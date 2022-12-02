@@ -2,14 +2,16 @@
 
 (name ocannl)
 
+(version 0.0.1)
+
 (generate_opam_files true)
 
 (source
  (github username/reponame))
 
-(authors "Author Name")
+(authors "Lukasz Stafiniak")
 
-(maintainers "Maintainer Name")
+(maintainers "Lukasz Stafiniak")
 
 (license LICENSE)
 

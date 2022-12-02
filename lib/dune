@@ -1,2 +1,7 @@
 (library
- (name ocannl))
+ (name formula)
+ (libraries ndarray))
+
+(library
+ (name ndarray))
+ 
