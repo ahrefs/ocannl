@@ -1,4 +1,5 @@
 (executable
  (public_name ocannl)
  (name main)
- (libraries ocannl base stdio matplotlib lacaml))
+ (libraries ocannl base stdio matplotlib)
+ (modes exe))

@@ -1,7 +1,3 @@
 (library
- (name formula)
- (libraries ndarray))
-
-(library
- (name ndarray))
- 
+ (name ocannl)
+ (libraries base dynlink metaocaml))
