@@ -7,7 +7,7 @@
 (generate_opam_files true)
 
 (source
- (github username/reponame))
+ (github lukstafi/ocannl))
 
 (authors "Lukasz Stafiniak")
 
@@ -15,14 +15,14 @@
 
 (license LICENSE)
 
-(documentation https://url/to/documentation)
+(documentation https://github.com/lukstafi/ocannl/blob/master/README.md)
 
 (package
  (name ocannl)
- (synopsis "A short synopsis")
+ (synopsis "A from-scratch Deep Learning library with CUDA, operator fusion, staged compilation, backprop.")
  (description "A longer description")
  (depends ocaml dune)
  (tags
-  (topics "to describe" your project)))
+  (metaocaml deeplearning backprop CUDA)))
 
 ; See the complete stanza docs at https://dune.readthedocs.io/en/stable/dune-files.html#dune-project
