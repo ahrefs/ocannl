@@ -2,7 +2,7 @@ open Base
 
 open Matplotlib
 
-module F = Ocannl.Formula
+module E = Ocannl.Engine
 
 (* Copy of https://github.com/LaurentMazare/ocaml-matplotlib/blob/master/examples/pyplot.ml *)
 let () =
