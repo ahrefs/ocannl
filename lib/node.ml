@@ -1,27 +1,7 @@
-
-(** Reverse-mode autodiff. *)
-(* open Trx *)
-
+(** `Node`: the object type, global state and utils which the `Formula` staged code uses. *)
 open Base
 
 type data = Ndarray.t
-
-(** 
- * Initial scope of the project: we assume there is only one loss function per model, i.e. one
- * root `node`, but that there is parameter tying, i.e. that the graph under the root is
- * an arbitrary DAG.
- *
- * Stages of life:
-    1. Constructing models using the engine.
-    2. Call `compile` on the model root once all the model with parameter tying is constructed.
-    4. Inside the training loop:
-      5. Modify in-place the `Ndarray`s of those `param` nodes that are inputs.
-      6. Call `forward` on the loss/root.
-      7. Log the loss.
-      8. Call `backprop` on the loss.
-      9. Update the parameters.
-*)
-(* We should use `genletv` to avoid double-counting in the backprop phase! *)
 
 type t = {
   mutable value: data;

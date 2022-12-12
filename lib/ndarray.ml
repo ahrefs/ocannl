@@ -1,8 +1,8 @@
+(** Multidimensional arrays. *)
 open Base
 
-(** Multidimensional arrays of float32. *)
-(* The code is inspired by OWL - OCaml Scientific Computing:
- * Copyright (c) 2016-2022 Liang Wang <liang@ocaml.xyz> *)
+(* Note also the OWL library.
+ * OCaml Scientific Computing: Copyright (c) 2016-2022 Liang Wang <liang@ocaml.xyz> *)
 module A = Bigarray.Genarray
 type elt = Bigarray.float32_elt
 type t = (float, elt, Bigarray.c_layout) A.t
@@ -16,6 +16,13 @@ let reset_ones (arr: t) =
 
 let reset_zeros (arr: t) =
     A.fill arr 0.0
+
+let get_uniform ~(low:float) ~(high:float) dims =
+  (* TODO: checks not needed *)
+  let arr = create dims in
+  (* TODO: FIXME: NOT IMPLEMENTED *)
+  ignore(low, high);
+  arr
 
 let assign_add lhs rhs1 rhs2 =
   let dims_l = dims lhs in
@@ -55,7 +62,7 @@ let assign_relu lhs rhs =
   (* TODO: FIXME: NOT IMPLEMENTED *)
   ()
 
-(** Computes `if rhs1 > 0 then rhs2 else 0`. *)
+(** Computes [if rhs1 > 0 then rhs2 else 0]. *)
 let relu_gate rhs1 rhs2 =
   let dims_r1 = dims rhs1 in
   let dims_r2 = dims rhs2 in

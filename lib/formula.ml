@@ -17,13 +17,13 @@ type submodel = {
   (** Initializes the backpropagation phase. Computed once per backpropagation. *)
   node_id: int;
   mutable processed: bool;
-  (** `true` if `forward_body`/`backprop_body`/`zero_grads` were already included in a parent submodel. *)
+  (** [true] if [forward_body]/[backprop_body]/[zero_grads] were already included in a parent submodel. *)
   mutable debug_node: Node.t;
   (** This tracks the computation node as long as the model is not cross-compiled to a different process. *)
 }
 
 (* The code relies on argument evaluation order. To lift the requirement, we could use
-   `submodel Lazy.t`, but that's an unnecessary obfuscation. *)
+   [submodel Lazy.t], but that's an unnecessary obfuscation. *)
 let l2r_comp_order =
   let l2r_ord = ref None in
   (fun () () ->
@@ -32,9 +32,9 @@ let l2r_comp_order =
     | None -> assert false) (l2r_ord := Some false) (l2r_ord := Some true)
 
 (* Design choice: tensor dims are decided after code is constructed, but before it is compiled.
-   I.e. code needs to be recompiled with `Runcode.run` when the dimensions change. *)
+   I.e. code needs to be recompiled with [Runcode.run] when the dimensions change. *)
 
-(* TODO: maybe propagate a label and use it as a prefix for `genlet`? *)
+(* TODO: maybe propagate a label and use it as a prefix for [genlet]? *)
 
 let binop ~label ~name ~op_body ~grad_body m1 m2 =
   let debug_node = Node.create ~label in
@@ -164,6 +164,8 @@ let unop ~label ~name ~op_body ~grad_body m =
 
 (* FIXME: be careful about where n1v etc. is created vs. where it's used. *)
 
+(* ********** User API below ********** *)
+
 let param ~label ~(init_code:Ndarray.t Codelib.code) : submodel =
   let debug_node = Node.create ~label in
   let node_id = debug_node.id in
@@ -193,8 +195,6 @@ let param ~label ~(init_code:Ndarray.t Codelib.code) : submodel =
   {toplevel_forward; toplevel_backprop; forward_body; backprop_body;
     init_values; init_grads; zero_grads;
     node_id; processed=false; debug_node}
-
-(* ********** Operations ********** *)
 
 let add =
   let label = "+" in
