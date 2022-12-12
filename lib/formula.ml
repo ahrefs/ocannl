@@ -22,8 +22,14 @@ type submodel = {
   (** This tracks the computation node as long as the model is not cross-compiled to a different process. *)
 }
 
-(* Note! The code relies on argument evaluation order. To lift the requirement, we would need: *)
-(* type t = submodel Lazy.t *)
+(* The code relies on argument evaluation order. To lift the requirement, we could use
+   `submodel Lazy.t`, but that's an unnecessary obfuscation. *)
+let l2r_comp_order =
+  let l2r_ord = ref None in
+  (fun () () ->
+    match !l2r_ord with
+    | Some b -> b
+    | None -> assert false) (l2r_ord := Some false) (l2r_ord := Some true)
 
 (* Design choice: tensor dims are decided after code is constructed, but before it is compiled.
    I.e. code needs to be recompiled with `Runcode.run` when the dimensions change. *)
@@ -45,38 +51,42 @@ let binop ~label ~name ~op_body ~grad_body m1 m2 =
     if m1.processed && m2.processed then op_body
     else if m1.processed then (.< .~(m2.forward_body); .~op_body >.)
     else if m2.processed then (.< .~(m1.forward_body); .~op_body >.)
-    else (.< .~(m1.forward_body); .~(m2.forward_body); .~op_body >.) in
-  let init_values = (.<
-    .~(m1.init_values);
-    .~(m2.init_values);
+    else if l2r_comp_order then (.< .~(m1.forward_body); .~(m2.forward_body); .~op_body >.)
+    else (.< .~(m2.forward_body); .~(m1.forward_body); .~op_body >.) in
+  let init_values_body = (.<
     let dims1 = Ndarray.dims .~n1v in
     let dims2 = Ndarray.dims .~n2v in
     assert (Array.equal (=) dims1 dims2);
     .~n.value <- Ndarray.create dims1;
   >.) in
+  (* Not required, but we preserve the order, for readability. *)
+  let init_values =
+    if m1.processed && m2.processed then init_values_body
+    else if m1.processed then (.< .~(m2.init_values); .~init_values_body >.)
+    else if m2.processed then (.< .~(m1.init_values); .~init_values_body >.)
+    else if l2r_comp_order then (.< .~(m1.init_values); .~(m2.init_values); .~init_values_body >.)
+    else (.< .~(m2.init_values); .~(m1.init_values); .~init_values_body >.) in
   let toplevel_forward = (.< .~init_values; fun () -> .~forward_body >.) in
   let nd = Codelib.genlet ~name:"addd" (.< .~n.grad >.) in
   let n1d = Codelib.genlet ~name:"add1d" (.< (Node.get n1_id).grad >.) in
   let n2d = Codelib.genlet ~name:"add2d" (.< (Node.get n2_id).grad >.) in
   let zero_body = (.< Ndarray.reset_zeros .~nd >.) in
-(* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
+  (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
      and keep the backprop order for readability. *)
   let zero_grads =
     if m1.processed && m2.processed then zero_body
     else if m1.processed then (.< .~zero_body; .~(m2.zero_grads) >.)
     else if m2.processed then (.< .~zero_body; .~(m1.zero_grads) >.)
-    else (.< .~zero_body; .~(m2.zero_grads); .~(m1.zero_grads) >.) in
-  let back_body = (.<
-    Ndarray.assign_add .~n1d .~n1d .~nd;
-    Ndarray.assign_add .~n2d .~n2d .~nd
-  >.) in
+    else if l2r_comp_order then (.< .~zero_body; .~(m2.zero_grads); .~(m1.zero_grads) >.)
+    else (.< .~zero_body; .~(m1.zero_grads); .~(m2.zero_grads) >.) in
   (* The code needs to be included in the reverse order to which it was computed! *)
   let grad_body = grad_body ~n1d ~n2d ~nd ~nv ~n1v ~n2v in
   let backprop_body =
      if m1.processed && m2.processed then grad_body
      else if m1.processed then (.< .~grad_body; .~(m2.backprop_body) >.)
      else if m2.processed then (.< .~grad_body; .~(m1.backprop_body) >.)
-     else (.< .~grad_body; .~(m2.backprop_body); .~(m1.backprop_body) >.) in
+     else if l2r_comp_order then (.< .~grad_body; .~(m2.backprop_body); .~(m1.backprop_body) >.)
+     else (.< .~grad_body; .~(m1.backprop_body); .~(m2.backprop_body) >.) in
   let init_grads_body = (.<
     let dims = Ndarray.dims .~nv in
     .~n.grad <- Ndarray.create dims;
@@ -86,7 +96,8 @@ let binop ~label ~name ~op_body ~grad_body m1 m2 =
     if m1.processed && m2.processed then init_grads_body
     else if m1.processed then (.< .~init_grads_body; .~(m2.init_grads) >.)
     else if m2.processed then (.< .~init_grads_body; .~(m1.init_grads) >.)
-    else (.< .~init_grads_body; .~(m2.init_grads); .~(m1.init_grads) >.) in
+    else if l2r_comp_order then (.< .~init_grads_body; .~(m2.init_grads); .~(m1.init_grads) >.)
+    else (.< .~init_grads_body; .~(m1.init_grads); .~(m2.init_grads) >.) in
   let toplevel_backprop = (.<
     .~init_grads;
     fun () ->
