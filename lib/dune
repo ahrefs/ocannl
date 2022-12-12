@@ -1,4 +1,5 @@
 (library
  (name ocannl)
- (libraries base dynlink metaocaml))
+ (libraries base dynlink metaocaml)
+ (modes byte native))
 
