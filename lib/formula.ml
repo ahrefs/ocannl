@@ -166,6 +166,8 @@ let unop ~label ~name ~op_body ~grad_body m =
 
 (* ********** User API below ********** *)
 
+(** A parameter or input of the model. The [label] must be unique, i.e. not already present in
+    [Node.global.params]. *)
 let param ~label ~(init_code:Ndarray.t Codelib.code) : submodel =
   let debug_node = Node.create ~label in
   let node_id = debug_node.id in
@@ -174,7 +176,7 @@ let param ~label ~(init_code:Ndarray.t Codelib.code) : submodel =
   (* Very unlikely someone will compute just the parameters. *)
   let forward_body = (.< () >.) in
   let init_values = (.<
-    assert (phys_equal `Ok @@ Hashtbl.add Node.global.params ~key:label ~data:(.~n));
+    Hashtbl.add_exn Node.global.params ~key:label ~data:(.~n);
     .~n.value <- .~init_code;
   >.) in
   let toplevel_forward = (.< .~init_values; fun () -> .~forward_body >.) in
