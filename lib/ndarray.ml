@@ -11,17 +11,59 @@ type t = (float, elt, Bigarray.c_layout) A.t
  let create = A.create Bigarray.Float32 Bigarray.C_layout
  let empty = create [||]
  
-let create_ones =
-  let v = A.create Bigarray.Float32 Bigarray.C_layout in
-  (* TODO: FIXME: NOT IMPLEMENTED *)
-  v
+let create_ones dims =
+  let arr = A.create Bigarray.Float32 Bigarray.C_layout dims in
+  A.fill arr 1.0;
+  arr
 
-  let assign_add lhs rhs1 rhs2 =
-    let dims_l = dims lhs in
-    let dims_r1 = dims rhs1 in
-    let dims_r2 = dims rhs2 in
-    (* TODO: checks not needed *)
-    assert (Array.equal (=) dims_l dims_r1);
-    assert (Array.equal (=) dims_l dims_r2);
-    (* TODO: FIXME: NOT IMPLEMENTED *)
-    ()
+let reset_zeros (arr: t) =
+    A.fill arr 0.0
+
+let assign_add lhs rhs1 rhs2 =
+  let dims_l = dims lhs in
+  let dims_r1 = dims rhs1 in
+  let dims_r2 = dims rhs2 in
+  (* TODO: checks not needed *)
+  assert (Array.equal (=) dims_l dims_r1);
+  assert (Array.equal (=) dims_l dims_r2);
+  (* TODO: FIXME: NOT IMPLEMENTED *)
+  ()
+
+let assign_mul lhs rhs1 rhs2 =
+  let dims_l = dims lhs in
+  let dims_r1 = dims rhs1 in
+  let dims_r2 = dims rhs2 in
+  (* TODO: checks not needed *)
+  assert (Array.equal (=) dims_l dims_r1);
+  assert (Array.equal (=) dims_l dims_r2);
+  (* TODO: FIXME: NOT IMPLEMENTED *)
+  ()
+
+let mul rhs1 rhs2 =
+  let dims_r1 = dims rhs1 in
+  let dims_r2 = dims rhs2 in
+  (* TODO: checks not needed *)
+  assert (Array.equal (=) dims_r1 dims_r2);
+  let arr = A.create Bigarray.Float32 Bigarray.C_layout dims_r1 in
+  (* TODO: FIXME: NOT IMPLEMENTED *)
+  A.fill arr 1.0;
+  arr
+
+let assign_relu lhs rhs =
+  let dims_l = dims lhs in
+  let dims_r = dims rhs in
+  (* TODO: checks not needed *)
+  assert (Array.equal (=) dims_l dims_r);
+  (* TODO: FIXME: NOT IMPLEMENTED *)
+  ()
+
+(** Computes `if rhs1 > 0 then rhs2 else 0`. *)
+let relu_gate rhs1 rhs2 =
+  let dims_r1 = dims rhs1 in
+  let dims_r2 = dims rhs2 in
+  (* TODO: checks not needed *)
+  assert (Array.equal (=) dims_r1 dims_r2);
+  let arr = A.create Bigarray.Float32 Bigarray.C_layout dims_r1 in
+  (* TODO: FIXME: NOT IMPLEMENTED *)
+  A.fill arr 1.0;
+  arr
