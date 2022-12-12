@@ -11,10 +11,8 @@ type t = (float, elt, Bigarray.c_layout) A.t
  let create = A.create Bigarray.Float32 Bigarray.C_layout
  let empty = create [||]
  
-let create_ones dims =
-  let arr = A.create Bigarray.Float32 Bigarray.C_layout dims in
-  A.fill arr 1.0;
-  arr
+let reset_ones (arr: t) =
+  A.fill arr 1.0
 
 let reset_zeros (arr: t) =
     A.fill arr 0.0
