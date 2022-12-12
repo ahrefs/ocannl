@@ -72,7 +72,8 @@ let add m1 m2 =
     assert (Array.equal (=) dims1 dims2);
     .~n.grad <- Ndarray.create dims1;
     fun () ->
-      .~zero_grads;
+      .~(m.zero_grads);
+      Ndarray.reset_ones .~nd;
       .~backprop_body
   >.) in
   m1.processed <- true; m2.processed <- true;
@@ -129,7 +130,8 @@ let mul m1 m2 =
     assert (Array.equal (=) dims1 dims2);
     .~n.grad <- Ndarray.create dims1;
     fun () ->
-      .~zero_grads;
+      .~(m.zero_grads);
+      Ndarray.reset_ones .~nd;
       .~backprop_body
   >.) in
   m1.processed <- true; m2.processed <- true;
@@ -172,7 +174,8 @@ let relu m =
     let dims1 = Ndarray.dims .~n1v in
     .~n.grad <- Ndarray.create dims1;
     fun () ->
-      .~zero_grads;
+      .~(m.zero_grads);
+      Ndarray.reset_ones .~nd;
       .~backprop_body
   >.) in
   m.processed <- true;
