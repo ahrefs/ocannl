@@ -9,6 +9,9 @@ type submodel = {
   forward_body: unit Codelib.code;
   init_values: unit Codelib.code;
   (** Initializes the values. Computed only once per model compilation. *)
+  init_grads: unit Codelib.code;
+  (** Initializes the gradient data: typically, simply creates the ndarrays.
+      Gradients are zeroed separately. *)
   backprop_body: unit Codelib.code;
   zero_grads: unit Codelib.code;
   (** Initializes the backpropagation phase. Computed once per backpropagation. *)
@@ -72,11 +75,18 @@ let add m1 m2 =
      else if m1.processed then (.< .~back_body; .~(m2.backprop_body) >.)
      else if m2.processed then (.< .~back_body; .~(m1.backprop_body) >.)
      else (.< .~back_body; .~(m2.backprop_body); .~(m1.backprop_body) >.) in
+  let init_grads_body = (.<
+    let dims = Ndarray.dims .~nv in
+    .~n.grad <- Ndarray.create dims;
+  >.) in
+  (* The order is not relevant, we keep the same order as in backprop for readability. *)
+  let init_grads =
+    if m1.processed && m2.processed then init_grads_body
+    else if m1.processed then (.< .~init_grads_body; .~(m2.init_grads) >.)
+    else if m2.processed then (.< .~init_grads_body; .~(m1.init_grads) >.)
+    else (.< .~init_grads_body; .~(m2.init_grads); .~(m1.init_grads) >.) in
   let toplevel_backprop = (.<
-    let dims1 = Ndarray.dims .~n1v in
-    let dims2 = Ndarray.dims .~n2v in
-    assert (Array.equal (=) dims1 dims2);
-    .~n.grad <- Ndarray.create dims1;
+    .~init_grads;
     fun () ->
       .~(m1.zero_grads);
       .~(m2.zero_grads);
@@ -84,7 +94,8 @@ let add m1 m2 =
       .~backprop_body
   >.) in
   m1.processed <- true; m2.processed <- true;
-  {toplevel_forward; toplevel_backprop; forward_body; backprop_body; init_values; zero_grads;
+  {toplevel_forward; toplevel_backprop; forward_body; backprop_body;
+   init_values; init_grads; zero_grads;
    node_id; processed=false; debug_node}
 
 let mul m1 m2 =
@@ -133,11 +144,18 @@ let mul m1 m2 =
     else if m1.processed then (.< .~back_body; .~(m2.backprop_body) >.)
     else if m2.processed then (.< .~back_body; .~(m1.backprop_body) >.)
     else (.< .~back_body; .~(m2.backprop_body); .~(m1.backprop_body) >.) in
+  let init_grads_body = (.<
+    let dims = Ndarray.dims .~nv in
+    .~n.grad <- Ndarray.create dims;
+  >.) in
+  (* The order is not relevant, we keep the same order as in backprop for readability. *)
+  let init_grads =
+    if m1.processed && m2.processed then init_grads_body
+    else if m1.processed then (.< .~init_grads_body; .~(m2.init_grads) >.)
+    else if m2.processed then (.< .~init_grads_body; .~(m1.init_grads) >.)
+    else (.< .~init_grads_body; .~(m2.init_grads); .~(m1.init_grads) >.) in
   let toplevel_backprop = (.<
-    let dims1 = Ndarray.dims .~n1v in
-    let dims2 = Ndarray.dims .~n2v in
-    assert (Array.equal (=) dims1 dims2);
-    .~n.grad <- Ndarray.create dims1;
+    .~init_grads;
     fun () ->
       .~(m1.zero_grads);
       .~(m2.zero_grads);
@@ -145,7 +163,8 @@ let mul m1 m2 =
       .~backprop_body
   >.) in
   m1.processed <- true; m2.processed <- true;
-  {toplevel_forward; toplevel_backprop; forward_body; backprop_body; init_values; zero_grads;
+  {toplevel_forward; toplevel_backprop; forward_body; backprop_body;
+  init_values; init_grads; zero_grads;
    node_id; processed=false; debug_node}
 
 let relu m =
@@ -181,16 +200,24 @@ let relu m =
   let backprop_body =
     if m.processed then back_body
     else (.< .~back_body; .~(m.backprop_body) >.) in
+  let init_grads_body = (.<
+    let dims = Ndarray.dims .~nv in
+    .~n.grad <- Ndarray.create dims;
+  >.) in
+  (* The order is not relevant, we keep the same order as in backprop for readability. *)
+  let init_grads =
+    if m.processed then init_grads_body
+    else (.< .~init_grads_body; .~(m.init_grads) >.) in
   let toplevel_backprop = (.<
-    let dims1 = Ndarray.dims .~n1v in
-    .~n.grad <- Ndarray.create dims1;
+    .~init_grads;
     fun () ->
       .~(m.zero_grads);
       Ndarray.reset_ones .~nd;
       .~backprop_body
   >.) in
   m.processed <- true;
-  {toplevel_forward; toplevel_backprop; forward_body; backprop_body; init_values; zero_grads;
+  {toplevel_forward; toplevel_backprop; forward_body; backprop_body;
+  init_values; init_grads; zero_grads;
    node_id; processed=false; debug_node}
 
 (* FIXME: be careful about where n1v etc. is created vs. where it's used. *)
