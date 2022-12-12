@@ -27,17 +27,19 @@ type submodel = {
 
 (* Design choice: tensor dims are decided after code is constructed, but before it is compiled.
    I.e. code needs to be recompiled with `Runcode.run` when the dimensions change. *)
+
 (* TODO: maybe propagate a label and use it as a prefix for `genlet`? *)
-let add m1 m2 =
-  let debug_node = Node.create ~label:"+" in
+
+let binop ~label ~name ~op_body ~grad_body m1 m2 =
+  let debug_node = Node.create ~label in
   let node_id = debug_node.id in
   let n1_id = m1.node_id in
   let n2_id = m2.node_id in
-  let n = Codelib.genlet ~name:"addn" (.< Node.get node_id >.) in
-  let nv = Codelib.genlet ~name:"addv" (.< .~n.value >.) in
-  let n1v = Codelib.genlet ~name:"add1v" (.< (Node.get n1_id).value >.) in
-  let n2v = Codelib.genlet ~name:"add2v" (.< (Node.get n2_id).value >.) in
-  let op_body = (.< Ndarray.assign_add .~nv .~n1v .~n2v >.) in
+  let n = Codelib.genlet ~name:(name^"n") (.< Node.get node_id >.) in
+  let nv = Codelib.genlet ~name:(name^"v") (.< .~n.value >.) in
+  let n1v = Codelib.genlet ~name:(name^"1v") (.< (Node.get n1_id).value >.) in
+  let n2v = Codelib.genlet ~name:(name^"2v") (.< (Node.get n2_id).value >.) in
+  let op_body = op_body ~nv ~n1v ~n2v in
   (* The code needs to be included in the order it was computed! *)
   let forward_body =
     if m1.processed && m2.processed then op_body
@@ -69,11 +71,12 @@ let add m1 m2 =
     Ndarray.assign_add .~n2d .~n2d .~nd
   >.) in
   (* The code needs to be included in the reverse order to which it was computed! *)
+  let grad_body = grad_body ~n1d ~n2d ~nd ~nv ~n1v ~n2v in
   let backprop_body =
-     if m1.processed && m2.processed then back_body
-     else if m1.processed then (.< .~back_body; .~(m2.backprop_body) >.)
-     else if m2.processed then (.< .~back_body; .~(m1.backprop_body) >.)
-     else (.< .~back_body; .~(m2.backprop_body); .~(m1.backprop_body) >.) in
+     if m1.processed && m2.processed then grad_body
+     else if m1.processed then (.< .~grad_body; .~(m2.backprop_body) >.)
+     else if m2.processed then (.< .~grad_body; .~(m1.backprop_body) >.)
+     else (.< .~grad_body; .~(m2.backprop_body); .~(m1.backprop_body) >.) in
   let init_grads_body = (.<
     let dims = Ndarray.dims .~nv in
     .~n.grad <- Ndarray.create dims;
@@ -97,83 +100,14 @@ let add m1 m2 =
    init_values; init_grads; zero_grads;
    node_id; processed=false; debug_node}
 
-let mul m1 m2 =
-  let debug_node = Node.create ~label:"*" in
-  let node_id = debug_node.id in
-  let n1_id = m1.node_id in
-  let n2_id = m2.node_id in
-  let n = Codelib.genlet ~name:"muln" (.< Node.get node_id >.) in
-  let nv = Codelib.genlet ~name:"mulv" (.< .~n.value >.) in
-  let n1v = Codelib.genlet ~name:"mul1v" (.< (Node.get n1_id).value >.) in
-  let n2v = Codelib.genlet ~name:"mul2v" (.< (Node.get n2_id).value >.) in
-  let op_body = (.< Ndarray.assign_mul .~nv .~n1v .~n2v >.) in
-  (* The code needs to be included in the order it was computed! *)
-  let forward_body =
-    if m1.processed && m2.processed then op_body
-    else if m1.processed then (.< .~(m2.forward_body); .~op_body >.)
-    else if m2.processed then (.< .~(m1.forward_body); .~op_body >.)
-    else (.< .~(m1.forward_body); .~(m2.forward_body); .~op_body >.) in
-  let init_values = (.<
-    .~(m1.init_values);
-    .~(m2.init_values);
-    let dims1 = Ndarray.dims .~n1v in
-    let dims2 = Ndarray.dims .~n2v in
-    assert (Array.equal (=) dims1 dims2);
-    .~n.value <- Ndarray.create dims1;
-  >.) in
-  let toplevel_forward = (.< .~init_values; fun () -> .~forward_body >.) in
-  let nd = Codelib.genlet ~name:"muld" (.< .~n.grad >.) in
-  let n1d = Codelib.genlet ~name:"mul1d" (.< (Node.get n1_id).grad >.) in
-  let n2d = Codelib.genlet ~name:"mul2d" (.< (Node.get n2_id).grad >.) in
-  let zero_body = (.< Ndarray.reset_zeros .~nd >.) in
-  (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
-       and keep the backprop order for readability. *)
-  let zero_grads =
-    if m1.processed && m2.processed then zero_body
-    else if m1.processed then (.< .~zero_body; .~(m2.zero_grads) >.)
-    else if m2.processed then (.< .~zero_body; .~(m1.zero_grads) >.)
-    else (.< .~zero_body; .~(m2.zero_grads); .~(m1.zero_grads) >.) in
-  let back_body = (.<
-    Ndarray.assign_add .~n1d .~n1d (Ndarray.mul .~nd .~n2v);
-    Ndarray.assign_add .~n2d .~n2d (Ndarray.mul .~nd .~n1v)
-  >.) in
-  (* The code needs to be included in the reverse order to which it was computed! *)
-  let backprop_body =
-    if m1.processed && m2.processed then back_body
-    else if m1.processed then (.< .~back_body; .~(m2.backprop_body) >.)
-    else if m2.processed then (.< .~back_body; .~(m1.backprop_body) >.)
-    else (.< .~back_body; .~(m2.backprop_body); .~(m1.backprop_body) >.) in
-  let init_grads_body = (.<
-    let dims = Ndarray.dims .~nv in
-    .~n.grad <- Ndarray.create dims;
-  >.) in
-  (* The order is not relevant, we keep the same order as in backprop for readability. *)
-  let init_grads =
-    if m1.processed && m2.processed then init_grads_body
-    else if m1.processed then (.< .~init_grads_body; .~(m2.init_grads) >.)
-    else if m2.processed then (.< .~init_grads_body; .~(m1.init_grads) >.)
-    else (.< .~init_grads_body; .~(m2.init_grads); .~(m1.init_grads) >.) in
-  let toplevel_backprop = (.<
-    .~init_grads;
-    fun () ->
-      .~(m1.zero_grads);
-      .~(m2.zero_grads);
-      Ndarray.reset_ones .~nd;
-      .~backprop_body
-  >.) in
-  m1.processed <- true; m2.processed <- true;
-  {toplevel_forward; toplevel_backprop; forward_body; backprop_body;
-  init_values; init_grads; zero_grads;
-   node_id; processed=false; debug_node}
-
-let relu m =
-  let debug_node = Node.create ~label:"*" in
+let unop ~label ~name ~op_body ~grad_body m =
+  let debug_node = Node.create ~label in
   let node_id = debug_node.id in
   let n1_id = m.node_id in
-  let n = Codelib.genlet ~name:"relun" (.< Node.get node_id >.) in
-  let nv = Codelib.genlet ~name:"reluv" (.< .~n.value >.) in
-  let n1v = Codelib.genlet ~name:"relu1v" (.< (Node.get n1_id).value >.) in
-  let op_body = (.< Ndarray.assign_relu .~nv .~n1v >.) in
+  let n = Codelib.genlet ~name:(name^"n") (.< Node.get node_id >.) in
+  let nv = Codelib.genlet ~name:(name^"v") (.< .~n.value >.) in
+  let n1v = Codelib.genlet ~name:(name^"1v") (.< (Node.get n1_id).value >.) in
+  let op_body = op_body ~nv ~n1v in
   (* The code needs to be included in the order it was computed! *)
   let forward_body =
     if m.processed then op_body
@@ -192,13 +126,11 @@ let relu m =
   let zero_grads =
     if m.processed then zero_body
     else (.< .~zero_body; .~(m.zero_grads) >.) in
-  let back_body = (.<
-    Ndarray.assign_add .~n1d .~n1d (Ndarray.relu_gate .~nv .~nd)
-  >.) in
+  let grad_body = grad_body ~n1d ~nd ~nv ~n1v in
   (* The code needs to be included in the reverse order to which it was computed! *)
   let backprop_body =
-    if m.processed then back_body
-    else (.< .~back_body; .~(m.backprop_body) >.) in
+    if m.processed then grad_body
+    else (.< .~grad_body; .~(m.backprop_body) >.) in
   let init_grads_body = (.<
     let dims = Ndarray.dims .~nv in
     .~n.grad <- Ndarray.create dims;
@@ -247,8 +179,37 @@ let param ~label ~(init_code:Ndarray.t Codelib.code) : submodel =
       Ndarray.reset_ones .~nd;
       .~backprop_body
   >.) in
-  let result = {
-    toplevel_forward; toplevel_backprop; forward_body; backprop_body;
+  {toplevel_forward; toplevel_backprop; forward_body; backprop_body;
     init_values; init_grads; zero_grads;
-    node_id; processed=false; debug_node} in
-  result
+    node_id; processed=false; debug_node}
+
+(* ********** Operations ********** *)
+
+let add =
+  let label = "+" in
+  let name = "add" in
+  let op_body ~nv ~n1v ~n2v = (.< Ndarray.assign_add .~nv .~n1v .~n2v >.) in
+  let grad_body ~n1d ~n2d ~nd ~nv:_ ~n1v:_ ~n2v:_ = (.<
+    Ndarray.assign_add .~n1d .~n1d .~nd;
+    Ndarray.assign_add .~n2d .~n2d .~nd
+  >.) in
+  binop ~label ~name ~op_body ~grad_body
+
+let mul =
+  let label = "*" in
+  let name = "mul" in
+  let op_body ~nv ~n1v ~n2v = (.< Ndarray.assign_mul .~nv .~n1v .~n2v >.) in
+  let grad_body ~n1d ~n2d ~nd ~nv:_ ~n1v ~n2v = (.<
+    Ndarray.assign_add .~n1d .~n1d (Ndarray.mul .~nd .~n2v);
+    Ndarray.assign_add .~n2d .~n2d (Ndarray.mul .~nd .~n1v)
+  >.) in
+  binop ~label ~name ~op_body ~grad_body
+
+let relu =
+  let label = "relu" in
+  let name = "relu" in
+  let op_body ~nv ~n1v = (.< Ndarray.assign_relu .~nv .~n1v >.) in
+  let grad_body ~n1d ~nd ~nv ~n1v:_ = (.<
+    Ndarray.assign_add .~n1d .~n1d (Ndarray.relu_gate .~nv .~nd)
+  >.) in
+  unop ~label ~name ~op_body ~grad_body
