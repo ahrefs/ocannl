@@ -51,7 +51,6 @@ let add m1 m2 =
     let dims2 = Ndarray.dims .~n2v in
     assert (Array.equal (=) dims1 dims2);
     .~n.value <- Ndarray.create dims1;
-    fun () -> .~forward_body
   >.) in
   let toplevel_forward = (.< .~init_values; fun () -> .~forward_body >.) in
   let nd = Codelib.genlet ~name:"addd" (.< .~n.grad >.) in
@@ -221,3 +220,35 @@ let relu m =
    node_id; processed=false; debug_node}
 
 (* FIXME: be careful about where n1v etc. is created vs. where it's used. *)
+
+let param ~label ~(init_code:Ndarray.t Codelib.code) : submodel =
+  let debug_node = Node.create ~label in
+  let node_id = debug_node.id in
+  let n = Codelib.genlet ~name:label (.< Node.get node_id >.) in
+  let nv = Codelib.genlet ~name:(label ^ "v") (.< .~n.value >.) in
+  (* Very unlikely someone will compute just the parameters. *)
+  let forward_body = (.< () >.) in
+  let init_values = (.<
+    assert (phys_equal `Ok @@ Hashtbl.add Node.global.params ~key:label ~data:(.~n));
+    .~n.value <- .~init_code;
+  >.) in
+  let toplevel_forward = (.< .~init_values; fun () -> .~forward_body >.) in
+  let nd = Codelib.genlet ~name:"paramd" (.< .~n.grad >.) in
+  let zero_grads = (.< Ndarray.reset_zeros .~nd >.) in
+  let backprop_body = (.< () >.) in
+  (* Very unlikely someone will want dw/dw. *)
+  let init_grads = (.<
+    let dims = Ndarray.dims .~nv in
+    .~n.grad <- Ndarray.create dims;
+  >.) in
+  let toplevel_backprop = (.<
+    .~init_grads;
+    fun () ->
+      Ndarray.reset_ones .~nd;
+      .~backprop_body
+  >.) in
+  let result = {
+    toplevel_forward; toplevel_backprop; forward_body; backprop_body;
+    init_values; init_grads; zero_grads;
+    node_id; processed=false; debug_node} in
+  result
