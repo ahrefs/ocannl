@@ -7,6 +7,8 @@ type submodel = {
   (** Only apply at the root! Gradients propagate from the top and are only propagated once. Zeroes
       the gradients before propagating. *)
   forward_body: unit Codelib.code;
+  init_values: unit Codelib.code;
+  (** Initializes the values. Computed only once per model compilation. *)
   backprop_body: unit Codelib.code;
   zero_grads: unit Codelib.code;
   (** Initializes the backpropagation phase. Computed once per backpropagation. *)
@@ -39,13 +41,16 @@ let add m1 m2 =
     else if m1.processed then (.< .~(m2.forward_body); .~op_body >.)
     else if m2.processed then (.< .~(m1.forward_body); .~op_body >.)
     else (.< .~(m1.forward_body); .~(m2.forward_body); .~op_body >.) in
-  let toplevel_forward = (.<
+  let init_values = (.<
+    .~(m1.init_values);
+    .~(m2.init_values);
     let dims1 = Ndarray.dims .~n1v in
     let dims2 = Ndarray.dims .~n2v in
     assert (Array.equal (=) dims1 dims2);
     .~n.value <- Ndarray.create dims1;
     fun () -> .~forward_body
   >.) in
+  let toplevel_forward = (.< .~init_values; fun () -> .~forward_body >.) in
   let nd = Codelib.genlet ~name:"addd" (.< .~n.grad >.) in
   let n1d = Codelib.genlet ~name:"add1d" (.< (Node.get n1_id).grad >.) in
   let n2d = Codelib.genlet ~name:"add2d" (.< (Node.get n2_id).grad >.) in
@@ -79,7 +84,7 @@ let add m1 m2 =
       .~backprop_body
   >.) in
   m1.processed <- true; m2.processed <- true;
-  {toplevel_forward; toplevel_backprop; forward_body; backprop_body; zero_grads;
+  {toplevel_forward; toplevel_backprop; forward_body; backprop_body; init_values; zero_grads;
    node_id; processed=false; debug_node}
 
 let mul m1 m2 =
@@ -98,13 +103,15 @@ let mul m1 m2 =
     else if m1.processed then (.< .~(m2.forward_body); .~op_body >.)
     else if m2.processed then (.< .~(m1.forward_body); .~op_body >.)
     else (.< .~(m1.forward_body); .~(m2.forward_body); .~op_body >.) in
-  let toplevel_forward = (.<
+  let init_values = (.<
+    .~(m1.init_values);
+    .~(m2.init_values);
     let dims1 = Ndarray.dims .~n1v in
     let dims2 = Ndarray.dims .~n2v in
     assert (Array.equal (=) dims1 dims2);
     .~n.value <- Ndarray.create dims1;
-    fun () -> .~forward_body
   >.) in
+  let toplevel_forward = (.< .~init_values; fun () -> .~forward_body >.) in
   let nd = Codelib.genlet ~name:"muld" (.< .~n.grad >.) in
   let n1d = Codelib.genlet ~name:"mul1d" (.< (Node.get n1_id).grad >.) in
   let n2d = Codelib.genlet ~name:"mul2d" (.< (Node.get n2_id).grad >.) in
@@ -138,7 +145,7 @@ let mul m1 m2 =
       .~backprop_body
   >.) in
   m1.processed <- true; m2.processed <- true;
-  {toplevel_forward; toplevel_backprop; forward_body; backprop_body; zero_grads;
+  {toplevel_forward; toplevel_backprop; forward_body; backprop_body; init_values; zero_grads;
    node_id; processed=false; debug_node}
 
 let relu m =
@@ -153,11 +160,12 @@ let relu m =
   let forward_body =
     if m.processed then op_body
     else (.< .~(m.forward_body); .~op_body >.) in
-  let toplevel_forward = (.<
+  let init_values = (.<
+    .~(m.init_values);
     let dims = Ndarray.dims .~n1v in
     .~n.value <- Ndarray.create dims;
-    fun () -> .~forward_body
   >.) in
+  let toplevel_forward = (.< .~init_values; fun () -> .~forward_body >.) in
   let nd = Codelib.genlet ~name:"relud" (.< .~n.grad >.) in
   let n1d = Codelib.genlet ~name:"relu1d" (.< (Node.get n1_id).grad >.) in
   let zero_body = (.< Ndarray.reset_zeros .~nd >.) in
@@ -182,7 +190,7 @@ let relu m =
       .~backprop_body
   >.) in
   m.processed <- true;
-  {toplevel_forward; toplevel_backprop; forward_body; backprop_body; zero_grads;
+  {toplevel_forward; toplevel_backprop; forward_body; backprop_body; init_values; zero_grads;
    node_id; processed=false; debug_node}
 
 (* FIXME: be careful about where n1v etc. is created vs. where it's used. *)
