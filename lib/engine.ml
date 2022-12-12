@@ -9,6 +9,7 @@ type submodel = {
   forward_body: unit Codelib.code;
   backprop_body: unit Codelib.code;
   zero_grads: unit Codelib.code;
+  (** Initializes the backpropagation phase. Computed once per backpropagation. *)
   node_id: int;
   mutable processed: bool;
   (** `true` if `forward_body`/`backprop_body`/`zero_grads` were already included in a parent submodel. *)
@@ -72,7 +73,8 @@ let add m1 m2 =
     assert (Array.equal (=) dims1 dims2);
     .~n.grad <- Ndarray.create dims1;
     fun () ->
-      .~(m.zero_grads);
+      .~(m1.zero_grads);
+      .~(m2.zero_grads);
       Ndarray.reset_ones .~nd;
       .~backprop_body
   >.) in
@@ -130,7 +132,8 @@ let mul m1 m2 =
     assert (Array.equal (=) dims1 dims2);
     .~n.grad <- Ndarray.create dims1;
     fun () ->
-      .~(m.zero_grads);
+      .~(m1.zero_grads);
+      .~(m2.zero_grads);
       Ndarray.reset_ones .~nd;
       .~backprop_body
   >.) in
