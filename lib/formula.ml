@@ -56,7 +56,6 @@ let binop ~label ~name ~op_body ~grad_body m1 m2 =
   let init_values_body = (.<
     let dims1 = Ndarray.dims .~n1v in
     let dims2 = Ndarray.dims .~n2v in
-    assert (Array.equal (=) dims1 dims2);
     .~n.value <- Ndarray.create dims1;
   >.) in
   (* Not required, but we preserve the order, for readability. *)
@@ -226,3 +225,22 @@ let relu =
     Ndarray.assign_add .~n1d .~n1d (Ndarray.relu_gate .~nv .~nd)
   >.) in
   unop ~label ~name ~op_body ~grad_body
+
+let init_zeroes dims = (.< let p = Ndarray.create dims in Ndarray.reset_zeros p; p >.)
+let init_uniform dims = (.< Ndarray.get_uniform ~low:(-1.0) ~high:1.0 dims >.)
+
+(* 
+~/ocannl$ dune utop
+
+open Base;;
+#load "_build/default/lib/ocannl.cma";;
+open Ocannl;;
+module F = Formula;;
+let x = F.init_zeroes [|3; 3|];;
+let w = F.init_uniform [|3; 3|];;
+let nn = F.(add (mul (param ~label:"w" ~init_code:w) (param ~label:"x" ~init_code:x)) (param ~label:"b" ~init_code:b));;
+let nn_fwd = Codelib.close_code nn.toplevel_forward;;
+let nn_bwd = Codelib.close_code nn.toplevel_backprop;;
+Codelib.format_code Caml.Format.std_formatter nn_fwd;;
+Codelib.format_code Caml.Format.std_formatter nn_bwd;;
+*)
