@@ -1,5 +1,5 @@
 (executable
  (public_name ocannl)
  (name main)
- (libraries ocannl base stdio matplotlib)
+ (libraries ocannl base stdio ocaml-canvas)
  (modes exe))
