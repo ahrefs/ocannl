@@ -19,8 +19,10 @@ type submodel = {
   node_id: int;
   mutable processed: bool;
   (** [true] if [forward_body]/[backprop_body]/[zero_grads] were already included in a parent submodel. *)
-  mutable debug_node: Node.t;
+  debug_node: Node.t;
   (** This tracks the computation node as long as the model is not cross-compiled to a different process. *)
+  node: Node.t Codelib.code;
+  (** The node storing the computation results. *)
 }
 
 (* The code relies on argument evaluation order. To lift the requirement, we could use
@@ -36,17 +38,16 @@ let l2r_comp_order =
    I.e. code needs to be re-executed with [Runcode.run_bytecode] or [Runnative.run_native]
    when the dimensions change. *)
 
-(* TODO: maybe propagate a label and use it as a prefix for [genlet]? *)
-
-let binop ~label ~name ~op_body ~grad_body m1 m2 =
+let binop ~op_label ~op_body ~grad_body m1 m2 =
+  let m1_l = m1.debug_node.label in
+  let m2_l = m2.debug_node.label in
+  let label = m1_l ^ op_label ^ m2_l in
   let debug_node = Node.create ~label in
   let node_id = debug_node.id in
-  let n1_id = m1.node_id in
-  let n2_id = m2.node_id in
-  let n = Codelib.genlet ~name:(name^"n") (.< Node.get node_id >.) in
-  let nv = Codelib.genlet ~name:(name^"v") (.< .~n.value >.) in
-  let n1v = Codelib.genlet ~name:(name^"1v") (.< (Node.get n1_id).value >.) in
-  let n2v = Codelib.genlet ~name:(name^"2v") (.< (Node.get n2_id).value >.) in
+  let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
+  let nv = (.< .~node.value >.) in
+  let n1v = (.< .~(m1.node).value >.) in
+  let n2v = (.< .~(m2.node).value >.) in
   let op_body = op_body ~nv ~n1v ~n2v in
   (* The code needs to be included in the order it was computed! *)
   let forward_body =
@@ -60,7 +61,7 @@ let binop ~label ~name ~op_body ~grad_body m1 m2 =
     | false, Some m1_body, _, _ -> (.< .~m1_body; .~op_body >.)
   in
   let init_values_body = (.<
-    .~n.value <- Ndarray.create (Ndarray.dims .~n1v);
+    .~node.value <- Ndarray.create (Ndarray.dims .~n1v);
   >.) in
   (* Not required, but we preserve the order, for readability. *)
   let init_values =
@@ -70,9 +71,9 @@ let binop ~label ~name ~op_body ~grad_body m1 m2 =
     else if l2r_comp_order then (.< .~(m1.init_values); .~(m2.init_values); .~init_values_body >.)
     else (.< .~(m2.init_values); .~(m1.init_values); .~init_values_body >.) in
   let toplevel_forward = (.< .~init_values; fun () -> .~forward_body >.) in
-  let nd = Codelib.genlet ~name:"addd" (.< .~n.grad >.) in
-  let n1d = Codelib.genlet ~name:"add1d" (.< (Node.get n1_id).grad >.) in
-  let n2d = Codelib.genlet ~name:"add2d" (.< (Node.get n2_id).grad >.) in
+  let nd = (.< .~node.grad >.) in
+  let n1d = (.< .~(m1.node).grad >.) in
+  let n2d = (.< .~(m2.node).grad >.) in
   let zero_body = (.< Ndarray.reset_zeros .~nd >.) in
   (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
      and keep the backprop order for readability. *)
@@ -95,7 +96,7 @@ let binop ~label ~name ~op_body ~grad_body m1 m2 =
     | false, Some m1_body, _, _ -> (.< .~grad_body; .~m1_body  >.)
     in
   let init_grads_body = (.<
-    .~n.grad <- Ndarray.create (Ndarray.dims .~nv);
+    .~node.grad <- Ndarray.create (Ndarray.dims .~nv);
   >.) in
   (* The order is not relevant, we keep the same order as in backprop for readability. *)
   let init_grads =
@@ -116,15 +117,16 @@ let binop ~label ~name ~op_body ~grad_body m1 m2 =
   {toplevel_forward; toplevel_backprop;
    forward_body=Some forward_body; backprop_body=Some backprop_body;
    init_values; init_grads; zero_grads;
-   node_id; processed=false; debug_node}
+   node_id; processed=false; debug_node; node}
 
-let unop ~label ~name ~op_body ~grad_body m =
+let unop ~op_label ~op_body ~grad_body m =
+  let m_l = m.debug_node.label in
+  let label = op_label ^ m_l in
   let debug_node = Node.create ~label in
   let node_id = debug_node.id in
-  let n1_id = m.node_id in
-  let n = Codelib.genlet ~name:(name^"n") (.< Node.get node_id >.) in
-  let nv = Codelib.genlet ~name:(name^"v") (.< .~n.value >.) in
-  let n1v = Codelib.genlet ~name:(name^"1v") (.< (Node.get n1_id).value >.) in
+  let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
+  let nv = (.< .~node.value >.) in
+  let n1v = (.< .~(m.node).value >.) in
   let op_body = op_body ~nv ~n1v in
   (* The code needs to be included in the order it was computed! *)
   let forward_body =
@@ -133,11 +135,11 @@ let unop ~label ~name ~op_body ~grad_body m =
     | false, Some m_body -> (.< .~m_body; .~op_body >.) in
   let init_values = (.<
     .~(m.init_values);
-    .~n.value <- Ndarray.create (Ndarray.dims .~n1v);
+    .~node.value <- Ndarray.create (Ndarray.dims .~n1v);
   >.) in
   let toplevel_forward = (.< .~init_values; fun () -> .~forward_body >.) in
-  let nd = Codelib.genlet ~name:"relud" (.< .~n.grad >.) in
-  let n1d = Codelib.genlet ~name:"relu1d" (.< (Node.get n1_id).grad >.) in
+  let nd = (.< .~node.grad >.) in
+  let n1d = (.< .~(m.node).grad >.) in
   let zero_body = (.< Ndarray.reset_zeros .~nd >.) in
   (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
        and keep the backprop order for readability. *)
@@ -151,7 +153,7 @@ let unop ~label ~name ~op_body ~grad_body m =
     | true, _ | _, None -> grad_body
     | false, Some m_body -> (.< .~grad_body; .~m_body >.) in
   let init_grads_body = (.<
-    .~n.grad <- Ndarray.create (Ndarray.dims .~nv);
+    .~node.grad <- Ndarray.create (Ndarray.dims .~nv);
   >.) in
   (* The order is not relevant, we keep the same order as in backprop for readability. *)
   let init_grads =
@@ -168,7 +170,7 @@ let unop ~label ~name ~op_body ~grad_body m =
   {toplevel_forward; toplevel_backprop;
    forward_body=Some forward_body; backprop_body=Some backprop_body;
    init_values; init_grads; zero_grads;
-   node_id; processed=false; debug_node}
+   node_id; processed=false; debug_node; node}
 
 (* FIXME: be careful about where n1v etc. is created vs. where it's used. *)
 
@@ -179,21 +181,21 @@ let unop ~label ~name ~op_body ~grad_body m =
 let param ~label ~(init_code:Ndarray.t Codelib.code) : submodel =
   let debug_node = Node.create ~label in
   let node_id = debug_node.id in
-  let n = Codelib.genlet ~name:label (.< Node.get node_id >.) in
-  let nv = Codelib.genlet ~name:(label ^ "v") (.< .~n.value >.) in
+  let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
+  let nv = (.< .~node.value >.) in
   (* Very unlikely someone will compute just the parameters. *)
   let forward_body = None in
   let init_values = (.<
-    Hashtbl.add_exn Node.global.params ~key:label ~data:(.~n);
-    .~n.value <- .~init_code;
+    Hashtbl.add_exn Node.global.params ~key:label ~data:(.~node);
+    .~node.value <- .~init_code;
   >.) in
   let toplevel_forward = (.< .~init_values; fun () -> () >.) in
-  let nd = Codelib.genlet ~name:(label^"d") (.< .~n.grad >.) in
+  let nd = Codelib.genlet ~name:(label^"d") (.< .~node.grad >.) in
   let zero_grads = (.< Ndarray.reset_zeros .~nd >.) in
   let backprop_body = None in
   (* Very unlikely someone will want dw/dw. *)
   let init_grads = (.<
-    .~n.grad <- Ndarray.create (Ndarray.dims .~nv);
+    .~node.grad <- Ndarray.create (Ndarray.dims .~nv);
   >.) in
   let toplevel_backprop = (.<
     .~init_grads;
@@ -201,36 +203,30 @@ let param ~label ~(init_code:Ndarray.t Codelib.code) : submodel =
   >.) in
   {toplevel_forward; toplevel_backprop; forward_body; backprop_body;
     init_values; init_grads; zero_grads;
-    node_id; processed=false; debug_node}
+    node_id; processed=false; debug_node; node}
 
 let add =
-  let label = "+" in
-  let name = "add" in
   let op_body ~nv ~n1v ~n2v = (.< Ndarray.assign_add .~nv .~n1v .~n2v >.) in
   let grad_body ~n1d ~n2d ~nd ~nv:_ ~n1v:_ ~n2v:_ = (.<
     Ndarray.assign_add .~n1d .~n1d .~nd;
     Ndarray.assign_add .~n2d .~n2d .~nd
   >.) in
-  binop ~label ~name ~op_body ~grad_body
+  binop ~op_label:"t" ~op_body ~grad_body
 
 let mul =
-  let label = "*" in
-  let name = "mul" in
   let op_body ~nv ~n1v ~n2v = (.< Ndarray.assign_mul .~nv .~n1v .~n2v >.) in
   let grad_body ~n1d ~n2d ~nd ~nv:_ ~n1v ~n2v = (.<
     Ndarray.assign_add .~n1d .~n1d (Ndarray.mul .~nd .~n2v);
     Ndarray.assign_add .~n2d .~n2d (Ndarray.mul .~nd .~n1v)
   >.) in
-  binop ~label ~name ~op_body ~grad_body
+  binop ~op_label:"" ~op_body ~grad_body
 
 let relu =
-  let label = "relu" in
-  let name = "relu" in
   let op_body ~nv ~n1v = (.< Ndarray.assign_relu .~nv .~n1v >.) in
   let grad_body ~n1d ~nd ~nv ~n1v:_ = (.<
     Ndarray.assign_add .~n1d .~n1d (Ndarray.relu_gate .~nv .~nd)
   >.) in
-  unop ~label ~name ~op_body ~grad_body
+  unop ~op_label:"r" ~op_body ~grad_body
 
 let init_zeroes dims = (.< let p = Ndarray.create dims in Ndarray.reset_zeros p; p >.)
 let init_uniform dims = (.< Ndarray.get_uniform ~low:(-1.0) ~high:1.0 dims >.)
@@ -267,4 +263,4 @@ let b = F.init_uniform [|3; 3|]
 let nn = F.(add (mul (param ~label:"w" ~init_code:w) (param ~label:"x" ~init_code:x)) (param ~label:"b" ~init_code:b));;
 Stdio.print_endline @@ fst @@ F.sprint nn.toplevel_forward;;
 Stdio.print_endline @@ fst @@ F.sprint nn.toplevel_forward
-   *)
+*)
