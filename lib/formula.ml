@@ -32,8 +32,9 @@ let l2r_comp_order =
     | Some b -> b
     | None -> assert false) (l2r_ord := Some false) (l2r_ord := Some true)
 
-(* Design choice: tensor dims are decided after code is constructed, but before it is compiled.
-   I.e. code needs to be recompiled with [Runcode.run] when the dimensions change. *)
+(* Design choice: tensor dims are decided after code is constructed, but when it is loaded.
+   I.e. code needs to be re-executed with [Runcode.run_bytecode] or [Runnative.run_native]
+   when the dimensions change. *)
 
 (* TODO: maybe propagate a label and use it as a prefix for [genlet]? *)
 
@@ -234,6 +235,25 @@ let relu =
 let init_zeroes dims = (.< let p = Ndarray.create dims in Ndarray.reset_zeros p; p >.)
 let init_uniform dims = (.< Ndarray.get_uniform ~low:(-1.0) ~high:1.0 dims >.)
 
+let sprint code =
+  let closed, check = Codelib.close_code_delay_check code in
+  ignore (Caml.Format.flush_str_formatter());
+  Caml.Format.pp_set_margin Caml.Format.str_formatter 160;
+  Codelib.format_code Caml.Format.str_formatter closed;
+  let s = Caml.Format.flush_str_formatter() in
+  let s = String.substr_replace_all s ~pattern:"Base." ~with_:"" in
+  let s = String.substr_replace_all s ~pattern:"Ocannl." ~with_:"" in
+  let s = String.substr_replace_all s ~pattern:"Ndarray." ~with_:"" in
+  let s = String.substr_replace_all s ~pattern:"Node." ~with_:"" in
+  s, check
+
+(*
+let postprocess code =
+  let closed, check = Codelib.close_code_delay_check code in
+  let ast = Codelib.ast_of_code closed in
+  Printast.expression
+*)
+
 (* 
 ~/ocannl$ dune utop
 
@@ -244,39 +264,7 @@ module F = Formula
 let x = F.init_zeroes [|3; 3|]
 let w = F.init_uniform [|3; 3|]
 let b = F.init_uniform [|3; 3|]
-let nn = F.(add (mul (param ~label:"w" ~init_code:w) (param ~label:"x" ~init_code:x)) (param ~label:"b" ~init_code:b))
-let nn_fwd = Codelib.close_code nn.toplevel_forward
-let nn_bwd = Codelib.close_code nn.toplevel_backprop
-Codelib.format_code Caml.Format.std_formatter nn_fwd
-Codelib.format_code Caml.Format.std_formatter nn_bwd
-*)
-(* Forward:
-let addn_10 = Ocannl.Node.get 4 in
-let add1v_11 = (Ocannl.Node.get 3).Ocannl.Node.value in
-let add2v_12 = (Ocannl.Node.get 0).Ocannl.Node.value in
-let muln_5 = Ocannl.Node.get 3 in
-let mul1v_6 = (Ocannl.Node.get 2).Ocannl.Node.value in
-let mul2v_7 = (Ocannl.Node.get 1).Ocannl.Node.value in
-let w_4 = Ocannl.Node.get 2 in
-let x_3 = Ocannl.Node.get 1 in
-let b_2 = Ocannl.Node.get 0 in
-((Base.Hashtbl.add_exn Ocannl.Node.global.Ocannl.Node.params ~key:"b" ~data:b_2;
-  b_2.Ocannl.Node.value <-
-    (Ocannl.Ndarray.get_uniform ~low:(-1.0) ~high:1.0 (* CSP dims *)));
- ((Base.Hashtbl.add_exn Ocannl.Node.global.Ocannl.Node.params ~key:"x"
-     ~data:x_3;
-   x_3.Ocannl.Node.value <-
-     ((let p_1 = Ocannl.Ndarray.create (* CSP dims *) in
-       Ocannl.Ndarray.reset_zeros p_1; p_1)));
-  (Base.Hashtbl.add_exn Ocannl.Node.global.Ocannl.Node.params ~key:"w"
-     ~data:w_4;
-   w_4.Ocannl.Node.value <-
-     (Ocannl.Ndarray.get_uniform ~low:(-1.0) ~high:1.0 (* CSP dims *)));
-  muln_5.Ocannl.Node.value <-
-    (Ocannl.Ndarray.create (Ocannl.Ndarray.dims mul1v_6)));
- addn_10.Ocannl.Node.value <-
-   (Ocannl.Ndarray.create (Ocannl.Ndarray.dims add1v_11)));
-(fun () ->
-   Ocannl.Ndarray.assign_mul muln_5.Ocannl.Node.value mul1v_6 mul2v_7;
-   Ocannl.Ndarray.assign_add addn_10.Ocannl.Node.value add1v_11 add2v_12)
+let nn = F.(add (mul (param ~label:"w" ~init_code:w) (param ~label:"x" ~init_code:x)) (param ~label:"b" ~init_code:b));;
+Stdio.print_endline @@ fst @@ F.sprint nn.toplevel_forward;;
+Stdio.print_endline @@ fst @@ F.sprint nn.toplevel_forward
    *)
