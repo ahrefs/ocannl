@@ -1,7 +1,7 @@
 open Base
 
 (** Uses [code option], i.e. [None] instead of [.< () >.], to improve readability of generated code. *)
-type submodel = {
+type t = {
   toplevel_forward: (unit -> unit) Codelib.code;
   (** Only apply at the root, since otherwise some computation may be elided (incorrect results). *)
   toplevel_backprop: (unit -> unit) Codelib.code;
@@ -18,15 +18,16 @@ type submodel = {
   (** Initializes the backpropagation phase. Computed once per backpropagation. *)
   node_id: int;
   mutable processed: bool;
-  (** [true] if [forward_body]/[backprop_body]/[zero_grads] were already included in a parent submodel. *)
+  (** [true] if [forward_body]/[backprop_body]/[zero_grads] were already included in a parent `t`. *)
   debug_node: Node.t;
-  (** This tracks the computation node as long as the model is not cross-compiled to a different process. *)
+  (** This tracks the computation node as long as the model is not cross-compiled to a different
+      process etc. *)
   node: Node.t Codelib.code;
   (** The node storing the computation results. *)
 }
 
 (* The code relies on argument evaluation order. To lift the requirement, we could use
-   [submodel Lazy.t], but that's an unnecessary obfuscation. *)
+   [t Lazy.t], but that's an unnecessary obfuscation. *)
 let l2r_comp_order =
   let l2r_ord = ref None in
   (fun () () ->
@@ -176,19 +177,15 @@ let unop ~op_label ~op_body ~grad_body m =
 
 (* ********** User API below ********** *)
 
-(** A parameter or input of the model. The [label] must be unique, i.e. not already present in
-    [Node.global.params]. *)
-let param ~label ~(init_code:Ndarray.t Codelib.code) : submodel =
+(** A parameter or input of the model. *)
+let param ~label ~(init_code:Ndarray.t Codelib.code) : t =
   let debug_node = Node.create ~label in
   let node_id = debug_node.id in
   let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
   let nv = (.< .~node.value >.) in
   (* Very unlikely someone will compute just the parameters. *)
   let forward_body = None in
-  let init_values = (.<
-    Hashtbl.add_exn Node.global.params ~key:label ~data:(.~node);
-    .~node.value <- .~init_code;
-  >.) in
+  let init_values = (.< .~node.value <- .~init_code >.) in
   let toplevel_forward = (.< .~init_values; fun () -> () >.) in
   let nd = Codelib.genlet ~name:(label^"d") (.< .~node.grad >.) in
   let zero_grads = (.< Ndarray.reset_zeros .~nd >.) in

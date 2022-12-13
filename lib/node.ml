@@ -13,14 +13,11 @@ type t = {
 type state = {
   mutable unique_id: int;
   node_store: (int, t) Hashtbl.t;
-  params: (string, t) Hashtbl.t;
-  (** A subset of nodes that are parameters. Assumes unique param labels. *)
 }
 
 let global = {
   unique_id = 0;
   node_store = Hashtbl.create (module Int);
-  params = Hashtbl.create (module String);
 }
 let get uid = Hashtbl.find_exn global.node_store uid
 
