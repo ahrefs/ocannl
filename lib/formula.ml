@@ -1,3 +1,5 @@
+(** The compositional primitives for runtime-compiled code supporting backpropagation. *)
+
 open Base
 
 (** Uses [code option], i.e. [None] instead of [.< () >.], to improve readability of generated code. *)
@@ -39,7 +41,7 @@ let l2r_comp_order =
    I.e. code needs to be re-executed with [Runcode.run_bytecode] or [Runnative.run_native]
    when the dimensions change. *)
 
-let binop ~op_label ~op_body ~grad_body m1 m2 =
+let binop ~op_label ~op_body ~grad_body m1 m2: t =
   let m1_l = m1.debug_node.label in
   let m2_l = m2.debug_node.label in
   let label = m1_l ^ op_label ^ m2_l in
@@ -120,7 +122,7 @@ let binop ~op_label ~op_body ~grad_body m1 m2 =
    init_values; init_grads; zero_grads;
    node_id; processed=false; debug_node; node}
 
-let unop ~op_label ~op_body ~grad_body m =
+let unop ~op_label ~op_body ~grad_body m: t =
   let m_l = m.debug_node.label in
   let label = op_label ^ m_l in
   let debug_node = Node.create ~label in
@@ -240,6 +242,13 @@ let sprint code =
   let s = String.substr_replace_all s ~pattern:"Node." ~with_:"" in
   s, check
 
+module O = struct
+  let ( * ) = mul
+  let (+) = add
+  let (!/) = relu
+  let (!~) label dims = param ~label ~init_code:(init_uniform dims)
+end
+
 (*
 let postprocess code =
   let closed, check = Codelib.close_code_delay_check code in
@@ -254,10 +263,8 @@ open Base
 #load "_build/default/lib/ocannl.cma"
 open Ocannl
 module F = Formula
-let x = F.init_zeroes [|3; 3|]
-let w = F.init_uniform [|3; 3|]
-let b = F.init_uniform [|3; 3|]
-let nn = F.(add (mul (param ~label:"w" ~init_code:w) (param ~label:"x" ~init_code:x)) (param ~label:"b" ~init_code:b));;
-Stdio.print_endline @@ fst @@ F.sprint nn.toplevel_forward;;
-Stdio.print_endline @@ fst @@ F.sprint nn.toplevel_forward
+let d = [|3; 3|]
+let nn = F.O.(!/(!~"w" d * !~"x" d + !~"b" d))
+let () = Stdio.print_endline @@ fst @@ F.sprint nn.toplevel_forward
+let () = Stdio.print_endline @@ fst @@ F.sprint nn.toplevel_backprop
 *)

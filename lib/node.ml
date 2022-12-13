@@ -1,4 +1,4 @@
-(** `Node`: the object type, global state and utils which the `Formula` staged code uses. *)
+(** `Node`: the computation type, global state and utils which the `Formula` staged code uses. *)
 open Base
 
 type data = Ndarray.t
