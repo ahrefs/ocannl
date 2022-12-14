@@ -37,7 +37,7 @@ let l2r_comp_order =
     | Some b -> b
     | None -> assert false) (l2r_ord := Some false) (l2r_ord := Some true)
 
-(* Design choice: tensor dims are decided after code is constructed, but when it is loaded.
+(* Design choice: tensor shape is decided after code is constructed, but when it is loaded.
    I.e. code needs to be re-executed with [Runcode.run_bytecode] or [Runnative.run_native]
    when the dimensions change. *)
 
@@ -66,7 +66,7 @@ let binop ~op_label ~op_body ~grad_body m1 m2: t =
     | false, Some m1_body, _, _ -> (.< .~m1_body; .~op_body >.)
   in
   let init_values_body = (.<
-    .~node.value <- Ndarray.create (Ndarray.dims .~n1v);
+    .~node.value <- Ndarray.create (Ndarray.shape .~n1v);
   >.) in
   (* Not required, but we preserve the order, for readability. *)
   let init_values =
@@ -101,7 +101,7 @@ let binop ~op_label ~op_body ~grad_body m1 m2: t =
     | false, Some m1_body, _, _ -> (.< .~grad_body; .~m1_body  >.)
     in
   let init_grads_body = (.<
-    .~node.grad <- Ndarray.create (Ndarray.dims .~nv);
+    .~node.grad <- Ndarray.create (Ndarray.shape .~nv);
   >.) in
   (* The order is not relevant, we keep the same order as in backprop for readability. *)
   let init_grads =
@@ -141,7 +141,7 @@ let unop ~op_label ~op_body ~grad_body m: t =
     | false, Some m_body -> (.< .~m_body; .~op_body >.) in
   let init_values = (.<
     .~(m.init_values);
-    .~node.value <- Ndarray.create (Ndarray.dims .~n1v);
+    .~node.value <- Ndarray.create (Ndarray.shape .~n1v);
   >.) in
   let toplevel_forward = (.< .~init_values; fun () -> .~forward_body >.) in
   let nd = (.< .~node.grad >.) in
@@ -159,7 +159,7 @@ let unop ~op_label ~op_body ~grad_body m: t =
     | true, _ | _, None -> grad_body
     | false, Some m_body -> (.< .~grad_body; .~m_body >.) in
   let init_grads_body = (.<
-    .~node.grad <- Ndarray.create (Ndarray.dims .~nv);
+    .~node.grad <- Ndarray.create (Ndarray.shape .~nv);
   >.) in
   (* The order is not relevant, we keep the same order as in backprop for readability. *)
   let init_grads =
@@ -197,7 +197,7 @@ let term ~label ~(init_code:Ndarray.t Codelib.code) : t =
   let backprop_body = None in
   (* Very unlikely someone will want dw/dw. *)
   let init_grads = (.<
-    .~node.grad <- Ndarray.create (Ndarray.dims .~nv);
+    .~node.grad <- Ndarray.create (Ndarray.shape .~nv);
   >.) in
   let toplevel_backprop = (.<
     .~init_grads;
@@ -230,8 +230,8 @@ let relu =
   >.) in
   unop ~op_label:"r" ~op_body ~grad_body
 
-let init_zeroes dims = (.< let p = Ndarray.create dims in Ndarray.reset_zeros p; p >.)
-let init_uniform dims = (.< Ndarray.get_uniform ~low:(-1.0) ~high:1.0 dims >.)
+let init_zeroes shape = (.< let p = Ndarray.create shape in Ndarray.reset_zeros p; p >.)
+let init_uniform shape = (.< Ndarray.get_uniform ~low:(-1.0) ~high:1.0 shape >.)
 
 let float_to_label v = "v" ^ (
   Float.to_string v |> String.substr_replace_all ~pattern:"." ~with_:"p"
@@ -245,7 +245,7 @@ module O = struct
   let ( * ) = mul
   let (+) = add
   let (!/) = relu
-  let (!~) label dims = term ~label ~init_code:(init_uniform dims)
+  let (!~) label shape = term ~label ~init_code:(init_uniform shape)
   let (!.) = number
   let (-) m1 m2 = m1 + !.(-1.) * m2
 end
