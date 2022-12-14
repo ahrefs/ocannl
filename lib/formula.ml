@@ -2,8 +2,20 @@
 
 open Base
 
+type scalar = Scalar
+type tensor = Tensor
+type 'a batched = Batched of 'a
+type ('a, 'b) matmul = Matmul of 'a * 'b
+type ('a, 'b) broadcast = Broadcast of 'a * 'b
+type _ shape =
+  | Scalar: scalar shape
+  | Tensor: int array -> tensor shape
+  | Batched: int * 'a shape -> 'a batched shape
+  | Matmul: 'a shape * 'b shape -> ('a, 'b) matmul shape
+  | Broadcast: 'a shape * 'b shape -> ('a, 'b) broadcast shape
+
 (** Uses [code option], i.e. [None] instead of [.< () >.], to improve readability of generated code. *)
-type t = {
+type 'a t = {
   toplevel_forward: (unit -> unit) Codelib.code;
   (** Only apply at the root, since otherwise some computation may be elided (incorrect results). *)
   toplevel_backprop: (unit -> unit) Codelib.code;
@@ -20,6 +32,7 @@ type t = {
   (** Initializes the backpropagation phase. Computed once per backpropagation. *)
   node_id: int;
   mutable processed: bool;
+  mutable shape: 'a shape option ref;
   (** [true] if [forward_body]/[backprop_body]/[zero_grads] were already included in a parent `t`. *)
   comp_node: Node.t;
   (** This tracks the computation node as long as the model is not cross-compiled to a different
