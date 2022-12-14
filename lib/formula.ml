@@ -43,7 +43,9 @@ let l2r_comp_order =
 
 let binop ~op_label ~op_body ~grad_body m1 m2: t =
   let m1_l = m1.comp_node.label in
+  let m1_l = if String.length m1_l > 11 then "n"^Int.to_string m1.node_id else m1_l in
   let m2_l = m2.comp_node.label in
+  let m2_l = if String.length m2_l > 11 then "n"^Int.to_string m2.node_id else m2_l in
   let label = m1_l ^ op_label ^ m2_l in
   let comp_node = Node.create ~label in
   let node_id = comp_node.id in
@@ -124,6 +126,7 @@ let binop ~op_label ~op_body ~grad_body m1 m2: t =
 
 let unop ~op_label ~op_body ~grad_body m: t =
   let m_l = m.comp_node.label in
+  let m_l = if String.length m_l > 11 then "n"^Int.to_string m.node_id else m_l in
   let label = op_label ^ m_l in
   let comp_node = Node.create ~label in
   let node_id = comp_node.id in
