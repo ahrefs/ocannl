@@ -238,6 +238,15 @@ let number v =
   (* TODO(5): use dimensions inference and broadcasting. *)
   term ~label:(float_to_label v) ~init_code:(.< Ndarray.get_val v [|1|] >.)
 
+module O = struct
+  let ( * ) = mul
+  let (+) = add
+  let (!/) = relu
+  let (!~) label dims = term ~label ~init_code:(init_uniform dims)
+  let (!.) = number
+  let (-) m1 m2 = m1 + !.(-1.) * m2
+end
+
 let sprint code =
   let closed, check = Codelib.close_code_delay_check code in
   ignore (Caml.Format.flush_str_formatter());
@@ -250,14 +259,19 @@ let sprint code =
   let s = String.substr_replace_all s ~pattern:"Node." ~with_:"" in
   s, check
 
-module O = struct
-  let ( * ) = mul
-  let (+) = add
-  let (!/) = relu
-  let (!~) label dims = term ~label ~init_code:(init_uniform dims)
-  let (!.) = number
-  let (-) m1 m2 = m1 + !.(-1.) * m2
-end
+(* TODO: maybe streamline [t] to enable [t_of_sexp]. *)
+let sexp_of_t m =
+  Sexp.message "Formula" [
+    "label", String.sexp_of_t m.comp_node.label; "node_id", Int.sexp_of_t m.node_id;
+    "toplevel_forward", String.sexp_of_t @@ fst @@ sprint m.toplevel_forward;
+    "toplevel_backprop", String.sexp_of_t @@ fst @@ sprint m.toplevel_backprop;
+  ]
+
+include Comparator.Make(struct
+    type nonrec t = t
+    let compare m1 m2 = Int.compare m1.node_id m2.node_id
+    let sexp_of_t = sexp_of_t
+end)
 
 (*
 let postprocess code =
