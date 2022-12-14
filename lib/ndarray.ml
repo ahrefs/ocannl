@@ -17,8 +17,12 @@ let reset_ones (arr: t) =
 let reset_zeros (arr: t) =
     A.fill arr 0.0
 
+let get_val v dims =
+  let arr = create dims in
+  A.fill arr v;
+  arr
+
 let get_uniform ~(low:float) ~(high:float) dims =
-  (* TODO: checks not needed *)
   let arr = create dims in
   (* TODO: FIXME: NOT IMPLEMENTED *)
   ignore(low, high);

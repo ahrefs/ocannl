@@ -230,6 +230,14 @@ let relu =
 let init_zeroes dims = (.< let p = Ndarray.create dims in Ndarray.reset_zeros p; p >.)
 let init_uniform dims = (.< Ndarray.get_uniform ~low:(-1.0) ~high:1.0 dims >.)
 
+let float_to_label v = "v" ^ (
+  Float.to_string v |> String.substr_replace_all ~pattern:"." ~with_:"p"
+  |> String.substr_replace_all ~pattern:"-" ~with_:"m")
+
+let number v =
+  (* TODO(5): use dimensions inference and broadcasting. *)
+  term ~label:(float_to_label v) ~init_code:(.< Ndarray.get_val v [|1|] >.)
+
 let sprint code =
   let closed, check = Codelib.close_code_delay_check code in
   ignore (Caml.Format.flush_str_formatter());
@@ -247,6 +255,8 @@ module O = struct
   let (+) = add
   let (!/) = relu
   let (!~) label dims = term ~label ~init_code:(init_uniform dims)
+  let (!.) = number
+  let (-) m1 m2 = m1 + !.(-1.) * m2
 end
 
 (*
