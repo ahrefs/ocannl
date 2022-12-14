@@ -276,6 +276,12 @@ include Comparator.Make(struct
     let sexp_of_t = sexp_of_t
 end)
 
+module Summable = struct
+  type nonrec t = t
+  let (+) = add
+  let zero = number 0.0
+end
+
 (*
 let postprocess code =
   let closed, check = Codelib.close_code_delay_check code in
