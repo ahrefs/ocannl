@@ -16,7 +16,7 @@ type state = {
 }
 
 let global = {
-  unique_id = 0;
+  unique_id = 1;
   node_store = Hashtbl.create (module Int);
 }
 let get uid = Hashtbl.find_exn global.node_store uid
