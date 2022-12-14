@@ -19,13 +19,13 @@ let nonlinear ~w ~b =
 let compose m1 m2 =
   let apply x = m1.apply @@ m2.apply x in
   let params = Sequence.merge_deduped_and_sorted m1.params m2.params
-      ~compare:(fun f1 f2 -> String.compare f1.debug_node.label f2.debug_node.label) in
+      ~compare:(fun f1 f2 -> String.compare f1.comp_node.label f2.comp_node.label) in
   {apply; params}
 
 let residual_compose m1 m2 =
   let apply x = let z = m2.apply x in Formula.O.(m1.apply z + z)  in
   let params = Sequence.merge_deduped_and_sorted m1.params m2.params
-      ~compare:(fun f1 f2 -> String.compare f1.debug_node.label f2.debug_node.label) in
+      ~compare:(fun f1 f2 -> String.compare f1.comp_node.label f2.comp_node.label) in
   {apply; params}
 
 module O = struct

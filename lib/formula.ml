@@ -21,7 +21,7 @@ type t = {
   node_id: int;
   mutable processed: bool;
   (** [true] if [forward_body]/[backprop_body]/[zero_grads] were already included in a parent `t`. *)
-  debug_node: Node.t;
+  comp_node: Node.t;
   (** This tracks the computation node as long as the model is not cross-compiled to a different
       process etc. *)
   node: Node.t Codelib.code;
@@ -42,11 +42,11 @@ let l2r_comp_order =
    when the dimensions change. *)
 
 let binop ~op_label ~op_body ~grad_body m1 m2: t =
-  let m1_l = m1.debug_node.label in
-  let m2_l = m2.debug_node.label in
+  let m1_l = m1.comp_node.label in
+  let m2_l = m2.comp_node.label in
   let label = m1_l ^ op_label ^ m2_l in
-  let debug_node = Node.create ~label in
-  let node_id = debug_node.id in
+  let comp_node = Node.create ~label in
+  let node_id = comp_node.id in
   let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
   let nv = (.< .~node.value >.) in
   let n1v = (.< .~(m1.node).value >.) in
@@ -120,13 +120,13 @@ let binop ~op_label ~op_body ~grad_body m1 m2: t =
   {toplevel_forward; toplevel_backprop;
    forward_body=Some forward_body; backprop_body=Some backprop_body;
    init_values; init_grads; zero_grads;
-   node_id; processed=false; debug_node; node}
+   node_id; processed=false; comp_node; node}
 
 let unop ~op_label ~op_body ~grad_body m: t =
-  let m_l = m.debug_node.label in
+  let m_l = m.comp_node.label in
   let label = op_label ^ m_l in
-  let debug_node = Node.create ~label in
-  let node_id = debug_node.id in
+  let comp_node = Node.create ~label in
+  let node_id = comp_node.id in
   let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
   let nv = (.< .~node.value >.) in
   let n1v = (.< .~(m.node).value >.) in
@@ -173,16 +173,16 @@ let unop ~op_label ~op_body ~grad_body m: t =
   {toplevel_forward; toplevel_backprop;
    forward_body=Some forward_body; backprop_body=Some backprop_body;
    init_values; init_grads; zero_grads;
-   node_id; processed=false; debug_node; node}
+   node_id; processed=false; comp_node; node}
 
 (* FIXME: be careful about where n1v etc. is created vs. where it's used. *)
 
 (* ********** User API below ********** *)
 
-(** A parameter or input of the model. *)
-let param ~label ~(init_code:Ndarray.t Codelib.code) : t =
-  let debug_node = Node.create ~label in
-  let node_id = debug_node.id in
+(** A terminal: a constant, a parameter, an input of the model. *)
+let term ~label ~(init_code:Ndarray.t Codelib.code) : t =
+  let comp_node = Node.create ~label in
+  let node_id = comp_node.id in
   let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
   let nv = (.< .~node.value >.) in
   (* Very unlikely someone will compute just the parameters. *)
@@ -202,7 +202,7 @@ let param ~label ~(init_code:Ndarray.t Codelib.code) : t =
   >.) in
   {toplevel_forward; toplevel_backprop; forward_body; backprop_body;
     init_values; init_grads; zero_grads;
-    node_id; processed=false; debug_node; node}
+    node_id; processed=false; comp_node; node}
 
 let add =
   let op_body ~nv ~n1v ~n2v = (.< Ndarray.assign_add .~nv .~n1v .~n2v >.) in
@@ -246,7 +246,7 @@ module O = struct
   let ( * ) = mul
   let (+) = add
   let (!/) = relu
-  let (!~) label dims = param ~label ~init_code:(init_uniform dims)
+  let (!~) label dims = term ~label ~init_code:(init_uniform dims)
 end
 
 (*
