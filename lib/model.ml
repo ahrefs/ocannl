@@ -30,7 +30,7 @@ let residual_compose m1 m2 =
       ~compare:(fun f1 f2 -> String.compare f1.comp_node.label f2.comp_node.label) in
   {apply; params}
 
-let bind m f =
+let bind_ret m f =
   let apply x = f @@ m.apply x in
   {apply; params=m.params}
 
@@ -40,10 +40,10 @@ module O = struct
   let (@@) m x = m.apply x
   let ( % ) = compose
   let (%+) = residual_compose
-  (* This is [(>>>)] from arrows, but [(%>)] is neater. *)
+  (* This is like [(>>>)] from arrows, but [(%>)] is neater. *)
   let ( %> ) m1 m2 = compose m2 m1
   let (%+>) m1 m2 = residual_compose m2 m1
-  let (@>) = bind
+  let (>>|) = bind_ret
 end
 
 (* 
