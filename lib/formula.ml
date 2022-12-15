@@ -78,13 +78,22 @@ type t = {
   zero_grads: unit Codelib.code;
   (** Initializes the backpropagation phase. Computed once per backpropagation. *)
   node_id: int;
-  mutable processed: bool;
-  (** [true] if [forward_body]/[backprop_body]/[zero_grads] were already included in a parent `t`. *)
   comp_node: Node.t;
   (** This tracks the computation node as long as the model is not cross-compiled to a different
       process etc. *)
   node: Node.t Codelib.code;
-  (** The node storing the computation results. *)
+  (** The node storing the computation results. [.!(t.node)] should equal [t.comp_node]. *)
+  mutable processed: bool;
+  (** [true] if [forward_body]/[backprop_body]/[zero_grads] were already included in a parent [t]. *)
+  shape_logic: shape_logic;
+  (** How to do the last update of [t.shape] when finalizing the formula. *)
+  shape: shape;
+  (** The eventual shape of [.!(t.node).value] and [.!(t.node).grad], incorporating the current state of
+      shape inference. *)
+  subtree_shape_updates: shape_update_step Sequence.t;
+  (** We piggy-back on the code generation setup to arrange the updates. We perform each update twice
+      to propagate information between all subformulas: first in postfix order while computing [t],
+      second in prefix order by iterating over [t.subtree_shape_updates]. *)
 }
 
 (* The code relies on argument evaluation order. To lift the requirement, we could use
@@ -100,7 +109,11 @@ let l2r_comp_order =
    I.e. code needs to be re-executed with [Runcode.run_bytecode] or [Runnative.run_native]
    when the dimensions change. *)
 
-let binop ~op_label ~op_body ~grad_body m1 m2: t =
+let propagate_shapes (update: shape_update_step) =
+  (* FIXME: NOT IMPLEMENTED *)
+  ignore update
+
+let binop ~op_label ?(is_compose_op=false) ~op_body ~grad_body m1 m2: t =
   let m1_l = m1.comp_node.label in
   let m1_l = if String.length m1_l > 11 then "n"^Int.to_string m1.node_id else m1_l in
   let m2_l = m2.comp_node.label in
@@ -108,6 +121,34 @@ let binop ~op_label ~op_body ~grad_body m1 m2: t =
   let label = m1_l ^ op_label ^ m2_l in
   let comp_node = Node.create ~label in
   let node_id = comp_node.id in
+  let axis_labels = Map.merge m1.shape.axis_labels m2.shape.axis_labels ~f:(fun ~key ->
+    function
+    | `Both (l1, l2) ->
+      if String.equal l1 l2 then Some l1
+      else
+        let error = "Axis label mismatch: "^l1^" vs "^l2^" for "^
+                    (Sexp.to_string_hum @@ AxisKey.sexp_of_t key) in
+         raise @@ Shape_error (error, m1.shape, m2.shape)
+    | `Right l | `Left l -> Some l
+  ) in
+  let shape = { batch_shape=None; input_shape=None; output_shape=None; axis_labels; fixed=[];
+                shape_of_node_id=node_id } in
+  let shape_logic =
+    if is_compose_op then BroadcastCompose (m1.shape, m2.shape)
+    else BroadcastPointwise (m1.shape, m2.shape) in
+  (* let shape_update_step = { shape_update; shape; parent_shape; parent_shape_logic } in *)
+  let m1_shape_update = {
+    shape_update=if is_compose_op then ComposeWithRight m2.shape else BroadcastWith m2.shape;
+    shape=m1.shape;
+    parent_shape=shape;
+    parent_shape_logic=shape_logic;
+  } in
+  let m2_shape_update = {
+    shape_update=if is_compose_op then ComposeWithLeft m1.shape else BroadcastWith m1.shape;
+    shape=m2.shape;
+    parent_shape=shape;
+    parent_shape_logic=shape_logic;
+  } in
   let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
   let nv = (.< .~node.value >.) in
   let n1v = (.< .~(m1.node).value >.) in
@@ -147,7 +188,9 @@ let binop ~op_label ~op_body ~grad_body m1 m2: t =
     else if m2.processed then (.< .~zero_body; .~(m1.zero_grads) >.)
     else if l2r_comp_order then (.< .~zero_body; .~(m2.zero_grads); .~(m1.zero_grads) >.)
     else (.< .~zero_body; .~(m1.zero_grads); .~(m2.zero_grads) >.) in
-  (* The code needs to be included in the reverse order to which it was computed! *)
+  (* The code needs to be included in the reverse order to which it was computed! This guarantees
+     that all ancestors of a node are backpropagated before the node is backpropagated, even for
+     non-tree DAGs. *)
   let grad_body = grad_body ~n1d ~n2d ~nd ~nv ~n1v ~n2v in
   let backprop_body =
     match m1.processed, m1.backprop_body, m2.processed, m2.backprop_body with
@@ -177,13 +220,26 @@ let binop ~op_label ~op_body ~grad_body m1 m2: t =
       Ndarray.reset_ones .~nd;
       .~backprop_body
   >.) in
+  (* The order is reverse to the order the updates were already executed for the first time. *)
+  let local_shape_updates = Sequence.of_list [m1_shape_update; m2_shape_update] in
+  let subtree_shape_updates: shape_update_step Sequence.t =
+    if m1.processed && m2.processed then local_shape_updates
+    else if m1.processed then Sequence.append local_shape_updates m2.subtree_shape_updates
+    else if m2.processed then Sequence.append local_shape_updates m1.subtree_shape_updates
+    else if l2r_comp_order then 
+      Sequence.(concat @@ of_list
+                  [local_shape_updates; m2.subtree_shape_updates; m1.subtree_shape_updates])
+    else Sequence.(concat @@ of_list
+                     [local_shape_updates; m1.subtree_shape_updates; m2.subtree_shape_updates]) in
+
   m1.processed <- true; m2.processed <- true;
   {toplevel_forward; toplevel_backprop;
    forward_body=Some forward_body; backprop_body=Some backprop_body;
    init_values; init_grads; zero_grads;
-   node_id; processed=false; comp_node; node}
+   node_id; processed=false; comp_node; node;
+   shape_logic; shape; subtree_shape_updates}
 
-let unop ~op_label ~op_body ~grad_body m: t =
+let unop ~op_label ?(is_transpose_op=false) ~op_body ~grad_body m: t =
   let m_l = m.comp_node.label in
   let m_l = if String.length m_l > 11 then "n"^Int.to_string m.node_id else m_l in
   let label = op_label ^ m_l in
