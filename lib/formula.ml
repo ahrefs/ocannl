@@ -2,6 +2,65 @@
 
 open Base
 
+module AxisKey = struct
+  module T = struct
+    type shape_kind = 
+      | Batch_shape
+      | Input_shape
+      | Output_shape
+    [@@deriving compare, sexp]
+    type t = shape_kind * int [@@deriving compare, sexp]
+  end
+  include T
+  include Comparator.Make(T)
+end
+
+type axis_labels = string Map.M(AxisKey).t [@@deriving sexp]
+
+(** The datatype from which the actual Ndarray shapes are computed. In the future we can have
+    named axes here instead of the predefined options.
+
+    Mutability is sufficient to perform unification, since there is no need for backtracking and
+    no explicit unification variables. [None] stands for "not yet specified". *)
+type shape = {
+  mutable batch_shape: int list option;
+  mutable input_shape: int list option;
+  mutable output_shape: int list option;
+  mutable axis_labels: axis_labels;
+  fixed: AxisKey.shape_kind list;
+  (** The axes which were user-specified and should not be mutated. *)
+  shape_of_node_id: int;
+} [@@deriving fields, sexp]
+
+(** How to propagate shape updates and do the last update of [t.shape] when finalizing the formula.
+    There is no case for unary pointwise operations because then the shape remains the same.
+    Axes are broadcast-expanded on update to fit the incoming shape, except for [TerminalShape]'s
+    batch axes, which are set to empty unless user-provided. *)
+type shape_logic = 
+  | BroadcastPointwise of shape * shape
+  (** NumPy-style broadcast matching batch, input and output axes, e.g. as in [s1 + s2]. *)
+  | BroadcastCompose of shape * shape
+  (** Compose the outputs of the second shape with the inputs of the first shape, i.e.
+      the shape of [fun x -> s1(s2(x))], or [s1 * s2] where [*] is the inner product (e.g. matrix multiply). *)
+  | TransposeShape of shape
+  (** Swap inputs with outputs of [s1]. *)
+  | TerminalShape
+
+(** The holes into [shape_logic], to propagate shape updates. *)
+type shape_update =
+  | BroadcastWith of shape
+  | ComposeWithRight of shape
+  | ComposeWithLeft of shape
+
+type shape_update_step = {
+  shape_update: shape_update;
+  shape: shape;
+  parent_shape: shape;
+  parent_shape_logic: shape_logic;
+}
+
+exception Shape_error of string * shape * shape [@@deriving sexp]
+
 (** Uses [code option], i.e. [None] instead of [.< () >.], to improve readability of generated code. *)
 type t = {
   toplevel_forward: (unit -> unit) Codelib.code;
