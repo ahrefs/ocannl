@@ -7,7 +7,7 @@ module A = Bigarray.Genarray
 type elt = Bigarray.float32_elt
 type t = (float, elt, Bigarray.c_layout) A.t
 
- let shape: t -> 'a = A.shape
+ let shape: t -> 'a = A.dims
  let create = A.create Bigarray.Float32 Bigarray.C_layout
  let empty = create [||]
  
