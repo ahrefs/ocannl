@@ -42,21 +42,24 @@ type shape_logic =
   | BroadcastCompose of shape * shape
   (** Compose the outputs of the second shape with the inputs of the first shape, i.e.
       the shape of [fun x -> s1(s2(x))], or [s1 * s2] where [*] is the inner product (e.g. matrix multiply). *)
-  | TransposeShape of shape
-  (** Swap inputs with outputs of [s1]. *)
+  | TransposeShape of (shape -> shape) * shape
+  (** Permutes the axes of a shape. The simplest [TransposeShape] is to swap inputs with outputs of [s1],
+      hence the name. *)
   | TerminalShape
 
-(** The holes into [shape_logic], to propagate shape updates. *)
+(** The holes into [shape_logic], to propagate shape updates, where [LocalUpdate] is the whole [shape_logic]. *)
 type shape_update =
   | BroadcastWith of shape
   | ComposeWithRight of shape
   | ComposeWithLeft of shape
+  | InverseTranspose of (shape -> shape)
+  | LocalUpdate
 
 type shape_update_step = {
   shape_update: shape_update;
   shape: shape;
-  parent_shape: shape;
-  parent_shape_logic: shape_logic;
+  shape_logic: shape_logic;
+  parent_shape: shape option;
 }
 
 exception Shape_error of string * shape * shape [@@deriving sexp]
@@ -140,15 +143,18 @@ let binop ~op_label ?(is_compose_op=false) ~op_body ~grad_body m1 m2: t =
   let m1_shape_update = {
     shape_update=if is_compose_op then ComposeWithRight m2.shape else BroadcastWith m2.shape;
     shape=m1.shape;
-    parent_shape=shape;
-    parent_shape_logic=shape_logic;
+    parent_shape=Some shape;
+    shape_logic=m1.shape_logic;
   } in
   let m2_shape_update = {
     shape_update=if is_compose_op then ComposeWithLeft m1.shape else BroadcastWith m1.shape;
     shape=m2.shape;
-    parent_shape=shape;
-    parent_shape_logic=shape_logic;
+    parent_shape=Some shape;
+    shape_logic=m2.shape_logic;
   } in
+  let local_shape_update = { shape_update=LocalUpdate; shape; parent_shape=None; shape_logic } in
+  propagate_shapes m1_shape_update; propagate_shapes m2_shape_update;
+  propagate_shapes local_shape_update;
   let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
   let nv = (.< .~node.value >.) in
   let n1v = (.< .~(m1.node).value >.) in
@@ -221,7 +227,10 @@ let binop ~op_label ?(is_compose_op=false) ~op_body ~grad_body m1 m2: t =
       .~backprop_body
   >.) in
   (* The order is reverse to the order the updates were already executed for the first time. *)
-  let local_shape_updates = Sequence.of_list [m1_shape_update; m2_shape_update] in
+  let local_shape_updates =
+    Sequence.of_list @@
+      if l2r_comp_order then [local_shape_update; m2_shape_update; m1_shape_update]
+      else [local_shape_update; m1_shape_update; m2_shape_update] in
   let subtree_shape_updates: shape_update_step Sequence.t =
     if m1.processed && m2.processed then local_shape_updates
     else if m1.processed then Sequence.append local_shape_updates m2.subtree_shape_updates
@@ -239,12 +248,28 @@ let binop ~op_label ?(is_compose_op=false) ~op_body ~grad_body m1 m2: t =
    node_id; processed=false; comp_node; node;
    shape_logic; shape; subtree_shape_updates}
 
-let unop ~op_label ?(is_transpose_op=false) ~op_body ~grad_body m: t =
+let unop ~op_label ?(transpose_op=fun sh->sh) ?inv_transpose ~op_body ~grad_body m: t =
   let m_l = m.comp_node.label in
   let m_l = if String.length m_l > 11 then "n"^Int.to_string m.node_id else m_l in
   let label = op_label ^ m_l in
   let comp_node = Node.create ~label in
   let node_id = comp_node.id in
+
+  (* The default is that a transpose is its own inverse. *)
+  let inv_transpose = match inv_transpose with Some invt -> invt | None -> transpose_op in
+  let shape = transpose_op m.shape in
+  let shape_logic = TransposeShape(transpose_op, m.shape) in
+  (* let shape_update_step = { shape_update; shape; parent_shape; parent_shape_logic } in *)
+  let m_shape_update = {
+    shape_update=InverseTranspose inv_transpose;
+    shape=m.shape;
+    parent_shape=Some shape;
+    shape_logic=shape_logic;
+  } in
+  let local_shape_update = { shape_update=LocalUpdate; shape; parent_shape=None; shape_logic; } in
+  propagate_shapes m_shape_update;
+  propagate_shapes local_shape_update;
+
   let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
   let nv = (.< .~node.value >.) in
   let n1v = (.< .~(m.node).value >.) in
@@ -287,20 +312,33 @@ let unop ~op_label ?(is_transpose_op=false) ~op_body ~grad_body m: t =
       Ndarray.reset_ones .~nd;
       .~backprop_body
   >.) in
+  let local_shape_updates = Sequence.of_list [local_shape_update; m_shape_update] in
+  let subtree_shape_updates: shape_update_step Sequence.t =
+    if m.processed then local_shape_updates
+    else Sequence.append local_shape_updates m.subtree_shape_updates in
   m.processed <- true;
   {toplevel_forward; toplevel_backprop;
    forward_body=Some forward_body; backprop_body=Some backprop_body;
    init_values; init_grads; zero_grads;
-   node_id; processed=false; comp_node; node}
-
-(* FIXME: be careful about where n1v etc. is created vs. where it's used. *)
+   node_id; processed=false; comp_node; node; shape_logic; shape; subtree_shape_updates}
 
 (* ********** User API below ********** *)
 
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label ~(init_code:Ndarray.t Codelib.code) : t =
+let term ~label ?shape_spec ~(init_code:Ndarray.t Codelib.code) : t =
   let comp_node = Node.create ~label in
   let node_id = comp_node.id in
+  let axis_labels = Map.empty (module AxisKey) in
+  let shape =
+    match shape_spec with
+    | None -> { batch_shape=None; input_shape=None; output_shape=None; axis_labels; fixed=[];
+                shape_of_node_id=node_id }
+    | Some spec -> spec in
+    (* FIXME: spec should be easy to provide partially. *)
+  let shape_logic = TerminalShape in
+  let local_shape_update = { shape_update=LocalUpdate; shape; parent_shape=None; shape_logic; } in
+  propagate_shapes local_shape_update;
+
   let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
   let nv = (.< .~node.value >.) in
   (* Very unlikely someone will compute just the parameters. *)
@@ -318,9 +356,10 @@ let term ~label ~(init_code:Ndarray.t Codelib.code) : t =
     .~init_grads;
     fun () -> Ndarray.reset_ones .~nd; ()
   >.) in
+  let subtree_shape_updates = Sequence.singleton local_shape_update in
   {toplevel_forward; toplevel_backprop; forward_body; backprop_body;
     init_values; init_grads; zero_grads;
-    node_id; processed=false; comp_node; node}
+    node_id; processed=false; comp_node; node; shape_logic; shape; subtree_shape_updates}
 
 let add =
   let op_body ~nv ~n1v ~n2v = (.< Ndarray.assign_add .~nv .~n1v .~n2v >.) in
@@ -328,15 +367,23 @@ let add =
     Ndarray.assign_add .~n1d .~n1d .~nd;
     Ndarray.assign_add .~n2d .~n2d .~nd
   >.) in
-  binop ~op_label:"t" ~op_body ~grad_body
+  binop ~is_compose_op:false ~op_label:"t" ~op_body ~grad_body
 
-let mul =
+let mul_pointwise =
   let op_body ~nv ~n1v ~n2v = (.< Ndarray.assign_mul .~nv .~n1v .~n2v >.) in
   let grad_body ~n1d ~n2d ~nd ~nv:_ ~n1v ~n2v = (.<
     Ndarray.assign_add .~n1d .~n1d (Ndarray.mul .~nd .~n2v);
     Ndarray.assign_add .~n2d .~n2d (Ndarray.mul .~nd .~n1v)
   >.) in
-  binop ~op_label:"" ~op_body ~grad_body
+  binop ~is_compose_op:false ~op_label:"" ~op_body ~grad_body
+
+let matmul =
+  let op_body ~nv ~n1v ~n2v = (.< Ndarray.assign_mul .~nv .~n1v .~n2v >.) in
+  let grad_body ~n1d ~n2d ~nd ~nv:_ ~n1v ~n2v = (.<
+    Ndarray.assign_add .~n1d .~n1d (Ndarray.mul .~nd .~n2v);
+    Ndarray.assign_add .~n2d .~n2d (Ndarray.mul .~nd .~n1v)
+  >.) in
+  binop ~is_compose_op:true ~op_label:"" ~op_body ~grad_body
 
 let relu =
   let op_body ~nv ~n1v = (.< Ndarray.assign_relu .~nv .~n1v >.) in
@@ -354,10 +401,16 @@ let float_to_label v = "v" ^ (
 
 let number v =
   (* TODO(5): use dimensions inference and broadcasting. *)
-  term ~label:(float_to_label v) ~init_code:(.< Ndarray.get_val v [|1|] >.)
+  term ~label:(float_to_label v) 
+    ~shape_spec:{batch_shape=Some []; input_shape=Some []; output_shape=Some [1];
+                 axis_labels=Map.empty (module AxisKey);
+                 fixed=[Batch_shape; Input_shape; Output_shape]; shape_of_node_id=0}
+                 (* FIXME: this spec is broken *)
+    ~init_code:(.< Ndarray.get_val v [|1|] >.)
 
 module O = struct
-  let ( * ) = mul
+  let ( * ) = matmul
+  let ( *. ) = mul_pointwise
   let (+) = add
   let (!/) = relu
   let (!~) label shape = term ~label ~init_code:(init_uniform shape)
