@@ -132,10 +132,21 @@ let l2r_comp_order =
    when the dimensions change. *)
 
 let propagate_shapes (update: shape_update_step) =
+  (* These are only for pointwise. *)
+  let axis_labels sh1 sh2 = Map.merge sh1.axis_labels sh2.axis_labels ~f:(fun ~key ->
+    function
+    | `Both (l1, l2) ->
+      if String.equal l1 l2 then Some l1
+      else
+        let error = "Axis label mismatch: "^l1^" vs "^l2^" for "^
+                    (Sexp.to_string_hum @@ AxisKey.sexp_of_t key) in
+         raise @@ Shape_error (error, sh1, sh2)
+    | `Right l | `Left l -> Some l
+  ) in
   (* FIXME: NOT IMPLEMENTED *)
-  ignore update
+  ignore (axis_labels, update)
 
-let binop ~op_label ?(is_compose_op=false) ~op_body ~grad_body m1 m2: t =
+let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
   let m1_l = m1.comp_node.label in
   let m1_l = if String.length m1_l > 11 then "n"^Int.to_string m1.node_id else m1_l in
   let m2_l = m2.comp_node.label in
@@ -143,35 +154,26 @@ let binop ~op_label ?(is_compose_op=false) ~op_body ~grad_body m1 m2: t =
   let label = m1_l ^ op_label ^ m2_l in
   let comp_node = Node.create ~label in
   let node_id = comp_node.id in
-  let axis_labels = Map.merge m1.shape.axis_labels m2.shape.axis_labels ~f:(fun ~key ->
-    function
-    | `Both (l1, l2) ->
-      if String.equal l1 l2 then Some l1
-      else
-        let error = "Axis label mismatch: "^l1^" vs "^l2^" for "^
-                    (Sexp.to_string_hum @@ AxisKey.sexp_of_t key) in
-         raise @@ Shape_error (error, m1.shape, m2.shape)
-    | `Right l | `Left l -> Some l
-  ) in
+  let axis_labels = Map.empty (module AxisKey) in
   let shape = { batch_shape=None; input_shape=None; output_shape=None; axis_labels; fixed=[];
                 shape_of_node_id=node_id } in
-  let shape_logic =
-    if is_compose_op then BroadcastCompose (m1.shape, m2.shape)
-    else BroadcastPointwise (m1.shape, m2.shape) in
+  let shape_logic = Broadcast (compose_op, m1.shape, m2.shape) in
   (* let shape_update_step = { shape_update; shape; parent_shape; parent_shape_logic } in *)
   let m1_shape_update = {
-    shape_update=if is_compose_op then ComposeWithRight m2.shape else BroadcastWith m2.shape;
     shape=m1.shape;
-    parent_shape=Some shape;
     shape_logic=m1.shape_logic;
+    parent_shape=Some shape;
+    parent_shape_logic=Some shape_logic;
   } in
   let m2_shape_update = {
-    shape_update=if is_compose_op then ComposeWithLeft m1.shape else BroadcastWith m1.shape;
     shape=m2.shape;
-    parent_shape=Some shape;
     shape_logic=m2.shape_logic;
+    parent_shape=Some shape;
+    parent_shape_logic=Some shape_logic;
   } in
-  let local_shape_update = { shape_update=LocalUpdate; shape; parent_shape=None; shape_logic } in
+  let local_shape_update = {
+     shape; shape_logic; parent_shape=None; parent_shape_logic=None
+   } in
   propagate_shapes m1_shape_update; propagate_shapes m2_shape_update;
   propagate_shapes local_shape_update;
   let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
@@ -267,7 +269,7 @@ let binop ~op_label ?(is_compose_op=false) ~op_body ~grad_body m1 m2: t =
    node_id; processed=false; comp_node; node;
    shape_logic; shape; subtree_shape_updates}
 
-let unop ~op_label ?(transpose_op=fun sh->sh) ?inv_transpose ~op_body ~grad_body m: t =
+let unop ~op_label ?(transpose_op=`Transpose) ~op_body ~grad_body m: t =
   let m_l = m.comp_node.label in
   let m_l = if String.length m_l > 11 then "n"^Int.to_string m.node_id else m_l in
   let label = op_label ^ m_l in
@@ -275,17 +277,19 @@ let unop ~op_label ?(transpose_op=fun sh->sh) ?inv_transpose ~op_body ~grad_body
   let node_id = comp_node.id in
 
   (* The default is that a transpose is its own inverse. *)
-  let inv_transpose = match inv_transpose with Some invt -> invt | None -> transpose_op in
-  let shape = transpose_op m.shape in
+  let axis_labels = Map.empty (module AxisKey) in
+  let shape = { batch_shape=None; input_shape=None; output_shape=None; axis_labels; fixed=[];
+                shape_of_node_id=node_id } in
   let shape_logic = TransposeShape(transpose_op, m.shape) in
   (* let shape_update_step = { shape_update; shape; parent_shape; parent_shape_logic } in *)
   let m_shape_update = {
-    shape_update=InverseTranspose inv_transpose;
     shape=m.shape;
+    shape_logic=m.shape_logic;
     parent_shape=Some shape;
-    shape_logic=shape_logic;
+    parent_shape_logic=Some shape_logic;
   } in
-  let local_shape_update = { shape_update=LocalUpdate; shape; parent_shape=None; shape_logic; } in
+  let local_shape_update = {
+    shape; shape_logic; parent_shape=None; parent_shape_logic=None; } in
   propagate_shapes m_shape_update;
   propagate_shapes local_shape_update;
 
@@ -355,7 +359,10 @@ let term ~label ?shape_spec ~(init_code:Ndarray.t Codelib.code) : t =
     | Some spec -> spec in
     (* FIXME: spec should be easy to provide partially. *)
   let shape_logic = TerminalShape in
-  let local_shape_update = { shape_update=LocalUpdate; shape; parent_shape=None; shape_logic; } in
+  (* FIXME: not much of an updatable info *)
+  let local_shape_update = {
+     shape; shape_logic; parent_shape=None; parent_shape_logic=None;
+   } in
   propagate_shapes local_shape_update;
 
   let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
@@ -386,7 +393,7 @@ let add =
     Ndarray.assign_add .~n1d .~n1d .~nd;
     Ndarray.assign_add .~n2d .~n2d .~nd
   >.) in
-  binop ~is_compose_op:false ~op_label:"t" ~op_body ~grad_body
+  binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
 let mul_pointwise =
   let op_body ~nv ~n1v ~n2v = (.< Ndarray.assign_mul .~nv .~n1v .~n2v >.) in
@@ -394,7 +401,7 @@ let mul_pointwise =
     Ndarray.assign_add .~n1d .~n1d (Ndarray.mul .~nd .~n2v);
     Ndarray.assign_add .~n2d .~n2d (Ndarray.mul .~nd .~n1v)
   >.) in
-  binop ~is_compose_op:false ~op_label:"" ~op_body ~grad_body
+  binop ~compose_op:`Pointwise ~op_label:"" ~op_body ~grad_body
 
 let matmul =
   let op_body ~nv ~n1v ~n2v = (.< Ndarray.assign_mul .~nv .~n1v .~n2v >.) in
@@ -402,7 +409,7 @@ let matmul =
     Ndarray.assign_add .~n1d .~n1d (Ndarray.mul .~nd .~n2v);
     Ndarray.assign_add .~n2d .~n2d (Ndarray.mul .~nd .~n1v)
   >.) in
-  binop ~is_compose_op:true ~op_label:"" ~op_body ~grad_body
+  binop ~compose_op:`Compose ~op_label:"" ~op_body ~grad_body
 
 let relu =
   let op_body ~nv ~n1v = (.< Ndarray.assign_relu .~nv .~n1v >.) in
