@@ -15,7 +15,7 @@ module AxisKey = struct
   include Comparator.Make(T)
 end
 
-type axis_labels = string Map.M(AxisKey).t [@@deriving sexp]
+type axis_labels = string Map.M(AxisKey).t [@@deriving compare, sexp]
 
 (** The datatype from which the actual Ndarray shapes are computed. In the future we can have
     named axes here instead of the predefined options.
@@ -32,34 +32,53 @@ type shape = {
   shape_of_node_id: int;
 } [@@deriving fields, sexp]
 
+type compose_type =
+  [ `Pointwise
+  (** NumPy-style broadcast matching batch, input and output axes, e.g. as in [s1 + s2]. *)
+  | `Compose
+  (** Compose the outputs of the second shape with the inputs of the first shape, i.e. the shape of
+      [fun x -> s1(s2(x))], or [s1 * s2] where [*] is the inner product (e.g. matrix multiply). *)
+  | `Einsum of axis_labels * axis_labels * axis_labels
+  (** A version of the [einsum] syntax. Note that [`Pointwise] and [`Compose] are
+      not redundant with [`Einsum], because they enable much more shape inference: they do not specify
+      the number of axes. The [axis_labels] use pseudo-labels local to the notation, to line up the axes.
+      
+      Currently, we support two variants of the [einsum] syntax: either all the axes are provided,
+      or all input, output axes are provided but none of the batch axes. *)
+  ]
+
+type transpose_type =
+  [ `Transpose
+  (** Swaps inputs and outputs of a shape, preserves batch axes. *)
+  | `Permute of axis_labels * axis_labels
+  (** [`Permute (ls1, ls2)] is equivalent to [`Einsum (ls1, ls1, ls2)] (also to 
+      [`Einsum (ls1, axis_labels.empty, ls2)] etc.). *)
+  ]
+
 (** How to propagate shape updates and do the last update of [t.shape] when finalizing the formula.
     There is no case for unary pointwise operations because then the shape remains the same.
     Axes are broadcast-expanded on update to fit the incoming shape, except for [TerminalShape]'s
     batch axes, which are set to empty unless user-provided. *)
 type shape_logic = 
-  | BroadcastPointwise of shape * shape
-  (** NumPy-style broadcast matching batch, input and output axes, e.g. as in [s1 + s2]. *)
-  | BroadcastCompose of shape * shape
-  (** Compose the outputs of the second shape with the inputs of the first shape, i.e.
-      the shape of [fun x -> s1(s2(x))], or [s1 * s2] where [*] is the inner product (e.g. matrix multiply). *)
-  | TransposeShape of (shape -> shape) * shape
+  | Broadcast of compose_type * shape * shape
+  (** 
+
+     For [Broadcast (`Einsum (ls1, ls2, ls3), s1, s2)], the labels of [s1] and [s2] must match according
+     to the [ls1], [ls2] lineup, and the resulting shape inherits the labels according to the [ls3] lineup.
+  *)
+  | TransposeShape of transpose_type * shape
   (** Permutes the axes of a shape. The simplest [TransposeShape] is to swap inputs with outputs of [s1],
       hence the name. *)
   | TerminalShape
 
-(** The holes into [shape_logic], to propagate shape updates, where [LocalUpdate] is the whole [shape_logic]. *)
-type shape_update =
-  | BroadcastWith of shape
-  | ComposeWithRight of shape
-  | ComposeWithLeft of shape
-  | InverseTranspose of (shape -> shape)
-  | LocalUpdate
-
+(** Data required for a shape inference update step. A step should equilibrate information, passing it both
+    top-down and bottom-up. The child should be identifiable within the parent via physical equality
+    (allowing that a child fills both slots of a binary parent). *)
 type shape_update_step = {
-  shape_update: shape_update;
   shape: shape;
   shape_logic: shape_logic;
   parent_shape: shape option;
+  parent_shape_logic: shape_logic option;
 }
 
 exception Shape_error of string * shape * shape [@@deriving sexp]
