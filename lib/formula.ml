@@ -24,18 +24,29 @@ end
 
 type axis_labels = string Map.M(AxisKey).t [@@deriving compare, sexp]
 
+type dims =
+| Given of int list
+| Inferred of int list
+| Unknown [@@deriving compare, sexp, variants]
+
 (** The datatype from which the actual Ndarray shapes are computed. In the future we can have
     named axes here instead of the predefined options.
 
     Mutability is sufficient to perform inference, since there is no need for backtracking and
-    no explicit unification variables for now. [None] stands for "not yet specified". *)
+    no explicit unification variables for now. [Unknown] stands for "not yet specified". *)
 type shape = {
-  mutable batch_shape: int list option;
-  mutable input_shape: int list option;
-  mutable output_shape: int list option;
+  mutable batch_shape: dims;
+  mutable input_shape: dims;
+  mutable output_shape: dims;
   mutable axis_labels: axis_labels;
   shape_of_node_id: int;
 } [@@deriving fields, sexp]
+
+let dims_of_kind =
+  let open AxisKey in function
+  | Batch -> batch_shape
+  | Input -> input_shape
+  | Output -> output_shape
 
 type compose_type =
   [ `Pointwise
@@ -135,15 +146,7 @@ let l2r_comp_order =
    Due to mutable updates during shape inference, it is not possible to reuse the same formula with
    different shapes. *)
 
-(*   mutable batch_shape: int list option;
-  mutable input_shape: int list option;
-  mutable output_shape: int list option;
-  mutable axis_labels: axis_labels;
-  fixed: AxisKey.shape_kind list;
-  (* The axes which were user-specified and should not be mutated. *)
-  shape_of_node_id: int;
- *)
-let propagate_shapes ~(bottom_up: bool) (update: shape_update_step) =
+let propagate_shapes (update: shape_update_step) =
   let pointwise_labels debug1 debug2 ls1 ls2 = Map.merge ls1 ls2 ~f:(fun ~key ->
     function
     | `Both (l1, l2) ->
@@ -154,22 +157,18 @@ let propagate_shapes ~(bottom_up: bool) (update: shape_update_step) =
          raise @@ Shape_error (error, debug1, debug2)
     | `Right l | `Left l -> Some l
   ) in
-  let transpose_labels ls: axis_labels = Map.map_keys_exn (module AxisKey) ls ~f:AxisKey.(function
-      | {in_axes=Input; from_end} -> {in_axes=Output; from_end}
-      | {in_axes=Output; from_end} -> {in_axes=Input; from_end}
-      | {in_axes=Batch; _} as k -> k) in
-  let broad_dim debug1 debug2 axis_key label = function
-    | 1, d | d, 1 when bottom_up -> d
+  let broad_dim debug1 debug2 axis_key label ~verify_only = function
+    | 1, d | d, 1 when not verify_only -> d
     | d1, d2 when d1 = d2 -> d1
     | d1, d2 ->
       let opt_label = match label with None -> "" | Some l -> " ("^l^")" in
       let error = "Dimension mismatch for axis "^AxisKey.to_string axis_key^opt_label^": "^
                   Int.to_string d1^" vs. "^Int.to_string d2 in
       raise @@ Shape_error (error, debug1, debug2) in
-  let broadcast_dims debug1 debug2 kind labels =
+  let broadcast_dims debug1 debug2 kind labels ~verify_only =
     let rec broad_back_dims accu i = function
     | [], [] -> accu
-    | [], dims | dims, [] when bottom_up -> List.rev_append dims accu
+    | [], dims | dims, [] when not verify_only -> List.rev_append dims accu
     | [], _ | _, [] ->
       let key = AxisKey.{in_axes=kind; from_end=i} in
       let opt_label = match Map.find labels key with None -> "" | Some l -> " ("^l^")" in
@@ -177,78 +176,73 @@ let propagate_shapes ~(bottom_up: bool) (update: shape_update_step) =
       raise @@ Shape_error (error, debug1, debug2)
     | d1::dims1, d2::dims2 ->
       let key = AxisKey.{in_axes=kind; from_end=i} in
-      broad_back_dims (broad_dim debug1 debug2 key (Map.find labels key) (d1, d2)::accu) (i+1) (dims1, dims2) in
+      broad_back_dims 
+        (broad_dim debug1 debug2 key (Map.find labels key) ~verify_only (d1, d2)::accu)
+        (i+1) (dims1, dims2) in
     function
-    | None, None -> None
-    | Some dims, None | None, Some dims -> Some dims
-    | Some dims1, Some dims2 ->
-        Some (broad_back_dims [] 1 (List.rev dims1, List.rev dims2)) in
+    | Unknown, Unknown -> Unknown
+    | (Inferred dims | Given dims), Unknown | Unknown, (Inferred dims | Given dims) -> Inferred dims
+    | (Inferred dims1 | Given dims1), (Inferred dims2 | Given dims2) ->
+      Inferred (broad_back_dims [] 1 (List.rev dims1, List.rev dims2)) in
   let cur_sh = update.shape in
-  let updated_labels sh1 sh2 kind =
+  let update_labels sh1 to_kind sh2 from_kind =
     pointwise_labels sh1 sh2 sh1.axis_labels @@
-    Map.filter_keys sh2.axis_labels ~f:(fun k -> phys_equal k.in_axes kind) in
+    Map.map_keys_exn (module AxisKey) ~f:(fun k -> {k with in_axes=to_kind}) @@
+    Map.filter_keys sh2.axis_labels ~f:(fun k -> phys_equal k.in_axes from_kind) in
+  let broadcast_into to_sh to_kind from_sh from_kind =
+    match dims_of_kind to_kind to_sh, dims_of_kind from_kind from_sh with
+    | Given _ as into_dims, from_dims ->
+      broadcast_dims to_sh from_sh to_kind to_sh.axis_labels ~verify_only:true (into_dims, from_dims)
+    | into_dims, from_dims ->
+      to_sh.axis_labels <- update_labels to_sh to_kind from_sh from_kind;
+      broadcast_dims to_sh from_sh to_kind to_sh.axis_labels ~verify_only:false (into_dims, from_dims) in
   match update.shape_logic with
   | Terminal_shape -> ()
   | Transpose_shape (`Transpose, sh) ->
-    let transposed_axes = transpose_labels sh.axis_labels in
-    let up_labels = pointwise_labels cur_sh sh cur_sh.axis_labels transposed_axes in
-    cur_sh.axis_labels <- up_labels;
-    cur_sh.input_shape <- Option.first_some cur_sh.input_shape sh.output_shape;
-    cur_sh.output_shape <- Option.first_some cur_sh.output_shape sh.input_shape;
-    cur_sh.batch_shape <- Option.first_some cur_sh.batch_shape sh.batch_shape;
-    (* There is no broadcasting, so we can safely transfer all labels. *)
-    let inv_transposed = transpose_labels cur_sh.axis_labels in
-    let down_labels = pointwise_labels sh cur_sh sh.axis_labels inv_transposed in
-    cur_sh.axis_labels <- down_labels;    
-    sh.input_shape <- Option.first_some sh.input_shape cur_sh.output_shape;
-    sh.output_shape <- Option.first_some sh.output_shape cur_sh.input_shape;
-    sh.batch_shape <- Option.first_some sh.batch_shape cur_sh.batch_shape;
+    cur_sh.input_shape <- broadcast_into cur_sh Input sh Output;
+    cur_sh.output_shape <- broadcast_into cur_sh Output sh Input;
+    cur_sh.batch_shape <- broadcast_into cur_sh Batch sh Batch;
+    sh.input_shape <- broadcast_into sh Input cur_sh Output;
+    sh.output_shape <- broadcast_into sh Output cur_sh Input;
+    sh.batch_shape <- broadcast_into sh Batch cur_sh Batch;
 
-  | Transpose_shape (`Permute perm, sh) -> 
-    ignore (perm, sh); failwith "Not implemented yet"
+  | Transpose_shape (`Permute einsum, sh) -> 
+    ignore (einsum, sh); failwith "Not implemented yet"
 
   | Broadcast (`Pointwise, sh1, sh2) ->
     let up_labels = pointwise_labels sh1 sh2 sh1.axis_labels sh2.axis_labels in
     cur_sh.axis_labels <- up_labels;
-    cur_sh.input_shape <- broadcast_dims sh1 sh2 AxisKey.Input up_labels (sh1.input_shape, sh2.input_shape);
-    cur_sh.output_shape <- broadcast_dims sh1 sh2 AxisKey.Output up_labels (sh1.output_shape, sh2.output_shape);
-    cur_sh.batch_shape <- broadcast_dims sh1 sh2 AxisKey.Output up_labels (sh1.batch_shape, sh2.batch_shape);
+    cur_sh.input_shape <- broadcast_dims sh1 sh2 AxisKey.Input up_labels ~verify_only:false
+        (sh1.input_shape, sh2.input_shape);
+    cur_sh.output_shape <- broadcast_dims sh1 sh2 AxisKey.Output up_labels ~verify_only:false
+        (sh1.output_shape, sh2.output_shape);
+    cur_sh.batch_shape <- broadcast_dims sh1 sh2 AxisKey.Output up_labels ~verify_only:false
+        (sh1.batch_shape, sh2.batch_shape);
     
-    (if phys_equal sh1.input_shape None then sh1.axis_labels <- updated_labels sh1 cur_sh AxisKey.Input);
-    sh1.input_shape <- Option.first_some sh1.input_shape cur_sh.input_shape;
-    (if phys_equal sh1.output_shape None then sh1.axis_labels <- updated_labels sh1 cur_sh AxisKey.Output);
-    sh1.output_shape <- Option.first_some sh1.output_shape cur_sh.output_shape;
-    (if phys_equal sh1.batch_shape None then sh1.axis_labels <- updated_labels sh1 cur_sh AxisKey.Batch);
-    sh1.batch_shape <- Option.first_some sh1.batch_shape cur_sh.batch_shape;
-    (if phys_equal sh2.input_shape None then sh2.axis_labels <- updated_labels sh2 cur_sh AxisKey.Input);
-    sh2.input_shape <- Option.first_some sh2.input_shape cur_sh.input_shape;
-    (if phys_equal sh2.output_shape None then sh2.axis_labels <- updated_labels sh2 cur_sh AxisKey.Output);
-    sh2.output_shape <- Option.first_some sh2.output_shape cur_sh.output_shape;
-    (if phys_equal sh2.batch_shape None then sh2.axis_labels <- updated_labels sh2 cur_sh AxisKey.Batch);
-    sh2.batch_shape <- Option.first_some sh2.batch_shape cur_sh.batch_shape;
+    sh1.input_shape <- broadcast_into sh1 Input cur_sh Input;
+    sh1.output_shape <- broadcast_into sh1 Output cur_sh Output;
+    sh1.batch_shape <- broadcast_into sh1 Batch cur_sh Batch;
+    sh2.input_shape <- broadcast_into sh2 Input cur_sh Input;
+    sh2.output_shape <- broadcast_into sh2 Output cur_sh Output;
+    sh2.batch_shape <- broadcast_into sh2 Batch cur_sh Batch;
 
   | Broadcast (`Compose, sh1, sh2) ->
     (* [sh2] is the value or the function that gets applied first: [cur_sh(x) = sh1(sh2(x))].
        I.e. [cur.I = sh2.I, cur.O = sh1.O, sh2.O = sh1.I]. *)
     (* let transposed_sh2 = transpose_labels sh2.axis_labels in *)
-    let up_labels = cur_sh.labels in
+    let up_labels = cur_sh.axis_labels in
     (* let up_labels = pointwise_labels sh1 sh2 sh1.axis_labels transposed_axes in
     cur_sh.axis_labels <- up_labels; *)
-    cur_sh.input_shape <- broadcast_dims sh1 sh2 AxisKey.Input up_labels (sh1.input_shape, sh2.output_shape);
-    cur_sh.output_shape <- broadcast_dims sh1 sh2 AxisKey.Output up_labels (sh1.output_shape, sh2.input_shape);
-    cur_sh.batch_shape <- broadcast_dims sh1 sh2 AxisKey.Output up_labels (sh1.batch_shape, sh2.batch_shape);
-    (if phys_equal sh1.input_shape None then sh1.axis_labels <- updated_labels sh1 cur_sh AxisKey.Input);
-    sh1.input_shape <- Option.first_some sh1.input_shape cur_sh.input_shape;
-    (if phys_equal sh1.output_shape None then sh1.axis_labels <- updated_labels sh1 cur_sh AxisKey.Output);
-    sh1.output_shape <- Option.first_some sh1.output_shape cur_sh.output_shape;
-    (if phys_equal sh1.batch_shape None then sh1.axis_labels <- updated_labels sh1 cur_sh AxisKey.Batch);
-    sh1.batch_shape <- Option.first_some sh1.batch_shape cur_sh.batch_shape;
-    (if phys_equal sh2.input_shape None then sh2.axis_labels <- updated_labels sh2 cur_sh AxisKey.Input);
-    sh2.input_shape <- Option.first_some sh2.input_shape cur_sh.input_shape;
-    (if phys_equal sh2.output_shape None then sh2.axis_labels <- updated_labels sh2 cur_sh AxisKey.Output);
-    sh2.output_shape <- Option.first_some sh2.output_shape cur_sh.output_shape;
-    (if phys_equal sh2.batch_shape None then sh2.axis_labels <- updated_labels sh2 cur_sh AxisKey.Batch);
-    sh2.batch_shape <- Option.first_some sh2.batch_shape cur_sh.batch_shape;
+    cur_sh.input_shape <- broadcast_into cur_sh AxisKey.Input sh2 AxisKey.Input;
+    cur_sh.output_shape <- broadcast_into cur_sh AxisKey.Output sh1 AxisKey.Output;
+    cur_sh.batch_shape <- broadcast_dims sh1 sh2 AxisKey.Output up_labels ~verify_only:false
+        (sh1.batch_shape, sh2.batch_shape);    
+    sh1.input_shape <- broadcast_into sh1 Input cur_sh Input;
+    sh1.output_shape <- broadcast_into sh1 Output cur_sh Output;
+    sh1.batch_shape <- broadcast_into sh1 Batch cur_sh Batch;
+    sh2.input_shape <- broadcast_into sh2 Input cur_sh Input;
+    sh2.output_shape <- broadcast_into sh2 Output cur_sh Output;
+    sh2.batch_shape <- broadcast_into sh2 Batch cur_sh Batch;
   | Broadcast (`Einsum spec, sh1, sh2) ->
     ignore (spec, sh1, sh2); failwith "Not implemented yet"
 
@@ -261,11 +255,11 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
   let comp_node = Node.create ~label in
   let node_id = comp_node.id in
   let axis_labels = Map.empty (module AxisKey) in
-  let shape = { batch_shape=None; input_shape=None; output_shape=None; axis_labels;
+  let shape = { batch_shape=Unknown; input_shape=Unknown; output_shape=Unknown; axis_labels;
                 shape_of_node_id=node_id } in
   let shape_logic = Broadcast (compose_op, m1.shape, m2.shape) in
   let local_shape_update = { shape; shape_logic } in
-  propagate_shapes ~bottom_up:true local_shape_update;
+  propagate_shapes local_shape_update;
   let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
   let nv = (.< .~node.value >.) in
   let n1v = (.< .~(m1.node).value >.) in
@@ -365,12 +359,12 @@ let unop ~op_label ?(transpose_op=`Transpose) ~op_body ~grad_body m: t =
 
   (* The default is that a transpose is its own inverse. *)
   let axis_labels = Map.empty (module AxisKey) in
-  let shape = { batch_shape=None; input_shape=None; output_shape=None; axis_labels; fixed=[];
+  let shape = { batch_shape=Unknown; input_shape=Unknown; output_shape=Unknown; axis_labels;
                 shape_of_node_id=node_id } in
   let shape_logic = Transpose_shape(transpose_op, m.shape) in
   (* let shape_update_step = { shape_update; shape; parent_shape; parent_shape_logic } in *)
   let local_shape_update = { shape; shape_logic } in
-  propagate_shapes ~bottom_up:true local_shape_update;
+  propagate_shapes local_shape_update;
 
   let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
   let nv = (.< .~node.value >.) in
@@ -433,7 +427,7 @@ let term ~label ?shape_spec ~(init_code:Ndarray.t Codelib.code) : t =
   let axis_labels = Map.empty (module AxisKey) in
   let shape =
     match shape_spec with
-    | None -> { batch_shape=None; input_shape=None; output_shape=None; axis_labels; fixed=[];
+    | None -> { batch_shape=Unknown; input_shape=Unknown; output_shape=Unknown; axis_labels;
                 shape_of_node_id=node_id }
     | Some spec -> spec in
     (* FIXME: spec should be easy to provide partially. *)
@@ -505,9 +499,8 @@ let float_to_label v = "v" ^ (
 let number v =
   (* TODO(5): use dimensions inference and broadcasting. *)
   term ~label:(float_to_label v) 
-    ~shape_spec:{batch_shape=Some []; input_shape=Some []; output_shape=Some [1];
-                 axis_labels=Map.empty (module AxisKey);
-                 fixed=AxisKey.[Batch; Input; Output]; shape_of_node_id=0}
+    ~shape_spec:{batch_shape=Given []; input_shape=Given []; output_shape=Given [1];
+                 axis_labels=Map.empty (module AxisKey); shape_of_node_id=0}
                  (* FIXME: this spec is broken *)
     ~init_code:(.< Ndarray.get_val v [|1|] >.)
 
