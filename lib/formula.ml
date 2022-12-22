@@ -26,8 +26,16 @@ type axis_labels = string Map.M(AxisKey).t [@@deriving compare, sexp]
 
 type dims =
 | Given of int list
+(** User-provided dimensions. They will not change but will be broadcasted to bigger sizes. *)
+| Fixed of int list
+(** User-provided dimensions that will fail if used in a different size context, even if broadcastable.
+    As an exception, [Fixed []] implements the [stop_broadcast] operation: inference can modify it
+    to non-empty [Fixed] dimensions (which will then not change). *)
 | Inferred of int list
-| Unknown [@@deriving compare, sexp, variants]
+(** Dimensions that will itself change to a bigger size: they adapt to the broadcasted size. *)
+| Unknown
+(** User-provided but quivalent to [Inferred []]. *)
+[@@deriving compare, sexp, variants]
 
 type deduce_dims =
 [ `Not_deduced
@@ -36,17 +44,20 @@ type deduce_dims =
 ] [@@deriving compare, sexp, variants]
 
 (** Converts dimensions according to the specification. Note that scalar axes (1D) are not scaled,
-    for compatibility with broadcasting. *)
+    for compatibility with broadcasting.
+    
+    Note that in practice [from] will be [Unknown] or [Inferred] dimensions, making it of little relevance
+    how the [Given] and [Fixed] cases are interpreted here. *)
 let deduce_dims from: deduce_dims -> dims = function
 | `Not_deduced -> Unknown
 | `Preserve ->
   (match from with
-  | Given dims -> Inferred dims
-  | from -> from)
+  | Given dims | Fixed dims -> Inferred dims
+  | Inferred _ | Unknown -> from)
 | `Scale sc ->
   match from with
   | Unknown -> Unknown
-  | (Inferred dims | Given dims) -> Inferred (List.map dims ~f:(
+  | (Given dims | Fixed dims | Inferred dims) -> Inferred (List.map dims ~f:(
       fun d -> if d = 1 then 1 else Float.(iround_exn ~dir:`Up @@ sc * of_int d)))
 
 (** The datatype from which the actual Ndarray shapes are computed. In the future we can have
@@ -168,7 +179,8 @@ let l2r_comp_order =
 
 (* Design choice: tensor shapes are decided while code is constructed, although not immediately.
    Due to mutable updates during shape inference, it is not possible to reuse the same formula with
-   different shapes. *)
+   different shapes. The inference is finalized by invoking the [subtree_shape_updates] once
+   on the root formula. *)
 
 let propagate_shapes (update: shape_update_step) =
   let pointwise_labels debug1 debug2 ls1 ls2 = Map.merge ls1 ls2 ~f:(fun ~key ->
@@ -181,50 +193,51 @@ let propagate_shapes (update: shape_update_step) =
          raise @@ Shape_error (error, debug1, debug2)
     | `Right l | `Left l -> Some l
   ) in
-  let broad_dim ?(to_broader=false) ?(to_narrower=false) debug1 debug2 axis_key label = function
+  let broad_dim ~fixed_left ~fixed_right debug1 debug2 axis_key label = function
     | d1, d2 when d1 = d2 -> d1
-    | 1, d when not to_broader -> d
-    | d, 1 when not to_narrower -> d
+    | 1, d when not fixed_left -> d
+    | d, 1 when not fixed_right -> d
     | d1, d2 ->
       let opt_label = match label with None -> "" | Some l -> " ("^l^")" in
       let error = "Dimension mismatch for axis "^AxisKey.to_string axis_key^opt_label^": "^
                   Int.to_string d1^" vs. "^Int.to_string d2 in
       raise @@ Shape_error (error, debug1, debug2) in
-  let broadcast_dims ?(to_broader=false) ?(to_narrower=false) debug1 debug2 kind labels =
-    let rec broad_back_dims accu i = function
+  let broadcast_dims sh1 sh2 kind labels sh1_dims sh2_dims =
+    let rec broad_back_dims ~fixed_left ~fixed_right accu i = function
     | [], [] -> accu
-    | [], dims when not to_broader -> List.rev_append dims accu
-    | dims, [] when not to_narrower -> List.rev_append dims accu
+    | [], dims when not fixed_left -> List.rev_append dims accu
+    | dims, [] when not fixed_right -> List.rev_append dims accu
     | [], _ | _, [] ->
       let key = AxisKey.{in_axes=kind; from_end=i} in
       let opt_label = match Map.find labels key with None -> "" | Some l -> " ("^l^")" in
       let error = "Different number of axes around from-end "^AxisKey.to_string key^opt_label in
-      raise @@ Shape_error (error, debug1, debug2)
+      raise @@ Shape_error (error, sh1, sh2)
     | d1::dims1, d2::dims2 ->
       let key = AxisKey.{in_axes=kind; from_end=i} in
-      broad_back_dims 
-        (broad_dim ~to_broader ~to_narrower debug1 debug2 key (Map.find labels key) (d1, d2)::accu)
+      broad_back_dims ~fixed_left ~fixed_right
+        (broad_dim ~fixed_left ~fixed_right sh1 sh2 key (Map.find labels key) (d1, d2)::accu)
         (i+1) (dims1, dims2) in
-    function
-    | Unknown, Unknown -> Unknown
-    | (Inferred dims | Given dims), Unknown | Unknown, (Inferred dims | Given dims) -> Inferred dims
-    | (Inferred dims1 | Given dims1), (Inferred dims2 | Given dims2) ->
-      Inferred (broad_back_dims [] 1 (List.rev dims1, List.rev dims2)) in
+    match sh1_dims, sh2_dims with
+      | Unknown, Unknown -> Unknown
+      | (Inferred dims | Given dims| Fixed dims), Unknown
+      | Unknown, (Inferred dims | Given dims | Fixed dims) -> Inferred dims
+      | (Inferred dims1 | Given dims1 | Fixed dims1), (Inferred dims2 | Given dims2 | Fixed dims2) ->
+        Inferred (broad_back_dims ~fixed_left:(is_fixed sh1_dims) ~fixed_right:(is_fixed sh2_dims)
+                    [] 1 (List.rev dims1, List.rev dims2)) in
   let cur_sh = update.shape in
   let update_labels sh1 to_kind sh2 from_kind =
     pointwise_labels sh1 sh2 sh1.axis_labels @@
     Map.map_keys_exn (module AxisKey) ~f:(fun k -> {k with in_axes=to_kind}) @@
     Map.filter_keys sh2.axis_labels ~f:(fun k -> phys_equal k.in_axes from_kind) in
-  let broadcast_into ?to_broader ?to_narrower to_sh to_kind from_sh from_kind =
+  let broadcast_into to_sh to_kind from_sh from_kind =
     match dims_of_kind to_kind to_sh, dims_of_kind from_kind from_sh with
     | Given _ as into_dims, from_dims ->
       ignore @@
-        broadcast_dims ?to_broader ?to_narrower to_sh from_sh to_kind to_sh.axis_labels
-          (into_dims, from_dims);
+        broadcast_dims to_sh from_sh to_kind to_sh.axis_labels into_dims from_dims;
       into_dims
     | into_dims, from_dims ->
       to_sh.axis_labels <- update_labels to_sh to_kind from_sh from_kind;
-      broadcast_dims to_sh from_sh to_kind to_sh.axis_labels (into_dims, from_dims) in
+      broadcast_dims to_sh from_sh to_kind to_sh.axis_labels into_dims from_dims in
   match update.shape_logic with
   | Terminal_shape -> ()
   | Transpose_shape (`Transpose, sh) ->
@@ -242,22 +255,19 @@ let propagate_shapes (update: shape_update_step) =
     let up_labels = pointwise_labels sh1 sh2 sh1.axis_labels sh2.axis_labels in
     cur_sh.axis_labels <- up_labels;
     (if is_unknown cur_sh.input_shape then
-      cur_sh.input_shape <- broadcast_dims sh1 sh2 AxisKey.Input up_labels
-          (sh1.input_shape, sh2.input_shape)
+      cur_sh.input_shape <- broadcast_dims sh1 sh2 AxisKey.Input up_labels sh1.input_shape sh2.input_shape
     else (
       cur_sh.input_shape <- broadcast_into cur_sh Input sh1 Input;
       cur_sh.input_shape <- broadcast_into cur_sh Input sh2 Input;
     ));
     (if is_unknown cur_sh.output_shape then
-      cur_sh.output_shape <- broadcast_dims sh1 sh2 AxisKey.Output up_labels
-          (sh1.output_shape, sh2.output_shape)
+      cur_sh.output_shape <- broadcast_dims sh1 sh2 AxisKey.Output up_labels sh1.output_shape sh2.output_shape
     else (
       cur_sh.output_shape <- broadcast_into cur_sh Output sh1 Output;
       cur_sh.output_shape <- broadcast_into cur_sh Output sh2 Output;
     ));
     (if is_unknown cur_sh.batch_shape then
-      cur_sh.batch_shape <- broadcast_dims sh1 sh2 AxisKey.Batch up_labels
-          (sh1.batch_shape, sh2.batch_shape)
+      cur_sh.batch_shape <- broadcast_dims sh1 sh2 AxisKey.Batch up_labels sh1.batch_shape sh2.batch_shape
     else (
       cur_sh.batch_shape <- broadcast_into cur_sh Batch sh1 Batch;
       cur_sh.batch_shape <- broadcast_into cur_sh Batch sh2 Batch;
@@ -280,8 +290,7 @@ let propagate_shapes (update: shape_update_step) =
       cur_sh.axis_labels <- up_labels;
       let up_labels = update_labels cur_sh Batch sh2 Batch in
       cur_sh.axis_labels <- up_labels;
-      cur_sh.batch_shape <- broadcast_dims sh1 sh2 AxisKey.Batch up_labels
-           (sh1.batch_shape, sh2.batch_shape)
+      cur_sh.batch_shape <- broadcast_dims sh1 sh2 AxisKey.Batch up_labels sh1.batch_shape sh2.batch_shape
      else (
        cur_sh.batch_shape <- broadcast_into cur_sh Batch sh1 Batch;
        cur_sh.batch_shape <- broadcast_into cur_sh Batch sh2 Batch;
