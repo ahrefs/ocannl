@@ -30,7 +30,7 @@ type dims =
 | Unknown [@@deriving compare, sexp, variants]
 
 type deduce_dims =
-[ `None
+[ `Not_deduced
 | `Preserve
 | `Scale of float
 ] [@@deriving compare, sexp, variants]
@@ -38,7 +38,7 @@ type deduce_dims =
 (** Converts dimensions according to the specification. Note that scalar axes (1D) are not scaled,
     for compatibility with broadcasting. *)
 let deduce_dims from: deduce_dims -> dims = function
-| `None -> Unknown
+| `Not_deduced -> Unknown
 | `Preserve ->
   (match from with
   | Given dims -> Inferred dims
@@ -215,11 +215,12 @@ let propagate_shapes (update: shape_update_step) =
     pointwise_labels sh1 sh2 sh1.axis_labels @@
     Map.map_keys_exn (module AxisKey) ~f:(fun k -> {k with in_axes=to_kind}) @@
     Map.filter_keys sh2.axis_labels ~f:(fun k -> phys_equal k.in_axes from_kind) in
-  let broadcast_into ?to_broader to_sh to_kind from_sh from_kind =
+  let broadcast_into ?to_broader ?to_narrower to_sh to_kind from_sh from_kind =
     match dims_of_kind to_kind to_sh, dims_of_kind from_kind from_sh with
     | Given _ as into_dims, from_dims ->
       ignore @@
-        broadcast_dims ?to_broader to_sh from_sh to_kind to_sh.axis_labels (into_dims, from_dims);
+        broadcast_dims ?to_broader ?to_narrower to_sh from_sh to_kind to_sh.axis_labels
+          (into_dims, from_dims);
       into_dims
     | into_dims, from_dims ->
       to_sh.axis_labels <- update_labels to_sh to_kind from_sh from_kind;
@@ -269,7 +270,6 @@ let propagate_shapes (update: shape_update_step) =
     sh2.output_shape <- broadcast_into sh2 Output cur_sh Output;
     sh2.batch_shape <- broadcast_into sh2 Batch cur_sh Batch;
 
-    (* if Option.is_some sh. *)
   | Broadcast (`Compose, sh1, sh2) ->
     (* [sh2] is the value or the function that gets applied first: [cur_sh(x) = sh1(sh2(x))].
        I.e. [cur.I = sh2.I, cur.O = sh1.O, sh2.O = sh1.I]. *)
@@ -295,7 +295,7 @@ let propagate_shapes (update: shape_update_step) =
     sh2.batch_shape <- broadcast_into sh2 Batch cur_sh Batch;
 
     (* Always re-derive the output shape, to have the latest information. *)
-    if not @@ is_none sh1.deduce_output_from_input then
+    if not @@ is_not_deduced sh1.deduce_output_from_input then
       sh1.output_shape <- deduce_dims sh2.input_shape sh1.deduce_output_from_input
 
   | Broadcast (`Einsum spec, sh1, sh2) ->
@@ -311,7 +311,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
   let node_id = comp_node.id in
   let axis_labels = Map.empty (module AxisKey) in
   let shape = { batch_shape=Unknown; input_shape=Unknown; output_shape=Unknown; axis_labels;
-                shape_of_node_id=node_id; deduce_output_from_input=`None } in
+                shape_of_node_id=node_id; deduce_output_from_input=`Not_deduced } in
   let shape_logic = Broadcast (compose_op, m1.shape, m2.shape) in
   let local_shape_update = { shape; shape_logic } in
   propagate_shapes local_shape_update;
@@ -415,7 +415,7 @@ let unop ~op_label ?(transpose_op=`Transpose) ~op_body ~grad_body m: t =
   (* The default is that a transpose is its own inverse. *)
   let axis_labels = Map.empty (module AxisKey) in
   let shape = { batch_shape=Unknown; input_shape=Unknown; output_shape=Unknown; axis_labels;
-                shape_of_node_id=node_id; deduce_output_from_input=`None } in
+                shape_of_node_id=node_id; deduce_output_from_input=`Not_deduced } in
   let shape_logic = Transpose_shape(transpose_op, m.shape) in
   (* let shape_update_step = { shape_update; shape; parent_shape; parent_shape_logic } in *)
   let local_shape_update = { shape; shape_logic } in
@@ -519,23 +519,23 @@ let shape_of_term_spec ~node_id : term_spec -> shape = function
 | `Unknown ->
   { batch_shape=Unknown; input_shape=Unknown; output_shape=Unknown;
     axis_labels=Map.empty (module AxisKey);
-    shape_of_node_id=node_id; deduce_output_from_input=`None }
+    shape_of_node_id=node_id; deduce_output_from_input=`Not_deduced }
 | `Constant (dims, labels_spec) ->
   { batch_shape=Given []; input_shape=Given []; output_shape=Given dims;
     axis_labels=axis_labels_of_spec labels_spec;
-    shape_of_node_id=node_id; deduce_output_from_input=`None }
+    shape_of_node_id=node_id; deduce_output_from_input=`Not_deduced }
 | `Data (batch_dims, dims, labels_spec) ->
   { batch_shape=Given batch_dims; input_shape=Given []; output_shape=Given dims;
     axis_labels=axis_labels_of_spec labels_spec;
-    shape_of_node_id=node_id; deduce_output_from_input=`None }
+    shape_of_node_id=node_id; deduce_output_from_input=`Not_deduced }
 | `Params (input_dims, output_dims, labels_spec) ->
   { batch_shape=Given []; input_shape=Given input_dims; output_shape=Given output_dims;
     axis_labels=axis_labels_of_spec labels_spec;
-    shape_of_node_id=node_id; deduce_output_from_input=`None }
+    shape_of_node_id=node_id; deduce_output_from_input=`Not_deduced }
 | `Unknown_batch_data (dims, labels_spec) ->
   { batch_shape=Unknown; input_shape=Given []; output_shape=Given dims;
     axis_labels=axis_labels_of_spec labels_spec;
-    shape_of_node_id=node_id; deduce_output_from_input=`None }
+    shape_of_node_id=node_id; deduce_output_from_input=`Not_deduced }
 | `Deduced_params deduce_output_from_input ->
   { batch_shape=Given []; input_shape=Unknown; output_shape=Unknown;
     axis_labels=Map.empty (module AxisKey);
