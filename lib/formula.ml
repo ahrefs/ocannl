@@ -35,6 +35,8 @@ type deduce_dims =
 | `Scale of float
 ] [@@deriving compare, sexp, variants]
 
+(** Converts dimensions according to the specification. Note that scalar axes (1D) are not scaled,
+    for compatibility with broadcasting. *)
 let deduce_dims from: deduce_dims -> dims = function
 | `None -> Unknown
 | `Preserve ->
@@ -45,7 +47,7 @@ let deduce_dims from: deduce_dims -> dims = function
   match from with
   | Unknown -> Unknown
   | (Inferred dims | Given dims) -> Inferred (List.map dims ~f:(
-      fun d -> Float.(iround_exn ~dir:`Up @@ sc * of_int d)))
+      fun d -> if d = 1 then 1 else Float.(iround_exn ~dir:`Up @@ sc * of_int d)))
 
 (** The datatype from which the actual Ndarray shapes are computed. In the future we can have
     named axes here instead of the predefined options.
@@ -284,14 +286,18 @@ let propagate_shapes (update: shape_update_step) =
        cur_sh.batch_shape <- broadcast_into cur_sh Batch sh1 Batch;
        cur_sh.batch_shape <- broadcast_into cur_sh Batch sh2 Batch;
      ));
-     (* FIXME: NOT IMPLEMENTED below here. *)
-    sh1.input_shape <- broadcast_into sh1 Input cur_sh Input;
+    
+    sh1.input_shape <- broadcast_into sh1 Input sh2 Output;
     sh1.output_shape <- broadcast_into sh1 Output cur_sh Output;
     sh1.batch_shape <- broadcast_into sh1 Batch cur_sh Batch;
     sh2.input_shape <- broadcast_into sh2 Input cur_sh Input;
-    sh2.output_shape <- broadcast_into sh2 Output cur_sh Output;
+    sh2.output_shape <- broadcast_into sh2 Output sh1 Input;
     sh2.batch_shape <- broadcast_into sh2 Batch cur_sh Batch;
-    (* FIXME: If [sh1] shapes still unknown, deduce them here. *)
+
+    (* Always re-derive the output shape, to have the latest information. *)
+    if not @@ is_none sh1.deduce_output_from_input then
+      sh1.output_shape <- deduce_dims sh2.input_shape sh1.deduce_output_from_input
+
   | Broadcast (`Einsum spec, sh1, sh2) ->
     ignore (spec, sh1, sh2); failwith "Not implemented yet"
 
@@ -489,7 +495,8 @@ type term_spec =
 (** Parameters with inferred dimensionality. Example use cases:
     [`Deduced_params `Preserve] -- a hidden layer preserving the dimensionality.
     [`Deduced_params (`Scale 2.0)] -- an expansion hidden layer doubling the dimensionality.
-    [`Deduced_params (`Scale 0.5)] -- an bottleneck hidden layer halving the dimensionality. *)
+    [`Deduced_params (`Scale 0.5)] -- an bottleneck hidden layer halving the dimensionality.
+    Note that scalar axes (1D) are not scaled, for compatibility with broadcasting. *)
 ] [@@deriving compare, sexp]
 
 (** Parses a labels specification.
