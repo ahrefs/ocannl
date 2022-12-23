@@ -1,47 +1,33 @@
-(** A model (module) is a function that takes one or more [Formula.t]s and outputs a [Formula.t],
-    while maintaining an index of trainable parameters.
-    
-    When need arises we can make the type of [t.apply] more general. *)
+(** Losses and the training loop. *)
 open Base
 
-type t = {
-  apply: Formula.t -> Formula.t;
-  params: (Formula.t, Formula.comparator_witness) Set.t;
+type params = (Formula.t, Formula.comparator_witness) Set.t
+
+type content = {
+  input: Formula.t;
+  output: Formula.t;
+  loss: Formula.t;
+  params: params;
 }
-let linear ~w ~b =
-  let apply x = Formula.O.(w*x + b) in
-  let params = Set.of_list (module Formula) [w; b] in
-  {apply; params}
 
-let nonlinear ~w ~b =
-  let apply x = Formula.O.(!/(w*x + b)) in
-  let params = Set.of_list (module Formula) [w; b] in
-  {apply; params}
+type loss_fun = params -> output:Formula.t -> target:Formula.t -> Formula.t
+type t = input:Formula.t -> target:Formula.t -> content
 
-let compose m1 m2 =
-  let apply x = m1.apply @@ m2.apply x in
-  let params = Set.union m1.params m2.params in
-  {apply; params}
+let model network (loss_fun:loss_fun): t =
+  fun ~input ~target ->
+  let nn = network() in
+  let output = Network.O.(nn @@ input) in
+  let loss = loss_fun nn.params ~output ~target in
+  { input; output; loss; params=nn.params }
 
-let residual_compose m1 m2 =
-  let apply x = let z = m2.apply x in Formula.O.(m1.apply z + z)  in
-  let params = Set.union m1.params m2.params in
-  {apply; params}
+let hinge_loss ~output:y ~target:y' = Network.O.(!/(!.1.0 - y * y'))
 
-let bind_ret m f =
-  let apply x = f @@ m.apply x in
-  {apply; params=m.params}
+let sum_over_params (params: params) ~f = Set.sum (module Formula.Summable) params ~f
 
-module O = struct
-  include Formula.O
-  let (@@) m x = m.apply x
-  let ( % ) = compose
-  let (%+) = residual_compose
-  (* This is like [(>>>)] from arrows, but [(%>)] is neater. *)
-  let ( %> ) m1 m2 = compose m2 m1
-  let (%+>) m1 m2 = residual_compose m2 m1
-  let (>>|) = bind_ret
-end
+let l2_reg_loss ~alpha (loss:loss_fun): loss_fun =
+    fun params ~output ~target ->
+     Network.O.(!.alpha * sum_over_params params ~f:(fun p -> p * p) + loss params ~output ~target)
+
 
 (* 
 ~/ocannl$ dune utop
@@ -51,10 +37,11 @@ open Base
 open Ocannl
 module F = Formula
 let d = [|3; 3|]
-let res_mlp3 = let open Model in O.(
+let o = [|3; 1|]
+let res_mlp3 = let open Network in O.(
     nonlinear ~w:(!~"w1" d) ~b:(!~"b1" d) %+> nonlinear ~w:(!~"w2" d) ~b:(!~"b2" d) %+>
-    linear ~w:(!~"w3" d) ~b:(!~"b3" d))
-let y = Model.O.(res_mlp3 @@ !~"x" d)
-let () = Stdio.print_endline @@ fst @@ F.sprint y.toplevel_forward
-let () = Stdio.print_endline @@ fst @@ F.sprint y.toplevel_backprop
+    linear ~w:(!~"w3" o) ~b:(!~"b3" o))
+let loss = Network.O.(l2_reg_loss ~alpha:1e-4 res_mlp3 + (Train.hinge_loss res_mlp3 !.3.0 !.7.0))
+let () = Stdio.print_endline @@ fst @@ F.sprint loss.toplevel_forward
+let () = Stdio.print_endline @@ fst @@ F.sprint loss.toplevel_backprop
 *)
