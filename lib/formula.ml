@@ -87,10 +87,10 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
     else if l2r_comp_order then (.< .~(m1.init_values); .~(m2.init_values); .~init_values_body >.)
     else (.< .~(m2.init_values); .~(m1.init_values); .~init_values_body >.) in
   let toplevel_forward = (.< .~init_values; fun () -> .~forward_body >.) in
-  let nd = (.< .~node.grad >.) in
-  let n1d = (.< .~(m1.node).grad >.) in
-  let n2d = (.< .~(m2.node).grad >.) in
-  let zero_body = (.< Ndarray.reset_zeros .~nd >.) in
+  let ng = (.< .~node.grad >.) in
+  let n1g = (.< .~(m1.node).grad >.) in
+  let n2g = (.< .~(m2.node).grad >.) in
+  let zero_body = (.< Ndarray.reset_zeros .~ng >.) in
   (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
      and keep the backprop order for readability. *)
   let zero_grads =
@@ -102,7 +102,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
   (* The code needs to be included in the reverse order to which it was computed! This guarantees
      that all ancestors of a node are backpropagated before the node is backpropagated, even for
      non-tree DAGs. *)
-  let grad_body = grad_body ~n1d ~n2d ~nd ~nv ~n1v ~n2v in
+  let grad_body = grad_body dims ~n1g ~n2g ~ng ~nv ~n1v ~n2v in
   let backprop_body =
     match m1.processed, m1.backprop_body, m2.processed, m2.backprop_body with
     | true, _, true, _ | true, _, _, None | _, None, true, _ | _, None, _, None -> grad_body
@@ -128,7 +128,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
     fun () ->
       .~(m1.zero_grads);
       .~(m2.zero_grads);
-      Ndarray.reset_ones .~nd;
+      Ndarray.reset_ones .~ng;
       .~backprop_body
   >.) in
   (* The order is reverse to the order the updates were already executed for the first time. *)
@@ -179,15 +179,15 @@ let unop ~op_label ?(transpose_op=`Transpose) ~op_body ~grad_body m: t =
     .~node.value <- Ndarray.create (Ndarray.shape .~n1v);
   >.) in
   let toplevel_forward = (.< .~init_values; fun () -> .~forward_body >.) in
-  let nd = (.< .~node.grad >.) in
-  let n1d = (.< .~(m.node).grad >.) in
-  let zero_body = (.< Ndarray.reset_zeros .~nd >.) in
+  let ng = (.< .~node.grad >.) in
+  let n1g = (.< .~(m.node).grad >.) in
+  let zero_body = (.< Ndarray.reset_zeros .~ng >.) in
   (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
        and keep the backprop order for readability. *)
   let zero_grads =
     if m.processed then zero_body
     else (.< .~zero_body; .~(m.zero_grads) >.) in
-  let grad_body = grad_body ~n1d ~nd ~nv ~n1v in
+  let grad_body = grad_body dims ~n1g ~ng ~nv ~n1v in
   (* The code needs to be included in the reverse order to which it was computed! *)
   let backprop_body =
     match m.processed, m.backprop_body with
@@ -204,7 +204,7 @@ let unop ~op_label ?(transpose_op=`Transpose) ~op_body ~grad_body m: t =
     .~init_grads;
     fun () ->
       .~(m.zero_grads);
-      Ndarray.reset_ones .~nd;
+      Ndarray.reset_ones .~ng;
       .~backprop_body
   >.) in
   let local_shape_updates = Sequence.singleton local_shape_update in
@@ -225,7 +225,8 @@ let term ~label (spec: Shape.term_spec) ~(init_code:Ndarray.t Codelib.code) : t 
   let node_id = comp_node.id in
   let shape = Shape.of_term_spec ~node_id spec in
   let shape_logic = Shape.Terminal in
-  (* FIXME: not much of an updatable info *)
+  (* NOTE: this update does not do any work, but that might change in the future,
+     and having it in the update sequence might help with debuggability. *)
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
 
@@ -235,8 +236,8 @@ let term ~label (spec: Shape.term_spec) ~(init_code:Ndarray.t Codelib.code) : t 
   let forward_body = None in
   let init_values = (.< .~node.value <- .~init_code >.) in
   let toplevel_forward = (.< .~init_values; fun () -> () >.) in
-  let nd = Codelib.genlet ~name:(label^"d") (.< .~node.grad >.) in
-  let zero_grads = (.< Ndarray.reset_zeros .~nd >.) in
+  let ng = Codelib.genlet ~name:(label^"d") (.< .~node.grad >.) in
+  let zero_grads = (.< Ndarray.reset_zeros .~ng >.) in
   let backprop_body = None in
   (* Very unlikely someone will want dw/dw. *)
   let init_grads = (.<
@@ -244,7 +245,7 @@ let term ~label (spec: Shape.term_spec) ~(init_code:Ndarray.t Codelib.code) : t 
   >.) in
   let toplevel_backprop = (.<
     .~init_grads;
-    fun () -> Ndarray.reset_ones .~nd; ()
+    fun () -> Ndarray.reset_ones .~ng
   >.) in
   let subtree_shape_updates = Sequence.singleton local_shape_update in
   {toplevel_forward; toplevel_backprop; forward_body; backprop_body;
@@ -253,32 +254,32 @@ let term ~label (spec: Shape.term_spec) ~(init_code:Ndarray.t Codelib.code) : t 
 
 let add =
   let op_body ~nv ~n1v ~n2v = (.< Ndarray.assign_add .~nv .~n1v .~n2v >.) in
-  let grad_body ~n1d ~n2d ~nd ~nv:_ ~n1v:_ ~n2v:_ = (.<
-    Ndarray.assign_add .~n1d .~n1d .~nd;
-    Ndarray.assign_add .~n2d .~n2d .~nd
+  let grad_body _dims ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ = (.<
+    Ndarray.assign_add .~n1g .~n1g .~ng;
+    Ndarray.assign_add .~n2g .~n2g .~ng
   >.) in
   binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
 let mul_pointwise =
   let op_body ~nv ~n1v ~n2v = (.< Ndarray.assign_mul .~nv .~n1v .~n2v >.) in
-  let grad_body ~n1d ~n2d ~nd ~nv:_ ~n1v ~n2v = (.<
-    Ndarray.assign_add .~n1d .~n1d (Ndarray.mul .~nd .~n2v);
-    Ndarray.assign_add .~n2d .~n2d (Ndarray.mul .~nd .~n1v)
+  let grad_body dims ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v = (.<
+    Ndarray.assign_add .~n1g .~n1g (Ndarray.mul .~dims .~ng .~n2v);
+    Ndarray.assign_add .~n2g .~n2g (Ndarray.mul .~dims .~ng .~n1v)
   >.) in
   binop ~compose_op:`Pointwise ~op_label:"" ~op_body ~grad_body
 
 let matmul =
   let op_body ~nv ~n1v ~n2v = (.< Ndarray.assign_mul .~nv .~n1v .~n2v >.) in
-  let grad_body ~n1d ~n2d ~nd ~nv:_ ~n1v ~n2v = (.<
-    Ndarray.assign_add .~n1d .~n1d (Ndarray.mul .~nd .~n2v);
-    Ndarray.assign_add .~n2d .~n2d (Ndarray.mul .~nd .~n1v)
+  let grad_body dims ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v = (.<
+    Ndarray.assign_add .~n1g .~n1g (Ndarray.mul .~dims .~ng .~n2v);
+    Ndarray.assign_add .~n2g .~n2g (Ndarray.mul .~dims .~ng .~n1v)
   >.) in
   binop ~compose_op:`Compose ~op_label:"" ~op_body ~grad_body
 
 let relu =
   let op_body ~nv ~n1v = (.< Ndarray.assign_relu .~nv .~n1v >.) in
-  let grad_body ~n1d ~nd ~nv ~n1v:_ = (.<
-    Ndarray.assign_add .~n1d .~n1d (Ndarray.relu_gate .~nv .~nd)
+  let grad_body dims ~n1g ~ng ~nv ~n1v:_ = (.<
+    Ndarray.assign_add .~n1g .~n1g (Ndarray.relu_gate .~dims .~nv .~ng)
   >.) in
   unop ~op_label:"r" ~op_body ~grad_body
 
