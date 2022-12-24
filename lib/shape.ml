@@ -278,38 +278,61 @@ let propagate_shapes (update: update_step) =
 
 (* ********** User API below ********** *)
 
-type axis_labels_spec = string [@@deriving compare, sexp]
 
 (** Parses a labels specification.
 
-    * If [spec] contains alphanumeric characters only, each character is converted into a label of
-    the kind [Output].
-    * If [spec] contains a substring ["->"] plus alphanumeric characters only, characters to the left
-    of [->] are converted to [Input] labels, to the right of [->] to [Output] labels.
-    * If [spec] contains any of: whitespace, comma, parentheses, then those characters are used
-    as label name separators. *)
-let axis_labels_of_spec (spec: axis_labels_spec): axis_labels =
-  let axis_labels = Map.empty (module AxisKey) in
-  (* FIXME: NOT IMPLEMENTED *)
-  ignore spec;
-  axis_labels
+    * If [spec] contains any of: [' '; ','; '('; ')'], these characters are used as label separators.
+    Otherwise, every character is a label.
+    * If [spec] does not contain ["|"] nor ["->"], each label is of the kind [Output].
+    * If [spec] doesn't contain ["|"], labels to the left of ["->"] are [Input] and to the right [Output].
+    * Labels to the left of ["|"] are [Batch], and between ["|"] and ["->"] are [Input]. *)
+let axis_labels_of_spec spec: axis_labels =
+  if List.exists ~f:(String.contains spec) [' '; ','; '('; ')'] then
+    failwith "Multicharacter axis labels are not implemented yet"
+  else
+    let batch_spec, spec =
+      match String.substr_index spec ~pattern:"|" with
+      | Some end_bch -> String.sub ~pos:0 ~len:end_bch spec,
+                        String.sub ~pos:(end_bch+1) ~len:(String.length spec - end_bch - 1) spec
+      | None -> "", spec in
+    let input_spec, output_spec =
+      match String.substr_index spec ~pattern:"->" with
+      | Some end_inp -> String.sub ~pos:0 ~len:end_inp spec,
+                        String.sub ~pos:(end_inp+2) ~len:(String.length spec - end_inp - 2) spec
+      | None -> "", spec in
+    let batch_labels = String.foldi batch_spec ~init:(Map.empty (module AxisKey))
+        ~f:(fun from_start labels label -> Map.add_exn labels 
+               ~key:AxisKey.{in_axes=Batch; from_end=String.length batch_spec - from_start}
+               ~data:(String.of_char label)) in
+    let input_labels = String.foldi input_spec ~init:(Map.empty (module AxisKey))
+        ~f:(fun from_start labels label -> Map.add_exn labels 
+               ~key:AxisKey.{in_axes=Input; from_end=String.length input_spec - from_start}
+               ~data:(String.of_char label)) in
+    let output_labels = String.foldi output_spec ~init:(Map.empty (module AxisKey))
+        ~f:(fun from_start labels label -> Map.add_exn labels 
+               ~key:AxisKey.{in_axes=Output; from_end=String.length output_spec - from_start}
+               ~data:(String.of_char label)) in
+    match Map.append ~lower_part:input_labels ~upper_part:output_labels with
+    | `Ok m -> (match Map.append ~lower_part:batch_labels ~upper_part:m with `Ok r -> r | _ -> assert false)
+    | _ -> assert false
 
   (* TODO: implement [einsum_of_spec] using a ["spec;spec=>spec"] syntax. *)
 
-
+(** Specification of a terminal [Formula.t]'s shape. The [string] occurrences refer to [axis_labels]
+    specs.  *)
 type term_spec =
   [ `Unknown
   (** The shape will need to be fully inferred. *)
-  | `Constant of int list * axis_labels_spec
+  | `Constant of int list * string
   (** [`Constant (output_dims, labels)]
       A constant shape has no batch nor input dimensions, only output dimensions. *)
-  | `Data of int list * int list * axis_labels_spec
+  | `Data of int list * int list * string
   (** [`Data (batch_dims, output_dims, labels)]
       A data shape does not have input dimensions. *)
-  | `Params of int list *  int list * axis_labels_spec
+  | `Params of int list *  int list * string
   (** [`Params (input_dims, output_dims, labels)]
       A parameters shape with fixed dimensionality. Parameters not have batch dimensions. *)
-  | `Unknown_batch_data of int list * axis_labels_spec
+  | `Unknown_batch_data of int list * string
   (** [`Unknown_batch_data (output_dims, labels)]
       A data shape where the batch dimensions are left up to inference. *)
   | `Deduced_params of deduce_dims
