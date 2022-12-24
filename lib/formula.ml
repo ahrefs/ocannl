@@ -64,7 +64,8 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
   let nv = (.< .~node.value >.) in
   let n1v = (.< .~(m1.node).value >.) in
   let n2v = (.< .~(m2.node).value >.) in
-  let op_body = op_body ~nv ~n1v ~n2v in
+  let dims: int array Codelib.code = failwith "figure this out" in
+  let op_body = op_body dims ~nv ~n1v ~n2v in
   (* The code needs to be included in the order it was computed! *)
   let forward_body =
     match m1.processed, m1.forward_body, m2.processed, m2.forward_body with
@@ -76,9 +77,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
     | _, _, false, Some m2_body -> (.< .~m2_body; .~op_body >.)
     | false, Some m1_body, _, _ -> (.< .~m1_body; .~op_body >.)
   in
-  let init_values_body = (.<
-    .~node.value <- Ndarray.create (Ndarray.shape .~n1v);
-  >.) in
+  let init_values_body = (.< .~node.value <- Ndarray.create .~node.dims >.) in
   (* Not required, but we preserve the order, for readability. *)
   let init_values =
     if m1.processed && m2.processed then init_values_body
@@ -102,6 +101,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
   (* The code needs to be included in the reverse order to which it was computed! This guarantees
      that all ancestors of a node are backpropagated before the node is backpropagated, even for
      non-tree DAGs. *)
+  let dims: int array Codelib.code = failwith "figure this out" in
   let grad_body = grad_body dims ~n1g ~n2g ~ng ~nv ~n1v ~n2v in
   let backprop_body =
     match m1.processed, m1.backprop_body, m2.processed, m2.backprop_body with
@@ -113,9 +113,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
     | _, _, false, Some m2_body -> (.< .~grad_body; .~m2_body  >.)
     | false, Some m1_body, _, _ -> (.< .~grad_body; .~m1_body  >.)
     in
-  let init_grads_body = (.<
-    .~node.grad <- Ndarray.create (Ndarray.shape .~nv);
-  >.) in
+  let init_grads_body = (.< .~node.grad <- Ndarray.create .~node.dims >.) in
   (* The order is not relevant, we keep the same order as in backprop for readability. *)
   let init_grads =
     if m1.processed && m2.processed then init_grads_body
@@ -168,7 +166,8 @@ let unop ~op_label ?(transpose_op=`Transpose) ~op_body ~grad_body m: t =
   let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
   let nv = (.< .~node.value >.) in
   let n1v = (.< .~(m.node).value >.) in
-  let op_body = op_body ~nv ~n1v in
+  let dims: int array Codelib.code = failwith "figure this out" in
+  let op_body = op_body dims ~nv ~n1v in
   (* The code needs to be included in the order it was computed! *)
   let forward_body =
     match m.processed, m.forward_body with
@@ -176,7 +175,7 @@ let unop ~op_label ?(transpose_op=`Transpose) ~op_body ~grad_body m: t =
     | false, Some m_body -> (.< .~m_body; .~op_body >.) in
   let init_values = (.<
     .~(m.init_values);
-    .~node.value <- Ndarray.create (Ndarray.shape .~n1v);
+    .~node.value <- Ndarray.create .~node.dims;
   >.) in
   let toplevel_forward = (.< .~init_values; fun () -> .~forward_body >.) in
   let ng = (.< .~node.grad >.) in
@@ -187,15 +186,14 @@ let unop ~op_label ?(transpose_op=`Transpose) ~op_body ~grad_body m: t =
   let zero_grads =
     if m.processed then zero_body
     else (.< .~zero_body; .~(m.zero_grads) >.) in
+  let dims: int array Codelib.code = failwith "figure this out" in
   let grad_body = grad_body dims ~n1g ~ng ~nv ~n1v in
   (* The code needs to be included in the reverse order to which it was computed! *)
   let backprop_body =
     match m.processed, m.backprop_body with
     | true, _ | _, None -> grad_body
     | false, Some m_body -> (.< .~grad_body; .~m_body >.) in
-  let init_grads_body = (.<
-    .~node.grad <- Ndarray.create (Ndarray.shape .~nv);
-  >.) in
+  let init_grads_body = (.< .~node.grad <- Ndarray.create .~node.dims >.) in
   (* The order is not relevant, we keep the same order as in backprop for readability. *)
   let init_grads =
     if m.processed then init_grads_body
@@ -231,7 +229,6 @@ let term ~label (spec: Shape.term_spec) ~(init_code:Ndarray.t Codelib.code) : t 
   Shape.propagate_shapes local_shape_update;
 
   let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
-  let nv = (.< .~node.value >.) in
   (* Very unlikely someone will compute just the parameters. *)
   let forward_body = None in
   let init_values = (.< .~node.value <- .~init_code >.) in
@@ -240,9 +237,7 @@ let term ~label (spec: Shape.term_spec) ~(init_code:Ndarray.t Codelib.code) : t 
   let zero_grads = (.< Ndarray.reset_zeros .~ng >.) in
   let backprop_body = None in
   (* Very unlikely someone will want dw/dw. *)
-  let init_grads = (.<
-    .~node.grad <- Ndarray.create (Ndarray.shape .~nv);
-  >.) in
+  let init_grads = (.< .~node.grad <- Ndarray.create .~node.dims >.) in
   let toplevel_backprop = (.<
     .~init_grads;
     fun () -> Ndarray.reset_ones .~ng
@@ -253,7 +248,7 @@ let term ~label (spec: Shape.term_spec) ~(init_code:Ndarray.t Codelib.code) : t 
     node_id; processed=false; comp_node; node; shape_logic; shape; subtree_shape_updates}
 
 let add =
-  let op_body ~nv ~n1v ~n2v = (.< Ndarray.assign_add .~nv .~n1v .~n2v >.) in
+  let op_body _dims ~nv ~n1v ~n2v = (.< Ndarray.assign_add .~nv .~n1v .~n2v >.) in
   let grad_body _dims ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ = (.<
     Ndarray.assign_add .~n1g .~n1g .~ng;
     Ndarray.assign_add .~n2g .~n2g .~ng
@@ -261,7 +256,7 @@ let add =
   binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
 let mul_pointwise =
-  let op_body ~nv ~n1v ~n2v = (.< Ndarray.assign_mul .~nv .~n1v .~n2v >.) in
+  let op_body _dims ~nv ~n1v ~n2v = (.< Ndarray.assign_mul .~nv .~n1v .~n2v >.) in
   let grad_body dims ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v = (.<
     Ndarray.assign_add .~n1g .~n1g (Ndarray.mul .~dims .~ng .~n2v);
     Ndarray.assign_add .~n2g .~n2g (Ndarray.mul .~dims .~ng .~n1v)
@@ -269,7 +264,7 @@ let mul_pointwise =
   binop ~compose_op:`Pointwise ~op_label:"" ~op_body ~grad_body
 
 let matmul =
-  let op_body ~nv ~n1v ~n2v = (.< Ndarray.assign_mul .~nv .~n1v .~n2v >.) in
+  let op_body _dims ~nv ~n1v ~n2v = (.< Ndarray.assign_mul .~nv .~n1v .~n2v >.) in
   let grad_body dims ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v = (.<
     Ndarray.assign_add .~n1g .~n1g (Ndarray.mul .~dims .~ng .~n2v);
     Ndarray.assign_add .~n2g .~n2g (Ndarray.mul .~dims .~ng .~n1v)
@@ -277,7 +272,7 @@ let matmul =
   binop ~compose_op:`Compose ~op_label:"" ~op_body ~grad_body
 
 let relu =
-  let op_body ~nv ~n1v = (.< Ndarray.assign_relu .~nv .~n1v >.) in
+  let op_body _dims ~nv ~n1v = (.< Ndarray.assign_relu .~nv .~n1v >.) in
   let grad_body dims ~n1g ~ng ~nv ~n1v:_ = (.<
     Ndarray.assign_add .~n1g .~n1g (Ndarray.relu_gate .~dims .~nv .~ng)
   >.) in
@@ -317,7 +312,6 @@ let sprint code =
   let s = String.substr_replace_all s ~pattern:"Node." ~with_:"" in
   s, check
 
-(* TODO: maybe streamline [t] to enable [t_of_sexp]. *)
 let sexp_of_t m =
   Sexp.message "Formula" [
     "label", String.sexp_of_t m.comp_node.label; "node_id", Int.sexp_of_t m.node_id;

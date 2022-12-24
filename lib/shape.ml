@@ -368,4 +368,15 @@ let of_term_spec ~node_id : term_spec -> t = function
     { batch=Given []; input=Unknown; output=Unknown;
       axis_labels=Map.empty (module AxisKey);
       of_node_id=node_id; deduce_output_from_input }
-  
+
+let to_dims (sh: t): int array =
+  let b_dims = match sh.batch with
+    | Unknown -> raise @@ Shape_error ("Batch dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims in
+  let i_dims = match sh.input with
+    | Unknown -> raise @@ Shape_error ("Input dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims in
+  let o_dims = match sh.output with
+    | Unknown -> raise @@ Shape_error ("Output dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims in
+Array.concat [b_dims; i_dims; o_dims]
