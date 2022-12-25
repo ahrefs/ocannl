@@ -45,6 +45,12 @@ let global_roots = ref @@ Map.empty (module Int)
 
 let first_session_id = ref 1
 
+let recompile = ()
+
+let run = ()
+
+let print_global_roots = ()
+
 exception Session_error of string * t option
 
 let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t =
@@ -142,10 +148,13 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
 
   m1_processed <- true; m2_processed <- true;
   {toplevel_forward; toplevel_backprop;
-   forward_body=Some forward_body; backprop_body=Some backprop_body;
+  let formula = {forward_body=Some forward_body; backprop_body=Some backprop_body;
    init_values; init_grads; zero_grads;
-   node_id; processed=false; comp_node; node;
-   shape_logic; shape; subtree_shape_updates}
+                node_id; comp_node; node; shape_logic; shape} in
+  let root = {forward_code=None; forward=None; backprop_code=None; backprop=None; 
+              formula; subtree_shape_updates} in
+  global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
+  formula
 
 let unop ~op_label ?(transpose_op=`Transpose) ~op_body ~grad_body m: t =
   let m_l = m.comp_node.label in
@@ -197,23 +206,26 @@ let unop ~op_label ?(transpose_op=`Transpose) ~op_body ~grad_body m: t =
   (* The order is not relevant, we keep the same order as in backprop for readability. *)
   let init_grads =
     if m_processed then init_grads_body
-    else (.< .~init_grads_body; .~(m.init_grads) >.) in
+  let formula = {forward_body=Some forward_body; backprop_body=Some backprop_body;
+                 init_values; init_grads; zero_grads;
+                 node_id; comp_node; node; shape_logic; shape} in
+  let root = {forward_code=None; forward=None; backprop_code=None; backprop=None; 
+              formula; subtree_shape_updates} in
+  global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
+  formula
+
+let get_toplevel m =
+  let forward_body = match m.forward_body with None -> .< () >. | Some body -> body in
+   let toplevel_forward = (.< .~(m.init_values ()); fun () -> .~forward_body >.) in
+   let backprop_body = match m.backprop_body with None -> .< () >. | Some body -> body in
   let toplevel_backprop = (.<
-    .~init_grads;
+   .~(m.init_grads ());
     fun () ->
       .~(m.zero_grads);
-      Ndarray.reset_ones .~ng;
+     Ndarray.reset_ones .~(m.node).grad;
       .~backprop_body
   >.) in
-  let local_shape_updates = Sequence.singleton local_shape_update in
-  let subtree_shape_updates: Shape.update_step Sequence.t =
-    if m_processed then local_shape_updates
-    else Sequence.append local_shape_updates m.subtree_shape_updates in
-  m_processed <- true;
-  {toplevel_forward; toplevel_backprop;
-   forward_body=Some forward_body; backprop_body=Some backprop_body;
-   init_values; init_grads; zero_grads;
-   node_id; processed=false; comp_node; node; shape_logic; shape; subtree_shape_updates}
+  toplevel_forward, toplevel_backprop
 
 (* ********** User API below ********** *)
 
@@ -243,9 +255,13 @@ let term ~label (spec: Shape.term_spec) ~(init_code:Ndarray.t Codelib.code) : t 
     fun () -> Ndarray.reset_ones .~ng
   >.) in
   let subtree_shape_updates = Sequence.singleton local_shape_update in
-  {toplevel_forward; toplevel_backprop; forward_body; backprop_body;
+  let formula = {forward_body; backprop_body;
     init_values; init_grads; zero_grads;
-    node_id; processed=false; comp_node; node; shape_logic; shape; subtree_shape_updates}
+                 node_id; comp_node; node; shape_logic; shape} in
+  let root = {forward_code=None; forward=None; backprop_code=None; backprop=None; 
+              formula; subtree_shape_updates} in
+  global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
+  formula
 
 let add =
   let op_body _dims ~nv ~n1v ~n2v = (.< Ndarray.assign_add .~nv .~n1v .~n2v >.) in

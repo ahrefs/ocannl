@@ -21,11 +21,11 @@ let make ?(clear_session=true) network (loss_fun:loss_fun): t =
   (* Reset the session. *)
   if clear_session then (
     Formula.first_session_id := Node.global.unique_id;
-    if (Map.exists !Formula.global_roots ~f:(fun f -> f.node_id <> loss.node_id)) then (
-      let _, other_root = Map.min_elt_exn @@ Map.filter !Formula.global_roots
-          ~f:(fun f -> f.node_id <> loss.node_id) in
+    if (Map.existsi !Formula.global_roots ~f:(fun ~key ~data:_ -> key <> loss.node_id)) then (
+      let _, other_root = Map.min_elt_exn @@ Map.filteri !Formula.global_roots
+          ~f:(fun ~key ~data:_ -> key <> loss.node_id) in
           raise @@ Formula.Session_error (
-            "Model.make expects the loss to be the only global root", other_root));
+            "Model.make expects the loss to be the only global root", Some other_root.formula));
     Formula.global_roots := Map.empty (module Int)
   );
   { input; output; loss; params=nn.params }
