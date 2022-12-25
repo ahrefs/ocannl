@@ -19,8 +19,6 @@ type t = {
       process etc. *)
   node: Node.t Codelib.code;
   (** The node storing the computation results. [.!(t.node)] should equal [t.comp_node]. *)
-  mutable processed: bool;
-  (** [true] if [forward_body]/[backprop_body]/[zero_grads] were already included in a parent [t]. *)
   shape_logic: Shape.logic;
   (** How to do the last update of [t.shape] when finalizing the formula. *)
   shape: Shape.t;
