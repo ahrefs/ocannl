@@ -134,15 +134,6 @@ type update_step = {
 
 exception Shape_error of string * t * t [@@deriving sexp]
 
-(* The code relies on argument evaluation order. To lift the requirement, we could use
-   [t Lazy.t], but that's an unnecessary obfuscation. *)
-   let l2r_comp_order =
-    let l2r_ord = ref None in
-    (fun () () ->
-      match !l2r_ord with
-      | Some b -> b
-      | None -> assert false) (l2r_ord := Some false) (l2r_ord := Some true)
-
 (* Design choice: tensor shapes are decided while code is constructed, although not immediately.
    Due to mutable updates during shape inference, it is not possible to reuse the same formula with
    different shapes. The inference is finalized by invoking the [Formula.subtree_shape_updates] once

@@ -37,16 +37,10 @@ type t = {
       second in prefix order by iterating over [t.subtree_shape_updates]. *)
 }
 
-(* The code relies on argument evaluation order. To lift the requirement, we could use
-   [t Lazy.t], but that's an unnecessary obfuscation. *)
-let l2r_comp_order =
-  let l2r_ord = ref None in
-  (fun () () ->
-    match !l2r_ord with
-    | Some b -> b
-    | None -> assert false) (l2r_ord := Some false) (l2r_ord := Some true)
+(**  *)
 
-let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
+let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t =
+  let m1, m2 = if m1arg.node_id <= m2arg.node_id then m1arg, m2arg else m2arg, m1arg in
   let m1_l = m1.comp_node.label in
   let m1_l = if String.length m1_l > 11 then "n"^Int.to_string m1.node_id else m1_l in
   let m2_l = m2.comp_node.label in
@@ -70,10 +64,8 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
   let forward_body =
     match m1.processed, m1.forward_body, m2.processed, m2.forward_body with
     | true, _, true, _ | true, _, _, None | _, None, true, _ | _, None, _, None -> op_body
-    | false, Some m1_body, false, Some m2_body when l2r_comp_order ->
-      (.< .~m1_body; .~m2_body; .~op_body >.)
     | false, Some m1_body, false, Some m2_body ->
-      (.< .~m2_body; .~m1_body; .~op_body >.) 
+      (.< .~m1_body; .~m2_body; .~op_body >.)
     | _, _, false, Some m2_body -> (.< .~m2_body; .~op_body >.)
     | false, Some m1_body, _, _ -> (.< .~m1_body; .~op_body >.)
   in
@@ -83,8 +75,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
     if m1.processed && m2.processed then init_values_body
     else if m1.processed then (.< .~(m2.init_values); .~init_values_body >.)
     else if m2.processed then (.< .~(m1.init_values); .~init_values_body >.)
-    else if l2r_comp_order then (.< .~(m1.init_values); .~(m2.init_values); .~init_values_body >.)
-    else (.< .~(m2.init_values); .~(m1.init_values); .~init_values_body >.) in
+    else (.< .~(m1.init_values); .~(m2.init_values); .~init_values_body >.) in
   let toplevel_forward = (.< .~init_values; fun () -> .~forward_body >.) in
   let ng = (.< .~node.grad >.) in
   let n1g = (.< .~(m1.node).grad >.) in
@@ -96,8 +87,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
     if m1.processed && m2.processed then zero_body
     else if m1.processed then (.< .~zero_body; .~(m2.zero_grads) >.)
     else if m2.processed then (.< .~zero_body; .~(m1.zero_grads) >.)
-    else if l2r_comp_order then (.< .~zero_body; .~(m2.zero_grads); .~(m1.zero_grads) >.)
-    else (.< .~zero_body; .~(m1.zero_grads); .~(m2.zero_grads) >.) in
+    else (.< .~zero_body; .~(m2.zero_grads); .~(m1.zero_grads) >.) in
   (* The code needs to be included in the reverse order to which it was computed! This guarantees
      that all ancestors of a node are backpropagated before the node is backpropagated, even for
      non-tree DAGs. *)
@@ -106,10 +96,8 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
   let backprop_body =
     match m1.processed, m1.backprop_body, m2.processed, m2.backprop_body with
     | true, _, true, _ | true, _, _, None | _, None, true, _ | _, None, _, None -> grad_body
-    | false, Some m1_body, false, Some m2_body when l2r_comp_order ->
-      (.< .~grad_body; .~m1_body; .~m2_body >.)
     | false, Some m1_body, false, Some m2_body ->
-      (.< .~grad_body; .~m2_body; .~m1_body;  >.) 
+      (.< .~grad_body; .~m1_body; .~m2_body >.)
     | _, _, false, Some m2_body -> (.< .~grad_body; .~m2_body  >.)
     | false, Some m1_body, _, _ -> (.< .~grad_body; .~m1_body  >.)
     in
@@ -119,8 +107,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
     if m1.processed && m2.processed then init_grads_body
     else if m1.processed then (.< .~init_grads_body; .~(m2.init_grads) >.)
     else if m2.processed then (.< .~init_grads_body; .~(m1.init_grads) >.)
-    else if l2r_comp_order then (.< .~init_grads_body; .~(m2.init_grads); .~(m1.init_grads) >.)
-    else (.< .~init_grads_body; .~(m1.init_grads); .~(m2.init_grads) >.) in
+    else (.< .~init_grads_body; .~(m2.init_grads); .~(m1.init_grads) >.) in
   let toplevel_backprop = (.<
     .~init_grads;
     fun () ->
@@ -135,11 +122,9 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
     if m1.processed && m2.processed then local_shape_updates
     else if m1.processed then Sequence.append local_shape_updates m2.subtree_shape_updates
     else if m2.processed then Sequence.append local_shape_updates m1.subtree_shape_updates
-    else if l2r_comp_order then 
+    else
       Sequence.(concat @@ of_list
-                  [local_shape_updates; m2.subtree_shape_updates; m1.subtree_shape_updates])
-    else Sequence.(concat @@ of_list
-                     [local_shape_updates; m1.subtree_shape_updates; m2.subtree_shape_updates]) in
+                  [local_shape_updates; m2.subtree_shape_updates; m1.subtree_shape_updates]) in
 
   m1.processed <- true; m2.processed <- true;
   {toplevel_forward; toplevel_backprop;
