@@ -13,11 +13,21 @@ type content = {
 type loss_fun = params -> output:Formula.t -> target:Formula.t -> Formula.t
 type t = input:Formula.t -> target:Formula.t -> content
 
-let model network (loss_fun:loss_fun): t =
+let make ?(clear_session=true) network (loss_fun:loss_fun): t =
   fun ~input ~target ->
   let nn = network() in
   let output = Network.O.(nn @@ input) in
   let loss = loss_fun nn.params ~output ~target in
+  (* Reset the session. *)
+  if clear_session then (
+    Formula.first_session_id := Node.global.unique_id;
+    if (Map.exists !Formula.global_roots ~f:(fun f -> f.node_id <> loss.node_id)) then (
+      let _, other_root = Map.min_elt_exn @@ Map.filter !Formula.global_roots
+          ~f:(fun f -> f.node_id <> loss.node_id) in
+          raise @@ Formula.Session_error (
+            "Model.make expects the loss to be the only global root", other_root));
+    Formula.global_roots := Map.empty (module Int)
+  );
   { input; output; loss; params=nn.params }
 
 let hinge_loss ~output:y ~target:y' = Network.O.(!/(!.1.0 - y * y'))

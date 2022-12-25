@@ -45,8 +45,16 @@ type global_root = {
     of a global root. *)
 let global_roots = ref @@ Map.empty (module Int)
 
+let first_session_id = ref 1
+
+exception Session_error of string * t option
+
 let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t =
   let m1, m2 = if m1arg.node_id <= m2arg.node_id then m1arg, m2arg else m2arg, m1arg in
+  (if (m1.node_id < !first_session_id) then
+    raise @@ Session_error ("The subformula is outside of current session", Some m1));
+  (if (m2.node_id < !first_session_id) then
+     raise @@ Session_error ("The subformula is outside of current session", Some m2));
   let m1_l = m1.comp_node.label in
   let m1_l = if String.length m1_l > 11 then "n"^Int.to_string m1.node_id else m1_l in
   let m2_l = m2.comp_node.label in
