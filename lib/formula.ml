@@ -5,11 +5,11 @@ open Base
 (** Uses [code option], i.e. [None] instead of [.< () >.], to improve readability of generated code. *)
 type t = {
   forward_body: unit Codelib.code option;
-  init_values: unit Codelib.code;
-  (** Initializes the values. Computed only once per model compilation. *)
-  init_grads: unit Codelib.code;
+  init_values: unit -> unit Codelib.code;
+  (** Initializes the values. The code is suspended so that it can incorporate shape inference. *)
+  init_grads: unit -> unit Codelib.code;
   (** Initializes the gradient data: typically, simply creates the ndarrays.
-      Gradients are zeroed separately. *)
+      Gradients are zeroed separately. The code is suspended so that it can incorporate shape inference. *)
   backprop_body: unit Codelib.code option;
   zero_grads: unit Codelib.code;
   (** Initializes the backpropagation phase. Computed once per backpropagation. *)
@@ -89,14 +89,14 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
     | _, _, false, Some m2_body -> (.< .~m2_body; .~op_body >.)
     | false, Some m1_body, _, _ -> (.< .~m1_body; .~op_body >.)
   in
-  let init_values_body = (.< .~node.value <- Ndarray.create .~node.dims >.) in
-  (* Not required, but we preserve the order, for readability. *)
+  let init_values_body = fun () -> (.< .~node.value <- Ndarray.create .~(Shape.to_dims_code shape) >.) in
+  let m1_init_values = m1.init_values in
+  let m2_init_values = m2.init_values in
   let init_values =
     if m1_processed && m2_processed then init_values_body
-    else if m1_processed then (.< .~(m2.init_values); .~init_values_body >.)
-    else if m2_processed then (.< .~(m1.init_values); .~init_values_body >.)
-    else (.< .~(m1.init_values); .~(m2.init_values); .~init_values_body >.) in
-  let toplevel_forward = (.< .~init_values; fun () -> .~forward_body >.) in
+    else if m1_processed then fun () -> (.< .~(m2_init_values ()); .~(init_values_body ()) >.)
+    else if m2_processed then fun () -> (.< .~(m1_init_values ()); .~(init_values_body ()) >.)
+    else fun () -> (.< .~(m1_init_values ()); .~(m2.init_values ()); .~(init_values_body ()) >.) in
   let ng = (.< .~node.grad >.) in
   let n1g = (.< .~(m1.node).grad >.) in
   let n2g = (.< .~(m2.node).grad >.) in
@@ -121,35 +121,32 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
     | _, _, false, Some m2_body -> (.< .~grad_body; .~m2_body  >.)
     | false, Some m1_body, _, _ -> (.< .~grad_body; .~m1_body  >.)
     in
-  let init_grads_body = (.< .~node.grad <- Ndarray.create .~node.dims >.) in
+  let init_grads_body = fun () -> (.< .~node.grad <- Ndarray.create .~(Shape.to_dims_code shape) >.) in
   (* The order is not relevant, we keep the same order as in backprop for readability. *)
+  let m1_init_grads = m1.init_grads in
+  let m2_init_grads = m2.init_grads in
   let init_grads =
     if m1_processed && m2_processed then init_grads_body
-    else if m1_processed then (.< .~init_grads_body; .~(m2.init_grads) >.)
-    else if m2_processed then (.< .~init_grads_body; .~(m1.init_grads) >.)
-    else (.< .~init_grads_body; .~(m2.init_grads); .~(m1.init_grads) >.) in
-  let toplevel_backprop = (.<
-    .~init_grads;
-    fun () ->
-      .~(m1.zero_grads);
-      .~(m2.zero_grads);
-      Ndarray.reset_ones .~ng;
-      .~backprop_body
-  >.) in
+    else if m1_processed then fun () -> (.< .~(init_grads_body ()); .~(m2_init_grads ()) >.)
+    else if m2_processed then fun () -> (.< .~(init_grads_body ()); .~(m1_init_grads ()) >.)
+    else fun () -> (.< .~(init_grads_body ()); .~(m2_init_grads ()); .~(m1_init_grads ()) >.) in
   (* The order is reverse to the order the updates were already executed for the first time. *)
   let local_shape_updates = Sequence.singleton local_shape_update in
   let subtree_shape_updates: Shape.update_step Sequence.t =
     if m1_processed && m2_processed then local_shape_updates
-    else if m1_processed then Sequence.append local_shape_updates m2.subtree_shape_updates
-    else if m2_processed then Sequence.append local_shape_updates m1.subtree_shape_updates
+    else if m1_processed then Sequence.append local_shape_updates @@
+      (Map.find_exn !global_roots m2.node_id).subtree_shape_updates
+    else if m2_processed then Sequence.append local_shape_updates @@
+      (Map.find_exn !global_roots m1.node_id).subtree_shape_updates
     else
       Sequence.(concat @@ of_list
-                  [local_shape_updates; m2.subtree_shape_updates; m1.subtree_shape_updates]) in
+                  [local_shape_updates; (Map.find_exn !global_roots m2.node_id).subtree_shape_updates;
+                  (Map.find_exn !global_roots m1.node_id).subtree_shape_updates]) in
 
-  m1_processed <- true; m2_processed <- true;
-  {toplevel_forward; toplevel_backprop;
+  (if not m1_processed then global_roots := Map.remove !global_roots m1.node_id);
+  (if not m2_processed then global_roots := Map.remove !global_roots m2.node_id);
   let formula = {forward_body=Some forward_body; backprop_body=Some backprop_body;
-   init_values; init_grads; zero_grads;
+                init_values; init_grads; zero_grads;
                 node_id; comp_node; node; shape_logic; shape} in
   let root = {forward_code=None; forward=None; backprop_code=None; backprop=None; 
               formula; subtree_shape_updates} in
@@ -182,11 +179,11 @@ let unop ~op_label ?(transpose_op=`Transpose) ~op_body ~grad_body m: t =
     match m_processed, m.forward_body with
     | true, _ | _, None -> op_body
     | false, Some m_body -> (.< .~m_body; .~op_body >.) in
-  let init_values = (.<
-    .~(m.init_values);
-    .~node.value <- Ndarray.create .~node.dims;
+  let m_init_values = m.init_values in
+  let init_values = fun () -> (.<
+    .~(m_init_values ());
+    .~node.value <- Ndarray.create .~(Shape.to_dims_code shape);
   >.) in
-  let toplevel_forward = (.< .~init_values; fun () -> .~forward_body >.) in
   let ng = (.< .~node.grad >.) in
   let n1g = (.< .~(m.node).grad >.) in
   let zero_body = (.< Ndarray.reset_zeros .~ng >.) in
@@ -202,10 +199,19 @@ let unop ~op_label ?(transpose_op=`Transpose) ~op_body ~grad_body m: t =
     match m_processed, m.backprop_body with
     | true, _ | _, None -> grad_body
     | false, Some m_body -> (.< .~grad_body; .~m_body >.) in
-  let init_grads_body = (.< .~node.grad <- Ndarray.create .~node.dims >.) in
+  let init_grads_body = fun () -> (.< .~node.grad <- Ndarray.create .~(Shape.to_dims_code shape) >.) in
   (* The order is not relevant, we keep the same order as in backprop for readability. *)
+  let m_init_grads = m.init_grads in
   let init_grads =
     if m_processed then init_grads_body
+    else fun () -> (.< .~(init_grads_body ()); .~(m_init_grads ()) >.) in
+  let local_shape_updates = Sequence.singleton local_shape_update in
+  let subtree_shape_updates: Shape.update_step Sequence.t =
+    if m_processed then local_shape_updates
+    else Sequence.append local_shape_updates @@
+    (Map.find_exn !global_roots m.node_id).subtree_shape_updates in
+
+  (if not m_processed then global_roots := Map.remove !global_roots m.node_id);
   let formula = {forward_body=Some forward_body; backprop_body=Some backprop_body;
                  init_values; init_grads; zero_grads;
                  node_id; comp_node; node; shape_logic; shape} in
@@ -218,13 +224,13 @@ let get_toplevel m =
   let forward_body = match m.forward_body with None -> .< () >. | Some body -> body in
    let toplevel_forward = (.< .~(m.init_values ()); fun () -> .~forward_body >.) in
    let backprop_body = match m.backprop_body with None -> .< () >. | Some body -> body in
-  let toplevel_backprop = (.<
+   let toplevel_backprop = (.<
    .~(m.init_grads ());
-    fun () ->
-      .~(m.zero_grads);
+   fun () ->
+     .~(m.zero_grads);
      Ndarray.reset_ones .~(m.node).grad;
-      .~backprop_body
-  >.) in
+     .~backprop_body
+ >.) in
   toplevel_forward, toplevel_backprop
 
 (* ********** User API below ********** *)
@@ -243,20 +249,16 @@ let term ~label (spec: Shape.term_spec) ~(init_code:Ndarray.t Codelib.code) : t 
   let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
   (* Very unlikely someone will compute just the parameters. *)
   let forward_body = None in
-  let init_values = (.< .~node.value <- .~init_code >.) in
-  let toplevel_forward = (.< .~init_values; fun () -> () >.) in
+  (* FIXME: should use shape probably instead of [init_code], which should be [forward_code]? *)
+  let init_values = fun () -> (.< .~node.value <- .~init_code >.) in
   let ng = Codelib.genlet ~name:(label^"d") (.< .~node.grad >.) in
   let zero_grads = (.< Ndarray.reset_zeros .~ng >.) in
   let backprop_body = None in
   (* Very unlikely someone will want dw/dw. *)
-  let init_grads = (.< .~node.grad <- Ndarray.create .~node.dims >.) in
-  let toplevel_backprop = (.<
-    .~init_grads;
-    fun () -> Ndarray.reset_ones .~ng
-  >.) in
+  let init_grads = fun () -> (.< .~node.grad <- Ndarray.create .~(Shape.to_dims_code shape) >.) in
   let subtree_shape_updates = Sequence.singleton local_shape_update in
   let formula = {forward_body; backprop_body;
-    init_values; init_grads; zero_grads;
+                 init_values; init_grads; zero_grads;
                  node_id; comp_node; node; shape_logic; shape} in
   let root = {forward_code=None; forward=None; backprop_code=None; backprop=None; 
               formula; subtree_shape_updates} in
@@ -331,8 +333,6 @@ let sprint code =
 let sexp_of_t m =
   Sexp.message "Formula" [
     "label", String.sexp_of_t m.comp_node.label; "node_id", Int.sexp_of_t m.node_id;
-    "toplevel_forward", String.sexp_of_t @@ fst @@ sprint m.toplevel_forward;
-    "toplevel_backprop", String.sexp_of_t @@ fst @@ sprint m.toplevel_backprop;
   ]
 
 include Comparator.Make(struct

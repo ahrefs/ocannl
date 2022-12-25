@@ -370,4 +370,9 @@ let to_dims (sh: t): int array =
   let o_dims = match sh.output with
     | Unknown -> raise @@ Shape_error ("Output dimensions still unknown", sh, sh)
     | Inferred dims | Given dims | Fixed dims -> Array.of_list dims in
-Array.concat [b_dims; i_dims; o_dims]
+  Array.concat [b_dims; i_dims; o_dims]
+
+let to_dims_code (sh: t): int array Codelib.code =
+  let dims = to_dims sh in
+  ignore dims;
+  failwith "NOT IMPLEMENTED YET"
