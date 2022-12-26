@@ -72,64 +72,63 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let shape_logic = Shape.Broadcast (compose_op, m1.shape, m2.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
-  let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
-  let nv = (.< .~node.value >.) in
-  let n1v = (.< .~(m1.node).value >.) in
-  let n2v = (.< .~(m2.node).value >.) in
+  let node = Codelib.genlet ~name:label .< Node.get node_id >. in
+  let nv = .< .~node.value >. in
+  let n1v = .< .~(m1.node).value >. in
+  let n2v = .< .~(m2.node).value >. in
   let dims: int array Codelib.code = failwith "figure this out" in
   let op_body = op_body dims ~nv ~n1v ~n2v in
   let m1_processed = not @@ Map.mem !global_roots m1.node_id in
   let m2_processed = not @@ Map.mem !global_roots m2.node_id in
   (* The code needs to be included in the order it was computed! *)
   let forward_body =
-    match m1_processed, m1.forward_body, m2_processed, m2.forward_body with
+    (match m1_processed, m1.forward_body, m2_processed, m2.forward_body with
     | true, _, true, _ | true, _, _, None | _, None, true, _ | _, None, _, None -> op_body
     | false, Some m1_body, false, Some m2_body ->
-      (.< .~m1_body; .~m2_body; .~op_body >.)
-    | _, _, false, Some m2_body -> (.< .~m2_body; .~op_body >.)
-    | false, Some m1_body, _, _ -> (.< .~m1_body; .~op_body >.)
+      .< .~m1_body; .~m2_body; .~op_body >.
+    | _, _, false, Some m2_body -> .< .~m2_body; .~op_body >.
+    | false, Some m1_body, _, _ -> .< .~m1_body; .~op_body >.)
   in
-  let init_values_body = fun () -> (.< .~node.value <- Ndarray.create .~(Shape.to_dims_code shape) >.) in
+  let init_values_body = fun () -> .< .~node.value <- Ndarray.create .~(Shape.to_dims_code shape) >. in
   let m1_init_values = m1.init_values in
   let m2_init_values = m2.init_values in
   let init_values =
-    if m1_processed && m2_processed then init_values_body
-    else if m1_processed then fun () -> (.< .~(m2_init_values ()); .~(init_values_body ()) >.)
-    else if m2_processed then fun () -> (.< .~(m1_init_values ()); .~(init_values_body ()) >.)
-    else fun () -> (.< .~(m1_init_values ()); .~(m2.init_values ()); .~(init_values_body ()) >.) in
-  let ng = (.< .~node.grad >.) in
-  let n1g = (.< .~(m1.node).grad >.) in
-  let n2g = (.< .~(m2.node).grad >.) in
-  let zero_body = (.< Ndarray.reset_zeros .~ng >.) in
+    (if m1_processed && m2_processed then init_values_body
+    else if m1_processed then fun () -> .< .~(m2_init_values ()); .~(init_values_body ()) >.
+    else if m2_processed then fun () -> .< .~(m1_init_values ()); .~(init_values_body ()) >.
+    else fun () -> .< .~(m1_init_values ()); .~(m2.init_values ()); .~(init_values_body ()) >.) in
+  let ng = .< .~node.grad >. in
+  let n1g = .< .~(m1.node).grad >. in
+  let n2g = .< .~(m2.node).grad >. in
+  let zero_body = .< Ndarray.reset_zeros .~ng >. in
   (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
      and keep the backprop order for readability. *)
   let zero_grads =
     if m1_processed && m2_processed then zero_body
-    else if m1_processed then (.< .~zero_body; .~(m2.zero_grads) >.)
-    else if m2_processed then (.< .~zero_body; .~(m1.zero_grads) >.)
-    else (.< .~zero_body; .~(m2.zero_grads); .~(m1.zero_grads) >.) in
+    else if m1_processed then .< .~zero_body; .~(m2.zero_grads) >.
+    else if m2_processed then .< .~zero_body; .~(m1.zero_grads) >.
+    else .< .~zero_body; .~(m2.zero_grads); .~(m1.zero_grads) >. in
   (* The code needs to be included in the reverse order to which it was computed! This guarantees
      that all ancestors of a node are backpropagated before the node is backpropagated, even for
      non-tree DAGs. *)
-  let dims: int array Codelib.code = failwith "figure this out" in
   let grad_body = grad_body dims ~n1g ~n2g ~ng ~nv ~n1v ~n2v in
   let backprop_body =
     match m1_processed, m1.backprop_body, m2_processed, m2.backprop_body with
     | true, _, true, _ | true, _, _, None | _, None, true, _ | _, None, _, None -> grad_body
     | false, Some m1_body, false, Some m2_body ->
-      (.< .~grad_body; .~m1_body; .~m2_body >.)
-    | _, _, false, Some m2_body -> (.< .~grad_body; .~m2_body  >.)
-    | false, Some m1_body, _, _ -> (.< .~grad_body; .~m1_body  >.)
+      .< .~grad_body; .~m1_body; .~m2_body >.
+    | _, _, false, Some m2_body -> .< .~grad_body; .~m2_body  >.
+    | false, Some m1_body, _, _ -> .< .~grad_body; .~m1_body  >.
     in
-  let init_grads_body = fun () -> (.< .~node.grad <- Ndarray.create .~(Shape.to_dims_code shape) >.) in
+  let init_grads_body = fun () -> .< .~node.grad <- Ndarray.create .~(Shape.to_dims_code shape) >. in
   (* The order is not relevant, we keep the same order as in backprop for readability. *)
   let m1_init_grads = m1.init_grads in
   let m2_init_grads = m2.init_grads in
   let init_grads =
     if m1_processed && m2_processed then init_grads_body
-    else if m1_processed then fun () -> (.< .~(init_grads_body ()); .~(m2_init_grads ()) >.)
-    else if m2_processed then fun () -> (.< .~(init_grads_body ()); .~(m1_init_grads ()) >.)
-    else fun () -> (.< .~(init_grads_body ()); .~(m2_init_grads ()); .~(m1_init_grads ()) >.) in
+    else if m1_processed then fun () -> .< .~(init_grads_body ()); .~(m2_init_grads ()) >.
+    else if m2_processed then fun () -> .< .~(init_grads_body ()); .~(m1_init_grads ()) >.
+    else fun () -> .< .~(init_grads_body ()); .~(m2_init_grads ()); .~(m1_init_grads ()) >. in
   (* The order is reverse to the order the updates were already executed for the first time. *)
   let local_shape_updates = Sequence.singleton local_shape_update in
   let subtree_shape_updates: Shape.update_step Sequence.t =
@@ -168,9 +167,9 @@ let unop ~op_label ?(transpose_op=`Transpose) ~op_body ~grad_body m: t =
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
 
-  let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
-  let nv = (.< .~node.value >.) in
-  let n1v = (.< .~(m.node).value >.) in
+  let node = Codelib.genlet ~name:label .< Node.get node_id >. in
+  let nv = .< .~node.value >. in
+  let n1v = .< .~(m.node).value >. in
   let dims: int array Codelib.code = failwith "figure this out" in
   let op_body = op_body dims ~nv ~n1v in
   let m_processed = not @@ Map.mem !global_roots m.node_id in
@@ -178,33 +177,33 @@ let unop ~op_label ?(transpose_op=`Transpose) ~op_body ~grad_body m: t =
   let forward_body =
     match m_processed, m.forward_body with
     | true, _ | _, None -> op_body
-    | false, Some m_body -> (.< .~m_body; .~op_body >.) in
+    | false, Some m_body -> .< .~m_body; .~op_body >. in
   let m_init_values = m.init_values in
-  let init_values = fun () -> (.<
+  let init_values = fun () -> .<
     .~(m_init_values ());
     .~node.value <- Ndarray.create .~(Shape.to_dims_code shape);
-  >.) in
-  let ng = (.< .~node.grad >.) in
-  let n1g = (.< .~(m.node).grad >.) in
-  let zero_body = (.< Ndarray.reset_zeros .~ng >.) in
+  >. in
+  let ng = .< .~node.grad >. in
+  let n1g = .< .~(m.node).grad >. in
+  let zero_body = .< Ndarray.reset_zeros .~ng >. in
   (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
        and keep the backprop order for readability. *)
   let zero_grads =
     if m_processed then zero_body
-    else (.< .~zero_body; .~(m.zero_grads) >.) in
+    else .< .~zero_body; .~(m.zero_grads) >. in
   let dims: int array Codelib.code = failwith "figure this out" in
   let grad_body = grad_body dims ~n1g ~ng ~nv ~n1v in
   (* The code needs to be included in the reverse order to which it was computed! *)
   let backprop_body =
     match m_processed, m.backprop_body with
     | true, _ | _, None -> grad_body
-    | false, Some m_body -> (.< .~grad_body; .~m_body >.) in
-  let init_grads_body = fun () -> (.< .~node.grad <- Ndarray.create .~(Shape.to_dims_code shape) >.) in
+    | false, Some m_body -> .< .~grad_body; .~m_body >. in
+  let init_grads_body = fun () -> .< .~node.grad <- Ndarray.create .~(Shape.to_dims_code shape) >. in
   (* The order is not relevant, we keep the same order as in backprop for readability. *)
   let m_init_grads = m.init_grads in
   let init_grads =
     if m_processed then init_grads_body
-    else fun () -> (.< .~(init_grads_body ()); .~(m_init_grads ()) >.) in
+    else fun () -> .< .~(init_grads_body ()); .~(m_init_grads ()) >. in
   let local_shape_updates = Sequence.singleton local_shape_update in
   let subtree_shape_updates: Shape.update_step Sequence.t =
     if m_processed then local_shape_updates
@@ -222,15 +221,15 @@ let unop ~op_label ?(transpose_op=`Transpose) ~op_body ~grad_body m: t =
 
 let get_toplevel m =
   let forward_body = match m.forward_body with None -> .< () >. | Some body -> body in
-   let toplevel_forward = (.< .~(m.init_values ()); fun () -> .~forward_body >.) in
+   let toplevel_forward = .< .~(m.init_values ()); fun () -> .~forward_body >. in
    let backprop_body = match m.backprop_body with None -> .< () >. | Some body -> body in
-   let toplevel_backprop = (.<
+   let toplevel_backprop = .<
    .~(m.init_grads ());
    fun () ->
      .~(m.zero_grads);
      Ndarray.reset_ones .~(m.node).grad;
      .~backprop_body
- >.) in
+ >. in
   toplevel_forward, toplevel_backprop
 
 (* ********** User API below ********** *)
@@ -246,16 +245,16 @@ let term ~label (spec: Shape.term_spec) ~(init_code:Ndarray.t Codelib.code) : t 
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
 
-  let node = Codelib.genlet ~name:label (.< Node.get node_id >.) in
+  let node = Codelib.genlet ~name:label .< Node.get node_id >. in
   (* Very unlikely someone will compute just the parameters. *)
   let forward_body = None in
   (* FIXME: should use shape probably instead of [init_code], which should be [forward_code]? *)
-  let init_values = fun () -> (.< .~node.value <- .~init_code >.) in
-  let ng = Codelib.genlet ~name:(label^"d") (.< .~node.grad >.) in
-  let zero_grads = (.< Ndarray.reset_zeros .~ng >.) in
+  let init_values = fun () -> .< .~node.value <- .~init_code >. in
+  let ng = Codelib.genlet ~name:(label^"d") .< .~node.grad >. in
+  let zero_grads = .< Ndarray.reset_zeros .~ng >. in
   let backprop_body = None in
   (* Very unlikely someone will want dw/dw. *)
-  let init_grads = fun () -> (.< .~node.grad <- Ndarray.create .~(Shape.to_dims_code shape) >.) in
+  let init_grads = fun () -> .< .~node.grad <- Ndarray.create .~(Shape.to_dims_code shape) >. in
   let subtree_shape_updates = Sequence.singleton local_shape_update in
   let formula = {forward_body; backprop_body;
                  init_values; init_grads; zero_grads;
@@ -266,38 +265,38 @@ let term ~label (spec: Shape.term_spec) ~(init_code:Ndarray.t Codelib.code) : t 
   formula
 
 let add =
-  let op_body _dims ~nv ~n1v ~n2v = (.< Ndarray.assign_add .~nv .~n1v .~n2v >.) in
-  let grad_body _dims ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ = (.<
+  let op_body _dims ~nv ~n1v ~n2v = .< Ndarray.assign_add .~nv .~n1v .~n2v >. in
+  let grad_body _dims ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ = .<
     Ndarray.assign_add .~n1g .~n1g .~ng;
     Ndarray.assign_add .~n2g .~n2g .~ng
-  >.) in
+  >. in
   binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
 let mul_pointwise =
-  let op_body _dims ~nv ~n1v ~n2v = (.< Ndarray.assign_mul .~nv .~n1v .~n2v >.) in
-  let grad_body dims ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v = (.<
+  let op_body _dims ~nv ~n1v ~n2v = .< Ndarray.assign_mul .~nv .~n1v .~n2v >. in
+  let grad_body dims ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v = .<
     Ndarray.assign_add .~n1g .~n1g (Ndarray.mul .~dims .~ng .~n2v);
     Ndarray.assign_add .~n2g .~n2g (Ndarray.mul .~dims .~ng .~n1v)
-  >.) in
+  >. in
   binop ~compose_op:`Pointwise ~op_label:"" ~op_body ~grad_body
 
 let matmul =
-  let op_body _dims ~nv ~n1v ~n2v = (.< Ndarray.assign_mul .~nv .~n1v .~n2v >.) in
-  let grad_body dims ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v = (.<
+  let op_body _dims ~nv ~n1v ~n2v = .< Ndarray.assign_mul .~nv .~n1v .~n2v >. in
+  let grad_body dims ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v = .<
     Ndarray.assign_add .~n1g .~n1g (Ndarray.mul .~dims .~ng .~n2v);
     Ndarray.assign_add .~n2g .~n2g (Ndarray.mul .~dims .~ng .~n1v)
-  >.) in
+  >. in
   binop ~compose_op:`Compose ~op_label:"" ~op_body ~grad_body
 
 let relu =
-  let op_body _dims ~nv ~n1v = (.< Ndarray.assign_relu .~nv .~n1v >.) in
-  let grad_body dims ~n1g ~ng ~nv ~n1v:_ = (.<
+  let op_body _dims ~nv ~n1v = .< Ndarray.assign_relu .~nv .~n1v >. in
+  let grad_body dims ~n1g ~ng ~nv ~n1v:_ = .<
     Ndarray.assign_add .~n1g .~n1g (Ndarray.relu_gate .~dims .~nv .~ng)
-  >.) in
+  >. in
   unop ~op_label:"r" ~op_body ~grad_body
 
-let init_zeroes shape = (.< let p = Ndarray.create shape in Ndarray.reset_zeros p; p >.)
-let init_uniform shape = (.< Ndarray.get_uniform ~low:(-1.0) ~high:1.0 shape >.)
+let init_zeroes shape = .< let p = Ndarray.create shape in Ndarray.reset_zeros p; p >.
+let init_uniform shape = .< Ndarray.get_uniform ~low:(-1.0) ~high:1.0 shape >.
 
 let float_to_label v = "v" ^ (
   Float.to_string v |> String.substr_replace_all ~pattern:"." ~with_:"p"
@@ -306,7 +305,7 @@ let float_to_label v = "v" ^ (
 let number v =
   (* Note: no axis label so that we do not conflict with user labels. *)
   term ~label:(float_to_label v) (`Constant ([1], ""))
-    ~init_code:(.< Ndarray.get_val v [|1|] >.)
+    ~init_code:.< Ndarray.get_val v [|1|] >.
 
 module O = struct
   let ( * ) = matmul

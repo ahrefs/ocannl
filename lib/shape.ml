@@ -374,5 +374,5 @@ let to_dims (sh: t): int array =
 
 let to_dims_code (sh: t): int array Codelib.code =
   let dims = to_dims sh in
-  ignore dims;
-  failwith "NOT IMPLEMENTED YET"
+  (* FIXME: I thought BER MetaOCaml does this itself, but we are left with CSP? *)
+  .< dims >.
