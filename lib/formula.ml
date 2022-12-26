@@ -43,13 +43,9 @@ type global_root = {
     of a global root. *)
 let global_roots = ref @@ Map.empty (module Int)
 
+(** A current session is the range of nodes from [!first_session_id] to [global.unique_id]. Subformulas
+    with [node_id] before this range are not allowed in new formulas. *)
 let first_session_id = ref 1
-
-let recompile = ()
-
-let run = ()
-
-let print_global_roots = ()
 
 exception Session_error of string * t option
 
@@ -233,6 +229,29 @@ let get_toplevel m =
   toplevel_forward, toplevel_backprop
 
 (* ********** User API below ********** *)
+
+let refresh_session ?(recompile=false) ?(reinit=false) ?(run=true) () =
+  List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
+    let m = root.formula in
+    (if recompile || Option.is_none root.forward_code || Option.is_none root.backprop_code then
+      Sequence.iter root.subtree_shape_updates ~f:(fun step -> Shape.propagate_shapes step);
+      let forward_code, backprop_code = get_toplevel m in
+       root.forward_code <- Some forward_code;
+       root.forward <- None;
+       root.backprop_code <- Some backprop_code;
+       root.backprop <- None
+    );
+    (if reinit || Option.is_none root.forward || Option.is_none root.backprop then
+      let forward = Runnative.run @@ Option.value_exn root.forward_code in
+      root.forward <- Some forward;
+      let backprop = Runnative.run @@ Option.value_exn root.backprop_code in
+      root.backprop <- Some backprop;
+      );
+    (if run then Option.value_exn root.forward ());
+  );
+  if run then
+    List.iter (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
+      Option.value_exn root.backprop ())
 
 (** A terminal: a constant, a parameter, an input of the model. *)
 let term ~label (spec: Shape.term_spec) ~(init_code:Ndarray.t Codelib.code) : t =
