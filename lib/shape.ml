@@ -376,3 +376,22 @@ let to_dims_code (sh: t): int array Codelib.code =
   let dims = to_dims sh in
   (* FIXME: I thought BER MetaOCaml does this itself, but we are left with CSP? *)
   .< dims >.
+
+let to_string_hum sh =
+  let list_of_dims = function
+  | Given ls | Fixed ls | Inferred ls -> ls
+  | Unknown -> [] in
+  let dims_to_string kind =
+    let dims = list_of_dims @@ dims_of_kind kind sh in
+    String.concat ~sep:"," @@ List.mapi dims ~f:(fun i d ->
+        let key = AxisKey.{in_axes=kind; from_end=List.length dims - i} in
+        let label = match Map.find sh.axis_labels key with None -> ""
+         | Some l -> l^":" in
+        label^Int.to_string d) in
+  let batch_dims = dims_to_string Batch in
+  let input_dims = dims_to_string Input in
+  let output_dims = dims_to_string Output in
+  if String.is_empty batch_dims && String.is_empty input_dims then output_dims
+  else if String.is_empty batch_dims then input_dims^"->"^output_dims
+  else if String.is_empty input_dims then batch_dims^"|"^output_dims
+  else batch_dims^"|"^input_dims^"->"^output_dims

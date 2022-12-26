@@ -7,6 +7,11 @@ module A = Bigarray.Genarray
 type elt = Bigarray.float32_elt
 type t = (float, elt, Bigarray.c_layout) A.t
 
+let pp_print fmt (arr: t) =
+  ignore (fmt, arr);
+  (* FIXME(13): *)
+  Caml.Format.pp_print_string fmt "NOT IMPLEMENTED YET"
+
  let create = A.create Bigarray.Float32 Bigarray.C_layout
  let empty = create [||]
  

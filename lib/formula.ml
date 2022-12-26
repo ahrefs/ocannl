@@ -335,7 +335,7 @@ module O = struct
   let (-) m1 m2 = m1 + !.(-1.) * m2
 end
 
-let sprint code =
+let sprint_code code =
   let closed, check = Codelib.close_code_delay_check code in
   ignore (Caml.Format.flush_str_formatter());
   Caml.Format.pp_set_margin Caml.Format.str_formatter 160;
@@ -347,10 +347,31 @@ let sprint code =
   let s = String.substr_replace_all s ~pattern:"Node." ~with_:"" in
   s, check
 
-let print_global_roots ~with_code:_ =
-  List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, _root) ->
-  failwith "NOT IMPLEMENTED YET"
-    )
+let print_global_roots ~with_grad ~with_code =
+  List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (node_id, root) ->
+      let m = root.formula in
+      assert (node_id = m.node_id);
+      assert (node_id = m.comp_node.id);
+      assert (node_id = m.shape.of_node_id);
+      Stdio.print_endline @@ "["^Int.to_string node_id^"] "^m.comp_node.label^": "^
+                             Shape.to_string_hum m.shape;
+      Ndarray.pp_print Caml.Format.std_formatter m.comp_node.value;
+      if with_grad then (
+        Stdio.print_endline "Gradient:";
+        Ndarray.pp_print Caml.Format.std_formatter m.comp_node.grad);
+      if with_code then (
+        (match root.forward_code with
+         | None -> ()
+         | Some fwd_code ->
+           Stdio.print_endline "Forward:";
+           Stdio.print_endline @@ fst @@ sprint_code fwd_code);
+        (match root.backprop_code with
+         | None -> ()
+         | Some bwd_code ->
+           Stdio.print_endline "Backprop:";
+           Stdio.print_endline @@ fst @@ sprint_code bwd_code)
+      ));
+  Stdio.printf "\n%!"
 
 let get_root id =
   match Map.find !global_roots id with
