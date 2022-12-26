@@ -252,7 +252,7 @@ let refresh_session ?(recompile=false) ?(reinit=false) ?(run=true) () =
       Option.value_exn root.backprop ())
 
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label (spec: Shape.term_spec) ~(init_code:Ndarray.t Codelib.code) : t =
+let term ~label (spec: Shape.term_spec) ~(init_code:int array Codelib.code -> Ndarray.t Codelib.code) : t =
   let comp_node = Node.create ~label in
   let node_id = comp_node.id in
   let shape = Shape.of_term_spec ~node_id spec in
@@ -265,8 +265,7 @@ let term ~label (spec: Shape.term_spec) ~(init_code:Ndarray.t Codelib.code) : t 
   let node = Codelib.genlet ~name:label .< Node.get node_id >. in
   (* Very unlikely someone will compute just the parameters. *)
   let forward_body = None in
-  (* FIXME: should use shape probably instead of [init_code], which should be [forward_code]? *)
-  let init_values = fun () -> .< .~node.value <- .~init_code >. in
+  let init_values = fun () -> .< .~node.value <- .~(init_code @@ Shape.to_dims_code shape) >. in
   let ng = Codelib.genlet ~name:(label^"d") .< .~node.grad >. in
   let zero_grads = .< Ndarray.reset_zeros .~ng >. in
   let backprop_body = None in
@@ -312,13 +311,10 @@ let relu =
   >. in
   unop ~op_label:"r" ~op_body ~grad_body
 
-  (* FIXME(15): params initialization logic is broken *)
-let init_zeroes term_spec =
-  let shape = Shape.of_term_spec ~node_id:0 term_spec in
-   .< let p = Ndarray.create .~(Shape.to_dims_code shape) in Ndarray.reset_zeros p; p >.
-let init_uniform term_spec =
-  let shape = Shape.of_term_spec ~node_id:0 term_spec in
-   .< Ndarray.get_uniform ~low:(-1.0) ~high:1.0 .~(Shape.to_dims_code shape) >.
+let init_zeroes dims_code =
+   .< let p = Ndarray.create .~dims_code in Ndarray.reset_zeros p; p >.
+let init_uniform dims_code =
+   .< Ndarray.get_uniform ~low:(-1.0) ~high:1.0 .~dims_code >.
 
 let float_to_label v = "v" ^ (
   Float.to_string v |> String.substr_replace_all ~pattern:"." ~with_:"p"
@@ -327,14 +323,14 @@ let float_to_label v = "v" ^ (
 let number v =
   (* Note: no axis label so that we do not conflict with user labels. *)
   term ~label:(float_to_label v) (`Constant ([1], ""))
-    ~init_code:.< Ndarray.get_val v [|1|] >.
+    ~init_code:(fun dims -> .< Ndarray.get_val v .~dims >.)
 
 module O = struct
   let ( * ) = matmul
   let ( *. ) = mul_pointwise
   let (+) = add
   let (!/) = relu
-  let (!~) label = term ~label ~init_code:(init_uniform `Unknown)
+  let (!~) label = term ~label ~init_code:init_uniform
   let (!.) = number
   let (-) m1 m2 = m1 + !.(-1.) * m2
 end
