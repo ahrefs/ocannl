@@ -148,7 +148,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
   formula
 
-let unop ~op_label ?(transpose_op=`Transpose) ~op_body ~grad_body m: t =
+let unop ~op_label ~transpose_op ~op_body ~grad_body m: t =
   let m_l = m.comp_node.label in
   let m_l = if String.length m_l > 11 then "n"^Int.to_string m.node_id else m_l in
   let label = op_label ^ m_l in
@@ -273,7 +273,7 @@ let relu =
   let grad_body dims ~n1g ~ng ~nv ~n1v:_ = .<
     Ndarray.assign_add .~n1g .~n1g (Ndarray.relu_gate .~dims .~nv .~ng)
   >. in
-  unop ~op_label:"r" ~op_body ~grad_body
+  unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
 let init_zeroes dims_code =
    .< let p = Ndarray.create .~dims_code in Ndarray.reset_zeros p; p >.

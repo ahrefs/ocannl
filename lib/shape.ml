@@ -104,6 +104,8 @@ type compose_type =
 type transpose_type =
   [ `Transpose
   (** Swaps inputs and outputs of a shape, preserves batch axes. *)
+  | `Pointwise
+  (** Preserves the shape. *)
   | `Permute of axis_labels * axis_labels
   (** [`Permute (ls1, ls2)] is equivalent to [`Einsum (ls1, ls1, ls2)] (also to 
       [`Einsum (ls1, axis_labels.empty, ls2)] etc.). *)
@@ -203,6 +205,14 @@ let propagate_shapes (update: update_step) =
     cur_sh.batch <- broadcast_into cur_sh Batch sh Batch;
     sh.input <- broadcast_into sh Input cur_sh Output;
     sh.output <- broadcast_into sh Output cur_sh Input;
+    sh.batch <- broadcast_into sh Batch cur_sh Batch;
+
+  | Transpose (`Pointwise, sh) ->
+    cur_sh.input <- broadcast_into cur_sh Input sh Input;
+    cur_sh.output <- broadcast_into cur_sh Output sh Output;
+    cur_sh.batch <- broadcast_into cur_sh Batch sh Batch;
+    sh.input <- broadcast_into sh Input cur_sh Input;
+    sh.output <- broadcast_into sh Output cur_sh Output;
     sh.batch <- broadcast_into sh Batch cur_sh Batch;
 
   | Transpose (`Permute einsum, sh) -> 
