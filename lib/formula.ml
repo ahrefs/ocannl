@@ -215,42 +215,6 @@ let unop ~op_label ?(transpose_op=`Transpose) ~op_body ~grad_body m: t =
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
   formula
 
-let get_toplevel m =
-  let forward_body = match m.forward_body with None -> .< () >. | Some body -> body in
-   let toplevel_forward = .< .~(m.init_values ()); fun () -> .~forward_body >. in
-   let backprop_body = match m.backprop_body with None -> .< () >. | Some body -> body in
-   let toplevel_backprop = .<
-   .~(m.init_grads ());
-   fun () ->
-     .~(m.zero_grads);
-     Ndarray.reset_ones .~(m.node).grad;
-     .~backprop_body
- >. in
-  toplevel_forward, toplevel_backprop
-
-let refresh_session ?(recompile=false) ?(reinit=false) ?(run=true) () =
-  List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
-    let m = root.formula in
-    (if recompile || Option.is_none root.forward_code || Option.is_none root.backprop_code then
-      Sequence.iter root.subtree_shape_updates ~f:(fun step -> Shape.propagate_shapes step);
-      let forward_code, backprop_code = get_toplevel m in
-       root.forward_code <- Some forward_code;
-       root.forward <- None;
-       root.backprop_code <- Some backprop_code;
-       root.backprop <- None
-    );
-    (if reinit || Option.is_none root.forward || Option.is_none root.backprop then
-      let forward = Runnative.run @@ Option.value_exn root.forward_code in
-      root.forward <- Some forward;
-      let backprop = Runnative.run @@ Option.value_exn root.backprop_code in
-      root.backprop <- Some backprop;
-      );
-    (if run then Option.value_exn root.forward ());
-  );
-  if run then
-    List.iter (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
-      Option.value_exn root.backprop ())
-
 (** A terminal: a constant, a parameter, an input of the model. *)
 let term ~label (spec: Shape.term_spec) ~(init_code:int array Codelib.code -> Ndarray.t Codelib.code) : t =
   let comp_node = Node.create ~label in
@@ -335,6 +299,42 @@ module O = struct
   let (-) m1 m2 = m1 + !.(-1.) * m2
 end
 
+let get_toplevel m =
+  let forward_body = match m.forward_body with None -> .< () >. | Some body -> body in
+   let toplevel_forward = .< .~(m.init_values ()); fun () -> .~forward_body >. in
+   let backprop_body = match m.backprop_body with None -> .< () >. | Some body -> body in
+   let toplevel_backprop = .<
+   .~(m.init_grads ());
+   fun () ->
+     .~(m.zero_grads);
+     Ndarray.reset_ones .~(m.node).grad;
+     .~backprop_body
+ >. in
+  toplevel_forward, toplevel_backprop
+
+let refresh_session ?(recompile=false) ?(reinit=false) ?(run=true) () =
+  List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
+    let m = root.formula in
+    (if recompile || Option.is_none root.forward_code || Option.is_none root.backprop_code then
+      Sequence.iter root.subtree_shape_updates ~f:(fun step -> Shape.propagate_shapes step);
+      let forward_code, backprop_code = get_toplevel m in
+       root.forward_code <- Some forward_code;
+       root.forward <- None;
+       root.backprop_code <- Some backprop_code;
+       root.backprop <- None
+    );
+    (if reinit || Option.is_none root.forward || Option.is_none root.backprop then
+      let forward = Runnative.run @@ Option.value_exn root.forward_code in
+      root.forward <- Some forward;
+      let backprop = Runnative.run @@ Option.value_exn root.backprop_code in
+      root.backprop <- Some backprop;
+      );
+    (if run then Option.value_exn root.forward ());
+  );
+  if run then
+    List.iter (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
+      Option.value_exn root.backprop ())
+
 let sprint_code code =
   let closed, check = Codelib.close_code_delay_check code in
   ignore (Caml.Format.flush_str_formatter());
@@ -347,31 +347,34 @@ let sprint_code code =
   let s = String.substr_replace_all s ~pattern:"Node." ~with_:"" in
   s, check
 
+let print_global_root ~with_grad ~with_code root =
+  let m = root.formula in
+  assert (m.node_id = m.comp_node.id);
+  assert (m.node_id = m.shape.of_node_id);
+  Stdio.print_endline @@ "["^Int.to_string m.node_id^"] "^m.comp_node.label^": "^
+                         Shape.to_string_hum m.shape;
+  Ndarray.pp_print Caml.Format.std_formatter m.comp_node.value;
+  if with_grad then (
+    Stdio.print_endline "Gradient:";
+    Ndarray.pp_print Caml.Format.std_formatter m.comp_node.grad);
+  if with_code then (
+    (match root.forward_code with
+     | None -> ()
+     | Some fwd_code ->
+       Stdio.print_endline "Forward:";
+       Stdio.print_endline @@ fst @@ sprint_code fwd_code);
+    (match root.backprop_code with
+     | None -> ()
+     | Some bwd_code ->
+       Stdio.print_endline "Backprop:";
+       Stdio.print_endline @@ fst @@ sprint_code bwd_code)
+  );
+  Stdio.printf "\n%!"
+
 let print_global_roots ~with_grad ~with_code =
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (node_id, root) ->
-      let m = root.formula in
-      assert (node_id = m.node_id);
-      assert (node_id = m.comp_node.id);
-      assert (node_id = m.shape.of_node_id);
-      Stdio.print_endline @@ "["^Int.to_string node_id^"] "^m.comp_node.label^": "^
-                             Shape.to_string_hum m.shape;
-      Ndarray.pp_print Caml.Format.std_formatter m.comp_node.value;
-      if with_grad then (
-        Stdio.print_endline "Gradient:";
-        Ndarray.pp_print Caml.Format.std_formatter m.comp_node.grad);
-      if with_code then (
-        (match root.forward_code with
-         | None -> ()
-         | Some fwd_code ->
-           Stdio.print_endline "Forward:";
-           Stdio.print_endline @@ fst @@ sprint_code fwd_code);
-        (match root.backprop_code with
-         | None -> ()
-         | Some bwd_code ->
-           Stdio.print_endline "Backprop:";
-           Stdio.print_endline @@ fst @@ sprint_code bwd_code)
-      ));
-  Stdio.printf "\n%!"
+      assert (node_id = root.formula.node_id);
+      print_global_root ~with_grad ~with_code root)
 
 let get_root id =
   match Map.find !global_roots id with
@@ -404,6 +407,7 @@ module CLI = struct
   let init_zeroes = init_zeroes
   let init_uniform = init_uniform
   let term = term
+  let print_global_root = print_global_root
   let print_global_roots = print_global_roots
   let get_root = get_root
   let get_node = get_node
