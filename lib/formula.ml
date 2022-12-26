@@ -228,8 +228,6 @@ let get_toplevel m =
  >. in
   toplevel_forward, toplevel_backprop
 
-(* ********** User API below ********** *)
-
 let refresh_session ?(recompile=false) ?(reinit=false) ?(run=true) () =
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
     let m = root.formula in
@@ -314,8 +312,13 @@ let relu =
   >. in
   unop ~op_label:"r" ~op_body ~grad_body
 
-let init_zeroes shape = .< let p = Ndarray.create shape in Ndarray.reset_zeros p; p >.
-let init_uniform shape = .< Ndarray.get_uniform ~low:(-1.0) ~high:1.0 shape >.
+  (* FIXME(15): params initialization logic is broken *)
+let init_zeroes term_spec =
+  let shape = Shape.of_term_spec ~node_id:0 term_spec in
+   .< let p = Ndarray.create .~(Shape.to_dims_code shape) in Ndarray.reset_zeros p; p >.
+let init_uniform term_spec =
+  let shape = Shape.of_term_spec ~node_id:0 term_spec in
+   .< Ndarray.get_uniform ~low:(-1.0) ~high:1.0 .~(Shape.to_dims_code shape) >.
 
 let float_to_label v = "v" ^ (
   Float.to_string v |> String.substr_replace_all ~pattern:"." ~with_:"p"
@@ -331,7 +334,7 @@ module O = struct
   let ( *. ) = mul_pointwise
   let (+) = add
   let (!/) = relu
-  let (!~) label shape = term ~label ~init_code:(init_uniform shape)
+  let (!~) label = term ~label ~init_code:(init_uniform `Unknown)
   let (!.) = number
   let (-) m1 m2 = m1 + !.(-1.) * m2
 end
@@ -347,6 +350,47 @@ let sprint code =
   let s = String.substr_replace_all s ~pattern:"Ndarray." ~with_:"" in
   let s = String.substr_replace_all s ~pattern:"Node." ~with_:"" in
   s, check
+
+let print_global_roots ~with_code:_ =
+  List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, _root) ->
+  failwith "NOT IMPLEMENTED YET"
+    )
+
+let get_root id =
+  match Map.find !global_roots id with
+  | Some r -> r
+  | None ->
+    let msg = 
+      if id >= !first_session_id && id < Node.global.unique_id then
+        "get_root: Node "^Int.to_string id^" is a subformula"
+      else if id >= Node.global.unique_id then
+        "get_root: Node "^Int.to_string id^" has not been created yet"
+      else if id < 1 then "get_root: Node IDs start from 1"
+      else
+        "get_root: Node "^Int.to_string id^" is outside the current session" in
+    raise @@ Session_error (msg, None)
+
+let get_node id =
+  match Hashtbl.find Node.global.node_store id with
+  | Some r -> r
+  | None ->
+    let msg = 
+      if id >= Node.global.unique_id then
+        "get_node: Node "^Int.to_string id^" has not been created yet"
+      else if id < 1 then "get_root: Node IDs start from 1"
+      else
+        "get_node: Node "^Int.to_string id^" has been removed or lives on a different machine" in
+    raise @@ Session_error (msg, None)
+
+module CLI = struct
+  module FO = O
+  let init_zeroes = init_zeroes
+  let init_uniform = init_uniform
+  let term = term
+  let print_global_roots = print_global_roots
+  let get_root = get_root
+  let get_node = get_node
+end
 
 let sexp_of_t m =
   Sexp.message "Formula" [
