@@ -32,6 +32,10 @@ let get_uniform ~(low:float) ~(high:float) dims =
   ignore(low, high);
   arr
 
+let assign lhs rhs =
+  (* TODO: FIXME: NOT IMPLEMENTED *)
+  ignore (lhs, rhs)
+
 let assign_add lhs rhs1 rhs2 =
   (* TODO: FIXME: NOT IMPLEMENTED *)
   ignore (lhs, rhs1, rhs2)

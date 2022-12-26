@@ -155,7 +155,6 @@ let unop ~op_label ~transpose_op ~op_body ~grad_body m: t =
   let comp_node = Node.create ~label in
   let node_id = comp_node.id in
 
-  (* The default is that a transpose is its own inverse. *)
   let shape = Shape.{ batch=Unknown; input=Unknown; output=Unknown;
                       axis_labels=Map.empty (module AxisKey);
                       of_node_id=node_id; deduce_output_from_input=`Not_deduced } in
@@ -289,6 +288,13 @@ let number v =
   term ~label:(float_to_label v) (`Constant ([1], ""))
     ~init_code:(fun dims -> .< Ndarray.get_val v .~dims >.)
 
+(** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
+let stop_gradient =
+  let op_body _dims ~nv ~n1v = .< Ndarray.assign .~nv .~n1v >. in
+  let grad_body _dims ~n1g:_ ~ng:_ ~nv:_ ~n1v:_ = .< () >. in
+  unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
+
+    
 module O = struct
   let ( * ) = matmul
   let ( *. ) = mul_pointwise
