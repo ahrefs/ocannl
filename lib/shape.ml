@@ -386,10 +386,11 @@ let to_dims_code (sh: t): int array Codelib.code =
   (* FIXME: I thought BER MetaOCaml does this itself, but we are left with CSP? *)
   .< dims >.
 
-let to_string_hum sh =
-  let list_of_dims = function
+let list_of_dims = function
   | Given ls | Fixed ls | Inferred ls -> ls
-  | Unknown -> [] in
+  | Unknown -> []
+
+let to_string_hum sh =
   let dims_to_string kind =
     let dims = list_of_dims @@ dims_of_kind kind sh in
     String.concat ~sep:"," @@ List.mapi dims ~f:(fun i d ->

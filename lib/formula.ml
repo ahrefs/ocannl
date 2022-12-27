@@ -147,16 +147,20 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
   formula
 
-let unop ~op_label ~transpose_op ~op_body ~grad_body m: t =
+let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   let m_l = m.comp_node.label in
   let m_l = if String.length m_l > 11 then "n"^Int.to_string m.node_id else m_l in
   let label = op_label ^ m_l in
   let comp_node = Node.create ~label in
   let node_id = comp_node.id in
 
-  let shape = Shape.{ batch=Unknown; input=Unknown; output=Unknown;
-                      axis_labels=Map.empty (module AxisKey);
-                      of_node_id=node_id; deduce_output_from_input=`Not_deduced } in
+  let shape =
+    match init_shape with
+    | None ->
+      Shape.{ batch=Unknown; input=Unknown; output=Unknown;
+              axis_labels=Map.empty (module AxisKey);
+              deduce_output_from_input=`Not_deduced }
+    | Some shape -> shape in
   let shape_logic = Shape.Transpose(transpose_op, m.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
@@ -291,6 +295,15 @@ let stop_gradient =
   let grad_body ~n1g:_ ~ng:_ ~nv:_ ~n1v:_ = .< () >. in
   unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
+let stop_broadcast m =
+  let sh = m.shape in
+  let init_shape = Shape.{
+     batch=Fixed (list_of_dims sh.batch);
+     input=Fixed (list_of_dims sh.input); output=Fixed (list_of_dims sh.input);
+     axis_labels=sh.axis_labels; deduce_output_from_input=`Not_deduced } in
+  let op_body ~nv ~n1v = .< Ndarray.assign .~nv .~n1v >. in
+  let grad_body ~n1g:_ ~ng:_ ~nv:_ ~n1v:_ = .< () >. in
+  unop ~init_shape ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
     
 module O = struct
   let ( * ) = matmul
