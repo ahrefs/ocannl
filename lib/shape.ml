@@ -382,9 +382,8 @@ let to_dims (sh: t): int array =
   Array.concat [b_dims; i_dims; o_dims]
 
 let to_dims_code (sh: t): int array Codelib.code =
-  let dims = to_dims sh in
-  (* FIXME: I thought BER MetaOCaml does this itself, but we are left with CSP? *)
-  .< dims >.
+  let dims = Array.map (to_dims sh) ~f:(Lifts.Lift_int.lift) in
+  Lifts.lift_array dims
 
 let list_of_dims = function
   | Given ls | Fixed ls | Inferred ls -> ls
