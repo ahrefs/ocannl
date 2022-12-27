@@ -12,6 +12,8 @@ let pp_print fmt (arr: t) =
   (* FIXME(13): *)
   Caml.Format.pp_print_string fmt "NOT IMPLEMENTED YET"
 
+let dims (arr: t) = A.dims arr
+  
  let create = A.create Bigarray.Float32 Bigarray.C_layout
  let empty = create [||]
  
