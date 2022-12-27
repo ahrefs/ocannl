@@ -363,8 +363,7 @@ let sprint_code code =
   let s = String.substr_replace_all s ~pattern:"Node." ~with_:"" in
   s, check
 
-let print_global_root ~with_grad ~with_code root =
-  let m = root.formula in
+let print_formula ~with_grad ~with_code m =
   assert (m.node_id = m.comp_node.id);
   Stdio.print_endline @@ "["^Int.to_string m.node_id^"] "^m.comp_node.label^": "^
                          Shape.to_string_hum m.shape;
@@ -372,6 +371,22 @@ let print_global_root ~with_grad ~with_code root =
   if with_grad then (
     Stdio.print_endline "Gradient:";
     Ndarray.pp_print Caml.Format.std_formatter m.comp_node.grad);
+  if with_code then (
+    (match m.forward_body with
+     | None -> ()
+     | Some fwd_code ->
+       Stdio.print_endline "Forward body:";
+       Stdio.print_endline @@ fst @@ sprint_code fwd_code);
+    (match m.backprop_body with
+     | None -> ()
+     | Some bwd_code ->
+       Stdio.print_endline "Backprop body:";
+       Stdio.print_endline @@ fst @@ sprint_code bwd_code)
+  );
+  Stdio.printf "\n%!"
+
+let print_global_root ~with_grad ~with_code root =
+  print_formula ~with_grad ~with_code:false root.formula;
   if with_code then (
     (match root.forward_code with
      | None -> ()
@@ -422,7 +437,11 @@ module CLI = struct
   let init_zeroes = init_zeroes
   let init_uniform = init_uniform
   let term = term
+  let stop_broadcast = stop_broadcast
+  let stop_gradient = stop_gradient
   let print_global_root = print_global_root
+  let print_node = Node.print_node
+  let print_formula = print_formula
   let print_global_roots = print_global_roots
   let get_root = get_root
   let get_node = get_node

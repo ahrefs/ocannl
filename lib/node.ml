@@ -28,3 +28,10 @@ let create ~label =
   } in
   assert (phys_equal `Ok @@ Hashtbl.add global.node_store ~key:node.id ~data:node);
   node
+
+let print_node ~with_grad n =
+  Stdio.print_endline @@ "["^Int.to_string n.id^"] "^n.label;
+  Ndarray.pp_print Caml.Format.std_formatter n.value;
+  if with_grad then (
+    Stdio.print_endline "Gradient:";
+    Ndarray.pp_print Caml.Format.std_formatter n.grad)
