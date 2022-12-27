@@ -71,7 +71,6 @@ type t = {
   mutable input: dims;
   mutable output: dims;
   mutable axis_labels: axis_labels;
-  of_node_id: int;
   deduce_output_from_input: deduce_dims;
   (** Intended for terminal node cases where both [input] and [output] are initially
       unknown. It makes it trivial to implement dimension-preserving hidden layers: just set
@@ -344,31 +343,31 @@ type term_spec =
         Note that scalar axes (1D) are not scaled, for compatibility with broadcasting. *)
   ] [@@deriving compare, sexp]
 
-let of_term_spec ~node_id : term_spec -> t = function
+let of_term_spec : term_spec -> t = function
   | `Unknown ->
     { batch=Unknown; input=Unknown; output=Unknown;
       axis_labels=Map.empty (module AxisKey);
-      of_node_id=node_id; deduce_output_from_input=`Not_deduced }
+      deduce_output_from_input=`Not_deduced }
   | `Constant (dims, labels_spec) ->
     { batch=Given []; input=Given []; output=Given dims;
       axis_labels=axis_labels_of_spec labels_spec;
-      of_node_id=node_id; deduce_output_from_input=`Not_deduced }
+      deduce_output_from_input=`Not_deduced }
   | `Data (batch_dims, dims, labels_spec) ->
     { batch=Given batch_dims; input=Given []; output=Given dims;
       axis_labels=axis_labels_of_spec labels_spec;
-      of_node_id=node_id; deduce_output_from_input=`Not_deduced }
+      deduce_output_from_input=`Not_deduced }
   | `Params (input_dims, output_dims, labels_spec) ->
     { batch=Given []; input=Given input_dims; output=Given output_dims;
       axis_labels=axis_labels_of_spec labels_spec;
-      of_node_id=node_id; deduce_output_from_input=`Not_deduced }
+      deduce_output_from_input=`Not_deduced }
   | `Unknown_batch_data (dims, labels_spec) ->
     { batch=Unknown; input=Given []; output=Given dims;
       axis_labels=axis_labels_of_spec labels_spec;
-      of_node_id=node_id; deduce_output_from_input=`Not_deduced }
+      deduce_output_from_input=`Not_deduced }
   | `Deduced_params deduce_output_from_input ->
     { batch=Given []; input=Unknown; output=Unknown;
       axis_labels=Map.empty (module AxisKey);
-      of_node_id=node_id; deduce_output_from_input }
+      deduce_output_from_input }
 
 let to_dims (sh: t): int array =
   let b_dims = match sh.batch with

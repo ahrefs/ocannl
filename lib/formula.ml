@@ -64,7 +64,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let node_id = comp_node.id in
   let shape = Shape.{ batch=Unknown; input=Unknown; output=Unknown;
                       axis_labels=Map.empty (module AxisKey);
-                      of_node_id=node_id; deduce_output_from_input=`Not_deduced } in
+                     deduce_output_from_input=`Not_deduced } in
   let shape_logic = Shape.Broadcast (compose_op, m1.shape, m2.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
@@ -218,7 +218,7 @@ let unop ~op_label ~transpose_op ~op_body ~grad_body m: t =
 let term ~label (spec: Shape.term_spec) ~(init_code:int array Codelib.code -> Ndarray.t Codelib.code) : t =
   let comp_node = Node.create ~label in
   let node_id = comp_node.id in
-  let shape = Shape.of_term_spec ~node_id spec in
+  let shape = Shape.of_term_spec spec in
   let shape_logic = Shape.Terminal in
   (* NOTE: this update does not do any work, but that might change in the future,
      and having it in the update sequence might help with debuggability. *)
@@ -356,7 +356,6 @@ let sprint_code code =
 let print_global_root ~with_grad ~with_code root =
   let m = root.formula in
   assert (m.node_id = m.comp_node.id);
-  assert (m.node_id = m.shape.of_node_id);
   Stdio.print_endline @@ "["^Int.to_string m.node_id^"] "^m.comp_node.label^": "^
                          Shape.to_string_hum m.shape;
   Ndarray.pp_print Caml.Format.std_formatter m.comp_node.value;
