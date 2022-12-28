@@ -367,10 +367,11 @@ let print_formula ~with_grad ~with_code m =
   assert (m.node_id = m.comp_node.id);
   Stdio.print_endline @@ "["^Int.to_string m.node_id^"] "^m.comp_node.label^": "^
                          Shape.to_string_hum m.shape;
-  Ndarray.pp_print Caml.Format.std_formatter m.comp_node.value;
+  let indices = failwith "NOT IMPLEMENTED" in
+  Ndarray.pp_print Caml.Format.std_formatter ~indices m.comp_node.value;
   if with_grad then (
     Stdio.print_endline "Gradient:";
-    Ndarray.pp_print Caml.Format.std_formatter m.comp_node.grad);
+    Ndarray.pp_print Caml.Format.std_formatter ~indices m.comp_node.grad);
   if with_code then (
     (match m.forward_body with
      | None -> ()
