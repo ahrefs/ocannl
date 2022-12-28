@@ -30,8 +30,11 @@ let create ~label =
   node
 
 let print_node ~with_grad ~indices n =
+  let screen_stop () =
+    Stdio.print_endline "Press [Enter] for next screen, [q] [Enter] to quit.";
+    String.(Stdio.In_channel.input_line_exn Stdio.stdin = "q")  in
   Stdio.print_endline @@ "["^Int.to_string n.id^"] "^n.label;
-  Ndarray.pp_print Caml.Format.std_formatter ~indices n.value;
+  Ndarray.pp_print Caml.Format.std_formatter ~screen_stop ~indices n.value;
   if with_grad then (
     Stdio.print_endline "Gradient:";
-    Ndarray.pp_print Caml.Format.std_formatter ~indices n.grad)
+    Ndarray.pp_print Caml.Format.std_formatter ~screen_stop ~indices n.grad)

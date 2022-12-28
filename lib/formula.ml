@@ -363,15 +363,46 @@ let sprint_code code =
   let s = String.substr_replace_all s ~pattern:"Node." ~with_:"" in
   s, check
 
-let print_formula ~with_grad ~with_code m =
+(** We print out up to 5 axes when printing an [Ndarray], as a grid (outer rectangle) of (inner)
+    rectangles, possibly repeated. By default, the inner rectangle has an input and an output axis,
+    and the batch axes are the vertical ones (the outer rectangle and the repetition). *)
+type array_print_style =
+[ `Default
+(** The default behavior: the inner rectangles comprise both an input and an output axis, if available. *)
+| `Prefer_input_axis
+(** If there are 2 or more input axes, the inner rectangles comprise the input axes. *)
+| `Prefer_output_axis
+(** If there are 2 or more output axes, the inner rectangles comprise the output axes. *)
+| `Prefer_batch_axis
+(** The inner rectangles remain input x output, but the outer rectangles and repetition comprise
+    batch axes, if available. *)
+| `Exact_layout of string
+(** The string should use integer pseudo-labels to represent the priorities of the axes, where the
+    priorities correspond to, from highest: horizontal direction, vertical direction of inner rectangle,
+    horizontal direction, vertical direction of outer rectangle, repetition. *)
+]
+
+let print_formula ~with_grad ~with_code (style: array_print_style) m =
   assert (m.node_id = m.comp_node.id);
   Stdio.print_endline @@ "["^Int.to_string m.node_id^"] "^m.comp_node.label^": "^
                          Shape.to_string_hum m.shape;
-  let indices = failwith "NOT IMPLEMENTED" in
-  Ndarray.pp_print Caml.Format.std_formatter ~indices m.comp_node.value;
+  let indices = failwith "INDICES NOT IMPLEMENTED" in
+  let order_of_axes =
+    match style with
+    | `Exact_layout priorities ->
+      let p_labels = Shape.axis_labels_of_spec priorities in
+
+       ignore p_labels; []
+    | _ -> failwith "STYLE NOT IMPLEMENTED" in
+  let labels = failwith "LABEL PASSING NOT IMPLEMENTED" in
+  let screen_stop () =
+    Stdio.print_endline "Press [Enter] for next screen, [q] [Enter] to quit.";
+    String.(Stdio.In_channel.input_line_exn Stdio.stdin = "q")  in
+  Ndarray.pp_print Caml.Format.std_formatter ~screen_stop ~indices m.comp_node.value;
   if with_grad then (
     Stdio.print_endline "Gradient:";
-    Ndarray.pp_print Caml.Format.std_formatter ~indices m.comp_node.grad);
+    Ndarray.pp_print Caml.Format.std_formatter ~order_of_axes ~labels ~screen_stop ~indices
+      m.comp_node.grad);
   if with_code then (
     (match m.forward_body with
      | None -> ()
@@ -386,8 +417,8 @@ let print_formula ~with_grad ~with_code m =
   );
   Stdio.printf "\n%!"
 
-let print_global_root ~with_grad ~with_code root =
-  print_formula ~with_grad ~with_code:false root.formula;
+let print_global_root ~with_grad ~with_code (style: array_print_style) root =
+  print_formula ~with_grad ~with_code:false style root.formula;
   if with_code then (
     (match root.forward_code with
      | None -> ()
@@ -402,10 +433,10 @@ let print_global_root ~with_grad ~with_code root =
   );
   Stdio.printf "\n%!"
 
-let print_global_roots ~with_grad ~with_code =
+let print_global_roots ~with_grad ~with_code (style: array_print_style) =
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (node_id, root) ->
       assert (node_id = root.formula.node_id);
-      print_global_root ~with_grad ~with_code root)
+      print_global_root ~with_grad ~with_code style root)
 
 let get_root id =
   match Map.find !global_roots id with
