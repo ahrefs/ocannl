@@ -8,13 +8,16 @@ type t = {
   apply: Formula.t -> Formula.t;
   params: (Formula.t, Formula.comparator_witness) Set.t;
 }
+
+module FO = Operation.O
+
 let linear ~w ~b =
-  let apply x = Formula.O.(w*x + b) in
+  let apply x = FO.(w*x + b) in
   let params = Set.of_list (module Formula) [w; b] in
   {apply; params}
 
 let nonlinear ~w ~b =
-  let apply x = Formula.O.(!/(w*x + b)) in
+  let apply x = FO.(!/(w*x + b)) in
   let params = Set.of_list (module Formula) [w; b] in
   {apply; params}
 
@@ -24,7 +27,7 @@ let compose m1 m2 =
   {apply; params}
 
 let residual_compose m1 m2 =
-  let apply x = let z = m2.apply x in Formula.O.(m1.apply z + z)  in
+  let apply x = let z = m2.apply x in FO.(m1.apply z + z)  in
   let params = Set.union m1.params m2.params in
   {apply; params}
 
@@ -33,7 +36,7 @@ let bind_ret m f =
   {apply; params=m.params}
 
 module O = struct
-  include Formula.O
+  include Operation.O
   let (@@) m x = m.apply x
   let ( % ) = compose
   let (%+) = residual_compose

@@ -32,7 +32,7 @@ let make ?(clear_session=true) network (loss_fun:loss_fun): t =
 
 let hinge_loss ~output:y ~target:y' = Network.O.(!/(!.1.0 - y * y'))
 
-let sum_over_params (params: params) ~f = Set.sum (module Formula.Summable) params ~f
+let sum_over_params (params: params) ~f = Set.sum (module Operation.Summable) params ~f
 
 let l2_reg_loss ~alpha (loss:loss_fun): loss_fun =
     fun params ~output ~target ->
