@@ -328,10 +328,10 @@ let get_toplevel m =
  >. in
   toplevel_forward, toplevel_backprop
 
-let refresh_session ?(recompile=false) ?(reinit=false) ?(run=true) () =
+let refresh_session ?(regenerate=false) ?(reinit=false) ?(run=true) () =
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
     let m = root.formula in
-    (if recompile || Option.is_none root.forward_code || Option.is_none root.backprop_code then
+    (if regenerate || Option.is_none root.forward_code || Option.is_none root.backprop_code then
       Sequence.iter root.subtree_shape_updates ~f:(fun step -> Shape.propagate_shapes step);
       let forward_code, backprop_code = get_toplevel m in
        root.forward_code <- Some forward_code;
