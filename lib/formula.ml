@@ -244,7 +244,18 @@ let term ~label (spec: Shape.term_spec) ~(init_code:int array Codelib.code -> Nd
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
   formula
 
-let add =
+(** Whether to inline [Ndarray] operations. *)
+let global_inline = ref true
+
+let add_inline =
+  let op_body ~nv ~n1v ~n2v = Ndarray.assign_add_code nv n1v n2v in
+  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ = .<
+    .~(Ndarray.assign_add_code n1g n1g ng);
+    .~(Ndarray.assign_add_code n2g n2g ng)
+  >. in
+  binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
+
+let add_call =
   let op_body ~nv ~n1v ~n2v = .< Ndarray.assign_add .~nv .~n1v .~n2v >. in
   let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ = .<
     Ndarray.assign_add .~n1g .~n1g .~ng;
@@ -252,7 +263,17 @@ let add =
   >. in
   binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
-let mul_pointwise =
+let add m1 m2 = if !global_inline then add_inline m1 m2 else add_call m1 m2
+
+let mul_pointwise_inline =
+  let op_body ~nv ~n1v ~n2v = Ndarray.assign_mul_code nv n1v n2v in
+  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v = .<
+    .~(Ndarray.assign_add_code n1g n1g (Ndarray.mul_code .< Ndarray.dims .~n1g >. ng n2v));
+    .~(Ndarray.assign_add_code n2g n2g (Ndarray.mul_code .< Ndarray.dims .~n2g >. ng n1v))
+  >. in
+  binop ~compose_op:`Pointwise ~op_label:"" ~op_body ~grad_body
+
+let mul_pointwise_call =
   let op_body ~nv ~n1v ~n2v = .< Ndarray.assign_mul .~nv .~n1v .~n2v >. in
   let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v = .<
     Ndarray.assign_add .~n1g .~n1g (Ndarray.mul (Ndarray.dims .~n1g) .~ng .~n2v);
@@ -260,7 +281,21 @@ let mul_pointwise =
   >. in
   binop ~compose_op:`Pointwise ~op_label:"" ~op_body ~grad_body
 
-let matmul =
+let mul_pointwise m1 m2 = if !global_inline then mul_pointwise_inline m1 m2 else mul_pointwise_call m1 m2
+
+let matmul_inline =
+  (* FIXME(14): not implemented: either mul_pointwise or matmul need to use a different set of Ndarray
+     routines. *)
+  let op_body ~nv ~n1v ~n2v = Ndarray.assign_mul_code nv n1v n2v in
+  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v = .<
+    .~(Ndarray.assign_add_code n1g n1g (Ndarray.mul_code .< Ndarray.dims .~n1g >. ng n2v));
+    .~(Ndarray.assign_add_code n2g n2g (Ndarray.mul_code .< Ndarray.dims .~n2g >. ng n1v))
+  >. in
+  binop ~compose_op:`Compose ~op_label:"" ~op_body ~grad_body
+
+let matmul_call =
+  (* FIXME(14): not implemented: either mul_pointwise or matmul need to use a different set of Ndarray
+     routines. *)
   let op_body ~nv ~n1v ~n2v = .< Ndarray.assign_mul .~nv .~n1v .~n2v >. in
   let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v = .<
     Ndarray.assign_add .~n1g .~n1g (Ndarray.mul (Ndarray.dims .~n1g) .~ng .~n2v);
@@ -268,12 +303,23 @@ let matmul =
   >. in
   binop ~compose_op:`Compose ~op_label:"" ~op_body ~grad_body
 
-let relu =
+let matmul m1 m2 = if !global_inline then matmul_inline m1 m2 else matmul_call m1 m2
+
+let relu_inline =
+  let op_body ~nv ~n1v = Ndarray.assign_relu_code nv n1v in
+  let grad_body ~n1g ~ng ~nv ~n1v:_ = .<
+    Ndarray.assign_add .~n1g .~n1g (Ndarray.relu_gate (Ndarray.dims .~n1g) .~nv .~ng)
+  >. in
+  unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
+
+let relu_call =
   let op_body ~nv ~n1v = .< Ndarray.assign_relu .~nv .~n1v >. in
   let grad_body ~n1g ~ng ~nv ~n1v:_ = .<
     Ndarray.assign_add .~n1g .~n1g (Ndarray.relu_gate (Ndarray.dims .~n1g) .~nv .~ng)
   >. in
   unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
+
+let relu m = if !global_inline then relu_inline m else relu_call m
 
 let init_zeroes dims_code =
    .< let p = Ndarray.create .~dims_code in Ndarray.reset_zeros p; p >.

@@ -173,30 +173,47 @@ let get_uniform ~(low:float) ~(high:float) dims =
 let assign lhs rhs =
   (* TODO: FIXME: NOT IMPLEMENTED *)
   ignore (lhs, rhs)
-
-let assign_add lhs rhs1 rhs2 =
+  
+let assign_add_code lhs rhs1 rhs2 =
   (* TODO: FIXME: NOT IMPLEMENTED *)
-  ignore (lhs, rhs1, rhs2)
+  .< ignore (.~lhs, .~rhs1, .~rhs2) >.
 
-let assign_mul lhs rhs1 rhs2 =
-  (* TODO: FIXME: NOT IMPLEMENTED *)
-  ignore (lhs, rhs1, rhs2)
+let assign_add: t -> t -> t -> unit =
+  Runnative.run .< fun lhs rhs1 rhs2 -> .~(assign_add_code .<lhs>. .<rhs1>. .<rhs2>.) >.
 
-let mul dims rhs1 rhs2 =
-  let arr = A.create Bigarray.Float32 Bigarray.C_layout dims in
+let assign_mul_code lhs rhs1 rhs2 =
   (* TODO: FIXME: NOT IMPLEMENTED *)
-  A.fill arr 1.0;
-  ignore(rhs1, rhs2);
-  arr
+  .< ignore (.~lhs, .~rhs1, .~rhs2) >.
 
-let assign_relu lhs rhs =
+let assign_mul: t -> t -> t -> unit =
+  Runnative.run .< fun lhs rhs1 rhs2 -> .~(assign_mul_code .<lhs>. .<rhs1>. .<rhs2>.) >.
+
+let mul_code dims rhs1 rhs2 =
+  .< let arr = A.create Bigarray.Float32 Bigarray.C_layout .~dims in
+     (* TODO: FIXME: NOT IMPLEMENTED *)
+     A.fill arr 1.0;
+     ignore(rhs1, rhs2);
+     arr
+  >.
+
+let mul: int array -> t -> t -> t =
+  Runnative.run .< fun dims rhs1 rhs2 -> .~(mul_code .<dims>. .<rhs1>. .<rhs2>.) >.
+
+let assign_relu_code lhs rhs =
   (* TODO: FIXME: NOT IMPLEMENTED *)
-  ignore (lhs, rhs)
+  .< ignore (.~lhs, .~rhs) >.
+
+let assign_relu: t -> t -> unit =
+  Runnative.run .< fun lhs rhs -> .~(assign_relu_code .<lhs>. .<rhs>.) >.
 
 (** Computes [if rhs1 > 0 then rhs2 else 0]. *)
-let relu_gate dims rhs1 rhs2 =
-  let arr = A.create Bigarray.Float32 Bigarray.C_layout dims in
-  (* TODO: FIXME: NOT IMPLEMENTED *)
-  A.fill arr 1.0;
-  ignore (rhs1, rhs2);
-  arr
+let relu_gate_code dims rhs1 rhs2 =
+  .< let arr = A.create Bigarray.Float32 Bigarray.C_layout .~dims in
+    (* TODO: FIXME: NOT IMPLEMENTED *)
+    A.fill arr 1.0;
+    ignore (.~rhs1, .~rhs2);
+    arr
+  >.
+
+let relu_gate: int array -> t -> t -> t =
+  Runnative.run .< fun dims rhs1 rhs2 -> .~(relu_gate_code .<dims>. .<rhs1>. .<rhs2>.) >.
