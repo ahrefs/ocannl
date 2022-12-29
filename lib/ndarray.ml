@@ -9,12 +9,13 @@ type t = (float, elt, Bigarray.c_layout) A.t
 
 (** Prints 0-based [indices] entries out of [arr], where [-1] in an axis means to print out the axis,
     and a non-negative index means to print out only the indexed dimension of the axis. Up to [5] axes
-    can be [-1]. Prints up to [entries_per_axis] or [entries_per_axis+1] entries per axis. If
-    [order_of_axes] specifies the layout of the printed matrices (default [1, 2, 4, 3, 5]), and should
-    be a list of up to 5 numbers in range [1] to the length of the list. [labels] specifies the labels
-    (if any) of the printed out axes. The printed out axes are arranged as: grids (outer rectangles)
-    of (inner) rectangles, repeated until a callback called in between each outer rectangle returns true. *)
-let pp_print fmt ?(entries_per_axis=5) ?(order_of_axes=[0; 1; 3; 2; 4]) ?(prefer_vertical=false)
+    can be [-1]. Prints up to [entries_per_axis] or [entries_per_axis+1] entries per axis.
+    [order_of_axes] specifies the layout (priorities) of the printed matrices, and should be a list of
+    up to 5 integers. [labels] specifies the labels (if any) of the printed out axes. The printed out
+    axes are arranged as, from highest priority: horizontal by vertical in inner rectangles,
+    horizontal by vertical in outer rectangles, vertical list (of outer rectangles) repeated until
+    a callback called in between each outer rectangle returns true. *)
+let pp_print fmt ?(entries_per_axis=5) ?(order_of_axes=[]) ?(prefer_vertical=false)
     ?(labels=[]) ~screen_stop ~indices (arr: t) =
   let dims = A.dims arr in
   let indices = Array.copy indices in
@@ -48,15 +49,17 @@ let pp_print fmt ?(entries_per_axis=5) ?(order_of_axes=[0; 1; 3; 2; 4]) ?(prefer
   let order_of_axes = ord order_of_axes in
   let var_indices = List.map ~f:snd @@ List.sort ~compare:(fun (a,_) (b,_) -> Int.compare a b) @@
     List.zip_exn order_of_axes var_indices in
+  (* Swap second-to-highest and third-to-highest priority axes: horizontal looping takes precedence
+     over vertical. *)
   let ind0, ind1, ind2, ind3, ind4 =
     match var_indices with 
-    | [ind0; ind1; ind2; ind3; ind4] -> ind0, ind1, ind2, ind3, ind4
+    | [ind0; ind1; ind2; ind3; ind4] -> ind0, ind1, ind3, ind2, ind4
     | _ -> assert false in
   let labels = List.map ~f:snd @@ List.sort ~compare:(fun (a,_) (b,_) -> Int.compare a b) @@
     List.zip_exn order_of_axes labels in
   let label0, label1, label2, label3, label4 =
     match labels with 
-    | [label0; label1; label2; label3; label4] -> label0, label1, label2, label3, label4
+    | [label0; label1; label2; label3; label4] -> label0, label1, label3, label2, label4
     | _ -> assert false in
   let to0 = if ind0 = -1 then 0 else min (dims.(ind0) - 1) entries_per_axis in
   let to1 = if ind1 = -1 then 0 else min (dims.(ind1) - 1) entries_per_axis in

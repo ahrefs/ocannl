@@ -379,7 +379,7 @@ let to_dims (sh: t): int array =
   let o_dims = match sh.output with
     | Unknown -> raise @@ Shape_error ("Output dimensions still unknown", sh, sh)
     | Inferred dims | Given dims | Fixed dims -> Array.of_list dims in
-  Array.concat [b_dims; i_dims; o_dims]
+  Array.concat [b_dims; o_dims; i_dims]
 
 let to_dims_code (sh: t): int array Codelib.code =
   let dims = Array.map (to_dims sh) ~f:(Lifts.Lift_int.lift) in
