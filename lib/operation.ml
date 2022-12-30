@@ -103,6 +103,8 @@ let stop_gradient =
   let grad_body ~n1g:_ ~ng:_ ~nv:_ ~n1v:_ = .< () >. in
   unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
+(** A [stop_broadcast] is an identity in both forward and backprop passes, which substitutes-in
+    a [Fixed] copy of the shape of the input. *)
 let stop_broadcast m =
   let sh = m.shape in
   let init_shape = Shape.{
@@ -110,7 +112,7 @@ let stop_broadcast m =
      input=Fixed (list_of_dims sh.input); output=Fixed (list_of_dims sh.input);
      axis_labels=sh.axis_labels; deduce_output_from_input=`Not_deduced } in
   let op_body ~nv ~n1v = .< Ndarray.assign .~nv .~n1v >. in
-  let grad_body ~n1g:_ ~ng:_ ~nv:_ ~n1v:_ = .< () >. in
+  let grad_body ~n1g ~ng ~nv:_ ~n1v:_ = .< Ndarray.assign .~n1g .~ng >. in
   unop ~init_shape ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
     
 module O = struct
