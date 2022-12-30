@@ -1,11 +1,80 @@
-(** Multidimensional arrays. *)
+(** Multidimensional arrays and the code for operating on them. *)
 open Base
 
-(* Note also the OWL library.
- * OCaml Scientific Computing: Copyright (c) 2016-2022 Liang Wang <liang@ocaml.xyz> *)
 module A = Bigarray.Genarray
 type elt = Bigarray.float32_elt
 type t = (float, elt, Bigarray.c_layout) A.t
+
+let dims (arr: t) = A.dims arr
+  
+ let create = A.create Bigarray.Float32 Bigarray.C_layout
+ let empty = create [||]
+ 
+let reset_ones (arr: t) =
+  A.fill arr 1.0
+
+let reset_zeros (arr: t) =
+    A.fill arr 0.0
+
+let get_val v dims =
+  let arr = create dims in
+  A.fill arr v;
+  arr
+
+let get_uniform ~(low:float) ~(high:float) dims =
+  let arr = create dims in
+  (* TODO: FIXME: NOT IMPLEMENTED *)
+  ignore(low, high);
+  arr
+
+let assign lhs rhs =
+  (* TODO: FIXME: NOT IMPLEMENTED *)
+  ignore (lhs, rhs)
+  
+let assign_add_code lhs rhs1 rhs2 =
+  (* TODO: FIXME: NOT IMPLEMENTED *)
+  .< ignore (.~lhs, .~rhs1, .~rhs2) >.
+
+let assign_add: t -> t -> t -> unit =
+  Runnative.run .< fun lhs rhs1 rhs2 -> .~(assign_add_code .<lhs>. .<rhs1>. .<rhs2>.) >.
+
+let assign_mul_code lhs rhs1 rhs2 =
+  (* TODO: FIXME: NOT IMPLEMENTED *)
+  .< ignore (.~lhs, .~rhs1, .~rhs2) >.
+
+let assign_mul: t -> t -> t -> unit =
+  Runnative.run .< fun lhs rhs1 rhs2 -> .~(assign_mul_code .<lhs>. .<rhs1>. .<rhs2>.) >.
+
+let mul_code dims rhs1 rhs2 =
+  .< let arr = A.create Bigarray.Float32 Bigarray.C_layout .~dims in
+     (* TODO: FIXME: NOT IMPLEMENTED *)
+     A.fill arr 1.0;
+     ignore(rhs1, rhs2);
+     arr
+  >.
+
+let mul: int array -> t -> t -> t =
+  Runnative.run .< fun dims rhs1 rhs2 -> .~(mul_code .<dims>. .<rhs1>. .<rhs2>.) >.
+
+let assign_relu_code lhs rhs =
+  (* TODO: FIXME: NOT IMPLEMENTED *)
+  .< ignore (.~lhs, .~rhs) >.
+
+let assign_relu: t -> t -> unit =
+  Runnative.run .< fun lhs rhs -> .~(assign_relu_code .<lhs>. .<rhs>.) >.
+
+(** Computes [if rhs1 > 0 then rhs2 else 0]. *)
+let relu_gate_code dims rhs1 rhs2 =
+  .< let arr = A.create Bigarray.Float32 Bigarray.C_layout .~dims in
+    (* TODO: FIXME: NOT IMPLEMENTED *)
+    A.fill arr 1.0;
+    ignore (.~rhs1, .~rhs2);
+    arr
+  >.
+
+let relu_gate: int array -> t -> t -> t =
+  Runnative.run .< fun dims rhs1 rhs2 -> .~(relu_gate_code .<dims>. .<rhs1>. .<rhs2>.) >.
+
 
 (** Prints 0-based [indices] entries out of [arr], where [-1] in an axis means to print out the axis,
     and a non-negative index means to print out only the indexed dimension of the axis. Up to [5] axes
@@ -150,73 +219,3 @@ let debug_navi_parens fmt dims ~indices =
     done
   done;
   pp_print_newline fmt ()*)
-
-let dims (arr: t) = A.dims arr
-  
- let create = A.create Bigarray.Float32 Bigarray.C_layout
- let empty = create [||]
- 
-let reset_ones (arr: t) =
-  A.fill arr 1.0
-
-let reset_zeros (arr: t) =
-    A.fill arr 0.0
-
-let get_val v dims =
-  let arr = create dims in
-  A.fill arr v;
-  arr
-
-let get_uniform ~(low:float) ~(high:float) dims =
-  let arr = create dims in
-  (* TODO: FIXME: NOT IMPLEMENTED *)
-  ignore(low, high);
-  arr
-
-let assign lhs rhs =
-  (* TODO: FIXME: NOT IMPLEMENTED *)
-  ignore (lhs, rhs)
-  
-let assign_add_code lhs rhs1 rhs2 =
-  (* TODO: FIXME: NOT IMPLEMENTED *)
-  .< ignore (.~lhs, .~rhs1, .~rhs2) >.
-
-let assign_add: t -> t -> t -> unit =
-  Runnative.run .< fun lhs rhs1 rhs2 -> .~(assign_add_code .<lhs>. .<rhs1>. .<rhs2>.) >.
-
-let assign_mul_code lhs rhs1 rhs2 =
-  (* TODO: FIXME: NOT IMPLEMENTED *)
-  .< ignore (.~lhs, .~rhs1, .~rhs2) >.
-
-let assign_mul: t -> t -> t -> unit =
-  Runnative.run .< fun lhs rhs1 rhs2 -> .~(assign_mul_code .<lhs>. .<rhs1>. .<rhs2>.) >.
-
-let mul_code dims rhs1 rhs2 =
-  .< let arr = A.create Bigarray.Float32 Bigarray.C_layout .~dims in
-     (* TODO: FIXME: NOT IMPLEMENTED *)
-     A.fill arr 1.0;
-     ignore(rhs1, rhs2);
-     arr
-  >.
-
-let mul: int array -> t -> t -> t =
-  Runnative.run .< fun dims rhs1 rhs2 -> .~(mul_code .<dims>. .<rhs1>. .<rhs2>.) >.
-
-let assign_relu_code lhs rhs =
-  (* TODO: FIXME: NOT IMPLEMENTED *)
-  .< ignore (.~lhs, .~rhs) >.
-
-let assign_relu: t -> t -> unit =
-  Runnative.run .< fun lhs rhs -> .~(assign_relu_code .<lhs>. .<rhs>.) >.
-
-(** Computes [if rhs1 > 0 then rhs2 else 0]. *)
-let relu_gate_code dims rhs1 rhs2 =
-  .< let arr = A.create Bigarray.Float32 Bigarray.C_layout .~dims in
-    (* TODO: FIXME: NOT IMPLEMENTED *)
-    A.fill arr 1.0;
-    ignore (.~rhs1, .~rhs2);
-    arr
-  >.
-
-let relu_gate: int array -> t -> t -> t =
-  Runnative.run .< fun dims rhs1 rhs2 -> .~(relu_gate_code .<dims>. .<rhs1>. .<rhs2>.) >.
