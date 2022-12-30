@@ -10,56 +10,59 @@ open Formula
 let global_inline = ref true
 
 let add_inline =
-  let op_body ~nv ~n1v ~n2v = Ndarray.assign_add_code nv n1v n2v in
-  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ = .<
-    .~(Ndarray.assign_add_code n1g n1g ng);
-    .~(Ndarray.assign_add_code n2g n2g ng)
+  let op_body ~nv ~n1v ~n1i_code ~n1i_call:_ ~n2v ~n2i_code ~n2i_call:_ =
+    Ndarray.assign_add_code ~lhs:nv ~rhs1:n1v ~index1:n1i_code ~rhs2:n2v ~index2:n2i_code in
+  let grad_body ~n1g ~n1i_code ~n1i_call:_ ~n2g ~n2i_code ~n2i_call:_ ~ng ~nv:_ ~n1v:_ ~n2v:_ = .<
+    .~(Ndarray.accum_sum_code ~lhs:n1g ~index_lhs:n1i_code ~rhs:ng);
+    .~(Ndarray.accum_sum_code ~lhs:n2g ~index_lhs:n2i_code ~rhs:ng)
   >. in
   binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
 let add_call =
-  let op_body ~nv ~n1v ~n2v = .< Ndarray.assign_add .~nv .~n1v .~n2v >. in
-  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ = .<
-    Ndarray.assign_add .~n1g .~n1g .~ng;
-    Ndarray.assign_add .~n2g .~n2g .~ng
+  let op_body ~nv ~n1v ~n1i_code:_ ~n1i_call ~n2v ~n2i_code:_ ~n2i_call =
+    .< Ndarray.assign_add_call ~lhs: .~nv ~rhs1: .~n1v ~index1:n1i_call ~rhs2: .~n2v ~index2:n2i_call >. in
+  let grad_body ~n1g ~n1i_code ~n1i_call:_ ~n2g ~n2i_code ~n2i_call:_ ~ng ~nv:_ ~n1v:_ ~n2v:_ = .<
+    Ndarray.assign_sum_call ~lhs: .~n1g ~index_lhs:n1i_call ~rhs: .~ng;
+    Ndarray.assign_sum_call ~lhs: .~n2g ~index_lhs:n2i_call ~rhs: .~ng
   >. in
   binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
 let add m1 m2 = if !global_inline then add_inline m1 m2 else add_call m1 m2
 
-let mul_pointwise_inline =
-  let op_body ~nv ~n1v ~n2v = Ndarray.assign_mul_code nv n1v n2v in
-  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v = .<
+let pointmul_inline =
+  let op_body ~nv ~n1v ~n1i_code:_ ~n1i_call ~n2v ~n2i_code ~n2i_call:_ =
+    Ndarray.assign_pointmul_code ~lhs:nv ~rhs1:n1v ~index1:n1i_call ~rhs2:n2v ~index2:n1i_call in
+  let grad_body ~n1g ~n1i_code ~n1i_call:_ ~n2g ~n2i_code ~n2i_call:_ ~ng ~nv:_ ~n1v ~n2v = .<
     .~(Ndarray.assign_add_code n1g n1g (Ndarray.mul_code .< Ndarray.dims .~n1g >. ng n2v));
     .~(Ndarray.assign_add_code n2g n2g (Ndarray.mul_code .< Ndarray.dims .~n2g >. ng n1v))
   >. in
   binop ~compose_op:`Pointwise ~op_label:"" ~op_body ~grad_body
 
-let mul_pointwise_call =
-  let op_body ~nv ~n1v ~n2v = .< Ndarray.assign_mul .~nv .~n1v .~n2v >. in
-  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v = .<
+let pointmul_call =
+  let op_body ~nv ~n1v ~n1i_code:_ ~n1i_call ~n2v ~n2i_code ~n2i_call:_ = .< Ndarray.assign_mul .~nv .~n1v .~n2v >. in
+  let grad_body ~n1g ~n1i_code:_ ~n1i_call ~n2g ~n2i_code ~n2i_call:_ ~ng ~nv:_ ~n1v ~n2v = .<
     Ndarray.assign_add .~n1g .~n1g (Ndarray.mul (Ndarray.dims .~n1g) .~ng .~n2v);
     Ndarray.assign_add .~n2g .~n2g (Ndarray.mul (Ndarray.dims .~n2g) .~ng .~n1v)
   >. in
   binop ~compose_op:`Pointwise ~op_label:"" ~op_body ~grad_body
 
-let mul_pointwise m1 m2 = if !global_inline then mul_pointwise_inline m1 m2 else mul_pointwise_call m1 m2
+let pointmul m1 m2 = if !global_inline then pointmul_inline m1 m2 else pointmul_call m1 m2
 
 let matmul_inline =
-  (* FIXME(14): not implemented: either mul_pointwise or matmul need to use a different set of Ndarray
+  (* FIXME(14): not implemented: either pointmul or matmul need to use a different set of Ndarray
      routines. *)
-  let op_body ~nv ~n1v ~n2v = Ndarray.assign_mul_code nv n1v n2v in
-  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v = .<
+  let op_body ~nv ~n1v ~n1i_code:_ ~n1i_call ~n2v = Ndarray.assign_mul_code nv n1v n2v in
+  let grad_body ~n1g ~n1i_code:_ ~n1i_call ~n2g ~n2i_code ~n2i_call:_ ~ng ~nv:_ ~n1v ~n2v = .<
     .~(Ndarray.assign_add_code n1g n1g (Ndarray.mul_code .< Ndarray.dims .~n1g >. ng n2v));
     .~(Ndarray.assign_add_code n2g n2g (Ndarray.mul_code .< Ndarray.dims .~n2g >. ng n1v))
   >. in
   binop ~compose_op:`Compose ~op_label:"" ~op_body ~grad_body
 
 let matmul_call =
-  (* FIXME(14): not implemented: either mul_pointwise or matmul need to use a different set of Ndarray
+  (* FIXME(14): not implemented: either pointmul or matmul need to use a different set of Ndarray
      routines. *)
-  let op_body ~nv ~n1v ~n2v = .< Ndarray.assign_mul .~nv .~n1v .~n2v >. in
-  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v = .<
+  let op_body ~nv ~n1v ~n1i_code:_ ~n1i_call ~n2v ~n2i_code ~n2i_call:_ = .< Ndarray.assign_mul .~nv .~n1v .~n2v >. in
+  let grad_body ~n1g ~n1i_code:_ ~n1i_call ~n2g ~n2i_code ~n2i_call:_ ~ng ~nv:_ ~n1v ~n2v = .<
     Ndarray.assign_add .~n1g .~n1g (Ndarray.mul (Ndarray.dims .~n1g) .~ng .~n2v);
     Ndarray.assign_add .~n2g .~n2g (Ndarray.mul (Ndarray.dims .~n2g) .~ng .~n1v)
   >. in
@@ -117,7 +120,7 @@ let stop_broadcast m =
     
 module O = struct
   let ( * ) = matmul
-  let ( *. ) = mul_pointwise
+  let ( *. ) = pointmul
   let (+) = add
   let (!/) = relu
   let (!~) label = term ~label ~init_code:init_uniform
