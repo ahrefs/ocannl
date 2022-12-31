@@ -21,66 +21,70 @@ let add_inline =
 let add_call =
   let op_body ~nv ~n1v ~n1i_code:_ ~n1i_call ~n2v ~n2i_code:_ ~n2i_call =
     .< Ndarray.assign_add_call ~lhs: .~nv ~rhs1: .~n1v ~index1:n1i_call ~rhs2: .~n2v ~index2:n2i_call >. in
-  let grad_body ~n1g ~n1i_code ~n1i_call:_ ~n2g ~n2i_code ~n2i_call:_ ~ng ~nv:_ ~n1v:_ ~n2v:_ = .<
-    Ndarray.assign_sum_call ~lhs: .~n1g ~index_lhs:n1i_call ~rhs: .~ng;
-    Ndarray.assign_sum_call ~lhs: .~n2g ~index_lhs:n2i_call ~rhs: .~ng
+  let grad_body ~n1g ~n1i_code:_ ~n1i_call ~n2g ~n2i_code:_ ~n2i_call ~ng ~nv:_ ~n1v:_ ~n2v:_ = .<
+    Ndarray.accum_sum_call ~lhs: .~n1g ~index_lhs:n1i_call ~rhs: .~ng;
+    Ndarray.accum_sum_call ~lhs: .~n2g ~index_lhs:n2i_call ~rhs: .~ng
   >. in
   binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
 let add m1 m2 = if !global_inline then add_inline m1 m2 else add_call m1 m2
 
 let pointmul_inline =
-  let op_body ~nv ~n1v ~n1i_code:_ ~n1i_call ~n2v ~n2i_code ~n2i_call:_ =
-    Ndarray.assign_pointmul_code ~lhs:nv ~rhs1:n1v ~index1:n1i_call ~rhs2:n2v ~index2:n1i_call in
+  let op_body ~nv ~n1v ~n1i_code ~n1i_call:_ ~n2v ~n2i_code ~n2i_call:_ =
+    Ndarray.assign_pointmul_code ~lhs:nv ~rhs1:n1v ~index1:n1i_code ~rhs2:n2v ~index2:n2i_code in
   let grad_body ~n1g ~n1i_code ~n1i_call:_ ~n2g ~n2i_code ~n2i_call:_ ~ng ~nv:_ ~n1v ~n2v = .<
-    .~(Ndarray.assign_add_code n1g n1g (Ndarray.mul_code .< Ndarray.dims .~n1g >. ng n2v));
-    .~(Ndarray.assign_add_code n2g n2g (Ndarray.mul_code .< Ndarray.dims .~n2g >. ng n1v))
+    .~(Ndarray.accum_pointmul_code ~lhs:n1g ~index_lhs:n1i_code ~rhs1:ng ~rhs2:n2v ~index2:n2i_code);
+    .~(Ndarray.accum_pointmul_code ~lhs:n2g ~index_lhs:n1i_code ~rhs1:ng ~rhs2:n1v ~index2:n2i_code)
   >. in
   binop ~compose_op:`Pointwise ~op_label:"" ~op_body ~grad_body
 
 let pointmul_call =
-  let op_body ~nv ~n1v ~n1i_code:_ ~n1i_call ~n2v ~n2i_code ~n2i_call:_ = .< Ndarray.assign_mul .~nv .~n1v .~n2v >. in
-  let grad_body ~n1g ~n1i_code:_ ~n1i_call ~n2g ~n2i_code ~n2i_call:_ ~ng ~nv:_ ~n1v ~n2v = .<
-    Ndarray.assign_add .~n1g .~n1g (Ndarray.mul (Ndarray.dims .~n1g) .~ng .~n2v);
-    Ndarray.assign_add .~n2g .~n2g (Ndarray.mul (Ndarray.dims .~n2g) .~ng .~n1v)
+  let op_body ~nv ~n1v ~n1i_code:_ ~n1i_call ~n2v ~n2i_code:_ ~n2i_call =
+     .< Ndarray.assign_pointmul_call ~lhs: .~nv ~rhs1: .~n1v ~index1:n1i_call ~rhs2: .~n2v ~index2:n2i_call >. in
+  let grad_body ~n1g ~n1i_code:_ ~n1i_call ~n2g ~n2i_code:_ ~n2i_call ~ng ~nv:_ ~n1v ~n2v = .<
+    Ndarray.accum_pointmul_call ~lhs: .~n1g ~index_lhs:n1i_call ~rhs1: .~ng ~rhs2: .~n2v ~index2:n2i_call;
+    Ndarray.accum_pointmul_call ~lhs: .~n2g ~index_lhs:n1i_call ~rhs1: .~ng ~rhs2: .~n1v ~index2:n2i_call
   >. in
   binop ~compose_op:`Pointwise ~op_label:"" ~op_body ~grad_body
 
 let pointmul m1 m2 = if !global_inline then pointmul_inline m1 m2 else pointmul_call m1 m2
 
 let matmul_inline =
-  (* FIXME(14): not implemented: either pointmul or matmul need to use a different set of Ndarray
-     routines. *)
-  let op_body ~nv ~n1v ~n1i_code:_ ~n1i_call ~n2v = Ndarray.assign_mul_code nv n1v n2v in
-  let grad_body ~n1g ~n1i_code:_ ~n1i_call ~n2g ~n2i_code ~n2i_call:_ ~ng ~nv:_ ~n1v ~n2v = .<
-    .~(Ndarray.assign_add_code n1g n1g (Ndarray.mul_code .< Ndarray.dims .~n1g >. ng n2v));
-    .~(Ndarray.assign_add_code n2g n2g (Ndarray.mul_code .< Ndarray.dims .~n2g >. ng n1v))
-  >. in
-  binop ~compose_op:`Compose ~op_label:"" ~op_body ~grad_body
+  (* FIXME(19): not implemented! *)
+  let op_body ~nv ~n1v ~n1i_code ~n1i_call:_ ~n2v ~n2i_code ~n2i_call:_ =
+    Ndarray.assign_pointmul_code ~lhs:nv ~rhs1:n1v ~index1:n1i_code ~rhs2:n2v ~index2:n2i_code in
+  let grad_body ~n1g ~n1i_code ~n1i_call:_ ~n2g ~n2i_code ~n2i_call:_ ~ng ~nv:_ ~n1v ~n2v = .<
+  .~(Ndarray.accum_pointmul_code ~lhs:n1g ~index_lhs:n1i_code ~rhs1:ng ~rhs2:n2v ~index2:n2i_code);
+    .~(Ndarray.accum_pointmul_code ~lhs:n2g ~index_lhs:n1i_code ~rhs1:ng ~rhs2:n1v ~index2:n2i_code)
+    >. in
+  binop ~compose_op:`Pointwise ~op_label:"" ~op_body ~grad_body
 
 let matmul_call =
-  (* FIXME(14): not implemented: either pointmul or matmul need to use a different set of Ndarray
-     routines. *)
-  let op_body ~nv ~n1v ~n1i_code:_ ~n1i_call ~n2v ~n2i_code ~n2i_call:_ = .< Ndarray.assign_mul .~nv .~n1v .~n2v >. in
-  let grad_body ~n1g ~n1i_code:_ ~n1i_call ~n2g ~n2i_code ~n2i_call:_ ~ng ~nv:_ ~n1v ~n2v = .<
-    Ndarray.assign_add .~n1g .~n1g (Ndarray.mul (Ndarray.dims .~n1g) .~ng .~n2v);
-    Ndarray.assign_add .~n2g .~n2g (Ndarray.mul (Ndarray.dims .~n2g) .~ng .~n1v)
-  >. in
-  binop ~compose_op:`Compose ~op_label:"" ~op_body ~grad_body
+  (* FIXME(19): not implemented! *)
+     let op_body ~nv ~n1v ~n1i_code:_ ~n1i_call ~n2v ~n2i_code:_ ~n2i_call =
+      .< Ndarray.assign_pointmul_call ~lhs: .~nv ~rhs1: .~n1v ~index1:n1i_call ~rhs2: .~n2v ~index2:n2i_call >. in
+   let grad_body ~n1g ~n1i_code:_ ~n1i_call ~n2g ~n2i_code:_ ~n2i_call ~ng ~nv:_ ~n1v ~n2v = .<
+     Ndarray.accum_pointmul_call ~lhs: .~n1g ~index_lhs:n1i_call ~rhs1: .~ng ~rhs2: .~n2v ~index2:n2i_call;
+     Ndarray.accum_pointmul_call ~lhs: .~n2g ~index_lhs:n1i_call ~rhs1: .~ng ~rhs2: .~n1v ~index2:n2i_call
+   >. in
+   binop ~compose_op:`Pointwise ~op_label:"" ~op_body ~grad_body
 
 let matmul m1 m2 = if !global_inline then matmul_inline m1 m2 else matmul_call m1 m2
 
 let relu_inline =
-  let op_body ~nv ~n1v = Ndarray.assign_relu_code nv n1v in
-  let grad_body ~n1g ~ng ~nv ~n1v:_ = .<
-    Ndarray.assign_add .~n1g .~n1g (Ndarray.relu_gate (Ndarray.dims .~n1g) .~nv .~ng)
-  >. in
+  let op_body ~nv ~n1v ~n1i_code ~n1i_call:_ =
+    Ndarray.assign_relu_code ~lhs:nv ~rhs:n1v ~index_rhs:n1i_code in
+  let grad_body ~n1g ~n1i_code ~n1i_call:_ ~ng ~nv ~n1v:_ =
+    Ndarray.accum_relu_gate_code ~lhs:n1g ~index_lhs:n1i_code ~rhs1:nv
+      ~index1:(fun x -> Lifts.lift_array x) ~rhs2:ng in
   unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
 let relu_call =
-  let op_body ~nv ~n1v = .< Ndarray.assign_relu .~nv .~n1v >. in
-  let grad_body ~n1g ~ng ~nv ~n1v:_ = .<
-    Ndarray.assign_add .~n1g .~n1g (Ndarray.relu_gate (Ndarray.dims .~n1g) .~nv .~ng)
+  let op_body ~nv ~n1v ~n1i_code:_ ~n1i_call =
+    .< Ndarray.assign_relu_call ~lhs: .~nv ~rhs: .~n1v ~index_rhs:n1i_call >. in
+  let grad_body ~n1g ~n1i_code:_ ~n1i_call ~ng ~nv ~n1v:_ = .<
+    Ndarray.accum_relu_gate_call ~lhs: .~n1g ~index_lhs:n1i_call ~rhs1: .~nv
+      ~index1:(fun x -> x) ~rhs2: .~ng
   >. in
   unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
@@ -102,8 +106,8 @@ let number v =
 
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient =
-  let op_body ~nv ~n1v = .< Ndarray.assign .~nv .~n1v >. in
-  let grad_body ~n1g:_ ~ng:_ ~nv:_ ~n1v:_ = .< () >. in
+  let op_body ~nv ~n1v ~n1i_code:_ ~n1i_call:_ = .< Ndarray.assign .~nv .~n1v >. in
+  let grad_body ~n1g:_ ~n1i_code:_ ~n1i_call:_ ~ng:_ ~nv:_ ~n1v:_ = .< () >. in
   unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
 (** A [stop_broadcast] is an identity in both forward and backprop passes, which substitutes-in
@@ -114,8 +118,8 @@ let stop_broadcast m =
      batch=Fixed (list_of_dims sh.batch);
      input=Fixed (list_of_dims sh.input); output=Fixed (list_of_dims sh.input);
      axis_labels=sh.axis_labels; deduce_output_from_input=`Not_deduced } in
-  let op_body ~nv ~n1v = .< Ndarray.assign .~nv .~n1v >. in
-  let grad_body ~n1g ~ng ~nv:_ ~n1v:_ = .< Ndarray.assign .~n1g .~ng >. in
+  let op_body ~nv ~n1v ~n1i_code:_ ~n1i_call:_ = .< Ndarray.assign .~nv .~n1v >. in
+  let grad_body ~n1g ~n1i_code:_ ~n1i_call:_ ~ng ~nv:_ ~n1v:_ = .< Ndarray.assign .~n1g .~ng >. in
   unop ~init_shape ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
     
 module O = struct
