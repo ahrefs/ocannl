@@ -61,8 +61,7 @@ let deduce_dims from: deduce_dims -> dims = function
   | (Given dims | Fixed dims | Inferred dims) -> Inferred (List.map dims ~f:(
       fun d -> if d = 1 then 1 else Float.(iround_exn ~dir:`Up @@ sc * of_int d)))
 
-(** The datatype from which the actual Ndarray shapes are computed. In the future we can have
-    named axes here instead of the predefined options.
+(** The datatype from which the actual Ndarray shapes are computed.
 
     Mutability is sufficient to perform inference, since there is no need for backtracking and
     no explicit unification variables for now. [Unknown] stands for "not yet specified". *)
@@ -121,7 +120,7 @@ type logic =
      to the [ls1], [ls2] lineup, and the resulting shape inherits the labels according to the [ls3] lineup.
   *)
   | Transpose of transpose_type * t
-  (** Permutes the axes of a shape. The simplest [Transpose] is to swap inputs with outputs of [s1],
+  (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of [s1],
       hence the name. *)
   | Terminal
 
@@ -140,6 +139,8 @@ exception Shape_error of string * t * t [@@deriving sexp]
    different shapes. The inference is finalized by invoking the [Formula.subtree_shape_updates] once
    on the root formula. *)
 
+(** Performs a local step of shape inference, propagates information into and out of the parent shape
+    and the child shape(s). *)
 let propagate_shapes (update: update_step) =
   let pointwise_labels debug1 debug2 ls1 ls2 = Map.merge ls1 ls2 ~f:(fun ~key ->
     function
