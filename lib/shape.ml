@@ -277,6 +277,28 @@ let propagate_shapes (update: update_step) =
   | Broadcast (`Einsum spec, sh1, sh2) ->
     ignore (spec, sh1, sh2); failwith "Not implemented yet"
 
+(** All the information relevant for [Ndarray] code generation contained in a completed [update_step]. *)
+type 'a projections = {
+  iter_space: int array;
+  (** The product space dimensions (concatentation of the relevant batch, output, input axes) with
+      the same semantics as [to_dims], that an operation should parallelize (map-reduce) over. *)
+  project_lhs: 'a array -> 'a array;
+  (** A projection that takes an [iter_space]-bounded index and produces an index into the result of
+      an operation. *)
+  project_rhs1: 'a array -> 'a array;
+  (** P projection that takes an [iter_space]-bounded index and produces an index into the (first)
+      argument of an operation. *)
+  project_rhs2: ('a array -> 'a array) option;
+  (** A projection that takes an [iter_space]-bounded index and produces an index into the second
+      argument of a binary operation. *)
+}
+    
+(** Computes the indexing into subformulas given the shape information of a formula. The processing
+    mirrors [propagate_shapes], but [derive_indexing] should only be invoked when the shapes
+    are inferred already. *)
+let derive_indexing (shapes: update_step) (type a) ~(lift_one: a): a projections =
+  ignore (shapes, lift_one); failwith "NOT IMPLEMENTED YET"
+
 (* ********** User API below ********** *)
 
 

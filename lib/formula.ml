@@ -2,16 +2,18 @@
 
 open Base
 
-(** Uses [code option], i.e. [None] instead of [.< () >.], to improve readability of generated code. *)
+(** Information needed for compositional code generation. The code generation is suspended so that
+    it can incorporate shape inference. *)
 type t = {
-  forward_body: unit Codelib.code option;
+  forward_body: (unit -> unit Codelib.code) option;
+  (** Uses [option], i.e. [None] instead of [fun () -> .< () >.], to improve readability of generated code. *)
   init_values: unit -> unit Codelib.code;
-  (** Initializes the values. The code is suspended so that it can incorporate shape inference. *)
+  (** Initializes the values. *)
   init_grads: unit -> unit Codelib.code;
   (** Initializes the gradient data: typically, simply creates the ndarrays.
       Gradients are zeroed separately. The code is suspended so that it can incorporate shape inference. *)
-  backprop_body: unit Codelib.code option;
-  zero_grads: unit Codelib.code;
+  backprop_body: (unit -> unit Codelib.code) option;
+  zero_grads: unit -> unit Codelib.code;
   (** Initializes the backpropagation phase. Computed once per backpropagation. *)
   node_id: int;
   comp_node: Node.t;
