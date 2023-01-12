@@ -53,11 +53,11 @@ exception Session_error of string * t option
 
 (* [reset_] and [create_] functions are the only direct users of [Ndarray] functions inside [Formula].
    The other uses are mediated by the [~op_body], [~grad_body] and [~init_code] arguments. *)
-let reset_zeros ng shape =
-   Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun _ -> zero_code) ~lhs:ng ~rhs:ng
+let reset_zeros n shape =
+   Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun _ -> zero_code) ~lhs:n ~rhs:n
               (Shape.trivial_projections shape))
-let reset_ones ng shape =
-  Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun _ -> one_code) ~lhs:ng ~rhs:ng
+let reset_ones n shape =
+  Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun _ -> one_code) ~lhs:n ~rhs:n
              (Shape.trivial_projections shape))
 let create_value node shape = .< .~node.Node.value <- Ndarray.create .~(Shape.to_dims_code shape) >.
 let create_grad node shape = .< .~node.Node.grad <- Ndarray.create .~(Shape.to_dims_code shape) >.
@@ -219,7 +219,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
     match m_processed, m.backprop_body with
     | true, _ | _, None -> grad_body
     | false, Some m_body -> fun () -> .< .~(grad_body()); .~(m_body()) >. in
-  let init_grads_body = fun () -> .< .~node.grad <- Ndarray.create .~(Shape.to_dims_code shape) >. in
+  let init_grads_body = fun () -> create_grad node shape in
   (* The order is not relevant, we keep the same order as in backprop for readability. *)
   let m_init_grads = m.init_grads in
   let init_grads =
@@ -241,7 +241,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   formula
 
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label (spec: Shape.term_spec) ~(init_code:int array Codelib.code -> Ndarray.t Codelib.code) : t =
+let term ~label (spec: Shape.term_spec) ~op_body : t =
   let comp_node = Node.create ~label in
   let node_id = comp_node.id in
   let shape = Shape.of_term_spec spec in
@@ -252,14 +252,15 @@ let term ~label (spec: Shape.term_spec) ~(init_code:int array Codelib.code -> Nd
   Shape.propagate_shapes local_shape_update;
 
   let node = Codelib.genlet ~name:label .< Node.get node_id >. in
+  let nv = .< .~node.value >. in
   (* Very unlikely someone will compute just the parameters. *)
   let forward_body = None in
-  let init_values = fun () -> .< .~node.value <- .~(init_code @@ Shape.to_dims_code shape) >. in
-  let ng = Codelib.genlet ~name:(label^"d") .< .~node.grad >. in
+  let init_values() = op_body ~nv shape in
+  let ng = .< .~node.grad >. in
   let zero_grads() = reset_zeros ng shape in
   let backprop_body = None in
   (* Very unlikely someone will want dw/dw. *)
-  let init_grads = fun () -> .< .~node.grad <- Ndarray.create .~(Shape.to_dims_code shape) >. in
+  let init_grads = fun () -> create_grad node shape in
   let subtree_shape_updates = Sequence.singleton local_shape_update in
   let formula = {forward_body; backprop_body;
                  init_values; init_grads; zero_grads;
@@ -273,11 +274,12 @@ let get_toplevel m =
   let forward_body = match m.forward_body with None -> .< () >. | Some body -> body() in
    let toplevel_forward = .< .~(m.init_values ()); fun () -> .~forward_body >. in
    let backprop_body = match m.backprop_body with None -> .< () >. | Some body -> body() in
+   let ng = .< .~(m.node).Node.grad >. in
    let toplevel_backprop = .<
    .~(m.init_grads ());
    fun () ->
      .~(m.zero_grads());
-     Ndarray.reset_ones .~(m.node).grad;
+     .~(reset_ones ng m.shape);
      .~backprop_body
  >. in
   toplevel_forward, toplevel_backprop

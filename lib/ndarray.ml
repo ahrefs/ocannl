@@ -9,23 +9,6 @@ let dims (arr: t) = A.dims arr
   
  let create = A.create Bigarray.Float32 Bigarray.C_layout
  let empty = create [||]
- 
-let reset_ones (arr: t) =
-  A.fill arr 1.0
-
-let reset_zeros (arr: t) =
-    A.fill arr 0.0
-
-let get_val v dims =
-  let arr = create dims in
-  A.fill arr v;
-  arr
-
-let get_uniform ~(low:float) ~(high:float) dims =
-  let arr = create dims in
-  (* TODO: FIXME: NOT IMPLEMENTED *)
-  ignore(low, high);
-  arr
 
 (** Accumulates the results of the operation on [rhs] by adding them into the [lhs]. *)
 let accum_binop_code ~accum ~op ~lhs ~rhs1 ~rhs2 projections =
@@ -42,10 +25,6 @@ let accum_binop_call ~accum ~op ~lhs ~rhs1 ~rhs2 projections =
 
 let accum_unop_call ~accum ~op ~lhs ~rhs projections =
   .< ignore (accum, op, .~lhs, .~rhs, projections) >.
-
-let assign lhs rhs =
-  (* TODO: FIXME: NOT IMPLEMENTED *)
-  ignore (lhs, rhs)
 
 let skip_arg_code (_n1: float Codelib.code) (n2: float Codelib.code) = n2
 
@@ -74,6 +53,10 @@ let zero_call = 1.0
 let one_code = .< 1.0 >.
 
 let one_call = 1.0
+
+let value_code (v: float) = Lifts.Lift_float.lift v
+
+let value_call (v: float) = v
 
 (** Prints 0-based [indices] entries out of [arr], where [-1] in an axis means to print out the axis,
     and a non-negative index means to print out only the indexed dimension of the axis. Up to [5] axes
