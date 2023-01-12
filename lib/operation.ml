@@ -12,24 +12,24 @@ let global_inline = ref true
 let add_inline =
   let op_body ~nv ~n1v ~n2v indexing =
     Ndarray.(accum_binop_code ~accum:skip_arg_code ~op:add_code ~lhs:nv ~rhs1:n1v ~rhs2:n2v
-               indexing.index_code) in
+               indexing.Shape.index_code) in
   let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ indexing = .<
     .~(Ndarray.(accum_unop_code ~accum:add_code ~op:Fn.id ~lhs:n1g ~rhs:ng @@
-                Shape.backprop1 indexing.index_code));
+                Shape.backprop1 indexing.Shape.index_code));
     .~(Ndarray.(accum_unop_code ~accum:add_code ~op:Fn.id ~lhs:n2g ~rhs:ng @@
-                Shape.backprop2 indexing.index_code))
+                Shape.backprop2 indexing.Shape.index_code))
   >. in
   binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
 let add_call =
   let op_body ~nv ~n1v ~n2v indexing =
-    .< Ndarray.(accum_binop_call ~accum:skip_arg_call ~op:add_call ~lhs: .~nv ~rhs1: .~n1v ~rhs2: .~n2v
-                  indexing.index_call) >. in
+    Ndarray.(accum_binop_call ~accum:skip_arg_call ~op:add_call ~lhs:nv ~rhs1:n1v ~rhs2:n2v
+                  indexing.Shape.index_call) in
   let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ indexing = .<
-    Ndarray.(accum_unop_call ~accum:add_call ~op:Fn.id ~lhs: .~n1g ~rhs: .~ng @@
-             Shape.backprop1 indexing.index_call);
-    Ndarray.(accum_unop_call ~accum:add_call ~op:Fn.id ~lhs: .~n2g ~rhs: .~ng @@
-             Shape.backprop2 indexing.index_call)
+    .~Ndarray.(accum_unop_call ~accum:add_call ~op:Fn.id ~lhs:n1g ~rhs:ng @@
+               Shape.backprop1 indexing.Shape.index_call);
+    .~Ndarray.(accum_unop_call ~accum:add_call ~op:Fn.id ~lhs:n2g ~rhs:ng @@
+               Shape.backprop2 indexing.Shape.index_call)
   >. in
   binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
@@ -38,23 +38,24 @@ let add m1 m2 = if !global_inline then add_inline m1 m2 else add_call m1 m2
 let mul_inline ~compose_op =
   let op_body ~nv ~n1v ~n2v indexing =
     Ndarray.(accum_binop_code ~accum:skip_arg_code ~op:mul_code ~lhs:nv ~rhs1:n1v ~rhs2:n2v
-               indexing.index_code) in
+               indexing.Shape.index_code) in
   let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v indexing = .<
     .~(Ndarray.(accum_binop_code ~accum:add_code ~op:mul_code ~lhs:n1g ~rhs1:ng ~rhs2:n2v @@
-                Shape.backprop1 indexing.index_code));
+                Shape.backprop1 indexing.Shape.index_code));
     .~(Ndarray.(accum_binop_code ~accum:add_code ~op:mul_code ~lhs:n2g ~rhs1:ng ~rhs2:n1v @@
-                Shape.backprop2 indexing.index_code))
+                Shape.backprop2 indexing.Shape.index_code))
   >. in
   binop ~compose_op ~op_label:"" ~op_body ~grad_body
 
 let mul_call ~compose_op =
   let op_body ~nv ~n1v ~n2v indexing =
-    .< Ndarray.(accum_binop_call ~accum:skip_arg_call ~op:mul_call ~lhs: .~nv ~rhs1: .~n1v ~rhs2: .~n2v indexing.index_call) >. in
+    Ndarray.(accum_binop_call ~accum:skip_arg_call ~op:mul_call ~lhs:nv ~rhs1:n1v ~rhs2:n2v
+               indexing.Shape.index_call) in
   let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v indexing = .<
-    Ndarray.(accum_binop_call ~accum:add_call ~op:mul_call ~lhs: .~n1g ~rhs1: .~ng ~rhs2: .~n2v @@
-             Shape.backprop1 indexing.index_call);
-    Ndarray.(accum_binop_call ~accum:add_call ~op:mul_call ~lhs: .~n2g ~rhs1: .~ng ~rhs2: .~n1v @@
-             Shape.backprop2 indexing.index_call)
+    .~Ndarray.(accum_binop_call ~accum:add_call ~op:mul_call ~lhs:n1g ~rhs1:ng ~rhs2:n2v @@
+               Shape.backprop1 indexing.Shape.index_call);
+    .~Ndarray.(accum_binop_call ~accum:add_call ~op:mul_call ~lhs:n2g ~rhs1:ng ~rhs2:n1v @@
+               Shape.backprop2 indexing.Shape.index_call)
   >. in
   binop ~compose_op ~op_label:"" ~op_body ~grad_body
 
@@ -75,18 +76,20 @@ let matmul m1 m2 = if !global_inline then matmul_inline m1 m2 else matmul_call m
 
 let relu_inline =
   let op_body ~nv ~n1v indexing =
-    Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:relu_code ~lhs:nv ~rhs:n1v indexing.index_code) in
+    Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:relu_code ~lhs:nv ~rhs:n1v
+               indexing.Shape.index_code) in
   let grad_body ~n1g ~ng ~nv ~n1v:_ indexing =
     Ndarray.(accum_binop_code ~accum:add_code ~op:relu_gate_code ~lhs:n1g ~rhs1:nv ~rhs2:ng @@
-             Shape.backprop_unary indexing.index_code) in
+             Shape.backprop_unary indexing.Shape.index_code) in
   unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
 let relu_call =
   let op_body ~nv ~n1v indexing =
-    Ndarray.(accum_unop_call ~accum:skip_arg_call ~op:relu_call ~lhs:nv ~rhs:n1v indexing.index_call) in
+    Ndarray.(accum_unop_call ~accum:skip_arg_call ~op:relu_call ~lhs:nv ~rhs:n1v
+               indexing.Shape.index_call) in
   let grad_body ~n1g ~ng ~nv ~n1v:_ indexing =
     Ndarray.(accum_binop_call ~accum:add_call ~op:relu_gate_call ~lhs:n1g ~rhs1:nv ~rhs2:ng @@
-             Shape.backprop_unary indexing.index_call) in
+             Shape.backprop_unary indexing.Shape.index_call) in
   unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
 let relu m = if !global_inline then relu_inline m else relu_call m
@@ -217,13 +220,13 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
     (match m.forward_body with
      | None -> ()
      | Some fwd_code ->
-       Stdio.print_endline "Forward body:";
-       Stdio.print_endline @@ fst @@ sprint_code fwd_code);
+       Stdio.print_endline "Current forward body:";
+       Stdio.print_endline @@ fst @@ sprint_code @@ fwd_code());
     (match m.backprop_body with
      | None -> ()
      | Some bwd_code ->
-       Stdio.print_endline "Backprop body:";
-       Stdio.print_endline @@ fst @@ sprint_code bwd_code)
+       Stdio.print_endline "Current backprop body:";
+       Stdio.print_endline @@ fst @@ sprint_code @@ bwd_code())
   );
   Stdio.printf "\n%!"
 
