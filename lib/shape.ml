@@ -314,6 +314,23 @@ let backprop_unary projections = {
                    project_rhs2 = Some projections.project_lhs;
 }
 
+let to_dims (sh: t): int array =
+  let b_dims = match sh.batch with
+    | Unknown -> raise @@ Shape_error ("Batch dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims in
+  let i_dims = match sh.input with
+    | Unknown -> raise @@ Shape_error ("Input dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims in
+  let o_dims = match sh.output with
+    | Unknown -> raise @@ Shape_error ("Output dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims in
+  Array.concat [b_dims; o_dims; i_dims]
+
+let trivial_projections sh = {
+  product_space=to_dims sh;
+  project_lhs=Fn.id; project_rhs1=Fn.id; project_rhs2=Some Fn.id;
+}
+
 type indexing = {
   index_code: int Codelib.code projections;
   index_call: int projections;
@@ -416,19 +433,7 @@ let of_term_spec : term_spec -> t = function
     { batch=Given []; input=Unknown; output=Unknown;
       axis_labels=Map.empty (module AxisKey);
       deduce_output_from_input }
-
-let to_dims (sh: t): int array =
-  let b_dims = match sh.batch with
-    | Unknown -> raise @@ Shape_error ("Batch dimensions still unknown", sh, sh)
-    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims in
-  let i_dims = match sh.input with
-    | Unknown -> raise @@ Shape_error ("Input dimensions still unknown", sh, sh)
-    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims in
-  let o_dims = match sh.output with
-    | Unknown -> raise @@ Shape_error ("Output dimensions still unknown", sh, sh)
-    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims in
-  Array.concat [b_dims; o_dims; i_dims]
-
+  
 let to_dims_code (sh: t): int array Codelib.code =
   let dims = Array.map (to_dims sh) ~f:(Lifts.Lift_int.lift) in
   Lifts.lift_array dims

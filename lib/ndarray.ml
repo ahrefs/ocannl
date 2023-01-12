@@ -67,6 +67,13 @@ let relu_gate_code n1 n2 = .< Float.(if .~n1 > 0.0 then .~n2 else 0.0) >.
 
 let relu_gate_call n1 n2 = Float.(if n1 > 0.0 then n2 else 0.0)
 
+let zero_code = .< 1.0 >.
+
+let zero_call = 1.0
+
+let one_code = .< 1.0 >.
+
+let one_call = 1.0
 
 (** Prints 0-based [indices] entries out of [arr], where [-1] in an axis means to print out the axis,
     and a non-negative index means to print out only the indexed dimension of the axis. Up to [5] axes
