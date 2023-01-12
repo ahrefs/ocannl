@@ -5,10 +5,6 @@ module A = Bigarray.Genarray
 type elt = Bigarray.float32_elt
 type t = (float, elt, Bigarray.c_layout) A.t
 
-(** Index into an ndarray: encapsulates broadcasting, transpose, permuting axes for [einsum], etc.
-    The input is the inner-loop parent/result indices, the output is the subformula/argument indices. *)
-type index_t = int Codelib.code array -> int array Codelib.code
-
 let dims (arr: t) = A.dims arr
   
  let create = A.create Bigarray.Float32 Bigarray.C_layout
@@ -31,109 +27,45 @@ let get_uniform ~(low:float) ~(high:float) dims =
   ignore(low, high);
   arr
 
-let precompile_unop unop_code:
-  lhs:t -> rhs:t -> index_rhs:(int array -> int array) -> unit =
-  Runnative.run .< fun ~lhs ~rhs ~index_rhs ->
-    .~(unop_code ~lhs: .<lhs>. ~rhs: .<rhs>.
-       ~index_rhs:(fun idx -> .<index_rhs .~(Lifts.lift_array idx)>.)
-      ) >.
+(** Accumulates the results of the operation on [rhs] by adding them into the [lhs]. *)
+let accum_binop_code ~accum ~op ~lhs ~rhs1 ~rhs2 projections =
+  (* TODO: FIXME: NOT IMPLEMENTED *)
+  .< ignore (accum, op, .~lhs, .~rhs1, .~rhs2, projections) >.
 
-let precompile_binop binop_code:
-  lhs:t -> rhs1:t -> index1:(int array -> int array) -> rhs2:t -> index2:(int array -> int array) -> unit =
-  Runnative.run .< fun ~lhs ~rhs1 ~index1 ~rhs2 ~index2 ->
-    .~(binop_code ~lhs: .<lhs>. ~rhs1: .<rhs1>.
-       ~index1:(fun idx -> .<index1 .~(Lifts.lift_array idx)>.)
-       ~rhs2: .<rhs2>.
-       ~index2:(fun idx -> .<index2 .~(Lifts.lift_array idx)>.)
-       ) >.
-
-let precompile_unop_sum unop_code:
-  lhs:t -> index_lhs:(int array -> int array) -> rhs:t -> unit =
-  Runnative.run .< fun ~lhs ~index_lhs ~rhs ->
-    .~(unop_code ~lhs: .<lhs>. ~index_lhs:(fun idx -> .<index_lhs .~(Lifts.lift_array idx)>.)
-         ~rhs: .<rhs>.
-      ) >.
-
-let precompile_binop_sum1 binop_code:
-  lhs:t -> index_lhs:(int array -> int array) ->
-     rhs1:t -> rhs2:t -> index2:(int array -> int array) -> unit =
-  Runnative.run .< fun ~lhs ~index_lhs ~rhs1 ~rhs2 ~index2 ->
-    .~(binop_code ~lhs: .<lhs>. ~index_lhs:(fun idx -> .<index_lhs .~(Lifts.lift_array idx)>.)
-       ~rhs1: .<rhs1>.
-       ~rhs2: .<rhs2>.
-       ~index2:(fun idx -> .<index2 .~(Lifts.lift_array idx)>.)
-       ) >.
-
-let precompile_binop_sum2 binop_code:
-  lhs:t -> index_lhs:(int array -> int array) ->
-     rhs1:t -> index1:(int array -> int array) -> rhs2:t -> unit =
-  Runnative.run .< fun ~lhs ~index_lhs ~rhs1 ~index1 ~rhs2 ->
-    .~(binop_code ~lhs: .<lhs>. ~index_lhs:(fun idx -> .<index_lhs .~(Lifts.lift_array idx)>.)
-       ~rhs1: .<rhs1>.
-       ~index1:(fun idx -> .<index1 .~(Lifts.lift_array idx)>.)
-       ~rhs2: .<rhs2>.
-       ) >.
+let accum_unop_code ~accum ~op ~lhs ~rhs projections =
+  .< ignore (accum, op, .~lhs, .~rhs, projections) >.
 
 (** Accumulates the results of the operation on [rhs] by adding them into the [lhs]. *)
-let unop_sum unop ~lhs ~(index_lhs: index_t) ~rhs =
+let accum_binop_call ~accum ~op ~lhs ~rhs1 ~rhs2 projections =
   (* TODO: FIXME: NOT IMPLEMENTED *)
-  .< ignore (.~(unop .<1.0>.), .~lhs, .~rhs, .~(index_lhs [||])) >.
+  .< ignore (accum, op, .~lhs, .~rhs1, .~rhs2, projections) >.
 
-(** Accumulates the results of the operation on [rhs1] with side input [rhs2] by adding them into the [lhs]. *)
-let binop_sum1 binop ~lhs ~(index_lhs: index_t) ~rhs1 ~rhs2 ~(index2: index_t) =
-  (* TODO: FIXME: NOT IMPLEMENTED *)
-  .< ignore (.~(binop .<1.0>. .<1.0>.), .~lhs, .~rhs1, .~rhs2, .~(index_lhs [||]), .~(index2 [||])) >.
-
-(** Accumulates the results of the operation on [rhs2] with side input [rhs1] by adding them into the [lhs]. *)
-let binop_sum2 binop ~lhs ~(index_lhs: index_t) ~rhs1 ~(index1: index_t) ~rhs2 =
-  (* TODO: FIXME: NOT IMPLEMENTED *)
-  .< ignore (.~(binop .<1.0>. .<1.0>.), .~lhs, .~rhs1, .~rhs2, .~(index_lhs [||]), .~(index1 [||])) >.
+let accum_unop_call ~accum ~op ~lhs ~rhs projections =
+  .< ignore (accum, op, .~lhs, .~rhs, projections) >.
 
 let assign lhs rhs =
   (* TODO: FIXME: NOT IMPLEMENTED *)
   ignore (lhs, rhs)
-  
-(** Iteraters through [lhs] and assigns [lhs.(lhs_pos) <- rhs1.(index1 lhs_pos) + rhs2.(index2 lhs_pos)]. *)
-let assign_add_code ~lhs ~rhs1 ~(index1: index_t) ~rhs2 ~(index2: index_t) =
-  (* TODO: FIXME: NOT IMPLEMENTED *)
-  .< ignore (.~lhs, .~rhs1, .~(index1 [||]), .~rhs2, .~(index2 [||])) >.
 
-(** Same as [assign_add_code] but precompiled. *)
-let assign_add_call = precompile_binop assign_add_code
+let skip_arg_code (_n1: float Codelib.code) (n2: float Codelib.code) = n2
 
-(** Iteraters through [rhs] and assigns [lhs.(index_lhs rhs_pos) <- lhs.(index_lhs lhs_pos) + rhs.(rhs_pos)]. *)
-let accum_sum_code = unop_sum (fun rhs -> rhs)
+let skip_arg_call (_n1: float) (n2: float) = n2
 
-(** Same as [accum_sum_code] but precompiled. *)
-let accum_sum_call = precompile_unop_sum accum_sum_code
+let add_code n1 n2 = .< Float.(.~n1 + .~n2) >.
 
-(** Iteraters through [lhs] and assigns [lhs.(lhs_pos) <- rhs1.(index1 lhs_pos) *. rhs2.(index2 lhs_pos)]. *)
-let assign_pointmul_code ~lhs ~rhs1 ~(index1: index_t) ~rhs2 ~(index2: index_t) =
-  (* TODO: FIXME: NOT IMPLEMENTED *)
-  .< ignore (.~lhs, .~rhs1, .~(index1 [||]), .~rhs2, .~(index2 [||])) >.
+let add_call n1 n2 = Float.(n1 + n2)
 
-(** Same as [assign_mul_code] but precompiled. *)
-let assign_pointmul_call = precompile_binop assign_pointmul_code
+let mul_code n1 n2 = .< Float.(.~n1 * .~n2) >.
 
-(** Computes [lhs += rhs1 * rhs2]. *)
-let accum_pointmul_code = binop_sum1 (fun rhs1 rhs2 -> .< Float.(.~rhs1 * .~rhs2) >.)
+let mul_call n1 n2 = Float.(n1 * n2)
 
-(** Same as [accum_pointmul_code] but precompiled. *)
-let accum_pointmul_call = precompile_binop_sum1 accum_pointmul_code
+let relu_code n = .< Float.(if .~n > 0.0 then .~n else 0.0) >.
 
-let assign_relu_code ~lhs ~rhs ~(index_rhs: index_t) =
-  (* TODO: FIXME: NOT IMPLEMENTED *)
-  .< ignore (.~lhs, .~(index_rhs [||]), .~rhs) >.
+let relu_call n = Float.(if n > 0.0 then n else 0.0)
 
-(** Same as [assign_relu_code] but precompiled. *)
-let assign_relu_call = precompile_unop assign_relu_code
+let relu_gate_code n1 n2 = .< Float.(if .~n1 > 0.0 then .~n2 else 0.0) >.
 
-(** Computes [lhs += if rhs1 > 0 then rhs2 else 0]. *)
-let accum_relu_gate_code =
-  binop_sum2 (fun rhs1 rhs2 -> .< Float.(if .~rhs1 > 0.0 then .~rhs2 else 0.0) >.)
-
-(** Same as [relu_gate_code] but precompiled. *)
-let accum_relu_gate_call = precompile_binop_sum2 accum_relu_gate_code
+let relu_gate_call n1 n2 = Float.(if n1 > 0.0 then n2 else 0.0)
 
 
 (** Prints 0-based [indices] entries out of [arr], where [-1] in an axis means to print out the axis,

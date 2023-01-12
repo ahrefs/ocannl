@@ -299,6 +299,21 @@ type 'a projections = {
 let derive_projections (shapes: update_step) (type a) ~(lift_one: a): a projections =
   ignore (shapes, lift_one); failwith "NOT IMPLEMENTED YET"
 
+let backprop1 projections = {
+  projections with project_lhs = projections.project_rhs1; project_rhs1 = projections.project_lhs;
+}
+
+let backprop2 projections =
+  match projections.project_rhs2 with
+  | None -> invalid_arg "Shape.backprop2: unary shapes (project_rhs2 is None)"
+  | Some project_rhs2 -> 
+    { projections with project_lhs = project_rhs2; project_rhs2 = Some projections.project_lhs }
+
+let backprop_unary projections = {
+  projections with project_lhs = projections.project_rhs1; project_rhs1 = projections.project_lhs;
+                   project_rhs2 = Some projections.project_lhs;
+}
+
 type indexing = {
   index_code: int Codelib.code projections;
   index_call: int projections;
