@@ -94,10 +94,9 @@ let relu_call =
 
 let relu m = if !global_inline then relu_inline m else relu_call m
 
-let init_zeroes dims_code =
-   .< let p = Ndarray.create .~dims_code in Ndarray.reset_zeros p; p >.
-let init_uniform dims_code =
-   .< Ndarray.get_uniform ~low:(-1.0) ~high:1.0 .~dims_code >.
+let reset_value v ~nv shape =
+  Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun _ -> value_code v) ~lhs:nv ~rhs:nv
+             (Shape.trivial_projections shape))
 
 let float_to_label v = "v" ^ (
   Float.to_string v |> String.substr_replace_all ~pattern:"." ~with_:"p"
@@ -105,14 +104,16 @@ let float_to_label v = "v" ^ (
 
 let number v =
   (* Note: no axis label so that we do not conflict with user labels. *)
-  term ~label:(float_to_label v) (`Constant ([1], ""))
-    ~init_code:(fun dims -> .< Ndarray.get_val v .~dims >.)
+  term ~label:(float_to_label v) (`Constant ([1], "")) ~op_body:(reset_value v)
+
+let assign ~nv ~n1v indexing =
+  Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun v -> v) ~lhs:nv ~rhs:n1v
+   indexing.Shape.index_code)
 
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient =
-  let op_body ~nv ~n1v _indexing = .< Ndarray.assign .~nv .~n1v >. in
   let grad_body ~n1g:_ ~ng:_ ~nv:_ ~n1v:_ _indexing = .< () >. in
-  unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
+  unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign ~grad_body
 
 (** A [stop_broadcast] is an identity in both forward and backprop passes, which substitutes-in
     a [Fixed] copy of the shape of the input. *)
@@ -122,16 +123,16 @@ let stop_broadcast m =
      batch=Fixed (list_of_dims sh.batch);
      input=Fixed (list_of_dims sh.input); output=Fixed (list_of_dims sh.input);
      axis_labels=sh.axis_labels; deduce_output_from_input=`Not_deduced } in
-  let op_body ~nv ~n1v _indexing = .< Ndarray.assign .~nv .~n1v >. in
-  let grad_body ~n1g ~ng ~nv:_ ~n1v:_ _indexing = .< Ndarray.assign .~n1g .~ng >. in
-  unop ~init_shape ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
+  let grad_body ~n1g ~ng ~nv:_ ~n1v:_ indexing = assign ~nv:n1g ~n1v:ng indexing in
+  unop ~init_shape ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign ~grad_body
     
 module O = struct
   let ( * ) = matmul
   let ( *. ) = pointmul
   let (+) = add
   let (!/) = relu
-  let (!~) label = term ~label ~init_code:init_uniform
+  (* FIXME: NOT IMPLEMENTED *)
+  (* let (!~) label = term ~label ~init_code:init_uniform *)
   let (!.) = number
   let (-) m1 m2 = m1 + !.(-1.) * m2
 end
@@ -254,8 +255,9 @@ let print_global_roots ~with_grad ~with_code (style: array_print_style) =
 
 module CLI = struct
   module FO = O
-  let init_zeroes = init_zeroes
-  let init_uniform = init_uniform
+  (* FIXME: NOT IMPLEMENTED *)
+  (* let init_zeroes = init_zeroes *)
+  (* let init_uniform = init_uniform *)
   let term = term
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient
