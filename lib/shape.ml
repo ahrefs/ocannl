@@ -92,7 +92,7 @@ type compose_type =
   (** A version of the [einsum] syntax. Note that currently [`Pointwise] and [`Compose] are
       not redundant with [`Einsum], because they enable more shape inference: they do not specify
       the number of axes. The [axis_labels] use pseudo-labels local to the notation, to line up the axes.
-      For [`Einsum (ls1, ls1, ls2)], the symmetric difference / disjunctive union of [ls1] and [ls2]'s
+      For [`Einsum (ls1, ls2, ls3)], the symmetric difference / disjunctive union of [ls1] and [ls2]'s
       pseudo-labels should be equal to [ls3] pseudo-labels.
       
       Currently, we support two variants of the [einsum] syntax: either all the axes are provided,
@@ -384,7 +384,7 @@ let axis_labels_of_spec spec: axis_labels =
   (* TODO: implement [einsum_of_spec] using a ["spec;spec=>spec"] syntax. *)
 
 (** Specification of a terminal [Formula.t]'s shape. The [string] occurrences refer to [axis_labels]
-    specs.  *)
+    specs. *)
 type term_spec =
   [ `Unknown
   (** The shape will need to be fully inferred. *)
@@ -396,7 +396,7 @@ type term_spec =
       A data shape does not have input dimensions. *)
   | `Params of int list *  int list * string
   (** [`Params (input_dims, output_dims, labels)]
-      A parameters shape with fixed dimensionality. Parameters not have batch dimensions. *)
+      A parameters shape with fixed dimensionality. Parameters do not have batch dimensions. *)
   | `Unknown_batch_data of int list * string
   (** [`Unknown_batch_data (output_dims, labels)]
       A data shape where the batch dimensions are left up to inference. *)
