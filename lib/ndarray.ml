@@ -58,6 +58,11 @@ let value_code (v: float) = Lifts.Lift_float.lift v
 
 let value_call (v: float) = v
 
+let uniform_call ~low ~high = Random.float_range low high
+
+let uniform_code ~low ~high = .< Random.float_range low high >.
+
+
 (** Prints 0-based [indices] entries out of [arr], where [-1] in an axis means to print out the axis,
     and a non-negative index means to print out only the indexed dimension of the axis. Up to [5] axes
     can be [-1]. Prints up to [entries_per_axis] or [entries_per_axis+1] entries per axis.

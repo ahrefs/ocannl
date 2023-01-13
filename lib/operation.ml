@@ -98,6 +98,10 @@ let reset_value v ~nv shape =
   Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun _ -> value_code v) ~lhs:nv ~rhs:nv
              (Shape.trivial_projections shape))
 
+let uniform_value ~nv shape =
+  Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun _ -> uniform_code ~low:(-1.0) ~high:1.0)
+             ~lhs:nv ~rhs:nv @@ Shape.trivial_projections shape)
+
 let float_to_label v = "v" ^ (
   Float.to_string v |> String.substr_replace_all ~pattern:"." ~with_:"p"
   |> String.substr_replace_all ~pattern:"-" ~with_:"m")
@@ -131,8 +135,7 @@ module O = struct
   let ( *. ) = pointmul
   let (+) = add
   let (!/) = relu
-  (* FIXME: NOT IMPLEMENTED *)
-  (* let (!~) label = term ~label ~init_code:init_uniform *)
+  let (!~) label = term ~label (`Deduced_params `Not_deduced) ~op_body:uniform_value
   let (!.) = number
   let (-) m1 m2 = m1 + !.(-1.) * m2
 end
@@ -255,9 +258,8 @@ let print_global_roots ~with_grad ~with_code (style: array_print_style) =
 
 module CLI = struct
   module FO = O
-  (* FIXME: NOT IMPLEMENTED *)
-  (* let init_zeroes = init_zeroes *)
-  (* let init_uniform = init_uniform *)
+  let reset_value = reset_value
+  let uniform_value = uniform_value
   let term = term
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient

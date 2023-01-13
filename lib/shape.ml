@@ -401,7 +401,8 @@ type term_spec =
   (** [`Unknown_batch_data (output_dims, labels)]
       A data shape where the batch dimensions are left up to inference. *)
   | `Deduced_params of deduce_dims
-    (** Parameters with inferred dimensionality. Example use cases:
+    (** Parameters with inferred dimensionality. Use cases:
+        [`Deduced_params `Not_deduced] -- the shape will need to be fully inferred (no batch dims).
         [`Deduced_params `Preserve] -- a hidden layer preserving the dimensionality.
         [`Deduced_params (`Scale 2.0)] -- an expansion hidden layer doubling the dimensionality.
         [`Deduced_params (`Scale 0.5)] -- an bottleneck hidden layer halving the dimensionality.
