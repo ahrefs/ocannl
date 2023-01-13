@@ -30,8 +30,8 @@ type dims =
 (** User-provided dimensions. They will not change but will be broadcasted to bigger sizes. *)
 | Fixed of int list
 (** User-provided dimensions that will fail if used in a different size context, even if broadcastable.
-    As an exception, [Fixed []] implements the [stop_broadcast] operation: inference can modify it
-    to non-empty [Fixed] dimensions (which will then not change). *)
+    Note that [Operation.stop_broadcast] implements additional shape logic:
+    it converts the (bottom-up i.e. partially inferred) shape into a [Fixed] variant. *)
 | Inferred of int list
 (** Dimensions that will itself change to a bigger size: they adapt to the broadcasted size. *)
 | Unknown
@@ -134,6 +134,10 @@ type update_step = {
 
 exception Shape_error of string * t * t [@@deriving sexp]
 
+let list_of_dims = function
+  | Given ls | Fixed ls | Inferred ls -> ls
+  | Unknown -> []
+
 (* Design choice: tensor shapes are decided while code is constructed, although not immediately.
    Due to mutable updates during shape inference, it is not possible to reuse the same formula with
    different shapes. The inference is finalized by invoking the [Formula.subtree_shape_updates] once
@@ -190,7 +194,7 @@ let propagate_shapes (update: update_step) =
     Map.filter_keys sh2.axis_labels ~f:(fun k -> phys_equal k.in_axes from_kind) in
   let broadcast_into to_sh to_kind from_sh from_kind =
     match dims_of_kind to_kind to_sh, dims_of_kind from_kind from_sh with
-    | Given _ as into_dims, from_dims ->
+    | (Given _ | Fixed _) as into_dims, from_dims ->
       ignore @@
         broadcast_dims to_sh from_sh to_kind to_sh.axis_labels into_dims from_dims;
       into_dims
@@ -442,10 +446,6 @@ let of_term_spec : term_spec -> t = function
 let to_dims_code (sh: t): int array Codelib.code =
   let dims = Array.map (to_dims sh) ~f:(Lifts.Lift_int.lift) in
   Lifts.lift_array dims
-
-let list_of_dims = function
-  | Given ls | Fixed ls | Inferred ls -> ls
-  | Unknown -> []
 
 let to_string_hum sh =
   let dims_to_string kind =
