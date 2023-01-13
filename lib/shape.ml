@@ -216,6 +216,7 @@ let propagate_shapes (update: update_step) =
     sh.batch <- broadcast_into sh Batch cur_sh Batch;
 
   | Transpose (`Permute einsum, sh) -> 
+    (* FIXME: NOT IMPLEMENTED *)
     ignore (einsum, sh); failwith "Not implemented yet"
 
   | Broadcast (`Pointwise, sh1, sh2) ->
@@ -275,6 +276,7 @@ let propagate_shapes (update: update_step) =
       sh1.output <- deduce_dims sh2.input sh1.deduce_output_from_input
 
   | Broadcast (`Einsum spec, sh1, sh2) ->
+    (* FIXME: NOT IMPLEMENTED *)
     ignore (spec, sh1, sh2); failwith "Not implemented yet"
 
 (** All the information relevant for [Ndarray] code generation contained in a completed [update_step]. *)
@@ -297,6 +299,7 @@ type 'a projections = {
     mirrors [propagate_shapes], but [derive_indexing] should only be invoked when the shapes
     are inferred already. *)
 let derive_projections (shapes: update_step) (type a) ~(lift_one: a): a projections =
+  (* FIXME: NOT IMPLEMENTED *)
   ignore (shapes, lift_one); failwith "NOT IMPLEMENTED YET"
 
 let backprop1 projections = {
@@ -353,6 +356,7 @@ let derive_indexing shapes =
     * Labels to the left of ["|"] are [Batch], and between ["|"] and ["->"] are [Input]. *)
 let axis_labels_of_spec spec: axis_labels =
   if List.exists ~f:(String.contains spec) [' '; ','; '('; ')'] then
+    (* FIXME: NOT IMPLEMENTED *)
     failwith "Multicharacter axis labels are not implemented yet"
   else
     let batch_spec, spec =

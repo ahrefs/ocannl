@@ -203,6 +203,7 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
   assert (m.node_id = m.comp_node.id);
   Stdio.print_endline @@ "["^Int.to_string m.node_id^"] "^m.comp_node.label^": "^
                          Shape.to_string_hum m.shape;
+  (* FIXME: NOT IMPLEMENTED *)
   let indices = failwith "INDICES NOT IMPLEMENTED" in
   let order_of_axes =
     match style with

@@ -12,18 +12,20 @@ let dims (arr: t) = A.dims arr
 
 (** Accumulates the results of the operation on [rhs] by adding them into the [lhs]. *)
 let accum_binop_code ~accum ~op ~lhs ~rhs1 ~rhs2 projections =
-  (* TODO: FIXME: NOT IMPLEMENTED *)
+  (* FIXME: NOT IMPLEMENTED *)
   .< ignore (accum, op, .~lhs, .~rhs1, .~rhs2, projections) >.
 
 let accum_unop_code ~accum ~op ~lhs ~rhs projections =
+  (* FIXME: NOT IMPLEMENTED *)
   .< ignore (accum, op, .~lhs, .~rhs, projections) >.
 
 (** Accumulates the results of the operation on [rhs] by adding them into the [lhs]. *)
 let accum_binop_call ~accum ~op ~lhs ~rhs1 ~rhs2 projections =
-  (* TODO: FIXME: NOT IMPLEMENTED *)
+  (* FIXME: NOT IMPLEMENTED *)
   .< ignore (accum, op, .~lhs, .~rhs1, .~rhs2, projections) >.
 
 let accum_unop_call ~accum ~op ~lhs ~rhs projections =
+  (* FIXME: NOT IMPLEMENTED *)
   .< ignore (accum, op, .~lhs, .~rhs, projections) >.
 
 let skip_arg_code (_n1: float Codelib.code) (n2: float Codelib.code) = n2
