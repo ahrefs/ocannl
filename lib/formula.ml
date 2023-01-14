@@ -86,8 +86,8 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let nv = .< .~node.value >. in
   let n1v = .< .~(m1.node).value >. in
   let n2v = .< .~(m2.node).value >. in
-  let indexing = Shape.derive_indexing local_shape_update in
-  let op_body() = op_body ~nv ~n1v ~n2v indexing in
+  let projections = Shape.derive_projections local_shape_update in
+  let op_body() = op_body ~nv ~n1v ~n2v projections in
   let m1_processed = not @@ Map.mem !global_roots m1.node_id in
   let m2_processed = not @@ Map.mem !global_roots m2.node_id in
   (* The code needs to be included in the order it was computed! *)
@@ -125,7 +125,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   (* The code needs to be included in the reverse order to which it was computed! This guarantees
      that all ancestors of a node are backpropagated before the node is backpropagated, even for
      non-tree DAGs. *)
-  let grad_body() = grad_body ~n1g ~n2g ~ng ~nv ~n1v ~n2v indexing in
+  let grad_body() = grad_body ~n1g ~n2g ~ng ~nv ~n1v ~n2v projections in
   let backprop_body =
     match m1_processed, m1.backprop_body, m2_processed, m2.backprop_body with
     | true, _, true, _ | true, _, _, None | _, None, true, _ | _, None, _, None -> grad_body
@@ -190,8 +190,8 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   let node = Codelib.genlet ~name:label .< Node.get node_id >. in
   let nv = .< .~node.value >. in
   let n1v = .< .~(m.node).value >. in
-  let indexing = Shape.derive_indexing local_shape_update in
-  let op_body() = op_body ~nv ~n1v indexing in
+  let projections = Shape.derive_projections local_shape_update in
+  let op_body() = op_body ~nv ~n1v projections in
   let m_processed = not @@ Map.mem !global_roots m.node_id in
   (* The code needs to be included in the order it was computed! *)
 
@@ -213,7 +213,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   let zero_grads =
     if m_processed then zero_body
     else fun () -> .< .~(zero_body()); .~(m_zero_grads()) >. in
-  let grad_body() = grad_body ~n1g ~ng ~nv ~n1v indexing in
+  let grad_body() = grad_body ~n1g ~ng ~nv ~n1v projections in
   (* The code needs to be included in the reverse order to which it was computed! *)
   let backprop_body =
     match m_processed, m.backprop_body with

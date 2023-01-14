@@ -10,52 +10,45 @@ open Formula
 let global_inline = ref true
 
 let add_inline =
-  let op_body ~nv ~n1v ~n2v indexing =
-    Ndarray.(accum_binop_code ~accum:skip_arg_code ~op:add_code ~lhs:nv ~rhs1:n1v ~rhs2:n2v
-               indexing.Shape.index_code) in
-  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ indexing = .<
-    .~(Ndarray.(accum_unop_code ~accum:add_code ~op:Fn.id ~lhs:n1g ~rhs:ng @@
-                Shape.backprop1 indexing.Shape.index_code));
-    .~(Ndarray.(accum_unop_code ~accum:add_code ~op:Fn.id ~lhs:n2g ~rhs:ng @@
-                Shape.backprop2 indexing.Shape.index_code))
+  let op_body ~nv ~n1v ~n2v projections =
+    Ndarray.(accum_binop_code ~accum:skip_arg_code ~op:add_code ~lhs:nv ~rhs1:n1v ~rhs2:n2v projections) in
+  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ projections = .<
+    .~(Ndarray.(accum_unop_code ~accum:add_code ~op:Fn.id ~lhs:n1g ~rhs:ng @@ Shape.backprop1 projections));
+    .~(Ndarray.(accum_unop_code ~accum:add_code ~op:Fn.id ~lhs:n2g ~rhs:ng @@ Shape.backprop2 projections))
   >. in
   binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
 let add_call =
-  let op_body ~nv ~n1v ~n2v indexing =
+  let op_body ~nv ~n1v ~n2v projections =
     Ndarray.(accum_binop_call ~accum:skip_arg_call ~op:add_call ~lhs:nv ~rhs1:n1v ~rhs2:n2v
-                  indexing.Shape.index_call) in
-  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ indexing = .<
-    .~Ndarray.(accum_unop_call ~accum:add_call ~op:Fn.id ~lhs:n1g ~rhs:ng @@
-               Shape.backprop1 indexing.Shape.index_call);
-    .~Ndarray.(accum_unop_call ~accum:add_call ~op:Fn.id ~lhs:n2g ~rhs:ng @@
-               Shape.backprop2 indexing.Shape.index_call)
+                  projections) in
+  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ projections = .<
+    .~Ndarray.(accum_unop_call ~accum:add_call ~op:Fn.id ~lhs:n1g ~rhs:ng @@ Shape.backprop1 projections);
+    .~Ndarray.(accum_unop_call ~accum:add_call ~op:Fn.id ~lhs:n2g ~rhs:ng @@ Shape.backprop2 projections)
   >. in
   binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
 let add m1 m2 = if !global_inline then add_inline m1 m2 else add_call m1 m2
 
 let mul_inline ~compose_op =
-  let op_body ~nv ~n1v ~n2v indexing =
-    Ndarray.(accum_binop_code ~accum:skip_arg_code ~op:mul_code ~lhs:nv ~rhs1:n1v ~rhs2:n2v
-               indexing.Shape.index_code) in
-  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v indexing = .<
+  let op_body ~nv ~n1v ~n2v projections =
+    Ndarray.(accum_binop_code ~accum:skip_arg_code ~op:mul_code ~lhs:nv ~rhs1:n1v ~rhs2:n2v projections) in
+  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v projections = .<
     .~(Ndarray.(accum_binop_code ~accum:add_code ~op:mul_code ~lhs:n1g ~rhs1:ng ~rhs2:n2v @@
-                Shape.backprop1 indexing.Shape.index_code));
+                Shape.backprop1 projections));
     .~(Ndarray.(accum_binop_code ~accum:add_code ~op:mul_code ~lhs:n2g ~rhs1:ng ~rhs2:n1v @@
-                Shape.backprop2 indexing.Shape.index_code))
+                Shape.backprop2 projections))
   >. in
   binop ~compose_op ~op_label:"" ~op_body ~grad_body
 
 let mul_call ~compose_op =
-  let op_body ~nv ~n1v ~n2v indexing =
-    Ndarray.(accum_binop_call ~accum:skip_arg_call ~op:mul_call ~lhs:nv ~rhs1:n1v ~rhs2:n2v
-               indexing.Shape.index_call) in
-  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v indexing = .<
+  let op_body ~nv ~n1v ~n2v projections =
+    Ndarray.(accum_binop_call ~accum:skip_arg_call ~op:mul_call ~lhs:nv ~rhs1:n1v ~rhs2:n2v projections) in
+  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v projections = .<
     .~Ndarray.(accum_binop_call ~accum:add_call ~op:mul_call ~lhs:n1g ~rhs1:ng ~rhs2:n2v @@
-               Shape.backprop1 indexing.Shape.index_call);
+               Shape.backprop1 projections);
     .~Ndarray.(accum_binop_call ~accum:add_call ~op:mul_call ~lhs:n2g ~rhs1:ng ~rhs2:n1v @@
-               Shape.backprop2 indexing.Shape.index_call)
+               Shape.backprop2 projections)
   >. in
   binop ~compose_op ~op_label:"" ~op_body ~grad_body
 
@@ -75,21 +68,19 @@ let matmul_call = mul_call ~compose_op:`Compose
 let matmul m1 m2 = if !global_inline then matmul_inline m1 m2 else matmul_call m1 m2
 
 let relu_inline =
-  let op_body ~nv ~n1v indexing =
-    Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:relu_code ~lhs:nv ~rhs:n1v
-               indexing.Shape.index_code) in
-  let grad_body ~n1g ~ng ~nv ~n1v:_ indexing =
+  let op_body ~nv ~n1v projections =
+    Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:relu_code ~lhs:nv ~rhs:n1v projections) in
+  let grad_body ~n1g ~ng ~nv ~n1v:_ projections =
     Ndarray.(accum_binop_code ~accum:add_code ~op:relu_gate_code ~lhs:n1g ~rhs1:nv ~rhs2:ng @@
-             Shape.backprop_unary indexing.Shape.index_code) in
+             Shape.backprop_unary projections) in
   unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
 let relu_call =
-  let op_body ~nv ~n1v indexing =
-    Ndarray.(accum_unop_call ~accum:skip_arg_call ~op:relu_call ~lhs:nv ~rhs:n1v
-               indexing.Shape.index_call) in
-  let grad_body ~n1g ~ng ~nv ~n1v:_ indexing =
+  let op_body ~nv ~n1v projections =
+    Ndarray.(accum_unop_call ~accum:skip_arg_call ~op:relu_call ~lhs:nv ~rhs:n1v projections) in
+  let grad_body ~n1g ~ng ~nv ~n1v:_ projections =
     Ndarray.(accum_binop_call ~accum:add_call ~op:relu_gate_call ~lhs:n1g ~rhs1:nv ~rhs2:ng @@
-             Shape.backprop_unary indexing.Shape.index_call) in
+             Shape.backprop_unary projections) in
   unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
 let relu m = if !global_inline then relu_inline m else relu_call m
@@ -110,13 +101,12 @@ let number v =
   (* Note: no axis label so that we do not conflict with user labels. *)
   term ~label:(float_to_label v) (`Constant ([1], "")) ~op_body:(reset_value v)
 
-let assign ~nv ~n1v indexing =
-  Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun v -> v) ~lhs:nv ~rhs:n1v
-   indexing.Shape.index_code)
+let assign ~nv ~n1v projections =
+  Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun v -> v) ~lhs:nv ~rhs:n1v projections)
 
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient =
-  let grad_body ~n1g:_ ~ng:_ ~nv:_ ~n1v:_ _indexing = .< () >. in
+  let grad_body ~n1g:_ ~ng:_ ~nv:_ ~n1v:_ _projections = .< () >. in
   unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign ~grad_body
 
 (** A [stop_broadcast] is an identity in both forward and backprop passes, which substitutes-in
@@ -127,7 +117,7 @@ let stop_broadcast m =
      batch=Fixed (list_of_dims sh.batch);
      input=Fixed (list_of_dims sh.input); output=Fixed (list_of_dims sh.input);
      axis_labels=sh.axis_labels; deduce_output_from_input=`Not_deduced } in
-  let grad_body ~n1g ~ng ~nv:_ ~n1v:_ indexing = assign ~nv:n1g ~n1v:ng indexing in
+  let grad_body ~n1g ~ng ~nv:_ ~n1v:_ projections = assign ~nv:n1g ~n1v:ng projections in
   unop ~init_shape ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign ~grad_body
     
 module O = struct
