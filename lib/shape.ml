@@ -285,6 +285,19 @@ let propagate_shapes (update: update_step) =
     (* FIXME: NOT IMPLEMENTED *)
     ignore (spec, sh1, sh2); failwith "Not implemented yet"
 
+(** Uses the matrix convention of putting the input axes last. *)
+let to_dims (sh: t): int array =
+  let b_dims = match sh.batch with
+    | Unknown -> raise @@ Shape_error ("Batch dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims in
+  let i_dims = match sh.input with
+    | Unknown -> raise @@ Shape_error ("Input dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims in
+  let o_dims = match sh.output with
+    | Unknown -> raise @@ Shape_error ("Output dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims in
+  Array.concat [b_dims; o_dims; i_dims]
+
 type symbol = Symbol of int [@@deriving compare, sexp, variants]
 let unique_id = ref 0
 let get_symbol() = Int.incr unique_id; Symbol !unique_id
@@ -314,20 +327,179 @@ type projections = {
   (** A projection that takes an [product_space]-bound index and produces an index into the second
       argument of a binary operation. *)
 }
-    
+
 (** Projections for iterating over a terminal [Ndarray], or for a pointwise unary operator. *)
 let terminal_projections sh =
   let product_space = to_dims sh in
   let product_iterators = Array.map product_space ~f:(fun _ -> get_symbol()) in
-  let project_lhs = Array.map product_iterators ~f:(fun s -> Iterator s) in
+  let project_lhs = Array.map product_iterators ~f:iterator in
   { product_space; product_iterators; project_lhs; project_rhs1=project_lhs; project_rhs2=None; }
 
 (** Computes the indexing into subformulas given the shape information of a formula. The processing
-    mirrors [propagate_shapes], but [derive_indexing] should only be invoked when the shapes
+    mirrors [propagate_shapes], but [derive_projections] should only be invoked when the shapes
     are inferred already. *)
-let derive_projections (shapes: update_step) (type a) ~(lift_one: a): a projections =
-  (* FIXME: NOT IMPLEMENTED *)
-  ignore (shapes, lift_one); failwith "NOT IMPLEMENTED YET"
+let derive_projections (shapes: update_step) : projections =
+  (* Broadcasts symmetrically to iterate all axes. *)
+  let broadcast_dims sh1_dims sh2_dims =
+    let broad_dim = function
+    | d1, d2 when d1 = d2 -> d1, get_symbol()
+    | 1, d | d, 1 -> d, get_symbol()
+    | _ -> assert false in
+    let rec broad_back_dims (accu_dims, accu_idcs as accu) = function
+    | [], [] -> accu
+    | dims, [] | [], dims ->
+      List.rev_append dims accu_dims, List.rev_map_append dims accu_idcs ~f:(fun _ -> get_symbol())
+    | d1::dims1, d2::dims2 ->
+      let d, idx = broad_dim (d1, d2) in
+      broad_back_dims (d::accu_dims, idx::accu_idcs) (dims1, dims2) in
+    match sh1_dims, sh2_dims with
+      | Unknown, Unknown -> [], []
+      | (Inferred dims | Given dims| Fixed dims), Unknown
+      | Unknown, (Inferred dims | Given dims | Fixed dims) ->
+        dims, List.map dims ~f:(fun _ -> get_symbol())
+      | (Inferred dims1 | Given dims1 | Fixed dims1), (Inferred dims2 | Given dims2 | Fixed dims2) ->
+        broad_back_dims ([], []) (List.rev dims1, List.rev dims2) in
+  let broadcast_sh sh1 kind1 sh2 kind2 =
+    broadcast_dims (dims_of_kind kind1 sh1) (dims_of_kind kind2 sh2) in
+  (* The first arg is "into" we build the projection for, the second arg is the context. *)
+  let broadcast_into_dims product_idcs sh1_dims sh2_dims =
+    let broad_dim idx = function
+      (* It is less error-prone to handle 1 as Fixed_idx -- less dependence on what sh2 is. *)
+    | 1, _d -> Fixed_idx 0
+    | _ -> Iterator idx in
+    let rec broad_back_dims accu_idcs = function
+    | [], [], [] -> accu_idcs
+    | _idcs, [], _dims -> accu_idcs
+    | idcs, _dims, [] -> List.rev_map_append idcs accu_idcs ~f:iterator
+    | idx::idcs, d1::dims1, d2::dims2 ->
+      broad_back_dims (broad_dim idx (d1, d2)::accu_idcs) (idcs, dims1, dims2)
+    | _ -> assert false in
+    match sh1_dims, sh2_dims with
+      | Unknown, Unknown ->
+        assert (0 = List.length product_idcs); 
+        []
+      | (Inferred dims | Given dims| Fixed dims), Unknown
+      | Unknown, (Inferred dims | Given dims | Fixed dims) ->
+        assert (List.length dims = List.length product_idcs);
+        List.map product_idcs ~f:iterator
+      | (Inferred dims1 | Given dims1 | Fixed dims1), (Inferred dims2 | Given dims2 | Fixed dims2) ->
+        broad_back_dims [] (List.rev product_idcs, List.rev dims1, List.rev dims2) in
+  let broadcast_into product_idcs sh1 kind1 sh2 kind2 =
+    broadcast_into_dims product_idcs (dims_of_kind kind1 sh1) (dims_of_kind kind2 sh2) in
+  let cur_sh = shapes.shape in
+  (* For binary cases, we cannot rely on [cur_sh] containing all axes, since in principle it could
+     have been restricted by an initial [Given] setting to efficiently implement map-reduce. *)
+  match shapes.logic with
+  | Terminal -> terminal_projections cur_sh
+  | Transpose (`Transpose, sh) ->
+    let product_inp, iters_inp = broadcast_sh cur_sh Input sh Output in
+    let lhs_input = broadcast_into iters_inp cur_sh Input sh Output in
+    let product_out, iters_out = broadcast_sh cur_sh Output sh Input in
+    let lhs_output = broadcast_into iters_out cur_sh Output sh Input in
+    let product_bch, iters_bch = broadcast_sh cur_sh Batch sh Batch in
+    let lhs_batch = broadcast_into iters_bch cur_sh Batch sh Batch in
+    let rhs_input = broadcast_into iters_out sh Input cur_sh Output in
+    let rhs_output = broadcast_into iters_inp sh Output cur_sh Input in
+    let rhs_batch = broadcast_into iters_bch sh Batch cur_sh Batch in
+    let product_space =
+      Array.of_list @@ List.concat [product_bch; product_out; product_inp] in
+    let product_iterators =
+      Array.of_list @@ List.concat [iters_bch; iters_out; iters_inp] in
+    let project_lhs =
+      Array.of_list @@ List.concat [lhs_batch; lhs_output; lhs_input] in
+    let project_rhs1 =
+      Array.of_list @@ List.concat [rhs_batch; rhs_output; rhs_input] in    
+    { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 = None }
+
+  | Transpose (`Pointwise, sh) ->
+    let product_inp, iters_inp = broadcast_sh cur_sh Input sh Input in
+    let lhs_input = broadcast_into iters_inp cur_sh Input sh Input in
+    let product_out, iters_out = broadcast_sh cur_sh Output sh Output in
+    let lhs_output = broadcast_into iters_out cur_sh Output sh Output in
+    let product_bch, iters_bch = broadcast_sh cur_sh Batch sh Batch in
+    let lhs_batch = broadcast_into iters_bch cur_sh Batch sh Batch in
+    let rhs_input = broadcast_into iters_out sh Input cur_sh Input in
+    let rhs_output = broadcast_into iters_inp sh Output cur_sh Output in
+    let rhs_batch = broadcast_into iters_bch sh Batch cur_sh Batch in
+    let product_space =
+      Array.of_list @@ List.concat [product_bch; product_out; product_inp] in
+    let product_iterators =
+      Array.of_list @@ List.concat [iters_bch; iters_out; iters_inp] in
+    let project_lhs =
+      Array.of_list @@ List.concat [lhs_batch; lhs_output; lhs_input] in
+    let project_rhs1 =
+      Array.of_list @@ List.concat [rhs_batch; rhs_output; rhs_input] in    
+    { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 = None }
+    
+  | Transpose (`Permute einsum, sh) -> 
+    (* FIXME: NOT IMPLEMENTED *)
+    ignore (einsum, sh); failwith "Not implemented yet"
+
+  | Broadcast (`Pointwise, sh1, sh2) ->
+    let product_inp, iters_inp = broadcast_sh sh1 Input sh2 Input in
+    let lhs1_input = broadcast_into iters_inp cur_sh Input sh1 Input in
+    let product_out, iters_out = broadcast_sh sh1 Output sh2 Output in
+    let lhs1_output = broadcast_into iters_out cur_sh Output sh1 Output in
+    let product_bch, iters_bch = broadcast_sh sh1 Batch sh2 Batch in
+    let lhs1_batch = broadcast_into iters_bch cur_sh Batch sh1 Batch in
+    let rhs1_input = broadcast_into iters_inp sh1 Input cur_sh Input in
+    let rhs1_output = broadcast_into iters_out sh1 Output cur_sh Output in
+    let rhs1_batch = broadcast_into iters_bch sh1 Batch sh2 Batch in
+    let lhs2_input = broadcast_into iters_inp cur_sh Input sh2 Input in
+    let lhs2_output = broadcast_into iters_out cur_sh Output sh2 Output in
+    let lhs2_batch = broadcast_into iters_bch cur_sh Batch sh2 Batch in
+    let rhs2_input = broadcast_into iters_inp sh2 Input cur_sh Input in
+    let rhs2_output = broadcast_into iters_out sh2 Output cur_sh Output in
+    let rhs2_batch = broadcast_into iters_bch sh2 Batch sh1 Batch in
+    let product_space =
+      Array.of_list @@ List.concat [product_bch; product_out; product_inp] in
+    let product_iterators =
+      Array.of_list @@ List.concat [iters_bch; iters_out; iters_inp] in
+    let project_lhs =
+      Array.of_list @@ List.concat [lhs1_batch; lhs1_output; lhs1_input] in
+    let project_lhs_verify =
+      Array.of_list @@ List.concat [lhs2_batch; lhs2_output; lhs2_input] in
+    assert (Array.equal (fun a b -> compare_axis_index a b = 0) project_lhs project_lhs_verify);
+    let project_rhs1 =
+      Array.of_list @@ List.concat [rhs1_batch; rhs1_output; rhs1_input] in    
+    let project_rhs2 =
+      Some (Array.of_list @@ List.concat [rhs2_batch; rhs2_output; rhs2_input]) in    
+    { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
+
+  | Broadcast (`Compose, sh1, sh2) ->
+    (** [sh2] is the value or the function that gets applied first: [cur_sh(x) = sh1(sh2(x))].
+       I.e. [cur.I = sh2.I, cur.O = sh1.O, sh2.O = sh1.I]. *)
+    let product_inp, iters_inp = broadcast_sh cur_sh Input sh2 Input in
+    let lhs_input = broadcast_into iters_inp cur_sh Input sh2 Input in
+    let product_out, iters_out = broadcast_sh cur_sh Output sh1 Output in
+    let lhs_output = broadcast_into iters_out cur_sh Output sh1 Output in
+    let product_bch, iters_bch = broadcast_sh sh1 Batch sh2 Batch in
+    let lhs1_batch = broadcast_into iters_bch cur_sh Batch sh1 Batch in
+    let lhs2_batch = broadcast_into iters_bch cur_sh Batch sh2 Batch in
+    assert (List.equal (fun a b -> compare_axis_index a b = 0) lhs1_batch lhs2_batch);
+
+    let product_hid, iters_hid = broadcast_sh sh1 Input sh2 Output in
+    let rhs1_input = broadcast_into iters_hid sh1 Input sh2 Output in
+    let rhs1_output = broadcast_into iters_out sh1 Output cur_sh Output in
+    let rhs1_batch = broadcast_into iters_bch sh1 Batch sh2 Batch in
+    let rhs2_input = broadcast_into iters_inp sh2 Input cur_sh Input in
+    let rhs2_output = broadcast_into iters_hid sh2 Output sh1 Input in
+    let rhs2_batch = broadcast_into iters_bch sh2 Batch sh1 Batch in
+    let product_space =
+      Array.of_list @@ List.concat [product_bch; product_out; product_hid; product_inp] in
+    let product_iterators =
+      Array.of_list @@ List.concat [iters_bch; iters_out; iters_hid; iters_inp] in
+    let project_lhs =
+      Array.of_list @@ List.concat [lhs1_batch; lhs_output; lhs_input] in
+    let project_rhs1 =
+      Array.of_list @@ List.concat [rhs1_batch; rhs1_output; rhs1_input] in    
+    let project_rhs2 =
+      Some (Array.of_list @@ List.concat [rhs2_batch; rhs2_output; rhs2_input]) in    
+    { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
+
+  | Broadcast (`Einsum spec, sh1, sh2) ->
+    (* FIXME: NOT IMPLEMENTED *)
+    ignore (spec, sh1, sh2); failwith "Not implemented yet"
 
 let backprop1 projections = {
   projections with project_lhs = projections.project_rhs1; project_rhs1 = projections.project_lhs;
@@ -343,33 +515,6 @@ let backprop_unary projections = {
   projections with project_lhs = projections.project_rhs1; project_rhs1 = projections.project_lhs;
                    project_rhs2 = Some projections.project_lhs;
 }
-
-let to_dims (sh: t): int array =
-  let b_dims = match sh.batch with
-    | Unknown -> raise @@ Shape_error ("Batch dimensions still unknown", sh, sh)
-    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims in
-  let i_dims = match sh.input with
-    | Unknown -> raise @@ Shape_error ("Input dimensions still unknown", sh, sh)
-    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims in
-  let o_dims = match sh.output with
-    | Unknown -> raise @@ Shape_error ("Output dimensions still unknown", sh, sh)
-    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims in
-  Array.concat [b_dims; o_dims; i_dims]
-
-let trivial_projections sh = {
-  product_space=to_dims sh;
-  project_lhs=Fn.id; project_rhs1=Fn.id; project_rhs2=Some Fn.id;
-}
-
-type indexing = {
-  index_code: int Codelib.code projections;
-  index_call: int projections;
-}
-
-let derive_indexing shapes =
-  let index_code = derive_projections shapes ~lift_one: .< 1 >. in
-  let index_call = derive_projections shapes ~lift_one:1 in
-  { index_code; index_call }
 
 (* ********** User API below ********** *)
 
