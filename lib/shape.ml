@@ -165,6 +165,8 @@ let propagate_shapes (update: update_step) =
       let error = "Dimension mismatch for axis "^AxisKey.to_string axis_key^opt_label^": "^
                   Int.to_string d1^" vs. "^Int.to_string d2 in
       raise @@ Shape_error (error, debug1, debug2) in
+  (* If initially [lhs] is [Unknown], [rhs1] is [sh1] and [rhs2] is [sh2],
+     then [lhs] becomes [broadcast_dims sh1 sh2]. *)
   let broadcast_dims sh1 sh2 kind labels sh1_dims sh2_dims =
     let rec broad_back_dims ~fixed_left ~fixed_right accu i = function
     | [], [] -> accu
@@ -283,22 +285,43 @@ let propagate_shapes (update: update_step) =
     (* FIXME: NOT IMPLEMENTED *)
     ignore (spec, sh1, sh2); failwith "Not implemented yet"
 
+type symbol = Symbol of int [@@deriving compare, sexp, variants]
+let unique_id = ref 0
+let get_symbol() = Int.incr unique_id; Symbol !unique_id
+
+(** An index into a single axis for doing computations over multiple [Shape]-derived [Ndarray]s. *)
+type axis_index =
+| Fixed_idx of int
+(** The specific position along an axis. *)
+| Iterator of symbol [@@deriving compare, sexp, variants]
+(** The given member of the [product_space] corresponding to some [product_iterators]. *)
+  
 (** All the information relevant for [Ndarray] code generation contained in a completed [update_step]. *)
-type 'a projections = {
+type projections = {
   product_space: int array;
   (** The product space dimensions (concatentation of the relevant batch, output, input axes) with
       the same semantics as [to_dims], that an operation should parallelize (map-reduce) over. *)
-  project_lhs: 'a array -> 'a array;
-  (** A projection that takes an [product_space]-bounded index and produces an index into the result of
+  product_iterators: symbol array;
+  (** The product space iterators (concatentation of the relevant batch, output, input axes)
+      for iterating over the [product_space] axes, where same axes are at same array indices. *)
+  project_lhs: axis_index array;
+  (** A projection that takes an [product_space]-bound index and produces an index into the result of
       an operation. *)
-  project_rhs1: 'a array -> 'a array;
-  (** P projection that takes an [product_space]-bounded index and produces an index into the (first)
+  project_rhs1: axis_index array;
+  (** A projection that takes an [product_space]-bound index and produces an index into the (first)
       argument of an operation. *)
-  project_rhs2: ('a array -> 'a array) option;
-  (** A projection that takes an [product_space]-bounded index and produces an index into the second
+  project_rhs2: axis_index array option;
+  (** A projection that takes an [product_space]-bound index and produces an index into the second
       argument of a binary operation. *)
 }
     
+(** Projections for iterating over a terminal [Ndarray], or for a pointwise unary operator. *)
+let terminal_projections sh =
+  let product_space = to_dims sh in
+  let product_iterators = Array.map product_space ~f:(fun _ -> get_symbol()) in
+  let project_lhs = Array.map product_iterators ~f:(fun s -> Iterator s) in
+  { product_space; product_iterators; project_lhs; project_rhs1=project_lhs; project_rhs2=None; }
+
 (** Computes the indexing into subformulas given the shape information of a formula. The processing
     mirrors [propagate_shapes], but [derive_indexing] should only be invoked when the shapes
     are inferred already. *)

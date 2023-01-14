@@ -96,11 +96,11 @@ let relu m = if !global_inline then relu_inline m else relu_call m
 
 let reset_value v ~nv shape =
   Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun _ -> value_code v) ~lhs:nv ~rhs:nv
-             (Shape.trivial_projections shape))
+             (Shape.terminal_projections shape))
 
 let uniform_value ~nv shape =
   Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun _ -> uniform_code ~low:(-1.0) ~high:1.0)
-             ~lhs:nv ~rhs:nv @@ Shape.trivial_projections shape)
+             ~lhs:nv ~rhs:nv @@ Shape.terminal_projections shape)
 
 let float_to_label v = "v" ^ (
   Float.to_string v |> String.substr_replace_all ~pattern:"." ~with_:"p"

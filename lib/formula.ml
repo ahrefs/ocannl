@@ -55,10 +55,10 @@ exception Session_error of string * t option
    The other uses are mediated by the [~op_body], [~grad_body] and [~init_code] arguments. *)
 let reset_zeros n shape =
    Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun _ -> zero_code) ~lhs:n ~rhs:n
-              (Shape.trivial_projections shape))
+              (Shape.terminal_projections shape))
 let reset_ones n shape =
   Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun _ -> one_code) ~lhs:n ~rhs:n
-             (Shape.trivial_projections shape))
+             (Shape.terminal_projections shape))
 let create_value node shape = .< .~node.Node.value <- Ndarray.create .~(Shape.to_dims_code shape) >.
 let create_grad node shape = .< .~node.Node.grad <- Ndarray.create .~(Shape.to_dims_code shape) >.
 
