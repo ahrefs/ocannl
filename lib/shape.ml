@@ -2,7 +2,12 @@
 
 open Base
 
-(** An index pointing to any of a shape's axes. *)
+(** An index pointing to any of a shape's axes, including the kind of the axis kind ([Batch, Input, Output])
+    and the position (which is counted from the end to facilitate broadcasting).
+    
+    Note the following inconsistency due to differing conventions in function notation and matrix notation:
+    for label specifications and einsum notation, we write "batch|inputs->outputs", but when we convert
+    a shape to an [Ndarray] index we do it in the order [[batch; outputs; inputs]]. *)
 module AxisKey = struct
   module T = struct
     type kind = 
@@ -23,7 +28,10 @@ module AxisKey = struct
   include Comparator.Make(T)
 end
 
-type axis_labels = string Map.M(AxisKey).t [@@deriving compare, sexp]
+type 'a axis_map = 'a Map.M(AxisKey).t [@@deriving compare, sexp]
+
+(** The labels are strings assigned to [AxisKey] axes. *)
+type axis_labels = string axis_map [@@deriving compare, sexp]
 
 type dims =
 | Given of int list
@@ -137,7 +145,7 @@ exception Shape_error of string * t * t [@@deriving sexp]
 let list_of_dims = function
   | Given ls | Fixed ls | Inferred ls -> ls
   | Unknown -> []
-
+  
 (* Design choice: tensor shapes are decided while code is constructed, although not immediately.
    Due to mutable updates during shape inference, it is not possible to reuse the same formula with
    different shapes. The inference is finalized by invoking the [Formula.subtree_shape_updates] once
@@ -569,6 +577,27 @@ let axis_labels_of_spec spec: axis_labels =
 
   (* TODO: implement [einsum_of_spec] using a ["spec;spec=>spec"] syntax. *)
 
+(** Given a fully-inferred shape, maps axes to their corresponding positions in an index using the
+    [Shape.to_dims] semantics. *)
+let axis_keys_to_idcs (sh: t): int axis_map =
+  let b_dims = match sh.batch with
+    | Unknown -> raise @@ Shape_error ("Batch dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims ->
+      (* Enumerate axes backwards. *)
+      Array.of_list_mapi dims ~f:(fun i _ -> AxisKey.{ in_axes=Batch; from_end=i + 1 }) in
+  let i_dims = match sh.input with
+    | Unknown -> raise @@ Shape_error ("Input dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims ->
+      Array.of_list_mapi dims ~f:(fun i _ -> AxisKey.{ in_axes=Input; from_end=i + 1 }) in
+  let o_dims = match sh.output with
+    | Unknown -> raise @@ Shape_error ("Output dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims ->
+      Array.of_list_mapi dims ~f:(fun i _ -> AxisKey.{ in_axes=Output; from_end=i + 1 }) in
+  let idcs = Array.concat [i_dims; o_dims; b_dims] in
+  Array.rev_inplace idcs;
+  Map.of_alist_exn (module AxisKey) @@ Array.to_list @@ Array.mapi idcs ~f:(fun i key -> key, i)
+
+
 (** Specification of a terminal [Formula.t]'s shape. The [string] occurrences refer to [axis_labels]
     specs. *)
 type term_spec =
@@ -628,8 +657,9 @@ let to_dims_code (sh: t): int array Codelib.code =
 let to_string_hum sh =
   let dims_to_string kind =
     let dims = list_of_dims @@ dims_of_kind kind sh in
+    let n_dims = List.length dims in
     String.concat ~sep:"," @@ List.mapi dims ~f:(fun i d ->
-        let key = AxisKey.{in_axes=kind; from_end=List.length dims - i} in
+        let key = AxisKey.{in_axes=kind; from_end=n_dims - i} in
         let label = match Map.find sh.axis_labels key with None -> ""
          | Some l -> l^":" in
         label^Int.to_string d) in
