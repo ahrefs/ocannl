@@ -131,45 +131,51 @@ let sprint_code code =
   s, check
 
 (** We print out up to 5 axes when printing an [Ndarray], as a grid (outer rectangle) of (inner)
-    rectangles, possibly repeated. By default, the inner rectangle has an input and an output axis,
-    and the batch axes are the vertical ones (the outer rectangle and the repetition). *)
+    rectangles, possibly repeated (screens). By default, the inner rectangle has an input and an output
+    axis, and the batch axes are the vertical ones (the outer rectangle and the repetition). *)
 type array_print_style =
 [ `Default
-(** The default behavior: the inner rectangles comprise both an input and an output axis, if available. *)
-| `Prefer_input_axis
-(** If there are 2 or more input axes, the inner rectangles comprise the input axes. *)
-| `Prefer_output_axis
-(** If there are 2 or more output axes, the inner rectangles comprise the output axes. *)
-| `Prefer_batch_axis
-(** The inner rectangles remain input x output, but the outer rectangles and repetition comprise
-    batch axes, if available. *)
-| `Exact_layout of string
-(** The string should use integer pseudo-labels to represent the priorities of the axes, where the
-    priorities correspond to, from highest: horizontal direction, vertical direction of inner rectangle,
-    horizontal direction, vertical direction of outer rectangle, repetition. *)
+(** Tthe inner rectangles comprise both an input and an output axis, if available; and the screens
+    comprise a batch axis, if available and if there is 5 or more axes. *)
+| `N5_layout of string
+(** The string should provide exclusively non-negative integer pseudo-labels. The numbers [0]-[4] represent
+    the priorities of the axes to be printed out, where the priorities correspond to, from highest:
+    horizontal directions of inner, outer rectangle, verticals directions of inner, outer rectangle,
+    repetition (see also [Ndarray.pp_print]). The numbers [n >= 5] stand for the actual positions [n - 5]
+    within the corresponding axes. *)
+| `Label_layout of (string * int) list
+(** The association from axis labels to integers. The negative numbers [-5] to [-1] represent
+    the priorities of the axes to be printed out, where the priorities correspond to, from highest:
+    horizontal directions of inner, outer rectangle, verticals directions of inner, outer rectangle,
+    repetition (see also [Ndarray.pp_print]). The non-negative numbers stand for the actual positions
+    within the corresponding axes. Unspecified axes will be printed at position [0]. *)
 ]
 
 let print_formula ~with_grad ~with_code (style: array_print_style) m =
   assert (m.node_id = m.comp_node.id);
+  let sh = m.shape in
   Stdio.print_endline @@ "["^Int.to_string m.node_id^"] "^m.comp_node.label^": "^
-                         Shape.to_string_hum m.shape;
-  (* FIXME: NOT IMPLEMENTED *)
-  let indices = failwith "INDICES NOT IMPLEMENTED" in
-  let order_of_axes =
+                         Shape.to_string_hum sh;
+  let indices =
     match style with
-    | `Exact_layout priorities ->
+    | `Default ->
+      [||]
+    | `N5_layout priorities ->
       let p_labels = Shape.axis_labels_of_spec priorities in
-
-       ignore p_labels; []
-    | _ -> failwith "STYLE NOT IMPLEMENTED" in
-  let labels = failwith "LABEL PASSING NOT IMPLEMENTED" in
+      
+       ignore p_labels; [||]
+    | `Label_layout label_idcs ->
+      ignore label_idcs; [||]
+     in
+  (* let labels = sh.Shape.axis_labels in *)
+  let labels = [||] in
   let screen_stop () =
     Stdio.print_endline "Press [Enter] for next screen, [q] [Enter] to quit.";
     String.(Stdio.In_channel.input_line_exn Stdio.stdin = "q")  in
-  Ndarray.pp_print Caml.Format.std_formatter ~screen_stop ~indices m.comp_node.value;
+  Ndarray.pp_print Caml.Format.std_formatter ~labels ~screen_stop ~indices m.comp_node.value;
   if with_grad then (
     Stdio.print_endline "Gradient:";
-    Ndarray.pp_print Caml.Format.std_formatter ~order_of_axes ~labels ~screen_stop ~indices
+    Ndarray.pp_print Caml.Format.std_formatter ~labels ~screen_stop ~indices
       m.comp_node.grad);
   if with_code then (
     (match m.forward_body with

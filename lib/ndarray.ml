@@ -65,60 +65,36 @@ let value_code (v: float) = Lifts.Lift_float.lift v
 let uniform_code ~low ~high = .< Random.float_range low high >.
 
 
-(** Prints 0-based [indices] entries out of [arr], where [-1] in an axis means to print out the axis,
-    and a non-negative index means to print out only the indexed dimension of the axis. Up to [5] axes
-    can be [-1]. Prints up to [entries_per_axis] or [entries_per_axis+1] entries per axis.
-    [order_of_axes] specifies the layout (priorities) of the printed matrices, and should be a list of
-    up to 5 integers. [labels] specifies the labels (if any) of the printed out axes. The printed out
-    axes are arranged as, from highest priority: horizontal by vertical in inner rectangles,
-    horizontal by vertical in outer rectangles, vertical list (of outer rectangles) repeated until
-    a callback called in between each outer rectangle returns true. *)
-let pp_print fmt ?(entries_per_axis=5) ?(order_of_axes=[]) ?(prefer_vertical=false)
-    ?(labels=[]) ~screen_stop ~indices (arr: t) =
+(** Prints 0-based [indices] entries out of [arr], where a number between [-5] and [-1] in an axis means
+    to print out the axis, and a non-negative number means to print out only the indexed dimension of the axis.
+    Prints up to [entries_per_axis] or [entries_per_axis+1] entries per axis, possibly with ellipsis
+    in the middle. [labels] specifies the labels of the printed out axes, use [""] for no label.
+    The last label corresponds to axis [-1] etc. The printed out axes are arranged as:
+    * -1: a horizontal segment in an inner rectangle (i.e. column numbers of the inner rectangle),
+    * -2: a sequence of segments in a line of text (i.e. column numbers of an outer rectangle),
+    * -3: a vertical segment in an inner rectangle (i.e. row numbers of the inner rectangle),
+    * -4: a vertical sequence of segments (i.e. column numbers of an outer rectangle),
+    * -5: a sequence of screens of text (i.e. stack numbers of outer rectangles).
+    Printing out of axis [-5] is interrupted when a callback called in between each outer rectangle
+    returns true. *)
+let pp_print fmt ?(entries_per_axis=4) ?(labels=[||]) ~screen_stop ~indices (arr: t) =
   let dims = A.dims arr in
   let indices = Array.copy indices in
   let entries_per_axis = if entries_per_axis % 2 = 0 then entries_per_axis + 1 else entries_per_axis in
-  let var_indices =
-    match Array.filter_mapi indices ~f:(fun i d -> if d = -1 then Some i else None) with
-    | [||] -> [-1; -1; -1; -1; -1]
-    | [|ind1|] -> [-1; -1; -1; -1; ind1]
-    | [|ind1; ind2|] -> [-1; -1; ind1; -1; ind2]
-    | [|ind1; ind2; ind3|] ->
-      if prefer_vertical then [-1; ind1; ind2; -1; ind3] else [-1; -1; ind1; ind2; ind3]
-    | [|ind1; ind2; ind3; ind4|] -> [-1; ind1; ind2; ind3; ind4]
-    | [|ind0; ind1; ind2; ind3; ind4|] -> [ind0; ind1; ind2; ind3; ind4]
-    | _ ->  invalid_arg "Ndarray.pp_print: more than 5 axes to print out not supported" in
-  let labels =
-    match labels with
-    | [] | [None] | [None; None] | [None; None; None] | [None; None; None; None]
-    | [None; None; None; None; None] ->
-      [""; ""; ""; ""; ""]
-    | [Some l1] | [None; Some l1] | [None; None; Some l1] | [None; None; None; Some l1] -> 
-      [""; ""; ""; ""; l1^":"]
-    | [Some l1; Some l2] | [None; Some l1; Some l2] | [None; None; Some l1; Some l2] -> 
-      [""; ""; ""; l1^":"; l2^":"]
-    | [Some l1; None; Some l2] | [None; Some l1; None; Some l2] -> [""; ""; l1^":"; ""; l2^":"]
-    | [Some l1; Some l2; Some l3] | [None; Some l1; Some l2; Some l3] -> [""; ""; l1^":"; l2^":"; l3^":"]
-    | [Some l1; Some l2; Some l3; Some l4] -> [""; l1^":"; l2^":"; l3^":"; l4^":"]
-    | [Some l0; Some l1; Some l2; Some l3; Some l4] -> [l0^":"; l1^":"; l2^":"; l3^":"; l4^":"]
-    | _ -> invalid_arg "pp_print: ~labels should have at most 5 entries" in
-  let rec ord axes = if List.length axes >= 5 then axes
-    else ord (1::List.map axes ~f:(fun d->d + 1)) in
-  let order_of_axes = ord order_of_axes in
-  let var_indices = List.map ~f:snd @@ List.sort ~compare:(fun (a,_) (b,_) -> Int.compare a b) @@
-    List.zip_exn order_of_axes var_indices in
-  (* Swap second-to-highest and third-to-highest priority axes: horizontal looping takes precedence
-     over vertical. *)
+  let var_indices = Array.filter_mapi indices ~f:(fun i d -> if d <= -1 then Some (~-d, i) else None) in
+  let var_indices = Array.append (Array.create ~len:(5 - Array.length var_indices) (0, -1)) var_indices in
+  Array.sort ~compare:(fun (a,_) (b,_) -> Int.compare a b) var_indices;
+  let var_indices = Array.map ~f:snd @@ var_indices in
   let ind0, ind1, ind2, ind3, ind4 =
     match var_indices with 
-    | [ind0; ind1; ind2; ind3; ind4] -> ind0, ind1, ind3, ind2, ind4
-    | _ -> assert false in
-  let labels = List.map ~f:snd @@ List.sort ~compare:(fun (a,_) (b,_) -> Int.compare a b) @@
-    List.zip_exn order_of_axes labels in
+    | [|ind4; ind3; ind2; ind1; ind0|] -> ind0, ind1, ind3, ind2, ind4
+    | _ -> invalid_arg "Ndarray.pp_print: indices should contain at most 5 negative numbers" in
+  let labels = Array.append (Array.create ~len:(5 - Array.length labels) "") @@
+    Array.map labels ~f:(fun l -> if String.is_empty l then l else l^":") in
   let label0, label1, label2, label3, label4 =
-    match labels with 
-    | [label0; label1; label2; label3; label4] -> label0, label1, label3, label2, label4
-    | _ -> assert false in
+    match labels with
+    | [|l0; l1; l2; l3; l4|] -> l0, l1, l2, l3, l4
+    | _ -> invalid_arg "pp_print: ~labels should have at most 5 entries" in
   let to0 = if ind0 = -1 then 0 else min (dims.(ind0) - 1) entries_per_axis in
   let to1 = if ind1 = -1 then 0 else min (dims.(ind1) - 1) entries_per_axis in
   let to2 = if ind2 = -1 then 0 else min (dims.(ind2) - 1) entries_per_axis in
@@ -126,6 +102,7 @@ let pp_print fmt ?(entries_per_axis=5) ?(order_of_axes=[]) ?(prefer_vertical=fal
   let to4 = if ind4 = -1 then 0 else min (dims.(ind4) - 1) entries_per_axis in
   let open Caml.Format in
   let exception Stop_outermost_axis in
+  (* Each screen is a separately flushed box of formatting. *)
   (try for v = 0 to to0 do
        if ind0 <> -1 then fprintf fmt "%s%d=%d" label0 ind0 v;
        pp_open_tbox fmt ();
@@ -201,7 +178,7 @@ let debug_navi_parens fmt dims ~indices =
       for k = 0 to to3 do
         if k <> to3 then (pp_print_tab fmt (); fprintf fmt "|")
         else (
-          (* FIXME: sort out if we need [pp_print_tbreak fmt 0 0]. *)
+          (* sort out if we need [pp_print_tbreak fmt 0 0]. *)
             
         )
       done
