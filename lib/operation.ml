@@ -6,10 +6,7 @@ open Base
    we open [Formula] globally. *)
 open Formula
 
-(** Whether to inline [Ndarray] operations. *)
-let global_inline = ref true
-
-let add_inline =
+let add =
   let op_body ~nv ~n1v ~n2v projections =
     Ndarray.(accum_binop_code ~accum:skip_arg_code ~op:add_code ~lhs:nv ~rhs1:n1v ~rhs2:n2v projections) in
   let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ projections = .<
@@ -18,19 +15,7 @@ let add_inline =
   >. in
   binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
-let add_call =
-  let op_body ~nv ~n1v ~n2v projections =
-    Ndarray.(accum_binop_call ~accum:skip_arg_call ~op:add_call ~lhs:nv ~rhs1:n1v ~rhs2:n2v
-                  projections) in
-  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ projections = .<
-    .~Ndarray.(accum_unop_call ~accum:add_call ~op:Fn.id ~lhs:n1g ~rhs:ng @@ Shape.backprop1 projections);
-    .~Ndarray.(accum_unop_call ~accum:add_call ~op:Fn.id ~lhs:n2g ~rhs:ng @@ Shape.backprop2 projections)
-  >. in
-  binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
-
-let add m1 m2 = if !global_inline then add_inline m1 m2 else add_call m1 m2
-
-let mul_inline ~compose_op =
+let mul ~compose_op =
   let op_body ~nv ~n1v ~n2v projections =
     Ndarray.(accum_binop_code ~accum:skip_arg_code ~op:mul_code ~lhs:nv ~rhs1:n1v ~rhs2:n2v projections) in
   let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v projections = .<
@@ -41,20 +26,7 @@ let mul_inline ~compose_op =
   >. in
   binop ~compose_op ~op_label:"" ~op_body ~grad_body
 
-let mul_call ~compose_op =
-  let op_body ~nv ~n1v ~n2v projections =
-    Ndarray.(accum_binop_call ~accum:skip_arg_call ~op:mul_call ~lhs:nv ~rhs1:n1v ~rhs2:n2v projections) in
-  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v projections = .<
-    .~Ndarray.(accum_binop_call ~accum:add_call ~op:mul_call ~lhs:n1g ~rhs1:ng ~rhs2:n2v @@
-               Shape.backprop1 projections);
-    .~Ndarray.(accum_binop_call ~accum:add_call ~op:mul_call ~lhs:n2g ~rhs1:ng ~rhs2:n1v @@
-               Shape.backprop2 projections)
-  >. in
-  binop ~compose_op ~op_label:"" ~op_body ~grad_body
-
-let pointmul_inline = mul_inline ~compose_op:`Pointwise
-let pointmul_call = mul_call ~compose_op:`Pointwise
-let pointmul m1 m2 = if !global_inline then pointmul_inline m1 m2 else pointmul_call m1 m2
+let pointmul = mul ~compose_op:`Pointwise
 
 (* N1: AxB, N2 BxC, N: AxC, A: output of N1, B: input/output of N1/N2, C: input of N2.
    Although the matrix algebra would require that we insert additional transposes in gradient multiplies:
@@ -63,27 +35,15 @@ let pointmul m1 m2 = if !global_inline then pointmul_inline m1 m2 else pointmul_
    in our setup there is no transposing to do, since the projections produce correct indices for their
    corresponding matrices. *)
 
-let matmul_inline = mul_inline ~compose_op:`Compose
-let matmul_call = mul_call ~compose_op:`Compose
-let matmul m1 m2 = if !global_inline then matmul_inline m1 m2 else matmul_call m1 m2
+let matmul = mul ~compose_op:`Compose
 
-let relu_inline =
+let relu =
   let op_body ~nv ~n1v projections =
     Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:relu_code ~lhs:nv ~rhs:n1v projections) in
   let grad_body ~n1g ~ng ~nv ~n1v:_ projections =
     Ndarray.(accum_binop_code ~accum:add_code ~op:relu_gate_code ~lhs:n1g ~rhs1:nv ~rhs2:ng @@
              Shape.backprop_unary projections) in
   unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
-
-let relu_call =
-  let op_body ~nv ~n1v projections =
-    Ndarray.(accum_unop_call ~accum:skip_arg_call ~op:relu_call ~lhs:nv ~rhs:n1v projections) in
-  let grad_body ~n1g ~ng ~nv ~n1v:_ projections =
-    Ndarray.(accum_binop_call ~accum:add_call ~op:relu_gate_call ~lhs:n1g ~rhs1:nv ~rhs2:ng @@
-             Shape.backprop_unary projections) in
-  unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
-
-let relu m = if !global_inline then relu_inline m else relu_call m
 
 let reset_value v ~nv shape =
   Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun _ -> value_code v) ~lhs:nv ~rhs:nv

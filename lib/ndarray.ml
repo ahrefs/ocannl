@@ -10,7 +10,7 @@ let dims (arr: t) = A.dims arr
  let create = A.create Bigarray.Float32 Bigarray.C_layout
  let empty = create [||]
 
-(** Accumulates the results of the operation on [rhs] by adding them into the [lhs]. *)
+(** Accumulates the results of the operation: [lhs = accum lhs (op rhs1 rhs2)]. *)
 let accum_binop_code ~accum ~op ~lhs ~rhs1 ~rhs2 projections =
   let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
   let rhs1_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
@@ -30,6 +30,7 @@ let accum_binop_code ~accum ~op ~lhs ~rhs1 ~rhs2 projections =
     .< for i = 0 to .~(Lifts.Lift_int.lift dim) - 1 do .~(loop (.<i>. ::rev_iters) product) done >. in
   loop [] @@ Array.to_list projections.product_space
 
+(** Accumulates the results of the operation: [lhs = accum lhs (op rhs)]. *)
 let accum_unop_code ~accum ~op ~lhs ~rhs projections =
   let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
   let rhs1_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
@@ -45,48 +46,21 @@ let accum_unop_code ~accum ~op ~lhs ~rhs projections =
     .< for i = 0 to .~(Lifts.Lift_int.lift dim) - 1 do .~(loop (.<i>. ::rev_iters) product) done >. in
   loop [] @@ Array.to_list projections.product_space
 
-(** Accumulates the results of the operation on [rhs] by adding them into the [lhs]. *)
-let accum_binop_call ~accum ~op ~lhs ~rhs1 ~rhs2 projections =
-  (* FIXME: NOT IMPLEMENTED *)
-  .< ignore (accum, op, .~lhs, .~rhs1, .~rhs2, projections) >.
-
-let accum_unop_call ~accum ~op ~lhs ~rhs projections =
-  (* FIXME: NOT IMPLEMENTED *)
-  .< ignore (accum, op, .~lhs, .~rhs, projections) >.
-
 let skip_arg_code (_n1: float Codelib.code) (n2: float Codelib.code) = n2
-
-let skip_arg_call (_n1: float) (n2: float) = n2
 
 let add_code n1 n2 = .< Float.(.~n1 + .~n2) >.
 
-let add_call n1 n2 = Float.(n1 + n2)
-
 let mul_code n1 n2 = .< Float.(.~n1 * .~n2) >.
-
-let mul_call n1 n2 = Float.(n1 * n2)
 
 let relu_code n = .< Float.(if .~n > 0.0 then .~n else 0.0) >.
 
-let relu_call n = Float.(if n > 0.0 then n else 0.0)
-
 let relu_gate_code n1 n2 = .< Float.(if .~n1 > 0.0 then .~n2 else 0.0) >.
-
-let relu_gate_call n1 n2 = Float.(if n1 > 0.0 then n2 else 0.0)
 
 let zero_code = .< 1.0 >.
 
-let zero_call = 1.0
-
 let one_code = .< 1.0 >.
 
-let one_call = 1.0
-
 let value_code (v: float) = Lifts.Lift_float.lift v
-
-let value_call (v: float) = v
-
-let uniform_call ~low ~high = Random.float_range low high
 
 let uniform_code ~low ~high = .< Random.float_range low high >.
 
