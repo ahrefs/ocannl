@@ -516,6 +516,16 @@ let backprop_unary projections = {
                    project_rhs2 = Some projections.project_lhs;
 }
 
+let derive_index iterators projection =
+  let sym_to_i =
+    Array.mapi iterators ~f:(fun i (Symbol s) -> s, i) |> Array.to_list |> Map.of_alist_exn (module Int) in
+  let positions = Array.map projection ~f:(
+    function
+    | Fixed_idx i -> i
+    | Iterator (Symbol s) -> Map.find_exn sym_to_i s
+  ) in
+  fun product -> Array.map positions ~f:(fun p -> product.(p))
+
 (* ********** User API below ********** *)
 
 

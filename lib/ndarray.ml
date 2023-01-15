@@ -12,12 +12,38 @@ let dims (arr: t) = A.dims arr
 
 (** Accumulates the results of the operation on [rhs] by adding them into the [lhs]. *)
 let accum_binop_code ~accum ~op ~lhs ~rhs1 ~rhs2 projections =
-  (* FIXME: NOT IMPLEMENTED *)
-  .< ignore (accum, op, .~lhs, .~rhs1, .~rhs2, projections) >.
+  let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
+  let rhs1_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
+  let rhs2_idx = match projections.project_rhs2 with
+    | None -> invalid_arg "accum_binop_code: projections missing project_rhs2"
+    | Some rhs2 -> Shape.(derive_index projections.product_iterators rhs2) in
+  let rec loop rev_iters = function
+  | [] ->
+    let iters = Array.of_list_rev rev_iters in
+    let lhs_idx = Lifts.lift_array @@ lhs_idx iters in
+    let rhs1_idx = Lifts.lift_array @@ rhs1_idx iters in
+    let rhs2_idx = Lifts.lift_array @@ rhs2_idx iters in
+    .< Bigarray.Genarray.set .~lhs .~lhs_idx
+       .~(accum .<Bigarray.Genarray.get .~lhs .~lhs_idx>. @@
+          op .<Bigarray.Genarray.get .~rhs1 .~rhs1_idx>. .<Bigarray.Genarray.get .~rhs2 .~rhs2_idx>. ) >.
+  | dim::product ->
+    .< for i = 0 to .~(Lifts.Lift_int.lift dim) - 1 do .~(loop (.<i>. ::rev_iters) product) done >. in
+  loop [] @@ Array.to_list projections.product_space
 
 let accum_unop_code ~accum ~op ~lhs ~rhs projections =
-  (* FIXME: NOT IMPLEMENTED *)
-  .< ignore (accum, op, .~lhs, .~rhs, projections) >.
+  let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
+  let rhs1_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
+  let rec loop rev_iters = function
+  | [] ->
+    let iters = Array.of_list_rev rev_iters in
+    let lhs_idx = Lifts.lift_array @@ lhs_idx iters in
+    let rhs1_idx = Lifts.lift_array @@ rhs1_idx iters in
+    .< Bigarray.Genarray.set .~lhs .~lhs_idx
+       .~(accum .<Bigarray.Genarray.get .~lhs .~lhs_idx>. @@
+          op .<Bigarray.Genarray.get .~rhs .~rhs1_idx>. ) >.
+  | dim::product ->
+    .< for i = 0 to .~(Lifts.Lift_int.lift dim) - 1 do .~(loop (.<i>. ::rev_iters) product) done >. in
+  loop [] @@ Array.to_list projections.product_space
 
 (** Accumulates the results of the operation on [rhs] by adding them into the [lhs]. *)
 let accum_binop_call ~accum ~op ~lhs ~rhs1 ~rhs2 projections =
