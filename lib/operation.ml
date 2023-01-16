@@ -131,12 +131,15 @@ let sprint_code code =
   s, check
 
 (** We print out up to 5 axes when printing an [Ndarray], as a grid (outer rectangle) of (inner)
-    rectangles, possibly repeated (screens). By default, the inner rectangle has an input and an output
-    axis, and the batch axes are the vertical ones (the outer rectangle and the repetition). *)
+    rectangles, possibly repeated (screens). *)
 type array_print_style =
 [ `Default
-(** Tthe inner rectangles comprise both an input and an output axis, if available; and the screens
-    comprise a batch axis, if available and if there is 5 or more axes. *)
+(** The inner rectangles comprise both an input and an output axis, if available. Even if there are only
+    1, 2 or 3 input plus output axes, the batch axes are only output as the vertical direction of the
+    outer rectangle, and/or the screens. At least one batch axis is output, when available.
+    The outer rectangle comprises both an input and an output axis, when both inputs and outputs have
+    2 or more axes. If there are no input axes, the last two output axes form the inner rectangles.
+    The axes that couldn't be output are printed at position/dimension [0]. *)
 | `N5_layout of string
 (** The string should provide exclusively non-negative integer pseudo-labels. The numbers [0]-[4] represent
     the priorities of the axes to be printed out, where the priorities correspond to, from highest:
@@ -148,7 +151,7 @@ type array_print_style =
     the priorities of the axes to be printed out, where the priorities correspond to, from highest:
     horizontal directions of inner, outer rectangle, verticals directions of inner, outer rectangle,
     repetition (see also [Ndarray.pp_print]). The non-negative numbers stand for the actual positions
-    within the corresponding axes. Unspecified axes will be printed at position [0]. *)
+    within the corresponding axes. Unspecified axes are printed at position [0]. *)
 ]
 
 let print_formula ~with_grad ~with_code (style: array_print_style) m =
@@ -159,14 +162,56 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
   let indices =
     match style with
     | `Default ->
-      [||]
-    | `N5_layout priorities ->
-      let p_labels = Shape.axis_labels_of_spec priorities in
+      let axes = Shape.axis_keys_to_idcs sh |> Map.map ~f:(fun _ -> 0) in
+      let num_inputs_plus_outputs =
+        List.([sh.input; sh.output] |> map ~f:Shape.list_of_dims |> map ~f:length |> reduce_exn ~f:(+)) in
+      let axes = Map.change axes {in_axes=Input; from_end=1} ~f:(Option.map ~f:(fun _ -> -1)) in
+      let axes =
+        if Map.mem axes {in_axes=Input; from_end=1}
+        then Map.change axes {in_axes=Output; from_end=1} ~f:(Option.map ~f:(fun _ -> -3))
+        else Map.change axes {in_axes=Output; from_end=1} ~f:(Option.map ~f:(fun _ -> -1)) in
+      let axes = Map.change axes {in_axes=Input; from_end=2} ~f:(Option.map ~f:(fun _ -> -2)) in
+      let axes =
+        if Map.mem axes {in_axes=Input; from_end=2}
+        then Map.change axes {in_axes=Output; from_end=2} ~f:(Option.map ~f:(fun _ -> -4))
+        else if Map.mem axes {in_axes=Input; from_end=1}
+        then Map.change axes {in_axes=Output; from_end=2} ~f:(Option.map ~f:(fun _ -> -2))
+        else Map.change axes {in_axes=Output; from_end=2} ~f:(Option.map ~f:(fun _ -> -3)) in
+      let remaining = Stack.of_list @@ List.filter ~f:(Map.mem axes) @@
+        Shape.AxisKey.[{in_axes=Output; from_end=3}; {in_axes=Output; from_end=4};
+                       {in_axes=Input; from_end=3}; {in_axes=Input; from_end=4};
+                       {in_axes=Output; from_end=5}; {in_axes=Input; from_end=5}] in
+      let axes =
+        if Stack.is_empty remaining then axes
+        else Map.change axes (Stack.pop_exn remaining) ~f:(Option.map ~f:(fun _ -> -4)) in
+      let axes =
+        if num_inputs_plus_outputs > 3
+        then Map.change axes {in_axes=Batch; from_end=1} ~f:(Option.map ~f:(fun _ -> -5))
+        else Map.change axes {in_axes=Batch; from_end=1} ~f:(Option.map ~f:(fun _ -> -4)) in
+      let axes =
+        if num_inputs_plus_outputs > 3
+        then axes
+        else Map.change axes {in_axes=Batch; from_end=2} ~f:(Option.map ~f:(fun _ -> -5)) in
+      let axes =
+        if Map.mem axes {in_axes=Batch; from_end=1} || Stack.is_empty remaining
+        then axes
+        else Map.change axes (Stack.pop_exn remaining) ~f:(Option.map ~f:(fun _ -> -5)) in
+      Shape.axis_map_to_dims_index axes
       
-       ignore p_labels; [||]
+    | `N5_layout priorities ->
+      let p_labels = Shape.axis_labels_of_spec priorities |> Map.map ~f:(Fn.compose ((-) 5) Int.of_string) in
+      Shape.axis_map_to_dims_index p_labels
+
     | `Label_layout label_idcs ->
-      ignore label_idcs; [||]
-     in
+      let inv_labels = Map.to_alist sh.axis_labels |> List.map ~f:(fun (a,b) -> b,a) |>
+                       Map.of_alist (module String) in
+      let inv_labels = match inv_labels with
+        | `Duplicate_key l -> raise @@ Session_error ("`Label_layout found a repeating label: "^l, Some m)
+        | `Ok inv_labels -> inv_labels in
+      let idcs = List.map label_idcs ~f:(fun (l, i) ->
+        match Map.find inv_labels l with Some axis -> axis, i | None ->
+          raise @@ Session_error ("`Label_layout label not found in shape: "^l, Some m)) in
+      Shape.axis_map_to_dims_index @@ Map.of_alist_exn (module Shape.AxisKey) idcs in
   (* let labels = sh.Shape.axis_labels in *)
   let labels = [||] in
   let screen_stop () =
