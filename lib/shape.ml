@@ -14,7 +14,7 @@ module AxisKey = struct
       | Batch
       | Input
       | Output
-    [@@deriving compare, sexp]
+    [@@deriving compare, sexp, variants]
     type t = {
       in_axes: kind;
       from_end: int
@@ -84,11 +84,10 @@ type t = {
       [deduce_output_from_input=`Preserve]. *)
 } [@@deriving fields, sexp]
 
-let dims_of_kind =
-  let open AxisKey in function
-  | Batch -> batch
-  | Input -> input
-  | Output -> output
+let dims_of_kind = function
+  | AxisKey.Batch -> batch
+  | AxisKey.Input -> input
+  | AxisKey.Output -> output
 
 type compose_type =
   [ `Pointwise
@@ -597,6 +596,28 @@ let axis_keys_to_idcs (sh: t): int axis_map =
   Array.rev_inplace idcs;
   Map.of_alist_exn (module AxisKey) @@ Array.to_list @@ Array.mapi idcs ~f:(fun i key -> key, i)
 
+(** Converts an axes-keyed map into an array of values using the [Shape.to_dims] semantics of axes.
+    If the map is incomplete, the result might be invalid: gaps in the array are filled with an arbitrary
+    one of the provided values. *)
+let axis_map_to_dims_index (type a) (idcs: a axis_map): a array =
+  let _, witness = Map.min_elt_exn idcs in
+  let bch_axes, other = Map.partition_mapi idcs ~f:(
+    fun ~key:{in_axes; _} ~data -> if AxisKey.is_batch in_axes then Either.First data else Either.Second data) in
+  let inp_axes, out_axes = Map.partition_mapi other ~f:(
+    fun ~key:{in_axes; _} ~data -> if AxisKey.is_input in_axes then Either.First data else Either.Second data) in
+  let bch_axes = Map.to_alist bch_axes |> List.map ~f:(fun ({from_end=i; _}, v) -> i, v) in
+  let bch_size = List.fold bch_axes ~init:0 ~f:(fun accu (i,_) -> max i accu) in
+  let bch = Array.create ~len:bch_size witness in
+  List.iter bch_axes ~f:(fun (i,v) -> bch.(bch_size - i) <- v);
+  let inp_axes = Map.to_alist inp_axes |> List.map ~f:(fun ({from_end=i; _}, v) -> i, v) in
+  let inp_size = List.fold inp_axes ~init:0 ~f:(fun accu (i,_) -> max i accu) in
+  let inp = Array.create ~len:inp_size witness in
+  List.iter inp_axes ~f:(fun (i,v) -> inp.(inp_size - i) <- v);
+  let out_axes = Map.to_alist out_axes |> List.map ~f:(fun ({from_end=i; _}, v) -> i, v) in
+  let out_size = List.fold out_axes ~init:0 ~f:(fun accu (i,_) -> max i accu) in
+  let out = Array.create ~len:out_size witness in
+  List.iter out_axes ~f:(fun (i,v) -> out.(out_size - i) <- v);
+ Array.concat [bch; out; inp]
 
 (** Specification of a terminal [Formula.t]'s shape. The [string] occurrences refer to [axis_labels]
     specs. *)
