@@ -95,15 +95,16 @@ type compose_type =
   | `Compose
   (** Compose the outputs of the second shape with the inputs of the first shape, i.e. the shape of
       [fun x -> s1(s2(x))], or [s1 * s2] where [*] is the inner product (e.g. matrix multiply). *)
-  | `Einsum of axis_labels * axis_labels * axis_labels
+  | `Einsum of string * axis_labels * axis_labels * axis_labels
   (** A version of the [einsum] syntax. Note that currently [`Pointwise] and [`Compose] are
       not redundant with [`Einsum], because they enable more shape inference: they do not specify
       the number of axes. The [axis_labels] use pseudo-labels local to the notation, to line up the axes.
-      For [`Einsum (ls1, ls2, ls3)], the symmetric difference / disjunctive union of [ls1] and [ls2]'s
+      For [`Einsum (debug, ls1, ls2, ls3)], the symmetric difference / disjunctive union of [ls1] and [ls2]'s
       pseudo-labels should be equal to [ls3] pseudo-labels.
       
       Currently, we support two variants of the [einsum] syntax: either all the axes are provided,
-      or all input, output axes are provided but none of the batch axes. *)
+      or all input, output axes are provided but none of the batch axes.
+      Note: The "right-hand-side" is on the left! Because of the syntax "rhs=>lhs", "rhs1;rhs2=>lhs". *)
   ]
 
 type transpose_type =
@@ -111,9 +112,10 @@ type transpose_type =
   (** Swaps inputs and outputs of a shape, preserves batch axes. *)
   | `Pointwise
   (** Preserves the shape. *)
-  | `Permute of axis_labels * axis_labels
-  (** [`Permute (ls1, ls2)] is equivalent to [`Einsum (ls1, ls1, ls2)] (also to 
-      [`Einsum (ls1, axis_labels.empty, ls2)] etc.). *)
+  | `Permute of string * axis_labels * axis_labels
+  (** [`Permute (debug, ls1, ls2)] is equivalent to [`Einsum (debug, ls1, ls1, ls2)] (also to 
+      [`Einsum (debug, ls1, axis_labels.empty, ls2)] etc.).
+      Note: The "right-hand-side" is on the left! Because of the syntax "rhs=>lhs", "rhs1;rhs2=>lhs". *)
   ]
 
 (** How to propagate shape updates and do the last update of [Formula.t.shape] when finalizing the formula.
@@ -144,7 +146,7 @@ exception Shape_error of string * t * t [@@deriving sexp]
 let list_of_dims = function
   | Given ls | Fixed ls | Inferred ls -> ls
   | Unknown -> []
-  
+
 (** Given a fully-inferred shape, maps axes to their corresponding positions in an index using the
     [Shape.to_dims] semantics. *)
 let axis_keys_to_idcs (sh: t): int axis_map =
@@ -271,6 +273,7 @@ let propagate_shapes (update: update_step) =
         Inferred (broad_back_dims ~fixed_left:(is_fixed sh1_dims) ~fixed_right:(is_fixed sh2_dims)
                     [] 1 (List.rev dims1, List.rev dims2)) in
   let cur_sh = update.shape in
+  (* Note: does not work with arbitrary permutation as in einsum. *)
   let update_labels sh1 to_kind sh2 from_kind =
     pointwise_labels sh1 sh2 sh1.axis_labels @@
     Map.map_keys_exn (module AxisKey) ~f:(fun k -> {k with in_axes=to_kind}) @@
@@ -284,6 +287,44 @@ let propagate_shapes (update: update_step) =
     | into_dims, from_dims ->
       to_sh.axis_labels <- update_labels to_sh to_kind from_sh from_kind;
       broadcast_dims to_sh from_sh to_kind to_sh.axis_labels into_dims from_dims in
+  let einsum_one_dim_opt debug_spec debug1 debug2 label terms =
+    snd @@
+    List.fold terms ~init:(false, None) ~f:(fun (is_fixed, dim as accu) ((_side, _axis), dims) ->
+      match dim, dims with
+        | _, (Inferred (_::_::_) | Given (_::_::_) | Fixed (_::_::_)) -> assert false
+        | None, Unknown -> assert (not is_fixed); false, None
+        | Some _, Unknown -> accu
+        | None, (Inferred [dim2] | Given [dim2]) -> assert (not is_fixed); false, Some dim2
+        | None, (Fixed [dim2]) -> assert (not is_fixed); true, Some dim2
+        | Some dim1, (Inferred [dim2] | Given [dim2]) when dim1 = dim2 -> accu
+        | Some dim1, (Fixed [dim2]) when dim1 = dim2 -> true, dim
+        | Some 1, (Inferred [dim2] | Given [dim2]) when not is_fixed -> false, Some dim2
+        | Some dim1, (Inferred [dim2] | Given [dim2] | Fixed [dim2]) ->
+          raise @@ Shape_error ("Dimension mismatch "^Int.to_string_hum dim1^" vs. "^
+                                Int.to_string_hum dim2^" for einsum pseudo-label "^label^" of "^debug_spec^
+                                (if dim1 = 1 || dim2 = 1 then " (broadcast prevented)" else ""),
+                                debug1, debug2)
+        | _, Fixed [] ->
+          raise @@ Shape_error ("Too few fixed axes at einsum pseudo-label "^label^" of "^debug_spec^
+                                " (broadcast prevented)", debug1, debug2)
+        | _, (Inferred [] | Given []) when is_fixed ->
+          raise @@ Shape_error ("Too few actual axes at einsum pseudo-label "^label^" of "^debug_spec^
+                                " (broadcast prevented)", debug1, debug2)
+        | _, (Inferred [] | Given []) -> accu
+      ) in
+  let einsum_one_dim debug_spec debug1 debug2 ~key ~data =
+    match einsum_one_dim_opt debug_spec debug1 debug2 key data with
+    | None -> 1
+    | Some dim -> dim in
+  let to_inferred = Fn.compose inferred Array.to_list in
+  let eqs_xhs debug_spec debug_sh ls_xhs sh_xhs =
+    let eqs = Map.merge ls_xhs sh_xhs ~f:(fun ~key:axis -> function
+        | `Both (label, dims) -> Some (label, (axis, dims))
+        | `Left label -> Some (label, (axis, Inferred []))
+        | `Right (Given [] | Fixed [] | Inferred []) -> None
+        | `Right _dims -> raise @@ Shape_error (
+            "Too few axes to permute -- spec too long: "^debug_spec, debug_sh, cur_sh)) in
+    Map.of_alist_multi (module String) @@ Map.data eqs in
   match update.logic with
   | Terminal -> ()
   | Transpose (`Transpose, sh) ->
@@ -302,9 +343,27 @@ let propagate_shapes (update: update_step) =
     sh.output <- broadcast_into sh Output cur_sh Output;
     sh.batch <- broadcast_into sh Batch cur_sh Batch;
 
-  | Transpose (`Permute einsum, sh) -> 
-    (* FIXME: NOT IMPLEMENTED *)
-    ignore (einsum, sh); failwith "Not implemented yet"
+  | Transpose (`Permute (debug, ls_rhs, ls_lhs), sh) -> 
+    let sh_rhs = to_axis_map sh in
+    let sh_lhs = to_axis_map cur_sh in
+    let eqs_rhs = eqs_xhs debug sh ls_rhs sh_rhs in
+    let eqs_lhs = eqs_xhs debug sh ls_lhs sh_lhs in
+    let side_eq side (axis, dims) = (side, axis), dims in
+    let eqs = Map.merge eqs_rhs eqs_lhs ~f:(fun ~key:_label -> function
+        | `Both (rhs, lhs) -> Some (List.rev_map_append rhs ~f:(side_eq `Rhs1) @@ List.map lhs ~f:(side_eq `Lhs))
+        | `Left rhs -> Some (List.map rhs ~f:(side_eq `Rhs1))
+        | `Right lhs -> Some (List.map lhs ~f:(side_eq `Lhs))) in
+    let label_dims = Map.mapi eqs ~f:(einsum_one_dim debug cur_sh sh) in
+    let inferred_lhs = Map.map ls_lhs ~f:(Map.find_exn label_dims) in
+    let b_lhs, i_lhs, o_lhs = axis_map_to_dims_bio inferred_lhs in
+    (if is_inferred cur_sh.batch || is_unknown cur_sh.batch then cur_sh.batch <- to_inferred b_lhs);
+    (if is_inferred cur_sh.input || is_unknown cur_sh.input then cur_sh.input <- to_inferred i_lhs);
+    (if is_inferred cur_sh.output || is_unknown cur_sh.output then cur_sh.output <- to_inferred o_lhs);
+    let inferred_rhs = Map.map ls_rhs ~f:(Map.find_exn label_dims) in
+    let b_rhs, i_rhs, o_rhs = axis_map_to_dims_bio inferred_rhs in
+    (if is_inferred sh.batch || is_unknown sh.batch then sh.batch <- to_inferred b_rhs);
+    (if is_inferred sh.input || is_unknown sh.input then sh.input <- to_inferred i_rhs);
+    (if is_inferred sh.output || is_unknown sh.output then sh.output <- to_inferred o_rhs)
 
   | Broadcast (`Pointwise, sh1, sh2) ->
     let up_labels = pointwise_labels sh1 sh2 sh1.axis_labels sh2.axis_labels in
@@ -362,9 +421,38 @@ let propagate_shapes (update: update_step) =
     if not @@ is_not_deduced sh1.deduce_output_from_input then
       sh1.output <- deduce_dims sh2.input sh1.deduce_output_from_input
 
-  | Broadcast (`Einsum spec, sh1, sh2) ->
-    (* FIXME: NOT IMPLEMENTED *)
-    ignore (spec, sh1, sh2); failwith "Not implemented yet"
+  | Broadcast (`Einsum (debug, ls_rhs1, ls_rhs2, ls_lhs), sh1, sh2) ->
+    let sh_rhs1 = to_axis_map sh1 in
+    let sh_rhs2 = to_axis_map sh2 in
+    let sh_lhs = to_axis_map cur_sh in
+    let eqs_rhs1 = eqs_xhs debug sh1 ls_rhs1 sh_rhs1 in
+    let eqs_rhs2 = eqs_xhs debug sh2 ls_rhs2 sh_rhs2 in
+    let eqs_lhs = eqs_xhs debug sh1 ls_lhs sh_lhs in
+    let side_eq side (axis, dims) = (side, axis), dims in
+    let eqs = Map.merge eqs_rhs1 eqs_lhs ~f:(fun ~key:_label -> function
+        | `Both (rhs, lhs) -> Some (List.rev_map_append rhs ~f:(side_eq `Rhs1) @@ List.map lhs ~f:(side_eq `Lhs))
+        | `Left rhs -> Some (List.map rhs ~f:(side_eq `Rhs1))
+        | `Right lhs -> Some (List.map lhs ~f:(side_eq `Lhs))) in
+    let eqs = Map.merge eqs_rhs2 eqs ~f:(fun ~key:_label -> function
+        | `Both (rhs, more) -> Some (List.rev_map_append rhs ~f:(side_eq `Rhs2) more)
+        | `Left rhs -> Some (List.map rhs ~f:(side_eq `Rhs2))
+        | `Right more -> Some more) in
+    let label_dims = Map.mapi eqs ~f:(einsum_one_dim debug sh1 sh2) in
+    let inferred_lhs = Map.map ls_lhs ~f:(Map.find_exn label_dims) in
+    let b_lhs, i_lhs, o_lhs = axis_map_to_dims_bio inferred_lhs in
+    (if is_inferred cur_sh.batch || is_unknown cur_sh.batch then cur_sh.batch <- to_inferred b_lhs);
+    (if is_inferred cur_sh.input || is_unknown cur_sh.input then cur_sh.input <- to_inferred i_lhs);
+    (if is_inferred cur_sh.output || is_unknown cur_sh.output then cur_sh.output <- to_inferred o_lhs);
+    let inferred_rhs1 = Map.map ls_rhs1 ~f:(Map.find_exn label_dims) in
+    let b_rhs1, i_rhs1, o_rhs1 = axis_map_to_dims_bio inferred_rhs1 in
+    (if is_inferred sh1.batch || is_unknown sh1.batch then sh1.batch <- to_inferred b_rhs1);
+    (if is_inferred sh1.input || is_unknown sh1.input then sh1.input <- to_inferred i_rhs1);
+    (if is_inferred sh1.output || is_unknown sh1.output then sh1.output <- to_inferred o_rhs1);
+    let inferred_rhs2 = Map.map ls_rhs2 ~f:(Map.find_exn label_dims) in
+    let b_rhs2, i_rhs2, o_rhs2 = axis_map_to_dims_bio inferred_rhs2 in
+    (if is_inferred sh2.batch || is_unknown sh2.batch then sh2.batch <- to_inferred b_rhs2);
+    (if is_inferred sh2.input || is_unknown sh2.input then sh2.input <- to_inferred i_rhs2);
+    (if is_inferred sh2.output || is_unknown sh2.output then sh2.output <- to_inferred o_rhs2)
 
 (** Uses the matrix convention of putting the input axes last. *)
 let to_dims (sh: t): int array =
