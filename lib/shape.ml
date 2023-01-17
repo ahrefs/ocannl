@@ -145,6 +145,80 @@ let list_of_dims = function
   | Given ls | Fixed ls | Inferred ls -> ls
   | Unknown -> []
   
+(** Given a fully-inferred shape, maps axes to their corresponding positions in an index using the
+    [Shape.to_dims] semantics. *)
+let axis_keys_to_idcs (sh: t): int axis_map =
+  let b_dims = match sh.batch with
+    | Unknown -> raise @@ Shape_error ("Batch dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims ->
+      (* Enumerate axes backwards. *)
+      Array.of_list_mapi dims ~f:(fun i _ -> AxisKey.{ in_axes=Batch; from_end=i + 1 }) in
+  let i_dims = match sh.input with
+    | Unknown -> raise @@ Shape_error ("Input dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims ->
+      Array.of_list_mapi dims ~f:(fun i _ -> AxisKey.{ in_axes=Input; from_end=i + 1 }) in
+  let o_dims = match sh.output with
+    | Unknown -> raise @@ Shape_error ("Output dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims ->
+      Array.of_list_mapi dims ~f:(fun i _ -> AxisKey.{ in_axes=Output; from_end=i + 1 }) in
+  let idcs = Array.concat [i_dims; o_dims; b_dims] in
+  Array.rev_inplace idcs;
+  Map.of_alist_exn (module AxisKey) @@ Array.to_list @@ Array.mapi idcs ~f:(fun i key -> key, i)
+
+(** Converts an axes-keyed map into three arrays of values: batch axes, input axes, output axes.
+    If the map is incomplete, the result might be invalid: gaps in the array are filled with an arbitrary
+    one of the provided values. *)
+let axis_map_to_dims_bio (type a) (idcs: a axis_map) =
+  let _, witness = Map.min_elt_exn idcs in
+  let bch_axes, other = Map.partition_mapi idcs ~f:(
+    fun ~key:{in_axes; _} ~data -> if AxisKey.is_batch in_axes then Either.First data else Either.Second data) in
+  let inp_axes, out_axes = Map.partition_mapi other ~f:(
+    fun ~key:{in_axes; _} ~data -> if AxisKey.is_input in_axes then Either.First data else Either.Second data) in
+  let bch_axes = Map.to_alist bch_axes |> List.map ~f:(fun ({from_end=i; _}, v) -> i, v) in
+  let bch_size = List.fold bch_axes ~init:0 ~f:(fun accu (i,_) -> max i accu) in
+  let bch = Array.create ~len:bch_size witness in
+  List.iter bch_axes ~f:(fun (i,v) -> bch.(bch_size - i) <- v);
+  let inp_axes = Map.to_alist inp_axes |> List.map ~f:(fun ({from_end=i; _}, v) -> i, v) in
+  let inp_size = List.fold inp_axes ~init:0 ~f:(fun accu (i,_) -> max i accu) in
+  let inp = Array.create ~len:inp_size witness in
+  List.iter inp_axes ~f:(fun (i,v) -> inp.(inp_size - i) <- v);
+  let out_axes = Map.to_alist out_axes |> List.map ~f:(fun ({from_end=i; _}, v) -> i, v) in
+  let out_size = List.fold out_axes ~init:0 ~f:(fun accu (i,_) -> max i accu) in
+  let out = Array.create ~len:out_size witness in
+  List.iter out_axes ~f:(fun (i,v) -> out.(out_size - i) <- v);
+ bch, inp, out
+
+(** Converts an axes-keyed map into an array of values using the [Shape.to_dims] semantics of axes.
+    If the map is incomplete, the result might be invalid: gaps in the array are filled with an arbitrary
+    one of the provided values. *)
+let axis_map_to_dims_index (type a) (idcs: a axis_map): a array =
+  let bch, inp, out = axis_map_to_dims_bio idcs in
+  Array.concat [bch; out; inp]
+
+(** Splits the dimensions of a shape into a map from axes, putting at most one number in a [dims] of
+    an axis. An empty [dims] list is an end-of-list sentinel: means that there are one fewer axes
+    of the particular kind. *)
+let to_axis_map (sh: t): dims axis_map =
+  let kind_dims kind = match dims_of_kind kind sh with
+    | Unknown ->
+      [AxisKey.{ in_axes=kind; from_end=1 }, Unknown]
+    | Inferred dims ->
+      let n_dims = List.length dims in
+      (AxisKey.{ in_axes=kind; from_end=n_dims + 1 }, Inferred [])::
+      List.rev_mapi dims ~f:(fun i d -> AxisKey.{ in_axes=kind; from_end=n_dims - i }, Inferred [d])
+    | Given dims ->
+      let n_dims = List.length dims in
+      (AxisKey.{ in_axes=kind; from_end=n_dims + 1 }, Given [])::
+      List.rev_mapi dims ~f:(fun i d -> AxisKey.{ in_axes=kind; from_end=n_dims - i }, Given [d])
+    | Fixed dims ->
+      let n_dims = List.length dims in
+      (AxisKey.{ in_axes=kind; from_end=n_dims + 1 }, Fixed [])::
+      List.rev_mapi dims ~f:(fun i d -> AxisKey.{ in_axes=kind; from_end=n_dims - i }, Fixed [d]) in
+  let b_dims = kind_dims Batch in
+  let i_dims = kind_dims Input in
+  let o_dims = kind_dims Output in
+  Map.of_alist_exn (module AxisKey) @@ List.concat [b_dims; i_dims; o_dims]
+
 (* Design choice: tensor shapes are decided while code is constructed, although not immediately.
    Due to mutable updates during shape inference, it is not possible to reuse the same formula with
    different shapes. The inference is finalized by invoking the [Formula.subtree_shape_updates] once
@@ -575,49 +649,6 @@ let axis_labels_of_spec spec: axis_labels =
     | _ -> assert false
 
   (* TODO: implement [einsum_of_spec] using a ["spec;spec=>spec"] syntax. *)
-
-(** Given a fully-inferred shape, maps axes to their corresponding positions in an index using the
-    [Shape.to_dims] semantics. *)
-let axis_keys_to_idcs (sh: t): int axis_map =
-  let b_dims = match sh.batch with
-    | Unknown -> raise @@ Shape_error ("Batch dimensions still unknown", sh, sh)
-    | Inferred dims | Given dims | Fixed dims ->
-      (* Enumerate axes backwards. *)
-      Array.of_list_mapi dims ~f:(fun i _ -> AxisKey.{ in_axes=Batch; from_end=i + 1 }) in
-  let i_dims = match sh.input with
-    | Unknown -> raise @@ Shape_error ("Input dimensions still unknown", sh, sh)
-    | Inferred dims | Given dims | Fixed dims ->
-      Array.of_list_mapi dims ~f:(fun i _ -> AxisKey.{ in_axes=Input; from_end=i + 1 }) in
-  let o_dims = match sh.output with
-    | Unknown -> raise @@ Shape_error ("Output dimensions still unknown", sh, sh)
-    | Inferred dims | Given dims | Fixed dims ->
-      Array.of_list_mapi dims ~f:(fun i _ -> AxisKey.{ in_axes=Output; from_end=i + 1 }) in
-  let idcs = Array.concat [i_dims; o_dims; b_dims] in
-  Array.rev_inplace idcs;
-  Map.of_alist_exn (module AxisKey) @@ Array.to_list @@ Array.mapi idcs ~f:(fun i key -> key, i)
-
-(** Converts an axes-keyed map into an array of values using the [Shape.to_dims] semantics of axes.
-    If the map is incomplete, the result might be invalid: gaps in the array are filled with an arbitrary
-    one of the provided values. *)
-let axis_map_to_dims_index (type a) (idcs: a axis_map): a array =
-  let _, witness = Map.min_elt_exn idcs in
-  let bch_axes, other = Map.partition_mapi idcs ~f:(
-    fun ~key:{in_axes; _} ~data -> if AxisKey.is_batch in_axes then Either.First data else Either.Second data) in
-  let inp_axes, out_axes = Map.partition_mapi other ~f:(
-    fun ~key:{in_axes; _} ~data -> if AxisKey.is_input in_axes then Either.First data else Either.Second data) in
-  let bch_axes = Map.to_alist bch_axes |> List.map ~f:(fun ({from_end=i; _}, v) -> i, v) in
-  let bch_size = List.fold bch_axes ~init:0 ~f:(fun accu (i,_) -> max i accu) in
-  let bch = Array.create ~len:bch_size witness in
-  List.iter bch_axes ~f:(fun (i,v) -> bch.(bch_size - i) <- v);
-  let inp_axes = Map.to_alist inp_axes |> List.map ~f:(fun ({from_end=i; _}, v) -> i, v) in
-  let inp_size = List.fold inp_axes ~init:0 ~f:(fun accu (i,_) -> max i accu) in
-  let inp = Array.create ~len:inp_size witness in
-  List.iter inp_axes ~f:(fun (i,v) -> inp.(inp_size - i) <- v);
-  let out_axes = Map.to_alist out_axes |> List.map ~f:(fun ({from_end=i; _}, v) -> i, v) in
-  let out_size = List.fold out_axes ~init:0 ~f:(fun accu (i,_) -> max i accu) in
-  let out = Array.create ~len:out_size witness in
-  List.iter out_axes ~f:(fun (i,v) -> out.(out_size - i) <- v);
- Array.concat [bch; out; inp]
 
 (** Specification of a terminal [Formula.t]'s shape. The [string] occurrences refer to [axis_labels]
     specs. *)
