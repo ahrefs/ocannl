@@ -69,16 +69,19 @@ let stop_gradient =
   let grad_body ~n1g:_ ~ng:_ ~nv:_ ~n1v:_ _projections = .< () >. in
   unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign ~grad_body
 
-(** A [stop_broadcast] is an identity in both forward and backprop passes, which substitutes-in
-    a [Fixed] copy of the shape of the input. *)
+(** A [stop_broadcast] mutates the partially-inferred shape of a formula in-place, substituting-in
+    a [Fixed] marker on the dimensions. This way we avoid introducing a new node. *)
 let stop_broadcast m =
   let sh = m.shape in
-  let init_shape = Shape.{
-     batch=Fixed (list_of_dims sh.batch);
-     input=Fixed (list_of_dims sh.input); output=Fixed (list_of_dims sh.input);
-     axis_labels=sh.axis_labels; deduce_output_from_input=`Not_deduced } in
+  sh.batch <- Fixed (list_of_dims sh.batch);
+  sh.batch <- Fixed (list_of_dims sh.batch);
+  sh.batch <- Fixed (list_of_dims sh.batch);
+  m
+    
+(** [identity] introduces a new node, which is an identity in both the forward and backward pass. *)
+let identity m =
   let grad_body ~n1g ~ng ~nv:_ ~n1v:_ projections = assign ~nv:n1g ~n1v:ng projections in
-  unop ~init_shape ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign ~grad_body
+  unop ~init_shape:m.shape ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign ~grad_body
     
 module O = struct
   let ( * ) = matmul
