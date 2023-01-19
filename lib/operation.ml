@@ -15,7 +15,7 @@ let add =
   >. in
   binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
-let mul ~compose_op =
+let mul compose_op =
   let op_body ~nv ~n1v ~n2v projections =
     Ndarray.(accum_binop_code ~accum:skip_arg_code ~op:mul_code ~lhs:nv ~rhs1:n1v ~rhs2:n2v projections) in
   let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v projections = .<
@@ -26,7 +26,7 @@ let mul ~compose_op =
   >. in
   binop ~compose_op ~op_label:"" ~op_body ~grad_body
 
-let pointmul = mul ~compose_op:`Pointwise
+let pointmul = mul `Pointwise
 
 (* N1: AxB, N2 BxC, N: AxC, A: output of N1, B: input/output of N1/N2, C: input of N2.
    Although the matrix algebra would require that we insert additional transposes in gradient multiplies:
@@ -35,7 +35,21 @@ let pointmul = mul ~compose_op:`Pointwise
    in our setup there is no transposing to do, since the projections produce correct indices for their
    corresponding matrices. *)
 
-let matmul = mul ~compose_op:`Compose
+let matmul = mul `Compose
+
+let einsum spec =
+  let op_body ~nv ~n1v ~n2v projections =
+    Ndarray.(accum_binop_code ~zero_out:true ~accum:add_code ~op:mul_code ~lhs:nv ~rhs1:n1v ~rhs2:n2v
+               projections) in
+  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v projections = .<
+    .~(Ndarray.(accum_binop_code ~accum:add_code ~op:mul_code ~lhs:n1g ~rhs1:ng ~rhs2:n2v @@
+                Shape.backprop1 projections));
+    .~(Ndarray.(accum_binop_code ~accum:add_code ~op:mul_code ~lhs:n2g ~rhs1:ng ~rhs2:n1v @@
+                Shape.backprop2 projections))
+  >. in
+  binop ~compose_op:(`Einsum spec) ~op_label:"" ~op_body ~grad_body
+
+(* TODO: implement [einsum1], the unary case. *)
 
 let relu =
   let op_body ~nv ~n1v projections =
