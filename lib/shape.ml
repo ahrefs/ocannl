@@ -95,16 +95,17 @@ type compose_type =
   | `Compose
   (** Compose the outputs of the second shape with the inputs of the first shape, i.e. the shape of
       [fun x -> s1(s2(x))], or [s1 * s2] where [*] is the inner product (e.g. matrix multiply). *)
-  | `Einsum of string * axis_labels * axis_labels * axis_labels
-  (** A version of the [einsum] syntax. Note that currently [`Pointwise] and [`Compose] are
-      not redundant with [`Einsum], because they enable more shape inference: they do not specify
-      the number of axes. The [axis_labels] use pseudo-labels local to the notation, to line up the axes.
-      For [`Einsum (debug, ls1, ls2, ls3)], the symmetric difference / disjunctive union of [ls1] and [ls2]'s
+  | `Einsum of string
+  (** The [einsum] syntax: LABELS1;LABELS2=>LABELS3, where LABELSi are labels specifications.
+      Note that currently [`Pointwise] and [`Compose] are not redundant with [`Einsum], because they
+      enable more shape inference: they do not specify the number of axes. The [axis_labels] use
+      pseudo-labels local to the notation, to line up the axes.
+      For [`Einsum (ls1^";"^ls2^"=>"^ls3)], the symmetric difference / disjunctive union of [ls1] and [ls2]'s
       pseudo-labels should be equal to [ls3] pseudo-labels.
       
       Currently, we support two variants of the [einsum] syntax: either all the axes are provided,
       or all input, output axes are provided but none of the batch axes.
-      Note: The "right-hand-side" is on the left! Because of the syntax "rhs=>lhs", "rhs1;rhs2=>lhs". *)
+      Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
   ]
 
 type transpose_type =
@@ -112,11 +113,68 @@ type transpose_type =
   (** Swaps inputs and outputs of a shape, preserves batch axes. *)
   | `Pointwise
   (** Preserves the shape. *)
-  | `Permute of string * axis_labels * axis_labels
-  (** [`Permute (debug, ls1, ls2)] is equivalent to [`Einsum (debug, ls1, ls1, ls2)] (also to 
-      [`Einsum (debug, ls1, axis_labels.empty, ls2)] etc.).
-      Note: The "right-hand-side" is on the left! Because of the syntax "rhs=>lhs", "rhs1;rhs2=>lhs". *)
+  | `Permute of string
+  (** [`Permute (ls1^"=>"^ls2)] is a variant of the [einsum] syntax [`Einsum (ls1^";"^ls1^"=>"^ls2)].
+      Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
   ]
+
+(** Parses a labels specification.
+
+  * If [spec] contains any of: [' '; ','; '('; ')'], these characters are used as label separators.
+    Otherwise, every character is a label.
+  * If [spec] does not contain ["|"] nor ["->"], each label is of the kind [Output].
+  * If [spec] doesn't contain ["|"], labels to the left of ["->"] are [Input] and to the right [Output].
+  * Labels to the left of ["|"] are [Batch], and between ["|"] and ["->"] are [Input]. *)
+let axis_labels_of_spec spec: axis_labels =
+  let parse spec in_axes =
+    if List.exists ~f:(String.contains spec) [' '; ','; '('; ')'] then
+      let labels = String.split_on_chars spec ~on:[' '; ','; '('; ')'] |>
+                   List.filter ~f:(fun s -> not @@ String.is_empty s) in
+      let labels_num = List.length labels in
+      List.foldi labels ~init:(Map.empty (module AxisKey))
+        ~f:(fun from_start labels label -> Map.add_exn labels 
+               ~key:AxisKey.{in_axes; from_end=labels_num - from_start} ~data:label)
+    else
+      String.foldi spec ~init:(Map.empty (module AxisKey))
+        ~f:(fun from_start labels label -> Map.add_exn labels 
+               ~key:AxisKey.{in_axes; from_end=String.length spec - from_start}
+               ~data:(String.of_char label)) in
+  let batch_spec, spec =
+    match String.substr_index spec ~pattern:"|" with
+    | Some end_bch -> String.sub ~pos:0 ~len:end_bch spec,
+                      String.sub ~pos:(end_bch+1) ~len:(String.length spec - end_bch - 1) spec
+    | None -> "", spec in
+  let input_spec, output_spec =
+    match String.substr_index spec ~pattern:"->" with
+    | Some end_inp -> String.sub ~pos:0 ~len:end_inp spec,
+                      String.sub ~pos:(end_inp+2) ~len:(String.length spec - end_inp - 2) spec
+    | None -> "", spec in
+  let batch_labels = parse batch_spec Batch in
+  let input_labels = parse input_spec Input in
+  let output_labels = parse output_spec Output in
+  match Map.append ~lower_part:input_labels ~upper_part:output_labels with
+  | `Ok m -> (match Map.append ~lower_part:batch_labels ~upper_part:m with `Ok r -> r | _ -> assert false)
+  | _ -> assert false
+
+let einsum_of_spec spec =
+  let rhs_spec, lhs_spec =
+    match String.substr_index spec ~pattern:"=>" with
+    | Some endp -> String.sub ~pos:0 ~len:endp spec,
+                      String.sub ~pos:(endp+2) ~len:(String.length spec - endp - 2) spec
+    | None -> "", spec in
+  (if String.is_empty lhs_spec then invalid_arg (
+    "einsum_of_spec: missing the result spec in "^rhs_spec));
+  (if String.is_empty rhs_spec then invalid_arg (
+    "einsum_of_spec: missing the argument spec in "^rhs_spec));
+  let rhs1_spec, rhs2_spec =
+    match String.substr_index spec ~pattern:"|" with
+    | Some endp -> String.sub ~pos:0 ~len:endp spec,
+                      String.sub ~pos:(endp+1) ~len:(String.length spec - endp - 1) spec
+    | None -> spec, "" in
+  let lhs_ls = axis_labels_of_spec lhs_spec in
+  let rhs1_ls = axis_labels_of_spec rhs1_spec in
+  if String.is_empty rhs2_spec then `Permute (rhs1_ls, lhs_ls)
+  else `Einsum (rhs1_ls, axis_labels_of_spec rhs2_spec, lhs_ls) 
 
 (** How to propagate shape updates and do the last update of [Formula.t.shape] when finalizing the formula.
     Axes are broadcast-expanded on a bottom-up update to fit the incoming shape. *)
@@ -343,17 +401,20 @@ let propagate_shapes (update: update_step) =
     sh.output <- broadcast_into sh Output cur_sh Output;
     sh.batch <- broadcast_into sh Batch cur_sh Batch;
 
-  | Transpose (`Permute (debug, ls_rhs, ls_lhs), sh) -> 
+  | Transpose (`Permute spec, sh) ->
+    let ls_rhs, ls_lhs = match einsum_of_spec spec with
+    | `Permute (ls_rhs, ls_lhs) -> ls_rhs, ls_lhs
+    | _ -> raise @@ Shape_error ("Invalid permutation (single-argument einsum) spec: "^spec, sh, cur_sh) in
     let sh_rhs = to_axis_map sh in
     let sh_lhs = to_axis_map cur_sh in
-    let eqs_rhs = eqs_xhs debug sh ls_rhs sh_rhs in
-    let eqs_lhs = eqs_xhs debug sh ls_lhs sh_lhs in
+    let eqs_rhs = eqs_xhs spec sh ls_rhs sh_rhs in
+    let eqs_lhs = eqs_xhs spec sh ls_lhs sh_lhs in
     let side_eq side (axis, dims) = (side, axis), dims in
     let eqs = Map.merge eqs_rhs eqs_lhs ~f:(fun ~key:_label -> function
         | `Both (rhs, lhs) -> Some (List.rev_map_append rhs ~f:(side_eq `Rhs1) @@ List.map lhs ~f:(side_eq `Lhs))
         | `Left rhs -> Some (List.map rhs ~f:(side_eq `Rhs1))
         | `Right lhs -> Some (List.map lhs ~f:(side_eq `Lhs))) in
-    let label_dims = Map.mapi eqs ~f:(einsum_one_dim debug cur_sh sh) in
+    let label_dims = Map.mapi eqs ~f:(einsum_one_dim spec cur_sh sh) in
     let inferred_lhs = Map.map ls_lhs ~f:(Map.find_exn label_dims) in
     let b_lhs, i_lhs, o_lhs = axis_map_to_dims_bio inferred_lhs in
     (if is_inferred cur_sh.batch || is_unknown cur_sh.batch then cur_sh.batch <- to_inferred b_lhs);
@@ -421,13 +482,16 @@ let propagate_shapes (update: update_step) =
     if not @@ is_not_deduced sh1.deduce_output_from_input then
       sh1.output <- deduce_dims sh2.input sh1.deduce_output_from_input
 
-  | Broadcast (`Einsum (debug, ls_rhs1, ls_rhs2, ls_lhs), sh1, sh2) ->
+  | Broadcast (`Einsum spec, sh1, sh2) ->
+    let ls_rhs1, ls_rhs2, ls_lhs = match einsum_of_spec spec with
+    | `Einsum (ls_rhs1, ls_rhs2, ls_lhs) -> ls_rhs1, ls_rhs2, ls_lhs
+    | _ -> raise @@ Shape_error ("Invalid (two-argument) einsum spec: "^spec, sh1, sh2) in
     let sh_rhs1 = to_axis_map sh1 in
     let sh_rhs2 = to_axis_map sh2 in
     let sh_lhs = to_axis_map cur_sh in
-    let eqs_rhs1 = eqs_xhs debug sh1 ls_rhs1 sh_rhs1 in
-    let eqs_rhs2 = eqs_xhs debug sh2 ls_rhs2 sh_rhs2 in
-    let eqs_lhs = eqs_xhs debug sh1 ls_lhs sh_lhs in
+    let eqs_rhs1 = eqs_xhs spec sh1 ls_rhs1 sh_rhs1 in
+    let eqs_rhs2 = eqs_xhs spec sh2 ls_rhs2 sh_rhs2 in
+    let eqs_lhs = eqs_xhs spec sh1 ls_lhs sh_lhs in
     let side_eq side (axis, dims) = (side, axis), dims in
     let eqs = Map.merge eqs_rhs1 eqs_lhs ~f:(fun ~key:_label -> function
         | `Both (rhs, lhs) -> Some (List.rev_map_append rhs ~f:(side_eq `Rhs1) @@ List.map lhs ~f:(side_eq `Lhs))
@@ -437,7 +501,7 @@ let propagate_shapes (update: update_step) =
         | `Both (rhs, more) -> Some (List.rev_map_append rhs ~f:(side_eq `Rhs2) more)
         | `Left rhs -> Some (List.map rhs ~f:(side_eq `Rhs2))
         | `Right more -> Some more) in
-    let label_dims = Map.mapi eqs ~f:(einsum_one_dim debug sh1 sh2) in
+    let label_dims = Map.mapi eqs ~f:(einsum_one_dim spec sh1 sh2) in
     let inferred_lhs = Map.map ls_lhs ~f:(Map.find_exn label_dims) in
     let b_lhs, i_lhs, o_lhs = axis_map_to_dims_bio inferred_lhs in
     (if is_inferred cur_sh.batch || is_unknown cur_sh.batch then cur_sh.batch <- to_inferred b_lhs);
@@ -619,7 +683,10 @@ let derive_projections (shapes: update_step) : projections =
       Array.of_list @@ List.concat [rhs_batch; rhs_output; rhs_input] in    
     { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 = None }
 
-  | Transpose (`Permute (_debug, ls_rhs, ls_lhs), sh) ->
+  | Transpose (`Permute spec, sh) ->
+    let ls_rhs, ls_lhs = match einsum_of_spec spec with
+    | `Permute (ls_rhs, ls_lhs) -> ls_rhs, ls_lhs
+    | _ -> raise @@ Shape_error ("Invalid permutation (single-argument einsum) spec: "^spec, sh, cur_sh) in
     (* For einsum the product_space is precisely one-axis-per-label. *)
     let sh_rhs = to_axis_map sh in
     let sh_lhs = to_axis_map cur_sh in
@@ -727,7 +794,10 @@ let derive_projections (shapes: update_step) : projections =
       Some (Array.of_list @@ List.concat [rhs2_batch; rhs2_output; rhs2_input]) in    
     { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
 
-  | Broadcast (`Einsum (_debug, ls_rhs1, ls_rhs2, ls_lhs), sh1, sh2) ->
+  | Broadcast (`Einsum spec, sh1, sh2) ->
+    let ls_rhs1, ls_rhs2, ls_lhs = match einsum_of_spec spec with
+    | `Einsum (ls_rhs1, ls_rhs2, ls_lhs) -> ls_rhs1, ls_rhs2, ls_lhs
+    | _ -> raise @@ Shape_error ("Invalid (two-argument) einsum spec: "^spec, sh1, sh2) in
     (* For einsum the product_space is precisely one-axis-per-label. *)
     let sh_rhs1 = to_axis_map sh1 in
     let sh_rhs2 = to_axis_map sh2 in
@@ -806,49 +876,6 @@ let derive_index iterators projection =
     | Iterator (Symbol s) -> Map.find_exn sym_to_i s
   ) in
   fun product -> Array.map positions ~f:(fun p -> product.(p))
-
-(* ********** User API below ********** *)
-
-
-(** Parses a labels specification.
-
-    * If [spec] contains any of: [' '; ','; '('; ')'], these characters are used as label separators.
-    Otherwise, every character is a label.
-    * If [spec] does not contain ["|"] nor ["->"], each label is of the kind [Output].
-    * If [spec] doesn't contain ["|"], labels to the left of ["->"] are [Input] and to the right [Output].
-    * Labels to the left of ["|"] are [Batch], and between ["|"] and ["->"] are [Input]. *)
-let axis_labels_of_spec spec: axis_labels =
-  let parse spec in_axes =
-    if List.exists ~f:(String.contains spec) [' '; ','; '('; ')'] then
-      let labels = String.split_on_chars spec ~on:[' '; ','; '('; ')'] |>
-                   List.filter ~f:(fun s -> not @@ String.is_empty s) in
-      let labels_num = List.length labels in
-      List.foldi labels ~init:(Map.empty (module AxisKey))
-        ~f:(fun from_start labels label -> Map.add_exn labels 
-               ~key:AxisKey.{in_axes; from_end=labels_num - from_start} ~data:label)
-    else
-      String.foldi spec ~init:(Map.empty (module AxisKey))
-        ~f:(fun from_start labels label -> Map.add_exn labels 
-               ~key:AxisKey.{in_axes; from_end=String.length spec - from_start}
-               ~data:(String.of_char label)) in
-  let batch_spec, spec =
-    match String.substr_index spec ~pattern:"|" with
-    | Some end_bch -> String.sub ~pos:0 ~len:end_bch spec,
-                      String.sub ~pos:(end_bch+1) ~len:(String.length spec - end_bch - 1) spec
-    | None -> "", spec in
-  let input_spec, output_spec =
-    match String.substr_index spec ~pattern:"->" with
-    | Some end_inp -> String.sub ~pos:0 ~len:end_inp spec,
-                      String.sub ~pos:(end_inp+2) ~len:(String.length spec - end_inp - 2) spec
-    | None -> "", spec in
-  let batch_labels = parse batch_spec Batch in
-  let input_labels = parse input_spec Input in
-  let output_labels = parse output_spec Output in
-  match Map.append ~lower_part:input_labels ~upper_part:output_labels with
-  | `Ok m -> (match Map.append ~lower_part:batch_labels ~upper_part:m with `Ok r -> r | _ -> assert false)
-  | _ -> assert false
-
-  (* TODO: implement [einsum_of_spec] using a ["spec;spec=>spec"] syntax. *)
 
 (** Specification of a terminal [Formula.t]'s shape. The [string] occurrences refer to [axis_labels]
     specs. *)
