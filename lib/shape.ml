@@ -571,7 +571,6 @@ let derive_projections (shapes: update_step) : projections =
 
   (* For binary cases, we cannot rely on [cur_sh] containing all axes, since in principle it could
      have been restricted by an initial [Given] setting to efficiently implement map-reduce. *)
-  (* TODO: we can trivially derive iters_x from product_x, simplify broadcast_dims. *)
   match shapes.logic with
   | Terminal -> terminal_projections cur_sh
   | Transpose (`Transpose, sh) ->
@@ -819,35 +818,35 @@ let derive_index iterators projection =
     * If [spec] doesn't contain ["|"], labels to the left of ["->"] are [Input] and to the right [Output].
     * Labels to the left of ["|"] are [Batch], and between ["|"] and ["->"] are [Input]. *)
 let axis_labels_of_spec spec: axis_labels =
-  if List.exists ~f:(String.contains spec) [' '; ','; '('; ')'] then
-    (* FIXME: NOT IMPLEMENTED *)
-    failwith "Multicharacter axis labels are not implemented yet"
-  else
-    let batch_spec, spec =
-      match String.substr_index spec ~pattern:"|" with
-      | Some end_bch -> String.sub ~pos:0 ~len:end_bch spec,
-                        String.sub ~pos:(end_bch+1) ~len:(String.length spec - end_bch - 1) spec
-      | None -> "", spec in
-    let input_spec, output_spec =
-      match String.substr_index spec ~pattern:"->" with
-      | Some end_inp -> String.sub ~pos:0 ~len:end_inp spec,
-                        String.sub ~pos:(end_inp+2) ~len:(String.length spec - end_inp - 2) spec
-      | None -> "", spec in
-    let batch_labels = String.foldi batch_spec ~init:(Map.empty (module AxisKey))
+  let parse spec in_axes =
+    if List.exists ~f:(String.contains spec) [' '; ','; '('; ')'] then
+      let labels = String.split_on_chars spec ~on:[' '; ','; '('; ')'] |>
+                   List.filter ~f:(fun s -> not @@ String.is_empty s) in
+      let labels_num = List.length labels in
+      List.foldi labels ~init:(Map.empty (module AxisKey))
         ~f:(fun from_start labels label -> Map.add_exn labels 
-               ~key:AxisKey.{in_axes=Batch; from_end=String.length batch_spec - from_start}
-               ~data:(String.of_char label)) in
-    let input_labels = String.foldi input_spec ~init:(Map.empty (module AxisKey))
+               ~key:AxisKey.{in_axes; from_end=labels_num - from_start} ~data:label)
+    else
+      String.foldi spec ~init:(Map.empty (module AxisKey))
         ~f:(fun from_start labels label -> Map.add_exn labels 
-               ~key:AxisKey.{in_axes=Input; from_end=String.length input_spec - from_start}
+               ~key:AxisKey.{in_axes; from_end=String.length spec - from_start}
                ~data:(String.of_char label)) in
-    let output_labels = String.foldi output_spec ~init:(Map.empty (module AxisKey))
-        ~f:(fun from_start labels label -> Map.add_exn labels 
-               ~key:AxisKey.{in_axes=Output; from_end=String.length output_spec - from_start}
-               ~data:(String.of_char label)) in
-    match Map.append ~lower_part:input_labels ~upper_part:output_labels with
-    | `Ok m -> (match Map.append ~lower_part:batch_labels ~upper_part:m with `Ok r -> r | _ -> assert false)
-    | _ -> assert false
+  let batch_spec, spec =
+    match String.substr_index spec ~pattern:"|" with
+    | Some end_bch -> String.sub ~pos:0 ~len:end_bch spec,
+                      String.sub ~pos:(end_bch+1) ~len:(String.length spec - end_bch - 1) spec
+    | None -> "", spec in
+  let input_spec, output_spec =
+    match String.substr_index spec ~pattern:"->" with
+    | Some end_inp -> String.sub ~pos:0 ~len:end_inp spec,
+                      String.sub ~pos:(end_inp+2) ~len:(String.length spec - end_inp - 2) spec
+    | None -> "", spec in
+  let batch_labels = parse batch_spec Batch in
+  let input_labels = parse input_spec Input in
+  let output_labels = parse output_spec Output in
+  match Map.append ~lower_part:input_labels ~upper_part:output_labels with
+  | `Ok m -> (match Map.append ~lower_part:batch_labels ~upper_part:m with `Ok r -> r | _ -> assert false)
+  | _ -> assert false
 
   (* TODO: implement [einsum_of_spec] using a ["spec;spec=>spec"] syntax. *)
 
