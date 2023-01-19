@@ -73,9 +73,9 @@ let stop_gradient =
     a [Fixed] marker on the dimensions. This way we avoid introducing a new node. *)
 let stop_broadcast m =
   let sh = m.shape in
-  sh.batch <- Fixed (list_of_dims sh.batch);
-  sh.batch <- Fixed (list_of_dims sh.batch);
-  sh.batch <- Fixed (list_of_dims sh.batch);
+  sh.batch <- Fixed (Shape.list_of_dims sh.batch);
+  sh.batch <- Fixed (Shape.list_of_dims sh.batch);
+  sh.batch <- Fixed (Shape.list_of_dims sh.batch);
   m
     
 (** [identity] introduces a new node, which is an identity in both the forward and backward pass. *)
