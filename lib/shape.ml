@@ -314,7 +314,7 @@ let propagate_shapes (update: update_step) =
       ) in
   let einsum_one_dim debug_spec debug1 debug2 ~key ~data =
     match einsum_one_dim_opt debug_spec debug1 debug2 key data with
-    | None -> 1
+    | None -> 1 (* which can still be expanded/broadcasted *)
     | Some dim -> dim in
   let to_inferred = Fn.compose inferred Array.to_list in
   let eqs_xhs debug_spec debug_sh ls_xhs sh_xhs =
@@ -556,8 +556,30 @@ let derive_projections (shapes: update_step) : projections =
   let broadcast_into product_idcs sh1 kind1 sh2 kind2 =
     broadcast_into_dims product_idcs (dims_of_kind kind1 sh1) (dims_of_kind kind2 sh2) in
   let cur_sh = shapes.shape in
+  let einsum_one_dim terms =
+    List.fold terms ~init:1 ~f:(fun dim ((_side, _axis), dims) ->
+      match dims with
+        | Unknown -> dim
+        | Inferred [dim2] | Given [dim2] | Fixed [dim2] when dim = dim2 -> dim
+        | Inferred [dim2] | Given [dim2] | Fixed [dim2] when dim = 1 -> dim2
+        | Inferred [] | Given [] | Fixed [] -> dim
+        | _ -> assert false
+      ) in
+  let map_with_dims dims idcs ~f =
+    let rdims = List.rev @@ list_of_dims dims in
+    let ridcs = List.take (Array.to_list @@ Array.rev idcs) @@ List.length rdims in
+    List.rev @@ List.map2_exn rdims ridcs ~f in
+  let eqs_xhs ls_xhs sh_xhs =
+    let eqs = Map.merge ls_xhs sh_xhs ~f:(fun ~key:axis -> function
+        | `Both (label, dims) -> Some (label, (axis, dims))
+        | `Left label -> Some (label, (axis, Inferred []))
+        | `Right (Given [] | Fixed [] | Inferred []) -> None
+        | `Right _dims -> assert false) in
+    Map.of_alist_multi (module String) @@ Map.data eqs in
+
   (* For binary cases, we cannot rely on [cur_sh] containing all axes, since in principle it could
      have been restricted by an initial [Given] setting to efficiently implement map-reduce. *)
+  (* TODO: we can trivially derive iters_x from product_x, simplify broadcast_dims. *)
   match shapes.logic with
   | Terminal -> terminal_projections cur_sh
   | Transpose (`Transpose, sh) ->
@@ -599,10 +621,45 @@ let derive_projections (shapes: update_step) : projections =
     let project_rhs1 =
       Array.of_list @@ List.concat [rhs_batch; rhs_output; rhs_input] in    
     { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 = None }
-    
-  | Transpose (`Permute einsum, sh) -> 
-    (* FIXME: NOT IMPLEMENTED *)
-    ignore (einsum, sh); failwith "Not implemented yet"
+
+  | Transpose (`Permute (_debug, ls_rhs, ls_lhs), sh) ->
+    (* For einsum the product_space is precisely one-axis-per-label. *)
+    let sh_rhs = to_axis_map sh in
+    let sh_lhs = to_axis_map cur_sh in
+    let eqs_rhs = eqs_xhs ls_rhs sh_rhs in
+    let eqs_lhs = eqs_xhs ls_lhs sh_lhs in
+    let side_eq side (axis, dims) = (side, axis), dims in
+    let eqs = Map.merge eqs_rhs eqs_lhs ~f:(fun ~key:_label -> function
+        | `Both (rhs, lhs) -> Some (List.rev_map_append rhs ~f:(side_eq `Rhs1) @@ List.map lhs ~f:(side_eq `Lhs))
+        | `Left rhs -> Some (List.map rhs ~f:(side_eq `Rhs1))
+        | `Right lhs -> Some (List.map lhs ~f:(side_eq `Lhs))) in
+    let label_dims = Map.map eqs ~f:einsum_one_dim in
+    let label_iterators = Map.map eqs ~f:(fun _ -> get_symbol()) in
+    let product_space = Array.of_list @@ Map.data label_dims in
+    let product_iterators = Array.of_list @@ Map.data label_iterators in
+    (* Inferred dims are not broadcasted-from-1, i.e. do not need Fixed_idx. But it doesn't hurt
+       to treat them uniformly. *)
+    let inferred_lhs = Map.map ls_lhs ~f:(Map.find_exn label_iterators) in
+    let b_lhs, i_lhs, o_lhs = axis_map_to_dims_bio inferred_lhs in
+    let lhs_batch = map_with_dims cur_sh.batch b_lhs ~f:(fun d s ->
+      if d = 1 then Fixed_idx 0 else Iterator s) in
+    let lhs_input = map_with_dims cur_sh.input i_lhs ~f:(fun d s ->
+      if d = 1 then Fixed_idx 0 else Iterator s) in
+    let lhs_output = map_with_dims cur_sh.output o_lhs ~f:(fun d s ->
+      if d = 1 then Fixed_idx 0 else Iterator s) in
+    let inferred_rhs = Map.map ls_rhs ~f:(Map.find_exn label_iterators) in
+    let b_rhs, i_rhs, o_rhs = axis_map_to_dims_bio inferred_rhs in
+    let rhs_batch = map_with_dims cur_sh.batch b_rhs ~f:(fun d s ->
+      if d = 1 then Fixed_idx 0 else Iterator s) in
+    let rhs_input = map_with_dims cur_sh.input i_rhs ~f:(fun d s ->
+      if d = 1 then Fixed_idx 0 else Iterator s) in
+    let rhs_output = map_with_dims cur_sh.output o_rhs ~f:(fun d s ->
+      if d = 1 then Fixed_idx 0 else Iterator s) in
+      let project_lhs =
+        Array.of_list @@ List.concat [lhs_batch; lhs_output; lhs_input] in
+      let project_rhs1 =
+        Array.of_list @@ List.concat [rhs_batch; rhs_output; rhs_input] in    
+      { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 = None }
 
   | Broadcast (`Pointwise, sh1, sh2) ->
     let product_inp, iters_inp = broadcast_sh sh1 Input sh2 Input in
@@ -666,9 +723,60 @@ let derive_projections (shapes: update_step) : projections =
       Some (Array.of_list @@ List.concat [rhs2_batch; rhs2_output; rhs2_input]) in    
     { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
 
-  | Broadcast (`Einsum spec, sh1, sh2) ->
-    (* FIXME: NOT IMPLEMENTED *)
-    ignore (spec, sh1, sh2); failwith "Not implemented yet"
+  | Broadcast (`Einsum (_debug, ls_rhs1, ls_rhs2, ls_lhs), sh1, sh2) ->
+    (* For einsum the product_space is precisely one-axis-per-label. *)
+    let sh_rhs1 = to_axis_map sh1 in
+    let sh_rhs2 = to_axis_map sh2 in
+    let sh_lhs = to_axis_map cur_sh in
+    let eqs_rhs1 = eqs_xhs ls_rhs1 sh_rhs1 in
+    let eqs_rhs2 = eqs_xhs ls_rhs2 sh_rhs2 in
+    let eqs_lhs = eqs_xhs ls_lhs sh_lhs in
+    let side_eq side (axis, dims) = (side, axis), dims in
+    let eqs = Map.merge eqs_rhs1 eqs_lhs ~f:(fun ~key:_label -> function
+        | `Both (rhs, lhs) -> Some (List.rev_map_append rhs ~f:(side_eq `Rhs1) @@ List.map lhs ~f:(side_eq `Lhs))
+        | `Left rhs -> Some (List.map rhs ~f:(side_eq `Rhs1))
+        | `Right lhs -> Some (List.map lhs ~f:(side_eq `Lhs))) in
+    let eqs = Map.merge eqs_rhs2 eqs ~f:(fun ~key:_label -> function
+        | `Both (rhs, more) -> Some (List.rev_map_append rhs ~f:(side_eq `Rhs2) more)
+        | `Left rhs -> Some (List.map rhs ~f:(side_eq `Rhs2))
+        | `Right more -> Some more) in
+    let label_dims = Map.map eqs ~f:einsum_one_dim in
+    let label_iterators = Map.map eqs ~f:(fun _ -> get_symbol()) in
+    let product_space = Array.of_list @@ Map.data label_dims in
+    let product_iterators = Array.of_list @@ Map.data label_iterators in
+    (* Inferred dims are not broadcasted-from-1, i.e. do not need Fixed_idx. But it doesn't hurt
+       to treat them uniformly. *)
+    let inferred_lhs = Map.map ls_lhs ~f:(Map.find_exn label_iterators) in
+    let b_lhs, i_lhs, o_lhs = axis_map_to_dims_bio inferred_lhs in
+    let lhs_batch = map_with_dims cur_sh.batch b_lhs ~f:(fun d s ->
+      if d = 1 then Fixed_idx 0 else Iterator s) in
+    let lhs_input = map_with_dims cur_sh.input i_lhs ~f:(fun d s ->
+      if d = 1 then Fixed_idx 0 else Iterator s) in
+    let lhs_output = map_with_dims cur_sh.output o_lhs ~f:(fun d s ->
+      if d = 1 then Fixed_idx 0 else Iterator s) in
+    let inferred_rhs1 = Map.map ls_rhs1 ~f:(Map.find_exn label_iterators) in
+    let b_rhs1, i_rhs1, o_rhs1 = axis_map_to_dims_bio inferred_rhs1 in
+    let rhs1_batch = map_with_dims cur_sh.batch b_rhs1 ~f:(fun d s ->
+      if d = 1 then Fixed_idx 0 else Iterator s) in
+    let rhs1_input = map_with_dims cur_sh.input i_rhs1 ~f:(fun d s ->
+      if d = 1 then Fixed_idx 0 else Iterator s) in
+    let rhs1_output = map_with_dims cur_sh.output o_rhs1 ~f:(fun d s ->
+      if d = 1 then Fixed_idx 0 else Iterator s) in
+    let inferred_rhs2 = Map.map ls_rhs2 ~f:(Map.find_exn label_iterators) in
+    let b_rhs2, i_rhs2, o_rhs2 = axis_map_to_dims_bio inferred_rhs2 in
+    let rhs2_batch = map_with_dims cur_sh.batch b_rhs2 ~f:(fun d s ->
+      if d = 1 then Fixed_idx 0 else Iterator s) in
+    let rhs2_input = map_with_dims cur_sh.input i_rhs2 ~f:(fun d s ->
+      if d = 1 then Fixed_idx 0 else Iterator s) in
+    let rhs2_output = map_with_dims cur_sh.output o_rhs2 ~f:(fun d s ->
+      if d = 1 then Fixed_idx 0 else Iterator s) in
+    let project_lhs =
+      Array.of_list @@ List.concat [lhs_batch; lhs_output; lhs_input] in
+    let project_rhs1 =
+      Array.of_list @@ List.concat [rhs1_batch; rhs1_output; rhs1_input] in    
+    let project_rhs2 =
+      Some (Array.of_list @@ List.concat [rhs2_batch; rhs2_output; rhs2_input]) in    
+    { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
 
 let backprop1 projections = {
   projections with project_lhs = projections.project_rhs1; project_rhs1 = projections.project_lhs;
