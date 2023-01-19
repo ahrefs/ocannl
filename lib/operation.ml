@@ -37,6 +37,11 @@ let pointmul = mul `Pointwise
 
 let matmul = mul `Compose
 
+(** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of
+    matrix multiplication, inner and outer products, etc.
+
+    Note that ["a,b->c"] from [numpy] is ["a;b=>c"] in OCaNNL, since ["->"] is used to separate the input
+    and the output axes. *)
 let einsum spec =
   let op_body ~nv ~n1v ~n2v projections =
     Ndarray.(accum_binop_code ~zero_out:true ~accum:add_code ~op:mul_code ~lhs:nv ~rhs1:n1v ~rhs2:n2v
@@ -49,7 +54,19 @@ let einsum spec =
   >. in
   binop ~compose_op:(`Einsum spec) ~op_label:"" ~op_body ~grad_body
 
-(* TODO: implement [einsum1], the unary case. *)
+(** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract diagonals,
+    compute traces etc.
+
+    Note that ["a->c"] from [numpy] is ["a=>c"] in OCaNNL, since ["->"] is used to separate the input
+    and the output axes. *)
+let einsum1 spec =
+  let op_body ~nv ~n1v projections =
+    Ndarray.(accum_unop_code ~zero_out:true ~accum:add_code ~op:id_code ~lhs:nv ~rhs:n1v
+               projections) in
+  let grad_body ~n1g ~ng ~nv:_ ~n1v:_ projections =
+    Ndarray.(accum_unop_code ~accum:add_code ~op:id_code ~lhs:n1g ~rhs:ng @@
+                Shape.backprop_unary projections) in
+  unop ~transpose_op:(`Permute spec) ~op_label:"" ~op_body ~grad_body
 
 let relu =
   let op_body ~nv ~n1v projections =
@@ -277,6 +294,8 @@ let print_global_roots ~with_grad ~with_code (style: array_print_style) =
 
 module CLI = struct
   module FO = O
+  let einsum = einsum
+  let einsum1 = einsum
   let reset_value = reset_value
   let uniform_value = uniform_value
   let term = term

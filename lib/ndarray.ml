@@ -39,7 +39,7 @@ let accum_binop_code ?(zero_out=false) ~accum ~op ~lhs ~rhs1 ~rhs2 projections =
     loop [] @@ Array.to_list projections.product_space
 
 (** Accumulates the results of the operation: [lhs = accum lhs (op rhs)]. *)
-let accum_unop_code ~accum ~op ~lhs ~rhs projections =
+let accum_unop_code ?(zero_out=false) ~accum ~op ~lhs ~rhs projections =
   let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
   let rhs1_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
   let basecase rev_iters =
@@ -53,9 +53,14 @@ let accum_unop_code ~accum ~op ~lhs ~rhs projections =
   | [] -> basecase rev_iters
   | dim::product ->
     .< for i = 0 to .~(Lifts.Lift_int.lift dim) - 1 do .~(loop (.<i>. ::rev_iters) product) done >. in
-  loop [] @@ Array.to_list projections.product_space
+  if zero_out then
+    .< Bigarray.Genarray.fill .~lhs .~zero_code; .~(loop [] @@ Array.to_list projections.product_space) >.
+  else
+    loop [] @@ Array.to_list projections.product_space
 
 let skip_arg_code (_n1: float Codelib.code) (n2: float Codelib.code) = n2
+
+let id_code (n: float Codelib.code) = n
 
 let add_code n1 n2 = .< Float.(.~n1 + .~n2) >.
 
