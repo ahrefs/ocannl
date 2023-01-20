@@ -233,7 +233,8 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
       Shape.axis_map_to_dims_index axes
       
     | `N5_layout priorities ->
-      let p_labels = Shape.axis_labels_of_spec priorities |> Map.map ~f:(Fn.compose ((-) 5) Int.of_string) in
+      let p_labels = Shape.(axis_labels_of_spec priorities).labels |>
+                     Map.map ~f:(Fn.compose ((-) 5) Int.of_string) in
       Shape.axis_map_to_dims_index p_labels
 
     | `Label_layout label_idcs ->
