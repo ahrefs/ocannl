@@ -14,12 +14,12 @@ module AxisKey = struct
       | Batch
       | Input
       | Output
-    [@@deriving compare, sexp, variants]
+    [@@deriving equal, compare, sexp, variants]
     type t = {
       in_axes: kind;
       from_end: int
       (** Axes are indexed from the end, to avoid reindexing when broadcasting; starting with [1]. *)
-     } [@@deriving compare, sexp]
+     } [@@deriving equal, compare, sexp]
      let to_string key = 
       (match key.in_axes with Batch -> "bch" | Input -> "inp" | Output -> "out") ^
       Int.to_string key.from_end
@@ -117,9 +117,10 @@ type compose_type =
       [fun x -> s1(s2(x))], or [s1 * s2] where [*] is the inner product (e.g. matrix multiply). *)
   | `Einsum of string
   (** The [einsum] syntax: LABELS1;LABELS2=>LABELS3, where LABELSi are labels specifications.
-      Note that currently [`Pointwise] and [`Compose] are not redundant with [`Einsum], because they
-      enable more shape inference: they do not specify the number of axes. The [axis_labels] use
-      pseudo-labels local to the notation, to line up the axes.
+      Note that currently [`Compose] is not redundant with [`Einsum], because it enables more shape
+      inference: [`Einsum] is limited to [`Pointwise]-like broadcasting, while [`Compose] broadcasts
+      inputs of the "operator" against outputs of the "operand" (matching up an arbitrary number of axes).
+      The [axis_labels] use pseudo-labels local to the notation, to line up the axes.
       For [`Einsum (ls1^";"^ls2^"=>"^ls3)], the symmetric difference / disjunctive union of [ls1] and [ls2]'s
       pseudo-labels should be equal to [ls3] pseudo-labels.
       
@@ -378,7 +379,7 @@ let propagate_shapes (update: update_step) =
   let update_labels sh1 to_kind sh2 from_kind =
     pointwise_labels sh1 sh2 sh1.axis_labels @@
     Map.map_keys_exn (module AxisKey) ~f:(fun k -> {k with in_axes=to_kind}) @@
-    Map.filter_keys sh2.axis_labels ~f:(fun k -> phys_equal k.in_axes from_kind) in
+    Map.filter_keys sh2.axis_labels ~f:AxisKey.(fun k -> equal_kind k.in_axes from_kind) in
   let broadcast_into to_sh to_kind from_sh from_kind =
     match dims_of_kind to_kind to_sh, dims_of_kind from_kind from_sh with
     | (Given _ | Fixed _) as into_dims, from_dims ->
