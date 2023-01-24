@@ -442,6 +442,21 @@ let propagate_shapes (update: update_step) =
             (* Note: the too-few-axes error is reported when einsum_one_dim processes the result. *)
         | `Right dim -> Some (gen_label_of_axis ls_xhs axis, (axis, dim))) in
     Map.of_alist_multi (module String) @@ Map.data eqs in
+  let pseudo_to_labels_xhs xhs_labels sh =
+    Map.merge xhs_labels sh.axis_labels ~f:(fun ~key:_ -> function
+        | `Both (pseudo, label) -> Some (pseudo, label)
+        | `Left _pseudo -> None
+        | `Right _label -> assert false) |>
+    Map.data |> Map.of_alist_exn (module String) in
+  let all_axis_labels debug1 debug2 debug_spec pseudo_to_labels_1 pseudo_to_labels_2 =
+    Map.merge pseudo_to_labels_1 pseudo_to_labels_2 ~f:(fun ~key:pseudo -> function
+        | `Both (l1, l2) when String.equal l1 l2 -> Some l1
+        | `Left l | `Right l -> Some l
+        | `Both (l1, l2) ->
+          let error = "Axis label mismatch: "^l1^" vs "^l2^" for pseudo label "^pseudo^
+                      " of spec "^debug_spec in
+          raise @@ Shape_error (error, debug1, debug2)
+      ) in
   match update.logic with
   | Terminal -> ()
   | Transpose (`Transpose, sh) ->
@@ -474,17 +489,24 @@ let propagate_shapes (update: update_step) =
         | `Right lhs -> Some lhs) in
     let label_dims = Map.mapi eqs ~f:(einsum_one_dim spec cur_sh sh) in
     let lhs_labels = axes_with_inf_labels ~all_labels:label_dims ls_lhs in
+    let pseudo_to_labels_lhs = pseudo_to_labels_xhs lhs_labels cur_sh in
     let inferred_lhs = Map.map lhs_labels ~f:(Map.find_exn label_dims) in
     let b_lhs, i_lhs, o_lhs = axis_map_to_dims_bio inferred_lhs in
     (if is_inferred cur_sh.batch || is_unknown cur_sh.batch then cur_sh.batch <- to_inferred b_lhs);
     (if is_inferred cur_sh.input || is_unknown cur_sh.input then cur_sh.input <- to_inferred i_lhs);
     (if is_inferred cur_sh.output || is_unknown cur_sh.output then cur_sh.output <- to_inferred o_lhs);
     let rhs_labels = axes_with_inf_labels ~all_labels:label_dims ls_rhs in
+    let pseudo_to_labels_rhs = pseudo_to_labels_xhs rhs_labels sh in
     let inferred_rhs = Map.map rhs_labels ~f:(Map.find_exn label_dims) in
     let b_rhs, i_rhs, o_rhs = axis_map_to_dims_bio inferred_rhs in
     (if is_inferred sh.batch || is_unknown sh.batch then sh.batch <- to_inferred b_rhs);
     (if is_inferred sh.input || is_unknown sh.input then sh.input <- to_inferred i_rhs);
-    (if is_inferred sh.output || is_unknown sh.output then sh.output <- to_inferred o_rhs)
+    (if is_inferred sh.output || is_unknown sh.output then sh.output <- to_inferred o_rhs);
+    let all_axis_labels = all_axis_labels cur_sh sh spec pseudo_to_labels_lhs pseudo_to_labels_rhs in
+    let lhs_axis_labels = Map.map lhs_labels ~f:(Map.find_exn all_axis_labels) in
+    cur_sh.axis_labels <- lhs_axis_labels;
+    let rhs_axis_labels = Map.map rhs_labels ~f:(Map.find_exn all_axis_labels) in
+    sh.axis_labels <- rhs_axis_labels
 
   | Broadcast (`Pointwise, sh1, sh2) ->
     let up_labels = pointwise_labels sh1 sh2 sh1.axis_labels sh2.axis_labels in
@@ -563,23 +585,35 @@ let propagate_shapes (update: update_step) =
         | `Right more -> Some more) in
     let label_dims = Map.mapi eqs ~f:(einsum_one_dim spec sh1 sh2) in
     let lhs_labels = axes_with_inf_labels ~all_labels:label_dims ls_lhs in
+    let pseudo_to_labels_lhs = pseudo_to_labels_xhs lhs_labels cur_sh in
     let inferred_lhs = Map.map lhs_labels ~f:(Map.find_exn label_dims) in
     let b_lhs, i_lhs, o_lhs = axis_map_to_dims_bio inferred_lhs in
     (if is_inferred cur_sh.batch || is_unknown cur_sh.batch then cur_sh.batch <- to_inferred b_lhs);
     (if is_inferred cur_sh.input || is_unknown cur_sh.input then cur_sh.input <- to_inferred i_lhs);
     (if is_inferred cur_sh.output || is_unknown cur_sh.output then cur_sh.output <- to_inferred o_lhs);
     let rhs1_labels = axes_with_inf_labels ~all_labels:label_dims ls_rhs1 in
+    let pseudo_to_labels_rhs1 = pseudo_to_labels_xhs rhs1_labels sh1 in
     let inferred_rhs1 = Map.map rhs1_labels ~f:(Map.find_exn label_dims) in
     let b_rhs1, i_rhs1, o_rhs1 = axis_map_to_dims_bio inferred_rhs1 in
     (if is_inferred sh1.batch || is_unknown sh1.batch then sh1.batch <- to_inferred b_rhs1);
     (if is_inferred sh1.input || is_unknown sh1.input then sh1.input <- to_inferred i_rhs1);
     (if is_inferred sh1.output || is_unknown sh1.output then sh1.output <- to_inferred o_rhs1);
     let rhs2_labels = axes_with_inf_labels ~all_labels:label_dims ls_rhs2 in
+    let pseudo_to_labels_rhs2 = pseudo_to_labels_xhs rhs2_labels sh2 in
     let inferred_rhs2 = Map.map rhs2_labels ~f:(Map.find_exn label_dims) in
     let b_rhs2, i_rhs2, o_rhs2 = axis_map_to_dims_bio inferred_rhs2 in
     (if is_inferred sh2.batch || is_unknown sh2.batch then sh2.batch <- to_inferred b_rhs2);
     (if is_inferred sh2.input || is_unknown sh2.input then sh2.input <- to_inferred i_rhs2);
-    (if is_inferred sh2.output || is_unknown sh2.output then sh2.output <- to_inferred o_rhs2)
+    (if is_inferred sh2.output || is_unknown sh2.output then sh2.output <- to_inferred o_rhs2);
+    let all_axis_labels1 = all_axis_labels cur_sh sh1 spec pseudo_to_labels_lhs pseudo_to_labels_rhs1 in
+    let all_axis_labels = all_axis_labels cur_sh sh2 spec all_axis_labels1 pseudo_to_labels_rhs2 in
+    let lhs_axis_labels = Map.map lhs_labels ~f:(Map.find_exn all_axis_labels) in
+    cur_sh.axis_labels <- lhs_axis_labels;
+    let rhs1_axis_labels = Map.map rhs1_labels ~f:(Map.find_exn all_axis_labels) in
+    sh1.axis_labels <- rhs1_axis_labels;
+    let rhs2_axis_labels = Map.map rhs2_labels ~f:(Map.find_exn all_axis_labels) in
+    sh2.axis_labels <- rhs2_axis_labels
+
 
 (** Uses the matrix convention of putting the input axes last. *)
 let to_dims (sh: t): int array =
