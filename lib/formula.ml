@@ -26,6 +26,9 @@ type t = {
   shape: Shape.t;
   (** The eventual shape of [.!(t.node).value] and [.!(t.node).grad], incorporating the current state of
       shape inference. *)
+  needs_gradient: bool;
+  (** An optimization setting: whether gradients should be backpropagated into the formula. If any subformula
+      needs gradients, this formula also needs gradients. *)
 }
 
 (** A global root is a formula that is not (currently) a subformula of another formula. *)
@@ -115,19 +118,24 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let zero_body() = reset_zeros ng shape in
   (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
      and keep the backprop order for readability. *)
-  let m2_zero_grads = m2.zero_grads in
+  let needs_gradient = m1.needs_gradient || m2.needs_gradient in
+  let m1_no_grad = m1_processed || not m1.needs_gradient in
+  let m2_no_grad = m2_processed || not m2.needs_gradient in
   let m1_zero_grads = m1.zero_grads in
+  let m2_zero_grads = m2.zero_grads in
   let zero_grads =
-    if m1_processed && m2_processed then zero_body
-    else if m1_processed then fun () -> .< .~(zero_body()); .~(m2_zero_grads()) >.
-    else if m2_processed then fun () -> .< .~(zero_body()); .~(m1_zero_grads()) >.
+    if m1_no_grad && m2_no_grad then zero_body
+    else if m1_no_grad then fun () -> .< .~(zero_body()); .~(m2_zero_grads()) >.
+    else if m2_no_grad then fun () -> .< .~(zero_body()); .~(m1_zero_grads()) >.
     else fun () -> .< .~(zero_body()); .~(m2_zero_grads()); .~(m1_zero_grads()) >. in
   (* The code needs to be included in the reverse order to which it was computed! This guarantees
      that all ancestors of a node are backpropagated before the node is backpropagated, even for
      non-tree DAGs. *)
   let grad_body() = grad_body ~n1g ~n2g ~ng ~nv ~n1v ~n2v projections in
+  (* For consistency / debuggability, we keep grad_body in backprop_body even when needs_gradients
+     is false. *)
   let backprop_body =
-    match m1_processed, m1.backprop_body, m2_processed, m2.backprop_body with
+    match m1_no_grad, m1.backprop_body, m2_no_grad, m2.backprop_body with
     | true, _, true, _ | true, _, _, None | _, None, true, _ | _, None, _, None -> grad_body
     | false, Some m1_body, false, Some m2_body ->
       fun () -> .< .~(grad_body()); .~(m1_body()); .~(m2_body()) >.
@@ -141,9 +149,9 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let m1_init_grads = m1.init_grads in
   let m2_init_grads = m2.init_grads in
   let init_grads =
-    if m1_processed && m2_processed then init_grads_body
-    else if m1_processed then fun () -> .< .~(init_grads_body ()); .~(m2_init_grads ()) >.
-    else if m2_processed then fun () -> .< .~(init_grads_body ()); .~(m1_init_grads ()) >.
+    if m1_no_grad && m2_no_grad then init_grads_body
+    else if m1_no_grad then fun () -> .< .~(init_grads_body ()); .~(m2_init_grads ()) >.
+    else if m2_no_grad then fun () -> .< .~(init_grads_body ()); .~(m1_init_grads ()) >.
     else fun () -> .< .~(init_grads_body ()); .~(m2_init_grads ()); .~(m1_init_grads ()) >. in
   (* The order is reverse to the order the updates were already executed for the first time. *)
   let local_shape_updates = Sequence.singleton local_shape_update in
@@ -162,7 +170,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   (if not m2_processed then global_roots := Map.remove !global_roots m2.node_id);
   let formula = {forward_body=Some forward_body; backprop_body=Some backprop_body;
                 init_values; init_grads; zero_grads;
-                node_id; comp_node; node; shape_logic; shape} in
+                node_id; comp_node; node; shape_logic; shape; needs_gradient} in
   let root = {forward_code=None; forward=None; backprop_code=None; backprop=None; 
               formula; subtree_shape_updates} in
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
@@ -209,6 +217,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   let zero_body() = reset_zeros ng shape in
   (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
        and keep the backprop order for readability. *)
+  let needs_gradient = m.needs_gradient in
   let m_zero_grads = m.zero_grads in
   let zero_grads =
     if m_processed then zero_body
@@ -234,17 +243,30 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   (if not m_processed then global_roots := Map.remove !global_roots m.node_id);
   let formula = {forward_body=Some forward_body; backprop_body=Some backprop_body;
                  init_values; init_grads; zero_grads;
-                 node_id; comp_node; node; shape_logic; shape} in
+                 node_id; comp_node; node; shape_logic; shape; needs_gradient} in
   let root = {forward_code=None; forward=None; backprop_code=None; backprop=None; 
               formula; subtree_shape_updates} in
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
   formula
 
+let term_needs_gradient (spec: Shape.term_spec) =
+  match spec with
+  | `Unknown -> true
+  | `Constant _ -> false
+  | `Data _ -> false
+  | `Params _ -> true
+  | `Unknown_batch_data _ -> false
+  | `Deduced_params _ -> true
+
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label (spec: Shape.term_spec) ~op_body : t =
+let term ~label ?needs_gradient (spec: Shape.term_spec) ~op_body : t =
   let comp_node = Node.create ~label in
   let node_id = comp_node.id in
   let shape = Shape.of_term_spec spec in
+  let needs_gradient =
+    match needs_gradient with
+    | None -> term_needs_gradient spec
+    | Some setting -> setting in
   let shape_logic = Shape.Terminal in
   (* NOTE: this update does not do any work, but that might change in the future,
      and having it in the update sequence might help with debuggability. *)
@@ -264,7 +286,7 @@ let term ~label (spec: Shape.term_spec) ~op_body : t =
   let subtree_shape_updates = Sequence.singleton local_shape_update in
   let formula = {forward_body; backprop_body;
                  init_values; init_grads; zero_grads;
-                 node_id; comp_node; node; shape_logic; shape} in
+                 node_id; comp_node; node; shape_logic; shape; needs_gradient} in
   let root = {forward_code=None; forward=None; backprop_code=None; backprop=None; 
               formula; subtree_shape_updates} in
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
@@ -275,13 +297,15 @@ let get_toplevel m =
    let toplevel_forward = .< .~(m.init_values ()); fun () -> .~forward_body >. in
    let backprop_body = match m.backprop_body with None -> .< () >. | Some body -> body() in
    let ng = .< .~(m.node).Node.grad >. in
-   let toplevel_backprop = .<
-   .~(m.init_grads ());
-   fun () ->
-     .~(m.zero_grads());
-     .~(reset_ones ng m.shape);
-     .~backprop_body
- >. in
+   let toplevel_backprop =
+    if not m.needs_gradient then .< fun () -> () >.
+    else .<
+      .~(m.init_grads ());
+      fun () ->
+        .~(m.zero_grads());
+        .~(reset_ones ng m.shape);
+        .~backprop_body
+    >. in
   toplevel_forward, toplevel_backprop
 
 let refresh_session ?(regenerate=false) ?(reinit=false) ?(run=true) () =
