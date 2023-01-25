@@ -310,7 +310,9 @@ let get_toplevel m =
       >. in
   toplevel_forward, toplevel_backprop
   
-let refresh_session ?(regenerate=false) ?(reinit=false) ?(run=true) () =
+let refresh_session ?(regenerate=false) ?(reinit=false) ?(run=true) ?(force_no_init=false) () =
+  if force_no_init && (regenerate || reinit || run) then
+    invalid_arg "refresh_session: set other triggers to false when using force_no_init";
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
     let m = root.formula in
     (if regenerate || Option.is_none root.forward_code || Option.is_none root.backprop_code then
@@ -321,7 +323,8 @@ let refresh_session ?(regenerate=false) ?(reinit=false) ?(run=true) () =
        root.backprop_code <- Some backprop_code;
        root.backprop <- None
     );
-    (if (reinit || Option.is_none root.forward || Option.is_none root.backprop) then
+    (if not force_no_init && 
+        (reinit || Option.is_none root.forward || Option.is_none root.backprop) then
       let forward = Exec.run_native @@ Option.value_exn root.forward_code in
       root.forward <- Some forward;
       let backprop = Exec.run_native @@ Option.value_exn root.backprop_code in
