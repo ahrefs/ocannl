@@ -1,6 +1,15 @@
 (library
- (name ocannl)
- (libraries base dynlink metaocaml)
+ (name ocannl_runtime)
+ (libraries base)
  (preprocess (pps ppx_jane))
+ (modules node)
+ (modes byte native))
+
+
+(library
+ (name ocannl)
+ (libraries base dynlink metaocaml ocannl_runtime)
+ (preprocess (pps ppx_jane))
+ (modules lifts ndarray shape formula operation network model exec)
  (modes byte native))
 

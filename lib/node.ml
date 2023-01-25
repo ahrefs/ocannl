@@ -1,7 +1,21 @@
 (** `Node`: the computation type, global state and utils which the `Formula` staged code uses. *)
-open Base
+(* Do not depend on Base to minimize dependencies. *)
+module Obj = Obj
 
-type data = Ndarray.t
+module A = Bigarray.Genarray
+type elt = Bigarray.float32_elt
+type data = (float, elt, Bigarray.c_layout) A.t
+
+(* The reference cell below contains something other than None for a brief
+   period, before the value is taken and returned to the caller of
+   run_native. This policy prevents memory leaks
+*)
+let result__ : Obj.t option ref = ref None
+
+let dims (arr: data) = A.dims arr
+  
+ let create_array = A.create Bigarray.Float32 Bigarray.C_layout
+ let empty = create_array [||]
 
 type t = {
   mutable value: data;
@@ -17,24 +31,16 @@ type state = {
 
 let global = {
   unique_id = 1;
-  node_store = Hashtbl.create (module Int);
+  node_store = Hashtbl.create 16;
 }
-let get uid = Hashtbl.find_exn global.node_store uid
+let get uid = Hashtbl.find global.node_store uid
 
 let create ~label =
   let node = {
-    value=Ndarray.empty; grad=Ndarray.empty; label;
+    value=empty; grad=empty; label;
     id=let uid = global.unique_id in global.unique_id <- global.unique_id + 1; uid
   } in
-  assert (phys_equal `Ok @@ Hashtbl.add global.node_store ~key:node.id ~data:node);
+  Hashtbl.add global.node_store node.id node;
   node
 
-let print_node ~with_grad ~indices n =
-  let screen_stop () =
-    Stdio.print_endline "Press [Enter] for next screen, [q] [Enter] to quit.";
-    String.(Stdio.In_channel.input_line_exn Stdio.stdin = "q")  in
-  Stdio.print_endline @@ "["^Int.to_string n.id^"] "^n.label;
-  Ndarray.pp_print Caml.Format.std_formatter ~screen_stop ~indices n.value;
-  if with_grad then (
-    Stdio.print_endline "Gradient:";
-    Ndarray.pp_print Caml.Format.std_formatter ~screen_stop ~indices n.grad)
+let minus = (-)

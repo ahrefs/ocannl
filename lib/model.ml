@@ -20,7 +20,7 @@ let make ?(clear_session=true) network (loss_fun:loss_fun): t =
   let loss = loss_fun nn.params ~output ~target in
   (* Reset the session. *)
   if clear_session then (
-    Formula.first_session_id := Node.global.unique_id;
+    Formula.first_session_id := Ocannl_runtime.Node.global.unique_id;
     if (Map.existsi !Formula.global_roots ~f:(fun ~key ~data:_ -> key <> loss.node_id)) then (
       let _, other_root = Map.min_elt_exn @@ Map.filteri !Formula.global_roots
           ~f:(fun ~key ~data:_ -> key <> loss.node_id) in

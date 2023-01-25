@@ -129,9 +129,9 @@ let get_root id =
   | Some r -> r
   | None ->
     let msg = 
-      if id >= !first_session_id && id < Node.global.unique_id then
+      if id >= !first_session_id && id < Ocannl_runtime.Node.global.unique_id then
         "get_root: Node "^Int.to_string id^" is a subformula"
-      else if id >= Node.global.unique_id then
+      else if id >= Ocannl_runtime.Node.global.unique_id then
         "get_root: Node "^Int.to_string id^" has not been created yet"
       else if id < 1 then "get_root: Node IDs start from 1"
       else
@@ -139,11 +139,12 @@ let get_root id =
     raise @@ Session_error (msg, None)
 
 let get_node id =
-  match Hashtbl.find Node.global.node_store id with
+  let open Ocannl_runtime.Node in
+  match Caml.Hashtbl.find_opt global.node_store id with
   | Some r -> r
   | None ->
     let msg = 
-      if id >= Node.global.unique_id then
+      if id >= global.unique_id then
         "get_node: Node "^Int.to_string id^" has not been created yet"
       else if id < 1 then "get_root: Node IDs start from 1"
       else
@@ -303,7 +304,7 @@ module CLI = struct
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient
   let print_global_root = print_global_root
-  let print_node = Node.print_node
+  let print_node = Ndarray.print_node
   let print_formula = print_formula
   let print_global_roots = print_global_roots
   let get_root = get_root

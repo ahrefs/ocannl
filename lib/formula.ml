@@ -16,10 +16,10 @@ type t = {
   zero_grads: unit -> unit Codelib.code;
   (** Initializes the backpropagation phase. Computed once per backpropagation. *)
   node_id: int;
-  comp_node: Node.t;
+  comp_node: Ocannl_runtime.Node.t;
   (** This tracks the computation node as long as the model is not cross-compiled to a different
       process etc. *)
-  node: Node.t Codelib.code;
+  node: Ocannl_runtime.Node.t Codelib.code;
   (** The node storing the computation results. [.!(t.node)] should equal [t.comp_node]. *)
   shape_logic: Shape.logic;
   (** How to do the last update of [t.shape] when finalizing the formula. *)
@@ -62,8 +62,10 @@ let reset_zeros n shape =
 let reset_ones n shape =
   Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun _ -> one_code) ~lhs:n ~rhs:n
              (Shape.terminal_projections shape))
-let create_value node shape = .< .~node.Node.value <- Ndarray.create .~(Shape.to_dims_code shape) >.
-let create_grad node shape = .< .~node.Node.grad <- Ndarray.create .~(Shape.to_dims_code shape) >.
+let create_value node shape =
+   .< Ocannl_runtime.Node.(.~node.value <- create_array .~(Shape.to_dims_code shape)) >.
+let create_grad node shape =
+   .< Ocannl_runtime.Node.(.~node.grad <- create_array .~(Shape.to_dims_code shape)) >.
 
 let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t =
   let m1, m2 = if m1arg.node_id <= m2arg.node_id then m1arg, m2arg else m2arg, m1arg in
@@ -77,7 +79,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let m2_l = m2.comp_node.label in
   let m2_l = if String.length m2_l > 11 then "n"^Int.to_string m2.node_id else m2_l in
   let label = m1_l ^ op_label ^ m2_l in
-  let comp_node = Node.create ~label in
+  let comp_node = Ocannl_runtime.Node.create ~label in
   let node_id = comp_node.id in
   let shape = Shape.{ batch=Unknown; input=Unknown; output=Unknown;
                       axis_labels=Map.empty (module AxisKey);
@@ -85,7 +87,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let shape_logic = Shape.Broadcast (compose_op, m1.shape, m2.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
-  let node = Codelib.genlet ~name:label .< Node.get node_id >. in
+  let node = Codelib.genlet ~name:label .< Ocannl_runtime.Node.get node_id >. in
   let nv = .< .~node.value >. in
   let n1v = .< .~(m1.node).value >. in
   let n2v = .< .~(m2.node).value >. in
@@ -181,7 +183,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   let m_l = m.comp_node.label in
   let m_l = if String.length m_l > 11 then "n"^Int.to_string m.node_id else m_l in
   let label = op_label ^ m_l in
-  let comp_node = Node.create ~label in
+  let comp_node = Ocannl_runtime.Node.create ~label in
   let node_id = comp_node.id in
 
   let shape =
@@ -195,7 +197,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
 
-  let node = Codelib.genlet ~name:label .< Node.get node_id >. in
+  let node = Codelib.genlet ~name:label .< Ocannl_runtime.Node.get node_id >. in
   let nv = .< .~node.value >. in
   let n1v = .< .~(m.node).value >. in
   let projections = Shape.derive_projections local_shape_update in
@@ -260,7 +262,7 @@ let term_needs_gradient (spec: Shape.term_spec) =
 
 (** A terminal: a constant, a parameter, an input of the model. *)
 let term ~label ?needs_gradient (spec: Shape.term_spec) ~op_body : t =
-  let comp_node = Node.create ~label in
+  let comp_node = Ocannl_runtime.Node.create ~label in
   let node_id = comp_node.id in
   let shape = Shape.of_term_spec spec in
   let needs_gradient =
@@ -273,7 +275,7 @@ let term ~label ?needs_gradient (spec: Shape.term_spec) ~op_body : t =
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
 
-  let node = Codelib.genlet ~name:label .< Node.get node_id >. in
+  let node = Codelib.genlet ~name:label .< Ocannl_runtime.Node.get node_id >. in
   let nv = .< .~node.value >. in
   (* Very unlikely someone will compute just the parameters. *)
   let forward_body = None in
@@ -294,20 +296,20 @@ let term ~label ?needs_gradient (spec: Shape.term_spec) ~op_body : t =
 
 let get_toplevel m =
   let forward_body = match m.forward_body with None -> .< () >. | Some body -> body() in
-   let toplevel_forward = .< .~(m.init_values ()); fun () -> .~forward_body >. in
-   let backprop_body = match m.backprop_body with None -> .< () >. | Some body -> body() in
-   let ng = .< .~(m.node).Node.grad >. in
-   let toplevel_backprop =
+  let toplevel_forward = .< .~(m.init_values ()); fun () -> .~forward_body >. in
+  let backprop_body = match m.backprop_body with None -> .< () >. | Some body -> body() in
+  let ng = .< .~(m.node).Ocannl_runtime.Node.grad >. in
+  let toplevel_backprop =
     if not m.needs_gradient then .< fun () -> () >.
     else .<
-      .~(m.init_grads ());
-      fun () ->
-        .~(m.zero_grads());
-        .~(reset_ones ng m.shape);
-        .~backprop_body
-    >. in
+    .~(m.init_grads ());
+    fun () ->
+      .~(m.zero_grads());
+      .~(reset_ones ng m.shape);
+      .~backprop_body
+      >. in
   toplevel_forward, toplevel_backprop
-
+  
 let refresh_session ?(regenerate=false) ?(reinit=false) ?(run=true) () =
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
     let m = root.formula in
@@ -319,10 +321,10 @@ let refresh_session ?(regenerate=false) ?(reinit=false) ?(run=true) () =
        root.backprop_code <- Some backprop_code;
        root.backprop <- None
     );
-    (if reinit || Option.is_none root.forward || Option.is_none root.backprop then
-      let forward = Runnative.run @@ Option.value_exn root.forward_code in
+    (if (reinit || Option.is_none root.forward || Option.is_none root.backprop) then
+      let forward = Exec.run_native @@ Option.value_exn root.forward_code in
       root.forward <- Some forward;
-      let backprop = Runnative.run @@ Option.value_exn root.backprop_code in
+      let backprop = Exec.run_native @@ Option.value_exn root.backprop_code in
       root.backprop <- Some backprop;
       );
     (if run then Option.value_exn root.forward ());
