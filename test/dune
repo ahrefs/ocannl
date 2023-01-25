@@ -1,2 +1,6 @@
-(test
- (name ocannl))
+(library
+ (name tutorials)
+ (inline_tests)
+ (libraries base dynlink metaocaml ocannl_runtime ocannl)
+ (preprocess (pps ppx_jane ppx_expect ppx_inline_test))
+ (modes native))
