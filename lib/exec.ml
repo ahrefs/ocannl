@@ -18,16 +18,11 @@ let add_search_path : string -> unit = fun dir ->
 
 let ocamlopt_path = 
   let open Caml.Filename in
-  (* Argh! standard_runtime is no longer provided.
-     Try to get the bin directory from the standard library directory
- 
-  concat (dirname (Config.standard_runtime)) "ocamlopt"
-  *)
   concat (concat (dirname (dirname (Config.standard_library))) 
    "bin") "ocamlfind ocamlopt"
 
 (* Compile the source file and make the .cmxs, returning its name *)
-let compile_source : string -> string = fun src_fname ->
+let compile_source ~with_debug src_fname =
   let basename = Caml.Filename.remove_extension src_fname in
   let plugin_fname =  basename ^ ".cmxs" in
   let other_files  =  [basename ^ ".cmi"; basename ^ ".cmx";
@@ -36,7 +31,7 @@ let compile_source : string -> string = fun src_fname ->
   (* FIXME: un-hardcode the paths. *)
   let cmdline = ocamlopt_path ^ 
                 " -I ~/ocannl/_build/default/lib -I ~/ocannl/_build/default/lib/.ocannl_runtime.objs/native -I ~/ocannl/_build/default/lib/.ocannl_runtime.objs/byte " ^
-                " -verbose -shared -o " ^ plugin_fname ^
+                " -shared"^(if with_debug then " -g" else "")^" -o " ^ plugin_fname ^
                 (String.concat ~sep:"" @@ 
                  List.map ~f:(fun p -> " -I " ^ p) !load_path) ^
                 " " ^ src_fname in      
@@ -68,6 +63,7 @@ let create_comp_unit : 'a Codelib.closed_code -> string = fun cde ->
     Caml.Filename.open_temp_file ~mode:[Open_wronly;Open_creat;Open_text]
       code_file_prefix ".ml" in
   let ppf = Caml.Format.formatter_of_out_channel oc in
+  Caml.Format.pp_set_margin ppf 160;
   let ()  = Caml.Format.fprintf ppf
       "Ocannl_runtime.Node.result__ :=@ Some (Ocannl_runtime.Node.Obj.repr (@ %a))@."
       Codelib.format_code cde in
@@ -79,12 +75,12 @@ let create_comp_unit : 'a Codelib.closed_code -> string = fun cde ->
   fname                                 (* let the errors propagate *)
 
 
-let run_native cde =
+let run_native ?(with_debug=true) (type a) (cde: a Codelib.code): a =
   let closed = Codelib.close_code cde in
   if not Dynlink.is_native then
     failwith "run_native only works in the native code";
   let source_fname = create_comp_unit closed in
-  let plugin_fname = compile_source source_fname in
+    let plugin_fname = compile_source ~with_debug source_fname in
   let () = Dynlink.loadfile_private plugin_fname in
   Caml.Sys.remove plugin_fname;
   Caml.Sys.remove source_fname;
