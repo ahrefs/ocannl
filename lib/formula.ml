@@ -309,32 +309,6 @@ let get_toplevel m =
       .~backprop_body
       >. in
   toplevel_forward, toplevel_backprop
-  
-let refresh_session ?(regenerate=false) ?(reinit=false) ?(run=true) ?(force_no_init=false) () =
-  if force_no_init && (regenerate || reinit || run) then
-    invalid_arg "refresh_session: set other triggers to false when using force_no_init";
-  List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
-    let m = root.formula in
-    (if regenerate || Option.is_none root.forward_code || Option.is_none root.backprop_code then
-      Sequence.iter root.subtree_shape_updates ~f:(fun step -> Shape.propagate_shapes step);
-      let forward_code, backprop_code = get_toplevel m in
-       root.forward_code <- Some forward_code;
-       root.forward <- None;
-       root.backprop_code <- Some backprop_code;
-       root.backprop <- None
-    );
-    (if not force_no_init && 
-        (reinit || Option.is_none root.forward || Option.is_none root.backprop) then
-      let forward = Exec.run_native @@ Option.value_exn root.forward_code in
-      root.forward <- Some forward;
-      let backprop = Exec.run_native @@ Option.value_exn root.backprop_code in
-      root.backprop <- Some backprop;
-      );
-    (if run then Option.value_exn root.forward ());
-  );
-  if run then
-    List.iter (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
-      Option.value_exn root.backprop ())
 
 let sexp_of_t m =
   Sexp.message "Formula" [
