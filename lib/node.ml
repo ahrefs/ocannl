@@ -6,11 +6,8 @@ module A = Bigarray.Genarray
 type elt = Bigarray.float32_elt
 type data = (float, elt, Bigarray.c_layout) A.t
 
-(* The reference cell below contains something other than None for a brief
-   period, before the value is taken and returned to the caller of
-   run_native. This policy prevents memory leaks
-*)
-let result__ : Obj.t option ref = ref None
+let error_message__ : string option ref = ref None
+
 
 let dims (arr: data) = A.dims arr
   
@@ -20,6 +17,8 @@ let dims (arr: data) = A.dims arr
 type t = {
   mutable value: data;
   mutable grad: data;
+  mutable forward: (unit -> unit) option;
+  mutable backprop: (unit -> unit) option;
   label: string;
   id: int;
 }
@@ -37,7 +36,9 @@ let get uid = Hashtbl.find global.node_store uid
 
 let create ~label =
   let node = {
-    value=empty; grad=empty; label;
+    value=empty; grad=empty;
+    forward=None; backprop=None;
+    label;
     id=let uid = global.unique_id in global.unique_id <- global.unique_id + 1; uid
   } in
   Hashtbl.add global.node_store node.id node;

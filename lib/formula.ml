@@ -33,10 +33,8 @@ type t = {
 
 (** A global root is a formula that is not (currently) a subformula of another formula. *)
 type global_root = {
-  mutable forward_code: (unit -> unit) Codelib.code option;
-  mutable forward: (unit -> unit) option;
-  mutable backprop_code: (unit -> unit) Codelib.code option;
-  mutable backprop: (unit -> unit) option;
+  mutable forward_code: unit Codelib.code option;
+  mutable backprop_code: unit Codelib.code option;
   formula: t;
   subtree_shape_updates: Shape.update_step Sequence.t;
   (** We piggy-back on the code generation setup to arrange the updates. We perform each update twice
@@ -173,7 +171,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let formula = {forward_body=Some forward_body; backprop_body=Some backprop_body;
                 init_values; init_grads; zero_grads;
                 node_id; comp_node; node; shape_logic; shape; needs_gradient} in
-  let root = {forward_code=None; forward=None; backprop_code=None; backprop=None; 
+  let root = {forward_code=None; backprop_code=None; 
               formula; subtree_shape_updates} in
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
   formula
@@ -246,7 +244,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   let formula = {forward_body=Some forward_body; backprop_body=Some backprop_body;
                  init_values; init_grads; zero_grads;
                  node_id; comp_node; node; shape_logic; shape; needs_gradient} in
-  let root = {forward_code=None; forward=None; backprop_code=None; backprop=None; 
+  let root = {forward_code=None; backprop_code=None; 
               formula; subtree_shape_updates} in
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
   formula
@@ -289,25 +287,27 @@ let term ~label ?needs_gradient (spec: Shape.term_spec) ~op_body : t =
   let formula = {forward_body; backprop_body;
                  init_values; init_grads; zero_grads;
                  node_id; comp_node; node; shape_logic; shape; needs_gradient} in
-  let root = {forward_code=None; forward=None; backprop_code=None; backprop=None; 
+  let root = {forward_code=None; backprop_code=None; 
               formula; subtree_shape_updates} in
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
   formula
 
-let get_toplevel m =
+let get_toplevel_native m =
   let forward_body = match m.forward_body with None -> .< () >. | Some body -> body() in
-  let toplevel_forward = .< .~(m.init_values ()); fun () -> .~forward_body >. in
+  let toplevel_forward = .<
+    .~(m.init_values ());
+    .~(m.node).Ocannl_runtime.Node.backprop <- Some (fun () -> .~forward_body) >. in
   let backprop_body = match m.backprop_body with None -> .< () >. | Some body -> body() in
   let ng = .< .~(m.node).Ocannl_runtime.Node.grad >. in
   let toplevel_backprop =
-    if not m.needs_gradient then .< fun () -> () >.
+    if not m.needs_gradient then .<
+      .~(m.node).Ocannl_runtime.Node.backprop <- Some (fun () -> ()) >.
     else .<
     .~(m.init_grads ());
-    fun () ->
+    .~(m.node).Ocannl_runtime.Node.backprop <- Some (fun () ->
       .~(m.zero_grads());
       .~(reset_ones ng m.shape);
-      .~backprop_body
-      >. in
+      .~backprop_body) >. in
   toplevel_forward, toplevel_backprop
 
 let sexp_of_t m =
