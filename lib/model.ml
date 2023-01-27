@@ -1,4 +1,6 @@
-(** Losses and the training loop. *)
+(** A model encapsulates "glorified curve fitting": an input-output approximator, and a loss formula,
+    as a function of the data inputs and targets. Semi-parametric models can make use of the data
+    in the approximator. *)
 open Base
 
 type params = (Formula.t, Formula.comparator_witness) Set.t
@@ -24,8 +26,8 @@ let make ?(clear_session=true) network (loss_fun:loss_fun): t =
     if (Map.existsi !Formula.global_roots ~f:(fun ~key ~data:_ -> key <> loss.node_id)) then (
       let _, other_root = Map.min_elt_exn @@ Map.filteri !Formula.global_roots
           ~f:(fun ~key ~data:_ -> key <> loss.node_id) in
-          raise @@ Formula.Session_error (
-            "Model.make expects the loss to be the only global root", Some other_root.formula));
+      raise @@ Formula.Session_error (
+        "Model.make expects the loss to be the only global root", Some other_root.formula));
     Formula.global_roots := Map.empty (module Int)
   );
   { input; output; loss; params=nn.params }

@@ -1,6 +1,12 @@
 (** Multidimensional arrays and the code for operating on them. *)
 open Base
 
+type precision =
+  | Half
+  | Single
+  | Double
+  (* FIXME(28): implement precision setting and precision-specific code generation. *)
+  
  let zero_code = .< 0.0 >.
 
  let one_code = .< 1.0 >.
