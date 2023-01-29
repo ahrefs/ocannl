@@ -1,4 +1,4 @@
-(** Computational primitives for neural networks, integrating [Formula] with [Ndarray]. *)
+(** Computational primitives for neural networks, integrating [Formula] with [Ndcode]. *)
 
 open Base
 
@@ -8,20 +8,20 @@ open Formula
 
 let add =
   let op_body ~nv ~n1v ~n2v projections =
-    Ndarray.(accum_binop_code ~accum:skip_arg_code ~op:add_code ~lhs:nv ~rhs1:n1v ~rhs2:n2v projections) in
+    Ndcode.(accum_binop ~accum:skip_arg ~op:add ~lhs:nv ~rhs1:n1v ~rhs2:n2v projections) in
   let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ projections = .<
-    .~(Ndarray.(accum_unop_code ~accum:add_code ~op:Fn.id ~lhs:n1g ~rhs:ng @@ Shape.backprop1 projections));
-    .~(Ndarray.(accum_unop_code ~accum:add_code ~op:Fn.id ~lhs:n2g ~rhs:ng @@ Shape.backprop2 projections))
+    .~(Ndcode.(accum_unop ~accum:add ~op:Fn.id ~lhs:n1g ~rhs:ng @@ Shape.backprop1 projections));
+    .~(Ndcode.(accum_unop ~accum:add ~op:Fn.id ~lhs:n2g ~rhs:ng @@ Shape.backprop2 projections))
   >. in
   binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
 let mul compose_op =
   let op_body ~nv ~n1v ~n2v projections =
-    Ndarray.(accum_binop_code ~accum:skip_arg_code ~op:mul_code ~lhs:nv ~rhs1:n1v ~rhs2:n2v projections) in
+    Ndcode.(accum_binop ~accum:skip_arg ~op:mul ~lhs:nv ~rhs1:n1v ~rhs2:n2v projections) in
   let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v projections = .<
-    .~(Ndarray.(accum_binop_code ~accum:add_code ~op:mul_code ~lhs:n1g ~rhs1:ng ~rhs2:n2v @@
+    .~(Ndcode.(accum_binop ~accum:add ~op:mul ~lhs:n1g ~rhs1:ng ~rhs2:n2v @@
                 Shape.backprop1 projections));
-    .~(Ndarray.(accum_binop_code ~accum:add_code ~op:mul_code ~lhs:n2g ~rhs1:ng ~rhs2:n1v @@
+    .~(Ndcode.(accum_binop ~accum:add ~op:mul ~lhs:n2g ~rhs1:ng ~rhs2:n1v @@
                 Shape.backprop2 projections))
   >. in
   binop ~compose_op ~op_label:"" ~op_body ~grad_body
@@ -44,12 +44,12 @@ let matmul = mul `Compose
     and the output axes. *)
 let einsum spec =
   let op_body ~nv ~n1v ~n2v projections =
-    Ndarray.(accum_binop_code ~zero_out:true ~accum:add_code ~op:mul_code ~lhs:nv ~rhs1:n1v ~rhs2:n2v
+    Ndcode.(accum_binop ~zero_out:true ~accum:add ~op:mul ~lhs:nv ~rhs1:n1v ~rhs2:n2v
                projections) in
   let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v projections = .<
-    .~(Ndarray.(accum_binop_code ~accum:add_code ~op:mul_code ~lhs:n1g ~rhs1:ng ~rhs2:n2v @@
+    .~(Ndcode.(accum_binop ~accum:add ~op:mul ~lhs:n1g ~rhs1:ng ~rhs2:n2v @@
                 Shape.backprop1 projections));
-    .~(Ndarray.(accum_binop_code ~accum:add_code ~op:mul_code ~lhs:n2g ~rhs1:ng ~rhs2:n1v @@
+    .~(Ndcode.(accum_binop ~accum:add ~op:mul ~lhs:n2g ~rhs1:ng ~rhs2:n1v @@
                 Shape.backprop2 projections))
   >. in
   binop ~compose_op:(`Einsum spec) ~op_label:"" ~op_body ~grad_body
@@ -61,27 +61,27 @@ let einsum spec =
     and the output axes. *)
 let einsum1 spec =
   let op_body ~nv ~n1v projections =
-    Ndarray.(accum_unop_code ~zero_out:true ~accum:add_code ~op:id_code ~lhs:nv ~rhs:n1v
+    Ndcode.(accum_unop ~zero_out:true ~accum:add ~op:identity ~lhs:nv ~rhs:n1v
                projections) in
   let grad_body ~n1g ~ng ~nv:_ ~n1v:_ projections =
-    Ndarray.(accum_unop_code ~accum:add_code ~op:id_code ~lhs:n1g ~rhs:ng @@
+    Ndcode.(accum_unop ~accum:add ~op:identity ~lhs:n1g ~rhs:ng @@
                 Shape.backprop_unary projections) in
   unop ~transpose_op:(`Permute spec) ~op_label:"" ~op_body ~grad_body
 
 let relu =
   let op_body ~nv ~n1v projections =
-    Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:relu_code ~lhs:nv ~rhs:n1v projections) in
+    Ndcode.(accum_unop ~accum:skip_arg ~op:relu ~lhs:nv ~rhs:n1v projections) in
   let grad_body ~n1g ~ng ~nv ~n1v:_ projections =
-    Ndarray.(accum_binop_code ~accum:add_code ~op:relu_gate_code ~lhs:n1g ~rhs1:nv ~rhs2:ng @@
+    Ndcode.(accum_binop ~accum:add ~op:relu_gate ~lhs:n1g ~rhs1:nv ~rhs2:ng @@
              Shape.backprop_unary projections) in
   unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
 let reset_value v ~nv shape =
-  Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun _ -> value_code v) ~lhs:nv ~rhs:nv
+  Ndcode.(accum_unop ~accum:skip_arg ~op:(fun _ -> value v) ~lhs:nv ~rhs:nv
              (Shape.terminal_projections shape))
 
 let uniform_value ~nv shape =
-  Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun _ -> uniform_code ~low:(-1.0) ~high:1.0)
+  Ndcode.(accum_unop ~accum:skip_arg ~op:(fun _ -> uniform ~low:(-1.0) ~high:1.0)
              ~lhs:nv ~rhs:nv @@ Shape.terminal_projections shape)
 
 let float_to_label v = "v" ^ (
@@ -93,7 +93,7 @@ let number v =
   term ~label:(float_to_label v) (`Constant ([1], "")) ~op_body:(reset_value v)
 
 let assign ~nv ~n1v projections =
-  Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun v -> v) ~lhs:nv ~rhs:n1v projections)
+  Ndcode.(accum_unop ~accum:skip_arg ~op:(fun v -> v) ~lhs:nv ~rhs:n1v projections)
 
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient =
@@ -161,11 +161,11 @@ let sprint_code code =
   let s = Caml.Format.flush_str_formatter() in
   let s = String.substr_replace_all s ~pattern:"Base." ~with_:"" in
   let s = String.substr_replace_all s ~pattern:"Ocannl." ~with_:"" in
-  let s = String.substr_replace_all s ~pattern:"Ndarray." ~with_:"" in
+  let s = String.substr_replace_all s ~pattern:"Ndcode." ~with_:"" in
   let s = String.substr_replace_all s ~pattern:"Node." ~with_:"" in
   s, check
 
-(** We print out up to 5 axes when printing an [Ndarray], as a grid (outer rectangle) of (inner)
+(** We print out up to 5 axes when printing an [Ndcode], as a grid (outer rectangle) of (inner)
     rectangles, possibly repeated (screens). *)
 type array_print_style =
 [ `Default
@@ -179,13 +179,13 @@ type array_print_style =
 (** The string should provide exclusively non-negative integer pseudo-labels. The numbers [0]-[4] represent
     the priorities of the axes to be printed out, where the priorities correspond to, from highest:
     horizontal directions of inner, outer rectangle, verticals directions of inner, outer rectangle,
-    repetition (see also [Ndarray.pp_print]). The numbers [n >= 5] stand for the actual positions [n - 5]
+    repetition (see also [Ndcode.pp_print]). The numbers [n >= 5] stand for the actual positions [n - 5]
     within the corresponding axes. *)
 | `Label_layout of (string * int) list
 (** The association from axis labels to integers. The negative numbers [-5] to [-1] represent
     the priorities of the axes to be printed out, where the priorities correspond to, from highest:
     horizontal directions of inner, outer rectangle, verticals directions of inner, outer rectangle,
-    repetition (see also [Ndarray.pp_print]). The non-negative numbers stand for the actual positions
+    repetition (see also [Ndcode.pp_print]). The non-negative numbers stand for the actual positions
     within the corresponding axes. Unspecified axes are printed at position [0]. *)
 ]
 
@@ -253,10 +253,10 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
   let screen_stop () =
     Stdio.print_endline "Press [Enter] for next screen, [q] [Enter] to quit.";
     String.(Stdio.In_channel.input_line_exn Stdio.stdin = "q")  in
-  Ndarray.pp_print Caml.Format.std_formatter ~labels ~screen_stop ~indices m.comp_node.value;
+  Ndcode.pp_print Caml.Format.std_formatter ~labels ~screen_stop ~indices m.comp_node.value;
   if with_grad then (
     Stdio.print_endline "Gradient:";
-    Ndarray.pp_print Caml.Format.std_formatter ~labels ~screen_stop ~indices
+    Ndcode.pp_print Caml.Format.std_formatter ~labels ~screen_stop ~indices
       m.comp_node.grad);
   if with_code then (
     (match m.forward_body with
@@ -345,7 +345,7 @@ module CLI = struct
   let stop_gradient = stop_gradient
   let refresh_session = refresh_session
   let print_global_root = print_global_root
-  let print_node = Ndarray.print_node
+  let print_node = Ndcode.print_node
   let print_formula = print_formula
   let print_global_roots = print_global_roots
   let get_root = get_root

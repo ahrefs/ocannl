@@ -5,7 +5,7 @@ open Base
 type t = {
   apply: Formula.t -> Formula.t;
   params: (Formula.t, Formula.comparator_witness) Set.t;
-  promote_precision: Ndarray.precision option;
+  promote_precision: Ndcode.precision option;
   (** The precision at which the network's computation should happen, regardless of the precisions
       of the inputs and results. *)
 }

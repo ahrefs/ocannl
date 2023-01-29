@@ -7,16 +7,16 @@ type precision =
   | Double
   (* FIXME(28): implement precision setting and precision-specific code generation. *)
   
- let zero_code = .< 0.0 >.
+ let zero = .< 0.0 >.
 
- let one_code = .< 1.0 >.
+ let one = .< 1.0 >.
  
 (** Accumulates the results of the operation: [lhs = accum lhs (op rhs1 rhs2)]. *)
-let accum_binop_code ?(zero_out=false) ~accum ~op ~lhs ~rhs1 ~rhs2 projections =
+let accum_binop ?(zero_out=false) ~accum ~op ~lhs ~rhs1 ~rhs2 projections =
   let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
   let rhs1_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
   let rhs2_idx = match projections.project_rhs2 with
-    | None -> invalid_arg "accum_binop_code: projections missing project_rhs2"
+    | None -> invalid_arg "accum_binop: projections missing project_rhs2"
     | Some rhs2 -> Shape.(derive_index projections.product_iterators rhs2) in
   let basecase rev_iters =
     let iters = Array.of_list_rev rev_iters in
@@ -33,12 +33,12 @@ let accum_binop_code ?(zero_out=false) ~accum ~op ~lhs ~rhs1 ~rhs2 projections =
          .~(loop (.<i>. ::rev_iters) product)
        done >. in
   if zero_out then
-    .< Bigarray.Genarray.fill .~lhs .~zero_code; .~(loop [] @@ Array.to_list projections.product_space) >.
+    .< Bigarray.Genarray.fill .~lhs .~zero; .~(loop [] @@ Array.to_list projections.product_space) >.
   else
     loop [] @@ Array.to_list projections.product_space
 
 (** Accumulates the results of the operation: [lhs = accum lhs (op rhs)]. *)
-let accum_unop_code ?(zero_out=false) ~accum ~op ~lhs ~rhs projections =
+let accum_unop ?(zero_out=false) ~accum ~op ~lhs ~rhs projections =
   let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
   let rhs1_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
   let basecase rev_iters =
@@ -55,25 +55,25 @@ let accum_unop_code ?(zero_out=false) ~accum ~op ~lhs ~rhs projections =
          .~(loop (.<i>. ::rev_iters) product)
        done >. in
   if zero_out then
-    .< Bigarray.Genarray.fill .~lhs .~zero_code; .~(loop [] @@ Array.to_list projections.product_space) >.
+    .< Bigarray.Genarray.fill .~lhs .~zero; .~(loop [] @@ Array.to_list projections.product_space) >.
   else
     loop [] @@ Array.to_list projections.product_space
 
-let skip_arg_code (_n1: float Codelib.code) (n2: float Codelib.code) = n2
+let skip_arg (_n1: float Codelib.code) (n2: float Codelib.code) = n2
 
-let id_code (n: float Codelib.code) = n
+let identity (n: float Codelib.code) = n
 
-let add_code n1 n2 = .< Float.(.~n1 + .~n2) >.
+let add n1 n2 = .< Float.(.~n1 + .~n2) >.
 
-let mul_code n1 n2 = .< Float.(.~n1 * .~n2) >.
+let mul n1 n2 = .< Float.(.~n1 * .~n2) >.
 
-let relu_code n = .< Float.(if .~n > 0.0 then .~n else 0.0) >.
+let relu n = .< Float.(if .~n > 0.0 then .~n else 0.0) >.
 
-let relu_gate_code n1 n2 = .< Float.(if .~n1 > 0.0 then .~n2 else 0.0) >.
+let relu_gate n1 n2 = .< Float.(if .~n1 > 0.0 then .~n2 else 0.0) >.
 
-let value_code (v: float) = Lifts.Lift_float.lift v
+let value (v: float) = Lifts.Lift_float.lift v
 
-let uniform_code ~low ~high = .< Random.float_range low high >.
+let uniform ~low ~high = .< Random.float_range low high >.
 
 
 
@@ -102,7 +102,7 @@ let pp_print fmt ?(entries_per_axis=4) ?(labels=[||]) ~screen_stop ~indices (arr
   let ind0, ind1, ind2, ind3, ind4 =
     match var_indices with 
     | [|ind4; ind3; ind2; ind1; ind0|] -> ind0, ind1, ind3, ind2, ind4
-    | _ -> invalid_arg "Ndarray.pp_print: indices should contain at most 5 negative numbers" in
+    | _ -> invalid_arg "Ndcode.pp_print: indices should contain at most 5 negative numbers" in
   let labels = Array.append (Array.create ~len:(5 - Array.length labels) "") @@
     Array.map labels ~f:(fun l -> if String.is_empty l then l else l^":") in
   let label0, label1, label2, label3, label4 =

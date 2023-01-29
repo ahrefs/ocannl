@@ -10,7 +10,7 @@ type t = {
   init_values: unit -> unit Codelib.code;
   (** Initializes the values. *)
   init_grads: unit -> unit Codelib.code;
-  (** Initializes the gradient data: typically, simply creates the ndarrays.
+  (** Initializes the gradient data: typically, simply creates the arrays.
       Gradients are zeroed separately. The code is suspended so that it can incorporate shape inference. *)
   backprop_body: (unit -> unit Codelib.code) option;
   zero_grads: unit -> unit Codelib.code;
@@ -59,13 +59,13 @@ let session_error_printer = function
 
 let () = Caml.Printexc.register_printer session_error_printer
   
-(* [reset_] and [create_] functions are the only direct users of [Ndarray] functions inside [Formula].
+(* [reset_] and [create_] functions are the only direct users of [Ndcode] functions inside [Formula].
    The other uses are mediated by the [~op_body], [~grad_body] and [~init_code] arguments. *)
 let reset_zeros n shape =
-   Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun _ -> zero_code) ~lhs:n ~rhs:n
+   Ndcode.(accum_unop ~accum:skip_arg ~op:(fun _ -> zero) ~lhs:n ~rhs:n
               (Shape.terminal_projections shape))
 let reset_ones n shape =
-  Ndarray.(accum_unop_code ~accum:skip_arg_code ~op:(fun _ -> one_code) ~lhs:n ~rhs:n
+  Ndcode.(accum_unop ~accum:skip_arg ~op:(fun _ -> one) ~lhs:n ~rhs:n
              (Shape.terminal_projections shape))
 let create_value node shape =
    .< Ocannl_runtime.Node.(.~node.value <- create_array .~(Shape.to_dims_code shape)) >.
