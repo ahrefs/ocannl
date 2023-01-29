@@ -293,7 +293,7 @@ let print_global_roots ~with_grad ~with_code (style: array_print_style) =
       assert (node_id = root.formula.node_id);
       print_global_root ~with_grad ~with_code style root)
 
-let refresh_session ?(regenerate=false) ?(reinit=false) ?(run=true) ?(force_no_init=false) () =
+let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) ?(force_no_init=false) () =
   if force_no_init && (regenerate || reinit || run) then
     invalid_arg "refresh_session: set other triggers to false when using force_no_init";
   (* Initialization and the forward processing. *)
@@ -310,20 +310,30 @@ let refresh_session ?(regenerate=false) ?(reinit=false) ?(run=true) ?(force_no_i
     if not force_no_init && 
         (reinit || Option.is_none root.formula.comp_node.forward) then (
       try
-        Exec.load_native (Option.value_exn root.forward_code)
+        let contents = Exec.load_native ?with_debug (Option.value_exn root.forward_code) in
+        match contents, m.comp_node.forward with
+        | Some contents, Some forward ->
+          m.comp_node.forward <- 
+            Some (fun () -> try forward() with error -> Exec.handle_error "Forward error:" error contents)
+        | _ -> ()
       with Session_error (msg, None) ->
-        let msg = "Forward error: "^msg in
+        let msg = "Forward init error: "^msg in
         Stdio.print_endline msg;
         raise @@ Session_error (msg, Some m);
     );
     if not force_no_init && 
         (reinit || Option.is_none root.formula.comp_node.backprop) then (
       try
-        Exec.load_native (Option.value_exn root.backprop_code);
+        let contents = Exec.load_native ?with_debug (Option.value_exn root.backprop_code) in
+        match contents, m.comp_node.backprop with
+        | Some contents, Some backprop ->
+          m.comp_node.backprop <-
+            Some (fun () -> try backprop() with error -> Exec.handle_error "Backprop error:" error contents)
+        | _ -> ()
       with Session_error (msg, None) ->
-        Stdio.print_endline "Forward (context for error):";
+        Stdio.print_endline "Forward code (context for error):";
         Stdio.print_endline @@ fst @@ sprint_code @@ Option.value_exn root.forward_code;
-        let msg = "Backprop error: "^msg in
+        let msg = "Backprop init error: "^msg in
         Stdio.print_endline msg;
         raise @@ Session_error (msg, Some m);
     );

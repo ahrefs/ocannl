@@ -71,20 +71,39 @@ let first_file_span ~contents ~message =
   with Caml.Not_found ->
     0, last_char
 
+let handle_error prefix exc contents =
+  let message =
+    match !Ocannl_runtime.Node.error_message__ with None -> "error not captured" | Some m -> m in
+  Ocannl_runtime.Node.error_message__ := None;
+  let from_pos, to_pos = first_file_span ~contents ~message in
+  let contents =
+    String.sub contents ~pos:0 ~len:from_pos ^ "«" ^
+    String.sub contents ~pos:from_pos ~len:(to_pos - from_pos) ^ "»" ^ 
+    String.sub contents ~pos:to_pos ~len:(String.length contents - to_pos) in
+  let contents = String.substr_replace_all contents ~pattern:"Ocannl_runtime." ~with_:"" in
+  let contents = String.substr_replace_all contents ~pattern:"Node." ~with_:"" in
+  let local_msg = Caml.Printexc.to_string exc^"\n"^Caml.Printexc.get_backtrace() in
+  Stdio.print_endline prefix;
+  Stdio.print_endline @@ "Original error:\n" ^ message;
+  Stdio.print_endline @@ "Local error:\n" ^ local_msg;
+  Stdio.print_endline @@ "In code span «...»:\n"^contents;
+
+  raise @@ Formula.Session_error (prefix^"\n"^message^"\nIn code span «...»:\n"^contents, None)
+
 let load_native ?(with_debug=true) (cde: unit Codelib.code) =
   let closed = Codelib.close_code cde in
   if not Dynlink.is_native then invalid_arg "Exec.load_forward: only works in native code";
   let source_fname = create_comp_unit closed in
   let plugin_fname = compile_source ~with_debug source_fname in
-  let () =
-    if with_debug then
-      try Dynlink.loadfile_private plugin_fname with
+  let result =
+    if with_debug then (
+      Caml.Format.pp_set_margin Caml.Format.str_formatter 160;
+      Caml.Format.fprintf Caml.Format.str_formatter
+        "try@ %a@ with error -> Ocannl_runtime.Node.set_error_message error; raise error@.%!"
+        Codelib.format_code closed;
+      let contents = Caml.Format.flush_str_formatter() in
+      try Dynlink.loadfile_private plugin_fname; Some contents with
       | Dynlink.Error (Library's_module_initializers_failed _exc) ->
-        Caml.Format.pp_set_margin Caml.Format.str_formatter 160;
-        Caml.Format.fprintf Caml.Format.str_formatter
-          "try@ %a@ with error -> Ocannl_runtime.Node.set_error_message error; raise error@.%!"
-          Codelib.format_code closed;
-        let contents = Caml.Format.flush_str_formatter() in
         let message =
           match !Ocannl_runtime.Node.error_message__ with None -> "error not captured" | Some m -> m in
         Ocannl_runtime.Node.error_message__ := None;
@@ -95,8 +114,9 @@ let load_native ?(with_debug=true) (cde: unit Codelib.code) =
           String.sub contents ~pos:to_pos ~len:(String.length contents - to_pos) in
         let contents = String.substr_replace_all contents ~pattern:"Ocannl_runtime." ~with_:"" in
         let contents = String.substr_replace_all contents ~pattern:"Node." ~with_:"" in
-        raise @@ Formula.Session_error ("Runtime error: \n"^message^"\nIn code span «...»:\n"^contents, None)
+        raise @@ Formula.Session_error ("Runtime error: \n"^message^"\nIn code span «...»:\n"^contents, None))
     
-    else Dynlink.loadfile_private plugin_fname in
+    else (Dynlink.loadfile_private plugin_fname; None) in
   Caml.Sys.remove plugin_fname;
-  Caml.Sys.remove source_fname
+  Caml.Sys.remove source_fname;
+  result
