@@ -39,19 +39,13 @@ let compile_source ~with_debug src_fname =
 let code_file_prefix = "runn"
 
 (* Create a file to compile and later link, using the given closed code *)
-let create_comp_unit ~with_debug closed =
+let create_comp_unit closed =
   let fname, oc =
     Caml.Filename.open_temp_file ~mode:[Open_wronly;Open_creat;Open_text]
       code_file_prefix ".ml" in
   let ppf = Caml.Format.formatter_of_out_channel oc in
   Caml.Format.pp_set_margin ppf 160;
-  let () =
-  (* TODO(29): Cleanup when the backtrace can be captured in this file. *)
-    if with_debug then
-      Caml.Format.fprintf ppf
-       "try@ %a@ with error -> Ocannl_runtime.Node.set_error_message error; raise error@.%!"
-       Codelib.format_code closed
-    else Codelib.format_code ppf closed in
+  let () = Codelib.format_code ppf closed in
   let () = Stdio.Out_channel.close oc in
   fname
 
@@ -80,7 +74,7 @@ let first_file_span ~contents ~message =
 let load_native ?(with_debug=true) (cde: unit Codelib.code) =
   let closed = Codelib.close_code cde in
   if not Dynlink.is_native then invalid_arg "Exec.load_forward: only works in native code";
-  let source_fname = create_comp_unit ~with_debug closed in
+  let source_fname = create_comp_unit closed in
   let plugin_fname = compile_source ~with_debug source_fname in
   let () =
     if with_debug then

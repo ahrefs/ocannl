@@ -302,22 +302,35 @@ let term ~label ?needs_gradient (spec: Shape.term_spec) ~op_body : t =
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
   formula
 
-let get_toplevel_native m =
+let get_toplevel_native ?(with_debug=true) m =
   let forward_body = match m.forward_body with None -> .< () >. | Some body -> body() in
-  let toplevel_forward = .<
-    .~(m.init_values ());
-    .~(m.node).Ocannl_runtime.Node.forward <- Some (fun () -> .~forward_body) >. in
+  let toplevel_forward =
+    if with_debug then .<
+      (try .~(m.init_values ()) with error -> Ocannl_runtime.Node.set_error_message error; raise error);
+      .~(m.node).Ocannl_runtime.Node.forward <- Some (fun () ->
+        try .~forward_body with error -> Ocannl_runtime.Node.set_error_message error; raise error) >.
+    else .<
+      .~(m.init_values ());
+      .~(m.node).Ocannl_runtime.Node.forward <- Some (fun () -> .~forward_body) >. in
   let backprop_body = match m.backprop_body with None -> .< () >. | Some body -> body() in
   let ng = .< .~(m.node).Ocannl_runtime.Node.grad >. in
   let toplevel_backprop =
     if not m.needs_gradient then .<
       .~(m.node).Ocannl_runtime.Node.backprop <- Some (fun () -> ()) >.
+    else if with_debug then .<
+      (try .~(m.init_grads ()) with error -> Ocannl_runtime.Node.set_error_message error; raise error);
+      .~(m.node).Ocannl_runtime.Node.backprop <- Some (fun () ->
+        try
+          .~(m.zero_grads());
+          .~(reset_ones ng m.shape);
+          .~backprop_body
+        with error -> Ocannl_runtime.Node.set_error_message error; raise error) >.
     else .<
-    .~(m.init_grads ());
-    .~(m.node).Ocannl_runtime.Node.backprop <- Some (fun () ->
-      .~(m.zero_grads());
-      .~(reset_ones ng m.shape);
-      .~backprop_body) >. in
+      .~(m.init_grads ());
+      .~(m.node).Ocannl_runtime.Node.backprop <- Some (fun () ->
+        .~(m.zero_grads());
+        .~(reset_ones ng m.shape);
+        .~backprop_body) >. in
   toplevel_forward, toplevel_backprop
 
 let sexp_of_t m =
