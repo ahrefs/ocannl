@@ -1,12 +1,13 @@
 (** `Node`: the computation type, global state and utils which the `Formula` staged code uses. *)
-(* Do not depend on Base to minimize dependencies. *)
+open Base
+
 module A = Bigarray.Genarray
 type elt = Bigarray.float32_elt
 type data = (float, elt, Bigarray.c_layout) A.t
 
 let error_message__ : string option ref = ref None
 let set_error_message exc =
-  let msg = Printexc.to_string exc^"\n"^Printexc.get_backtrace() in
+  let msg = Caml.Printexc.to_string exc^"\n"^Caml.Printexc.get_backtrace() in
   error_message__ := Some msg
 
 let dims (arr: data) = A.dims arr
@@ -30,9 +31,9 @@ type state = {
 
 let global = {
   unique_id = 1;
-  node_store = Hashtbl.create 16;
+  node_store = Hashtbl.create (module Int);
 }
-let get uid = Hashtbl.find global.node_store uid
+let get uid = Hashtbl.find_exn global.node_store uid
 
 let create ~label =
   let node = {
@@ -41,7 +42,7 @@ let create ~label =
     label;
     id=let uid = global.unique_id in global.unique_id <- global.unique_id + 1; uid
   } in
-  Hashtbl.add global.node_store node.id node;
+  Hashtbl.add_exn global.node_store ~key:node.id ~data:node;
   node
 
 let minus = (-)

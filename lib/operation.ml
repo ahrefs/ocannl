@@ -140,7 +140,7 @@ let get_root id =
 
 let get_node id =
   let open Ocannl_runtime.Node in
-  match Caml.Hashtbl.find_opt global.node_store id with
+  match Hashtbl.find global.node_store id with
   | Some r -> r
   | None ->
     let msg = 

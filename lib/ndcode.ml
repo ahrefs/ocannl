@@ -1,4 +1,4 @@
-(** Multidimensional arrays and the code for operating on them. *)
+(** The code for operating on n-dimensional arrays. *)
 open Base
 
 type precision =

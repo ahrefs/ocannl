@@ -1,5 +1,6 @@
 (library
  (name ocannl_runtime)
+ (libraries base)
  (modules node)
  (modes byte native))
 
