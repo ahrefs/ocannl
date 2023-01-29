@@ -1,7 +1,5 @@
 (** `Node`: the computation type, global state and utils which the `Formula` staged code uses. *)
 (* Do not depend on Base to minimize dependencies. *)
-module Obj = Obj
-
 module A = Bigarray.Genarray
 type elt = Bigarray.float32_elt
 type data = (float, elt, Bigarray.c_layout) A.t

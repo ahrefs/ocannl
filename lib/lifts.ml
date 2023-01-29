@@ -57,7 +57,7 @@ let lift_array : 'a code array -> 'a array code = fun arr ->
   arr |> 
     Array.map (fun x -> (x : 'a code :> Trx.code_repr)) |>
     Trx.build_array Trx.loc_none |>  (* returns code_repr for array *)
-    Ocannl_runtime.Node.Obj.magic |>
+    Caml.Obj.magic |>
     genlet
 
 module Lift_array(L:lift) = struct

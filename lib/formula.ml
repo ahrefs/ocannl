@@ -296,7 +296,7 @@ let get_toplevel_native m =
   let forward_body = match m.forward_body with None -> .< () >. | Some body -> body() in
   let toplevel_forward = .<
     .~(m.init_values ());
-    .~(m.node).Ocannl_runtime.Node.backprop <- Some (fun () -> .~forward_body) >. in
+    .~(m.node).Ocannl_runtime.Node.forward <- Some (fun () -> .~forward_body) >. in
   let backprop_body = match m.backprop_body with None -> .< () >. | Some body -> body() in
   let ng = .< .~(m.node).Ocannl_runtime.Node.grad >. in
   let toplevel_backprop =

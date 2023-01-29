@@ -1,7 +1,5 @@
 (library
  (name ocannl_runtime)
- (libraries base)
- (preprocess (pps ppx_jane))
  (modules node)
  (modes byte native))
 

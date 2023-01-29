@@ -248,7 +248,7 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
         match Map.find inv_labels l with Some axis -> axis, i | None ->
           raise @@ Session_error ("`Label_layout label not found in shape: "^l, Some m)) in
       Shape.axis_map_to_dims_index @@ Map.of_alist_exn (module Shape.AxisKey) idcs in
-  (* let labels = sh.Shape.axis_labels in *)
+  (* FIXME: let labels = sh.Shape.axis_labels in *)
   let labels = [||] in
   let screen_stop () =
     Stdio.print_endline "Press [Enter] for next screen, [q] [Enter] to quit.";
