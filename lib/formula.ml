@@ -215,7 +215,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
     | true, _ | _, None -> op_body
     | false, Some m_body -> fun() -> .< .~(m_body()); .~(op_body()) >. in
   let m_init_values = m.init_values in
-  let init_values = fun () -> .<
+  let init_values() = .<
     .~(m_init_values ());
     .~(create_value node shape);
   >. in
@@ -284,7 +284,10 @@ let term ~label ?needs_gradient (spec: Shape.term_spec) ~op_body : t =
   let nv = .< .~node.value >. in
   (* Very unlikely someone will compute just the parameters. *)
   let forward_body = None in
-  let init_values() = op_body ~nv shape in
+  let init_values() = .<
+    .~(create_value node shape);
+    .~(op_body ~nv shape);
+  >. in
   let ng = .< .~node.grad >. in
   let zero_grads() = reset_zeros ng shape in
   let backprop_body = None in
