@@ -296,6 +296,7 @@ let print_global_roots ~with_grad ~with_code (style: array_print_style) =
 let refresh_session ?(regenerate=false) ?(reinit=false) ?(run=true) ?(force_no_init=false) () =
   if force_no_init && (regenerate || reinit || run) then
     invalid_arg "refresh_session: set other triggers to false when using force_no_init";
+  (* Initialization and the forward processing. *)
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
     let m = root.formula in
     if regenerate || Option.is_none root.forward_code || Option.is_none root.backprop_code then (
@@ -307,13 +308,28 @@ let refresh_session ?(regenerate=false) ?(reinit=false) ?(run=true) ?(force_no_i
        root.formula.comp_node.backprop <- None
     );
     if not force_no_init && 
-        (reinit || Option.is_none root.formula.comp_node.forward) then
-      Exec.load_native (Option.value_exn root.forward_code);
+        (reinit || Option.is_none root.formula.comp_node.forward) then (
+      try
+        Exec.load_native (Option.value_exn root.forward_code)
+      with Session_error (msg, None) ->
+        let msg = "Forward error: "^msg in
+        Stdio.print_endline msg;
+        raise @@ Session_error (msg, Some m);
+    );
     if not force_no_init && 
-        (reinit || Option.is_none root.formula.comp_node.backprop) then
-      Exec.load_native (Option.value_exn root.backprop_code);
+        (reinit || Option.is_none root.formula.comp_node.backprop) then (
+      try
+        Exec.load_native (Option.value_exn root.backprop_code);
+      with Session_error (msg, None) ->
+        Stdio.print_endline "Forward (context for error):";
+        Stdio.print_endline @@ fst @@ sprint_code @@ Option.value_exn root.forward_code;
+        let msg = "Backprop error: "^msg in
+        Stdio.print_endline msg;
+        raise @@ Session_error (msg, Some m);
+    );
     if run then Option.value_exn root.formula.comp_node.forward ();
   );
+  (* The backpropagation. *)
   if run then
     List.iter (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
       Option.value_exn root.formula.comp_node.backprop ())

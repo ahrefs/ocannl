@@ -5,7 +5,9 @@ type elt = Bigarray.float32_elt
 type data = (float, elt, Bigarray.c_layout) A.t
 
 let error_message__ : string option ref = ref None
-
+let set_error_message exc =
+  let msg = Printexc.to_string exc^"\n"^Printexc.get_backtrace() in
+  error_message__ := Some msg
 
 let dims (arr: data) = A.dims arr
   

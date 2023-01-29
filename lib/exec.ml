@@ -49,7 +49,7 @@ let create_comp_unit ~with_debug closed =
   (* TODO(29): Cleanup when the backtrace can be captured in this file. *)
     if with_debug then
       Caml.Format.fprintf ppf
-       "try@ %a@ with error -> Ocannl_runtime.Node.error_message__ := Some(Printexc.get_backtrace()); raise error@.%!"
+       "try@ %a@ with error -> Ocannl_runtime.Node.set_error_message error; raise error@.%!"
        Codelib.format_code closed
     else Codelib.format_code ppf closed in
   let () = Stdio.Out_channel.close oc in
@@ -88,11 +88,12 @@ let load_native ?(with_debug=true) (cde: unit Codelib.code) =
       | Dynlink.Error (Library's_module_initializers_failed _exc) ->
         Caml.Format.pp_set_margin Caml.Format.str_formatter 160;
         Caml.Format.fprintf Caml.Format.str_formatter
-          "try@ %a@ with error -> Ocannl_runtime.Node.error_message__ := Some (Printexc.get_backtrace()); raise error@.%!"
+          "try@ %a@ with error -> Ocannl_runtime.Node.set_error_message error; raise error@.%!"
           Codelib.format_code closed;
         let contents = Caml.Format.flush_str_formatter() in
         let message =
           match !Ocannl_runtime.Node.error_message__ with None -> "error not captured" | Some m -> m in
+        Ocannl_runtime.Node.error_message__ := None;
         let from_pos, to_pos = first_file_span ~contents ~message in
         let contents =
           String.sub contents ~pos:0 ~len:from_pos ^ "«" ^
@@ -100,7 +101,6 @@ let load_native ?(with_debug=true) (cde: unit Codelib.code) =
           String.sub contents ~pos:to_pos ~len:(String.length contents - to_pos) in
         let contents = String.substr_replace_all contents ~pattern:"Ocannl_runtime." ~with_:"" in
         let contents = String.substr_replace_all contents ~pattern:"Node." ~with_:"" in
-        Stdio.print_endline contents;
         raise @@ Formula.Session_error ("Runtime error: \n"^message^"\nIn code span «...»:\n"^contents, None)
     
     else Dynlink.loadfile_private plugin_fname in

@@ -52,6 +52,13 @@ let first_session_id = ref 1
 
 exception Session_error of string * t option
 
+let session_error_printer = function
+  | Session_error (msg, None) -> Some msg
+  | Session_error (msg, Some m) -> Some ("[Node "^Int.to_string m.node_id^"] "^msg)
+  | _ -> None
+
+let () = Caml.Printexc.register_printer session_error_printer
+  
 (* [reset_] and [create_] functions are the only direct users of [Ndarray] functions inside [Formula].
    The other uses are mediated by the [~op_body], [~grad_body] and [~init_code] arguments. *)
 let reset_zeros n shape =
