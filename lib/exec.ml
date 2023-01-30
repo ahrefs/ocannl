@@ -5,10 +5,8 @@ open Base
 
 let load_path : string list ref = ref []
 
-(* Add a directory to search for .cmo/.cmi files, needed
-   for the sake of running the generated code .
-   The specified directory is prepended to the load_path.
-*)
+(** Add a directory to search for .cmo/.cmi files, needed for the sake of running the generated code.
+    The specified directory is prepended to [load_path]. *)
 let add_search_path dir =
   load_path := dir :: !load_path
 
@@ -16,12 +14,11 @@ let ocamlopt_path =
   let open Caml.Filename in
   concat (concat (dirname (dirname (Config.standard_library))) "bin") "ocamlfind ocamlopt"
 
-(* Compile the source file and make the .cmxs, returning its name *)
+(** Compile the source file and make the .cmxs, returning its name. *)
 let compile_source ~with_debug src_fname =
   let basename = Caml.Filename.remove_extension src_fname in
-  let plugin_fname =  basename ^ ".cmxs" in
-  let other_files  =  [basename ^ ".cmi"; basename ^ ".cmx";
-                       basename ^ Config.ext_obj] in
+  let plugin_fname = basename ^ ".cmxs" in
+  let other_files = [basename ^ ".cmi"; basename ^ ".cmx"; basename ^ Config.ext_obj] in
   (* We need the byte objects directory in path because it contains the .cmi files. *)
   (* FIXME: un-hardcode the paths. *)
   let cmdline = ocamlopt_path ^ 
@@ -38,15 +35,23 @@ let compile_source ~with_debug src_fname =
 
 let code_file_prefix = "runn"
 
-(* Create a file to compile and later link, using the given closed code *)
+(** Create a file to compile and later link, using the given closed code. *)
 let create_comp_unit closed =
   let fname, oc =
     Caml.Filename.open_temp_file ~mode:[Open_wronly;Open_creat;Open_text]
       code_file_prefix ".ml" in
+  (* FIXME(32): the following outputs truncated source code -- missing the last line:
   let ppf = Caml.Format.formatter_of_out_channel oc in
   Caml.Format.pp_set_margin ppf 160;
   let () = Codelib.format_code ppf closed in
-  let () = Stdio.Out_channel.close oc in
+  let () = Stdio.Out_channel.close oc in *)
+  Caml.Format.pp_set_margin Caml.Format.str_formatter 160;
+  Codelib.format_code Caml.Format.str_formatter closed;
+  let contents = Caml.Format.flush_str_formatter() in
+  Stdio.Out_channel.output_string oc contents;
+  Stdio.Out_channel.flush oc;
+  Stdio.Out_channel.close oc;
+  (* Stdio.printf "\nCreated file:\n%s\n\n%!" @@ Stdio.In_channel.read_all fname; *)
   fname
 
 let first_file_span_re = Str.regexp @@

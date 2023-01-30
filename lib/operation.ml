@@ -313,10 +313,9 @@ let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) 
         let contents = Exec.load_native ?with_debug (Option.value_exn root.forward_code) in
         match contents, m.comp_node.forward with
         | Some contents, Some forward ->
-          m.comp_node.forward <- 
+          m.comp_node.forward <-
             Some (fun () -> try forward() with error -> Exec.handle_error "Forward error:" error ~contents)
-        (* FIXME: mysterious buggy behavior. *)
-        | _, None -> Stdio.print_endline "This is bad forward."
+        | _, None -> assert false
         | _ -> ()
       with Session_error (msg, None) ->
         let msg = "Forward init error: "^msg in
@@ -330,8 +329,7 @@ let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) 
         | Some contents, Some backprop ->
           m.comp_node.backprop <-
             Some (fun () -> try backprop() with error -> Exec.handle_error "Backprop error:" error ~contents)
-        (* FIXME: mysterious buggy behavior. *)
-        | _, None -> Stdio.print_endline "This is bad backprop."
+        | _, None -> assert false
         | _ -> ()
       with Session_error (msg, None) ->
         Stdio.print_endline "Forward code (context for backprop init error):";
@@ -341,8 +339,7 @@ let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) 
     );
     if run then match root.formula.comp_node.forward with
       | Some forward -> forward()
-      (* FIXME: mysterious buggy behavior. *)
-      | None -> Stdio.print_endline "This is bad."
+      | None -> assert false
   );
   (* The backpropagation. *)
   if run then
