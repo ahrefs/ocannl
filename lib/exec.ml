@@ -25,7 +25,7 @@ let compile_source ~with_debug src_fname =
   (* We need the byte objects directory in path because it contains the .cmi files. *)
   (* FIXME: un-hardcode the paths. *)
   let cmdline = ocamlopt_path ^ 
-                " -I ~/ocannl/_build/default/lib -I ~/ocannl/_build/default/lib/.ocannl_runtime.objs/native -I ~/ocannl/_build/default/lib/.ocannl_runtime.objs/byte -package base " ^
+                " -I ~/ocannl/_build/default/lib -I ~/ocannl/_build/default/lib/.ocannl_runtime.objs/native -I ~/ocannl/_build/default/lib/.ocannl_runtime.objs/byte -package base -package stdio " ^
                 " -shared"^(if with_debug then " -g" else "")^" -o " ^ plugin_fname ^
                 (String.concat ~sep:"" @@ 
                  List.map ~f:(fun p -> " -I " ^ p) !load_path) ^

@@ -1,13 +1,13 @@
 (library
  (name ocannl_runtime)
- (libraries base)
+ (libraries base stdio)
  (modules node)
  (modes byte native))
 
 
 (library
  (name ocannl)
- (libraries base dynlink str metaocaml ocannl_runtime)
+ (libraries base stdio dynlink str metaocaml ocannl_runtime)
  (preprocess (pps ppx_jane))
  (modules lifts ndcode shape formula operation network model exec)
  (modes byte native))
