@@ -314,11 +314,12 @@ let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) 
         match contents, m.comp_node.forward with
         | Some contents, Some forward ->
           m.comp_node.forward <- 
-            Some (fun () -> try forward() with error -> Exec.handle_error "Forward error:" error contents)
+            Some (fun () -> try forward() with error -> Exec.handle_error "Forward error:" error ~contents)
+        (* FIXME: mysterious buggy behavior. *)
+        | _, None -> Stdio.print_endline "This is bad forward."
         | _ -> ()
       with Session_error (msg, None) ->
         let msg = "Forward init error: "^msg in
-        Stdio.print_endline msg;
         raise @@ Session_error (msg, Some m);
     );
     if not force_no_init && 
@@ -328,16 +329,20 @@ let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) 
         match contents, m.comp_node.backprop with
         | Some contents, Some backprop ->
           m.comp_node.backprop <-
-            Some (fun () -> try backprop() with error -> Exec.handle_error "Backprop error:" error contents)
+            Some (fun () -> try backprop() with error -> Exec.handle_error "Backprop error:" error ~contents)
+        (* FIXME: mysterious buggy behavior. *)
+        | _, None -> Stdio.print_endline "This is bad backprop."
         | _ -> ()
       with Session_error (msg, None) ->
-        Stdio.print_endline "Forward code (context for error):";
+        Stdio.print_endline "Forward code (context for backprop init error):";
         Stdio.print_endline @@ fst @@ sprint_code @@ Option.value_exn root.forward_code;
         let msg = "Backprop init error: "^msg in
-        Stdio.print_endline msg;
         raise @@ Session_error (msg, Some m);
     );
-    if run then Option.value_exn root.formula.comp_node.forward ();
+    if run then match root.formula.comp_node.forward with
+      | Some forward -> forward()
+      (* FIXME: mysterious buggy behavior. *)
+      | None -> Stdio.print_endline "This is bad."
   );
   (* The backpropagation. *)
   if run then

@@ -49,13 +49,13 @@ let create_comp_unit closed =
   let () = Stdio.Out_channel.close oc in
   fname
 
-let first_file_span_re = Str.regexp "line \\([0-9]+\\), characters \\([0-9]+\\)-\\([0-9]+\\)"
+let first_file_span_re = Str.regexp @@
+  code_file_prefix ^ "[A-Za-z0-9]*.ml\", line \\([0-9]+\\), characters \\([0-9]+\\)-\\([0-9]+\\)"
 
 (** Returns the character offset span inside [contents] corresponding to the first file span from [message].
     Returns [0, 0] if no span is found. *)
 let first_file_span ~contents ~message =
   let last_char = String.length contents - 1 in
-  (* Stdio.printf "first_file_span: message=%s, match=%d\n" message (Str.search_forward first_file_span_re message 0); *)
   try
     ignore (Str.search_forward first_file_span_re message 0);
     let line_num = Int.of_string @@ Str.matched_group 1 message in
@@ -71,10 +71,8 @@ let first_file_span ~contents ~message =
   with Caml.Not_found ->
     0, last_char
 
-let handle_error prefix exc contents =
-  let message =
-    match !Ocannl_runtime.Node.error_message__ with None -> "error not captured" | Some m -> m in
-  Ocannl_runtime.Node.error_message__ := None;
+let handle_error prefix exc ~contents =
+  let message = Caml.Printexc.to_string exc^"\n"^Caml.Printexc.get_backtrace() in
   let from_pos, to_pos = first_file_span ~contents ~message in
   let contents =
     String.sub contents ~pos:0 ~len:from_pos ^ "«" ^
@@ -82,10 +80,7 @@ let handle_error prefix exc contents =
     String.sub contents ~pos:to_pos ~len:(String.length contents - to_pos) in
   let contents = String.substr_replace_all contents ~pattern:"Ocannl_runtime." ~with_:"" in
   let contents = String.substr_replace_all contents ~pattern:"Node." ~with_:"" in
-  let local_msg = Caml.Printexc.to_string exc^"\n"^Caml.Printexc.get_backtrace() in
-  Stdio.print_endline prefix;
-  Stdio.print_endline @@ "Original error:\n" ^ message;
-  Stdio.print_endline @@ "Local error:\n" ^ local_msg;
+  Stdio.print_endline @@ prefix^" "^message;
   Stdio.print_endline @@ "In code span «...»:\n"^contents;
 
   raise @@ Formula.Session_error (prefix^"\n"^message^"\nIn code span «...»:\n"^contents, None)
@@ -98,24 +93,12 @@ let load_native ?(with_debug=true) (cde: unit Codelib.code) =
   let result =
     if with_debug then (
       Caml.Format.pp_set_margin Caml.Format.str_formatter 160;
-      Caml.Format.fprintf Caml.Format.str_formatter
-        "try@ %a@ with error -> Ocannl_runtime.Node.set_error_message error; raise error@.%!"
-        Codelib.format_code closed;
+      Codelib.format_code Caml.Format.str_formatter closed;
       let contents = Caml.Format.flush_str_formatter() in
       try Dynlink.loadfile_private plugin_fname; Some contents with
-      | Dynlink.Error (Library's_module_initializers_failed _exc) ->
-        let message =
-          match !Ocannl_runtime.Node.error_message__ with None -> "error not captured" | Some m -> m in
-        Ocannl_runtime.Node.error_message__ := None;
-        let from_pos, to_pos = first_file_span ~contents ~message in
-        let contents =
-          String.sub contents ~pos:0 ~len:from_pos ^ "«" ^
-          String.sub contents ~pos:from_pos ~len:(to_pos - from_pos) ^ "»" ^ 
-          String.sub contents ~pos:to_pos ~len:(String.length contents - to_pos) in
-        let contents = String.substr_replace_all contents ~pattern:"Ocannl_runtime." ~with_:"" in
-        let contents = String.substr_replace_all contents ~pattern:"Node." ~with_:"" in
-        raise @@ Formula.Session_error ("Runtime error: \n"^message^"\nIn code span «...»:\n"^contents, None))
-    
+      | Dynlink.Error (Library's_module_initializers_failed exc) ->
+        handle_error "Runtime init error:" exc ~contents)
+
     else (Dynlink.loadfile_private plugin_fname; None) in
   Caml.Sys.remove plugin_fname;
   Caml.Sys.remove source_fname;

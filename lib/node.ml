@@ -5,11 +5,6 @@ module A = Bigarray.Genarray
 type elt = Bigarray.float32_elt
 type data = (float, elt, Bigarray.c_layout) A.t
 
-let error_message__ : string option ref = ref None
-let set_error_message exc =
-  let msg = Caml.Printexc.to_string exc^"\n"^Caml.Printexc.get_backtrace() in
-  error_message__ := Some msg
-
 let dims (arr: data) = A.dims arr
   
  let create_array = A.create Bigarray.Float32 Bigarray.C_layout
