@@ -44,5 +44,3 @@ let create ~label =
   } in
   Hashtbl.add_exn global.node_store ~key:node.id ~data:node;
   node
-
-let minus = (-)

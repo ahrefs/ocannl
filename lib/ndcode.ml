@@ -29,7 +29,7 @@ let accum_binop ?(zero_out=false) ~accum ~op ~lhs ~rhs1 ~rhs2 projections =
   let rec loop rev_iters = function
   | [] -> basecase rev_iters
   | dim::product ->
-    .< for i = 0 to Ocannl_runtime.Node.minus .~(Lifts.Lift_int.lift dim) 1 do
+    .< for i = 0 to .~(Lifts.Lift_int.lift dim) - 1 do
          .~(loop (.<i>. ::rev_iters) product)
        done >. in
   if zero_out then
@@ -51,7 +51,7 @@ let accum_unop ?(zero_out=false) ~accum ~op ~lhs ~rhs projections =
   let rec loop rev_iters = function
   | [] -> basecase rev_iters
   | dim::product ->
-    .< for i = 0 to Ocannl_runtime.Node.minus .~(Lifts.Lift_int.lift dim) 1 do
+    .< for i = 0 to .~(Lifts.Lift_int.lift dim) - 1 do
          .~(loop (.<i>. ::rev_iters) product)
        done >. in
   if zero_out then
