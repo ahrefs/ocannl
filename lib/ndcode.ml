@@ -76,6 +76,22 @@ let value (v: float) = Lifts.Lift_float.lift v
 let uniform ~low ~high = .< Random.float_range low high >.
 
 
+(* TODO: perhaps the rest of this file should be a separate [Ndarray] module. *)
+
+(** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
+    Outputs ["-"] for empty dimensions. *)
+let dims_to_string dims =
+  if Array.is_empty dims then "-"
+  else String.concat_array ~sep:"x" @@ Array.map dims ~f:Int.to_string_hum
+
+(** Converts ID, label and the dimensions of a node to a string. *)
+let node_header n =
+  let open Ocannl_runtime.Node in
+  let v_dims_s = dims_to_string @@ dims n.value in
+  let g_dims_s = dims_to_string @@ dims n.grad in
+  let dims_s =
+    if String.equal v_dims_s g_dims_s then "dims "^v_dims_s else "dims val "^v_dims_s^" grad "^g_dims_s in
+  (if String.is_empty n.label then " #" else n.label^" #")^Int.to_string n.id^" "^dims_s
 
 (** Prints 0-based [indices] entries out of [arr], where a number between [-5] and [-1] in an axis means
     to print out the axis, and a non-negative number means to print out only the indexed dimension of the axis.
@@ -177,36 +193,12 @@ let pp_print fmt ?(entries_per_axis=4) ?(labels=[||]) ~screen_stop ~indices (arr
       done with Stop_outermost_axis -> ());
   pp_close_tbox fmt (); pp_print_newline fmt ()
 
-
-    (* Debug navi-parens.
-    let debug_navi_parens fmt dims ~indices =
-      let ind1, ind2, ind3 =
-        match indices with 
-        | [ind1; ind2; ind3] -> ind1, ind2, ind3
-        | _ -> assert false in
-      let to1 = if ind1 = -1 then 0 else dims.(ind1) - 1 in
-      let to2 = if ind2 = -1 then 0 else dims.(ind2) - 1 in
-      let to3 = if ind3 = -1 then 0 else dims.(ind3) - 1 in
-      let open Caml.Format in
-      for i = 0 to to1 do
-        for j = 0 to to2 do
-          for k = 0 to to3 do
-            if k <> to3 then (pp_print_tab fmt (); fprintf fmt "|")
-            else (
-              (* sort out if we need [pp_print_tbreak fmt 0 0]. *)
-                
-            )
-          done
-        done
-      done;
-      pp_print_newline fmt ()*)
-
 let print_node ~with_grad ~indices n =
   let open Ocannl_runtime.Node in
   let screen_stop () =
     Stdio.print_endline "Press [Enter] for next screen, [q] [Enter] to quit.";
     String.(Stdio.In_channel.input_line_exn Stdio.stdin = "q")  in
-  Stdio.print_endline @@ "["^Int.to_string n.id^"] "^n.label;
+  Stdio.print_endline @@ "["^node_header n^"] "^n.label;
   pp_print Caml.Format.std_formatter ~screen_stop ~indices n.value;
   if with_grad then (
     Stdio.print_endline "Gradient:";

@@ -76,7 +76,7 @@ let first_file_span ~contents ~message =
   with Caml.Not_found ->
     0, last_char
 
-let handle_error prefix exc ~contents =
+let handle_error prefix ?formula ~contents exc =
   let message = Caml.Printexc.to_string exc^"\n"^Caml.Printexc.get_backtrace() in
   let from_pos, to_pos = first_file_span ~contents ~message in
   let contents =
@@ -85,10 +85,9 @@ let handle_error prefix exc ~contents =
     String.sub contents ~pos:to_pos ~len:(String.length contents - to_pos) in
   let contents = String.substr_replace_all contents ~pattern:"Ocannl_runtime." ~with_:"" in
   let contents = String.substr_replace_all contents ~pattern:"Node." ~with_:"" in
-  Stdio.print_endline @@ prefix^" "^message;
-  Stdio.print_endline @@ "In code span «...»:\n"^contents;
-
-  raise @@ Formula.Session_error (prefix^"\n"^message^"\nIn code span «...»:\n"^contents, None)
+  let contents = String.substr_replace_all contents ~pattern:"Base." ~with_:"" in
+  let contents = String.substr_replace_all contents ~pattern:"Stdlib.Bigarray.Genarray." ~with_:"A." in
+  raise @@ Formula.Session_error (prefix^"\n"^message^"\nIn code span «...»:\n"^contents, formula)
 
 let load_native ?(with_debug=true) (cde: unit Codelib.code) =
   let closed = Codelib.close_code cde in
@@ -102,7 +101,7 @@ let load_native ?(with_debug=true) (cde: unit Codelib.code) =
       let contents = Caml.Format.flush_str_formatter() in
       try Dynlink.loadfile_private plugin_fname; Some contents with
       | Dynlink.Error (Library's_module_initializers_failed exc) ->
-        handle_error "Runtime init error:" exc ~contents)
+        handle_error "Runtime init error:" ~contents exc)
 
     else (Dynlink.loadfile_private plugin_fname; None) in
   Caml.Sys.remove plugin_fname;

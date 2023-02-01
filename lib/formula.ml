@@ -46,15 +46,27 @@ type global_root = {
     of a global root. *)
 let global_roots = ref @@ Map.empty (module Int)
 
-(** A current session is the range of nodes from [!first_session_id] to [global.unique_id]. Subformulas
-    with [node_id] before this range are not allowed in new formulas. *)
+(** A current session is the range of nodes from [!first_session_id] to [Node.global.unique_id - 1].
+    Subformulas with [node_id] before this range are not allowed in new formulas. *)
 let first_session_id = ref 1
 
 exception Session_error of string * t option
 
+let prefix_with_preamble content =
+  let open Ocannl_runtime in
+  let result = Buffer.create 16 in
+  let ap = Buffer.add_string result in
+  for i = !first_session_id to Node.global.unique_id - 1 do
+    let n = Ndcode.node_header @@ Node.get i in
+    ap"Node "; ap n; ap";\n";
+  done;
+  ap content; 
+  Buffer.contents result
+
 let session_error_printer = function
-  | Session_error (msg, None) -> Some msg
-  | Session_error (msg, Some m) -> Some ("[Node "^Int.to_string m.node_id^"] "^msg)
+  | Session_error (msg, None) -> Some (prefix_with_preamble msg)
+  | Session_error (msg, Some m) ->
+    Some (prefix_with_preamble @@ "For #"^Int.to_string_hum m.node_id^": "^msg)
   | _ -> None
 
 let () = Caml.Printexc.register_printer session_error_printer
