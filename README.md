@@ -3,16 +3,26 @@ ocannl
 
 ## OCaNNL: OCaml Neural Networks Library
 
-The most bare-bones from-scratch implementation based on MetaOCaml.
-Inspired by Andrej Karpathy's [Micrograd](https://github.com/karpathy/micrograd) and by [JAX](https://jax.readthedocs.io/en/latest/autodidax.html).
-
-MetaOCaml's generated code can be both run directly (encapsulating the steps: natively compile, dynlink and invoke), or it can be offshored, saved as text, etc. It offers debuggability and lots of flexibility going forward.
-
-OCaNNL's codeflow is as follows:
-1. Construct a model, represented by a loss formula composed of appropriate subformulas all the way down to parameters. Inputs are just parameters that the training loop treats specially. The primitives are in the module [`Formula`](lib/formula.ml). The subformulas store code pieces that are not compiled (not `Runcode.run`ed) yet.
-2. MetaOCaml's `Runcode.run` combines compiling and executing the code. Executing code of a `Formula` specializes it to particular [`Ndarray`](lib/ndarray.ml) dimensions, and outputs the procedures for forward inference and backward gradient propagation.
-3. A step of the training loop sets the inputs, invokes the "forward" and "backprop" procedures, and updates the parameters (adding to a parameter's `value`, its `grad` scaled by the learning rate). Gradient zeroing is performed automatically by the "backprop" procedure.
-4. The low-level computations are encapsulated by [`Ndarray`](lib/ndarray.ml). I plan to implement them in CUDA.
+* A from-scratch, compiled Deep Learning framework based on MetaOCaml.
+* Implements backpropagation (i.e. first-order reverse mode autodiff) and shape inference.
+* Tensor axes have optional labels and are split into kinds: batch, input and output.
+* Has full support for the `einsum` notation, integrated with shape inference.
+* Optionally, can deduce output axes from input axes, e.g. with scaling to make expansion or bottleneck layers auto-adapting to the dimensionality of the data.
+* Has a suite of tutorials doubling as tests with inline expectations. `dune runtest`, and `dune promote` if diffs look OK.
+* Does not use any external computation libraries. Compiles everything down to `for` loops.
+  * The generated code is dynamically linked with the "user land" code.
+  * Currently, compiles all computation of a single step of training into two programs: the forward pass and the backpropagation pass.
+  * I plan to implement offshoring to CUDA at some point.
+* Offers four levels of abstraction:
+  * [`Model`](lib/model.ml) for optimizable objects / data approximators.
+  * [`Network`](lib/network.ml) for trainable components.
+  * [`Operation`](lib/operation.ml) for differentiable computations.
+  * [`Node`](lib/node.ml) maintains a store of n-dimensional arrays that the compiled code operates on.
+* Does not hide anything. Model surgery should be starightforward (not sure if we are there yet).
+* Does not build an explicit computation graph.
+  * Instead, directly composes code fragments.
+  * Generation of the final code is suspended since it requires results of shape inference. Users can force code generation for intermediate components, for debugging.
+  * The generated code should be somewhat readable and debuggable, but is very low-level.
 
 ## Installation
 
@@ -27,4 +37,9 @@ Some ideas regarding installation (skip or substitute equivalent actions etc.):
 * eval $(opam env)
 * opam install ocaml-canvas
 * cd ~/ocannl
-* dune exec ocannl
+* dune runtest
+
+## Interesting links to other projects
+
+* Andrej Karpathy's [Micrograd](https://github.com/karpathy/micrograd)
+* [JAX autodidax](https://jax.readthedocs.io/en/latest/autodidax.html)
