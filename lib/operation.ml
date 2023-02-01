@@ -9,19 +9,19 @@ open Formula
 let add =
   let op_body ~nv ~n1v ~n2v projections =
     Ndcode.(accum_binop ~accum:skip_arg ~op:add ~lhs:nv ~rhs1:n1v ~rhs2:n2v projections) in
-  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v:_ ~n2v:_ projections = .<
-    .~(Ndcode.(accum_unop ~accum:add ~op:Fn.id ~lhs:n1g ~rhs:ng @@ Shape.backprop1 projections));
-    .~(Ndcode.(accum_unop ~accum:add ~op:Fn.id ~lhs:n2g ~rhs:ng @@ Shape.backprop2 projections))
+  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v:_ ~n2v:_ projections = .<
+    .~(Ndcode.(accum_unop ~accum:add ~op:num_id ?lhs:n1g ?rhs:ng @@ Shape.backprop1 projections));
+    .~(Ndcode.(accum_unop ~accum:add ~op:num_id ?lhs:n2g ?rhs:ng @@ Shape.backprop2 projections))
   >. in
   binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
 let mul compose_op =
   let op_body ~nv ~n1v ~n2v projections =
     Ndcode.(accum_binop ~accum:skip_arg ~op:mul ~lhs:nv ~rhs1:n1v ~rhs2:n2v projections) in
-  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v projections = .<
-    .~(Ndcode.(accum_binop ~accum:add ~op:mul ~lhs:n1g ~rhs1:ng ~rhs2:n2v @@
+  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v ~n2v projections = .<
+    .~(Ndcode.(accum_binop ~accum:add ~op:mul ?lhs:n1g ?rhs1:ng ~rhs2:n2v @@
                 Shape.backprop1 projections));
-    .~(Ndcode.(accum_binop ~accum:add ~op:mul ~lhs:n2g ~rhs1:ng ~rhs2:n1v @@
+    .~(Ndcode.(accum_binop ~accum:add ~op:mul ?lhs:n2g ?rhs1:ng ~rhs2:n1v @@
                 Shape.backprop2 projections))
   >. in
   binop ~compose_op ~op_label:"" ~op_body ~grad_body
@@ -46,10 +46,10 @@ let einsum spec =
   let op_body ~nv ~n1v ~n2v projections =
     Ndcode.(accum_binop ~zero_out:true ~accum:add ~op:mul ~lhs:nv ~rhs1:n1v ~rhs2:n2v
                projections) in
-  let grad_body ~n1g ~n2g ~ng ~nv:_ ~n1v ~n2v projections = .<
-    .~(Ndcode.(accum_binop ~accum:add ~op:mul ~lhs:n1g ~rhs1:ng ~rhs2:n2v @@
+  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v ~n2v projections = .<
+    .~(Ndcode.(accum_binop ~accum:add ~op:mul ?lhs:n1g ?rhs1:ng ~rhs2:n2v @@
                 Shape.backprop1 projections));
-    .~(Ndcode.(accum_binop ~accum:add ~op:mul ~lhs:n2g ~rhs1:ng ~rhs2:n1v @@
+    .~(Ndcode.(accum_binop ~accum:add ~op:mul ?lhs:n2g ?rhs1:ng ~rhs2:n1v @@
                 Shape.backprop2 projections))
   >. in
   binop ~compose_op:(`Einsum spec) ~op_label:"" ~op_body ~grad_body
@@ -63,16 +63,16 @@ let einsum1 spec =
   let op_body ~nv ~n1v projections =
     Ndcode.(accum_unop ~zero_out:true ~accum:add ~op:identity ~lhs:nv ~rhs:n1v
                projections) in
-  let grad_body ~n1g ~ng ~nv:_ ~n1v:_ projections =
-    Ndcode.(accum_unop ~accum:add ~op:identity ~lhs:n1g ~rhs:ng @@
+  let grad_body ?n1g ?ng ~nv:_ ~n1v:_ projections =
+    Ndcode.(accum_unop ~accum:add ~op:identity ?lhs:n1g ?rhs:ng @@
                 Shape.backprop_unary projections) in
   unop ~transpose_op:(`Permute spec) ~op_label:"" ~op_body ~grad_body
 
 let relu =
   let op_body ~nv ~n1v projections =
     Ndcode.(accum_unop ~accum:skip_arg ~op:relu ~lhs:nv ~rhs:n1v projections) in
-  let grad_body ~n1g ~ng ~nv ~n1v:_ projections =
-    Ndcode.(accum_binop ~accum:add ~op:relu_gate ~lhs:n1g ~rhs1:nv ~rhs2:ng @@
+  let grad_body ?n1g ?ng ~nv ~n1v:_ projections =
+    Ndcode.(accum_binop ~accum:add ~op:relu_gate ?lhs:n1g ~rhs1:nv ?rhs2:ng @@
              Shape.backprop_unary projections) in
   unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
@@ -92,13 +92,15 @@ let number v =
   (* Note: no axis label so that we do not conflict with user labels. *)
   term ~label:(float_to_label v) (`Constant ([1], "")) ~op_body:(reset_value v)
 
-let assign ~nv ~n1v projections =
-  Ndcode.(accum_unop ~accum:skip_arg ~op:(fun v -> v) ~lhs:nv ~rhs:n1v projections)
+let assign ?lhs ?rhs projections =
+  Ndcode.(accum_unop ~accum:skip_arg ~op:(fun v -> v) ?lhs ?rhs projections)
+
+let assign_op ~nv ~n1v projections = assign ~lhs:nv ~rhs:n1v projections
 
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient =
-  let grad_body ~n1g:_ ~ng:_ ~nv:_ ~n1v:_ _projections = .< () >. in
-  unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign ~grad_body
+  let grad_body ?n1g:_ ?ng:_ ~nv:_ ~n1v:_ _projections = .< () >. in
+  unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign_op ~grad_body
 
 (** A [stop_broadcast] mutates the partially-inferred shape of a formula in-place, substituting-in
     a [Fixed] marker on the dimensions. This way we avoid introducing a new node. *)
@@ -111,8 +113,8 @@ let stop_broadcast m =
     
 (** [identity] introduces a new node, which is an identity in both the forward and backward pass. *)
 let identity m =
-  let grad_body ~n1g ~ng ~nv:_ ~n1v:_ projections = assign ~nv:n1g ~n1v:ng projections in
-  unop ~init_shape:m.shape ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign ~grad_body
+  let grad_body ?n1g ?ng ~nv:_ ~n1v:_ projections = assign ?lhs:n1g ?rhs:ng projections in
+  unop ~init_shape:m.shape ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign_op ~grad_body
     
 module O = struct
   let ( * ) = matmul

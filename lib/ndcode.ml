@@ -12,54 +12,74 @@ type precision =
  let one = .< 1.0 >.
  
 (** Accumulates the results of the operation: [lhs = accum lhs (op rhs1 rhs2)]. *)
-let accum_binop ?(zero_out=false) ~accum ~op ~lhs ~rhs1 ~rhs2 projections =
+let accum_binop ?(zero_out=false) ~accum ~op ?lhs ?rhs1 ?rhs2 projections =
   let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
   let rhs1_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
   let rhs2_idx = match projections.project_rhs2 with
     | None -> invalid_arg "accum_binop: projections missing project_rhs2"
     | Some rhs2 -> Shape.(derive_index projections.product_iterators rhs2) in
-  let basecase rev_iters =
-    let iters = Array.of_list_rev rev_iters in
-    let lhs_idx = Lifts.lift_array @@ lhs_idx iters in
-    let rhs1_idx = Lifts.lift_array @@ rhs1_idx iters in
-    let rhs2_idx = Lifts.lift_array @@ rhs2_idx iters in
-    .< Bigarray.Genarray.set .~lhs .~lhs_idx
-       .~(accum .<Bigarray.Genarray.get .~lhs .~lhs_idx>. @@
-          op .<Bigarray.Genarray.get .~rhs1 .~rhs1_idx>. .<Bigarray.Genarray.get .~rhs2 .~rhs2_idx>. ) >. in
-  let rec loop rev_iters = function
-  | [] -> basecase rev_iters
-  | dim::product ->
-    .< for i = 0 to .~(Lifts.Lift_int.lift dim) - 1 do
-         .~(loop (.<i>. ::rev_iters) product)
-       done >. in
-  if zero_out then
-    .< Bigarray.Genarray.fill .~lhs .~zero; .~(loop [] @@ Array.to_list projections.product_space) >.
-  else
-    loop [] @@ Array.to_list projections.product_space
+  let rhs1 iters =
+    match rhs1 with
+    | None -> zero
+    | Some rhs1 ->
+      let rhs1_idx = Lifts.lift_array @@ rhs1_idx iters in
+      .<Bigarray.Genarray.get .~rhs1 .~rhs1_idx>. in
+  let rhs2 iters =
+    match rhs2 with
+    | None -> zero
+    | Some rhs2 -> 
+      let rhs2_idx = Lifts.lift_array @@ rhs2_idx iters in
+      .<Bigarray.Genarray.get .~rhs2 .~rhs2_idx>. in
+  match lhs with
+  | None -> .<()>.
+  | Some lhs ->
+    let basecase rev_iters =
+      let iters = Array.of_list_rev rev_iters in
+      let lhs_idx = Lifts.lift_array @@ lhs_idx iters in
+      .< Bigarray.Genarray.set .~lhs .~lhs_idx
+           .~(accum .<Bigarray.Genarray.get .~lhs .~lhs_idx>. @@ op (rhs1 iters) (rhs2 iters) ) >. in
+    let rec loop rev_iters = function
+      | [] -> basecase rev_iters
+      | dim::product ->
+        .< for i = 0 to .~(Lifts.Lift_int.lift dim) - 1 do
+          .~(loop (.<i>. ::rev_iters) product)
+        done >. in
+    if zero_out then
+      .< Bigarray.Genarray.fill .~lhs .~zero; .~(loop [] @@ Array.to_list projections.product_space) >.
+    else
+      loop [] @@ Array.to_list projections.product_space
 
 (** Accumulates the results of the operation: [lhs = accum lhs (op rhs)]. *)
-let accum_unop ?(zero_out=false) ~accum ~op ~lhs ~rhs projections =
+let accum_unop ?(zero_out=false) ~accum ~op ?lhs ?rhs projections =
   let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
   let rhs1_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
-  let basecase rev_iters =
-    let iters = Array.of_list_rev rev_iters in
-    let lhs_idx = Lifts.lift_array @@ lhs_idx iters in
-    let rhs1_idx = Lifts.lift_array @@ rhs1_idx iters in
-    .< Bigarray.Genarray.set .~lhs .~lhs_idx
-       .~(accum .<Bigarray.Genarray.get .~lhs .~lhs_idx>. @@
-          op .<Bigarray.Genarray.get .~rhs .~rhs1_idx>. ) >. in
-  let rec loop rev_iters = function
-  | [] -> basecase rev_iters
-  | dim::product ->
-    .< for i = 0 to .~(Lifts.Lift_int.lift dim) - 1 do
-         .~(loop (.<i>. ::rev_iters) product)
-       done >. in
-  if zero_out then
-    .< Bigarray.Genarray.fill .~lhs .~zero; .~(loop [] @@ Array.to_list projections.product_space) >.
-  else
-    loop [] @@ Array.to_list projections.product_space
+  let rhs iters =
+    match rhs with
+    | None -> zero
+    | Some rhs ->
+      let rhs1_idx = Lifts.lift_array @@ rhs1_idx iters in
+      .<Bigarray.Genarray.get .~rhs .~rhs1_idx>. in
+  match lhs with
+  | None -> .<()>.
+  | Some lhs ->
+    let basecase rev_iters =
+      let iters = Array.of_list_rev rev_iters in
+      let lhs_idx = Lifts.lift_array @@ lhs_idx iters in
+      .< Bigarray.Genarray.set .~lhs .~lhs_idx
+          .~(accum .<Bigarray.Genarray.get .~lhs .~lhs_idx>. @@ op (rhs iters) ) >. in
+    let rec loop rev_iters = function
+      | [] -> basecase rev_iters
+      | dim::product ->
+        .< for i = 0 to .~(Lifts.Lift_int.lift dim) - 1 do
+          .~(loop (.<i>. ::rev_iters) product)
+        done >. in
+    if zero_out then
+      .< Bigarray.Genarray.fill .~lhs .~zero; .~(loop [] @@ Array.to_list projections.product_space) >.
+    else
+      loop [] @@ Array.to_list projections.product_space
 
 let skip_arg (_n1: float Codelib.code) (n2: float Codelib.code) = n2
+let num_id (n: float Codelib.code) = n
 
 let identity (n: float Codelib.code) = n
 

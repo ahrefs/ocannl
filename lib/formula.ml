@@ -132,12 +132,12 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
     else if m2_processed then fun () -> .< .~(m1_init_values ()); .~(init_values_body ()) >.
     else fun () -> .< .~(m1_init_values ()); .~(m2.init_values ()); .~(init_values_body ()) >.) in
   let needs_gradient = m1.needs_gradient || m2.needs_gradient in
+  let ng = if needs_gradient then Some .< .~node.grad >. else None in
+  let n1g = if m1.needs_gradient then Some .< .~(m1.node).grad >. else None in
+  let n2g = if m2.needs_gradient then Some .< .~(m2.node).grad >. else None in
   let m1_no_grad = m1_processed || not m1.needs_gradient in
   let m2_no_grad = m2_processed || not m2.needs_gradient in
-  let ng = .< .~node.grad >. in
-  let n1g = .< .~(m1.node).grad >. in
-  let n2g = .< .~(m2.node).grad >. in
-  let zero_body() = reset_zeros ng shape in
+  let zero_body() = match ng with None -> .<()>. | Some ng -> reset_zeros ng shape in
   (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
      and keep the backprop order for readability. *)
   let m1_zero_grads = m1.zero_grads in
@@ -150,7 +150,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   (* The code needs to be included in the reverse order to which it was computed! This guarantees
      that all ancestors of a node are backpropagated before the node is backpropagated, even for
      non-tree DAGs. *)
-  let grad_body() = grad_body ~n1g ~n2g ~ng ~nv ~n1v ~n2v projections in
+  let grad_body() = grad_body ?n1g ?n2g ?ng ~nv ~n1v ~n2v projections in
   let backprop_body =
     match m1_no_grad, m1.backprop_body, m2_no_grad, m2.backprop_body with
     | true, _, true, _ | true, _, _, None | _, None, true, _ | _, None, _, None -> grad_body
@@ -230,18 +230,19 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
     .~(m_init_values ());
     .~(create_value node shape);
   >. in
-  let m_no_grad = m_processed || not m.needs_gradient in
   let needs_gradient = m.needs_gradient in
-  let ng = .< .~node.grad >. in
-  let n1g = .< .~(m.node).grad >. in
-  let zero_body() = reset_zeros ng shape in
+  let ng = if needs_gradient then Some .< .~node.grad >. else None in
+  (* Note: not wrt. m_no_grad. *)
+  let n1g = if m.needs_gradient then Some .< .~(m.node).grad >. else None in
+  let m_no_grad = m_processed || not m.needs_gradient in
+  let zero_body() = match ng with None -> .<()>. | Some ng -> reset_zeros ng shape in
   (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
        and keep the backprop order for readability. *)
   let m_zero_grads = m.zero_grads in
   let zero_grads =
     if m_no_grad then zero_body
     else fun () -> .< .~(zero_body()); .~(m_zero_grads()) >. in
-  let grad_body() = grad_body ~n1g ~ng ~nv ~n1v projections in
+  let grad_body() = grad_body ?n1g ?ng ~nv ~n1v projections in
   (* The code needs to be included in the reverse order to which it was computed! *)
   let backprop_body =
     match m_no_grad, m.backprop_body with
