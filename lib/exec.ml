@@ -76,18 +76,25 @@ let first_file_span ~contents ~message =
   with Caml.Not_found ->
     0, last_char
 
+let error_opening_delimiter = " {$# "
+let error_closing_delimiter = " #$} "
+
 let handle_error prefix ?formula ~contents exc =
   let message = Caml.Printexc.to_string exc^"\n"^Caml.Printexc.get_backtrace() in
   let from_pos, to_pos = first_file_span ~contents ~message in
   let contents =
-    String.sub contents ~pos:0 ~len:from_pos ^ "«" ^
-    String.sub contents ~pos:from_pos ~len:(to_pos - from_pos) ^ "»" ^ 
+    String.sub contents ~pos:0 ~len:from_pos ^ error_opening_delimiter ^
+    String.sub contents ~pos:from_pos ~len:(to_pos - from_pos) ^ error_closing_delimiter ^ 
     String.sub contents ~pos:to_pos ~len:(String.length contents - to_pos) in
   let contents = String.substr_replace_all contents ~pattern:"Ocannl_runtime." ~with_:"" in
   let contents = String.substr_replace_all contents ~pattern:"Node." ~with_:"" in
   let contents = String.substr_replace_all contents ~pattern:"Base." ~with_:"" in
   let contents = String.substr_replace_all contents ~pattern:"Stdlib.Bigarray.Genarray." ~with_:"A." in
-  raise @@ Formula.Session_error (prefix^"\n"^message^"\nIn code span «...»:\n"^contents, formula)
+  let exc = Formula.Session_error (
+    prefix^"\n"^message^"\nIn code span "^error_opening_delimiter^"..."^error_closing_delimiter^
+    ":\n"^contents, formula) in
+  Stdio.prerr_endline @@ Option.value_exn (Formula.session_error_printer exc);
+  raise exc
 
 let load_native ?(with_debug=true) (cde: unit Codelib.code) =
   let closed = Codelib.close_code cde in
