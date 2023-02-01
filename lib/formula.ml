@@ -52,12 +52,13 @@ let first_session_id = ref 1
 
 exception Session_error of string * t option
 
+(** Prefix the input with the header information of all nodes within the current session. *)
 let prefix_with_preamble content =
   let open Ocannl_runtime in
   let result = Buffer.create 16 in
   let ap = Buffer.add_string result in
   for i = !first_session_id to Node.global.unique_id - 1 do
-    let n = Ndcode.node_header @@ Node.get i in
+    let n = NodeUI.node_header @@ Node.get i in
     ap"Node "; ap n; ap";\n";
   done;
   ap content; 

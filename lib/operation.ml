@@ -255,10 +255,10 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
   let screen_stop () =
     Stdio.print_endline "Press [Enter] for next screen, [q] [Enter] to quit.";
     String.(Stdio.In_channel.input_line_exn Stdio.stdin = "q")  in
-  Ndcode.pp_print Caml.Format.std_formatter ~labels ~screen_stop ~indices m.comp_node.value;
+  NodeUI.pp_print Caml.Format.std_formatter ~labels ~screen_stop ~indices m.comp_node.value;
   if with_grad then (
     Stdio.print_endline "Gradient:";
-    Ndcode.pp_print Caml.Format.std_formatter ~labels ~screen_stop ~indices
+    NodeUI.pp_print Caml.Format.std_formatter ~labels ~screen_stop ~indices
       m.comp_node.grad);
   if with_code then (
     (match m.forward_body with
@@ -361,7 +361,7 @@ module CLI = struct
   let stop_gradient = stop_gradient
   let refresh_session = refresh_session
   let print_global_root = print_global_root
-  let print_node = Ndcode.print_node
+  let print_node = NodeUI.print_node
   let print_formula = print_formula
   let print_global_roots = print_global_roots
   let get_root = get_root
@@ -373,23 +373,3 @@ module Summable = struct
   let (+) = add
   let zero = number 0.0
 end
-
-(*
-let postprocess code =
-  let closed, check = Codelib.close_code_delay_check code in
-  let ast = Codelib.ast_of_code closed in
-  Printast.expression
-*)
-
-(* 
-~/ocannl$ dune utop
-
-open Base
-#load "_build/default/lib/ocannl.cma"
-open Ocannl
-module F = Operation
-let d = [|3; 3|]
-let nn = F.O.(!/(!~"w" d * !~"x" d + !~"b" d))
-let () = Stdio.print_endline @@ fst @@ F.sprint nn.toplevel_forward
-let () = Stdio.print_endline @@ fst @@ F.sprint nn.toplevel_backprop
-*)
