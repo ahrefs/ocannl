@@ -153,7 +153,7 @@ let get_node id =
         "get_node: Node "^Int.to_string id^" has been removed or lives on a different machine" in
     raise @@ Session_error (msg, None)
 
-(* *** Printing. *** *)
+(** *** Printing. *** *)
 
 let sprint_code code =
   let closed, check = Codelib.close_code_delay_check code in
@@ -295,6 +295,8 @@ let print_global_roots ~with_grad ~with_code (style: array_print_style) =
       assert (node_id = root.formula.node_id);
       print_global_root ~with_grad ~with_code style root)
 
+(** *** Session management. *** *)
+
 let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) ?(force_no_init=false) () =
   if force_no_init && (regenerate || reinit || run) then
     invalid_arg "refresh_session: set other triggers to false when using force_no_init";
@@ -350,6 +352,21 @@ let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) 
     List.iter (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
       Option.value_exn root.formula.comp_node.backprop ())
 
+(** Discards global roots, rolls back [Node.state.unique_id] to [Formula.first_session_id], discards
+    the corresponding elements from [Node.state.node_store]. *)
+let drop_session() =
+  Formula.global_roots := Map.empty (module Int);
+  for i = !Formula.first_session_id to Ocannl_runtime.Node.global.unique_id - 1 do
+    Hashtbl.remove Ocannl_runtime.Node.global.node_store i
+  done;
+  Ocannl_runtime.Node.global.unique_id <- !Formula.first_session_id
+
+(** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id]. *)
+let close_session() =
+  Formula.first_session_id := Ocannl_runtime.Node.global.unique_id;
+  Formula.global_roots := Map.empty (module Int)
+
+      
 module CLI = struct
   module FO = O
   let einsum = einsum
@@ -360,6 +377,8 @@ module CLI = struct
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient
   let refresh_session = refresh_session
+  let drop_session = drop_session
+  let close_session = close_session
   let print_global_root = print_global_root
   let print_node = NodeUI.print_node
   let print_formula = print_formula

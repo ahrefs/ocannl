@@ -15,20 +15,20 @@ type content = {
 type loss_fun = params -> output:Formula.t -> target:Formula.t -> Formula.t
 type t = input:Formula.t -> target:Formula.t -> content
 
-let make ?(clear_session=true) network (loss_fun:loss_fun): t =
+let make ?(close_session=true) network (loss_fun:loss_fun): t =
   fun ~input ~target ->
   let nn = network() in
   let output = Network.O.(nn @@ input) in
   let loss = loss_fun nn.params ~output ~target in
   (* Reset the session. *)
-  if clear_session then (
-    Formula.first_session_id := Ocannl_runtime.Node.global.unique_id;
+  if close_session then (
     if (Map.existsi !Formula.global_roots ~f:(fun ~key ~data:_ -> key <> loss.node_id)) then (
       let _, other_root = Map.min_elt_exn @@ Map.filteri !Formula.global_roots
           ~f:(fun ~key ~data:_ -> key <> loss.node_id) in
       raise @@ Formula.Session_error (
-        "Model.make expects the loss to be the only global root", Some other_root.formula));
-    Formula.global_roots := Map.empty (module Int)
+        "Model.make ~close_session:true expects the loss to be the only global root",
+        Some other_root.formula));
+    Operation.close_session()
   );
   { input; output; loss; params=nn.params }
 

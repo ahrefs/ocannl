@@ -46,7 +46,8 @@ type global_root = {
     of a global root. *)
 let global_roots = ref @@ Map.empty (module Int)
 
-(** A current session is the range of nodes from [!first_session_id] to [Node.global.unique_id - 1].
+(** A current session is the range of nodes from [!first_session_id] to [Node.global.unique_id - 1],
+    or an empty range if [!first_session_id = Node.global.unique_id].
     Subformulas with [node_id] before this range are not allowed in new formulas. *)
 let first_session_id = ref 1
 
