@@ -171,15 +171,20 @@ let pp_print fmt ?(entries_per_axis=4) ?(labels=[||]) ~screen_stop ~indices (arr
           if k <> to3 then (pp_set_tab fmt (); fprintf fmt "|")
         done;
         (* Tables. *)
+        if ind0 <> -1 then (
+          let pos0 = if dims.(ind0) <= entries_per_axis || v < entries_per_axis / 2 then v
+            else dims.(ind0) + entries_per_axis / 2 - v in
+          indices.(ind0) <- pos0;
+        );
         for i = 0 to to1 do
           if ind1 <> -1 then (
-            let pos1 = if dims.(ind1) < entries_per_axis || i < entries_per_axis / 2 then i
+            let pos1 = if dims.(ind1) <= entries_per_axis || i < entries_per_axis / 2 then i
               else dims.(ind1) + entries_per_axis / 2 - i in
             indices.(ind1) <- pos1;
           );
           for j = 0 to to2 do
             if ind2 <> -1 then (
-              let pos2 = if dims.(ind2) < entries_per_axis || j < entries_per_axis / 2 then j
+              let pos2 = if dims.(ind2) <= entries_per_axis || j < entries_per_axis / 2 then j
                 else dims.(ind2) + entries_per_axis / 2 - j in
               indices.(ind2) <- pos2;
             );
@@ -192,18 +197,22 @@ let pp_print fmt ?(entries_per_axis=4) ?(labels=[||]) ~screen_stop ~indices (arr
             if ind1 <> -1 || ind2 <> -1 then fprintf fmt ">";
             for k = 0 to to3 do
               if ind3 <> -1 then (
-                let pos3 = if dims.(ind3) < entries_per_axis || k < entries_per_axis / 2 then k
+                let pos3 = if dims.(ind3) <= entries_per_axis || k < entries_per_axis / 2 then k
                   else dims.(ind3) + entries_per_axis / 2 - k in
                 indices.(ind3) <- pos3;
               );
               for l = 0 to to4 do
                 if ind4 <> -1 then (
-                  let pos4 = if dims.(ind4) < entries_per_axis || l < entries_per_axis / 2 then l
+                  let pos4 = if dims.(ind4) <= entries_per_axis || l < entries_per_axis / 2 then l
                     else dims.(ind4) + entries_per_axis / 2 - l in
                   indices.(ind4) <- pos4;
                 );
                 pp_print_tab fmt ();
-                fprintf fmt "%f" @@ A.get arr indices
+                try fprintf fmt "%f" @@ A.get arr indices
+                with Invalid_argument _ as error ->
+                  Stdio.Out_channel.printf "Invalid indices: %s into array: %s\n%!"
+                    (dims_to_string indices) (dims_to_string dims);
+                  raise error
               done;
               if k <> to3 then (pp_print_tab fmt (); fprintf fmt "|")
             done
