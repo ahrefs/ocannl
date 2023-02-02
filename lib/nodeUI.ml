@@ -32,7 +32,7 @@ let node_header n =
 let pp_print fmt ?(entries_per_axis=4) ?(labels=[||]) ~screen_stop ~indices (arr: Ocannl_runtime.Node.data) =
   let open Ocannl_runtime.Node in
   let dims = A.dims arr in
-  Stdio.Out_channel.(print_string "dims: "; print_s @@ Array.sexp_of_t (Int.sexp_of_t) dims; flush stdout);
+  Stdio.Out_channel.(print_endline @@ "dims: "^dims_to_string dims; flush stdout);
   let indices = Array.copy indices in
   let entries_per_axis = if entries_per_axis % 2 = 0 then entries_per_axis + 1 else entries_per_axis in
   let var_indices = Array.filter_mapi indices ~f:(fun i d -> if d <= -1 then Some (~-d, i) else None) in
