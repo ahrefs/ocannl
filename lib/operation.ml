@@ -181,21 +181,20 @@ type array_print_style =
 (** The string should provide exclusively non-negative integer pseudo-labels. The numbers [0]-[4] represent
     the priorities of the axes to be printed out, where the priorities correspond to, from highest:
     horizontal directions of inner, outer rectangle, verticals directions of inner, outer rectangle,
-    repetition (see also [Ndcode.pp_print]). The numbers [n >= 5] stand for the actual positions [n - 5]
+    repetition (see also [NodeUI.pp_print]). The numbers [n >= 5] stand for the actual positions [n - 5]
     within the corresponding axes. *)
 | `Label_layout of (string * int) list
 (** The association from axis labels to integers. The negative numbers [-5] to [-1] represent
     the priorities of the axes to be printed out, where the priorities correspond to, from highest:
     horizontal directions of inner, outer rectangle, verticals directions of inner, outer rectangle,
-    repetition (see also [Ndcode.pp_print]). The non-negative numbers stand for the actual positions
+    repetition (see also [NodeUI.pp_print]). The non-negative numbers stand for the actual positions
     within the corresponding axes. Unspecified axes are printed at position [0]. *)
 ]
 
 let print_formula ~with_grad ~with_code (style: array_print_style) m =
   assert (m.node_id = m.comp_node.id);
   let sh = m.shape in
-  Stdio.print_endline @@ "["^Int.to_string m.node_id^"] "^m.comp_node.label^": "^
-                         Shape.to_string_hum sh;
+  let prefix = "["^Int.to_string m.node_id^"] "^m.comp_node.label^": "^ Shape.to_string_hum sh^" " in
   let indices =
     match style with
     | `Default ->
@@ -254,10 +253,9 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
   let screen_stop () =
     Stdio.print_endline "Press [Enter] for next screen, [q] [Enter] to quit.";
     String.(Stdio.In_channel.input_line_exn Stdio.stdin = "q")  in
-  NodeUI.pp_print Caml.Format.std_formatter ~labels ~screen_stop ~indices m.comp_node.value;
+  NodeUI.pp_print Caml.Format.std_formatter ~prefix ~labels ~screen_stop ~indices m.comp_node.value;
   if with_grad then (
-    Stdio.print_endline "Gradient:";
-    NodeUI.pp_print Caml.Format.std_formatter ~labels ~screen_stop ~indices
+    NodeUI.pp_print Caml.Format.std_formatter ~prefix:(prefix^" Gradient ") ~labels ~screen_stop ~indices
       m.comp_node.grad);
   if with_code then (
     (match m.forward_body with
