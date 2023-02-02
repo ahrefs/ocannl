@@ -88,9 +88,9 @@ let float_to_label v = "v" ^ (
   Float.to_string v |> String.substr_replace_all ~pattern:"." ~with_:"p"
   |> String.substr_replace_all ~pattern:"-" ~with_:"m")
 
-let number v =
+let number ?(axis_label="") v =
   (* Note: no axis label so that we do not conflict with user labels. *)
-  term ~label:(float_to_label v) (`Constant ([1], "")) ~op_body:(reset_value v)
+  term ~label:(float_to_label v) (`Constant ([1], axis_label)) ~op_body:(reset_value v)
 
 let assign ?lhs ?rhs projections =
   Ndcode.(accum_unop ~accum:skip_arg ~op:(fun v -> v) ?lhs ?rhs projections)
@@ -374,6 +374,7 @@ module CLI = struct
   let reset_value = reset_value
   let uniform_value = uniform_value
   let term = term
+  let number = number
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient
   let refresh_session = refresh_session

@@ -260,7 +260,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   let subtree_shape_updates: Shape.update_step Sequence.t =
     if m_processed then local_shape_updates
     else Sequence.append local_shape_updates @@
-    (Map.find_exn !global_roots m.node_id).subtree_shape_updates in
+      (Map.find_exn !global_roots m.node_id).subtree_shape_updates in
 
   (if not m_processed then global_roots := Map.remove !global_roots m.node_id);
   let backprop_body= if needs_gradient then Some backprop_body else None in

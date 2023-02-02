@@ -127,7 +127,7 @@ type compose_type =
       Currently, we support two variants of the [einsum] syntax: either all the axes are provided,
       or all input, output axes are provided but none of the batch axes.
       Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
-  ]
+  ] [@@deriving sexp]
 
 type transpose_type =
   [ `Transpose
@@ -137,7 +137,7 @@ type transpose_type =
   | `Permute of string
   (** [`Permute (ls1^"=>"^ls2)] is a variant of the [einsum] syntax [`Einsum (ls1^";"^ls1^"=>"^ls2)].
       Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
-  ]
+  ] [@@deriving sexp]
 
 (** Parses a labels specification.
 
@@ -227,6 +227,7 @@ type logic =
   (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of [s1],
       hence the name. *)
   | Terminal
+  [@@deriving sexp]
 
 (** Data required for a shape inference update step. A step should equilibrate information, passing it both
     top-down and bottom-up. The child should be identifiable within the parent via physical equality
@@ -234,7 +235,7 @@ type logic =
 type update_step = {
   shape: t;
   logic: logic;
-}
+} [@@deriving sexp]
 
 exception Shape_error of string * t * t [@@deriving sexp]
 
