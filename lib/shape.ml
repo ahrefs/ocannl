@@ -266,8 +266,11 @@ let axis_keys_to_idcs (sh: t): int axis_map =
 (** Converts an axes-keyed map into three arrays of values: batch axes, input axes, output axes.
     If the map is incomplete, the result might be invalid: gaps in the array are filled with an arbitrary
     one of the provided values. *)
-let axis_map_to_dims_bio (type a) (idcs: a axis_map) =
-  let _, witness = Map.min_elt_exn idcs in
+let axis_map_to_dims_bio (type a) ?(default:a option) (idcs: a axis_map) =
+  let witness =
+  match default with
+  | Some witness -> witness
+  | None -> snd @@ Map.min_elt_exn idcs in
   let bch_axes, other = Map.partition_mapi idcs ~f:(
     fun ~key:{in_axes; _} ~data -> if AxisKey.is_batch in_axes then Either.First data else Either.Second data) in
   let inp_axes, out_axes = Map.partition_mapi other ~f:(
@@ -287,10 +290,10 @@ let axis_map_to_dims_bio (type a) (idcs: a axis_map) =
  bch, inp, out
 
 (** Converts an axes-keyed map into an array of values using the [Shape.to_dims] semantics of axes.
-    If the map is incomplete, the result might be invalid: gaps in the array are filled with an arbitrary
-    one of the provided values. *)
-let axis_map_to_dims_index (type a) (idcs: a axis_map): a array =
-  let bch, inp, out = axis_map_to_dims_bio idcs in
+    If the map is incomplete and the [~default] is not given, the result might be invalid: gaps in
+    the array are filled with an arbitrary one of the provided values. *)
+let axis_map_to_dims_index (type a) ?(default:a option) (idcs: a axis_map): a array =
+  let bch, inp, out = axis_map_to_dims_bio ?default idcs in
   Array.concat [bch; out; inp]
 
 (** Splits the dimensions of a shape into a map from axes, putting at most one number in a [dims] of
