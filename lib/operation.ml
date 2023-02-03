@@ -387,6 +387,7 @@ module CLI = struct
   let print_node = NodeUI.print_node
   let print_formula = print_formula
   let print_global_roots = print_global_roots
+  let print_decimals_precision = NodeUI.print_decimals_precision
   let get_root = get_root
   let get_node = get_node
 end
