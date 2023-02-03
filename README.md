@@ -35,6 +35,7 @@ Some ideas regarding installation (skip or substitute equivalent actions etc.):
 * opam remote add metaocaml git+https://github.com/metaocaml/metaocaml-opam.git
 * opam install dune
 * eval $(opam env)
+* opam install printbox printbox-text printbox-html
 * opam install ocaml-canvas
 * cd ~/ocannl
 * dune runtest

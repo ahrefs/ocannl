@@ -259,9 +259,9 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
       Shape.axis_map_to_dims_index @@ Map.of_alist_exn (module Shape.AxisKey) idcs
     | `Inline -> failwith "NOT IMPLEMENTED YET" in
   let labels = Shape.axis_map_to_dims_index ~default:"" sh.Shape.axis_labels in
-  NodeUI.pp_print Caml.Format.std_formatter ~prefix ~labels ~screen_stop ~indices m.comp_node.value;
+  NodeUI.pp_print Caml.Format.std_formatter ~prefix ~labels ~indices m.comp_node.value;
   if with_grad then (
-    NodeUI.pp_print Caml.Format.std_formatter ~prefix:(prefix^" Gradient ") ~labels ~screen_stop ~indices
+    NodeUI.pp_print Caml.Format.std_formatter ~prefix:(prefix^" Gradient ") ~labels ~indices
       m.comp_node.grad);
   if with_code then (
     (match m.forward_body with
