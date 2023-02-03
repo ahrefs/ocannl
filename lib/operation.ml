@@ -189,6 +189,14 @@ type array_print_style =
     horizontal directions of inner, outer rectangle, verticals directions of inner, outer rectangle,
     repetition (see also [NodeUI.pp_print]). The non-negative numbers stand for the actual positions
     within the corresponding axes. Unspecified axes are printed at position [0]. *)
+| `Inline
+(** The tensors are printed linearly, in a bracketed manner, always prefixed with the labels specification
+    to avoid ambiguities that the syntax causes for 1-dimensional input axes (underscores are used for
+    axes without explicit labels). The axis nesting is right-to-left (rightmost is innermost).
+    The input axes are innermost and the batch axes outermost. The input axes use [,] as a separator
+    and [()] as axis delimiters, but the delimiter for the outermost (i.e. leftmost) axis is omitted.
+    The output axes use [;] as a separator and [[]] as axis delimiters (obligatory).
+    The batch axes use [;] as a separator and [[||]] as axis delimiters (obligatory). *)
 ]
 
 let print_formula ~with_grad ~with_code (style: array_print_style) m =
@@ -248,11 +256,9 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
       let idcs = List.map label_idcs ~f:(fun (l, i) ->
         match Map.find inv_labels l with Some axis -> axis, i | None ->
           raise @@ Session_error ("`Label_layout label not found in shape: "^l, Some m)) in
-      Shape.axis_map_to_dims_index @@ Map.of_alist_exn (module Shape.AxisKey) idcs in
+      Shape.axis_map_to_dims_index @@ Map.of_alist_exn (module Shape.AxisKey) idcs
+    | `Inline -> failwith "NOT IMPLEMENTED YET" in
   let labels = Shape.axis_map_to_dims_index ~default:"" sh.Shape.axis_labels in
-  let screen_stop () =
-    Stdio.print_endline "Press [Enter] for next screen, [q] [Enter] to quit.";
-    String.(Stdio.In_channel.input_line_exn Stdio.stdin = "q")  in
   NodeUI.pp_print Caml.Format.std_formatter ~prefix ~labels ~screen_stop ~indices m.comp_node.value;
   if with_grad then (
     NodeUI.pp_print Caml.Format.std_formatter ~prefix:(prefix^" Gradient ") ~labels ~screen_stop ~indices

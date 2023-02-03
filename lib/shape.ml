@@ -149,7 +149,8 @@ type transpose_type =
   
   The label ["..."] is only allowed at the first axis of a kind (i.e. last from-end).
   It is used to enable broadcasting for the axis kind in the einsum-related shape inference
-  (like the ellipsis ["..."] in [numpy.einsum]). *)
+  (like the ellipsis ["..."] in [numpy.einsum]). The label ["_"] is a place-holder: it is not output
+  to the resulting map but aligns the axes of other labels. *)
 let axis_labels_of_spec spec: parsed_axis_labels =
   let check_dot s =
     if String.length s > 3 && Option.is_some @@ String.substr_index ~pos:3 s ~pattern:"..."
@@ -165,8 +166,9 @@ let axis_labels_of_spec spec: parsed_axis_labels =
       let labels_num = List.length labels in
       labels_num,
       List.foldi labels ~init:(Map.empty (module AxisKey))
-        ~f:(fun from_start labels label -> Map.add_exn labels 
-               ~key:AxisKey.{in_axes; from_end=labels_num - from_start} ~data:label)
+        ~f:(fun from_start labels label ->
+          if String.equal label "_" then labels
+          else Map.add_exn labels ~key:AxisKey.{in_axes; from_end=labels_num - from_start} ~data:label)
     else
       let labels_num = String.length spec in
       labels_num,
@@ -1040,15 +1042,15 @@ let to_dims_code (sh: t): int array Codelib.code =
   let dims = Array.map (to_dims sh) ~f:(Lifts.Lift_int.lift) in
   Lifts.lift_array dims
 
-let to_string_hum sh =
+let to_string_hum ?(only_labels=false) sh =
   let dims_to_string kind =
     let dims = list_of_dims @@ dims_of_kind kind sh in
     let n_dims = List.length dims in
     String.concat ~sep:"," @@ List.mapi dims ~f:(fun i d ->
         let key = AxisKey.{in_axes=kind; from_end=n_dims - i} in
-        let label = match Map.find sh.axis_labels key with None -> ""
-         | Some l -> l^":" in
-        label^Int.to_string d) in
+        match Map.find sh.axis_labels key with
+          |  None -> if only_labels then "_" else Int.to_string d
+          | Some l -> if only_labels then l else l^":"^Int.to_string d) in
   let batch_dims = dims_to_string Batch in
   let input_dims = dims_to_string Input in
   let output_dims = dims_to_string Output in
