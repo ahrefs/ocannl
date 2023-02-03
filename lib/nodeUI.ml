@@ -35,7 +35,7 @@ let print_decimals_precision = ref 3
     * -5: a sequence of screens of text (i.e. stack numbers of outer rectangles).
     Printing out of axis [-5] is interrupted when a callback called in between each outer rectangle
     returns true. *)
-let render ?(prefix="") ?(entries_per_axis=4) ?(labels=[||]) ~indices
+let render_tensor ?(prefix="") ?(entries_per_axis=4) ?(labels=[||]) ~indices
     (arr: Ocannl_runtime.Node.data) =
   let module B = PrintBox in
   let open Ocannl_runtime.Node in
@@ -63,6 +63,7 @@ let render ?(prefix="") ?(entries_per_axis=4) ?(labels=[||]) ~indices
   let label2 = if ind2 = -1 || no_label ind2 then "_=" else labels.(ind2) in
   let label3 = if ind3 = -1 || no_label ind3 then "_=" else labels.(ind3) in
   let label4 = if ind4 = -1 || no_label ind4 then "_=" else labels.(ind4) in
+  (* FIXME: handle ellipsis. *)
   let update_indices v i j k l =
     if ind0 <> -1 then indices.(ind0) <- v;
     if ind1 <> -1 then indices.(ind1) <- i;
@@ -93,13 +94,45 @@ let render ?(prefix="") ?(entries_per_axis=4) ?(labels=[||]) ~indices
   let screens = B.init_grid ~bars:true ~line:1 ~col:size0 (fun ~line:_ ~col -> outer_grid col) in
   B.vlist ~bars:false [B.line header; screens]
 
-let pp_print fmt ?prefix ?entries_per_axis ?labels ~indices arr =
-  PrintBox_text.pp fmt @@ render ?prefix ?entries_per_axis ?labels ~indices arr
+let pp_tensor fmt ?prefix ?entries_per_axis ?labels ~indices arr =
+  PrintBox_text.pp fmt @@ render_tensor ?prefix ?entries_per_axis ?labels ~indices arr
 
 let print_node ~with_grad ~indices n =
   let open Ocannl_runtime.Node in
   Stdio.print_endline @@ "["^node_header n^"] "^n.label;
-  pp_print Caml.Format.std_formatter ~indices n.value;
+  pp_tensor Caml.Format.std_formatter ~indices n.value;
   if with_grad then (
     Stdio.print_endline "Gradient:";
-    pp_print Caml.Format.std_formatter ~indices n.grad)
+    pp_tensor Caml.Format.std_formatter ~indices n.grad)
+
+(** Prints the whole tensor in an inline syntax. *)
+let pp_tensor_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?labels_spec arr =
+  let module A = Ocannl_runtime.Node.A in
+  let dims = A.dims arr in
+  let num_all_axes = num_batch_axes + num_output_axes + num_input_axes in
+  let open Caml.Format in
+  let ind = Array.copy dims in
+  (match labels_spec with None -> () | Some spec -> fprintf fmt "\"%s\" " spec);
+  let rec loop axis =
+    let sep =
+      if axis < num_batch_axes then ";"
+      else if axis < num_batch_axes + num_output_axes then ";"
+      else "," in
+    let open_delim =
+      if axis < num_batch_axes then "[|"
+      else if axis < num_batch_axes + num_output_axes then "["
+      else if axis < num_all_axes - 1 then "("
+      else "" in
+    let close_delim =
+      if axis < num_batch_axes then "|]"
+      else if axis < num_batch_axes + num_output_axes then "]"
+      else if axis < num_all_axes - 1 then ")"
+      else "" in
+    if axis = num_all_axes then printf "%+.*f" !print_decimals_precision (A.get arr ind)
+    else (fprintf fmt "@[<hov 2>%s@," open_delim;
+          for i = 0 to dims.(axis) - 1 do
+            ind.(axis) <- i; loop (axis + 1);
+            if i < dims.(axis) - 1 then fprintf fmt "%s@ " sep;
+          done;
+          fprintf fmt "@,%s@]" close_delim) in
+  loop 0

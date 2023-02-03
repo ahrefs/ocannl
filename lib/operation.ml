@@ -257,12 +257,25 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
         match Map.find inv_labels l with Some axis -> axis, i | None ->
           raise @@ Session_error ("`Label_layout label not found in shape: "^l, Some m)) in
       Shape.axis_map_to_dims_index @@ Map.of_alist_exn (module Shape.AxisKey) idcs
-    | `Inline -> failwith "NOT IMPLEMENTED YET" in
+    | `Inline -> [||] in
   let labels = Shape.axis_map_to_dims_index ~default:"" sh.Shape.axis_labels in
-  NodeUI.pp_print Caml.Format.std_formatter ~prefix ~labels ~indices m.comp_node.value;
+  let labels_spec = Shape.to_string_hum ~only_labels:true sh in
+  let num_axes kind = List.length Shape.(list_of_dims @@ dims_of_kind kind sh) in
+  let num_batch_axes = num_axes Shape.AxisKey.Batch in
+  let num_input_axes = num_axes Shape.AxisKey.Input in
+  let num_output_axes = num_axes Shape.AxisKey.Output in
+  (match style with
+   | `Inline ->
+     NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
+       ~labels_spec m.comp_node.value
+   | _ -> NodeUI.pp_tensor Caml.Format.std_formatter ~prefix ~labels ~indices m.comp_node.value);
   if with_grad then (
-    NodeUI.pp_print Caml.Format.std_formatter ~prefix:(prefix^" Gradient ") ~labels ~indices
-      m.comp_node.grad);
+    match style with
+    | `Inline ->
+      NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
+        ~labels_spec m.comp_node.grad
+    | _ -> NodeUI.pp_tensor Caml.Format.std_formatter ~prefix:(prefix^" Gradient ") ~labels ~indices
+             m.comp_node.grad);
   if with_code then (
     (match m.forward_body with
      | None -> ()
