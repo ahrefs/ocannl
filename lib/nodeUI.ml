@@ -4,9 +4,12 @@ open Base
 
 (** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
     Outputs ["-"] for empty dimensions. *)
-let dims_to_string dims =
+let dims_to_string ?(with_axis_numbers=false) dims =
   if Array.is_empty dims then "-"
-  else String.concat_array ~sep:"x" @@ Array.map dims ~f:Int.to_string_hum
+  else if with_axis_numbers then
+    String.concat_array ~sep:" x " @@ Array.mapi dims ~f:(fun d s ->  Int.to_string d^":"^Int.to_string s)
+  else
+    String.concat_array ~sep:"x" @@ Array.map dims ~f:Int.to_string
 
 (** Converts ID, label and the dimensions of a node to a string. *)
 let node_header n =
@@ -34,7 +37,7 @@ let render ?(prefix="") ?(entries_per_axis=4) ?(labels=[||]) ~indices
   let module B = PrintBox in
   let open Ocannl_runtime.Node in
   let dims = A.dims arr in
-  let header = prefix ^ "dims: "^dims_to_string dims in
+  let header = prefix ^ "layout: "^dims_to_string ~with_axis_numbers:true dims in
   let indices = Array.copy indices in
   let entries_per_axis = if entries_per_axis % 2 = 0 then entries_per_axis + 1 else entries_per_axis in
   let var_indices = Array.filter_mapi indices ~f:(fun i d -> if d <= -1 then Some (5 + d, i) else None) in
@@ -45,18 +48,18 @@ let render ?(prefix="") ?(entries_per_axis=4) ?(labels=[||]) ~indices
     match var_indices with 
     | [|ind0; ind1; ind2; ind3; ind4|] -> ind0, ind1, ind3, ind2, ind4
     | _ -> invalid_arg "NodeUI.render: indices should contain at most 5 negative numbers" in
-  let labels = Array.map labels ~f:(fun l -> if String.is_empty l then "_:" else l^":") in
+  let labels = Array.map labels ~f:(fun l -> if String.is_empty l then "_=" else l^"=") in
   let size0 = if ind0 = -1 then 1 else min dims.(ind0) entries_per_axis in
   let size1 = if ind1 = -1 then 1 else min dims.(ind1) entries_per_axis in
   let size2 = if ind2 = -1 then 1 else min dims.(ind2) entries_per_axis in
   let size3 = if ind3 = -1 then 1 else min dims.(ind3) entries_per_axis in
   let size4 = if ind4 = -1 then 1 else min dims.(ind4) entries_per_axis in
   let no_label ind = Array.length labels <= ind in
-  let label0 = if ind0 = -1 || no_label ind0 then "_:" else labels.(ind0) in
-  let label1 = if ind1 = -1 || no_label ind1 then "_:" else labels.(ind1) in
-  let label2 = if ind2 = -1 || no_label ind2 then "_:" else labels.(ind2) in
-  let label3 = if ind3 = -1 || no_label ind3 then "_:" else labels.(ind3) in
-  let label4 = if ind4 = -1 || no_label ind4 then "_:" else labels.(ind4) in
+  let label0 = if ind0 = -1 || no_label ind0 then "_=" else labels.(ind0) in
+  let label1 = if ind1 = -1 || no_label ind1 then "_=" else labels.(ind1) in
+  let label2 = if ind2 = -1 || no_label ind2 then "_=" else labels.(ind2) in
+  let label3 = if ind3 = -1 || no_label ind3 then "_=" else labels.(ind3) in
+  let label4 = if ind4 = -1 || no_label ind4 then "_=" else labels.(ind4) in
   let update_indices v i j k l =
     if ind0 <> -1 then indices.(ind0) <- v;
     if ind1 <> -1 then indices.(ind1) <- i;

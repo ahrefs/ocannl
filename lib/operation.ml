@@ -202,7 +202,7 @@ type array_print_style =
 let print_formula ~with_grad ~with_code (style: array_print_style) m =
   assert (m.node_id = m.comp_node.id);
   let sh = m.shape in
-  let prefix = "["^Int.to_string m.node_id^"] "^m.comp_node.label^": "^ Shape.to_string_hum sh^" " in
+  let prefix = "["^Int.to_string m.node_id^"] "^m.comp_node.label^": shape "^ Shape.to_string_hum sh^" " in
   let indices =
     match style with
     | `Default ->
