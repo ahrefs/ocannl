@@ -20,6 +20,9 @@ let node_header n =
     if String.equal v_dims_s g_dims_s then "dims "^v_dims_s else "dims val "^v_dims_s^" grad "^g_dims_s in
   (if String.is_empty n.label then " #" else n.label^" #")^Int.to_string n.id^" "^dims_s
 
+(** When rendering tensors, outputs this many decimal digits. *)
+let print_decimals_precision = 3
+  
 (** Prints 0-based [indices] entries out of [arr], where a number between [-5] and [-1] in an axis means
     to print out the axis, and a non-negative number means to print out only the indexed dimension of the axis.
     Prints up to [entries_per_axis] or [entries_per_axis+1] entries per axis, possibly with ellipsis
@@ -69,7 +72,7 @@ let render ?(prefix="") ?(entries_per_axis=4) ?(labels=[||]) ~indices
   let inner_grid v i j =
     B.init_grid ~bars:false ~line:size3 ~col:size4 (fun ~line ~col ->
         update_indices v i j line col;
-        try B.float @@ A.get arr indices
+        try B.line @@ Float.to_string_hum ~decimals:print_decimals_precision (A.get arr indices)
         with Invalid_argument _ as error ->
           Stdio.Out_channel.printf "Invalid indices: %s into array: %s\n%!"
             (dims_to_string indices) (dims_to_string dims);

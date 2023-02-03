@@ -16,7 +16,7 @@ let%expect_test "Pointwise multiplication dims 1" =
     [4] heyv2p: shape 1 layout: 0:1
     │_=0
     ┼──────────────────────────────
-    │-1.33455812931 |}]
+    │-1.335 |}]
 
 let%expect_test "Matrix multiplication dims 1x1" =
   Operation.drop_session();
@@ -32,10 +32,10 @@ let%expect_test "Matrix multiplication dims 1x1" =
     │0@p=0
     │q=1
     ┼────────────────────────────────────────
-    │-0.667279064655 |}];
+    │-0.667 |}];
   print_formula ~with_code:false ~with_grad:false `Default t;
   [%expect {|
     [5] v1ptheyv2p: shape p:1 layout: 0:1
     │p=0
     ┼────────────────────────────────────
-    │-0.334558129311 |}]
+    │-0.335 |}]
