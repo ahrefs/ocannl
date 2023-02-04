@@ -13,8 +13,7 @@ ocannl
   * The generated code is dynamically linked with the "user land" code.
   * Currently, compiles all computation of a single step of training into two programs: the forward pass and the backpropagation pass.
   * I plan to implement offshoring to CUDA at some point.
-* Offers four levels of abstraction:
-  * [`Model`](lib/model.ml) for optimizable objects / data approximators.
+* Offers three levels of abstraction:
   * [`Network`](lib/network.ml) for trainable components.
   * [`Operation`](lib/operation.ml) for differentiable computations.
   * [`Node`](lib/node.ml) maintains a store of n-dimensional arrays that the compiled code operates on.
