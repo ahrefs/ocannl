@@ -9,6 +9,6 @@
  (name ocannl)
  (libraries base printbox printbox-text stdio dynlink str metaocaml ocannl_runtime)
  (preprocess (pps ppx_jane))
- (modules lifts nodeUI ndcode shape formula operation network model exec)
+ (modules lifts nodeUI ndcode shape formula operation network exec)
  (modes byte native))
 
