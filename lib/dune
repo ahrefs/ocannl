@@ -4,11 +4,17 @@
  (modules node)
  (modes byte native))
 
+(library
+ (name ppx_ocannl)
+ (kind ppx_rewriter)
+ (modules ppx_ocannl)
+ (libraries base ppxlib)
+ (preprocess (pps ppx_jane ppxlib.metaquot)))
 
 (library
  (name ocannl)
  (libraries base printbox printbox-text stdio dynlink str metaocaml ocannl_runtime)
- (preprocess (pps ppx_jane))
+ (preprocess (pps ppx_jane ppx_ocannl))
  (modules lifts nodeUI ndcode shape formula operation network exec)
  (modes byte native))
 

@@ -5,7 +5,10 @@ module F = Formula
 
 (* FIXME(28): implement [promote_precision] effects. *)
 
-(** Composable network components, with parameter tracking. *)
+(** Composable network components, with parameter tracking. A single instance of [Network.t] can be
+    reused multiple times in the same model (i.e. parameter sharing), or can be used in multiple
+    simultaneusly or consecutively trained models (i.e. model surgery), but it carries a single instance
+    of parameters. *)
 type 'a t = {
   comp: 'a comp;
   (** The parametric computation. *)
