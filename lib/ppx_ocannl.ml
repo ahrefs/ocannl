@@ -39,10 +39,10 @@ let rec translate expr =
     [%expr Network.return_term Operation.O.(!~ [%e expr])]
     
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3] ] ->
-    [%expr Network.apply (Network.apply [%e expr1] [%e translate expr2]) [%e translate expr3]]
+    [%expr Network.apply (Network.apply [%e translate expr1] [%e translate expr2]) [%e translate expr3]]
 
   | [%expr [%e? expr1] [%e? expr2] ] ->
-    [%expr Network.apply [%e expr1] [%e translate expr2]]
+    [%expr Network.apply [%e translate expr1] [%e translate expr2]]
 
   | [%expr fun ~config [%p? pat1] [%p? pat2] -> [%e? body] ] ->
     (* TODO(38): generalize config to any number of labeled arguments with any labels. *)
