@@ -34,6 +34,9 @@ let rec translate expr =
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as s]
       [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
     [%expr Network.return_term (Operation.number ~axis_label:[%e s] (Float.of_int [%e i]))]
+
+  | { pexp_desc = Pexp_constant (Pconst_string _); _ } ->
+    [%expr Network.return_term Operation.O.(!~ [%e expr])]
     
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3] ] ->
     [%expr Network.apply (Network.apply [%e expr1] [%e translate expr2]) [%e translate expr3]]
@@ -135,8 +138,14 @@ let rec translate expr =
   | expr ->
     expr
 
-let expander ~loc:_ ~path:_ payload =
-  translate payload
+let expr_expander ~loc ~path:_ payload =
+  match payload with
+  | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
+    (* We are at the %ocannl annotation level: do not tranlsate the body. *)
+     let bindings = List.map bindings ~f:(fun vb ->
+         {vb with pvb_expr=[%expr let open Network.O in [%e translate vb.pvb_expr]]}) in
+     {payload with pexp_desc=Pexp_let (recflag, bindings, body)}
+  | expr -> translate expr
 
 let flatten_str ~loc ~path:_ items =
   match items with
@@ -162,7 +171,7 @@ let str_expander ~loc ~path (payload: structure_item list) =
 
 let rules =
   [Ppxlib.Context_free.Rule.extension  @@
-   Extension.declare "ocannl" Extension.Context.expression Ast_pattern.(single_expr_payload __) expander;
+   Extension.declare "ocannl" Extension.Context.expression Ast_pattern.(single_expr_payload __) expr_expander;
    Ppxlib.Context_free.Rule.extension  @@
    Extension.declare "ocannl" Extension.Context.structure_item Ast_pattern.(pstr __) str_expander;
    ]
