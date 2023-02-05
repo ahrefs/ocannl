@@ -40,10 +40,10 @@ let apply (type a) (f: (F.t -> a) t) (x: F.t t): a t =
     match f.comp, x.comp with
     | Unary f, Nullary x -> (Nullary (f x): a comp)
     | Unary f, Placeholder x -> (Suspended (lazy (f (Option.value_exn !x))): a comp)
+    | Unary f, Suspended x -> (Suspended (lazy (f (Lazy.force x))): a comp)
     | Binary f, Nullary x -> Unary (f x)
     | Binary f, Placeholder x -> (Unary (fun y -> f (Option.value_exn !x) y): a comp)
-    | Binary f, Suspended x -> (Unary (fun y -> f (Lazy.force x) y): a comp)
-    | Unary f, Suspended x -> (Suspended (lazy (f (Lazy.force x))): a comp) in
+    | Binary f, Suspended x -> (Unary (fun y -> f (Lazy.force x) y): a comp) in
   let params = Set.union f.params x.params in
   {comp; params; promote_precision=None}
 
