@@ -7,8 +7,9 @@ let%expect_test "Hello World" =
 
 let%expect_test "Pointwise multiplication dims 1" =
   Random.init 0;
-  (* Hey is inferred to be a scalar. *)
-  let%ocannl y = 2 * "hey" in
+  (* "Hey" is inferred to be a scalar.
+     Note the pointwise multiplication means "hey" does not have any input axes. *)
+  let%ocannl y = 2 *. "hey" in
   let y_f = Network.unpack y in
   let open Operation.CLI in
   refresh_session ();
