@@ -2,11 +2,39 @@ open Base
 
 open Ppxlib
 
-let pat2expr pat = ignore pat; failwith "NOT LOOKED UP YET"
+let pat2expr pat =
+  let loc = pat.ppat_loc in
+  match pat.ppat_desc with
+  | Ppat_var ident -> Ast_builder.Default.pexp_ident ~loc {ident with txt = Lident ident.txt}
+  | _ ->
+     Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
+       "OCaNNL currently only supports single identifiers as argument patterns."
+
+let pat2pat_ref pat =
+  let loc = pat.ppat_loc in
+  match pat.ppat_desc with
+  | Ppat_var ident -> Ast_builder.Default.ppat_var ~loc {ident with txt = ident.txt ^ "_ref"}
+  | _ ->
+     Ast_builder.Default.ppat_extension ~loc @@ Location.error_extensionf ~loc
+       "OCaNNL currently only supports single identifiers as argument patterns."
 
 let rec translate expr =
   let loc = expr.pexp_loc in
   match expr with
+  | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
+    [%expr Network.return_term (Operation.number [%e expr])]
+
+  | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
+    [%expr Network.return_term (Operation.number (Float.of_int [%e expr]))]
+
+  | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as s]
+      [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
+    [%expr Network.return_term (Operation.number ~axis_label:[%e s] [%e f])]
+
+  | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as s]
+      [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
+    [%expr Network.return_term (Operation.number ~axis_label:[%e s] (Float.of_int [%e i]))]
+    
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3] ] ->
     [%expr Network.apply (Network.apply [%e expr1] [%e translate expr2]) [%e translate expr3]]
 
@@ -15,43 +43,55 @@ let rec translate expr =
 
   | [%expr fun ~config [%p? pat1] [%p? pat2] -> [%e? body] ] ->
     (* TODO(38): generalize config to any number of labeled arguments with any labels. *)
+    let pat1_ref = pat2pat_ref pat1 in
+    let pat2_ref = pat2pat_ref pat2 in
     [%expr
       fun ~config ->
-        let inp1 = ref None in let [%p pat1] = Network.return (Network.Placeholder inp1) in
-        let inp2 = ref None in let [%p pat2] = Network.return (Network.Placeholder inp2) in
+        let [%p pat1_ref] = ref None in
+        let [%p pat1] = Network.return (Network.Placeholder [%e pat2expr @@ pat1_ref]) in
+        let [%p pat2_ref] = ref None in
+        let [%p pat2] = Network.return (Network.Placeholder [%e pat2expr @@ pat2_ref]) in
         let body = [%e translate body] in
         fun [%p pat1] [%p pat2] ->
-          inp1 := [%e (pat2expr pat1)]; inp2 := [%e (pat2expr pat2)];
+          [%p pat1_ref] := [%e pat2expr pat1]; [%p pat2_ref] := [%e pat2expr pat2];
           Network.unpack body
     ]
 
   | [%expr fun ~config [%p? pat] -> [%e? body] ] ->
     (* TODO(38): generalize config to any number of labeled arguments with any labels. *)
+    let pat_ref = pat2pat_ref pat in
     [%expr
       fun ~config ->
-        let inp = ref None in let [%p pat] = Network.return (Network.Placeholder inp) in
+        let [%p pat_ref] = ref None in
+        let [%p pat] = Network.return (Network.Placeholder [%e pat2expr @@ pat_ref]) in
         let body = [%e translate body] in
         fun [%p pat] ->
-          inp := [%e (pat2expr pat)];
+          [%p pat_ref] := [%e pat2expr pat];
           Network.unpack body
     ]
 
   | [%expr fun [%p? pat1] [%p? pat2] -> [%e? body] ] ->
+    let pat1_ref = pat2pat_ref pat1 in
+    let pat2_ref = pat2pat_ref pat2 in
     [%expr
-      let inp1 = ref None in let [%p pat1] = Network.return (Network.Placeholder inp1) in
-      let inp2 = ref None in let [%p pat2] = Network.return (Network.Placeholder inp2) in
+      let [%p pat1_ref] = ref None in
+      let [%p pat1] = Network.return (Network.Placeholder [%e pat2expr @@ pat1_ref]) in
+      let [%p pat2_ref] = ref None in
+      let [%p pat2] = Network.return (Network.Placeholder [%e pat2expr @@ pat2_ref]) in
       let body = [%e translate body] in
       fun [%p pat1] [%p pat2] ->
-        inp1 := [%e (pat2expr pat1)]; inp2 := [%e (pat2expr pat2)];
+        [%p pat1_ref] := [%e pat2expr pat1]; [%p pat2_ref] := [%e pat2expr pat2];
         Network.unpack body
     ]
 
   | [%expr fun [%p? pat] -> [%e? body] ] ->
+    let pat_ref = pat2pat_ref pat in
     [%expr
-      let inp = ref None in let [%p pat] = Network.return (Network.Placeholder inp) in
+      let [%p pat_ref] = ref None in
+      let [%p pat] = Network.return (Network.Placeholder [%e pat2expr @@ pat_ref]) in
       let body = [%e translate body] in
       fun [%p pat] ->
-        inp := [%e (pat2expr pat)];
+        [%p pat_ref] := [%e pat2expr pat];
         Network.unpack body
     ]
 
@@ -111,7 +151,10 @@ let translate_str ({pstr_desc; _} as str) =
   match pstr_desc with
   | Pstr_eval (expr, attrs) -> {str with pstr_desc=Pstr_eval (translate expr, attrs)}
   | Pstr_value (recf, vbl) ->
-    {str with pstr_desc=Pstr_value (recf, List.map vbl ~f:(fun vb -> {vb with pvb_expr=translate vb.pvb_expr}))}
+    let f vb =
+      let loc = vb.pvb_loc in
+      {vb with pvb_expr=[%expr let open Network.O in [%e translate vb.pvb_expr]]} in
+    {str with pstr_desc=Pstr_value (recf, List.map vbl ~f)}
   | _ -> str
      
 let str_expander ~loc ~path (payload: structure_item list) =
