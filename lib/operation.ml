@@ -9,21 +9,21 @@ open Formula
 let add =
   let op_body ~nv ~n1v ~n2v projections =
     Ndcode.(accum_binop ~accum:skip_arg ~op:add ~lhs:nv ~rhs1:n1v ~rhs2:n2v projections) in
-  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v:_ ~n2v:_ projections = .<
-    .~(Ndcode.(accum_unop ~accum:add ~op:num_id ?lhs:n1g ?rhs:ng @@ Shape.backprop1 projections));
-    .~(Ndcode.(accum_unop ~accum:add ~op:num_id ?lhs:n2g ?rhs:ng @@ Shape.backprop2 projections))
-  >. in
+  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v:_ ~n2v:_ projections = [%c 
+    [%e Ndcode.(accum_unop ~accum:add ~op:num_id ?lhs:n1g ?rhs:ng @@ Shape.backprop1 projections)];
+    [%e Ndcode.(accum_unop ~accum:add ~op:num_id ?lhs:n2g ?rhs:ng @@ Shape.backprop2 projections)]
+  ] in
   binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
 let mul compose_op =
   let op_body ~nv ~n1v ~n2v projections =
     Ndcode.(accum_binop ~accum:skip_arg ~op:mul ~lhs:nv ~rhs1:n1v ~rhs2:n2v projections) in
-  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v ~n2v projections = .<
-    .~(Ndcode.(accum_binop ~accum:add ~op:mul ?lhs:n1g ?rhs1:ng ~rhs2:n2v @@
-                Shape.backprop1 projections));
-    .~(Ndcode.(accum_binop ~accum:add ~op:mul ?lhs:n2g ?rhs1:ng ~rhs2:n1v @@
-                Shape.backprop2 projections))
-  >. in
+  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v ~n2v projections = [%c 
+    [%e Ndcode.(accum_binop ~accum:add ~op:mul ?lhs:n1g ?rhs1:ng ~rhs2:n2v @@
+                Shape.backprop1 projections)];
+    [%e Ndcode.(accum_binop ~accum:add ~op:mul ?lhs:n2g ?rhs1:ng ~rhs2:n1v @@
+                Shape.backprop2 projections)]
+  ] in
   binop ~compose_op ~op_label:"" ~op_body ~grad_body
 
 let pointmul = mul `Pointwise
@@ -46,12 +46,12 @@ let einsum spec =
   let op_body ~nv ~n1v ~n2v projections =
     Ndcode.(accum_binop ~zero_out:true ~accum:add ~op:mul ~lhs:nv ~rhs1:n1v ~rhs2:n2v
                projections) in
-  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v ~n2v projections = .<
-    .~(Ndcode.(accum_binop ~accum:add ~op:mul ?lhs:n1g ?rhs1:ng ~rhs2:n2v @@
-                Shape.backprop1 projections));
-    .~(Ndcode.(accum_binop ~accum:add ~op:mul ?lhs:n2g ?rhs1:ng ~rhs2:n1v @@
-                Shape.backprop2 projections))
-  >. in
+  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v ~n2v projections = [%c 
+    [%e Ndcode.(accum_binop ~accum:add ~op:mul ?lhs:n1g ?rhs1:ng ~rhs2:n2v @@
+                Shape.backprop1 projections)];
+    [%e Ndcode.(accum_binop ~accum:add ~op:mul ?lhs:n2g ?rhs1:ng ~rhs2:n1v @@
+                Shape.backprop2 projections)]
+  ] in
   binop ~compose_op:(`Einsum spec) ~op_label:"" ~op_body ~grad_body
 
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract diagonals,
@@ -99,7 +99,7 @@ let assign_op ~nv ~n1v projections = assign ~lhs:nv ~rhs:n1v projections
 
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient =
-  let grad_body ?n1g:_ ?ng:_ ~nv:_ ~n1v:_ _projections = .< () >. in
+  let grad_body ?n1g:_ ?ng:_ ~nv:_ ~n1v:_ _projections = [%c () ] in
   unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign_op ~grad_body
 
 (** A [stop_broadcast] mutates the partially-inferred shape of a formula in-place, substituting-in

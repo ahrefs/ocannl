@@ -18,22 +18,22 @@ open Codelib
 
 module Lift_int = struct
   type t = int
-  let lift (x:int) = .<x>.
+  let lift (x:int): int code = [%c x]
 end
 
 module Lift_char = struct
   type t = char
-  let lift (x:char) = .<x>.
+  let lift (x:char) = [%c x]
 end
 
 module Lift_float = struct
   type t = float
-  let lift (x:float) = .<x>.
+  let lift (x:float) = [%c x]
 end
 
 module Lift_string = struct
   type t = string
-  let lift (x:string) = .<x>.
+  let lift (x:string) = [%c x]
 end
 
 
@@ -42,15 +42,15 @@ end
 module Lift_option(L:lift) = struct
   type t = L.t option
   let lift = function 
-    | None   -> .<None>.
-    | Some x -> .<Some .~(L.lift x)>.
+    | None   -> [%c None]
+    | Some x -> [%c Some [%e L.lift x]]
 end
 
 module Lift_list(L:lift) = struct
   type t = L.t list
-  let lift l = 
+  let lift (l: 'a list) = 
     genlet @@
-    List.fold_right (fun x acc -> .<.~(L.lift x) :: .~acc>.) l .<[]>.
+    List.fold_right (fun x acc -> [%c [%e L.lift x] :: [%e acc] ]) l ([%c []] : t code)
 end
 
 let lift_array : 'a code array -> 'a array code = fun arr ->
@@ -62,7 +62,7 @@ let lift_array : 'a code array -> 'a array code = fun arr ->
 
 module Lift_array(L:lift) = struct
   type t = L.t array
-  let lift l = 
+  let lift (l: t): t code = 
     l |> Array.map L.lift |> lift_array
 end
 
