@@ -155,18 +155,6 @@ let get_node id =
 
 (** *** Printing. *** *)
 
-let sprint_code code =
-  let closed, check = Codelib.close_code_delay_check code in
-  ignore (Caml.Format.flush_str_formatter());
-  Caml.Format.pp_set_margin Caml.Format.str_formatter 160;
-  Codelib.format_code Caml.Format.str_formatter closed;
-  let s = Caml.Format.flush_str_formatter() in
-  let s = String.substr_replace_all s ~pattern:"Base." ~with_:"" in
-  let s = String.substr_replace_all s ~pattern:"Ocannl." ~with_:"" in
-  let s = String.substr_replace_all s ~pattern:"Ndcode." ~with_:"" in
-  let s = String.substr_replace_all s ~pattern:"Node." ~with_:"" in
-  s, check
-
 (** We print out up to 5 axes when printing an [Ndcode], as a grid (outer rectangle) of (inner)
     rectangles, possibly repeated (screens). *)
 type array_print_style =
@@ -200,7 +188,6 @@ type array_print_style =
 ]
 
 let print_formula ~with_grad ~with_code (style: array_print_style) m =
-  assert (m.node_id = m.comp_node.id);
   let sh = m.shape in
   let prefix = "["^Int.to_string m.node_id^"] "^m.comp_node.label^": shape "^ Shape.to_string_hum sh^" " in
   let indices =

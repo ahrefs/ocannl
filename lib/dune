@@ -6,9 +6,9 @@
 
 (library
  (name ocannl)
- (libraries base printbox printbox-text stdio dynlink str metaocaml ocannl_runtime)
- (preprocess (pps ppx_jane ppx_ocannl ppx_metaocannl))
- (modules lifts nodeUI ndcode shape formula operation network exec)
+ (libraries base printbox printbox-text stdio dynlink str ocannl_runtime)
+ (preprocess (pps ppx_jane ppx_ocannl))
+ (modules nodeUI code shape formula operation network emitOCaml exec)
  (modes byte native))
 
 (library
@@ -17,9 +17,3 @@
  (modules ppx_ocannl)
  (libraries base ppxlib)
  (preprocess (pps ppx_jane ppxlib.metaquot)))
-
-(library
- (name ppx_metaocannl)
- (kind ppx_rewriter)
- (modules ppx_metaocannl)
- (libraries ppxlib))

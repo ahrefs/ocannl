@@ -43,10 +43,10 @@ let create_comp_unit closed =
   (* FIXME(32): the following outputs truncated source code -- missing the last line:
   let ppf = Caml.Format.formatter_of_out_channel oc in
   Caml.Format.pp_set_margin ppf 160;
-  let () = Codelib.format_code ppf closed in
+  let () = EmitOCaml.format_code ppf closed in
   let () = Stdio.Out_channel.close oc in *)
   Caml.Format.pp_set_margin Caml.Format.str_formatter 160;
-  Codelib.format_code Caml.Format.str_formatter closed;
+  EmitOCaml.format_code Caml.Format.str_formatter closed;
   let contents = Caml.Format.flush_str_formatter() in
   Stdio.Out_channel.output_string oc contents;
   Stdio.Out_channel.flush oc;
@@ -96,15 +96,15 @@ let handle_error prefix ?formula ~contents exc =
   Stdio.prerr_endline @@ Option.value_exn (Formula.session_error_printer exc);
   raise exc
 
-let load_native ?(with_debug=true) (cde: unit Codelib.code) =
-  let closed = Codelib.close_code cde in
+let load_native ?(with_debug=true) (cde: unit EmitOCaml.low_level) =
+  let closed = EmitOCaml.emit cde in
   if not Dynlink.is_native then invalid_arg "Exec.load_forward: only works in native code";
   let source_fname = create_comp_unit closed in
   let plugin_fname = compile_source ~with_debug source_fname in
   let result =
     if with_debug then (
       Caml.Format.pp_set_margin Caml.Format.str_formatter 160;
-      Codelib.format_code Caml.Format.str_formatter closed;
+      EmitOCaml.format_code Caml.Format.str_formatter closed;
       let contents = Caml.Format.flush_str_formatter() in
       try Dynlink.loadfile_private plugin_fname; Some contents with
       | Dynlink.Error (Library's_module_initializers_failed exc) ->

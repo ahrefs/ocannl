@@ -5,22 +5,19 @@ open Base
 (** Information needed for compositional code generation. The code generation is suspended so that
     it can incorporate inferred shape information. *)
 type t = {
-  forward_body: (unit -> unit Codelib.code) option;
-  (** Uses [option], i.e. [None] instead of [fun () -> [%c () ]], to improve readability of generated code. *)
-  init_values: unit -> unit Codelib.code;
+  forward_body: Code.t;
+  init_values: Code.t;
   (** Initializes the values. *)
-  init_grads: unit -> unit Codelib.code;
+  init_grads: Code.t;
   (** Initializes the gradient data: typically, simply creates the arrays.
       Gradients are zeroed separately. The code is suspended so that it can incorporate shape inference. *)
-  backprop_body: (unit -> unit Codelib.code) option;
-  zero_grads: unit -> unit Codelib.code;
+  backprop_body: Code.t;
+  zero_grads: Code.t;
   (** Initializes the backpropagation phase. Computed once per backpropagation. *)
   node_id: int;
   comp_node: Ocannl_runtime.Node.t;
   (** This tracks the computation node as long as the model is not cross-compiled to a different
       process etc. *)
-  node: Ocannl_runtime.Node.t Codelib.code;
-  (** The node storing the computation results. [.!(t.node)] should equal [t.comp_node]. *)
   shape_logic: Shape.logic;
   (** How to do the last update of [t.shape] when finalizing the formula. *)
   shape: Shape.t;
@@ -33,8 +30,8 @@ type t = {
 
 (** A global root is a formula that is not (currently) a subformula of another formula. *)
 type global_root = {
-  mutable forward_code: unit Codelib.code option;
-  mutable backprop_code: unit Codelib.code option;
+  mutable forward_code: Code.t;
+  mutable backprop_code: Code.t;
   formula: t;
   subtree_shape_updates: Shape.update_step Sequence.t;
   (** We piggy-back on the code generation setup to arrange the updates. We perform each update twice
@@ -76,15 +73,21 @@ let () = Caml.Printexc.register_printer session_error_printer
 (* [reset_] and [create_] functions are the only direct users of [Ndcode] functions inside [Formula].
    The other uses are mediated by the [~op_body], [~grad_body] and [~init_code] arguments. *)
 let reset_zeros n shape =
-   Ndcode.(accum_unop ~accum:skip_arg ~op:(fun _ -> zero) ~lhs:n ~rhs:n
-              (Shape.terminal_projections shape))
+  let open Code in
+  failwith "NOT IMPLEMENTED YET"
+
 let reset_ones n shape =
-  Ndcode.(accum_unop ~accum:skip_arg ~op:(fun _ -> one) ~lhs:n ~rhs:n
-             (Shape.terminal_projections shape))
+  let open Code in
+  failwith "NOT IMPLEMENTED YET"
+  
 let create_value node shape =
-   [%c Ocannl_runtime.Node.([%e node].value <- create_array [%e Shape.to_dims_code shape]) ]
+  let open Code in
+  failwith "NOT IMPLEMENTED YET"
+   (* [%c Ocannl_runtime.Node.([%e node].value <- create_array [%e Shape.to_dims_code shape]) ] *)
 let create_grad node shape =
-   [%c Ocannl_runtime.Node.([%e node].grad <- create_array [%e Shape.to_dims_code shape]) ]
+  let open Code in
+  failwith "NOT IMPLEMENTED YET"
+   (* [%c Ocannl_runtime.Node.([%e node].grad <- create_array [%e Shape.to_dims_code shape]) ] *)
 
 let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t =
   let m1, m2 = if m1arg.node_id <= m2arg.node_id then m1arg, m2arg else m2arg, m1arg in
@@ -106,7 +109,6 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let shape_logic = Shape.Broadcast (compose_op, m1.shape, m2.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
-  let node = Codelib.genlet ~name:label [%c Ocannl_runtime.Node.get node_id ] in
   let nv = [%c [%e node].value ] in
   let n1v = [%c [%e m1.node].value ] in
   let n2v = [%c [%e m2.node].value ] in
@@ -190,7 +192,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let backprop_body= if needs_gradient then Some backprop_body else None in
   let formula = {forward_body=Some forward_body; backprop_body;
                 init_values; init_grads; zero_grads;
-                node_id; comp_node; node; shape_logic; shape; needs_gradient} in
+                node_id; comp_node; shape_logic; shape; needs_gradient} in
   let root = {forward_code=None; backprop_code=None; 
               formula; subtree_shape_updates} in
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
@@ -215,7 +217,6 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
 
-  let node = Codelib.genlet ~name:label [%c Ocannl_runtime.Node.get node_id ] in
   let nv = [%c [%e node].value ] in
   let n1v = [%c [%e m.node].value ] in
   let projections() = Shape.derive_projections local_shape_update in
@@ -266,7 +267,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   let backprop_body= if needs_gradient then Some backprop_body else None in
   let formula = {forward_body=Some forward_body; backprop_body;
                  init_values; init_grads; zero_grads;
-                 node_id; comp_node; node; shape_logic; shape; needs_gradient} in
+                 node_id; comp_node; shape_logic; shape; needs_gradient} in
   let root = {forward_code=None; backprop_code=None; 
               formula; subtree_shape_updates} in
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
@@ -297,7 +298,6 @@ let term ~label ?needs_gradient (spec: Shape.term_spec) ~op_body : t =
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
 
-  let node = Codelib.genlet ~name:label [%c Ocannl_runtime.Node.get node_id ] in
   let nv = [%c [%e node].value ] in
   (* Very unlikely someone will compute just the parameters. *)
   let forward_body = None in
@@ -313,7 +313,7 @@ let term ~label ?needs_gradient (spec: Shape.term_spec) ~op_body : t =
   let subtree_shape_updates = Sequence.singleton local_shape_update in
   let formula = {forward_body; backprop_body;
                  init_values; init_grads; zero_grads;
-                 node_id; comp_node; node; shape_logic; shape; needs_gradient} in
+                 node_id; comp_node; shape_logic; shape; needs_gradient} in
   let root = {forward_code=None; backprop_code=None; 
               formula; subtree_shape_updates} in
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;

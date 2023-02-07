@@ -1037,10 +1037,6 @@ let of_term_spec : term_spec -> t = function
     { batch=Given []; input=Unknown; output=Unknown;
       axis_labels=Map.empty (module AxisKey);
       deduce_output_from_input }
-  
-let to_dims_code (sh: t): int array Codelib.code =
-  let dims = Array.map (to_dims sh) ~f:(Lifts.Lift_int.lift) in
-  Lifts.lift_array dims
 
 let to_string_hum ?(only_labels=false) sh =
   let dims_to_string kind =
