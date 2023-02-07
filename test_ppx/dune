@@ -1,0 +1,20 @@
+(executable
+ (name pp)
+ (modules pp)
+ (libraries ppx_ocannl ppxlib)
+ (modes exe))
+
+(rule
+ (targets test_ppx_actual.ml)
+ (deps (:pp pp.exe) (:input test_ppx.ml))
+ (action (run ./%{pp} --impl %{input} -o %{targets})))
+
+(rule
+ (alias runtest)
+ (action (diff test_ppx_expected.ml test_ppx_actual.ml)))
+
+(test
+  (name test_ppx)
+  (modules test_ppx)
+  (libraries ocannl)
+  (preprocess (pps ppx_ocannl)))

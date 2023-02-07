@@ -56,7 +56,7 @@ let rec translate expr =
         let [%p pat2] = Network.return (Network.Placeholder [%e pat2expr @@ pat2_ref]) in
         let body = [%e translate body] in
         fun [%p pat1] [%p pat2] ->
-          [%p pat1_ref] := [%e pat2expr pat1]; [%p pat2_ref] := [%e pat2expr pat2];
+          [%e pat2expr pat1_ref] := [%e pat2expr pat1]; [%e pat2expr pat2_ref] := [%e pat2expr pat2];
           Network.unpack body
     ]
 
@@ -69,7 +69,7 @@ let rec translate expr =
         let [%p pat] = Network.return (Network.Placeholder [%e pat2expr @@ pat_ref]) in
         let body = [%e translate body] in
         fun [%p pat] ->
-          [%p pat_ref] := [%e pat2expr pat];
+          [%e pat2expr pat_ref] := [%e pat2expr pat];
           Network.unpack body
     ]
 
@@ -83,7 +83,7 @@ let rec translate expr =
       let [%p pat2] = Network.return (Network.Placeholder [%e pat2expr @@ pat2_ref]) in
       let body = [%e translate body] in
       fun [%p pat1] [%p pat2] ->
-        [%p pat1_ref] := [%e pat2expr pat1]; [%p pat2_ref] := [%e pat2expr pat2];
+        [%e pat2expr pat1_ref] := [%e pat2expr pat1]; [%e pat2expr pat2_ref] := [%e pat2expr pat2];
         Network.unpack body
     ]
 
@@ -94,7 +94,7 @@ let rec translate expr =
       let [%p pat] = Network.return (Network.Placeholder [%e pat2expr @@ pat_ref]) in
       let body = [%e translate body] in
       fun [%p pat] ->
-        [%p pat_ref] := [%e pat2expr pat];
+        [%e pat2expr pat_ref] := [%e pat2expr pat];
         Network.unpack body
     ]
 
