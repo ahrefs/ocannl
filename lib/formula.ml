@@ -30,8 +30,8 @@ type t = {
 
 (** A global root is a formula that is not (currently) a subformula of another formula. *)
 type global_root = {
-  mutable forward_code: Code.t;
-  mutable backprop_code: Code.t;
+  mutable forward_code: Code.t option;
+  mutable backprop_code: Code.t option;
   formula: t;
   subtree_shape_updates: Shape.update_step Sequence.t;
   (** We piggy-back on the code generation setup to arrange the updates. We perform each update twice
@@ -73,19 +73,23 @@ let () = Caml.Printexc.register_printer session_error_printer
 (* [reset_] and [create_] functions are the only direct users of [Ndcode] functions inside [Formula].
    The other uses are mediated by the [~op_body], [~grad_body] and [~init_code] arguments. *)
 let reset_zeros n shape =
-  let open Code in
+  (* let open Code in *)
+  ignore (n, shape);
   failwith "NOT IMPLEMENTED YET"
 
 let reset_ones n shape =
-  let open Code in
+  (* let open Code in *)
+  ignore (n, shape);
   failwith "NOT IMPLEMENTED YET"
   
-let create_value node shape =
-  let open Code in
+let create_value n shape =
+  (* let open Code in *)
+  ignore (n, shape);
   failwith "NOT IMPLEMENTED YET"
    (* [%c Ocannl_runtime.Node.([%e node].value <- create_array [%e Shape.to_dims_code shape]) ] *)
-let create_grad node shape =
-  let open Code in
+let create_grad n shape =
+  (* let open Code in *)
+  ignore (n, shape);
   failwith "NOT IMPLEMENTED YET"
    (* [%c Ocannl_runtime.Node.([%e node].grad <- create_array [%e Shape.to_dims_code shape]) ] *)
 
@@ -109,71 +113,66 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let shape_logic = Shape.Broadcast (compose_op, m1.shape, m2.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
-  let nv = [%c [%e node].value ] in
-  let n1v = [%c [%e m1.node].value ] in
-  let n2v = [%c [%e m2.node].value ] in
+  let nv = comp_node.value in
+  let n1v = m1.comp_node.value in
+  let n2v = m2.comp_node.value  in
   let projections() = Shape.derive_projections local_shape_update in
-  let op_body() = op_body ~nv ~n1v ~n2v @@ projections() in
+  let op_body = op_body ~nv ~n1v ~n2v projections in
   let m1_processed = not @@ Map.mem !global_roots m1.node_id in
   let m2_processed = not @@ Map.mem !global_roots m2.node_id in
   (* The code needs to be included in the order it was computed! *)
   let m1_forward_body = m1.forward_body in
   let m2_forward_body = m2.forward_body in
+  let open Code in
   let forward_body =
     (match m1_processed, m1_forward_body, m2_processed, m2_forward_body with
-    | true, _, true, _ | true, _, _, None | _, None, true, _ | _, None, _, None -> op_body
-    | false, Some m1_body, false, Some m2_body ->
-      fun () -> [%c [%e m1_body()]; [%e m2_body()]; [%e op_body()] ]
-    | _, _, false, Some m2_body -> fun () -> [%c [%e m2_body()]; [%e op_body()] ]
-    | false, Some m1_body, _, _ -> fun () -> [%c [%e m1_body()]; [%e op_body()] ])
-  in
-  let init_values_body() = create_value node shape in
+    | true, _, true, _ | true, _, _, Noop | _, Noop, true, _ | _, Noop, _, Noop -> op_body
+    | false, m1_body, false, m2_body -> Seq (Par (m1_body, m2_body), op_body)
+    | _, _, false, m2_body -> Seq (m2_body, op_body)
+    | false, m1_body, _, _ -> Seq(m1_body, op_body)) in
+  let init_values_body = create_value comp_node shape in
   let m1_init_values = m1.init_values in
   let m2_init_values = m2.init_values in
   let init_values =
-    (if m1_processed && m2_processed then init_values_body
-    else if m1_processed then fun () -> [%c [%e m2_init_values ()]; [%e init_values_body ()] ]
-    else if m2_processed then fun () -> [%c [%e m1_init_values ()]; [%e init_values_body ()] ]
-    else fun () -> [%c [%e m1_init_values ()]; [%e m2.init_values ()]; [%e init_values_body ()] ]) in
+    if m1_processed && m2_processed then init_values_body
+    else if m1_processed then Seq (m2_init_values, init_values_body)
+    else if m2_processed then Seq (m1_init_values, init_values_body)
+    else Seq (Par (m1_init_values, m2_init_values), init_values_body) in
   let needs_gradient = m1.needs_gradient || m2.needs_gradient in
-  let ng = if needs_gradient then Some [%c [%e node].grad ] else None in
-  let n1g = if m1.needs_gradient then Some [%c [%e m1.node].grad ] else None in
-  let n2g = if m2.needs_gradient then Some [%c [%e m2.node].grad ] else None in
+  let ng = if needs_gradient then Some comp_node.grad else None in
+  let n1g = if m1.needs_gradient then Some m1.comp_node.grad else None in
+  let n2g = if m2.needs_gradient then Some m2.comp_node.grad else None in
   let m1_no_grad = m1_processed || not m1.needs_gradient in
   let m2_no_grad = m2_processed || not m2.needs_gradient in
-  let zero_body() = match ng with None -> [%c ()] | Some ng -> reset_zeros ng shape in
+  let zero_body = match ng with None -> Noop | Some ng -> reset_zeros ng shape in
   (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
      and keep the backprop order for readability. *)
   let m1_zero_grads = m1.zero_grads in
   let m2_zero_grads = m2.zero_grads in
   let zero_grads =
     if m1_no_grad && m2_no_grad then zero_body
-    else if m1_no_grad then fun () -> [%c [%e zero_body()]; [%e m2_zero_grads()] ]
-    else if m2_no_grad then fun () -> [%c [%e zero_body()]; [%e m1_zero_grads()] ]
-    else fun () -> [%c [%e zero_body()]; [%e m2_zero_grads()]; [%e m1_zero_grads()] ] in
+    else if m1_no_grad then Seq (zero_body, m2_zero_grads)
+    else if m2_no_grad then Seq (zero_body, m1_zero_grads)
+    else Seq (zero_body, Par (m2_zero_grads, m1_zero_grads)) in
   (* The code needs to be included in the reverse order to which it was computed! This guarantees
      that all ancestors of a node are backpropagated before the node is backpropagated, even for
      non-tree DAGs. *)
-  let grad_body() = grad_body ?n1g ?n2g ?ng ~nv ~n1v ~n2v @@ projections() in
+  let grad_body = grad_body ?n1g ?n2g ?ng ~nv ~n1v ~n2v projections in
   let backprop_body =
     match m1_no_grad, m1.backprop_body, m2_no_grad, m2.backprop_body with
-    | true, _, true, _ | true, _, _, None | _, None, true, _ | _, None, _, None -> grad_body
-    | false, Some m1_body, false, Some m2_body ->
-      fun () -> [%c [%e grad_body()]; [%e m1_body()]; [%e m2_body()] ]
-    | _, _, false, Some m2_body ->
-      fun () -> [%c [%e grad_body()]; [%e m2_body()]  ]
-    | false, Some m1_body, _, _ ->
-      fun () -> [%c [%e grad_body()]; [%e m1_body()]  ]
-    in
-  let init_grads_body() = create_grad node shape in
+    | true, _, true, _ | true, _, _, Noop | _, Noop, true, _ | _, Noop, _, Noop -> grad_body
+    | false, m1_body, false, m2_body -> Seq (grad_body, Par(m1_body, m2_body))
+    | _, _, false, m2_body -> Seq (grad_body, m2_body)
+    | false, m1_body, _, _ -> Seq (grad_body, m1_body) in
+  let init_grads_body = create_grad comp_node shape in
   (* The order is not relevant, we keep the same order as in backprop for readability. *)
   let m1_init_grads = m1.init_grads in
   let m2_init_grads = m2.init_grads in
   let init_grads =
     if m1_no_grad && m2_no_grad then init_grads_body
-    else if m1_no_grad then fun () -> [%c [%e init_grads_body ()]; [%e m2_init_grads ()] ]
-    else if m2_no_grad then fun () -> [%c [%e init_grads_body ()]; [%e m1_init_grads ()] ]
-    else fun () -> [%c [%e init_grads_body ()]; [%e m2_init_grads ()]; [%e m1_init_grads ()] ] in
+    else if m1_no_grad then Seq (init_grads_body, m2_init_grads)
+    else if m2_no_grad then Seq (init_grads_body, m1_init_grads)
+    else Seq (init_grads_body, Par (m2_init_grads, m1_init_grads))in
   (* The order is reverse to the order the updates were already executed for the first time. *)
   let local_shape_updates = Sequence.singleton local_shape_update in
   let subtree_shape_updates: Shape.update_step Sequence.t =
@@ -189,8 +188,8 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
 
   (if not m1_processed then global_roots := Map.remove !global_roots m1.node_id);
   (if not m2_processed then global_roots := Map.remove !global_roots m2.node_id);
-  let backprop_body= if needs_gradient then Some backprop_body else None in
-  let formula = {forward_body=Some forward_body; backprop_body;
+  let backprop_body = if needs_gradient then backprop_body else Noop in
+  let formula = {forward_body; backprop_body;
                 init_values; init_grads; zero_grads;
                 node_id; comp_node; shape_logic; shape; needs_gradient} in
   let root = {forward_code=None; backprop_code=None; 
@@ -217,46 +216,43 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
 
-  let nv = [%c [%e node].value ] in
-  let n1v = [%c [%e m.node].value ] in
+  let nv = comp_node.value in
+  let n1v = m.comp_node.value in
   let projections() = Shape.derive_projections local_shape_update in
-  let op_body() = op_body ~nv ~n1v @@ projections() in
+  let op_body = op_body ~nv ~n1v projections in
   let m_processed = not @@ Map.mem !global_roots m.node_id in
   (* The code needs to be included in the order it was computed! *)
-
+  let open Code in
   let forward_body =
     match m_processed, m.forward_body with
-    | true, _ | _, None -> op_body
-    | false, Some m_body -> fun() -> [%c [%e m_body()]; [%e op_body()] ] in
+    | true, _ | _, Noop -> op_body
+    | false, m_body -> Seq (m_body, op_body) in
   let m_init_values = m.init_values in
-  let init_values() = [%c 
-    [%e m_init_values ()];
-    [%e create_value node shape];
-  ] in
+  let init_values = Seq (m_init_values, create_value comp_node shape) in
   let needs_gradient = m.needs_gradient in
-  let ng = if needs_gradient then Some [%c [%e node].grad ] else None in
+  let ng = if needs_gradient then Some comp_node.grad else None in
   (* Note: not wrt. m_no_grad. *)
-  let n1g = if m.needs_gradient then Some [%c [%e m.node].grad ] else None in
+  let n1g = if m.needs_gradient then Some m.comp_node.grad else None in
   let m_no_grad = m_processed || not m.needs_gradient in
-  let zero_body() = match ng with None -> [%c ()] | Some ng -> reset_zeros ng shape in
+  let zero_body = match ng with None -> Noop | Some ng -> reset_zeros ng shape in
   (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
        and keep the backprop order for readability. *)
   let m_zero_grads = m.zero_grads in
   let zero_grads =
     if m_no_grad then zero_body
-    else fun () -> [%c [%e zero_body()]; [%e m_zero_grads()] ] in
-  let grad_body() = grad_body ?n1g ?ng ~nv ~n1v @@ projections() in
+    else Seq (zero_body, m_zero_grads) in
+  let grad_body = grad_body ?n1g ?ng ~nv ~n1v projections in
   (* The code needs to be included in the reverse order to which it was computed! *)
   let backprop_body =
     match m_no_grad, m.backprop_body with
-    | true, _ | _, None -> grad_body
-    | false, Some m_body -> fun () -> [%c [%e grad_body()]; [%e m_body()] ] in
-  let init_grads_body() = create_grad node shape in
+    | true, _ | _, Noop -> grad_body
+    | false, m_body -> Seq (grad_body, m_body) in
+  let init_grads_body = create_grad comp_node shape in
   (* The order is not relevant, we keep the same order as in backprop for readability. *)
   let m_init_grads = m.init_grads in
   let init_grads =
     if m_no_grad then init_grads_body
-    else fun () -> [%c [%e init_grads_body ()]; [%e m_init_grads ()] ] in
+    else Seq (init_grads_body, m_init_grads) in
   let local_shape_updates = Sequence.singleton local_shape_update in
   let subtree_shape_updates: Shape.update_step Sequence.t =
     if m_processed then local_shape_updates
@@ -264,8 +260,8 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
       (Map.find_exn !global_roots m.node_id).subtree_shape_updates in
 
   (if not m_processed then global_roots := Map.remove !global_roots m.node_id);
-  let backprop_body= if needs_gradient then Some backprop_body else None in
-  let formula = {forward_body=Some forward_body; backprop_body;
+  let backprop_body = if needs_gradient then backprop_body else Noop in
+  let formula = {forward_body; backprop_body;
                  init_values; init_grads; zero_grads;
                  node_id; comp_node; shape_logic; shape; needs_gradient} in
   let root = {forward_code=None; backprop_code=None; 
@@ -298,18 +294,16 @@ let term ~label ?needs_gradient (spec: Shape.term_spec) ~op_body : t =
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
 
-  let nv = [%c [%e node].value ] in
+  let nv = comp_node.value in
+  let open Code in
   (* Very unlikely someone will compute just the parameters. *)
-  let forward_body = None in
-  let init_values() = [%c 
-    [%e create_value node shape];
-    [%e op_body ~nv shape];
-  ] in
-  let ng = [%c [%e node].grad ] in
-  let zero_grads() = reset_zeros ng shape in
-  let backprop_body = None in
+  let forward_body = Noop in
+  let init_values = Seq (create_value comp_node shape, op_body ~nv shape) in
+  let ng = comp_node.grad in
+  let zero_grads = reset_zeros ng shape in
+  let backprop_body = Noop in
   (* Very unlikely someone will want dw/dw. *)
-  let init_grads() = create_grad node shape in
+  let init_grads = create_grad comp_node shape in
   let subtree_shape_updates = Sequence.singleton local_shape_update in
   let formula = {forward_body; backprop_body;
                  init_values; init_grads; zero_grads;
@@ -320,15 +314,15 @@ let term ~label ?needs_gradient (spec: Shape.term_spec) ~op_body : t =
   formula
 
 let get_toplevel_native m =
-  let forward_body = match m.forward_body with None -> [%c () ] | Some body -> body() in
-  let toplevel_forward = [%c 
+  let open Code in
+  let toplevel_forward = Seq (m.init_values, m.forward_body)
+    (* [%c 
     [%e m.init_values ()];
     [%e m.node].Ocannl_runtime.Node.forward <- Some (fun () -> [%e forward_body])
-  ] in
-  let backprop_body = match m.backprop_body with None -> [%c () ] | Some body -> body() in
-  let ng = [%c [%e m.node].Ocannl_runtime.Node.grad ] in
-  let toplevel_backprop =
-    if not m.needs_gradient then [%c 
+  ] *) in
+  (* let ng = m.comp_node.grad in *)
+  let toplevel_backprop = Seq (m.init_grads, m.backprop_body)
+    (* if not m.needs_gradient then [%c 
       [%e m.node].Ocannl_runtime.Node.backprop <- Some (fun () -> ())
     ] else [%c 
       [%e m.init_grads ()];
@@ -336,7 +330,7 @@ let get_toplevel_native m =
         [%e m.zero_grads()];
         [%e reset_ones ng m.shape];
         [%e backprop_body])
-    ] in
+    ] *) in
   toplevel_forward, toplevel_backprop
 
 let sexp_of_t m =

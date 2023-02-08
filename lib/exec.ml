@@ -10,15 +10,13 @@ let load_path : string list ref = ref []
 let add_search_path dir =
   load_path := dir :: !load_path
 
-let ocamlopt_path = 
-  let open Caml.Filename in
-  concat (concat (dirname (dirname (Config.standard_library))) "bin") "ocamlfind ocamlopt"
+let ocamlopt_path = "ocamlfind ocamlopt"
 
 (** Compile the source file and make the .cmxs, returning its name. *)
 let compile_source ~with_debug src_fname =
   let basename = Caml.Filename.remove_extension src_fname in
   let plugin_fname = basename ^ ".cmxs" in
-  let other_files = [basename ^ ".cmi"; basename ^ ".cmx"; basename ^ Config.ext_obj] in
+  let other_files = [basename ^ ".cmi"; basename ^ ".cmx"(*; basename ^ Config.ext_obj*)] in
   (* We need the byte objects directory in path because it contains the .cmi files. *)
   (* FIXME: un-hardcode the paths. *)
   let cmdline = ocamlopt_path ^ 
@@ -96,7 +94,7 @@ let handle_error prefix ?formula ~contents exc =
   Stdio.prerr_endline @@ Option.value_exn (Formula.session_error_printer exc);
   raise exc
 
-let load_native ?(with_debug=true) (cde: unit EmitOCaml.low_level) =
+let load_native ?(with_debug=true) (cde: Code.t) =
   let closed = EmitOCaml.emit cde in
   if not Dynlink.is_native then invalid_arg "Exec.load_forward: only works in native code";
   let source_fname = create_comp_unit closed in

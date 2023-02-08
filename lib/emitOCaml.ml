@@ -88,6 +88,9 @@ module type FOLD_CODE = sig
   val exists_greater_0: data low_level_result -> bool low_level_result
 end
 
+let emit = unoptimized
+
+let format_code fmt c: unit = ignore (fmt, c); failwith "NOT IMPLEMENTED YET"
 
 (*
  let zero = [%c 0.0 ]
