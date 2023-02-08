@@ -70,28 +70,15 @@ let session_error_printer = function
 
 let () = Caml.Printexc.register_printer session_error_printer
   
-(* [reset_] and [create_] functions are the only direct users of [Code] functions inside [Formula].
-   The other uses are mediated by the [~op_body], [~grad_body] and [~init_code] arguments. *)
-let reset_zeros n shape =
-  (* let open Code in *)
-  ignore (n, shape);
-  failwith "NOT IMPLEMENTED YET"
+let reset_zeros node field shape =
+  Code.Reset {tensor={node; field}; dims=(fun () -> Shape.to_dims shape); reset_values=[|0.0|]}
 
-let reset_ones n shape =
-  (* let open Code in *)
-  ignore (n, shape);
-  failwith "NOT IMPLEMENTED YET"
-  
-let create_value n shape =
-  (* let open Code in *)
-  ignore (n, shape);
-  failwith "NOT IMPLEMENTED YET"
-   (* [%c Ocannl_runtime.Node.([%e node].value <- create_array [%e Shape.to_dims_code shape]) ] *)
-let create_grad n shape =
-  (* let open Code in *)
-  ignore (n, shape);
-  failwith "NOT IMPLEMENTED YET"
-   (* [%c Ocannl_runtime.Node.([%e node].grad <- create_array [%e Shape.to_dims_code shape]) ] *)
+let reset_ones node field shape =
+  Code.Reset {tensor={node; field}; dims=(fun () -> Shape.to_dims shape); reset_values=[|1.0|]}
+
+let create node field shape =
+  Code.Create {tensor={node; field}; dims=(fun () -> Shape.to_dims shape); init_values=[||];
+               precision=Single}
 
 let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t =
   let m1, m2 = if m1arg.node_id <= m2arg.node_id then m1arg, m2arg else m2arg, m1arg in
@@ -105,19 +92,18 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let m2_l = m2.comp_node.label in
   let m2_l = if String.length m2_l > 11 then "n"^Int.to_string m2.node_id else m2_l in
   let label = m1_l ^ op_label ^ m2_l in
-  let comp_node = Ocannl_runtime.Node.create ~label in
-  let node_id = comp_node.id in
+  let n = Ocannl_runtime.Node.create ~label in
+  let node_id = n.id in
   let shape = Shape.{ batch=Unknown; input=Unknown; output=Unknown;
                       axis_labels=Map.empty (module AxisKey);
-                     deduce_output_from_input=`Not_deduced } in
+                      deduce_output_from_input=`Not_deduced } in
   let shape_logic = Shape.Broadcast (compose_op, m1.shape, m2.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
-  let nv = comp_node.value in
-  let n1v = m1.comp_node.value in
-  let n2v = m2.comp_node.value  in
+  let n1 = m1.comp_node in
+  let n2 = m2.comp_node  in
   let projections() = Shape.derive_projections local_shape_update in
-  let op_body = op_body ~nv ~n1v ~n2v projections in
+  let op_body = op_body ~n ~n1 ~n2 projections in
   let m1_processed = not @@ Map.mem !global_roots m1.node_id in
   let m2_processed = not @@ Map.mem !global_roots m2.node_id in
   (* The code needs to be included in the order it was computed! *)
@@ -130,9 +116,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
     | false, m1_body, false, m2_body -> Seq (Par (m1_body, m2_body), op_body)
     | _, _, false, m2_body -> Seq (m2_body, op_body)
     | false, m1_body, _, _ -> Seq(m1_body, op_body)) in
-  let init_values_body = create_value comp_node shape in
-  let m1_init_values = m1.init_values in
-  let m2_init_values = m2.init_values in
+  let init_values_body = create n `Value shape in
   let init_values =
     if m1_processed && m2_processed then init_values_body
     else if m1_processed then Seq (m2_init_values, init_values_body)
@@ -144,11 +128,9 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let n2g = if m2.needs_gradient then Some m2.comp_node.grad else None in
   let m1_no_grad = m1_processed || not m1.needs_gradient in
   let m2_no_grad = m2_processed || not m2.needs_gradient in
-  let zero_body = match ng with None -> Noop | Some ng -> reset_zeros ng shape in
+  let zero_body = if needs_gradient then reset_zeros n `Grad shape else Noop in
   (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
      and keep the backprop order for readability. *)
-  let m1_zero_grads = m1.zero_grads in
-  let m2_zero_grads = m2.zero_grads in
   let zero_grads =
     if m1_no_grad && m2_no_grad then zero_body
     else if m1_no_grad then Seq (zero_body, m2_zero_grads)
@@ -157,14 +139,18 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   (* The code needs to be included in the reverse order to which it was computed! This guarantees
      that all ancestors of a node are backpropagated before the node is backpropagated, even for
      non-tree DAGs. *)
-  let grad_body = grad_body ?n1g ?n2g ?ng ~nv ~n1v ~n2v projections in
+  (*  *)
+  let grad_body =
+    if needs_gradient then
+      grad_body ~n ~n1 ~n2 ~needs1:m1.needs_gradient ~needs2:m2.needs_gradient projections
+    else Noop in
   let backprop_body =
     match m1_no_grad, m1.backprop_body, m2_no_grad, m2.backprop_body with
     | true, _, true, _ | true, _, _, Noop | _, Noop, true, _ | _, Noop, _, Noop -> grad_body
     | false, m1_body, false, m2_body -> Seq (grad_body, Par(m1_body, m2_body))
     | _, _, false, m2_body -> Seq (grad_body, m2_body)
     | false, m1_body, _, _ -> Seq (grad_body, m1_body) in
-  let init_grads_body = create_grad comp_node shape in
+  let init_grads_body = create n `Grad shape in
   (* The order is not relevant, we keep the same order as in backprop for readability. *)
   let m1_init_grads = m1.init_grads in
   let m2_init_grads = m2.init_grads in
@@ -188,10 +174,9 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
 
   (if not m1_processed then global_roots := Map.remove !global_roots m1.node_id);
   (if not m2_processed then global_roots := Map.remove !global_roots m2.node_id);
-  let backprop_body = if needs_gradient then backprop_body else Noop in
   let formula = {forward_body; backprop_body;
                 init_values; init_grads; zero_grads;
-                node_id; comp_node; shape_logic; shape; needs_gradient} in
+                node_id; comp_node=n; shape_logic; shape; needs_gradient} in
   let root = {forward_code=None; backprop_code=None; 
               formula; subtree_shape_updates} in
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
@@ -202,8 +187,8 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   let m_l = m.comp_node.label in
   let m_l = if String.length m_l > 11 then "n"^Int.to_string m.node_id else m_l in
   let label = op_label ^ m_l in
-  let comp_node = Ocannl_runtime.Node.create ~label in
-  let node_id = comp_node.id in
+  let n = Ocannl_runtime.Node.create ~label in
+  let node_id = n.id in
 
   let shape =
     match init_shape with
@@ -216,10 +201,9 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
 
-  let nv = comp_node.value in
-  let n1v = m.comp_node.value in
+  let n1 = m.comp_node in
   let projections() = Shape.derive_projections local_shape_update in
-  let op_body = op_body ~nv ~n1v projections in
+  let op_body = op_body ~n ~n1 projections in
   let m_processed = not @@ Map.mem !global_roots m.node_id in
   (* The code needs to be included in the order it was computed! *)
   let open Code in
@@ -234,22 +218,19 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   (* Note: not wrt. m_no_grad. *)
   let n1g = if m.needs_gradient then Some m.comp_node.grad else None in
   let m_no_grad = m_processed || not m.needs_gradient in
-  let zero_body = match ng with None -> Noop | Some ng -> reset_zeros ng shape in
-  (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
-       and keep the backprop order for readability. *)
-  let m_zero_grads = m.zero_grads in
+  let zero_body = if needs_gradient then reset_zeros n `Grad shape else Noop in
   let zero_grads =
     if m_no_grad then zero_body
     else Seq (zero_body, m_zero_grads) in
   let grad_body = grad_body ?n1g ?ng ~nv ~n1v projections in
+  let grad_body =
+    if needs_gradient then grad_body ~n ~n1 projections else Noop in
   (* The code needs to be included in the reverse order to which it was computed! *)
   let backprop_body =
     match m_no_grad, m.backprop_body with
     | true, _ | _, Noop -> grad_body
     | false, m_body -> Seq (grad_body, m_body) in
-  let init_grads_body = create_grad comp_node shape in
-  (* The order is not relevant, we keep the same order as in backprop for readability. *)
-  let m_init_grads = m.init_grads in
+  let init_grads_body = create n `Grad shape in
   let init_grads =
     if m_no_grad then init_grads_body
     else Seq (init_grads_body, m_init_grads) in
@@ -260,10 +241,9 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
       (Map.find_exn !global_roots m.node_id).subtree_shape_updates in
 
   (if not m_processed then global_roots := Map.remove !global_roots m.node_id);
-  let backprop_body = if needs_gradient then backprop_body else Noop in
   let formula = {forward_body; backprop_body;
                  init_values; init_grads; zero_grads;
-                 node_id; comp_node; shape_logic; shape; needs_gradient} in
+                 node_id; comp_node=n; shape_logic; shape; needs_gradient} in
   let root = {forward_code=None; backprop_code=None; 
               formula; subtree_shape_updates} in
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
@@ -280,9 +260,9 @@ let term_needs_gradient (spec: Shape.term_spec) =
   | `Deduced_params _ -> true
 
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label ?needs_gradient (spec: Shape.term_spec) ~op_body : t =
-  let comp_node = Ocannl_runtime.Node.create ~label in
-  let node_id = comp_node.id in
+let term ~label ?needs_gradient (spec: Shape.term_spec) ~init_body : t =
+  let n = Ocannl_runtime.Node.create ~label in
+  let node_id = n.id in
   let shape = Shape.of_term_spec spec in
   let needs_gradient =
     match needs_gradient with
@@ -294,20 +274,18 @@ let term ~label ?needs_gradient (spec: Shape.term_spec) ~op_body : t =
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
 
-  let nv = comp_node.value in
   let open Code in
   (* Very unlikely someone will compute just the parameters. *)
   let forward_body = Noop in
-  let init_values = Seq (create_value comp_node shape, op_body ~nv shape) in
-  let ng = comp_node.grad in
-  let zero_grads = reset_zeros ng shape in
+  let init_values = Par (create n `Value shape, init_body ~n shape) in
+  let zero_grads = reset_zeros n `Grad shape in
   let backprop_body = Noop in
   (* Very unlikely someone will want dw/dw. *)
-  let init_grads = create_grad comp_node shape in
+  let init_grads = create n `Grad shape in
   let subtree_shape_updates = Sequence.singleton local_shape_update in
   let formula = {forward_body; backprop_body;
                  init_values; init_grads; zero_grads;
-                 node_id; comp_node; shape_logic; shape; needs_gradient} in
+                 node_id; comp_node=n; shape_logic; shape; needs_gradient} in
   let root = {forward_code=None; backprop_code=None; 
               formula; subtree_shape_updates} in
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;

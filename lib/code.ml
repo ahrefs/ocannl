@@ -6,7 +6,8 @@ type precision =
   | Single
   | Double
 
-type data = Ocannl_runtime.Node.data
+type data = {node: Ocannl_runtime.Node.t; field: [`Value | `Grad]}
+type routine = {node: Ocannl_runtime.Node.t; field: [`Forward | `Backprop]}
 
 type binop =
   | Skip_arg
@@ -25,13 +26,13 @@ type t =
   | Accum_binop of {
       zero_out: bool;
       accum: binop; op: binop;
-      lhs: data option; rhs1: data option; rhs2: data option;
+      lhs: data; rhs1: data; rhs2: data;
       projections: unit -> Shape.projections;
       precision: precision }
   | Accum_unop of {
       zero_out: bool;
       accum: binop; op: unop;
-      lhs: data option; rhs: data option;
+      lhs: data; rhs: data;
       projections: unit -> Shape.projections;
       precision: precision }
   | Create of {

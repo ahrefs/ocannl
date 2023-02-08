@@ -2,27 +2,41 @@
 
 open Base
 
+let g n: Code.data = {node=n; field=`Grad}
+let v n: Code.data = {node=n; field=`Value}
+
 let add =
   let open Code in
-  let op_body ~nv ~n1v ~n2v projections =
-    Accum_binop {zero_out=false; accum=Skip_arg; op=Add; lhs=Some nv; rhs1=Some n1v; rhs2=Some n2v; projections; precision=Single} in
-  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v:_ ~n2v:_ projections =
-    Par (
-      Accum_unop {zero_out=false; accum=Add; op=Identity; lhs=n1g; rhs=ng;
-                  projections=(fun () -> Shape.backprop1 @@ projections()); precision=Single},
-      Accum_unop {zero_out=false; accum=Add; op=Identity; lhs=n2g; rhs=ng;
-                  projections=(fun () -> Shape.backprop2 @@ projections()); precision=Single}) in
+  let op_body ~n ~n1 ~n2 projections =
+    Accum_binop {zero_out=false; accum=Skip_arg; op=Add; lhs=v n; rhs1=v n1; rhs2=v n2; projections; precision=Single} in
+  let grad_body ~n ~n1 ~n2 ~needs1 ~needs2 projections =
+    let grad1 =
+      Accum_unop {zero_out=false; accum=Add; op=Identity; lhs=g n1; rhs=g n;
+                  projections=(fun () -> Shape.backprop1 @@ projections()); precision=Single} in
+    let grad2 =
+      Accum_unop {zero_out=false; accum=Add; op=Identity; lhs=g n2; rhs=g n;
+                  projections=(fun () -> Shape.backprop2 @@ projections()); precision=Single} in
+    if needs1 && needs2 then Seq (grad1, grad2)
+    else if needs1 then grad1
+    else if needs2 then grad2
+    else assert false in
   Formula.binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
 let mul compose_op =
   let open Code in
-  let op_body ~nv ~n1v ~n2v projections =
-    Accum_binop {zero_out=false; accum=Skip_arg; op=Mul; lhs=Some nv; rhs1=Some n1v; rhs2=Some n2v; projections; precision=Single} in
-  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v ~n2v projections = 
-    Par (Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=n1g; rhs1=ng; rhs2=Some n2v;
-                      projections=(fun () -> Shape.backprop1 @@ projections()); precision=Single},
-         Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=n2g; rhs1=ng; rhs2=Some n1v;
-                      projections=(fun () -> Shape.backprop2 @@ projections()); precision=Single}) in
+  let op_body ~n ~n1 ~n2 projections =
+    Accum_binop {zero_out=false; accum=Skip_arg; op=Mul; lhs=v n; rhs1=v n1; rhs2=v n2; projections; precision=Single} in
+  let grad_body ~n ~n1 ~n2 ~needs1 ~needs2 projections =
+    let grad1 =
+      Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n1; rhs1=g n; rhs2=v n2;
+                   projections=(fun () -> Shape.backprop1 @@ projections()); precision=Single} in
+    let grad2 =
+      Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n2; rhs1=g n; rhs2=v n1;
+                      projections=(fun () -> Shape.backprop2 @@ projections()); precision=Single} in
+    if needs1 && needs2 then Seq (grad1, grad2)
+    else if needs1 then grad1
+    else if needs2 then grad2
+    else assert false in
   Formula.binop ~compose_op ~op_label:"" ~op_body ~grad_body
 
 let pointmul = mul `Pointwise
@@ -43,14 +57,20 @@ let matmul = mul `Compose
     and the output axes. *)
 let einsum spec =
   let open Code in
-  let op_body ~nv ~n1v ~n2v projections =
-    Accum_binop {zero_out=true; accum=Add; op=Mul; lhs=Some nv; rhs1=Some n1v; rhs2=Some n2v;
+  let op_body ~n ~n1 ~n2 projections =
+    Accum_binop {zero_out=true; accum=Add; op=Mul; lhs=v n; rhs1=v n1; rhs2=v n2;
                  projections; precision=Single} in
-  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v ~n2v projections =
-    Par (Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=n1g; rhs1=ng; rhs2=Some n2v;
-                      projections=(fun () -> Shape.backprop1 @@ projections()); precision=Single},
-         Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=n2g; rhs1=ng; rhs2=Some n1v;
-                      projections=(fun () -> Shape.backprop2 @@ projections()); precision=Single}) in
+  let grad_body ~n ~n1 ~n2 ~needs1 ~needs2 projections =
+    let grad1 =
+      Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n1; rhs1=g n; rhs2=v n2;
+                      projections=(fun () -> Shape.backprop1 @@ projections()); precision=Single} in
+    let grad2 =
+      Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n2; rhs1=g n; rhs2=v n1;
+                      projections=(fun () -> Shape.backprop2 @@ projections()); precision=Single} in
+    if needs1 && needs2 then Seq (grad1, grad2)
+    else if needs1 then grad1
+    else if needs2 then grad2
+    else assert false in
   Formula.binop ~compose_op:(`Einsum spec) ~op_label:"" ~op_body ~grad_body
 
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract diagonals,
@@ -60,46 +80,46 @@ let einsum spec =
     and the output axes. *)
 let einsum1 spec =
   let open Code in
-  let op_body ~nv ~n1v projections =
-    Accum_unop {zero_out=true; accum=Add; op=Identity; lhs=Some nv; rhs=Some n1v; projections;
+  let op_body ~n ~n1 projections =
+    Accum_unop {zero_out=true; accum=Add; op=Identity; lhs=v n; rhs=v n1; projections;
                 precision=Single} in
-  let grad_body ?n1g ?ng ~nv:_ ~n1v:_ projections =
-    Accum_unop {zero_out=false; accum=Add; op=Identity; lhs=n1g; rhs=ng;
+  let grad_body ~n ~n1 projections =
+    Accum_unop {zero_out=false; accum=Add; op=Identity; lhs=g n1; rhs=g n;
                 projections=(fun () -> Shape.backprop_unary @@ projections()); precision=Single} in
   Formula.unop ~transpose_op:(`Permute spec) ~op_label:"" ~op_body ~grad_body
 
 let relu =
   let open Code in
-  let op_body ~nv ~n1v projections =
-    Accum_unop {zero_out=false; accum=Skip_arg; op=Relu; lhs=Some nv; rhs=Some n1v; projections; precision=Single} in
-  let grad_body ?n1g ?ng ~nv ~n1v:_ projections =
-    Accum_binop {zero_out=false; accum=Add; op=Relu_gate; lhs=n1g; rhs1=Some nv; rhs2=ng;
+  let op_body ~n ~n1 projections =
+    Accum_unop {zero_out=false; accum=Skip_arg; op=Relu; lhs=v n; rhs=v n1; projections; precision=Single} in
+  let grad_body ~n ~n1 projections =
+    Accum_binop {zero_out=false; accum=Add; op=Relu_gate; lhs=g n1; rhs1=v n; rhs2=g n;
                  projections=(fun () -> Shape.backprop_unary @@ projections()); precision=Single} in
   Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
-let reset_value v ~nv shape =
-  Code.Reset {tensor=nv; dims=(fun () -> Shape.to_dims shape); reset_values=[|v|]}
+let reset_value c ~n shape =
+  Code.Reset {tensor=v n; dims=(fun () -> Shape.to_dims shape); reset_values=[|c|]}
 
 let float_to_label v = "v" ^ (
   Float.to_string v |> String.substr_replace_all ~pattern:"." ~with_:"p"
   |> String.substr_replace_all ~pattern:"-" ~with_:"m")
 
-let number ?(axis_label="") v =
+let number ?(axis_label="") c =
   (* Note: no axis label so that we do not conflict with user labels. *)
-  Formula.term ~label:(float_to_label v) (`Constant ([1], axis_label)) ~op_body:(reset_value v)
+  Formula.term ~label:(float_to_label c) (`Constant ([1], axis_label)) ~init_body:(reset_value c)
 
-let uniform_value ~nv shape: Code.t = ignore (nv, shape); failwith "NOT IMPLEMENTED YET"
+let uniform_value ~n shape: Code.t = ignore (n, shape); failwith "NOT IMPLEMENTED YET"
 
-let assign ?lhs ?rhs projections =
+let assign ~lhs ~rhs projections =
   let open Code in
   Accum_unop {zero_out=false; accum=Skip_arg; op=Identity; lhs; rhs; projections; precision=Single}
 
-let assign_op ~nv ~n1v projections = assign ~lhs:nv ~rhs:n1v projections
+let assign_op field ~n ~n1 projections = assign ~lhs:(field n) ~rhs:(field n1) projections
 
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient =
-  let grad_body ?n1g:_ ?ng:_ ~nv:_ ~n1v:_ _projections = Code.Noop in
-  Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign_op ~grad_body
+  let grad_body ~n:_ ~n1:_ _projections = Code.Noop in
+  Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body:(assign_op v) ~grad_body
 
 (** A [stop_broadcast] mutates the partially-inferred shape of a formula in-place, substituting-in
     a [Fixed] marker on the dimensions. This way we avoid introducing a new node. *)
@@ -113,15 +133,16 @@ let stop_broadcast m =
     
 (** [identity] introduces a new node, which is an identity in both the forward and backward pass. *)
 let identity m =
-  let grad_body ?n1g ?ng ~nv:_ ~n1v:_ projections = assign ?lhs:n1g ?rhs:ng projections in
-  Formula.(unop ~init_shape:m.shape ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign_op ~grad_body)
+  let grad_body ~n ~n1 projections = assign_op g ~n:n1 ~n1:n projections in
+  Formula.(unop ~init_shape:m.shape ~transpose_op:`Pointwise ~op_label:"r"
+             ~op_body:(assign_op v) ~grad_body)
     
 module O = struct
   let ( * ) = matmul
   let ( *. ) = pointmul
   let (+) = add
   let (!/) = relu
-  let (!~) label = Formula.term ~label (`Deduced_params `Not_deduced) ~op_body:uniform_value
+  let (!~) label = Formula.term ~label (`Deduced_params `Not_deduced) ~init_body:uniform_value
   let (!.) = number
   let (-) m1 m2 = m1 + !.(-1.) * m2
 end
