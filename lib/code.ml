@@ -47,3 +47,6 @@ type t =
             the length of the tensor -- initialize from numbers where the rightmost axis is contiguous. *)
       }
   | Noop
+
+
+  let sprint_code (c: t): string = ignore c; failwith "NOT IMPLEMENTED YET"

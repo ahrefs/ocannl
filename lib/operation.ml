@@ -1,30 +1,29 @@
-(** Computational primitives for neural networks, integrating [Formula] with [Ndcode]. *)
+(** Computational primitives for neural networks, integrating [Formula] with [Code]. *)
 
 open Base
 
-(* Since this module is a utility wrapper around [Formula] rather than providing a new type,
-   we open [Formula] globally. *)
-open Formula
-
 let add =
+  let open Code in
   let op_body ~nv ~n1v ~n2v projections =
-    Ndcode.(accum_binop ~accum:skip_arg ~op:add ~lhs:nv ~rhs1:n1v ~rhs2:n2v projections) in
-  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v:_ ~n2v:_ projections = [%c 
-    [%e Ndcode.(accum_unop ~accum:add ~op:num_id ?lhs:n1g ?rhs:ng @@ Shape.backprop1 projections)];
-    [%e Ndcode.(accum_unop ~accum:add ~op:num_id ?lhs:n2g ?rhs:ng @@ Shape.backprop2 projections)]
-  ] in
-  binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
+    Accum_binop {zero_out=false; accum=Skip_arg; op=Add; lhs=Some nv; rhs1=Some n1v; rhs2=Some n2v; projections; precision=Single} in
+  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v:_ ~n2v:_ projections =
+    Par (
+      Accum_unop {zero_out=false; accum=Add; op=Identity; lhs=n1g; rhs=ng;
+                  projections=(fun () -> Shape.backprop1 @@ projections()); precision=Single},
+      Accum_unop {zero_out=false; accum=Add; op=Identity; lhs=n2g; rhs=ng;
+                  projections=(fun () -> Shape.backprop2 @@ projections()); precision=Single}) in
+  Formula.binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
 
 let mul compose_op =
+  let open Code in
   let op_body ~nv ~n1v ~n2v projections =
-    Ndcode.(accum_binop ~accum:skip_arg ~op:mul ~lhs:nv ~rhs1:n1v ~rhs2:n2v projections) in
-  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v ~n2v projections = [%c 
-    [%e Ndcode.(accum_binop ~accum:add ~op:mul ?lhs:n1g ?rhs1:ng ~rhs2:n2v @@
-                Shape.backprop1 projections)];
-    [%e Ndcode.(accum_binop ~accum:add ~op:mul ?lhs:n2g ?rhs1:ng ~rhs2:n1v @@
-                Shape.backprop2 projections)]
-  ] in
-  binop ~compose_op ~op_label:"" ~op_body ~grad_body
+    Accum_binop {zero_out=false; accum=Skip_arg; op=Mul; lhs=Some nv; rhs1=Some n1v; rhs2=Some n2v; projections; precision=Single} in
+  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v ~n2v projections = 
+    Par (Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=n1g; rhs1=ng; rhs2=Some n2v;
+                      projections=(fun () -> Shape.backprop1 @@ projections()); precision=Single},
+         Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=n2g; rhs1=ng; rhs2=Some n1v;
+                      projections=(fun () -> Shape.backprop2 @@ projections()); precision=Single}) in
+  Formula.binop ~compose_op ~op_label:"" ~op_body ~grad_body
 
 let pointmul = mul `Pointwise
 
@@ -43,16 +42,16 @@ let matmul = mul `Compose
     Note that ["a,b->c"] from [numpy] is ["a;b=>c"] in OCaNNL, since ["->"] is used to separate the input
     and the output axes. *)
 let einsum spec =
+  let open Code in
   let op_body ~nv ~n1v ~n2v projections =
-    Ndcode.(accum_binop ~zero_out:true ~accum:add ~op:mul ~lhs:nv ~rhs1:n1v ~rhs2:n2v
-               projections) in
-  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v ~n2v projections = [%c 
-    [%e Ndcode.(accum_binop ~accum:add ~op:mul ?lhs:n1g ?rhs1:ng ~rhs2:n2v @@
-                Shape.backprop1 projections)];
-    [%e Ndcode.(accum_binop ~accum:add ~op:mul ?lhs:n2g ?rhs1:ng ~rhs2:n1v @@
-                Shape.backprop2 projections)]
-  ] in
-  binop ~compose_op:(`Einsum spec) ~op_label:"" ~op_body ~grad_body
+    Accum_binop {zero_out=true; accum=Add; op=Mul; lhs=Some nv; rhs1=Some n1v; rhs2=Some n2v;
+                 projections; precision=Single} in
+  let grad_body ?n1g ?n2g ?ng ~nv:_ ~n1v ~n2v projections =
+    Par (Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=n1g; rhs1=ng; rhs2=Some n2v;
+                      projections=(fun () -> Shape.backprop1 @@ projections()); precision=Single},
+         Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=n2g; rhs1=ng; rhs2=Some n1v;
+                      projections=(fun () -> Shape.backprop2 @@ projections()); precision=Single}) in
+  Formula.binop ~compose_op:(`Einsum spec) ~op_label:"" ~op_body ~grad_body
 
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract diagonals,
     compute traces etc.
@@ -60,29 +59,26 @@ let einsum spec =
     Note that ["a->c"] from [numpy] is ["a=>c"] in OCaNNL, since ["->"] is used to separate the input
     and the output axes. *)
 let einsum1 spec =
+  let open Code in
   let op_body ~nv ~n1v projections =
-    Ndcode.(accum_unop ~zero_out:true ~accum:add ~op:identity ~lhs:nv ~rhs:n1v
-               projections) in
+    Accum_unop {zero_out=true; accum=Add; op=Identity; lhs=Some nv; rhs=Some n1v; projections;
+                precision=Single} in
   let grad_body ?n1g ?ng ~nv:_ ~n1v:_ projections =
-    Ndcode.(accum_unop ~accum:add ~op:identity ?lhs:n1g ?rhs:ng @@
-                Shape.backprop_unary projections) in
-  unop ~transpose_op:(`Permute spec) ~op_label:"" ~op_body ~grad_body
+    Accum_unop {zero_out=false; accum=Add; op=Identity; lhs=n1g; rhs=ng;
+                projections=(fun () -> Shape.backprop_unary @@ projections()); precision=Single} in
+  Formula.unop ~transpose_op:(`Permute spec) ~op_label:"" ~op_body ~grad_body
 
 let relu =
+  let open Code in
   let op_body ~nv ~n1v projections =
-    Ndcode.(accum_unop ~accum:skip_arg ~op:relu ~lhs:nv ~rhs:n1v projections) in
+    Accum_unop {zero_out=false; accum=Skip_arg; op=Relu; lhs=Some nv; rhs=Some n1v; projections; precision=Single} in
   let grad_body ?n1g ?ng ~nv ~n1v:_ projections =
-    Ndcode.(accum_binop ~accum:add ~op:relu_gate ?lhs:n1g ~rhs1:nv ?rhs2:ng @@
-             Shape.backprop_unary projections) in
-  unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
+    Accum_binop {zero_out=false; accum=Add; op=Relu_gate; lhs=n1g; rhs1=Some nv; rhs2=ng;
+                 projections=(fun () -> Shape.backprop_unary @@ projections()); precision=Single} in
+  Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
 let reset_value v ~nv shape =
-  Ndcode.(accum_unop ~accum:skip_arg ~op:(fun _ -> value v) ~lhs:nv ~rhs:nv
-             (Shape.terminal_projections shape))
-
-let uniform_value ~nv shape =
-  Ndcode.(accum_unop ~accum:skip_arg ~op:(fun _ -> uniform ~low:(-1.0) ~high:1.0)
-             ~lhs:nv ~rhs:nv @@ Shape.terminal_projections shape)
+  Code.Reset {tensor=nv; dims=(fun () -> Shape.to_dims shape); reset_values=[|v|]}
 
 let float_to_label v = "v" ^ (
   Float.to_string v |> String.substr_replace_all ~pattern:"." ~with_:"p"
@@ -90,21 +86,25 @@ let float_to_label v = "v" ^ (
 
 let number ?(axis_label="") v =
   (* Note: no axis label so that we do not conflict with user labels. *)
-  term ~label:(float_to_label v) (`Constant ([1], axis_label)) ~op_body:(reset_value v)
+  Formula.term ~label:(float_to_label v) (`Constant ([1], axis_label)) ~op_body:(reset_value v)
+
+let uniform_value ~nv shape: Code.t = ignore (nv, shape); failwith "NOT IMPLEMENTED YET"
 
 let assign ?lhs ?rhs projections =
-  Ndcode.(accum_unop ~accum:skip_arg ~op:(fun v -> v) ?lhs ?rhs projections)
+  let open Code in
+  Accum_unop {zero_out=false; accum=Skip_arg; op=Identity; lhs; rhs; projections; precision=Single}
 
 let assign_op ~nv ~n1v projections = assign ~lhs:nv ~rhs:n1v projections
 
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient =
-  let grad_body ?n1g:_ ?ng:_ ~nv:_ ~n1v:_ _projections = [%c () ] in
-  unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign_op ~grad_body
+  let grad_body ?n1g:_ ?ng:_ ~nv:_ ~n1v:_ _projections = Code.Noop in
+  Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign_op ~grad_body
 
 (** A [stop_broadcast] mutates the partially-inferred shape of a formula in-place, substituting-in
     a [Fixed] marker on the dimensions. This way we avoid introducing a new node. *)
 let stop_broadcast m =
+  let open Formula in
   let sh = m.shape in
   sh.batch <- Fixed (Shape.list_of_dims sh.batch);
   sh.batch <- Fixed (Shape.list_of_dims sh.batch);
@@ -114,19 +114,20 @@ let stop_broadcast m =
 (** [identity] introduces a new node, which is an identity in both the forward and backward pass. *)
 let identity m =
   let grad_body ?n1g ?ng ~nv:_ ~n1v:_ projections = assign ?lhs:n1g ?rhs:ng projections in
-  unop ~init_shape:m.shape ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign_op ~grad_body
+  Formula.(unop ~init_shape:m.shape ~transpose_op:`Pointwise ~op_label:"r" ~op_body:assign_op ~grad_body)
     
 module O = struct
   let ( * ) = matmul
   let ( *. ) = pointmul
   let (+) = add
   let (!/) = relu
-  let (!~) label = term ~label (`Deduced_params `Not_deduced) ~op_body:uniform_value
+  let (!~) label = Formula.term ~label (`Deduced_params `Not_deduced) ~op_body:uniform_value
   let (!.) = number
   let (-) m1 m2 = m1 + !.(-1.) * m2
 end
 
 let get_root id =
+  let open Formula in
   match Map.find !global_roots id with
   | Some r -> r
   | None ->
@@ -151,11 +152,11 @@ let get_node id =
       else if id < 1 then "get_root: Node IDs start from 1"
       else
         "get_node: Node "^Int.to_string id^" has been removed or lives on a different machine" in
-    raise @@ Session_error (msg, None)
+    raise @@ Formula.Session_error (msg, None)
 
 (** *** Printing. *** *)
 
-(** We print out up to 5 axes when printing an [Ndcode], as a grid (outer rectangle) of (inner)
+(** We print out up to 5 axes when printing an [Code], as a grid (outer rectangle) of (inner)
     rectangles, possibly repeated (screens). *)
 type array_print_style =
 [ `Default
@@ -188,6 +189,7 @@ type array_print_style =
 ]
 
 let print_formula ~with_grad ~with_code (style: array_print_style) m =
+  let open Formula in
   let sh = m.shape in
   let prefix = "["^Int.to_string m.node_id^"] "^m.comp_node.label^": shape "^ Shape.to_string_hum sh^" " in
   let indices =
@@ -265,35 +267,37 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
              m.comp_node.grad);
   if with_code then (
     (match m.forward_body with
-     | None -> ()
-     | Some fwd_code ->
+     | Noop -> ()
+     | fwd_code ->
        Stdio.print_endline "Current forward body:";
-       Stdio.print_endline @@ fst @@ sprint_code @@ fwd_code());
+       Stdio.print_endline @@ Code.sprint_code fwd_code);
     (match m.backprop_body with
-     | None -> ()
-     | Some bwd_code ->
+     | Noop -> ()
+     | bwd_code ->
        Stdio.print_endline "Current backprop body:";
-       Stdio.print_endline @@ fst @@ sprint_code @@ bwd_code())
+       Stdio.print_endline @@ Code.sprint_code bwd_code)
   );
   Stdio.printf "\n%!"
 
 let print_global_root ~with_grad ~with_code (style: array_print_style) root =
+  let open Formula in
   print_formula ~with_grad ~with_code:false style root.formula;
   if with_code then (
     (match root.forward_code with
      | None -> ()
      | Some fwd_code ->
        Stdio.print_endline "Forward:";
-       Stdio.print_endline @@ fst @@ sprint_code fwd_code);
+       Stdio.print_endline @@ Code.sprint_code fwd_code);
     (match root.backprop_code with
      | None -> ()
      | Some bwd_code ->
        Stdio.print_endline "Backprop:";
-       Stdio.print_endline @@ fst @@ sprint_code bwd_code)
+       Stdio.print_endline @@ Code.sprint_code bwd_code)
   );
   Stdio.printf "\n%!"
 
 let print_global_roots ~with_grad ~with_code (style: array_print_style) =
+  let open Formula in
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (node_id, root) ->
       assert (node_id = root.formula.node_id);
       print_global_root ~with_grad ~with_code style root)
@@ -301,6 +305,7 @@ let print_global_roots ~with_grad ~with_code (style: array_print_style) =
 (** *** Session management. *** *)
 
 let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) ?(force_no_init=false) () =
+  let open Formula in
   if force_no_init && (regenerate || reinit || run) then
     invalid_arg "refresh_session: set other triggers to false when using force_no_init";
   (* Initialization and the forward processing. *)
@@ -342,7 +347,7 @@ let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) 
         | _ -> ()
       with Session_error (msg, None) ->
         Stdio.print_endline "Forward code (context for backprop init error):";
-        Stdio.print_endline @@ fst @@ sprint_code @@ Option.value_exn root.forward_code;
+        Stdio.print_endline @@ Code.sprint_code @@ Option.value_exn root.forward_code;
         let msg = "Backprop init error: "^msg in
         raise @@ Session_error (msg, Some m);
     );
@@ -376,7 +381,7 @@ module CLI = struct
   let einsum1 = einsum1
   let reset_value = reset_value
   let uniform_value = uniform_value
-  let term = term
+  let term = Formula.term
   let number = number
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient
@@ -393,7 +398,7 @@ module CLI = struct
 end
 
 module Summable = struct
-  type nonrec t = t
+  type nonrec t = Formula.t
   let (+) = add
   let zero = number 0.0
 end
