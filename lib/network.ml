@@ -13,7 +13,7 @@ type 'a t = {
   comp: 'a comp;
   (** The parametric computation. *)
   params: (F.t, F.comparator_witness) Set.t;
-  mutable promote_precision: Ndcode.precision option;
+  mutable promote_precision: Code.precision option;
   (** The precision at which the network's computation should happen, regardless of the precisions
       of the inputs and results, unless otherwise specified in subnetworks. *)
 }

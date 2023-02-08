@@ -7,7 +7,7 @@ open Base
     
     Note the following inconsistency due to differing conventions in function notation and matrix notation:
     for label specifications and einsum notation, we write "batch|inputs->outputs", but when we convert
-    a shape to an [Ndcode] index we do it in the order [[batch; outputs; inputs]]. *)
+    a shape to an [Code] index we do it in the order [[batch; outputs; inputs]]. *)
 module AxisKey = struct
   module T = struct
     type kind = 
@@ -89,7 +89,7 @@ let deduce_dims from: deduce_dims -> dims = function
   | (Given dims | Fixed dims | Inferred dims) -> Inferred (List.map dims ~f:(
       fun d -> if d = 1 then 1 else Float.(iround_exn ~dir:`Up @@ sc * of_int d)))
 
-(** The datatype from which the actual Ndcode shapes are computed.
+(** The datatype from which the actual Code shapes are computed.
 
     Mutability is sufficient to perform inference, since there is no need for backtracking and
     no explicit unification variables for now. [Unknown] stands for "not yet specified". *)
@@ -638,14 +638,14 @@ type symbol = Symbol of int [@@deriving compare, sexp, variants]
 let unique_id = ref 0
 let get_symbol() = Int.incr unique_id; Symbol !unique_id
 
-(** An index into a single axis for doing computations over multiple [Shape]-derived [Ndcode]s. *)
+(** An index into a single axis for doing computations over multiple [Shape]-derived [Code]s. *)
 type axis_index =
 | Fixed_idx of int
 (** The specific position along an axis. *)
 | Iterator of symbol [@@deriving compare, sexp, variants]
 (** The given member of the [product_space] corresponding to some [product_iterators]. *)
   
-(** All the information relevant for [Ndcode] code generation contained in a completed [update_step]. *)
+(** All the information relevant for [Code] code generation contained in a completed [update_step]. *)
 type projections = {
   product_space: int array;
   (** The product space dimensions (concatentation of the relevant batch, output, input axes) with
@@ -664,7 +664,7 @@ type projections = {
       argument of a binary operation. *)
 }
 
-(** Projections for iterating over a terminal [Ndcode], or for a pointwise unary operator. *)
+(** Projections for iterating over a terminal [Code], or for a pointwise unary operator. *)
 let terminal_projections sh =
   let product_space = to_dims sh in
   let product_iterators = Array.map product_space ~f:(fun _ -> get_symbol()) in

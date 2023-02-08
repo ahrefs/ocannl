@@ -70,7 +70,7 @@ let session_error_printer = function
 
 let () = Caml.Printexc.register_printer session_error_printer
   
-(* [reset_] and [create_] functions are the only direct users of [Ndcode] functions inside [Formula].
+(* [reset_] and [create_] functions are the only direct users of [Code] functions inside [Formula].
    The other uses are mediated by the [~op_body], [~grad_body] and [~init_code] arguments. *)
 let reset_zeros n shape =
   (* let open Code in *)
