@@ -94,7 +94,7 @@ let handle_error prefix ?formula ~contents exc =
   Stdio.prerr_endline @@ Option.value_exn (Formula.session_error_printer exc);
   raise exc
 
-let load_native ?(with_debug=true) (cde: Code.t) =
+let load_native ?(with_debug=true) (cde: Code.program) =
   let closed = EmitOCaml.emit cde in
   if not Dynlink.is_native then invalid_arg "Exec.load_forward: only works in native code";
   let source_fname = create_comp_unit closed in

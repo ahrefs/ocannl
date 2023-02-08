@@ -22,6 +22,7 @@ type _ low_level =
   | Unoptimized_get: Shape.symbol array * data low_level -> float low_level
   | All_greater_0: data low_level -> bool low_level
   | Exists_greater_0: data low_level -> bool low_level
+  | Assign_routine: routine * unit low_level -> unit low_level
 
     (* TODO(41): [@@deriving fold_sig] *)
   
@@ -51,6 +52,12 @@ let unoptimized (code: t): unit low_level =
     ); failwith "NOT IMPLEMENTED YET"
   | (Noop|Par (_, _)|ParHint (_, _)|Seq (_, _)|Create _|Reset _) -> failwith "NOT IMPLEMENTED YET"
 
+  let unoptimized_program (prog: program): unit low_level =
+    let init = unoptimized prog.initialization in
+    let proc = unoptimized prog.procedure in
+    Lines [|init; Assign_routine (prog.routine, proc)|]
+
+  
 (* TODO(41): this could be automatically derived. *)
 module type FOLD_CODE = sig
   type 'a result
@@ -88,7 +95,7 @@ module type FOLD_CODE = sig
   val exists_greater_0: data low_level_result -> bool low_level_result
 end
 
-let emit = unoptimized
+let emit = unoptimized_program
 
 let format_code fmt c: unit = ignore (fmt, c); failwith "NOT IMPLEMENTED YET"
 

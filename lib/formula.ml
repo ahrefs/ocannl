@@ -30,8 +30,8 @@ type t = {
 
 (** A global root is a formula that is not (currently) a subformula of another formula. *)
 type global_root = {
-  mutable forward_code: Code.t option;
-  mutable backprop_code: Code.t option;
+  mutable forward_code: Code.program option;
+  mutable backprop_code: Code.program option;
   formula: t;
   subtree_shape_updates: Shape.update_step Sequence.t;
   (** We piggy-back on the code generation setup to arrange the updates. We perform each update twice
@@ -281,24 +281,16 @@ let term ~label ?needs_gradient (spec: Shape.term_spec) ~init_body : t =
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
   formula
 
-let get_toplevel_native m =
+let get_toplevel m =
   let open Code in
-  let toplevel_forward = Seq (m.init_values, m.forward_body)
-    (* [%c 
-    [%e m.init_values ()];
-    [%e m.node].Ocannl_runtime.Node.forward <- Some (fun () -> [%e forward_body])
-  ] *) in
-  (* let ng = m.comp_node.grad in *)
-  let toplevel_backprop = Seq (m.init_grads, m.backprop_body)
-    (* if not m.needs_gradient then [%c 
-      [%e m.node].Ocannl_runtime.Node.backprop <- Some (fun () -> ())
-    ] else [%c 
-      [%e m.init_grads ()];
-      [%e m.node].Ocannl_runtime.Node.backprop <- Some (fun () ->
-        [%e m.zero_grads()];
-        [%e reset_ones ng m.shape];
-        [%e backprop_body])
-    ] *) in
+  let toplevel_forward = 
+    {initialization=m.init_values; procedure=m.forward_body;
+     routine={node=m.comp_node; field=`Forward}} in
+  let backprop =
+    Seq (Par (m.zero_grads, reset_ones m.comp_node `Grad m.shape), m.backprop_body) in
+  let toplevel_backprop =
+    {initialization=m.init_grads; procedure=backprop;
+     routine={node=m.comp_node; field=`Backprop}} in
   toplevel_forward, toplevel_backprop
 
 let sexp_of_t m =

@@ -306,14 +306,14 @@ let print_global_root ~with_grad ~with_code (style: array_print_style) root =
   if with_code then (
     (match root.forward_code with
      | None -> ()
-     | Some fwd_code ->
+     | Some fwd ->
        Stdio.print_endline "Forward:";
-       Stdio.print_endline @@ Code.sprint_code fwd_code);
+       Stdio.print_endline @@ Code.sprint_program fwd);
     (match root.backprop_code with
      | None -> ()
-     | Some bwd_code ->
+     | Some bwd ->
        Stdio.print_endline "Backprop:";
-       Stdio.print_endline @@ Code.sprint_code bwd_code)
+       Stdio.print_endline @@ Code.sprint_program bwd)
   );
   Stdio.printf "\n%!"
 
@@ -334,10 +334,10 @@ let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) 
     let m = root.formula in
     if regenerate || Option.is_none root.forward_code || Option.is_none root.backprop_code then (
       Sequence.iter root.subtree_shape_updates ~f:(fun step -> Shape.propagate_shapes step);
-      let forward_code, backprop_code = get_toplevel_native m in
-       root.forward_code <- Some forward_code;
+      let forward_prog, backprop_prog = get_toplevel m in
+       root.forward_code <- Some forward_prog;
        root.formula.comp_node.forward <- None;
-       root.backprop_code <- Some backprop_code;
+       root.backprop_code <- Some backprop_prog;
        root.formula.comp_node.backprop <- None
     );
     if not force_no_init && 
@@ -368,7 +368,7 @@ let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) 
         | _ -> ()
       with Session_error (msg, None) ->
         Stdio.print_endline "Forward code (context for backprop init error):";
-        Stdio.print_endline @@ Code.sprint_code @@ Option.value_exn root.forward_code;
+        Stdio.print_endline @@ Code.sprint_program @@ Option.value_exn root.forward_code;
         let msg = "Backprop init error: "^msg in
         raise @@ Session_error (msg, Some m);
     );
