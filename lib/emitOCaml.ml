@@ -49,7 +49,7 @@ let unoptimized (code: t): unit low_level =
       lhs, rhs,
       projections, precision
     ); failwith "NOT IMPLEMENTED YET"
-  | (Noop|Par (_, _)|Seq (_, _)|Create _|Reset _) -> failwith "NOT IMPLEMENTED YET"
+  | (Noop|Par (_, _)|ParHint (_, _)|Seq (_, _)|Create _|Reset _) -> failwith "NOT IMPLEMENTED YET"
 
 (* TODO(41): this could be automatically derived. *)
 module type FOLD_CODE = sig

@@ -107,25 +107,20 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let m1_processed = not @@ Map.mem !global_roots m1.node_id in
   let m2_processed = not @@ Map.mem !global_roots m2.node_id in
   (* The code needs to be included in the order it was computed! *)
-  let m1_forward_body = m1.forward_body in
-  let m2_forward_body = m2.forward_body in
   let open Code in
   let forward_body =
-    (match m1_processed, m1_forward_body, m2_processed, m2_forward_body with
+    (match m1_processed, m1.forward_body, m2_processed, m2.forward_body with
     | true, _, true, _ | true, _, _, Noop | _, Noop, true, _ | _, Noop, _, Noop -> op_body
-    | false, m1_body, false, m2_body -> Seq (Par (m1_body, m2_body), op_body)
+    | false, m1_body, false, m2_body -> Seq (ParHint (m1_body, m2_body), op_body)
     | _, _, false, m2_body -> Seq (m2_body, op_body)
     | false, m1_body, _, _ -> Seq(m1_body, op_body)) in
   let init_values_body = create n `Value shape in
   let init_values =
     if m1_processed && m2_processed then init_values_body
-    else if m1_processed then Seq (m2_init_values, init_values_body)
-    else if m2_processed then Seq (m1_init_values, init_values_body)
-    else Seq (Par (m1_init_values, m2_init_values), init_values_body) in
+    else if m1_processed then Par (m2.init_values, init_values_body)
+    else if m2_processed then Par (m1.init_values, init_values_body)
+    else Par (Par (m1.init_values, m2.init_values), init_values_body) in
   let needs_gradient = m1.needs_gradient || m2.needs_gradient in
-  let ng = if needs_gradient then Some comp_node.grad else None in
-  let n1g = if m1.needs_gradient then Some m1.comp_node.grad else None in
-  let n2g = if m2.needs_gradient then Some m2.comp_node.grad else None in
   let m1_no_grad = m1_processed || not m1.needs_gradient in
   let m2_no_grad = m2_processed || not m2.needs_gradient in
   let zero_body = if needs_gradient then reset_zeros n `Grad shape else Noop in
@@ -133,9 +128,9 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
      and keep the backprop order for readability. *)
   let zero_grads =
     if m1_no_grad && m2_no_grad then zero_body
-    else if m1_no_grad then Seq (zero_body, m2_zero_grads)
-    else if m2_no_grad then Seq (zero_body, m1_zero_grads)
-    else Seq (zero_body, Par (m2_zero_grads, m1_zero_grads)) in
+    else if m1_no_grad then Par (zero_body, m2.zero_grads)
+    else if m2_no_grad then Par (zero_body, m1.zero_grads)
+    else Par (zero_body, Par (m2.zero_grads, m1.zero_grads)) in
   (* The code needs to be included in the reverse order to which it was computed! This guarantees
      that all ancestors of a node are backpropagated before the node is backpropagated, even for
      non-tree DAGs. *)
@@ -147,7 +142,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let backprop_body =
     match m1_no_grad, m1.backprop_body, m2_no_grad, m2.backprop_body with
     | true, _, true, _ | true, _, _, Noop | _, Noop, true, _ | _, Noop, _, Noop -> grad_body
-    | false, m1_body, false, m2_body -> Seq (grad_body, Par(m1_body, m2_body))
+    | false, m1_body, false, m2_body -> Seq (grad_body, ParHint(m2_body, m1_body))
     | _, _, false, m2_body -> Seq (grad_body, m2_body)
     | false, m1_body, _, _ -> Seq (grad_body, m1_body) in
   let init_grads_body = create n `Grad shape in
@@ -156,9 +151,9 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let m2_init_grads = m2.init_grads in
   let init_grads =
     if m1_no_grad && m2_no_grad then init_grads_body
-    else if m1_no_grad then Seq (init_grads_body, m2_init_grads)
-    else if m2_no_grad then Seq (init_grads_body, m1_init_grads)
-    else Seq (init_grads_body, Par (m2_init_grads, m1_init_grads))in
+    else if m1_no_grad then Par (init_grads_body, m2_init_grads)
+    else if m2_no_grad then Par (init_grads_body, m1_init_grads)
+    else Par (init_grads_body, Par (m2_init_grads, m1_init_grads))in
   (* The order is reverse to the order the updates were already executed for the first time. *)
   let local_shape_updates = Sequence.singleton local_shape_update in
   let subtree_shape_updates: Shape.update_step Sequence.t =
@@ -211,18 +206,13 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
     match m_processed, m.forward_body with
     | true, _ | _, Noop -> op_body
     | false, m_body -> Seq (m_body, op_body) in
-  let m_init_values = m.init_values in
-  let init_values = Seq (m_init_values, create_value comp_node shape) in
+  let init_values = Par (m.init_values, create n `Value shape) in
   let needs_gradient = m.needs_gradient in
-  let ng = if needs_gradient then Some comp_node.grad else None in
-  (* Note: not wrt. m_no_grad. *)
-  let n1g = if m.needs_gradient then Some m.comp_node.grad else None in
   let m_no_grad = m_processed || not m.needs_gradient in
   let zero_body = if needs_gradient then reset_zeros n `Grad shape else Noop in
   let zero_grads =
     if m_no_grad then zero_body
-    else Seq (zero_body, m_zero_grads) in
-  let grad_body = grad_body ?n1g ?ng ~nv ~n1v projections in
+    else Par (zero_body, m.zero_grads) in
   let grad_body =
     if needs_gradient then grad_body ~n ~n1 projections else Noop in
   (* The code needs to be included in the reverse order to which it was computed! *)
@@ -233,7 +223,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   let init_grads_body = create n `Grad shape in
   let init_grads =
     if m_no_grad then init_grads_body
-    else Seq (init_grads_body, m_init_grads) in
+    else Par (init_grads_body, m.init_grads) in
   let local_shape_updates = Sequence.singleton local_shape_update in
   let subtree_shape_updates: Shape.update_step Sequence.t =
     if m_processed then local_shape_updates

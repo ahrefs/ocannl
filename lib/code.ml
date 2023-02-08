@@ -22,7 +22,12 @@ type unop =
 
 type t =
   | Par of t * t
+  (** These tasks can proceed in parallel, there is no interaction. *)
+  | ParHint of t * t
+  (** Computing [ParHint (c1, c2)] can proceed in parallel on [c1] and [c2], but when [c2] reads values
+      that [c1] writes, the writes in [c1] must occur before the reads in [c2]. *)
   | Seq of t * t
+  (** These tasks can only benefit from mutual parallelism via operator fusion / loop fusion. *)
   | Accum_binop of {
       zero_out: bool;
       accum: binop; op: binop;
