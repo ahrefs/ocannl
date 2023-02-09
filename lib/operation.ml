@@ -108,7 +108,7 @@ let number ?(axis_label="") c =
   (* Note: no axis label so that we do not conflict with user labels. *)
   Formula.term ~label:(float_to_label c) (`Constant ([1], axis_label)) ~init_body:(reset_value c)
 
-let uniform_value ~n shape: Code.t = ignore (n, shape); failwith "NOT IMPLEMENTED YET"
+let uniform_value ~n shape: Code.t = ignore (n, shape); failwith "NOT IMPLEMENTED YET [4]"
 
 let assign ~lhs ~rhs projections =
   let open Code in
@@ -343,12 +343,12 @@ let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) 
     if not force_no_init && 
         (reinit || Option.is_none root.formula.comp_node.forward) then (
       try
-        let contents = Exec.load_native ?with_debug (Option.value_exn root.forward_code) in
+        let contents = ExecAsOCaml.load_native ?with_debug (Option.value_exn root.forward_code) in
         match contents, m.comp_node.forward with
         | Some contents, Some forward ->
           m.comp_node.forward <-
             Some (fun () -> try forward() with error ->
-                Exec.handle_error "Forward error:" ~formula:m ~contents error)
+                ExecAsOCaml.handle_error "Forward error:" ~formula:m ~contents error)
         | _, None -> assert false
         | _ -> ()
       with Session_error (msg, None) ->
@@ -358,12 +358,12 @@ let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) 
     if not force_no_init && 
         (reinit || Option.is_none root.formula.comp_node.backprop) then (
       try
-        let contents = Exec.load_native ?with_debug (Option.value_exn root.backprop_code) in
+        let contents = ExecAsOCaml.load_native ?with_debug (Option.value_exn root.backprop_code) in
         match contents, m.comp_node.backprop with
         | Some contents, Some backprop ->
           m.comp_node.backprop <-
             Some (fun () ->
-                try backprop() with error -> Exec.handle_error "Backprop error:" ~formula:m ~contents error)
+                try backprop() with error -> ExecAsOCaml.handle_error "Backprop error:" ~formula:m ~contents error)
         | _, None -> assert false
         | _ -> ()
       with Session_error (msg, None) ->

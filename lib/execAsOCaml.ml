@@ -24,7 +24,7 @@ let code_file_prefix = "runn"
 let emit = Code.unoptimized_program
 
 let format_low_level (fmt: Caml.Format.formatter) (c: 'a Code.low_level): unit =
-  ignore (fmt, c); failwith "NOT IMPLEMENTED YET"
+  ignore (fmt, c); failwith "NOT IMPLEMENTED YET [3]"
 
 (** Create a file to compile and later link. *)
 let create_comp_unit compiled =
@@ -89,7 +89,7 @@ let handle_error prefix ?formula ~contents exc =
 
 let load_native ?(with_debug=true) (prog: Code.program) =
   let compiled = emit prog in
-  if not Dynlink.is_native then invalid_arg "Exec.load_forward: only works in native code";
+  if not Dynlink.is_native then invalid_arg "ExecAsOCaml.load_forward: only works in native code";
   let source_fname = create_comp_unit compiled in
   let plugin_fname = compile_source ~with_debug source_fname in
   let result =

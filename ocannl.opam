@@ -7,7 +7,7 @@ description: "A longer description"
 maintainer: ["Lukasz Stafiniak"]
 authors: ["Lukasz Stafiniak"]
 license: "LICENSE"
-tags: ["metaocaml" "deeplearning" "backprop" "CUDA"]
+tags: ["deeplearning" "backprop" "CUDA"]
 homepage: "https://github.com/lukstafi/ocannl"
 doc: "https://github.com/lukstafi/ocannl/blob/master/README.md"
 bug-reports: "https://github.com/lukstafi/ocannl/issues"

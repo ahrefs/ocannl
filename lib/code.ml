@@ -59,8 +59,8 @@ type t =
 (** Dynamically loading a program executes [initialization] and bounds the [procedure] to [routine]. *)
 type program = {initialization: t; procedure: t; routine: routine}
 
-let sprint_code (c: t): string = ignore c; failwith "NOT IMPLEMENTED YET"
-let sprint_program (c: program): string = ignore c; failwith "NOT IMPLEMENTED YET"
+let sprint_code (c: t): string = ignore c; failwith "NOT IMPLEMENTED YET [1]"
+let sprint_program (c: program): string = ignore c; failwith "NOT IMPLEMENTED YET [2]"
 
 (** *** Low-level representation. *)
 

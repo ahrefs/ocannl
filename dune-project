@@ -23,6 +23,6 @@
  (description "A longer description")
  (depends ocaml dune)
  (tags
-  (metaocaml deeplearning backprop CUDA)))
+  (deeplearning backprop CUDA)))
 
 ; See the complete stanza docs at https://dune.readthedocs.io/en/stable/dune-files.html#dune-project
