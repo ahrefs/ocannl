@@ -18,3 +18,8 @@
   (modules test_ppx)
   (libraries ocannl)
   (preprocess (pps ppx_ocannl)))
+
+(test
+  (name test_ppx_expected)
+  (modules test_ppx_expected)
+  (libraries ocannl))

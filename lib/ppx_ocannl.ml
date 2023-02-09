@@ -50,14 +50,18 @@ let rec translate expr =
     let pat2_ref = pat2pat_ref pat2 in
     [%expr
       fun ~config ->
-        let [%p pat1_ref] = ref None in
+        let [%p pat1_ref] = ref [] in
         let [%p pat1] = Network.return (Network.Placeholder [%e pat2expr @@ pat1_ref]) in
-        let [%p pat2_ref] = ref None in
+        let [%p pat2_ref] = ref [] in
         let [%p pat2] = Network.return (Network.Placeholder [%e pat2expr @@ pat2_ref]) in
         let body = [%e translate body] in
         fun [%p pat1] [%p pat2] ->
-          [%e pat2expr pat1_ref] := [%e pat2expr pat1]; [%e pat2expr pat2_ref] := [%e pat2expr pat2];
-          Network.unpack body
+          [%e pat2expr pat1_ref] := [%e pat2expr pat1] :: ![%e pat2expr pat1_ref];
+          [%e pat2expr pat2_ref] := [%e pat2expr pat2] :: ![%e pat2expr pat2_ref];
+          let result__ = Network.unpack body in
+          [%e pat2expr pat1_ref] := List.tl_exn ![%e pat2expr pat1_ref];
+          [%e pat2expr pat2_ref] := List.tl_exn ![%e pat2expr pat2_ref];
+          result__
     ]
 
   | [%expr fun ~config [%p? pat] -> [%e? body] ] ->
@@ -65,38 +69,46 @@ let rec translate expr =
     let pat_ref = pat2pat_ref pat in
     [%expr
       fun ~config ->
-        let [%p pat_ref] = ref None in
+        let [%p pat_ref] = ref [] in
         let [%p pat] = Network.return (Network.Placeholder [%e pat2expr @@ pat_ref]) in
         let body = [%e translate body] in
         fun [%p pat] ->
-          [%e pat2expr pat_ref] := [%e pat2expr pat];
-          Network.unpack body
+          [%e pat2expr pat_ref] := [%e pat2expr pat] :: ![%e pat2expr pat_ref];
+          let result__ = Network.unpack body in
+          [%e pat2expr pat_ref] := List.tl_exn ![%e pat2expr pat_ref];
+          result__
     ]
 
   | [%expr fun [%p? pat1] [%p? pat2] -> [%e? body] ] ->
     let pat1_ref = pat2pat_ref pat1 in
     let pat2_ref = pat2pat_ref pat2 in
     [%expr
-      let [%p pat1_ref] = ref None in
+      let [%p pat1_ref] = ref [] in
       let [%p pat1] = Network.return (Network.Placeholder [%e pat2expr @@ pat1_ref]) in
-      let [%p pat2_ref] = ref None in
+      let [%p pat2_ref] = ref [] in
       let [%p pat2] = Network.return (Network.Placeholder [%e pat2expr @@ pat2_ref]) in
       let body = [%e translate body] in
       fun [%p pat1] [%p pat2] ->
-        [%e pat2expr pat1_ref] := [%e pat2expr pat1]; [%e pat2expr pat2_ref] := [%e pat2expr pat2];
-        Network.unpack body
+        [%e pat2expr pat1_ref] := [%e pat2expr pat1] :: ![%e pat2expr pat1_ref];
+        [%e pat2expr pat2_ref] := [%e pat2expr pat2] :: ![%e pat2expr pat2_ref];
+        let result__ = Network.unpack body in
+        [%e pat2expr pat1_ref] := List.tl_exn ![%e pat2expr pat1_ref];
+        [%e pat2expr pat2_ref] := List.tl_exn ![%e pat2expr pat2_ref];
+        result__
     ]
 
   | [%expr fun [%p? pat] -> [%e? body] ] ->
     let pat_ref = pat2pat_ref pat in
     [%expr
-      let [%p pat_ref] = ref None in
+      let [%p pat_ref] = ref [] in
       let [%p pat] = Network.return (Network.Placeholder [%e pat2expr @@ pat_ref]) in
       let body = [%e translate body] in
       fun [%p pat] ->
-        [%e pat2expr pat_ref] := [%e pat2expr pat];
-        Network.unpack body
-    ]
+        [%e pat2expr pat_ref] := [%e pat2expr pat] :: ![%e pat2expr pat_ref];
+        let result__ = Network.unpack body in
+        [%e pat2expr pat_ref] := List.tl_exn ![%e pat2expr pat_ref];
+        result__
+  ]
 
   | [%expr while [%e? test_expr] do [%e? body_expr] done ] ->
     [%expr while [%e test_expr] do [%e translate body_expr] done ]

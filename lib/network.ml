@@ -4,6 +4,16 @@ open Base
 module F = Formula
 
 (* FIXME(28): implement [promote_precision] effects. *)
+(** The computation payload of a network component. The computations are suspended, so that as we build
+    a network component, we partially evaluate it to collect its parameters. *)
+type _ comp =
+| Placeholder: F.t list ref -> F.t comp
+(** A placeholder is an "unfulfilled input" for constructing a network. Placeholders are lifted into
+    function arguments. The list type enables building network components recursively. *)
+| Suspended: F.t Lazy.t -> F.t comp 
+| Nullary: F.t -> F.t comp
+| Unary: (F.t -> F.t) -> (F.t -> F.t) comp
+| Binary: (F.t -> F.t -> F.t) -> (F.t -> F.t -> F.t) comp
 
 (** Composable network components, with parameter tracking. A single instance of [Network.t] can be
     reused multiple times in the same model (i.e. parameter sharing), or can be used in multiple
@@ -17,19 +27,11 @@ type 'a t = {
   (** The precision at which the network's computation should happen, regardless of the precisions
       of the inputs and results, unless otherwise specified in subnetworks. *)
 }
-and _ comp =
-| Placeholder: F.t option ref -> F.t comp
-(** A placeholder is an "unfulfilled input" for constructing a network. Placeholders are lifted into
-    function arguments. *)
-| Suspended: F.t Lazy.t -> F.t comp 
-| Nullary: F.t -> F.t comp
-| Unary: (F.t -> F.t) -> (F.t -> F.t) comp
-| Binary: (F.t -> F.t -> F.t) -> (F.t -> F.t -> F.t) comp
 
 let unpack (type a) (n : a t): a =
   match n.comp with
-  | Placeholder {contents=None} -> invalid_arg "Network.unpack: encountered an empty placeholder"
-  | Placeholder {contents=Some m} -> m
+  | Placeholder {contents=[]} -> invalid_arg "Network.unpack: encountered an empty placeholder"
+  | Placeholder {contents=m::_} -> m
   | Suspended f -> Lazy.force f
   | Nullary f -> f
   | Unary f -> f
@@ -39,10 +41,10 @@ let apply (type a) (f: (F.t -> a) t) (x: F.t t): a t =
   let comp = 
     match f.comp, x.comp with
     | Unary f, Nullary x -> (Nullary (f x): a comp)
-    | Unary f, Placeholder x -> (Suspended (lazy (f (Option.value_exn !x))): a comp)
+    | Unary f, Placeholder x -> (Suspended (lazy (f (List.hd_exn !x))): a comp)
     | Unary f, Suspended x -> (Suspended (lazy (f (Lazy.force x))): a comp)
     | Binary f, Nullary x -> Unary (f x)
-    | Binary f, Placeholder x -> (Unary (fun y -> f (Option.value_exn !x) y): a comp)
+    | Binary f, Placeholder x -> (Unary (fun y -> f (List.hd_exn !x) y): a comp)
     | Binary f, Suspended x -> (Unary (fun y -> f (Lazy.force x) y): a comp) in
   let params = Set.union f.params x.params in
   {comp; params; promote_precision=None}
@@ -64,7 +66,7 @@ let swap (type a) (f: (F.t -> F.t -> a) t) =
 let bind_ret (type a) (m: a t) (f: F.t -> a) =
   let comp = 
     match m.comp with
-    | Placeholder x -> (Suspended (lazy (f (Option.value_exn !x))): a comp)
+    | Placeholder x -> (Suspended (lazy (f (List.hd_exn !x))): a comp)
     | Suspended x -> (Suspended (lazy (f (Lazy.force x))): a comp)
     | Nullary x -> (Nullary (f x): a comp)
     | Unary g -> Unary (fun x -> f (g x) x)
