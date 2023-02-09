@@ -40,7 +40,7 @@ let unpack (type a) (n : a t): a =
 let apply (type a) (f: (F.t -> a) t) (x: F.t t): a t =
   let comp = 
     match f.comp, x.comp with
-    | Unary f, Nullary x -> (Nullary (f x): a comp)
+    | Unary f, Nullary x -> (Suspended (lazy (f x)): a comp) (* [f] might originally be binary. *)
     | Unary f, Placeholder x -> (Suspended (lazy (f (List.hd_exn !x))): a comp)
     | Unary f, Suspended x -> (Suspended (lazy (f (Lazy.force x))): a comp)
     | Binary f, Nullary x -> Unary (f x)
