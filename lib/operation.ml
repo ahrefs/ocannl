@@ -97,8 +97,8 @@ let relu =
                  projections=(fun () -> Shape.backprop_unary @@ projections()); precision=Single} in
   Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
-let reset_value c ~n _shape =
-  Code.Reset {tensor=v n; precision=Single; reset_values=[|c|]}
+let reset_value c ~n field _shape =
+  Code.Reset {tensor={node=n; field}; precision=Single; reset_op=ConstantOfValue c}
 
 let float_to_label v = "v" ^ (
   Float.to_string v |> String.substr_replace_all ~pattern:"." ~with_:"p"
@@ -108,7 +108,9 @@ let number ?(axis_label="") c =
   (* Note: no axis label so that we do not conflict with user labels. *)
   Formula.term ~label:(float_to_label c) (`Constant ([1], axis_label)) ~init_body:(reset_value c)
 
-let uniform_value ~n shape: Code.t = ignore (n, shape); failwith "NOT IMPLEMENTED YET [4]"
+let uniform_value ~n field shape: Code.t =
+  Code.(Create {tensor={node=n; field}; precision=Single; dims=(fun () -> Shape.to_dims shape);
+                init_op=StandardUniform})
 
 let assign ~lhs ~rhs projections =
   let open Code in

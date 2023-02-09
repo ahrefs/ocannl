@@ -71,13 +71,13 @@ let session_error_printer = function
 let () = Caml.Printexc.register_printer session_error_printer
   
 let reset_zeros node field _shape =
-  Code.Reset {tensor={node; field}; precision=Single; reset_values=[|0.0|]}
+  Code.Reset {tensor={node; field}; precision=Single; reset_op=ConstantOfValue 0.0}
 
 let reset_ones node field _shape =
-  Code.Reset {tensor={node; field}; precision=Single; reset_values=[|1.0|]}
+  Code.Reset {tensor={node; field}; precision=Single; reset_op=ConstantOfValue 1.0}
 
 let create node field shape =
-  Code.Create {tensor={node; field}; dims=(fun () -> Shape.to_dims shape); init_values=[||];
+  Code.Create {tensor={node; field}; dims=(fun () -> Shape.to_dims shape); init_op=Unspecified;
                precision=Single}
 
 let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t =
@@ -267,7 +267,7 @@ let term ~label ?needs_gradient (spec: Shape.term_spec) ~init_body : t =
   let open Code in
   (* Very unlikely someone will compute just the parameters. *)
   let forward_body = Noop in
-  let init_values = Par (create n `Value shape, init_body ~n shape) in
+  let init_values = Par (create n `Value shape, init_body ~n `Value shape) in
   let zero_grads = reset_zeros n `Grad shape in
   let backprop_body = Noop in
   (* Very unlikely someone will want dw/dw. *)

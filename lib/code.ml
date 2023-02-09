@@ -16,11 +16,24 @@ type binop =
   | Add
   | Mul
   | Relu_gate
-  | Uniform
 
 type unop =
   | Identity
   | Relu
+
+(** Initializes or resets a tensor by filling in the corresponding numbers, at the appropriate precision. *)
+type init_op =
+  | Unspecified
+  (** Uninitialized. On reset, values may remain unchanged, but are not guaranteed to. *)
+  | ConstantOfValue of float
+  (** Puts the value in all cells. *)
+  | FixedConstant of float array
+  (** Fills in the numbers where the rightmost axis is contiguous. *)
+  | StandardUniform
+  (** Draws the values from U(0,1). *)
+  | StandardGaussian
+  (** Draws the values from N(0,1). *)
+
 
 type t =
   | Par of t * t
@@ -42,18 +55,8 @@ type t =
       lhs: data; rhs: data;
       projections: unit -> Shape.projections;
       precision: precision }
-  | Create of {
-        tensor: data; precision: precision; dims: unit -> int array;
-        init_values: float array;
-        (** [init_values] can be empty -- no initialization, single number -- initialize the whole tensor,
-            the length of the tensor -- initialize from numbers where the rightmost axis is contiguous. *)
-      }
-  | Reset of {
-        tensor: data; precision: precision;
-        reset_values: float array;
-        (** [reset_values] can be empty -- no initialization, single number -- initialize the whole tensor,
-            the length of the tensor -- initialize from numbers where the rightmost axis is contiguous. *)
-      }
+  | Create of { tensor: data; precision: precision; dims: unit -> int array; init_op: init_op }
+  | Reset of { tensor: data; precision: precision; reset_op: init_op }
   | Noop
 
 (** Dynamically loading a program executes [initialization] and bounds the [procedure] to [routine]. *)
@@ -68,18 +71,14 @@ let sprint_program (c: program): string = ignore c; failwith "NOT IMPLEMENTED YE
     [data low_level] -- a tensor. *)
 type _ low_level =
   | Lines: unit low_level array -> unit low_level
-  | For_loop: Shape.symbol * int * int * unit low_level -> unit low_level
+  | For_loop: {index: Shape.symbol; from_: int; to_: int; body: unit low_level} -> unit low_level
   | Value_at_node_id: int -> data low_level
   | Gradient_at_node_id: int -> data low_level
   | LLCreate: {
-      tensor: data low_level; precision: precision; dims: int array;
-      init_values: float array;
-      (** [init_values] can be empty -- no initialization, single number -- initialize the whole tensor,
-          the length of the tensor -- initialize from numbers where the rightmost axis is contiguous. *)
+      tensor: data low_level; precision: precision; dims: int array; init_op: init_op;
     } -> unit low_level
   | LLReset: {
-      tensor: data low_level; precision: precision; reset_values: float array;
-      (** [init_values] as in the [LLCreate] case. *)
+      tensor: data low_level; precision: precision; reset_op: init_op;
     } -> unit low_level
   | Unoptimized_set: data low_level * Shape.symbol array * float low_level -> unit low_level
   | Unoptimized_get: data low_level * Shape.symbol array -> float low_level
@@ -110,11 +109,12 @@ let rec unoptimized (code: t): unit low_level =
     let rec loop rev_iters = function
       | ([], []) -> basecase rev_iters
       | (dim::product, it::iters) ->
-        For_loop (it, 0, dim - 1, loop (it::rev_iters) (product, iters))
+        For_loop {index=it; from_=0; to_=dim - 1; body=loop (it::rev_iters) (product, iters)}
       | _ -> invalid_arg "Code.unoptimized: Accum_binop projections dims-iterators mismatch" in
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
-    if zero_out then Lines [|LLReset {tensor=lhs_ptr; precision; reset_values=[|0.0|]}; for_loops|]
+    if zero_out
+    then Lines [|LLReset {tensor=lhs_ptr; precision; reset_op=ConstantOfValue 0.0}; for_loops|]
     else for_loops
 
   | Accum_unop {zero_out; accum; op; lhs; rhs; projections; precision} ->
@@ -131,11 +131,12 @@ let rec unoptimized (code: t): unit low_level =
     let rec loop rev_iters = function
       | ([], []) -> basecase rev_iters
       | (dim::product, it::iters) ->
-        For_loop (it, 0, dim - 1, loop (it::rev_iters) (product, iters))
+        For_loop {index=it; from_=0; to_=dim - 1; body=loop (it::rev_iters) (product, iters)}
       | _ -> invalid_arg "Code.unoptimized: Accum_unop projections dims-iterators mismatch" in
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
-    if zero_out then Lines [|LLReset {tensor=lhs_ptr; precision; reset_values=[|0.0|]}; for_loops|]
+    if zero_out
+    then Lines [|LLReset {tensor=lhs_ptr; precision; reset_op=ConstantOfValue 0.0}; for_loops|]
     else for_loops
 
   | Noop -> Lines [||]
@@ -149,10 +150,10 @@ let rec unoptimized (code: t): unit low_level =
      | Lines ls1, _ -> Lines (Array.append ls1 [|ll2|])
      | _ -> Lines [|ll1; ll2|])
 
-  | Create {tensor; precision; dims; init_values} ->
-    LLCreate {tensor=data_pointer tensor; precision; dims=dims(); init_values}
-  | Reset {tensor; precision; reset_values} ->
-    LLReset {tensor=data_pointer tensor; precision; reset_values}
+  | Create {tensor; precision; dims; init_op} ->
+    LLCreate {tensor=data_pointer tensor; precision; dims=dims(); init_op}
+  | Reset {tensor; precision; reset_op} ->
+    LLReset {tensor=data_pointer tensor; precision; reset_op}
 
 let unoptimized_program (prog: program): unit low_level =
   let init = unoptimized prog.initialization in
