@@ -12,19 +12,24 @@ type _ low_level =
   | Float_const: precision * float -> float low_level
   | Value_at_node_id: int -> data low_level
   | Gradient_at_node_id: int -> data low_level
-  | Initialize: {
+  | LLCreate: {
       tensor: data low_level; precision: precision; dims: int array;
       init_values: float array;
       (** [init_values] can be empty -- no initialization, single number -- initialize the whole tensor,
           the length of the tensor -- initialize from numbers where the rightmost axis is contiguous. *)
     } -> unit low_level
-  | Unoptimized_set: Shape.symbol array * data low_level * float low_level -> unit low_level
-  | Unoptimized_get: Shape.symbol array * data low_level -> float low_level
-  | All_greater_0: data low_level -> bool low_level
-  | Exists_greater_0: data low_level -> bool low_level
+  | LLReset: {
+      tensor: data low_level; precision: precision; reset_values: float array;
+      (** [init_values] as in the [LLCreate] case. *)
+    } -> unit low_level
+  | Unoptimized_set: data low_level * Shape.symbol array * float low_level -> unit low_level
+  | Unoptimized_get: data low_level * Shape.symbol array -> float low_level
+  | Unoptimized_binop: binop * float low_level * float low_level -> float low_level
+  | Unoptimized_unop: unop * float low_level -> float low_level
   | Assign_routine: routine * unit low_level -> unit low_level
-
-    (* TODO(41): [@@deriving fold_sig] *)
+  
+let data_pointer (xhs: data) =
+  match xhs.field with `Value -> Value_at_node_id xhs.node.id | `Grad -> Gradient_at_node_id xhs.node.id
   
 let unoptimized (code: t): unit low_level =
   match code with
