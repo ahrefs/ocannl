@@ -26,9 +26,9 @@ Some ideas regarding installation (skip or substitute equivalent actions etc.):
 * eval $(opam env --switch=5.0-flambda)
 * opam install dune
 * opam install base stdio ppx_jane
-* opam i
 * opam install printbox printbox-text printbox-html
 * opam install ocaml-canvas
+* opam install ocaml-lsp-server ocamlformat
 * eval $(opam env)
 * cd ~/ocannl
 * dune runtest
