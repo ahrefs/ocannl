@@ -97,8 +97,8 @@ let relu =
                  projections=(fun () -> Shape.backprop_unary @@ projections()); precision=Single} in
   Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
-let reset_value c ~n shape =
-  Code.Reset {tensor=v n; dims=(fun () -> Shape.to_dims shape); reset_values=[|c|]}
+let reset_value c ~n _shape =
+  Code.Reset {tensor=v n; precision=Single; reset_values=[|c|]}
 
 let float_to_label v = "v" ^ (
   Float.to_string v |> String.substr_replace_all ~pattern:"." ~with_:"p"

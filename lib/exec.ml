@@ -1,14 +1,4 @@
-(* This file is inspired by:
-   https://github.com/metaocaml/ber-metaocaml/blob/ber-n111/ber-metaocaml-111/runnative.ml *)
-
 open Base
-
-let load_path : string list ref = ref []
-
-(** Add a directory to search for .cmo/.cmi files, needed for the sake of running the generated code.
-    The specified directory is prepended to [load_path]. *)
-let add_search_path dir =
-  load_path := dir :: !load_path
 
 let ocamlopt_path = "ocamlfind ocamlopt"
 
@@ -22,8 +12,6 @@ let compile_source ~with_debug src_fname =
   let cmdline = ocamlopt_path ^ 
                 " -I ~/ocannl/_build/default/lib -I ~/ocannl/_build/default/lib/.ocannl_runtime.objs/native -I ~/ocannl/_build/default/lib/.ocannl_runtime.objs/byte -package base -package stdio " ^
                 " -shared"^(if with_debug then " -g" else "")^" -o " ^ plugin_fname ^
-                (String.concat ~sep:"" @@ 
-                 List.map ~f:(fun p -> " -I " ^ p) !load_path) ^
                 " " ^ src_fname in      
   let rc = Caml.Sys.command cmdline in
   List.iter ~f:Caml.Sys.remove other_files;
@@ -33,18 +21,23 @@ let compile_source ~with_debug src_fname =
 
 let code_file_prefix = "runn"
 
-(** Create a file to compile and later link, using the given closed code. *)
-let create_comp_unit closed =
+let emit = Code.unoptimized_program
+
+let format_low_level (fmt: Caml.Format.formatter) (c: 'a Code.low_level): unit =
+  ignore (fmt, c); failwith "NOT IMPLEMENTED YET"
+
+(** Create a file to compile and later link. *)
+let create_comp_unit compiled =
   let fname, oc =
     Caml.Filename.open_temp_file ~mode:[Open_wronly;Open_creat;Open_text]
       code_file_prefix ".ml" in
   (* FIXME(32): the following outputs truncated source code -- missing the last line:
   let ppf = Caml.Format.formatter_of_out_channel oc in
   Caml.Format.pp_set_margin ppf 160;
-  let () = EmitOCaml.format_code ppf closed in
+  let () = format_low_level ppf compiled in
   let () = Stdio.Out_channel.close oc in *)
   Caml.Format.pp_set_margin Caml.Format.str_formatter 160;
-  EmitOCaml.format_code Caml.Format.str_formatter closed;
+  format_low_level Caml.Format.str_formatter compiled;
   let contents = Caml.Format.flush_str_formatter() in
   Stdio.Out_channel.output_string oc contents;
   Stdio.Out_channel.flush oc;
@@ -94,15 +87,15 @@ let handle_error prefix ?formula ~contents exc =
   Stdio.prerr_endline @@ Option.value_exn (Formula.session_error_printer exc);
   raise exc
 
-let load_native ?(with_debug=true) (cde: Code.program) =
-  let closed = EmitOCaml.emit cde in
+let load_native ?(with_debug=true) (prog: Code.program) =
+  let compiled = emit prog in
   if not Dynlink.is_native then invalid_arg "Exec.load_forward: only works in native code";
-  let source_fname = create_comp_unit closed in
+  let source_fname = create_comp_unit compiled in
   let plugin_fname = compile_source ~with_debug source_fname in
   let result =
     if with_debug then (
       Caml.Format.pp_set_margin Caml.Format.str_formatter 160;
-      EmitOCaml.format_code Caml.Format.str_formatter closed;
+      format_low_level Caml.Format.str_formatter compiled;
       let contents = Caml.Format.flush_str_formatter() in
       try Dynlink.loadfile_private plugin_fname; Some contents with
       | Dynlink.Error (Library's_module_initializers_failed exc) ->
