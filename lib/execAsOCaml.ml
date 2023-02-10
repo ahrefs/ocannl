@@ -2,7 +2,8 @@ open Base
 
 let emit = Code.unoptimized_program
 
-let semi ppf () = Caml.Format.fprintf ppf ";@ "
+let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
+let pp_symbol ppf (Shape.Symbol s) = Caml.Format.fprintf ppf "i%d" s
 
 let pp_print_init_op ppf: Code.init_op -> unit = function
   | `Unspecified -> Caml.Format.pp_print_string ppf "`Unspecified"
@@ -10,7 +11,7 @@ let pp_print_init_op ppf: Code.init_op -> unit = function
     Caml.Format.fprintf ppf "(`ConstantOfValue %f)" c
   | `FixedConstant cs ->
     Caml.Format.(fprintf ppf "(`FixedConstant @[<2>[|%a|]@])"
-                   (pp_print_list ~pp_sep:semi pp_print_float) @@ Array.to_list cs)
+                   (pp_print_list ~pp_sep:pp_semi pp_print_float) @@ Array.to_list cs)
   | `StandardUniform -> Caml.Format.pp_print_string ppf "`StandardUniform"
   | `StandardGaussian -> Caml.Format.pp_print_string ppf "`StandardGaussian"
 
@@ -18,17 +19,16 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
   let open Code in
   let open Caml.Format in
   let pp_dims ppf dims =
-    fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:semi pp_print_int) @@ Array.to_list dims in
+    fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:pp_semi pp_print_int) @@ Array.to_list dims in
   let pp_indices ppf idcs =
-    fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:semi pp_print_int) @@
-    Array.to_list @@ Array.map ~f:(function Shape.Symbol s -> s) idcs in
+    fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:pp_semi pp_symbol) @@ Array.to_list idcs in
   let rec pp_ll: 'a. formatter -> 'a low_level -> unit = fun (ppf: formatter) (type a) (c: a low_level) ->
     (* FIXME: performance bug, bind the nodes [(get %d)] at the start of the program. *)
     match c with
     | Lines lines ->
-      (pp_print_list ~pp_sep:semi pp_ll ppf @@ Array.to_list lines : unit)
-    | For_loop {index=Symbol i; from_; to_; body} ->
-      fprintf ppf "@[<2>for@ i%d = %d@ to %d@ do@ %a@]@ done" i from_ to_ pp_ll body
+      (pp_print_list ~pp_sep:pp_semi pp_ll ppf @@ Array.to_list lines : unit)
+    | For_loop {index=i; from_; to_; body} ->
+      fprintf ppf "@[<2>for@ %a = %d@ to %d@ do@ %a@]@ done" pp_symbol i from_ to_ pp_ll body
     | Value_at_node_id id ->
       fprintf ppf "(get %d).value" id
     | Gradient_at_node_id id ->
@@ -68,7 +68,7 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
        fprintf ppf "@[<2>let () =@ %a@]" (pp_print_list ~pp_sep:(fun p () -> fprintf p "@]@ @[<2>let () =@ ") pp_ll) @@
        Array.to_list toplevel
      else
-      fprintf ppf "(@[<2>%a@]@,)" (pp_print_list ~pp_sep:semi pp_ll) @@
+      fprintf ppf "(@[<2>%a@]@,)" (pp_print_list ~pp_sep:pp_semi pp_ll) @@
       Array.to_list toplevel
 
    | c -> pp_ll ppf c);
