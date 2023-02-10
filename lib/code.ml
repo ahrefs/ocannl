@@ -157,8 +157,10 @@ let rec unoptimized (code: t): unit low_level =
 
 let unoptimized_program (prog: program): unit low_level =
   let init = unoptimized prog.initialization in
-  let proc = unoptimized prog.procedure in
-  Lines [|init; Assign_routine (prog.routine, proc)|]
+  let proc = Assign_routine (prog.routine, unoptimized prog.procedure) in
+  match init with
+  | Lines init_lines ->  Lines (Array.append init_lines [|proc|])
+  | _ -> Lines [|init; proc|]
 
 (*
 let skip_arg (_n1: float Codelib.code) (n2: float Codelib.code) = n2

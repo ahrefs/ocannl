@@ -352,6 +352,9 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
           m.comp_node.forward <-
             Some (fun () -> try forward() with error ->
                 ExecAsOCaml.handle_error "Forward error:" ~formula:m ~contents error)
+        | Some contents, None ->
+          let msg = "refresh_session: error loading `forward`: routine not set in code:\n"^contents in
+          raise @@ Session_error (msg, Some m)
         | _, None ->
           failwith ("refresh_session: error loading `forward`: routine not set"^
                     (if with_debug then "" else " (use `~with_debug:true` for more information)"))
@@ -369,6 +372,9 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
           m.comp_node.backprop <-
             Some (fun () ->
                 try backprop() with error -> ExecAsOCaml.handle_error "Backprop error:" ~formula:m ~contents error)
+        | Some contents, None ->
+          let msg = "refresh_session: error loading `backprop`: routine not set in code:\n"^contents in
+          raise @@ Session_error (msg, Some m)
         | _, None ->
           failwith ("refresh_session: error loading `backprop`: routine not set"^
                     (if with_debug then "" else " (use `~with_debug:true` for more information)"))
