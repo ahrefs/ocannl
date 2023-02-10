@@ -327,7 +327,8 @@ let print_global_roots ~with_grad ~with_code (style: array_print_style) =
 
 (** *** Session management. *** *)
 
-let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) ?(force_no_init=false) () =
+let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run=true)
+    ?(force_no_init=false) () =
   let open Formula in
   if force_no_init && (regenerate || reinit || run) then
     invalid_arg "refresh_session: set other triggers to false when using force_no_init";
@@ -345,14 +346,15 @@ let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) 
     if not force_no_init && 
         (reinit || Option.is_none root.formula.comp_node.forward) then (
       try
-        let contents = ExecAsOCaml.load_native ?with_debug (Option.value_exn root.forward_code) in
+        let contents = ExecAsOCaml.load_native ~with_debug (Option.value_exn root.forward_code) in
         match contents, m.comp_node.forward with
         | Some contents, Some forward ->
           m.comp_node.forward <-
             Some (fun () -> try forward() with error ->
                 ExecAsOCaml.handle_error "Forward error:" ~formula:m ~contents error)
         | _, None ->
-          failwith "refresh_session: error loading `forward`, use `~with_debug:true` for more information"
+          failwith ("refresh_session: error loading `forward`: routine not set"^
+                    (if with_debug then "" else " (use `~with_debug:true` for more information)"))
         | _ -> ()
       with Session_error (msg, None) ->
         let msg = "Forward init error: "^msg in
@@ -361,14 +363,15 @@ let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) 
     if not force_no_init && 
         (reinit || Option.is_none root.formula.comp_node.backprop) then (
       try
-        let contents = ExecAsOCaml.load_native ?with_debug (Option.value_exn root.backprop_code) in
+        let contents = ExecAsOCaml.load_native ~with_debug (Option.value_exn root.backprop_code) in
         match contents, m.comp_node.backprop with
         | Some contents, Some backprop ->
           m.comp_node.backprop <-
             Some (fun () ->
                 try backprop() with error -> ExecAsOCaml.handle_error "Backprop error:" ~formula:m ~contents error)
         | _, None ->
-          failwith "refresh_session: error loading `backprop`, use `~with_debug:true` for more information"
+          failwith ("refresh_session: error loading `backprop`: routine not set"^
+                    (if with_debug then "" else " (use `~with_debug:true` for more information)"))
         | _ -> ()
       with Session_error (msg, None) ->
         Stdio.print_endline "Forward code (context for backprop init error):";
