@@ -23,17 +23,17 @@ type unop =
 
 (** Initializes or resets a tensor by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op =
-  | Unspecified
+  [ `Unspecified
   (** Uninitialized. On reset, values may remain unchanged, but are not guaranteed to. *)
-  | ConstantOfValue of float
+  | `ConstantOfValue of float
   (** Puts the value in all cells. *)
-  | FixedConstant of float array
+  | `FixedConstant of float array
   (** Fills in the numbers where the rightmost axis is contiguous. *)
-  | StandardUniform
+  | `StandardUniform
   (** Draws the values from U(0,1). *)
-  | StandardGaussian
+  | `StandardGaussian
   (** Draws the values from N(0,1). *)
-
+  ]
 
 type t =
   | Par of t * t
@@ -114,7 +114,7 @@ let rec unoptimized (code: t): unit low_level =
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|LLReset {tensor=lhs_ptr; precision; reset_op=ConstantOfValue 0.0}; for_loops|]
+    then Lines [|LLReset {tensor=lhs_ptr; precision; reset_op=`ConstantOfValue 0.0}; for_loops|]
     else for_loops
 
   | Accum_unop {zero_out; accum; op; lhs; rhs; projections; precision} ->
@@ -136,7 +136,7 @@ let rec unoptimized (code: t): unit low_level =
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|LLReset {tensor=lhs_ptr; precision; reset_op=ConstantOfValue 0.0}; for_loops|]
+    then Lines [|LLReset {tensor=lhs_ptr; precision; reset_op=`ConstantOfValue 0.0}; for_loops|]
     else for_loops
 
   | Noop -> Lines [||]

@@ -98,7 +98,7 @@ let relu =
   Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
 let reset_value c ~n field _shape =
-  Code.Reset {tensor={node=n; field}; precision=Single; reset_op=ConstantOfValue c}
+  Code.Reset {tensor={node=n; field}; precision=Single; reset_op=`ConstantOfValue c}
 
 let float_to_label v = "v" ^ (
   Float.to_string v |> String.substr_replace_all ~pattern:"." ~with_:"p"
@@ -110,7 +110,7 @@ let number ?(axis_label="") c =
 
 let uniform_value ~n field shape: Code.t =
   Code.(Create {tensor={node=n; field}; precision=Single; dims=(fun () -> Shape.to_dims shape);
-                init_op=StandardUniform})
+                init_op=`StandardUniform})
 
 let assign ~lhs ~rhs projections =
   let open Code in
