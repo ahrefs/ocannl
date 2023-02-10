@@ -49,12 +49,19 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
       fprintf ppf "@[<2>A.get (get %d).value@ %a@]" id pp_indices indices
     | Unoptimized_get (Gradient_at_node_id id, indices) ->
       fprintf ppf "@[<2>A.get (get %d).grad@ %a@]" id pp_indices indices
-      fprintf ppf "@[A.get (get %d).grad@ %a@]" id pp_indices indices
-    | Unoptimized_binop (_op, _v1, _v2) -> fprintf ppf "()"
-    | Unoptimized_unop (_op, _v) -> fprintf ppf "()"
-    | Assign_routine (_routine, _proc) -> fprintf ppf "()" in
-  fprintf ppf "@[<v>open Ocannl_runtime@ open Node@ ";
-  fprintf ppf "@[<v>open Ocannl_runtime@ open Node@ open Float@ ";
+    | Unoptimized_binop (Skip_arg, _v1, v2) -> pp_ll ppf v2
+    | Unoptimized_binop (Add, v1, v2) -> fprintf ppf "(@[<2>%a +@ %a@]@,)" pp_ll v1 pp_ll v2
+    | Unoptimized_binop (Mul, v1, v2) -> fprintf ppf "(@[<2>%a *@ %a@]@,)" pp_ll v1 pp_ll v2
+    | Unoptimized_binop (Relu_gate, v1, v2) ->
+      fprintf ppf "(@[<2>if %a > 0.0@ then %a@ else 0.0@]@,)" pp_ll v1 pp_ll v2
+    | Unoptimized_unop (Identity, v) -> pp_ll ppf v
+    | Unoptimized_unop (Relu, v) ->
+      fprintf ppf "(@[<2>let a = %a in@ if a > 0.0 then a else 0.0@]@,)" pp_ll v
+    | Assign_routine ({node={id; _}; field=`Forward}, proc) ->
+      fprintf ppf "@[<2>(get %d).forward <-@ Some (@[<2>fun () ->@ %a@]@,)@]" id pp_ll proc
+    | Assign_routine ({node={id; _}; field=`Backprop}, proc) ->
+      fprintf ppf "@[<2>(get %d).backprop <-@ Some (@[<2>fun () -> %a@]@,)@]" id pp_ll proc in
+  fprintf ppf "@[<v>open Base@ open Ocannl_runtime@ open Node@ open Base.Float@ ";
   (match c with
    | Lines toplevel ->
      if as_toplevel then
