@@ -23,8 +23,58 @@ let code_file_prefix = "runn"
 
 let emit = Code.unoptimized_program
 
-let format_low_level (fmt: Caml.Format.formatter) (c: 'a Code.low_level): unit =
-  ignore (fmt, c); failwith "NOT IMPLEMENTED YET [3]"
+let semi ppf () = Caml.Format.fprintf ppf ";@ "
+
+let pp_print_init_op ppf: Code.init_op -> unit = function
+  | `Unspecified -> Caml.Format.pp_print_string ppf "`Unspecified"
+  | `ConstantOfValue c ->
+    Caml.Format.fprintf ppf "(`ConstantOfValue %f)" c
+  | `FixedConstant cs ->
+    Caml.Format.(fprintf ppf "(`FixedConstant @[[|%a|]@])"
+                   (pp_print_list ~pp_sep:semi pp_print_float) @@ Array.to_list cs)
+  | `StandardUniform -> Caml.Format.pp_print_string ppf "`StandardUniform"
+  | `StandardGaussian -> Caml.Format.pp_print_string ppf "`StandardGaussian"
+
+let format_low_level (ppf: Caml.Format.formatter) (type a) (c: a Code.low_level): unit =
+  let open Code in
+  let open Caml.Format in
+  let pp_dims ppf dims =
+    fprintf ppf "@[[|%a|]@]" (pp_print_list ~pp_sep:semi pp_print_int) @@ Array.to_list dims in
+  let pp_indices ppf idcs =
+    fprintf ppf "@[[|%a|]@]" (pp_print_list ~pp_sep:semi pp_print_int) @@
+    Array.to_list @@ Array.map ~f:(function Shape.Symbol s -> s) idcs in
+  let rec pp_ll: 'a. formatter -> 'a low_level -> unit = fun (ppf: formatter) (type a) (c: a low_level) ->
+  (* FIXME: performance bug, bind the nodes [(get %d)] at the start of the program. *)
+  match c with
+  | Lines lines ->
+    (pp_print_list ~pp_sep:semi pp_ll ppf @@ Array.to_list lines : unit)
+  | For_loop {index=Symbol i; from_; to_; body} ->
+    fprintf ppf "@[for@ i%d = %d@ to %d@ do@ %a@ done@]" i from_ to_ pp_ll body
+  | Value_at_node_id id ->
+    fprintf ppf "(get %d).value" id
+  | Gradient_at_node_id id ->
+    fprintf ppf "(get %d).grad" id
+  | LLCreate { tensor=Value_at_node_id id; precision=_; dims; init_op } ->
+    fprintf ppf "@[(get %d).value <-@ create_array@ %a %a@]" id pp_dims dims pp_print_init_op init_op
+  | LLCreate { tensor=Gradient_at_node_id id; precision=_; dims; init_op } ->
+    fprintf ppf "@[(get %d).grad <-@ create_array@ %a %a@]" id pp_dims dims pp_print_init_op init_op
+  | LLReset { tensor=Value_at_node_id id; precision=_; reset_op } ->
+    fprintf ppf "@[reset_array@ ((get %d).value) %a@]" id pp_print_init_op reset_op
+  | LLReset { tensor=Gradient_at_node_id id; precision=_; reset_op } ->
+    fprintf ppf "@[reset_array@ ((get %d).grad) %a@]" id pp_print_init_op reset_op
+  | Unoptimized_set (Value_at_node_id id, indices, v) ->
+    fprintf ppf "@[A.set (get %d).value@ %a@ %a@]" id pp_indices indices pp_ll v
+  | Unoptimized_set (Gradient_at_node_id id, indices, v) ->
+    fprintf ppf "@[A.set (get %d).grad@ %a@ %a@]" id pp_indices indices pp_ll v
+  | Unoptimized_get (Value_at_node_id id, indices) ->
+    fprintf ppf "@[A.get (get %d).value@ %a@]" id pp_indices indices
+  | Unoptimized_get (Gradient_at_node_id id, indices) ->
+    fprintf ppf "@[A.get (get %d).grad@ %a@]" id pp_indices indices
+  | Unoptimized_binop (_op, _v1, _v2) -> fprintf ppf "()"
+  | Unoptimized_unop (_op, _v) -> fprintf ppf "()"
+  | Assign_routine (_routine, _proc) -> fprintf ppf "()" in
+  fprintf ppf "@[<v>open Ocannl_runtime@ open Node@ %a@]" pp_ll c
+
 
 (** Create a file to compile and later link. *)
 let create_comp_unit compiled =
