@@ -114,26 +114,33 @@ let compile_source ~with_debug src_fname =
   List.iter ~f:safe_remove other_files;
   plugin_fname, log_fname, rc
 
-let first_file_span_re = Str.regexp @@
+let code_file_span_line = Str.regexp @@
   code_file_prefix ^ {|[A-Za-z0-9]*\.ml\\?", line \([0-9]+\), characters \([0-9]+\)-\([0-9]+\)|}
+let code_file_span_lines = Str.regexp @@
+  code_file_prefix ^ {|[A-Za-z0-9]*\.ml\\?", lines \([0-9]+\)-\([0-9]+\), characters \([0-9]+\)-\([0-9]+\)|}
 
 (** Returns the character offset span inside [contents] corresponding to the first file span from [message].
     Returns [0, 0] if no span is found. *)
 let first_file_span ~contents ~message =
   let last_char = String.length contents - 1 in
   try
-    ignore (Str.search_forward first_file_span_re message 0);
+    let multiline =
+      try ignore(Str.search_forward code_file_span_line message 0); false
+      with (Caml.Not_found | Not_found_s _) ->
+        ignore(Str.search_forward code_file_span_lines message 0); true in
     let line_num = Int.of_string @@ Str.matched_group 1 message in
-    let char_start = Int.of_string @@ Str.matched_group 2 message in
-    let char_end = Int.of_string @@ Str.matched_group 3 message in
+    let line_end = if multiline then Int.of_string @@ Str.matched_group 2 message else line_num in
+    let char_start = Int.of_string @@ Str.matched_group (if multiline then 3 else 2) message in
+    let char_end = Int.of_string @@ Str.matched_group (if multiline then 4 else 3) message in
     let rec line_offset ~line_num ~from =
       if line_num <= 1 then from else
         match String.index_from contents from '\n' with
         | None -> from
         | Some pos -> line_offset ~line_num:(line_num-1) ~from:(pos+1) in
-    let line_offset = line_offset ~line_num ~from:0 in
-    line_offset + char_start, line_offset + char_end
-  with Caml.Not_found ->
+    let line_from_offset = line_offset ~line_num ~from:0 in
+    let line_end_offset = line_offset ~line_num:(line_end - line_num) ~from:line_from_offset in
+    line_from_offset + char_start, line_end_offset + char_end
+  with (Caml.Not_found | Not_found_s _) ->
     0, last_char
 
 let error_closing_delimiter = " #$}\027[0m "
