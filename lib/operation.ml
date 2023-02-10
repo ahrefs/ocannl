@@ -351,7 +351,8 @@ let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) 
           m.comp_node.forward <-
             Some (fun () -> try forward() with error ->
                 ExecAsOCaml.handle_error "Forward error:" ~formula:m ~contents error)
-        | _, None -> assert false
+        | _, None ->
+          failwith "refresh_session: error loading `forward`, use `~with_debug:true` for more information"
         | _ -> ()
       with Session_error (msg, None) ->
         let msg = "Forward init error: "^msg in
@@ -366,7 +367,8 @@ let refresh_session ?with_debug ?(regenerate=false) ?(reinit=false) ?(run=true) 
           m.comp_node.backprop <-
             Some (fun () ->
                 try backprop() with error -> ExecAsOCaml.handle_error "Backprop error:" ~formula:m ~contents error)
-        | _, None -> assert false
+        | _, None ->
+          failwith "refresh_session: error loading `backprop`, use `~with_debug:true` for more information"
         | _ -> ()
       with Session_error (msg, None) ->
         Stdio.print_endline "Forward code (context for backprop init error):";
