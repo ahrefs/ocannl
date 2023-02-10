@@ -9,7 +9,7 @@ let pp_print_init_op ppf: Code.init_op -> unit = function
   | `ConstantOfValue c ->
     Caml.Format.fprintf ppf "(`ConstantOfValue %f)" c
   | `FixedConstant cs ->
-    Caml.Format.(fprintf ppf "(`FixedConstant @[[|%a|]@])"
+    Caml.Format.(fprintf ppf "(`FixedConstant @[<2>[|%a|]@])"
                    (pp_print_list ~pp_sep:semi pp_print_float) @@ Array.to_list cs)
   | `StandardUniform -> Caml.Format.pp_print_string ppf "`StandardUniform"
   | `StandardGaussian -> Caml.Format.pp_print_string ppf "`StandardGaussian"
@@ -18,9 +18,9 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
   let open Code in
   let open Caml.Format in
   let pp_dims ppf dims =
-    fprintf ppf "@[[|%a|]@]" (pp_print_list ~pp_sep:semi pp_print_int) @@ Array.to_list dims in
+    fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:semi pp_print_int) @@ Array.to_list dims in
   let pp_indices ppf idcs =
-    fprintf ppf "@[[|%a|]@]" (pp_print_list ~pp_sep:semi pp_print_int) @@
+    fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:semi pp_print_int) @@
     Array.to_list @@ Array.map ~f:(function Shape.Symbol s -> s) idcs in
   let rec pp_ll: 'a. formatter -> 'a low_level -> unit = fun (ppf: formatter) (type a) (c: a low_level) ->
     (* FIXME: performance bug, bind the nodes [(get %d)] at the start of the program. *)
@@ -28,44 +28,47 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
     | Lines lines ->
       (pp_print_list ~pp_sep:semi pp_ll ppf @@ Array.to_list lines : unit)
     | For_loop {index=Symbol i; from_; to_; body} ->
-      fprintf ppf "@[for@ i%d = %d@ to %d@ do@ %a@ done@]" i from_ to_ pp_ll body
+      fprintf ppf "@[<2>for@ i%d = %d@ to %d@ do@ %a@]@ done" i from_ to_ pp_ll body
     | Value_at_node_id id ->
       fprintf ppf "(get %d).value" id
     | Gradient_at_node_id id ->
       fprintf ppf "(get %d).grad" id
     | LLCreate { tensor=Value_at_node_id id; precision=_; dims; init_op } ->
-      fprintf ppf "@[(get %d).value <-@ create_array@ %a %a@]" id pp_dims dims pp_print_init_op init_op
+      fprintf ppf "@[<2>(get %d).value <-@ create_array@ %a %a@]" id pp_dims dims pp_print_init_op init_op
     | LLCreate { tensor=Gradient_at_node_id id; precision=_; dims; init_op } ->
-      fprintf ppf "@[(get %d).grad <-@ create_array@ %a %a@]" id pp_dims dims pp_print_init_op init_op
+      fprintf ppf "@[<2>(get %d).grad <-@ create_array@ %a %a@]" id pp_dims dims pp_print_init_op init_op
     | LLReset { tensor=Value_at_node_id id; precision=_; reset_op } ->
-      fprintf ppf "@[reset_array@ ((get %d).value) %a@]" id pp_print_init_op reset_op
+      fprintf ppf "@[<2>reset_array@ ((get %d).value) %a@]" id pp_print_init_op reset_op
     | LLReset { tensor=Gradient_at_node_id id; precision=_; reset_op } ->
-      fprintf ppf "@[reset_array@ ((get %d).grad) %a@]" id pp_print_init_op reset_op
+      fprintf ppf "@[<2>reset_array@ ((get %d).grad) %a@]" id pp_print_init_op reset_op
     | Unoptimized_set (Value_at_node_id id, indices, v) ->
-      fprintf ppf "@[A.set (get %d).value@ %a@ %a@]" id pp_indices indices pp_ll v
+      fprintf ppf "@[<2>A.set (get %d).value@ %a@ %a@]" id pp_indices indices pp_ll v
     | Unoptimized_set (Gradient_at_node_id id, indices, v) ->
-      fprintf ppf "@[A.set (get %d).grad@ %a@ %a@]" id pp_indices indices pp_ll v
+      fprintf ppf "@[<2>A.set (get %d).grad@ %a@ %a@]" id pp_indices indices pp_ll v
     | Unoptimized_get (Value_at_node_id id, indices) ->
-      fprintf ppf "@[A.get (get %d).value@ %a@]" id pp_indices indices
+      fprintf ppf "@[<2>A.get (get %d).value@ %a@]" id pp_indices indices
     | Unoptimized_get (Gradient_at_node_id id, indices) ->
+      fprintf ppf "@[<2>A.get (get %d).grad@ %a@]" id pp_indices indices
       fprintf ppf "@[A.get (get %d).grad@ %a@]" id pp_indices indices
     | Unoptimized_binop (_op, _v1, _v2) -> fprintf ppf "()"
     | Unoptimized_unop (_op, _v) -> fprintf ppf "()"
     | Assign_routine (_routine, _proc) -> fprintf ppf "()" in
   fprintf ppf "@[<v>open Ocannl_runtime@ open Node@ ";
+  fprintf ppf "@[<v>open Ocannl_runtime@ open Node@ open Float@ ";
   (match c with
    | Lines toplevel ->
      if as_toplevel then
-       fprintf ppf "@[let () =@ %a@]" (pp_print_list ~pp_sep:(fun p () -> fprintf p "@]@ @[let () =@ ") pp_ll) @@
+       fprintf ppf "@[<2>let () =@ %a@]" (pp_print_list ~pp_sep:(fun p () -> fprintf p "@]@ @[<2>let () =@ ") pp_ll) @@
        Array.to_list toplevel
      else
-      fprintf ppf "(@[%a@])" (pp_print_list ~pp_sep:semi pp_ll) @@
+      fprintf ppf "(@[<2>%a@]@,)" (pp_print_list ~pp_sep:semi pp_ll) @@
       Array.to_list toplevel
 
    | c -> pp_ll ppf c);
   fprintf ppf "@]"
 
 let code_file_prefix = "nnrun"
+let column_width = 100
 
 (** Create a file to compile and later link. *)
 let create_comp_unit compiled =
@@ -74,10 +77,12 @@ let create_comp_unit compiled =
       code_file_prefix ".ml" in
   (* FIXME(32): the following outputs truncated source code -- missing the last line:
   let ppf = Caml.Format.formatter_of_out_channel oc in
-  Caml.Format.pp_set_margin ppf 160;
+  Caml.Format.pp_set_geometry Caml.Format.str_formatter
+    ~max_indent:(column_width/2) ~margin:column_width;
   let () = format_low_level ppf compiled in
   let () = Stdio.Out_channel.close oc in *)
-  Caml.Format.pp_set_margin Caml.Format.str_formatter 160;
+  Caml.Format.pp_set_geometry Caml.Format.str_formatter
+    ~max_indent:(column_width/2) ~margin:column_width;
   format_low_level ~as_toplevel:true Caml.Format.str_formatter compiled;
   let contents = Caml.Format.flush_str_formatter() in
   Stdio.Out_channel.output_string oc contents;
@@ -164,7 +169,8 @@ let load_native ?(with_debug=true) (prog: Code.program) =
     ~f:(fun () ->
         if with_debug then
           let contents =
-            Caml.Format.pp_set_margin Caml.Format.str_formatter 160;
+            Caml.Format.pp_set_geometry Caml.Format.str_formatter
+              ~max_indent:(column_width/2) ~margin:column_width;
             format_low_level ~as_toplevel:true Caml.Format.str_formatter compiled;
             Caml.Format.flush_str_formatter() in
           try
