@@ -25,14 +25,12 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
   let rec pp_ll: 'a. formatter -> 'a low_level -> unit = fun (ppf: formatter) (type a) (c: a low_level) ->
     (* FIXME: performance bug, bind the nodes [(get %d)] at the start of the program. *)
     match c with
-    | Lines lines ->
-      (pp_print_list ~pp_sep:pp_semi pp_ll ppf @@ Array.to_list lines : unit)
+    | Lines [||] -> fprintf ppf "()"
+    | Lines lines -> (pp_print_list ~pp_sep:pp_semi pp_ll ppf @@ Array.to_list lines : unit)
     | For_loop {index=i; from_; to_; body} ->
       fprintf ppf "@[<2>for@ %a = %d@ to %d@ do@ %a@]@ done" pp_symbol i from_ to_ pp_ll body
-    | Value_at_node_id id ->
-      fprintf ppf "(get %d).value" id
-    | Gradient_at_node_id id ->
-      fprintf ppf "(get %d).grad" id
+    | Value_at_node_id id -> fprintf ppf "(get %d).value" id
+    | Gradient_at_node_id id -> fprintf ppf "(get %d).grad" id
     | LLCreate { tensor=Value_at_node_id id; precision=_; dims; init_op } ->
       fprintf ppf "@[<2>(get %d).value <-@ create_array@ %a %a@]" id pp_dims dims pp_print_init_op init_op
     | LLCreate { tensor=Gradient_at_node_id id; precision=_; dims; init_op } ->

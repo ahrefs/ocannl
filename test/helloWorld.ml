@@ -14,7 +14,11 @@ let%expect_test "Pointwise multiplication dims 1" =
   let open Operation.CLI in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ y_f;
-  [%expect {| |}]
+  [%expect {|
+    [4] (hey*2): shape 1 layout: 0:1
+    │_=0
+    ┼───────────────────────────────
+    │0.267 |}]
 
 let%expect_test "Matrix multiplication dims 1x1" =
   Operation.drop_session();
