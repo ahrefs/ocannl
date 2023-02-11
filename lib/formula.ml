@@ -267,7 +267,6 @@ let term ~label ?needs_gradient (spec: Shape.term_spec) ~init_body : t =
   Shape.propagate_shapes local_shape_update;
 
   let open Code in
-  (* Very unlikely someone will compute just the parameters. *)
   let forward_body = Noop in
   let init_values = Par (create n `Value shape, init_body ~n `Value shape) in
   let zero_grads = reset_zeros n `Grad shape in
@@ -283,16 +282,28 @@ let term ~label ?needs_gradient (spec: Shape.term_spec) ~init_body : t =
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
   formula
 
+let error_if_unknown_shape m =
+  match m.shape with
+  | {input=Unknown; _} -> raise @@ Session_error ("Shape of inputs is still unknown", Some m)
+  | {output=Unknown; _} -> raise @@ Session_error ("Shape of outputs is still unknown", Some m)
+  | {batch=Unknown; _} -> raise @@ Session_error ("Shape of batching is still unknown", Some m)
+  | {output=Inferred []; _} ->
+     raise @@ Session_error ("Shape of outputs is still empty -- missing shape information", Some m)
+  | {input=_; output=_; batch=_; axis_labels=_; deduce_output_from_input=_} -> ()
+
 let get_toplevel m =
+  error_if_unknown_shape m;
   let open Code in
   let toplevel_forward = 
     {initialization=m.init_values; procedure=m.forward_body;
-     routine={node=m.comp_node; field=`Forward}} in
+     routine={node=m.comp_node; field=`Forward};
+     label="Forward #"^Int.to_string m.node_id^" "^m.comp_node.label} in
   let backprop =
     Seq (Par (m.zero_grads, reset_ones m.comp_node `Grad m.shape), m.backprop_body) in
   let toplevel_backprop =
     {initialization=m.init_grads; procedure=backprop;
-     routine={node=m.comp_node; field=`Backprop}} in
+     routine={node=m.comp_node; field=`Backprop};
+     label="Backprop #"^Int.to_string m.node_id^" "^m.comp_node.label} in
   toplevel_forward, toplevel_backprop
 
 let sexp_of_t m =
