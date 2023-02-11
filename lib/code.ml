@@ -60,7 +60,7 @@ type t =
   | Noop
 
 (** Dynamically loading a program executes [initialization] and bounds the [procedure] to [routine]. *)
-type program = {initialization: t; procedure: t; routine: routine}
+type program = {initialization: t; procedure: t; routine: routine; label: string}
 
 let sprint_code (c: t): string = ignore c; failwith "NOT IMPLEMENTED YET [1]"
 let sprint_program (c: program): string = ignore c; failwith "NOT IMPLEMENTED YET [2]"
@@ -85,6 +85,7 @@ type _ low_level =
   | Unoptimized_binop: binop * float low_level * float low_level -> float low_level
   | Unoptimized_unop: unop * float low_level -> float low_level
   | Assign_routine: routine * unit low_level -> unit low_level
+  | Comment: string -> unit low_level
 
 let data_pointer (xhs: data) =
   match xhs.field with `Value -> Value_at_node_id xhs.node.id | `Grad -> Gradient_at_node_id xhs.node.id
@@ -158,9 +159,10 @@ let rec unoptimized (code: t): unit low_level =
 let unoptimized_program (prog: program): unit low_level =
   let init = unoptimized prog.initialization in
   let proc = Assign_routine (prog.routine, unoptimized prog.procedure) in
+  let comment = Comment prog.label in
   match init with
-  | Lines init_lines ->  Lines (Array.append init_lines [|proc|])
-  | _ -> Lines [|init; proc|]
+  | Lines init_lines ->  Lines (Array.concat [[|comment|]; init_lines; [|proc|]])
+  | _ -> Lines [|comment; init; proc|]
 
 (*
 let skip_arg (_n1: float Codelib.code) (n2: float Codelib.code) = n2

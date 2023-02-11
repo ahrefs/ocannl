@@ -60,7 +60,8 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
     | Assign_routine ({node={id; _}; field=`Forward}, proc) ->
       fprintf ppf "@[<2>(get %d).forward <-@ Some (@[<2>fun () ->@ %a@]@,)@]" id pp_ll proc
     | Assign_routine ({node={id; _}; field=`Backprop}, proc) ->
-      fprintf ppf "@[<2>(get %d).backprop <-@ Some (@[<2>fun () -> %a@]@,)@]" id pp_ll proc in
+      fprintf ppf "@[<2>(get %d).backprop <-@ Some (@[<2>fun () -> %a@]@,)@]" id pp_ll proc
+    | Comment message -> fprintf ppf "(* %s *)()" message in
   fprintf ppf "@[<v>open Base@ open Ocannl_runtime@ open Node@ open Base.Float@ ";
   (match c with
    | Lines toplevel ->
