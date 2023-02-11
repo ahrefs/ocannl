@@ -35,7 +35,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
     │0.134 |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ y_f;
   [%expect {|
-    [5] v1ptheyv2p: shape p:1 layout: 0:1
+    [5] (1+(hey*2)): shape p:1 layout: 0:1
     │p=0
-    ┼────────────────────────────────────
+    ┼─────────────────────────────────────
     │1.267 |}]

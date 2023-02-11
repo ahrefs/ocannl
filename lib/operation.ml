@@ -20,7 +20,7 @@ let add =
     else if needs1 then grad1
     else if needs2 then grad2
     else assert false in
-  Formula.binop ~compose_op:`Pointwise ~op_label:"t" ~op_body ~grad_body
+  Formula.binop ~compose_op:`Pointwise ~op_label:"+" ~op_body ~grad_body
 
 let mul compose_op =
   let open Code in
@@ -37,7 +37,7 @@ let mul compose_op =
     else if needs1 then grad1
     else if needs2 then grad2
     else assert false in
-  Formula.binop ~compose_op ~op_label:"" ~op_body ~grad_body
+  Formula.binop ~compose_op ~op_label:"*" ~op_body ~grad_body
 
 let pointmul = mul `Pointwise
 
@@ -71,7 +71,7 @@ let einsum spec =
     else if needs1 then grad1
     else if needs2 then grad2
     else assert false in
-  Formula.binop ~compose_op:(`Einsum spec) ~op_label:"" ~op_body ~grad_body
+  Formula.binop ~compose_op:(`Einsum spec) ~op_label:";=>" ~op_body ~grad_body
 
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract diagonals,
     compute traces etc.
@@ -86,7 +86,7 @@ let einsum1 spec =
   let grad_body ~n ~n1 projections =
     Accum_unop {zero_out=false; accum=Add; op=Identity; lhs=g n1; rhs=g n;
                 projections=(fun () -> Shape.backprop_unary @@ projections()); precision=Single} in
-  Formula.unop ~transpose_op:(`Permute spec) ~op_label:"" ~op_body ~grad_body
+  Formula.unop ~transpose_op:(`Permute spec) ~op_label:"=>" ~op_body ~grad_body
 
 let relu =
   let open Code in
@@ -100,9 +100,7 @@ let relu =
 let reset_value c ~n field _shape =
   Code.Reset {tensor={node=n; field}; precision=Single; reset_op=`ConstantOfValue c}
 
-let float_to_label v = "v" ^ (
-  Float.to_string v |> String.substr_replace_all ~pattern:"." ~with_:"p"
-  |> String.substr_replace_all ~pattern:"-" ~with_:"m")
+let float_to_label v = Float.to_string_hum ~strip_zero:true v
 
 let number ?(axis_label="") c =
   (* Note: no axis label so that we do not conflict with user labels. *)
@@ -121,7 +119,7 @@ let assign_op field ~n ~n1 projections = assign ~lhs:(field n) ~rhs:(field n1) p
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient =
   let grad_body ~n:_ ~n1:_ _projections = Code.Noop in
-  Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body:(assign_op v) ~grad_body
+  Formula.unop ~transpose_op:`Pointwise ~op_label:"stop_grad" ~op_body:(assign_op v) ~grad_body
 
 (** A [stop_broadcast] mutates the partially-inferred shape of a formula in-place, substituting-in
     a [Fixed] marker on the dimensions. This way we avoid introducing a new node. *)
@@ -136,7 +134,7 @@ let stop_broadcast m =
 (** [identity] introduces a new node, which is an identity in both the forward and backward pass. *)
 let identity m =
   let grad_body ~n ~n1 projections = assign_op g ~n:n1 ~n1:n projections in
-  Formula.(unop ~init_shape:m.shape ~transpose_op:`Pointwise ~op_label:"r"
+  Formula.(unop ~init_shape:m.shape ~transpose_op:`Pointwise ~op_label:"="
              ~op_body:(assign_op v) ~grad_body)
     
 module O = struct
@@ -336,7 +334,7 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
     let m = root.formula in
     if regenerate || Option.is_none root.forward_code || Option.is_none root.backprop_code then (
-      Sequence.iter root.subtree_shape_updates ~f:(fun step -> Shape.propagate_shapes step);
+      Sequence.iter root.subtree_shape_updates ~f:Shape.propagate_shapes;
       let forward_prog, backprop_prog = get_toplevel m in
        root.forward_code <- Some forward_prog;
        root.formula.comp_node.forward <- None;
@@ -424,6 +422,7 @@ module CLI = struct
   let close_session = close_session
   let print_global_root = print_global_root
   let print_node = NodeUI.print_node
+  let max_sublabel_length = Formula.max_sublabel_length
   let print_formula = print_formula
   let print_global_roots = print_global_roots
   let print_decimals_precision = NodeUI.print_decimals_precision

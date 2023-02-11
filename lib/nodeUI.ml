@@ -18,7 +18,7 @@ let node_header n =
   let g_dims_s = dims_to_string @@ dims n.grad in
   let dims_s =
     if String.equal v_dims_s g_dims_s then "dims "^v_dims_s else "dims val "^v_dims_s^" grad "^g_dims_s in
-  (if String.is_empty n.label then " #" else n.label^" #")^Int.to_string n.id^" "^dims_s
+  "#"^Int.to_string n.id^(if String.is_empty n.label then "" else " "^n.label)^" "^dims_s
 
 (** When rendering tensors, outputs this many decimal digits. *)
 let print_decimals_precision = ref 3
