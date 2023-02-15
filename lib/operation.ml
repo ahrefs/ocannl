@@ -109,6 +109,34 @@ let number ?(axis_label="") c =
   Formula.term ~label:(float_to_label c) (Constant {output_dims=[1]; axis_labels=axis_label})
     ~init_body:(reset_value c)
 
+let ndarray ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[]) values =
+  let spec =
+    match label, batch_dims, input_dims with
+    | Some _, [], _ -> Shape.Params {input_dims; output_dims; axis_labels}
+    | None, [], [] -> Constant {output_dims; axis_labels}
+    | None, [], _ -> Transform {input_dims; output_dims; axis_labels}
+    | _, _, [] -> Data {batch_dims; output_dims; axis_labels}
+    | _, _::_, _::_ ->
+      let sh = {Shape.batch=Given batch_dims; input=Given input_dims; output=Given output_dims;
+                deduce_output_from_input=`Not_deduced;
+                axis_labels=(Shape.axis_labels_of_spec axis_labels).labels} in
+      raise @@
+      Shape.Shape_error ("Operation.ndarray: cannot provide both [batch_dims] and [input_dims]", sh, sh) in
+  let label =
+    match label with
+    | Some label -> label
+    | None ->
+      Caml.Format.pp_set_geometry Caml.Format.str_formatter
+        ~max_indent:(!Formula.max_sublabel_length/2) ~margin: !Formula.max_sublabel_length;
+      let (!) = Array.of_list in
+      let dims = Array.concat [!batch_dims; !output_dims; !input_dims] in
+      let ndarr = Ocannl_runtime.Node.create_ndarray Single dims (`FixedConstant values) in
+      let (!) = List.length in
+      NodeUI.pp_tensor_inline ~num_batch_axes: !batch_dims ~num_output_axes: !output_dims
+        ~num_input_axes: !input_dims Caml.Format.str_formatter ndarr;
+      Caml.Format.flush_str_formatter() in
+  Formula.term ~label spec ~init_body:(reset_values values)
+
 let uniform_value ~n field shape: Code.t =
   Code.(Create {tensor={node=n; field}; dims=(fun () -> Shape.to_dims shape);
                 init_op=`StandardUniform})
@@ -418,6 +446,7 @@ module CLI = struct
   let uniform_value = uniform_value
   let term = Formula.term
   let number = number
+  let ndarray = ndarray
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient
   let refresh_session = refresh_session
