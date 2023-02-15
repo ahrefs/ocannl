@@ -155,14 +155,14 @@ let pp_tensor_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?label
     let open_delim =
       if axis < num_batch_axes then "[|"
       else if axis < num_batch_axes + num_output_axes then "["
-      else if axis < num_all_axes - 1 then "("
-      else "" in
+      else if axis = num_batch_axes + num_output_axes then ""
+      else "(" in
     let close_delim =
       if axis < num_batch_axes then "|]"
       else if axis < num_batch_axes + num_output_axes then "]"
-      else if axis < num_all_axes - 1 then ")"
-      else "" in
-    if axis = num_all_axes then printf "%+.*f" !print_decimals_precision (Node.get_as_float arr ind)
+      else if axis = num_batch_axes + num_output_axes then ""
+      else ")" in
+    if axis = num_all_axes then fprintf fmt "%.*f" !print_decimals_precision (Node.get_as_float arr ind)
     else (fprintf fmt "@[<hov 2>%s@," open_delim;
           for i = 0 to dims.(axis) - 1 do
             ind.(axis) <- i; loop (axis + 1);
