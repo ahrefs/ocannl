@@ -71,17 +71,16 @@ let session_error_printer = function
 let () = Caml.Printexc.register_printer session_error_printer
   
 let reset_zeros node field _shape =
-  Code.Reset {tensor={node; field}; precision=Single; reset_op=`ConstantOfValue 0.0}
+  Code.Reset {tensor={node; field}; reset_op=`ConstantOfValue 0.0}
 
 let reset_ones node field _shape =
-  Code.Reset {tensor={node; field}; precision=Single; reset_op=`ConstantOfValue 1.0}
+  Code.Reset {tensor={node; field}; reset_op=`ConstantOfValue 1.0}
 
 let create node field shape =
-  Code.Create {tensor={node; field}; dims=(fun () -> Shape.to_dims shape); init_op=`Unspecified;
-               precision=Single}
+  Code.Create {tensor={node; field}; dims=(fun () -> Shape.to_dims shape); init_op=`Unspecified}
 
 let max_sublabel_length = ref 25
-               
+
 let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t =
   let m1, m2 = if m1arg.node_id <= m2arg.node_id then m1arg, m2arg else m2arg, m1arg in
   (* Note: do not capture m1, m2 in any closure, so they can be GC'd. *)

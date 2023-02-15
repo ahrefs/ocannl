@@ -8,14 +8,14 @@ let v n: Code.data = {node=n; field=`Value}
 let add =
   let open Code in
   let op_body ~n ~n1 ~n2 projections =
-    Accum_binop {zero_out=false; accum=Skip_arg; op=Add; lhs=v n; rhs1=v n1; rhs2=v n2; projections; precision=Single} in
+    Accum_binop {zero_out=false; accum=Skip_arg; op=Add; lhs=v n; rhs1=v n1; rhs2=v n2; projections} in
   let grad_body ~n ~n1 ~n2 ~needs1 ~needs2 projections =
     let grad1 =
       Accum_unop {zero_out=false; accum=Add; op=Identity; lhs=g n1; rhs=g n;
-                  projections=(fun () -> Shape.backprop1 @@ projections()); precision=Single} in
+                  projections=(fun () -> Shape.backprop1 @@ projections())} in
     let grad2 =
       Accum_unop {zero_out=false; accum=Add; op=Identity; lhs=g n2; rhs=g n;
-                  projections=(fun () -> Shape.backprop2 @@ projections()); precision=Single} in
+                  projections=(fun () -> Shape.backprop2 @@ projections())} in
     if needs1 && needs2 then Seq (grad1, grad2)
     else if needs1 then grad1
     else if needs2 then grad2
@@ -25,14 +25,14 @@ let add =
 let mul compose_op =
   let open Code in
   let op_body ~n ~n1 ~n2 projections =
-    Accum_binop {zero_out=false; accum=Skip_arg; op=Mul; lhs=v n; rhs1=v n1; rhs2=v n2; projections; precision=Single} in
+    Accum_binop {zero_out=false; accum=Skip_arg; op=Mul; lhs=v n; rhs1=v n1; rhs2=v n2; projections} in
   let grad_body ~n ~n1 ~n2 ~needs1 ~needs2 projections =
     let grad1 =
       Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n1; rhs1=g n; rhs2=v n2;
-                   projections=(fun () -> Shape.backprop1 @@ projections()); precision=Single} in
+                   projections=(fun () -> Shape.backprop1 @@ projections())} in
     let grad2 =
       Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n2; rhs1=g n; rhs2=v n1;
-                      projections=(fun () -> Shape.backprop2 @@ projections()); precision=Single} in
+                      projections=(fun () -> Shape.backprop2 @@ projections())} in
     if needs1 && needs2 then Seq (grad1, grad2)
     else if needs1 then grad1
     else if needs2 then grad2
@@ -59,14 +59,14 @@ let einsum spec =
   let open Code in
   let op_body ~n ~n1 ~n2 projections =
     Accum_binop {zero_out=true; accum=Add; op=Mul; lhs=v n; rhs1=v n1; rhs2=v n2;
-                 projections; precision=Single} in
+                 projections} in
   let grad_body ~n ~n1 ~n2 ~needs1 ~needs2 projections =
     let grad1 =
       Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n1; rhs1=g n; rhs2=v n2;
-                      projections=(fun () -> Shape.backprop1 @@ projections()); precision=Single} in
+                      projections=(fun () -> Shape.backprop1 @@ projections())} in
     let grad2 =
       Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n2; rhs1=g n; rhs2=v n1;
-                      projections=(fun () -> Shape.backprop2 @@ projections()); precision=Single} in
+                      projections=(fun () -> Shape.backprop2 @@ projections())} in
     if needs1 && needs2 then Seq (grad1, grad2)
     else if needs1 then grad1
     else if needs2 then grad2
@@ -81,24 +81,26 @@ let einsum spec =
 let einsum1 spec =
   let open Code in
   let op_body ~n ~n1 projections =
-    Accum_unop {zero_out=true; accum=Add; op=Identity; lhs=v n; rhs=v n1; projections;
-                precision=Single} in
+    Accum_unop {zero_out=true; accum=Add; op=Identity; lhs=v n; rhs=v n1; projections} in
   let grad_body ~n ~n1 projections =
     Accum_unop {zero_out=false; accum=Add; op=Identity; lhs=g n1; rhs=g n;
-                projections=(fun () -> Shape.backprop_unary @@ projections()); precision=Single} in
+                projections=(fun () -> Shape.backprop_unary @@ projections())} in
   Formula.unop ~transpose_op:(`Permute spec) ~op_label:"=>" ~op_body ~grad_body
 
 let relu =
   let open Code in
   let op_body ~n ~n1 projections =
-    Accum_unop {zero_out=false; accum=Skip_arg; op=Relu; lhs=v n; rhs=v n1; projections; precision=Single} in
+    Accum_unop {zero_out=false; accum=Skip_arg; op=Relu; lhs=v n; rhs=v n1; projections} in
   let grad_body ~n ~n1 projections =
     Accum_binop {zero_out=false; accum=Add; op=Relu_gate; lhs=g n1; rhs1=v n; rhs2=g n;
-                 projections=(fun () -> Shape.backprop_unary @@ projections()); precision=Single} in
+                 projections=(fun () -> Shape.backprop_unary @@ projections())} in
   Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
 let reset_value c ~n field _shape =
-  Code.Reset {tensor={node=n; field}; precision=Single; reset_op=`ConstantOfValue c}
+  Code.Reset {tensor={node=n; field}; reset_op=`ConstantOfValue c}
+
+let reset_values arr ~n field _shape =
+  Code.Reset {tensor={node=n; field}; reset_op=`FixedConstant arr}
 
 let float_to_label v = Float.to_string_hum ~strip_zero:true v
 
@@ -107,12 +109,12 @@ let number ?(axis_label="") c =
   Formula.term ~label:(float_to_label c) (`Constant ([1], axis_label)) ~init_body:(reset_value c)
 
 let uniform_value ~n field shape: Code.t =
-  Code.(Create {tensor={node=n; field}; precision=Single; dims=(fun () -> Shape.to_dims shape);
+  Code.(Create {tensor={node=n; field}; dims=(fun () -> Shape.to_dims shape);
                 init_op=`StandardUniform})
 
 let assign ~lhs ~rhs projections =
   let open Code in
-  Accum_unop {zero_out=false; accum=Skip_arg; op=Identity; lhs; rhs; projections; precision=Single}
+  Accum_unop {zero_out=false; accum=Skip_arg; op=Identity; lhs; rhs; projections}
 
 let assign_op field ~n ~n1 projections = assign ~lhs:(field n) ~rhs:(field n1) projections
 

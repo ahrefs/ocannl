@@ -26,8 +26,8 @@ type 'a t = {
   comp: 'a comp;
   (** The parametric computation. *)
   params: (F.t, F.comparator_witness) Set.t;
-  mutable promote_precision: Code.precision option;
-  (** The precision at which the network's computation should happen, regardless of the precisions
+  (* mutable promote_precision: Ocannl_runtime.Node.precision option; *)
+  (* * The precision at which the network's computation should happen, regardless of the precisions
       of the inputs and results, unless otherwise specified in subnetworks. *)
 }
 
@@ -50,7 +50,7 @@ let apply (type a) (f: (F.t -> a) t) (x: F.t t): a t =
     | Binary f, Placeholder x -> (Unary (fun y -> f (List.hd_exn !x) y): a comp)
     | Binary f, Suspended x -> (Unary (fun y -> f (x ()) y): a comp) in
   let params = Set.union f.params x.params in
-  {comp; params; promote_precision=None}
+  {comp; params}
 
 let compose (type a) (f: (F.t -> a) t) (g: (F.t -> a) t): (F.t -> a) t =
   let comp = 
@@ -58,7 +58,7 @@ let compose (type a) (f: (F.t -> a) t) (g: (F.t -> a) t): (F.t -> a) t =
     | Unary f, Unary g -> (Unary (fun x -> f (g x)): (F.t -> a) comp)
     | Binary f, Binary g -> (Binary (fun x y -> f (g x y) y): (F.t -> a) comp) in
   let params = Set.union f.params g.params in
-  {comp; params; promote_precision=None}
+  {comp; params}
 
 let swap (type a) (f: (F.t -> F.t -> a) t) =
   let comp = 
@@ -81,10 +81,10 @@ let bind_ret (type a) (m: a t) (f: F.t -> a) =
 let return_term x =
   let params =
     if x.F.needs_gradient then Set.singleton (module F) x else Set.empty (module F) in
-  {comp=Nullary x; params; promote_precision=None}
+  {comp=Nullary x; params}
 
 let return c =
-  {comp=c; params=Set.empty (module F); promote_precision=None}
+  {comp=c; params=Set.empty (module F)}
   
 module FO = Operation.O
 
@@ -94,7 +94,7 @@ let residual_compose (type a) (f: (F.t -> a) t) (g: (F.t -> a) t): (F.t -> a) t 
     | Unary f, Unary g -> (Unary FO.(fun x -> let y = g x in f y + y): (F.t -> a) comp)
     | Binary f, Binary g -> (Binary FO.(fun x y -> let z = g x y in f z y + z): (F.t -> a) comp) in
   let params = Set.union f.params g.params in
-  {comp; params; promote_precision=None}
+  {comp; params}
 
 let sum_over_params n ~f = Set.sum (module Operation.Summable) n.params ~f
 

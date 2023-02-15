@@ -31,13 +31,13 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
       fprintf ppf "@[<2>for@ %a = %d@ to %d@ do@ %a@]@ done" pp_symbol i from_ to_ pp_ll body
     | Value_at_node_id id -> fprintf ppf "(get %d).value" id
     | Gradient_at_node_id id -> fprintf ppf "(get %d).grad" id
-    | LLCreate { tensor=Value_at_node_id id; precision=_; dims; init_op } ->
+    | LLCreate { tensor=Value_at_node_id id; dims; init_op } ->
       fprintf ppf "@[<2>(get %d).value <-@ create_array@ %a %a@]" id pp_dims dims pp_print_init_op init_op
-    | LLCreate { tensor=Gradient_at_node_id id; precision=_; dims; init_op } ->
+    | LLCreate { tensor=Gradient_at_node_id id; dims; init_op } ->
       fprintf ppf "@[<2>(get %d).grad <-@ create_array@ %a %a@]" id pp_dims dims pp_print_init_op init_op
-    | LLReset { tensor=Value_at_node_id id; precision=_; reset_op } ->
+    | LLReset { tensor=Value_at_node_id id; reset_op } ->
       fprintf ppf "@[<2>reset_array@ ((get %d).value) %a@]" id pp_print_init_op reset_op
-    | LLReset { tensor=Gradient_at_node_id id; precision=_; reset_op } ->
+    | LLReset { tensor=Gradient_at_node_id id; reset_op } ->
       fprintf ppf "@[<2>reset_array@ ((get %d).grad) %a@]" id pp_print_init_op reset_op
     | Unoptimized_set (Value_at_node_id id, indices, v) ->
       fprintf ppf "@[<2>A.set (get %d).value@ %a@ %a@]" id pp_indices indices pp_ll v

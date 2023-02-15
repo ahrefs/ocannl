@@ -3,11 +3,6 @@ open Base
 
 (** *** High-level representation. *** *)
 
-type precision =
-  | Half
-  | Single
-  | Double
-
 type data = {node: Ocannl_runtime.Node.t; field: [`Value | `Grad]}
 type routine = {node: Ocannl_runtime.Node.t; field: [`Forward | `Backprop]}
 
@@ -47,16 +42,14 @@ type t =
       zero_out: bool;
       accum: binop; op: binop;
       lhs: data; rhs1: data; rhs2: data;
-      projections: unit -> Shape.projections;
-      precision: precision }
+      projections: unit -> Shape.projections }
   | Accum_unop of {
       zero_out: bool;
       accum: binop; op: unop;
       lhs: data; rhs: data;
-      projections: unit -> Shape.projections;
-      precision: precision }
-  | Create of { tensor: data; precision: precision; dims: unit -> int array; init_op: init_op }
-  | Reset of { tensor: data; precision: precision; reset_op: init_op }
+      projections: unit -> Shape.projections }
+  | Create of { tensor: data; dims: unit -> int array; init_op: init_op }
+  | Reset of { tensor: data; reset_op: init_op }
   | Noop
 
 (** Dynamically loading a program executes [initialization] and bounds the [procedure] to [routine]. *)
@@ -75,10 +68,10 @@ type _ low_level =
   | Value_at_node_id: int -> data low_level
   | Gradient_at_node_id: int -> data low_level
   | LLCreate: {
-      tensor: data low_level; precision: precision; dims: int array; init_op: init_op;
+      tensor: data low_level; dims: int array; init_op: init_op;
     } -> unit low_level
   | LLReset: {
-      tensor: data low_level; precision: precision; reset_op: init_op;
+      tensor: data low_level; reset_op: init_op;
     } -> unit low_level
   | Unoptimized_set: data low_level * Shape.symbol array * float low_level -> unit low_level
   | Unoptimized_get: data low_level * Shape.symbol array -> float low_level
@@ -92,7 +85,7 @@ let data_pointer (xhs: data) =
 
 let rec unoptimized (code: t): unit low_level =
   match code with
-  | Accum_binop {zero_out; accum; op; lhs; rhs1; rhs2; projections; precision} ->
+  | Accum_binop {zero_out; accum; op; lhs; rhs1; rhs2; projections} ->
     let projections = projections() in
     let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
     let rhs1_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
@@ -115,10 +108,10 @@ let rec unoptimized (code: t): unit low_level =
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|LLReset {tensor=lhs_ptr; precision; reset_op=`ConstantOfValue 0.0}; for_loops|]
+    then Lines [|LLReset {tensor=lhs_ptr; reset_op=`ConstantOfValue 0.0}; for_loops|]
     else for_loops
 
-  | Accum_unop {zero_out; accum; op; lhs; rhs; projections; precision} ->
+  | Accum_unop {zero_out; accum; op; lhs; rhs; projections} ->
     let projections = projections() in
     let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
     let rhs_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
@@ -137,7 +130,7 @@ let rec unoptimized (code: t): unit low_level =
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|LLReset {tensor=lhs_ptr; precision; reset_op=`ConstantOfValue 0.0}; for_loops|]
+    then Lines [|LLReset {tensor=lhs_ptr; reset_op=`ConstantOfValue 0.0}; for_loops|]
     else for_loops
 
   | Noop -> Lines [||]
@@ -151,10 +144,10 @@ let rec unoptimized (code: t): unit low_level =
      | Lines ls1, _ -> Lines (Array.append ls1 [|ll2|])
      | _ -> Lines [|ll1; ll2|])
 
-  | Create {tensor; precision; dims; init_op} ->
-    LLCreate {tensor=data_pointer tensor; precision; dims=dims(); init_op}
-  | Reset {tensor; precision; reset_op} ->
-    LLReset {tensor=data_pointer tensor; precision; reset_op}
+  | Create {tensor; dims; init_op} ->
+    LLCreate {tensor=data_pointer tensor; dims=dims(); init_op}
+  | Reset {tensor; reset_op} ->
+    LLReset {tensor=data_pointer tensor; reset_op}
 
 let unoptimized_program (prog: program): unit low_level =
   let init = unoptimized prog.initialization in
