@@ -243,12 +243,13 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
 (** The default [needs_gradient] behavior. *)
 let term_needs_gradient (spec: Shape.term_spec) =
   match spec with
-  | `Unknown -> true
-  | `Constant _ -> false
-  | `Data _ -> false
-  | `Params _ -> true
-  | `Unknown_batch_data _ -> false
-  | `Deduced_params _ -> true
+  | Unknown_shape -> true
+  | Data _ -> false
+  | Constant _ -> false
+  | Params _ -> true
+  | Transform _ -> false
+  | Unknown_batch_data _ -> false
+  | Deduced_params _ -> true
 
 (** A terminal: a constant, a parameter, an input of the model. *)
 let term ~label ?needs_gradient (spec: Shape.term_spec) ~init_body : t =

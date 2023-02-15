@@ -106,7 +106,8 @@ let float_to_label v = Float.to_string_hum ~strip_zero:true v
 
 let number ?(axis_label="") c =
   (* Note: no axis label so that we do not conflict with user labels. *)
-  Formula.term ~label:(float_to_label c) (`Constant ([1], axis_label)) ~init_body:(reset_value c)
+  Formula.term ~label:(float_to_label c) (Constant {output_dims=[1]; axis_labels=axis_label})
+    ~init_body:(reset_value c)
 
 let uniform_value ~n field shape: Code.t =
   Code.(Create {tensor={node=n; field}; dims=(fun () -> Shape.to_dims shape);
@@ -144,7 +145,7 @@ module O = struct
   let ( *. ) = pointmul
   let (+) = add
   let (!/) = relu
-  let (!~) label = Formula.term ~label (`Deduced_params `Not_deduced) ~init_body:uniform_value
+  let (!~) label = Formula.term ~label (Deduced_params `Not_deduced) ~init_body:uniform_value
   let (!.) = number
   let (-) m1 m2 = m1 + !.(-1.) * m2
 end

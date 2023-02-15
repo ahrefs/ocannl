@@ -989,51 +989,53 @@ let derive_index iterators projection =
 (** Specification of a terminal [Formula.t]'s shape. The [string] occurrences refer to [axis_labels]
     specs. *)
 type term_spec =
-  [ `Unknown
+  | Unknown_shape
   (** The shape will need to be fully inferred. *)
-  | `Constant of int list * string
-  (** [`Constant (output_dims, labels)]
-      A constant shape has no batch nor input dimensions, only output dimensions. *)
-  | `Data of int list * int list * string
-  (** [`Data (batch_dims, output_dims, labels)]
-      A data shape does not have input dimensions. *)
-  | `Params of int list *  int list * string
-  (** [`Params (input_dims, output_dims, labels)]
-      A parameters shape with fixed dimensionality. Parameters do not have batch dimensions. *)
-  | `Unknown_batch_data of int list * string
-  (** [`Unknown_batch_data (output_dims, labels)]
-      A data shape where the batch dimensions are left up to inference. *)
-  | `Deduced_params of deduce_dims
+  | Constant of {output_dims: int list; axis_labels: string}
+  (** Shape of a constant has no batch nor input dimensions, only output dimensions. *)
+  | Data of {batch_dims: int list; output_dims: int list; axis_labels: string}
+  (** A data shape does not have input dimensions. *)
+  | Params of {input_dims: int list; output_dims: int list; axis_labels: string}
+  (** A parameters shape with fixed dimensionality. Parameters do not have batch dimensions. *)
+  | Transform of {input_dims: int list; output_dims: int list; axis_labels: string}
+  (** A non-differentiable transformation shape. *)
+  | Unknown_batch_data of {output_dims: int list; axis_labels: string}
+  (** A data shape where the batch dimensions are left up to inference. *)
+  | Deduced_params of deduce_dims
     (** Parameters with inferred dimensionality. Use cases:
-        [`Deduced_params `Not_deduced] -- the shape will need to be fully inferred (no batch dims).
-        [`Deduced_params `Preserve] -- a hidden layer preserving the dimensionality.
-        [`Deduced_params (`Scale 2.0)] -- an expansion hidden layer doubling the dimensionality.
-        [`Deduced_params (`Scale 0.5)] -- an bottleneck hidden layer halving the dimensionality.
+        [Deduced_params `Not_deduced] -- the shape will need to be fully inferred (no batch dims).
+        [Deduced_params `Preserve] -- a hidden layer preserving the dimensionality.
+        [Deduced_params (`Scale 2.0)] -- an expansion hidden layer doubling the dimensionality.
+        [Deduced_params (`Scale 0.5)] -- an bottleneck hidden layer halving the dimensionality.
         Note that scalar axes (1D) are not scaled, for compatibility with broadcasting. *)
-  ] [@@deriving compare, sexp]
+[@@deriving compare, sexp]
 
 let of_term_spec : term_spec -> t = function
-  | `Unknown ->
+  | Unknown_shape ->
     { batch=Unknown; input=Unknown; output=Unknown;
       axis_labels=Map.empty (module AxisKey);
       deduce_output_from_input=`Not_deduced }
-  | `Constant (dims, labels_spec) ->
-    { batch=Given []; input=Given []; output=Given dims;
-      axis_labels=(axis_labels_of_spec labels_spec).labels;
+  | Constant {output_dims; axis_labels} ->
+    { batch=Given []; input=Given []; output=Given output_dims;
+      axis_labels=(axis_labels_of_spec axis_labels).labels;
       deduce_output_from_input=`Not_deduced }
-  | `Data (batch_dims, dims, labels_spec) ->
-    { batch=Given batch_dims; input=Given []; output=Given dims;
-      axis_labels=(axis_labels_of_spec labels_spec).labels;
+  | Data {batch_dims; output_dims; axis_labels} ->
+    { batch=Given batch_dims; input=Given []; output=Given output_dims;
+      axis_labels=(axis_labels_of_spec axis_labels).labels;
       deduce_output_from_input=`Not_deduced }
-  | `Params (input_dims, output_dims, labels_spec) ->
+  | Params {input_dims; output_dims; axis_labels} ->
     { batch=Given []; input=Given input_dims; output=Given output_dims;
-      axis_labels=(axis_labels_of_spec labels_spec).labels;
+      axis_labels=(axis_labels_of_spec axis_labels).labels;
       deduce_output_from_input=`Not_deduced }
-  | `Unknown_batch_data (dims, labels_spec) ->
-    { batch=Unknown; input=Given []; output=Given dims;
-      axis_labels=(axis_labels_of_spec labels_spec).labels;
+  | Transform  {input_dims; output_dims; axis_labels} ->
+    { batch=Given []; input=Given input_dims; output=Given output_dims;
+      axis_labels=(axis_labels_of_spec axis_labels).labels;
       deduce_output_from_input=`Not_deduced }
-  | `Deduced_params deduce_output_from_input ->
+  | Unknown_batch_data {output_dims; axis_labels} ->
+    { batch=Unknown; input=Given []; output=Given output_dims;
+      axis_labels=(axis_labels_of_spec axis_labels).labels;
+      deduce_output_from_input=`Not_deduced }
+  | Deduced_params deduce_output_from_input ->
     { batch=Given []; input=Unknown; output=Unknown;
       axis_labels=Map.empty (module AxisKey);
       deduce_output_from_input }
