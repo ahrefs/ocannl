@@ -997,8 +997,8 @@ type term_spec =
   (** A data shape does not have input dimensions. *)
   | Params of {input_dims: int list; output_dims: int list; axis_labels: string}
   (** A parameters shape with fixed dimensionality. Parameters do not have batch dimensions. *)
-  | Transform of {input_dims: int list; output_dims: int list; axis_labels: string}
-  (** A non-differentiable transformation shape. *)
+  | Transform of {batch_dims: int list; input_dims: int list; output_dims: int list; axis_labels: string}
+  (** A non-differentiable transformation(s) shape. *)
   | Unknown_batch_data of {output_dims: int list; axis_labels: string}
   (** A data shape where the batch dimensions are left up to inference. *)
   | Deduced_params of deduce_dims
@@ -1027,8 +1027,8 @@ let of_term_spec : term_spec -> t = function
     { batch=Given []; input=Given input_dims; output=Given output_dims;
       axis_labels=(axis_labels_of_spec axis_labels).labels;
       deduce_output_from_input=`Not_deduced }
-  | Transform  {input_dims; output_dims; axis_labels} ->
-    { batch=Given []; input=Given input_dims; output=Given output_dims;
+  | Transform  {batch_dims; input_dims; output_dims; axis_labels} ->
+    { batch=Given batch_dims; input=Given input_dims; output=Given output_dims;
       axis_labels=(axis_labels_of_spec axis_labels).labels;
       deduce_output_from_input=`Not_deduced }
   | Unknown_batch_data {output_dims; axis_labels} ->

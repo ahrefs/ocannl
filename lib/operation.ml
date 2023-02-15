@@ -114,14 +114,15 @@ let ndarray ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_
     match label, batch_dims, input_dims with
     | Some _, [], _ -> Shape.Params {input_dims; output_dims; axis_labels}
     | None, [], [] -> Constant {output_dims; axis_labels}
-    | None, [], _ -> Transform {input_dims; output_dims; axis_labels}
+    | None, _, _ -> Transform {batch_dims; input_dims; output_dims; axis_labels}
     | _, _, [] -> Data {batch_dims; output_dims; axis_labels}
     | _, _::_, _::_ ->
       let sh = {Shape.batch=Given batch_dims; input=Given input_dims; output=Given output_dims;
                 deduce_output_from_input=`Not_deduced;
                 axis_labels=(Shape.axis_labels_of_spec axis_labels).labels} in
       raise @@
-      Shape.Shape_error ("Operation.ndarray: cannot provide both [batch_dims] and [input_dims]", sh, sh) in
+      Shape.Shape_error ("Operation.ndarray: cannot provide all of [label], [batch_dims] and [input_dims]",
+                         sh, sh) in
   let label =
     match label with
     | Some label -> label
