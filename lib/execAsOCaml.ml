@@ -32,21 +32,21 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
     | Value_at_node_id id -> fprintf ppf "(get %d).value" id
     | Gradient_at_node_id id -> fprintf ppf "(get %d).grad" id
     | LLCreate { tensor=Value_at_node_id id; dims; init_op } ->
-      fprintf ppf "@[<2>(get %d).value <-@ create_array@ %a %a@]" id pp_dims dims pp_print_init_op init_op
+      fprintf ppf "@[<2>(get %d).value <-@ create_ndarray Single@ %a %a@]" id pp_dims dims pp_print_init_op init_op
     | LLCreate { tensor=Gradient_at_node_id id; dims; init_op } ->
-      fprintf ppf "@[<2>(get %d).grad <-@ create_array@ %a %a@]" id pp_dims dims pp_print_init_op init_op
+      fprintf ppf "@[<2>(get %d).grad <-@ create_ndarray Single@ %a %a@]" id pp_dims dims pp_print_init_op init_op
     | LLReset { tensor=Value_at_node_id id; reset_op } ->
-      fprintf ppf "@[<2>reset_array@ ((get %d).value) %a@]" id pp_print_init_op reset_op
+      fprintf ppf "@[<2>reset_ndarray@ %a@ ((get %d).value)@]" pp_print_init_op reset_op id
     | LLReset { tensor=Gradient_at_node_id id; reset_op } ->
-      fprintf ppf "@[<2>reset_array@ ((get %d).grad) %a@]" id pp_print_init_op reset_op
+      fprintf ppf "@[<2>reset_ndarray@ %a@ ((get %d).grad)@]" pp_print_init_op reset_op id
     | Unoptimized_set (Value_at_node_id id, indices, v) ->
-      fprintf ppf "@[<2>A.set (get %d).value@ %a@ %a@]" id pp_indices indices pp_ll v
+      fprintf ppf "@[<2>set_from_float (get %d).value@ %a@ %a@]" id pp_indices indices pp_ll v
     | Unoptimized_set (Gradient_at_node_id id, indices, v) ->
-      fprintf ppf "@[<2>A.set (get %d).grad@ %a@ %a@]" id pp_indices indices pp_ll v
+      fprintf ppf "@[<2>set_from_float (get %d).grad@ %a@ %a@]" id pp_indices indices pp_ll v
     | Unoptimized_get (Value_at_node_id id, indices) ->
-      fprintf ppf "@[<2>A.get (get %d).value@ %a@]" id pp_indices indices
+      fprintf ppf "@[<2>get_as_float (get %d).value@ %a@]" id pp_indices indices
     | Unoptimized_get (Gradient_at_node_id id, indices) ->
-      fprintf ppf "@[<2>A.get (get %d).grad@ %a@]" id pp_indices indices
+      fprintf ppf "@[<2>get_as_float (get %d).grad@ %a@]" id pp_indices indices
     | Unoptimized_binop (Skip_arg, _v1, v2) -> pp_ll ppf v2
     | Unoptimized_binop (Add, v1, v2) -> fprintf ppf "(@[<2>%a +@ %a@]@,)" pp_ll v1 pp_ll v2
     | Unoptimized_binop (Mul, v1, v2) -> fprintf ppf "(@[<2>%a *@ %a@]@,)" pp_ll v1 pp_ll v2

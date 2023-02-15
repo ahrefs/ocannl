@@ -2,6 +2,39 @@
     in the runtime. *)
 open Base
 
+open Ocannl_runtime
+
+let create_of_same_precision_as (node: Node.t) ~label =
+  match node.value, node.grad with
+  | Single_nd _, Single_nd _ -> Node.create ~value_prec:Single ~grad_prec:Single ~label
+  | Single_nd _, Double_nd _ -> Node.create ~value_prec:Single ~grad_prec:Double ~label
+  | Double_nd _, Double_nd _ -> Node.create ~value_prec:Double ~grad_prec:Double ~label
+  | _ -> invalid_arg @@
+  "create_of_same_precision_as: unsupported combination of precisions value: "^
+  Node.ndarray_precision_to_string node.value^", grad: "^
+  Node.ndarray_precision_to_string node.grad
+
+let create_of_promoted_precision (n1: Node.t) (n2: Node.t) ~label =
+  match n1.value, n2.value with
+  | Single_nd _, Single_nd _ ->
+    (match n1.grad, n2.grad with
+     | Single_nd _, Single_nd _ ->
+       Node.create ~value_prec:Single ~grad_prec:Single ~label
+     | Single_nd _, Double_nd _
+     | Double_nd _, Single_nd _
+     | Double_nd _, Double_nd _ -> Node.create ~value_prec:Single ~grad_prec:Double ~label
+     | _ -> invalid_arg @@
+     "create_of_promoted_precision: unsupported combination of precisions n1 grad: "^
+     Node.ndarray_precision_to_string n1.grad^", n2 grad: "^
+     Node.ndarray_precision_to_string n2.grad)
+  | Single_nd _, Double_nd _
+  | Double_nd _, Single_nd _
+  | Double_nd _, Double_nd _ -> Node.create ~value_prec:Double ~grad_prec:Double ~label
+  | _ -> invalid_arg @@
+  "create_of_promoted_precision: unsupported combination of precisions n1 value: "^
+  Node.ndarray_precision_to_string n1.value^", n2 value: "^
+  Node.ndarray_precision_to_string n2.value
+
 (** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
     Outputs ["-"] for empty dimensions. *)
 let dims_to_string ?(with_axis_numbers=false) dims =
@@ -11,11 +44,14 @@ let dims_to_string ?(with_axis_numbers=false) dims =
   else
     String.concat_array ~sep:"x" @@ Array.map dims ~f:Int.to_string
 
+let ndarray_dims_to_string ?(with_axis_numbers=false) arr =
+  Node.(ndarray_precision_to_string arr ^" prec "^dims_to_string ~with_axis_numbers (dims arr))
+
 (** Converts ID, label and the dimensions of a node to a string. *)
 let node_header n =
-  let open Ocannl_runtime.Node in
-  let v_dims_s = dims_to_string @@ dims n.value in
-  let g_dims_s = dims_to_string @@ dims n.grad in
+  let open Node in
+  let v_dims_s = ndarray_dims_to_string n.value in
+  let g_dims_s = ndarray_dims_to_string n.grad in
   let dims_s =
     if String.equal v_dims_s g_dims_s then "dims "^v_dims_s else "dims val "^v_dims_s^" grad "^g_dims_s in
   "#"^Int.to_string n.id^(if String.is_empty n.label then "" else " "^n.label)^" "^dims_s
@@ -35,11 +71,10 @@ let print_decimals_precision = ref 3
     * -5: a sequence of screens of text (i.e. stack numbers of outer rectangles).
     Printing out of axis [-5] is interrupted when a callback called in between each outer rectangle
     returns true. *)
-let render_tensor ?(prefix="") ?(entries_per_axis=4) ?(labels=[||]) ~indices
-    (arr: Ocannl_runtime.Node.data) =
+let render_tensor ?(prefix="") ?(entries_per_axis=4) ?(labels=[||]) ~indices (arr: Node.ndarray) =
   let module B = PrintBox in
-  let open Ocannl_runtime.Node in
-  let dims = A.dims arr in
+  let open Node in
+  let dims = dims arr in
   let header = prefix ^ "layout: "^dims_to_string ~with_axis_numbers:true dims in
   let indices = Array.copy indices in
   let entries_per_axis = if entries_per_axis % 2 = 0 then entries_per_axis + 1 else entries_per_axis in
@@ -73,7 +108,7 @@ let render_tensor ?(prefix="") ?(entries_per_axis=4) ?(labels=[||]) ~indices
   let inner_grid v i j =
     B.init_grid ~bars:false ~line:size3 ~col:size4 (fun ~line ~col ->
         update_indices v i j line col;
-        try B.line @@ Float.to_string_hum ~decimals:!print_decimals_precision (A.get arr indices)
+        try B.line @@ Float.to_string_hum ~decimals:!print_decimals_precision (get_as_float arr indices)
         with Invalid_argument _ as error ->
           Stdio.Out_channel.printf "Invalid indices: %s into array: %s\n%!"
             (dims_to_string indices) (dims_to_string dims);
@@ -98,7 +133,7 @@ let pp_tensor fmt ?prefix ?entries_per_axis ?labels ~indices arr =
   PrintBox_text.pp fmt @@ render_tensor ?prefix ?entries_per_axis ?labels ~indices arr
 
 let print_node ~with_grad ~indices n =
-  let open Ocannl_runtime.Node in
+  let open Node in
   Stdio.print_endline @@ "["^node_header n^"] "^n.label;
   pp_tensor Caml.Format.std_formatter ~indices n.value;
   if with_grad then (
@@ -107,8 +142,7 @@ let print_node ~with_grad ~indices n =
 
 (** Prints the whole tensor in an inline syntax. *)
 let pp_tensor_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?labels_spec arr =
-  let module A = Ocannl_runtime.Node.A in
-  let dims = A.dims arr in
+  let dims = Node.dims arr in
   let num_all_axes = num_batch_axes + num_output_axes + num_input_axes in
   let open Caml.Format in
   let ind = Array.copy dims in
@@ -128,7 +162,7 @@ let pp_tensor_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?label
       else if axis < num_batch_axes + num_output_axes then "]"
       else if axis < num_all_axes - 1 then ")"
       else "" in
-    if axis = num_all_axes then printf "%+.*f" !print_decimals_precision (A.get arr ind)
+    if axis = num_all_axes then printf "%+.*f" !print_decimals_precision (Node.get_as_float arr ind)
     else (fprintf fmt "@[<hov 2>%s@," open_delim;
           for i = 0 to dims.(axis) - 1 do
             ind.(axis) <- i; loop (axis + 1);

@@ -93,7 +93,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let m2_l = m2.comp_node.label in
   let m2_l = if String.length m2_l > !max_sublabel_length then "#"^Int.to_string m2.node_id else m2_l in
   let label = "(" ^ m1_l ^ op_label ^ m2_l ^ ")" in
-  let n = Ocannl_runtime.Node.create ~label in
+  let n = NodeUI.create_of_promoted_precision m1.comp_node m2.comp_node ~label in
   let node_id = n.id in
   let shape = Shape.{ batch=Unknown; input=Unknown; output=Unknown;
                       axis_labels=Map.empty (module AxisKey);
@@ -183,7 +183,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   let m_l = m.comp_node.label in
   let m_l = if String.length m_l > !max_sublabel_length then "#"^Int.to_string m.node_id else m_l in
   let label = op_label ^ "(" ^ m_l ^ ")" in
-  let n = Ocannl_runtime.Node.create ~label in
+  let n = NodeUI.create_of_same_precision_as m.comp_node ~label in
   let node_id = n.id in
 
   let shape =
@@ -253,7 +253,7 @@ let term_needs_gradient (spec: Shape.term_spec) =
 
 (** A terminal: a constant, a parameter, an input of the model. *)
 let term ~label ?needs_gradient (spec: Shape.term_spec) ~init_body : t =
-  let n = Ocannl_runtime.Node.create ~label in
+  let n = Ocannl_runtime.Node.create ~value_prec:Single ~grad_prec:Single ~label in
   let node_id = n.id in
   let shape = Shape.of_term_spec spec in
   let needs_gradient =
