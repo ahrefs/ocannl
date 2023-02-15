@@ -112,14 +112,16 @@ let init_array_of_prec (type val_t arr_t) (prec: (val_t, arr_t) precision) dims
   | Single -> A.init Bigarray.Float32 Bigarray.C_layout dims f
   | Double -> A.init Bigarray.Float64 Bigarray.C_layout dims f
 
+let indices_to_offset ~dims ~idcs =
+  Array.fold2_exn dims idcs ~init:0 ~f:(fun accu dim idx -> accu * dim + idx)
+
 let create_array (type arr_t) 
     (prec: (float, arr_t) precision) dims (init_op: init_op): arr_t =
   match init_op with
   | `Unspecified -> create_array_of_prec prec dims
   | `ConstantOfValue c -> init_array_of_prec prec dims ~f:(fun _ -> c)
   | `FixedConstant cs ->
-    init_array_of_prec prec dims
-      ~f:(fun indcs -> cs.(Array.foldi indcs ~init:0 ~f:(fun d pos i -> dims.(d) * pos + i)))
+    init_array_of_prec prec dims ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs))
   | `StandardUniform ->
     init_array_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
   | `StandardGaussian ->
@@ -135,15 +137,24 @@ let cast_map_as_bigarray {ff} = function
   | Single_nd arr -> ff Fn.id arr
   | Double_nd arr -> ff Fn.id arr
 
+let loop_bigarray arr ~f =
+  let dims = A.dims arr in
+  let rec cloop idx f col =
+    if col = Array.length idx then A.set arr idx (f idx)
+    else for j = 0 to Int.pred dims.(col) do
+           idx.(col) <- j;
+           cloop idx f (Int.succ col)
+         done in
+  let len = Array.length dims in
+  cloop (Array.create ~len 0) f 0
+  
 let reset_bigarray (reset_op: init_op) (type a b) (cast: float -> a) (arr: (a, b, Bigarray.c_layout) A.t) =
-  let _dims = A.dims arr in
+  let dims = A.dims arr in
   match reset_op with
   | `Unspecified -> ()
   | `ConstantOfValue c -> A.fill arr @@ cast c
-  | `FixedConstant _cs ->
-    (* FIXME: *) failwith "NOT IMPLEMENTED YET"
-  | `StandardUniform ->
-    (* FIXME: *) failwith "NOT IMPLEMENTED YET"
+  | `FixedConstant cs -> loop_bigarray arr ~f:(fun idcs -> cast cs.(indices_to_offset ~dims ~idcs))
+  | `StandardUniform -> loop_bigarray arr ~f:(fun _ -> cast @@ Random.float_range 0.0 1.0)
   | `StandardGaussian ->
     (* FIXME: *) failwith "NOT IMPLEMENTED YET"
 
