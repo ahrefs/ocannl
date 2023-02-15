@@ -128,7 +128,7 @@ let ndarray ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_
     | Some label -> label
     | None ->
       Caml.Format.pp_set_geometry Caml.Format.str_formatter
-        ~max_indent:(!Formula.max_sublabel_length/2) ~margin: !Formula.max_sublabel_length;
+        ~max_indent:(!Formula.max_sublabel_length) ~margin:(!Formula.max_sublabel_length*2);
       let (!) = Array.of_list in
       let dims = Array.concat [!batch_dims; !output_dims; !input_dims] in
       let ndarr = Ocannl_runtime.Node.create_ndarray Single dims (`FixedConstant values) in
@@ -136,6 +136,10 @@ let ndarray ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_
       NodeUI.pp_tensor_inline ~num_batch_axes: !batch_dims ~num_output_axes: !output_dims
         ~num_input_axes: !input_dims Caml.Format.str_formatter ndarr;
       Caml.Format.flush_str_formatter() in
+  let label =
+    if String.contains label '\n' then
+      "c"^(NodeUI.dims_to_string @@ Array.concat_map [|batch_dims; output_dims; input_dims|] ~f:Array.of_list)
+    else label in
   Formula.term ~label spec ~init_body:(reset_values values)
 
 let uniform_value ~n field shape: Code.t =
@@ -300,8 +304,10 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
           raise @@ Session_error ("`Label_layout label not found in shape: "^l, Some m)) in
       Shape.axis_map_to_dims_index @@ Map.of_alist_exn (module Shape.AxisKey) idcs
     | `Inline -> [||] in
-  let labels = Shape.axis_map_to_dims_index ~default:"" sh.Shape.axis_labels in
-  let labels_spec = Shape.to_string_hum ~only_labels:true sh in
+  let needs_spec = Fn.non Map.is_empty sh.axis_labels ||
+                   Shape.(List.exists ~f:((=) 1) @@ list_of_dims @@ dims_of_kind Input sh) in
+  let labels = Shape.axis_map_to_dims_index ~default:"" sh.axis_labels in
+  let labels_spec = if needs_spec then Some (Shape.to_string_hum ~only_labels:true sh) else None in
   let num_axes kind = List.length Shape.(list_of_dims @@ dims_of_kind kind sh) in
   let num_batch_axes = num_axes Shape.AxisKey.Batch in
   let num_input_axes = num_axes Shape.AxisKey.Input in
@@ -309,13 +315,13 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
   (match style with
    | `Inline ->
      NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
-       ~labels_spec m.comp_node.value
+       ?labels_spec m.comp_node.value
    | _ -> NodeUI.pp_tensor Caml.Format.std_formatter ~prefix ~labels ~indices m.comp_node.value);
   if with_grad then (
     match style with
     | `Inline ->
       NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
-        ~labels_spec m.comp_node.grad
+        ?labels_spec m.comp_node.grad
     | _ -> NodeUI.pp_tensor Caml.Format.std_formatter ~prefix:(prefix^" Gradient ") ~labels ~indices
              m.comp_node.grad);
   if with_code then (
