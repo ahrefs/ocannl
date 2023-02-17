@@ -7,13 +7,13 @@ let pp_symbol ppf (Shape.Symbol s) = Caml.Format.fprintf ppf "i%d" s
 
 let pp_print_init_op ppf: Code.init_op -> unit = function
   | `Unspecified -> Caml.Format.pp_print_string ppf "`Unspecified"
-  | `ConstantOfValue c ->
-    Caml.Format.fprintf ppf "(`ConstantOfValue %f)" c
-  | `FixedConstant cs ->
-    Caml.Format.(fprintf ppf "(`FixedConstant @[<2>[|%a|]@])"
+  | `Constant_of_value c ->
+    Caml.Format.fprintf ppf "(`Constant_of_value %f)" c
+  | `Fixed_constant cs ->
+    Caml.Format.(fprintf ppf "(`Fixed_constant @[<2>[|%a|]@])"
                    (pp_print_list ~pp_sep:pp_semi pp_print_float) @@ Array.to_list cs)
-  | `StandardUniform -> Caml.Format.pp_print_string ppf "`StandardUniform"
-  | `StandardGaussian -> Caml.Format.pp_print_string ppf "`StandardGaussian"
+  | `Standard_uniform -> Caml.Format.pp_print_string ppf "`Standard_uniform"
+  | `Standard_gaussian -> Caml.Format.pp_print_string ppf "`Standard_gaussian"
 
 let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Code.low_level): unit =
   let open Code in

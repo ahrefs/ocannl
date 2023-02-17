@@ -97,10 +97,11 @@ let relu =
   Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
 let reset_value c ~n field _shape =
-  Code.Reset {tensor={node=n; field}; reset_op=`ConstantOfValue c}
+  Code.Reset {tensor={node=n; field}; reset_op=`Constant_of_value c}
+
 
 let reset_values arr ~n field _shape =
-  Code.Reset {tensor={node=n; field}; reset_op=`FixedConstant arr}
+  Code.Reset {tensor={node=n; field}; reset_op=`Fixed_constant arr}
 
 let float_to_label v = Float.to_string_hum ~strip_zero:true v
 
@@ -131,7 +132,7 @@ let ndarray ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_
         ~max_indent:(!Formula.max_sublabel_length) ~margin:(!Formula.max_sublabel_length*2);
       let (!) = Array.of_list in
       let dims = Array.concat [!batch_dims; !output_dims; !input_dims] in
-      let ndarr = Ocannl_runtime.Node.create_ndarray Single dims (`FixedConstant values) in
+      let ndarr = Ocannl_runtime.Node.create_ndarray Single dims (`Fixed_constant values) in
       let (!) = List.length in
       NodeUI.pp_tensor_inline ~num_batch_axes: !batch_dims ~num_output_axes: !output_dims
         ~num_input_axes: !input_dims Caml.Format.str_formatter ndarr;
@@ -144,7 +145,7 @@ let ndarray ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_
 
 let uniform_value ~n field shape: Code.t =
   Code.(Create {tensor={node=n; field}; dims=(fun () -> Shape.to_dims shape);
-                init_op=`StandardUniform})
+                init_op=`Standard_uniform})
 
 let assign ~lhs ~rhs projections =
   let open Code in

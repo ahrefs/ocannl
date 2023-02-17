@@ -71,10 +71,10 @@ let session_error_printer = function
 let () = Caml.Printexc.register_printer session_error_printer
   
 let reset_zeros node field _shape =
-  Code.Reset {tensor={node; field}; reset_op=`ConstantOfValue 0.0}
+  Code.Reset {tensor={node; field}; reset_op=`Constant_of_value 0.0}
 
 let reset_ones node field _shape =
-  Code.Reset {tensor={node; field}; reset_op=`ConstantOfValue 1.0}
+  Code.Reset {tensor={node; field}; reset_op=`Constant_of_value 1.0}
 
 let create node field shape =
   Code.Create {tensor={node; field}; dims=(fun () -> Shape.to_dims shape); init_op=`Unspecified}
