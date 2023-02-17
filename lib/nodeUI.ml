@@ -77,7 +77,7 @@ let render_tensor ?(prefix="") ?(entries_per_axis=4) ?(labels=[||]) ~indices (ar
   let dims = dims arr in
   if Array.is_empty dims then B.line "<empty or not initialized>"
   else
-    let header = prefix ^ "layout: "^dims_to_string ~with_axis_numbers:true dims in
+    let header = prefix in
     let indices = Array.copy indices in
     let entries_per_axis = if entries_per_axis % 2 = 0 then entries_per_axis + 1 else entries_per_axis in
     let var_indices = Array.filter_mapi indices ~f:(fun i d -> if d <= -1 then Some (5 + d, i) else None) in

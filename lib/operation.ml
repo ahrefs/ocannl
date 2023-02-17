@@ -248,7 +248,9 @@ type array_print_style =
 let print_formula ~with_grad ~with_code (style: array_print_style) m =
   let open Formula in
   let sh = m.shape in
-  let prefix = "["^Int.to_string m.node_id^"] "^m.comp_node.label^": shape "^ Shape.to_string_hum sh^" " in
+  let prefix =
+    "["^Int.to_string m.node_id^"] "^m.comp_node.label^": shape "^
+    Shape.to_string_hum ~style:`Axis_number_and_size sh^" " in
   let indices =
     match style with
     | `Default ->
@@ -295,7 +297,7 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
   let needs_spec = Fn.non Map.is_empty sh.axis_labels ||
                    Shape.(List.exists ~f:((=) 1) @@ list_of_dims @@ dims_of_kind Input sh) in
   let labels = Shape.axis_map_to_dims_index ~default:"" sh.axis_labels in
-  let labels_spec = if needs_spec then Some (Shape.to_string_hum ~only_labels:true sh) else None in
+  let labels_spec = if needs_spec then Some (Shape.to_string_hum ~style:`Only_labels sh) else None in
   let num_axes kind = List.length Shape.(list_of_dims @@ dims_of_kind kind sh) in
   let num_batch_axes = num_axes Shape.AxisKey.Batch in
   let num_input_axes = num_axes Shape.AxisKey.Input in

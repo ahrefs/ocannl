@@ -1040,15 +1040,25 @@ let of_term_spec : term_spec -> t = function
       axis_labels=Map.empty (module AxisKey);
       deduce_output_from_input }
 
-let to_string_hum ?(only_labels=false) sh =
+let to_string_hum ?(style=`Axis_size) sh =
+  let n_outputs = List.length @@ list_of_dims @@ dims_of_kind Output sh in
+  let n_batch = List.length @@ list_of_dims @@ dims_of_kind Batch sh in
   let dims_to_string kind =
     let dims = list_of_dims @@ dims_of_kind kind sh in
     let n_dims = List.length dims in
     String.concat ~sep:"," @@ List.mapi dims ~f:(fun i d ->
         let key = AxisKey.{in_axes=kind; from_end=n_dims - i} in
-        match Map.find sh.axis_labels key with
-          |  None -> if only_labels then "_" else Int.to_string d
-          | Some l -> if only_labels then l else l^":"^Int.to_string d) in
+        let num = match kind with
+        | Input -> n_batch + n_outputs + i
+        | Output -> n_batch + i
+        | Batch -> i in
+        match style, Map.find sh.axis_labels key with
+        | `Only_labels, None -> "_" 
+        | `Axis_size, None -> Int.to_string d
+        | `Axis_number_and_size, None -> Int.to_string num^":"^Int.to_string d
+        | `Only_labels, Some l -> l
+        | `Axis_size, Some l -> l ^":"^ Int.to_string d
+        | `Axis_number_and_size, Some l -> l^"="^Int.to_string num^":"^Int.to_string d) in
   let batch_dims = dims_to_string Batch in
   let input_dims = dims_to_string Input in
   let output_dims = dims_to_string Output in
