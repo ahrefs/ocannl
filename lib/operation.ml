@@ -115,7 +115,16 @@ let number ?(axis_label="") c =
 let range ?(axis_label="") upto =
   Formula.term ~label:("0"^"..."^Int.to_string upto)
    (Constant {output_dims=[upto + 1]; axis_labels=axis_label}) ~init_body:reset_range
-    
+
+let range_of_shape ?(axis_labels="") ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[]) () =
+  let spec =
+    match batch_dims, input_dims with
+    | [], [] -> Shape.Constant {output_dims; axis_labels}
+    | _, [] -> Data {batch_dims; output_dims; axis_labels}
+    | _, _ -> Transform {batch_dims; input_dims; output_dims; axis_labels} in
+  let dims = Array.concat_map [|batch_dims; output_dims; input_dims|] ~f:Array.of_list in
+  Formula.term ~label:("r"^NodeUI.dims_to_string dims) spec ~init_body:reset_range
+
 let ndarray ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[]) values =
   let spec =
     match label, batch_dims, input_dims with
@@ -451,6 +460,7 @@ module CLI = struct
   let term = Formula.term
   let number = number
   let range = range
+  let range_of_shape = range_of_shape
   let ndarray = ndarray
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient

@@ -348,9 +348,23 @@ let%expect_test "Big matrix" =
     let zero_to_twenty = range 20 in
     let y = FO.(zero_to_twenty * hey + zero_to_twenty) in
     refresh_session ();
+    print_formula ~with_code:false ~with_grad:false `Inline zero_to_twenty;
+    [%expect {| |}];
     print_formula ~with_code:false ~with_grad:false `Default zero_to_twenty;
     [%expect {| |}];
     print_formula ~with_code:false ~with_grad:false `Default hey;
     [%expect {| |}];
     print_formula ~with_code:false ~with_grad:false `Default y;
+    [%expect {| |}]
+
+let%expect_test "Vary big tensor" =
+    Operation.drop_session();
+    Random.init 0;
+    (* Hey is inferred to be a matrix. *)
+    let open Operation.CLI in
+    let hey = range_of_shape ~batch_dims:[17] ~input_dims:[19; 20; 21] ~output_dims:[23; 24] () in
+    refresh_session ();
+    (* print_formula ~with_code:false ~with_grad:false `Inline hey;
+    [%expect {| |}]; *)
+    print_formula ~with_code:false ~with_grad:false `Default hey;
     [%expect {| |}]
