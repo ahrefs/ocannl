@@ -58,7 +58,7 @@ let node_header n =
 
 (** When rendering tensors, outputs this many decimal digits. *)
 let print_decimals_precision = ref 3
-  
+
 (** Prints 0-based [indices] entries out of [arr], where a number between [-5] and [-1] in an axis means
     to print out the axis, and a non-negative number means to print out only the indexed dimension of the axis.
     Prints up to [entries_per_axis] or [entries_per_axis+1] entries per axis, possibly with ellipsis
@@ -75,59 +75,66 @@ let render_tensor ?(prefix="") ?(entries_per_axis=4) ?(labels=[||]) ~indices (ar
   let module B = PrintBox in
   let open Node in
   let dims = dims arr in
-  let header = prefix ^ "layout: "^dims_to_string ~with_axis_numbers:true dims in
-  let indices = Array.copy indices in
-  let entries_per_axis = if entries_per_axis % 2 = 0 then entries_per_axis + 1 else entries_per_axis in
-  let var_indices = Array.filter_mapi indices ~f:(fun i d -> if d <= -1 then Some (5 + d, i) else None) in
-  let var_indices = Array.append (Array.create ~len:(5 - Array.length var_indices) (-1, -1)) var_indices in
-  Array.sort ~compare:(fun (a,_) (b,_) -> Int.compare a b) var_indices;
-  let var_indices = Array.map ~f:snd @@ var_indices in
-  let ind0, ind1, ind2, ind3, ind4 =
-    match var_indices with 
-    | [|ind0; ind1; ind2; ind3; ind4|] -> ind0, ind1, ind3, ind2, ind4
-    | _ -> invalid_arg "NodeUI.render: indices should contain at most 5 negative numbers" in
-  let labels = Array.map labels ~f:(fun l -> if String.is_empty l then "_=" else l^"=") in
-  let size0 = if ind0 = -1 then 1 else min dims.(ind0) entries_per_axis in
-  let size1 = if ind1 = -1 then 1 else min dims.(ind1) entries_per_axis in
-  let size2 = if ind2 = -1 then 1 else min dims.(ind2) entries_per_axis in
-  let size3 = if ind3 = -1 then 1 else min dims.(ind3) entries_per_axis in
-  let size4 = if ind4 = -1 then 1 else min dims.(ind4) entries_per_axis in
-  let no_label ind = Array.length labels <= ind in
-  let label0 = if ind0 = -1 || no_label ind0 then "_=" else labels.(ind0) in
-  let label1 = if ind1 = -1 || no_label ind1 then "_=" else labels.(ind1) in
-  let label2 = if ind2 = -1 || no_label ind2 then "_=" else labels.(ind2) in
-  let label3 = if ind3 = -1 || no_label ind3 then "_=" else labels.(ind3) in
-  let label4 = if ind4 = -1 || no_label ind4 then "_=" else labels.(ind4) in
-  (* FIXME: handle ellipsis. *)
-  let update_indices v i j k l =
-    if ind0 <> -1 then indices.(ind0) <- v;
-    if ind1 <> -1 then indices.(ind1) <- i;
-    if ind2 <> -1 then indices.(ind2) <- j;
-    if ind3 <> -1 then indices.(ind3) <- k;
-    if ind4 <> -1 then indices.(ind4) <- l in
-  let inner_grid v i j =
-    B.init_grid ~bars:false ~line:size3 ~col:size4 (fun ~line ~col ->
-        update_indices v i j line col;
-        try B.line @@ Float.to_string_hum ~decimals:!print_decimals_precision (get_as_float arr indices)
-        with Invalid_argument _ as error ->
-          Stdio.Out_channel.printf "Invalid indices: %s into array: %s\n%!"
-            (dims_to_string indices) (dims_to_string dims);
-          raise error) in
-  let tag ?pos label ind =
-    if ind = -1 then ""
-    else match pos with
-      | Some pos when pos >= 0 -> Int.to_string pos^"@"^label^Int.to_string ind
-      | _ -> label^Int.to_string ind in
-  let outer_grid v =
-    B.init_grid ~bars:true ~line:(size1+1) ~col:(size2+1) (fun ~line ~col ->
-      if line = 0 && col = 0 then B.lines @@ List.filter ~f:(Fn.non String.is_empty) @@ [tag ~pos:v label0 ind0]
-      else if line = 0 then
-        B.lines @@ List.filter ~f:(Fn.non String.is_empty) @@ [tag ~pos:(col-1) label2 ind2; tag label4 ind4]
-      else if col = 0 then
-        B.lines @@ List.filter ~f:(Fn.non String.is_empty) @@ [tag ~pos:(line-1) label1 ind1; tag label3 ind3]
-      else inner_grid v (line-1) (col-1)) in
-  let screens = B.init_grid ~bars:true ~line:1 ~col:size0 (fun ~line:_ ~col -> outer_grid col) in
-  B.vlist ~bars:false [B.line header; screens]
+  if Array.is_empty dims then B.line "<empty or not initialized>"
+  else
+    let header = prefix ^ "layout: "^dims_to_string ~with_axis_numbers:true dims in
+    let indices = Array.copy indices in
+    let entries_per_axis = if entries_per_axis % 2 = 0 then entries_per_axis + 1 else entries_per_axis in
+    let var_indices = Array.filter_mapi indices ~f:(fun i d -> if d <= -1 then Some (5 + d, i) else None) in
+    let extra_indices =
+      [|0, -1; 1, -1; 2, -1; 3, -1; 4, -1|] |>
+      Array.filter ~f:(Fn.non @@ Array.mem var_indices ~equal:(fun (a,_) (b,_) -> Int.equal a b)) in
+    let var_indices = Array.append extra_indices var_indices in
+    Array.sort ~compare:(fun (a,_) (b,_) -> Int.compare a b) var_indices;
+    let var_indices = Array.map ~f:snd @@ var_indices in
+    let ind0, ind1, ind2, ind3, ind4 =
+      match var_indices with
+      | [|ind0; ind1; ind2; ind3; ind4|] -> ind0, ind1, ind2, ind3, ind4
+      | _ -> invalid_arg "NodeUI.render: indices should contain at most 5 negative numbers" in
+    let labels = Array.map labels ~f:(fun l -> if String.is_empty l then "" else l^"=") in
+    let size0 = if ind0 = -1 then 1 else min dims.(ind0) entries_per_axis in
+    let size1 = if ind1 = -1 then 1 else min dims.(ind1) entries_per_axis in
+    let size2 = if ind2 = -1 then 1 else min dims.(ind2) entries_per_axis in
+    let size3 = if ind3 = -1 then 1 else min dims.(ind3) entries_per_axis in
+    let size4 = if ind4 = -1 then 1 else min dims.(ind4) entries_per_axis in
+    let no_label ind = Array.length labels <= ind in
+    let label0 = if ind0 = -1 || no_label ind0 then "" else labels.(ind0) in
+    let label1 = if ind1 = -1 || no_label ind1 then "" else labels.(ind1) in
+    let label2 = if ind2 = -1 || no_label ind2 then "" else labels.(ind2) in
+    let label3 = if ind3 = -1 || no_label ind3 then "" else labels.(ind3) in
+    let label4 = if ind4 = -1 || no_label ind4 then "" else labels.(ind4) in
+    (* FIXME: handle ellipsis. *)
+    let update_indices v i j k l =
+      if ind0 <> -1 then indices.(ind0) <- v;
+      if ind1 <> -1 then indices.(ind1) <- i;
+      if ind2 <> -1 then indices.(ind2) <- j;
+      if ind3 <> -1 then indices.(ind3) <- k;
+      if ind4 <> -1 then indices.(ind4) <- l in
+    let inner_grid v i j =
+      B.init_grid ~bars:false ~line:size3 ~col:size4 (fun ~line ~col ->
+          update_indices v i j line col;
+          try B.hpad 1 @@ B.line @@
+            Float.to_string_hum ~decimals:!print_decimals_precision (get_as_float arr indices)
+          with Invalid_argument _ as error ->
+            Stdio.Out_channel.printf "Invalid indices: %s into array: %s\n%!"
+              (dims_to_string indices) (dims_to_string dims);
+            raise error) in
+    let tag ?pos label ind =
+      if ind = -1 then ""
+      else match pos with
+        | Some pos when pos >= 0 -> Int.to_string pos^" @ "^label^Int.to_string ind
+        | _ -> "axis "^label^Int.to_string ind in
+    let outer_grid v =
+      B.frame @@
+      B.init_grid ~bars:true ~line:(size1+1) ~col:(size2+1) (fun ~line ~col ->
+          if line = 0 && col = 0 then B.lines @@ List.filter ~f:(Fn.non String.is_empty) @@ [tag ~pos:v label0 ind0]
+          else if line = 0 then
+            B.lines @@ List.filter ~f:(Fn.non String.is_empty) @@ [tag ~pos:(col-1) label2 ind2; tag label4 ind4]
+          else if col = 0 then
+            B.lines @@ List.filter ~f:(Fn.non String.is_empty) @@ [tag ~pos:(line-1) label1 ind1; tag label3 ind3]
+          else inner_grid v (line-1) (col-1)) in
+    let screens = B.init_grid ~bars:true ~line:size0 ~col:1 (fun ~line ~col:_ -> outer_grid line) in
+    B.frame @@ B.vlist ~bars:false [B.text header; screens]
 
 let pp_tensor fmt ?prefix ?entries_per_axis ?labels ~indices arr =
   PrintBox_text.pp fmt @@ render_tensor ?prefix ?entries_per_axis ?labels ~indices arr
