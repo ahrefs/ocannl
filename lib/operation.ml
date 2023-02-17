@@ -99,6 +99,8 @@ let relu =
 let reset_value c ~n field _shape =
   Code.Reset {tensor={node=n; field}; reset_op=`Constant_of_value c}
 
+let reset_range ~n field _shape =
+  Code.Reset {tensor={node=n; field}; reset_op=`Range_over_offsets}
 
 let reset_values arr ~n field _shape =
   Code.Reset {tensor={node=n; field}; reset_op=`Fixed_constant arr}
@@ -110,6 +112,10 @@ let number ?(axis_label="") c =
   Formula.term ~label:(float_to_label c) (Constant {output_dims=[1]; axis_labels=axis_label})
     ~init_body:(reset_value c)
 
+let range ?(axis_label="") upto =
+  Formula.term ~label:("0"^"..."^Int.to_string upto)
+   (Constant {output_dims=[upto + 1]; axis_labels=axis_label}) ~init_body:reset_range
+    
 let ndarray ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[]) values =
   let spec =
     match label, batch_dims, input_dims with
@@ -444,6 +450,7 @@ module CLI = struct
   let uniform_value = uniform_value
   let term = Formula.term
   let number = number
+  let range = range
   let ndarray = ndarray
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient

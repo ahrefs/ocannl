@@ -338,3 +338,19 @@ let%expect_test "Matrix multiplication dims 2x3" =
     │││ 6.603  5.804  7.762 │                                    │
     │└┴─────────────────────┘                                    │
     └────────────────────────────────────────────────────────────┘ |}]
+
+let%expect_test "Big matrix" =
+    Operation.drop_session();
+    Random.init 0;
+    (* Hey is inferred to be a matrix. *)
+    let open Operation.CLI in
+    let hey = FO.(!~ "hey") in
+    let zero_to_twenty = range 20 in
+    let y = FO.(zero_to_twenty * hey + zero_to_twenty) in
+    refresh_session ();
+    print_formula ~with_code:false ~with_grad:false `Default zero_to_twenty;
+    [%expect {| |}];
+    print_formula ~with_code:false ~with_grad:false `Default hey;
+    [%expect {| |}];
+    print_formula ~with_code:false ~with_grad:false `Default y;
+    [%expect {| |}]

@@ -12,6 +12,9 @@ let pp_print_init_op ppf: Code.init_op -> unit = function
   | `Fixed_constant cs ->
     Caml.Format.(fprintf ppf "(`Fixed_constant @[<2>[|%a|]@])"
                    (pp_print_list ~pp_sep:pp_semi pp_print_float) @@ Array.to_list cs)
+  | `Range_over_axis_from_end d ->
+    Caml.Format.(fprintf ppf "(`Range_over_axis_from_end %d)" d)
+  | `Range_over_offsets -> Caml.Format.(fprintf ppf "`Range_over_offsets")
   | `Standard_uniform -> Caml.Format.pp_print_string ppf "`Standard_uniform"
   | `Standard_gaussian -> Caml.Format.pp_print_string ppf "`Standard_gaussian"
 

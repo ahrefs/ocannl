@@ -24,6 +24,11 @@ type init_op =
   (** Puts the value in all cells. *)
   | `Fixed_constant of float array
   (** Fills in the numbers where the rightmost axis is contiguous. *)
+  | `Range_over_axis_from_end of int
+  (** Fills in the index number of the specified axis counting from end.
+      [`Range_over_axis_from_end 1] is the range over the last axis. *)
+  | `Range_over_offsets
+  (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
   | `Standard_uniform
   (** Draws the values from U(0,1). *)
   | `Standard_gaussian
