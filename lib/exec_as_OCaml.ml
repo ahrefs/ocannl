@@ -58,10 +58,10 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
     | Unoptimized_unop (Identity, v) -> pp_ll ppf v
     | Unoptimized_unop (Relu, v) ->
       fprintf ppf "(@[<2>let a = %a in@ if a > 0.0 then a else 0.0@]@,)" pp_ll v
-    | Assign_routine ({node={id; _}; field=`Forward}, proc) ->
-      fprintf ppf "@[<2>(get %d).forward <-@ Some (@[<2>fun () ->@ %a@]@,)@]" id pp_ll proc
-    | Assign_routine ({node={id; _}; field=`Backprop}, proc) ->
-      fprintf ppf "@[<2>(get %d).backprop <-@ Some (@[<2>fun () -> %a@]@,)@]" id pp_ll proc
+    | Assign_routine ({node_id; field=`Forward}, proc) ->
+      fprintf ppf "@[<2>(get %d).forward <-@ Some (@[<2>fun () ->@ %a@]@,)@]" node_id pp_ll proc
+    | Assign_routine ({node_id; field=`Backprop}, proc) ->
+      fprintf ppf "@[<2>(get %d).backprop <-@ Some (@[<2>fun () -> %a@]@,)@]" node_id pp_ll proc
     | Comment message -> fprintf ppf "(* %s *)()" message in
   fprintf ppf "@[<v>open Base@ open Ocannl_runtime@ open Node@ open Base.Float@ ";
   (match c with
@@ -179,7 +179,7 @@ let handle_error prefix ?formula ?extra_error_msg ~contents exc =
 
 let load_native ?(with_debug=true) (prog: Code.program) =
   let compiled = emit prog in
-  if not Dynlink.is_native then invalid_arg "ExecAsOCaml.load_forward: only works in native code";
+  if not Dynlink.is_native then invalid_arg "Exec_as_OCaml.load_forward: only works in native code";
   let source_fname = create_comp_unit compiled in
   Exn.protect ~finally:(fun () -> safe_remove source_fname)
     ~f:(fun () ->
@@ -192,23 +192,32 @@ let load_native ?(with_debug=true) (prog: Code.program) =
           try
             let plugin_fname, log_fname, exitc = compile_source ~with_debug source_fname in
             let exec_logs = Stdio.In_channel.read_all log_fname in
-            if exitc <> 0 then handle_error "Compilation error:\n" ~contents (Failure exec_logs)
+            if exitc <> 0 then
+              let msg = handle_error "Compilation error:\n" ~contents (Failure exec_logs) in
+              raise @@ Formula.Session_error (msg, None)
             else
               Exn.protect ~finally:(fun () -> safe_remove plugin_fname; safe_remove log_fname)
                 ~f:(fun () ->
                   try Dynlink.loadfile_private plugin_fname; Some contents
                   with 
                   | Dynlink.Error (Library's_module_initializers_failed exc) ->
-                    handle_error "Runtime init error:\n" ~extra_error_msg:exec_logs ~contents exc
+                    let msg =
+                      handle_error "Runtime init error:\n" ~extra_error_msg:exec_logs ~contents exc in
+                    raise @@ Formula.Session_error (msg, None)
                   | exc ->
-                    handle_error "Compilation or unknown runtime error:\n" ~extra_error_msg:exec_logs
-                      ~contents exc)
-          with 
+                    let msg = handle_error "Compilation or unknown runtime error:\n"
+                        ~extra_error_msg:exec_logs ~contents exc in
+                    raise @@ Formula.Session_error (msg, None))
+          with
           | Formula.Session_error _ as exc -> raise exc
-          | exc -> handle_error "Compile-time error:\n" ~contents exc
+          | exc ->
+            let msg = handle_error "Compile-time error:\n" ~contents exc in
+            raise @@ Formula.Session_error (msg, None)
         else (
           let plugin_fname, log_fname, exitc = compile_source ~with_debug source_fname in
           let exec_logs = Stdio.In_channel.read_all log_fname in
-          if exitc <> 0 then handle_error "ExecAsOCaml.load_native: "
-             ~contents:"<pass ~with_debug:true for debugging information>" (Failure exec_logs)
+          if exitc <> 0 then
+            let msg = handle_error "Exec_as_OCaml.load_native: "
+             ~contents:"<pass ~with_debug:true for debugging information>" (Failure exec_logs) in
+            raise @@ Formula.Session_error (msg, None)
           else Dynlink.loadfile_private plugin_fname; None))
