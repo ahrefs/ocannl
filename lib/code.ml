@@ -187,6 +187,51 @@ let value (v: float) = Lifts.Lift_float.lift v
 
 let uniform ~low ~high = [%c Random.float_range low high ]
 *)
+let interpret_llc ?(with_debug=true) llc =
+  let lookup env indices =
+    Array.map indices ~f:(Map.find_exn env) in
+  let open Ocannl_runtime.Node in
+  let rec loop_proc env llc: unit =
+    let loop = loop_proc env in
+    match llc with
+    | Lines body -> Array.iter ~f:loop body
+    | For_loop {index=key; from_; to_; body} ->
+      for data = from_ to to_ do
+        loop_proc (Map.add_exn ~key ~data env) body
+      done
+    | LLCreate { tensor=Value_at_node_id id; dims; init_op } ->
+      (get id).value <- create_ndarray Single dims init_op
+    | LLCreate { tensor=Gradient_at_node_id id; dims; init_op } ->
+      (get id).grad <- create_ndarray Single dims init_op
+    | LLReset { tensor=Value_at_node_id id; reset_op } ->
+      reset_ndarray reset_op ((get id).value)
+    | LLReset { tensor=Gradient_at_node_id id; reset_op } ->
+      reset_ndarray reset_op ((get id).grad)
+    | Unoptimized_set (Value_at_node_id id, indices, llv) ->
+      set_from_float (get id).value (lookup env indices) @@ loop_float env llv
+    | Unoptimized_set (Gradient_at_node_id id, indices, llv) ->
+      set_from_float (get id).grad (lookup env indices) @@ loop_float env llv
+    | Assign_routine ({node_id; field=`Forward}, proc) ->
+      (get node_id).forward <- Some (fun () -> loop proc)
+    | Assign_routine ({node_id; field=`Backprop}, proc) ->
+      (get node_id).backprop <- Some (fun () -> loop proc)
+    | Comment message when with_debug -> Stdio.printf "%s\n%!" message
+    | Comment _ -> ()
+    and loop_float env llv =
+    let open Float in
+    let loop = loop_float env in
+    match llv with
+    | Unoptimized_get (Value_at_node_id id, indices) ->
+      get_as_float (get id).value @@ lookup env indices
+    | Unoptimized_get (Gradient_at_node_id id, indices) ->
+      get_as_float (get id).grad @@ lookup env indices
+    | Unoptimized_binop (Skip_arg, _llv1, llv2) -> loop llv2
+    | Unoptimized_binop (Add, llv1, llv2) -> loop llv1 + loop llv2
+    | Unoptimized_binop (Mul, llv1, llv2) -> loop llv1 * loop llv2
+    | Unoptimized_binop (Relu_gate, llv1, llv2) -> if loop llv1 > 0.0 then loop llv2 else 0.0
+    | Unoptimized_unop (Identity, llv) -> loop llv
+    | Unoptimized_unop (Relu, llv) -> let v = loop llv in if v > 0.0 then v else 0.0 in
+  loop_proc (Map.empty (module Shape.Symbol)) llc
 
 let fprint_code ppf c =
   (* TODO: something nicely concise. *)
@@ -195,3 +240,22 @@ let fprint_code ppf c =
 let fprint_program ppf prog =
   (* TODO: something nicely concise. *)
   Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_program prog  
+
+let interpret_program ?(with_debug=true) prog: string option =
+  let llc = unoptimized_program prog in
+  let () = interpret_llc ~with_debug llc in
+  (* If we were interpreting bytecode, we would return the bytecode for debugging purposes. *)
+  (* Some (Sexp.to_string_hum @@ sexp_of_low_level llc) *)
+  Some (Caml.Format.asprintf "%a" fprint_program prog)
+
+let interpreter_error_message prefix ?extra_error_msg ~contents exc =
+  let backtrace = Caml.Printexc.get_backtrace() in
+  let exc_str = Caml.Printexc.to_string exc in
+  let message =
+    Buffer.create (String.length contents + String.length backtrace + String.length exc_str) in
+  let msg = Buffer.add_string message in
+  msg prefix; msg exc_str; msg "\n"; msg backtrace;
+  (match extra_error_msg with None -> () | Some extra ->
+    msg "\nIn the context of:\n"; msg extra);
+  msg contents;
+  Buffer.contents message

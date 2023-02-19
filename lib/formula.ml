@@ -69,9 +69,11 @@ let session_error_printer = function
   | _ -> None
 
 let () = Caml.Printexc.register_printer session_error_printer
-  
-let reset_zeros node field _shape =
-  Code.Reset {tensor={node; field}; reset_op=`Constant_of_value 0.0}
+
+let handle_error ?formula message =
+  let exc = Session_error (message, formula) in
+  Stdio.prerr_endline @@ Option.value_exn (session_error_printer exc);
+  raise exc
 
 let reset_zeros ~node_id field _shape =
   Code.Reset {tensor={node_id; field}; reset_op=`Constant_of_value 0.0}

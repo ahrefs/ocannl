@@ -155,7 +155,7 @@ let first_file_span ~contents ~message =
 let error_closing_delimiter = " #$}\027[0m "
 let error_opening_delimiter =" \027[1;31m{$# "
 
-let handle_error prefix ?formula ?extra_error_msg ~contents exc =
+let error_message prefix ?extra_error_msg ~contents exc =
   let backtrace = Caml.Printexc.get_backtrace() in
   let exc_str = Caml.Printexc.to_string exc in
   let message =
@@ -172,10 +172,7 @@ let handle_error prefix ?formula ?extra_error_msg ~contents exc =
   msg @@ String.sub contents ~pos:from_pos ~len:(to_pos - from_pos);
   msg error_closing_delimiter;
   msg @@ String.sub contents ~pos:to_pos ~len:(String.length contents - to_pos);
-  let exc = Formula.Session_error (Buffer.contents message, formula) in
-  Buffer.clear message;
-  Stdio.prerr_endline @@ Option.value_exn (Formula.session_error_printer exc);
-  raise exc
+  Buffer.contents message
 
 let load_native ?(with_debug=true) (prog: Code.program) =
   let compiled = emit prog in
@@ -193,31 +190,27 @@ let load_native ?(with_debug=true) (prog: Code.program) =
             let plugin_fname, log_fname, exitc = compile_source ~with_debug source_fname in
             let exec_logs = Stdio.In_channel.read_all log_fname in
             if exitc <> 0 then
-              let msg = handle_error "Compilation error:\n" ~contents (Failure exec_logs) in
-              raise @@ Formula.Session_error (msg, None)
+              Formula.handle_error @@ error_message "Compilation error:\n" ~contents
+                (Failure exec_logs)
             else
               Exn.protect ~finally:(fun () -> safe_remove plugin_fname; safe_remove log_fname)
                 ~f:(fun () ->
                   try Dynlink.loadfile_private plugin_fname; Some contents
                   with 
                   | Dynlink.Error (Library's_module_initializers_failed exc) ->
-                    let msg =
-                      handle_error "Runtime init error:\n" ~extra_error_msg:exec_logs ~contents exc in
-                    raise @@ Formula.Session_error (msg, None)
+                    Formula.handle_error @@ error_message "Runtime init error:\n"
+                      ~extra_error_msg:exec_logs ~contents exc
                   | exc ->
-                    let msg = handle_error "Compilation or unknown runtime error:\n"
-                        ~extra_error_msg:exec_logs ~contents exc in
-                    raise @@ Formula.Session_error (msg, None))
+                    Formula.handle_error @@ error_message "Compilation or unknown runtime error:\n"
+                        ~extra_error_msg:exec_logs ~contents exc)
           with
           | Formula.Session_error _ as exc -> raise exc
           | exc ->
-            let msg = handle_error "Compile-time error:\n" ~contents exc in
-            raise @@ Formula.Session_error (msg, None)
+            Formula.handle_error @@ error_message "Compile-time error:\n" ~contents exc
         else (
           let plugin_fname, log_fname, exitc = compile_source ~with_debug source_fname in
           let exec_logs = Stdio.In_channel.read_all log_fname in
           if exitc <> 0 then
-            let msg = handle_error "Exec_as_OCaml.load_native: "
-             ~contents:"<pass ~with_debug:true for debugging information>" (Failure exec_logs) in
-            raise @@ Formula.Session_error (msg, None)
+            Formula.handle_error @@ error_message "Exec_as_OCaml.load_native: "
+              ~contents:"<pass ~with_debug:true for debugging information>" (Failure exec_logs)
           else Dynlink.loadfile_private plugin_fname; None))
