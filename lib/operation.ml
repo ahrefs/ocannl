@@ -2,8 +2,9 @@
 
 open Base
 
-let g n: Code.data = {node=n; field=`Grad}
-let v n: Code.data = {node=n; field=`Value}
+let g n: Code.data = {node_id=n.Ocannl_runtime.Node.id; field=`Grad}
+let v n: Code.data = {node_id=n.Ocannl_runtime.Node.id; field=`Value}
+let d n field: Code.data = {node_id=n.Ocannl_runtime.Node.id; field}
 
 let add =
   let open Code in
@@ -97,13 +98,13 @@ let relu =
   Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
 let reset_value c ~n field _shape =
-  Code.Reset {tensor={node=n; field}; reset_op=`Constant_of_value c}
+  Code.Reset {tensor=d n field; reset_op=`Constant_of_value c}
 
 let reset_range ~n field _shape =
-  Code.Reset {tensor={node=n; field}; reset_op=`Range_over_offsets}
+  Code.Reset {tensor=d n field; reset_op=`Range_over_offsets}
 
 let reset_values arr ~n field _shape =
-  Code.Reset {tensor={node=n; field}; reset_op=`Fixed_constant arr}
+  Code.Reset {tensor=d n field; reset_op=`Fixed_constant arr}
 
 let float_to_label v = Float.to_string_hum ~strip_zero:true v
 
@@ -159,7 +160,7 @@ let ndarray ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_
   Formula.term ~label spec ~init_body:(reset_values values)
 
 let uniform_value ~n field shape: Code.t =
-  Code.(Create {tensor={node=n; field}; dims=(fun () -> Shape.to_dims shape);
+  Code.(Create {tensor=d n field; dims=(fun () -> Shape.to_dims shape);
                 init_op=`Standard_uniform})
 
 let assign ~lhs ~rhs projections =

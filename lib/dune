@@ -8,7 +8,7 @@
  (name ocannl)
  (libraries base printbox printbox-text stdio dynlink str ocannl_runtime)
  (preprocess (pps ppx_jane ppx_ocannl))
- (modules nodeUI code shape formula operation network execAsOCaml)
+ (modules nodeUI shape code formula operation network exec_as_OCaml)
  (modes byte native))
 
 (library

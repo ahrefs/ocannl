@@ -3,8 +3,11 @@ open Base
 
 (** *** High-level representation. *** *)
 
-type data = {node: Ocannl_runtime.Node.t; field: [`Value | `Grad]}
-type routine = {node: Ocannl_runtime.Node.t; field: [`Forward | `Backprop]}
+type data = {node_id: int; field: [`Value | `Grad]}
+[@@deriving sexp]
+
+type routine = {node_id: int; field: [`Forward | `Backprop]}
+[@@deriving sexp]
 
 type binop =
   | Skip_arg
@@ -86,7 +89,8 @@ type _ low_level =
   | Comment: string -> unit low_level
 
 let data_pointer (xhs: data) =
-  match xhs.field with `Value -> Value_at_node_id xhs.node.id | `Grad -> Gradient_at_node_id xhs.node.id
+  match xhs.field with
+  | `Value -> Value_at_node_id xhs.node_id | `Grad -> Gradient_at_node_id xhs.node_id
 
 let rec unoptimized (code: t): unit low_level =
   match code with

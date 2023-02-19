@@ -73,11 +73,14 @@ let () = Caml.Printexc.register_printer session_error_printer
 let reset_zeros node field _shape =
   Code.Reset {tensor={node; field}; reset_op=`Constant_of_value 0.0}
 
-let reset_ones node field _shape =
-  Code.Reset {tensor={node; field}; reset_op=`Constant_of_value 1.0}
+let reset_zeros ~node_id field _shape =
+  Code.Reset {tensor={node_id; field}; reset_op=`Constant_of_value 0.0}
 
-let create node field shape =
-  Code.Create {tensor={node; field}; dims=(fun () -> Shape.to_dims shape); init_op=`Unspecified}
+let reset_ones ~node_id field _shape =
+  Code.Reset {tensor={node_id; field}; reset_op=`Constant_of_value 1.0}
+
+let create ~node_id field shape =
+  Code.Create {tensor={node_id; field}; dims=(fun () -> Shape.to_dims shape); init_op=`Unspecified}
 
 let max_sublabel_length = ref 25
 
@@ -115,7 +118,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
     | false, m1_body, false, m2_body -> Seq (ParHint (m1_body, m2_body), op_body)
     | _, _, false, m2_body -> Seq (m2_body, op_body)
     | false, m1_body, _, _ -> Seq(m1_body, op_body)) in
-  let init_values_body = create n `Value shape in
+  let init_values_body = create ~node_id `Value shape in
   let init_values =
     if m1_processed && m2_processed then init_values_body
     else if m1_processed then Par (m2.init_values, init_values_body)
@@ -124,7 +127,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let needs_gradient = m1.needs_gradient || m2.needs_gradient in
   let m1_no_grad = m1_processed || not m1.needs_gradient in
   let m2_no_grad = m2_processed || not m2.needs_gradient in
-  let zero_body = if needs_gradient then reset_zeros n `Grad shape else Noop in
+  let zero_body = if needs_gradient then reset_zeros ~node_id `Grad shape else Noop in
   (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
      and keep the backprop order for readability. *)
   let zero_grads =
@@ -146,7 +149,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
     | false, m1_body, false, m2_body -> Seq (grad_body, ParHint(m2_body, m1_body))
     | _, _, false, m2_body -> Seq (grad_body, m2_body)
     | false, m1_body, _, _ -> Seq (grad_body, m1_body) in
-  let init_grads_body = create n `Grad shape in
+  let init_grads_body = create ~node_id `Grad shape in
   (* The order is not relevant, we keep the same order as in backprop for readability. *)
   let m1_init_grads = m1.init_grads in
   let m2_init_grads = m2.init_grads in
@@ -207,10 +210,10 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
     match m_processed, m.forward_body with
     | true, _ | _, Noop -> op_body
     | false, m_body -> Seq (m_body, op_body) in
-  let init_values = Par (m.init_values, create n `Value shape) in
+  let init_values = Par (m.init_values, create ~node_id `Value shape) in
   let needs_gradient = m.needs_gradient in
   let m_no_grad = m_processed || not m.needs_gradient in
-  let zero_body = if needs_gradient then reset_zeros n `Grad shape else Noop in
+  let zero_body = if needs_gradient then reset_zeros ~node_id `Grad shape else Noop in
   let zero_grads =
     if m_no_grad then zero_body
     else Par (zero_body, m.zero_grads) in
@@ -221,7 +224,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
     match m_no_grad, m.backprop_body with
     | true, _ | _, Noop -> grad_body
     | false, m_body -> Seq (grad_body, m_body) in
-  let init_grads_body = create n `Grad shape in
+  let init_grads_body = create ~node_id `Grad shape in
   let init_grads =
     if m_no_grad then init_grads_body
     else Par (init_grads_body, m.init_grads) in
@@ -268,11 +271,11 @@ let term ~label ?needs_gradient (spec: Shape.term_spec) ~init_body : t =
 
   let open Code in
   let forward_body = Noop in
-  let init_values = Par (create n `Value shape, init_body ~n `Value shape) in
-  let zero_grads = reset_zeros n `Grad shape in
+  let init_values = Par (create ~node_id `Value shape, init_body ~n `Value shape) in
+  let zero_grads = reset_zeros ~node_id `Grad shape in
   let backprop_body = Noop in
   (* Very unlikely someone will want dw/dw. *)
-  let init_grads = create n `Grad shape in
+  let init_grads = create ~node_id `Grad shape in
   let subtree_shape_updates = Sequence.singleton local_shape_update in
   let formula = {forward_body; backprop_body;
                  init_values; init_grads; zero_grads;
@@ -296,13 +299,13 @@ let get_toplevel m =
   let open Code in
   let toplevel_forward = 
     {initialization=m.init_values; procedure=m.forward_body;
-     routine={node=m.comp_node; field=`Forward};
+     routine={node_id=m.node_id; field=`Forward};
      label="Forward #"^Int.to_string m.node_id^" "^m.comp_node.label} in
   let backprop =
-    Seq (Par (m.zero_grads, reset_ones m.comp_node `Grad m.shape), m.backprop_body) in
+    Seq (Par (m.zero_grads, reset_ones ~node_id:m.node_id `Grad m.shape), m.backprop_body) in
   let toplevel_backprop =
     {initialization=m.init_grads; procedure=backprop;
-     routine={node=m.comp_node; field=`Backprop};
+     routine={node_id=m.node_id; field=`Backprop};
      label="Backprop #"^Int.to_string m.node_id^" "^m.comp_node.label} in
   toplevel_forward, toplevel_backprop
 
