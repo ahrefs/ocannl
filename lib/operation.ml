@@ -472,6 +472,7 @@ module CLI = struct
   let ndarray = ndarray
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient
+  let set_executor = set_executor
   let refresh_session = refresh_session
   let drop_session = drop_session
   let close_session = close_session

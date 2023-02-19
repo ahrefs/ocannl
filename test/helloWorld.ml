@@ -1,22 +1,26 @@
 open Base
 open Ocannl
 
+let test_executor = `OCaml
+
 let%expect_test "Hello World" =
   Stdio.printf "Hello World!\n";
   [%expect {| Hello World! |}]
 
 let%expect_test "Pointwise multiplication dims 1" =
+  let open Operation.CLI in
+  drop_session();
   Random.init 0;
+  set_executor test_executor;
   (* "Hey" is inferred to be a scalar.
      Note the pointwise multiplication means "hey" does not have any input axes. *)
   let%ocannl y = 2 *. "hey" in
   let y_f = Network.unpack y in
-  let open Operation.CLI in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ y_f;
   [%expect {|
     ┌───────────────────────┐
-    │[4] (hey*2): shape 0:1 │
+    │[3] (hey*2): shape 0:1 │
     │┌┬─────────┐           │
     │││axis 0   │           │
     │├┼─────────┼────────── │
@@ -25,14 +29,15 @@ let%expect_test "Pointwise multiplication dims 1" =
     └───────────────────────┘ |}]
 
 let%expect_test "Matrix multiplication dims 1x1" =
-  Operation.drop_session();
+  let open Operation.CLI in
+  drop_session();
   Random.init 0;
+  set_executor test_executor;
   (* Hey is inferred to be a matrix. *)
   let%ocannl hey = "hey" in
   let%ocannl y = "q" 2.0 * hey + "p" 1.0 in
   let y_f = Network.unpack y in
   let hey_f = Network.unpack hey in
-  let open Operation.CLI in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey_f;
   [%expect {|
@@ -307,14 +312,15 @@ let%expect_test "Print constant tensor" =
     └──────────────────────────────────────────────┘ |}]
 
 let%expect_test "Matrix multiplication dims 2x3" =
-  Operation.drop_session();
+  let open Operation.CLI in
+  drop_session();
   Random.init 0;
+  set_executor test_executor;
   (* Hey is inferred to be a matrix. *)
   let%ocannl hey = "hey" in
   let%ocannl y = [2; 3] * hey + [4; 5; 6] in
   let y_f = Network.unpack y in
   let hey_f = Network.unpack hey in
-  let open Operation.CLI in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey_f;
   [%expect {|
@@ -340,21 +346,22 @@ let%expect_test "Matrix multiplication dims 2x3" =
     └───────────────────────────────────────────────────────┘ |}]
 
 let%expect_test "Big matrix" =
-    Operation.drop_session();
-    Random.init 0;
-    (* Hey is inferred to be a matrix. *)
-    let open Operation.CLI in
-    let hey = FO.(!~ "hey") in
-    let zero_to_twenty = range 20 in
-    let y = FO.(zero_to_twenty * hey + zero_to_twenty) in
-    refresh_session ();
-    print_formula ~with_code:false ~with_grad:false `Inline zero_to_twenty;
-    [%expect {|
+  let open Operation.CLI in
+  drop_session();
+  Random.init 0;
+  set_executor test_executor;
+  (* Hey is inferred to be a matrix. *)
+  let hey = FO.(!~ "hey") in
+  let zero_to_twenty = range 20 in
+  let y = FO.(zero_to_twenty * hey + zero_to_twenty) in
+  refresh_session ();
+  print_formula ~with_code:false ~with_grad:false `Inline zero_to_twenty;
+  [%expect {|
       [0.00; 1.00; 2.00; 3.00; 4.00; 5.00; 6.00; 7.00; 8.00; 9.00; 10.00; 11.00;
         12.00; 13.00; 14.00; 15.00; 16.00; 17.00; 18.00; 19.00; 20.00
       ] |}];
-    print_formula ~with_code:false ~with_grad:false `Default zero_to_twenty;
-    [%expect {|
+  print_formula ~with_code:false ~with_grad:false `Default zero_to_twenty;
+  [%expect {|
       ┌────────────────────────────────────────────┐
       │[2] 0...20: shape 0:21                      │
       │┌┬─────────────────────────────────────────┐│
@@ -363,8 +370,8 @@ let%expect_test "Big matrix" =
       │││ 0.00e+0  1.00e+0  ...  1.90e+1  2.00e+1 ││
       │└┴─────────────────────────────────────────┘│
       └────────────────────────────────────────────┘ |}];
-    print_formula ~with_code:false ~with_grad:false `Default hey;
-    [%expect {|
+  print_formula ~with_code:false ~with_grad:false `Default hey;
+  [%expect {|
       ┌──────────────────────────────────────────────────┐
       │[1] hey: shape 1:21->0:21                         │
       │┌──────┬─────────────────────────────────────────┐│
@@ -377,8 +384,8 @@ let%expect_test "Big matrix" =
       ││      │ 8.50e-1  4.69e-1  ...  6.16e-2  8.49e-1 ││
       │└──────┴─────────────────────────────────────────┘│
       └──────────────────────────────────────────────────┘ |}];
-    print_formula ~with_code:false ~with_grad:false `Default y;
-    [%expect {|
+  print_formula ~with_code:false ~with_grad:false `Default y;
+  [%expect {|
       ┌────────────────────────────────────────────┐
       │[4] (0...20+(hey*0...20)): shape 0:21       │
       │┌┬─────────────────────────────────────────┐│
@@ -391,8 +398,9 @@ let%expect_test "Big matrix" =
 let%expect_test "Vary big tensor" =
     Operation.drop_session();
     Random.init 0;
-    (* Hey is inferred to be a matrix. *)
     let open Operation.CLI in
+    set_executor test_executor;
+    (* Hey is inferred to be a matrix. *)
     let hey = range_of_shape ~batch_dims:[17] ~input_dims:[19; 20; 21] ~output_dims:[23; 24] () in
     refresh_session ();
     (* print_formula ~with_code:false ~with_grad:false `Inline hey;
