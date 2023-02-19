@@ -11,6 +11,8 @@ let pp_symbolic_index ppf =
 
 let pp_print_init_op ppf: Code.init_op -> unit = function
   | `Unspecified -> Caml.Format.pp_print_string ppf "`Unspecified"
+  | `Constant_of_value c when Float.(c < 0.0) ->
+    Caml.Format.fprintf ppf "(`Constant_of_value (%f))" c
   | `Constant_of_value c ->
     Caml.Format.fprintf ppf "(`Constant_of_value %f)" c
   | `Fixed_constant cs ->
