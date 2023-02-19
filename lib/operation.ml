@@ -335,13 +335,11 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
     (match m.forward_body with
      | Noop -> ()
      | fwd_code ->
-       Stdio.print_endline "Current forward body:";
-       Stdio.print_endline @@ Code.sprint_code fwd_code);
+       Caml.Format.printf "Current forward body:@ %a@ " Code.fprint_code fwd_code);
     (match m.backprop_body with
      | Noop -> ()
      | bwd_code ->
-       Stdio.print_endline "Current backprop body:";
-       Stdio.print_endline @@ Code.sprint_code bwd_code)
+      Caml.Format.printf "Current backprop body:@ %a@ " Code.fprint_code bwd_code)
   );
   Stdio.printf "\n%!"
 
@@ -352,13 +350,11 @@ let print_global_root ~with_grad ~with_code (style: array_print_style) root =
     (match root.forward_code with
      | None -> ()
      | Some fwd ->
-       Stdio.print_endline "Forward:";
-       Stdio.print_endline @@ Code.sprint_program fwd);
+       Caml.Format.printf "Forward:@ %a@ " Code.fprint_program fwd);
     (match root.backprop_code with
      | None -> ()
      | Some bwd ->
-       Stdio.print_endline "Backprop:";
-       Stdio.print_endline @@ Code.sprint_program bwd)
+      Caml.Format.printf "Backprop:@ %a@ " Code.fprint_program bwd)
   );
   Stdio.printf "\n%!"
 
@@ -423,10 +419,8 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
                     (if with_debug then "" else " (use `~with_debug:true` for more information)"))
         | _ -> ()
       with Session_error (msg, None) ->
-        Stdio.print_endline "Forward code (context for backprop init error):";
-        Stdio.print_endline @@ Code.sprint_program @@ Option.value_exn root.forward_code;
-        let msg = "Backprop init error: "^msg in
-        raise @@ Session_error (msg, Some m);
+        Caml.Format.printf "Forward code (context for backprop init error):@ %a@\n"
+          Code.fprint_program @@ Option.value_exn root.forward_code;
     );
     if run then match root.formula.comp_node.forward with
       | Some forward -> forward()

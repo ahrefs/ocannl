@@ -398,6 +398,7 @@ let%expect_test "Vary big tensor" =
     (* print_formula ~with_code:false ~with_grad:false `Inline hey;
     [%expect {| |}]; *)
     print_formula ~with_code:false ~with_grad:false `Default hey;
+    (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
     [%expect {|
       ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
       │[1] r17x23x24x19x20x21: shape 0:17|3:19,4:20,5:21->1:23,2:24                                                                                                                           │

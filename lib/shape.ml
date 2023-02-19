@@ -1066,3 +1066,13 @@ let to_string_hum ?(style=`Axis_size) sh =
   else if String.is_empty batch_dims then input_dims^"->"^output_dims
   else if String.is_empty input_dims then batch_dims^"|"^output_dims
   else batch_dims^"|"^input_dims^"->"^output_dims
+
+module CompareSymbol = struct
+  type t = symbol
+  let compare = compare_symbol
+  let sexp_of_t = sexp_of_symbol
+end
+module Symbol = struct
+  include CompareSymbol
+  include Comparator.Make(CompareSymbol)
+end

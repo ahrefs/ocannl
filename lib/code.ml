@@ -14,10 +14,12 @@ type binop =
   | Add
   | Mul
   | Relu_gate
+[@@deriving sexp]
 
 type unop =
   | Identity
   | Relu
+[@@deriving sexp]
 
 (** Initializes or resets a tensor by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op =
@@ -37,6 +39,7 @@ type init_op =
   | `Standard_gaussian
   (** Draws the values from N(0,1). *)
   ]
+[@@deriving sexp]
 
 type t =
   | Par of t * t
@@ -59,12 +62,11 @@ type t =
   | Create of { tensor: data; dims: unit -> int array; init_op: init_op }
   | Reset of { tensor: data; reset_op: init_op }
   | Noop
+[@@deriving sexp]
 
 (** Dynamically loading a program executes [initialization] and bounds the [procedure] to [routine]. *)
 type program = {initialization: t; procedure: t; routine: routine; label: string}
-
-let sprint_code (c: t): string = ignore c; failwith "NOT IMPLEMENTED YET [1]"
-let sprint_program (c: program): string = ignore c; failwith "NOT IMPLEMENTED YET [2]"
+[@@deriving sexp]
 
 (** *** Low-level representation. *)
 
@@ -87,6 +89,7 @@ type _ low_level =
   | Unoptimized_unop: unop * float low_level -> float low_level
   | Assign_routine: routine * unit low_level -> unit low_level
   | Comment: string -> unit low_level
+(* [@@deriving sexp] *)
 
 let data_pointer (xhs: data) =
   match xhs.field with
@@ -184,3 +187,11 @@ let value (v: float) = Lifts.Lift_float.lift v
 
 let uniform ~low ~high = [%c Random.float_range low high ]
 *)
+
+let fprint_code ppf c =
+  (* TODO: something nicely concise. *)
+  Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_t c  
+
+let fprint_program ppf prog =
+  (* TODO: something nicely concise. *)
+  Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_program prog  
