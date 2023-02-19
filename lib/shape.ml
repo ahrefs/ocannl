@@ -639,12 +639,18 @@ let unique_id = ref 0
 let get_symbol() = Int.incr unique_id; Symbol !unique_id
 
 (** An index into a single axis for doing computations over multiple [Shape]-derived [Code]s. *)
-type axis_index =
+type 'a axis_index =
 | Fixed_idx of int
 (** The specific position along an axis. *)
-| Iterator of symbol [@@deriving compare, sexp, variants]
+| Iterator of 'a
 (** The given member of the [product_space] corresponding to some [product_iterators]. *)
-  
+[@@deriving compare, sexp, variants]
+
+type symbolic_axis = symbol axis_index
+[@@deriving compare, sexp]
+
+type positional_axis = int axis_index
+
 (** All the information relevant for [Code] code generation contained in a completed [update_step]. *)
 type projections = {
   product_space: int array;
@@ -653,13 +659,13 @@ type projections = {
   product_iterators: symbol array;
   (** The product space iterators (concatentation of the relevant batch, output, input axes)
       for iterating over the [product_space] axes, where same axes are at same array indices. *)
-  project_lhs: axis_index array;
+  project_lhs: symbolic_axis array;
   (** A projection that takes an [product_space]-bound index and produces an index into the result of
       an operation. *)
-  project_rhs1: axis_index array;
+  project_rhs1: symbolic_axis array;
   (** A projection that takes an [product_space]-bound index and produces an index into the (first)
       argument of an operation. *)
-  project_rhs2: axis_index array option;
+  project_rhs2: symbolic_axis array option;
   (** A projection that takes an [product_space]-bound index and produces an index into the second
       argument of a binary operation. *)
 }
@@ -858,7 +864,7 @@ let derive_projections (shapes: update_step) : projections =
       Array.of_list @@ List.concat [lhs1_batch; lhs1_output; lhs1_input] in
     let project_lhs_verify =
       Array.of_list @@ List.concat [lhs2_batch; lhs2_output; lhs2_input] in
-    assert (Array.equal (fun a b -> compare_axis_index a b = 0) project_lhs project_lhs_verify);
+    assert (Array.equal (fun a b -> compare_symbolic_axis a b = 0) project_lhs project_lhs_verify);
     let project_rhs1 =
       Array.of_list @@ List.concat [rhs1_batch; rhs1_output; rhs1_input] in    
     let project_rhs2 =
@@ -878,7 +884,7 @@ let derive_projections (shapes: update_step) : projections =
     let iters_bch = List.map product_bch ~f:(fun _ -> get_symbol()) in
     let lhs1_batch = broadcast_into iters_bch cur_sh Batch sh1 Batch in
     let lhs2_batch = broadcast_into iters_bch cur_sh Batch sh2 Batch in
-    assert (List.equal (fun a b -> compare_axis_index a b = 0) lhs1_batch lhs2_batch);
+    assert (List.equal (fun a b -> compare_symbolic_axis a b = 0) lhs1_batch lhs2_batch);
 
     let product_hid = broadcast_sh sh1 Input sh2 Output in
     let iters_hid = List.map product_hid ~f:(fun _ -> get_symbol()) in
@@ -976,15 +982,18 @@ let backprop_unary projections = {
                    project_rhs2 = Some projections.project_lhs;
 }
 
-let derive_index iterators projection =
+let derive_index iterator_symbols (projection: symbolic_axis array) (type iterator):
+  iterator array -> iterator axis_index array =
   let sym_to_i =
-    Array.mapi iterators ~f:(fun i (Symbol s) -> s, i) |> Array.to_list |> Map.of_alist_exn (module Int) in
-  let positions = Array.map projection ~f:(
+    Array.mapi iterator_symbols ~f:(fun i (Symbol s) -> s, i) |>
+    Array.to_list |> Map.of_alist_exn (module Int) in
+  let positions: positional_axis array = Array.map projection ~f:(
     function
-    | Fixed_idx i -> i
-    | Iterator (Symbol s) -> Map.find_exn sym_to_i s
+    | Fixed_idx i -> Fixed_idx i
+    | Iterator (Symbol s) -> Iterator (Map.find_exn sym_to_i s)
   ) in
-  fun product -> Array.map positions ~f:(fun p -> product.(p))
+  fun product -> Array.map positions ~f:(
+      function Fixed_idx i -> Fixed_idx i | Iterator p -> Iterator product.(p))
 
 (** Specification of a terminal [Formula.t]'s shape. The [string] occurrences refer to [axis_labels]
     specs. *)

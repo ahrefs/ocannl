@@ -83,8 +83,8 @@ type _ low_level =
   | LLReset: {
       tensor: data low_level; reset_op: init_op;
     } -> unit low_level
-  | Unoptimized_set: data low_level * Shape.symbol array * float low_level -> unit low_level
-  | Unoptimized_get: data low_level * Shape.symbol array -> float low_level
+  | Unoptimized_set: data low_level * Shape.symbolic_axis array * float low_level -> unit low_level
+  | Unoptimized_get: data low_level * Shape.symbolic_axis array -> float low_level
   | Unoptimized_binop: binop * float low_level * float low_level -> float low_level
   | Unoptimized_unop: unop * float low_level -> float low_level
   | Assign_routine: routine * unit low_level -> unit low_level
@@ -189,7 +189,9 @@ let uniform ~low ~high = [%c Random.float_range low high ]
 *)
 let interpret_llc ?(with_debug=true) llc =
   let lookup env indices =
-    Array.map indices ~f:(Map.find_exn env) in
+    Array.map indices ~f:Shape.(function
+    | Fixed_idx i -> i
+    | Iterator s -> Map.find_exn env s) in
   let open Ocannl_runtime.Node in
   let rec loop_proc env llc: unit =
     let loop = loop_proc env in

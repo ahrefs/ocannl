@@ -4,6 +4,10 @@ let emit = Code.unoptimized_program
 
 let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
 let pp_symbol ppf (Shape.Symbol s) = Caml.Format.fprintf ppf "i%d" s
+let pp_symbolic_index ppf =
+  let open Shape in function
+    | Iterator (Symbol s) -> Caml.Format.fprintf ppf "i%d" s
+    | Fixed_idx i -> Caml.Format.fprintf ppf "%d" i
 
 let pp_print_init_op ppf: Code.init_op -> unit = function
   | `Unspecified -> Caml.Format.pp_print_string ppf "`Unspecified"
@@ -24,7 +28,7 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
   let pp_dims ppf dims =
     fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:pp_semi pp_print_int) @@ Array.to_list dims in
   let pp_indices ppf idcs =
-    fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:pp_semi pp_symbol) @@ Array.to_list idcs in
+    fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:pp_semi pp_symbolic_index) @@ Array.to_list idcs in
   let rec pp_ll: 'a. formatter -> 'a low_level -> unit = fun (ppf: formatter) (type a) (c: a low_level) ->
     (* FIXME: performance bug, bind the nodes [(get %d)] at the start of the program. *)
     match c with
