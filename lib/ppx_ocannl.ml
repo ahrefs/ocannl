@@ -149,7 +149,7 @@ let rec translate expr =
     [%expr Network.apply [%e translate expr1] [%e translate expr2]]
 
   | [%expr fun ~config [%p? pat1] [%p? pat2] -> [%e? body] ] ->
-    (* TODO(38): generalize config to any number of labeled arguments with any labels. *)
+    (* TODO(#38): generalize config to any number of labeled arguments with any labels. *)
     let pat1_ref = pat2pat_ref pat1 in
     let pat2_ref = pat2pat_ref pat2 in
     [%expr
@@ -169,7 +169,7 @@ let rec translate expr =
     ]
 
   | [%expr fun ~config [%p? pat] -> [%e? body] ] ->
-    (* TODO(38): generalize config to any number of labeled arguments with any labels. *)
+    (* TODO(#38): generalize config to any number of labeled arguments with any labels. *)
     let pat_ref = pat2pat_ref pat in
     [%expr
       fun ~config ->

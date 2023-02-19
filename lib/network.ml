@@ -3,7 +3,7 @@
 open Base
 module F = Formula
 
-(* FIXME(28): implement [promote_precision] effects. *)
+(* FIXME(#28): implement [promote_precision] effects. *)
 (** The computation payload of a network component. The computations are suspended, so that as we build
     a network component, we partially evaluate it to collect its parameters. *)
 type _ comp =

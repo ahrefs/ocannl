@@ -567,8 +567,12 @@ let propagate_shapes (update: update_step) =
     sh2.batch <- broadcast_into sh2 Batch cur_sh Batch;
 
     (* Always re-derive the output shape, to have the latest information. *)
+    (* TODO: isn't it wasteful to discard the old sh1.output? *)
     if not @@ is_not_deduced sh1.deduce_output_from_input then
       sh1.output <- deduce_dims sh2.input sh1.deduce_output_from_input
+    (* TODO(#37):
+    if not @@ is_not_deduced sh1.deduce_input_from_output then
+      sh1.input <- deduce_dims sh2.output sh1.deduce_input_from_output *)
 
   | Broadcast (`Einsum spec, sh1, sh2) ->
     let ls_rhs1, ls_rhs2, ls_lhs = match einsum_of_spec spec with
