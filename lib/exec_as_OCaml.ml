@@ -90,12 +90,15 @@ let create_comp_unit compiled =
   let fname, oc =
     Caml.Filename.open_temp_file ~mode:[Open_wronly;Open_creat;Open_text]
       code_file_prefix ".ml" in
-  (* FIXME(#32): the following outputs truncated source code -- missing the last line:
+  (* FIXME(#32): the following outputs truncated source code -- missing the last line: *
   let ppf = Caml.Format.formatter_of_out_channel oc in
   Caml.Format.pp_set_geometry Caml.Format.str_formatter
     ~max_indent:(column_width/2) ~margin:column_width;
-  let () = format_low_level ppf compiled in
-  let () = Stdio.Out_channel.close oc in *)
+  let () = format_low_level ~as_toplevel:true ppf compiled in
+  let () = Stdio.Out_channel.close oc in
+  let () = Stdio.printf "FIXME(32): file content:\n%s\nEND file content\n%!"
+    (Stdio.In_channel.read_all fname) in
+  * Defensive variant: *)
   Caml.Format.pp_set_geometry Caml.Format.str_formatter
     ~max_indent:(column_width/2) ~margin:column_width;
   format_low_level ~as_toplevel:true Caml.Format.str_formatter compiled;
@@ -103,6 +106,7 @@ let create_comp_unit compiled =
   Stdio.Out_channel.output_string oc contents;
   Stdio.Out_channel.flush oc;
   Stdio.Out_channel.close oc;
+  (* *)
   fname
 
 let safe_remove fname =
@@ -171,6 +175,9 @@ let error_message prefix ?extra_error_msg ~contents exc =
   (match extra_error_msg with None -> () | Some extra ->
     msg "\nIn the context of:\n"; msg extra);
   let from_pos, to_pos = first_file_span ~contents ~message:(Buffer.contents message) in
+  (* Be defensive to avoid introducing a misleading error. *)
+  let from_pos = Int.min from_pos @@ String.length contents - 1 in
+  let to_pos = Int.min to_pos @@ String.length contents - 1 in
   msg "\nIn code span ";
   msg error_opening_delimiter; msg "..."; msg error_closing_delimiter; msg ":\n";
   msg @@ String.sub contents ~pos:0 ~len:from_pos;
