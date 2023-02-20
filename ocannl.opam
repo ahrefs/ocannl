@@ -2,7 +2,7 @@
 opam-version: "2.0"
 version: "0.0.1"
 synopsis:
-  "A from-scratch Deep Learning library with CUDA, operator fusion, staged compilation, backprop."
+  "A from-scratch Deep Learning library with CUDA, operator fusion, staged compilation, backprop"
 description: "A longer description"
 maintainer: ["Lukasz Stafiniak"]
 authors: ["Lukasz Stafiniak"]
@@ -14,6 +14,13 @@ bug-reports: "https://github.com/lukstafi/ocannl/issues"
 depends: [
   "ocaml"
   "dune" {>= "3.6"}
+  "base"
+  "printbox"
+  "printbox-text"
+  "stdio"
+  "ppx_jane"
+  "ppx_expect"
+  "ppx_inline_test"
   "odoc" {with-doc}
 ]
 build: [

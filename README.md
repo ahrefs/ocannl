@@ -31,16 +31,9 @@ ocannl
 Some ideas regarding installation (skip or substitute equivalent actions etc.):
 * opam switch create 5.0-flambda ocaml-variants.5.0.0+options ocaml-option-flambda
 * eval $(opam env --switch=5.0-flambda)
-* opam install dune
-* opam install base stdio ppx_jane
-* opam install printbox printbox-text printbox-html
-* opam install ocaml-canvas
-* opam install ocaml-lsp-server ocamlformat
-* opam install utop
-* opam install magic-trace
-* opam install ppx_expect mdx
-* eval $(opam env)
 * cd ~/ocannl
+* opam install . --deps-only
+* eval $(opam env)
 * dune runtest
 
 ## Interesting links to other projects
