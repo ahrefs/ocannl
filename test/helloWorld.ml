@@ -395,7 +395,7 @@ let%expect_test "Big matrix" =
       │└┴─────────────────────────────────────────┘│
       └────────────────────────────────────────────┘ |}]
 
-let%expect_test "Vary big tensor" =
+let%expect_test "Very big tensor" =
     Operation.drop_session();
     Random.init 0;
     let open Operation.CLI in
@@ -403,7 +403,7 @@ let%expect_test "Vary big tensor" =
     (* Hey is inferred to be a matrix. *)
     let hey = Network.return_term @@
       range_of_shape ~batch_dims:[17] ~input_dims:[19; 20; 21] ~output_dims:[23; 24] () in
-    let%ocannl hoo = 2 * hey - 10 in
+    let%ocannl hoo = (1 + 1) * hey - 10 in
     let hoo_f = Network.unpack hoo in
     refresh_session ();
     (* print_formula ~with_code:false ~with_grad:false `Inline hey;

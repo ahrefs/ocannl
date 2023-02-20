@@ -19,6 +19,12 @@ ocannl
   * [`Operation`](lib/operation.ml) for differentiable computations.
   * [`Code`](lib/code.ml) for computations, [`Node`](lib/node.ml) maintains a store of n-dimensional arrays that the code operates on.
 * Does not hide anything. Model surgery should be starightforward (not sure if we are there yet).
+* It's a feature, not a bug!
+  * To scale a tensor by a number, always use pointwise-multiplication, e.g. `2*.m` or `m*.2`.
+  * Matrix-multiplying a tensor `m` by a constant number, e.g. `m*2`, broadcasts the number to the shape of the input axes of the tensor. This results in an output-axes-only tensor (multi-axis-vector) that is the scaled sum over the input axes of the tensor `m`.
+  * Matrix-multiplying a constant number by a tensor `m`, e.g. `2*m`, broadcasts the number to the shape of the output axes of the tensor. This results in a tensor whose inputs are of the same shape as the inputs of `m`, and the output shape is 1D (scalar), that is the scaled sum over the output axes of the tensor `m`.
+  * The matrix-multiply operation behaves pointwise along the batch axes.
+  
 
 ## Installation
 

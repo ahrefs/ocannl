@@ -90,7 +90,7 @@ let create_comp_unit compiled =
   let fname, oc =
     Caml.Filename.open_temp_file ~mode:[Open_wronly;Open_creat;Open_text]
       code_file_prefix ".ml" in
-  (* FIXME(32): the following outputs truncated source code -- missing the last line:
+  (* FIXME(#32): the following outputs truncated source code -- missing the last line:
   let ppf = Caml.Format.formatter_of_out_channel oc in
   Caml.Format.pp_set_geometry Caml.Format.str_formatter
     ~max_indent:(column_width/2) ~margin:column_width;
