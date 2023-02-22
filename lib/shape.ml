@@ -53,14 +53,16 @@ let given_of_kind = function
   | AxisKey.Input -> given_input
   | AxisKey.Output -> given_output
 
+type dim_list = int list [@@deriving compare, sexp]
+
 type dims =
-| Given of int list
+| Given of dim_list
 (** User-provided dimensions. They will not change but will be broadcasted to bigger sizes. *)
-| Fixed of int list
+| Fixed of dim_list
 (** User-provided dimensions that will fail if used in a different size context, even if broadcastable.
     Note that [Operation.stop_broadcast] implements additional shape logic:
     it converts the (bottom-up i.e. partially inferred) shape into a [Fixed] variant. *)
-| Inferred of int list
+| Inferred of dim_list
 (** Dimensions that will itself change to a bigger size: they adapt to the broadcasted size. *)
 | Unknown
 (** User-provided but quivalent to [Inferred []]. *)
@@ -650,29 +652,33 @@ type 'a axis_index =
 (** The given member of the [product_space] corresponding to some [product_iterators]. *)
 [@@deriving compare, sexp, variants]
 
-type symbolic_axis = symbol axis_index
-[@@deriving compare, sexp]
-
-type positional_axis = int axis_index
+type symbol_list = symbol list [@@deriving sexp]
+type symbolic_axis = symbol axis_index [@@deriving compare, sexp]
+type symbolic_axes = symbolic_axis list [@@deriving sexp]
+type positional_axis = int axis_index [@@deriving sexp]
+type positional_axes = positional_axis list [@@deriving sexp]
+type product_space = int array [@@deriving sexp]
+type product_iterators = symbol array [@@deriving sexp]
+type project = symbolic_axis array [@@deriving sexp]
 
 (** All the information relevant for [Code] code generation contained in a completed [update_step]. *)
 type projections = {
-  product_space: int array;
+  product_space: product_space;
   (** The product space dimensions (concatentation of the relevant batch, output, input axes) with
       the same semantics as [to_dims], that an operation should parallelize (map-reduce) over. *)
-  product_iterators: symbol array;
+  product_iterators: product_iterators;
   (** The product space iterators (concatentation of the relevant batch, output, input axes)
       for iterating over the [product_space] axes, where same axes are at same array indices. *)
-  project_lhs: symbolic_axis array;
+  project_lhs: project;
   (** A projection that takes an [product_space]-bound index and produces an index into the result of
       an operation. *)
-  project_rhs1: symbolic_axis array;
+  project_rhs1: project;
   (** A projection that takes an [product_space]-bound index and produces an index into the (first)
       argument of an operation. *)
-  project_rhs2: symbolic_axis array option;
+  project_rhs2: project option;
   (** A projection that takes an [product_space]-bound index and produces an index into the second
       argument of a binary operation. *)
-}
+} [@@deriving sexp]
 
 (** Projections for iterating over a terminal [Code], or for a pointwise unary operator. *)
 let terminal_projections sh =
@@ -684,7 +690,7 @@ let terminal_projections sh =
 (** Computes the indexing into subformulas given the shape information of a formula. The processing
     mirrors [propagate_shapes], but [derive_projections] should only be invoked when the shapes
     are inferred already. *)
-let derive_projections (shapes: update_step) : projections =
+let%minidebug derive_projections (shapes: update_step) : projections =
   (* Broadcasts symmetrically to iterate all axes. *)
   let broadcast_dims sh1_dims sh2_dims =
     let rec broad_back_dims accu = function

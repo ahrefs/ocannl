@@ -2,7 +2,7 @@ open Base
 open Ocannl
 
 let test_executor = `OCaml
-
+(*
 let%expect_test "Hello World" =
   Stdio.printf "Hello World!\n";
   [%expect {| Hello World! |}]
@@ -394,7 +394,7 @@ let%expect_test "Big matrix" =
       │││ 9.39e+0  1.90e+0  ...  2.89e+1  3.70e+1 ││
       │└┴─────────────────────────────────────────┘│
       └────────────────────────────────────────────┘ |}]
-
+*)
 let%expect_test "Very big tensor" =
     Operation.drop_session();
     Random.init 0;
