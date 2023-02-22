@@ -21,7 +21,7 @@
  (name ocannl)
  (synopsis "A from-scratch Deep Learning library with CUDA, operator fusion, staged compilation, backprop")
  (description "A longer description")
- (depends ocaml dune base printbox printbox-text stdio ppx_jane ppx_expect ppx_inline_test)
+ (depends ocaml dune base core printbox printbox-text stdio ppx_jane ppx_expect)
  (tags
   (deeplearning backprop CUDA)))
 

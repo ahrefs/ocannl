@@ -31,6 +31,7 @@ ocannl
 Some ideas regarding installation (skip or substitute equivalent actions etc.):
 * opam switch create 5.0-flambda ocaml-variants.5.0.0+options ocaml-option-flambda
 * eval $(opam env --switch=5.0-flambda)
+* opam install lsp ocamlformat
 * cd ~/ocannl
 * opam install . --deps-only
 * eval $(opam env)

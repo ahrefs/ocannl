@@ -15,12 +15,12 @@ depends: [
   "ocaml"
   "dune" {>= "3.6"}
   "base"
+  "core"
   "printbox"
   "printbox-text"
   "stdio"
   "ppx_jane"
   "ppx_expect"
-  "ppx_inline_test"
   "odoc" {with-doc}
 ]
 build: [
