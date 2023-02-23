@@ -104,6 +104,8 @@ type t = {
   (** Intended for terminal node cases where both [input] and [output] are initially
       unknown. It makes it trivial to implement dimension-preserving hidden layers: just set
       [deduce_output_from_input=`Preserve]. *)
+  node_id: int;
+  (** A node that has the same shape as this shape. *)
 } [@@deriving fields, sexp]
 
 let dims_of_kind = function
@@ -1030,35 +1032,35 @@ type term_spec =
         Note that scalar axes (1D) are not scaled, for compatibility with broadcasting. *)
 [@@deriving compare, sexp]
 
-let of_term_spec : term_spec -> t = function
+let of_term_spec node_id: term_spec -> t = function
   | Unknown_shape ->
     { batch=Unknown; input=Unknown; output=Unknown;
       axis_labels=Map.empty (module AxisKey);
-      deduce_output_from_input=`Not_deduced }
+      deduce_output_from_input=`Not_deduced; node_id }
   | Constant {output_dims; axis_labels} ->
     { batch=Given []; input=Given []; output=Given output_dims;
       axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_output_from_input=`Not_deduced }
+      deduce_output_from_input=`Not_deduced; node_id }
   | Data {batch_dims; output_dims; axis_labels} ->
     { batch=Given batch_dims; input=Given []; output=Given output_dims;
       axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_output_from_input=`Not_deduced }
+      deduce_output_from_input=`Not_deduced; node_id }
   | Params {input_dims; output_dims; axis_labels} ->
     { batch=Given []; input=Given input_dims; output=Given output_dims;
       axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_output_from_input=`Not_deduced }
+      deduce_output_from_input=`Not_deduced; node_id }
   | Transform  {batch_dims; input_dims; output_dims; axis_labels} ->
     { batch=Given batch_dims; input=Given input_dims; output=Given output_dims;
       axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_output_from_input=`Not_deduced }
+      deduce_output_from_input=`Not_deduced; node_id }
   | Unknown_batch_data {output_dims; axis_labels} ->
     { batch=Unknown; input=Given []; output=Given output_dims;
       axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_output_from_input=`Not_deduced }
+      deduce_output_from_input=`Not_deduced; node_id }
   | Deduced_params deduce_output_from_input ->
     { batch=Given []; input=Unknown; output=Unknown;
       axis_labels=Map.empty (module AxisKey);
-      deduce_output_from_input }
+      deduce_output_from_input; node_id }
 
 let to_string_hum ?(style=`Axis_size) sh =
   let n_outputs = List.length @@ list_of_dims @@ dims_of_kind Output sh in

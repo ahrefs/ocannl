@@ -136,7 +136,7 @@ let ndarray ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_
     | _, _::_, _::_ ->
       let sh = {Shape.batch=Given batch_dims; input=Given input_dims; output=Given output_dims;
                 deduce_output_from_input=`Not_deduced;
-                axis_labels=(Shape.axis_labels_of_spec axis_labels).labels} in
+                axis_labels=(Shape.axis_labels_of_spec axis_labels).labels; node_id= -1} in
       raise @@
       Shape.Shape_error ("Operation.ndarray: cannot provide all of [label], [batch_dims] and [input_dims]",
                          sh, sh) in

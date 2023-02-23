@@ -100,9 +100,9 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let label = "(" ^ m1_l ^ op_label ^ m2_l ^ ")" in
   let n = NodeUI.create_of_promoted_precision m1.comp_node m2.comp_node ~label in
   let node_id = n.id in
-  let shape = Shape.{ batch=Unknown; input=Unknown; output=Unknown;
-                      axis_labels=Map.empty (module AxisKey);
-                      deduce_output_from_input=`Not_deduced } in
+  let shape = { Shape.batch=Unknown; input=Unknown; output=Unknown;
+                axis_labels=Map.empty (module Shape.AxisKey);
+                deduce_output_from_input=`Not_deduced; node_id } in
   let shape_logic = Shape.Broadcast (compose_op, m1.shape, m2.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
@@ -194,9 +194,9 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   let shape =
     match init_shape with
     | None ->
-      Shape.{ batch=Unknown; input=Unknown; output=Unknown;
-              axis_labels=Map.empty (module AxisKey);
-              deduce_output_from_input=`Not_deduced }
+      { Shape.batch=Unknown; input=Unknown; output=Unknown;
+        axis_labels=Map.empty (module Shape.AxisKey);
+        deduce_output_from_input=`Not_deduced; node_id }
     | Some shape -> shape in
   let shape_logic = Shape.Transpose(transpose_op, m.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
@@ -260,7 +260,7 @@ let term_needs_gradient (spec: Shape.term_spec) =
 let term ~label ?needs_gradient (spec: Shape.term_spec) ~init_body : t =
   let n = Ocannl_runtime.Node.create ~value_prec:Single ~grad_prec:Single ~label in
   let node_id = n.id in
-  let shape = Shape.of_term_spec spec in
+  let shape = Shape.of_term_spec node_id spec in
   let needs_gradient =
     match needs_gradient with
     | None -> term_needs_gradient spec
@@ -294,7 +294,7 @@ let error_if_unknown_shape m =
   | {batch=Unknown; _} -> raise @@ Session_error ("Shape of batching is still unknown", Some m)
   | {output=Inferred []; _} ->
      raise @@ Session_error ("Shape of outputs is still empty -- missing shape information", Some m)
-  | {input=_; output=_; batch=_; axis_labels=_; deduce_output_from_input=_} -> ()
+  | {input=_; output=_; batch=_; axis_labels=_; deduce_output_from_input=_; node_id=_} -> ()
 
 let get_toplevel m =
   error_if_unknown_shape m;
