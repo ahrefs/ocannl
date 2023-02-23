@@ -1,7 +1,7 @@
 (executable
  (name pp)
  (modules pp)
- (libraries ppx_ocannl ppxlib)
+ (libraries ppx_ocannl ppx_minidebug ppxlib)
  (modes exe))
 
 (rule
@@ -10,8 +10,17 @@
  (action (run ./%{pp} --impl %{input} -o %{targets})))
 
 (rule
+ (targets test_debug_ppx_actual.ml)
+ (deps (:pp pp.exe) (:input test_debug_ppx.ml))
+ (action (run ./%{pp} --impl %{input} -o %{targets})))
+
+(rule
  (alias runtest)
  (action (diff test_ppx_expected.ml test_ppx_actual.ml)))
+
+(rule
+ (alias runtest)
+ (action (diff test_debug_ppx_expected.ml test_debug_ppx_actual.ml)))
 
 (test
   (name test_ppx)
@@ -22,4 +31,15 @@
 (test
   (name test_ppx_expected)
   (modules test_ppx_expected)
+  (libraries ocannl))
+
+(test
+  (name test_debug_ppx)
+  (modules test_debug_ppx)
+  (libraries ocannl)
+  (preprocess (pps ppx_minidebug)))
+
+(test
+  (name test_debug_ppx_expected)
+  (modules test_debug_ppx_expected)
   (libraries ocannl))
