@@ -31,25 +31,31 @@ let rec splice_lident ~id_prefix = function
   | Ldot (path, id) -> Ldot (path, id_prefix ^ id)
   | Lapply (f, a) -> Lapply (splice_lident ~id_prefix f, a)
 
-let log_preamble ?(message="") ~loc () =
-  (* TODO: use Format and Sexp.pp instead of generating strings. *)
-  [%expr
-    let fname = [%e A.estring ~loc loc.loc_start.pos_fname] in
+let log_preamble ?(brief=false) ?(message="") ~loc () =
+  if brief then
+    [%expr
     Caml.Format.fprintf Debug_runtime.ppf
-      "@[\"%s\":%d:%d-%d:%d@ at time UTC@ %s: %s@]" fname
+      "\"%s\":%d:%d:%s" [%e A.estring ~loc loc.loc_start.pos_fname]
       [%e A.eint ~loc loc.loc_start.pos_lnum]
       [%e A.eint ~loc (loc.loc_start.pos_cnum - loc.loc_start.pos_bol)]
-      [%e A.eint ~loc loc.loc_end.pos_lnum]
-      [%e A.eint ~loc (loc.loc_end.pos_cnum - loc.loc_end.pos_bol)]
-      (Core.Time_ns.to_string_utc @@ Core.Time_ns.now())
       [%e A.estring ~loc message]]
+  else
+    [%expr
+      Caml.Format.fprintf Debug_runtime.ppf
+        "@[\"%s\":%d:%d-%d:%d@ at time UTC@ %s: %s@]@ "
+        [%e A.estring ~loc loc.loc_start.pos_fname]
+        [%e A.eint ~loc loc.loc_start.pos_lnum]
+        [%e A.eint ~loc (loc.loc_start.pos_cnum - loc.loc_start.pos_bol)]
+        [%e A.eint ~loc loc.loc_end.pos_lnum]
+        [%e A.eint ~loc (loc.loc_end.pos_cnum - loc.loc_end.pos_bol)]
+        (Core.Time_ns.to_string_utc @@ Core.Time_ns.now())
+        [%e A.estring ~loc message]]
 
 let log_value ~loc ~t_lident_loc ~descr_loc exp =
   let converter = A.pexp_ident ~loc 
       {t_lident_loc with txt = splice_lident ~id_prefix:"sexp_of_" t_lident_loc.txt} in
   [%expr
-     [%e log_preamble ~loc:t_lident_loc.loc ()];
-     Caml.Format.fprintf Debug_runtime.ppf "%s =@ %a@ "
+     Caml.Format.fprintf Debug_runtime.ppf "%s = %a@ @ "
        [%e A.estring ~loc:descr_loc.loc descr_loc.txt] Sexp.pp_hum ([%e converter] [%e exp])]
 
 exception Not_transforming
@@ -88,7 +94,7 @@ let debug_fun callback bind descr_loc t_lident_loc_opt1 exp =
   let result = pat2pat_res bind in
   let body =
     [%expr
-      Caml.Format.pp_open_hvbox Debug_runtime.ppf 2;
+      Caml.Format.pp_open_hovbox Debug_runtime.ppf 2;
       [%e arg_logs];
       let [%p result] = [%e callback body] in
       [%e log_value ~loc ~t_lident_loc ~descr_loc (pat2expr result)];
@@ -115,7 +121,7 @@ let debug_binding callback vb =
         descr_loc, Some t_lident_loc
     | {ppat_desc=Ppat_var descr_loc; _}, _ ->
         descr_loc, None
-    | _ -> (* raise Not_transforming *)  {txt="made_up_d_2"; loc}, None in
+    | _ -> raise Not_transforming in
   match vb.pvb_expr.pexp_desc, t_lident_loc_opt with
   | Pexp_fun _, _ -> 
     {vb with pvb_expr = debug_fun callback vb.pvb_pat descr_loc t_lident_loc_opt vb.pvb_expr}
@@ -123,15 +129,15 @@ let debug_binding callback vb =
     let result = pat2pat_res pat in
     let exp =
       [%expr
-        Caml.Format.pp_open_hvbox Debug_runtime.ppf 2;
-        [%e log_preamble ~message:descr_loc.txt ~loc:descr_loc.loc ()];
+        Caml.Format.pp_open_hovbox Debug_runtime.ppf 0;
+        [%e log_preamble ~brief:true ~message:" " ~loc:descr_loc.loc ()];
         let [%p result] = [%e callback vb.pvb_expr] in
         [%e log_value ~loc ~t_lident_loc ~descr_loc (pat2expr result)];
         Caml.Format.pp_close_box Debug_runtime.ppf ();
         [%e pat2expr result]] in
     {vb with pvb_expr = exp}
   | _ -> raise Not_transforming
-
+  
 let traverse =
   object (self)
     inherit Ast_traverse.map (* _with_expansion_context *) as super
