@@ -2,21 +2,27 @@ open Base
 
 open Ppxlib
 
-let pat2expr pat =
+let rec pat2expr pat =
   let loc = pat.ppat_loc in
   match pat.ppat_desc with
-  | Ppat_var ident -> Ast_builder.Default.pexp_ident ~loc {ident with txt = Lident ident.txt}
+  | Ppat_constraint (pat', typ) ->
+    Ast_builder.Default.pexp_constraint ~loc (pat2expr pat') typ
+  | Ppat_alias (_, ident)
+  | Ppat_var ident ->
+    Ast_builder.Default.pexp_ident ~loc {ident with txt = Lident ident.txt}
   | _ ->
      Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
-       "OCaNNL currently only supports single identifiers as argument patterns."
+       "ppx_ocannl requires a pattern identifier here: try using an `as` alias."
 
-let pat2pat_ref pat =
+let rec pat2pat_ref pat =
   let loc = pat.ppat_loc in
   match pat.ppat_desc with
-  | Ppat_var ident -> Ast_builder.Default.ppat_var ~loc {ident with txt = ident.txt ^ "_ref"}
+  | Ppat_constraint (pat', _) -> pat2pat_ref pat'
+  | Ppat_alias (_, ident)
+  | Ppat_var ident -> Ast_builder.Default.ppat_var ~loc {ident with txt = ident.txt ^ "__ref"}
   | _ ->
-     Ast_builder.Default.ppat_extension ~loc @@ Location.error_extensionf ~loc
-       "OCaNNL currently only supports single identifiers as argument patterns."
+    Ast_builder.Default.ppat_extension ~loc @@ Location.error_extensionf ~loc
+      "ppx_ocannl requires a pattern identifier here: try using an `as` alias."
 
 let rec collect_list accu = function
   | [%expr [%e? hd] :: [%e? tl]] -> collect_list (hd::accu) tl
