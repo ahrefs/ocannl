@@ -660,6 +660,7 @@ type positional_axes = positional_axis list [@@deriving sexp]
 type product_space = int array [@@deriving sexp]
 type product_iterators = symbol array [@@deriving sexp]
 type project = symbolic_axis array [@@deriving sexp]
+type project_opt = project option [@@deriving sexp]
 
 (** All the information relevant for [Code] code generation contained in a completed [update_step]. *)
 type projections = {
@@ -884,35 +885,35 @@ let%minidebug derive_projections (shapes: update_step) : projections =
   | Broadcast (`Compose, sh1, sh2) ->
     (** [sh2] is the value or the function that gets applied first: [cur_sh(x) = sh1(sh2(x))].
        I.e. [cur.I = sh2.I, cur.O = sh1.O, sh2.O = sh1.I]. *)
-    let product_inp = broadcast_sh cur_sh Input sh2 Input in
-    let iters_inp = List.map product_inp ~f:(fun _ -> get_symbol()) in
-    let lhs_input = broadcast_into iters_inp cur_sh Input sh2 Input in
-    let product_out = broadcast_sh cur_sh Output sh1 Output in
-    let iters_out = List.map product_out ~f:(fun _ -> get_symbol()) in
-    let lhs_output = broadcast_into iters_out cur_sh Output sh1 Output in
-    let product_bch = broadcast_sh sh1 Batch sh2 Batch in
-    let iters_bch = List.map product_bch ~f:(fun _ -> get_symbol()) in
-    let lhs1_batch = broadcast_into iters_bch cur_sh Batch sh1 Batch in
-    let lhs2_batch = broadcast_into iters_bch cur_sh Batch sh2 Batch in
+    let product_inp: dim_list = broadcast_sh cur_sh Input sh2 Input in
+    let iters_inp: symbol_list = List.map product_inp ~f:(fun _ -> get_symbol()) in
+    let lhs_input: symbolic_axes = broadcast_into iters_inp cur_sh Input sh2 Input in
+    let product_out: dim_list = broadcast_sh cur_sh Output sh1 Output in
+    let iters_out: symbol_list = List.map product_out ~f:(fun _ -> get_symbol()) in
+    let lhs_output: symbolic_axes = broadcast_into iters_out cur_sh Output sh1 Output in
+    let product_bch: dim_list = broadcast_sh sh1 Batch sh2 Batch in
+    let iters_bch: symbol_list = List.map product_bch ~f:(fun _ -> get_symbol()) in
+    let lhs1_batch: symbolic_axes = broadcast_into iters_bch cur_sh Batch sh1 Batch in
+    let lhs2_batch: symbolic_axes = broadcast_into iters_bch cur_sh Batch sh2 Batch in
     assert (List.equal (fun a b -> compare_symbolic_axis a b = 0) lhs1_batch lhs2_batch);
 
-    let product_hid = broadcast_sh sh1 Input sh2 Output in
-    let iters_hid = List.map product_hid ~f:(fun _ -> get_symbol()) in
-    let rhs1_input = broadcast_into iters_hid sh1 Input sh2 Output in
-    let rhs1_output = broadcast_into iters_out sh1 Output cur_sh Output in
-    let rhs1_batch = broadcast_into iters_bch sh1 Batch sh2 Batch in
-    let rhs2_input = broadcast_into iters_inp sh2 Input cur_sh Input in
-    let rhs2_output = broadcast_into iters_hid sh2 Output sh1 Input in
-    let rhs2_batch = broadcast_into iters_bch sh2 Batch sh1 Batch in
-    let product_space =
+    let product_hid: dim_list = broadcast_sh sh1 Input sh2 Output in
+    let iters_hid: symbol_list = List.map product_hid ~f:(fun _ -> get_symbol()) in
+    let rhs1_input: symbolic_axes = broadcast_into iters_hid sh1 Input sh2 Output in
+    let rhs1_output: symbolic_axes = broadcast_into iters_out sh1 Output cur_sh Output in
+    let rhs1_batch: symbolic_axes = broadcast_into iters_bch sh1 Batch sh2 Batch in
+    let rhs2_input: symbolic_axes = broadcast_into iters_inp sh2 Input cur_sh Input in
+    let rhs2_output: symbolic_axes = broadcast_into iters_hid sh2 Output sh1 Input in
+    let rhs2_batch: symbolic_axes = broadcast_into iters_bch sh2 Batch sh1 Batch in
+    let product_space: product_space =
       Array.of_list @@ List.concat [product_bch; product_out; product_hid; product_inp] in
-    let product_iterators =
+    let product_iterators: product_iterators =
       Array.of_list @@ List.concat [iters_bch; iters_out; iters_hid; iters_inp] in
-    let project_lhs =
+    let project_lhs: project =
       Array.of_list @@ List.concat [lhs1_batch; lhs_output; lhs_input] in
-    let project_rhs1 =
+    let project_rhs1: project =
       Array.of_list @@ List.concat [rhs1_batch; rhs1_output; rhs1_input] in    
-    let project_rhs2 =
+    let project_rhs2: project_opt =
       Some (Array.of_list @@ List.concat [rhs2_batch; rhs2_output; rhs2_input]) in    
     { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
 
