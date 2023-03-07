@@ -6,21 +6,14 @@
 
 (library
  (name ocannl)
- (libraries base core printbox printbox-text stdio dynlink str ocannl_runtime)
+ (libraries base core printbox printbox-text stdio dynlink str ocannl_runtime minidebug_runtime)
  (preprocess (pps ppx_jane ppx_ocannl ppx_minidebug))
- (modules nodeUI debug_runtime shape code formula operation network exec_as_OCaml)
+ (modules nodeUI shape code formula operation network exec_as_OCaml)
  (modes byte native))
 
 (library
  (name ppx_ocannl)
  (kind ppx_rewriter)
  (modules ppx_ocannl)
- (libraries base ppxlib)
- (preprocess (pps ppx_jane ppxlib.metaquot)))
-
-(library
- (name ppx_minidebug)
- (kind ppx_rewriter)
- (modules ppx_minidebug)
  (libraries base ppxlib)
  (preprocess (pps ppx_jane ppxlib.metaquot)))

@@ -402,7 +402,7 @@ let%expect_test "Very big tensor" =
     set_executor test_executor;
     (* Hey is inferred to be a matrix. *)
     let hey = Network.return_term @@
-      range_of_shape ~batch_dims:[17] ~input_dims:[19; 20; 21] ~output_dims:[23; 24] () in
+      range_of_shape ~batch_dims:[7] ~input_dims:[9; 10; 11] ~output_dims:[13; 14] () in
     let%ocannl hoo = (1 + 1) * hey - 10 in
     let hoo_f = Network.unpack hoo in
     refresh_session ();

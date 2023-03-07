@@ -53,16 +53,14 @@ let given_of_kind = function
   | AxisKey.Input -> given_input
   | AxisKey.Output -> given_output
 
-type dim_list = int list [@@deriving compare, sexp]
-
 type dims =
-| Given of dim_list
+| Given of int list
 (** User-provided dimensions. They will not change but will be broadcasted to bigger sizes. *)
-| Fixed of dim_list
+| Fixed of int list
 (** User-provided dimensions that will fail if used in a different size context, even if broadcastable.
     Note that [Operation.stop_broadcast] implements additional shape logic:
     it converts the (bottom-up i.e. partially inferred) shape into a [Fixed] variant. *)
-| Inferred of dim_list
+| Inferred of int list
 (** Dimensions that will itself change to a bigger size: they adapt to the broadcasted size. *)
 | Unknown
 (** User-provided but quivalent to [Inferred []]. *)
@@ -654,31 +652,23 @@ type 'a axis_index =
 (** The given member of the [product_space] corresponding to some [product_iterators]. *)
 [@@deriving compare, sexp, variants]
 
-type symbol_list = symbol list [@@deriving sexp]
 type symbolic_axis = symbol axis_index [@@deriving compare, sexp]
-type symbolic_axes = symbolic_axis list [@@deriving sexp]
-type positional_axis = int axis_index [@@deriving sexp]
-type positional_axes = positional_axis list [@@deriving sexp]
-type product_space = int array [@@deriving sexp]
-type product_iterators = symbol array [@@deriving sexp]
-type project = symbolic_axis array [@@deriving sexp]
-type project_opt = project option [@@deriving sexp]
 
 (** All the information relevant for [Code] code generation contained in a completed [update_step]. *)
 type projections = {
-  product_space: product_space;
+  product_space: int array;
   (** The product space dimensions (concatentation of the relevant batch, output, input axes) with
       the same semantics as [to_dims], that an operation should parallelize (map-reduce) over. *)
-  product_iterators: product_iterators;
+  product_iterators: symbol array;
   (** The product space iterators (concatentation of the relevant batch, output, input axes)
       for iterating over the [product_space] axes, where same axes are at same array indices. *)
-  project_lhs: project;
+  project_lhs: symbolic_axis array;
   (** A projection that takes an [product_space]-bound index and produces an index into the result of
       an operation. *)
-  project_rhs1: project;
+  project_rhs1: symbolic_axis array;
   (** A projection that takes an [product_space]-bound index and produces an index into the (first)
       argument of an operation. *)
-  project_rhs2: project option;
+  project_rhs2: symbolic_axis array option;
   (** A projection that takes an [product_space]-bound index and produces an index into the second
       argument of a binary operation. *)
 } [@@deriving sexp]
@@ -690,12 +680,16 @@ let terminal_projections sh =
   let project_lhs = Array.map product_iterators ~f:iterator in
   { product_space; product_iterators; project_lhs; project_rhs1=project_lhs; project_rhs2=None; }
 
+module Log_ch = Minidebug_runtime.Debug_ch(struct let filename = "shape_debug.log" end)
+(* module Debug_runtime = Minidebug_runtime.PrintBox(struct let debug_ch = Stdio.Out_channel.stderr end) *)
+module Debug_runtime = Minidebug_runtime.PrintBox(Log_ch)
+
 (** Computes the indexing into subformulas given the shape information of a formula. The processing
     mirrors [propagate_shapes], but [derive_projections] should only be invoked when the shapes
     are inferred already. *)
-let%minidebug derive_projections (shapes: update_step) : projections =
+let%debug_sexp derive_projections (shapes: update_step) : projections =
   (* Broadcasts symmetrically to iterate all axes. *)
-  let broadcast_dims sh1_dims sh2_dims =
+  let broadcast_dims (sh1_dims: dims) (sh2_dims: dims): int list =
     let rec broad_back_dims accu = function
     | [], [] -> accu
     | dims, [] | [], dims -> List.rev_append dims accu
@@ -706,7 +700,7 @@ let%minidebug derive_projections (shapes: update_step) : projections =
       | Unknown, (Inferred dims | Given dims | Fixed dims) -> dims
       | (Inferred dims1 | Given dims1 | Fixed dims1), (Inferred dims2 | Given dims2 | Fixed dims2) ->
         broad_back_dims [] (List.rev dims1, List.rev dims2) in
-  let broadcast_sh sh1 kind1 sh2 kind2 =
+  let broadcast_sh (sh1: t) (kind1: AxisKey.kind) (sh2: t) (kind2: AxisKey.kind): int list =
     broadcast_dims (dims_of_kind kind1 sh1) (dims_of_kind kind2 sh2) in
   (* The first arg is "into" we build the projection for, the second arg is the context. *)
   let broadcast_into_dims product_idcs sh1_dims sh2_dims =
@@ -784,25 +778,25 @@ let%minidebug derive_projections (shapes: update_step) : projections =
     { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 = None }
 
   | Transpose (`Pointwise, sh) ->
-    let product_inp = broadcast_sh cur_sh Input sh Input in
-    let iters_inp = List.map product_inp ~f:(fun _ -> get_symbol()) in
-    let lhs_input = broadcast_into iters_inp cur_sh Input sh Input in
-    let product_out = broadcast_sh cur_sh Output sh Output in
-    let iters_out = List.map product_out ~f:(fun _ -> get_symbol()) in
-    let lhs_output = broadcast_into iters_out cur_sh Output sh Output in
-    let product_bch = broadcast_sh cur_sh Batch sh Batch in
-    let iters_bch = List.map product_bch ~f:(fun _ -> get_symbol()) in
-    let lhs_batch = broadcast_into iters_bch cur_sh Batch sh Batch in
-    let rhs_input = broadcast_into iters_out sh Input cur_sh Input in
-    let rhs_output = broadcast_into iters_inp sh Output cur_sh Output in
-    let rhs_batch = broadcast_into iters_bch sh Batch cur_sh Batch in
-    let product_space =
+    let product_inp: int list = broadcast_sh cur_sh Input sh Input in
+    let iters_inp: symbol list = List.map product_inp ~f:(fun _ -> get_symbol()) in
+    let lhs_input: symbol axis_index list = broadcast_into iters_inp cur_sh Input sh Input in
+    let product_out: int list = broadcast_sh cur_sh Output sh Output in
+    let iters_out: symbol list = List.map product_out ~f:(fun _ -> get_symbol()) in
+    let lhs_output: symbol axis_index list = broadcast_into iters_out cur_sh Output sh Output in
+    let product_bch: int list = broadcast_sh cur_sh Batch sh Batch in
+    let iters_bch: symbol list = List.map product_bch ~f:(fun _ -> get_symbol()) in
+    let lhs_batch: symbol axis_index list = broadcast_into iters_bch cur_sh Batch sh Batch in
+    let rhs_input: symbol axis_index list = broadcast_into iters_out sh Input cur_sh Input in
+    let rhs_output: symbol axis_index list = broadcast_into iters_inp sh Output cur_sh Output in
+    let rhs_batch: symbol axis_index list = broadcast_into iters_bch sh Batch cur_sh Batch in
+    let product_space: int array =
       Array.of_list @@ List.concat [product_bch; product_out; product_inp] in
-    let product_iterators =
+    let product_iterators: symbol array =
       Array.of_list @@ List.concat [iters_bch; iters_out; iters_inp] in
-    let project_lhs =
+    let project_lhs: symbol axis_index array =
       Array.of_list @@ List.concat [lhs_batch; lhs_output; lhs_input] in
-    let project_rhs1 =
+    let project_rhs1: symbol axis_index array =
       Array.of_list @@ List.concat [rhs_batch; rhs_output; rhs_input] in    
     { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 = None }
 
@@ -887,35 +881,35 @@ let%minidebug derive_projections (shapes: update_step) : projections =
   | Broadcast (`Compose, sh1, sh2) ->
     (** [sh2] is the value or the function that gets applied first: [cur_sh(x) = sh1(sh2(x))].
        I.e. [cur.I = sh2.I, cur.O = sh1.O, sh2.O = sh1.I]. *)
-    let product_inp: dim_list = broadcast_sh cur_sh Input sh2 Input in
-    let iters_inp: symbol_list = List.map product_inp ~f:(fun _ -> get_symbol()) in
-    let lhs_input: symbolic_axes = broadcast_into iters_inp cur_sh Input sh2 Input in
-    let product_out: dim_list = broadcast_sh cur_sh Output sh1 Output in
-    let iters_out: symbol_list = List.map product_out ~f:(fun _ -> get_symbol()) in
-    let lhs_output: symbolic_axes = broadcast_into iters_out cur_sh Output sh1 Output in
-    let product_bch: dim_list = broadcast_sh sh1 Batch sh2 Batch in
-    let iters_bch: symbol_list = List.map product_bch ~f:(fun _ -> get_symbol()) in
-    let lhs1_batch: symbolic_axes = broadcast_into iters_bch cur_sh Batch sh1 Batch in
-    let lhs2_batch: symbolic_axes = broadcast_into iters_bch cur_sh Batch sh2 Batch in
+    let product_inp: int list = broadcast_sh cur_sh Input sh2 Input in
+    let iters_inp: symbol list = List.map product_inp ~f:(fun _ -> get_symbol()) in
+    let lhs_input: symbolic_axis list = broadcast_into iters_inp cur_sh Input sh2 Input in
+    let product_out: int list = broadcast_sh cur_sh Output sh1 Output in
+    let iters_out: symbol list = List.map product_out ~f:(fun _ -> get_symbol()) in
+    let lhs_output: symbolic_axis list = broadcast_into iters_out cur_sh Output sh1 Output in
+    let product_bch: int list = broadcast_sh sh1 Batch sh2 Batch in
+    let iters_bch: symbol list = List.map product_bch ~f:(fun _ -> get_symbol()) in
+    let lhs1_batch: symbolic_axis list = broadcast_into iters_bch cur_sh Batch sh1 Batch in
+    let lhs2_batch: symbolic_axis list = broadcast_into iters_bch cur_sh Batch sh2 Batch in
     assert (List.equal (fun a b -> compare_symbolic_axis a b = 0) lhs1_batch lhs2_batch);
 
-    let product_hid: dim_list = broadcast_sh sh1 Input sh2 Output in
-    let iters_hid: symbol_list = List.map product_hid ~f:(fun _ -> get_symbol()) in
-    let rhs1_input: symbolic_axes = broadcast_into iters_hid sh1 Input sh2 Output in
-    let rhs1_output: symbolic_axes = broadcast_into iters_out sh1 Output cur_sh Output in
-    let rhs1_batch: symbolic_axes = broadcast_into iters_bch sh1 Batch sh2 Batch in
-    let rhs2_input: symbolic_axes = broadcast_into iters_inp sh2 Input cur_sh Input in
-    let rhs2_output: symbolic_axes = broadcast_into iters_hid sh2 Output sh1 Input in
-    let rhs2_batch: symbolic_axes = broadcast_into iters_bch sh2 Batch sh1 Batch in
-    let product_space: product_space =
+    let product_hid: int list = broadcast_sh sh1 Input sh2 Output in
+    let iters_hid: symbol list = List.map product_hid ~f:(fun _ -> get_symbol()) in
+    let rhs1_input: symbolic_axis list = broadcast_into iters_hid sh1 Input sh2 Output in
+    let rhs1_output: symbolic_axis list = broadcast_into iters_out sh1 Output cur_sh Output in
+    let rhs1_batch: symbolic_axis list = broadcast_into iters_bch sh1 Batch sh2 Batch in
+    let rhs2_input: symbolic_axis list = broadcast_into iters_inp sh2 Input cur_sh Input in
+    let rhs2_output: symbolic_axis list = broadcast_into iters_hid sh2 Output sh1 Input in
+    let rhs2_batch: symbolic_axis list = broadcast_into iters_bch sh2 Batch sh1 Batch in
+    let product_space: int array =
       Array.of_list @@ List.concat [product_bch; product_out; product_hid; product_inp] in
-    let product_iterators: product_iterators =
+    let product_iterators: symbol array =
       Array.of_list @@ List.concat [iters_bch; iters_out; iters_hid; iters_inp] in
-    let project_lhs: project =
+    let project_lhs: symbolic_axis array =
       Array.of_list @@ List.concat [lhs1_batch; lhs_output; lhs_input] in
-    let project_rhs1: project =
+    let project_rhs1: symbolic_axis array =
       Array.of_list @@ List.concat [rhs1_batch; rhs1_output; rhs1_input] in    
-    let project_rhs2: project_opt =
+    let project_rhs2: symbolic_axis array option =
       Some (Array.of_list @@ List.concat [rhs2_batch; rhs2_output; rhs2_input]) in    
     { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
 
@@ -1000,7 +994,7 @@ let derive_index iterator_symbols (projection: symbolic_axis array) (type iterat
   let sym_to_i =
     Array.mapi iterator_symbols ~f:(fun i (Symbol s) -> s, i) |>
     Array.to_list |> Map.of_alist_exn (module Int) in
-  let positions: positional_axis array = Array.map projection ~f:(
+  let positions: int axis_index array = Array.map projection ~f:(
     function
     | Fixed_idx i -> Fixed_idx i
     | Iterator (Symbol s) -> Iterator (Map.find_exn sym_to_i s)

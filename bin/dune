@@ -1,5 +1,13 @@
 (executable
  (public_name ocannl)
  (name main)
+ (modules main)
  (libraries ocannl base stdio)
+ (modes exe))
+
+(executable
+ (name helloWorld)
+ (modules helloWorld)
+ (libraries ocannl base stdio)
+ (preprocess (pps ppx_jane ppx_ocannl))
  (modes exe))
