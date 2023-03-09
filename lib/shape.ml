@@ -336,6 +336,11 @@ let gen_label_of_axis parsed_spec axis =
   let idx = axis.from_end - (given_of_kind axis.in_axes parsed_spec) in
   (match axis.in_axes with Batch -> "__b" | Input -> "__i" | Output -> "__o") ^ Int.to_string idx
 
+let set_dims_type sh typ =
+  sh.batch <- typ (list_of_dims sh.batch);
+  sh.input <- typ (list_of_dims sh.input);
+  sh.output <- typ (list_of_dims sh.output)
+
 (** Augment the pseudo-labels map of an einsum notation with the generated labels for broadcasted axes. *)
 let axes_with_inf_labels ~all_labels ls_xhs =
   let rec loop more kind accu =

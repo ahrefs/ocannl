@@ -176,14 +176,8 @@ let stop_gradient =
 
 (** A [stop_broadcast] mutates the partially-inferred shape of a formula in-place, substituting-in
     a [Fixed] marker on the dimensions. This way we avoid introducing a new node. *)
-let stop_broadcast m =
-  let open Formula in
-  let sh = m.shape in
-  sh.batch <- Fixed (Shape.list_of_dims sh.batch);
-  sh.batch <- Fixed (Shape.list_of_dims sh.batch);
-  sh.batch <- Fixed (Shape.list_of_dims sh.batch);
-  m
-    
+let stop_broadcast m = Shape.set_dims_type m.Formula.shape Shape.fixed
+
 (** [identity] introduces a new node, which is an identity in both the forward and backward pass. *)
 let identity m =
   let grad_body ~n ~n1 projections = assign_op g ~n:n1 ~n1:n projections in
