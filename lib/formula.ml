@@ -105,7 +105,13 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
                 deduce_output_from_input=`Not_deduced; node_id } in
   let shape_logic = Shape.Broadcast (compose_op, m1.shape, m2.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
-  Shape.propagate_shapes local_shape_update;
+  Shape.(
+    propagate_shapes local_shape_update;
+    match m1.shape, m2.shape with
+    | {batch=Given _; input=Given _; output=Given _; _}, {batch=Given _; input=Given _; output=Given _; _} ->
+      set_dims_type shape given
+    | _ -> ()
+  );
   let n1 = m1.comp_node in
   let n2 = m2.comp_node  in
   let projections() = Shape.derive_projections local_shape_update in
@@ -200,8 +206,13 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
     | Some shape -> shape in
   let shape_logic = Shape.Transpose(transpose_op, m.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
-  Shape.propagate_shapes local_shape_update;
-
+  Shape.(
+    propagate_shapes local_shape_update;
+    if Option.is_none init_shape then match m.shape with
+    | {batch=Given _; input=Given _; output=Given _; _} ->
+      set_dims_type shape given
+    | _ -> ()
+  );
   let n1 = m.comp_node in
   let projections() = Shape.derive_projections local_shape_update in
   let op_body = op_body ~n ~n1 projections in
