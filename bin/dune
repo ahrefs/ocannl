@@ -11,3 +11,10 @@
  (libraries ocannl base stdio)
  (preprocess (pps ppx_jane ppx_ocannl))
  (modes exe))
+
+(executable
+ (name micrograd_demo)
+ (modules micrograd_demo)
+ (libraries ocannl base stdio)
+ (preprocess (pps ppx_jane ppx_ocannl))
+ (modes exe))
