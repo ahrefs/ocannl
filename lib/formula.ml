@@ -102,7 +102,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t 
   let node_id = n.id in
   let shape = { Shape.batch=Unknown; input=Unknown; output=Unknown;
                 axis_labels=Map.empty (module Shape.AxisKey);
-                deduce_output_from_input=`Not_deduced; node_id } in
+                deduce_output_from_input=`Not_constrained; node_id } in
   let shape_logic = Shape.Broadcast (compose_op, m1.shape, m2.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.(
@@ -202,7 +202,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
     | None ->
       { Shape.batch=Unknown; input=Unknown; output=Unknown;
         axis_labels=Map.empty (module Shape.AxisKey);
-        deduce_output_from_input=`Not_deduced; node_id }
+        deduce_output_from_input=`Not_constrained; node_id }
     | Some shape -> shape in
   let shape_logic = Shape.Transpose(transpose_op, m.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in

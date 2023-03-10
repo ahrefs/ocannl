@@ -132,6 +132,12 @@ let let_opt ~loc vbs expr =
 let no_vbs = Map.empty (module String)
 let reduce_vbss = List.reduce_exn ~f:(Map.merge_skewed ~combine:(fun ~key:_ _v1 v2 -> v2))
 
+let make_vb ~loc ~str_loc ~ident ~string =
+  let pat = Ast_helper.Pat.var ~loc {loc=str_loc; txt=ident} in
+  let v = [%expr Network.return_term (Operation.unconstrained_param [%e string])] in
+  let vb = Ast_helper.Vb.mk ~loc pat v in
+  pat, vb
+
 let rec translate expr =
   let loc = expr.pexp_loc in
   match expr with
@@ -154,9 +160,7 @@ let rec translate expr =
     no_vbs, [%expr Network.return_term (Operation.number ~axis_label:[%e axis] (Float.of_int [%e i]))]
 
   | { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } ->
-    let pat = Ast_helper.Pat.var ~loc {loc=str_loc; txt=ident} in
-    let v = [%expr Network.return_term Operation.O.(!~ [%e expr])] in
-    let vb = Ast_helper.Vb.mk ~loc pat v in
+    let pat, vb = make_vb ~loc ~str_loc ~ident ~string:expr in
     Map.singleton (module String) ident vb, pat2expr pat
 
   | { pexp_desc = Pexp_tuple _; _ } | { pexp_desc = Pexp_array _; _ } 

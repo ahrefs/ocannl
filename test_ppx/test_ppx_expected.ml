@@ -2,7 +2,7 @@ open Base
 open Ocannl
 let y0 =
   let open! Network.O in
-    let hey = Network.return_term (let open Operation.O in !~ "hey") in
+    let hey = Network.return_term (Operation.unconstrained_param "hey") in
     Network.apply
       (Network.apply (+)
          (Network.apply
@@ -11,7 +11,7 @@ let y0 =
       (Network.return_term (Operation.number (Float.of_int 3)))
 let y1 =
   let open! Network.O in
-    let hey = Network.return_term (let open Operation.O in !~ "hey") in
+    let hey = Network.return_term (Operation.unconstrained_param "hey") in
     let x__ref = ref [] in
     let x = Network.return (Network.Placeholder x__ref) in
     let body =
@@ -27,7 +27,7 @@ let y1 =
        x__ref := (List.tl_exn (!x__ref)); result__)
 let y2 =
   let open! Network.O in
-    let hey = Network.return_term (let open Operation.O in !~ "hey") in
+    let hey = Network.return_term (Operation.unconstrained_param "hey") in
     let x1__ref = ref [] in
     let x1 = Network.return (Network.Placeholder x1__ref) in
     let x2__ref = ref [] in
@@ -59,7 +59,7 @@ let b =
                                                                  10)|])
 let y =
   let open! Network.O in
-    let hey = Network.return_term (let open Operation.O in !~ "hey") in
+    let hey = Network.return_term (Operation.unconstrained_param "hey") in
     Network.apply
       (Network.apply (+)
          (Network.apply
@@ -69,7 +69,7 @@ let y =
       (Network.return_term (Operation.number ~axis_label:"p" 1.0))
 let z =
   let open! Network.O in
-    let hey = Network.return_term (let open Operation.O in !~ "hey") in
+    let hey = Network.return_term (Operation.unconstrained_param "hey") in
     Network.apply
       (Network.apply (+)
          (Network.apply

@@ -67,7 +67,7 @@ type dims =
 [@@deriving compare, sexp, variants]
 
 type deduce_dims =
-[ `Not_deduced
+[ `Not_constrained
 | `Preserve
 | `Scale of float
 ] [@@deriving compare, sexp, variants]
@@ -78,7 +78,7 @@ type deduce_dims =
     Note that in practice [from] will be [Unknown] or [Inferred] dimensions, making it of little relevance
     how the [Given] and [Fixed] cases are interpreted here. *)
 let deduce_dims from: deduce_dims -> dims = function
-| `Not_deduced -> Unknown
+| `Not_constrained -> Unknown
 | `Preserve ->
   (match from with
   | Given dims | Fixed dims -> Inferred dims
@@ -575,10 +575,10 @@ let propagate_shapes (update: update_step) =
 
     (* Always re-derive the output shape, to have the latest information. *)
     (* TODO: isn't it wasteful to discard the old sh1.output? *)
-    if not @@ is_not_deduced sh1.deduce_output_from_input then
+    if not @@ is_not_constrained sh1.deduce_output_from_input then
       sh1.output <- deduce_dims sh2.input sh1.deduce_output_from_input
     (* TODO(#37):
-    if not @@ is_not_deduced sh1.deduce_input_from_output then
+    if not @@ is_not_constrained sh1.deduce_input_from_output then
       sh1.input <- deduce_dims sh2.output sh1.deduce_input_from_output *)
 
   | Broadcast (`Einsum spec, sh1, sh2) ->
@@ -1017,7 +1017,7 @@ let derive_index iterator_symbols (projection: symbolic_axis array) (type iterat
       function Fixed_idx i -> Fixed_idx i | Iterator p -> Iterator product.(p))
 
 (** Specification of a terminal [Formula.t]'s shape. The [string] occurrences refer to [axis_labels]
-    specs. *)
+    specs. Note: the specification is just a helper in constructing shapes,  *)
 type term_spec =
   | Unknown_shape
   (** The shape will need to be fully inferred. *)
@@ -1033,7 +1033,7 @@ type term_spec =
   (** A data shape where the batch dimensions are left up to inference. *)
   | Deduced_params of deduce_dims
     (** Parameters with inferred dimensionality. Use cases:
-        [Deduced_params `Not_deduced] -- the shape will need to be fully inferred (no batch dims).
+        [Deduced_params `Not_constrained] -- the shape will need to be fully inferred (no batch dims).
         [Deduced_params `Preserve] -- a hidden layer preserving the dimensionality.
         [Deduced_params (`Scale 2.0)] -- an expansion hidden layer doubling the dimensionality.
         [Deduced_params (`Scale 0.5)] -- an bottleneck hidden layer halving the dimensionality.
@@ -1044,27 +1044,27 @@ let of_term_spec node_id: term_spec -> t = function
   | Unknown_shape ->
     { batch=Unknown; input=Unknown; output=Unknown;
       axis_labels=Map.empty (module AxisKey);
-      deduce_output_from_input=`Not_deduced; node_id }
+      deduce_output_from_input=`Not_constrained; node_id }
   | Constant {output_dims; axis_labels} ->
     { batch=Given []; input=Given []; output=Given output_dims;
       axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_output_from_input=`Not_deduced; node_id }
+      deduce_output_from_input=`Not_constrained; node_id }
   | Data {batch_dims; output_dims; axis_labels} ->
     { batch=Given batch_dims; input=Given []; output=Given output_dims;
       axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_output_from_input=`Not_deduced; node_id }
+      deduce_output_from_input=`Not_constrained; node_id }
   | Params {input_dims; output_dims; axis_labels} ->
     { batch=Given []; input=Given input_dims; output=Given output_dims;
       axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_output_from_input=`Not_deduced; node_id }
+      deduce_output_from_input=`Not_constrained; node_id }
   | Transform  {batch_dims; input_dims; output_dims; axis_labels} ->
     { batch=Given batch_dims; input=Given input_dims; output=Given output_dims;
       axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_output_from_input=`Not_deduced; node_id }
+      deduce_output_from_input=`Not_constrained; node_id }
   | Unknown_batch_data {output_dims; axis_labels} ->
     { batch=Unknown; input=Given []; output=Given output_dims;
       axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_output_from_input=`Not_deduced; node_id }
+      deduce_output_from_input=`Not_constrained; node_id }
   | Deduced_params deduce_output_from_input ->
     { batch=Given []; input=Unknown; output=Unknown;
       axis_labels=Map.empty (module AxisKey);

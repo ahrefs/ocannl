@@ -104,6 +104,13 @@ let number ?(axis_label="") c =
   Formula.term ~label:(float_to_label c) (Constant {output_dims=[1]; axis_labels=axis_label})
     ~init_op:(`Constant_of_value c)
 
+let unconstrained_param ?init label =
+  (* Note: no axis label so that we do not conflict with user labels. *)
+  let init_op = match init with
+  | None -> `Standard_uniform
+  | Some c -> `Constant_of_value c in
+  Formula.term ~label (Deduced_params `Not_constrained) ~init_op
+
 let range ?(axis_label="") upto =
   Formula.term ~label:("0"^"..."^Int.to_string upto)
    (Constant {output_dims=[upto + 1]; axis_labels=axis_label}) ~init_op:`Range_over_offsets
@@ -126,7 +133,7 @@ let ndarray ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_
     | _, _, [] -> Data {batch_dims; output_dims; axis_labels}
     | _, _::_, _::_ ->
       let sh = {Shape.batch=Given batch_dims; input=Given input_dims; output=Given output_dims;
-                deduce_output_from_input=`Not_deduced;
+                deduce_output_from_input=`Not_constrained;
                 axis_labels=(Shape.axis_labels_of_spec axis_labels).labels; node_id= -1} in
       raise @@
       Shape.Shape_error ("Operation.ndarray: cannot provide all of [label], [batch_dims] and [input_dims]",
@@ -176,7 +183,7 @@ module O = struct
   let ( *. ) = pointmul
   let (+) = add
   let (!/) = relu
-  let (!~) label = Formula.term ~label (Deduced_params `Not_deduced) ~init_op:`Standard_uniform
+  let (!~) label = Formula.term ~label (Deduced_params `Not_constrained) ~init_op:`Standard_uniform
   let (!.) = number
   let (-) m1 m2 = m1 + !.(-1.) * m2
 end
@@ -446,6 +453,7 @@ module CLI = struct
   let einsum1 = einsum1
   let term = Formula.term
   let number = number
+  let unconstrained_param = unconstrained_param
   let range = range
   let range_of_shape = range_of_shape
   let ndarray = ndarray
