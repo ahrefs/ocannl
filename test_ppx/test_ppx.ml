@@ -12,4 +12,6 @@ let%ocannl b = [|[7; 8]; [9; 10]|]
 
 let%ocannl y = "q" 2.0 * "hey" + "p" 1.0
 
-let () = ignore (y0, y1, y2, a, b, y)
+let%ocannl z = "q" 2.0 * "hey" + hey * "p" 1.0
+
+let () = ignore (y0, y1, y2, a, b, y, z)

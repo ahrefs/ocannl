@@ -67,4 +67,15 @@ let y =
                (Network.return_term (Operation.number ~axis_label:"q" 2.0)))
             hey))
       (Network.return_term (Operation.number ~axis_label:"p" 1.0))
-let () = ignore (y0, y1, y2, a, b, y)
+let z =
+  let open! Network.O in
+    let hey = Network.return_term (let open Operation.O in !~ "hey") in
+    Network.apply
+      (Network.apply (+)
+         (Network.apply
+            (Network.apply ( * )
+               (Network.return_term (Operation.number ~axis_label:"q" 2.0)))
+            hey))
+      (Network.apply (Network.apply ( * ) hey)
+         (Network.return_term (Operation.number ~axis_label:"p" 1.0)))
+let () = ignore (y0, y1, y2, a, b, y, z)
