@@ -34,7 +34,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
   Random.init 0;
   set_executor test_executor;
   (* Hey is inferred to be a matrix. *)
-  let%ocannl y = "q" 2.0 * "hey" + "p" 1.0 in
+  let%ocannl y = 'q' 2.0 * "hey" + 'p' 1.0 in
   let y_f = Network.unpack y in
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   let hey_f = Network.unpack hey in
