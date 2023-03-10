@@ -705,8 +705,9 @@ let derive_projections (shapes: update_step) : projections =
     broadcast_dims (dims_of_kind kind1 sh1) (dims_of_kind kind2 sh2) in
   (* The first arg is "into" we build the projection for, the second arg is the context. *)
   let broadcast_into_dims product_idcs sh1_dims sh2_dims =
+    (* TODO: audit the use of [Iterator idx] / [Fixed_idx 0] wrt. the [project_lhs_verify] assert. *)
     let broad_dim idx = function
-      (* It is less error-prone to handle 1 as Fixed_idx -- less dependence on what sh2 is. *)
+    | 1, 1 -> Iterator idx
     | 1, _d -> Fixed_idx 0
     | _ -> Iterator idx in
     let rec broad_back_dims accu_idcs = function
@@ -788,8 +789,8 @@ let derive_projections (shapes: update_step) : projections =
     let product_bch = broadcast_sh cur_sh Batch sh Batch in
     let iters_bch = List.map product_bch ~f:(fun _ -> get_symbol()) in
     let lhs_batch = broadcast_into iters_bch cur_sh Batch sh Batch in
-    let rhs_input = broadcast_into iters_out sh Input cur_sh Input in
-    let rhs_output = broadcast_into iters_inp sh Output cur_sh Output in
+    let rhs_input = broadcast_into iters_inp sh Input cur_sh Input in
+    let rhs_output = broadcast_into iters_out sh Output cur_sh Output in
     let rhs_batch = broadcast_into iters_bch sh Batch cur_sh Batch in
     let product_space =
       Array.of_list @@ List.concat [product_bch; product_out; product_inp] in
@@ -847,9 +848,9 @@ let derive_projections (shapes: update_step) : projections =
 
   | Broadcast (`Pointwise, sh1, sh2) ->
     let product_inp =
-    match cur_sh.input with
-    | Given _ | Unknown -> broadcast_sh sh1 Input sh2 Input
-    | Fixed dims | Inferred dims -> dims in
+      match cur_sh.input with
+      | Given _ | Unknown -> broadcast_sh sh1 Input sh2 Input
+      | Fixed dims | Inferred dims -> dims in
     let iters_inp = List.map product_inp ~f:(fun _ -> get_symbol()) in
     let lhs1_input = broadcast_into iters_inp cur_sh Input sh1 Input in
     let product_out =
