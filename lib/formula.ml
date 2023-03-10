@@ -81,8 +81,8 @@ let reset_zeros ~node_id field _shape =
 let reset_ones ~node_id field _shape =
   Code.Reset {tensor={node_id; field}; reset_op=`Constant_of_value 1.0}
 
-let create ~node_id field shape =
-  Code.Create {tensor={node_id; field}; dims=(fun () -> Shape.to_dims shape); init_op=`Unspecified}
+let create ~node_id ?(init_op=`Unspecified) field shape =
+  Code.Create {tensor={node_id; field}; dims=(fun () -> Shape.to_dims shape); init_op}
 
 let max_sublabel_length = ref 25
 
@@ -268,7 +268,7 @@ let term_needs_gradient (spec: Shape.term_spec) =
   | Deduced_params _ -> true
 
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label ?needs_gradient (spec: Shape.term_spec) ~init_body : t =
+let term ~label ?needs_gradient (spec: Shape.term_spec) ~init_op : t =
   let n = Ocannl_runtime.Node.create ~value_prec:Single ~grad_prec:Single ~label in
   let node_id = n.id in
   let shape = Shape.of_term_spec node_id spec in
@@ -284,7 +284,7 @@ let term ~label ?needs_gradient (spec: Shape.term_spec) ~init_body : t =
 
   let open Code in
   let forward_body = Noop in
-  let init_values = Par (create ~node_id `Value shape, init_body ~n `Value shape) in
+  let init_values = create ~node_id ~init_op `Value shape in
   let zero_grads = reset_zeros ~node_id `Grad shape in
   let backprop_body = Noop in
   (* Very unlikely someone will want dw/dw. *)

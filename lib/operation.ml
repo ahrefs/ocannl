@@ -97,25 +97,16 @@ let relu =
                  projections=(fun () -> Shape.backprop_unary @@ projections())} in
   Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
-let reset_value c ~n field _shape =
-  Code.Reset {tensor=d n field; reset_op=`Constant_of_value c}
-
-let reset_range ~n field _shape =
-  Code.Reset {tensor=d n field; reset_op=`Range_over_offsets}
-
-let reset_values arr ~n field _shape =
-  Code.Reset {tensor=d n field; reset_op=`Fixed_constant arr}
-
 let float_to_label v = Float.to_string_hum ~strip_zero:true v
 
 let number ?(axis_label="") c =
   (* Note: no axis label so that we do not conflict with user labels. *)
   Formula.term ~label:(float_to_label c) (Constant {output_dims=[1]; axis_labels=axis_label})
-    ~init_body:(reset_value c)
+    ~init_op:(`Constant_of_value c)
 
 let range ?(axis_label="") upto =
   Formula.term ~label:("0"^"..."^Int.to_string upto)
-   (Constant {output_dims=[upto + 1]; axis_labels=axis_label}) ~init_body:reset_range
+   (Constant {output_dims=[upto + 1]; axis_labels=axis_label}) ~init_op:`Range_over_offsets
 
 let range_of_shape ?(axis_labels="") ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[]) () =
   let spec =
@@ -124,7 +115,7 @@ let range_of_shape ?(axis_labels="") ?(batch_dims=[]) ?(input_dims=[]) ?(output_
     | _, [] -> Data {batch_dims; output_dims; axis_labels}
     | _, _ -> Transform {batch_dims; input_dims; output_dims; axis_labels} in
   let dims = Array.concat_map [|batch_dims; output_dims; input_dims|] ~f:Array.of_list in
-  Formula.term ~label:("r"^NodeUI.dims_to_string dims) spec ~init_body:reset_range
+  Formula.term ~label:("r"^NodeUI.dims_to_string dims) spec ~init_op:`Range_over_offsets
 
 let ndarray ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[]) values =
   let spec =
@@ -157,11 +148,7 @@ let ndarray ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_
     if String.contains label '\n' then
       "c"^(NodeUI.dims_to_string @@ Array.concat_map [|batch_dims; output_dims; input_dims|] ~f:Array.of_list)
     else label in
-  Formula.term ~label spec ~init_body:(reset_values values)
-
-let uniform_value ~n field shape: Code.t =
-  Code.(Create {tensor=d n field; dims=(fun () -> Shape.to_dims shape);
-                init_op=`Standard_uniform})
+  Formula.term ~label spec ~init_op:(`Fixed_constant values)
 
 let assign ~lhs ~rhs projections =
   let open Code in
@@ -189,7 +176,7 @@ module O = struct
   let ( *. ) = pointmul
   let (+) = add
   let (!/) = relu
-  let (!~) label = Formula.term ~label (Deduced_params `Not_deduced) ~init_body:uniform_value
+  let (!~) label = Formula.term ~label (Deduced_params `Not_deduced) ~init_op:`Standard_uniform
   let (!.) = number
   let (-) m1 m2 = m1 + !.(-1.) * m2
 end
@@ -457,8 +444,6 @@ module CLI = struct
   module FO = O
   let einsum = einsum
   let einsum1 = einsum1
-  let reset_value = reset_value
-  let uniform_value = uniform_value
   let term = Formula.term
   let number = number
   let range = range
