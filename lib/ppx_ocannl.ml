@@ -132,9 +132,10 @@ let let_opt ~loc vbs expr =
 let no_vbs = Map.empty (module String)
 let reduce_vbss = List.reduce_exn ~f:(Map.merge_skewed ~combine:(fun ~key:_ _v1 v2 -> v2))
 
-let make_vb ~loc ~str_loc ~ident ~string =
+let make_vb ?init ~loc ~str_loc ~ident string =
   let pat = Ast_helper.Pat.var ~loc {loc=str_loc; txt=ident} in
-  let v = [%expr Network.return_term (Operation.unconstrained_param [%e string])] in
+  let init = match init with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
+  let v = [%expr Network.return_term (Operation.unconstrained_param ?init:[%e init] [%e string])] in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   pat, vb
 
@@ -159,8 +160,18 @@ let rec translate expr =
         (Pconst_string (String.of_char ch, pexp_loc, None)) in
     no_vbs, [%expr Network.return_term (Operation.number ~axis_label:[%e axis] (Float.of_int [%e i]))]
 
+  | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
+      [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
+    let pat, vb = make_vb ~init:f ~loc ~str_loc ~ident s in
+    Map.singleton (module String) ident vb, pat2expr pat
+
+  | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
+      [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
+    let pat, vb = make_vb ~init:[%expr Float.of_int [%e i]] ~loc ~str_loc ~ident s in
+    Map.singleton (module String) ident vb, pat2expr pat
+
   | { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } ->
-    let pat, vb = make_vb ~loc ~str_loc ~ident ~string:expr in
+    let pat, vb = make_vb ~loc ~str_loc ~ident expr in
     Map.singleton (module String) ident vb, pat2expr pat
 
   | { pexp_desc = Pexp_tuple _; _ } | { pexp_desc = Pexp_array _; _ } 
