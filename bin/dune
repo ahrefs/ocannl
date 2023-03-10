@@ -6,8 +6,8 @@
  (modes exe))
 
 (executable
- (name helloWorld)
- (modules helloWorld)
+ (name hello_world)
+ (modules hello_world)
  (libraries ocannl base stdio)
  (preprocess (pps ppx_jane ppx_ocannl))
  (modes exe))

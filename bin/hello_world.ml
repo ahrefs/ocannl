@@ -12,7 +12,5 @@ let() =
   let%ocannl hoo = (1 + 1) * hey - 10 in
   let hoo_f = Network.unpack hoo in
   refresh_session ();
-  (* print_formula ~with_code:false ~with_grad:false `Inline hey;
-     [%expect {| |}]; *)
   print_formula ~with_code:false ~with_grad:false `Default hoo_f
   (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
