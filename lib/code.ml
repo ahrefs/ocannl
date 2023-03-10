@@ -46,7 +46,9 @@ type t =
   (** These tasks can proceed in parallel, there is no interaction. *)
   | ParHint of t * t
   (** Computing [ParHint (c1, c2)] can proceed in parallel on [c1] and [c2], but when [c2] reads values
-      that [c1] writes, the writes in [c1] must occur before the reads in [c2]. *)
+      that [c1] writes, the writes in [c1] must occur before the reads in [c2]. If a backend does not
+      support detection of when [ParHint (c1, c2)] is safe to parallelize, it should provide an option
+      [force_unsafe_parhint] which always parallelizes. *)
   | Seq of t * t
   (** These tasks can only benefit from mutual parallelism via operator fusion / loop fusion. *)
   | Accum_binop of {

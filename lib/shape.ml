@@ -129,7 +129,7 @@ type compose_type =
       Currently, we support two variants of the [einsum] syntax: either all the axes are provided,
       or all input, output axes are provided but none of the batch axes.
       Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
-  ] [@@deriving sexp]
+  ] [@@deriving sexp, equal]
 
 type transpose_type =
   [ `Transpose

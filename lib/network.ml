@@ -104,6 +104,9 @@ module O = struct
   let (+) = return (Binary Operation.add)
   let (!/) = return (Unary Operation.relu)
   let (-) = return (Binary Operation.O.(-))
+  let (~-) = return (Unary Operation.O.(~-))
+  let (/) = return (Binary Operation.O.(/))
+  let (/.) = return (Binary Operation.O.(/.))
 
   let (@@) m x = apply m x
   let ( % ) = compose

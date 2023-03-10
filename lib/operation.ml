@@ -38,7 +38,9 @@ let mul compose_op =
     else if needs1 then grad1
     else if needs2 then grad2
     else assert false in
-  Formula.binop ~compose_op ~op_label:"*" ~op_body ~grad_body
+  Formula.binop ~compose_op 
+    ~op_label:(if Shape.equal_compose_type compose_op `Pointwise then "*." else "*")
+    ~op_body ~grad_body
 
 let pointmul = mul `Pointwise
 
@@ -177,7 +179,10 @@ let identity m =
   let grad_body ~n ~n1 projections = assign_op g ~n:n1 ~n1:n projections in
   Formula.(unop ~init_shape:m.shape ~transpose_op:`Pointwise ~op_label:"="
              ~op_body:(assign_op v) ~grad_body)
-    
+
+let one_over m = (* FIXME: *) (* failwith "NOT IMPLEMENTED YET" *) m
+let one_over_dot m = (* FIXME: *) (* failwith "NOT IMPLEMENTED YET" *) m
+
 module O = struct
   let ( * ) = matmul
   let ( *. ) = pointmul
@@ -185,7 +190,10 @@ module O = struct
   let (!/) = relu
   let (!~) label = Formula.term ~label (Deduced_params `Not_constrained) ~init_op:`Standard_uniform
   let (!.) = number
-  let (-) m1 m2 = m1 + !.(-1.) * m2
+  let (-) m1 m2 = m1 + !.(-1.) *. m2
+  let (~-) m = !.(-1.) *. m
+  let (/) m1 m2 = m1 * one_over m2
+  let (/.) m1 m2 = m1 *. one_over_dot m2
 end
 
 let get_root id =
