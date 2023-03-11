@@ -1,6 +1,8 @@
 ocannl
 ======
 
+Warning disclaimer: this project is still "not announced". The features described might not be implemented yet.
+
 ## OCaNNL: OCaml Neural Networks Library
 
 * A from-scratch, compiled Deep Learning framework.
@@ -18,7 +20,8 @@ ocannl
   * [`Network`](lib/network.ml) for trainable components.
   * [`Operation`](lib/operation.ml) for differentiable computations.
   * [`Code`](lib/code.ml) for computations, [`Node`](lib/node.ml) maintains a store of n-dimensional arrays that the code operates on.
-* Does not hide anything. Model surgery should be starightforward (not sure if we are there yet).
+* Does not hide anything. Should be easily extensible.
+* Model surgery should be starightforward (not sure if we are there yet).
 * It's a feature, not a bug!
   * To scale a tensor by a number, always use pointwise-multiplication, e.g. `2*.m` or `m*.2`.
   * Matrix-multiplying a tensor `m` by a constant number, e.g. `m*2`, broadcasts the number to the shape of the input axes of the tensor. This results in an output-axes-only tensor (multi-axis-vector) that is the scaled sum over the input axes of the tensor `m`.
