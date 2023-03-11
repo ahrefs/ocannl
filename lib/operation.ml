@@ -99,6 +99,16 @@ let relu =
                  projections=(fun () -> Shape.backprop_unary @@ projections())} in
   Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
+let pointpow p =
+  let open Code in
+  let op_body ~n ~n1 projections =
+    Accum_unop {zero_out=false; accum=Skip_arg; op=ToPowOf p; lhs=v n; rhs=v n1; projections} in
+  let grad_body ~n ~n1 projections =
+    Accum_binop {zero_out=false; accum=Add; op=Relu_gate; lhs=g n1; rhs1=v n; rhs2=g n;
+                 projections=(fun () -> Shape.backprop_unary @@ projections())} in
+  let op_label = "**"^Float.(if is_integer p then Int.to_string @@ to_int p else to_string p) in
+  Formula.unop ~transpose_op:`Pointwise ~op_label ~op_body ~grad_body
+
 let float_to_label v = Float.to_string_hum ~strip_zero:true v
 
 let number ?(axis_label="") c =
@@ -180,8 +190,8 @@ let identity m =
   Formula.(unop ~init_shape:m.shape ~transpose_op:`Pointwise ~op_label:"="
              ~op_body:(assign_op v) ~grad_body)
 
-let one_over m = (* FIXME: *) (* failwith "NOT IMPLEMENTED YET" *) m
-let one_over_dot m = (* FIXME: *) (* failwith "NOT IMPLEMENTED YET" *) m
+let one_over _m = failwith "Tensor inversion not implemented yet"
+let one_over_dot m = pointpow (-1.) m
 
 module O = struct
   let ( * ) = matmul

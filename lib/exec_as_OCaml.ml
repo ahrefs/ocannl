@@ -64,6 +64,10 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
     | Unoptimized_unop (Identity, v) -> pp_ll ppf v
     | Unoptimized_unop (Relu, v) ->
       fprintf ppf "(@[<2>let a = %a in@ if a > 0.0 then a else 0.0@]@,)" pp_ll v
+    | Unoptimized_unop (ToPowOf p, v) ->
+      let open Float in
+      if is_integer p then fprintf ppf "(@[<2>int_pow (%a) (%d)@]@,)" pp_ll v (to_int p)
+      else fprintf ppf "(@[<2>(%a) **@ (%f)@]@,)" pp_ll v p
     | Assign_routine ({node_id; field=`Forward}, proc) ->
       fprintf ppf "@[<2>(get %d).forward <-@ Some (@[<2>fun () ->@ %a@]@,)@]" node_id pp_ll proc
     | Assign_routine ({node_id; field=`Backprop}, proc) ->

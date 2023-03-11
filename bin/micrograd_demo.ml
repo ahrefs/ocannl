@@ -44,5 +44,9 @@ let () =
   let%ocannl g = g + 10. /. f in
 
   let g_f = Network.unpack g in
+  let a_f = Network.unpack a in
+  let b_f = Network.unpack b in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ g_f
+  print_formula ~with_code:false ~with_grad:false `Default @@ g_f;
+  print_formula ~with_code:false ~with_grad:true `Default @@ a_f;
+  print_formula ~with_code:false ~with_grad:true `Default @@ b_f

@@ -19,6 +19,7 @@ type binop =
 type unop =
   | Identity
   | Relu
+  | ToPowOf of float
 [@@deriving sexp]
 
 (** Initializes or resets a tensor by filling in the corresponding numbers, at the appropriate precision. *)
@@ -234,7 +235,10 @@ let interpret_llc ?(with_debug=true) llc =
     | Unoptimized_binop (Mul, llv1, llv2) -> loop llv1 * loop llv2
     | Unoptimized_binop (Relu_gate, llv1, llv2) -> if loop llv1 > 0.0 then loop llv2 else 0.0
     | Unoptimized_unop (Identity, llv) -> loop llv
-    | Unoptimized_unop (Relu, llv) -> let v = loop llv in if v > 0.0 then v else 0.0 in
+    | Unoptimized_unop (Relu, llv) -> let v = loop llv in if v > 0.0 then v else 0.0
+    | Unoptimized_unop (ToPowOf p, llv) ->
+      let v = loop llv in let open Float in
+      if is_integer p then int_pow v @@ to_int p else v ** p in
   loop_proc (Map.empty (module Shape.Symbol)) llc
 
 let fprint_code ppf c =

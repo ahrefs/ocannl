@@ -22,6 +22,21 @@ let%expect_test "Micrograd README basic example" =
   let%ocannl g = g + 10. /. f in
 
   let g_f = Network.unpack g in
+  let a_f = Network.unpack a in
+  let b_f = Network.unpack b in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ g_f;
-  [%expect {|  |}]
+  [%expect {|
+    ┌────────────────────────────────────────────────────┐
+    │[211] ((10*.**-1(#107))+(#208*.**-1(2))): shape 0:1 │
+    │┌┬─────────┐                                        │
+    │││axis 0   │                                        │
+    │├┼─────────┼─────────────────────────────────────── │
+    │││ 2.47e+1 │                                        │
+    │└┴─────────┘                                        │
+    └────────────────────────────────────────────────────┘ |}];
+  print_formula ~with_code:false ~with_grad:true `Default @@ a_f;
+  [%expect {| |}];
+  print_formula ~with_code:false ~with_grad:true `Default @@ b_f;
+  [%expect {| |}]
+
