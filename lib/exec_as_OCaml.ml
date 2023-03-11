@@ -57,8 +57,8 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
     | Unoptimized_get (Gradient_at_node_id id, indices) ->
       fprintf ppf "@[<2>get_as_float (get %d).grad@ %a@]" id pp_indices indices
     | Unoptimized_binop (Skip_arg, _v1, v2) -> pp_ll ppf v2
-    | Unoptimized_binop (Add, v1, v2) -> fprintf ppf "(@[<2>%a +@ %a@]@,)" pp_ll v1 pp_ll v2
-    | Unoptimized_binop (Mul, v1, v2) -> fprintf ppf "(@[<2>%a *@ %a@]@,)" pp_ll v1 pp_ll v2
+    | Unoptimized_binop (Add, v1, v2) -> fprintf ppf "(@[<2>(%a) +@ (%a)@]@,)" pp_ll v1 pp_ll v2
+    | Unoptimized_binop (Mul, v1, v2) -> fprintf ppf "(@[<2>(%a) *@ (%a)@]@,)" pp_ll v1 pp_ll v2
     | Unoptimized_binop (Relu_gate, v1, v2) ->
       fprintf ppf "(@[<2>if %a > 0.0@ then %a@ else 0.0@]@,)" pp_ll v1 pp_ll v2
     | Unoptimized_unop (Identity, v) -> pp_ll ppf v
