@@ -17,7 +17,7 @@ let add =
     let grad2 =
       Accum_unop {zero_out=false; accum=Add; op=Identity; lhs=g n2; rhs=g n;
                   projections=(fun () -> Shape.backprop2 @@ projections())} in
-    if needs1 && needs2 then Seq (grad1, grad2)
+    if needs1 && needs2 then ParHint (grad1, grad2)
     else if needs1 then grad1
     else if needs2 then grad2
     else assert false in
@@ -34,7 +34,7 @@ let mul compose_op =
     let grad2 =
       Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n2; rhs1=g n; rhs2=v n1;
                       projections=(fun () -> Shape.backprop2 @@ projections())} in
-    if needs1 && needs2 then Seq (grad1, grad2)
+    if needs1 && needs2 then ParHint (grad1, grad2)
     else if needs1 then grad1
     else if needs2 then grad2
     else assert false in
@@ -70,7 +70,7 @@ let einsum spec =
     let grad2 =
       Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n2; rhs1=g n; rhs2=v n1;
                       projections=(fun () -> Shape.backprop2 @@ projections())} in
-    if needs1 && needs2 then Seq (grad1, grad2)
+    if needs1 && needs2 then ParHint (grad1, grad2)
     else if needs1 then grad1
     else if needs2 then grad2
     else assert false in
