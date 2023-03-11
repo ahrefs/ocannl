@@ -18,7 +18,7 @@ Warning disclaimer: this project is still "not announced". The features describe
   * Currently, compiles all computation of a single step of training into two programs: the forward pass and the backpropagation pass.
 * Offers three levels of abstraction:
   * [`Network`](lib/network.ml) for trainable components.
-  * [`Operation`](lib/operation.ml) for differentiable computations.
+  * [`Formula`](lib/formula.ml)-centric [`Operation`](lib/operation.ml) for differentiable computations.
   * [`Code`](lib/code.ml) for computations, [`Node`](lib/node.ml) maintains a store of n-dimensional arrays that the code operates on.
 * Does not hide anything. Should be easily extensible.
 * Model surgery should be starightforward (not sure if we are there yet).
@@ -28,6 +28,22 @@ Warning disclaimer: this project is still "not announced". The features describe
   * Matrix-multiplying a constant number by a tensor `m`, e.g. `2*m`, broadcasts the number to the shape of the output axes of the tensor. This results in a tensor whose inputs are of the same shape as the inputs of `m`, and the output shape is 1D (scalar), that is the scaled sum over the output axes of the tensor `m`.
   * The matrix-multiply operation behaves pointwise along the batch axes.
   
+## Why not just use [OWL](https://ocaml.xyz/)?
+
+OCaNNL follows different design choices than [OWL](https://ocaml.xyz/). For example:
+* OCaNNL is not functorized.
+* OCaNNL has fewer abstraction layers.
+* OCaNNL has arguably a more powerful shape inference.
+* OCaNNL only supports backpropagation, while OWL supports full forward and backward auto-diff.
+* Some aspects are more centralized in OCaNNL than in OWL and form the "infrastructure", with less of an intention to be extended or even read by end-users:
+  * Shape inference is fully handled by [`Shape`](lib/shape.ml).
+  * [`Formula`](lib/formula.ml) implements "putting pieces together".
+  * [`Session`](lib/session.ml) implements the session logic.
+* Some aspects that are more core to OWL are "delegated to user-land" in OCaNNL.
+  * [`Operation`](lib/operation.ml) is just a bunch of glue functions that users implementing new computational primitives should extend.
+  * Specific network architectures, e.g. MLP, CNN, Transformer, can be concisely formulated and belong to individual projects in OCaNNL -- my perception is that they are more part of the library in OWL. In this regard working on new architectures is not impeded by OCaNNL.
+  * But the enabling mechanisms, such as "generalized `einsum`", belong to the OCaNNL library/infrastructure. In this regard OCaNNL is less extensible.
+* OCaNNL provides lower-level compilation backends than OWL, it is more self-contained in this sense.
 
 ## Installation
 
