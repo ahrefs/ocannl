@@ -223,12 +223,13 @@ let get_grad (type val_t arr_t) (prec: (val_t, arr_t) precision) uid: arr_t =
     Note that the precision for gradients should not be lower than the precision for values. *)
 let create (type grad_arr_t value_arr_t) ~(value_prec: ('a, value_arr_t) precision)
     ~(grad_prec: ('a, grad_arr_t) precision) ~label =
+  let id = let uid = global.unique_id in global.unique_id <- global.unique_id + 1; uid in
   let node = {
     value=as_ndarray value_prec @@ empty value_prec;
     grad=as_ndarray grad_prec @@ empty grad_prec;
     forward=None; backprop=None;
-    label;
-    id=let uid = global.unique_id in global.unique_id <- global.unique_id + 1; uid
+    label=label id;
+    id;
   } in
   Hashtbl.add_exn global.node_store ~key:node.id ~data:node;
   node
