@@ -8,45 +8,55 @@ let _suspended () =
   drop_session();
   Random.init 0;
   set_executor test_executor;
-  let%ocannl c = "a" (-4) + "b" 2 in
+  let%nn_op c = "a" (-4) + "b" 2 in
   (* TODO: exponentiation operator *)
-  let%ocannl d = a * b + b * b * b in
-  (* TODO: figure out how to have [let%ocannl c += c + 1] etc. *)
-  let%ocannl c = c + c + 1 in
-  let%ocannl c = c + 1 + c + ~-a in
-  let%ocannl d = d + d * 2 + !/ (b + a) in
-  let%ocannl d = d + 3 * d + !/ (b - a) in
-  let%ocannl e = c - d in
-  let%ocannl f = e * e in
-  let%ocannl g = f / 2 in
-  let%ocannl g = g + 10. / f in
+  let%nn_op d = a * b + b * b * b in
+  (* TODO: figure out how to have [let%nn_op c += c + 1] etc. *)
+  let%nn_op c = c + c + 1 in
+  let%nn_op c = c + 1 + c + ~-a in
+  let%nn_op d = d + d * 2 + !/ (b + a) in
+  let%nn_op d = d + 3 * d + !/ (b - a) in
+  let%nn_op e = c - d in
+  let%nn_op f = e * e in
+  let%nn_op g = f / 2 in
+  let%nn_op g = g + 10. / f in
 
-  let g_f = Network.unpack g in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ g_f
+  print_formula ~with_code:false ~with_grad:false `Default g
 
 let () =
   let open Operation.CLI in
   drop_session();
   Random.init 0;
   set_executor test_executor;
-  let%ocannl c = "a" (-4) + "b" 2 in
+  let%nn_op c = "a" (-4) + "b" 2 in
   (* TODO: exponentiation operator *)
-  let%ocannl d = a *. b + b *. b *. b in
-  (* TODO: figure out how to have [let%ocannl c += c + 1] etc. *)
-  let%ocannl c = c + c + 1 in
-  let%ocannl c = c + 1 + c + ~-a in
-  let%ocannl d = d + d *. 2 + !/ (b + a) in
-  let%ocannl d = d + 3 *. d + !/ (b - a) in
-  let%ocannl e = c - d in
-  let%ocannl f = e *. e in
-  let%ocannl g = f /. 2 in
-  let%ocannl g = g + 10. /. f in
+  let%nn_op d = a *. b + b *. b *. b in
+  (* TODO: figure out how to have [let%nn_op c += c + 1] etc. *)
+  let%nn_op c = c + c + 1 in
+  let%nn_op c = c + 1 + c + ~-a in
+  let%nn_op d = d + d *. 2 + !/ (b + a) in
+  let%nn_op d = d + 3 *. d + !/ (b - a) in
+  let%nn_op e = c - d in
+  let%nn_op f = e *. e in
+  let%nn_op g = f /. 2 in
+  let%nn_op g = g + 10. /. f in
 
-  let g_f = Network.unpack g in
-  let a_f = Network.unpack a in
-  let b_f = Network.unpack b in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ g_f;
-  print_formula ~with_code:false ~with_grad:true `Default @@ a_f;
-  print_formula ~with_code:false ~with_grad:true `Default @@ b_f
+  print_preamble ();
+  for i = !Formula.first_session_id to Ocannl_runtime.Node.global.unique_id - 1 do
+    let n = Ocannl_runtime.Node.get i in
+    let h = NodeUI.node_header n in
+    Stdio.printf "Value for [%d] -- %s:\n%!" i h;
+    NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes:0 ~num_input_axes:0 ~num_output_axes:1 n.value;
+    Caml.Format.print_newline();
+    let open Ocannl_runtime in
+    if Array.length (Node.dims n.grad) = 1 then (
+      Stdio.printf "Gradient for [%d]:\n%!" i;
+      NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes:0 ~num_input_axes:0 ~num_output_axes:1 n.grad
+    );
+    Caml.Format.print_newline()
+  done;
+  print_formula ~with_code:false ~with_grad:false `Default @@ g;
+  print_formula ~with_code:false ~with_grad:true `Default @@ a;
+  print_formula ~with_code:false ~with_grad:true `Default @@ b

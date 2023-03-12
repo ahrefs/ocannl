@@ -7,10 +7,9 @@ let() =
   let open Operation.CLI in
   set_executor `OCaml;
   (* Hey is inferred to be a matrix. *)
-  let hey = Network.return_term @@
+  let hey =
     range_of_shape ~batch_dims:[7] ~input_dims:[9; 10; 11] ~output_dims:[13; 14] () in
-  let%ocannl hoo = (1 + 1) * hey - 10 in
-  let hoo_f = Network.unpack hoo in
+  let%nn_op hoo = (1 + 1) * hey - 10 in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default hoo_f
+  print_formula ~with_code:false ~with_grad:false `Default hoo
   (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)

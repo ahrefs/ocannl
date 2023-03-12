@@ -5,21 +5,41 @@
  (modes exe))
 
 (rule
- (targets test_ppx_actual.ml)
- (deps (:pp pp.exe) (:input test_ppx.ml))
+ (targets test_ppx_op_actual.ml)
+ (deps (:pp pp.exe) (:input test_ppx_op.ml))
  (action (run ./%{pp} --impl %{input} -o %{targets})))
 
 (rule
  (alias runtest)
- (action (diff test_ppx_expected.ml test_ppx_actual.ml)))
+ (action (diff test_ppx_op_expected.ml test_ppx_op_actual.ml)))
+
+(rule
+ (targets test_ppx_mo_actual.ml)
+ (deps (:pp pp.exe) (:input test_ppx_mo.ml))
+ (action (run ./%{pp} --impl %{input} -o %{targets})))
+
+(rule
+ (alias runtest)
+ (action (diff test_ppx_mo_expected.ml test_ppx_mo_actual.ml)))
 
 (test
-  (name test_ppx)
-  (modules test_ppx)
+  (name test_ppx_op)
+  (modules test_ppx_op)
   (libraries ocannl)
   (preprocess (pps ppx_ocannl)))
 
 (test
-  (name test_ppx_expected)
-  (modules test_ppx_expected)
+  (name test_ppx_op_expected)
+  (modules test_ppx_op_expected)
+  (libraries ocannl))
+  
+(test
+  (name test_ppx_mo)
+  (modules test_ppx_mo)
+  (libraries ocannl)
+  (preprocess (pps ppx_ocannl)))
+
+(test
+  (name test_ppx_mo_expected)
+  (modules test_ppx_mo_expected)
   (libraries ocannl))
