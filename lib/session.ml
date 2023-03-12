@@ -64,7 +64,49 @@ type array_print_style =
     The batch axes use [;] as a separator and [[||]] as axis delimiters (obligatory). *)
 ]
 
-let print_formula ~with_tree ~with_grad ~with_code (style: array_print_style) m =
+let reformat_dag (_style: array_print_style) box_depth b =
+  let s: ('a, 'cmp) Comparator.Module.t = (module String) in
+  let rec reused = function
+  | `Pad (`Text id) -> Set.singleton s id
+  | `Pad b -> reused b
+  | `Text _ | `Empty -> Set.empty s
+  | `Tree (n, bs) -> Set.union_list s (reused n::List.map ~f:reused bs)
+  | `Hlist bs -> Set.union_list s @@ List.map ~f:reused bs
+  | `Vlist bs -> Set.union_list s @@ List.map ~f:reused bs
+  | `Table bss ->
+    Set.union_list s @@ Array.to_list @@ Array.concat_map bss
+      ~f:(fun bs -> Array.map ~f:reused bs) in
+  let reused = reused b in
+  let rec cleanup = function
+  | `Pad (`Text id) -> `Text ("["^id^"]")
+  | `Tree (n, bs) -> `Tree (cleanup n, List.map ~f:cleanup bs)
+  | `Hlist [`Text id; `Text op] when Set.mem reused id -> `Text ("["^id^"] "^op)
+  | `Hlist [`Text id; `Text op] when not @@ Set.mem reused id -> `Text op
+  | `Hlist bs -> `Hlist (List.map ~f:cleanup bs)
+  | `Vlist bs -> `Vlist (List.map ~f:cleanup bs)
+  | b -> b in
+  let rec boxify depth = function
+  | `Tree (n, bs) when depth > 0 -> `Vlist [n; `Hlist (List.map ~f:(boxify @@ depth - 1) bs)]
+  | `Hlist bs -> `Hlist (List.map ~f:(boxify @@ depth - 1) bs)
+  | `Vlist bs -> `Vlist (List.map ~f:(boxify @@ depth - 1) bs)
+  | b -> b in
+  boxify box_depth @@ cleanup b
+
+let to_printbox b =
+  let open PrintBox in
+  let rec to_box = function
+  | `Empty -> empty
+  | `Pad b -> pad (to_box b)
+  | `Text t -> text t
+  | `Vlist [h; b] -> vlist [align ~h:`Center ~v:`Bottom @@ to_box h; to_box b]
+  | `Vlist l -> vlist (List.map ~f:to_box l)
+  | `Hlist l -> hlist (List.map ~f:to_box l)
+  | `Table a -> grid (map_matrix to_box a)
+  | `Tree (`Text _ | `Hlist [`Text _; `Text _] as h, l) -> tree (frame @@ to_box h) (List.map ~f:to_box l)
+  | `Tree (b, l) -> tree (to_box b) (List.map ~f:to_box l) in
+  to_box b
+
+let print_formula ?with_tree ~with_grad ~with_code (style: array_print_style) m =
   let open Formula in
   let sh = m.shape in
   let prefix =
@@ -121,7 +163,8 @@ let print_formula ~with_tree ~with_grad ~with_code (style: array_print_style) m 
   let num_batch_axes = num_axes Shape.AxisKey.Batch in
   let num_input_axes = num_axes Shape.AxisKey.Input in
   let num_output_axes = num_axes Shape.AxisKey.Output in
-  let tree = if with_tree then Some m.comp_node.label else None in
+  let tree = Option.map with_tree
+      ~f:(fun depth -> to_printbox @@ reformat_dag style depth m.comp_node.label) in
   (match style with
    | `Inline ->
      NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes

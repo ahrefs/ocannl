@@ -95,11 +95,11 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
   let m1_processed = not @@ Map.mem !global_roots m1.node_id in
   let m2_processed = not @@ Map.mem !global_roots m2.node_id in
   let m1_l =
-    if m1_processed then `Text ("["^Int.to_string m1.node_id^"]") else m1.comp_node.label in
+    if m1_processed then `Pad (`Text (Int.to_string m1.node_id)) else m1.comp_node.label in
   let m2_l =
-    if m2_processed then `Text ("["^Int.to_string m2.node_id^"]") else m2.comp_node.label in
+    if m2_processed then `Pad (`Text (Int.to_string m2.node_id)) else m2.comp_node.label in
   let label id =
-    `Tree (`Hlist [`Text (""^Int.to_string id^""); `Text op_label], [m1_l; m2_l]) in
+    `Tree (`Hlist [`Text (Int.to_string id); `Text op_label], [m1_l; m2_l]) in
   let n = NodeUI.create_of_promoted_precision m1.comp_node m2.comp_node ~label in
   let node_id = n.id in
   let shape = { Shape.batch=Unknown; input=Unknown; output=Unknown;
@@ -193,9 +193,9 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   (* Note: do not capture m in any closure, so it can be GC'd. *)
   let m_processed = not @@ Map.mem !global_roots m.node_id in
   let m_l =
-    if m_processed then `Text ("["^Int.to_string m.node_id^"]") else m.comp_node.label in
+    if m_processed then `Pad (`Text (Int.to_string m.node_id)) else m.comp_node.label in
   let label id =
-    `Tree (`Hlist [`Text (""^Int.to_string id^""); `Text op_label], [m_l]) in
+    `Tree (`Hlist [`Text (Int.to_string id); `Text op_label], [m_l]) in
   let n = NodeUI.create_of_same_precision_as m.comp_node ~label in
   let node_id = n.id in
 

@@ -159,8 +159,7 @@ let render_tensor ?(prefix="") ?tree ?(entries_per_axis=4) ?(labels=[||]) ~indic
     let screens = B.init_grid ~bars:true ~line:size0 ~col:1 (fun ~line ~col:_ ->
        if elide_for line ~ind:ind0
        then B.hpad 1 @@ B.line "..." else outer_grid line) in
-    B.frame @@ B.vlist ~bars:false 
-      (B.text header :: Option.(to_list @@ map tree ~f:B.Simple.to_box) @ [screens])
+    B.frame @@ B.vlist ~bars:false @@ B.text header :: Option.to_list tree @ [screens]
 
 let pp_tensor fmt ?prefix ?tree ?entries_per_axis ?labels ~indices arr =
   PrintBox_text.pp fmt @@ render_tensor ?prefix ?entries_per_axis ?labels ?tree ~indices arr
