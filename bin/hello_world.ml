@@ -2,9 +2,10 @@ open Base
 open Ocannl
 
 let() =
-  Operation.drop_session();
+  Session.drop_session();
   Random.init 0;
   let open Operation.CLI in
+  let open Session.CLI in
   set_executor `OCaml;
   (* Hey is inferred to be a matrix. *)
   let hey =

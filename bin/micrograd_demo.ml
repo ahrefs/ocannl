@@ -4,7 +4,8 @@ open Ocannl
 let test_executor = `OCaml
 
 let _suspended () =
-  let open Operation.CLI in
+  (* let open Operation.CLI in *)
+  let open Session.CLI in
   drop_session();
   Random.init 0;
   set_executor test_executor;
@@ -25,7 +26,8 @@ let _suspended () =
   print_formula ~with_code:false ~with_grad:false `Default g
 
 let () =
-  let open Operation.CLI in
+  (* let open Operation.CLI in *)
+  let open Session.CLI in
   drop_session();
   Random.init 0;
   set_executor test_executor;

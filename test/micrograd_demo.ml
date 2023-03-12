@@ -4,7 +4,8 @@ open Ocannl
 let test_executor = `OCaml
 
 let%expect_test "Micrograd README basic example" =
-  let open Operation.CLI in
+  (* let open Operation.CLI in *)
+  let open Session.CLI in
   drop_session();
   Random.init 0;
   set_executor test_executor;

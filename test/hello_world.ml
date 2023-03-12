@@ -8,7 +8,8 @@ let%expect_test "Hello World" =
   [%expect {| Hello World! |}]
 
 let%expect_test "Pointwise multiplication dims 1" =
-  let open Operation.CLI in
+  (* let open Operation.CLI in *)
+  let open Session.CLI in
   drop_session();
   Random.init 0;
   set_executor test_executor;
@@ -29,7 +30,8 @@ let%expect_test "Pointwise multiplication dims 1" =
     └────────────────────────┘ |}]
 
 let%expect_test "Matrix multiplication dims 1x1" =
-  let open Operation.CLI in
+  (* let open Operation.CLI in *)
+  let open Session.CLI in
   drop_session();
   Random.init 0;
   set_executor test_executor;
@@ -61,9 +63,10 @@ let%expect_test "Matrix multiplication dims 1x1" =
     └─────────────────────────────┘ |}]
 
 let%expect_test "Print constant tensor" =
-  Operation.drop_session();
+  Session.drop_session();
   Random.init 0;
-  let open Operation.CLI in
+  (* let open Operation.CLI in *)
+  let open Session.CLI in
   let%nn_mo hey = [1, 2, 3; 4, 5, 6] in
   let hey_f = Network.unpack hey in
   refresh_session ();
@@ -312,7 +315,8 @@ let%expect_test "Print constant tensor" =
     └──────────────────────────────────────────────┘ |}]
 
 let%expect_test "Matrix multiplication dims 2x3" =
-  let open Operation.CLI in
+  (* let open Operation.CLI in *)
+  let open Session.CLI in
   drop_session();
   Random.init 0;
   set_executor test_executor;
@@ -347,6 +351,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
 
 let%expect_test "Big matrix" =
   let open Operation.CLI in
+  let open Session.CLI in
   drop_session();
   Random.init 0;
   set_executor test_executor;
@@ -396,7 +401,8 @@ let%expect_test "Big matrix" =
       └────────────────────────────────────────────┘ |}]
 
 let%expect_test "Very big tensor" =
-    Operation.drop_session();
+    let open Session.CLI in
+    drop_session();
     Random.init 0;
     let open Operation.CLI in
     set_executor test_executor;
