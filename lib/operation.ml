@@ -370,6 +370,9 @@ let print_global_roots ~with_grad ~with_code (style: array_print_style) =
       assert (node_id = root.formula.node_id);
       print_global_root ~with_grad ~with_code style root)
 
+let print_preamble() =
+  Stdio.printf "%s\n%!" (Formula.prefix_with_preamble "")
+
 (** *** Session management. *** *)
 let executor = ref Exec_as_OCaml.load_native
 let executor_error_message = ref Exec_as_OCaml.error_message
@@ -486,6 +489,7 @@ module CLI = struct
   let max_sublabel_length = Formula.max_sublabel_length
   let print_formula = print_formula
   let print_global_roots = print_global_roots
+  let print_preamble = print_preamble
   let print_decimals_precision = NodeUI.print_decimals_precision
   let get_root = get_root
   let get_node = get_node
