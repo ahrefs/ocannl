@@ -93,7 +93,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
   (if (m2.node_id < !first_session_id) then
      raise @@ Session_error ("The subformula is outside of current session", Some m2));
   let m1_processed = not @@ Map.mem !global_roots m1.node_id in
-  let m2_processed = not @@ Map.mem !global_roots m2.node_id in
+  let m2_processed = m2.node_id = m1.node_id || not @@ Map.mem !global_roots m2.node_id in
   let m1_l =
     if m1_processed then `Pad (`Text (Int.to_string m1.node_id)) else m1.comp_node.label in
   let m2_l =
