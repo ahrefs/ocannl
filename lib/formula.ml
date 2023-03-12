@@ -86,8 +86,7 @@ let create ~node_id ?(init_op=`Unspecified) field shape =
 
 let max_sublabel_length = ref 25
 
-let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1arg m2arg: t =
-  let m1, m2 = if m1arg.node_id <= m2arg.node_id then m1arg, m2arg else m2arg, m1arg in
+let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
   (* Note: do not capture m1, m2 in any closure, so they can be GC'd. *)
   (if (m1.node_id < !first_session_id) then
     raise @@ Session_error ("The subformula is outside of current session", Some m1));
