@@ -30,7 +30,7 @@ let b =
 let y =
   let open! Operation.O in
     let hey4 = Operation.unconstrained_param ?init:None "hey4" in
-    ((Operation.number ~axis_label:"q" 2.0) * hey4) +
+    (hey4 * (Operation.number ~axis_label:"q" 2.0)) +
       (Operation.number ~axis_label:"p" 1.0)
 let z =
   let open! Operation.O in
