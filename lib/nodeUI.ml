@@ -54,7 +54,8 @@ let node_header n =
   let g_dims_s = ndarray_dims_to_string n.grad in
   let dims_s =
     if String.equal v_dims_s g_dims_s then "dims "^v_dims_s else "dims val "^v_dims_s^" grad "^g_dims_s in
-  "#"^Int.to_string n.id^(if String.is_empty n.label then "" else " "^n.label)^" "^dims_s
+  "#"^Int.to_string n.id^" "^dims_s 
+  (*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box n.label)*)
 
 (** When rendering tensors, outputs this many decimal digits. *)
 let print_decimals_precision = ref 2
@@ -71,7 +72,7 @@ let print_decimals_precision = ref 2
     * -5: a sequence of screens of text (i.e. stack numbers of outer rectangles).
     Printing out of axis [-5] is interrupted when a callback called in between each outer rectangle
     returns true. *)
-let render_tensor ?(prefix="") ?(entries_per_axis=4) ?(labels=[||]) ~indices (arr: Node.ndarray) =
+let render_tensor ?(prefix="") ?tree ?(entries_per_axis=4) ?(labels=[||]) ~indices (arr: Node.ndarray) =
   let module B = PrintBox in
   let open Node in
   let dims = dims arr in
@@ -158,18 +159,21 @@ let render_tensor ?(prefix="") ?(entries_per_axis=4) ?(labels=[||]) ~indices (ar
     let screens = B.init_grid ~bars:true ~line:size0 ~col:1 (fun ~line ~col:_ ->
        if elide_for line ~ind:ind0
        then B.hpad 1 @@ B.line "..." else outer_grid line) in
-    B.frame @@ B.vlist ~bars:false [B.text header; screens]
+    B.frame @@ B.vlist ~bars:false 
+      (B.text header :: Option.(to_list @@ map tree ~f:B.Simple.to_box) @ [screens])
 
-let pp_tensor fmt ?prefix ?entries_per_axis ?labels ~indices arr =
-  PrintBox_text.pp fmt @@ render_tensor ?prefix ?entries_per_axis ?labels ~indices arr
+let pp_tensor fmt ?prefix ?tree ?entries_per_axis ?labels ~indices arr =
+  PrintBox_text.pp fmt @@ render_tensor ?prefix ?entries_per_axis ?labels ?tree ~indices arr
 
 let print_node ~with_grad ~indices n =
   let open Node in
-  Stdio.print_endline @@ "["^node_header n^"] "^n.label;
-  pp_tensor Caml.Format.std_formatter ~indices n.value;
+  Caml.Format.printf "[%s]@ %a@ @ %a" (node_header n)
+    PrintBox_text.pp (PrintBox.Simple.to_box n.label)
+    (pp_tensor ~prefix:"Value:" ?tree:None ?entries_per_axis:None ?labels:None ~indices) n.value;
   if with_grad then (
-    Stdio.print_endline "Gradient:";
-    pp_tensor Caml.Format.std_formatter ~indices n.grad)
+    Caml.Format.printf "@ %a"
+      (pp_tensor ~prefix:"Gradient:" ?tree:None ?entries_per_axis:None ?labels:None ~indices) n.grad);
+  Caml.Format.print_newline ()
 
 (** Prints the whole tensor in an inline syntax. *)
 let pp_tensor_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?labels_spec arr =

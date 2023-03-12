@@ -1,6 +1,6 @@
 (library
  (name ocannl_runtime)
- (libraries base stdio)
+ (libraries base printbox stdio)
  (modules node)
  (modes byte native))
 

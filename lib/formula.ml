@@ -92,11 +92,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
     raise @@ Session_error ("The subformula is outside of current session", Some m1));
   (if (m2.node_id < !first_session_id) then
      raise @@ Session_error ("The subformula is outside of current session", Some m2));
-  let m1_l = m1.comp_node.label in
-  let m1_l = if String.length m1_l > !max_sublabel_length then "#"^Int.to_string m1.node_id else m1_l in
-  let m2_l = m2.comp_node.label in
-  let m2_l = if String.length m2_l > !max_sublabel_length then "#"^Int.to_string m2.node_id else m2_l in
-  let label = "(" ^ m1_l ^ op_label ^ m2_l ^ ")" in
+  let label = `Tree (`Text op_label, [m1.comp_node.label; m2.comp_node.label]) in
   let n = NodeUI.create_of_promoted_precision m1.comp_node m2.comp_node ~label in
   let node_id = n.id in
   let shape = { Shape.batch=Unknown; input=Unknown; output=Unknown;
@@ -190,9 +186,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
 
 let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
   (* Note: do not capture m in any closure, so it can be GC'd. *)
-  let m_l = m.comp_node.label in
-  let m_l = if String.length m_l > !max_sublabel_length then "#"^Int.to_string m.node_id else m_l in
-  let label = op_label ^ "(" ^ m_l ^ ")" in
+  let label = `Tree (`Text op_label, [m.comp_node.label]) in
   let n = NodeUI.create_of_same_precision_as m.comp_node ~label in
   let node_id = n.id in
 
@@ -268,6 +262,7 @@ let term_needs_gradient (spec: Shape.term_spec) =
 
 (** A terminal: a constant, a parameter, an input of the model. *)
 let term ~label ?needs_gradient (spec: Shape.term_spec) ~init_op : t =
+  let label = `Text label in
   let n = Ocannl_runtime.Node.create ~value_prec:Single ~grad_prec:Single ~label in
   let node_id = n.id in
   let shape = Shape.of_term_spec node_id spec in
@@ -312,18 +307,29 @@ let get_toplevel m =
   let toplevel_forward = 
     {initialization=m.init_values; procedure=m.forward_body;
      routine={node_id=m.node_id; field=`Forward};
-     label="Forward #"^Int.to_string m.node_id^" "^m.comp_node.label} in
+     label="Forward #"^Int.to_string m.node_id} in
   let backprop =
     Seq (Par (m.zero_grads, reset_ones ~node_id:m.node_id `Grad m.shape), m.backprop_body) in
   let toplevel_backprop =
     {initialization=m.init_grads; procedure=backprop;
      routine={node_id=m.node_id; field=`Backprop};
-     label="Backprop #"^Int.to_string m.node_id^" "^m.comp_node.label} in
+     label="Backprop #"^Int.to_string m.node_id} in
   toplevel_forward, toplevel_backprop
+
+(* FIXME: not inlining here gives an error about PrintBox.Simple.t_of_sexp missing *)
+type printbox = (* PrintBox.Simple.t *)
+    [ `Empty
+    | `Hlist of printbox list
+    | `Pad of printbox
+    | `Table of printbox array array
+    | `Text of string
+    | `Tree of printbox * printbox list
+    | `Vlist of printbox list ] [@@deriving sexp, compare]
 
 let sexp_of_t m =
   Sexp.message "Formula" [
-    "label", String.sexp_of_t m.comp_node.label; "node_id", Int.sexp_of_t m.node_id;
+    "node_id", Int.sexp_of_t m.node_id;
+    "label", sexp_of_printbox m.comp_node.label;
   ]
 
 include Comparator.Make(struct

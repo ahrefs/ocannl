@@ -1,4 +1,4 @@
-(** Computational primitives for neural networks, integrating [Formula] with [Code]. *)
+(** Managing a computation session. *)
 
 open Base
 
@@ -64,11 +64,11 @@ type array_print_style =
     The batch axes use [;] as a separator and [[||]] as axis delimiters (obligatory). *)
 ]
 
-let print_formula ~with_grad ~with_code (style: array_print_style) m =
+let print_formula ~with_tree ~with_grad ~with_code (style: array_print_style) m =
   let open Formula in
   let sh = m.shape in
   let prefix =
-    "["^Int.to_string m.node_id^"] "^m.comp_node.label^": shape "^
+    "["^Int.to_string m.node_id^"]: shape "^
     Shape.to_string_hum ~style:`Axis_number_and_size sh^" " in
   let indices =
     match style with
@@ -121,18 +121,19 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
   let num_batch_axes = num_axes Shape.AxisKey.Batch in
   let num_input_axes = num_axes Shape.AxisKey.Input in
   let num_output_axes = num_axes Shape.AxisKey.Output in
+  let tree = if with_tree then Some m.comp_node.label else None in
   (match style with
    | `Inline ->
      NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
        ?labels_spec m.comp_node.value
-   | _ -> NodeUI.pp_tensor Caml.Format.std_formatter ~prefix ~labels ~indices m.comp_node.value);
+   | _ -> NodeUI.pp_tensor Caml.Format.std_formatter ~prefix ?tree ~labels ~indices m.comp_node.value);
   if with_grad then (
     match style with
     | `Inline ->
       NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
         ?labels_spec m.comp_node.grad
-    | _ -> NodeUI.pp_tensor Caml.Format.std_formatter ~prefix:(prefix^" Gradient ") ~labels ~indices
-             m.comp_node.grad);
+    | _ -> NodeUI.pp_tensor Caml.Format.std_formatter ~prefix:(prefix^" Gradient ") ?tree ~labels
+             ~indices m.comp_node.grad);
   if with_code then (
     (match m.forward_body with
      | Noop -> ()
@@ -145,9 +146,9 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
   );
   Stdio.printf "\n%!"
 
-let print_global_root ~with_grad ~with_code (style: array_print_style) root =
+let print_global_root ~with_tree ~with_grad ~with_code (style: array_print_style) root =
   let open Formula in
-  print_formula ~with_grad ~with_code:false style root.formula;
+  print_formula ~with_tree ~with_grad ~with_code:false style root.formula;
   if with_code then (
     (match root.forward_code with
      | None -> ()
@@ -160,11 +161,11 @@ let print_global_root ~with_grad ~with_code (style: array_print_style) root =
   );
   Stdio.printf "\n%!"
 
-let print_global_roots ~with_grad ~with_code (style: array_print_style) =
+let print_global_roots ~with_tree ~with_grad ~with_code (style: array_print_style) =
   let open Formula in
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (node_id, root) ->
       assert (node_id = root.formula.node_id);
-      print_global_root ~with_grad ~with_code style root)
+      print_global_root ~with_tree ~with_grad ~with_code style root)
 
 let print_preamble() =
   Stdio.printf "%s\n%!" (Formula.prefix_with_preamble "")

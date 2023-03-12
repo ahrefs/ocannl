@@ -182,7 +182,7 @@ type t = {
   mutable grad: ndarray;
   mutable forward: (unit -> unit) option;
   mutable backprop: (unit -> unit) option;
-  label: string;
+  label: PrintBox.Simple.t;
   id: int;
 }
 
