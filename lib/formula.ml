@@ -92,6 +92,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
     raise @@ Session_error ("The subformula is outside of current session", Some m1));
   (if (m2.node_id < !first_session_id) then
      raise @@ Session_error ("The subformula is outside of current session", Some m2));
+  let m1_first = m1.node_id <= m2.node_id in
   let m1_processed = not @@ Map.mem !global_roots m1.node_id in
   let m2_processed = m2.node_id = m1.node_id || not @@ Map.mem !global_roots m2.node_id in
   let m1_l =
@@ -123,7 +124,8 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
   let forward_body =
     (match m1_processed, m1.forward_body, m2_processed, m2.forward_body with
     | true, _, true, _ | true, _, _, Noop | _, Noop, true, _ | _, Noop, _, Noop -> op_body
-    | false, m1_body, false, m2_body -> Seq (ParHint (m1_body, m2_body), op_body)
+    | false, m1_body, false, m2_body when m1_first -> Seq (ParHint (m1_body, m2_body), op_body)
+    | false, m1_body, false, m2_body -> Seq (ParHint (m2_body, m1_body), op_body)
     | _, _, false, m2_body -> Seq (m2_body, op_body)
     | false, m1_body, _, _ -> Seq(m1_body, op_body)) in
   let init_values_body = create ~node_id `Value shape in
@@ -131,7 +133,8 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
     if m1_processed && m2_processed then init_values_body
     else if m1_processed then Par (m2.init_values, init_values_body)
     else if m2_processed then Par (m1.init_values, init_values_body)
-    else Par (Par (m1.init_values, m2.init_values), init_values_body) in
+    else if m1_first then Par (Par (m1.init_values, m2.init_values), init_values_body)
+    else Par (Par (m2.init_values, m1.init_values), init_values_body) in
   let needs_gradient = m1.needs_gradient || m2.needs_gradient in
   let m1_no_grad = m1_processed || not m1.needs_gradient in
   let m2_no_grad = m2_processed || not m2.needs_gradient in
@@ -142,7 +145,8 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
     if m1_no_grad && m2_no_grad then zero_body
     else if m1_no_grad then Par (zero_body, m2.zero_grads)
     else if m2_no_grad then Par (zero_body, m1.zero_grads)
-    else Par (zero_body, Par (m2.zero_grads, m1.zero_grads)) in
+    else if m1_first then Par (zero_body, Par (m2.zero_grads, m1.zero_grads))
+    else Par (zero_body, Par (m1.zero_grads, m2.zero_grads)) in
   (* The code needs to be included in the reverse order to which it was computed! This guarantees
      that all ancestors of a node are backpropagated before the node is backpropagated, even for
      non-tree DAGs. *)
@@ -154,7 +158,8 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
   let backprop_body =
     match m1_no_grad, m1.backprop_body, m2_no_grad, m2.backprop_body with
     | true, _, true, _ | true, _, _, Noop | _, Noop, true, _ | _, Noop, _, Noop -> grad_body
-    | false, m1_body, false, m2_body -> Seq (grad_body, ParHint(m2_body, m1_body))
+    | false, m1_body, false, m2_body when m1_first -> Seq (grad_body, ParHint(m2_body, m1_body))
+    | false, m1_body, false, m2_body -> Seq (grad_body, ParHint(m1_body, m2_body))
     | _, _, false, m2_body -> Seq (grad_body, m2_body)
     | false, m1_body, _, _ -> Seq (grad_body, m1_body) in
   let init_grads_body = create ~node_id `Grad shape in
@@ -165,7 +170,8 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
     if m1_no_grad && m2_no_grad then init_grads_body
     else if m1_no_grad then Par (init_grads_body, m2_init_grads)
     else if m2_no_grad then Par (init_grads_body, m1_init_grads)
-    else Par (init_grads_body, Par (m2_init_grads, m1_init_grads))in
+    else if m1_first then Par (init_grads_body, Par (m2_init_grads, m1_init_grads))
+    else Par (init_grads_body, Par (m1_init_grads, m2_init_grads))in
   (* The order is reverse to the order the updates were already executed for the first time. *)
   let local_shape_updates = Sequence.singleton local_shape_update in
   let subtree_shape_updates: Shape.update_step Sequence.t =
@@ -174,10 +180,14 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
       (Map.find_exn !global_roots m2.node_id).subtree_shape_updates
     else if m2_processed then Sequence.append local_shape_updates @@
       (Map.find_exn !global_roots m1.node_id).subtree_shape_updates
-    else
+    else if m1_first then
       Sequence.(concat @@ of_list
                   [local_shape_updates; (Map.find_exn !global_roots m2.node_id).subtree_shape_updates;
-                  (Map.find_exn !global_roots m1.node_id).subtree_shape_updates]) in
+                  (Map.find_exn !global_roots m1.node_id).subtree_shape_updates])
+    else
+      Sequence.(concat @@ of_list
+                  [local_shape_updates; (Map.find_exn !global_roots m1.node_id).subtree_shape_updates;
+                   (Map.find_exn !global_roots m2.node_id).subtree_shape_updates]) in
 
   (if not m1_processed then global_roots := Map.remove !global_roots m1.node_id);
   (if not m2_processed then global_roots := Map.remove !global_roots m2.node_id);
