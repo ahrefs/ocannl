@@ -72,11 +72,11 @@ let print_decimals_precision = ref 2
     * -5: a sequence of screens of text (i.e. stack numbers of outer rectangles).
     Printing out of axis [-5] is interrupted when a callback called in between each outer rectangle
     returns true. *)
-let render_tensor ?(prefix="") ?(entries_per_axis=4) ?(labels=[||]) ~indices (arr: Node.ndarray) =
+let render_tensor ?(brief=false) ?(prefix="") ?(entries_per_axis=4) ?(labels=[||]) ~indices (arr: Node.ndarray) =
   let module B = PrintBox in
   let open Node in
   let dims = dims arr in
-  if Array.is_empty dims then B.line "<empty or not initialized>"
+  if Array.is_empty dims then B.line "<void>"
   else
     let header = prefix in
     let indices = Array.copy indices in
@@ -140,26 +140,31 @@ let render_tensor ?(prefix="") ?(entries_per_axis=4) ?(labels=[||]) ~indices (ar
       | Some pos when elide_for pos ~ind -> "~~~~~"
       | Some pos when pos >= 0 -> Int.to_string (expand pos ~ind)^" @ "^label^Int.to_string ind
         | _ -> "axis "^label^Int.to_string ind in
+    let nlines = if brief then size1 else size1 + 1 in
+    let ncols = if brief then size2 else size2 + 1 in
     let outer_grid v =
-      B.frame @@
-      B.init_grid ~bars:true ~line:(size1+1) ~col:(size2+1) (fun ~line ~col ->
-          if line = 0 && col = 0
+      (if brief then Fn.id else B.frame) @@
+      B.init_grid ~bars:true ~line:nlines ~col:ncols (fun ~line ~col ->
+          if not brief && line = 0 && col = 0
           then B.lines @@ List.filter ~f:(Fn.non String.is_empty) @@ [tag ~pos:v label0 ind0]
-          else if line = 0
+          else if not brief && line = 0
           then
             B.lines @@ List.filter ~f:(Fn.non String.is_empty) @@
             [tag ~pos:(col-1) label2 ind2; tag label4 ind4]
-          else if col = 0
+          else if not brief && col = 0
           then
             B.lines @@ List.filter ~f:(Fn.non String.is_empty) @@
             [tag ~pos:(line-1) label1 ind1; tag label3 ind3]
-          else if elide_for (col-1) ~ind:ind2 || elide_for (line-1) ~ind:ind1
-          then B.hpad 1 @@ B.line "..."
-          else inner_grid v (line-1) (col-1)) in
+          else
+            let nline = if brief then line else line - 1 in
+            let ncol = if brief then col else col - 1 in
+             if elide_for ncol ~ind:ind2 || elide_for nline ~ind:ind1
+             then B.hpad 1 @@ B.line "..."
+             else inner_grid v nline ncol) in
     let screens = B.init_grid ~bars:true ~line:size0 ~col:1 (fun ~line ~col:_ ->
        if elide_for line ~ind:ind0
        then B.hpad 1 @@ B.line "..." else outer_grid line) in
-    B.frame @@ B.vlist ~bars:false [B.text header; screens]
+    (if brief then Fn.id else B.frame) @@ B.vlist ~bars:false [B.text header; screens]
 
 let pp_tensor fmt ?prefix ?entries_per_axis ?labels ~indices arr =
   PrintBox_text.pp fmt @@ render_tensor ?prefix ?entries_per_axis ?labels ~indices arr
@@ -208,17 +213,21 @@ let to_dag ?entries_per_axis ~with_value ~with_grad n_id =
     | _, false, false, _
     | _, _, _, None -> `Subtree_with_ID (id, `Tree (`Text n.op_label, children))
     | _, true, false, Some indices ->
-      let node = `Box (render_tensor ~prefix ?entries_per_axis ?labels ~indices n.value) in
+      let node =
+        `Box (render_tensor ~brief:true ~prefix ?entries_per_axis ?labels ~indices n.value) in
       `Subtree_with_ID (id, `Tree (node, children))
     | _, false, true, Some indices ->
       let prefix = prefix^" Gradient" in
-      let node = `Box (render_tensor ~prefix ?entries_per_axis ?labels ~indices n.grad) in
+      let node =
+        `Box (render_tensor ~brief:true ~prefix ?entries_per_axis ?labels ~indices n.grad) in
       `Subtree_with_ID (id, `Tree (node, children))
     | _, true, true, Some indices ->
       let node =
-        let value = render_tensor ~prefix ?entries_per_axis ?labels ~indices n.value in
-        let grad = render_tensor ~prefix:"Gradient" ?entries_per_axis ?labels ~indices n.grad in
-        `Vlist [`Box value; `Box grad] in
+        let value =
+          render_tensor ~brief:true ~prefix ?entries_per_axis ?labels ~indices n.value in
+        let grad =
+          render_tensor ~brief:true ~prefix:"Gradient" ?entries_per_axis ?labels ~indices n.grad in
+        `Vlist (false, [`Box value; `Box grad]) in
       `Subtree_with_ID (id, `Tree (node, children)) in
   to_dag {Node.sub_node_id=n_id; computed_externally=false}
 

@@ -127,14 +127,19 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
    | `Inline ->
      NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
        ?labels_spec m.comp_node.value
-   | _ -> NodeUI.pp_tensor Caml.Format.std_formatter ~prefix ~labels ~indices m.comp_node.value);
+   | _ ->
+     NodeUI.pp_tensor Caml.Format.std_formatter ~prefix ~labels ~indices m.comp_node.value;
+     Caml.Format.print_newline());
   if with_grad then (
     match style with
     | `Inline ->
       NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
-        ?labels_spec m.comp_node.grad
-    | _ -> NodeUI.pp_tensor Caml.Format.std_formatter ~prefix:(prefix^" Gradient ") ~labels
-             ~indices m.comp_node.grad);
+        ?labels_spec m.comp_node.grad;
+      Caml.Format.print_newline()
+    | _ -> 
+      NodeUI.pp_tensor Caml.Format.std_formatter ~prefix:(prefix^" Gradient ") ~labels
+        ~indices m.comp_node.grad;
+      Caml.Format.print_newline());
   if with_code then (
     (match m.forward_body with
      | Noop -> ()
