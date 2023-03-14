@@ -64,6 +64,31 @@ type array_print_style =
     The batch axes use [;] as a separator and [[||]] as axis delimiters (obligatory). *)
 ]
 
+let default_display_indices sh =
+  let axes = Shape.axis_keys_to_idcs sh |> Map.map ~f:(fun _ -> 0) in
+  let occupied = Array.create ~len:5 false in
+  let set_occu prio = occupied.(prio + 5) <- true; prio in
+  let occu prio = occupied.(prio + 5) in
+  let num_input_axes = List.length Shape.(list_of_dims @@ dims_of_kind Input sh) in
+  let remaining = Stack.of_list @@ List.filter ~f:(Map.mem axes) @@
+    Shape.AxisKey.[
+      {in_axes=Input; from_end=1}; {in_axes=Output; from_end=1};
+      {in_axes=Input; from_end=2}; {in_axes=Output; from_end=2};
+      (if num_input_axes > 1 then {in_axes=Batch; from_end=1} else {in_axes=Output; from_end=3});
+      {in_axes=Batch; from_end=1}; {in_axes=Batch; from_end=2};
+      {in_axes=Input; from_end=3}; {in_axes=Output; from_end=3};
+      {in_axes=Input; from_end=4}; {in_axes=Output; from_end=4};
+      {in_axes=Input; from_end=5}; {in_axes=Output; from_end=5} ] in
+  let rec loop offset axes =
+    if Stack.is_empty remaining || offset > 5 then axes
+    else if Fn.non occu ~-offset
+    then
+      loop (offset + 1) @@ Map.change axes (Stack.pop_exn remaining)
+        ~f:(Option.map ~f:(fun _ -> set_occu ~-offset))
+    else loop (offset + 1) axes in
+  let axes = loop 1 axes in
+  Shape.axis_map_to_dims_index axes
+
 let print_formula ~with_grad ~with_code (style: array_print_style) m =
   let open Formula in
   let sh = m.shape in
@@ -73,30 +98,7 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
   let indices =
     match style with
     | `Default ->
-      let axes = Shape.axis_keys_to_idcs sh |> Map.map ~f:(fun _ -> 0) in
-      let occupied = Array.create ~len:5 false in
-      let set_occu prio = occupied.(prio + 5) <- true; prio in
-      let occu prio = occupied.(prio + 5) in
-      let num_input_axes = List.length Shape.(list_of_dims @@ dims_of_kind Input sh) in
-      let remaining = Stack.of_list @@ List.filter ~f:(Map.mem axes) @@
-        Shape.AxisKey.[
-          {in_axes=Input; from_end=1}; {in_axes=Output; from_end=1};
-          {in_axes=Input; from_end=2}; {in_axes=Output; from_end=2};
-          (if num_input_axes > 1 then {in_axes=Batch; from_end=1} else {in_axes=Output; from_end=3});
-          {in_axes=Batch; from_end=1}; {in_axes=Batch; from_end=2};
-          {in_axes=Input; from_end=3}; {in_axes=Output; from_end=3};
-          {in_axes=Input; from_end=4}; {in_axes=Output; from_end=4};
-          {in_axes=Input; from_end=5}; {in_axes=Output; from_end=5} ] in
-      let rec loop offset axes =
-        if Stack.is_empty remaining || offset > 5 then axes
-        else if Fn.non occu ~-offset
-        then
-          loop (offset + 1) @@ Map.change axes (Stack.pop_exn remaining)
-            ~f:(Option.map ~f:(fun _ -> set_occu ~-offset))
-        else loop (offset + 1) axes in
-      let axes = loop 1 axes in
-      Shape.axis_map_to_dims_index axes
-      
+      default_display_indices sh      
     | `N5_layout priorities ->
       let p_labels = Shape.(axis_labels_of_spec priorities).labels |>
                      Map.map ~f:(Fn.compose ((-) 5) Int.of_string) in
@@ -190,7 +192,13 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
     let m = root.formula in
     if regenerate || Option.is_none root.forward_code || Option.is_none root.backprop_code then (
-      Sequence.iter root.subtree_shape_updates ~f:Shape.propagate_shapes;
+      Sequence.iter root.subtree_shape_updates ~f:(fun update_step ->
+        Shape.propagate_shapes update_step;
+        let sh = update_step.shape in
+        let n = Ocannl_runtime.Node.get sh.node_id in
+        n.default_display_indices <- Some (default_display_indices sh);
+        n.default_display_labels <- Some (Shape.axis_map_to_dims_index ~default:"" sh.axis_labels)
+      );
       let forward_prog, backprop_prog = get_toplevel m in
        root.forward_code <- Some forward_prog;
        root.formula.comp_node.forward <- None;

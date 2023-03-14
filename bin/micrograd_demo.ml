@@ -59,6 +59,6 @@ let () =
     );
     Caml.Format.print_newline()
   done;
-  print_formula ~with_code:false ~with_grad:false `Default @@ g;
-  print_formula ~with_code:false ~with_grad:true `Default @@ a;
-  print_formula ~with_code:false ~with_grad:true `Default @@ b
+  print_node_tree ~with_grad:true ~depth:9 g.node_id;
+  print_formula ~with_code:true ~with_grad:true `Default @@ a;
+  print_formula ~with_code:true ~with_grad:true `Default @@ b
