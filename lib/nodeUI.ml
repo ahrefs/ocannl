@@ -195,61 +195,9 @@ let pp_tensor_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?label
           fprintf fmt "@,%s@]" close_delim) in
   loop 0
 
-type dag = [
-  | `Empty
-  | `Pad of dag
-  | `Text of string
-  | `Box of PrintBox.t
-  | `Vlist of dag list
-  | `Hlist of dag list
-  | `Table of dag array array
-  | `Tree of dag * dag list
-  | `Embed_subtree_ID of string
-  | `Subtree_with_ID of string * dag
-]
-  
-let reformat_dag box_depth (b: dag) =
-  let s: ('a, 'cmp) Comparator.Module.t = (module String) in
-  let rec boxify depth = function
-  | `Tree (n, bs) when depth > 0 -> `Vlist [n; `Hlist (List.map ~f:(boxify @@ depth - 1) bs)]
-  | `Hlist bs -> `Hlist (List.map ~f:(boxify @@ depth - 1) bs)
-  | `Vlist bs -> `Vlist (List.map ~f:(boxify @@ depth - 1) bs)
-  | b -> b in
-  let b = boxify box_depth b in
-  let rec reused = function
-  | `Embed_subtree_ID id -> Set.singleton s id
-  | `Subtree_with_ID (_, b) -> reused b
-  | `Pad b -> reused b
-  | `Empty | `Text _ | `Box _ -> Set.empty s
-  | `Tree (n, bs) -> Set.union_list s (reused n::List.map ~f:reused bs)
-  | `Hlist bs -> Set.union_list s @@ List.map ~f:reused bs
-  | `Vlist bs -> Set.union_list s @@ List.map ~f:reused bs
-  | `Table bss ->
-    Set.union_list s @@ Array.to_list @@ Array.concat_map bss
-      ~f:(fun bs -> Array.map ~f:reused bs) in
-  let reused = reused b in
-  let open PrintBox in
-  let rec convert = function
-  | `Embed_subtree_ID id -> text ("["^id^"]")
-  | `Tree (n, bs) -> tree (convert n) (List.map ~f:convert bs)
-  | `Subtree_with_ID (id, `Text x) when Set.mem reused id ->
-     text ("["^id^"] "^x)
-  | `Subtree_with_ID (id, `Tree (`Text x, bs)) when Set.mem reused id ->
-     convert @@ `Tree (`Text ("["^id^"] "^x), bs)
-  | `Subtree_with_ID (_, b) -> convert b
-  | `Box b -> b
-  | `Empty -> empty
-  | `Pad b -> pad (convert b)
-  | `Text t -> text t
-  | `Vlist [h; b] -> vlist [align ~h:`Center ~v:`Bottom @@ convert h; convert b]
-  | `Vlist l -> vlist (List.map ~f:convert l)
-  | `Hlist l -> hlist (List.map ~f:convert l)
-  | `Table a -> grid (map_matrix convert a) in
-  convert b
-
 
 let to_dag ?entries_per_axis ~with_value ~with_grad n_id =
-  let rec to_dag {Node.sub_node_id; computed_externally}: dag =
+  let rec to_dag {Node.sub_node_id; computed_externally}: PrintBox_utils.dag =
     let n = Node.get sub_node_id in
     let id = Int.to_string sub_node_id in
     let children = List.map ~f:to_dag n.children in
@@ -275,4 +223,4 @@ let to_dag ?entries_per_axis ~with_value ~with_grad n_id =
   to_dag {Node.sub_node_id=n_id; computed_externally=false}
 
 let to_printbox ?entries_per_axis ?(with_value=true) ~with_grad ~depth n_id =
-  to_dag ?entries_per_axis ~with_value ~with_grad n_id |> reformat_dag depth
+  to_dag ?entries_per_axis ~with_value ~with_grad n_id |> PrintBox_utils.reformat_dag depth
