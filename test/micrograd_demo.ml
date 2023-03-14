@@ -23,7 +23,7 @@ let%expect_test "Micrograd README basic example" =
   let%nn_op g = g + 10. /. f in
 
   refresh_session ();
-  print_formula ~with_tree:9 ~with_code:false ~with_grad:false `Default @@ g;
+  print_formula ~with_code:false ~with_grad:false `Default @@ g;
   [%expect {|
     ┌────────────────┐
     │[41]: shape 0:1 │

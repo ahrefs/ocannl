@@ -175,16 +175,20 @@ let reset_ndarray reset_op arr =
   let ff arr = reset_bigarray reset_op arr in
    cast_map_as_bigarray {ff} arr
 
- let empty prec = create_array prec [||] `Unspecified
+let empty prec = create_array prec [||] `Unspecified
 
 type t = {
   mutable value: ndarray;
   mutable grad: ndarray;
   mutable forward: (unit -> unit) option;
   mutable backprop: (unit -> unit) option;
-  label: PrintBox.Simple.t;
+  op_label: string;
+  children: sub_node list;
   id: int;
+  mutable default_display_indices: int array option;
+  mutable default_display_labels: string array option;
 }
+and sub_node = {sub_node_id: int; computed_externally: bool}
 
 exception Runtime_error of string * t option
 
@@ -222,14 +226,15 @@ let get_grad (type val_t arr_t) (prec: (val_t, arr_t) precision) uid: arr_t =
 (** Constructs a node with empty tensors of the specified precision and registers it in the global store.
     Note that the precision for gradients should not be lower than the precision for values. *)
 let create (type grad_arr_t value_arr_t) ~(value_prec: ('a, value_arr_t) precision)
-    ~(grad_prec: ('a, grad_arr_t) precision) ~label =
+    ~(grad_prec: ('a, grad_arr_t) precision) ~op_label ~children =
   let id = let uid = global.unique_id in global.unique_id <- global.unique_id + 1; uid in
   let node = {
     value=as_ndarray value_prec @@ empty value_prec;
     grad=as_ndarray grad_prec @@ empty grad_prec;
     forward=None; backprop=None;
-    label=label id;
-    id;
+    op_label; children; id;
+    default_display_indices=None;
+    default_display_labels=None;
   } in
   Hashtbl.add_exn global.node_store ~key:node.id ~data:node;
   node

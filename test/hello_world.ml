@@ -18,7 +18,7 @@ let%expect_test "Pointwise multiplication dims 1" =
   let%nn_mo y = 2 *. "hey" in
   let y_f = Network.unpack y in
   refresh_session ();
-  print_formula ~with_tree:9 ~with_code:false ~with_grad:false `Default @@ y_f;
+  print_formula ~with_code:false ~with_grad:false `Default @@ y_f;
   [%expect {|
     ┌────────────────────────┐
     │[3] (hey*.2): shape 0:1 │
@@ -51,7 +51,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
     ││axis p=0│ 1.34e-1 │        │
     │└────────┴─────────┘        │
     └────────────────────────────┘ |}];
-  print_formula ~with_tree:9 ~with_code:false ~with_grad:false `Default @@ y_f;
+  print_formula ~with_code:false ~with_grad:false `Default @@ y_f;
   [%expect {|
     ┌─────────────────────────────┐
     │[5] (1+(hey*2)): shape p=0:1 │
@@ -338,7 +338,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
     ││      │ 3.56e-2  5.87e-1 ││
     │└──────┴──────────────────┘│
     └───────────────────────────┘ |}];
-  print_formula ~with_tree:9 ~with_code:false ~with_grad:false `Default @@ y_f;
+  print_formula ~with_code:false ~with_grad:false `Default @@ y_f;
   [%expect {|
     ┌───────────────────────────────────────────────────────┐
     │[5] ([4.00; 5.00; 6.00]+(hey*[2.00; 3.00])): shape 0:3 │
@@ -389,7 +389,7 @@ let%expect_test "Big matrix" =
       ││      │ 8.50e-1  4.69e-1  ...  6.16e-2  8.49e-1 ││
       │└──────┴─────────────────────────────────────────┘│
       └──────────────────────────────────────────────────┘ |}];
-  print_formula ~with_tree:9 ~with_code:false ~with_grad:false `Default y;
+  print_formula ~with_code:false ~with_grad:false `Default y;
   [%expect {|
       ┌────────────────────────────────────────────┐
       │[4] (0...20+(hey*0...20)): shape 0:21       │
@@ -414,7 +414,7 @@ let%expect_test "Very big tensor" =
     refresh_session ();
     (* print_formula ~with_code:false ~with_grad:false `Inline hey;
     [%expect {| |}]; *)
-    print_formula ~with_tree:9 ~with_code:false ~with_grad:false `Default hoo_f;
+    print_formula ~with_code:false ~with_grad:false `Default hoo_f;
     (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
     [%expect {|
       ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐

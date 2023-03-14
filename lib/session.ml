@@ -64,49 +64,7 @@ type array_print_style =
     The batch axes use [;] as a separator and [[||]] as axis delimiters (obligatory). *)
 ]
 
-let reformat_dag (_style: array_print_style) box_depth b =
-  let s: ('a, 'cmp) Comparator.Module.t = (module String) in
-  let rec reused = function
-  | `Pad (`Text id) -> Set.singleton s id
-  | `Pad b -> reused b
-  | `Text _ | `Empty -> Set.empty s
-  | `Tree (n, bs) -> Set.union_list s (reused n::List.map ~f:reused bs)
-  | `Hlist bs -> Set.union_list s @@ List.map ~f:reused bs
-  | `Vlist bs -> Set.union_list s @@ List.map ~f:reused bs
-  | `Table bss ->
-    Set.union_list s @@ Array.to_list @@ Array.concat_map bss
-      ~f:(fun bs -> Array.map ~f:reused bs) in
-  let reused = reused b in
-  let rec cleanup = function
-  | `Pad (`Text id) -> `Text ("["^id^"]")
-  | `Tree (n, bs) -> `Tree (cleanup n, List.map ~f:cleanup bs)
-  | `Hlist [`Text id; `Text op] when Set.mem reused id -> `Text ("["^id^"] "^op)
-  | `Hlist [`Text id; `Text op] when not @@ Set.mem reused id -> `Text op
-  | `Hlist bs -> `Hlist (List.map ~f:cleanup bs)
-  | `Vlist bs -> `Vlist (List.map ~f:cleanup bs)
-  | b -> b in
-  let rec boxify depth = function
-  | `Tree (n, bs) when depth > 0 -> `Vlist [n; `Hlist (List.map ~f:(boxify @@ depth - 1) bs)]
-  | `Hlist bs -> `Hlist (List.map ~f:(boxify @@ depth - 1) bs)
-  | `Vlist bs -> `Vlist (List.map ~f:(boxify @@ depth - 1) bs)
-  | b -> b in
-  boxify box_depth @@ cleanup b
-
-let to_printbox b =
-  let open PrintBox in
-  let rec to_box = function
-  | `Empty -> empty
-  | `Pad b -> pad (to_box b)
-  | `Text t -> text t
-  | `Vlist [h; b] -> vlist [align ~h:`Center ~v:`Bottom @@ to_box h; to_box b]
-  | `Vlist l -> vlist (List.map ~f:to_box l)
-  | `Hlist l -> hlist (List.map ~f:to_box l)
-  | `Table a -> grid (map_matrix to_box a)
-  | `Tree (`Text _ | `Hlist [`Text _; `Text _] as h, l) -> tree (frame @@ to_box h) (List.map ~f:to_box l)
-  | `Tree (b, l) -> tree (to_box b) (List.map ~f:to_box l) in
-  to_box b
-
-let print_formula ?with_tree ~with_grad ~with_code (style: array_print_style) m =
+let print_formula ~with_grad ~with_code (style: array_print_style) m =
   let open Formula in
   let sh = m.shape in
   let prefix =
@@ -163,19 +121,17 @@ let print_formula ?with_tree ~with_grad ~with_code (style: array_print_style) m 
   let num_batch_axes = num_axes Shape.AxisKey.Batch in
   let num_input_axes = num_axes Shape.AxisKey.Input in
   let num_output_axes = num_axes Shape.AxisKey.Output in
-  let tree = Option.map with_tree
-      ~f:(fun depth -> to_printbox @@ reformat_dag style depth m.comp_node.label) in
   (match style with
    | `Inline ->
      NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
        ?labels_spec m.comp_node.value
-   | _ -> NodeUI.pp_tensor Caml.Format.std_formatter ~prefix ?tree ~labels ~indices m.comp_node.value);
+   | _ -> NodeUI.pp_tensor Caml.Format.std_formatter ~prefix ~labels ~indices m.comp_node.value);
   if with_grad then (
     match style with
     | `Inline ->
       NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
         ?labels_spec m.comp_node.grad
-    | _ -> NodeUI.pp_tensor Caml.Format.std_formatter ~prefix:(prefix^" Gradient ") ?tree ~labels
+    | _ -> NodeUI.pp_tensor Caml.Format.std_formatter ~prefix:(prefix^" Gradient ") ~labels
              ~indices m.comp_node.grad);
   if with_code then (
     (match m.forward_body with
@@ -189,9 +145,9 @@ let print_formula ?with_tree ~with_grad ~with_code (style: array_print_style) m 
   );
   Stdio.printf "\n%!"
 
-let print_global_root ~with_tree ~with_grad ~with_code (style: array_print_style) root =
+let print_global_root ~with_grad ~with_code (style: array_print_style) root =
   let open Formula in
-  print_formula ~with_tree ~with_grad ~with_code:false style root.formula;
+  print_formula ~with_grad ~with_code:false style root.formula;
   if with_code then (
     (match root.forward_code with
      | None -> ()
@@ -204,11 +160,11 @@ let print_global_root ~with_tree ~with_grad ~with_code (style: array_print_style
   );
   Stdio.printf "\n%!"
 
-let print_global_roots ~with_tree ~with_grad ~with_code (style: array_print_style) =
+let print_global_roots ~with_grad ~with_code (style: array_print_style) =
   let open Formula in
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (node_id, root) ->
       assert (node_id = root.formula.node_id);
-      print_global_root ~with_tree ~with_grad ~with_code style root)
+      print_global_root ~with_grad ~with_code style root)
 
 let print_preamble() =
   Stdio.printf "%s\n%!" (Formula.prefix_with_preamble "")
@@ -313,7 +269,9 @@ module CLI = struct
   let drop_session = drop_session
   let close_session = close_session
   let print_global_root = print_global_root
-  let print_node = NodeUI.print_node
+  let print_node_tree ?entries_per_axis ?with_value ~with_grad ~depth id =
+    PrintBox_text.output Stdio.stdout @@
+    NodeUI.to_printbox ?entries_per_axis ?with_value ~with_grad ~depth id
   let max_sublabel_length = Formula.max_sublabel_length
   let print_formula = print_formula
   let print_global_roots = print_global_roots
