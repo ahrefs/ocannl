@@ -66,10 +66,8 @@ let y =
       Network.return_term (Operation.unconstrained_param ?init:None "hey4") in
     Network.apply
       (Network.apply (+)
-         (Network.apply
-            (Network.apply ( * )
-               (Network.return_term (Operation.number ~axis_label:"q" 2.0)))
-            hey4))
+         (Network.apply (Network.apply ( * ) hey4)
+            (Network.return_term (Operation.number ~axis_label:"q" 2.0))))
       (Network.return_term (Operation.number ~axis_label:"p" 1.0))
 let z =
   let open! Network.O in

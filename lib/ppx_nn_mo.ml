@@ -4,7 +4,7 @@ open Ppxlib
 
 open Ppx_nn_shared
 
-let ndarray_constant ?axis_labels ?label expr =
+let ndarray_mo ?axis_labels ?label expr =
   let loc = expr.pexp_loc in
   let values, batch_dims, output_dims, input_dims = ndarray_constant expr in
   let edims dims = Ast_builder.Default.elist ~loc @@ List.rev dims in
@@ -23,6 +23,24 @@ let make_vb ?init ~loc ~str_loc ~ident string =
   let pat = Ast_helper.Pat.var ~loc {loc=str_loc; txt=ident} in
   let init = match init with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
   let v = [%expr Network.return_term (Operation.unconstrained_param ?init:[%e init] [%e string])] in
+  let vb = Ast_helper.Vb.mk ~loc pat v in
+  pat, vb
+
+let make_vb_nd ~loc ~str_loc ?axis_labels ~ident ~init_nd string =
+  let pat = Ast_helper.Pat.var ~loc {loc=str_loc; txt=ident} in
+  let values, batch_dims, output_dims, input_dims = ndarray_constant init_nd in
+  let v =
+    if not @@ List.is_empty batch_dims then
+      Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
+        "ppx_ocannl params cannot have batch dims: define a constant or remove the array syntax."
+    else
+      let edims dims = Ast_builder.Default.elist ~loc @@ List.rev dims in
+      let op =
+        match axis_labels with
+        | None -> [%expr Operation.given_dims_params]
+        | Some axis_labels -> [%expr Operation.given_dims_params ?axis_labels:[%e axis_labels]] in
+      [%expr Network.return_term ([%e op] ~input_dims:[%e edims input_dims]
+          ~output_dims:[%e edims output_dims] [%e string] [%e values])] in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   pat, vb
 
@@ -57,13 +75,19 @@ let rec translate expr =
     let pat, vb = make_vb ~init:[%expr Float.of_int [%e i]] ~loc ~str_loc ~ident s in
     Map.singleton (module String) ident vb, pat2expr pat
 
+  | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
+      [%e? ({ pexp_desc = Pexp_tuple _; _ } | { pexp_desc = Pexp_array _; _ } 
+           | { pexp_desc = Pexp_construct ({txt=Lident "::"; _}, _); _ }) as init_nd]] ->
+    let pat, vb = make_vb_nd ~loc ~str_loc ~ident ~init_nd s in
+    Map.singleton (module String) ident vb, pat2expr pat
+
   | { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } ->
     let pat, vb = make_vb ~loc ~str_loc ~ident expr in
     Map.singleton (module String) ident vb, pat2expr pat
 
   | { pexp_desc = Pexp_tuple _; _ } | { pexp_desc = Pexp_array _; _ } 
   | { pexp_desc = Pexp_construct ({txt=Lident "::"; _}, _); _ } ->
-    no_vbs, ndarray_constant expr
+    no_vbs, ndarray_mo expr
     
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3] ] ->
     let vbs1, e1 = translate expr1 in

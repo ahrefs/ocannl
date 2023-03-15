@@ -169,6 +169,10 @@ let ndarray ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_
     else label in
   Formula.term ~label spec ~init_op:(`Fixed_constant values)
 
+let given_dims_params ?(axis_labels="") ?(input_dims=[]) ?(output_dims=[]) label values =
+  Formula.term ~label (Params {input_dims; output_dims; axis_labels})
+    ~init_op:(`Fixed_constant values)
+
 let assign ~lhs ~rhs projections =
   let open Code in
   Accum_unop {zero_out=false; accum=Skip_arg; op=Identity; lhs; rhs; projections}

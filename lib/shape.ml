@@ -1018,7 +1018,7 @@ let derive_index iterator_symbols (projection: symbolic_axis array) (type iterat
       function Fixed_idx i -> Fixed_idx i | Iterator p -> Iterator product.(p))
 
 (** Specification of a terminal [Formula.t]'s shape. The [string] occurrences refer to [axis_labels]
-    specs. Note: the specification is just a helper in constructing shapes,  *)
+    specs. Note: the specification is just a helper in constructing shapes. *)
 type term_spec =
   | Unknown_shape
   (** The shape will need to be fully inferred. *)
