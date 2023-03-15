@@ -11,7 +11,7 @@ let%expect_test "Micrograd README basic example" =
   set_executor test_executor;
   let%nn_op c = "a" [-4] + "b" 2 in
   (* TODO: exponentiation operator *)
-  let%nn_op d = a *. b + b *. b *. b in
+  let%nn_op d = a *. b + b **. 3 in
   (* TODO: figure out how to have [let%nn_op c += c + 1] etc. *)
   let%nn_op c = c + c + 1 in
   let%nn_op c = c + 1 + c + ~-a in
@@ -26,7 +26,7 @@ let%expect_test "Micrograd README basic example" =
   print_formula ~with_code:false ~with_grad:false `Default @@ g;
   [%expect {|
     ┌────────────────┐
-    │[41]: shape 0:1 │
+    │[40]: shape 0:1 │
     │┌┬─────────┐    │
     │││axis 0   │    │
     │├┼─────────┼─── │

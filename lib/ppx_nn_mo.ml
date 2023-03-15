@@ -88,7 +88,17 @@ let rec translate expr =
   | { pexp_desc = Pexp_tuple _; _ } | { pexp_desc = Pexp_array _; _ } 
   | { pexp_desc = Pexp_construct ({txt=Lident "::"; _}, _); _ } ->
     no_vbs, ndarray_mo expr
-    
+
+  | [%expr [%e? expr1] **.
+      [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
+    let vbs, e1 = translate expr1 in
+    vbs, [%expr Network.bind_ret ~f:(Operation.pointpow [%e f]) ~m:[%e e1]]
+
+  | [%expr [%e? expr1] **.
+      [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
+    let vbs, e1 = translate expr1 in
+    vbs, [%expr Network.bind_ret ~f:(Operation.pointpow (Float.of_int [%e i])) ~m:[%e e1]]
+
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3] ] ->
     let vbs1, e1 = translate expr1 in
     let vbs2, e2 = translate expr2 in

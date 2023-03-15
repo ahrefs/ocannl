@@ -201,6 +201,7 @@ module O = struct
   let ( * ) = matmul
   let ( *. ) = pointmul
   let (+) = add
+  let ( **. ) base exp = pointpow exp base
   let (!/) = relu
   let (!~) label = Formula.term ~label (Deduced_params `Not_constrained) ~init_op:`Standard_uniform
   let (!.) = number
