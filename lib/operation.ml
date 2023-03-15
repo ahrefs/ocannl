@@ -106,7 +106,7 @@ let pointpow p =
   let grad_body ~n ~n1 projections =
     Accum_binop {zero_out=false; accum=Add; op=Relu_gate; lhs=g n1; rhs1=v n; rhs2=g n;
                  projections=(fun () -> Shape.backprop_unary @@ projections())} in
-  let op_label = "**"^Float.(if is_integer p then Int.to_string @@ to_int p else to_string p) in
+  let op_label = "**."^Float.(if is_integer p then Int.to_string @@ to_int p else to_string p) in
   Formula.unop ~transpose_op:`Pointwise ~op_label ~op_body ~grad_body
 
 let float_to_label v = Float.to_string_hum ~strip_zero:true v
