@@ -4,6 +4,21 @@ open Ppxlib
 
 open Ppx_nn_shared
 
+let ndarray_constant ?axis_labels ?label expr =
+  let loc = expr.pexp_loc in
+  let values, batch_dims, output_dims, input_dims = ndarray_constant expr in
+  let edims dims = Ast_builder.Default.elist ~loc @@ List.rev dims in
+  let op =
+    match axis_labels, label with
+    | None, None -> [%expr Operation.ndarray]
+    | Some axis_labels, None -> [%expr Operation.ndarray ?axis_labels:[%e axis_labels]]
+    | None, Some label -> [%expr Operation.ndarray ?label:[%e label]]
+    | Some axis_labels, Some label ->
+      [%expr Operation.ndarray ?axis_labels:[%e axis_labels] ?label:[%e label]] in
+  [%expr Network.return_term
+      ([%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
+         ~output_dims:[%e edims output_dims] [%e values])]
+
 let make_vb ?init ~loc ~str_loc ~ident string =
   let pat = Ast_helper.Pat.var ~loc {loc=str_loc; txt=ident} in
   let init = match init with Some c -> [%expr Some [%e c]] | None -> [%expr None] in

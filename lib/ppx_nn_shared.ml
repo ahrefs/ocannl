@@ -34,7 +34,7 @@ let dim_spec_to_string = function
 | `Output_dims dim -> "output (list) of dim "^Int.to_string dim
 | `Batch_dims dim -> "batch (array) of dim "^Int.to_string dim
 
-let ndarray_constant ?axis_labels ?label expr =
+let ndarray_constant expr =
   let loc = expr.pexp_loc in
   (* Traverse the backbone of the ndarray to collect the dimensions. *)
   let rec loop_dims accu = function
@@ -113,17 +113,7 @@ let ndarray_constant ?axis_labels ?label expr =
       | `Input_dims dim -> batch_dims, output_dims, eint ~loc dim::input_dims
       | `Output_dims dim -> batch_dims, eint ~loc dim::output_dims, input_dims
       | `Batch_dims dim -> eint ~loc dim::batch_dims, output_dims, input_dims) in
-  let edims dims = elist ~loc @@ List.rev dims in
-  let op =
-    match axis_labels, label with
-    | None, None -> [%expr Operation.ndarray]
-    | Some axis_labels, None -> [%expr Operation.ndarray ?axis_labels:[%e axis_labels]]
-    | None, Some label -> [%expr Operation.ndarray ?label:[%e label]]
-    | Some axis_labels, Some label ->
-      [%expr Operation.ndarray ?axis_labels:[%e axis_labels] ?label:[%e label]] in
-  [%expr Network.return_term
-      ([%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
-         ~output_dims:[%e edims output_dims] [%e values])]
+  values, batch_dims, output_dims, input_dims
 
 let let_opt ~loc vbs expr =
   if Map.is_empty vbs then expr
