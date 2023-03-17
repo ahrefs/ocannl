@@ -146,10 +146,11 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
      | Noop -> ()
      | fwd_code ->
        Caml.Format.printf "Current forward body:@ %a@ " Code.fprint_code fwd_code);
-    (match m.backprop_body with
-     | Noop -> ()
-     | bwd_code ->
-      Caml.Format.printf "Current backprop body:@ %a@ " Code.fprint_code bwd_code)
+    (match m.form with
+     | Some {backprop_body=Noop; _} -> ()
+     | Some {backprop_body=bwd_code; _} ->
+       Caml.Format.printf "Current backprop body:@ %a@ " Code.fprint_code bwd_code
+     | None -> ())
   );
   Stdio.printf "\n%!"
 

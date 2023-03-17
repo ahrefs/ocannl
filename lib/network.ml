@@ -80,7 +80,9 @@ let bind_ret (type a) (m: a t) (f: F.t -> a) =
     as parameters. *)
 let return_term x =
   let params =
-    if x.F.needs_gradient then Set.singleton (module F) x else Set.empty (module F) in
+    match x.F.form with
+    | Some {needs_gradient=true; _} -> Set.singleton (module F) x
+    | _ -> Set.empty (module F) in
   {comp=Nullary x; params}
 
 let return c =
