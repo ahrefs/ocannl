@@ -220,6 +220,9 @@ let get uid = Hashtbl.find_exn global.node_store uid
 
 let get_form uid = Option.value_exn ~message:"get_form: not a form node" (get uid).form
 
+let session_initializations = ref @@ Some (fun () -> ())
+let session_prepare_step = ref @@ Some (fun () -> ())
+
 let get_value (type val_t arr_t) (prec: (val_t, arr_t) precision) uid: arr_t =
   let n = Hashtbl.find_exn global.node_store uid in
   match prec, n.value with

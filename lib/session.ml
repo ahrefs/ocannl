@@ -196,72 +196,95 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
   if force_no_init && (regenerate || reinit || run) then
     invalid_arg "refresh_session: set other triggers to false when using force_no_init";
   (* Initialization and the forward processing. *)
-  List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
-    let m = root.formula in
-    let cform = match m.comp_node.form with
-    | Some form -> form
-    | None -> assert false in
-  if regenerate || Option.is_none root.forward_code || Option.is_none root.backprop_code then (
-      List.iter !session_shape_updates ~f:(fun update_step ->
+  if regenerate || Map.exists !global_roots
+       ~f:(fun root -> Option.is_none root.forward_code || Option.is_none root.backprop_code)
+  then (
+    List.iter !session_shape_updates ~f:(fun update_step ->
         Shape.propagate_shapes update_step;
         let sh = update_step.shape in
         let n = Ocannl_runtime.Node.get sh.node_id in
         n.default_display_indices <- Some (default_display_indices sh);
         n.default_display_labels <- Some (Shape.axis_map_to_dims_index ~default:"" sh.axis_labels)
       );
-      let forward_prog, backprop_prog = get_toplevel m in
-       root.forward_code <- Some forward_prog;
-       cform.forward <- None;
-       root.backprop_code <- Some backprop_prog;
-       cform.backprop <- None
-    );
-    if not force_no_init && 
-        (reinit || Option.is_none cform.forward) then (
-      try
-        let contents = Exec_as_OCaml.load_native ~with_debug (Option.value_exn root.forward_code) in
-        match contents, cform.forward with
-        | Some contents, Some forward ->
-          cform.forward <-
-            Some (fun () -> try forward() with error ->
-                Formula.handle_error ~formula:m @@ !executor_error_message "Forward error:" ~contents error)
-        | Some contents, None ->
-          let msg = "refresh_session: error loading `forward`: routine not set in code:\n"^contents in
-          raise @@ Session_error (msg, Some m)
-        | _, None ->
-          failwith ("refresh_session: error loading `forward`: routine not set"^
-                    (if with_debug then "" else " (use `~with_debug:true` for more information)"))
-        | _ -> ()
-      with Session_error (msg, None) ->
-        let msg = "Forward init error: "^msg in
-        raise @@ Session_error (msg, Some m);
-    );
-    if not force_no_init && 
-        (reinit || Option.is_none cform.backprop) then (
-      try
-        let contents = Exec_as_OCaml.load_native ~with_debug (Option.value_exn root.backprop_code) in
-        match contents, cform.backprop with
-        | Some contents, Some backprop ->
-          cform.backprop <-
-            Some (fun () ->
-                try backprop() with error ->
-                  Formula.handle_error ~formula:m @@ !executor_error_message "Backprop error:" 
-                    ~contents error)
-        | Some contents, None ->
-          Formula.handle_error ~formula:m @@
-          "refresh_session: error loading `backprop`: routine not set in code:\n"^contents
-        | None, None ->
-          failwith ("refresh_session: error loading `backprop`: routine not set"^
-                    (if with_debug then "" else " (use `~with_debug:true` for more information)"))
-        | _ -> ()
-      with Session_error (msg, None) ->
-        Caml.Format.printf "Forward code (context for backprop init error):@ %a@\n"
-          Code.fprint_program @@ Option.value_exn root.forward_code;
-        Formula.handle_error ~formula:m @@ "Backprop init error: "^msg
-    );
-    if run then match cform.forward with
-      | Some forward -> forward()
-      | None -> assert false
+    (* FIXME: only do this for newly added inits! Otherwise it breaks terms! *)
+    (* FIXME: clean this function up. Refactor loader-with-error-handling. *)
+    let contents =
+      Exec_as_OCaml.load_native ~with_debug 
+        Code.(Session_initializations (all_parallel !session_initializations)) in
+    let open Ocannl_runtime in
+    match contents, !Node.session_initializations with
+    | Some contents, Some init ->
+      Node.session_initializations :=
+        Some (fun () -> try init() with error ->
+            Formula.handle_error @@ !executor_error_message "Initialization error:" ~contents error)
+    | Some contents, None ->
+      let msg =
+        "refresh_session: error loading initialization: routine not set in code:\n"^contents in
+      raise @@ Session_error (msg, None)
+    | _, None ->
+      failwith ("refresh_session: error loading initialization: routine not set"^
+                (if with_debug then "" else " (use `~with_debug:true` for more information)"))
+    | _ -> ()
+);
+  List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
+    let m = root.formula in
+    let cform = match m.comp_node.form with
+    | Some form -> form
+    | None -> assert false in
+  if regenerate || Option.is_none root.forward_code || Option.is_none root.backprop_code then (
+    let forward_prog, backprop_prog = get_toplevel m in
+    root.forward_code <- Some forward_prog;
+    cform.forward <- None;
+    root.backprop_code <- Some backprop_prog;
+    cform.backprop <- None
   );
+  if not force_no_init && 
+     (reinit || Option.is_none cform.forward) then (
+    try
+      let contents = Exec_as_OCaml.load_native ~with_debug (Option.value_exn root.forward_code) in
+      match contents, cform.forward with
+      | Some contents, Some forward ->
+        cform.forward <-
+          Some (fun () -> try forward() with error ->
+              Formula.handle_error ~formula:m @@ !executor_error_message "Forward error:" ~contents error)
+      | Some contents, None ->
+        let msg = "refresh_session: error loading `forward`: routine not set in code:\n"^contents in
+        raise @@ Session_error (msg, Some m)
+      | _, None ->
+        failwith ("refresh_session: error loading `forward`: routine not set"^
+                  (if with_debug then "" else " (use `~with_debug:true` for more information)"))
+      | _ -> ()
+    with Session_error (msg, None) ->
+      let msg = "Forward init error: "^msg in
+      raise @@ Session_error (msg, Some m);
+  );
+  if not force_no_init && 
+     (reinit || Option.is_none cform.backprop) then (
+    try
+      let contents = Exec_as_OCaml.load_native ~with_debug (Option.value_exn root.backprop_code) in
+      match contents, cform.backprop with
+      | Some contents, Some backprop ->
+        cform.backprop <-
+          Some (fun () ->
+              try backprop() with error ->
+                Formula.handle_error ~formula:m @@ !executor_error_message "Backprop error:" 
+                  ~contents error)
+      | Some contents, None ->
+        Formula.handle_error ~formula:m @@
+        "refresh_session: error loading `backprop`: routine not set in code:\n"^contents
+      | None, None ->
+        failwith ("refresh_session: error loading `backprop`: routine not set"^
+                  (if with_debug then "" else " (use `~with_debug:true` for more information)"))
+      | _ -> ()
+    with Session_error (msg, None) ->
+      Caml.Format.printf "Forward code (context for backprop init error):@ %a@\n"
+        Code.fprint_program @@ Option.value_exn root.forward_code;
+      Formula.handle_error ~formula:m @@ "Backprop init error: "^msg
+  );
+  if run then match cform.forward with
+    | Some forward -> forward()
+    | None -> assert false
+    );
   (* The backpropagation. *)
   if run then
     List.iter (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->

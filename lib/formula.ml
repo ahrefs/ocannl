@@ -3,22 +3,18 @@
 open Base
 
 type form = {
-  init_grads: Code.t;
-  (** Initializes the gradient data: typically, simply creates the arrays.
-      Gradients are zeroed separately. The code is suspended so that it can incorporate shape inference. *)
   backprop_body: Code.t;
-  zero_grads: Code.t;
-  (** Initializes the backpropagation phase. Computed once per backpropagation. *)
+  (** Performs backpropagation for the formula, which typically means adding partial gradients
+      to the gradient tensor of the subformulas. *)
   needs_gradient: bool;
-  (** An optimization setting: whether gradients should be backpropagated into the formula. If any subformula
-      needs gradients, this formula also needs gradients. *)
+  (** An optimization setting: whether gradients should be backpropagated into the formula.
+      If any subformula needs gradients, this formula also needs gradients. *)
 } [@@deriving sexp]
 
 (** Information needed for compositional code generation. The code generation is suspended so that
     it can incorporate inferred shape information. *)
 type t = {
   forward_body: Code.t;
-  init_values: Code.t;
   (** Initializes the values. *)
   form: form option;
   node_id: int;
@@ -46,6 +42,16 @@ let global_roots = ref @@ Map.empty (module Int)
 (** We perform each update (at least) twice to propagate information between all subformulas:
     first in postfix order while computing [t], then in prefix order by iterating over this stack. *)
 let session_shape_updates: Shape.update_step list ref = ref []
+
+(** This code will usually be executed only once, after the shapes are inferred. But it will also
+    be executed by each [Session.refresh_session ~regenerate:true] and 
+    [Session.refresh_session ~reinit:true] call, except if [~force_no_init:true].
+    Execution potentially in parallel. *)
+let session_initializations: Code.t list ref = ref []
+
+(** This code will be executed on each [Session.refresh_session ~run:true] call ([~run:true]
+    is implicit), before any [forward] or [backprop] code. Execution potentially in parallel. *)
+let session_prepare_step: Code.t list ref = ref []
 
 (** A current session is the range of nodes from [!first_session_id] to [Node.global.unique_id - 1],
     or an empty range if [!first_session_id = Node.global.unique_id].
@@ -133,15 +139,9 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body ~is_form m1 m2 
     | _, _, false, m2_body -> Seq (m2_body, op_body)
     | false, m1_body, _, _ -> Seq(m1_body, op_body)) in
   let init_values_body = create ~node_id `Value shape in
-  let init_values =
-    if m1_processed && m2_processed then init_values_body
-    else if m1_processed then Par (m2.init_values, init_values_body)
-    else if m2_processed then Par (m1.init_values, init_values_body)
-    else if m1_first then Par (Par (m1.init_values, m2.init_values), init_values_body)
-    else Par (Par (m2.init_values, m1.init_values), init_values_body) in
+  session_initializations := init_values_body :: !session_initializations;
   if not is_form then
-    {forward_body; form=None; init_values;
-     node_id; comp_node=n; shape_logic; shape}
+    {forward_body; form=None; node_id; comp_node=n; shape_logic; shape}
   else
     let form1, form2 = match m1.form, m2.form with
     | Some form1, Some form2 -> form1, form2
@@ -152,15 +152,8 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body ~is_form m1 m2 
     let needs_gradient = form1.needs_gradient || form2.needs_gradient in
     let m1_no_grad = m1_processed || not form1.needs_gradient in
     let m2_no_grad = m2_processed || not form2.needs_gradient in
-    let zero_body = if needs_gradient then reset_zeros ~node_id `Grad shape else Noop in
-    (* The order of zeroing gradients is irrelevant and multiple zeroing is fine, but we avoid it
-       and keep the backprop order for readability. *)
-    let zero_grads =
-      if m1_no_grad && m2_no_grad then zero_body
-      else if m1_no_grad then Par (zero_body, form2.zero_grads)
-      else if m2_no_grad then Par (zero_body, form1.zero_grads)
-      else if m1_first then Par (zero_body, Par (form2.zero_grads, form1.zero_grads))
-      else Par (zero_body, Par (form1.zero_grads, form2.zero_grads)) in
+    let zero_grads = if needs_gradient then reset_zeros ~node_id `Grad shape else Noop in
+    session_prepare_step := zero_grads :: !session_prepare_step;
     (* The code needs to be included in the reverse order to which it was computed! This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
@@ -176,21 +169,12 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body ~is_form m1 m2 
       | _, _, false, m2_body -> Seq (grad_body, m2_body)
       | false, m1_body, _, _ -> Seq (grad_body, m1_body) in
     let init_grads_body = create ~node_id `Grad shape in
+    session_initializations := init_grads_body :: !session_initializations;    
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
-    let m1_init_grads = form1.init_grads in
-    let m2_init_grads = form2.init_grads in
-    let init_grads =
-      if m1_no_grad && m2_no_grad then init_grads_body
-      else if m1_no_grad then Par (init_grads_body, m2_init_grads)
-      else if m2_no_grad then Par (init_grads_body, m1_init_grads)
-      else if m1_first then Par (init_grads_body, Par (m2_init_grads, m1_init_grads))
-      else Par (init_grads_body, Par (m1_init_grads, m2_init_grads))in
-
     (if not m1_processed then global_roots := Map.remove !global_roots m1.node_id);
     (if not m2_processed then global_roots := Map.remove !global_roots m2.node_id);
-    let form = Some {backprop_body; init_grads; zero_grads; needs_gradient} in
-    let formula = {forward_body; init_values; form;
-                   node_id; comp_node=n; shape_logic; shape} in
+    let form = Some {backprop_body; needs_gradient} in
+    let formula = {forward_body; form; node_id; comp_node=n; shape_logic; shape} in
     let root = {forward_code=None; backprop_code=None; formula} in
     global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
     formula
@@ -228,10 +212,9 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m: t =
     match m_processed, m.forward_body with
     | true, _ | _, Noop -> op_body
     | false, m_body -> Seq (m_body, op_body) in
-  let init_values = Par (m.init_values, create ~node_id `Value shape) in
+  session_initializations := create ~node_id `Value shape :: !session_initializations;
   if not is_form then
-    {forward_body; form=None; init_values;
-     node_id; comp_node=n; shape_logic; shape}
+    {forward_body; form=None; node_id; comp_node=n; shape_logic; shape}
   else
     let form1 = match m.form with
     | Some form -> form
@@ -239,10 +222,8 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m: t =
       raise @@ Session_error ("binop ~is_form:true but subformula is non-form", Some m) in
     let needs_gradient = form1.needs_gradient in
     let m_no_grad = m_processed || not form1.needs_gradient in
-    let zero_body = if needs_gradient then reset_zeros ~node_id `Grad shape else Noop in
-    let zero_grads =
-      if m_no_grad then zero_body
-      else Par (zero_body, form1.zero_grads) in
+    let zero_grads = if needs_gradient then reset_zeros ~node_id `Grad shape else Noop in
+    session_prepare_step := zero_grads :: !session_prepare_step;
     let grad_body =
       if needs_gradient then grad_body ~n ~n1 projections else Noop in
     (* The code needs to be included in the reverse order to which it was computed! *)
@@ -251,13 +232,11 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m: t =
       | true, _ | _, Noop -> grad_body
       | false, m_body -> Seq (grad_body, m_body) in
     let init_grads_body = create ~node_id `Grad shape in
-    let init_grads =
-      if m_no_grad then init_grads_body
-      else Par (init_grads_body, form1.init_grads) in
+    session_initializations := init_grads_body :: !session_initializations;    
 
     (if not m_processed then global_roots := Map.remove !global_roots m.node_id);
-    let form = Some {backprop_body; init_grads; zero_grads; needs_gradient} in
-    let formula = {forward_body; init_values; form;
+    let form = Some {backprop_body; needs_gradient} in
+    let formula = {forward_body; form;
                    node_id; comp_node=n; shape_logic; shape} in
     let root = {forward_code=None; backprop_code=None; formula} in
     global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
@@ -289,22 +268,21 @@ let term ~label ?needs_gradient ~is_form (spec: Shape.term_spec) ~init_op =
 
   let open Code in
   let forward_body = Noop in
-  let init_values = create ~node_id ~init_op `Value shape in
+  session_initializations := create ~node_id ~init_op `Value shape :: !session_initializations;
   if not is_form then
-    {forward_body; form=None; init_values;
-     node_id; comp_node=n; shape_logic; shape}
+    {forward_body; form=None; node_id; comp_node=n; shape_logic; shape}
   else
     let needs_gradient =
       match needs_gradient with
       | None -> term_needs_gradient spec
       | Some setting -> setting in
-    let zero_grads = reset_zeros ~node_id `Grad shape in
+    let zero_grads = if needs_gradient then reset_zeros ~node_id `Grad shape else Noop in
+    session_prepare_step := zero_grads :: !session_prepare_step;
     let backprop_body = Noop in
     (* Very unlikely someone will want dw/dw. *)
-    let init_grads = create ~node_id `Grad shape in
-    let form = Some {backprop_body; init_grads; zero_grads; needs_gradient} in
-    let formula = {forward_body; init_values; form;
-                   node_id; comp_node=n; shape_logic; shape} in
+    session_initializations := create ~node_id `Grad shape :: !session_initializations;    
+    let form = Some {backprop_body; needs_gradient} in
+    let formula = {forward_body; form; node_id; comp_node=n; shape_logic; shape} in
     let root = {forward_code=None; backprop_code=None; formula} in
     global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
     formula
@@ -321,18 +299,16 @@ let error_if_unknown_shape m =
 let get_toplevel m =
   error_if_unknown_shape m;
   let open Code in
-  let toplevel_forward = 
-    {initialization=m.init_values; procedure=m.forward_body;
-     routine={node_id=m.node_id; field=`Forward};
-     label="Forward #"^Int.to_string m.node_id} in
+  let toplevel_forward =
+    Node_specific {procedure=m.forward_body; routine={node_id=m.node_id; field=`Forward};
+                   label="Forward #"^Int.to_string m.node_id} in
   let backprop =
-    Seq (Par ((Option.value_exn m.form).zero_grads,
-              reset_ones ~node_id:m.node_id `Grad m.shape), 
+    Seq (reset_ones ~node_id:m.node_id `Grad m.shape,
          (Option.value_exn m.form).backprop_body) in
   let toplevel_backprop =
-    {initialization=(Option.value_exn m.form).init_grads; procedure=backprop;
-     routine={node_id=m.node_id; field=`Backprop};
-     label="Backprop #"^Int.to_string m.node_id} in
+    Node_specific {procedure=backprop;
+                   routine={node_id=m.node_id; field=`Backprop};
+                   label="Backprop #"^Int.to_string m.node_id} in
   toplevel_forward, toplevel_backprop
 
 (* FIXME: not inlining here gives an error about PrintBox.Simple.t_of_sexp missing *)

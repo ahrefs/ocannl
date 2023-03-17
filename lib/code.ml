@@ -67,8 +67,13 @@ type t =
   | Noop
 [@@deriving sexp]
 
-(** Dynamically loading a program executes [initialization] and bounds the [procedure] to [routine]. *)
-type program = {initialization: t; procedure: t; routine: routine; label: string}
+(** Dynamically loading a program executes the [Initialization] code, or bounds the [procedure]
+    to [routine] for a node, or bounds a callback to one of the two global routine slots. *)
+type program =
+  | Node_specific of {procedure: t; routine: routine; label: string}
+  | Initialization of t
+  | Session_initializations of t
+  | Session_prepare_step of t
 [@@deriving sexp]
 
 (** *** Low-level representation. *)
@@ -91,12 +96,16 @@ type _ low_level =
   | Unoptimized_binop: binop * float low_level * float low_level -> float low_level
   | Unoptimized_unop: unop * float low_level -> float low_level
   | Assign_routine: routine * unit low_level -> unit low_level
+  | Assign_session_initializations: unit low_level -> unit low_level
+  | Assign_session_prepare_step: unit low_level -> unit low_level
   | Comment: string -> unit low_level
 (* [@@deriving sexp] *)
 
 let data_pointer (xhs: data) =
   match xhs.field with
   | `Value -> Value_at_node_id xhs.node_id | `Grad -> Gradient_at_node_id xhs.node_id
+
+let all_parallel = List.fold ~init:Noop ~f:(fun sts st -> Par (st, sts))
 
 let rec unoptimized (code: t): unit low_level =
   match code with
@@ -164,13 +173,13 @@ let rec unoptimized (code: t): unit low_level =
   | Reset {tensor; reset_op} ->
     LLReset {tensor=data_pointer tensor; reset_op}
 
-let unoptimized_program (prog: program): unit low_level =
-  let init = unoptimized prog.initialization in
-  let proc = Assign_routine (prog.routine, unoptimized prog.procedure) in
-  let comment = Comment prog.label in
-  match init with
-  | Lines init_lines ->  Lines (Array.concat [[|comment|]; init_lines; [|proc|]])
-  | _ -> Lines [|comment; init; proc|]
+let unoptimized_program prog: unit low_level =
+  match prog with
+  | Initialization proc -> unoptimized proc
+  | Node_specific {procedure; routine; label} ->
+    Lines [|Comment label; Assign_routine (routine, unoptimized procedure)|]
+  | Session_initializations proc -> Assign_session_initializations (unoptimized proc)
+  | Session_prepare_step proc -> Assign_session_prepare_step (unoptimized proc)
 
 (*
 let skip_arg (_n1: float Codelib.code) (n2: float Codelib.code) = n2
@@ -220,6 +229,10 @@ let interpret_llc ?(with_debug=true) llc =
       (get_form node_id).forward <- Some (fun () -> loop proc)
     | Assign_routine ({node_id; field=`Backprop}, proc) ->
       (get_form node_id).backprop <- Some (fun () -> loop proc)
+    | Assign_session_initializations (proc) ->
+      session_initializations := Some (fun () -> loop proc)
+    | Assign_session_prepare_step (proc) ->
+      session_prepare_step := Some (fun () -> loop proc)
     | Comment message when with_debug -> Stdio.printf "%s\n%!" message
     | Comment _ -> ()
     and loop_float env llv =
