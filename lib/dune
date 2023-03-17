@@ -1,6 +1,7 @@
 (library
  (name ocannl_runtime)
  (libraries base stdio)
+ (preprocess (pps ppx_jane))
  (modules node)
  (modes byte native))
 
@@ -14,6 +15,6 @@
 (library
  (name ppx_ocannl)
  (kind ppx_rewriter)
- (modules ppx_nn_shared ppx_nn_op ppx_nn_mo ppx_ocannl)
+ (modules ppx_nn_shared ppx_nn_cd ppx_nn_op ppx_nn_mo ppx_ocannl)
  (libraries base ppxlib)
  (preprocess (pps ppx_jane ppxlib.metaquot)))
