@@ -131,15 +131,16 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
      NodeUI.pp_tensor Caml.Format.std_formatter ~prefix ~labels ~indices m.comp_node.value;
      Caml.Format.print_newline());
   if with_grad then (
-    match style with
-    | `Inline ->
+    match style, m.comp_node.form with
+    | `Inline, Some cform ->
       NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
-        ?labels_spec m.comp_node.grad;
+        ?labels_spec cform.grad;
       Caml.Format.print_newline()
-    | _ -> 
+    | _, Some cform -> 
       NodeUI.pp_tensor Caml.Format.std_formatter ~prefix:(prefix^" Gradient ") ~labels
-        ~indices m.comp_node.grad;
-      Caml.Format.print_newline());
+        ~indices cform.grad;
+      Caml.Format.print_newline()
+    | _ -> ());
   if with_code then (
     (match m.forward_body with
      | Noop -> ()
@@ -196,8 +197,11 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
   (* Initialization and the forward processing. *)
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
     let m = root.formula in
-    if regenerate || Option.is_none root.forward_code || Option.is_none root.backprop_code then (
-      Sequence.iter root.subtree_shape_updates ~f:(fun update_step ->
+    let cform = match m.comp_node.form with
+    | Some form -> form
+    | None -> assert false in
+  if regenerate || Option.is_none root.forward_code || Option.is_none root.backprop_code then (
+      List.iter !session_shape_updates ~f:(fun update_step ->
         Shape.propagate_shapes update_step;
         let sh = update_step.shape in
         let n = Ocannl_runtime.Node.get sh.node_id in
@@ -206,17 +210,17 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
       );
       let forward_prog, backprop_prog = get_toplevel m in
        root.forward_code <- Some forward_prog;
-       root.formula.comp_node.forward <- None;
+       cform.forward <- None;
        root.backprop_code <- Some backprop_prog;
-       root.formula.comp_node.backprop <- None
+       cform.backprop <- None
     );
     if not force_no_init && 
-        (reinit || Option.is_none root.formula.comp_node.forward) then (
+        (reinit || Option.is_none cform.forward) then (
       try
         let contents = Exec_as_OCaml.load_native ~with_debug (Option.value_exn root.forward_code) in
-        match contents, m.comp_node.forward with
+        match contents, cform.forward with
         | Some contents, Some forward ->
-          m.comp_node.forward <-
+          cform.forward <-
             Some (fun () -> try forward() with error ->
                 Formula.handle_error ~formula:m @@ !executor_error_message "Forward error:" ~contents error)
         | Some contents, None ->
@@ -231,12 +235,12 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
         raise @@ Session_error (msg, Some m);
     );
     if not force_no_init && 
-        (reinit || Option.is_none root.formula.comp_node.backprop) then (
+        (reinit || Option.is_none cform.backprop) then (
       try
         let contents = Exec_as_OCaml.load_native ~with_debug (Option.value_exn root.backprop_code) in
-        match contents, m.comp_node.backprop with
+        match contents, cform.backprop with
         | Some contents, Some backprop ->
-          m.comp_node.backprop <-
+          cform.backprop <-
             Some (fun () ->
                 try backprop() with error ->
                   Formula.handle_error ~formula:m @@ !executor_error_message "Backprop error:" 
@@ -253,14 +257,17 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
           Code.fprint_program @@ Option.value_exn root.forward_code;
         Formula.handle_error ~formula:m @@ "Backprop init error: "^msg
     );
-    if run then match root.formula.comp_node.forward with
+    if run then match cform.forward with
       | Some forward -> forward()
       | None -> assert false
   );
   (* The backpropagation. *)
   if run then
     List.iter (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
-      Option.value_exn root.formula.comp_node.backprop ())
+        let cform = match root.formula.comp_node.form with
+          | Some form -> form
+          | None -> assert false in
+        Option.value_exn cform.backprop ())
 
 (** Discards global roots, rolls back [Node.state.unique_id] to [Formula.first_session_id], discards
     the corresponding elements from [Node.state.node_store]. *)

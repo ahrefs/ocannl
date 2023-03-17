@@ -10,11 +10,11 @@ let ndarray_mo ?axis_labels ?label expr =
   let edims dims = Ast_builder.Default.elist ~loc @@ List.rev dims in
   let op =
     match axis_labels, label with
-    | None, None -> [%expr Operation.ndarray]
-    | Some axis_labels, None -> [%expr Operation.ndarray ?axis_labels:[%e axis_labels]]
-    | None, Some label -> [%expr Operation.ndarray ?label:[%e label]]
+    | None, None -> [%expr Operation.CLI.ndarray]
+    | Some axis_labels, None -> [%expr Operation.CLI.ndarray ?axis_labels:[%e axis_labels]]
+    | None, Some label -> [%expr Operation.CLI.ndarray ?label:[%e label]]
     | Some axis_labels, Some label ->
-      [%expr Operation.ndarray ?axis_labels:[%e axis_labels] ?label:[%e label]] in
+      [%expr Operation.CLI.ndarray ?axis_labels:[%e axis_labels] ?label:[%e label]] in
   [%expr Network.return_term
       ([%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
          ~output_dims:[%e edims output_dims] [%e values])]
@@ -22,7 +22,7 @@ let ndarray_mo ?axis_labels ?label expr =
 let make_vb ?init ~loc ~str_loc ~ident string =
   let pat = Ast_helper.Pat.var ~loc {loc=str_loc; txt=ident} in
   let init = match init with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
-  let v = [%expr Network.return_term (Operation.unconstrained_param ?init:[%e init] [%e string])] in
+  let v = [%expr Network.return_term (Operation.CLI.unconstrained_param ?init:[%e init] [%e string])] in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   pat, vb
 
@@ -48,22 +48,22 @@ let rec translate expr =
   let loc = expr.pexp_loc in
   match expr with
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
-    no_vbs, [%expr Network.return_term (Operation.number [%e expr])]
+    no_vbs, [%expr Network.return_term (Operation.CLI.number [%e expr])]
 
   | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
-    no_vbs, [%expr Network.return_term (Operation.number (Float.of_int [%e expr]))]
+    no_vbs, [%expr Network.return_term (Operation.CLI.number (Float.of_int [%e expr]))]
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
       [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
     let axis = Ast_helper.Exp.constant ~loc:pexp_loc
         (Pconst_string (String.of_char ch, pexp_loc, None)) in
-    no_vbs, [%expr Network.return_term (Operation.number ~axis_label:[%e axis] [%e f])]
+    no_vbs, [%expr Network.return_term (Operation.CLI.number ~axis_label:[%e axis] [%e f])]
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
       [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
         let axis = Ast_helper.Exp.constant ~loc:pexp_loc
         (Pconst_string (String.of_char ch, pexp_loc, None)) in
-    no_vbs, [%expr Network.return_term (Operation.number ~axis_label:[%e axis] (Float.of_int [%e i]))]
+    no_vbs, [%expr Network.return_term (Operation.CLI.number ~axis_label:[%e axis] (Float.of_int [%e i]))]
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
       [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
@@ -92,12 +92,14 @@ let rec translate expr =
   | [%expr [%e? expr1] **.
       [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
     let vbs, e1 = translate expr1 in
-    vbs, [%expr Network.bind_ret ~f:(Operation.pointpow [%e f]) ~m:[%e e1]]
+    (* FIXME: *)
+    vbs, [%expr Network.bind_ret ~f:(Operation.CLI.O.( **. )) [%e e1] [%e f]]
 
   | [%expr [%e? expr1] **.
       [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
     let vbs, e1 = translate expr1 in
-    vbs, [%expr Network.bind_ret ~f:(Operation.pointpow (Float.of_int [%e i])) ~m:[%e e1]]
+    (* FIXME: *)
+    vbs, [%expr Network.bind_ret ~f:(Operation.CLI.O.( **. )) [%e e1] (Float.of_int [%e i])]
 
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3] ] ->
     let vbs1, e1 = translate expr1 in

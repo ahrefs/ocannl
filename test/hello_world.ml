@@ -356,9 +356,9 @@ let%expect_test "Big matrix" =
   Random.init 0;
   set_executor test_executor;
   (* Hey is inferred to be a matrix. *)
-  let hey = FO.(!~ "hey") in
+  let hey = O.(!~ "hey") in
   let zero_to_twenty = range 20 in
-  let y = FO.(zero_to_twenty * hey + zero_to_twenty) in
+  let y = O.(zero_to_twenty * hey + zero_to_twenty) in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Inline zero_to_twenty;
   [%expect {|

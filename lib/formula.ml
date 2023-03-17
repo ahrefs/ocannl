@@ -83,7 +83,7 @@ let create ~node_id ?(init_op=`Unspecified) field shape =
 
 let max_sublabel_length = ref 25
 
-let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
+let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body ~is_form m1 m2 =
   (* Note: do not capture m1, m2 in any closure, so they can be GC'd. *)
   (if (m1.node_id < !first_session_id) then
     raise @@ Session_error ("The subformula is outside of current session", Some m1));
@@ -94,7 +94,8 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
   let m2_processed = m2.node_id = m1.node_id || not @@ Map.mem !global_roots m2.node_id in
   let children = [{Ocannl_runtime.Node.sub_node_id=m1.node_id; computed_externally=m1_processed};
                   {sub_node_id=m2.node_id; computed_externally=m2_processed}] in
-  let n = NodeUI.create_of_promoted_precision m1.comp_node m2.comp_node ~op_label ~children in
+  let n =
+    NodeUI.create_of_promoted_precision ~is_form m1.comp_node m2.comp_node ~op_label children in
   let node_id = n.id in
   let shape = { Shape.batch=Unknown; input=Unknown; output=Unknown;
                 axis_labels=Map.empty (module Shape.AxisKey);
@@ -192,11 +193,11 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body m1 m2: t =
   global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
   formula
 
-let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body m: t =
+let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m: t =
   (* Note: do not capture m in any closure, so it can be GC'd. *)
   let m_processed = not @@ Map.mem !global_roots m.node_id in
   let children = [{Ocannl_runtime.Node.sub_node_id=m.node_id; computed_externally=m_processed}] in
-  let n = NodeUI.create_of_same_precision_as m.comp_node ~op_label ~children in
+  let n = NodeUI.create_of_same_precision_as ~is_form m.comp_node ~op_label children in
   let node_id = n.id in
 
   let shape =
@@ -269,9 +270,9 @@ let term_needs_gradient (spec: Shape.term_spec) =
   | Deduced_params _ -> true
 
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label ?needs_gradient (spec: Shape.term_spec) ~init_op : t =
+let term ~label ?needs_gradient ~is_form (spec: Shape.term_spec) ~init_op =
   let n =
-    Ocannl_runtime.Node.create ~value_prec:Single ~grad_prec:Single ~op_label:label ~children:[] in
+    Ocannl_runtime.Node.create ~value_prec:Single ~grad_prec:Single ~is_form () ~op_label:label [] in
   let node_id = n.id in
   let shape = Shape.of_term_spec node_id spec in
   let needs_gradient =

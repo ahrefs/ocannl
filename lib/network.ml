@@ -99,10 +99,10 @@ let residual_compose (type a) (f: (F.t -> a) t) (g: (F.t -> a) t): (F.t -> a) t 
 let sum_over_params n ~f = Set.sum (module Operation.Summable) n.params ~f
 
 module O = struct
-  let ( * ) = return (Binary Operation.matmul)
-  let ( *. ) = return (Binary Operation.pointmul)
-  let (+) = return (Binary Operation.add)
-  let (!/) = return (Unary Operation.relu)
+  let ( * ) = return (Binary Operation.O.( * ))
+  let ( *. ) = return (Binary Operation.O.( *. ))
+  let (+) = return (Binary Operation.O.(+))
+  let (!/) = return (Unary Operation.O.(!/))
   let (-) = return (Binary Operation.O.(-))
   let (~-) = return (Unary Operation.O.(~-))
   let (/) = return (Binary Operation.O.(/))

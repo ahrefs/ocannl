@@ -184,11 +184,18 @@ let reset_ndarray reset_op arr =
 
 let empty prec = create_array prec [||] `Unspecified
 
-type t = {
-  mutable value: ndarray;
+(** Nodes that can potentially be root formulas. *)
+type form = {
   mutable grad: ndarray;
   mutable forward: (unit -> unit) option;
   mutable backprop: (unit -> unit) option;
+} [@@deriving sexp_of]
+
+(** Non-form nodes can only be parts of other computations. They cannot have gradients.
+    But they participate in shape inference etc. *)
+type t = {
+  mutable value: ndarray;
+  form: form option;
   op_label: string;
   children: sub_node list;
   id: int;
@@ -211,6 +218,8 @@ let global = {
 }
 let get uid = Hashtbl.find_exn global.node_store uid
 
+let get_form uid = Option.value_exn ~message:"get_form: not a form node" (get uid).form
+
 let get_value (type val_t arr_t) (prec: (val_t, arr_t) precision) uid: arr_t =
   let n = Hashtbl.find_exn global.node_store uid in
   match prec, n.value with
@@ -223,23 +232,33 @@ let get_value (type val_t arr_t) (prec: (val_t, arr_t) precision) uid: arr_t =
 
 let get_grad (type val_t arr_t) (prec: (val_t, arr_t) precision) uid: arr_t =
   let n = Hashtbl.find_exn global.node_store uid in
-  match prec, n.grad with
-  | Byte_as_int, Byte_as_int_nd arr -> arr
-  | Half_as_int, Half_as_int_nd arr -> arr
-  | Single, Single_nd arr -> arr
-  | Double, Double_nd arr -> arr
-  | _, arr -> raise @@ Runtime_error ("Precision mismatch: expected "^precision_to_string prec^
-                                      ", got "^ndarray_precision_to_string arr, Some n)
+  match prec, n.form with
+  | Byte_as_int, Some {grad=Byte_as_int_nd arr; _} -> arr
+  | Half_as_int, Some {grad=Half_as_int_nd arr; _} -> arr
+  | Single, Some {grad=Single_nd arr; _} -> arr
+  | Double, Some {grad=Double_nd arr; _} -> arr
+  | _, Some {grad=arr; _} ->
+     raise @@ Runtime_error ("Precision mismatch: expected "^precision_to_string prec^
+                             ", got "^ndarray_precision_to_string arr, Some n)
+  | _, None ->
+    raise @@ Runtime_error ("get_grad: non-form node", Some n)
 
 (** Constructs a node with empty tensors of the specified precision and registers it in the global store.
     Note that the precision for gradients should not be lower than the precision for values. *)
 let create (type grad_arr_t value_arr_t) ~(value_prec: ('a, value_arr_t) precision)
-    ~(grad_prec: ('a, grad_arr_t) precision) ~op_label ~children =
+    ?(grad_prec: ('a, grad_arr_t) precision option) ~is_form () ~op_label children =
   let id = let uid = global.unique_id in global.unique_id <- global.unique_id + 1; uid in
+  let form =
+    match grad_prec, is_form with
+    | Some grad_prec, true -> Some {
+      grad=as_ndarray grad_prec @@ empty grad_prec;
+      forward=None; backprop=None;
+    }
+    | None, true -> invalid_arg "Node.create: ~is_form:true requires providing ~grad_prec"
+    | _, false -> None in
   let node = {
     value=as_ndarray value_prec @@ empty value_prec;
-    grad=as_ndarray grad_prec @@ empty grad_prec;
-    forward=None; backprop=None;
+    form;
     op_label; children; id;
     default_display_indices=None;
     default_display_labels=None;

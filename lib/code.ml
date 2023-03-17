@@ -207,19 +207,19 @@ let interpret_llc ?(with_debug=true) llc =
     | LLCreate { tensor=Value_at_node_id id; dims; init_op } ->
       (get id).value <- create_ndarray Single dims init_op
     | LLCreate { tensor=Gradient_at_node_id id; dims; init_op } ->
-      (get id).grad <- create_ndarray Single dims init_op
+      (get_form id).grad <- create_ndarray Single dims init_op
     | LLReset { tensor=Value_at_node_id id; reset_op } ->
       reset_ndarray reset_op ((get id).value)
     | LLReset { tensor=Gradient_at_node_id id; reset_op } ->
-      reset_ndarray reset_op ((get id).grad)
+      reset_ndarray reset_op ((get_form id).grad)
     | Unoptimized_set (Value_at_node_id id, indices, llv) ->
       set_from_float (get id).value (lookup env indices) @@ loop_float env llv
     | Unoptimized_set (Gradient_at_node_id id, indices, llv) ->
-      set_from_float (get id).grad (lookup env indices) @@ loop_float env llv
+      set_from_float (get_form id).grad (lookup env indices) @@ loop_float env llv
     | Assign_routine ({node_id; field=`Forward}, proc) ->
-      (get node_id).forward <- Some (fun () -> loop proc)
+      (get_form node_id).forward <- Some (fun () -> loop proc)
     | Assign_routine ({node_id; field=`Backprop}, proc) ->
-      (get node_id).backprop <- Some (fun () -> loop proc)
+      (get_form node_id).backprop <- Some (fun () -> loop proc)
     | Comment message when with_debug -> Stdio.printf "%s\n%!" message
     | Comment _ -> ()
     and loop_float env llv =
@@ -229,16 +229,17 @@ let interpret_llc ?(with_debug=true) llc =
     | Unoptimized_get (Value_at_node_id id, indices) ->
       get_as_float (get id).value @@ lookup env indices
     | Unoptimized_get (Gradient_at_node_id id, indices) ->
-      get_as_float (get id).grad @@ lookup env indices
+      get_as_float (get_form id).grad @@ lookup env indices
     | Unoptimized_binop (Skip_arg, _llv1, llv2) -> loop llv2
     | Unoptimized_binop (Add, llv1, llv2) -> loop llv1 + loop llv2
     | Unoptimized_binop (Mul, llv1, llv2) -> loop llv1 * loop llv2
+    | Unoptimized_binop (ToPowOf, llv1, llv2) ->
+      let v1 = loop llv1 in
+      let v2 = loop llv2 in
+      Float.(if is_integer v2 then int_pow v1 @@ to_int v2 else v1 ** v2)
     | Unoptimized_binop (Relu_gate, llv1, llv2) -> if loop llv1 > 0.0 then loop llv2 else 0.0
     | Unoptimized_unop (Identity, llv) -> loop llv
-    | Unoptimized_unop (Relu, llv) -> let v = loop llv in if v > 0.0 then v else 0.0
-    | Unoptimized_unop (ToPowOf p, llv) ->
-      let v = loop llv in let open Float in
-      if is_integer p then int_pow v @@ to_int p else v ** p in
+    | Unoptimized_unop (Relu, llv) -> let v = loop llv in if v > 0.0 then v else 0.0 in
   loop_proc (Map.empty (module Shape.Symbol)) llc
 
 let fprint_code ppf c =

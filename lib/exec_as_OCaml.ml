@@ -39,39 +39,38 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
     | For_loop {index=i; from_; to_; body} ->
       fprintf ppf "@[<2>for@ %a = %d@ to %d@ do@ %a@]@ done" pp_symbol i from_ to_ pp_ll body
     | Value_at_node_id id -> fprintf ppf "(get %d).value" id
-    | Gradient_at_node_id id -> fprintf ppf "(get %d).grad" id
+    | Gradient_at_node_id id -> fprintf ppf "(get_form %d).grad" id
     | LLCreate { tensor=Value_at_node_id id; dims; init_op } ->
       fprintf ppf "@[<2>(get %d).value <-@ create_ndarray Single@ %a %a@]" id pp_dims dims pp_print_init_op init_op
     | LLCreate { tensor=Gradient_at_node_id id; dims; init_op } ->
-      fprintf ppf "@[<2>(get %d).grad <-@ create_ndarray Single@ %a %a@]" id pp_dims dims pp_print_init_op init_op
+      fprintf ppf "@[<2>(get_form %d).grad <-@ create_ndarray Single@ %a %a@]" id pp_dims dims pp_print_init_op init_op
     | LLReset { tensor=Value_at_node_id id; reset_op } ->
       fprintf ppf "@[<2>reset_ndarray@ %a@ ((get %d).value)@]" pp_print_init_op reset_op id
     | LLReset { tensor=Gradient_at_node_id id; reset_op } ->
-      fprintf ppf "@[<2>reset_ndarray@ %a@ ((get %d).grad)@]" pp_print_init_op reset_op id
+      fprintf ppf "@[<2>reset_ndarray@ %a@ ((get_form %d).grad)@]" pp_print_init_op reset_op id
     | Unoptimized_set (Value_at_node_id id, indices, v) ->
       fprintf ppf "@[<2>set_from_float (get %d).value@ %a@ %a@]" id pp_indices indices pp_ll v
     | Unoptimized_set (Gradient_at_node_id id, indices, v) ->
-      fprintf ppf "@[<2>set_from_float (get %d).grad@ %a@ %a@]" id pp_indices indices pp_ll v
+      fprintf ppf "@[<2>set_from_float (get_form %d).grad@ %a@ %a@]" id pp_indices indices pp_ll v
     | Unoptimized_get (Value_at_node_id id, indices) ->
       fprintf ppf "@[<2>get_as_float (get %d).value@ %a@]" id pp_indices indices
     | Unoptimized_get (Gradient_at_node_id id, indices) ->
-      fprintf ppf "@[<2>get_as_float (get %d).grad@ %a@]" id pp_indices indices
+      fprintf ppf "@[<2>get_as_float (get_form %d).grad@ %a@]" id pp_indices indices
     | Unoptimized_binop (Skip_arg, _v1, v2) -> pp_ll ppf v2
     | Unoptimized_binop (Add, v1, v2) -> fprintf ppf "(@[<2>(%a) +@ (%a)@]@,)" pp_ll v1 pp_ll v2
     | Unoptimized_binop (Mul, v1, v2) -> fprintf ppf "(@[<2>(%a) *@ (%a)@]@,)" pp_ll v1 pp_ll v2
+    | Unoptimized_binop (ToPowOf, v1, v2) ->
+      (* if is_integer p then fprintf ppf "(@[<2>int_pow (%a) (%d)@]@,)" pp_ll v1 (to_int p) *)
+      fprintf ppf "(@[<2>(%a) **@ (%a)@]@,)" pp_ll v1  pp_ll v2
     | Unoptimized_binop (Relu_gate, v1, v2) ->
       fprintf ppf "(@[<2>if %a > 0.0@ then %a@ else 0.0@]@,)" pp_ll v1 pp_ll v2
     | Unoptimized_unop (Identity, v) -> pp_ll ppf v
     | Unoptimized_unop (Relu, v) ->
       fprintf ppf "(@[<2>let a = %a in@ if a > 0.0 then a else 0.0@]@,)" pp_ll v
-    | Unoptimized_unop (ToPowOf p, v) ->
-      let open Float in
-      if is_integer p then fprintf ppf "(@[<2>int_pow (%a) (%d)@]@,)" pp_ll v (to_int p)
-      else fprintf ppf "(@[<2>(%a) **@ (%f)@]@,)" pp_ll v p
     | Assign_routine ({node_id; field=`Forward}, proc) ->
-      fprintf ppf "@[<2>(get %d).forward <-@ Some (@[<2>fun () ->@ %a@]@,)@]" node_id pp_ll proc
+      fprintf ppf "@[<2>(get_form %d).forward <-@ Some (@[<2>fun () ->@ %a@]@,)@]" node_id pp_ll proc
     | Assign_routine ({node_id; field=`Backprop}, proc) ->
-      fprintf ppf "@[<2>(get %d).backprop <-@ Some (@[<2>fun () -> %a@]@,)@]" node_id pp_ll proc
+      fprintf ppf "@[<2>(get_form %d).backprop <-@ Some (@[<2>fun () -> %a@]@,)@]" node_id pp_ll proc
     | Comment message -> fprintf ppf "(* %s *)()" message in
   fprintf ppf "@[<v>open Base@ open Ocannl_runtime@ open Node@ open Base.Float@ ";
   (match c with
