@@ -30,15 +30,15 @@ type global_root = {
   mutable forward_code: Code.program option;
   mutable backprop_code: Code.program option;
   formula: t;
-  subtree_shape_updates: Shape.update_step Sequence.t;
-  (** We piggy-back on the code generation setup to arrange the updates. We perform each update twice
-      to propagate information between all subformulas: first in postfix order while computing [t],
-      second in prefix order by iterating over [t.subtree_shape_updates]. *)
 }
 
 (** If a formula with [node_id >= !first_session_id] is not among global roots, it must be a subformula
     of a global root. *)
 let global_roots = ref @@ Map.empty (module Int)
+
+(** We perform each update (at least) twice to propagate information between all subformulas:
+    first in postfix order while computing [t], then in prefix order by iterating over this stack. *)
+let session_shape_updates: Shape.update_step list ref = ref []
 
 (** A current session is the range of nodes from [!first_session_id] to [Node.global.unique_id - 1],
     or an empty range if [!first_session_id = Node.global.unique_id].
@@ -109,6 +109,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body ~is_form m1 m2 
       set_dims_type shape given
     | _ -> ()
   );
+  session_shape_updates := local_shape_update :: !session_shape_updates;
   let n1 = m1.comp_node in
   let n2 = m2.comp_node  in
   let projections() = Shape.derive_projections local_shape_update in
@@ -216,6 +217,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m: t =
       set_dims_type shape given
     | _ -> ()
   );
+  session_shape_updates := local_shape_update :: !session_shape_updates;
   let n1 = m.comp_node in
   let projections() = Shape.derive_projections local_shape_update in
   let op_body = op_body ~n ~n1 projections in
@@ -284,6 +286,7 @@ let term ~label ?needs_gradient ~is_form (spec: Shape.term_spec) ~init_op =
      and having it in the update sequence might help with debuggability. *)
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.propagate_shapes local_shape_update;
+  session_shape_updates := local_shape_update :: !session_shape_updates;
 
   let open Code in
   let forward_body = Noop in
