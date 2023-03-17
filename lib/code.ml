@@ -13,13 +13,13 @@ type binop =
   | Skip_arg
   | Add
   | Mul
+  | ToPowOf
   | Relu_gate
 [@@deriving sexp]
 
 type unop =
   | Identity
   | Relu
-  | ToPowOf of float
 [@@deriving sexp]
 
 (** Initializes or resets a tensor by filling in the corresponding numbers, at the appropriate precision. *)
