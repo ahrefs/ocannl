@@ -23,10 +23,7 @@ type t = {
   shape: Shape.t;
   (** The eventual shape of [.!(t.node).value] and [.!(t.node).grad], incorporating the current state of
       shape inference. *)
-  needs_gradient: bool;
-  (** An optimization setting: whether gradients should be backpropagated into the formula. If any subformula
-      needs gradients, this formula also needs gradients. *)
-}
+} [@@deriving sexp_of]
 
 (** A global root is a formula that is not (currently) a subformula of another formula. *)
 type global_root = {

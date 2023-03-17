@@ -2,12 +2,18 @@
 open Base
 
 module A = Bigarray.Genarray
+type ('a, 'b, 'c) bigarray = ('a, 'b, 'c) A.t
+let sexp_of_bigarray (_arr: ('a, 'b, 'c) bigarray) = Sexp.Atom "<opaque_bigarray>"
 
-(* type bit_as_bool_nd = (bool, Bigarray.bool_elt, Bigarray.c_layout) A.t *)
-type byte_as_int_nd = (int, Bigarray.int8_signed_elt, Bigarray.c_layout) A.t
-type half_as_int_nd = (int, Bigarray.int16_signed_elt, Bigarray.c_layout) A.t
-type single_nd = (float, Bigarray.float32_elt, Bigarray.c_layout) A.t
-type double_nd = (float, Bigarray.float64_elt, Bigarray.c_layout) A.t
+(* type bit_as_bool_nd = (bool, Bigarray.bool_elt, Bigarray.c_layout) bigarray *)
+type byte_as_int_nd = (int, Bigarray.int8_signed_elt, Bigarray.c_layout) bigarray
+let sexp_of_byte_as_int_nd (_arr: byte_as_int_nd) = Sexp.Atom "<opaque_byte_as_int_nd>"
+type half_as_int_nd = (int, Bigarray.int16_signed_elt, Bigarray.c_layout) bigarray
+let sexp_of_half_as_int_nd (_arr: half_as_int_nd) = Sexp.Atom "<opaque_half_as_int_nd>"
+type single_nd = (float, Bigarray.float32_elt, Bigarray.c_layout) bigarray
+let sexp_of_single_nd (_arr: single_nd) = Sexp.Atom "<opaque_single_nd>"
+type double_nd = (float, Bigarray.float64_elt, Bigarray.c_layout) bigarray
+let sexp_of_double_nd (_arr: double_nd) = Sexp.Atom "<opaque_double_nd>"
 
 type ndarray =
 (* | Bit_as_bool_nd of bit_as_bool_nd *)
@@ -15,14 +21,15 @@ type ndarray =
 | Half_as_int_nd of half_as_int_nd
 | Single_nd of single_nd
 | Double_nd of double_nd
+[@@deriving sexp_of]
 
 type ('a, 'b) precision =
   (* | Bit_as_bool: (bool, bit_as_bool_nd) precision *)
   | Byte_as_int: (int, byte_as_int_nd) precision
   | Half_as_int: (int, half_as_int_nd) precision
-  (* | Bit: (float, (bool, Bigarray.bool_elt, Bigarray.c_layout) A.t) precision *)
-  (* | Byte: (float, (float, Bigarray.float8_elt, Bigarray.c_layout) A.t) precision *)
-  (* | Half: (float, (float, Bigarray.float16_elt, Bigarray.c_layout) A.t) precision *)
+  (* | Bit: (float, (bool, Bigarray.bool_elt, Bigarray.c_layout) bigarray) precision *)
+  (* | Byte: (float, (float, Bigarray.float8_elt, Bigarray.c_layout) bigarray) precision *)
+  (* | Half: (float, (float, Bigarray.float16_elt, Bigarray.c_layout) bigarray) precision *)
   | Single: (float, single_nd) precision
   | Double: (float, double_nd) precision
 
@@ -34,7 +41,7 @@ let as_ndarray (type val_t arr_t) (prec: (val_t, arr_t) precision) (arr: arr_t) 
   | Double -> Double_nd arr
 
 let precision_to_bigarray_kind (type val_t elt_t)
-    (prec: (val_t, (val_t, elt_t, Bigarray.c_layout) A.t) precision): (val_t, elt_t) Bigarray.kind =
+    (prec: (val_t, (val_t, elt_t, Bigarray.c_layout) bigarray) precision): (val_t, elt_t) Bigarray.kind =
    match prec with
   (* | Bit -> Bigarray.Bool *)
   | Byte_as_int -> Bigarray.Int8_signed
@@ -59,7 +66,7 @@ let ndarray_precision_to_string = function
 
 let default_kind = Single
 
-type 'c map_as_bigarray = {f: 'a 'b. ('a, 'b, Bigarray.c_layout) A.t -> 'c}
+type 'c map_as_bigarray = {f: 'a 'b. ('a, 'b, Bigarray.c_layout) bigarray -> 'c}
 
 let map_as_bigarray {f} = function
   | Byte_as_int_nd arr -> f arr
@@ -138,7 +145,7 @@ let create_array (type arr_t)
 
 let create_ndarray prec dims init_op = as_ndarray prec @@ create_array prec dims init_op
 
-type 'c cast_map_as_bigarray = {ff: 'a 'b. (float -> 'a) -> ('a, 'b, Bigarray.c_layout) A.t -> 'c}
+type 'c cast_map_as_bigarray = {ff: 'a 'b. (float -> 'a) -> ('a, 'b, Bigarray.c_layout) bigarray -> 'c}
 
 let cast_map_as_bigarray {ff} = function
   | Byte_as_int_nd arr -> ff Int.of_float arr
@@ -157,7 +164,7 @@ let loop_bigarray arr ~f =
   let len = Array.length dims in
   cloop (Array.create ~len 0) f 0
   
-let reset_bigarray (reset_op: init_op) (type a b) (cast: float -> a) (arr: (a, b, Bigarray.c_layout) A.t) =
+let reset_bigarray (reset_op: init_op) (type a b) (cast: float -> a) (arr: (a, b, Bigarray.c_layout) bigarray) =
   let dims = A.dims arr in
   match reset_op with
   | `Unspecified -> ()
@@ -187,8 +194,9 @@ type t = {
   id: int;
   mutable default_display_indices: int array option;
   mutable default_display_labels: string array option;
-}
+} [@@deriving sexp_of]
 and sub_node = {sub_node_id: int; computed_externally: bool}
+[@@deriving sexp_of]
 
 exception Runtime_error of string * t option
 
