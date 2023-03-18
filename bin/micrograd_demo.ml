@@ -46,19 +46,6 @@ let () =
 
   refresh_session ();
   print_preamble ();
-  for i = !Formula.first_session_id to Ocannl_runtime.Node.global.unique_id - 1 do
-    let n = Ocannl_runtime.Node.get i in
-    let h = NodeUI.node_header n in
-    Stdio.printf "Value for [%d] -- %s:\n%!" i h;
-    NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes:0 ~num_input_axes:0 ~num_output_axes:1 n.value;
-    Caml.Format.print_newline();
-    let open Ocannl_runtime in
-    if Array.length (Node.dims n.grad) = 1 then (
-      Stdio.printf "Gradient for [%d]:\n%!" i;
-      NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes:0 ~num_input_axes:0 ~num_output_axes:1 n.grad
-    );
-    Caml.Format.print_newline()
-  done;
   print_node_tree ~with_grad:true ~depth:99 g.node_id;
   Stdio.print_endline "";
   print_formula ~with_code:true ~with_grad:true `Default @@ a;

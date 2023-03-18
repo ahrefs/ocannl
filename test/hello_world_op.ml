@@ -7,7 +7,7 @@ let%expect_test "Hello World" =
   Stdio.printf "Hello World!\n";
   [%expect {| Hello World! |}]
 
-let%expect_test "Pointwise multiplication dims 1" =
+let%expect_test "op:Pointwise multiplication dims 1" =
   (* let open Operation.CLI in *)
   let open Session.CLI in
   drop_session();
@@ -15,10 +15,9 @@ let%expect_test "Pointwise multiplication dims 1" =
   set_executor test_executor;
   (* "Hey" is inferred to be a scalar.
      Note the pointwise multiplication means "hey" does not have any input axes. *)
-  let%nn_mo y = 2 *. "hey" in
-  let y_f = Network.unpack y in
+  let%nn_op y = 2 *. "hey" in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ y_f;
+  print_formula ~with_code:false ~with_grad:false `Default @@ y;
   [%expect {|
     ┌────────────────────────┐
     │[3] (hey*.2): shape 0:1 │
@@ -29,19 +28,17 @@ let%expect_test "Pointwise multiplication dims 1" =
     │└┴─────────┘            │
     └────────────────────────┘ |}]
 
-let%expect_test "Matrix multiplication dims 1x1" =
+let%expect_test "op:Matrix multiplication dims 1x1" =
   (* let open Operation.CLI in *)
   let open Session.CLI in
   drop_session();
   Random.init 0;
   set_executor test_executor;
   (* Hey is inferred to be a matrix. *)
-  let%nn_mo y = 'q' 2.0 * "hey" + 'p' 1.0 in
-  let y_f = Network.unpack y in
+  let%nn_op y = 'q' 2.0 * "hey" + 'p' 1.0 in
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
-  let hey_f = Network.unpack hey in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ hey_f;
+  print_formula ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect {|
     ┌────────────────────────────┐
     │[1] hey: shape q=1:1->p=0:1 │
@@ -51,7 +48,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
     ││axis p=0│ 1.34e-1 │        │
     │└────────┴─────────┘        │
     └────────────────────────────┘ |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ y_f;
+  print_formula ~with_code:false ~with_grad:false `Default @@ y;
   [%expect {|
     ┌─────────────────────────────┐
     │[5] (1+(hey*2)): shape p=0:1 │
@@ -62,17 +59,16 @@ let%expect_test "Matrix multiplication dims 1x1" =
     │└┴─────────┘                 │
     └─────────────────────────────┘ |}]
 
-let%expect_test "Print constant tensor" =
+let%expect_test "op:Print constant tensor" =
   Session.drop_session();
   Random.init 0;
   (* let open Operation.CLI in *)
   let open Session.CLI in
-  let%nn_mo hey = [1, 2, 3; 4, 5, 6] in
-  let hey_f = Network.unpack hey in
+  let%nn_op hey = [1, 2, 3; 4, 5, 6] in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Inline @@ hey_f;
+  print_formula ~with_code:false ~with_grad:false `Inline @@ hey;
   [%expect {| [1.00, 2.00, 3.00; 4.00, 5.00, 6.00] |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ hey_f;
+  print_formula ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect {|
     ┌─────────────────────────────────────────────────────────┐
     │[1] [1.00, 2.00, 3.00; 4.00, 5.00, 6.00]: shape 1:3->0:2 │
@@ -83,12 +79,11 @@ let%expect_test "Print constant tensor" =
     ││      │ 4.00e+0  5.00e+0  6.00e+0 │                     │
     │└──────┴───────────────────────────┘                     │
     └─────────────────────────────────────────────────────────┘ |}];
-  let%nn_mo hoo = [| [1; 2; 3]; [4; 5; 6] |] in
-  let hoo_f = Network.unpack hoo in
+  let%nn_op hoo = [| [1; 2; 3]; [4; 5; 6] |] in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Inline @@ hoo_f;
+  print_formula ~with_code:false ~with_grad:false `Inline @@ hoo;
   [%expect {| [|[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]|] |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ hoo_f;
+  print_formula ~with_code:false ~with_grad:false `Default @@ hoo;
   [%expect {|
     ┌──────────────────────────────────────────────────────────────┐
     │[2] [|[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]|]: shape 0:2|1:3 │
@@ -99,18 +94,17 @@ let%expect_test "Print constant tensor" =
     ││      │ 4.00e+0  5.00e+0  6.00e+0 │                          │
     │└──────┴───────────────────────────┘                          │
     └──────────────────────────────────────────────────────────────┘ |}];
-  let%nn_mo hey2 = [(1, 2, 3), (4, 5, 6); (7, 8, 9), (10, 11, 12); (13, 14, 15), (16, 17, 18);
+  let%nn_op hey2 = [(1, 2, 3), (4, 5, 6); (7, 8, 9), (10, 11, 12); (13, 14, 15), (16, 17, 18);
                      (19, 20, 21), (22, 23, 24)] in
-  let hey2_f = Network.unpack hey2 in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Inline @@ hey2_f;
+  print_formula ~with_code:false ~with_grad:false `Inline @@ hey2;
   [%expect {|
     [(1.00, 2.00, 3.00), (4.00, 5.00, 6.00);
       (7.00, 8.00, 9.00), (10.00, 11.00, 12.00);
       (13.00, 14.00, 15.00), (16.00, 17.00, 18.00);
       (19.00, 20.00, 21.00), (22.00, 23.00, 24.00)
     ] |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ hey2_f;
+  print_formula ~with_code:false ~with_grad:false `Default @@ hey2;
   [%expect {|
     ┌────────────────────────────────────────────────────────────────┐
     │[3] c4x2x3: shape 1:2,2:3->0:4                                  │
@@ -124,18 +118,17 @@ let%expect_test "Print constant tensor" =
     ││      │ 1.90e+1  2.00e+1  2.10e+1 │ 2.20e+1  2.30e+1  2.40e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
-  let%nn_mo hoo2 = [| [[1; 2; 3]; [4; 5; 6]]; [[7; 8; 9]; [10; 11; 12]]; [[13; 14; 15]; [16; 17; 18]];
+  let%nn_op hoo2 = [| [[1; 2; 3]; [4; 5; 6]]; [[7; 8; 9]; [10; 11; 12]]; [[13; 14; 15]; [16; 17; 18]];
                        [[19; 20; 21]; [22; 23; 24]] |] in
-  let hoo2_f = Network.unpack hoo2 in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Inline @@ hoo2_f;
+  print_formula ~with_code:false ~with_grad:false `Inline @@ hoo2;
   [%expect {|
     [|[[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]];
       [[7.00; 8.00; 9.00]; [10.00; 11.00; 12.00]];
       [[13.00; 14.00; 15.00]; [16.00; 17.00; 18.00]];
       [[19.00; 20.00; 21.00]; [22.00; 23.00; 24.00]]
     |] |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ hoo2_f;
+  print_formula ~with_code:false ~with_grad:false `Default @@ hoo2;
   [%expect {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[4] c4x2x3: shape 0:4|1:2,2:3                                                                                           │
@@ -147,18 +140,17 @@ let%expect_test "Print constant tensor" =
     ││      │ 4.00e+0  5.00e+0  6.00e+0 │ 1.00e+1  1.10e+1  1.20e+1 │ 1.60e+1  1.70e+1  1.80e+1 │ 2.20e+1  2.30e+1  2.40e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  let%nn_mo heyhoo = [| [|[1; 2; 3]; [4; 5; 6]|]; [|[7; 8; 9]; [10; 11; 12]|]; [|[13; 14; 15]; [16; 17; 18]|];
+  let%nn_op heyhoo = [| [|[1; 2; 3]; [4; 5; 6]|]; [|[7; 8; 9]; [10; 11; 12]|]; [|[13; 14; 15]; [16; 17; 18]|];
                        [|[19; 20; 21]; [22; 23; 24]|] |] in
-  let heyhoo_f = Network.unpack heyhoo in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Inline @@ heyhoo_f;
+  print_formula ~with_code:false ~with_grad:false `Inline @@ heyhoo;
   [%expect {|
     [|[|[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]|];
       [|[7.00; 8.00; 9.00]; [10.00; 11.00; 12.00]|];
       [|[13.00; 14.00; 15.00]; [16.00; 17.00; 18.00]|];
       [|[19.00; 20.00; 21.00]; [22.00; 23.00; 24.00]|]
     |] |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ heyhoo_f;
+  print_formula ~with_code:false ~with_grad:false `Default @@ heyhoo;
   [%expect {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[5] c4x2x3: shape 0:4,1:2|2:3                                                                                           │
@@ -170,13 +162,12 @@ let%expect_test "Print constant tensor" =
     ││      │ 4.00e+0  5.00e+0  6.00e+0 │ 1.00e+1  1.10e+1  1.20e+1 │ 1.60e+1  1.70e+1  1.80e+1 │ 2.20e+1  2.30e+1  2.40e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  let%nn_mo heyhoo2 = [| [|[[1; 31]; [2; 32]; [3; 33]]; [[4; 34]; [5; 35]; [6; 36]]|];
+  let%nn_op heyhoo2 = [| [|[[1; 31]; [2; 32]; [3; 33]]; [[4; 34]; [5; 35]; [6; 36]]|];
                           [|[[7; 37]; [8; 38]; [9; 39]]; [[10; 40]; [11; 41]; [12; 42]]|];
                           [|[[13; 43]; [14; 44]; [15; 45]]; [[16; 46]; [17; 47]; [18; 48]]|];
                           [|[[19; 49]; [20; 50]; [21; 51]]; [[22; 52]; [23; 53]; [24; 54]]|] |] in
-  let heyhoo2_f = Network.unpack heyhoo2 in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Inline @@ heyhoo2_f;
+  print_formula ~with_code:false ~with_grad:false `Inline @@ heyhoo2;
   [%expect {|
     [|
       [|[[1.00; 31.00]; [2.00; 32.00]; [3.00; 33.00]];
@@ -188,7 +179,7 @@ let%expect_test "Print constant tensor" =
       [|[[19.00; 49.00]; [20.00; 50.00]; [21.00; 51.00]];
         [[22.00; 52.00]; [23.00; 53.00]; [24.00; 54.00]]|]
     |] |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ heyhoo2_f;
+  print_formula ~with_code:false ~with_grad:false `Default @@ heyhoo2;
   [%expect {|
     ┌──────────────────────────────────────────────┐
     │[6] c4x2x3x2: shape 0:4,1:2|2:3,3:2           │
@@ -213,13 +204,12 @@ let%expect_test "Print constant tensor" =
     ││      │ 2.10e+1  5.10e+1 │ 2.40e+1  5.40e+1 ││
     │└──────┴──────────────────┴──────────────────┘│
     └──────────────────────────────────────────────┘ |}];
-  let%nn_mo heyhoo3 = [| [| [[[1; 31]; [2; 32]; [3; 33]]; [[4; 34]; [5; 35]; [6; 36]]];
+  let%nn_op heyhoo3 = [| [| [[[1; 31]; [2; 32]; [3; 33]]; [[4; 34]; [5; 35]; [6; 36]]];
                              [[[7; 37]; [8; 38]; [9; 39]]; [[10; 40]; [11; 41]; [12; 42]]] |];
                           [| [[[13; 43]; [14; 44]; [15; 45]]; [[16; 46]; [17; 47]; [18; 48]]];
                              [[[19; 49]; [20; 50]; [21; 51]]; [[22; 52]; [23; 53]; [24; 54]]] |] |] in
-  let heyhoo3_f = Network.unpack heyhoo3 in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Inline @@ heyhoo3_f;
+  print_formula ~with_code:false ~with_grad:false `Inline @@ heyhoo3;
   [%expect {|
     [|
       [|
@@ -233,7 +223,7 @@ let%expect_test "Print constant tensor" =
         [[[19.00; 49.00]; [20.00; 50.00]; [21.00; 51.00]];
           [[22.00; 52.00]; [23.00; 53.00]; [24.00; 54.00]]]|]
     |] |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ heyhoo3_f;
+  print_formula ~with_code:false ~with_grad:false `Default @@ heyhoo3;
   [%expect {|
     ┌──────────────────────────────────────────────┐
     │[7] c2x2x2x3x2: shape 0:2,1:2|2:2,3:3,4:2     │
@@ -263,13 +253,12 @@ let%expect_test "Print constant tensor" =
     ││      │ 2.10e+1  5.10e+1 │ 2.40e+1  5.40e+1 ││
     │└──────┴──────────────────┴──────────────────┘│
     └──────────────────────────────────────────────┘ |}];
-  let%nn_mo heyhoo4 = [| [ [[1, 31; 2, 32; 3, 33]; [4, 34; 5, 35; 6, 36]];
+  let%nn_op heyhoo4 = [| [ [[1, 31; 2, 32; 3, 33]; [4, 34; 5, 35; 6, 36]];
                              [[7, 37; 8, 38; 9, 39]; [10, 40; 11, 41; 12, 42]] ];
                           [ [[13, 43; 14, 44; 15, 45]; [16, 46; 17, 47; 18, 48]];
                              [[19, 49; 20, 50; 21, 51]; [22, 52; 23, 53; 24, 54]] ] |] in
-  let heyhoo4_f = Network.unpack heyhoo4 in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Inline @@ heyhoo4_f;
+  print_formula ~with_code:false ~with_grad:false `Inline @@ heyhoo4;
   [%expect {|
     [|
       [
@@ -283,7 +272,7 @@ let%expect_test "Print constant tensor" =
         [[19.00, 49.00; 20.00, 50.00; 21.00, 51.00];
           [22.00, 52.00; 23.00, 53.00; 24.00, 54.00]]]
     |] |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ heyhoo4_f;
+  print_formula ~with_code:false ~with_grad:false `Default @@ heyhoo4;
   [%expect {|
     ┌──────────────────────────────────────────────┐
     │[8] c2x2x2x3x2: shape 0:2|4:2->1:2,2:2,3:3    │
@@ -314,19 +303,17 @@ let%expect_test "Print constant tensor" =
     │└──────┴──────────────────┴──────────────────┘│
     └──────────────────────────────────────────────┘ |}]
 
-let%expect_test "Matrix multiplication dims 2x3" =
+let%expect_test "op:Matrix multiplication dims 2x3" =
   (* let open Operation.CLI in *)
   let open Session.CLI in
   drop_session();
   Random.init 0;
   set_executor test_executor;
   (* Hey is inferred to be a matrix. *)
-  let%nn_mo hey = "hey" in
-  let%nn_mo y = [2; 3] * hey + [4; 5; 6] in
-  let y_f = Network.unpack y in
-  let hey_f = Network.unpack hey in
+  let%nn_op hey = "hey" in
+  let%nn_op y = [2; 3] * hey + [4; 5; 6] in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ hey_f;
+  print_formula ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect {|
     ┌───────────────────────────┐
     │[1] hey: shape 1:2->0:3    │
@@ -338,7 +325,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
     ││      │ 3.56e-2  5.87e-1 ││
     │└──────┴──────────────────┘│
     └───────────────────────────┘ |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ y_f;
+  print_formula ~with_code:false ~with_grad:false `Default @@ y;
   [%expect {|
     ┌───────────────────────────────────────────────────────┐
     │[5] ([4.00; 5.00; 6.00]+(hey*[2.00; 3.00])): shape 0:3 │
@@ -400,21 +387,20 @@ let%expect_test "Big matrix" =
       │└┴─────────────────────────────────────────┘│
       └────────────────────────────────────────────┘ |}]
 
-let%expect_test "Very big tensor" =
+let%expect_test "op:Very big tensor" =
     let open Session.CLI in
     drop_session();
     Random.init 0;
     let open Operation.CLI in
     set_executor test_executor;
     (* Hey is inferred to be a matrix. *)
-    let hey = Network.return_term @@
+    let hey =
       range_of_shape ~batch_dims:[7] ~input_dims:[9; 10; 11] ~output_dims:[13; 14] () in
-    let%nn_mo hoo = (1 + 1) * hey - 10 in
-    let hoo_f = Network.unpack hoo in
+    let%nn_op hoo = (1 + 1) * hey - 10 in
     refresh_session ();
     (* print_formula ~with_code:false ~with_grad:false `Inline hey;
     [%expect {| |}]; *)
-    print_formula ~with_code:false ~with_grad:false `Default hoo_f;
+    print_formula ~with_code:false ~with_grad:false `Default hoo;
     (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
     [%expect {|
       ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
