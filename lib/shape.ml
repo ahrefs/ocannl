@@ -271,27 +271,29 @@ let axis_keys_to_idcs (sh: t): int axis_map =
     If the map is incomplete, the result might be invalid: gaps in the array are filled with an arbitrary
     one of the provided values. *)
 let axis_map_to_dims_bio (type a) ?(default:a option) (idcs: a axis_map) =
-  let witness =
-  match default with
-  | Some witness -> witness
-  | None -> snd @@ Map.min_elt_exn idcs in
-  let bch_axes, other = Map.partition_mapi idcs ~f:(
-    fun ~key:{in_axes; _} ~data -> if AxisKey.is_batch in_axes then Either.First data else Either.Second data) in
-  let inp_axes, out_axes = Map.partition_mapi other ~f:(
-    fun ~key:{in_axes; _} ~data -> if AxisKey.is_input in_axes then Either.First data else Either.Second data) in
-  let bch_axes = Map.to_alist bch_axes |> List.map ~f:(fun ({from_end=i; _}, v) -> i, v) in
-  let bch_size = List.fold bch_axes ~init:0 ~f:(fun accu (i,_) -> max i accu) in
-  let bch = Array.create ~len:bch_size witness in
-  List.iter bch_axes ~f:(fun (i,v) -> bch.(bch_size - i) <- v);
-  let inp_axes = Map.to_alist inp_axes |> List.map ~f:(fun ({from_end=i; _}, v) -> i, v) in
-  let inp_size = List.fold inp_axes ~init:0 ~f:(fun accu (i,_) -> max i accu) in
-  let inp = Array.create ~len:inp_size witness in
-  List.iter inp_axes ~f:(fun (i,v) -> inp.(inp_size - i) <- v);
-  let out_axes = Map.to_alist out_axes |> List.map ~f:(fun ({from_end=i; _}, v) -> i, v) in
-  let out_size = List.fold out_axes ~init:0 ~f:(fun accu (i,_) -> max i accu) in
-  let out = Array.create ~len:out_size witness in
-  List.iter out_axes ~f:(fun (i,v) -> out.(out_size - i) <- v);
- bch, inp, out
+  if Map.is_empty idcs then [||], [||], [||]
+  else
+    let witness =
+      match default with
+      | Some witness -> witness
+      | None -> snd @@ Map.min_elt_exn idcs in
+    let bch_axes, other = Map.partition_mapi idcs ~f:(
+        fun ~key:{in_axes; _} ~data -> if AxisKey.is_batch in_axes then Either.First data else Either.Second data) in
+    let inp_axes, out_axes = Map.partition_mapi other ~f:(
+        fun ~key:{in_axes; _} ~data -> if AxisKey.is_input in_axes then Either.First data else Either.Second data) in
+    let bch_axes = Map.to_alist bch_axes |> List.map ~f:(fun ({from_end=i; _}, v) -> i, v) in
+    let bch_size = List.fold bch_axes ~init:0 ~f:(fun accu (i,_) -> max i accu) in
+    let bch = Array.create ~len:bch_size witness in
+    List.iter bch_axes ~f:(fun (i,v) -> bch.(bch_size - i) <- v);
+    let inp_axes = Map.to_alist inp_axes |> List.map ~f:(fun ({from_end=i; _}, v) -> i, v) in
+    let inp_size = List.fold inp_axes ~init:0 ~f:(fun accu (i,_) -> max i accu) in
+    let inp = Array.create ~len:inp_size witness in
+    List.iter inp_axes ~f:(fun (i,v) -> inp.(inp_size - i) <- v);
+    let out_axes = Map.to_alist out_axes |> List.map ~f:(fun ({from_end=i; _}, v) -> i, v) in
+    let out_size = List.fold out_axes ~init:0 ~f:(fun accu (i,_) -> max i accu) in
+    let out = Array.create ~len:out_size witness in
+    List.iter out_axes ~f:(fun (i,v) -> out.(out_size - i) <- v);
+    bch, inp, out
 
 (** Converts an axes-keyed map into an array of values using the [Shape.to_dims] semantics of axes.
     If the map is incomplete and the [~default] is not given, the result might be invalid: gaps in
