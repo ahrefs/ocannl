@@ -215,8 +215,8 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
       ~f:(fun root -> Option.is_none root.forward_code || Option.is_none root.backprop_code) in
   (* Initialization and the forward processing. *)
   if regenerate || root_changed then (
+    List.iter !session_shape_updates ~f:Shape.propagate_shapes;
     List.iter !session_shape_updates ~f:(fun update_step ->
-        Shape.propagate_shapes update_step;
         let sh = update_step.shape in
         let n = Ocannl_runtime.Node.get sh.node_id in
         n.default_display_indices <- Some (default_display_indices sh);
