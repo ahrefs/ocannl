@@ -26,7 +26,7 @@ let%expect_test "Micrograd README basic example" =
   print_formula ~with_code:false ~with_grad:false `Default @@ g;
   [%expect {|
     ┌────────────────┐
-    │[40]: shape 0:1 │
+    │[52]: shape 0:1 │
     │┌┬─────────┐    │
     │││axis 0   │    │
     │├┼─────────┼─── │
@@ -34,7 +34,39 @@ let%expect_test "Micrograd README basic example" =
     │└┴─────────┘    │
     └────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:true `Default @@ a;
-  [%expect {|  |}];
+  [%expect {|
+    ┌───────────────┐
+    │[1]: shape 0:1 │
+    │┌┬──────────┐  │
+    │││axis 0    │  │
+    │├┼──────────┼─ │
+    │││ -4.00e+0 │  │
+    │└┴──────────┘  │
+    └───────────────┘
+    ┌─────────────────────────┐
+    │[1]: shape 0:1  Gradient │
+    │┌┬─────────┐             │
+    │││axis 0   │             │
+    │├┼─────────┼──────────── │
+    │││ 1.39e+2 │             │
+    │└┴─────────┘             │
+    └─────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:true `Default @@ b;
-  [%expect {|  |}]
+  [%expect {|
+    ┌───────────────┐
+    │[2]: shape 0:1 │
+    │┌┬─────────┐   │
+    │││axis 0   │   │
+    │├┼─────────┼── │
+    │││ 2.00e+0 │   │
+    │└┴─────────┘   │
+    └───────────────┘
+    ┌─────────────────────────┐
+    │[2]: shape 0:1  Gradient │
+    │┌┬─────────┐             │
+    │││axis 0   │             │
+    │├┼─────────┼──────────── │
+    │││ 6.46e+2 │             │
+    │└┴─────────┘             │
+    └─────────────────────────┘ |}]
 
