@@ -9,18 +9,18 @@ Warning disclaimer: this project is still "not announced". The features describe
 * Implements backpropagation (i.e. first-order reverse mode autodiff) and shape inference.
 * Tensor axes have optional labels and are split into kinds: batch, input and output.
 * Has full support for the `einsum` notation, integrated with shape inference.
-* Supports mixed-precision computations, e.g. higher-precision network components, or gradients at a higher precision than values.
 * Optionally, can deduce output axes from input axes (and vice-versa TODO), e.g. with scaling to make expansion or bottleneck layers auto-adapting to the dimensionality of the data.
 * Has a suite of tutorials doubling as tests with inline expectations. `dune runtest`, and `dune promote` if diffs look OK.
 * Does not (need to) use any external computation libraries.
   * Starts with a high-level representation, but can compile everything down to `for` loops.
   * Has multiple "backends": interpreted, compiled via OCaml, compiled via pure C, compiled via CUDA.
   * Currently, compiles all computation of a single step of training into two programs: the forward pass and the backpropagation pass.
-* Offers three levels of abstraction:
-  * [`Network`](lib/network.ml) for trainable components.
-  * [`Formula`](lib/formula.ml)-centric [`Operation`](lib/operation.ml) for differentiable computations.
-  * [`Code`](lib/code.ml) for computations, [`Node`](lib/node.ml) maintains a store of n-dimensional arrays that the code operates on.
-* Does not hide anything. Should be easily extensible.
+* Offers only two levels of abstraction.
+  * Differentiable computations, centered around the [`%nn_op`](lib/ppx_nn_op.ml) syntax extension.
+  * Plain computations, centered around the [`%nn_cd`](lib/ppx_nn_cd.ml) syntax extension.
+  * Both abstraction levels share infrastructure. [`Formula.t`](lib/formula.ml) represent tensors, and are usually potentially differentiable (we call them _form_ formulas), but need not be (_non-form_ formulas). _non-form_ (non-differentiable) formulas cannot be subformulas of differentiable formulas. The [`%nn_cd`](lib/ppx_nn_cd.ml) syntax can be used to build up _non-form_ formulas, but also to express "primitive/glue" computations ([`Code.t`](lib/code.ml)) that do not introduce new tensors.
+* Supports mixed-precision computations, e.g. higher-precision network components, or gradients at a higher precision than values.
+* Should be easily extensible.
 * Model surgery should be starightforward (not sure if we are there yet).
 * It's a feature, not a bug!
   * To scale a tensor by a number, always use pointwise-multiplication, e.g. `2*.m` or `m*.2`.
@@ -40,8 +40,8 @@ OCaNNL follows different design choices than [OWL](https://ocaml.xyz/). For exam
   * [`Formula`](lib/formula.ml) implements "putting pieces together".
   * [`Session`](lib/session.ml) implements the session logic.
 * Some aspects that are more core to OWL are "delegated to user-land" in OCaNNL.
-  * [`Operation`](lib/operation.ml) is just a bunch of glue functions that users implementing new computational primitives should extend.
-  * Specific network architectures, e.g. MLP, CNN, Transformer, can be concisely formulated and belong to individual projects in OCaNNL -- my perception is that they are more part of the library in OWL. In this regard working on new architectures is not impeded by OCaNNL.
+  * [`Operation`](lib/operation.ml) is just a bunch of functions, what users implementing new computational primitives would do.
+  * Specific network architectures, e.g. MLP, CNN, Transformer, can be concisely formulated and belong to individual projects in OCaNNL -- while ti seems to me they are more part of the library in OWL. In this regard working on new architectures is not impeded by OCaNNL.
   * But the enabling mechanisms, such as "generalized `einsum`", belong to the OCaNNL library/infrastructure. In this regard OCaNNL is less extensible.
 * OCaNNL provides lower-level compilation backends than OWL, it is more self-contained in this sense.
 
@@ -60,3 +60,4 @@ Some ideas regarding installation (skip or substitute equivalent actions etc.):
 
 * Andrej Karpathy's [Micrograd](https://github.com/karpathy/micrograd)
 * [JAX autodidax](https://jax.readthedocs.io/en/latest/autodidax.html)
+* [Fast GPT: GPT-2 inference in Fortran](https://github.com/certik/fastGPT/), [picoGPT: code-golf GPT-2 inference in NumPy]
