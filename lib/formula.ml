@@ -48,6 +48,7 @@ let session_shape_updates: Shape.update_step list ref = ref []
     [Session.refresh_session ~reinit:true] call, except if [~force_no_init:true].
     Execution potentially in parallel. *)
 let session_initializations: Code.t list ref = ref []
+let session_initialized = ref 0
 
 (** This code will be executed on each [Session.refresh_session ~run:true] call ([~run:true]
     is implicit), before any [forward] or [backprop] code. Execution potentially in parallel. *)

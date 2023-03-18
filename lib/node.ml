@@ -210,18 +210,17 @@ exception Runtime_error of string * t option
 type state = {
   mutable unique_id: int;
   node_store: (int, t) Hashtbl.t;
+  session_prepare_step: (unit -> unit) option ref;
 }
 
 let global = {
   unique_id = 1;
   node_store = Hashtbl.create (module Int);
-}
+  session_prepare_step = ref @@ Some (fun () -> ())
+  }
 let get uid = Hashtbl.find_exn global.node_store uid
 
 let get_form uid = Option.value_exn ~message:"get_form: not a form node" (get uid).form
-
-let session_initializations = ref @@ Some (fun () -> ())
-let session_prepare_step = ref @@ Some (fun () -> ())
 
 let get_value (type val_t arr_t) (prec: (val_t, arr_t) precision) uid: arr_t =
   let n = Hashtbl.find_exn global.node_store uid in

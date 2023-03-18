@@ -209,12 +209,12 @@ let dynload_with_handler ~with_debug ~runtime_store code =
 let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run=true)
     ?(force_no_init=false) () =
   let open Formula in
-  if force_no_init && (regenerate || reinit || run) then
-    invalid_arg "refresh_session: set other triggers to false when using force_no_init";
+  (if force_no_init && (regenerate || reinit || run) then
+     invalid_arg "refresh_session: set other triggers to false when using force_no_init");
+  let root_changed = Map.exists !global_roots
+      ~f:(fun root -> Option.is_none root.forward_code || Option.is_none root.backprop_code) in
   (* Initialization and the forward processing. *)
-  if regenerate || Map.exists !global_roots
-       ~f:(fun root -> Option.is_none root.forward_code || Option.is_none root.backprop_code)
-  then (
+  if regenerate || root_changed then (
     List.iter !session_shape_updates ~f:(fun update_step ->
         Shape.propagate_shapes update_step;
         let sh = update_step.shape in
@@ -222,44 +222,62 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
         n.default_display_indices <- Some (default_display_indices sh);
         n.default_display_labels <- Some (Shape.axis_map_to_dims_index ~default:"" sh.axis_labels)
       );
-    (* FIXME: only do this for newly added inits! Otherwise it breaks terms! *)
-    dynload_with_handler ~with_debug ~runtime_store:Ocannl_runtime.Node.session_initializations
-      Code.(Session_initializations (all_parallel !session_initializations));
   );
+  (if regenerate then session_initialized := 0);
+  if not force_no_init && (regenerate || reinit || root_changed) then (
+    (* Since we use [Initialization], this is just to satisfy [dynload_with_handler]. *)
+    let dummy = ref @@ Some (fun () -> ()) in
+    let num_inits = List.length !session_initializations in
+    dynload_with_handler ~with_debug ~runtime_store:dummy
+      Code.(Initialization (
+        all_parallel @@ List.take !session_initializations (num_inits - !session_initialized)));
+    session_initialized := num_inits
+  );
+  if regenerate || root_changed then (
+    Ocannl_runtime.Node.global.session_prepare_step := None;
+    dynload_with_handler ~with_debug
+      ~runtime_store:Ocannl_runtime.Node.global.session_prepare_step
+      Code.(Session_prepare_step (all_parallel !session_prepare_step))
+  );
+  (if run then match !(Ocannl_runtime.Node.global.session_prepare_step) with
+      | None -> assert false
+      | Some prepare -> prepare ());
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
-    let m = root.formula in
-    let cform = match m.comp_node.form with
-    | Some form -> form
-    | None -> assert false in
-  if regenerate || Option.is_none root.forward_code || Option.is_none root.backprop_code then (
-    let forward_prog, backprop_prog = get_toplevel m in
-    root.forward_code <- Some forward_prog;
-    cform.forward := None;
-    root.backprop_code <- Some backprop_prog;
-    cform.backprop := None
-  );
-  if not force_no_init && 
-     (reinit || Option.is_none !(cform.forward)) then (
-    try
-      dynload_with_handler ~with_debug ~runtime_store:cform.forward
-        (Option.value_exn root.forward_code);
-    with Session_error (msg, None) ->
-      let msg = "Forward init error: "^msg in
-      raise @@ Session_error (msg, Some m);
-  );
-  if not force_no_init && 
-     (reinit || Option.is_none !(cform.backprop)) then (
-    try
-      dynload_with_handler ~with_debug ~runtime_store:cform.backprop
-        (Option.value_exn root.backprop_code);
-    with Session_error (msg, None) ->
-      Caml.Format.printf "Forward code (context for backprop init error):@ %a@\n"
-        Code.fprint_program @@ Option.value_exn root.forward_code;
-      Formula.handle_error ~formula:m @@ "Backprop init error: "^msg
-  );
-  if run then match !(cform.forward) with
-    | Some forward -> forward()
-    | None -> assert false
+      let m = root.formula in
+      let cform = match m.comp_node.form with
+        | Some form -> form
+        | None -> assert false in
+      if regenerate || Option.is_none root.forward_code || Option.is_none root.backprop_code then (
+        let forward_prog, backprop_prog = get_toplevel m in
+        root.forward_code <- Some forward_prog;
+        cform.forward := None;
+        root.backprop_code <- Some backprop_prog;
+        cform.backprop := None
+      );
+      if not force_no_init && 
+         (reinit || Option.is_none !(cform.forward)) then (
+        try
+          cform.forward := None;
+          dynload_with_handler ~with_debug ~runtime_store:cform.forward
+            (Option.value_exn root.forward_code);
+        with Session_error (msg, None) ->
+          let msg = "Forward init error: "^msg in
+          raise @@ Session_error (msg, Some m);
+      );
+      if not force_no_init && 
+         (reinit || Option.is_none !(cform.backprop)) then (
+        try
+          cform.backprop := None;
+          dynload_with_handler ~with_debug ~runtime_store:cform.backprop
+            (Option.value_exn root.backprop_code);
+        with Session_error (msg, None) ->
+          Caml.Format.printf "Forward code (context for backprop init error):@ %a@\n"
+            Code.fprint_program @@ Option.value_exn root.forward_code;
+          Formula.handle_error ~formula:m @@ "Backprop init error: "^msg
+      );
+      if run then match !(cform.forward) with
+        | Some forward -> forward()
+        | None -> assert false
     );
   (* The backpropagation. *)
   if run then

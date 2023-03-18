@@ -68,11 +68,10 @@ type t =
 [@@deriving sexp]
 
 (** Dynamically loading a program executes the [Initialization] code, or bounds the [procedure]
-    to [routine] for a node, or bounds a callback to one of the two global routine slots. *)
+    to [routine] for a node, or bounds a callback to the global routine slot. *)
 type program =
   | Node_specific of {procedure: t; routine: routine; label: string}
   | Initialization of t
-  | Session_initializations of t
   | Session_prepare_step of t
 [@@deriving sexp]
 
@@ -96,7 +95,6 @@ type _ low_level =
   | Unoptimized_binop: binop * float low_level * float low_level -> float low_level
   | Unoptimized_unop: unop * float low_level -> float low_level
   | Assign_routine: routine * unit low_level -> unit low_level
-  | Assign_session_initializations: unit low_level -> unit low_level
   | Assign_session_prepare_step: unit low_level -> unit low_level
   | Comment: string -> unit low_level
 (* [@@deriving sexp] *)
@@ -178,7 +176,6 @@ let unoptimized_program prog: unit low_level =
   | Initialization proc -> unoptimized proc
   | Node_specific {procedure; routine; label} ->
     Lines [|Comment label; Assign_routine (routine, unoptimized procedure)|]
-  | Session_initializations proc -> Assign_session_initializations (unoptimized proc)
   | Session_prepare_step proc -> Assign_session_prepare_step (unoptimized proc)
 
 (*
@@ -229,10 +226,8 @@ let interpret_llc ?(with_debug=true) llc =
       (get_form node_id).forward := Some (fun () -> loop proc)
     | Assign_routine ({node_id; field=`Backprop}, proc) ->
       (get_form node_id).backprop := Some (fun () -> loop proc)
-    | Assign_session_initializations (proc) ->
-      session_initializations := Some (fun () -> loop proc)
     | Assign_session_prepare_step (proc) ->
-      session_prepare_step := Some (fun () -> loop proc)
+      global.session_prepare_step := Some (fun () -> loop proc)
     | Comment message when with_debug -> Stdio.printf "%s\n%!" message
     | Comment _ -> ()
     and loop_float env llv =
