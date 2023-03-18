@@ -1,7 +1,7 @@
 (library
  (name ocannl_runtime)
- (libraries base stdio)
- (preprocess (pps ppx_jane))
+ (libraries base stdio minidebug_runtime)
+ (preprocess (pps ppx_jane ppx_minidebug))
  (modules node)
  (modes byte native))
 
