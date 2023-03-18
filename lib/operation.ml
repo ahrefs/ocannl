@@ -114,7 +114,6 @@ let rec pointpow ~is_form p m1: Formula.t =
   let op_body ~n ~n1 ~n2 projections =
     Accum_binop {zero_out=false; accum=Skip_arg; op=ToPowOf; lhs=v n;
                  rhs1=v n1; rhs2=v n2; projections} in
-  (* FIXME: dedicated is_form not needed? Formula should handle it? *)
   let grad_body =
     if not is_form then 
       fun ~n:_ ~n1:_ ~n2:_ ~needs1:_ ~needs2:_ _projections -> Noop
@@ -123,15 +122,18 @@ let rec pointpow ~is_form p m1: Formula.t =
       fun ~n ~n1 ~n2:_ ~needs1 ~needs2 projections ->
         (* [Formula] will not invoke [grad_body] if it does not need at least one gradient. *)
         assert (needs1 && not needs2);
-        Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n1; rhs1=vi grad_f.node_id; rhs2=g n;
-                     projections=(fun () -> Shape.backprop_unary @@ projections())}    
+        Seq (
+          grad_f.forward_body,
+          Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n1; rhs1=vi grad_f.node_id; rhs2=g n;
+                       projections=(fun () -> Shape.backprop_unary @@ projections())})
     else
       let grad_powf = pointpow ~is_form:false (p -. 1.) m1 in
       let grad_f = pointmul ~is_form:false p_f grad_powf in
       fun ~n ~n1 ~n2:_ ~needs1 ~needs2 projections ->
         assert (needs1 && not needs2);
-        Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n1; rhs1=vi grad_f.node_id; rhs2=g n;
-                     projections=(fun () -> Shape.backprop_unary @@ projections())} in
+        Seq (grad_f.forward_body,
+             Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n1; rhs1=vi grad_f.node_id; rhs2=g n;
+                     projections=(fun () -> Shape.backprop_unary @@ projections())}) in
   Formula.binop ~compose_op:`Pointwise ~op_label:"**." ~op_body ~grad_body ~is_form m1 p_f
 
 let unconstrained_param ?init label =
