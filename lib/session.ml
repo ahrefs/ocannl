@@ -291,6 +291,9 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
     the corresponding elements from [Node.state.node_store]. *)
 let drop_session() =
   Formula.global_roots := Map.empty (module Int);
+  Formula.session_shape_updates := [];
+  Formula.session_initializations := [];
+  Formula.session_initialized := 0;
   for i = !Formula.first_session_id to Ocannl_runtime.Node.global.unique_id - 1 do
     Hashtbl.remove Ocannl_runtime.Node.global.node_store i
   done;
@@ -299,7 +302,11 @@ let drop_session() =
 (** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id]. *)
 let close_session() =
   Formula.first_session_id := Ocannl_runtime.Node.global.unique_id;
-  Formula.global_roots := Map.empty (module Int)
+  Formula.global_roots := Map.empty (module Int);
+  Formula.session_shape_updates := [];
+  Formula.session_initializations := [];
+  Formula.session_initialized := 0
+
       
 module CLI = struct
   let set_executor = set_executor
