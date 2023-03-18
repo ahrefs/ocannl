@@ -153,8 +153,8 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body ~is_form m1 m2 
     let needs_gradient = form1.needs_gradient || form2.needs_gradient in
     let m1_no_grad = m1_processed || not form1.needs_gradient in
     let m2_no_grad = m2_processed || not form2.needs_gradient in
-    let zero_grads = if needs_gradient then reset_zeros ~node_id `Grad shape else Noop in
-    session_prepare_step := zero_grads :: !session_prepare_step;
+    if needs_gradient then
+      session_prepare_step := reset_zeros ~node_id `Grad shape :: !session_prepare_step;
     (* The code needs to be included in the reverse order to which it was computed! This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
@@ -223,8 +223,8 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m: t =
       raise @@ Session_error ("binop ~is_form:true but subformula is non-form", Some m) in
     let needs_gradient = form1.needs_gradient in
     let m_no_grad = m_processed || not form1.needs_gradient in
-    let zero_grads = if needs_gradient then reset_zeros ~node_id `Grad shape else Noop in
-    session_prepare_step := zero_grads :: !session_prepare_step;
+    if needs_gradient then
+      session_prepare_step := reset_zeros ~node_id `Grad shape :: !session_prepare_step;
     let grad_body =
       if needs_gradient then grad_body ~n ~n1 projections else Noop in
     (* The code needs to be included in the reverse order to which it was computed! *)
@@ -277,8 +277,8 @@ let term ~label ?needs_gradient ~is_form (spec: Shape.term_spec) ~init_op =
       match needs_gradient with
       | None -> term_needs_gradient spec
       | Some setting -> setting in
-    let zero_grads = if needs_gradient then reset_zeros ~node_id `Grad shape else Noop in
-    session_prepare_step := zero_grads :: !session_prepare_step;
+    if needs_gradient then
+      session_prepare_step := reset_zeros ~node_id `Grad shape :: !session_prepare_step;
     let backprop_body = Noop in
     (* Very unlikely someone will want dw/dw. *)
     if needs_gradient then

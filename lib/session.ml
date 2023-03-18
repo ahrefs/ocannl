@@ -294,6 +294,7 @@ let drop_session() =
   Formula.session_shape_updates := [];
   Formula.session_initializations := [];
   Formula.session_initialized := 0;
+  Formula.session_prepare_step := [];
   for i = !Formula.first_session_id to Ocannl_runtime.Node.global.unique_id - 1 do
     Hashtbl.remove Ocannl_runtime.Node.global.node_store i
   done;
@@ -305,7 +306,8 @@ let close_session() =
   Formula.global_roots := Map.empty (module Int);
   Formula.session_shape_updates := [];
   Formula.session_initializations := [];
-  Formula.session_initialized := 0
+  Formula.session_initialized := 0;
+  Formula.session_prepare_step := []
 
       
 module CLI = struct
