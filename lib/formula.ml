@@ -169,8 +169,8 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body ~is_form m1 m2 
       | false, m1_body, false, m2_body -> Seq (grad_body, ParHint(m1_body, m2_body))
       | _, _, false, m2_body -> Seq (grad_body, m2_body)
       | false, m1_body, _, _ -> Seq (grad_body, m1_body) in
-    let init_grads_body = create ~node_id `Grad shape in
-    session_initializations := init_grads_body :: !session_initializations;    
+    if needs_gradient then
+      session_initializations := create ~node_id `Grad shape :: !session_initializations;    
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     (if not m1_processed then global_roots := Map.remove !global_roots m1.node_id);
     (if not m2_processed then global_roots := Map.remove !global_roots m2.node_id);
@@ -232,8 +232,8 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m: t =
       match m_no_grad, form1.backprop_body with
       | true, _ | _, Noop -> grad_body
       | false, m_body -> Seq (grad_body, m_body) in
-    let init_grads_body = create ~node_id `Grad shape in
-    session_initializations := init_grads_body :: !session_initializations;    
+    if needs_gradient then
+      session_initializations := create ~node_id `Grad shape :: !session_initializations;    
 
     (if not m_processed then global_roots := Map.remove !global_roots m.node_id);
     let form = Some {backprop_body; needs_gradient} in
@@ -281,7 +281,8 @@ let term ~label ?needs_gradient ~is_form (spec: Shape.term_spec) ~init_op =
     session_prepare_step := zero_grads :: !session_prepare_step;
     let backprop_body = Noop in
     (* Very unlikely someone will want dw/dw. *)
-    session_initializations := create ~node_id `Grad shape :: !session_initializations;    
+    if needs_gradient then
+      session_initializations := create ~node_id `Grad shape :: !session_initializations;    
     let form = Some {backprop_body; needs_gradient} in
     let formula = {forward_body; form; node_id; comp_node=n; shape_logic; shape} in
     let root = {forward_code=None; backprop_code=None; formula} in
