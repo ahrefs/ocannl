@@ -226,9 +226,9 @@ let interpret_llc ?(with_debug=true) llc =
     | Unoptimized_set (Gradient_at_node_id id, indices, llv) ->
       set_from_float (get_form id).grad (lookup env indices) @@ loop_float env llv
     | Assign_routine ({node_id; field=`Forward}, proc) ->
-      (get_form node_id).forward <- Some (fun () -> loop proc)
+      (get_form node_id).forward := Some (fun () -> loop proc)
     | Assign_routine ({node_id; field=`Backprop}, proc) ->
-      (get_form node_id).backprop <- Some (fun () -> loop proc)
+      (get_form node_id).backprop := Some (fun () -> loop proc)
     | Assign_session_initializations (proc) ->
       session_initializations := Some (fun () -> loop proc)
     | Assign_session_prepare_step (proc) ->

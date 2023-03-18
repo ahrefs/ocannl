@@ -190,6 +190,22 @@ let set_executor = function
     executor := Exec_as_OCaml.load_native;
     executor_error_message := Exec_as_OCaml.error_message
 
+let dynload_with_handler ~with_debug ~runtime_store code =
+  let contents = !executor ~with_debug code in
+  match contents, !runtime_store with
+  | Some contents, Some routine ->
+    runtime_store :=
+      Some (fun () -> try routine() with error ->
+          Formula.handle_error @@ !executor_error_message "Runtime error:" ~contents error)
+  | Some contents, None ->
+    let msg =
+      "refresh_session: error loading initialization: routine not set in code:\n"^contents in
+    raise @@ Formula.Session_error (msg, None)
+  | _, None ->
+    failwith ("refresh_session: error loading initialization: routine not set"^
+              (if with_debug then "" else " (use `~with_debug:true` for more information)"))
+  | _ -> ()
+
 let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run=true)
     ?(force_no_init=false) () =
   let open Formula in
@@ -207,25 +223,9 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
         n.default_display_labels <- Some (Shape.axis_map_to_dims_index ~default:"" sh.axis_labels)
       );
     (* FIXME: only do this for newly added inits! Otherwise it breaks terms! *)
-    (* FIXME: clean this function up. Refactor loader-with-error-handling. *)
-    let contents =
-      Exec_as_OCaml.load_native ~with_debug 
-        Code.(Session_initializations (all_parallel !session_initializations)) in
-    let open Ocannl_runtime in
-    match contents, !Node.session_initializations with
-    | Some contents, Some init ->
-      Node.session_initializations :=
-        Some (fun () -> try init() with error ->
-            Formula.handle_error @@ !executor_error_message "Initialization error:" ~contents error)
-    | Some contents, None ->
-      let msg =
-        "refresh_session: error loading initialization: routine not set in code:\n"^contents in
-      raise @@ Session_error (msg, None)
-    | _, None ->
-      failwith ("refresh_session: error loading initialization: routine not set"^
-                (if with_debug then "" else " (use `~with_debug:true` for more information)"))
-    | _ -> ()
-);
+    dynload_with_handler ~with_debug ~runtime_store:Ocannl_runtime.Node.session_initializations
+      Code.(Session_initializations (all_parallel !session_initializations));
+  );
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
     let m = root.formula in
     let cform = match m.comp_node.form with
@@ -234,54 +234,30 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
   if regenerate || Option.is_none root.forward_code || Option.is_none root.backprop_code then (
     let forward_prog, backprop_prog = get_toplevel m in
     root.forward_code <- Some forward_prog;
-    cform.forward <- None;
+    cform.forward := None;
     root.backprop_code <- Some backprop_prog;
-    cform.backprop <- None
+    cform.backprop := None
   );
   if not force_no_init && 
-     (reinit || Option.is_none cform.forward) then (
+     (reinit || Option.is_none !(cform.forward)) then (
     try
-      let contents = Exec_as_OCaml.load_native ~with_debug (Option.value_exn root.forward_code) in
-      match contents, cform.forward with
-      | Some contents, Some forward ->
-        cform.forward <-
-          Some (fun () -> try forward() with error ->
-              Formula.handle_error ~formula:m @@ !executor_error_message "Forward error:" ~contents error)
-      | Some contents, None ->
-        let msg = "refresh_session: error loading `forward`: routine not set in code:\n"^contents in
-        raise @@ Session_error (msg, Some m)
-      | _, None ->
-        failwith ("refresh_session: error loading `forward`: routine not set"^
-                  (if with_debug then "" else " (use `~with_debug:true` for more information)"))
-      | _ -> ()
+      dynload_with_handler ~with_debug ~runtime_store:cform.forward
+        (Option.value_exn root.forward_code);
     with Session_error (msg, None) ->
       let msg = "Forward init error: "^msg in
       raise @@ Session_error (msg, Some m);
   );
   if not force_no_init && 
-     (reinit || Option.is_none cform.backprop) then (
+     (reinit || Option.is_none !(cform.backprop)) then (
     try
-      let contents = Exec_as_OCaml.load_native ~with_debug (Option.value_exn root.backprop_code) in
-      match contents, cform.backprop with
-      | Some contents, Some backprop ->
-        cform.backprop <-
-          Some (fun () ->
-              try backprop() with error ->
-                Formula.handle_error ~formula:m @@ !executor_error_message "Backprop error:" 
-                  ~contents error)
-      | Some contents, None ->
-        Formula.handle_error ~formula:m @@
-        "refresh_session: error loading `backprop`: routine not set in code:\n"^contents
-      | None, None ->
-        failwith ("refresh_session: error loading `backprop`: routine not set"^
-                  (if with_debug then "" else " (use `~with_debug:true` for more information)"))
-      | _ -> ()
+      dynload_with_handler ~with_debug ~runtime_store:cform.backprop
+        (Option.value_exn root.backprop_code);
     with Session_error (msg, None) ->
       Caml.Format.printf "Forward code (context for backprop init error):@ %a@\n"
         Code.fprint_program @@ Option.value_exn root.forward_code;
       Formula.handle_error ~formula:m @@ "Backprop init error: "^msg
   );
-  if run then match cform.forward with
+  if run then match !(cform.forward) with
     | Some forward -> forward()
     | None -> assert false
     );
@@ -291,7 +267,7 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
         let cform = match root.formula.comp_node.form with
           | Some form -> form
           | None -> assert false in
-        Option.value_exn cform.backprop ())
+        Option.value_exn !(cform.backprop) ())
 
 (** Discards global roots, rolls back [Node.state.unique_id] to [Formula.first_session_id], discards
     the corresponding elements from [Node.state.node_store]. *)

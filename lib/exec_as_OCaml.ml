@@ -68,9 +68,9 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
     | Unoptimized_unop (Relu, v) ->
       fprintf ppf "(@[<2>let a = %a in@ if a > 0.0 then a else 0.0@]@,)" pp_ll v
     | Assign_routine ({node_id; field=`Forward}, proc) ->
-      fprintf ppf "@[<2>(get_form %d).forward <-@ Some (@[<2>fun () ->@ %a@]@,)@]" node_id pp_ll proc
+      fprintf ppf "@[<2>(get_form %d).forward :=@ Some (@[<2>fun () ->@ %a@]@,)@]" node_id pp_ll proc
     | Assign_routine ({node_id; field=`Backprop}, proc) ->
-      fprintf ppf "@[<2>(get_form %d).backprop <-@ Some (@[<2>fun () -> %a@]@,)@]" node_id pp_ll proc
+      fprintf ppf "@[<2>(get_form %d).backprop :=@ Some (@[<2>fun () -> %a@]@,)@]" node_id pp_ll proc
     | Assign_session_initializations proc ->
       fprintf ppf "@[<2>let () = session_initializations@ := Some (@[<2>fun () -> %a@]@,)@]" pp_ll proc
     | Assign_session_prepare_step proc ->

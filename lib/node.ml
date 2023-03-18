@@ -187,8 +187,8 @@ let empty prec = create_array prec [||] `Unspecified
 (** Nodes that can potentially be root formulas. *)
 type form = {
   mutable grad: ndarray;
-  mutable forward: (unit -> unit) option;
-  mutable backprop: (unit -> unit) option;
+  forward: (unit -> unit) option ref;
+  backprop: (unit -> unit) option ref;
 } [@@deriving sexp_of]
 
 (** Non-form nodes can only be parts of other computations. They cannot have gradients.
@@ -255,7 +255,7 @@ let create (type grad_arr_t value_arr_t) ~(value_prec: ('a, value_arr_t) precisi
     match grad_prec, is_form with
     | Some grad_prec, true -> Some {
       grad=as_ndarray grad_prec @@ empty grad_prec;
-      forward=None; backprop=None;
+      forward=ref None; backprop=ref None;
     }
     | None, true -> invalid_arg "Node.create: ~is_form:true requires providing ~grad_prec"
     | _, false -> None in
