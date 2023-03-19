@@ -382,7 +382,7 @@ module DSL = struct
   let ndarray = ndarray ~is_form:true
 end
 
-module NFCLI = struct
+module NFDSL = struct
   let term = term ~is_form:false
   let number = number ~is_form:false
   let ndarray = ndarray ~is_form:false

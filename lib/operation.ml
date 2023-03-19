@@ -218,8 +218,8 @@ module NFO = struct
   let (/.) m1 m2 = m1 *. m2 **. (-1.0)
 end
 
-module NFCLI = struct
-  include Formula.NFCLI
+module NFDSL = struct
+  include Formula.NFDSL
   module O = NFO
   let einsum s = einsum s ~is_form:false
   let einsum1 s = einsum1 s ~is_form:false

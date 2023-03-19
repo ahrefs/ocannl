@@ -10,11 +10,11 @@ let ndarray_op ?axis_labels ?label expr =
   let edims dims = Ast_builder.Default.elist ~loc @@ List.rev dims in
   let op =
     match axis_labels, label with
-    | None, None -> [%expr Formula.NFCLI.ndarray]
-    | Some axis_labels, None -> [%expr Formula.NFCLI.ndarray ?axis_labels:[%e axis_labels]]
-    | None, Some label -> [%expr Formula.NFCLI.ndarray ?label:[%e label]]
+    | None, None -> [%expr Formula.NFDSL.ndarray]
+    | Some axis_labels, None -> [%expr Formula.NFDSL.ndarray ?axis_labels:[%e axis_labels]]
+    | None, Some label -> [%expr Formula.NFDSL.ndarray ?label:[%e label]]
     | Some axis_labels, Some label ->
-      [%expr Formula.NFCLI.ndarray ?axis_labels:[%e axis_labels] ?label:[%e label]] in
+      [%expr Formula.NFDSL.ndarray ?axis_labels:[%e axis_labels] ?label:[%e label]] in
   [%expr
     [%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
       ~output_dims:[%e edims output_dims] [%e values]]
@@ -23,22 +23,22 @@ let rec translate expr =
   let loc = expr.pexp_loc in
   match expr with
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
-    [%expr Formula.NFCLI.number [%e expr]]
+    [%expr Formula.NFDSL.number [%e expr]]
 
   | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
-    [%expr Formula.NFCLI.number (Float.of_int [%e expr])]
+    [%expr Formula.NFDSL.number (Float.of_int [%e expr])]
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
       [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
     let axis = Ast_helper.Exp.constant ~loc:pexp_loc
         (Pconst_string (String.of_char ch, pexp_loc, None)) in
-    [%expr Formula.NFCLI.number ~axis_label:[%e axis] [%e f]]
+    [%expr Formula.NFDSL.number ~axis_label:[%e axis] [%e f]]
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
       [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
         let axis = Ast_helper.Exp.constant ~loc:pexp_loc
         (Pconst_string (String.of_char ch, pexp_loc, None)) in
-    [%expr Formula.NFCLI.number ~axis_label:[%e axis] (Float.of_int [%e i])]
+    [%expr Formula.NFDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])]
 
   | { pexp_desc = Pexp_tuple _; _ } | { pexp_desc = Pexp_array _; _ } 
   | { pexp_desc = Pexp_construct ({txt=Lident "::"; _}, _); _ } ->
