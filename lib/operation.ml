@@ -2,10 +2,10 @@
 
 open Base
 
-let g n: Code.data = {node_id=n.Ocannl_runtime.Node.id; field=`Grad}
-let v n: Code.data = {node_id=n.Ocannl_runtime.Node.id; field=`Value}
+let v = Code.DSL.value_of_node
+let g = Code.DSL.grad_of_node
 let d n field: Code.data = {node_id=n.Ocannl_runtime.Node.id; field}
-let vi node_id: Code.data = {node_id; field=`Value}
+let vi = Code.DSL.value_of_id
 
 let add =
   let open Code in

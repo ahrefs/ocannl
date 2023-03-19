@@ -19,7 +19,42 @@ let ndarray_op ?axis_labels ?label expr =
     [%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
       ~output_dims:[%e edims output_dims] [%e values]]
 
-type expr_type = Code | Formula | Unknown [@@deriving equal]
+type expr_type = Code | Formula | Node | Data | Data_grad | Operator | Unknown [@@deriving equal]
+
+let assignment_op expr =
+  let loc = expr.pexp_loc in
+  match expr with
+  | [%expr (=:)] -> [%expr Code.Skip_arg]
+  | [%expr (=+)] -> [%expr Code.Add]
+  | [%expr (=*)] -> [%expr Code.Mul]
+  | [%expr (=**)] -> [%expr Code.ToPowOf]
+  | [%expr (=?/)] -> [%expr Code.Relu_gate]
+  | _ ->
+    Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
+      "ppx_ocannl %%nn_cd: expected an assignment operator, one of: %s"
+      "=: (Skip_arg), =+ (Add), =* (Mul), =** (ToPowOf), =?/ (Relu_gate)"
+
+let binary_op expr =
+  let loc = expr.pexp_loc in
+  match expr with
+  | [%expr (+)] -> [%expr Code.Add]
+  | [%expr ( * )] -> [%expr Code.Mul]
+  | [%expr ( ** )] -> [%expr Code.ToPowOf]
+  | [%expr (-?/)] -> [%expr Code.Relu_gate]
+  | [%expr (-/>)] -> [%expr Code.Skip_arg]
+  | _ ->
+    Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
+      "ppx_ocannl %%nn_cd: expected a binary operator, one of: %s"
+      "+ (Add), * (Mul), ** (ToPowOf), -?/ (Relu_gate), -/> (Skip_arg)"
+
+let unary_op expr =
+  let loc = expr.pexp_loc in
+  match expr with
+  | [%expr (=)] -> [%expr Code.Identity]
+  | [%expr (!/)] -> [%expr Code.Relu]
+  | _ ->
+    Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
+      "ppx_ocannl %%nn_cd: expected a unary operator, one of: = (Identity), !/ (Relu)"
 
 let rec translate expr =
   let loc = expr.pexp_loc in
@@ -48,7 +83,7 @@ let rec translate expr =
 
   | [%expr [%e? expr1] **.
       [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
-    (* If converting code to a formula was possible we would do it here.
+    (* If converting code or a node to a formula was possible we would do it here.
        Since it's not, we let OCaml handle the type errors. Same further below. *)
     let _typ1, expr1 = translate expr1 in
     Formula, [%expr pointpow ~is_form [%e expr1] [%e f]]
@@ -58,6 +93,53 @@ let rec translate expr =
     let _typ1, expr1 = translate expr1 in
     Formula, [%expr pointpow ~is_form [%e expr1] (Float.of_int [%e i])]
 
+  | [%expr [%e? expr1].value ] ->
+    let typ1, expr1 = translate expr1 in
+    let expr1 = match typ1 with
+    | Formula -> [%expr DSL.value_of_id [%e expr1].node_id]
+    | Node -> [%expr DSL.value_of_node [%e expr1]]
+    | _ ->
+      Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
+        "ppx_ocannl %%nn_cd: the x.value syntax requires x to be a Node or a Formula" in
+    Data, expr1
+
+  | [%expr [%e? expr1].grad ] ->
+    let typ1, expr1 = translate expr1 in
+    let expr1 = match typ1 with
+    | Formula -> [%expr DSL.grad_of_id [%e expr1].node_id]
+    | Node -> [%expr DSL.grad_of_node [%e expr1]]
+    | _ ->
+      Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
+        "ppx_ocannl %%nn_cd: the x.grad syntax requires x to be a Node or a Formula" in
+    Data_grad, expr1
+
+  | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections])) ] ->
+    let accu_op = assignment_op accu_op in
+    let lhs_typ, lhs = translate lhs in
+    let bin_op = binary_op bin_op in
+    let rhs1_typ, rhs1 = translate rhs1 in
+    let rhs2_typ, rhs2 = translate rhs2 in
+    let guess_zero_out =
+      if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs1_typ; rhs2_typ]
+      then [%expr false] else [%expr true] in
+    Code, [%expr Code.Accum_binop {
+      zero_out=[%e guess_zero_out]; accum=[%e accu_op]; lhs=[%e lhs];
+      op=[%e bin_op]; rhs1=[%e rhs1]; rhs2=[%e rhs2]; projections=[%e projections]}
+    ]
+
+    | [%expr [%e? accu_op] [%e? lhs] ([%e? un_op] ([%e? rhs] ~projections:[%e? projections])) ] ->
+      let accu_op = assignment_op accu_op in
+      let lhs_typ, lhs = translate lhs in
+      let un_op = unary_op un_op in
+      let rhs_typ, rhs = translate rhs in
+      let guess_zero_out =
+        if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs_typ]
+        then [%expr false] else [%expr true] in
+      Code, [%expr Code.Accum_unop {
+        zero_out=[%e guess_zero_out]; accum=[%e accu_op]; lhs=[%e lhs];
+        op=[%e un_op]; rhs=[%e rhs]; projections=[%e projections]}
+      ]
+  
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3] ] ->
     let typ1, expr1 = translate expr1 in
     let _typ2, expr2 = translate expr2 in

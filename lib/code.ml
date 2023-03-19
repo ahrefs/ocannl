@@ -178,24 +178,28 @@ let unoptimized_program prog: unit low_level =
     Lines [|Comment label; Assign_routine (routine, unoptimized procedure)|]
   | Session_prepare_step proc -> Assign_session_prepare_step (unoptimized proc)
 
-(*
-let skip_arg (_n1: float Codelib.code) (n2: float Codelib.code) = n2
-let num_id (n: float Codelib.code) = n
+module O = struct
+  let (||) a b = Par (a, b)
+  let (|?) a b = ParHint (a, b)
+  let (=+) lhs rhs1 op rhs2 ~projections = Accum_binop {
+    zero_out=false;
+    accum=Add; op; lhs; rhs1; rhs2;
+    projections }
+  let (=:) lhs rhs1 op rhs2 ~projections = Accum_binop {
+    zero_out=false;
+    accum=Skip_arg; op; lhs; rhs1; rhs2;
+    projections }
+end
 
-let identity (n: float Codelib.code) = n
+module DSL = struct
+  module O = O
+  let value_of_node n: data = {node_id=n.Ocannl_runtime.Node.id; field=`Value}
+  let grad_of_node n: data = {node_id=n.Ocannl_runtime.Node.id; field=`Grad}
+  let value_of_id node_id: data = {node_id; field=`Value}
+  let grad_of_id node_id: data = {node_id; field=`Grad}
+  
+end
 
-let add n1 n2 = [%c Float.([%e n1] + [%e n2]) ]
-
-let mul n1 n2 = [%c Float.([%e n1] * [%e n2]) ]
-
-let relu n = [%c Float.(if [%e n] > 0.0 then [%e n] else 0.0) ]
-
-let relu_gate n1 n2 = [%c Float.(if [%e n1] > 0.0 then [%e n2] else 0.0) ]
-
-let value (v: float) = Lifts.Lift_float.lift v
-
-let uniform ~low ~high = [%c Random.float_range low high ]
-*)
 let interpret_llc ?(with_debug=true) llc =
   let lookup env indices =
     Array.map indices ~f:Shape.(function
