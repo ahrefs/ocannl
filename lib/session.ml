@@ -178,6 +178,13 @@ let print_global_roots ~with_grad ~with_code (style: array_print_style) =
 let print_preamble() =
   Stdio.printf "%s\n%!" (Formula.prefix_with_preamble "")
 
+let print_session_code() =
+  let open Code in
+  Caml.Format.printf "Initialization:@ %a@ Step preparation:@ %a"
+    fprint_code (all_parallel !Formula.session_initializations)
+    fprint_code (all_parallel !Formula.session_prepare_step);
+  Caml.Format.print_newline()
+
 (** *** Session management. *** *)
 let executor = ref Exec_as_OCaml.load_native
 let executor_error_message = ref Exec_as_OCaml.error_message
@@ -228,9 +235,10 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
     (* Since we use [Initialization], this is just to satisfy [dynload_with_handler]. *)
     let dummy = ref @@ Some (fun () -> ()) in
     let num_inits = List.length !session_initializations in
-    dynload_with_handler ~with_debug ~runtime_store:dummy
-      Code.(Initialization (
-        all_parallel @@ List.take !session_initializations (num_inits - !session_initialized)));
+    let to_init = num_inits - !session_initialized in
+    let code =
+      Code.(Initialization (all_parallel @@ List.take !session_initializations to_init)) in
+    dynload_with_handler ~with_debug ~runtime_store:dummy code;
     session_initialized := num_inits
   );
   if regenerate || root_changed then (
@@ -323,6 +331,7 @@ module DSL = struct
   let print_formula = print_formula
   let print_global_roots = print_global_roots
   let print_preamble = print_preamble
+  let print_session_code = print_session_code
   let print_decimals_precision = NodeUI.print_decimals_precision
   let get_root = get_root
   let get_node = get_node

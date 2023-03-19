@@ -229,9 +229,3 @@ module NFDSL = struct
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient
 end
-
-module Summable = struct
-  type nonrec t = Formula.t
-  let (+) = add ~is_form:true
-  let zero = Formula.number ~is_form:true 0.0
-end

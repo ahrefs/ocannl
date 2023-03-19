@@ -107,7 +107,7 @@ type init_op =
   (** Draws the values from U(0,1). *)
   | `Standard_gaussian
   (** Draws the values from N(0,1). *)
-  ]
+  ] [@@deriving sexp, equal]
 
 let create_array_of_prec (type val_t arr_t) (prec: (val_t, arr_t) precision) dims: arr_t =
   match prec with
