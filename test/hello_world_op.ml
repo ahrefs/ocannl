@@ -1,6 +1,7 @@
 open Base
 open Ocannl
 
+module CLI = Operation.CLI
 let test_executor = `OCaml
 
 let%expect_test "Hello World" =
@@ -8,7 +9,6 @@ let%expect_test "Hello World" =
   [%expect {| Hello World! |}]
 
 let%expect_test "op:Pointwise multiplication dims 1" =
-  (* let open Operation.CLI in *)
   let open Session.CLI in
   drop_session();
   Random.init 0;
@@ -29,7 +29,6 @@ let%expect_test "op:Pointwise multiplication dims 1" =
     └────────────────────────┘ |}]
 
 let%expect_test "op:Matrix multiplication dims 1x1" =
-  (* let open Operation.CLI in *)
   let open Session.CLI in
   drop_session();
   Random.init 0;
@@ -62,7 +61,6 @@ let%expect_test "op:Matrix multiplication dims 1x1" =
 let%expect_test "op:Print constant tensor" =
   Session.drop_session();
   Random.init 0;
-  (* let open Operation.CLI in *)
   let open Session.CLI in
   let%nn_op hey = [1, 2, 3; 4, 5, 6] in
   refresh_session ();
@@ -304,7 +302,6 @@ let%expect_test "op:Print constant tensor" =
     └──────────────────────────────────────────────┘ |}]
 
 let%expect_test "op:Matrix multiplication dims 2x3" =
-  (* let open Operation.CLI in *)
   let open Session.CLI in
   drop_session();
   Random.init 0;
@@ -337,15 +334,14 @@ let%expect_test "op:Matrix multiplication dims 2x3" =
     └───────────────────────────────────────────────────────┘ |}]
 
 let%expect_test "Big matrix" =
-  let open Operation.CLI in
   let open Session.CLI in
   drop_session();
   Random.init 0;
   set_executor test_executor;
   (* Hey is inferred to be a matrix. *)
-  let hey = O.(!~ "hey") in
-  let zero_to_twenty = range 20 in
-  let y = O.(zero_to_twenty * hey + zero_to_twenty) in
+  let hey = CLI.O.(!~ "hey") in
+  let zero_to_twenty = CLI.range 20 in
+  let y = CLI.O.(zero_to_twenty * hey + zero_to_twenty) in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Inline zero_to_twenty;
   [%expect {|
@@ -391,11 +387,10 @@ let%expect_test "op:Very big tensor" =
     let open Session.CLI in
     drop_session();
     Random.init 0;
-    let open Operation.CLI in
     set_executor test_executor;
     (* Hey is inferred to be a matrix. *)
     let hey =
-      range_of_shape ~batch_dims:[7] ~input_dims:[9; 10; 11] ~output_dims:[13; 14] () in
+      CLI.range_of_shape ~batch_dims:[7] ~input_dims:[9; 10; 11] ~output_dims:[13; 14] () in
     let%nn_op hoo = (1 + 1) * hey - 10 in
     refresh_session ();
     (* print_formula ~with_code:false ~with_grad:false `Inline hey;

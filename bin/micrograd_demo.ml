@@ -1,5 +1,6 @@
 open Base
 open Ocannl
+module CLI = Operation.CLI
 
 let test_executor = `OCaml
 

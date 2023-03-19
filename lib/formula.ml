@@ -334,3 +334,56 @@ include Comparator.Make(struct
     let compare m1 m2 = Int.compare m1.node_id m2.node_id
     let sexp_of_t = sexp_of_t
 end)
+
+let float_to_label v = Float.to_string_hum ~strip_zero:true v
+
+let number ~is_form ?(axis_label="") c =
+  (* Note: no axis label so that we do not conflict with user labels. *)
+  term ~label:(float_to_label c) ~is_form
+    (Constant {output_dims=[1]; axis_labels=axis_label}) ~init_op:(`Constant_of_value c)
+
+let ndarray ~is_form ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[])
+ values =
+  let spec =
+    match label, batch_dims, input_dims with
+    | Some _, [], _ -> Shape.Params {input_dims; output_dims; axis_labels}
+    | None, [], [] -> Constant {output_dims; axis_labels}
+    | None, _, _ -> Transform {batch_dims; input_dims; output_dims; axis_labels}
+    | _, _, [] -> Data {batch_dims; output_dims; axis_labels}
+    | _, _::_, _::_ ->
+      let sh = {Shape.batch=Given batch_dims; input=Given input_dims; output=Given output_dims;
+                deduce_output_from_input=`Not_constrained;
+                axis_labels=(Shape.axis_labels_of_spec axis_labels).labels; node_id= -1} in
+      raise @@
+      Shape.Shape_error ("Operation.ndarray: cannot provide all of [label], [batch_dims] and [input_dims]",
+                         sh, sh) in
+  let label =
+    match label with
+    | Some label -> label
+    | None ->
+      Caml.Format.pp_set_geometry Caml.Format.str_formatter
+        ~max_indent:(!max_sublabel_length) ~margin:(!max_sublabel_length*2);
+      let (!) = Array.of_list in
+      let dims = Array.concat [!batch_dims; !output_dims; !input_dims] in
+      let ndarr = Ocannl_runtime.Node.create_ndarray Single dims (`Fixed_constant values) in
+      let (!) = List.length in
+      NodeUI.pp_tensor_inline ~num_batch_axes: !batch_dims ~num_output_axes: !output_dims
+        ~num_input_axes: !input_dims Caml.Format.str_formatter ndarr;
+      Caml.Format.flush_str_formatter() in
+  let label =
+    if String.contains label '\n' then
+      "c"^(NodeUI.dims_to_string @@ Array.concat_map [|batch_dims; output_dims; input_dims|] ~f:Array.of_list)
+    else label in
+  term ~is_form ~label spec ~init_op:(`Fixed_constant values)
+
+module CLI = struct
+  let term = term ~is_form:true
+  let number = number ~is_form:true
+  let ndarray = ndarray ~is_form:true
+end
+
+module NFCLI = struct
+  let term = term ~is_form:false
+  let number = number ~is_form:false
+  let ndarray = ndarray ~is_form:false
+end

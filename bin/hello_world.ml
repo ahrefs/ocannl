@@ -1,5 +1,6 @@
 open Base
 open Ocannl
+module CLI = Operation.CLI
 
 let() =
   Session.drop_session();

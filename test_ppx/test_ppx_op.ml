@@ -1,5 +1,6 @@
 open Base
 open Ocannl
+module CLI = Operation.CLI
 
 let%nn_op y0 = 2 *. "hey1" + 3
 

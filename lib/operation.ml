@@ -101,16 +101,9 @@ let relu =
                  projections=(fun () -> Shape.backprop_unary @@ projections())} in
   Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
-let float_to_label v = Float.to_string_hum ~strip_zero:true v
-
-let number ~is_form ?(axis_label="") c =
-  (* Note: no axis label so that we do not conflict with user labels. *)
-  Formula.term ~label:(float_to_label c) ~is_form
-    (Constant {output_dims=[1]; axis_labels=axis_label}) ~init_op:(`Constant_of_value c)
-
 let rec pointpow ~is_form p m1: Formula.t =
   let open Code in
-  let p_f = number ~is_form p in
+  let p_f = Formula.number ~is_form p in
   let op_body ~n ~n1 ~n2 projections =
     Accum_binop {zero_out=false; accum=Skip_arg; op=ToPowOf; lhs=v n;
                  rhs1=v n1; rhs2=v n2; projections} in
@@ -156,40 +149,6 @@ let range_of_shape ~is_form ?(axis_labels="") ?(batch_dims=[]) ?(input_dims=[]) 
   let dims = Array.concat_map [|batch_dims; output_dims; input_dims|] ~f:Array.of_list in
   Formula.term ~is_form ~label:("r"^NodeUI.dims_to_string dims) spec ~init_op:`Range_over_offsets
 
-let ndarray ~is_form ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[])
- values =
-  let spec =
-    match label, batch_dims, input_dims with
-    | Some _, [], _ -> Shape.Params {input_dims; output_dims; axis_labels}
-    | None, [], [] -> Constant {output_dims; axis_labels}
-    | None, _, _ -> Transform {batch_dims; input_dims; output_dims; axis_labels}
-    | _, _, [] -> Data {batch_dims; output_dims; axis_labels}
-    | _, _::_, _::_ ->
-      let sh = {Shape.batch=Given batch_dims; input=Given input_dims; output=Given output_dims;
-                deduce_output_from_input=`Not_constrained;
-                axis_labels=(Shape.axis_labels_of_spec axis_labels).labels; node_id= -1} in
-      raise @@
-      Shape.Shape_error ("Operation.ndarray: cannot provide all of [label], [batch_dims] and [input_dims]",
-                         sh, sh) in
-  let label =
-    match label with
-    | Some label -> label
-    | None ->
-      Caml.Format.pp_set_geometry Caml.Format.str_formatter
-        ~max_indent:(!Formula.max_sublabel_length) ~margin:(!Formula.max_sublabel_length*2);
-      let (!) = Array.of_list in
-      let dims = Array.concat [!batch_dims; !output_dims; !input_dims] in
-      let ndarr = Ocannl_runtime.Node.create_ndarray Single dims (`Fixed_constant values) in
-      let (!) = List.length in
-      NodeUI.pp_tensor_inline ~num_batch_axes: !batch_dims ~num_output_axes: !output_dims
-        ~num_input_axes: !input_dims Caml.Format.str_formatter ndarr;
-      Caml.Format.flush_str_formatter() in
-  let label =
-    if String.contains label '\n' then
-      "c"^(NodeUI.dims_to_string @@ Array.concat_map [|batch_dims; output_dims; input_dims|] ~f:Array.of_list)
-    else label in
-  Formula.term ~is_form ~label spec ~init_op:(`Fixed_constant values)
-
 let given_dims_params ?(axis_labels="") ?(input_dims=[]) ?(output_dims=[]) label values =
   Formula.term ~is_form:true ~label (Params {input_dims; output_dims; axis_labels})
     ~init_op:(`Fixed_constant values)
@@ -224,7 +183,7 @@ module O = struct
   let (!/) = relu ~is_form:true
   let (!~) label =
    Formula.term ~label ~is_form:true (Deduced_params `Not_constrained) ~init_op:`Standard_uniform
-  let (!.) = number ~is_form:true
+  let (!.) = Formula.number ~is_form:true
   let (-) m1 m2 = m1 + !.(-1.) *. m2
   let (~-) m = !.(-1.) *. m
   let (/) m1 m2 = m1 * m2 **. (-1.0)
@@ -232,15 +191,13 @@ module O = struct
 end
       
 module CLI = struct
+  include Formula.CLI
   module O = O
   let einsum s = einsum s ~is_form:true
   let einsum1 s = einsum1 s ~is_form:true
-  let term = Formula.term ~is_form:true
-  let number = number ~is_form:true
   let unconstrained_param = unconstrained_param
   let range = range ~is_form:true
   let range_of_shape = range_of_shape ~is_form:true
-  let ndarray = ndarray ~is_form:true
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient
 end
@@ -254,7 +211,7 @@ module NFO = struct
   let (!/) = relu ~is_form:false
   let (!~) label =
    Formula.term ~label ~is_form:false (Deduced_params `Not_constrained) ~init_op:`Standard_uniform
-  let (!.) = number ~is_form:false
+  let (!.) = Formula.number ~is_form:false
   let (-) m1 m2 = m1 + !.(-1.) *. m2
   let (~-) m = !.(-1.) *. m
   let (/) m1 m2 = m1 * m2 **. (-1.0)
@@ -262,14 +219,13 @@ module NFO = struct
 end
 
 module NFCLI = struct
+  include Formula.NFCLI
   module O = NFO
   let einsum s = einsum s ~is_form:false
   let einsum1 s = einsum1 s ~is_form:false
   let term = Formula.term ~is_form:false
-  let number = number ~is_form:false
   let range = range ~is_form:false
   let range_of_shape = range_of_shape ~is_form:false
-  let ndarray = ndarray ~is_form:false
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient
 end
@@ -277,5 +233,5 @@ end
 module Summable = struct
   type nonrec t = Formula.t
   let (+) = add ~is_form:true
-  let zero = number ~is_form:true 0.0
+  let zero = Formula.number ~is_form:true 0.0
 end
