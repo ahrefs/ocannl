@@ -190,8 +190,8 @@ module O = struct
   let (/.) m1 m2 = m1 *. m2 **. (-1.0)
 end
       
-module CLI = struct
-  include Formula.CLI
+module DSL = struct
+  include Formula.DSL
   module O = O
   let einsum s = einsum s ~is_form:true
   let einsum1 s = einsum1 s ~is_form:true

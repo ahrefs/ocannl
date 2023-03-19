@@ -104,7 +104,7 @@ let expr_expander ~loc ~path:_ payload =
   | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
     (* We are at the %ocannl annotation level: do not tranlsate the body. *)
      let bindings = List.map bindings
-      ~f:(fun vb -> {vb with pvb_expr=[%expr let open! CLI.O in [%e translate vb.pvb_expr]]}) in
+      ~f:(fun vb -> {vb with pvb_expr=[%expr let open! DSL.O in [%e translate vb.pvb_expr]]}) in
      {payload with pexp_desc=Pexp_let (recflag, bindings, body)}
   | expr -> translate expr
 
@@ -124,7 +124,7 @@ let translate_str ({pstr_desc; _} as str) =
   | Pstr_value (recf, bindings) ->
     let f vb =
       let loc = vb.pvb_loc in
-      {vb with pvb_expr=[%expr let open! CLI.O in [%e translate vb.pvb_expr]]} in
+      {vb with pvb_expr=[%expr let open! DSL.O in [%e translate vb.pvb_expr]]} in
     {str with pstr_desc=Pstr_value (recf, List.map bindings ~f)}
   | _ -> str
      

@@ -376,7 +376,7 @@ let ndarray ~is_form ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) 
     else label in
   term ~is_form ~label spec ~init_op:(`Fixed_constant values)
 
-module CLI = struct
+module DSL = struct
   let term = term ~is_form:true
   let number = number ~is_form:true
   let ndarray = ndarray ~is_form:true
