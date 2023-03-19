@@ -19,94 +19,130 @@ let ndarray_op ?axis_labels ?label expr =
     [%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
       ~output_dims:[%e edims output_dims] [%e values]]
 
+type expr_type = Code | Formula | Unknown [@@deriving equal]
+
 let rec translate expr =
   let loc = expr.pexp_loc in
   match expr with
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
-    [%expr Formula.NFDSL.number [%e expr]]
+    Formula, [%expr Formula.NFDSL.number [%e expr]]
 
   | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
-    [%expr Formula.NFDSL.number (Float.of_int [%e expr])]
+    Formula, [%expr Formula.NFDSL.number (Float.of_int [%e expr])]
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
       [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
     let axis = Ast_helper.Exp.constant ~loc:pexp_loc
         (Pconst_string (String.of_char ch, pexp_loc, None)) in
-    [%expr Formula.NFDSL.number ~axis_label:[%e axis] [%e f]]
+    Formula, [%expr Formula.NFDSL.number ~axis_label:[%e axis] [%e f]]
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
       [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
         let axis = Ast_helper.Exp.constant ~loc:pexp_loc
         (Pconst_string (String.of_char ch, pexp_loc, None)) in
-    [%expr Formula.NFDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])]
+    Formula, [%expr Formula.NFDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])]
 
   | { pexp_desc = Pexp_tuple _; _ } | { pexp_desc = Pexp_array _; _ } 
   | { pexp_desc = Pexp_construct ({txt=Lident "::"; _}, _); _ } ->
-    ndarray_op expr
+    Formula, ndarray_op expr
 
   | [%expr [%e? expr1] **.
       [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
-    [%expr pointpow ~is_form [%e translate expr1] [%e f]]
+    (* If converting code to a formula was possible we would do it here.
+       Since it's not, we let OCaml handle the type errors. Same further below. *)
+    let _typ1, expr1 = translate expr1 in
+    Formula, [%expr pointpow ~is_form [%e expr1] [%e f]]
 
   | [%expr [%e? expr1] **.
       [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
-    [%expr pointpow ~is_form [%e translate expr1] (Float.of_int [%e i])]
+    let _typ1, expr1 = translate expr1 in
+    Formula, [%expr pointpow ~is_form [%e expr1] (Float.of_int [%e i])]
 
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3] ] ->
-    [%expr [%e translate expr1] [%e translate expr2] [%e translate expr3]]
+    let typ1, expr1 = translate expr1 in
+    let _typ2, expr2 = translate expr2 in
+    let _typ3, expr3 = translate expr3 in
+    typ1, [%expr [%e expr1] [%e expr2] [%e expr3]]
 
   | [%expr [%e? expr1] [%e? expr2] ] ->
-    [%expr [%e translate expr1] [%e translate expr2]]
-  
-    | {pexp_desc=Pexp_fun (arg_label, arg, opt_val, body); _} as expr ->
-      {expr with pexp_desc=Pexp_fun (arg_label, arg, opt_val, translate body)}
+    let typ1, expr1 = translate expr1 in
+    let _typ2, expr2 = translate expr2 in
+    typ1, [%expr [%e expr1] [%e expr2]]
+
+  | {pexp_desc=Pexp_fun (arg_label, arg, opt_val, body); _} as expr ->
+    let typ, body = translate body in
+    typ, {expr with pexp_desc=Pexp_fun (arg_label, arg, opt_val, body)}
  
-  | [%expr while [%e? test_expr] do [%e? body_expr] done ] ->
-    [%expr while [%e test_expr] do [%e translate body_expr] done ]
+  | [%expr while [%e? _test_expr] do [%e? _body] done ] ->
+    Unknown,
+    Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
+      "ppx_ocannl %%nn_cd: while: low-level code embeddings not supported yet"
 
-  | [%expr for [%p? pat] = [%e? init] to [%e? final] do [%e? body_expr] done ] ->
-    [%expr for [%p pat] = [%e init] to [%e final] do [%e translate body_expr] done ]
+  | [%expr for [%p? _pat] = [%e? _init] to [%e? _final] do [%e? _body_expr] done ] ->
+    Unknown,
+    Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
+      "ppx_ocannl %%nn_cd: for-to: low-level code embeddings not supported yet"
 
-  | [%expr for [%p? pat] = [%e? init] downto [%e? final] do [%e? body_expr] done ] ->
-    [%expr for [%p pat] = [%e init] downto [%e final] do [%e translate body_expr] done ]
+  | [%expr for [%p? _pat] = [%e? _init] downto [%e? _final] do [%e? _body_expr] done ] ->
+    Unknown,
+    Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
+      "ppx_ocannl %%nn_cd: for-downto: low-level code embeddings not supported yet"
 
   | [%expr [%e? expr1] ; [%e? expr2] ] ->
-    (* FIXME: use Seq *)
-    [%expr [%e translate expr1] ; [%e translate expr2]]
+    let typ1, expr1 = translate expr1 in
+    let expr1 = match typ1 with Formula -> [%expr [%e expr1].forward_body] | _ -> expr1 in
+    let typ2, expr2 = translate expr2 in
+    let expr2 = match typ2 with Formula -> [%expr [%e expr2].forward_body] | _ -> expr2 in
+    Code, [%expr Code.Seq ([%e expr1], [%e expr2])]
 
   | [%expr if [%e? expr1] then [%e? expr2] else [%e? expr3]] ->
-    [%expr if [%e expr1] then [%e translate expr2] else [%e translate expr3]]
+    let _typ1, expr1 = translate expr1 in
+    let typ2, expr2 = translate expr2 in
+    let typ3, expr3 = translate expr3 in
+    let typ = if equal_expr_type typ2 Unknown then typ3 else typ2 in
+    typ, [%expr if [%e expr1] then [%e expr2] else [%e expr3]]
 
   | [%expr if [%e? expr1] then [%e? expr2]] ->
-    [%expr if [%e expr1] then [%e translate expr2] else Code.Noop]
+    let _typ1, expr1 = translate expr1 in
+    let _typ2, expr2 = translate expr2 in
+    Code, [%expr if [%e expr1] then [%e expr2] else Code.Noop]
 
   | { pexp_desc = Pexp_match (expr1, cases); _ } ->
-    let cases =
-      List.map cases ~f:(fun ({pc_rhs; _} as c) -> {c with pc_rhs=translate pc_rhs}) in
-     { expr with pexp_desc = Pexp_match (expr1, cases) }
+    let typs, cases =
+      List.unzip @@ List.map cases ~f:(fun ({pc_rhs; _} as c) ->
+        let typ, pc_rhs = translate pc_rhs in typ, {c with pc_rhs}) in
+    let typ = Option.value ~default:Unknown @@
+      List.find typs ~f:(Fn.non @@ equal_expr_type Unknown) in
+    typ, { expr with pexp_desc = Pexp_match (expr1, cases) }
 
-  | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
-     let bindings = List.map bindings
+  | { pexp_desc = Pexp_let (_recflag, _bindings, _body); _ } ->
+    (* TODO(80): to properly support local bindings, we need to collect the type environment. *)
+    Unknown,
+    Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
+      "ppx_ocannl %%nn_cd: for-to: local let-bindings not implemented yet"
+     (* let bindings = List.map bindings
          ~f:(fun binding -> {binding with pvb_expr=translate binding.pvb_expr}) in
-     {expr with pexp_desc=Pexp_let (recflag, bindings, translate body)}
+        {expr with pexp_desc=Pexp_let (recflag, bindings, translate body)} *)
 
   | { pexp_desc = Pexp_open (decl, body); _ } ->
-    {expr with pexp_desc=Pexp_open (decl, translate body)}
+    let typ, body = translate body in
+    typ, {expr with pexp_desc=Pexp_open (decl, body)}
 
   | { pexp_desc = Pexp_letmodule (name, module_expr, body); _ } ->
-    {expr with pexp_desc=Pexp_letmodule (name, module_expr, translate body)}
+    let typ, body = translate body in
+    typ, {expr with pexp_desc=Pexp_letmodule (name, module_expr, body)}
 
-  | expr ->
-    expr
+  | expr -> Unknown, expr
 
 let expr_expander ~loc ~path:_ payload =
   match payload with
   | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
     (* We are at the %ocannl annotation level: do not tranlsate the body. *)
      let bindings = List.map bindings
-      ~f:(fun vb -> {vb with pvb_expr=[%expr let open! DSL.O in [%e translate vb.pvb_expr]]}) in
+      ~f:(fun vb -> {
+             vb with pvb_expr=[%expr let open! DSL.O in [%e snd @@ translate vb.pvb_expr]]}) in
      {payload with pexp_desc=Pexp_let (recflag, bindings, body)}
-  | expr -> translate expr
+  | expr -> snd @@ translate expr
 
 let flatten_str ~loc ~path:_ items =
   match items with
@@ -120,11 +156,11 @@ let flatten_str ~loc ~path:_ items =
 let translate_str ({pstr_desc; _} as str) =
   match pstr_desc with
   | Pstr_eval (expr, attrs) ->
-    {str with pstr_desc=Pstr_eval (translate expr, attrs)}
+    {str with pstr_desc=Pstr_eval (snd @@ translate expr, attrs)}
   | Pstr_value (recf, bindings) ->
     let f vb =
       let loc = vb.pvb_loc in
-      {vb with pvb_expr=[%expr let open! DSL.O in [%e translate vb.pvb_expr]]} in
+      {vb with pvb_expr=[%expr let open! DSL.O in [%e snd @@ translate vb.pvb_expr]]} in
     {str with pstr_desc=Pstr_value (recf, List.map bindings ~f)}
   | _ -> str
      
