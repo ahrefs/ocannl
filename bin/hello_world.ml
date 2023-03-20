@@ -1,13 +1,13 @@
 open Base
 open Ocannl
-module DSL = Operation.DSL
+module DSL = Operation.FDSL
 
 let () = Session.DSL.set_executor `OCaml
 
 let hello1() =
   Session.drop_session();
   Random.init 0;
-  let open Operation.DSL in
+  let open Operation.FDSL in
   let open Session.DSL in
   (* Hey is inferred to be a matrix. *)
   let hey =

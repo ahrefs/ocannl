@@ -1,6 +1,6 @@
 open Base
 open Ocannl
-module DSL = Operation.DSL
+module DSL = Operation.FDSL
 
 let%nn_op y0 = 2 *. "hey1" + 3
 

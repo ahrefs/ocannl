@@ -1,11 +1,11 @@
 open Base
 open Ocannl
-module DSL = Operation.DSL
+module DSL = Operation.FDSL
 
 let test_executor = `OCaml
 
 let%expect_test "Micrograd README basic example" =
-  (* let open Operation.DSL in *)
+  (* let open Operation.FDSL in *)
   let open Session.DSL in
   drop_session();
   Random.init 0;

@@ -2,22 +2,22 @@
 
 open Base
 
-let v = Code.DSL.value_of_node
-let g = Code.DSL.grad_of_node
+module DSL = Code.DSL
+
+let v = DSL.value_of_node
+let g = DSL.grad_of_node
 let d n field: Code.data = {node_id=n.Ocannl_runtime.Node.id; field}
-let vi = Code.DSL.value_of_id
+let vi = DSL.value_of_id
 
 let add =
   let open Code in
-  let op_body ~n ~n1 ~n2 projections =
-    Accum_binop {zero_out=false; accum=Skip_arg; op=Add; lhs=v n; rhs1=v n1; rhs2=v n2; projections} in
+  let%nn_cd op_body ~n ~n1 ~n2 projections =
+    n =: n1 + n2 ~projections in
   let grad_body ~n ~n1 ~n2 ~needs1 ~needs2 projections =
-    let grad1 =
-      Accum_unop {zero_out=false; accum=Add; op=Identity; lhs=g n1; rhs=g n;
-                  projections=(fun () -> Shape.backprop1 @@ projections())} in
-    let grad2 =
-      Accum_unop {zero_out=false; accum=Add; op=Identity; lhs=g n2; rhs=g n;
-                  projections=(fun () -> Shape.backprop2 @@ projections())} in
+    let%nn_cd grad1 =
+      n1.grad =+ n.grad ~projections:(fun () -> Shape.backprop1 @@ projections()) in
+    let%nn_cd grad2 =
+      n2.grad =+ n.grad ~projections:(fun () -> Shape.backprop2 @@ projections()) in
     if needs1 && needs2 then ParHint (grad1, grad2)
     else if needs1 then grad1
     else if needs2 then grad2
@@ -27,15 +27,13 @@ let add =
 
 let mul compose_op =
   let open Code in
-  let op_body ~n ~n1 ~n2 projections =
-    Accum_binop {zero_out=false; accum=Skip_arg; op=Mul; lhs=v n; rhs1=v n1; rhs2=v n2; projections} in
+  let%nn_cd op_body ~n ~n1 ~n2 projections =
+    n =: n1 * n2 ~projections in
   let grad_body ~n ~n1 ~n2 ~needs1 ~needs2 projections =
-    let grad1 =
-      Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n1; rhs1=g n; rhs2=v n2;
-                   projections=(fun () -> Shape.backprop1 @@ projections())} in
-    let grad2 =
-      Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n2; rhs1=g n; rhs2=v n1;
-                      projections=(fun () -> Shape.backprop2 @@ projections())} in
+    let%nn_cd grad1 =
+      n1.grad =+ n.grad * n2 ~projections:(fun () -> Shape.backprop1 @@ projections()) in
+    let%nn_cd grad2 =
+      n2.grad =+ n.grad * n1 ~projections:(fun () -> Shape.backprop2 @@ projections()) in
     if needs1 && needs2 then ParHint (grad1, grad2)
     else if needs1 then grad1
     else if needs2 then grad2
@@ -62,16 +60,13 @@ let matmul = mul `Compose
     and the output axes. *)
 let einsum spec =
   let open Code in
-  let op_body ~n ~n1 ~n2 projections =
-    Accum_binop {zero_out=true; accum=Add; op=Mul; lhs=v n; rhs1=v n1; rhs2=v n2;
-                 projections} in
+  let%nn_cd op_body ~n ~n1 ~n2 projections =
+    n =+ n1 * n2 ~projections in
   let grad_body ~n ~n1 ~n2 ~needs1 ~needs2 projections =
-    let grad1 =
-      Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n1; rhs1=g n; rhs2=v n2;
-                      projections=(fun () -> Shape.backprop1 @@ projections())} in
-    let grad2 =
-      Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n2; rhs1=g n; rhs2=v n1;
-                      projections=(fun () -> Shape.backprop2 @@ projections())} in
+    let%nn_cd grad1 =
+      n1.grad =+ n.grad * n2 ~projections:(fun () -> Shape.backprop1 @@ projections()) in
+    let%nn_cd grad2 =
+      n2.grad =+ n.grad * n1 ~projections:(fun () -> Shape.backprop2 @@ projections()) in
     if needs1 && needs2 then ParHint (grad1, grad2)
     else if needs1 then grad1
     else if needs2 then grad2
@@ -85,28 +80,25 @@ let einsum spec =
     and the output axes. *)
 let einsum1 spec =
   let open Code in
-  let op_body ~n ~n1 projections =
-    Accum_unop {zero_out=true; accum=Add; op=Identity; lhs=v n; rhs=v n1; projections} in
-  let grad_body ~n ~n1 projections =
-    Accum_unop {zero_out=false; accum=Add; op=Identity; lhs=g n1; rhs=g n;
-                projections=(fun () -> Shape.backprop_unary @@ projections())} in
+  let%nn_cd op_body ~n ~n1 projections =
+    n =+ n1 ~projections in
+  let%nn_cd grad_body ~n ~n1 projections =
+    n1.grad =+ n.grad ~projections:(fun () -> Shape.backprop_unary @@ projections()) in
   Formula.unop ~transpose_op:(`Permute spec) ~op_label:"=>" ~op_body ~grad_body
 
 let relu =
   let open Code in
-  let op_body ~n ~n1 projections =
-    Accum_unop {zero_out=false; accum=Skip_arg; op=Relu; lhs=v n; rhs=v n1; projections} in
-  let grad_body ~n ~n1 projections =
-    Accum_binop {zero_out=false; accum=Add; op=Relu_gate; lhs=g n1; rhs1=v n; rhs2=g n;
-                 projections=(fun () -> Shape.backprop_unary @@ projections())} in
+  let%nn_cd op_body ~n ~n1 projections =
+    n =: !/ n1 ~projections in
+  let%nn_cd grad_body ~n ~n1 projections =
+    n1.grad =+ n -?/ n.grad ~projections:(fun () -> Shape.backprop_unary @@ projections()) in
   Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
 let rec pointpow ~is_form p m1: Formula.t =
   let open Code in
   let p_f = Formula.number ~is_form p in
-  let op_body ~n ~n1 ~n2 projections =
-    Accum_binop {zero_out=false; accum=Skip_arg; op=ToPowOf; lhs=v n;
-                 rhs1=v n1; rhs2=v n2; projections} in
+  let%nn_cd op_body ~n ~n1 ~n2 projections =
+    n =: n1 ** n2 ~projections in
   let grad_body =
     if not is_form then 
       fun ~n:_ ~n1:_ ~n2:_ ~needs1:_ ~needs2:_ _projections -> Noop
@@ -153,9 +145,8 @@ let given_dims_params ?(axis_labels="") ?(input_dims=[]) ?(output_dims=[]) label
   Formula.term ~is_form:true ~label (Params {input_dims; output_dims; axis_labels})
     ~init_op:(`Fixed_constant values)
 
-let assign ~lhs ~rhs projections =
-  let open Code in
-  Accum_unop {zero_out=false; accum=Skip_arg; op=Identity; lhs; rhs; projections}
+let%nn_cd assign ~lhs ~rhs projections =
+  lhs =: rhs ~projections
 
 let assign_op field ~n ~n1 projections = assign ~lhs:(field n) ~rhs:(field n1) projections
 
@@ -190,7 +181,7 @@ module O = struct
   let (/.) m1 m2 = m1 *. m2 **. (-1.0)
 end
       
-module DSL = struct
+module FDSL = struct
   include Formula.DSL
   module O = O
   let einsum s = einsum s ~is_form:true

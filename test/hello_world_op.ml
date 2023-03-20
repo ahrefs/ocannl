@@ -1,7 +1,7 @@
 open Base
 open Ocannl
 
-module DSL = Operation.DSL
+module DSL = Operation.FDSL
 let test_executor = `OCaml
 
 let%expect_test "Hello World" =

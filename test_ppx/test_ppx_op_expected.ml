@@ -1,6 +1,6 @@
 open Base
 open Ocannl
-module DSL = Operation.DSL
+module DSL = Operation.FDSL
 let y0 =
   let open! DSL.O in
     let hey1 = DSL.unconstrained_param ?init:None "hey1" in

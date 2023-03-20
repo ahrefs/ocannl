@@ -50,7 +50,7 @@ let binary_op expr =
 let unary_op expr =
   let loc = expr.pexp_loc in
   match expr with
-  | [%expr (=)] -> [%expr Code.Identity]
+  | [%expr (~=)] -> [%expr Code.Identity]
   | [%expr (!/)] -> [%expr Code.Relu]
   | _ ->
     Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
@@ -80,6 +80,11 @@ let rec translate expr =
   | { pexp_desc = Pexp_tuple _; _ } | { pexp_desc = Pexp_array _; _ } 
   | { pexp_desc = Pexp_construct ({txt=Lident "::"; _}, _); _ } ->
     Formula, ndarray_op expr
+
+  | { pexp_desc = Pexp_ident {txt=Lident "n"; _}; _ }
+  | { pexp_desc = Pexp_ident {txt=Lident "n1"; _}; _ }
+  | { pexp_desc = Pexp_ident {txt=Lident "n2"; _}; _ } ->
+    Node, expr
 
   | [%expr [%e? expr1] **.
       [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
@@ -116,9 +121,21 @@ let rec translate expr =
   | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections])) ] ->
     let accu_op = assignment_op accu_op in
     let lhs_typ, lhs = translate lhs in
+    let lhs = match lhs_typ with
+      | Formula -> [%expr DSL.value_of_id [%e lhs].node_id]
+      | Node -> [%expr DSL.value_of_node [%e lhs]]
+      | _ -> lhs in
     let bin_op = binary_op bin_op in
     let rhs1_typ, rhs1 = translate rhs1 in
+    let rhs1 = match rhs1_typ with
+      | Formula -> [%expr DSL.value_of_id [%e rhs1].node_id]
+      | Node -> [%expr DSL.value_of_node [%e rhs1]]
+      | _ -> rhs1 in
     let rhs2_typ, rhs2 = translate rhs2 in
+    let rhs2 = match rhs2_typ with
+      | Formula -> [%expr DSL.value_of_id [%e rhs2].node_id]
+      | Node -> [%expr DSL.value_of_node [%e rhs2]]
+      | _ -> rhs2 in
     let guess_zero_out =
       if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs1_typ; rhs2_typ]
       then [%expr false] else [%expr true] in
@@ -127,19 +144,49 @@ let rec translate expr =
       op=[%e bin_op]; rhs1=[%e rhs1]; rhs2=[%e rhs2]; projections=[%e projections]}
     ]
 
-    | [%expr [%e? accu_op] [%e? lhs] ([%e? un_op] ([%e? rhs] ~projections:[%e? projections])) ] ->
-      let accu_op = assignment_op accu_op in
-      let lhs_typ, lhs = translate lhs in
-      let un_op = unary_op un_op in
-      let rhs_typ, rhs = translate rhs in
-      let guess_zero_out =
-        if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs_typ]
-        then [%expr false] else [%expr true] in
-      Code, [%expr Code.Accum_unop {
+  | [%expr [%e? accu_op] [%e? lhs] (([%e? un_op] [%e? rhs]) ~projections:[%e? projections]) ]
+  | [%expr [%e? accu_op] [%e? lhs] ([%e? un_op] ([%e? rhs] ~projections:[%e? projections])) ] ->
+      (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
+    let accu_op = assignment_op accu_op in
+    let lhs_typ, lhs = translate lhs in
+    let lhs = match lhs_typ with
+      | Formula -> [%expr DSL.value_of_id [%e lhs].node_id]
+      | Node -> [%expr DSL.value_of_node [%e lhs]]
+      | _ -> lhs in
+    let un_op = unary_op un_op in
+    let rhs_typ, rhs = translate rhs in
+    let rhs = match rhs_typ with
+      | Formula -> [%expr DSL.value_of_id [%e rhs].node_id]
+      | Node -> [%expr DSL.value_of_node [%e rhs]]
+      | _ -> rhs in
+    let guess_zero_out =
+      if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs_typ]
+      then [%expr false] else [%expr true] in
+    Code, [%expr Code.Accum_unop {
         zero_out=[%e guess_zero_out]; accum=[%e accu_op]; lhs=[%e lhs];
         op=[%e un_op]; rhs=[%e rhs]; projections=[%e projections]}
-      ]
-  
+    ]
+
+  | [%expr [%e? accu_op] [%e? lhs] ([%e? rhs] ~projections:[%e? projections]) ] ->
+    let accu_op = assignment_op accu_op in
+    let lhs_typ, lhs = translate lhs in
+    let lhs = match lhs_typ with
+      | Formula -> [%expr DSL.value_of_id [%e lhs].node_id]
+      | Node -> [%expr DSL.value_of_node [%e lhs]]
+      | _ -> lhs in
+    let rhs_typ, rhs = translate rhs in
+    let rhs = match rhs_typ with
+      | Formula -> [%expr DSL.value_of_id [%e rhs].node_id]
+      | Node -> [%expr DSL.value_of_node [%e rhs]]
+      | _ -> rhs in
+    let guess_zero_out =
+      if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs_typ]
+      then [%expr false] else [%expr true] in
+    Code, [%expr Code.Accum_unop {
+        zero_out=[%e guess_zero_out]; accum=[%e accu_op]; lhs=[%e lhs];
+        op=Code.Identity; rhs=[%e rhs]; projections=[%e projections]}
+    ]
+
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3] ] ->
     let typ1, expr1 = translate expr1 in
     let _typ2, expr2 = translate expr2 in
@@ -214,7 +261,7 @@ let rec translate expr =
     let typ, body = translate body in
     typ, {expr with pexp_desc=Pexp_letmodule (name, module_expr, body)}
 
-  | expr -> Unknown, expr
+  | _ -> Unknown, expr
 
 let expr_expander ~loc ~path:_ payload =
   match payload with
