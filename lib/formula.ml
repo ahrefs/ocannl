@@ -158,10 +158,13 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body ~is_form m1 m2 
     (* The code needs to be included in the reverse order to which it was computed! This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
+    let grad_body = if needs_gradient then grad_body ~n ~n1 ~n2 projections else Noop in
     let grad_body =
-      if needs_gradient then
-        grad_body ~n ~n1 ~n2 ~needs1:form1.needs_gradient ~needs2:form2.needs_gradient projections
-      else Noop in
+      if form1.needs_gradient then grad_body
+      else Code.remove_updates {node_id=m1.node_id; field=`Grad} grad_body in
+    let grad_body =
+      if form2.needs_gradient then grad_body
+      else Code.remove_updates {node_id=m2.node_id; field=`Grad} grad_body in
     let backprop_body =
       match m1_no_grad, form1.backprop_body, m2_no_grad, form2.backprop_body with
       | true, _, true, _ | true, _, _, Noop | _, Noop, true, _ | _, Noop, _, Noop -> grad_body
@@ -227,6 +230,9 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m: t =
       session_prepare_step := reset_zeros ~node_id `Grad shape :: !session_prepare_step;
     let grad_body =
       if needs_gradient then grad_body ~n ~n1 projections else Noop in
+    let grad_body =
+      if form1.needs_gradient then grad_body
+      else Code.remove_updates {node_id=m.node_id; field=`Grad} grad_body in
     (* The code needs to be included in the reverse order to which it was computed! *)
     let backprop_body =
       match m_no_grad, form1.backprop_body with

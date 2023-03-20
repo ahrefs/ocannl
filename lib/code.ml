@@ -4,10 +4,10 @@ open Base
 (** *** High-level representation. *** *)
 
 type data = {node_id: int; field: [`Value | `Grad]}
-[@@deriving sexp]
+[@@deriving sexp, equal]
 
 type routine = {node_id: int; field: [`Forward | `Backprop]}
-[@@deriving sexp]
+[@@deriving sexp, equal]
 
 type binop =
   | Skip_arg
@@ -74,6 +74,24 @@ type program =
   | Initialization of t
   | Session_prepare_step of t
 [@@deriving sexp]
+
+let remove_updates data c =
+  let rec rm check = function
+    | ( Par ((Accum_binop {lhs; _} | Accum_unop {lhs; _}), t)
+      | ParHint ((Accum_binop {lhs; _} | Accum_unop {lhs; _}), t)
+      | Seq ((Accum_binop {lhs; _} | Accum_unop {lhs; _}), t)
+      | Par (t, (Accum_binop {lhs; _} | Accum_unop {lhs; _}))
+      | ParHint (t, (Accum_binop {lhs; _} | Accum_unop {lhs; _}))
+      | Seq (t, (Accum_binop {lhs; _} | Accum_unop {lhs; _}))) as c when check ->
+        if equal_data data lhs then rm true t else rm false c
+    | Par (t1, t2) -> Par (rm true t1, rm true t2)
+    | ParHint (t1, t2) -> ParHint (rm true t1, rm true t2)
+    | Seq (t1, t2) -> Seq (rm true t1, rm true t2)
+    | (Accum_binop {lhs; _} | Accum_unop {lhs; _}) when equal_data data lhs -> Noop
+    | c -> c in
+  rm true c
+
+
 
 (** *** Low-level representation. *)
 

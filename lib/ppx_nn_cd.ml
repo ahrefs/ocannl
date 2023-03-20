@@ -86,6 +86,14 @@ let rec translate expr =
   | { pexp_desc = Pexp_ident {txt=Lident "n2"; _}; _ } ->
     Node, expr
 
+  | [%expr [%e? expr1] || [%e? expr2] ] ->
+    (* Check this before the generic application pattern. *)
+    let typ1, expr1 = translate expr1 in
+    let expr1 = match typ1 with Formula -> [%expr [%e expr1].forward_body] | _ -> expr1 in
+    let typ2, expr2 = translate expr2 in
+    let expr2 = match typ2 with Formula -> [%expr [%e expr2].forward_body] | _ -> expr2 in
+    Code, [%expr Code.ParHint ([%e expr1], [%e expr2])]
+
   | [%expr [%e? expr1] **.
       [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
     (* If converting code or a node to a formula was possible we would do it here.

@@ -13,31 +13,18 @@ let add =
   let open Code in
   let%nn_cd op_body ~n ~n1 ~n2 projections =
     n =: n1 + n2 ~projections in
-  let grad_body ~n ~n1 ~n2 ~needs1 ~needs2 projections =
-    let%nn_cd grad1 =
-      n1.grad =+ n.grad ~projections:(fun () -> Shape.backprop1 @@ projections()) in
-    let%nn_cd grad2 =
-      n2.grad =+ n.grad ~projections:(fun () -> Shape.backprop2 @@ projections()) in
-    if needs1 && needs2 then ParHint (grad1, grad2)
-    else if needs1 then grad1
-    else if needs2 then grad2
-    (* [Formula] will not invoke [grad_body] if it does not need at least one gradient. *)
-    else assert false in
+  let%nn_cd grad_body ~n ~n1 ~n2 projections =
+    n1.grad =+ n.grad ~projections:(fun () -> Shape.backprop1 @@ projections()) ||
+    n2.grad =+ n.grad ~projections:(fun () -> Shape.backprop2 @@ projections()) in
   Formula.binop ~compose_op:`Pointwise ~op_label:"+" ~op_body ~grad_body
 
 let mul compose_op =
   let open Code in
   let%nn_cd op_body ~n ~n1 ~n2 projections =
     n =: n1 * n2 ~projections in
-  let grad_body ~n ~n1 ~n2 ~needs1 ~needs2 projections =
-    let%nn_cd grad1 =
-      n1.grad =+ n.grad * n2 ~projections:(fun () -> Shape.backprop1 @@ projections()) in
-    let%nn_cd grad2 =
-      n2.grad =+ n.grad * n1 ~projections:(fun () -> Shape.backprop2 @@ projections()) in
-    if needs1 && needs2 then ParHint (grad1, grad2)
-    else if needs1 then grad1
-    else if needs2 then grad2
-    else assert false in
+  let%nn_cd grad_body ~n ~n1 ~n2 projections =
+    n1.grad =+ n.grad * n2 ~projections:(fun () -> Shape.backprop1 @@ projections()) ||
+    n2.grad =+ n.grad * n1 ~projections:(fun () -> Shape.backprop2 @@ projections()) in
   Formula.binop ~compose_op 
     ~op_label:(if Shape.equal_compose_type compose_op `Pointwise then "*." else "*")
     ~op_body ~grad_body
@@ -62,15 +49,9 @@ let einsum spec =
   let open Code in
   let%nn_cd op_body ~n ~n1 ~n2 projections =
     n =+ n1 * n2 ~projections in
-  let grad_body ~n ~n1 ~n2 ~needs1 ~needs2 projections =
-    let%nn_cd grad1 =
-      n1.grad =+ n.grad * n2 ~projections:(fun () -> Shape.backprop1 @@ projections()) in
-    let%nn_cd grad2 =
-      n2.grad =+ n.grad * n1 ~projections:(fun () -> Shape.backprop2 @@ projections()) in
-    if needs1 && needs2 then ParHint (grad1, grad2)
-    else if needs1 then grad1
-    else if needs2 then grad2
-    else assert false in
+  let%nn_cd grad_body ~n ~n1 ~n2 projections =
+    n1.grad =+ n.grad * n2 ~projections:(fun () -> Shape.backprop1 @@ projections()) ||
+    n2.grad =+ n.grad * n1 ~projections:(fun () -> Shape.backprop2 @@ projections()) in
   Formula.binop ~compose_op:(`Einsum spec) ~op_label:";=>" ~op_body ~grad_body
 
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract diagonals,
@@ -101,12 +82,10 @@ let rec pointpow ~is_form p m1: Formula.t =
     n =: n1 ** n2 ~projections in
   let grad_body =
     if not is_form then 
-      fun ~n:_ ~n1:_ ~n2:_ ~needs1:_ ~needs2:_ _projections -> Noop
+      fun ~n:_ ~n1:_ ~n2:_ _projections -> Noop
     else if Float.equal p 2.0 then
       let grad_f = pointmul ~is_form:false p_f m1 in
-      fun ~n ~n1 ~n2:_ ~needs1 ~needs2 projections ->
-        (* [Formula] will not invoke [grad_body] if it does not need at least one gradient. *)
-        assert (needs1 && not needs2);
+      fun ~n ~n1 ~n2:_ projections ->
         Seq (
           grad_f.forward_body,
           Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n1; rhs1=vi grad_f.node_id; rhs2=g n;
@@ -114,8 +93,7 @@ let rec pointpow ~is_form p m1: Formula.t =
     else
       let grad_powf = pointpow ~is_form:false (p -. 1.) m1 in
       let grad_f = pointmul ~is_form:false p_f grad_powf in
-      fun ~n ~n1 ~n2:_ ~needs1 ~needs2 projections ->
-        assert (needs1 && not needs2);
+      fun ~n ~n1 ~n2:_ projections ->
         Seq (grad_f.forward_body,
              Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n1; rhs1=vi grad_f.node_id; rhs2=g n;
                      projections=(fun () -> Shape.backprop_unary @@ projections())}) in
