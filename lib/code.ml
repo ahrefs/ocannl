@@ -196,21 +196,7 @@ let unoptimized_program prog: unit low_level =
     Lines [|Comment label; Assign_routine (routine, unoptimized procedure)|]
   | Session_prepare_step proc -> Assign_session_prepare_step (unoptimized proc)
 
-module O = struct
-  let (||) a b = Par (a, b)
-  let (|?) a b = ParHint (a, b)
-  let (=+) lhs rhs1 op rhs2 ~projections = Accum_binop {
-    zero_out=false;
-    accum=Add; op; lhs; rhs1; rhs2;
-    projections }
-  let (=:) lhs rhs1 op rhs2 ~projections = Accum_binop {
-    zero_out=false;
-    accum=Skip_arg; op; lhs; rhs1; rhs2;
-    projections }
-end
-
 module DSL = struct
-  module O = O
   let value_of_node n: data = {node_id=n.Ocannl_runtime.Node.id; field=`Value}
   let grad_of_node n: data = {node_id=n.Ocannl_runtime.Node.id; field=`Grad}
   let value_of_id node_id: data = {node_id; field=`Value}
