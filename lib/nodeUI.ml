@@ -84,7 +84,9 @@ let node_header n =
   let dims_s =
     if String.equal v_dims_s g_dims_s then "dims "^v_dims_s
     else "dims val "^v_dims_s^" grad "^g_dims_s in
-  "#"^Int.to_string n.id^" op "^n.op_label^" "^dims_s 
+  "#"^Int.to_string n.id^" op "^n.op_label^" "^dims_s^" ["^
+  String.concat ~sep:"," (List.map n.children ~f:(fun {sub_node_id=i; _} -> Int.to_string i))^
+  "]"
   (*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box n.label)*)
 
 (** When rendering tensors, outputs this many decimal digits. *)
