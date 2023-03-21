@@ -1,13 +1,13 @@
 (library
  (name ocannl_runtime)
- (libraries base stdio minidebug_runtime)
+ (libraries base stdio ppx_minidebug.runtime)
  (preprocess (pps ppx_jane ppx_minidebug))
  (modules node)
  (modes byte native))
 
 (library
  (name ocannl)
- (libraries base core printbox printbox-text stdio dynlink str ocannl_runtime minidebug_runtime)
+ (libraries base core printbox printbox-text stdio dynlink str ocannl_runtime ppx_minidebug.runtime)
  (preprocess (pps ppx_jane ppx_ocannl ppx_minidebug))
  (modules PrintBox_utils nodeUI shape code formula operation session exec_as_OCaml)
  (modes byte native))
