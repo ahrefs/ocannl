@@ -88,10 +88,8 @@ let rec translate expr =
 
   | [%expr [%e? expr1] || [%e? expr2] ] ->
     (* Check this before the generic application pattern. *)
-    let typ1, expr1 = translate expr1 in
-    let expr1 = match typ1 with Formula -> [%expr [%e expr1].forward_body] | _ -> expr1 in
-    let typ2, expr2 = translate expr2 in
-    let expr2 = match typ2 with Formula -> [%expr [%e expr2].forward_body] | _ -> expr2 in
+    let _typ1, expr1 = translate expr1 in
+    let _typ2, expr2 = translate expr2 in
     Code, [%expr Code.ParHint ([%e expr1], [%e expr2])]
 
   | [%expr [%e? expr1] **.
@@ -226,10 +224,8 @@ let rec translate expr =
       "ppx_ocannl %%nn_cd: for-downto: low-level code embeddings not supported yet"
 
   | [%expr [%e? expr1] ; [%e? expr2] ] ->
-    let typ1, expr1 = translate expr1 in
-    let expr1 = match typ1 with Formula -> [%expr [%e expr1].forward_body] | _ -> expr1 in
-    let typ2, expr2 = translate expr2 in
-    let expr2 = match typ2 with Formula -> [%expr [%e expr2].forward_body] | _ -> expr2 in
+    let _typ1, expr1 = translate expr1 in
+    let _typ2, expr2 = translate expr2 in
     Code, [%expr Code.Seq ([%e expr1], [%e expr2])]
 
   | [%expr if [%e? expr1] then [%e? expr2] else [%e? expr3]] ->
