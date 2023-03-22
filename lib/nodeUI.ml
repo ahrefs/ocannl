@@ -63,6 +63,12 @@ let create_of_promoted_precision ~is_form (n1: Node.t) (n2: Node.t) =
   Node.ndarray_precision_to_string n1.value^", n2 value: "^
   Node.ndarray_precision_to_string n2.value
 
+let param_nodes ?(from_id=0) () =
+  Hashtbl.filter Node.global.node_store ~f:(
+    fun n -> n.id >= from_id && Option.is_some n.form && List.is_empty n.children)
+
+(* *** Printing *** *)
+
 (** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
     Outputs ["-"] for empty dimensions. *)
 let dims_to_string ?(with_axis_numbers=false) dims =

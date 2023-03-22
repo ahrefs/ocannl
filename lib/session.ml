@@ -317,12 +317,15 @@ let close_session() =
   Formula.session_initialized := 0;
   Formula.session_prepare_step := []
 
+let session_params() = NodeUI.param_nodes ~from_id:!Formula.first_session_id ()
+
       
 module SDSL = struct
   let set_executor = set_executor
   let refresh_session = refresh_session
   let drop_session = drop_session
   let close_session = close_session
+  let session_params = session_params
   let print_global_root = print_global_root
   let print_node_tree ?entries_per_axis ?with_value ~with_grad ~depth id =
     PrintBox_text.output Stdio.stdout @@
