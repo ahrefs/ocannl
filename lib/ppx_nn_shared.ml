@@ -14,16 +14,6 @@ let rec pat2expr pat =
      Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
        "ppx_ocannl requires a pattern identifier here: try using an `as` alias."
 
-let rec pat2pat_ref pat =
-  let loc = pat.ppat_loc in
-  match pat.ppat_desc with
-  | Ppat_constraint (pat', _) -> pat2pat_ref pat'
-  | Ppat_alias (_, ident)
-  | Ppat_var ident -> Ast_builder.Default.ppat_var ~loc {ident with txt = ident.txt ^ "__ref"}
-  | _ ->
-    Ast_builder.Default.ppat_extension ~loc @@ Location.error_extensionf ~loc
-      "ppx_ocannl requires a pattern identifier here: try using an `as` alias."
-
 let rec collect_list accu = function
   | [%expr [%e? hd] :: [%e? tl]] -> collect_list (hd::accu) tl
   | [%expr []] -> List.rev accu
