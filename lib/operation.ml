@@ -103,10 +103,10 @@ let rec pointpow ~is_form p m1: Formula.t =
       fun ~n:_ ~n1:_ ~n2:_ _projections -> Noop
     else if Float.equal p 2.0 then
       fun ~n ~n1 ~n2:_ projections ->
-        n1.grad =+ (p_f *. m1) * n.grad ~projections:(fun () -> Shape.backprop_unary @@ projections())
+        n1.grad =+ p_f *. m1 * n.grad ~projections:(fun () -> Shape.backprop_unary @@ projections())
     else
       fun ~n ~n1 ~n2:_ projections ->
-        n1.grad =+ (p_f *. (m1 **. (p -. 1.))) * n.grad
+        n1.grad =+ (p_f *. m1 **. (p -. 1.)) * n.grad
                 ~projections:(fun () -> Shape.backprop_unary @@ projections()) in
   Formula.binop ~compose_op:`Pointwise ~op_label:"**." ~op_body ~grad_body ~is_form m1 p_f
 
