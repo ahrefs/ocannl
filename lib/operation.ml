@@ -2,12 +2,12 @@
 
 open Base
 
-module DSL = Code.DSL
+module CDSL = Code.CDSL
 
-let v = DSL.value_of_node
-let g = DSL.grad_of_node
+let v = CDSL.value_of_node
+let g = CDSL.grad_of_node
 let d n field: Code.data = {node_id=n.Ocannl_runtime.Node.id; field}
-let vi = DSL.value_of_id
+let vi = CDSL.value_of_id
 
 let add =
   let open Code in
@@ -160,7 +160,7 @@ module O = struct
 end
       
 module FDSL = struct
-  include Formula.DSL
+  include Formula.FDSL
   module O = O
   let einsum s = einsum s ~is_form:true
   let einsum1 s = einsum1 s ~is_form:true

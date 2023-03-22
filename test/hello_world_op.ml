@@ -1,7 +1,7 @@
 open Base
 open Ocannl
 
-module DSL = Operation.FDSL
+module FDSL = Operation.FDSL
 let test_executor = `OCaml
 
 let%expect_test "Hello World" =
@@ -9,7 +9,7 @@ let%expect_test "Hello World" =
   [%expect {| Hello World! |}]
 
 let%expect_test "op:Pointwise multiplication dims 1" =
-  let open Session.DSL in
+  let open Session.SDSL in
   drop_session();
   Random.init 0;
   set_executor test_executor;
@@ -29,7 +29,7 @@ let%expect_test "op:Pointwise multiplication dims 1" =
     └───────────────┘ |}]
 
 let%expect_test "op:Matrix multiplication dims 1x1" =
-  let open Session.DSL in
+  let open Session.SDSL in
   drop_session();
   Random.init 0;
   set_executor test_executor;
@@ -61,7 +61,7 @@ let%expect_test "op:Matrix multiplication dims 1x1" =
 let%expect_test "op:Print constant tensor" =
   Session.drop_session();
   Random.init 0;
-  let open Session.DSL in
+  let open Session.SDSL in
   let%nn_op hey = [1, 2, 3; 4, 5, 6] in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Inline @@ hey;
@@ -302,7 +302,7 @@ let%expect_test "op:Print constant tensor" =
     └──────────────────────────────────────────────┘ |}]
 
 let%expect_test "op:Matrix multiplication dims 2x3" =
-  let open Session.DSL in
+  let open Session.SDSL in
   drop_session();
   Random.init 0;
   set_executor test_executor;
@@ -334,14 +334,14 @@ let%expect_test "op:Matrix multiplication dims 2x3" =
     └──────────────────────────────┘ |}]
 
 let%expect_test "Big matrix" =
-  let open Session.DSL in
+  let open Session.SDSL in
   drop_session();
   Random.init 0;
   set_executor test_executor;
   (* Hey is inferred to be a matrix. *)
-  let hey = DSL.O.(!~ "hey") in
-  let zero_to_twenty = DSL.range 20 in
-  let y = DSL.O.(hey * zero_to_twenty + zero_to_twenty) in
+  let hey = FDSL.O.(!~ "hey") in
+  let zero_to_twenty = FDSL.range 20 in
+  let y = FDSL.O.(hey * zero_to_twenty + zero_to_twenty) in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Inline zero_to_twenty;
   [%expect {|
@@ -384,13 +384,13 @@ let%expect_test "Big matrix" =
       └────────────────────────────────────────────┘ |}]
 
 let%expect_test "op:Very big tensor" =
-    let open Session.DSL in
+    let open Session.SDSL in
     drop_session();
     Random.init 0;
     set_executor test_executor;
     (* Hey is inferred to be a matrix. *)
     let hey =
-      DSL.range_of_shape ~batch_dims:[6] ~input_dims:[7; 8; 9] ~output_dims:[10; 11] () in
+      FDSL.range_of_shape ~batch_dims:[6] ~input_dims:[7; 8; 9] ~output_dims:[10; 11] () in
     let%nn_op hoo = hey * (1 + 1) - 10 in
     refresh_session ();
     print_formula ~with_code:false ~with_grad:false `Default hey;

@@ -91,6 +91,7 @@ let remove_updates data c =
     | c -> c in
   rm true c
 
+let all_parallel = List.fold ~init:Noop ~f:(fun sts st -> Par (st, sts))
 
 
 (** *** Low-level representation. *)
@@ -120,8 +121,6 @@ type _ low_level =
 let data_pointer (xhs: data) =
   match xhs.field with
   | `Value -> Value_at_node_id xhs.node_id | `Grad -> Gradient_at_node_id xhs.node_id
-
-let all_parallel = List.fold ~init:Noop ~f:(fun sts st -> Par (st, sts))
 
 let rec unoptimized (code: t): unit low_level =
   match code with
@@ -196,7 +195,7 @@ let unoptimized_program prog: unit low_level =
     Lines [|Comment label; Assign_routine (routine, unoptimized procedure)|]
   | Session_prepare_step proc -> Assign_session_prepare_step (unoptimized proc)
 
-module DSL = struct
+module CDSL = struct
   let value_of_node n: data = {node_id=n.Ocannl_runtime.Node.id; field=`Value}
   let grad_of_node n: data = {node_id=n.Ocannl_runtime.Node.id; field=`Grad}
   let value_of_id node_id: data = {node_id; field=`Value}

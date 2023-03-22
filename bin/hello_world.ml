@@ -1,14 +1,14 @@
 open Base
 open Ocannl
-module DSL = Operation.FDSL
+module FDSL = Operation.FDSL
 
-let () = Session.DSL.set_executor `OCaml
+let () = Session.SDSL.set_executor `OCaml
 
 let hello1() =
   Session.drop_session();
   Random.init 0;
   let open Operation.FDSL in
-  let open Session.DSL in
+  let open Session.SDSL in
   (* Hey is inferred to be a matrix. *)
   let hey =
     range_of_shape ~batch_dims:[7] ~input_dims:[9; 10; 11] ~output_dims:[13; 14] () in
@@ -19,7 +19,7 @@ let hello1() =
   (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
 
 let hello2() =
-  let open Session.DSL in
+  let open Session.SDSL in
   drop_session();
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
@@ -31,13 +31,13 @@ let hello2() =
   print_formula ~with_code:false ~with_grad:false `Default @@ y
 
 let hello3() =
-  let open Session.DSL in
+  let open Session.SDSL in
   drop_session();
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
-  let hey = DSL.O.(!~ "hey") in
-  let zero_to_twenty = DSL.range 20 in
-  let _y = DSL.O.(hey * zero_to_twenty + zero_to_twenty) in
+  let hey = FDSL.O.(!~ "hey") in
+  let zero_to_twenty = FDSL.range 20 in
+  let _y = FDSL.O.(hey * zero_to_twenty + zero_to_twenty) in
   refresh_session ();
   print_preamble();
   print_session_code();

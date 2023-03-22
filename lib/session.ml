@@ -318,7 +318,7 @@ let close_session() =
   Formula.session_prepare_step := []
 
       
-module DSL = struct
+module SDSL = struct
   let set_executor = set_executor
   let refresh_session = refresh_session
   let drop_session = drop_session

@@ -1,12 +1,12 @@
 open Base
 open Ocannl
-module DSL = Operation.FDSL
+module FDSL = Operation.FDSL
 
 let test_executor = `OCaml
 
 let%expect_test "Micrograd README basic example" =
   (* let open Operation.FDSL in *)
-  let open Session.DSL in
+  let open Session.SDSL in
   drop_session();
   Random.init 0;
   set_executor test_executor;
@@ -27,7 +27,7 @@ let%expect_test "Micrograd README basic example" =
   print_formula ~with_code:false ~with_grad:false `Default @@ g;
   [%expect {|
     ┌────────────────┐
-    │[52]: shape 0:1 │
+    │[49]: shape 0:1 │
     │┌┬─────────┐    │
     │││axis 0   │    │
     │├┼─────────┼─── │
