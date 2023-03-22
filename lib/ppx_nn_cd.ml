@@ -19,7 +19,7 @@ let ndarray_op ?axis_labels ?label expr =
     [%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
       ~output_dims:[%e edims output_dims] [%e values]]
 
-type expr_type = Code | Formula | Node | Data | Data_grad | Operator | Unknown [@@deriving equal]
+type expr_type = Code | Formula_nf | Node | Data | Data_grad | Operator | Unknown [@@deriving equal]
 
 let assignment_op expr =
   let loc = expr.pexp_loc in
@@ -56,35 +56,59 @@ let unary_op expr =
     Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
       "ppx_ocannl %%nn_cd: expected a unary operator, one of: = (Identity), !/ (Relu)"
 
-let rec translate expr =
+let alphanum_regexp = Str.regexp "^[^a-zA-Z0-9]+$"
+let is_operator ident = Str.string_match alphanum_regexp ident 0
+      
+let setup_data hs_pat (hs_typ, hs) =
+  let loc = hs.pexp_loc in
+  match hs_typ with
+  | Formula_nf ->
+    Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].forward_body]),
+    hs_typ, [%expr CDSL.value_of_id [%e pat2expr hs_pat].node_id]
+  | Node -> None, hs_typ, [%expr CDSL.value_of_node [%e hs]]
+  | _ -> None, hs_typ, hs
+
+let with_forward_args setups body =
+  let loc = body.pexp_loc in
+  let bindings = List.map setups ~f:(fun (pat, v, _) -> Ast_helper.Vb.mk ~loc pat v) in
+  let forward_args =
+    List.map setups ~f:(fun (_, _, fwd) -> fwd) |>
+    List.reduce ~f:(fun code fwd -> [%expr Code.Par ([%e code], [%e fwd])]) in
+  Code, (match forward_args with
+      | None -> body
+      | Some fwd ->
+        Ast_helper.Exp.let_ ~loc Nonrecursive bindings [%expr Code.Seq([%e fwd], [%e body])])
+
+let rec translate (expr: expression): expr_type * expression =
   let loc = expr.pexp_loc in
   match expr with
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
-    Formula, [%expr Formula.NFDSL.number [%e expr]]
+    Formula_nf, [%expr Formula.NFDSL.number [%e expr]]
 
   | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
-    Formula, [%expr Formula.NFDSL.number (Float.of_int [%e expr])]
+    Formula_nf, [%expr Formula.NFDSL.number (Float.of_int [%e expr])]
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
       [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
     let axis = Ast_helper.Exp.constant ~loc:pexp_loc
         (Pconst_string (String.of_char ch, pexp_loc, None)) in
-    Formula, [%expr Formula.NFDSL.number ~axis_label:[%e axis] [%e f]]
+    Formula_nf, [%expr Formula.NFDSL.number ~axis_label:[%e axis] [%e f]]
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
       [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
         let axis = Ast_helper.Exp.constant ~loc:pexp_loc
         (Pconst_string (String.of_char ch, pexp_loc, None)) in
-    Formula, [%expr Formula.NFDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])]
+    Formula_nf, [%expr Formula.NFDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])]
 
   | { pexp_desc = Pexp_tuple _; _ } | { pexp_desc = Pexp_array _; _ } 
   | { pexp_desc = Pexp_construct ({txt=Lident "::"; _}, _); _ } ->
-    Formula, ndarray_op expr
+    Formula_nf, ndarray_op expr
 
-  | { pexp_desc = Pexp_ident {txt=Lident "n"; _}; _ }
-  | { pexp_desc = Pexp_ident {txt=Lident "n1"; _}; _ }
-  | { pexp_desc = Pexp_ident {txt=Lident "n2"; _}; _ } ->
+  | { pexp_desc = Pexp_ident {txt=Lident ("n" | "n1" | "n2"); _}; _ } ->
     Node, expr
+
+  | { pexp_desc = Pexp_ident {txt=Lident op_ident; _}; _ } when is_operator op_ident ->
+    Formula_nf, expr
 
   | [%expr [%e? expr1] || [%e? expr2] ] ->
     (* Check this before the generic application pattern. *)
@@ -92,23 +116,17 @@ let rec translate expr =
     let _typ2, expr2 = translate expr2 in
     Code, [%expr Code.ParHint ([%e expr1], [%e expr2])]
 
-  | [%expr [%e? expr1] **.
-      [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
+  | [%expr [%e? expr1] **. [%e? expr2]] ->
     (* If converting code or a node to a formula was possible we would do it here.
        Since it's not, we let OCaml handle the type errors. Same further below. *)
     let _typ1, expr1 = translate expr1 in
-    Formula, [%expr pointpow ~is_form [%e expr1] [%e f]]
-
-  | [%expr [%e? expr1] **.
-      [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
-    let _typ1, expr1 = translate expr1 in
-    Formula, [%expr pointpow ~is_form [%e expr1] (Float.of_int [%e i])]
+    Formula_nf, [%expr pointpow ~is_form:false [%e expr2] [%e expr1]]
 
   | [%expr [%e? expr1].value ] ->
     let typ1, expr1 = translate expr1 in
     let expr1 = match typ1 with
-    | Formula -> [%expr DSL.value_of_id [%e expr1].node_id]
-    | Node -> [%expr DSL.value_of_node [%e expr1]]
+    | Formula_nf -> [%expr CDSL.value_of_id [%e expr1].node_id]
+    | Node -> [%expr CDSL.value_of_node [%e expr1]]
     | _ ->
       Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
         "ppx_ocannl %%nn_cd: the x.value syntax requires x to be a Node or a Formula" in
@@ -117,8 +135,8 @@ let rec translate expr =
   | [%expr [%e? expr1].grad ] ->
     let typ1, expr1 = translate expr1 in
     let expr1 = match typ1 with
-    | Formula -> [%expr DSL.grad_of_id [%e expr1].node_id]
-    | Node -> [%expr DSL.grad_of_node [%e expr1]]
+    | Formula_nf -> [%expr CDSL.grad_of_id [%e expr1].node_id]
+    | Node -> [%expr CDSL.grad_of_node [%e expr1]]
     | _ ->
       Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
         "ppx_ocannl %%nn_cd: the x.grad syntax requires x to be a Node or a Formula" in
@@ -126,72 +144,50 @@ let rec translate expr =
 
   | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections])) ] ->
     let accu_op = assignment_op accu_op in
-    let lhs_typ, lhs = translate lhs in
-    let lhs = match lhs_typ with
-      | Formula -> [%expr DSL.value_of_id [%e lhs].node_id]
-      | Node -> [%expr DSL.value_of_node [%e lhs]]
-      | _ -> lhs in
+    let lhs_setup, lhs_typ, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
     let bin_op = binary_op bin_op in
-    let rhs1_typ, rhs1 = translate rhs1 in
-    let rhs1 = match rhs1_typ with
-      | Formula -> [%expr DSL.value_of_id [%e rhs1].node_id]
-      | Node -> [%expr DSL.value_of_node [%e rhs1]]
-      | _ -> rhs1 in
-    let rhs2_typ, rhs2 = translate rhs2 in
-    let rhs2 = match rhs2_typ with
-      | Formula -> [%expr DSL.value_of_id [%e rhs2].node_id]
-      | Node -> [%expr DSL.value_of_node [%e rhs2]]
-      | _ -> rhs2 in
+    let rhs1_setup, rhs1_typ, rhs1 = setup_data [%pat? nonform___rhs1] @@ translate rhs1 in
+    let rhs2_setup, rhs2_typ, rhs2 = setup_data [%pat? nonform___rhs2] @@ translate rhs2 in
     let guess_zero_out =
       if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs1_typ; rhs2_typ]
       then [%expr false] else [%expr true] in
-    Code, [%expr Code.Accum_binop {
+    let body = [%expr Code.Accum_binop {
       zero_out=[%e guess_zero_out]; accum=[%e accu_op]; lhs=[%e lhs];
       op=[%e bin_op]; rhs1=[%e rhs1]; rhs2=[%e rhs2]; projections=[%e projections]}
-    ]
+    ] in
+    let setups = List.filter_map ~f:Fn.id [lhs_setup; rhs1_setup; rhs2_setup] in
+    with_forward_args setups body
 
   | [%expr [%e? accu_op] [%e? lhs] (([%e? un_op] [%e? rhs]) ~projections:[%e? projections]) ]
   | [%expr [%e? accu_op] [%e? lhs] ([%e? un_op] ([%e? rhs] ~projections:[%e? projections])) ] ->
       (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
     let accu_op = assignment_op accu_op in
-    let lhs_typ, lhs = translate lhs in
-    let lhs = match lhs_typ with
-      | Formula -> [%expr DSL.value_of_id [%e lhs].node_id]
-      | Node -> [%expr DSL.value_of_node [%e lhs]]
-      | _ -> lhs in
+    let lhs_setup, lhs_typ, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
     let un_op = unary_op un_op in
-    let rhs_typ, rhs = translate rhs in
-    let rhs = match rhs_typ with
-      | Formula -> [%expr DSL.value_of_id [%e rhs].node_id]
-      | Node -> [%expr DSL.value_of_node [%e rhs]]
-      | _ -> rhs in
+    let rhs_setup, rhs_typ, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
     let guess_zero_out =
       if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs_typ]
       then [%expr false] else [%expr true] in
-    Code, [%expr Code.Accum_unop {
+    let body = [%expr Code.Accum_unop {
         zero_out=[%e guess_zero_out]; accum=[%e accu_op]; lhs=[%e lhs];
         op=[%e un_op]; rhs=[%e rhs]; projections=[%e projections]}
-    ]
+    ] in
+    let setups = List.filter_map ~f:Fn.id [lhs_setup; rhs_setup] in
+    with_forward_args setups body
 
   | [%expr [%e? accu_op] [%e? lhs] ([%e? rhs] ~projections:[%e? projections]) ] ->
     let accu_op = assignment_op accu_op in
-    let lhs_typ, lhs = translate lhs in
-    let lhs = match lhs_typ with
-      | Formula -> [%expr DSL.value_of_id [%e lhs].node_id]
-      | Node -> [%expr DSL.value_of_node [%e lhs]]
-      | _ -> lhs in
-    let rhs_typ, rhs = translate rhs in
-    let rhs = match rhs_typ with
-      | Formula -> [%expr DSL.value_of_id [%e rhs].node_id]
-      | Node -> [%expr DSL.value_of_node [%e rhs]]
-      | _ -> rhs in
+    let lhs_setup, lhs_typ, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
+    let rhs_setup, rhs_typ, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
     let guess_zero_out =
       if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs_typ]
       then [%expr false] else [%expr true] in
-    Code, [%expr Code.Accum_unop {
+    let body = [%expr Code.Accum_unop {
         zero_out=[%e guess_zero_out]; accum=[%e accu_op]; lhs=[%e lhs];
         op=Code.Identity; rhs=[%e rhs]; projections=[%e projections]}
-    ]
+    ] in
+    let setups = List.filter_map ~f:Fn.id [lhs_setup; rhs_setup] in
+    with_forward_args setups body
 
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3] ] ->
     let typ1, expr1 = translate expr1 in
@@ -229,7 +225,6 @@ let rec translate expr =
     Code, [%expr Code.Seq ([%e expr1], [%e expr2])]
 
   | [%expr if [%e? expr1] then [%e? expr2] else [%e? expr3]] ->
-    let _typ1, expr1 = translate expr1 in
     let typ2, expr2 = translate expr2 in
     let typ3, expr3 = translate expr3 in
     let typ = if equal_expr_type typ2 Unknown then typ3 else typ2 in
@@ -252,7 +247,7 @@ let rec translate expr =
     (* TODO(80): to properly support local bindings, we need to collect the type environment. *)
     Unknown,
     Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
-      "ppx_ocannl %%nn_cd: for-to: local let-bindings not implemented yet"
+      "ppx_ocannl %%nn_cd: let-in: local let-bindings not implemented yet"
      (* let bindings = List.map bindings
          ~f:(fun binding -> {binding with pvb_expr=translate binding.pvb_expr}) in
         {expr with pexp_desc=Pexp_let (recflag, bindings, translate body)} *)
@@ -267,13 +262,14 @@ let rec translate expr =
 
   | _ -> Unknown, expr
 
-let expr_expander ~loc:_ ~path:_ payload =
+let expr_expander ~loc ~path:_ payload =
   match payload with
   | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
     (* We are at the %ocannl annotation level: do not tranlsate the body. *)
      let bindings = List.map bindings
-      ~f:(fun vb -> {
-             vb with pvb_expr=snd @@ translate vb.pvb_expr}) in
+      ~f:(fun vb ->
+        let _, v = translate vb.pvb_expr in
+         { vb with pvb_expr=[%expr let open! NFDSL.O in [%e v]] }) in
      {payload with pexp_desc=Pexp_let (recflag, bindings, body)}
   | expr -> snd @@ translate expr
 
@@ -289,11 +285,14 @@ let flatten_str ~loc ~path:_ items =
 let translate_str ({pstr_desc; _} as str) =
   match pstr_desc with
   | Pstr_eval (expr, attrs) ->
-    {str with pstr_desc=Pstr_eval (snd @@ translate expr, attrs)}
+    let _, expr = translate expr in
+    let loc = expr.pexp_loc in
+    {str with pstr_desc=Pstr_eval ([%expr let open! NFDSL.O in [%e expr]], attrs)}
   | Pstr_value (recf, bindings) ->
     let f vb =
-      (* let loc = vb.pvb_loc in *)
-      {vb with pvb_expr=snd @@ translate vb.pvb_expr} in
+      let loc = vb.pvb_loc in
+      let _, v = translate vb.pvb_expr in
+      {vb with pvb_expr=[%expr let open! NFDSL.O in [%e v]]} in
     {str with pstr_desc=Pstr_value (recf, List.map bindings ~f)}
   | _ -> str
      

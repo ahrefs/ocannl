@@ -11,6 +11,7 @@ let vi = CDSL.value_of_id
 
 let add =
   let open Code in
+  let module NFDSL = struct module O = struct end end in
   let%nn_cd op_body ~n ~n1 ~n2 projections =
     n =: n1 + n2 ~projections in
   let%nn_cd grad_body ~n ~n1 ~n2 projections =
@@ -20,6 +21,7 @@ let add =
 
 let mul compose_op =
   let open Code in
+  let module NFDSL = struct module O = struct end end in
   let%nn_cd op_body ~n ~n1 ~n2 projections =
     n =: n1 * n2 ~projections in
   let%nn_cd grad_body ~n ~n1 ~n2 projections =
@@ -47,6 +49,7 @@ let matmul = mul `Compose
     and the output axes. *)
 let einsum spec =
   let open Code in
+  let module NFDSL = struct module O = struct end end in
   let%nn_cd op_body ~n ~n1 ~n2 projections =
     n =+ n1 * n2 ~projections in
   let%nn_cd grad_body ~n ~n1 ~n2 projections =
@@ -61,6 +64,7 @@ let einsum spec =
     and the output axes. *)
 let einsum1 spec =
   let open Code in
+  let module NFDSL = struct module O = struct end end in
   let%nn_cd op_body ~n ~n1 projections =
     n =+ n1 ~projections in
   let%nn_cd grad_body ~n ~n1 projections =
@@ -69,34 +73,41 @@ let einsum1 spec =
 
 let relu =
   let open Code in
+  let module NFDSL = struct module O = struct end end in
   let%nn_cd op_body ~n ~n1 projections =
     n =: !/ n1 ~projections in
   let%nn_cd grad_body ~n ~n1 projections =
     n1.grad =+ n -?/ n.grad ~projections:(fun () -> Shape.backprop_unary @@ projections()) in
   Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
+module NFO_without_pow = struct
+  let ( * ) = matmul ~is_form:false
+  let ( *. ) = pointmul ~is_form:false
+  let (+) = add ~is_form:false
+  let (!/) = relu ~is_form:false
+  let (!~) label =
+   Formula.term ~label ~is_form:false (Deduced_params `Not_constrained) ~init_op:`Standard_uniform
+  let (!.) = Formula.number ~is_form:false
+  let (-) m1 m2 = m1 + !.(-1.) *. m2
+  let (~-) m = !.(-1.) *. m
+end
+
 let rec pointpow ~is_form p m1: Formula.t =
+  let module NFDSL = struct module O = NFO_without_pow end in
   let open Code in
   let p_f = Formula.number ~is_form p in
   let%nn_cd op_body ~n ~n1 ~n2 projections =
     n =: n1 ** n2 ~projections in
-  let grad_body =
+  let%nn_cd grad_body =
     if not is_form then 
       fun ~n:_ ~n1:_ ~n2:_ _projections -> Noop
     else if Float.equal p 2.0 then
-      let grad_f = pointmul ~is_form:false p_f m1 in
       fun ~n ~n1 ~n2:_ projections ->
-        Seq (
-          grad_f.forward_body,
-          Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n1; rhs1=vi grad_f.node_id; rhs2=g n;
-                       projections=(fun () -> Shape.backprop_unary @@ projections())})
+        n1.grad =+ (p_f *. m1) * n.grad ~projections:(fun () -> Shape.backprop_unary @@ projections())
     else
-      let grad_powf = pointpow ~is_form:false (p -. 1.) m1 in
-      let grad_f = pointmul ~is_form:false p_f grad_powf in
       fun ~n ~n1 ~n2:_ projections ->
-        Seq (grad_f.forward_body,
-             Accum_binop {zero_out=false; accum=Add; op=Mul; lhs=g n1; rhs1=vi grad_f.node_id; rhs2=g n;
-                     projections=(fun () -> Shape.backprop_unary @@ projections())}) in
+        n1.grad =+ (p_f *. (m1 **. (p -. 1.))) * n.grad
+                ~projections:(fun () -> Shape.backprop_unary @@ projections()) in
   Formula.binop ~compose_op:`Pointwise ~op_label:"**." ~op_body ~grad_body ~is_form m1 p_f
 
 let unconstrained_param ?init label =
@@ -123,8 +134,11 @@ let given_dims_params ?(axis_labels="") ?(input_dims=[]) ?(output_dims=[]) label
   Formula.term ~is_form:true ~label (Params {input_dims; output_dims; axis_labels})
     ~init_op:(`Fixed_constant values)
 
-let%nn_cd assign ~lhs ~rhs projections =
-  lhs =: rhs ~projections
+let assign =
+  let module NFDSL = struct module O = struct end end in
+  let%nn_cd assign ~lhs ~rhs projections =
+    lhs =: rhs ~projections in
+  assign
 
 let assign_op field ~n ~n1 projections = assign ~lhs:(field n) ~rhs:(field n1) projections
 
@@ -155,7 +169,6 @@ module O = struct
   let (!.) = Formula.number ~is_form:true
   let (-) m1 m2 = m1 + !.(-1.) *. m2
   let (~-) m = !.(-1.) *. m
-  let (/) m1 m2 = m1 * m2 **. (-1.0)
   let (/.) m1 m2 = m1 *. m2 **. (-1.0)
 end
       
@@ -173,17 +186,8 @@ end
 
 
 module NFO = struct
-  let ( * ) = matmul ~is_form:false
-  let ( *. ) = pointmul ~is_form:false
-  let (+) = add ~is_form:false
+  include NFO_without_pow
   let ( **. ) base exp = pointpow exp base ~is_form:false
-  let (!/) = relu ~is_form:false
-  let (!~) label =
-   Formula.term ~label ~is_form:false (Deduced_params `Not_constrained) ~init_op:`Standard_uniform
-  let (!.) = Formula.number ~is_form:false
-  let (-) m1 m2 = m1 + !.(-1.) *. m2
-  let (~-) m = !.(-1.) *. m
-  let (/) m1 m2 = m1 * m2 **. (-1.0)
   let (/.) m1 m2 = m1 *. m2 **. (-1.0)
 end
 
