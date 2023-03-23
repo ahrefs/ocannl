@@ -20,6 +20,7 @@ let ndarray_op ?axis_labels ?label expr =
       ~output_dims:[%e edims output_dims] [%e values]]
 
 type expr_type = Code | Formula_nf | Node | Data | Data_grad | Operator | Unknown [@@deriving equal]
+type projections_slot = LHS | RHS1 | RHS2 | Nonslot | Undet [@@deriving equal]
 
 let assignment_op expr =
   let loc = expr.pexp_loc in
@@ -59,14 +60,14 @@ let unary_op expr =
 let alphanum_regexp = Str.regexp "^[^a-zA-Z0-9]+$"
 let is_operator ident = Str.string_match alphanum_regexp ident 0
       
-let setup_data hs_pat (hs_typ, hs) =
+let setup_data hs_pat (hs_typ, slot, hs) =
   let loc = hs.pexp_loc in
   match hs_typ with
   | Formula_nf ->
     Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].forward_body]),
-    hs_typ, [%expr CDSL.value_of_id [%e pat2expr hs_pat].node_id]
-  | Node -> None, hs_typ, [%expr CDSL.value_of_node [%e hs]]
-  | _ -> None, hs_typ, hs
+    hs_typ, slot, [%expr CDSL.value_of_id [%e pat2expr hs_pat].node_id]
+  | Node -> None, hs_typ, slot, [%expr CDSL.value_of_node [%e hs]]
+  | _ -> None, hs_typ, slot, hs
 
 let with_forward_args setups body =
   let loc = body.pexp_loc in
@@ -74,80 +75,94 @@ let with_forward_args setups body =
   let forward_args =
     List.map setups ~f:(fun (_, _, fwd) -> fwd) |>
     List.reduce ~f:(fun code fwd -> [%expr Code.Par ([%e code], [%e fwd])]) in
-  Code, (match forward_args with
+  Code, Nonslot, (match forward_args with
       | None -> body
       | Some fwd ->
         Ast_helper.Exp.let_ ~loc Nonrecursive bindings [%expr Code.Seq([%e fwd], [%e body])])
 
-let rec translate (expr: expression): expr_type * expression =
+let rec translate (expr: expression): expr_type * projections_slot * expression =
   let loc = expr.pexp_loc in
   match expr with
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
-    Formula_nf, [%expr Formula.NFDSL.number [%e expr]]
+    Formula_nf, Undet, [%expr Formula.NFDSL.number [%e expr]]
 
   | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
-    Formula_nf, [%expr Formula.NFDSL.number (Float.of_int [%e expr])]
+    Formula_nf, Undet, [%expr Formula.NFDSL.number (Float.of_int [%e expr])]
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
       [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
     let axis = Ast_helper.Exp.constant ~loc:pexp_loc
         (Pconst_string (String.of_char ch, pexp_loc, None)) in
-    Formula_nf, [%expr Formula.NFDSL.number ~axis_label:[%e axis] [%e f]]
+    Formula_nf, Undet, [%expr Formula.NFDSL.number ~axis_label:[%e axis] [%e f]]
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
       [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
         let axis = Ast_helper.Exp.constant ~loc:pexp_loc
         (Pconst_string (String.of_char ch, pexp_loc, None)) in
-    Formula_nf, [%expr Formula.NFDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])]
+    Formula_nf, Undet, [%expr Formula.NFDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])]
 
   | { pexp_desc = Pexp_tuple _; _ } | { pexp_desc = Pexp_array _; _ } 
   | { pexp_desc = Pexp_construct ({txt=Lident "::"; _}, _); _ } ->
-    Formula_nf, ndarray_op expr
+    Formula_nf, Undet, ndarray_op expr
 
-  | { pexp_desc = Pexp_ident {txt=Lident ("n" | "n1" | "n2"); _}; _ } ->
-    Node, expr
+  | { pexp_desc = Pexp_ident {txt=Lident ("n" | "lhs" as ident); _}; _ } ->
+    (if String.equal ident "n" then Node else Data), LHS, expr
+
+  | { pexp_desc = Pexp_ident {txt=Lident ("n1" | "m1" | "rhs1" | "rhs" as ident); _}; _ } ->
+    (if String.equal ident "n1" then Node
+     else if String.equal ident "m1" then Formula_nf
+     else Data), RHS1, expr
+
+  | { pexp_desc = Pexp_ident {txt=Lident ("n2" | "m2" | "rhs2" as ident); _}; _ } ->
+    (if String.equal ident "n2" then Node
+    else if String.equal ident "m2" then Formula_nf
+    else Data), RHS2, expr
 
   | { pexp_desc = Pexp_ident {txt=Lident op_ident; _}; _ } when is_operator op_ident ->
-    Formula_nf, expr
+    Formula_nf, Undet, expr
 
   | [%expr [%e? expr1] || [%e? expr2] ] ->
     (* Check this before the generic application pattern. *)
-    let _typ1, expr1 = translate expr1 in
-    let _typ2, expr2 = translate expr2 in
-    Code, [%expr Code.ParHint ([%e expr1], [%e expr2])]
+    let _typ1, _slot1, expr1 = translate expr1 in
+    let _typ2, _slot2, expr2 = translate expr2 in
+    (* We could warn if typ is not Code and slot is not Nonslot, but that could be annoying. *)
+    Code, Nonslot, [%expr Code.ParHint ([%e expr1], [%e expr2])]
 
   | [%expr [%e? expr1] **. [%e? expr2]] ->
     (* If converting code or a node to a formula was possible we would do it here.
        Since it's not, we let OCaml handle the type errors. Same further below. *)
-    let _typ1, expr1 = translate expr1 in
-    Formula_nf, [%expr pointpow ~is_form:false [%e expr2] [%e expr1]]
+    let _typ1, slot1, expr1 = translate expr1 in
+    Formula_nf, slot1, [%expr pointpow ~is_form:false [%e expr2] [%e expr1]]
 
   | [%expr [%e? expr1].value ] ->
-    let typ1, expr1 = translate expr1 in
+    let typ1, slot1, expr1 = translate expr1 in
     let expr1 = match typ1 with
     | Formula_nf -> [%expr CDSL.value_of_id [%e expr1].node_id]
     | Node -> [%expr CDSL.value_of_node [%e expr1]]
     | _ ->
       Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
         "ppx_ocannl %%nn_cd: the x.value syntax requires x to be a Node or a Formula" in
-    Data, expr1
+    Data, slot1, expr1
 
   | [%expr [%e? expr1].grad ] ->
-    let typ1, expr1 = translate expr1 in
+    let typ1, slot1, expr1 = translate expr1 in
     let expr1 = match typ1 with
     | Formula_nf -> [%expr CDSL.grad_of_id [%e expr1].node_id]
     | Node -> [%expr CDSL.grad_of_node [%e expr1]]
     | _ ->
       Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
         "ppx_ocannl %%nn_cd: the x.grad syntax requires x to be a Node or a Formula" in
-    Data_grad, expr1
+    Data_grad, slot1, expr1
 
   | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections])) ] ->
     let accu_op = assignment_op accu_op in
-    let lhs_setup, lhs_typ, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
+    let lhs_setup, lhs_typ, _lhs_slot, lhs =
+      setup_data [%pat? nonform___lhs] @@ translate lhs in
     let bin_op = binary_op bin_op in
-    let rhs1_setup, rhs1_typ, rhs1 = setup_data [%pat? nonform___rhs1] @@ translate rhs1 in
-    let rhs2_setup, rhs2_typ, rhs2 = setup_data [%pat? nonform___rhs2] @@ translate rhs2 in
+    let rhs1_setup, rhs1_typ, _rhs1_slot, rhs1 =
+      setup_data [%pat? nonform___rhs1] @@ translate rhs1 in
+    let rhs2_setup, rhs2_typ, _rhs2_slot, rhs2 =
+      setup_data [%pat? nonform___rhs2] @@ translate rhs2 in
     let guess_zero_out =
       if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs1_typ; rhs2_typ]
       then [%expr false] else [%expr true] in
@@ -162,9 +177,9 @@ let rec translate (expr: expression): expr_type * expression =
   | [%expr [%e? accu_op] [%e? lhs] ([%e? un_op] ([%e? rhs] ~projections:[%e? projections])) ] ->
       (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
     let accu_op = assignment_op accu_op in
-    let lhs_setup, lhs_typ, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
+    let lhs_setup, lhs_typ, _lhs_slot, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
     let un_op = unary_op un_op in
-    let rhs_setup, rhs_typ, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
+    let rhs_setup, rhs_typ, _rhs_slot, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
     let guess_zero_out =
       if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs_typ]
       then [%expr false] else [%expr true] in
@@ -177,8 +192,8 @@ let rec translate (expr: expression): expr_type * expression =
 
   | [%expr [%e? accu_op] [%e? lhs] ([%e? rhs] ~projections:[%e? projections]) ] ->
     let accu_op = assignment_op accu_op in
-    let lhs_setup, lhs_typ, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
-    let rhs_setup, rhs_typ, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
+    let lhs_setup, lhs_typ, _lhs_slot, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
+    let rhs_setup, rhs_typ, _rhs_slot, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
     let guess_zero_out =
       if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs_typ]
       then [%expr false] else [%expr true] in
@@ -190,62 +205,69 @@ let rec translate (expr: expression): expr_type * expression =
     with_forward_args setups body
 
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3] ] ->
-    let typ1, expr1 = translate expr1 in
-    let _typ2, expr2 = translate expr2 in
-    let _typ3, expr3 = translate expr3 in
-    typ1, [%expr [%e expr1] [%e expr2] [%e expr3]]
+    let typ1, slot1, expr1 = translate expr1 in
+    let _typ2, slot2, expr2 = translate expr2 in
+    let _typ3, slot3, expr3 = translate expr3 in
+    let slot = Option.value ~default:Undet @@
+      List.find ~f:(function Undet -> false | _ -> true) [slot1; slot2; slot3] in
+    typ1, slot, [%expr [%e expr1] [%e expr2] [%e expr3]]
 
   | [%expr [%e? expr1] [%e? expr2] ] ->
-    let typ1, expr1 = translate expr1 in
-    let _typ2, expr2 = translate expr2 in
-    typ1, [%expr [%e expr1] [%e expr2]]
+    let typ1, slot1, expr1 = translate expr1 in
+    let _typ2, slot2, expr2 = translate expr2 in
+    let slot = Option.value ~default:Undet @@
+      List.find ~f:(function Undet -> false | _ -> true) [slot1; slot2] in
+    typ1, slot, [%expr [%e expr1] [%e expr2]]
 
   | {pexp_desc=Pexp_fun (arg_label, arg, opt_val, body); _} as expr ->
-    let typ, body = translate body in
-    typ, {expr with pexp_desc=Pexp_fun (arg_label, arg, opt_val, body)}
+    let typ, slot, body = translate body in
+    typ, slot, {expr with pexp_desc=Pexp_fun (arg_label, arg, opt_val, body)}
  
   | [%expr while [%e? _test_expr] do [%e? _body] done ] ->
-    Unknown,
+    Code, Nonslot,
     Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
       "ppx_ocannl %%nn_cd: while: low-level code embeddings not supported yet"
 
   | [%expr for [%p? _pat] = [%e? _init] to [%e? _final] do [%e? _body_expr] done ] ->
-    Unknown,
+    Code, Nonslot,
     Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
       "ppx_ocannl %%nn_cd: for-to: low-level code embeddings not supported yet"
 
   | [%expr for [%p? _pat] = [%e? _init] downto [%e? _final] do [%e? _body_expr] done ] ->
-    Unknown,
+    Code, Nonslot,
     Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
       "ppx_ocannl %%nn_cd: for-downto: low-level code embeddings not supported yet"
 
   | [%expr [%e? expr1] ; [%e? expr2] ] ->
-    let _typ1, expr1 = translate expr1 in
-    let _typ2, expr2 = translate expr2 in
-    Code, [%expr Code.Seq ([%e expr1], [%e expr2])]
+    let _typ1, _slot1, expr1 = translate expr1 in
+    let _typ2, _slot1, expr2 = translate expr2 in
+    Code, Nonslot, [%expr Code.Seq ([%e expr1], [%e expr2])]
 
   | [%expr if [%e? expr1] then [%e? expr2] else [%e? expr3]] ->
-    let typ2, expr2 = translate expr2 in
-    let typ3, expr3 = translate expr3 in
+    let typ2, slot2, expr2 = translate expr2 in
+    let typ3, slot3, expr3 = translate expr3 in
     let typ = if equal_expr_type typ2 Unknown then typ3 else typ2 in
-    typ, [%expr if [%e expr1] then [%e expr2] else [%e expr3]]
+    let slot = Option.value ~default:Undet @@
+      List.find ~f:(function Undet -> false | _ -> true) [slot2; slot3] in
+    typ, slot, [%expr if [%e expr1] then [%e expr2] else [%e expr3]]
 
   | [%expr if [%e? expr1] then [%e? expr2]] ->
-    let _typ1, expr1 = translate expr1 in
-    let _typ2, expr2 = translate expr2 in
-    Code, [%expr if [%e expr1] then [%e expr2] else Code.Noop]
+    let _typ2, _slot2, expr2 = translate expr2 in
+    Code, Nonslot, [%expr if [%e expr1] then [%e expr2] else Code.Noop]
 
   | { pexp_desc = Pexp_match (expr1, cases); _ } ->
-    let typs, cases =
-      List.unzip @@ List.map cases ~f:(fun ({pc_rhs; _} as c) ->
-        let typ, pc_rhs = translate pc_rhs in typ, {c with pc_rhs}) in
+    let typs, slots, cases =
+      List.unzip3 @@ List.map cases ~f:(fun ({pc_rhs; _} as c) ->
+        let typ, slot, pc_rhs = translate pc_rhs in typ, slot, {c with pc_rhs}) in
     let typ = Option.value ~default:Unknown @@
       List.find typs ~f:(Fn.non @@ equal_expr_type Unknown) in
-    typ, { expr with pexp_desc = Pexp_match (expr1, cases) }
+    let slot = Option.value ~default:Undet @@
+      List.find ~f:(function Undet -> false | _ -> true) slots in
+    typ, slot, { expr with pexp_desc = Pexp_match (expr1, cases) }
 
   | { pexp_desc = Pexp_let (_recflag, _bindings, _body); _ } ->
     (* TODO(80): to properly support local bindings, we need to collect the type environment. *)
-    Unknown,
+    Unknown, Undet,
     Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
       "ppx_ocannl %%nn_cd: let-in: local let-bindings not implemented yet"
      (* let bindings = List.map bindings
@@ -253,14 +275,14 @@ let rec translate (expr: expression): expr_type * expression =
         {expr with pexp_desc=Pexp_let (recflag, bindings, translate body)} *)
 
   | { pexp_desc = Pexp_open (decl, body); _ } ->
-    let typ, body = translate body in
-    typ, {expr with pexp_desc=Pexp_open (decl, body)}
+    let typ, slot, body = translate body in
+    typ, slot, {expr with pexp_desc=Pexp_open (decl, body)}
 
   | { pexp_desc = Pexp_letmodule (name, module_expr, body); _ } ->
-    let typ, body = translate body in
-    typ, {expr with pexp_desc=Pexp_letmodule (name, module_expr, body)}
+    let typ, slot, body = translate body in
+    typ, slot, {expr with pexp_desc=Pexp_letmodule (name, module_expr, body)}
 
-  | _ -> Unknown, expr
+  | _ -> Unknown, Undet, expr
 
 let expr_expander ~loc ~path:_ payload =
   match payload with
@@ -268,11 +290,11 @@ let expr_expander ~loc ~path:_ payload =
     (* We are at the %ocannl annotation level: do not tranlsate the body. *)
      let bindings = List.map bindings
       ~f:(fun vb ->
-        let _, v = translate vb.pvb_expr in
+        let _, _, v = translate vb.pvb_expr in
          { vb with pvb_expr=[%expr let open! NFDSL.O in [%e v]] }) in
      {payload with pexp_desc=Pexp_let (recflag, bindings, body)}
   | expr ->
-    [%expr let open! NFDSL.O in [%e snd @@ translate expr]]
+    let _, _, expr = translate expr in [%expr let open! NFDSL.O in [%e expr]]
 
 let flatten_str ~loc ~path:_ items =
   match items with
@@ -286,13 +308,13 @@ let flatten_str ~loc ~path:_ items =
 let translate_str ({pstr_desc; _} as str) =
   match pstr_desc with
   | Pstr_eval (expr, attrs) ->
-    let _, expr = translate expr in
+    let _, _, expr = translate expr in
     let loc = expr.pexp_loc in
     {str with pstr_desc=Pstr_eval ([%expr let open! NFDSL.O in [%e expr]], attrs)}
   | Pstr_value (recf, bindings) ->
     let f vb =
       let loc = vb.pvb_loc in
-      let _, v = translate vb.pvb_expr in
+      let _, _, v = translate vb.pvb_expr in
       {vb with pvb_expr=[%expr let open! NFDSL.O in [%e v]]} in
     {str with pstr_desc=Pstr_value (recf, List.map bindings ~f)}
   | _ -> str
