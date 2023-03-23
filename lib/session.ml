@@ -319,7 +319,16 @@ let close_session() =
 
 let session_params() = NodeUI.param_nodes ~from_id:!Formula.first_session_id ()
 
-      
+let update_params_code ~learning_rate ?params () =
+  let params =
+    Option.value_or_thunk params ~default:(fun () -> Hashtbl.data @@ session_params()) in
+  let module CDSL = Code.CDSL in
+  let module NFDSL = Operation.NFDSL in
+  let module N = Ocannl_runtime.Node in
+  Code.all_parallel @@ List.map params ~f:(
+    fun n -> [%nn_cd n =+ !.learning_rate * n.grad ~projections:(
+        fun () -> Shape.identity_projections (N.dims n.value))])
+
 module SDSL = struct
   let set_executor = set_executor
   let refresh_session = refresh_session

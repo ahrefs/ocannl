@@ -271,7 +271,8 @@ let expr_expander ~loc ~path:_ payload =
         let _, v = translate vb.pvb_expr in
          { vb with pvb_expr=[%expr let open! NFDSL.O in [%e v]] }) in
      {payload with pexp_desc=Pexp_let (recflag, bindings, body)}
-  | expr -> snd @@ translate expr
+  | expr ->
+    [%expr let open! NFDSL.O in [%e snd @@ translate expr]]
 
 let flatten_str ~loc ~path:_ items =
   match items with
