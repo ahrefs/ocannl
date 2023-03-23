@@ -25,7 +25,7 @@ let () =
 
   refresh_session ();
   print_preamble ();
-  print_node_tree ~with_grad:true ~depth:99 g.node_id;
+  print_node_tree ~with_grad:true ~depth:99 g.id;
   Stdio.print_endline "";
   print_formula ~with_code:true ~with_grad:true `Default @@ a;
   Stdio.print_endline "";

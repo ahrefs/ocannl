@@ -196,14 +196,8 @@ type form = {
 type t = {
   mutable value: ndarray;
   form: form option;
-  op_label: string;
-  children: sub_node list;
   id: int;
-  mutable default_display_indices: int array option;
-  mutable default_display_labels: string array option;
 } [@@deriving sexp_of]
-and sub_node = {sub_node_id: int; computed_externally: bool}
-[@@deriving sexp_of]
 
 exception Runtime_error of string * t option
 

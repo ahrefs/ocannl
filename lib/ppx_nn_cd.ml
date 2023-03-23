@@ -19,7 +19,15 @@ let ndarray_op ?axis_labels ?label expr =
     [%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
       ~output_dims:[%e edims output_dims] [%e values]]
 
-type expr_type = Code | Formula_nf | Node | Data | Data_grad | Operator | Unknown [@@deriving equal]
+type expr_type =
+  | Code
+  | Formula_nf
+  | Formula_or_node_or_data
+  | Grad_of_source of expression
+  | Unknown
+
+let is_grad = function Grad_of_source _ -> true | _ -> false
+  
 type projections_slot = LHS | RHS1 | RHS2 | Nonslot | Undet [@@deriving equal, sexp]
 
 let assignment_op expr =
@@ -68,7 +76,7 @@ let setup_data hs_pat (hs_typ, slot, hs) =
   match hs_typ with
   | Formula_nf ->
     Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].forward_body]),
-    hs_typ, slot, [%expr CDSL.value_of_id [%e pat2expr hs_pat].node_id]
+    hs_typ, slot, [%expr CDSL.value_of_id [%e pat2expr hs_pat].id]
   | Node -> None, hs_typ, slot, [%expr CDSL.value_of_node [%e hs]]
   | _ -> None, hs_typ, slot, hs
 
@@ -152,7 +160,7 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
   | [%expr [%e? expr1].value ] ->
     let typ1, slot1, expr1 = translate expr1 in
     let expr1 = match typ1 with
-    | Formula_nf -> [%expr CDSL.value_of_id [%e expr1].node_id]
+    | Formula_nf -> [%expr CDSL.value_of_id [%e expr1].id]
     | Node -> [%expr CDSL.value_of_node [%e expr1]]
     | _ ->
       Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
@@ -162,12 +170,11 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
   | [%expr [%e? expr1].grad ] ->
     let typ1, slot1, expr1 = translate expr1 in
     let expr1 = match typ1 with
-    | Formula_nf -> [%expr CDSL.grad_of_id [%e expr1].node_id]
-    | Node -> [%expr CDSL.grad_of_node [%e expr1]]
+    | Formula_or_node_or_data -> [%expr CDSL.grad_of_id [%e expr1].id]
     | _ ->
       Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
-        "ppx_ocannl %%nn_cd: the x.grad syntax requires x to be a Node or a Formula" in
-    Data_grad, slot1, expr1
+        "ppx_ocannl %%nn_cd: the x.grad syntax requires x to be Node.t, Node.data or Formula.t" in
+    Grad_of_source expr1, slot1, expr1
 
   | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections])) ] ->
     let accu_op = assignment_op accu_op in
@@ -179,7 +186,7 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
     let rhs2_setup, rhs2_typ, _rhs2_slot, rhs2 =
       setup_data [%pat? nonform___rhs2] @@ translate rhs2 in
     let guess_zero_out =
-      if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs1_typ; rhs2_typ]
+      if List.exists ~f:is_grad [lhs_typ; rhs1_typ; rhs2_typ]
       then [%expr false] else [%expr true] in
     let body = [%expr Code.Accum_binop {
       zero_out=[%e guess_zero_out]; accum=[%e accu_op]; lhs=[%e lhs];
@@ -196,7 +203,7 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
     let un_op = unary_op un_op in
     let rhs_setup, rhs_typ, _rhs_slot, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
     let guess_zero_out =
-      if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs_typ]
+      if List.exists ~f:(equal_expr_type Grad) [lhs_typ; rhs_typ]
       then [%expr false] else [%expr true] in
     let body = [%expr Code.Accum_unop {
         zero_out=[%e guess_zero_out]; accum=[%e accu_op]; lhs=[%e lhs];
@@ -210,7 +217,7 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
     let lhs_setup, lhs_typ, _lhs_slot, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
     let rhs_setup, rhs_typ, _rhs_slot, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
     let guess_zero_out =
-      if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs_typ]
+      if List.exists ~f:(equal_expr_type Grad) [lhs_typ; rhs_typ]
       then [%expr false] else [%expr true] in
     let body = [%expr Code.Accum_unop {
         zero_out=[%e guess_zero_out]; accum=[%e accu_op]; lhs=[%e lhs];
@@ -230,16 +237,16 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
     let rhs2_setup, rhs2_typ, rhs2_slot, rhs2 =
       setup_data [%pat? nonform___rhs2] @@ translate rhs2 in
     let guess_zero_out =
-      if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs1_typ; rhs2_typ]
+      if List.exists ~f:(equal_expr_type Grad) [lhs_typ; rhs1_typ; rhs2_typ]
       then [%expr false] else [%expr true] in
-    let project_lhs = project_xhs "LHS" lhs.pexp_loc lhs_slot in
-    let project_rhs1 = project_xhs "RHS1" rhs1.pexp_loc rhs1_slot in
-    let project_rhs2 = project_xhs "RHS2" rhs2.pexp_loc rhs2_slot in
     let projections =
+      let project_lhs = project_xhs "LHS" lhs.pexp_loc lhs_slot in
+      let project_rhs1 = project_xhs "RHS1" rhs1.pexp_loc rhs1_slot in
+      let project_rhs2 = project_xhs "RHS2" rhs2.pexp_loc rhs2_slot in
       [%expr fun () -> let p = projections() in Shape.{
-        p with project_lhs = [%e project_lhs];
-               project_rhs1 = [%e project_rhs1]; project_rhs2 = Some [%e project_rhs2] }]
-     in
+          p with project_lhs = [%e project_lhs];
+                 project_rhs1 = [%e project_rhs1]; project_rhs2 = Some [%e project_rhs2] }]
+    in
     let body = [%expr Code.Accum_binop {
       zero_out=[%e guess_zero_out]; accum=[%e accu_op]; lhs=[%e lhs];
       op=[%e bin_op]; rhs1=[%e rhs1]; rhs2=[%e rhs2]; projections=[%e projections]}
@@ -255,7 +262,7 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
     let un_op = unary_op un_op in
     let rhs_setup, rhs_typ, rhs_slot, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
     let guess_zero_out =
-      if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs_typ]
+      if List.exists ~f:(equal_expr_type Grad) [lhs_typ; rhs_typ]
       then [%expr false] else [%expr true] in
       let project_lhs = project_xhs "LHS" lhs.pexp_loc lhs_slot in
       let project_rhs1 = project_xhs "RHS1" rhs.pexp_loc rhs_slot in
@@ -278,7 +285,7 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
     let lhs_setup, lhs_typ, lhs_slot, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
     let rhs_setup, rhs_typ, rhs_slot, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
     let guess_zero_out =
-      if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs_typ]
+      if List.exists ~f:(equal_expr_type Grad) [lhs_typ; rhs_typ]
       then [%expr false] else [%expr true] in
       let project_lhs = project_xhs "LHS" lhs.pexp_loc lhs_slot in
       let project_rhs1 = project_xhs "RHS1" rhs.pexp_loc rhs_slot in

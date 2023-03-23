@@ -4,11 +4,6 @@ open Base
 
 module CDSL = Code.CDSL
 
-let v = CDSL.value_of_node
-let g = CDSL.grad_of_node
-let d n field: Code.data = {node_id=n.Ocannl_runtime.Node.id; field}
-let vi = CDSL.value_of_id
-
 let add =
   let open Code in
   let module NFDSL = struct module O = struct end end in

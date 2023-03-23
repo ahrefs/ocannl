@@ -93,7 +93,7 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
   let open Formula in
   let sh = m.shape in
   let prefix =
-    "["^Int.to_string m.node_id^"]: shape "^
+    "["^Int.to_string m.id^"]: shape "^
     Shape.to_string_hum ~style:`Axis_number_and_size sh^" " in
   let indices =
     match style with
@@ -171,8 +171,8 @@ let print_global_root ~with_grad ~with_code (style: array_print_style) root =
 
 let print_global_roots ~with_grad ~with_code (style: array_print_style) =
   let open Formula in
-  List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (node_id, root) ->
-      assert (node_id = root.formula.node_id);
+  List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (id, root) ->
+      assert (id = root.formula.id);
       print_global_root ~with_grad ~with_code style root)
 
 let print_preamble() =
@@ -230,7 +230,7 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
     List.iter !session_shape_updates ~f:Shape.propagate_shapes;
     List.iter !session_shape_updates ~f:(fun update_step ->
         let sh = update_step.shape in
-        let n = Ocannl_runtime.Node.get sh.node_id in
+        let n = Ocannl_runtime.Node.get sh.id in
         n.default_display_indices <- Some (default_display_indices sh);
         n.default_display_labels <- Some (Shape.axis_map_to_dims_index ~default:"" sh.axis_labels)
       );
@@ -327,8 +327,7 @@ let update_params ?with_debug ~learning_rate ?params () =
   let module NFDSL = Operation.NFDSL in
   let module N = Ocannl_runtime.Node in
   compile_and_run ?with_debug @@ Code.all_parallel @@ List.map params ~f:(
-    fun n -> [%nn_cd n =+ !.learning_rate * n.grad ~projections:(
-        fun () -> Shape.identity_projections (N.dims n.value))])
+    fun n -> [%nn_cd n =+ !.learning_rate * n.grad])
 
 module SDSL = struct
   let set_executor = set_executor

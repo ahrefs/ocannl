@@ -1,8 +1,17 @@
-(** Utilities for working with [Node] that could be part of the runtime, but are not currently needed
-    in the runtime. *)
+(** Utilities for working with [Node] that do not belong in the runtime. *)
 open Base
 
 open Ocannl_runtime
+
+(** A DAG of decorated [Node]s, also storing the shape information. *)
+type t = {
+  node: Node.t;
+  (* FIXME: maybe just store IDs? Reconsider. *)
+  children: t list;
+  computed_externally: bool;
+  op_label: string;
+  shape: Shape.t;
+} [@@deriving sexp_of]
 
 let create_of_same_precision_as ~is_form (node: Node.t) =
   match node.value, node.form with

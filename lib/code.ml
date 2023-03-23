@@ -3,10 +3,10 @@ open Base
 
 (** *** High-level representation. *** *)
 
-type data = {node_id: int; field: [`Value | `Grad]}
+type data = {id: int; field: [`Value | `Grad]}
 [@@deriving sexp, equal]
 
-type routine = {node_id: int; field: [`Forward | `Backprop]}
+type routine = {id: int; field: [`Forward | `Backprop]}
 [@@deriving sexp, equal]
 
 type binop =
@@ -120,7 +120,7 @@ type _ low_level =
 
 let data_pointer (xhs: data) =
   match xhs.field with
-  | `Value -> Value_at_node_id xhs.node_id | `Grad -> Gradient_at_node_id xhs.node_id
+  | `Value -> Value_at_node_id xhs.id | `Grad -> Gradient_at_node_id xhs.id
 
 let rec unoptimized (code: t): unit low_level =
   match code with
@@ -196,10 +196,8 @@ let unoptimized_program prog: unit low_level =
   | Session_prepare_step proc -> Assign_session_prepare_step (unoptimized proc)
 
 module CDSL = struct
-  let value_of_node n: data = {node_id=n.Ocannl_runtime.Node.id; field=`Value}
-  let grad_of_node n: data = {node_id=n.Ocannl_runtime.Node.id; field=`Grad}
-  let value_of_id node_id: data = {node_id; field=`Value}
-  let grad_of_id node_id: data = {node_id; field=`Grad}
+  let value_of_id id: data = {id; field=`Value}
+  let grad_of_id id: data = {id; field=`Grad}
   
 end
 
@@ -229,10 +227,10 @@ let interpret_llc ?(with_debug=true) llc =
       set_from_float (get id).value (lookup env indices) @@ loop_float env llv
     | Unoptimized_set (Gradient_at_node_id id, indices, llv) ->
       set_from_float (get_form id).grad (lookup env indices) @@ loop_float env llv
-    | Assign_routine ({node_id; field=`Forward}, proc) ->
-      (get_form node_id).forward := Some (fun () -> loop proc)
-    | Assign_routine ({node_id; field=`Backprop}, proc) ->
-      (get_form node_id).backprop := Some (fun () -> loop proc)
+    | Assign_routine ({id; field=`Forward}, proc) ->
+      (get_form id).forward := Some (fun () -> loop proc)
+    | Assign_routine ({id; field=`Backprop}, proc) ->
+      (get_form id).backprop := Some (fun () -> loop proc)
     | Assign_session_prepare_step (proc) ->
       global.session_prepare_step := Some (fun () -> loop proc)
     | Comment message when with_debug -> Stdio.printf "%s\n%!" message

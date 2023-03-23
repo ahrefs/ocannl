@@ -17,7 +17,7 @@ type t = {
   forward_body: Code.t;
   (** Initializes the values. *)
   form: form option;
-  node_id: int;
+  id: int;
   comp_node: Ocannl_runtime.Node.t;
   (** This tracks the computation node as long as the model is not cross-compiled to a different
       process etc. *)
@@ -35,7 +35,7 @@ type global_root = {
   formula: t;
 }
 
-(** If a formula with [node_id >= !first_session_id] is not among global roots, it must be a subformula
+(** If a formula with [id >= !first_session_id] is not among global roots, it must be a subformula
     of a global root. *)
 let global_roots = ref @@ Map.empty (module Int)
 
@@ -56,7 +56,7 @@ let session_prepare_step: Code.t list ref = ref []
 
 (** A current session is the range of nodes from [!first_session_id] to [Node.global.unique_id - 1],
     or an empty range if [!first_session_id = Node.global.unique_id].
-    Subformulas with [node_id] before this range are not allowed in new formulas. *)
+    Subformulas with [id] before this range are not allowed in new formulas. *)
 let first_session_id = ref 1
 
 exception Session_error of string * t option
@@ -76,7 +76,7 @@ let prefix_with_preamble content =
 let session_error_printer = function
   | Session_error (msg, None) -> Some (prefix_with_preamble msg)
   | Session_error (msg, Some m) ->
-    Some (prefix_with_preamble @@ "For #"^Int.to_string_hum m.node_id^": "^msg)
+    Some (prefix_with_preamble @@ "For #"^Int.to_string_hum m.id^": "^msg)
   | _ -> None
 
 let () = Caml.Printexc.register_printer session_error_printer
@@ -86,36 +86,36 @@ let handle_error ?formula message =
   Stdio.prerr_endline @@ Option.value_exn (session_error_printer exc);
   raise exc
 
-let reset_zeros ~node_id field _shape =
-  Code.Reset {tensor={node_id; field}; reset_op=`Constant_of_value 0.0}
+let reset_zeros ~id field _shape =
+  Code.Reset {tensor={id; field}; reset_op=`Constant_of_value 0.0}
 
-let reset_ones ~node_id field _shape =
-  Code.Reset {tensor={node_id; field}; reset_op=`Constant_of_value 1.0}
+let reset_ones ~id field _shape =
+  Code.Reset {tensor={id; field}; reset_op=`Constant_of_value 1.0}
 
-let create ~node_id ?(init_op=`Unspecified) field shape =
-  Code.Create {tensor={node_id; field}; dims=(fun () -> Shape.to_dims shape); init_op}
+let create ~id ?(init_op=`Unspecified) field shape =
+  Code.Create {tensor={id; field}; dims=(fun () -> Shape.to_dims shape); init_op}
 
 let max_sublabel_length = ref 25
 
 let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body ~is_form m1 m2 =
   (* Note: do not capture m1, m2 in any closure, so they can be GC'd. *)
-  (if (m1.node_id < !first_session_id) then
+  (if (m1.id < !first_session_id) then
     raise @@ Session_error ("The subformula is outside of current session", Some m1));
-  (if (m2.node_id < !first_session_id) then
+  (if (m2.id < !first_session_id) then
      raise @@ Session_error ("The subformula is outside of current session", Some m2));
-  let m1_first = m1.node_id <= m2.node_id in
+  let m1_first = m1.id <= m2.id in
   let m1_processed: bool =
-    Option.is_some m1.form && not @@ Map.mem !global_roots m1.node_id in
+    Option.is_some m1.form && not @@ Map.mem !global_roots m1.id in
   let m2_processed: bool =
-    Option.is_some m2.form && (m2.node_id = m1.node_id || not @@ Map.mem !global_roots m2.node_id) in
-  let children = [{Ocannl_runtime.Node.sub_node_id=m1.node_id; computed_externally=m1_processed};
-                  {sub_node_id=m2.node_id; computed_externally=m2_processed}] in
+    Option.is_some m2.form && (m2.id = m1.id || not @@ Map.mem !global_roots m2.id) in
+  let children = [{Ocannl_runtime.Node.sub_node_id=m1.id; computed_externally=m1_processed};
+                  {sub_node_id=m2.id; computed_externally=m2_processed}] in
   let n =
     NodeUI.create_of_promoted_precision ~is_form m1.comp_node m2.comp_node ~op_label children in
-  let node_id = n.id in
+  let id = n.id in
   let shape = { Shape.batch=Unknown; input=Unknown; output=Unknown;
                 axis_labels=Map.empty (module Shape.AxisKey);
-                deduce_output_from_input=`Not_constrained; node_id } in
+                deduce_output_from_input=`Not_constrained; id } in
   let shape_logic = Shape.Broadcast (compose_op, m1.shape, m2.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.(
@@ -139,10 +139,10 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body ~is_form m1 m2 
     | false, m1_body, false, m2_body -> Seq (ParHint (m2_body, m1_body), op_body)
     | _, _, false, m2_body -> Seq (m2_body, op_body)
     | false, m1_body, _, _ -> Seq(m1_body, op_body)) in
-  let init_values_body = create ~node_id `Value shape in
+  let init_values_body = create ~id `Value shape in
   session_initializations := init_values_body :: !session_initializations;
   if not is_form then
-    {forward_body; form=None; node_id; comp_node=n; shape_logic; shape}
+    {forward_body; form=None; id; comp_node=n; shape_logic; shape}
   else
     let form1, form2 = match m1.form, m2.form with
     | Some form1, Some form2 -> form1, form2
@@ -154,17 +154,17 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body ~is_form m1 m2 
     let m1_no_grad = m1_processed || not form1.needs_gradient in
     let m2_no_grad = m2_processed || not form2.needs_gradient in
     if needs_gradient then
-      session_prepare_step := reset_zeros ~node_id `Grad shape :: !session_prepare_step;
+      session_prepare_step := reset_zeros ~id `Grad shape :: !session_prepare_step;
     (* The code needs to be included in the reverse order to which it was computed! This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
     let grad_body = if needs_gradient then grad_body ~n ~n1 ~n2 projections else Noop in
     let grad_body =
       if form1.needs_gradient then grad_body
-      else Code.remove_updates {node_id=m1.node_id; field=`Grad} grad_body in
+      else Code.remove_updates {id=m1.id; field=`Grad} grad_body in
     let grad_body =
       if form2.needs_gradient then grad_body
-      else Code.remove_updates {node_id=m2.node_id; field=`Grad} grad_body in
+      else Code.remove_updates {id=m2.id; field=`Grad} grad_body in
     let backprop_body =
       match m1_no_grad, form1.backprop_body, m2_no_grad, form2.backprop_body with
       | true, _, true, _ | true, _, _, Noop | _, Noop, true, _ | _, Noop, _, Noop -> grad_body
@@ -173,29 +173,29 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body ~is_form m1 m2 
       | _, _, false, m2_body -> Seq (grad_body, m2_body)
       | false, m1_body, _, _ -> Seq (grad_body, m1_body) in
     if needs_gradient then
-      session_initializations := create ~node_id `Grad shape :: !session_initializations;    
+      session_initializations := create ~id `Grad shape :: !session_initializations;    
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
-    (if not m1_processed then global_roots := Map.remove !global_roots m1.node_id);
-    (if not m2_processed then global_roots := Map.remove !global_roots m2.node_id);
+    (if not m1_processed then global_roots := Map.remove !global_roots m1.id);
+    (if not m2_processed then global_roots := Map.remove !global_roots m2.id);
     let form = Some {backprop_body; needs_gradient} in
-    let formula = {forward_body; form; node_id; comp_node=n; shape_logic; shape} in
+    let formula = {forward_body; form; id; comp_node=n; shape_logic; shape} in
     let root = {forward_code=None; backprop_code=None; formula} in
-    global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
+    global_roots := Map.add_exn !global_roots ~key:id ~data:root;
     formula
 
 let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1: t =
   (* Note: do not capture m in any closure, so it can be GC'd. *)
-  let m1_processed = Option.is_some m1.form && not @@ Map.mem !global_roots m1.node_id in
-  let children = [{Ocannl_runtime.Node.sub_node_id=m1.node_id; computed_externally=m1_processed}] in
+  let m1_processed = Option.is_some m1.form && not @@ Map.mem !global_roots m1.id in
+  let children = [{Ocannl_runtime.Node.sub_node_id=m1.id; computed_externally=m1_processed}] in
   let n = NodeUI.create_of_same_precision_as ~is_form m1.comp_node ~op_label children in
-  let node_id = n.id in
+  let id = n.id in
 
   let shape =
     match init_shape with
     | None ->
       { Shape.batch=Unknown; input=Unknown; output=Unknown;
         axis_labels=Map.empty (module Shape.AxisKey);
-        deduce_output_from_input=`Not_constrained; node_id }
+        deduce_output_from_input=`Not_constrained; id }
     | Some shape -> shape in
   let shape_logic = Shape.Transpose(transpose_op, m1.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
@@ -216,9 +216,9 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1: t 
     match m1_processed, m1.forward_body with
     | true, _ | _, Noop -> op_body
     | false, m_body -> Seq (m_body, op_body) in
-  session_initializations := create ~node_id `Value shape :: !session_initializations;
+  session_initializations := create ~id `Value shape :: !session_initializations;
   if not is_form then
-    {forward_body; form=None; node_id; comp_node=n; shape_logic; shape}
+    {forward_body; form=None; id; comp_node=n; shape_logic; shape}
   else
     let form1 = match m1.form with
     | Some form -> form
@@ -227,26 +227,26 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1: t 
     let needs_gradient = form1.needs_gradient in
     let m1_no_grad = m1_processed || not form1.needs_gradient in
     if needs_gradient then
-      session_prepare_step := reset_zeros ~node_id `Grad shape :: !session_prepare_step;
+      session_prepare_step := reset_zeros ~id `Grad shape :: !session_prepare_step;
     let grad_body =
       if needs_gradient then grad_body ~n ~n1 projections else Noop in
     let grad_body =
       if form1.needs_gradient then grad_body
-      else Code.remove_updates {node_id=m1.node_id; field=`Grad} grad_body in
+      else Code.remove_updates {id=m1.id; field=`Grad} grad_body in
     (* The code needs to be included in the reverse order to which it was computed! *)
     let backprop_body =
       match m1_no_grad, form1.backprop_body with
       | true, _ | _, Noop -> grad_body
       | false, m1_body -> Seq (grad_body, m1_body) in
     if needs_gradient then
-      session_initializations := create ~node_id `Grad shape :: !session_initializations;    
+      session_initializations := create ~id `Grad shape :: !session_initializations;    
 
-    (if not m1_processed then global_roots := Map.remove !global_roots m1.node_id);
+    (if not m1_processed then global_roots := Map.remove !global_roots m1.id);
     let form = Some {backprop_body; needs_gradient} in
     let formula = {forward_body; form;
-                   node_id; comp_node=n; shape_logic; shape} in
+                   id; comp_node=n; shape_logic; shape} in
     let root = {forward_code=None; backprop_code=None; formula} in
-    global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
+    global_roots := Map.add_exn !global_roots ~key:id ~data:root;
     formula
 
 (** The default [needs_gradient] behavior. *)
@@ -264,8 +264,8 @@ let term_needs_gradient (spec: Shape.term_spec) =
 let term ~label ?needs_gradient ~is_form (spec: Shape.term_spec) ~init_op =
   let n =
     Ocannl_runtime.Node.create ~value_prec:Single ~grad_prec:Single ~is_form () ~op_label:label [] in
-  let node_id = n.id in
-  let shape = Shape.of_term_spec node_id spec in
+  let id = n.id in
+  let shape = Shape.of_term_spec id spec in
   let shape_logic = Shape.Terminal in
   (* NOTE: this update does not do any work, but that might change in the future,
      and having it in the update sequence might help with debuggability. *)
@@ -275,24 +275,24 @@ let term ~label ?needs_gradient ~is_form (spec: Shape.term_spec) ~init_op =
 
   let open Code in
   let forward_body = Noop in
-  session_initializations := create ~node_id ~init_op `Value shape :: !session_initializations;
+  session_initializations := create ~id ~init_op `Value shape :: !session_initializations;
   if not is_form then
-    {forward_body; form=None; node_id; comp_node=n; shape_logic; shape}
+    {forward_body; form=None; id; comp_node=n; shape_logic; shape}
   else
     let needs_gradient =
       match needs_gradient with
       | None -> term_needs_gradient spec
       | Some setting -> setting in
     if needs_gradient then
-      session_prepare_step := reset_zeros ~node_id `Grad shape :: !session_prepare_step;
+      session_prepare_step := reset_zeros ~id `Grad shape :: !session_prepare_step;
     let backprop_body = Noop in
     (* Very unlikely someone will want dw/dw. *)
     if needs_gradient then
-      session_initializations := create ~node_id `Grad shape :: !session_initializations;    
+      session_initializations := create ~id `Grad shape :: !session_initializations;    
     let form = Some {backprop_body; needs_gradient} in
-    let formula = {forward_body; form; node_id; comp_node=n; shape_logic; shape} in
+    let formula = {forward_body; form; id; comp_node=n; shape_logic; shape} in
     let root = {forward_code=None; backprop_code=None; formula} in
-    global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
+    global_roots := Map.add_exn !global_roots ~key:id ~data:root;
     formula
 
 let error_if_unknown_shape m =
@@ -302,21 +302,21 @@ let error_if_unknown_shape m =
   | {batch=Unknown; _} -> raise @@ Session_error ("Shape of batching is still unknown", Some m)
   | {output=Inferred []; _} ->
      raise @@ Session_error ("Shape of outputs is still empty -- missing shape information", Some m)
-  | {input=_; output=_; batch=_; axis_labels=_; deduce_output_from_input=_; node_id=_} -> ()
+  | {input=_; output=_; batch=_; axis_labels=_; deduce_output_from_input=_; id=_} -> ()
 
 let get_toplevel m =
   error_if_unknown_shape m;
   let open Code in
   let toplevel_forward =
-    Node_specific {procedure=m.forward_body; routine={node_id=m.node_id; field=`Forward};
-                   label="Forward #"^Int.to_string m.node_id} in
+    Node_specific {procedure=m.forward_body; routine={id=m.id; field=`Forward};
+                   label="Forward #"^Int.to_string m.id} in
   let backprop =
-    Seq (reset_ones ~node_id:m.node_id `Grad m.shape,
+    Seq (reset_ones ~id:m.id `Grad m.shape,
          (Option.value_exn m.form).backprop_body) in
   let toplevel_backprop =
     Node_specific {procedure=backprop;
-                   routine={node_id=m.node_id; field=`Backprop};
-                   label="Backprop #"^Int.to_string m.node_id} in
+                   routine={id=m.id; field=`Backprop};
+                   label="Backprop #"^Int.to_string m.id} in
   toplevel_forward, toplevel_backprop
 
 (* FIXME: not inlining here gives an error about PrintBox.Simple.t_of_sexp missing *)
@@ -331,13 +331,13 @@ type printbox = (* PrintBox.Simple.t *)
 
 let sexp_of_t m =
   Sexp.message "Formula" [
-    "node_id", Int.sexp_of_t m.node_id;
+    "id", Int.sexp_of_t m.id;
     "op_label", String.sexp_of_t m.comp_node.op_label;
   ]
 
 include Comparator.Make(struct
     type nonrec t = t
-    let compare m1 m2 = Int.compare m1.node_id m2.node_id
+    let compare m1 m2 = Int.compare m1.id m2.id
     let sexp_of_t = sexp_of_t
 end)
 
@@ -359,7 +359,7 @@ let ndarray ~is_form ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) 
     | _, _::_, _::_ ->
       let sh = {Shape.batch=Given batch_dims; input=Given input_dims; output=Given output_dims;
                 deduce_output_from_input=`Not_constrained;
-                axis_labels=(Shape.axis_labels_of_spec axis_labels).labels; node_id= -1} in
+                axis_labels=(Shape.axis_labels_of_spec axis_labels).labels; id= -1} in
       raise @@
       Shape.Shape_error ("Operation.ndarray: cannot provide all of [label], [batch_dims] and [input_dims]",
                          sh, sh) in
