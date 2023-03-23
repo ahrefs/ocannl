@@ -103,11 +103,15 @@ let rec pointpow ~is_form p m1: Formula.t =
       fun ~n:_ ~n1:_ ~n2:_ _projections -> Noop
     else if Float.equal p 2.0 then
       fun ~n ~n1 ~n2:_ projections ->
-        n1.grad =+ p_f *. m1 * n.grad ~projections:(fun () -> Shape.backprop_unary @@ projections())
+        n1.grad =+ p_f *. m1 * n.grad ~projections:(
+          fun () -> let p = projections() in Shape.{
+            p with project_lhs = p.project_rhs1; project_rhs2 = Some p.project_lhs })
     else
       fun ~n ~n1 ~n2:_ projections ->
         n1.grad =+ (p_f *. m1 **. (p -. 1.)) * n.grad
-                ~projections:(fun () -> Shape.backprop_unary @@ projections()) in
+                ~projections:(
+                  fun () -> let p = projections() in Shape.{
+                    p with project_lhs = p.project_rhs1; project_rhs2 = Some p.project_lhs }) in
   Formula.binop ~compose_op:`Pointwise ~op_label:"**." ~op_body ~grad_body ~is_form m1 p_f
 
 let unconstrained_param ?init label =
