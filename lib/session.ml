@@ -213,6 +213,11 @@ let dynload_with_handler ~with_debug ~runtime_store code =
               (if with_debug then "" else " (use `~with_debug:true` for more information)"))
   | _ -> ()
 
+let compile_and_run ?(with_debug=true) code =
+  (* Since we use [Initialization], this is just to satisfy [dynload_with_handler]. *)
+  let dummy = ref @@ Some (fun () -> ()) in
+  dynload_with_handler ~with_debug ~runtime_store:dummy (Code.Initialization code)
+  
 let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run=true)
     ?(force_no_init=false) () =
   let open Formula in
@@ -232,13 +237,9 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
   );
   (if regenerate then session_initialized := 0);
   if not force_no_init && (regenerate || reinit || root_changed) then (
-    (* Since we use [Initialization], this is just to satisfy [dynload_with_handler]. *)
-    let dummy = ref @@ Some (fun () -> ()) in
     let num_inits = List.length !session_initializations in
     let to_init = num_inits - !session_initialized in
-    let code =
-      Code.(Initialization (all_parallel @@ List.take !session_initializations to_init)) in
-    dynload_with_handler ~with_debug ~runtime_store:dummy code;
+    compile_and_run ~with_debug @@ Code.all_parallel @@ List.take !session_initializations to_init;
     session_initialized := num_inits
   );
   if regenerate || root_changed then (
@@ -319,13 +320,13 @@ let close_session() =
 
 let session_params() = NodeUI.param_nodes ~from_id:!Formula.first_session_id ()
 
-let update_params_code ~learning_rate ?params () =
+let update_params ?with_debug ~learning_rate ?params () =
   let params =
-    Option.value_or_thunk params ~default:(fun () -> Hashtbl.data @@ session_params()) in
+    match params with Some p -> p | None -> Hashtbl.data @@ session_params() in
   let module CDSL = Code.CDSL in
   let module NFDSL = Operation.NFDSL in
   let module N = Ocannl_runtime.Node in
-  Code.all_parallel @@ List.map params ~f:(
+  compile_and_run ?with_debug @@ Code.all_parallel @@ List.map params ~f:(
     fun n -> [%nn_cd n =+ !.learning_rate * n.grad ~projections:(
         fun () -> Shape.identity_projections (N.dims n.value))])
 
