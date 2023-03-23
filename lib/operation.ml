@@ -26,7 +26,7 @@ let mul compose_op =
     n =: n1 * n2 ~projections in
   let%nn_cd grad_body ~n ~n1 ~n2 projections =
     n1.grad =+ n.grad * n2 ~projections:(fun () -> Shape.backprop1 @@ projections()) ||
-    n2.grad =+ n.grad * n1 ~projections:(fun () -> Shape.backprop2 @@ projections()) in
+    n2.grad =+ n1 * n.grad ~projections:(fun () -> Shape.backprop2 @@ projections()) in
   Formula.binop ~compose_op 
     ~op_label:(if Shape.equal_compose_type compose_op `Pointwise then "*." else "*")
     ~op_body ~grad_body
@@ -54,7 +54,7 @@ let einsum spec =
     n =+ n1 * n2 ~projections in
   let%nn_cd grad_body ~n ~n1 ~n2 projections =
     n1.grad =+ n.grad * n2 ~projections:(fun () -> Shape.backprop1 @@ projections()) ||
-    n2.grad =+ n.grad * n1 ~projections:(fun () -> Shape.backprop2 @@ projections()) in
+    n2.grad =+ n1 * n.grad ~projections:(fun () -> Shape.backprop2 @@ projections()) in
   Formula.binop ~compose_op:(`Einsum spec) ~op_label:";=>" ~op_body ~grad_body
 
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract diagonals,
