@@ -20,7 +20,7 @@ let ndarray_op ?axis_labels ?label expr =
       ~output_dims:[%e edims output_dims] [%e values]]
 
 type expr_type = Code | Formula_nf | Node | Data | Data_grad | Operator | Unknown [@@deriving equal]
-type projections_slot = LHS | RHS1 | RHS2 | Nonslot | Undet [@@deriving equal]
+type projections_slot = LHS | RHS1 | RHS2 | Nonslot | Undet [@@deriving equal, sexp]
 
 let assignment_op expr =
   let loc = expr.pexp_loc in
@@ -59,7 +59,10 @@ let unary_op expr =
 
 let alphanum_regexp = Str.regexp "^[^a-zA-Z0-9]+$"
 let is_operator ident = Str.string_match alphanum_regexp ident 0
-      
+let is_assignment ident =
+  String.length ident > 1 && Char.equal ident.[0] '=' &&
+  not @@ List.mem ["=="; "==="; "=>"; "==>"; "=>>"] ident ~equal:String.equal
+
 let setup_data hs_pat (hs_typ, slot, hs) =
   let loc = hs.pexp_loc in
   match hs_typ with
@@ -79,6 +82,18 @@ let with_forward_args setups body =
       | None -> body
       | Some fwd ->
         Ast_helper.Exp.let_ ~loc Nonrecursive bindings [%expr Code.Seq([%e fwd], [%e body])])
+
+let project_xhs debug loc slot = match slot with
+  | LHS -> [%expr p.project_lhs]
+  | RHS1 -> [%expr p.project_rhs1]
+  | RHS2 -> [%expr Option.value_exn p.project_rhs2]
+  | Nonslot ->
+    Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
+      "ppx_ocannl %%nn_cd: not a valid accumulation/assignment slot filler at %s" debug
+  | Undet ->
+    Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
+      "ppx_ocannl %%nn_cd: insufficient slot filler information at %s %s" debug
+      "(incorporate one of: n, n1, n2, m1, m2, lhs, rhs, rhs1, rhs2)"
 
 let rec translate (expr: expression): expr_type * projections_slot * expression =
   let loc = expr.pexp_loc in
@@ -198,6 +213,81 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
       if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs_typ]
       then [%expr false] else [%expr true] in
     let body = [%expr Code.Accum_unop {
+        zero_out=[%e guess_zero_out]; accum=[%e accu_op]; lhs=[%e lhs];
+        op=Code.Identity; rhs=[%e rhs]; projections=[%e projections]}
+    ] in
+    let setups = List.filter_map ~f:Fn.id [lhs_setup; rhs_setup] in
+    with_forward_args setups body
+
+  | [%expr [%e? { pexp_desc = Pexp_ident {txt=Lident op_ident; _}; _ } as accu_op]
+      [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2])) ] when is_assignment op_ident ->
+    let accu_op = assignment_op accu_op in
+    let lhs_setup, lhs_typ, lhs_slot, lhs =
+      setup_data [%pat? nonform___lhs] @@ translate lhs in
+    let bin_op = binary_op bin_op in
+    let rhs1_setup, rhs1_typ, rhs1_slot, rhs1 =
+      setup_data [%pat? nonform___rhs1] @@ translate rhs1 in
+    let rhs2_setup, rhs2_typ, rhs2_slot, rhs2 =
+      setup_data [%pat? nonform___rhs2] @@ translate rhs2 in
+    let guess_zero_out =
+      if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs1_typ; rhs2_typ]
+      then [%expr false] else [%expr true] in
+    let project_lhs = project_xhs "LHS" lhs.pexp_loc lhs_slot in
+    let project_rhs1 = project_xhs "RHS1" rhs1.pexp_loc rhs1_slot in
+    let project_rhs2 = project_xhs "RHS2" rhs2.pexp_loc rhs2_slot in
+    let projections =
+      [%expr fun () -> let p = projections() in Shape.{
+        p with project_lhs = [%e project_lhs];
+               project_rhs1 = [%e project_rhs1]; project_rhs2 = Some [%e project_rhs2] }]
+     in
+    let body = [%expr Code.Accum_binop {
+      zero_out=[%e guess_zero_out]; accum=[%e accu_op]; lhs=[%e lhs];
+      op=[%e bin_op]; rhs1=[%e rhs1]; rhs2=[%e rhs2]; projections=[%e projections]}
+    ] in
+    let setups = List.filter_map ~f:Fn.id [lhs_setup; rhs1_setup; rhs2_setup] in
+    with_forward_args setups body
+
+  | [%expr [%e? { pexp_desc = Pexp_ident {txt=Lident op_ident; _}; _ } as accu_op]
+      [%e? lhs] ([%e? un_op] [%e? rhs]) ] when is_assignment op_ident ->
+      (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
+    let accu_op = assignment_op accu_op in
+    let lhs_setup, lhs_typ, lhs_slot, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
+    let un_op = unary_op un_op in
+    let rhs_setup, rhs_typ, rhs_slot, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
+    let guess_zero_out =
+      if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs_typ]
+      then [%expr false] else [%expr true] in
+      let project_lhs = project_xhs "LHS" lhs.pexp_loc lhs_slot in
+      let project_rhs1 = project_xhs "RHS1" rhs.pexp_loc rhs_slot in
+      let projections =
+        [%expr fun () -> let p = projections() in Shape.{
+          p with project_lhs = [%e project_lhs];
+                 project_rhs1 = [%e project_rhs1]; project_rhs2 = None }]
+       in
+      let body = [%expr Code.Accum_unop {
+        zero_out=[%e guess_zero_out]; accum=[%e accu_op]; lhs=[%e lhs];
+        op=[%e un_op]; rhs=[%e rhs]; projections=[%e projections]}
+    ] in
+    let setups = List.filter_map ~f:Fn.id [lhs_setup; rhs_setup] in
+    with_forward_args setups body
+
+  | [%expr [%e? { pexp_desc = Pexp_ident {txt=Lident op_ident; _}; _ } as accu_op]
+      [%e? lhs] [%e? rhs] ] when is_assignment op_ident ->
+      (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
+    let accu_op = assignment_op accu_op in
+    let lhs_setup, lhs_typ, lhs_slot, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
+    let rhs_setup, rhs_typ, rhs_slot, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
+    let guess_zero_out =
+      if List.exists ~f:(equal_expr_type Data_grad) [lhs_typ; rhs_typ]
+      then [%expr false] else [%expr true] in
+      let project_lhs = project_xhs "LHS" lhs.pexp_loc lhs_slot in
+      let project_rhs1 = project_xhs "RHS1" rhs.pexp_loc rhs_slot in
+      let projections =
+        [%expr fun () -> let p = projections() in Shape.{
+          p with project_lhs = [%e project_lhs];
+                 project_rhs1 = [%e project_rhs1]; project_rhs2 = None }]
+       in
+      let body = [%expr Code.Accum_unop {
         zero_out=[%e guess_zero_out]; accum=[%e accu_op]; lhs=[%e lhs];
         op=Code.Identity; rhs=[%e rhs]; projections=[%e projections]}
     ] in

@@ -13,20 +13,18 @@ let add =
   let open Code in
   let module NFDSL = struct module O = struct end end in
   let%nn_cd op_body ~n ~n1 ~n2 projections =
-    n =: n1 + n2 ~projections in
+    n =: n1 + n2 in
   let%nn_cd grad_body ~n ~n1 ~n2 projections =
-    n1.grad =+ n.grad ~projections:(fun () -> Shape.backprop1 @@ projections()) ||
-    n2.grad =+ n.grad ~projections:(fun () -> Shape.backprop2 @@ projections()) in
+    n1.grad =+ n.grad || n2.grad =+ n.grad in
   Formula.binop ~compose_op:`Pointwise ~op_label:"+" ~op_body ~grad_body
 
 let mul compose_op =
   let open Code in
   let module NFDSL = struct module O = struct end end in
-  let%nn_cd op_body ~n ~n1 ~n2 projections =
-    n =: n1 * n2 ~projections in
+  let%nn_cd op_body ~n ~n1 ~n2 projections = 
+    n =: n1 * n2 in
   let%nn_cd grad_body ~n ~n1 ~n2 projections =
-    n1.grad =+ n.grad * n2 ~projections:(fun () -> Shape.backprop1 @@ projections()) ||
-    n2.grad =+ n1 * n.grad ~projections:(fun () -> Shape.backprop2 @@ projections()) in
+    n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad in
   Formula.binop ~compose_op 
     ~op_label:(if Shape.equal_compose_type compose_op `Pointwise then "*." else "*")
     ~op_body ~grad_body
@@ -51,10 +49,9 @@ let einsum spec =
   let open Code in
   let module NFDSL = struct module O = struct end end in
   let%nn_cd op_body ~n ~n1 ~n2 projections =
-    n =+ n1 * n2 ~projections in
+    n =+ n1 * n2 in
   let%nn_cd grad_body ~n ~n1 ~n2 projections =
-    n1.grad =+ n.grad * n2 ~projections:(fun () -> Shape.backprop1 @@ projections()) ||
-    n2.grad =+ n1 * n.grad ~projections:(fun () -> Shape.backprop2 @@ projections()) in
+    n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad in
   Formula.binop ~compose_op:(`Einsum spec) ~op_label:";=>" ~op_body ~grad_body
 
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract diagonals,
@@ -66,9 +63,9 @@ let einsum1 spec =
   let open Code in
   let module NFDSL = struct module O = struct end end in
   let%nn_cd op_body ~n ~n1 projections =
-    n =+ n1 ~projections in
+    n =+ n1 in
   let%nn_cd grad_body ~n ~n1 projections =
-    n1.grad =+ n.grad ~projections:(fun () -> Shape.backprop_unary @@ projections()) in
+    n1.grad =+ n.grad in
   Formula.unop ~transpose_op:(`Permute spec) ~op_label:"=>" ~op_body ~grad_body
 
 let relu =
@@ -77,7 +74,7 @@ let relu =
   let%nn_cd op_body ~n ~n1 projections =
     n =: !/ n1 ~projections in
   let%nn_cd grad_body ~n ~n1 projections =
-    n1.grad =+ n -?/ n.grad ~projections:(fun () -> Shape.backprop_unary @@ projections()) in
+    n1.grad =+ n -?/ n.grad in
   Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
 
 module NFO_without_pow = struct
@@ -102,16 +99,9 @@ let rec pointpow ~is_form p m1: Formula.t =
     if not is_form then 
       fun ~n:_ ~n1:_ ~n2:_ _projections -> Noop
     else if Float.equal p 2.0 then
-      fun ~n ~n1 ~n2:_ projections ->
-        n1.grad =+ p_f *. m1 * n.grad ~projections:(
-          fun () -> let p = projections() in Shape.{
-            p with project_lhs = p.project_rhs1; project_rhs2 = Some p.project_lhs })
+      fun ~n ~n1 ~n2:_ projections -> n1.grad =+ p_f *. m1 * n.grad
     else
-      fun ~n ~n1 ~n2:_ projections ->
-        n1.grad =+ (p_f *. m1 **. (p -. 1.)) * n.grad
-                ~projections:(
-                  fun () -> let p = projections() in Shape.{
-                    p with project_lhs = p.project_rhs1; project_rhs2 = Some p.project_lhs }) in
+      fun ~n ~n1 ~n2:_ projections -> n1.grad =+ (p_f *. m1 **. (p -. 1.)) * n.grad in
   Formula.binop ~compose_op:`Pointwise ~op_label:"**." ~op_body ~grad_body ~is_form m1 p_f
 
 let unconstrained_param ?init label =
