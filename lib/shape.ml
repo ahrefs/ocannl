@@ -680,9 +680,8 @@ type projections = {
       argument of a binary operation. *)
 } [@@deriving sexp]
 
-(** Projections for iterating over a terminal [Code], or for a pointwise unary operator. *)
-let terminal_projections sh =
-  let product_space = to_dims sh in
+(** Projections for iterating over a terminal in [Code], or for a pointwise unary operator. *)
+let identity_projections product_space =
   let product_iterators = Array.map product_space ~f:(fun _ -> get_symbol()) in
   let project_lhs = Array.map product_iterators ~f:iterator in
   { product_space; product_iterators; project_lhs; project_rhs1=project_lhs; project_rhs2=None; }
@@ -757,7 +756,7 @@ let derive_projections (shapes: update_step) : projections =
   (* For binary cases, we cannot rely on [cur_sh] containing all axes, since in principle it could
      have been restricted by an initial [Given] setting to efficiently implement map-reduce. *)
   match shapes.logic with
-  | Terminal -> let _chpoint: string = "terminal" in terminal_projections cur_sh
+  | Terminal -> identity_projections @@ to_dims cur_sh
   | Transpose (`Transpose, sh) ->
     let product_inp = broadcast_sh cur_sh Input sh Output in
     let iters_inp = List.map product_inp ~f:(fun _ -> get_symbol()) in
