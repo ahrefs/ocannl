@@ -183,11 +183,11 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body ~is_form m1 m2 
     global_roots := Map.add_exn !global_roots ~key:node_id ~data:root;
     formula
 
-let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m: t =
+let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1: t =
   (* Note: do not capture m in any closure, so it can be GC'd. *)
-  let m_processed = Option.is_some m.form && not @@ Map.mem !global_roots m.node_id in
-  let children = [{Ocannl_runtime.Node.sub_node_id=m.node_id; computed_externally=m_processed}] in
-  let n = NodeUI.create_of_same_precision_as ~is_form m.comp_node ~op_label children in
+  let m1_processed = Option.is_some m1.form && not @@ Map.mem !global_roots m1.node_id in
+  let children = [{Ocannl_runtime.Node.sub_node_id=m1.node_id; computed_externally=m1_processed}] in
+  let n = NodeUI.create_of_same_precision_as ~is_form m1.comp_node ~op_label children in
   let node_id = n.id in
 
   let shape =
@@ -197,51 +197,51 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m: t =
         axis_labels=Map.empty (module Shape.AxisKey);
         deduce_output_from_input=`Not_constrained; node_id }
     | Some shape -> shape in
-  let shape_logic = Shape.Transpose(transpose_op, m.shape) in
+  let shape_logic = Shape.Transpose(transpose_op, m1.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.(
     propagate_shapes local_shape_update;
-    if Option.is_none init_shape then match m.shape with
+    if Option.is_none init_shape then match m1.shape with
     | {batch=Given _; input=Given _; output=Given _; _} ->
       set_dims_type shape given
     | _ -> ()
   );
   session_shape_updates := local_shape_update :: !session_shape_updates;
-  let n1 = m.comp_node in
+  let n1 = m1.comp_node in
   let projections() = Shape.derive_projections local_shape_update in
   let op_body = op_body ~n ~n1 projections in
   (* The code needs to be included in the order it was computed! *)
   let open Code in
   let forward_body =
-    match m_processed, m.forward_body with
+    match m1_processed, m1.forward_body with
     | true, _ | _, Noop -> op_body
     | false, m_body -> Seq (m_body, op_body) in
   session_initializations := create ~node_id `Value shape :: !session_initializations;
   if not is_form then
     {forward_body; form=None; node_id; comp_node=n; shape_logic; shape}
   else
-    let form1 = match m.form with
+    let form1 = match m1.form with
     | Some form -> form
     | None ->
-      raise @@ Session_error ("binop ~is_form:true but subformula is non-form", Some m) in
+      raise @@ Session_error ("binop ~is_form:true but subformula is non-form", Some m1) in
     let needs_gradient = form1.needs_gradient in
-    let m_no_grad = m_processed || not form1.needs_gradient in
+    let m1_no_grad = m1_processed || not form1.needs_gradient in
     if needs_gradient then
       session_prepare_step := reset_zeros ~node_id `Grad shape :: !session_prepare_step;
     let grad_body =
       if needs_gradient then grad_body ~n ~n1 projections else Noop in
     let grad_body =
       if form1.needs_gradient then grad_body
-      else Code.remove_updates {node_id=m.node_id; field=`Grad} grad_body in
+      else Code.remove_updates {node_id=m1.node_id; field=`Grad} grad_body in
     (* The code needs to be included in the reverse order to which it was computed! *)
     let backprop_body =
-      match m_no_grad, form1.backprop_body with
+      match m1_no_grad, form1.backprop_body with
       | true, _ | _, Noop -> grad_body
-      | false, m_body -> Seq (grad_body, m_body) in
+      | false, m1_body -> Seq (grad_body, m1_body) in
     if needs_gradient then
       session_initializations := create ~node_id `Grad shape :: !session_initializations;    
 
-    (if not m_processed then global_roots := Map.remove !global_roots m.node_id);
+    (if not m1_processed then global_roots := Map.remove !global_roots m1.node_id);
     let form = Some {backprop_body; needs_gradient} in
     let formula = {forward_body; form;
                    node_id; comp_node=n; shape_logic; shape} in
