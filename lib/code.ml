@@ -198,7 +198,7 @@ let unoptimized_program prog: unit low_level =
 module CDSL = struct
   let value_of_id id: data = {id; field=`Value}
   let grad_of_id id: data = {id; field=`Grad}
-  
+  let data_of_node field n: data = {id=n.NodeUI.id; field}
 end
 
 let interpret_llc ?(with_debug=true) llc =

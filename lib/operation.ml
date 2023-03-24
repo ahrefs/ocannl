@@ -7,24 +7,24 @@ module CDSL = Code.CDSL
 let add =
   let open Code in
   let module NFDSL = struct module O = struct end end in
-  let%nn_cd op_body ~n ~n1 ~n2 projections =
+  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
     n =: n1 + n2 in
-  let%nn_cd grad_body ~n ~n1 ~n2 projections =
+  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
     n1.grad =+ n.grad || n2.grad =+ n.grad in
-  Formula.binop ~compose_op:Pointwise ~op_label:"+" ~op_body ~grad_body
+  Formula.binop ~compose_op:Pointwise_bin ~op_label:"+" ~op_body ~grad_body
 
 let mul compose_op =
   let open Code in
   let module NFDSL = struct module O = struct end end in
-  let%nn_cd op_body ~n ~n1 ~n2 projections = 
+  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections = 
     n =: n1 * n2 in
-  let%nn_cd grad_body ~n ~n1 ~n2 projections =
+  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
     n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad in
   Formula.binop ~compose_op 
-    ~op_label:(if Shape.equal_compose_type compose_op Pointwise then "*." else "*")
+    ~op_label:(if Shape.equal_compose_type compose_op Pointwise_bin then "*." else "*")
     ~op_body ~grad_body
 
-let pointmul = mul Pointwise
+let pointmul = mul Pointwise_bin
 
 (* N1: AxB, N2 BxC, N: AxC, A: output of N1, B: input/output of N1/N2, C: input of N2.
    Although the matrix algebra would require that we insert additional transposes in gradient multiplies:
@@ -43,9 +43,9 @@ let matmul = mul Compose
 let einsum spec =
   let open Code in
   let module NFDSL = struct module O = struct end end in
-  let%nn_cd op_body ~n ~n1 ~n2 projections =
+  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
     n =+ n1 * n2 in
-  let%nn_cd grad_body ~n ~n1 ~n2 projections =
+  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
     n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad in
   Formula.binop ~compose_op:(Einsum spec) ~op_label:";=>" ~op_body ~grad_body
 
@@ -57,20 +57,20 @@ let einsum spec =
 let einsum1 spec =
   let open Code in
   let module NFDSL = struct module O = struct end end in
-  let%nn_cd op_body ~n ~n1 projections =
+  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) projections =
     n =+ n1 in
-  let%nn_cd grad_body ~n ~n1 projections =
+  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) projections =
     n1.grad =+ n.grad in
   Formula.unop ~transpose_op:(Permute spec) ~op_label:"=>" ~op_body ~grad_body
 
 let relu =
   let open Code in
   let module NFDSL = struct module O = struct end end in
-  let%nn_cd op_body ~n ~n1 projections =
+  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) projections =
     n =: !/ n1 ~projections in
-  let%nn_cd grad_body ~n ~n1 projections =
+  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) projections =
     n1.grad =+ n -?/ n.grad in
-  Formula.unop ~transpose_op:Pointwise ~op_label:"r" ~op_body ~grad_body
+  Formula.unop ~transpose_op:Pointwise_un ~op_label:"r" ~op_body ~grad_body
 
 module NFO_without_pow = struct
   let ( * ) = matmul ~is_form:false
@@ -88,16 +88,16 @@ let rec pointpow ~is_form p m1: Formula.t =
   let module NFDSL = struct module O = NFO_without_pow end in
   let open Code in
   let p_f = Formula.number ~is_form p in
-  let%nn_cd op_body ~n ~n1 ~n2 projections =
+  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
     n =: n1 ** n2 ~projections in
   let%nn_cd grad_body =
     if not is_form then 
       fun ~n:_ ~n1:_ ~n2:_ _projections -> Noop
     else if Float.equal p 2.0 then
-      fun ~n ~n1 ~n2:_ projections -> n1.grad =+ p_f *. m1 * n.grad
+      fun ~(n:NodeUI.t) ~(n1:NodeUI.t) ~n2:_ projections -> n1.grad =+ p_f *. m1 * n.grad
     else
-      fun ~n ~n1 ~n2:_ projections -> n1.grad =+ (p_f *. m1 **. (p -. 1.)) * n.grad in
-  Formula.binop ~compose_op:Pointwise ~op_label:"**." ~op_body ~grad_body ~is_form m1 p_f
+      fun ~(n:NodeUI.t) ~(n1:NodeUI.t) ~n2:_ projections -> n1.grad =+ (p_f *. m1 **. (p -. 1.)) * n.grad in
+  Formula.binop ~compose_op:Pointwise_bin ~op_label:"**." ~op_body ~grad_body ~is_form m1 p_f
 
 let unconstrained_param ?init label =
   (* Note: no axis label so that we do not conflict with user labels. *)
@@ -125,16 +125,17 @@ let given_dims_params ?(axis_labels="") ?(input_dims=[]) ?(output_dims=[]) label
 
 let assign =
   let module NFDSL = struct module O = struct end end in
-  let%nn_cd assign ~lhs ~rhs projections =
+  let%nn_cd assign ~(lhs:Code.data) ~(rhs:Code.data) projections =
     lhs =: rhs ~projections in
   assign
 
-let assign_op field ~n ~n1 projections = assign ~lhs:(field n) ~rhs:(field n1) projections
+let assign_op field ~(n:NodeUI.t) ~(n1:NodeUI.t) projections = assign ~lhs:(field n) ~rhs:(field n1) projections
 
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient =
   let grad_body ~n:_ ~n1:_ _projections = Code.Noop in
-  Formula.unop ~transpose_op:Pointwise ~op_label:"stop_grad" ~op_body:(assign_op v) ~grad_body
+  let op_body = assign_op @@ Code.CDSL.data_of_node `Value in
+  Formula.unop ~transpose_op:Pointwise_un ~op_label:"stop_grad" ~op_body ~grad_body
     ~is_form:true
 
 (** A [stop_broadcast] mutates the partially-inferred shape of a formula in-place, substituting-in
@@ -143,9 +144,11 @@ let stop_broadcast m = Shape.set_dims_type m.Formula.shape Shape.fixed
 
 (** [identity] introduces a new node, which is an identity in both the forward and backward pass. *)
 let identity ~is_form m =
-  let grad_body ~n ~n1 projections = assign_op g ~n:n1 ~n1:n projections in
-  Formula.(unop ~init_shape:m.shape ~transpose_op:Pointwise ~op_label:"="
-             ~op_body:(assign_op v) ~grad_body ~is_form)
+  let grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) = 
+    assign_op (Code.CDSL.data_of_node `Grad) ~n:n1 ~n1:n in
+  let op_body = assign_op @@ Code.CDSL.data_of_node `Value in
+  Formula.(unop ~init_shape:m.shape ~transpose_op:Pointwise_un ~op_label:"="
+             ~op_body ~grad_body ~is_form)
 
 module O = struct
   let ( * ) = matmul ~is_form:true
