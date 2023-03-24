@@ -97,7 +97,7 @@ let create ~id ?(init_op=`Unspecified) field shape =
 
 let max_sublabel_length = ref 25
 
-let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body ~is_form m1 m2 =
+let binop ~op_label ?(compose_op=Pointwise) ~op_body ~grad_body ~is_form m1 m2 =
   (* Note: do not capture m1, m2 in any closure, so they can be GC'd. *)
   (if (m1.id < !first_session_id) then
     raise @@ Session_error ("The subformula is outside of current session", Some m1));
@@ -115,7 +115,7 @@ let binop ~op_label ?(compose_op=`Pointwise) ~op_body ~grad_body ~is_form m1 m2 
   let id = n.id in
   let shape = { Shape.batch=Unknown; input=Unknown; output=Unknown;
                 axis_labels=Map.empty (module Shape.AxisKey);
-                deduce_output_from_input=`Not_constrained; id } in
+                deduce_output_from_input=Not_constrained; id } in
   let shape_logic = Shape.Broadcast (compose_op, m1.shape, m2.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.(
@@ -195,7 +195,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1: t 
     | None ->
       { Shape.batch=Unknown; input=Unknown; output=Unknown;
         axis_labels=Map.empty (module Shape.AxisKey);
-        deduce_output_from_input=`Not_constrained; id }
+        deduce_output_from_input=Not_constrained; id }
     | Some shape -> shape in
   let shape_logic = Shape.Transpose(transpose_op, m1.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
@@ -358,7 +358,7 @@ let ndarray ~is_form ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) 
     | _, _, [] -> Data {batch_dims; output_dims; axis_labels}
     | _, _::_, _::_ ->
       let sh = {Shape.batch=Given batch_dims; input=Given input_dims; output=Given output_dims;
-                deduce_output_from_input=`Not_constrained;
+                deduce_output_from_input=Not_constrained;
                 axis_labels=(Shape.axis_labels_of_spec axis_labels).labels; id= -1} in
       raise @@
       Shape.Shape_error ("Operation.ndarray: cannot provide all of [label], [batch_dims] and [input_dims]",

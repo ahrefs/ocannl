@@ -11,7 +11,7 @@ let add =
     n =: n1 + n2 in
   let%nn_cd grad_body ~n ~n1 ~n2 projections =
     n1.grad =+ n.grad || n2.grad =+ n.grad in
-  Formula.binop ~compose_op:`Pointwise ~op_label:"+" ~op_body ~grad_body
+  Formula.binop ~compose_op:Pointwise ~op_label:"+" ~op_body ~grad_body
 
 let mul compose_op =
   let open Code in
@@ -21,10 +21,10 @@ let mul compose_op =
   let%nn_cd grad_body ~n ~n1 ~n2 projections =
     n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad in
   Formula.binop ~compose_op 
-    ~op_label:(if Shape.equal_compose_type compose_op `Pointwise then "*." else "*")
+    ~op_label:(if Shape.equal_compose_type compose_op Pointwise then "*." else "*")
     ~op_body ~grad_body
 
-let pointmul = mul `Pointwise
+let pointmul = mul Pointwise
 
 (* N1: AxB, N2 BxC, N: AxC, A: output of N1, B: input/output of N1/N2, C: input of N2.
    Although the matrix algebra would require that we insert additional transposes in gradient multiplies:
@@ -33,7 +33,7 @@ let pointmul = mul `Pointwise
    in our setup there is no transposing to do, since the projections produce correct indices for their
    corresponding matrices. *)
 
-let matmul = mul `Compose
+let matmul = mul Compose
 
 (** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of
     matrix multiplication, inner and outer products, etc.
@@ -47,7 +47,7 @@ let einsum spec =
     n =+ n1 * n2 in
   let%nn_cd grad_body ~n ~n1 ~n2 projections =
     n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad in
-  Formula.binop ~compose_op:(`Einsum spec) ~op_label:";=>" ~op_body ~grad_body
+  Formula.binop ~compose_op:(Einsum spec) ~op_label:";=>" ~op_body ~grad_body
 
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract diagonals,
     compute traces etc.
@@ -61,7 +61,7 @@ let einsum1 spec =
     n =+ n1 in
   let%nn_cd grad_body ~n ~n1 projections =
     n1.grad =+ n.grad in
-  Formula.unop ~transpose_op:(`Permute spec) ~op_label:"=>" ~op_body ~grad_body
+  Formula.unop ~transpose_op:(Permute spec) ~op_label:"=>" ~op_body ~grad_body
 
 let relu =
   let open Code in
@@ -70,7 +70,7 @@ let relu =
     n =: !/ n1 ~projections in
   let%nn_cd grad_body ~n ~n1 projections =
     n1.grad =+ n -?/ n.grad in
-  Formula.unop ~transpose_op:`Pointwise ~op_label:"r" ~op_body ~grad_body
+  Formula.unop ~transpose_op:Pointwise ~op_label:"r" ~op_body ~grad_body
 
 module NFO_without_pow = struct
   let ( * ) = matmul ~is_form:false
@@ -78,7 +78,7 @@ module NFO_without_pow = struct
   let (+) = add ~is_form:false
   let (!/) = relu ~is_form:false
   let (!~) label =
-   Formula.term ~label ~is_form:false (Deduced_params `Not_constrained) ~init_op:`Standard_uniform
+   Formula.term ~label ~is_form:false (Deduced_params Not_constrained) ~init_op:`Standard_uniform
   let (!.) = Formula.number ~is_form:false
   let (-) m1 m2 = m1 + !.(-1.) *. m2
   let (~-) m = !.(-1.) *. m
@@ -97,14 +97,14 @@ let rec pointpow ~is_form p m1: Formula.t =
       fun ~n ~n1 ~n2:_ projections -> n1.grad =+ p_f *. m1 * n.grad
     else
       fun ~n ~n1 ~n2:_ projections -> n1.grad =+ (p_f *. m1 **. (p -. 1.)) * n.grad in
-  Formula.binop ~compose_op:`Pointwise ~op_label:"**." ~op_body ~grad_body ~is_form m1 p_f
+  Formula.binop ~compose_op:Pointwise ~op_label:"**." ~op_body ~grad_body ~is_form m1 p_f
 
 let unconstrained_param ?init label =
   (* Note: no axis label so that we do not conflict with user labels. *)
   let init_op = match init with
   | None -> `Standard_uniform
   | Some c -> `Constant_of_value c in
-  Formula.term ~is_form:true ~label (Deduced_params `Not_constrained) ~init_op
+  Formula.term ~is_form:true ~label (Deduced_params Not_constrained) ~init_op
 
 let range ~is_form ?(axis_label="") upto =
   Formula.term ~is_form ~label:("0"^"..."^Int.to_string upto)
@@ -134,7 +134,7 @@ let assign_op field ~n ~n1 projections = assign ~lhs:(field n) ~rhs:(field n1) p
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient =
   let grad_body ~n:_ ~n1:_ _projections = Code.Noop in
-  Formula.unop ~transpose_op:`Pointwise ~op_label:"stop_grad" ~op_body:(assign_op v) ~grad_body
+  Formula.unop ~transpose_op:Pointwise ~op_label:"stop_grad" ~op_body:(assign_op v) ~grad_body
     ~is_form:true
 
 (** A [stop_broadcast] mutates the partially-inferred shape of a formula in-place, substituting-in
@@ -144,7 +144,7 @@ let stop_broadcast m = Shape.set_dims_type m.Formula.shape Shape.fixed
 (** [identity] introduces a new node, which is an identity in both the forward and backward pass. *)
 let identity ~is_form m =
   let grad_body ~n ~n1 projections = assign_op g ~n:n1 ~n1:n projections in
-  Formula.(unop ~init_shape:m.shape ~transpose_op:`Pointwise ~op_label:"="
+  Formula.(unop ~init_shape:m.shape ~transpose_op:Pointwise ~op_label:"="
              ~op_body:(assign_op v) ~grad_body ~is_form)
 
 module O = struct
@@ -154,7 +154,7 @@ module O = struct
   let ( **. ) base exp = pointpow exp base ~is_form:true
   let (!/) = relu ~is_form:true
   let (!~) label =
-   Formula.term ~label ~is_form:true (Deduced_params `Not_constrained) ~init_op:`Standard_uniform
+   Formula.term ~label ~is_form:true (Deduced_params Not_constrained) ~init_op:`Standard_uniform
   let (!.) = Formula.number ~is_form:true
   let (-) m1 m2 = m1 + !.(-1.) *. m2
   let (~-) m = !.(-1.) *. m
