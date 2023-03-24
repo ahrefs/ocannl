@@ -32,64 +32,7 @@ let get_node id =
 
 (** *** Printing. *** *)
 
-(** We print out up to 5 axes when printing an [Code], as a grid (outer rectangle) of (inner)
-    rectangles, possibly repeated (screens). *)
-type array_print_style =
-[ `Default
-(** The inner rectangles comprise both an input and an output axis, if available. Similarly,
-    the outer rectangle comprises a second-from-end input axis and a second-from-end output axis,
-    if available. At least one batch axis is output, when available.
-    The axes that couldn't be output are printed at position/dimension [0]. *)
-| `N5_layout of string
-(** The string should provide exclusively non-negative integer pseudo-labels. The numbers [0]-[4] represent
-    the priorities of the axes to be printed out, where the priorities correspond to, from highest:
-    horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the outer
-    rectangle, repetition (see also [NodeUI.pp_print]). The numbers [n >= 5] stand for the actual
-    positions [n - 5] within the corresponding axes. *)
-| `Label_layout of (string * int) list
-(** The association from axis labels to integers. The negative numbers [-5] to [-1] represent
-    the priorities of the axes to be printed out, where the priorities correspond to, from highest:
-    horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the outer
-    rectangle, repetition (as above). The numbers [n >= 0] stand for the actual positions
-    within the corresponding axes. Unspecified axes are printed at position [0]. *)
-| `Inline
-(** The tensors are printed linearly, in a bracketed manner, optionally prefixed with the labels
-    specification. Note that the syntax causes ambiguity for 1-dimensional input axes (underscores are
-    used for axes without explicit labels); when there is a 1-dimensional input axis, we output
-    the labels specification even if there are no axis labels as a way to display the number of axes.
-    The axis nesting is right-to-left (rightmost is innermost).
-    The input axes are innermost and the batch axes outermost. The input axes use [,] as a separator
-    and [()] as axis delimiters, but the delimiter for the outermost (i.e. leftmost) axis is omitted.
-    The output axes use [;] as a separator and [[]] as axis delimiters (obligatory).
-    The batch axes use [;] as a separator and [[||]] as axis delimiters (obligatory). *)
-]
-
-let default_display_indices sh =
-  let axes = Shape.axis_keys_to_idcs sh |> Map.map ~f:(fun _ -> 0) in
-  let occupied = Array.create ~len:5 false in
-  let set_occu prio = occupied.(prio + 5) <- true; prio in
-  let occu prio = occupied.(prio + 5) in
-  let num_input_axes = List.length Shape.(list_of_dims @@ dims_of_kind Input sh) in
-  let remaining = Stack.of_list @@ List.filter ~f:(Map.mem axes) @@
-    Shape.AxisKey.[
-      {in_axes=Input; from_end=1}; {in_axes=Output; from_end=1};
-      {in_axes=Input; from_end=2}; {in_axes=Output; from_end=2};
-      (if num_input_axes > 1 then {in_axes=Batch; from_end=1} else {in_axes=Output; from_end=3});
-      {in_axes=Batch; from_end=1}; {in_axes=Batch; from_end=2};
-      {in_axes=Input; from_end=3}; {in_axes=Output; from_end=3};
-      {in_axes=Input; from_end=4}; {in_axes=Output; from_end=4};
-      {in_axes=Input; from_end=5}; {in_axes=Output; from_end=5} ] in
-  let rec loop offset axes =
-    if Stack.is_empty remaining || offset > 5 then axes
-    else if Fn.non occu ~-offset
-    then
-      loop (offset + 1) @@ Map.change axes (Stack.pop_exn remaining)
-        ~f:(Option.map ~f:(fun _ -> set_occu ~-offset))
-    else loop (offset + 1) axes in
-  let axes = loop 1 axes in
-  Shape.axis_map_to_dims_index axes
-
-let print_formula ~with_grad ~with_code (style: array_print_style) m =
+let print_formula ~with_grad ~with_code (style: NodeUI.array_print_style) m =
   let open Formula in
   let sh = m.shape in
   let prefix =
@@ -97,8 +40,7 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
     Shape.to_string_hum ~style:`Axis_number_and_size sh^" " in
   let indices =
     match style with
-    | `Default ->
-      default_display_indices sh      
+    | `Default -> NodeUI.default_display_indices sh      
     | `N5_layout priorities ->
       let p_labels = Shape.(axis_labels_of_spec priorities).labels |>
                      Map.map ~f:(Fn.compose ((-) 5) Int.of_string) in
@@ -126,12 +68,12 @@ let print_formula ~with_grad ~with_code (style: array_print_style) m =
   (match style with
    | `Inline ->
      NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
-       ?labels_spec m.comp_node.value
+       ?labels_spec m.node.node.value
    | _ ->
-     NodeUI.pp_tensor Caml.Format.std_formatter ~prefix ~labels ~indices m.comp_node.value;
+     NodeUI.pp_tensor Caml.Format.std_formatter ~prefix ~labels ~indices m.node.node.value;
      Caml.Format.print_newline());
   if with_grad then (
-    match style, m.comp_node.form with
+    match style, m.node.node.form with
     | `Inline, Some cform ->
       NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
         ?labels_spec cform.grad;
@@ -226,15 +168,8 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
   let root_changed = Map.exists !global_roots
       ~f:(fun root -> Option.is_none root.forward_code || Option.is_none root.backprop_code) in
   (* Initialization and the forward processing. *)
-  if regenerate || root_changed then (
-    List.iter !session_shape_updates ~f:Shape.propagate_shapes;
-    List.iter !session_shape_updates ~f:(fun update_step ->
-        let sh = update_step.shape in
-        let n = Ocannl_runtime.Node.get sh.id in
-        n.default_display_indices <- Some (default_display_indices sh);
-        n.default_display_labels <- Some (Shape.axis_map_to_dims_index ~default:"" sh.axis_labels)
-      );
-  );
+  (if regenerate || root_changed then
+    List.iter !session_shape_updates ~f:Shape.propagate_shapes);
   (if regenerate then session_initialized := 0);
   if not force_no_init && (regenerate || reinit || root_changed) then (
     let num_inits = List.length !session_initializations in
@@ -253,7 +188,7 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
       | Some prepare -> prepare ());
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
       let m = root.formula in
-      let cform = match m.comp_node.form with
+      let cform = match m.node.node.form with
         | Some form -> form
         | None -> assert false in
       if regenerate || Option.is_none root.forward_code || Option.is_none root.backprop_code then (
@@ -291,7 +226,7 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
   (* The backpropagation. *)
   if run then
     List.iter (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
-        let cform = match root.formula.comp_node.form with
+        let cform = match root.formula.node.node.form with
           | Some form -> form
           | None -> assert false in
         Option.value_exn !(cform.backprop) ())
