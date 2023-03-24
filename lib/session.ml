@@ -19,7 +19,7 @@ let get_root id =
 
 let get_node id =
   let open Ocannl_runtime.Node in
-  match Hashtbl.find global.node_store id with
+  match Hashtbl.find NodeUI.global_node_store id with
   | Some r -> r
   | None ->
     let msg = 
@@ -240,6 +240,7 @@ let drop_session() =
   Formula.session_initialized := 0;
   Formula.session_prepare_step := [];
   for i = !Formula.first_session_id to Ocannl_runtime.Node.global.unique_id - 1 do
+    Hashtbl.remove NodeUI.global_node_store i;
     Hashtbl.remove Ocannl_runtime.Node.global.node_store i
   done;
   Ocannl_runtime.Node.global.unique_id <- !Formula.first_session_id

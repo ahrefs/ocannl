@@ -8,7 +8,7 @@ let%expect_test "Hello World" =
   Stdio.printf "Hello World!\n";
   [%expect {| Hello World! |}]
 
-let%expect_test "op:Pointwise multiplication dims 1" =
+let%expect_test "Pointwise multiplication dims 1" =
   let open Session.SDSL in
   drop_session();
   Random.init 0;
