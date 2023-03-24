@@ -68,8 +68,8 @@ type dims =
 
 type deduce_dims =
 | Not_constrained
-| Preserve
-| Scale of float
+| Input_equals_output
+| Input_output_scale of float
 [@@deriving compare, sexp, variants]
 
 (** Converts dimensions according to the specification. Note that scalar axes (1D) are not scaled,
@@ -79,11 +79,11 @@ type deduce_dims =
     how the [Given] and [Fixed] cases are interpreted here. *)
 let deduce_dims from: deduce_dims -> dims = function
 | Not_constrained -> Unknown
-| Preserve ->
+| Input_equals_output ->
   (match from with
   | Given dims | Fixed dims -> Inferred dims
   | Inferred _ | Unknown -> from)
-| Scale sc ->
+| Input_output_scale sc ->
   match from with
   | Unknown -> Unknown
   | (Given dims | Fixed dims | Inferred dims) -> Inferred (List.map dims ~f:(
@@ -98,10 +98,10 @@ type t = {
   mutable input: dims;
   mutable output: dims;
   mutable axis_labels: string axis_map;
-  deduce_output_from_input: deduce_dims;
+  deduce_within_shape_constraints: deduce_dims;
   (** Intended for terminal node cases where both [input] and [output] are initially
       unknown. It makes it trivial to implement dimension-preserving hidden layers: just set
-      [deduce_output_from_input=Preserve]. *)
+      [deduce_within_shape_constraints=Input_equals_output]. *)
   id: int;
   (** A node that has the same shape as this shape. *)
 } [@@deriving fields, sexp]
@@ -112,7 +112,7 @@ let dims_of_kind = function
   | AxisKey.Output -> output
 
 type compose_type =
-  | Pointwise
+  | Pointwise_bin
   (** NumPy-style broadcast matching batch, input and output axes, e.g. as in [s1 + s2]. *)
   | Compose
   (** Compose the outputs of the second shape with the inputs of the first shape, i.e. the shape of
@@ -120,7 +120,7 @@ type compose_type =
   | Einsum of string
   (** The [einsum] syntax: LABELS1;LABELS2=>LABELS3, where LABELSi are labels specifications.
       Note that currently [Compose] is not redundant with [Einsum], because it enables more shape
-      inference: [Einsum] is limited to [Pointwise]-like broadcasting, while [Compose] broadcasts
+      inference: [Einsum] is limited to [Pointwise_bin]-like broadcasting, while [Compose] broadcasts
       inputs of the "operator" against outputs of the "operand" (matching up an arbitrary number of axes).
       The [axis_labels] use pseudo-labels local to the notation, to line up the axes.
       For [Einsum (ls1^";"^ls2^"=>"^ls3)], the symmetric difference / disjunctive union of [ls1] and [ls2]'s
@@ -134,7 +134,7 @@ type compose_type =
 type transpose_type =
   | Transpose
   (** Swaps inputs and outputs of a shape, preserves batch axes. *)
-  | Pointwise
+  | Pointwise_un
   (** Preserves the shape. *)
   | Permute of string
   (** [Permute (ls1^"=>"^ls2)] is a variant of the [einsum] syntax [Einsum (ls1^";"^ls1^"=>"^ls2)].
@@ -214,8 +214,8 @@ let einsum_of_spec spec =
     | None -> spec, "" in
   let lhs_ls = axis_labels_of_spec lhs_spec in
   let rhs1_ls = axis_labels_of_spec rhs1_spec in
-  if String.is_empty rhs2_spec then Permute (rhs1_ls, lhs_ls)
-  else Einsum (rhs1_ls, axis_labels_of_spec rhs2_spec, lhs_ls) 
+  if String.is_empty rhs2_spec then `Permute_unop (rhs1_ls, lhs_ls)
+  else `Permute_binop (rhs1_ls, axis_labels_of_spec rhs2_spec, lhs_ls) 
 
 (** How to propagate shape updates and do the last update of [Formula.t.shape] when finalizing the formula.
     Axes are broadcast-expanded on a bottom-up update to fit the incoming shape. *)
@@ -482,7 +482,7 @@ let propagate_shapes (update: update_step) =
     sh.output <- broadcast_into sh Output cur_sh Input;
     sh.batch <- broadcast_into sh Batch cur_sh Batch;
 
-  | Transpose (Pointwise, sh) ->
+  | Transpose (Pointwise_un, sh) ->
     cur_sh.input <- broadcast_into cur_sh Input sh Input;
     cur_sh.output <- broadcast_into cur_sh Output sh Output;
     cur_sh.batch <- broadcast_into cur_sh Batch sh Batch;
@@ -492,8 +492,9 @@ let propagate_shapes (update: update_step) =
 
   | Transpose (Permute spec, sh) ->
     let ls_rhs, ls_lhs = match einsum_of_spec spec with
-    | Permute (ls_rhs, ls_lhs) -> ls_rhs, ls_lhs
-    | _ -> raise @@ Shape_error ("Invalid permutation spec (expected one argument): "^spec, sh, cur_sh) in
+    | `Permute_unop (ls_rhs, ls_lhs) -> ls_rhs, ls_lhs
+    | _ -> raise @@
+      Shape_error ("Invalid permutation spec (expected one argument): "^spec, sh, cur_sh) in
     let sh_rhs = to_axis_map sh in
     let sh_lhs = to_axis_map cur_sh in
     let eqs_rhs = eqs_xhs spec sh ls_rhs sh_rhs in
@@ -523,7 +524,7 @@ let propagate_shapes (update: update_step) =
     let rhs_axis_labels = Map.map rhs_labels ~f:(Map.find_exn all_axis_labels) in
     sh.axis_labels <- rhs_axis_labels
 
-  | Broadcast (Pointwise, sh1, sh2) ->
+  | Broadcast (Pointwise_bin, sh1, sh2) ->
     let up_labels = pointwise_labels sh1 sh2 sh1.axis_labels sh2.axis_labels in
     cur_sh.axis_labels <- up_labels;
     (if is_unknown cur_sh.input then
@@ -577,16 +578,17 @@ let propagate_shapes (update: update_step) =
 
     (* Always re-derive the output shape, to have the latest information. *)
     (* TODO: isn't it wasteful to discard the old sh1.output? *)
-    if not @@ is_not_constrained sh1.deduce_output_from_input then
-      sh1.output <- deduce_dims sh2.input sh1.deduce_output_from_input
+    if not @@ is_not_constrained sh1.deduce_within_shape_constraints then
+      sh1.output <- deduce_dims sh2.input sh1.deduce_within_shape_constraints
     (* TODO(#37):
     if not @@ is_not_constrained sh1.deduce_input_from_output then
       sh1.input <- deduce_dims sh2.output sh1.deduce_input_from_output *)
 
   | Broadcast (Einsum spec, sh1, sh2) ->
     let ls_rhs1, ls_rhs2, ls_lhs = match einsum_of_spec spec with
-    | Einsum (ls_rhs1, ls_rhs2, ls_lhs) -> ls_rhs1, ls_rhs2, ls_lhs
-    | _ -> raise @@ Shape_error ("Invalid einsum spec (expected two arguments): "^spec, sh1, sh2) in
+    | `Permute_binop (ls_rhs1, ls_rhs2, ls_lhs) -> ls_rhs1, ls_rhs2, ls_lhs
+    | _ -> raise @@
+      Shape_error ("Invalid einsum spec (expected two arguments): "^spec, sh1, sh2) in
     let sh_rhs1 = to_axis_map sh1 in
     let sh_rhs2 = to_axis_map sh2 in
     let sh_lhs = to_axis_map cur_sh in
@@ -780,7 +782,7 @@ let derive_projections (shapes: update_step) : projections =
       Array.of_list @@ List.concat [rhs_batch; rhs_output; rhs_input] in    
     { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 = None }
 
-  | Transpose (Pointwise, sh) ->
+  | Transpose (Pointwise_un, sh) ->
     let product_inp = broadcast_sh cur_sh Input sh Input in
     let iters_inp = List.map product_inp ~f:(fun _ -> get_symbol()) in
     let lhs_input = broadcast_into iters_inp cur_sh Input sh Input in
@@ -805,8 +807,9 @@ let derive_projections (shapes: update_step) : projections =
 
   | Transpose (Permute spec, sh) ->
     let ls_rhs, ls_lhs = match einsum_of_spec spec with
-    | Permute (ls_rhs, ls_lhs) -> ls_rhs, ls_lhs
-    | _ -> raise @@ Shape_error ("Invalid permutation (single-argument einsum) spec: "^spec, sh, cur_sh) in
+    | `Permute_unop (ls_rhs, ls_lhs) -> ls_rhs, ls_lhs
+    | _ -> raise @@
+      Shape_error ("Invalid permutation (single-argument einsum) spec: "^spec, sh, cur_sh) in
     (* For einsum the product_space is precisely one-axis-per-label. *)
     let sh_rhs = to_axis_map sh in
     let sh_lhs = to_axis_map cur_sh in
@@ -847,7 +850,7 @@ let derive_projections (shapes: update_step) : projections =
       Array.of_list @@ List.concat [rhs_batch; rhs_output; rhs_input] in    
     { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 = None }
 
-  | Broadcast (Pointwise, sh1, sh2) ->
+  | Broadcast (Pointwise_bin, sh1, sh2) ->
     let product_inp =
       match cur_sh.input with
       | Given _ | Unknown -> broadcast_sh sh1 Input sh2 Input
@@ -930,8 +933,9 @@ let derive_projections (shapes: update_step) : projections =
 
   | Broadcast (Einsum spec, sh1, sh2) ->
     let ls_rhs1, ls_rhs2, ls_lhs = match einsum_of_spec spec with
-    | Einsum (ls_rhs1, ls_rhs2, ls_lhs) -> ls_rhs1, ls_rhs2, ls_lhs
-    | _ -> raise @@ Shape_error ("Invalid (two-argument) einsum spec: "^spec, sh1, sh2) in
+    | `Permute_binop (ls_rhs1, ls_rhs2, ls_lhs) -> ls_rhs1, ls_rhs2, ls_lhs
+    | _ -> raise @@
+      Shape_error ("Invalid (two-argument) einsum spec: "^spec, sh1, sh2) in
     (* For einsum the product_space is precisely one-axis-per-label. *)
     let sh_rhs1 = to_axis_map sh1 in
     let sh_rhs2 = to_axis_map sh2 in
@@ -1036,9 +1040,9 @@ type term_spec =
   | Deduced_params of deduce_dims
     (** Parameters with inferred dimensionality. Use cases:
         [Deduced_params Not_constrained] -- the shape will need to be fully inferred (no batch dims).
-        [Deduced_params Preserve] -- a hidden layer preserving the dimensionality.
-        [Deduced_params (Scale 2.0)] -- an expansion hidden layer doubling the dimensionality.
-        [Deduced_params (Scale 0.5)] -- an bottleneck hidden layer halving the dimensionality.
+        [Deduced_params Input_equals_output] -- a hidden layer preserving the dimensionality.
+        [Deduced_params (Input_output_scale 2.0)] -- an expansion hidden layer doubling the dimensionality.
+        [Deduced_params (Input_output_scale 0.5)] -- an bottleneck hidden layer halving the dimensionality.
         Note that scalar axes (1D) are not scaled, for compatibility with broadcasting. *)
 [@@deriving compare, sexp]
 
@@ -1046,31 +1050,31 @@ let of_term_spec id: term_spec -> t = function
   | Unknown_shape ->
     { batch=Unknown; input=Unknown; output=Unknown;
       axis_labels=Map.empty (module AxisKey);
-      deduce_output_from_input=Not_constrained; id }
+      deduce_within_shape_constraints=Not_constrained; id }
   | Constant {output_dims; axis_labels} ->
     { batch=Given []; input=Given []; output=Given output_dims;
       axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_output_from_input=Not_constrained; id }
+      deduce_within_shape_constraints=Not_constrained; id }
   | Data {batch_dims; output_dims; axis_labels} ->
     { batch=Given batch_dims; input=Given []; output=Given output_dims;
       axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_output_from_input=Not_constrained; id }
+      deduce_within_shape_constraints=Not_constrained; id }
   | Params {input_dims; output_dims; axis_labels} ->
     { batch=Given []; input=Given input_dims; output=Given output_dims;
       axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_output_from_input=Not_constrained; id }
-  | Transform  {batch_dims; input_dims; output_dims; axis_labels} ->
+      deduce_within_shape_constraints=Not_constrained; id }
+  | Transform {batch_dims; input_dims; output_dims; axis_labels} ->
     { batch=Given batch_dims; input=Given input_dims; output=Given output_dims;
       axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_output_from_input=Not_constrained; id }
+      deduce_within_shape_constraints=Not_constrained; id }
   | Unknown_batch_data {output_dims; axis_labels} ->
     { batch=Unknown; input=Given []; output=Given output_dims;
       axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_output_from_input=Not_constrained; id }
-  | Deduced_params deduce_output_from_input ->
+      deduce_within_shape_constraints=Not_constrained; id }
+  | Deduced_params deduce_within_shape_constraints ->
     { batch=Given []; input=Unknown; output=Unknown;
       axis_labels=Map.empty (module AxisKey);
-      deduce_output_from_input; id }
+      deduce_within_shape_constraints; id }
 
 let to_string_hum ?(style=`Axis_size) sh =
   let n_outputs = List.length @@ list_of_dims @@ dims_of_kind Output sh in
