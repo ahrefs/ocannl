@@ -79,7 +79,17 @@ let setup_data hs_pat (hs_typ, slot, hs) =
     Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].forward_body]),
     hs_typ, slot, [%expr CDSL.value_of_id [%e pat2expr hs_pat].id]
   | Formula_or_node_or_data -> None, hs_typ, slot, [%expr CDSL.value_of_id [%e hs].id]
+  | Grad_of_source expr -> None, hs_typ, slot, [%expr CDSL.value_of_id [%e expr].id]
   | _ -> None, hs_typ, slot, hs
+
+let setup_node_id hs_pat (hs_typ, slot, hs) =
+  let loc = hs.pexp_loc in
+  match hs_typ with
+  | Formula_nf ->
+    Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].forward_body]),
+    hs_typ, slot, [%expr [%e pat2expr hs_pat].id]
+  | Grad_of_source expr -> None, hs_typ, slot, [%expr [%e expr].id]
+  | _ -> None, hs_typ, slot, [%expr [%e hs].id]
 
 let with_forward_args setups body =
   let loc = body.pexp_loc in
@@ -166,8 +176,7 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
 
   | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections])) ] ->
     let accu_op = assignment_op accu_op in
-    let lhs_setup, lhs_typ, _lhs_slot, lhs =
-      setup_data [%pat? nonform___lhs] @@ translate lhs in
+    let lhs_setup, lhs_typ, _lhs_slot, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
     let bin_op = binary_op bin_op in
     let rhs1_setup, rhs1_typ, _rhs1_slot, rhs1 =
       setup_data [%pat? nonform___rhs1] @@ translate rhs1 in
@@ -210,6 +219,68 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
     let body = [%expr Code.Accum_unop {
         zero_out=[%e guess_zero_out]; accum=[%e accu_op]; lhs=[%e lhs];
         op=Code.Identity; rhs=[%e rhs]; projections=[%e projections]}
+    ] in
+    let setups = List.filter_map ~f:Fn.id [lhs_setup; rhs_setup] in
+    with_forward_args setups body
+
+  | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~logic:[%e? logic])) ] ->
+    let accu_op = assignment_op accu_op in
+    let lhs_setup, lhs_typ, _lhs_slot, lhs_id =
+      setup_node_id [%pat? nonform___lhs] @@ translate lhs in
+    let bin_op = binary_op bin_op in
+    let rhs1_setup, rhs1_typ, _rhs1_slot, rhs1_id =
+      setup_node_id [%pat? nonform___rhs1] @@ translate rhs1 in
+    let rhs2_setup, rhs2_typ, _rhs2_slot, rhs2_id =
+      setup_node_id [%pat? nonform___rhs2] @@ translate rhs2 in
+    let guess_zero_out =
+      if List.exists ~f:is_grad [lhs_typ; rhs1_typ; rhs2_typ]
+      then [%expr false] else [%expr true] in
+    let lhs_is_grad = if is_grad lhs_typ then [%expr true] else [%expr false] in
+    let rhs1_is_grad = if is_grad rhs1_typ then [%expr true] else [%expr false] in
+    let rhs2_is_grad = if is_grad rhs2_typ then [%expr true] else [%expr false] in
+    let body = [%expr
+      Formula.raw_binop ~zero_out:[%e guess_zero_out] ~accum:[%e accu_op]
+        ~lhs_id:[%e lhs_id] ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e bin_op]
+        ~rhs1_id:[%e rhs1_id] ~rhs1_is_grad:[%e rhs1_is_grad] ~rhs2_id:[%e rhs2_id]
+        ~rhs2_is_grad:[%e rhs2_is_grad] ~logic:[%e logic]
+    ] in
+    let setups = List.filter_map ~f:Fn.id [lhs_setup; rhs1_setup; rhs2_setup] in
+    with_forward_args setups body
+
+  | [%expr [%e? accu_op] [%e? lhs] (([%e? un_op] [%e? rhs]) ~logic:[%e? logic]) ]
+  | [%expr [%e? accu_op] [%e? lhs] ([%e? un_op] ([%e? rhs] ~logic:[%e? logic])) ] ->
+      (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
+    let accu_op = assignment_op accu_op in
+    let lhs_setup, lhs_typ, _lhs_slot, lhs_id =
+     setup_node_id [%pat? nonform___lhs] @@ translate lhs in
+    let un_op = unary_op un_op in
+    let rhs_setup, rhs_typ, _rhs_slot, rhs_id =
+     setup_node_id [%pat? nonform___rhs] @@ translate rhs in
+    let guess_zero_out =
+      if List.exists ~f:is_grad [lhs_typ; rhs_typ]
+      then [%expr false] else [%expr true] in
+    let lhs_is_grad = if is_grad lhs_typ then [%expr true] else [%expr false] in
+    let rhs_is_grad = if is_grad rhs_typ then [%expr true] else [%expr false] in
+    let body = [%expr
+    Formula.raw_unop ~zero_out:[%e guess_zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id]
+      ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e un_op] ~rhs_id:[%e rhs_id]
+      ~rhs_is_grad:[%e rhs_is_grad] ~logic:[%e logic]
+    ] in
+    let setups = List.filter_map ~f:Fn.id [lhs_setup; rhs_setup] in
+    with_forward_args setups body
+
+  | [%expr [%e? accu_op] [%e? lhs] ([%e? rhs] ~logic:[%e? logic]) ] ->
+    let accu_op = assignment_op accu_op in
+    let lhs_setup, lhs_typ, _lhs_slot, lhs_id =
+     setup_node_id [%pat? nonform___lhs] @@ translate lhs in
+    let rhs_setup, rhs_typ, _rhs_slot, rhs_id =
+     setup_node_id [%pat? nonform___rhs] @@ translate rhs in
+    let guess_zero_out =
+      if List.exists ~f:is_grad [lhs_typ; rhs_typ]
+      then [%expr false] else [%expr true] in
+    let body = [%expr
+       Formula.raw_unop ~zero_out:[%e guess_zero_out] ~accum_op:[%e accu_op] ~lhs_id:[%e lhs_id]
+        ~op:Code.Identity ~rhs_id:[%e rhs_id] ~logic:[%e logic]
     ] in
     let setups = List.filter_map ~f:Fn.id [lhs_setup; rhs_setup] in
     with_forward_args setups body

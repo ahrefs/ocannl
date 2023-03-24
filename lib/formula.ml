@@ -97,6 +97,48 @@ let create ~id ?(init_op=`Unspecified) field shape =
 
 let max_sublabel_length = ref 25
 
+let raw_binop ~zero_out ~accum ~lhs_id ~lhs_is_grad ~op
+    ~rhs1_id ~rhs1_is_grad ~rhs2_id ~rhs2_is_grad ~logic =
+  let n = NodeUI.get lhs_id in
+  let n1 = NodeUI.get rhs1_id in
+  let n2 = NodeUI.get rhs2_id in
+  let shape = n.shape in
+  let shape_logic = Shape.Broadcast (logic, n1.shape, n2.shape) in
+  let local_shape_update = Shape.{ shape; logic=shape_logic } in
+  Shape.(
+    propagate_shapes local_shape_update;
+    match n1.shape, n2.shape with
+    | {batch=Given _; input=Given _; output=Given _; _},
+      {batch=Given _; input=Given _; output=Given _; _} ->
+      set_dims_type shape given
+    | _ -> ()
+  );
+  session_shape_updates := local_shape_update :: !session_shape_updates;
+  let projections() = Shape.derive_projections local_shape_update in
+  let lhs = Code.CDSL.(if lhs_is_grad then grad_of_id lhs_id else value_of_id lhs_id) in
+  let rhs1 = Code.CDSL.(if rhs1_is_grad then grad_of_id rhs1_id else value_of_id rhs1_id) in
+  let rhs2 = Code.CDSL.(if rhs2_is_grad then grad_of_id rhs2_id else value_of_id rhs2_id) in
+  Code.Accum_binop { zero_out; accum; lhs; op; rhs1; rhs2; projections}
+
+let raw_unop ~zero_out ~accum ~lhs_id ~lhs_is_grad ~op ~rhs_id ~rhs_is_grad ~logic =
+  let n = NodeUI.get lhs_id in
+  let n1 = NodeUI.get rhs_id in
+  let shape = n.shape in
+  let shape_logic = Shape.Transpose (logic, n1.shape) in
+  let local_shape_update = Shape.{ shape; logic=shape_logic } in
+  Shape.(
+    propagate_shapes local_shape_update;
+    match n1.shape with
+    | {batch=Given _; input=Given _; output=Given _; _} ->
+      set_dims_type shape given
+    | _ -> ()
+  );
+  session_shape_updates := local_shape_update :: !session_shape_updates;
+  let projections() = Shape.derive_projections local_shape_update in
+  let lhs = Code.CDSL.(if lhs_is_grad then grad_of_id lhs_id else value_of_id lhs_id) in
+  let rhs = Code.CDSL.(if rhs_is_grad then grad_of_id rhs_id else value_of_id rhs_id) in
+  Code.Accum_unop { zero_out; accum; lhs; op; rhs; projections}
+  
 let binop ~op_label ?(compose_op=Shape.Pointwise_bin) ~op_body ~grad_body ~is_form m1 m2 =
   (* Note: do not capture m1, m2 in any closure, so they can be GC'd. *)
   (if (m1.id < !first_session_id) then

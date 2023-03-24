@@ -96,7 +96,7 @@ let print_formula ~with_grad ~with_code (style: NodeUI.array_print_style) m =
   );
   Stdio.printf "\n%!"
 
-let print_global_root ~with_grad ~with_code (style: array_print_style) root =
+let print_global_root ~with_grad ~with_code (style: NodeUI.array_print_style) root =
   let open Formula in
   print_formula ~with_grad ~with_code:false style root.formula;
   if with_code then (
@@ -111,7 +111,7 @@ let print_global_root ~with_grad ~with_code (style: array_print_style) root =
   );
   Stdio.printf "\n%!"
 
-let print_global_roots ~with_grad ~with_code (style: array_print_style) =
+let print_global_roots ~with_grad ~with_code (style: NodeUI.array_print_style) =
   let open Formula in
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (id, root) ->
       assert (id = root.formula.id);
@@ -262,7 +262,7 @@ let update_params ?with_debug ~learning_rate ?params () =
   let module NFDSL = Operation.NFDSL in
   let module N = Ocannl_runtime.Node in
   compile_and_run ?with_debug @@ Code.all_parallel @@ List.map params ~f:(
-    fun n -> [%nn_cd n =+ !.learning_rate * n.grad])
+    fun n -> [%nn_cd n =+ !.learning_rate * n.grad ~logic:Pointwise_bin])
 
 module SDSL = struct
   let set_executor = set_executor
