@@ -79,7 +79,7 @@ let setup_data hs_pat (hs_typ, slot, hs) =
     Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].forward_body]),
     hs_typ, slot, [%expr CDSL.value_of_id [%e pat2expr hs_pat].id]
   | Formula_or_node_or_data -> None, hs_typ, slot, [%expr CDSL.value_of_id [%e hs].id]
-  | Grad_of_source expr -> None, hs_typ, slot, [%expr CDSL.value_of_id [%e expr].id]
+  | Grad_of_source expr -> None, hs_typ, slot, [%expr CDSL.grad_of_id [%e expr].id]
   | _ -> None, hs_typ, slot, hs
 
 let setup_node_id hs_pat (hs_typ, slot, hs) =
@@ -167,12 +167,12 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
 
   | [%expr [%e? expr1].grad ] ->
     let typ1, slot1, expr1 = translate expr1 in
-    let expr1 = match typ1 with
+    let expr_grad = match typ1 with
     | Formula_or_node_or_data -> [%expr CDSL.grad_of_id [%e expr1].id]
     | _ ->
       Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
         "ppx_ocannl %%nn_cd: the x.grad syntax requires x to be Node.t, Node.data or Formula.t" in
-    Grad_of_source expr1, slot1, expr1
+    Grad_of_source expr1, slot1, expr_grad
 
   | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections])) ] ->
     let accu_op = assignment_op accu_op in
