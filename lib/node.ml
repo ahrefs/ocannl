@@ -242,7 +242,7 @@ let get_grad (type val_t arr_t) (prec: (val_t, arr_t) precision) uid: arr_t =
 (** Constructs a node with empty tensors of the specified precision and registers it in the global store.
     Note that the precision for gradients should not be lower than the precision for values. *)
 let create (type grad_arr_t value_arr_t) ~(value_prec: ('a, value_arr_t) precision)
-    ?(grad_prec: ('a, grad_arr_t) precision option) ~is_form () ~op_label children =
+    ?(grad_prec: ('a, grad_arr_t) precision option) ~is_form () =
   let id = let uid = global.unique_id in global.unique_id <- global.unique_id + 1; uid in
   let form =
     match grad_prec, is_form with
@@ -254,10 +254,6 @@ let create (type grad_arr_t value_arr_t) ~(value_prec: ('a, value_arr_t) precisi
     | _, false -> None in
   let node = {
     value=as_ndarray value_prec @@ empty value_prec;
-    form;
-    op_label; children; id;
-    default_display_indices=None;
-    default_display_labels=None;
-  } in
+    form; id } in
   Hashtbl.add_exn global.node_store ~key:node.id ~data:node;
   node

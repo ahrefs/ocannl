@@ -5,34 +5,51 @@ open Ocannl_runtime
 
 (** A DAG of decorated [Node]s, also storing the shape information. *)
 type t = {
+  id: int;
   node: Node.t;
-  (* FIXME: maybe just store IDs? Reconsider. *)
-  children: t list;
-  computed_externally: bool;
+  children: sub_node list;
   op_label: string;
   shape: Shape.t;
 } [@@deriving sexp_of]
+and sub_node = {
+  sub_node_id: int;
+  computed_externally: bool;
+} [@@deriving sexp_of]
+
+let global_node_store = Hashtbl.create (module Int)
+let get uid = Hashtbl.find_exn global_node_store uid
+
+(** Constructs a node with empty tensors of the specified precision and registers it in the global store.
+    Note that the precision for gradients should not be lower than the precision for values. *)
+let create (type grad_arr_t value_arr_t) ~(value_prec: ('a, value_arr_t) Node.precision)
+    ?(grad_prec: ('a, grad_arr_t) Node.precision option) ~is_form ()
+    ~op_label ~shape_spec ~children =
+  let node = Node.create ~value_prec ?grad_prec ~is_form () in
+  let shape = Shape.of_term_spec node.id shape_spec in
+  let data = { id=node.id; node; op_label; children; shape } in
+  Hashtbl.add_exn global_node_store ~key:node.id ~data;
+  data
 
 let create_of_same_precision_as ~is_form (node: Node.t) =
   match node.value, node.form with
   | Single_nd _, Some {grad=Single_nd _; _} ->
-    Node.create ~value_prec:Single ~grad_prec:Single ~is_form ()
+    create ~value_prec:Single ~grad_prec:Single ~is_form ()
   | Single_nd _, Some {grad=Double_nd _; _} ->
-    Node.create ~value_prec:Single ~grad_prec:Double ~is_form ()
+    create ~value_prec:Single ~grad_prec:Double ~is_form ()
   | Double_nd _, Some {grad=Double_nd _; _} ->
-    Node.create ~value_prec:Double ~grad_prec:Double ~is_form ()
+    create ~value_prec:Double ~grad_prec:Double ~is_form ()
   | Single_nd _, None ->
     if is_form then
       invalid_arg @@
       "create_of_same_precision_as: ~is_form:true but a non-form subnode ["^
       Int.to_string node.id
-    else Node.create ~value_prec:Single ~is_form:false ()
+    else create ~value_prec:Single ~is_form:false ()
   | Double_nd _, None ->
     if is_form then
       invalid_arg @@
       "create_of_same_precision_as: ~is_form:true but a non-form subnode ["^
       Int.to_string node.id
-    else Node.create ~value_prec:Double ~is_form:false ()
+    else create ~value_prec:Double ~is_form:false ()
   | _, Some {grad; _} -> invalid_arg @@
   "create_of_same_precision_as: unsupported combination of precisions value: "^
   Node.ndarray_precision_to_string node.value^", grad: "^
@@ -46,17 +63,17 @@ let create_of_promoted_precision ~is_form (n1: Node.t) (n2: Node.t) =
   | Single_nd _, Single_nd _ ->
     (match n1.form, n2.form with
      | Some {grad=Single_nd _; _}, Some {grad=Single_nd _; _} ->
-       Node.create ~value_prec:Single ~grad_prec:Single ~is_form ()
+       create ~value_prec:Single ~grad_prec:Single ~is_form ()
      | Some {grad=Single_nd _; _}, Some {grad=Double_nd _; _}
      | Some {grad=Double_nd _; _}, Some {grad=Single_nd _; _}
      | Some {grad=Double_nd _; _}, Some {grad=Double_nd _; _} ->
-       Node.create ~value_prec:Single ~grad_prec:Double ~is_form ()
+       create ~value_prec:Single ~grad_prec:Double ~is_form ()
      | None, _ | _, None ->
       if is_form then
         invalid_arg @@
         "create_of_promoted_precision: ~is_form:true but a non-form subnode ["^
         Int.to_string n1.id^"] or ["^Int.to_string n2.id^"]"
-      else Node.create ~value_prec:Single ~is_form:false ()
+      else create ~value_prec:Single ~is_form:false ()
      | Some {grad=n1grad; _}, Some {grad=n2grad; _} ->
        invalid_arg @@
        "create_of_promoted_precision: unsupported combination of precisions n1 grad: "^
@@ -64,17 +81,17 @@ let create_of_promoted_precision ~is_form (n1: Node.t) (n2: Node.t) =
        Node.ndarray_precision_to_string n2grad)
   | (Single_nd _, Double_nd _ | Double_nd _, Single_nd _ | Double_nd _, Double_nd _)
     when Option.is_some n1.form || Option.is_some n2.form ->
-    Node.create ~value_prec:Double ~grad_prec:Double ~is_form:true ()
+    create ~value_prec:Double ~grad_prec:Double ~is_form:true ()
   | (Single_nd _, Double_nd _ | Double_nd _, Single_nd _ | Double_nd _, Double_nd _) ->
-    Node.create ~value_prec:Double ~is_form:false ()
+    create ~value_prec:Double ~is_form:false ()
   | _ -> invalid_arg @@
   "create_of_promoted_precision: unsupported combination of precisions n1 value: "^
   Node.ndarray_precision_to_string n1.value^", n2 value: "^
   Node.ndarray_precision_to_string n2.value
-
+  
 let param_nodes ?(from_id=0) () =
-  Hashtbl.filter Node.global.node_store ~f:(
-    fun n -> n.id >= from_id && Option.is_some n.form && List.is_empty n.children)
+  Hashtbl.filter global_node_store ~f:(
+    fun n -> n.node.id >= from_id && Option.is_some n.node.form && List.is_empty n.children)
 
 (* *** Printing *** *)
 
@@ -93,9 +110,9 @@ let ndarray_dims_to_string ?(with_axis_numbers=false) arr =
 (** Converts ID, label and the dimensions of a node to a string. *)
 let node_header n =
   let open Node in
-  let v_dims_s = ndarray_dims_to_string n.value in
+  let v_dims_s = ndarray_dims_to_string n.node.value in
   let g_dims_s =
-    match n.form with None -> "<no-form>" | Some form -> ndarray_dims_to_string form.grad in
+    match n.node.form with None -> "<no-form>" | Some form -> ndarray_dims_to_string form.grad in
   let dims_s =
     if String.equal v_dims_s g_dims_s then "dims "^v_dims_s
     else "dims val "^v_dims_s^" grad "^g_dims_s in
@@ -248,37 +265,94 @@ let pp_tensor_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?label
   loop 0
 
 
+(** We print out up to 5 axes when printing an [Code], as a grid (outer rectangle) of (inner)
+    rectangles, possibly repeated (screens). *)
+type array_print_style =
+[ `Default
+(** The inner rectangles comprise both an input and an output axis, if available. Similarly,
+    the outer rectangle comprises a second-from-end input axis and a second-from-end output axis,
+    if available. At least one batch axis is output, when available.
+    The axes that couldn't be output are printed at position/dimension [0]. *)
+| `N5_layout of string
+(** The string should provide exclusively non-negative integer pseudo-labels. The numbers [0]-[4] represent
+    the priorities of the axes to be printed out, where the priorities correspond to, from highest:
+    horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the outer
+    rectangle, repetition (see also [NodeUI.pp_print]). The numbers [n >= 5] stand for the actual
+    positions [n - 5] within the corresponding axes. *)
+| `Label_layout of (string * int) list
+(** The association from axis labels to integers. The negative numbers [-5] to [-1] represent
+    the priorities of the axes to be printed out, where the priorities correspond to, from highest:
+    horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the outer
+    rectangle, repetition (as above). The numbers [n >= 0] stand for the actual positions
+    within the corresponding axes. Unspecified axes are printed at position [0]. *)
+| `Inline
+(** The tensors are printed linearly, in a bracketed manner, optionally prefixed with the labels
+    specification. Note that the syntax causes ambiguity for 1-dimensional input axes (underscores are
+    used for axes without explicit labels); when there is a 1-dimensional input axis, we output
+    the labels specification even if there are no axis labels as a way to display the number of axes.
+    The axis nesting is right-to-left (rightmost is innermost).
+    The input axes are innermost and the batch axes outermost. The input axes use [,] as a separator
+    and [()] as axis delimiters, but the delimiter for the outermost (i.e. leftmost) axis is omitted.
+    The output axes use [;] as a separator and [[]] as axis delimiters (obligatory).
+    The batch axes use [;] as a separator and [[||]] as axis delimiters (obligatory). *)
+]
+
+let default_display_indices sh =
+  let axes = Shape.axis_keys_to_idcs sh |> Map.map ~f:(fun _ -> 0) in
+  let occupied = Array.create ~len:5 false in
+  let set_occu prio = occupied.(prio + 5) <- true; prio in
+  let occu prio = occupied.(prio + 5) in
+  let num_input_axes = List.length Shape.(list_of_dims @@ dims_of_kind Input sh) in
+  let remaining = Stack.of_list @@ List.filter ~f:(Map.mem axes) @@
+    Shape.AxisKey.[
+      {in_axes=Input; from_end=1}; {in_axes=Output; from_end=1};
+      {in_axes=Input; from_end=2}; {in_axes=Output; from_end=2};
+      (if num_input_axes > 1 then {in_axes=Batch; from_end=1} else {in_axes=Output; from_end=3});
+      {in_axes=Batch; from_end=1}; {in_axes=Batch; from_end=2};
+      {in_axes=Input; from_end=3}; {in_axes=Output; from_end=3};
+      {in_axes=Input; from_end=4}; {in_axes=Output; from_end=4};
+      {in_axes=Input; from_end=5}; {in_axes=Output; from_end=5} ] in
+  let rec loop offset axes =
+    if Stack.is_empty remaining || offset > 5 then axes
+    else if Fn.non occu ~-offset
+    then
+      loop (offset + 1) @@ Map.change axes (Stack.pop_exn remaining)
+        ~f:(Option.map ~f:(fun _ -> set_occu ~-offset))
+    else loop (offset + 1) axes in
+  let axes = loop 1 axes in
+  Shape.axis_map_to_dims_index axes
+
 let to_dag ?entries_per_axis ~with_value ~with_grad n_id =
-  let rec to_dag {Node.sub_node_id; computed_externally}: PrintBox_utils.dag =
-    let n = Node.get sub_node_id in
+  let rec to_dag {sub_node_id; computed_externally}: PrintBox_utils.dag =
+    let n = get sub_node_id in
     let id = Int.to_string sub_node_id in
     let children = List.map ~f:to_dag n.children in
     let prefix = "["^id^"] "^n.op_label in
-    let labels = n.default_display_labels in
-    match computed_externally, with_value, with_grad, n.default_display_indices, n.form with
-    | true, _, _, _, _ -> `Embed_subtree_ID (Int.to_string sub_node_id)
-    | _, false, false, _, _
-    | _, false, true, _, None
-    | _, _, _, None, _ -> `Subtree_with_ID (id, `Tree (`Text n.op_label, children))
-    | _, true, false, Some indices, _
-    | _, true, true, Some indices, None ->
+    let labels = Shape.axis_map_to_dims_index ~default:"" n.shape.axis_labels in
+    let indices = default_display_indices n.shape in
+    match computed_externally, with_value, with_grad, n.node.form with
+    | true, _, _, _ -> `Embed_subtree_ID (Int.to_string sub_node_id)
+    | _, false, false, _
+    | _, false, true, None -> `Subtree_with_ID (id, `Tree (`Text n.op_label, children))
+    | _, true, false, _
+    | _, true, true, None ->
       let node =
-        `Box (render_tensor ~brief:true ~prefix ?entries_per_axis ?labels ~indices n.value) in
+        `Box (render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices n.node.value) in
       `Subtree_with_ID (id, `Tree (node, children))
-    | _, false, true, Some indices, Some form ->
+    | _, false, true, Some form ->
       let prefix = prefix^" Gradient" in
       let node =
-        `Box (render_tensor ~brief:true ~prefix ?entries_per_axis ?labels ~indices form.grad) in
+        `Box (render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices form.grad) in
       `Subtree_with_ID (id, `Tree (node, children))
-    | _, true, true, Some indices, Some form ->
+    | _, true, true, Some form ->
       let node =
         let value =
-          render_tensor ~brief:true ~prefix ?entries_per_axis ?labels ~indices n.value in
+          render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices n.node.value in
         let grad =
-          render_tensor ~brief:true ~prefix:"Gradient" ?entries_per_axis ?labels ~indices form.grad in
+          render_tensor ~brief:true ~prefix:"Gradient" ?entries_per_axis ~labels ~indices form.grad in
         `Vlist (false, [`Box value; `Box grad]) in
       `Subtree_with_ID (id, `Tree (node, children)) in
-  to_dag {Node.sub_node_id=n_id; computed_externally=false}
+  to_dag {sub_node_id=n_id; computed_externally=false}
 
 let to_printbox ?entries_per_axis ?(with_value=true) ~with_grad ~depth n_id =
   to_dag ?entries_per_axis ~with_value ~with_grad n_id |> PrintBox_utils.reformat_dag depth
