@@ -231,14 +231,15 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1: t 
   let n = NodeUI.create_of_same_precision_as ~is_form m1.node.node
       ~op_label ~shape_spec:Unknown_shape ~children in
   let id = n.id in
-
-  let shape =
-    match init_shape with
-    | None ->
-      { Shape.batch=Unknown; input=Unknown; output=Unknown;
-        axis_labels=Map.empty (module Shape.AxisKey);
-        deduce_within_shape_constraints=Not_constrained; id }
-    | Some shape -> shape in
+  let shape = n.shape in
+  (match init_shape with
+    | None -> ()
+    | Some init -> let open Shape in
+      shape.batch <- init.batch;
+      shape.input <- init.input;
+      shape.output <- init.output;
+      shape.axis_labels <- init.axis_labels;
+  );     
   let shape_logic = Shape.Transpose(transpose_op, m1.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
   Shape.(
