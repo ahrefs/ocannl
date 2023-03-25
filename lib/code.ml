@@ -23,23 +23,22 @@ type unop =
 [@@deriving sexp]
 
 (** Initializes or resets a tensor by filling in the corresponding numbers, at the appropriate precision. *)
-type init_op =
-  [ `Unspecified
+type init_op = Ocannl_runtime.Node.init_op =
+  | Unspecified
   (** Uninitialized. On reset, values may remain unchanged, but are not guaranteed to. *)
-  | `Constant_of_value of float
+  | Constant_of_value of float
   (** Puts the value in all cells. *)
-  | `Fixed_constant of float array
+  | Fixed_constant of float array
   (** Fills in the numbers where the rightmost axis is contiguous. *)
-  | `Range_over_axis_from_end of int
+  | Range_over_axis_from_end of int
   (** Fills in the index number of the specified axis counting from end.
-      [`Range_over_axis_from_end 1] is the range over the last axis. *)
-  | `Range_over_offsets
+      [Range_over_axis_from_end 1] is the range over the last axis. *)
+  | Range_over_offsets
   (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
-  | `Standard_uniform
+  | Standard_uniform
   (** Draws the values from U(0,1). *)
-  | `Standard_gaussian
+  | Standard_gaussian
   (** Draws the values from N(0,1). *)
-  ]
 [@@deriving sexp]
 
 type t =
@@ -149,7 +148,7 @@ let rec unoptimized (code: t): unit low_level =
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|LLReset {tensor=lhs_ptr; reset_op=`Constant_of_value 0.0}; for_loops|]
+    then Lines [|LLReset {tensor=lhs_ptr; reset_op=Constant_of_value 0.0}; for_loops|]
     else for_loops
 
   | Accum_unop {zero_out; accum; op; lhs; rhs; projections} ->
@@ -171,7 +170,7 @@ let rec unoptimized (code: t): unit low_level =
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|LLReset {tensor=lhs_ptr; reset_op=`Constant_of_value 0.0}; for_loops|]
+    then Lines [|LLReset {tensor=lhs_ptr; reset_op=Constant_of_value 0.0}; for_loops|]
     else for_loops
 
   | Noop -> Lines [||]

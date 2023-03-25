@@ -87,12 +87,12 @@ let handle_error ?formula message =
   raise exc
 
 let reset_zeros ~id field _shape =
-  Code.Reset {tensor={id; field}; reset_op=`Constant_of_value 0.0}
+  Code.Reset {tensor={id; field}; reset_op=Constant_of_value 0.0}
 
 let reset_ones ~id field _shape =
-  Code.Reset {tensor={id; field}; reset_op=`Constant_of_value 1.0}
+  Code.Reset {tensor={id; field}; reset_op=Constant_of_value 1.0}
 
-let create ~id ?(init_op=`Unspecified) field shape =
+let create ~id ?(init_op=Code.Unspecified) field shape =
   Code.Create {tensor={id; field}; dims=(fun () -> Shape.to_dims shape); init_op}
 
 let max_sublabel_length = ref 25
@@ -389,7 +389,7 @@ let float_to_label v = Float.to_string_hum ~strip_zero:true v
 let number ~is_form ?(axis_label="") c =
   (* Note: no axis label so that we do not conflict with user labels. *)
   term ~label:(float_to_label c) ~is_form
-    (Constant {output_dims=[1]; axis_labels=axis_label}) ~init_op:(`Constant_of_value c)
+    (Constant {output_dims=[1]; axis_labels=axis_label}) ~init_op:(Constant_of_value c)
 
 let ndarray ~is_form ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[])
  values =
@@ -414,7 +414,7 @@ let ndarray ~is_form ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) 
         ~max_indent:(!max_sublabel_length) ~margin:(!max_sublabel_length*2);
       let (!) = Array.of_list in
       let dims = Array.concat [!batch_dims; !output_dims; !input_dims] in
-      let ndarr = Ocannl_runtime.Node.create_ndarray Single dims (`Fixed_constant values) in
+      let ndarr = Ocannl_runtime.Node.create_ndarray Single dims (Fixed_constant values) in
       let (!) = List.length in
       NodeUI.pp_tensor_inline ~num_batch_axes: !batch_dims ~num_output_axes: !output_dims
         ~num_input_axes: !input_dims Caml.Format.str_formatter ndarr;
@@ -423,7 +423,7 @@ let ndarray ~is_form ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) 
     if String.contains label '\n' then
       "c"^(NodeUI.dims_to_string @@ Array.concat_map [|batch_dims; output_dims; input_dims|] ~f:Array.of_list)
     else label in
-  term ~is_form ~label spec ~init_op:(`Fixed_constant values)
+  term ~is_form ~label spec ~init_op:(Fixed_constant values)
 
 module FDSL = struct
   let term = term ~is_form:true

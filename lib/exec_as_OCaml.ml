@@ -10,19 +10,19 @@ let pp_symbolic_index ppf =
     | Fixed_idx i -> Caml.Format.fprintf ppf "%d" i
 
 let pp_print_init_op ppf: Code.init_op -> unit = function
-  | `Unspecified -> Caml.Format.pp_print_string ppf "`Unspecified"
-  | `Constant_of_value c when Float.(c < 0.0) ->
-    Caml.Format.fprintf ppf "(`Constant_of_value (%f))" c
-  | `Constant_of_value c ->
-    Caml.Format.fprintf ppf "(`Constant_of_value %f)" c
-  | `Fixed_constant cs ->
-    Caml.Format.(fprintf ppf "(`Fixed_constant @[<2>[|%a|]@])"
+  | Unspecified -> Caml.Format.pp_print_string ppf "Unspecified"
+  | Constant_of_value c when Float.(c < 0.0) ->
+    Caml.Format.fprintf ppf "(Constant_of_value (%f))" c
+  | Constant_of_value c ->
+    Caml.Format.fprintf ppf "(Constant_of_value %f)" c
+  | Fixed_constant cs ->
+    Caml.Format.(fprintf ppf "(Fixed_constant @[<2>[|%a|]@])"
                    (pp_print_list ~pp_sep:pp_semi pp_print_float) @@ Array.to_list cs)
-  | `Range_over_axis_from_end d ->
-    Caml.Format.(fprintf ppf "(`Range_over_axis_from_end %d)" d)
-  | `Range_over_offsets -> Caml.Format.(fprintf ppf "`Range_over_offsets")
-  | `Standard_uniform -> Caml.Format.pp_print_string ppf "`Standard_uniform"
-  | `Standard_gaussian -> Caml.Format.pp_print_string ppf "`Standard_gaussian"
+  | Range_over_axis_from_end d ->
+    Caml.Format.(fprintf ppf "(Range_over_axis_from_end %d)" d)
+  | Range_over_offsets -> Caml.Format.(fprintf ppf "Range_over_offsets")
+  | Standard_uniform -> Caml.Format.pp_print_string ppf "Standard_uniform"
+  | Standard_gaussian -> Caml.Format.pp_print_string ppf "Standard_gaussian"
 
 let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Code.low_level): unit =
   let open Code in

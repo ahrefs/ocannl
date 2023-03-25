@@ -92,22 +92,22 @@ let set_from_float arr idx v =
 
 (** Initializes or resets a tensor by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op =
-  [ `Unspecified
+  | Unspecified
   (** Uninitialized. On reset, values may remain unchanged, but are not guaranteed to. *)
-  | `Constant_of_value of float
+  | Constant_of_value of float
   (** Puts the value in all cells. *)
-  | `Fixed_constant of float array
+  | Fixed_constant of float array
   (** Fills in the numbers where the rightmost axis is contiguous. *)
-  | `Range_over_axis_from_end of int
+  | Range_over_axis_from_end of int
   (** Fills in the index number of the specified axis counting from end.
-      [`Range_over_axis_from_end 1] is the range over the last axis. *)
-  | `Range_over_offsets
+      [Range_over_axis_from_end 1] is the range over the last axis. *)
+  | Range_over_offsets
   (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
-  | `Standard_uniform
+  | Standard_uniform
   (** Draws the values from U(0,1). *)
-  | `Standard_gaussian
+  | Standard_gaussian
   (** Draws the values from N(0,1). *)
-  ] [@@deriving sexp, equal]
+[@@deriving sexp]
 
 let create_array_of_prec (type val_t arr_t) (prec: (val_t, arr_t) precision) dims: arr_t =
   match prec with
@@ -130,17 +130,17 @@ let indices_to_offset ~dims ~idcs =
 let create_array (type arr_t) 
     (prec: (float, arr_t) precision) dims (init_op: init_op): arr_t =
   match init_op with
-  | `Unspecified -> create_array_of_prec prec dims
-  | `Constant_of_value c -> init_array_of_prec prec dims ~f:(fun _ -> c)
-  | `Fixed_constant cs ->
+  | Unspecified -> create_array_of_prec prec dims
+  | Constant_of_value c -> init_array_of_prec prec dims ~f:(fun _ -> c)
+  | Fixed_constant cs ->
     init_array_of_prec prec dims ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs))
-  | `Range_over_axis_from_end d ->
+  | Range_over_axis_from_end d ->
     init_array_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ idcs.(Array.length idcs - d))
-  | `Range_over_offsets ->
+  | Range_over_offsets ->
     init_array_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | `Standard_uniform ->
+  | Standard_uniform ->
     init_array_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
-  | `Standard_gaussian ->
+  | Standard_gaussian ->
     (* FIXME: *) failwith "NOT IMPLEMENTED YET"
 
 let create_ndarray prec dims init_op = as_ndarray prec @@ create_array prec dims init_op
@@ -167,22 +167,22 @@ let loop_bigarray arr ~f =
 let reset_bigarray (reset_op: init_op) (type a b) (cast: float -> a) (arr: (a, b, Bigarray.c_layout) bigarray) =
   let dims = A.dims arr in
   match reset_op with
-  | `Unspecified -> ()
-  | `Constant_of_value c -> A.fill arr @@ cast c
-  | `Fixed_constant cs -> loop_bigarray arr ~f:(fun idcs -> cast cs.(indices_to_offset ~dims ~idcs))
-  | `Range_over_axis_from_end d ->
+  | Unspecified -> ()
+  | Constant_of_value c -> A.fill arr @@ cast c
+  | Fixed_constant cs -> loop_bigarray arr ~f:(fun idcs -> cast cs.(indices_to_offset ~dims ~idcs))
+  | Range_over_axis_from_end d ->
     loop_bigarray arr ~f:(fun idcs -> cast @@ Float.of_int @@ idcs.(Array.length idcs - d))
-  | `Range_over_offsets ->
+  | Range_over_offsets ->
     loop_bigarray arr ~f:(fun idcs -> cast @@ Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | `Standard_uniform -> loop_bigarray arr ~f:(fun _ -> cast @@ Random.float_range 0.0 1.0)
-  | `Standard_gaussian ->
+  | Standard_uniform -> loop_bigarray arr ~f:(fun _ -> cast @@ Random.float_range 0.0 1.0)
+  | Standard_gaussian ->
     (* FIXME: *) failwith "NOT IMPLEMENTED YET"
 
 let reset_ndarray reset_op arr =
   let ff arr = reset_bigarray reset_op arr in
    cast_map_as_bigarray {ff} arr
 
-let empty prec = create_array prec [||] `Unspecified
+let empty prec = create_array prec [||] Unspecified
 
 (** Nodes that can potentially be root formulas. *)
 type form = {

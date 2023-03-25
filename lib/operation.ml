@@ -78,7 +78,7 @@ module NFO_without_pow = struct
   let (+) = add ~is_form:false
   let (!/) = relu ~is_form:false
   let (!~) label =
-   Formula.term ~label ~is_form:false (Deduced_params Not_constrained) ~init_op:`Standard_uniform
+   Formula.term ~label ~is_form:false (Deduced_params Not_constrained) ~init_op:Standard_uniform
   let (!.) = Formula.number ~is_form:false
   let (-) m1 m2 = m1 + !.(-1.) *. m2
   let (~-) m = !.(-1.) *. m
@@ -102,13 +102,13 @@ let rec pointpow ~is_form p m1: Formula.t =
 let unconstrained_param ?init label =
   (* Note: no axis label so that we do not conflict with user labels. *)
   let init_op = match init with
-  | None -> `Standard_uniform
-  | Some c -> `Constant_of_value c in
+  | None -> Code.Standard_uniform
+  | Some c -> Code.Constant_of_value c in
   Formula.term ~is_form:true ~label (Deduced_params Not_constrained) ~init_op
 
 let range ~is_form ?(axis_label="") upto =
   Formula.term ~is_form ~label:("0"^"..."^Int.to_string upto)
-   (Constant {output_dims=[upto + 1]; axis_labels=axis_label}) ~init_op:`Range_over_offsets
+   (Constant {output_dims=[upto + 1]; axis_labels=axis_label}) ~init_op:Range_over_offsets
 
 let range_of_shape ~is_form ?(axis_labels="") ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[]) () =
   let spec =
@@ -117,11 +117,11 @@ let range_of_shape ~is_form ?(axis_labels="") ?(batch_dims=[]) ?(input_dims=[]) 
     | _, [] -> Data {batch_dims; output_dims; axis_labels}
     | _, _ -> Transform {batch_dims; input_dims; output_dims; axis_labels} in
   let dims = Array.concat_map [|batch_dims; output_dims; input_dims|] ~f:Array.of_list in
-  Formula.term ~is_form ~label:("r"^NodeUI.dims_to_string dims) spec ~init_op:`Range_over_offsets
+  Formula.term ~is_form ~label:("r"^NodeUI.dims_to_string dims) spec ~init_op:Range_over_offsets
 
 let given_dims_params ?(axis_labels="") ?(input_dims=[]) ?(output_dims=[]) label values =
   Formula.term ~is_form:true ~label (Params {input_dims; output_dims; axis_labels})
-    ~init_op:(`Fixed_constant values)
+    ~init_op:(Fixed_constant values)
 
 let assign =
   let module NFDSL = struct module O = struct end end in
@@ -157,7 +157,7 @@ module O = struct
   let ( **. ) base exp = pointpow exp base ~is_form:true
   let (!/) = relu ~is_form:true
   let (!~) label =
-   Formula.term ~label ~is_form:true (Deduced_params Not_constrained) ~init_op:`Standard_uniform
+   Formula.term ~label ~is_form:true (Deduced_params Not_constrained) ~init_op:Standard_uniform
   let (!.) = Formula.number ~is_form:true
   let (-) m1 m2 = m1 + !.(-1.) *. m2
   let (~-) m = !.(-1.) *. m
