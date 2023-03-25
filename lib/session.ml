@@ -264,14 +264,14 @@ let close_session() =
 
 let session_params() = NodeUI.param_nodes ~from_id:!Formula.first_session_id ()
 
-let update_params ?with_debug ~learning_rate ?params () =
+let update_params ?with_debug ~(minus_lr: Formula.t) ?params () =
   let params =
     match params with Some p -> p | None -> Hashtbl.data @@ session_params() in
   let module CDSL = Code.CDSL in
   let module NFDSL = Operation.NFDSL in
   let module N = Ocannl_runtime.Node in
-  compile_and_run ?with_debug @@ Code.all_parallel @@ List.map params ~f:(
-    fun n -> [%nn_cd n =+ !.learning_rate * n.grad ~logic:Pointwise_bin])
+  compile_routine ?with_debug @@ Code.all_parallel @@ List.map params ~f:(
+    fun n -> [%nn_cd n =+ minus_lr * n.grad ~logic:Pointwise_bin])
 
 module SDSL = struct
   let set_executor = set_executor
