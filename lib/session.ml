@@ -231,13 +231,16 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
         | Some forward -> forward()
         | None -> assert false
     );
-  (* The backpropagation. *)
-  if run then
+  if run then (
+    (* The backpropagation. *)
     List.iter (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
         let cform = match root.formula.node.node.form with
           | Some form -> form
           | None -> assert false in
-        Option.value_exn !(cform.backprop) ())
+        Option.value_exn !(cform.backprop) ());
+    (* Advance the counter. *)
+    Ocannl_runtime.Node.global.session_step <- Int.succ Ocannl_runtime.Node.global.session_step
+  )
 
 (** Discards global roots, rolls back [Node.state.unique_id] to [Formula.first_session_id], discards
     the corresponding elements from [Node.state.node_store]. *)
@@ -247,6 +250,7 @@ let drop_session() =
   Formula.session_initializations := [];
   Formula.session_initialized := 0;
   Formula.session_prepare_step := [];
+  Ocannl_runtime.Node.global.session_step <- 0;
   for i = !Formula.first_session_id to Ocannl_runtime.Node.global.unique_id - 1 do
     Hashtbl.remove NodeUI.global_node_store i;
     Hashtbl.remove Ocannl_runtime.Node.global.node_store i
@@ -260,7 +264,8 @@ let close_session() =
   Formula.session_shape_updates := [];
   Formula.session_initializations := [];
   Formula.session_initialized := 0;
-  Formula.session_prepare_step := []
+  Formula.session_prepare_step := [];
+  Ocannl_runtime.Node.global.session_step <- 0
 
 let session_params() = NodeUI.param_nodes ~from_id:!Formula.first_session_id ()
 

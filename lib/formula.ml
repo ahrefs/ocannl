@@ -87,10 +87,10 @@ let handle_error ?formula message =
   raise exc
 
 let reset_zeros ~id field _shape =
-  Code.Reset {tensor={id; field}; reset_op=Constant_of_value 0.0}
+  Code.Reset {tensor={id; field}; reset_op=Init_op (Constant_of_value 0.0)}
 
 let reset_ones ~id field _shape =
-  Code.Reset {tensor={id; field}; reset_op=Constant_of_value 1.0}
+  Code.Reset {tensor={id; field}; reset_op=Init_op (Constant_of_value 1.0)}
 
 let create ~id ?(init_op=Code.Unspecified) field shape =
   Code.Create {tensor={id; field}; dims=(fun () -> Shape.to_dims shape); init_op}

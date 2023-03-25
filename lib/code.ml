@@ -22,7 +22,8 @@ type unop =
   | Relu
 [@@deriving sexp]
 
-(** Initializes or resets a tensor by filling in the corresponding numbers, at the appropriate precision. *)
+(** Initializes or resets a tensor by filling in the corresponding numbers, at the appropriate
+    precision. *)
 type init_op = Ocannl_runtime.Node.init_op =
   | Unspecified
   (** Uninitialized. On reset, values may remain unchanged, but are not guaranteed to. *)
@@ -39,6 +40,18 @@ type init_op = Ocannl_runtime.Node.init_op =
   (** Draws the values from U(0,1). *)
   | Standard_gaussian
   (** Draws the values from N(0,1). *)
+[@@deriving sexp]
+
+(** Resets a tensor by performing the specified computation or data fetching. [session_step]
+    is incremented at each call of [Session.refresh_session ~run:true]. *)
+type reset_op = Ocannl_runtime.Node.reset_op =
+  | Init_op of init_op
+  | Compute_point of (session_step:int -> dims:int array -> idcs:int array -> float)
+  | Blit of {f: 'a 'b. session_step:int -> ('a, 'b) Ocannl_runtime.Node.precision -> 'b}
+  (** Provides the data to blit into the tensor. *)
+  | Fills_in of {f: 'a 'b. session_step:int -> ('a, 'b) Ocannl_runtime.Node.precision ->
+                   tensor:'b -> unit}
+  (* Arbitrarily fills in the tensor. *)
 [@@deriving sexp]
 
 type t =
@@ -62,7 +75,7 @@ type t =
       lhs: data; rhs: data;
       projections: unit -> Shape.projections }
   | Create of { tensor: data; dims: unit -> int array; init_op: init_op }
-  | Reset of { tensor: data; reset_op: init_op }
+  | Reset of { tensor: data; reset_op: reset_op }
   | Noop
 [@@deriving sexp]
 
@@ -107,7 +120,7 @@ type _ low_level =
       tensor: data low_level; dims: int array; init_op: init_op;
     } -> unit low_level
   | LLReset: {
-      tensor: data low_level; reset_op: init_op;
+      tensor: data low_level; reset_op: reset_op;
     } -> unit low_level
   | Unoptimized_set: data low_level * Shape.symbolic_axis array * float low_level -> unit low_level
   | Unoptimized_get: data low_level * Shape.symbolic_axis array -> float low_level
@@ -148,7 +161,7 @@ let rec unoptimized (code: t): unit low_level =
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|LLReset {tensor=lhs_ptr; reset_op=Constant_of_value 0.0}; for_loops|]
+    then Lines [|LLReset {tensor=lhs_ptr; reset_op=Init_op (Constant_of_value 0.0)}; for_loops|]
     else for_loops
 
   | Accum_unop {zero_out; accum; op; lhs; rhs; projections} ->
@@ -170,7 +183,7 @@ let rec unoptimized (code: t): unit low_level =
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|LLReset {tensor=lhs_ptr; reset_op=Constant_of_value 0.0}; for_loops|]
+    then Lines [|LLReset {tensor=lhs_ptr; reset_op=Init_op (Constant_of_value 0.0)}; for_loops|]
     else for_loops
 
   | Noop -> Lines [||]

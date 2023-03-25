@@ -71,3 +71,12 @@ let%expect_test "Micrograd README basic example" =
     │└┴─────────┘             │
     └─────────────────────────┘ |}]
 
+
+let%expect_test "Micrograd half-moons example" =
+  (* let open Operation.FDSL in *)
+  let open Session.SDSL in
+  drop_session();
+  Random.init 0;
+  set_executor test_executor;
+  (* FIXME: in progress *)
+  ()

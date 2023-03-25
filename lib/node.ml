@@ -97,7 +97,10 @@ type init_op =
   | Constant_of_value of float
   (** Puts the value in all cells. *)
   | Fixed_constant of float array
-  (** Fills in the numbers where the rightmost axis is contiguous. *)
+  (** Fills in the numbers where the rightmost axis is contiguous. If used as [reset_op.Init_op],
+      the size of the array provided can be a multiple of the size of the tensor, and the tensor
+      will be filled with the [global.session_step]th group from the provided array, modulo
+      the number of groups. *)
   | Range_over_axis_from_end of int
   (** Fills in the index number of the specified axis counting from end.
       [Range_over_axis_from_end 1] is the range over the last axis. *)
@@ -107,6 +110,17 @@ type init_op =
   (** Draws the values from U(0,1). *)
   | Standard_gaussian
   (** Draws the values from N(0,1). *)
+[@@deriving sexp]
+
+(** Resets a tensor by performing the specified computation or data fetching. [session_step]
+    is incremented at each call of [Session.refresh_session ~run:true]. *)
+type reset_op =
+  | Init_op of init_op
+  | Compute_point of (session_step:int -> dims:int array -> idcs:int array -> float)
+  | Blit of {f: 'a 'b. session_step:int -> ('a, 'b) precision -> 'b}
+  (** Provides the data to blit into the tensor. *)
+  | Fills_in of {f: 'a 'b. session_step:int -> ('a, 'b) precision -> tensor:'b -> unit}
+  (* Arbitrarily fills in the tensor. *)
 [@@deriving sexp]
 
 let create_array_of_prec (type val_t arr_t) (prec: (val_t, arr_t) precision) dims: arr_t =
@@ -145,13 +159,15 @@ let create_array (type arr_t)
 
 let create_ndarray prec dims init_op = as_ndarray prec @@ create_array prec dims init_op
 
-type 'c cast_map_as_bigarray = {ff: 'a 'b. (float -> 'a) -> ('a, 'b, Bigarray.c_layout) bigarray -> 'c}
+type 'c cast_map_as_bigarray =
+  {ff: 'a 'b. (float -> 'a) -> ('a, ('a, 'b, Bigarray.c_layout) bigarray) precision ->
+     ('a, 'b, Bigarray.c_layout) bigarray -> 'c}
 
 let cast_map_as_bigarray {ff} = function
-  | Byte_as_int_nd arr -> ff Int.of_float arr
-  | Half_as_int_nd arr -> ff Int.of_float arr
-  | Single_nd arr -> ff Fn.id arr
-  | Double_nd arr -> ff Fn.id arr
+  | Byte_as_int_nd arr -> ff Int.of_float Byte_as_int arr
+  | Half_as_int_nd arr -> ff Int.of_float Half_as_int arr
+  | Single_nd arr -> ff Fn.id Single arr
+  | Double_nd arr -> ff Fn.id Double arr
 
 let loop_bigarray arr ~f =
   let dims = A.dims arr in
@@ -163,24 +179,6 @@ let loop_bigarray arr ~f =
          done in
   let len = Array.length dims in
   cloop (Array.create ~len 0) f 0
-  
-let reset_bigarray (reset_op: init_op) (type a b) (cast: float -> a) (arr: (a, b, Bigarray.c_layout) bigarray) =
-  let dims = A.dims arr in
-  match reset_op with
-  | Unspecified -> ()
-  | Constant_of_value c -> A.fill arr @@ cast c
-  | Fixed_constant cs -> loop_bigarray arr ~f:(fun idcs -> cast cs.(indices_to_offset ~dims ~idcs))
-  | Range_over_axis_from_end d ->
-    loop_bigarray arr ~f:(fun idcs -> cast @@ Float.of_int @@ idcs.(Array.length idcs - d))
-  | Range_over_offsets ->
-    loop_bigarray arr ~f:(fun idcs -> cast @@ Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Standard_uniform -> loop_bigarray arr ~f:(fun _ -> cast @@ Random.float_range 0.0 1.0)
-  | Standard_gaussian ->
-    (* FIXME: *) failwith "NOT IMPLEMENTED YET"
-
-let reset_ndarray reset_op arr =
-  let ff arr = reset_bigarray reset_op arr in
-   cast_map_as_bigarray {ff} arr
 
 let empty prec = create_array prec [||] Unspecified
 
@@ -207,13 +205,16 @@ type state = {
   mutable unique_id: int;
   node_store: (int, t) Hashtbl.t;
   session_prepare_step: (unit -> unit) option ref;
+  mutable session_step: int;
 }
 
 let global = {
   unique_id = 1;
   node_store = Hashtbl.create (module Int);
-  session_prepare_step = ref @@ Some (fun () -> ())
-  }
+  session_prepare_step = ref @@ Some (fun () -> ());
+  session_step = 0;
+}
+
 let get uid = Hashtbl.find_exn global.node_store uid
 
 let get_form uid = Option.value_exn ~message:"get_form: not a form node" (get uid).form
@@ -259,3 +260,36 @@ let create (type grad_arr_t value_arr_t) ~(value_prec: ('a, value_arr_t) precisi
     form; id } in
   Hashtbl.add_exn global.node_store ~key:node.id ~data:node;
   node
+
+let reset_bigarray (reset_op: reset_op) (type val_t b) (cast: float -> val_t)
+    (prec: (val_t, (val_t, b, Bigarray.c_layout) bigarray) precision)
+    (arr: (val_t, b, Bigarray.c_layout) bigarray) =
+  let dims = A.dims arr in
+  match reset_op with
+  | Init_op (Unspecified) ->
+    ()
+  | Init_op (Constant_of_value c) ->
+    A.fill arr @@ cast c
+  | Init_op (Fixed_constant cs) ->
+    let group_offset =
+      Int.((global.session_step * Array.fold dims ~init:1 ~f:( * )) % Array.length cs) in
+    loop_bigarray arr ~f:(fun idcs -> cast cs.(indices_to_offset ~dims ~idcs + group_offset))
+  | Init_op (Range_over_axis_from_end d) ->
+    loop_bigarray arr ~f:(fun idcs -> cast @@ Float.of_int @@ idcs.(Array.length idcs - d))
+  | Init_op (Range_over_offsets) ->
+    loop_bigarray arr 
+      ~f:(fun idcs -> cast @@ Float.of_int @@ indices_to_offset ~dims ~idcs)
+  | Init_op (Standard_uniform) ->
+    loop_bigarray arr ~f:(fun _ -> cast @@ Random.float_range 0.0 1.0)
+  | Init_op (Standard_gaussian) ->
+    (* FIXME: *) failwith "NOT IMPLEMENTED YET"
+  | Compute_point f ->
+    loop_bigarray arr ~f:(fun idcs -> cast (f ~session_step:global.session_step ~dims ~idcs))
+  | Blit {f} ->
+    A.blit (f ~session_step:global.session_step prec) arr
+  | Fills_in {f} ->
+    f ~session_step:global.session_step prec ~tensor:arr
+
+let reset_ndarray reset_op arr =
+  let ff arr = reset_bigarray reset_op arr in
+   cast_map_as_bigarray {ff} arr
