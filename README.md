@@ -3,7 +3,7 @@ ocannl
 
 Warning disclaimer: this project is still "not announced". The features described might not be implemented yet.
 
-## OCaNNL: OCaml Neural Networks Library
+## OCANNL -- OCaml Compiles Algorithms for Neural Networks Learning
 
 * A from-scratch, compiled Deep Learning framework.
 * Implements backpropagation (i.e. first-order reverse mode autodiff) and shape inference.
@@ -30,20 +30,20 @@ Warning disclaimer: this project is still "not announced". The features describe
   
 ## Why not just use [OWL](https://ocaml.xyz/)?
 
-OCaNNL follows different design choices than [OWL](https://ocaml.xyz/). For example:
-* OCaNNL is not functorized.
-* OCaNNL has fewer abstraction layers.
-* OCaNNL has arguably a more powerful shape inference.
-* OCaNNL only supports backpropagation, while OWL supports full forward and backward auto-diff.
-* Some aspects are more centralized in OCaNNL than in OWL and form the "infrastructure", with less of an intention to be extended or even read by end-users:
+OCANNL follows different design choices than [OWL](https://ocaml.xyz/). For example:
+* OCANNL is not functorized.
+* OCANNL has fewer abstraction layers.
+* OCANNL has arguably a more powerful shape inference.
+* OCANNL only supports backpropagation, while OWL supports full forward and backward auto-diff.
+* Some aspects are more centralized in OCANNL than in OWL and form the "infrastructure", with less of an intention to be extended or even read by end-users:
   * Shape inference is fully handled by [`Shape`](lib/shape.ml).
   * [`Formula`](lib/formula.ml) implements "putting pieces together".
   * [`Session`](lib/session.ml) implements the session logic.
-* Some aspects that are more core to OWL are "delegated to user-land" in OCaNNL.
+* Some aspects that are more core to OWL are "delegated to user-land" in OCANNL.
   * [`Operation`](lib/operation.ml) is just a bunch of functions, what users implementing new computational primitives would do.
-  * Specific network architectures, e.g. MLP, CNN, Transformer, can be concisely formulated and belong to individual projects in OCaNNL -- while ti seems to me they are more part of the library in OWL. In this regard working on new architectures is not impeded by OCaNNL.
-  * But the enabling mechanisms, such as "generalized `einsum`", belong to the OCaNNL library/infrastructure. In this regard OCaNNL is less extensible.
-* OCaNNL provides lower-level compilation backends than OWL, it is more self-contained in this sense.
+  * Specific network architectures, e.g. MLP, CNN, Transformer, can be concisely formulated and belong to individual projects in OCANNL -- while ti seems to me they are more part of the library in OWL. In this regard working on new architectures is not impeded by OCANNL.
+  * But the enabling mechanisms, such as "generalized `einsum`", belong to the OCANNL library/infrastructure. In this regard OCANNL is less extensible.
+* OCANNL provides lower-level compilation backends than OWL, it is more self-contained in this sense.
 
 ## Installation
 

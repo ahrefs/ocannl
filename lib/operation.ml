@@ -38,7 +38,7 @@ let matmul = mul Compose
 (** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of
     matrix multiplication, inner and outer products, etc.
 
-    Note that ["a,b->c"] from [numpy] is ["a;b=>c"] in OCaNNL, since ["->"] is used to separate the input
+    Note that ["a,b->c"] from [numpy] is ["a;b=>c"] in OCANNL, since ["->"] is used to separate the input
     and the output axes. *)
 let einsum spec =
   let open Code in
@@ -52,7 +52,7 @@ let einsum spec =
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract diagonals,
     compute traces etc.
 
-    Note that ["a->c"] from [numpy] is ["a=>c"] in OCaNNL, since ["->"] is used to separate the input
+    Note that ["a->c"] from [numpy] is ["a=>c"] in OCANNL, since ["->"] is used to separate the input
     and the output axes. *)
 let einsum1 spec =
   let open Code in

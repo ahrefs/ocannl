@@ -49,15 +49,15 @@ let ndarray_constant expr =
       | { pexp_desc = Pexp_tuple _; pexp_loc=loc; _ } ->
         (pexp_extension ~loc
          @@ Location.error_extensionf ~loc
-           "OCaNNL: ndarray literal found input axis (tuple), expected number")::accu
+           "OCANNL: ndarray literal found input axis (tuple), expected number")::accu
       | { pexp_desc = Pexp_array _; pexp_loc=loc; _ } -> 
         (pexp_extension ~loc
          @@ Location.error_extensionf ~loc
-           "OCaNNL: ndarray literal found batch axis (array), expected number")::accu
+           "OCANNL: ndarray literal found batch axis (array), expected number")::accu
       | { pexp_desc = Pexp_construct ({txt=Lident "::"; _}, _); _ } ->
         (pexp_extension ~loc
          @@ Location.error_extensionf ~loc
-           "OCaNNL: ndarray literal found output axis (list), expected number")::accu
+           "OCANNL: ndarray literal found output axis (list), expected number")::accu
       | expr -> expr::accu (* it either computes a number, or becomes a type error *)
     else match expr with
       | { pexp_desc = Pexp_tuple exps; _ } ->
@@ -67,7 +67,7 @@ let ndarray_constant expr =
          | dim_spec ->
            (pexp_extension ~loc
             @@ Location.error_extensionf ~loc
-              "OCaNNL: ndarray literal axis mismatch, got %s, expected %s"
+              "OCANNL: ndarray literal axis mismatch, got %s, expected %s"
               (dim_spec_to_string @@ `Input_dims (List.length exps)) (dim_spec_to_string dim_spec))
            ::accu)
       | { pexp_desc = Pexp_array exps; _ } ->
@@ -77,7 +77,7 @@ let ndarray_constant expr =
          | dim_spec ->
            (pexp_extension ~loc
             @@ Location.error_extensionf ~loc
-              "OCaNNL: ndarray literal axis mismatch, got %s, expected %s"
+              "OCANNL: ndarray literal axis mismatch, got %s, expected %s"
               (dim_spec_to_string @@ `Batch_dims (List.length exps)) (dim_spec_to_string dim_spec))
            ::accu)
       | { pexp_desc = Pexp_construct ({txt=Lident "::"; _}, _); _ } ->
@@ -88,13 +88,13 @@ let ndarray_constant expr =
          | dim_spec ->
            (pexp_extension ~loc
             @@ Location.error_extensionf ~loc
-              "OCaNNL: ndarray literal axis mismatch, got %s, expected %s"
+              "OCANNL: ndarray literal axis mismatch, got %s, expected %s"
               (dim_spec_to_string @@ `Output_dims (List.length exps)) (dim_spec_to_string dim_spec))
            ::accu)
       | { pexp_loc=loc; _ } ->
         (pexp_extension ~loc
          @@ Location.error_extensionf ~loc
-           "OCaNNL: ndarray literal: expected an axis (tuple, list or array)")::accu in
+           "OCANNL: ndarray literal: expected an axis (tuple, list or array)")::accu in
   let result = loop_values 0 [] expr in
   let values = {expr with pexp_desc = Pexp_array (List.rev result)} in
   let batch_dims, output_dims, input_dims =
