@@ -71,6 +71,9 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
       fprintf ppf "@[<2>(get_form %d).forward :=@ Some (@[<2>fun () ->@ %a@]@,)@]" id pp_ll proc
     | Assign_routine ({id; field=`Backprop}, proc) ->
       fprintf ppf "@[<2>(get_form %d).backprop :=@ Some (@[<2>fun () -> %a@]@,)@]" id pp_ll proc
+    | Assign_suspension proc ->
+      fprintf ppf
+        "@[<2>let () = most_recent_suspension@ := Some (@[<2>fun () -> %a@]@,)@]" pp_ll proc
     | Assign_session_prepare_step proc ->
       fprintf ppf
         "@[<2>let () = global.session_prepare_step@ := Some (@[<2>fun () -> %a@]@,)@]" pp_ll proc

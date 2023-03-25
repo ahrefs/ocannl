@@ -72,6 +72,7 @@ type t =
 type program =
   | Node_specific of {procedure: t; routine: routine; label: string}
   | Initialization of t
+  | Suspension of t
   | Session_prepare_step of t
 [@@deriving sexp]
 
@@ -114,6 +115,7 @@ type _ low_level =
   | Unoptimized_binop: binop * float low_level * float low_level -> float low_level
   | Unoptimized_unop: unop * float low_level -> float low_level
   | Assign_routine: routine * unit low_level -> unit low_level
+  | Assign_suspension: unit low_level -> unit low_level
   | Assign_session_prepare_step: unit low_level -> unit low_level
   | Comment: string -> unit low_level
 (* [@@deriving sexp] *)
@@ -193,6 +195,7 @@ let unoptimized_program prog: unit low_level =
   | Initialization proc -> unoptimized proc
   | Node_specific {procedure; routine; label} ->
     Lines [|Comment label; Assign_routine (routine, unoptimized procedure)|]
+  | Suspension proc -> Assign_suspension (unoptimized proc)
   | Session_prepare_step proc -> Assign_session_prepare_step (unoptimized proc)
 
 module CDSL = struct
@@ -231,6 +234,8 @@ let interpret_llc ?(with_debug=true) llc =
       (get_form id).forward := Some (fun () -> loop proc)
     | Assign_routine ({id; field=`Backprop}, proc) ->
       (get_form id).backprop := Some (fun () -> loop proc)
+    | Assign_suspension (proc) ->
+      most_recent_suspension := Some (fun () -> loop proc)
     | Assign_session_prepare_step (proc) ->
       global.session_prepare_step := Some (fun () -> loop proc)
     | Comment message when with_debug -> Stdio.printf "%s\n%!" message

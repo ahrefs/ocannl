@@ -201,6 +201,8 @@ type t = {
 
 exception Runtime_error of string * t option
 
+let most_recent_suspension: (unit -> unit) option ref = ref None
+
 type state = {
   mutable unique_id: int;
   node_store: (int, t) Hashtbl.t;

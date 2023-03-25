@@ -159,6 +159,14 @@ let compile_and_run ?(with_debug=true) code =
   (* Since we use [Initialization], this is just to satisfy [dynload_with_handler]. *)
   let dummy = ref @@ Some (fun () -> ()) in
   dynload_with_handler ~with_debug ~runtime_store:dummy (Code.Initialization code)
+
+let compile_routine ?(with_debug=true) code =
+  Ocannl_runtime.Node.most_recent_suspension := None;
+  dynload_with_handler ~with_debug ~runtime_store:(Ocannl_runtime.Node.most_recent_suspension)
+    (Code.Suspension code);
+  let routine = Option.value_exn !Ocannl_runtime.Node.most_recent_suspension in
+  Ocannl_runtime.Node.most_recent_suspension := None;
+  routine
   
 let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run=true)
     ?(force_no_init=false) () =
