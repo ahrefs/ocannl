@@ -191,6 +191,9 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
     session_initialized := num_inits
   );
   if regenerate || root_changed then (
+    for i = !Formula.first_session_id to Ocannl_runtime.Node.global.unique_id - 1 do
+      Hashtbl.remove Ocannl_runtime.Node.global.node_fetch_callbacks i
+    done;
     Ocannl_runtime.Node.global.session_prepare_step := None;
     dynload_with_handler ~with_debug
       ~runtime_store:Ocannl_runtime.Node.global.session_prepare_step
@@ -262,7 +265,8 @@ let drop_session() =
   Ocannl_runtime.Node.global.session_step <- 0;
   for i = !Formula.first_session_id to Ocannl_runtime.Node.global.unique_id - 1 do
     Hashtbl.remove NodeUI.global_node_store i;
-    Hashtbl.remove Ocannl_runtime.Node.global.node_store i
+    Hashtbl.remove Ocannl_runtime.Node.global.node_store i;
+    Hashtbl.remove Ocannl_runtime.Node.global.node_fetch_callbacks i
   done;
   Ocannl_runtime.Node.global.unique_id <- !Formula.first_session_id
 

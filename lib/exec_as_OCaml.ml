@@ -24,6 +24,20 @@ let pp_print_init_op ppf: Code.init_op -> unit = function
   | Standard_uniform -> Caml.Format.pp_print_string ppf "Standard_uniform"
   | Standard_gaussian -> Caml.Format.pp_print_string ppf "Standard_gaussian"
 
+let pp_print_fetch_op ~id ppf: Code.fetch_op -> unit = function
+  | Init_op init_op ->
+    Caml.Format.(fprintf ppf "(Either.First (Init_op @[<2>(%a)@]))" pp_print_init_op init_op)
+  | (Compute_point _ | Blit _ | Fills_in _) as callback ->
+    let open Ocannl_runtime in
+    match Hashtbl.add Node.global.node_fetch_callbacks ~key:id ~data:callback with
+    | `Ok ->
+      (* Stdio.eprintf "pp_print_fetch_op orig id=%d\n%!" id; *)
+      Caml.Format.(fprintf ppf "(Either.Second %d)" id)
+    | `Duplicate ->
+      (* Stdio.eprintf "pp_print_fetch_op dup id=%d\n%!" id; *)
+      Caml.Format.(fprintf ppf "(Either.Second %d)" id)
+      (* invalid_arg "exec_as_OCaml: multiple fetch callbacks for the same node not supported" *)
+
 let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Code.low_level): unit =
   let open Code in
   let open Caml.Format in
@@ -44,14 +58,12 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
       fprintf ppf "@[<2>(get %d).value <-@ create_ndarray Single@ %a %a@]" id pp_dims dims pp_print_init_op init_op
     | LLCreate { tensor=Gradient_at_node_id id; dims; init_op } ->
       fprintf ppf "@[<2>(get_form %d).grad <-@ create_ndarray Single@ %a %a@]" id pp_dims dims pp_print_init_op init_op
-    | LLFetch { tensor=Value_at_node_id id; fetch_op=Init_op fetch_op } ->
-      fprintf ppf "@[<2>fetch_ndarray@ (Init_op %a)@ ((get %d).value)@]" pp_print_init_op fetch_op id
-    | LLFetch { tensor=Value_at_node_id _id; fetch_op=_ } ->
-      (* FIXME: *) failwith "NOT IMPLEMENTED YET"
-    | LLFetch { tensor=Gradient_at_node_id id; fetch_op=Init_op fetch_op } ->
-      fprintf ppf "@[<2>fetch_ndarray@ (Init_op %a)@ ((get_form %d).grad)@]" pp_print_init_op fetch_op id
-    | LLFetch { tensor=Gradient_at_node_id _id; fetch_op=_ } ->
-      (* FIXME: *) failwith "NOT IMPLEMENTED YET"
+    | LLFetch { tensor=Value_at_node_id id; fetch_op } ->
+      fprintf ppf "@[<2>fetch_ndarray_callback@ ~op_or_id:%a@ ((get %d).value)@]"
+        (pp_print_fetch_op ~id) fetch_op id
+    | LLFetch { tensor=Gradient_at_node_id id; fetch_op } ->
+      fprintf ppf "@[<2>fetch_ndarray_callback@ ~op_or_id:%a@ ((get_form %d).grad)@]"
+        (pp_print_fetch_op ~id) fetch_op id
     | Unoptimized_set (Value_at_node_id id, indices, v) ->
       fprintf ppf "@[<2>set_from_float (get %d).value@ %a@ %a@]" id pp_indices indices pp_ll v
     | Unoptimized_set (Gradient_at_node_id id, indices, v) ->

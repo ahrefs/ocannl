@@ -206,6 +206,7 @@ type state = {
   node_store: (int, t) Hashtbl.t;
   session_prepare_step: (unit -> unit) option ref;
   mutable session_step: int;
+  node_fetch_callbacks: (int, fetch_op) Hashtbl.t;
 }
 
 let global = {
@@ -213,6 +214,7 @@ let global = {
   node_store = Hashtbl.create (module Int);
   session_prepare_step = ref @@ Some (fun () -> ());
   session_step = 0;
+  node_fetch_callbacks = Hashtbl.create (module Int);
 }
 
 let get uid = Hashtbl.find_exn global.node_store uid
@@ -293,3 +295,9 @@ let fetch_bigarray (fetch_op: fetch_op) (type val_t b) (cast: float -> val_t)
 let fetch_ndarray fetch_op arr =
   let ff arr = fetch_bigarray fetch_op arr in
    cast_map_as_bigarray {ff} arr
+
+let fetch_ndarray_callback ~op_or_id arr =
+  let fetch_op =
+    Either.value_map op_or_id ~first:Fn.id
+      ~second:(Hashtbl.find_exn global.node_fetch_callbacks) in
+  fetch_ndarray fetch_op arr
