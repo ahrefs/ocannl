@@ -86,7 +86,6 @@ let%expect_test "Micrograd half-moons example" =
       (Init_op (Fixed_constant moons_flat)) in
   let moons_class = FDSL.data ~label:"moons_class" ~batch_dims:[batch] ~output_dims:[1]
       (Init_op (Fixed_constant moons_classes)) in
-  let module A = Bigarray.Genarray in
   let points1 = ref [] in
   let points2 = ref [] in
   for _step = 1 to 2 * len/batch do
@@ -97,45 +96,48 @@ let%expect_test "Micrograd half-moons example" =
     points1 := npoints1 :: !points1;
     points2 := npoints2 :: !points2;
   done;
-  let canvas = 
+  let plot_box = 
     let open PrintBox_utils in
-    plot ~size:(75, 35)
+    plot ~size:(75, 35) ~x_label:"ixes" ~y_label:"ygreks"
       [Scatterplot {points=Array.concat !points1; pixel="#"}; 
        Scatterplot {points=Array.concat !points2; pixel="%"}] in
-  PrintBox_text.output Stdio.stdout @@ PrintBox.grid_text ~bars:false canvas;
+  PrintBox_text.output Stdio.stdout plot_box;
   [%expect {|
-                                #
-                        #
-                     ##   ##   #      #
-                  #   #     #  #
-                ##     #   #     # ##  # #
-              #   ##    ##          #   # #   #
-           #  #  #                   # #  #
-             #  #                      #   #   #
-            #                              ## #
-         #   #
-        #  #                                 #
-          ##                                  ##
-       #                   %                   # #
-                                               #  #                           %
-      # ##                 %  %                                          %
-     #                      %%                  #                            %
-     ##                      %%%                  ###                     %
-    # #                     %                        #                    %
-       #                                         #  #                   %%%%%
-     #                         %                     #                 %% %
-       #                    %                      ## #
-       #                       %                                        % %
-    ##                       %% %%                   #                %
-                               %   %               #                   %%
-                              %    %                                 %%
-                                    %                              %     %
-                                     %%                              %   %
-                                   %  %                           %  %
-                                  %
-                                         %                     %  %%
-                                      %  % % %              %  %
-                                       %%   % %  %  %%  %      %   %
-                                       %  %%      %    % % %%  %
-                                           %        % % %    %
-                                                 %%    %  % |}]
+     1.091e+0 │                            #
+              │                    #
+              │                 ##   ##   #      #
+              │              #   #     #  #
+              │            ##     #   #     # ##  # #
+              │          #   ##    ##          #   # #   #
+              │       #  #  #                   # #  #
+              │         #  #                      #   #   #
+              │        #                              ## #
+              │     #   #
+              │    #  #                                 #
+              │      ##                                  ##
+              │   #                   %                   # #
+              │                                           #  #                           %
+    y         │  # ##                 %  %                                          %
+    g         │ #                      %%                  #                            %
+    r         │ ##                      %%%                  ###                     %
+    e         │# #                     %                        #                    %
+    k         │   #                                         #  #                   %%%%%
+    s         │ #                         %                     #                 %% %
+              │   #                    %                      ## #
+              │   #                       %                                        % %
+              │##                       %% %%                   #                %
+              │                           %   %               #                   %%
+              │                          %    %                                 %%
+              │                                %                              %     %
+              │                                 %%                              %   %
+              │                               %  %                           %  %
+              │                              %
+              │                                     %                     %  %%
+              │                                  %  % % %              %  %
+              │                                   %%   % %  %  %%  %      %   %
+              │                                   %  %%      %    % % %%  %
+              │                                       %        % % %    %
+     -5.843e-1│                                             %%    %  %
+    ──────────┼───────────────────────────────────────────────────────────────────────────
+              │-1.068e+0                                                          2.095e+0
+              │                                   ixes |}]

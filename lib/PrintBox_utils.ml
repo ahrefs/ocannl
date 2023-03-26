@@ -73,7 +73,7 @@ type plot_spec =
   | Scatterplot of {points: (float * float) array; pixel: string}
   | Line_plot of {points: float array; pixel: string}
 
-let plot ?canvas ?size specs =
+let plot_canvas ?canvas ?size specs =
   let open Float in
   (* Unfortunately "x" and "y" of a "matrix" are opposite to how we want them displayed --
      the first dimension (i.e. "x") as the horizontal axis. *)
@@ -115,4 +115,26 @@ let plot ?canvas ?size specs =
         let rescale_x i = to_int @@ of_int i * spanx / of_int (Array.length points) in
         (* TODO: implement interpolation if not enough points. *)
         Array.iteri points ~f:Int.(fun i j -> canvas.(dimy - 1 - j).(rescale_x i) <- pixel));
-  canvas
+  minx, miny, maxx, maxy, canvas
+
+let concise_float ~prec v =
+  Printf.sprintf "%.*e" prec v |>
+  (* The C99 standard requires at least two digits for the exponent, but the leading zero
+     is a waste of space. *)
+  String.substr_replace_first ~pattern:"e+0" ~with_:"e+" |>
+  String.substr_replace_first ~pattern:"e-0" ~with_:"e-"
+
+
+let plot ?canvas ?size ~x_label ~y_label specs =
+  let minx, miny, maxx, maxy, canvas = plot_canvas ?canvas ?size specs in
+  let open PrintBox in
+  let y_label_l = List.map ~f:String.of_char @@ String.to_list y_label in
+  grid_l [[hlist ~bars:false [
+      align ~h:`Left ~v:`Center @@ lines y_label_l;
+      vlist ~bars:false [line @@ concise_float ~prec:3 maxy;
+                         align_bottom @@ line @@ concise_float ~prec:3 miny]];
+     grid_text ~bars:false canvas];
+     [empty; vlist ~bars:false [
+         hlist ~bars:false [line @@ concise_float ~prec:3 minx;
+                            align_right @@ line @@ concise_float ~prec:3 maxx];
+         align ~h:`Center ~v:`Bottom @@ line x_label]]]

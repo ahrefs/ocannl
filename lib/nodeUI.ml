@@ -227,11 +227,8 @@ let render_tensor ?(brief=false) ?(prefix="") ?(entries_per_axis=4) ?(labels=[||
           update_indices v i j line col;
           try B.hpad 1 @@ B.line @@
             if is_ellipsis() then "..." else
-              Printf.sprintf "%.*e" !print_decimals_precision (get_as_float arr indices) |>
-              (* The C99 standard requires at least two digits for the exponent, but the leading zero
-                 is a waste of space. *)
-              String.substr_replace_first ~pattern:"e+0" ~with_:"e+" |>
-              String.substr_replace_first ~pattern:"e-0" ~with_:"e-"
+              PrintBox_utils.concise_float ~prec:!print_decimals_precision
+                (get_as_float arr indices)
           with Invalid_argument _ as error ->
             Stdio.Out_channel.printf "Invalid indices: %s into array: %s\n%!"
               (dims_to_string indices) (dims_to_string dims);

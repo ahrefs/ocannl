@@ -58,11 +58,11 @@ let () =
     points1 := npoints1 :: !points1;
     points2 := npoints2 :: !points2;
   done;
-  let canvas = 
+  let plot_box = 
     let open PrintBox_utils in
-    plot ~size:(75, 35)
+    plot ~size:(75, 35) ~x_label:"ixes" ~y_label:"ygreks"
       [Scatterplot {points=Array.concat !points1; pixel="#"}; 
        Scatterplot {points=Array.concat !points2; pixel="%"}] in
   Stdio.printf "Half-moons scatterplot:\n%!";
-  PrintBox_text.output Stdio.stdout @@ PrintBox.grid_text ~bars:false canvas;
+  PrintBox_text.output Stdio.stdout plot_box;
   Stdio.printf "\n%!"
