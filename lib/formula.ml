@@ -434,10 +434,15 @@ let ndarray ~is_form ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) 
     else label in
   term ~is_form ~label spec (First (Fixed_constant values))
 
+let given_dims_params ?(axis_labels="") ?(input_dims=[]) ?(output_dims=[]) label values =
+  term ~is_form:true ~label (Params {input_dims; output_dims; axis_labels})
+    (First (Fixed_constant values))
+
 module FDSL = struct
   let term = term ~is_form:true
   let number = number ~is_form:true
   let ndarray = ndarray ~is_form:true
+  let given_dims_params = given_dims_params
 end
 
 module NFDSL = struct

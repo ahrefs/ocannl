@@ -192,6 +192,4 @@ module NFDSL = struct
   let term = Formula.term ~is_form:false
   let range = range ~is_form:false
   let range_of_shape = range_of_shape ~is_form:false
-  let stop_broadcast = stop_broadcast
-  let stop_gradient = stop_gradient
 end

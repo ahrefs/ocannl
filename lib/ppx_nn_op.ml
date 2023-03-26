@@ -10,11 +10,11 @@ let ndarray_op ?axis_labels ?label expr =
   let edims dims = Ast_builder.Default.elist ~loc @@ List.rev dims in
   let op =
     match axis_labels, label with
-    | None, None -> [%expr Formula.FDSL.ndarray]
-    | Some axis_labels, None -> [%expr Formula.FDSL.ndarray ?axis_labels:[%e axis_labels]]
-    | None, Some label -> [%expr Formula.FDSL.ndarray ?label:[%e label]]
+    | None, None -> [%expr FDSL.ndarray]
+    | Some axis_labels, None -> [%expr FDSL.ndarray ?axis_labels:[%e axis_labels]]
+    | None, Some label -> [%expr FDSL.ndarray ?label:[%e label]]
     | Some axis_labels, Some label ->
-      [%expr Formula.FDSL.ndarray ?axis_labels:[%e axis_labels] ?label:[%e label]] in
+      [%expr FDSL.ndarray ?axis_labels:[%e axis_labels] ?label:[%e label]] in
   [%expr
     [%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
       ~output_dims:[%e edims output_dims] [%e values]]
@@ -37,8 +37,8 @@ let make_vb_nd ~loc ~str_loc ?axis_labels ~ident ~init_nd string =
       let edims dims = Ast_builder.Default.elist ~loc @@ List.rev dims in
       let op =
         match axis_labels with
-        | None -> [%expr Operation.given_dims_params]
-        | Some axis_labels -> [%expr Operation.given_dims_params ?axis_labels:[%e axis_labels]] in
+        | None -> [%expr FDSL.given_dims_params]
+        | Some axis_labels -> [%expr FDSL.given_dims_params ?axis_labels:[%e axis_labels]] in
       [%expr [%e op] ~input_dims:[%e edims input_dims]
           ~output_dims:[%e edims output_dims] [%e string] [%e values]] in
   let vb = Ast_helper.Vb.mk ~loc pat v in
@@ -48,22 +48,22 @@ let rec translate expr =
   let loc = expr.pexp_loc in
   match expr with
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
-    no_vbs, [%expr Formula.FDSL.number [%e expr]]
+    no_vbs, [%expr FDSL.number [%e expr]]
 
   | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
-    no_vbs, [%expr Formula.FDSL.number (Float.of_int [%e expr])]
+    no_vbs, [%expr FDSL.number (Float.of_int [%e expr])]
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
       [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
     let axis = Ast_helper.Exp.constant ~loc:pexp_loc
         (Pconst_string (String.of_char ch, pexp_loc, None)) in
-    no_vbs, [%expr Formula.FDSL.number ~axis_label:[%e axis] [%e f]]
+    no_vbs, [%expr FDSL.number ~axis_label:[%e axis] [%e f]]
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
       [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
         let axis = Ast_helper.Exp.constant ~loc:pexp_loc
         (Pconst_string (String.of_char ch, pexp_loc, None)) in
-    no_vbs, [%expr Formula.FDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])]
+    no_vbs, [%expr FDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])]
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
       [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
