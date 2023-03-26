@@ -303,7 +303,8 @@ let term_needs_gradient (spec: Shape.term_spec) =
   | Deduced_params _ -> true
 
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label ?needs_gradient ~is_form (spec: Shape.term_spec) ~init_op =
+let term ~label ?needs_gradient ~is_form (spec: Shape.term_spec)
+    (init_or_fetch: (Code.init_op, Code.fetch_op) Either.t) =
   let n = NodeUI.create ~value_prec:Single ~grad_prec:Single ~is_form ()
       ~op_label:label ~shape_spec:spec ~children:[] in
   let id = n.id in
@@ -317,7 +318,15 @@ let term ~label ?needs_gradient ~is_form (spec: Shape.term_spec) ~init_op =
 
   let open Code in
   let forward_body = Noop in
+  let init_op = match init_or_fetch with
+  | First init -> init
+  | Second _ -> Unspecified in
   session_initializations := create ~id ~init_op `Value shape :: !session_initializations;
+  (match init_or_fetch with
+  | First _ -> ()
+  | Second fetch_op ->
+    session_prepare_step := Fetch { tensor={id; field=`Value}; fetch_op } ::
+                            !session_prepare_step);
   if not is_form then
     {forward_body; form=None; id; node=n; shape_logic; shape}
   else
@@ -389,7 +398,7 @@ let float_to_label v = Float.to_string_hum ~strip_zero:true v
 let number ~is_form ?(axis_label="") c =
   (* Note: no axis label so that we do not conflict with user labels. *)
   term ~label:(float_to_label c) ~is_form
-    (Constant {output_dims=[1]; axis_labels=axis_label}) ~init_op:(Constant_of_value c)
+    (Constant {output_dims=[1]; axis_labels=axis_label}) (First (Constant_of_value c))
 
 let ndarray ~is_form ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[])
  values =
@@ -423,7 +432,7 @@ let ndarray ~is_form ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) 
     if String.contains label '\n' then
       "c"^(NodeUI.dims_to_string @@ Array.concat_map [|batch_dims; output_dims; input_dims|] ~f:Array.of_list)
     else label in
-  term ~is_form ~label spec ~init_op:(Fixed_constant values)
+  term ~is_form ~label spec (First (Fixed_constant values))
 
 module FDSL = struct
   let term = term ~is_form:true
