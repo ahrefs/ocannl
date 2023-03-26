@@ -196,9 +196,6 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
       ~runtime_store:Ocannl_runtime.Node.global.session_prepare_step
       Code.(Session_prepare_step (all_parallel !session_prepare_step))
   );
-  (if run then match !(Ocannl_runtime.Node.global.session_prepare_step) with
-      | None -> assert false
-      | Some prepare -> prepare ());
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
       let m = root.formula in
       let cform = match m.node.node.form with
@@ -232,11 +229,18 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
             Code.fprint_program @@ Option.value_exn root.forward_code;
           Formula.handle_error ~formula:m @@ "Backprop init error: "^msg
       );
-      if run then match !(cform.forward) with
+  );
+  if run then (
+    (* Preparation. *)
+    (match !(Ocannl_runtime.Node.global.session_prepare_step) with
+      | None -> assert false
+      | Some prepare -> prepare ());
+    (* Forward propagation. *)
+    List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
+      match !((Option.value_exn root.formula.node.node.form).forward) with
         | Some forward -> forward()
         | None -> assert false
     );
-  if run then (
     (* The backpropagation. *)
     List.iter (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
         let cform = match root.formula.node.node.form with
