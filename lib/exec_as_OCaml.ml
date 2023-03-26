@@ -29,14 +29,14 @@ let pp_print_fetch_op ~id ppf: Code.fetch_op -> unit = function
     Caml.Format.(fprintf ppf "(Either.First (Init_op @[<2>(%a)@]))" pp_print_init_op init_op)
   | (Compute_point _ | Blit _ | Fills_in _) as callback ->
     let open Ocannl_runtime in
-    match Hashtbl.add Node.global.node_fetch_callbacks ~key:id ~data:callback with
-    | `Ok ->
-      (* Stdio.eprintf "pp_print_fetch_op orig id=%d\n%!" id; *)
-      Caml.Format.(fprintf ppf "(Either.Second %d)" id)
-    | `Duplicate ->
-      (* Stdio.eprintf "pp_print_fetch_op dup id=%d\n%!" id; *)
-      Caml.Format.(fprintf ppf "(Either.Second %d)" id)
-      (* invalid_arg "exec_as_OCaml: multiple fetch callbacks for the same node not supported" *)
+    Hashtbl.update Node.global.node_fetch_callbacks id ~f:(function
+        | None -> callback
+        | Some other ->
+          (if not @@ phys_equal other callback then invalid_arg
+               "exec_as_OCaml: multiple fetch callbacks for the same node not supported currently");
+          callback
+    );
+    Caml.Format.(fprintf ppf "(Either.Second %d)" id)
 
 let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Code.low_level): unit =
   let open Code in
@@ -219,6 +219,7 @@ let load_native ?(with_debug=true) (prog: Code.program) =
   Exn.protect ~finally:(fun () -> safe_remove source_fname)
     ~f:(fun () ->
         if with_debug then
+          (* TODO: don't generate the source twice. *)
           let contents =
             Caml.Format.pp_set_geometry Caml.Format.str_formatter
               ~max_indent:(column_width/2) ~margin:column_width;
