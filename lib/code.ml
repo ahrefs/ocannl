@@ -26,7 +26,7 @@ type unop =
     precision. *)
 type init_op = Ocannl_runtime.Node.init_op =
   | Unspecified
-  (** Uninitialized. On reset, values may remain unchanged, but are not guaranteed to. *)
+  (** Uninitialized. On fetch, values may remain unchanged, but are not guaranteed to. *)
   | Constant_of_value of float
   (** Puts the value in all cells. *)
   | Fixed_constant of float array
@@ -44,7 +44,7 @@ type init_op = Ocannl_runtime.Node.init_op =
 
 (** Resets a tensor by performing the specified computation or data fetching. [session_step]
     is incremented at each call of [Session.refresh_session ~run:true]. *)
-type reset_op = Ocannl_runtime.Node.reset_op =
+type fetch_op = Ocannl_runtime.Node.fetch_op =
   | Init_op of init_op
   | Compute_point of (session_step:int -> dims:int array -> idcs:int array -> float)
   | Blit of {f: 'a 'b. session_step:int -> ('a, 'b) Ocannl_runtime.Node.precision -> 'b}
@@ -75,7 +75,7 @@ type t =
       lhs: data; rhs: data;
       projections: unit -> Shape.projections }
   | Create of { tensor: data; dims: unit -> int array; init_op: init_op }
-  | Reset of { tensor: data; reset_op: reset_op }
+  | Fetch of { tensor: data; fetch_op: fetch_op }
   | Noop
 [@@deriving sexp]
 
@@ -119,8 +119,8 @@ type _ low_level =
   | LLCreate: {
       tensor: data low_level; dims: int array; init_op: init_op;
     } -> unit low_level
-  | LLReset: {
-      tensor: data low_level; reset_op: reset_op;
+  | LLFetch: {
+      tensor: data low_level; fetch_op: fetch_op;
     } -> unit low_level
   | Unoptimized_set: data low_level * Shape.symbolic_axis array * float low_level -> unit low_level
   | Unoptimized_get: data low_level * Shape.symbolic_axis array -> float low_level
@@ -161,7 +161,7 @@ let rec unoptimized (code: t): unit low_level =
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|LLReset {tensor=lhs_ptr; reset_op=Init_op (Constant_of_value 0.0)}; for_loops|]
+    then Lines [|LLFetch {tensor=lhs_ptr; fetch_op=Init_op (Constant_of_value 0.0)}; for_loops|]
     else for_loops
 
   | Accum_unop {zero_out; accum; op; lhs; rhs; projections} ->
@@ -183,7 +183,7 @@ let rec unoptimized (code: t): unit low_level =
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|LLReset {tensor=lhs_ptr; reset_op=Init_op (Constant_of_value 0.0)}; for_loops|]
+    then Lines [|LLFetch {tensor=lhs_ptr; fetch_op=Init_op (Constant_of_value 0.0)}; for_loops|]
     else for_loops
 
   | Noop -> Lines [||]
@@ -199,8 +199,8 @@ let rec unoptimized (code: t): unit low_level =
 
   | Create {tensor; dims; init_op} ->
     LLCreate {tensor=data_pointer tensor; dims=dims(); init_op}
-  | Reset {tensor; reset_op} ->
-    LLReset {tensor=data_pointer tensor; reset_op}
+  | Fetch {tensor; fetch_op} ->
+    LLFetch {tensor=data_pointer tensor; fetch_op}
 
 let unoptimized_program prog: unit low_level =
   match prog with
@@ -234,10 +234,10 @@ let interpret_llc ?(with_debug=true) llc =
       (get id).value <- create_ndarray Single dims init_op
     | LLCreate { tensor=Gradient_at_node_id id; dims; init_op } ->
       (get_form id).grad <- create_ndarray Single dims init_op
-    | LLReset { tensor=Value_at_node_id id; reset_op } ->
-      reset_ndarray reset_op ((get id).value)
-    | LLReset { tensor=Gradient_at_node_id id; reset_op } ->
-      reset_ndarray reset_op ((get_form id).grad)
+    | LLFetch { tensor=Value_at_node_id id; fetch_op } ->
+      fetch_ndarray fetch_op ((get id).value)
+    | LLFetch { tensor=Gradient_at_node_id id; fetch_op } ->
+      fetch_ndarray fetch_op ((get_form id).grad)
     | Unoptimized_set (Value_at_node_id id, indices, llv) ->
       set_from_float (get id).value (lookup env indices) @@ loop_float env llv
     | Unoptimized_set (Gradient_at_node_id id, indices, llv) ->

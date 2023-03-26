@@ -93,11 +93,11 @@ let set_from_float arr idx v =
 (** Initializes or resets a tensor by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op =
   | Unspecified
-  (** Uninitialized. On reset, values may remain unchanged, but are not guaranteed to. *)
+  (** Uninitialized. On fetch, values may remain unchanged, but are not guaranteed to. *)
   | Constant_of_value of float
   (** Puts the value in all cells. *)
   | Fixed_constant of float array
-  (** Fills in the numbers where the rightmost axis is contiguous. If used as [reset_op.Init_op],
+  (** Fills in the numbers where the rightmost axis is contiguous. If used as [fetch_op.Init_op],
       the size of the array provided can be a multiple of the size of the tensor, and the tensor
       will be filled with the [global.session_step]th group from the provided array, modulo
       the number of groups. *)
@@ -114,7 +114,7 @@ type init_op =
 
 (** Resets a tensor by performing the specified computation or data fetching. [session_step]
     is incremented at each call of [Session.refresh_session ~run:true]. *)
-type reset_op =
+type fetch_op =
   | Init_op of init_op
   | Compute_point of (session_step:int -> dims:int array -> idcs:int array -> float)
   | Blit of {f: 'a 'b. session_step:int -> ('a, 'b) precision -> 'b}
@@ -261,11 +261,11 @@ let create (type grad_arr_t value_arr_t) ~(value_prec: ('a, value_arr_t) precisi
   Hashtbl.add_exn global.node_store ~key:node.id ~data:node;
   node
 
-let reset_bigarray (reset_op: reset_op) (type val_t b) (cast: float -> val_t)
+let fetch_bigarray (fetch_op: fetch_op) (type val_t b) (cast: float -> val_t)
     (prec: (val_t, (val_t, b, Bigarray.c_layout) bigarray) precision)
     (arr: (val_t, b, Bigarray.c_layout) bigarray) =
   let dims = A.dims arr in
-  match reset_op with
+  match fetch_op with
   | Init_op (Unspecified) ->
     ()
   | Init_op (Constant_of_value c) ->
@@ -290,6 +290,6 @@ let reset_bigarray (reset_op: reset_op) (type val_t b) (cast: float -> val_t)
   | Fills_in {f} ->
     f ~session_step:global.session_step prec ~tensor:arr
 
-let reset_ndarray reset_op arr =
-  let ff arr = reset_bigarray reset_op arr in
+let fetch_ndarray fetch_op arr =
+  let ff arr = fetch_bigarray fetch_op arr in
    cast_map_as_bigarray {ff} arr

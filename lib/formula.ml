@@ -86,11 +86,11 @@ let handle_error ?formula message =
   Stdio.prerr_endline @@ Option.value_exn (session_error_printer exc);
   raise exc
 
-let reset_zeros ~id field _shape =
-  Code.Reset {tensor={id; field}; reset_op=Init_op (Constant_of_value 0.0)}
+let fetch_zeros ~id field _shape =
+  Code.Fetch {tensor={id; field}; fetch_op=Init_op (Constant_of_value 0.0)}
 
-let reset_ones ~id field _shape =
-  Code.Reset {tensor={id; field}; reset_op=Init_op (Constant_of_value 1.0)}
+let fetch_ones ~id field _shape =
+  Code.Fetch {tensor={id; field}; fetch_op=Init_op (Constant_of_value 1.0)}
 
 let create ~id ?(init_op=Code.Unspecified) field shape =
   Code.Create {tensor={id; field}; dims=(fun () -> Shape.to_dims shape); init_op}
@@ -195,7 +195,7 @@ let binop ~op_label ?(compose_op=Shape.Pointwise_bin) ~op_body ~grad_body ~is_fo
     let m1_no_grad = m1_processed || not form1.needs_gradient in
     let m2_no_grad = m2_processed || not form2.needs_gradient in
     if needs_gradient then
-      session_prepare_step := reset_zeros ~id `Grad shape :: !session_prepare_step;
+      session_prepare_step := fetch_zeros ~id `Grad shape :: !session_prepare_step;
     (* The code needs to be included in the reverse order to which it was computed! This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
@@ -270,7 +270,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1: t 
     let needs_gradient = form1.needs_gradient in
     let m1_no_grad = m1_processed || not form1.needs_gradient in
     if needs_gradient then
-      session_prepare_step := reset_zeros ~id `Grad shape :: !session_prepare_step;
+      session_prepare_step := fetch_zeros ~id `Grad shape :: !session_prepare_step;
     let grad_body =
       if needs_gradient then grad_body ~n ~n1 projections else Noop in
     let grad_body =
@@ -326,7 +326,7 @@ let term ~label ?needs_gradient ~is_form (spec: Shape.term_spec) ~init_op =
       | None -> term_needs_gradient spec
       | Some setting -> setting in
     if needs_gradient then
-      session_prepare_step := reset_zeros ~id `Grad shape :: !session_prepare_step;
+      session_prepare_step := fetch_zeros ~id `Grad shape :: !session_prepare_step;
     let backprop_body = Noop in
     (* Very unlikely someone will want dw/dw. *)
     if needs_gradient then
@@ -353,7 +353,7 @@ let get_toplevel m =
     Node_specific {procedure=m.forward_body; routine={id=m.id; field=`Forward};
                    label="Forward #"^Int.to_string m.id} in
   let backprop =
-    Seq (reset_ones ~id:m.id `Grad m.shape,
+    Seq (fetch_ones ~id:m.id `Grad m.shape,
          (Option.value_exn m.form).backprop_body) in
   let toplevel_backprop =
     Node_specific {procedure=backprop;

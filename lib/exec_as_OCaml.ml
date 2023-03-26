@@ -44,13 +44,13 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
       fprintf ppf "@[<2>(get %d).value <-@ create_ndarray Single@ %a %a@]" id pp_dims dims pp_print_init_op init_op
     | LLCreate { tensor=Gradient_at_node_id id; dims; init_op } ->
       fprintf ppf "@[<2>(get_form %d).grad <-@ create_ndarray Single@ %a %a@]" id pp_dims dims pp_print_init_op init_op
-    | LLReset { tensor=Value_at_node_id id; reset_op=Init_op reset_op } ->
-      fprintf ppf "@[<2>reset_ndarray@ %a@ ((get %d).value)@]" pp_print_init_op reset_op id
-    | LLReset { tensor=Value_at_node_id _id; reset_op=_ } ->
+    | LLFetch { tensor=Value_at_node_id id; fetch_op=Init_op fetch_op } ->
+      fprintf ppf "@[<2>fetch_ndarray@ (Init_op %a)@ ((get %d).value)@]" pp_print_init_op fetch_op id
+    | LLFetch { tensor=Value_at_node_id _id; fetch_op=_ } ->
       (* FIXME: *) failwith "NOT IMPLEMENTED YET"
-    | LLReset { tensor=Gradient_at_node_id id; reset_op=Init_op reset_op } ->
-      fprintf ppf "@[<2>reset_ndarray@ %a@ ((get_form %d).grad)@]" pp_print_init_op reset_op id
-    | LLReset { tensor=Gradient_at_node_id _id; reset_op=_ } ->
+    | LLFetch { tensor=Gradient_at_node_id id; fetch_op=Init_op fetch_op } ->
+      fprintf ppf "@[<2>fetch_ndarray@ (Init_op %a)@ ((get_form %d).grad)@]" pp_print_init_op fetch_op id
+    | LLFetch { tensor=Gradient_at_node_id _id; fetch_op=_ } ->
       (* FIXME: *) failwith "NOT IMPLEMENTED YET"
     | Unoptimized_set (Value_at_node_id id, indices, v) ->
       fprintf ppf "@[<2>set_from_float (get %d).value@ %a@ %a@]" id pp_indices indices pp_ll v
