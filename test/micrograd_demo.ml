@@ -10,9 +10,7 @@ let%expect_test "Micrograd README basic example" =
   drop_session();
   Random.init 0;
   let%nn_op c = "a" [-4] + "b" 2 in
-  (* TODO: exponentiation operator *)
   let%nn_op d = a *. b + b **. 3 in
-  (* TODO: figure out how to have [let%nn_op c += c + 1] etc. *)
   let%nn_op c = c + c + 1 in
   let%nn_op c = c + 1 + c + ~-a in
   let%nn_op d = d + d *. 2 + !/ (b + a) in
