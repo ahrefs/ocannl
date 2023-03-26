@@ -68,3 +68,51 @@ let dag_to_box (b: dag) =
 
 let reformat_dag box_depth b =
   boxify box_depth b |> dag_to_box
+
+type plot_spec =
+  | Scatterplot of {points: (float * float) array; pixel: string}
+  | Line_plot of {points: float array; pixel: string}
+
+let plot ?canvas ?size specs =
+  let open Float in
+  (* Unfortunately "x" and "y" of a "matrix" are opposite to how we want them displayed --
+     the first dimension (i.e. "x") as the horizontal axis. *)
+  let dimx, dimy, canvas =
+    match canvas, size with
+    | None, None -> invalid_arg "PrintBox_utils.plot: provide ~canvas or ~size"
+    | None, Some (dimx, dimy) -> dimx, dimy, Array.make_matrix ~dimx:dimy ~dimy:dimx " "
+    | Some canvas, None ->
+      let dimy = Array.length canvas in
+      let dimx = Array.length canvas.(0) in
+      dimx, dimy, canvas
+    | Some canvas, Some (dimx, dimy) ->
+      assert Int.(dimy = Array.length canvas);
+      assert Int.(dimx = Array.length canvas.(0));
+      dimx, dimy, canvas in
+  let specs = Array.of_list specs in
+  let all_x_points = Array.concat_map specs ~f:(function
+      | Scatterplot {points; _} -> Array.map ~f:fst points
+      | Line_plot _ -> [||]) in
+  let all_y_points = Array.concat_map specs ~f:(function
+      | Scatterplot {points; _} -> Array.map ~f:snd points
+      | Line_plot {points; _} -> points) in
+  let minx = Array.reduce_exn all_x_points ~f:min in
+  let miny = Array.reduce_exn all_y_points ~f:min in
+  let maxx = Array.reduce_exn all_x_points ~f:max in
+  let maxy = Array.reduce_exn all_y_points ~f:max in
+  let spanx = maxx - minx in
+  let spany = maxy - miny in
+  let scale_1d y = to_int @@ of_int Int.(dimy - 1) * (y - miny) / spany in
+  let scale_2d (x, y) =
+    to_int @@ of_int Int.(dimx - 1) * (x - minx) / spanx,
+    to_int @@ of_int Int.(dimy - 1) * (y - miny) / spany in
+  Array.iter specs ~f:(function
+      | Scatterplot {points; pixel} ->
+        let points = Array.map points ~f:scale_2d in
+        Array.iter points ~f:Int.(fun (i, j) -> canvas.(dimy - 1 - j).(i) <- pixel)
+      | Line_plot {points; pixel} ->
+        let points = Array.map points ~f:scale_1d in
+        let rescale_x i = to_int @@ of_int i * spanx / of_int (Array.length points) in
+        (* TODO: implement interpolation if not enough points. *)
+        Array.iteri points ~f:Int.(fun i j -> canvas.(dimy - 1 - j).(rescale_x i) <- pixel));
+  canvas
