@@ -93,6 +93,44 @@ let param_nodes ?(from_id=0) () =
   Hashtbl.filter global_node_store ~f:(
     fun n -> n.node.id >= from_id && Option.is_some n.node.form && List.is_empty n.children)
 
+let retrieve_2d_points ?from_axis ~xdim ~ydim arr =
+  let dims = Node.dims arr in
+  let n_axes = Array.length dims in
+  let from_axis = Option.value from_axis ~default:(n_axes - 1) in
+  let result = ref [] in
+  let idx = Array.create ~len:n_axes 0 in
+  let rec iter axis =
+    if axis = n_axes then
+      let x = idx.(from_axis) <- xdim; Node.get_as_float arr idx in
+      let y = idx.(from_axis) <- ydim; Node.get_as_float arr idx in
+      result := (x, y) :: !result
+    else if axis = from_axis then iter (axis + 1)
+    else for p = 0 to dims.(axis) - 1 do
+      idx.(axis) <- p;
+      iter (axis + 1)
+    done in
+  iter 0;
+  Array.of_list_rev !result
+
+let retrieve_1d_points ?from_axis ~xdim arr =
+  let dims = Node.dims arr in
+  let n_axes = Array.length dims in
+  let from_axis = Option.value from_axis ~default:(n_axes - 1) in
+  let result = ref [] in
+  let idx = Array.create ~len:n_axes 0 in
+  let rec iter axis =
+    if axis = n_axes then
+      let x = idx.(from_axis) <- xdim; Node.get_as_float arr idx in
+      result := x :: !result
+    else if axis = from_axis then iter (axis + 1)
+    else for p = 0 to dims.(axis) - 1 do
+      idx.(axis) <- p;
+      iter (axis + 1)
+    done in
+  iter 0;
+  Array.of_list_rev !result
+
+    
 (* *** Printing *** *)
 
 (** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
