@@ -2,14 +2,13 @@ open Base
 open Ocannl
 module FDSL = Operation.FDSL
 
-let test_executor = `OCaml
+let () = Session.SDSL.set_executor OCaml
 
 let%expect_test "Micrograd README basic example" =
   (* let open Operation.FDSL in *)
   let open Session.SDSL in
   drop_session();
   Random.init 0;
-  set_executor test_executor;
   let%nn_op c = "a" [-4] + "b" 2 in
   (* TODO: exponentiation operator *)
   let%nn_op d = a *. b + b **. 3 in
@@ -77,6 +76,5 @@ let%expect_test "Micrograd half-moons example" =
   let open Session.SDSL in
   drop_session();
   Random.init 0;
-  set_executor test_executor;
   (* FIXME: in progress *)
   ()

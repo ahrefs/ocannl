@@ -128,14 +128,19 @@ let print_session_code() =
   Caml.Format.print_newline()
 
 (** *** Session management. *** *)
+type backend =
+| Interpreter
+| OCaml
+[@@deriving sexp, equal]
+
 let executor = ref Exec_as_OCaml.load_native
 let executor_error_message = ref Exec_as_OCaml.error_message
 let set_executor = function
-  | `Interpreter ->
+  | Interpreter ->
      executor := Code.interpret_program;
      executor_error_message := Code.interpreter_error_message
 
-  | `OCaml ->
+  | OCaml ->
     executor := Exec_as_OCaml.load_native;
     executor_error_message := Exec_as_OCaml.error_message
 
@@ -279,6 +284,9 @@ let update_params ?with_debug ~(minus_lr: Formula.t) ?params () =
     fun n -> [%nn_cd n =+ minus_lr * n.grad ~logic:Pointwise_bin])
 
 module SDSL = struct
+  type nonrec backend = backend =
+    | Interpreter
+    | OCaml
   let set_executor = set_executor
   let refresh_session = refresh_session
   let drop_session = drop_session

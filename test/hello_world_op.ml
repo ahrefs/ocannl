@@ -2,7 +2,8 @@ open Base
 open Ocannl
 
 module FDSL = Operation.FDSL
-let test_executor = `OCaml
+
+let () = Session.SDSL.set_executor OCaml
 
 let%expect_test "Hello World" =
   Stdio.printf "Hello World!\n";
@@ -12,7 +13,6 @@ let%expect_test "Pointwise multiplication dims 1" =
   let open Session.SDSL in
   drop_session();
   Random.init 0;
-  set_executor test_executor;
   (* "Hey" is inferred to be a scalar.
      Note the pointwise multiplication means "hey" does not have any input axes. *)
   let%nn_op y = 2 *. "hey" in
@@ -32,7 +32,6 @@ let%expect_test "op:Matrix multiplication dims 1x1" =
   let open Session.SDSL in
   drop_session();
   Random.init 0;
-  set_executor test_executor;
   (* Hey is inferred to be a matrix. *)
   let%nn_op y = "hey" * 'q' 2.0 + 'p' 1.0 in
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
@@ -305,7 +304,6 @@ let%expect_test "op:Matrix multiplication dims 2x3" =
   let open Session.SDSL in
   drop_session();
   Random.init 0;
-  set_executor test_executor;
   (* Hey is inferred to be a matrix. *)
   let%nn_op hey = "hey" in
   let%nn_op y = hey * [2; 3] + [4; 5; 6] in
@@ -337,7 +335,6 @@ let%expect_test "Big matrix" =
   let open Session.SDSL in
   drop_session();
   Random.init 0;
-  set_executor test_executor;
   (* Hey is inferred to be a matrix. *)
   let hey = FDSL.O.(!~ "hey") in
   let zero_to_twenty = FDSL.range 20 in
@@ -387,7 +384,6 @@ let%expect_test "op:Very big tensor" =
     let open Session.SDSL in
     drop_session();
     Random.init 0;
-    set_executor test_executor;
     (* Hey is inferred to be a matrix. *)
     let hey =
       FDSL.range_of_shape ~batch_dims:[6] ~input_dims:[7; 8; 9] ~output_dims:[10; 11] () in

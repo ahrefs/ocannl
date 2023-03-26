@@ -2,7 +2,7 @@ open Base
 open Ocannl
 module FDSL = Operation.FDSL
 
-let () = Session.SDSL.set_executor `OCaml
+let () = Session.SDSL.set_executor OCaml
 
 let hello1() =
   Session.drop_session();
