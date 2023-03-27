@@ -135,7 +135,7 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
         (Pconst_string (String.of_char ch, pexp_loc, None)) in
     Formula_nf, Undet, [%expr Formula.NFDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])]
 
-  | { pexp_desc = Pexp_tuple _; _ } | { pexp_desc = Pexp_array _; _ } 
+  | { pexp_desc = Pexp_array _; _ } 
   | { pexp_desc = Pexp_construct ({txt=Lident "::"; _}, _); _ } ->
     Formula_nf, Undet, ndarray_op expr
 

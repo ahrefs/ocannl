@@ -26,6 +26,15 @@ let make_vb ?value ~loc ~str_loc ~ident string =
   let vb = Ast_helper.Vb.mk ~loc pat v in
   pat, vb
 
+let make_vb_dims ~loc ~str_loc ~ident ~dims ~dims_loc string =
+  let pat = Ast_helper.Pat.var ~loc {loc=str_loc; txt=ident} in
+  let dims =
+    let loc = dims_loc in
+    List.fold_right dims ~init:[%expr []] ~f:(fun d ds -> [%expr [%e d] :: [%e ds]]) in
+  let v = [%expr FDSL.params ~output_dims:[%e dims] [%e string]] in
+  let vb = Ast_helper.Vb.mk ~loc pat v in
+  pat, vb
+
 let make_vb_nd ~loc ~str_loc ?axis_labels ~ident ~init_nd string =
   let pat = Ast_helper.Pat.var ~loc {loc=str_loc; txt=ident} in
   let values, batch_dims, output_dims, input_dims = ndarray_constant init_nd in
@@ -66,26 +75,27 @@ let rec translate expr =
     no_vbs, [%expr FDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])]
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
-      [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
-    let pat, vb = make_vb ~value:f ~loc ~str_loc ~ident s in
+      [%e? { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = dims_loc; _ } as i]] ->
+    let pat, vb =
+      make_vb_dims ~loc ~str_loc ~ident ~dims:[i] ~dims_loc s in
     Map.singleton (module String) ident vb, pat2expr pat
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
-      [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
-    let pat, vb = make_vb ~value:[%expr Float.of_int [%e i]] ~loc ~str_loc ~ident s in
-    Map.singleton (module String) ident vb, pat2expr pat
-
-  | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
-      [%e? ({ pexp_desc = Pexp_tuple _; _ } | { pexp_desc = Pexp_array _; _ } 
+      [%e? ({ pexp_desc = Pexp_array _; _ } 
            | { pexp_desc = Pexp_construct ({txt=Lident "::"; _}, _); _ }) as init_nd]] ->
     let pat, vb = make_vb_nd ~loc ~str_loc ~ident ~init_nd s in
+    Map.singleton (module String) ident vb, pat2expr pat
+
+  | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
+      [%e? { pexp_desc = Pexp_tuple dims; pexp_loc = dims_loc; _ }]] ->
+    let pat, vb = make_vb_dims ~loc ~str_loc ~ident ~dims ~dims_loc s in
     Map.singleton (module String) ident vb, pat2expr pat
 
   | { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } ->
     let pat, vb = make_vb ~loc ~str_loc ~ident expr in
     Map.singleton (module String) ident vb, pat2expr pat
 
-  | { pexp_desc = Pexp_tuple _; _ } | { pexp_desc = Pexp_array _; _ } 
+  | { pexp_desc = Pexp_array _; _ } 
   | { pexp_desc = Pexp_construct ({txt=Lident "::"; _}, _); _ } ->
     no_vbs, ndarray_op expr
 
