@@ -47,7 +47,7 @@ let () =
       (Init_op (Fixed_constant moons_flat)) in
   let moons_class = FDSL.data ~label:"moons_class" ~batch_dims:[batch] ~output_dims:[1]
       (Init_op (Fixed_constant moons_classes)) in
-  let module A = Bigarray.Genarray in
+  (* let%nn_op ffn x = *)
   let points1 = ref [] in
   let points2 = ref [] in
   for _step = 1 to 2 * len/batch do
@@ -62,7 +62,9 @@ let () =
     let open PrintBox_utils in
     plot ~size:(75, 35) ~x_label:"ixes" ~y_label:"ygreks"
       [Scatterplot {points=Array.concat !points1; pixel="#"}; 
-       Scatterplot {points=Array.concat !points2; pixel="%"}] in
+       Scatterplot {points=Array.concat !points2; pixel="%"};
+       Boundary_map {pixel_false="."; pixel_true="*"; callback=Float.(fun (x,y) ->
+           x <= y && y <= 0. || (x * x + y * y) <= 1. && y >= 0.)}] in
   Stdio.printf "Half-moons scatterplot:\n%!";
   PrintBox_text.output Stdio.stdout plot_box;
   Stdio.printf "\n%!"

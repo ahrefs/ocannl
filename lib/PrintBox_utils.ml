@@ -72,6 +72,7 @@ let reformat_dag box_depth b =
 type plot_spec =
   | Scatterplot of {points: (float * float) array; pixel: string}
   | Line_plot of {points: float array; pixel: string}
+  | Boundary_map of {callback: (float * float) -> bool; pixel_true: string; pixel_false: string}
 
 let plot_canvas ?canvas ?size specs =
   let open Float in
@@ -92,10 +93,12 @@ let plot_canvas ?canvas ?size specs =
   let specs = Array.of_list specs in
   let all_x_points = Array.concat_map specs ~f:(function
       | Scatterplot {points; _} -> Array.map ~f:fst points
-      | Line_plot _ -> [||]) in
+      | Line_plot _ -> [||]
+      | Boundary_map _ -> [||]) in
   let all_y_points = Array.concat_map specs ~f:(function
       | Scatterplot {points; _} -> Array.map ~f:snd points
-      | Line_plot {points; _} -> points) in
+      | Line_plot {points; _} -> points
+      | Boundary_map _ -> [||]) in
   let minx = Array.reduce_exn all_x_points ~f:min in
   let miny = Array.reduce_exn all_y_points ~f:min in
   let maxx = Array.reduce_exn all_x_points ~f:max in
@@ -114,7 +117,14 @@ let plot_canvas ?canvas ?size specs =
         let points = Array.map points ~f:scale_1d in
         let rescale_x i = to_int @@ of_int i * spanx / of_int (Array.length points) in
         (* TODO: implement interpolation if not enough points. *)
-        Array.iteri points ~f:Int.(fun i j -> canvas.(dimy - 1 - j).(rescale_x i) <- pixel));
+        Array.iteri points ~f:Int.(fun i j -> canvas.(dimy - 1 - j).(rescale_x i) <- pixel)
+      | Boundary_map {callback; pixel_true; pixel_false} -> 
+        Array.iteri canvas ~f:(fun dmj -> Array.iteri ~f:(fun i pix ->
+          if String.is_empty @@ String.strip pix then
+            let x = of_int i * spanx / of_int Int.(dimx - 1) + minx in
+            let y = of_int Int.(dimy - 1 - dmj) * spany / of_int Int.(dimy - 1) + miny in
+            canvas.(dmj).(i) <- if callback (x, y) then pixel_true else pixel_false
+          )));
   minx, miny, maxx, maxy, canvas
 
 let concise_float ~prec v =
