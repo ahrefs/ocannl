@@ -105,14 +105,7 @@ let raw_binop ~zero_out ~accum ~lhs_id ~lhs_is_grad ~op
   let shape = n.shape in
   let shape_logic = Shape.Broadcast (logic, n1.shape, n2.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
-  Shape.(
-    propagate_shapes local_shape_update;
-    match n1.shape, n2.shape with
-    | {batch=Given _; input=Given _; output=Given _; _},
-      {batch=Given _; input=Given _; output=Given _; _} ->
-      set_dims_type shape given
-    | _ -> ()
-  );
+  Shape.propagate_shapes local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections() = Shape.derive_projections local_shape_update in
   let lhs = Code.CDSL.(if lhs_is_grad then grad_of_id lhs_id else value_of_id lhs_id) in
@@ -126,13 +119,7 @@ let raw_unop ~zero_out ~accum ~lhs_id ~lhs_is_grad ~op ~rhs_id ~rhs_is_grad ~log
   let shape = n.shape in
   let shape_logic = Shape.Transpose (logic, n1.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
-  Shape.(
-    propagate_shapes local_shape_update;
-    match n1.shape with
-    | {batch=Given _; input=Given _; output=Given _; _} ->
-      set_dims_type shape given
-    | _ -> ()
-  );
+  Shape.propagate_shapes local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections() = Shape.derive_projections local_shape_update in
   let lhs = Code.CDSL.(if lhs_is_grad then grad_of_id lhs_id else value_of_id lhs_id) in
@@ -158,17 +145,10 @@ let binop ~op_label ?(compose_op=Shape.Pointwise_bin) ~op_body ~grad_body ~is_fo
   let shape = n.shape in
   let shape_logic = Shape.Broadcast (compose_op, m1.shape, m2.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
-  Shape.(
-    propagate_shapes local_shape_update;
-    match m1.shape, m2.shape with
-    | {batch=Given _; input=Given _; output=Given _; _},
-      {batch=Given _; input=Given _; output=Given _; _} ->
-      set_dims_type shape given
-    | _ -> ()
-  );
-  session_shape_updates := local_shape_update :: !session_shape_updates;
   let n1 = m1.node in
   let n2 = m2.node  in
+  Shape.propagate_shapes local_shape_update;
+  session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections() = Shape.derive_projections local_shape_update in
   let op_body = op_body ~n ~n1 ~n2 projections in
   (* The code needs to be included in the order it was computed! *)
@@ -241,15 +221,9 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1: t 
   );     
   let shape_logic = Shape.Transpose(transpose_op, m1.shape) in
   let local_shape_update = Shape.{ shape; logic=shape_logic } in
-  Shape.(
-    propagate_shapes local_shape_update;
-    if Option.is_none init_shape then match m1.shape with
-    | {batch=Given _; input=Given _; output=Given _; _} ->
-      set_dims_type shape given
-    | _ -> ()
-  );
-  session_shape_updates := local_shape_update :: !session_shape_updates;
   let n1 = m1.node in
+  Shape.propagate_shapes local_shape_update;
+  session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections() = Shape.derive_projections local_shape_update in
   let op_body = op_body ~n ~n1 projections in
   (* The code needs to be included in the order it was computed! *)

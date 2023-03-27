@@ -63,7 +63,7 @@ type dims =
 | Inferred of int list
 (** Dimensions that will itself change to a bigger size: they adapt to the broadcasted size. *)
 | Unknown
-(** User-provided but quivalent to [Inferred []]. *)
+(** User-provided and will be replaced through inference. Prefer using [Unknown] to [Inferred []]. *)
 [@@deriving compare, sexp, variants]
 
 type deduce_dims =
@@ -278,9 +278,11 @@ let axis_map_to_dims_bio (type a) ?(default:a option) (idcs: a axis_map) =
       | Some witness -> witness
       | None -> snd @@ Map.min_elt_exn idcs in
     let bch_axes, other = Map.partition_mapi idcs ~f:(
-        fun ~key:{in_axes; _} ~data -> if AxisKey.is_batch in_axes then Either.First data else Either.Second data) in
+        fun ~key:{in_axes; _} ~data ->
+          if AxisKey.is_batch in_axes then Either.First data else Either.Second data) in
     let inp_axes, out_axes = Map.partition_mapi other ~f:(
-        fun ~key:{in_axes; _} ~data -> if AxisKey.is_input in_axes then Either.First data else Either.Second data) in
+        fun ~key:{in_axes; _} ~data ->
+          if AxisKey.is_input in_axes then Either.First data else Either.Second data) in
     let bch_axes = Map.to_alist bch_axes |> List.map ~f:(fun ({from_end=i; _}, v) -> i, v) in
     let bch_size = List.fold bch_axes ~init:0 ~f:(fun accu (i,_) -> max i accu) in
     let bch = Array.create ~len:bch_size witness in
@@ -356,6 +358,9 @@ let axes_with_inf_labels ~all_labels ls_xhs =
     else accu in
   AxisKey.(see Batch @@ see Input @@ see Output @@ ls_xhs.labels)
 
+let is_given_or_fixed dims = is_given dims || is_fixed dims
+
+module Debug_runtime = Minidebug_runtime.PrintBox(struct let debug_ch = Stdio.stdout end)
 (** Performs a local step of shape inference, propagates information into and out of the parent shape
     and the child shape(s). *)
 let propagate_shapes (update: update_step) =
@@ -395,20 +400,26 @@ let propagate_shapes (update: update_step) =
       broad_back_dims ~fixed_left ~fixed_right
         (broad_dim ~fixed_left ~fixed_right sh1 sh2 key (Map.find labels key) (d1, d2)::accu)
         (i+1) (dims1, dims2) in
+    let broadcast_dims ~dims1 ~dims2 =
+      broad_back_dims ~fixed_left:(is_fixed sh1_dims) ~fixed_right:(is_fixed sh2_dims)
+                    [] 1 (List.rev dims1, List.rev dims2) in
     match sh1_dims, sh2_dims with
       | Unknown, Unknown -> Unknown
       | (Inferred dims | Given dims| Fixed dims), Unknown
       | Unknown, (Inferred dims | Given dims | Fixed dims) -> Inferred dims
+      | Fixed dims1, Fixed dims2 ->
+        Fixed (broadcast_dims ~dims1 ~dims2)
+      | (Given dims1 | Fixed dims1), (Given dims2 | Fixed dims2) ->
+        Given (broadcast_dims ~dims1 ~dims2)
       | (Inferred dims1 | Given dims1 | Fixed dims1), (Inferred dims2 | Given dims2 | Fixed dims2) ->
-        Inferred (broad_back_dims ~fixed_left:(is_fixed sh1_dims) ~fixed_right:(is_fixed sh2_dims)
-                    [] 1 (List.rev dims1, List.rev dims2)) in
+        Inferred (broadcast_dims ~dims1 ~dims2) in
   let cur_sh = update.shape in
   (* Note: does not work with arbitrary permutation as in einsum. *)
   let update_labels sh1 to_kind sh2 from_kind =
     pointwise_labels sh1 sh2 sh1.axis_labels @@
     Map.map_keys_exn (module AxisKey) ~f:(fun k -> {k with in_axes=to_kind}) @@
     Map.filter_keys sh2.axis_labels ~f:AxisKey.(fun k -> equal_kind k.in_axes from_kind) in
-  let broadcast_into to_sh to_kind from_sh from_kind =
+  let broadcast_into ?(det=false) to_sh to_kind from_sh from_kind =
     match dims_of_kind to_kind to_sh, dims_of_kind from_kind from_sh with
     | (Given _ | Fixed _) as into_dims, from_dims ->
       ignore @@
@@ -416,7 +427,11 @@ let propagate_shapes (update: update_step) =
       into_dims
     | into_dims, from_dims ->
       to_sh.axis_labels <- update_labels to_sh to_kind from_sh from_kind;
-      broadcast_dims to_sh from_sh to_kind to_sh.axis_labels into_dims from_dims in
+      let result = broadcast_dims to_sh from_sh to_kind to_sh.axis_labels into_dims from_dims in
+      match det, from_dims, result with
+      | true, Fixed _, Inferred dims -> Fixed dims
+      | true, Given _, Inferred dims -> Given dims
+      | _ -> result in
   let einsum_one_dim_opt debug_spec debug1 debug2 label terms =
     snd @@
     List.fold terms ~init:(false, None) ~f:(fun (is_fixed, dim as accu) (_axis, dims) ->
@@ -475,17 +490,17 @@ let propagate_shapes (update: update_step) =
   match update.logic with
   | Terminal -> ()
   | Transpose (Transpose, sh) ->
-    cur_sh.input <- broadcast_into cur_sh Input sh Output;
-    cur_sh.output <- broadcast_into cur_sh Output sh Input;
-    cur_sh.batch <- broadcast_into cur_sh Batch sh Batch;
+    cur_sh.input <- broadcast_into ~det:true cur_sh Input sh Output;
+    cur_sh.output <- broadcast_into ~det:true cur_sh Output sh Input;
+    cur_sh.batch <- broadcast_into ~det:true cur_sh Batch sh Batch;
     sh.input <- broadcast_into sh Input cur_sh Output;
     sh.output <- broadcast_into sh Output cur_sh Input;
     sh.batch <- broadcast_into sh Batch cur_sh Batch;
 
   | Transpose (Pointwise_un, sh) ->
-    cur_sh.input <- broadcast_into cur_sh Input sh Input;
-    cur_sh.output <- broadcast_into cur_sh Output sh Output;
-    cur_sh.batch <- broadcast_into cur_sh Batch sh Batch;
+    cur_sh.input <- broadcast_into ~det:true cur_sh Input sh Input;
+    cur_sh.output <- broadcast_into ~det:true cur_sh Output sh Output;
+    cur_sh.batch <- broadcast_into ~det:true cur_sh Batch sh Batch;
     sh.input <- broadcast_into sh Input cur_sh Input;
     sh.output <- broadcast_into sh Output cur_sh Output;
     sh.batch <- broadcast_into sh Batch cur_sh Batch;
@@ -523,10 +538,13 @@ let propagate_shapes (update: update_step) =
     cur_sh.axis_labels <- lhs_axis_labels;
     let rhs_axis_labels = Map.map rhs_labels ~f:(Map.find_exn all_axis_labels) in
     sh.axis_labels <- rhs_axis_labels
+    (* FIXME(87): handle givenness / fixedness propagation *)
 
   | Broadcast (Pointwise_bin, sh1, sh2) ->
     let up_labels = pointwise_labels sh1 sh2 sh1.axis_labels sh2.axis_labels in
     cur_sh.axis_labels <- up_labels;
+    (* Note: will not work as expected (propagate givenness/fixedness) if the shape is pre-filled
+       as [Inferred] instead of [Unknown]. *)
     (if is_unknown cur_sh.input then
       cur_sh.input <- broadcast_dims sh1 sh2 AxisKey.Input up_labels sh1.input sh2.input
     else (
@@ -556,8 +574,8 @@ let propagate_shapes (update: update_step) =
   | Broadcast (Compose, sh1, sh2) ->
     (** [sh2] is the value or the function that gets applied first: [cur_sh(x) = sh1(sh2(x))].
        I.e. [cur.I = sh2.I, cur.O = sh1.O, sh2.O = sh1.I]. *)
-    cur_sh.input <- broadcast_into cur_sh AxisKey.Input sh2 AxisKey.Input;
-    cur_sh.output <- broadcast_into cur_sh AxisKey.Output sh1 AxisKey.Output;
+    cur_sh.input <- broadcast_into ~det:true cur_sh AxisKey.Input sh2 AxisKey.Input;
+    cur_sh.output <- broadcast_into ~det:true cur_sh AxisKey.Output sh1 AxisKey.Output;
     (if is_unknown cur_sh.batch then
       let up_labels = update_labels cur_sh Batch sh1 Batch in
       cur_sh.axis_labels <- up_labels;
@@ -634,6 +652,7 @@ let propagate_shapes (update: update_step) =
     sh1.axis_labels <- rhs1_axis_labels;
     let rhs2_axis_labels = Map.map rhs2_labels ~f:(Map.find_exn all_axis_labels) in
     sh2.axis_labels <- rhs2_axis_labels
+    (* FIXME(87): handle givenness / fixedness propagation *)
 
 
 (** Uses the matrix convention of putting the input axes last. *)
