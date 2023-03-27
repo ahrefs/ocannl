@@ -32,9 +32,9 @@ let () =
   let points2 = ref [] in
   let losses = ref [] in
   (* let%nn_op reg_loss = w1 **. 2 + w2 **. 2 + w3 **. 2 + b1 **. 2 + b2 **. 2 + b3 **. 2 in *)
-  let%nn_op reg_loss = w1 *. w1 + w2 *. w2 + w3 *. w3 + b1 *. b1 + b2 *. b2 + b3 *. b3 in
+  (* let%nn_op reg_loss = w1 *. w1 + w2 *. w2 + w3 *. w3 + b1 *. b1 + b2 *. b2 + b3 *. b3 in *)
   let%nn_op margin_loss = !/ (1 - moons_class *. mlp moons_input) in
-  let%nn_op total_loss = margin_loss + 0.0001 *. reg_loss in
+  (* let%nn_op total_loss = margin_loss + 0.0001 *. reg_loss in *)
   for step = 1 to 2 * len/batch do
     refresh_session ();
     update_weights ();
@@ -43,7 +43,8 @@ let () =
     let npoints1, npoints2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
     points1 := npoints1 :: !points1;
     points2 := npoints2 :: !points2;
-    let batch_losses = NodeUI.retrieve_1d_points ~xdim:0 total_loss.node.node.value in
+    (* let batch_losses = NodeUI.retrieve_1d_points ~xdim:0 total_loss.node.node.value in *)
+    let batch_losses = NodeUI.retrieve_1d_points ~xdim:0 margin_loss.node.node.value in
     Stdio.printf "Losses over batch for step %d: %s\n%!" step
       (Array.map batch_losses ~f:Float.to_string |> String.concat_array ~sep:", ");
     losses := batch_losses :: !losses;
