@@ -23,9 +23,10 @@ let get uid = Hashtbl.find_exn global_node_store uid
     Note that the precision for gradients should not be lower than the precision for values. *)
 let create (type grad_arr_t value_arr_t) ~(value_prec: ('a, value_arr_t) Node.precision)
     ?(grad_prec: ('a, grad_arr_t) Node.precision option) ~is_form ()
-    ~op_label ~shape_spec ~children =
+    ~op_label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children () =
   let node = Node.create ~value_prec ?grad_prec ~is_form () in
-  let shape = Shape.of_term_spec node.id shape_spec in
+  let shape =
+    Shape.make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~id:node.id () in
   let data = { id=node.id; node; op_label; children; shape } in
   Hashtbl.add_exn global_node_store ~key:node.id ~data;
   data

@@ -153,7 +153,7 @@ let binop ~op_label ?(compose_op=Shape.Pointwise_bin) ~op_body ~grad_body ~is_fo
   let children = [{NodeUI.sub_node_id=m1.id; computed_externally=m1_processed};
                   {sub_node_id=m2.id; computed_externally=m2_processed}] in
   let n = NodeUI.create_of_promoted_precision ~is_form m1.node.node m2.node.node
-      ~op_label ~shape_spec:Unknown_shape ~children in
+      ~op_label ~children () in
   let id = n.id in
   let shape = n.shape in
   let shape_logic = Shape.Broadcast (compose_op, m1.shape, m2.shape) in
@@ -228,8 +228,7 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1: t 
   (* Note: do not capture m in any closure, so it can be GC'd. *)
   let m1_processed = Option.is_some m1.form && not @@ Map.mem !global_roots m1.id in
   let children = [{NodeUI.sub_node_id=m1.id; computed_externally=m1_processed}] in
-  let n = NodeUI.create_of_same_precision_as ~is_form m1.node.node
-      ~op_label ~shape_spec:Unknown_shape ~children in
+  let n = NodeUI.create_of_same_precision_as ~is_form m1.node.node ~op_label ~children () in
   let id = n.id in
   let shape = n.shape in
   (match init_shape with
@@ -291,22 +290,12 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1: t 
     global_roots := Map.add_exn !global_roots ~key:id ~data:root;
     formula
 
-(** The default [needs_gradient] behavior. *)
-let term_needs_gradient (spec: Shape.term_spec) =
-  match spec with
-  | Unknown_shape -> true
-  | Data _ -> false
-  | Constant _ -> false
-  | Params _ -> true
-  | Transform _ -> false
-  | Unknown_batch_data _ -> false
-  | Deduced_params _ -> true
-
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label ?needs_gradient ~is_form (spec: Shape.term_spec)
+let term ~label ?needs_gradient ~is_form
+    ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced
     (init_or_fetch: (Code.init_op, Code.fetch_op) Either.t) =
   let n = NodeUI.create ~value_prec:Single ~grad_prec:Single ~is_form ()
-      ~op_label:label ~shape_spec:spec ~children:[] in
+      ~op_label:label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children:[] () in
   let id = n.id in
   let shape = n.shape in
   let shape_logic = Shape.Terminal in
@@ -331,9 +320,10 @@ let term ~label ?needs_gradient ~is_form (spec: Shape.term_spec)
     {forward_body; form=None; id; node=n; shape_logic; shape}
   else
     let needs_gradient =
-      match needs_gradient with
-      | None -> term_needs_gradient spec
-      | Some setting -> setting in
+      match needs_gradient, batch_dims with
+      | None, Some [] -> true
+      | Some setting, _ -> setting
+      | _ -> false in
     if needs_gradient then
       session_prepare_step := fetch_zeros ~id `Grad shape :: !session_prepare_step;
     let backprop_body = Noop in
@@ -397,24 +387,12 @@ let float_to_label v = Float.to_string_hum ~strip_zero:true v
 
 let number ~is_form ?(axis_label="") c =
   (* Note: no axis label so that we do not conflict with user labels. *)
-  term ~label:(float_to_label c) ~is_form
-    (Constant {output_dims=[1]; axis_labels=axis_label}) (First (Constant_of_value c))
+  term ~label:(float_to_label c) ~is_form ~needs_gradient:false
+    ~batch_dims:[] ~input_dims:[] ~output_dims:[1] ~axis_labels:axis_label
+    (First (Constant_of_value c))
 
-let ndarray ~is_form ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[])
- values =
-  let spec =
-    match label, batch_dims, input_dims with
-    | Some _, [], _ -> Shape.Params {input_dims; output_dims; axis_labels}
-    | None, [], [] -> Constant {output_dims; axis_labels}
-    | None, _, _ -> Transform {batch_dims; input_dims; output_dims; axis_labels}
-    | _, _, [] -> Data {batch_dims; output_dims; axis_labels}
-    | _, _::_, _::_ ->
-      let sh = {Shape.batch=Given batch_dims; input=Given input_dims; output=Given output_dims;
-                deduce_within_shape_constraints=Not_constrained;
-                axis_labels=(Shape.axis_labels_of_spec axis_labels).labels; id= -1} in
-      raise @@
-      Shape.Shape_error ("Operation.ndarray: cannot provide all of [label], [batch_dims] and [input_dims]",
-                         sh, sh) in
+let ndarray ~is_form ?(needs_gradient=false) ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[])
+    ?axis_labels ?label values =
   let label =
     match label with
     | Some label -> label
@@ -432,17 +410,24 @@ let ndarray ~is_form ?(axis_labels="") ?label ?(batch_dims=[]) ?(input_dims=[]) 
     if String.contains label '\n' then
       "c"^(NodeUI.dims_to_string @@ Array.concat_map [|batch_dims; output_dims; input_dims|] ~f:Array.of_list)
     else label in
-  term ~is_form ~label spec (First (Fixed_constant values))
-
-let given_dims_params ?(axis_labels="") ?(input_dims=[]) ?(output_dims=[]) label values =
-  term ~is_form:true ~label (Params {input_dims; output_dims; axis_labels})
+  term ~needs_gradient ~is_form
+    ~batch_dims ~input_dims ~output_dims ?axis_labels ~deduced:Not_constrained ~label
     (First (Fixed_constant values))
+
+let params ?axis_labels ?input_dims ?output_dims ?deduced ?values ?value label =
+  let init = match values, value with
+    | Some _, Some _ -> invalid_arg "Formula.params: do not provide both ~values and ~value"
+    | Some values, _ -> Either.First (Code.Fixed_constant values)
+    | _, Some value -> Either.First (Code.Constant_of_value value)
+    | None, None -> First Standard_uniform in
+  term ~needs_gradient:true ~is_form:true ~batch_dims:[] ?input_dims ?output_dims ?axis_labels
+    ?deduced ~label init
 
 module FDSL = struct
   let term = term ~is_form:true
   let number = number ~is_form:true
   let ndarray = ndarray ~is_form:true
-  let given_dims_params = given_dims_params
+  let params = params
 end
 
 module NFDSL = struct

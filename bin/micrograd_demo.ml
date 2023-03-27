@@ -9,7 +9,7 @@ let _suspended () =
   let open Session.SDSL in
   drop_session();
   Random.init 0;
-  let%nn_op c = "a" (-4) + "b" 2 in
+  let%nn_op c = "a" [-4] + "b" [2] in
   (* TODO: exponentiation operator *)
   let%nn_op d = a *. b + b **. 3 in
   (* TODO: figure out how to have [let%nn_op c += c + 1] etc. *)

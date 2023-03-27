@@ -77,8 +77,6 @@ module NFO_without_pow = struct
   let ( *. ) = pointmul ~is_form:false
   let (+) = add ~is_form:false
   let (!/) = relu ~is_form:false
-  let (!~) label =
-   Formula.term ~label ~is_form:false (Deduced_params Not_constrained) (First Standard_uniform)
   let (!.) = Formula.number ~is_form:false
   let (-) m1 m2 = m1 + !.(-1.) *. m2
   let (~-) m = !.(-1.) *. m
@@ -99,29 +97,19 @@ let rec pointpow ~is_form p m1: Formula.t =
       fun ~(n:NodeUI.t) ~(n1:NodeUI.t) ~n2:_ projections -> n1.grad =+ (p_f *. m1 **. (p -. 1.)) * n.grad in
   Formula.binop ~compose_op:Pointwise_bin ~op_label:"**." ~op_body ~grad_body ~is_form m1 p_f
 
-let unconstrained_param ?init label =
-  (* Note: no axis label so that we do not conflict with user labels. *)
-  let init_op = match init with
-  | None -> Code.Standard_uniform
-  | Some c -> Code.Constant_of_value c in
-  Formula.term ~is_form:true ~label (Deduced_params Not_constrained) (First init_op)
-
-let range ~is_form ?(axis_label="") upto =
+let range ~is_form ?axis_label upto =
   Formula.term ~is_form ~label:("0"^"..."^Int.to_string upto)
-   (Constant {output_dims=[upto + 1]; axis_labels=axis_label}) (First Range_over_offsets)
+    ~batch_dims:[] ~input_dims:[] ~output_dims:[upto + 1] ?axis_labels:axis_label
+    (First Range_over_offsets)
 
-let range_of_shape ~is_form ?(axis_labels="") ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[]) () =
-  let spec =
-    match batch_dims, input_dims with
-    | [], [] -> Shape.Constant {output_dims; axis_labels}
-    | _, [] -> Data {batch_dims; output_dims; axis_labels}
-    | _, _ -> Transform {batch_dims; input_dims; output_dims; axis_labels} in
+let range_of_shape ~is_form ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[]) ?axis_labels () =
   let dims = Array.concat_map [|batch_dims; output_dims; input_dims|] ~f:Array.of_list in
-  Formula.term ~is_form ~label:("r"^NodeUI.dims_to_string dims) spec (First Range_over_offsets)
+  Formula.term ~is_form ~needs_gradient:false ~batch_dims ~input_dims ~output_dims ?axis_labels
+    ~label:("r"^NodeUI.dims_to_string dims) (First Range_over_offsets)
 
-let data ?(axis_labels="") ~label ~batch_dims ~output_dims reset_op =
-  let spec = Shape.Data {batch_dims; output_dims; axis_labels} in
-  Formula.term ~label ~needs_gradient:false ~is_form:true spec (Second reset_op)
+let data ?axis_labels ~label ~batch_dims ~output_dims reset_op =
+  Formula.term ~label ~is_form:true ~needs_gradient:false ~batch_dims ~input_dims:[] ~output_dims 
+    ?axis_labels (Second reset_op)
 
 let assign =
   let module NFDSL = struct module O = struct end end in
@@ -156,8 +144,7 @@ module O = struct
   let (+) = add ~is_form:true
   let ( **. ) base exp = pointpow exp base ~is_form:true
   let (!/) = relu ~is_form:true
-  let (!~) label =
-   Formula.term ~label ~is_form:true (Deduced_params Not_constrained) (First Standard_uniform)
+  let (!~) label = Formula.params label
   let (!.) = Formula.number ~is_form:true
   let (-) m1 m2 = m1 + !.(-1.) *. m2
   let (~-) m = !.(-1.) *. m
@@ -169,7 +156,6 @@ module FDSL = struct
   module O = O
   let einsum s = einsum s ~is_form:true
   let einsum1 s = einsum1 s ~is_form:true
-  let unconstrained_param = unconstrained_param
   let range = range ~is_form:true
   let range_of_shape = range_of_shape ~is_form:true
   let data = data

@@ -11,10 +11,10 @@ let ndarray_op ?axis_labels ?label expr =
   let op =
     match axis_labels, label with
     | None, None -> [%expr Formula.NFDSL.ndarray]
-    | Some axis_labels, None -> [%expr Formula.NFDSL.ndarray ?axis_labels:[%e axis_labels]]
-    | None, Some label -> [%expr Formula.NFDSL.ndarray ?label:[%e label]]
+    | Some axis_labels, None -> [%expr Formula.NFDSL.ndarray ~axis_labels:[%e axis_labels]]
+    | None, Some label -> [%expr Formula.NFDSL.ndarray ~label:[%e label]]
     | Some axis_labels, Some label ->
-      [%expr Formula.NFDSL.ndarray ?axis_labels:[%e axis_labels] ?label:[%e label]] in
+      [%expr Formula.NFDSL.ndarray ~axis_labels:[%e axis_labels] ~label:[%e label]] in
   [%expr
     [%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
       ~output_dims:[%e edims output_dims] [%e values]]

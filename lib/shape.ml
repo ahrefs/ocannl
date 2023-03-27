@@ -1022,59 +1022,21 @@ let derive_index iterator_symbols (projection: symbolic_axis array) (type iterat
   fun product -> Array.map positions ~f:(
       function Fixed_idx i -> Fixed_idx i | Iterator p -> Iterator product.(p))
 
-(** Specification of a terminal [Formula.t]'s shape. The [string] occurrences refer to [axis_labels]
-    specs. Note: the specification is just a helper in constructing shapes. *)
-type term_spec =
-  | Unknown_shape
-  (** The shape will need to be fully inferred. *)
-  | Constant of {output_dims: int list; axis_labels: string}
-  (** Shape of a constant has no batch nor input dimensions, only output dimensions. *)
-  | Data of {batch_dims: int list; output_dims: int list; axis_labels: string}
-  (** A data shape does not have input dimensions. *)
-  | Params of {input_dims: int list; output_dims: int list; axis_labels: string}
-  (** A parameters shape with fixed dimensionality. Parameters do not have batch dimensions. *)
-  | Transform of {batch_dims: int list; input_dims: int list; output_dims: int list; axis_labels: string}
-  (** A non-differentiable transformation(s) shape. *)
-  | Unknown_batch_data of {output_dims: int list; axis_labels: string}
-  (** A data shape where the batch dimensions are left up to inference. *)
-  | Deduced_params of deduce_dims
-    (** Parameters with inferred dimensionality. Use cases:
-        [Deduced_params Not_constrained] -- the shape will need to be fully inferred (no batch dims).
-        [Deduced_params Input_equals_output] -- a hidden layer preserving the dimensionality.
-        [Deduced_params (Input_output_scale 2.0)] -- an expansion hidden layer doubling the dimensionality.
-        [Deduced_params (Input_output_scale 0.5)] -- an bottleneck hidden layer halving the dimensionality.
-        Note that scalar axes (1D) are not scaled, for compatibility with broadcasting. *)
-[@@deriving compare, sexp]
-
-let of_term_spec id: term_spec -> t = function
-  | Unknown_shape ->
-    { batch=Unknown; input=Unknown; output=Unknown;
-      axis_labels=Map.empty (module AxisKey);
-      deduce_within_shape_constraints=Not_constrained; id }
-  | Constant {output_dims; axis_labels} ->
-    { batch=Given []; input=Given []; output=Given output_dims;
-      axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_within_shape_constraints=Not_constrained; id }
-  | Data {batch_dims; output_dims; axis_labels} ->
-    { batch=Given batch_dims; input=Given []; output=Given output_dims;
-      axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_within_shape_constraints=Not_constrained; id }
-  | Params {input_dims; output_dims; axis_labels} ->
-    { batch=Given []; input=Given input_dims; output=Given output_dims;
-      axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_within_shape_constraints=Not_constrained; id }
-  | Transform {batch_dims; input_dims; output_dims; axis_labels} ->
-    { batch=Given batch_dims; input=Given input_dims; output=Given output_dims;
-      axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_within_shape_constraints=Not_constrained; id }
-  | Unknown_batch_data {output_dims; axis_labels} ->
-    { batch=Unknown; input=Given []; output=Given output_dims;
-      axis_labels=(axis_labels_of_spec axis_labels).labels;
-      deduce_within_shape_constraints=Not_constrained; id }
-  | Deduced_params deduce_within_shape_constraints ->
-    { batch=Given []; input=Unknown; output=Unknown;
-      axis_labels=Map.empty (module AxisKey);
-      deduce_within_shape_constraints; id }
+let make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~id () =
+  let input = match input_dims with
+    | None -> Unknown
+    | Some dims -> Given dims in
+  let output = match output_dims with
+    | None -> Unknown
+    | Some dims -> Given dims in
+  let batch = match batch_dims with
+    | None -> Unknown
+    | Some dims -> Given dims in
+  let deduce_within_shape_constraints = Option.value deduced ~default:Not_constrained in
+  let axis_labels = match axis_labels with 
+    | None -> Map.empty (module AxisKey)
+    | Some spec -> (axis_labels_of_spec spec).labels in
+  {input; output; batch; deduce_within_shape_constraints; axis_labels; id}
 
 let to_string_hum ?(style=`Axis_size) sh =
   let n_outputs = List.length @@ list_of_dims @@ dims_of_kind Output sh in

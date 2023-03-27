@@ -287,7 +287,6 @@ let update_params ?with_debug ~(minus_lr: Formula.t) ?params () =
     match params with Some p -> p | None -> Hashtbl.data @@ session_params() in
   let module CDSL = Code.CDSL in
   let module NFDSL = Operation.NFDSL in
-  let module N = Ocannl_runtime.Node in
   compile_routine ?with_debug @@ Code.all_parallel @@ List.map params ~f:(
     fun n -> [%nn_cd n =+ minus_lr * n.grad ~logic:Pointwise_bin])
 
@@ -300,6 +299,7 @@ module SDSL = struct
   let drop_session = drop_session
   let close_session = close_session
   let session_params = session_params
+  let update_params = update_params
   let print_global_root = print_global_root
   let print_node_tree ?entries_per_axis ?with_value ~with_grad ~depth id =
     PrintBox_text.output Stdio.stdout @@

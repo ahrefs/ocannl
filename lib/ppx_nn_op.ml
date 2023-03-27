@@ -11,18 +11,18 @@ let ndarray_op ?axis_labels ?label expr =
   let op =
     match axis_labels, label with
     | None, None -> [%expr FDSL.ndarray]
-    | Some axis_labels, None -> [%expr FDSL.ndarray ?axis_labels:[%e axis_labels]]
-    | None, Some label -> [%expr FDSL.ndarray ?label:[%e label]]
+    | Some axis_labels, None -> [%expr FDSL.ndarray ~axis_labels:[%e axis_labels]]
+    | None, Some label -> [%expr FDSL.ndarray ~label:[%e label]]
     | Some axis_labels, Some label ->
-      [%expr FDSL.ndarray ?axis_labels:[%e axis_labels] ?label:[%e label]] in
+      [%expr FDSL.ndarray ~axis_labels:[%e axis_labels] ~label:[%e label]] in
   [%expr
     [%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
       ~output_dims:[%e edims output_dims] [%e values]]
 
-let make_vb ?init ~loc ~str_loc ~ident string =
+let make_vb ?value ~loc ~str_loc ~ident string =
   let pat = Ast_helper.Pat.var ~loc {loc=str_loc; txt=ident} in
-  let init = match init with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
-  let v = [%expr FDSL.unconstrained_param ?init:[%e init] [%e string]] in
+  let value = match value with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
+  let v = [%expr FDSL.params ?value:[%e value] [%e string]] in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   pat, vb
 
@@ -37,10 +37,10 @@ let make_vb_nd ~loc ~str_loc ?axis_labels ~ident ~init_nd string =
       let edims dims = Ast_builder.Default.elist ~loc @@ List.rev dims in
       let op =
         match axis_labels with
-        | None -> [%expr FDSL.given_dims_params]
-        | Some axis_labels -> [%expr FDSL.given_dims_params ?axis_labels:[%e axis_labels]] in
+        | None -> [%expr FDSL.params]
+        | Some axis_labels -> [%expr FDSL.params ~axis_labels:[%e axis_labels]] in
       [%expr [%e op] ~input_dims:[%e edims input_dims]
-          ~output_dims:[%e edims output_dims] [%e string] [%e values]] in
+          ~output_dims:[%e edims output_dims] ~values:[%e values] [%e string]] in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   pat, vb
 
@@ -67,12 +67,12 @@ let rec translate expr =
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
       [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
-    let pat, vb = make_vb ~init:f ~loc ~str_loc ~ident s in
+    let pat, vb = make_vb ~value:f ~loc ~str_loc ~ident s in
     Map.singleton (module String) ident vb, pat2expr pat
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
       [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
-    let pat, vb = make_vb ~init:[%expr Float.of_int [%e i]] ~loc ~str_loc ~ident s in
+    let pat, vb = make_vb ~value:[%expr Float.of_int [%e i]] ~loc ~str_loc ~ident s in
     Map.singleton (module String) ident vb, pat2expr pat
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
