@@ -74,6 +74,13 @@ let rec translate expr =
         (Pconst_string (String.of_char ch, pexp_loc, None)) in
     no_vbs, [%expr FDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])]
 
+  | [%expr [%e? expr1] *+
+      [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]
+        [%e? expr2]] when String.contains spec_str '>' ->
+    let vbs1, e1 = translate expr1 in
+    let vbs2, e2 = translate expr2 in
+    reduce_vbss [vbs1; vbs2], [%expr FDSL.einsum [%e spec] [%e e1] [%e e2]]
+
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
       [%e? { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = dims_loc; _ } as i]] ->
     let pat, vb =
@@ -157,12 +164,12 @@ let rec translate expr =
   | [%expr [%e? expr1] ; [%e? expr2] ] ->
     let vbs1, e1 = translate expr1 in
     let vbs2, e2 = translate expr2 in
-    Map.merge_skewed vbs1 vbs2 ~combine:(fun ~key:_ _v1 v2 -> v2), [%expr [%e e1] ; [%e e2]]
+    reduce_vbss [vbs1; vbs2], [%expr [%e e1] ; [%e e2]]
 
   | [%expr if [%e? expr1] then [%e? expr2] else [%e? expr3]] ->
     let vbs2, e2 = translate expr2 in
     let vbs3, e3 = translate expr3 in
-    Map.merge_skewed vbs2 vbs3 ~combine:(fun ~key:_ _v1 v2 -> v2), [%expr if [%e expr1] then [%e e2] else [%e e3]]
+    reduce_vbss [vbs2; vbs3], [%expr if [%e expr1] then [%e e2] else [%e e3]]
 
   | [%expr if [%e? expr1] then [%e? expr2]] ->
     let vbs2, e2 = translate expr2 in
