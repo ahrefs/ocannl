@@ -81,6 +81,12 @@ let rec translate expr =
     let vbs2, e2 = translate expr2 in
     reduce_vbss [vbs1; vbs2], [%expr FDSL.einsum [%e spec] [%e e1] [%e e2]]
 
+  | [%expr [%e? expr1] ++
+      [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]]
+    when String.contains spec_str '>' ->
+    let vbs1, e1 = translate expr1 in
+    vbs1, [%expr FDSL.einsum1 [%e spec] [%e e1]]
+
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
       [%e? { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = dims_loc; _ } as i]] ->
     let pat, vb =
