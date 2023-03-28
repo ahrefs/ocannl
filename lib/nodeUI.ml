@@ -91,8 +91,9 @@ let create_of_promoted_precision ~is_form (n1: Node.t) (n2: Node.t) =
   Node.ndarray_precision_to_string n2.value
   
 let param_nodes ?(from_id=0) () =
-  Hashtbl.filter global_node_store ~f:(
-    fun n -> n.node.id >= from_id && Option.is_some n.node.form && List.is_empty n.children)
+  Hashtbl.filter global_node_store ~f:(fun n ->
+      n.node.id >= from_id && List.is_empty n.children &&
+      Option.exists n.node.form ~f:(fun form -> not @@ Array.is_empty @@ Node.dims form.grad))
 
 let retrieve_2d_points ?from_axis ~xdim ~ydim arr =
   let dims = Node.dims arr in
