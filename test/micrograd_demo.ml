@@ -148,12 +148,14 @@ let%expect_test "Micrograd half-moons example" =
           0.9 * of_int session_step / 100. - 1.)) in
   (* Although [mlp] is not yet applied to anything, we can already compile the weight updates,
      because the parameters are already created by parameter punning. *)
-  let update_weights = update_params ~minus_lr () in
   (* let%nn_op reg_loss = w1 **. 2 + w2 **. 2 + w3 **. 2 + b1 **. 2 + b2 **. 2 + b3 **. 2 in *)
   let%nn_op margin_loss = !/ (1 - moons_class *. mlp moons_input) in
   (* let%nn_op _total_loss = margin_loss + 0.0001 *. reg_loss in *)
-  for _step = 1 to 2 * len/batch do
-    refresh_session (); update_weights ();
+  refresh_session ();
+  let update_weights = update_params ~minus_lr () in
+  for step = 1 to 2 * len/batch do
+    update_weights ();
+    if step < 2 * len/batch then refresh_session ();
   done;
   close_session ();
   let point = [|0.; 0.|] in

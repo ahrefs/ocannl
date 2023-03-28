@@ -27,7 +27,6 @@ let () =
           0.9 * of_int session_step / 100. - 1.)) in
   (* Although [mlp] is not yet applied to anything, we can already compile the weight updates,
      because the parameters are already created by parameter punning. *)
-  let update_weights = update_params ~minus_lr () in
   let points1 = ref [] in
   let points2 = ref [] in
   let losses = ref [] in
@@ -35,8 +34,9 @@ let () =
   (* let%nn_op reg_loss = w1 *. w1 + w2 *. w2 + w3 *. w3 + b1 *. b1 + b2 *. b2 + b3 *. b3 in *)
   let%nn_op margin_loss = !/ (1 - moons_class *. mlp moons_input) in
   (* let%nn_op total_loss = margin_loss + 0.0001 *. reg_loss in *)
+  refresh_session ();
+  let update_weights = update_params ~minus_lr () in
   for step = 1 to 2 * len/batch do
-    refresh_session ();
     update_weights ();
     let points = NodeUI.retrieve_2d_points ~xdim:0 ~ydim:1 moons_input.node.node.value in
     let classes = NodeUI.retrieve_1d_points ~xdim:0 moons_class.node.node.value in
@@ -48,6 +48,7 @@ let () =
     Stdio.printf "Losses over batch for step %d: %s\n%!" step
       (Array.map batch_losses ~f:Float.to_string |> String.concat_array ~sep:", ");
     losses := batch_losses :: !losses;
+    if step < 2 * len/batch then refresh_session ();
   done;
   close_session ();
   let point = [|0.; 0.|] in
