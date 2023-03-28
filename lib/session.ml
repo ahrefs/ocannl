@@ -172,7 +172,20 @@ let compile_routine ?(with_debug=true) code =
   let routine = Option.value_exn !Ocannl_runtime.Node.most_recent_suspension in
   Ocannl_runtime.Node.most_recent_suspension := None;
   routine
-  
+
+let session_params() = NodeUI.param_nodes ~from_id:!Formula.first_session_id ()
+
+let generate_params_update ?with_debug ~(minus_lr: Formula.t) ?params () =
+  let params =
+    match params with Some p -> p | None -> Hashtbl.data @@ session_params() in
+  let module CDSL = Code.CDSL in
+  let module NFDSL = Operation.NFDSL in
+  compile_routine ?with_debug @@ Code.all_parallel @@ List.map params ~f:(
+    fun n -> [%nn_cd n =+ minus_lr * n.grad ~logic:Pointwise_bin])
+
+let minus_learning_rate: Formula.t option ref = ref None
+let update_params = ref None
+
 let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run=true)
     ?(force_no_init=false) () =
   let open Formula in
@@ -198,6 +211,11 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
     dynload_with_handler ~with_debug
       ~runtime_store:Ocannl_runtime.Node.global.session_prepare_step
       Code.(Session_prepare_step (all_parallel !session_prepare_step))
+  );
+  if regenerate || Option.is_none !update_params then (
+    match !minus_learning_rate with
+    | None -> ()
+    | Some minus_lr -> update_params := Some (generate_params_update ~with_debug ~minus_lr ())
   );
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
       let m = root.formula in
@@ -280,16 +298,7 @@ let close_session() =
   Formula.session_prepare_step := [];
   Ocannl_runtime.Node.global.session_step <- 0
 
-let session_params() = NodeUI.param_nodes ~from_id:!Formula.first_session_id ()
-
-let update_params ?with_debug ~(minus_lr: Formula.t) ?params () =
-  let params =
-    match params with Some p -> p | None -> Hashtbl.data @@ session_params() in
-  let module CDSL = Code.CDSL in
-  let module NFDSL = Operation.NFDSL in
-  compile_routine ?with_debug @@ Code.all_parallel @@ List.map params ~f:(
-    fun n -> [%nn_cd n =+ minus_lr * n.grad ~logic:Pointwise_bin])
-
+    
 module SDSL = struct
   type nonrec backend = backend =
     | Interpreter
@@ -299,6 +308,7 @@ module SDSL = struct
   let drop_session = drop_session
   let close_session = close_session
   let session_params = session_params
+  let minus_learning_rate = minus_learning_rate
   let update_params = update_params
   let print_global_root = print_global_root
   let print_node_tree ?entries_per_axis ?with_value ~with_grad ~depth id =

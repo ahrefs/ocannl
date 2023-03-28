@@ -22,9 +22,10 @@ let () =
   let moons_class = FDSL.data ~label:"moons_class" ~batch_dims:[batch] ~output_dims:[1]
       (Init_op (Fixed_constant moons_classes)) in
   let%nn_op mlp x = "b3" 1 + "w3" * !/ ("b2" 16 + "w2" * !/ ("b1" 16 + "w1" * x)) in
-  let minus_lr = FDSL.data ~label:"minus_lr" ~batch_dims:[] ~output_dims:[1]
-      Float.(Compute_point (fun ~session_step ~dims:_ ~idcs:_ ->
-          0.9 * of_int session_step / 100. - 1.)) in
+  minus_learning_rate := Some (
+      FDSL.data ~label:"minus_lr" ~batch_dims:[] ~output_dims:[1]
+        Float.(Compute_point (fun ~session_step ~dims:_ ~idcs:_ ->
+            0.9 * of_int session_step / 100. - 1.)));
   (* Although [mlp] is not yet applied to anything, we can already compile the weight updates,
      because the parameters are already created by parameter punning. *)
   let points1 = ref [] in
@@ -34,10 +35,9 @@ let () =
   (* let%nn_op reg_loss = w1 *. w1 + w2 *. w2 + w3 *. w3 + b1 *. b1 + b2 *. b2 + b3 *. b3 in *)
   let%nn_op margin_loss = !/ (1 - moons_class *. mlp moons_input) in
   (* let%nn_op total_loss = margin_loss + 0.0001 *. reg_loss in *)
-  refresh_session ();
-  let update_weights = update_params ~minus_lr () in
   for step = 1 to 2 * len/batch do
-    update_weights ();
+    refresh_session ();
+    Option.value_exn !update_params ();
     let points = NodeUI.retrieve_2d_points ~xdim:0 ~ydim:1 moons_input.node.node.value in
     let classes = NodeUI.retrieve_1d_points ~xdim:0 moons_class.node.node.value in
     let npoints1, npoints2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
@@ -48,7 +48,6 @@ let () =
     Stdio.printf "Losses over batch for step %d: %s\n%!" step
       (Array.map batch_losses ~f:Float.to_string |> String.concat_array ~sep:", ");
     losses := batch_losses :: !losses;
-    if step < 2 * len/batch then refresh_session ();
   done;
   close_session ();
   let point = [|0.; 0.|] in

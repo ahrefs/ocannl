@@ -360,7 +360,8 @@ let axes_with_inf_labels ~all_labels ls_xhs =
 
 let is_given_or_fixed dims = is_given dims || is_fixed dims
 
-module Debug_runtime = Minidebug_runtime.PrintBox(struct let debug_ch = Stdio.stdout end)
+(* module Debug_runtime = Minidebug_runtime.PrintBox(struct let debug_ch = Stdio.stdout end) *)
+
 (** Performs a local step of shape inference, propagates information into and out of the parent shape
     and the child shape(s). *)
 let propagate_shapes (update: update_step) =

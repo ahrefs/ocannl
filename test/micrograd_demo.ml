@@ -143,19 +143,18 @@ let%expect_test "Micrograd half-moons example" =
               │                                   ixes |}];
 
   let%nn_op mlp x = "b3" 1 + "w3" * !/ ("b2" 16 + "w2" * !/ ("b1" 16 + "w1" * x)) in
-  let minus_lr = FDSL.data ~label:"minus_lr" ~batch_dims:[] ~output_dims:[1]
+  minus_learning_rate := Some (
+    FDSL.data ~label:"minus_lr" ~batch_dims:[] ~output_dims:[1]
       Float.(Compute_point (fun ~session_step ~dims:_ ~idcs:_ ->
-          0.9 * of_int session_step / 100. - 1.)) in
+          0.9 * of_int session_step / 100. - 1.)));
   (* Although [mlp] is not yet applied to anything, we can already compile the weight updates,
      because the parameters are already created by parameter punning. *)
   (* let%nn_op reg_loss = w1 **. 2 + w2 **. 2 + w3 **. 2 + b1 **. 2 + b2 **. 2 + b3 **. 2 in *)
-  let%nn_op margin_loss = !/ (1 - moons_class *. mlp moons_input) in
+  let%nn_op _margin_loss = !/ (1 - moons_class *. mlp moons_input) in
   (* let%nn_op _total_loss = margin_loss + 0.0001 *. reg_loss in *)
-  refresh_session ();
-  let update_weights = update_params ~minus_lr () in
-  for step = 1 to 2 * len/batch do
-    update_weights ();
-    if step < 2 * len/batch then refresh_session ();
+  for _step = 1 to 2 * len/batch do
+    refresh_session ();
+    Option.value_exn !update_params ();
   done;
   close_session ();
   let point = [|0.; 0.|] in
