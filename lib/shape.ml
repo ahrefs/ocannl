@@ -208,7 +208,7 @@ let einsum_of_spec spec =
   (if String.is_empty rhs_spec then invalid_arg (
     "einsum_of_spec: missing the argument spec in "^rhs_spec));
   let rhs1_spec, rhs2_spec =
-    match String.substr_index spec ~pattern:"|" with
+    match String.substr_index spec ~pattern:";" with
     | Some endp -> String.sub ~pos:0 ~len:endp spec,
                       String.sub ~pos:(endp+1) ~len:(String.length spec - endp - 1) spec
     | None -> spec, "" in
