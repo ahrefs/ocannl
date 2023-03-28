@@ -77,7 +77,7 @@ type t =
   | Create of { tensor: data; dims: unit -> int array; init_op: init_op }
   | Fetch of { tensor: data; fetch_op: fetch_op }
   | Noop
-[@@deriving sexp]
+[@@deriving sexp, variants]
 
 (** Dynamically loading a program executes the [Initialization] code, or bounds the [procedure]
     to [routine] for a node, or bounds a callback to the global routine slot. *)

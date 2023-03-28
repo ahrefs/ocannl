@@ -4,8 +4,8 @@ open Base
 
 type form = {
   backprop_body: Code.t;
-  (** Performs backpropagation for the formula, which typically means adding partial gradients
-      to the gradient tensor of the subformulas. *)
+  (** Performs backpropagation for the formula at each session step, which typically means adding
+      partial gradients to the gradient tensor of the subformulas. *)
   needs_gradient: bool;
   (** An optimization setting: whether gradients should be backpropagated into the formula.
       If any subformula needs gradients, this formula also needs gradients. *)
@@ -15,17 +15,20 @@ type form = {
     it can incorporate inferred shape information. *)
 type t = {
   forward_body: Code.t;
-  (** Initializes the values. *)
+  (** Computes the values at each session step. *)
   form: form option;
   id: int;
   node: NodeUI.t;
-  (** This tracks the computation node as long as the model is not cross-compiled to a different
-      process etc. *)
+  (** Tracks the computation node. *)
   shape_logic: Shape.logic;
-  (** How to do the last update of [t.shape] when finalizing the formula. *)
+  (** How to do the last update of [t.shape] when finalizing the formula.
+      It is stored with the formula for debugging (shape inference does not need to retrieve it). *)
   shape: Shape.t;
   (** The eventual shape of [.!(t.node).value] and [.!(t.node).grad], incorporating the current state of
       shape inference. *)
+  cross_session_persistent: bool;
+  (** A subformula is cross-session persistent if [forward_body] is [Noop], and the formula does
+      not require data fetching. *)
 } [@@deriving sexp_of]
 
 (** A global root is a formula that is not (currently) a subformula of another formula. *)
@@ -128,9 +131,9 @@ let raw_unop ~zero_out ~accum ~lhs_id ~lhs_is_grad ~op ~rhs_id ~rhs_is_grad ~log
   
 let binop ~op_label ?(compose_op=Shape.Pointwise_bin) ~op_body ~grad_body ~is_form m1 m2 =
   (* Note: do not capture m1, m2 in any closure, so they can be GC'd. *)
-  (if (m1.id < !first_session_id) then
+  (if (m1.id < !first_session_id) && not m1.cross_session_persistent then
     raise @@ Session_error ("The subformula is outside of current session", Some m1));
-  (if (m2.id < !first_session_id) then
+  (if (m2.id < !first_session_id) && not m2.cross_session_persistent then
      raise @@ Session_error ("The subformula is outside of current session", Some m2));
   let m1_first = m1.id <= m2.id in
   let m1_processed: bool =
@@ -152,9 +155,8 @@ let binop ~op_label ?(compose_op=Shape.Pointwise_bin) ~op_body ~grad_body ~is_fo
   let projections() = Shape.derive_projections local_shape_update in
   let op_body = op_body ~n ~n1 ~n2 projections in
   (* The code needs to be included in the order it was computed! *)
-  let open Code in
   let forward_body =
-    (match m1_processed, m1.forward_body, m2_processed, m2.forward_body with
+    Code.(match m1_processed, m1.forward_body, m2_processed, m2.forward_body with
     | true, _, true, _ | true, _, _, Noop | _, Noop, true, _ | _, Noop, _, Noop -> op_body
     | false, m1_body, false, m2_body when m1_first -> Seq (ParHint (m1_body, m2_body), op_body)
     | false, m1_body, false, m2_body -> Seq (ParHint (m2_body, m1_body), op_body)
@@ -163,7 +165,7 @@ let binop ~op_label ?(compose_op=Shape.Pointwise_bin) ~op_body ~grad_body ~is_fo
   let init_values_body = create ~id `Value shape in
   session_initializations := init_values_body :: !session_initializations;
   if not is_form then
-    {forward_body; form=None; id; node=n; shape_logic; shape}
+    {forward_body; form=None; id; node=n; shape_logic; shape; cross_session_persistent=false}
   else
     let form1, form2 = match m1.form, m2.form with
     | Some form1, Some form2 -> form1, form2
@@ -174,12 +176,13 @@ let binop ~op_label ?(compose_op=Shape.Pointwise_bin) ~op_body ~grad_body ~is_fo
     let needs_gradient = form1.needs_gradient || form2.needs_gradient in
     let m1_no_grad = m1_processed || not form1.needs_gradient in
     let m2_no_grad = m2_processed || not form2.needs_gradient in
-    if needs_gradient then
-      session_prepare_step := fetch_zeros ~id `Grad shape :: !session_prepare_step;
+    (if needs_gradient then
+       let zero_grads = fetch_zeros ~id `Grad shape in
+       session_prepare_step := zero_grads :: !session_prepare_step);
     (* The code needs to be included in the reverse order to which it was computed! This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
-    let grad_body = if needs_gradient then grad_body ~n ~n1 ~n2 projections else Noop in
+    let grad_body = if needs_gradient then grad_body ~n ~n1 ~n2 projections else Code.Noop in
     let grad_body =
       if form1.needs_gradient then grad_body
       else Code.remove_updates {id=m1.id; field=`Grad} grad_body in
@@ -199,7 +202,8 @@ let binop ~op_label ?(compose_op=Shape.Pointwise_bin) ~op_body ~grad_body ~is_fo
     (if not m1_processed then global_roots := Map.remove !global_roots m1.id);
     (if not m2_processed then global_roots := Map.remove !global_roots m2.id);
     let form = Some {backprop_body; needs_gradient} in
-    let formula = {forward_body; form; id; node=n; shape_logic; shape} in
+    let formula = 
+      {forward_body; form; id; node=n; shape_logic; shape; cross_session_persistent=false} in
     let root = {forward_code=None; backprop_code=None; formula} in
     global_roots := Map.add_exn !global_roots ~key:id ~data:root;
     formula
@@ -227,14 +231,13 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1: t 
   let projections() = Shape.derive_projections local_shape_update in
   let op_body = op_body ~n ~n1 projections in
   (* The code needs to be included in the order it was computed! *)
-  let open Code in
   let forward_body =
-    match m1_processed, m1.forward_body with
+    Code.(match m1_processed, m1.forward_body with
     | true, _ | _, Noop -> op_body
-    | false, m_body -> Seq (m_body, op_body) in
+    | false, m_body -> Seq (m_body, op_body)) in
   session_initializations := create ~id `Value shape :: !session_initializations;
   if not is_form then
-    {forward_body; form=None; id; node=n; shape_logic; shape}
+    {forward_body; form=None; id; node=n; shape_logic; shape; cross_session_persistent=false}
   else
     let form1 = match m1.form with
     | Some form -> form
@@ -242,10 +245,11 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1: t 
       raise @@ Session_error ("binop ~is_form:true but subformula is non-form", Some m1) in
     let needs_gradient = form1.needs_gradient in
     let m1_no_grad = m1_processed || not form1.needs_gradient in
-    if needs_gradient then
-      session_prepare_step := fetch_zeros ~id `Grad shape :: !session_prepare_step;
+    (if needs_gradient then
+       let zero_grads = fetch_zeros ~id `Grad shape in
+       session_prepare_step := zero_grads :: !session_prepare_step);
     let grad_body =
-      if needs_gradient then grad_body ~n ~n1 projections else Noop in
+      if needs_gradient then grad_body ~n ~n1 projections else Code.Noop in
     let grad_body =
       if form1.needs_gradient then grad_body
       else Code.remove_updates {id=m1.id; field=`Grad} grad_body in
@@ -259,7 +263,8 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1: t 
 
     (if not m1_processed then global_roots := Map.remove !global_roots m1.id);
     let form = Some {backprop_body; needs_gradient} in
-    let formula = {forward_body; form; id; node=n; shape_logic; shape} in
+    let formula = 
+      {forward_body; form; id; node=n; shape_logic; shape; cross_session_persistent=false} in
     let root = {forward_code=None; backprop_code=None; formula} in
     global_roots := Map.add_exn !global_roots ~key:id ~data:root;
     formula
@@ -279,33 +284,37 @@ let term ~label ?needs_gradient ~is_form
   Shape.propagate_shapes local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
 
-  let open Code in
-  let forward_body = Noop in
+  let forward_body = Code.Noop in
+  (* Note: we could embed the fetching code in the forward computation instead, but then we miss out
+     on potential optimizations. E.g. fetching latency means it's important to do it early and
+    in parallel. *)
   let init_op = match init_or_fetch with
   | First init -> init
   | Second _ -> Unspecified in
   session_initializations := create ~id ~init_op `Value shape :: !session_initializations;
-  (match init_or_fetch with
-  | First _ -> ()
+  let cross_session_persistent = Code.(match init_or_fetch with
+  | First _ -> true
   | Second fetch_op ->
-    session_prepare_step := Fetch { tensor={id; field=`Value}; fetch_op } ::
-                            !session_prepare_step);
+    let fetch = Fetch { tensor={id; field=`Value}; fetch_op } in
+    session_prepare_step := fetch :: !session_prepare_step;
+    false) in
   if not is_form then
-    {forward_body; form=None; id; node=n; shape_logic; shape}
+    {forward_body; form=None; id; node=n; shape_logic; shape; cross_session_persistent}
   else
     let needs_gradient =
       match needs_gradient, batch_dims with
       | None, Some [] -> true
       | Some setting, _ -> setting
       | _ -> false in
-    if needs_gradient then
-      session_prepare_step := fetch_zeros ~id `Grad shape :: !session_prepare_step;
-    let backprop_body = Noop in
+    (if needs_gradient then
+       let zero_grads = fetch_zeros ~id `Grad shape in
+       session_prepare_step := zero_grads :: !session_prepare_step);
+    let backprop_body = Code.Noop in
     (* Very unlikely someone will want dw/dw. *)
     if needs_gradient then
       session_initializations := create ~id `Grad shape :: !session_initializations;    
     let form = Some {backprop_body; needs_gradient} in
-    let formula = {forward_body; form; id; node=n; shape_logic; shape} in
+    let formula = {forward_body; form; id; node=n; shape_logic; shape; cross_session_persistent} in
     let root = {forward_code=None; backprop_code=None; formula} in
     global_roots := Map.add_exn !global_roots ~key:id ~data:root;
     formula

@@ -49,6 +49,7 @@ let () =
       (Array.map batch_losses ~f:Float.to_string |> String.concat_array ~sep:", ");
     losses := batch_losses :: !losses;
   done;
+  print_preamble();
   close_session ();
   let point = [|0.; 0.|] in
   let point_input = FDSL.data ~label:"point_input" ~batch_dims:[1] ~output_dims:[2]
