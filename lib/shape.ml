@@ -229,15 +229,19 @@ let einsum_of_spec spec =
     | Some endp -> String.sub ~pos:0 ~len:endp spec,
                       String.sub ~pos:(endp+2) ~len:(String.length spec - endp - 2) spec
     | None -> "", spec in
+  let lhs_spec = String.strip lhs_spec in
+  let rhs_spec = String.strip rhs_spec in
   (if String.is_empty lhs_spec then invalid_arg (
-    "einsum_of_spec: missing the result spec in "^rhs_spec));
+    "einsum_of_spec: missing the result spec in "^spec));
   (if String.is_empty rhs_spec then invalid_arg (
-    "einsum_of_spec: missing the argument spec in "^rhs_spec));
+    "einsum_of_spec: missing the argument spec in "^spec));
   let rhs1_spec, rhs2_spec =
-    match String.substr_index spec ~pattern:";" with
-    | Some endp -> String.sub ~pos:0 ~len:endp spec,
-                      String.sub ~pos:(endp+1) ~len:(String.length spec - endp - 1) spec
-    | None -> spec, "" in
+    match String.substr_index rhs_spec ~pattern:";" with
+    | Some endp -> String.sub ~pos:0 ~len:endp rhs_spec,
+                      String.sub ~pos:(endp+1) ~len:(String.length rhs_spec - endp - 1) rhs_spec
+    | None -> rhs_spec, "" in
+  let rhs1_spec = String.strip rhs1_spec in
+  let rhs2_spec = String.strip rhs2_spec in
   let lhs_ls = axis_labels_of_spec lhs_spec in
   let rhs1_ls = axis_labels_of_spec rhs1_spec in
   if String.is_empty rhs2_spec then `Permute_unop (rhs1_ls, lhs_ls)
