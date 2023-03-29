@@ -181,7 +181,7 @@ let generate_params_update ?with_debug ~(minus_lr: Formula.t) ?params () =
   let module CDSL = Code.CDSL in
   let module NFDSL = Operation.NFDSL in
   compile_routine ?with_debug @@ Code.all_parallel @@ List.map params ~f:(
-    fun n -> [%nn_cd n =+ minus_lr * n.grad ~logic:Pointwise_bin])
+    fun n -> [%nn_cd n =+ minus_lr * n.grad ~logic:"."])
 
 let minus_learning_rate: Formula.t option ref = ref None
 let update_params = ref None

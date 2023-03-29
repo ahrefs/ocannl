@@ -238,7 +238,14 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
     let setups = List.filter_map ~f:Fn.id [lhs_setup; rhs_setup] in
     with_forward_args setups body
 
-  | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~logic:[%e? logic])) ] ->
+  | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] (
+      [%e? rhs2] ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ }
+        as logic])) ] ->
+    let logic = 
+      let loc = s_loc in
+      if String.equal spec "." then [%expr Shape.Pointwise_bin]
+      else if String.equal spec "@" then [%expr Shape.Compose]
+      else [%expr Shape.Einsum [%e logic]] in
     let accu_op = assignment_op accu_op in
     let lhs_setup, lhs_typ, _lhs_slot, lhs_id =
       setup_node_id [%pat? nonform___lhs] @@ translate lhs in
@@ -262,9 +269,18 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
     let setups = List.filter_map ~f:Fn.id [lhs_setup; rhs1_setup; rhs2_setup] in
     with_forward_args setups body
 
-  | [%expr [%e? accu_op] [%e? lhs] (([%e? un_op] [%e? rhs]) ~logic:[%e? logic]) ]
-  | [%expr [%e? accu_op] [%e? lhs] ([%e? un_op] ([%e? rhs] ~logic:[%e? logic])) ] ->
-      (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
+  | [%expr [%e? accu_op] [%e? lhs] (
+      ([%e? un_op] [%e? rhs]) 
+        ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as logic]) ]
+  | [%expr [%e? accu_op] [%e? lhs] ([%e? un_op] (
+        [%e? rhs] ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ }
+          as logic])) ] ->
+    (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
+    let logic = 
+      let loc = s_loc in
+      if String.equal spec "." then [%expr Shape.Pointwise_un]
+      else if String.equal spec "T" then [%expr Shape.Transpose]
+      else [%expr Shape.Permute [%e logic]] in
     let accu_op = assignment_op accu_op in
     let lhs_setup, lhs_typ, _lhs_slot, lhs_id =
      setup_node_id [%pat? nonform___lhs] @@ translate lhs in
