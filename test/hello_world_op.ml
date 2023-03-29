@@ -13,8 +13,7 @@ let%expect_test "Pointwise multiplication dims 1" =
   let open Session.SDSL in
   drop_session();
   Random.init 0;
-  (* "Hey" is inferred to be a scalar.
-     Note the pointwise multiplication means "hey" does not have any input axes. *)
+  (* "Hey" is inferred to be a scalar. *)
   let%nn_op y = 2 *. "hey" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ y;
@@ -28,11 +27,11 @@ let%expect_test "Pointwise multiplication dims 1" =
     │└┴─────────┘   │
     └───────────────┘ |}]
 
-let%expect_test "op:Matrix multiplication dims 1x1" =
+let%expect_test "Matrix multiplication dims 1x1" =
   let open Session.SDSL in
   drop_session();
   Random.init 0;
-  (* Hey is inferred to be a matrix. *)
+  (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
   let%nn_op y = "hey" * 'q' 2.0 + 'p' 1.0 in
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   refresh_session ();
@@ -57,7 +56,7 @@ let%expect_test "op:Matrix multiplication dims 1x1" =
     │└┴─────────┘     │
     └─────────────────┘ |}]
 
-let%expect_test "op:Print constant tensor" =
+let%expect_test "Print constant tensor" =
   Session.drop_session();
   Random.init 0;
   let open Session.SDSL in
@@ -300,7 +299,7 @@ let%expect_test "op:Print constant tensor" =
     │└──────┴──────────────────┴──────────────────┘│
     └──────────────────────────────────────────────┘ |}]
 
-let%expect_test "op:Matrix multiplication dims 2x3" =
+let%expect_test "Matrix multiplication dims 2x3" =
   let open Session.SDSL in
   drop_session();
   Random.init 0;
@@ -380,11 +379,10 @@ let%expect_test "Big matrix" =
       │└┴─────────────────────────────────────────┘│
       └────────────────────────────────────────────┘ |}]
 
-let%expect_test "op:Very big tensor" =
+let%expect_test "Very big tensor" =
     let open Session.SDSL in
     drop_session();
     Random.init 0;
-    (* Hey is inferred to be a matrix. *)
     let hey =
       FDSL.range_of_shape ~batch_dims:[6] ~input_dims:[7; 8; 9] ~output_dims:[10; 11] () in
     let%nn_op hoo = hey * (1 + 1) - 10 in

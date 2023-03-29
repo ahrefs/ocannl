@@ -5,7 +5,6 @@ module FDSL = Operation.FDSL
 let () = Session.SDSL.set_executor OCaml
 
 let%expect_test "Micrograd README basic example" =
-  (* let open Operation.FDSL in *)
   let open Session.SDSL in
   drop_session();
   Random.init 0;
