@@ -509,7 +509,7 @@ let propagate_shapes (update: update_step) =
     let eqs = Map.merge ls_xhs.labels sh_xhs ~f:(fun ~key:axis -> function
         | `Both (label, dim) -> Some (label, (axis, dim))
         | `Left label -> Some (label, (axis, Inferred []))
-        | `Right (Given [] | Fixed [] | Inferred []) -> None
+        | `Right (Given [] | Fixed [] | Inferred []| Unknown) -> None
         | `Right _dim when not (bcast_of_kind axis.in_axes ls_xhs) -> raise @@ Shape_error (
             "Too many axes to permute -- spec too short: "^debug_spec, debug_sh, cur_sh)
             (* Note: the too-few-axes error is reported when einsum_one_dim processes the result. *)
