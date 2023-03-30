@@ -725,6 +725,13 @@ type 'a axis_index =
 
 type symbolic_axis = symbol axis_index [@@deriving compare, sexp]
 
+type str_sym_map = ( string, symbol, Base.String.comparator_witness ) Base.Map.t
+let sexp_of_str_sym_map (map: str_sym_map) = 
+  Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: (string * symbol)])
+type axis_sym_map = (AxisKey.t, symbol, AxisKey.comparator_witness) Base.Map.t
+let sexp_of_axis_sym_map (map: axis_sym_map) = 
+  Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: (AxisKey.t * symbol)])
+
 (** All the information relevant for [Code] code generation contained in a completed [update_step]. *)
 type projections = {
   product_space: int array;
@@ -873,29 +880,29 @@ let derive_projections (shapes: update_step) : projections =
     | _ -> raise @@
       Shape_error ("Invalid permutation (single-argument einsum) spec: "^spec, sh, cur_sh) in
     (* For einsum the product_space is precisely one-axis-per-label. *)
-    let sh_rhs = to_axis_map sh in
-    let sh_lhs = to_axis_map cur_sh in
-    let eqs_rhs = eqs_xhs ls_rhs sh_rhs in
-    let eqs_lhs = eqs_xhs ls_lhs sh_lhs in
+    let sh_rhs: dims axis_map = to_axis_map sh in
+    let sh_lhs: dims axis_map = to_axis_map cur_sh in
+    let eqs_rhs: eqs_map = eqs_xhs ls_rhs sh_rhs in
+    let eqs_lhs: eqs_map = eqs_xhs ls_lhs sh_lhs in
     let side_eq side (axis, dims) = (side, axis), dims in
     let eqs = Map.merge eqs_rhs eqs_lhs ~f:(fun ~key:_label -> function
         | `Both (rhs, lhs) -> Some (List.rev_map_append rhs ~f:(side_eq `Rhs1) @@ List.map lhs ~f:(side_eq `Lhs))
         | `Left rhs -> Some (List.map rhs ~f:(side_eq `Rhs1))
         | `Right lhs -> Some (List.map lhs ~f:(side_eq `Lhs))) in
-    let label_dims = Map.map eqs ~f:einsum_one_dim in
-    let label_iterators = Map.map eqs ~f:(fun _ -> get_symbol()) in
-    let product_space = Array.of_list @@ Map.data label_dims in
-    let product_iterators = Array.of_list @@ Map.data label_iterators in
+    let label_dims: str_int_map = Map.map eqs ~f:einsum_one_dim in
+    let label_iterators: str_sym_map = Map.map eqs ~f:(fun _ -> get_symbol()) in
+    let product_space: int array = Array.of_list @@ Map.data label_dims in
+    let product_iterators: symbol array = Array.of_list @@ Map.data label_iterators in
     (* Inferred dims are not broadcasted-from-1, i.e. do not need Fixed_idx. But it doesn't hurt
        to treat them uniformly. *)
-    let lhs_labels = axes_with_inf_labels ~all_labels:label_dims ls_lhs in
+    let lhs_labels: axis_str_map = axes_with_inf_labels ~all_labels:label_dims ls_lhs in
     let inferred_lhs = Map.map lhs_labels ~f:(Map.find_exn label_iterators) in
     let b_lhs, i_lhs, o_lhs = axis_map_to_dims_bio inferred_lhs in
-    let lhs_batch = map_with_dims cur_sh.batch b_lhs ~f:(fun d s ->
+    let lhs_batch: symbol axis_index list = map_with_dims cur_sh.batch b_lhs ~f:(fun d s ->
       if d = 1 then Fixed_idx 0 else Iterator s) in
-    let lhs_input = map_with_dims cur_sh.input i_lhs ~f:(fun d s ->
+    let lhs_input: symbol axis_index list = map_with_dims cur_sh.input i_lhs ~f:(fun d s ->
       if d = 1 then Fixed_idx 0 else Iterator s) in
-    let lhs_output = map_with_dims cur_sh.output o_lhs ~f:(fun d s ->
+    let lhs_output: symbol axis_index list = map_with_dims cur_sh.output o_lhs ~f:(fun d s ->
       if d = 1 then Fixed_idx 0 else Iterator s) in
     let rhs_labels = axes_with_inf_labels ~all_labels:label_dims ls_rhs in
     let inferred_rhs = Map.map rhs_labels ~f:(Map.find_exn label_iterators) in
@@ -906,9 +913,9 @@ let derive_projections (shapes: update_step) : projections =
         if d = 1 then Fixed_idx 0 else Iterator s) in
     let rhs_output = map_with_dims cur_sh.output o_rhs ~f:(fun d s ->
         if d = 1 then Fixed_idx 0 else Iterator s) in
-    let project_lhs =
+    let project_lhs: symbol axis_index array =
       Array.of_list @@ List.concat [lhs_batch; lhs_output; lhs_input] in
-    let project_rhs1 =
+    let project_rhs1: symbol axis_index array =
       Array.of_list @@ List.concat [rhs_batch; rhs_output; rhs_input] in    
     { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 = None }
 
