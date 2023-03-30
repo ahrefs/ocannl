@@ -650,12 +650,12 @@ let propagate_shapes (update: update_step) =
     | (ls_rhs1, Some ls_rhs2, ls_lhs) -> ls_rhs1, ls_rhs2, ls_lhs
     | _ -> raise @@
       Shape_error ("Invalid einsum spec (expected two arguments): "^spec, sh1, sh2) in
-    let sh_rhs1 = to_axis_map sh1 in
-    let sh_rhs2 = to_axis_map sh2 in
-    let sh_lhs = to_axis_map cur_sh in
-    let eqs_rhs1 = eqs_xhs spec sh1 ls_rhs1 sh_rhs1 in
-    let eqs_rhs2 = eqs_xhs spec sh2 ls_rhs2 sh_rhs2 in
-    let eqs_lhs = eqs_xhs spec sh1 ls_lhs sh_lhs in
+    let sh_rhs1: dims axis_map = to_axis_map sh1 in
+    let sh_rhs2: dims axis_map = to_axis_map sh2 in
+    let sh_lhs: dims axis_map = to_axis_map cur_sh in
+    let eqs_rhs1: eqs_map = eqs_xhs spec sh1 ls_rhs1 sh_rhs1 in
+    let eqs_rhs2: eqs_map = eqs_xhs spec sh2 ls_rhs2 sh_rhs2 in
+    let eqs_lhs: eqs_map = eqs_xhs spec sh1 ls_lhs sh_lhs in
     let side_eq side (axis, dims) = (side, axis), dims in
     let eqs = Map.merge eqs_rhs1 eqs_lhs ~f:(fun ~key:_label -> function
         | `Both (rhs, lhs) -> Some (List.rev_map_append rhs ~f:(side_eq `Rhs1) @@ List.map lhs ~f:(side_eq `Lhs))
@@ -665,24 +665,24 @@ let propagate_shapes (update: update_step) =
         | `Both (rhs, more) -> Some (List.rev_map_append rhs ~f:(side_eq `Rhs2) more)
         | `Left rhs -> Some (List.map rhs ~f:(side_eq `Rhs2))
         | `Right more -> Some more) in
-    let label_dims = Map.mapi eqs ~f:(einsum_one_dim spec sh1 sh2) in
-    let lhs_labels = axes_with_inf_labels ~all_labels:label_dims ls_lhs in
-    let pseudo_to_labels_lhs = pseudo_to_labels_xhs lhs_labels cur_sh in
-    let inferred_lhs = Map.map lhs_labels ~f:(Map.find_exn label_dims) in
+    let label_dims: str_int_map = Map.mapi eqs ~f:(einsum_one_dim spec sh1 sh2) in
+    let lhs_labels: axis_str_map = axes_with_inf_labels ~all_labels:label_dims ls_lhs in
+    let pseudo_to_labels_lhs: str_str_map = pseudo_to_labels_xhs lhs_labels cur_sh in
+    let inferred_lhs: axis_int_map = Map.map lhs_labels ~f:(Map.find_exn label_dims) in
     let b_lhs, i_lhs, o_lhs = axis_map_to_dims_bio inferred_lhs in
     (if is_inferred cur_sh.batch || is_unknown cur_sh.batch then cur_sh.batch <- to_inferred b_lhs);
     (if is_inferred cur_sh.input || is_unknown cur_sh.input then cur_sh.input <- to_inferred i_lhs);
     (if is_inferred cur_sh.output || is_unknown cur_sh.output then cur_sh.output <- to_inferred o_lhs);
-    let rhs1_labels = axes_with_inf_labels ~all_labels:label_dims ls_rhs1 in
-    let pseudo_to_labels_rhs1 = pseudo_to_labels_xhs rhs1_labels sh1 in
-    let inferred_rhs1 = Map.map rhs1_labels ~f:(Map.find_exn label_dims) in
+    let rhs1_labels: axis_str_map = axes_with_inf_labels ~all_labels:label_dims ls_rhs1 in
+    let pseudo_to_labels_rhs1: str_str_map = pseudo_to_labels_xhs rhs1_labels sh1 in
+    let inferred_rhs1: axis_int_map = Map.map rhs1_labels ~f:(Map.find_exn label_dims) in
     let b_rhs1, i_rhs1, o_rhs1 = axis_map_to_dims_bio inferred_rhs1 in
     (if is_inferred sh1.batch || is_unknown sh1.batch then sh1.batch <- to_inferred b_rhs1);
     (if is_inferred sh1.input || is_unknown sh1.input then sh1.input <- to_inferred i_rhs1);
     (if is_inferred sh1.output || is_unknown sh1.output then sh1.output <- to_inferred o_rhs1);
-    let rhs2_labels = axes_with_inf_labels ~all_labels:label_dims ls_rhs2 in
-    let pseudo_to_labels_rhs2 = pseudo_to_labels_xhs rhs2_labels sh2 in
-    let inferred_rhs2 = Map.map rhs2_labels ~f:(Map.find_exn label_dims) in
+    let rhs2_labels: axis_str_map = axes_with_inf_labels ~all_labels:label_dims ls_rhs2 in
+    let pseudo_to_labels_rhs2: str_str_map = pseudo_to_labels_xhs rhs2_labels sh2 in
+    let inferred_rhs2: axis_int_map = Map.map rhs2_labels ~f:(Map.find_exn label_dims) in
     let b_rhs2, i_rhs2, o_rhs2 = axis_map_to_dims_bio inferred_rhs2 in
     (if is_inferred sh2.batch || is_unknown sh2.batch then sh2.batch <- to_inferred b_rhs2);
     (if is_inferred sh2.input || is_unknown sh2.input then sh2.input <- to_inferred i_rhs2);
@@ -1006,12 +1006,12 @@ let derive_projections (shapes: update_step) : projections =
     | _ -> raise @@
       Shape_error ("Invalid (two-argument) einsum spec: "^spec, sh1, sh2) in
     (* For einsum the product_space is precisely one-axis-per-label. *)
-    let sh_rhs1 = to_axis_map sh1 in
-    let sh_rhs2 = to_axis_map sh2 in
-    let sh_lhs = to_axis_map cur_sh in
-    let eqs_rhs1 = eqs_xhs ls_rhs1 sh_rhs1 in
-    let eqs_rhs2 = eqs_xhs ls_rhs2 sh_rhs2 in
-    let eqs_lhs = eqs_xhs ls_lhs sh_lhs in
+    let sh_rhs1: dims axis_map = to_axis_map sh1 in
+    let sh_rhs2: dims axis_map = to_axis_map sh2 in
+    let sh_lhs: dims axis_map = to_axis_map cur_sh in
+    let eqs_rhs1: eqs_map = eqs_xhs ls_rhs1 sh_rhs1 in
+    let eqs_rhs2: eqs_map = eqs_xhs ls_rhs2 sh_rhs2 in
+    let eqs_lhs: eqs_map = eqs_xhs ls_lhs sh_lhs in
     let side_eq side (axis, dims) = (side, axis), dims in
     let eqs = Map.merge eqs_rhs1 eqs_lhs ~f:(fun ~key:_label -> function
         | `Both (rhs, lhs) ->
@@ -1022,44 +1022,44 @@ let derive_projections (shapes: update_step) : projections =
         | `Both (rhs, more) -> Some (List.rev_map_append rhs ~f:(side_eq `Rhs2) more)
         | `Left rhs -> Some (List.map rhs ~f:(side_eq `Rhs2))
         | `Right more -> Some more) in
-    let label_dims = Map.map eqs ~f:einsum_one_dim in
-    let label_iterators = Map.map eqs ~f:(fun _ -> get_symbol()) in
-    let product_space = Array.of_list @@ Map.data label_dims in
-    let product_iterators = Array.of_list @@ Map.data label_iterators in
+    let label_dims: str_int_map = Map.map eqs ~f:einsum_one_dim in
+    let label_iterators: str_sym_map = Map.map eqs ~f:(fun _ -> get_symbol()) in
+    let product_space: int array = Array.of_list @@ Map.data label_dims in
+    let product_iterators: symbol array = Array.of_list @@ Map.data label_iterators in
     (* Inferred dims are not broadcasted-from-1, i.e. do not need Fixed_idx. But it doesn't hurt
        to treat them uniformly. *)
-    let lhs_labels = axes_with_inf_labels ~all_labels:label_dims ls_lhs in
-    let inferred_lhs = Map.map lhs_labels ~f:(Map.find_exn label_iterators) in
+    let lhs_labels: axis_str_map = axes_with_inf_labels ~all_labels:label_dims ls_lhs in
+    let inferred_lhs: axis_sym_map = Map.map lhs_labels ~f:(Map.find_exn label_iterators) in
     let b_lhs, i_lhs, o_lhs = axis_map_to_dims_bio inferred_lhs in
-    let lhs_batch = map_with_dims cur_sh.batch b_lhs ~f:(fun d s ->
+    let lhs_batch: symbol axis_index list = map_with_dims cur_sh.batch b_lhs ~f:(fun d s ->
       if d = 1 then Fixed_idx 0 else Iterator s) in
-    let lhs_input = map_with_dims cur_sh.input i_lhs ~f:(fun d s ->
+    let lhs_input: symbol axis_index list = map_with_dims cur_sh.input i_lhs ~f:(fun d s ->
       if d = 1 then Fixed_idx 0 else Iterator s) in
-    let lhs_output = map_with_dims cur_sh.output o_lhs ~f:(fun d s ->
+    let lhs_output: symbol axis_index list = map_with_dims cur_sh.output o_lhs ~f:(fun d s ->
       if d = 1 then Fixed_idx 0 else Iterator s) in
-    let rhs1_labels = axes_with_inf_labels ~all_labels:label_dims ls_rhs1 in
-    let inferred_rhs1 = Map.map rhs1_labels ~f:(Map.find_exn label_iterators) in
+    let rhs1_labels: axis_str_map = axes_with_inf_labels ~all_labels:label_dims ls_rhs1 in
+    let inferred_rhs1: axis_sym_map = Map.map rhs1_labels ~f:(Map.find_exn label_iterators) in
     let b_rhs1, i_rhs1, o_rhs1 = axis_map_to_dims_bio inferred_rhs1 in
-    let rhs1_batch = map_with_dims cur_sh.batch b_rhs1 ~f:(fun d s ->
+    let rhs1_batch: symbol axis_index list = map_with_dims sh1.batch b_rhs1 ~f:(fun d s ->
       if d = 1 then Fixed_idx 0 else Iterator s) in
-    let rhs1_input = map_with_dims cur_sh.input i_rhs1 ~f:(fun d s ->
+    let rhs1_input: symbol axis_index list = map_with_dims sh1.input i_rhs1 ~f:(fun d s ->
       if d = 1 then Fixed_idx 0 else Iterator s) in
-    let rhs1_output = map_with_dims cur_sh.output o_rhs1 ~f:(fun d s ->
+    let rhs1_output: symbol axis_index list = map_with_dims sh1.output o_rhs1 ~f:(fun d s ->
       if d = 1 then Fixed_idx 0 else Iterator s) in
-    let rhs2_labels = axes_with_inf_labels ~all_labels:label_dims ls_rhs2 in
-    let inferred_rhs2 = Map.map rhs2_labels ~f:(Map.find_exn label_iterators) in
+    let rhs2_labels: axis_str_map = axes_with_inf_labels ~all_labels:label_dims ls_rhs2 in
+    let inferred_rhs2: axis_sym_map = Map.map rhs2_labels ~f:(Map.find_exn label_iterators) in
     let b_rhs2, i_rhs2, o_rhs2 = axis_map_to_dims_bio inferred_rhs2 in
-    let rhs2_batch = map_with_dims cur_sh.batch b_rhs2 ~f:(fun d s ->
+    let rhs2_batch: symbol axis_index list = map_with_dims sh2.batch b_rhs2 ~f:(fun d s ->
       if d = 1 then Fixed_idx 0 else Iterator s) in
-    let rhs2_input = map_with_dims cur_sh.input i_rhs2 ~f:(fun d s ->
+    let rhs2_input: symbol axis_index list = map_with_dims sh2.input i_rhs2 ~f:(fun d s ->
       if d = 1 then Fixed_idx 0 else Iterator s) in
-    let rhs2_output = map_with_dims cur_sh.output o_rhs2 ~f:(fun d s ->
+    let rhs2_output: symbol axis_index list = map_with_dims sh2.output o_rhs2 ~f:(fun d s ->
       if d = 1 then Fixed_idx 0 else Iterator s) in
-    let project_lhs =
+    let project_lhs: symbol axis_index array =
       Array.of_list @@ List.concat [lhs_batch; lhs_output; lhs_input] in
-    let project_rhs1 =
+    let project_rhs1: symbol axis_index array =
       Array.of_list @@ List.concat [rhs1_batch; rhs1_output; rhs1_input] in    
-    let project_rhs2 =
+    let project_rhs2: symbol axis_index array option =
       Some (Array.of_list @@ List.concat [rhs2_batch; rhs2_output; rhs2_input]) in    
     { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
 
