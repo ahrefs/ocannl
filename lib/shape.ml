@@ -244,8 +244,8 @@ let einsum_of_spec spec =
   let rhs2_spec = String.strip rhs2_spec in
   let lhs_ls = axis_labels_of_spec lhs_spec in
   let rhs1_ls = axis_labels_of_spec rhs1_spec in
-  if String.is_empty rhs2_spec then `Permute_unop (rhs1_ls, lhs_ls)
-  else `Permute_binop (rhs1_ls, axis_labels_of_spec rhs2_spec, lhs_ls) 
+  if String.is_empty rhs2_spec then (rhs1_ls, None, lhs_ls)
+  else (rhs1_ls, Some (axis_labels_of_spec rhs2_spec), lhs_ls) 
 
 (** How to propagate shape updates and do the last update of [Formula.t.shape] when finalizing the formula.
     Axes are broadcast-expanded on a bottom-up update to fit the incoming shape. *)
@@ -538,7 +538,7 @@ let propagate_shapes (update: update_step) =
 
   | Transpose (Permute spec, sh) ->
     let ls_rhs, ls_lhs = match einsum_of_spec spec with
-    | `Permute_unop (ls_rhs, ls_lhs) -> ls_rhs, ls_lhs
+    | ls_rhs, None, ls_lhs -> ls_rhs, ls_lhs
     | _ -> raise @@
       Shape_error ("Invalid permutation spec (expected one argument): "^spec, sh, cur_sh) in
     let sh_rhs = to_axis_map sh in
@@ -635,7 +635,7 @@ let propagate_shapes (update: update_step) =
 
   | Broadcast (Einsum spec, sh1, sh2) ->
     let ls_rhs1, ls_rhs2, ls_lhs = match einsum_of_spec spec with
-    | `Permute_binop (ls_rhs1, ls_rhs2, ls_lhs) -> ls_rhs1, ls_rhs2, ls_lhs
+    | (ls_rhs1, Some ls_rhs2, ls_lhs) -> ls_rhs1, ls_rhs2, ls_lhs
     | _ -> raise @@
       Shape_error ("Invalid einsum spec (expected two arguments): "^spec, sh1, sh2) in
     let sh_rhs1 = to_axis_map sh1 in
@@ -857,7 +857,7 @@ let derive_projections (shapes: update_step) : projections =
 
   | Transpose (Permute spec, sh) ->
     let ls_rhs, ls_lhs = match einsum_of_spec spec with
-    | `Permute_unop (ls_rhs, ls_lhs) -> ls_rhs, ls_lhs
+    | ls_rhs, None, ls_lhs -> ls_rhs, ls_lhs
     | _ -> raise @@
       Shape_error ("Invalid permutation (single-argument einsum) spec: "^spec, sh, cur_sh) in
     (* For einsum the product_space is precisely one-axis-per-label. *)
@@ -983,7 +983,7 @@ let derive_projections (shapes: update_step) : projections =
 
   | Broadcast (Einsum spec, sh1, sh2) ->
     let ls_rhs1, ls_rhs2, ls_lhs = match einsum_of_spec spec with
-    | `Permute_binop (ls_rhs1, ls_rhs2, ls_lhs) -> ls_rhs1, ls_rhs2, ls_lhs
+    | ls_rhs1, Some ls_rhs2, ls_lhs -> ls_rhs1, ls_rhs2, ls_lhs
     | _ -> raise @@
       Shape_error ("Invalid (two-argument) einsum spec: "^spec, sh1, sh2) in
     (* For einsum the product_space is precisely one-axis-per-label. *)
