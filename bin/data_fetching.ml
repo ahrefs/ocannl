@@ -7,7 +7,7 @@ let () = Session.SDSL.set_executor OCaml
 let () =
   (* let open Operation.FDSL in *)
   let open Session.SDSL in
-  drop_session();
+  drop_all_sessions();
   Random.init 0;
   let c_data = FDSL.data ~label:"fetch_callback" ~batch_dims:[1] ~output_dims:[2;3]
     (Compute_point (fun ~session_step ~dims:_ ~idcs ->

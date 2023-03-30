@@ -7,7 +7,7 @@ let () = Session.SDSL.set_executor OCaml
 let () =
   (* let open Operation.FDSL in *)
   let open Session.SDSL in
-  drop_session();
+  drop_all_sessions();
   Random.init 0;
   let len = 10 in
   let batch = 2 in

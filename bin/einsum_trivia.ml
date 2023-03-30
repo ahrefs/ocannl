@@ -7,7 +7,7 @@ let () = Session.SDSL.set_executor OCaml
 
 let () =
   let open Session.SDSL in
-  drop_session();
+  drop_all_sessions();
   Random.init 0;
   let hey =
     FDSL.range_of_shape ~batch_dims:[2] ~input_dims:[3] ~output_dims:[4] () in

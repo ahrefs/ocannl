@@ -7,7 +7,7 @@ let () = Session.SDSL.set_executor OCaml
 let%expect_test "Constants and synthetic data" =
   (* let open Operation.FDSL in *)
   let open Session.SDSL in
-  drop_session();
+  drop_all_sessions();
   Random.init 0;
   let big_range = Array.init 300 ~f:(Int.to_float) in
   let r_data = FDSL.data ~label:"big_range" ~batch_dims:[2] ~output_dims:[3;5]

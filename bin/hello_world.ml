@@ -5,7 +5,7 @@ module FDSL = Operation.FDSL
 let () = Session.SDSL.set_executor OCaml
 
 let hello1() =
-  Session.drop_session();
+  Session.drop_all_sessions();
   Random.init 0;
   let open Operation.FDSL in
   let open Session.SDSL in
@@ -20,7 +20,7 @@ let hello1() =
 
 let hello2() =
   let open Session.SDSL in
-  drop_session();
+  drop_all_sessions();
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
   let%nn_op y = "hey" * 'q' 2.0 + 'p' 1.0 in
@@ -32,7 +32,7 @@ let hello2() =
 
 let hello3() =
   let open Session.SDSL in
-  drop_session();
+  drop_all_sessions();
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
   let hey = FDSL.O.(!~ "hey") in

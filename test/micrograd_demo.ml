@@ -6,7 +6,7 @@ let () = Session.SDSL.set_executor OCaml
 
 let%expect_test "Micrograd README basic example" =
   let open Session.SDSL in
-  drop_session();
+  drop_all_sessions();
   Random.init 0;
   let%nn_op c = "a" [-4] + "b" [2] in
   let%nn_op d = a *. b + b **. 3 in
@@ -71,7 +71,7 @@ let%expect_test "Micrograd README basic example" =
 let%expect_test "Micrograd half-moons example" =
   (* let open Operation.FDSL in *)
   let open Session.SDSL in
-  drop_session();
+  drop_all_sessions();
   Random.init 0;
   let len = 100 in
   let batch = 10 in

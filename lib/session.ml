@@ -288,6 +288,21 @@ let drop_session() =
   done;
   Ocannl_runtime.Node.global.unique_id <- !Formula.first_session_id
 
+(** Discards all global state, rolls back [Node.state.unique_id] and [Formula.first_session_id]
+    to 1. *)
+let drop_all_sessions() =
+  Formula.global_roots := Map.empty (module Int);
+  Formula.session_shape_updates := [];
+  Formula.session_initializations := [];
+  Formula.session_initialized := 0;
+  Formula.session_prepare_step := [];
+  Formula.first_session_id := 1;
+  Ocannl_runtime.Node.global.session_step <- 0;
+  Hashtbl.clear NodeUI.global_node_store;
+  Hashtbl.clear Ocannl_runtime.Node.global.node_store;
+  Hashtbl.clear Ocannl_runtime.Node.global.node_fetch_callbacks;
+  Ocannl_runtime.Node.global.unique_id <- 1
+
 (** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id]. *)
 let close_session() =
   Formula.first_session_id := Ocannl_runtime.Node.global.unique_id;
@@ -306,6 +321,7 @@ module SDSL = struct
   let set_executor = set_executor
   let refresh_session = refresh_session
   let drop_session = drop_session
+  let drop_all_sessions = drop_all_sessions
   let close_session = close_session
   let session_params = session_params
   let minus_learning_rate = minus_learning_rate

@@ -11,7 +11,7 @@ let%expect_test "Hello World" =
 
 let%expect_test "Pointwise multiplication dims 1" =
   let open Session.SDSL in
-  drop_session();
+  drop_all_sessions();
   Random.init 0;
   (* "Hey" is inferred to be a scalar. *)
   let%nn_op y = 2 *. "hey" in
@@ -29,7 +29,7 @@ let%expect_test "Pointwise multiplication dims 1" =
 
 let%expect_test "Matrix multiplication dims 1x1" =
   let open Session.SDSL in
-  drop_session();
+  drop_all_sessions();
   Random.init 0;
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
   let%nn_op y = "hey" * 'q' 2.0 + 'p' 1.0 in
@@ -57,7 +57,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
     └─────────────────┘ |}]
 
 let%expect_test "Print constant tensor" =
-  Session.drop_session();
+  Session.drop_all_sessions();
   Random.init 0;
   let open Session.SDSL in
   let%nn_op hey = [1, 2, 3; 4, 5, 6] in
@@ -301,7 +301,7 @@ let%expect_test "Print constant tensor" =
 
 let%expect_test "Matrix multiplication dims 2x3" =
   let open Session.SDSL in
-  drop_session();
+  drop_all_sessions();
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
   let%nn_op hey = "hey" in
@@ -332,7 +332,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
 
 let%expect_test "Big matrix" =
   let open Session.SDSL in
-  drop_session();
+  drop_all_sessions();
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
   let hey = FDSL.O.(!~ "hey") in
@@ -381,7 +381,7 @@ let%expect_test "Big matrix" =
 
 let%expect_test "Very big tensor" =
     let open Session.SDSL in
-    drop_session();
+    drop_all_sessions();
     Random.init 0;
     let hey =
       FDSL.range_of_shape ~batch_dims:[6] ~input_dims:[7; 8; 9] ~output_dims:[10; 11] () in
