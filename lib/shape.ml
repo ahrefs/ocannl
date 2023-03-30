@@ -576,10 +576,10 @@ let propagate_shapes (update: update_step) =
     (if is_inferred sh.batch || is_unknown sh.batch then sh.batch <- to_inferred b_rhs);
     (if is_inferred sh.input || is_unknown sh.input then sh.input <- to_inferred i_rhs);
     (if is_inferred sh.output || is_unknown sh.output then sh.output <- to_inferred o_rhs);
-    let all_axis_labels = all_axis_labels cur_sh sh spec pseudo_to_labels_lhs pseudo_to_labels_rhs in
-    let lhs_axis_labels = Map.map lhs_labels ~f:(Map.find_exn all_axis_labels) in
+    let all_axis_labels: str_str_map = all_axis_labels cur_sh sh spec pseudo_to_labels_lhs pseudo_to_labels_rhs in
+    let lhs_axis_labels: axis_str_map = Map.filter_map lhs_labels ~f:(Map.find all_axis_labels) in
     cur_sh.axis_labels <- lhs_axis_labels;
-    let rhs_axis_labels = Map.map rhs_labels ~f:(Map.find_exn all_axis_labels) in
+    let rhs_axis_labels: axis_str_map = Map.filter_map rhs_labels ~f:(Map.find all_axis_labels) in
     sh.axis_labels <- rhs_axis_labels
     (* FIXME(87): handle givenness / fixedness propagation *)
 
