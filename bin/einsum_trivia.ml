@@ -9,9 +9,12 @@ let () =
   let open Session.SDSL in
   drop_all_sessions();
   Random.init 0;
-  let hey =
-    FDSL.range_of_shape ~batch_dims:[2] ~input_dims:[3] ~output_dims:[4] () in
-  let%nn_op ho = hey++"b|i->o => b|i" in
+  let a =
+    FDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[2] () in
+  let b =
+    FDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[3] () in
+  let%nn_op c = (a + 1) *+"i; j => i->j" b in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ hey;
-  print_formula ~with_code:false ~with_grad:false `Default @@ ho
+  print_formula ~with_code:false ~with_grad:false `Default @@ a;
+  print_formula ~with_code:false ~with_grad:false `Default @@ b;
+  print_formula ~with_code:false ~with_grad:false `Default @@ c

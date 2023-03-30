@@ -687,13 +687,13 @@ let propagate_shapes (update: update_step) =
     (if is_inferred sh2.batch || is_unknown sh2.batch then sh2.batch <- to_inferred b_rhs2);
     (if is_inferred sh2.input || is_unknown sh2.input then sh2.input <- to_inferred i_rhs2);
     (if is_inferred sh2.output || is_unknown sh2.output then sh2.output <- to_inferred o_rhs2);
-    let all_axis_labels1 = all_axis_labels cur_sh sh1 spec pseudo_to_labels_lhs pseudo_to_labels_rhs1 in
-    let all_axis_labels = all_axis_labels cur_sh sh2 spec all_axis_labels1 pseudo_to_labels_rhs2 in
-    let lhs_axis_labels = Map.map lhs_labels ~f:(Map.find_exn all_axis_labels) in
+    let all_axis_labels1: str_str_map = all_axis_labels cur_sh sh1 spec pseudo_to_labels_lhs pseudo_to_labels_rhs1 in
+    let all_axis_labels: str_str_map = all_axis_labels cur_sh sh2 spec all_axis_labels1 pseudo_to_labels_rhs2 in
+    let lhs_axis_labels: axis_str_map = Map.filter_map lhs_labels ~f:(Map.find all_axis_labels) in
     cur_sh.axis_labels <- lhs_axis_labels;
-    let rhs1_axis_labels = Map.map rhs1_labels ~f:(Map.find_exn all_axis_labels) in
+    let rhs1_axis_labels: axis_str_map = Map.filter_map rhs1_labels ~f:(Map.find all_axis_labels) in
     sh1.axis_labels <- rhs1_axis_labels;
-    let rhs2_axis_labels = Map.map rhs2_labels ~f:(Map.find_exn all_axis_labels) in
+    let rhs2_axis_labels: axis_str_map = Map.filter_map rhs2_labels ~f:(Map.find all_axis_labels) in
     sh2.axis_labels <- rhs2_axis_labels
     (* FIXME(87): handle givenness / fixedness propagation *)
 
