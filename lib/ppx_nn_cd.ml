@@ -174,11 +174,11 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
       List.find ~f:(function Undet -> false | _ -> true) [slot1; slot2] in
     Formula_nf, slot, [%expr NFDSL.einsum [%e spec] [%e expr1] [%e expr2]]
 
-    | [%expr [%e? expr1] ++
-             [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]]
-      when String.contains spec_str '>' ->
-  let _typ1, slot1, expr1 = translate expr1 in
-  Formula_nf, slot1, [%expr NFDSL.einsum1 [%e spec] [%e expr1]]
+  | [%expr [%e? expr1] ++
+           [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]]
+    when String.contains spec_str '>' ->
+    let _typ1, slot1, expr1 = translate expr1 in
+    Formula_nf, slot1, [%expr NFDSL.einsum1 [%e spec] [%e expr1]]
 
   | [%expr [%e? expr1].grad ] ->
     let typ1, slot1, expr1 = translate expr1 in
