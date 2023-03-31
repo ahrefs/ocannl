@@ -35,8 +35,8 @@ let () =
   let points2 = ref [] in
   let losses = ref [] in
   let%nn_op margin_loss = !/ (1 - moons_class *. mlp moons_input) in
-  let%nn_op reg_loss = w1 **. 2 ++"%=>0" + w2 **. 2 ++"%=>0" + w3 **. 2 ++"%=>0" +
-                       b1 **. 2 ++"%=>0" + b2 **. 2 ++"%=>0" + b3 **. 2 ++"%=>0" in
+  let%nn_op ssq w = (w **. 2) ++"...|...->... => 0" in
+  let reg_loss = List.map ~f:ssq [w1; w2; w3; b1; b2; b3] |> List.reduce_exn ~f:FDSL.O.(+) in
   let%nn_op total_loss = margin_loss + 0.0001 *. reg_loss in
   for step = 1 to steps do
     refresh_session ();

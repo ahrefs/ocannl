@@ -32,16 +32,11 @@ type 'a axis_map = 'a Map.M(AxisKey).t [@@deriving compare, sexp]
 
 (** The labels are strings assigned to [AxisKey] axes. Moreover the [bcast_] fields represent whether
     additional leading axes are allowed (corresponding to the dot-ellipsis syntax for broadcasting).
-    The [given_] fields count the number of specified axes of the corresponding kind in [labels].
-    The [wildcard_] fields represent whether a wildcard suffix `%` was used, i.e. additional trailing
-    axes are allowed (which in the case of `einsum` or `einsum1` operations should be summed over). *)
+    The [given_] fields count the number of specified axes of the corresponding kind in [labels]. *)
 type parsed_axis_labels = {
   bcast_batch: bool;
   bcast_input: bool;
   bcast_output: bool;
-  wildcard_batch: bool;
-  wildcard_input: bool;
-  wildcard_output: bool;
   given_batch: int;
   given_input: int;
   given_output: int;
@@ -52,11 +47,6 @@ let bcast_of_kind = function
   | AxisKey.Batch -> bcast_batch
   | AxisKey.Input -> bcast_input
   | AxisKey.Output -> bcast_output
-
-let wildcard_of_kind = function
-  | AxisKey.Batch -> wildcard_batch
-  | AxisKey.Input -> wildcard_input
-  | AxisKey.Output -> wildcard_output
 
 let given_of_kind = function
   | AxisKey.Batch -> given_batch
@@ -164,26 +154,16 @@ type transpose_type =
   (like the ellipsis ["..."] in [numpy.einsum]).
   
   The label ["_"] is a place-holder: it is not output to the resulting map but aligns the axes
-  of other labels.
-  
-  The label ["%"] is only allowed as the last axis of a kind (i.e. first from-end). It is a
-  non-broadcasting wildcard. *)
+  of other labels. *)
 let axis_labels_of_spec spec: parsed_axis_labels =
   let check_dot s =
     if String.length s > 3 && Option.is_some @@ String.substr_index ~pos:3 s ~pattern:"..."
     then invalid_arg ("axis_labels_of_spec: dot only allowed at first axis of a kind: "^spec)
     else if String.is_prefix s ~prefix:"..." then true, String.drop_prefix s 3
     else false, s in
-  let check_wildcard s =
-    if String.length s > 0 &&
-       Option.exists (String.index s '%') ~f:(fun p -> p < String.length s - 1)
-    then invalid_arg ("axis_labels_of_spec: % only allowed at last axis of a kind: "^spec)
-    else if String.is_suffix s ~suffix:"%" then true, String.drop_suffix s 1
-    else false, s in
   let parse spec in_axes =
     let bcast, spec = check_dot @@ String.strip spec in
-    let wildcard, spec = check_wildcard spec in
-    bcast, wildcard,
+    bcast,
     if List.exists ~f:(String.contains spec) [' '; ','; '('; ')'] then
       let labels = String.split_on_chars spec ~on:[' '; ','; '('; ')'] |>
                    List.filter ~f:(fun s -> not @@ String.is_empty s) in
@@ -210,15 +190,14 @@ let axis_labels_of_spec spec: parsed_axis_labels =
     | Some end_inp -> String.sub ~pos:0 ~len:end_inp spec,
                       String.sub ~pos:(end_inp+2) ~len:(String.length spec - end_inp - 2) spec
     | None -> "", spec in
-  let bcast_batch, wildcard_batch, (given_batch, batch_labels) = parse batch_spec Batch in
-  let bcast_input, wildcard_input, (given_input, input_labels) = parse input_spec Input in
-  let bcast_output, wildcard_output, (given_output, output_labels) = parse output_spec Output in
+  let bcast_batch, (given_batch, batch_labels) = parse batch_spec Batch in
+  let bcast_input, (given_input, input_labels) = parse input_spec Input in
+  let bcast_output, (given_output, output_labels) = parse output_spec Output in
   let labels =
     match Map.append ~lower_part:input_labels ~upper_part:output_labels with
     | `Ok m -> (match Map.append ~lower_part:batch_labels ~upper_part:m with `Ok r -> r | _ -> assert false)
     | _ -> assert false in
-  { bcast_batch; bcast_input; bcast_output; wildcard_batch; wildcard_input;
-    wildcard_output; given_batch; given_input; given_output; labels }
+  { bcast_batch; bcast_input; bcast_output; given_batch; given_input; given_output; labels }
 
 let einsum_of_spec spec =
   let rhs_spec, lhs_spec =
