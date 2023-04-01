@@ -42,8 +42,10 @@ let print_formula ~with_grad ~with_code (style: NodeUI.array_print_style) m =
     match style with
     | `Default -> NodeUI.default_display_indices sh      
     | `N5_layout priorities ->
-      let p_labels = Shape.(axis_labels_of_spec priorities).labels |>
-                     Map.map ~f:(Fn.compose ((-) 5) Int.of_string) in
+      let f = function
+      | Either.Second i -> i
+      | First _ -> invalid_arg "`N5_layout requires integer-only labels" in
+      let p_labels = Shape.(axis_labels_of_spec priorities).labels |> Map.map ~f in
       Shape.axis_map_to_dims_index p_labels
 
     | `Label_layout label_idcs ->
