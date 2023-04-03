@@ -107,8 +107,8 @@ let range_of_shape ~is_form ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[]) 
   Formula.term ~is_form ~needs_gradient:false ~batch_dims ~input_dims ~output_dims ?axis_labels
     ~label:("r"^NodeUI.dims_to_string dims) (First Range_over_offsets)
 
-let data ?axis_labels ~label ~batch_dims ~output_dims reset_op =
-  Formula.term ~label ~is_form:true ~needs_gradient:false ~batch_dims ~input_dims:[] ~output_dims 
+let data ?axis_labels ?(needs_gradient=false) ~label ~batch_dims ~output_dims reset_op =
+  Formula.term ~label ~is_form:true ~needs_gradient ~batch_dims ~input_dims:[] ~output_dims 
     ?axis_labels (Second reset_op)
 
 let assign =
