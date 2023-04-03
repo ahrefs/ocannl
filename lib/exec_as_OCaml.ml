@@ -65,13 +65,13 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
       fprintf ppf "@[<2>fetch_ndarray_callback@ ~op_or_id:%a@ ((get_form %d).grad)@]"
         (pp_print_fetch_op ~id) fetch_op id
     | Unoptimized_set (Value_at_node_id id, indices, v) ->
-      fprintf ppf "@[<2>set_from_float (get %d).value@ %a@ %a@]" id pp_indices indices pp_ll v
+      fprintf ppf "@[<2>set_from_float (get %d).value@ (%a)@ (%a)@]" id pp_indices indices pp_ll v
     | Unoptimized_set (Gradient_at_node_id id, indices, v) ->
-      fprintf ppf "@[<2>set_from_float (get_form %d).grad@ %a@ %a@]" id pp_indices indices pp_ll v
+      fprintf ppf "@[<2>set_from_float (get_form %d).grad@ (%a)@ (%a)@]" id pp_indices indices pp_ll v
     | Unoptimized_get (Value_at_node_id id, indices) ->
-      fprintf ppf "@[<2>get_as_float (get %d).value@ %a@]" id pp_indices indices
+      fprintf ppf "@[<2>get_as_float (get %d).value@ (%a)@]" id pp_indices indices
     | Unoptimized_get (Gradient_at_node_id id, indices) ->
-      fprintf ppf "@[<2>get_as_float (get_form %d).grad@ %a@]" id pp_indices indices
+      fprintf ppf "@[<2>get_as_float (get_form %d).grad@ (%a)@]" id pp_indices indices
     | Unoptimized_binop (Skip_arg, _v1, v2) -> pp_ll ppf v2
     | Unoptimized_binop (Add, v1, v2) -> fprintf ppf "(@[<2>(%a) +@ (%a)@]@,)" pp_ll v1 pp_ll v2
     | Unoptimized_binop (Mul, v1, v2) -> fprintf ppf "(@[<2>(%a) *@ (%a)@]@,)" pp_ll v1 pp_ll v2
