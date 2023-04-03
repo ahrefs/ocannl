@@ -32,3 +32,10 @@
  (libraries ocannl base stdio)
  (preprocess (pps ppx_jane ppx_ocannl))
  (modes exe))
+
+(executable
+ (name zero2hero_1of7)
+ (modules zero2hero_1of7)
+ (libraries ocannl base stdio)
+ (preprocess (pps ppx_jane ppx_ocannl))
+ (modes exe))
