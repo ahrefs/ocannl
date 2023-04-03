@@ -24,9 +24,10 @@ type expr_type =
   | Formula_nf
   | Formula_or_node_or_data
   | Grad_of_source of expression
+  | Grad_of_code of expression
   | Unknown
 
-let is_grad = function Grad_of_source _ -> true | _ -> false
+let is_grad = function Grad_of_source _ | Grad_of_code _ -> true | _ -> false
 let is_unknown = function Unknown -> true | _ -> false
 
 type projections_slot = LHS | RHS1 | RHS2 | Nonslot | Undet [@@deriving equal, sexp]
@@ -72,15 +73,32 @@ let is_assignment ident =
   String.length ident > 1 && Char.equal ident.[0] '=' &&
   not @@ List.mem ["=="; "==="; "=>"; "==>"; "=>>"] ident ~equal:String.equal
 
+let rec data_of_code hs =
+  let loc = hs.pexp_loc in
+  [%expr
+    match [%e hs] with
+    | Accum_binop {lhs; _} | Accum_unop {lhs; _} -> lhs
+    | Create {tensor; _} | Fetch {tensor; _} -> tensor
+    | Seq (_, subexpr) | ParHint (_, subexpr) | Par (_, subexpr) ->
+      [%e data_of_code [%expr subexpr]]
+    | Noop -> Location.error_extensionf ~loc
+                "ppx_ocannl %%nn_cd: Noop code does not refer to any data"]
+  
 let setup_data hs_pat (hs_typ, slot, hs) =
   let loc = hs.pexp_loc in
   match hs_typ with
   | Formula_nf ->
     Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].forward_body]),
     hs_typ, slot, [%expr CDSL.value_of_id [%e pat2expr hs_pat].id]
-  | Formula_or_node_or_data -> None, hs_typ, slot, [%expr CDSL.value_of_id [%e hs].id]
-  | Grad_of_source expr -> None, hs_typ, slot, [%expr CDSL.grad_of_id [%e expr].id]
-  | _ -> None, hs_typ, slot, hs
+  | Unknown | Formula_or_node_or_data ->
+    None, hs_typ, slot, [%expr CDSL.value_of_id [%e hs].id]
+  | Grad_of_source expr ->
+    None, hs_typ, slot, [%expr CDSL.grad_of_id [%e expr].id]
+  | Grad_of_code expr ->
+    Some (hs_pat, hs, pat2expr hs_pat),
+    hs_typ, slot, [%expr CDSL.grad_of_id [%e data_of_code expr].id]
+  | Code ->
+    Some (hs_pat, hs, pat2expr hs_pat), hs_typ, slot, data_of_code hs
 
 let setup_node_id hs_pat (hs_typ, slot, hs) =
   let loc = hs.pexp_loc in
@@ -89,7 +107,11 @@ let setup_node_id hs_pat (hs_typ, slot, hs) =
     Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].forward_body]),
     hs_typ, slot, [%expr [%e pat2expr hs_pat].id]
   | Grad_of_source expr -> None, hs_typ, slot, [%expr [%e expr].id]
-  | _ -> None, hs_typ, slot, [%expr [%e hs].id]
+  | Unknown | Formula_or_node_or_data -> None, hs_typ, slot, [%expr [%e hs].id]
+  | Grad_of_code expr ->
+    Some (hs_pat, hs, pat2expr hs_pat), hs_typ, slot, [%expr [%e data_of_code expr].id]
+  | Code ->
+    Some (hs_pat, hs, pat2expr hs_pat), hs_typ, slot, [%expr [%e data_of_code hs].id]
 
 let with_forward_args setups body =
   let loc = body.pexp_loc in
@@ -182,12 +204,17 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
 
   | [%expr [%e? expr1].grad ] ->
     let typ1, slot1, expr1 = translate expr1 in
-    let expr_grad = match typ1 with
-    | Formula_or_node_or_data -> [%expr CDSL.grad_of_id [%e expr1].id]
-    | _ ->
-      Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
-        "ppx_ocannl %%nn_cd: the x.grad syntax requires x to be Node.t, Node.data or Formula.t" in
-    Grad_of_source expr1, slot1, expr_grad
+    (match typ1 with
+     | Grad_of_code _ | Grad_of_source _ -> typ1, slot1, expr1
+     | Unknown | Formula_or_node_or_data ->
+       Grad_of_source expr1, slot1, [%expr CDSL.grad_of_id [%e expr1].id]
+     | Code ->
+       let id_expr = data_of_code expr1 in
+       Grad_of_code expr1, slot1, [%expr CDSL.grad_of_id [%e id_expr].id]
+     | Formula_nf ->
+       Grad_of_source expr1, slot1,
+       Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
+         "ppx_ocannl %%nn_cd: non-form formulas do not have a gradient")
 
   | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections])) ] ->
     let accu_op = assignment_op accu_op in
