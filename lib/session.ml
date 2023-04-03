@@ -168,9 +168,14 @@ let compile_and_run ?(with_debug=true) code =
   dynload_with_handler ~with_debug ~runtime_store:dummy (Code.Initialization code)
 
 let compile_routine ?(with_debug=true) code =
+  let open Formula in
+  let num_inits = List.length !session_initializations in
+  let to_init = num_inits - !session_initialized in
+  let init_code = Code.all_parallel @@ List.take !session_initializations to_init in
+  session_initialized := num_inits;
   Ocannl_runtime.Node.most_recent_suspension := None;
   dynload_with_handler ~with_debug ~runtime_store:(Ocannl_runtime.Node.most_recent_suspension)
-    (Code.Suspension code);
+    Code.(Suspension (Seq (init_code, code)));
   let routine = Option.value_exn !Ocannl_runtime.Node.most_recent_suspension in
   Ocannl_runtime.Node.most_recent_suspension := None;
   routine
@@ -325,6 +330,7 @@ module SDSL = struct
   let drop_session = drop_session
   let drop_all_sessions = drop_all_sessions
   let close_session = close_session
+  let compile_routine = compile_routine
   let session_params = session_params
   let minus_learning_rate = minus_learning_rate
   let update_params = update_params
