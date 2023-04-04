@@ -145,14 +145,16 @@ let%expect_test "Micrograd half-moons example" =
     FDSL.data ~label:"minus_lr" ~batch_dims:[] ~output_dims:[1]
       Float.(Compute_point (fun ~session_step ~dims:_ ~idcs:_ ->
           0.9 * of_int session_step / 100. - 1.)));
-  (* let%nn_op ssq w = (w **. 2) ++"...|...->... => 0" in *)
-  (* Although [mlp] is not yet applied to anything, we can already refer to the weights. *)
-  (* let reg_loss = List.map ~f:ssq [w1; w2; w3; b1; b2; b3] |> List.reduce_exn ~f:FDSL.O.(+) in *)
-  let%nn_op _margin_loss = !/ (1 - moons_class *. mlp moons_input) in
-  (* let%nn_op _total_loss = margin_loss + 0.0001 *. reg_loss in *)
+  let%nn_op ssq w = (w **. 2) ++"...|...->... => 0" in
+  let%nn_op margin_loss = !/ (1 - moons_class *. mlp moons_input) in
+  let reg_loss = List.map ~f:ssq [w1; w2; w3; b1; b2; b3] |> List.reduce_exn ~f:FDSL.O.(+) in
+  let%nn_op _total_loss = margin_loss + 0.0001 *. reg_loss in
   for _step = 1 to 2 * len/batch do
     refresh_session ();
     Option.value_exn !update_params ();
+    (* let batch_losses = NodeUI.retrieve_1d_points ~xdim:0 total_loss.node.node.value in
+    Stdio.printf "\nLosses over batch for step %d: %s\n%!" step
+      (Array.map batch_losses ~f:Float.to_string |> String.concat_array ~sep:", "); *)
   done;
   close_session ();
   let point = [|0.; 0.|] in
