@@ -11,7 +11,7 @@ let () =
   Random.init 0;
   let len = 200 in
   let batch = 10 in
-  let epochs = 200 in
+  let epochs = 40 in
   let noise() = Random.float_range (-0.1) 0.1 in
   let moons_flat = Array.concat_map (Array.create ~len ()) ~f:Float.(fun () ->
     let i = Random.int len in
@@ -28,10 +28,11 @@ let () =
   minus_learning_rate := Some (
       FDSL.data ~label:"minus_lr" ~batch_dims:[] ~output_dims:[1]
         Float.(Compute_point (fun ~session_step ~dims:_ ~idcs:_ ->
-            (0.999 * of_int session_step / of_int steps - 1.) / 50.)));
+            -0.1 * of_int Int.(steps - session_step) / of_int steps)));
   let points1 = ref [] in
   let points2 = ref [] in
   let losses = ref [] in
+  let log_losses = ref [] in
   let learning_rates = ref [] in
   let%nn_op margin_loss = !/ (1 - moons_class *. mlp moons_input) in
   let%nn_op ssq w = (w **. 2) ++"...|...->... => 0" in
@@ -45,16 +46,16 @@ let () =
     let npoints1, npoints2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
     points1 := npoints1 :: !points1;
     points2 := npoints2 :: !points2;
-    if step % 50 = 0 then
-      let mlr = NodeUI.retrieve_1d_points ~xdim:0 
-          (Option.value_exn !minus_learning_rate).node.node.value in
-      assert (Array.length mlr = 1);
-      Stdio.printf "Minus learning rate over batch for step %d: %f\n%!" step mlr.(0);
-      learning_rates := ~-. (mlr.(0)) :: !learning_rates;
-      let batch_loss = NodeUI.retrieve_1d_points ~xdim:0 total_loss.node.node.value in
-      assert (Array.length batch_loss = 1);
-      Stdio.printf "Loss over batch for step %d: %f\n%!" step batch_loss.(0);
-      losses := batch_loss.(0) :: !losses;
+    let mlr = NodeUI.retrieve_1d_points ~xdim:0 
+        (Option.value_exn !minus_learning_rate).node.node.value in
+    assert (Array.length mlr = 1);
+    Stdio.printf "Minus learning rate over batch for step %d: %f\n%!" step mlr.(0);
+    learning_rates := ~-. (mlr.(0)) :: !learning_rates;
+    let batch_loss = NodeUI.retrieve_1d_points ~xdim:0 total_loss.node.node.value in
+    assert (Array.length batch_loss = 1);
+    Stdio.printf "Loss over batch for step %d: %f\n%!" step batch_loss.(0);
+    losses := batch_loss.(0) :: !losses;
+    log_losses := Float.log batch_loss.(0) :: !log_losses;
   done;
   close_session ();
   let point = [|0.; 0.|] in
@@ -77,13 +78,19 @@ let () =
   Stdio.printf "Loss curve:\n%!";
   let plot_loss =
     let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step/50" ~y_label:"loss"
+    plot ~size:(120, 30) ~x_label:"step" ~y_label:"loss"
       [Line_plot {points=Array.of_list_rev !losses; pixel="-"}] in
   PrintBox_text.output Stdio.stdout plot_loss;
-  Stdio.printf "\nLearning rate curve:\n%!";
+  Stdio.printf "Log-loss, for better visibility:\n%!";
+  let plot_loss =
+    let open PrintBox_utils in
+    plot ~size:(120, 30) ~x_label:"step" ~y_label:"log loss"
+      [Line_plot {points=Array.of_list_rev !log_losses; pixel="-"}] in
+  PrintBox_text.output Stdio.stdout plot_loss;
+  Stdio.printf "\nLearning rate:\n%!";
   let plot_lr =
     let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step/50" ~y_label:"learning rate"
+    plot ~size:(120, 30) ~x_label:"step" ~y_label:"learning rate"
       [Line_plot {points=Array.of_list_rev !learning_rates; pixel="-"}] in
   PrintBox_text.output Stdio.stdout plot_lr;
   Stdio.printf "\n%!"
