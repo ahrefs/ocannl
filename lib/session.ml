@@ -35,8 +35,11 @@ let get_node id =
 let print_formula ~with_grad ~with_code (style: NodeUI.array_print_style) m =
   let open Formula in
   let sh = m.shape in
+  let label =
+    (match m.node.desc_label with None -> "" | Some l -> l^" ")^
+    (match m.node.op_label with "" -> "" | l -> "<"^l^"> ") in
   let prefix =
-    "["^Int.to_string m.id^"]: shape "^
+    "["^Int.to_string m.id^"]: "^label^"shape "^
     Shape.to_string_hum ~style:`Axis_number_and_size sh^" " in
   let indices =
     match style with

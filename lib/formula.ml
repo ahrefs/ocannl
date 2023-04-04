@@ -360,6 +360,7 @@ let sexp_of_t m =
   Sexp.message "Formula" [
     "id", Int.sexp_of_t m.id;
     "op_label", String.sexp_of_t m.node.op_label;
+    "desc_label", Option.sexp_of_t String.sexp_of_t m.node.desc_label;
   ]
 
 include Comparator.Make(struct

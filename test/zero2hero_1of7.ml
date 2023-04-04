@@ -15,23 +15,23 @@ let%expect_test "Graph drawing recompile" =
   refresh_session ();
   print_node_tree ~with_grad:true ~depth:9 f.id;
   [%expect {|
-                               [13] +
+                               [13] f <+>
                                 6.00e+1
                                Gradient
                                 1.00e+0
-                          [12] +                          │[2] 5
+                          [12] <+>                        │[2] <5>
                            5.50e+1                        │ 5.00e+0
                           Gradient                        │<void>
                            1.00e+0                        │
-           [9] *.          │          [11] *.             │
+           [9] <*.>        │          [11] <*.>           │
             7.50e+1        │           -2.00e+1           │
            Gradient        │          Gradient            │
             1.00e+0        │           1.00e+0            │
-    [8] 3    │  [6] **.    │[10] -1   │    [4] *.         │
+    [8] <3>  │  [6] <**.>  │[10] <-1> │    [4] <*.>       │
      3.00e+0 │   2.50e+1   │ -1.00e+0 │     2.00e+1       │
     <void>   │  Gradient   │<void>    │    Gradient       │
              │   3.00e+0   │          │     -1.00e+0      │
-             │[1]│[5] 2    │          │[3] 4    │[1] x    │
+             │[1]│[5] <2>  │          │[3] <4>  │[1] <x>  │
              │   │ 2.00e+0 │          │ 4.00e+0 │ 5.00e+0 │
              │   │<void>   │          │<void>   │Gradient │
              │   │         │          │         │ 2.60e+1 │ |}];
@@ -96,20 +96,21 @@ let%expect_test "Graph drawing fetch" =
   refresh_session ();
   print_node_tree ~with_grad:false ~depth:9 f5.id;
   [%expect {|
-                               [12] +
+                               [12] f <+>
                                 6.00e+1
-                          [11] +                          │[2] 5
+                          [11] <+>                        │[2] <5>
                            5.50e+1                        │ 5.00e+0
-           [8] *.          │          [10] *.             │
+           [8] <*.>        │          [10] <*.>           │
             7.50e+1        │           -2.00e+1           │
-    [7] 3    │  [6] **.    │[9] -1    │     [4] *.        │
+    [7] <3>  │  [6] <**.>  │[9] <-1>  │     [4] <*.>      │
      3.00e+0 │   2.50e+1   │ -1.00e+0 │      2.00e+1      │
-             │[1]│[5] 2    │          │[3] 4    │[1] 5    │
+             │[1]│[5] <2>  │          │[3] <4>  │[1] <5>  │
              │   │ 2.00e+0 │          │ 4.00e+0 │ 5.00e+0 │ |}];
   (* close_session is not necessary. *)
   close_session ();
   let xs = Array.init 100 ~f:Float.(fun i -> of_int i / 10. - 5.) in
-  let x = FDSL.data ~needs_gradient:true ~label:"x" ~batch_dims:[] ~output_dims:[1] (Init_op (Fixed_constant xs)) in
+  let x = FDSL.data ~needs_gradient:true ~label:"x" ~batch_dims:[] ~output_dims:[1]
+      (Init_op (Fixed_constant xs)) in
   let fx = f x in
   let ys = Array.map xs ~f:(fun _ ->
     refresh_session ();
@@ -164,3 +165,24 @@ let%expect_test "Graph drawing fetch" =
     ──────────┼───────────────────────────────────────────────────────────────────────────
               │-5.000e+0                                                          4.900e+0
               │                                     x |}]
+
+let%expect_test "Simple gradients" =
+  let open Session.SDSL in
+  drop_all_sessions();
+  Random.init 0;
+  let%nn_op f = "a" [2] *. "b" [-3] + "c" [10] in
+  refresh_session ();
+  print_node_tree ~with_grad:true ~depth:9 f.id;
+  [%expect {|
+               [5] f <+>
+                4.00e+0
+               Gradient
+                1.00e+0
+         [4] <*.>        │[3] <c>
+          -6.00e+0       │ 1.00e+1
+         Gradient        │Gradient
+          1.00e+0        │ 1.00e+0
+    [1] <a>   │[2] <b>   │
+     2.00e+0  │ -3.00e+0 │
+    Gradient  │Gradient  │
+     -3.00e+0 │ 2.00e+0  │ |}]

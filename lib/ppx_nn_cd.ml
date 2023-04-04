@@ -69,12 +69,6 @@ let unary_op expr =
     Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
       "ppx_ocannl %%nn_cd: expected a unary operator, one of: = (Identity), !/ (Relu)"
 
-let alphanum_regexp = Str.regexp "^[^a-zA-Z0-9]+$"
-let is_operator ident = Str.string_match alphanum_regexp ident 0
-let is_assignment ident =
-  String.length ident > 1 && Char.equal ident.[0] '=' &&
-  not @@ List.mem ["=="; "==="; "=>"; "==>"; "=>>"] ident ~equal:String.equal
-
 let rec data_of_code hs =
   let loc = hs.pexp_loc in
   [%expr
@@ -510,6 +504,9 @@ let rec translate ?desc_label (expr: expression): expr_type * projections_slot *
   | { pexp_desc = Pexp_letmodule (name, module_expr, body); _ } ->
     let typ, slot, body = translate ?desc_label body in
     typ, slot, {expr with pexp_desc=Pexp_letmodule (name, module_expr, body)}
+
+  | { pexp_desc = Pexp_ident {txt=Lident op_ident; _}; _ } when is_operator op_ident ->
+    Unknown, Undet, [%expr [%e expr] ?desc_label:[%e opt_pat2string ~loc desc_label]]
 
   | _ -> Unknown, Undet, expr
 

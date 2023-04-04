@@ -212,8 +212,10 @@ let rec translate ?desc_label expr =
     let vbs, body = translate ?desc_label body in
      vbs, {expr with pexp_desc=Pexp_letmodule (name, module_expr, body)}
 
-  | expr ->
-    no_vbs, expr
+  | { pexp_desc = Pexp_ident {txt=Lident op_ident; _}; _ } when is_operator op_ident ->
+    no_vbs, [%expr [%e expr] ?desc_label:[%e opt_pat2string ~loc desc_label]]
+
+  | expr -> no_vbs, expr
 
 let expr_expander ~loc ~path:_ payload =
   match payload with

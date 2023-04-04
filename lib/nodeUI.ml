@@ -157,7 +157,8 @@ let node_header n =
   let dims_s =
     if String.equal v_dims_s g_dims_s then "dims "^v_dims_s
     else "dims val "^v_dims_s^" grad "^g_dims_s in
-  "#"^Int.to_string n.id^" op "^n.op_label^" "^dims_s^" ["^
+  let desc_l = match n.desc_label with None -> "" | Some l -> " "^l in
+  "#"^Int.to_string n.id^desc_l^" op "^n.op_label^" "^dims_s^" ["^
   String.concat ~sep:"," (List.map n.children ~f:(fun {sub_node_id=i; _} -> Int.to_string i))^
   "]"
   (*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box n.label)*)
@@ -365,13 +366,17 @@ let to_dag ?entries_per_axis ~with_value ~with_grad n_id =
     let n = get sub_node_id in
     let id = Int.to_string sub_node_id in
     let children = List.map ~f:to_dag n.children in
-    let prefix = "["^id^"] "^n.op_label in
+    let desc_l = match n.desc_label with None -> "" | Some l -> l^" " in
+    let op_l = match n.op_label with "" -> "" | l -> "<"^l^">" in
+    let prefix = "["^id^"] "^desc_l^op_l in
     let labels = Shape.axis_map_to_dims_index ~default:"" n.shape.axis_labels in
     let indices = default_display_indices n.shape in
     match computed_externally, with_value, with_grad, n.node.form with
     | true, _, _, _ -> `Embed_subtree_ID (Int.to_string sub_node_id)
     | _, false, false, _
-    | _, false, true, None -> `Subtree_with_ID (id, `Tree (`Text n.op_label, children))
+    | _, false, true, None ->
+      let txt = desc_l^n.op_label in
+      `Subtree_with_ID (id, `Tree (`Text txt, children))
     | _, true, false, _
     | _, true, true, None ->
       let node =

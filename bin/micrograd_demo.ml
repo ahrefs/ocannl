@@ -4,7 +4,7 @@ module FDSL = Operation.FDSL
 
 let () = Session.SDSL.set_executor OCaml
 
-let () =
+let _suspended () =
   (* let open Operation.FDSL in *)
   let open Session.SDSL in
   drop_all_sessions();
@@ -79,3 +79,23 @@ let () =
   Stdio.printf "Half-moons scatterplot:\n%!";
   PrintBox_text.output Stdio.stdout plot_box;
   Stdio.printf "\n%!"
+
+
+let () =
+  let open Session.SDSL in
+  drop_all_sessions();
+  Random.init 0;
+  let%nn_op c = "a" [-4] + "b" [2] in
+  let%nn_op d = a *. b + b **. 3 in
+  let%nn_op c = c + c + 1 in
+  let%nn_op c = c + 1 + c + ~-a in
+  let%nn_op d = d + d *. 2 + !/ (b + a) in
+  let%nn_op d = d + 3 *. d + !/ (b - a) in
+  let%nn_op e = c - d in
+  let%nn_op f = e *. e in
+  let%nn_op g = f /. 2 in
+  let%nn_op g = g + 10. /. f in
+
+  refresh_session ();
+  print_formula ~with_code:false ~with_grad:false `Default @@ g;
+  print_node_tree ~with_grad:true ~depth:99 g.id

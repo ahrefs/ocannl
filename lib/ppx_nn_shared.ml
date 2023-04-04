@@ -13,12 +13,40 @@ let rec pat2expr pat =
   | _ ->
      Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
        "ppx_ocannl requires a pattern identifier here: try using an `as` alias."
-
+type li = longident
 let pat2string pat =
-  ignore (Caml.Format.flush_str_formatter());
-  Ocaml_common.Printast.expression 80 Caml.Format.str_formatter @@ pat2expr pat;
-  Ast_helper.Exp.constant ~loc:pat.ppat_loc @@
-  Pconst_string (Caml.Format.flush_str_formatter(), pat.ppat_loc, None)
+  let rec lident = function
+  | Lident s
+  | Ldot (_, s) -> s
+  | Lapply (_, i) -> lident i in
+  let rec loop pat =
+    match pat.ppat_desc with
+    | Ppat_open (_, pat)
+    | Ppat_lazy pat
+    | Ppat_constraint (pat, _) -> loop pat
+    | Ppat_alias (_, ident) -> ident.txt
+    | Ppat_var ident -> ident.txt
+    | Ppat_any -> "_"
+    | Ppat_variant (s, _)
+    | Ppat_constant (Pconst_string (s, _, _))
+    | Ppat_constant (Pconst_integer (s, _))
+    | Ppat_constant (Pconst_float (s, _)) -> s
+    | Ppat_constant (Pconst_char c) -> Char.to_string c
+    | Ppat_tuple pats ->
+      "("^String.concat ~sep:", " (List.map ~f:loop pats) ^")"
+    | Ppat_array pats ->
+      "[|"^String.concat ~sep:", " (List.map ~f:loop pats) ^"|]"
+    | Ppat_construct (c, _) -> lident c.txt
+    | Ppat_interval (_, _)
+    | Ppat_record (_, _)
+    | Ppat_or (_, _)
+    | Ppat_type _
+    | Ppat_unpack _
+    | Ppat_exception _
+    | Ppat_extension _
+     -> ""
+    in  
+  Ast_helper.Exp.constant @@ Pconst_string (loop pat, pat.ppat_loc, None)
 
 let opt_pat2string ~loc = function
   | None -> [%expr None]
@@ -33,6 +61,12 @@ let dim_spec_to_string = function
 | `Input_dims dim -> "input (tuple) of dim "^Int.to_string dim
 | `Output_dims dim -> "output (list) of dim "^Int.to_string dim
 | `Batch_dims dim -> "batch (array) of dim "^Int.to_string dim
+
+let alphanum_regexp = Str.regexp "^[^a-zA-Z0-9]+$"
+let is_operator ident = Str.string_match alphanum_regexp ident 0
+let is_assignment ident =
+  String.length ident > 1 && Char.equal ident.[0] '=' &&
+  not @@ List.mem ["=="; "==="; "=>"; "==>"; "=>>"] ident ~equal:String.equal
 
 let ndarray_constant expr =
   let loc = expr.pexp_loc in
