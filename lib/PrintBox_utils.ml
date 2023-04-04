@@ -99,9 +99,12 @@ let plot_canvas ?canvas ?size specs =
       | Scatterplot {points; _} -> Array.map ~f:snd points
       | Line_plot {points; _} -> points
       | Boundary_map _ -> [||]) in
-  let minx = Array.reduce_exn all_x_points ~f:min in
+  let minx =
+    if Array.is_empty all_x_points then 0. else Array.reduce_exn all_x_points ~f:min in
   let miny = Array.reduce_exn all_y_points ~f:min in
-  let maxx = Array.reduce_exn all_x_points ~f:max in
+  let maxx =
+    if Array.is_empty all_x_points then of_int Int.(Array.length all_y_points - 1)
+    else Array.reduce_exn all_x_points ~f:max in
   let maxy = Array.reduce_exn all_y_points ~f:max in
   let spanx = maxx - minx in
   let spany = maxy - miny in
