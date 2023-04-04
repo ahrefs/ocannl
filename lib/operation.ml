@@ -13,18 +13,14 @@ let add =
     n1.grad =+ n.grad || n2.grad =+ n.grad in
   Formula.binop ~compose_op:Pointwise_bin ~op_label:"+" ~op_body ~grad_body
 
-let mul compose_op =
+let pointmul =
   let open Code in
   let module NFDSL = struct module O = struct end end in
   let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections = 
     n =: n1 * n2 in
   let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
     n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad in
-  Formula.binop ~compose_op 
-    ~op_label:(if Shape.equal_compose_type compose_op Pointwise_bin then "*." else "*")
-    ~op_body ~grad_body
-
-let pointmul = mul Pointwise_bin
+  Formula.binop ~compose_op:Pointwise_bin ~op_label:"*." ~op_body ~grad_body
 
 (* N1: AxB, N2 BxC, N: AxC, A: output of N1, B: input/output of N1/N2, C: input of N2.
    Although the matrix algebra would require that we insert additional transposes in gradient multiplies:
@@ -33,7 +29,14 @@ let pointmul = mul Pointwise_bin
    in our setup there is no transposing to do, since the projections produce correct indices for their
    corresponding matrices. *)
 
-let matmul = mul Compose
+let matmul =
+  let open Code in
+  let module NFDSL = struct module O = struct end end in
+  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections = 
+    n =+ n1 * n2 in
+  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
+    n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad in
+  Formula.binop ~compose_op:Compose ~op_label:"*"~op_body ~grad_body
 
 (** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of
     matrix multiplication, inner and outer products, etc.

@@ -227,4 +227,16 @@ let%expect_test "2D neuron" =
   let%nn_op n = "w" [-3, 1] * "x" [2; 0] + "b" [6.7] in
   refresh_session ();
   print_node_tree ~with_grad:true ~depth:9 n.id;
-  [%expect {| |}]
+  [%expect {|
+                        [5] n <+>
+                         7.00e-1
+                        Gradient
+                         1.00e+0
+                  [4] <*>                  │[1] <b>
+                   -6.00e+0                │ 6.70e+0
+                  Gradient                 │Gradient
+                   1.00e+0                 │ 1.00e+0
+    [2] <w>            │[3] <x>            │
+     -3.00e+0  1.00e+0 │ 2.00e+0  0.00e+0  │
+    Gradient           │Gradient           │
+     2.00e+0  0.00e+0  │ -3.00e+0  1.00e+0 │ |}]
