@@ -4,7 +4,7 @@ open Ppxlib
 
 open Ppx_nn_shared
 
-let ndarray_op ?axis_labels ?label expr =
+let ndarray_op ?desc_label ?axis_labels ?label expr =
   let loc = expr.pexp_loc in
   let values, batch_dims, output_dims, input_dims = ndarray_constant expr in
   let edims dims = Ast_builder.Default.elist ~loc @@ List.rev dims in
@@ -14,9 +14,11 @@ let ndarray_op ?axis_labels ?label expr =
     | Some axis_labels, None -> [%expr Formula.NFDSL.ndarray ~axis_labels:[%e axis_labels]]
     | None, Some label -> [%expr Formula.NFDSL.ndarray ~label:[%e label]]
     | Some axis_labels, Some label ->
-      [%expr Formula.NFDSL.ndarray ~axis_labels:[%e axis_labels] ~label:[%e label]] in
+      [%expr Formula.NFDSL.ndarray ?desc_label:[%e opt_pat2string ~loc desc_label]
+          ~axis_labels:[%e axis_labels] ~label:[%e label]] in
   [%expr
-    [%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
+    [%e op] ?desc_label:[%e opt_pat2string ~loc desc_label]
+      ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
       ~output_dims:[%e edims output_dims] [%e values]]
 
 type expr_type =
@@ -136,26 +138,31 @@ let project_xhs debug loc slot = match slot with
       "ppx_ocannl %%nn_cd: insufficient slot filler information at %s %s" debug
       "(incorporate one of: n, n1, n2, m1, m2, lhs, rhs, rhs1, rhs2)"
 
-let rec translate (expr: expression): expr_type * projections_slot * expression =
+let rec translate ?desc_label (expr: expression): expr_type * projections_slot * expression =
   let loc = expr.pexp_loc in
   match expr with
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
-    Formula_nf, Undet, [%expr Formula.NFDSL.number [%e expr]]
+    Formula_nf, Undet, 
+    [%expr Formula.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] [%e expr]]
 
   | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
-    Formula_nf, Undet, [%expr Formula.NFDSL.number (Float.of_int [%e expr])]
+    Formula_nf, Undet, 
+    [%expr Formula.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] (Float.of_int [%e expr])]
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
       [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
     let axis = Ast_helper.Exp.constant ~loc:pexp_loc
         (Pconst_string (String.of_char ch, pexp_loc, None)) in
-    Formula_nf, Undet, [%expr Formula.NFDSL.number ~axis_label:[%e axis] [%e f]]
+    Formula_nf, Undet, 
+    [%expr Formula.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis] [%e f]]
 
   | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
       [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
         let axis = Ast_helper.Exp.constant ~loc:pexp_loc
         (Pconst_string (String.of_char ch, pexp_loc, None)) in
-    Formula_nf, Undet, [%expr Formula.NFDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])]
+    Formula_nf, Undet, 
+    [%expr Formula.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label]
+        ~axis_label:[%e axis] (Float.of_int [%e i])]
 
   | { pexp_desc = Pexp_array _; _ } 
   | { pexp_desc = Pexp_construct ({txt=Lident "::"; _}, _); _ } ->
@@ -176,8 +183,8 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
 
   | [%expr [%e? expr1] || [%e? expr2] ] ->
     (* Check this before the generic application pattern. *)
-    let _typ1, _slot1, expr1 = translate expr1 in
-    let _typ2, _slot2, expr2 = translate expr2 in
+    let _typ1, _slot1, expr1 = translate ?desc_label expr1 in
+    let _typ2, _slot2, expr2 = translate ?desc_label expr2 in
     (* We could warn if typ is not Code and slot is not Nonslot, but that could be annoying. *)
     Code, Nonslot, [%expr Code.ParHint ([%e expr1], [%e expr2])]
 
@@ -185,7 +192,8 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
     (* If converting code or a node to a formula was possible we would do it here.
        Since it's not, we let OCaml handle the type errors. Same further below. *)
     let _typ1, slot1, expr1 = translate expr1 in
-    Formula_nf, slot1, [%expr pointpow ~is_form:false [%e expr2] [%e expr1]]
+    Formula_nf, slot1, 
+    [%expr pointpow ?desc_label:[%e opt_pat2string ~loc desc_label] ~is_form:false [%e expr2] [%e expr1]]
 
   | [%expr [%e? expr1] *+
       [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]
@@ -194,16 +202,18 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
     let _typ2, slot2, expr2 = translate expr2 in
     let slot = Option.value ~default:Undet @@
       List.find ~f:(function Undet -> false | _ -> true) [slot1; slot2] in
-    Formula_nf, slot, [%expr NFDSL.einsum [%e spec] [%e expr1] [%e expr2]]
+    Formula_nf, slot,
+    [%expr NFDSL.einsum ?desc_label:[%e opt_pat2string ~loc desc_label] [%e spec] [%e expr1] [%e expr2]]
 
   | [%expr [%e? expr1] ++
            [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]]
     when String.contains spec_str '>' ->
     let _typ1, slot1, expr1 = translate expr1 in
-    Formula_nf, slot1, [%expr NFDSL.einsum1 [%e spec] [%e expr1]]
+    Formula_nf, slot1, 
+    [%expr NFDSL.einsum1 ?desc_label:[%e opt_pat2string ~loc desc_label] [%e spec] [%e expr1]]
 
   | [%expr [%e? expr1].grad ] ->
-    let typ1, slot1, expr1 = translate expr1 in
+    let typ1, slot1, expr1 = translate ?desc_label expr1 in
     (match typ1 with
      | Grad_of_code _ | Grad_of_source _ -> typ1, slot1, expr1
      | Unknown | Formula_or_node_or_data ->
@@ -218,7 +228,8 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
 
   | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections])) ] ->
     let accu_op = assignment_op accu_op in
-    let lhs_setup, lhs_typ, _lhs_slot, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
+    let lhs_setup, lhs_typ, _lhs_slot, lhs =
+      setup_data [%pat? nonform___lhs] @@ translate ?desc_label lhs in
     let bin_op = binary_op bin_op in
     let rhs1_setup, rhs1_typ, _rhs1_slot, rhs1 =
       setup_data [%pat? nonform___rhs1] @@ translate rhs1 in
@@ -238,7 +249,8 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
   | [%expr [%e? accu_op] [%e? lhs] ([%e? un_op] ([%e? rhs] ~projections:[%e? projections])) ] ->
       (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
     let accu_op = assignment_op accu_op in
-    let lhs_setup, lhs_typ, _lhs_slot, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
+    let lhs_setup, lhs_typ, _lhs_slot, lhs =
+      setup_data [%pat? nonform___lhs] @@ translate ?desc_label lhs in
     let un_op = unary_op un_op in
     let rhs_setup, rhs_typ, _rhs_slot, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
     let guess_zero_out =
@@ -253,7 +265,8 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
 
   | [%expr [%e? accu_op] [%e? lhs] ([%e? rhs] ~projections:[%e? projections]) ] ->
     let accu_op = assignment_op accu_op in
-    let lhs_setup, lhs_typ, _lhs_slot, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
+    let lhs_setup, lhs_typ, _lhs_slot, lhs =
+      setup_data [%pat? nonform___lhs] @@ translate ?desc_label lhs in
     let rhs_setup, rhs_typ, _rhs_slot, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
     let guess_zero_out =
       if List.exists ~f:is_grad [lhs_typ; rhs_typ]
@@ -275,7 +288,7 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
       else [%expr Shape.Einsum [%e logic]] in
     let accu_op = assignment_op accu_op in
     let lhs_setup, lhs_typ, _lhs_slot, lhs_id =
-      setup_node_id [%pat? nonform___lhs] @@ translate lhs in
+      setup_node_id [%pat? nonform___lhs] @@ translate ?desc_label lhs in
     let bin_op = binary_op bin_op in
     let rhs1_setup, rhs1_typ, _rhs1_slot, rhs1_id =
       setup_node_id [%pat? nonform___rhs1] @@ translate rhs1 in
@@ -310,7 +323,7 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
       else [%expr Shape.Permute [%e logic]] in
     let accu_op = assignment_op accu_op in
     let lhs_setup, lhs_typ, _lhs_slot, lhs_id =
-     setup_node_id [%pat? nonform___lhs] @@ translate lhs in
+     setup_node_id [%pat? nonform___lhs] @@ translate ?desc_label lhs in
     let un_op = unary_op un_op in
     let rhs_setup, rhs_typ, _rhs_slot, rhs_id =
      setup_node_id [%pat? nonform___rhs] @@ translate rhs in
@@ -330,7 +343,7 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
   | [%expr [%e? accu_op] [%e? lhs] ([%e? rhs] ~logic:[%e? logic]) ] ->
     let accu_op = assignment_op accu_op in
     let lhs_setup, lhs_typ, _lhs_slot, lhs_id =
-     setup_node_id [%pat? nonform___lhs] @@ translate lhs in
+     setup_node_id [%pat? nonform___lhs] @@ translate ?desc_label lhs in
     let rhs_setup, rhs_typ, _rhs_slot, rhs_id =
      setup_node_id [%pat? nonform___rhs] @@ translate rhs in
     let guess_zero_out =
@@ -347,7 +360,7 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
       [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2])) ] when is_assignment op_ident ->
     let accu_op = assignment_op accu_op in
     let lhs_setup, lhs_typ, lhs_slot, lhs =
-      setup_data [%pat? nonform___lhs] @@ translate lhs in
+      setup_data [%pat? nonform___lhs] @@ translate ?desc_label lhs in
     let bin_op = binary_op bin_op in
     let rhs1_setup, rhs1_typ, rhs1_slot, rhs1 =
       setup_data [%pat? nonform___rhs1] @@ translate rhs1 in
@@ -375,7 +388,8 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
       [%e? lhs] ([%e? un_op] [%e? rhs]) ] when is_assignment op_ident ->
       (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
     let accu_op = assignment_op accu_op in
-    let lhs_setup, lhs_typ, lhs_slot, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
+    let lhs_setup, lhs_typ, lhs_slot, lhs =
+      setup_data [%pat? nonform___lhs] @@ translate ?desc_label lhs in
     let un_op = unary_op un_op in
     let rhs_setup, rhs_typ, rhs_slot, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
     let guess_zero_out =
@@ -399,7 +413,8 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
       [%e? lhs] [%e? rhs] ] when is_assignment op_ident ->
       (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
     let accu_op = assignment_op accu_op in
-    let lhs_setup, lhs_typ, lhs_slot, lhs = setup_data [%pat? nonform___lhs] @@ translate lhs in
+    let lhs_setup, lhs_typ, lhs_slot, lhs = 
+      setup_data [%pat? nonform___lhs] @@ translate ?desc_label lhs in
     let rhs_setup, rhs_typ, rhs_slot, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
     let guess_zero_out =
       if List.exists ~f:is_grad [lhs_typ; rhs_typ]
@@ -419,7 +434,7 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
     with_forward_args setups body
 
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3] ] ->
-    let typ1, slot1, expr1 = translate expr1 in
+    let typ1, slot1, expr1 = translate ?desc_label expr1 in
     let _typ2, slot2, expr2 = translate expr2 in
     let _typ3, slot3, expr3 = translate expr3 in
     let slot = Option.value ~default:Undet @@
@@ -427,14 +442,14 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
     typ1, slot, [%expr [%e expr1] [%e expr2] [%e expr3]]
 
   | [%expr [%e? expr1] [%e? expr2] ] ->
-    let typ1, slot1, expr1 = translate expr1 in
+    let typ1, slot1, expr1 = translate ?desc_label expr1 in
     let _typ2, slot2, expr2 = translate expr2 in
     let slot = Option.value ~default:Undet @@
       List.find ~f:(function Undet -> false | _ -> true) [slot1; slot2] in
     typ1, slot, [%expr [%e expr1] [%e expr2]]
 
   | {pexp_desc=Pexp_fun (arg_label, arg, opt_val, body); _} as expr ->
-    let typ, slot, body = translate body in
+    let typ, slot, body = translate ?desc_label body in
     typ, slot, {expr with pexp_desc=Pexp_fun (arg_label, arg, opt_val, body)}
  
   | [%expr while [%e? _test_expr] do [%e? _body] done ] ->
@@ -454,25 +469,25 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
 
   | [%expr [%e? expr1] ; [%e? expr2] ] ->
     let _typ1, _slot1, expr1 = translate expr1 in
-    let _typ2, _slot1, expr2 = translate expr2 in
+    let _typ2, _slot1, expr2 = translate ?desc_label expr2 in
     Code, Nonslot, [%expr Code.Seq ([%e expr1], [%e expr2])]
 
   | [%expr if [%e? expr1] then [%e? expr2] else [%e? expr3]] ->
-    let typ2, slot2, expr2 = translate expr2 in
-    let typ3, slot3, expr3 = translate expr3 in
+    let typ2, slot2, expr2 = translate ?desc_label expr2 in
+    let typ3, slot3, expr3 = translate ?desc_label expr3 in
     let typ = if is_unknown typ2 then typ3 else typ2 in
     let slot = Option.value ~default:Undet @@
       List.find ~f:(function Undet -> false | _ -> true) [slot2; slot3] in
     typ, slot, [%expr if [%e expr1] then [%e expr2] else [%e expr3]]
 
   | [%expr if [%e? expr1] then [%e? expr2]] ->
-    let _typ2, _slot2, expr2 = translate expr2 in
+    let _typ2, _slot2, expr2 = translate ?desc_label expr2 in
     Code, Nonslot, [%expr if [%e expr1] then [%e expr2] else Code.Noop]
 
   | { pexp_desc = Pexp_match (expr1, cases); _ } ->
     let typs, slots, cases =
       List.unzip3 @@ List.map cases ~f:(fun ({pc_rhs; _} as c) ->
-        let typ, slot, pc_rhs = translate pc_rhs in typ, slot, {c with pc_rhs}) in
+        let typ, slot, pc_rhs = translate ?desc_label pc_rhs in typ, slot, {c with pc_rhs}) in
     let typ = Option.value ~default:Unknown @@
       List.find typs ~f:(Fn.non is_unknown) in
     let slot = Option.value ~default:Undet @@
@@ -489,11 +504,11 @@ let rec translate (expr: expression): expr_type * projections_slot * expression 
         {expr with pexp_desc=Pexp_let (recflag, bindings, translate body)} *)
 
   | { pexp_desc = Pexp_open (decl, body); _ } ->
-    let typ, slot, body = translate body in
+    let typ, slot, body = translate ?desc_label body in
     typ, slot, {expr with pexp_desc=Pexp_open (decl, body)}
 
   | { pexp_desc = Pexp_letmodule (name, module_expr, body); _ } ->
-    let typ, slot, body = translate body in
+    let typ, slot, body = translate ?desc_label body in
     typ, slot, {expr with pexp_desc=Pexp_letmodule (name, module_expr, body)}
 
   | _ -> Unknown, Undet, expr
@@ -504,7 +519,7 @@ let expr_expander ~loc ~path:_ payload =
     (* We are at the %ocannl annotation level: do not tranlsate the body. *)
      let bindings = List.map bindings
       ~f:(fun vb ->
-        let _, _, v = translate vb.pvb_expr in
+        let _, _, v = translate ~desc_label:vb.pvb_pat vb.pvb_expr in
          { vb with pvb_expr=[%expr let open! NFDSL.O in [%e v]] }) in
      {payload with pexp_desc=Pexp_let (recflag, bindings, body)}
   | expr ->
@@ -528,7 +543,7 @@ let translate_str ({pstr_desc; _} as str) =
   | Pstr_value (recf, bindings) ->
     let f vb =
       let loc = vb.pvb_loc in
-      let _, _, v = translate vb.pvb_expr in
+      let _, _, v = translate ~desc_label:vb.pvb_pat vb.pvb_expr in
       {vb with pvb_expr=[%expr let open! NFDSL.O in [%e v]]} in
     {str with pstr_desc=Pstr_value (recf, List.map bindings ~f)}
   | _ -> str

@@ -14,6 +14,16 @@ let rec pat2expr pat =
      Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
        "ppx_ocannl requires a pattern identifier here: try using an `as` alias."
 
+let pat2string pat =
+  ignore (Caml.Format.flush_str_formatter());
+  Ocaml_common.Printast.expression 80 Caml.Format.str_formatter @@ pat2expr pat;
+  Ast_helper.Exp.constant ~loc:pat.ppat_loc @@
+  Pconst_string (Caml.Format.flush_str_formatter(), pat.ppat_loc, None)
+
+let opt_pat2string ~loc = function
+  | None -> [%expr None]
+  | Some pat -> [%expr Some [%e pat2string pat]]
+
 let rec collect_list accu = function
   | [%expr [%e? hd] :: [%e? tl]] -> collect_list (hd::accu) tl
   | [%expr []] -> List.rev accu

@@ -129,7 +129,7 @@ let raw_unop ~zero_out ~accum ~lhs_id ~lhs_is_grad ~op ~rhs_id ~rhs_is_grad ~log
   let rhs = Code.CDSL.(if rhs_is_grad then grad_of_id rhs_id else value_of_id rhs_id) in
   Code.Accum_unop { zero_out; accum; lhs; op; rhs; projections}
   
-let binop ~op_label ?(compose_op=Shape.Pointwise_bin) ~op_body ~grad_body ~is_form m1 m2 =
+let binop ~op_label ?desc_label ?(compose_op=Shape.Pointwise_bin) ~op_body ~grad_body ~is_form m1 m2 =
   (* Note: do not capture m1, m2 in any closure, so they can be GC'd. *)
   (if (m1.id < !first_session_id) && not m1.cross_session_persistent then
     raise @@ Session_error ("The subformula is outside of current session", Some m1));
@@ -143,7 +143,7 @@ let binop ~op_label ?(compose_op=Shape.Pointwise_bin) ~op_body ~grad_body ~is_fo
   let children = [{NodeUI.sub_node_id=m1.id; computed_externally=m1_processed};
                   {sub_node_id=m2.id; computed_externally=m2_processed}] in
   let n = NodeUI.create_of_promoted_precision ~is_form m1.node.node m2.node.node
-      ~op_label ~children () in
+      ~op_label ?desc_label ~children () in
   let id = n.id in
   let shape = n.shape in
   let shape_logic = Shape.Broadcast (compose_op, m1.shape, m2.shape) in
@@ -208,11 +208,12 @@ let binop ~op_label ?(compose_op=Shape.Pointwise_bin) ~op_body ~grad_body ~is_fo
     global_roots := Map.add_exn !global_roots ~key:id ~data:root;
     formula
 
-let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1: t =
+let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1: t =
   (* Note: do not capture m in any closure, so it can be GC'd. *)
   let m1_processed = Option.is_some m1.form && not @@ Map.mem !global_roots m1.id in
   let children = [{NodeUI.sub_node_id=m1.id; computed_externally=m1_processed}] in
-  let n = NodeUI.create_of_same_precision_as ~is_form m1.node.node ~op_label ~children () in
+  let n =
+    NodeUI.create_of_same_precision_as ~is_form m1.node.node ~op_label ?desc_label ~children () in
   let id = n.id in
   let shape = n.shape in
   (match init_shape with
@@ -270,11 +271,12 @@ let unop ~op_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1: t 
     formula
 
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label ?needs_gradient ~is_form
+let term ~label ?desc_label ?needs_gradient ~is_form
     ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced
     (init_or_fetch: (Code.init_op, Code.fetch_op) Either.t) =
   let n = NodeUI.create ~value_prec:Single ~grad_prec:Single ~is_form ()
-      ~op_label:label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children:[] () in
+      ~op_label:label ?desc_label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced
+      ~children:[] () in
   let id = n.id in
   let shape = n.shape in
   let shape_logic = Shape.Terminal in
@@ -368,13 +370,13 @@ end)
 
 let float_to_label v = Float.to_string_hum ~strip_zero:true v
 
-let number ~is_form ?(axis_label="") c =
+let number ?desc_label ~is_form ?(axis_label="") c =
   (* Note: no axis label so that we do not conflict with user labels. *)
-  term ~label:(float_to_label c) ~is_form ~needs_gradient:false
+  term ?desc_label ~label:(float_to_label c) ~is_form ~needs_gradient:false
     ~batch_dims:[] ~input_dims:[] ~output_dims:[1] ~axis_labels:axis_label
     (First (Constant_of_value c))
 
-let ndarray ~is_form ?(needs_gradient=false) ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[])
+let ndarray ?desc_label ~is_form ?(needs_gradient=false) ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[])
     ?axis_labels ?label values =
   let label =
     match label with
@@ -393,18 +395,18 @@ let ndarray ~is_form ?(needs_gradient=false) ?(batch_dims=[]) ?(input_dims=[]) ?
     if String.contains label '\n' then
       "c"^(NodeUI.dims_to_string @@ Array.concat_map [|batch_dims; output_dims; input_dims|] ~f:Array.of_list)
     else label in
-  term ~needs_gradient ~is_form
+  term ?desc_label ~needs_gradient ~is_form
     ~batch_dims ~input_dims ~output_dims ?axis_labels ~deduced:Not_constrained ~label
     (First (Fixed_constant values))
 
-let params ?axis_labels ?input_dims ?output_dims ?deduced ?values ?value label =
+let params ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?values ?value label =
   let init = match values, value with
     | Some _, Some _ -> invalid_arg "Formula.params: do not provide both ~values and ~value"
     | Some values, _ -> Either.First (Code.Fixed_constant values)
     | _, Some value -> Either.First (Code.Constant_of_value value)
     | None, None -> First Standard_uniform in
-  term ~needs_gradient:true ~is_form:true ~batch_dims:[] ?input_dims ?output_dims ?axis_labels
-    ?deduced ~label init
+  term ?desc_label ~needs_gradient:true ~is_form:true
+    ~batch_dims:[] ?input_dims ?output_dims ?axis_labels ?deduced ~label init
 
 module FDSL = struct
   let term = term ~is_form:true

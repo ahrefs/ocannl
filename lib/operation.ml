@@ -40,28 +40,28 @@ let matmul = mul Compose
 
     Note that ["a,b->c"] from [numpy] is ["a;b=>c"] in OCANNL, since ["->"] is used to separate the input
     and the output axes. *)
-let einsum spec =
+let einsum ?desc_label spec =
   let open Code in
   let module NFDSL = struct module O = struct end end in
   let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
     n =+ n1 * n2 in
   let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
     n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad in
-  Formula.binop ~compose_op:(Einsum spec) ~op_label:";=>" ~op_body ~grad_body
+  Formula.binop ?desc_label ~compose_op:(Einsum spec) ~op_label:";=>" ~op_body ~grad_body
 
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract diagonals,
     compute traces etc.
 
     Note that ["a->c"] from [numpy] is ["a=>c"] in OCANNL, since ["->"] is used to separate the input
     and the output axes. *)
-let einsum1 spec =
+let einsum1 ?desc_label spec =
   let open Code in
   let module NFDSL = struct module O = struct end end in
   let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) projections =
     n =+ n1 in
   let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) projections =
     n1.grad =+ n.grad in
-  Formula.unop ~transpose_op:(Permute spec) ~op_label:"=>" ~op_body ~grad_body
+  Formula.unop ?desc_label ~transpose_op:(Permute spec) ~op_label:"=>" ~op_body ~grad_body
 
 let relu =
   let open Code in
@@ -78,11 +78,11 @@ module NFO_without_pow = struct
   let (+) = add ~is_form:false
   let (!/) = relu ~is_form:false
   let (!.) = Formula.number ~is_form:false
-  let (-) m1 m2 = m1 + !.(-1.) *. m2
-  let (~-) m = !.(-1.) *. m
+  let (-) ?desc_label m1 m2 = (+) ?desc_label m1 ((!. (-1.)) *. m2)
+  let (~-) ?desc_label m = ( *. ) ?desc_label !.(-1.)  m
 end
 
-let rec pointpow ~is_form p m1: Formula.t =
+let rec pointpow ?desc_label ~is_form p m1: Formula.t =
   let module NFDSL = struct module O = NFO_without_pow end in
   let open Code in
   let p_f = Formula.number ~is_form p in
@@ -95,21 +95,22 @@ let rec pointpow ~is_form p m1: Formula.t =
       fun ~(n:NodeUI.t) ~(n1:NodeUI.t) ~n2:_ projections -> n1.grad =+ p_f *. m1 * n.grad
     else
       fun ~(n:NodeUI.t) ~(n1:NodeUI.t) ~n2:_ projections -> n1.grad =+ (p_f *. m1 **. (p -. 1.)) * n.grad in
-  Formula.binop ~compose_op:Pointwise_bin ~op_label:"**." ~op_body ~grad_body ~is_form m1 p_f
+  Formula.binop ?desc_label ~compose_op:Pointwise_bin ~op_label:"**."
+    ~op_body ~grad_body ~is_form m1 p_f
 
-let range ~is_form ?axis_label upto =
-  Formula.term ~is_form ~label:("0"^"..."^Int.to_string upto)
+let range ?desc_label ~is_form ?axis_label upto =
+  Formula.term ?desc_label ~is_form ~label:("0"^"..."^Int.to_string upto)
     ~batch_dims:[] ~input_dims:[] ~output_dims:[upto + 1] ?axis_labels:axis_label
     (First Range_over_offsets)
 
-let range_of_shape ~is_form ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[]) ?axis_labels () =
+let range_of_shape ?desc_label ~is_form ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[]) ?axis_labels () =
   let dims = Array.concat_map [|batch_dims; output_dims; input_dims|] ~f:Array.of_list in
-  Formula.term ~is_form ~needs_gradient:false ~batch_dims ~input_dims ~output_dims ?axis_labels
+  Formula.term ?desc_label ~is_form ~needs_gradient:false ~batch_dims ~input_dims ~output_dims ?axis_labels
     ~label:("r"^NodeUI.dims_to_string dims) (First Range_over_offsets)
 
-let data ?axis_labels ?(needs_gradient=false) ~label ~batch_dims ~output_dims reset_op =
-  Formula.term ~label ~is_form:true ~needs_gradient ~batch_dims ~input_dims:[] ~output_dims 
-    ?axis_labels (Second reset_op)
+let data ?desc_label ?axis_labels ?(needs_gradient=false) ~label ~batch_dims ~output_dims reset_op =
+  Formula.term ?desc_label ~label ~is_form:true ~needs_gradient
+    ~batch_dims ~input_dims:[] ~output_dims ?axis_labels (Second reset_op)
 
 let assign =
   let module NFDSL = struct module O = struct end end in
@@ -117,7 +118,8 @@ let assign =
     lhs =: rhs ~projections in
   assign
 
-let assign_op field ~(n:NodeUI.t) ~(n1:NodeUI.t) projections = assign ~lhs:(field n) ~rhs:(field n1) projections
+let assign_op field ~(n:NodeUI.t) ~(n1:NodeUI.t) projections =
+  assign ~lhs:(field n) ~rhs:(field n1) projections
 
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient =
@@ -131,31 +133,31 @@ let stop_gradient =
 let stop_broadcast m = Shape.set_dims_type m.Formula.shape Shape.fixed
 
 (** [identity] introduces a new node, which is an identity in both the forward and backward pass. *)
-let identity ~is_form m =
+let identity ?desc_label ~is_form m =
   let grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) = 
     assign_op (Code.CDSL.data_of_node `Grad) ~n:n1 ~n1:n in
   let op_body = assign_op @@ Code.CDSL.data_of_node `Value in
-  Formula.(unop ~init_shape:m.shape ~transpose_op:Pointwise_un ~op_label:"="
+  Formula.(unop ?desc_label ~init_shape:m.shape ~transpose_op:Pointwise_un ~op_label:"="
              ~op_body ~grad_body ~is_form)
 
 module O = struct
   let ( * ) = matmul ~is_form:true
   let ( *. ) = pointmul ~is_form:true
   let (+) = add ~is_form:true
-  let ( **. ) base exp = pointpow exp base ~is_form:true
+  let ( **. ) ?desc_label base exp = pointpow ?desc_label exp base ~is_form:true
   let (!/) = relu ~is_form:true
-  let (!~) label = Formula.params label
+  let (!~) ?desc_label label = Formula.params ?desc_label label
   let (!.) = Formula.number ~is_form:true
-  let (-) m1 m2 = m1 + !.(-1.) *. m2
-  let (~-) m = !.(-1.) *. m
-  let (/.) m1 m2 = m1 *. m2 **. (-1.0)
+  let (-) ?desc_label m1 m2 = (+) ?desc_label m1 (!.(-1.) *. m2)
+  let (~-) ?desc_label m = ( *. ) ?desc_label !.(-1.) m
+  let (/.) ?desc_label m1 m2 = ( *. ) ?desc_label m1 (m2 **. (-1.0))
 end
       
 module FDSL = struct
   include Formula.FDSL
   module O = O
-  let einsum s = einsum s ~is_form:true
-  let einsum1 s = einsum1 s ~is_form:true
+  let einsum ?desc_label s = einsum ?desc_label s ~is_form:true
+  let einsum1 ?desc_label s = einsum1 ?desc_label s ~is_form:true
   let range = range ~is_form:true
   let range_of_shape = range_of_shape ~is_form:true
   let data = data
@@ -166,15 +168,15 @@ end
 
 module NFO = struct
   include NFO_without_pow
-  let ( **. ) base exp = pointpow exp base ~is_form:false
-  let (/.) m1 m2 = m1 *. m2 **. (-1.0)
+  let ( **. ) ?desc_label base exp = pointpow ?desc_label exp base ~is_form:false
+  let (/.) ?desc_label m1 m2 = ( *. ) ?desc_label m1 (m2 **. (-1.0))
 end
 
 module NFDSL = struct
   include Formula.NFDSL
   module O = NFO
-  let einsum s = einsum s ~is_form:false
-  let einsum1 s = einsum1 s ~is_form:false
+  let einsum ?desc_label s = einsum ?desc_label s ~is_form:false
+  let einsum1 ?desc_label s = einsum1 ?desc_label s ~is_form:false
   let term = Formula.term ~is_form:false
   let range = range ~is_form:false
   let range_of_shape = range_of_shape ~is_form:false
