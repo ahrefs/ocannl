@@ -81,6 +81,7 @@ module NFO_without_pow = struct
   let (+) = add ~is_form:false
   let (!/) = relu ~is_form:false
   let (!.) = Formula.number ~is_form:false
+  let (!..) ?desc_label i = Formula.number ?desc_label ~is_form:false @@ Float.of_int i
   let (-) ?desc_label m1 m2 = (+) ?desc_label m1 ((!. (-1.)) *. m2)
   let (~-) ?desc_label m = ( *. ) ?desc_label !.(-1.)  m
 end
@@ -151,6 +152,7 @@ module O = struct
   let (!/) = relu ~is_form:true
   let (!~) ?desc_label label = Formula.params ?desc_label label
   let (!.) = Formula.number ~is_form:true
+  let (!..) ?desc_label i = Formula.number ?desc_label ~is_form:true @@ Float.of_int i
   let (-) ?desc_label m1 m2 = (+) ?desc_label m1 (!.(-1.) *. m2)
   let (~-) ?desc_label m = ( *. ) ?desc_label !.(-1.) m
   let (/.) ?desc_label m1 m2 = ( *. ) ?desc_label m1 (m2 **. (-1.0))
