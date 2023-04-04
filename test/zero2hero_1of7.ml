@@ -170,19 +170,61 @@ let%expect_test "Simple gradients" =
   let open Session.SDSL in
   drop_all_sessions();
   Random.init 0;
-  let%nn_op f = "a" [2] *. "b" [-3] + "c" [10] in
+  let%nn_op e = "a" [2] *. "b" [-3] in
+  let%nn_op d = e + "c" [10] in
+  let%nn_op l = d *. "f" [-2] in
+  minus_learning_rate := Some (
+      FDSL.data ~label:"minus_lr" ~batch_dims:[] ~output_dims:[1]
+        (Init_op (Constant_of_value 0.1)));
   refresh_session ();
-  print_node_tree ~with_grad:true ~depth:9 f.id;
+  print_node_tree ~with_grad:true ~depth:9 l.id;
   [%expect {|
-               [5] f <+>
-                4.00e+0
-               Gradient
-                1.00e+0
-         [4] <*.>        │[3] <c>
-          -6.00e+0       │ 1.00e+1
-         Gradient        │Gradient
-          1.00e+0        │ 1.00e+0
-    [1] <a>   │[2] <b>   │
-     2.00e+0  │ -3.00e+0 │
-    Gradient  │Gradient  │
-     -3.00e+0 │ 2.00e+0  │ |}]
+                    [7] l <*.>
+                     -8.00e+0
+                    Gradient
+                     1.00e+0
+              [5] d <+>            │[6] <f>
+               4.00e+0             │ -2.00e+0
+              Gradient             │Gradient
+               -2.00e+0            │ 4.00e+0
+         [3] e <*.>     │[4] <c>   │
+          -6.00e+0      │ 1.00e+1  │
+         Gradient       │Gradient  │
+          -2.00e+0      │ -2.00e+0 │
+    [1] <a>  │[2] <b>   │          │
+     2.00e+0 │ -3.00e+0 │          │
+    Gradient │Gradient  │          │
+     6.00e+0 │ -4.00e+0 │          │ |}];
+  Option.value_exn !update_params ();
+  refresh_session ();
+  print_node_tree ~with_grad:true ~depth:9 l.id;
+  [%expect {|
+                    [7] l <*.>
+                     -1.54e+0
+                    Gradient
+                     1.00e+0
+              [5] d <+>            │[6] <f>
+               9.60e-1             │ -1.60e+0
+              Gradient             │Gradient
+               -1.60e+0            │ 9.60e-1
+         [3] e <*.>     │[4] <c>   │
+          -8.84e+0      │ 9.80e+0  │
+         Gradient       │Gradient  │
+          -1.60e+0      │ -1.60e+0 │
+    [1] <a>  │[2] <b>   │          │
+     2.60e+0 │ -3.40e+0 │          │
+    Gradient │Gradient  │          │
+     5.44e+0 │ -4.16e+0 │          │ |}]
+
+let%expect_test "tanh plot" =
+  (* TODO: NOT IMPLEMENTED *)
+  ()
+
+let%expect_test "2D neuron" =
+  let open Session.SDSL in
+  drop_all_sessions();
+  Random.init 0;
+  let%nn_op n = "w" [-3, 1] * "x" [2; 0] + "b" [6.7] in
+  refresh_session ();
+  print_node_tree ~with_grad:true ~depth:9 n.id;
+  [%expect {| |}]
