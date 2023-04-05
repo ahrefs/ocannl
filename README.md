@@ -48,6 +48,7 @@ OCANNL follows different design choices than [OWL](https://ocaml.xyz/). For exam
 ## Installation
 
 Some ideas regarding installation (skip or substitute equivalent actions etc.):
+* `gcc --version`, then install `libgccjit-`version`-dev`
 * opam switch create 5.0-flambda ocaml-variants.5.0.0+options ocaml-option-flambda
 * eval $(opam env --switch=5.0-flambda)
 * opam install lsp ocamlformat

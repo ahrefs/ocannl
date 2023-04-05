@@ -1,8 +1,9 @@
 (lang dune 3.6)
+(using ctypes 0.2)
 
 (name ocannl)
 
-(version 0.0.1)
+(version 0.1.0)
 
 (generate_opam_files true)
 
@@ -21,8 +22,8 @@
  (name ocannl)
  (synopsis "A from-scratch Deep Learning library with CUDA, operator fusion, staged compilation, backprop")
  (description "A longer description")
- (depends ocaml dune base core printbox printbox-text stdio ppx_jane ppx_expect)
+ (depends ocaml dune base core ctypes ctypes-foreign printbox printbox-text stdio ppx_jane ppx_expect)
  (tags
-  (deeplearning backprop CUDA)))
+  (deeplearning backprop jit CUDA)))
 
 ; See the complete stanza docs at https://dune.readthedocs.io/en/stable/dune-files.html#dune-project
