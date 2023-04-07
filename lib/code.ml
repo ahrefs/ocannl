@@ -106,12 +106,12 @@ let remove_updates data c =
 
 let all_parallel = List.fold ~init:Noop ~f:(fun sts st -> Par (st, sts))
 
-
 (** *** Low-level representation. *)
 
 (** Cases: [unit low_level] -- code, [float low_level] -- single number at some precision,
     [data low_level] -- a tensor. *)
 type _ low_level =
+  | Comment: string -> unit low_level
   | Lines: unit low_level array -> unit low_level
   | For_loop: {index: Shape.symbol; from_: int; to_: int; body: unit low_level} -> unit low_level
   | Value_at_node_id: int -> data low_level
@@ -126,10 +126,12 @@ type _ low_level =
   | Unoptimized_get: data low_level * Shape.symbolic_axis array -> float low_level
   | Unoptimized_binop: binop * float low_level * float low_level -> float low_level
   | Unoptimized_unop: unop * float low_level -> float low_level
-  | Assign_routine: routine * unit low_level -> unit low_level
-  | Assign_suspension: unit low_level -> unit low_level
-  | Assign_session_prepare_step: unit low_level -> unit low_level
-  | Comment: string -> unit low_level
+
+type low_level_program =
+  | Perform of unit low_level
+  | Assign_routine of routine * unit low_level
+  | Assign_suspension of unit low_level
+  | Assign_session_prepare_step of unit low_level
 (* [@@deriving sexp] *)
 
 let data_pointer (xhs: data) =
@@ -202,11 +204,11 @@ let rec unoptimized (code: t): unit low_level =
   | Fetch {tensor; fetch_op} ->
     LLFetch {tensor=data_pointer tensor; fetch_op}
 
-let unoptimized_program prog: unit low_level =
+let unoptimized_program prog: low_level_program =
   match prog with
-  | Initialization proc -> unoptimized proc
+  | Initialization proc -> Perform (unoptimized proc)
   | Node_specific {procedure; routine; label} ->
-    Lines [|Comment label; Assign_routine (routine, unoptimized procedure)|]
+    Assign_routine (routine, Lines [|Comment label; unoptimized procedure|])
   | Suspension proc -> Assign_suspension (unoptimized proc)
   | Session_prepare_step proc -> Assign_session_prepare_step (unoptimized proc)
 
@@ -242,14 +244,6 @@ let interpret_llc ?(with_debug=true) llc =
       set_from_float (get id).value (lookup env indices) @@ loop_float env llv
     | Unoptimized_set (Gradient_at_node_id id, indices, llv) ->
       set_from_float (get_form id).grad (lookup env indices) @@ loop_float env llv
-    | Assign_routine ({id; field=`Forward}, proc) ->
-      (get_form id).forward := Some (fun () -> loop proc)
-    | Assign_routine ({id; field=`Backprop}, proc) ->
-      (get_form id).backprop := Some (fun () -> loop proc)
-    | Assign_suspension (proc) ->
-      most_recent_suspension := Some (fun () -> loop proc)
-    | Assign_session_prepare_step (proc) ->
-      global.session_prepare_step := Some (fun () -> loop proc)
     | Comment message when with_debug -> Stdio.printf "%s\n%!" message
     | Comment _ -> ()
     and loop_float env llv =
@@ -272,6 +266,17 @@ let interpret_llc ?(with_debug=true) llc =
     | Unoptimized_unop (Relu, llv) -> let v = loop llv in if v > 0.0 then v else 0.0 in
   loop_proc (Map.empty (module Shape.Symbol)) llc
 
+let interpret_llprog ?(with_debug=true) = function
+  | Perform proc -> interpret_llc ~with_debug proc
+  | Assign_routine ({id; field=`Forward}, proc) ->
+    (Ocannl_runtime.Node.get_form id).forward := Some (fun () -> interpret_llc ~with_debug proc)
+  | Assign_routine ({id; field=`Backprop}, proc) ->
+    (Ocannl_runtime.Node.get_form id).backprop := Some (fun () -> interpret_llc ~with_debug proc)
+  | Assign_suspension (proc) ->
+    Ocannl_runtime.Node.most_recent_suspension := Some (fun () -> interpret_llc ~with_debug proc)
+  | Assign_session_prepare_step (proc) ->
+    Ocannl_runtime.Node.global.session_prepare_step := Some (fun () -> interpret_llc ~with_debug proc)
+
 let fprint_code ppf c =
   (* TODO: something nicely concise. *)
   Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_t c  
@@ -281,8 +286,8 @@ let fprint_program ppf prog =
   Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_program prog  
 
 let interpret_program ?(with_debug=true) prog: string option =
-  let llc = unoptimized_program prog in
-  let () = interpret_llc ~with_debug llc in
+  let llp = unoptimized_program prog in
+  let () = interpret_llprog ~with_debug llp in
   (* If we were interpreting bytecode, we would return the bytecode for debugging purposes. *)
   (* Some (Sexp.to_string_hum @@ sexp_of_low_level llc) *)
   Some (Caml.Format.asprintf "%a" fprint_program prog)

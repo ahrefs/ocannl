@@ -83,16 +83,6 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
     | Unoptimized_unop (Identity, v) -> pp_ll ppf v
     | Unoptimized_unop (Relu, v) ->
       fprintf ppf "(@[<2>let a = %a in@ if a > 0.0 then a else 0.0@]@,)" pp_ll v
-    | Assign_routine ({id; field=`Forward}, proc) ->
-      fprintf ppf "@[<2>(get_form %d).forward :=@ Some (@[<2>fun () ->@ %a@]@,)@]" id pp_ll proc
-    | Assign_routine ({id; field=`Backprop}, proc) ->
-      fprintf ppf "@[<2>(get_form %d).backprop :=@ Some (@[<2>fun () -> %a@]@,)@]" id pp_ll proc
-    | Assign_suspension proc ->
-      fprintf ppf
-        "@[<2>let () = most_recent_suspension@ := Some (@[<2>fun () -> %a@]@,)@]" pp_ll proc
-    | Assign_session_prepare_step proc ->
-      fprintf ppf
-        "@[<2>let () = global.session_prepare_step@ := Some (@[<2>fun () -> %a@]@,)@]" pp_ll proc
     | Comment message -> fprintf ppf "(* %s *)()" message in
   fprintf ppf "@[<v>open Base@ open Ocannl_runtime@ open Node@ open Base.Float@ ";
   (match c with
@@ -106,6 +96,26 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
 
    | c -> pp_ll ppf c);
   fprintf ppf "@]"
+
+let format_ll_prog (ppf: Caml.Format.formatter) (p: Code.low_level_program): unit =
+    let open Code in
+    let open Caml.Format in
+    match p with
+    | Perform proc -> format_low_level ~as_toplevel:true ppf proc
+    | Assign_routine ({id; field=`Forward}, proc) ->
+      fprintf ppf "@[<2>(get_form %d).forward :=@ Some (@[<2>fun () ->@ %a@]@,)@]"
+        id (format_low_level ~as_toplevel:true) proc
+    | Assign_routine ({id; field=`Backprop}, proc) ->
+      fprintf ppf "@[<2>(get_form %d).backprop :=@ Some (@[<2>fun () -> %a@]@,)@]"
+        id (format_low_level ~as_toplevel:true) proc
+    | Assign_suspension proc ->
+      fprintf ppf
+        "@[<2>let () = most_recent_suspension@ := Some (@[<2>fun () -> %a@]@,)@]"
+        (format_low_level ~as_toplevel:true) proc
+    | Assign_session_prepare_step proc ->
+      fprintf ppf
+        "@[<2>let () = global.session_prepare_step@ := Some (@[<2>fun () -> %a@]@,)@]" 
+        (format_low_level ~as_toplevel:true) proc
 
 let code_file_prefix = "nnrun"
 let column_width = 100
@@ -126,7 +136,7 @@ let create_comp_unit compiled =
   * Defensive variant: *)
   Caml.Format.pp_set_geometry Caml.Format.str_formatter
     ~max_indent:(column_width/2) ~margin:column_width;
-  format_low_level ~as_toplevel:true Caml.Format.str_formatter compiled;
+  format_ll_prog Caml.Format.str_formatter compiled;
   let contents = Caml.Format.flush_str_formatter() in
   Stdio.Out_channel.output_string oc contents;
   Stdio.Out_channel.flush oc;
@@ -223,7 +233,7 @@ let load_native ?(with_debug=true) (prog: Code.program) =
           let contents =
             Caml.Format.pp_set_geometry Caml.Format.str_formatter
               ~max_indent:(column_width/2) ~margin:column_width;
-            format_low_level ~as_toplevel:true Caml.Format.str_formatter compiled;
+            format_ll_prog Caml.Format.str_formatter compiled;
             Caml.Format.flush_str_formatter() in
           try
             let plugin_fname, log_fname, exitc = compile_source ~with_debug source_fname in
