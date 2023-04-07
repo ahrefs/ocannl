@@ -94,22 +94,15 @@ let set_from_float arr idx v =
 type init_op =
   | Unspecified
   (** Uninitialized. On fetch, values may remain unchanged, but are not guaranteed to. *)
-  | Constant_of_value of float
-  (** Puts the value in all cells. *)
-  | Fixed_constant of float array
-  (** Fills in the numbers where the rightmost axis is contiguous. If used as [fetch_op.Init_op],
-      the size of the array provided can be a multiple of the size of the tensor, and the tensor
-      will be filled with the [global.session_step]th group from the provided array, modulo
-      the number of groups. *)
-  | Range_over_axis_from_end of int
-  (** Fills in the index number of the specified axis counting from end.
-      [Range_over_axis_from_end 1] is the range over the last axis. *)
+  | Constant_stream of float array
+  (** Fills in the numbers where the rightmost axis is contiguous, looping over the provided values.
+      If used as [fetch_op.Init_op], the size of the array provided can be a multiple of the size of
+      the tensor, and the tensor will be filled with the [global.session_step]th group from
+      the provided array, modulo the number of groups. *)
   | Range_over_offsets
   (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
   | Standard_uniform
   (** Draws the values from U(0,1). *)
-  | Standard_gaussian
-  (** Draws the values from N(0,1). *)
 [@@deriving sexp]
 
 (** Resets a tensor by performing the specified computation or data fetching. [session_step]
@@ -117,10 +110,6 @@ type init_op =
 type fetch_op =
   | Init_op of init_op
   | Compute_point of (session_step:int -> dims:int array -> idcs:int array -> float)
-  | Blit of {f: 'a 'b. session_step:int -> ('a, 'b) precision -> 'b}
-  (** Provides the data to blit into the tensor. *)
-  | Fills_in of {f: 'a 'b. session_step:int -> ('a, 'b) precision -> tensor:'b -> unit}
-  (* Arbitrarily fills in the tensor. *)
 [@@deriving sexp]
 
 let create_array_of_prec (type val_t arr_t) (prec: (val_t, arr_t) precision) dims: arr_t =
@@ -145,17 +134,13 @@ let create_array (type arr_t)
     (prec: (float, arr_t) precision) dims (init_op: init_op): arr_t =
   match init_op with
   | Unspecified -> create_array_of_prec prec dims
-  | Constant_of_value c -> init_array_of_prec prec dims ~f:(fun _ -> c)
-  | Fixed_constant cs ->
-    init_array_of_prec prec dims ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs))
-  | Range_over_axis_from_end d ->
-    init_array_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ idcs.(Array.length idcs - d))
+  | Constant_stream cs ->
+    let size = Array.length cs in
+    init_array_of_prec prec dims ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
   | Range_over_offsets ->
     init_array_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
   | Standard_uniform ->
     init_array_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
-  | Standard_gaussian ->
-    (* FIXME: *) failwith "NOT IMPLEMENTED YET"
 
 let create_ndarray prec dims init_op = as_ndarray prec @@ create_array prec dims init_op
 
@@ -264,33 +249,25 @@ let create (type grad_arr_t value_arr_t) ~(value_prec: ('a, value_arr_t) precisi
   node
 
 let fetch_bigarray (fetch_op: fetch_op) (type val_t b) (cast: float -> val_t)
-    (prec: (val_t, (val_t, b, Bigarray.c_layout) bigarray) precision)
+    (_prec: (val_t, (val_t, b, Bigarray.c_layout) bigarray) precision)
     (arr: (val_t, b, Bigarray.c_layout) bigarray) =
   let dims = A.dims arr in
   match fetch_op with
   | Init_op (Unspecified) ->
     ()
-  | Init_op (Constant_of_value c) ->
-    A.fill arr @@ cast c
-  | Init_op (Fixed_constant cs) ->
+  | Init_op (Constant_stream cs) ->
+    let size = Array.length cs in
     let group_offset =
-      Int.((global.session_step * Array.fold dims ~init:1 ~f:( * )) % Array.length cs) in
-    loop_bigarray arr ~f:(fun idcs -> cast cs.(indices_to_offset ~dims ~idcs + group_offset))
-  | Init_op (Range_over_axis_from_end d) ->
-    loop_bigarray arr ~f:(fun idcs -> cast @@ Float.of_int @@ idcs.(Array.length idcs - d))
+      Int.((global.session_step * Array.fold dims ~init:1 ~f:( * )) % size) in
+    loop_bigarray arr
+      ~f:(fun idcs -> cast cs.((indices_to_offset ~dims ~idcs + group_offset) % size))
   | Init_op (Range_over_offsets) ->
     loop_bigarray arr 
       ~f:(fun idcs -> cast @@ Float.of_int @@ indices_to_offset ~dims ~idcs)
   | Init_op (Standard_uniform) ->
     loop_bigarray arr ~f:(fun _ -> cast @@ Random.float_range 0.0 1.0)
-  | Init_op (Standard_gaussian) ->
-    (* FIXME: *) failwith "NOT IMPLEMENTED YET"
   | Compute_point f ->
     loop_bigarray arr ~f:(fun idcs -> cast (f ~session_step:global.session_step ~dims ~idcs))
-  | Blit {f} ->
-    A.blit (f ~session_step:global.session_step prec) arr
-  | Fills_in {f} ->
-    f ~session_step:global.session_step prec ~tensor:arr
 
 let fetch_ndarray fetch_op arr =
   let ff arr = fetch_bigarray fetch_op arr in

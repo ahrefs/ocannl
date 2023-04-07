@@ -11,7 +11,7 @@ let%expect_test "Constants and synthetic data" =
   Random.init 0;
   let big_range = Array.init 300 ~f:(Int.to_float) in
   let r_data = FDSL.data ~label:"big_range" ~batch_dims:[2] ~output_dims:[3;5]
-      (Init_op (Fixed_constant big_range)) in
+      (Init_op (Constant_stream big_range)) in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ r_data;
   [%expect {|

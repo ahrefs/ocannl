@@ -75,4 +75,40 @@ let term_needs_gradient spec =
   let pp_dims ppf dims =
     fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:pp_semi pp_print_int) @@ Array.to_list dims in
 
+  | LLFetch: {
+      tensor: data low_level; fetch_op: fetch_op;
+    } -> unit low_level
+
+    | LLFetch { tensor=Value_at_node_id id; fetch_op } ->
+      fetch_ndarray fetch_op ((get id).value)
+    | LLFetch { tensor=Gradient_at_node_id id; fetch_op } ->
+      fetch_ndarray fetch_op ((get_form id).grad)
+
+    | LLFetch { tensor=Value_at_node_id id; fetch_op } ->
+      fprintf ppf "@[<2>fetch_ndarray_callback@ ~op_or_id:%a@ ((get %d).value)@]"
+        (pp_print_fetch_op ~id) fetch_op id
+    | LLFetch { tensor=Gradient_at_node_id id; fetch_op } ->
+      fprintf ppf "@[<2>fetch_ndarray_callback@ ~op_or_id:%a@ ((get_form %d).grad)@]"
+        (pp_print_fetch_op ~id) fetch_op id
+
+
+
+  | Range_over_axis_from_end of int
+  (** Fills in the index number of the specified axis counting from end.
+      [Range_over_axis_from_end 1] is the range over the last axis. *)
+
+  | Range_over_axis_from_end d ->
+    Caml.Format.(fprintf ppf "(Range_over_axis_from_end %d)" d)
+
+  | Range_over_axis_from_end d ->
+    init_array_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ idcs.(Array.length idcs - d))
+
+  | Init_op (Range_over_axis_from_end d) ->
+    loop_bigarray arr ~f:(fun idcs -> cast @@ Float.of_int @@ idcs.(Array.length idcs - d))
+
+
+  | Standard_gaussian
+  (** Draws the values from N(0,1). *)
+
+
 ]}

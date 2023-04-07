@@ -20,9 +20,9 @@ let () =
     [|c + noise(); s + noise(); 1.0 - c + noise(); 0.5 - s + noise()|]) in
   let moons_classes = Array.init (len*2) ~f:(fun i -> if i % 2 = 0 then 1. else (-1.)) in
   let moons_input = FDSL.data ~label:"moons_input" ~batch_dims:[batch] ~output_dims:[2]
-      (Init_op (Fixed_constant moons_flat)) in
+      (Init_op (Constant_stream moons_flat)) in
   let moons_class = FDSL.data ~label:"moons_class" ~batch_dims:[batch] ~output_dims:[1]
-      (Init_op (Fixed_constant moons_classes)) in
+      (Init_op (Constant_stream moons_classes)) in
   let%nn_op mlp x = "b3" 1 + "w3" * !/ ("b2" 16 + "w2" * !/ ("b1" 16 + "w1" * x)) in
   let steps = epochs * 2 * len/batch in
   minus_learning_rate := Some (

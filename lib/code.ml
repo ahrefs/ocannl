@@ -27,19 +27,15 @@ type unop =
 type init_op = Ocannl_runtime.Node.init_op =
   | Unspecified
   (** Uninitialized. On fetch, values may remain unchanged, but are not guaranteed to. *)
-  | Constant_of_value of float
-  (** Puts the value in all cells. *)
-  | Fixed_constant of float array
-  (** Fills in the numbers where the rightmost axis is contiguous. *)
-  | Range_over_axis_from_end of int
-  (** Fills in the index number of the specified axis counting from end.
-      [Range_over_axis_from_end 1] is the range over the last axis. *)
+  | Constant_stream of float array
+  (** Fills in the numbers where the rightmost axis is contiguous, looping over the provided values.
+      If used as [fetch_op.Init_op], the size of the array provided can be a multiple of the size of
+      the tensor, and the tensor will be filled with the [global.session_step]th group from
+      the provided array, modulo the number of groups. *)
   | Range_over_offsets
   (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
   | Standard_uniform
   (** Draws the values from U(0,1). *)
-  | Standard_gaussian
-  (** Draws the values from N(0,1). *)
 [@@deriving sexp]
 
 (** Resets a tensor by performing the specified computation or data fetching. [session_step]
@@ -47,11 +43,6 @@ type init_op = Ocannl_runtime.Node.init_op =
 type fetch_op = Ocannl_runtime.Node.fetch_op =
   | Init_op of init_op
   | Compute_point of (session_step:int -> dims:int array -> idcs:int array -> float)
-  | Blit of {f: 'a 'b. session_step:int -> ('a, 'b) Ocannl_runtime.Node.precision -> 'b}
-  (** Provides the data to blit into the tensor. *)
-  | Fills_in of {f: 'a 'b. session_step:int -> ('a, 'b) Ocannl_runtime.Node.precision ->
-                   tensor:'b -> unit}
-  (* Arbitrarily fills in the tensor. *)
 [@@deriving sexp]
 
 type t =
@@ -118,9 +109,6 @@ type _ low_level =
   | For_loop: {index: Shape.symbol; from_: int; to_: int; body: unit low_level} -> unit low_level
   | Value_at_node_id: int -> data low_level
   | Gradient_at_node_id: int -> data low_level
-  | LLFetch: {
-      tensor: data low_level; fetch_op: fetch_op;
-    } -> unit low_level
   | Unoptimized_set: data low_level * Shape.symbolic_axis array * float low_level -> unit low_level
   | Unoptimized_get: data low_level * Shape.symbolic_axis array -> float low_level
   | Unoptimized_binop: binop * float low_level * float low_level -> float low_level
@@ -147,13 +135,14 @@ let rec unoptimized (code: t): unit low_level =
       | None -> invalid_arg "accum_binop: projections missing project_rhs2"
       | Some rhs2 -> Shape.(derive_index projections.product_iterators rhs2) in
     let lhs_ptr = data_pointer lhs in
-    let lhs iters = Unoptimized_get (lhs_ptr, lhs_idx iters) in
+    let lhs_it iters = Unoptimized_get (lhs_ptr, lhs_idx iters) in
     let rhs1 iters = Unoptimized_get (data_pointer rhs1, rhs1_idx iters) in
     let rhs2 iters = Unoptimized_get (data_pointer rhs2, rhs2_idx iters) in
     let basecase rev_iters =
       let iters = Array.of_list_rev rev_iters in
-      Unoptimized_set (lhs_ptr, lhs_idx iters,
-                       Unoptimized_binop (accum, lhs iters, Unoptimized_binop (op, rhs1 iters, rhs2 iters))) in
+      Unoptimized_set (
+        lhs_ptr, lhs_idx iters,
+        Unoptimized_binop (accum, lhs_it iters, Unoptimized_binop (op, rhs1 iters, rhs2 iters))) in
     let rec loop rev_iters = function
       | ([], []) -> basecase rev_iters
       | (dim::product, it::iters) ->
@@ -162,7 +151,8 @@ let rec unoptimized (code: t): unit low_level =
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|LLFetch {tensor=lhs_ptr; fetch_op=Init_op (Constant_of_value 0.0)}; for_loops|]
+    then Lines [|unoptimized (Fetch {tensor=lhs; fetch_op=Init_op (Constant_stream [|0.0|])});
+                 for_loops|]
     else for_loops
 
   | Accum_unop {zero_out; accum; op; lhs; rhs; projections} ->
@@ -170,12 +160,12 @@ let rec unoptimized (code: t): unit low_level =
     let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
     let rhs_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
     let lhs_ptr = data_pointer lhs in
-    let lhs iters = Unoptimized_get (lhs_ptr, lhs_idx iters) in
+    let lhs_it iters = Unoptimized_get (lhs_ptr, lhs_idx iters) in
     let rhs iters = Unoptimized_get (data_pointer rhs, rhs_idx iters) in
     let basecase rev_iters =
       let iters = Array.of_list_rev rev_iters in
       Unoptimized_set (lhs_ptr, lhs_idx iters,
-                       Unoptimized_binop (accum, lhs iters, Unoptimized_unop (op, rhs iters))) in
+                       Unoptimized_binop (accum, lhs_it iters, Unoptimized_unop (op, rhs iters))) in
     let rec loop rev_iters = function
       | ([], []) -> basecase rev_iters
       | (dim::product, it::iters) ->
@@ -184,7 +174,8 @@ let rec unoptimized (code: t): unit low_level =
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|LLFetch {tensor=lhs_ptr; fetch_op=Init_op (Constant_of_value 0.0)}; for_loops|]
+    then Lines [|unoptimized (Fetch {tensor=lhs; fetch_op=Init_op (Constant_stream [|0.0|])});
+                 for_loops|]
     else for_loops
 
   | Noop -> Lines [||]
@@ -198,8 +189,9 @@ let rec unoptimized (code: t): unit low_level =
      | Lines ls1, _ -> Lines (Array.append ls1 [|ll2|])
      | _ -> Lines [|ll1; ll2|])
 
-  | Fetch {tensor; fetch_op} ->
-    LLFetch {tensor=data_pointer tensor; fetch_op}
+  | Fetch { tensor; fetch_op = Init_op _ }
+  | Fetch { tensor; fetch_op = Compute_point _ }
+   -> ignore tensor; failwith "NOT IMPLEMENTED YET"
 
 let unoptimized_program prog: low_level_program =
   match prog with
@@ -229,10 +221,6 @@ let interpret_llc ?(with_debug=true) llc =
       for data = from_ to to_ do
         loop_proc (Map.add_exn ~key ~data env) body
       done
-    | LLFetch { tensor=Value_at_node_id id; fetch_op } ->
-      fetch_ndarray fetch_op ((get id).value)
-    | LLFetch { tensor=Gradient_at_node_id id; fetch_op } ->
-      fetch_ndarray fetch_op ((get_form id).grad)
     | Unoptimized_set (Value_at_node_id id, indices, llv) ->
       set_from_float (get id).value (lookup env indices) @@ loop_float env llv
     | Unoptimized_set (Gradient_at_node_id id, indices, llv) ->

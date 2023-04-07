@@ -16,8 +16,6 @@ let rec jit_code ~name ~env ctx func ~b_initial (body: unit Code.low_level): Gcc
           jit_code ~name:(name^":"^Int.to_string i) ~env ctx func ~b_initial line)
   | Code.For_loop {index; from_; to_; body} ->
     jit_for_loop ~env ctx func index from_ to_ ~b_initial body
-  | Code.LLFetch {tensor=Value_at_node_id _id; fetch_op=_} -> failwith "NOT IMPLEMENTED"
-  | Code.LLFetch {tensor=Gradient_at_node_id _id; fetch_op=_} -> failwith "NOT IMPLEMENTED"
   | Code.Unoptimized_set (_, _, _) -> failwith "NOT IMPLEMENTED"
   | Code.Comment c -> Block.comment b_initial c; b_initial
   )

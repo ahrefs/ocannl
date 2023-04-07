@@ -11,23 +11,16 @@ let pp_symbolic_index ppf =
 
 let pp_print_init_op ppf: Code.init_op -> unit = function
   | Unspecified -> Caml.Format.pp_print_string ppf "Unspecified"
-  | Constant_of_value c when Float.(c < 0.0) ->
-    Caml.Format.fprintf ppf "(Constant_of_value (%f))" c
-  | Constant_of_value c ->
-    Caml.Format.fprintf ppf "(Constant_of_value %f)" c
-  | Fixed_constant cs ->
-    Caml.Format.(fprintf ppf "(Fixed_constant @[<2>[|%a|]@])"
+  | Constant_stream cs ->
+    Caml.Format.(fprintf ppf "(Constant_stream @[<2>[|%a|]@])"
                    (pp_print_list ~pp_sep:pp_semi pp_print_float) @@ Array.to_list cs)
-  | Range_over_axis_from_end d ->
-    Caml.Format.(fprintf ppf "(Range_over_axis_from_end %d)" d)
   | Range_over_offsets -> Caml.Format.(fprintf ppf "Range_over_offsets")
   | Standard_uniform -> Caml.Format.pp_print_string ppf "Standard_uniform"
-  | Standard_gaussian -> Caml.Format.pp_print_string ppf "Standard_gaussian"
 
 let pp_print_fetch_op ~id ppf: Code.fetch_op -> unit = function
   | Init_op init_op ->
     Caml.Format.(fprintf ppf "(Either.First (Init_op @[<2>(%a)@]))" pp_print_init_op init_op)
-  | (Compute_point _ | Blit _ | Fills_in _) as callback ->
+  | (Compute_point _) as callback ->
     let open Ocannl_runtime in
     Hashtbl.update Node.global.node_fetch_callbacks id ~f:(function
         | None -> callback
@@ -52,12 +45,6 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
       fprintf ppf "@[<2>for@ %a = %d@ to %d@ do@ %a@]@ done" pp_symbol i from_ to_ pp_ll body
     | Value_at_node_id id -> fprintf ppf "(get %d).value" id
     | Gradient_at_node_id id -> fprintf ppf "(get_form %d).grad" id
-    | LLFetch { tensor=Value_at_node_id id; fetch_op } ->
-      fprintf ppf "@[<2>fetch_ndarray_callback@ ~op_or_id:%a@ ((get %d).value)@]"
-        (pp_print_fetch_op ~id) fetch_op id
-    | LLFetch { tensor=Gradient_at_node_id id; fetch_op } ->
-      fprintf ppf "@[<2>fetch_ndarray_callback@ ~op_or_id:%a@ ((get_form %d).grad)@]"
-        (pp_print_fetch_op ~id) fetch_op id
     | Unoptimized_set (Value_at_node_id id, indices, v) ->
       fprintf ppf "@[<2>set_from_float (get %d).value@ (%a)@ (%a)@]" id pp_indices indices pp_ll v
     | Unoptimized_set (Gradient_at_node_id id, indices, v) ->
