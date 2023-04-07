@@ -136,18 +136,25 @@ let print_session_code() =
 type backend =
 | Interpreter
 | OCaml
+| Gccjit
 [@@deriving sexp, equal]
 
 let executor = ref Exec_as_OCaml.load_native
 let executor_error_message = ref Exec_as_OCaml.error_message
+let cleanup_executor_session = ref (fun () -> ())
 let set_executor = function
   | Interpreter ->
-     executor := Code.interpret_program;
-     executor_error_message := Code.interpreter_error_message
-
+    executor := Code.interpret_program;
+    executor_error_message := Code.interpreter_error_message;
+    cleanup_executor_session := (fun () -> ())    
   | OCaml ->
     executor := Exec_as_OCaml.load_native;
-    executor_error_message := Exec_as_OCaml.error_message
+    executor_error_message := Exec_as_OCaml.error_message;
+    cleanup_executor_session := (fun () -> ())    
+  | Gccjit ->
+    executor := Exec_as_gccjit.jit_program;
+    executor_error_message := Exec_as_gccjit.error_message;
+    cleanup_executor_session := Exec_as_gccjit.cleanup_session
 
 let dynload_with_handler ~with_debug ~runtime_store code =
   let contents = !executor ~with_debug code in
@@ -292,6 +299,7 @@ let drop_session() =
   Formula.session_prepare_step := [];
   minus_learning_rate := None;
   update_params := None;
+  !cleanup_executor_session ();
   for i = !Formula.first_session_id to Ocannl_runtime.Node.global.unique_id - 1 do
     Hashtbl.remove NodeUI.global_node_store i;
     Hashtbl.remove Ocannl_runtime.Node.global.node_store i;
@@ -312,6 +320,7 @@ let drop_all_sessions() =
   Formula.first_session_id := 1;
   minus_learning_rate := None;
   update_params := None;
+  !cleanup_executor_session ();
   Hashtbl.clear NodeUI.global_node_store;
   Hashtbl.clear Ocannl_runtime.Node.global.node_store;
   Hashtbl.clear Ocannl_runtime.Node.global.node_fetch_callbacks;
@@ -319,7 +328,9 @@ let drop_all_sessions() =
   Ocannl_runtime.Node.most_recent_suspension := None;
   Ocannl_runtime.Node.global.unique_id <- 1
 
-(** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id]. *)
+(** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id].
+    Discards all computations (forward, backward, update params), but keeps the already computed
+    data. *)
 let close_session() =
   Formula.first_session_id := Ocannl_runtime.Node.global.unique_id;
   Formula.global_roots := Map.empty (module Int);
@@ -329,6 +340,7 @@ let close_session() =
   Formula.session_prepare_step := [];
   minus_learning_rate := None;
   update_params := None;
+  !cleanup_executor_session ();
   Ocannl_runtime.Node.global.session_step <- 0;
   Ocannl_runtime.Node.most_recent_suspension := None
 
@@ -337,6 +349,7 @@ module SDSL = struct
   type nonrec backend = backend =
     | Interpreter
     | OCaml
+    | Gccjit
   let set_executor = set_executor
   let refresh_session = refresh_session
   let drop_session = drop_session
