@@ -41,8 +41,6 @@ let pp_print_fetch_op ~id ppf: Code.fetch_op -> unit = function
 let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Code.low_level): unit =
   let open Code in
   let open Caml.Format in
-  let pp_dims ppf dims =
-    fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:pp_semi pp_print_int) @@ Array.to_list dims in
   let pp_indices ppf idcs =
     fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:pp_semi pp_symbolic_index) @@ Array.to_list idcs in
   let rec pp_ll: 'a. formatter -> 'a low_level -> unit = fun (ppf: formatter) (type a) (c: a low_level) ->
@@ -54,10 +52,6 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
       fprintf ppf "@[<2>for@ %a = %d@ to %d@ do@ %a@]@ done" pp_symbol i from_ to_ pp_ll body
     | Value_at_node_id id -> fprintf ppf "(get %d).value" id
     | Gradient_at_node_id id -> fprintf ppf "(get_form %d).grad" id
-    | LLCreate { tensor=Value_at_node_id id; dims; init_op } ->
-      fprintf ppf "@[<2>(get %d).value <-@ create_ndarray Single@ %a %a@]" id pp_dims dims pp_print_init_op init_op
-    | LLCreate { tensor=Gradient_at_node_id id; dims; init_op } ->
-      fprintf ppf "@[<2>(get_form %d).grad <-@ create_ndarray Single@ %a %a@]" id pp_dims dims pp_print_init_op init_op
     | LLFetch { tensor=Value_at_node_id id; fetch_op } ->
       fprintf ppf "@[<2>fetch_ndarray_callback@ ~op_or_id:%a@ ((get %d).value)@]"
         (pp_print_fetch_op ~id) fetch_op id

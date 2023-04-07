@@ -127,8 +127,7 @@ let print_preamble() =
 
 let print_session_code() =
   let open Code in
-  Caml.Format.printf "Initialization:@ %a@ Step preparation:@ %a"
-    fprint_code (all_parallel !Formula.session_initializations)
+  Caml.Format.printf "Step preparation:@ %a"
     fprint_code (all_parallel !Formula.session_prepare_step);
   Caml.Format.print_newline()
 
@@ -181,11 +180,11 @@ let compile_routine ?(with_debug=true) code =
   let open Formula in
   let num_inits = List.length !session_initializations in
   let to_init = num_inits - !session_initialized in
-  let init_code = Code.all_parallel @@ List.take !session_initializations to_init in
+  Code.interpret_initialization @@ List.take !session_initializations to_init;
   session_initialized := num_inits;
   Ocannl_runtime.Node.most_recent_suspension := None;
   dynload_with_handler ~with_debug ~runtime_store:(Ocannl_runtime.Node.most_recent_suspension)
-    Code.(Suspension (Seq (init_code, code)));
+    Code.(Suspension code);
   let routine = Option.value_exn !Ocannl_runtime.Node.most_recent_suspension in
   Ocannl_runtime.Node.most_recent_suspension := None;
   routine
@@ -217,7 +216,7 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
   if not force_no_init && (regenerate || reinit || root_changed) then (
     let num_inits = List.length !session_initializations in
     let to_init = num_inits - !session_initialized in
-    compile_and_run ~with_debug @@ Code.all_parallel @@ List.take !session_initializations to_init;
+    Code.interpret_initialization @@ List.take !session_initializations to_init;
     session_initialized := num_inits
   );
   if regenerate || root_changed then (

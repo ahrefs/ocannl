@@ -50,7 +50,7 @@ let session_shape_updates: Shape.update_step list ref = ref []
     be executed by each [Session.refresh_session ~regenerate:true] and 
     [Session.refresh_session ~reinit:true] call, except if [~force_no_init:true].
     Execution potentially in parallel. *)
-let session_initializations: Code.t list ref = ref []
+let session_initializations: Code.create list ref = ref []
 let session_initialized = ref 0
 
 (** This code will be executed on each [Session.refresh_session ~run:true] call ([~run:true]
@@ -96,7 +96,7 @@ let fetch_ones ~id field _shape =
   Code.Fetch {tensor={id; field}; fetch_op=Init_op (Constant_of_value 1.0)}
 
 let create ~id ?(init_op=Code.Unspecified) field shape =
-  Code.Create {tensor={id; field}; dims=(fun () -> Shape.to_dims shape); init_op}
+  {Code.tensor={id; field}; dims=(fun () -> Shape.to_dims shape); init_op}
 
 let max_sublabel_length = ref 25
 

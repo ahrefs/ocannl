@@ -74,7 +74,6 @@ type t =
       accum: binop; op: unop;
       lhs: data; rhs: data;
       projections: unit -> Shape.projections }
-  | Create of { tensor: data; dims: unit -> int array; init_op: init_op }
   | Fetch of { tensor: data; fetch_op: fetch_op }
   | Noop
 [@@deriving sexp, variants]
@@ -87,6 +86,9 @@ type program =
   | Suspension of t
   | Session_prepare_step of t
 [@@deriving sexp]
+
+(** Information to create a tensor, once its shape is inferred. *)
+type create = { tensor: data; dims: unit -> int array; init_op: init_op }
 
 let remove_updates data c =
   let rec rm check = function
@@ -116,9 +118,6 @@ type _ low_level =
   | For_loop: {index: Shape.symbol; from_: int; to_: int; body: unit low_level} -> unit low_level
   | Value_at_node_id: int -> data low_level
   | Gradient_at_node_id: int -> data low_level
-  | LLCreate: {
-      tensor: data low_level; dims: int array; init_op: init_op;
-    } -> unit low_level
   | LLFetch: {
       tensor: data low_level; fetch_op: fetch_op;
     } -> unit low_level
@@ -199,8 +198,6 @@ let rec unoptimized (code: t): unit low_level =
      | Lines ls1, _ -> Lines (Array.append ls1 [|ll2|])
      | _ -> Lines [|ll1; ll2|])
 
-  | Create {tensor; dims; init_op} ->
-    LLCreate {tensor=data_pointer tensor; dims=dims(); init_op}
   | Fetch {tensor; fetch_op} ->
     LLFetch {tensor=data_pointer tensor; fetch_op}
 
@@ -232,10 +229,6 @@ let interpret_llc ?(with_debug=true) llc =
       for data = from_ to to_ do
         loop_proc (Map.add_exn ~key ~data env) body
       done
-    | LLCreate { tensor=Value_at_node_id id; dims; init_op } ->
-      (get id).value <- create_ndarray Single dims init_op
-    | LLCreate { tensor=Gradient_at_node_id id; dims; init_op } ->
-      (get_form id).grad <- create_ndarray Single dims init_op
     | LLFetch { tensor=Value_at_node_id id; fetch_op } ->
       fetch_ndarray fetch_op ((get id).value)
     | LLFetch { tensor=Gradient_at_node_id id; fetch_op } ->
@@ -277,6 +270,14 @@ let interpret_llprog ?(with_debug=true) = function
   | Assign_session_prepare_step (proc) ->
     Ocannl_runtime.Node.global.session_prepare_step := Some (fun () -> interpret_llc ~with_debug proc)
 
+let interpret_initialization =
+  let open Ocannl_runtime.Node in
+  List.iter ~f:(function  
+  | { tensor={id; field=`Value}; dims; init_op } ->
+    (get id).value <- create_ndarray Single (dims()) init_op
+  | { tensor={id; field=`Grad}; dims; init_op } ->
+    (get_form id).grad <- create_ndarray Single (dims()) init_op)
+    
 let fprint_code ppf c =
   (* TODO: something nicely concise. *)
   Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_t c  

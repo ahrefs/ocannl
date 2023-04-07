@@ -64,4 +64,15 @@ let term_needs_gradient spec =
   | Transform _ -> false
   | Unknown_batch_data _ -> false
   | Deduced_params _ -> true
+
+
+    | LLCreate { tensor=Value_at_node_id id; dims; init_op } ->
+      fprintf ppf "@[<2>(get %d).value <-@ create_ndarray Single@ %a %a@]" id pp_dims dims pp_print_init_op init_op
+    | LLCreate { tensor=Gradient_at_node_id id; dims; init_op } ->
+      fprintf ppf "@[<2>(get_form %d).grad <-@ create_ndarray Single@ %a %a@]" id pp_dims dims pp_print_init_op init_op
+
+
+  let pp_dims ppf dims =
+    fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:pp_semi pp_print_int) @@ Array.to_list dims in
+
 ]}
