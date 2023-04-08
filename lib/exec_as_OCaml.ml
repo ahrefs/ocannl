@@ -17,20 +17,6 @@ let pp_print_init_op ppf: Code.init_op -> unit = function
   | Range_over_offsets -> Caml.Format.(fprintf ppf "Range_over_offsets")
   | Standard_uniform -> Caml.Format.pp_print_string ppf "Standard_uniform"
 
-let pp_print_fetch_op ~id ppf: Code.fetch_op -> unit = function
-  | Init_op init_op ->
-    Caml.Format.(fprintf ppf "(Either.First (Init_op @[<2>(%a)@]))" pp_print_init_op init_op)
-  | (Compute_point _) as callback ->
-    let open Ocannl_runtime in
-    Hashtbl.update Node.global.node_fetch_callbacks id ~f:(function
-        | None -> callback
-        | Some other ->
-          (if not @@ phys_equal other callback then invalid_arg
-               "exec_as_OCaml: multiple fetch callbacks for the same node not supported currently");
-          callback
-    );
-    Caml.Format.(fprintf ppf "(Either.Second %d)" id)
-
 let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Code.low_level): unit =
   let open Code in
   let open Caml.Format in

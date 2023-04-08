@@ -96,20 +96,11 @@ type init_op =
   (** Uninitialized. On fetch, values may remain unchanged, but are not guaranteed to. *)
   | Constant_stream of float array
   (** Fills in the numbers where the rightmost axis is contiguous, looping over the provided values.
-      If used as [fetch_op.Init_op], the size of the array provided can be a multiple of the size of
-      the tensor, and the tensor will be filled with the [global.session_step]th group from
-      the provided array, modulo the number of groups. *)
+      As a [fetch_op], persists stream position across session steps. *)
   | Range_over_offsets
   (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
   | Standard_uniform
   (** Draws the values from U(0,1). *)
-[@@deriving sexp]
-
-(** Resets a tensor by performing the specified computation or data fetching. [session_step]
-    is incremented at each call of [Session.refresh_session ~run:true]. *)
-type fetch_op =
-  | Init_op of init_op
-  | Compute_point of (session_step:int -> dims:int array -> idcs:int array -> float)
 [@@deriving sexp]
 
 let create_array_of_prec (type val_t arr_t) (prec: (val_t, arr_t) precision) dims: arr_t =
@@ -190,16 +181,12 @@ type state = {
   mutable unique_id: int;
   node_store: (int, t) Hashtbl.t;
   session_prepare_step: (unit -> unit) option ref;
-  mutable session_step: int;
-  node_fetch_callbacks: (int, fetch_op) Hashtbl.t;
 }
 
 let global = {
   unique_id = 1;
   node_store = Hashtbl.create (module Int);
   session_prepare_step = ref @@ Some (fun () -> ());
-  session_step = 0;
-  node_fetch_callbacks = Hashtbl.create (module Int);
 }
 
 let get uid = Hashtbl.find_exn global.node_store uid
@@ -248,33 +235,24 @@ let create (type grad_arr_t value_arr_t) ~(value_prec: ('a, value_arr_t) precisi
   Hashtbl.add_exn global.node_store ~key:node.id ~data:node;
   node
 
-let fetch_bigarray (fetch_op: fetch_op) (type val_t b) (cast: float -> val_t)
+let init_bigarray (init_op: init_op) (type val_t b) (cast: float -> val_t)
     (_prec: (val_t, (val_t, b, Bigarray.c_layout) bigarray) precision)
     (arr: (val_t, b, Bigarray.c_layout) bigarray) =
   let dims = A.dims arr in
-  match fetch_op with
-  | Init_op (Unspecified) ->
+  match init_op with
+  | Unspecified ->
     ()
-  | Init_op (Constant_stream cs) ->
+  | Constant_stream cs ->
     let size = Array.length cs in
-    let group_offset =
-      Int.((global.session_step * Array.fold dims ~init:1 ~f:( * )) % size) in
     loop_bigarray arr
-      ~f:(fun idcs -> cast cs.((indices_to_offset ~dims ~idcs + group_offset) % size))
-  | Init_op (Range_over_offsets) ->
+      ~f:(fun idcs -> cast cs.((indices_to_offset ~dims ~idcs) % size))
+
+  | Range_over_offsets ->
     loop_bigarray arr 
       ~f:(fun idcs -> cast @@ Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Init_op (Standard_uniform) ->
+  | Standard_uniform ->
     loop_bigarray arr ~f:(fun _ -> cast @@ Random.float_range 0.0 1.0)
-  | Compute_point f ->
-    loop_bigarray arr ~f:(fun idcs -> cast (f ~session_step:global.session_step ~dims ~idcs))
 
-let fetch_ndarray fetch_op arr =
-  let ff arr = fetch_bigarray fetch_op arr in
+let init_ndarray init_op arr =
+  let ff arr = init_bigarray init_op arr in
    cast_map_as_bigarray {ff} arr
-
-let fetch_ndarray_callback ~op_or_id arr =
-  let fetch_op =
-    Either.value_map op_or_id ~first:Fn.id
-      ~second:(Hashtbl.find_exn global.node_fetch_callbacks) in
-  fetch_ndarray fetch_op arr

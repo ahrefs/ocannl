@@ -29,23 +29,21 @@ type init_op = Ocannl_runtime.Node.init_op =
   (** Uninitialized. On fetch, values may remain unchanged, but are not guaranteed to. *)
   | Constant_stream of float array
   (** Fills in the numbers where the rightmost axis is contiguous, looping over the provided values.
-      If used as [fetch_op.Init_op], the size of the array provided can be a multiple of the size of
-      the tensor, and the tensor will be filled with the [global.session_step]th group from
-      the provided array, modulo the number of groups. *)
+      As a [fetch_op], persists stream position across session steps. *)
   | Range_over_offsets
   (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
   | Standard_uniform
   (** Draws the values from U(0,1). *)
 [@@deriving sexp]
 
-(** Resets a tensor by performing the specified computation or data fetching. [session_step]
-    is incremented at each call of [Session.refresh_session ~run:true]. *)
-type fetch_op = Ocannl_runtime.Node.fetch_op =
+(** Resets a tensor by performing the specified computation or data fetching. *)
+type fetch_op =
   | Init_op of init_op
-  | Compute_point of (session_step:int -> dims:int array -> idcs:int array -> float)
+  | Synthetic of t
+  | Imported of {func: string; (* params: Gccjit.rvalue list *)}
 [@@deriving sexp]
 
-type t =
+and t =
   | Par of t * t
   (** These tasks can proceed in parallel, there is no interaction. *)
   | ParHint of t * t
@@ -67,7 +65,7 @@ type t =
       projections: unit -> Shape.projections }
   | Fetch of { tensor: data; fetch_op: fetch_op }
   | Noop
-[@@deriving sexp, variants]
+[@@deriving sexp]
 
 (** Dynamically loading a program executes the [Initialization] code, or bounds the [procedure]
     to [routine] for a node, or bounds a callback to the global routine slot. *)
@@ -189,9 +187,19 @@ let rec unoptimized (code: t): unit low_level =
      | Lines ls1, _ -> Lines (Array.append ls1 [|ll2|])
      | _ -> Lines [|ll1; ll2|])
 
-  | Fetch { tensor; fetch_op = Init_op _ }
-  | Fetch { tensor; fetch_op = Compute_point _ }
-   -> ignore tensor; failwith "NOT IMPLEMENTED YET"
+  | Fetch { tensor=_; fetch_op = Init_op Unspecified } ->
+    Lines [||]
+  | Fetch { tensor=_; fetch_op = Synthetic gen } ->
+    unoptimized gen
+  | Fetch { tensor=_; fetch_op = Imported {func=_} } ->
+    (* FIXME: NOT IMPLEMENTED YET also below *)
+    Lines [||]
+  | Fetch { tensor=_; fetch_op = Init_op (Constant_stream _cs) } ->
+    Lines [||]
+  | Fetch { tensor=_; fetch_op = Init_op Range_over_offsets } ->
+    Lines [||]
+  | Fetch { tensor=_; fetch_op = Init_op Standard_uniform } ->
+    Lines [||]
 
 let unoptimized_program prog: low_level_program =
   match prog with
