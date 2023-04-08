@@ -1,6 +1,8 @@
 open Base
 open Ocannl
 module FDSL = Operation.FDSL
+module NFDSL = Operation.NFDSL
+module CDSL = Code.CDSL
 
 let () = Session.SDSL.set_executor OCaml
 
@@ -82,16 +84,19 @@ let%expect_test "Micrograd half-moons example" =
     let c = cos v and s = sin v in
     [|c + noise(); s + noise(); 1.0 - c + noise(); 0.5 - s + noise()|]) in
   let moons_classes = Array.init (len*2) ~f:(fun i -> if i % 2 = 0 then 1. else (-1.)) in
+  (* TODO: convert to [Synthetic] data. *)
   let moons_input = FDSL.data ~label:"moons_input" ~batch_dims:[batch] ~output_dims:[2]
-      (Init_op (Constant_stream moons_flat)) in
+      (fun ~n:_ -> Init_op (Constant_stream moons_flat)) in
   let moons_class = FDSL.data ~label:"moons_class" ~batch_dims:[batch] ~output_dims:[1]
-      (Init_op (Constant_stream moons_classes)) in
+      (fun ~n:_ -> Init_op (Constant_stream moons_classes)) in
   let%nn_op mlp x = "b3" 1 + "w3" * !/ ("b2" 16 + "w2" * !/ ("b1" 16 + "w1" * x)) in
   let steps = epochs * 2 * len/batch in
+  let session_step = FDSL.data ~label:"session_step" ~batch_dims:[] ~output_dims:[1]
+      (fun ~n -> Synthetic [%nn_cd n =+ ~= 1 ~logic:"."]) in
   minus_learning_rate := Some (
       FDSL.data ~label:"minus_lr" ~batch_dims:[] ~output_dims:[1]
-        Float.(Compute_point (fun ~session_step ~dims:_ ~idcs:_ ->
-            -0.1 * of_int Int.(steps - session_step) / of_int steps)));
+        (fun ~n -> Synthetic
+            [%nn_cd n =: ~= (-0.1 *. (!..steps - session_step) /. !..steps) ~logic:"."]));
   let points1 = ref [] in
   let points2 = ref [] in
   let losses = ref [] in
@@ -119,12 +124,11 @@ let%expect_test "Micrograd half-moons example" =
     log_losses := Float.log batch_loss.(0) :: !log_losses;
   done;
   close_session ();
-  let point = [|0.; 0.|] in
-  let point_input = FDSL.data ~label:"point_input" ~batch_dims:[1] ~output_dims:[2]
-      (Compute_point (fun ~session_step:_ ~dims:_ ~idcs -> point.(idcs.(1)))) in
-  let mlp_result = mlp point_input in
+  let%nn_op point = [0; 0] in
+  let mlp_result = mlp point in
   let callback (x, y) =
-    point.(0) <- x; point.(1) <- y;
+    (* FIXME: NOT IMPLEMENTED *)
+    ignore (x, y);
     refresh_session ();
     let result = NodeUI.retrieve_1d_points ~xdim:0 mlp_result.node.node.value in
     Float.(result.(0) >= 0.) in

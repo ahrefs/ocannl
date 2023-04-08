@@ -110,7 +110,7 @@ let%expect_test "Graph drawing fetch" =
   close_session ();
   let xs = Array.init 100 ~f:Float.(fun i -> of_int i / 10. - 5.) in
   let x = FDSL.data ~needs_gradient:true ~label:"x" ~batch_dims:[] ~output_dims:[1]
-      (Init_op (Constant_stream xs)) in
+      (fun ~n:_ -> Init_op (Constant_stream xs)) in
   let fx = f x in
   let ys = Array.map xs ~f:(fun _ ->
     refresh_session ();
@@ -175,7 +175,7 @@ let%expect_test "Simple gradients" =
   let%nn_op l = d *. "f" [-2] in
   minus_learning_rate := Some (
       FDSL.data ~label:"minus_lr" ~batch_dims:[] ~output_dims:[1]
-        (Init_op (Constant_stream [|0.1|])));
+        (fun ~n:_ -> Init_op (Constant_stream [|0.1|])));
   refresh_session ();
   print_node_tree ~with_grad:true ~depth:9 l.id;
   [%expect {|

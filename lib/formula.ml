@@ -273,7 +273,7 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
 (** A terminal: a constant, a parameter, an input of the model. *)
 let term ~label ?desc_label ?needs_gradient ~is_form
     ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced
-    (init_or_fetch: (Code.init_op, Code.fetch_op) Either.t) =
+    (init_or_fetch: (Code.init_op, n:NodeUI.t -> Code.fetch_op) Either.t) =
   let n = NodeUI.create ~value_prec:Single ~grad_prec:Single ~is_form ()
       ~op_label:label ?desc_label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced
       ~children:[] () in
@@ -297,7 +297,7 @@ let term ~label ?desc_label ?needs_gradient ~is_form
   let cross_session_persistent = Code.(match init_or_fetch with
   | First _ -> true
   | Second fetch_op ->
-    let fetch = Fetch { tensor={id; field=`Value}; fetch_op } in
+    let fetch = Fetch { tensor={id; field=`Value}; fetch_op=fetch_op ~n } in
     session_prepare_step := fetch :: !session_prepare_step;
     false) in
   if not is_form then

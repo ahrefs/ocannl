@@ -1,6 +1,9 @@
 open Base
 open Ocannl
 module FDSL = Operation.FDSL
+module NFDSL = Operation.NFDSL
+module CDSL = Code.CDSL
+
 
 let () = Session.SDSL.set_executor OCaml
 
@@ -11,7 +14,7 @@ let%expect_test "Constants and synthetic data" =
   Random.init 0;
   let big_range = Array.init 300 ~f:(Int.to_float) in
   let r_data = FDSL.data ~label:"big_range" ~batch_dims:[2] ~output_dims:[3;5]
-      (Init_op (Constant_stream big_range)) in
+      (fun ~n:_ -> Init_op (Constant_stream big_range)) in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ r_data;
   [%expect {|
@@ -54,9 +57,10 @@ let%expect_test "Constants and synthetic data" =
     ││      │ 7.00e+1  7.10e+1  7.20e+1  7.30e+1  7.40e+1 │ 8.50e+1  8.60e+1  8.70e+1  8.80e+1  8.90e+1 ││
     │└──────┴─────────────────────────────────────────────┴─────────────────────────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
+  let session_step = FDSL.data ~label:"session_step" ~batch_dims:[] ~output_dims:[1]
+      (fun ~n -> Synthetic [%nn_cd n =+ ~= 1 ~logic:"."]) in
   let c_data = FDSL.data ~label:"fetch_callback" ~batch_dims:[1] ~output_dims:[2;3]
-    (Compute_point (fun ~session_step ~dims:_ ~idcs ->
-          Int.to_float @@ session_step*100 + idcs.(1)*10 + idcs.(2))) in
+    (fun ~n -> Synthetic [%nn_cd n =+ ~= (session_step *. 100) ~logic:"."]) in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ c_data;
   [%expect {|

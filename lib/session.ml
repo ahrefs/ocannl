@@ -138,6 +138,8 @@ type backend =
 | Gccjit
 [@@deriving sexp, equal]
 
+let node_fetch_callbacks: (int, Code.fetch_op) Hashtbl.t = Hashtbl.create (module Int)
+
 let executor = ref Exec_as_OCaml.load_native
 let executor_error_message = ref Exec_as_OCaml.error_message
 let cleanup_executor_session = ref (fun () -> ())
@@ -221,7 +223,7 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
   );
   if regenerate || root_changed then (
     for i = !Formula.first_session_id to Ocannl_runtime.Node.global.unique_id - 1 do
-      Hashtbl.remove Ocannl_runtime.Node.global.node_fetch_callbacks i
+      Hashtbl.remove node_fetch_callbacks i
     done;
     Ocannl_runtime.Node.global.session_prepare_step := None;
     dynload_with_handler ~with_debug
@@ -284,8 +286,6 @@ let refresh_session ?(with_debug=true) ?(regenerate=false) ?(reinit=false) ?(run
           | Some form -> form
           | None -> assert false in
         Option.value_exn !(cform.backprop) ());
-    (* Advance the counter. *)
-    Ocannl_runtime.Node.global.session_step <- Int.succ Ocannl_runtime.Node.global.session_step
   )
 
 (** Discards global roots, rolls back [Node.state.unique_id] to [Formula.first_session_id], discards
@@ -302,9 +302,8 @@ let drop_session() =
   for i = !Formula.first_session_id to Ocannl_runtime.Node.global.unique_id - 1 do
     Hashtbl.remove NodeUI.global_node_store i;
     Hashtbl.remove Ocannl_runtime.Node.global.node_store i;
-    Hashtbl.remove Ocannl_runtime.Node.global.node_fetch_callbacks i
+    Hashtbl.remove node_fetch_callbacks i
   done;
-  Ocannl_runtime.Node.global.session_step <- 0;
   Ocannl_runtime.Node.most_recent_suspension := None;
   Ocannl_runtime.Node.global.unique_id <- !Formula.first_session_id
 
@@ -322,8 +321,7 @@ let drop_all_sessions() =
   !cleanup_executor_session ();
   Hashtbl.clear NodeUI.global_node_store;
   Hashtbl.clear Ocannl_runtime.Node.global.node_store;
-  Hashtbl.clear Ocannl_runtime.Node.global.node_fetch_callbacks;
-  Ocannl_runtime.Node.global.session_step <- 0;
+  Hashtbl.clear node_fetch_callbacks;
   Ocannl_runtime.Node.most_recent_suspension := None;
   Ocannl_runtime.Node.global.unique_id <- 1
 
@@ -340,7 +338,6 @@ let close_session() =
   minus_learning_rate := None;
   update_params := None;
   !cleanup_executor_session ();
-  Ocannl_runtime.Node.global.session_step <- 0;
   Ocannl_runtime.Node.most_recent_suspension := None
 
     

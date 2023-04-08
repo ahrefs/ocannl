@@ -111,4 +111,65 @@ let term_needs_gradient spec =
   (** Draws the values from N(0,1). *)
 
 
+let fetch_bigarray (fetch_op: fetch_op) (type val_t b) (cast: float -> val_t)
+    (_prec: (val_t, (val_t, b, Bigarray.c_layout) bigarray) precision)
+    (arr: (val_t, b, Bigarray.c_layout) bigarray) =
+  let dims = A.dims arr in
+  match fetch_op with
+  | Init_op (Unspecified) ->
+    ()
+  | Init_op (Constant_stream cs) ->
+    let size = Array.length cs in
+    let group_offset =
+      Int.((global.session_step * Array.fold dims ~init:1 ~f:( * )) % size) in
+    loop_bigarray arr
+      ~f:(fun idcs -> cast cs.((indices_to_offset ~dims ~idcs + group_offset) % size))
+  | Init_op (Range_over_offsets) ->
+    loop_bigarray arr 
+      ~f:(fun idcs -> cast @@ Float.of_int @@ indices_to_offset ~dims ~idcs)
+  | Init_op (Standard_uniform) ->
+    loop_bigarray arr ~f:(fun _ -> cast @@ Random.float_range 0.0 1.0)
+  | Compute_point f ->
+    loop_bigarray arr ~f:(fun idcs -> cast (f ~session_step:global.session_step ~dims ~idcs))
+
+let fetch_ndarray fetch_op arr =
+  let ff arr = fetch_bigarray fetch_op arr in
+   cast_map_as_bigarray {ff} arr
+
+let fetch_ndarray_callback ~op_or_id arr =
+  let fetch_op =
+    Either.value_map op_or_id ~first:Fn.id
+      ~second:(Hashtbl.find_exn global.node_fetch_callbacks) in
+  fetch_ndarray fetch_op arr
+
+
+let init_ndarray_callback ~op_or_id arr =
+  let init_op =
+    Either.value_map op_or_id ~first:Fn.id
+      ~second:(Hashtbl.find_exn global.node_init_callbacks) in
+  init_ndarray init_op arr
+
+let pp_print_fetch_op ~id ppf: Code.fetch_op -> unit = function
+  | Init_op init_op ->
+    Caml.Format.(fprintf ppf "(Either.First (Init_op @[<2>(%a)@]))" pp_print_init_op init_op)
+  | (Compute_point _) as callback ->
+    let open Ocannl_runtime in
+    Hashtbl.update Node.global.node_fetch_callbacks id ~f:(function
+        | None -> callback
+        | Some other ->
+          (if not @@ phys_equal other callback then invalid_arg
+               "exec_as_OCaml: multiple fetch callbacks for the same node not supported currently");
+          callback
+    );
+    Caml.Format.(fprintf ppf "(Either.Second %d)" id)
+
+  let point_input = FDSL.data ~label:"point_input" ~batch_dims:[1] ~output_dims:[2]
+      (Compute_point (fun ~session_step:_ ~dims:_ ~idcs -> point.(idcs.(1)))) in
+
+    let size = Array.length cs in
+    let group_offset =
+      Int.((global.session_step * Array.fold dims ~init:1 ~f:( * )) % size) in
+    loop_bigarray arr
+      ~f:(fun idcs -> cast cs.((indices_to_offset ~dims ~idcs + group_offset) % size))
+
 ]}
