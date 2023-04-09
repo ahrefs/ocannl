@@ -66,8 +66,8 @@ let () =
   let%nn_op point = [0; 0] in
   let mlp_result = mlp point in
   let callback (x, y) =
-    (* FIXME: NOT IMPLEMENTED *)
-    ignore (x, y);
+    Ocannl_runtime.Node.(set_from_float point.node.node.value [|0|] x;
+                         set_from_float point.node.node.value [|1|] y);
     refresh_session ();
     let result = NodeUI.retrieve_1d_points ~xdim:0 mlp_result.node.node.value in
     Float.(result.(0) >= 0.) in
