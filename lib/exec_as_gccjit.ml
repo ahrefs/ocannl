@@ -1,9 +1,50 @@
 open Base
 
+let session_context = ref @@ Gccjit.Context.create ()
+
+type tensor = {
+  ptr: Gccjit.rvalue;
+  (** Pointer to the first value of the underlying array. *)
+  dims: int array;
+  (** Dimensions (shape) of the tensor. *)
+  num_typ: Gccjit.type_;
+  (** The type of the stored values: [signed char] (corresponds to precision [Byte]),
+      [short] (precision [Half]), [float] (precision [Signle]), [double] (precision [Double]). *)
+}
+
+let value_tensors_cache: (int, tensor) Hashtbl.t = Hashtbl.create (module Int)
+let grad_tensors_cache: (int, tensor) Hashtbl.t = Hashtbl.create (module Int)
 let session_results: Gccjit.result list ref = ref []
 
+let get_tensor acc cache id: tensor =
+  let open Ocannl_runtime.Node in
+  let open Gccjit in
+  let tensor c_typ arr =
+    let ptr = Ctypes.bigarray_start Ctypes_static.Genarray arr in
+    let dims = Bigarray.Genarray.dims arr in
+    let num_typ = Type.(get !session_context c_typ) in
+    let ptr = RValue.ptr !session_context num_typ ptr in
+    {ptr; dims; num_typ} in
+  let default() =
+    let n = get id in
+    match acc n with
+    | Byte_as_int_nd arr -> tensor Type.Signed_char arr
+    | Half_as_int_nd arr -> tensor Type.Short arr
+    | Single_nd arr -> tensor Type.Float arr
+    | Double_nd arr -> tensor Type.Double arr in
+  Hashtbl.find_or_add cache id ~default
+
+let get_value_tensor = get_tensor (fun n->n.value) value_tensors_cache
+
+let get_grad_tensor = get_tensor (fun n-> (Option.value_exn n.form).grad) grad_tensors_cache
+
 let cleanup_session () =
-  List.iter !session_results ~f:Gccjit.Result.release;
+  let open Gccjit in
+  List.iter !session_results ~f:Result.release;
+  Hashtbl.clear value_tensors_cache;
+  Hashtbl.clear grad_tensors_cache;
+  Context.release !session_context;
+  session_context := Gccjit.Context.create ();
   session_results := []
 
 let rec jit_code ~name ~env ctx func ~b_initial (body: unit Code.low_level): Gccjit.block =
@@ -16,7 +57,14 @@ let rec jit_code ~name ~env ctx func ~b_initial (body: unit Code.low_level): Gcc
           jit_code ~name:(name^":"^Int.to_string i) ~env ctx func ~b_initial line)
   | Code.For_loop {index; from_; to_; body} ->
     jit_for_loop ~env ctx func index from_ to_ ~b_initial body
-  | Code.Unoptimized_set (_, _, _) -> failwith "NOT IMPLEMENTED"
+  | Code.Unoptimized_set (Value_at_node_id id, idcs, expr) ->
+     let tensor = get_value_tensor id in
+     ignore (tensor, idcs, expr);
+     failwith "NOT IMPLEMENTED"
+  | Code.Unoptimized_set (Gradient_at_node_id id, idcs, expr) ->
+    let tensor = get_grad_tensor id in
+    ignore (tensor, idcs, expr);
+    failwith "NOT IMPLEMENTED"
   | Code.Comment c -> Block.comment b_initial c; b_initial
   )
 (* 
@@ -94,7 +142,7 @@ let error_message prefix ?extra_error_msg ~contents exc =
 
 let jit_program ?(with_debug=true) (prog: Code.program) =
   let open Gccjit in
-  let ctx = Context.create () in
+  let ctx = Context.create_child !session_context in
   Context.set_option ctx Context.Optimization_level 3;
   if with_debug then Context.set_option ctx Context.Dump_initial_gimple true;
   let msg = "" in
