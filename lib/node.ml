@@ -90,11 +90,18 @@ let set_from_float arr idx v =
   | Single_nd arr -> A.set arr idx v
   | Double_nd arr -> A.set arr idx v
 
+let fill_from_float arr v =
+  match arr with
+  | Byte_as_int_nd arr -> A.fill arr (Int.of_float v)
+  | Half_as_int_nd arr -> A.fill arr (Int.of_float v)
+  | Single_nd arr -> A.fill arr v
+  | Double_nd arr -> A.fill arr v
+
 (** Initializes or resets a tensor by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op =
   | Unspecified
   (** Uninitialized. On fetch, values may remain unchanged, but are not guaranteed to. *)
-  | Constant_stream of float array
+  | Constant_fill of float array
   (** Fills in the numbers where the rightmost axis is contiguous, looping over the provided values.
       As a [fetch_op], persists stream position across session steps. *)
   | Range_over_offsets
@@ -125,7 +132,7 @@ let create_array (type arr_t)
     (prec: (float, arr_t) precision) dims (init_op: init_op): arr_t =
   match init_op with
   | Unspecified -> create_array_of_prec prec dims
-  | Constant_stream cs ->
+  | Constant_fill cs ->
     let size = Array.length cs in
     init_array_of_prec prec dims ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
   | Range_over_offsets ->
@@ -242,7 +249,7 @@ let init_bigarray (init_op: init_op) (type val_t b) (cast: float -> val_t)
   match init_op with
   | Unspecified ->
     ()
-  | Constant_stream cs ->
+  | Constant_fill cs ->
     let size = Array.length cs in
     loop_bigarray arr
       ~f:(fun idcs -> cast cs.((indices_to_offset ~dims ~idcs) % size))

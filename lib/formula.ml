@@ -90,10 +90,10 @@ let handle_error ?formula message =
   raise exc
 
 let fetch_zeros ~id field _shape =
-  Code.Fetch {tensor={id; field}; fetch_op=Init_op (Constant_stream [|0.0|])}
+  Code.Fetch {tensor={id; field}; fetch_op=Zero}
 
 let fetch_ones ~id field _shape =
-  Code.Fetch {tensor={id; field}; fetch_op=Init_op (Constant_stream [|1.0|])}
+  Code.Fetch {tensor={id; field}; fetch_op=One}
 
 let create ~id ?(init_op=Code.Unspecified) field shape =
   {Code.tensor={id; field}; dims=(fun () -> Shape.to_dims shape); init_op}
@@ -375,7 +375,7 @@ let number ?desc_label ~is_form ?(axis_label="") c =
   (* Note: no axis label so that we do not conflict with user labels. *)
   term ?desc_label ~label:(float_to_label c) ~is_form ~needs_gradient:false
     ~batch_dims:[] ~input_dims:[] ~output_dims:[1] ~axis_labels:axis_label
-    (First (Constant_stream [|c|]))
+    (First (Constant_fill [|c|]))
 
 let ndarray ?desc_label ~is_form ?(needs_gradient=false) ?(batch_dims=[]) ?(input_dims=[]) ?(output_dims=[])
     ?axis_labels ?label values =
@@ -387,7 +387,7 @@ let ndarray ?desc_label ~is_form ?(needs_gradient=false) ?(batch_dims=[]) ?(inpu
         ~max_indent:(!max_sublabel_length) ~margin:(!max_sublabel_length*2);
       let (!) = Array.of_list in
       let dims = Array.concat [!batch_dims; !output_dims; !input_dims] in
-      let ndarr = Ocannl_runtime.Node.create_ndarray Single dims (Constant_stream values) in
+      let ndarr = Ocannl_runtime.Node.create_ndarray Single dims (Constant_fill values) in
       let (!) = List.length in
       NodeUI.pp_tensor_inline ~num_batch_axes: !batch_dims ~num_output_axes: !output_dims
         ~num_input_axes: !input_dims Caml.Format.str_formatter ndarr;
@@ -398,13 +398,13 @@ let ndarray ?desc_label ~is_form ?(needs_gradient=false) ?(batch_dims=[]) ?(inpu
     else label in
   term ?desc_label ~needs_gradient ~is_form
     ~batch_dims ~input_dims ~output_dims ?axis_labels ~deduced:Not_constrained ~label
-    (First (Constant_stream values))
+    (First (Constant_fill values))
 
 let params ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?values ?value label =
   let init = match values, value with
     | Some _, Some _ -> invalid_arg "Formula.params: do not provide both ~values and ~value"
-    | Some values, _ -> Either.First (Code.Constant_stream values)
-    | _, Some value -> Either.First (Code.Constant_stream [|value|])
+    | Some values, _ -> Either.First (Code.Constant_fill values)
+    | _, Some value -> Either.First (Code.Constant_fill [|value|])
     | None, None -> First Standard_uniform in
   term ?desc_label ~needs_gradient:true ~is_form:true
     ~batch_dims:[] ?input_dims ?output_dims ?axis_labels ?deduced ~label init

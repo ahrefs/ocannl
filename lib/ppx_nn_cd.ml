@@ -55,6 +55,7 @@ let binary_op expr =
   | [%expr ( ** )] -> [%expr Code.ToPowOf]
   | [%expr (-?/)] -> [%expr Code.Relu_gate]
   | [%expr (-/>)] -> [%expr Code.Skip_arg]
+  | [%expr (@..)] -> [%expr Code.Sub_batch]
   | _ ->
     Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
       "ppx_ocannl %%nn_cd: expected a binary operator, one of: %s"

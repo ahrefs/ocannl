@@ -15,6 +15,7 @@ type binop =
   | Mul
   | ToPowOf
   | Relu_gate
+  | Sub_batch
 [@@deriving sexp]
 
 type unop =
@@ -22,14 +23,13 @@ type unop =
   | Relu
 [@@deriving sexp]
 
-(** Initializes or resets a tensor by filling in the corresponding numbers, at the appropriate
-    precision. *)
+(** Initializes a tensor by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op = Ocannl_runtime.Node.init_op =
   | Unspecified
-  (** Uninitialized. On fetch, values may remain unchanged, but are not guaranteed to. *)
-  | Constant_stream of float array
-  (** Fills in the numbers where the rightmost axis is contiguous, looping over the provided values.
-      As a [fetch_op], persists stream position across session steps. *)
+  (** Uninitialized. *)
+  | Constant_fill of float array
+  (** Fills in the numbers where the rightmost axis is contiguous, looping over the provided values
+      if necessary. *)
   | Range_over_offsets
   (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
   | Standard_uniform
@@ -38,7 +38,8 @@ type init_op = Ocannl_runtime.Node.init_op =
 
 (** Resets a tensor by performing the specified computation or data fetching. *)
 type fetch_op =
-  | Init_op of init_op
+  | Zero
+  | One
   | Synthetic of t
   | Imported of {func: string; (* params: Gccjit.rvalue list *)}
 [@@deriving sexp]
@@ -105,12 +106,14 @@ type _ low_level =
   | Comment: string -> unit low_level
   | Lines: unit low_level array -> unit low_level
   | For_loop: {index: Shape.symbol; from_: int; to_: int; body: unit low_level} -> unit low_level
+  | Fill: {tensor: data low_level; value: float low_level} -> unit low_level
   | Value_at_node_id: int -> data low_level
   | Gradient_at_node_id: int -> data low_level
   | Unoptimized_set: data low_level * Shape.symbolic_axis array * float low_level -> unit low_level
   | Unoptimized_get: data low_level * Shape.symbolic_axis array -> float low_level
   | Unoptimized_binop: binop * float low_level * float low_level -> float low_level
   | Unoptimized_unop: unop * float low_level -> float low_level
+  | Constant: float -> float low_level
 
 type low_level_program =
   | Perform of unit low_level
@@ -149,8 +152,7 @@ let rec unoptimized (code: t): unit low_level =
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|unoptimized (Fetch {tensor=lhs; fetch_op=Init_op (Constant_stream [|0.0|])});
-                 for_loops|]
+    then Lines [|unoptimized (Fetch {tensor=lhs; fetch_op=Zero}); for_loops|]
     else for_loops
 
   | Accum_unop {zero_out; accum; op; lhs; rhs; projections} ->
@@ -172,8 +174,7 @@ let rec unoptimized (code: t): unit low_level =
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|unoptimized (Fetch {tensor=lhs; fetch_op=Init_op (Constant_stream [|0.0|])});
-                 for_loops|]
+    then Lines [|unoptimized (Fetch {tensor=lhs; fetch_op=Zero}); for_loops|]
     else for_loops
 
   | Noop -> Lines [||]
@@ -187,19 +188,15 @@ let rec unoptimized (code: t): unit low_level =
      | Lines ls1, _ -> Lines (Array.append ls1 [|ll2|])
      | _ -> Lines [|ll1; ll2|])
 
-  | Fetch { tensor=_; fetch_op = Init_op Unspecified } ->
-    Lines [||]
+  | Fetch { tensor; fetch_op = Zero } ->
+    Fill {tensor=data_pointer tensor; value=Constant 0.}
+  | Fetch { tensor; fetch_op = One } ->
+    Fill {tensor=data_pointer tensor; value=Constant 1.}
   | Fetch { tensor=_; fetch_op = Synthetic gen } ->
     unoptimized gen
   | Fetch { tensor=_; fetch_op = Imported {func=_} } ->
-    (* FIXME: NOT IMPLEMENTED YET also below *)
-    Lines [||]
-  | Fetch { tensor=_; fetch_op = Init_op (Constant_stream _cs) } ->
-    Lines [||]
-  | Fetch { tensor=_; fetch_op = Init_op Range_over_offsets } ->
-    Lines [||]
-  | Fetch { tensor=_; fetch_op = Init_op Standard_uniform } ->
-    Lines [||]
+    (* FIXME: NOT IMPLEMENTED YET *)
+    failwith "NOT IMPLEMENTED YET"
 
 let unoptimized_program prog: low_level_program =
   match prog with
@@ -218,8 +215,8 @@ end
 let interpret_llc ?(with_debug=true) llc =
   let lookup env indices =
     Array.map indices ~f:Shape.(function
-    | Fixed_idx i -> i
-    | Iterator s -> Map.find_exn env s) in
+        | Fixed_idx i -> i
+        | Iterator s -> Map.find_exn env s) in
   let open Ocannl_runtime.Node in
   let rec loop_proc env llc: unit =
     let loop = loop_proc env in
@@ -229,16 +226,21 @@ let interpret_llc ?(with_debug=true) llc =
       for data = from_ to to_ do
         loop_proc (Map.add_exn ~key ~data env) body
       done
+    | Fill {tensor=Value_at_node_id id; value} ->
+      fill_from_float (get id).value @@ loop_float env value
+    | Fill {tensor=Gradient_at_node_id id; value} ->
+      fill_from_float (get_form id).grad @@ loop_float env value
     | Unoptimized_set (Value_at_node_id id, indices, llv) ->
       set_from_float (get id).value (lookup env indices) @@ loop_float env llv
     | Unoptimized_set (Gradient_at_node_id id, indices, llv) ->
       set_from_float (get_form id).grad (lookup env indices) @@ loop_float env llv
     | Comment message when with_debug -> Stdio.printf "%s\n%!" message
     | Comment _ -> ()
-    and loop_float env llv =
+  and loop_float env llv =
     let open Float in
     let loop = loop_float env in
     match llv with
+    | Constant c -> c
     | Unoptimized_get (Value_at_node_id id, indices) ->
       get_as_float (get id).value @@ lookup env indices
     | Unoptimized_get (Gradient_at_node_id id, indices) ->
@@ -251,6 +253,8 @@ let interpret_llc ?(with_debug=true) llc =
       let v2 = loop llv2 in
       Float.(if is_integer v2 then int_pow v1 @@ to_int v2 else v1 ** v2)
     | Unoptimized_binop (Relu_gate, llv1, llv2) -> if loop llv1 > 0.0 then loop llv2 else 0.0
+    | Unoptimized_binop (Sub_batch, _llv1, _llv2) ->
+      failwith "NOT IMPLEMENTED YET"
     | Unoptimized_unop (Identity, llv) -> loop llv
     | Unoptimized_unop (Relu, llv) -> let v = loop llv in if v > 0.0 then v else 0.0 in
   loop_proc (Map.empty (module Shape.Symbol)) llc

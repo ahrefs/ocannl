@@ -66,6 +66,15 @@ let rec jit_code ~name ~env ctx func ~b_initial (body: unit Code.low_level): Gcc
     ignore (tensor, idcs, expr);
     failwith "NOT IMPLEMENTED"
   | Code.Comment c -> Block.comment b_initial c; b_initial
+  | Code.Fill {tensor=Value_at_node_id id; value} ->
+    let tensor = get_value_tensor id in
+    ignore (tensor, value);
+    failwith "NOT IMPLEMENTED"
+  | Code.Fill {tensor=Gradient_at_node_id id; value} ->
+    let tensor = get_value_tensor id in
+    ignore (tensor, value);
+    failwith "NOT IMPLEMENTED"
+
   )
 (* 
   | Code.Value_at_node_id _ -> _

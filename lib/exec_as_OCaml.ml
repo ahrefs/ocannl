@@ -11,8 +11,8 @@ let pp_symbolic_index ppf =
 
 let pp_print_init_op ppf: Code.init_op -> unit = function
   | Unspecified -> Caml.Format.pp_print_string ppf "Unspecified"
-  | Constant_stream cs ->
-    Caml.Format.(fprintf ppf "(Constant_stream @[<2>[|%a|]@])"
+  | Constant_fill cs ->
+    Caml.Format.(fprintf ppf "(Constant_fill @[<2>[|%a|]@])"
                    (pp_print_list ~pp_sep:pp_semi pp_print_float) @@ Array.to_list cs)
   | Range_over_offsets -> Caml.Format.(fprintf ppf "Range_over_offsets")
   | Standard_uniform -> Caml.Format.pp_print_string ppf "Standard_uniform"
@@ -31,12 +31,17 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
       fprintf ppf "@[<2>for@ %a = %d@ to %d@ do@ %a@]@ done" pp_symbol i from_ to_ pp_ll body
     | Value_at_node_id id -> fprintf ppf "(get %d).value" id
     | Gradient_at_node_id id -> fprintf ppf "(get_form %d).grad" id
+    | Fill {tensor=Value_at_node_id id; value} ->
+      fprintf ppf "@[<2>fill_from_float (get %d).value@ (%a)@]" id pp_ll value
+    | Fill {tensor=Gradient_at_node_id id; value} ->
+      fprintf ppf "@[<2>fill_from_float (get_form %d).grad@ (%a)@]" id pp_ll value
     | Unoptimized_set (Value_at_node_id id, indices, v) ->
       fprintf ppf "@[<2>set_from_float (get %d).value@ (%a)@ (%a)@]" id pp_indices indices pp_ll v
     | Unoptimized_set (Gradient_at_node_id id, indices, v) ->
       fprintf ppf "@[<2>set_from_float (get_form %d).grad@ (%a)@ (%a)@]" id pp_indices indices pp_ll v
     | Unoptimized_get (Value_at_node_id id, indices) ->
       fprintf ppf "@[<2>get_as_float (get %d).value@ (%a)@]" id pp_indices indices
+    | Constant c -> fprintf ppf "(%f)" c
     | Unoptimized_get (Gradient_at_node_id id, indices) ->
       fprintf ppf "@[<2>get_as_float (get_form %d).grad@ (%a)@]" id pp_indices indices
     | Unoptimized_binop (Skip_arg, _v1, v2) -> pp_ll ppf v2
@@ -47,6 +52,8 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
       fprintf ppf "(@[<2>(%a) **@ (%a)@]@,)" pp_ll v1  pp_ll v2
     | Unoptimized_binop (Relu_gate, v1, v2) ->
       fprintf ppf "(@[<2>if %a > 0.0@ then %a@ else 0.0@]@,)" pp_ll v1 pp_ll v2
+    | Unoptimized_binop (Sub_batch, _v1, _v2) ->
+      failwith "NOT IMPLEMENTED YET"
     | Unoptimized_unop (Identity, v) -> pp_ll ppf v
     | Unoptimized_unop (Relu, v) ->
       fprintf ppf "(@[<2>let a = %a in@ if a > 0.0 then a else 0.0@]@,)" pp_ll v
