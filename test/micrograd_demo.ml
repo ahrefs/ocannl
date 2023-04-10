@@ -78,7 +78,6 @@ let%expect_test "Micrograd half-moons example" =
   let batch = 10 in
   let epochs = 40 in
   let noise() = Random.float_range (-0.1) 0.1 in
-  (* TODO: convert to [Synthetic] data. *)
   let moons_flat = Array.concat_map (Array.create ~len ()) ~f:Float.(fun () ->
     let i = Random.int len in
     let v = of_int i * pi / of_int len in

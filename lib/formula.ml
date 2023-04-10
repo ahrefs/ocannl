@@ -90,10 +90,10 @@ let handle_error ?formula message =
   raise exc
 
 let fetch_zeros ~id field _shape =
-  Code.Fetch {tensor={id; field}; fetch_op=Zero}
+  Code.Fetch {tensor={id; field}; fetch_op=Zeros}
 
 let fetch_ones ~id field _shape =
-  Code.Fetch {tensor={id; field}; fetch_op=One}
+  Code.Fetch {tensor={id; field}; fetch_op=Ones}
 
 let create ~id ?(init_op=Code.Unspecified) field shape =
   {Code.tensor={id; field}; dims=(fun () -> Shape.to_dims shape); init_op}

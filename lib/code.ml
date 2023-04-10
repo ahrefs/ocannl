@@ -38,8 +38,8 @@ type init_op = Ocannl_runtime.Node.init_op =
 
 (** Resets a tensor by performing the specified computation or data fetching. *)
 type fetch_op =
-  | Zero
-  | One
+  | Zeros
+  | Ones
   | Synthetic of t
   | Imported of {func: string; (* params: Gccjit.rvalue list *)}
 [@@deriving sexp]
@@ -152,7 +152,7 @@ let rec unoptimized (code: t): unit low_level =
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|unoptimized (Fetch {tensor=lhs; fetch_op=Zero}); for_loops|]
+    then Lines [|unoptimized (Fetch {tensor=lhs; fetch_op=Zeros}); for_loops|]
     else for_loops
 
   | Accum_unop {zero_out; accum; op; lhs; rhs; projections} ->
@@ -174,7 +174,7 @@ let rec unoptimized (code: t): unit low_level =
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|unoptimized (Fetch {tensor=lhs; fetch_op=Zero}); for_loops|]
+    then Lines [|unoptimized (Fetch {tensor=lhs; fetch_op=Zeros}); for_loops|]
     else for_loops
 
   | Noop -> Lines [||]
@@ -188,9 +188,9 @@ let rec unoptimized (code: t): unit low_level =
      | Lines ls1, _ -> Lines (Array.append ls1 [|ll2|])
      | _ -> Lines [|ll1; ll2|])
 
-  | Fetch { tensor; fetch_op = Zero } ->
+  | Fetch { tensor; fetch_op = Zeros } ->
     Fill {tensor=data_pointer tensor; value=Constant 0.}
-  | Fetch { tensor; fetch_op = One } ->
+  | Fetch { tensor; fetch_op = Ones } ->
     Fill {tensor=data_pointer tensor; value=Constant 1.}
   | Fetch { tensor=_; fetch_op = Synthetic gen } ->
     unoptimized gen
