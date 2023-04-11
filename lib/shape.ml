@@ -110,7 +110,7 @@ let dims_of_kind = function
   | AxisKey.Batch -> batch
   | AxisKey.Input -> input
   | AxisKey.Output -> output
-
+  
 type compose_type =
   | Pointwise_bin
   (** NumPy-style broadcast matching batch, input and output axes, e.g. as in [s1 + s2]. *)
@@ -129,6 +129,17 @@ type compose_type =
       Currently, we support two variants of the [einsum] syntax: either all the axes are provided,
       or all input, output axes are provided but none of the batch axes.
       Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
+  | Dynamic_index of {over_kind: AxisKey.kind; from_left: bool; other_axes_pointwise: bool}
+  (** Uses RHS2 as an index into RHS1. The values of RHS2 along the last (output) axis are used to
+      fix the RHS1 [over_kind] axes. If RHS1 has more [over_kind] axes than the size of RHS2's last
+      axis, the remaining right axes are kept if [from_left] is true, otherwise the left axes
+      are kept. The fixed axes are dropped from the shape of LHS. If RHS2 has more than one axis,
+      [other_axes_pointwise] decides what to do with the other axes: if true, they are traversed
+      pointwise with the corresponding axes of RHS1. For the pointwise alignment, we drop the last
+      output axis of RHS2 and the fixed axes of RHS1. If [other_axes_pointwise] is false,
+      the other axes of RHS2 are prepended to the remaining axes of RHS1 (of the corresponding
+      kind). ([other_axes_pointwise] being true is akin to an inner product, being false is akin to
+      an outer product.) *)
 [@@deriving sexp, equal]
 
 type transpose_type =
@@ -735,6 +746,10 @@ let propagate_shapes (update: update_step) =
     let rhs2_axis_labels: axis_str_map = Map.filter_map rhs2_labels ~f:(Map.find all_axis_labels) in
     sh2.axis_labels <- rhs2_axis_labels
 
+  | Broadcast (Dynamic_index {over_kind; from_left; other_axes_pointwise}, sh1, sh2) ->
+    ignore (over_kind, from_left, other_axes_pointwise, sh1, sh2);
+    failwith "NOT IMPLEMENTED YET"
+
 (** Uses the matrix convention of putting the input axes last. *)
 let to_dims (sh: t): int array =
   let b_dims = match sh.batch with
@@ -1118,6 +1133,10 @@ let derive_projections (shapes: update_step) : projections =
     let product_space = Array.filter ~f:((<>) 1) product_space in
     let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
     { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
+
+  | Broadcast (Dynamic_index {over_kind; from_left; other_axes_pointwise}, sh1, sh2) ->
+    ignore (over_kind, from_left, other_axes_pointwise, sh1, sh2);
+    failwith "NOT IMPLEMENTED YET"
 
 let backprop1 projections = {
   projections with project_lhs = projections.project_rhs1; project_rhs1 = projections.project_lhs;
