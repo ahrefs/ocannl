@@ -812,7 +812,7 @@ let rec propagate_shapes (update: update_step) =
        let reduced_dims over_dims = map_dims over_dims ~f:(fun d -> List.drop d subs) in
        let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
        let sh1_size = List.length @@ list_of_dims @@ dims_of_kind over_kind sh1 in
-       let drop_left from_end = if from_end >= sh1_size - subs then -1 else from_end in
+       let drop_left from_end = if from_end > sh1_size - subs then -1 else from_end in
        let reduced_sh1 = 
          {reduced_sh1 with axis_labels=shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_left} in
        let logic = 
@@ -822,11 +822,11 @@ let rec propagate_shapes (update: update_step) =
            Transpose (Pointwise_un, extended_sh) in
        let update_other_axes = {shape=cur_sh; logic} in
        propagate_shapes update_other_axes;
-       let push_left from_end = if from_end >= sh1_size - subs then from_end + subs else from_end in
+       let push_left from_end = if from_end > sh1_size - subs then from_end + subs else from_end in
        let sh1_axis_labels = shift_axes_of_kind over_kind sh1.axis_labels ~f:push_left in
        let sh1_axis_labels = Map.fold sh1.axis_labels ~init:sh1_axis_labels
            ~f:(fun ~key:({in_axes; from_end} as key) ~data labels ->
-               if AxisKey.equal_kind over_kind in_axes && from_end >= sh1_size - subs
+               if AxisKey.equal_kind over_kind in_axes && from_end > sh1_size - subs
                then Map.add_exn labels ~key ~data else labels) in
        sh1.axis_labels <- sh1_axis_labels
      else
