@@ -868,7 +868,7 @@ let rec propagate_shapes (update: update_step) =
       match Map.find sh2.axis_labels k1 with
       | None -> sh2_axis_labels | Some v -> Map.add_exn sh2_axis_labels ~key:k1 ~data:v in
     sh2.axis_labels <- sh2_axis_labels;
-    sh2.output <- ~f:(fun _ -> map_dims reduced_sh2.output ~f:(fun d -> d @ [subs]))
+    sh2.output <- map_dims reduced_sh2.output ~f:(fun d -> d @ [subs])
 
 
 (** Uses the matrix convention of putting the input axes last. *)
@@ -942,7 +942,7 @@ let identity_projections product_space =
 (** Computes the indexing into subformulas given the shape information of a formula. The processing
     mirrors [propagate_shapes], but [derive_projections] should only be invoked when the shapes
     are inferred already. *)
-let derive_projections (shapes: update_step) : projections =
+let rec derive_projections (shapes: update_step) : projections =
   (* Broadcasts symmetrically to iterate all axes. *)
   let broadcast_dims (sh1_dims: dims) (sh2_dims: dims): int list =
     let rec broad_back_dims accu = function
@@ -1256,8 +1256,74 @@ let derive_projections (shapes: update_step) : projections =
     { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
 
   | Broadcast (Dynamic_index {over_kind; from_left; other_axes_pointwise}, sh1, sh2) ->
-    ignore (over_kind, from_left, other_axes_pointwise, sh1, sh2);
-    failwith "NOT IMPLEMENTED YET"
+    let subs = Option.value ~default:1 @@ List.last @@ list_of_dims sh2.output in
+    let output = map_dims sh2.output ~f:List.drop_last_exn in
+    let reduced_sh2 = {sh2 with output} in
+    let reduced_sh2 = 
+      {reduced_sh2 with axis_labels=shift_axes_of_kind AxisKey.Output sh2.axis_labels ~f:((-) 1)} in
+    (if from_left then
+       let reduced_dims over_dims = map_dims over_dims ~f:(fun d -> List.drop d subs) in
+       let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
+       let sh1_size = List.length @@ list_of_dims @@ dims_of_kind over_kind sh1 in
+       let drop_left from_end = if from_end > sh1_size - subs then -1 else from_end in
+       let reduced_sh1 = 
+         {reduced_sh1 with axis_labels=shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_left} in
+       let logic = 
+         if other_axes_pointwise then Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
+         else
+           let extended_sh = append_all_axes ~prefix:reduced_sh2 ~main:reduced_sh1 () in
+           Transpose (Pointwise_un, extended_sh) in
+       let update_other_axes = {shape=cur_sh; logic} in
+       let projections = derive_projections update_other_axes in
+       (* let push_left from_end = if from_end > sh1_size - subs then from_end + subs else from_end in
+       let sh1_axis_labels = shift_axes_of_kind over_kind sh1.axis_labels ~f:push_left in
+       let sh1_axis_labels = Map.fold sh1.axis_labels ~init:sh1_axis_labels
+           ~f:(fun ~key:({in_axes; from_end} as key) ~data labels ->
+               if AxisKey.equal_kind over_kind in_axes && from_end > sh1_size - subs
+               then Map.add_exn labels ~key ~data else labels) in
+       sh1.axis_labels <- sh1_axis_labels;
+       let added_dims, updated_dims =
+         dims_of_kind over_kind reduced_sh1 |> list_of_dims |>
+         (fun d -> List.split_n d @@ List.length d - sh1_size - subs) in
+       let restored_dims over_dims =
+         map_dims over_dims ~f:(fun d -> List.concat [added_dims; List.take d subs; updated_dims]) in
+       update_kind over_kind sh1 ~f:restored_dims *)
+       projections
+     else
+       let reduced_dims over_dims =
+         map_dims over_dims ~f:(fun d -> List.take d @@ List.length d - subs) in
+       let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
+       let drop_right from_end = from_end - subs in
+       let reduced_sh1 = 
+         {reduced_sh1 with axis_labels=shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_right} in
+       let logic = 
+         if other_axes_pointwise then Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
+         else
+           let extended_sh = append_all_axes ~suffix:reduced_sh2 ~main:reduced_sh1 () in
+           Transpose (Pointwise_un, extended_sh) in
+       let update_other_axes = {shape=cur_sh; logic} in
+       let projections = derive_projections update_other_axes in
+       (* let push_right from_end = from_end + subs in
+       let sh1_axis_labels = shift_axes_of_kind over_kind sh1.axis_labels ~f:push_right in
+       let sh1_axis_labels = Map.fold sh1.axis_labels ~init:sh1_axis_labels
+           ~f:(fun ~key:({in_axes; from_end} as key) ~data labels ->
+               if AxisKey.equal_kind over_kind in_axes && from_end <= subs
+               then Map.add_exn labels ~key ~data else labels) in
+       sh1.axis_labels <- sh1_axis_labels;
+       let inferred_dims =
+         dims_of_kind over_kind reduced_sh1 |> list_of_dims in
+       let restored_dims over_dims =
+         map_dims over_dims ~f:(fun d -> inferred_dims @ List.drop d @@ List.length d - subs) in
+       update_kind over_kind sh1 ~f:restored_dims *)
+       projections
+    )
+    (* let sh2_axis_labels = shift_axes_of_kind over_kind reduced_sh2.axis_labels ~f:((+) 1) in
+    let k1 = AxisKey.{in_axes=Output; from_end=1} in
+    let sh2_axis_labels =
+      match Map.find sh2.axis_labels k1 with
+      | None -> sh2_axis_labels | Some v -> Map.add_exn sh2_axis_labels ~key:k1 ~data:v in
+    sh2.axis_labels <- sh2_axis_labels;
+    sh2.output <- map_dims reduced_sh2.output ~f:(fun d -> d @ [subs]) *)
 
 let backprop1 projections = {
   projections with project_lhs = projections.project_rhs1; project_rhs1 = projections.project_lhs;
