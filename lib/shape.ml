@@ -803,7 +803,7 @@ let rec propagate_shapes (update: update_step) =
     sh2.axis_labels <- rhs2_axis_labels
 
   | Broadcast (Dynamic_index {over_kind; from_left; other_axes_pointwise}, sh1, sh2) ->
-    let subs = List.last_exn @@ list_of_dims sh2.output in
+    let subs = Option.value ~default:1 @@ List.last @@ list_of_dims sh2.output in
     let output = map_dims sh2.output ~f:List.drop_last_exn in
     let reduced_sh2 = {sh2 with output} in
     let reduced_sh2 = 
