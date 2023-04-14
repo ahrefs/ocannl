@@ -818,12 +818,12 @@ let rec propagate_shapes (update: update_step) =
       let update_other_axes = {shape=cur_sh; logic} in
       propagate_shapes update_other_axes
     else
-      let reduced_dims over_dims = map_dims over_dims ~f:(fun d -> List.drop d subs) in
+      let reduced_dims over_dims =
+        map_dims over_dims ~f:(fun d -> List.take d @@ List.length d - subs) in
       let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
-      let sh1_size = List.length @@ list_of_dims @@ dims_of_kind over_kind sh1 in
-      let drop_left from_end = if from_end >= sh1_size - subs then -1 else from_end in
+      let drop_right from_end = from_end - subs in
       let reduced_sh1 = 
-        {reduced_sh1 with axis_labels=shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_left} in
+        {reduced_sh1 with axis_labels=shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_right} in
       let logic = 
         if other_axes_pointwise then Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
         else
