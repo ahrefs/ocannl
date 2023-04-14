@@ -856,7 +856,7 @@ let rec propagate_shapes (update: update_step) =
       match Map.find sh2.axis_labels k1 with
       | None -> sh2_axis_labels | Some v -> Map.add_exn sh2_axis_labels ~key:k1 ~data:v in
     sh2.axis_labels <- sh2_axis_labels;
-    update_kind over_kind sh2 ~f:(fun _ -> map_dims reduced_sh2.output ~f:(fun d -> d @ [subs]))
+    sh2.output <- ~f:(fun _ -> map_dims reduced_sh2.output ~f:(fun d -> d @ [subs]))
 
 
 (** Uses the matrix convention of putting the input axes last. *)
