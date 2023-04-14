@@ -129,6 +129,11 @@ let map_over_kind ~f kind sh = match kind with
   | AxisKey.Input -> {sh with input=f sh.input}
   | AxisKey.Output -> {sh with output=f sh.output}
 
+let update_kind ~f kind sh = match kind with
+  | AxisKey.Batch -> sh.batch <- f sh.batch
+  | AxisKey.Input -> sh.input <- f sh.input
+  | AxisKey.Output -> sh.output <- f sh.output
+
 let list_of_dims = function
   | Given ls | Fixed ls | Inferred ls -> ls
   | Unknown -> []
@@ -802,35 +807,56 @@ let rec propagate_shapes (update: update_step) =
     let output = map_dims sh2.output ~f:List.drop_last_exn in
     let reduced_sh2 = {sh2 with output} in
     let reduced_sh2 = 
-      {reduced_sh2 with axis_labels=shift_axes_of_kind over_kind sh2.axis_labels ~f:((-) 1)} in
-    if from_left then
-      let reduced_dims over_dims = map_dims over_dims ~f:(fun d -> List.drop d subs) in
-      let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
-      let sh1_size = List.length @@ list_of_dims @@ dims_of_kind over_kind sh1 in
-      let drop_left from_end = if from_end >= sh1_size - subs then -1 else from_end in
-      let reduced_sh1 = 
-        {reduced_sh1 with axis_labels=shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_left} in
-      let logic = 
-        if other_axes_pointwise then Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
-        else
-          let extended_sh = append_all_axes ~prefix:reduced_sh2 ~main:reduced_sh1 () in
-          Transpose (Pointwise_un, extended_sh) in
-      let update_other_axes = {shape=cur_sh; logic} in
-      propagate_shapes update_other_axes
-    else
-      let reduced_dims over_dims =
-        map_dims over_dims ~f:(fun d -> List.take d @@ List.length d - subs) in
-      let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
-      let drop_right from_end = from_end - subs in
-      let reduced_sh1 = 
-        {reduced_sh1 with axis_labels=shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_right} in
-      let logic = 
-        if other_axes_pointwise then Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
-        else
-          let extended_sh = append_all_axes ~suffix:reduced_sh2 ~main:reduced_sh1 () in
-          Transpose (Pointwise_un, extended_sh) in
-      let update_other_axes = {shape=cur_sh; logic} in
-      propagate_shapes update_other_axes
+      {reduced_sh2 with axis_labels=shift_axes_of_kind AxisKey.Output sh2.axis_labels ~f:((-) 1)} in
+    (if from_left then
+       let reduced_dims over_dims = map_dims over_dims ~f:(fun d -> List.drop d subs) in
+       let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
+       let sh1_size = List.length @@ list_of_dims @@ dims_of_kind over_kind sh1 in
+       let drop_left from_end = if from_end >= sh1_size - subs then -1 else from_end in
+       let reduced_sh1 = 
+         {reduced_sh1 with axis_labels=shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_left} in
+       let logic = 
+         if other_axes_pointwise then Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
+         else
+           let extended_sh = append_all_axes ~prefix:reduced_sh2 ~main:reduced_sh1 () in
+           Transpose (Pointwise_un, extended_sh) in
+       let update_other_axes = {shape=cur_sh; logic} in
+       propagate_shapes update_other_axes;
+       let push_left from_end = if from_end >= sh1_size - subs then from_end + subs else from_end in
+       let sh1_axis_labels = shift_axes_of_kind over_kind sh1.axis_labels ~f:push_left in
+       let sh1_axis_labels = Map.fold sh1.axis_labels ~init:sh1_axis_labels
+           ~f:(fun ~key:({in_axes; from_end} as key) ~data labels ->
+               if AxisKey.equal_kind over_kind in_axes && from_end >= sh1_size - subs
+               then Map.add_exn labels ~key ~data else labels) in
+       sh1.axis_labels <- sh1_axis_labels
+     else
+       let reduced_dims over_dims =
+         map_dims over_dims ~f:(fun d -> List.take d @@ List.length d - subs) in
+       let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
+       let drop_right from_end = from_end - subs in
+       let reduced_sh1 = 
+         {reduced_sh1 with axis_labels=shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_right} in
+       let logic = 
+         if other_axes_pointwise then Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
+         else
+           let extended_sh = append_all_axes ~suffix:reduced_sh2 ~main:reduced_sh1 () in
+           Transpose (Pointwise_un, extended_sh) in
+       let update_other_axes = {shape=cur_sh; logic} in
+       propagate_shapes update_other_axes;
+       let push_right from_end = from_end + subs in
+       let sh1_axis_labels = shift_axes_of_kind over_kind sh1.axis_labels ~f:push_right in
+       let sh1_axis_labels = Map.fold sh1.axis_labels ~init:sh1_axis_labels
+           ~f:(fun ~key:({in_axes; from_end} as key) ~data labels ->
+               if AxisKey.equal_kind over_kind in_axes && from_end <= subs
+               then Map.add_exn labels ~key ~data else labels) in
+       sh1.axis_labels <- sh1_axis_labels);
+    let sh2_axis_labels = shift_axes_of_kind over_kind reduced_sh2.axis_labels ~f:((+) 1) in
+    let k1 = AxisKey.{in_axes=Output; from_end=1} in
+    let sh2_axis_labels =
+      match Map.find sh2.axis_labels k1 with
+      | None -> sh2_axis_labels | Some v -> Map.add_exn sh2_axis_labels ~key:k1 ~data:v in
+    sh2.axis_labels <- sh2_axis_labels;
+    update_kind over_kind sh2 ~f:(fun _ -> map_dims reduced_sh2.output ~f:(fun d -> d @ [subs]))
 
 
 (** Uses the matrix convention of putting the input axes last. *)
