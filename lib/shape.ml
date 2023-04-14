@@ -828,7 +828,13 @@ let rec propagate_shapes (update: update_step) =
            ~f:(fun ~key:({in_axes; from_end} as key) ~data labels ->
                if AxisKey.equal_kind over_kind in_axes && from_end > sh1_size - subs
                then Map.add_exn labels ~key ~data else labels) in
-       sh1.axis_labels <- sh1_axis_labels
+       sh1.axis_labels <- sh1_axis_labels;
+       let added_dims, updated_dims =
+         dims_of_kind over_kind reduced_sh1 |> list_of_dims |>
+         (fun d -> List.split_n d @@ List.length d - sh1_size - subs) in
+       let restored_dims over_dims =
+         map_dims over_dims ~f:(fun d -> List.concat [added_dims; List.take d subs; updated_dims]) in
+       update_kind over_kind sh1 ~f:restored_dims
      else
        let reduced_dims over_dims =
          map_dims over_dims ~f:(fun d -> List.take d @@ List.length d - subs) in
@@ -849,7 +855,13 @@ let rec propagate_shapes (update: update_step) =
            ~f:(fun ~key:({in_axes; from_end} as key) ~data labels ->
                if AxisKey.equal_kind over_kind in_axes && from_end <= subs
                then Map.add_exn labels ~key ~data else labels) in
-       sh1.axis_labels <- sh1_axis_labels);
+       sh1.axis_labels <- sh1_axis_labels;
+       let inferred_dims =
+         dims_of_kind over_kind reduced_sh1 |> list_of_dims in
+       let restored_dims over_dims =
+         map_dims over_dims ~f:(fun d -> inferred_dims @ List.drop d @@ List.length d - subs) in
+       update_kind over_kind sh1 ~f:restored_dims
+    );
     let sh2_axis_labels = shift_axes_of_kind over_kind reduced_sh2.axis_labels ~f:((+) 1) in
     let k1 = AxisKey.{in_axes=Output; from_end=1} in
     let sh2_axis_labels =
