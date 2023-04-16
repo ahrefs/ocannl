@@ -4,10 +4,11 @@ let emit = Code.unoptimized_program
 
 let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
 let pp_symbol ppf (Shape.Symbol s) = Caml.Format.fprintf ppf "i%d" s
-let pp_symbolic_index ppf =
+let pp_symbolic_index ?provider_dim ppf =
   let open Shape in function
-    | Iterator (Symbol s) -> Caml.Format.fprintf ppf "i%d" s
+    | Iterator (Symbol s) | Dynamic_recipient (Symbol s) -> Caml.Format.fprintf ppf "i%d" s
     | Fixed_idx i -> Caml.Format.fprintf ppf "%d" i
+    | Dynamic_provider _ -> Caml.Format.fprintf ppf "%d" @@ Option.value_exn provider_dim
 
 let pp_print_init_op ppf: Code.init_op -> unit = function
   | Unspecified -> Caml.Format.pp_print_string ppf "Unspecified"
@@ -20,8 +21,10 @@ let pp_print_init_op ppf: Code.init_op -> unit = function
 let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Code.low_level): unit =
   let open Code in
   let open Caml.Format in
-  let pp_indices ppf idcs =
-    fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:pp_semi pp_symbolic_index) @@ Array.to_list idcs in
+  let pp_indices ?provider_dim ppf idcs =
+    fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:pp_semi (pp_symbolic_index ?provider_dim)) @@
+    Array.to_list idcs in
+  let pp_idcs = pp_indices ?provider_dim:None in
   let rec pp_ll: 'a. formatter -> 'a low_level -> unit = fun (ppf: formatter) (type a) (c: a low_level) ->
     (* FIXME: performance bug, bind the nodes [(get %d)] at the start of the program. *)
     match c with
@@ -36,14 +39,18 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
     | Fill {tensor=Gradient_at_node_id id; value} ->
       fprintf ppf "@[<2>fill_from_float (get_form %d).grad@ (%a)@]" id pp_ll value
     | Unoptimized_set (Value_at_node_id id, indices, v) ->
-      fprintf ppf "@[<2>set_from_float (get %d).value@ (%a)@ (%a)@]" id pp_indices indices pp_ll v
+      fprintf ppf "@[<2>set_from_float (get %d).value@ (%a)@ (%a)@]" id pp_idcs indices pp_ll v
     | Unoptimized_set (Gradient_at_node_id id, indices, v) ->
-      fprintf ppf "@[<2>set_from_float (get_form %d).grad@ (%a)@ (%a)@]" id pp_indices indices pp_ll v
+      fprintf ppf "@[<2>set_from_float (get_form %d).grad@ (%a)@ (%a)@]" id pp_idcs indices pp_ll v
+    | Dynamic_indices {tensor=Value_at_node_id id; tensor_idcs; dynamic_idcs; body} ->
+      dynamic_indices ("(get "^Int.to_string id^").value") ~tensor_idcs ~dynamic_idcs body
+    | Dynamic_indices {tensor=Gradient_at_node_id id; tensor_idcs; dynamic_idcs; body} ->
+      dynamic_indices ("(get_form "^Int.to_string id^").grad") ~tensor_idcs ~dynamic_idcs body
     | Unoptimized_get (Value_at_node_id id, indices) ->
-      fprintf ppf "@[<2>get_as_float (get %d).value@ (%a)@]" id pp_indices indices
+      fprintf ppf "@[<2>get_as_float (get %d).value@ (%a)@]" id pp_idcs indices
     | Constant c -> fprintf ppf "(%f)" c
     | Unoptimized_get (Gradient_at_node_id id, indices) ->
-      fprintf ppf "@[<2>get_as_float (get_form %d).grad@ (%a)@]" id pp_indices indices
+      fprintf ppf "@[<2>get_as_float (get_form %d).grad@ (%a)@]" id pp_idcs indices
     | Unoptimized_binop (Skip_arg, _v1, v2) -> pp_ll ppf v2
     | Unoptimized_binop (Add, v1, v2) -> fprintf ppf "(@[<2>(%a) +@ (%a)@]@,)" pp_ll v1 pp_ll v2
     | Unoptimized_binop (Mul, v1, v2) -> fprintf ppf "(@[<2>(%a) *@ (%a)@]@,)" pp_ll v1 pp_ll v2
@@ -57,7 +64,12 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
     | Unoptimized_unop (Identity, v) -> pp_ll ppf v
     | Unoptimized_unop (Relu, v) ->
       fprintf ppf "(@[<2>let a = %a in@ if a > 0.0 then a else 0.0@]@,)" pp_ll v
-    | Comment message -> fprintf ppf "(* %s *)()" message in
+    | Comment message -> fprintf ppf "(* %s *)()" message
+  and dynamic_indices tensor ~tensor_idcs ~dynamic_idcs body =
+    Array.iteri dynamic_idcs ~f:(fun provider_dim sym ->
+        fprintf ppf "let@ %a = @[<2>Float.to_int@ (get_as_float %s@ (%a))@]@ in@ " pp_symbol sym
+          tensor (pp_indices ~provider_dim) tensor_idcs);
+    pp_ll ppf body in
   fprintf ppf "@[<v>open Base@ open Ocannl_runtime@ open Node@ open Base.Float@ ";
   (match c with
    | Lines toplevel ->
@@ -65,31 +77,31 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
        fprintf ppf "@[<2>let () =@ %a@]" (pp_print_list ~pp_sep:(fun p () -> fprintf p "@]@ @[<2>let () =@ ") pp_ll) @@
        Array.to_list toplevel
      else
-      fprintf ppf "(@[<2>%a@]@,)" (pp_print_list ~pp_sep:pp_semi pp_ll) @@
-      Array.to_list toplevel
+       fprintf ppf "(@[<2>%a@]@,)" (pp_print_list ~pp_sep:pp_semi pp_ll) @@
+       Array.to_list toplevel
 
    | c -> pp_ll ppf c);
   fprintf ppf "@]"
 
 let format_ll_prog (ppf: Caml.Format.formatter) (p: Code.low_level_program): unit =
-    let open Code in
-    let open Caml.Format in
-    match p with
-    | Perform proc -> format_low_level ~as_toplevel:true ppf proc
-    | Assign_routine ({id; field=`Forward}, proc) ->
-      fprintf ppf "@[<2>(get_form %d).forward :=@ Some (@[<2>fun () ->@ %a@]@,)@]"
-        id (format_low_level ~as_toplevel:true) proc
-    | Assign_routine ({id; field=`Backprop}, proc) ->
-      fprintf ppf "@[<2>(get_form %d).backprop :=@ Some (@[<2>fun () -> %a@]@,)@]"
-        id (format_low_level ~as_toplevel:true) proc
-    | Assign_suspension proc ->
-      fprintf ppf
-        "@[<2>let () = most_recent_suspension@ := Some (@[<2>fun () -> %a@]@,)@]"
-        (format_low_level ~as_toplevel:true) proc
-    | Assign_session_prepare_step proc ->
-      fprintf ppf
-        "@[<2>let () = global.session_prepare_step@ := Some (@[<2>fun () -> %a@]@,)@]" 
-        (format_low_level ~as_toplevel:true) proc
+  let open Code in
+  let open Caml.Format in
+  match p with
+  | Perform proc -> format_low_level ~as_toplevel:true ppf proc
+  | Assign_routine ({id; field=`Forward}, proc) ->
+    fprintf ppf "@[<2>(get_form %d).forward :=@ Some (@[<2>fun () ->@ %a@]@,)@]"
+      id (format_low_level ~as_toplevel:true) proc
+  | Assign_routine ({id; field=`Backprop}, proc) ->
+    fprintf ppf "@[<2>(get_form %d).backprop :=@ Some (@[<2>fun () -> %a@]@,)@]"
+      id (format_low_level ~as_toplevel:true) proc
+  | Assign_suspension proc ->
+    fprintf ppf
+      "@[<2>let () = most_recent_suspension@ := Some (@[<2>fun () -> %a@]@,)@]"
+      (format_low_level ~as_toplevel:true) proc
+  | Assign_session_prepare_step proc ->
+    fprintf ppf
+      "@[<2>let () = global.session_prepare_step@ := Some (@[<2>fun () -> %a@]@,)@]" 
+      (format_low_level ~as_toplevel:true) proc
 
 let code_file_prefix = "nnrun"
 let column_width = 100
@@ -100,14 +112,14 @@ let create_comp_unit compiled =
     Caml.Filename.open_temp_file ~mode:[Open_wronly;Open_creat;Open_text]
       code_file_prefix ".ml" in
   (* FIXME(#32): the following outputs truncated source code -- missing the last line: *
-  let ppf = Caml.Format.formatter_of_out_channel oc in
-  Caml.Format.pp_set_geometry Caml.Format.str_formatter
-    ~max_indent:(column_width/2) ~margin:column_width;
-  let () = format_low_level ~as_toplevel:true ppf compiled in
-  let () = Stdio.Out_channel.close oc in
-  let () = Stdio.printf "FIXME(32): file content:\n%s\nEND file content\n%!"
-    (Stdio.In_channel.read_all fname) in
-  * Defensive variant: *)
+     let ppf = Caml.Format.formatter_of_out_channel oc in
+     Caml.Format.pp_set_geometry Caml.Format.str_formatter
+     ~max_indent:(column_width/2) ~margin:column_width;
+     let () = format_low_level ~as_toplevel:true ppf compiled in
+     let () = Stdio.Out_channel.close oc in
+     let () = Stdio.printf "FIXME(32): file content:\n%s\nEND file content\n%!"
+     (Stdio.In_channel.read_all fname) in
+   * Defensive variant: *)
   Caml.Format.pp_set_geometry Caml.Format.str_formatter
     ~max_indent:(column_width/2) ~margin:column_width;
   format_ll_prog Caml.Format.str_formatter compiled;
@@ -182,7 +194,7 @@ let error_message prefix ?extra_error_msg ~contents exc =
   let msg = Buffer.add_string message in
   msg prefix; msg exc_str; msg "\n"; msg backtrace;
   (match extra_error_msg with None -> () | Some extra ->
-    msg "\nIn the context of:\n"; msg extra);
+      msg "\nIn the context of:\n"; msg extra);
   let from_pos, to_pos = first_file_span ~contents ~message:(Buffer.contents message) in
   (* Be defensive to avoid introducing a misleading error. *)
   let from_pos = Int.min from_pos @@ String.length contents - 1 in
@@ -218,13 +230,13 @@ let load_native ?(with_debug=true) (prog: Code.program) =
             else
               Exn.protect ~finally:(fun () -> safe_remove plugin_fname; safe_remove log_fname)
                 ~f:(fun () ->
-                  try Dynlink.loadfile_private plugin_fname; Some contents
-                  with 
-                  | Dynlink.Error (Library's_module_initializers_failed exc) ->
-                    Formula.handle_error @@ error_message "Runtime init error:\n"
-                      ~extra_error_msg:exec_logs ~contents exc
-                  | exc ->
-                    Formula.handle_error @@ error_message "Compilation or unknown runtime error:\n"
+                    try Dynlink.loadfile_private plugin_fname; Some contents
+                    with 
+                    | Dynlink.Error (Library's_module_initializers_failed exc) ->
+                      Formula.handle_error @@ error_message "Runtime init error:\n"
+                        ~extra_error_msg:exec_logs ~contents exc
+                    | exc ->
+                      Formula.handle_error @@ error_message "Compilation or unknown runtime error:\n"
                         ~extra_error_msg:exec_logs ~contents exc)
           with
           | Formula.Session_error _ as exc -> raise exc

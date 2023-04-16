@@ -88,7 +88,7 @@ let remove_updates data c =
       | Par (t, (Accum_binop {lhs; _} | Accum_unop {lhs; _}))
       | ParHint (t, (Accum_binop {lhs; _} | Accum_unop {lhs; _}))
       | Seq (t, (Accum_binop {lhs; _} | Accum_unop {lhs; _}))) as c when check ->
-        if equal_data data lhs then rm true t else rm false c
+      if equal_data data lhs then rm true t else rm false c
     | Par (t1, t2) -> Par (rm true t1, rm true t2)
     | ParHint (t1, t2) -> ParHint (rm true t1, rm true t2)
     | Seq (t1, t2) -> Seq (rm true t1, rm true t2)
@@ -109,6 +109,9 @@ type _ low_level =
   | Fill: {tensor: data low_level; value: float low_level} -> unit low_level
   | Value_at_node_id: int -> data low_level
   | Gradient_at_node_id: int -> data low_level
+  | Dynamic_indices:
+      {tensor: data low_level; tensor_idcs: Shape.symbolic_axis array;
+       dynamic_idcs: Shape.symbol array; body: unit low_level} -> unit low_level
   | Unoptimized_set: data low_level * Shape.symbolic_axis array * float low_level -> unit low_level
   | Unoptimized_get: data low_level * Shape.symbolic_axis array -> float low_level
   | Unoptimized_binop: binop * float low_level * float low_level -> float low_level
@@ -120,7 +123,7 @@ type low_level_program =
   | Assign_routine of routine * unit low_level
   | Assign_suspension of unit low_level
   | Assign_session_prepare_step of unit low_level
-(* [@@deriving sexp] *)
+  (* [@@deriving sexp] *)
 
 let data_pointer (xhs: data) =
   match xhs.field with
@@ -213,10 +216,11 @@ module CDSL = struct
 end
 
 let interpret_llc ?(with_debug=true) llc =
-  let lookup env indices =
+  let lookup ?provider_dim env indices =
     Array.map indices ~f:Shape.(function
         | Fixed_idx i -> i
-        | Iterator s -> Map.find_exn env s) in
+        | Iterator s | Dynamic_recipient s -> Map.find_exn env s
+        | Dynamic_provider _ -> Option.value_exn provider_dim) in
   let open Ocannl_runtime.Node in
   let rec loop_proc env llc: unit =
     let loop = loop_proc env in
@@ -235,6 +239,10 @@ let interpret_llc ?(with_debug=true) llc =
     | Unoptimized_set (Gradient_at_node_id id, indices, llv) ->
       set_from_float (get_form id).grad (lookup env indices) @@ loop_float env llv
     | Comment message when with_debug -> Stdio.printf "%s\n%!" message
+    | Dynamic_indices {tensor=Value_at_node_id id; tensor_idcs; dynamic_idcs; body} ->
+      dynamic_indices env (get id).value ~tensor_idcs ~dynamic_idcs body
+    | Dynamic_indices {tensor=Gradient_at_node_id id; tensor_idcs; dynamic_idcs; body} ->
+      dynamic_indices env (get_form id).grad ~tensor_idcs ~dynamic_idcs body
     | Comment _ -> ()
   and loop_float env llv =
     let open Float in
@@ -256,7 +264,12 @@ let interpret_llc ?(with_debug=true) llc =
     | Unoptimized_binop (Sub_batch, _llv1, _llv2) ->
       failwith "NOT IMPLEMENTED YET"
     | Unoptimized_unop (Identity, llv) -> loop llv
-    | Unoptimized_unop (Relu, llv) -> let v = loop llv in if v > 0.0 then v else 0.0 in
+    | Unoptimized_unop (Relu, llv) -> let v = loop llv in if v > 0.0 then v else 0.0
+  and dynamic_indices env tensor ~tensor_idcs ~dynamic_idcs body =
+    let env = Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
+      let data = Float.to_int @@ get_as_float tensor @@ lookup ~provider_dim env tensor_idcs in
+      Map.add_exn ~key ~data env) in
+    loop_proc env body in
   loop_proc (Map.empty (module Shape.Symbol)) llc
 
 let interpret_llprog ?(with_debug=true) = function
@@ -273,11 +286,11 @@ let interpret_llprog ?(with_debug=true) = function
 let interpret_initialization =
   let open Ocannl_runtime.Node in
   List.iter ~f:(function  
-  | { tensor={id; field=`Value}; dims; init_op } ->
-    (get id).value <- create_ndarray Single (dims()) init_op
-  | { tensor={id; field=`Grad}; dims; init_op } ->
-    (get_form id).grad <- create_ndarray Single (dims()) init_op)
-    
+      | { tensor={id; field=`Value}; dims; init_op } ->
+        (get id).value <- create_ndarray Single (dims()) init_op
+      | { tensor={id; field=`Grad}; dims; init_op } ->
+        (get_form id).grad <- create_ndarray Single (dims()) init_op)
+
 let fprint_code ppf c =
   (* TODO: something nicely concise. *)
   Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_t c  
@@ -301,6 +314,6 @@ let interpreter_error_message prefix ?extra_error_msg ~contents exc =
   let msg = Buffer.add_string message in
   msg prefix; msg exc_str; msg "\n"; msg backtrace;
   (match extra_error_msg with None -> () | Some extra ->
-    msg "\nIn the context of:\n"; msg extra);
+      msg "\nIn the context of:\n"; msg extra);
   msg contents;
   Buffer.contents message

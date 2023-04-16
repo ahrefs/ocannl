@@ -872,7 +872,7 @@ let rec propagate_shapes (update: update_step) =
        | Some extended_sh ->
          (* FIXME: NOT IMPLEMENTED restoring inferred shapes and axis labels. *)
          ignore extended_sh
-    s);
+    );
     let sh2_axis_labels = shift_axes_of_kind AxisKey.Output reduced_sh2.axis_labels ~f:((+) 1) in
     let k1 = AxisKey.{in_axes=Output; from_end=1} in
     let sh2_axis_labels =
@@ -909,7 +909,14 @@ type 'a axis_index =
   (** The specific position along an axis. *)
   | Iterator of 'a
   (** The given member of the [product_space] corresponding to some [product_iterators]. *)
+  | Dynamic_recipient of symbol
+  (** [Dynamic_recipient s] gets the index from the [s] member of an [Dynamic_provider sl]
+      axis. *)
+  | Dynamic_provider of symbol array
+  (** The values along a [Dynamic_provider sl] axis are read via "random access" by
+      [Dynamic_recipient s] axes for various values of [s] in [sl]. *)
 [@@deriving compare, sexp, variants]
+
 let opt_iterator = function
   | None -> Fixed_idx 0
   | Some sym -> Iterator sym
@@ -1287,18 +1294,18 @@ let rec derive_projections (shapes: update_step) : projections =
        let update_other_axes = {shape=cur_sh; logic} in
        let projections = derive_projections update_other_axes in
        (* let push_left from_end = if from_end > sh1_size - subs then from_end + subs else from_end in
-       let sh1_axis_labels = shift_axes_of_kind over_kind sh1.axis_labels ~f:push_left in
-       let sh1_axis_labels = Map.fold sh1.axis_labels ~init:sh1_axis_labels
+          let sh1_axis_labels = shift_axes_of_kind over_kind sh1.axis_labels ~f:push_left in
+          let sh1_axis_labels = Map.fold sh1.axis_labels ~init:sh1_axis_labels
            ~f:(fun ~key:({in_axes; from_end} as key) ~data labels ->
                if AxisKey.equal_kind over_kind in_axes && from_end > sh1_size - subs
                then Map.add_exn labels ~key ~data else labels) in
-       sh1.axis_labels <- sh1_axis_labels;
-       let added_dims, updated_dims =
-         dims_of_kind over_kind reduced_sh1 |> list_of_dims |>
-         (fun d -> List.split_n d @@ List.length d - sh1_size - subs) in
-       let restored_dims over_dims =
-         map_dims over_dims ~f:(fun d -> List.concat [added_dims; List.take d subs; updated_dims]) in
-       update_kind over_kind sh1 ~f:restored_dims *)
+          sh1.axis_labels <- sh1_axis_labels;
+          let added_dims, updated_dims =
+          dims_of_kind over_kind reduced_sh1 |> list_of_dims |>
+          (fun d -> List.split_n d @@ List.length d - sh1_size - subs) in
+          let restored_dims over_dims =
+          map_dims over_dims ~f:(fun d -> List.concat [added_dims; List.take d subs; updated_dims]) in
+          update_kind over_kind sh1 ~f:restored_dims *)
        projections
      else
        let reduced_dims over_dims =
@@ -1315,26 +1322,26 @@ let rec derive_projections (shapes: update_step) : projections =
        let update_other_axes = {shape=cur_sh; logic} in
        let projections = derive_projections update_other_axes in
        (* let push_right from_end = from_end + subs in
-       let sh1_axis_labels = shift_axes_of_kind over_kind sh1.axis_labels ~f:push_right in
-       let sh1_axis_labels = Map.fold sh1.axis_labels ~init:sh1_axis_labels
+          let sh1_axis_labels = shift_axes_of_kind over_kind sh1.axis_labels ~f:push_right in
+          let sh1_axis_labels = Map.fold sh1.axis_labels ~init:sh1_axis_labels
            ~f:(fun ~key:({in_axes; from_end} as key) ~data labels ->
                if AxisKey.equal_kind over_kind in_axes && from_end <= subs
                then Map.add_exn labels ~key ~data else labels) in
-       sh1.axis_labels <- sh1_axis_labels;
-       let inferred_dims =
-         dims_of_kind over_kind reduced_sh1 |> list_of_dims in
-       let restored_dims over_dims =
-         map_dims over_dims ~f:(fun d -> inferred_dims @ List.drop d @@ List.length d - subs) in
-       update_kind over_kind sh1 ~f:restored_dims *)
+          sh1.axis_labels <- sh1_axis_labels;
+          let inferred_dims =
+          dims_of_kind over_kind reduced_sh1 |> list_of_dims in
+          let restored_dims over_dims =
+          map_dims over_dims ~f:(fun d -> inferred_dims @ List.drop d @@ List.length d - subs) in
+          update_kind over_kind sh1 ~f:restored_dims *)
        projections
     )
-    (* let sh2_axis_labels = shift_axes_of_kind over_kind reduced_sh2.axis_labels ~f:((+) 1) in
-    let k1 = AxisKey.{in_axes=Output; from_end=1} in
-    let sh2_axis_labels =
-      match Map.find sh2.axis_labels k1 with
-      | None -> sh2_axis_labels | Some v -> Map.add_exn sh2_axis_labels ~key:k1 ~data:v in
-    sh2.axis_labels <- sh2_axis_labels;
-    sh2.output <- map_dims reduced_sh2.output ~f:(fun d -> d @ [subs]) *)
+(* let sh2_axis_labels = shift_axes_of_kind over_kind reduced_sh2.axis_labels ~f:((+) 1) in
+   let k1 = AxisKey.{in_axes=Output; from_end=1} in
+   let sh2_axis_labels =
+   match Map.find sh2.axis_labels k1 with
+   | None -> sh2_axis_labels | Some v -> Map.add_exn sh2_axis_labels ~key:k1 ~data:v in
+   sh2.axis_labels <- sh2_axis_labels;
+   sh2.output <- map_dims reduced_sh2.output ~f:(fun d -> d @ [subs]) *)
 
 let backprop1 projections = {
   projections with project_lhs = projections.project_rhs1; project_rhs1 = projections.project_lhs;
@@ -1351,18 +1358,23 @@ let backprop_unary projections = {
                    project_rhs2 = Some projections.project_lhs;
 }
 
-let derive_index iterator_symbols (projection: symbolic_axis array) (type iterator):
-  iterator array -> iterator axis_index array =
+let derive_index iterator_symbols (projection: symbolic_axis array):
+  symbol array -> symbolic_axis array =
   let sym_to_i =
     Array.mapi iterator_symbols ~f:(fun i (Symbol s) -> s, i) |>
     Array.to_list |> Map.of_alist_exn (module Int) in
-  let positions: int axis_index array = Array.map projection ~f:(
+  let positions = Array.map projection ~f:(
       function
       | Fixed_idx i -> Fixed_idx i
       | Iterator (Symbol s) -> Iterator (Map.find_exn sym_to_i s)
+      | (Dynamic_provider _ | Dynamic_recipient _ as dyn) -> dyn
     ) in
-  fun product -> Array.map positions ~f:(
-      function Fixed_idx i -> Fixed_idx i | Iterator p -> Iterator product.(p))
+  fun product ->
+    Array.map positions ~f:(
+      function
+      | Fixed_idx i -> Fixed_idx i
+      | Iterator p -> Iterator product.(p)
+      | (Dynamic_provider _ | Dynamic_recipient _ as dyn) -> dyn)
 
 let make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~id () =
   let input = match input_dims with

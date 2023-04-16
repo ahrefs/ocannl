@@ -51,30 +51,30 @@ let rec jit_code ~name ~env ctx func ~b_initial (body: unit Code.low_level): Gcc
   let open Gccjit in
   (* TODO: match gccjit's assign_op-style pattern *)
   (match body with
-  | Code.Lines lines ->
-    Array.foldi lines ~init:b_initial
-      ~f:(fun i b_initial line ->
-          jit_code ~name:(name^":"^Int.to_string i) ~env ctx func ~b_initial line)
-  | Code.For_loop {index; from_; to_; body} ->
-    jit_for_loop ~env ctx func index from_ to_ ~b_initial body
-  | Code.Unoptimized_set (Value_at_node_id id, idcs, expr) ->
+   | Code.Lines lines ->
+     Array.foldi lines ~init:b_initial
+       ~f:(fun i b_initial line ->
+           jit_code ~name:(name^":"^Int.to_string i) ~env ctx func ~b_initial line)
+   | Code.For_loop {index; from_; to_; body} ->
+     jit_for_loop ~env ctx func index from_ to_ ~b_initial body
+   | Code.Unoptimized_set (Value_at_node_id id, idcs, expr) ->
      let tensor = get_value_tensor id in
      ignore (tensor, idcs, expr);
      failwith "NOT IMPLEMENTED"
-  | Code.Unoptimized_set (Gradient_at_node_id id, idcs, expr) ->
-    let tensor = get_grad_tensor id in
-    ignore (tensor, idcs, expr);
-    failwith "NOT IMPLEMENTED"
-  | Code.Comment c -> Block.comment b_initial c; b_initial
-  | Code.Fill {tensor=Value_at_node_id id; value} ->
-    let tensor = get_value_tensor id in
-    ignore (tensor, value);
-    failwith "NOT IMPLEMENTED"
-  | Code.Fill {tensor=Gradient_at_node_id id; value} ->
-    let tensor = get_value_tensor id in
-    ignore (tensor, value);
-    failwith "NOT IMPLEMENTED"
-
+   | Code.Unoptimized_set (Gradient_at_node_id id, idcs, expr) ->
+     let tensor = get_grad_tensor id in
+     ignore (tensor, idcs, expr);
+     failwith "NOT IMPLEMENTED"
+   | Code.Comment c -> Block.comment b_initial c; b_initial
+   | Code.Fill {tensor=Value_at_node_id id; value} ->
+     let tensor = get_value_tensor id in
+     ignore (tensor, value);
+     failwith "NOT IMPLEMENTED"
+   | Code.Fill {tensor=Gradient_at_node_id id; value} ->
+     let tensor = get_value_tensor id in
+     ignore (tensor, value);
+     failwith "NOT IMPLEMENTED"
+   | Dynamic_indices _ -> failwith "NOT IMPLEMENTED"
   )
 (* 
   | Code.Value_at_node_id _ -> _
@@ -122,9 +122,9 @@ let jit_ll_prog ~name ctx prog =
    | Assign_routine ({id; field=`Backprop}, proc) ->
      (get_form id).backprop := Some (emit_routine proc @@ "_backprop_" ^ Int.to_string id)
    | Assign_suspension proc ->
-    most_recent_suspension := Some (emit_routine proc @@ "_suspension")
+     most_recent_suspension := Some (emit_routine proc @@ "_suspension")
    | Assign_session_prepare_step proc ->
-    global.session_prepare_step := Some (emit_routine proc @@ "_prepare_step")
+     global.session_prepare_step := Some (emit_routine proc @@ "_prepare_step")
   )
 
 let error_message prefix ?extra_error_msg ~contents exc =
@@ -135,17 +135,17 @@ let error_message prefix ?extra_error_msg ~contents exc =
   let msg = Buffer.add_string message in
   msg prefix; msg exc_str; msg "\n"; msg backtrace;
   (match extra_error_msg with None -> () | Some extra ->
-    msg "\nIn the context of:\n"; msg extra);
+      msg "\nIn the context of:\n"; msg extra);
   (* let from_pos, to_pos = first_file_span ~contents ~message:(Buffer.contents message) in
-  let from_pos = Int.min from_pos @@ String.length contents - 1 in
-  let to_pos = Int.min to_pos @@ String.length contents - 1 in
-  msg "\nIn code span ";
-  msg error_opening_delimiter; msg "..."; msg error_closing_delimiter; msg ":\n";
-  msg @@ String.sub contents ~pos:0 ~len:from_pos;
-  msg error_opening_delimiter;
-  msg @@ String.sub contents ~pos:from_pos ~len:(to_pos - from_pos);
-  msg error_closing_delimiter;
-  msg @@ String.sub contents ~pos:to_pos ~len:(String.length contents - to_pos); *)
+     let from_pos = Int.min from_pos @@ String.length contents - 1 in
+     let to_pos = Int.min to_pos @@ String.length contents - 1 in
+     msg "\nIn code span ";
+     msg error_opening_delimiter; msg "..."; msg error_closing_delimiter; msg ":\n";
+     msg @@ String.sub contents ~pos:0 ~len:from_pos;
+     msg error_opening_delimiter;
+     msg @@ String.sub contents ~pos:from_pos ~len:(to_pos - from_pos);
+     msg error_closing_delimiter;
+     msg @@ String.sub contents ~pos:to_pos ~len:(String.length contents - to_pos); *)
   msg contents;
   Buffer.contents message
 
