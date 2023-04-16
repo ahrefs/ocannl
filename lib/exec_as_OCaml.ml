@@ -51,7 +51,8 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
     | Constant c -> fprintf ppf "(%f)" c
     | Unoptimized_get (Gradient_at_node_id id, indices) ->
       fprintf ppf "@[<2>get_as_float (get_form %d).grad@ (%a)@]" id pp_idcs indices
-    | Unoptimized_binop (Skip_arg, _v1, v2) -> pp_ll ppf v2
+    | Unoptimized_binop (Arg1, v1, _v2) -> pp_ll ppf v1
+    | Unoptimized_binop (Arg2, _v1, v2) -> pp_ll ppf v2
     | Unoptimized_binop (Add, v1, v2) -> fprintf ppf "(@[<2>(%a) +@ (%a)@]@,)" pp_ll v1 pp_ll v2
     | Unoptimized_binop (Mul, v1, v2) -> fprintf ppf "(@[<2>(%a) *@ (%a)@]@,)" pp_ll v1 pp_ll v2
     | Unoptimized_binop (ToPowOf, v1, v2) ->
@@ -59,8 +60,6 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
       fprintf ppf "(@[<2>(%a) **@ (%a)@]@,)" pp_ll v1  pp_ll v2
     | Unoptimized_binop (Relu_gate, v1, v2) ->
       fprintf ppf "(@[<2>if %a > 0.0@ then %a@ else 0.0@]@,)" pp_ll v1 pp_ll v2
-    | Unoptimized_binop (Sub_batch, _v1, _v2) ->
-      failwith "NOT IMPLEMENTED YET"
     | Unoptimized_unop (Identity, v) -> pp_ll ppf v
     | Unoptimized_unop (Relu, v) ->
       fprintf ppf "(@[<2>let a = %a in@ if a > 0.0 then a else 0.0@]@,)" pp_ll v

@@ -37,7 +37,7 @@ type projections_slot = LHS | RHS1 | RHS2 | Nonslot | Undet [@@deriving equal, s
 let assignment_op expr =
   let loc = expr.pexp_loc in
   match expr with
-  | [%expr (=:)] -> [%expr Code.Skip_arg]
+  | [%expr (=:)] -> [%expr Code.Arg2]
   | [%expr (=+)] -> [%expr Code.Add]
   | [%expr (=*)] -> [%expr Code.Mul]
   | [%expr (=**)] -> [%expr Code.ToPowOf]
@@ -45,7 +45,7 @@ let assignment_op expr =
   | _ ->
     Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
       "ppx_ocannl %%nn_cd: expected an assignment operator, one of: %s"
-      "=: (Skip_arg), =+ (Add), =* (Mul), =** (ToPowOf), =?/ (Relu_gate)"
+      "=: (Arg2), =+ (Add), =* (Mul), =** (ToPowOf), =?/ (Relu_gate)"
 
 let binary_op expr =
   let loc = expr.pexp_loc in
@@ -54,12 +54,12 @@ let binary_op expr =
   | [%expr ( * )] -> [%expr Code.Mul]
   | [%expr ( ** )] -> [%expr Code.ToPowOf]
   | [%expr (-?/)] -> [%expr Code.Relu_gate]
-  | [%expr (-/>)] -> [%expr Code.Skip_arg]
-  | [%expr (@..)] -> [%expr Code.Sub_batch]
+  | [%expr (-/>)] -> [%expr Code.Arg2]
+  | [%expr (@..)] -> [%expr Code.Arg1]
   | _ ->
     Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
       "ppx_ocannl %%nn_cd: expected a binary operator, one of: %s"
-      "+ (Add), * (Mul), ** (ToPowOf), -?/ (Relu_gate), -/> (Skip_arg)"
+      "+ (Add), * (Mul), ** (ToPowOf), -?/ (Relu_gate), -/> (Arg2)"
 
 let unary_op expr =
   let loc = expr.pexp_loc in

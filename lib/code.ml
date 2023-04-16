@@ -10,12 +10,12 @@ type routine = {id: int; field: [`Forward | `Backprop]}
 [@@deriving sexp, equal]
 
 type binop =
-  | Skip_arg
   | Add
   | Mul
   | ToPowOf
   | Relu_gate
-  | Sub_batch
+  | Arg2
+  | Arg1
 [@@deriving sexp]
 
 type unop =
@@ -253,7 +253,8 @@ let interpret_llc ?(with_debug=true) llc =
       get_as_float (get id).value @@ lookup env indices
     | Unoptimized_get (Gradient_at_node_id id, indices) ->
       get_as_float (get_form id).grad @@ lookup env indices
-    | Unoptimized_binop (Skip_arg, _llv1, llv2) -> loop llv2
+    | Unoptimized_binop (Arg1, llv1, _llv2) -> loop llv1
+    | Unoptimized_binop (Arg2, _llv1, llv2) -> loop llv2
     | Unoptimized_binop (Add, llv1, llv2) -> loop llv1 + loop llv2
     | Unoptimized_binop (Mul, llv1, llv2) -> loop llv1 * loop llv2
     | Unoptimized_binop (ToPowOf, llv1, llv2) ->
@@ -261,8 +262,6 @@ let interpret_llc ?(with_debug=true) llc =
       let v2 = loop llv2 in
       Float.(if is_integer v2 then int_pow v1 @@ to_int v2 else v1 ** v2)
     | Unoptimized_binop (Relu_gate, llv1, llv2) -> if loop llv1 > 0.0 then loop llv2 else 0.0
-    | Unoptimized_binop (Sub_batch, _llv1, _llv2) ->
-      failwith "NOT IMPLEMENTED YET"
     | Unoptimized_unop (Identity, llv) -> loop llv
     | Unoptimized_unop (Relu, llv) -> let v = loop llv in if v > 0.0 then v else 0.0
   and dynamic_indices env tensor ~tensor_idcs ~dynamic_idcs body =
