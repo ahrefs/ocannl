@@ -140,13 +140,21 @@ let rec unoptimized (code: t): unit low_level =
       | Some rhs2 -> Shape.(derive_index projections.product_iterators rhs2) in
     let lhs_ptr = data_pointer lhs in
     let lhs_it iters = Unoptimized_get (lhs_ptr, lhs_idx iters) in
-    let rhs1 iters = Unoptimized_get (data_pointer rhs1, rhs1_idx iters) in
-    let rhs2 iters = Unoptimized_get (data_pointer rhs2, rhs2_idx iters) in
     let basecase rev_iters =
       let iters = Array.of_list_rev rev_iters in
-      Unoptimized_set (
-        lhs_ptr, lhs_idx iters,
-        Unoptimized_binop (accum, lhs_it iters, Unoptimized_binop (op, rhs1 iters, rhs2 iters))) in
+      let rhs1_idcs = rhs1_idx iters in
+      let rhs2_idcs = rhs2_idx iters in
+      let rhs1_tensor = data_pointer rhs1 in
+      let rhs2_tensor = data_pointer rhs2 in
+      let rhs1 = Unoptimized_get (rhs1_tensor, rhs1_idcs) in
+      let rhs2 = Unoptimized_get (rhs2_tensor, rhs2_idcs) in
+      let body = Unoptimized_set (
+          lhs_ptr, lhs_idx iters,
+          Unoptimized_binop (accum, lhs_it iters, Unoptimized_binop (op, rhs1, rhs2))) in
+      match Array.find rhs2_idcs ~f:Shape.is_dynamic_provider with
+      | Some (Dynamic_provider dynamic_idcs) ->
+        Dynamic_indices {tensor=rhs2_tensor; tensor_idcs=rhs2_idcs; dynamic_idcs; body}
+      | _ -> body in
     let rec loop rev_iters = function
       | ([], []) -> basecase rev_iters
       | (dim::product, it::iters) ->
@@ -266,8 +274,8 @@ let interpret_llc ?(with_debug=true) llc =
     | Unoptimized_unop (Relu, llv) -> let v = loop llv in if v > 0.0 then v else 0.0
   and dynamic_indices env tensor ~tensor_idcs ~dynamic_idcs body =
     let env = Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
-      let data = Float.to_int @@ get_as_float tensor @@ lookup ~provider_dim env tensor_idcs in
-      Map.add_exn ~key ~data env) in
+        let data = Float.to_int @@ get_as_float tensor @@ lookup ~provider_dim env tensor_idcs in
+        Map.add_exn ~key ~data env) in
     loop_proc env body in
   loop_proc (Map.empty (module Shape.Symbol)) llc
 
