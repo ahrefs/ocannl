@@ -837,7 +837,8 @@ let rec propagate_shapes (update: update_step) =
            (fun d -> List.split_n d @@ List.length d - sh1_size - subs) in
          let restored_dims over_dims =
            map_dims over_dims ~f:(fun d -> List.concat [added_dims; List.take d subs; updated_dims]) in
-         update_kind over_kind sh1 ~f:restored_dims
+         if not @@ is_given_or_fixed @@ dims_of_kind over_kind sh1 then
+           update_kind over_kind sh1 ~f:restored_dims
        | Some extended_sh ->
          (* FIXME: NOT IMPLEMENTED restoring inferred shapes and axis labels. *)
          ignore extended_sh
@@ -868,7 +869,8 @@ let rec propagate_shapes (update: update_step) =
            dims_of_kind over_kind reduced_sh1 |> list_of_dims in
          let restored_dims over_dims =
            map_dims over_dims ~f:(fun d -> inferred_dims @ List.drop d @@ List.length d - subs) in
-         update_kind over_kind sh1 ~f:restored_dims
+         if not @@ is_given_or_fixed @@ dims_of_kind over_kind sh1 then
+           update_kind over_kind sh1 ~f:restored_dims
        | Some extended_sh ->
          (* FIXME: NOT IMPLEMENTED restoring inferred shapes and axis labels. *)
          ignore extended_sh
@@ -879,7 +881,8 @@ let rec propagate_shapes (update: update_step) =
       match Map.find sh2.axis_labels k1 with
       | None -> sh2_axis_labels | Some v -> Map.add_exn sh2_axis_labels ~key:k1 ~data:v in
     sh2.axis_labels <- sh2_axis_labels;
-    sh2.output <- map_dims reduced_sh2.output ~f:(fun d -> d @ [subs])
+    if not @@ is_given_or_fixed sh2.output then
+      sh2.output <- map_dims reduced_sh2.output ~f:(fun d -> d @ [subs])
 
 
 (** Uses the matrix convention of putting the input axes last. *)
