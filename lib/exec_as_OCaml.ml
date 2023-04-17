@@ -69,7 +69,6 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
         fprintf ppf "let@ %a = @[<2>Float.to_int@ (get_as_float %s@ (%a))@]@ in@ " pp_symbol sym
           tensor (pp_indices ~provider_dim) tensor_idcs);
     pp_ll ppf body in
-  fprintf ppf "@[<v>open Base@ open Ocannl_runtime@ open Node@ open Base.Float@ ";
   (match c with
    | Lines toplevel ->
      if as_toplevel then
@@ -85,22 +84,23 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
 let format_ll_prog (ppf: Caml.Format.formatter) (p: Code.low_level_program): unit =
   let open Code in
   let open Caml.Format in
+  fprintf ppf "@[<v>open Base@ open Ocannl_runtime@ open Node@ open Base.Float@ ";
   match p with
   | Perform proc -> format_low_level ~as_toplevel:true ppf proc
   | Assign_routine ({id; field=`Forward}, proc) ->
-    fprintf ppf "@[<2>(get_form %d).forward :=@ Some (@[<2>fun () ->@ %a@]@,)@]"
-      id (format_low_level ~as_toplevel:true) proc
+    fprintf ppf "@[<2>let () = (get_form %d).forward :=@ Some (@[<2>fun () ->@ %a@]@,)@]"
+      id (format_low_level ~as_toplevel:false) proc
   | Assign_routine ({id; field=`Backprop}, proc) ->
-    fprintf ppf "@[<2>(get_form %d).backprop :=@ Some (@[<2>fun () -> %a@]@,)@]"
-      id (format_low_level ~as_toplevel:true) proc
+    fprintf ppf "@[<2>let () = (get_form %d).backprop :=@ Some (@[<2>fun () -> %a@]@,)@]"
+      id (format_low_level ~as_toplevel:false) proc
   | Assign_suspension proc ->
     fprintf ppf
       "@[<2>let () = most_recent_suspension@ := Some (@[<2>fun () -> %a@]@,)@]"
-      (format_low_level ~as_toplevel:true) proc
+      (format_low_level ~as_toplevel:false) proc
   | Assign_session_prepare_step proc ->
     fprintf ppf
       "@[<2>let () = global.session_prepare_step@ := Some (@[<2>fun () -> %a@]@,)@]" 
-      (format_low_level ~as_toplevel:true) proc
+      (format_low_level ~as_toplevel:false) proc
 
 let code_file_prefix = "nnrun"
 let column_width = 100
