@@ -957,6 +957,15 @@ let identity_projections product_space =
   let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
   { product_space; product_iterators; project_lhs; project_rhs1=project_lhs; project_rhs2=None; }
 
+let indices_bio sh (type v) (arr: v array) =
+  let n_batch = List.length @@ list_of_dims sh.batch in
+  let batch: v Array.t = Array.sub arr ~pos:0 ~len:n_batch in
+  let n_input = List.length @@ list_of_dims sh.input in
+  let input = Array.sub arr ~pos:n_batch ~len:n_input in
+  let n_output = List.length @@ list_of_dims sh.output in
+  let output = Array.sub arr ~pos:(n_batch + n_input) ~len:n_output in
+  batch, input, output
+
 (** Computes the indexing into subformulas given the shape information of a formula. The processing
     mirrors [propagate_shapes], but [derive_projections] should only be invoked when the shapes
     are inferred already. *)
@@ -1279,69 +1288,61 @@ let rec derive_projections (shapes: update_step) : projections =
     let reduced_sh2 = {sh2 with output} in
     let reduced_sh2 = 
       {reduced_sh2 with axis_labels=shift_axes_of_kind AxisKey.Output sh2.axis_labels ~f:((-) 1)} in
-    (if from_left then
-       let reduced_dims over_dims = map_dims over_dims ~f:(fun d -> List.drop d subs) in
-       let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
-       let sh1_size = List.length @@ list_of_dims @@ dims_of_kind over_kind sh1 in
-       let drop_left from_end = if from_end > sh1_size - subs then -1 else from_end in
-       let reduced_sh1 = 
-         {reduced_sh1 with axis_labels=shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_left} in
-       let logic = 
-         if other_axes_pointwise then Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
-         else
-           let extended_sh = append_all_axes ~prefix:reduced_sh2 ~main:reduced_sh1 () in
-           Transpose (Pointwise_un, extended_sh) in
-       let update_other_axes = {shape=cur_sh; logic} in
-       let projections = derive_projections update_other_axes in
-       (* let push_left from_end = if from_end > sh1_size - subs then from_end + subs else from_end in
-          let sh1_axis_labels = shift_axes_of_kind over_kind sh1.axis_labels ~f:push_left in
-          let sh1_axis_labels = Map.fold sh1.axis_labels ~init:sh1_axis_labels
-           ~f:(fun ~key:({in_axes; from_end} as key) ~data labels ->
-               if AxisKey.equal_kind over_kind in_axes && from_end > sh1_size - subs
-               then Map.add_exn labels ~key ~data else labels) in
-          sh1.axis_labels <- sh1_axis_labels;
-          let added_dims, updated_dims =
-          dims_of_kind over_kind reduced_sh1 |> list_of_dims |>
-          (fun d -> List.split_n d @@ List.length d - sh1_size - subs) in
-          let restored_dims over_dims =
-          map_dims over_dims ~f:(fun d -> List.concat [added_dims; List.take d subs; updated_dims]) in
-          update_kind over_kind sh1 ~f:restored_dims *)
-       projections
-     else
-       let reduced_dims over_dims =
-         map_dims over_dims ~f:(fun d -> List.take d @@ List.length d - subs) in
-       let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
-       let drop_right from_end = from_end - subs in
-       let reduced_sh1 = 
-         {reduced_sh1 with axis_labels=shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_right} in
-       let logic = 
-         if other_axes_pointwise then Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
-         else
-           let extended_sh = append_all_axes ~suffix:reduced_sh2 ~main:reduced_sh1 () in
-           Transpose (Pointwise_un, extended_sh) in
-       let update_other_axes = {shape=cur_sh; logic} in
-       let projections = derive_projections update_other_axes in
-       (* let push_right from_end = from_end + subs in
-          let sh1_axis_labels = shift_axes_of_kind over_kind sh1.axis_labels ~f:push_right in
-          let sh1_axis_labels = Map.fold sh1.axis_labels ~init:sh1_axis_labels
-           ~f:(fun ~key:({in_axes; from_end} as key) ~data labels ->
-               if AxisKey.equal_kind over_kind in_axes && from_end <= subs
-               then Map.add_exn labels ~key ~data else labels) in
-          sh1.axis_labels <- sh1_axis_labels;
-          let inferred_dims =
-          dims_of_kind over_kind reduced_sh1 |> list_of_dims in
-          let restored_dims over_dims =
-          map_dims over_dims ~f:(fun d -> inferred_dims @ List.drop d @@ List.length d - subs) in
-          update_kind over_kind sh1 ~f:restored_dims *)
-       projections
-    )
-(* let sh2_axis_labels = shift_axes_of_kind over_kind reduced_sh2.axis_labels ~f:((+) 1) in
-   let k1 = AxisKey.{in_axes=Output; from_end=1} in
-   let sh2_axis_labels =
-   match Map.find sh2.axis_labels k1 with
-   | None -> sh2_axis_labels | Some v -> Map.add_exn sh2_axis_labels ~key:k1 ~data:v in
-   sh2.axis_labels <- sh2_axis_labels;
-   sh2.output <- map_dims reduced_sh2.output ~f:(fun d -> d @ [subs]) *)
+    let logic =
+      if from_left then
+        let reduced_dims over_dims = map_dims over_dims ~f:(fun d -> List.drop d subs) in
+        let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
+        let sh1_size = List.length @@ list_of_dims @@ dims_of_kind over_kind sh1 in
+        let drop_left from_end = if from_end > sh1_size - subs then -1 else from_end in
+        let reduced_sh1 = 
+          {reduced_sh1 with axis_labels=shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_left} in
+        if other_axes_pointwise then Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
+        else
+          let extended_sh = append_all_axes ~prefix:reduced_sh2 ~main:reduced_sh1 () in
+          Transpose (Pointwise_un, extended_sh)
+      else
+        let reduced_dims over_dims =
+          map_dims over_dims ~f:(fun d -> List.take d @@ List.length d - subs) in
+        let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
+        let drop_right from_end = from_end - subs in
+        let reduced_sh1 = 
+          {reduced_sh1 with axis_labels=shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_right} in
+        if other_axes_pointwise then Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
+        else
+          let extended_sh = append_all_axes ~suffix:reduced_sh2 ~main:reduced_sh1 () in
+          Transpose (Pointwise_un, extended_sh) in
+    let update_other_axes = {shape=cur_sh; logic} in
+    let projections = derive_projections update_other_axes in
+    let dynamic_idcs = Array.init subs ~f:(fun _ -> get_symbol()) in
+    let proj_b, proj_i, proj_o = indices_bio sh1 projections.project_rhs1 in
+    let project_rhs1 =
+      if from_left then
+        match over_kind with
+        | AxisKey.Batch ->
+          Array.append (Array.map dynamic_idcs ~f:(fun s -> Dynamic_recipient s))
+            projections.project_rhs1
+        | AxisKey.Input ->
+          Array.concat [proj_b;
+                        (Array.map dynamic_idcs ~f:(fun s -> Dynamic_recipient s)); proj_i; proj_o]
+        | AxisKey.Output ->
+          Array.concat [proj_b; proj_i;
+                        (Array.map dynamic_idcs ~f:(fun s -> Dynamic_recipient s)); proj_o]
+      else
+        match over_kind with
+        | AxisKey.Batch ->
+          Array.concat [proj_b;
+                        (Array.map dynamic_idcs ~f:(fun s -> Dynamic_recipient s)); proj_i; proj_o]
+        | AxisKey.Input ->
+          Array.concat [proj_b; proj_i;
+                        (Array.map dynamic_idcs ~f:(fun s -> Dynamic_recipient s)); proj_o]
+        | AxisKey.Output ->
+          Array.append projections.project_rhs1
+            (Array.map dynamic_idcs ~f:(fun s -> Dynamic_recipient s))
+    in
+    let project_rhs2 =
+      Some (Array.append (Option.value_exn projections.project_rhs2)
+              [|Dynamic_provider dynamic_idcs|]) in
+    {projections with project_rhs1; project_rhs2}
 
 let backprop1 projections = {
   projections with project_lhs = projections.project_rhs1; project_rhs1 = projections.project_lhs;
