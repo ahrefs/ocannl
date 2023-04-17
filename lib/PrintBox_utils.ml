@@ -107,7 +107,12 @@ let plot_canvas ?canvas ?size specs =
     else Array.reduce_exn all_x_points ~f:max in
   let maxy = Array.reduce_exn all_y_points ~f:max in
   let spanx = maxx - minx in
+  let spanx = Float.(if spanx < epsilon_float then 1.0 else spanx) in
   let spany = maxy - miny in
+  let spany = Float.(if spany < epsilon_float then 1.0 else spany) in
+  let to_int v =
+    try to_int v with Invalid_argument _ ->
+      Stdio.eprintf "\nPrintBox_tools: cannot plot number %f\n%!" v; 0 in
   let scale_1d y = to_int @@ of_int Int.(dimy - 1) * (y - miny) / spany in
   let scale_2d (x, y) =
     to_int @@ of_int Int.(dimx - 1) * (x - minx) / spanx,
