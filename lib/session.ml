@@ -296,6 +296,7 @@ let drop_session() =
   Formula.session_initializations := [];
   Formula.session_initialized := 0;
   Formula.session_prepare_step := [];
+  Hashtbl.clear node_fetch_callbacks;
   minus_learning_rate := None;
   update_params := None;
   !cleanup_executor_session ();
@@ -316,6 +317,7 @@ let drop_all_sessions() =
   Formula.session_initialized := 0;
   Formula.session_prepare_step := [];
   Formula.first_session_id := 1;
+  Hashtbl.clear node_fetch_callbacks;
   minus_learning_rate := None;
   update_params := None;
   !cleanup_executor_session ();
@@ -326,8 +328,8 @@ let drop_all_sessions() =
   Ocannl_runtime.Node.global.unique_id <- 1
 
 (** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id].
-    Discards all computations (forward, backward, update params), but keeps the already computed
-    data. *)
+    Discards all computations (forward, backward, update params, data fetches), but keeps
+    the already computed data / parameters. *)
 let close_session() =
   Formula.first_session_id := Ocannl_runtime.Node.global.unique_id;
   Formula.global_roots := Map.empty (module Int);
@@ -335,6 +337,7 @@ let close_session() =
   Formula.session_initializations := [];
   Formula.session_initialized := 0;
   Formula.session_prepare_step := [];
+  Hashtbl.clear node_fetch_callbacks;
   minus_learning_rate := None;
   update_params := None;
   !cleanup_executor_session ();
