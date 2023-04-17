@@ -66,7 +66,7 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
     | Comment message -> fprintf ppf "(* %s *)()" message
   and dynamic_indices tensor ~tensor_idcs ~dynamic_idcs body =
     Array.iteri dynamic_idcs ~f:(fun provider_dim sym ->
-        fprintf ppf "let@ %a = @[<2>Float.to_int@ (get_as_float %s@ (%a))@]@ in@ " pp_symbol sym
+        fprintf ppf "let@ %a = @[<2>get_as_int %s@ (%a)@]@ in@ " pp_symbol sym
           tensor (pp_indices ~provider_dim) tensor_idcs);
     pp_ll ppf body in
   (match c with

@@ -274,7 +274,7 @@ let interpret_llc ?(with_debug=true) llc =
     | Unoptimized_unop (Relu, llv) -> let v = loop llv in if v > 0.0 then v else 0.0
   and dynamic_indices env tensor ~tensor_idcs ~dynamic_idcs body =
     let env = Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
-        let data = Float.to_int @@ get_as_float tensor @@ lookup ~provider_dim env tensor_idcs in
+        let data = get_as_int tensor @@ lookup ~provider_dim env tensor_idcs in
         Map.add_exn ~key ~data env) in
     loop_proc env body in
   loop_proc (Map.empty (module Shape.Symbol)) llc

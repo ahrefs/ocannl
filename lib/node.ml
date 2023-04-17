@@ -83,6 +83,19 @@ let get_as_float arr idx =
   | Single_nd arr -> A.get arr idx
   | Double_nd arr -> A.get arr idx
 
+let get_as_int arr idx =
+  match arr with
+  | Byte_as_int_nd arr -> A.get arr idx
+  | Half_as_int_nd arr -> A.get arr idx
+  | Single_nd arr ->
+    let v = A.get arr idx in
+    (try Float.to_int v with Invalid_argument _ ->
+    Stdio.eprintf "\nOCANNL Runtime error: get_as_int invalid float: %f\n%!" v; 0)
+  | Double_nd arr ->
+    let v = A.get arr idx in
+    (try Float.to_int v with Invalid_argument _ ->
+    Stdio.eprintf "\nOCANNL Runtime error: get_as_int invalid float: %f\n%!" v; 0)
+
 let set_from_float arr idx v =
   match arr with
   | Byte_as_int_nd arr -> A.set arr idx (Int.of_float v)
