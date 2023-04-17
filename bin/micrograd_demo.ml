@@ -16,15 +16,15 @@ let () =
   let epochs = 40 in
   let noise() = Random.float_range (-0.1) 0.1 in
   let moons_flat = Array.concat_map (Array.create ~len ()) ~f:Float.(fun () ->
-    let i = Random.int len in
-    let v = of_int i * pi / of_int len in
-    let c = cos v and s = sin v in
-    [|c + noise(); s + noise(); 1.0 - c + noise(); 0.5 - s + noise()|]) in
+      let i = Random.int len in
+      let v = of_int i * pi / of_int len in
+      let c = cos v and s = sin v in
+      [|c + noise(); s + noise(); 1.0 - c + noise(); 0.5 - s + noise()|]) in
   let moons_flat = FDSL.term ~label:"moons_flat" ~batch_dims:[epochs; batch] ~output_dims:[2] @@
-      First (Constant_fill moons_flat) in
+    First (Constant_fill moons_flat) in
   let moons_classes = Array.init (len*2) ~f:(fun i -> if i % 2 = 0 then 1. else (-1.)) in
   let moons_classes = FDSL.term ~label:"moons_flat" ~batch_dims:[epochs; batch] ~output_dims:[1] @@
-      First (Constant_fill moons_classes) in
+    First (Constant_fill moons_classes) in
   let%nn_op mlp x = "b3" 1 + "w3" * !/ ("b2" 16 + "w2" * !/ ("b1" 16 + "w1" * x)) in
   let steps = epochs * 2 * len/batch in
   let session_step = FDSL.data ~label:"session_step" ~batch_dims:[] ~output_dims:[1]
@@ -57,17 +57,23 @@ let () =
     let mlr = NodeUI.retrieve_1d_points ~xdim:0 
         (Option.value_exn !minus_learning_rate).node.node.value in
     assert (Array.length mlr = 1);
-    Stdio.printf "Minus learning rate over batch for step %d: %f\n%!" step mlr.(0);
     learning_rates := ~-. (mlr.(0)) :: !learning_rates;
     let batch_loss = NodeUI.retrieve_1d_points ~xdim:0 total_loss.node.node.value in
     assert (Array.length batch_loss = 1);
-    Stdio.printf "Loss over batch for step %d: %f\n%!" step batch_loss.(0);
     losses := batch_loss.(0) :: !losses;
     log_losses := Float.log batch_loss.(0) :: !log_losses;
+    if step % 10 = 0 then (
+      Stdio.printf "Minus learning rate over batch for step %d: %f\n%!" step mlr.(0);
+      Stdio.printf "Loss over batch for step %d: %f\n%!" step batch_loss.(0);
+      let step_no = NodeUI.retrieve_1d_points ~xdim:0 session_step.node.node.value in
+      assert (Array.length step_no = 1);
+      Stdio.printf "Step index at step %d: %f\n%!" step step_no.(0);
+    )
   done;
   close_session ();
   let%nn_op point = [0; 0] in
   let mlp_result = mlp point in
+  refresh_session ();
   let callback (x, y) =
     Ocannl_runtime.Node.(set_from_float point.node.node.value [|0|] x;
                          set_from_float point.node.node.value [|1|] y);
