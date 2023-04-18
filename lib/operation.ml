@@ -33,7 +33,7 @@ let matmul =
   let open Code in
   let module NFDSL = struct module O = struct end end in
   let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections = 
-    n =+ n1 * n2 in
+    n =:+ n1 * n2 in
   let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
     n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad in
   Formula.binop ~compose_op:Compose ~op_label:"*"~op_body ~grad_body
@@ -47,7 +47,7 @@ let einsum ?desc_label spec =
   let open Code in
   let module NFDSL = struct module O = struct end end in
   let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
-    n =+ n1 * n2 in
+    n =:+ n1 * n2 in
   let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
     n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad in
   Formula.binop ?desc_label ~compose_op:(Einsum spec) ~op_label:";=>" ~op_body ~grad_body
@@ -61,7 +61,7 @@ let einsum1 ?desc_label spec =
   let open Code in
   let module NFDSL = struct module O = struct end end in
   let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) projections =
-    n =+ n1 in
+    n =:+ n1 in
   let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) projections =
     n1.grad =+ n.grad in
   Formula.unop ?desc_label ~transpose_op:(Permute spec) ~op_label:"=>" ~op_body ~grad_body
