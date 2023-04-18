@@ -111,7 +111,8 @@ type _ low_level =
   | Gradient_at_node_id: int -> data low_level
   | Dynamic_indices:
       {tensor: data low_level; tensor_idcs: Shape.symbolic_axis array;
-       dynamic_idcs: Shape.symbol array; body: unit low_level} -> unit low_level
+       dynamic_idcs: Shape.symbol array; target_dims: int array;
+       body: unit low_level} -> unit low_level
   | Set: data low_level * Shape.symbolic_axis array * float low_level -> unit low_level
   | Get: data low_level * Shape.symbolic_axis array -> float low_level
   | Binop: binop * float low_level * float low_level -> float low_level
@@ -152,8 +153,8 @@ let rec to_low_level (code: t): unit low_level =
           lhs_ptr, lhs_idx iters,
           Binop (accum, lhs_it iters, Binop (op, rhs1, rhs2))) in
       match Array.find rhs2_idcs ~f:Shape.is_dynamic_provider with
-      | Some (Dynamic_provider dynamic_idcs) ->
-        Dynamic_indices {tensor=rhs2_tensor; tensor_idcs=rhs2_idcs; dynamic_idcs; body}
+      | Some (Dynamic_provider {idcs=dynamic_idcs; target_dims}) ->
+        Dynamic_indices {tensor=rhs2_tensor; tensor_idcs=rhs2_idcs; dynamic_idcs; target_dims; body}
       | _ -> body in
     let rec loop rev_iters = function
       | ([], []) -> basecase rev_iters
@@ -176,7 +177,7 @@ let rec to_low_level (code: t): unit low_level =
     let basecase rev_iters =
       let iters = Array.of_list_rev rev_iters in
       Set (lhs_ptr, lhs_idx iters,
-                       Binop (accum, lhs_it iters, Unop (op, rhs iters))) in
+           Binop (accum, lhs_it iters, Unop (op, rhs iters))) in
     let rec loop rev_iters = function
       | ([], []) -> basecase rev_iters
       | (dim::product, it::iters) ->
@@ -247,10 +248,10 @@ let interpret_llc ?(with_debug=true) llc =
     | Set (Gradient_at_node_id id, indices, llv) ->
       set_from_float (get_form id).grad (lookup env indices) @@ loop_float env llv
     | Comment message when with_debug -> Stdio.printf "%s\n%!" message
-    | Dynamic_indices {tensor=Value_at_node_id id; tensor_idcs; dynamic_idcs; body} ->
-      dynamic_indices env (get id).value ~tensor_idcs ~dynamic_idcs body
-    | Dynamic_indices {tensor=Gradient_at_node_id id; tensor_idcs; dynamic_idcs; body} ->
-      dynamic_indices env (get_form id).grad ~tensor_idcs ~dynamic_idcs body
+    | Dynamic_indices {tensor=Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body} ->
+      dynamic_indices env (get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body
+    | Dynamic_indices {tensor=Gradient_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body} ->
+      dynamic_indices env (get_form id).grad ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Comment _ -> ()
   and loop_float env llv =
     let open Float in
@@ -272,10 +273,10 @@ let interpret_llc ?(with_debug=true) llc =
     | Binop (Relu_gate, llv1, llv2) -> if loop llv1 > 0.0 then loop llv2 else 0.0
     | Unop (Identity, llv) -> loop llv
     | Unop (Relu, llv) -> let v = loop llv in if v > 0.0 then v else 0.0
-  and dynamic_indices env tensor ~tensor_idcs ~dynamic_idcs body =
+  and dynamic_indices env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body =
     let env = Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
-        let data = get_as_int tensor @@ lookup ~provider_dim env tensor_idcs in
-        Map.add_exn ~key ~data env) in
+        let actual = get_as_int tensor @@ lookup ~provider_dim env tensor_idcs in
+        Map.add_exn ~key ~data:(actual % target_dims.(provider_dim)) env) in
     loop_proc env body in
   loop_proc (Map.empty (module Shape.Symbol)) llc
 

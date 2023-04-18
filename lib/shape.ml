@@ -915,9 +915,11 @@ type 'a axis_index =
   | Dynamic_recipient of symbol
   (** [Dynamic_recipient s] gets the index from the [s] member of an [Dynamic_provider sl]
       axis. *)
-  | Dynamic_provider of symbol array
-  (** The values along a [Dynamic_provider sl] axis are read via "random access" by
-      [Dynamic_recipient s] axes for various values of [s] in [sl]. *)
+  | Dynamic_provider of {idcs: symbol array; target_dims: int array}
+  (** The values along a [Dynamic_provider {idcs; target_dims}] axis are read via "random access" by
+      [Dynamic_recipient idx] axes for various values of [idx] in [idcs], modulo the corresponding
+      dimension from [target_dims]. To prevent out-of-bound errors, set [target_dims] to the
+      dimensions of the recipient axes. *)
 [@@deriving compare, sexp, variants]
 
 let opt_iterator = function
@@ -1295,29 +1297,36 @@ let rec derive_projections (shapes: update_step) : projections =
     let reduced_sh2 = {sh2 with output} in
     let reduced_sh2 = 
       {reduced_sh2 with axis_labels=shift_axes_of_kind AxisKey.Output sh2.axis_labels ~f:((-) 1)} in
-    let reduced_sh1, logic =
+    let reduced_sh1, target_dims, logic =
       if from_left then
         let reduced_dims over_dims = map_dims over_dims ~f:(fun d -> List.drop d subs) in
         let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
         let sh1_size = List.length @@ list_of_dims @@ dims_of_kind over_kind sh1 in
+        let target_dims =
+          dims_of_kind over_kind sh1 |> list_of_dims |> Fn.flip List.take subs |> Array.of_list in
         let drop_left from_end = if from_end > sh1_size - subs then -1 else from_end in
         let reduced_sh1 = 
           {reduced_sh1 with axis_labels=shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_left} in
-        if other_axes_pointwise then reduced_sh1, Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
+        if other_axes_pointwise then
+          reduced_sh1, target_dims, Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
         else
           let extended_sh = append_all_axes ~prefix:reduced_sh2 ~main:reduced_sh1 () in
-          reduced_sh1, Transpose (Pointwise_un, extended_sh)
+          reduced_sh1, target_dims, Transpose (Pointwise_un, extended_sh)
       else
         let reduced_dims over_dims =
           map_dims over_dims ~f:(fun d -> List.take d @@ List.length d - subs) in
         let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
+        let target_dims =
+          dims_of_kind over_kind sh1 |> list_of_dims |> 
+          (fun d -> List.drop d @@ List.length d - subs) |> Array.of_list in
         let drop_right from_end = from_end - subs in
         let reduced_sh1 = 
           {reduced_sh1 with axis_labels=shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_right} in
-        if other_axes_pointwise then reduced_sh1, Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
+        if other_axes_pointwise then
+          reduced_sh1, target_dims, Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
         else
           let extended_sh = append_all_axes ~suffix:reduced_sh2 ~main:reduced_sh1 () in
-          reduced_sh1, Transpose (Pointwise_un, extended_sh) in
+          reduced_sh1, target_dims, Transpose (Pointwise_un, extended_sh) in
     let update_other_axes = {shape=cur_sh; logic} in
     let projections = derive_projections update_other_axes in
     let dynamic_idcs = Array.init subs ~f:(fun _ -> get_symbol()) in
@@ -1348,7 +1357,7 @@ let rec derive_projections (shapes: update_step) : projections =
     in
     let project_rhs2 =
       Some (Array.append (Option.value_exn projections.project_rhs2)
-              [|Dynamic_provider dynamic_idcs|]) in
+              [|Dynamic_provider {idcs=dynamic_idcs; target_dims}|]) in
     {projections with project_rhs1; project_rhs2}
 
 let backprop1 projections = {

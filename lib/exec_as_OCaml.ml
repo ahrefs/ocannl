@@ -42,10 +42,12 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
       fprintf ppf "@[<2>set_from_float (get %d).value@ (%a)@ (%a)@]" id pp_idcs indices pp_ll v
     | Set (Gradient_at_node_id id, indices, v) ->
       fprintf ppf "@[<2>set_from_float (get_form %d).grad@ (%a)@ (%a)@]" id pp_idcs indices pp_ll v
-    | Dynamic_indices {tensor=Value_at_node_id id; tensor_idcs; dynamic_idcs; body} ->
-      dynamic_indices ("(get "^Int.to_string id^").value") ~tensor_idcs ~dynamic_idcs body
-    | Dynamic_indices {tensor=Gradient_at_node_id id; tensor_idcs; dynamic_idcs; body} ->
-      dynamic_indices ("(get_form "^Int.to_string id^").grad") ~tensor_idcs ~dynamic_idcs body
+    | Dynamic_indices {tensor=Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body} ->
+      dynamic_indices ("(get "^Int.to_string id^").value") ~tensor_idcs
+        ~dynamic_idcs ~target_dims body
+    | Dynamic_indices {tensor=Gradient_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body} ->
+      dynamic_indices ("(get_form "^Int.to_string id^").grad") ~tensor_idcs
+        ~dynamic_idcs ~target_dims body
     | Get (Value_at_node_id id, indices) ->
       fprintf ppf "@[<2>get_as_float (get %d).value@ (%a)@]" id pp_idcs indices
     | Constant c -> fprintf ppf "(%f)" c
@@ -64,10 +66,10 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
     | Unop (Relu, v) ->
       fprintf ppf "(@[<2>let a = %a in@ if a > 0.0 then a else 0.0@]@,)" pp_ll v
     | Comment message -> fprintf ppf "(* %s *)()" message
-  and dynamic_indices tensor ~tensor_idcs ~dynamic_idcs body =
+  and dynamic_indices tensor ~tensor_idcs ~dynamic_idcs ~target_dims body =
     Array.iteri dynamic_idcs ~f:(fun provider_dim sym ->
-        fprintf ppf "let@ %a = @[<2>get_as_int %s@ (%a)@]@ in@ " pp_symbol sym
-          tensor (pp_indices ~provider_dim) tensor_idcs);
+        fprintf ppf "let@ %a = Int.(@[<2>(get_as_int %s@ (%a)) %% %d@]) in@ " pp_symbol sym
+          tensor (pp_indices ~provider_dim) tensor_idcs target_dims.(provider_dim));
     pp_ll ppf body in
   (match c with
    | Lines toplevel ->

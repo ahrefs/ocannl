@@ -61,7 +61,7 @@ let () =
     assert (Array.length batch_loss = 1);
     losses := batch_loss.(0) :: !losses;
     log_losses := Float.log batch_loss.(0) :: !log_losses;
-    if step % 10 = 0 then (
+    if step % 100 = 0 then (
       Stdio.printf "Minus learning rate over batch for step %d: %f\n%!" step mlr.(0);
       Stdio.printf "Loss over batch for step %d: %f\n%!" step batch_loss.(0);
       let step_no = NodeUI.retrieve_1d_points ~xdim:0 session_step.node.node.value in
