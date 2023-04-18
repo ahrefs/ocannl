@@ -7,18 +7,18 @@ module CDSL = Code.CDSL
 let add =
   let open Code in
   let module NFDSL = struct module O = struct end end in
-  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
+  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) ~projections =
     n =: n1 + n2 in
-  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
+  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) ~projections =
     n1.grad =+ n.grad || n2.grad =+ n.grad in
   Formula.binop ~compose_op:Pointwise_bin ~op_label:"+" ~op_body ~grad_body
 
 let pointmul =
   let open Code in
   let module NFDSL = struct module O = struct end end in
-  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections = 
+  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) ~projections = 
     n =: n1 * n2 in
-  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
+  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) ~projections =
     n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad in
   Formula.binop ~compose_op:Pointwise_bin ~op_label:"*." ~op_body ~grad_body
 
@@ -32,9 +32,9 @@ let pointmul =
 let matmul =
   let open Code in
   let module NFDSL = struct module O = struct end end in
-  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections = 
+  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) ~projections = 
     n =:+ n1 * n2 in
-  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
+  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) ~projections =
     n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad in
   Formula.binop ~compose_op:Compose ~op_label:"*"~op_body ~grad_body
 
@@ -46,9 +46,9 @@ let matmul =
 let einsum ?desc_label spec =
   let open Code in
   let module NFDSL = struct module O = struct end end in
-  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
+  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) ~projections =
     n =:+ n1 * n2 in
-  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
+  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) ~projections =
     n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad in
   Formula.binop ?desc_label ~compose_op:(Einsum spec) ~op_label:";=>" ~op_body ~grad_body
 
@@ -60,18 +60,18 @@ let einsum ?desc_label spec =
 let einsum1 ?desc_label spec =
   let open Code in
   let module NFDSL = struct module O = struct end end in
-  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) projections =
+  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~projections =
     n =:+ n1 in
-  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) projections =
+  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~projections =
     n1.grad =+ n.grad in
   Formula.unop ?desc_label ~transpose_op:(Permute spec) ~op_label:"=>" ~op_body ~grad_body
 
 let relu =
   let open Code in
   let module NFDSL = struct module O = struct end end in
-  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) projections =
+  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~projections =
     n =: !/ n1 ~projections in
-  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) projections =
+  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~projections =
     n1.grad =+ n -?/ n.grad in
   Formula.unop ~transpose_op:Pointwise_un ~op_label:"r" ~op_body ~grad_body
 
@@ -90,15 +90,15 @@ let rec pointpow ?desc_label ~is_form p m1: Formula.t =
   let module NFDSL = struct module O = NFO_without_pow end in
   let open Code in
   let p_f = Formula.number ~is_form p in
-  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) projections =
+  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) ~projections =
     n =: n1 ** n2 ~projections in
   let%nn_cd grad_body =
     if not is_form then 
-      fun ~n:_ ~n1:_ ~n2:_ _projections -> Noop
+      fun ~n:_ ~n1:_ ~n2:_ ~projections:_ -> Noop
     else if Float.equal p 2.0 then
-      fun ~(n:NodeUI.t) ~(n1:NodeUI.t) ~n2:_ projections -> n1.grad =+ p_f *. m1 * n.grad
+      fun ~(n:NodeUI.t) ~(n1:NodeUI.t) ~n2:_ ~projections -> n1.grad =+ p_f *. m1 * n.grad
     else
-      fun ~(n:NodeUI.t) ~(n1:NodeUI.t) ~n2:_ projections -> n1.grad =+ (p_f *. m1 **. (p -. 1.)) * n.grad in
+      fun ~(n:NodeUI.t) ~(n1:NodeUI.t) ~n2:_ ~projections -> n1.grad =+ (p_f *. m1 **. (p -. 1.)) * n.grad in
   Formula.binop ?desc_label ~compose_op:Pointwise_bin ~op_label:"**."
     ~op_body ~grad_body ~is_form m1 p_f
 
@@ -118,16 +118,16 @@ let data ?desc_label ?axis_labels ?(needs_gradient=false) ~label ~batch_dims ~ou
 
 let assign =
   let module NFDSL = struct module O = struct end end in
-  let%nn_cd assign ~(lhs:Code.data) ~(rhs:Code.data) projections =
+  let%nn_cd assign ~(lhs:Code.data) ~(rhs:Code.data) ~projections =
     lhs =: rhs ~projections in
   assign
 
-let assign_op field ~(n:NodeUI.t) ~(n1:NodeUI.t) projections =
-  assign ~lhs:(field n) ~rhs:(field n1) projections
+let assign_op field ~(n:NodeUI.t) ~(n1:NodeUI.t) ~projections =
+  assign ~lhs:(field n) ~rhs:(field n1) ~projections
 
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient =
-  let grad_body ~n:_ ~n1:_ _projections = Code.Noop in
+  let grad_body ~n:_ ~n1:_ ~projections:_ = Code.Noop in
   let op_body = assign_op @@ Code.CDSL.data_of_node `Value in
   Formula.unop ~transpose_op:Pointwise_un ~op_label:"stop_grad" ~op_body ~grad_body
     ~is_form:true

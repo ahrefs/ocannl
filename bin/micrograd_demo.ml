@@ -20,23 +20,22 @@ let () =
       let v = of_int i * pi / of_int len in
       let c = cos v and s = sin v in
       [|c + noise(); s + noise(); 1.0 - c + noise(); 0.5 - s + noise()|]) in
-  let moons_flat = FDSL.term ~label:"moons_flat" ~batch_dims:[epochs; batch] ~output_dims:[2] @@
-    First (Constant_fill moons_flat) in
+  let moons_flat = FDSL.term ~label:"moons_flat" ~batch_dims:[epochs; batch] ~input_dims:[]
+      ~output_dims:[2] @@ First (Constant_fill moons_flat) in
   let moons_classes = Array.init (len*2) ~f:(fun i -> if i % 2 = 0 then 1. else (-1.)) in
-  let moons_classes = FDSL.term ~label:"moons_flat" ~batch_dims:[epochs; batch] ~output_dims:[1] @@
-    First (Constant_fill moons_classes) in
+  let moons_classes = FDSL.term ~label:"moons_flat" ~batch_dims:[epochs; batch] ~input_dims:[]
+      ~output_dims:[1] @@ First (Constant_fill moons_classes) in
   let%nn_op mlp x = "b3" 1 + "w3" * !/ ("b2" 16 + "w2" * !/ ("b1" 16 + "w1" * x)) in
   let steps = epochs * 2 * len/batch in
   let session_step = FDSL.data ~label:"session_step" ~batch_dims:[] ~output_dims:[1]
-      (fun ~n -> Synthetic [%nn_cd n =+ ~= 1 ~logic:"."]) in
+      (fun ~n -> Synthetic [%nn_cd n =+ 1]) in
   minus_learning_rate := Some (
       FDSL.data ~label:"minus_lr" ~batch_dims:[] ~output_dims:[1]
-        (fun ~n -> Synthetic
-            [%nn_cd n =: ~= (-0.1 *. (!..steps - session_step) /. !..steps) ~logic:"."]));
+        (fun ~n -> Synthetic [%nn_cd n =: (-0.1 *. (!..steps - session_step) /. !..steps)]));
   let moons_input = FDSL.data ~label:"moons_input" ~batch_dims:[batch] ~output_dims:[2]
-      (fun ~n -> Synthetic [%nn_cd n =: moons_flat @.. session_step ~logic:"."]) in
+      (fun ~n -> Synthetic [%nn_cd n =: moons_flat @.. session_step]) in
   let moons_class = FDSL.data ~label:"moons_class" ~batch_dims:[batch] ~output_dims:[1]
-      (fun ~n -> Synthetic [%nn_cd n =: moons_classes @.. session_step ~logic:"."]) in
+      (fun ~n -> Synthetic [%nn_cd n =: moons_classes @.. session_step]) in
   let points1 = ref [] in
   let points2 = ref [] in
   let losses = ref [] in

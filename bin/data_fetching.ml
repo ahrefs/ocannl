@@ -12,11 +12,9 @@ let () =
   drop_all_sessions();
   Random.init 0;
   let session_step = FDSL.data ~label:"session_step" ~batch_dims:[] ~output_dims:[1]
-      (fun ~n -> Synthetic
-          [%nn_cd n =+ ~= 1 ~logic:"."]) in
+      (fun ~n -> Synthetic [%nn_cd n =+ 1]) in
   let c_data = FDSL.data ~label:"fetch_callback" ~batch_dims:[1] ~output_dims:[2;3]
-    (fun ~n -> Synthetic
-          [%nn_cd n =+ ~= (session_step *. 100) ~logic:"."]) in
+    (fun ~n -> Synthetic [%nn_cd n =+ (session_step *. 100)]) in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ c_data;
   refresh_session ();

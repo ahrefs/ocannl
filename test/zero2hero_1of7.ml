@@ -38,7 +38,7 @@ let%expect_test "Graph drawing recompile" =
   let xs = Array.init 5 ~f:Float.(fun i -> 2. * of_int i - 5.) in
   let ys = Array.map xs ~f:(fun v ->
     (* This is very inefficient because it compiles the argument update inside the loop. *)
-    let setval = compile_routine [%nn_cd x =: ~= !.v ~logic:"."] in
+    let setval = compile_routine [%nn_cd x =: !.v] in
     setval (); refresh_session ();
     (NodeUI.retrieve_1d_points ~xdim:0 f.node.node.value).(0)) in
   let plot_box = 

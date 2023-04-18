@@ -153,7 +153,7 @@ let binop ~op_label ?desc_label ?(compose_op=Shape.Pointwise_bin) ~op_body ~grad
   Shape.propagate_shapes local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections() = Shape.derive_projections local_shape_update in
-  let op_body = op_body ~n ~n1 ~n2 projections in
+  let op_body = op_body ~n ~n1 ~n2 ~projections in
   (* The code needs to be included in the order it was computed! *)
   let forward_body =
     Code.(match m1_processed, m1.forward_body, m2_processed, m2.forward_body with
@@ -182,7 +182,7 @@ let binop ~op_label ?desc_label ?(compose_op=Shape.Pointwise_bin) ~op_body ~grad
     (* The code needs to be included in the reverse order to which it was computed! This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
-    let grad_body = if needs_gradient then grad_body ~n ~n1 ~n2 projections else Code.Noop in
+    let grad_body = if needs_gradient then grad_body ~n ~n1 ~n2 ~projections else Code.Noop in
     let grad_body =
       if form1.needs_gradient then grad_body
       else Code.remove_updates {id=m1.id; field=`Grad} grad_body in
@@ -230,7 +230,7 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
   Shape.propagate_shapes local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections() = Shape.derive_projections local_shape_update in
-  let op_body = op_body ~n ~n1 projections in
+  let op_body = op_body ~n ~n1 ~projections in
   (* The code needs to be included in the order it was computed! *)
   let forward_body =
     Code.(match m1_processed, m1.forward_body with
@@ -250,7 +250,7 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
        let zero_grads = fetch_zeros ~id `Grad shape in
        session_prepare_step := zero_grads :: !session_prepare_step);
     let grad_body =
-      if needs_gradient then grad_body ~n ~n1 projections else Code.Noop in
+      if needs_gradient then grad_body ~n ~n1 ~projections else Code.Noop in
     let grad_body =
       if form1.needs_gradient then grad_body
       else Code.remove_updates {id=m1.id; field=`Grad} grad_body in
