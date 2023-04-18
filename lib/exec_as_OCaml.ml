@@ -1,6 +1,6 @@
 open Base
 
-let emit = Code.unoptimized_program
+let emit = Code.to_low_level_program
 
 let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
 let pp_symbol ppf (Shape.Symbol s) = Caml.Format.fprintf ppf "i%d" s
@@ -38,30 +38,30 @@ let format_low_level ~as_toplevel (ppf: Caml.Format.formatter) (type a) (c: a Co
       fprintf ppf "@[<2>fill_from_float (get %d).value@ (%a)@]" id pp_ll value
     | Fill {tensor=Gradient_at_node_id id; value} ->
       fprintf ppf "@[<2>fill_from_float (get_form %d).grad@ (%a)@]" id pp_ll value
-    | Unoptimized_set (Value_at_node_id id, indices, v) ->
+    | Set (Value_at_node_id id, indices, v) ->
       fprintf ppf "@[<2>set_from_float (get %d).value@ (%a)@ (%a)@]" id pp_idcs indices pp_ll v
-    | Unoptimized_set (Gradient_at_node_id id, indices, v) ->
+    | Set (Gradient_at_node_id id, indices, v) ->
       fprintf ppf "@[<2>set_from_float (get_form %d).grad@ (%a)@ (%a)@]" id pp_idcs indices pp_ll v
     | Dynamic_indices {tensor=Value_at_node_id id; tensor_idcs; dynamic_idcs; body} ->
       dynamic_indices ("(get "^Int.to_string id^").value") ~tensor_idcs ~dynamic_idcs body
     | Dynamic_indices {tensor=Gradient_at_node_id id; tensor_idcs; dynamic_idcs; body} ->
       dynamic_indices ("(get_form "^Int.to_string id^").grad") ~tensor_idcs ~dynamic_idcs body
-    | Unoptimized_get (Value_at_node_id id, indices) ->
+    | Get (Value_at_node_id id, indices) ->
       fprintf ppf "@[<2>get_as_float (get %d).value@ (%a)@]" id pp_idcs indices
     | Constant c -> fprintf ppf "(%f)" c
-    | Unoptimized_get (Gradient_at_node_id id, indices) ->
+    | Get (Gradient_at_node_id id, indices) ->
       fprintf ppf "@[<2>get_as_float (get_form %d).grad@ (%a)@]" id pp_idcs indices
-    | Unoptimized_binop (Arg1, v1, _v2) -> pp_ll ppf v1
-    | Unoptimized_binop (Arg2, _v1, v2) -> pp_ll ppf v2
-    | Unoptimized_binop (Add, v1, v2) -> fprintf ppf "(@[<2>(%a) +@ (%a)@]@,)" pp_ll v1 pp_ll v2
-    | Unoptimized_binop (Mul, v1, v2) -> fprintf ppf "(@[<2>(%a) *@ (%a)@]@,)" pp_ll v1 pp_ll v2
-    | Unoptimized_binop (ToPowOf, v1, v2) ->
+    | Binop (Arg1, v1, _v2) -> pp_ll ppf v1
+    | Binop (Arg2, _v1, v2) -> pp_ll ppf v2
+    | Binop (Add, v1, v2) -> fprintf ppf "(@[<2>(%a) +@ (%a)@]@,)" pp_ll v1 pp_ll v2
+    | Binop (Mul, v1, v2) -> fprintf ppf "(@[<2>(%a) *@ (%a)@]@,)" pp_ll v1 pp_ll v2
+    | Binop (ToPowOf, v1, v2) ->
       (* if is_integer p then fprintf ppf "(@[<2>int_pow (%a) (%d)@]@,)" pp_ll v1 (to_int p) *)
       fprintf ppf "(@[<2>(%a) **@ (%a)@]@,)" pp_ll v1  pp_ll v2
-    | Unoptimized_binop (Relu_gate, v1, v2) ->
+    | Binop (Relu_gate, v1, v2) ->
       fprintf ppf "(@[<2>if %a > 0.0@ then %a@ else 0.0@]@,)" pp_ll v1 pp_ll v2
-    | Unoptimized_unop (Identity, v) -> pp_ll ppf v
-    | Unoptimized_unop (Relu, v) ->
+    | Unop (Identity, v) -> pp_ll ppf v
+    | Unop (Relu, v) ->
       fprintf ppf "(@[<2>let a = %a in@ if a > 0.0 then a else 0.0@]@,)" pp_ll v
     | Comment message -> fprintf ppf "(* %s *)()" message
   and dynamic_indices tensor ~tensor_idcs ~dynamic_idcs body =

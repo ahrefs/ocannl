@@ -57,11 +57,11 @@ let rec jit_code ~name ~env ctx func ~b_initial (body: unit Code.low_level): Gcc
            jit_code ~name:(name^":"^Int.to_string i) ~env ctx func ~b_initial line)
    | Code.For_loop {index; from_; to_; body} ->
      jit_for_loop ~env ctx func index from_ to_ ~b_initial body
-   | Code.Unoptimized_set (Value_at_node_id id, idcs, expr) ->
+   | Code.Set (Value_at_node_id id, idcs, expr) ->
      let tensor = get_value_tensor id in
      ignore (tensor, idcs, expr);
      failwith "NOT IMPLEMENTED"
-   | Code.Unoptimized_set (Gradient_at_node_id id, idcs, expr) ->
+   | Code.Set (Gradient_at_node_id id, idcs, expr) ->
      let tensor = get_grad_tensor id in
      ignore (tensor, idcs, expr);
      failwith "NOT IMPLEMENTED"
@@ -79,9 +79,9 @@ let rec jit_code ~name ~env ctx func ~b_initial (body: unit Code.low_level): Gcc
 (* 
   | Code.Value_at_node_id _ -> _
   | Code.Gradient_at_node_id _ -> _
-  | Code.Unoptimized_get (_, _) -> _
-  | Code.Unoptimized_binop (_, _, _) -> _
-  | Code.Unoptimized_unop (_, _) -> _
+  | Code.Get (_, _) -> _
+  | Code.Binop (_, _, _) -> _
+  | Code.Unop (_, _) -> _
  *)
 
 and jit_for_loop ~env ctx func (Shape.Symbol s as symbol) from_ to_ ~b_initial body: Gccjit.block =
@@ -156,7 +156,7 @@ let jit_program ?(with_debug=true) (prog: Code.program) =
   if with_debug then Context.set_option ctx Context.Dump_initial_gimple true;
   let msg = "" in
   ignore (prog, jit_code);
-  jit_ll_prog ~name:"" ctx (Code.unoptimized_program prog);
+  jit_ll_prog ~name:"" ctx (Code.to_low_level_program prog);
   Context.release ctx;
   if with_debug then Some msg
   else None

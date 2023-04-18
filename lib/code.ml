@@ -112,10 +112,10 @@ type _ low_level =
   | Dynamic_indices:
       {tensor: data low_level; tensor_idcs: Shape.symbolic_axis array;
        dynamic_idcs: Shape.symbol array; body: unit low_level} -> unit low_level
-  | Unoptimized_set: data low_level * Shape.symbolic_axis array * float low_level -> unit low_level
-  | Unoptimized_get: data low_level * Shape.symbolic_axis array -> float low_level
-  | Unoptimized_binop: binop * float low_level * float low_level -> float low_level
-  | Unoptimized_unop: unop * float low_level -> float low_level
+  | Set: data low_level * Shape.symbolic_axis array * float low_level -> unit low_level
+  | Get: data low_level * Shape.symbolic_axis array -> float low_level
+  | Binop: binop * float low_level * float low_level -> float low_level
+  | Unop: unop * float low_level -> float low_level
   | Constant: float -> float low_level
 
 type low_level_program =
@@ -129,7 +129,7 @@ let data_pointer (xhs: data) =
   match xhs.field with
   | `Value -> Value_at_node_id xhs.id | `Grad -> Gradient_at_node_id xhs.id
 
-let rec unoptimized (code: t): unit low_level =
+let rec to_low_level (code: t): unit low_level =
   match code with
   | Accum_binop {zero_out; accum; op; lhs; rhs1; rhs2; projections} ->
     let projections = projections() in
@@ -139,18 +139,18 @@ let rec unoptimized (code: t): unit low_level =
       | None -> invalid_arg "accum_binop: projections missing project_rhs2"
       | Some rhs2 -> Shape.(derive_index projections.product_iterators rhs2) in
     let lhs_ptr = data_pointer lhs in
-    let lhs_it iters = Unoptimized_get (lhs_ptr, lhs_idx iters) in
+    let lhs_it iters = Get (lhs_ptr, lhs_idx iters) in
     let basecase rev_iters =
       let iters = Array.of_list_rev rev_iters in
       let rhs1_idcs = rhs1_idx iters in
       let rhs2_idcs = rhs2_idx iters in
       let rhs1_tensor = data_pointer rhs1 in
       let rhs2_tensor = data_pointer rhs2 in
-      let rhs1 = Unoptimized_get (rhs1_tensor, rhs1_idcs) in
-      let rhs2 = Unoptimized_get (rhs2_tensor, rhs2_idcs) in
-      let body = Unoptimized_set (
+      let rhs1 = Get (rhs1_tensor, rhs1_idcs) in
+      let rhs2 = Get (rhs2_tensor, rhs2_idcs) in
+      let body = Set (
           lhs_ptr, lhs_idx iters,
-          Unoptimized_binop (accum, lhs_it iters, Unoptimized_binop (op, rhs1, rhs2))) in
+          Binop (accum, lhs_it iters, Binop (op, rhs1, rhs2))) in
       match Array.find rhs2_idcs ~f:Shape.is_dynamic_provider with
       | Some (Dynamic_provider dynamic_idcs) ->
         Dynamic_indices {tensor=rhs2_tensor; tensor_idcs=rhs2_idcs; dynamic_idcs; body}
@@ -159,11 +159,11 @@ let rec unoptimized (code: t): unit low_level =
       | ([], []) -> basecase rev_iters
       | (dim::product, it::iters) ->
         For_loop {index=it; from_=0; to_=dim - 1; body=loop (it::rev_iters) (product, iters)}
-      | _ -> invalid_arg "Code.unoptimized: Accum_binop projections dims-iterators mismatch" in
+      | _ -> invalid_arg "Code.to_low_level: Accum_binop projections dims-iterators mismatch" in
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|unoptimized (Fetch {tensor=lhs; fetch_op=Zeros}); for_loops|]
+    then Lines [|to_low_level (Fetch {tensor=lhs; fetch_op=Zeros}); for_loops|]
     else for_loops
 
   | Accum_unop {zero_out; accum; op; lhs; rhs; projections} ->
@@ -171,28 +171,28 @@ let rec unoptimized (code: t): unit low_level =
     let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
     let rhs_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
     let lhs_ptr = data_pointer lhs in
-    let lhs_it iters = Unoptimized_get (lhs_ptr, lhs_idx iters) in
-    let rhs iters = Unoptimized_get (data_pointer rhs, rhs_idx iters) in
+    let lhs_it iters = Get (lhs_ptr, lhs_idx iters) in
+    let rhs iters = Get (data_pointer rhs, rhs_idx iters) in
     let basecase rev_iters =
       let iters = Array.of_list_rev rev_iters in
-      Unoptimized_set (lhs_ptr, lhs_idx iters,
-                       Unoptimized_binop (accum, lhs_it iters, Unoptimized_unop (op, rhs iters))) in
+      Set (lhs_ptr, lhs_idx iters,
+                       Binop (accum, lhs_it iters, Unop (op, rhs iters))) in
     let rec loop rev_iters = function
       | ([], []) -> basecase rev_iters
       | (dim::product, it::iters) ->
         For_loop {index=it; from_=0; to_=dim - 1; body=loop (it::rev_iters) (product, iters)}
-      | _ -> invalid_arg "Code.unoptimized: Accum_unop projections dims-iterators mismatch" in
+      | _ -> invalid_arg "Code.to_low_level: Accum_unop projections dims-iterators mismatch" in
     let for_loops = 
       loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators) in
     if zero_out
-    then Lines [|unoptimized (Fetch {tensor=lhs; fetch_op=Zeros}); for_loops|]
+    then Lines [|to_low_level (Fetch {tensor=lhs; fetch_op=Zeros}); for_loops|]
     else for_loops
 
   | Noop -> Lines [||]
 
   | Par (c1, c2) | ParHint (c1, c2) | Seq (c1, c2) ->
-    let ll1 = unoptimized c1 in
-    let ll2 = unoptimized c2 in
+    let ll1 = to_low_level c1 in
+    let ll2 = to_low_level c2 in
     (match ll1, ll2 with
      | Lines ls1, Lines ls2 -> Lines (Array.append ls1 ls2)
      | _, Lines ls2 -> Lines (Array.append [|ll1|] ls2)
@@ -204,18 +204,18 @@ let rec unoptimized (code: t): unit low_level =
   | Fetch { tensor; fetch_op = Ones } ->
     Fill {tensor=data_pointer tensor; value=Constant 1.}
   | Fetch { tensor=_; fetch_op = Synthetic gen } ->
-    unoptimized gen
+    to_low_level gen
   | Fetch { tensor=_; fetch_op = Imported {func=_} } ->
     (* FIXME: NOT IMPLEMENTED YET *)
     failwith "NOT IMPLEMENTED YET"
 
-let unoptimized_program prog: low_level_program =
+let to_low_level_program prog: low_level_program =
   match prog with
-  | Initialization proc -> Perform (unoptimized proc)
+  | Initialization proc -> Perform (to_low_level proc)
   | Node_specific {procedure; routine; label} ->
-    Assign_routine (routine, Lines [|Comment label; unoptimized procedure|])
-  | Suspension proc -> Assign_suspension (unoptimized proc)
-  | Session_prepare_step proc -> Assign_session_prepare_step (unoptimized proc)
+    Assign_routine (routine, Lines [|Comment label; to_low_level procedure|])
+  | Suspension proc -> Assign_suspension (to_low_level proc)
+  | Session_prepare_step proc -> Assign_session_prepare_step (to_low_level proc)
 
 module CDSL = struct
   let value_of_id id: data = {id; field=`Value}
@@ -242,9 +242,9 @@ let interpret_llc ?(with_debug=true) llc =
       fill_from_float (get id).value @@ loop_float env value
     | Fill {tensor=Gradient_at_node_id id; value} ->
       fill_from_float (get_form id).grad @@ loop_float env value
-    | Unoptimized_set (Value_at_node_id id, indices, llv) ->
+    | Set (Value_at_node_id id, indices, llv) ->
       set_from_float (get id).value (lookup env indices) @@ loop_float env llv
-    | Unoptimized_set (Gradient_at_node_id id, indices, llv) ->
+    | Set (Gradient_at_node_id id, indices, llv) ->
       set_from_float (get_form id).grad (lookup env indices) @@ loop_float env llv
     | Comment message when with_debug -> Stdio.printf "%s\n%!" message
     | Dynamic_indices {tensor=Value_at_node_id id; tensor_idcs; dynamic_idcs; body} ->
@@ -257,21 +257,21 @@ let interpret_llc ?(with_debug=true) llc =
     let loop = loop_float env in
     match llv with
     | Constant c -> c
-    | Unoptimized_get (Value_at_node_id id, indices) ->
+    | Get (Value_at_node_id id, indices) ->
       get_as_float (get id).value @@ lookup env indices
-    | Unoptimized_get (Gradient_at_node_id id, indices) ->
+    | Get (Gradient_at_node_id id, indices) ->
       get_as_float (get_form id).grad @@ lookup env indices
-    | Unoptimized_binop (Arg1, llv1, _llv2) -> loop llv1
-    | Unoptimized_binop (Arg2, _llv1, llv2) -> loop llv2
-    | Unoptimized_binop (Add, llv1, llv2) -> loop llv1 + loop llv2
-    | Unoptimized_binop (Mul, llv1, llv2) -> loop llv1 * loop llv2
-    | Unoptimized_binop (ToPowOf, llv1, llv2) ->
+    | Binop (Arg1, llv1, _llv2) -> loop llv1
+    | Binop (Arg2, _llv1, llv2) -> loop llv2
+    | Binop (Add, llv1, llv2) -> loop llv1 + loop llv2
+    | Binop (Mul, llv1, llv2) -> loop llv1 * loop llv2
+    | Binop (ToPowOf, llv1, llv2) ->
       let v1 = loop llv1 in
       let v2 = loop llv2 in
       Float.(if is_integer v2 then int_pow v1 @@ to_int v2 else v1 ** v2)
-    | Unoptimized_binop (Relu_gate, llv1, llv2) -> if loop llv1 > 0.0 then loop llv2 else 0.0
-    | Unoptimized_unop (Identity, llv) -> loop llv
-    | Unoptimized_unop (Relu, llv) -> let v = loop llv in if v > 0.0 then v else 0.0
+    | Binop (Relu_gate, llv1, llv2) -> if loop llv1 > 0.0 then loop llv2 else 0.0
+    | Unop (Identity, llv) -> loop llv
+    | Unop (Relu, llv) -> let v = loop llv in if v > 0.0 then v else 0.0
   and dynamic_indices env tensor ~tensor_idcs ~dynamic_idcs body =
     let env = Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
         let data = get_as_int tensor @@ lookup ~provider_dim env tensor_idcs in
@@ -307,7 +307,7 @@ let fprint_program ppf prog =
   Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_program prog  
 
 let interpret_program ?(with_debug=true) prog: string option =
-  let llp = unoptimized_program prog in
+  let llp = to_low_level_program prog in
   let () = interpret_llprog ~with_debug llp in
   (* If we were interpreting bytecode, we would return the bytecode for debugging purposes. *)
   (* Some (Sexp.to_string_hum @@ sexp_of_low_level llc) *)
