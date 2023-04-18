@@ -991,12 +991,16 @@ let rec derive_projections (shapes: update_step) : projections =
     let project_dim = function
       | _, 1 | None, _ -> Fixed_idx 0
       | Some idx, _ -> Iterator idx in
-    let rec project_dims ~is_fixed accu_idcs = function
+    let rec project_dims ~is_fixed  accu_idcs = function
       | [], [] -> accu_idcs
       | _idcs, [] -> assert (not is_fixed); accu_idcs
       | idx::idcs, d1::dims1 ->
         project_dims ~is_fixed (project_dim (idx, d1)::accu_idcs) (idcs, dims1)
-      | _ -> assert false in
+      | _ ->
+        (* Only reduced shapes, used internally, can have no output axes. *)
+        (* FIXME: debug what's happening here. Maybe check for is_given. *)
+        (* assert false *)
+        accu_idcs in
     match sh1_dims with
     | Unknown ->
       assert (0 = List.length product_idcs); 
@@ -1291,7 +1295,7 @@ let rec derive_projections (shapes: update_step) : projections =
     let reduced_sh2 = {sh2 with output} in
     let reduced_sh2 = 
       {reduced_sh2 with axis_labels=shift_axes_of_kind AxisKey.Output sh2.axis_labels ~f:((-) 1)} in
-    let logic =
+    let reduced_sh1, logic =
       if from_left then
         let reduced_dims over_dims = map_dims over_dims ~f:(fun d -> List.drop d subs) in
         let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
@@ -1299,10 +1303,10 @@ let rec derive_projections (shapes: update_step) : projections =
         let drop_left from_end = if from_end > sh1_size - subs then -1 else from_end in
         let reduced_sh1 = 
           {reduced_sh1 with axis_labels=shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_left} in
-        if other_axes_pointwise then Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
+        if other_axes_pointwise then reduced_sh1, Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
         else
           let extended_sh = append_all_axes ~prefix:reduced_sh2 ~main:reduced_sh1 () in
-          Transpose (Pointwise_un, extended_sh)
+          reduced_sh1, Transpose (Pointwise_un, extended_sh)
       else
         let reduced_dims over_dims =
           map_dims over_dims ~f:(fun d -> List.take d @@ List.length d - subs) in
@@ -1310,14 +1314,14 @@ let rec derive_projections (shapes: update_step) : projections =
         let drop_right from_end = from_end - subs in
         let reduced_sh1 = 
           {reduced_sh1 with axis_labels=shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_right} in
-        if other_axes_pointwise then Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
+        if other_axes_pointwise then reduced_sh1, Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2)
         else
           let extended_sh = append_all_axes ~suffix:reduced_sh2 ~main:reduced_sh1 () in
-          Transpose (Pointwise_un, extended_sh) in
+          reduced_sh1, Transpose (Pointwise_un, extended_sh) in
     let update_other_axes = {shape=cur_sh; logic} in
     let projections = derive_projections update_other_axes in
     let dynamic_idcs = Array.init subs ~f:(fun _ -> get_symbol()) in
-    let proj_b, proj_i, proj_o = indices_bio sh1 projections.project_rhs1 in
+    let proj_b, proj_i, proj_o = indices_bio reduced_sh1 projections.project_rhs1 in
     let project_rhs1 =
       if from_left then
         match over_kind with

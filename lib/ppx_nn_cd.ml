@@ -67,7 +67,7 @@ let binary_op expr =
   | [%expr (-/>)] -> [%expr Shape.Pointwise_bin], [%expr Code.Arg2]
   | [%expr (@..)] ->
     [%expr Shape.Dynamic_index {
-        over_kind=Shape.AxisKey.Output; from_left=true; other_axes_pointwise=true}],
+        over_kind=Shape.AxisKey.Batch; from_left=true; other_axes_pointwise=true}],
     [%expr Code.Arg1]
   | _ ->
     [%expr Shape.Pointwise_bin],
