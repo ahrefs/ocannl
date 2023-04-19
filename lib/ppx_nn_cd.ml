@@ -67,55 +67,6 @@ let binary_op expr =
   | [%expr (-/>)] -> [%expr Shape.Pointwise_bin], [%expr Code.Arg2]
   | [%expr (-@>)] -> [%expr Shape.Pointwise_bin], [%expr Code.Arg1]
 
-  | [%expr (@.|)] ->
-    [%expr Shape.Dynamic_index {
-        over_kind=Shape.AxisKey.Batch; from_left=true; other_axes_pointwise=true}],
-    [%expr Code.Arg1]
-  | [%expr (@./)] ->
-    [%expr Shape.Dynamic_index {
-        over_kind=Shape.AxisKey.Input; from_left=true; other_axes_pointwise=true}],
-    [%expr Code.Arg1]
-  | [%expr (@.-)] ->
-    [%expr Shape.Dynamic_index {
-        over_kind=Shape.AxisKey.Output; from_left=true; other_axes_pointwise=true}],
-    [%expr Code.Arg1]
-  | [%expr (@^|)] ->
-    [%expr Shape.Dynamic_index {
-        over_kind=Shape.AxisKey.Batch; from_left=true; other_axes_pointwise=false}],
-    [%expr Code.Arg1]
-  | [%expr (@^/)] ->
-    [%expr Shape.Dynamic_index {
-        over_kind=Shape.AxisKey.Input; from_left=true; other_axes_pointwise=false}],
-    [%expr Code.Arg1]
-  | [%expr (@^-)] ->
-    [%expr Shape.Dynamic_index {
-        over_kind=Shape.AxisKey.Output; from_left=true; other_axes_pointwise=false}],
-    [%expr Code.Arg1]
-  | [%expr (@|.)] ->
-    [%expr Shape.Dynamic_index {
-        over_kind=Shape.AxisKey.Batch; from_left=false; other_axes_pointwise=true}],
-    [%expr Code.Arg1]
-  | [%expr (@/.)] ->
-    [%expr Shape.Dynamic_index {
-        over_kind=Shape.AxisKey.Input; from_left=false; other_axes_pointwise=true}],
-    [%expr Code.Arg1]
-  | [%expr (@-.)] ->
-    [%expr Shape.Dynamic_index {
-        over_kind=Shape.AxisKey.output; from_left=false; other_axes_pointwise=true}],
-    [%expr Code.Arg1]
-  | [%expr (@|^)] ->
-    [%expr Shape.Dynamic_index {
-        over_kind=Shape.AxisKey.Batch; from_left=false; other_axes_pointwise=false}],
-    [%expr Code.Arg1]
-  | [%expr (@/^)] ->
-    [%expr Shape.Dynamic_index {
-        over_kind=Shape.AxisKey.Input; from_left=false; other_axes_pointwise=false}],
-    [%expr Code.Arg1]
-  | [%expr (@-^)] ->
-    [%expr Shape.Dynamic_index {
-        over_kind=Shape.AxisKey.Output; from_left=false; other_axes_pointwise=false}],
-    [%expr Code.Arg1]
-
   | _ ->
     [%expr Shape.Pointwise_bin],
     Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc

@@ -36,8 +36,7 @@ let x_flat = FDSL.term ~needs_gradient:true ~label:"x_flat" ~batch_dims:[size] ~
  ~output_dims:[1] (First (Constant_fill xs)) in
 let session_step = FDSL.data ~label:"session_step" ~batch_dims:[] ~output_dims:[1]
     (fun ~n -> Synthetic [%nn_cd n =+ 1]) in
-let x = FDSL.term ~label:"x" ~needs_gradient:true ~batch_dims:[] ~input_dims:[] ~output_dims:[1]
-    @@ Second (fun ~n -> Synthetic [%nn_cd n =: x_flat @.| session_step]) in
+let%nn_op x = x_flat @.| session_step in
 let%nn_op fx = f x in
 refresh_session ();
 print_preamble ();
