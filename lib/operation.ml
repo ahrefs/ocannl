@@ -36,7 +36,7 @@ let matmul =
     n =:+ n1 * n2 in
   let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) ~projections =
     n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad in
-  Formula.binop ~compose_op:Compose ~op_label:"*"~op_body ~grad_body
+  Formula.binop ~compose_op:Compose ~op_label:"*" ~op_body ~grad_body
 
 (** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of
     matrix multiplication, inner and outer products, etc.
@@ -75,6 +75,26 @@ let relu =
     n1.grad =+ n -?/ n.grad in
   Formula.unop ~transpose_op:Pointwise_un ~op_label:"r" ~op_body ~grad_body
 
+let subtensor_label ~over_kind ~from_left ~other_axes_pointwise =
+  let kind_spec = match over_kind with
+    | Shape.AxisKey.Batch -> "|"
+    | Input -> "/"
+    | Output -> "-" in
+  let pointwise_spec = if other_axes_pointwise then "." else "^" in
+  if from_left then "@" ^ pointwise_spec ^ kind_spec
+  else "@" ^ kind_spec ^ pointwise_spec
+
+let dynamic_subtensor ~over_kind ~from_left ~other_axes_pointwise =
+  let open Code in
+  let module NFDSL = struct module O = struct end end in
+  let%nn_cd op_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~(n2:NodeUI.t) ~projections =
+    n =: n1 -@> n2 in
+  let%nn_cd grad_body ~(n:NodeUI.t) ~(n1:NodeUI.t) ~n2:_ ~projections =
+    n1.grad =+ n.grad in
+  let compose_op = Shape.Dynamic_index {over_kind; from_left; other_axes_pointwise} in
+  let op_label = subtensor_label ~over_kind ~from_left ~other_axes_pointwise in
+  Formula.binop ~compose_op ~op_label ~op_body ~grad_body
+
 module NFO_without_pow = struct
   let ( * ) = matmul ~is_form:false
   let ( *. ) = pointmul ~is_form:false
@@ -84,6 +104,43 @@ module NFO_without_pow = struct
   let (!..) ?desc_label i = Formula.number ?desc_label ~is_form:false @@ Float.of_int i
   let (-) ?desc_label m1 m2 = (+) ?desc_label m1 ((!. (-1.)) *. m2)
   let (~-) ?desc_label m = ( *. ) ?desc_label !.(-1.)  m
+
+  let (@.|) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:true ~other_axes_pointwise:true
+      ~is_form:false
+  let (@./) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:true ~other_axes_pointwise:true
+      ~is_form:false
+  let (@.-) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Output ~from_left:true ~other_axes_pointwise:true
+      ~is_form:false
+  let (@^|) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:true ~other_axes_pointwise:false
+      ~is_form:false
+  let (@^/) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:true ~other_axes_pointwise:false
+      ~is_form:false
+  let (@^-) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Output ~from_left:true ~other_axes_pointwise:false
+      ~is_form:false
+  let (@|.) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:false ~other_axes_pointwise:true
+      ~is_form:false
+  let (@/.) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:false ~other_axes_pointwise:true
+      ~is_form:false
+  let (@-.) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Output ~from_left:false ~other_axes_pointwise:true
+      ~is_form:false
+  let (@|^) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:false ~other_axes_pointwise:false
+      ~is_form:false
+  let (@/^) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:false ~other_axes_pointwise:false
+      ~is_form:false
+  let (@-^) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Output ~from_left:false ~other_axes_pointwise:false
+      ~is_form:false
 end
 
 let rec pointpow ?desc_label ~is_form p m1: Formula.t =
@@ -156,8 +213,45 @@ module O = struct
   let (-) ?desc_label m1 m2 = (+) ?desc_label m1 (!.(-1.) *. m2)
   let (~-) ?desc_label m = ( *. ) ?desc_label !.(-1.) m
   let (/.) ?desc_label m1 m2 = ( *. ) ?desc_label m1 (m2 **. (-1.0))
+
+  let (@.|) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:true ~other_axes_pointwise:true
+      ~is_form:true
+  let (@./) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:true ~other_axes_pointwise:true
+      ~is_form:true
+  let (@.-) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Output ~from_left:true ~other_axes_pointwise:true
+      ~is_form:true
+  let (@^|) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:true ~other_axes_pointwise:false
+      ~is_form:true
+  let (@^/) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:true ~other_axes_pointwise:false
+      ~is_form:true
+  let (@^-) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Output ~from_left:true ~other_axes_pointwise:false
+      ~is_form:true
+  let (@|.) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:false ~other_axes_pointwise:true
+      ~is_form:true
+  let (@/.) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:false ~other_axes_pointwise:true
+      ~is_form:true
+  let (@-.) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Output ~from_left:false ~other_axes_pointwise:true
+      ~is_form:true
+  let (@|^) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:false ~other_axes_pointwise:false
+      ~is_form:true
+  let (@/^) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:false ~other_axes_pointwise:false
+      ~is_form:true
+  let (@-^) =
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Output ~from_left:false ~other_axes_pointwise:false
+      ~is_form:true
 end
-      
+
 module FDSL = struct
   include Formula.FDSL
   module O = O

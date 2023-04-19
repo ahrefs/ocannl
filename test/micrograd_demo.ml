@@ -97,9 +97,9 @@ let%expect_test "Micrograd half-moons example" =
         (fun ~n -> Synthetic
             [%nn_cd n =: (-0.1 *. (!..steps - session_step) /. !..steps)]));
   let moons_input = FDSL.data ~label:"moons_input" ~batch_dims:[batch] ~output_dims:[2]
-      (fun ~n -> Synthetic [%nn_cd n =: moons_flat @.. session_step]) in
+      (fun ~n -> Synthetic [%nn_cd n =: moons_flat @.| session_step]) in
   let moons_class = FDSL.data ~label:"moons_class" ~batch_dims:[batch] ~output_dims:[1]
-      (fun ~n -> Synthetic [%nn_cd n =: moons_classes @.. session_step]) in
+      (fun ~n -> Synthetic [%nn_cd n =: moons_classes @.| session_step]) in
   let points1 = ref [] in
   let points2 = ref [] in
   let losses = ref [] in

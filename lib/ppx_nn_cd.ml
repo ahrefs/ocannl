@@ -65,10 +65,57 @@ let binary_op expr =
   | [%expr ( ** )] -> [%expr Shape.Pointwise_bin], [%expr Code.ToPowOf]
   | [%expr (-?/)] -> [%expr Shape.Pointwise_bin], [%expr Code.Relu_gate]
   | [%expr (-/>)] -> [%expr Shape.Pointwise_bin], [%expr Code.Arg2]
-  | [%expr (@..)] ->
+  | [%expr (-@>)] -> [%expr Shape.Pointwise_bin], [%expr Code.Arg1]
+
+  | [%expr (@.|)] ->
     [%expr Shape.Dynamic_index {
         over_kind=Shape.AxisKey.Batch; from_left=true; other_axes_pointwise=true}],
     [%expr Code.Arg1]
+  | [%expr (@./)] ->
+    [%expr Shape.Dynamic_index {
+        over_kind=Shape.AxisKey.Input; from_left=true; other_axes_pointwise=true}],
+    [%expr Code.Arg1]
+  | [%expr (@.-)] ->
+    [%expr Shape.Dynamic_index {
+        over_kind=Shape.AxisKey.Output; from_left=true; other_axes_pointwise=true}],
+    [%expr Code.Arg1]
+  | [%expr (@^|)] ->
+    [%expr Shape.Dynamic_index {
+        over_kind=Shape.AxisKey.Batch; from_left=true; other_axes_pointwise=false}],
+    [%expr Code.Arg1]
+  | [%expr (@^/)] ->
+    [%expr Shape.Dynamic_index {
+        over_kind=Shape.AxisKey.Input; from_left=true; other_axes_pointwise=false}],
+    [%expr Code.Arg1]
+  | [%expr (@^-)] ->
+    [%expr Shape.Dynamic_index {
+        over_kind=Shape.AxisKey.Output; from_left=true; other_axes_pointwise=false}],
+    [%expr Code.Arg1]
+  | [%expr (@|.)] ->
+    [%expr Shape.Dynamic_index {
+        over_kind=Shape.AxisKey.Batch; from_left=false; other_axes_pointwise=true}],
+    [%expr Code.Arg1]
+  | [%expr (@/.)] ->
+    [%expr Shape.Dynamic_index {
+        over_kind=Shape.AxisKey.Input; from_left=false; other_axes_pointwise=true}],
+    [%expr Code.Arg1]
+  | [%expr (@-.)] ->
+    [%expr Shape.Dynamic_index {
+        over_kind=Shape.AxisKey.output; from_left=false; other_axes_pointwise=true}],
+    [%expr Code.Arg1]
+  | [%expr (@|^)] ->
+    [%expr Shape.Dynamic_index {
+        over_kind=Shape.AxisKey.Batch; from_left=false; other_axes_pointwise=false}],
+    [%expr Code.Arg1]
+  | [%expr (@/^)] ->
+    [%expr Shape.Dynamic_index {
+        over_kind=Shape.AxisKey.Input; from_left=false; other_axes_pointwise=false}],
+    [%expr Code.Arg1]
+  | [%expr (@-^)] ->
+    [%expr Shape.Dynamic_index {
+        over_kind=Shape.AxisKey.Output; from_left=false; other_axes_pointwise=false}],
+    [%expr Code.Arg1]
+
   | _ ->
     [%expr Shape.Pointwise_bin],
     Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
@@ -76,7 +123,7 @@ let binary_op expr =
       "+ (Add), * (Mul), ** (ToPowOf), -?/ (Relu_gate), -/> (Arg2)"
 
 let is_binary_op ident =
-  List.mem ["+"; "*"; "**"; "-?/"; "-/>"; "@.."] ident ~equal:String.equal
+  List.mem ["+"; "*"; "**"; "-?/"; "-/>"; "-@>"] ident ~equal:String.equal
 
 let unary_op expr =
   let loc = expr.pexp_loc in

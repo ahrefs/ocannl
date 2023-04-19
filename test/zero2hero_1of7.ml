@@ -38,6 +38,7 @@ let%expect_test "Graph drawing recompile" =
   let xs = Array.init 5 ~f:Float.(fun i -> 2. * of_int i - 5.) in
   let ys = Array.map xs ~f:(fun v ->
     (* This is very inefficient because it compiles the argument update inside the loop. *)
+    (* TODO: once we have the gccjit backend, increase the number of points and benchmark. *)
     let setval = compile_routine [%nn_cd x =: !.v] in
     setval (); refresh_session ();
     (NodeUI.retrieve_1d_points ~xdim:0 f.node.node.value).(0)) in
@@ -108,10 +109,17 @@ let%expect_test "Graph drawing fetch" =
              │   │ 2.00e+0 │          │ 4.00e+0 │ 5.00e+0 │ |}];
   (* close_session is not necessary. *)
   close_session ();
-  let xs = Array.init 100 ~f:Float.(fun i -> of_int i / 10. - 5.) in
-  let x = FDSL.term ~needs_gradient:true ~label:"x" ~batch_dims:[] ~output_dims:[1]
-      (First (Constant_fill xs)) in
-  let fx = f x in
+  let size = 100 in
+  let xs = Array.init size ~f:Float.(fun i -> of_int i / 10. - 5.) in
+  let x_flat = FDSL.term ~needs_gradient:true ~label:"x_flat" ~batch_dims:[size] ~input_dims:[]
+   ~output_dims:[1] (First (Constant_fill xs)) in
+  let session_step = FDSL.data ~label:"session_step" ~batch_dims:[] ~output_dims:[1]
+      (fun ~n -> Synthetic [%nn_cd n =+ 1]) in
+  let x = FDSL.data ~label:"x" ~batch_dims:[] ~output_dims:[1]
+      (fun ~n -> Synthetic [%nn_cd n =: x_flat @.| session_step]) in
+  let%nn_op fx = f x in
+  refresh_session ();
+  print_preamble ();
   let ys = Array.map xs ~f:(fun _ ->
     refresh_session ();
     (NodeUI.retrieve_1d_points ~xdim:0 fx.node.node.value).(0)) in
@@ -174,7 +182,7 @@ let%expect_test "Simple gradients" =
   let%nn_op d = e + "c" [10] in
   let%nn_op l = d *. "f" [-2] in
   minus_learning_rate := Some (
-      FDSL.term ~label:"minus_lr" ~batch_dims:[] ~output_dims:[1]
+      FDSL.term ~label:"minus_lr" ~batch_dims:[] ~input_dims:[] ~output_dims:[1]
         (First (Constant_fill [|0.1|])));
   refresh_session ();
   print_node_tree ~with_grad:true ~depth:9 l.id;
