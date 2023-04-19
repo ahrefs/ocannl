@@ -53,12 +53,12 @@ let create_of_same_precision_as ~is_form (node: Node.t) =
       Int.to_string node.id
     else create ~value_prec:Double ~is_form:false ()
   | _, Some {grad; _} -> invalid_arg @@
-  "create_of_same_precision_as: unsupported combination of precisions value: "^
-  Node.ndarray_precision_to_string node.value^", grad: "^
-  Node.ndarray_precision_to_string grad
+    "create_of_same_precision_as: unsupported combination of precisions value: "^
+    Node.ndarray_precision_to_string node.value^", grad: "^
+    Node.ndarray_precision_to_string grad
   | _ -> invalid_arg @@
-  "create_of_same_precision_as: unsupported combination of precisions value: "^
-  Node.ndarray_precision_to_string node.value
+    "create_of_same_precision_as: unsupported combination of precisions value: "^
+    Node.ndarray_precision_to_string node.value
 
 let create_of_promoted_precision ~is_form (n1: Node.t) (n2: Node.t) =
   match n1.value, n2.value with
@@ -71,11 +71,11 @@ let create_of_promoted_precision ~is_form (n1: Node.t) (n2: Node.t) =
      | Some {grad=Double_nd _; _}, Some {grad=Double_nd _; _} ->
        create ~value_prec:Single ~grad_prec:Double ~is_form ()
      | None, _ | _, None ->
-      if is_form then
-        invalid_arg @@
-        "create_of_promoted_precision: ~is_form:true but a non-form subnode ["^
-        Int.to_string n1.id^"] or ["^Int.to_string n2.id^"]"
-      else create ~value_prec:Single ~is_form:false ()
+       if is_form then
+         invalid_arg @@
+         "create_of_promoted_precision: ~is_form:true but a non-form subnode ["^
+         Int.to_string n1.id^"] or ["^Int.to_string n2.id^"]"
+       else create ~value_prec:Single ~is_form:false ()
      | Some {grad=n1grad; _}, Some {grad=n2grad; _} ->
        invalid_arg @@
        "create_of_promoted_precision: unsupported combination of precisions n1 grad: "^
@@ -87,10 +87,10 @@ let create_of_promoted_precision ~is_form (n1: Node.t) (n2: Node.t) =
   | (Single_nd _, Double_nd _ | Double_nd _, Single_nd _ | Double_nd _, Double_nd _) ->
     create ~value_prec:Double ~is_form:false ()
   | _ -> invalid_arg @@
-  "create_of_promoted_precision: unsupported combination of precisions n1 value: "^
-  Node.ndarray_precision_to_string n1.value^", n2 value: "^
-  Node.ndarray_precision_to_string n2.value
-  
+    "create_of_promoted_precision: unsupported combination of precisions n1 value: "^
+    Node.ndarray_precision_to_string n1.value^", n2 value: "^
+    Node.ndarray_precision_to_string n2.value
+
 let param_nodes ?(from_id=0) () =
   Hashtbl.filter global_node_store ~f:(fun n ->
       n.node.id >= from_id && List.is_empty n.children &&
@@ -98,42 +98,47 @@ let param_nodes ?(from_id=0) () =
 
 let retrieve_2d_points ?from_axis ~xdim ~ydim arr =
   let dims = Node.dims arr in
-  let n_axes = Array.length dims in
-  let from_axis = Option.value from_axis ~default:(n_axes - 1) in
-  let result = ref [] in
-  let idx = Array.create ~len:n_axes 0 in
-  let rec iter axis =
-    if axis = n_axes then
-      let x = idx.(from_axis) <- xdim; Node.get_as_float arr idx in
-      let y = idx.(from_axis) <- ydim; Node.get_as_float arr idx in
-      result := (x, y) :: !result
-    else if axis = from_axis then iter (axis + 1)
-    else for p = 0 to dims.(axis) - 1 do
-      idx.(axis) <- p;
-      iter (axis + 1)
-    done in
-  iter 0;
-  Array.of_list_rev !result
+  if Array.is_empty dims then [||]
+  else
+    let n_axes = Array.length dims in
+    let from_axis = Option.value from_axis ~default:(n_axes - 1) in
+    let result = ref [] in
+    let idx = Array.create ~len:n_axes 0 in
+    let rec iter axis =
+      if axis = n_axes then
+        let x = idx.(from_axis) <- xdim; Node.get_as_float arr idx in
+        let y = idx.(from_axis) <- ydim; Node.get_as_float arr idx in
+        result := (x, y) :: !result
+      else if axis = from_axis then iter (axis + 1)
+      else for p = 0 to dims.(axis) - 1 do
+          idx.(axis) <- p;
+          iter (axis + 1)
+        done in
+    iter 0;
+    Array.of_list_rev !result
 
+(* module Debug_runtime = Minidebug_runtime.Flushing(struct let debug_ch = Stdio.stdout end) *)
 let retrieve_1d_points ?from_axis ~xdim arr =
   let dims = Node.dims arr in
-  let n_axes = Array.length dims in
-  let from_axis = Option.value from_axis ~default:(n_axes - 1) in
-  let result = ref [] in
-  let idx = Array.create ~len:n_axes 0 in
-  let rec iter axis =
-    if axis = n_axes then
-      let x = idx.(from_axis) <- xdim; Node.get_as_float arr idx in
-      result := x :: !result
-    else if axis = from_axis then iter (axis + 1)
-    else for p = 0 to dims.(axis) - 1 do
-      idx.(axis) <- p;
-      iter (axis + 1)
-    done in
-  iter 0;
-  Array.of_list_rev !result
+  if Array.is_empty dims then [||]
+  else
+    let n_axes = Array.length dims in
+    let from_axis = Option.value from_axis ~default:(n_axes - 1) in
+    let result = ref [] in
+    let idx = Array.create ~len:n_axes 0 in
+    let rec iter axis =
+      if axis = n_axes then
+        let x = idx.(from_axis) <- xdim; Node.get_as_float arr idx in
+        result := x :: !result
+      else if axis = from_axis then iter (axis + 1)
+      else for p = 0 to dims.(axis) - 1 do
+          idx.(axis) <- p;
+          iter (axis + 1)
+        done in
+    iter 0;
+    Array.of_list_rev !result
 
-    
+
 (* *** Printing *** *)
 
 (** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
@@ -161,7 +166,7 @@ let node_header n =
   "#"^Int.to_string n.id^desc_l^" op "^n.op_label^" "^dims_s^" ["^
   String.concat ~sep:"," (List.map n.children ~f:(fun {sub_node_id=i; _} -> Int.to_string i))^
   "]"
-  (*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box n.label)*)
+(*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box n.label)*)
 
 (** When rendering tensors, outputs this many decimal digits. *)
 let print_decimals_precision = ref 2
@@ -240,8 +245,8 @@ let render_tensor ?(brief=false) ?(prefix="") ?(entries_per_axis=4) ?(labels=[||
     let tag ?pos label ind =
       if ind = -1 then ""
       else match pos with
-      | Some pos when elide_for pos ~ind -> "~~~~~"
-      | Some pos when pos >= 0 -> Int.to_string (expand pos ~ind)^" @ "^label^Int.to_string ind
+        | Some pos when elide_for pos ~ind -> "~~~~~"
+        | Some pos when pos >= 0 -> Int.to_string (expand pos ~ind)^" @ "^label^Int.to_string ind
         | _ -> "axis "^label^Int.to_string ind in
     let nlines = if brief then size1 else size1 + 1 in
     let ncols = if brief then size2 else size2 + 1 in
@@ -261,12 +266,12 @@ let render_tensor ?(brief=false) ?(prefix="") ?(entries_per_axis=4) ?(labels=[||
           else
             let nline = if brief then line else line - 1 in
             let ncol = if brief then col else col - 1 in
-             if elide_for ncol ~ind:ind2 || elide_for nline ~ind:ind1
-             then B.hpad 1 @@ B.line "..."
-             else inner_grid v nline ncol) in
+            if elide_for ncol ~ind:ind2 || elide_for nline ~ind:ind1
+            then B.hpad 1 @@ B.line "..."
+            else inner_grid v nline ncol) in
     let screens = B.init_grid ~bars:true ~line:size0 ~col:1 (fun ~line ~col:_ ->
-       if elide_for line ~ind:ind0
-       then B.hpad 1 @@ B.line "..." else outer_grid line) in
+        if elide_for line ~ind:ind0
+        then B.hpad 1 @@ B.line "..." else outer_grid line) in
     (if brief then Fn.id else B.frame) @@ B.vlist ~bars:false [B.text header; screens]
 
 let pp_tensor fmt ?prefix ?entries_per_axis ?labels ~indices arr =
@@ -307,34 +312,34 @@ let pp_tensor_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?label
 (** We print out up to 5 axes when printing an [Code], as a grid (outer rectangle) of (inner)
     rectangles, possibly repeated (screens). *)
 type array_print_style =
-[ `Default
-(** The inner rectangles comprise both an input and an output axis, if available. Similarly,
-    the outer rectangle comprises a second-from-end input axis and a second-from-end output axis,
-    if available. At least one batch axis is output, when available.
-    The axes that couldn't be output are printed at position/dimension [0]. *)
-| `N5_layout of string
-(** The string should provide exclusively non-negative integer pseudo-labels. The numbers [0]-[4] represent
-    the priorities of the axes to be printed out, where the priorities correspond to, from highest:
-    horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the outer
-    rectangle, repetition (see also [NodeUI.pp_print]). The numbers [n >= 5] stand for the actual
-    positions [n - 5] within the corresponding axes. *)
-| `Label_layout of (string * int) list
-(** The association from axis labels to integers. The negative numbers [-5] to [-1] represent
-    the priorities of the axes to be printed out, where the priorities correspond to, from highest:
-    horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the outer
-    rectangle, repetition (as above). The numbers [n >= 0] stand for the actual positions
-    within the corresponding axes. Unspecified axes are printed at position [0]. *)
-| `Inline
-(** The tensors are printed linearly, in a bracketed manner, optionally prefixed with the labels
-    specification. Note that the syntax causes ambiguity for 1-dimensional input axes (underscores are
-    used for axes without explicit labels); when there is a 1-dimensional input axis, we output
-    the labels specification even if there are no axis labels as a way to display the number of axes.
-    The axis nesting is right-to-left (rightmost is innermost).
-    The input axes are innermost and the batch axes outermost. The input axes use [,] as a separator
-    and [()] as axis delimiters, but the delimiter for the outermost (i.e. leftmost) axis is omitted.
-    The output axes use [;] as a separator and [[]] as axis delimiters (obligatory).
-    The batch axes use [;] as a separator and [[||]] as axis delimiters (obligatory). *)
-]
+  [ `Default
+  (** The inner rectangles comprise both an input and an output axis, if available. Similarly,
+      the outer rectangle comprises a second-from-end input axis and a second-from-end output axis,
+      if available. At least one batch axis is output, when available.
+      The axes that couldn't be output are printed at position/dimension [0]. *)
+  | `N5_layout of string
+  (** The string should provide exclusively non-negative integer pseudo-labels. The numbers [0]-[4] represent
+      the priorities of the axes to be printed out, where the priorities correspond to, from highest:
+      horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the outer
+      rectangle, repetition (see also [NodeUI.pp_print]). The numbers [n >= 5] stand for the actual
+      positions [n - 5] within the corresponding axes. *)
+  | `Label_layout of (string * int) list
+  (** The association from axis labels to integers. The negative numbers [-5] to [-1] represent
+      the priorities of the axes to be printed out, where the priorities correspond to, from highest:
+      horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the outer
+      rectangle, repetition (as above). The numbers [n >= 0] stand for the actual positions
+      within the corresponding axes. Unspecified axes are printed at position [0]. *)
+  | `Inline
+    (** The tensors are printed linearly, in a bracketed manner, optionally prefixed with the labels
+        specification. Note that the syntax causes ambiguity for 1-dimensional input axes (underscores are
+        used for axes without explicit labels); when there is a 1-dimensional input axis, we output
+        the labels specification even if there are no axis labels as a way to display the number of axes.
+        The axis nesting is right-to-left (rightmost is innermost).
+        The input axes are innermost and the batch axes outermost. The input axes use [,] as a separator
+        and [()] as axis delimiters, but the delimiter for the outermost (i.e. leftmost) axis is omitted.
+        The output axes use [;] as a separator and [[]] as axis delimiters (obligatory).
+        The batch axes use [;] as a separator and [[||]] as axis delimiters (obligatory). *)
+  ]
 
 let default_display_indices sh =
   let axes = Shape.axis_keys_to_idcs sh |> Map.map ~f:(fun _ -> 0) in
