@@ -9,33 +9,38 @@
  (name hello_world)
  (modules hello_world)
  (libraries ocannl base stdio)
- (preprocess (pps ppx_jane ppx_ocannl))
+ (preprocess
+  (pps ppx_jane ppx_ocannl))
  (modes exe))
 
 (executable
  (name micrograd_demo)
  (modules micrograd_demo)
  (libraries ocannl base stdio)
- (preprocess (pps ppx_jane ppx_ocannl))
+ (preprocess
+  (pps ppx_jane ppx_ocannl))
  (modes exe))
 
 (executable
  (name data_fetching)
  (modules data_fetching)
  (libraries ocannl base stdio)
- (preprocess (pps ppx_jane ppx_ocannl))
+ (preprocess
+  (pps ppx_jane ppx_ocannl))
  (modes exe))
 
 (executable
  (name einsum_trivia)
  (modules einsum_trivia)
  (libraries ocannl base stdio)
- (preprocess (pps ppx_jane ppx_ocannl))
+ (preprocess
+  (pps ppx_jane ppx_ocannl))
  (modes exe))
 
 (executable
  (name zero2hero_1of7)
  (modules zero2hero_1of7)
  (libraries ocannl base stdio)
- (preprocess (pps ppx_jane ppx_ocannl))
+ (preprocess
+  (pps ppx_jane ppx_ocannl))
  (modes exe))

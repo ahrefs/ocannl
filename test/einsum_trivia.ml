@@ -1,20 +1,19 @@
 open Base
 open Ocannl
-
 module FDSL = Operation.FDSL
 
 let () = Session.SDSL.set_executor OCaml
 
 let%expect_test "einsum1 permute axes" =
   let open Session.SDSL in
-  drop_all_sessions();
+  drop_all_sessions ();
   Random.init 0;
-  let hey =
-    FDSL.range_of_shape ~batch_dims:[2] ~input_dims:[3] ~output_dims:[4] () in
-  let%nn_op ho = hey++"b|i->o => o|b->i" in
+  let hey = FDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
+  let%nn_op ho = hey ++ "b|i->o => o|b->i" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────┐
     │[1]: <r2x4x3> shape 0:2|2:3->1:4                                │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -26,9 +25,10 @@ let%expect_test "einsum1 permute axes" =
     ││      │ 6.00e+0  7.00e+0  8.00e+0 │ 1.80e+1  1.90e+1  2.00e+1 ││
     ││      │ 9.00e+0  1.00e+1  1.10e+1 │ 2.10e+1  2.20e+1  2.30e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
-    └────────────────────────────────────────────────────────────────┘ |} ];
+    └────────────────────────────────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ ho;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────────────────────────┐
     │[2]: ho <=>> shape 0:4|2:2->1:3                                                     │
     │┌──────┬──────────────────┬──────────────────┬──────────────────┬──────────────────┐│
@@ -39,13 +39,13 @@ let%expect_test "einsum1 permute axes" =
     ││      │ 1.00e+0  1.30e+1 │ 4.00e+0  1.60e+1 │ 7.00e+0  1.90e+1 │ 1.00e+1  2.20e+1 ││
     ││      │ 2.00e+0  1.40e+1 │ 5.00e+0  1.70e+1 │ 8.00e+0  2.00e+1 │ 1.10e+1  2.30e+1 ││
     │└──────┴──────────────────┴──────────────────┴──────────────────┴──────────────────┘│
-    └────────────────────────────────────────────────────────────────────────────────────┘ |} ];
-    let hey2 =
-      FDSL.range_of_shape ~batch_dims:[2;3] ~input_dims:[4;5] ~output_dims:[6;7] () in
-    let%nn_op ho2 = hey2++"ab|cd->ef => cf|ae->db" in
-    refresh_session ();
-    print_formula ~with_code:false ~with_grad:false `Default @@ hey2;
-    [%expect {|
+    └────────────────────────────────────────────────────────────────────────────────────┘ |}];
+  let hey2 = FDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] () in
+  let%nn_op ho2 = hey2 ++ "ab|cd->ef => cf|ae->db" in
+  refresh_session ();
+  print_formula ~with_code:false ~with_grad:false `Default @@ hey2;
+  [%expect
+    {|
       ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
       │[3]: <r2x3x6x7x4x5> shape 0:2,1:3|4:4,5:5->2:6,3:7                                                                                                                                              │
       │┌──────┬─────────────────────────────────────────────┬─────────────────────────────────────────────┬─────────────────────────────────────────────┬─────────────────────────────────────────────┐│
@@ -143,9 +143,10 @@ let%expect_test "einsum1 permute axes" =
       ││      │ 2.48e+3  2.48e+3  2.48e+3  2.48e+3  2.48e+3 │ 2.48e+3  2.49e+3  2.49e+3  2.49e+3  2.49e+3 │ 2.49e+3  2.49e+3  2.49e+3  2.49e+3  2.49e+3 │ 2.50e+3  2.50e+3  2.50e+3  2.50e+3  2.50e+3 ││
       ││      │ 2.50e+3  2.50e+3  2.50e+3  2.50e+3  2.50e+3 │ 2.50e+3  2.51e+3  2.51e+3  2.51e+3  2.51e+3 │ 2.51e+3  2.51e+3  2.51e+3  2.51e+3  2.51e+3 │ 2.52e+3  2.52e+3  2.52e+3  2.52e+3  2.52e+3 ││
       │└──────┴─────────────────────────────────────────────┴─────────────────────────────────────────────┴─────────────────────────────────────────────┴─────────────────────────────────────────────┘│
-      └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |} ];
-    print_formula ~with_code:false ~with_grad:false `Default @@ ho2;
-    [%expect {|
+      └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
+  print_formula ~with_code:false ~with_grad:false `Default @@ ho2;
+  [%expect
+    {|
       ┌────────────────────────────────────────────────────────────────────────────────────────────┐
       │[4]: ho2 <=>> shape 0:4,1:7|4:2,5:6->2:5,3:3                                                │
       │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -249,18 +250,18 @@ let%expect_test "einsum1 permute axes" =
       ││axis 3│ 9.64e+2  1.10e+3  ...  1.52e+3  1.66e+3 │ 3.48e+3  3.62e+3  ...  4.04e+3  4.18e+3 ││
       ││      │ 1.80e+3  1.94e+3  ...  2.36e+3  2.50e+3 │ 4.32e+3  4.46e+3  ...  4.88e+3  5.02e+3 ││
       │└──────┴─────────────────────────────────────────┴─────────────────────────────────────────┘│
-      └────────────────────────────────────────────────────────────────────────────────────────────┘ |} ]
-  
+      └────────────────────────────────────────────────────────────────────────────────────────────┘ |}]
+
 let%expect_test "einsum1 sum out axes" =
   let open Session.SDSL in
-  drop_all_sessions();
+  drop_all_sessions ();
   Random.init 0;
-  let hey =
-    FDSL.range_of_shape ~batch_dims:[2] ~input_dims:[3] ~output_dims:[4] () in
-  let%nn_op ho = hey++"b|i->o => b|i" in
+  let hey = FDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
+  let%nn_op ho = hey ++ "b|i->o => b|i" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────┐
     │[1]: <r2x4x3> shape 0:2|2:3->1:4                                │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -272,9 +273,10 @@ let%expect_test "einsum1 sum out axes" =
     ││      │ 6.00e+0  7.00e+0  8.00e+0 │ 1.80e+1  1.90e+1  2.00e+1 ││
     ││      │ 9.00e+0  1.00e+1  1.10e+1 │ 2.10e+1  2.20e+1  2.30e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
-    └────────────────────────────────────────────────────────────────┘ |} ];
+    └────────────────────────────────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ ho;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────┐
     │[2]: ho <=>> shape 0:2|1:3          │
     │┌──────┬───────────────────────────┐│
@@ -283,15 +285,15 @@ let%expect_test "einsum1 sum out axes" =
     ││axis 0│ 1.80e+1  2.20e+1  2.60e+1 ││
     ││      │ 6.60e+1  7.00e+1  7.40e+1 ││
     │└──────┴───────────────────────────┘│
-    └────────────────────────────────────┘ |} ];
-    let hey2 =
-      FDSL.range_of_shape ~batch_dims:[2;3] ~input_dims:[4;5] ~output_dims:[6;7] () in
-    let%nn_op ho2 = hey2++"ab|cd->ef => c|a->d" in
-    refresh_session ();
-    (* Axis 5 of hey2, i.e. d in the einsum spec, has the lowest variation (progresses by 1),
-       that's why axis 1 of ho2 appears nearly constant. *)
-    print_formula ~with_code:false ~with_grad:false `Default @@ ho2;
-    [%expect {|
+    └────────────────────────────────────┘ |}];
+  let hey2 = FDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] () in
+  let%nn_op ho2 = hey2 ++ "ab|cd->ef => c|a->d" in
+  refresh_session ();
+  (* Axis 5 of hey2, i.e. d in the einsum spec, has the lowest variation (progresses by 1),
+     that's why axis 1 of ho2 appears nearly constant. *)
+  print_formula ~with_code:false ~with_grad:false `Default @@ ho2;
+  [%expect
+    {|
       ┌────────────────────────────────────────────────────────────────────────────────────┐
       │[4]: ho2 <=>> shape 0:4|2:2->1:5                                                    │
       │┌──────┬──────────────────┬──────────────────┬──────────────────┬──────────────────┐│
@@ -306,19 +308,17 @@ let%expect_test "einsum1 sum out axes" =
       │└──────┴──────────────────┴──────────────────┴──────────────────┴──────────────────┘│
       └────────────────────────────────────────────────────────────────────────────────────┘ |}]
 
-
 let%expect_test "einsum outer product" =
   let open Session.SDSL in
-  drop_all_sessions();
+  drop_all_sessions ();
   Random.init 0;
-  let a =
-    FDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[2] () in
-  let b =
-    FDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[3] () in
-  let%nn_op c = (a + 1) *+"i; j => i->j" b in
+  let a = FDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
+  let b = FDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] () in
+  let%nn_op c = (a + 1) *+ "i; j => i->j" b in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ a;
-  [%expect {|
+  [%expect
+    {|
     ┌─────────────────────┐
     │[1]: <r2> shape 0:2  │
     │┌┬──────────────────┐│
@@ -328,7 +328,8 @@ let%expect_test "einsum outer product" =
     │└┴──────────────────┘│
     └─────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ b;
-  [%expect {|
+  [%expect
+    {|
     ┌──────────────────────────────┐
     │[2]: <r3> shape 0:3           │
     │┌┬───────────────────────────┐│
@@ -338,7 +339,8 @@ let%expect_test "einsum outer product" =
     │└┴───────────────────────────┘│
     └──────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ c;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────┐
     │[5]: c <;=>> shape 1:2->0:3 │
     │┌──────┬──────────────────┐ │
@@ -349,14 +351,13 @@ let%expect_test "einsum outer product" =
     ││      │ 2.00e+0  4.00e+0 │ │
     │└──────┴──────────────────┘ │
     └────────────────────────────┘ |}];
-  let a =
-    FDSL.range_of_shape ~batch_dims:[2] ~input_dims:[3] ~output_dims:[4] () in
-  let b =
-    FDSL.range_of_shape ~batch_dims:[5] ~input_dims:[6] ~output_dims:[7] () in
-  let%nn_op c = a *+"i|j->k; l|m->n => il|jm->kn" b in
+  let a = FDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
+  let b = FDSL.range_of_shape ~batch_dims:[ 5 ] ~input_dims:[ 6 ] ~output_dims:[ 7 ] () in
+  let%nn_op c = a *+ "i|j->k; l|m->n => il|jm->kn" b in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ a;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────┐
     │[6]: <r2x4x3> shape 0:2|2:3->1:4                                │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -370,7 +371,8 @@ let%expect_test "einsum outer product" =
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ b;
-  [%expect {|
+  [%expect
+    {|
     ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[7]: <r5x7x6> shape 0:5|2:6->1:7                                                                                                                                                                                          │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -385,7 +387,8 @@ let%expect_test "einsum outer product" =
     │└──────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┘│
     └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ c;
-  [%expect {|
+  [%expect
+    {|
     ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[8]: c <;=>> shape 0:2,1:5|4:3,5:6->2:4,3:7                                                                                           │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -533,23 +536,22 @@ let%expect_test "einsum outer product" =
     ││      │ 1.84e+3  1.84e+3  ...  1.87e+3  1.88e+3 │ 2.04e+3  2.05e+3  ...  2.08e+3  2.09e+3 │ 2.24e+3  2.26e+3  ...  2.29e+3  2.30e+3 ││
     │└──────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┘│
     └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}]
-  
+
 let%expect_test "einsum matrix/inner+outer products" =
   let open Session.SDSL in
-  drop_all_sessions();
+  drop_all_sessions ();
   Random.init 0;
-  let a =
-    FDSL.range_of_shape ~batch_dims:[2] ~input_dims:[3] ~output_dims:[4] () in
-  let b =
-    FDSL.range_of_shape ~batch_dims:[2] ~input_dims:[4] ~output_dims:[5] () in
-  let%nn_op a2 = a *+"b|i->o; b|i->o => b|i->o" a in
-  let%nn_op c = b *+"b|h->o; b|i->h => b|i->o" a in
-  let%nn_op d = a *+"a|i->h; b|h->o => ab|i->o" b in
-  let%nn_op e = a *+"b|i->h; b|h->o => i->o" b in
-  let%nn_op f = a *+"a|i->h; b|h->o => i->o" b in
+  let a = FDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
+  let b = FDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] () in
+  let%nn_op a2 = a *+ "b|i->o; b|i->o => b|i->o" a in
+  let%nn_op c = b *+ "b|h->o; b|i->h => b|i->o" a in
+  let%nn_op d = a *+ "a|i->h; b|h->o => ab|i->o" b in
+  let%nn_op e = a *+ "b|i->h; b|h->o => i->o" b in
+  let%nn_op f = a *+ "a|i->h; b|h->o => i->o" b in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ a2;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────┐
     │[3]: a2 <;=>> shape 0:2|2:3->1:4                                │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -563,7 +565,8 @@ let%expect_test "einsum matrix/inner+outer products" =
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ c;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────┐
     │[4]: c <;=>> shape 0:2|2:3->1:5                                 │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -577,8 +580,9 @@ let%expect_test "einsum matrix/inner+outer products" =
     ││      │ 3.30e+2  4.00e+2  4.70e+2 │ 2.49e+3  2.64e+3  2.79e+3 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
-    print_formula ~with_code:false ~with_grad:false `Default @@ d;
-    [%expect {|
+  print_formula ~with_code:false ~with_grad:false `Default @@ d;
+  [%expect
+    {|
       ┌────────────────────────────────────────────────────────────────┐
       │[5]: d <;=>> shape 0:2,1:2|3:3->2:5                             │
       │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -598,8 +602,9 @@ let%expect_test "einsum matrix/inner+outer products" =
       ││      │ 1.17e+3  1.24e+3  1.31e+3 │ 2.49e+3  2.64e+3  2.79e+3 ││
       │└──────┴───────────────────────────┴───────────────────────────┘│
       └────────────────────────────────────────────────────────────────┘ |}];
-    print_formula ~with_code:false ~with_grad:false `Default @@ e;
-    [%expect {|
+  print_formula ~with_code:false ~with_grad:false `Default @@ e;
+  [%expect
+    {|
       ┌────────────────────────────────────┐
       │[6]: e <;=>> shape 1:3->0:5         │
       │┌──────┬───────────────────────────┐│
@@ -612,8 +617,9 @@ let%expect_test "einsum matrix/inner+outer products" =
       ││      │ 2.82e+3  3.04e+3  3.26e+3 ││
       │└──────┴───────────────────────────┘│
       └────────────────────────────────────┘ |}];
-    print_formula ~with_code:false ~with_grad:false `Default @@ f;
-    [%expect {|
+  print_formula ~with_code:false ~with_grad:false `Default @@ f;
+  [%expect
+    {|
       ┌────────────────────────────────────┐
       │[7]: f <;=>> shape 1:3->0:5         │
       │┌──────┬───────────────────────────┐│
@@ -629,14 +635,14 @@ let%expect_test "einsum matrix/inner+outer products" =
 
 let%expect_test "einsum1 broadcast or sum out prefix axes" =
   let open Session.SDSL in
-  drop_all_sessions();
+  drop_all_sessions ();
   Random.init 0;
-  let hey =
-    FDSL.range_of_shape ~batch_dims:[2] ~input_dims:[3] ~output_dims:[4] () in
-  let%nn_op ho = hey++"...|i->o => ...|o->i" in
+  let hey = FDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
+  let%nn_op ho = hey ++ "...|i->o => ...|o->i" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────┐
     │[1]: <r2x4x3> shape 0:2|2:3->1:4                                │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -650,7 +656,8 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ ho;
-  [%expect {|
+  [%expect
+    {|
     ┌──────────────────────────────────────────────────────────────────────────────────┐
     │[2]: ho <=>> shape 0:2|2:4->1:3                                                   │
     │┌──────┬────────────────────────────────────┬────────────────────────────────────┐│
@@ -662,10 +669,11 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     ││      │ 2.00e+0  5.00e+0  8.00e+0  1.10e+1 │ 1.40e+1  1.70e+1  2.00e+1  2.30e+1 ││
     │└──────┴────────────────────────────────────┴────────────────────────────────────┘│
     └──────────────────────────────────────────────────────────────────────────────────┘ |}];
-  let%nn_op ho2 = hey++"b|...->o => o|...->b" in
+  let%nn_op ho2 = hey ++ "b|...->o => o|...->b" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ ho2;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[3]: ho2 <=>> shape 0:4|2:3->1:2                                                                                        │
     │┌──────┬───────────────────────────┬───────────────────────────┬───────────────────────────┬───────────────────────────┐│
@@ -677,12 +685,12 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└──────┴───────────────────────────┴───────────────────────────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
 
-  let hey2 =
-    FDSL.range_of_shape ~batch_dims:[2;3] ~input_dims:[4;5] ~output_dims:[6;7] () in
-  let%nn_op ho3 = hey2++"...b|...i->...o => ...i|...o->...b" in
+  let hey2 = FDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] () in
+  let%nn_op ho3 = hey2 ++ "...b|...i->...o => ...i|...o->...b" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey2;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[4]: <r2x3x6x7x4x5> shape 0:2,1:3|4:4,5:5->2:6,3:7                                                                                                                                              │
     │┌──────┬─────────────────────────────────────────────┬─────────────────────────────────────────────┬─────────────────────────────────────────────┬─────────────────────────────────────────────┐│
@@ -782,7 +790,8 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└──────┴─────────────────────────────────────────────┴─────────────────────────────────────────────┴─────────────────────────────────────────────┴─────────────────────────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ ho3;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[5]: ho3 <=>> shape 0:2,1:5|4:4,5:7->2:6,3:3                                                                                                                                    │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -906,10 +915,11 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└──────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
 
-  let%nn_op ho4 = hey2++"...b|...i->...o => i|o->b" in
+  let%nn_op ho4 = hey2 ++ "...b|...i->...o => i|o->b" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ ho4;
-  [%expect {|
+  [%expect
+    {|
     ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[6]: ho4 <=>> shape 0:5|2:7->1:3                                                                                                                                                                                          │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -921,10 +931,11 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     ││      │ 1.58e+5  1.59e+5  ...  1.63e+5  1.64e+5 │ 1.58e+5  1.59e+5  ...  1.63e+5  1.64e+5 │ 1.58e+5  1.59e+5  ...  1.63e+5  1.64e+5 │ 1.58e+5  1.59e+5  ...  1.63e+5  1.64e+5 │ 1.58e+5  1.59e+5  ...  1.63e+5  1.64e+5 ││
     │└──────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┘│
     └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  let%nn_op ho5 = hey++"...|...->...o => o" in
+  let%nn_op ho5 = hey ++ "...|...->...o => o" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────┐
     │[1]: <r2x4x3> shape 0:2|2:3->1:4                                │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -938,7 +949,8 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ ho5;
-  [%expect {|
+  [%expect
+    {|
     ┌───────────────────────────────────────┐
     │[7]: ho5 <=>> shape 0:4                │
     │┌┬────────────────────────────────────┐│
@@ -947,12 +959,12 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │││ 4.20e+1  6.00e+1  7.80e+1  9.60e+1 ││
     │└┴────────────────────────────────────┘│
     └───────────────────────────────────────┘ |}];
-  let hey3 =
-    FDSL.range_of_shape ~output_dims:[3; 4] () in
-  let%nn_op ho6 = hey3++"...|...->...o => o" in
+  let hey3 = FDSL.range_of_shape ~output_dims:[ 3; 4 ] () in
+  let%nn_op ho6 = hey3 ++ "...|...->...o => o" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey3;
-  [%expect {|
+  [%expect
+    {|
     ┌─────────────────────────────────────────────┐
     │[8]: <r3x4> shape 0:3,1:4                    │
     │┌──────┬────────────────────────────────────┐│
@@ -964,7 +976,8 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└──────┴────────────────────────────────────┘│
     └─────────────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ ho6;
-  [%expect {|
+  [%expect
+    {|
     ┌───────────────────────────────────────┐
     │[9]: ho6 <=>> shape 0:4                │
     │┌┬────────────────────────────────────┐│
@@ -974,12 +987,12 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└┴────────────────────────────────────┘│
     └───────────────────────────────────────┘ |}];
   (* Broadcast with a shift. *)
-  let hey4 =
-    FDSL.range_of_shape ~input_dims:[2] ~output_dims:[3; 4] () in
-  let%nn_op ho7 = hey4++"i->...o => ...io" in
+  let hey4 = FDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3; 4 ] () in
+  let%nn_op ho7 = hey4 ++ "i->...o => ...io" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey4;
-  [%expect {|
+  [%expect
+    {|
     ┌─────────────────────────────────────────────────────────────────┐
     │[10]: <r3x4x2> shape 2:2->0:3,1:4                                │
     │┌──────┬──────────────────┬──────────────────┬──────────────────┐│
@@ -993,7 +1006,8 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└──────┴──────────────────┴──────────────────┴──────────────────┘│
     └─────────────────────────────────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ ho7;
-  [%expect {|
+  [%expect
+    {|
     ┌─────────────────────────────────────────────┐
     │[11]: ho7 <=>> shape 0:3,1:2,2:4             │
     │┌──────┬────────────────────────────────────┐│
@@ -1010,19 +1024,17 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└──────┴────────────────────────────────────┘│
     └─────────────────────────────────────────────┘ |}]
 
-
 let%expect_test "einsum broadcast or sum out prefix axes" =
   let open Session.SDSL in
-  drop_all_sessions();
+  drop_all_sessions ();
   Random.init 0;
-  let a =
-    FDSL.range_of_shape ~batch_dims:[3] ~input_dims:[4] ~output_dims:[2] () in
-  let b =
-    FDSL.range_of_shape ~batch_dims:[3] ~input_dims:[1] ~output_dims:[4] () in
-  let%nn_op c = a *+"...|i->...; ...|...->i => ...|i" b in
+  let a = FDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
+  let b = FDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] () in
+  let%nn_op c = a *+ "...|i->...; ...|...->i => ...|i" b in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ a;
-  [%expect {|
+  [%expect
+    {|
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[1]: <r3x2x4> shape 0:3|2:4->1:2                                                                                       │
     │┌──────┬────────────────────────────────────┬────────────────────────────────────┬────────────────────────────────────┐│
@@ -1034,7 +1046,8 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
     │└──────┴────────────────────────────────────┴────────────────────────────────────┴────────────────────────────────────┘│
     └───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ b;
-  [%expect {|
+  [%expect
+    {|
     ┌──────────────────────────────────────┐
     │[2]: <r3x4x1> shape 0:3|2:1->1:4      │
     │┌──────┬─────────┬─────────┬─────────┐│
@@ -1048,7 +1061,8 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
     │└──────┴─────────┴─────────┴─────────┘│
     └──────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ c;
-  [%expect {|
+  [%expect
+    {|
     ┌─────────────────────────────────────────────┐
     │[3]: c <;=>> shape 0:3|1:4                   │
     │┌──────┬────────────────────────────────────┐│
@@ -1060,14 +1074,13 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
     │└──────┴────────────────────────────────────┘│
     └─────────────────────────────────────────────┘ |}];
   (* Broadcast with a shift. *)
-  let d =
-    FDSL.range_of_shape ~input_dims:[2] ~output_dims:[3] () in
-  let e =
-    FDSL.range_of_shape ~input_dims:[4] ~output_dims:[3] () in
-  let%nn_op f = d *+"i->...;j->... => ...ij" e in
+  let d = FDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
+  let e = FDSL.range_of_shape ~input_dims:[ 4 ] ~output_dims:[ 3 ] () in
+  let%nn_op f = d *+ "i->...;j->... => ...ij" e in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ d;
-  [%expect {|
+  [%expect
+    {|
     ┌───────────────────────────┐
     │[4]: <r3x2> shape 1:2->0:3 │
     │┌──────┬──────────────────┐│
@@ -1079,7 +1092,8 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
     │└──────┴──────────────────┘│
     └───────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ e;
-  [%expect {|
+  [%expect
+    {|
     ┌─────────────────────────────────────────────┐
     │[5]: <r3x4> shape 1:4->0:3                   │
     │┌──────┬────────────────────────────────────┐│
@@ -1091,7 +1105,8 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
     │└──────┴────────────────────────────────────┘│
     └─────────────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ f;
-  [%expect {|
+  [%expect
+    {|
     ┌─────────────────────────────────────────────┐
     │[6]: f <;=>> shape 0:3,1:2,2:4               │
     │┌──────┬────────────────────────────────────┐│
@@ -1110,14 +1125,14 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
 
 let%expect_test "einsum1 fixed dim axis" =
   let open Session.SDSL in
-  drop_all_sessions();
+  drop_all_sessions ();
   Random.init 0;
-  let hey =
-    FDSL.range_of_shape ~batch_dims:[2] ~input_dims:[3] ~output_dims:[4] () in
-  let%nn_op ho = hey++"...|1->... => ...|..." in
+  let hey = FDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
+  let%nn_op ho = hey ++ "...|1->... => ...|..." in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────┐
     │[1]: <r2x4x3> shape 0:2|2:3->1:4                                │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -1131,7 +1146,8 @@ let%expect_test "einsum1 fixed dim axis" =
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ ho;
-  [%expect {|
+  [%expect
+    {|
     ┌─────────────────────────────────────────────┐
     │[2]: ho <=>> shape 0:2|1:4                   │
     │┌──────┬────────────────────────────────────┐│
@@ -1141,10 +1157,11 @@ let%expect_test "einsum1 fixed dim axis" =
     ││      │ 1.30e+1  1.60e+1  1.90e+1  2.20e+1 ││
     │└──────┴────────────────────────────────────┘│
     └─────────────────────────────────────────────┘ |}];
-  let%nn_op ho2 = hey++"...|...->... => ...|...->0" in
+  let%nn_op ho2 = hey ++ "...|...->... => ...|...->0" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────┐
     │[1]: <r2x4x3> shape 0:2|2:3->1:4                                │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -1158,7 +1175,8 @@ let%expect_test "einsum1 fixed dim axis" =
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ ho2;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────┐
     │[3]: ho2 <=>> shape 0:2|2:3->1:1                                │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -1168,12 +1186,12 @@ let%expect_test "einsum1 fixed dim axis" =
     ││axis 1│ 1.80e+1  2.20e+1  2.60e+1 │ 6.60e+1  7.00e+1  7.40e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
-  let hey2 =
-    FDSL.range_of_shape ~input_dims:[2] ~output_dims:[3] () in
-  let%nn_op ho3 = hey2++"...|...->... => 0" in
+  let hey2 = FDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
+  let%nn_op ho3 = hey2 ++ "...|...->... => 0" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey2;
-  [%expect {|
+  [%expect
+    {|
     ┌───────────────────────────┐
     │[4]: <r3x2> shape 1:2->0:3 │
     │┌──────┬──────────────────┐│
@@ -1185,7 +1203,8 @@ let%expect_test "einsum1 fixed dim axis" =
     │└──────┴──────────────────┘│
     └───────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ ho3;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────┐
     │[5]: ho3 <=>> shape 0:1 │
     │┌┬─────────┐            │
@@ -1194,22 +1213,21 @@ let%expect_test "einsum1 fixed dim axis" =
     │││ 1.50e+1 │            │
     │└┴─────────┘            │
     └────────────────────────┘ |}];
-  let%nn_op ho4 = hey2++"i->j => i0j" in
+  let%nn_op ho4 = hey2 ++ "i->j => i0j" in
   print_formula ~with_code:false ~with_grad:false `Default @@ ho4;
   [%expect {| <void> |}]
 
 let%expect_test "einsum with fixed dim axes" =
   let open Session.SDSL in
-  drop_all_sessions();
+  drop_all_sessions ();
   Random.init 0;
-  let a =
-    FDSL.range_of_shape ~batch_dims:[3] ~input_dims:[4] ~output_dims:[2] () in
-  let b =
-    FDSL.range_of_shape ~batch_dims:[3] ~input_dims:[1] ~output_dims:[4] () in
-  let%nn_op c = a *+"...|i->1; ...|...->i => ...|i" b in
+  let a = FDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
+  let b = FDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] () in
+  let%nn_op c = a *+ "...|i->1; ...|...->i => ...|i" b in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ a;
-  [%expect {|
+  [%expect
+    {|
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[1]: <r3x2x4> shape 0:3|2:4->1:2                                                                                       │
     │┌──────┬────────────────────────────────────┬────────────────────────────────────┬────────────────────────────────────┐│
@@ -1221,7 +1239,8 @@ let%expect_test "einsum with fixed dim axes" =
     │└──────┴────────────────────────────────────┴────────────────────────────────────┴────────────────────────────────────┘│
     └───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ b;
-  [%expect {|
+  [%expect
+    {|
     ┌──────────────────────────────────────┐
     │[2]: <r3x4x1> shape 0:3|2:1->1:4      │
     │┌──────┬─────────┬─────────┬─────────┐│
@@ -1235,7 +1254,8 @@ let%expect_test "einsum with fixed dim axes" =
     │└──────┴─────────┴─────────┴─────────┘│
     └──────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ c;
-  [%expect {|
+  [%expect
+    {|
     ┌─────────────────────────────────────────────┐
     │[3]: c <;=>> shape 0:3|1:4                   │
     │┌──────┬────────────────────────────────────┐│

@@ -4,21 +4,24 @@ module FDSL = Operation.FDSL
 module NFDSL = Operation.NFDSL
 module CDSL = Code.CDSL
 
-
 let () = Session.SDSL.set_executor OCaml
 
 let%expect_test "Synthetic data" =
   (* let open Operation.FDSL in *)
   let open Session.SDSL in
-  drop_all_sessions();
+  drop_all_sessions ();
   Random.init 0;
-  let session_step = FDSL.data ~label:"session_step" ~batch_dims:[] ~output_dims:[1]
-      (fun ~n -> Synthetic [%nn_cd n =+ 1]) in
-  let c_data = FDSL.data ~label:"fetch_callback" ~batch_dims:[1] ~output_dims:[2;3]
-    (fun ~n -> Synthetic [%nn_cd n =+ (session_step *. 100)]) in
+  let session_step =
+    FDSL.data ~label:"session_step" ~batch_dims:[] ~output_dims:[ 1 ] (fun ~n -> Synthetic [%nn_cd n =+ 1])
+  in
+  let c_data =
+    FDSL.data ~label:"fetch_callback" ~batch_dims:[ 1 ] ~output_dims:[ 2; 3 ] (fun ~n ->
+        Synthetic [%nn_cd n =+ session_step *. 100])
+  in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ c_data;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────┐
     │[2]: <fetch_callback> shape 0:1|1:2,2:3 │
     │┌──────┬───────────────────────────┐    │
@@ -31,7 +34,8 @@ let%expect_test "Synthetic data" =
     └────────────────────────────────────────┘ |}];
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ c_data;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────┐
     │[2]: <fetch_callback> shape 0:1|1:2,2:3 │
     │┌──────┬───────────────────────────┐    │
@@ -44,7 +48,8 @@ let%expect_test "Synthetic data" =
     └────────────────────────────────────────┘ |}];
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ c_data;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────┐
     │[2]: <fetch_callback> shape 0:1|1:2,2:3 │
     │┌──────┬───────────────────────────┐    │

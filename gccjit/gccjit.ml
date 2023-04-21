@@ -23,6 +23,7 @@
 exception Error of string
 
 open Gccjit_bindings_types
+
 (* open C.Types *)
 open C.Functions
 
@@ -40,10 +41,7 @@ type block = gcc_jit_block
 
 let null_loc = Ctypes.(coerce (ptr void) gcc_jit_location null)
 
-type unary_op =
-  | Negate
-  | Bitwise_negate
-  | Logical_negate
+type unary_op = Negate | Bitwise_negate | Logical_negate
 
 type binary_op =
   | Plus
@@ -86,58 +84,38 @@ let unary_op = function
 
 let wrap1 ctx f x1 =
   let y = f x1 in
-  match gcc_jit_context_get_first_error ctx with
-  | None -> y
-  | Some err -> raise (Error err)
+  match gcc_jit_context_get_first_error ctx with None -> y | Some err -> raise (Error err)
 
 let wrap2 ctx f x1 x2 =
   let y = f x1 x2 in
-  match gcc_jit_context_get_first_error ctx with
-  | None -> y
-  | Some err -> raise (Error err)
+  match gcc_jit_context_get_first_error ctx with None -> y | Some err -> raise (Error err)
 
 let wrap3 ctx f x1 x2 x3 =
   let y = f x1 x2 x3 in
-  match gcc_jit_context_get_first_error ctx with
-  | None -> y
-  | Some err -> raise (Error err)
+  match gcc_jit_context_get_first_error ctx with None -> y | Some err -> raise (Error err)
 
 let wrap4 ctx f x1 x2 x3 x4 =
   let y = f x1 x2 x3 x4 in
-  match gcc_jit_context_get_first_error ctx with
-  | None -> y
-  | Some err -> raise (Error err)
+  match gcc_jit_context_get_first_error ctx with None -> y | Some err -> raise (Error err)
 
 let wrap5 ctx f x1 x2 x3 x4 x5 =
   let y = f x1 x2 x3 x4 x5 in
-  match gcc_jit_context_get_first_error ctx with
-  | None -> y
-  | Some err -> raise (Error err)
+  match gcc_jit_context_get_first_error ctx with None -> y | Some err -> raise (Error err)
 
 let wrap6 ctx f x1 x2 x3 x4 x5 x6 =
   let y = f x1 x2 x3 x4 x5 x6 in
-  match gcc_jit_context_get_first_error ctx with
-  | None -> y
-  | Some err -> raise (Error err)
+  match gcc_jit_context_get_first_error ctx with None -> y | Some err -> raise (Error err)
 
 let wrap8 ctx f x1 x2 x3 x4 x5 x6 x7 x8 =
   let y = f x1 x2 x3 x4 x5 x6 x7 x8 in
-  match gcc_jit_context_get_first_error ctx with
-  | None -> y
-  | Some err -> raise (Error err)
+  match gcc_jit_context_get_first_error ctx with None -> y | Some err -> raise (Error err)
 
-let get_first_error ctx =
-  gcc_jit_context_get_first_error ctx
+let get_first_error ctx = gcc_jit_context_get_first_error ctx
 
 module Context = struct
-  let create () =
-    gcc_jit_context_acquire ()
-
-  let release ctx =
-    gcc_jit_context_release ctx
-
-  let create_child ctx =
-    wrap1 ctx gcc_jit_context_new_child_context ctx
+  let create () = gcc_jit_context_acquire ()
+  let release ctx = gcc_jit_context_release ctx
+  let create_child ctx = wrap1 ctx gcc_jit_context_new_child_context ctx
 
   let dump_to_file ctx ?(update_locs = false) path =
     wrap3 ctx gcc_jit_context_dump_to_file ctx path (if update_locs then 1 else 0)
@@ -145,20 +123,15 @@ module Context = struct
   external int_of_file_descr : Unix.file_descr -> int = "%identity"
 
   let set_logfile ctx = function
-    | None ->
-        wrap4 ctx gcc_jit_context_set_logfile ctx Ctypes.null 0 0
+    | None -> wrap4 ctx gcc_jit_context_set_logfile ctx Ctypes.null 0 0
     | Some fd ->
-        let f = match fdopen (int_of_file_descr fd) "a" with
-          | None -> raise (Error "fdopen")
-          | Some f -> f
-        in
+        let f = match fdopen (int_of_file_descr fd) "a" with None -> raise (Error "fdopen") | Some f -> f in
         wrap4 ctx gcc_jit_context_set_logfile ctx f 0 0
 
-  let dump_reproducer_to_file ctx path =
-    wrap2 ctx gcc_jit_context_dump_reproducer_to_file ctx path
+  let dump_reproducer_to_file ctx path = wrap2 ctx gcc_jit_context_dump_reproducer_to_file ctx path
 
   type _ context_option =
-      Progname : string context_option
+    | Progname : string context_option
     | Optimization_level : int context_option
     | Debuginfo : bool context_option
     | Dump_initial_tree : bool context_option
@@ -169,26 +142,22 @@ module Context = struct
     | Selfcheck_gc : bool context_option
     | Keep_intermediates : bool context_option
 
-  let set_option : type a. context -> a context_option -> a -> unit = fun ctx opt v ->
+  let set_option : type a. context -> a context_option -> a -> unit =
+   fun ctx opt v ->
     match opt with
-    | Progname ->
-        wrap3 ctx gcc_jit_context_set_str_option ctx GCC_JIT_STR_OPTION_PROGNAME v
+    | Progname -> wrap3 ctx gcc_jit_context_set_str_option ctx GCC_JIT_STR_OPTION_PROGNAME v
     | Optimization_level ->
         wrap3 ctx gcc_jit_context_set_int_option ctx GCC_JIT_INT_OPTION_OPTIMIZATION_LEVEL v
-    | Debuginfo ->
-        wrap3 ctx gcc_jit_context_set_bool_option ctx GCC_JIT_BOOL_OPTION_DEBUGINFO v
+    | Debuginfo -> wrap3 ctx gcc_jit_context_set_bool_option ctx GCC_JIT_BOOL_OPTION_DEBUGINFO v
     | Dump_initial_tree ->
         wrap3 ctx gcc_jit_context_set_bool_option ctx GCC_JIT_BOOL_OPTION_DUMP_INITIAL_TREE v
     | Dump_initial_gimple ->
         wrap3 ctx gcc_jit_context_set_bool_option ctx GCC_JIT_BOOL_OPTION_DUMP_INITIAL_GIMPLE v
     | Dump_generated_code ->
         wrap3 ctx gcc_jit_context_set_bool_option ctx GCC_JIT_BOOL_OPTION_DUMP_GENERATED_CODE v
-    | Dump_summary ->
-        wrap3 ctx gcc_jit_context_set_bool_option ctx GCC_JIT_BOOL_OPTION_DUMP_SUMMARY v
-    | Dump_everything ->
-        wrap3 ctx gcc_jit_context_set_bool_option ctx GCC_JIT_BOOL_OPTION_DUMP_EVERYTHING v
-    | Selfcheck_gc ->
-        wrap3 ctx gcc_jit_context_set_bool_option ctx GCC_JIT_BOOL_OPTION_SELFCHECK_GC v
+    | Dump_summary -> wrap3 ctx gcc_jit_context_set_bool_option ctx GCC_JIT_BOOL_OPTION_DUMP_SUMMARY v
+    | Dump_everything -> wrap3 ctx gcc_jit_context_set_bool_option ctx GCC_JIT_BOOL_OPTION_DUMP_EVERYTHING v
+    | Selfcheck_gc -> wrap3 ctx gcc_jit_context_set_bool_option ctx GCC_JIT_BOOL_OPTION_SELFCHECK_GC v
     | Keep_intermediates ->
         wrap3 ctx gcc_jit_context_set_bool_option ctx GCC_JIT_BOOL_OPTION_KEEP_INTERMEDIATES v
 
@@ -197,11 +166,7 @@ module Context = struct
     (* Gc.finalise gcc_jit_result_release res; *)
     res
 
-  type output_kind =
-      Assembler
-    | Object_file
-    | Dynamic_library
-    | Executable
+  type output_kind = Assembler | Object_file | Dynamic_library | Executable
 
   let output_kind = function
     | Assembler -> GCC_JIT_OUTPUT_KIND_ASSEMBLER
@@ -209,31 +174,23 @@ module Context = struct
     | Dynamic_library -> GCC_JIT_OUTPUT_KIND_DYNAMIC_LIBRARY
     | Executable -> GCC_JIT_OUTPUT_KIND_EXECUTABLE
 
-  let compile_to_file ctx kind path =
-    wrap3 ctx gcc_jit_context_compile_to_file ctx (output_kind kind) path
+  let compile_to_file ctx kind path = wrap3 ctx gcc_jit_context_compile_to_file ctx (output_kind kind) path
 end
 
 module Field = struct
-  let create ctx ?(loc = null_loc) typ name =
-    wrap4 ctx gcc_jit_context_new_field ctx loc typ name
-
-  let to_string fld =
-    gcc_jit_object_get_debug_string (gcc_jit_field_as_object fld)
+  let create ctx ?(loc = null_loc) typ name = wrap4 ctx gcc_jit_context_new_field ctx loc typ name
+  let to_string fld = gcc_jit_object_get_debug_string (gcc_jit_field_as_object fld)
 end
 
 module Struct = struct
   let create ctx ?(loc = null_loc) name fields =
     let a = Ctypes.CArray.of_list gcc_jit_field fields in
-    wrap3 ctx gcc_jit_context_new_struct_type ctx loc name
-      (List.length fields) (Ctypes.CArray.start a)
+    wrap3 ctx gcc_jit_context_new_struct_type ctx loc name (List.length fields) (Ctypes.CArray.start a)
 
-  let opaque ctx ?(loc = null_loc) name =
-    wrap2 ctx gcc_jit_context_new_opaque_struct ctx loc name
+  let opaque ctx ?(loc = null_loc) name = wrap2 ctx gcc_jit_context_new_opaque_struct ctx loc name
 
   let set_fields ?(loc = null_loc) struc fields =
-    let ctx =
-      gcc_jit_object_get_context (gcc_jit_type_as_object (gcc_jit_struct_as_type struc))
-    in
+    let ctx = gcc_jit_object_get_context (gcc_jit_type_as_object (gcc_jit_struct_as_type struc)) in
     let a = Ctypes.CArray.of_list gcc_jit_field fields in
     wrap3 ctx gcc_jit_struct_set_fields struc loc (List.length fields) (Ctypes.CArray.start a)
 
@@ -243,7 +200,7 @@ end
 
 module Type = struct
   type type_kind =
-      Void
+    | Void
     | Void_ptr
     | Bool
     | Char
@@ -268,7 +225,7 @@ module Type = struct
     | Complex_long_double
 
   let type_kind = function
-      Void -> GCC_JIT_TYPE_VOID
+    | Void -> GCC_JIT_TYPE_VOID
     | Void_ptr -> GCC_JIT_TYPE_VOID_PTR
     | Bool -> GCC_JIT_TYPE_BOOL
     | Char -> GCC_JIT_TYPE_CHAR
@@ -292,11 +249,8 @@ module Type = struct
     | Complex_double -> GCC_JIT_TYPE_COMPLEX_DOUBLE
     | Complex_long_double -> GCC_JIT_TYPE_COMPLEX_LONG_DOUBLE
 
-  let get ctx kind =
-    wrap2 ctx gcc_jit_context_get_type ctx (type_kind kind)
-
-  let int ctx ?(signed = false) n =
-    wrap3 ctx gcc_jit_context_get_int_type ctx (if signed then 1 else 0) n
+  let get ctx kind = wrap2 ctx gcc_jit_context_get_type ctx (type_kind kind)
+  let int ctx ?(signed = false) n = wrap3 ctx gcc_jit_context_get_int_type ctx (if signed then 1 else 0) n
 
   let pointer typ =
     let ctx = gcc_jit_object_get_context (gcc_jit_type_as_object typ) in
@@ -310,13 +264,11 @@ module Type = struct
     let ctx = gcc_jit_object_get_context (gcc_jit_type_as_object typ) in
     wrap1 ctx gcc_jit_type_get_volatile typ
 
-  let array ctx ?(loc = null_loc) typ n =
-    wrap4 ctx gcc_jit_context_new_array_type ctx loc typ n
+  let array ctx ?(loc = null_loc) typ n = wrap4 ctx gcc_jit_context_new_array_type ctx loc typ n
 
   let function_ptr ctx ?(loc = null_loc) ?(variadic = false) args ret =
     let a = Ctypes.CArray.of_list gcc_jit_type args in
-    wrap5 ctx gcc_jit_context_new_function_ptr_type ctx
-      loc ret (List.length args) (Ctypes.CArray.start a)
+    wrap5 ctx gcc_jit_context_new_function_ptr_type ctx loc ret (List.length args) (Ctypes.CArray.start a)
       (if variadic then 1 else 0)
 
   let struct_ str =
@@ -327,8 +279,7 @@ module Type = struct
     let a = Ctypes.CArray.of_list gcc_jit_field fields in
     wrap3 ctx gcc_jit_context_new_union_type ctx loc name (List.length fields) (Ctypes.CArray.start a)
 
-  let to_string typ =
-    gcc_jit_object_get_debug_string (gcc_jit_type_as_object typ)
+  let to_string typ = gcc_jit_object_get_debug_string (gcc_jit_type_as_object typ)
 end
 
 module RValue = struct
@@ -336,35 +287,19 @@ module RValue = struct
     let ctx = gcc_jit_object_get_context (gcc_jit_rvalue_as_object rval) in
     wrap1 ctx gcc_jit_rvalue_get_type rval
 
-  let int ctx typ n =
-    wrap3 ctx gcc_jit_context_new_rvalue_from_int ctx typ n
-
-  let zero ctx typ : rvalue =
-    wrap2 ctx gcc_jit_context_zero ctx typ
-
-  let one ctx typ =
-    wrap2 ctx gcc_jit_context_one ctx typ
-
-  let double ctx typ f =
-    wrap3 ctx gcc_jit_context_new_rvalue_from_double ctx typ f
-
-  let ptr ctx typ ptr =
-    wrap3 ctx gcc_jit_context_new_rvalue_from_ptr ctx typ
-      (Ctypes.to_voidp ptr)
-
-  let null ctx typ =
-    wrap2 ctx gcc_jit_context_null ctx typ
-
-  let string_literal ctx str =
-    wrap2 ctx gcc_jit_context_new_string_literal ctx str
+  let int ctx typ n = wrap3 ctx gcc_jit_context_new_rvalue_from_int ctx typ n
+  let zero ctx typ : rvalue = wrap2 ctx gcc_jit_context_zero ctx typ
+  let one ctx typ = wrap2 ctx gcc_jit_context_one ctx typ
+  let double ctx typ f = wrap3 ctx gcc_jit_context_new_rvalue_from_double ctx typ f
+  let ptr ctx typ ptr = wrap3 ctx gcc_jit_context_new_rvalue_from_ptr ctx typ (Ctypes.to_voidp ptr)
+  let null ctx typ = wrap2 ctx gcc_jit_context_null ctx typ
+  let string_literal ctx str = wrap2 ctx gcc_jit_context_new_string_literal ctx str
 
   let unary_op ctx ?(loc = null_loc) op typ rval =
-    wrap5 ctx gcc_jit_context_new_unary_op ctx
-      loc (unary_op op) typ rval
+    wrap5 ctx gcc_jit_context_new_unary_op ctx loc (unary_op op) typ rval
 
   let binary_op ctx ?(loc = null_loc) op typ rval1 rval2 =
-    wrap6 ctx gcc_jit_context_new_binary_op ctx loc (binary_op op)
-      typ rval1 rval2
+    wrap6 ctx gcc_jit_context_new_binary_op ctx loc (binary_op op) typ rval1 rval2
 
   let comparison ctx ?(loc = null_loc) cmp rval1 rval2 =
     wrap5 ctx gcc_jit_context_new_comparison ctx loc (comparison cmp) rval1 rval2
@@ -375,11 +310,9 @@ module RValue = struct
 
   let indirect_call ctx ?(loc = null_loc) rval args =
     let a = Ctypes.CArray.of_list gcc_jit_rvalue args in
-    wrap5 ctx gcc_jit_context_new_call_through_ptr ctx
-      loc rval (List.length args) (Ctypes.CArray.start a)
+    wrap5 ctx gcc_jit_context_new_call_through_ptr ctx loc rval (List.length args) (Ctypes.CArray.start a)
 
-  let cast ctx ?(loc = null_loc) rval typ =
-    wrap4 ctx gcc_jit_context_new_cast ctx loc rval typ
+  let cast ctx ?(loc = null_loc) rval typ = wrap4 ctx gcc_jit_context_new_cast ctx loc rval typ
 
   let access_field ?(loc = null_loc) rval fld =
     let ctx = gcc_jit_object_get_context (gcc_jit_rvalue_as_object rval) in
@@ -393,8 +326,7 @@ module RValue = struct
     let ctx = gcc_jit_object_get_context (gcc_jit_param_as_object param) in
     wrap1 ctx gcc_jit_param_as_rvalue param
 
-  let to_string rval =
-    gcc_jit_object_get_debug_string (gcc_jit_rvalue_as_object rval)
+  let to_string rval = gcc_jit_object_get_debug_string (gcc_jit_rvalue_as_object rval)
 end
 
 module LValue = struct
@@ -402,10 +334,7 @@ module LValue = struct
     let ctx = gcc_jit_object_get_context (gcc_jit_lvalue_as_object lval) in
     wrap2 ctx gcc_jit_lvalue_get_address lval loc
 
-  type global_kind =
-      Exported
-    | Internal
-    | Imported
+  type global_kind = Exported | Internal | Imported
 
   let global_kind = function
     | Exported -> GCC_JIT_GLOBAL_EXPORTED
@@ -435,40 +364,30 @@ module LValue = struct
     let ctx = gcc_jit_object_get_context (gcc_jit_param_as_object param) in
     wrap1 ctx gcc_jit_param_as_lvalue param
 
-  let to_string lval =
-    gcc_jit_object_get_debug_string (gcc_jit_lvalue_as_object lval)
+  let to_string lval = gcc_jit_object_get_debug_string (gcc_jit_lvalue_as_object lval)
 end
 
 module Param = struct
-  let create ctx ?(loc = null_loc) typ name =
-    wrap4 ctx gcc_jit_context_new_param ctx loc typ name
-
-  let to_string param =
-    gcc_jit_object_get_debug_string (gcc_jit_param_as_object param)
+  let create ctx ?(loc = null_loc) typ name = wrap4 ctx gcc_jit_context_new_param ctx loc typ name
+  let to_string param = gcc_jit_object_get_debug_string (gcc_jit_param_as_object param)
 end
 
 module Function = struct
-
-  type function_kind =
-      Exported
-    | Internal
-    | Imported
-    | Always_inline
+  type function_kind = Exported | Internal | Imported | Always_inline
 
   let function_kind = function
-      Exported -> GCC_JIT_FUNCTION_EXPORTED
+    | Exported -> GCC_JIT_FUNCTION_EXPORTED
     | Internal -> GCC_JIT_FUNCTION_INTERNAL
     | Imported -> GCC_JIT_FUNCTION_IMPORTED
     | Always_inline -> GCC_JIT_FUNCTION_ALWAYS_INLINE
 
   let create ctx ?(loc = null_loc) ?(variadic = false) kind ret name args =
     let a = Ctypes.CArray.of_list gcc_jit_param args in
-    wrap8 ctx gcc_jit_context_new_function
-      ctx loc (function_kind kind) ret name (List.length args) (Ctypes.CArray.start a)
+    wrap8 ctx gcc_jit_context_new_function ctx loc (function_kind kind) ret name (List.length args)
+      (Ctypes.CArray.start a)
       (if variadic then 1 else 0)
 
-  let builtin ctx name =
-    wrap2 ctx gcc_jit_context_get_builtin_function ctx name
+  let builtin ctx name = wrap2 ctx gcc_jit_context_get_builtin_function ctx name
 
   let param fn i =
     let ctx = gcc_jit_object_get_context (gcc_jit_function_as_object fn) in
@@ -482,8 +401,7 @@ module Function = struct
     let ctx = gcc_jit_object_get_context (gcc_jit_function_as_object fn) in
     wrap4 ctx gcc_jit_function_new_local fn loc typ name
 
-  let to_string fn =
-    gcc_jit_object_get_debug_string (gcc_jit_function_as_object fn)
+  let to_string fn = gcc_jit_object_get_debug_string (gcc_jit_function_as_object fn)
 end
 
 module Block = struct
@@ -527,16 +445,12 @@ module Block = struct
     let ctx = gcc_jit_object_get_context (gcc_jit_block_as_object blk) in
     wrap2 ctx gcc_jit_block_end_with_void_return blk loc
 
-  let to_string blk =
-    gcc_jit_object_get_debug_string (gcc_jit_block_as_object blk)
+  let to_string blk = gcc_jit_object_get_debug_string (gcc_jit_block_as_object blk)
 end
 
 module Location = struct
-  let create ctx path line col =
-    wrap4 ctx gcc_jit_context_new_location ctx path line col
-
-  let to_string loc =
-    gcc_jit_object_get_debug_string (gcc_jit_location_as_object loc)
+  let create ctx path line col = wrap4 ctx gcc_jit_context_new_location ctx path line col
+  let to_string loc = gcc_jit_object_get_debug_string (gcc_jit_location_as_object loc)
 end
 
 module Result = struct
@@ -548,6 +462,5 @@ module Result = struct
     let p = gcc_jit_result_get_global res name in
     Ctypes.(coerce (ptr void) (ptr typ)) p
 
-  let release res =
-    gcc_jit_result_release res
+  let release res = gcc_jit_result_release res
 end

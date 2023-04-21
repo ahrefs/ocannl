@@ -1,15 +1,36 @@
 (library
  (name ocannl_runtime)
  (libraries base stdio ppx_minidebug.runtime)
- (preprocess (pps ppx_jane ppx_minidebug))
+ (preprocess
+  (pps ppx_jane ppx_minidebug))
  (modules node)
  (modes byte native))
 
 (library
  (name ocannl)
- (libraries base core printbox printbox-text stdio dynlink str ocannl_runtime gccjit ppx_minidebug.runtime)
- (preprocess (pps ppx_jane ppx_ocannl ppx_minidebug))
- (modules PrintBox_utils nodeUI shape code formula operation session exec_as_OCaml exec_as_gccjit)
+ (libraries
+  base
+  core
+  printbox
+  printbox-text
+  stdio
+  dynlink
+  str
+  ocannl_runtime
+  gccjit
+  ppx_minidebug.runtime)
+ (preprocess
+  (pps ppx_jane ppx_ocannl ppx_minidebug))
+ (modules
+  PrintBox_utils
+  nodeUI
+  shape
+  code
+  formula
+  operation
+  session
+  exec_as_OCaml
+  exec_as_gccjit)
  (modes byte native))
 
 (library
@@ -17,4 +38,5 @@
  (kind ppx_rewriter)
  (modules ppx_nn_shared ppx_nn_cd ppx_nn_op ppx_ocannl)
  (libraries base ppxlib str)
- (preprocess (pps ppx_jane ppxlib.metaquot)))
+ (preprocess
+  (pps ppx_jane ppxlib.metaquot)))

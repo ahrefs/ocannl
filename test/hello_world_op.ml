@@ -1,6 +1,5 @@
 open Base
 open Ocannl
-
 module FDSL = Operation.FDSL
 
 let () = Session.SDSL.set_executor OCaml
@@ -11,13 +10,14 @@ let%expect_test "Hello World" =
 
 let%expect_test "Pointwise multiplication dims 1" =
   let open Session.SDSL in
-  drop_all_sessions();
+  drop_all_sessions ();
   Random.init 0;
   (* "Hey" is inferred to be a scalar. *)
   let%nn_op y = 2 *. "hey" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ y;
-  [%expect {|
+  [%expect
+    {|
     ┌──────────────────────┐
     │[3]: y <*.> shape 0:1 │
     │┌┬─────────┐          │
@@ -29,14 +29,15 @@ let%expect_test "Pointwise multiplication dims 1" =
 
 let%expect_test "Matrix multiplication dims 1x1" =
   let open Session.SDSL in
-  drop_all_sessions();
+  drop_all_sessions ();
   Random.init 0;
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
-  let%nn_op y = "hey" * 'q' 2.0 + 'p' 1.0 in
+  let%nn_op y = ("hey" * 'q' 2.0) + 'p' 1.0 in
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey;
-  [%expect {|
+  [%expect
+    {|
     ┌──────────────────────────────┐
     │[1]: <hey> shape q=1:1->p=0:1 │
     │┌────────┬─────────┐          │
@@ -46,7 +47,8 @@ let%expect_test "Matrix multiplication dims 1x1" =
     │└────────┴─────────┘          │
     └──────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ y;
-  [%expect {|
+  [%expect
+    {|
     ┌───────────────────────┐
     │[5]: y <+> shape p=0:1 │
     │┌┬─────────┐           │
@@ -57,15 +59,16 @@ let%expect_test "Matrix multiplication dims 1x1" =
     └───────────────────────┘ |}]
 
 let%expect_test "Print constant tensor" =
-  Session.drop_all_sessions();
+  Session.drop_all_sessions ();
   Random.init 0;
   let open Session.SDSL in
-  let%nn_op hey = [1, 2, 3; 4, 5, 6] in
+  let%nn_op hey = [ (1, 2, 3); (4, 5, 6) ] in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Inline @@ hey;
   [%expect {| [1.00, 2.00, 3.00; 4.00, 5.00, 6.00] |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ hey;
-  [%expect {|
+  [%expect
+    {|
     ┌───────────────────────────────────────────────────────────────┐
     │[1]: hey <[1.00, 2.00, 3.00; 4.00, 5.00, 6.00]> shape 1:3->0:2 │
     │┌──────┬───────────────────────────┐                           │
@@ -75,12 +78,13 @@ let%expect_test "Print constant tensor" =
     ││      │ 4.00e+0  5.00e+0  6.00e+0 │                           │
     │└──────┴───────────────────────────┘                           │
     └───────────────────────────────────────────────────────────────┘ |}];
-  let%nn_op hoo = [| [1; 2; 3]; [4; 5; 6] |] in
+  let%nn_op hoo = [| [ 1; 2; 3 ]; [ 4; 5; 6 ] |] in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Inline @@ hoo;
   [%expect {| [|[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]|] |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ hoo;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────────┐
     │[2]: hoo <[|[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]|]> shape 0:2|1:3 │
     │┌──────┬───────────────────────────┐                                │
@@ -90,18 +94,26 @@ let%expect_test "Print constant tensor" =
     ││      │ 4.00e+0  5.00e+0  6.00e+0 │                                │
     │└──────┴───────────────────────────┘                                │
     └────────────────────────────────────────────────────────────────────┘ |}];
-  let%nn_op hey2 = [(1, 2, 3), (4, 5, 6); (7, 8, 9), (10, 11, 12); (13, 14, 15), (16, 17, 18);
-                     (19, 20, 21), (22, 23, 24)] in
+  let%nn_op hey2 =
+    [
+      ((1, 2, 3), (4, 5, 6));
+      ((7, 8, 9), (10, 11, 12));
+      ((13, 14, 15), (16, 17, 18));
+      ((19, 20, 21), (22, 23, 24));
+    ]
+  in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Inline @@ hey2;
-  [%expect {|
+  [%expect
+    {|
     [(1.00, 2.00, 3.00), (4.00, 5.00, 6.00);
       (7.00, 8.00, 9.00), (10.00, 11.00, 12.00);
       (13.00, 14.00, 15.00), (16.00, 17.00, 18.00);
       (19.00, 20.00, 21.00), (22.00, 23.00, 24.00)
     ] |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ hey2;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────┐
     │[3]: hey2 <c4x2x3> shape 1:2,2:3->0:4                           │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -114,18 +126,26 @@ let%expect_test "Print constant tensor" =
     ││      │ 1.90e+1  2.00e+1  2.10e+1 │ 2.20e+1  2.30e+1  2.40e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
-  let%nn_op hoo2 = [| [[1; 2; 3]; [4; 5; 6]]; [[7; 8; 9]; [10; 11; 12]]; [[13; 14; 15]; [16; 17; 18]];
-                       [[19; 20; 21]; [22; 23; 24]] |] in
+  let%nn_op hoo2 =
+    [|
+      [ [ 1; 2; 3 ]; [ 4; 5; 6 ] ];
+      [ [ 7; 8; 9 ]; [ 10; 11; 12 ] ];
+      [ [ 13; 14; 15 ]; [ 16; 17; 18 ] ];
+      [ [ 19; 20; 21 ]; [ 22; 23; 24 ] ];
+    |]
+  in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Inline @@ hoo2;
-  [%expect {|
+  [%expect
+    {|
     [|[[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]];
       [[7.00; 8.00; 9.00]; [10.00; 11.00; 12.00]];
       [[13.00; 14.00; 15.00]; [16.00; 17.00; 18.00]];
       [[19.00; 20.00; 21.00]; [22.00; 23.00; 24.00]]
     |] |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ hoo2;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[4]: hoo2 <c4x2x3> shape 0:4|1:2,2:3                                                                                    │
     │┌──────┬───────────────────────────┬───────────────────────────┬───────────────────────────┬───────────────────────────┐│
@@ -136,18 +156,26 @@ let%expect_test "Print constant tensor" =
     ││      │ 4.00e+0  5.00e+0  6.00e+0 │ 1.00e+1  1.10e+1  1.20e+1 │ 1.60e+1  1.70e+1  1.80e+1 │ 2.20e+1  2.30e+1  2.40e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  let%nn_op heyhoo = [| [|[1; 2; 3]; [4; 5; 6]|]; [|[7; 8; 9]; [10; 11; 12]|]; [|[13; 14; 15]; [16; 17; 18]|];
-                       [|[19; 20; 21]; [22; 23; 24]|] |] in
+  let%nn_op heyhoo =
+    [|
+      [| [ 1; 2; 3 ]; [ 4; 5; 6 ] |];
+      [| [ 7; 8; 9 ]; [ 10; 11; 12 ] |];
+      [| [ 13; 14; 15 ]; [ 16; 17; 18 ] |];
+      [| [ 19; 20; 21 ]; [ 22; 23; 24 ] |];
+    |]
+  in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Inline @@ heyhoo;
-  [%expect {|
+  [%expect
+    {|
     [|[|[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]|];
       [|[7.00; 8.00; 9.00]; [10.00; 11.00; 12.00]|];
       [|[13.00; 14.00; 15.00]; [16.00; 17.00; 18.00]|];
       [|[19.00; 20.00; 21.00]; [22.00; 23.00; 24.00]|]
     |] |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ heyhoo;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[5]: heyhoo <c4x2x3> shape 0:4,1:2|2:3                                                                                  │
     │┌──────┬───────────────────────────┬───────────────────────────┬───────────────────────────┬───────────────────────────┐│
@@ -158,13 +186,18 @@ let%expect_test "Print constant tensor" =
     ││      │ 4.00e+0  5.00e+0  6.00e+0 │ 1.00e+1  1.10e+1  1.20e+1 │ 1.60e+1  1.70e+1  1.80e+1 │ 2.20e+1  2.30e+1  2.40e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  let%nn_op heyhoo2 = [| [|[[1; 31]; [2; 32]; [3; 33]]; [[4; 34]; [5; 35]; [6; 36]]|];
-                          [|[[7; 37]; [8; 38]; [9; 39]]; [[10; 40]; [11; 41]; [12; 42]]|];
-                          [|[[13; 43]; [14; 44]; [15; 45]]; [[16; 46]; [17; 47]; [18; 48]]|];
-                          [|[[19; 49]; [20; 50]; [21; 51]]; [[22; 52]; [23; 53]; [24; 54]]|] |] in
+  let%nn_op heyhoo2 =
+    [|
+      [| [ [ 1; 31 ]; [ 2; 32 ]; [ 3; 33 ] ]; [ [ 4; 34 ]; [ 5; 35 ]; [ 6; 36 ] ] |];
+      [| [ [ 7; 37 ]; [ 8; 38 ]; [ 9; 39 ] ]; [ [ 10; 40 ]; [ 11; 41 ]; [ 12; 42 ] ] |];
+      [| [ [ 13; 43 ]; [ 14; 44 ]; [ 15; 45 ] ]; [ [ 16; 46 ]; [ 17; 47 ]; [ 18; 48 ] ] |];
+      [| [ [ 19; 49 ]; [ 20; 50 ]; [ 21; 51 ] ]; [ [ 22; 52 ]; [ 23; 53 ]; [ 24; 54 ] ] |];
+    |]
+  in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Inline @@ heyhoo2;
-  [%expect {|
+  [%expect
+    {|
     [|
       [|[[1.00; 31.00]; [2.00; 32.00]; [3.00; 33.00]];
         [[4.00; 34.00]; [5.00; 35.00]; [6.00; 36.00]]|];
@@ -176,7 +209,8 @@ let%expect_test "Print constant tensor" =
         [[22.00; 52.00]; [23.00; 53.00]; [24.00; 54.00]]|]
     |] |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ heyhoo2;
-  [%expect {|
+  [%expect
+    {|
     ┌──────────────────────────────────────────────┐
     │[6]: heyhoo2 <c4x2x3x2> shape 0:4,1:2|2:3,3:2 │
     │┌──────┬──────────────────┬──────────────────┐│
@@ -200,13 +234,22 @@ let%expect_test "Print constant tensor" =
     ││      │ 2.10e+1  5.10e+1 │ 2.40e+1  5.40e+1 ││
     │└──────┴──────────────────┴──────────────────┘│
     └──────────────────────────────────────────────┘ |}];
-  let%nn_op heyhoo3 = [| [| [[[1; 31]; [2; 32]; [3; 33]]; [[4; 34]; [5; 35]; [6; 36]]];
-                             [[[7; 37]; [8; 38]; [9; 39]]; [[10; 40]; [11; 41]; [12; 42]]] |];
-                          [| [[[13; 43]; [14; 44]; [15; 45]]; [[16; 46]; [17; 47]; [18; 48]]];
-                             [[[19; 49]; [20; 50]; [21; 51]]; [[22; 52]; [23; 53]; [24; 54]]] |] |] in
+  let%nn_op heyhoo3 =
+    [|
+      [|
+        [ [ [ 1; 31 ]; [ 2; 32 ]; [ 3; 33 ] ]; [ [ 4; 34 ]; [ 5; 35 ]; [ 6; 36 ] ] ];
+        [ [ [ 7; 37 ]; [ 8; 38 ]; [ 9; 39 ] ]; [ [ 10; 40 ]; [ 11; 41 ]; [ 12; 42 ] ] ];
+      |];
+      [|
+        [ [ [ 13; 43 ]; [ 14; 44 ]; [ 15; 45 ] ]; [ [ 16; 46 ]; [ 17; 47 ]; [ 18; 48 ] ] ];
+        [ [ [ 19; 49 ]; [ 20; 50 ]; [ 21; 51 ] ]; [ [ 22; 52 ]; [ 23; 53 ]; [ 24; 54 ] ] ];
+      |];
+    |]
+  in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Inline @@ heyhoo3;
-  [%expect {|
+  [%expect
+    {|
     [|
       [|
         [[[1.00; 31.00]; [2.00; 32.00]; [3.00; 33.00]];
@@ -220,7 +263,8 @@ let%expect_test "Print constant tensor" =
           [[22.00; 52.00]; [23.00; 53.00]; [24.00; 54.00]]]|]
     |] |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ heyhoo3;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────────────────────┐
     │[7]: heyhoo3 <c2x2x2x3x2> shape 0:2,1:2|2:2,3:3,4:2 │
     │┌──────┬──────────────────┬──────────────────┐      │
@@ -249,13 +293,22 @@ let%expect_test "Print constant tensor" =
     ││      │ 2.10e+1  5.10e+1 │ 2.40e+1  5.40e+1 │      │
     │└──────┴──────────────────┴──────────────────┘      │
     └────────────────────────────────────────────────────┘ |}];
-  let%nn_op heyhoo4 = [| [ [[1, 31; 2, 32; 3, 33]; [4, 34; 5, 35; 6, 36]];
-                             [[7, 37; 8, 38; 9, 39]; [10, 40; 11, 41; 12, 42]] ];
-                          [ [[13, 43; 14, 44; 15, 45]; [16, 46; 17, 47; 18, 48]];
-                             [[19, 49; 20, 50; 21, 51]; [22, 52; 23, 53; 24, 54]] ] |] in
+  let%nn_op heyhoo4 =
+    [|
+      [
+        [ [ (1, 31); (2, 32); (3, 33) ]; [ (4, 34); (5, 35); (6, 36) ] ];
+        [ [ (7, 37); (8, 38); (9, 39) ]; [ (10, 40); (11, 41); (12, 42) ] ];
+      ];
+      [
+        [ [ (13, 43); (14, 44); (15, 45) ]; [ (16, 46); (17, 47); (18, 48) ] ];
+        [ [ (19, 49); (20, 50); (21, 51) ]; [ (22, 52); (23, 53); (24, 54) ] ];
+      ];
+    |]
+  in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Inline @@ heyhoo4;
-  [%expect {|
+  [%expect
+    {|
     [|
       [
         [[1.00, 31.00; 2.00, 32.00; 3.00, 33.00];
@@ -269,7 +322,8 @@ let%expect_test "Print constant tensor" =
           [22.00, 52.00; 23.00, 53.00; 24.00, 54.00]]]
     |] |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ heyhoo4;
-  [%expect {|
+  [%expect
+    {|
     ┌─────────────────────────────────────────────────────┐
     │[8]: heyhoo4 <c2x2x2x3x2> shape 0:2|4:2->1:2,2:2,3:3 │
     │┌──────┬──────────────────┬──────────────────┐       │
@@ -301,14 +355,15 @@ let%expect_test "Print constant tensor" =
 
 let%expect_test "Matrix multiplication dims 2x3" =
   let open Session.SDSL in
-  drop_all_sessions();
+  drop_all_sessions ();
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
   let%nn_op hey = "hey" in
-  let%nn_op y = hey * [2; 3] + [4; 5; 6] in
+  let%nn_op y = (hey * [ 2; 3 ]) + [ 4; 5; 6 ] in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey;
-  [%expect {|
+  [%expect
+    {|
     ┌───────────────────────────┐
     │[1]: <hey> shape 1:2->0:3  │
     │┌──────┬──────────────────┐│
@@ -320,7 +375,8 @@ let%expect_test "Matrix multiplication dims 2x3" =
     │└──────┴──────────────────┘│
     └───────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default @@ y;
-  [%expect {|
+  [%expect
+    {|
     ┌──────────────────────────────┐
     │[5]: y <+> shape 0:3          │
     │┌┬───────────────────────────┐│
@@ -332,20 +388,22 @@ let%expect_test "Matrix multiplication dims 2x3" =
 
 let%expect_test "Big matrix" =
   let open Session.SDSL in
-  drop_all_sessions();
+  drop_all_sessions ();
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
-  let hey = FDSL.O.(!~ "hey") in
+  let hey = FDSL.O.(!~"hey") in
   let zero_to_twenty = FDSL.range 20 in
-  let y = FDSL.O.(hey * zero_to_twenty + zero_to_twenty) in
+  let y = FDSL.O.((hey * zero_to_twenty) + zero_to_twenty) in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Inline zero_to_twenty;
-  [%expect {|
+  [%expect
+    {|
       [0.00; 1.00; 2.00; 3.00; 4.00; 5.00; 6.00; 7.00; 8.00; 9.00; 10.00; 11.00;
         12.00; 13.00; 14.00; 15.00; 16.00; 17.00; 18.00; 19.00; 20.00
       ] |}];
   print_formula ~with_code:false ~with_grad:false `Default zero_to_twenty;
-  [%expect {|
+  [%expect
+    {|
       ┌────────────────────────────────────────────┐
       │[2]: <0...20> shape 0:21                    │
       │┌┬─────────────────────────────────────────┐│
@@ -355,7 +413,8 @@ let%expect_test "Big matrix" =
       │└┴─────────────────────────────────────────┘│
       └────────────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default hey;
-  [%expect {|
+  [%expect
+    {|
       ┌──────────────────────────────────────────────────┐
       │[1]: <hey> shape 1:21->0:21                       │
       │┌──────┬─────────────────────────────────────────┐│
@@ -369,7 +428,8 @@ let%expect_test "Big matrix" =
       │└──────┴─────────────────────────────────────────┘│
       └──────────────────────────────────────────────────┘ |}];
   print_formula ~with_code:false ~with_grad:false `Default y;
-  [%expect {|
+  [%expect
+    {|
       ┌────────────────────────────────────────────┐
       │[4]: <+> shape 0:21                         │
       │┌┬─────────────────────────────────────────┐│
@@ -380,15 +440,15 @@ let%expect_test "Big matrix" =
       └────────────────────────────────────────────┘ |}]
 
 let%expect_test "Very big tensor" =
-    let open Session.SDSL in
-    drop_all_sessions();
-    Random.init 0;
-    let hey =
-      FDSL.range_of_shape ~batch_dims:[6] ~input_dims:[7; 8; 9] ~output_dims:[10; 11] () in
-    let%nn_op hoo = hey * (1 + 1) - 10 in
-    refresh_session ();
-    print_formula ~with_code:false ~with_grad:false `Default hey;
-    [%expect {|
+  let open Session.SDSL in
+  drop_all_sessions ();
+  Random.init 0;
+  let hey = FDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8; 9 ] ~output_dims:[ 10; 11 ] () in
+  let%nn_op hoo = (hey * (1 + 1)) - 10 in
+  refresh_session ();
+  print_formula ~with_code:false ~with_grad:false `Default hey;
+  [%expect
+    {|
       ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
       │[1]: <r6x10x11x7x8x9> shape 0:6|3:7,4:8,5:9->1:10,2:11                                                                                                                                 │
       │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬──────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -521,9 +581,10 @@ let%expect_test "Very big tensor" =
       ││      │ 3.32e+5  3.32e+5  ...  3.32e+5  3.32e+5 │ 3.32e+5  3.32e+5  ...  3.32e+5  3.32e+5 │      │ 3.32e+5  3.32e+5  ...  3.32e+5  3.32e+5 │ 3.32e+5  3.32e+5  ...  3.32e+5  3.32e+5 ││
       │└──────┴─────────────────────────────────────────┴─────────────────────────────────────────┴──────┴─────────────────────────────────────────┴─────────────────────────────────────────┘│
       └───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
-    print_formula ~with_code:false ~with_grad:false `Default hoo;
-    (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
-    [%expect {|
+  print_formula ~with_code:false ~with_grad:false `Default hoo;
+  (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
+  [%expect
+    {|
       ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
       │[9]: hoo <+> shape 0:6|1:10,2:11                                                                                                                                                       │
       │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬──────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│

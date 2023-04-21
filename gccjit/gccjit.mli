@@ -67,13 +67,10 @@ type function_
 type block
 (** The type of basic blocks.  See {{!blocks}Basic Blocks}. *)
 
-type unary_op =
-    Negate
-  | Bitwise_negate
-  | Logical_negate
+type unary_op = Negate | Bitwise_negate | Logical_negate
 
 type binary_op =
-    Plus
+  | Plus
   | Minus
   | Mult
   | Divide
@@ -103,7 +100,7 @@ type comparison = Eq | Ne | Lt | Le | Gt | Ge
 
     Eventually you can call {!Context.release} to clean up the context; any
     in-memory results created from it are still usable. *)
-    
+
 val get_first_error : context -> string option
 
 module Context : sig
@@ -212,56 +209,47 @@ module Context : sig
   (** {1 Context Options} *)
 
   type _ context_option =
-      Progname : string context_option
-    (** The name of the program, for used as a prefix when printing error messages
+    | Progname : string context_option
+        (** The name of the program, for used as a prefix when printing error messages
         to stderr.  If not set, ["libgccjit.so"] is used. *)
-
     | Optimization_level : int context_option
-    (** How much to optimize the code.  Valid values are [0-3], corresponding to
+        (** How much to optimize the code.  Valid values are [0-3], corresponding to
         GCC's command-line options -O0 through -O3.
 
         The default value is 0 (unoptimized). *)
-
     | Debuginfo : bool context_option
-    (** If [true], {!Context.compile} will attempt to do the right thing so that
+        (** If [true], {!Context.compile} will attempt to do the right thing so that
         if you attach a debugger to the process, it will be able to inspect
         variables and step through your code.  Note that you can't step through
         code unless you set up source location information for the code (by
         creating and passing in {!location} instances).  *)
-
     | Dump_initial_tree : bool context_option
-    (** If [true], {!Context.compile} will dump its initial "tree" representation
+        (** If [true], {!Context.compile} will dump its initial "tree" representation
         of your code to [stderr] (before any optimizations).  *)
-
     | Dump_initial_gimple : bool context_option
-    (** If [true], {!Context.compile} will dump the "gimple" representation of
+        (** If [true], {!Context.compile} will dump the "gimple" representation of
         your code to stderr, before any optimizations are performed.  The dump
         resembles C code.  *)
-
     | Dump_generated_code : bool context_option
-    (** If [true], {!Context.compile} will dump the final generated code to
+        (** If [true], {!Context.compile} will dump the final generated code to
         stderr, in the form of assembly language.  *)
-
     | Dump_summary : bool context_option
-    (** If [true], {!Context.compile} will print information to stderr on the
+        (** If [true], {!Context.compile} will print information to stderr on the
         actions it is performing, followed by a profile showing the time taken and
         memory usage of each phase. *)
-
     | Dump_everything : bool context_option
-    (** If [true], {!Context.compile} will dump copious amount of information on
+        (** If [true], {!Context.compile} will dump copious amount of information on
         what it's doing to various files within a temporary directory.  Use
         [Keep_intermediates] (see below) to see the results.  The files are
         intended to be human-readable, but the exact files and their formats are
         subject to change. *)
-
     | Selfcheck_gc : bool context_option
-    (** If [true], [libgccjit] will aggressively run its garbage collector,
+        (** If [true], [libgccjit] will aggressively run its garbage collector,
         to shake out bugs (greatly slowing down the compile).  This is likely to
         only be of interest to developers *of* the library.  It is used when
         running the selftest suite.  *)
-
     | Keep_intermediates : bool context_option
-    (** If [true], {!Context.release} will not clean up intermediate files written
+        (** If [true], {!Context.release} will not clean up intermediate files written
          to the filesystem, and will display their location on stderr.  *)
 
   val set_option : context -> 'a context_option -> 'a -> unit
@@ -284,17 +272,10 @@ module Context : sig
   (** Kinds of ahead-of-time compilation, for use with
       {!compile_to_file}.  *)
   type output_kind =
-      Assembler
-    (** Compile the context to an assembly file. *)
-
-    | Object_file
-    (** Compile the context to an object file. *)
-
-    | Dynamic_library
-    (** Compile the context to a dynamic library. *)
-
-    | Executable
-    (** Compile the context to an executable. *)
+    | Assembler  (** Compile the context to an assembly file. *)
+    | Object_file  (** Compile the context to an object file. *)
+    | Dynamic_library  (** Compile the context to a dynamic library. *)
+    | Executable  (** Compile the context to an executable. *)
 
   val compile_to_file : context -> output_kind -> string -> unit
   (** Compile the context to a file of the given kind.  This can be called more
@@ -369,9 +350,8 @@ end
 (** {1:types Types} *)
 
 module Type : sig
-
   type type_kind =
-      Void
+    | Void
     | Void_ptr
     | Bool
     | Char
@@ -414,7 +394,6 @@ module Type : sig
   (** Given type [T], get type [T[N]] (for a constant [N]). *)
 
   val function_ptr : context -> ?loc:location -> ?variadic:bool -> type_ list -> type_ -> type_
-
   val struct_ : struct_ -> type_
 
   val union : context -> ?loc:location -> string -> field list -> type_
@@ -444,7 +423,6 @@ end
     error). *)
 
 module RValue : sig
-
   val type_of : rvalue -> type_
   (** Get the type of this {!rvalue}. *)
 
@@ -523,9 +501,7 @@ add_eval block (new_call ctx printf_func args)
       - [P* <-> Q*], for pointer types [P] and [Q] *)
 
   val access_field : ?loc:location -> rvalue -> field -> rvalue
-
   val lvalue : lvalue -> rvalue
-
   val param : param -> rvalue
 
   val to_string : rvalue -> string
@@ -539,14 +515,10 @@ end
     the {!rvalue} is computed by reading from the storage area. *)
 
 module LValue : sig
-
   val address : ?loc:location -> lvalue -> rvalue
   (** Taking the address of an {!lvalue}; analogous to [&(EXPR)] in C. *)
 
-  type global_kind =
-      Exported
-    | Internal
-    | Imported
+  type global_kind = Exported | Internal | Imported
 
   val global : context -> ?loc:location -> global_kind -> type_ -> string -> lvalue
   (** Add a new global variable of the given type and name to the context.
@@ -568,7 +540,6 @@ module LValue : sig
       indeed, to [PTR + INDEX]). *)
 
   val access_field : ?loc:location -> lvalue -> field -> lvalue
-
   val param : param -> lvalue
 
   val to_string : lvalue -> string
@@ -581,7 +552,6 @@ end
     {{!functions}function}. *)
 
 module Param : sig
-
   val create : context -> ?loc:location -> type_ -> string -> param
   (** In preparation for creating a function, create a new parameter of the given
       type and name. *)
@@ -597,23 +567,18 @@ end
     within the rest of the process. *)
 
 module Function : sig
-
   (** Kinds of function.  *)
   type function_kind =
-      Exported
-    (** Function is defined by the client code and visible by name outside of the
+    | Exported  (** Function is defined by the client code and visible by name outside of the
         JIT. *)
-
     | Internal
-    (** Function is defined by the client code, but is invisible outside of the
+        (** Function is defined by the client code, but is invisible outside of the
         JIT.  Analogous to a ["static"] function. *)
-
     | Imported
-    (** Function is not defined by the client code; we're merely referring to it.
+        (** Function is not defined by the client code; we're merely referring to it.
          Analogous to using an ["extern"] function from a header file. *)
-
     | Always_inline
-    (** Function is only ever inlined into other functions, and is invisible
+        (** Function is only ever inlined into other functions, and is invisible
         outside of the JIT.  Analogous to prefixing with ["inline"] and adding
         [__attribute__((always_inline))].  Inlining will only occur when the
         optimization level is above 0; when optimization is off, this is
@@ -654,7 +619,6 @@ end
       blocks that terminate by returning. *)
 
 module Block : sig
-
   val create : ?name:string -> function_ -> block
   (** Create a block.  You can give it a meaningful name, which may show up in
       dumps of the internal representation, and in error messages. *)
@@ -768,7 +732,6 @@ end
 (** {1:inmemory In-memory compilation} *)
 
 module Result : sig
-
   val code : result -> string -> ('a -> 'b) Ctypes.fn -> 'a -> 'b
   (** Locate a given function within the built machine code.
       - Functions are looked up by name. For this to succeed, a function with a
