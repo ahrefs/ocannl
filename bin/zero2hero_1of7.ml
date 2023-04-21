@@ -41,7 +41,7 @@ let () =
   in
   let%nn_op x = x_flat @.| session_step in
   let%nn_op fx = f x in
-  print_formula ~with_grad:true ~with_code:true `Default fx;
+  print_formula ~with_grad:true ~with_code:true ~with_low_level:true `Default fx;
   refresh_session ();
   print_preamble ();
   let ys =

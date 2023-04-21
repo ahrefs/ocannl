@@ -31,7 +31,7 @@ let get_node id =
 
 (** *** Printing. *** *)
 
-let print_formula ~with_grad ~with_code (style : NodeUI.array_print_style) m =
+let print_formula ~with_grad ~with_code ?(with_low_level = false) (style : NodeUI.array_print_style) m =
   let open Formula in
   let sh = m.shape in
   let label =
@@ -106,6 +106,15 @@ let print_formula ~with_grad ~with_code (style : NodeUI.array_print_style) m =
     | Some { backprop_body = Noop; _ } -> ()
     | Some { backprop_body = bwd_code; _ } ->
         Caml.Format.printf "Current backprop body:@ %a@ " Code.fprint_code bwd_code
+    | None -> ());
+  if with_low_level then (
+    (match m.forward_body with
+    | Noop -> ()
+    | fwd_code -> Caml.Format.printf "Current forward low-level body:@ %a@ " Code.fprint_low_level fwd_code);
+    match m.form with
+    | Some { backprop_body = Noop; _ } -> ()
+    | Some { backprop_body = bwd_code; _ } ->
+        Caml.Format.printf "Current backprop low-level body:@ %a@ " Code.fprint_low_level bwd_code
     | None -> ());
   Stdio.printf "\n%!"
 

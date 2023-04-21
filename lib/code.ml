@@ -113,6 +113,7 @@ type _ low_level =
   | Binop : binop * float low_level * float low_level -> float low_level
   | Unop : unop * float low_level -> float low_level
   | Constant : float -> float low_level
+[@@deriving sexp_of]
 
 type low_level_program =
   | Perform of unit low_level
@@ -298,6 +299,10 @@ let interpret_initialization =
 let fprint_code ppf c =
   (* TODO: something nicely concise. *)
   Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_t c
+
+let fprint_low_level ppf c =
+  (* TODO: something nicely concise. *)
+  Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_low_level Unit.sexp_of_t (to_low_level c)
 
 let fprint_program ppf prog =
   (* TODO: something nicely concise. *)
