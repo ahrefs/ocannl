@@ -220,10 +220,13 @@ let to_low_level_program prog : low_level_program =
   | Suspension proc -> Assign_suspension (to_low_level proc)
   | Session_prepare_step proc -> Assign_session_prepare_step (to_low_level proc)
 
+let interpreter_print_comments = ref false
+
 module CDSL = struct
   let value_of_id id : data = { id; field = `Value }
   let grad_of_id id : data = { id; field = `Grad }
   let data_of_node field n : data = { id = n.NodeUI.id; field }
+  let interpreter_print_comments = interpreter_print_comments
 end
 
 let interpret_llc ?(with_debug = true) llc =
@@ -252,7 +255,7 @@ let interpret_llc ?(with_debug = true) llc =
         set_from_float (get id).value (lookup env indices) @@ loop_float env llv
     | Set (Gradient_at_node_id id, indices, llv) ->
         set_from_float (get_form id).grad (lookup env indices) @@ loop_float env llv
-    | Comment message when with_debug -> Stdio.printf "%s\n%!" message
+    | Comment message when with_debug && !interpreter_print_comments -> Stdio.printf "%s\n%!" message
     | Dynamic_indices { tensor = Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
         dynamic_indices env (get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Dynamic_indices { tensor = Gradient_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->

@@ -1,12 +1,12 @@
 open Base
+open Core_bench
 open Ocannl
 module FDSL = Operation.FDSL
 module NFDSL = Operation.NFDSL
 module CDSL = Code.CDSL
 
-let () = Session.SDSL.set_executor OCaml
-
-let () =
+let classify_moons executor () =
+  let () = Session.SDSL.set_executor executor in
   (* let open Operation.FDSL in *)
   let open Session.SDSL in
   drop_all_sessions ();
@@ -121,3 +121,15 @@ let () =
   in
   PrintBox_text.output Stdio.stdout plot_lr;
   Stdio.printf "\n%!"
+
+  let benchmarks =
+    [ "Interpreter", classify_moons Interpreter
+    ; "OCaml", classify_moons OCaml
+    ; "gccjit", classify_moons Gccjit
+    ]
+  
+  let () =
+    List.map benchmarks ~f:(fun (name, test) ->
+        Bench.Test.create ~name test)
+    |> Bench.make_command
+    |> Command_unix.run
