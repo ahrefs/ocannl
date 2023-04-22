@@ -45,7 +45,7 @@ type param
 (** A {!param} is a function parameter.  See {{!params}Parameters}. *)
 
 type lvalue
-(** An {!lvalue} is something that can of the left-hand side of an assignment.
+(** An {!lvalue} is something that can be the left-hand side of an assignment.
     See {{!lvalues}Lvalues}. *)
 
 type rvalue

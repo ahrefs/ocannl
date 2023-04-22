@@ -4,9 +4,9 @@ module CDSL = Code.CDSL
 module FDSL = Operation.FDSL
 module NFDSL = Operation.NFDSL
 
-let () = Session.SDSL.set_executor OCaml
+let () = Session.SDSL.set_executor Gccjit
 
-let _suspended () =
+let () =
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;
@@ -20,7 +20,7 @@ let _suspended () =
   print_formula ~with_grad:false ~with_code:true `Default n;
   Stdio.printf "\n%!"
 
-let () =
+let _suspended () =
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;
