@@ -93,7 +93,9 @@ let dynamic_subtensor ~over_kind ~from_left ~other_axes_pointwise =
     module O = struct end
   end in
   let%nn_cd op_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~(n2 : NodeUI.t) ~projections = n =: n1 -@> n2 in
-  let%nn_cd grad_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~n2:_ ~projections = n1.grad =+ n.grad in
+  let%nn_cd grad_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~(n2 : NodeUI.t) ~projections =
+    n1.grad =+ n.grad -@> n2
+  in
   let compose_op = Shape.Dynamic_index { over_kind; from_left; other_axes_pointwise } in
   let op_label = subtensor_label ~over_kind ~from_left ~other_axes_pointwise in
   Formula.binop ~compose_op ~op_label ~op_body ~grad_body

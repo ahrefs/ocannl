@@ -136,8 +136,8 @@ let rec to_low_level (code : t) : unit low_level =
         | None -> invalid_arg "accum_binop: projections missing project_rhs2"
         | Some rhs2 -> Shape.(derive_index projections.product_iterators rhs2)
       in
-      let lhs_ptr = data_pointer lhs in
-      let lhs_it iters = Get (lhs_ptr, lhs_idx iters) in
+      let lhs_tensor = data_pointer lhs in
+      let lhs_it iters = Get (lhs_tensor, lhs_idx iters) in
       let basecase rev_iters =
         let iters = Array.of_list_rev rev_iters in
         let rhs1_idcs = rhs1_idx iters in
@@ -146,11 +146,22 @@ let rec to_low_level (code : t) : unit low_level =
         let rhs2_tensor = data_pointer rhs2 in
         let rhs1 = Get (rhs1_tensor, rhs1_idcs) in
         let rhs2 = Get (rhs2_tensor, rhs2_idcs) in
-        let body = Set (lhs_ptr, lhs_idx iters, Binop (accum, lhs_it iters, Binop (op, rhs1, rhs2))) in
+        let lhs_idcs = lhs_idx iters in
+        let body = Set (lhs_tensor, lhs_idcs, Binop (accum, lhs_it iters, Binop (op, rhs1, rhs2))) in
         match Array.find rhs2_idcs ~f:Shape.is_dynamic_provider with
         | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
             Dynamic_indices { tensor = rhs2_tensor; tensor_idcs = rhs2_idcs; dynamic_idcs; target_dims; body }
-        | _ -> body
+        | _ -> (
+            match Array.find rhs1_idcs ~f:Shape.is_dynamic_provider with
+            | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
+                Dynamic_indices
+                  { tensor = rhs1_tensor; tensor_idcs = rhs1_idcs; dynamic_idcs; target_dims; body }
+            | _ -> (
+                match Array.find lhs_idcs ~f:Shape.is_dynamic_provider with
+                | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
+                    Dynamic_indices
+                      { tensor = lhs_tensor; tensor_idcs = lhs_idcs; dynamic_idcs; target_dims; body }
+                | _ -> body))
       in
       let rec loop rev_iters = function
         | [], [] -> basecase rev_iters

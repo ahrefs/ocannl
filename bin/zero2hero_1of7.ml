@@ -26,8 +26,8 @@ let () =
   Random.init 0;
   let%nn_op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%nn_op f5 = f 5 in
-  refresh_session ();
   print_node_tree ~with_grad:false ~depth:9 f5.id;
+  refresh_session ();
   (* close_session is not necessary. *)
   close_session ();
   let size = 100 in
@@ -41,9 +41,10 @@ let () =
   in
   let%nn_op x = x_flat @.| session_step in
   let%nn_op fx = f x in
-  print_formula ~with_grad:true ~with_code:true ~with_low_level:true `Default fx;
   refresh_session ();
   print_preamble ();
+  print_node_tree ~with_grad:false ~depth:9 fx.id;
+  print_formula ~with_grad:true ~with_code:true ~with_low_level:true `Default fx;
   let ys =
     Array.map xs ~f:(fun _ ->
         refresh_session ();
