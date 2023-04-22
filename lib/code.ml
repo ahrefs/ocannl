@@ -115,6 +115,10 @@ type _ low_level =
   | Constant : float -> float low_level
 [@@deriving sexp_of]
 
+let is_value_at_node_id = function
+  | Value_at_node_id _ -> true
+  | _ -> false
+
 type low_level_program =
   | Perform of unit low_level
   | Assign_routine of routine * unit low_level
