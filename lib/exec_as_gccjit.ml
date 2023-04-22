@@ -6,9 +6,6 @@ let session_context =
   set_option ctx Optimization_level 3;
   ref ctx
 
-let session_result : Gccjit.result option ref = ref None
-(* Compile the session_context after adding a function to it. *)
-
 type tensor = {
   ptr : Gccjit.rvalue;  (** Pointer to the first value of the underlying array. *)
   dims : int array;  (** Dimensions (shape) of the tensor. *)
@@ -153,6 +150,7 @@ let jit_ll_prog ~with_debug ~name ctx prog =
     Block.return_void after_proc;
     let result = Context.compile ctx in
     if with_debug then msg := Some (Function.to_string func);
+    session_results := result :: !session_results;
     Result.code result name Ctypes.(void @-> returning void)
   in
   let open Ocannl_runtime.Node in
