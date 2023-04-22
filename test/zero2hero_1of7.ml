@@ -152,41 +152,58 @@ let%expect_test "Graph drawing fetch" =
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect
     {|
-     1.000e+2 │#
+    Node #13 op x_flat dims single prec 100x1 [];
+    Node #14 op session_step dims val single prec 1 grad single prec - [];
+    Node #15 op 1 dims val single prec 1 grad <no-form> [];
+    Node #16 x op @.| dims single prec 1 [13,14];
+    Node #17 op 5 dims val single prec 1 grad single prec - [];
+    Node #18 op 4 dims val single prec 1 grad single prec - [];
+    Node #19 op *. dims single prec 1 [18,16];
+    Node #20 op 2 dims val single prec 1 grad single prec - [];
+    Node #21 op **. dims single prec 1 [16,20];
+    Node #22 op *. dims val single prec 1 grad <no-form> [20,16];
+    Node #23 op 3 dims val single prec 1 grad single prec - [];
+    Node #24 op *. dims single prec 1 [23,21];
+    Node #25 op -1 dims val single prec 1 grad single prec - [];
+    Node #26 op *. dims single prec 1 [25,19];
+    Node #27 op + dims single prec 1 [24,26];
+    Node #28 f op + dims single prec 1 [27,17];
+
+     9.960e+1 │                                                                          #
+              │#                                                                        #
               │#
               │ #
               │  #
-              │  #
-              │   ##
+              │  ##
+              │    #
               │     #
-              │     #
-              │      ##
+              │     ##
+              │       #
               │        #
-              │        ##
-              │          #                                                               #
-              │           #                                                             #
-              │            #                                                          ##
-              │             ##                                                       ##
-    f         │              ##                                                    ##
-    (         │                ##                                                 ##
-    x         │                 ##                                              ##
-    )         │                   ##                                           ##
-              │                    ##                                        ##          *
-              │                      ##                                    ###     ******
-              │                        ###                               ##    *****
-              │                          ###                           ## *****
-              │                             ###                     #*****
-              │                                #####           #*****
-              │                                     #######*****
-              │-  -   -   -   -  -   -   -   -  -   - **-***-  -   -   -   -  -   -   -
-              │                                  *****
-              │                             *****
-              │                        ******
-              │                    ****
-              │              ******
-              │          *****
-              │     *****
-     -3.400e+1│*****
+              │         #
+              │          ##                                                            #
+              │           #                                                           #
+              │            ##                                                       ##
+    f         │              #                                                     #
+    (         │               ##                                                  #
+    x         │                 #                                               ##
+    )         │                  ##                                           ###
+              │                    #                                         #         *
+              │                     ###                                   ###     *****
+              │                       ###                                ##  *****
+              │                          ##                           ##******
+              │                            ###                     #****
+              │                               #####           ******
+              │                                   #######******
+              │-  -   -   -   -  -   -   -   -  -   -***-   -  -   -   -   -  -   -   -
+              │                                ******
+              │                            *****
+              │                       *****
+              │                  *****
+              │             *****
+              │        *****
+              │   ******
+     -3.400e+1│***                                                                      **
     ──────────┼───────────────────────────────────────────────────────────────────────────
               │-5.000e+0                                                          4.900e+0
               │                                     x |}]
@@ -228,21 +245,21 @@ let%expect_test "Simple gradients" =
   [%expect
     {|
                     [7] l <*.>
-                     -1.54e+0
+                     3.78e+0
                     Gradient
                      1.00e+0
               [5] d <+>            │[6] <f>
-               9.60e-1             │ -1.60e+0
+               -2.36e+0            │ -1.60e+0
               Gradient             │Gradient
-               -1.60e+0            │ 9.60e-1
+               -1.60e+0            │ -2.36e+0
          [3] e <*.>     │[4] <c>   │
-          -8.84e+0      │ 9.80e+0  │
+          -1.22e+1      │ 9.80e+0  │
          Gradient       │Gradient  │
           -1.60e+0      │ -1.60e+0 │
     [1] <a>  │[2] <b>   │          │
-     2.60e+0 │ -3.40e+0 │          │
+     3.20e+0 │ -3.80e+0 │          │
     Gradient │Gradient  │          │
-     5.44e+0 │ -4.16e+0 │          │ |}]
+     6.08e+0 │ -5.12e+0 │          │ |}]
 
 let%expect_test "tanh plot" =
   (* TODO: NOT IMPLEMENTED *)
