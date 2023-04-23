@@ -7,7 +7,9 @@ let session_context =
   ref ctx
 
 type tensor = {
-  ptr : Gccjit.rvalue;  (** Pointer to the first value of the underlying array. *)
+  (* ptr : Gccjit.rvalue;   *)
+  (** Pointer to the first value of the associated [Bigarray]. *)
+  array : Gccjit.lvalue;  (** A single-session C array. *)
   dims : int array;  (** Dimensions (shape) of the tensor. *)
   num_typ : Gccjit.type_;
       (** The type of the stored values: [signed char] (corresponds to precision [Byte]),
@@ -17,18 +19,23 @@ type tensor = {
 let value_tensors_cache : (int, tensor) Hashtbl.t = Hashtbl.create (module Int)
 let grad_tensors_cache : (int, tensor) Hashtbl.t = Hashtbl.create (module Int)
 let session_results : Gccjit.result list ref = ref []
+let compiled_session_globals : Gccjit.result option ref = ref None
 let hoist_dynamic_indices = ref false
 
-let get_tensor acc cache id : tensor =
+let get_tensor acc ~suffix cache id : tensor =
   let open Ocannl_runtime.Node in
   let open Gccjit in
+  let ctx = !session_context in
   let tensor c_typ arr =
-    let ptr = Ctypes.bigarray_start Ctypes_static.Genarray arr in
+    let num_typ = Type.(get ctx c_typ) in
+    (* let ptr = RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray arr in *)
     let dims = Bigarray.Genarray.dims arr in
-    let num_typ = Type.(get !session_context c_typ) in
-    let ptr = RValue.ptr !session_context (Type.pointer num_typ) ptr in
-    (* let () = session_result := Some (Context.compile !session_context) in *)
-    { ptr; dims; num_typ }
+    let size = Array.fold dims ~init:1 ~f:( * ) in
+    let name = "n" ^ Int.to_string id ^ "_" ^ suffix in
+    let array = LValue.(global ctx Exported (Type.array ctx num_typ size) name) in
+    Option.iter !compiled_session_globals ~f:Result.release;
+    compiled_session_globals := None;
+    { array; dims; num_typ }
   in
   let default () =
     let n = get id in
@@ -40,14 +47,16 @@ let get_tensor acc cache id : tensor =
   in
   Hashtbl.find_or_add cache id ~default
 
-let get_value_tensor = get_tensor (fun n -> n.value) value_tensors_cache
-let get_grad_tensor = get_tensor (fun n -> (Option.value_exn n.form).grad) grad_tensors_cache
+let get_value_tensor = get_tensor (fun n -> n.value) ~suffix:"value" value_tensors_cache
+let get_grad_tensor = get_tensor (fun n -> (Option.value_exn n.form).grad) ~suffix:"grad" grad_tensors_cache
 
 let cleanup_session () =
   let open Gccjit in
-  List.iter !session_results ~f:Result.release;
   Hashtbl.clear value_tensors_cache;
   Hashtbl.clear grad_tensors_cache;
+  List.iter !session_results ~f:Result.release;
+  Option.iter !compiled_session_globals ~f:Result.release;
+  compiled_session_globals := None;
   Context.release !session_context;
   session_context := Context.create ();
   Context.set_option !session_context Optimization_level 3;
@@ -55,19 +64,22 @@ let cleanup_session () =
 
 let jit_array_offset ctx ~idcs ~dims =
   let open Gccjit in
-  let c_index = Type.get ctx Type.Size_t in
+  let c_index = Type.get ctx Type.Int in
   Array.fold2_exn idcs dims ~init:(RValue.zero ctx c_index) ~f:(fun offset idx dim ->
-      RValue.binary_op ctx Plus c_index idx @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
+      RValue.binary_op ctx Plus c_index idx
+      @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
 
-let pointee_at_offset ctx ~ptr ~offset =
+let pointee_at_offset _ctx _num_typ ~array ~offset =
   let open Gccjit in
-  let c_index = Type.get ctx Type.Size_t in
-  LValue.deref @@ RValue.binary_op ctx Plus c_index ptr offset
+  (* let c_index = Type.get ctx Type.Int in *)
+  (* LValue.deref @@ RValue.binary_op ctx Plus c_index (RValue.cast ctx ptr c_index) offset *)
+  (* LValue.access_array (RValue.lvalue @@ LValue.deref ptr) offset *)
+  LValue.access_array (RValue.lvalue array) offset
 
 let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.block =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
-  let c_index = Type.get ctx Type.Size_t in
+  let c_index = c_int in
   let lookup ?provider_dim env indices =
     Array.map indices
       ~f:
@@ -89,7 +101,7 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ value in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
-        let lhs = pointee_at_offset ctx ~ptr:tensor.ptr ~offset in
+        let lhs = pointee_at_offset ctx tensor.num_typ ~array:tensor.array ~offset in
         Block.assign block lhs value;
         block
     | Comment c ->
@@ -100,7 +112,7 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
         let size_m_1 = Array.fold tensor.dims ~init:1 ~f:( * ) - 1 in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ value in
         let callback after_body offset =
-          let lhs = pointee_at_offset ctx ~ptr:tensor.ptr ~offset in
+          let lhs = pointee_at_offset ctx tensor.num_typ ~array:tensor.array ~offset in
           Block.assign after_body lhs value
         in
         jit_for_loop ~env (Shape.get_symbol ()) ~from_:0 ~to_:size_m_1 ~block (Either.Second callback)
@@ -113,7 +125,7 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
         let tensor = if Code.is_value_at_node_id tensor then get_value_tensor id else get_grad_tensor id in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
-        RValue.lvalue @@ pointee_at_offset ctx ~ptr:tensor.ptr ~offset
+        RValue.lvalue @@ pointee_at_offset ctx tensor.num_typ ~array:tensor.array ~offset
     | Binop (Code.Add, c1, c2) -> RValue.binary_op ctx Plus num_typ (loop c1) (loop c2)
     | Binop (Code.Mul, c1, c2) -> RValue.binary_op ctx Mult num_typ (loop c1) (loop c2)
     | Binop (Code.ToPowOf, c1, c2) -> RValue.call ctx (Function.builtin ctx "pow") [ loop c1; loop c2 ]
@@ -159,7 +171,9 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
           let provider_dim = RValue.int ctx c_int provider_dim in
           let idcs = lookup ~provider_dim env tensor_idcs in
           let prov_offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
-          let dyn_index = RValue.lvalue @@ LValue.access_array tensor.ptr prov_offset in
+          let dyn_index =
+            RValue.lvalue @@ 
+            pointee_at_offset ctx tensor.num_typ ~array:tensor.array ~offset:prov_offset in
           let dyn_index = RValue.binary_op ctx Modulo tensor.num_typ dyn_index target_dim in
           let data =
             if !hoist_dynamic_indices then (
@@ -190,6 +204,12 @@ let jit_ll_prog ~with_debug ~name ctx prog =
       let f_name = name ^ "-gccjit-debug.c" in
       Context.dump_to_file ctx ~update_locs:true f_name;
       msg := Some (Stdio.In_channel.read_all f_name));
+    (match !compiled_session_globals with
+    | None ->
+      Context.dump_to_file !session_context ~update_locs:true "globals-gccjit-debug.c";
+      let globals = Context.compile !session_context in
+       compiled_session_globals := Some globals
+    | Some _ -> ());
     let result = Context.compile ctx in
     session_results := result :: !session_results;
     Result.code result name Ctypes.(void @-> returning void)
@@ -237,10 +257,11 @@ let jit_program ?(with_debug = true) (prog : Code.program) =
   let open Gccjit in
   let ctx = Context.create_child !session_context in
   Context.set_option ctx Context.Optimization_level 3;
-  (* if with_debug then (
-       Context.set_option ctx Context.Keep_intermediates true;
-       Context.set_option ctx Context.Dump_everything true;
-     ); *)
+  (* *)
+  if with_debug then (
+    Context.set_option ctx Context.Keep_intermediates true;
+    Context.set_option ctx Context.Dump_everything true);
+  (* *)
   let msg = jit_ll_prog ~with_debug ~name:"" ctx (Code.to_low_level_program prog) in
   Context.release ctx;
   msg
