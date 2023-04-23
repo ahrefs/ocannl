@@ -80,7 +80,7 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
     | For_loop { index; from_; to_; body } -> jit_for_loop ~env index ~from_ ~to_ ~block (Either.First body)
     | Set (((Value_at_node_id id | Gradient_at_node_id id) as tensor), idcs, value) ->
         let tensor = if Code.is_value_at_node_id tensor then get_value_tensor id else get_grad_tensor id in
-        let value = loop_float ~name ~env value in
+        let value = loop_float ~name ~env ~num_typ:tensor.num_typ value in
         let idcs = lookup env idcs in
         let lhs_offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
         let lhs = LValue.access_array tensor.ptr lhs_offset in
@@ -92,7 +92,7 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
     | Fill { tensor = (Value_at_node_id id | Gradient_at_node_id id) as tensor; value } ->
         let tensor = if Code.is_value_at_node_id tensor then get_value_tensor id else get_grad_tensor id in
         let size_m_1 = Array.fold tensor.dims ~init:1 ~f:( * ) - 1 in
-        let value = loop_float ~name ~env value in
+        let value = loop_float ~name ~env ~num_typ:tensor.num_typ value in
         let callback after_body lhs_offset =
           let lhs = LValue.access_array tensor.ptr lhs_offset in
           Block.assign after_body lhs value
@@ -100,13 +100,28 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
         jit_for_loop ~env (Shape.get_symbol ()) ~from_:0 ~to_:size_m_1 ~block (Either.Second callback)
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
         jit_dynamic_indices ~name ~env ~block tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
-  and loop_float ~name ~env value =
+  and loop_float ~name ~env ~num_typ value =
     ignore (name, env);
+    let loop = loop_float ~name ~env ~num_typ in
     match value with
-    | Get (_, _) -> failwith "NOT IMPLEMENTED"
-    | Binop (_, _, _) -> failwith "NOT IMPLEMENTED"
-    | Unop (_, _) -> failwith "NOT IMPLEMENTED"
-    | Constant _v -> failwith "NOT IMPLEMENTED"
+    | Get (((Value_at_node_id id | Gradient_at_node_id id) as tensor), idcs) ->
+        let tensor = if Code.is_value_at_node_id tensor then get_value_tensor id else get_grad_tensor id in
+        let idcs = lookup env idcs in
+        let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
+        RValue.lvalue @@ LValue.access_array tensor.ptr offset
+    | Binop (Code.Add, c1, c2) -> RValue.binary_op ctx Plus num_typ (loop c1) (loop c2)
+    | Binop (Code.Mul, c1, c2) -> RValue.binary_op ctx Mult num_typ (loop c1) (loop c2)
+    | Binop (Code.ToPowOf, c1, c2) -> RValue.call ctx (Function.builtin ctx "pow") [ loop c1; loop c2 ]
+    | Binop (Code.Relu_gate, c1, c2) ->
+        let cmp = RValue.comparison ctx Le (RValue.zero ctx num_typ) @@ loop c1 in
+        RValue.binary_op ctx Mult num_typ cmp @@ loop c2
+    | Binop (Code.Arg2, _, c2) -> loop c2
+    | Binop (Code.Arg1, c1, _) -> loop c1
+    | Unop (Code.Identity, c) -> loop c
+    | Unop (Code.Relu, c) ->
+        let cmp = RValue.comparison ctx Le (RValue.zero ctx num_typ) @@ loop c in
+        RValue.binary_op ctx Mult num_typ cmp @@ loop c
+    | Constant v -> RValue.double ctx num_typ v
   and jit_for_loop ~env (Shape.Symbol s as symbol) ~from_ ~to_ ~block body : Gccjit.block =
     let open Gccjit in
     let index = Function.local func c_int ("i" ^ Int.to_string s) in
