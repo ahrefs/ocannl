@@ -22,6 +22,14 @@
  (modes exe))
 
 (executable
+ (name compilation_speed)
+ (modules compilation_speed)
+ (libraries ocannl base stdio core core_unix.command_unix core_bench)
+ (preprocess
+  (pps ppx_jane ppx_ocannl))
+ (modes exe))
+
+(executable
  (name data_fetching)
  (modules data_fetching)
  (libraries ocannl base stdio)

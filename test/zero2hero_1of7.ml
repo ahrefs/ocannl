@@ -36,11 +36,10 @@ let%expect_test "Graph drawing recompile" =
              │   │ 2.00e+0 │          │ 4.00e+0 │ 5.00e+0 │
              │   │<void>   │          │<void>   │Gradient │
              │   │         │          │         │ 2.60e+1 │ |}];
-  let xs = Array.init 5 ~f:Float.(fun i -> (2. * of_int i) - 5.) in
+  let xs = Array.init 10 ~f:Float.(fun i -> of_int i - 5.) in
   let ys =
     Array.map xs ~f:(fun v ->
-        (* This is very inefficient because it compiles the argument update inside the loop. *)
-        (* TODO: once we have the gccjit backend, increase the number of points and benchmark. *)
+        (* This is inefficient because it compiles the argument update inside the loop. *)
         let setval = compile_routine [%nn_cd x =: !.v] in
         setval ();
         refresh_session ();
@@ -65,7 +64,7 @@ let%expect_test "Graph drawing recompile" =
              │
              │
              │
-             │
+             │        #
              │
              │
              │
@@ -74,23 +73,23 @@ let%expect_test "Graph drawing recompile" =
     x        │
     )        │
              │
-             │                  #
-             │
-             │
-             │
-             │
-             │
-             │
+             │                #
              │
              │
              │                                                                          #
              │
              │
-             │                                     #
              │
-     4.000e+0│                                                       #
+             │                        #
+             │
+             │                                                                 #
+             │
+             │
+             │                                #
+             │                                                         #
+     4.000e+0│                                         #       #
     ─────────┼───────────────────────────────────────────────────────────────────────────
-             │-5.000e+0                                                          3.000e+0
+             │-5.000e+0                                                          4.000e+0
              │                                     x |}]
 
 let%expect_test "Graph drawing fetch" =

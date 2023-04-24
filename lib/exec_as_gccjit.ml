@@ -1,9 +1,11 @@
 open Base
 
+let optimization_level = ref 3
+
 let session_context =
   let open Gccjit.Context in
   let ctx = create () in
-  set_option ctx Optimization_level 3;
+  set_option ctx Optimization_level !optimization_level;
   ref ctx
 
 type tensor = {
@@ -47,7 +49,7 @@ let cleanup_session () =
   compiled_session_globals := None;
   Context.release !session_context;
   session_context := Context.create ();
-  Context.set_option !session_context Optimization_level 3;
+  Context.set_option !session_context Optimization_level !optimization_level;
   session_results := []
 
 let jit_array_offset ctx ~idcs ~dims =
@@ -258,7 +260,7 @@ let error_message ~name ~prefix ?extra_error_msg ~contents exc =
 let jit_program (prog : Code.program) =
   let open Gccjit in
   let ctx = Context.create_child !session_context in
-  Context.set_option ctx Context.Optimization_level 3;
+  Context.set_option ctx Context.Optimization_level !optimization_level;
   (*
   if !Code.with_debug then (
     Context.set_option ctx Context.Keep_intermediates true;
