@@ -122,14 +122,15 @@ let classify_moons executor () =
   PrintBox_text.output Stdio.stdout plot_lr;
   Stdio.printf "\n%!"
 
-  let benchmarks =
-    [ "Interpreter", classify_moons Interpreter
-    ; "OCaml", classify_moons OCaml
-    ; "gccjit", classify_moons Gccjit
-    ]
-  
-  let () =
-    List.map benchmarks ~f:(fun (name, test) ->
-        Bench.Test.create ~name test)
-    |> Bench.make_command
-    |> Command_unix.run
+let benchmarks =
+  [
+    ("Interpreter", classify_moons Interpreter);
+    ("OCaml", classify_moons OCaml);
+    ("gccjit", classify_moons Gccjit);
+  ]
+
+let _suspended () = classify_moons Gccjit ()
+
+let () =
+  List.map benchmarks ~f:(fun (name, test) -> Bench.Test.create ~name test)
+  |> Bench.make_command |> Command_unix.run
