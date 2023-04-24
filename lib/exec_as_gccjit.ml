@@ -141,7 +141,7 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
     let b_after_loop = Block.create ~name:("after_loop_" ^ i) func in
     Block.assign block index (RValue.int ctx c_index from_);
     Block.jump block b_loop_cond;
-    let guard = RValue.comparison ctx Ge (RValue.lvalue index) (RValue.int ctx c_index to_) in
+    let guard = RValue.comparison ctx Gt (RValue.lvalue index) (RValue.int ctx c_index to_) in
     Block.cond_jump b_loop_cond guard b_after_loop (* on true *) b_loop_body (* on false *);
     let after_body =
       match body with
