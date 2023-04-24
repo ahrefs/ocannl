@@ -61,6 +61,7 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
   let c_double = Type.get ctx Type.Double in
+  let cast_bool num_typ v = RValue.cast ctx (RValue.cast ctx v c_int) num_typ in
   let lookup ?provider_dim env indices =
     Array.map indices
       ~f:
@@ -121,13 +122,13 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
         (* TODO: check if there's a single precision "powf"; dispatch on num_typ if so. *)
         RValue.cast ctx (RValue.call ctx (Function.builtin ctx "pow") [ base; expon ]) num_typ
     | Binop (Code.Relu_gate, c1, c2) ->
-        let cmp = RValue.cast ctx (RValue.comparison ctx Le (RValue.zero ctx num_typ) @@ loop c1) num_typ in
+        let cmp = cast_bool num_typ @@ RValue.comparison ctx Le (RValue.zero ctx num_typ) @@ loop c1 in
         RValue.binary_op ctx Mult num_typ cmp @@ loop c2
     | Binop (Code.Arg2, _, c2) -> loop c2
     | Binop (Code.Arg1, c1, _) -> loop c1
     | Unop (Code.Identity, c) -> loop c
     | Unop (Code.Relu, c) ->
-        let cmp = RValue.cast ctx (RValue.comparison ctx Le (RValue.zero ctx num_typ) @@ loop c) num_typ in
+        let cmp = cast_bool num_typ @@ RValue.comparison ctx Le (RValue.zero ctx num_typ) @@ loop c in
         RValue.binary_op ctx Mult num_typ cmp @@ loop c
     | Constant v -> RValue.double ctx num_typ v
   and jit_for_loop ~env (Shape.Symbol s as symbol) ~from_ ~to_ ~block body : Gccjit.block =
