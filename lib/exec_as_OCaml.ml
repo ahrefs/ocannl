@@ -109,12 +109,15 @@ let format_ll_prog (ppf : Caml.Format.formatter) (p : Code.low_level_program) : 
         proc
 
 let column_width = 100
+let unique_id = ref @@ ((Int63.to_int_trunc @@ Time_now.nanoseconds_since_unix_epoch ()) % 1000) * 100
+let safe_remove fname = try Caml.Sys.remove fname with _ -> ()
 
 (** Create a file to compile and later link. *)
 let create_comp_unit ~name compiled =
   let f_name =
     if !Code.keep_files_in_run_directory then name ^ ".ml" else Caml.Filename.temp_file (name ^ "_") ".ml"
   in
+  safe_remove f_name;
   let oc = Out_channel.open_text f_name in
   (* FIXME(#32): the following outputs truncated source code -- missing the last line: *
      let ppf = Caml.Format.formatter_of_out_channel oc in
@@ -133,7 +136,6 @@ let create_comp_unit ~name compiled =
   Stdio.Out_channel.close oc;
   f_name
 
-let safe_remove fname = try Caml.Sys.remove fname with _ -> ()
 let ocamlopt_path = "ocamlfind ocamlopt"
 
 (** Compile the source file and make the .cmxs, returning its name and the name of the file with
@@ -145,6 +147,8 @@ let compile_source ~with_debug src_fname =
   let other_files = [ basename ^ ".cmi"; basename ^ ".cmx"; basename ^ ".o" ] in
   (* We need the byte objects directory in path because it contains the .cmi files. *)
   (* FIXME: un-hardcode the paths. *)
+  safe_remove plugin_fname;
+  Stdio.eprintf "DEBUG: source=%s\n%!" (Stdio.In_channel.read_all src_fname);
   let cmdline =
     ocamlopt_path
     ^ " -I ~/ocannl/_build/default/lib -I ~/ocannl/_build/default/lib/.ocannl_runtime.objs/native -I \
@@ -230,7 +234,7 @@ let error_message ~name ~prefix ?extra_error_msg ~contents exc =
 
 let load_native ?(with_debug = true) (prog : Code.program) =
   let compiled = emit prog in
-  let name = Code.get_name prog in
+  let name = Code.get_name prog ^ "_u" ^ Int.to_string (Int.incr unique_id; !unique_id) in
   if not Dynlink.is_native then invalid_arg "Exec_as_OCaml.load_forward: only works in native code";
   let source_fname = create_comp_unit ~name compiled in
   Exn.protect
