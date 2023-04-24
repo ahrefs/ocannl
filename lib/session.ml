@@ -148,9 +148,9 @@ let print_session_code () =
 type backend = Interpreter | OCaml | Gccjit [@@deriving sexp, equal]
 
 let node_fetch_callbacks : (int, Code.fetch_op) Hashtbl.t = Hashtbl.create (module Int)
-let executor = ref Exec_as_OCaml.load_native
-let executor_error_message = ref Exec_as_OCaml.error_message
-let cleanup_executor_session = ref (fun () -> ())
+let executor = ref Exec_as_gccjit.jit_program
+let executor_error_message = ref Exec_as_gccjit.error_message
+let cleanup_executor_session = ref Exec_as_gccjit.cleanup_session
 
 let set_executor = function
   | Interpreter ->

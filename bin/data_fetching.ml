@@ -4,7 +4,7 @@ module FDSL = Operation.FDSL
 module NFDSL = Operation.NFDSL
 module CDSL = Code.CDSL
 
-let () = Session.SDSL.set_executor OCaml
+let () = Session.SDSL.set_executor Gccjit
 
 let () =
   (* let open Operation.FDSL in *)
