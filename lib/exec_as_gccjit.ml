@@ -181,7 +181,7 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
 
   loop_proc ~name ~env ~block body
 
-let jit_ll_prog ~with_debug ~name ctx prog =
+let jit_ll_prog ~name ctx prog =
   let open Gccjit in
   let fkind = Function.Exported in
   let env = Map.empty (module Shape.Symbol) in
@@ -192,7 +192,7 @@ let jit_ll_prog ~with_debug ~name ctx prog =
     let block = Block.create ~name func in
     (let after_proc = jit_code ~name ~env ctx func block proc in
      Block.return_void after_proc;
-     if with_debug then (
+     if !Code.with_debug then (
        let suf = "-gccjit-debug.c" in
        let f_name =
          if !Code.keep_files_in_run_directory then name ^ suf else Caml.Filename.temp_file (name ^ "-") suf
@@ -250,15 +250,15 @@ let error_message ~name ~prefix ?extra_error_msg ~contents exc =
   msg contents;
   Buffer.contents message
 
-let jit_program ?(with_debug = true) (prog : Code.program) =
+let jit_program (prog : Code.program) =
   let open Gccjit in
   let ctx = Context.create_child !session_context in
   Context.set_option ctx Context.Optimization_level 3;
   (*
-  if with_debug then (
+  if !Code.with_debug then (
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)
-  let msg = jit_ll_prog ~with_debug ~name:"" ctx (Code.to_low_level_program prog) in
+  let msg = jit_ll_prog ~name:"" ctx (Code.to_low_level_program prog) in
   Context.release ctx;
   msg

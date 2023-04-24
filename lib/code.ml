@@ -235,6 +235,7 @@ let to_low_level_program prog : low_level_program =
 
 let interpreter_print_comments = ref false
 let keep_files_in_run_directory = ref false
+let with_debug = ref true
 
 module CDSL = struct
   let value_of_id id : data = { id; field = `Value }
@@ -242,9 +243,10 @@ module CDSL = struct
   let data_of_node field n : data = { id = n.NodeUI.id; field }
   let interpreter_print_comments = interpreter_print_comments
   let keep_files_in_run_directory = keep_files_in_run_directory
+  let with_debug = with_debug
 end
 
-let interpret_llc ?(with_debug = true) llc =
+let interpret_llc llc =
   let lookup ?provider_dim env indices =
     Array.map indices
       ~f:
@@ -270,7 +272,7 @@ let interpret_llc ?(with_debug = true) llc =
         set_from_float (get id).value (lookup env indices) @@ loop_float env llv
     | Set (Gradient_at_node_id id, indices, llv) ->
         set_from_float (get_form id).grad (lookup env indices) @@ loop_float env llv
-    | Comment message when with_debug && !interpreter_print_comments -> Stdio.printf "%s\n%!" message
+    | Comment message when !with_debug && !interpreter_print_comments -> Stdio.printf "%s\n%!" message
     | Dynamic_indices { tensor = Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
         dynamic_indices env (get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Dynamic_indices { tensor = Gradient_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
@@ -306,16 +308,16 @@ let interpret_llc ?(with_debug = true) llc =
   in
   loop_proc (Map.empty (module Shape.Symbol)) llc
 
-let interpret_llprog ?(with_debug = true) = function
-  | Perform proc -> interpret_llc ~with_debug proc
+let interpret_llprog = function
+  | Perform proc -> interpret_llc proc
   | Assign_routine ({ id; field = `Forward }, proc) ->
-      (Ocannl_runtime.Node.get_form id).forward := Some (fun () -> interpret_llc ~with_debug proc)
+      (Ocannl_runtime.Node.get_form id).forward := Some (fun () -> interpret_llc proc)
   | Assign_routine ({ id; field = `Backprop }, proc) ->
-      (Ocannl_runtime.Node.get_form id).backprop := Some (fun () -> interpret_llc ~with_debug proc)
+      (Ocannl_runtime.Node.get_form id).backprop := Some (fun () -> interpret_llc proc)
   | Assign_suspension proc ->
-      Ocannl_runtime.Node.most_recent_suspension := Some (fun () -> interpret_llc ~with_debug proc)
+      Ocannl_runtime.Node.most_recent_suspension := Some (fun () -> interpret_llc proc)
   | Assign_session_prepare_step proc ->
-      Ocannl_runtime.Node.global.session_prepare_step := Some (fun () -> interpret_llc ~with_debug proc)
+      Ocannl_runtime.Node.global.session_prepare_step := Some (fun () -> interpret_llc proc)
 
 let interpret_initialization =
   let open Ocannl_runtime.Node in
@@ -337,9 +339,9 @@ let fprint_program ppf prog =
   (* TODO: something nicely concise. *)
   Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_program prog
 
-let interpret_program ?(with_debug = true) prog : string option =
+let interpret_program prog : string option =
   let llp = to_low_level_program prog in
-  let () = interpret_llprog ~with_debug llp in
+  let () = interpret_llprog llp in
   (* If we were interpreting bytecode, we would return the bytecode for debugging purposes. *)
   (* Some (Sexp.to_string_hum @@ sexp_of_low_level llc) *)
   Some (Caml.Format.asprintf "%a" fprint_program prog)

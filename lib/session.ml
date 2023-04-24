@@ -166,9 +166,9 @@ let set_executor = function
       executor_error_message := Exec_as_gccjit.error_message;
       cleanup_executor_session := Exec_as_gccjit.cleanup_session
 
-let dynload_with_handler ~with_debug ~runtime_store code =
+let dynload_with_handler ~runtime_store code =
   let name = Code.get_name code in
-  let contents = !executor ~with_debug code in
+  let contents = !executor code in
   match (contents, !runtime_store) with
   | Some contents, Some routine ->
       runtime_store :=
@@ -183,22 +183,22 @@ let dynload_with_handler ~with_debug ~runtime_store code =
   | _, None ->
       failwith
         ("refresh_session: error loading initialization: routine not set"
-        ^ if with_debug then "" else " (use `~with_debug:true` for more information)")
+        ^ if !Code.with_debug then "" else " (set `Code.CDSL.with_debug := true` for more information)")
   | _ -> ()
 
-let compile_and_run ?(with_debug = true) code =
+let compile_and_run code =
   (* Since we use [Initialization], this is just to satisfy [dynload_with_handler]. *)
   let dummy = ref @@ Some (fun () -> ()) in
-  dynload_with_handler ~with_debug ~runtime_store:dummy (Code.Initialization code)
+  dynload_with_handler ~runtime_store:dummy (Code.Initialization code)
 
-let compile_routine ?(with_debug = true) code =
+let compile_routine code =
   let open Formula in
   let num_inits = List.length !session_initializations in
   let to_init = num_inits - !session_initialized in
   Code.interpret_initialization @@ List.take !session_initializations to_init;
   session_initialized := num_inits;
   Ocannl_runtime.Node.most_recent_suspension := None;
-  dynload_with_handler ~with_debug ~runtime_store:Ocannl_runtime.Node.most_recent_suspension
+  dynload_with_handler ~runtime_store:Ocannl_runtime.Node.most_recent_suspension
     Code.(Suspension code);
   let routine = Option.value_exn !Ocannl_runtime.Node.most_recent_suspension in
   Ocannl_runtime.Node.most_recent_suspension := None;
@@ -206,17 +206,17 @@ let compile_routine ?(with_debug = true) code =
 
 let session_params () = NodeUI.param_nodes ~from_id:!Formula.first_session_id ()
 
-let generate_params_update ?with_debug ~(minus_lr : Formula.t) ?params () =
+let generate_params_update ~(minus_lr : Formula.t) ?params () =
   let params = match params with Some p -> p | None -> Hashtbl.data @@ session_params () in
   let module CDSL = Code.CDSL in
   let module NFDSL = Operation.NFDSL in
-  compile_routine ?with_debug @@ Code.all_parallel
+  compile_routine @@ Code.all_parallel
   @@ List.map params ~f:(fun n -> [%nn_cd n =+ minus_lr * n.grad ~logic:"."])
 
 let minus_learning_rate : Formula.t option ref = ref None
 let update_params = ref None
 
-let refresh_session ?(with_debug = true) ?(regenerate = false) ?(reinit = false) ?(run = true)
+let refresh_session ?(regenerate = false) ?(reinit = false) ?(run = true)
     ?(force_no_init = false) () =
   let open Formula in
   if force_no_init && (regenerate || reinit || run) then
@@ -238,12 +238,12 @@ let refresh_session ?(with_debug = true) ?(regenerate = false) ?(reinit = false)
       Hashtbl.remove node_fetch_callbacks i
     done;
     Ocannl_runtime.Node.global.session_prepare_step := None;
-    dynload_with_handler ~with_debug ~runtime_store:Ocannl_runtime.Node.global.session_prepare_step
+    dynload_with_handler ~runtime_store:Ocannl_runtime.Node.global.session_prepare_step
       Code.(Session_prepare_step (all_parallel !session_prepare_step)));
   (if regenerate || Option.is_none !update_params then
      match !minus_learning_rate with
      | None -> ()
-     | Some minus_lr -> update_params := Some (generate_params_update ~with_debug ~minus_lr ()));
+     | Some minus_lr -> update_params := Some (generate_params_update ~minus_lr ()));
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
       let m = root.formula in
       let cform = match m.node.node.form with Some form -> form | None -> assert false in
@@ -256,14 +256,14 @@ let refresh_session ?(with_debug = true) ?(regenerate = false) ?(reinit = false)
       (if (not force_no_init) && (reinit || Option.is_none !(cform.forward)) then
          try
            cform.forward := None;
-           dynload_with_handler ~with_debug ~runtime_store:cform.forward (Option.value_exn root.forward_code)
+           dynload_with_handler ~runtime_store:cform.forward (Option.value_exn root.forward_code)
          with Session_error (msg, None) ->
            let msg = "Forward init error: " ^ msg in
            raise @@ Session_error (msg, Some m));
       if (not force_no_init) && (reinit || Option.is_none !(cform.backprop)) then (
         try
           cform.backprop := None;
-          dynload_with_handler ~with_debug ~runtime_store:cform.backprop (Option.value_exn root.backprop_code)
+          dynload_with_handler ~runtime_store:cform.backprop (Option.value_exn root.backprop_code)
         with Session_error (msg, None) ->
           Caml.Format.printf "Forward code (context for backprop init error):@ %a@\n" Code.fprint_program
           @@ Option.value_exn root.forward_code;

@@ -6,14 +6,20 @@ module NFDSL = Operation.NFDSL
 module CDSL = Code.CDSL
 
 let classify_moons executor () =
+  Code.CDSL.with_debug := false;
+  Stdio.prerr_endline @@ "\n\n****** Benchmarking "
+  ^ Sexp.to_string_hum (Session.sexp_of_backend executor)
+  ^ " ******";
   let () = Session.SDSL.set_executor executor in
   (* let open Operation.FDSL in *)
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;
-  let len = 200 in
-  let batch = 10 in
-  let epochs = 40 in
+  (* let hid1 = 64 in *)
+  let len = 400 in
+  let batch = 100 in
+  let epochs = 1000 in
+  let steps = epochs * 2 * len / batch in
   let noise () = Random.float_range (-0.1) 0.1 in
   let moons_flat =
     Array.concat_map (Array.create ~len ())
@@ -34,8 +40,7 @@ let classify_moons executor () =
     FDSL.term ~label:"moons_flat" ~batch_dims:[ epochs; batch ] ~input_dims:[] ~output_dims:[ 1 ]
     @@ First (Constant_fill moons_classes)
   in
-  let%nn_op mlp x = "b3" 1 + ("w3" * !/("b2" 16 + ("w2" * !/("b1" 16 + ("w1" * x))))) in
-  let steps = epochs * 2 * len / batch in
+  let%nn_op mlp x = "b4" 1 + ("w4" * !/("b3" 16 + ("w3" * !/("b2" 32 + ("w2" * !/("b1" 64 + ("w1" * x))))))) in
   let session_step =
     FDSL.data ~label:"session_step" ~batch_dims:[] ~output_dims:[ 1 ] (fun ~n -> Synthetic [%nn_cd n =+ 1])
   in
@@ -69,7 +74,7 @@ let classify_moons executor () =
     assert (Array.length batch_loss = 1);
     losses := batch_loss.(0) :: !losses;
     log_losses := Float.log batch_loss.(0) :: !log_losses;
-    if step % 100 = 0 then (
+    if step % 10000 = 0 then (
       Stdio.printf "Minus learning rate over batch for step %d: %f\n%!" step mlr.(0);
       Stdio.printf "Loss over batch for step %d: %f\n%!" step batch_loss.(0);
       let step_no = NodeUI.retrieve_1d_points ~xdim:0 session_step.node.node.value in
@@ -97,16 +102,16 @@ let classify_moons executor () =
         Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
       ]
   in
-  Stdio.printf "Half-moons scatterplot and decision boundary:\n%!";
+  Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n%!";
   PrintBox_text.output Stdio.stdout plot_moons;
-  Stdio.printf "Loss curve:\n%!";
+  Stdio.printf "\nLoss curve:\n%!";
   let plot_loss =
     let open PrintBox_utils in
     plot ~size:(120, 30) ~x_label:"step" ~y_label:"loss"
       [ Line_plot { points = Array.of_list_rev !losses; pixel = "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_loss;
-  Stdio.printf "Log-loss, for better visibility:\n%!";
+  Stdio.printf "\nLog-loss, for better visibility:\n%!";
   let plot_loss =
     let open PrintBox_utils in
     plot ~size:(120, 30) ~x_label:"step" ~y_label:"log loss"

@@ -139,7 +139,7 @@ let ocamlopt_path = "ocamlfind ocamlopt"
 
 (** Compile the source file and make the .cmxs, returning its name and the name of the file with
     the compilation logs. *)
-let compile_source ~with_debug src_fname =
+let compile_source src_fname =
   let basename = Caml.Filename.remove_extension src_fname in
   let log_fname = basename ^ ".log" in
   let plugin_fname = basename ^ ".cmxs" in
@@ -151,7 +151,7 @@ let compile_source ~with_debug src_fname =
     ocamlopt_path
     ^ " -I ~/ocannl/_build/default/lib -I ~/ocannl/_build/default/lib/.ocannl_runtime.objs/native -I \
        ~/ocannl/_build/default/lib/.ocannl_runtime.objs/byte -package base -package stdio " ^ " -shared"
-    ^ (if with_debug then " -g" else "")
+    ^ (if !Code.with_debug then " -g" else "")
     ^ " -o " ^ plugin_fname ^ " " ^ src_fname ^ " >> " ^ log_fname ^ " 2>&1"
   in
   (* TODO: consider using `Core` or `Core_unix`. *)
@@ -230,7 +230,7 @@ let error_message ~name ~prefix ?extra_error_msg ~contents exc =
   msg @@ String.sub contents ~pos:to_pos ~len:(String.length contents - to_pos);
   Buffer.contents message
 
-let load_native ?(with_debug = true) (prog : Code.program) =
+let load_native (prog : Code.program) =
   let compiled = emit prog in
   let name = Code.get_name prog ^ "_u" ^ Int.to_string (Int.incr unique_id; !unique_id) in
   if not Dynlink.is_native then invalid_arg "Exec_as_OCaml.load_forward: only works in native code";
@@ -238,7 +238,7 @@ let load_native ?(with_debug = true) (prog : Code.program) =
   Exn.protect
     ~finally:(fun () -> if not !Code.keep_files_in_run_directory then safe_remove source_fname)
     ~f:(fun () ->
-      if with_debug then
+      if !Code.with_debug then
         (* TODO: don't generate the source twice. *)
         let contents =
           Caml.Format.pp_set_geometry Caml.Format.str_formatter ~max_indent:(column_width / 2)
@@ -247,7 +247,7 @@ let load_native ?(with_debug = true) (prog : Code.program) =
           Caml.Format.flush_str_formatter ()
         in
         try
-          let plugin_fname, log_fname, exitc = compile_source ~with_debug source_fname in
+          let plugin_fname, log_fname, exitc = compile_source source_fname in
           let exec_logs = Stdio.In_channel.read_all log_fname in
           if exitc <> 0 then
             Formula.handle_error
@@ -274,11 +274,11 @@ let load_native ?(with_debug = true) (prog : Code.program) =
         | Formula.Session_error _ as exc -> raise exc
         | exc -> Formula.handle_error @@ error_message ~name ~prefix:"Compile-time error:\n" ~contents exc
       else
-        let plugin_fname, log_fname, exitc = compile_source ~with_debug source_fname in
+        let plugin_fname, log_fname, exitc = compile_source source_fname in
         let exec_logs = Stdio.In_channel.read_all log_fname in
         if exitc <> 0 then
           Formula.handle_error
           @@ error_message ~name ~prefix:"Exec_as_OCaml.load_native: "
-               ~contents:"<pass ~with_debug:true for debugging information>" (Failure exec_logs)
+               ~contents:"<Set `Code.CDSL.with_debug : =true` for debugging information>" (Failure exec_logs)
         else Dynlink.loadfile_private plugin_fname;
         None)
