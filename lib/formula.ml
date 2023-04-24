@@ -94,7 +94,7 @@ let handle_error ?formula message =
 let fetch_zeros ~id field _shape = Code.Fetch { tensor = { id; field }; fetch_op = Zeros }
 let fetch_ones ~id field _shape = Code.Fetch { tensor = { id; field }; fetch_op = Ones }
 
-let create ~id ?(init_op = Code.Constant_fill [|0.0|]) field shape =
+let create ~id ?(init_op = Code.Constant_fill [| 0.0 |]) field shape =
   { Code.tensor = { id; field }; dims = (fun () -> Shape.to_dims shape); init_op }
 
 let max_sublabel_length = ref 25
@@ -182,8 +182,8 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
     let m1_no_grad = m1_processed || not form1.needs_gradient in
     let m2_no_grad = m2_processed || not form2.needs_gradient in
     (if needs_gradient then
-     let zero_grads = fetch_zeros ~id `Grad shape in
-     session_prepare_step := zero_grads :: !session_prepare_step);
+       let zero_grads = fetch_zeros ~id `Grad shape in
+       session_prepare_step := zero_grads :: !session_prepare_step);
     (* The code needs to be included in the reverse order to which it was computed! This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
@@ -255,8 +255,8 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
     let needs_gradient = form1.needs_gradient in
     let m1_no_grad = m1_processed || not form1.needs_gradient in
     (if needs_gradient then
-     let zero_grads = fetch_zeros ~id `Grad shape in
-     session_prepare_step := zero_grads :: !session_prepare_step);
+       let zero_grads = fetch_zeros ~id `Grad shape in
+       session_prepare_step := zero_grads :: !session_prepare_step);
     let grad_body = if needs_gradient then grad_body ~n ~n1 ~projections else Code.Noop in
     let grad_body =
       if form1.needs_gradient then grad_body else Code.remove_updates { id = m1.id; field = `Grad } grad_body
@@ -280,7 +280,7 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
 
 (** A terminal: a constant, a parameter, an input of the model. *)
 let term ~label ?desc_label ?needs_gradient ~is_form ?batch_dims ?input_dims ?output_dims ?axis_labels
-    ?deduced (init_or_fetch : (Code.init_op, n:NodeUI.t -> Code.fetch_op) Either.t) =
+    ?deduced ?init_op ?fetch_op () =
   let n =
     NodeUI.create ~value_prec:Single ~grad_prec:Single ~is_form () ~op_label:label ?desc_label ?batch_dims
       ?input_dims ?output_dims ?axis_labels ?deduced ~children:[] ()
@@ -298,13 +298,13 @@ let term ~label ?desc_label ?needs_gradient ~is_form ?batch_dims ?input_dims ?ou
   (* Note: we could embed the fetching code in the forward computation instead, but then we miss out
       on potential optimizations. E.g. fetching latency means it's important to do it early and
      in parallel. *)
-  let init_op = match init_or_fetch with First init -> init | Second _ -> Code.Constant_fill [|0.0|] in
+  let init_op = Option.value_or_thunk init_op ~default:(fun () -> Code.Constant_fill [| 0.0 |]) in
   session_initializations := create ~id ~init_op `Value shape :: !session_initializations;
   let cross_session_persistent =
     Code.(
-      match init_or_fetch with
-      | First _ -> true
-      | Second fetch_op ->
+      match fetch_op with
+      | None -> true
+      | Some fetch_op ->
           let fetch = Fetch { tensor = { id; field = `Value }; fetch_op = fetch_op ~n } in
           session_prepare_step := fetch :: !session_prepare_step;
           false)
@@ -319,8 +319,8 @@ let term ~label ?desc_label ?needs_gradient ~is_form ?batch_dims ?input_dims ?ou
       | _ -> false
     in
     (if needs_gradient then
-     let zero_grads = fetch_zeros ~id `Grad shape in
-     session_prepare_step := zero_grads :: !session_prepare_step);
+       let zero_grads = fetch_zeros ~id `Grad shape in
+       session_prepare_step := zero_grads :: !session_prepare_step);
     let backprop_body = Code.Noop in
     (* Very unlikely someone will want dw/dw. *)
     if needs_gradient then session_initializations := create ~id `Grad shape :: !session_initializations;
@@ -394,7 +394,7 @@ let float_to_label v = Float.to_string_hum ~strip_zero:true v
 let number ?desc_label ~is_form ?(axis_label = "") c =
   (* Note: no axis label so that we do not conflict with user labels. *)
   term ?desc_label ~label:(float_to_label c) ~is_form ~needs_gradient:false ~batch_dims:[] ~input_dims:[]
-    ~output_dims:[ 1 ] ~axis_labels:axis_label (First (Constant_fill [| c |]))
+    ~output_dims:[ 1 ] ~axis_labels:axis_label ~init_op:(Constant_fill [| c |]) ()
 
 let ndarray ?desc_label ~is_form ?(needs_gradient = false) ?(batch_dims = []) ?(input_dims = [])
     ?(output_dims = []) ?axis_labels ?label values =
@@ -419,18 +419,18 @@ let ndarray ?desc_label ~is_form ?(needs_gradient = false) ?(batch_dims = []) ?(
     else label
   in
   term ?desc_label ~needs_gradient ~is_form ~batch_dims ~input_dims ~output_dims ?axis_labels
-    ~deduced:Not_constrained ~label (First (Constant_fill values))
+    ~deduced:Not_constrained ~label ~init_op:(Constant_fill values) ()
 
 let params ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?values ?value label =
-  let init =
+  let init_op =
     match (values, value) with
     | Some _, Some _ -> invalid_arg "Formula.params: do not provide both ~values and ~value"
-    | Some values, _ -> Either.First (Code.Constant_fill values)
-    | _, Some value -> Either.First (Code.Constant_fill [| value |])
-    | None, None -> First Standard_uniform
+    | Some values, _ -> Code.Constant_fill values
+    | _, Some value -> Code.Constant_fill [| value |]
+    | None, None -> Standard_uniform
   in
   term ?desc_label ~needs_gradient:true ~is_form:true ~batch_dims:[] ?input_dims ?output_dims ?axis_labels
-    ?deduced ~label init
+    ?deduced ~label ~init_op ()
 
 module FDSL = struct
   let term = term ~is_form:true

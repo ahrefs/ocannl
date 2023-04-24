@@ -4,7 +4,7 @@ module CDSL = Code.CDSL
 module FDSL = Operation.FDSL
 module NFDSL = Operation.NFDSL
 
-let () = Session.SDSL.set_executor OCaml
+let () = Session.SDSL.set_executor Gccjit
 
 let%expect_test "Graph drawing recompile" =
   (* let open Operation.FDSL in *)
@@ -120,7 +120,7 @@ let%expect_test "Graph drawing fetch" =
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   let x_flat =
     FDSL.term ~needs_gradient:true ~label:"x_flat" ~batch_dims:[ size ] ~input_dims:[] ~output_dims:[ 1 ]
-      (First (Constant_fill xs))
+      ~init_op:(Constant_fill xs) ()
   in
   let session_step =
     FDSL.data ~label:"session_step" ~batch_dims:[] ~output_dims:[ 1 ] (fun ~n -> Synthetic [%nn_cd n =+ 1])
@@ -199,7 +199,7 @@ let%expect_test "Simple gradients" =
   minus_learning_rate :=
     Some
       (FDSL.term ~label:"minus_lr" ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ]
-         (First (Constant_fill [| 0.1 |])));
+         ~init_op:(Constant_fill [| 0.1 |]) ());
   refresh_session ();
   print_node_tree ~with_grad:true ~depth:9 l.id;
   [%expect

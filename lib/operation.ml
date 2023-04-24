@@ -180,18 +180,18 @@ let range ?desc_label ~is_form ?axis_label upto =
     ~label:("0" ^ "..." ^ Int.to_string upto)
     ~batch_dims:[] ~input_dims:[]
     ~output_dims:[ upto + 1 ]
-    ?axis_labels:axis_label (First Range_over_offsets)
+    ?axis_labels:axis_label ~init_op:Range_over_offsets ()
 
 let range_of_shape ?desc_label ~is_form ?(batch_dims = []) ?(input_dims = []) ?(output_dims = []) ?axis_labels
     () =
   let dims = Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list in
   Formula.term ?desc_label ~is_form ~needs_gradient:false ~batch_dims ~input_dims ~output_dims ?axis_labels
     ~label:("r" ^ NodeUI.dims_to_string dims)
-    (First Range_over_offsets)
+    ~init_op:Range_over_offsets ()
 
-let data ?desc_label ?axis_labels ?(needs_gradient = false) ~label ~batch_dims ~output_dims reset_op =
+let data ?desc_label ?axis_labels ?(needs_gradient = false) ~label ~batch_dims ~output_dims fetch_op =
   Formula.term ?desc_label ~label ~is_form:true ~needs_gradient ~batch_dims ~input_dims:[] ~output_dims
-    ?axis_labels (Second reset_op)
+    ?axis_labels ~fetch_op ()
 
 let assign =
   let module NFDSL = struct
