@@ -301,6 +301,7 @@ let drop_session () =
     Hashtbl.remove node_fetch_callbacks i
   done;
   Ocannl_runtime.Node.most_recent_suspension := None;
+  Ocannl_runtime.Node.global.session_prepare_step := None;
   Ocannl_runtime.Node.global.unique_id <- !Formula.first_session_id
 
 (** Discards all global state, rolls back [Node.state.unique_id] and [Formula.first_session_id]
@@ -320,6 +321,7 @@ let drop_all_sessions () =
   Hashtbl.clear Ocannl_runtime.Node.global.node_store;
   Hashtbl.clear node_fetch_callbacks;
   Ocannl_runtime.Node.most_recent_suspension := None;
+  Ocannl_runtime.Node.global.session_prepare_step := None;
   Ocannl_runtime.Node.global.unique_id <- 1
 
 (** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id].
@@ -336,7 +338,8 @@ let close_session () =
   minus_learning_rate := None;
   update_params := None;
   !cleanup_executor_session ();
-  Ocannl_runtime.Node.most_recent_suspension := None
+  Ocannl_runtime.Node.most_recent_suspension := None;
+  Ocannl_runtime.Node.global.session_prepare_step := None
 
 module SDSL = struct
   type nonrec backend = backend = Interpreter | OCaml | Gccjit
