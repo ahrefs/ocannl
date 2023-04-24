@@ -108,7 +108,7 @@ let format_ll_prog (ppf : Caml.Format.formatter) (p : Code.low_level_program) : 
         proc
 
 let column_width = 100
-let unique_id = ref @@ ((Int63.to_int_trunc @@ Time_now.nanoseconds_since_unix_epoch ()) % 1000) * 100
+let unique_id = ref @@ ((Int63.to_int_trunc @@ Time_now.nanoseconds_since_unix_epoch ()) % 1000 * 100)
 let safe_remove fname = try Caml.Sys.remove fname with _ -> ()
 
 (** Create a file to compile and later link. *)
@@ -155,7 +155,7 @@ let compile_source src_fname =
     ^ " -o " ^ plugin_fname ^ " " ^ src_fname ^ " >> " ^ log_fname ^ " 2>&1"
   in
   (* TODO: consider using `Core` or `Core_unix`. *)
-  let rc =  Caml.Sys.command cmdline in
+  let rc = Caml.Sys.command cmdline in
   while not @@ Caml.Sys.file_exists log_fname do
     ()
   done;
@@ -166,7 +166,8 @@ let code_file_span_line ~name =
   Str.regexp @@ name ^ {|[_A-Za-z0-9]*\.ml\\?", line \([0-9]+\), characters \([0-9]+\)-\([0-9]+\)|}
 
 let code_file_span_lines ~name =
-  Str.regexp @@ name ^ {|[_A-Za-z0-9]*\.ml\\?", lines \([0-9]+\)-\([0-9]+\), characters \([0-9]+\)-\([0-9]+\)|}
+  Str.regexp @@ name
+  ^ {|[_A-Za-z0-9]*\.ml\\?", lines \([0-9]+\)-\([0-9]+\), characters \([0-9]+\)-\([0-9]+\)|}
 
 (** Returns the character offset span inside [contents] corresponding to the first file span from [message].
     Returns [0, 0] if no span is found. *)
@@ -232,7 +233,12 @@ let error_message ~name ~prefix ?extra_error_msg ~contents exc =
 
 let load_native (prog : Code.program) =
   let compiled = emit prog in
-  let name = Code.get_name prog ^ "_u" ^ Int.to_string (Int.incr unique_id; !unique_id) in
+  let name =
+    Code.get_name prog ^ "_u"
+    ^ Int.to_string
+        (Int.incr unique_id;
+         !unique_id)
+  in
   if not Dynlink.is_native then invalid_arg "Exec_as_OCaml.load_forward: only works in native code";
   let source_fname = create_comp_unit ~name compiled in
   Exn.protect

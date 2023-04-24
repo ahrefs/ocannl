@@ -379,7 +379,7 @@ let default_display_indices sh =
            { in_axes = Input; from_end = 2 };
            { in_axes = Output; from_end = 2 };
            (if num_input_axes > 1 then { in_axes = Batch; from_end = 1 }
-           else { in_axes = Output; from_end = 3 });
+            else { in_axes = Output; from_end = 3 });
            { in_axes = Batch; from_end = 1 };
            { in_axes = Batch; from_end = 2 };
            { in_axes = Input; from_end = 3 };

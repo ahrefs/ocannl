@@ -67,9 +67,9 @@ type program =
 
 (** Name of a program that can be used as part of a file name. *)
 let get_name = function
-  | Node_specific { procedure = _; routine = { id; field = `Forward }; label=_ } ->
+  | Node_specific { procedure = _; routine = { id; field = `Forward }; label = _ } ->
       "forward_n" ^ Int.to_string id ^ "_"
-  | Node_specific { procedure = _; routine = { id; field = `Backprop }; label=_ } ->
+  | Node_specific { procedure = _; routine = { id; field = `Backprop }; label = _ } ->
       "backprop_n" ^ Int.to_string id ^ "_"
   | Initialization _ -> "initialization"
   | Suspension _ -> "suspension"
@@ -124,9 +124,7 @@ type _ low_level =
   | Constant : float -> float low_level
 [@@deriving sexp_of]
 
-let is_value_at_node_id = function
-  | Value_at_node_id _ -> true
-  | _ -> false
+let is_value_at_node_id = function Value_at_node_id _ -> true | _ -> false
 
 type low_level_program =
   | Perform of unit low_level
@@ -351,7 +349,8 @@ let interpreter_error_message ~name ~prefix ?extra_error_msg ~contents exc =
   let exc_str = Caml.Printexc.to_string exc in
   let message = Buffer.create (String.length contents + String.length backtrace + String.length exc_str) in
   let msg = Buffer.add_string message in
-  msg name; msg ": ";
+  msg name;
+  msg ": ";
   msg prefix;
   msg exc_str;
   msg "\n";

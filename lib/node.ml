@@ -184,7 +184,7 @@ let loop_bigarray arr ~f =
   let len = Array.length dims in
   cloop (Array.create ~len 0) f 0
 
-let empty prec = create_array prec [||] (Constant_fill [|0.0|])
+let empty prec = create_array prec [||] (Constant_fill [| 0.0 |])
 
 type form = {
   mutable grad : ndarray;

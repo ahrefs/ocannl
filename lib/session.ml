@@ -198,8 +198,7 @@ let compile_routine code =
   Code.interpret_initialization @@ List.take !session_initializations to_init;
   session_initialized := num_inits;
   Ocannl_runtime.Node.most_recent_suspension := None;
-  dynload_with_handler ~runtime_store:Ocannl_runtime.Node.most_recent_suspension
-    Code.(Suspension code);
+  dynload_with_handler ~runtime_store:Ocannl_runtime.Node.most_recent_suspension Code.(Suspension code);
   let routine = Option.value_exn !Ocannl_runtime.Node.most_recent_suspension in
   Ocannl_runtime.Node.most_recent_suspension := None;
   routine
@@ -216,8 +215,7 @@ let generate_params_update ~(minus_lr : Formula.t) ?params () =
 let minus_learning_rate : Formula.t option ref = ref None
 let update_params = ref None
 
-let refresh_session ?(regenerate = false) ?(reinit = false) ?(run = true)
-    ?(force_no_init = false) () =
+let refresh_session ?(regenerate = false) ?(reinit = false) ?(run = true) ?(force_no_init = false) () =
   let open Formula in
   if force_no_init && (regenerate || reinit || run) then
     invalid_arg "refresh_session: set other triggers to false when using force_no_init";
