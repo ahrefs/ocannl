@@ -6,7 +6,7 @@ module NFDSL = Operation.NFDSL
 
 let () = Session.SDSL.set_executor Gccjit
 
-let () =
+let _suspended () =
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;
@@ -20,14 +20,14 @@ let () =
   print_formula ~with_grad:false ~with_code:true `Default n;
   Stdio.printf "\n%!"
 
-let _suspended () =
+let () =
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;
   let%nn_op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%nn_op f5 = f 5 in
-  print_node_tree ~with_grad:false ~depth:9 f5.id;
   refresh_session ();
+  print_node_tree ~with_grad:false ~depth:9 f5.id;
   (* close_session is not necessary. *)
   close_session ();
   let size = 100 in
