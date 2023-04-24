@@ -12,6 +12,7 @@ type tensor = {
   num_typ : Gccjit.type_;
       (** The type of the stored values: [signed char] (corresponds to precision [Byte]),
       [short] (precision [Half]), [float] (precision [Single]), [double] (precision [Double]). *)
+  is_double : bool;
 }
 
 let session_results : Gccjit.result list ref = ref []
@@ -21,20 +22,20 @@ let hoist_dynamic_indices = ref false
 let get_tensor acc ctx id : tensor =
   let open Ocannl_runtime.Node in
   let open Gccjit in
-  let tensor c_typ arr =
+  let tensor c_typ is_double arr =
     let num_typ = Type.(get ctx c_typ) in
     let ptr = RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray arr in
     let dims = Bigarray.Genarray.dims arr in
     Option.iter !compiled_session_globals ~f:Result.release;
     compiled_session_globals := None;
-    { ptr; dims; num_typ }
+    { ptr; dims; num_typ; is_double }
   in
   let n = get id in
   match acc n with
-  | Byte_as_int_nd arr -> tensor Type.Signed_char arr
-  | Half_as_int_nd arr -> tensor Type.Short arr
-  | Single_nd arr -> tensor Type.Float arr
-  | Double_nd arr -> tensor Type.Double arr
+  | Byte_as_int_nd arr -> tensor Type.Signed_char false arr
+  | Half_as_int_nd arr -> tensor Type.Short false arr
+  | Single_nd arr -> tensor Type.Float false arr
+  | Double_nd arr -> tensor Type.Double true arr
 
 let get_value_tensor = get_tensor (fun n -> n.value)
 let get_grad_tensor = get_tensor (fun n -> (Option.value_exn n.form).grad)
@@ -60,6 +61,7 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
+  let c_float = Type.get ctx Type.Float in
   let c_double = Type.get ctx Type.Double in
   let cast_bool num_typ v = RValue.cast ctx (RValue.cast ctx v c_int) num_typ in
   let lookup ?provider_dim env indices =
@@ -82,7 +84,7 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
         let tensor =
           if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id
         in
-        let value = loop_float ~name ~env ~num_typ:tensor.num_typ value in
+        let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
         let lhs = LValue.access_array tensor.ptr offset in
@@ -96,7 +98,7 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
           if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id
         in
         let size_m_1 = Array.fold tensor.dims ~init:1 ~f:( * ) - 1 in
-        let value = loop_float ~name ~env ~num_typ:tensor.num_typ value in
+        let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
         let callback after_body offset =
           let lhs = LValue.access_array tensor.ptr offset in
           Block.assign after_body lhs value
@@ -104,8 +106,8 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
         jit_for_loop ~env (Shape.get_symbol ()) ~from_:0 ~to_:size_m_1 ~block (Either.Second callback)
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
         jit_dynamic_indices ~name ~env ~block tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
-  and loop_float ~name ~env ~num_typ value =
-    let loop = loop_float ~name ~env ~num_typ in
+  and loop_float ~name ~env ~num_typ ~is_double value =
+    let loop = loop_float ~name ~env ~num_typ ~is_double in
     match value with
     | Get (((Value_at_node_id id | Gradient_at_node_id id) as tensor), idcs) ->
         let tensor =
@@ -116,11 +118,14 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
         RValue.lvalue @@ LValue.access_array tensor.ptr offset
     | Binop (Code.Add, c1, c2) -> RValue.binary_op ctx Plus num_typ (loop c1) (loop c2)
     | Binop (Code.Mul, c1, c2) -> RValue.binary_op ctx Mult num_typ (loop c1) (loop c2)
-    | Binop (Code.ToPowOf, c1, c2) ->
+    | Binop (Code.ToPowOf, c1, c2) when is_double ->
         let base = RValue.cast ctx (loop c1) c_double in
         let expon = RValue.cast ctx (loop c2) c_double in
-        (* TODO: check if there's a single precision "powf"; dispatch on num_typ if so. *)
         RValue.cast ctx (RValue.call ctx (Function.builtin ctx "pow") [ base; expon ]) num_typ
+    | Binop (Code.ToPowOf, c1, c2) ->
+        let base = RValue.cast ctx (loop c1) c_float in
+        let expon = RValue.cast ctx (loop c2) c_float in
+        RValue.cast ctx (RValue.call ctx (Function.builtin ctx "powf") [ base; expon ]) num_typ
     | Binop (Code.Relu_gate, c1, c2) ->
         let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) @@ loop c1 in
         RValue.binary_op ctx Mult num_typ cmp @@ loop c2
