@@ -25,13 +25,6 @@ let () =
   drop_all_sessions ();
   Random.init 0;
   let%nn_op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
-  let%nn_op f5 = f 5 in
-  refresh_session ();
-  print_node_tree ~with_grad:false ~depth:9 f5.id;
-  Stdio.print_endline "\n";
-  (* close_session / drop_session is not necessary. *)
-  (* close_session (); *)
-  (* drop_session (); *)
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   let x_flat =
@@ -43,6 +36,9 @@ let () =
   in
   let%nn_op x = x_flat @.| session_step in
   let%nn_op fx = f x in
+  Stdio.print_endline "\n";
+  print_node_tree ~with_id:true ~with_value:false ~with_grad:false ~depth:9 fx.id;
+  Stdio.print_endline "\n";
   (* print_formula ~with_grad:true ~with_code:true ~with_low_level:true `Default fx; *)
   let ys =
     Array.map xs ~f:(fun _ ->
@@ -56,7 +52,9 @@ let () =
         let dy = NodeUI.retrieve_1d_points ~xdim:0 (Option.value_exn x.node.node.form).grad in
         if Array.is_empty dy then 70.0 else dy.(0))
   in
+  Stdio.print_endline "\n";
   print_preamble ();
+  Stdio.print_endline "\n";
   let plot_box =
     let open PrintBox_utils in
     plot ~size:(75, 35) ~x_label:"x" ~y_label:"f(x)"

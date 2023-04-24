@@ -355,8 +355,9 @@ module SDSL = struct
   let update_params = update_params
   let print_global_root = print_global_root
 
-  let print_node_tree ?entries_per_axis ?with_value ~with_grad ~depth id =
-    PrintBox_text.output Stdio.stdout @@ NodeUI.to_printbox ?entries_per_axis ?with_value ~with_grad ~depth id
+  let print_node_tree ?entries_per_axis ?with_id ?with_value ~with_grad ~depth id =
+    PrintBox_text.output Stdio.stdout
+    @@ NodeUI.to_printbox ?entries_per_axis ?with_id ?with_value ~with_grad ~depth id
 
   let max_sublabel_length = Formula.max_sublabel_length
   let print_formula = print_formula

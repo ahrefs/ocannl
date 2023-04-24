@@ -400,7 +400,7 @@ let default_display_indices sh =
   let axes = loop 1 axes in
   Shape.axis_map_to_dims_index axes
 
-let to_dag ?entries_per_axis ~with_value ~with_grad n_id =
+let to_dag ?entries_per_axis ~with_id ~with_value ~with_grad n_id =
   let rec to_dag { sub_node_id; computed_externally } : PrintBox_utils.dag =
     let n = get sub_node_id in
     let id = Int.to_string sub_node_id in
@@ -413,7 +413,7 @@ let to_dag ?entries_per_axis ~with_value ~with_grad n_id =
     match (computed_externally, with_value, with_grad, n.node.form) with
     | true, _, _, _ -> `Embed_subtree_ID (Int.to_string sub_node_id)
     | _, false, false, _ | _, false, true, None ->
-        let txt = desc_l ^ n.op_label in
+        let txt = if with_id then prefix else desc_l ^ n.op_label in
         `Subtree_with_ID (id, `Tree (`Text txt, children))
     | _, true, false, _ | _, true, true, None ->
         let node = `Box (render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices n.node.value) in
@@ -434,5 +434,5 @@ let to_dag ?entries_per_axis ~with_value ~with_grad n_id =
   in
   to_dag { sub_node_id = n_id; computed_externally = false }
 
-let to_printbox ?entries_per_axis ?(with_value = true) ~with_grad ~depth n_id =
-  to_dag ?entries_per_axis ~with_value ~with_grad n_id |> PrintBox_utils.reformat_dag depth
+let to_printbox ?entries_per_axis ?(with_id = false) ?(with_value = true) ~with_grad ~depth n_id =
+  to_dag ?entries_per_axis ~with_id ~with_value ~with_grad n_id |> PrintBox_utils.reformat_dag depth
