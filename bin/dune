@@ -14,8 +14,8 @@
  (modes exe))
 
 (executable
- (name micrograd_demo)
- (modules micrograd_demo)
+ (name moons_benchmark)
+ (modules moons_benchmark)
  (libraries ocannl base stdio core core_unix.command_unix core_bench)
  (preprocess
   (pps ppx_jane ppx_ocannl))
