@@ -10,7 +10,6 @@ type unop = Identity | Relu [@@deriving sexp]
 
 (** Initializes a tensor by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op = Ocannl_runtime.Node.init_op =
-  | Unspecified  (** Uninitialized. *)
   | Constant_fill of float array
       (** Fills in the numbers where the rightmost axis is contiguous, looping over the provided values
       if necessary. *)
@@ -235,7 +234,7 @@ let to_low_level_program prog : low_level_program =
   | Session_prepare_step proc -> Assign_session_prepare_step (to_low_level proc)
 
 let interpreter_print_comments = ref false
-let keep_files_in_run_directory = ref true
+let keep_files_in_run_directory = ref false
 
 module CDSL = struct
   let value_of_id id : data = { id; field = `Value }

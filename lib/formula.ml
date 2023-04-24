@@ -94,7 +94,7 @@ let handle_error ?formula message =
 let fetch_zeros ~id field _shape = Code.Fetch { tensor = { id; field }; fetch_op = Zeros }
 let fetch_ones ~id field _shape = Code.Fetch { tensor = { id; field }; fetch_op = Ones }
 
-let create ~id ?(init_op = Code.Unspecified) field shape =
+let create ~id ?(init_op = Code.Constant_fill [|0.0|]) field shape =
   { Code.tensor = { id; field }; dims = (fun () -> Shape.to_dims shape); init_op }
 
 let max_sublabel_length = ref 25
@@ -298,7 +298,7 @@ let term ~label ?desc_label ?needs_gradient ~is_form ?batch_dims ?input_dims ?ou
   (* Note: we could embed the fetching code in the forward computation instead, but then we miss out
       on potential optimizations. E.g. fetching latency means it's important to do it early and
      in parallel. *)
-  let init_op = match init_or_fetch with First init -> init | Second _ -> Unspecified in
+  let init_op = match init_or_fetch with First init -> init | Second _ -> Code.Constant_fill [|0.0|] in
   session_initializations := create ~id ~init_op `Value shape :: !session_initializations;
   let cross_session_persistent =
     Code.(

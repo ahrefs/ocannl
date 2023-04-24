@@ -13,7 +13,6 @@ let pp_symbolic_index ?provider_dim ppf =
   | Dynamic_provider _ -> Caml.Format.fprintf ppf "%d" @@ Option.value_exn provider_dim
 
 let pp_print_init_op ppf : Code.init_op -> unit = function
-  | Unspecified -> Caml.Format.pp_print_string ppf "Unspecified"
   | Constant_fill cs ->
       Caml.Format.(
         fprintf ppf "(Constant_fill @[<2>[|%a|]@])" (pp_print_list ~pp_sep:pp_semi pp_print_float)
@@ -148,7 +147,6 @@ let compile_source ~with_debug src_fname =
   (* We need the byte objects directory in path because it contains the .cmi files. *)
   (* FIXME: un-hardcode the paths. *)
   safe_remove plugin_fname;
-  Stdio.eprintf "DEBUG: source=%s\n%!" (Stdio.In_channel.read_all src_fname);
   let cmdline =
     ocamlopt_path
     ^ " -I ~/ocannl/_build/default/lib -I ~/ocannl/_build/default/lib/.ocannl_runtime.objs/native -I \

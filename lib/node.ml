@@ -121,10 +121,8 @@ let fill_from_float arr v =
 
 (** Initializes or resets a tensor by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op =
-  | Unspecified  (** Uninitialized. On fetch, values may remain unchanged, but are not guaranteed to. *)
   | Constant_fill of float array
-      (** Fills in the numbers where the rightmost axis is contiguous, looping over the provided values.
-      As a [fetch_op], persists stream position across session steps. *)
+      (** Fills in the numbers where the rightmost axis is contiguous, looping over the provided values. *)
   | Range_over_offsets
       (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
   | Standard_uniform  (** Draws the values from U(0,1). *)
@@ -149,7 +147,6 @@ let indices_to_offset ~dims ~idcs =
 
 let create_array (type arr_t) (prec : (float, arr_t) precision) dims (init_op : init_op) : arr_t =
   match init_op with
-  | Unspecified -> create_array_of_prec prec dims
   | Constant_fill cs ->
       let size = Array.length cs in
       init_array_of_prec prec dims ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
@@ -187,7 +184,7 @@ let loop_bigarray arr ~f =
   let len = Array.length dims in
   cloop (Array.create ~len 0) f 0
 
-let empty prec = create_array prec [||] Unspecified
+let empty prec = create_array prec [||] (Constant_fill [|0.0|])
 
 type form = {
   mutable grad : ndarray;
@@ -275,7 +272,6 @@ let init_bigarray (init_op : init_op) (type val_t b) (cast : float -> val_t)
     (arr : (val_t, b, Bigarray.c_layout) bigarray) =
   let dims = A.dims arr in
   match init_op with
-  | Unspecified -> ()
   | Constant_fill cs ->
       let size = Array.length cs in
       loop_bigarray arr ~f:(fun idcs -> cast cs.(indices_to_offset ~dims ~idcs % size))

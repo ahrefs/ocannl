@@ -127,8 +127,6 @@ let%expect_test "Graph drawing fetch" =
   in
   let%nn_op x = x_flat @.| session_step in
   let%nn_op fx = f x in
-  refresh_session ();
-  print_preamble ();
   let ys =
     Array.map xs ~f:(fun _ ->
         refresh_session ();
@@ -152,58 +150,41 @@ let%expect_test "Graph drawing fetch" =
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect
     {|
-    Node #13 op x_flat dims single prec 100x1 [];
-    Node #14 op session_step dims val single prec 1 grad single prec - [];
-    Node #15 op 1 dims val single prec 1 grad <no-form> [];
-    Node #16 x op @.| dims single prec 1 [13,14];
-    Node #17 op 5 dims val single prec 1 grad single prec - [];
-    Node #18 op 4 dims val single prec 1 grad single prec - [];
-    Node #19 op *. dims single prec 1 [18,16];
-    Node #20 op 2 dims val single prec 1 grad single prec - [];
-    Node #21 op **. dims single prec 1 [16,20];
-    Node #22 op *. dims val single prec 1 grad <no-form> [20,16];
-    Node #23 op 3 dims val single prec 1 grad single prec - [];
-    Node #24 op *. dims single prec 1 [23,21];
-    Node #25 op -1 dims val single prec 1 grad single prec - [];
-    Node #26 op *. dims single prec 1 [25,19];
-    Node #27 op + dims single prec 1 [24,26];
-    Node #28 f op + dims single prec 1 [27,17];
-
-     9.960e+1 │                                                                          #
-              │#                                                                        #
+     9.703e+1 │                                                                          #
               │#
-              │ #
+              │ ##
               │  #
-              │  ##
+              │   #
               │    #
               │     #
-              │     ##
+              │      #
               │       #
               │        #
               │         #
-              │          ##                                                            #
-              │           #                                                           #
-              │            ##                                                       ##
-    f         │              #                                                     #
-    (         │               ##                                                  #
-    x         │                 #                                               ##
-    )         │                  ##                                           ###
-              │                    #                                         #         *
-              │                     ###                                   ###     *****
-              │                       ###                                ##  *****
-              │                          ##                           ##******
-              │                            ###                     #****
-              │                               #####           ******
-              │                                   #######******
+              │          ##
+              │           #                                                            ##
+              │            ##                                                         #
+              │              #                                                       #
+    f         │               ##                                                   ##
+    (         │                 #                                                 ##
+    x         │                 ##                                              ##
+    )         │                   ##                                           ##
+              │#                    ##                                       ##       ***
+              │                       ##                                   ##    ******
+              │                         ##                               ##  ****
+              │                          ####                         ##*****
+              │                             ####                   *****
+              │                                ######         *****
+              │                                      ####******
               │-  -   -   -   -  -   -   -   -  -   -***-   -  -   -   -   -  -   -   -
               │                                ******
               │                            *****
               │                       *****
-              │                  *****
-              │             *****
-              │        *****
-              │   ******
-     -3.400e+1│***                                                                      **
+              │                  ******
+              │              ****
+              │        ******
+              │    *****
+     -3.400e+1│****                                                                      *
     ──────────┼───────────────────────────────────────────────────────────────────────────
               │-5.000e+0                                                          4.900e+0
               │                                     x |}]
