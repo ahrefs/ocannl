@@ -66,6 +66,16 @@ type program =
   | Session_prepare_step of t
 [@@deriving sexp]
 
+(** Name of a program that can be used as part of a file name. *)
+let get_name = function
+  | Node_specific { procedure = _; routine = { id; field = `Forward }; label=_ } ->
+      "forward_n" ^ Int.to_string id ^ "_"
+  | Node_specific { procedure = _; routine = { id; field = `Backprop }; label=_ } ->
+      "backprop_n" ^ Int.to_string id ^ "_"
+  | Initialization _ -> "initialization"
+  | Suspension _ -> "suspension"
+  | Session_prepare_step _ -> "prepare_step"
+
 type create = { tensor : data; dims : unit -> int array; init_op : init_op }
 (** Information to create a tensor, once its shape is inferred. *)
 
@@ -225,12 +235,14 @@ let to_low_level_program prog : low_level_program =
   | Session_prepare_step proc -> Assign_session_prepare_step (to_low_level proc)
 
 let interpreter_print_comments = ref false
+let keep_files_in_run_directory = ref true
 
 module CDSL = struct
   let value_of_id id : data = { id; field = `Value }
   let grad_of_id id : data = { id; field = `Grad }
   let data_of_node field n : data = { id = n.NodeUI.id; field }
   let interpreter_print_comments = interpreter_print_comments
+  let keep_files_in_run_directory = keep_files_in_run_directory
 end
 
 let interpret_llc ?(with_debug = true) llc =
@@ -333,11 +345,12 @@ let interpret_program ?(with_debug = true) prog : string option =
   (* Some (Sexp.to_string_hum @@ sexp_of_low_level llc) *)
   Some (Caml.Format.asprintf "%a" fprint_program prog)
 
-let interpreter_error_message prefix ?extra_error_msg ~contents exc =
+let interpreter_error_message ~name ~prefix ?extra_error_msg ~contents exc =
   let backtrace = Caml.Printexc.get_backtrace () in
   let exc_str = Caml.Printexc.to_string exc in
   let message = Buffer.create (String.length contents + String.length backtrace + String.length exc_str) in
   let msg = Buffer.add_string message in
+  msg name; msg ": ";
   msg prefix;
   msg exc_str;
   msg "\n";

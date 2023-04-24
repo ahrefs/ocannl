@@ -89,15 +89,16 @@ let print_formula ~with_grad ~with_code ?(with_low_level = false) (style : NodeU
       NodeUI.pp_tensor Caml.Format.std_formatter ~prefix ~labels ~indices m.node.node.value;
       Caml.Format.print_newline ());
   (if with_grad then
-   match (style, m.node.node.form) with
-   | `Inline, Some cform ->
-       NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
-         ?labels_spec cform.grad;
-       Caml.Format.print_newline ()
-   | _, Some cform ->
-       NodeUI.pp_tensor Caml.Format.std_formatter ~prefix:(prefix ^ " Gradient ") ~labels ~indices cform.grad;
-       Caml.Format.print_newline ()
-   | _ -> ());
+     match (style, m.node.node.form) with
+     | `Inline, Some cform ->
+         NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
+           ?labels_spec cform.grad;
+         Caml.Format.print_newline ()
+     | _, Some cform ->
+         NodeUI.pp_tensor Caml.Format.std_formatter ~prefix:(prefix ^ " Gradient ") ~labels ~indices
+           cform.grad;
+         Caml.Format.print_newline ()
+     | _ -> ());
   if with_code then (
     (match m.forward_body with
     | Noop -> ()
@@ -166,6 +167,7 @@ let set_executor = function
       cleanup_executor_session := Exec_as_gccjit.cleanup_session
 
 let dynload_with_handler ~with_debug ~runtime_store code =
+  let name = Code.get_name code in
   let contents = !executor ~with_debug code in
   match (contents, !runtime_store) with
   | Some contents, Some routine ->
@@ -173,7 +175,8 @@ let dynload_with_handler ~with_debug ~runtime_store code =
         Some
           (fun () ->
             try routine ()
-            with error -> Formula.handle_error @@ !executor_error_message "Runtime error:" ~contents error)
+            with error ->
+              Formula.handle_error @@ !executor_error_message ~name ~prefix:"Runtime error:" ~contents error)
   | Some contents, None ->
       let msg = "refresh_session: error loading initialization: routine not set in code:\n" ^ contents in
       raise @@ Formula.Session_error (msg, None)
@@ -238,9 +241,9 @@ let refresh_session ?(with_debug = true) ?(regenerate = false) ?(reinit = false)
     dynload_with_handler ~with_debug ~runtime_store:Ocannl_runtime.Node.global.session_prepare_step
       Code.(Session_prepare_step (all_parallel !session_prepare_step)));
   (if regenerate || Option.is_none !update_params then
-   match !minus_learning_rate with
-   | None -> ()
-   | Some minus_lr -> update_params := Some (generate_params_update ~with_debug ~minus_lr ()));
+     match !minus_learning_rate with
+     | None -> ()
+     | Some minus_lr -> update_params := Some (generate_params_update ~with_debug ~minus_lr ()));
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
       let m = root.formula in
       let cform = match m.node.node.form with Some form -> form | None -> assert false in
@@ -251,12 +254,12 @@ let refresh_session ?(with_debug = true) ?(regenerate = false) ?(reinit = false)
         root.backprop_code <- Some backprop_prog;
         cform.backprop := None);
       (if (not force_no_init) && (reinit || Option.is_none !(cform.forward)) then
-       try
-         cform.forward := None;
-         dynload_with_handler ~with_debug ~runtime_store:cform.forward (Option.value_exn root.forward_code)
-       with Session_error (msg, None) ->
-         let msg = "Forward init error: " ^ msg in
-         raise @@ Session_error (msg, Some m));
+         try
+           cform.forward := None;
+           dynload_with_handler ~with_debug ~runtime_store:cform.forward (Option.value_exn root.forward_code)
+         with Session_error (msg, None) ->
+           let msg = "Forward init error: " ^ msg in
+           raise @@ Session_error (msg, Some m));
       if (not force_no_init) && (reinit || Option.is_none !(cform.backprop)) then (
         try
           cform.backprop := None;

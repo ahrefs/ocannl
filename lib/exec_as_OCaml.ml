@@ -1,5 +1,6 @@
 open Base
 
+let keep_files_in_run_directory = ref false
 let emit = Code.to_low_level_program
 let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
 let pp_symbol ppf (Shape.Symbol s) = Caml.Format.fprintf ppf "i%d" s
@@ -107,14 +108,14 @@ let format_ll_prog (ppf : Caml.Format.formatter) (p : Code.low_level_program) : 
         (format_low_level ~as_toplevel:false)
         proc
 
-let code_file_prefix = "nnrun"
 let column_width = 100
 
 (** Create a file to compile and later link. *)
-let create_comp_unit compiled =
-  let fname, oc =
-    Caml.Filename.open_temp_file ~mode:[ Open_wronly; Open_creat; Open_text ] code_file_prefix ".ml"
+let create_comp_unit ~name compiled =
+  let f_name =
+    if !Code.keep_files_in_run_directory then name ^ ".ml" else Caml.Filename.temp_file (name ^ "_") ".ml"
   in
+  let oc = Out_channel.open_text f_name in
   (* FIXME(#32): the following outputs truncated source code -- missing the last line: *
      let ppf = Caml.Format.formatter_of_out_channel oc in
      Caml.Format.pp_set_geometry Caml.Format.str_formatter
@@ -130,8 +131,7 @@ let create_comp_unit compiled =
   Stdio.Out_channel.output_string oc contents;
   Stdio.Out_channel.flush oc;
   Stdio.Out_channel.close oc;
-  (* *)
-  fname
+  f_name
 
 let safe_remove fname = try Caml.Sys.remove fname with _ -> ()
 let ocamlopt_path = "ocamlfind ocamlopt"
@@ -142,7 +142,7 @@ let compile_source ~with_debug src_fname =
   let basename = Caml.Filename.remove_extension src_fname in
   let log_fname = basename ^ ".log" in
   let plugin_fname = basename ^ ".cmxs" in
-  let other_files = [ basename ^ ".cmi"; basename ^ ".cmx" ] in
+  let other_files = [ basename ^ ".cmi"; basename ^ ".cmx"; basename ^ ".o" ] in
   (* We need the byte objects directory in path because it contains the .cmi files. *)
   (* FIXME: un-hardcode the paths. *)
   let cmdline =
@@ -153,31 +153,30 @@ let compile_source ~with_debug src_fname =
     ^ " -o " ^ plugin_fname ^ " " ^ src_fname ^ " >> " ^ log_fname ^ " 2>&1"
   in
   (* TODO: consider using `Core` or `Core_unix`. *)
-  let rc = Caml.Sys.command cmdline in
+  let rc =  Caml.Sys.command cmdline in
   while not @@ Caml.Sys.file_exists log_fname do
     ()
   done;
   List.iter ~f:safe_remove other_files;
   (plugin_fname, log_fname, rc)
 
-let code_file_span_line =
-  Str.regexp @@ code_file_prefix ^ {|[A-Za-z0-9]*\.ml\\?", line \([0-9]+\), characters \([0-9]+\)-\([0-9]+\)|}
+let code_file_span_line ~name =
+  Str.regexp @@ name ^ {|[_A-Za-z0-9]*\.ml\\?", line \([0-9]+\), characters \([0-9]+\)-\([0-9]+\)|}
 
-let code_file_span_lines =
-  Str.regexp @@ code_file_prefix
-  ^ {|[A-Za-z0-9]*\.ml\\?", lines \([0-9]+\)-\([0-9]+\), characters \([0-9]+\)-\([0-9]+\)|}
+let code_file_span_lines ~name =
+  Str.regexp @@ name ^ {|[_A-Za-z0-9]*\.ml\\?", lines \([0-9]+\)-\([0-9]+\), characters \([0-9]+\)-\([0-9]+\)|}
 
 (** Returns the character offset span inside [contents] corresponding to the first file span from [message].
     Returns [0, 0] if no span is found. *)
-let first_file_span ~contents ~message =
+let first_file_span ~name ~contents ~message =
   let last_char = String.length contents - 1 in
   try
     let multiline =
       try
-        ignore (Str.search_forward code_file_span_line message 0);
+        ignore (Str.search_forward (code_file_span_line ~name) message 0);
         false
       with Caml.Not_found | Not_found_s _ ->
-        ignore (Str.search_forward code_file_span_lines message 0);
+        ignore (Str.search_forward (code_file_span_lines ~name) message 0);
         true
     in
     let line_num = Int.of_string @@ Str.matched_group 1 message in
@@ -199,7 +198,7 @@ let first_file_span ~contents ~message =
 let error_closing_delimiter = " #$}\027[0m "
 let error_opening_delimiter = " \027[1;31m{$# "
 
-let error_message prefix ?extra_error_msg ~contents exc =
+let error_message ~name ~prefix ?extra_error_msg ~contents exc =
   let backtrace = Caml.Printexc.get_backtrace () in
   let exc_str = Caml.Printexc.to_string exc in
   let message = Buffer.create (String.length contents + String.length backtrace + String.length exc_str) in
@@ -213,7 +212,7 @@ let error_message prefix ?extra_error_msg ~contents exc =
   | Some extra ->
       msg "\nIn the context of:\n";
       msg extra);
-  let from_pos, to_pos = first_file_span ~contents ~message:(Buffer.contents message) in
+  let from_pos, to_pos = first_file_span ~name ~contents ~message:(Buffer.contents message) in
   (* Be defensive to avoid introducing a misleading error. *)
   let from_pos = Int.min from_pos @@ (String.length contents - 1) in
   let to_pos = Int.min to_pos @@ (String.length contents - 1) in
@@ -231,10 +230,11 @@ let error_message prefix ?extra_error_msg ~contents exc =
 
 let load_native ?(with_debug = true) (prog : Code.program) =
   let compiled = emit prog in
+  let name = Code.get_name prog in
   if not Dynlink.is_native then invalid_arg "Exec_as_OCaml.load_forward: only works in native code";
-  let source_fname = create_comp_unit compiled in
+  let source_fname = create_comp_unit ~name compiled in
   Exn.protect
-    ~finally:(fun () -> safe_remove source_fname)
+    ~finally:(fun () -> if not !Code.keep_files_in_run_directory then safe_remove source_fname)
     ~f:(fun () ->
       if with_debug then
         (* TODO: don't generate the source twice. *)
@@ -248,7 +248,8 @@ let load_native ?(with_debug = true) (prog : Code.program) =
           let plugin_fname, log_fname, exitc = compile_source ~with_debug source_fname in
           let exec_logs = Stdio.In_channel.read_all log_fname in
           if exitc <> 0 then
-            Formula.handle_error @@ error_message "Compilation error:\n" ~contents (Failure exec_logs)
+            Formula.handle_error
+            @@ error_message ~name ~prefix:"Compilation error:\n" ~contents (Failure exec_logs)
           else
             Exn.protect
               ~finally:(fun () ->
@@ -261,20 +262,21 @@ let load_native ?(with_debug = true) (prog : Code.program) =
                 with
                 | Dynlink.Error (Library's_module_initializers_failed exc) ->
                     Formula.handle_error
-                    @@ error_message "Runtime init error:\n" ~extra_error_msg:exec_logs ~contents exc
+                    @@ error_message ~name ~prefix:"Runtime init error:\n" ~extra_error_msg:exec_logs
+                         ~contents exc
                 | exc ->
                     Formula.handle_error
-                    @@ error_message "Compilation or unknown runtime error:\n" ~extra_error_msg:exec_logs
-                         ~contents exc)
+                    @@ error_message ~name ~prefix:"Compilation or unknown runtime error:\n"
+                         ~extra_error_msg:exec_logs ~contents exc)
         with
         | Formula.Session_error _ as exc -> raise exc
-        | exc -> Formula.handle_error @@ error_message "Compile-time error:\n" ~contents exc
+        | exc -> Formula.handle_error @@ error_message ~name ~prefix:"Compile-time error:\n" ~contents exc
       else
         let plugin_fname, log_fname, exitc = compile_source ~with_debug source_fname in
         let exec_logs = Stdio.In_channel.read_all log_fname in
         if exitc <> 0 then
           Formula.handle_error
-          @@ error_message "Exec_as_OCaml.load_native: "
+          @@ error_message ~name ~prefix:"Exec_as_OCaml.load_native: "
                ~contents:"<pass ~with_debug:true for debugging information>" (Failure exec_logs)
         else Dynlink.loadfile_private plugin_fname;
         None)

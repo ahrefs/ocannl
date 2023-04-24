@@ -7,8 +7,7 @@ let session_context =
   ref ctx
 
 type tensor = {
-  ptr : Gccjit.rvalue;  
-  (** Pointer to the first value of the associated [Bigarray]. *)
+  ptr : Gccjit.rvalue;  (** Pointer to the first value of the associated [Bigarray]. *)
   dims : int array;  (** Dimensions (shape) of the tensor. *)
   num_typ : Gccjit.type_;
       (** The type of the stored values: [signed char] (corresponds to precision [Byte]),
@@ -30,12 +29,12 @@ let get_tensor acc ctx id : tensor =
     compiled_session_globals := None;
     { ptr; dims; num_typ }
   in
-    let n = get id in
-    match acc n with
-    | Byte_as_int_nd arr -> tensor Type.Signed_char arr
-    | Half_as_int_nd arr -> tensor Type.Short arr
-    | Single_nd arr -> tensor Type.Float arr
-    | Double_nd arr -> tensor Type.Double arr
+  let n = get id in
+  match acc n with
+  | Byte_as_int_nd arr -> tensor Type.Signed_char arr
+  | Half_as_int_nd arr -> tensor Type.Short arr
+  | Single_nd arr -> tensor Type.Float arr
+  | Double_nd arr -> tensor Type.Double arr
 
 let get_value_tensor = get_tensor (fun n -> n.value)
 let get_grad_tensor = get_tensor (fun n -> (Option.value_exn n.form).grad)
@@ -79,7 +78,9 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
             loop_proc ~name:(name ^ "_at_" ^ Int.to_string i) ~env ~block line)
     | For_loop { index; from_; to_; body } -> jit_for_loop ~env index ~from_ ~to_ ~block (Either.First body)
     | Set (((Value_at_node_id id | Gradient_at_node_id id) as tensor), idcs, value) ->
-        let tensor = if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id in
+        let tensor =
+          if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id
+        in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ value in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
@@ -90,7 +91,9 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
         Block.comment block c;
         block
     | Fill { tensor = (Value_at_node_id id | Gradient_at_node_id id) as tensor; value } ->
-        let tensor = if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id in
+        let tensor =
+          if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id
+        in
         let size_m_1 = Array.fold tensor.dims ~init:1 ~f:( * ) - 1 in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ value in
         let callback after_body offset =
@@ -104,16 +107,19 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
     let loop = loop_float ~name ~env ~num_typ in
     match value with
     | Get (((Value_at_node_id id | Gradient_at_node_id id) as tensor), idcs) ->
-        let tensor = if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id in
+        let tensor =
+          if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id
+        in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
         RValue.lvalue @@ LValue.access_array tensor.ptr offset
     | Binop (Code.Add, c1, c2) -> RValue.binary_op ctx Plus num_typ (loop c1) (loop c2)
     | Binop (Code.Mul, c1, c2) -> RValue.binary_op ctx Mult num_typ (loop c1) (loop c2)
     | Binop (Code.ToPowOf, c1, c2) ->
-      let base = RValue.cast ctx (loop c1) c_double in
-      let expon = RValue.cast ctx (loop c2) c_double in
-      RValue.cast ctx (RValue.call ctx (Function.builtin ctx "pow") [ base; expon ]) num_typ 
+        let base = RValue.cast ctx (loop c1) c_double in
+        let expon = RValue.cast ctx (loop c2) c_double in
+        (* TODO: check if there's a single precision "powf"; dispatch on num_typ if so. *)
+        RValue.cast ctx (RValue.call ctx (Function.builtin ctx "pow") [ base; expon ]) num_typ
     | Binop (Code.Relu_gate, c1, c2) ->
         let cmp = RValue.cast ctx (RValue.comparison ctx Le (RValue.zero ctx num_typ) @@ loop c1) num_typ in
         RValue.binary_op ctx Mult num_typ cmp @@ loop c2
@@ -129,7 +135,6 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
     let i = "i" ^ Int.to_string s in
     let index = Function.local func c_index i in
     let env = Map.add_exn env ~key:symbol ~data:(RValue.lvalue index) in
-    (* TODO: maybe propagate more informative names *)
     let b_loop_cond = Block.create ~name:("loop_cond_" ^ i) func in
     let b_loop_body = Block.create ~name:("loop_body_" ^ i) func in
     let b_after_loop = Block.create ~name:("after_loop_" ^ i) func in
@@ -149,16 +154,16 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
     b_after_loop
   and jit_dynamic_indices ~name ~env ~block ((Value_at_node_id id | Gradient_at_node_id id) as tensor)
       ~tensor_idcs ~dynamic_idcs ~target_dims body =
-    let tensor = if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id in
+    let tensor =
+      if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id
+    in
     let env =
       Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env (Symbol s as key) ->
           let target_dim = RValue.int ctx c_int @@ target_dims.(provider_dim) in
           let provider_dim = RValue.int ctx c_int provider_dim in
           let idcs = lookup ~provider_dim env tensor_idcs in
           let prov_offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
-          let dyn_index =
-            RValue.lvalue @@ 
-            LValue.access_array tensor.ptr prov_offset in
+          let dyn_index = RValue.lvalue @@ LValue.access_array tensor.ptr prov_offset in
           let dyn_index = RValue.cast ctx dyn_index c_index in
           let dyn_index = RValue.binary_op ctx Modulo c_index dyn_index target_dim in
           let data =
@@ -184,18 +189,21 @@ let jit_ll_prog ~with_debug ~name ctx prog =
     let name = name ^ suffix in
     let func = Function.create ctx fkind (Type.get ctx Void) name [] in
     let block = Block.create ~name func in
-    let after_proc = jit_code ~name ~env ctx func block proc in
-    Block.return_void after_proc;
-    if with_debug then (
-      let f_name = Caml.Filename.temp_file (name^"-") "-gccjit-debug.c" in
-      Context.dump_to_file ctx ~update_locs:true f_name;
-      msg := Some (Stdio.In_channel.read_all f_name));
+    (let after_proc = jit_code ~name ~env ctx func block proc in
+     Block.return_void after_proc;
+     if with_debug then (
+       let suf = "-gccjit-debug.c" in
+       let f_name =
+         if !Code.keep_files_in_run_directory then name ^ suf else Caml.Filename.temp_file (name ^ "-") suf
+       in
+       Context.dump_to_file ctx ~update_locs:true f_name;
+       msg := Some (Stdio.In_channel.read_all f_name)))
     (* match !compiled_session_globals with
-    | None ->
-      Context.dump_to_file !session_context ~update_locs:true "globals-gccjit-debug.c";
-      let globals = Context.compile !session_context in
-       compiled_session_globals := Some globals
-    | Some _ -> () *);
+       | None ->
+         Context.dump_to_file !session_context ~update_locs:true "globals-gccjit-debug.c";
+         let globals = Context.compile !session_context in
+          compiled_session_globals := Some globals
+       | Some _ -> () *);
     let result = Context.compile ctx in
     session_results := result :: !session_results;
     Result.code result name Ctypes.(void @-> returning void)
@@ -212,11 +220,13 @@ let jit_ll_prog ~with_debug ~name ctx prog =
       global.session_prepare_step := Some (emit_routine proc @@ "prepare_step"));
   !msg
 
-let error_message prefix ?extra_error_msg ~contents exc =
+let error_message ~name ~prefix ?extra_error_msg ~contents exc =
   let backtrace = Caml.Printexc.get_backtrace () in
   let exc_str = Caml.Printexc.to_string exc in
   let message = Buffer.create (String.length contents + String.length backtrace + String.length exc_str) in
   let msg = Buffer.add_string message in
+  msg name;
+  msg ": ";
   msg prefix;
   msg exc_str;
   msg "\n";
