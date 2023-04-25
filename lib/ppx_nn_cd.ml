@@ -659,9 +659,9 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
         Ast_builder.Default.pexp_extension ~loc
         @@ Location.error_extensionf ~loc "ppx_ocannl %%nn_cd: let-in: local let-bindings not implemented yet"
       )
-      (* let bindings = List.map bindings
-          ~f:(fun binding -> {binding with pvb_expr=translate binding.pvb_expr}) in
-         {expr with pexp_desc=Pexp_let (recflag, bindings, translate body)} *)
+  (* let bindings = List.map bindings
+      ~f:(fun binding -> {binding with pvb_expr=translate binding.pvb_expr}) in
+     {expr with pexp_desc=Pexp_let (recflag, bindings, translate body)} *)
   | { pexp_desc = Pexp_open (decl, body); _ } ->
       let typ, slot, body = translate ?desc_label ?proj_in_scope body in
       (typ, slot, { expr with pexp_desc = Pexp_open (decl, body) })
@@ -673,30 +673,46 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
   | _ -> (Unknown, Undet, expr)
 
 let translate_dt ?desc_label (expr : expression) : expression =
-  let rec loop ?batch_dims ?input_dims ?output_dims expr =
+  let rec loop ?label ?batch_dims ?input_dims ?output_dims expr =
     let loc = expr.pexp_loc in
     match expr with
+    | { pexp_desc = Pexp_fun (Labelled "label", None, arg, body); _ } ->
+        if Option.is_some label then
+          Ast_builder.Default.pexp_extension ~loc
+          @@ Location.error_extensionf ~loc "nn_dt: Multiple specifications for ~label"
+        else loop ~label:(pat2string arg) ?batch_dims ?input_dims ?output_dims body
     | { pexp_desc = Pexp_fun (Labelled "batch_dims", None, arg, body); _ } ->
         if Option.is_some batch_dims then
           Ast_builder.Default.pexp_extension ~loc
-          @@ Location.error_extensionf ~loc "Multiple specifications for ~batch_dims"
+          @@ Location.error_extensionf ~loc "nn_dt: Multiple specifications for ~batch_dims"
         else loop ~batch_dims:(pat2expr arg) ?input_dims ?output_dims body
     | { pexp_desc = Pexp_fun (Labelled "input_dims", None, arg, body); _ } ->
         if Option.is_some input_dims then
           Ast_builder.Default.pexp_extension ~loc
-          @@ Location.error_extensionf ~loc "Multiple specifications for ~input_dims"
+          @@ Location.error_extensionf ~loc "nn_dt: Multiple specifications for ~input_dims"
         else loop ?batch_dims ~input_dims:(pat2expr arg) ?output_dims body
     | { pexp_desc = Pexp_fun (Labelled "output_dims", None, arg, body); _ } ->
         if Option.is_some output_dims then
           Ast_builder.Default.pexp_extension ~loc
-          @@ Location.error_extensionf ~loc "Multiple specifications for ~output_dims"
+          @@ Location.error_extensionf ~loc "nn_dt: Multiple specifications for ~output_dims"
         else loop ?batch_dims ?input_dims ~output_dims:(pat2expr arg) body
     | _ ->
-        let _, _, body = translate ?desc_label expr in
+        let desc_label, label =
+          match (desc_label, label) with
+          | None, None ->
+              ( None,
+                Ast_builder.Default.pexp_extension ~loc
+                @@ Location.error_extensionf ~loc
+                     "nn_dt: Not a let-binding and missing specification for ~label" )
+          | None, Some label -> (None, label)
+          | Some label, None -> (None, pat2string label)
+          | _, Some label -> (desc_label, label)
+        in
+        let _, _, body = translate ?desc_label:None expr in
         [%expr
-          FDSL.data ?label:[%e opt_pat2string ~loc desc_label] ?batch_dims:[%e opt_expr ~loc batch_dims]
-            ?input_dims:[%e opt_expr ~loc input_dims] ?output_dims:[%e opt_expr ~loc output_dims] (fun ~n ->
-              Code.Synthetic [%e body])]
+          FDSL.data ?desc_label:[%e opt_pat2string ~loc desc_label] ~label:[%e label]
+            ?batch_dims:[%e opt_expr ~loc batch_dims] ?input_dims:[%e opt_expr ~loc input_dims]
+            ?output_dims:[%e opt_expr ~loc output_dims] (fun ~n -> Code.Synthetic [%e body])]
   in
   loop expr
 
