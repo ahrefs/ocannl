@@ -1,17 +1,6 @@
 open Base
 open Ppxlib
 
-let rec pat2expr pat =
-  let loc = pat.ppat_loc in
-  match pat.ppat_desc with
-  | Ppat_constraint (pat', typ) -> Ast_builder.Default.pexp_constraint ~loc (pat2expr pat') typ
-  | Ppat_alias (_, ident) | Ppat_var ident ->
-      Ast_builder.Default.pexp_ident ~loc { ident with txt = Lident ident.txt }
-  | _ ->
-      Ast_builder.Default.pexp_extension ~loc
-      @@ Location.error_extensionf ~loc
-           "ppx_ocannl requires a pattern identifier here: try using an `as` alias."
-
 type li = longident
 
 let pat2string pat =
@@ -40,11 +29,31 @@ let pat2string pat =
   Ast_helper.Exp.constant @@ Pconst_string (loop pat, pat.ppat_loc, None)
 
 let opt_pat2string ~loc = function None -> [%expr None] | Some pat -> [%expr Some [%e pat2string pat]]
+let opt_expr ~loc = function None -> [%expr None] | Some expr -> [%expr Some [%e expr]]
 
 let rec collect_list accu = function
   | [%expr [%e? hd] :: [%e? tl]] -> collect_list (hd :: accu) tl
   | [%expr []] -> List.rev accu
   | expr -> List.rev (expr :: accu)
+
+let rec pat2expr pat =
+  let module Ast = Ast_builder.Default in
+  let loc = pat.ppat_loc in
+  match pat.ppat_desc with
+  | Ppat_constraint (pat', typ) -> Ast.pexp_constraint ~loc (pat2expr pat') typ
+  | Ppat_alias (_, ident) | Ppat_var ident -> Ast.pexp_ident ~loc { ident with txt = Lident ident.txt }
+  | Ppat_variant (ident, e_opt) -> Ast.pexp_variant ~loc ident @@ Option.map e_opt ~f:pat2expr
+  | Ppat_constant c -> Ast.pexp_constant ~loc c
+  | Ppat_construct (c, None) -> Ast.pexp_construct ~loc c None
+  | Ppat_construct (c, Some ([], args)) -> Ast.pexp_construct ~loc c @@ Some (pat2expr args)
+  | Ppat_record (fields, Asttypes.Closed) ->
+      Ast.pexp_record ~loc (List.map fields ~f:(fun (label, field) -> (label, pat2expr field))) None
+  | Ppat_tuple pats -> Ast.pexp_tuple ~loc @@ List.map pats ~f:pat2expr
+  | Ppat_array pats -> Ast.pexp_array ~loc @@ List.map pats ~f:pat2expr
+  | _ ->
+      Ast.pexp_extension ~loc
+      @@ Location.error_extensionf ~loc
+           "ppx_ocannl does not recognize/support the pattern; maybe try using an `as` alias."
 
 let dim_spec_to_string = function
   | `Input_dims dim -> "input (tuple) of dim " ^ Int.to_string dim

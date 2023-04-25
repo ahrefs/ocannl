@@ -672,13 +672,45 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       (Unknown, Undet, [%expr [%e expr] ?desc_label:[%e opt_pat2string ~loc desc_label]])
   | _ -> (Unknown, Undet, expr)
 
-let expr_expander ~loc ~path:_ payload =
+let translate_dt ?desc_label (expr : expression) : expression =
+  let rec loop ?batch_dims ?input_dims ?output_dims expr =
+    let loc = expr.pexp_loc in
+    match expr with
+    | { pexp_desc = Pexp_fun (Labelled "batch_dims", None, arg, body); _ } ->
+        if Option.is_some batch_dims then
+          Ast_builder.Default.pexp_extension ~loc
+          @@ Location.error_extensionf ~loc "Multiple specifications for ~batch_dims"
+        else loop ~batch_dims:(pat2expr arg) ?input_dims ?output_dims body
+    | { pexp_desc = Pexp_fun (Labelled "input_dims", None, arg, body); _ } ->
+        if Option.is_some input_dims then
+          Ast_builder.Default.pexp_extension ~loc
+          @@ Location.error_extensionf ~loc "Multiple specifications for ~input_dims"
+        else loop ?batch_dims ~input_dims:(pat2expr arg) ?output_dims body
+    | { pexp_desc = Pexp_fun (Labelled "output_dims", None, arg, body); _ } ->
+        if Option.is_some output_dims then
+          Ast_builder.Default.pexp_extension ~loc
+          @@ Location.error_extensionf ~loc "Multiple specifications for ~output_dims"
+        else loop ?batch_dims ?input_dims ~output_dims:(pat2expr arg) body
+    | _ ->
+        let _, _, body = translate ?desc_label expr in
+        [%expr
+          FDSL.data ?label:[%e opt_pat2string ~loc desc_label] ?batch_dims:[%e opt_expr ~loc batch_dims]
+            ?input_dims:[%e opt_expr ~loc input_dims] ?output_dims:[%e opt_expr ~loc output_dims] (fun ~n ->
+              Code.Synthetic [%e body])]
+  in
+  loop expr
+
+let translate ?desc_label (expr : expression) : expression =
+  let _, _, v = translate ?desc_label expr in
+  v
+
+let expr_expander ~dt ~loc ~path:_ payload =
   match payload with
   | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
       (* We are at the %ocannl annotation level: do not tranlsate the body. *)
       let bindings =
         List.map bindings ~f:(fun vb ->
-            let _, _, v = translate ~desc_label:vb.pvb_pat vb.pvb_expr in
+            let v = (if dt then translate_dt else translate) ~desc_label:vb.pvb_pat vb.pvb_expr in
             {
               vb with
               pvb_expr =
@@ -689,7 +721,7 @@ let expr_expander ~loc ~path:_ payload =
       in
       { payload with pexp_desc = Pexp_let (recflag, bindings, body) }
   | expr ->
-      let _, _, expr = translate expr in
+      let expr = (if dt then translate_dt else translate) expr in
       [%expr
         let open! NFDSL.O in
         [%e expr]]
@@ -701,10 +733,10 @@ let flatten_str ~loc ~path:_ items =
       Ast_helper.Str.include_
         { pincl_mod = Ast_helper.Mod.structure items; pincl_loc = loc; pincl_attributes = [] }
 
-let translate_str ({ pstr_desc; _ } as str) =
+let translate_str ~dt ({ pstr_desc; _ } as str) =
   match pstr_desc with
   | Pstr_eval (expr, attrs) ->
-      let _, _, expr = translate expr in
+      let expr = if dt then translate_dt expr else translate expr in
       let loc = expr.pexp_loc in
       {
         str with
@@ -718,7 +750,7 @@ let translate_str ({ pstr_desc; _ } as str) =
   | Pstr_value (recf, bindings) ->
       let f vb =
         let loc = vb.pvb_loc in
-        let _, _, v = translate ~desc_label:vb.pvb_pat vb.pvb_expr in
+        let v = (if dt then translate_dt else translate) ~desc_label:vb.pvb_pat vb.pvb_expr in
         {
           vb with
           pvb_expr =
@@ -731,4 +763,7 @@ let translate_str ({ pstr_desc; _ } as str) =
   | _ -> str
 
 let str_expander ~loc ~path (payload : structure_item list) =
-  flatten_str ~loc ~path @@ List.map payload ~f:translate_str
+  flatten_str ~loc ~path @@ List.map payload ~f:(translate_str ~dt:false)
+
+let str_expander_dt ~loc ~path (payload : structure_item list) =
+  flatten_str ~loc ~path @@ List.map payload ~f:(translate_str ~dt:true)
