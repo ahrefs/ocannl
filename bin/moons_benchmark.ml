@@ -71,23 +71,23 @@ let classify_moons executor () =
     refresh_session ();
     Option.value_exn !update_params ();
     if step <= len then (
-      let points = NodeUI.retrieve_2d_points ~xdim:0 ~ydim:1 moons_input.node.node.value in
-      let classes = NodeUI.retrieve_1d_points ~xdim:0 moons_class.node.node.value in
+      let points = value_2d_points ~xdim:0 ~ydim:1 moons_input in
+      let classes = value_1d_points ~xdim:0 moons_class in
       let npoints1, npoints2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
       points1 := npoints1 :: !points1;
       points2 := npoints2 :: !points2);
     if step % 1000 = 0 then (
-      let mlr = NodeUI.retrieve_1d_points ~xdim:0 (Option.value_exn !minus_learning_rate).node.node.value in
+      let mlr = value_1d_points ~xdim:0 @@ Option.value_exn !minus_learning_rate in
       assert (Array.length mlr = 1);
       learning_rates := ~-.(mlr.(0)) :: !learning_rates;
-      let batch_loss = NodeUI.retrieve_1d_points ~xdim:0 total_loss.node.node.value in
+      let batch_loss = value_1d_points ~xdim:0 total_loss in
       assert (Array.length batch_loss = 1);
       losses := batch_loss.(0) :: !losses;
       log_losses := Float.log batch_loss.(0) :: !log_losses;
       if step % 50000 = 0 then (
         Stdio.printf "Minus learning rate over batch for step %d: %f\n%!" step mlr.(0);
         Stdio.printf "Loss over batch for step %d: %f\n%!" step batch_loss.(0);
-        let step_no = NodeUI.retrieve_1d_points ~xdim:0 session_step.node.node.value in
+        let step_no = value_1d_points ~xdim:0 session_step in
         assert (Array.length step_no = 1);
         Stdio.printf "Step index at step %d: %f\n%!" step step_no.(0)))
   done;
@@ -100,7 +100,7 @@ let classify_moons executor () =
       set_from_float point.node.node.value [| 0 |] x;
       set_from_float point.node.node.value [| 1 |] y);
     refresh_session ();
-    let result = NodeUI.retrieve_1d_points ~xdim:0 mlp_result.node.node.value in
+    let result = value_1d_points ~xdim:0 mlp_result in
     Float.(result.(0) >= 0.)
   in
   let plot_moons =

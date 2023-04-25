@@ -365,4 +365,18 @@ module SDSL = struct
   let print_decimals_precision = NodeUI.print_decimals_precision
   let get_root = get_root
   let get_node = get_node
+
+  let value_1d_points ?from_axis ~xdim m =
+    NodeUI.retrieve_1d_points ?from_axis ~xdim m.Formula.node.node.value
+
+  let value_2d_points ?from_axis ~xdim ~ydim m =
+    NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim m.Formula.node.node.value
+
+  let grad_1d_points ?from_axis ~xdim m =
+    let form = m.Formula.node.node.form in
+    match form with None -> [||] | Some f -> NodeUI.retrieve_1d_points ?from_axis ~xdim f.grad
+
+  let grad_2d_points ?from_axis ~xdim ~ydim m =
+    let form = m.Formula.node.node.form in
+    match form with None -> [||] | Some f -> NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim f.grad
 end

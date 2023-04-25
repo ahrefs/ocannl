@@ -43,7 +43,7 @@ let%expect_test "Graph drawing recompile" =
         let setval = compile_routine [%nn_cd x =: !.v] in
         setval ();
         refresh_session ();
-        (NodeUI.retrieve_1d_points ~xdim:0 f.node.node.value).(0))
+        (value_1d_points ~xdim:0 f).(0))
   in
   let plot_box =
     let open PrintBox_utils in
@@ -127,13 +127,13 @@ let%expect_test "Graph drawing fetch" =
   let ys =
     Array.map xs ~f:(fun _ ->
         refresh_session ();
-        (NodeUI.retrieve_1d_points ~xdim:0 fx.node.node.value).(0))
+        (value_1d_points ~xdim:0 fx).(0))
   in
   (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
   let dys =
     Array.map xs ~f:(fun _ ->
         refresh_session ();
-        (NodeUI.retrieve_1d_points ~xdim:0 (Option.value_exn x.node.node.form).grad).(0))
+        (grad_1d_points ~xdim:0 x).(0))
   in
   let plot_box =
     let open PrintBox_utils in

@@ -24,7 +24,7 @@ let recompiling_graph executor opti () =
         let setval = compile_routine [%nn_cd x =: !.v] in
         setval ();
         refresh_session ();
-        (NodeUI.retrieve_1d_points ~xdim:0 f.node.node.value).(0))
+        (value_1d_points ~xdim:0 f).(0))
   in
   let plot_box =
     let open PrintBox_utils in

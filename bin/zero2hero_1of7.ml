@@ -37,13 +37,13 @@ let () =
   let ys =
     Array.map xs ~f:(fun _ ->
         refresh_session ();
-        (NodeUI.retrieve_1d_points ~xdim:0 fx.node.node.value).(0))
+        (value_1d_points ~xdim:0 fx).(0))
   in
   (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
   let dys =
     Array.map xs ~f:(fun _ ->
         refresh_session ();
-        let dy = NodeUI.retrieve_1d_points ~xdim:0 (Option.value_exn x.node.node.form).grad in
+        let dy = grad_1d_points ~xdim:0 x in
         if Array.is_empty dy then 70.0 else dy.(0))
   in
   Stdio.print_endline "\n";
