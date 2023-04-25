@@ -101,13 +101,9 @@ let%expect_test "Micrograd half-moons example" =
   in
   let%nn_op mlp x = "b3" 1 + ("w3" * !/("b2" 16 + ("w2" * !/("b1" 16 + ("w1" * x))))) in
   let steps = epochs * 2 * len / batch in
-  let session_step =
-    FDSL.data ~label:"session_step" ~output_dims:[ 1 ] (fun ~n -> Synthetic [%nn_cd n =+ 1])
-  in
-  minus_learning_rate :=
-    Some
-      (FDSL.data ~label:"minus_lr" ~output_dims:[ 1 ] (fun ~n ->
-           Synthetic [%nn_cd n =: -0.1 *. (!..steps - session_step) /. !..steps]));
+  let%nn_dt session_step ~output_dims:[ 1 ] = n =+ 1 in
+  let%nn_dt minus_lr ~output_dims:[ 1 ] = n =: -0.1 *. (!..steps - session_step) /. !..steps in
+  minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = moons_flat @.| session_step in
   let%nn_op moons_class = moons_classes @.| session_step in
   let points1 = ref [] in
