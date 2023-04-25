@@ -122,7 +122,7 @@ let%expect_test "Graph drawing fetch" =
       ~init_op:(Constant_fill xs) ()
   in
   let session_step =
-    FDSL.data ~label:"session_step" ~batch_dims:[] ~output_dims:[ 1 ] (fun ~n -> Synthetic [%nn_cd n =+ 1])
+    FDSL.data ~label:"session_step" ~output_dims:[ 1 ] (fun ~n -> Synthetic [%nn_cd n =+ 1])
   in
   let%nn_op x = x_flat @.| session_step in
   let%nn_op fx = f x in

@@ -52,11 +52,11 @@ let classify_moons executor () =
           + ("b5" 4 + ("w5" * !/(b4 + (w4 * !/(b3 + (w3 * !/(b2 + (w2 * !/(b1 + (w1 * x)))))))))))
   in
   let session_step =
-    FDSL.data ~label:"session_step" ~batch_dims:[] ~output_dims:[ 1 ] (fun ~n -> Synthetic [%nn_cd n =+ 1])
+    FDSL.data ~label:"session_step" ~output_dims:[ 1 ] (fun ~n -> Synthetic [%nn_cd n =+ 1])
   in
   minus_learning_rate :=
     Some
-      (FDSL.data ~label:"minus_lr" ~batch_dims:[] ~output_dims:[ 1 ] (fun ~n ->
+      (FDSL.data ~label:"minus_lr" ~output_dims:[ 1 ] (fun ~n ->
            Synthetic [%nn_cd n =: -0.1 *. (!..steps - session_step) /. !..steps]));
   let%nn_op moons_input = moons_flat @.| session_step in
   let%nn_op moons_class = moons_classes @.| session_step in

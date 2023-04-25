@@ -189,8 +189,10 @@ let range_of_shape ?desc_label ~is_form ?(batch_dims = []) ?(input_dims = []) ?(
     ~label:("r" ^ NodeUI.dims_to_string dims)
     ~init_op:Range_over_offsets ()
 
-let data ?desc_label ?axis_labels ?(needs_gradient = false) ~label ~batch_dims ~output_dims fetch_op =
-  Formula.term ?desc_label ~label ~is_form:true ~needs_gradient ~batch_dims ~input_dims:[] ~output_dims
+(** In {!Formula.term} the omitted axes are {!Shape.Unknown} -- to be inferred, here they are known and empty.  *)
+let data ?desc_label ?axis_labels ?(needs_gradient = false) ~label ?(batch_dims = []) ?(input_dims = [])
+    ?(output_dims = []) fetch_op =
+  Formula.term ?desc_label ~label ~is_form:true ~needs_gradient ~batch_dims ~input_dims ~output_dims
     ?axis_labels ~fetch_op ()
 
 let assign =
