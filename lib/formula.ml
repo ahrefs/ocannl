@@ -31,14 +31,9 @@ type t = {
 (** Information needed for compositional code generation. The code generation is suspended so that
     it can incorporate inferred shape information. *)
 
-type global_root = {
-  mutable forward_code : Code.program option;
-  mutable backprop_code : Code.program option;
-  formula : t;
-}
-(** A global root is a formula that is not (currently) a subformula of another formula. *)
+(** A global root is a formula that is not (currently) a subformula of another formula.
 
-(** If a formula with [id >= !first_session_id] is not among global roots, it must be a subformula
+    If a formula with [id >= !first_session_id] is not among global roots, it must be a subformula
     of a global root. *)
 let global_roots = ref @@ Map.empty (module Int)
 
@@ -56,7 +51,8 @@ let session_initialized = ref 0
 
 (** This code will be executed on each [Session.refresh_session ~run:true] call ([~run:true]
     is implicit), before any [forward] or [backprop] code. Execution potentially in parallel. *)
-let session_prepare_step : Code.t list ref = ref []
+let session_prepare_forward : Code.t list ref = ref []
+let session_prepare_backprop : Code.t list ref = ref []
 
 (** A current session is the range of nodes from [!first_session_id] to [Node.global.unique_id - 1],
     or an empty range if [!first_session_id = Node.global.unique_id].
@@ -183,7 +179,7 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
     let m2_no_grad = m2_processed || not form2.needs_gradient in
     (if needs_gradient then
        let zero_grads = fetch_zeros ~id `Grad shape in
-       session_prepare_step := zero_grads :: !session_prepare_step);
+       session_prepare_backprop := zero_grads :: !session_prepare_backprop);
     (* The code needs to be included in the reverse order to which it was computed! This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
@@ -210,8 +206,7 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
     let formula =
       { forward_body; form; id; node = n; shape_logic; shape; cross_session_persistent = false }
     in
-    let root = { forward_code = None; backprop_code = None; formula } in
-    global_roots := Map.add_exn !global_roots ~key:id ~data:root;
+    global_roots := Map.add_exn !global_roots ~key:id ~data:formula;
     formula
 
 let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1 : t =
@@ -256,7 +251,7 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
     let m1_no_grad = m1_processed || not form1.needs_gradient in
     (if needs_gradient then
        let zero_grads = fetch_zeros ~id `Grad shape in
-       session_prepare_step := zero_grads :: !session_prepare_step);
+       session_prepare_backprop := zero_grads :: !session_prepare_backprop);
     let grad_body = if needs_gradient then grad_body ~n ~n1 ~projections else Code.Noop in
     let grad_body =
       if form1.needs_gradient then grad_body else Code.remove_updates { id = m1.id; field = `Grad } grad_body
@@ -274,8 +269,7 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
     let formula =
       { forward_body; form; id; node = n; shape_logic; shape; cross_session_persistent = false }
     in
-    let root = { forward_code = None; backprop_code = None; formula } in
-    global_roots := Map.add_exn !global_roots ~key:id ~data:root;
+    global_roots := Map.add_exn !global_roots ~key:id ~data:formula;
     formula
 
 (** A terminal: a constant, a parameter, an input of the model. *)
@@ -306,7 +300,7 @@ let term ~label ?desc_label ?needs_gradient ~is_form ?batch_dims ?input_dims ?ou
       | None -> true
       | Some fetch_op ->
           let fetch = Fetch { tensor = { id; field = `Value }; fetch_op = fetch_op ~n } in
-          session_prepare_step := fetch :: !session_prepare_step;
+          session_prepare_forward := fetch :: !session_prepare_forward;
           false)
   in
   if not is_form then
@@ -320,14 +314,13 @@ let term ~label ?desc_label ?needs_gradient ~is_form ?batch_dims ?input_dims ?ou
     in
     (if needs_gradient then
        let zero_grads = fetch_zeros ~id `Grad shape in
-       session_prepare_step := zero_grads :: !session_prepare_step);
+       session_prepare_backprop := zero_grads :: !session_prepare_backprop);
     let backprop_body = Code.Noop in
     (* Very unlikely someone will want dw/dw. *)
     if needs_gradient then session_initializations := create ~id `Grad shape :: !session_initializations;
     let form = Some { backprop_body; needs_gradient } in
     let formula = { forward_body; form; id; node = n; shape_logic; shape; cross_session_persistent } in
-    let root = { forward_code = None; backprop_code = None; formula } in
-    global_roots := Map.add_exn !global_roots ~key:id ~data:root;
+    global_roots := Map.add_exn !global_roots ~key:id ~data:formula;
     formula
 
 let error_if_unknown_shape m =
@@ -339,27 +332,15 @@ let error_if_unknown_shape m =
       raise @@ Session_error ("Shape of outputs is still empty -- missing shape information", Some m)
   | { input = _; output = _; batch = _; axis_labels = _; deduce_within_shape_constraints = _; id = _ } -> ()
 
-let get_toplevel m =
+let get_toplevel_forward m =
   error_if_unknown_shape m;
-  let open Code in
-  let toplevel_forward =
-    Node_specific
-      {
-        procedure = m.forward_body;
-        routine = { id = m.id; field = `Forward };
-        label = "Forward #" ^ Int.to_string m.id;
-      }
-  in
-  let backprop = Seq (fetch_ones ~id:m.id `Grad m.shape, (Option.value_exn m.form).backprop_body) in
-  let toplevel_backprop =
-    Node_specific
-      {
-        procedure = backprop;
-        routine = { id = m.id; field = `Backprop };
-        label = "Backprop #" ^ Int.to_string m.id;
-      }
-  in
-  (toplevel_forward, toplevel_backprop)
+  Code.Block_comment ("Forward #" ^ Int.to_string m.id, m.forward_body)
+
+let get_toplevel_backprop m =
+  error_if_unknown_shape m;
+  Code.Block_comment
+    ( "Backprop #" ^ Int.to_string m.id,
+      Seq (fetch_ones ~id:m.id `Grad m.shape, (Option.value_exn m.form).backprop_body) )
 
 (* FIXME: not inlining here gives an error about PrintBox.Simple.t_of_sexp missing *)
 type printbox =

@@ -118,30 +118,13 @@ let print_formula ~with_grad ~with_code ?(with_low_level = false) (style : NodeU
     | None -> ());
   Stdio.printf "\n%!"
 
-let print_global_root ~with_grad ~with_code (style : NodeUI.array_print_style) root =
-  let open Formula in
-  print_formula ~with_grad ~with_code:false style root.formula;
-  if with_code then (
-    (match root.forward_code with
-    | None -> ()
-    | Some fwd -> Caml.Format.printf "Forward:@ %a@ " Code.fprint_program fwd);
-    match root.backprop_code with
-    | None -> ()
-    | Some bwd -> Caml.Format.printf "Backprop:@ %a@ " Code.fprint_program bwd);
-  Stdio.printf "\n%!"
-
 let print_global_roots ~with_grad ~with_code (style : NodeUI.array_print_style) =
   let open Formula in
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (id, root) ->
-      assert (id = root.formula.id);
-      print_global_root ~with_grad ~with_code style root)
+      assert (id = root.id);
+      print_formula ~with_grad ~with_code style root)
 
 let print_preamble () = Stdio.printf "%s\n%!" (Formula.prefix_with_preamble "")
-
-let print_session_code () =
-  let open Code in
-  Caml.Format.printf "Step preparation:@ %a" fprint_code (all_parallel !Formula.session_prepare_step);
-  Caml.Format.print_newline ()
 
 (** *** Session management. *** *)
 type backend = Interpreter | OCaml | Gccjit [@@deriving sexp, equal]
@@ -388,7 +371,6 @@ module SDSL = struct
   let session_params = session_params
   let minus_learning_rate = minus_learning_rate
   let update_params = update_params
-  let print_global_root = print_global_root
 
   let print_node_tree ?entries_per_axis ?with_id ?with_value ~with_grad ~depth id =
     PrintBox_text.output Stdio.stdout
