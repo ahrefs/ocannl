@@ -89,21 +89,12 @@ let format_ll_prog (ppf : Caml.Format.formatter) (p : Code.low_level_program) : 
   let open Caml.Format in
   fprintf ppf "@[<v>open Base@ open Ocannl_runtime@ open Node@ open Base.Float@ ";
   match p with
-  | Perform proc -> format_low_level ~as_toplevel:true ppf proc
-  | Assign_routine ({ id; field = `Forward }, proc) ->
-      fprintf ppf "@[<2>let () = (get_form %d).forward :=@ Some (@[<2>fun () ->@ %a@]@,)@]" id
-        (format_low_level ~as_toplevel:false)
-        proc
-  | Assign_routine ({ id; field = `Backprop }, proc) ->
-      fprintf ppf "@[<2>let () = (get_form %d).backprop :=@ Some (@[<2>fun () -> %a@]@,)@]" id
-        (format_low_level ~as_toplevel:false)
-        proc
   | Assign_suspension proc ->
       fprintf ppf "@[<2>let () = most_recent_suspension@ := Some (@[<2>fun () -> %a@]@,)@]"
         (format_low_level ~as_toplevel:false)
         proc
-  | Assign_session_prepare_step proc ->
-      fprintf ppf "@[<2>let () = global.session_prepare_step@ := Some (@[<2>fun () -> %a@]@,)@]"
+  | Assign_session_step_update proc ->
+      fprintf ppf "@[<2>let () = global.session_step_update@ := Some (@[<2>fun () -> %a@]@,)@]"
         (format_low_level ~as_toplevel:false)
         proc
 

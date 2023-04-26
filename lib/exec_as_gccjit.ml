@@ -40,7 +40,7 @@ let get_tensor acc ctx id : tensor =
   | Double_nd arr -> tensor Type.Double true arr
 
 let get_value_tensor = get_tensor (fun n -> n.value)
-let get_grad_tensor = get_tensor (fun n -> (Option.value_exn n.form).grad)
+let get_grad_tensor = get_tensor (fun n -> Option.value_exn n.grad)
 
 let cleanup_session () =
   let open Gccjit in
@@ -218,14 +218,9 @@ let jit_ll_prog ~name ctx prog =
   in
   let open Ocannl_runtime.Node in
   (match prog with
-  | Code.Perform proc -> emit_routine proc "init" ()
-  | Assign_routine ({ id; field = `Forward }, proc) ->
-      (get_form id).forward := Some (emit_routine proc @@ "forward_" ^ Int.to_string id)
-  | Assign_routine ({ id; field = `Backprop }, proc) ->
-      (get_form id).backprop := Some (emit_routine proc @@ "backprop_" ^ Int.to_string id)
-  | Assign_suspension proc -> most_recent_suspension := Some (emit_routine proc @@ "suspension")
-  | Assign_session_prepare_step proc ->
-      global.session_prepare_step := Some (emit_routine proc @@ "prepare_step"));
+  | Code.Assign_suspension proc -> most_recent_suspension := Some (emit_routine proc @@ "suspension")
+  | Assign_session_step_update proc ->
+      global.session_step_update := Some (emit_routine proc @@ "step_update"));
   !msg
 
 let error_message ~name ~prefix ?extra_error_msg ~contents exc =

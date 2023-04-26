@@ -4,7 +4,6 @@ open Base
 (** *** High-level representation. *** *)
 
 type data = { id : int; field : [ `Value | `Grad ] } [@@deriving sexp, equal]
-type routine = { id : int; field : [ `Forward | `Backprop ] } [@@deriving sexp, equal]
 type binop = Add | Mul | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp]
 type unop = Identity | Relu [@@deriving sexp]
 
@@ -53,27 +52,18 @@ and t =
       projections : unit -> Shape.projections;
     }
   | Fetch of { tensor : data; fetch_op : fetch_op }
+  | Block_comment of string * t
   | Noop
 [@@deriving sexp]
 
-(** Dynamically loading a program executes the [Initialization] code, or bounds the [procedure]
-    to [routine] for a node, or bounds a callback to the global routine slot. *)
-type program =
-  | Node_specific of { procedure : t; routine : routine; label : string }
-  | Initialization of t
-  | Suspension of t
-  | Session_prepare_step of t
-[@@deriving sexp]
+(** Dynamically loading a program bounds a callback to one of the two global routine slots:
+    the [session_step_update], or the temporary slot to be read by the caller right after compilation. *)
+type program = Suspension of t | Session_step_update of t [@@deriving sexp]
 
 (** Name of a program that can be used as part of a file name. *)
 let get_name = function
-  | Node_specific { procedure = _; routine = { id; field = `Forward }; label = _ } ->
-      "forward_n" ^ Int.to_string id ^ "_"
-  | Node_specific { procedure = _; routine = { id; field = `Backprop }; label = _ } ->
-      "backprop_n" ^ Int.to_string id ^ "_"
-  | Initialization _ -> "initialization"
   | Suspension _ -> "suspension"
-  | Session_prepare_step _ -> "prepare_step"
+  | Session_step_update _ -> "session_step_update"
 
 type create = { tensor : data; dims : unit -> int array; init_op : init_op }
 (** Information to create a tensor, once its shape is inferred. *)
@@ -97,6 +87,7 @@ let remove_updates data c =
   rm true c
 
 let all_parallel = List.fold ~init:Noop ~f:(fun sts st -> Par (st, sts))
+let sequential = List.fold_right ~init:Noop ~f:(fun sts st -> Seq (st, sts))
 
 (** *** Low-level representation. *)
 
@@ -127,10 +118,8 @@ type _ low_level =
 let is_value_at_node_id = function Value_at_node_id _ -> true | _ -> false
 
 type low_level_program =
-  | Perform of unit low_level
-  | Assign_routine of routine * unit low_level
   | Assign_suspension of unit low_level
-  | Assign_session_prepare_step of unit low_level
+  | Assign_session_step_update of unit low_level
 (* [@@deriving sexp] *)
 
 let data_pointer (xhs : data) =
@@ -207,8 +196,10 @@ let rec to_low_level (code : t) : unit low_level =
       in
       if zero_out then Lines [| to_low_level (Fetch { tensor = lhs; fetch_op = Zeros }); for_loops |]
       else for_loops
+  | Block_comment (s, c) -> Lines [| Comment s; to_low_level c |]
   | Noop -> Lines [||]
   | Par (c1, c2) | ParHint (c1, c2) | Seq (c1, c2) -> (
+      (* TODO: this ignores parallelization altogether, don't! *)
       let ll1 = to_low_level c1 in
       let ll2 = to_low_level c2 in
       match (ll1, ll2) with
@@ -225,11 +216,8 @@ let rec to_low_level (code : t) : unit low_level =
 
 let to_low_level_program prog : low_level_program =
   match prog with
-  | Initialization proc -> Perform (to_low_level proc)
-  | Node_specific { procedure; routine; label } ->
-      Assign_routine (routine, Lines [| Comment label; to_low_level procedure |])
   | Suspension proc -> Assign_suspension (to_low_level proc)
-  | Session_prepare_step proc -> Assign_session_prepare_step (to_low_level proc)
+  | Session_step_update proc -> Assign_session_step_update (to_low_level proc)
 
 let interpreter_print_comments = ref false
 let keep_files_in_run_directory = ref false
@@ -265,16 +253,16 @@ let interpret_llc llc =
         done
     | Fill { tensor = Value_at_node_id id; value } -> fill_from_float (get id).value @@ loop_float env value
     | Fill { tensor = Gradient_at_node_id id; value } ->
-        fill_from_float (get_form id).grad @@ loop_float env value
+        fill_from_float (Option.value_exn (get id).grad) @@ loop_float env value
     | Set (Value_at_node_id id, indices, llv) ->
         set_from_float (get id).value (lookup env indices) @@ loop_float env llv
     | Set (Gradient_at_node_id id, indices, llv) ->
-        set_from_float (get_form id).grad (lookup env indices) @@ loop_float env llv
+        set_from_float (Option.value_exn (get id).grad) (lookup env indices) @@ loop_float env llv
     | Comment message when !with_debug && !interpreter_print_comments -> Stdio.printf "%s\n%!" message
     | Dynamic_indices { tensor = Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
         dynamic_indices env (get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Dynamic_indices { tensor = Gradient_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        dynamic_indices env (get_form id).grad ~tensor_idcs ~dynamic_idcs ~target_dims body
+        dynamic_indices env (Option.value_exn (get id).grad) ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Comment _ -> ()
   and loop_float env llv =
     let open Float in
@@ -282,7 +270,8 @@ let interpret_llc llc =
     match llv with
     | Constant c -> c
     | Get (Value_at_node_id id, indices) -> get_as_float (get id).value @@ lookup env indices
-    | Get (Gradient_at_node_id id, indices) -> get_as_float (get_form id).grad @@ lookup env indices
+    | Get (Gradient_at_node_id id, indices) ->
+        get_as_float (Option.value_exn (get id).grad) @@ lookup env indices
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
     | Binop (Add, llv1, llv2) -> loop llv1 + loop llv2
@@ -307,23 +296,10 @@ let interpret_llc llc =
   loop_proc (Map.empty (module Shape.Symbol)) llc
 
 let interpret_llprog = function
-  | Perform proc -> interpret_llc proc
-  | Assign_routine ({ id; field = `Forward }, proc) ->
-      (Ocannl_runtime.Node.get_form id).forward := Some (fun () -> interpret_llc proc)
-  | Assign_routine ({ id; field = `Backprop }, proc) ->
-      (Ocannl_runtime.Node.get_form id).backprop := Some (fun () -> interpret_llc proc)
   | Assign_suspension proc ->
       Ocannl_runtime.Node.most_recent_suspension := Some (fun () -> interpret_llc proc)
-  | Assign_session_prepare_step proc ->
-      Ocannl_runtime.Node.global.session_prepare_step := Some (fun () -> interpret_llc proc)
-
-let interpret_initialization =
-  let open Ocannl_runtime.Node in
-  List.iter ~f:(function
-    | { tensor = { id; field = `Value }; dims; init_op } ->
-        (get id).value <- create_ndarray Single (dims ()) init_op
-    | { tensor = { id; field = `Grad }; dims; init_op } ->
-        (get_form id).grad <- create_ndarray Single (dims ()) init_op)
+  | Assign_session_step_update proc ->
+      Ocannl_runtime.Node.global.session_step_update := Some (fun () -> interpret_llc proc)
 
 let fprint_code ppf c =
   (* TODO: something nicely concise. *)
