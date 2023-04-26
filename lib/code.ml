@@ -87,7 +87,7 @@ let remove_updates data c =
   rm true c
 
 let all_parallel = List.fold ~init:Noop ~f:(fun sts st -> Par (st, sts))
-let sequential = List.fold_right ~init:Noop ~f:(fun sts st -> Seq (st, sts))
+let sequential = List.fold_right ~init:Noop ~f:(fun st sts -> Seq (st, sts))
 
 (** *** Low-level representation. *)
 
