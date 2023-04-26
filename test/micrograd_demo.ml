@@ -90,15 +90,9 @@ let%expect_test "Micrograd half-moons example" =
             let c = cos v and s = sin v in
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
-  let moons_flat =
-    FDSL.term ~label:"moons_flat" ~batch_dims:[ epochs; batch ] ~input_dims:[] ~output_dims:[ 2 ]
-      ~init_op:(Constant_fill moons_flat) ()
-  in
+  let moons_flat = FDSL.init_const ~l:"moons_flat" ~b:[ epochs; batch ] ~o:[ 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes =
-    FDSL.term ~label:"moons_classes" ~batch_dims:[ epochs; batch ] ~input_dims:[] ~output_dims:[ 1 ]
-      ~init_op:(Constant_fill moons_classes) ()
-  in
+  let moons_classes = FDSL.init_const ~l:"moons_classes" ~b:[ epochs; batch ] ~o:[ 1 ] moons_classes in
   let%nn_op mlp x = "b3" 1 + ("w3" * !/("b2" 16 + ("w2" * !/("b1" 16 + ("w1" * x))))) in
   let steps = epochs * 2 * len / batch in
   let%nn_dt session_step ~output_dims:[ 1 ] = n =+ 1 in

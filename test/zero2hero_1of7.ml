@@ -192,10 +192,7 @@ let%expect_test "Simple gradients" =
   let%nn_op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%nn_op d = e + "c" [ 10 ] in
   let%nn_op l = d *. "f" [ -2 ] in
-  minus_learning_rate :=
-    Some
-      (FDSL.term ~label:"minus_lr" ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ]
-         ~init_op:(Constant_fill [| 0.1 |]) ());
+  minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ 1 ] [| 0.1 |]);
   refresh_session ();
   print_node_tree ~with_grad:true ~depth:9 l.id;
   [%expect

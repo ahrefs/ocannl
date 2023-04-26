@@ -681,16 +681,19 @@ let translate_dt ?desc_label (expr : expression) : expression =
           Ast_builder.Default.pexp_extension ~loc
           @@ Location.error_extensionf ~loc "nn_dt: Multiple specifications for ~label"
         else loop ~label:(pat2string arg) ?batch_dims ?input_dims ?output_dims body
+    | { pexp_desc = Pexp_fun (Labelled "b", None, arg, body); _ }
     | { pexp_desc = Pexp_fun (Labelled "batch_dims", None, arg, body); _ } ->
         if Option.is_some batch_dims then
           Ast_builder.Default.pexp_extension ~loc
           @@ Location.error_extensionf ~loc "nn_dt: Multiple specifications for ~batch_dims"
         else loop ~batch_dims:(pat2expr arg) ?input_dims ?output_dims body
+    | { pexp_desc = Pexp_fun (Labelled "i", None, arg, body); _ }
     | { pexp_desc = Pexp_fun (Labelled "input_dims", None, arg, body); _ } ->
         if Option.is_some input_dims then
           Ast_builder.Default.pexp_extension ~loc
           @@ Location.error_extensionf ~loc "nn_dt: Multiple specifications for ~input_dims"
         else loop ?batch_dims ~input_dims:(pat2expr arg) ?output_dims body
+    | { pexp_desc = Pexp_fun (Labelled "o", None, arg, body); _ }
     | { pexp_desc = Pexp_fun (Labelled "output_dims", None, arg, body); _ } ->
         if Option.is_some output_dims then
           Ast_builder.Default.pexp_extension ~loc
