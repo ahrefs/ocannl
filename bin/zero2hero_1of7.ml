@@ -6,7 +6,7 @@ module NFDSL = Operation.NFDSL
 
 let () = Session.SDSL.set_executor Gccjit
 
-let _suspended () =
+let () =
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;
@@ -14,9 +14,11 @@ let _suspended () =
   refresh_session ();
   Stdio.printf "\n%!";
   print_node_tree ~with_id:true ~with_grad:true ~depth:9 n.id;
+  Stdio.printf "\n%!";
+  print_session_code ();
   Stdio.printf "\n%!"
 
-let () =
+let _suspended () =
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;

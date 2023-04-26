@@ -203,7 +203,7 @@ let generated_session_step_update = ref Code.Noop
 
 let print_session_code () =
   let open Code in
-  Caml.Format.printf "Step preparation:@ %a" fprint_code !generated_session_step_update;
+  Caml.Format.printf "Session step update code:@ %a" fprint_code !generated_session_step_update;
   Caml.Format.print_newline ()
 
 let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_params = true) ?(reinit = false)

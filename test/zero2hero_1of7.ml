@@ -243,7 +243,8 @@ let%expect_test "2D neuron" =
   drop_all_sessions ();
   Random.init 0;
   let%nn_op n = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
-  refresh_session ~update_params:false ();
+  (* No need for [~update_params:false] because we have not set [minus_learning_rate]. *)
+  refresh_session ();
   print_node_tree ~with_grad:true ~depth:9 n.id;
   [%expect
     {|
