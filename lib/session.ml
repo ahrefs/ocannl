@@ -227,7 +227,8 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
     let to_init = num_inits - !session_initialized in
     perform_initialization @@ List.take !session_initializations to_init;
     session_initialized := num_inits);
-  if regenerate || roots_changed || backprop_changed || update_params_changed then (
+  let generating = regenerate || roots_changed || backprop_changed || update_params_changed in
+  if generating then (
     Ocannl_runtime.Node.global.session_step_update := None;
     let open Code in
     let forward =
@@ -256,7 +257,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
       | _ -> Noop
     in
     generated_session_step_update := sequential [ forward; backprop; params_update ]);
-  if (not force_no_init) && (regenerate || roots_changed || backprop_changed || reinit) then
+  if (not force_no_init) && (generating || reinit) then
     dynload_with_handler ~runtime_store:Ocannl_runtime.Node.global.session_step_update
       Code.(Session_step_update !generated_session_step_update);
   if run then
@@ -273,6 +274,8 @@ let close_session () =
   Formula.session_shape_updates := [];
   Formula.session_initializations := [];
   Formula.session_initialized := 0;
+  Formula.session_prepare_forward := [];
+  Formula.session_prepare_backprop := [];
   generated_session_step_update := Noop;
   minus_learning_rate := None;
   !cleanup_executor_session ();
@@ -294,8 +297,8 @@ let drop_session () =
 (** Discards all global state, rolls back [Node.state.unique_id] and [Formula.first_session_id]
     to 1. *)
 let drop_all_sessions () =
-  drop_session ();
   Formula.first_session_id := 1;
+  drop_session ();
   Hashtbl.clear NodeUI.global_node_store;
   Hashtbl.clear Ocannl_runtime.Node.global.node_store;
   Ocannl_runtime.Node.global.unique_id <- 1
