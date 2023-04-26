@@ -37,26 +37,26 @@ let format_low_level ~as_toplevel (ppf : Caml.Format.formatter) (type a) (c : a 
     | For_loop { index = i; from_; to_; body } ->
         fprintf ppf "@[<2>for@ %a = %d@ to %d@ do@ %a@]@ done" pp_symbol i from_ to_ pp_ll body
     | Value_at_node_id id -> fprintf ppf "(get %d).value" id
-    | Gradient_at_node_id id -> fprintf ppf "(get_form %d).grad" id
+    | Gradient_at_node_id id -> fprintf ppf "(Option.value_exn (get %d).grad)" id
     | Fill { tensor = Value_at_node_id id; value } ->
         fprintf ppf "@[<2>fill_from_float (get %d).value@ (%a)@]" id pp_ll value
     | Fill { tensor = Gradient_at_node_id id; value } ->
-        fprintf ppf "@[<2>fill_from_float (get_form %d).grad@ (%a)@]" id pp_ll value
+        fprintf ppf "@[<2>fill_from_float (Option.value_exn (get %d).grad)@ (%a)@]" id pp_ll value
     | Set (Value_at_node_id id, indices, v) ->
         fprintf ppf "@[<2>set_from_float (get %d).value@ (%a)@ (%a)@]" id pp_idcs indices pp_ll v
     | Set (Gradient_at_node_id id, indices, v) ->
-        fprintf ppf "@[<2>set_from_float (get_form %d).grad@ (%a)@ (%a)@]" id pp_idcs indices pp_ll v
+        fprintf ppf "@[<2>set_from_float (Option.value_exn (get %d).grad)@ (%a)@ (%a)@]" id pp_idcs indices pp_ll v
     | Dynamic_indices { tensor = Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
         dynamic_indices ("(get " ^ Int.to_string id ^ ").value") ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Dynamic_indices { tensor = Gradient_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
         dynamic_indices
-          ("(get_form " ^ Int.to_string id ^ ").grad")
+          ("(Option.value_exn (get " ^ Int.to_string id ^ ").grad)")
           ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Get (Value_at_node_id id, indices) ->
         fprintf ppf "@[<2>get_as_float (get %d).value@ (%a)@]" id pp_idcs indices
     | Constant c -> fprintf ppf "(%f)" c
     | Get (Gradient_at_node_id id, indices) ->
-        fprintf ppf "@[<2>get_as_float (get_form %d).grad@ (%a)@]" id pp_idcs indices
+        fprintf ppf "@[<2>get_as_float (Option.value_exn (get %d).grad)@ (%a)@]" id pp_idcs indices
     | Binop (Arg1, v1, _v2) -> pp_ll ppf v1
     | Binop (Arg2, _v1, v2) -> pp_ll ppf v2
     | Binop (Add, v1, v2) -> fprintf ppf "(@[<2>(%a) +@ (%a)@]@,)" pp_ll v1 pp_ll v2
