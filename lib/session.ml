@@ -147,7 +147,6 @@ let print_session_code () =
 (** *** Session management. *** *)
 type backend = Interpreter | OCaml | Gccjit [@@deriving sexp, equal]
 
-let node_fetch_callbacks : (int, Code.fetch_op) Hashtbl.t = Hashtbl.create (module Int)
 let executor = ref Exec_as_gccjit.jit_program
 let executor_error_message = ref Exec_as_gccjit.error_message
 let cleanup_executor_session = ref Exec_as_gccjit.cleanup_session
@@ -232,9 +231,6 @@ let refresh_session ?(regenerate = false) ?(reinit = false) ?(run = true) ?(forc
     Code.interpret_initialization @@ List.take !session_initializations to_init;
     session_initialized := num_inits);
   if regenerate || root_changed then (
-    for i = !Formula.first_session_id to Ocannl_runtime.Node.global.unique_id - 1 do
-      Hashtbl.remove node_fetch_callbacks i
-    done;
     Ocannl_runtime.Node.global.session_prepare_step := None;
     dynload_with_handler ~runtime_store:Ocannl_runtime.Node.global.session_prepare_step
       Code.(Session_prepare_step (all_parallel !session_prepare_step)));
@@ -289,14 +285,12 @@ let drop_session () =
   Formula.session_initializations := [];
   Formula.session_initialized := 0;
   Formula.session_prepare_step := [];
-  Hashtbl.clear node_fetch_callbacks;
   minus_learning_rate := None;
   update_params := None;
   !cleanup_executor_session ();
   for i = !Formula.first_session_id to Ocannl_runtime.Node.global.unique_id - 1 do
     Hashtbl.remove NodeUI.global_node_store i;
-    Hashtbl.remove Ocannl_runtime.Node.global.node_store i;
-    Hashtbl.remove node_fetch_callbacks i
+    Hashtbl.remove Ocannl_runtime.Node.global.node_store i
   done;
   Ocannl_runtime.Node.most_recent_suspension := None;
   Ocannl_runtime.Node.global.session_prepare_step := None;
@@ -311,13 +305,11 @@ let drop_all_sessions () =
   Formula.session_initialized := 0;
   Formula.session_prepare_step := [];
   Formula.first_session_id := 1;
-  Hashtbl.clear node_fetch_callbacks;
   minus_learning_rate := None;
   update_params := None;
   !cleanup_executor_session ();
   Hashtbl.clear NodeUI.global_node_store;
   Hashtbl.clear Ocannl_runtime.Node.global.node_store;
-  Hashtbl.clear node_fetch_callbacks;
   Ocannl_runtime.Node.most_recent_suspension := None;
   Ocannl_runtime.Node.global.session_prepare_step := None;
   Ocannl_runtime.Node.global.unique_id <- 1
@@ -332,7 +324,6 @@ let close_session () =
   Formula.session_initializations := [];
   Formula.session_initialized := 0;
   Formula.session_prepare_step := [];
-  Hashtbl.clear node_fetch_callbacks;
   minus_learning_rate := None;
   update_params := None;
   !cleanup_executor_session ();
