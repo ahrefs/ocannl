@@ -111,7 +111,6 @@ let%expect_test "Micrograd half-moons example" =
   let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..batch) + (0.0001 *. reg_loss) in
   for _step = 1 to steps do
     refresh_session ();
-    Option.value_exn !update_params ();
     let points = value_2d_points ~xdim:0 ~ydim:1 moons_input in
     let classes = value_1d_points ~xdim:0 moons_class in
     let npoints1, npoints2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in

@@ -167,16 +167,19 @@ let dynload_with_handler ~runtime_store code =
         ^ if !Code.with_debug then "" else " (set `Code.CDSL.with_debug := true` for more information)")
   | _ -> ()
 
-let compile_and_run code =
-  (* Since we use [Initialization], this is just to satisfy [dynload_with_handler]. *)
-  let dummy = ref @@ Some (fun () -> ()) in
-  dynload_with_handler ~runtime_store:dummy (Code.Initialization code)
+let perform_initialization =
+  let open Ocannl_runtime.Node in
+  List.iter ~f:(function
+    | { Code.tensor = { id; field = `Value }; dims; init_op } ->
+        (get id).value <- create_ndarray Single (dims ()) init_op
+    | { tensor = { id; field = `Grad }; dims; init_op } ->
+        (get id).grad <- Some (create_ndarray Single (dims ()) init_op))
 
 let compile_routine code =
   let open Formula in
   let num_inits = List.length !session_initializations in
   let to_init = num_inits - !session_initialized in
-  Code.interpret_initialization @@ List.take !session_initializations to_init;
+  perform_initialization @@ List.take !session_initializations to_init;
   session_initialized := num_inits;
   Ocannl_runtime.Node.most_recent_suspension := None;
   dynload_with_handler ~runtime_store:Ocannl_runtime.Node.most_recent_suspension Code.(Suspension code);
@@ -190,111 +193,71 @@ let generate_params_update ~(minus_lr : Formula.t) ?params () =
   let params = match params with Some p -> p | None -> Hashtbl.data @@ session_params () in
   let module CDSL = Code.CDSL in
   let module NFDSL = Operation.NFDSL in
-  compile_routine @@ Code.all_parallel
-  @@ List.map params ~f:(fun n -> [%nn_cd n =+ minus_lr * n.grad ~logic:"."])
+  Code.all_parallel @@ List.map params ~f:(fun n -> [%nn_cd n =+ minus_lr * n.grad ~logic:"."])
 
 let minus_learning_rate : Formula.t option ref = ref None
-let update_params = ref None
+let last_refresh_roots = ref !Formula.global_roots
+let last_with_backprop = ref false
+let generated_session_step_update = ref Code.Noop
 
-let refresh_session ?(regenerate = false) ?(reinit = false) ?(run = true) ?(force_no_init = false) () =
+let print_session_code () =
+  let open Code in
+  Caml.Format.printf "Step preparation:@ %a" fprint_code !generated_session_step_update;
+  Caml.Format.print_newline ()
+
+let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(reinit = false) ?(run = true)
+    ?(force_no_init = false) () =
   let open Formula in
   if force_no_init && (regenerate || reinit || run) then
     invalid_arg "refresh_session: set other triggers to false when using force_no_init";
-  let root_changed =
-    Map.exists !global_roots ~f:(fun root ->
-        Option.is_none root.forward_code || Option.is_none root.backprop_code)
-  in
   (* Initialization and the forward processing. *)
-  if regenerate || root_changed then List.iter !session_shape_updates ~f:Shape.propagate_shapes;
+  let roots_changed = not @@ phys_equal !last_refresh_roots !Formula.global_roots in
+  last_refresh_roots := !Formula.global_roots;
+  let backprop_changed = Bool.(!last_with_backprop <> with_backprop) in
+  last_with_backprop := with_backprop;
+  if regenerate || roots_changed then List.iter !session_shape_updates ~f:Shape.propagate_shapes;
   if regenerate then session_initialized := 0;
-  if (not force_no_init) && (regenerate || reinit || root_changed) then (
+  if (not force_no_init) && (regenerate || reinit || roots_changed) then (
     let num_inits = List.length !session_initializations in
     let to_init = num_inits - !session_initialized in
-    Code.interpret_initialization @@ List.take !session_initializations to_init;
+    perform_initialization @@ List.take !session_initializations to_init;
     session_initialized := num_inits);
-  if regenerate || root_changed then (
-    Ocannl_runtime.Node.global.session_prepare_step := None;
-    dynload_with_handler ~runtime_store:Ocannl_runtime.Node.global.session_prepare_step
-      Code.(Session_prepare_step (all_parallel !session_prepare_step)));
-  (if regenerate || Option.is_none !update_params then
-     match !minus_learning_rate with
-     | None -> ()
-     | Some minus_lr -> update_params := Some (generate_params_update ~minus_lr ()));
-  List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
-      let m = root.formula in
-      let cform = match m.node.node.form with Some form -> form | None -> assert false in
-      if regenerate || Option.is_none root.forward_code || Option.is_none root.backprop_code then (
-        let forward_prog, backprop_prog = get_toplevel m in
-        root.forward_code <- Some forward_prog;
-        cform.forward := None;
-        root.backprop_code <- Some backprop_prog;
-        cform.backprop := None);
-      (if (not force_no_init) && (reinit || Option.is_none !(cform.forward)) then
-         try
-           cform.forward := None;
-           dynload_with_handler ~runtime_store:cform.forward (Option.value_exn root.forward_code)
-         with Session_error (msg, None) ->
-           let msg = "Forward init error: " ^ msg in
-           raise @@ Session_error (msg, Some m));
-      if (not force_no_init) && (reinit || Option.is_none !(cform.backprop)) then (
-        try
-          cform.backprop := None;
-          dynload_with_handler ~runtime_store:cform.backprop (Option.value_exn root.backprop_code)
-        with Session_error (msg, None) ->
-          Caml.Format.printf "Forward code (context for backprop init error):@ %a@\n" Code.fprint_program
-          @@ Option.value_exn root.forward_code;
-          Formula.handle_error ~formula:m @@ "Backprop init error: " ^ msg));
-  if run then (
-    (* Preparation. *)
-    (match !(Ocannl_runtime.Node.global.session_prepare_step) with
+  if regenerate || roots_changed || backprop_changed then (
+    Ocannl_runtime.Node.global.session_step_update := None;
+    let open Code in
+    let forward =
+      Block_comment
+        ( "Forward pass",
+          Seq
+            ( Block_comment ("Prepare forward pass", all_parallel !Formula.session_prepare_forward),
+              sequential
+              @@ List.map (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
+                     get_toplevel_forward root) ) )
+    in
+    let backprop =
+      if not with_backprop then Noop
+      else
+        Block_comment
+          ( "Backprop pass",
+            Seq
+              ( Block_comment ("Prepare backprop pass", all_parallel !Formula.session_prepare_backprop),
+                sequential
+                @@ List.map (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
+                       get_toplevel_backprop root) ) )
+    in
+    let params_update =
+      match (with_backprop, !minus_learning_rate) with
+      | true, Some minus_lr -> Block_comment ("Params update", generate_params_update ~minus_lr ())
+      | _ -> Noop
+    in
+    generated_session_step_update := sequential [ forward; backprop; params_update ]);
+  if (not force_no_init) && (regenerate || roots_changed || backprop_changed || reinit) then
+    dynload_with_handler ~runtime_store:Ocannl_runtime.Node.global.session_step_update
+      Code.(Session_step_update !generated_session_step_update);
+  if run then
+    match !(Ocannl_runtime.Node.global.session_step_update) with
     | None -> assert false
-    | Some prepare -> prepare ());
-    (* Forward propagation. *)
-    List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
-        match !((Option.value_exn root.formula.node.node.form).forward) with
-        | Some forward -> forward ()
-        | None -> assert false);
-    (* The backpropagation. *)
-    List.iter (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
-        let cform = match root.formula.node.node.form with Some form -> form | None -> assert false in
-        Option.value_exn !(cform.backprop) ()))
-
-(** Discards global roots, rolls back [Node.state.unique_id] to [Formula.first_session_id], discards
-    the corresponding elements from [Node.state.node_store]. *)
-let drop_session () =
-  Formula.global_roots := Map.empty (module Int);
-  Formula.session_shape_updates := [];
-  Formula.session_initializations := [];
-  Formula.session_initialized := 0;
-  Formula.session_prepare_step := [];
-  minus_learning_rate := None;
-  update_params := None;
-  !cleanup_executor_session ();
-  for i = !Formula.first_session_id to Ocannl_runtime.Node.global.unique_id - 1 do
-    Hashtbl.remove NodeUI.global_node_store i;
-    Hashtbl.remove Ocannl_runtime.Node.global.node_store i
-  done;
-  Ocannl_runtime.Node.most_recent_suspension := None;
-  Ocannl_runtime.Node.global.session_prepare_step := None;
-  Ocannl_runtime.Node.global.unique_id <- !Formula.first_session_id
-
-(** Discards all global state, rolls back [Node.state.unique_id] and [Formula.first_session_id]
-    to 1. *)
-let drop_all_sessions () =
-  Formula.global_roots := Map.empty (module Int);
-  Formula.session_shape_updates := [];
-  Formula.session_initializations := [];
-  Formula.session_initialized := 0;
-  Formula.session_prepare_step := [];
-  Formula.first_session_id := 1;
-  minus_learning_rate := None;
-  update_params := None;
-  !cleanup_executor_session ();
-  Hashtbl.clear NodeUI.global_node_store;
-  Hashtbl.clear Ocannl_runtime.Node.global.node_store;
-  Ocannl_runtime.Node.most_recent_suspension := None;
-  Ocannl_runtime.Node.global.session_prepare_step := None;
-  Ocannl_runtime.Node.global.unique_id <- 1
+    | Some update -> update ()
 
 (** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id].
     Discards all computations (forward, backward, update params, data fetches), but keeps
@@ -305,12 +268,32 @@ let close_session () =
   Formula.session_shape_updates := [];
   Formula.session_initializations := [];
   Formula.session_initialized := 0;
-  Formula.session_prepare_step := [];
+  generated_session_step_update := Noop;
   minus_learning_rate := None;
-  update_params := None;
   !cleanup_executor_session ();
   Ocannl_runtime.Node.most_recent_suspension := None;
-  Ocannl_runtime.Node.global.session_prepare_step := None
+  Ocannl_runtime.Node.global.session_step_update := None
+
+(** Discards global roots, rolls back [Node.state.unique_id] to [Formula.first_session_id], discards
+    the corresponding elements from [Node.state.node_store]. *)
+let drop_session () =
+  let beginning_of_session = !Formula.first_session_id in
+  close_session ();
+  Formula.first_session_id := beginning_of_session;
+  for i = !Formula.first_session_id to Ocannl_runtime.Node.global.unique_id - 1 do
+    Hashtbl.remove NodeUI.global_node_store i;
+    Hashtbl.remove Ocannl_runtime.Node.global.node_store i
+  done;
+  Ocannl_runtime.Node.global.unique_id <- !Formula.first_session_id
+
+(** Discards all global state, rolls back [Node.state.unique_id] and [Formula.first_session_id]
+    to 1. *)
+let drop_all_sessions () =
+  drop_session ();
+  Formula.first_session_id := 1;
+  Hashtbl.clear NodeUI.global_node_store;
+  Hashtbl.clear Ocannl_runtime.Node.global.node_store;
+  Ocannl_runtime.Node.global.unique_id <- 1
 
 let value_1d_points ?from_axis ~xdim m = NodeUI.retrieve_1d_points ?from_axis ~xdim m.Formula.node.node.value
 
@@ -370,7 +353,6 @@ module SDSL = struct
   let compile_routine = compile_routine
   let session_params = session_params
   let minus_learning_rate = minus_learning_rate
-  let update_params = update_params
 
   let print_node_tree ?entries_per_axis ?with_id ?with_value ~with_grad ~depth id =
     PrintBox_text.output Stdio.stdout

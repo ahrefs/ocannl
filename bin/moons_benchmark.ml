@@ -63,7 +63,6 @@ let classify_moons executor () =
   let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..batch) + (0.001 *. reg_loss) in
   for step = 1 to steps do
     refresh_session ();
-    Option.value_exn !update_params ();
     if step <= len then (
       let points = value_2d_points ~xdim:0 ~ydim:1 moons_input in
       let classes = value_1d_points ~xdim:0 moons_class in

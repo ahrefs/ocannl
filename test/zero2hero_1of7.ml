@@ -193,7 +193,7 @@ let%expect_test "Simple gradients" =
   let%nn_op d = e + "c" [ 10 ] in
   let%nn_op l = d *. "f" [ -2 ] in
   minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ 1 ] [| 0.1 |]);
-  refresh_session ();
+  refresh_session ~with_backprop:false ();
   print_node_tree ~with_grad:true ~depth:9 l.id;
   [%expect
     {|
@@ -213,8 +213,7 @@ let%expect_test "Simple gradients" =
      2.00e+0 │ -3.00e+0 │          │
     Gradient │Gradient  │          │
      6.00e+0 │ -4.00e+0 │          │ |}];
-  Option.value_exn !update_params ();
-  refresh_session ();
+  refresh_session ~with_backprop:true ();
   print_node_tree ~with_grad:true ~depth:9 l.id;
   [%expect
     {|
