@@ -123,24 +123,18 @@ let%expect_test "Micrograd half-moons example" =
     let npoints1, npoints2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
     points1 := npoints1 :: !points1;
     points2 := npoints2 :: !points2;
-    let mlr = value_1d_points ~xdim:0 @@ Option.value_exn !minus_learning_rate in
-    assert (Array.length mlr = 1);
-    learning_rates := ~-.(mlr.(0)) :: !learning_rates;
-    let batch_loss = value_1d_points ~xdim:0 total_loss in
-    assert (Array.length batch_loss = 1);
-    losses := batch_loss.(0) :: !losses;
-    log_losses := Float.log batch_loss.(0) :: !log_losses
+    learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
+    losses := total_loss.@[0] :: !losses;
+    log_losses := Float.log total_loss.@[0] :: !log_losses
   done;
   close_session ();
   let%nn_op point = [ 0; 0 ] in
   let mlp_result = mlp point in
   refresh_session ();
   let callback (x, y) =
-    set_value point [| 0 |] x;
-    set_value point [| 1 |] y;
+    set_values point [| x; y |];
     refresh_session ();
-    let result = value_1d_points ~xdim:0 mlp_result in
-    Float.(result.(0) >= 0.)
+    Float.(mlp_result.@[0] >= 0.)
   in
   let plot_moons =
     let open PrintBox_utils in

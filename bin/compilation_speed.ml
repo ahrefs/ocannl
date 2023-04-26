@@ -21,10 +21,9 @@ let recompiling_graph executor opti () =
   let xs = Array.init 100 ~f:Float.(fun i -> of_int i - 50.) in
   let ys =
     Array.map xs ~f:(fun v ->
-        let setval = compile_routine [%nn_cd x =: !.v] in
-        setval ();
+        compile_routine [%nn_cd x =: !.v] ();
         refresh_session ();
-        (value_1d_points ~xdim:0 f).(0))
+        f.@[0])
   in
   let plot_box =
     let open PrintBox_utils in

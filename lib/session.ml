@@ -339,8 +339,55 @@ let close_session () =
   Ocannl_runtime.Node.most_recent_suspension := None;
   Ocannl_runtime.Node.global.session_prepare_step := None
 
+let value_1d_points ?from_axis ~xdim m = NodeUI.retrieve_1d_points ?from_axis ~xdim m.Formula.node.node.value
+
+let value_2d_points ?from_axis ~xdim ~ydim m =
+  NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim m.Formula.node.node.value
+
+let grad_1d_points ?from_axis ~xdim m =
+  let form = m.Formula.node.node.form in
+  match form with None -> [||] | Some f -> NodeUI.retrieve_1d_points ?from_axis ~xdim f.grad
+
+let grad_2d_points ?from_axis ~xdim ~ydim m =
+  let form = m.Formula.node.node.form in
+  match form with None -> [||] | Some f -> NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim f.grad
+
+let set_value m = Ocannl_runtime.Node.set_from_float m.Formula.node.node.value
+let get_value m = Ocannl_runtime.Node.get_as_float m.Formula.node.node.value
+let set_grad m = Ocannl_runtime.Node.set_from_float (Option.value_exn m.Formula.node.node.form).grad
+let get_grad m = Ocannl_runtime.Node.get_as_float (Option.value_exn m.Formula.node.node.form).grad
+
+module O = struct
+  (** Get the value at the given indices. *)
+  let ( .@{} ) = get_value
+
+  (** Set the value at the given indices. *)
+  let ( .@{}<- ) = set_value
+
+  (** Get the gradient at the given indices. *)
+  let ( .@%{} ) = get_grad
+
+  (** Set the gradient at the given indices. *)
+  let ( .@%{}<- ) = set_grad
+
+  (** Get the value at the given index from a single-axis shape formula. *)
+  let ( .@[] ) m indx = get_value m [| indx |]
+
+  (** Set the value at the given index for a single-axis shape formula. *)
+  let ( .@[]<- ) m indx = set_value m [| indx |]
+
+  (** Get the gradient at the given index from a single-axis shape formula. *)
+  let ( .@%[] ) m indx = get_grad m [| indx |]
+
+  (** Set the gradient at the given index for a single-axis shape formula. *)
+  let ( .@%[]<- ) m indx = set_grad m [| indx |]
+end
+
 module SDSL = struct
   type nonrec backend = backend = Interpreter | OCaml | Gccjit
+
+  include O
+  (** Including the accessors since it is unlikely they will conflict with other modules. *)
 
   let set_executor = set_executor
   let refresh_session = refresh_session
@@ -365,6 +412,10 @@ module SDSL = struct
   let print_decimals_precision = NodeUI.print_decimals_precision
   let get_root = get_root
   let get_node = get_node
+  let set_values m cs = Ocannl_runtime.Node.(init_ndarray (Constant_fill cs) m.Formula.node.node.value)
+
+  let set_grads m cs =
+    Ocannl_runtime.Node.(init_ndarray (Constant_fill cs) (Option.value_exn m.Formula.node.node.form).grad)
 
   let value_1d_points ?from_axis ~xdim m =
     NodeUI.retrieve_1d_points ?from_axis ~xdim m.Formula.node.node.value
@@ -379,6 +430,4 @@ module SDSL = struct
   let grad_2d_points ?from_axis ~xdim ~ydim m =
     let form = m.Formula.node.node.form in
     match form with None -> [||] | Some f -> NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim f.grad
-
-  let set_value m = Ocannl_runtime.Node.set_from_float m.Formula.node.node.value
 end

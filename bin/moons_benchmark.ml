@@ -77,30 +77,22 @@ let classify_moons executor () =
       points1 := npoints1 :: !points1;
       points2 := npoints2 :: !points2);
     if step % 1000 = 0 then (
-      let mlr = value_1d_points ~xdim:0 @@ Option.value_exn !minus_learning_rate in
-      assert (Array.length mlr = 1);
-      learning_rates := ~-.(mlr.(0)) :: !learning_rates;
-      let batch_loss = value_1d_points ~xdim:0 total_loss in
-      assert (Array.length batch_loss = 1);
-      losses := batch_loss.(0) :: !losses;
-      log_losses := Float.log batch_loss.(0) :: !log_losses;
+      learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
+      losses := total_loss.@[0] :: !losses;
+      log_losses := Float.log total_loss.@[0] :: !log_losses;
       if step % 50000 = 0 then (
-        Stdio.printf "Minus learning rate over batch for step %d: %f\n%!" step mlr.(0);
-        Stdio.printf "Loss over batch for step %d: %f\n%!" step batch_loss.(0);
-        let step_no = value_1d_points ~xdim:0 session_step in
-        assert (Array.length step_no = 1);
-        Stdio.printf "Step index at step %d: %f\n%!" step step_no.(0)))
+        Stdio.printf "Minus learning rate over batch for step %d: %f\n%!" step minus_lr.@[0];
+        Stdio.printf "Loss over batch for step %d: %f\n%!" step total_loss.@[0];
+        Stdio.printf "Step index at step %d: %f\n%!" step session_step.@[0]))
   done;
   close_session ();
   let%nn_op point = [ 0; 0 ] in
   let mlp_result = mlp point in
   refresh_session ();
   let callback (x, y) =
-    set_value point [| 0 |] x;
-    set_value point [| 1 |] y;
+    set_values point [| x; y |];
     refresh_session ();
-    let result = value_1d_points ~xdim:0 mlp_result in
-    Float.(result.(0) >= 0.)
+    Float.(mlp_result.@[0] >= 0.)
   in
   let plot_moons =
     let open PrintBox_utils in

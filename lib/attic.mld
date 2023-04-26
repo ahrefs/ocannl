@@ -226,6 +226,44 @@ type nulop =
     │└──────┴─────────────────────────────────────────────┴─────────────────────────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
 
+
+
+
+  (** Extract the values along the first batch axis, keeping the other axes fixed. *)
+  let ( .:|{} ) = get_value_along_axis ~over_kind:Shape.AxisKey.Batch ~from_left:true
+
+  (** Extract the values along the first input axis, keeping the other axes fixed. *)
+  let ( .:/{} ) = get_value_along_axis ~over_kind:Shape.AxisKey.Input ~from_left:true
+
+  (** Extract the values along the first output axis, keeping the other axes fixed. *)
+  let ( .:-{} ) = get_value_along_axis ~over_kind:Shape.AxisKey.Output ~from_left:true
+
+  (** Extract the values along the last batch axis, keeping the other axes fixed. *)
+  let ( .|:{} ) = get_value_along_axis ~over_kind:Shape.AxisKey.Batch ~from_left:false
+
+  (** Extract the values along the last input axis, keeping the other axes fixed. *)
+  let ( ./:{} ) = get_value_along_axis ~over_kind:Shape.AxisKey.Input ~from_left:false
+
+  (** Extract the values along the last output axis, keeping the other axes fixed. *)
+  let ( .-:{} ) = get_value_along_axis ~over_kind:Shape.AxisKey.Output ~from_left:false
+
+  (** Set the values along the first batch axis, keeping the other axes fixed. *)
+  let ( .:|{}<- ) = set_value_along_axis ~over_kind:Shape.AxisKey.Batch ~from_left:true
+
+  (** Set the values along the first input axis, keeping the other axes fixed. *)
+  let ( .:/{}<- ) = set_value_along_axis ~over_kind:Shape.AxisKey.Input ~from_left:true
+
+  (** Set the values along the first output axis, keeping the other axes fixed. *)
+  let ( .:-{}<- ) = set_value_along_axis ~over_kind:Shape.AxisKey.Output ~from_left:true
+
+  (** Set the values along the last batch axis, keeping the other axes fixed. *)
+  let ( .|:{}<- ) = set_value_along_axis ~over_kind:Shape.AxisKey.Batch ~from_left:false
+
+  (** Set the values along the last input axis, keeping the other axes fixed. *)
+  let ( ./:{}<- ) = set_value_along_axis ~over_kind:Shape.AxisKey.Input ~from_left:false
+
+  (** Set the values along the last output axis, keeping the other axes fixed. *)
+  let ( .-:{}<- ) = set_value_along_axis ~over_kind:Shape.AxisKey.Output ~from_left:false
+
+
 ]}
-File "lib/shape.ml", lines 900-1131, characters 2-81:
-File "lib/shape.ml", line 747, characters 2-39:

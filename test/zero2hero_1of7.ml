@@ -40,10 +40,9 @@ let%expect_test "Graph drawing recompile" =
   let ys =
     Array.map xs ~f:(fun v ->
         (* This is inefficient because it compiles the argument update inside the loop. *)
-        let setval = compile_routine [%nn_cd x =: !.v] in
-        setval ();
+        compile_routine [%nn_cd x =: !.v] ();
         refresh_session ();
-        (value_1d_points ~xdim:0 f).(0))
+        f.@[0])
   in
   let plot_box =
     let open PrintBox_utils in
@@ -127,13 +126,13 @@ let%expect_test "Graph drawing fetch" =
   let ys =
     Array.map xs ~f:(fun _ ->
         refresh_session ();
-        (value_1d_points ~xdim:0 fx).(0))
+        fx.@[0])
   in
   (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
   let dys =
     Array.map xs ~f:(fun _ ->
         refresh_session ();
-        (grad_1d_points ~xdim:0 x).(0))
+        x.@%[0])
   in
   let plot_box =
     let open PrintBox_utils in

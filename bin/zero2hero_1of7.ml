@@ -37,14 +37,13 @@ let () =
   let ys =
     Array.map xs ~f:(fun _ ->
         refresh_session ();
-        (value_1d_points ~xdim:0 fx).(0))
+        fx.@[0])
   in
   (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
   let dys =
     Array.map xs ~f:(fun _ ->
         refresh_session ();
-        let dy = grad_1d_points ~xdim:0 x in
-        if Array.is_empty dy then 70.0 else dy.(0))
+        x.@%[0])
   in
   Stdio.print_endline "\n";
   print_preamble ();
