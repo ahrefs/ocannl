@@ -198,6 +198,7 @@ let generate_params_update ~(minus_lr : Formula.t) ?params () =
 let minus_learning_rate : Formula.t option ref = ref None
 let last_refresh_roots = ref !Formula.global_roots
 let last_with_backprop = ref false
+let last_update_params = ref false
 let generated_session_step_update = ref Code.Noop
 
 let print_session_code () =
@@ -205,24 +206,28 @@ let print_session_code () =
   Caml.Format.printf "Step preparation:@ %a" fprint_code !generated_session_step_update;
   Caml.Format.print_newline ()
 
-let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(reinit = false) ?(run = true)
-    ?(force_no_init = false) () =
+let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_params = true) ?(reinit = false)
+    ?(run = true) ?(force_no_init = false) () =
   let open Formula in
-  if force_no_init && (regenerate || reinit || run) then
-    invalid_arg "refresh_session: set other triggers to false when using force_no_init";
+  if force_no_init && reinit then
+    invalid_arg "refresh_session: ~force_no_init conflicts with ~reinit";
+  if update_params && not with_backprop then
+    invalid_arg "refresh_session: ~update_params:true requires ~with_backprop:true";
   (* Initialization and the forward processing. *)
   let roots_changed = not @@ phys_equal !last_refresh_roots !Formula.global_roots in
   last_refresh_roots := !Formula.global_roots;
   let backprop_changed = Bool.(!last_with_backprop <> with_backprop) in
   last_with_backprop := with_backprop;
+  let update_params_changed = Bool.(!last_update_params <> update_params) in
+  last_update_params := update_params;
   if regenerate || roots_changed then List.iter !session_shape_updates ~f:Shape.propagate_shapes;
   if regenerate then session_initialized := 0;
-  if (not force_no_init) && (regenerate || reinit || roots_changed) then (
+  if regenerate || reinit || roots_changed then (
     let num_inits = List.length !session_initializations in
     let to_init = num_inits - !session_initialized in
     perform_initialization @@ List.take !session_initializations to_init;
     session_initialized := num_inits);
-  if regenerate || roots_changed || backprop_changed then (
+  if regenerate || roots_changed || backprop_changed || update_params_changed then (
     Ocannl_runtime.Node.global.session_step_update := None;
     let open Code in
     let forward =
@@ -246,7 +251,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(reinit = fal
                        get_toplevel_backprop root) ) )
     in
     let params_update =
-      match (with_backprop, !minus_learning_rate) with
+      match (update_params, !minus_learning_rate) with
       | true, Some minus_lr -> Block_comment ("Params update", generate_params_update ~minus_lr ())
       | _ -> Noop
     in
@@ -378,8 +383,12 @@ module SDSL = struct
     NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim m.Formula.node.node.value
 
   let grad_1d_points ?from_axis ~xdim m =
-    match m.Formula.node.node.grad with None -> [||] | Some a -> NodeUI.retrieve_1d_points ?from_axis ~xdim a
+    match m.Formula.node.node.grad with
+    | None -> [||]
+    | Some a -> NodeUI.retrieve_1d_points ?from_axis ~xdim a
 
   let grad_2d_points ?from_axis ~xdim ~ydim m =
-    match m.Formula.node.node.grad with None -> [||] | Some a -> NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim a
+    match m.Formula.node.node.grad with
+    | None -> [||]
+    | Some a -> NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim a
 end
