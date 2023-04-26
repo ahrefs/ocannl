@@ -379,4 +379,6 @@ module SDSL = struct
   let grad_2d_points ?from_axis ~xdim ~ydim m =
     let form = m.Formula.node.node.form in
     match form with None -> [||] | Some f -> NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim f.grad
+
+  let set_value m = Ocannl_runtime.Node.set_from_float m.Formula.node.node.value
 end

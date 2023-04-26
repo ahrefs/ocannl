@@ -136,9 +136,8 @@ let%expect_test "Micrograd half-moons example" =
   let mlp_result = mlp point in
   refresh_session ();
   let callback (x, y) =
-    Ocannl_runtime.Node.(
-      set_from_float point.node.node.value [| 0 |] x;
-      set_from_float point.node.node.value [| 1 |] y);
+    set_value point [| 0 |] x;
+    set_value point [| 1 |] y;
     refresh_session ();
     let result = value_1d_points ~xdim:0 mlp_result in
     Float.(result.(0) >= 0.)
