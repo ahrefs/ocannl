@@ -89,14 +89,13 @@ let print_formula ~with_grad ~with_code ?(with_low_level = false) (style : NodeU
       NodeUI.pp_tensor Caml.Format.std_formatter ~prefix ~labels ~indices m.node.node.value;
       Caml.Format.print_newline ());
   (if with_grad then
-     match (style, m.node.node.form) with
-     | `Inline, Some cform ->
+     match (style, m.node.node.grad) with
+     | `Inline, Some grad ->
          NodeUI.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
-           ?labels_spec cform.grad;
+           ?labels_spec grad;
          Caml.Format.print_newline ()
-     | _, Some cform ->
-         NodeUI.pp_tensor Caml.Format.std_formatter ~prefix:(prefix ^ " Gradient ") ~labels ~indices
-           cform.grad;
+     | _, Some grad ->
+         NodeUI.pp_tensor Caml.Format.std_formatter ~prefix:(prefix ^ " Gradient ") ~labels ~indices grad;
          Caml.Format.print_newline ()
      | _ -> ());
   if with_code then (
@@ -336,17 +335,17 @@ let value_2d_points ?from_axis ~xdim ~ydim m =
   NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim m.Formula.node.node.value
 
 let grad_1d_points ?from_axis ~xdim m =
-  let form = m.Formula.node.node.form in
-  match form with None -> [||] | Some f -> NodeUI.retrieve_1d_points ?from_axis ~xdim f.grad
+  match m.Formula.node.node.grad with None -> [||] | Some a -> NodeUI.retrieve_1d_points ?from_axis ~xdim a
 
 let grad_2d_points ?from_axis ~xdim ~ydim m =
-  let form = m.Formula.node.node.form in
-  match form with None -> [||] | Some f -> NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim f.grad
+  match m.Formula.node.node.grad with
+  | None -> [||]
+  | Some a -> NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim a
 
 let set_value m = Ocannl_runtime.Node.set_from_float m.Formula.node.node.value
 let get_value m = Ocannl_runtime.Node.get_as_float m.Formula.node.node.value
-let set_grad m = Ocannl_runtime.Node.set_from_float (Option.value_exn m.Formula.node.node.form).grad
-let get_grad m = Ocannl_runtime.Node.get_as_float (Option.value_exn m.Formula.node.node.form).grad
+let set_grad m = Ocannl_runtime.Node.set_from_float (Option.value_exn m.Formula.node.node.grad)
+let get_grad m = Ocannl_runtime.Node.get_as_float (Option.value_exn m.Formula.node.node.grad)
 
 module O = struct
   (** Get the value at the given indices. *)
@@ -406,7 +405,7 @@ module SDSL = struct
   let set_values m cs = Ocannl_runtime.Node.(init_ndarray (Constant_fill cs) m.Formula.node.node.value)
 
   let set_grads m cs =
-    Ocannl_runtime.Node.(init_ndarray (Constant_fill cs) (Option.value_exn m.Formula.node.node.form).grad)
+    Ocannl_runtime.Node.(init_ndarray (Constant_fill cs) (Option.value_exn m.Formula.node.node.grad))
 
   let value_1d_points ?from_axis ~xdim m =
     NodeUI.retrieve_1d_points ?from_axis ~xdim m.Formula.node.node.value
@@ -415,10 +414,8 @@ module SDSL = struct
     NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim m.Formula.node.node.value
 
   let grad_1d_points ?from_axis ~xdim m =
-    let form = m.Formula.node.node.form in
-    match form with None -> [||] | Some f -> NodeUI.retrieve_1d_points ?from_axis ~xdim f.grad
+    match m.Formula.node.node.grad with None -> [||] | Some a -> NodeUI.retrieve_1d_points ?from_axis ~xdim a
 
   let grad_2d_points ?from_axis ~xdim ~ydim m =
-    let form = m.Formula.node.node.form in
-    match form with None -> [||] | Some f -> NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim f.grad
+    match m.Formula.node.node.grad with None -> [||] | Some a -> NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim a
 end

@@ -31,10 +31,10 @@ let create (type grad_arr_t value_arr_t) ~(value_prec : ('a, value_arr_t) Node.p
   data
 
 let create_of_same_precision_as ~is_form (node : Node.t) =
-  match (node.value, node.form) with
-  | Single_nd _, Some { grad = Single_nd _; _ } -> create ~value_prec:Single ~grad_prec:Single ~is_form ()
-  | Single_nd _, Some { grad = Double_nd _; _ } -> create ~value_prec:Single ~grad_prec:Double ~is_form ()
-  | Double_nd _, Some { grad = Double_nd _; _ } -> create ~value_prec:Double ~grad_prec:Double ~is_form ()
+  match (node.value, node.grad) with
+  | Single_nd _, Some (Single_nd _) -> create ~value_prec:Single ~grad_prec:Single ~is_form ()
+  | Single_nd _, Some (Double_nd _) -> create ~value_prec:Single ~grad_prec:Double ~is_form ()
+  | Double_nd _, Some (Double_nd _) -> create ~value_prec:Double ~grad_prec:Double ~is_form ()
   | Single_nd _, None ->
       if is_form then
         invalid_arg @@ "create_of_same_precision_as: ~is_form:true but a non-form subnode ["
@@ -45,7 +45,7 @@ let create_of_same_precision_as ~is_form (node : Node.t) =
         invalid_arg @@ "create_of_same_precision_as: ~is_form:true but a non-form subnode ["
         ^ Int.to_string node.id
       else create ~value_prec:Double ~is_form:false ()
-  | _, Some { grad; _ } ->
+  | _, Some grad ->
       invalid_arg @@ "create_of_same_precision_as: unsupported combination of precisions value: "
       ^ Node.ndarray_precision_to_string node.value
       ^ ", grad: "
@@ -57,28 +57,30 @@ let create_of_same_precision_as ~is_form (node : Node.t) =
 let create_of_promoted_precision ~is_form (n1 : Node.t) (n2 : Node.t) =
   match (n1.value, n2.value) with
   | Single_nd _, Single_nd _ -> (
-      match (n1.form, n2.form) with
-      | Some { grad = Single_nd _; _ }, Some { grad = Single_nd _; _ } ->
-          create ~value_prec:Single ~grad_prec:Single ~is_form ()
-      | Some { grad = Single_nd _; _ }, Some { grad = Double_nd _; _ }
-      | Some { grad = Double_nd _; _ }, Some { grad = Single_nd _; _ }
-      | Some { grad = Double_nd _; _ }, Some { grad = Double_nd _; _ } ->
+      match (n1.grad, n2.grad) with
+      | Some (Single_nd _), Some (Single_nd _) -> create ~value_prec:Single ~grad_prec:Single ~is_form ()
+      | Some (Single_nd _), Some (Double_nd _)
+      | Some (Double_nd _), Some (Single_nd _)
+      | Some (Double_nd _), Some (Double_nd _) ->
           create ~value_prec:Single ~grad_prec:Double ~is_form ()
       | None, _ | _, None ->
           if is_form then
             invalid_arg @@ "create_of_promoted_precision: ~is_form:true but a non-form subnode ["
             ^ Int.to_string n1.id ^ "] or [" ^ Int.to_string n2.id ^ "]"
           else create ~value_prec:Single ~is_form:false ()
-      | Some { grad = n1grad; _ }, Some { grad = n2grad; _ } ->
+      | Some n1grad, Some n2grad ->
           invalid_arg @@ "create_of_promoted_precision: unsupported combination of precisions n1 grad: "
           ^ Node.ndarray_precision_to_string n1grad
           ^ ", n2 grad: "
           ^ Node.ndarray_precision_to_string n2grad)
   | (Single_nd _, Double_nd _ | Double_nd _, Single_nd _ | Double_nd _, Double_nd _)
-    when Option.is_some n1.form || Option.is_some n2.form ->
-      create ~value_prec:Double ~grad_prec:Double ~is_form:true ()
+    when Option.is_some n1.grad || Option.is_some n2.grad ->
+      create ~value_prec:Double ~grad_prec:Double ~is_form ()
   | Single_nd _, Double_nd _ | Double_nd _, Single_nd _ | Double_nd _, Double_nd _ ->
-      create ~value_prec:Double ~is_form:false ()
+      if is_form then
+        invalid_arg @@ "create_of_promoted_precision: ~is_form:true but a non-form subnode ["
+        ^ Int.to_string n1.id ^ "] or [" ^ Int.to_string n2.id ^ "]"
+      else create ~value_prec:Double ~is_form:false ()
   | _ ->
       invalid_arg @@ "create_of_promoted_precision: unsupported combination of precisions n1 value: "
       ^ Node.ndarray_precision_to_string n1.value
@@ -88,7 +90,7 @@ let create_of_promoted_precision ~is_form (n1 : Node.t) (n2 : Node.t) =
 let param_nodes ?(from_id = 0) () =
   Hashtbl.filter global_node_store ~f:(fun n ->
       n.node.id >= from_id && List.is_empty n.children
-      && Option.exists n.node.form ~f:(fun form -> not @@ Array.is_empty @@ Node.dims form.grad))
+      && Option.exists n.node.grad ~f:(fun grad -> not @@ Array.is_empty @@ Node.dims grad))
 
 let retrieve_2d_points ?from_axis ~xdim ~ydim arr =
   let dims = Node.dims arr in
@@ -163,7 +165,7 @@ let node_header n =
   let open Node in
   let v_dims_s = ndarray_dims_to_string n.node.value in
   let g_dims_s =
-    match n.node.form with None -> "<no-form>" | Some form -> ndarray_dims_to_string form.grad
+    match n.node.grad with None -> "<no-grad>" | Some grad -> ndarray_dims_to_string grad
   in
   let dims_s =
     if String.equal v_dims_s g_dims_s then "dims " ^ v_dims_s
@@ -410,7 +412,7 @@ let to_dag ?entries_per_axis ~with_id ~with_value ~with_grad n_id =
     let prefix = "[" ^ id ^ "] " ^ desc_l ^ op_l in
     let labels = Shape.axis_map_to_dims_index ~default:"" n.shape.axis_labels in
     let indices = default_display_indices n.shape in
-    match (computed_externally, with_value, with_grad, n.node.form) with
+    match (computed_externally, with_value, with_grad, n.node.grad) with
     | true, _, _, _ -> `Embed_subtree_ID (Int.to_string sub_node_id)
     | _, false, false, _ | _, false, true, None ->
         let txt = if with_id then prefix else desc_l ^ n.op_label in
@@ -418,15 +420,15 @@ let to_dag ?entries_per_axis ~with_id ~with_value ~with_grad n_id =
     | _, true, false, _ | _, true, true, None ->
         let node = `Box (render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices n.node.value) in
         `Subtree_with_ID (id, `Tree (node, children))
-    | _, false, true, Some form ->
+    | _, false, true, Some grad ->
         let prefix = prefix ^ " Gradient" in
-        let node = `Box (render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices form.grad) in
+        let node = `Box (render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices grad) in
         `Subtree_with_ID (id, `Tree (node, children))
-    | _, true, true, Some form ->
+    | _, true, true, Some grad ->
         let node =
           let value = render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices n.node.value in
           let grad =
-            render_tensor ~brief:true ~prefix:"Gradient" ?entries_per_axis ~labels ~indices form.grad
+            render_tensor ~brief:true ~prefix:"Gradient" ?entries_per_axis ~labels ~indices grad
           in
           `Vlist (false, [ `Box value; `Box grad ])
         in

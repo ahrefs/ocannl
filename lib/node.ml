@@ -186,17 +186,7 @@ let loop_bigarray arr ~f =
 
 let empty prec = create_array prec [||] (Constant_fill [| 0.0 |])
 
-type form = {
-  mutable grad : ndarray;
-  forward : (unit -> unit) option ref;
-  backprop : (unit -> unit) option ref;
-}
-[@@deriving sexp_of]
-(** Nodes that can potentially be root formulas. *)
-
-type t = { mutable value : ndarray; form : form option; id : int } [@@deriving sexp_of]
-(** Non-form nodes can only be parts of other computations. They cannot have gradients.
-    But they participate in shape inference etc. *)
+type t = { mutable value : ndarray; mutable grad : ndarray option; id : int } [@@deriving sexp_of]
 
 exception Runtime_error of string * t option
 
@@ -205,18 +195,17 @@ let most_recent_suspension : (unit -> unit) option ref = ref None
 type state = {
   mutable unique_id : int;
   node_store : (int, t) Hashtbl.t;
-  session_prepare_step : (unit -> unit) option ref;
+  session_step_update : (unit -> unit) option ref;
 }
 
 let global =
   {
     unique_id = 1;
     node_store = Hashtbl.create (module Int);
-    session_prepare_step = ref @@ Some (fun () -> ());
+    session_step_update = ref @@ Some (fun () -> ());
   }
 
 let get uid = Hashtbl.find_exn global.node_store uid
-let get_form uid = Option.value_exn ~message:"get_form: not a form node" (get uid).form
 
 let get_value (type val_t arr_t) (prec : (val_t, arr_t) precision) uid : arr_t =
   let n = Hashtbl.find_exn global.node_store uid in
@@ -234,12 +223,12 @@ let get_value (type val_t arr_t) (prec : (val_t, arr_t) precision) uid : arr_t =
 
 let get_grad (type val_t arr_t) (prec : (val_t, arr_t) precision) uid : arr_t =
   let n = Hashtbl.find_exn global.node_store uid in
-  match (prec, n.form) with
-  | Byte_as_int, Some { grad = Byte_as_int_nd arr; _ } -> arr
-  | Half_as_int, Some { grad = Half_as_int_nd arr; _ } -> arr
-  | Single, Some { grad = Single_nd arr; _ } -> arr
-  | Double, Some { grad = Double_nd arr; _ } -> arr
-  | _, Some { grad = arr; _ } ->
+  match (prec, n.grad) with
+  | Byte_as_int, Some (Byte_as_int_nd arr) -> arr
+  | Half_as_int, Some (Half_as_int_nd arr) -> arr
+  | Single, Some (Single_nd arr) -> arr
+  | Double, Some (Double_nd arr) -> arr
+  | _, Some arr ->
       raise
       @@ Runtime_error
            ( "Precision mismatch: expected " ^ precision_to_string prec ^ ", got "
@@ -256,14 +245,13 @@ let create (type grad_arr_t value_arr_t) ~(value_prec : ('a, value_arr_t) precis
     global.unique_id <- global.unique_id + 1;
     uid
   in
-  let form =
+  let grad =
     match (grad_prec, is_form) with
-    | Some grad_prec, true ->
-        Some { grad = as_ndarray grad_prec @@ empty grad_prec; forward = ref None; backprop = ref None }
+    | Some grad_prec, true -> Some (as_ndarray grad_prec @@ empty grad_prec)
     | None, true -> invalid_arg "Node.create: ~is_form:true requires providing ~grad_prec"
     | _, false -> None
   in
-  let node = { value = as_ndarray value_prec @@ empty value_prec; form; id } in
+  let node = { value = as_ndarray value_prec @@ empty value_prec; grad; id } in
   Hashtbl.add_exn global.node_store ~key:node.id ~data:node;
   node
 
