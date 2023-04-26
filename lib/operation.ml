@@ -289,8 +289,9 @@ module FDSL = struct
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient
 
-  let init_const ~l ?(b=[]) ?(i=[]) ?(o=[]) cs =
-    term ~label:l ~batch_dims:b ~input_dims:i ~output_dims:o ~init_op:(Constant_fill cs) ()
+  let init_const ~l ?(b = []) ?(i = []) ?(o = []) cs =
+    term ~label:l ~needs_gradient:false ~batch_dims:b ~input_dims:i ~output_dims:o ~init_op:(Constant_fill cs)
+      ()
 end
 
 module NFO = struct
