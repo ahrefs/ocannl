@@ -194,6 +194,8 @@ let%expect_test "Simple gradients" =
   let%nn_op l = d *. "f" [ -2 ] in
   minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ 1 ] [| 0.1 |]);
   refresh_session ~update_params:false ();
+  (* We did not update the params: all values and gradients will be at initial points, which are
+     specified in the formula in the brackets. *)
   print_node_tree ~with_grad:true ~depth:9 l.id;
   [%expect
     {|
@@ -214,25 +216,49 @@ let%expect_test "Simple gradients" =
     Gradient │Gradient  │          │
      6.00e+0 │ -4.00e+0 │          │ |}];
   refresh_session ~update_params:true ();
+  (* Now we updated the params, but after the forward and backward passes: only params values
+     will change, compared to the above. *)
   print_node_tree ~with_grad:true ~depth:9 l.id;
   [%expect
     {|
                     [7] l <*.>
-                     3.78e+0
+                     -8.00e+0
                     Gradient
                      1.00e+0
               [5] d <+>            │[6] <f>
-               -2.36e+0            │ -1.60e+0
+               4.00e+0             │ -1.60e+0
               Gradient             │Gradient
-               -1.60e+0            │ -2.36e+0
+               -2.00e+0            │ 4.00e+0
          [3] e <*.>     │[4] <c>   │
-          -1.22e+1      │ 9.80e+0  │
+          -6.00e+0      │ 9.80e+0  │
          Gradient       │Gradient  │
-          -1.60e+0      │ -1.60e+0 │
+          -2.00e+0      │ -2.00e+0 │
     [1] <a>  │[2] <b>   │          │
-     3.20e+0 │ -3.80e+0 │          │
+     2.60e+0 │ -3.40e+0 │          │
     Gradient │Gradient  │          │
-     6.08e+0 │ -5.12e+0 │          │ |}]
+     6.00e+0 │ -4.00e+0 │          │ |}];
+  refresh_session ~update_params:false ();
+  (* Now again we did not update the params, they will remain as above, but both param gradients
+     and the values and gradients of other nodes will change thanks to the forward and backward passes. *)
+  print_node_tree ~with_grad:true ~depth:9 l.id;
+  [%expect
+    {|
+                      [7] l <*.>
+                       -1.54e+0
+                      Gradient
+                       1.00e+0
+                [5] d <+>            │[6] <f>
+                 9.60e-1             │ -1.60e+0
+                Gradient             │Gradient
+                 -1.60e+0            │ 9.60e-1
+           [3] e <*.>     │[4] <c>   │
+            -8.84e+0      │ 9.80e+0  │
+           Gradient       │Gradient  │
+            -1.60e+0      │ -1.60e+0 │
+      [1] <a>  │[2] <b>   │          │
+       2.60e+0 │ -3.40e+0 │          │
+      Gradient │Gradient  │          │
+       5.44e+0 │ -4.16e+0 │          │ |} ]
 
 let%expect_test "tanh plot" =
   (* TODO: NOT IMPLEMENTED *)
