@@ -123,7 +123,7 @@ let classify_moons executor () =
 
 let benchmarks =
   [
-    ("Interpreter", classify_moons Interpreter);
+    (* ("Interpreter", classify_moons Interpreter); *)
     ("OCaml", classify_moons OCaml);
     ("gccjit", classify_moons Gccjit);
   ]
@@ -134,7 +134,7 @@ let () =
   List.map benchmarks ~f:(fun (name, test) -> Bench.Test.create ~name test)
   |> Bench.make_command |> Command_unix.run
 
-(* Example output, before the single-use-not-memorized aka. virtual nodes optimization:
+(* Example output, first after gccjit implemented, before the virtual nodes optimization:
 
    ┌─────────────┬───────────┬────────────────┬──────────────┬──────────────┬────────────┐
    │ Name        │  Time/Run │        mWd/Run │     mjWd/Run │     Prom/Run │ Percentage │
@@ -143,4 +143,13 @@ let () =
    │ OCaml       │ 1_405.22s │   384_153.02Mw │  14_864.72kw │  14_658.17kw │     37.93% │
    │ gccjit      │    10.76s │       286.06Mw │     737.77kw │     703.35kw │      0.29% │
    └─────────────┴───────────┴────────────────┴──────────────┴──────────────┴────────────┘
+
+    Run after the transition to monolithic step update code (single routine call per step):
+
+   ┌────────┬───────────┬──────────────┬────────────┬────────────┬────────────┐
+   │ Name   │  Time/Run │      mWd/Run │   mjWd/Run │   Prom/Run │ Percentage │
+   ├────────┼───────────┼──────────────┼────────────┼────────────┼────────────┤
+   │ OCaml  │ 1_464.26s │ 384_100.19Mw │ 2_024.75kw │ 1_882.76kw │    100.00% │
+   │ gccjit │     9.38s │      44.96Mw │   780.57kw │   746.15kw │      0.64% │
+   └────────┴───────────┴──────────────┴────────────┴────────────┴────────────┘
 *)
