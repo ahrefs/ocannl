@@ -100,14 +100,14 @@ type _ low_level =
   | Gradient_at_node_id : int -> data low_level
   | Dynamic_indices : {
       tensor : data low_level;
-      tensor_idcs : Shape.symbolic_axis array;
-      dynamic_idcs : Shape.symbol array;
-      target_dims : int array;
+      tensor_idcs : Shape.Symbolic_idcs.t;
+      dynamic_idcs : Shape.Symbols.t;
+      target_dims : Shape.Indices.t;
       body : unit low_level;
     }
       -> unit low_level
-  | Set : data low_level * Shape.symbolic_axis array * float low_level -> unit low_level
-  | Get : data low_level * Shape.symbolic_axis array -> float low_level
+  | Set : data low_level * Shape.Symbolic_idcs.t * float low_level -> unit low_level
+  | Get : data low_level * Shape.Symbolic_idcs.t -> float low_level
   | Binop : binop * float low_level * float low_level -> float low_level
   | Unop : unop * float low_level -> float low_level
   | Constant : float -> float low_level
