@@ -8,7 +8,7 @@ module CDSL = Code.CDSL
 let recompiling_graph executor opti () =
   Code.CDSL.with_debug := false;
   Stdio.prerr_endline @@ "\n\n****** Benchmarking "
-  ^ Sexp.to_string_hum (Session.sexp_of_backend executor)
+  ^ Sexp.to_string_hum ([%sexp_of: Session.backend * int] (executor, opti))
   ^ " ******";
   let () = Session.SDSL.set_executor executor in
   Exec_as_gccjit.optimization_level := opti;
@@ -31,6 +31,7 @@ let recompiling_graph executor opti () =
       [ Scatterplot { points = Array.zip_exn xs ys; pixel = "#" } ]
   in
   PrintBox_text.output Stdio.stdout plot_box;
+  Exec_as_gccjit.optimization_level := 3;
   Stdio.print_endline "\n"
 
 let benchmarks =

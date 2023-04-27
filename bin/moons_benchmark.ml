@@ -5,12 +5,13 @@ module FDSL = Operation.FDSL
 module NFDSL = Operation.NFDSL
 module CDSL = Code.CDSL
 
-let classify_moons executor () =
+let classify_moons executor opti () =
   Code.CDSL.with_debug := false;
   Stdio.prerr_endline @@ "\n\n****** Benchmarking "
-  ^ Sexp.to_string_hum (Session.sexp_of_backend executor)
+  ^ Sexp.to_string_hum ([%sexp_of: Session.backend * int] (executor, opti))
   ^ " ******";
   let () = Session.SDSL.set_executor executor in
+  Exec_as_gccjit.optimization_level := opti;
   (* let open Operation.FDSL in *)
   let open Session.SDSL in
   drop_all_sessions ();
@@ -35,16 +36,23 @@ let classify_moons executor () =
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let moons_classes = FDSL.init_const ~l:"moons_classes" ~b:[ epochs; batch ] ~o:[ 1 ] moons_classes in
   let%nn_op mlp x =
+      "b6" 1
+      + "w6"
+        * !/("b4" 4
+            + "w4"
+              * !/("b2" 8
+                  + ("w2" * !/("b1" 16 + ("w1" * x)))
+                  + "b3" 8
+                  + ("w3" * !/(b2 + (w2 * !/(b1 + (w1 * x))))))
+            + ("b5" 4 + ("w5" * !/(b4 + (w4 * !/(b3 + (w3 * !/(b2 + (w2 * !/(b1 + (w1 * x)))))))))))
+    in
+  (* let%nn_op mlp x =
     "b6" 1
     + "w6"
-      * !/("b4" 4
-          + "w4"
-            * !/("b2" 8
-                + ("w2" * !/("b1" 16 + ("w1" * x)))
-                + "b3" 8
-                + ("w3" * !/(b2 + (w2 * !/(b1 + (w1 * x))))))
-          + ("b5" 4 + ("w5" * !/(b4 + (w4 * !/(b3 + (w3 * !/(b2 + (w2 * !/(b1 + (w1 * x)))))))))))
-  in
+      * !/("b5" 4
+          + ("w5" * !/("b4" 4 + ("w4" * !/("b3" 8 + ("w3" * !/("b2" 8 + ("w2" * !/("b1" 16 + ("w1" * x)))))))))
+          )
+  in *)
   let%nn_dt session_step ~output_dims:[ 1 ] = n =+ 1 in
   let%nn_dt minus_lr ~output_dims:[ 1 ] = n =: -0.1 *. (!..steps - session_step) /. !..steps in
   minus_learning_rate := Some minus_lr;
@@ -119,37 +127,60 @@ let classify_moons executor () =
       [ Line_plot { points = Array.of_list_rev !learning_rates; pixel = "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_lr;
+  Exec_as_gccjit.optimization_level := 3;
   Stdio.printf "\n%!"
 
 let benchmarks =
   [
-    (* ("Interpreter", classify_moons Interpreter); *)
-    ("OCaml", classify_moons OCaml);
-    ("gccjit", classify_moons Gccjit);
+    (* ("Interpreter", classify_moons Interpreter 3); *)
+    (* ("OCaml", classify_moons OCaml 3); *)
+    ("gccjit O0", classify_moons Gccjit 0);
+    ("gccjit O1", classify_moons Gccjit 1);
+    ("gccjit O2", classify_moons Gccjit 2);
+    ("gccjit O3", classify_moons Gccjit 3);
   ]
 
-let _suspended () = classify_moons Gccjit ()
+let _suspended () = classify_moons Gccjit 3 ()
 
 let () =
   List.map benchmarks ~f:(fun (name, test) -> Bench.Test.create ~name test)
   |> Bench.make_command |> Command_unix.run
 
-(* Example output, first after gccjit implemented, before the virtual nodes optimization:
+(* Example output, before monolithic update overhaul and before the virtual nodes optimization:
 
-   ┌─────────────┬───────────┬────────────────┬──────────────┬──────────────┬────────────┐
-   │ Name        │  Time/Run │        mWd/Run │     mjWd/Run │     Prom/Run │ Percentage │
-   ├─────────────┼───────────┼────────────────┼──────────────┼──────────────┼────────────┤
-   │ Interpreter │ 3_705.02s │ 1_316_342.55Mw │ 178_312.43kw │ 178_176.42kw │    100.00% │
-   │ OCaml       │ 1_405.22s │   384_153.02Mw │  14_864.72kw │  14_658.17kw │     37.93% │
-   │ gccjit      │    10.76s │       286.06Mw │     737.77kw │     703.35kw │      0.29% │
-   └─────────────┴───────────┴────────────────┴──────────────┴──────────────┴────────────┘
+    ┌─────────────┬───────────┬────────────────┬──────────────┬──────────────┬────────────┐
+    │ Name        │  Time/Run │        mWd/Run │     mjWd/Run │     Prom/Run │ Percentage │
+    ├─────────────┼───────────┼────────────────┼──────────────┼──────────────┼────────────┤
+    │ Interpreter │ 3_705.02s │ 1_316_342.55Mw │ 178_312.43kw │ 178_176.42kw │    100.00% │
+    │ OCaml       │ 1_405.22s │   384_153.02Mw │  14_864.72kw │  14_658.17kw │     37.93% │
+    │ gccjit      │    10.76s │       286.06Mw │     737.77kw │     703.35kw │      0.29% │
+    └─────────────┴───────────┴────────────────┴──────────────┴──────────────┴────────────┘
 
-    Run after the transition to monolithic step update code (single routine call per step):
+   Run after the transition to monolithic step update code (single routine call per step):
 
-   ┌────────┬───────────┬──────────────┬────────────┬────────────┬────────────┐
-   │ Name   │  Time/Run │      mWd/Run │   mjWd/Run │   Prom/Run │ Percentage │
-   ├────────┼───────────┼──────────────┼────────────┼────────────┼────────────┤
-   │ OCaml  │ 1_464.26s │ 384_100.19Mw │ 2_024.75kw │ 1_882.76kw │    100.00% │
-   │ gccjit │     9.38s │      44.96Mw │   780.57kw │   746.15kw │      0.64% │
-   └────────┴───────────┴──────────────┴────────────┴────────────┴────────────┘
+    ┌────────┬───────────┬──────────────┬────────────┬────────────┬────────────┐
+    │ Name   │  Time/Run │      mWd/Run │   mjWd/Run │   Prom/Run │ Percentage │
+    ├────────┼───────────┼──────────────┼────────────┼────────────┼────────────┤
+    │ OCaml  │ 1_464.26s │ 384_100.19Mw │ 2_024.75kw │ 1_882.76kw │    100.00% │
+    │ gccjit │     9.38s │      44.96Mw │   780.57kw │   746.15kw │      0.64% │
+    └────────┴───────────┴──────────────┴────────────┴────────────┴────────────┘
+    ┌───────────┬──────────┬─────────┬──────────┬──────────┬────────────┐
+    │ Name      │ Time/Run │ mWd/Run │ mjWd/Run │ Prom/Run │ Percentage │
+    ├───────────┼──────────┼─────────┼──────────┼──────────┼────────────┤
+    │ gccjit O0 │   47.07s │ 44.72Mw │ 757.03kw │ 722.61kw │    100.00% │
+    │ gccjit O1 │   14.11s │ 44.72Mw │ 756.40kw │ 721.98kw │     29.97% │
+    │ gccjit O2 │    9.65s │ 44.96Mw │ 780.57kw │ 746.15kw │     20.50% │
+    │ gccjit O3 │    9.26s │ 44.96Mw │ 780.57kw │ 746.15kw │     19.67% │
+    └───────────┴──────────┴─────────┴──────────┴──────────┴────────────┘
+
+   Same, without shared subexpressions (the commented-out mlp):
+
+    ┌───────────┬──────────┬─────────┬──────────┬──────────┬────────────┐
+    │ Name      │ Time/Run │ mWd/Run │ mjWd/Run │ Prom/Run │ Percentage │
+    ├───────────┼──────────┼─────────┼──────────┼──────────┼────────────┤
+    │ gccjit O0 │   19.73s │ 44.30Mw │ 738.84kw │ 704.42kw │    100.00% │
+    │ gccjit O1 │    6.16s │ 44.55Mw │ 761.39kw │ 726.97kw │     31.21% │
+    │ gccjit O2 │    4.75s │ 44.55Mw │ 761.41kw │ 726.99kw │     24.07% │
+    │ gccjit O3 │    4.65s │ 44.55Mw │ 761.41kw │ 726.99kw │     23.58% │
+    └───────────┴──────────┴─────────┴──────────┴──────────┴────────────┘
 *)
