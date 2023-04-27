@@ -332,3 +332,107 @@ let interpreter_error_message ~name ~prefix ?extra_error_msg ~contents exc =
       msg extra);
   msg contents;
   Buffer.contents message
+
+(** *** Optimization *** *)
+
+type visits =
+  | Never
+  | Once
+  | Many
+  | Recurrent  (** A [Recurrent] visit is when there is an access prior to any assignment in an update. *)
+[@@deriving sexp, equal]
+
+type node = {
+  id : int;
+  value_assignments : (Shape.Symbolic_idcs.t, float low_level list) Hashtbl.t;
+  value_accesses : (Shape.Indices.t, visits) Hashtbl.t;
+      (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
+  grad_assignments : (Shape.Symbolic_idcs.t, float low_level list) Hashtbl.t;
+  grad_accesses : (Shape.Indices.t, visits) Hashtbl.t;
+  mutable value_has_fill : bool;
+}
+[@@deriving sexp_of]
+
+let global_node_store : (int, node) Hashtbl.t = Hashtbl.create (module Int)
+
+let get uid =
+  Hashtbl.find_or_add global_node_store uid ~default:(fun () ->
+      {
+        id = uid;
+        value_assignments = Hashtbl.create (module Shape.Symbolic_idcs);
+        value_accesses = Hashtbl.create (module Shape.Indices);
+        grad_accesses = Hashtbl.create (module Shape.Indices);
+        grad_assignments = Hashtbl.create (module Shape.Symbolic_idcs);
+        value_has_fill = false;
+      })
+(*
+let analyze_llc llc =
+  let lookup ?provider_dim env indices =
+    Array.map indices
+      ~f:
+        Shape.(
+          function
+          | Fixed_idx i -> i
+          | Iterator s | Dynamic_recipient s -> Map.find_exn env s
+          | Dynamic_provider _ -> Option.value_exn provider_dim)
+  in
+  let rec loop_proc env llc : unit =
+    let loop = loop_proc env in
+    match llc with
+    | Lines body -> Array.iter ~f:loop body
+    | For_loop { index = key; from_; to_; body } ->
+        for data = from_ to to_ do
+          loop_proc (Map.add_exn ~key ~data env) body
+        done
+    | Fill { tensor = Value_at_node_id id; value } ->
+        (get id) Hashtbl.add_multi node.value_assignments ~fill_from_float (get id).value
+        @@ loop_float env value
+    | Fill { tensor = Gradient_at_node_id id; value } ->
+        fill_from_float (Option.value_exn (get id).grad) @@ loop_float env value
+    | Set (Value_at_node_id id, indices, llv) ->
+        set_from_float (get id).value (lookup env indices) @@ loop_float env llv
+    | Set (Gradient_at_node_id id, indices, llv) ->
+        set_from_float (Option.value_exn (get id).grad) (lookup env indices) @@ loop_float env llv
+    | Comment message when !with_debug && !interpreter_print_comments -> Stdio.printf "%s\n%!" message
+    | Dynamic_indices { tensor = Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
+        dynamic_indices env (get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body
+    | Dynamic_indices { tensor = Gradient_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
+        dynamic_indices env (Option.value_exn (get id).grad) ~tensor_idcs ~dynamic_idcs ~target_dims body
+    | Comment _ -> ()
+  and loop_float env llv =
+    let open Float in
+    let loop = loop_float env in
+    match llv with
+    | Constant c -> c
+    | Get (Value_at_node_id id, indices) -> get_as_float (get id).value @@ lookup env indices
+    | Get (Gradient_at_node_id id, indices) ->
+        get_as_float (Option.value_exn (get id).grad) @@ lookup env indices
+    | Binop (Arg1, llv1, _llv2) -> loop llv1
+    | Binop (Arg2, _llv1, llv2) -> loop llv2
+    | Binop (Add, llv1, llv2) -> loop llv1 + loop llv2
+    | Binop (Mul, llv1, llv2) -> loop llv1 * loop llv2
+    | Binop (ToPowOf, llv1, llv2) ->
+        let v1 = loop llv1 in
+        let v2 = loop llv2 in
+        Float.(if is_integer v2 then int_pow v1 @@ to_int v2 else v1 ** v2)
+    | Binop (Relu_gate, llv1, llv2) -> if loop llv1 > 0.0 then loop llv2 else 0.0
+    | Unop (Identity, llv) -> loop llv
+    | Unop (Relu, llv) ->
+        let v = loop llv in
+        if v > 0.0 then v else 0.0
+  and dynamic_indices env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body =
+    let env =
+      Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
+          let actual = get_as_int tensor @@ lookup ~provider_dim env tensor_idcs in
+          Map.add_exn ~key ~data:(actual % target_dims.(provider_dim)) env)
+    in
+    loop_proc env body
+  in
+  loop_proc (Map.empty (module Shape.Symbol)) llc
+
+let analyze_llprog = function
+  | Assign_suspension proc ->
+      Ocannl_runtime.Node.most_recent_suspension := Some (fun () -> interpret_llc proc)
+  | Assign_session_step_update proc ->
+      Ocannl_runtime.Node.global.session_step_update := Some (fun () -> interpret_llc proc)
+*)
