@@ -359,7 +359,7 @@ type array_print_style =
         The output axes use [;] as a separator and [[]] as axis delimiters (obligatory).
         The batch axes use [;] as a separator and [[||]] as axis delimiters (obligatory). *)
   ]
-(** We print out up to 5 axes when printing an [Code], as a grid (outer rectangle) of (inner)
+(** We print out up to 5 axes when printing a tensor, as a grid (outer rectangle) of (inner)
     rectangles, possibly repeated (screens). *)
 
 let default_display_indices sh =
