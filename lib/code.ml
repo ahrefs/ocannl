@@ -349,7 +349,9 @@ type node = {
       (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
   grad_assignments : (Shape.Symbolic_idcs.t, float low_level list) Hashtbl.t;
   grad_accesses : (Shape.Indices.t, visits) Hashtbl.t;
-  mutable value_has_fill : bool;
+  mutable value_fill : float low_level option;
+  mutable grad_fill : float low_level option;
+  mutable non_virtual : bool;
 }
 [@@deriving sexp_of]
 
@@ -363,9 +365,16 @@ let get uid =
         value_accesses = Hashtbl.create (module Shape.Indices);
         grad_accesses = Hashtbl.create (module Shape.Indices);
         grad_assignments = Hashtbl.create (module Shape.Symbolic_idcs);
-        value_has_fill = false;
+        value_fill = None;
+        grad_fill = None;
+        non_virtual = false;
       })
-(*
+
+let visit assignments idcs old =
+  if not @@ Hashtbl.mem assignments idcs then Recurrent
+  else
+    match old with None | Some Never -> Once | Some Once | Some Many -> Many | Some Recurrent -> Recurrent
+
 let analyze_llc llc =
   let lookup ?provider_dim env indices =
     Array.map indices
@@ -385,54 +394,59 @@ let analyze_llc llc =
           loop_proc (Map.add_exn ~key ~data env) body
         done
     | Fill { tensor = Value_at_node_id id; value } ->
-        (get id) Hashtbl.add_multi node.value_assignments ~fill_from_float (get id).value
-        @@ loop_float env value
+        loop_float env value;
+        let node = get id in
+        if not @@ Hashtbl.is_empty node.value_accesses then node.non_virtual <- true;
+        Hashtbl.clear node.value_assignments;
+        node.value_fill <- Some value
     | Fill { tensor = Gradient_at_node_id id; value } ->
-        fill_from_float (Option.value_exn (get id).grad) @@ loop_float env value
+        loop_float env value;
+        let node = get id in
+        if not @@ Hashtbl.is_empty node.grad_accesses then node.non_virtual <- true;
+        Hashtbl.clear node.grad_assignments;
+        node.grad_fill <- Some value
     | Set (Value_at_node_id id, indices, llv) ->
-        set_from_float (get id).value (lookup env indices) @@ loop_float env llv
+        loop_float env llv;
+        Hashtbl.add_multi (get id).value_assignments ~key:indices ~data:llv
     | Set (Gradient_at_node_id id, indices, llv) ->
-        set_from_float (Option.value_exn (get id).grad) (lookup env indices) @@ loop_float env llv
-    | Comment message when !with_debug && !interpreter_print_comments -> Stdio.printf "%s\n%!" message
-    | Dynamic_indices { tensor = Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        dynamic_indices env (get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body
-    | Dynamic_indices { tensor = Gradient_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        dynamic_indices env (Option.value_exn (get id).grad) ~tensor_idcs ~dynamic_idcs ~target_dims body
+        loop_float env llv;
+        Hashtbl.add_multi (get id).grad_assignments ~key:indices ~data:llv
     | Comment _ -> ()
+    | Dynamic_indices { tensor = Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
+        let node = get id in
+        dynamic_indices node.value_accesses node.value_assignments env ~tensor_idcs ~dynamic_idcs ~target_dims
+          body
+    | Dynamic_indices { tensor = Gradient_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
+        let node = get id in
+        dynamic_indices node.grad_accesses node.grad_assignments env ~tensor_idcs ~dynamic_idcs ~target_dims
+          body
   and loop_float env llv =
-    let open Float in
     let loop = loop_float env in
     match llv with
-    | Constant c -> c
-    | Get (Value_at_node_id id, indices) -> get_as_float (get id).value @@ lookup env indices
+    | Constant _ -> ()
+    | Get (Value_at_node_id id, indices) ->
+        let node = get id in
+        Hashtbl.update node.value_accesses (lookup env indices) ~f:(visit node.value_assignments indices)
     | Get (Gradient_at_node_id id, indices) ->
-        get_as_float (Option.value_exn (get id).grad) @@ lookup env indices
+        let node = get id in
+        Hashtbl.update node.grad_accesses (lookup env indices) ~f:(visit node.grad_assignments indices)
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
-    | Binop (Add, llv1, llv2) -> loop llv1 + loop llv2
-    | Binop (Mul, llv1, llv2) -> loop llv1 * loop llv2
-    | Binop (ToPowOf, llv1, llv2) ->
-        let v1 = loop llv1 in
-        let v2 = loop llv2 in
-        Float.(if is_integer v2 then int_pow v1 @@ to_int v2 else v1 ** v2)
-    | Binop (Relu_gate, llv1, llv2) -> if loop llv1 > 0.0 then loop llv2 else 0.0
-    | Unop (Identity, llv) -> loop llv
-    | Unop (Relu, llv) ->
-        let v = loop llv in
-        if v > 0.0 then v else 0.0
-  and dynamic_indices env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body =
+    | Binop (_, llv1, llv2) ->
+        loop llv1;
+        loop llv2
+    | Unop (_, llv) -> loop llv
+  and dynamic_indices accesses assignments env ~tensor_idcs ~dynamic_idcs ~target_dims:_ body =
     let env =
       Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
-          let actual = get_as_int tensor @@ lookup ~provider_dim env tensor_idcs in
-          Map.add_exn ~key ~data:(actual % target_dims.(provider_dim)) env)
+          let at_pos = lookup ~provider_dim env tensor_idcs in
+          Hashtbl.update accesses at_pos ~f:(visit assignments tensor_idcs);
+          Map.add_exn ~key ~data:0 env)
     in
     loop_proc env body
   in
   loop_proc (Map.empty (module Shape.Symbol)) llc
 
 let analyze_llprog = function
-  | Assign_suspension proc ->
-      Ocannl_runtime.Node.most_recent_suspension := Some (fun () -> interpret_llc proc)
-  | Assign_session_step_update proc ->
-      Ocannl_runtime.Node.global.session_step_update := Some (fun () -> interpret_llc proc)
-*)
+  | Assign_suspension proc
+  | Assign_session_step_update proc -> analyze_llc proc
