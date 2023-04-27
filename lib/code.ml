@@ -61,9 +61,7 @@ and t =
 type program = Suspension of t | Session_step_update of t [@@deriving sexp]
 
 (** Name of a program that can be used as part of a file name. *)
-let get_name = function
-  | Suspension _ -> "suspension"
-  | Session_step_update _ -> "session_step_update"
+let get_name = function Suspension _ -> "suspension" | Session_step_update _ -> "session_step_update"
 
 type create = { tensor : data; dims : unit -> int array; init_op : init_op }
 (** Information to create a tensor, once its shape is inferred. *)
@@ -117,10 +115,8 @@ type _ low_level =
 
 let is_value_at_node_id = function Value_at_node_id _ -> true | _ -> false
 
-type low_level_program =
-  | Assign_suspension of unit low_level
-  | Assign_session_step_update of unit low_level
-(* [@@deriving sexp] *)
+type low_level_program = Assign_suspension of unit low_level | Assign_session_step_update of unit low_level
+[@@deriving sexp_of]
 
 let data_pointer (xhs : data) =
   match xhs.field with `Value -> Value_at_node_id xhs.id | `Grad -> Gradient_at_node_id xhs.id
@@ -316,9 +312,7 @@ let fprint_program ppf prog =
 let interpret_program prog : string option =
   let llp = to_low_level_program prog in
   let () = interpret_llprog llp in
-  (* If we were interpreting bytecode, we would return the bytecode for debugging purposes. *)
-  (* Some (Sexp.to_string_hum @@ sexp_of_low_level llc) *)
-  Some (Caml.Format.asprintf "%a" fprint_program prog)
+  Some (Sexp.to_string_hum @@ sexp_of_low_level_program llp)
 
 let interpreter_error_message ~name ~prefix ?extra_error_msg ~contents exc =
   let backtrace = Caml.Printexc.get_backtrace () in
