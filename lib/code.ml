@@ -426,6 +426,8 @@ type node = {
 
 let global_node_store : (int, node) Hashtbl.t = Hashtbl.create (module Int)
 
+let cleanup_session () = Hashtbl.clear global_node_store
+
 let get uid =
   Hashtbl.find_or_add global_node_store uid ~default:(fun () ->
       {
@@ -448,8 +450,11 @@ let visit fill assignments idcs old =
     | Some Twice -> Thrice
     | Some Thrice | Some Many -> Many
     | Some Recurrent -> Recurrent
-(*
-let analyze_llc llc =
+
+let is_too_many = function Never | Once | Twice | Thrice -> false | _ -> true
+
+let visit_llc llc =
+  let nodes = Hash_set.create (module Int) in
   let lookup ?provider_dim env indices =
     Array.map indices
       ~f:
@@ -470,28 +475,24 @@ let analyze_llc llc =
     | Fill { tensor = Value_at_node_id id; value } ->
         loop_float env value;
         let node = get id in
-        if not @@ Hashtbl.is_empty node.value_accesses then node.non_virtual <- true;
-        Hashtbl.clear node.value_assignments;
-        node.value_fill <- Some value
+        Hash_set.add nodes id;
+        if not @@ Hashtbl.is_empty node.value_accesses then node.non_virtual <- true
     | Fill { tensor = Gradient_at_node_id id; value } ->
         loop_float env value;
         let node = get id in
-        if not @@ Hashtbl.is_empty node.grad_accesses then node.non_virtual <- true;
-        Hashtbl.clear node.grad_assignments;
-        node.grad_fill <- Some value
-    | Set (Value_at_node_id id, indices, llv) ->
-        loop_float env llv;
-        Hashtbl.add_multi (get id).value_assignments ~key:indices ~data:llv
-    | Set (Gradient_at_node_id id, indices, llv) ->
-        loop_float env llv;
-        Hashtbl.add_multi (get id).grad_assignments ~key:indices ~data:llv
+        Hash_set.add nodes id;
+        if not @@ Hashtbl.is_empty node.grad_accesses then node.non_virtual <- true
+    | Set (_, _, llv) -> loop_float env llv
+    | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
     | Dynamic_indices { tensor = Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
         let node = get id in
+        Hash_set.add nodes id;
         dynamic_indices node.value_accesses node.value_fill node.value_assignments env ~tensor_idcs
           ~dynamic_idcs ~target_dims body
     | Dynamic_indices { tensor = Gradient_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
         let node = get id in
+        Hash_set.add nodes id;
         dynamic_indices node.grad_accesses node.grad_fill node.grad_assignments env ~tensor_idcs ~dynamic_idcs
           ~target_dims body
   and loop_float env llv =
@@ -500,12 +501,16 @@ let analyze_llc llc =
     | Constant _ -> ()
     | Get (Value_at_node_id id, indices) ->
         let node = get id in
+        Hash_set.add nodes id;
         Hashtbl.update node.value_accesses (lookup env indices)
           ~f:(visit node.value_fill node.value_assignments indices)
     | Get (Gradient_at_node_id id, indices) ->
         let node = get id in
+        Hash_set.add nodes id;
         Hashtbl.update node.grad_accesses (lookup env indices)
           ~f:(visit node.grad_fill node.grad_assignments indices)
+    | Local_scope (_, _, llc) -> loop_proc env llc
+    | Get_local _ -> ()
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
     | Binop (_, llv1, llv2) ->
@@ -521,10 +526,14 @@ let analyze_llc llc =
     in
     loop_proc env body
   in
-  loop_proc (Map.empty (module Shape.Symbol)) llc
+  loop_proc (Map.empty (module Shape.Symbol)) llc;
+  Hash_set.iter nodes ~f:(fun node_id ->
+      let node = Hashtbl.find_exn global_node_store node_id in
+      if Hashtbl.exists node.value_accesses ~f:is_too_many || Hashtbl.exists node.grad_accesses ~f:is_too_many
+      then node.non_virtual <- true)
 
-let analyze_llprog = function Assign_suspension proc | Assign_session_step_update proc -> analyze_llc proc
-
+let visit_llprog = function Assign_suspension proc | Assign_session_step_update proc -> visit_llc proc
+(*
 let analyze_llc llc =
   let lookup ?provider_dim env indices =
     Array.map indices

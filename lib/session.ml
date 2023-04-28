@@ -278,6 +278,7 @@ let close_session () =
   Formula.session_prepare_backprop := [];
   generated_session_step_update := Noop;
   minus_learning_rate := None;
+  Code.cleanup_session ();
   !cleanup_executor_session ();
   Ocannl_runtime.Node.most_recent_suspension := None;
   Ocannl_runtime.Node.global.session_step_update := None
