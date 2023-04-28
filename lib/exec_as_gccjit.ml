@@ -76,6 +76,7 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
   let c_float = Type.get ctx Type.Float in
   let c_double = Type.get ctx Type.Double in
   let cast_bool num_typ v = RValue.cast ctx (RValue.cast ctx v c_int) num_typ in
+  let current_block = ref initial_block in
   let lookup ?provider_dim env indices =
     Array.map indices
       ~f:
@@ -85,13 +86,12 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
           | Iterator s | Dynamic_recipient s -> Map.find_exn env s
           | Dynamic_provider _ -> Option.value_exn provider_dim)
   in
-  let rec loop_proc ~name ~env ~block (body : unit Code.low_level) : Gccjit.block =
+  let rec loop_proc ~name ~env (body : unit Code.low_level) : unit =
     (* TODO: consider matching gccjit's assign_op-style pattern (but probably no benefit). *)
     match body with
     | Code.Lines lines ->
-        Array.foldi lines ~init:block ~f:(fun i block line ->
-            loop_proc ~name:(name ^ "_at_" ^ Int.to_string i) ~env ~block line)
-    | For_loop { index; from_; to_; body } -> jit_for_loop ~env index ~from_ ~to_ ~block (Either.First body)
+        Array.iteri lines ~f:(fun i line -> loop_proc ~name:(name ^ "_at_line_" ^ Int.to_string i) ~env line)
+    | For_loop { index; from_; to_; body } -> jit_for_loop ~env index ~from_ ~to_ (Either.First body)
     | Set (((Value_at_node_id id | Gradient_at_node_id id) as tensor), idcs, value) ->
         let tensor =
           if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id
@@ -100,25 +100,22 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
         let lhs = LValue.access_array tensor.ptr offset in
-        Block.assign block lhs value;
-        block
-    | Comment c ->
-        Block.comment block c;
-        block
+        Block.assign !current_block lhs value
+    | Comment c -> Block.comment !current_block c
     | Fill { tensor = (Value_at_node_id id | Gradient_at_node_id id) as tensor; value } ->
         let tensor =
           if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id
         in
         let size_m_1 = Array.fold tensor.dims ~init:1 ~f:( * ) - 1 in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
-        let callback after_body offset =
+        let callback offset =
           let lhs = LValue.access_array tensor.ptr offset in
-          Block.assign after_body lhs value
+          Block.assign !current_block lhs value
         in
-        jit_for_loop ~env (Shape.get_symbol ()) ~from_:0 ~to_:size_m_1 ~block (Either.Second callback)
+        jit_for_loop ~env (Shape.get_symbol ()) ~from_:0 ~to_:size_m_1 (Either.Second callback)
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        jit_dynamic_indices ~name ~env ~block tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
-  and loop_float ~name ~env ~num_typ ~is_double value =
+        jit_dynamic_indices ~name ~env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
+  and loop_float ~name ~env ~num_typ ~is_double value : rvalue =
     let loop = loop_float ~name ~env ~num_typ ~is_double in
     match value with
     | Get (((Value_at_node_id id | Gradient_at_node_id id) as tensor), idcs) ->
@@ -148,7 +145,7 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
         let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) @@ loop c in
         RValue.binary_op ctx Mult num_typ cmp @@ loop c
     | Constant v -> RValue.double ctx num_typ v
-  and jit_for_loop ~env (Shape.Symbol s as symbol) ~from_ ~to_ ~block body : Gccjit.block =
+  and jit_for_loop ~env (Shape.Symbol s as symbol) ~from_ ~to_ body : unit =
     let open Gccjit in
     let i = "i" ^ Int.to_string s in
     let index = Function.local func c_index i in
@@ -156,22 +153,19 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
     let b_loop_cond = Block.create ~name:("loop_cond_" ^ i) func in
     let b_loop_body = Block.create ~name:("loop_body_" ^ i) func in
     let b_after_loop = Block.create ~name:("after_loop_" ^ i) func in
-    Block.assign block index (RValue.int ctx c_index from_);
-    Block.jump block b_loop_cond;
+    Block.assign !current_block index (RValue.int ctx c_index from_);
+    Block.jump !current_block b_loop_cond;
     let guard = RValue.comparison ctx Gt (RValue.lvalue index) (RValue.int ctx c_index to_) in
     Block.cond_jump b_loop_cond guard b_after_loop (* on true *) b_loop_body (* on false *);
-    let after_body =
-      match body with
-      | Either.First body -> loop_proc ~name ~env ~block:b_loop_body body
-      | Second callback ->
-          callback b_loop_body (RValue.lvalue index);
-          b_loop_body
-    in
-    Block.assign_op after_body index Plus (RValue.one ctx c_index);
-    Block.jump after_body b_loop_cond;
-    b_after_loop
-  and jit_dynamic_indices ~name ~env ~block ((Value_at_node_id id | Gradient_at_node_id id) as tensor)
-      ~tensor_idcs ~dynamic_idcs ~target_dims body =
+    current_block := b_loop_body;
+    (match body with
+    | Either.First body -> loop_proc ~name ~env body
+    | Second callback -> callback (RValue.lvalue index));
+    Block.assign_op !current_block index Plus (RValue.one ctx c_index);
+    Block.jump !current_block b_loop_cond;
+    current_block := b_after_loop
+  and jit_dynamic_indices ~name ~env ((Value_at_node_id id | Gradient_at_node_id id) as tensor) ~tensor_idcs
+      ~dynamic_idcs ~target_dims body =
     let tensor =
       if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id
     in
