@@ -3,12 +3,14 @@ open Base
 
 (** *** High-level representation. *** *)
 
-type data = { id : int; field : [ `Value | `Grad ] } [@@deriving sexp, equal]
+type data = { id : int; field : [ `Value | `Grad ] } [@@deriving sexp, equal, hash]
 type binop = Add | Mul | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp]
 type unop = Identity | Relu [@@deriving sexp]
 
+module N = Ocannl_runtime.Node
+
 (** Initializes a tensor by filling in the corresponding numbers, at the appropriate precision. *)
-type init_op = Ocannl_runtime.Node.init_op =
+type init_op = N.init_op =
   | Constant_fill of float array
       (** Fills in the numbers where the rightmost axis is contiguous, looping over the provided values
       if necessary. *)
@@ -16,6 +18,35 @@ type init_op = Ocannl_runtime.Node.init_op =
       (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
   | Standard_uniform  (** Draws the values from U(0,1). *)
 [@@deriving sexp]
+
+type prec =
+  (* | Bit_as_bool: (bool, bit_as_bool_nd) precision *)
+  | Byte_as_int_prec : (int, N.byte_as_int_nd) N.precision -> prec
+  | Half_as_int_prec : (int, N.half_as_int_nd) N.precision -> prec
+  (* | Bit_prec: (float, (bool, Bigarray.bool_elt, Bigarray.c_layout) bigarray) N.precision -> prec*)
+  (* | Byte_prec: (float, (float, Bigarray.float8_elt, Bigarray.c_layout) bigarray) N.precision -> prec *)
+  (* | Half_prec: (float, (float, Bigarray.float16_elt, Bigarray.c_layout) bigarray) N.precision -> prec*)
+  | Single_prec : (float, N.single_nd) N.precision -> prec
+  | Double_prec : (float, N.double_nd) N.precision -> prec
+
+let byte_as_int = Byte_as_int_prec N.Byte_as_int
+let half_as_int = Half_as_int_prec N.Half_as_int
+let single = Single_prec N.Single
+let double = Double_prec N.Double
+
+let sexp_of_prec = function
+  | Byte_as_int_prec _ -> Sexp.Atom "Byte_as_int_prec"
+  | Half_as_int_prec _ -> Sexp.Atom "Half_as_int_prec"
+  | Single_prec _ -> Sexp.Atom "Single_prec"
+  | Double_prec _ -> Sexp.Atom "Double_prec"
+
+let prec_of_sexp = function
+  | Sexp.Atom "Byte_as_int_prec" -> byte_as_int
+  | Sexp.Atom "Half_as_int_prec" -> half_as_int
+  | Sexp.Atom "Single_prec" -> single
+  | Sexp.Atom "Double_prec" -> double
+  | Sexp.List _ -> invalid_arg "prec_of_sexp: expected atom, found list"
+  | Sexp.Atom s -> invalid_arg @@ "prec_of_sexp: unknown precision " ^ s
 
 (** Resets a tensor by performing the specified computation or data fetching. *)
 type fetch_op =

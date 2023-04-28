@@ -59,6 +59,16 @@ let jit_array_offset ctx ~idcs ~dims =
       RValue.binary_op ctx Plus c_index idx
       @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
 
+let prec_to_kind prec =
+  let open Gccjit in
+  match prec with
+  | Code.Byte_as_int_prec _ -> Type.Signed_char
+  | Half_as_int_prec _ -> Type.Short
+  | Single_prec _ -> Type.Float
+  | Double_prec _ -> Type.Double
+
+let prec_is_double = function Code.Double_prec _ -> true | _ -> false
+
 let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.block =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
