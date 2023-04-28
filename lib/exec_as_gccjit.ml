@@ -69,7 +69,7 @@ let prec_to_kind prec =
 
 let prec_is_double = function Code.Double_prec _ -> true | _ -> false
 
-let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.block =
+let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gccjit.block =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
