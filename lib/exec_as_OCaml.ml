@@ -45,13 +45,19 @@ let format_low_level ~as_toplevel (ppf : Caml.Format.formatter) (type a) (c : a 
     | Set (Value_at_node_id id, indices, v) ->
         fprintf ppf "@[<2>set_from_float (get %d).value@ (%a)@ (%a)@]" id pp_idcs indices pp_ll v
     | Set (Gradient_at_node_id id, indices, v) ->
-        fprintf ppf "@[<2>set_from_float (Option.value_exn (get %d).grad)@ (%a)@ (%a)@]" id pp_idcs indices pp_ll v
+        fprintf ppf "@[<2>set_from_float (Option.value_exn (get %d).grad)@ (%a)@ (%a)@]" id pp_idcs indices
+          pp_ll v
     | Dynamic_indices { tensor = Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
         dynamic_indices ("(get " ^ Int.to_string id ^ ").value") ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Dynamic_indices { tensor = Gradient_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
         dynamic_indices
           ("(Option.value_exn (get " ^ Int.to_string id ^ ").grad)")
           ~tensor_idcs ~dynamic_idcs ~target_dims body
+    | Set_local (Scope_id id, value) -> fprintf ppf "@[<2>v%d :=@ %a]" id pp_ll value
+    | Local_scope (Scope_id id, _prec, body) ->
+        (* Note: we could support precisions, but it's not worth it. *)
+        fprintf ppf "@[<2>let v%d =@ ref %a in@ !v%d]" id pp_ll body id
+    | Get_local (Scope_id id) -> fprintf ppf "!v%d" id
     | Get (Value_at_node_id id, indices) ->
         fprintf ppf "@[<2>get_as_float (get %d).value@ (%a)@]" id pp_idcs indices
     | Constant c -> fprintf ppf "(%f)" c

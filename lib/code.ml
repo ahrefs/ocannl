@@ -119,6 +119,13 @@ let all_parallel = List.fold ~init:Noop ~f:(fun sts st -> Par (st, sts))
 let sequential = List.fold_right ~init:Noop ~f:(fun st sts -> Seq (st, sts))
 
 (** *** Low-level representation. *)
+type scope_id = Scope_id of int [@@deriving sexp, equal, hash]
+
+let get_scope =
+  let uid = ref 0 in
+  fun () ->
+    Int.incr uid;
+    !uid
 
 (** Cases: [unit low_level] -- code, [float low_level] -- single number at some precision,
     [data low_level] -- a tensor. *)
@@ -138,6 +145,9 @@ type _ low_level =
     }
       -> unit low_level
   | Set : data low_level * Shape.Symbolic_idcs.t * float low_level -> unit low_level
+  | Set_local : scope_id * float low_level -> unit low_level
+  | Local_scope : scope_id * prec * unit low_level -> float low_level
+  | Get_local : scope_id -> float low_level
   | Get : data low_level * Shape.Symbolic_idcs.t -> float low_level
   | Binop : binop * float low_level * float low_level -> float low_level
   | Unop : unop * float low_level -> float low_level
@@ -260,6 +270,7 @@ module CDSL = struct
 end
 
 let interpret_llc llc =
+  let locals = Hashtbl.Poly.create () in
   let lookup ?provider_dim env indices =
     Array.map indices
       ~f:
@@ -285,6 +296,7 @@ let interpret_llc llc =
         set_from_float (get id).value (lookup env indices) @@ loop_float env llv
     | Set (Gradient_at_node_id id, indices, llv) ->
         set_from_float (Option.value_exn (get id).grad) (lookup env indices) @@ loop_float env llv
+    | Set_local (id, llv) -> Hashtbl.update locals id ~f:(fun _ -> loop_float env llv)
     | Comment message when !with_debug && !interpreter_print_comments -> Stdio.printf "%s\n%!" message
     | Dynamic_indices { tensor = Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
         dynamic_indices env (get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body
@@ -299,6 +311,11 @@ let interpret_llc llc =
     | Get (Value_at_node_id id, indices) -> get_as_float (get id).value @@ lookup env indices
     | Get (Gradient_at_node_id id, indices) ->
         get_as_float (Option.value_exn (get id).grad) @@ lookup env indices
+    | Local_scope (id, _prec, body) ->
+        Hashtbl.add_exn locals ~key:id ~data:0.0;
+        loop_proc env body;
+        Hashtbl.find_exn locals id
+    | Get_local id -> Hashtbl.find_exn locals id
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
     | Binop (Add, llv1, llv2) -> loop llv1 + loop llv2
@@ -364,11 +381,32 @@ let interpreter_error_message ~name ~prefix ?extra_error_msg ~contents exc =
   msg contents;
   Buffer.contents message
 
-(** *** Optimization *** *)
+(*
+let substitute_llc env llc =
+  let rec loop (type a) (llc : a low_level) =
+    match (llc : a low_level) with
+    | Comment _ as c -> c
+    | Lines cs -> Lines (Array.map cs ~f:loop)
+    | For_loop { index; from_; to_; body } -> For_loop { index; from_; to_; body }
+    | Fill _ -> _
+    | Value_at_node_id _ -> _
+    | Gradient_at_node_id _ -> _
+    | Dynamic_indices _ -> _
+    | Set (_, _, _) -> _
+    | Get (_, _) -> _
+    | Binop (_, _, _) -> _
+    | Unop (_, _) -> _
+    | Constant _ -> _
+  in
+  loop llc
+*)
 
+(** *** Optimization *** *)
 type visits =
   | Never
   | Once
+  | Twice
+  | Thrice
   | Many
   | Recurrent  (** A [Recurrent] visit is when there is an access prior to any assignment in an update. *)
 [@@deriving sexp, equal]
@@ -401,10 +439,91 @@ let get uid =
         non_virtual = false;
       })
 
-let visit assignments idcs old =
-  if not @@ Hashtbl.mem assignments idcs then Recurrent
+let visit fill assignments idcs old =
+  if Option.is_none fill && (not @@ Hashtbl.mem assignments idcs) then Recurrent
   else
-    match old with None | Some Never -> Once | Some Once | Some Many -> Many | Some Recurrent -> Recurrent
+    match old with
+    | None | Some Never -> Once
+    | Some Once -> Twice
+    | Some Twice -> Thrice
+    | Some Thrice | Some Many -> Many
+    | Some Recurrent -> Recurrent
+(*
+let analyze_llc llc =
+  let lookup ?provider_dim env indices =
+    Array.map indices
+      ~f:
+        Shape.(
+          function
+          | Fixed_idx i -> i
+          | Iterator s | Dynamic_recipient s -> Map.find_exn env s
+          | Dynamic_provider _ -> Option.value_exn provider_dim)
+  in
+  let rec loop_proc env llc : unit =
+    let loop = loop_proc env in
+    match llc with
+    | Lines body -> Array.iter ~f:loop body
+    | For_loop { index = key; from_; to_; body } ->
+        for data = from_ to to_ do
+          loop_proc (Map.add_exn ~key ~data env) body
+        done
+    | Fill { tensor = Value_at_node_id id; value } ->
+        loop_float env value;
+        let node = get id in
+        if not @@ Hashtbl.is_empty node.value_accesses then node.non_virtual <- true;
+        Hashtbl.clear node.value_assignments;
+        node.value_fill <- Some value
+    | Fill { tensor = Gradient_at_node_id id; value } ->
+        loop_float env value;
+        let node = get id in
+        if not @@ Hashtbl.is_empty node.grad_accesses then node.non_virtual <- true;
+        Hashtbl.clear node.grad_assignments;
+        node.grad_fill <- Some value
+    | Set (Value_at_node_id id, indices, llv) ->
+        loop_float env llv;
+        Hashtbl.add_multi (get id).value_assignments ~key:indices ~data:llv
+    | Set (Gradient_at_node_id id, indices, llv) ->
+        loop_float env llv;
+        Hashtbl.add_multi (get id).grad_assignments ~key:indices ~data:llv
+    | Comment _ -> ()
+    | Dynamic_indices { tensor = Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
+        let node = get id in
+        dynamic_indices node.value_accesses node.value_fill node.value_assignments env ~tensor_idcs
+          ~dynamic_idcs ~target_dims body
+    | Dynamic_indices { tensor = Gradient_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
+        let node = get id in
+        dynamic_indices node.grad_accesses node.grad_fill node.grad_assignments env ~tensor_idcs ~dynamic_idcs
+          ~target_dims body
+  and loop_float env llv =
+    let loop = loop_float env in
+    match llv with
+    | Constant _ -> ()
+    | Get (Value_at_node_id id, indices) ->
+        let node = get id in
+        Hashtbl.update node.value_accesses (lookup env indices)
+          ~f:(visit node.value_fill node.value_assignments indices)
+    | Get (Gradient_at_node_id id, indices) ->
+        let node = get id in
+        Hashtbl.update node.grad_accesses (lookup env indices)
+          ~f:(visit node.grad_fill node.grad_assignments indices)
+    | Binop (Arg1, llv1, _llv2) -> loop llv1
+    | Binop (Arg2, _llv1, llv2) -> loop llv2
+    | Binop (_, llv1, llv2) ->
+        loop llv1;
+        loop llv2
+    | Unop (_, llv) -> loop llv
+  and dynamic_indices accesses fill assignments env ~tensor_idcs ~dynamic_idcs ~target_dims:_ body =
+    let env =
+      Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
+          let at_pos = lookup ~provider_dim env tensor_idcs in
+          Hashtbl.update accesses at_pos ~f:(visit fill assignments tensor_idcs);
+          Map.add_exn ~key ~data:0 env)
+    in
+    loop_proc env body
+  in
+  loop_proc (Map.empty (module Shape.Symbol)) llc
+
+let analyze_llprog = function Assign_suspension proc | Assign_session_step_update proc -> analyze_llc proc
 
 let analyze_llc llc =
   let lookup ?provider_dim env indices =
@@ -478,6 +597,5 @@ let analyze_llc llc =
   in
   loop_proc (Map.empty (module Shape.Symbol)) llc
 
-let analyze_llprog = function
-  | Assign_suspension proc
-  | Assign_session_step_update proc -> analyze_llc proc
+let analyze_llprog = function Assign_suspension proc | Assign_session_step_update proc -> analyze_llc proc
+*)

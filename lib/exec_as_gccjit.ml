@@ -76,6 +76,7 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
   let c_float = Type.get ctx Type.Float in
   let c_double = Type.get ctx Type.Double in
   let cast_bool num_typ v = RValue.cast ctx (RValue.cast ctx v c_int) num_typ in
+  let locals = Hashtbl.Poly.create () in
   let current_block = ref initial_block in
   let lookup ?provider_dim env indices =
     Array.map indices
@@ -101,6 +102,10 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
         let lhs = LValue.access_array tensor.ptr offset in
         Block.assign !current_block lhs value
+    | Set_local (id, value) ->
+        let lhs, num_typ, is_double = Hashtbl.find_exn locals id in
+        let value = loop_float ~name ~env ~num_typ ~is_double value in
+        Block.assign !current_block lhs value
     | Comment c -> Block.comment !current_block c
     | Fill { tensor = (Value_at_node_id id | Gradient_at_node_id id) as tensor; value } ->
         let tensor =
@@ -118,6 +123,16 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
   and loop_float ~name ~env ~num_typ ~is_double value : rvalue =
     let loop = loop_float ~name ~env ~num_typ ~is_double in
     match value with
+    | Local_scope ((Scope_id i as id), prec, body) ->
+        let typ = Type.get ctx @@ prec_to_kind prec in
+        let v_name = "v" ^ Int.to_string i in
+        let lvalue = Function.local func typ v_name in
+        Hashtbl.add_exn locals ~key:id ~data:(lvalue, typ, prec_is_double prec);
+        loop_proc ~name:(name ^ "_at_" ^ v_name) ~env body;
+        RValue.lvalue lvalue
+    | Get_local id ->
+        let lvalue, _typ, _is_double = Hashtbl.find_exn locals id in
+        RValue.lvalue lvalue
     | Get (((Value_at_node_id id | Gradient_at_node_id id) as tensor), idcs) ->
         let tensor =
           if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id
@@ -181,16 +196,17 @@ let jit_code ~name ~env ctx func block (body : unit Code.low_level) : Gccjit.blo
           let data =
             if !hoist_dynamic_indices then (
               let sym_index = Function.local func c_index ("i" ^ Int.to_string s) in
-              Block.assign block sym_index dyn_index;
+              Block.assign !current_block sym_index dyn_index;
               RValue.lvalue sym_index)
             else dyn_index
           in
           Map.add_exn ~key ~data env)
     in
-    loop_proc ~name ~env ~block body
+    loop_proc ~name ~env body
   in
 
-  loop_proc ~name ~env ~block body
+  loop_proc ~name ~env body;
+  !current_block
 
 let jit_ll_prog ~name ctx prog =
   let open Gccjit in
@@ -223,8 +239,7 @@ let jit_ll_prog ~name ctx prog =
   let open Ocannl_runtime.Node in
   (match prog with
   | Code.Assign_suspension proc -> most_recent_suspension := Some (emit_routine proc @@ "suspension")
-  | Assign_session_step_update proc ->
-      global.session_step_update := Some (emit_routine proc @@ "step_update"));
+  | Assign_session_step_update proc -> global.session_step_update := Some (emit_routine proc @@ "step_update"));
   !msg
 
 let error_message ~name ~prefix ?extra_error_msg ~contents exc =
