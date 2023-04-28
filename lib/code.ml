@@ -403,11 +403,7 @@ let substitute_llc env llc =
 
 (** *** Optimization *** *)
 type visits =
-  | Never
-  | Once
-  | Twice
-  | Thrice
-  | Many
+  | Visits of int
   | Recurrent  (** A [Recurrent] visit is when there is an access prior to any assignment in an update. *)
 [@@deriving sexp, equal]
 
@@ -425,7 +421,6 @@ type node = {
 [@@deriving sexp_of]
 
 let global_node_store : (int, node) Hashtbl.t = Hashtbl.create (module Int)
-
 let cleanup_session () = Hashtbl.clear global_node_store
 
 let get uid =
@@ -443,17 +438,10 @@ let get uid =
 
 let visit fill assignments idcs old =
   if Option.is_none fill && (not @@ Hashtbl.mem assignments idcs) then Recurrent
-  else
-    match old with
-    | None | Some Never -> Once
-    | Some Once -> Twice
-    | Some Twice -> Thrice
-    | Some Thrice | Some Many -> Many
-    | Some Recurrent -> Recurrent
+  else match old with None -> Visits 0 | Some (Visits i) -> Visits (i + 1) | Some Recurrent -> Recurrent
 
-let is_too_many = function Never | Once | Twice | Thrice -> false | _ -> true
-
-let visit_llc llc =
+let visit_llc ~max_visits ~consider_grads llc =
+  let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
   let nodes = Hash_set.create (module Int) in
   let lookup ?provider_dim env indices =
     Array.map indices
@@ -529,10 +517,14 @@ let visit_llc llc =
   loop_proc (Map.empty (module Shape.Symbol)) llc;
   Hash_set.iter nodes ~f:(fun node_id ->
       let node = Hashtbl.find_exn global_node_store node_id in
-      if Hashtbl.exists node.value_accesses ~f:is_too_many || Hashtbl.exists node.grad_accesses ~f:is_too_many
+      if
+        Hashtbl.exists node.value_accesses ~f:is_too_many
+        || (consider_grads && Hashtbl.exists node.grad_accesses ~f:is_too_many)
       then node.non_virtual <- true)
 
-let visit_llprog = function Assign_suspension proc | Assign_session_step_update proc -> visit_llc proc
+let visit_llprog ?(max_visits = 3) ?(consider_grads = false) = function
+  | Assign_suspension proc | Assign_session_step_update proc -> visit_llc ~max_visits ~consider_grads proc
+
 (*
 let analyze_llc llc =
   let lookup ?provider_dim env indices =
