@@ -409,10 +409,17 @@ type visits =
 
 type node = {
   id : int;
-  value_assignments : (Shape.Symbolic_idcs.t, float low_level list) Hashtbl.t;
+  value_assign_index_bag : Shape.symbol Hash_set.t;
+  value_computations : (Shape.Symbolic_idcs.t, unit low_level list) Hashtbl.t;
+      (** The computations are retrieved for optimization just as they are populated, so that
+          the inlined code corresponds precisely to the changes to the tensors that would happen up till
+          that point. Within the code blocks paired with an index tuple, all assignments and accesses
+          must happen via the index tuple; if this is not the case for some assignment, the node cannot
+          be virtual. *)
   value_accesses : (Shape.Indices.t, visits) Hashtbl.t;
       (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
-  grad_assignments : (Shape.Symbolic_idcs.t, float low_level list) Hashtbl.t;
+  grad_assign_index_bag : Shape.symbol Hash_set.t;
+  grad_computations : (Shape.Symbolic_idcs.t, unit low_level list) Hashtbl.t;
   grad_accesses : (Shape.Indices.t, visits) Hashtbl.t;
   mutable value_fill : float low_level option;
   mutable grad_fill : float low_level option;
@@ -427,17 +434,19 @@ let get uid =
   Hashtbl.find_or_add global_node_store uid ~default:(fun () ->
       {
         id = uid;
-        value_assignments = Hashtbl.create (module Shape.Symbolic_idcs);
+        value_assign_index_bag = Hash_set.Poly.create ();
+        value_computations = Hashtbl.create (module Shape.Symbolic_idcs);
         value_accesses = Hashtbl.create (module Shape.Indices);
+        grad_assign_index_bag = Hash_set.Poly.create ();
         grad_accesses = Hashtbl.create (module Shape.Indices);
-        grad_assignments = Hashtbl.create (module Shape.Symbolic_idcs);
+        grad_computations = Hashtbl.create (module Shape.Symbolic_idcs);
         value_fill = None;
         grad_fill = None;
         non_virtual = false;
       })
 
-let visit fill assignments idcs old =
-  if Option.is_none fill && (not @@ Hashtbl.mem assignments idcs) then Recurrent
+let visit fill assign_bag old =
+  if Option.is_none fill && Hash_set.is_empty assign_bag then Recurrent
   else match old with None -> Visits 0 | Some (Visits i) -> Visits (i + 1) | Some Recurrent -> Recurrent
 
 let visit_llc ~max_visits ~consider_grads llc =
@@ -470,19 +479,32 @@ let visit_llc ~max_visits ~consider_grads llc =
         let node = get id in
         Hash_set.add nodes id;
         if not @@ Hashtbl.is_empty node.grad_accesses then node.non_virtual <- true
-    | Set (_, _, llv) -> loop_float env llv
+    | Set (Value_at_node_id id, idcs, llv) ->
+        loop_float env llv;
+        Hash_set.add nodes id;
+        let node = get id in
+        Array.iter idcs ~f:(function
+          | Shape.Fixed_idx _ | Shape.Dynamic_provider _ -> ()
+          | Shape.Iterator s | Shape.Dynamic_recipient s -> Hash_set.add node.value_assign_index_bag s)
+    | Set (Gradient_at_node_id id, idcs, llv) ->
+        loop_float env llv;
+        Hash_set.add nodes id;
+        let node = get id in
+        Array.iter idcs ~f:(function
+          | Shape.Fixed_idx _ | Shape.Dynamic_provider _ -> ()
+          | Shape.Iterator s | Shape.Dynamic_recipient s -> Hash_set.add node.grad_assign_index_bag s)
     | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
     | Dynamic_indices { tensor = Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
         let node = get id in
         Hash_set.add nodes id;
-        dynamic_indices node.value_accesses node.value_fill node.value_assignments env ~tensor_idcs
+        dynamic_indices node.value_accesses node.value_fill node.value_assign_index_bag env ~tensor_idcs
           ~dynamic_idcs ~target_dims body
     | Dynamic_indices { tensor = Gradient_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
         let node = get id in
         Hash_set.add nodes id;
-        dynamic_indices node.grad_accesses node.grad_fill node.grad_assignments env ~tensor_idcs ~dynamic_idcs
-          ~target_dims body
+        dynamic_indices node.grad_accesses node.grad_fill node.grad_assign_index_bag env ~tensor_idcs
+          ~dynamic_idcs ~target_dims body
   and loop_float env llv =
     let loop = loop_float env in
     match llv with
@@ -491,12 +513,12 @@ let visit_llc ~max_visits ~consider_grads llc =
         let node = get id in
         Hash_set.add nodes id;
         Hashtbl.update node.value_accesses (lookup env indices)
-          ~f:(visit node.value_fill node.value_assignments indices)
+          ~f:(visit node.value_fill node.value_assign_index_bag)
     | Get (Gradient_at_node_id id, indices) ->
         let node = get id in
         Hash_set.add nodes id;
         Hashtbl.update node.grad_accesses (lookup env indices)
-          ~f:(visit node.grad_fill node.grad_assignments indices)
+          ~f:(visit node.grad_fill node.grad_assign_index_bag)
     | Local_scope (_, _, llc) -> loop_proc env llc
     | Get_local _ -> ()
     | Binop (Arg1, llv1, _llv2) -> loop llv1
@@ -505,11 +527,11 @@ let visit_llc ~max_visits ~consider_grads llc =
         loop llv1;
         loop llv2
     | Unop (_, llv) -> loop llv
-  and dynamic_indices accesses fill assignments env ~tensor_idcs ~dynamic_idcs ~target_dims:_ body =
+  and dynamic_indices accesses fill assign_bag env ~tensor_idcs ~dynamic_idcs ~target_dims:_ body =
     let env =
       Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
           let at_pos = lookup ~provider_dim env tensor_idcs in
-          Hashtbl.update accesses at_pos ~f:(visit fill assignments tensor_idcs);
+          Hashtbl.update accesses at_pos ~f:(visit fill assign_bag);
           Map.add_exn ~key ~data:0 env)
     in
     loop_proc env body

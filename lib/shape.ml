@@ -1007,7 +1007,9 @@ type 'a axis_index =
       (** The values along a [Dynamic_provider {idcs; target_dims}] axis are read via "random access" by
       [Dynamic_recipient idx] axes for various values of [idx] in [idcs], modulo the corresponding
       dimension from [target_dims]. To prevent out-of-bound errors, set [target_dims] to the
-      dimensions of the recipient axes. *)
+      dimensions of the recipient axes. The contents stored with a [Dynamic_provider] are used during
+      the translation from the high-level to the low-level representation, and later [Dynamic_provider]
+      is used as a place-holder filled in with the axis number of the recipient. *)
 [@@deriving compare, sexp, hash, variants]
 
 let opt_iterator = function None -> Fixed_idx 0 | Some sym -> Iterator sym
