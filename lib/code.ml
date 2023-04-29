@@ -53,6 +53,13 @@ let prec_of_sexp = function
   | Sexp.List _ -> invalid_arg "prec_of_sexp: expected atom, found list"
   | Sexp.Atom s -> invalid_arg @@ "prec_of_sexp: unknown precision " ^ s
 
+let node_prec data =
+  match get_tensor data with
+  | N.Byte_as_int_nd _ -> byte_as_int
+  | N.Half_as_int_nd _ -> half_as_int
+  | N.Single_nd _ -> single
+  | N.Double_nd _ -> double
+
 (** Resets a tensor by performing the specified computation or data fetching. *)
 type fetch_op =
   | Zeros
