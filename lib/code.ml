@@ -529,79 +529,65 @@ let visit_llc ~max_visits ~consider_grads llc =
 
 let visit_llprog ?(max_visits = 3) ?(consider_grads = false) = function
   | Assign_suspension proc | Assign_session_step_update proc -> visit_llc ~max_visits ~consider_grads proc
-(*
-let virtual_llc llc: unit low_level =
-  let lookup ?provider_dim env indices =
-    Array.map indices
-      ~f:
-        Shape.(
-          function
-          | Fixed_idx i -> i
-          | Iterator s | Dynamic_recipient s -> Map.find_exn env s
-          | Dynamic_provider _ -> Option.value_exn provider_dim)
-  in
-  let rec loop_proc env llc : unit low_level =
-    let loop = loop_proc env in
-    match llc with
-    | Lines body -> Lines (Array.map ~f:loop body)
-    | For_loop { index = key; from_=_; to_=_; body } ->
-          loop_proc (Map.add_exn ~key ~data env) body
-    | Fill { tensor = Value_at_node_id id; value } ->
-        loop_float env value;
-        let node = get id in
-        if not @@ Hashtbl.is_empty node.value_accesses then node.non_virtual <- true;
-        Hashtbl.clear node.value_assignments;
-        node.value_fill <- Some value
-    | Fill { tensor = Gradient_at_node_id id; value } ->
-        loop_float env value;
-        let node = get id in
-        if not @@ Hashtbl.is_empty node.grad_accesses then node.non_virtual <- true;
-        Hashtbl.clear node.grad_assignments;
-        node.grad_fill <- Some value
-    | Set (Value_at_node_id id, indices, llv) ->
-        loop_float env llv;
-        Hashtbl.add_multi (get id).value_assignments ~key:indices ~data:llv
-    | Set (Gradient_at_node_id id, indices, llv) ->
-        loop_float env llv;
-        Hashtbl.add_multi (get id).grad_assignments ~key:indices ~data:llv
-    | Set_local (_, llv) -> loop_float env llv
-    | Comment _ -> ()
-    | Dynamic_indices { tensor = Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        let node = get id in
-        dynamic_indices node.value_accesses node.value_assignments env ~tensor_idcs ~dynamic_idcs ~target_dims
-          body
-    | Dynamic_indices { tensor = Gradient_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        let node = get id in
-        dynamic_indices node.grad_accesses node.grad_assignments env ~tensor_idcs ~dynamic_idcs ~target_dims
-          body
-  and loop_float env llv: float low_level =
-    let loop = loop_float env in
-    match llv with
-    | Constant _ -> ()
-    | Get (Value_at_node_id id, indices) ->
-        let node = get id in
-        Hashtbl.update node.value_accesses (lookup env indices) ~f:(visit node.value_assignments indices)
-    | Get (Gradient_at_node_id id, indices) ->
-        let node = get id in
-        Hashtbl.update node.grad_accesses (lookup env indices) ~f:(visit node.grad_assignments indices)
-    | Local_scope (_, _, llc) -> loop_proc env llc
-    | Get_local _ -> ()
-    | Binop (Arg1, llv1, _llv2) -> loop llv1
-    | Binop (Arg2, _llv1, llv2) -> loop llv2
-    | Binop (_, llv1, llv2) ->
-        loop llv1;
-        loop llv2
-    | Unop (_, llv) -> loop llv
-  and dynamic_indices accesses assignments env ~tensor_idcs ~dynamic_idcs ~target_dims:_ body =
-    let env =
-      Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
-          let at_pos = lookup ~provider_dim env tensor_idcs in
-          Hashtbl.update accesses at_pos ~f:(visit assignments tensor_idcs);
-          Map.add_exn ~key ~data:0 env)
-    in
-    loop_proc env body
-  in
-  loop_proc (Map.empty (module Shape.Symbol)) llc
 
-let analyze_llprog = function Assign_suspension proc | Assign_session_step_update proc -> collect_llc proc
-*)
+let process_computation node llc : unit = ignore (node, llc)
+
+let inline_computation ~id node indices =
+  ignore (id, node, indices);
+  Lines [||]
+
+let virtual_llc llc : unit low_level =
+  let rec loop_proc llc : unit low_level option =
+    let loop = loop_proc in
+    match llc with
+    | Lines body ->
+        let body = Array.filter_map ~f:loop body in
+        if Array.is_empty body then None else Some (Lines body)
+    | For_loop { index = key; from_; to_; body } ->
+        let for_nodes = Hashtbl.find_or_add reverse_node_map ~default:Hash_set.Poly.create key in
+        (* Keep the computation in the output if it has some non-virtual assignment. *)
+        let should_keep =
+          Hash_set.exists for_nodes ~f:(fun data ->
+              let node = Hashtbl.find_exn global_node_store data in
+              node.non_virtual)
+        in
+        Hash_set.iter for_nodes ~f:(fun data ->
+            let node = Hashtbl.find_exn global_node_store data in
+            if not node.non_virtual then process_computation node llc);
+        if should_keep then
+          Option.map ~f:(fun body -> For_loop { index = key; from_; to_; body }) @@ loop body
+        else None
+    | Fill { tensor; value } ->
+        let node = Hashtbl.find_exn global_node_store tensor in
+        if not node.non_virtual then (
+          process_computation node llc;
+          None)
+        else Some (Fill { tensor; value = loop_float value })
+    | Set (data, indices, llv) -> Some (Set (data, indices, loop_float llv))
+    | Set_local (id, llv) -> Some (Set_local (id, loop_float llv))
+    | Comment _ -> Some llc
+    | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
+        (* FIXME(132): implement virtual dynamic indices. *)
+        Option.map ~f:(fun body -> Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body })
+        @@ loop body
+  and loop_float llv : float low_level =
+    match llv with
+    | Constant _ -> llv
+    | Get (data, indices) ->
+        let node = get data in
+        if node.non_virtual then llv
+        else
+          let id = get_scope () in
+          let body = inline_computation ~id node indices in
+          Local_scope (id, node.prec, body)
+    | Local_scope (id, prec, llc) ->
+        Local_scope (id, prec, Option.value_or_thunk ~default:(fun () -> llc) @@ loop_proc llc)
+    | Get_local _ -> llv
+    | Binop (Arg1, llv1, _llv2) -> loop_float llv1
+    | Binop (Arg2, _llv1, llv2) -> loop_float llv2
+    | Binop (op, llv1, llv2) -> Binop (op, loop_float llv1, loop_float llv2)
+    | Unop (op, llv) -> Unop (op, loop_float llv)
+  in
+  Option.value_exn @@ loop_proc llc
+
+let virtual_llprog = function Assign_suspension proc | Assign_session_step_update proc -> virtual_llc proc
