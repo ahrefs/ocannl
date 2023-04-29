@@ -12,6 +12,10 @@ let pp_symbolic_index ?provider_dim ppf =
   | Fixed_idx i -> Caml.Format.fprintf ppf "%d" i
   | Dynamic_provider _ -> Caml.Format.fprintf ppf "%d" @@ Option.value_exn provider_dim
 
+let pp_data_node ppf = function
+  | { Code.id; field = Value } -> Caml.Format.fprintf ppf "(get %d).value" id
+  | { id; field = Grad } -> Caml.Format.fprintf ppf "(Option.value_exn (get %d).grad)" id
+
 let pp_print_init_op ppf : Code.init_op -> unit = function
   | Constant_fill cs ->
       Caml.Format.(
@@ -36,33 +40,22 @@ let format_low_level ~as_toplevel (ppf : Caml.Format.formatter) (type a) (c : a 
     | Lines lines -> (pp_print_list ~pp_sep:pp_semi pp_ll ppf @@ Array.to_list lines : unit)
     | For_loop { index = i; from_; to_; body } ->
         fprintf ppf "@[<2>for@ %a = %d@ to %d@ do@ %a@]@ done" pp_symbol i from_ to_ pp_ll body
-    | Value_at_node_id id -> fprintf ppf "(get %d).value" id
-    | Gradient_at_node_id id -> fprintf ppf "(Option.value_exn (get %d).grad)" id
-    | Fill { tensor = Value_at_node_id id; value } ->
-        fprintf ppf "@[<2>fill_from_float (get %d).value@ (%a)@]" id pp_ll value
-    | Fill { tensor = Gradient_at_node_id id; value } ->
-        fprintf ppf "@[<2>fill_from_float (Option.value_exn (get %d).grad)@ (%a)@]" id pp_ll value
-    | Set (Value_at_node_id id, indices, v) ->
-        fprintf ppf "@[<2>set_from_float (get %d).value@ (%a)@ (%a)@]" id pp_idcs indices pp_ll v
-    | Set (Gradient_at_node_id id, indices, v) ->
-        fprintf ppf "@[<2>set_from_float (Option.value_exn (get %d).grad)@ (%a)@ (%a)@]" id pp_idcs indices
-          pp_ll v
-    | Dynamic_indices { tensor = Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        dynamic_indices ("(get " ^ Int.to_string id ^ ").value") ~tensor_idcs ~dynamic_idcs ~target_dims body
-    | Dynamic_indices { tensor = Gradient_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        dynamic_indices
-          ("(Option.value_exn (get " ^ Int.to_string id ^ ").grad)")
-          ~tensor_idcs ~dynamic_idcs ~target_dims body
+    | Fill { tensor; value } -> fprintf ppf "@[<2>fill_from_float %a@ (%a)@]" pp_data_node tensor pp_ll value
+    | Set (tensor, indices, v) ->
+        fprintf ppf "@[<2>set_from_float %a@ (%a)@ (%a)@]" pp_data_node tensor pp_idcs indices pp_ll v
+    | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
+        Array.iteri dynamic_idcs ~f:(fun provider_dim sym ->
+            fprintf ppf "let@ %a = Int.(@[<2>(get_as_int %a@ (%a)) %% %d@]) in@ " pp_symbol sym pp_data_node
+              tensor (pp_indices ~provider_dim) tensor_idcs target_dims.(provider_dim));
+        pp_ll ppf body
     | Set_local (Scope_id id, value) -> fprintf ppf "@[<2>v%d :=@ %a]" id pp_ll value
     | Local_scope (Scope_id id, _prec, body) ->
         (* Note: we could support precisions, but it's not worth it. *)
         fprintf ppf "@[<2>let v%d =@ ref %a in@ !v%d]" id pp_ll body id
     | Get_local (Scope_id id) -> fprintf ppf "!v%d" id
-    | Get (Value_at_node_id id, indices) ->
-        fprintf ppf "@[<2>get_as_float (get %d).value@ (%a)@]" id pp_idcs indices
+    | Get (tensor, indices) ->
+        fprintf ppf "@[<2>get_as_float %a@ (%a)@]" pp_data_node tensor pp_idcs indices
     | Constant c -> fprintf ppf "(%f)" c
-    | Get (Gradient_at_node_id id, indices) ->
-        fprintf ppf "@[<2>get_as_float (Option.value_exn (get %d).grad)@ (%a)@]" id pp_idcs indices
     | Binop (Arg1, v1, _v2) -> pp_ll ppf v1
     | Binop (Arg2, _v1, v2) -> pp_ll ppf v2
     | Binop (Add, v1, v2) -> fprintf ppf "(@[<2>(%a) +@ (%a)@]@,)" pp_ll v1 pp_ll v2
@@ -74,11 +67,6 @@ let format_low_level ~as_toplevel (ppf : Caml.Format.formatter) (type a) (c : a 
     | Unop (Identity, v) -> pp_ll ppf v
     | Unop (Relu, v) -> fprintf ppf "(@[<2>let a = %a in@ if a > 0.0 then a else 0.0@]@,)" pp_ll v
     | Comment message -> fprintf ppf "(* %s *)()" message
-  and dynamic_indices tensor ~tensor_idcs ~dynamic_idcs ~target_dims body =
-    Array.iteri dynamic_idcs ~f:(fun provider_dim sym ->
-        fprintf ppf "let@ %a = Int.(@[<2>(get_as_int %s@ (%a)) %% %d@]) in@ " pp_symbol sym tensor
-          (pp_indices ~provider_dim) tensor_idcs target_dims.(provider_dim));
-    pp_ll ppf body
   in
   (match c with
   | Lines toplevel ->

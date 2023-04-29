@@ -21,7 +21,7 @@ let session_results : Gccjit.result list ref = ref []
 let compiled_session_globals : Gccjit.result option ref = ref None
 let hoist_dynamic_indices = ref false
 
-let get_tensor acc ctx id : tensor =
+let get_tensor ctx data : tensor =
   let open Ocannl_runtime.Node in
   let open Gccjit in
   let tensor c_typ is_double arr =
@@ -32,15 +32,13 @@ let get_tensor acc ctx id : tensor =
     compiled_session_globals := None;
     { ptr; dims; num_typ; is_double }
   in
-  let n = get id in
-  match acc n with
+  let open Code in
+  let arr = get_tensor data in
+  match arr with
   | Byte_as_int_nd arr -> tensor Type.Signed_char false arr
   | Half_as_int_nd arr -> tensor Type.Short false arr
   | Single_nd arr -> tensor Type.Float false arr
   | Double_nd arr -> tensor Type.Double true arr
-
-let get_value_tensor = get_tensor (fun n -> n.value)
-let get_grad_tensor = get_tensor (fun n -> Option.value_exn n.grad)
 
 let cleanup_session () =
   let open Gccjit in
@@ -93,10 +91,8 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
     | Code.Lines lines ->
         Array.iteri lines ~f:(fun i line -> loop_proc ~name:(name ^ "_at_line_" ^ Int.to_string i) ~env line)
     | For_loop { index; from_; to_; body } -> jit_for_loop ~env index ~from_ ~to_ (Either.First body)
-    | Set (((Value_at_node_id id | Gradient_at_node_id id) as tensor), idcs, value) ->
-        let tensor =
-          if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id
-        in
+    | Set (data_node, idcs, value) ->
+        let tensor = get_tensor ctx data_node in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
@@ -107,10 +103,8 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
         let value = loop_float ~name ~env ~num_typ ~is_double value in
         Block.assign !current_block lhs value
     | Comment c -> Block.comment !current_block c
-    | Fill { tensor = (Value_at_node_id id | Gradient_at_node_id id) as tensor; value } ->
-        let tensor =
-          if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id
-        in
+    | Fill { tensor; value } ->
+        let tensor = get_tensor ctx tensor in
         let size_m_1 = Array.fold tensor.dims ~init:1 ~f:( * ) - 1 in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
         let callback offset =
@@ -133,10 +127,8 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
     | Get_local id ->
         let lvalue, _typ, _is_double = Hashtbl.find_exn locals id in
         RValue.lvalue lvalue
-    | Get (((Value_at_node_id id | Gradient_at_node_id id) as tensor), idcs) ->
-        let tensor =
-          if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id
-        in
+    | Get (tensor, idcs) ->
+        let tensor = get_tensor ctx tensor in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
         RValue.lvalue @@ LValue.access_array tensor.ptr offset
@@ -179,11 +171,8 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
     Block.assign_op !current_block index Plus (RValue.one ctx c_index);
     Block.jump !current_block b_loop_cond;
     current_block := b_after_loop
-  and jit_dynamic_indices ~name ~env ((Value_at_node_id id | Gradient_at_node_id id) as tensor) ~tensor_idcs
-      ~dynamic_idcs ~target_dims body =
-    let tensor =
-      if Code.is_value_at_node_id tensor then get_value_tensor ctx id else get_grad_tensor ctx id
-    in
+  and jit_dynamic_indices ~name ~env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body =
+    let tensor = get_tensor ctx tensor in
     let env =
       Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env (Symbol s as key) ->
           let target_dim = RValue.int ctx c_int @@ target_dims.(provider_dim) in

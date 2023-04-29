@@ -3,11 +3,16 @@ open Base
 
 (** *** High-level representation. *** *)
 type data_kind = Value | Grad [@@deriving sexp, equal, hash]
+
 type data = { id : int; field : data_kind } [@@deriving sexp, equal, hash]
 type binop = Add | Mul | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp]
 type unop = Identity | Relu [@@deriving sexp]
 
 module N = Ocannl_runtime.Node
+
+let get_tensor data =
+  let n = N.get data.id in
+  match data.field with Value -> n.value | Grad -> Option.value_exn n.grad
 
 (** Initializes a tensor by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op = N.init_op =
@@ -133,34 +138,27 @@ type _ low_level =
   | Comment : string -> unit low_level
   | Lines : unit low_level array -> unit low_level
   | For_loop : { index : Shape.symbol; from_ : int; to_ : int; body : unit low_level } -> unit low_level
-  | Fill : { tensor : data low_level; value : float low_level } -> unit low_level
-  | Value_at_node_id : int -> data low_level
-  | Gradient_at_node_id : int -> data low_level
+  | Fill : { tensor : data; value : float low_level } -> unit low_level
   | Dynamic_indices : {
-      tensor : data low_level;
+      tensor : data;
       tensor_idcs : Shape.Symbolic_idcs.t;
       dynamic_idcs : Shape.Symbols.t;
       target_dims : Shape.Indices.t;
       body : unit low_level;
     }
       -> unit low_level
-  | Set : data low_level * Shape.Symbolic_idcs.t * float low_level -> unit low_level
+  | Set : data * Shape.Symbolic_idcs.t * float low_level -> unit low_level
   | Set_local : scope_id * float low_level -> unit low_level
   | Local_scope : scope_id * prec * unit low_level -> float low_level
   | Get_local : scope_id -> float low_level
-  | Get : data low_level * Shape.Symbolic_idcs.t -> float low_level
+  | Get : data * Shape.Symbolic_idcs.t -> float low_level
   | Binop : binop * float low_level * float low_level -> float low_level
   | Unop : unop * float low_level -> float low_level
   | Constant : float -> float low_level
 [@@deriving sexp_of]
 
-let is_value_at_node_id = function Value_at_node_id _ -> true | _ -> false
-
 type low_level_program = Assign_suspension of unit low_level | Assign_session_step_update of unit low_level
 [@@deriving sexp_of]
-
-let data_pointer (xhs : data) =
-  match xhs.field with Value -> Value_at_node_id xhs.id | Grad -> Gradient_at_node_id xhs.id
 
 let rec to_low_level (code : t) : unit low_level =
   match code with
@@ -173,31 +171,26 @@ let rec to_low_level (code : t) : unit low_level =
         | None -> invalid_arg "accum_binop: projections missing project_rhs2"
         | Some rhs2 -> Shape.(derive_index projections.product_iterators rhs2)
       in
-      let lhs_tensor = data_pointer lhs in
-      let lhs_it iters = Get (lhs_tensor, lhs_idx iters) in
       let basecase rev_iters =
         let iters = Array.of_list_rev rev_iters in
         let rhs1_idcs = rhs1_idx iters in
         let rhs2_idcs = rhs2_idx iters in
-        let rhs1_tensor = data_pointer rhs1 in
-        let rhs2_tensor = data_pointer rhs2 in
-        let rhs1 = Get (rhs1_tensor, rhs1_idcs) in
-        let rhs2 = Get (rhs2_tensor, rhs2_idcs) in
         let lhs_idcs = lhs_idx iters in
-        let body = Set (lhs_tensor, lhs_idcs, Binop (accum, lhs_it iters, Binop (op, rhs1, rhs2))) in
+        let lhs_ll = Get (lhs, lhs_idcs) in
+        let rhs1_ll = Get (rhs1, rhs1_idcs) in
+        let rhs2_ll = Get (rhs2, rhs2_idcs) in
+        let body = Set (lhs, lhs_idcs, Binop (accum, lhs_ll, Binop (op, rhs1_ll, rhs2_ll))) in
         match Array.find rhs2_idcs ~f:Shape.is_dynamic_provider with
         | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
-            Dynamic_indices { tensor = rhs2_tensor; tensor_idcs = rhs2_idcs; dynamic_idcs; target_dims; body }
+            Dynamic_indices { tensor = rhs2; tensor_idcs = rhs2_idcs; dynamic_idcs; target_dims; body }
         | _ -> (
             match Array.find rhs1_idcs ~f:Shape.is_dynamic_provider with
             | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
-                Dynamic_indices
-                  { tensor = rhs1_tensor; tensor_idcs = rhs1_idcs; dynamic_idcs; target_dims; body }
+                Dynamic_indices { tensor = rhs1; tensor_idcs = rhs1_idcs; dynamic_idcs; target_dims; body }
             | _ -> (
                 match Array.find lhs_idcs ~f:Shape.is_dynamic_provider with
                 | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
-                    Dynamic_indices
-                      { tensor = lhs_tensor; tensor_idcs = lhs_idcs; dynamic_idcs; target_dims; body }
+                    Dynamic_indices { tensor = lhs; tensor_idcs = lhs_idcs; dynamic_idcs; target_dims; body }
                 | _ -> body))
       in
       let rec loop rev_iters = function
@@ -215,12 +208,12 @@ let rec to_low_level (code : t) : unit low_level =
       let projections = projections () in
       let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
       let rhs_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
-      let lhs_ptr = data_pointer lhs in
-      let lhs_it iters = Get (lhs_ptr, lhs_idx iters) in
-      let rhs iters = Get (data_pointer rhs, rhs_idx iters) in
       let basecase rev_iters =
         let iters = Array.of_list_rev rev_iters in
-        Set (lhs_ptr, lhs_idx iters, Binop (accum, lhs_it iters, Unop (op, rhs iters)))
+        let lhs_idcs = lhs_idx iters in
+        let lhs_ll = Get (lhs, lhs_idcs) in
+        let rhs_ll = Get (rhs, rhs_idx iters) in
+        Set (lhs, lhs_idcs, Binop (accum, lhs_ll, Unop (op, rhs_ll)))
       in
       let rec loop rev_iters = function
         | [], [] -> basecase rev_iters
@@ -244,8 +237,8 @@ let rec to_low_level (code : t) : unit low_level =
       | _, Lines ls2 -> Lines (Array.append [| ll1 |] ls2)
       | Lines ls1, _ -> Lines (Array.append ls1 [| ll2 |])
       | _ -> Lines [| ll1; ll2 |])
-  | Fetch { tensor; fetch_op = Zeros } -> Fill { tensor = data_pointer tensor; value = Constant 0. }
-  | Fetch { tensor; fetch_op = Ones } -> Fill { tensor = data_pointer tensor; value = Constant 1. }
+  | Fetch { tensor; fetch_op = Zeros } -> Fill { tensor; value = Constant 0. }
+  | Fetch { tensor; fetch_op = Ones } -> Fill { tensor; value = Constant 1. }
   | Fetch { tensor = _; fetch_op = Synthetic gen } -> to_low_level gen
   | Fetch { tensor = _; fetch_op = Imported { func = _ } } ->
       (* FIXME: NOT IMPLEMENTED YET *)
@@ -289,18 +282,18 @@ let interpret_llc llc =
         for data = from_ to to_ do
           loop_proc (Map.add_exn ~key ~data env) body
         done
-    | Fill { tensor = Value_at_node_id id; value } -> fill_from_float (get id).value @@ loop_float env value
-    | Fill { tensor = Gradient_at_node_id id; value } ->
+    | Fill { tensor = { id; field = Value }; value } -> fill_from_float (get id).value @@ loop_float env value
+    | Fill { tensor = { id; field = Grad }; value } ->
         fill_from_float (Option.value_exn (get id).grad) @@ loop_float env value
-    | Set (Value_at_node_id id, indices, llv) ->
+    | Set ({ id; field = Value }, indices, llv) ->
         set_from_float (get id).value (lookup env indices) @@ loop_float env llv
-    | Set (Gradient_at_node_id id, indices, llv) ->
+    | Set ({ id; field = Grad }, indices, llv) ->
         set_from_float (Option.value_exn (get id).grad) (lookup env indices) @@ loop_float env llv
     | Set_local (id, llv) -> Hashtbl.update locals id ~f:(fun _ -> loop_float env llv)
     | Comment message when !with_debug && !interpreter_print_comments -> Stdio.printf "%s\n%!" message
-    | Dynamic_indices { tensor = Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
+    | Dynamic_indices { tensor = { id; field = Value }; tensor_idcs; dynamic_idcs; target_dims; body } ->
         dynamic_indices env (get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body
-    | Dynamic_indices { tensor = Gradient_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
+    | Dynamic_indices { tensor = { id; field = Grad }; tensor_idcs; dynamic_idcs; target_dims; body } ->
         dynamic_indices env (Option.value_exn (get id).grad) ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Comment _ -> ()
   and loop_float env llv =
@@ -308,8 +301,8 @@ let interpret_llc llc =
     let loop = loop_float env in
     match llv with
     | Constant c -> c
-    | Get (Value_at_node_id id, indices) -> get_as_float (get id).value @@ lookup env indices
-    | Get (Gradient_at_node_id id, indices) ->
+    | Get ({ id; field = Value }, indices) -> get_as_float (get id).value @@ lookup env indices
+    | Get ({ id; field = Grad }, indices) ->
         get_as_float (Option.value_exn (get id).grad) @@ lookup env indices
     | Local_scope (id, _prec, body) ->
         Hashtbl.add_exn locals ~key:id ~data:0.0;
@@ -407,42 +400,36 @@ type visits =
   | Recurrent  (** A [Recurrent] visit is when there is an access prior to any assignment in an update. *)
 [@@deriving sexp, equal]
 
-type node = {
+type data_node = {
   id : int;
-  value_assign_index_bag : Shape.symbol Hash_set.t;
-  value_computations : (Shape.Symbolic_idcs.t, unit low_level list) Hashtbl.t;
+  kind : data_kind;
+  assign_index_bag : Shape.symbol Hash_set.t;
+  computations : (Shape.Symbolic_idcs.t, unit low_level list) Hashtbl.t;
       (** The computations are retrieved for optimization just as they are populated, so that
           the inlined code corresponds precisely to the changes to the tensors that would happen up till
           that point. Within the code blocks paired with an index tuple, all assignments and accesses
           must happen via the index tuple; if this is not the case for some assignment, the node cannot
           be virtual. *)
-  value_accesses : (Shape.Indices.t, visits) Hashtbl.t;
+  accesses : (Shape.Indices.t, visits) Hashtbl.t;
       (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
-  grad_assign_index_bag : Shape.symbol Hash_set.t;
-  grad_computations : (Shape.Symbolic_idcs.t, unit low_level list) Hashtbl.t;
-  grad_accesses : (Shape.Indices.t, visits) Hashtbl.t;
-  mutable value_fill : float low_level option;
-  mutable grad_fill : float low_level option;
+  mutable fill : float low_level option;
   mutable non_virtual : bool;
 }
 [@@deriving sexp_of]
 
-let global_node_store : (int, node) Hashtbl.t = Hashtbl.create (module Int)
+let global_node_store : (data, data_node) Hashtbl.t = Hashtbl.Poly.create ()
 let reverse_node_map : (Shape.symbol, data) Hashtbl.t = Hashtbl.Poly.create ()
 let cleanup_session () = Hashtbl.clear global_node_store
 
 let get uid =
   Hashtbl.find_or_add global_node_store uid ~default:(fun () ->
       {
-        id = uid;
-        value_assign_index_bag = Hash_set.Poly.create ();
-        value_computations = Hashtbl.create (module Shape.Symbolic_idcs);
-        value_accesses = Hashtbl.create (module Shape.Indices);
-        grad_assign_index_bag = Hash_set.Poly.create ();
-        grad_accesses = Hashtbl.create (module Shape.Indices);
-        grad_computations = Hashtbl.create (module Shape.Symbolic_idcs);
-        value_fill = None;
-        grad_fill = None;
+        id = uid.id;
+        kind = uid.field;
+        assign_index_bag = Hash_set.Poly.create ();
+        computations = Hashtbl.create (module Shape.Symbolic_idcs);
+        accesses = Hashtbl.create (module Shape.Indices);
+        fill = None;
         non_virtual = false;
       })
 
@@ -470,56 +457,33 @@ let visit_llc ~max_visits ~consider_grads llc =
         for data = from_ to to_ do
           loop_proc (Map.add_exn ~key ~data env) body
         done
-    | Fill { tensor = Value_at_node_id id; value } ->
+    | Fill { tensor; value } ->
         loop_float env value;
-        let node = get id in
-        Hash_set.add nodes id;
-        if not @@ Hashtbl.is_empty node.value_accesses then node.non_virtual <- true
-    | Fill { tensor = Gradient_at_node_id id; value } ->
-        loop_float env value;
-        let node = get id in
-        Hash_set.add nodes id;
-        if not @@ Hashtbl.is_empty node.grad_accesses then node.non_virtual <- true
-    | Set (Value_at_node_id id, idcs, llv) ->
+        let data_node = get tensor in
+        Hash_set.add nodes data_node.id;
+        if not @@ Hashtbl.is_empty data_node.accesses then data_node.non_virtual <- true
+    | Set (data, idcs, llv) ->
         loop_float env llv;
-        Hash_set.add nodes id;
-        let node = get id in
+        Hash_set.add nodes data.id;
+        let node = get data in
         Array.iter idcs ~f:(function
           | Shape.Fixed_idx _ | Shape.Dynamic_provider _ -> ()
-          | Shape.Iterator s | Shape.Dynamic_recipient s -> Hash_set.add node.value_assign_index_bag s)
-    | Set (Gradient_at_node_id id, idcs, llv) ->
-        loop_float env llv;
-        Hash_set.add nodes id;
-        let node = get id in
-        Array.iter idcs ~f:(function
-          | Shape.Fixed_idx _ | Shape.Dynamic_provider _ -> ()
-          | Shape.Iterator s | Shape.Dynamic_recipient s -> Hash_set.add node.grad_assign_index_bag s)
+          | Shape.Iterator s | Shape.Dynamic_recipient s -> Hash_set.add node.assign_index_bag s)
     | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
-    | Dynamic_indices { tensor = Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        let node = get id in
-        Hash_set.add nodes id;
-        dynamic_indices node.value_accesses node.value_fill node.value_assign_index_bag env ~tensor_idcs
-          ~dynamic_idcs ~target_dims body
-    | Dynamic_indices { tensor = Gradient_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        let node = get id in
-        Hash_set.add nodes id;
-        dynamic_indices node.grad_accesses node.grad_fill node.grad_assign_index_bag env ~tensor_idcs
-          ~dynamic_idcs ~target_dims body
+    | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
+        let data_node = get tensor in
+        Hash_set.add nodes data_node.id;
+        dynamic_indices data_node env ~tensor_idcs ~dynamic_idcs ~target_dims body
   and loop_float env llv =
     let loop = loop_float env in
     match llv with
     | Constant _ -> ()
-    | Get (Value_at_node_id id, indices) ->
-        let node = get id in
-        Hash_set.add nodes id;
-        Hashtbl.update node.value_accesses (lookup env indices)
-          ~f:(visit node.value_fill node.value_assign_index_bag)
-    | Get (Gradient_at_node_id id, indices) ->
-        let node = get id in
-        Hash_set.add nodes id;
-        Hashtbl.update node.grad_accesses (lookup env indices)
-          ~f:(visit node.grad_fill node.grad_assign_index_bag)
+    | Get (data, indices) ->
+        let data_node = get data in
+        Hash_set.add nodes data_node.id;
+        Hashtbl.update data_node.accesses (lookup env indices)
+          ~f:(visit data_node.fill data_node.assign_index_bag)
     | Local_scope (_, _, llc) -> loop_proc env llc
     | Get_local _ -> ()
     | Binop (Arg1, llv1, _llv2) -> loop llv1
@@ -528,22 +492,22 @@ let visit_llc ~max_visits ~consider_grads llc =
         loop llv1;
         loop llv2
     | Unop (_, llv) -> loop llv
-  and dynamic_indices accesses fill assign_bag env ~tensor_idcs ~dynamic_idcs ~target_dims:_ body =
+  and dynamic_indices node env ~tensor_idcs ~dynamic_idcs ~target_dims:_ body =
     let env =
       Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
           let at_pos = lookup ~provider_dim env tensor_idcs in
-          Hashtbl.update accesses at_pos ~f:(visit fill assign_bag);
+          Hashtbl.update node.accesses at_pos ~f:(visit node.fill node.assign_index_bag);
           Map.add_exn ~key ~data:0 env)
     in
     loop_proc env body
   in
   loop_proc (Map.empty (module Shape.Symbol)) llc;
   Hash_set.iter nodes ~f:(fun node_id ->
-      let node = Hashtbl.find_exn global_node_store node_id in
-      if
-        Hashtbl.exists node.value_accesses ~f:is_too_many
-        || (consider_grads && Hashtbl.exists node.grad_accesses ~f:is_too_many)
-      then node.non_virtual <- true)
+      let value_node = Hashtbl.find_exn global_node_store { id = node_id; field = Value } in
+      if Hashtbl.exists value_node.accesses ~f:is_too_many then value_node.non_virtual <- true;
+      if consider_grads then
+        let grad_node = Hashtbl.find_exn global_node_store { id = node_id; field = Grad } in
+        if Hashtbl.exists grad_node.accesses ~f:is_too_many then grad_node.non_virtual <- true)
 
 let visit_llprog ?(max_visits = 3) ?(consider_grads = false) = function
   | Assign_suspension proc | Assign_session_step_update proc -> visit_llc ~max_visits ~consider_grads proc
