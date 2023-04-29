@@ -137,7 +137,7 @@ let get_scope =
   let uid = ref 0 in
   fun () ->
     Int.incr uid;
-    !uid
+    Scope_id !uid
 
 (** Cases: [unit low_level] -- code, [float low_level] -- single number at some precision,
     [data low_level] -- a tensor. *)
@@ -410,11 +410,12 @@ type visits =
 type data_node = {
   id : int;
   kind : data_kind;
+  prec : prec;
   assign_index_bag : Shape.symbol Hash_set.t;
   computations : (Shape.Symbolic_idcs.t, unit low_level list) Hashtbl.t;
-      (** The computations are retrieved for optimization just as they are populated, so that
-          the inlined code corresponds precisely to the changes to the tensors that would happen up till
-          that point. Within the code blocks paired with an index tuple, all assignments and accesses
+      (** The computations (of the data node) are retrieved for optimization just as they are populated,
+          so that the inlined code corresponds precisely to the changes to the tensors that would happen
+          up till that point. Within the code blocks paired with an index tuple, all assignments and accesses
           must happen via the index tuple; if this is not the case for some assignment, the node cannot
           be virtual. *)
   accesses : (Shape.Indices.t, visits) Hashtbl.t;
@@ -425,14 +426,19 @@ type data_node = {
 [@@deriving sexp_of]
 
 let global_node_store : (data, data_node) Hashtbl.t = Hashtbl.Poly.create ()
-let reverse_node_map : (Shape.symbol, data) Hashtbl.t = Hashtbl.Poly.create ()
-let cleanup_session () = Hashtbl.clear global_node_store
+let reverse_node_map : (Shape.symbol, data Hash_set.t) Hashtbl.t = Hashtbl.Poly.create ()
+(* Identifies the computations that the code block associated with the symbol belongs to. *)
+
+let cleanup_session () =
+  Hashtbl.clear global_node_store;
+  Hashtbl.clear reverse_node_map
 
 let get uid =
   Hashtbl.find_or_add global_node_store uid ~default:(fun () ->
       {
         id = uid.id;
         kind = uid.field;
+        prec = node_prec uid;
         assign_index_bag = Hash_set.Poly.create ();
         computations = Hashtbl.create (module Shape.Symbolic_idcs);
         accesses = Hashtbl.create (module Shape.Indices);
@@ -475,11 +481,16 @@ let visit_llc ~max_visits ~consider_grads llc =
         let node = get data in
         Array.iter idcs ~f:(function
           | Shape.Fixed_idx _ | Shape.Dynamic_provider _ -> ()
-          | Shape.Iterator s | Shape.Dynamic_recipient s -> Hash_set.add node.assign_index_bag s)
+          | Shape.Iterator s | Shape.Dynamic_recipient s ->
+              let ns = Hashtbl.find_or_add reverse_node_map s ~default:Hash_set.Poly.create in
+              Hash_set.add ns data;
+              Hash_set.add node.assign_index_bag s)
     | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
         let data_node = get tensor in
+        (* FIXME(132): implement virtual dynamic indices. *)
+        data_node.non_virtual <- true;
         Hash_set.add nodes data_node.id;
         dynamic_indices data_node env ~tensor_idcs ~dynamic_idcs ~target_dims body
   and loop_float env llv =
