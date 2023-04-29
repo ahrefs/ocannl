@@ -163,7 +163,7 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
       | _, _, false, m2_body -> Seq (m2_body, op_body)
       | false, m1_body, _, _ -> Seq (m1_body, op_body))
   in
-  let init_values_body = create ~id `Value shape in
+  let init_values_body = create ~id Value shape in
   session_initializations := init_values_body :: !session_initializations;
   if not is_form then
     { forward_body; form = None; id; node = n; shape_logic; shape; cross_session_persistent = false }
@@ -178,17 +178,17 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
     let m1_no_grad = m1_processed || not form1.needs_gradient in
     let m2_no_grad = m2_processed || not form2.needs_gradient in
     (if needs_gradient then
-       let zero_grads = fetch_zeros ~id `Grad shape in
+       let zero_grads = fetch_zeros ~id Grad shape in
        session_prepare_backprop := zero_grads :: !session_prepare_backprop);
     (* The code needs to be included in the reverse order to which it was computed! This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
     let grad_body = if needs_gradient then grad_body ~n ~n1 ~n2 ~projections else Code.Noop in
     let grad_body =
-      if form1.needs_gradient then grad_body else Code.remove_updates { id = m1.id; field = `Grad } grad_body
+      if form1.needs_gradient then grad_body else Code.remove_updates { id = m1.id; field = Grad } grad_body
     in
     let grad_body =
-      if form2.needs_gradient then grad_body else Code.remove_updates { id = m2.id; field = `Grad } grad_body
+      if form2.needs_gradient then grad_body else Code.remove_updates { id = m2.id; field = Grad } grad_body
     in
     let backprop_body =
       match (m1_no_grad, form1.backprop_body, m2_no_grad, form2.backprop_body) with
@@ -198,7 +198,7 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
       | _, _, false, m2_body -> Seq (grad_body, m2_body)
       | false, m1_body, _, _ -> Seq (grad_body, m1_body)
     in
-    if needs_gradient then session_initializations := create ~id `Grad shape :: !session_initializations;
+    if needs_gradient then session_initializations := create ~id Grad shape :: !session_initializations;
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     if not m1_processed then global_roots := Map.remove !global_roots m1.id;
     if not m2_processed then global_roots := Map.remove !global_roots m2.id;
@@ -238,7 +238,7 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
       | true, _ | _, Noop -> op_body
       | false, m_body -> Seq (m_body, op_body))
   in
-  session_initializations := create ~id `Value shape :: !session_initializations;
+  session_initializations := create ~id Value shape :: !session_initializations;
   if not is_form then
     { forward_body; form = None; id; node = n; shape_logic; shape; cross_session_persistent = false }
   else
@@ -250,11 +250,11 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
     let needs_gradient = form1.needs_gradient in
     let m1_no_grad = m1_processed || not form1.needs_gradient in
     (if needs_gradient then
-       let zero_grads = fetch_zeros ~id `Grad shape in
+       let zero_grads = fetch_zeros ~id Grad shape in
        session_prepare_backprop := zero_grads :: !session_prepare_backprop);
     let grad_body = if needs_gradient then grad_body ~n ~n1 ~projections else Code.Noop in
     let grad_body =
-      if form1.needs_gradient then grad_body else Code.remove_updates { id = m1.id; field = `Grad } grad_body
+      if form1.needs_gradient then grad_body else Code.remove_updates { id = m1.id; field = Grad } grad_body
     in
     (* The code needs to be included in the reverse order to which it was computed! *)
     let backprop_body =
@@ -262,7 +262,7 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
       | true, _ | _, Noop -> grad_body
       | false, m1_body -> Seq (grad_body, m1_body)
     in
-    if needs_gradient then session_initializations := create ~id `Grad shape :: !session_initializations;
+    if needs_gradient then session_initializations := create ~id Grad shape :: !session_initializations;
 
     if not m1_processed then global_roots := Map.remove !global_roots m1.id;
     let form = Some { backprop_body; needs_gradient } in
@@ -293,13 +293,13 @@ let term ~label ?desc_label ?needs_gradient ~is_form ?batch_dims ?input_dims ?ou
       on potential optimizations. E.g. fetching latency means it's important to do it early and
      in parallel. *)
   let init_op = Option.value_or_thunk init_op ~default:(fun () -> Code.Constant_fill [| 0.0 |]) in
-  session_initializations := create ~id ~init_op `Value shape :: !session_initializations;
+  session_initializations := create ~id ~init_op Value shape :: !session_initializations;
   let cross_session_persistent =
     Code.(
       match fetch_op with
       | None -> true
       | Some fetch_op ->
-          let fetch = Fetch { tensor = { id; field = `Value }; fetch_op = fetch_op ~n } in
+          let fetch = Fetch { tensor = { id; field = Value }; fetch_op = fetch_op ~n } in
           session_prepare_forward := fetch :: !session_prepare_forward;
           false)
   in
@@ -313,11 +313,11 @@ let term ~label ?desc_label ?needs_gradient ~is_form ?batch_dims ?input_dims ?ou
       | _ -> false
     in
     (if needs_gradient then
-       let zero_grads = fetch_zeros ~id `Grad shape in
+       let zero_grads = fetch_zeros ~id Grad shape in
        session_prepare_backprop := zero_grads :: !session_prepare_backprop);
     let backprop_body = Code.Noop in
     (* Very unlikely someone will want dw/dw. *)
-    if needs_gradient then session_initializations := create ~id `Grad shape :: !session_initializations;
+    if needs_gradient then session_initializations := create ~id Grad shape :: !session_initializations;
     let form = Some { backprop_body; needs_gradient } in
     let formula = { forward_body; form; id; node = n; shape_logic; shape; cross_session_persistent } in
     global_roots := Map.add_exn !global_roots ~key:id ~data:formula;
@@ -340,7 +340,7 @@ let get_toplevel_backprop m =
   error_if_unknown_shape m;
   Code.Block_comment
     ( "Backprop #" ^ Int.to_string m.id,
-      Seq (fetch_ones ~id:m.id `Grad m.shape, (Option.value_exn m.form).backprop_body) )
+      Seq (fetch_ones ~id:m.id Grad m.shape, (Option.value_exn m.form).backprop_body) )
 
 (* FIXME: not inlining here gives an error about PrintBox.Simple.t_of_sexp missing *)
 type printbox =

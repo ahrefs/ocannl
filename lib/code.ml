@@ -2,8 +2,8 @@ open Base
 (** The code for operating on n-dimensional arrays. *)
 
 (** *** High-level representation. *** *)
-
-type data = { id : int; field : [ `Value | `Grad ] } [@@deriving sexp, equal, hash]
+type data_kind = Value | Grad [@@deriving sexp, equal, hash]
+type data = { id : int; field : data_kind } [@@deriving sexp, equal, hash]
 type binop = Add | Mul | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp]
 type unop = Identity | Relu [@@deriving sexp]
 
@@ -160,7 +160,7 @@ type low_level_program = Assign_suspension of unit low_level | Assign_session_st
 [@@deriving sexp_of]
 
 let data_pointer (xhs : data) =
-  match xhs.field with `Value -> Value_at_node_id xhs.id | `Grad -> Gradient_at_node_id xhs.id
+  match xhs.field with Value -> Value_at_node_id xhs.id | Grad -> Gradient_at_node_id xhs.id
 
 let rec to_low_level (code : t) : unit low_level =
   match code with
@@ -261,8 +261,8 @@ let keep_files_in_run_directory = ref false
 let with_debug = ref true
 
 module CDSL = struct
-  let value_of_id id : data = { id; field = `Value }
-  let grad_of_id id : data = { id; field = `Grad }
+  let value_of_id id : data = { id; field = Value }
+  let grad_of_id id : data = { id; field = Grad }
   let data_of_node field n : data = { id = n.NodeUI.id; field }
   let interpreter_print_comments = interpreter_print_comments
   let keep_files_in_run_directory = keep_files_in_run_directory
@@ -428,6 +428,7 @@ type node = {
 [@@deriving sexp_of]
 
 let global_node_store : (int, node) Hashtbl.t = Hashtbl.create (module Int)
+let reverse_node_map : (Shape.symbol, data) Hashtbl.t = Hashtbl.Poly.create ()
 let cleanup_session () = Hashtbl.clear global_node_store
 
 let get uid =
@@ -546,9 +547,8 @@ let visit_llc ~max_visits ~consider_grads llc =
 
 let visit_llprog ?(max_visits = 3) ?(consider_grads = false) = function
   | Assign_suspension proc | Assign_session_step_update proc -> visit_llc ~max_visits ~consider_grads proc
-
 (*
-let analyze_llc llc =
+let virtual_llc llc: unit low_level =
   let lookup ?provider_dim env indices =
     Array.map indices
       ~f:
@@ -558,14 +558,12 @@ let analyze_llc llc =
           | Iterator s | Dynamic_recipient s -> Map.find_exn env s
           | Dynamic_provider _ -> Option.value_exn provider_dim)
   in
-  let rec loop_proc env llc : unit =
+  let rec loop_proc env llc : unit low_level =
     let loop = loop_proc env in
     match llc with
-    | Lines body -> Array.iter ~f:loop body
-    | For_loop { index = key; from_; to_; body } ->
-        for data = from_ to to_ do
+    | Lines body -> Lines (Array.map ~f:loop body)
+    | For_loop { index = key; from_=_; to_=_; body } ->
           loop_proc (Map.add_exn ~key ~data env) body
-        done
     | Fill { tensor = Value_at_node_id id; value } ->
         loop_float env value;
         let node = get id in
@@ -584,6 +582,7 @@ let analyze_llc llc =
     | Set (Gradient_at_node_id id, indices, llv) ->
         loop_float env llv;
         Hashtbl.add_multi (get id).grad_assignments ~key:indices ~data:llv
+    | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
     | Dynamic_indices { tensor = Value_at_node_id id; tensor_idcs; dynamic_idcs; target_dims; body } ->
         let node = get id in
@@ -593,7 +592,7 @@ let analyze_llc llc =
         let node = get id in
         dynamic_indices node.grad_accesses node.grad_assignments env ~tensor_idcs ~dynamic_idcs ~target_dims
           body
-  and loop_float env llv =
+  and loop_float env llv: float low_level =
     let loop = loop_float env in
     match llv with
     | Constant _ -> ()
@@ -603,6 +602,8 @@ let analyze_llc llc =
     | Get (Gradient_at_node_id id, indices) ->
         let node = get id in
         Hashtbl.update node.grad_accesses (lookup env indices) ~f:(visit node.grad_assignments indices)
+    | Local_scope (_, _, llc) -> loop_proc env llc
+    | Get_local _ -> ()
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
     | Binop (_, llv1, llv2) ->
@@ -620,5 +621,5 @@ let analyze_llc llc =
   in
   loop_proc (Map.empty (module Shape.Symbol)) llc
 
-let analyze_llprog = function Assign_suspension proc | Assign_session_step_update proc -> analyze_llc proc
+let analyze_llprog = function Assign_suspension proc | Assign_session_step_update proc -> collect_llc proc
 *)

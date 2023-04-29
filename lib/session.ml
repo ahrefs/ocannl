@@ -170,9 +170,9 @@ let dynload_with_handler ~runtime_store code =
 let perform_initialization =
   let open Ocannl_runtime.Node in
   List.iter ~f:(function
-    | { Code.tensor = { id; field = `Value }; dims; init_op } ->
+    | { Code.tensor = { id; field = Value }; dims; init_op } ->
         (get id).value <- create_ndarray Single (dims ()) init_op
-    | { tensor = { id; field = `Grad }; dims; init_op } ->
+    | { tensor = { id; field = Grad }; dims; init_op } ->
         (get id).grad <- Some (create_ndarray Single (dims ()) init_op))
 
 let compile_routine code =

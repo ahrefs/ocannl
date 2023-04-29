@@ -208,7 +208,7 @@ let assign_op field ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~projections =
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient =
   let grad_body ~n:_ ~n1:_ ~projections:_ = Code.Noop in
-  let op_body = assign_op @@ Code.CDSL.data_of_node `Value in
+  let op_body = assign_op @@ Code.CDSL.data_of_node Value in
   Formula.unop ~transpose_op:Pointwise_un ~op_label:"stop_grad" ~op_body ~grad_body ~is_form:true
 
 (** A [stop_broadcast] mutates the partially-inferred shape of a formula in-place, substituting-in
@@ -217,8 +217,8 @@ let stop_broadcast m = Shape.set_dims_type m.Formula.shape Shape.fixed
 
 (** [identity] introduces a new node, which is an identity in both the forward and backward pass. *)
 let identity ?desc_label ~is_form m =
-  let grad_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) = assign_op (Code.CDSL.data_of_node `Grad) ~n:n1 ~n1:n in
-  let op_body = assign_op @@ Code.CDSL.data_of_node `Value in
+  let grad_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) = assign_op (Code.CDSL.data_of_node Grad) ~n:n1 ~n1:n in
+  let op_body = assign_op @@ Code.CDSL.data_of_node Value in
   Formula.(
     unop ?desc_label ~init_shape:m.shape ~transpose_op:Pointwise_un ~op_label:"=" ~op_body ~grad_body ~is_form)
 
