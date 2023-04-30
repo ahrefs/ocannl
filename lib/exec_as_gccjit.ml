@@ -269,6 +269,6 @@ let jit_program (prog : Code.program) =
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)
-  let msg = jit_ll_prog ~name:"" ctx (Code.to_low_level_program prog) in
+  let msg = jit_ll_prog ~name:"" ctx (Code.compile_program prog) in
   Context.release ctx;
   msg

@@ -260,15 +260,6 @@ let interpreter_print_comments = ref false
 let keep_files_in_run_directory = ref false
 let with_debug = ref true
 
-module CDSL = struct
-  let value_of_id id : data = { id; field = Value }
-  let grad_of_id id : data = { id; field = Grad }
-  let data_of_node field n : data = { id = n.NodeUI.id; field }
-  let interpreter_print_comments = interpreter_print_comments
-  let keep_files_in_run_directory = keep_files_in_run_directory
-  let with_debug = with_debug
-end
-
 let interpret_llc llc =
   let locals = Hashtbl.Poly.create () in
   let lookup ?provider_dim env indices =
@@ -356,11 +347,6 @@ let fprint_low_level ppf c =
 let fprint_program ppf prog =
   (* TODO: something nicely concise. *)
   Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_program prog
-
-let interpret_program prog : string option =
-  let llp = to_low_level_program prog in
-  let () = interpret_llprog llp in
-  Some (Sexp.to_string_hum @@ sexp_of_low_level_program llp)
 
 let interpreter_error_message ~name ~prefix ?extra_error_msg ~contents exc =
   let backtrace = Caml.Printexc.get_backtrace () in
@@ -531,9 +517,6 @@ let visit_llc ~max_visits ~consider_grads llc =
           ~f:(fun grad_node ->
             if Hashtbl.exists grad_node.accesses ~f:is_too_many then grad_node.non_virtual <- true))
 
-let visit_llprog ?(max_visits = 3) ?(consider_grads = false) = function
-  | Assign_suspension proc | Assign_session_step_update proc -> visit_llc ~max_visits ~consider_grads proc
-
 let process_computation node top_llc : unit =
   let exception Non_virtual in
   let top_data = { id = node.id; field = node.kind } in
@@ -684,4 +667,39 @@ let virtual_llc llc : unit low_level =
   in
   Option.value_exn @@ loop_proc llc
 
-let virtual_llprog = function Assign_suspension proc | Assign_session_step_update proc -> virtual_llc proc
+type virtualize_settings = {
+  mutable virtualize : bool;
+  mutable max_visits : int;
+  mutable consider_grads : bool;
+}
+
+let virtualize_settings = { virtualize = true; max_visits = 3; consider_grads = false }
+
+let compile_program prog =
+  let prog = to_low_level_program prog in
+  if not virtualize_settings.virtualize then prog
+  else
+    match prog with
+    | Assign_suspension proc ->
+        visit_llc ~max_visits:virtualize_settings.max_visits
+          ~consider_grads:virtualize_settings.consider_grads proc;
+        Assign_suspension (virtual_llc proc)
+    | Assign_session_step_update proc ->
+        visit_llc ~max_visits:virtualize_settings.max_visits
+          ~consider_grads:virtualize_settings.consider_grads proc;
+        Assign_session_step_update (virtual_llc proc)
+
+let interpret_program prog : string option =
+  let llp = compile_program prog in
+  let () = interpret_llprog llp in
+  Some (Sexp.to_string_hum @@ sexp_of_low_level_program llp)
+
+module CDSL = struct
+  let value_of_id id : data = { id; field = Value }
+  let grad_of_id id : data = { id; field = Grad }
+  let data_of_node field n : data = { id = n.NodeUI.id; field }
+  let interpreter_print_comments = interpreter_print_comments
+  let keep_files_in_run_directory = keep_files_in_run_directory
+  let with_debug = with_debug
+  let virtualize_settings = virtualize_settings
+end

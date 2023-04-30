@@ -5,13 +5,14 @@ module FDSL = Operation.FDSL
 module NFDSL = Operation.NFDSL
 module CDSL = Code.CDSL
 
-let classify_moons executor opti () =
+let classify_moons ~virtualize executor ~opti_level () =
   Code.CDSL.with_debug := false;
-  Stdio.prerr_endline @@ "\n\n****** Benchmarking "
-  ^ Sexp.to_string_hum ([%sexp_of: Session.backend * int] (executor, opti))
+  Stdio.prerr_endline @@ "\n\n****** Benchmarking virtualized: "
+  ^ Sexp.to_string_hum ([%sexp_of: bool * Session.backend * int] (virtualize, executor, opti_level))
   ^ " ******";
-  let () = Session.SDSL.set_executor executor in
-  Exec_as_gccjit.optimization_level := opti;
+  Code.CDSL.virtualize_settings.virtualize <- virtualize;
+  Session.SDSL.set_executor executor;
+  Exec_as_gccjit.optimization_level := opti_level;
   (* let open Operation.FDSL in *)
   let open Session.SDSL in
   drop_all_sessions ();
@@ -132,15 +133,21 @@ let classify_moons executor opti () =
 
 let benchmarks =
   [
-    (* ("Interpreter", classify_moons Interpreter 3); *)
-    (* ("OCaml", classify_moons OCaml 3); *)
-    ("gccjit O0", classify_moons Gccjit 0);
-    ("gccjit O1", classify_moons Gccjit 1);
-    ("gccjit O2", classify_moons Gccjit 2);
-    ("gccjit O3", classify_moons Gccjit 3);
+    (* ("non-virt. Interpreter", classify_moons ~virtualize:false Interpreter 3); *)
+    (* ("non-virt. OCaml", classify_moons ~virtualize:false OCaml 3); *)
+    ("non-virt. gccjit O0", classify_moons ~virtualize:false Gccjit ~opti_level:0);
+    ("non-virt. gccjit O1", classify_moons ~virtualize:false Gccjit ~opti_level:1);
+    ("non-virt. gccjit O2", classify_moons ~virtualize:false Gccjit ~opti_level:2);
+    ("non-virt. gccjit O3", classify_moons ~virtualize:false Gccjit ~opti_level:3);
+    (* ("virtualized Interpreter", classify_moons ~virtualize:true Interpreter 3); *)
+    (* ("virtualized OCaml", classify_moons ~virtualize:true OCaml 3); *)
+    ("virtualized gccjit O0", classify_moons ~virtualize:true Gccjit ~opti_level:0);
+    ("virtualized gccjit O1", classify_moons ~virtualize:true Gccjit ~opti_level:1);
+    ("virtualized gccjit O2", classify_moons ~virtualize:true Gccjit ~opti_level:2);
+    ("virtualized gccjit O3", classify_moons ~virtualize:true Gccjit ~opti_level:3);
   ]
 
-let _suspended () = classify_moons Gccjit 3 ()
+let _suspended () = classify_moons ~virtualize:true Gccjit ~opti_level:3 ()
 
 let () =
   List.map benchmarks ~f:(fun (name, test) -> Bench.Test.create ~name test)

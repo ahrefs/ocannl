@@ -1,7 +1,7 @@
 open Base
 
 let keep_files_in_run_directory = ref false
-let emit = Code.to_low_level_program
+let emit = Code.compile_program
 let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
 let pp_symbol ppf (Shape.Symbol s) = Caml.Format.fprintf ppf "i%d" s
 
