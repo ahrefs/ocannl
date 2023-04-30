@@ -627,7 +627,7 @@ let virtual_llc llc : unit low_level =
         if node.non_virtual then llv
         else
           let id = get_scope () in
-          let body = inline_computation ~id node indices in
+          let body = loop_proc @@ inline_computation ~id node indices in
           Local_scope (id, node.prec, body)
     | Local_scope (id, prec, llc) ->
         Local_scope (id, prec, Option.value_or_thunk ~default:(fun () -> llc) @@ loop_proc llc)
