@@ -433,7 +433,7 @@ let cleanup_session () =
   Hashtbl.clear global_node_store;
   Hashtbl.clear reverse_node_map
 
-let get uid =
+let get_node uid =
   Hashtbl.find_or_add global_node_store uid ~default:(fun () ->
       {
         id = uid.id;
@@ -472,14 +472,14 @@ let visit_llc ~max_visits ~consider_grads llc =
         done
     | Fill { tensor; value } ->
         loop_float env value;
-        let data_node = get tensor in
+        let data_node = get_node tensor in
         Hash_set.add nodes data_node.id;
         if not @@ Hashtbl.is_empty data_node.accesses then data_node.non_virtual <- true
         else data_node.fill <- Some value
     | Set (data, idcs, llv) ->
         loop_float env llv;
         Hash_set.add nodes data.id;
-        let node = get data in
+        let node = get_node data in
         Array.iter idcs ~f:(function
           | Shape.Fixed_idx _ | Shape.Dynamic_provider _ | Shape.Dynamic_recipient _ ->
               node.non_virtual <- true
@@ -490,7 +490,7 @@ let visit_llc ~max_visits ~consider_grads llc =
     | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        let data_node = get tensor in
+        let data_node = get_node tensor in
         (* FIXME(132): implement virtual dynamic indices. *)
         data_node.non_virtual <- true;
         Hash_set.add nodes data_node.id;
@@ -500,7 +500,7 @@ let visit_llc ~max_visits ~consider_grads llc =
     match llv with
     | Constant _ -> ()
     | Get (data, indices) ->
-        let data_node = get data in
+        let data_node = get_node data in
         Hash_set.add nodes data_node.id;
         Hashtbl.update data_node.accesses (lookup env indices)
           ~f:(visit data_node.fill data_node.assign_index_bag)
@@ -523,11 +523,13 @@ let visit_llc ~max_visits ~consider_grads llc =
   in
   loop_proc (Map.empty (module Shape.Symbol)) llc;
   Hash_set.iter nodes ~f:(fun node_id ->
-      let value_node = Hashtbl.find_exn global_node_store { id = node_id; field = Value } in
+      let value_node = get_node { id = node_id; field = Value } in
       if Hashtbl.exists value_node.accesses ~f:is_too_many then value_node.non_virtual <- true;
       if consider_grads then
-        let grad_node = Hashtbl.find_exn global_node_store { id = node_id; field = Grad } in
-        if Hashtbl.exists grad_node.accesses ~f:is_too_many then grad_node.non_virtual <- true)
+        Option.iter
+          (Hashtbl.find global_node_store { id = node_id; field = Grad })
+          ~f:(fun grad_node ->
+            if Hashtbl.exists grad_node.accesses ~f:is_too_many then grad_node.non_virtual <- true))
 
 let visit_llprog ?(max_visits = 3) ?(consider_grads = false) = function
   | Assign_suspension proc | Assign_session_step_update proc -> visit_llc ~max_visits ~consider_grads proc
@@ -666,7 +668,7 @@ let virtual_llc llc : unit low_level =
     match llv with
     | Constant _ -> llv
     | Get (data, indices) ->
-        let node = get data in
+        let node = get_node data in
         if node.non_virtual then llv
         else
           let id = get_scope () in
