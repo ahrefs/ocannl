@@ -475,6 +475,7 @@ let visit_llc ~max_visits ~consider_grads llc =
         let data_node = get tensor in
         Hash_set.add nodes data_node.id;
         if not @@ Hashtbl.is_empty data_node.accesses then data_node.non_virtual <- true
+        else data_node.fill <- Some value
     | Set (data, idcs, llv) ->
         loop_float env llv;
         Hash_set.add nodes data.id;
@@ -530,7 +531,44 @@ let visit_llc ~max_visits ~consider_grads llc =
 let visit_llprog ?(max_visits = 3) ?(consider_grads = false) = function
   | Assign_suspension proc | Assign_session_step_update proc -> visit_llc ~max_visits ~consider_grads proc
 
-let process_computation node llc : unit = ignore (node, llc)
+let process_computation node top_llc : unit =
+  let exception Non_virtual in
+  let top_data = { id = node.id; field = node.kind } in
+  let at_idcs = ref None in
+  let check_idcs indices =
+    Option.iter !at_idcs ~f:(fun at -> if not @@ Shape.Symbolic_idcs.equal at indices then raise Non_virtual) in
+  (* Traverse the float code too, for completeness / future use-cases. *)
+  let rec loop_proc llc : unit =
+    match llc with
+    | Lines body -> Array.iter ~f:loop_proc body
+    | For_loop { index = _; from_ = _; to_ = _; body } -> loop_proc body
+    | Fill { tensor = _; value } -> loop_float value
+    | Set (data, indices, llv) ->
+        if equal_data data top_data then check_idcs indices;
+        loop_float llv
+    | Set_local (_, llv) -> loop_float llv
+    | Comment _ -> ()
+    | Dynamic_indices { body; _ } -> loop_proc body
+  and loop_float llv : unit =
+    match llv with
+    | Constant _ -> ()
+    | Get (data, idcs) ->
+        if equal_data data top_data then check_idcs idcs
+    | Local_scope (_, _, llc) -> loop_proc llc
+    | Get_local _ -> ()
+    | Binop (Arg1, llv1, _llv2) -> loop_float llv1
+    | Binop (Arg2, _llv1, llv2) -> loop_float llv2
+    | Binop (_, llv1, llv2) ->
+        loop_float llv1;
+        loop_float llv2
+    | Unop (_, llv) -> loop_float llv
+  in
+  try
+    loop_proc top_llc;
+    match !at_idcs with
+    | None -> raise Non_virtual
+    | Some idcs -> Hashtbl.add_multi node.computations ~key:idcs ~data:top_llc
+  with Non_virtual -> node.non_virtual <- true
 
 let inline_computation ~id node indices =
   ignore (id, node, indices);
@@ -538,10 +576,9 @@ let inline_computation ~id node indices =
 
 let virtual_llc llc : unit low_level =
   let rec loop_proc llc : unit low_level option =
-    let loop = loop_proc in
     match llc with
     | Lines body ->
-        let body = Array.filter_map ~f:loop body in
+        let body = Array.filter_map ~f:loop_proc body in
         if Array.is_empty body then None else Some (Lines body)
     | For_loop { index = key; from_; to_; body } ->
         let for_nodes = Hashtbl.find_or_add reverse_node_map ~default:Hash_set.Poly.create key in
@@ -555,7 +592,7 @@ let virtual_llc llc : unit low_level =
             let node = Hashtbl.find_exn global_node_store data in
             if not node.non_virtual then process_computation node llc);
         if should_keep then
-          Option.map ~f:(fun body -> For_loop { index = key; from_; to_; body }) @@ loop body
+          Option.map ~f:(fun body -> For_loop { index = key; from_; to_; body }) @@ loop_proc body
         else None
     | Fill { tensor; value } ->
         let node = Hashtbl.find_exn global_node_store tensor in
@@ -569,7 +606,7 @@ let virtual_llc llc : unit low_level =
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
         (* FIXME(132): implement virtual dynamic indices. *)
         Option.map ~f:(fun body -> Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body })
-        @@ loop body
+        @@ loop_proc body
   and loop_float llv : float low_level =
     match llv with
     | Constant _ -> llv
