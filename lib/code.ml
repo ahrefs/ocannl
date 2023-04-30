@@ -417,7 +417,7 @@ type data_node = {
           so that the inlined code corresponds precisely to the changes to the tensors that would happen
           up till that point. Within the code blocks paired with an index tuple, all assignments and accesses
           must happen via the index tuple; if this is not the case for some assignment, the node cannot
-          be virtual. *)
+          be virtual. Currently, we only allow for-loop symbols in assignment indices of virtual nodes. *)
   accesses : (Shape.Indices.t, visits) Hashtbl.t;
       (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
   mutable fill : float low_level option;
@@ -537,7 +537,17 @@ let process_computation node top_llc : unit =
   let top_data = { id = node.id; field = node.kind } in
   let at_idcs = ref None in
   let check_idcs indices =
-    Option.iter !at_idcs ~f:(fun at -> if not @@ Shape.Symbolic_idcs.equal at indices then raise Non_virtual) in
+    let syms =
+      Set.of_array (module Shape.Symbol)
+      @@ Array.filter_map indices
+           ~f:
+             Shape.(
+               function
+               | Fixed_idx _ | Dynamic_recipient _ | Dynamic_provider _ -> None | Iterator s -> Some s)
+    in
+    if Set.length syms <> Array.length indices then raise Non_virtual;
+    Option.iter !at_idcs ~f:(fun at -> if not @@ Shape.Symbolic_idcs.equal at indices then raise Non_virtual)
+  in
   (* Traverse the float code too, for completeness / future use-cases. *)
   let rec loop_proc llc : unit =
     match llc with
@@ -545,7 +555,9 @@ let process_computation node top_llc : unit =
     | For_loop { index = _; from_ = _; to_ = _; body } -> loop_proc body
     | Fill { tensor = _; value } -> loop_float value
     | Set (data, indices, llv) ->
-        if equal_data data top_data then check_idcs indices;
+        if equal_data data top_data then (
+          check_idcs indices;
+          at_idcs := Some indices);
         loop_float llv
     | Set_local (_, llv) -> loop_float llv
     | Comment _ -> ()
