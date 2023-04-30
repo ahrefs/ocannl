@@ -582,9 +582,52 @@ let process_computation node top_llc : unit =
     | Some idcs -> node.computations <- (idcs, top_llc) :: node.computations
   with Non_virtual -> node.non_virtual <- true
 
-let inline_computation ~id node indices =
-  ignore (id, node, indices);
-  Lines [||]
+let inline_computation ~id node call_args =
+  let make_subst lhs_ind rhs_ind =
+    match lhs_ind with Shape.Iterator s -> (s, rhs_ind) | _ -> assert false
+  in
+  let at_data = { id = node.id; field = node.kind } in
+  (* In the order of computation. *)
+  let loop_proc (def_args, def) : unit low_level =
+    let env =
+      Map.of_alist_exn (module Shape.Symbol)
+      @@ Array.to_list
+      @@ Array.map2_exn def_args call_args ~f:make_subst
+    in
+    let subst = function Shape.Iterator s when Map.mem env s -> Map.find_exn env s | idx -> idx in
+    let rec loop llc : unit low_level =
+      match llc with
+      | Lines body -> Lines (Array.map ~f:loop body)
+      | For_loop { index; body; _ } when Map.mem env index -> body
+      | For_loop { index; from_; to_; body } -> For_loop { index; from_; to_; body = loop body }
+      | Fill { tensor; value } when equal_data tensor at_data -> Set_local (id, loop_float value)
+      | Fill { tensor; value } -> Fill { tensor; value = loop_float value }
+      | Set (data, indices, llv) when equal_data data at_data ->
+          assert (Shape.Symbolic_idcs.equal indices def_args);
+          Set_local (id, loop_float llv)
+      | Set (data, indices, llv) -> Set (data, indices, loop_float llv)
+      | Set_local (id, llv) -> Set_local (id, loop_float llv)
+      | Comment _ -> llc
+      | Dynamic_indices ({ body; _ } as dyn_idcs) ->
+          (* FIXME(132): implement virtual dynamic indices. *)
+          Dynamic_indices { dyn_idcs with body = loop body }
+    and loop_float llv : float low_level =
+      match llv with
+      | Constant _ -> llv
+      | Get (data, indices) when equal_data data at_data ->
+          assert (Shape.Symbolic_idcs.equal indices def_args);
+          Get_local id
+      | Get (data, indices) -> Get (data, Array.map ~f:subst indices)
+      | Local_scope (id, prec, llc) -> Local_scope (id, prec, loop llc)
+      | Get_local _ -> llv
+      | Binop (Arg1, llv1, _llv2) -> loop_float llv1
+      | Binop (Arg2, _llv1, llv2) -> loop_float llv2
+      | Binop (op, llv1, llv2) -> Binop (op, loop_float llv1, loop_float llv2)
+      | Unop (op, llv) -> Unop (op, loop_float llv)
+    in
+    loop def
+  in
+  Lines (Array.of_list_rev_map ~f:loop_proc node.computations)
 
 let virtual_llc llc : unit low_level =
   let rec loop_proc llc : unit low_level option =
