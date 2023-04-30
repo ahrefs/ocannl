@@ -412,7 +412,7 @@ type data_node = {
   kind : data_kind;
   prec : prec;
   assign_index_bag : Shape.symbol Hash_set.t;
-  computations : (Shape.Symbolic_idcs.t, unit low_level list) Hashtbl.t;
+  mutable computations : (Shape.Symbolic_idcs.t * unit low_level) list;
       (** The computations (of the data node) are retrieved for optimization just as they are populated,
           so that the inlined code corresponds precisely to the changes to the tensors that would happen
           up till that point. Within the code blocks paired with an index tuple, all assignments and accesses
@@ -440,7 +440,7 @@ let get uid =
         kind = uid.field;
         prec = node_prec uid;
         assign_index_bag = Hash_set.Poly.create ();
-        computations = Hashtbl.create (module Shape.Symbolic_idcs);
+        computations = [];
         accesses = Hashtbl.create (module Shape.Indices);
         fill = None;
         non_virtual = false;
@@ -481,8 +481,9 @@ let visit_llc ~max_visits ~consider_grads llc =
         Hash_set.add nodes data.id;
         let node = get data in
         Array.iter idcs ~f:(function
-          | Shape.Fixed_idx _ | Shape.Dynamic_provider _ -> ()
-          | Shape.Iterator s | Shape.Dynamic_recipient s ->
+          | Shape.Fixed_idx _ | Shape.Dynamic_provider _ | Shape.Dynamic_recipient _ ->
+              node.non_virtual <- true
+          | Shape.Iterator s ->
               let ns = Hashtbl.find_or_add reverse_node_map s ~default:Hash_set.Poly.create in
               Hash_set.add ns data;
               Hash_set.add node.assign_index_bag s)
@@ -552,8 +553,7 @@ let process_computation node top_llc : unit =
   and loop_float llv : unit =
     match llv with
     | Constant _ -> ()
-    | Get (data, idcs) ->
-        if equal_data data top_data then check_idcs idcs
+    | Get (data, idcs) -> if equal_data data top_data then check_idcs idcs
     | Local_scope (_, _, llc) -> loop_proc llc
     | Get_local _ -> ()
     | Binop (Arg1, llv1, _llv2) -> loop_float llv1
@@ -567,7 +567,7 @@ let process_computation node top_llc : unit =
     loop_proc top_llc;
     match !at_idcs with
     | None -> raise Non_virtual
-    | Some idcs -> Hashtbl.add_multi node.computations ~key:idcs ~data:top_llc
+    | Some idcs -> node.computations <- (idcs, top_llc) :: node.computations
   with Non_virtual -> node.non_virtual <- true
 
 let inline_computation ~id node indices =
