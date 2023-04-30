@@ -972,7 +972,7 @@ let to_dims (sh : t) : int array =
   in
   Array.concat [ b_dims; o_dims; i_dims ]
 
-type symbol = Symbol of int [@@deriving compare, sexp, hash, variants]
+type symbol = Symbol of int [@@deriving compare, equal, sexp, hash, variants]
 
 let unique_id = ref 0
 
@@ -983,14 +983,14 @@ let get_symbol () =
 let opt_symbol = function d when d <= 0 -> assert false | 1 -> None | _ -> Some (get_symbol ())
 
 module Indices = struct
-  type t = int array [@@deriving compare, sexp]
+  type t = int array [@@deriving compare, equal, sexp]
 
   let hash arr = [%hash: int list] @@ Array.to_list arr
   let hash_fold_t s arr = [%hash_fold: int list] s @@ Array.to_list arr
 end
 
 module Symbols = struct
-  type t = symbol array [@@deriving compare, sexp]
+  type t = symbol array [@@deriving compare, equal, sexp]
 
   let hash arr = [%hash: symbol list] @@ Array.to_list arr
   let hash_fold_t s arr = [%hash_fold: symbol list] s @@ Array.to_list arr
@@ -1010,12 +1010,12 @@ type 'a axis_index =
       dimensions of the recipient axes. The contents stored with a [Dynamic_provider] are used during
       the translation from the high-level to the low-level representation, and later [Dynamic_provider]
       is used as a place-holder filled in with the axis number of the recipient. *)
-[@@deriving compare, sexp, hash, variants]
+[@@deriving compare, equal, sexp, hash, variants]
 
 let opt_iterator = function None -> Fixed_idx 0 | Some sym -> Iterator sym
 
 module Symbolic_idcs = struct
-  type t = symbol axis_index array [@@deriving compare, sexp]
+  type t = symbol axis_index array [@@deriving compare, equal, sexp]
 
   let hash arr = [%hash: symbol axis_index list] @@ Array.to_list arr
   let hash_fold_t s arr = [%hash_fold: symbol axis_index list] s @@ Array.to_list arr
