@@ -170,10 +170,12 @@ let dynload_with_handler ~runtime_store code =
 let perform_initialization =
   let open Ocannl_runtime.Node in
   List.iter ~f:(function
-    | { Code.tensor = { id; field = Value }; dims; init_op } ->
-        (get id).value <- create_ndarray Single (dims ()) init_op
-    | { tensor = { id; field = Grad }; dims; init_op } ->
-        (get id).grad <- Some (create_ndarray Single (dims ()) init_op))
+    | { Code.tensor = { id; field = Value } as tensor; dims; init_op } ->
+        if not @@ (Code.get_node tensor).non_virtual then
+          (get id).value <- create_ndarray Single (dims ()) init_op
+    | { tensor = { id; field = Grad } as tensor; dims; init_op } ->
+        if not @@ (Code.get_node tensor).non_virtual then
+          (get id).grad <- Some (create_ndarray Single (dims ()) init_op))
 
 let compile_routine code =
   let open Formula in
@@ -201,16 +203,18 @@ let last_with_backprop = ref false
 let last_update_params = ref false
 let generated_session_step_update = ref Code.Noop
 
-let print_session_code () =
+let print_session_code ?(compiled = false) () =
   let open Code in
-  Caml.Format.printf "Session step update code:@ %a" fprint_code !generated_session_step_update;
+  if compiled then
+    Caml.Format.printf "Session step update code:@ %a" Sexp.pp_hum
+      (sexp_of_low_level_program @@ compile_program @@ Session_step_update !generated_session_step_update)
+  else Caml.Format.printf "Session step update code:@ %a" fprint_code !generated_session_step_update;
   Caml.Format.print_newline ()
 
 let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_params = true) ?(reinit = false)
     ?(run = true) ?(force_no_init = false) () =
   let open Formula in
-  if force_no_init && reinit then
-    invalid_arg "refresh_session: ~force_no_init conflicts with ~reinit";
+  if force_no_init && reinit then invalid_arg "refresh_session: ~force_no_init conflicts with ~reinit";
   if update_params && not with_backprop then
     invalid_arg "refresh_session: ~update_params:true requires ~with_backprop:true";
   (* Initialization and the forward processing. *)
@@ -256,6 +260,9 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
       | true, Some minus_lr -> Block_comment ("Params update", generate_params_update ~minus_lr ())
       | _ -> Noop
     in
+    (* Roots at the time of compilation are not virtual, so that they can be consumed downstream. *)
+    Map.iter_keys !Formula.global_roots ~f:(fun id ->
+       (Code.get_node {id; field=Value}).non_virtual <- true);
     generated_session_step_update := sequential [ forward; backprop; params_update ]);
   if (not force_no_init) && (generating || reinit) then
     dynload_with_handler ~runtime_store:Ocannl_runtime.Node.global.session_step_update

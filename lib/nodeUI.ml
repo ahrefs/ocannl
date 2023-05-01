@@ -10,6 +10,7 @@ type t = {
   op_label : string;
   desc_label : string option;
   shape : Shape.t;
+  mutable virtual_ : bool;
 }
 [@@deriving sexp_of]
 (** A DAG of decorated [Node]s, also storing the shape information. *)
@@ -26,7 +27,7 @@ let create (type grad_arr_t value_arr_t) ~(value_prec : ('a, value_arr_t) Node.p
     ?input_dims ?output_dims ?axis_labels ?deduced ~children () =
   let node = Node.create ~value_prec ?grad_prec ~is_form () in
   let shape = Shape.make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~id:node.id () in
-  let data = { id = node.id; node; op_label; desc_label; children; shape } in
+  let data = { id = node.id; node; op_label; desc_label; children; shape; virtual_ = false } in
   Hashtbl.add_exn global_node_store ~key:node.id ~data;
   data
 
@@ -409,7 +410,7 @@ let to_dag ?entries_per_axis ~with_id ~with_value ~with_grad n_id =
     let children = List.map ~f:to_dag n.children in
     let desc_l = match n.desc_label with None -> "" | Some l -> l ^ " " in
     let op_l = match n.op_label with "" -> "" | l -> "<" ^ l ^ ">" in
-    let prefix = "[" ^ id ^ "] " ^ desc_l ^ op_l in
+    let prefix = "[" ^ id ^ "] " ^ desc_l ^ op_l ^ (if n.virtual_ then " virtual" else "") in
     let labels = Shape.axis_map_to_dims_index ~default:"" n.shape.axis_labels in
     let indices = default_display_indices n.shape in
     match (computed_externally, with_value, with_grad, n.node.grad) with
