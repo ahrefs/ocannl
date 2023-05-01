@@ -123,6 +123,8 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
         let lvalue = Function.local func typ v_name in
         Hashtbl.add_exn locals ~key:id ~data:(lvalue, typ, prec_is_double prec);
         loop_proc ~name:(name ^ "_at_" ^ v_name) ~env body;
+        (* Tensors are initialized to 0 by default. *)
+        Block.assign !current_block lvalue @@ RValue.zero ctx typ;
         RValue.lvalue lvalue
     | Get_local id ->
         let lvalue, _typ, _is_double = Hashtbl.find_exn locals id in
