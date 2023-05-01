@@ -147,9 +147,9 @@ let benchmarks =
     ("virtualized gccjit O3", classify_moons ~virtualize:true Gccjit ~opti_level:3);
   ]
 
-let _suspended () = classify_moons ~virtualize:true Gccjit ~opti_level:3 ()
+let () = classify_moons ~virtualize:true Gccjit ~opti_level:3 ()
 
-let () =
+let _suspended () =
   List.map benchmarks ~f:(fun (name, test) -> Bench.Test.create ~name test)
   |> Bench.make_command |> Command_unix.run
 

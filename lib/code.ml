@@ -423,7 +423,7 @@ type data_node = {
 [@@deriving sexp_of]
 
 let global_node_store : (data, data_node) Hashtbl.t = Hashtbl.Poly.create ()
-let reverse_node_map : (sym_index, data Hash_set.t) Hashtbl.t = Hashtbl.Poly.create ()
+let reverse_node_map : (sym_index, data) Hashtbl.t = Hashtbl.Poly.create ()
 (* Identifies the computations that the code block associated with the symbol belongs to. *)
 
 let cleanup_session () =
@@ -482,8 +482,8 @@ let visit_llc ~max_visits ~consider_grads llc =
           | Shape.Fixed_idx _ | Shape.Dynamic_provider _ | Shape.Dynamic_recipient _ ->
               node.non_virtual <- true
           | Shape.Iterator s ->
-              let ns = Hashtbl.find_or_add reverse_node_map s ~default:Hash_set.Poly.create in
-              Hash_set.add ns tensor;
+              let old_tensor = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tensor) in
+              assert (equal_data old_tensor tensor);
               Hash_set.add node.assign_index_bag s)
     | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
@@ -628,18 +628,22 @@ let inline_computation ~id node call_args =
   Lines (Array.of_list_rev_map ~f:loop_proc node.computations)
 
 let virtual_llc llc : unit low_level =
-  let rec loop_proc llc : unit low_level option =
+  let rec loop_proc ~inline_only llc : unit low_level option =
+    let loop = loop_proc ~inline_only in
     match llc with
     | Lines body ->
-        let body = Array.filter_map ~f:loop_proc body in
+        let body = Array.filter_map ~f:loop body in
         if Array.is_empty body then None else Some (Lines body)
-    | For_loop { index = key; from_; to_; body } ->
-        let for_nodes = Hashtbl.find_or_add reverse_node_map ~default:Hash_set.Poly.create key in
-        (* Keep the computation in the output if it has some non-virtual assignment. *)
-        Hash_set.iter for_nodes ~f:(fun tensor ->
+    | For_loop { index; from_; to_; body } -> (
+        match (inline_only, Hashtbl.find reverse_node_map index) with
+        | false, Some tensor ->
             let node = Hashtbl.find_exn global_node_store tensor in
-            if not node.non_virtual then process_computation node llc);
-        Option.map ~f:(fun body -> For_loop { index = key; from_; to_; body }) @@ loop_proc body
+            if node.non_virtual then
+              Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop body
+            else (
+              Option.iter (loop_proc ~inline_only:true llc) ~f:(process_computation node);
+              None)
+        | _ -> Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop body)
     | Fill { tensor; value } ->
         let node : data_node = Hashtbl.find_exn global_node_store tensor in
         if not node.non_virtual then (
@@ -657,7 +661,7 @@ let virtual_llc llc : unit low_level =
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
         (* FIXME(132): implement virtual dynamic indices. *)
         Option.map ~f:(fun body -> Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body })
-        @@ loop_proc body
+        @@ loop body
   and loop_float (llv : float low_level) : float low_level =
     match llv with
     | Constant _ -> llv
@@ -666,17 +670,18 @@ let virtual_llc llc : unit low_level =
         if node.non_virtual then llv
         else
           let id = get_scope () in
-          let body = Option.value_exn @@ loop_proc @@ inline_computation ~id node indices in
+          let body = inline_computation ~id node indices in
           Local_scope (id, node.prec, body)
     | Local_scope (id, prec, llc) ->
-        Local_scope (id, prec, Option.value_or_thunk ~default:(fun () -> llc) @@ loop_proc llc)
+        Local_scope
+          (id, prec, Option.value_or_thunk ~default:(fun () -> llc) @@ loop_proc ~inline_only:true llc)
     | Get_local _ -> llv
     | Binop (Arg1, llv1, _llv2) -> loop_float llv1
     | Binop (Arg2, _llv1, llv2) -> loop_float llv2
     | Binop (op, llv1, llv2) -> Binop (op, loop_float llv1, loop_float llv2)
     | Unop (op, llv) -> Unop (op, loop_float llv)
   in
-  Option.value_exn @@ loop_proc llc
+  Option.value_exn @@ loop_proc ~inline_only:false llc
 
 type virtualize_settings = {
   mutable virtualize : bool;
