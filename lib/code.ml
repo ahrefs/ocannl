@@ -147,17 +147,17 @@ type _ low_level =
   | Fill : { tensor : data; value : float low_level } -> unit low_level
   | Dynamic_indices : {
       tensor : data;
-      tensor_idcs : Shape.Symbolic_idcs.t;
-      dynamic_idcs : Shape.Symbols.t;
-      target_dims : Shape.Indices.t;
+      tensor_idcs : Shape.symbol Shape.axis_index array;
+      dynamic_idcs : Shape.symbol array;
+      target_dims : int array;
       body : unit low_level;
     }
       -> unit low_level
-  | Set : data * Shape.Symbolic_idcs.t * float low_level -> unit low_level
+  | Set : data * Shape.symbol Shape.axis_index array * float low_level -> unit low_level
   | Set_local : scope_id * float low_level -> unit low_level
   | Local_scope : scope_id * prec * unit low_level -> float low_level
   | Get_local : scope_id -> float low_level
-  | Get : data * Shape.Symbolic_idcs.t -> float low_level
+  | Get : data * Shape.symbol Shape.axis_index array -> float low_level
   | Binop : binop * float low_level * float low_level -> float low_level
   | Unop : unop * float low_level -> float low_level
   | Constant : float -> float low_level
@@ -397,13 +397,13 @@ type data_node = {
   kind : data_kind;
   prec : prec;
   assign_index_bag : Shape.symbol Hash_set.t;
-  mutable computations : (Shape.Symbolic_idcs.t * unit low_level) list;
+  mutable computations : (Shape.symbol Shape.axis_index array * unit low_level) list;
       (** The computations (of the data node) are retrieved for optimization just as they are populated,
           so that the inlined code corresponds precisely to the changes to the tensors that would happen
           up till that point. Within the code blocks paired with an index tuple, all assignments and accesses
           must happen via the index tuple; if this is not the case for some assignment, the node cannot
           be virtual. Currently, we only allow for-loop symbols in assignment indices of virtual nodes. *)
-  accesses : (Shape.Indices.t, visits) Hashtbl.t;
+  accesses : (int array, visits) Hashtbl.t;
       (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
   mutable fill : float low_level option;
   mutable non_virtual : bool;
@@ -426,7 +426,7 @@ let get_node uid =
         prec = node_prec uid;
         assign_index_bag = Hash_set.Poly.create ();
         computations = [];
-        accesses = Hashtbl.create (module Shape.Indices);
+        accesses = Hashtbl.Poly.create ();
         fill = None;
         non_virtual = false;
       })
@@ -521,10 +521,10 @@ let process_computation node top_llc =
   let top_data = { id = node.id; field = node.kind } in
   let at_idcs = ref None in
   let has_setter = ref false in
-  let check_idcs (indices : Shape.Symbolic_idcs.t) =
+  let check_idcs (indices : Shape.symbol Shape.axis_index array) =
     (match !at_idcs with
     | None -> at_idcs := Some indices
-    | Some at -> if not @@ Shape.Symbolic_idcs.equal at indices then raise Non_virtual);
+    | Some at -> if not @@ [%equal : Shape.symbol Shape.axis_index array] at indices then raise Non_virtual);
     let syms =
       Set.of_array (module Shape.Symbol)
       @@ Array.filter_map indices
@@ -542,7 +542,8 @@ let process_computation node top_llc =
     | For_loop { index = _; from_ = _; to_ = _; body } -> loop_proc body
     | Fill { tensor = _; value } -> loop_float value
     | Set (tensor, indices, llv) ->
-        if equal_data tensor top_data then check_idcs indices; has_setter := true;
+        if equal_data tensor top_data then check_idcs indices;
+        has_setter := true;
         loop_float llv
     | Set_local (_, llv) -> loop_float llv
     | Comment _ -> ()
@@ -591,7 +592,7 @@ let inline_computation ~id node call_args =
       | Fill { tensor; value } when equal_data tensor at_data -> Set_local (id, loop_float value)
       | Fill { tensor; value } -> Fill { tensor; value = loop_float value }
       | Set (tensor, indices, llv) when equal_data tensor at_data ->
-          assert (Shape.Symbolic_idcs.equal indices def_args);
+          assert ([%equal : Shape.symbol Shape.axis_index array] indices def_args);
           Set_local (id, loop_float llv)
       | Set (tensor, indices, llv) -> Set (tensor, indices, loop_float llv)
       | Set_local (id, llv) -> Set_local (id, loop_float llv)
@@ -603,7 +604,7 @@ let inline_computation ~id node call_args =
       match llv with
       | Constant _ -> llv
       | Get (tensor, indices) when equal_data tensor at_data ->
-          assert (Shape.Symbolic_idcs.equal indices def_args);
+          assert ([%equal : Shape.symbol Shape.axis_index array] indices def_args);
           Get_local id
       | Get (tensor, indices) -> Get (tensor, Array.map ~f:subst indices)
       | Local_scope (id, prec, llc) -> Local_scope (id, prec, loop llc)

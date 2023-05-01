@@ -982,20 +982,6 @@ let get_symbol () =
 
 let opt_symbol = function d when d <= 0 -> assert false | 1 -> None | _ -> Some (get_symbol ())
 
-module Indices = struct
-  type t = int array [@@deriving compare, equal, sexp]
-
-  let hash arr = [%hash: int list] @@ Array.to_list arr
-  let hash_fold_t s arr = [%hash_fold: int list] s @@ Array.to_list arr
-end
-
-module Symbols = struct
-  type t = symbol array [@@deriving compare, equal, sexp]
-
-  let hash arr = [%hash: symbol list] @@ Array.to_list arr
-  let hash_fold_t s arr = [%hash_fold: symbol list] s @@ Array.to_list arr
-end
-
 (** An index into a single axis for doing computations over multiple [Shape]-derived [Code]s. *)
 type 'a axis_index =
   | Fixed_idx of int  (** The specific position along an axis. *)
@@ -1003,23 +989,16 @@ type 'a axis_index =
   | Dynamic_recipient of symbol
       (** [Dynamic_recipient s] gets the index from the [s] member of an [Dynamic_provider sl]
       axis. *)
-  | Dynamic_provider of { idcs : Symbols.t; target_dims : Indices.t }
+  | Dynamic_provider of { idcs : symbol array; target_dims : int array }
       (** The values along a [Dynamic_provider {idcs; target_dims}] axis are read via "random access" by
       [Dynamic_recipient idx] axes for various values of [idx] in [idcs], modulo the corresponding
       dimension from [target_dims]. To prevent out-of-bound errors, set [target_dims] to the
       dimensions of the recipient axes. The contents stored with a [Dynamic_provider] are used during
       the translation from the high-level to the low-level representation, and later [Dynamic_provider]
       is used as a place-holder filled in with the axis number of the recipient. *)
-[@@deriving compare, equal, sexp, hash, variants]
+[@@deriving compare, equal, sexp, variants]
 
 let opt_iterator = function None -> Fixed_idx 0 | Some sym -> Iterator sym
-
-module Symbolic_idcs = struct
-  type t = symbol axis_index array [@@deriving compare, equal, sexp]
-
-  let hash arr = [%hash: symbol axis_index list] @@ Array.to_list arr
-  let hash_fold_t s arr = [%hash_fold: symbol axis_index list] s @@ Array.to_list arr
-end
 
 type str_osym_map = (string, symbol option, Base.String.comparator_witness) Base.Map.t
 
@@ -1032,23 +1011,23 @@ let sexp_of_axis_osym_map (map : axis_osym_map) =
   Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: AxisKey.t * symbol option])
 
 type projections = {
-  product_space : Indices.t;
+  product_space : int array;
       (** The product space dimensions (concatentation of the relevant batch, output, input axes) with
       the same semantics as [to_dims], that an operation should parallelize (map-reduce) over. *)
-  product_iterators : Symbols.t;
+  product_iterators : symbol array;
       (** The product space iterators (concatentation of the relevant batch, output, input axes)
       for iterating over the [product_space] axes, where same axes are at same array indices. *)
-  project_lhs : Symbolic_idcs.t;
+  project_lhs : symbol axis_index array;
       (** A projection that takes an [product_space]-bound index and produces an index into the result of
       an operation. *)
-  project_rhs1 : Symbolic_idcs.t;
+  project_rhs1 : symbol axis_index array;
       (** A projection that takes an [product_space]-bound index and produces an index into the (first)
       argument of an operation. *)
-  project_rhs2 : Symbolic_idcs.t option;
+  project_rhs2 : symbol axis_index array option;
       (** A projection that takes an [product_space]-bound index and produces an index into the second
       argument of a binary operation. *)
 }
-[@@deriving compare, sexp, hash]
+[@@deriving compare, equal, sexp]
 (** All the information relevant for [Code] code generation contained in a completed [update_step]. *)
 
 (** Projections for iterating over a terminal in [Code], or for a pointwise unary operator. *)
@@ -1303,7 +1282,7 @@ let rec derive_projections (shapes : update_step) : projections =
         Some (Array.of_list @@ List.concat [ rhs2_batch; rhs2_output; rhs2_input ])
       in
       let product_space : int array = Array.filter ~f:(( <> ) 1) product_space in
-      let product_iterators : Symbols.t = Array.filter_map ~f:Fn.id product_iterators in
+      let product_iterators : symbol array = Array.filter_map ~f:Fn.id product_iterators in
       { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
   | Broadcast (Compose, sh1, sh2) ->
       (* [sh2] is the value or the function that gets applied first: [cur_sh(x) = sh1(sh2(x))].
@@ -1499,7 +1478,7 @@ let backprop_unary projections =
     project_rhs2 = Some projections.project_lhs;
   }
 
-let derive_index iterator_symbols (projection : Symbolic_idcs.t) : Symbols.t -> Symbolic_idcs.t =
+let derive_index iterator_symbols (projection : symbol axis_index array) : symbol array -> symbol axis_index array =
   let sym_to_i =
     Array.mapi iterator_symbols ~f:(fun i (Symbol s) -> (s, i))
     |> Array.to_list
