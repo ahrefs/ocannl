@@ -4,7 +4,7 @@ open Base
 (** *** High-level representation. *** *)
 type data_kind = Value | Grad [@@deriving sexp, equal, hash]
 
-type data = { id : int; field : data_kind } [@@deriving sexp, equal, hash]
+type tensor_ptr = { id : int; field : data_kind } [@@deriving sexp, equal, hash]
 type binop = Add | Mul | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp]
 type unop = Identity | Relu [@@deriving sexp]
 
@@ -81,20 +81,20 @@ and t =
       zero_out : bool;
       accum : binop;
       op : binop;
-      lhs : data;
-      rhs1 : data;
-      rhs2 : data;
+      lhs : tensor_ptr;
+      rhs1 : tensor_ptr;
+      rhs2 : tensor_ptr;
       projections : unit -> Shape.projections;
     }
   | Accum_unop of {
       zero_out : bool;
       accum : binop;
       op : unop;
-      lhs : data;
-      rhs : data;
+      lhs : tensor_ptr;
+      rhs : tensor_ptr;
       projections : unit -> Shape.projections;
     }
-  | Fetch of { tensor : data; fetch_op : fetch_op }
+  | Fetch of { tensor : tensor_ptr; fetch_op : fetch_op }
   | Block_comment of string * t
   | Noop
 [@@deriving sexp]
@@ -106,7 +106,7 @@ type program = Suspension of t | Session_step_update of t [@@deriving sexp]
 (** Name of a program that can be used as part of a file name. *)
 let get_name = function Suspension _ -> "suspension" | Session_step_update _ -> "session_step_update"
 
-type create = { tensor : data; dims : unit -> int array; init_op : init_op }
+type create = { tensor : tensor_ptr; dims : unit -> int array; init_op : init_op }
 (** Information to create a tensor, once its shape is inferred. *)
 
 let remove_updates tensor c =
@@ -118,11 +118,11 @@ let remove_updates tensor c =
       | ParHint (t, (Accum_binop { lhs; _ } | Accum_unop { lhs; _ }))
       | Seq (t, (Accum_binop { lhs; _ } | Accum_unop { lhs; _ })) ) as c
       when check ->
-        if equal_data tensor lhs then rm true t else rm false c
+        if equal_tensor_ptr tensor lhs then rm true t else rm false c
     | Par (t1, t2) -> Par (rm true t1, rm true t2)
     | ParHint (t1, t2) -> ParHint (rm true t1, rm true t2)
     | Seq (t1, t2) -> Seq (rm true t1, rm true t2)
-    | (Accum_binop { lhs; _ } | Accum_unop { lhs; _ }) when equal_data tensor lhs -> Noop
+    | (Accum_binop { lhs; _ } | Accum_unop { lhs; _ }) when equal_tensor_ptr tensor lhs -> Noop
     | c -> c
   in
   rm true c
@@ -153,20 +153,20 @@ type _ low_level =
   | Comment : string -> unit low_level
   | Lines : unit low_level array -> unit low_level
   | For_loop : { index : sym_index; from_ : int; to_ : int; body : unit low_level } -> unit low_level
-  | Fill : { tensor : data; value : float low_level } -> unit low_level
+  | Fill : { tensor : tensor_ptr; value : float low_level } -> unit low_level
   | Dynamic_indices : {
-      tensor : data;
+      tensor : tensor_ptr;
       tensor_idcs : index array;
       dynamic_idcs : Shape.symbol array;
       target_dims : int array;
       body : unit low_level;
     }
       -> unit low_level
-  | Set : data * index array * float low_level -> unit low_level
+  | Set : tensor_ptr * index array * float low_level -> unit low_level
   | Set_local : scope_id * float low_level -> unit low_level
   | Local_scope : scope_id * prec * unit low_level -> float low_level
   | Get_local : scope_id -> float low_level
-  | Get : data * index array -> float low_level
+  | Get : tensor_ptr * index array -> float low_level
   | Binop : binop * float low_level * float low_level -> float low_level
   | Unop : unop * float low_level -> float low_level
   | Constant : float -> float low_level
@@ -422,8 +422,8 @@ type data_node = {
 }
 [@@deriving sexp_of]
 
-let global_node_store : (data, data_node) Hashtbl.t = Hashtbl.Poly.create ()
-let reverse_node_map : (sym_index, data) Hashtbl.t = Hashtbl.Poly.create ()
+let global_node_store : (tensor_ptr, data_node) Hashtbl.t = Hashtbl.Poly.create ()
+let reverse_node_map : (sym_index, tensor_ptr) Hashtbl.t = Hashtbl.Poly.create ()
 (* Identifies the computations that the code block associated with the symbol belongs to. *)
 
 let cleanup_session () =
@@ -483,7 +483,7 @@ let visit_llc ~max_visits ~consider_grads llc =
               node.non_virtual <- true
           | Shape.Iterator s ->
               let old_tensor = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tensor) in
-              assert (equal_data old_tensor tensor);
+              assert (equal_tensor_ptr old_tensor tensor);
               Hash_set.add node.assign_index_bag s)
     | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
@@ -555,7 +555,7 @@ let process_computation node top_llc =
     | For_loop { index = _; from_ = _; to_ = _; body } -> loop_proc body
     | Fill { tensor = _; value } -> loop_float value
     | Set (tensor, indices, llv) ->
-        if equal_data tensor top_data then check_idcs indices;
+        if equal_tensor_ptr tensor top_data then check_idcs indices;
         has_setter := true;
         loop_float llv
     | Set_local (_, llv) -> loop_float llv
@@ -564,7 +564,7 @@ let process_computation node top_llc =
   and loop_float llv =
     match llv with
     | Constant _ -> ()
-    | Get (tensor, idcs) -> if equal_data tensor top_data then check_idcs idcs
+    | Get (tensor, idcs) -> if equal_tensor_ptr tensor top_data then check_idcs idcs
     | Local_scope (_, _, llc) -> loop_proc llc
     | Get_local _ -> ()
     | Binop (Arg1, llv1, _llv2) -> loop_float llv1
@@ -598,9 +598,9 @@ let inline_computation ~id node call_args =
       | Lines body -> Lines (Array.map ~f:loop body)
       | For_loop { index; body; _ } when Map.mem env index -> body
       | For_loop { index; from_; to_; body } -> For_loop { index; from_; to_; body = loop body }
-      | Fill { tensor; value } when equal_data tensor at_data -> Set_local (id, loop_float value)
+      | Fill { tensor; value } when equal_tensor_ptr tensor at_data -> Set_local (id, loop_float value)
       | Fill { tensor; value } -> Fill { tensor; value = loop_float value }
-      | Set (tensor, indices, llv) when equal_data tensor at_data ->
+      | Set (tensor, indices, llv) when equal_tensor_ptr tensor at_data ->
           assert ([%equal: index array] indices def_args);
           Set_local (id, loop_float llv)
       | Set (tensor, indices, llv) -> Set (tensor, indices, loop_float llv)
@@ -612,7 +612,7 @@ let inline_computation ~id node call_args =
     and loop_float llv : float low_level =
       match llv with
       | Constant _ -> llv
-      | Get (tensor, indices) when equal_data tensor at_data ->
+      | Get (tensor, indices) when equal_tensor_ptr tensor at_data ->
           assert ([%equal: index array] indices def_args);
           Get_local id
       | Get (tensor, indices) -> Get (tensor, Array.map ~f:subst indices)
@@ -711,9 +711,9 @@ let interpret_program prog : string option =
   Some (Sexp.to_string_hum @@ sexp_of_low_level_program llp)
 
 module CDSL = struct
-  let value_of_id id : data = { id; field = Value }
-  let grad_of_id id : data = { id; field = Grad }
-  let data_of_node field n : data = { id = n.NodeUI.id; field }
+  let value_of_id id : tensor_ptr = { id; field = Value }
+  let grad_of_id id : tensor_ptr = { id; field = Grad }
+  let data_of_node field n : tensor_ptr = { id = n.NodeUI.id; field }
   let interpreter_print_comments = interpreter_print_comments
   let keep_files_in_run_directory = keep_files_in_run_directory
   let with_debug = with_debug
