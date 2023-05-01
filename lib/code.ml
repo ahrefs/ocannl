@@ -527,7 +527,10 @@ let visit_llc ~max_visits ~consider_grads llc =
         Option.iter
           (Hashtbl.find global_node_store { id = node_id; field = Grad })
           ~f:(fun grad_node ->
-            if Hashtbl.exists grad_node.accesses ~f:is_too_many then grad_node.non_virtual <- true))
+            if Hashtbl.exists grad_node.accesses ~f:is_too_many then grad_node.non_virtual <- true;
+            (* Issue #135: For now, value and gradient are non-virtual reciprocically. *)
+            if value_node.non_virtual then grad_node.non_virtual <- true;
+            if grad_node.non_virtual then value_node.non_virtual <- true))
 
 let process_computation node top_llc =
   let exception Non_virtual in
@@ -577,13 +580,21 @@ let process_computation node top_llc =
         loop_float llv2
     | Unop (_, llv) -> loop_float llv
   in
+  (* Issue #135: For now, value and gradient are non-virtual reciprocically. *)
+  let other_node =
+    get_node { id = node.id; field = (if equal_data_kind node.kind Value then Grad else Value) }
+  in
   try
+    if node.non_virtual then raise Non_virtual;
+    if other_node.non_virtual then raise Non_virtual;
     loop_proc top_llc;
     if not !has_setter then raise Non_virtual;
     node.computations <- (!at_idcs, top_llc) :: node.computations;
     (NodeUI.get node.id).virtual_ <- true
   with Non_virtual ->
-    node.non_virtual <- true
+    (NodeUI.get node.id).virtual_ <- false;
+    node.non_virtual <- true;
+    other_node.non_virtual <- true
 
 let inline_computation ~id node call_args =
   let make_subst lhs_ind rhs_ind =
