@@ -10,9 +10,9 @@ type unop = Identity | Relu [@@deriving sexp]
 
 module N = Ocannl_runtime.Node
 
-let get_tensor data =
-  let n = N.get data.id in
-  match data.field with Value -> n.value | Grad -> Option.value_exn n.grad
+let get_tensor tensor =
+  let n = N.get tensor.id in
+  match tensor.field with Value -> n.value | Grad -> Option.value_exn n.grad
 
 (** Initializes a tensor by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op = N.init_op =
@@ -53,8 +53,8 @@ let prec_of_sexp = function
   | Sexp.List _ -> invalid_arg "prec_of_sexp: expected atom, found list"
   | Sexp.Atom s -> invalid_arg @@ "prec_of_sexp: unknown precision " ^ s
 
-let node_prec data =
-  match get_tensor data with
+let node_prec tensor =
+  match get_tensor tensor with
   | N.Byte_as_int_nd _ -> byte_as_int
   | N.Half_as_int_nd _ -> half_as_int
   | N.Single_nd _ -> single
@@ -109,7 +109,7 @@ let get_name = function Suspension _ -> "suspension" | Session_step_update _ -> 
 type create = { tensor : data; dims : unit -> int array; init_op : init_op }
 (** Information to create a tensor, once its shape is inferred. *)
 
-let remove_updates data c =
+let remove_updates tensor c =
   let rec rm check = function
     | ( Par ((Accum_binop { lhs; _ } | Accum_unop { lhs; _ }), t)
       | ParHint ((Accum_binop { lhs; _ } | Accum_unop { lhs; _ }), t)
@@ -118,11 +118,11 @@ let remove_updates data c =
       | ParHint (t, (Accum_binop { lhs; _ } | Accum_unop { lhs; _ }))
       | Seq (t, (Accum_binop { lhs; _ } | Accum_unop { lhs; _ })) ) as c
       when check ->
-        if equal_data data lhs then rm true t else rm false c
+        if equal_data tensor lhs then rm true t else rm false c
     | Par (t1, t2) -> Par (rm true t1, rm true t2)
     | ParHint (t1, t2) -> ParHint (rm true t1, rm true t2)
     | Seq (t1, t2) -> Seq (rm true t1, rm true t2)
-    | (Accum_binop { lhs; _ } | Accum_unop { lhs; _ }) when equal_data data lhs -> Noop
+    | (Accum_binop { lhs; _ } | Accum_unop { lhs; _ }) when equal_data tensor lhs -> Noop
     | c -> c
   in
   rm true c
@@ -139,8 +139,7 @@ let get_scope =
     Int.incr uid;
     Scope_id !uid
 
-(** Cases: [unit low_level] -- code, [float low_level] -- single number at some precision,
-    [data low_level] -- a tensor. *)
+(** Cases: [unit low_level] -- code, [float low_level] -- single number at some precision. *)
 type _ low_level =
   | Comment : string -> unit low_level
   | Lines : unit low_level array -> unit low_level
@@ -462,16 +461,16 @@ let visit_llc ~max_visits ~consider_grads llc =
         Hash_set.add nodes data_node.id;
         if not @@ Hashtbl.is_empty data_node.accesses then data_node.non_virtual <- true
         else data_node.fill <- Some value
-    | Set (data, idcs, llv) ->
+    | Set (tensor, idcs, llv) ->
         loop_float env llv;
-        Hash_set.add nodes data.id;
-        let node = get_node data in
+        Hash_set.add nodes tensor.id;
+        let node = get_node tensor in
         Array.iter idcs ~f:(function
           | Shape.Fixed_idx _ | Shape.Dynamic_provider _ | Shape.Dynamic_recipient _ ->
               node.non_virtual <- true
           | Shape.Iterator s ->
               let ns = Hashtbl.find_or_add reverse_node_map s ~default:Hash_set.Poly.create in
-              Hash_set.add ns data;
+              Hash_set.add ns tensor;
               Hash_set.add node.assign_index_bag s)
     | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
@@ -485,8 +484,8 @@ let visit_llc ~max_visits ~consider_grads llc =
     let loop = loop_float env in
     match llv with
     | Constant _ -> ()
-    | Get (data, indices) ->
-        let data_node = get_node data in
+    | Get (tensor, indices) ->
+        let data_node = get_node tensor in
         Hash_set.add nodes data_node.id;
         Hashtbl.update data_node.accesses (lookup env indices)
           ~f:(visit data_node.fill data_node.assign_index_bag)
@@ -517,11 +516,15 @@ let visit_llc ~max_visits ~consider_grads llc =
           ~f:(fun grad_node ->
             if Hashtbl.exists grad_node.accesses ~f:is_too_many then grad_node.non_virtual <- true))
 
-let process_computation node top_llc : unit =
+let process_computation node top_llc =
   let exception Non_virtual in
   let top_data = { id = node.id; field = node.kind } in
   let at_idcs = ref None in
-  let check_idcs indices =
+  let has_setter = ref false in
+  let check_idcs (indices : Shape.Symbolic_idcs.t) =
+    (match !at_idcs with
+    | None -> at_idcs := Some indices
+    | Some at -> if not @@ Shape.Symbolic_idcs.equal at indices then raise Non_virtual);
     let syms =
       Set.of_array (module Shape.Symbol)
       @@ Array.filter_map indices
@@ -530,27 +533,24 @@ let process_computation node top_llc : unit =
                function
                | Fixed_idx _ | Dynamic_recipient _ | Dynamic_provider _ -> None | Iterator s -> Some s)
     in
-    if Set.length syms <> Array.length indices then raise Non_virtual;
-    Option.iter !at_idcs ~f:(fun at -> if not @@ Shape.Symbolic_idcs.equal at indices then raise Non_virtual)
+    if Set.length syms <> Array.length indices then raise Non_virtual
   in
   (* Traverse the float code too, for completeness / future use-cases. *)
-  let rec loop_proc llc : unit =
+  let rec loop_proc llc =
     match llc with
     | Lines body -> Array.iter ~f:loop_proc body
     | For_loop { index = _; from_ = _; to_ = _; body } -> loop_proc body
     | Fill { tensor = _; value } -> loop_float value
-    | Set (data, indices, llv) ->
-        if equal_data data top_data then (
-          check_idcs indices;
-          at_idcs := Some indices);
+    | Set (tensor, indices, llv) ->
+        if equal_data tensor top_data then check_idcs indices; has_setter := true;
         loop_float llv
     | Set_local (_, llv) -> loop_float llv
     | Comment _ -> ()
     | Dynamic_indices { body; _ } -> loop_proc body
-  and loop_float llv : unit =
+  and loop_float llv =
     match llv with
     | Constant _ -> ()
-    | Get (data, idcs) -> if equal_data data top_data then check_idcs idcs
+    | Get (tensor, idcs) -> if equal_data tensor top_data then check_idcs idcs
     | Local_scope (_, _, llc) -> loop_proc llc
     | Get_local _ -> ()
     | Binop (Arg1, llv1, _llv2) -> loop_float llv1
@@ -562,9 +562,12 @@ let process_computation node top_llc : unit =
   in
   try
     loop_proc top_llc;
+    if not !has_setter then raise Non_virtual;
     match !at_idcs with
     | None -> raise Non_virtual
-    | Some idcs -> node.computations <- (idcs, top_llc) :: node.computations
+    | Some idcs ->
+        node.computations <- (idcs, top_llc) :: node.computations;
+        (NodeUI.get node.id).virtual_ <- true
   with Non_virtual -> node.non_virtual <- true
 
 let inline_computation ~id node call_args =
@@ -587,10 +590,10 @@ let inline_computation ~id node call_args =
       | For_loop { index; from_; to_; body } -> For_loop { index; from_; to_; body = loop body }
       | Fill { tensor; value } when equal_data tensor at_data -> Set_local (id, loop_float value)
       | Fill { tensor; value } -> Fill { tensor; value = loop_float value }
-      | Set (data, indices, llv) when equal_data data at_data ->
+      | Set (tensor, indices, llv) when equal_data tensor at_data ->
           assert (Shape.Symbolic_idcs.equal indices def_args);
           Set_local (id, loop_float llv)
-      | Set (data, indices, llv) -> Set (data, indices, loop_float llv)
+      | Set (tensor, indices, llv) -> Set (tensor, indices, loop_float llv)
       | Set_local (id, llv) -> Set_local (id, loop_float llv)
       | Comment _ -> llc
       | Dynamic_indices ({ body; _ } as dyn_idcs) ->
@@ -599,10 +602,10 @@ let inline_computation ~id node call_args =
     and loop_float llv : float low_level =
       match llv with
       | Constant _ -> llv
-      | Get (data, indices) when equal_data data at_data ->
+      | Get (tensor, indices) when equal_data tensor at_data ->
           assert (Shape.Symbolic_idcs.equal indices def_args);
           Get_local id
-      | Get (data, indices) -> Get (data, Array.map ~f:subst indices)
+      | Get (tensor, indices) -> Get (tensor, Array.map ~f:subst indices)
       | Local_scope (id, prec, llc) -> Local_scope (id, prec, loop llc)
       | Get_local _ -> llv
       | Binop (Arg1, llv1, _llv2) -> loop_float llv1
@@ -623,35 +626,33 @@ let virtual_llc llc : unit low_level =
     | For_loop { index = key; from_; to_; body } ->
         let for_nodes = Hashtbl.find_or_add reverse_node_map ~default:Hash_set.Poly.create key in
         (* Keep the computation in the output if it has some non-virtual assignment. *)
-        let should_keep =
-          Hash_set.exists for_nodes ~f:(fun data ->
-              let node = Hashtbl.find_exn global_node_store data in
-              node.non_virtual)
-        in
-        Hash_set.iter for_nodes ~f:(fun data ->
-            let node = Hashtbl.find_exn global_node_store data in
+        Hash_set.iter for_nodes ~f:(fun tensor ->
+            let node = Hashtbl.find_exn global_node_store tensor in
             if not node.non_virtual then process_computation node llc);
-        if should_keep then
-          Option.map ~f:(fun body -> For_loop { index = key; from_; to_; body }) @@ loop_proc body
-        else None
+        Option.map ~f:(fun body -> For_loop { index = key; from_; to_; body }) @@ loop_proc body
     | Fill { tensor; value } ->
-        let node = Hashtbl.find_exn global_node_store tensor in
+        let node : data_node = Hashtbl.find_exn global_node_store tensor in
         if not node.non_virtual then (
           process_computation node llc;
           None)
         else Some (Fill { tensor; value = loop_float value })
-    | Set (data, indices, llv) -> Some (Set (data, indices, loop_float llv))
+    | Set (tensor, indices, llv) ->
+        let node : data_node = Hashtbl.find_exn global_node_store tensor in
+        if not node.non_virtual then (
+          process_computation node llc;
+          None)
+        else Some (Set (tensor, indices, loop_float llv))
     | Set_local (id, llv) -> Some (Set_local (id, loop_float llv))
     | Comment _ -> Some llc
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
         (* FIXME(132): implement virtual dynamic indices. *)
         Option.map ~f:(fun body -> Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body })
         @@ loop_proc body
-  and loop_float llv : float low_level =
+  and loop_float (llv : float low_level) : float low_level =
     match llv with
     | Constant _ -> llv
-    | Get (data, indices) ->
-        let node = get_node data in
+    | Get (tensor, indices) ->
+        let node : data_node = get_node tensor in
         if node.non_virtual then llv
         else
           let id = get_scope () in
