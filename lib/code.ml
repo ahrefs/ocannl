@@ -658,7 +658,7 @@ let virtual_llc llc : unit low_level =
         else Some (Fill { tensor; value = loop_float value })
     | Set (tensor, indices, llv) ->
         let node : data_node = Hashtbl.find_exn global_node_store tensor in
-        if not node.non_virtual then (
+        if not inline_only && not node.non_virtual then (
           process_computation node llc;
           None)
         else Some (Set (tensor, indices, loop_float llv))
