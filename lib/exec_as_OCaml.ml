@@ -4,11 +4,13 @@ let keep_files_in_run_directory = ref false
 let emit = Code.compile_program
 let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
 let pp_symbol ppf (Shape.Symbol s) = Caml.Format.fprintf ppf "i%d" s
+let pp_index ppf (Code.{sym=Shape.Symbol s; uid}) = Caml.Format.fprintf ppf "i%d_%d" s uid
 
-let pp_symbolic_index ?provider_dim ppf =
+let pp_index_axis ?provider_dim ppf =
   let open Shape in
   function
-  | Iterator (Symbol s) | Dynamic_recipient (Symbol s) -> Caml.Format.fprintf ppf "i%d" s
+  | Iterator i -> pp_index ppf i
+  | Dynamic_recipient (Symbol s) -> Caml.Format.fprintf ppf "i%d" s
   | Fixed_idx i -> Caml.Format.fprintf ppf "%d" i
   | Dynamic_provider _ -> Caml.Format.fprintf ppf "%d" @@ Option.value_exn provider_dim
 
@@ -28,7 +30,7 @@ let format_low_level ~as_toplevel (ppf : Caml.Format.formatter) (type a) (c : a 
   let open Code in
   let open Caml.Format in
   let pp_indices ?provider_dim ppf idcs =
-    fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:pp_semi (pp_symbolic_index ?provider_dim))
+    fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:pp_semi (pp_index_axis ?provider_dim))
     @@ Array.to_list idcs
   in
   let pp_idcs = pp_indices ?provider_dim:None in
@@ -39,7 +41,7 @@ let format_low_level ~as_toplevel (ppf : Caml.Format.formatter) (type a) (c : a 
     | Lines [||] -> fprintf ppf "()"
     | Lines lines -> (pp_print_list ~pp_sep:pp_semi pp_ll ppf @@ Array.to_list lines : unit)
     | For_loop { index = i; from_; to_; body } ->
-        fprintf ppf "@[<2>for@ %a = %d@ to %d@ do@ %a@]@ done" pp_symbol i from_ to_ pp_ll body
+        fprintf ppf "@[<2>for@ %a = %d@ to %d@ do@ %a@]@ done" pp_index i from_ to_ pp_ll body
     | Fill { tensor; value } -> fprintf ppf "@[<2>fill_from_float %a@ (%a)@]" pp_data_node tensor pp_ll value
     | Set (tensor, indices, v) ->
         fprintf ppf "@[<2>set_from_float %a@ (%a)@ (%a)@]" pp_data_node tensor pp_idcs indices pp_ll v

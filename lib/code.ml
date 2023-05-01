@@ -139,25 +139,34 @@ let get_scope =
     Int.incr uid;
     Scope_id !uid
 
+type sym_index = { sym : Shape.symbol; uid : int } [@@deriving sexp, equal, compare]
+type index = sym_index Shape.axis_index [@@deriving sexp, equal, compare]
+
+let new_sym_index =
+  let uid = ref 0 in
+  fun sym ->
+    Int.incr uid;
+    { sym; uid = !uid }
+
 (** Cases: [unit low_level] -- code, [float low_level] -- single number at some precision. *)
 type _ low_level =
   | Comment : string -> unit low_level
   | Lines : unit low_level array -> unit low_level
-  | For_loop : { index : Shape.symbol; from_ : int; to_ : int; body : unit low_level } -> unit low_level
+  | For_loop : { index : sym_index; from_ : int; to_ : int; body : unit low_level } -> unit low_level
   | Fill : { tensor : data; value : float low_level } -> unit low_level
   | Dynamic_indices : {
       tensor : data;
-      tensor_idcs : Shape.symbol Shape.axis_index array;
+      tensor_idcs : index array;
       dynamic_idcs : Shape.symbol array;
       target_dims : int array;
       body : unit low_level;
     }
       -> unit low_level
-  | Set : data * Shape.symbol Shape.axis_index array * float low_level -> unit low_level
+  | Set : data * index array * float low_level -> unit low_level
   | Set_local : scope_id * float low_level -> unit low_level
   | Local_scope : scope_id * prec * unit low_level -> float low_level
   | Get_local : scope_id -> float low_level
-  | Get : data * Shape.symbol Shape.axis_index array -> float low_level
+  | Get : data * index array -> float low_level
   | Binop : binop * float low_level * float low_level -> float low_level
   | Unop : unop * float low_level -> float low_level
   | Constant : float -> float low_level
@@ -202,6 +211,7 @@ let rec to_low_level (code : t) : unit low_level =
       let rec loop rev_iters = function
         | [], [] -> basecase rev_iters
         | dim :: product, it :: iters ->
+            let it = new_sym_index it in
             For_loop { index = it; from_ = 0; to_ = dim - 1; body = loop (it :: rev_iters) (product, iters) }
         | _ -> invalid_arg "Code.to_low_level: Accum_binop projections dims-iterators mismatch"
       in
@@ -224,6 +234,7 @@ let rec to_low_level (code : t) : unit low_level =
       let rec loop rev_iters = function
         | [], [] -> basecase rev_iters
         | dim :: product, it :: iters ->
+            let it = new_sym_index it in
             For_loop { index = it; from_ = 0; to_ = dim - 1; body = loop (it :: rev_iters) (product, iters) }
         | _ -> invalid_arg "Code.to_low_level: Accum_unop projections dims-iterators mismatch"
       in
@@ -261,13 +272,14 @@ let with_debug = ref true
 
 let interpret_llc llc =
   let locals = Hashtbl.Poly.create () in
-  let lookup ?provider_dim env indices =
+  let lookup ?provider_dim (env, dyn_env) indices =
     Array.map indices
       ~f:
         Shape.(
           function
           | Fixed_idx i -> i
-          | Iterator s | Dynamic_recipient s -> Map.find_exn env s
+          | Iterator s -> Map.find_exn env s
+          | Dynamic_recipient s -> Map.find_exn dyn_env s
           | Dynamic_provider _ -> Option.value_exn provider_dim)
   in
   let open Ocannl_runtime.Node in
@@ -277,7 +289,7 @@ let interpret_llc llc =
     | Lines body -> Array.iter ~f:loop body
     | For_loop { index = key; from_; to_; body } ->
         for data = from_ to to_ do
-          loop_proc (Map.add_exn ~key ~data env) body
+          loop_proc (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
     | Fill { tensor = { id; field = Value }; value } -> fill_from_float (get id).value @@ loop_float env value
     | Fill { tensor = { id; field = Grad }; value } ->
@@ -323,11 +335,11 @@ let interpret_llc llc =
     let env =
       Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
           let actual = get_as_int tensor @@ lookup ~provider_dim env tensor_idcs in
-          Map.add_exn ~key ~data:(actual % target_dims.(provider_dim)) env)
+          (fst env, Map.add_exn ~key ~data:(actual % target_dims.(provider_dim)) @@ snd env))
     in
     loop_proc env body
   in
-  loop_proc (Map.empty (module Shape.Symbol)) llc
+  loop_proc (Map.Poly.empty, Map.Poly.empty) llc
 
 let interpret_llprog = function
   | Assign_suspension proc ->
@@ -396,8 +408,8 @@ type data_node = {
   id : int;
   kind : data_kind;
   prec : prec;
-  assign_index_bag : Shape.symbol Hash_set.t;
-  mutable computations : (Shape.symbol Shape.axis_index array * unit low_level) list;
+  assign_index_bag : sym_index Hash_set.t;
+  mutable computations : (index array * unit low_level) list;
       (** The computations (of the data node) are retrieved for optimization just as they are populated,
           so that the inlined code corresponds precisely to the changes to the tensors that would happen
           up till that point. Within the code blocks paired with an index tuple, all assignments and accesses
@@ -411,7 +423,7 @@ type data_node = {
 [@@deriving sexp_of]
 
 let global_node_store : (data, data_node) Hashtbl.t = Hashtbl.Poly.create ()
-let reverse_node_map : (Shape.symbol, data Hash_set.t) Hashtbl.t = Hashtbl.Poly.create ()
+let reverse_node_map : (sym_index, data Hash_set.t) Hashtbl.t = Hashtbl.Poly.create ()
 (* Identifies the computations that the code block associated with the symbol belongs to. *)
 
 let cleanup_session () =
@@ -438,13 +450,14 @@ let visit fill assign_bag old =
 let visit_llc ~max_visits ~consider_grads llc =
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
   let nodes = Hash_set.create (module Int) in
-  let lookup ?provider_dim env indices =
+  let lookup ?provider_dim (env, dyn_env) indices =
     Array.map indices
       ~f:
         Shape.(
           function
           | Fixed_idx i -> i
-          | Iterator s | Dynamic_recipient s -> Map.find_exn env s
+          | Iterator s -> Map.find_exn env s
+          | Dynamic_recipient s -> Map.find_exn dyn_env s
           | Dynamic_provider _ -> Option.value_exn provider_dim)
   in
   let rec loop_proc env llc : unit =
@@ -453,7 +466,7 @@ let visit_llc ~max_visits ~consider_grads llc =
     | Lines body -> Array.iter ~f:loop body
     | For_loop { index = key; from_; to_; body } ->
         for data = from_ to to_ do
-          loop_proc (Map.add_exn ~key ~data env) body
+          loop_proc (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
     | Fill { tensor; value } ->
         loop_float env value;
@@ -502,11 +515,11 @@ let visit_llc ~max_visits ~consider_grads llc =
       Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
           let at_pos = lookup ~provider_dim env tensor_idcs in
           Hashtbl.update node.accesses at_pos ~f:(visit node.fill node.assign_index_bag);
-          Map.add_exn ~key ~data:0 env)
+          (fst env, Map.add_exn ~key ~data:0 @@ snd env))
     in
     loop_proc env body
   in
-  loop_proc (Map.empty (module Shape.Symbol)) llc;
+  loop_proc (Map.Poly.empty, Map.Poly.empty) llc;
   Hash_set.iter nodes ~f:(fun node_id ->
       let value_node = get_node { id = node_id; field = Value } in
       if Hashtbl.exists value_node.accesses ~f:is_too_many then value_node.non_virtual <- true;
@@ -521,12 +534,12 @@ let process_computation node top_llc =
   let top_data = { id = node.id; field = node.kind } in
   let at_idcs = ref None in
   let has_setter = ref false in
-  let check_idcs (indices : Shape.symbol Shape.axis_index array) =
+  let check_idcs indices =
     (match !at_idcs with
     | None -> at_idcs := Some indices
-    | Some at -> if not @@ [%equal : Shape.symbol Shape.axis_index array] at indices then raise Non_virtual);
+    | Some at -> if not @@ [%equal: index array] at indices then raise Non_virtual);
     let syms =
-      Set.of_array (module Shape.Symbol)
+      Set.Poly.of_array
       @@ Array.filter_map indices
            ~f:
              Shape.(
@@ -578,11 +591,7 @@ let inline_computation ~id node call_args =
   let at_data = { id = node.id; field = node.kind } in
   (* In the order of computation. *)
   let loop_proc (def_args, def) : unit low_level =
-    let env =
-      Map.of_alist_exn (module Shape.Symbol)
-      @@ Array.to_list
-      @@ Array.map2_exn def_args call_args ~f:make_subst
-    in
+    let env = Map.Poly.of_alist_exn @@ Array.to_list @@ Array.map2_exn def_args call_args ~f:make_subst in
     let subst = function Shape.Iterator s when Map.mem env s -> Map.find_exn env s | idx -> idx in
     let rec loop llc : unit low_level =
       match llc with
@@ -592,7 +601,7 @@ let inline_computation ~id node call_args =
       | Fill { tensor; value } when equal_data tensor at_data -> Set_local (id, loop_float value)
       | Fill { tensor; value } -> Fill { tensor; value = loop_float value }
       | Set (tensor, indices, llv) when equal_data tensor at_data ->
-          assert ([%equal : Shape.symbol Shape.axis_index array] indices def_args);
+          assert ([%equal: index array] indices def_args);
           Set_local (id, loop_float llv)
       | Set (tensor, indices, llv) -> Set (tensor, indices, loop_float llv)
       | Set_local (id, llv) -> Set_local (id, loop_float llv)
@@ -604,7 +613,7 @@ let inline_computation ~id node call_args =
       match llv with
       | Constant _ -> llv
       | Get (tensor, indices) when equal_data tensor at_data ->
-          assert ([%equal : Shape.symbol Shape.axis_index array] indices def_args);
+          assert ([%equal: index array] indices def_args);
           Get_local id
       | Get (tensor, indices) -> Get (tensor, Array.map ~f:subst indices)
       | Local_scope (id, prec, llc) -> Local_scope (id, prec, loop llc)

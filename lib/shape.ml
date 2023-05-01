@@ -1478,7 +1478,7 @@ let backprop_unary projections =
     project_rhs2 = Some projections.project_lhs;
   }
 
-let derive_index iterator_symbols (projection : symbol axis_index array) : symbol array -> symbol axis_index array =
+let derive_index iterator_symbols (projection : symbol axis_index array) =
   let sym_to_i =
     Array.mapi iterator_symbols ~f:(fun i (Symbol s) -> (s, i))
     |> Array.to_list

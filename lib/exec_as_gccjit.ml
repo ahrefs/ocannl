@@ -76,13 +76,14 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
   let cast_bool num_typ v = RValue.cast ctx (RValue.cast ctx v c_int) num_typ in
   let locals = Hashtbl.Poly.create () in
   let current_block = ref initial_block in
-  let lookup ?provider_dim env indices =
+  let lookup ?provider_dim (env, dyn_env) indices =
     Array.map indices
       ~f:
         Shape.(
           function
           | Fixed_idx i -> RValue.int ctx c_index i
-          | Iterator s | Dynamic_recipient s -> Map.find_exn env s
+          | Iterator s -> Map.find_exn env s
+          | Dynamic_recipient s -> Map.find_exn dyn_env s
           | Dynamic_provider _ -> Option.value_exn provider_dim)
   in
   let rec loop_proc ~name ~env (body : unit Code.low_level) : unit =
@@ -111,7 +112,7 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
           let lhs = LValue.access_array tensor.ptr offset in
           Block.assign !current_block lhs value
         in
-        jit_for_loop ~env (Shape.get_symbol ()) ~from_:0 ~to_:size_m_1 (Either.Second callback)
+        jit_for_loop ~env (Code.new_sym_index @@ Shape.Symbol 0) ~from_:0 ~to_:size_m_1 (Either.Second callback)
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
         jit_dynamic_indices ~name ~env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
   and loop_float ~name ~env ~num_typ ~is_double value : rvalue =
@@ -154,11 +155,11 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
         let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) @@ loop c in
         RValue.binary_op ctx Mult num_typ cmp @@ loop c
     | Constant v -> RValue.double ctx num_typ v
-  and jit_for_loop ~env (Shape.Symbol s as symbol) ~from_ ~to_ body : unit =
+  and jit_for_loop ~env (Code.{sym=Shape.Symbol s; uid} as key) ~from_ ~to_ body : unit =
     let open Gccjit in
-    let i = "i" ^ Int.to_string s in
+    let i = "i" ^ Int.to_string s ^ "_" ^ Int.to_string uid in
     let index = Function.local func c_index i in
-    let env = Map.add_exn env ~key:symbol ~data:(RValue.lvalue index) in
+    let env = Map.add_exn ~key ~data:(RValue.lvalue index) @@ fst env, snd env in
     let b_loop_cond = Block.create ~name:("loop_cond_" ^ i) func in
     let b_loop_body = Block.create ~name:("loop_body_" ^ i) func in
     let b_after_loop = Block.create ~name:("after_loop_" ^ i) func in
@@ -191,7 +192,7 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
               RValue.lvalue sym_index)
             else dyn_index
           in
-          Map.add_exn ~key ~data env)
+          fst env, Map.add_exn ~key ~data @@ snd env)
     in
     loop_proc ~name ~env body
   in
@@ -202,7 +203,7 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
 let jit_ll_prog ~name ctx prog =
   let open Gccjit in
   let fkind = Function.Exported in
-  let env = Map.empty (module Shape.Symbol) in
+  let env = Map.Poly.empty, Map.Poly.empty in
   let msg = ref None in
   let emit_routine proc suffix =
     let name = name ^ suffix in
