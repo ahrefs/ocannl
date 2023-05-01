@@ -409,7 +409,7 @@ type data_node = {
   kind : data_kind;
   prec : prec;
   assign_index_bag : sym_index Hash_set.t;
-  mutable computations : (index array * unit low_level) list;
+  mutable computations : (index array option * unit low_level) list;
       (** The computations (of the data node) are retrieved for optimization just as they are populated,
           so that the inlined code corresponds precisely to the changes to the tensors that would happen
           up till that point. Within the code blocks paired with an index tuple, all assignments and accesses
@@ -445,7 +445,7 @@ let get_node uid =
 
 let visit fill assign_bag old =
   if Option.is_none fill && Hash_set.is_empty assign_bag then Recurrent
-  else match old with None -> Visits 0 | Some (Visits i) -> Visits (i + 1) | Some Recurrent -> Recurrent
+  else match old with None -> Visits 1 | Some (Visits i) -> Visits (i + 1) | Some Recurrent -> Recurrent
 
 let visit_llc ~max_visits ~consider_grads llc =
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
@@ -553,10 +553,13 @@ let process_computation node top_llc =
     match llc with
     | Lines body -> Array.iter ~f:loop_proc body
     | For_loop { index = _; from_ = _; to_ = _; body } -> loop_proc body
-    | Fill { tensor = _; value } -> loop_float value
+    | Fill { tensor; value } ->
+        if equal_tensor_ptr tensor top_data then has_setter := true;
+        loop_float value
     | Set (tensor, indices, llv) ->
-        if equal_tensor_ptr tensor top_data then check_idcs indices;
-        has_setter := true;
+        if equal_tensor_ptr tensor top_data then (
+          check_idcs indices;
+          has_setter := true);
         loop_float llv
     | Set_local (_, llv) -> loop_float llv
     | Comment _ -> ()
@@ -577,12 +580,10 @@ let process_computation node top_llc =
   try
     loop_proc top_llc;
     if not !has_setter then raise Non_virtual;
-    match !at_idcs with
-    | None -> raise Non_virtual
-    | Some idcs ->
-        node.computations <- (idcs, top_llc) :: node.computations;
-        (NodeUI.get node.id).virtual_ <- true
-  with Non_virtual -> node.non_virtual <- true
+    node.computations <- (!at_idcs, top_llc) :: node.computations;
+    (NodeUI.get node.id).virtual_ <- true
+  with Non_virtual ->
+    node.non_virtual <- true
 
 let inline_computation ~id node call_args =
   let make_subst lhs_ind rhs_ind =
@@ -591,7 +592,12 @@ let inline_computation ~id node call_args =
   let at_data = { id = node.id; field = node.kind } in
   (* In the order of computation. *)
   let loop_proc (def_args, def) : unit low_level =
-    let env = Map.Poly.of_alist_exn @@ Array.to_list @@ Array.map2_exn def_args call_args ~f:make_subst in
+    let env =
+      match def_args with
+      | None -> Map.Poly.empty
+      | Some def_args ->
+          Map.Poly.of_alist_exn @@ Array.to_list @@ Array.map2_exn def_args call_args ~f:make_subst
+    in
     let subst = function Shape.Iterator s when Map.mem env s -> Map.find_exn env s | idx -> idx in
     let rec loop llc : unit low_level =
       match llc with
@@ -601,7 +607,7 @@ let inline_computation ~id node call_args =
       | Fill { tensor; value } when equal_tensor_ptr tensor at_data -> Set_local (id, loop_float value)
       | Fill { tensor; value } -> Fill { tensor; value = loop_float value }
       | Set (tensor, indices, llv) when equal_tensor_ptr tensor at_data ->
-          assert ([%equal: index array] indices def_args);
+          assert ([%equal: index array option] (Some indices) def_args);
           Set_local (id, loop_float llv)
       | Set (tensor, indices, llv) -> Set (tensor, indices, loop_float llv)
       | Set_local (id, llv) -> Set_local (id, loop_float llv)
@@ -613,7 +619,7 @@ let inline_computation ~id node call_args =
       match llv with
       | Constant _ -> llv
       | Get (tensor, indices) when equal_tensor_ptr tensor at_data ->
-          assert ([%equal: index array] indices def_args);
+          assert ([%equal: index array option] (Some indices) def_args);
           Get_local id
       | Get (tensor, indices) -> Get (tensor, Array.map ~f:subst indices)
       | Local_scope (id, prec, llc) -> Local_scope (id, prec, loop llc)
