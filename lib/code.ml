@@ -131,13 +131,13 @@ let all_parallel = List.fold ~init:Noop ~f:(fun sts st -> Par (st, sts))
 let sequential = List.fold_right ~init:Noop ~f:(fun st sts -> Seq (st, sts))
 
 (** *** Low-level representation. *)
-type scope_id = Scope_id of int [@@deriving sexp, equal, hash]
+type scope_id = {tensor: tensor_ptr; scope_id: int} [@@deriving sexp, equal, hash]
 
 let get_scope =
   let uid = ref 0 in
-  fun () ->
+  fun tensor ->
     Int.incr uid;
-    Scope_id !uid
+    {tensor; scope_id = !uid}
 
 type sym_index = { sym : Shape.symbol; uid : int } [@@deriving sexp, equal, compare]
 type index = sym_index Shape.axis_index [@@deriving sexp, equal, compare]
@@ -669,7 +669,7 @@ let virtual_llc llc : unit low_level =
         else Some (Fill { tensor; value = loop_float value })
     | Set (tensor, indices, llv) ->
         let node : data_node = Hashtbl.find_exn global_node_store tensor in
-        if not inline_only && not node.non_virtual then (
+        if (not inline_only) && not node.non_virtual then (
           process_computation node llc;
           None)
         else Some (Set (tensor, indices, loop_float llv))
@@ -686,7 +686,7 @@ let virtual_llc llc : unit low_level =
         let node : data_node = get_node tensor in
         if node.non_virtual then llv
         else
-          let id = get_scope () in
+          let id = get_scope tensor in
           let body = inline_computation ~id node indices in
           Local_scope (id, node.prec, body)
     | Local_scope (id, prec, llc) ->

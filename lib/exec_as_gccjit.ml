@@ -118,7 +118,7 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
   and loop_float ~name ~env ~num_typ ~is_double value : rvalue =
     let loop = loop_float ~name ~env ~num_typ ~is_double in
     match value with
-    | Local_scope ((Scope_id i as id), prec, body) ->
+    | Local_scope (({scope_id=i; _} as id), prec, body) ->
         let typ = Type.get ctx @@ prec_to_kind prec in
         let v_name = "v" ^ Int.to_string i in
         let lvalue = Function.local func typ v_name in

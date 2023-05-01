@@ -50,11 +50,11 @@ let format_low_level ~as_toplevel (ppf : Caml.Format.formatter) (type a) (c : a 
             fprintf ppf "let@ %a = Int.(@[<2>(get_as_int %a@ (%a)) %% %d@]) in@ " pp_symbol sym pp_data_node
               tensor (pp_indices ~provider_dim) tensor_idcs target_dims.(provider_dim));
         pp_ll ppf body
-    | Set_local (Scope_id id, value) -> fprintf ppf "@[<2>v%d :=@ %a]" id pp_ll value
-    | Local_scope (Scope_id id, _prec, body) ->
+    | Set_local ({scope_id; _}, value) -> fprintf ppf "@[<2>v%d :=@ %a]" scope_id pp_ll value
+    | Local_scope ({scope_id; _}, _prec, body) ->
         (* Note: we could support precisions, but it's not worth it. *)
-        fprintf ppf "@[<2>let v%d =@ ref %a in@ !v%d]" id pp_ll body id
-    | Get_local (Scope_id id) -> fprintf ppf "!v%d" id
+        fprintf ppf "@[<2>let v%d =@ ref %a in@ !v%d]" scope_id pp_ll body scope_id
+    | Get_local ({scope_id; _}) -> fprintf ppf "!v%d" scope_id
     | Get (tensor, indices) ->
         fprintf ppf "@[<2>get_as_float %a@ (%a)@]" pp_data_node tensor pp_idcs indices
     | Constant c -> fprintf ppf "(%f)" c
