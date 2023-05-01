@@ -271,7 +271,8 @@ let keep_files_in_run_directory = ref false
 let with_debug = ref true
 
 let interpret_llc llc =
-  let locals = Hashtbl.Poly.create () in
+  (* Local scope ids can be non-unique due to inlining. *)
+  let locals = ref Map.Poly.empty in
   let lookup ?provider_dim (env, dyn_env) indices =
     Array.map indices
       ~f:
@@ -298,7 +299,7 @@ let interpret_llc llc =
         set_from_float (get id).value (lookup env indices) @@ loop_float env llv
     | Set ({ id; field = Grad }, indices, llv) ->
         set_from_float (Option.value_exn (get id).grad) (lookup env indices) @@ loop_float env llv
-    | Set_local (id, llv) -> Hashtbl.update locals id ~f:(fun _ -> loop_float env llv)
+    | Set_local (id, llv) -> locals := Map.update !locals id ~f:(fun _ -> loop_float env llv)
     | Comment message when !with_debug && !interpreter_print_comments -> Stdio.printf "%s\n%!" message
     | Dynamic_indices { tensor = { id; field = Value }; tensor_idcs; dynamic_idcs; target_dims; body } ->
         dynamic_indices env (get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body
@@ -314,10 +315,13 @@ let interpret_llc llc =
     | Get ({ id; field = Grad }, indices) ->
         get_as_float (Option.value_exn (get id).grad) @@ lookup env indices
     | Local_scope (id, _prec, body) ->
-        Hashtbl.add_exn locals ~key:id ~data:0.0;
+        let old_locals = !locals in
+        locals := Map.update !locals id ~f:(fun _ -> 0.0);
         loop_proc env body;
-        Hashtbl.find_exn locals id
-    | Get_local id -> Hashtbl.find_exn locals id
+        let result = Map.find_exn !locals id in
+        locals := old_locals;
+        result
+    | Get_local id -> Map.find_exn !locals id
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
     | Binop (Add, llv1, llv2) -> loop llv1 + loop llv2

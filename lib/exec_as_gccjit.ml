@@ -74,7 +74,9 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
   let c_float = Type.get ctx Type.Float in
   let c_double = Type.get ctx Type.Double in
   let cast_bool num_typ v = RValue.cast ctx (RValue.cast ctx v c_int) num_typ in
-  let locals = Hashtbl.Poly.create () in
+  (* Local scope ids can be non-unique due to inlining. *)
+  let scope_uid = ref 0 in
+  let locals = ref Map.Poly.empty in
   let current_block = ref initial_block in
   let lookup ?provider_dim (env, dyn_env) indices =
     Array.map indices
@@ -100,7 +102,7 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
         let lhs = LValue.access_array tensor.ptr offset in
         Block.assign !current_block lhs value
     | Set_local (id, value) ->
-        let lhs, num_typ, is_double = Hashtbl.find_exn locals id in
+        let lhs, num_typ, is_double = Map.find_exn !locals id in
         let value = loop_float ~name ~env ~num_typ ~is_double value in
         Block.assign !current_block lhs value
     | Comment c -> Block.comment !current_block c
@@ -120,15 +122,18 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
     match value with
     | Local_scope (({scope_id=i; _} as id), prec, body) ->
         let typ = Type.get ctx @@ prec_to_kind prec in
-        let v_name = "v" ^ Int.to_string i in
+        (* Scope ids can be non-unique due to inlining. *)
+        let v_name = Int.(incr scope_uid; "v" ^ to_string i ^ "_" ^ to_string !scope_uid) in
         let lvalue = Function.local func typ v_name in
-        Hashtbl.add_exn locals ~key:id ~data:(lvalue, typ, prec_is_double prec);
+        let old_locals = !locals in
+        locals := Map.update !locals id ~f:(fun _ -> lvalue, typ, prec_is_double prec);
         loop_proc ~name:(name ^ "_at_" ^ v_name) ~env body;
         (* Tensors are initialized to 0 by default. *)
         Block.assign !current_block lvalue @@ RValue.zero ctx typ;
+        locals := old_locals;
         RValue.lvalue lvalue
     | Get_local id ->
-        let lvalue, _typ, _is_double = Hashtbl.find_exn locals id in
+        let lvalue, _typ, _is_double = Map.find_exn !locals id in
         RValue.lvalue lvalue
     | Get (tensor, idcs) ->
         let tensor = get_tensor ctx tensor in
