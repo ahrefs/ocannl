@@ -602,7 +602,7 @@ let inline_computation ~id node call_args =
     let rec loop llc : unit low_level =
       match llc with
       | Lines body -> Lines (Array.map ~f:loop body)
-      | For_loop { index; body; _ } when Map.mem env index -> body
+      | For_loop { index; body; _ } when Map.mem env index -> loop body
       | For_loop { index; from_; to_; body } -> For_loop { index; from_; to_; body = loop body }
       | Fill { tensor; value } when equal_tensor_ptr tensor at_data -> Set_local (id, loop_float value)
       | Fill { tensor; value } -> Fill { tensor; value = loop_float value }
