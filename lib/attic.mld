@@ -266,4 +266,13 @@ type nulop =
   let ( .-:{}<- ) = set_value_along_axis ~over_kind:Shape.AxisKey.Output ~from_left:false
 
 
+
+        if !debug_virtual_nodes then (
+          try set_from_float id.tensor (lookup env idcs_for_debug) result
+          with e ->
+            Stdio.eprintf "\nError interpreter debug: idcs=\n%s\nenv=\n%s\n%!"
+              (Sexp.to_string_hum @@ [%sexp_of: index array] idcs_for_debug)
+              (Sexp.to_string_hum @@ sexp_of_int_env env);
+            raise e);
+        
 ]}

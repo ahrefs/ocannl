@@ -168,7 +168,13 @@ type _ low_level =
       -> unit low_level
   | Set : tensor_ptr * index array * float low_level -> unit low_level
   | Set_local : scope_id * float low_level -> unit low_level
-  | Local_scope : scope_id * prec * unit low_level -> float low_level
+  | Local_scope : {
+      id : scope_id;
+      prec : prec;
+      body : unit low_level;
+      idcs_for_debug : index array;
+    }
+      -> float low_level
   | Get_local : scope_id -> float low_level
   | Get : tensor_ptr * index array -> float low_level
   | Binop : binop * float low_level * float low_level -> float low_level
@@ -273,6 +279,17 @@ let to_low_level_program prog : low_level_program =
 let interpreter_print_comments = ref false
 let keep_files_in_run_directory = ref false
 let with_debug = ref true
+let debug_virtual_nodes = ref false
+
+type int_env = (sym_index, int) Base.Map.Poly.t * (Shape.symbol, int) Base.Map.Poly.t
+
+let sexp_of_int_env (env, dyn_env) =
+  [%sexp_of: (sym_index * int) list * (Shape.symbol * int) list] (Map.to_alist env, Map.to_alist dyn_env)
+
+let set_from_float ptr idcs value =
+  match ptr.field with
+  | Value -> N.set_from_float (N.get ptr.id).value idcs value
+  | Grad -> N.set_from_float (Option.value_exn (N.get ptr.id).grad) idcs value
 
 let interpret_llc llc =
   (* Local scope ids can be non-unique due to inlining. *)
@@ -287,7 +304,6 @@ let interpret_llc llc =
           | Dynamic_recipient s -> Map.find_exn dyn_env s
           | Dynamic_provider _ -> Option.value_exn provider_dim)
   in
-  let open Ocannl_runtime.Node in
   let rec loop_proc env llc : unit =
     let loop = loop_proc env in
     match llc with
@@ -296,34 +312,33 @@ let interpret_llc llc =
         for data = from_ to to_ do
           loop_proc (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
-    | Fill { tensor = { id; field = Value }; value } -> fill_from_float (get id).value @@ loop_float env value
+    | Fill { tensor = { id; field = Value }; value } ->
+        N.fill_from_float (N.get id).value @@ loop_float env value
     | Fill { tensor = { id; field = Grad }; value } ->
-        fill_from_float (Option.value_exn (get id).grad) @@ loop_float env value
-    | Set ({ id; field = Value }, indices, llv) ->
-        set_from_float (get id).value (lookup env indices) @@ loop_float env llv
-    | Set ({ id; field = Grad }, indices, llv) ->
-        set_from_float (Option.value_exn (get id).grad) (lookup env indices) @@ loop_float env llv
+        N.fill_from_float (Option.value_exn (N.get id).grad) @@ loop_float env value
+    | Set (ptr, indices, llv) -> set_from_float ptr (lookup env indices) @@ loop_float env llv
     | Set_local (id, llv) -> locals := Map.update !locals id ~f:(fun _ -> loop_float env llv)
     | Comment message when !with_debug && !interpreter_print_comments -> Stdio.printf "%s\n%!" message
     | Dynamic_indices { tensor = { id; field = Value }; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        dynamic_indices env (get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body
+        dynamic_indices env (N.get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Dynamic_indices { tensor = { id; field = Grad }; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        dynamic_indices env (Option.value_exn (get id).grad) ~tensor_idcs ~dynamic_idcs ~target_dims body
+        dynamic_indices env (Option.value_exn (N.get id).grad) ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Comment _ -> ()
   and loop_float env llv =
     let open Float in
     let loop = loop_float env in
     match llv with
     | Constant c -> c
-    | Get ({ id; field = Value }, indices) -> get_as_float (get id).value @@ lookup env indices
+    | Get ({ id; field = Value }, indices) -> N.get_as_float (N.get id).value @@ lookup env indices
     | Get ({ id; field = Grad }, indices) ->
-        get_as_float (Option.value_exn (get id).grad) @@ lookup env indices
-    | Local_scope (id, _prec, body) ->
+        N.get_as_float (Option.value_exn (N.get id).grad) @@ lookup env indices
+    | Local_scope { id; prec = _; body; idcs_for_debug } ->
         let old_locals = !locals in
         locals := Map.update !locals id ~f:(fun _ -> 0.0);
         loop_proc env body;
         let result = Map.find_exn !locals id in
         locals := old_locals;
+        if !debug_virtual_nodes then set_from_float id.tensor (lookup env idcs_for_debug) result;
         result
     | Get_local id -> Map.find_exn !locals id
     | Binop (Arg1, llv1, _llv2) -> loop llv1
@@ -342,7 +357,7 @@ let interpret_llc llc =
   and dynamic_indices env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body =
     let env =
       Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
-          let actual = get_as_int tensor @@ lookup ~provider_dim env tensor_idcs in
+          let actual = N.get_as_int tensor @@ lookup ~provider_dim env tensor_idcs in
           (fst env, Map.add_exn ~key ~data:(actual % target_dims.(provider_dim)) @@ snd env))
     in
     loop_proc env body
@@ -510,7 +525,7 @@ let visit_llc ~max_visits ~consider_grads llc =
         Hash_set.add nodes data_node.id;
         Hashtbl.update data_node.accesses (lookup env indices)
           ~f:(visit data_node.fill data_node.assign_index_bag)
-    | Local_scope (_, _, llc) -> loop_proc env llc
+    | Local_scope { body; _ } -> loop_proc env body
     | Get_local _ -> ()
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
@@ -579,7 +594,7 @@ let process_computation node top_llc =
     match llv with
     | Constant _ -> ()
     | Get (tensor, idcs) -> if equal_tensor_ptr tensor top_data then check_idcs idcs
-    | Local_scope (_, _, llc) -> loop_proc llc
+    | Local_scope { body; _ } -> loop_proc body
     | Get_local _ -> ()
     | Binop (Arg1, llv1, _llv2) -> loop_float llv1
     | Binop (Arg2, _llv1, llv2) -> loop_float llv2
@@ -628,7 +643,10 @@ let inline_computation ~id node call_args =
       | Set (tensor, indices, llv) when equal_tensor_ptr tensor at_data ->
           assert ([%equal: index array option] (Some indices) def_args);
           Set_local (id, loop_float llv)
-      | Set (tensor, indices, llv) -> Set (tensor, indices, loop_float llv)
+      | Set (tensor, indices, llv) ->
+          (* Check we are not leaking binders. *)
+          assert (Array.for_all indices ~f:(function Iterator i -> not @@ Map.mem env i | _ -> true));
+          Set (tensor, indices, loop_float llv)
       | Set_local (id, llv) -> Set_local (id, loop_float llv)
       | Comment _ -> llc
       | Dynamic_indices ({ body; _ } as dyn_idcs) ->
@@ -641,7 +659,8 @@ let inline_computation ~id node call_args =
           assert ([%equal: index array option] (Some indices) def_args);
           Get_local id
       | Get (tensor, indices) -> Get (tensor, Array.map ~f:subst indices)
-      | Local_scope (id, prec, llc) -> Local_scope (id, prec, loop llc)
+      | Local_scope { id; prec; body; idcs_for_debug } ->
+          Local_scope { id; prec; body = loop body; idcs_for_debug = Array.map ~f:subst idcs_for_debug }
       | Get_local _ -> llv
       | Binop (Arg1, llv1, _llv2) -> loop_float llv1
       | Binop (Arg2, _llv1, llv2) -> loop_float llv2
@@ -655,6 +674,7 @@ let inline_computation ~id node call_args =
 type tensor_ptrs = tensor_ptr Set.Poly.t
 
 let sexp_of_tensor_ptrs ts = [%sexp_of: tensor_ptr list] @@ Set.to_list ts
+  (* The current position is within scope of the definitions of the process_for virtual tensors. *)
   let rec loop_proc ~(process_for : tensor_ptrs) (llc : unit low_level) : unit low_level option =
     let loop = loop_proc ~process_for in
     match llc with
@@ -701,13 +721,15 @@ let sexp_of_tensor_ptrs ts = [%sexp_of: tensor_ptr list] @@ Set.to_list ts
         else
           let id = get_scope tensor in
           let body = inline_computation ~id node indices in
-          Local_scope (id, node.prec, body)
-    | Local_scope (id, prec, llc) ->
+          Local_scope { id; prec = node.prec; body; idcs_for_debug = indices }
+    | Local_scope opts ->
         Local_scope
-          ( id,
-            prec,
-            Option.value_or_thunk ~default:(fun () -> llc)
-            @@ loop_proc ~process_for:(Set.add process_for id.tensor) llc )
+          {
+            opts with
+            body =
+              Option.value_or_thunk ~default:(fun () -> opts.body)
+              @@ loop_proc ~process_for:(Set.add process_for opts.id.tensor) opts.body;
+          }
     | Get_local _ -> llv
     | Binop (Arg1, llv1, _llv2) -> loop_float ~process_for llv1
     | Binop (Arg2, _llv1, llv2) -> loop_float ~process_for llv2
@@ -751,4 +773,5 @@ module CDSL = struct
   let keep_files_in_run_directory = keep_files_in_run_directory
   let with_debug = with_debug
   let virtualize_settings = virtualize_settings
+  let debug_virtual_nodes = debug_virtual_nodes
 end

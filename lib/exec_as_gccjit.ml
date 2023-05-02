@@ -115,23 +115,36 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
           let lhs = LValue.access_array tensor.ptr offset in
           Block.assign !current_block lhs value
         in
-        jit_for_loop ~env (Code.new_sym_index @@ Shape.Symbol 0) ~from_:0 ~to_:size_m_1 (Either.Second callback)
+        jit_for_loop ~env
+          (Code.new_sym_index @@ Shape.Symbol 0)
+          ~from_:0 ~to_:size_m_1 (Either.Second callback)
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
         jit_dynamic_indices ~name ~env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
   and loop_float ~name ~env ~num_typ ~is_double value : rvalue =
     let loop = loop_float ~name ~env ~num_typ ~is_double in
     match value with
-    | Local_scope (({scope_id=i; _} as id), prec, body) ->
+    | Local_scope { id = { scope_id = i; tensor } as id; prec; body; idcs_for_debug } ->
         let typ = Type.get ctx @@ prec_to_kind prec in
         (* Scope ids can be non-unique due to inlining. *)
-        let v_name = Int.(incr scope_uid; "v" ^ to_string i ^ "_" ^ to_string !scope_uid) in
+        let v_name =
+          Int.(
+            incr scope_uid;
+            "v" ^ to_string i ^ "_" ^ to_string !scope_uid)
+        in
         let lvalue = Function.local func typ v_name in
-        (* Tensors are initialized to 0 by default. *)
+        (* Tensors are initialized to 0 by default. However, there is typically an explicit
+           initialization for virtual nodes. *)
         Block.assign !current_block lvalue @@ RValue.zero ctx typ;
         let old_locals = !locals in
-        locals := Map.update !locals id ~f:(fun _ -> lvalue, typ, prec_is_double prec);
+        locals := Map.update !locals id ~f:(fun _ -> (lvalue, typ, prec_is_double prec));
         loop_proc ~name:(name ^ "_at_" ^ v_name) ~env body;
         locals := old_locals;
+        (if !Code.debug_virtual_nodes then
+           let tensor = get_tensor ctx tensor in
+           let idcs = lookup env idcs_for_debug in
+           let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
+           let lhs = LValue.access_array tensor.ptr offset in
+           Block.assign !current_block lhs @@ RValue.lvalue lvalue);
         RValue.lvalue lvalue
     | Get_local id ->
         let lvalue, _typ, _is_double = Map.find_exn !locals id in
@@ -161,11 +174,11 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
         let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) @@ loop c in
         RValue.binary_op ctx Mult num_typ cmp @@ loop c
     | Constant v -> RValue.double ctx num_typ v
-  and jit_for_loop ~env (Code.{sym=Shape.Symbol s; uid} as key) ~from_ ~to_ body : unit =
+  and jit_for_loop ~env (Code.{ sym = Shape.Symbol s; uid } as key) ~from_ ~to_ body : unit =
     let open Gccjit in
     let i = "i" ^ Int.to_string s ^ "_" ^ Int.to_string uid in
     let index = Function.local func c_index i in
-    let env = Map.add_exn ~key ~data:(RValue.lvalue index) @@ fst env, snd env in
+    let env = (Map.add_exn ~key ~data:(RValue.lvalue index) @@ fst env, snd env) in
     let b_loop_cond = Block.create ~name:("loop_cond_" ^ i) func in
     let b_loop_body = Block.create ~name:("loop_body_" ^ i) func in
     let b_after_loop = Block.create ~name:("after_loop_" ^ i) func in
@@ -198,7 +211,7 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
               RValue.lvalue sym_index)
             else dyn_index
           in
-          fst env, Map.add_exn ~key ~data @@ snd env)
+          (fst env, Map.add_exn ~key ~data @@ snd env))
     in
     loop_proc ~name ~env body
   in
@@ -209,7 +222,7 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
 let jit_ll_prog ~name ctx prog =
   let open Gccjit in
   let fkind = Function.Exported in
-  let env = Map.Poly.empty, Map.Poly.empty in
+  let env = (Map.Poly.empty, Map.Poly.empty) in
   let msg = ref None in
   let emit_routine proc suffix =
     let name = name ^ suffix in

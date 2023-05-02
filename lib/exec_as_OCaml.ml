@@ -4,7 +4,7 @@ let keep_files_in_run_directory = ref false
 let emit = Code.compile_program
 let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
 let pp_symbol ppf (Shape.Symbol s) = Caml.Format.fprintf ppf "i%d" s
-let pp_index ppf (Code.{sym=Shape.Symbol s; uid}) = Caml.Format.fprintf ppf "i%d_%d" s uid
+let pp_index ppf Code.{ sym = Shape.Symbol s; uid } = Caml.Format.fprintf ppf "i%d_%d" s uid
 
 let pp_index_axis ?provider_dim ppf =
   let open Shape in
@@ -30,8 +30,7 @@ let format_low_level ~as_toplevel (ppf : Caml.Format.formatter) (type a) (c : a 
   let open Code in
   let open Caml.Format in
   let pp_indices ?provider_dim ppf idcs =
-    fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:pp_semi (pp_index_axis ?provider_dim))
-    @@ Array.to_list idcs
+    fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:pp_semi (pp_index_axis ?provider_dim)) @@ Array.to_list idcs
   in
   let pp_idcs = pp_indices ?provider_dim:None in
   let rec pp_ll : 'a. formatter -> 'a low_level -> unit =
@@ -50,13 +49,15 @@ let format_low_level ~as_toplevel (ppf : Caml.Format.formatter) (type a) (c : a 
             fprintf ppf "let@ %a = Int.(@[<2>(get_as_int %a@ (%a)) %% %d@]) in@ " pp_symbol sym pp_data_node
               tensor (pp_indices ~provider_dim) tensor_idcs target_dims.(provider_dim));
         pp_ll ppf body
-    | Set_local ({scope_id; _}, value) -> fprintf ppf "@[<2>v%d :=@ %a]" scope_id pp_ll value
-    | Local_scope ({scope_id; _}, _prec, body) ->
+    | Set_local ({ scope_id; _ }, value) -> fprintf ppf "@[<2>v%d :=@ %a]" scope_id pp_ll value
+    | Local_scope { id = { scope_id; tensor }; prec = _; body; idcs_for_debug } ->
         (* Note: we could support precisions, but it's not worth it. *)
-        fprintf ppf "@[<2>let v%d =@ ref %a in@ !v%d]" scope_id pp_ll body scope_id
-    | Get_local ({scope_id; _}) -> fprintf ppf "!v%d" scope_id
-    | Get (tensor, indices) ->
-        fprintf ppf "@[<2>get_as_float %a@ (%a)@]" pp_data_node tensor pp_idcs indices
+        if !Code.debug_virtual_nodes then
+          fprintf ppf "@[<2>let v%d =@ ref %a in@ (set_from_float %a@ (%a)@ !v%d; !v%d)]" scope_id pp_ll body
+            pp_data_node tensor pp_idcs idcs_for_debug scope_id scope_id
+        else fprintf ppf "@[<2>let v%d =@ ref %a in@ !v%d]" scope_id pp_ll body scope_id
+    | Get_local { scope_id; _ } -> fprintf ppf "!v%d" scope_id
+    | Get (tensor, indices) -> fprintf ppf "@[<2>get_as_float %a@ (%a)@]" pp_data_node tensor pp_idcs indices
     | Constant c -> fprintf ppf "(%f)" c
     | Binop (Arg1, v1, _v2) -> pp_ll ppf v1
     | Binop (Arg2, _v1, v2) -> pp_ll ppf v2
