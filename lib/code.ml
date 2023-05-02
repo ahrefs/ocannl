@@ -674,6 +674,8 @@ let inline_computation ~id node call_args =
 type tensor_ptrs = tensor_ptr Set.Poly.t
 
 let sexp_of_tensor_ptrs ts = [%sexp_of: tensor_ptr list] @@ Set.to_list ts
+
+let virtual_llc (llc : unit low_level) : unit low_level =
   (* The current position is within scope of the definitions of the process_for virtual tensors. *)
   let rec loop_proc ~(process_for : tensor_ptrs) (llc : unit low_level) : unit low_level option =
     let loop = loop_proc ~process_for in
