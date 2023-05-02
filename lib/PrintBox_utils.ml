@@ -150,7 +150,7 @@ let concise_float ~prec v =
   String.substr_replace_first ~pattern:"e+0" ~with_:"e+"
   |> String.substr_replace_first ~pattern:"e-0" ~with_:"e-"
 
-let plot ?canvas ?size ~x_label ~y_label specs =
+let plot ?(prec=3) ?canvas ?size ~x_label ~y_label specs =
   let minx, miny, maxx, maxy, canvas = plot_canvas ?canvas ?size specs in
   let open PrintBox in
   let y_label_l = List.map ~f:String.of_char @@ String.to_list y_label in
@@ -161,7 +161,7 @@ let plot ?canvas ?size ~x_label ~y_label specs =
           [
             align ~h:`Left ~v:`Center @@ lines y_label_l;
             vlist ~bars:false
-              [ line @@ concise_float ~prec:3 maxy; align_bottom @@ line @@ concise_float ~prec:3 miny ];
+              [ line @@ concise_float ~prec maxy; align_bottom @@ line @@ concise_float ~prec miny ];
           ];
         grid_text ~bars:false canvas;
       ];
@@ -170,7 +170,7 @@ let plot ?canvas ?size ~x_label ~y_label specs =
         vlist ~bars:false
           [
             hlist ~bars:false
-              [ line @@ concise_float ~prec:3 minx; align_right @@ line @@ concise_float ~prec:3 maxx ];
+              [ line @@ concise_float ~prec minx; align_right @@ line @@ concise_float ~prec maxx ];
             align ~h:`Center ~v:`Bottom @@ line x_label;
           ];
       ];
