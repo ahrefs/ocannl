@@ -205,6 +205,7 @@ let generated_session_step_update = ref Code.Noop
 
 let print_session_code ?(compiled = false) () =
   let open Code in
+  (* FIXME: figure out if / why this isn't idempotent. *)
   if compiled then
     Caml.Format.printf "Session step update code:@ %a" Sexp.pp_hum
       (sexp_of_low_level_program @@ compile_program @@ Session_step_update !generated_session_step_update)
@@ -262,7 +263,8 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
     in
     (* Roots at the time of compilation are not virtual, so that they can be consumed downstream. *)
     Map.iter_keys !Formula.global_roots ~f:(fun id ->
-       (Code.get_node {id; field=Value}).non_virtual <- true);
+      let make_non_virt: data_node = Code.get_node {id; field=Value} in
+       make_non_virt.non_virtual <- true);
     generated_session_step_update := sequential [ forward; backprop; params_update ]);
   if (not force_no_init) && (generating || reinit) then
     dynload_with_handler ~runtime_store:Ocannl_runtime.Node.global.session_step_update

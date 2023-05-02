@@ -5,12 +5,92 @@ module FDSL = Operation.FDSL
 module NFDSL = Operation.NFDSL
 module CDSL = Code.CDSL
 
+let _suspended () =
+  (* Code.CDSL.with_debug := false; *)
+  (* let open Operation.FDSL in *)
+  let open Session.SDSL in
+  set_executor Interpreter;
+  CDSL.debug_virtual_nodes := true;
+  CDSL.virtualize_settings.virtualize <- true;
+  drop_all_sessions ();
+  Random.init 0;
+  (* let hid1 = 64 in *)
+  let len = 400 in
+  let batch = 10 in
+  let epochs = 10000 in
+  let steps = epochs * 2 * len / batch in
+  let noise () = Random.float_range (-0.1) 0.1 in
+  let moons_flat =
+    Array.concat_map (Array.create ~len ())
+      ~f:
+        Float.(
+          fun () ->
+            let i = Random.int len in
+            let v = of_int i * pi / of_int len in
+            let c = cos v and s = sin v in
+            [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
+  in
+  let moons_flat = FDSL.init_const ~l:"moons_flat" ~b:[ epochs; batch ] ~o:[ 2 ] moons_flat in
+  let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
+  let moons_classes = FDSL.init_const ~l:"moons_classes" ~b:[ epochs; batch ] ~o:[ 1 ] moons_classes in
+  let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 16 + ("w1" * x))) in
+  (* let%nn_op mlp x =
+       "b6" 1
+       + "w6"
+         * !/("b4" 4
+             + "w4"
+               * !/("b2" 8
+                   + ("w2" * !/("b1" 16 + ("w1" * x)))
+                   + "b3" 8
+                   + ("w3" * !/(b2 + (w2 * !/(b1 + (w1 * x))))))
+             + ("b5" 4 + ("w5" * !/(b4 + (w4 * !/(b3 + (w3 * !/(b2 + (w2 * !/(b1 + (w1 * x)))))))))))
+     in *)
+  (* let%nn_op mlp x =
+       "b6" 1
+       + "w6"
+         * !/("b5" 4
+             + ("w5" * !/("b4" 4 + ("w4" * !/("b3" 8 + ("w3" * !/("b2" 8 + ("w2" * !/("b1" 16 + ("w1" * x)))))))))
+             )
+     in *)
+  let%nn_dt session_step ~output_dims:[ 1 ] = n =+ 1 in
+  let%nn_dt minus_lr ~output_dims:[ 1 ] = n =: -0.1 *. (!..steps - session_step) /. !..steps in
+  minus_learning_rate := Some minus_lr;
+  let%nn_op moons_input = moons_flat @.| session_step in
+  let%nn_op moons_class = moons_classes @.| session_step in
+  let%nn_op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
+  let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in
+  let reg_loss = List.map ~f:ssq [ w1; w2; b1; b2 ] |> List.reduce_exn ~f:FDSL.O.( + ) in
+  (* let reg_loss =
+       List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
+     in *)
+  let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..batch) + (0.001 *. reg_loss) in
+  refresh_session ();
+  print_decimals_precision := 6;
+  Stdio.print_endline "\nFirst step:\n%!";
+  print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
+  refresh_session ();
+  Stdio.print_endline "\nSecond step:\n%!";
+  print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
+  refresh_session ();
+  Stdio.print_endline "\nThird step:\n%!";
+  print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
+  refresh_session ();
+  Stdio.print_endline "\nFourth step:\n%!";
+  print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
+  refresh_session ();
+  Stdio.print_endline "\nFifth step:\n%!";
+  print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
+  refresh_session ();
+  Stdio.print_endline "\nSixth step:\n%!";
+  print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id
+
 let classify_moons ~virtualize executor ~opti_level () =
-  Code.CDSL.with_debug := false;
+  CDSL.with_debug := false;
   Stdio.prerr_endline @@ "\n\n****** Benchmarking virtualized: "
   ^ Sexp.to_string_hum ([%sexp_of: bool * Session.backend * int] (virtualize, executor, opti_level))
   ^ " ******";
-  Code.CDSL.virtualize_settings.virtualize <- virtualize;
+  CDSL.debug_virtual_nodes := false;
+  CDSL.virtualize_settings.virtualize <- virtualize;
   Session.SDSL.set_executor executor;
   Exec_as_gccjit.optimization_level := opti_level;
   (* let open Operation.FDSL in *)
@@ -36,24 +116,25 @@ let classify_moons ~virtualize executor ~opti_level () =
   let moons_flat = FDSL.init_const ~l:"moons_flat" ~b:[ epochs; batch ] ~o:[ 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let moons_classes = FDSL.init_const ~l:"moons_classes" ~b:[ epochs; batch ] ~o:[ 1 ] moons_classes in
-  let%nn_op mlp x =
-      "b6" 1
-      + "w6"
-        * !/("b4" 4
-            + "w4"
-              * !/("b2" 8
-                  + ("w2" * !/("b1" 16 + ("w1" * x)))
-                  + "b3" 8
-                  + ("w3" * !/(b2 + (w2 * !/(b1 + (w1 * x))))))
-            + ("b5" 4 + ("w5" * !/(b4 + (w4 * !/(b3 + (w3 * !/(b2 + (w2 * !/(b1 + (w1 * x)))))))))))
-    in
   (* let%nn_op mlp x =
-    "b6" 1
-    + "w6"
-      * !/("b5" 4
-          + ("w5" * !/("b4" 4 + ("w4" * !/("b3" 8 + ("w3" * !/("b2" 8 + ("w2" * !/("b1" 16 + ("w1" * x)))))))))
-          )
-  in *)
+       "b6" 1
+       + "w6"
+         * !/("b4" 4
+             + "w4"
+               * !/("b2" 8
+                   + ("w2" * !/("b1" 16 + ("w1" * x)))
+                   + "b3" 8
+                   + ("w3" * !/(b2 + (w2 * !/(b1 + (w1 * x))))))
+             + ("b5" 4 + ("w5" * !/(b4 + (w4 * !/(b3 + (w3 * !/(b2 + (w2 * !/(b1 + (w1 * x)))))))))))
+     in *)
+  (* let%nn_op mlp x =
+       "b6" 1
+       + "w6"
+         * !/("b5" 4
+             + ("w5" * !/("b4" 4 + ("w4" * !/("b3" 8 + ("w3" * !/("b2" 8 + ("w2" * !/("b1" 16 + ("w1" * x)))))))))
+             )
+     in *)
+  let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 16 + ("w1" * x))) in
   let%nn_dt session_step ~output_dims:[ 1 ] = n =+ 1 in
   let%nn_dt minus_lr ~output_dims:[ 1 ] = n =: -0.1 *. (!..steps - session_step) /. !..steps in
   minus_learning_rate := Some minus_lr;
@@ -66,12 +147,16 @@ let classify_moons ~virtualize executor ~opti_level () =
   let learning_rates = ref [] in
   let%nn_op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
   let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in
-  let reg_loss =
-    List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
-  in
+  (* let reg_loss =
+       List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
+     in *)
+  let reg_loss = List.map ~f:ssq [ w1; w2; b1; b2 ] |> List.reduce_exn ~f:FDSL.O.( + ) in
   let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..batch) + (0.001 *. reg_loss) in
   for step = 1 to steps do
     refresh_session ();
+    if step = 1 then (
+      print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
+      Stdio.printf "\n%!");
     if step <= len then (
       let points = value_2d_points ~xdim:0 ~ydim:1 moons_input in
       let classes = value_1d_points ~xdim:0 moons_class in
@@ -147,9 +232,12 @@ let benchmarks =
     ("virtualized gccjit O3", classify_moons ~virtualize:true Gccjit ~opti_level:3);
   ]
 
-let () = classify_moons ~virtualize:true Gccjit ~opti_level:3 ()
-
 let _suspended () =
+  CDSL.debug_virtual_nodes := false;
+  CDSL.virtualize_settings.virtualize <- true;
+  classify_moons ~virtualize:true Gccjit ~opti_level:3 ()
+
+let () =
   List.map benchmarks ~f:(fun (name, test) -> Bench.Test.create ~name test)
   |> Bench.make_command |> Command_unix.run
 
