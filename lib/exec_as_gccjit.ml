@@ -126,11 +126,11 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
         (* Scope ids can be non-unique due to inlining. *)
         let v_name = Int.(incr scope_uid; "v" ^ to_string i ^ "_" ^ to_string !scope_uid) in
         let lvalue = Function.local func typ v_name in
+        (* Tensors are initialized to 0 by default. *)
+        Block.assign !current_block lvalue @@ RValue.zero ctx typ;
         let old_locals = !locals in
         locals := Map.update !locals id ~f:(fun _ -> lvalue, typ, prec_is_double prec);
         loop_proc ~name:(name ^ "_at_" ^ v_name) ~env body;
-        (* Tensors are initialized to 0 by default. *)
-        Block.assign !current_block lvalue @@ RValue.zero ctx typ;
         locals := old_locals;
         RValue.lvalue lvalue
     | Get_local id ->
