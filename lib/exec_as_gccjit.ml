@@ -33,7 +33,7 @@ let get_tensor ctx data : tensor =
     { ptr; dims; num_typ; is_double }
   in
   let open Code in
-  let arr = get_tensor data in
+  let arr = Option.value_exn @@ get_tensor data in
   match arr with
   | Byte_as_int_nd arr -> tensor Type.Signed_char false arr
   | Half_as_int_nd arr -> tensor Type.Short false arr
@@ -60,7 +60,8 @@ let jit_array_offset ctx ~idcs ~dims =
 let prec_to_kind prec =
   let open Gccjit in
   match prec with
-  | Code.Byte_as_int_prec _ -> Type.Signed_char
+  | Code.Void_prec -> Type.Void
+  | Byte_as_int_prec _ -> Type.Signed_char
   | Half_as_int_prec _ -> Type.Short
   | Single_prec _ -> Type.Float
   | Double_prec _ -> Type.Double

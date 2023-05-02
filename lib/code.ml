@@ -12,7 +12,7 @@ module N = Ocannl_runtime.Node
 
 let get_tensor tensor =
   let n = N.get tensor.id in
-  match tensor.field with Value -> n.value | Grad -> Option.value_exn n.grad
+  match tensor.field with Value -> Some n.value | Grad -> n.grad
 
 (** Initializes a tensor by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op = N.init_op =
@@ -25,6 +25,7 @@ type init_op = N.init_op =
 [@@deriving sexp]
 
 type prec =
+  | Void_prec : prec
   (* | Bit_as_bool: (bool, bit_as_bool_nd) precision *)
   | Byte_as_int_prec : (int, N.byte_as_int_nd) N.precision -> prec
   | Half_as_int_prec : (int, N.half_as_int_nd) N.precision -> prec
@@ -40,12 +41,14 @@ let single = Single_prec N.Single
 let double = Double_prec N.Double
 
 let sexp_of_prec = function
+  | Void_prec -> Sexp.Atom "Void_prec"
   | Byte_as_int_prec _ -> Sexp.Atom "Byte_as_int_prec"
   | Half_as_int_prec _ -> Sexp.Atom "Half_as_int_prec"
   | Single_prec _ -> Sexp.Atom "Single_prec"
   | Double_prec _ -> Sexp.Atom "Double_prec"
 
 let prec_of_sexp = function
+  | Sexp.Atom "Void" -> Void_prec
   | Sexp.Atom "Byte_as_int_prec" -> byte_as_int
   | Sexp.Atom "Half_as_int_prec" -> half_as_int
   | Sexp.Atom "Single_prec" -> single
@@ -55,10 +58,11 @@ let prec_of_sexp = function
 
 let node_prec tensor =
   match get_tensor tensor with
-  | N.Byte_as_int_nd _ -> byte_as_int
-  | N.Half_as_int_nd _ -> half_as_int
-  | N.Single_nd _ -> single
-  | N.Double_nd _ -> double
+  | None -> Void_prec
+  | Some (N.Byte_as_int_nd _) -> byte_as_int
+  | Some (N.Half_as_int_nd _) -> half_as_int
+  | Some (N.Single_nd _) -> single
+  | Some (N.Double_nd _) -> double
 
 (** Resets a tensor by performing the specified computation or data fetching. *)
 type fetch_op =
@@ -130,14 +134,14 @@ let remove_updates tensor c =
 let all_parallel = List.fold ~init:Noop ~f:(fun sts st -> Par (st, sts))
 let sequential = List.fold_right ~init:Noop ~f:(fun st sts -> Seq (st, sts))
 
+type scope_id = { tensor : tensor_ptr; scope_id : int } [@@deriving sexp, equal, hash]
 (** *** Low-level representation. *)
-type scope_id = {tensor: tensor_ptr; scope_id: int} [@@deriving sexp, equal, hash]
 
 let get_scope =
   let uid = ref 0 in
   fun tensor ->
     Int.incr uid;
-    {tensor; scope_id = !uid}
+    { tensor; scope_id = !uid }
 
 type sym_index = { sym : Shape.symbol; uid : int } [@@deriving sexp, equal, compare]
 type index = sym_index Shape.axis_index [@@deriving sexp, equal, compare]
