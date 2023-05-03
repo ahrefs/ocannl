@@ -172,10 +172,10 @@ let perform_initialization =
   List.iter ~f:(function
     | { Code.tensor = { id; field = Value } as tensor; dims; init_op } ->
         if not @@ (Code.get_node tensor).non_virtual then
-          (get id).value <- create_ndarray Single (dims ()) init_op
+          (get id).value <- create_ndarray Double (dims ()) init_op
     | { tensor = { id; field = Grad } as tensor; dims; init_op } ->
         if not @@ (Code.get_node tensor).non_virtual then
-          (get id).grad <- Some (create_ndarray Single (dims ()) init_op))
+          (get id).grad <- Some (create_ndarray Double (dims ()) init_op))
 
 let compile_routine code =
   let open Formula in
@@ -263,8 +263,8 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
     in
     (* Roots at the time of compilation are not virtual, so that they can be consumed downstream. *)
     Map.iter_keys !Formula.global_roots ~f:(fun id ->
-      let make_non_virt: data_node = Code.get_node {id; field=Value} in
-       make_non_virt.non_virtual <- true);
+        let make_non_virt : data_node = Code.get_node { id; field = Value } in
+        make_non_virt.non_virtual <- true);
     generated_session_step_update := sequential [ forward; backprop; params_update ]);
   if (not force_no_init) && (generating || reinit) then
     dynload_with_handler ~runtime_store:Ocannl_runtime.Node.global.session_step_update
@@ -404,4 +404,16 @@ module SDSL = struct
     match m.Formula.node.node.grad with
     | None -> [||]
     | Some a -> NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim a
+
+  let enable_all_debugs ?(trace_interpreter = false) () =
+    Code.CDSL.with_debug := true;
+    Code.CDSL.keep_files_in_run_directory := true;
+    if trace_interpreter then Code.CDSL.debug_trace_interpretation := true;
+    Code.CDSL.debug_virtual_nodes := true
+
+  let disable_all_debugs () =
+    Code.CDSL.debug_trace_interpretation := false;
+    Code.CDSL.with_debug := false;
+    Code.CDSL.keep_files_in_run_directory := false;
+    Code.CDSL.debug_virtual_nodes := false
 end

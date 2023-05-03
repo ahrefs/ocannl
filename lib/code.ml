@@ -812,4 +812,5 @@ module CDSL = struct
   let with_debug = with_debug
   let virtualize_settings = virtualize_settings
   let debug_virtual_nodes = debug_virtual_nodes
+  let debug_trace_interpretation = debug_trace_interpretation
 end
