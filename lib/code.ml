@@ -185,6 +185,9 @@ type _ low_level =
 type low_level_program = Assign_suspension of unit low_level | Assign_session_step_update of unit low_level
 [@@deriving sexp_of]
 
+let binop ~op ~rhs1 ~rhs2 = match op with Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Binop (op, rhs1, rhs2)
+let unop ~op ~rhs = match op with Identity -> rhs | _ -> Unop (op, rhs)
+
 let rec to_low_level (code : t) : unit low_level =
   match code with
   | Accum_binop { zero_out; accum; op; lhs; rhs1; rhs2; projections } ->
@@ -204,7 +207,9 @@ let rec to_low_level (code : t) : unit low_level =
         let lhs_ll = Get (lhs, lhs_idcs) in
         let rhs1_ll = Get (rhs1, rhs1_idcs) in
         let rhs2_ll = Get (rhs2, rhs2_idcs) in
-        let body = Set (lhs, lhs_idcs, Binop (accum, lhs_ll, Binop (op, rhs1_ll, rhs2_ll))) in
+        let body =
+          Set (lhs, lhs_idcs, binop ~op:accum ~rhs1:lhs_ll ~rhs2:(binop ~op ~rhs1:rhs1_ll ~rhs2:rhs2_ll))
+        in
         match Array.find rhs2_idcs ~f:Shape.is_dynamic_provider with
         | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
             Dynamic_indices { tensor = rhs2; tensor_idcs = rhs2_idcs; dynamic_idcs; target_dims; body }
@@ -239,7 +244,7 @@ let rec to_low_level (code : t) : unit low_level =
         let lhs_idcs = lhs_idx iters in
         let lhs_ll = Get (lhs, lhs_idcs) in
         let rhs_ll = Get (rhs, rhs_idx iters) in
-        Set (lhs, lhs_idcs, Binop (accum, lhs_ll, Unop (op, rhs_ll)))
+        Set (lhs, lhs_idcs, binop ~op:accum ~rhs1:lhs_ll ~rhs2:(unop ~op ~rhs:rhs_ll))
       in
       let rec loop rev_iters = function
         | [], [] -> basecase rev_iters
@@ -596,8 +601,6 @@ let process_computation node top_llc =
     | Get (tensor, idcs) -> if equal_tensor_ptr tensor top_data then check_idcs idcs
     | Local_scope { body; _ } -> loop_proc body
     | Get_local _ -> ()
-    | Binop (Arg1, llv1, _llv2) -> loop_float llv1
-    | Binop (Arg2, _llv1, llv2) -> loop_float llv2
     | Binop (_, llv1, llv2) ->
         loop_float llv1;
         loop_float llv2
@@ -662,8 +665,6 @@ let inline_computation ~id node call_args =
       | Local_scope { id; prec; body; idcs_for_debug } ->
           Local_scope { id; prec; body = loop body; idcs_for_debug = Array.map ~f:subst idcs_for_debug }
       | Get_local _ -> llv
-      | Binop (Arg1, llv1, _llv2) -> loop_float llv1
-      | Binop (Arg2, _llv1, llv2) -> loop_float llv2
       | Binop (op, llv1, llv2) -> Binop (op, loop_float llv1, loop_float llv2)
       | Unop (op, llv) -> Unop (op, loop_float llv)
     in
@@ -733,8 +734,6 @@ let virtual_llc (llc : unit low_level) : unit low_level =
               @@ loop_proc ~process_for:(Set.add process_for opts.id.tensor) opts.body;
           }
     | Get_local _ -> llv
-    | Binop (Arg1, llv1, _llv2) -> loop_float ~process_for llv1
-    | Binop (Arg2, _llv1, llv2) -> loop_float ~process_for llv2
     | Binop (op, llv1, llv2) -> Binop (op, loop_float ~process_for llv1, loop_float ~process_for llv2)
     | Unop (op, llv) -> Unop (op, loop_float ~process_for llv)
   in
