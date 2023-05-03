@@ -403,14 +403,14 @@ let default_display_indices sh =
   let axes = loop 1 axes in
   Shape.axis_map_to_dims_index axes
 
-let to_dag ?entries_per_axis ~with_id ~with_value ~with_grad n_id =
+let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_grad n_id =
   let rec to_dag { sub_node_id; computed_externally } : PrintBox_utils.dag =
     let n = get sub_node_id in
     let id = Int.to_string sub_node_id in
-    let children = List.map ~f:to_dag n.children in
+    let children = if single_node then [] else List.map ~f:to_dag n.children in
     let desc_l = match n.desc_label with None -> "" | Some l -> l ^ " " in
     let op_l = match n.op_label with "" -> "" | l -> "<" ^ l ^ ">" in
-    let prefix = "[" ^ id ^ "] " ^ desc_l ^ op_l ^ (if n.virtual_ then " virtual" else "") in
+    let prefix = "[" ^ id ^ "] " ^ desc_l ^ op_l ^ ((* DEBUG: if n.virtual_ then " virtual" else *) "") in
     let labels = Shape.axis_map_to_dims_index ~default:"" n.shape.axis_labels in
     let indices = default_display_indices n.shape in
     match (computed_externally, with_value, with_grad, n.node.grad) with
@@ -437,5 +437,5 @@ let to_dag ?entries_per_axis ~with_id ~with_value ~with_grad n_id =
   in
   to_dag { sub_node_id = n_id; computed_externally = false }
 
-let to_printbox ?entries_per_axis ?(with_id = false) ?(with_value = true) ~with_grad ~depth n_id =
-  to_dag ?entries_per_axis ~with_id ~with_value ~with_grad n_id |> PrintBox_utils.reformat_dag depth
+let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_value = true) ~with_grad ~depth n_id =
+  to_dag ?single_node ?entries_per_axis ~with_id ~with_value ~with_grad n_id |> PrintBox_utils.reformat_dag depth
