@@ -172,7 +172,7 @@ type _ low_level =
       id : scope_id;
       prec : prec;
       body : unit low_level;
-      idcs_for_debug : index array;
+      orig_indices : index array;
     }
       -> float low_level
   | Get_local : scope_id -> float low_level
@@ -380,20 +380,20 @@ let interpret_llc llc =
             ([%sexp_of: int array] idcs)
             result;
         result
-    | Local_scope { id; prec = _; body; idcs_for_debug } ->
+    | Local_scope { id; prec = _; body; orig_indices } ->
         Caml.Format.printf "{";
         let old_locals = !locals in
         locals := Map.update !locals id ~f:(fun _ -> 0.0);
         loop_proc env body;
         let result = Map.find_exn !locals id in
         locals := old_locals;
-        let idcs = lookup env idcs_for_debug in
+        let idcs = lookup env orig_indices in
         if !debug_virtual_nodes then set_from_float id.tensor idcs result;
         if !debug_trace_interpretation then
           Caml.Format.printf "TRACE: %a [%a / %a] (%f) <-> %f}\n%!" Sexp.pp_hum
             ([%sexp_of: tensor_ptr] id.tensor)
             Sexp.pp_hum
-            ([%sexp_of: index array] idcs_for_debug)
+            ([%sexp_of: index array] orig_indices)
             Sexp.pp_hum
             ([%sexp_of: int array] idcs)
             (get_as_float id.tensor idcs) result;
@@ -533,8 +533,7 @@ let visit_llc ~max_visits ~consider_grads llc =
         loop_float env value;
         let data_node = get_node tensor in
         Hash_set.add nodes data_node.id;
-        if not @@ Hashtbl.is_empty data_node.accesses then data_node.non_virtual <- true
-        else data_node.fill <- Some value
+        data_node.fill <- Some value
     | Set (tensor, idcs, llv) ->
         loop_float env llv;
         Hash_set.add nodes tensor.id;
@@ -544,6 +543,7 @@ let visit_llc ~max_visits ~consider_grads llc =
               node.non_virtual <- true
           | Shape.Iterator s ->
               let old_tensor = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tensor) in
+              (* TODO(#134): this prevents multiple virtual tensors from sharing for loops. *)
               assert (equal_tensor_ptr old_tensor tensor);
               Hash_set.add node.assign_index_bag s)
     | Set_local (_, llv) -> loop_float env llv
@@ -661,7 +661,7 @@ let inline_computation ~id node call_args =
   in
   let at_data = { id = node.id; field = node.kind } in
   (* In the order of computation. *)
-  let loop_proc (def_args, def) : unit low_level =
+  let loop_proc (def_args, def) : unit low_level option =
     let env =
       match def_args with
       | None -> Map.Poly.empty
@@ -669,25 +669,25 @@ let inline_computation ~id node call_args =
           Map.Poly.of_alist_exn @@ Array.to_list @@ Array.map2_exn def_args call_args ~f:make_subst
     in
     let subst = function Shape.Iterator s when Map.mem env s -> Map.find_exn env s | idx -> idx in
-    let rec loop llc : unit low_level =
+    let rec loop llc : unit low_level option =
       match llc with
-      | Lines body -> Lines (Array.map ~f:loop body)
+      | Lines body ->
+          let body = Array.filter_map ~f:loop body in
+          if Array.is_empty body then None else Some (Lines body)
       | For_loop { index; body; _ } when Map.mem env index -> loop body
-      | For_loop { index; from_; to_; body } -> For_loop { index; from_; to_; body = loop body }
-      | Fill { tensor; value } when equal_tensor_ptr tensor at_data -> Set_local (id, loop_float value)
-      | Fill { tensor; value } -> Fill { tensor; value = loop_float value }
+      | For_loop { index; from_; to_; body } ->
+          Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop body
+      | Fill { tensor; value } when equal_tensor_ptr tensor at_data -> Some (Set_local (id, loop_float value))
+      | Fill _ -> None
       | Set (tensor, indices, llv) when equal_tensor_ptr tensor at_data ->
           assert ([%equal: index array option] (Some indices) def_args);
-          Set_local (id, loop_float llv)
-      | Set (tensor, indices, llv) ->
-          (* Check we are not leaking binders. *)
-          assert (Array.for_all indices ~f:(function Iterator i -> not @@ Map.mem env i | _ -> true));
-          Set (tensor, indices, loop_float llv)
-      | Set_local (id, llv) -> Set_local (id, loop_float llv)
-      | Comment _ -> llc
-      | Dynamic_indices ({ body; _ } as dyn_idcs) ->
+          Some (Set_local (id, loop_float llv))
+      | Set _ -> None
+      | Set_local (id, llv) -> Some (Set_local (id, loop_float llv))
+      | Comment _ -> Some llc
+      | Dynamic_indices dyn_idcs ->
           (* FIXME(132): implement virtual dynamic indices. *)
-          Dynamic_indices { dyn_idcs with body = loop body }
+          Option.map ~f:(fun body -> Dynamic_indices { dyn_idcs with body }) @@ loop dyn_idcs.body
     and loop_float llv : float low_level =
       match llv with
       | Constant _ -> llv
@@ -695,15 +695,16 @@ let inline_computation ~id node call_args =
           assert ([%equal: index array option] (Some indices) def_args);
           Get_local id
       | Get (tensor, indices) -> Get (tensor, Array.map ~f:subst indices)
-      | Local_scope { id; prec; body; idcs_for_debug } ->
-          Local_scope { id; prec; body = loop body; idcs_for_debug = Array.map ~f:subst idcs_for_debug }
+      | Local_scope { id; prec; body; orig_indices } ->
+          Local_scope
+            { id; prec; body = Option.value_exn @@ loop body; orig_indices = Array.map ~f:subst orig_indices }
       | Get_local _ -> llv
       | Binop (op, llv1, llv2) -> Binop (op, loop_float llv1, loop_float llv2)
       | Unop (op, llv) -> Unop (op, loop_float llv)
     in
     loop def
   in
-  Lines (Array.of_list_rev_map ~f:loop_proc node.computations)
+  Lines (Array.filter_opt @@ Array.of_list_rev_map ~f:loop_proc node.computations)
 
 type tensor_ptrs = tensor_ptr Set.Poly.t
 
@@ -711,66 +712,105 @@ let sexp_of_tensor_ptrs ts = [%sexp_of: tensor_ptr list] @@ Set.to_list ts
 
 let virtual_llc (llc : unit low_level) : unit low_level =
   (* The current position is within scope of the definitions of the process_for virtual tensors. *)
-  let rec loop_proc ~(process_for : tensor_ptrs) (llc : unit low_level) : unit low_level option =
+  let rec loop_proc ~(process_for : tensor_ptrs) (llc : unit low_level) : unit low_level =
     let loop = loop_proc ~process_for in
     match llc with
-    | Lines body ->
-        let body = Array.filter_map ~f:loop body in
-        if Array.is_empty body then None else Some (Lines body)
+    | Lines body -> Lines (Array.map ~f:loop body)
     | For_loop { index; from_; to_; body } -> (
         match Hashtbl.find reverse_node_map index with
         | Some tensor when not @@ Set.mem process_for tensor ->
             let node : data_node = Hashtbl.find_exn global_node_store tensor in
-            if node.non_virtual then
-              Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop body
-            else (
-              Option.iter
-                (loop_proc ~process_for:(Set.add process_for tensor) llc)
-                ~f:(process_computation node);
-              None)
-        | _ -> Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop body)
+            let result = loop_proc ~process_for:(Set.add process_for tensor) llc in
+            if not node.non_virtual then process_computation node result;
+            result
+        | _ -> For_loop { index; from_; to_; body = loop body })
     | Fill { tensor; value } ->
         let node : data_node = Hashtbl.find_exn global_node_store tensor in
-        if (not node.non_virtual) && (not @@ Set.mem process_for tensor) then (
-          Option.iter (loop_proc ~process_for:(Set.add process_for tensor) llc) ~f:(process_computation node);
-          None)
-        else Some (Fill { tensor; value = loop_float ~process_for value })
+        let process_for = if node.non_virtual then process_for else Set.add process_for tensor in
+        let result = Fill { tensor; value = loop_float ~process_for value } in
+        if (not node.non_virtual) && (not @@ Set.mem process_for tensor) then process_computation node result;
+        result
     | Set (tensor, indices, llv) ->
         let node : data_node = Hashtbl.find_exn global_node_store tensor in
-        if (not @@ Set.mem process_for tensor) && not node.non_virtual then (
-          process_computation node llc;
-          None)
-        else Some (Set (tensor, indices, loop_float ~process_for llv))
-    | Set_local (id, llv) -> Some (Set_local (id, loop_float ~process_for llv))
-    | Comment _ -> Some llc
-    | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
+        let process_for = if node.non_virtual then process_for else Set.add process_for tensor in
+        let result = Set (tensor, indices, loop_float ~process_for llv) in
+        if (not @@ Set.mem process_for tensor) && not node.non_virtual then process_computation node result;
+        result
+    | Set_local (id, llv) -> Set_local (id, loop_float ~process_for llv)
+    | Comment _ -> llc
+    | Dynamic_indices dyn_idcs ->
         (* FIXME(132): implement virtual dynamic indices. *)
-        Option.map ~f:(fun body -> Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body })
-        @@ loop body
+        Dynamic_indices { dyn_idcs with body = loop dyn_idcs.body }
   and loop_float ~(process_for : tensor_ptrs) (llv : float low_level) : float low_level =
     match llv with
     | Constant _ -> llv
-    | Get (tensor, _) when Set.mem process_for tensor -> llv
+    | Get (tensor, _) when Set.mem process_for tensor ->
+        (* [Get_local] will replace this [Get] during [inline_computation] if [tensor] remains virtual. *)
+        llv
     | Get (tensor, indices) ->
         let node : data_node = get_node tensor in
         if node.non_virtual then llv
         else
           let id = get_scope tensor in
           let body = inline_computation ~id node indices in
-          Local_scope { id; prec = node.prec; body; idcs_for_debug = indices }
+          Local_scope { id; prec = node.prec; body; orig_indices = indices }
     | Local_scope opts ->
-        Local_scope
-          {
-            opts with
-            body =
-              Option.value_or_thunk ~default:(fun () -> opts.body)
-              @@ loop_proc ~process_for:(Set.add process_for opts.id.tensor) opts.body;
-          }
+        Local_scope { opts with body = loop_proc ~process_for:(Set.add process_for opts.id.tensor) opts.body }
     | Get_local _ -> llv
     | Binop (op, llv1, llv2) -> Binop (op, loop_float ~process_for llv1, loop_float ~process_for llv2)
     | Unop (op, llv) -> Unop (op, loop_float ~process_for llv)
   in
-  Option.value_exn @@ loop_proc ~process_for:Set.Poly.empty llc
+  loop_proc ~process_for:Set.Poly.empty llc
+
+let cleanup_virtual_llc (llc : unit low_level) : unit low_level =
+  (* The current position is within scope of the definitions of the process_for virtual tensors. *)
+  let rec loop_proc (llc : unit low_level) : unit low_level option =
+    match llc with
+    | Lines body ->
+        let body = Array.filter_map ~f:loop_proc body in
+        if Array.is_empty body then None else Some (Lines body)
+    | For_loop { index; from_; to_; body } -> (
+        match Hashtbl.find reverse_node_map index with
+        | Some tensor ->
+            let node : data_node = Hashtbl.find_exn global_node_store tensor in
+            if node.non_virtual then
+              Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop_proc body
+            else None
+        | None -> Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop_proc body)
+    | Fill { tensor; value } ->
+        let node : data_node = Hashtbl.find_exn global_node_store tensor in
+        if node.non_virtual then Some (Fill { tensor; value = loop_float value }) else None
+    | Set (tensor, indices, llv) ->
+        let node : data_node = Hashtbl.find_exn global_node_store tensor in
+        if node.non_virtual then Some (Set (tensor, indices, loop_float llv)) else None
+    | Set_local (id, llv) ->
+        let node : data_node = Hashtbl.find_exn global_node_store id.tensor in
+        assert (not node.non_virtual);
+        Some (Set_local (id, loop_float llv))
+    | Comment _ -> Some llc
+    | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
+        (* FIXME(132): implement virtual dynamic indices. *)
+        Option.map ~f:(fun body -> Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body })
+        @@ loop_proc body
+  and loop_float (llv : float low_level) : float low_level =
+    match llv with
+    | Constant _ -> llv
+    | Get (tensor, _) ->
+        let node : data_node = get_node tensor in
+        assert node.non_virtual;
+        llv
+    | Local_scope { id; prec; body; orig_indices } ->
+        let node : data_node = get_node id.tensor in
+        if node.non_virtual then Get (id.tensor, orig_indices)
+        else Local_scope { id; prec; orig_indices; body = Option.value_exn @@ loop_proc body }
+    | Get_local id ->
+        let node : data_node = get_node id.tensor in
+        assert (not node.non_virtual);
+        llv
+    | Binop (op, llv1, llv2) -> Binop (op, loop_float llv1, loop_float llv2)
+    | Unop (op, llv) -> Unop (op, loop_float llv)
+  in
+  Option.value_exn @@ loop_proc llc
 
 type virtualize_settings = {
   mutable virtualize : bool;
@@ -786,7 +826,7 @@ let compile_proc proc =
   else (
     visit_llc ~max_visits:virtualize_settings.max_visits ~consider_grads:virtualize_settings.consider_grads
       llc;
-    virtual_llc llc)
+    cleanup_virtual_llc @@ virtual_llc llc)
 
 let compile_program prog =
   let result =

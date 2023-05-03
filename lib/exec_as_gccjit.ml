@@ -123,7 +123,7 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
   and loop_float ~name ~env ~num_typ ~is_double value : rvalue =
     let loop = loop_float ~name ~env ~num_typ ~is_double in
     match value with
-    | Local_scope { id = { scope_id = i; tensor } as id; prec; body; idcs_for_debug } ->
+    | Local_scope { id = { scope_id = i; tensor } as id; prec; body; orig_indices } ->
         let typ = Type.get ctx @@ prec_to_kind prec in
         (* Scope ids can be non-unique due to inlining. *)
         let v_name =
@@ -141,7 +141,7 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
         locals := old_locals;
         (if !Code.debug_virtual_nodes then
            let tensor = get_tensor ctx tensor in
-           let idcs = lookup env idcs_for_debug in
+           let idcs = lookup env orig_indices in
            let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
            let lhs = LValue.access_array tensor.ptr offset in
            Block.assign !current_block lhs @@ RValue.lvalue lvalue);
