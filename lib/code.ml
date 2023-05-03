@@ -335,7 +335,7 @@ let interpret_llc llc =
           Caml.Format.printf "TRACE: %a <- %f\n%!" Sexp.pp_hum ([%sexp_of: tensor_ptr] tensor) result;
         fill_from_float tensor result
     | Set (ptr, indices, llv) ->
-        Caml.Format.printf "{";
+        if !debug_trace_interpretation then Caml.Format.printf "{";
         let idcs = lookup env indices in
         let result = loop_float env llv in
         if !debug_trace_interpretation then
@@ -368,7 +368,7 @@ let interpret_llc llc =
     match llv with
     | Constant c -> c
     | Get (ptr, indices) ->
-        Caml.Format.printf "{";
+        if !debug_trace_interpretation then Caml.Format.printf "{";
         let idcs = lookup env indices in
         let result = get_as_float ptr idcs in
         if !debug_trace_interpretation then
@@ -381,7 +381,7 @@ let interpret_llc llc =
             result;
         result
     | Local_scope { id; prec = _; body; orig_indices } ->
-        Caml.Format.printf "{";
+        if !debug_trace_interpretation then Caml.Format.printf "{";
         let old_locals = !locals in
         locals := Map.update !locals id ~f:(fun _ -> 0.0);
         loop_proc env body;
@@ -726,14 +726,14 @@ let virtual_llc (llc : unit low_level) : unit low_level =
         | _ -> For_loop { index; from_; to_; body = loop body })
     | Fill { tensor; value } ->
         let node : data_node = Hashtbl.find_exn global_node_store tensor in
-        let process_for = if node.non_virtual then process_for else Set.add process_for tensor in
-        let result = Fill { tensor; value = loop_float ~process_for value } in
+        let next = if node.non_virtual then process_for else Set.add process_for tensor in
+        let result = Fill { tensor; value = loop_float ~process_for:next value } in
         if (not node.non_virtual) && (not @@ Set.mem process_for tensor) then process_computation node result;
         result
     | Set (tensor, indices, llv) ->
         let node : data_node = Hashtbl.find_exn global_node_store tensor in
-        let process_for = if node.non_virtual then process_for else Set.add process_for tensor in
-        let result = Set (tensor, indices, loop_float ~process_for llv) in
+        let next = if node.non_virtual then process_for else Set.add process_for tensor in
+        let result = Set (tensor, indices, loop_float ~process_for:next llv) in
         if (not @@ Set.mem process_for tensor) && not node.non_virtual then process_computation node result;
         result
     | Set_local (id, llv) -> Set_local (id, loop_float ~process_for llv)
