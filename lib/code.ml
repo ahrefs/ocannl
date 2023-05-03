@@ -296,6 +296,18 @@ let set_from_float ptr idcs value =
   | Value -> N.set_from_float (N.get ptr.id).value idcs value
   | Grad -> N.set_from_float (Option.value_exn (N.get ptr.id).grad) idcs value
 
+let fill_from_float ptr value =
+  match ptr.field with
+  | Value -> N.fill_from_float (N.get ptr.id).value value
+  | Grad -> N.fill_from_float (Option.value_exn (N.get ptr.id).grad) value
+
+let get_as_float ptr idcs =
+  match ptr.field with
+  | Value -> N.get_as_float (N.get ptr.id).value idcs
+  | Grad -> N.get_as_float (Option.value_exn (N.get ptr.id).grad) idcs
+
+let debug_trace_interpretation = ref false
+
 let interpret_llc llc =
   (* Local scope ids can be non-unique due to inlining. *)
   let locals = ref Map.Poly.empty in
@@ -317,33 +329,74 @@ let interpret_llc llc =
         for data = from_ to to_ do
           loop_proc (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
-    | Fill { tensor = { id; field = Value }; value } ->
-        N.fill_from_float (N.get id).value @@ loop_float env value
-    | Fill { tensor = { id; field = Grad }; value } ->
-        N.fill_from_float (Option.value_exn (N.get id).grad) @@ loop_float env value
-    | Set (ptr, indices, llv) -> set_from_float ptr (lookup env indices) @@ loop_float env llv
+    | Fill { tensor; value } ->
+        let result = loop_float env value in
+        if !debug_trace_interpretation then
+          Caml.Format.printf "TRACE: %a <- %f\n%!" Sexp.pp_hum ([%sexp_of: tensor_ptr] tensor) result;
+        fill_from_float tensor result
+    | Set (ptr, indices, llv) ->
+        Caml.Format.printf "{";
+        let idcs = lookup env indices in
+        let result = loop_float env llv in
+        if !debug_trace_interpretation then
+          Caml.Format.printf "TRACE: %a [%a -> %a] (%f) <- %f}\n%!" Sexp.pp_hum
+            ([%sexp_of: tensor_ptr] ptr)
+            Sexp.pp_hum
+            ([%sexp_of: index array] indices)
+            Sexp.pp_hum
+            ([%sexp_of: int array] idcs)
+            (get_as_float ptr idcs) result;
+        set_from_float ptr idcs @@ result
     | Set_local (id, llv) -> locals := Map.update !locals id ~f:(fun _ -> loop_float env llv)
     | Comment message when !with_debug && !interpreter_print_comments -> Stdio.printf "%s\n%!" message
     | Dynamic_indices { tensor = { id; field = Value }; tensor_idcs; dynamic_idcs; target_dims; body } ->
         dynamic_indices env (N.get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Dynamic_indices { tensor = { id; field = Grad }; tensor_idcs; dynamic_idcs; target_dims; body } ->
         dynamic_indices env (Option.value_exn (N.get id).grad) ~tensor_idcs ~dynamic_idcs ~target_dims body
-    | Comment _ -> ()
+    | Comment c ->
+        if !debug_trace_interpretation then (
+          Caml.Format.printf "TRACE: %s -- prior state of nodes: {\n%!" c;
+          NodeUI.print_decimals_precision := 9;
+          for i = 1 to Ocannl_runtime.Node.global.unique_id - 1 do
+            Caml.Format.printf "TRACE: %a\n%!" PrintBox_text.pp
+              (NodeUI.to_printbox ~single_node:true ~with_grad:true ~depth:9 i)
+          done;
+          Caml.Format.printf "}\n%!")
   and loop_float env llv =
     let open Float in
     let loop = loop_float env in
     match llv with
     | Constant c -> c
-    | Get ({ id; field = Value }, indices) -> N.get_as_float (N.get id).value @@ lookup env indices
-    | Get ({ id; field = Grad }, indices) ->
-        N.get_as_float (Option.value_exn (N.get id).grad) @@ lookup env indices
+    | Get (ptr, indices) ->
+        Caml.Format.printf "{";
+        let idcs = lookup env indices in
+        let result = get_as_float ptr idcs in
+        if !debug_trace_interpretation then
+          Caml.Format.printf "TRACE: %a [%a -> %a] -> %f}\n%!" Sexp.pp_hum
+            ([%sexp_of: tensor_ptr] ptr)
+            Sexp.pp_hum
+            ([%sexp_of: index array] indices)
+            Sexp.pp_hum
+            ([%sexp_of: int array] idcs)
+            result;
+        result
     | Local_scope { id; prec = _; body; idcs_for_debug } ->
+        Caml.Format.printf "{";
         let old_locals = !locals in
         locals := Map.update !locals id ~f:(fun _ -> 0.0);
         loop_proc env body;
         let result = Map.find_exn !locals id in
         locals := old_locals;
-        if !debug_virtual_nodes then set_from_float id.tensor (lookup env idcs_for_debug) result;
+        let idcs = lookup env idcs_for_debug in
+        if !debug_virtual_nodes then set_from_float id.tensor idcs result;
+        if !debug_trace_interpretation then
+          Caml.Format.printf "TRACE: %a [%a / %a] (%f) <-> %f}\n%!" Sexp.pp_hum
+            ([%sexp_of: tensor_ptr] id.tensor)
+            Sexp.pp_hum
+            ([%sexp_of: index array] idcs_for_debug)
+            Sexp.pp_hum
+            ([%sexp_of: int array] idcs)
+            (get_as_float id.tensor idcs) result;
         result
     | Get_local id -> Map.find_exn !locals id
     | Binop (Arg1, llv1, _llv2) -> loop llv1
@@ -405,26 +458,6 @@ let interpreter_error_message ~name ~prefix ?extra_error_msg ~contents exc =
       msg extra);
   msg contents;
   Buffer.contents message
-
-(*
-let substitute_llc env llc =
-  let rec loop (type a) (llc : a low_level) =
-    match (llc : a low_level) with
-    | Comment _ as c -> c
-    | Lines cs -> Lines (Array.map cs ~f:loop)
-    | For_loop { index; from_; to_; body } -> For_loop { index; from_; to_; body }
-    | Fill _ -> _
-    | Value_at_node_id _ -> _
-    | Gradient_at_node_id _ -> _
-    | Dynamic_indices _ -> _
-    | Set (_, _, _) -> _
-    | Get (_, _) -> _
-    | Binop (_, _, _) -> _
-    | Unop (_, _) -> _
-    | Constant _ -> _
-  in
-  loop llc
-*)
 
 (** *** Optimization *** *)
 type visits =
@@ -747,19 +780,23 @@ type virtualize_settings = {
 
 let virtualize_settings = { virtualize = true; max_visits = 3; consider_grads = false }
 
+let compile_proc proc =
+  let llc = to_low_level proc in
+  if not virtualize_settings.virtualize then llc
+  else (
+    visit_llc ~max_visits:virtualize_settings.max_visits ~consider_grads:virtualize_settings.consider_grads
+      llc;
+    virtual_llc llc)
+
 let compile_program prog =
-  let prog = to_low_level_program prog in
-  if not virtualize_settings.virtualize then prog
-  else
+  let result =
     match prog with
-    | Assign_suspension proc ->
-        visit_llc ~max_visits:virtualize_settings.max_visits
-          ~consider_grads:virtualize_settings.consider_grads proc;
-        Assign_suspension (virtual_llc proc)
-    | Assign_session_step_update proc ->
-        visit_llc ~max_visits:virtualize_settings.max_visits
-          ~consider_grads:virtualize_settings.consider_grads proc;
-        Assign_session_step_update (virtual_llc proc)
+    | Suspension proc -> Assign_suspension (compile_proc proc)
+    | Session_step_update proc -> Assign_session_step_update (compile_proc proc)
+  in
+  if !debug_trace_interpretation then
+    Caml.Format.printf "TRACE: Compiled program:@ %a@!" Sexp.pp_hum @@ sexp_of_low_level_program result;
+  result
 
 let interpret_program prog : string option =
   let llp = compile_program prog in
