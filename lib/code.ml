@@ -793,10 +793,10 @@ let compile_program prog =
     Caml.Format.printf "TRACE: Compiled program:@ %a@!" Sexp.pp_hum @@ sexp_of_low_level_program result;
   result
 
-let interpret_program prog : string option =
-  let llp = compile_program prog in
-  let () = interpret_llprog llp in
-  Some (Sexp.to_string_hum @@ sexp_of_low_level_program llp)
+let interpret_compiled ~name:_ compiled : string option =
+  let () = interpret_llprog compiled in
+  (* TODO: if with_debug and keep_files_in_run_directory, save the sexp_of llprog to a file name^".llc". *)
+  if !with_debug then Some (Sexp.to_string_hum @@ sexp_of_low_level_program compiled) else None
 
 module CDSL = struct
   let value_of_id id : NodeUI.tensor_ptr = { id; field = Value }

@@ -282,7 +282,7 @@ let error_message ~name ~prefix ?extra_error_msg ~contents exc =
   msg contents;
   Buffer.contents message
 
-let jit_program (prog : Code.program) =
+let jit_compiled ~name compiled =
   let open Gccjit in
   let ctx = Context.create_child !session_context in
   Context.set_option ctx Context.Optimization_level !optimization_level;
@@ -291,6 +291,6 @@ let jit_program (prog : Code.program) =
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)
-  let msg = jit_ll_prog ~name:"" ctx (Code.compile_program prog) in
+  let msg = jit_ll_prog ~name ctx compiled in
   Context.release ctx;
   msg

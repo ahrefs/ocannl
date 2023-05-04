@@ -219,10 +219,9 @@ let error_message ~name ~prefix ?extra_error_msg ~contents exc =
   msg @@ String.sub contents ~pos:to_pos ~len:(String.length contents - to_pos);
   Buffer.contents message
 
-let load_native (prog : Code.program) =
-  let compiled = emit prog in
+let load_native_compiled ~name compiled =
   let name =
-    Code.get_name prog ^ "_u"
+    name ^ "_u"
     ^ Int.to_string
         (Int.incr unique_id;
          !unique_id)

@@ -129,27 +129,26 @@ let print_preamble () = Stdio.printf "%s\n%!" (Formula.prefix_with_preamble "")
 (** *** Session management. *** *)
 type backend = Interpreter | OCaml | Gccjit [@@deriving sexp, equal]
 
-let executor = ref Exec_as_gccjit.jit_program
+let executor = ref Exec_as_gccjit.jit_compiled
 let executor_error_message = ref Exec_as_gccjit.error_message
 let cleanup_executor_session = ref Exec_as_gccjit.cleanup_session
 
 let set_executor = function
   | Interpreter ->
-      executor := Code.interpret_program;
+      executor := Code.interpret_compiled;
       executor_error_message := Code.interpreter_error_message;
       cleanup_executor_session := fun () -> ()
   | OCaml ->
-      executor := Exec_as_OCaml.load_native;
+      executor := Exec_as_OCaml.load_native_compiled;
       executor_error_message := Exec_as_OCaml.error_message;
       cleanup_executor_session := fun () -> ()
   | Gccjit ->
-      executor := Exec_as_gccjit.jit_program;
+      executor := Exec_as_gccjit.jit_compiled;
       executor_error_message := Exec_as_gccjit.error_message;
       cleanup_executor_session := Exec_as_gccjit.cleanup_session
 
-let dynload_with_handler ~runtime_store code =
-  let name = Code.get_name code in
-  let contents = !executor code in
+let dynload_with_handler ~runtime_store ~name compiled =
+  let contents = !executor ~name compiled in
   match (contents, !runtime_store) with
   | Some contents, Some routine ->
       runtime_store :=
@@ -171,20 +170,24 @@ let perform_initialization =
   List.iter ~f:(function
     | { Code.tensor = { id; field = Value }; dims; init_op } ->
         (* FIXME(#135): Defensive. For now, value and gradient should be non-virtual reciprocically. *)
-        if not (NodeUI.get id).virtual_ then
+        if !Code.debug_virtual_nodes || not (NodeUI.get id).virtual_ then
           (NodeUI.N.get id).value <- NodeUI.create_ndarray !Formula.default_value_prec (dims ()) init_op
     | { tensor = { id; field = Grad }; dims; init_op } ->
-        if not (NodeUI.get id).virtual_ then
+        if  !Code.debug_virtual_nodes || not (NodeUI.get id).virtual_ then
           (NodeUI.N.get id).grad <- Some (NodeUI.create_ndarray !Formula.default_grad_prec (dims ()) init_op))
 
 let compile_routine code =
   let open Formula in
   let num_inits = List.length !session_initializations in
   let to_init = num_inits - !session_initialized in
-  perform_initialization @@ List.take !session_initializations to_init;
   session_initialized := num_inits;
   Ocannl_runtime.Node.most_recent_suspension := None;
-  dynload_with_handler ~runtime_store:Ocannl_runtime.Node.most_recent_suspension Code.(Suspension code);
+  let prog = Code.(Suspension code) in
+  let name = Code.get_name prog in
+  let compiled = Code.compile_program prog in
+  (* Only initialize after compilation, to know which nodes are virtual. *)
+  perform_initialization @@ List.take !session_initializations to_init;
+  dynload_with_handler ~runtime_store:Ocannl_runtime.Node.most_recent_suspension ~name compiled;
   let routine = Option.value_exn !Ocannl_runtime.Node.most_recent_suspension in
   Ocannl_runtime.Node.most_recent_suspension := None;
   routine
@@ -202,13 +205,14 @@ let last_refresh_roots = ref !Formula.global_roots
 let last_with_backprop = ref false
 let last_update_params = ref false
 let generated_session_step_update = ref Code.Noop
+let generated_session_step_update_compiled = ref Code.(Assign_session_step_update (Comment "Noop"))
 
 let print_session_code ?(compiled = false) () =
   let open Code in
   (* FIXME: figure out if / why this isn't idempotent. *)
   if compiled then
-    Caml.Format.printf "Session step update code:@ %a" Sexp.pp_hum
-      (sexp_of_low_level_program @@ compile_program @@ Session_step_update !generated_session_step_update)
+    Caml.Format.printf "Compiled session step update code:@ %a" Sexp.pp_hum
+      (sexp_of_low_level_program @@ !generated_session_step_update_compiled)
   else Caml.Format.printf "Session step update code:@ %a" fprint_code !generated_session_step_update;
   Caml.Format.print_newline ()
 
@@ -227,11 +231,6 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
   last_update_params := update_params;
   if regenerate || roots_changed then List.iter !session_shape_updates ~f:Shape.propagate_shapes;
   if regenerate then session_initialized := 0;
-  if regenerate || reinit || roots_changed then (
-    let num_inits = List.length !session_initializations in
-    let to_init = num_inits - !session_initialized in
-    perform_initialization @@ List.take !session_initializations to_init;
-    session_initialized := num_inits);
   let generating = regenerate || roots_changed || backprop_changed || update_params_changed in
   if generating then (
     Ocannl_runtime.Node.global.session_step_update := None;
@@ -264,11 +263,21 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
     (* Roots at the time of compilation are not virtual, so that they can be consumed downstream. *)
     Map.iter_keys !Formula.global_roots ~f:(fun id ->
         let make_non_virt : data_node = Code.get_node { id; field = Value } in
-        make_non_virt.non_virtual <- true);
+        let make_non_virt_grad : data_node = Code.get_node { id; field = Value } in
+        make_non_virt.non_virtual <- true;
+        make_non_virt_grad.non_virtual <- true);
     generated_session_step_update := sequential [ forward; backprop; params_update ]);
+  let prog = Code.(Session_step_update !generated_session_step_update) in
+  let name = Code.get_name prog in
+  if generating then generated_session_step_update_compiled := Code.compile_program prog;
+  if generating || reinit || roots_changed then (
+    let num_inits = List.length !session_initializations in
+    let to_init = num_inits - !session_initialized in
+    perform_initialization @@ List.take !session_initializations to_init;
+    session_initialized := num_inits);
   if (not force_no_init) && (generating || reinit) then
-    dynload_with_handler ~runtime_store:Ocannl_runtime.Node.global.session_step_update
-      Code.(Session_step_update !generated_session_step_update);
+    dynload_with_handler ~runtime_store:Ocannl_runtime.Node.global.session_step_update ~name
+      !generated_session_step_update_compiled;
   if run then
     match !(Ocannl_runtime.Node.global.session_step_update) with
     | None -> assert false
