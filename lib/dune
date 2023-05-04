@@ -16,6 +16,7 @@
   stdio
   dynlink
   str
+  mem_usage
   ocannl_runtime
   gccjit
   ppx_minidebug.runtime)
