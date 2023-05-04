@@ -543,7 +543,7 @@ let visit_llc ~max_visits ~consider_grads llc =
           (Hashtbl.find global_node_store { id = node_id; field = Grad })
           ~f:(fun grad_node ->
             if Hashtbl.exists grad_node.accesses ~f:is_too_many then grad_node.non_virtual <- true;
-            (* Issue #135: For now, value and gradient are non-virtual reciprocically. *)
+            (* TODO(#135): For now, value and gradient are non-virtual reciprocically. *)
             if value_node.non_virtual then grad_node.non_virtual <- true;
             if grad_node.non_virtual then value_node.non_virtual <- true))
 

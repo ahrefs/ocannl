@@ -169,11 +169,12 @@ let dynload_with_handler ~runtime_store code =
 
 let perform_initialization =
   List.iter ~f:(function
-    | { Code.tensor = { id; field = Value } as tensor; dims; init_op } ->
-        if not @@ (Code.get_node tensor).non_virtual then
+    | { Code.tensor = { id; field = Value }; dims; init_op } ->
+        (* FIXME(#135): Defensive. For now, value and gradient should be non-virtual reciprocically. *)
+        if not (NodeUI.get id).virtual_ then
           (NodeUI.N.get id).value <- NodeUI.create_ndarray !Formula.default_value_prec (dims ()) init_op
-    | { tensor = { id; field = Grad } as tensor; dims; init_op } ->
-        if not @@ (Code.get_node tensor).non_virtual then
+    | { tensor = { id; field = Grad }; dims; init_op } ->
+        if not (NodeUI.get id).virtual_ then
           (NodeUI.N.get id).grad <- Some (NodeUI.create_ndarray !Formula.default_grad_prec (dims ()) init_op))
 
 let compile_routine code =
