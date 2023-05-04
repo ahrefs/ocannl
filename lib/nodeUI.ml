@@ -481,7 +481,7 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
     let children = if single_node then [] else List.map ~f:to_dag n.children in
     let desc_l = match n.desc_label with None -> "" | Some l -> l ^ " " in
     let op_l = match n.op_label with "" -> "" | l -> "<" ^ l ^ ">" in
-    let prefix = "[" ^ id ^ "] " ^ desc_l ^ op_l ^ (* DEBUG: if n.virtual_ then " virtual" else *) "" in
+    let prefix = "[" ^ id ^ "] " ^ desc_l ^ op_l ^ if n.virtual_ then " virtual" else "" in
     let labels = Shape.axis_map_to_dims_index ~default:"" n.shape.axis_labels in
     let indices = default_display_indices n.shape in
     match (computed_externally, with_value, with_grad, n.node.grad) with

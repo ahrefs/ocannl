@@ -62,4 +62,4 @@ Some ideas regarding installation (skip or substitute equivalent actions etc.):
 
 * Andrej Karpathy's [Micrograd](https://github.com/karpathy/micrograd)
 * [JAX autodidax](https://jax.readthedocs.io/en/latest/autodidax.html)
-* [Fast GPT: GPT-2 inference in Fortran](https://github.com/certik/fastGPT/), [picoGPT: code-golf GPT-2 inference in NumPy]
+* [Fast GPT: GPT-2 inference in Fortran](https://github.com/certik/fastGPT/), [picoGPT: code-golf GPT-2 inference in NumPy](https://github.com/jaymody/picoGPT)
