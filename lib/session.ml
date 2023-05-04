@@ -168,14 +168,13 @@ let dynload_with_handler ~runtime_store code =
   | _ -> ()
 
 let perform_initialization =
-  let open Ocannl_runtime.Node in
   List.iter ~f:(function
     | { Code.tensor = { id; field = Value } as tensor; dims; init_op } ->
         if not @@ (Code.get_node tensor).non_virtual then
-          (get id).value <- create_ndarray Double (dims ()) init_op
+          (NodeUI.N.get id).value <- NodeUI.create_ndarray !Formula.default_value_prec (dims ()) init_op
     | { tensor = { id; field = Grad } as tensor; dims; init_op } ->
         if not @@ (Code.get_node tensor).non_virtual then
-          (get id).grad <- Some (create_ndarray Double (dims ()) init_op))
+          (NodeUI.N.get id).grad <- Some (NodeUI.create_ndarray !Formula.default_grad_prec (dims ()) init_op))
 
 let compile_routine code =
   let open Formula in

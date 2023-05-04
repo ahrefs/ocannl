@@ -802,6 +802,8 @@ module CDSL = struct
   let value_of_id id : NodeUI.tensor_ptr = { id; field = Value }
   let grad_of_id id : NodeUI.tensor_ptr = { id; field = Grad }
   let data_of_node field (n : NodeUI.t) : NodeUI.tensor_ptr = { id = n.id; field }
+  let single = NodeUI.single
+  let double = NodeUI.double
   let interpreter_print_comments = interpreter_print_comments
   let keep_files_in_run_directory = keep_files_in_run_directory
   let with_debug = with_debug
