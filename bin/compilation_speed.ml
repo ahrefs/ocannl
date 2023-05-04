@@ -33,7 +33,14 @@ let recompiling_graph executor opti () =
   let final_time = Time_now.nanoseconds_since_unix_epoch () in
   let time_in_sec = Int63.(to_float @@ (final_time - init_time)) /. 1000_000_000. in
   let result =
-    PrintBox_utils.Benchmark { bench_title; time_in_sec; total_size_in_bytes = SDSL.global_size_in_bytes () }
+    PrintBox_utils.Benchmark
+      {
+        bench_title;
+        time_in_sec;
+        total_size_in_bytes = SDSL.global_size_in_bytes ();
+        result_label = "x, f(x)";
+        result = [%sexp_of: (float * float) list] @@ [ (xs.(0), ys.(0)); (xs.(50), ys.(50)) ];
+      }
   in
   PrintBox_text.output Stdio.stdout plot_box;
   Exec_as_gccjit.optimization_level := 3;

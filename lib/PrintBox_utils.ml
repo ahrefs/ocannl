@@ -176,7 +176,14 @@ let plot ?(prec = 3) ?canvas ?size ~x_label ~y_label specs =
       ];
     ]
 
-type table_row_spec = Benchmark of { bench_title : string; time_in_sec : float; total_size_in_bytes : int }
+type table_row_spec =
+  | Benchmark of {
+      bench_title : string;
+      time_in_sec : float;
+      total_size_in_bytes : int;
+      result_label : string;
+      result : Sexp.t;
+    }
 
 let table rows =
   if List.is_empty rows then PrintBox.empty
@@ -189,6 +196,9 @@ let table rows =
     let speedups = List.map times ~f:(fun x -> max_time /. x) in
     let mem_gains = List.map sizes ~f:Float.(fun x -> of_int max_size / of_int x) in
     let small_float = Fn.compose PrintBox.line (Printf.sprintf "%.3f") in
+    let results = List.map rows ~f:(fun (Benchmark { result; _ }) -> Sexp.to_string_hum result) in
+    let result_labels = List.map rows ~f:(fun (Benchmark { result_label; _ }) -> result_label) in
+    (* TODO(#140): partition by unique result_label and output a vlist of records. *)
     PrintBox.(
       frame
       @@ record
@@ -198,4 +208,5 @@ let table rows =
              ("Memory in bytes", vlist_map ~bars:false int_ sizes);
              ("Speedup", vlist_map ~bars:false small_float speedups);
              ("Mem gain", vlist_map ~bars:false small_float mem_gains);
+             (List.hd_exn result_labels, vlist_map ~bars:false line results)
            ])
