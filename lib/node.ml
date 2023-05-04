@@ -188,6 +188,10 @@ let empty prec = create_array prec [||] (Constant_fill [| 0.0 |])
 
 type t = { mutable value : ndarray; mutable grad : ndarray option; id : int } [@@deriving sexp_of]
 
+let size_in_bytes n =
+  let size = map_as_bigarray { f = A.size_in_bytes } in
+  size n.value + Option.value_map ~f:size n.grad ~default:0
+
 exception Runtime_error of string * t option
 
 let most_recent_suspension : (unit -> unit) option ref = ref None
@@ -205,6 +209,9 @@ let global =
     session_step_update = ref @@ Some (fun () -> ());
   }
 
+let global_size_in_bytes () =
+  Hashtbl.fold global.node_store ~init:0 ~f:(fun ~key:_ ~data sum -> sum + size_in_bytes data)
+  
 let get uid = Hashtbl.find_exn global.node_store uid
 
 let get_value (type val_t arr_t) (prec : (val_t, arr_t) precision) uid : arr_t =

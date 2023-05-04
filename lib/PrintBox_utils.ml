@@ -175,3 +175,26 @@ let plot ?(prec = 3) ?canvas ?size ~x_label ~y_label specs =
           ];
       ];
     ]
+
+type table_row_spec = Benchmark of { bench_title : string; time_in_sec : float; total_size_in_bytes : int }
+
+let table rows =
+  if List.is_empty rows then PrintBox.empty
+  else
+    let titles = List.map rows ~f:(fun (Benchmark { bench_title; _ }) -> bench_title) in
+    let times = List.map rows ~f:(fun (Benchmark { time_in_sec; _ }) -> time_in_sec) in
+    let sizes = List.map rows ~f:(fun (Benchmark { total_size_in_bytes; _ }) -> total_size_in_bytes) in
+    let max_time = List.reduce_exn ~f:Float.max times in
+    let max_size = List.reduce_exn ~f:Int.max sizes in
+    let speedups = List.map times ~f:(fun x -> max_time /. x) in
+    let mem_gains = List.map sizes ~f:Float.(fun x -> of_int max_size / of_int x) in
+    PrintBox.(
+      frame
+      @@ record
+           [
+             ("Benchmarks", vlist_map line titles);
+             ("Time in sec", vlist_map float_ times);
+             ("Memory in bytes", vlist_map int_ sizes);
+             ("Speedup vs. worst", vlist_map float_ speedups);
+             ("Mem gain vs. worst", vlist_map float_ mem_gains);
+           ])

@@ -1,18 +1,18 @@
 open Base
-open Core_bench
 open Ocannl
 module FDSL = Operation.FDSL
 module NFDSL = Operation.NFDSL
 module CDSL = Code.CDSL
+module SDSL = Session.SDSL
 
 let _suspended () =
   (* Code.CDSL.with_debug := false; *)
   (* let open Operation.FDSL in *)
-  let open Session.SDSL in
-  set_executor Interpreter;
-  enable_all_debugs ();
+  let open SDSL.O in
+  SDSL.set_executor Interpreter;
+  SDSL.enable_all_debugs ();
   CDSL.virtualize_settings.virtualize <- true;
-  drop_all_sessions ();
+  SDSL.drop_all_sessions ();
   Random.init 0;
   let len = 400 in
   let minibatch = 2 in
@@ -54,7 +54,7 @@ let _suspended () =
      in *)
   let%nn_dt session_step ~output_dims:[ 1 ] = n =+ 1 in
   let%nn_dt minus_lr ~output_dims:[ 1 ] = n =: -0.0001 *. (!..steps - session_step) /. !..steps in
-  minus_learning_rate := Some minus_lr;
+  SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = moons_flat @.| session_step in
   let%nn_op moons_class = moons_classes @.| session_step in
   let%nn_op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
@@ -64,47 +64,51 @@ let _suspended () =
        List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
      in *)
   let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..minibatch) + (0.001 *. reg_loss) in
-  refresh_session ();
-  print_decimals_precision := 9;
+  SDSL.refresh_session ();
+  SDSL.print_decimals_precision := 9;
   Stdio.print_endline "\nPreamble:\n";
-  print_preamble ();
+  SDSL.print_preamble ();
   Stdio.printf "\nStep 1: loss %f\n%!" total_loss.@[0];
-  print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
   List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
-      print_formula ~with_grad:true ~with_code:false `Default f);
-  refresh_session ();
+      SDSL.print_formula ~with_grad:true ~with_code:false `Default f);
+  SDSL.refresh_session ();
   Stdio.printf "\nStep 2: loss %f\n%!" total_loss.@[0];
-  print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
   List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
-      print_formula ~with_grad:true ~with_code:false `Default f);
-  refresh_session ();
+      SDSL.print_formula ~with_grad:true ~with_code:false `Default f);
+  SDSL.refresh_session ();
   Stdio.printf "\nStep 3: loss %f\n%!" total_loss.@[0];
-  print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
-  refresh_session ();
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
+  SDSL.refresh_session ();
   Stdio.printf "\nStep 4: loss %f\n%!" total_loss.@[0];
-  print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id
 
 let classify_moons ~virtualize executor ~opti_level precision () =
-  let epochs = 20000 in
-  (* let epochs = 200 in *)
-  Stdio.prerr_endline @@ "\n\n****** Benchmarking virtualized: "
-  ^ Sexp.to_string_hum
-      ([%sexp_of: bool * Session.backend * int * NodeUI.prec] (virtualize, executor, opti_level, precision))
-  ^ " for " ^ Int.to_string epochs ^ " epochs ******";
+  (* let epochs = 20000 in *)
+  let epochs = 200 in
+  let bench_title =
+    Sexp.to_string_hum
+    @@ [%sexp_of: string * Session.backend * int * NodeUI.prec]
+         ((if virtualize then "virtualized" else "non-virt."), executor, opti_level, precision)
+  in
+  Stdio.prerr_endline @@ "\n\n****** Benchmarking virtualized: " ^ bench_title ^ " for "
+  ^ Int.to_string epochs ^ " epochs ******";
   CDSL.debug_virtual_nodes := false;
   CDSL.virtualize_settings.virtualize <- virtualize;
-  Session.SDSL.set_executor executor;
-  Session.SDSL.default_value_prec := precision;
-  Session.SDSL.default_grad_prec := precision;
+  SDSL.set_executor executor;
+  SDSL.default_value_prec := precision;
+  SDSL.default_grad_prec := precision;
   Exec_as_gccjit.optimization_level := opti_level;
-  let open Session.SDSL in
-  disable_all_debugs ();
-  drop_all_sessions ();
+  SDSL.disable_all_debugs ();
+  SDSL.drop_all_sessions ();
+  let open SDSL.O in
   Random.init 0;
   (* let init_mem = Mem_usage.info () in *)
   (* let hid1 = 64 in *)
+  let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let len = 400 in
   let minibatch = 10 in
   let n_batches = 2 * len / minibatch in
@@ -144,7 +148,7 @@ let classify_moons ~virtualize executor ~opti_level precision () =
   (* let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 16 + ("w1" * x))) in *)
   let%nn_dt session_step ~output_dims:[ 1 ] = n =+ 1 in
   let%nn_dt minus_lr ~output_dims:[ 1 ] = n =: -0.1 *. (!..steps - session_step) /. !..steps in
-  minus_learning_rate := Some minus_lr;
+  SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = moons_flat @.| session_step in
   let%nn_op moons_class = moons_classes @.| session_step in
   let points1 = ref [] in
@@ -166,13 +170,13 @@ let classify_moons ~virtualize executor ~opti_level precision () =
   (* let reg_loss = List.map ~f:ssq [ w1; w2; b1; b2 ] |> List.reduce_exn ~f:FDSL.O.( + ) in *)
   let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..minibatch) + (0.0001 *. reg_loss) in
   while not !stop do
-    refresh_session ();
+    SDSL.refresh_session ();
     (* if step = 1 then (
        print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
        Stdio.printf "\n%!"); *)
     if !step <= n_batches then (
-      let points = value_2d_points ~xdim:0 ~ydim:1 moons_input in
-      let classes = value_1d_points ~xdim:0 moons_class in
+      let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_input in
+      let classes = SDSL.value_1d_points ~xdim:0 moons_class in
       let npoints1, npoints2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
       points1 := npoints1 :: !points1;
       points2 := npoints2 :: !points2);
@@ -195,13 +199,18 @@ let classify_moons ~virtualize executor ~opti_level precision () =
     if !step > steps then stop := true
   done;
   (* let train_mem = Mem_usage.info () in *)
-  close_session ();
+  let final_time = Time_now.nanoseconds_since_unix_epoch () in
+  let time_in_sec = Int63.(to_float @@ (final_time - init_time)) /. 1000_000_000. in
+  let result =
+    PrintBox_utils.Benchmark { bench_title; time_in_sec; total_size_in_bytes = SDSL.global_size_in_bytes () }
+  in
+  SDSL.close_session ();
   let%nn_op point = [ 0; 0 ] in
   let mlp_result = mlp point in
-  refresh_session ();
+  SDSL.refresh_session ();
   let callback (x, y) =
-    set_values point [| x; y |];
-    refresh_session ();
+    SDSL.set_values point [| x; y |];
+    SDSL.refresh_session ();
     Float.(mlp_result.@[0] >= 0.)
   in
   let plot_moons =
@@ -246,43 +255,43 @@ let classify_moons ~virtualize executor ~opti_level precision () =
   (* Stdio.printf "\nProcess memory delta: %d\n%!"
      (train_mem.process_physical_memory - init_mem.process_physical_memory); *)
   Exec_as_gccjit.optimization_level := 3;
-  Stdio.printf "\n%!"
+  Stdio.printf "\n%!";
+  result
 
 let benchmarks =
   [
-    (* ("non-virt. Interpreter single", classify_moons ~virtualize:false Interpreter ~opti_level:3 CDSL.single); *)
-    (* ("non-virt. OCaml single", classify_moons ~virtualize:false OCaml ~opti_level:3 CDSL.single); *)
-    ("non-virt. gccjit O0 single", classify_moons ~virtualize:false Gccjit ~opti_level:0 CDSL.single);
-    ("non-virt. gccjit O1 single", classify_moons ~virtualize:false Gccjit ~opti_level:1 CDSL.single);
-    ("non-virt. gccjit O2 single", classify_moons ~virtualize:false Gccjit ~opti_level:2 CDSL.single);
-    ("non-virt. gccjit O3 single", classify_moons ~virtualize:false Gccjit ~opti_level:3 CDSL.single);
-    (* ("virtualized Interpreter single", classify_moons ~virtualize:true Interpreter ~opti_level:3 CDSL.single); *)
-    (* ("virtualized OCaml single", classify_moons ~virtualize:true OCaml ~opti_level:3 CDSL.single); *)
-    ("virtualized gccjit O0 single", classify_moons ~virtualize:true Gccjit ~opti_level:0 CDSL.single);
-    ("virtualized gccjit O1 single", classify_moons ~virtualize:true Gccjit ~opti_level:1 CDSL.single);
-    ("virtualized gccjit O2 single", classify_moons ~virtualize:true Gccjit ~opti_level:2 CDSL.single);
-    ("virtualized gccjit O3 single", classify_moons ~virtualize:true Gccjit ~opti_level:3 CDSL.single);
-    (* ("non-virt. Interpreter double", classify_moons ~virtualize:false Interpreter ~opti_level:3 CDSL.double); *)
-    (* ("non-virt. OCaml double", classify_moons ~virtualize:false OCaml ~opti_level:3 CDSL.double); *)
-    ("non-virt. gccjit O0 double", classify_moons ~virtualize:false Gccjit ~opti_level:0 CDSL.double);
-    ("non-virt. gccjit O1 double", classify_moons ~virtualize:false Gccjit ~opti_level:1 CDSL.double);
-    ("non-virt. gccjit O2 double", classify_moons ~virtualize:false Gccjit ~opti_level:2 CDSL.double);
-    ("non-virt. gccjit O3 double", classify_moons ~virtualize:false Gccjit ~opti_level:3 CDSL.double);
-    (* ("virtualized Interpreter double", classify_moons ~virtualize:true Interpreter ~opti_level:3 CDSL.double); *)
-    (* ("virtualized OCaml double", classify_moons ~virtualize:true OCaml ~opti_level:3 CDSL.double); *)
-    ("virtualized gccjit O0 double", classify_moons ~virtualize:true Gccjit ~opti_level:0 CDSL.double);
-    ("virtualized gccjit O1 double", classify_moons ~virtualize:true Gccjit ~opti_level:1 CDSL.double);
-    ("virtualized gccjit O2 double", classify_moons ~virtualize:true Gccjit ~opti_level:2 CDSL.double);
-    ("virtualized gccjit O3 double", classify_moons ~virtualize:true Gccjit ~opti_level:3 CDSL.double);
+    (* (classify_moons ~virtualize:false Interpreter ~opti_level:3 CDSL.single); *)
+    (* (classify_moons ~virtualize:false OCaml ~opti_level:3 CDSL.single); *)
+    classify_moons ~virtualize:false Gccjit ~opti_level:0 CDSL.single;
+    classify_moons ~virtualize:false Gccjit ~opti_level:1 CDSL.single;
+    classify_moons ~virtualize:false Gccjit ~opti_level:2 CDSL.single;
+    classify_moons ~virtualize:false Gccjit ~opti_level:3 CDSL.single;
+    (* ( classify_moons ~virtualize:true Interpreter ~opti_level:3 CDSL.single); *)
+    (* (classify_moons ~virtualize:true OCaml ~opti_level:3 CDSL.single); *)
+    classify_moons ~virtualize:true Gccjit ~opti_level:0 CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:1 CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:2 CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 CDSL.single;
+    (* (classify_moons ~virtualize:false Interpreter ~opti_level:3 CDSL.double); *)
+    (* (classify_moons ~virtualize:false OCaml ~opti_level:3 CDSL.double); *)
+    classify_moons ~virtualize:false Gccjit ~opti_level:0 CDSL.double;
+    classify_moons ~virtualize:false Gccjit ~opti_level:1 CDSL.double;
+    classify_moons ~virtualize:false Gccjit ~opti_level:2 CDSL.double;
+    classify_moons ~virtualize:false Gccjit ~opti_level:3 CDSL.double;
+    (* (classify_moons ~virtualize:true Interpreter ~opti_level:3 CDSL.double); *)
+    (* (classify_moons ~virtualize:true OCaml ~opti_level:3 CDSL.double); *)
+    classify_moons ~virtualize:true Gccjit ~opti_level:0 CDSL.double;
+    classify_moons ~virtualize:true Gccjit ~opti_level:1 CDSL.double;
+    classify_moons ~virtualize:true Gccjit ~opti_level:2 CDSL.double;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 CDSL.double;
   ]
 
 let _suspended () = classify_moons ~virtualize:true Gccjit ~opti_level:3 CDSL.single ()
 
 let () =
-  List.map benchmarks ~f:(fun (name, test) -> Bench.Test.create ~name test)
-  |> Bench.make_command |> Command_unix.run
+  List.map benchmarks ~f:(fun bench -> bench ()) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
-(* Example output, 200 epochs:
+(* Example output from back when using core_bench, 200 epochs:
 
    ┌────────────────────────────────┬──────────────┬─────────────┬────────────┬────────────┬────────────┐
    │ Name                           │     Time/Run │     mWd/Run │   mjWd/Run │   Prom/Run │ Percentage │
@@ -313,7 +322,7 @@ let () =
    │ virtualized gccjit O3 double   │   2_237.71ms │      9.06Mw │   875.33kw │   867.32kw │      1.80% │
    └────────────────────────────────┴──────────────┴─────────────┴────────────┴────────────┴────────────┘
 
-   20000 epochs:
+   Example output from back when using core_bench,  20000 epochs:
 
    ┌──────────────────────────────┬──────────┬─────────┬──────────┬──────────┬────────────┐
    │ Name                         │ Time/Run │ mWd/Run │ mjWd/Run │ Prom/Run │ Percentage │
