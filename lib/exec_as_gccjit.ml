@@ -32,7 +32,7 @@ let get_tensor ctx data : tensor =
     compiled_session_globals := None;
     { ptr; dims; num_typ; is_double }
   in
-  let open Code in
+  let open NodeUI in
   let arr = Option.value_exn @@ get_tensor data in
   match arr with
   | Byte_as_int_nd arr -> tensor Type.Signed_char false arr
@@ -60,13 +60,13 @@ let jit_array_offset ctx ~idcs ~dims =
 let prec_to_kind prec =
   let open Gccjit in
   match prec with
-  | Code.Void_prec -> Type.Void
+  | NodeUI.Void_prec -> Type.Void
   | Byte_as_int_prec _ -> Type.Signed_char
   | Half_as_int_prec _ -> Type.Short
   | Single_prec _ -> Type.Float
   | Double_prec _ -> Type.Double
 
-let prec_is_double = function Code.Double_prec _ -> true | _ -> false
+let prec_is_double = function NodeUI.Double_prec _ -> true | _ -> false
 
 let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gccjit.block =
   let open Gccjit in

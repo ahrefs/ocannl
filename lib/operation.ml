@@ -199,7 +199,9 @@ let assign =
   let module NFDSL = struct
     module O = struct end
   end in
-  let%nn_cd assign ~(lhs : Code.tensor_ptr) ~(rhs : Code.tensor_ptr) ~projections = lhs =: rhs ~projections in
+  let%nn_cd assign ~(lhs : NodeUI.tensor_ptr) ~(rhs : NodeUI.tensor_ptr) ~projections =
+    lhs =: rhs ~projections
+  in
   assign
 
 let assign_op field ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~projections =

@@ -20,12 +20,81 @@ and sub_node = { sub_node_id : int; computed_externally : bool } [@@deriving sex
 let global_node_store = Hashtbl.create (module Int)
 let get uid = Hashtbl.find_exn global_node_store uid
 
+type data_kind = Value | Grad [@@deriving sexp, equal, hash]
+type tensor_ptr = { id : int; field : data_kind } [@@deriving sexp, equal, hash]
+
+module N = Ocannl_runtime.Node
+
+let get_tensor tensor =
+  let n = N.get tensor.id in
+  match tensor.field with Value -> Some n.value | Grad -> n.grad
+
+type prec =
+  | Void_prec : prec
+  (* | Bit_as_bool: (bool, bit_as_bool_nd) precision *)
+  | Byte_as_int_prec : (int, N.byte_as_int_nd) N.precision -> prec
+  | Half_as_int_prec : (int, N.half_as_int_nd) N.precision -> prec
+  (* | Bit_prec: (float, (bool, Bigarray.bool_elt, Bigarray.c_layout) bigarray) N.precision -> prec*)
+  (* | Byte_prec: (float, (float, Bigarray.float8_elt, Bigarray.c_layout) bigarray) N.precision -> prec *)
+  (* | Half_prec: (float, (float, Bigarray.float16_elt, Bigarray.c_layout) bigarray) N.precision -> prec*)
+  | Single_prec : (float, N.single_nd) N.precision -> prec
+  | Double_prec : (float, N.double_nd) N.precision -> prec
+
+let byte_as_int = Byte_as_int_prec N.Byte_as_int
+let half_as_int = Half_as_int_prec N.Half_as_int
+let single = Single_prec N.Single
+let double = Double_prec N.Double
+
+let sexp_of_prec = function
+  | Void_prec -> Sexp.Atom "Void_prec"
+  | Byte_as_int_prec _ -> Sexp.Atom "Byte_as_int_prec"
+  | Half_as_int_prec _ -> Sexp.Atom "Half_as_int_prec"
+  | Single_prec _ -> Sexp.Atom "Single_prec"
+  | Double_prec _ -> Sexp.Atom "Double_prec"
+
+let prec_of_sexp = function
+  | Sexp.Atom "Void" -> Void_prec
+  | Sexp.Atom "Byte_as_int_prec" -> byte_as_int
+  | Sexp.Atom "Half_as_int_prec" -> half_as_int
+  | Sexp.Atom "Single_prec" -> single
+  | Sexp.Atom "Double_prec" -> double
+  | Sexp.List _ -> invalid_arg "prec_of_sexp: expected atom, found list"
+  | Sexp.Atom s -> invalid_arg @@ "prec_of_sexp: unknown precision " ^ s
+
+let node_prec tensor =
+  match get_tensor tensor with
+  | None -> Void_prec
+  | Some (N.Byte_as_int_nd _) -> byte_as_int
+  | Some (N.Half_as_int_nd _) -> half_as_int
+  | Some (N.Single_nd _) -> single
+  | Some (N.Double_nd _) -> double
+
 (** Constructs a node with empty tensors of the specified precision and registers it in the global store.
     Note that the precision for gradients should not be lower than the precision for values. *)
-let create (type grad_arr_t value_arr_t) ~(value_prec : ('a, value_arr_t) Node.precision)
-    ?(grad_prec : ('a, grad_arr_t) Node.precision option) ~is_form () ~op_label ?desc_label ?batch_dims
+let create ~(value_prec : prec) ?(grad_prec : prec option) ~is_form () ~op_label ?desc_label ?batch_dims
     ?input_dims ?output_dims ?axis_labels ?deduced ~children () =
-  let node = Node.create ~value_prec ?grad_prec ~is_form () in
+  let node =
+    match value_prec with
+    | Void_prec -> assert false
+    | Byte_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
+    | Half_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
+    | Single_prec value_prec -> (
+        match grad_prec with
+        | None -> Node.create ~value_prec ~is_form ()
+        | Some Void_prec -> assert false
+        | Some (Byte_as_int_prec _) -> failwith "NodeUI.create: int prec not supported yet"
+        | Some (Half_as_int_prec _) -> failwith "NodeUI.create: int prec not supported yet"
+        | Some (Single_prec grad_prec) -> Node.create ~value_prec ~grad_prec ~is_form ()
+        | Some (Double_prec grad_prec) -> Node.create ~value_prec ~grad_prec ~is_form ())
+    | Double_prec value_prec -> (
+        match grad_prec with
+        | None -> Node.create ~value_prec ~is_form ()
+        | Some Void_prec -> assert false
+        | Some (Byte_as_int_prec _) -> failwith "NodeUI.create: int prec not supported yet"
+        | Some (Half_as_int_prec _) -> failwith "NodeUI.create: int prec not supported yet"
+        | Some (Single_prec grad_prec) -> Node.create ~value_prec ~grad_prec ~is_form ()
+        | Some (Double_prec grad_prec) -> Node.create ~value_prec ~grad_prec ~is_form ())
+  in
   let shape = Shape.make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~id:node.id () in
   let data = { id = node.id; node; op_label; desc_label; children; shape; virtual_ = false } in
   Hashtbl.add_exn global_node_store ~key:node.id ~data;
@@ -33,19 +102,19 @@ let create (type grad_arr_t value_arr_t) ~(value_prec : ('a, value_arr_t) Node.p
 
 let create_of_same_precision_as ~is_form (node : Node.t) =
   match (node.value, node.grad) with
-  | Single_nd _, Some (Single_nd _) -> create ~value_prec:Single ~grad_prec:Single ~is_form ()
-  | Single_nd _, Some (Double_nd _) -> create ~value_prec:Single ~grad_prec:Double ~is_form ()
-  | Double_nd _, Some (Double_nd _) -> create ~value_prec:Double ~grad_prec:Double ~is_form ()
+  | Single_nd _, Some (Single_nd _) -> create ~value_prec:single ~grad_prec:single ~is_form ()
+  | Single_nd _, Some (Double_nd _) -> create ~value_prec:single ~grad_prec:double ~is_form ()
+  | Double_nd _, Some (Double_nd _) -> create ~value_prec:double ~grad_prec:double ~is_form ()
   | Single_nd _, None ->
       if is_form then
         invalid_arg @@ "create_of_same_precision_as: ~is_form:true but a non-form subnode ["
         ^ Int.to_string node.id
-      else create ~value_prec:Single ~is_form:false ()
+      else create ~value_prec:single ~is_form:false ()
   | Double_nd _, None ->
       if is_form then
         invalid_arg @@ "create_of_same_precision_as: ~is_form:true but a non-form subnode ["
         ^ Int.to_string node.id
-      else create ~value_prec:Double ~is_form:false ()
+      else create ~value_prec:double ~is_form:false ()
   | _, Some grad ->
       invalid_arg @@ "create_of_same_precision_as: unsupported combination of precisions value: "
       ^ Node.ndarray_precision_to_string node.value
@@ -59,16 +128,16 @@ let create_of_promoted_precision ~is_form (n1 : Node.t) (n2 : Node.t) =
   match (n1.value, n2.value) with
   | Single_nd _, Single_nd _ -> (
       match (n1.grad, n2.grad) with
-      | Some (Single_nd _), Some (Single_nd _) -> create ~value_prec:Single ~grad_prec:Single ~is_form ()
+      | Some (Single_nd _), Some (Single_nd _) -> create ~value_prec:single ~grad_prec:single ~is_form ()
       | Some (Single_nd _), Some (Double_nd _)
       | Some (Double_nd _), Some (Single_nd _)
       | Some (Double_nd _), Some (Double_nd _) ->
-          create ~value_prec:Single ~grad_prec:Double ~is_form ()
+          create ~value_prec:single ~grad_prec:double ~is_form ()
       | None, _ | _, None ->
           if is_form then
             invalid_arg @@ "create_of_promoted_precision: ~is_form:true but a non-form subnode ["
             ^ Int.to_string n1.id ^ "] or [" ^ Int.to_string n2.id ^ "]"
-          else create ~value_prec:Single ~is_form:false ()
+          else create ~value_prec:single ~is_form:false ()
       | Some n1grad, Some n2grad ->
           invalid_arg @@ "create_of_promoted_precision: unsupported combination of precisions n1 grad: "
           ^ Node.ndarray_precision_to_string n1grad
@@ -76,12 +145,12 @@ let create_of_promoted_precision ~is_form (n1 : Node.t) (n2 : Node.t) =
           ^ Node.ndarray_precision_to_string n2grad)
   | (Single_nd _, Double_nd _ | Double_nd _, Single_nd _ | Double_nd _, Double_nd _)
     when Option.is_some n1.grad || Option.is_some n2.grad ->
-      create ~value_prec:Double ~grad_prec:Double ~is_form ()
+      create ~value_prec:double ~grad_prec:double ~is_form ()
   | Single_nd _, Double_nd _ | Double_nd _, Single_nd _ | Double_nd _, Double_nd _ ->
       if is_form then
         invalid_arg @@ "create_of_promoted_precision: ~is_form:true but a non-form subnode ["
         ^ Int.to_string n1.id ^ "] or [" ^ Int.to_string n2.id ^ "]"
-      else create ~value_prec:Double ~is_form:false ()
+      else create ~value_prec:double ~is_form:false ()
   | _ ->
       invalid_arg @@ "create_of_promoted_precision: unsupported combination of precisions n1 value: "
       ^ Node.ndarray_precision_to_string n1.value
@@ -165,9 +234,7 @@ let ndarray_dims_to_string ?(with_axis_numbers = false) arr =
 let node_header n =
   let open Node in
   let v_dims_s = ndarray_dims_to_string n.node.value in
-  let g_dims_s =
-    match n.node.grad with None -> "<no-grad>" | Some grad -> ndarray_dims_to_string grad
-  in
+  let g_dims_s = match n.node.grad with None -> "<no-grad>" | Some grad -> ndarray_dims_to_string grad in
   let dims_s =
     if String.equal v_dims_s g_dims_s then "dims " ^ v_dims_s
     else "dims val " ^ v_dims_s ^ " grad " ^ g_dims_s
@@ -410,7 +477,7 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
     let children = if single_node then [] else List.map ~f:to_dag n.children in
     let desc_l = match n.desc_label with None -> "" | Some l -> l ^ " " in
     let op_l = match n.op_label with "" -> "" | l -> "<" ^ l ^ ">" in
-    let prefix = "[" ^ id ^ "] " ^ desc_l ^ op_l ^ ((* DEBUG: if n.virtual_ then " virtual" else *) "") in
+    let prefix = "[" ^ id ^ "] " ^ desc_l ^ op_l ^ (* DEBUG: if n.virtual_ then " virtual" else *) "" in
     let labels = Shape.axis_map_to_dims_index ~default:"" n.shape.axis_labels in
     let indices = default_display_indices n.shape in
     match (computed_externally, with_value, with_grad, n.node.grad) with
@@ -428,14 +495,14 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
     | _, true, true, Some grad ->
         let node =
           let value = render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices n.node.value in
-          let grad =
-            render_tensor ~brief:true ~prefix:"Gradient" ?entries_per_axis ~labels ~indices grad
-          in
+          let grad = render_tensor ~brief:true ~prefix:"Gradient" ?entries_per_axis ~labels ~indices grad in
           `Vlist (false, [ `Box value; `Box grad ])
         in
         `Subtree_with_ID (id, `Tree (node, children))
   in
   to_dag { sub_node_id = n_id; computed_externally = false }
 
-let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_value = true) ~with_grad ~depth n_id =
-  to_dag ?single_node ?entries_per_axis ~with_id ~with_value ~with_grad n_id |> PrintBox_utils.reformat_dag depth
+let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_value = true) ~with_grad ~depth n_id
+    =
+  to_dag ?single_node ?entries_per_axis ~with_id ~with_value ~with_grad n_id
+  |> PrintBox_utils.reformat_dag depth

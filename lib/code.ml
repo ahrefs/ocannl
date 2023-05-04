@@ -2,17 +2,11 @@ open Base
 (** The code for operating on n-dimensional arrays. *)
 
 (** *** High-level representation. *** *)
-type data_kind = Value | Grad [@@deriving sexp, equal, hash]
-
-type tensor_ptr = { id : int; field : data_kind } [@@deriving sexp, equal, hash]
 type binop = Add | Mul | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp]
+
 type unop = Identity | Relu [@@deriving sexp]
 
 module N = Ocannl_runtime.Node
-
-let get_tensor tensor =
-  let n = N.get tensor.id in
-  match tensor.field with Value -> Some n.value | Grad -> n.grad
 
 (** Initializes a tensor by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op = N.init_op =
@@ -23,46 +17,6 @@ type init_op = N.init_op =
       (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
   | Standard_uniform  (** Draws the values from U(0,1). *)
 [@@deriving sexp]
-
-type prec =
-  | Void_prec : prec
-  (* | Bit_as_bool: (bool, bit_as_bool_nd) precision *)
-  | Byte_as_int_prec : (int, N.byte_as_int_nd) N.precision -> prec
-  | Half_as_int_prec : (int, N.half_as_int_nd) N.precision -> prec
-  (* | Bit_prec: (float, (bool, Bigarray.bool_elt, Bigarray.c_layout) bigarray) N.precision -> prec*)
-  (* | Byte_prec: (float, (float, Bigarray.float8_elt, Bigarray.c_layout) bigarray) N.precision -> prec *)
-  (* | Half_prec: (float, (float, Bigarray.float16_elt, Bigarray.c_layout) bigarray) N.precision -> prec*)
-  | Single_prec : (float, N.single_nd) N.precision -> prec
-  | Double_prec : (float, N.double_nd) N.precision -> prec
-
-let byte_as_int = Byte_as_int_prec N.Byte_as_int
-let half_as_int = Half_as_int_prec N.Half_as_int
-let single = Single_prec N.Single
-let double = Double_prec N.Double
-
-let sexp_of_prec = function
-  | Void_prec -> Sexp.Atom "Void_prec"
-  | Byte_as_int_prec _ -> Sexp.Atom "Byte_as_int_prec"
-  | Half_as_int_prec _ -> Sexp.Atom "Half_as_int_prec"
-  | Single_prec _ -> Sexp.Atom "Single_prec"
-  | Double_prec _ -> Sexp.Atom "Double_prec"
-
-let prec_of_sexp = function
-  | Sexp.Atom "Void" -> Void_prec
-  | Sexp.Atom "Byte_as_int_prec" -> byte_as_int
-  | Sexp.Atom "Half_as_int_prec" -> half_as_int
-  | Sexp.Atom "Single_prec" -> single
-  | Sexp.Atom "Double_prec" -> double
-  | Sexp.List _ -> invalid_arg "prec_of_sexp: expected atom, found list"
-  | Sexp.Atom s -> invalid_arg @@ "prec_of_sexp: unknown precision " ^ s
-
-let node_prec tensor =
-  match get_tensor tensor with
-  | None -> Void_prec
-  | Some (N.Byte_as_int_nd _) -> byte_as_int
-  | Some (N.Half_as_int_nd _) -> half_as_int
-  | Some (N.Single_nd _) -> single
-  | Some (N.Double_nd _) -> double
 
 (** Resets a tensor by performing the specified computation or data fetching. *)
 type fetch_op =
@@ -85,20 +39,20 @@ and t =
       zero_out : bool;
       accum : binop;
       op : binop;
-      lhs : tensor_ptr;
-      rhs1 : tensor_ptr;
-      rhs2 : tensor_ptr;
+      lhs : NodeUI.tensor_ptr;
+      rhs1 : NodeUI.tensor_ptr;
+      rhs2 : NodeUI.tensor_ptr;
       projections : unit -> Shape.projections;
     }
   | Accum_unop of {
       zero_out : bool;
       accum : binop;
       op : unop;
-      lhs : tensor_ptr;
-      rhs : tensor_ptr;
+      lhs : NodeUI.tensor_ptr;
+      rhs : NodeUI.tensor_ptr;
       projections : unit -> Shape.projections;
     }
-  | Fetch of { tensor : tensor_ptr; fetch_op : fetch_op }
+  | Fetch of { tensor : NodeUI.tensor_ptr; fetch_op : fetch_op }
   | Block_comment of string * t
   | Noop
 [@@deriving sexp]
@@ -110,7 +64,7 @@ type program = Suspension of t | Session_step_update of t [@@deriving sexp]
 (** Name of a program that can be used as part of a file name. *)
 let get_name = function Suspension _ -> "suspension" | Session_step_update _ -> "session_step_update"
 
-type create = { tensor : tensor_ptr; dims : unit -> int array; init_op : init_op }
+type create = { tensor : NodeUI.tensor_ptr; dims : unit -> int array; init_op : init_op }
 (** Information to create a tensor, once its shape is inferred. *)
 
 let remove_updates tensor c =
@@ -122,11 +76,11 @@ let remove_updates tensor c =
       | ParHint (t, (Accum_binop { lhs; _ } | Accum_unop { lhs; _ }))
       | Seq (t, (Accum_binop { lhs; _ } | Accum_unop { lhs; _ })) ) as c
       when check ->
-        if equal_tensor_ptr tensor lhs then rm true t else rm false c
+        if NodeUI.equal_tensor_ptr tensor lhs then rm true t else rm false c
     | Par (t1, t2) -> Par (rm true t1, rm true t2)
     | ParHint (t1, t2) -> ParHint (rm true t1, rm true t2)
     | Seq (t1, t2) -> Seq (rm true t1, rm true t2)
-    | (Accum_binop { lhs; _ } | Accum_unop { lhs; _ }) when equal_tensor_ptr tensor lhs -> Noop
+    | (Accum_binop { lhs; _ } | Accum_unop { lhs; _ }) when NodeUI.equal_tensor_ptr tensor lhs -> Noop
     | c -> c
   in
   rm true c
@@ -134,7 +88,7 @@ let remove_updates tensor c =
 let all_parallel = List.fold ~init:Noop ~f:(fun sts st -> Par (st, sts))
 let sequential = List.fold_right ~init:Noop ~f:(fun st sts -> Seq (st, sts))
 
-type scope_id = { tensor : tensor_ptr; scope_id : int } [@@deriving sexp, equal, hash]
+type scope_id = { tensor : NodeUI.tensor_ptr; scope_id : int } [@@deriving sexp, equal, hash]
 (** *** Low-level representation. *)
 
 let get_scope =
@@ -157,26 +111,26 @@ type _ low_level =
   | Comment : string -> unit low_level
   | Lines : unit low_level array -> unit low_level
   | For_loop : { index : sym_index; from_ : int; to_ : int; body : unit low_level } -> unit low_level
-  | Fill : { tensor : tensor_ptr; value : float low_level } -> unit low_level
+  | Fill : { tensor : NodeUI.tensor_ptr; value : float low_level } -> unit low_level
   | Dynamic_indices : {
-      tensor : tensor_ptr;
+      tensor : NodeUI.tensor_ptr;
       tensor_idcs : index array;
       dynamic_idcs : Shape.symbol array;
       target_dims : int array;
       body : unit low_level;
     }
       -> unit low_level
-  | Set : tensor_ptr * index array * float low_level -> unit low_level
+  | Set : NodeUI.tensor_ptr * index array * float low_level -> unit low_level
   | Set_local : scope_id * float low_level -> unit low_level
   | Local_scope : {
       id : scope_id;
-      prec : prec;
+      prec : NodeUI.prec;
       body : unit low_level;
       orig_indices : index array;
     }
       -> float low_level
   | Get_local : scope_id -> float low_level
-  | Get : tensor_ptr * index array -> float low_level
+  | Get : NodeUI.tensor_ptr * index array -> float low_level
   | Binop : binop * float low_level * float low_level -> float low_level
   | Unop : unop * float low_level -> float low_level
   | Constant : float -> float low_level
@@ -292,17 +246,17 @@ let sexp_of_int_env (env, dyn_env) =
   [%sexp_of: (sym_index * int) list * (Shape.symbol * int) list] (Map.to_alist env, Map.to_alist dyn_env)
 
 let set_from_float ptr idcs value =
-  match ptr.field with
+  match ptr.NodeUI.field with
   | Value -> N.set_from_float (N.get ptr.id).value idcs value
   | Grad -> N.set_from_float (Option.value_exn (N.get ptr.id).grad) idcs value
 
 let fill_from_float ptr value =
-  match ptr.field with
+  match ptr.NodeUI.field with
   | Value -> N.fill_from_float (N.get ptr.id).value value
   | Grad -> N.fill_from_float (Option.value_exn (N.get ptr.id).grad) value
 
 let get_as_float ptr idcs =
-  match ptr.field with
+  match ptr.NodeUI.field with
   | Value -> N.get_as_float (N.get ptr.id).value idcs
   | Grad -> N.get_as_float (Option.value_exn (N.get ptr.id).grad) idcs
 
@@ -332,7 +286,7 @@ let interpret_llc llc =
     | Fill { tensor; value } ->
         let result = loop_float env value in
         if !debug_trace_interpretation then
-          Caml.Format.printf "TRACE: %a <- %f\n%!" Sexp.pp_hum ([%sexp_of: tensor_ptr] tensor) result;
+          Caml.Format.printf "TRACE: %a <- %f\n%!" Sexp.pp_hum ([%sexp_of: NodeUI.tensor_ptr] tensor) result;
         fill_from_float tensor result
     | Set (ptr, indices, llv) ->
         if !debug_trace_interpretation then Caml.Format.printf "{";
@@ -340,7 +294,7 @@ let interpret_llc llc =
         let result = loop_float env llv in
         if !debug_trace_interpretation then
           Caml.Format.printf "TRACE: %a [%a -> %a] (%f) <- %f}\n%!" Sexp.pp_hum
-            ([%sexp_of: tensor_ptr] ptr)
+            ([%sexp_of: NodeUI.tensor_ptr] ptr)
             Sexp.pp_hum
             ([%sexp_of: index array] indices)
             Sexp.pp_hum
@@ -373,7 +327,7 @@ let interpret_llc llc =
         let result = get_as_float ptr idcs in
         if !debug_trace_interpretation then
           Caml.Format.printf "TRACE: %a [%a -> %a] -> %f}\n%!" Sexp.pp_hum
-            ([%sexp_of: tensor_ptr] ptr)
+            ([%sexp_of: NodeUI.tensor_ptr] ptr)
             Sexp.pp_hum
             ([%sexp_of: index array] indices)
             Sexp.pp_hum
@@ -391,7 +345,7 @@ let interpret_llc llc =
         if !debug_virtual_nodes then set_from_float id.tensor idcs result;
         if !debug_trace_interpretation then
           Caml.Format.printf "TRACE: %a [%a / %a] (%f) <-> %f}\n%!" Sexp.pp_hum
-            ([%sexp_of: tensor_ptr] id.tensor)
+            ([%sexp_of: NodeUI.tensor_ptr] id.tensor)
             Sexp.pp_hum
             ([%sexp_of: index array] orig_indices)
             Sexp.pp_hum
@@ -467,8 +421,8 @@ type visits =
 
 type data_node = {
   id : int;
-  kind : data_kind;
-  prec : prec;
+  kind : NodeUI.data_kind;
+  prec : NodeUI.prec;
   assign_index_bag : sym_index Hash_set.t;
   mutable computations : (index array option * unit low_level) list;
       (** The computations (of the data node) are retrieved for optimization just as they are populated,
@@ -483,8 +437,8 @@ type data_node = {
 }
 [@@deriving sexp_of]
 
-let global_node_store : (tensor_ptr, data_node) Hashtbl.t = Hashtbl.Poly.create ()
-let reverse_node_map : (sym_index, tensor_ptr) Hashtbl.t = Hashtbl.Poly.create ()
+let global_node_store : (NodeUI.tensor_ptr, data_node) Hashtbl.t = Hashtbl.Poly.create ()
+let reverse_node_map : (sym_index, NodeUI.tensor_ptr) Hashtbl.t = Hashtbl.Poly.create ()
 (* Identifies the computations that the code block associated with the symbol belongs to. *)
 
 let cleanup_session () =
@@ -496,7 +450,7 @@ let get_node uid =
       {
         id = uid.id;
         kind = uid.field;
-        prec = node_prec uid;
+        prec = NodeUI.node_prec uid;
         assign_index_bag = Hash_set.Poly.create ();
         computations = [];
         accesses = Hashtbl.Poly.create ();
@@ -544,7 +498,7 @@ let visit_llc ~max_visits ~consider_grads llc =
           | Shape.Iterator s ->
               let old_tensor = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tensor) in
               (* TODO(#134): this prevents multiple virtual tensors from sharing for loops. *)
-              assert (equal_tensor_ptr old_tensor tensor);
+              assert (NodeUI.equal_tensor_ptr old_tensor tensor);
               Hash_set.add node.assign_index_bag s)
     | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
@@ -595,7 +549,7 @@ let visit_llc ~max_visits ~consider_grads llc =
 
 let process_computation node top_llc =
   let exception Non_virtual in
-  let top_data = { id = node.id; field = node.kind } in
+  let top_data = { NodeUI.id = node.id; field = node.kind } in
   let at_idcs = ref None in
   let has_setter = ref false in
   let check_idcs indices =
@@ -618,10 +572,10 @@ let process_computation node top_llc =
     | Lines body -> Array.iter ~f:loop_proc body
     | For_loop { index = _; from_ = _; to_ = _; body } -> loop_proc body
     | Fill { tensor; value } ->
-        if equal_tensor_ptr tensor top_data then has_setter := true;
+        if NodeUI.equal_tensor_ptr tensor top_data then has_setter := true;
         loop_float value
     | Set (tensor, indices, llv) ->
-        if equal_tensor_ptr tensor top_data then (
+        if NodeUI.equal_tensor_ptr tensor top_data then (
           check_idcs indices;
           has_setter := true);
         loop_float llv
@@ -631,7 +585,7 @@ let process_computation node top_llc =
   and loop_float llv =
     match llv with
     | Constant _ -> ()
-    | Get (tensor, idcs) -> if equal_tensor_ptr tensor top_data then check_idcs idcs
+    | Get (tensor, idcs) -> if NodeUI.equal_tensor_ptr tensor top_data then check_idcs idcs
     | Local_scope { body; _ } -> loop_proc body
     | Get_local _ -> ()
     | Binop (_, llv1, llv2) ->
@@ -641,7 +595,7 @@ let process_computation node top_llc =
   in
   (* Issue #135: For now, value and gradient are non-virtual reciprocically. *)
   let other_node =
-    get_node { id = node.id; field = (if equal_data_kind node.kind Value then Grad else Value) }
+    get_node { id = node.id; field = (if NodeUI.equal_data_kind node.kind Value then Grad else Value) }
   in
   try
     if node.non_virtual then raise Non_virtual;
@@ -659,7 +613,7 @@ let inline_computation ~id node call_args =
   let make_subst lhs_ind rhs_ind =
     match lhs_ind with Shape.Iterator s -> (s, rhs_ind) | _ -> assert false
   in
-  let at_data = { id = node.id; field = node.kind } in
+  let at_data = { id = node.id; NodeUI.field = node.kind } in
   (* In the order of computation. *)
   let loop_proc (def_args, def) : unit low_level option =
     let env =
@@ -677,9 +631,10 @@ let inline_computation ~id node call_args =
       | For_loop { index; body; _ } when Map.mem env index -> loop body
       | For_loop { index; from_; to_; body } ->
           Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop body
-      | Fill { tensor; value } when equal_tensor_ptr tensor at_data -> Some (Set_local (id, loop_float value))
+      | Fill { tensor; value } when NodeUI.equal_tensor_ptr tensor at_data ->
+          Some (Set_local (id, loop_float value))
       | Fill _ -> None
-      | Set (tensor, indices, llv) when equal_tensor_ptr tensor at_data ->
+      | Set (tensor, indices, llv) when NodeUI.equal_tensor_ptr tensor at_data ->
           assert ([%equal: index array option] (Some indices) def_args);
           Some (Set_local (id, loop_float llv))
       | Set _ -> None
@@ -691,7 +646,7 @@ let inline_computation ~id node call_args =
     and loop_float llv : float low_level =
       match llv with
       | Constant _ -> llv
-      | Get (tensor, indices) when equal_tensor_ptr tensor at_data ->
+      | Get (tensor, indices) when NodeUI.equal_tensor_ptr tensor at_data ->
           assert ([%equal: index array option] (Some indices) def_args);
           Get_local id
       | Get (tensor, indices) -> Get (tensor, Array.map ~f:subst indices)
@@ -706,9 +661,9 @@ let inline_computation ~id node call_args =
   in
   Lines (Array.filter_opt @@ Array.of_list_rev_map ~f:loop_proc node.computations)
 
-type tensor_ptrs = tensor_ptr Set.Poly.t
+type tensor_ptrs = NodeUI.tensor_ptr Set.Poly.t
 
-let sexp_of_tensor_ptrs ts = [%sexp_of: tensor_ptr list] @@ Set.to_list ts
+let sexp_of_tensor_ptrs ts = [%sexp_of: NodeUI.tensor_ptr list] @@ Set.to_list ts
 
 let virtual_llc (llc : unit low_level) : unit low_level =
   (* The current position is within scope of the definitions of the process_for virtual tensors. *)
@@ -844,9 +799,9 @@ let interpret_program prog : string option =
   Some (Sexp.to_string_hum @@ sexp_of_low_level_program llp)
 
 module CDSL = struct
-  let value_of_id id : tensor_ptr = { id; field = Value }
-  let grad_of_id id : tensor_ptr = { id; field = Grad }
-  let data_of_node field n : tensor_ptr = { id = n.NodeUI.id; field }
+  let value_of_id id : NodeUI.tensor_ptr = { id; field = Value }
+  let grad_of_id id : NodeUI.tensor_ptr = { id; field = Grad }
+  let data_of_node field (n : NodeUI.t) : NodeUI.tensor_ptr = { id = n.id; field }
   let interpreter_print_comments = interpreter_print_comments
   let keep_files_in_run_directory = keep_files_in_run_directory
   let with_debug = with_debug

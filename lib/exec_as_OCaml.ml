@@ -15,7 +15,7 @@ let pp_index_axis ?provider_dim ppf =
   | Dynamic_provider _ -> Caml.Format.fprintf ppf "%d" @@ Option.value_exn provider_dim
 
 let pp_data_node ppf = function
-  | { Code.id; field = Value } -> Caml.Format.fprintf ppf "(get %d).value" id
+  | { id; NodeUI.field = Value } -> Caml.Format.fprintf ppf "(get %d).value" id
   | { id; field = Grad } -> Caml.Format.fprintf ppf "(Option.value_exn (get %d).grad)" id
 
 let pp_print_init_op ppf : Code.init_op -> unit = function
