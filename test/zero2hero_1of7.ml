@@ -258,7 +258,7 @@ let%expect_test "Simple gradients" =
       [1] <a>  │[2] <b>   │          │
        2.60e+0 │ -3.40e+0 │          │
       Gradient │Gradient  │          │
-       5.44e+0 │ -4.16e+0 │          │ |} ]
+       5.44e+0 │ -4.16e+0 │          │ |}]
 
 let%expect_test "tanh plot" =
   (* TODO: NOT IMPLEMENTED *)

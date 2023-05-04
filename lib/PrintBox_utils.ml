@@ -150,7 +150,7 @@ let concise_float ~prec v =
   String.substr_replace_first ~pattern:"e+0" ~with_:"e+"
   |> String.substr_replace_first ~pattern:"e-0" ~with_:"e-"
 
-let plot ?(prec=3) ?canvas ?size ~x_label ~y_label specs =
+let plot ?(prec = 3) ?canvas ?size ~x_label ~y_label specs =
   let minx, miny, maxx, maxy, canvas = plot_canvas ?canvas ?size specs in
   let open PrintBox in
   let y_label_l = List.map ~f:String.of_char @@ String.to_list y_label in
