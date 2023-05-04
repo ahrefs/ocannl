@@ -49,13 +49,13 @@ let format_low_level ~as_toplevel (ppf : Caml.Format.formatter) (type a) (c : a 
             fprintf ppf "let@ %a = Int.(@[<2>(get_as_int %a@ (%a)) %% %d@]) in@ " pp_symbol sym pp_data_node
               tensor (pp_indices ~provider_dim) tensor_idcs target_dims.(provider_dim));
         pp_ll ppf body
-    | Set_local ({ scope_id; _ }, value) -> fprintf ppf "@[<2>v%d :=@ %a]" scope_id pp_ll value
+    | Set_local ({ scope_id; _ }, value) -> fprintf ppf "@[<2>v%d :=@ %a@]" scope_id pp_ll value
     | Local_scope { id = { scope_id; tensor }; prec = _; body; orig_indices } ->
         (* Note: we could support precisions, but it's not worth it. *)
         if !Code.debug_virtual_nodes then
-          fprintf ppf "@[<2>let v%d =@ ref %a in@ (set_from_float %a@ (%a)@ !v%d; !v%d)]" scope_id pp_ll body
+          fprintf ppf "@[<2>let v%d =@ ref 0.0 in@ (%a;@ set_from_float %a@ (%a)@ !v%d; !v%d)@]" scope_id pp_ll body
             pp_data_node tensor pp_idcs orig_indices scope_id scope_id
-        else fprintf ppf "@[<2>let v%d =@ ref %a in@ !v%d]" scope_id pp_ll body scope_id
+        else fprintf ppf "@[<2>let v%d =@ ref 0.0 in@ %a;@ !v%d@]" scope_id pp_ll body scope_id
     | Get_local { scope_id; _ } -> fprintf ppf "!v%d" scope_id
     | Get (tensor, indices) -> fprintf ppf "@[<2>get_as_float %a@ (%a)@]" pp_data_node tensor pp_idcs indices
     | Constant c -> fprintf ppf "(%f)" c
