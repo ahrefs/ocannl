@@ -193,9 +193,9 @@ let table rows =
       frame
       @@ record
            [
-             ("Benchmarks", vlist_map line titles);
-             ("Time in sec", vlist_map float_ times);
-             ("Memory in bytes", vlist_map int_ sizes);
-             ("Speedup", vlist_map small_float speedups);
-             ("Mem gain", vlist_map small_float mem_gains);
+             ("Benchmarks", vlist_map ~bars:false line titles);
+             ("Time in sec", vlist_map ~bars:false float_ times);
+             ("Memory in bytes", vlist_map ~bars:false int_ sizes);
+             ("Speedup", vlist_map ~bars:false small_float speedups);
+             ("Mem gain", vlist_map ~bars:false small_float mem_gains);
            ])
