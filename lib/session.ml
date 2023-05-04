@@ -359,8 +359,7 @@ end
 module SDSL = struct
   type nonrec backend = backend = Interpreter | OCaml | Gccjit
 
-  include O
-  (** Including the accessors since it is unlikely they will conflict with other modules. *)
+  module O = O
 
   let set_executor = set_executor
   let refresh_session = refresh_session
@@ -418,4 +417,5 @@ module SDSL = struct
 
   let default_value_prec = Formula.default_value_prec
   let default_grad_prec = Formula.default_grad_prec
+  let global_size_in_bytes () = Ocannl_runtime.Node.global_size_in_bytes ()
 end

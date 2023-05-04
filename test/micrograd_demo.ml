@@ -3,12 +3,12 @@ open Ocannl
 module FDSL = Operation.FDSL
 module NFDSL = Operation.NFDSL
 module CDSL = Code.CDSL
+module SDSL = Session.SDSL
 
-let () = Session.SDSL.set_executor Gccjit
+let () = SDSL.set_executor Gccjit
 
 let%expect_test "Micrograd README basic example" =
-  let open Session.SDSL in
-  drop_all_sessions ();
+  SDSL.drop_all_sessions ();
   Random.init 0;
   let%nn_op c = "a" [ -4 ] + "b" [ 2 ] in
   let%nn_op d = (a *. b) + (b **. 3) in
@@ -20,8 +20,8 @@ let%expect_test "Micrograd README basic example" =
   let%nn_op f = e *. e in
   let%nn_op g = f /. 2 in
   let%nn_op g = g + (10. /. f) in
-  refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ g;
+  SDSL.refresh_session ();
+  SDSL.print_formula ~with_code:false ~with_grad:false `Default @@ g;
   [%expect
     {|
     ┌──────────────────────┐
@@ -32,7 +32,7 @@ let%expect_test "Micrograd README basic example" =
     │││ 2.47e+1 │          │
     │└┴─────────┘          │
     └──────────────────────┘ |}];
-  print_formula ~with_code:false ~with_grad:true `Default @@ a;
+  SDSL.print_formula ~with_code:false ~with_grad:true `Default @@ a;
   [%expect
     {|
     ┌───────────────────┐
@@ -51,7 +51,7 @@ let%expect_test "Micrograd README basic example" =
     │││ 1.39e+2 │                 │
     │└┴─────────┘                 │
     └─────────────────────────────┘ |}];
-  print_formula ~with_code:false ~with_grad:true `Default @@ b;
+  SDSL.print_formula ~with_code:false ~with_grad:true `Default @@ b;
   [%expect
     {|
     ┌───────────────────┐
@@ -72,9 +72,8 @@ let%expect_test "Micrograd README basic example" =
     └─────────────────────────────┘ |}]
 
 let%expect_test "Micrograd half-moons example" =
-  (* let open Operation.FDSL in *)
-  let open Session.SDSL in
-  drop_all_sessions ();
+  let open SDSL.O in
+  SDSL.drop_all_sessions ();
   Random.init 0;
   let len = 200 in
   let batch = 10 in
@@ -97,7 +96,7 @@ let%expect_test "Micrograd half-moons example" =
   let steps = epochs * 2 * len / batch in
   let%nn_dt session_step ~output_dims:[ 1 ] = n =+ 1 in
   let%nn_dt minus_lr ~output_dims:[ 1 ] = n =: -0.1 *. (!..steps - session_step) /. !..steps in
-  minus_learning_rate := Some minus_lr;
+  SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = moons_flat @.| session_step in
   let%nn_op moons_class = moons_classes @.| session_step in
   let points1 = ref [] in
@@ -110,9 +109,9 @@ let%expect_test "Micrograd half-moons example" =
   let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:FDSL.O.( + ) in
   let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..batch) + (0.0001 *. reg_loss) in
   for _step = 1 to steps do
-    refresh_session ();
-    let points = value_2d_points ~xdim:0 ~ydim:1 moons_input in
-    let classes = value_1d_points ~xdim:0 moons_class in
+    SDSL.refresh_session ();
+    let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_input in
+    let classes = SDSL.value_1d_points ~xdim:0 moons_class in
     let npoints1, npoints2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
     points1 := npoints1 :: !points1;
     points2 := npoints2 :: !points2;
@@ -120,13 +119,13 @@ let%expect_test "Micrograd half-moons example" =
     losses := total_loss.@[0] :: !losses;
     log_losses := Float.log total_loss.@[0] :: !log_losses
   done;
-  close_session ();
+  SDSL.close_session ();
   let%nn_op point = [ 0; 0 ] in
   let mlp_result = mlp point in
-  refresh_session ();
+  SDSL.refresh_session ();
   let callback (x, y) =
-    set_values point [| x; y |];
-    refresh_session ();
+    SDSL.set_values point [| x; y |];
+    SDSL.refresh_session ();
     Float.(mlp_result.@[0] >= 0.)
   in
   let plot_moons =

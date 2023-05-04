@@ -3,17 +3,18 @@ open Ocannl
 module CDSL = Code.CDSL
 module FDSL = Operation.FDSL
 module NFDSL = Operation.NFDSL
+module SDSL = Session.SDSL
 
-let () = Session.SDSL.set_executor Gccjit
+let () = SDSL.set_executor Gccjit
 
 let%expect_test "Graph drawing recompile" =
   (* let open Operation.FDSL in *)
-  let open Session.SDSL in
-  drop_all_sessions ();
+  let open SDSL.O in
+  SDSL.drop_all_sessions ();
   Random.init 0;
   let%nn_op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
-  refresh_session ();
-  print_node_tree ~with_grad:true ~depth:9 f.id;
+  SDSL.refresh_session ();
+  SDSL.print_node_tree ~with_grad:true ~depth:9 f.id;
   [%expect
     {|
                                [13] f <+>
@@ -40,8 +41,8 @@ let%expect_test "Graph drawing recompile" =
   let ys =
     Array.map xs ~f:(fun v ->
         (* This is inefficient because it compiles the argument update inside the loop. *)
-        compile_routine [%nn_cd x =: !.v] ();
-        refresh_session ();
+        SDSL.compile_routine [%nn_cd x =: !.v] ();
+        SDSL.refresh_session ();
         f.@[0])
   in
   let plot_box =
@@ -92,14 +93,13 @@ let%expect_test "Graph drawing recompile" =
              │                                     x |}]
 
 let%expect_test "Graph drawing fetch" =
-  (* let open Operation.FDSL in *)
-  let open Session.SDSL in
-  drop_all_sessions ();
+  let open SDSL.O in
+  SDSL.drop_all_sessions ();
   Random.init 0;
   let%nn_op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%nn_op f5 = f 5 in
-  refresh_session ();
-  print_node_tree ~with_grad:false ~depth:9 f5.id;
+  SDSL.refresh_session ();
+  SDSL.print_node_tree ~with_grad:false ~depth:9 f5.id;
   [%expect
     {|
                                [12] f <+>
@@ -113,7 +113,7 @@ let%expect_test "Graph drawing fetch" =
              │[1]│[5] <2>  │          │[3] <4>  │[1] <5>  │
              │   │ 2.00e+0 │          │ 4.00e+0 │ 5.00e+0 │ |}];
   (* close_session is not necessary. *)
-  close_session ();
+  SDSL.close_session ();
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   let x_flat =
@@ -125,13 +125,13 @@ let%expect_test "Graph drawing fetch" =
   let%nn_op fx = f x in
   let ys =
     Array.map xs ~f:(fun _ ->
-        refresh_session ();
+        SDSL.refresh_session ();
         fx.@[0])
   in
   (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
   let dys =
     Array.map xs ~f:(fun _ ->
-        refresh_session ();
+        SDSL.refresh_session ();
         x.@%[0])
   in
   let plot_box =
@@ -186,17 +186,16 @@ let%expect_test "Graph drawing fetch" =
               │                                     x |}]
 
 let%expect_test "Simple gradients" =
-  let open Session.SDSL in
-  drop_all_sessions ();
+  SDSL.drop_all_sessions ();
   Random.init 0;
   let%nn_op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%nn_op d = e + "c" [ 10 ] in
   let%nn_op l = d *. "f" [ -2 ] in
-  minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ 1 ] [| 0.1 |]);
-  refresh_session ~update_params:false ();
+  SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ 1 ] [| 0.1 |]);
+  SDSL.refresh_session ~update_params:false ();
   (* We did not update the params: all values and gradients will be at initial points, which are
      specified in the formula in the brackets. *)
-  print_node_tree ~with_grad:true ~depth:9 l.id;
+  SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
   [%expect
     {|
                     [7] l <*.>
@@ -215,10 +214,10 @@ let%expect_test "Simple gradients" =
      2.00e+0 │ -3.00e+0 │          │
     Gradient │Gradient  │          │
      6.00e+0 │ -4.00e+0 │          │ |}];
-  refresh_session ~update_params:true ();
+  SDSL.refresh_session ~update_params:true ();
   (* Now we updated the params, but after the forward and backward passes: only params values
      will change, compared to the above. *)
-  print_node_tree ~with_grad:true ~depth:9 l.id;
+  SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
   [%expect
     {|
                     [7] l <*.>
@@ -237,10 +236,10 @@ let%expect_test "Simple gradients" =
      2.60e+0 │ -3.40e+0 │          │
     Gradient │Gradient  │          │
      6.00e+0 │ -4.00e+0 │          │ |}];
-  refresh_session ~update_params:false ();
+  SDSL.refresh_session ~update_params:false ();
   (* Now again we did not update the params, they will remain as above, but both param gradients
      and the values and gradients of other nodes will change thanks to the forward and backward passes. *)
-  print_node_tree ~with_grad:true ~depth:9 l.id;
+  SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
   [%expect
     {|
                       [7] l <*.>
@@ -265,13 +264,12 @@ let%expect_test "tanh plot" =
   ()
 
 let%expect_test "2D neuron" =
-  let open Session.SDSL in
-  drop_all_sessions ();
+  SDSL.drop_all_sessions ();
   Random.init 0;
   let%nn_op n = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   (* No need for [~update_params:false] because we have not set [minus_learning_rate]. *)
-  refresh_session ();
-  print_node_tree ~with_grad:true ~depth:9 n.id;
+  SDSL.refresh_session ();
+  SDSL.print_node_tree ~with_grad:true ~depth:9 n.id;
   [%expect
     {|
                         [5] n <+>

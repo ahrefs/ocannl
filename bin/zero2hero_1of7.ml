@@ -3,24 +3,24 @@ open Ocannl
 module CDSL = Code.CDSL
 module FDSL = Operation.FDSL
 module NFDSL = Operation.NFDSL
+module SDSL = Session.SDSL
 
-let () = Session.SDSL.set_executor Gccjit
+let () = SDSL.set_executor Gccjit
 
 let () =
-  let open Session.SDSL in
-  drop_all_sessions ();
+  SDSL.drop_all_sessions ();
   Random.init 0;
   let%nn_op n = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
-  refresh_session ();
+  SDSL.refresh_session ();
   Stdio.printf "\n%!";
-  print_node_tree ~with_id:true ~with_grad:true ~depth:9 n.id;
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 n.id;
   Stdio.printf "\n%!";
-  print_session_code ();
+  SDSL.print_session_code ();
   Stdio.printf "\n%!"
 
 let _suspended () =
-  let open Session.SDSL in
-  drop_all_sessions ();
+  let open SDSL.O in
+  SDSL.drop_all_sessions ();
   Random.init 0;
   let%nn_op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let size = 100 in
@@ -33,22 +33,22 @@ let _suspended () =
   let%nn_op x = x_flat @.| session_step in
   let%nn_op fx = f x in
   Stdio.print_endline "\n";
-  print_node_tree ~with_id:true ~with_value:false ~with_grad:false ~depth:9 fx.id;
+  SDSL.print_node_tree ~with_id:true ~with_value:false ~with_grad:false ~depth:9 fx.id;
   Stdio.print_endline "\n";
   (* print_formula ~with_grad:true ~with_code:true ~with_low_level:true `Default fx; *)
   let ys =
     Array.map xs ~f:(fun _ ->
-        refresh_session ();
+        SDSL.refresh_session ();
         fx.@[0])
   in
   (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
   let dys =
     Array.map xs ~f:(fun _ ->
-        refresh_session ();
+        SDSL.refresh_session ();
         x.@%[0])
   in
   Stdio.print_endline "\n";
-  print_preamble ();
+  SDSL.print_preamble ();
   Stdio.print_endline "\n";
   let plot_box =
     let open PrintBox_utils in
