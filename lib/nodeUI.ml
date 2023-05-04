@@ -1,11 +1,11 @@
 open Base
 (** Utilities for working with [Node] that do not belong in the runtime. *)
 
-open Ocannl_runtime
+module N = Ocannl_runtime.Node
 
 type t = {
   id : int;
-  node : Node.t;
+  node : N.t;
   children : sub_node list;
   op_label : string;
   desc_label : string option;
@@ -22,8 +22,6 @@ let get uid = Hashtbl.find_exn global_node_store uid
 
 type data_kind = Value | Grad [@@deriving sexp, equal, hash]
 type tensor_ptr = { id : int; field : data_kind } [@@deriving sexp, equal, hash]
-
-module N = Ocannl_runtime.Node
 
 let get_tensor tensor =
   let n = N.get tensor.id in
@@ -69,6 +67,14 @@ let node_prec tensor =
   | Some (N.Single_nd _) -> single
   | Some (N.Double_nd _) -> double
 
+  let create_ndarray prec =
+    match prec with
+    | Void_prec -> assert false
+    | Byte_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
+    | Half_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
+    | Single_prec prec -> N.create_ndarray prec
+    | Double_prec prec -> N.create_ndarray prec
+
 (** Constructs a node with empty tensors of the specified precision and registers it in the global store.
     Note that the precision for gradients should not be lower than the precision for values. *)
 let create ~(value_prec : prec) ?(grad_prec : prec option) ~is_form () ~op_label ?desc_label ?batch_dims
@@ -80,27 +86,27 @@ let create ~(value_prec : prec) ?(grad_prec : prec option) ~is_form () ~op_label
     | Half_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
     | Single_prec value_prec -> (
         match grad_prec with
-        | None -> Node.create ~value_prec ~is_form ()
+        | None -> N.create ~value_prec ~is_form ()
         | Some Void_prec -> assert false
         | Some (Byte_as_int_prec _) -> failwith "NodeUI.create: int prec not supported yet"
         | Some (Half_as_int_prec _) -> failwith "NodeUI.create: int prec not supported yet"
-        | Some (Single_prec grad_prec) -> Node.create ~value_prec ~grad_prec ~is_form ()
-        | Some (Double_prec grad_prec) -> Node.create ~value_prec ~grad_prec ~is_form ())
+        | Some (Single_prec grad_prec) -> N.create ~value_prec ~grad_prec ~is_form ()
+        | Some (Double_prec grad_prec) -> N.create ~value_prec ~grad_prec ~is_form ())
     | Double_prec value_prec -> (
         match grad_prec with
-        | None -> Node.create ~value_prec ~is_form ()
+        | None -> N.create ~value_prec ~is_form ()
         | Some Void_prec -> assert false
         | Some (Byte_as_int_prec _) -> failwith "NodeUI.create: int prec not supported yet"
         | Some (Half_as_int_prec _) -> failwith "NodeUI.create: int prec not supported yet"
-        | Some (Single_prec grad_prec) -> Node.create ~value_prec ~grad_prec ~is_form ()
-        | Some (Double_prec grad_prec) -> Node.create ~value_prec ~grad_prec ~is_form ())
+        | Some (Single_prec grad_prec) -> N.create ~value_prec ~grad_prec ~is_form ()
+        | Some (Double_prec grad_prec) -> N.create ~value_prec ~grad_prec ~is_form ())
   in
   let shape = Shape.make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~id:node.id () in
   let data = { id = node.id; node; op_label; desc_label; children; shape; virtual_ = false } in
   Hashtbl.add_exn global_node_store ~key:node.id ~data;
   data
 
-let create_of_same_precision_as ~is_form (node : Node.t) =
+let create_of_same_precision_as ~is_form (node : N.t) =
   match (node.value, node.grad) with
   | Single_nd _, Some (Single_nd _) -> create ~value_prec:single ~grad_prec:single ~is_form ()
   | Single_nd _, Some (Double_nd _) -> create ~value_prec:single ~grad_prec:double ~is_form ()
@@ -117,14 +123,14 @@ let create_of_same_precision_as ~is_form (node : Node.t) =
       else create ~value_prec:double ~is_form:false ()
   | _, Some grad ->
       invalid_arg @@ "create_of_same_precision_as: unsupported combination of precisions value: "
-      ^ Node.ndarray_precision_to_string node.value
+      ^ N.ndarray_precision_to_string node.value
       ^ ", grad: "
-      ^ Node.ndarray_precision_to_string grad
+      ^ N.ndarray_precision_to_string grad
   | _ ->
       invalid_arg @@ "create_of_same_precision_as: unsupported combination of precisions value: "
-      ^ Node.ndarray_precision_to_string node.value
+      ^ N.ndarray_precision_to_string node.value
 
-let create_of_promoted_precision ~is_form (n1 : Node.t) (n2 : Node.t) =
+let create_of_promoted_precision ~is_form (n1 : N.t) (n2 : N.t) =
   match (n1.value, n2.value) with
   | Single_nd _, Single_nd _ -> (
       match (n1.grad, n2.grad) with
@@ -140,9 +146,9 @@ let create_of_promoted_precision ~is_form (n1 : Node.t) (n2 : Node.t) =
           else create ~value_prec:single ~is_form:false ()
       | Some n1grad, Some n2grad ->
           invalid_arg @@ "create_of_promoted_precision: unsupported combination of precisions n1 grad: "
-          ^ Node.ndarray_precision_to_string n1grad
+          ^ N.ndarray_precision_to_string n1grad
           ^ ", n2 grad: "
-          ^ Node.ndarray_precision_to_string n2grad)
+          ^ N.ndarray_precision_to_string n2grad)
   | (Single_nd _, Double_nd _ | Double_nd _, Single_nd _ | Double_nd _, Double_nd _)
     when Option.is_some n1.grad || Option.is_some n2.grad ->
       create ~value_prec:double ~grad_prec:double ~is_form ()
@@ -153,17 +159,17 @@ let create_of_promoted_precision ~is_form (n1 : Node.t) (n2 : Node.t) =
       else create ~value_prec:double ~is_form:false ()
   | _ ->
       invalid_arg @@ "create_of_promoted_precision: unsupported combination of precisions n1 value: "
-      ^ Node.ndarray_precision_to_string n1.value
+      ^ N.ndarray_precision_to_string n1.value
       ^ ", n2 value: "
-      ^ Node.ndarray_precision_to_string n2.value
+      ^ N.ndarray_precision_to_string n2.value
 
 let param_nodes ?(from_id = 0) () =
   Hashtbl.filter global_node_store ~f:(fun n ->
       n.node.id >= from_id && List.is_empty n.children
-      && Option.exists n.node.grad ~f:(fun grad -> not @@ Array.is_empty @@ Node.dims grad))
+      && Option.exists n.node.grad ~f:(fun grad -> not @@ Array.is_empty @@ N.dims grad))
 
 let retrieve_2d_points ?from_axis ~xdim ~ydim arr =
-  let dims = Node.dims arr in
+  let dims = N.dims arr in
   if Array.is_empty dims then [||]
   else
     let n_axes = Array.length dims in
@@ -174,11 +180,11 @@ let retrieve_2d_points ?from_axis ~xdim ~ydim arr =
       if axis = n_axes then
         let x =
           idx.(from_axis) <- xdim;
-          Node.get_as_float arr idx
+          N.get_as_float arr idx
         in
         let y =
           idx.(from_axis) <- ydim;
-          Node.get_as_float arr idx
+          N.get_as_float arr idx
         in
         result := (x, y) :: !result
       else if axis = from_axis then iter (axis + 1)
@@ -193,7 +199,7 @@ let retrieve_2d_points ?from_axis ~xdim ~ydim arr =
 
 (* module Debug_runtime = Minidebug_runtime.Flushing(struct let debug_ch = Stdio.stdout end) *)
 let retrieve_1d_points ?from_axis ~xdim arr =
-  let dims = Node.dims arr in
+  let dims = N.dims arr in
   if Array.is_empty dims then [||]
   else
     let n_axes = Array.length dims in
@@ -204,7 +210,7 @@ let retrieve_1d_points ?from_axis ~xdim arr =
       if axis = n_axes then
         let x =
           idx.(from_axis) <- xdim;
-          Node.get_as_float arr idx
+          N.get_as_float arr idx
         in
         result := x :: !result
       else if axis = from_axis then iter (axis + 1)
@@ -228,11 +234,10 @@ let dims_to_string ?(with_axis_numbers = false) dims =
   else String.concat_array ~sep:"x" @@ Array.map dims ~f:Int.to_string
 
 let ndarray_dims_to_string ?(with_axis_numbers = false) arr =
-  Node.(ndarray_precision_to_string arr ^ " prec " ^ dims_to_string ~with_axis_numbers (dims arr))
+  N.(ndarray_precision_to_string arr ^ " prec " ^ dims_to_string ~with_axis_numbers (dims arr))
 
 (** Converts ID, label and the dimensions of a node to a string. *)
 let node_header n =
-  let open Node in
   let v_dims_s = ndarray_dims_to_string n.node.value in
   let g_dims_s = match n.node.grad with None -> "<no-grad>" | Some grad -> ndarray_dims_to_string grad in
   let dims_s =
@@ -261,10 +266,9 @@ let print_decimals_precision = ref 2
     Printing out of axis [-5] is interrupted when a callback called in between each outer rectangle
     returns true. *)
 let render_tensor ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labels = [||]) ~indices
-    (arr : Node.ndarray) =
+    (arr : N.ndarray) =
   let module B = PrintBox in
-  let open Node in
-  let dims = dims arr in
+  let dims = N.dims arr in
   if Array.is_empty dims then B.line "<void>"
   else
     let header = prefix in
@@ -319,7 +323,7 @@ let render_tensor ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labe
             B.hpad 1 @@ B.line
             @@
             if is_ellipsis () then "..."
-            else PrintBox_utils.concise_float ~prec:!print_decimals_precision (get_as_float arr indices)
+            else PrintBox_utils.concise_float ~prec:!print_decimals_precision (N.get_as_float arr indices)
           with Invalid_argument _ as error ->
             Stdio.Out_channel.printf "Invalid indices: %s into array: %s\n%!" (dims_to_string indices)
               (dims_to_string dims);
@@ -365,7 +369,7 @@ let pp_tensor fmt ?prefix ?entries_per_axis ?labels ~indices arr =
 
 (** Prints the whole tensor in an inline syntax. *)
 let pp_tensor_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?labels_spec arr =
-  let dims = Node.dims arr in
+  let dims = N.dims arr in
   let num_all_axes = num_batch_axes + num_output_axes + num_input_axes in
   let open Caml.Format in
   let ind = Array.copy dims in
@@ -386,7 +390,7 @@ let pp_tensor_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?label
       else if axis = num_batch_axes + num_output_axes then ""
       else ")"
     in
-    if axis = num_all_axes then fprintf fmt "%.*f" !print_decimals_precision (Node.get_as_float arr ind)
+    if axis = num_all_axes then fprintf fmt "%.*f" !print_decimals_precision (N.get_as_float arr ind)
     else (
       fprintf fmt "@[<hov 2>%s@," open_delim;
       for i = 0 to dims.(axis) - 1 do
