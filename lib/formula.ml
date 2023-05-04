@@ -52,12 +52,16 @@ let session_initialized = ref 0
 (** This code will be executed on each [Session.refresh_session ~run:true] call ([~run:true]
     is implicit), before any [forward] or [backprop] code. Execution potentially in parallel. *)
 let session_prepare_forward : Code.t list ref = ref []
+
 let session_prepare_backprop : Code.t list ref = ref []
 
 (** A current session is the range of nodes from [!first_session_id] to [Node.global.unique_id - 1],
     or an empty range if [!first_session_id = Node.global.unique_id].
     Subformulas with [id] before this range are not allowed in new formulas. *)
 let first_session_id = ref 1
+
+let default_value_prec = ref NodeUI.single
+let default_grad_prec = ref NodeUI.single
 
 exception Session_error of string * t option [@@deriving sexp]
 
@@ -276,8 +280,8 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
 let term ~label ?desc_label ?needs_gradient ~is_form ?batch_dims ?input_dims ?output_dims ?axis_labels
     ?deduced ?init_op ?fetch_op () =
   let n =
-    NodeUI.create ~value_prec:Single ~grad_prec:Single ~is_form () ~op_label:label ?desc_label ?batch_dims
-      ?input_dims ?output_dims ?axis_labels ?deduced ~children:[] ()
+    NodeUI.create ~value_prec:!default_value_prec ~grad_prec:!default_grad_prec ~is_form () ~op_label:label
+      ?desc_label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children:[] ()
   in
   let id = n.id in
   let shape = n.shape in
@@ -387,7 +391,7 @@ let ndarray ?desc_label ~is_form ?(needs_gradient = false) ?(batch_dims = []) ?(
           ~margin:(!max_sublabel_length * 2);
         let ( ! ) = Array.of_list in
         let dims = Array.concat [ !batch_dims; !output_dims; !input_dims ] in
-        let ndarr = Ocannl_runtime.Node.create_ndarray Single dims (Constant_fill values) in
+        let ndarr = Ocannl_runtime.Node.create_ndarray Double dims (Constant_fill values) in
         let ( ! ) = List.length in
         NodeUI.pp_tensor_inline ~num_batch_axes:!batch_dims ~num_output_axes:!output_dims
           ~num_input_axes:!input_dims Caml.Format.str_formatter ndarr;

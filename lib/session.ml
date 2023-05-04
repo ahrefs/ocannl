@@ -416,4 +416,7 @@ module SDSL = struct
     Code.CDSL.with_debug := false;
     Code.CDSL.keep_files_in_run_directory := false;
     Code.CDSL.debug_virtual_nodes := false
+
+  let default_value_prec = Formula.default_value_prec
+  let default_grad_prec = Formula.default_grad_prec
 end
