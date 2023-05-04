@@ -70,10 +70,13 @@ let prefix_with_preamble content =
   let open Ocannl_runtime in
   let result = Buffer.create 16 in
   let ap = Buffer.add_string result in
-  for i = !first_session_id to Node.global.unique_id - 1 do
-    let n = NodeUI.node_header @@ NodeUI.get i in
+  for id = !first_session_id to Node.global.unique_id - 1 do
+    let n = NodeUI.get id in
     ap "Node ";
-    ap n;
+    ap @@ NodeUI.node_header n;
+    if n.virtual_ then ap " (virtual)"
+    else if not (Code.get_node { id; field = Value }).non_virtual then ap " (virtual value)"
+    else if not (Code.get_node { id; field = Grad }).non_virtual then ap " (virtual grad)";
     ap ";\n"
   done;
   ap content;

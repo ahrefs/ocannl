@@ -188,6 +188,7 @@ let table rows =
     let max_size = List.reduce_exn ~f:Int.max sizes in
     let speedups = List.map times ~f:(fun x -> max_time /. x) in
     let mem_gains = List.map sizes ~f:Float.(fun x -> of_int max_size / of_int x) in
+    let small_float = Fn.compose PrintBox.line (Printf.sprintf "%.3f") in
     PrintBox.(
       frame
       @@ record
@@ -195,6 +196,6 @@ let table rows =
              ("Benchmarks", vlist_map line titles);
              ("Time in sec", vlist_map float_ times);
              ("Memory in bytes", vlist_map int_ sizes);
-             ("Speedup vs. worst", vlist_map float_ speedups);
-             ("Mem gain vs. worst", vlist_map float_ mem_gains);
+             ("Speedup", vlist_map small_float speedups);
+             ("Mem gain", vlist_map small_float mem_gains);
            ])
