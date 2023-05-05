@@ -147,8 +147,16 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
       { sub_node_id = m2.id; computed_externally = m2_processed };
     ]
   in
+  let needs_gradient =
+    match (m1.form, m2.form) with
+    | Some form1, Some form2 -> form1.needs_gradient || form2.needs_gradient
+    | Some form1, _ -> form1.needs_gradient
+    | _, Some form2 -> form2.needs_gradient
+    | _ -> false
+  in
   let n =
-    NodeUI.create_of_promoted_precision ~is_form m1.node.node m2.node.node ~op_label ?desc_label ~children ()
+    NodeUI.create_of_promoted_precision ~needs_gradient m1.node.node m2.node.node ~op_label ?desc_label
+      ~children ()
   in
   let id = n.id in
   let shape = n.shape in
@@ -181,7 +189,6 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
       | None, _ -> raise @@ Session_error ("binop ~is_form:true but subformula is non-form", Some m1)
       | _, None -> raise @@ Session_error ("binop ~is_form:true but subformula is non-form", Some m2)
     in
-    let needs_gradient = form1.needs_gradient || form2.needs_gradient in
     let m1_no_grad = m1_processed || not form1.needs_gradient in
     let m2_no_grad = m2_processed || not form2.needs_gradient in
     (if needs_gradient then
@@ -220,7 +227,10 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
   (* Note: do not capture m in any closure, so it can be GC'd. *)
   let m1_processed = Option.is_some m1.form && (not @@ Map.mem !global_roots m1.id) in
   let children = [ { NodeUI.sub_node_id = m1.id; computed_externally = m1_processed } ] in
-  let n = NodeUI.create_of_same_precision_as ~is_form m1.node.node ~op_label ?desc_label ~children () in
+  let needs_gradient = match m1.form with Some form1 -> form1.needs_gradient | None -> false in
+  let n =
+    NodeUI.create_of_same_precision_as ~needs_gradient m1.node.node ~op_label ?desc_label ~children ()
+  in
   let id = n.id in
   let shape = n.shape in
   (match init_shape with
@@ -254,7 +264,6 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
       | Some form -> form
       | None -> raise @@ Session_error ("binop ~is_form:true but subformula is non-form", Some m1)
     in
-    let needs_gradient = form1.needs_gradient in
     let m1_no_grad = m1_processed || not form1.needs_gradient in
     (if needs_gradient then
        let zero_grads = fetch_zeros ~id Grad shape in
@@ -285,8 +294,8 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
   if needs_gradient && not is_form then
     raise @@ Session_error ("Formula.term ~needs_gradient:true: a non-form formula cannot need gradient", None);
   let n =
-    NodeUI.create ~value_prec:!default_value_prec ~grad_prec:!default_grad_prec ~is_form () ~op_label:label
-      ?desc_label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children:[] ()
+    NodeUI.create ~value_prec:!default_value_prec ~grad_prec:!default_grad_prec ~needs_gradient ()
+      ~op_label:label ?desc_label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children:[] ()
   in
   let id = n.id in
   let shape = n.shape in

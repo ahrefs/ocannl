@@ -67,17 +67,17 @@ let node_prec tensor =
   | Some (N.Single_nd _) -> single
   | Some (N.Double_nd _) -> double
 
-  let create_ndarray prec =
-    match prec with
-    | Void_prec -> assert false
-    | Byte_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
-    | Half_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
-    | Single_prec prec -> N.create_ndarray prec
-    | Double_prec prec -> N.create_ndarray prec
+let create_ndarray prec =
+  match prec with
+  | Void_prec -> assert false
+  | Byte_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
+  | Half_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
+  | Single_prec prec -> N.create_ndarray prec
+  | Double_prec prec -> N.create_ndarray prec
 
 (** Constructs a node with empty tensors of the specified precision and registers it in the global store.
     Note that the precision for gradients should not be lower than the precision for values. *)
-let create ~(value_prec : prec) ?(grad_prec : prec option) ~is_form () ~op_label ?desc_label ?batch_dims
+let create ~(value_prec : prec) ?(grad_prec : prec option) ~needs_gradient () ~op_label ?desc_label ?batch_dims
     ?input_dims ?output_dims ?axis_labels ?deduced ~children () =
   let node =
     match value_prec with
@@ -86,77 +86,49 @@ let create ~(value_prec : prec) ?(grad_prec : prec option) ~is_form () ~op_label
     | Half_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
     | Single_prec value_prec -> (
         match grad_prec with
-        | None -> N.create ~value_prec ~is_form ()
+        | None -> N.create ~value_prec ~needs_gradient ()
         | Some Void_prec -> assert false
         | Some (Byte_as_int_prec _) -> failwith "NodeUI.create: int prec not supported yet"
         | Some (Half_as_int_prec _) -> failwith "NodeUI.create: int prec not supported yet"
-        | Some (Single_prec grad_prec) -> N.create ~value_prec ~grad_prec ~is_form ()
-        | Some (Double_prec grad_prec) -> N.create ~value_prec ~grad_prec ~is_form ())
+        | Some (Single_prec grad_prec) -> N.create ~value_prec ~grad_prec ~needs_gradient ()
+        | Some (Double_prec grad_prec) -> N.create ~value_prec ~grad_prec ~needs_gradient ())
     | Double_prec value_prec -> (
         match grad_prec with
-        | None -> N.create ~value_prec ~is_form ()
+        | None -> N.create ~value_prec ~needs_gradient ()
         | Some Void_prec -> assert false
         | Some (Byte_as_int_prec _) -> failwith "NodeUI.create: int prec not supported yet"
         | Some (Half_as_int_prec _) -> failwith "NodeUI.create: int prec not supported yet"
-        | Some (Single_prec grad_prec) -> N.create ~value_prec ~grad_prec ~is_form ()
-        | Some (Double_prec grad_prec) -> N.create ~value_prec ~grad_prec ~is_form ())
+        | Some (Single_prec grad_prec) -> N.create ~value_prec ~grad_prec ~needs_gradient ()
+        | Some (Double_prec grad_prec) -> N.create ~value_prec ~grad_prec ~needs_gradient ())
   in
   let shape = Shape.make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~id:node.id () in
   let data = { id = node.id; node; op_label; desc_label; children; shape; virtual_ = false } in
   Hashtbl.add_exn global_node_store ~key:node.id ~data;
   data
 
-let create_of_same_precision_as ~is_form (node : N.t) =
+let create_of_same_precision_as ~needs_gradient (node : N.t) =
   match (node.value, node.grad) with
-  | Single_nd _, Some (Single_nd _) -> create ~value_prec:single ~grad_prec:single ~is_form ()
-  | Single_nd _, Some (Double_nd _) -> create ~value_prec:single ~grad_prec:double ~is_form ()
-  | Double_nd _, Some (Double_nd _) -> create ~value_prec:double ~grad_prec:double ~is_form ()
-  | Single_nd _, None ->
-      if is_form then
-        invalid_arg @@ "create_of_same_precision_as: ~is_form:true but a non-form subnode ["
-        ^ Int.to_string node.id
-      else create ~value_prec:single ~is_form:false ()
-  | Double_nd _, None ->
-      if is_form then
-        invalid_arg @@ "create_of_same_precision_as: ~is_form:true but a non-form subnode ["
-        ^ Int.to_string node.id
-      else create ~value_prec:double ~is_form:false ()
+  | Single_nd _, (Some (Single_nd _) | None) -> create ~value_prec:single ~grad_prec:single ~needs_gradient ()
+  | Single_nd _, Some (Double_nd _) -> create ~value_prec:single ~grad_prec:double ~needs_gradient ()
+  | Double_nd _, (Some (Double_nd _) | None) -> create ~value_prec:double ~grad_prec:double ~needs_gradient ()
   | _, Some grad ->
       invalid_arg @@ "create_of_same_precision_as: unsupported combination of precisions value: "
       ^ N.ndarray_precision_to_string node.value
-      ^ ", grad: "
-      ^ N.ndarray_precision_to_string grad
+      ^ ", grad: " ^ N.ndarray_precision_to_string grad
   | _ ->
       invalid_arg @@ "create_of_same_precision_as: unsupported combination of precisions value: "
       ^ N.ndarray_precision_to_string node.value
 
-let create_of_promoted_precision ~is_form (n1 : N.t) (n2 : N.t) =
+let create_of_promoted_precision ~needs_gradient (n1 : N.t) (n2 : N.t) =
   match (n1.value, n2.value) with
   | Single_nd _, Single_nd _ -> (
       match (n1.grad, n2.grad) with
-      | Some (Single_nd _), Some (Single_nd _) -> create ~value_prec:single ~grad_prec:single ~is_form ()
-      | Some (Single_nd _), Some (Double_nd _)
-      | Some (Double_nd _), Some (Single_nd _)
-      | Some (Double_nd _), Some (Double_nd _) ->
-          create ~value_prec:single ~grad_prec:double ~is_form ()
-      | None, _ | _, None ->
-          if is_form then
-            invalid_arg @@ "create_of_promoted_precision: ~is_form:true but a non-form subnode ["
-            ^ Int.to_string n1.id ^ "] or [" ^ Int.to_string n2.id ^ "]"
-          else create ~value_prec:single ~is_form:false ()
-      | Some n1grad, Some n2grad ->
-          invalid_arg @@ "create_of_promoted_precision: unsupported combination of precisions n1 grad: "
-          ^ N.ndarray_precision_to_string n1grad
-          ^ ", n2 grad: "
-          ^ N.ndarray_precision_to_string n2grad)
-  | (Single_nd _, Double_nd _ | Double_nd _, Single_nd _ | Double_nd _, Double_nd _)
-    when Option.is_some n1.grad || Option.is_some n2.grad ->
-      create ~value_prec:double ~grad_prec:double ~is_form ()
-  | Single_nd _, Double_nd _ | Double_nd _, Single_nd _ | Double_nd _, Double_nd _ ->
-      if is_form then
-        invalid_arg @@ "create_of_promoted_precision: ~is_form:true but a non-form subnode ["
-        ^ Int.to_string n1.id ^ "] or [" ^ Int.to_string n2.id ^ "]"
-      else create ~value_prec:double ~is_form:false ()
+      | _, Some (Double_nd _)
+      | Some (Double_nd _), _ ->
+          create ~value_prec:single ~grad_prec:double ~needs_gradient ()
+      | _ -> create ~value_prec:single ~grad_prec:single ~needs_gradient ())
+  | (_, Double_nd _ | Double_nd _, _) ->
+      create ~value_prec:double ~grad_prec:double ~needs_gradient ()
   | _ ->
       invalid_arg @@ "create_of_promoted_precision: unsupported combination of precisions n1 value: "
       ^ N.ndarray_precision_to_string n1.value
@@ -165,8 +137,7 @@ let create_of_promoted_precision ~is_form (n1 : N.t) (n2 : N.t) =
 
 let param_nodes ?(from_id = 0) () =
   Hashtbl.filter global_node_store ~f:(fun n ->
-      n.node.id >= from_id && List.is_empty n.children
-      && Option.exists n.node.grad ~f:(fun grad -> not @@ Array.is_empty @@ N.dims grad))
+      n.node.id >= from_id && List.is_empty n.children && Option.is_some n.node.grad)
 
 let retrieve_2d_points ?from_axis ~xdim ~ydim arr =
   let dims = N.dims arr in

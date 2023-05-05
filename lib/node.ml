@@ -246,16 +246,16 @@ let get_grad (type val_t arr_t) (prec : (val_t, arr_t) precision) uid : arr_t =
 (** Constructs a node with empty tensors of the specified precision and registers it in the global store.
     Note that the precision for gradients should not be lower than the precision for values. *)
 let create (type grad_arr_t value_arr_t) ~(value_prec : ('a, value_arr_t) precision)
-    ?(grad_prec : ('a, grad_arr_t) precision option) ~is_form () =
+    ?(grad_prec : ('a, grad_arr_t) precision option) ~needs_gradient () =
   let id =
     let uid = global.unique_id in
     global.unique_id <- global.unique_id + 1;
     uid
   in
   let grad =
-    match (grad_prec, is_form) with
+    match (grad_prec, needs_gradient) with
     | Some grad_prec, true -> Some (as_ndarray grad_prec @@ empty grad_prec)
-    | None, true -> invalid_arg "Node.create: ~is_form:true requires providing ~grad_prec"
+    | None, true -> invalid_arg "Node.create: ~needs_gradient:true requires providing ~grad_prec"
     | _, false -> None
   in
   let node = { value = as_ndarray value_prec @@ empty value_prec; grad; id } in
