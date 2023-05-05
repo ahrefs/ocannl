@@ -88,6 +88,7 @@ let _suspended () =
 
 let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff precision () =
   let epochs = 20000 in
+  (* let epochs = 2000 in *)
   (* let epochs = 200 in *)
   (* let epochs = 20 in *)
   let bench_title =
@@ -202,9 +203,9 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff precision (
         Stdio.printf "Minus learning rate over minibatch for step %d of %d: %f\n%!" !step steps minus_lr.@[0];
         Stdio.printf "Loss over minibatch for step %d: %f; epoch loss: %f; min loss: %f; max loss: %f\n%!"
           !step loss !epoch_loss !min_loss !max_loss));
+    if !step >= steps then stop := true;
     if !step % n_batches = 0 && not !stop then epoch_loss := 0.0;
-    Int.incr step;
-    if !step > steps then stop := true
+    Int.incr step
   done;
   (* let train_mem = Mem_usage.info () in *)
   let final_time = Time_now.nanoseconds_since_unix_epoch () in
@@ -219,9 +220,8 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff precision (
         result = [%sexp_of: float * float] (!min_loss, !epoch_loss);
       }
   in
-  (*
-  FIXME(#139):*)
   SDSL.close_session ();
+  Stdio.print_endline "\nSession closed.";
   let%nn_op point = [ 0; 0 ] in
   let mlp_result = mlp point in
   SDSL.refresh_session ();
@@ -240,7 +240,8 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff precision (
       ]
   in
   Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n%!";
-  PrintBox_text.output Stdio.stdout plot_moons; (* *)
+  PrintBox_text.output Stdio.stdout plot_moons;
+  (* *)
   Stdio.printf "\nEpoch (cumulative) loss curve:\n%!";
   let plot_loss =
     let open PrintBox_utils in
@@ -317,99 +318,126 @@ let benchmarks =
     (* classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:9 CDSL.single; *)
   ]
 
-let () = ignore @@ classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 CDSL.single ()
-
 let _suspended () =
+  ignore @@ classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:9 CDSL.single ()
+
+let () =
   List.map benchmarks ~f:(fun bench -> bench ()) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
 (* Example output from back when using core_bench, 200 epochs:
 
-   ┌────────────────────────────────┬──────────────┬─────────────┬────────────┬────────────┬────────────┐
-   │ Name                           │     Time/Run │     mWd/Run │   mjWd/Run │   Prom/Run │ Percentage │
-   ├────────────────────────────────┼──────────────┼─────────────┼────────────┼────────────┼────────────┤
-   │ non-virt. Interpreter single   │ 109_023.97ms │ 30_436.21Mw │ 5_935.83kw │ 5_856.90kw │     87.81% │
-   │ non-virt. OCaml single         │  31_138.47ms │  7_851.82Mw │   947.45kw │   830.35kw │     25.08% │
-   │ non-virt. gccjit O0 single     │   1_620.33ms │      6.37Mw │   763.69kw │   755.67kw │      1.31% │
-   │ non-virt. gccjit O1 single     │   1_009.66ms │      6.38Mw │   763.59kw │   755.58kw │      0.81% │
-   │ non-virt. gccjit O2 single     │   1_157.94ms │      6.37Mw │   763.61kw │   755.59kw │      0.93% │
-   │ non-virt. gccjit O3 single     │   3_032.70ms │      6.37Mw │   763.61kw │   755.59kw │      2.44% │
-   │ virtualized Interpreter single │ 124_034.27ms │ 39_199.56Mw │ 9_344.26kw │ 9_203.45kw │     99.90% │
-   │ virtualized OCaml single       │  29_818.01ms │  7_144.75Mw │ 1_120.24kw │   968.39kw │     24.02% │
-   │ virtualized gccjit O0 single   │   1_373.18ms │      9.06Mw │   875.24kw │   867.23kw │      1.11% │
-   │ virtualized gccjit O1 single   │     865.23ms │      9.05Mw │   875.21kw │   867.19kw │      0.70% │
-   │ virtualized gccjit O2 single   │   1_017.83ms │      9.05Mw │   875.17kw │   867.15kw │      0.82% │
-   │ virtualized gccjit O3 single   │   2_124.96ms │      9.06Mw │   875.27kw │   867.26kw │      1.71% │
-   │ non-virt. Interpreter double   │ 114_671.32ms │ 30_436.20Mw │ 5_973.27kw │ 5_860.26kw │     92.36% │
-   │ non-virt. OCaml double         │  30_803.15ms │  7_851.60Mw │   906.53kw │   806.55kw │     24.81% │
-   │ non-virt. gccjit O0 double     │   1_646.47ms │      6.37Mw │   763.59kw │   755.57kw │      1.33% │
-   │ non-virt. gccjit O1 double     │   1_046.90ms │      6.37Mw │   763.59kw │   755.57kw │      0.84% │
-   │ non-virt. gccjit O2 double     │   1_181.91ms │      6.37Mw │   763.59kw │   755.57kw │      0.95% │
-   │ non-virt. gccjit O3 double     │   3_014.77ms │      6.37Mw │   763.59kw │   755.58kw │      2.43% │
-   │ virtualized Interpreter double │ 124_156.15ms │ 39_199.56Mw │ 9_342.78kw │ 9_201.58kw │    100.00% │
-   │ virtualized OCaml double       │  30_173.51ms │  7_144.75Mw │ 1_120.10kw │   968.15kw │     24.30% │
-   │ virtualized gccjit O0 double   │   1_617.95ms │      9.06Mw │   875.34kw │   867.33kw │      1.30% │
-   │ virtualized gccjit O1 double   │     975.96ms │      9.05Mw │   875.19kw │   867.17kw │      0.79% │
-   │ virtualized gccjit O2 double   │   1_083.58ms │      9.06Mw │   875.24kw │   867.23kw │      0.87% │
-   │ virtualized gccjit O3 double   │   2_237.71ms │      9.06Mw │   875.33kw │   867.32kw │      1.80% │
-   └────────────────────────────────┴──────────────┴─────────────┴────────────┴────────────┴────────────┘
+    ┌────────────────────────────────┬──────────────┬─────────────┬────────────┬────────────┬────────────┐
+    │ Name                           │     Time/Run │     mWd/Run │   mjWd/Run │   Prom/Run │ Percentage │
+    ├────────────────────────────────┼──────────────┼─────────────┼────────────┼────────────┼────────────┤
+    │ non-virt. Interpreter single   │ 109_023.97ms │ 30_436.21Mw │ 5_935.83kw │ 5_856.90kw │     87.81% │
+    │ non-virt. OCaml single         │  31_138.47ms │  7_851.82Mw │   947.45kw │   830.35kw │     25.08% │
+    │ non-virt. gccjit O0 single     │   1_620.33ms │      6.37Mw │   763.69kw │   755.67kw │      1.31% │
+    │ non-virt. gccjit O1 single     │   1_009.66ms │      6.38Mw │   763.59kw │   755.58kw │      0.81% │
+    │ non-virt. gccjit O2 single     │   1_157.94ms │      6.37Mw │   763.61kw │   755.59kw │      0.93% │
+    │ non-virt. gccjit O3 single     │   3_032.70ms │      6.37Mw │   763.61kw │   755.59kw │      2.44% │
+    │ virtualized Interpreter single │ 124_034.27ms │ 39_199.56Mw │ 9_344.26kw │ 9_203.45kw │     99.90% │
+    │ virtualized OCaml single       │  29_818.01ms │  7_144.75Mw │ 1_120.24kw │   968.39kw │     24.02% │
+    │ virtualized gccjit O0 single   │   1_373.18ms │      9.06Mw │   875.24kw │   867.23kw │      1.11% │
+    │ virtualized gccjit O1 single   │     865.23ms │      9.05Mw │   875.21kw │   867.19kw │      0.70% │
+    │ virtualized gccjit O2 single   │   1_017.83ms │      9.05Mw │   875.17kw │   867.15kw │      0.82% │
+    │ virtualized gccjit O3 single   │   2_124.96ms │      9.06Mw │   875.27kw │   867.26kw │      1.71% │
+    │ non-virt. Interpreter double   │ 114_671.32ms │ 30_436.20Mw │ 5_973.27kw │ 5_860.26kw │     92.36% │
+    │ non-virt. OCaml double         │  30_803.15ms │  7_851.60Mw │   906.53kw │   806.55kw │     24.81% │
+    │ non-virt. gccjit O0 double     │   1_646.47ms │      6.37Mw │   763.59kw │   755.57kw │      1.33% │
+    │ non-virt. gccjit O1 double     │   1_046.90ms │      6.37Mw │   763.59kw │   755.57kw │      0.84% │
+    │ non-virt. gccjit O2 double     │   1_181.91ms │      6.37Mw │   763.59kw │   755.57kw │      0.95% │
+    │ non-virt. gccjit O3 double     │   3_014.77ms │      6.37Mw │   763.59kw │   755.58kw │      2.43% │
+    │ virtualized Interpreter double │ 124_156.15ms │ 39_199.56Mw │ 9_342.78kw │ 9_201.58kw │    100.00% │
+    │ virtualized OCaml double       │  30_173.51ms │  7_144.75Mw │ 1_120.10kw │   968.15kw │     24.30% │
+    │ virtualized gccjit O0 double   │   1_617.95ms │      9.06Mw │   875.34kw │   867.33kw │      1.30% │
+    │ virtualized gccjit O1 double   │     975.96ms │      9.05Mw │   875.19kw │   867.17kw │      0.79% │
+    │ virtualized gccjit O2 double   │   1_083.58ms │      9.06Mw │   875.24kw │   867.23kw │      0.87% │
+    │ virtualized gccjit O3 double   │   2_237.71ms │      9.06Mw │   875.33kw │   867.32kw │      1.80% │
+    └────────────────────────────────┴──────────────┴─────────────┴────────────┴────────────┴────────────┘
 
-   Example output from back when using core_bench,  20000 epochs:
+    Example output from back when using core_bench,  20000 epochs:
 
-   ┌──────────────────────────────┬──────────┬─────────┬──────────┬──────────┬────────────┐
-   │ Name                         │ Time/Run │ mWd/Run │ mjWd/Run │ Prom/Run │ Percentage │
-   ├──────────────────────────────┼──────────┼─────────┼──────────┼──────────┼────────────┤
-   │ non-virt. gccjit O0 single   │   96.55s │ 96.35Mw │   1.32Mw │   1.07Mw │     91.57% │
-   │ non-virt. gccjit O1 single   │   27.81s │ 96.34Mw │   1.31Mw │   1.07Mw │     26.38% │
-   │ non-virt. gccjit O2 single   │   18.43s │ 96.35Mw │   1.31Mw │   1.07Mw │     17.48% │
-   │ non-virt. gccjit O3 single   │   16.09s │ 96.35Mw │   1.31Mw │   1.07Mw │     15.26% │
-   │ virtualized gccjit O0 single │   92.85s │ 99.03Mw │   1.43Mw │   1.18Mw │     88.06% │
-   │ virtualized gccjit O1 single │   24.11s │ 99.03Mw │   1.42Mw │   1.18Mw │     22.86% │
-   │ virtualized gccjit O2 single │   18.44s │ 99.03Mw │   1.42Mw │   1.18Mw │     17.49% │
-   │ virtualized gccjit O3 single │   15.00s │ 99.03Mw │   1.42Mw │   1.18Mw │     14.23% │
-   │ non-virt. gccjit O0 double   │  105.44s │ 96.35Mw │   1.31Mw │   1.07Mw │    100.00% │
-   │ non-virt. gccjit O1 double   │   28.42s │ 96.35Mw │   1.31Mw │   1.07Mw │     26.95% │
-   │ non-virt. gccjit O2 double   │   21.55s │ 96.35Mw │   1.31Mw │   1.07Mw │     20.44% │
-   │ non-virt. gccjit O3 double   │   17.42s │ 96.35Mw │   1.31Mw │   1.07Mw │     16.53% │
-   │ virtualized gccjit O0 double │   93.55s │ 99.03Mw │   1.42Mw │   1.18Mw │     88.73% │
-   │ virtualized gccjit O1 double │   24.92s │ 99.03Mw │   1.42Mw │   1.18Mw │     23.64% │
-   │ virtualized gccjit O2 double │   20.29s │ 99.03Mw │   1.42Mw │   1.18Mw │     19.25% │
-   │ virtualized gccjit O3 double │   17.72s │ 99.03Mw │   1.42Mw │   1.18Mw │     16.80% │
-   └──────────────────────────────┴──────────┴─────────┴──────────┴──────────┴────────────┘
+    ┌──────────────────────────────┬──────────┬─────────┬──────────┬──────────┬────────────┐
+    │ Name                         │ Time/Run │ mWd/Run │ mjWd/Run │ Prom/Run │ Percentage │
+    ├──────────────────────────────┼──────────┼─────────┼──────────┼──────────┼────────────┤
+    │ non-virt. gccjit O0 single   │   96.55s │ 96.35Mw │   1.32Mw │   1.07Mw │     91.57% │
+    │ non-virt. gccjit O1 single   │   27.81s │ 96.34Mw │   1.31Mw │   1.07Mw │     26.38% │
+    │ non-virt. gccjit O2 single   │   18.43s │ 96.35Mw │   1.31Mw │   1.07Mw │     17.48% │
+    │ non-virt. gccjit O3 single   │   16.09s │ 96.35Mw │   1.31Mw │   1.07Mw │     15.26% │
+    │ virtualized gccjit O0 single │   92.85s │ 99.03Mw │   1.43Mw │   1.18Mw │     88.06% │
+    │ virtualized gccjit O1 single │   24.11s │ 99.03Mw │   1.42Mw │   1.18Mw │     22.86% │
+    │ virtualized gccjit O2 single │   18.44s │ 99.03Mw │   1.42Mw │   1.18Mw │     17.49% │
+    │ virtualized gccjit O3 single │   15.00s │ 99.03Mw │   1.42Mw │   1.18Mw │     14.23% │
+    │ non-virt. gccjit O0 double   │  105.44s │ 96.35Mw │   1.31Mw │   1.07Mw │    100.00% │
+    │ non-virt. gccjit O1 double   │   28.42s │ 96.35Mw │   1.31Mw │   1.07Mw │     26.95% │
+    │ non-virt. gccjit O2 double   │   21.55s │ 96.35Mw │   1.31Mw │   1.07Mw │     20.44% │
+    │ non-virt. gccjit O3 double   │   17.42s │ 96.35Mw │   1.31Mw │   1.07Mw │     16.53% │
+    │ virtualized gccjit O0 double │   93.55s │ 99.03Mw │   1.42Mw │   1.18Mw │     88.73% │
+    │ virtualized gccjit O1 double │   24.92s │ 99.03Mw │   1.42Mw │   1.18Mw │     23.64% │
+    │ virtualized gccjit O2 double │   20.29s │ 99.03Mw │   1.42Mw │   1.18Mw │     19.25% │
+    │ virtualized gccjit O3 double │   17.72s │ 99.03Mw │   1.42Mw │   1.18Mw │     16.80% │
+    └──────────────────────────────┴──────────┴─────────┴──────────┴──────────┴────────────┘
 
-   Example 20000 epochs:
-   ┌──────────────────────────────────┬─────────────┬───────────────┬─────────────────┬──────────────────┐
-   │Benchmarks                        │Time in sec  │Memory in bytes│Speedup vs. worst│Mem gain vs. worst│
-   ├──────────────────────────────────┼─────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(non-virt. Gccjit 0 Single_prec)  │96.399416234 │38168          │1.041            │2.000             │
-   ├──────────────────────────────────┼─────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(non-virt. Gccjit 1 Single_prec)  │27.473656989 │38168          │3.652            │2.000             │
-   ├──────────────────────────────────┼─────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(non-virt. Gccjit 2 Single_prec)  │17.91265167  │38168          │5.602            │2.000             │
-   ├──────────────────────────────────┼─────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(non-virt. Gccjit 3 Single_prec)  │14.759508918 │38168          │6.798            │2.000             │
-   ├──────────────────────────────────┼─────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(virtualized Gccjit 0 Single_prec)│90.704767936 │24764          │1.106            │3.083             │
-   ├──────────────────────────────────┼─────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(virtualized Gccjit 1 Single_prec)│23.39300971  │24764          │4.289            │3.083             │
-   ├──────────────────────────────────┼─────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(virtualized Gccjit 2 Single_prec)│17.271669809 │24764          │5.810            │3.083             │
-   ├──────────────────────────────────┼─────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(virtualized Gccjit 3 Single_prec)│13.175105768 │24764          │7.616            │3.083             │
-   ├──────────────────────────────────┼─────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(non-virt. Gccjit 0 Double_prec)  │100.341285701│76336          │1.000            │1.000             │
-   ├──────────────────────────────────┼─────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(non-virt. Gccjit 1 Double_prec)  │28.319701974 │76336          │3.543            │1.000             │
-   ├──────────────────────────────────┼─────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(non-virt. Gccjit 2 Double_prec)  │20.367626296 │76336          │4.927            │1.000             │
-   ├──────────────────────────────────┼─────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(non-virt. Gccjit 3 Double_prec)  │16.264518534 │76336          │6.169            │1.000             │
-   ├──────────────────────────────────┼─────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(virtualized Gccjit 0 Double_prec)│91.394629479 │49528          │1.098            │1.541             │
-   ├──────────────────────────────────┼─────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(virtualized Gccjit 1 Double_prec)│24.113780816 │49528          │4.161            │1.541             │
-   ├──────────────────────────────────┼─────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(virtualized Gccjit 2 Double_prec)│17.511645426 │49528          │5.730            │1.541             │
-   ├──────────────────────────────────┼─────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(virtualized Gccjit 3 Double_prec)│14.389259548 │49528          │6.973            │1.541             │
-   └──────────────────────────────────┴─────────────┴───────────────┴─────────────────┴──────────────────┘
+    Example 2000 epochs:
+    ┌────────────────────────────────────────────────────────────┬─────────────┬───────────────┬───────┬────────┬───────────────────────────────────────────┐
+    │Benchmarks                                                  │Time in sec  │Memory in bytes│Speedup│Mem gain│min minibatch loss, last epoch loss        │
+    ├────────────────────────────────────────────────────────────┼─────────────┼───────────────┼───────┼────────┼───────────────────────────────────────────┤
+    │(non-virt. Gccjit gcc-opt 0 inlining-cutoff 3 Single_prec)  │9.363082589  │38120          │21.056 │2.000   │(0.0077278576791286469 0.61822861433029175)│
+    │(non-virt. Gccjit gcc-opt 1 inlining-cutoff 3 Single_prec)  │2.873905738  │38120          │68.601 │2.000   │(0.0077278576791286469 0.61822861433029175)│
+    │(non-virt. Gccjit gcc-opt 2 inlining-cutoff 3 Single_prec)  │2.195167832  │38120          │89.812 │2.000   │(0.0077278576791286469 0.61822861433029175)│
+    │(non-virt. Gccjit gcc-opt 3 inlining-cutoff 3 Single_prec)  │2.934629743  │38120          │67.181 │2.000   │(0.0077278576791286469 0.61822861433029175)│
+    │(virtualized Gccjit gcc-opt 0 inlining-cutoff 3 Single_prec)│8.592617129  │24716          │22.944 │3.085   │(0.0077278576791286469 0.61822861433029175)│
+    │(virtualized Gccjit gcc-opt 1 inlining-cutoff 3 Single_prec)│2.444529065  │24716          │80.650 │3.085   │(0.0077278576791286469 0.61822861433029175)│
+    │(virtualized Gccjit gcc-opt 2 inlining-cutoff 3 Single_prec)│2.027041724  │24716          │97.261 │3.085   │(0.0077278576791286469 0.61822861433029175)│
+    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 3 Single_prec)│2.398860232  │24716          │82.186 │3.085   │(0.0077278576791286469 0.61822861433029175)│
+    │(non-virt. Gccjit gcc-opt 0 inlining-cutoff 3 Double_prec)  │10.609319968 │76240          │18.583 │1.000   │(0.0077286884825175511 0.61829524345436948)│
+    │(non-virt. Gccjit gcc-opt 1 inlining-cutoff 3 Double_prec)  │3.261412221  │76240          │60.450 │1.000   │(0.0077286884825175511 0.61829524345436948)│
+    │(non-virt. Gccjit gcc-opt 2 inlining-cutoff 3 Double_prec)  │2.733746302  │76240          │72.118 │1.000   │(0.0077286884825175511 0.61829524345436948)│
+    │(non-virt. Gccjit gcc-opt 3 inlining-cutoff 3 Double_prec)  │3.709142786  │76240          │53.153 │1.000   │(0.0077286884825175511 0.61829524345436948)│
+    │(virtualized Gccjit gcc-opt 0 inlining-cutoff 3 Double_prec)│9.54255515   │49432          │20.660 │1.542   │(0.0077286884825175511 0.61829524345436948)│
+    │(virtualized Gccjit gcc-opt 1 inlining-cutoff 3 Double_prec)│2.800555966  │49432          │70.398 │1.542   │(0.0077286884825175511 0.61829524345436948)│
+    │(virtualized Gccjit gcc-opt 2 inlining-cutoff 3 Double_prec)│2.456941883  │49432          │80.243 │1.542   │(0.0077286884825175511 0.61829524345436948)│
+    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 3 Double_prec)│2.723720642  │49432          │72.383 │1.542   │(0.0077286884825175511 0.61829524345436948)│
+    │(virtualized Gccjit gcc-opt 0 inlining-cutoff 5 Single_prec)│11.233905314 │24404          │17.550 │3.124   │(0.0077278576791286469 0.61822861433029175)│
+    │(virtualized Gccjit gcc-opt 1 inlining-cutoff 5 Single_prec)│3.297283659  │24404          │59.792 │3.124   │(0.0077278576791286469 0.61822861433029175)│
+    │(virtualized Gccjit gcc-opt 2 inlining-cutoff 5 Single_prec)│2.368921285  │24404          │83.225 │3.124   │(0.0077278576791286469 0.61822861433029175)│
+    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 5 Single_prec)│2.816892199  │24404          │69.989 │3.124   │(0.0077278576791286469 0.61822861433029175)│
+    │(virtualized Gccjit gcc-opt 0 inlining-cutoff 5 Double_prec)│10.950143674 │48808          │18.005 │1.562   │(0.0077286884825175511 0.61829524345436948)│
+    │(virtualized Gccjit gcc-opt 1 inlining-cutoff 5 Double_prec)│3.167095918  │48808          │62.250 │1.562   │(0.0077286884825175511 0.61829524345436948)│
+    │(virtualized Gccjit gcc-opt 2 inlining-cutoff 5 Double_prec)│2.456218661  │48808          │80.267 │1.562   │(0.0077286884825175511 0.61829524345436948)│
+    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 5 Double_prec)│3.040533753  │48808          │64.841 │1.562   │(0.0077286884825175511 0.61829524345436948)│
+    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 9 Single_prec)│197.152418626│20940          │1.000  │3.641   │(0.0077278576791286469 0.61822861433029175)│
+    └────────────────────────────────────────────────────────────┴─────────────┴───────────────┴───────┴────────┴───────────────────────────────────────────┘
+
+    Example 20000 epochs:
+
+    ┌────────────────────────────────────────────────────────────┬─────────────┬───────────────┬───────┬────────┬─────────────────────────────────────────────┐
+    │Benchmarks                                                  │Time in sec  │Memory in bytes│Speedup│Mem gain│min minibatch loss, last epoch loss          │
+    ├────────────────────────────────────────────────────────────┼─────────────┼───────────────┼───────┼────────┼─────────────────────────────────────────────┤
+    │(non-virt. Gccjit gcc-opt 0 inlining-cutoff 3 Single_prec)  │99.919336656 │38120          │1.075  │2.000   │(0.00042827261495403945 0.034261809196323156)│
+    │(non-virt. Gccjit gcc-opt 1 inlining-cutoff 3 Single_prec)  │26.841802306 │38120          │4.004  │2.000   │(0.00042827261495403945 0.034261809196323156)│
+    │(non-virt. Gccjit gcc-opt 2 inlining-cutoff 3 Single_prec)  │18.830494507 │38120          │5.707  │2.000   │(0.00042827261495403945 0.034261809196323156)│
+    │(non-virt. Gccjit gcc-opt 3 inlining-cutoff 3 Single_prec)  │15.097430759 │38120          │7.118  │2.000   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtualized Gccjit gcc-opt 0 inlining-cutoff 3 Single_prec)│94.391626625 │24716          │1.138  │3.085   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtualized Gccjit gcc-opt 1 inlining-cutoff 3 Single_prec)│23.370498677 │24716          │4.598  │3.085   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtualized Gccjit gcc-opt 2 inlining-cutoff 3 Single_prec)│18.852757047 │24716          │5.700  │3.085   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 3 Single_prec)│14.697218311 │24716          │7.312  │3.085   │(0.00042827261495403945 0.034261809196323156)│
+    │(non-virt. Gccjit gcc-opt 0 inlining-cutoff 3 Double_prec)  │102.817266337│76240          │1.045  │1.000   │(0.000423889497540527 0.033911160707398469)  │
+    │(non-virt. Gccjit gcc-opt 1 inlining-cutoff 3 Double_prec)  │27.8414052   │76240          │3.860  │1.000   │(0.000423889497540527 0.033911160707398469)  │
+    │(non-virt. Gccjit gcc-opt 2 inlining-cutoff 3 Double_prec)  │19.248354695 │76240          │5.583  │1.000   │(0.000423889497540527 0.033911160707398469)  │
+    │(non-virt. Gccjit gcc-opt 3 inlining-cutoff 3 Double_prec)  │16.399841631 │76240          │6.553  │1.000   │(0.000423889497540527 0.033911160707398469)  │
+    │(virtualized Gccjit gcc-opt 0 inlining-cutoff 3 Double_prec)│95.197089297 │49432          │1.129  │1.542   │(0.000423889497540527 0.033911160707398469)  │
+    │(virtualized Gccjit gcc-opt 1 inlining-cutoff 3 Double_prec)│24.125311743 │49432          │4.454  │1.542   │(0.000423889497540527 0.033911160707398469)  │
+    │(virtualized Gccjit gcc-opt 2 inlining-cutoff 3 Double_prec)│19.965895234 │49432          │5.382  │1.542   │(0.000423889497540527 0.033911160707398469)  │
+    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 3 Double_prec)│15.533763234 │49432          │6.918  │1.542   │(0.000423889497540527 0.033911160707398469)  │
+    │(virtualized Gccjit gcc-opt 0 inlining-cutoff 5 Single_prec)│105.764751222│24404          │1.016  │3.124   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtualized Gccjit gcc-opt 1 inlining-cutoff 5 Single_prec)│27.024510357 │24404          │3.976  │3.124   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtualized Gccjit gcc-opt 2 inlining-cutoff 5 Single_prec)│19.241918666 │24404          │5.585  │3.124   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 5 Single_prec)│15.775829198 │24404          │6.812  │3.124   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtualized Gccjit gcc-opt 0 inlining-cutoff 5 Double_prec)│107.461904166│48808          │1.000  │1.562   │(0.000423889497540527 0.033911160707398469)  │
+    │(virtualized Gccjit gcc-opt 1 inlining-cutoff 5 Double_prec)│28.517341334 │48808          │3.768  │1.562   │(0.000423889497540527 0.033911160707398469)  │
+    │(virtualized Gccjit gcc-opt 2 inlining-cutoff 5 Double_prec)│19.386238972 │48808          │5.543  │1.562   │(0.000423889497540527 0.033911160707398469)  │
+    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 5 Double_prec)│16.445398178 │48808          │6.534  │1.562   │(0.000423889497540527 0.033911160707398469)  │
+    └────────────────────────────────────────────────────────────┴─────────────┴───────────────┴───────┴────────┴─────────────────────────────────────────────┘
+
 *)
