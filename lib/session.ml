@@ -254,9 +254,10 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
             Seq
               ( Block_comment ("Prepare backprop pass", all_parallel !Formula.session_prepare_backprop),
                 sequential
-                @@ List.filter_map (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
-                  Option.some_if (Option.value_exn root.form).needs_gradient @@
-                       get_toplevel_backprop root) ) )
+                @@ List.filter_map (Map.to_alist ~key_order:`Decreasing !global_roots)
+                     ~f:(fun (_node_id, root) ->
+                       Option.some_if (Option.value_exn root.form).needs_gradient
+                       @@ get_toplevel_backprop root) ) )
     in
     let params_update =
       match (update_params, !minus_learning_rate) with

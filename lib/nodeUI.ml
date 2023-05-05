@@ -77,8 +77,8 @@ let create_ndarray prec =
 
 (** Constructs a node with empty tensors of the specified precision and registers it in the global store.
     Note that the precision for gradients should not be lower than the precision for values. *)
-let create ~(value_prec : prec) ?(grad_prec : prec option) ~needs_gradient () ~op_label ?desc_label ?batch_dims
-    ?input_dims ?output_dims ?axis_labels ?deduced ~children () =
+let create ~(value_prec : prec) ?(grad_prec : prec option) ~needs_gradient () ~op_label ?desc_label
+    ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children () =
   let node =
     match value_prec with
     | Void_prec -> assert false
@@ -123,12 +123,10 @@ let create_of_promoted_precision ~needs_gradient (n1 : N.t) (n2 : N.t) =
   match (n1.value, n2.value) with
   | Single_nd _, Single_nd _ -> (
       match (n1.grad, n2.grad) with
-      | _, Some (Double_nd _)
-      | Some (Double_nd _), _ ->
+      | _, Some (Double_nd _) | Some (Double_nd _), _ ->
           create ~value_prec:single ~grad_prec:double ~needs_gradient ()
       | _ -> create ~value_prec:single ~grad_prec:single ~needs_gradient ())
-  | (_, Double_nd _ | Double_nd _, _) ->
-      create ~value_prec:double ~grad_prec:double ~needs_gradient ()
+  | _, Double_nd _ | Double_nd _, _ -> create ~value_prec:double ~grad_prec:double ~needs_gradient ()
   | _ ->
       invalid_arg @@ "create_of_promoted_precision: unsupported combination of precisions n1 value: "
       ^ N.ndarray_precision_to_string n1.value
