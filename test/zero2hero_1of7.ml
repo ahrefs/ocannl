@@ -23,7 +23,7 @@ let%expect_test "Graph drawing recompile" =
                                 1.00e+0
                           [12] <+>                        │[2] <5>
                            5.50e+1                        │ 5.00e+0
-                          Gradient                        │<void>
+                          Gradient                        │
                            1.00e+0                        │
            [9] <*.>        │          [11] <*.>           │
             7.50e+1        │           -2.00e+1           │
@@ -31,11 +31,11 @@ let%expect_test "Graph drawing recompile" =
             1.00e+0        │           1.00e+0            │
     [8] <3>  │  [6] <**.>  │[10] <-1> │    [4] <*.>       │
      3.00e+0 │   2.50e+1   │ -1.00e+0 │     2.00e+1       │
-    <void>   │  Gradient   │<void>    │    Gradient       │
+             │  Gradient   │          │    Gradient       │
              │   3.00e+0   │          │     -1.00e+0      │
              │[1]│[5] <2>  │          │[3] <4>  │[1] <x>  │
              │   │ 2.00e+0 │          │ 4.00e+0 │ 5.00e+0 │
-             │   │<void>   │          │<void>   │Gradient │
+             │   │         │          │         │Gradient │
              │   │         │          │         │ 2.60e+1 │ |}];
   let xs = Array.init 10 ~f:Float.(fun i -> of_int i - 5.) in
   let ys =
