@@ -173,8 +173,10 @@ let perform_initialization =
         if !Code.debug_virtual_nodes || not (NodeUI.get id).virtual_ then
           (NodeUI.N.get id).value <- NodeUI.create_ndarray !Formula.default_value_prec (dims ()) init_op
     | { tensor = { id; field = Grad }; dims; init_op } ->
-        if  !Code.debug_virtual_nodes || not (NodeUI.get id).virtual_ then
-          (NodeUI.N.get id).grad <- Some (NodeUI.create_ndarray !Formula.default_grad_prec (dims ()) init_op))
+        let n = NodeUI.N.get id in
+        if !Code.debug_virtual_nodes || not (NodeUI.get id).virtual_ then
+          n.grad <- Some (NodeUI.create_ndarray !Formula.default_grad_prec (dims ()) init_op)
+        else assert (Option.is_some n.grad))
 
 let compile_routine code =
   let open Formula in
@@ -252,7 +254,8 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
             Seq
               ( Block_comment ("Prepare backprop pass", all_parallel !Formula.session_prepare_backprop),
                 sequential
-                @@ List.map (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
+                @@ List.filter_map (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
+                  Option.some_if (Option.value_exn root.form).needs_gradient @@
                        get_toplevel_backprop root) ) )
     in
     let params_update =
