@@ -289,7 +289,11 @@ let interpret_llc llc =
           Caml.Format.printf "TRACE: %a <- %f\n%!" Sexp.pp_hum ([%sexp_of: NodeUI.tensor_ptr] tensor) result;
         fill_from_float tensor result
     | Set (ptr, indices, llv) ->
-        if !debug_trace_interpretation then Caml.Format.printf "{";
+        if !debug_trace_interpretation then
+          Caml.Format.printf "{TRACE: %a [%a] <- ...\n%!" Sexp.pp_hum
+            ([%sexp_of: NodeUI.tensor_ptr] ptr)
+            Sexp.pp_hum
+            ([%sexp_of: index array] indices);
         let idcs = lookup env indices in
         let result = loop_float env llv in
         if !debug_trace_interpretation then
@@ -322,7 +326,11 @@ let interpret_llc llc =
     match llv with
     | Constant c -> c
     | Get (ptr, indices) ->
-        if !debug_trace_interpretation then Caml.Format.printf "{";
+        if !debug_trace_interpretation then
+          Caml.Format.printf "{TRACE: %a [%a] -> ...\n%!" Sexp.pp_hum
+            ([%sexp_of: NodeUI.tensor_ptr] ptr)
+            Sexp.pp_hum
+            ([%sexp_of: index array] indices);
         let idcs = lookup env indices in
         let result = get_as_float ptr idcs in
         if !debug_trace_interpretation then
@@ -335,7 +343,11 @@ let interpret_llc llc =
             result;
         result
     | Local_scope { id; prec = _; body; orig_indices } ->
-        if !debug_trace_interpretation then Caml.Format.printf "{";
+        if !debug_trace_interpretation then
+          Caml.Format.printf "{TRACE: %a [%a] <-> ...\n%!" Sexp.pp_hum
+            ([%sexp_of: NodeUI.tensor_ptr] id.tensor)
+            Sexp.pp_hum
+            ([%sexp_of: index array] orig_indices);
         let old_locals = !locals in
         locals := Map.update !locals id ~f:(fun _ -> 0.0);
         loop_proc env body;
