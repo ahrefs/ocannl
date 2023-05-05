@@ -280,8 +280,10 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
     formula
 
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label ?desc_label ?needs_gradient ~is_form ?batch_dims ?input_dims ?output_dims ?axis_labels
+let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?output_dims ?axis_labels
     ?deduced ?init_op ?fetch_op () =
+  if needs_gradient && not is_form then
+    raise @@ Session_error ("Formula.term ~needs_gradient:true: a non-form formula cannot need gradient", None);
   let n =
     NodeUI.create ~value_prec:!default_value_prec ~grad_prec:!default_grad_prec ~is_form () ~op_label:label
       ?desc_label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children:[] ()
@@ -313,16 +315,10 @@ let term ~label ?desc_label ?needs_gradient ~is_form ?batch_dims ?input_dims ?ou
   if not is_form then
     { forward_body; form = None; id; node = n; shape_logic; shape; cross_session_persistent }
   else
-    let needs_gradient =
-      match (needs_gradient, batch_dims) with
-      | None, Some [] -> true
-      | Some setting, _ -> setting
-      | _ -> false
-    in
+    let backprop_body = Code.Noop in
     (if needs_gradient then
        let zero_grads = fetch_zeros ~id Grad shape in
        session_prepare_backprop := zero_grads :: !session_prepare_backprop);
-    let backprop_body = Code.Noop in
     (* Very unlikely someone will want dw/dw. *)
     if needs_gradient then session_initializations := create ~id Grad shape :: !session_initializations;
     let form = Some { backprop_body; needs_gradient } in

@@ -13,8 +13,8 @@ let%expect_test "Synthetic data" =
   Random.init 0;
   let%nn_dt session_step ~output_dims:[ 1 ] = n =+ 1 in
   let c_data =
-    FDSL.term ~label:"fetch_callback" ~batch_dims:[ 1 ] ~input_dims:[] ~output_dims:[ 2; 3 ]
-      ~init_op:Code.Range_over_offsets
+    FDSL.term ~label:"fetch_callback" ~needs_gradient:false ~batch_dims:[ 1 ] ~input_dims:[]
+      ~output_dims:[ 2; 3 ] ~init_op:Code.Range_over_offsets
       ~fetch_op:(fun ~n -> Synthetic [%nn_cd n =+ session_step *. 100])
       ()
   in

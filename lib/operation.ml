@@ -176,7 +176,7 @@ let rec pointpow ?desc_label ~is_form p m1 : Formula.t =
   Formula.binop ?desc_label ~compose_op:Pointwise_bin ~op_label:"**." ~op_body ~grad_body ~is_form m1 p_f
 
 let range ?desc_label ~is_form ?axis_label upto =
-  Formula.term ?desc_label ~is_form
+  Formula.term ?desc_label ~is_form ~needs_gradient:false
     ~label:("0" ^ "..." ^ Int.to_string upto)
     ~batch_dims:[] ~input_dims:[]
     ~output_dims:[ upto + 1 ]
