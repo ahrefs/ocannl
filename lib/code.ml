@@ -467,7 +467,7 @@ let get_node uid =
         computations = [];
         accesses = Hashtbl.Poly.create ();
         fill = None;
-        non_virtual = false;
+        non_virtual = (NodeUI.get uid.id).cannot_be_virtual;
       })
 
 let visit fill assign_bag old =
@@ -617,7 +617,7 @@ let process_computation node top_llc =
     node.computations <- (!at_idcs, top_llc) :: node.computations;
     (NodeUI.get node.id).virtual_ <- true
   with Non_virtual ->
-    (NodeUI.get node.id).virtual_ <- false;
+    (NodeUI.get node.id).cannot_be_virtual <- true;
     node.non_virtual <- true;
     other_node.non_virtual <- true
 

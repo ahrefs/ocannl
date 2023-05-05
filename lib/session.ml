@@ -265,11 +265,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
       | _ -> Noop
     in
     (* Roots at the time of compilation are not virtual, so that they can be consumed downstream. *)
-    Map.iter_keys !Formula.global_roots ~f:(fun id ->
-        let make_non_virt : data_node = Code.get_node { id; field = Value } in
-        let make_non_virt_grad : data_node = Code.get_node { id; field = Value } in
-        make_non_virt.non_virtual <- true;
-        make_non_virt_grad.non_virtual <- true);
+    Map.iter_keys !Formula.global_roots ~f:(fun id -> (NodeUI.get id).cannot_be_virtual <- true);
     generated_session_step_update := sequential [ forward; backprop; params_update ]);
   let prog = Code.(Session_step_update !generated_session_step_update) in
   let name = Code.get_name prog in
@@ -300,7 +296,6 @@ let close_session () =
   Formula.session_prepare_backprop := [];
   generated_session_step_update := Noop;
   minus_learning_rate := None;
-  Code.cleanup_session ();
   !cleanup_executor_session ();
   Ocannl_runtime.Node.most_recent_suspension := None;
   Ocannl_runtime.Node.global.session_step_update := None
@@ -400,6 +395,8 @@ module SDSL = struct
 
   let set_grads m cs =
     Ocannl_runtime.Node.(init_ndarray (Constant_fill cs) (Option.value_exn m.Formula.node.node.grad))
+
+  let set_non_virtual m = m.Formula.node.cannot_be_virtual <- true
 
   let value_1d_points ?from_axis ~xdim m =
     NodeUI.retrieve_1d_points ?from_axis ~xdim m.Formula.node.node.value

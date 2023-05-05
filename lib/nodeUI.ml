@@ -11,6 +11,7 @@ type t = {
   desc_label : string option;
   shape : Shape.t;
   mutable virtual_ : bool;
+  mutable cannot_be_virtual : bool;
 }
 [@@deriving sexp_of]
 (** A DAG of decorated [Node]s, also storing the shape information. *)
@@ -102,7 +103,9 @@ let create ~(value_prec : prec) ?(grad_prec : prec option) ~needs_gradient () ~o
         | Some (Double_prec grad_prec) -> N.create ~value_prec ~grad_prec ~needs_gradient ())
   in
   let shape = Shape.make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~id:node.id () in
-  let data = { id = node.id; node; op_label; desc_label; children; shape; virtual_ = false } in
+  let data =
+    { id = node.id; node; op_label; desc_label; children; shape; virtual_ = false; cannot_be_virtual = false }
+  in
   Hashtbl.add_exn global_node_store ~key:node.id ~data;
   data
 

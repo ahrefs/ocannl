@@ -74,9 +74,7 @@ let prefix_with_preamble content =
     let n = NodeUI.get id in
     ap "Node ";
     ap @@ NodeUI.node_header n;
-    if n.virtual_ then ap " (virtual)"
-    else if not (Code.get_node { id; field = Value }).non_virtual then ap " (virtual value)"
-    else if not (Code.get_node { id; field = Grad }).non_virtual then ap " (virtual grad)";
+    if n.virtual_ then ap " (virtual)";
     ap ";\n"
   done;
   ap content;
