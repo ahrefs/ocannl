@@ -1215,7 +1215,9 @@ let%expect_test "einsum1 fixed dim axis" =
     └────────────────────────┘ |}];
   let%nn_op ho4 = hey2 ++ "i->j => i0j" in
   print_formula ~with_code:false ~with_grad:false `Default @@ ho4;
-  [%expect {| <void> |}]
+  [%expect {|
+    [6]: ho4 <=>> shape 0:2,1:1,2:3
+    <void> |}]
 
 let%expect_test "einsum with fixed dim axes" =
   let open Session.SDSL in

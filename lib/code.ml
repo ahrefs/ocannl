@@ -812,10 +812,6 @@ let virtual_llc node_store reverse_node_map (llc : unit low_level) : unit low_le
   in
   loop_proc ~process_for:Set.Poly.empty llc
 
-module Debug_runtime = Minidebug_runtime.Flushing (struct
-  let debug_ch = Stdio.stdout
-end)
-
 let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : unit low_level =
   let is_inline tensor =
     let node = Hashtbl.find_exn node_store tensor in

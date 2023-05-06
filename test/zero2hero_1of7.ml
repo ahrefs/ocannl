@@ -17,26 +17,26 @@ let%expect_test "Graph drawing recompile" =
   SDSL.print_node_tree ~with_grad:true ~depth:9 f.id;
   [%expect
     {|
-                               [13] f <+>
-                                6.00e+1
-                               Gradient
-                                1.00e+0
-                          [12] <+>                        │[2] <5>
-                           5.50e+1                        │ 5.00e+0
-                          Gradient                        │
-                           1.00e+0                        │
-           [9] <*.>        │          [11] <*.>           │
-            7.50e+1        │           -2.00e+1           │
-           Gradient        │          Gradient            │
-            1.00e+0        │           1.00e+0            │
-    [8] <3>  │  [6] <**.>  │[10] <-1> │    [4] <*.>       │
-     3.00e+0 │   2.50e+1   │ -1.00e+0 │     2.00e+1       │
-             │  Gradient   │          │    Gradient       │
-             │   3.00e+0   │          │     -1.00e+0      │
-             │[1]│[5] <2>  │          │[3] <4>  │[1] <x>  │
-             │   │ 2.00e+0 │          │ 4.00e+0 │ 5.00e+0 │
-             │   │         │          │         │Gradient │
-             │   │         │          │         │ 2.60e+1 │ |}];
+                                              [13] f <+>
+                                               6.00e+1
+                                              Gradient
+                                               1.00e+0
+                                       [12] <+>                                    │[2] <5> virtual
+                                        5.50e+1                                    │<void>
+                                       Gradient                                    │
+                                        1.00e+0                                    │
+                 [9] <*.>              │                [11] <*.>                  │
+                  7.50e+1              │                 -2.00e+1                  │
+                 Gradient              │                Gradient                   │
+                  1.00e+0              │                 1.00e+0                   │
+    [8] <3> virtual│     [6] <**.>     │[10] <-1> virtual│       [4] <*.>          │
+    <void>         │      2.50e+1      │<void>           │        2.00e+1          │
+                   │     Gradient      │                 │       Gradient          │
+                   │      3.00e+0      │                 │        -1.00e+0         │
+                   │[1]│[5] <2> virtual│                 │[3] <4> virtual│[1] <x>  │
+                   │   │<void>         │                 │<void>         │ 5.00e+0 │
+                   │   │               │                 │               │Gradient │
+                   │   │               │                 │               │ 2.60e+1 │ |}];
   let xs = Array.init 10 ~f:Float.(fun i -> of_int i - 5.) in
   let ys =
     Array.map xs ~f:(fun v ->
@@ -96,22 +96,23 @@ let%expect_test "Graph drawing fetch" =
   let open SDSL.O in
   SDSL.drop_all_sessions ();
   Random.init 0;
+  CDSL.debug_virtual_nodes := true;
   let%nn_op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%nn_op f5 = f 5 in
   SDSL.refresh_session ();
   SDSL.print_node_tree ~with_grad:false ~depth:9 f5.id;
   [%expect
     {|
-                               [12] f <+>
-                                6.00e+1
-                          [11] <+>                        │[2] <5>
-                           5.50e+1                        │ 5.00e+0
-           [8] <*.>        │          [10] <*.>           │
-            7.50e+1        │           -2.00e+1           │
-    [7] <3>  │  [6] <**.>  │[9] <-1>  │     [4] <*.>      │
-     3.00e+0 │   2.50e+1   │ -1.00e+0 │      2.00e+1      │
-             │[1]│[5] <2>  │          │[3] <4>  │[1] <5>  │
-             │   │ 2.00e+0 │          │ 4.00e+0 │ 5.00e+0 │ |}];
+                                                 [12] f <+>
+                                                  6.00e+1
+                                      [11] <+> virtual                                  │[2] <5> virtual
+                                       5.50e+1                                          │ 5.00e+0
+             [8] <*.> virtual          │               [10] <*.> virtual                │
+              7.50e+1                  │                -2.00e+1                        │
+    [7] <3> virtual│ [6] <**.> virtual │[9] <-1> virtual│       [4] <*.> virtual        │
+     3.00e+0       │  2.50e+1          │ -1.00e+0       │        2.00e+1                │
+                   │[1]│[5] <2> virtual│                │[3] <4> virtual│[1] <5> virtual│
+                   │   │ 2.00e+0       │                │ 4.00e+0       │ 5.00e+0       │ |}];
   (* close_session is not necessary. *)
   SDSL.close_session ();
   let size = 100 in

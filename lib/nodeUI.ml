@@ -175,7 +175,6 @@ let retrieve_2d_points ?from_axis ~xdim ~ydim arr =
     iter 0;
     Array.of_list_rev !result
 
-(* module Debug_runtime = Minidebug_runtime.Flushing(struct let debug_ch = Stdio.stdout end) *)
 let retrieve_1d_points ?from_axis ~xdim arr =
   let dims = N.dims arr in
   if Array.is_empty dims then [||]
