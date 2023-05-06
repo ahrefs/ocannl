@@ -1,3 +1,18 @@
+## [0.1.1] -- 2023-05-06
+
+### Added
+
+- An _inline constants_ optimization that compile-time computes scalar constant subexpressions and inlines the values.
+
+### Changed
+
+- Improved debuggability.
+
+### Fixed
+
+- A last-minute breaking bug (would be nice to have a pre-release or a pre-publish hook to run tests!).
+- The virtual nodes optimization is more robust, correct even with aggressive inlining settings (e.g. escaping variables check).
+
 ## [0.1.0] -- 2023-05-04
 
 ### Added
