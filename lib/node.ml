@@ -5,24 +5,34 @@ module A = Bigarray.Genarray
 
 type ('a, 'b, 'c) bigarray = ('a, 'b, 'c) A.t
 
-let sexp_of_bigarray (_arr : ('a, 'b, 'c) bigarray) = Sexp.Atom "<opaque_bigarray>"
+let sexp_of_bigarray (arr : ('a, 'b, 'c) bigarray) =
+  let dims = A.dims arr in
+  Sexp.Atom ("<bigarray_dims_" ^ String.concat_array ~sep:"x" (Array.map dims ~f:Int.to_string))
 
 (* type bit_as_bool_nd = (bool, Bigarray.bool_elt, Bigarray.c_layout) bigarray *)
 type byte_as_int_nd = (int, Bigarray.int8_signed_elt, Bigarray.c_layout) bigarray
 
-let sexp_of_byte_as_int_nd (_arr : byte_as_int_nd) = Sexp.Atom "<opaque_byte_as_int_nd>"
+let sexp_of_byte_as_int_nd (arr : byte_as_int_nd) =
+  let dims = A.dims arr in
+  Sexp.Atom ("<byte_as_int_nd_dims_" ^ String.concat_array ~sep:"x" (Array.map dims ~f:Int.to_string))
 
 type half_as_int_nd = (int, Bigarray.int16_signed_elt, Bigarray.c_layout) bigarray
 
-let sexp_of_half_as_int_nd (_arr : half_as_int_nd) = Sexp.Atom "<opaque_half_as_int_nd>"
+let sexp_of_half_as_int_nd (arr : half_as_int_nd) =
+  let dims = A.dims arr in
+  Sexp.Atom ("<half_as_int_nd_dims_" ^ String.concat_array ~sep:"x" (Array.map dims ~f:Int.to_string))
 
 type single_nd = (float, Bigarray.float32_elt, Bigarray.c_layout) bigarray
 
-let sexp_of_single_nd (_arr : single_nd) = Sexp.Atom "<opaque_single_nd>"
+let sexp_of_single_nd (arr : single_nd) =
+  let dims = A.dims arr in
+  Sexp.Atom ("<single_nd_dims_" ^ String.concat_array ~sep:"x" (Array.map dims ~f:Int.to_string))
 
 type double_nd = (float, Bigarray.float64_elt, Bigarray.c_layout) bigarray
 
-let sexp_of_double_nd (_arr : double_nd) = Sexp.Atom "<opaque_double_nd>"
+let sexp_of_double_nd (arr : double_nd) =
+  let dims = A.dims arr in
+  Sexp.Atom ("<double_nd_dims_" ^ String.concat_array ~sep:"x" (Array.map dims ~f:Int.to_string))
 
 type ndarray =
   (* | Bit_as_bool_nd of bit_as_bool_nd *)
@@ -189,7 +199,10 @@ let empty prec = create_array prec [||] (Constant_fill [| 0.0 |])
 type t = { mutable value : ndarray; mutable grad : ndarray option; id : int } [@@deriving sexp_of]
 
 let size_in_bytes n =
-  let size = map_as_bigarray { f = A.size_in_bytes } in
+  (* Cheating here because 1 number Bigarray is same size as empty Bigarray:
+     it's more informative to report the cases differently. *)
+  let f arr = if Array.is_empty @@ A.dims arr then 0 else A.size_in_bytes arr in
+  let size = map_as_bigarray { f } in
   size n.value + Option.value_map ~f:size n.grad ~default:0
 
 exception Runtime_error of string * t option
@@ -211,7 +224,7 @@ let global =
 
 let global_size_in_bytes () =
   Hashtbl.fold global.node_store ~init:0 ~f:(fun ~key:_ ~data sum -> sum + size_in_bytes data)
-  
+
 let get uid = Hashtbl.find_exn global.node_store uid
 
 let get_value (type val_t arr_t) (prec : (val_t, arr_t) precision) uid : arr_t =

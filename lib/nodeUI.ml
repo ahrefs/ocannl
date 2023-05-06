@@ -247,9 +247,9 @@ let render_tensor ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labe
     (arr : N.ndarray) =
   let module B = PrintBox in
   let dims = N.dims arr in
-  if Array.is_empty dims then B.line "<void>"
+  let header = prefix in
+  if Array.is_empty dims then B.vlist ~bars:false [ B.text header; B.line "<void>" ]
   else
-    let header = prefix in
     let indices = Array.copy indices in
     let entries_per_axis = if entries_per_axis % 2 = 0 then entries_per_axis + 1 else entries_per_axis in
     let var_indices = Array.filter_mapi indices ~f:(fun i d -> if d <= -1 then Some (5 + d, i) else None) in
