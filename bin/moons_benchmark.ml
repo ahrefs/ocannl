@@ -10,8 +10,9 @@ let _suspended () =
   (* let open Operation.FDSL in *)
   let open SDSL.O in
   SDSL.set_executor Interpreter;
-  SDSL.enable_all_debugs ();
+  SDSL.enable_all_debugs ~trace_interpreter:true ();
   CDSL.virtualize_settings.virtualize <- true;
+  CDSL.virtualize_settings.inline_constants <- true;
   SDSL.drop_all_sessions ();
   Random.init 0;
   let len = 400 in
@@ -84,29 +85,32 @@ let _suspended () =
   SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
   SDSL.refresh_session ();
   Stdio.printf "\nStep 4: loss %f\n%!" total_loss.@[0];
-  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
+  Stdio.printf "\nSize in bytes: %d\n%!" (SDSL.global_size_in_bytes ())
 
-let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff precision () =
-  let epochs = 20000 in
+let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_constants = true) precision () =
+  (* let epochs = 20000 in *)
   (* let epochs = 2000 in *)
   (* let epochs = 200 in *)
-  (* let epochs = 20 in *)
+  let epochs = 20 in
   let bench_title =
     Sexp.to_string_hum
-    @@ [%sexp_of: string * Session.backend * string * int * string * int * NodeUI.prec]
-         ( (if virtualize then "virtualized" else "non-virt."),
+    @@ [%sexp_of: string * Session.backend * string * int * string * int * string * NodeUI.prec]
+         ( (if virtualize then "virtu." else "non-v."),
            executor,
            "gcc-opt",
            opti_level,
-           "inlining-cutoff",
+           "inlining",
            inlining_cutoff,
+           (if inline_constants then "..." else "NIC"),
            precision )
   in
   Stdio.prerr_endline @@ "\n\n****** Benchmarking virtualized: " ^ bench_title ^ " for "
-  ^ Int.to_string epochs ^ " epochs ******";
+  ^ Int.to_string epochs ^ " epochs  (NIC = Not Inlining Constants) ******";
   CDSL.debug_virtual_nodes := false;
   CDSL.virtualize_settings.virtualize <- virtualize;
   CDSL.virtualize_settings.max_visits <- inlining_cutoff;
+  CDSL.virtualize_settings.inline_constants <- inline_constants;
   SDSL.set_executor executor;
   SDSL.default_value_prec := precision;
   SDSL.default_grad_prec := precision;
@@ -280,51 +284,92 @@ let benchmarks =
   [
     (* (classify_moons ~virtualize:false Interpreter ~opti_level:3 ~inlining_cutoff:3 CDSL.single); *)
     (* (classify_moons ~virtualize:false OCaml ~opti_level:3 ~inlining_cutoff:3 CDSL.single); *)
-    classify_moons ~virtualize:false Gccjit ~opti_level:0 ~inlining_cutoff:3 CDSL.single;
-    classify_moons ~virtualize:false Gccjit ~opti_level:1 ~inlining_cutoff:3 CDSL.single;
-    classify_moons ~virtualize:false Gccjit ~opti_level:2 ~inlining_cutoff:3 CDSL.single;
+    (* classify_moons ~virtualize:false Gccjit ~opti_level:0 ~inlining_cutoff:3 CDSL.single; *)
+    (* classify_moons ~virtualize:false Gccjit ~opti_level:1 ~inlining_cutoff:3 CDSL.single; *)
+    (* classify_moons ~virtualize:false Gccjit ~opti_level:2 ~inlining_cutoff:3 CDSL.single; *)
     classify_moons ~virtualize:false Gccjit ~opti_level:3 ~inlining_cutoff:3 CDSL.single;
+    (* ( classify_moons ~virtualize:true Interpreter ~opti_level:3 ~inlining_cutoff:3 ~inline_constants:false CDSL.single); *)
+    (* (classify_moons ~virtualize:true OCaml ~opti_level:3 ~inlining_cutoff:3 ~inline_constants:false CDSL.single); *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:3 ~inline_constants:false
+      CDSL.single; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:1 ~inlining_cutoff:3 ~inline_constants:false
+      CDSL.single; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:3 ~inline_constants:false
+      CDSL.single; *)
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~inline_constants:false
+      CDSL.single;
     (* ( classify_moons ~virtualize:true Interpreter ~opti_level:3 ~inlining_cutoff:3 CDSL.single); *)
     (* (classify_moons ~virtualize:true OCaml ~opti_level:3 ~inlining_cutoff:3 CDSL.single); *)
-    classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:3 CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:1 ~inlining_cutoff:3 CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:3 CDSL.single;
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:3 CDSL.single; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:1 ~inlining_cutoff:3 CDSL.single; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:3 CDSL.single; *)
     classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 CDSL.single;
     (* (classify_moons ~virtualize:false Interpreter ~opti_level:3 ~inlining_cutoff:3 CDSL.double); *)
     (* (classify_moons ~virtualize:false OCaml ~opti_level:3 ~inlining_cutoff:3 CDSL.double); *)
-    classify_moons ~virtualize:false Gccjit ~opti_level:0 ~inlining_cutoff:3 CDSL.double;
-    classify_moons ~virtualize:false Gccjit ~opti_level:1 ~inlining_cutoff:3 CDSL.double;
-    classify_moons ~virtualize:false Gccjit ~opti_level:2 ~inlining_cutoff:3 CDSL.double;
-    classify_moons ~virtualize:false Gccjit ~opti_level:3 ~inlining_cutoff:3 CDSL.double;
+    (* classify_moons ~virtualize:false Gccjit ~opti_level:0 ~inlining_cutoff:3 CDSL.double; *)
+    (* classify_moons ~virtualize:false Gccjit ~opti_level:1 ~inlining_cutoff:3 CDSL.double; *)
+    (* classify_moons ~virtualize:false Gccjit ~opti_level:2 ~inlining_cutoff:3 CDSL.double; *)
+    (* classify_moons ~virtualize:false Gccjit ~opti_level:3 ~inlining_cutoff:3 CDSL.double; *)
+    (* (classify_moons ~virtualize:true Interpreter ~opti_level:3 ~inlining_cutoff:3 ~inline_constants:false CDSL.double); *)
+    (* (classify_moons ~virtualize:true OCaml ~opti_level:3 ~inlining_cutoff:3 ~inline_constants:false CDSL.double); *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:3 ~inline_constants:false
+      CDSL.double; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:1 ~inlining_cutoff:3 ~inline_constants:false
+      CDSL.double; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:3 ~inline_constants:false
+      CDSL.double; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~inline_constants:false
+      CDSL.double; *)
     (* (classify_moons ~virtualize:true Interpreter ~opti_level:3 ~inlining_cutoff:3 CDSL.double); *)
     (* (classify_moons ~virtualize:true OCaml ~opti_level:3 ~inlining_cutoff:3 CDSL.double); *)
-    classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:3 CDSL.double;
-    classify_moons ~virtualize:true Gccjit ~opti_level:1 ~inlining_cutoff:3 CDSL.double;
-    classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:3 CDSL.double;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 CDSL.double;
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:3 CDSL.double; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:1 ~inlining_cutoff:3 CDSL.double; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:3 CDSL.double; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 CDSL.double; *)
+    (* ( classify_moons ~virtualize:true Interpreter ~opti_level:3 ~inlining_cutoff:5 ~inline_constants:false CDSL.single); *)
+    (* (classify_moons ~virtualize:true OCaml ~opti_level:3 ~inlining_cutoff:5 ~inline_constants:false CDSL.single); *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:5 ~inline_constants:false
+      CDSL.single; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:1 ~inlining_cutoff:5 ~inline_constants:false
+      CDSL.single; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:5 ~inline_constants:false
+      CDSL.single; *)
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~inline_constants:false
+      CDSL.single;
     (* ( classify_moons ~virtualize:true Interpreter ~opti_level:3 ~inlining_cutoff:5 CDSL.single); *)
     (* (classify_moons ~virtualize:true OCaml ~opti_level:3 ~inlining_cutoff:5 CDSL.single); *)
-    classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:5 CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:1 ~inlining_cutoff:5 CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:5 CDSL.single;
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:5 CDSL.single; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:1 ~inlining_cutoff:5 CDSL.single; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:5 CDSL.single; *)
     classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 CDSL.single;
+    (* (classify_moons ~virtualize:true Interpreter ~opti_level:3 ~inlining_cutoff:5 ~inline_constants:false CDSL.double); *)
+    (* (classify_moons ~virtualize:true OCaml ~opti_level:3 ~inlining_cutoff:5 ~inline_constants:false CDSL.double); *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:5 ~inline_constants:false
+      CDSL.double; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:1 ~inlining_cutoff:5 ~inline_constants:false
+      CDSL.double; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:5 ~inline_constants:false
+      CDSL.double; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~inline_constants:false
+      CDSL.double; *)
     (* (classify_moons ~virtualize:true Interpreter ~opti_level:3 ~inlining_cutoff:5 CDSL.double); *)
     (* (classify_moons ~virtualize:true OCaml ~opti_level:3 ~inlining_cutoff:5 CDSL.double); *)
-    classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:5 CDSL.double;
-    classify_moons ~virtualize:true Gccjit ~opti_level:1 ~inlining_cutoff:5 CDSL.double;
-    classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:5 CDSL.double;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 CDSL.double;
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:5 CDSL.double; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:1 ~inlining_cutoff:5 CDSL.double; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:5 CDSL.double; *)
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 CDSL.double; *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:9 CDSL.single; *)
-    (* classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:9 CDSL.single; *)
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:9 ~inline_constants:false CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:9 CDSL.single;
   ]
 
 let _suspended () =
-  ignore @@ classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:9 CDSL.single ()
+  ignore @@ classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 CDSL.single ()
 
 let () =
   List.map benchmarks ~f:(fun bench -> bench ()) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
-(* Example output from back when using core_bench, 200 epochs:
+(* Example output from back when using core_bench, 200 epochs (all are non-virtual):
 
     ┌────────────────────────────────┬──────────────┬─────────────┬────────────┬────────────┬────────────┐
     │ Name                           │     Time/Run │     mWd/Run │   mjWd/Run │   Prom/Run │ Percentage │
@@ -355,7 +400,7 @@ let () =
     │ virtualized gccjit O3 double   │   2_237.71ms │      9.06Mw │   875.33kw │   867.32kw │      1.80% │
     └────────────────────────────────┴──────────────┴─────────────┴────────────┴────────────┴────────────┘
 
-    Example output from back when using core_bench,  20000 epochs:
+    Example output from back when using core_bench, 20000 epochs (all are non-virtual):
 
     ┌──────────────────────────────┬──────────┬─────────┬──────────┬──────────┬────────────┐
     │ Name                         │ Time/Run │ mWd/Run │ mjWd/Run │ Prom/Run │ Percentage │
@@ -378,66 +423,45 @@ let () =
     │ virtualized gccjit O3 double │   17.72s │ 99.03Mw │   1.42Mw │   1.18Mw │     16.80% │
     └──────────────────────────────┴──────────┴─────────┴──────────┴──────────┴────────────┘
 
-    Example 2000 epochs:
-    ┌────────────────────────────────────────────────────────────┬─────────────┬───────────────┬───────┬────────┬───────────────────────────────────────────┐
-    │Benchmarks                                                  │Time in sec  │Memory in bytes│Speedup│Mem gain│min minibatch loss, last epoch loss        │
-    ├────────────────────────────────────────────────────────────┼─────────────┼───────────────┼───────┼────────┼───────────────────────────────────────────┤
-    │(non-virt. Gccjit gcc-opt 0 inlining-cutoff 3 Single_prec)  │9.363082589  │38120          │21.056 │2.000   │(0.0077278576791286469 0.61822861433029175)│
-    │(non-virt. Gccjit gcc-opt 1 inlining-cutoff 3 Single_prec)  │2.873905738  │38120          │68.601 │2.000   │(0.0077278576791286469 0.61822861433029175)│
-    │(non-virt. Gccjit gcc-opt 2 inlining-cutoff 3 Single_prec)  │2.195167832  │38120          │89.812 │2.000   │(0.0077278576791286469 0.61822861433029175)│
-    │(non-virt. Gccjit gcc-opt 3 inlining-cutoff 3 Single_prec)  │2.934629743  │38120          │67.181 │2.000   │(0.0077278576791286469 0.61822861433029175)│
-    │(virtualized Gccjit gcc-opt 0 inlining-cutoff 3 Single_prec)│8.592617129  │24716          │22.944 │3.085   │(0.0077278576791286469 0.61822861433029175)│
-    │(virtualized Gccjit gcc-opt 1 inlining-cutoff 3 Single_prec)│2.444529065  │24716          │80.650 │3.085   │(0.0077278576791286469 0.61822861433029175)│
-    │(virtualized Gccjit gcc-opt 2 inlining-cutoff 3 Single_prec)│2.027041724  │24716          │97.261 │3.085   │(0.0077278576791286469 0.61822861433029175)│
-    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 3 Single_prec)│2.398860232  │24716          │82.186 │3.085   │(0.0077278576791286469 0.61822861433029175)│
-    │(non-virt. Gccjit gcc-opt 0 inlining-cutoff 3 Double_prec)  │10.609319968 │76240          │18.583 │1.000   │(0.0077286884825175511 0.61829524345436948)│
-    │(non-virt. Gccjit gcc-opt 1 inlining-cutoff 3 Double_prec)  │3.261412221  │76240          │60.450 │1.000   │(0.0077286884825175511 0.61829524345436948)│
-    │(non-virt. Gccjit gcc-opt 2 inlining-cutoff 3 Double_prec)  │2.733746302  │76240          │72.118 │1.000   │(0.0077286884825175511 0.61829524345436948)│
-    │(non-virt. Gccjit gcc-opt 3 inlining-cutoff 3 Double_prec)  │3.709142786  │76240          │53.153 │1.000   │(0.0077286884825175511 0.61829524345436948)│
-    │(virtualized Gccjit gcc-opt 0 inlining-cutoff 3 Double_prec)│9.54255515   │49432          │20.660 │1.542   │(0.0077286884825175511 0.61829524345436948)│
-    │(virtualized Gccjit gcc-opt 1 inlining-cutoff 3 Double_prec)│2.800555966  │49432          │70.398 │1.542   │(0.0077286884825175511 0.61829524345436948)│
-    │(virtualized Gccjit gcc-opt 2 inlining-cutoff 3 Double_prec)│2.456941883  │49432          │80.243 │1.542   │(0.0077286884825175511 0.61829524345436948)│
-    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 3 Double_prec)│2.723720642  │49432          │72.383 │1.542   │(0.0077286884825175511 0.61829524345436948)│
-    │(virtualized Gccjit gcc-opt 0 inlining-cutoff 5 Single_prec)│11.233905314 │24404          │17.550 │3.124   │(0.0077278576791286469 0.61822861433029175)│
-    │(virtualized Gccjit gcc-opt 1 inlining-cutoff 5 Single_prec)│3.297283659  │24404          │59.792 │3.124   │(0.0077278576791286469 0.61822861433029175)│
-    │(virtualized Gccjit gcc-opt 2 inlining-cutoff 5 Single_prec)│2.368921285  │24404          │83.225 │3.124   │(0.0077278576791286469 0.61822861433029175)│
-    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 5 Single_prec)│2.816892199  │24404          │69.989 │3.124   │(0.0077278576791286469 0.61822861433029175)│
-    │(virtualized Gccjit gcc-opt 0 inlining-cutoff 5 Double_prec)│10.950143674 │48808          │18.005 │1.562   │(0.0077286884825175511 0.61829524345436948)│
-    │(virtualized Gccjit gcc-opt 1 inlining-cutoff 5 Double_prec)│3.167095918  │48808          │62.250 │1.562   │(0.0077286884825175511 0.61829524345436948)│
-    │(virtualized Gccjit gcc-opt 2 inlining-cutoff 5 Double_prec)│2.456218661  │48808          │80.267 │1.562   │(0.0077286884825175511 0.61829524345436948)│
-    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 5 Double_prec)│3.040533753  │48808          │64.841 │1.562   │(0.0077286884825175511 0.61829524345436948)│
-    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 9 Single_prec)│197.152418626│20940          │1.000  │3.641   │(0.0077278576791286469 0.61822861433029175)│
-    └────────────────────────────────────────────────────────────┴─────────────┴───────────────┴───────┴────────┴───────────────────────────────────────────┘
+    Example 20000 epochs, NIC = Not Inlining Constants:
+  
+    ┌────────────────────────────────────────────────────┬─────────────┬───────────────┬───────┬────────┬─────────────────────────────────────────────┐
+    │Benchmarks                                          │Time in sec  │Memory in bytes│Speedup│Mem gain│min minibatch loss, last epoch loss          │
+    ├────────────────────────────────────────────────────┼─────────────┼───────────────┼───────┼────────┼─────────────────────────────────────────────┤
+    │(non-v. Gccjit gcc-opt 0 inlining 3 ... Single_prec)│101.021516776│38072          │1.045  │2.000   │(0.00042827261495403945 0.034261809196323156)│
+    │(non-v. Gccjit gcc-opt 2 inlining 3 ... Single_prec)│19.912496753 │38072          │5.301  │2.000   │(0.00042827261495403945 0.034261809196323156)│
+    │(non-v. Gccjit gcc-opt 3 inlining 3 ... Single_prec)│15.544545288 │38072          │6.790  │2.000   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtu. Gccjit gcc-opt 0 inlining 3 NIC Single_prec)│94.163581659 │24472          │1.121  │3.111   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtu. Gccjit gcc-opt 2 inlining 3 NIC Single_prec)│18.416218613 │24472          │5.732  │3.111   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtu. Gccjit gcc-opt 3 inlining 3 NIC Single_prec)│14.896624094 │24472          │7.086  │3.111   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtu. Gccjit gcc-opt 0 inlining 3 ... Single_prec)│94.430359833 │24372          │1.118  │3.124   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtu. Gccjit gcc-opt 2 inlining 3 ... Single_prec)│17.247103467 │24372          │6.120  │3.124   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtu. Gccjit gcc-opt 3 inlining 3 ... Single_prec)│13.818436994 │24372          │7.639  │3.124   │(0.00042827261495403945 0.034261809196323156)│
+    │(non-v. Gccjit gcc-opt 3 inlining 3 ... Double_prec)│16.689233327 │76144          │6.325  │1.000   │(0.00039677893178988915 0.031742315389520596)│
+    │(virtu. Gccjit gcc-opt 3 inlining 3 NIC Double_prec)│15.8861714   │48944          │6.644  │1.556   │(0.000423889497540527 0.033911160707398469)  │
+    │(virtu. Gccjit gcc-opt 3 inlining 3 ... Double_prec)│14.124670616 │48744          │7.473  │1.562   │(0.00040795928131523104 0.032636843225462668)│
+    │(virtu. Gccjit gcc-opt 0 inlining 5 NIC Single_prec)│105.55315567 │24152          │1.000  │3.153   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtu. Gccjit gcc-opt 2 inlining 5 NIC Single_prec)│19.026866424 │24152          │5.548  │3.153   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtu. Gccjit gcc-opt 3 inlining 5 NIC Single_prec)│15.752430923 │24152          │6.701  │3.153   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtu. Gccjit gcc-opt 0 inlining 5 ... Single_prec)│104.954749848│24052          │1.006  │3.166   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtu. Gccjit gcc-opt 2 inlining 5 ... Single_prec)│17.903592128 │24052          │5.896  │3.166   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtu. Gccjit gcc-opt 3 inlining 5 ... Single_prec)│15.010505377 │24052          │7.032  │3.166   │(0.00042827261495403945 0.034261809196323156)│
+    │(virtu. Gccjit gcc-opt 3 inlining 5 NIC Double_prec)│16.499116244 │48304          │6.398  │1.576   │(0.000423889497540527 0.033911160707398469)  │
+    │(virtu. Gccjit gcc-opt 3 inlining 5 ... Double_prec)│15.14814802  │48104          │6.968  │1.583   │(0.00040795928131523104 0.032636843225462668)│
+    └────────────────────────────────────────────────────┴─────────────┴───────────────┴───────┴────────┴─────────────────────────────────────────────┘
 
-    Example 20000 epochs:
+    Another example 20 epochs:
 
-    ┌────────────────────────────────────────────────────────────┬─────────────┬───────────────┬───────┬────────┬─────────────────────────────────────────────┐
-    │Benchmarks                                                  │Time in sec  │Memory in bytes│Speedup│Mem gain│min minibatch loss, last epoch loss          │
-    ├────────────────────────────────────────────────────────────┼─────────────┼───────────────┼───────┼────────┼─────────────────────────────────────────────┤
-    │(non-virt. Gccjit gcc-opt 0 inlining-cutoff 3 Single_prec)  │99.919336656 │38120          │1.075  │2.000   │(0.00042827261495403945 0.034261809196323156)│
-    │(non-virt. Gccjit gcc-opt 1 inlining-cutoff 3 Single_prec)  │26.841802306 │38120          │4.004  │2.000   │(0.00042827261495403945 0.034261809196323156)│
-    │(non-virt. Gccjit gcc-opt 2 inlining-cutoff 3 Single_prec)  │18.830494507 │38120          │5.707  │2.000   │(0.00042827261495403945 0.034261809196323156)│
-    │(non-virt. Gccjit gcc-opt 3 inlining-cutoff 3 Single_prec)  │15.097430759 │38120          │7.118  │2.000   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtualized Gccjit gcc-opt 0 inlining-cutoff 3 Single_prec)│94.391626625 │24716          │1.138  │3.085   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtualized Gccjit gcc-opt 1 inlining-cutoff 3 Single_prec)│23.370498677 │24716          │4.598  │3.085   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtualized Gccjit gcc-opt 2 inlining-cutoff 3 Single_prec)│18.852757047 │24716          │5.700  │3.085   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 3 Single_prec)│14.697218311 │24716          │7.312  │3.085   │(0.00042827261495403945 0.034261809196323156)│
-    │(non-virt. Gccjit gcc-opt 0 inlining-cutoff 3 Double_prec)  │102.817266337│76240          │1.045  │1.000   │(0.000423889497540527 0.033911160707398469)  │
-    │(non-virt. Gccjit gcc-opt 1 inlining-cutoff 3 Double_prec)  │27.8414052   │76240          │3.860  │1.000   │(0.000423889497540527 0.033911160707398469)  │
-    │(non-virt. Gccjit gcc-opt 2 inlining-cutoff 3 Double_prec)  │19.248354695 │76240          │5.583  │1.000   │(0.000423889497540527 0.033911160707398469)  │
-    │(non-virt. Gccjit gcc-opt 3 inlining-cutoff 3 Double_prec)  │16.399841631 │76240          │6.553  │1.000   │(0.000423889497540527 0.033911160707398469)  │
-    │(virtualized Gccjit gcc-opt 0 inlining-cutoff 3 Double_prec)│95.197089297 │49432          │1.129  │1.542   │(0.000423889497540527 0.033911160707398469)  │
-    │(virtualized Gccjit gcc-opt 1 inlining-cutoff 3 Double_prec)│24.125311743 │49432          │4.454  │1.542   │(0.000423889497540527 0.033911160707398469)  │
-    │(virtualized Gccjit gcc-opt 2 inlining-cutoff 3 Double_prec)│19.965895234 │49432          │5.382  │1.542   │(0.000423889497540527 0.033911160707398469)  │
-    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 3 Double_prec)│15.533763234 │49432          │6.918  │1.542   │(0.000423889497540527 0.033911160707398469)  │
-    │(virtualized Gccjit gcc-opt 0 inlining-cutoff 5 Single_prec)│105.764751222│24404          │1.016  │3.124   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtualized Gccjit gcc-opt 1 inlining-cutoff 5 Single_prec)│27.024510357 │24404          │3.976  │3.124   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtualized Gccjit gcc-opt 2 inlining-cutoff 5 Single_prec)│19.241918666 │24404          │5.585  │3.124   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 5 Single_prec)│15.775829198 │24404          │6.812  │3.124   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtualized Gccjit gcc-opt 0 inlining-cutoff 5 Double_prec)│107.461904166│48808          │1.000  │1.562   │(0.000423889497540527 0.033911160707398469)  │
-    │(virtualized Gccjit gcc-opt 1 inlining-cutoff 5 Double_prec)│28.517341334 │48808          │3.768  │1.562   │(0.000423889497540527 0.033911160707398469)  │
-    │(virtualized Gccjit gcc-opt 2 inlining-cutoff 5 Double_prec)│19.386238972 │48808          │5.543  │1.562   │(0.000423889497540527 0.033911160707398469)  │
-    │(virtualized Gccjit gcc-opt 3 inlining-cutoff 5 Double_prec)│16.445398178 │48808          │6.534  │1.562   │(0.000423889497540527 0.033911160707398469)  │
-    └────────────────────────────────────────────────────────────┴─────────────┴───────────────┴───────┴────────┴─────────────────────────────────────────────┘
+    ┌────────────────────────────────────────────────────┬───────────┬───────────────┬───────┬────────┬──────────────────────────────────────┐
+    │Benchmarks                                          │Time in sec│Memory in bytes│Speedup│Mem gain│min minibatch loss, last epoch loss   │
+    ├────────────────────────────────────────────────────┼───────────┼───────────────┼───────┼────────┼──────────────────────────────────────┤
+    │(non-v. Gccjit gcc-opt 3 inlining 3 ... Single_prec)│1.774250802│38072          │2.412  │1.000   │(1.1707446575164795 93.65994119644165)│
+    │(virtu. Gccjit gcc-opt 3 inlining 3 NIC Single_prec)│1.207835761│24472          │3.543  │1.556   │(1.1707446575164795 93.65994119644165)│
+    │(virtu. Gccjit gcc-opt 3 inlining 3 ... Single_prec)│1.236990811│24372          │3.460  │1.562   │(1.1707446575164795 93.65994119644165)│
+    │(virtu. Gccjit gcc-opt 3 inlining 5 NIC Single_prec)│1.304117912│24152          │3.282  │1.576   │(1.1707446575164795 93.65994119644165)│
+    │(virtu. Gccjit gcc-opt 3 inlining 5 ... Single_prec)│1.255166352│24052          │3.410  │1.583   │(1.1707446575164795 93.65994119644165)│
+    │(virtu. Gccjit gcc-opt 3 inlining 9 NIC Single_prec)│4.279828003│20632          │1.000  │1.845   │(1.1707446575164795 93.65994119644165)│
+    │(virtu. Gccjit gcc-opt 3 inlining 9 ... Single_prec)│3.924971464│20532          │1.090  │1.854   │(1.1707446575164795 93.65994119644165)│
+    └────────────────────────────────────────────────────┴───────────┴───────────────┴───────┴────────┴──────────────────────────────────────┘
 
-*)
+    *)
