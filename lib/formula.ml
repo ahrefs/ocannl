@@ -291,12 +291,12 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
     ?deduced ?init_op ?fetch_op () =
   if needs_gradient && not is_form then
     raise @@ Session_error ("Formula.term ~needs_gradient:true: a non-form formula cannot need gradient", None);
-  let literal: bool =
+  let literal : bool =
     if needs_gradient then false
     else match (init_op, fetch_op) with Some (Code.Constant_fill [| _ |]), None -> true | _ -> false
   in
-  let op_label: string = label in
-  let n: NodeUI.t =
+  let op_label : string = label in
+  let n : NodeUI.t =
     NodeUI.create ~value_prec:!default_value_prec ~grad_prec:!default_grad_prec ~literal ~needs_gradient ()
       ~op_label ?desc_label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children:[] ()
   in
@@ -313,7 +313,9 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
   (* Note: we could embed the fetching code in the forward computation instead, but then we miss out
       on potential optimizations. E.g. fetching latency means it's important to do it early and
      in parallel. *)
-  let init_op: Code.init_op = Option.value_or_thunk init_op ~default:(fun () -> Code.Constant_fill [| 0.0 |]) in
+  let init_op : Code.init_op =
+    Option.value_or_thunk init_op ~default:(fun () -> Code.Constant_fill [| 0.0 |])
+  in
   session_initializations := create ~id ~init_op Value shape :: !session_initializations;
   (if literal && Code.virtualize_settings.inline_constants then
      let fetch_op : Code.fetch_op =
@@ -326,7 +328,7 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
       match fetch_op with
       | None -> true
       | Some fetch_op ->
-        let fetch_op = fetch_op ~n in
+          let fetch_op = fetch_op ~n in
           let fetch = Fetch { tensor = { id; field = Value }; fetch_op } in
           session_prepare_forward := fetch :: !session_prepare_forward;
           (match fetch_op with Constant _ -> () | _ -> n.cannot_be_virtual <- true);
