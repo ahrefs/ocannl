@@ -20,8 +20,7 @@ type init_op = N.init_op =
 
 (** Resets a tensor by performing the specified computation or data fetching. *)
 type fetch_op =
-  | Zeros
-  | Ones
+  | Constant of float
   | Synthetic of t
   | Imported of { func : string (* params: Gccjit.rvalue list *) }
 [@@deriving sexp]
@@ -187,7 +186,7 @@ let rec to_low_level (code : t) : unit low_level =
       let for_loops =
         loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators)
       in
-      if zero_out then Lines [| to_low_level (Fetch { tensor = lhs; fetch_op = Zeros }); for_loops |]
+      if zero_out then Lines [| to_low_level (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
       else for_loops
   | Accum_unop { zero_out; accum; op; lhs; rhs; projections } ->
       let projections = projections () in
@@ -210,7 +209,7 @@ let rec to_low_level (code : t) : unit low_level =
       let for_loops =
         loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators)
       in
-      if zero_out then Lines [| to_low_level (Fetch { tensor = lhs; fetch_op = Zeros }); for_loops |]
+      if zero_out then Lines [| to_low_level (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
       else for_loops
   | Block_comment (s, c) -> Lines [| Comment s; to_low_level c |]
   | Noop -> Lines [||]
@@ -223,8 +222,7 @@ let rec to_low_level (code : t) : unit low_level =
       | _, Lines ls2 -> Lines (Array.append [| ll1 |] ls2)
       | Lines ls1, _ -> Lines (Array.append ls1 [| ll2 |])
       | _ -> Lines [| ll1; ll2 |])
-  | Fetch { tensor; fetch_op = Zeros } -> Fill { tensor; value = Constant 0. }
-  | Fetch { tensor; fetch_op = Ones } -> Fill { tensor; value = Constant 1. }
+  | Fetch { tensor; fetch_op = Constant c } -> Fill { tensor; value = Constant c }
   | Fetch { tensor = _; fetch_op = Synthetic gen } -> to_low_level gen
   | Fetch { tensor = _; fetch_op = Imported { func = _ } } ->
       (* FIXME: NOT IMPLEMENTED YET *)
@@ -432,6 +430,17 @@ let interpreter_error_message ~name ~prefix ?extra_error_msg ~contents exc =
   Buffer.contents message
 
 (** *** Optimization *** *)
+
+type virtualize_settings = {
+  mutable virtualize : bool;
+  mutable max_visits : int;
+  mutable consider_grads : bool;
+  mutable inline_constants : bool;
+}
+
+let virtualize_settings =
+  { virtualize = true; max_visits = 3; consider_grads = false; inline_constants = true }
+
 type visits =
   | Visits of int
   | Recurrent  (** A [Recurrent] visit is when there is an access prior to any assignment in an update. *)
@@ -452,6 +461,7 @@ type data_node = {
       (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
   mutable fill : float low_level option;
   mutable non_virtual : bool;
+  mutable scalar : float option;
 }
 [@@deriving sexp_of]
 
@@ -466,7 +476,51 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         accesses = Hashtbl.Poly.create ();
         fill = None;
         non_virtual = (NodeUI.get uid.id).cannot_be_virtual;
+        scalar = None;
       })
+
+let precompute_constants ?idcs node_store top_node llv =
+  let exception Non_literal of int in
+  let rec loop llv =
+    match llv with
+    | Constant c -> c
+    | Get (ptr, indices) ->
+        let node = get_node node_store ptr in
+        Array.iter indices ~f:(function Shape.Fixed_idx 0 -> () | _ -> raise @@ Non_literal 1);
+        Option.value_or_thunk node.scalar ~default:(fun () -> raise @@ Non_literal 2)
+    | Local_scope { id; orig_indices; _ } ->
+        let node = get_node node_store id.tensor in
+        Array.iter orig_indices ~f:(function Shape.Fixed_idx 0 -> () | _ -> raise @@ Non_literal 3);
+        Option.value_or_thunk node.scalar ~default:(fun () -> raise @@ Non_literal 4)
+    | Get_local scope_id ->
+        let node = get_node node_store scope_id.tensor in
+        Option.value_or_thunk node.scalar ~default:(fun () -> raise @@ Non_literal 5)
+    | Binop (Arg1, llv1, _llv2) -> loop llv1
+    | Binop (Arg2, _llv1, llv2) -> loop llv2
+    | Binop (Add, llv1, llv2) -> Float.(loop llv1 + loop llv2)
+    | Binop (Mul, llv1, llv2) -> Float.(loop llv1 * loop llv2)
+    | Binop (ToPowOf, llv1, llv2) ->
+        let v1 = loop llv1 in
+        let v2 = loop llv2 in
+        Float.(if is_integer v2 then int_pow v1 @@ to_int v2 else v1 ** v2)
+    | Binop (Relu_gate, llv1, llv2) -> Float.(if loop llv1 > 0.0 then loop llv2 else 0.0)
+    | Unop (Identity, llv) -> loop llv
+    | Unop (Relu, llv) ->
+        let v = loop llv in
+        Float.(if v > 0.0 then v else 0.0)
+  in
+  try
+    let n = NodeUI.get top_node.id in
+    if n.cannot_be_virtual then raise @@ Non_literal 8;
+    if (not @@ Hashtbl.is_empty top_node.accesses) && not n.literal then raise @@ Non_literal 6;
+    (match idcs with
+    | None -> ()
+    | Some idcs ->
+        if Array.exists idcs ~f:(function Shape.Fixed_idx 0 -> false | _ -> true) then raise @@ Non_literal 7);
+    top_node.scalar <- Some (loop llv)
+  with Non_literal _ ->
+    (* In principle we might conclude again that the node is to be inlined as scalar, that's OK. *)
+    top_node.scalar <- None
 
 let visit fill assign_bag old =
   if Option.is_none fill && Hash_set.is_empty assign_bag then Recurrent
@@ -495,13 +549,15 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
         done
     | Fill { tensor; value } ->
         loop_float env value;
-        let data_node = get_node node_store tensor in
-        Hash_set.add nodes data_node.id;
-        data_node.fill <- Some value
+        let node = get_node node_store tensor in
+        Hash_set.add nodes node.id;
+        node.fill <- Some value;
+        if virtualize_settings.inline_constants then precompute_constants node_store node value
     | Set (tensor, idcs, llv) ->
         loop_float env llv;
         Hash_set.add nodes tensor.id;
         let node = get_node node_store tensor in
+        if virtualize_settings.inline_constants then precompute_constants ~idcs node_store node llv;
         Array.iter idcs ~f:(function
           | Shape.Fixed_idx _ | Shape.Dynamic_provider _ | Shape.Dynamic_recipient _ ->
               node.non_virtual <- true
@@ -516,6 +572,7 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
         let data_node = get_node node_store tensor in
         (* FIXME(132): implement virtual dynamic indices. *)
         data_node.non_virtual <- true;
+        data_node.scalar <- None;
         Hash_set.add nodes data_node.id;
         dynamic_indices data_node env ~tensor_idcs ~dynamic_idcs ~target_dims body
   and loop_float env llv =
@@ -760,6 +817,12 @@ module Debug_runtime = Minidebug_runtime.Flushing (struct
 end)
 
 let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : unit low_level =
+  let is_inline tensor =
+    let node = Hashtbl.find_exn node_store tensor in
+    (* Being defensive here to guarantee scalar constant tensors are populated when debugging. *)
+    (virtualize_settings.inline_constants && Option.is_some node.scalar && not !debug_virtual_nodes)
+    || not node.non_virtual
+  in
   (* The current position is within scope of the definitions of the process_for virtual tensors. *)
   let rec loop_proc ~(env_dom : sym_indices) (llc : unit low_level) : unit low_level option =
     let loop = loop_proc ~env_dom in
@@ -771,24 +834,22 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
         let env_dom = Set.add env_dom index in
         match Hashtbl.find reverse_node_map index with
         | Some tensor ->
-            let node = Hashtbl.find_exn node_store tensor in
-            if node.non_virtual then
-              Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop_proc ~env_dom body
-            else None
+            if is_inline tensor then None
+            else Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop_proc ~env_dom body
         | None -> Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop_proc ~env_dom body)
     | Fill { tensor; value } ->
-        let node = Hashtbl.find_exn node_store tensor in
-        if node.non_virtual then Some (Fill { tensor; value = loop_float ~env_dom value }) else None
+        if is_inline tensor then None else Some (Fill { tensor; value = loop_float ~env_dom value })
     | Set (tensor, indices, llv) ->
-        let node = Hashtbl.find_exn node_store tensor in
-        if node.non_virtual then (
+        if is_inline tensor then None
+        else (
           assert (Array.for_all indices ~f:(function Shape.Iterator s -> Set.mem env_dom s | _ -> true));
           Some (Set (tensor, indices, loop_float ~env_dom llv)))
-        else None
     | Set_local (id, llv) ->
         let node = Hashtbl.find_exn node_store id.tensor in
-        assert (not node.non_virtual);
-        Some (Set_local (id, loop_float ~env_dom llv))
+        if virtualize_settings.inline_constants && Option.is_some node.scalar then None
+        else (
+          assert (not node.non_virtual);
+          Some (Set_local (id, loop_float ~env_dom llv)))
     | Comment _ -> Some llc
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
         assert (Array.for_all tensor_idcs ~f:(function Shape.Iterator s -> Set.mem env_dom s | _ -> true));
@@ -800,32 +861,34 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
     let loop = loop_float ~env_dom in
     match llv with
     | Constant _ -> llv
-    | Get (tensor, indices) ->
+    | Get (tensor, indices) -> (
         let node = get_node node_store tensor in
-        assert node.non_virtual;
-        assert (Array.for_all indices ~f:(function Shape.Iterator s -> Set.mem env_dom s | _ -> true));
-        llv
-    | Local_scope { id; prec; body; orig_indices } ->
+        match node.scalar with
+        | Some c when virtualize_settings.inline_constants -> Constant c
+        | _ ->
+            assert node.non_virtual;
+            assert (Array.for_all indices ~f:(function Shape.Iterator s -> Set.mem env_dom s | _ -> true));
+            llv)
+    | Local_scope { id; prec; body; orig_indices } -> (
         let node = get_node node_store id.tensor in
-        assert (Array.for_all orig_indices ~f:(function Shape.Iterator s -> Set.mem env_dom s | _ -> true));
-        if node.non_virtual then Get (id.tensor, orig_indices)
-        else Local_scope { id; prec; orig_indices; body = Option.value_exn @@ loop_proc ~env_dom body }
-    | Get_local id ->
+        match node.scalar with
+        | Some c when virtualize_settings.inline_constants -> Constant c
+        | _ ->
+            assert (
+              Array.for_all orig_indices ~f:(function Shape.Iterator s -> Set.mem env_dom s | _ -> true));
+            if node.non_virtual then Get (id.tensor, orig_indices)
+            else Local_scope { id; prec; orig_indices; body = Option.value_exn @@ loop_proc ~env_dom body })
+    | Get_local id -> (
         let node = get_node node_store id.tensor in
-        assert (not node.non_virtual);
-        llv
+        match node.scalar with
+        | Some c when virtualize_settings.inline_constants -> Constant c
+        | _ ->
+            assert (not node.non_virtual);
+            llv)
     | Binop (op, llv1, llv2) -> Binop (op, loop llv1, loop llv2)
     | Unop (op, llv) -> Unop (op, loop llv)
   in
   Option.value_exn @@ loop_proc ~env_dom:Set.Poly.empty llc
-
-type virtualize_settings = {
-  mutable virtualize : bool;
-  mutable max_visits : int;
-  mutable consider_grads : bool;
-}
-
-let virtualize_settings = { virtualize = true; max_visits = 3; consider_grads = false }
 
 let optimize_proc llc =
   let node_store : (NodeUI.tensor_ptr, data_node) Hashtbl.t = Hashtbl.Poly.create () in
@@ -838,14 +901,20 @@ let optimize_proc llc =
         ~consider_grads:virtualize_settings.consider_grads llc;
       cleanup_virtual_llc node_store reverse_node_map @@ virtual_llc node_store reverse_node_map llc
     in
+    let is_inline node =
+      (virtualize_settings.inline_constants && Option.is_some node.scalar) || not node.non_virtual
+    in
     Hashtbl.iter node_store ~f:(fun dn ->
-        if not dn.non_virtual then
-          match
-            Hashtbl.find node_store
-              { id = dn.id; field = (if NodeUI.equal_data_kind dn.kind Value then Grad else Value) }
-          with
-          | Some other_n when other_n.non_virtual -> ()
-          | _ -> (NodeUI.get dn.id).virtual_ <- true);
+        let n = NodeUI.get dn.id in
+        if is_inline dn then
+          if Option.is_none n.node.grad then n.virtual_ <- true
+          else
+            match
+              Hashtbl.find node_store
+                { id = dn.id; field = (if NodeUI.equal_data_kind dn.kind Value then Grad else Value) }
+            with
+            | Some other_n when not @@ is_inline other_n -> ()
+            | _ -> n.virtual_ <- true);
     result
 
 let compile_proc proc = optimize_proc @@ to_low_level proc

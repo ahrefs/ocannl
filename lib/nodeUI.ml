@@ -12,6 +12,12 @@ type t = {
   shape : Shape.t;
   mutable virtual_ : bool;
   mutable cannot_be_virtual : bool;
+  literal : bool;
+  (** To avoid confusion, try to maintain the following for a literal:
+      - empty [children],
+      - [op_label] stores the approximate human-readable numerical value or representation of the node,
+      - [cannot_be_virtual] is never true,
+      - [node.grad] is always [None]. *)
 }
 [@@deriving sexp_of]
 (** A DAG of decorated [Node]s, also storing the shape information. *)
@@ -78,7 +84,7 @@ let create_ndarray prec =
 
 (** Constructs a node with empty tensors of the specified precision and registers it in the global store.
     Note that the precision for gradients should not be lower than the precision for values. *)
-let create ~(value_prec : prec) ?(grad_prec : prec option) ~needs_gradient () ~op_label ?desc_label
+let create ~(value_prec : prec) ?(grad_prec : prec option) ?(literal = false) ~needs_gradient () ~op_label ?desc_label
     ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children () =
   let node =
     match value_prec with
@@ -104,7 +110,7 @@ let create ~(value_prec : prec) ?(grad_prec : prec option) ~needs_gradient () ~o
   in
   let shape = Shape.make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~id:node.id () in
   let data =
-    { id = node.id; node; op_label; desc_label; children; shape; virtual_ = false; cannot_be_virtual = false }
+    { id = node.id; node; op_label; desc_label; children; shape; virtual_ = false; cannot_be_virtual = false; literal }
   in
   Hashtbl.add_exn global_node_store ~key:node.id ~data;
   data

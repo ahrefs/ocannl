@@ -92,8 +92,8 @@ let handle_error ?formula message =
   Stdio.prerr_endline @@ Option.value_exn (session_error_printer exc);
   raise exc
 
-let fetch_zeros ~id field _shape = Code.Fetch { tensor = { id; field }; fetch_op = Zeros }
-let fetch_ones ~id field _shape = Code.Fetch { tensor = { id; field }; fetch_op = Ones }
+let fetch_zeros ~id field _shape = Code.Fetch { tensor = { id; field }; fetch_op = Constant 0. }
+let fetch_ones ~id field _shape = Code.Fetch { tensor = { id; field }; fetch_op = Constant 1. }
 
 let create ~id ?(init_op = Code.Constant_fill [| 0.0 |]) field shape =
   { Code.tensor = { id; field }; dims = (fun () -> Shape.to_dims shape); init_op }
@@ -291,9 +291,14 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
     ?deduced ?init_op ?fetch_op () =
   if needs_gradient && not is_form then
     raise @@ Session_error ("Formula.term ~needs_gradient:true: a non-form formula cannot need gradient", None);
-  let n =
-    NodeUI.create ~value_prec:!default_value_prec ~grad_prec:!default_grad_prec ~needs_gradient ()
-      ~op_label:label ?desc_label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children:[] ()
+  let literal: bool =
+    if needs_gradient then false
+    else match (init_op, fetch_op) with Some (Code.Constant_fill [| _ |]), None -> true | _ -> false
+  in
+  let op_label: string = label in
+  let n: NodeUI.t =
+    NodeUI.create ~value_prec:!default_value_prec ~grad_prec:!default_grad_prec ~literal ~needs_gradient ()
+      ~op_label ?desc_label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children:[] ()
   in
   let id = n.id in
   let shape = n.shape in
@@ -308,15 +313,23 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
   (* Note: we could embed the fetching code in the forward computation instead, but then we miss out
       on potential optimizations. E.g. fetching latency means it's important to do it early and
      in parallel. *)
-  let init_op = Option.value_or_thunk init_op ~default:(fun () -> Code.Constant_fill [| 0.0 |]) in
+  let init_op: Code.init_op = Option.value_or_thunk init_op ~default:(fun () -> Code.Constant_fill [| 0.0 |]) in
   session_initializations := create ~id ~init_op Value shape :: !session_initializations;
+  (if literal && Code.virtualize_settings.inline_constants then
+     let fetch_op : Code.fetch_op =
+       match init_op with Constant_fill [| c |] -> Constant c | _ -> assert false
+     in
+     let fetch = Code.Fetch { tensor = { id; field = Value }; fetch_op } in
+     session_prepare_forward := fetch :: !session_prepare_forward);
   let cross_session_persistent =
     Code.(
       match fetch_op with
       | None -> true
       | Some fetch_op ->
-          let fetch = Fetch { tensor = { id; field = Value }; fetch_op = fetch_op ~n } in
+        let fetch_op = fetch_op ~n in
+          let fetch = Fetch { tensor = { id; field = Value }; fetch_op } in
           session_prepare_forward := fetch :: !session_prepare_forward;
+          (match fetch_op with Constant _ -> () | _ -> n.cannot_be_virtual <- true);
           false)
   in
   if not is_form then
