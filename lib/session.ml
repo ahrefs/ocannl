@@ -129,6 +129,10 @@ let print_preamble () = Stdio.printf "%s\n%!" (Formula.prefix_with_preamble "")
 (** *** Session management. *** *)
 type backend = Interpreter | OCaml | Gccjit [@@deriving sexp, equal]
 
+let num_tasks = ref 1
+let num_domains = Caml.Domain.recommended_domain_count ()
+let task_pool = Domainslib.Task.setup_pool ~name:"session_task_pool" ~num_domains ()
+
 let executor = ref Exec_as_gccjit.jit_compiled
 let executor_error_message = ref Exec_as_gccjit.error_message
 let cleanup_executor_session = ref Exec_as_gccjit.cleanup_session
@@ -281,7 +285,9 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
   if run then
     match !(Ocannl_runtime.Node.global.session_step_update) with
     | None -> assert false
-    | Some update -> update ~task_id:0
+    | Some update ->
+        Domainslib.Task.parallel_for task_pool ~start:0 ~finish:(!num_tasks - 1) ~body:(fun task_id ->
+            update ~task_id)
 
 (** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id].
     Discards all computations (forward, backward, update params, data fetches), but keeps
