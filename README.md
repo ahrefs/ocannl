@@ -28,6 +28,18 @@ Warning disclaimer: this project is still "not announced". The features describe
   * Matrix-multiplying a constant number by a tensor `m`, e.g. `2*m`, broadcasts the number to the shape of the output axes of the tensor. This results in a tensor whose inputs are of the same shape as the inputs of `m`, and the output shape is 1D (scalar), that is the scaled sum over the output axes of the tensor `m`.
   * The matrix-multiply operation behaves pointwise along the batch axes.
   
+## Future milestones
+
+For past milestones see [CHANGES](CHANGES.md).
+
+* **v0.1.2-multicore**: thread-local formula `cpu_id`; minimal example of multicore SGD, might waste some computations.
+* **v0.1.3-interfaces**: `.mli` files and maybe more documentation.
+* **v0.2-GPU**: a CUDA backend.
+* **v0.2.1-tiling**: the tiling optimization.
+* **v0.3.X-usability**: examples covering most of Andrej Karpathy's "Neural Networks Zero to Hero" series; data loading; checkpointing.
+* **v0.4.X-scale**: distributed computation; runtime-autotuning optimization settings.
+* **v1-completeness**: whatever not-yet-implemented features that still seem needed and impact the framework design. (E.g. at the time of v0.1.X, convolutions, reshaping, concatenation are not easily expressible.)
+
 ## Why not just use [OWL](https://ocaml.xyz/)?
 
 OCANNL follows different design choices than [OWL](https://ocaml.xyz/). For example:
