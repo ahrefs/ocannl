@@ -153,8 +153,8 @@ let dynload_with_handler ~runtime_store ~name compiled =
   | Some contents, Some routine ->
       runtime_store :=
         Some
-          (fun () ->
-            try routine ()
+          (fun ~task_id ->
+            try routine ~task_id
             with error ->
               Formula.handle_error @@ !executor_error_message ~name ~prefix:"Runtime error:" ~contents error)
   | Some contents, None ->
@@ -281,7 +281,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
   if run then
     match !(Ocannl_runtime.Node.global.session_step_update) with
     | None -> assert false
-    | Some update -> update ()
+    | Some update -> update ~task_id:0
 
 (** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id].
     Discards all computations (forward, backward, update params, data fetches), but keeps

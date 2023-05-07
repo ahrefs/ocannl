@@ -57,7 +57,9 @@ let session_prepare_backprop : Code.t list ref = ref []
 
 (** A current session is the range of nodes from [!first_session_id] to [Node.global.unique_id - 1],
     or an empty range if [!first_session_id = Node.global.unique_id].
-    Subformulas with [id] before this range are not allowed in new formulas. *)
+    Subformulas with [id] before this range are no longer updated by {!Session.SDSL.refresh_session}
+    and can only be used in new formulas if they are cross-session-persistent: not depending on
+    fetching operations. This condition is checked automatically. *)
 let first_session_id = ref 1
 
 let default_value_prec = ref NodeUI.single

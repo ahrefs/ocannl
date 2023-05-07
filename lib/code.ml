@@ -8,6 +8,11 @@ type unop = Identity | Relu [@@deriving sexp]
 
 module N = Ocannl_runtime.Node
 
+type global_identifier =
+  | Task_id  (** Retrieves the identifier (a non-negative integer) of the task running the computation. *)
+  | C_function of string  (** Calls a no-argument C function. *)
+[@@deriving sexp, equal, compare]
+
 (** Initializes a tensor by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op = N.init_op =
   | Constant_fill of float array
@@ -19,11 +24,7 @@ type init_op = N.init_op =
 [@@deriving sexp]
 
 (** Resets a tensor by performing the specified computation or data fetching. *)
-type fetch_op =
-  | Constant of float
-  | Synthetic of t
-  | Imported of { func : string (* params: Gccjit.rvalue list *) }
-[@@deriving sexp]
+type fetch_op = Constant of float | Synthetic of t | Imported of global_identifier [@@deriving sexp]
 
 and t =
   | Par of t * t  (** These tasks can proceed in parallel, there is no interaction. *)
@@ -129,6 +130,7 @@ type _ low_level =
     }
       -> float low_level
   | Get_local : scope_id -> float low_level
+  | Get_global : global_identifier -> float low_level
   | Get : NodeUI.tensor_ptr * index array -> float low_level
   | Binop : binop * float low_level * float low_level -> float low_level
   | Unop : unop * float low_level -> float low_level
@@ -224,9 +226,7 @@ let rec to_low_level (code : t) : unit low_level =
       | _ -> Lines [| ll1; ll2 |])
   | Fetch { tensor; fetch_op = Constant c } -> Fill { tensor; value = Constant c }
   | Fetch { tensor = _; fetch_op = Synthetic gen } -> to_low_level gen
-  | Fetch { tensor = _; fetch_op = Imported { func = _ } } ->
-      (* FIXME: NOT IMPLEMENTED YET *)
-      failwith "NOT IMPLEMENTED YET"
+  | Fetch { tensor; fetch_op = Imported gid } -> Fill { tensor; value = Get_global gid }
 
 let to_low_level_program prog : low_level_program =
   match prog with
@@ -260,7 +260,7 @@ let get_as_float ptr idcs =
 
 let debug_trace_interpretation = ref false
 
-let interpret_llc llc =
+let interpret_llc ~task_id llc =
   (* Local scope ids can be non-unique due to inlining. *)
   let locals = ref Map.Poly.empty in
   let lookup ?provider_dim (env, dyn_env) indices =
@@ -369,6 +369,8 @@ let interpret_llc llc =
             (get_as_float id.tensor idcs) result;
         result
     | Get_local id -> Map.find_exn !locals id
+    | Get_global Task_id -> Float.of_int task_id
+    | Get_global (C_function _) -> failwith "NOT IMPLEMENTED YET: jit-dynloading C calls in the interpreter"
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
     | Binop (Add, llv1, llv2) -> loop llv1 + loop llv2
@@ -394,9 +396,9 @@ let interpret_llc llc =
 
 let interpret_llprog = function
   | Assign_suspension proc ->
-      Ocannl_runtime.Node.most_recent_suspension := Some (fun () -> interpret_llc proc)
+      Ocannl_runtime.Node.most_recent_suspension := Some (fun ~task_id -> interpret_llc ~task_id proc)
   | Assign_session_step_update proc ->
-      Ocannl_runtime.Node.global.session_step_update := Some (fun () -> interpret_llc proc)
+      Ocannl_runtime.Node.global.session_step_update := Some (fun ~task_id -> interpret_llc ~task_id proc)
 
 let fprint_code ppf c =
   (* TODO: something nicely concise. *)
@@ -495,6 +497,7 @@ let precompute_constants ?idcs node_store top_node llv =
     | Get_local scope_id ->
         let node = get_node node_store scope_id.tensor in
         Option.value_or_thunk node.scalar ~default:(fun () -> raise @@ Non_literal 5)
+    | Get_global _ -> raise @@ Non_literal 9
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
     | Binop (Add, llv1, llv2) -> Float.(loop llv1 + loop llv2)
@@ -586,6 +589,7 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
           ~f:(visit data_node.fill data_node.assign_index_bag)
     | Local_scope { body; _ } -> loop_proc env body
     | Get_local _ -> ()
+    | Get_global _ -> ()
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
     | Binop (_, llv1, llv2) ->
@@ -685,6 +689,7 @@ let process_computation node_store node top_llc =
             | _ -> ())
     | Local_scope { body; _ } -> loop_proc ~env_dom body
     | Get_local _ -> ()
+    | Get_global _ -> ()
     | Binop (_, llv1, llv2) ->
         loop_float ~env_dom llv1;
         loop_float ~env_dom llv2
@@ -751,6 +756,7 @@ let inline_computation ~id node call_args =
           Local_scope
             { id; prec; body = Option.value_exn @@ loop body; orig_indices = Array.map ~f:subst orig_indices }
       | Get_local _ -> llv
+      | Get_global _ -> llv
       | Binop (op, llv1, llv2) -> Binop (op, loop_float llv1, loop_float llv2)
       | Unop (op, llv) -> Unop (op, loop_float llv)
     in
@@ -807,6 +813,7 @@ let virtual_llc node_store reverse_node_map (llc : unit low_level) : unit low_le
     | Local_scope opts ->
         Local_scope { opts with body = loop_proc ~process_for:(Set.add process_for opts.id.tensor) opts.body }
     | Get_local _ -> llv
+    | Get_global _ -> llv
     | Binop (op, llv1, llv2) -> Binop (op, loop_float ~process_for llv1, loop_float ~process_for llv2)
     | Unop (op, llv) -> Unop (op, loop_float ~process_for llv)
   in
@@ -881,6 +888,7 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
         | _ ->
             assert (not node.non_virtual);
             llv)
+    | Get_global _ -> llv
     | Binop (op, llv1, llv2) -> Binop (op, loop llv1, loop llv2)
     | Unop (op, llv) -> Unop (op, loop llv)
   in

@@ -68,7 +68,7 @@ let prec_to_kind prec =
 
 let prec_is_double = function NodeUI.Double_prec _ -> true | _ -> false
 
-let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gccjit.block =
+let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_level) : Gccjit.block =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
@@ -147,8 +147,14 @@ let jit_code ~name ~env ctx func initial_block (body : unit Code.low_level) : Gc
            Block.assign !current_block lhs @@ RValue.lvalue lvalue);
         RValue.lvalue lvalue
     | Get_local id ->
-        let lvalue, _typ, _is_double = Map.find_exn !locals id in
+        let lvalue, _typ, _local_is_double = Map.find_exn !locals id in
+        (* FIXME: Convert according to local_is_double ?= is_double. *)
         RValue.lvalue lvalue
+    | Get_global Task_id -> RValue.cast ctx (RValue.param task_id) num_typ
+    | Get_global (C_function f_name) ->
+        (* TODO: this is too limiting. *)
+        let f = Function.builtin ctx f_name in
+        RValue.call ctx f []
     | Get (tensor, idcs) ->
         let tensor = get_tensor ctx tensor in
         let idcs = lookup env idcs in
@@ -226,9 +232,10 @@ let jit_ll_prog ~name ctx prog =
   let msg = ref None in
   let emit_routine proc suffix =
     let name = name ^ suffix in
-    let func = Function.create ctx fkind (Type.get ctx Void) name [] in
+    let task_id = Param.create ctx Type.(get ctx Int) "task_id" in
+    let func = Function.create ctx fkind (Type.get ctx Void) name [task_id] in
     let block = Block.create ~name func in
-    (let after_proc = jit_code ~name ~env ctx func block proc in
+    (let after_proc = jit_code ~name ~env ~task_id ctx func block proc in
      Block.return_void after_proc;
      if !Code.with_debug then (
        let suf = "-gccjit-debug.c" in
@@ -245,7 +252,8 @@ let jit_ll_prog ~name ctx prog =
        | Some _ -> () *);
     let result = Context.compile ctx in
     session_results := result :: !session_results;
-    Result.code result name Ctypes.(void @-> returning void)
+    let routine = Result.code result name Ctypes.(int @-> returning void) in
+    fun ~task_id -> routine task_id
   in
   let open Ocannl_runtime.Node in
   (match prog with

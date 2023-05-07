@@ -207,19 +207,19 @@ let size_in_bytes n =
 
 exception Runtime_error of string * t option
 
-let most_recent_suspension : (unit -> unit) option ref = ref None
+let most_recent_suspension : (task_id:int -> unit) option ref = ref None
 
 type state = {
   mutable unique_id : int;
   node_store : (int, t) Hashtbl.t;
-  session_step_update : (unit -> unit) option ref;
+  session_step_update : (task_id:int -> unit) option ref;
 }
 
 let global =
   {
     unique_id = 1;
     node_store = Hashtbl.create (module Int);
-    session_step_update = ref @@ Some (fun () -> ());
+    session_step_update = ref @@ Some (fun ~task_id:_ -> ());
   }
 
 let global_size_in_bytes () =

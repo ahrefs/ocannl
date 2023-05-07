@@ -57,6 +57,8 @@ let format_low_level ~as_toplevel (ppf : Caml.Format.formatter) (type a) (c : a 
             pp_data_node tensor pp_idcs orig_indices scope_id scope_id
         else fprintf ppf "@[<2>let v%d =@ ref 0.0 in@ %a;@ !v%d@]" scope_id pp_ll body scope_id
     | Get_local { scope_id; _ } -> fprintf ppf "!v%d" scope_id
+    | Get_global Task_id -> fprintf ppf "(Float.of_int task_id)"
+    | Get_global (C_function _) -> failwith "OCaml backend: C FFI NOT IMPLEMENTED YET"
     | Get (tensor, indices) -> fprintf ppf "@[<2>get_as_float %a@ (%a)@]" pp_data_node tensor pp_idcs indices
     | Constant c -> fprintf ppf "(%f)" c
     | Binop (Arg1, v1, _v2) -> pp_ll ppf v1
@@ -87,11 +89,11 @@ let format_ll_prog (ppf : Caml.Format.formatter) (p : Code.low_level_program) : 
   fprintf ppf "@[<v>open Base@ open Ocannl_runtime@ open Node@ open Base.Float@ ";
   match p with
   | Assign_suspension proc ->
-      fprintf ppf "@[<2>let () = most_recent_suspension@ := Some (@[<2>fun () -> %a@]@,)@]"
+      fprintf ppf "@[<2>let () = most_recent_suspension@ := Some (@[<2>fun ~task_id -> %a@]@,)@]"
         (format_low_level ~as_toplevel:false)
         proc
   | Assign_session_step_update proc ->
-      fprintf ppf "@[<2>let () = global.session_step_update@ := Some (@[<2>fun () -> %a@]@,)@]"
+      fprintf ppf "@[<2>let () = global.session_step_update@ := Some (@[<2>fun ~task_id -> %a@]@,)@]"
         (format_low_level ~as_toplevel:false)
         proc
 
