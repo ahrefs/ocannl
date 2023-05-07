@@ -5,7 +5,7 @@ module NFDSL = Operation.NFDSL
 module CDSL = Code.CDSL
 module SDSL = Session.SDSL
 
-let _suspended () =
+let () =
   (* Code.CDSL.with_debug := false; *)
   (* let open Operation.FDSL in *)
   let open SDSL.O in
@@ -15,9 +15,13 @@ let _suspended () =
   CDSL.virtualize_settings.inline_constants <- true;
   SDSL.drop_all_sessions ();
   Random.init 0;
-  let len = 400 in
+  let num_parallel_tasks = SDSL.num_domains in
+  Stdio.printf "\n****** num_parallel_tasks = %d\n%!" num_parallel_tasks;
+  SDSL.num_parallel_tasks := num_parallel_tasks;
+  let len = 420 in
   let minibatch = 2 in
-  let n_batches = 2 * len / minibatch in
+  let batch = minibatch * num_parallel_tasks in
+  let n_batches = 2 * len / batch in
   let epochs = 100 in
   let steps = epochs * n_batches in
   let noise () = Random.float_range (-0.1) 0.1 in
@@ -31,9 +35,13 @@ let _suspended () =
             let c = cos v and s = sin v in
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
-  let moons_flat = FDSL.init_const ~l:"moons_flat" ~b:[ n_batches; minibatch ] ~o:[ 2 ] moons_flat in
+  let moons_flat =
+    FDSL.init_const ~l:"moons_flat" ~b:Shape.[ Dim n_batches; Parallel; Dim minibatch ] ~o:Shape.[ Dim 2 ] moons_flat
+  in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes = FDSL.init_const ~l:"moons_classes" ~b:[ n_batches; minibatch ] ~o:[ 1 ] moons_classes in
+  let moons_classes =
+    FDSL.init_const ~l:"moons_classes" ~b:Shape.[ Dim n_batches; Parallel; Dim minibatch ] ~o:Shape.[ Dim 1 ] moons_classes
+  in
   let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 2 + ("w1" * x))) in
   (* let%nn_op mlp x =
        "b6" 1
@@ -53,8 +61,9 @@ let _suspended () =
              + ("w5" * !/("b4" 4 + ("w4" * !/("b3" 8 + ("w3" * !/("b2" 8 + ("w2" * !/("b1" 16 + ("w1" * x)))))))))
              )
      in *)
-  let%nn_dt session_step ~output_dims:[ 1 ] = n =+ 1 in
-  let%nn_dt minus_lr ~output_dims:[ 1 ] = n =: -0.0001 *. (!..steps - session_step) /. !..steps in
+  let%nn_dt session_step ~output_dims:[ Dim 1 ] = n =+ 1 in
+  let%nn_dt minus_lr ~output_dims:[ Dim 1 ] = n =: -0.0001 *. (!..steps - session_step) /. !..steps in
+
   SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = moons_flat @.| session_step in
   let%nn_op moons_class = moons_classes @.| session_step in
@@ -122,7 +131,7 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   (* let init_mem = Mem_usage.info () in *)
   (* let hid1 = 64 in *)
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
-  let len = 400 in
+  let len = 420 in
   let minibatch = 10 in
   let n_batches = 2 * len / minibatch in
   let steps = epochs * n_batches in
@@ -137,9 +146,9 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
             let c = cos v and s = sin v in
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
-  let moons_flat = FDSL.init_const ~l:"moons_flat" ~b:[ n_batches; minibatch ] ~o:[ 2 ] moons_flat in
+  let moons_flat = FDSL.init_const ~l:"moons_flat" ~b:[ Dim n_batches; Dim minibatch ] ~o:[ Dim 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes = FDSL.init_const ~l:"moons_classes" ~b:[ n_batches; minibatch ] ~o:[ 1 ] moons_classes in
+  let moons_classes = FDSL.init_const ~l:"moons_classes" ~b:[ Dim n_batches; Dim minibatch ] ~o:[ Dim 1 ] moons_classes in
   let%nn_op mlp x =
     "b6" 1
     + "w6"
@@ -159,8 +168,8 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
              )
      in *)
   (* let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 16 + ("w1" * x))) in *)
-  let%nn_dt session_step ~output_dims:[ 1 ] = n =+ 1 in
-  let%nn_dt minus_lr ~output_dims:[ 1 ] = n =: -0.1 *. (!..steps - session_step) /. !..steps in
+  let%nn_dt session_step ~output_dims:[ Dim 1 ] = n =+ 1 in
+  let%nn_dt minus_lr ~output_dims:[ Dim 1 ] = n =: -0.1 *. (!..steps - session_step) /. !..steps in
   SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = moons_flat @.| session_step in
   let%nn_op moons_class = moons_classes @.| session_step in
@@ -226,7 +235,8 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   in
   SDSL.close_session ();
   Stdio.print_endline "\nSession closed.";
-  let%nn_op point = [ 0; 0 ] in
+  (* FIMXE: *)
+  let%nn_op point = (* [ 0; 0 ] *) "point" 2 in
   let mlp_result = mlp point in
   SDSL.refresh_session ();
   let callback (x, y) =
@@ -291,11 +301,11 @@ let benchmarks =
     (* ( classify_moons ~virtualize:true Interpreter ~opti_level:3 ~inlining_cutoff:3 ~inline_constants:false CDSL.single); *)
     (* (classify_moons ~virtualize:true OCaml ~opti_level:3 ~inlining_cutoff:3 ~inline_constants:false CDSL.single); *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:3 ~inline_constants:false
-      CDSL.single; *)
+       CDSL.single; *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:1 ~inlining_cutoff:3 ~inline_constants:false
-      CDSL.single; *)
+       CDSL.single; *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:3 ~inline_constants:false
-      CDSL.single; *)
+       CDSL.single; *)
     classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~inline_constants:false
       CDSL.single;
     (* ( classify_moons ~virtualize:true Interpreter ~opti_level:3 ~inlining_cutoff:3 CDSL.single); *)
@@ -313,13 +323,13 @@ let benchmarks =
     (* (classify_moons ~virtualize:true Interpreter ~opti_level:3 ~inlining_cutoff:3 ~inline_constants:false CDSL.double); *)
     (* (classify_moons ~virtualize:true OCaml ~opti_level:3 ~inlining_cutoff:3 ~inline_constants:false CDSL.double); *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:3 ~inline_constants:false
-      CDSL.double; *)
+       CDSL.double; *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:1 ~inlining_cutoff:3 ~inline_constants:false
-      CDSL.double; *)
+       CDSL.double; *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:3 ~inline_constants:false
-      CDSL.double; *)
+       CDSL.double; *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~inline_constants:false
-      CDSL.double; *)
+       CDSL.double; *)
     (* (classify_moons ~virtualize:true Interpreter ~opti_level:3 ~inlining_cutoff:3 CDSL.double); *)
     (* (classify_moons ~virtualize:true OCaml ~opti_level:3 ~inlining_cutoff:3 CDSL.double); *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:3 CDSL.double; *)
@@ -329,11 +339,11 @@ let benchmarks =
     (* ( classify_moons ~virtualize:true Interpreter ~opti_level:3 ~inlining_cutoff:5 ~inline_constants:false CDSL.single); *)
     (* (classify_moons ~virtualize:true OCaml ~opti_level:3 ~inlining_cutoff:5 ~inline_constants:false CDSL.single); *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:5 ~inline_constants:false
-      CDSL.single; *)
+       CDSL.single; *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:1 ~inlining_cutoff:5 ~inline_constants:false
-      CDSL.single; *)
+       CDSL.single; *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:5 ~inline_constants:false
-      CDSL.single; *)
+       CDSL.single; *)
     classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~inline_constants:false
       CDSL.single;
     (* ( classify_moons ~virtualize:true Interpreter ~opti_level:3 ~inlining_cutoff:5 CDSL.single); *)
@@ -345,13 +355,13 @@ let benchmarks =
     (* (classify_moons ~virtualize:true Interpreter ~opti_level:3 ~inlining_cutoff:5 ~inline_constants:false CDSL.double); *)
     (* (classify_moons ~virtualize:true OCaml ~opti_level:3 ~inlining_cutoff:5 ~inline_constants:false CDSL.double); *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:5 ~inline_constants:false
-      CDSL.double; *)
+       CDSL.double; *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:1 ~inlining_cutoff:5 ~inline_constants:false
-      CDSL.double; *)
+       CDSL.double; *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:5 ~inline_constants:false
-      CDSL.double; *)
+       CDSL.double; *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~inline_constants:false
-      CDSL.double; *)
+       CDSL.double; *)
     (* (classify_moons ~virtualize:true Interpreter ~opti_level:3 ~inlining_cutoff:5 CDSL.double); *)
     (* (classify_moons ~virtualize:true OCaml ~opti_level:3 ~inlining_cutoff:5 CDSL.double); *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:0 ~inlining_cutoff:5 CDSL.double; *)
@@ -359,14 +369,15 @@ let benchmarks =
     (* classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:5 CDSL.double; *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 CDSL.double; *)
     (* classify_moons ~virtualize:true Gccjit ~opti_level:2 ~inlining_cutoff:9 CDSL.single; *)
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:9 ~inline_constants:false CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:9 ~inline_constants:false
+      CDSL.single;
     classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:9 CDSL.single;
   ]
 
 let _suspended () =
   ignore @@ classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 CDSL.single ()
 
-let () =
+let _suspended () =
   List.map benchmarks ~f:(fun bench -> bench ()) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
 (* Example output from back when using core_bench, 200 epochs (all are non-virtual):
@@ -424,7 +435,7 @@ let () =
     └──────────────────────────────┴──────────┴─────────┴──────────┴──────────┴────────────┘
 
     Example 20000 epochs, NIC = Not Inlining Constants:
-  
+
     ┌────────────────────────────────────────────────────┬─────────────┬───────────────┬───────┬────────┬─────────────────────────────────────────────┐
     │Benchmarks                                          │Time in sec  │Memory in bytes│Speedup│Mem gain│min minibatch loss, last epoch loss          │
     ├────────────────────────────────────────────────────┼─────────────┼───────────────┼───────┼────────┼─────────────────────────────────────────────┤
@@ -463,5 +474,4 @@ let () =
     │(virtu. Gccjit gcc-opt 3 inlining 9 NIC Single_prec)│4.279828003│20632          │1.000  │1.845   │(1.1707446575164795 93.65994119644165)│
     │(virtu. Gccjit gcc-opt 3 inlining 9 ... Single_prec)│3.924971464│20532          │1.090  │1.854   │(1.1707446575164795 93.65994119644165)│
     └────────────────────────────────────────────────────┴───────────┴───────────────┴───────┴────────┴──────────────────────────────────────┘
-
-    *)
+*)

@@ -81,11 +81,11 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
   let current_block = ref initial_block in
   let lookup ?provider_dim (env, dyn_env) indices =
     Array.map indices
-      ~f:
-        Shape.(
+      ~f:(
           function
-          | Fixed_idx i -> RValue.int ctx c_index i
+          | Shape.Fixed_idx i -> RValue.int ctx c_index i
           | Iterator s -> Map.find_exn env s
+          | Task_id -> RValue.param task_id
           | Dynamic_recipient s -> Map.find_exn dyn_env s
           | Dynamic_provider _ -> Option.value_exn provider_dim)
   in
@@ -203,7 +203,12 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
     let tensor = get_tensor ctx tensor in
     let env =
       Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env (Symbol s as key) ->
-          let target_dim = RValue.int ctx c_int @@ target_dims.(provider_dim) in
+          let target_dim =
+            RValue.int ctx c_int
+              (match target_dims.(provider_dim) with
+              | Shape.Dim d -> d
+              | Parallel -> !Shape.num_parallel_tasks)
+          in
           let provider_dim = RValue.int ctx c_int provider_dim in
           let idcs = lookup ~provider_dim env tensor_idcs in
           let prov_offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
@@ -233,7 +238,7 @@ let jit_ll_prog ~name ctx prog =
   let emit_routine proc suffix =
     let name = name ^ suffix in
     let task_id = Param.create ctx Type.(get ctx Int) "task_id" in
-    let func = Function.create ctx fkind (Type.get ctx Void) name [task_id] in
+    let func = Function.create ctx fkind (Type.get ctx Void) name [ task_id ] in
     let block = Block.create ~name func in
     (let after_proc = jit_code ~name ~env ~task_id ctx func block proc in
      Block.return_void after_proc;

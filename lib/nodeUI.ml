@@ -13,7 +13,7 @@ type t = {
   mutable virtual_ : bool;
   mutable cannot_be_virtual : bool;
   literal : bool;
-  (** To avoid confusion, try to maintain the following for a literal:
+      (** To avoid confusion, try to maintain the following for a literal:
       - empty [children],
       - [op_label] stores the approximate human-readable numerical value or representation of the node,
       - [cannot_be_virtual] is never true,
@@ -74,18 +74,19 @@ let node_prec tensor =
   | Some (N.Single_nd _) -> single
   | Some (N.Double_nd _) -> double
 
-let create_ndarray prec =
+let create_ndarray prec dims =
+  let dims = Array.map dims ~f:(function Shape.Dim d -> d | Parallel -> !Shape.num_parallel_tasks) in
   match prec with
   | Void_prec -> assert false
   | Byte_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
   | Half_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
-  | Single_prec prec -> N.create_ndarray prec
-  | Double_prec prec -> N.create_ndarray prec
+  | Single_prec prec -> N.create_ndarray prec dims
+  | Double_prec prec -> N.create_ndarray prec dims
 
 (** Constructs a node with empty tensors of the specified precision and registers it in the global store.
     Note that the precision for gradients should not be lower than the precision for values. *)
-let create ~(value_prec : prec) ?(grad_prec : prec option) ?(literal = false) ~needs_gradient () ~op_label ?desc_label
-    ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children () =
+let create ~(value_prec : prec) ?(grad_prec : prec option) ?(literal = false) ~needs_gradient () ~op_label
+    ?desc_label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children () =
   let node =
     match value_prec with
     | Void_prec -> assert false
@@ -110,7 +111,17 @@ let create ~(value_prec : prec) ?(grad_prec : prec option) ?(literal = false) ~n
   in
   let shape = Shape.make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~id:node.id () in
   let data =
-    { id = node.id; node; op_label; desc_label; children; shape; virtual_ = false; cannot_be_virtual = false; literal }
+    {
+      id = node.id;
+      node;
+      op_label;
+      desc_label;
+      children;
+      shape;
+      virtual_ = false;
+      cannot_be_virtual = false;
+      literal;
+    }
   in
   Hashtbl.add_exn global_node_store ~key:node.id ~data;
   data
@@ -207,11 +218,15 @@ let retrieve_1d_points ?from_axis ~xdim arr =
 let dims_to_string ?(with_axis_numbers = false) dims =
   if Array.is_empty dims then "-"
   else if with_axis_numbers then
-    String.concat_array ~sep:" x " @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ Int.to_string s)
-  else String.concat_array ~sep:"x" @@ Array.map dims ~f:Int.to_string
+    String.concat_array ~sep:" x "
+    @@ Array.mapi dims ~f:Shape.(fun d s -> Int.to_string d ^ ":" ^ dim_to_string s)
+  else String.concat_array ~sep:"x" @@ Array.map dims ~f:Shape.dim_to_string
+
+let int_dims_to_string ?with_axis_numbers dims =
+  dims_to_string ?with_axis_numbers @@ Array.map ~f:(fun d -> Shape.Dim d) dims
 
 let ndarray_dims_to_string ?(with_axis_numbers = false) arr =
-  N.(ndarray_precision_to_string arr ^ " prec " ^ dims_to_string ~with_axis_numbers (dims arr))
+  N.ndarray_precision_to_string arr ^ " prec " ^ int_dims_to_string ~with_axis_numbers @@ N.dims arr
 
 (** Converts ID, label and the dimensions of a node to a string. *)
 let node_header n =
@@ -302,8 +317,8 @@ let render_tensor ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labe
             if is_ellipsis () then "..."
             else PrintBox_utils.concise_float ~prec:!print_decimals_precision (N.get_as_float arr indices)
           with Invalid_argument _ as error ->
-            Stdio.Out_channel.printf "Invalid indices: %s into array: %s\n%!" (dims_to_string indices)
-              (dims_to_string dims);
+            Stdio.Out_channel.printf "Invalid indices: %s into array: %s\n%!" (int_dims_to_string indices)
+              (int_dims_to_string dims);
             raise error)
     in
     let tag ?pos label ind =

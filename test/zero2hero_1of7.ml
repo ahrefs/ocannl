@@ -12,7 +12,8 @@ let%expect_test "Graph drawing recompile" =
   let open SDSL.O in
   SDSL.drop_all_sessions ();
   Random.init 0;
-  let%nn_op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
+  (* FIXME: *)
+  let%nn_op f = (3 *. ("x" (* [ 5 ] *) **. 2)) - (4 *. x) + 5 in
   SDSL.refresh_session ();
   SDSL.print_node_tree ~with_grad:true ~depth:9 f.id;
   [%expect
@@ -118,10 +119,10 @@ let%expect_test "Graph drawing fetch" =
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   let x_flat =
-    FDSL.term ~needs_gradient:true ~label:"x_flat" ~batch_dims:[ size ] ~input_dims:[] ~output_dims:[ 1 ]
+    FDSL.term ~needs_gradient:true ~label:"x_flat" ~batch_dims:[ Dim size ] ~input_dims:[] ~output_dims:[ Dim 1 ]
       ~init_op:(Constant_fill xs) ()
   in
-  let%nn_dt session_step ~output_dims:[ 1 ] = n =+ 1 in
+  let%nn_dt session_step ~output_dims:[ Dim 1 ] = n =+ 1 in
   let%nn_op x = x_flat @.| session_step in
   let%nn_op fx = f x in
   let ys =
@@ -189,10 +190,11 @@ let%expect_test "Graph drawing fetch" =
 let%expect_test "Simple gradients" =
   SDSL.drop_all_sessions ();
   Random.init 0;
-  let%nn_op e = "a" [ 2 ] *. "b" [ -3 ] in
-  let%nn_op d = e + "c" [ 10 ] in
-  let%nn_op l = d *. "f" [ -2 ] in
-  SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ 1 ] [| 0.1 |]);
+  (* FIXME: *)
+  let%nn_op e = "a" (* [ 2 ] *) *. "b" (* [ -3 ] *) in
+  let%nn_op d = e + "c" (* [ 10 ] *) in
+  let%nn_op l = d *. "f" (* [ -2 ] *) in
+  SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ Dim 1 ] [| 0.1 |]);
   SDSL.refresh_session ~update_params:false ();
   (* We did not update the params: all values and gradients will be at initial points, which are
      specified in the formula in the brackets. *)
@@ -267,7 +269,8 @@ let%expect_test "tanh plot" =
 let%expect_test "2D neuron" =
   SDSL.drop_all_sessions ();
   Random.init 0;
-  let%nn_op n = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
+  (* FIXME: *)
+  let%nn_op n = ("w" (* [ (-3, 1) ] *) * "x" (* [ 2; 0 ] *)) + "b" (* [ 6.7 ] *) in
   (* No need for [~update_params:false] because we have not set [minus_learning_rate]. *)
   SDSL.refresh_session ();
   SDSL.print_node_tree ~with_grad:true ~depth:9 n.id;

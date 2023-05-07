@@ -10,6 +10,7 @@ let pp_index_axis ?provider_dim ppf =
   let open Shape in
   function
   | Iterator i -> pp_index ppf i
+  | Task_id -> Caml.Format.fprintf ppf "task_id"
   | Dynamic_recipient (Symbol s) -> Caml.Format.fprintf ppf "i%d" s
   | Fixed_idx i -> Caml.Format.fprintf ppf "%d" i
   | Dynamic_provider _ -> Caml.Format.fprintf ppf "%d" @@ Option.value_exn provider_dim
@@ -46,15 +47,18 @@ let format_low_level ~as_toplevel (ppf : Caml.Format.formatter) (type a) (c : a 
         fprintf ppf "@[<2>set_from_float %a@ (%a)@ (%a)@]" pp_data_node tensor pp_idcs indices pp_ll v
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
         Array.iteri dynamic_idcs ~f:(fun provider_dim sym ->
+            let target_dim =
+              match target_dims.(provider_dim) with Parallel -> !Shape.num_parallel_tasks | Dim d -> d
+            in
             fprintf ppf "let@ %a = Int.(@[<2>(get_as_int %a@ (%a)) %% %d@]) in@ " pp_symbol sym pp_data_node
-              tensor (pp_indices ~provider_dim) tensor_idcs target_dims.(provider_dim));
+              tensor (pp_indices ~provider_dim) tensor_idcs target_dim);
         pp_ll ppf body
     | Set_local ({ scope_id; _ }, value) -> fprintf ppf "@[<2>v%d :=@ %a@]" scope_id pp_ll value
     | Local_scope { id = { scope_id; tensor }; prec = _; body; orig_indices } ->
         (* Note: we could support precisions, but it's not worth it. *)
         if !Code.debug_virtual_nodes then
-          fprintf ppf "@[<2>let v%d =@ ref 0.0 in@ (%a;@ set_from_float %a@ (%a)@ !v%d; !v%d)@]" scope_id pp_ll body
-            pp_data_node tensor pp_idcs orig_indices scope_id scope_id
+          fprintf ppf "@[<2>let v%d =@ ref 0.0 in@ (%a;@ set_from_float %a@ (%a)@ !v%d; !v%d)@]" scope_id
+            pp_ll body pp_data_node tensor pp_idcs orig_indices scope_id scope_id
         else fprintf ppf "@[<2>let v%d =@ ref 0.0 in@ %a;@ !v%d@]" scope_id pp_ll body scope_id
     | Get_local { scope_id; _ } -> fprintf ppf "!v%d" scope_id
     | Get_global Task_id -> fprintf ppf "(Float.of_int task_id)"

@@ -6,8 +6,8 @@ module NFDSL = Operation.NFDSL
 module SDSL = Session.SDSL
 
 let () = SDSL.set_executor Gccjit
-
-let () =
+(* FIXME: *)
+(* let () =
   SDSL.drop_all_sessions ();
   Random.init 0;
   let%nn_op n = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
@@ -17,7 +17,7 @@ let () =
   Stdio.printf "\n%!";
   SDSL.print_session_code ();
   Stdio.printf "\n%!"
-
+*)
 let _suspended () =
   let open SDSL.O in
   SDSL.drop_all_sessions ();
@@ -26,10 +26,10 @@ let _suspended () =
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   let x_flat =
-    FDSL.term ~needs_gradient:true ~label:"x_flat" ~batch_dims:[ size ] ~input_dims:[] ~output_dims:[ 1 ]
+    FDSL.term ~needs_gradient:true ~label:"x_flat" ~batch_dims:[ Dim size ] ~input_dims:[] ~output_dims:[ Dim 1 ]
       ~init_op:(Constant_fill xs) ()
   in
-  let%nn_dt session_step ~output_dims:[ 1 ] = n =+ 1 in
+  let%nn_dt session_step ~output_dims:[ Dim 1 ] = n =+ 1 in
   let%nn_op x = x_flat @.| session_step in
   let%nn_op fx = f x in
   Stdio.print_endline "\n";

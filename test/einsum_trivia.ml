@@ -8,7 +8,7 @@ let%expect_test "einsum1 permute axes" =
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;
-  let hey = FDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
+  let hey = FDSL.range_of_shape ~batch_dims:[ Dim 2 ] ~input_dims:[ Dim 3 ] ~output_dims:[ Dim 4 ] () in
   let%nn_op ho = hey ++ "b|i->o => o|b->i" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey;
@@ -40,7 +40,7 @@ let%expect_test "einsum1 permute axes" =
     ││      │ 2.00e+0  1.40e+1 │ 5.00e+0  1.70e+1 │ 8.00e+0  2.00e+1 │ 1.10e+1  2.30e+1 ││
     │└──────┴──────────────────┴──────────────────┴──────────────────┴──────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  let hey2 = FDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] () in
+  let hey2 = FDSL.range_of_shape ~batch_dims:[ Dim 2; Dim 3 ] ~input_dims:[ Dim 4; Dim 5 ] ~output_dims:[ Dim 6; Dim 7 ] () in
   let%nn_op ho2 = hey2 ++ "ab|cd->ef => cf|ae->db" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey2;
@@ -256,7 +256,7 @@ let%expect_test "einsum1 sum out axes" =
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;
-  let hey = FDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
+  let hey = FDSL.range_of_shape ~batch_dims:[ Dim 2 ] ~input_dims:[ Dim 3 ] ~output_dims:[ Dim 4 ] () in
   let%nn_op ho = hey ++ "b|i->o => b|i" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey;
@@ -286,7 +286,7 @@ let%expect_test "einsum1 sum out axes" =
     ││      │ 6.60e+1  7.00e+1  7.40e+1 ││
     │└──────┴───────────────────────────┘│
     └────────────────────────────────────┘ |}];
-  let hey2 = FDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] () in
+  let hey2 = FDSL.range_of_shape ~batch_dims:[ Dim 2; Dim 3 ] ~input_dims:[ Dim 4; Dim 5 ] ~output_dims:[ Dim 6; Dim 7 ] () in
   let%nn_op ho2 = hey2 ++ "ab|cd->ef => c|a->d" in
   refresh_session ();
   (* Axis 5 of hey2, i.e. d in the einsum spec, has the lowest variation (progresses by 1),
@@ -312,8 +312,8 @@ let%expect_test "einsum outer product" =
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;
-  let a = FDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
-  let b = FDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] () in
+  let a = FDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ Dim 2 ] () in
+  let b = FDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ Dim 3 ] () in
   let%nn_op c = (a + 1) *+ "i; j => i->j" b in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ a;
@@ -351,8 +351,8 @@ let%expect_test "einsum outer product" =
     ││      │ 2.00e+0  4.00e+0 │ │
     │└──────┴──────────────────┘ │
     └────────────────────────────┘ |}];
-  let a = FDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
-  let b = FDSL.range_of_shape ~batch_dims:[ 5 ] ~input_dims:[ 6 ] ~output_dims:[ 7 ] () in
+  let a = FDSL.range_of_shape ~batch_dims:[ Dim 2 ] ~input_dims:[ Dim 3 ] ~output_dims:[ Dim 4 ] () in
+  let b = FDSL.range_of_shape ~batch_dims:[ Dim 5 ] ~input_dims:[ Dim 6 ] ~output_dims:[ Dim 7 ] () in
   let%nn_op c = a *+ "i|j->k; l|m->n => il|jm->kn" b in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ a;
@@ -541,8 +541,8 @@ let%expect_test "einsum matrix/inner+outer products" =
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;
-  let a = FDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
-  let b = FDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] () in
+  let a = FDSL.range_of_shape ~batch_dims:[ Dim 2 ] ~input_dims:[ Dim 3 ] ~output_dims:[ Dim 4 ] () in
+  let b = FDSL.range_of_shape ~batch_dims:[ Dim 2 ] ~input_dims:[ Dim 4 ] ~output_dims:[ Dim 5 ] () in
   let%nn_op a2 = a *+ "b|i->o; b|i->o => b|i->o" a in
   let%nn_op c = b *+ "b|h->o; b|i->h => b|i->o" a in
   let%nn_op d = a *+ "a|i->h; b|h->o => ab|i->o" b in
@@ -637,7 +637,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;
-  let hey = FDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
+  let hey = FDSL.range_of_shape ~batch_dims:[ Dim 2 ] ~input_dims:[ Dim 3 ] ~output_dims:[ Dim 4 ] () in
   let%nn_op ho = hey ++ "...|i->o => ...|o->i" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey;
@@ -685,7 +685,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└──────┴───────────────────────────┴───────────────────────────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
 
-  let hey2 = FDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] () in
+  let hey2 = FDSL.range_of_shape ~batch_dims:[ Dim 2; Dim 3 ] ~input_dims:[ Dim 4; Dim 5 ] ~output_dims:[ Dim 6; Dim 7 ] () in
   let%nn_op ho3 = hey2 ++ "...b|...i->...o => ...i|...o->...b" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey2;
@@ -959,7 +959,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │││ 4.20e+1  6.00e+1  7.80e+1  9.60e+1 ││
     │└┴────────────────────────────────────┘│
     └───────────────────────────────────────┘ |}];
-  let hey3 = FDSL.range_of_shape ~output_dims:[ 3; 4 ] () in
+  let hey3 = FDSL.range_of_shape ~output_dims:[ Dim 3; Dim 4 ] () in
   let%nn_op ho6 = hey3 ++ "...|...->...o => o" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey3;
@@ -987,7 +987,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└┴────────────────────────────────────┘│
     └───────────────────────────────────────┘ |}];
   (* Broadcast with a shift. *)
-  let hey4 = FDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3; 4 ] () in
+  let hey4 = FDSL.range_of_shape ~input_dims:[ Dim 2 ] ~output_dims:[ Dim 3; Dim 4 ] () in
   let%nn_op ho7 = hey4 ++ "i->...o => ...io" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey4;
@@ -1028,8 +1028,8 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;
-  let a = FDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
-  let b = FDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] () in
+  let a = FDSL.range_of_shape ~batch_dims:[ Dim 3 ] ~input_dims:[ Dim 4 ] ~output_dims:[ Dim 2 ] () in
+  let b = FDSL.range_of_shape ~batch_dims:[ Dim 3 ] ~input_dims:[ Dim 1 ] ~output_dims:[ Dim 4 ] () in
   let%nn_op c = a *+ "...|i->...; ...|...->i => ...|i" b in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ a;
@@ -1074,8 +1074,8 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
     │└──────┴────────────────────────────────────┘│
     └─────────────────────────────────────────────┘ |}];
   (* Broadcast with a shift. *)
-  let d = FDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
-  let e = FDSL.range_of_shape ~input_dims:[ 4 ] ~output_dims:[ 3 ] () in
+  let d = FDSL.range_of_shape ~input_dims:[ Dim 2 ] ~output_dims:[ Dim 3 ] () in
+  let e = FDSL.range_of_shape ~input_dims:[ Dim 4 ] ~output_dims:[ Dim 3 ] () in
   let%nn_op f = d *+ "i->...;j->... => ...ij" e in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ d;
@@ -1127,7 +1127,7 @@ let%expect_test "einsum1 fixed dim axis" =
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;
-  let hey = FDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
+  let hey = FDSL.range_of_shape ~batch_dims:[ Dim 2 ] ~input_dims:[ Dim 3 ] ~output_dims:[ Dim 4 ] () in
   let%nn_op ho = hey ++ "...|1->... => ...|..." in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey;
@@ -1186,7 +1186,7 @@ let%expect_test "einsum1 fixed dim axis" =
     ││axis 1│ 1.80e+1  2.20e+1  2.60e+1 │ 6.60e+1  7.00e+1  7.40e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
-  let hey2 = FDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
+  let hey2 = FDSL.range_of_shape ~input_dims:[ Dim 2 ] ~output_dims:[ Dim 3 ] () in
   let%nn_op ho3 = hey2 ++ "...|...->... => 0" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey2;
@@ -1223,8 +1223,8 @@ let%expect_test "einsum with fixed dim axes" =
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;
-  let a = FDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
-  let b = FDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] () in
+  let a = FDSL.range_of_shape ~batch_dims:[ Dim 3 ] ~input_dims:[ Dim 4 ] ~output_dims:[ Dim 2 ] () in
+  let b = FDSL.range_of_shape ~batch_dims:[ Dim 3 ] ~input_dims:[ Dim 1 ] ~output_dims:[ Dim 4 ] () in
   let%nn_op c = a *+ "...|i->1; ...|...->i => ...|i" b in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ a;

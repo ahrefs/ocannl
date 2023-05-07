@@ -64,7 +64,7 @@ type program = Suspension of t | Session_step_update of t [@@deriving sexp]
 (** Name of a program that can be used as part of a file name. *)
 let get_name = function Suspension _ -> "suspension" | Session_step_update _ -> "session_step_update"
 
-type create = { tensor : NodeUI.tensor_ptr; dims : unit -> int array; init_op : init_op }
+type create = { tensor : NodeUI.tensor_ptr; dims : unit -> Shape.dim array; init_op : init_op }
 (** Information to create a tensor, once its shape is inferred. *)
 
 let remove_updates tensor c =
@@ -116,7 +116,7 @@ type _ low_level =
       tensor : NodeUI.tensor_ptr;
       tensor_idcs : index array;
       dynamic_idcs : Shape.symbol array;
-      target_dims : int array;
+      target_dims : Shape.dim array;
       body : unit low_level;
     }
       -> unit low_level
@@ -180,9 +180,12 @@ let rec to_low_level (code : t) : unit low_level =
       in
       let rec loop rev_iters = function
         | [], [] -> basecase rev_iters
-        | dim :: product, it :: iters ->
+        | Shape.Dim dim :: product, it :: iters ->
             let it = new_sym_index it in
             For_loop { index = it; from_ = 0; to_ = dim - 1; body = loop (it :: rev_iters) (product, iters) }
+        | Shape.Parallel :: _product, _it :: _iters ->
+            (* FIXME: was this filtered out? *)
+            invalid_arg "Code.to_low_level: Accum_binop projections parallel dim found in product space"
         | _ -> invalid_arg "Code.to_low_level: Accum_binop projections dims-iterators mismatch"
       in
       let for_loops =
@@ -203,9 +206,12 @@ let rec to_low_level (code : t) : unit low_level =
       in
       let rec loop rev_iters = function
         | [], [] -> basecase rev_iters
-        | dim :: product, it :: iters ->
+        | Shape.Dim dim :: product, it :: iters ->
             let it = new_sym_index it in
             For_loop { index = it; from_ = 0; to_ = dim - 1; body = loop (it :: rev_iters) (product, iters) }
+        | Parallel :: _product, _it :: _iters ->
+            (* FIXME: was this filtered out? *)
+            invalid_arg "Code.to_low_level: Accum_binop projections parallel dim found in product space"
         | _ -> invalid_arg "Code.to_low_level: Accum_unop projections dims-iterators mismatch"
       in
       let for_loops =
@@ -265,14 +271,12 @@ let interpret_llc ~task_id llc =
   let locals = ref Map.Poly.empty in
   let lookup ?provider_dim (env, dyn_env) indices =
     try
-      Array.map indices
-        ~f:
-          Shape.(
-            function
-            | Fixed_idx i -> i
-            | Iterator s -> Map.find_exn env s
-            | Dynamic_recipient s -> Map.find_exn dyn_env s
-            | Dynamic_provider _ -> Option.value_exn provider_dim)
+      Array.map indices ~f:(function
+        | Shape.Fixed_idx i -> i
+        | Task_id -> task_id
+        | Iterator s -> Map.find_exn env s
+        | Dynamic_recipient s -> Map.find_exn dyn_env s
+        | Dynamic_provider _ -> Option.value_exn provider_dim)
     with (Caml.Not_found | Not_found_s _) as e ->
       if !debug_trace_interpretation then
         Caml.Format.printf "TRACE: lookup error for env=@ %a\n%!" Sexp.pp_hum
@@ -388,7 +392,10 @@ let interpret_llc ~task_id llc =
     let env =
       Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
           let actual = N.get_as_int tensor @@ lookup ~provider_dim env tensor_idcs in
-          (fst env, Map.add_exn ~key ~data:(actual % target_dims.(provider_dim)) @@ snd env))
+          let target_dim =
+            match target_dims.(provider_dim) with Dim d -> d | Parallel -> !Shape.num_parallel_tasks
+          in
+          (fst env, Map.add_exn ~key ~data:(actual % target_dim) @@ snd env))
     in
     loop_proc env body
   in
@@ -532,44 +539,43 @@ let visit fill assign_bag old =
 let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
   let nodes = Hash_set.create (module Int) in
-  let lookup ?provider_dim (env, dyn_env) indices =
-    Array.map indices
-      ~f:
-        Shape.(
-          function
-          | Fixed_idx i -> i
-          | Iterator s -> Map.find_exn env s
-          | Dynamic_recipient s -> Map.find_exn dyn_env s
-          | Dynamic_provider _ -> Option.value_exn provider_dim)
+  let lookup ?provider_dim ~(task_id : int) (env, dyn_env) indices =
+    Array.map indices ~f:(function
+      | Shape.Fixed_idx i -> i
+      | Iterator s -> Map.find_exn env s
+      | Dynamic_recipient s -> Map.find_exn dyn_env s
+      | Dynamic_provider _ -> Option.value_exn provider_dim
+      | Task_id -> task_id)
   in
-  let rec loop_proc env llc : unit =
-    let loop = loop_proc env in
+  let rec loop_proc ~task_id env llc : unit =
+    let loop = loop_proc ~task_id env in
     match llc with
     | Lines body -> Array.iter ~f:loop body
     | For_loop { index = key; from_; to_; body } ->
         for data = from_ to to_ do
-          loop_proc (Map.add_exn ~key ~data @@ fst env, snd env) body
+          loop_proc ~task_id (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
     | Fill { tensor; value } ->
-        loop_float env value;
+        loop_float ~task_id env value;
         let node = get_node node_store tensor in
         Hash_set.add nodes node.id;
         node.fill <- Some value;
         if virtualize_settings.inline_constants then precompute_constants node_store node value
     | Set (tensor, idcs, llv) ->
-        loop_float env llv;
+        loop_float ~task_id env llv;
         Hash_set.add nodes tensor.id;
         let node = get_node node_store tensor in
         if virtualize_settings.inline_constants then precompute_constants ~idcs node_store node llv;
         Array.iter idcs ~f:(function
           | Shape.Fixed_idx _ | Shape.Dynamic_provider _ | Shape.Dynamic_recipient _ ->
               node.non_virtual <- true
+          | Task_id -> failwith "NOT IMPLEMENTED YET" (* FIXME: *)
           | Shape.Iterator s ->
               let old_tensor = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tensor) in
               (* TODO(#134): this prevents multiple virtual tensors from sharing for loops. *)
               assert (NodeUI.equal_tensor_ptr old_tensor tensor);
               Hash_set.add node.assign_index_bag s)
-    | Set_local (_, llv) -> loop_float env llv
+    | Set_local (_, llv) -> loop_float ~task_id env llv
     | Comment _ -> ()
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
         let data_node = get_node node_store tensor in
@@ -577,17 +583,17 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
         data_node.non_virtual <- true;
         data_node.scalar <- None;
         Hash_set.add nodes data_node.id;
-        dynamic_indices data_node env ~tensor_idcs ~dynamic_idcs ~target_dims body
-  and loop_float env llv =
-    let loop = loop_float env in
+        dynamic_indices data_node ~task_id env ~tensor_idcs ~dynamic_idcs ~target_dims body
+  and loop_float ~task_id env llv =
+    let loop = loop_float ~task_id env in
     match llv with
     | Constant _ -> ()
     | Get (tensor, indices) ->
         let data_node = get_node node_store tensor in
         Hash_set.add nodes data_node.id;
-        Hashtbl.update data_node.accesses (lookup env indices)
+        Hashtbl.update data_node.accesses (lookup ~task_id env indices)
           ~f:(visit data_node.fill data_node.assign_index_bag)
-    | Local_scope { body; _ } -> loop_proc env body
+    | Local_scope { body; _ } -> loop_proc ~task_id env body
     | Get_local _ -> ()
     | Get_global _ -> ()
     | Binop (Arg1, llv1, _llv2) -> loop llv1
@@ -596,16 +602,18 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
         loop llv1;
         loop llv2
     | Unop (_, llv) -> loop llv
-  and dynamic_indices node env ~tensor_idcs ~dynamic_idcs ~target_dims:_ body =
+  and dynamic_indices node ~task_id env ~tensor_idcs ~dynamic_idcs ~target_dims:_ body =
     let env =
       Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
-          let at_pos = lookup ~provider_dim env tensor_idcs in
+          let at_pos = lookup ~provider_dim ~task_id env tensor_idcs in
           Hashtbl.update node.accesses at_pos ~f:(visit node.fill node.assign_index_bag);
           (fst env, Map.add_exn ~key ~data:0 @@ snd env))
     in
-    loop_proc env body
+    loop_proc ~task_id env body
   in
-  loop_proc (Map.Poly.empty, Map.Poly.empty) llc;
+  for task_id = 0 to !Shape.num_parallel_tasks - 1 do
+    loop_proc ~task_id (Map.Poly.empty, Map.Poly.empty) llc
+  done;
   Hash_set.iter nodes ~f:(fun node_id ->
       let value_node = get_node node_store { id = node_id; field = Value } in
       if Hashtbl.exists value_node.accesses ~f:is_too_many then value_node.non_virtual <- true;
@@ -639,9 +647,12 @@ let process_computation node_store node top_llc =
            ~f:
              Shape.(
                function
-               | Fixed_idx _ | Dynamic_recipient _ | Dynamic_provider _ -> None | Iterator s -> Some s)
+               | Task_id | Fixed_idx _ | Dynamic_recipient _ | Dynamic_provider _ -> None
+               | Iterator s -> Some s)
     in
-    if Set.length syms <> Array.length indices then raise Non_virtual
+    (* FIXME: We need to allow inlining tensors with parallel dimensions. *)
+    let num_parallel = failwith "NOT IMPLEMENTED YET" in
+    if Set.length syms + num_parallel <> Array.length indices then raise Non_virtual
   in
   (* Traverse the float code too, for completeness / future use-cases. *)
   let rec loop_proc ~(env_dom : sym_indices) llc =

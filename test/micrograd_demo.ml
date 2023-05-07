@@ -10,7 +10,7 @@ let () = SDSL.set_executor Gccjit
 let%expect_test "Micrograd README basic example" =
   SDSL.drop_all_sessions ();
   Random.init 0;
-  let%nn_op c = "a" [ -4 ] + "b" [ 2 ] in
+  let%nn_op c = "a" (* [ -4 ] *) + "b" (* [ 2 ] *) in
   let%nn_op d = (a *. b) + (b **. 3) in
   let%nn_op c = c + c + 1 in
   let%nn_op c = c + 1 + c + ~-a in
@@ -89,13 +89,13 @@ let%expect_test "Micrograd half-moons example" =
             let c = cos v and s = sin v in
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
-  let moons_flat = FDSL.init_const ~l:"moons_flat" ~b:[ epochs; batch ] ~o:[ 2 ] moons_flat in
+  let moons_flat = FDSL.init_const ~l:"moons_flat" ~b:[ Dim epochs; Dim batch ] ~o:[ Dim 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes = FDSL.init_const ~l:"moons_classes" ~b:[ epochs; batch ] ~o:[ 1 ] moons_classes in
+  let moons_classes = FDSL.init_const ~l:"moons_classes" ~b:[ Dim epochs; Dim batch ] ~o:[ Dim 1 ] moons_classes in
   let%nn_op mlp x = "b3" 1 + ("w3" * !/("b2" 16 + ("w2" * !/("b1" 16 + ("w1" * x))))) in
   let steps = epochs * 2 * len / batch in
-  let%nn_dt session_step ~output_dims:[ 1 ] = n =+ 1 in
-  let%nn_dt minus_lr ~output_dims:[ 1 ] = n =: -0.1 *. (!..steps - session_step) /. !..steps in
+  let%nn_dt session_step ~output_dims:[ Dim 1 ] = n =+ 1 in
+  let%nn_dt minus_lr ~output_dims:[ Dim 1 ] = n =: -0.1 *. (!..steps - session_step) /. !..steps in
   SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = moons_flat @.| session_step in
   let%nn_op moons_class = moons_classes @.| session_step in
@@ -120,7 +120,8 @@ let%expect_test "Micrograd half-moons example" =
     log_losses := Float.log total_loss.@[0] :: !log_losses
   done;
   SDSL.close_session ();
-  let%nn_op point = [ 0; 0 ] in
+  (* FIMXE: *)
+  let%nn_op point = (* [ 0; 0 ] *) "point" 2 in
   let mlp_result = mlp point in
   SDSL.refresh_session ();
   let callback (x, y) =

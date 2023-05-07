@@ -52,7 +52,10 @@ let print_formula ~with_grad ~with_code ?(with_low_level = false) (style : NodeU
           | First _ -> invalid_arg "`N5_layout requires integer-only labels"
         in
         let p_labels = Shape.(axis_labels_of_spec priorities).labels |> Map.map ~f in
-        Shape.axis_map_to_dims_index p_labels
+        Array.map (Shape.axis_map_to_dims_index p_labels) ~f:(function
+          | Dim d -> d
+          | Parallel ->
+              raise @@ Session_error ("`Label_layout found an unexpected <parallel>: " ^ priorities, Some m))
     | `Label_layout label_idcs ->
         let inv_labels =
           Map.to_alist sh.axis_labels |> List.map ~f:(fun (a, b) -> (b, a)) |> Map.of_alist (module String)
@@ -73,7 +76,7 @@ let print_formula ~with_grad ~with_code ?(with_low_level = false) (style : NodeU
   in
   let needs_spec =
     Fn.non Map.is_empty sh.axis_labels
-    || Shape.(List.exists ~f:(( = ) 1) @@ list_of_dims @@ dims_of_kind Input sh)
+    || Shape.(List.exists ~f:Shape.dim_1 @@ list_of_dims @@ dims_of_kind Input sh)
   in
   let labels = Shape.axis_map_to_dims_index ~default:"" sh.axis_labels in
   let labels_spec = if needs_spec then Some (Shape.to_string_hum ~style:`Only_labels sh) else None in
@@ -129,10 +132,8 @@ let print_preamble () = Stdio.printf "%s\n%!" (Formula.prefix_with_preamble "")
 (** *** Session management. *** *)
 type backend = Interpreter | OCaml | Gccjit [@@deriving sexp, equal]
 
-let num_tasks = ref 1
 let num_domains = Caml.Domain.recommended_domain_count ()
 let task_pool = Domainslib.Task.setup_pool ~name:"session_task_pool" ~num_domains ()
-
 let executor = ref Exec_as_gccjit.jit_compiled
 let executor_error_message = ref Exec_as_gccjit.error_message
 let cleanup_executor_session = ref Exec_as_gccjit.cleanup_session
@@ -286,8 +287,8 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
     match !(Ocannl_runtime.Node.global.session_step_update) with
     | None -> assert false
     | Some update ->
-        Domainslib.Task.parallel_for task_pool ~start:0 ~finish:(!num_tasks - 1) ~body:(fun task_id ->
-            update ~task_id)
+        Domainslib.Task.parallel_for task_pool ~start:0 ~finish:(!Shape.num_parallel_tasks - 1)
+          ~body:(fun task_id -> update ~task_id)
 
 (** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id].
     Discards all computations (forward, backward, update params, data fetches), but keeps
@@ -435,4 +436,6 @@ module SDSL = struct
   let default_value_prec = Formula.default_value_prec
   let default_grad_prec = Formula.default_grad_prec
   let global_size_in_bytes () = Ocannl_runtime.Node.global_size_in_bytes ()
+  let num_parallel_tasks = Shape.num_parallel_tasks
+  let num_domains = num_domains
 end

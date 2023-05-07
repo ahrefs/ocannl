@@ -179,7 +179,7 @@ let range ?desc_label ~is_form ?axis_label upto =
   Formula.term ?desc_label ~is_form ~needs_gradient:false
     ~label:("0" ^ "..." ^ Int.to_string upto)
     ~batch_dims:[] ~input_dims:[]
-    ~output_dims:[ upto + 1 ]
+    ~output_dims:[ Dim (upto + 1) ]
     ?axis_labels:axis_label ~init_op:Range_over_offsets ()
 
 let range_of_shape ?desc_label ~is_form ?(batch_dims = []) ?(input_dims = []) ?(output_dims = []) ?axis_labels

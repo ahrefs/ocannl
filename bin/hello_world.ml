@@ -10,7 +10,7 @@ let hello1 () =
   let open Operation.FDSL in
   let open Session.SDSL in
   (* Hey is inferred to be a matrix. *)
-  let hey = range_of_shape ~batch_dims:[ 7 ] ~input_dims:[ 9; 10; 11 ] ~output_dims:[ 13; 14 ] () in
+  let hey = range_of_shape ~batch_dims:[ Dim 7 ] ~input_dims:[ Dim 9; Dim 10; Dim 11 ] ~output_dims:[ Dim 13; Dim 14 ] () in
   let%nn_op hoo = ((1 + 1) * hey) - 10 in
   refresh_session ();
   print_node_tree ~with_grad:false ~depth:99 hoo.id;
