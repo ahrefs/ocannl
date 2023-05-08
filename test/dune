@@ -1,7 +1,7 @@
 (library
  (name tutorials)
  (inline_tests)
- (libraries base dynlink ocannl_runtime ocannl)
+ (libraries base dynlink ocannl)
  (modules
   data_fetching
   einsum_trivia

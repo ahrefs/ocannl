@@ -6,7 +6,7 @@ type binop = Add | Mul | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp]
 
 type unop = Identity | Relu [@@deriving sexp]
 
-module N = Ocannl_runtime.Node
+module N = Node
 
 type global_identifier =
   | Task_id  (** Retrieves the identifier (a non-negative integer) of the task running the computation. *)
@@ -56,13 +56,6 @@ and t =
   | Block_comment of string * t
   | Noop
 [@@deriving sexp]
-
-(** Dynamically loading a program bounds a callback to one of the two global routine slots:
-    the [session_step_update], or the temporary slot to be read by the caller right after compilation. *)
-type program = Suspension of t | Session_step_update of t [@@deriving sexp]
-
-(** Name of a program that can be used as part of a file name. *)
-let get_name = function Suspension _ -> "suspension" | Session_step_update _ -> "session_step_update"
 
 type create = { tensor : NodeUI.tensor_ptr; dims : unit -> Shape.dim array; init_op : init_op }
 (** Information to create a tensor, once its shape is inferred. *)
@@ -135,9 +128,6 @@ type _ low_level =
   | Binop : binop * float low_level * float low_level -> float low_level
   | Unop : unop * float low_level -> float low_level
   | Constant : float -> float low_level
-[@@deriving sexp_of]
-
-type low_level_program = Assign_suspension of unit low_level | Assign_session_step_update of unit low_level
 [@@deriving sexp_of]
 
 let binop ~op ~rhs1 ~rhs2 = match op with Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Binop (op, rhs1, rhs2)
@@ -234,11 +224,6 @@ let rec to_low_level (code : t) : unit low_level =
   | Fetch { tensor = _; fetch_op = Synthetic gen } -> to_low_level gen
   | Fetch { tensor; fetch_op = Imported gid } -> Fill { tensor; value = Get_global gid }
 
-let to_low_level_program prog : low_level_program =
-  match prog with
-  | Suspension proc -> Assign_suspension (to_low_level proc)
-  | Session_step_update proc -> Assign_session_step_update (to_low_level proc)
-
 let interpreter_print_comments = ref false
 let keep_files_in_run_directory = ref false
 let with_debug = ref true
@@ -266,22 +251,27 @@ let get_as_float ptr idcs =
 
 let debug_trace_interpretation = ref false
 
-let interpret_llc ~task_id llc =
+let interpret_code ?task_id llc =
   (* Local scope ids can be non-unique due to inlining. *)
   let locals = ref Map.Poly.empty in
+  let task_id () =
+    match task_id with
+    | Some id -> id
+    | None -> invalid_arg "interpret_code: task_id not set, use interpret_task_id_func"
+  in
   let lookup ?provider_dim (env, dyn_env) indices =
     try
       Array.map indices ~f:(function
         | Shape.Fixed_idx i -> i
-        | Task_id -> task_id
+        | Task_id -> task_id ()
         | Iterator s -> Map.find_exn env s
         | Dynamic_recipient s -> Map.find_exn dyn_env s
         | Dynamic_provider _ -> Option.value_exn provider_dim)
-    with (Caml.Not_found | Not_found_s _) as e ->
+    with Caml.Not_found | Not_found_s _ ->
       if !debug_trace_interpretation then
         Caml.Format.printf "TRACE: lookup error for env=@ %a\n%!" Sexp.pp_hum
           ([%sexp_of: (sym_index * int) list] @@ Map.to_alist env);
-      raise e
+      failwith "interpret_code: index lookup error, set CDSL.debug_trace_interpretation for details"
   in
   let rec loop_proc env llc : unit =
     let loop = loop_proc env in
@@ -323,7 +313,7 @@ let interpret_llc ~task_id llc =
         if !debug_trace_interpretation then (
           Caml.Format.printf "TRACE: %s -- prior state of nodes: {\n%!" c;
           NodeUI.print_decimals_precision := 9;
-          for i = 1 to Ocannl_runtime.Node.global.unique_id - 1 do
+          for i = 1 to Node.global.unique_id - 1 do
             Caml.Format.printf "TRACE: %a\n%!" PrintBox_text.pp
               (NodeUI.to_printbox ~single_node:true ~with_grad:true ~depth:9 i)
           done;
@@ -373,7 +363,7 @@ let interpret_llc ~task_id llc =
             (get_as_float id.tensor idcs) result;
         result
     | Get_local id -> Map.find_exn !locals id
-    | Get_global Task_id -> Float.of_int task_id
+    | Get_global Task_id -> Float.of_int @@ task_id ()
     | Get_global (C_function _) -> failwith "NOT IMPLEMENTED YET: jit-dynloading C calls in the interpreter"
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
@@ -401,12 +391,6 @@ let interpret_llc ~task_id llc =
   in
   loop_proc (Map.Poly.empty, Map.Poly.empty) llc
 
-let interpret_llprog = function
-  | Assign_suspension proc ->
-      Ocannl_runtime.Node.most_recent_suspension := Some (fun ~task_id -> interpret_llc ~task_id proc)
-  | Assign_session_step_update proc ->
-      Ocannl_runtime.Node.global.session_step_update := Some (fun ~task_id -> interpret_llc ~task_id proc)
-
 let fprint_code ppf c =
   (* TODO: something nicely concise. *)
   Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_t c
@@ -414,10 +398,6 @@ let fprint_code ppf c =
 let fprint_low_level ppf c =
   (* TODO: something nicely concise. *)
   Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_low_level Unit.sexp_of_t (to_low_level c)
-
-let fprint_program ppf prog =
-  (* TODO: something nicely concise. *)
-  Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_program prog
 
 let interpreter_error_message ~name ~prefix ?extra_error_msg ~contents exc =
   let backtrace = Caml.Printexc.get_backtrace () in
@@ -940,22 +920,20 @@ let optimize_proc llc =
             | _ -> n.virtual_ <- true);
     result
 
-let compile_proc proc = optimize_proc @@ to_low_level proc
-
-let compile_program prog =
-  let result =
-    match prog with
-    | Suspension proc -> Assign_suspension (compile_proc proc)
-    | Session_step_update proc -> Assign_session_step_update (compile_proc proc)
-  in
+let compile_proc ~name proc =
+  let result = optimize_proc @@ to_low_level proc in
   if !debug_trace_interpretation then
-    Caml.Format.printf "TRACE: Compiled program:@ %a@!" Sexp.pp_hum @@ sexp_of_low_level_program result;
+    Caml.Format.printf "TRACE: Compiled program:@ %a@!" Sexp.pp_hum @@ sexp_of_low_level Unit.sexp_of_t result;
+  if !with_debug && !keep_files_in_run_directory then
+    Stdio.Out_channel.write_all (name ^ ".llc")
+      ~data:(Sexp.to_string_hum @@ sexp_of_low_level Unit.sexp_of_t result);
   result
 
-let interpret_compiled ~name:_ compiled : string option =
-  let () = interpret_llprog compiled in
-  (* TODO: if with_debug and keep_files_in_run_directory, save the sexp_of llprog to a file name^".llc". *)
-  if !with_debug then Some (Sexp.to_string_hum @@ sexp_of_low_level_program compiled) else None
+let interpret_task_id_func ~name:_ compiled =
+  fun ~task_id -> interpret_code ~task_id compiled
+
+let interpret_unit_func ~name:_ compiled =
+  fun () -> interpret_code compiled
 
 module CDSL = struct
   let value_of_id id : NodeUI.tensor_ptr = { id; field = Value }

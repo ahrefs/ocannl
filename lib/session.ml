@@ -8,9 +8,9 @@ let get_root id =
   | Some r -> r
   | None ->
       let msg =
-        if id >= !first_session_id && id < Ocannl_runtime.Node.global.unique_id then
+        if id >= !first_session_id && id < Node.global.unique_id then
           "get_root: Node " ^ Int.to_string id ^ " is a subformula"
-        else if id >= Ocannl_runtime.Node.global.unique_id then
+        else if id >= Node.global.unique_id then
           "get_root: Node " ^ Int.to_string id ^ " has not been created yet"
         else if id < 1 then "get_root: Node IDs start from 1"
         else "get_root: Node " ^ Int.to_string id ^ " is outside the current session"
@@ -18,7 +18,7 @@ let get_root id =
       raise @@ Session_error (msg, None)
 
 let get_node id =
-  let open Ocannl_runtime.Node in
+  let open Node in
   match Hashtbl.find NodeUI.global_node_store id with
   | Some r -> r
   | None ->
@@ -130,46 +130,26 @@ let print_global_roots ~with_grad ~with_code (style : NodeUI.array_print_style) 
 let print_preamble () = Stdio.printf "%s\n%!" (Formula.prefix_with_preamble "")
 
 (** *** Session management. *** *)
-type backend = Interpreter | OCaml | Gccjit [@@deriving sexp, equal]
+type backend = Interpreter | Gccjit [@@deriving sexp, equal]
 
 let num_domains = Caml.Domain.recommended_domain_count ()
 let task_pool = Domainslib.Task.setup_pool ~name:"session_task_pool" ~num_domains ()
-let executor = ref Exec_as_gccjit.jit_compiled
+let exec_task_id_func = ref Exec_as_gccjit.jit_task_id_func
+let exec_unit_func = ref Exec_as_gccjit.jit_unit_func
 let executor_error_message = ref Exec_as_gccjit.error_message
 let cleanup_executor_session = ref Exec_as_gccjit.cleanup_session
 
 let set_executor = function
   | Interpreter ->
-      executor := Code.interpret_compiled;
+      exec_task_id_func := Code.interpret_task_id_func;
+      exec_unit_func := Code.interpret_unit_func;
       executor_error_message := Code.interpreter_error_message;
       cleanup_executor_session := fun () -> ()
-  | OCaml ->
-      executor := Exec_as_OCaml.load_native_compiled;
-      executor_error_message := Exec_as_OCaml.error_message;
-      cleanup_executor_session := fun () -> ()
   | Gccjit ->
-      executor := Exec_as_gccjit.jit_compiled;
+      exec_task_id_func := Exec_as_gccjit.jit_task_id_func;
+      exec_unit_func := Exec_as_gccjit.jit_unit_func;
       executor_error_message := Exec_as_gccjit.error_message;
       cleanup_executor_session := Exec_as_gccjit.cleanup_session
-
-let dynload_with_handler ~runtime_store ~name compiled =
-  let contents = !executor ~name compiled in
-  match (contents, !runtime_store) with
-  | Some contents, Some routine ->
-      runtime_store :=
-        Some
-          (fun ~task_id ->
-            try routine ~task_id
-            with error ->
-              Formula.handle_error @@ !executor_error_message ~name ~prefix:"Runtime error:" ~contents error)
-  | Some contents, None ->
-      let msg = "refresh_session: error loading initialization: routine not set in code:\n" ^ contents in
-      raise @@ Formula.Session_error (msg, None)
-  | _, None ->
-      failwith
-        ("refresh_session: error loading initialization: routine not set"
-        ^ if !Code.with_debug then "" else " (set `Code.CDSL.with_debug := true` for more information)")
-  | _ -> ()
 
 let perform_initialization =
   List.iter ~f:(function
@@ -183,21 +163,15 @@ let perform_initialization =
           n.grad <- Some (NodeUI.create_ndarray !Formula.default_grad_prec (dims ()) init_op)
         else assert (Option.is_some n.grad))
 
-let compile_routine code =
+let compile_routine ~name code =
   let open Formula in
   let num_inits = List.length !session_initializations in
   let to_init = num_inits - !session_initialized in
   session_initialized := num_inits;
-  Ocannl_runtime.Node.most_recent_suspension := None;
-  let prog = Code.(Suspension code) in
-  let name = Code.get_name prog in
-  let compiled = Code.compile_program prog in
+  let compiled = Code.compile_proc ~name code in
   (* Only initialize after compilation, to know which nodes are virtual. *)
   perform_initialization @@ List.take !session_initializations to_init;
-  dynload_with_handler ~runtime_store:Ocannl_runtime.Node.most_recent_suspension ~name compiled;
-  let routine = Option.value_exn !Ocannl_runtime.Node.most_recent_suspension in
-  Ocannl_runtime.Node.most_recent_suspension := None;
-  routine
+  !exec_unit_func ~name compiled
 
 let session_params () = NodeUI.param_nodes ~from_id:!Formula.first_session_id ()
 
@@ -211,16 +185,19 @@ let minus_learning_rate : Formula.t option ref = ref None
 let last_refresh_roots = ref !Formula.global_roots
 let last_with_backprop = ref false
 let last_update_params = ref false
-let generated_session_step_update = ref Code.Noop
-let generated_session_step_update_compiled = ref Code.(Assign_session_step_update (Comment "Noop"))
+let session_step_update = ref Code.Noop
+let session_step_update_compiled = ref Code.(Comment "Noop")
+let session_step_update_routine = ref (fun ~task_id:_ -> ())
+let session_update_params = ref Code.Noop
+let session_update_params_compiled = ref Code.(Comment "Noop")
 
 let print_session_code ?(compiled = false) () =
   let open Code in
   (* FIXME: figure out if / why this isn't idempotent. *)
   if compiled then
     Caml.Format.printf "Compiled session step update code:@ %a" Sexp.pp_hum
-      (sexp_of_low_level_program @@ !generated_session_step_update_compiled)
-  else Caml.Format.printf "Session step update code:@ %a" fprint_code !generated_session_step_update;
+      (sexp_of_low_level Unit.sexp_of_t !session_step_update_compiled)
+  else Caml.Format.printf "Session step update code:@ %a" fprint_code !session_step_update;
   Caml.Format.print_newline ()
 
 let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_params = true) ?(reinit = false)
@@ -240,7 +217,6 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
   if regenerate then session_initialized := 0;
   let generating = regenerate || roots_changed || backprop_changed || update_params_changed in
   if generating then (
-    Ocannl_runtime.Node.global.session_step_update := None;
     let open Code in
     let forward =
       Block_comment
@@ -271,44 +247,37 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
     in
     (* Roots at the time of compilation are not virtual, so that they can be consumed downstream. *)
     Map.iter_keys !Formula.global_roots ~f:(fun id -> (NodeUI.get id).cannot_be_virtual <- true);
-    generated_session_step_update := sequential [ forward; backprop; params_update ]);
-  let prog = Code.(Session_step_update !generated_session_step_update) in
-  let name = Code.get_name prog in
-  if generating then generated_session_step_update_compiled := Code.compile_program prog;
+    session_step_update := sequential [ forward; backprop; params_update ]);
+  let name = "session_step_update" in
+  if generating then session_step_update_compiled := Code.compile_proc ~name !session_step_update;
   if generating || reinit || roots_changed then (
     let num_inits = List.length !session_initializations in
     let to_init = num_inits - !session_initialized in
     perform_initialization @@ List.take !session_initializations to_init;
     session_initialized := num_inits);
   if (not force_no_init) && (generating || reinit) then
-    dynload_with_handler ~runtime_store:Ocannl_runtime.Node.global.session_step_update ~name
-      !generated_session_step_update_compiled;
+    session_step_update_routine := !exec_task_id_func ~name !session_step_update_compiled;
   if run then
-    match !(Ocannl_runtime.Node.global.session_step_update) with
-    | None -> assert false
-    | Some update ->
-        if !Shape.num_parallel_tasks = 1 then update ~task_id:0
-        else
-          Domainslib.Task.run task_pool (fun () ->
-              Domainslib.Task.parallel_for task_pool ~start:0 ~finish:(!Shape.num_parallel_tasks - 1)
-                ~body:(fun task_id -> update ~task_id))
+    if !Shape.num_parallel_tasks = 1 then !session_step_update_routine ~task_id:0
+    else
+      Domainslib.Task.run task_pool (fun () ->
+          Domainslib.Task.parallel_for task_pool ~start:0 ~finish:(!Shape.num_parallel_tasks - 1)
+            ~body:(fun task_id -> !session_step_update_routine ~task_id))
 
 (** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id].
     Discards all computations (forward, backward, update params, data fetches), but keeps
     the already computed data / parameters. *)
 let close_session () =
-  Formula.first_session_id := Ocannl_runtime.Node.global.unique_id;
+  Formula.first_session_id := Node.global.unique_id;
   Formula.global_roots := Map.empty (module Int);
   Formula.session_shape_updates := [];
   Formula.session_initializations := [];
   Formula.session_initialized := 0;
   Formula.session_prepare_forward := [];
   Formula.session_prepare_backprop := [];
-  generated_session_step_update := Noop;
+  session_step_update := Noop;
   minus_learning_rate := None;
-  !cleanup_executor_session ();
-  Ocannl_runtime.Node.most_recent_suspension := None;
-  Ocannl_runtime.Node.global.session_step_update := None
+  !cleanup_executor_session ()
 
 (** Discards global roots, rolls back [Node.state.unique_id] to [Formula.first_session_id], discards
     the corresponding elements from [Node.state.node_store]. *)
@@ -316,11 +285,11 @@ let drop_session () =
   let beginning_of_session = !Formula.first_session_id in
   close_session ();
   Formula.first_session_id := beginning_of_session;
-  for i = !Formula.first_session_id to Ocannl_runtime.Node.global.unique_id - 1 do
+  for i = !Formula.first_session_id to Node.global.unique_id - 1 do
     Hashtbl.remove NodeUI.global_node_store i;
-    Hashtbl.remove Ocannl_runtime.Node.global.node_store i
+    Hashtbl.remove Node.global.node_store i
   done;
-  Ocannl_runtime.Node.global.unique_id <- !Formula.first_session_id
+  Node.global.unique_id <- !Formula.first_session_id
 
 (** Discards all global state, rolls back [Node.state.unique_id] and [Formula.first_session_id]
     to 1. *)
@@ -328,8 +297,8 @@ let drop_all_sessions () =
   Formula.first_session_id := 1;
   drop_session ();
   Hashtbl.clear NodeUI.global_node_store;
-  Hashtbl.clear Ocannl_runtime.Node.global.node_store;
-  Ocannl_runtime.Node.global.unique_id <- 1
+  Hashtbl.clear Node.global.node_store;
+  Node.global.unique_id <- 1
 
 let value_1d_points ?from_axis ~xdim m = NodeUI.retrieve_1d_points ?from_axis ~xdim m.Formula.node.node.value
 
@@ -344,10 +313,10 @@ let grad_2d_points ?from_axis ~xdim ~ydim m =
   | None -> [||]
   | Some a -> NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim a
 
-let set_value m = Ocannl_runtime.Node.set_from_float m.Formula.node.node.value
-let get_value m = Ocannl_runtime.Node.get_as_float m.Formula.node.node.value
-let set_grad m = Ocannl_runtime.Node.set_from_float (Option.value_exn m.Formula.node.node.grad)
-let get_grad m = Ocannl_runtime.Node.get_as_float (Option.value_exn m.Formula.node.node.grad)
+let set_value m = Node.set_from_float m.Formula.node.node.value
+let get_value m = Node.get_as_float m.Formula.node.node.value
+let set_grad m = Node.set_from_float (Option.value_exn m.Formula.node.node.grad)
+let get_grad m = Node.get_as_float (Option.value_exn m.Formula.node.node.grad)
 
 module O = struct
   (** Get the value at the given indices. *)
@@ -376,7 +345,7 @@ module O = struct
 end
 
 module SDSL = struct
-  type nonrec backend = backend = Interpreter | OCaml | Gccjit
+  type nonrec backend = backend = Interpreter | Gccjit
 
   module O = O
 
@@ -401,11 +370,8 @@ module SDSL = struct
   let print_decimals_precision = NodeUI.print_decimals_precision
   let get_root = get_root
   let get_node = get_node
-  let set_values m cs = Ocannl_runtime.Node.(init_ndarray (Constant_fill cs) m.Formula.node.node.value)
-
-  let set_grads m cs =
-    Ocannl_runtime.Node.(init_ndarray (Constant_fill cs) (Option.value_exn m.Formula.node.node.grad))
-
+  let set_values m cs = Node.(init_ndarray (Constant_fill cs) m.Formula.node.node.value)
+  let set_grads m cs = Node.(init_ndarray (Constant_fill cs) (Option.value_exn m.Formula.node.node.grad))
   let set_non_virtual m = m.Formula.node.cannot_be_virtual <- true
 
   let value_1d_points ?from_axis ~xdim m =
@@ -438,7 +404,7 @@ module SDSL = struct
 
   let default_value_prec = Formula.default_value_prec
   let default_grad_prec = Formula.default_grad_prec
-  let global_size_in_bytes () = Ocannl_runtime.Node.global_size_in_bytes ()
+  let global_size_in_bytes () = Node.global_size_in_bytes ()
   let num_parallel_tasks = Shape.num_parallel_tasks
   let num_domains = num_domains
 end

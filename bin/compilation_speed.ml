@@ -21,7 +21,7 @@ let recompiling_graph executor opti () =
   let xs = Array.init 100 ~f:Float.(fun i -> of_int i - 50.) in
   let ys =
     Array.map xs ~f:(fun v ->
-        SDSL.compile_routine [%nn_cd x =: !.v] ~task_id:0;
+        SDSL.compile_routine ~name:"assign_x" [%nn_cd x =: !.v] ();
         SDSL.refresh_session ();
         f.@[0])
   in
@@ -50,7 +50,6 @@ let recompiling_graph executor opti () =
 let benchmarks =
   [
     recompiling_graph Interpreter 3;
-    recompiling_graph OCaml 3;
     recompiling_graph Gccjit 0;
     recompiling_graph Gccjit 1;
     recompiling_graph Gccjit 2;

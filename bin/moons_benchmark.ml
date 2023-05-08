@@ -112,7 +112,8 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   (* let epochs = 20 in *)
   let bench_title =
     Sexp.to_string_hum
-    @@ [%sexp_of: string * Session.backend * string * int * string * int * string * NodeUI.prec]
+    @@ [%sexp_of:
+         string * Session.backend * string * int * string * int * string * string * int * NodeUI.prec]
          ( (if virtualize then "virtu." else "non-v."),
            executor,
            "gcc-opt",
@@ -120,6 +121,8 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
            "inlining",
            inlining_cutoff,
            (if inline_constants then "..." else "NIC"),
+           "parallel",
+           num_parallel_tasks,
            precision )
   in
   Stdio.prerr_endline @@ "\n\n****** Benchmarking virtualized: " ^ bench_title ^ " for "

@@ -66,39 +66,11 @@ let term_needs_gradient spec =
   | Deduced_params _ -> true
 
 
-    | LLCreate { tensor=Value_at_node_id id; dims; init_op } ->
-      fprintf ppf "@[<2>(get %d).value <-@ create_ndarray Single@ %a %a@]" id pp_dims dims pp_print_init_op init_op
-    | LLCreate { tensor=Gradient_at_node_id id; dims; init_op } ->
-      fprintf ppf "@[<2>(get_form %d).grad <-@ create_ndarray Single@ %a %a@]" id pp_dims dims pp_print_init_op init_op
-
-
-  let pp_dims ppf dims =
-    fprintf ppf "[|%a|]" (pp_print_list ~pp_sep:pp_semi pp_print_int) @@ Array.to_list dims in
-
-  | LLFetch: {
-      tensor: data low_level; fetch_op: fetch_op;
-    } -> unit low_level
-
-    | LLFetch { tensor=Value_at_node_id id; fetch_op } ->
-      fetch_ndarray fetch_op ((get id).value)
-    | LLFetch { tensor=Gradient_at_node_id id; fetch_op } ->
-      fetch_ndarray fetch_op ((get_form id).grad)
-
-    | LLFetch { tensor=Value_at_node_id id; fetch_op } ->
-      fprintf ppf "@[<2>fetch_ndarray_callback@ ~op_or_id:%a@ ((get %d).value)@]"
-        (pp_print_fetch_op ~id) fetch_op id
-    | LLFetch { tensor=Gradient_at_node_id id; fetch_op } ->
-      fprintf ppf "@[<2>fetch_ndarray_callback@ ~op_or_id:%a@ ((get_form %d).grad)@]"
-        (pp_print_fetch_op ~id) fetch_op id
-
-
 
   | Range_over_axis_from_end of int
   (** Fills in the index number of the specified axis counting from end.
       [Range_over_axis_from_end 1] is the range over the last axis. *)
 
-  | Range_over_axis_from_end d ->
-    Caml.Format.(fprintf ppf "(Range_over_axis_from_end %d)" d)
 
   | Range_over_axis_from_end d ->
     init_array_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ idcs.(Array.length idcs - d))
@@ -149,19 +121,6 @@ let init_ndarray_callback ~op_or_id arr =
       ~second:(Hashtbl.find_exn global.node_init_callbacks) in
   init_ndarray init_op arr
 
-let pp_print_fetch_op ~id ppf: Code.fetch_op -> unit = function
-  | Init_op init_op ->
-    Caml.Format.(fprintf ppf "(Either.First (Init_op @[<2>(%a)@]))" pp_print_init_op init_op)
-  | (Compute_point _) as callback ->
-    let open Ocannl_runtime in
-    Hashtbl.update Node.global.node_fetch_callbacks id ~f:(function
-        | None -> callback
-        | Some other ->
-          (if not @@ phys_equal other callback then invalid_arg
-               "exec_as_OCaml: multiple fetch callbacks for the same node not supported currently");
-          callback
-    );
-    Caml.Format.(fprintf ppf "(Either.Second %d)" id)
 
   let point_input = FDSL.data ~label:"point_input" ~batch_dims:[1] ~output_dims:[2]
       (Compute_point (fun ~session_step:_ ~dims:_ ~idcs -> point.(idcs.(1)))) in
@@ -274,5 +233,36 @@ type nulop =
               (Sexp.to_string_hum @@ [%sexp_of: index array] idcs_for_debug)
               (Sexp.to_string_hum @@ sexp_of_int_env env);
             raise e);
-        
+
+
+
+let get_value (type val_t arr_t) (prec : (val_t, arr_t) precision) uid : arr_t =
+  let n = Hashtbl.find_exn global.node_store uid in
+  match (prec, n.value) with
+  | Byte_as_int, Byte_as_int_nd arr -> arr
+  | Half_as_int, Half_as_int_nd arr -> arr
+  | Single, Single_nd arr -> arr
+  | Double, Double_nd arr -> arr
+  | _, arr ->
+      raise
+      @@ Runtime_error
+           ( "Precision mismatch: expected " ^ precision_to_string prec ^ ", got "
+             ^ ndarray_precision_to_string arr,
+             Some n )
+
+let get_grad (type val_t arr_t) (prec : (val_t, arr_t) precision) uid : arr_t =
+  let n = Hashtbl.find_exn global.node_store uid in
+  match (prec, n.grad) with
+  | Byte_as_int, Some (Byte_as_int_nd arr) -> arr
+  | Half_as_int, Some (Half_as_int_nd arr) -> arr
+  | Single, Some (Single_nd arr) -> arr
+  | Double, Some (Double_nd arr) -> arr
+  | _, Some arr ->
+      raise
+      @@ Runtime_error
+           ( "Precision mismatch: expected " ^ precision_to_string prec ^ ", got "
+             ^ ndarray_precision_to_string arr,
+             Some n )
+  | _, None -> raise @@ Runtime_error ("get_grad: non-form node", Some n)
+
 ]}

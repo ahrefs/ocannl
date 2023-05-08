@@ -205,56 +205,21 @@ let size_in_bytes n =
   let size = map_as_bigarray { f } in
   size n.value + Option.value_map ~f:size n.grad ~default:0
 
-exception Runtime_error of string * t option
-
-let most_recent_suspension : (task_id:int -> unit) option ref = ref None
-
 type state = {
   mutable unique_id : int;
   node_store : (int, t) Hashtbl.t;
-  session_step_update : (task_id:int -> unit) option ref;
 }
 
 let global =
   {
     unique_id = 1;
     node_store = Hashtbl.create (module Int);
-    session_step_update = ref @@ Some (fun ~task_id:_ -> ());
   }
 
 let global_size_in_bytes () =
   Hashtbl.fold global.node_store ~init:0 ~f:(fun ~key:_ ~data sum -> sum + size_in_bytes data)
 
 let get uid = Hashtbl.find_exn global.node_store uid
-
-let get_value (type val_t arr_t) (prec : (val_t, arr_t) precision) uid : arr_t =
-  let n = Hashtbl.find_exn global.node_store uid in
-  match (prec, n.value) with
-  | Byte_as_int, Byte_as_int_nd arr -> arr
-  | Half_as_int, Half_as_int_nd arr -> arr
-  | Single, Single_nd arr -> arr
-  | Double, Double_nd arr -> arr
-  | _, arr ->
-      raise
-      @@ Runtime_error
-           ( "Precision mismatch: expected " ^ precision_to_string prec ^ ", got "
-             ^ ndarray_precision_to_string arr,
-             Some n )
-
-let get_grad (type val_t arr_t) (prec : (val_t, arr_t) precision) uid : arr_t =
-  let n = Hashtbl.find_exn global.node_store uid in
-  match (prec, n.grad) with
-  | Byte_as_int, Some (Byte_as_int_nd arr) -> arr
-  | Half_as_int, Some (Half_as_int_nd arr) -> arr
-  | Single, Some (Single_nd arr) -> arr
-  | Double, Some (Double_nd arr) -> arr
-  | _, Some arr ->
-      raise
-      @@ Runtime_error
-           ( "Precision mismatch: expected " ^ precision_to_string prec ^ ", got "
-             ^ ndarray_precision_to_string arr,
-             Some n )
-  | _, None -> raise @@ Runtime_error ("get_grad: non-form node", Some n)
 
 (** Constructs a node with empty tensors of the specified precision and registers it in the global store.
     Note that the precision for gradients should not be lower than the precision for values. *)

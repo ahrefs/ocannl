@@ -41,7 +41,7 @@ let%expect_test "Graph drawing recompile" =
   let ys =
     Array.map xs ~f:(fun v ->
         (* This is inefficient because it compiles the argument update inside the loop. *)
-        SDSL.compile_routine [%nn_cd x =: !.v] ~task_id:0;
+        SDSL.compile_routine [%nn_cd x =: !.v] ~name:"assign_x" ();
         SDSL.refresh_session ();
         f.@[0])
   in

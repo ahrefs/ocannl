@@ -69,7 +69,6 @@ exception Session_error of string * t option [@@deriving sexp]
 
 (** Prefix the input with the header information of all nodes within the current session. *)
 let prefix_with_preamble content =
-  let open Ocannl_runtime in
   let result = Buffer.create 16 in
   let ap = Buffer.add_string result in
   for id = !first_session_id to Node.global.unique_id - 1 do
@@ -88,11 +87,6 @@ let session_error_printer = function
   | _ -> None
 
 let () = Caml.Printexc.register_printer session_error_printer
-
-let handle_error ?formula message =
-  let exc = Session_error (message, formula) in
-  Stdio.prerr_endline @@ Option.value_exn (session_error_printer exc);
-  raise exc
 
 let fetch_zeros ~id field _shape = Code.Fetch { tensor = { id; field }; fetch_op = Constant 0. }
 let fetch_ones ~id field _shape = Code.Fetch { tensor = { id; field }; fetch_op = Constant 1. }
@@ -416,7 +410,7 @@ let ndarray ?desc_label ~is_form ?(needs_gradient = false) ?(batch_dims = []) ?(
           Array.of_list_map ~f:(function Shape.Parallel -> !Shape.num_parallel_tasks | Dim d -> d)
         in
         let dims = Array.concat [ !batch_dims; !output_dims; !input_dims ] in
-        let ndarr = Ocannl_runtime.Node.create_ndarray Double dims (Constant_fill values) in
+        let ndarr = Node.create_ndarray Double dims (Constant_fill values) in
         let ( ! ) = List.length in
         NodeUI.pp_tensor_inline ~num_batch_axes:!batch_dims ~num_output_axes:!output_dims
           ~num_input_axes:!input_dims Caml.Format.str_formatter ndarr;

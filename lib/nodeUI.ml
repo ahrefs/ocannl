@@ -1,7 +1,7 @@
 open Base
 (** Utilities for working with [Node] that do not belong in the runtime. *)
 
-module N = Ocannl_runtime.Node
+module N = Node
 
 type t = {
   id : int;

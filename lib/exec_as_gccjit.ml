@@ -22,7 +22,7 @@ let compiled_session_globals : Gccjit.result option ref = ref None
 let hoist_dynamic_indices = ref false
 
 let get_tensor ctx data : tensor =
-  let open Ocannl_runtime.Node in
+  let open Node in
   let open Gccjit in
   let tensor c_typ is_double arr =
     let num_typ = Type.(get ctx c_typ) in
@@ -80,14 +80,12 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
   let locals = ref Map.Poly.empty in
   let current_block = ref initial_block in
   let lookup ?provider_dim (env, dyn_env) indices =
-    Array.map indices
-      ~f:(
-          function
-          | Shape.Fixed_idx i -> RValue.int ctx c_index i
-          | Iterator s -> Map.find_exn env s
-          | Task_id -> RValue.param task_id
-          | Dynamic_recipient s -> Map.find_exn dyn_env s
-          | Dynamic_provider _ -> Option.value_exn provider_dim)
+    Array.map indices ~f:(function
+      | Shape.Fixed_idx i -> RValue.int ctx c_index i
+      | Iterator s -> Map.find_exn env s
+      | Task_id -> RValue.param task_id
+      | Dynamic_recipient s -> Map.find_exn dyn_env s
+      | Dynamic_provider _ -> Option.value_exn provider_dim)
   in
   let rec loop_proc ~name ~env (body : unit Code.low_level) : unit =
     (* TODO: consider matching gccjit's assign_op-style pattern (but probably no benefit). *)
@@ -230,41 +228,27 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
   loop_proc ~name ~env body;
   !current_block
 
-let jit_ll_prog ~name ctx prog =
+let jit_func ~name ctx proc =
   let open Gccjit in
   let fkind = Function.Exported in
   let env = (Map.Poly.empty, Map.Poly.empty) in
-  let msg = ref None in
-  let emit_routine proc suffix =
-    let name = name ^ suffix in
-    let task_id = Param.create ctx Type.(get ctx Int) "task_id" in
-    let func = Function.create ctx fkind (Type.get ctx Void) name [ task_id ] in
-    let block = Block.create ~name func in
-    (let after_proc = jit_code ~name ~env ~task_id ctx func block proc in
-     Block.return_void after_proc;
-     if !Code.with_debug then (
-       let suf = "-gccjit-debug.c" in
-       let f_name =
-         if !Code.keep_files_in_run_directory then name ^ suf else Caml.Filename.temp_file (name ^ "-") suf
-       in
-       Context.dump_to_file ctx ~update_locs:true f_name;
-       msg := Some (Stdio.In_channel.read_all f_name)))
-    (* match !compiled_session_globals with
-       | None ->
-         Context.dump_to_file !session_context ~update_locs:true "globals-gccjit-debug.c";
-         let globals = Context.compile !session_context in
-          compiled_session_globals := Some globals
-       | Some _ -> () *);
-    let result = Context.compile ctx in
-    session_results := result :: !session_results;
-    let routine = Result.code result name Ctypes.(int @-> returning void) in
-    fun ~task_id -> routine task_id
-  in
-  let open Ocannl_runtime.Node in
-  (match prog with
-  | Code.Assign_suspension proc -> most_recent_suspension := Some (emit_routine proc @@ "suspension")
-  | Assign_session_step_update proc -> global.session_step_update := Some (emit_routine proc @@ "step_update"));
-  !msg
+  let task_id = Param.create ctx Type.(get ctx Int) "task_id" in
+  let func = Function.create ctx fkind (Type.get ctx Void) name [ task_id ] in
+  let block = Block.create ~name func in
+  (let after_proc = jit_code ~name ~env ~task_id ctx func block proc in
+   Block.return_void after_proc;
+   if !Code.with_debug then (
+     let suf = "-gccjit-debug.c" in
+     let f_name =
+       if !Code.keep_files_in_run_directory then name ^ suf else Caml.Filename.temp_file (name ^ "-") suf
+     in
+     Context.dump_to_file ctx ~update_locs:true f_name))
+  (* match !compiled_session_globals with
+     | None ->
+       Context.dump_to_file !session_context ~update_locs:true "globals-gccjit-debug.c";
+       let globals = Context.compile !session_context in
+        compiled_session_globals := Some globals
+     | Some _ -> () *)
 
 let error_message ~name ~prefix ?extra_error_msg ~contents exc =
   let backtrace = Caml.Printexc.get_backtrace () in
@@ -295,15 +279,34 @@ let error_message ~name ~prefix ?extra_error_msg ~contents exc =
   msg contents;
   Buffer.contents message
 
-let jit_compiled ~name compiled =
+let jit_task_id_func ~name compiled =
   let open Gccjit in
   let ctx = Context.create_child !session_context in
   Context.set_option ctx Context.Optimization_level !optimization_level;
   (*
-  if !Code.with_debug then (
+  if !Code.with_debug && !Code.keep_files_in_run_directory then (
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)
-  let msg = jit_ll_prog ~name ctx compiled in
+  jit_func ~name ctx compiled;
+  let result = Context.compile ctx in
+  session_results := result :: !session_results;
+  let routine = Result.code result name Ctypes.(int @-> returning void) in
   Context.release ctx;
-  msg
+  fun ~task_id -> routine task_id
+
+let jit_unit_func ~name compiled =
+  let open Gccjit in
+  let ctx = Context.create_child !session_context in
+  Context.set_option ctx Context.Optimization_level !optimization_level;
+  (*
+  if !Code.with_debug && !Code.keep_files_in_run_directory then (
+    Context.set_option ctx Context.Keep_intermediates true;
+    Context.set_option ctx Context.Dump_everything true);
+  *)
+  jit_func ~name ctx compiled;
+  let result = Context.compile ctx in
+  session_results := result :: !session_results;
+  let routine = Result.code result name Ctypes.(void @-> returning void) in
+  Context.release ctx;
+  routine
