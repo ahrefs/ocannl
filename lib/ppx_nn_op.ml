@@ -34,12 +34,6 @@ let make_vb_dims ~loc ~str_loc ~ident ~dims ~dims_loc string =
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
-let convert_dsl_dims dims =
-  (* FIXME: convert integers, identifier <parallel>, other identifiers all differently. *)
-  List.map dims ~f:(function
-    | { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = loc; _ } as i -> [%expr Shape.Dim [%e i]]
-    | e -> e)
-
 let make_vb_nd ~loc ~str_loc ?axis_labels ~ident ~init_nd string =
   let pat = Ast_helper.Pat.var ~loc { loc = str_loc; txt = ident } in
   let values, batch_dims, output_dims, input_dims = ndarray_constant init_nd in
@@ -49,7 +43,7 @@ let make_vb_nd ~loc ~str_loc ?axis_labels ~ident ~init_nd string =
       @@ Location.error_extensionf ~loc
            "ppx_ocannl params cannot have batch dims: define a constant or remove the array syntax."
     else
-      let edims dims = Ast_builder.Default.elist ~loc @@ List.rev dims in
+      let edims dims = Ast_builder.Default.elist ~loc dims in
       let op =
         match axis_labels with
         | None -> [%expr FDSL.params]
@@ -97,8 +91,10 @@ let rec translate ?desc_label expr =
       (vbs1, [%expr FDSL.einsum1 ?desc_label:[%e opt_pat2string ~loc desc_label] [%e spec] [%e e1]])
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
-        [%e? { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = dims_loc; _ } as i]] ->
-      let pat, vb = make_vb_dims ~loc ~str_loc ~ident ~dims:(convert_dsl_dims [ i ]) ~dims_loc s in
+        [%e?
+          ( { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = dims_loc; _ }
+          | { pexp_desc = Pexp_ident _; pexp_loc = dims_loc; _ } ) as d]] ->
+      let pat, vb = make_vb_dims ~loc ~str_loc ~ident ~dims:(convert_dsl_dims [ d ]) ~dims_loc s in
       (Map.singleton (module String) ident vb, pat2expr pat)
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]

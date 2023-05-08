@@ -5,7 +5,7 @@ open Ppx_nn_shared
 let ndarray_op ?desc_label ?axis_labels ?label expr =
   let loc = expr.pexp_loc in
   let values, batch_dims, output_dims, input_dims = ndarray_constant expr in
-  let edims dims = Ast_builder.Default.elist ~loc @@ List.rev dims in
+  let edims dims = Ast_builder.Default.elist ~loc dims in
   let op =
     match (axis_labels, label) with
     | None, None -> [%expr Formula.NFDSL.ndarray]

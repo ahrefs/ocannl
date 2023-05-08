@@ -158,6 +158,12 @@ let ndarray_constant expr =
   let to_dim dims = List.rev_map dims ~f:(fun d -> [%expr Shape.Dim [%e d]]) in
   (values, to_dim batch_dims, to_dim output_dims, to_dim input_dims)
 
+let convert_dsl_dims dims =
+  List.map dims ~f:(function
+    | { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = loc; _ } as i -> [%expr Shape.Dim [%e i]]
+    | { pexp_desc = Pexp_ident ({txt = Lident "parallel"; loc}); pexp_loc = _; _ } -> [%expr Shape.Parallel]
+    | e -> e)
+
 let let_opt ~loc vbs expr =
   if Map.is_empty vbs then expr else Ast_helper.Exp.let_ ~loc Nonrecursive (Map.data vbs) expr
 
