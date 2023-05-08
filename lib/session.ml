@@ -287,8 +287,11 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
     match !(Ocannl_runtime.Node.global.session_step_update) with
     | None -> assert false
     | Some update ->
-        Domainslib.Task.parallel_for task_pool ~start:0 ~finish:(!Shape.num_parallel_tasks - 1)
-          ~body:(fun task_id -> update ~task_id)
+        if !Shape.num_parallel_tasks = 1 then update ~task_id:0
+        else
+          Domainslib.Task.run task_pool (fun () ->
+              Domainslib.Task.parallel_for task_pool ~start:0 ~finish:(!Shape.num_parallel_tasks - 1)
+                ~body:(fun task_id -> update ~task_id))
 
 (** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id].
     Discards all computations (forward, backward, update params, data fetches), but keeps
