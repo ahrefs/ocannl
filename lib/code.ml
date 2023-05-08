@@ -650,8 +650,9 @@ let process_computation node_store node top_llc =
                | Task_id | Fixed_idx _ | Dynamic_recipient _ | Dynamic_provider _ -> None
                | Iterator s -> Some s)
     in
-    (* FIXME: We need to allow inlining tensors with parallel dimensions. *)
-    let num_parallel = failwith "NOT IMPLEMENTED YET" in
+    (* FIXME(#133): We need to allow inlining tensors with parallel dimensions. Unfortunately this requires
+       making progress on issue #133. *)
+    let num_parallel = Array.count indices ~f:(function Task_id -> true | _ -> false) in
     if Set.length syms + num_parallel <> Array.length indices then raise Non_virtual
   in
   (* Traverse the float code too, for completeness / future use-cases. *)
