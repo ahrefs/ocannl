@@ -12,8 +12,7 @@ let%expect_test "Graph drawing recompile" =
   let open SDSL.O in
   SDSL.drop_all_sessions ();
   Random.init 0;
-  (* FIXME: *)
-  let%nn_op f = (3 *. ("x" (* [ 5 ] *) **. 2)) - (4 *. x) + 5 in
+  let%nn_op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   SDSL.refresh_session ();
   SDSL.print_node_tree ~with_grad:true ~depth:9 f.id;
   [%expect
@@ -190,8 +189,7 @@ let%expect_test "Graph drawing fetch" =
 let%expect_test "Simple gradients" =
   SDSL.drop_all_sessions ();
   Random.init 0;
-  (* FIXME: *)
-  let%nn_op e = "a" (* [ 2 ] *) *. "b" (* [ -3 ] *) in
+  let%nn_op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%nn_op d = e + "c" (* [ 10 ] *) in
   let%nn_op l = d *. "f" (* [ -2 ] *) in
   SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ Dim 1 ] [| 0.1 |]);
@@ -269,8 +267,7 @@ let%expect_test "tanh plot" =
 let%expect_test "2D neuron" =
   SDSL.drop_all_sessions ();
   Random.init 0;
-  (* FIXME: *)
-  let%nn_op n = ("w" (* [ (-3, 1) ] *) * "x" (* [ 2; 0 ] *)) + "b" (* [ 6.7 ] *) in
+  let%nn_op n = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   (* No need for [~update_params:false] because we have not set [minus_learning_rate]. *)
   SDSL.refresh_session ();
   SDSL.print_node_tree ~with_grad:true ~depth:9 n.id;

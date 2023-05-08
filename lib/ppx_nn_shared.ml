@@ -155,7 +155,8 @@ let ndarray_constant expr =
       | `Output_dims dim -> (batch_dims, eint ~loc dim :: output_dims, input_dims)
       | `Batch_dims dim -> (eint ~loc dim :: batch_dims, output_dims, input_dims))
   in
-  (values, batch_dims, output_dims, input_dims)
+  let to_dim dims = List.rev_map dims ~f:(fun d -> [%expr Shape.Dim [%e d]]) in
+  (values, to_dim batch_dims, to_dim output_dims, to_dim input_dims)
 
 let let_opt ~loc vbs expr =
   if Map.is_empty vbs then expr else Ast_helper.Exp.let_ ~loc Nonrecursive (Map.data vbs) expr

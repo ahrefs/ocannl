@@ -5,7 +5,7 @@ open Ppx_nn_shared
 let ndarray_op ?desc_label ?axis_labels ?label expr =
   let loc = expr.pexp_loc in
   let values, batch_dims, output_dims, input_dims = ndarray_constant expr in
-  let edims dims = Ast_builder.Default.elist ~loc @@ List.rev dims in
+  let edims dims = Ast_builder.Default.elist ~loc dims in
   let op =
     match (axis_labels, label) with
     | None, None -> [%expr FDSL.ndarray]
@@ -36,8 +36,8 @@ let make_vb_dims ~loc ~str_loc ~ident ~dims ~dims_loc string =
 
 let convert_dsl_dims dims =
   (* FIXME: convert integers, identifier <parallel>, other identifiers all differently. *)
-  List.map dims ~f:(
-  function { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = loc; _ } as i -> [%expr Shape.Dim [%e i]]
+  List.map dims ~f:(function
+    | { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = loc; _ } as i -> [%expr Shape.Dim [%e i]]
     | e -> e)
 
 let make_vb_nd ~loc ~str_loc ?axis_labels ~ident ~init_nd string =
@@ -98,7 +98,7 @@ let rec translate ?desc_label expr =
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
         [%e? { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = dims_loc; _ } as i]] ->
-      let pat, vb = make_vb_dims ~loc ~str_loc ~ident ~dims:(convert_dsl_dims [i]) ~dims_loc s in
+      let pat, vb = make_vb_dims ~loc ~str_loc ~ident ~dims:(convert_dsl_dims [ i ]) ~dims_loc s in
       (Map.singleton (module String) ident vb, pat2expr pat)
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]

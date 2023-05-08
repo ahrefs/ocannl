@@ -58,8 +58,6 @@ let%expect_test "Matrix multiplication dims 1x1" =
     │└┴─────────┘           │
     └───────────────────────┘ |}]
 
-(* FIXME: *)
-(*
 let%expect_test "Print constant tensor" =
   Session.drop_all_sessions ();
   Random.init 0;
@@ -381,7 +379,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
     │││ 6.87e+0  6.70e+0  7.83e+0 ││
     │└┴───────────────────────────┘│
     └──────────────────────────────┘ |}]
-*)
+
 let%expect_test "Big matrix" =
   let open Session.SDSL in
   drop_all_sessions ();

@@ -6,8 +6,8 @@ module NFDSL = Operation.NFDSL
 module SDSL = Session.SDSL
 
 let () = SDSL.set_executor Gccjit
-(* FIXME: *)
-(* let () =
+
+let () =
   SDSL.drop_all_sessions ();
   Random.init 0;
   let%nn_op n = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
@@ -17,7 +17,7 @@ let () = SDSL.set_executor Gccjit
   Stdio.printf "\n%!";
   SDSL.print_session_code ();
   Stdio.printf "\n%!"
-*)
+
 let _suspended () =
   let open SDSL.O in
   SDSL.drop_all_sessions ();
