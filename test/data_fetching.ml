@@ -11,7 +11,7 @@ let%expect_test "Synthetic data" =
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;
-  let%nn_dt session_step ~output_dims:[ Dim 1 ] = n =+ 1 in
+  let%nn_dt session_step ~o:1 = n =+ 1 in
   let c_data =
     FDSL.term ~label:"fetch_callback" ~needs_gradient:false ~batch_dims:[ Dim 1 ] ~input_dims:[]
       ~output_dims:[ Dim 2; Dim 3 ] ~init_op:Code.Range_over_offsets

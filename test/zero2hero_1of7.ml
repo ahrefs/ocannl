@@ -121,7 +121,7 @@ let%expect_test "Graph drawing fetch" =
     FDSL.term ~needs_gradient:true ~label:"x_flat" ~batch_dims:[ Dim size ] ~input_dims:[] ~output_dims:[ Dim 1 ]
       ~init_op:(Constant_fill xs) ()
   in
-  let%nn_dt session_step ~output_dims:[ Dim 1 ] = n =+ 1 in
+  let%nn_dt session_step ~o:1 = n =+ 1 in
   let%nn_op x = x_flat @.| session_step in
   let%nn_op fx = f x in
   let ys =

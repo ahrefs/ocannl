@@ -712,10 +712,22 @@ let translate_dt ?desc_label (expr : expression) : expression =
           | _, Some label -> (desc_label, label)
         in
         let _, _, body = translate ?desc_label:None expr in
+        let edims ~dims_loc dims = Ast_builder.Default.elist ~loc:dims_loc dims in
+        let edims =
+          Option.map ~f:(function
+            | { pexp_desc = Pexp_tuple dims; pexp_loc = dims_loc; _ } ->
+                edims ~dims_loc @@ convert_dsl_dims dims
+            | ( { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = dims_loc; _ }
+              | { pexp_desc = Pexp_ident _; pexp_loc = dims_loc; _ } ) as d ->
+                edims ~dims_loc @@ convert_dsl_dims [ d ]
+            | e -> e)
+        in
         [%expr
           FDSL.data ?desc_label:[%e opt_pat2string ~loc desc_label] ~label:[%e label]
-            ?batch_dims:[%e opt_expr ~loc batch_dims] ?input_dims:[%e opt_expr ~loc input_dims]
-            ?output_dims:[%e opt_expr ~loc output_dims] (fun ~n -> Code.Synthetic [%e body])]
+            ?batch_dims:[%e opt_expr ~loc @@ edims batch_dims]
+            ?input_dims:[%e opt_expr ~loc @@ edims input_dims]
+            ?output_dims:[%e opt_expr ~loc @@ edims output_dims]
+            (fun ~n -> Code.Synthetic [%e body])]
   in
   loop expr
 

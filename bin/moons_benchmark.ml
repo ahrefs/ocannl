@@ -61,8 +61,8 @@ let () =
              + ("w5" * !/("b4" 4 + ("w4" * !/("b3" 8 + ("w3" * !/("b2" 8 + ("w2" * !/("b1" 16 + ("w1" * x)))))))))
              )
      in *)
-  let%nn_dt session_step ~output_dims:[ Dim 1 ] = n =+ 1 in
-  let%nn_dt minus_lr ~output_dims:[ Dim 1 ] = n =: -0.0001 *. (!..steps - session_step) /. !..steps in
+  let%nn_dt session_step ~o:1 = n =+ 1 in
+  let%nn_dt minus_lr ~o:1 = n =: -0.0001 *. (!..steps - session_step) /. !..steps in
 
   SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = moons_flat @.| session_step in
@@ -168,8 +168,8 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
              )
      in *)
   (* let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 16 + ("w1" * x))) in *)
-  let%nn_dt session_step ~output_dims:[ Dim 1 ] = n =+ 1 in
-  let%nn_dt minus_lr ~output_dims:[ Dim 1 ] = n =: -0.1 *. (!..steps - session_step) /. !..steps in
+  let%nn_dt session_step ~o:1 = n =+ 1 in
+  let%nn_dt minus_lr ~o:1 = n =: -0.1 *. (!..steps - session_step) /. !..steps in
   SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = moons_flat @.| session_step in
   let%nn_op moons_class = moons_classes @.| session_step in

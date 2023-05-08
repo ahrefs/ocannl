@@ -14,8 +14,10 @@ let () =
   SDSL.refresh_session ();
   Stdio.printf "\n%!";
   SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 n.id;
-  Stdio.printf "\n%!";
+  Stdio.printf "\nHigh-level code:\n%!";
   SDSL.print_session_code ();
+  Stdio.printf "\nCompiled code:\n%!";
+  SDSL.print_session_code ~compiled:true ();
   Stdio.printf "\n%!"
 
 let _suspended () =
@@ -29,7 +31,7 @@ let _suspended () =
     FDSL.term ~needs_gradient:true ~label:"x_flat" ~batch_dims:[ Dim size ] ~input_dims:[] ~output_dims:[ Dim 1 ]
       ~init_op:(Constant_fill xs) ()
   in
-  let%nn_dt session_step ~output_dims:[ Dim 1 ] = n =+ 1 in
+  let%nn_dt session_step ~o:1 = n =+ 1 in
   let%nn_op x = x_flat @.| session_step in
   let%nn_op fx = f x in
   Stdio.print_endline "\n";
