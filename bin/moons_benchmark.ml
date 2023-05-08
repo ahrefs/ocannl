@@ -15,11 +15,12 @@ let () =
   CDSL.virtualize_settings.inline_constants <- true;
   SDSL.drop_all_sessions ();
   Random.init 0;
-  let num_parallel_tasks = SDSL.num_domains in
+  let num_parallel_tasks = SDSL.num_domains - 1 in
   Stdio.printf "\n****** num_parallel_tasks = %d\n%!" num_parallel_tasks;
   SDSL.num_parallel_tasks := num_parallel_tasks;
-  let len = 420 in
   let minibatch = 2 in
+  (* Easier to make it divisible. *)
+  let len = 4 * minibatch * num_parallel_tasks in
   let batch = minibatch * num_parallel_tasks in
   let n_batches = 2 * len / batch in
   let epochs = 100 in

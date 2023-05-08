@@ -1002,11 +1002,9 @@ let get_symbol () =
   Int.incr unique_id;
   Symbol !unique_id
 
-let opt_symbol = function
-  | Dim d when d <= 0 -> assert false
-  | Dim 1 -> None
-  | Parallel -> None (* or Some? *)
-  | _ -> Some (get_symbol ())
+let iterated = function Dim d when d > 1 -> true | _ -> false
+
+let opt_symbol d = Option.some_if (iterated d) @@ get_symbol ()
 
 (** An index into a single axis for doing computations over multiple [Shape]-derived [Code]s. *)
 type 'a axis_index =
@@ -1061,7 +1059,7 @@ type projections = {
 let identity_projections (product_space : dim array) =
   let product_iterators = Array.map product_space ~f:opt_symbol in
   let project_lhs = Array.map product_iterators ~f:opt_iterator in
-  let product_space = Array.filter ~f:(Fn.non dim_1) product_space in
+  let product_space = Array.filter ~f:iterated product_space in
   let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
   { product_space; product_iterators; project_lhs; project_rhs1 = project_lhs; project_rhs2 = None }
 
@@ -1203,7 +1201,7 @@ let rec derive_projections (shapes : update_step) : projections =
       let product_iterators = Array.of_list @@ List.concat [ iters_bch; iters_out; iters_inp ] in
       let project_lhs = Array.of_list @@ List.concat [ lhs_batch; lhs_output; lhs_input ] in
       let project_rhs1 = Array.of_list @@ List.concat [ rhs_batch; rhs_output; rhs_input ] in
-      let product_space = Array.filter ~f:(Fn.non dim_1) product_space in
+      let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
       { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 = None }
   | Transpose (Pointwise_un, sh) ->
@@ -1223,7 +1221,7 @@ let rec derive_projections (shapes : update_step) : projections =
       let product_iterators = Array.of_list @@ List.concat [ iters_bch; iters_out; iters_inp ] in
       let project_lhs = Array.of_list @@ List.concat [ lhs_batch; lhs_output; lhs_input ] in
       let project_rhs1 = Array.of_list @@ List.concat [ rhs_batch; rhs_output; rhs_input ] in
-      let product_space = Array.filter ~f:(Fn.non dim_1) product_space in
+      let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
       { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 = None }
   | Transpose (Permute spec, sh) ->
@@ -1278,7 +1276,7 @@ let rec derive_projections (shapes : update_step) : projections =
       let project_rhs1 : symbol axis_index array =
         Array.of_list @@ List.concat [ rhs_batch; rhs_output; rhs_input ]
       in
-      let product_space = Array.filter ~f:(Fn.non dim_1) product_space in
+      let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
       { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 = None }
   | Broadcast (Pointwise_bin, sh1, sh2) ->
@@ -1324,7 +1322,7 @@ let rec derive_projections (shapes : update_step) : projections =
       let project_rhs2 : symbol axis_index array option =
         Some (Array.of_list @@ List.concat [ rhs2_batch; rhs2_output; rhs2_input ])
       in
-      let product_space : dim array = Array.filter ~f:(Fn.non dim_1) product_space in
+      let product_space = Array.filter ~f:iterated product_space in
       let product_iterators : symbol array = Array.filter_map ~f:Fn.id product_iterators in
       { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
   | Broadcast (Compose, sh1, sh2) ->
@@ -1359,7 +1357,7 @@ let rec derive_projections (shapes : update_step) : projections =
       let project_lhs = Array.of_list @@ List.concat [ lhs1_batch; lhs_output; lhs_input ] in
       let project_rhs1 = Array.of_list @@ List.concat [ rhs1_batch; rhs1_output; rhs1_input ] in
       let project_rhs2 = Some (Array.of_list @@ List.concat [ rhs2_batch; rhs2_output; rhs2_input ]) in
-      let product_space = Array.filter ~f:(Fn.non dim_1) product_space in
+      let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
       { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
   | Broadcast (Einsum spec, sh1, sh2) ->
@@ -1423,7 +1421,7 @@ let rec derive_projections (shapes : update_step) : projections =
       let project_rhs2 : symbol axis_index array option =
         Some (Array.of_list @@ List.concat [ rhs2_batch; rhs2_output; rhs2_input ])
       in
-      let product_space = Array.filter ~f:(Fn.non dim_1) product_space in
+      let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
       { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
   | Broadcast (Dynamic_index { over_kind; from_left; other_axes_pointwise }, sh1, sh2) ->
