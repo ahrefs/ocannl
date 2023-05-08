@@ -10,7 +10,7 @@ let () = SDSL.set_executor Gccjit
 let%expect_test "Micrograd README basic example" =
   SDSL.drop_all_sessions ();
   Random.init 0;
-  let%nn_op c = "a" (* [ -4 ] *) + "b" (* [ 2 ] *) in
+  let%nn_op c = "a" [ -4 ] + "b" [ 2 ] in
   let%nn_op d = (a *. b) + (b **. 3) in
   let%nn_op c = c + c + 1 in
   let%nn_op c = c + 1 + c + ~-a in

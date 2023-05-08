@@ -190,8 +190,8 @@ let%expect_test "Simple gradients" =
   SDSL.drop_all_sessions ();
   Random.init 0;
   let%nn_op e = "a" [ 2 ] *. "b" [ -3 ] in
-  let%nn_op d = e + "c" (* [ 10 ] *) in
-  let%nn_op l = d *. "f" (* [ -2 ] *) in
+  let%nn_op d = e + "c" [ 10 ] in
+  let%nn_op l = d *. "f" [ -2 ] in
   SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ Dim 1 ] [| 0.1 |]);
   SDSL.refresh_session ~update_params:false ();
   (* We did not update the params: all values and gradients will be at initial points, which are
