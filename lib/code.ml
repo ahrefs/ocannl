@@ -569,7 +569,7 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
         Array.iter idcs ~f:(function
           | Shape.Fixed_idx _ | Shape.Dynamic_provider _ | Shape.Dynamic_recipient _ ->
               node.non_virtual <- true
-          | Task_id -> failwith "NOT IMPLEMENTED YET" (* FIXME: *)
+          | Task_id -> ()
           | Shape.Iterator s ->
               let old_tensor = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tensor) in
               (* TODO(#134): this prevents multiple virtual tensors from sharing for loops. *)
@@ -641,6 +641,7 @@ let process_computation node_store node top_llc =
     (match !at_idcs with
     | None -> at_idcs := Some indices
     | Some at -> if not @@ [%equal: index array] at indices then raise Non_virtual);
+    (* TODO(#133): For non-recursive accesses, non-linearity is not supported yet. *)
     let syms =
       Set.Poly.of_array
       @@ Array.filter_map indices
@@ -650,10 +651,8 @@ let process_computation node_store node top_llc =
                | Task_id | Fixed_idx _ | Dynamic_recipient _ | Dynamic_provider _ -> None
                | Iterator s -> Some s)
     in
-    (* FIXME(#133): We need to allow inlining tensors with parallel dimensions. Unfortunately this requires
-       making progress on issue #133. *)
-    let num_parallel = Array.count indices ~f:(function Task_id -> true | _ -> false) in
-    if Set.length syms + num_parallel <> Array.length indices then raise Non_virtual
+    let num_syms = Array.count indices ~f:(function Iterator _ -> true | _ -> false) in
+    if Set.length syms <> num_syms then raise Non_virtual
   in
   (* Traverse the float code too, for completeness / future use-cases. *)
   let rec loop_proc ~(env_dom : sym_indices) llc =
@@ -724,8 +723,13 @@ let process_computation node_store node top_llc =
     other_node.non_virtual <- true
 
 let inline_computation ~id node call_args =
-  let make_subst lhs_ind rhs_ind =
-    match lhs_ind with Shape.Iterator s -> (s, rhs_ind) | _ -> assert false
+  let exception Non_virtual in
+  let make_subst i lhs_ind =
+    let rhs_ind = call_args.(i) in
+    match lhs_ind with
+    | Shape.Iterator s -> Some (s, rhs_ind)
+    | _ when Shape.equal_axis_index equal_sym_index lhs_ind rhs_ind -> None
+    | _ -> raise Non_virtual
   in
   let at_data = { id = node.id; NodeUI.field = node.kind } in
   (* In the order of computation. *)
@@ -733,8 +737,7 @@ let inline_computation ~id node call_args =
     let env =
       match def_args with
       | None -> Map.Poly.empty
-      | Some def_args ->
-          Map.Poly.of_alist_exn @@ Array.to_list @@ Array.map2_exn def_args call_args ~f:make_subst
+      | Some def_args -> Map.Poly.of_alist_exn @@ Array.to_list @@ Array.filter_mapi def_args ~f:make_subst
     in
     let subst = function Shape.Iterator s when Map.mem env s -> Map.find_exn env s | idx -> idx in
     let rec loop llc : unit low_level option =
@@ -774,7 +777,10 @@ let inline_computation ~id node call_args =
     in
     loop def
   in
-  Lines (Array.filter_opt @@ Array.of_list_rev_map ~f:loop_proc node.computations)
+  try Some (Lines (Array.filter_opt @@ Array.of_list_rev_map ~f:loop_proc node.computations))
+  with Non_virtual ->
+    node.non_virtual <- true;
+    None
 
 let virtual_llc node_store reverse_node_map (llc : unit low_level) : unit low_level =
   (* The current position is within scope of the definitions of the process_for virtual tensors. *)
@@ -820,8 +826,9 @@ let virtual_llc node_store reverse_node_map (llc : unit low_level) : unit low_le
         if node.non_virtual then llv
         else
           let id = get_scope tensor in
-          let body = inline_computation ~id node indices in
-          Local_scope { id; prec = node.prec; body; orig_indices = indices }
+          Option.value ~default:llv
+          @@ Option.map (inline_computation ~id node indices) ~f:(fun body ->
+                 Local_scope { id; prec = node.prec; body; orig_indices = indices })
     | Local_scope opts ->
         Local_scope { opts with body = loop_proc ~process_for:(Set.add process_for opts.id.tensor) opts.body }
     | Get_local _ -> llv
