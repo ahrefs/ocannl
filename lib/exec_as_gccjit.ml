@@ -105,17 +105,6 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
         let value = loop_float ~name ~env ~num_typ ~is_double value in
         Block.assign !current_block lhs value
     | Comment c -> Block.comment !current_block c
-    | Fill { tensor; value } ->
-        let tensor = get_tensor ctx tensor in
-        let size_m_1 = Array.fold tensor.dims ~init:1 ~f:( * ) - 1 in
-        let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
-        let callback offset =
-          let lhs = LValue.access_array tensor.ptr offset in
-          Block.assign !current_block lhs value
-        in
-        jit_for_loop ~env
-          (Code.new_sym_index @@ Shape.Symbol 0)
-          ~from_:0 ~to_:size_m_1 (Either.Second callback)
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
         jit_dynamic_indices ~name ~env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
   and loop_float ~name ~env ~num_typ ~is_double value : rvalue =

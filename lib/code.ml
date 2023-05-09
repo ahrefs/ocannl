@@ -104,7 +104,6 @@ type _ low_level =
   | Comment : string -> unit low_level
   | Lines : unit low_level array -> unit low_level
   | For_loop : { index : sym_index; from_ : int; to_ : int; body : unit low_level } -> unit low_level
-  | Fill : { tensor : NodeUI.tensor_ptr; value : float low_level } -> unit low_level
   | Dynamic_indices : {
       tensor : NodeUI.tensor_ptr;
       tensor_idcs : index array;
@@ -220,9 +219,20 @@ let rec to_low_level (code : t) : unit low_level =
       | _, Lines ls2 -> Lines (Array.append [| ll1 |] ls2)
       | Lines ls1, _ -> Lines (Array.append ls1 [| ll2 |])
       | _ -> Lines [| ll1; ll2 |])
-  | Fetch { tensor; fetch_op = Constant c } -> Fill { tensor; value = Constant c }
+  | Fetch { tensor; fetch_op = Constant c } ->
+      let product_space : Shape.dim array = Shape.to_dims (NodeUI.get tensor.id).shape in
+      let rec loop rev_idcs = function
+        | [] -> Set (tensor, Array.of_list_rev rev_idcs, Constant c)
+        | Shape.Dim dim :: product ->
+            let it = new_sym_index (Shape.get_symbol ()) in
+            let idx = Shape.Iterator it in
+            For_loop { index = it; from_ = 0; to_ = dim - 1; body = loop (idx :: rev_idcs) product }
+        | Parallel :: product -> loop (Shape.Task_id :: rev_idcs) product
+      in
+      let for_loops = loop [] (Array.to_list product_space) in
+      for_loops
   | Fetch { tensor = _; fetch_op = Synthetic gen } -> to_low_level gen
-  | Fetch { tensor; fetch_op = Imported gid } -> Fill { tensor; value = Get_global gid }
+  | Fetch { tensor = _; fetch_op = Imported _ } -> failwith "to_low_level: Imported NOT IMPLEMENTED YET"
 
 let interpreter_print_comments = ref false
 let keep_files_in_run_directory = ref false
@@ -281,11 +291,6 @@ let interpret_code ?task_id llc =
         for data = from_ to to_ do
           loop_proc (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
-    | Fill { tensor; value } ->
-        let result = loop_float env value in
-        if !debug_trace_interpretation then
-          Caml.Format.printf "TRACE: %a <- %f\n%!" Sexp.pp_hum ([%sexp_of: NodeUI.tensor_ptr] tensor) result;
-        fill_from_float tensor result
     | Set (ptr, indices, llv) ->
         if !debug_trace_interpretation then
           Caml.Format.printf "{TRACE: %a [%a] <- ...\n%!" Sexp.pp_hum
@@ -539,12 +544,6 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
         for data = from_ to to_ do
           loop_proc ~task_id (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
-    | Fill { tensor; value } ->
-        loop_float ~task_id env value;
-        let node = get_node node_store tensor in
-        Hash_set.add nodes node.id;
-        node.fill <- Some value;
-        if virtualize_settings.inline_constants then precompute_constants node_store node value
     | Set (tensor, idcs, llv) ->
         loop_float ~task_id env llv;
         Hash_set.add nodes tensor.id;
@@ -649,9 +648,6 @@ let process_computation node_store node top_llc =
     match llc with
     | Lines body -> Array.iter ~f:loop body
     | For_loop { index; from_ = _; to_ = _; body } -> loop_proc ~env_dom:(Set.add env_dom index) body
-    | Fill { tensor; value } ->
-        if NodeUI.equal_tensor_ptr tensor top_data then has_setter := true;
-        loop_float ~env_dom value
     | Set (tensor, indices, llv) ->
         if NodeUI.equal_tensor_ptr tensor top_data then (
           check_idcs indices;
@@ -737,9 +733,6 @@ let inline_computation ~id node call_args =
       | For_loop { index; body; _ } when Map.mem env index -> loop body
       | For_loop { index; from_; to_; body } ->
           Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop body
-      | Fill { tensor; value } when NodeUI.equal_tensor_ptr tensor at_data ->
-          Some (Set_local (id, loop_float value))
-      | Fill _ -> None
       | Set (tensor, indices, llv) when NodeUI.equal_tensor_ptr tensor at_data ->
           assert ([%equal: index array option] (Some indices) def_args);
           Some (Set_local (id, loop_float llv))
@@ -785,13 +778,6 @@ let virtual_llc node_store reverse_node_map (llc : unit low_level) : unit low_le
             if not node.non_virtual then process_computation node_store node result;
             result
         | _ -> For_loop { index; from_; to_; body = loop body })
-    | Fill { tensor; value } ->
-        let node : data_node = Hashtbl.find_exn node_store tensor in
-        let next = if node.non_virtual then process_for else Set.add process_for tensor in
-        let result = Fill { tensor; value = loop_float ~process_for:next value } in
-        if (not node.non_virtual) && (not @@ Set.mem process_for tensor) then
-          process_computation node_store node result;
-        result
     | Set (tensor, indices, llv) ->
         let node : data_node = Hashtbl.find_exn node_store tensor in
         let next = if node.non_virtual then process_for else Set.add process_for tensor in
@@ -848,8 +834,6 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
             if is_inline tensor then None
             else Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop_proc ~env_dom body
         | None -> Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop_proc ~env_dom body)
-    | Fill { tensor; value } ->
-        if is_inline tensor then None else Some (Fill { tensor; value = loop_float ~env_dom value })
     | Set (tensor, indices, llv) ->
         if is_inline tensor then None
         else (
