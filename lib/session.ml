@@ -243,7 +243,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
     in
     (match (update_params, !minus_learning_rate) with
     | true, Some minus_lr -> update_params_code := generate_params_update ~minus_lr ()
-    | _ -> ());
+    | _ -> update_params_code := []);
     (* Roots at the time of compilation are not virtual, so that they can be consumed downstream. *)
     Map.iter_keys !Formula.global_roots ~f:(fun id -> (NodeUI.get id).cannot_be_virtual <- true);
     if !update_params_in_parallel || !Shape.num_parallel_tasks > 1 then
