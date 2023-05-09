@@ -10,7 +10,7 @@ let _suspended () =
   (* let open Operation.FDSL in *)
   let open SDSL.O in
   SDSL.set_executor Interpreter;
-  SDSL.enable_all_debugs ~trace_interpreter:true ();
+  SDSL.enable_all_debugs ~trace_interpreter:true ~sequentialize:true ();
   CDSL.virtualize_settings.virtualize <- true;
   CDSL.virtualize_settings.inline_constants <- true;
   SDSL.drop_all_sessions ();
@@ -68,7 +68,7 @@ let _suspended () =
              + ("w5" * !/("b4" 4 + ("w4" * !/("b3" 8 + ("w3" * !/("b2" 8 + ("w2" * !/("b1" 16 + ("w1" * x)))))))))
              )
      in *)
-  let%nn_dt session_step ~o:1 = n =+ 1 in
+  let%nn_dt session_step ~o:1 = n =+ 1 /. !..num_parallel_tasks in
   let%nn_dt minus_lr ~o:1 = n =: -0.0001 *. (!..steps - session_step) /. !..steps in
 
   SDSL.minus_learning_rate := Some minus_lr;
@@ -141,7 +141,8 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   let open SDSL.O in
   Random.init 0;
   (* let init_mem = Mem_usage.info () in *)
-  (* let hid1 = 64 in *)
+  let hid_2_3 = Shape.Dim 8 in
+  let hid_4_5 = Shape.Dim 4 in
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let len = 420 in
   let minibatch = 10 in
@@ -171,13 +172,13 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   let%nn_op mlp x =
     "b6" 1
     + "w6"
-      * !/("b4" 4
+      * !/("b4" hid_4_5
           + "w4"
-            * !/("b2" 8
+            * !/("b2" hid_2_3
                 + ("w2" * !/("b1" 16 + ("w1" * x)))
-                + "b3" 8
+                + "b3" hid_2_3
                 + ("w3" * !/(b2 + (w2 * !/(b1 + (w1 * x))))))
-          + ("b5" 4 + ("w5" * !/(b4 + (w4 * !/(b3 + (w3 * !/(b2 + (w2 * !/(b1 + (w1 * x)))))))))))
+          + ("b5" hid_4_5 + ("w5" * !/(b4 + (w4 * !/(b3 + (w3 * !/(b2 + (w2 * !/(b1 + (w1 * x)))))))))))
   in
   (* let%nn_op mlp x =
        "b6" 1
@@ -187,13 +188,11 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
              )
      in *)
   (* let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 16 + ("w1" * x))) in *)
-  let%nn_dt session_step ~o:1 = n =+ 1 in
+  let%nn_dt session_step ~o:1 = n =+ 1 /. !..num_parallel_tasks in
   let%nn_dt minus_lr ~o:1 = n =: -0.1 *. (!..steps - session_step) /. !..steps in
   SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = moons_flat @.| session_step in
   let%nn_op moons_class = moons_classes @.| session_step in
-  let points1 = ref [] in
-  let points2 = ref [] in
   let minibatch_loglosses = ref [] in
   let min_loss = ref Float.infinity in
   let max_loss = ref 0.0 in
@@ -212,15 +211,6 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..minibatch) + (0.0001 *. reg_loss) in
   while not !stop do
     SDSL.refresh_session ();
-    (* if step = 1 then (
-       print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
-       Stdio.printf "\n%!"); *)
-    if !step <= n_batches then (
-      let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_input in
-      let classes = SDSL.value_1d_points ~xdim:0 moons_class in
-      let npoints1, npoints2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
-      points1 := npoints1 :: !points1;
-      points2 := npoints2 :: !points2);
     let loss = total_loss.@[0] in
     epoch_loss := !epoch_loss +. loss;
     if Float.(loss > 1000.0 (* * !min_loss && loss > (!min_loss + !max_loss) / 2.0 *)) then stop := true;
@@ -239,6 +229,9 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
     if !step % n_batches = 0 && not !stop then epoch_loss := 0.0;
     Int.incr step
   done;
+  let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
+  let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
+  let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   (* let train_mem = Mem_usage.info () in *)
   let final_time = Time_now.nanoseconds_since_unix_epoch () in
   let time_in_sec = Int63.(to_float @@ (final_time - init_time)) /. 1000_000_000. in
@@ -267,8 +260,8 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
     let open PrintBox_utils in
     plot ~size:(120, 40) ~x_label:"ixes" ~y_label:"ygreks"
       [
-        Scatterplot { points = Array.concat !points1; pixel = "#" };
-        Scatterplot { points = Array.concat !points2; pixel = "%" };
+        Scatterplot { points = points1; pixel = "#" };
+        Scatterplot { points = points2; pixel = "%" };
         Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
       ]
   in
@@ -323,12 +316,12 @@ let benchmarks =
     classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:9 ~num_parallel_tasks:8 CDSL.single;
   ]
 
-let () =
+let _suspended () =
   ignore
   @@ classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:8 CDSL.single
        ()
 
-let _suspended () =
+let () =
   List.map benchmarks ~f:(fun bench -> bench ()) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
 (* Example output from back when using core_bench, 200 epochs (all are non-virtual):
