@@ -468,6 +468,10 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         scalar = None;
       })
 
+let get_other_node node_store ptr =
+  get_node node_store
+    { ptr with field = (if NodeUI.equal_data_kind ptr.NodeUI.field Value then Grad else Value) }
+
 let precompute_constants ?idcs node_store top_node llv =
   let exception Non_literal of int in
   let rec loop llv =
@@ -596,7 +600,12 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
   done;
   Hash_set.iter nodes ~f:(fun node_id ->
       let value_node = get_node node_store { id = node_id; field = Value } in
-      if Hashtbl.exists value_node.accesses ~f:is_too_many then value_node.non_virtual <- true;
+      if Hashtbl.exists value_node.accesses ~f:is_too_many then (
+        value_node.non_virtual <- true;
+        (* TODO(#135): For now, value and gradient are non-virtual reciprocically. *)
+        Option.iter
+          (Hashtbl.find node_store { id = node_id; field = Grad })
+          ~f:(fun grad_node -> grad_node.non_virtual <- true));
       if consider_grads then
         Option.iter
           (Hashtbl.find node_store { id = node_id; field = Grad })
@@ -879,7 +888,21 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
             assert (
               Array.for_all orig_indices ~f:(function Shape.Iterator s -> Set.mem env_dom s | _ -> true));
             if node.non_virtual then Get (id.tensor, orig_indices)
-            else Local_scope { id; prec; orig_indices; body = Option.value_exn @@ loop_proc ~env_dom body })
+            else
+              Option.value_or_thunk ~default:(fun () ->
+                  Caml.Format.printf
+                    "WARNING: unexpected non-eliminable virtual tensor:@ %a@ Compilation data:@ %a@ \
+                     Compilation for the other tensor:@ %a@ Node:@ %a\n\
+                     %!"
+                    Sexp.pp_hum
+                    (NodeUI.sexp_of_tensor_ptr id.tensor)
+                    Sexp.pp_hum (sexp_of_data_node node) Sexp.pp_hum
+                    (sexp_of_data_node @@ get_other_node node_store id.tensor)
+                    Sexp.pp_hum
+                    (NodeUI.sexp_of_t @@ NodeUI.get id.tensor.id);
+                  Get (id.tensor, orig_indices))
+              @@ Option.map ~f:(fun body -> Local_scope { id; prec; orig_indices; body })
+              @@ loop_proc ~env_dom body)
     | Get_local id -> (
         let node = get_node node_store id.tensor in
         match node.scalar with
@@ -923,17 +946,15 @@ let optimize_proc llc =
 let compile_proc ~name proc =
   let result = optimize_proc @@ to_low_level proc in
   if !debug_trace_interpretation then
-    Caml.Format.printf "TRACE: Compiled program:@ %a@!" Sexp.pp_hum @@ sexp_of_low_level Unit.sexp_of_t result;
+    Caml.Format.printf "TRACE: Compiled program:@ %a\n%!" Sexp.pp_hum
+    @@ sexp_of_low_level Unit.sexp_of_t result;
   if !with_debug && !keep_files_in_run_directory then
     Stdio.Out_channel.write_all (name ^ ".llc")
       ~data:(Sexp.to_string_hum @@ sexp_of_low_level Unit.sexp_of_t result);
   result
 
-let interpret_task_id_func ~name:_ compiled =
-  fun ~task_id -> interpret_code ~task_id compiled
-
-let interpret_unit_func ~name:_ compiled =
-  fun () -> interpret_code compiled
+let interpret_task_id_func ~name:_ compiled ~task_id = interpret_code ~task_id compiled
+let interpret_unit_func ~name:_ compiled () = interpret_code compiled
 
 module CDSL = struct
   let value_of_id id : NodeUI.tensor_ptr = { id; field = Value }
