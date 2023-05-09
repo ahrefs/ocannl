@@ -105,32 +105,42 @@ let _suspended () =
   Stdio.printf "\nSize in bytes: %d\n%!" (SDSL.global_size_in_bytes ())
 
 let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_constants = true)
-    ~num_parallel_tasks precision () =
+    ~num_parallel_tasks ~update_params_pip precision () =
   (* let epochs = 20000 in *)
-  let epochs = 2000 in
+  (* let epochs = 2000 in *)
   (* let epochs = 200 in *)
-  (* let epochs = 20 in *)
+  let epochs = 20 in
   let bench_title =
     Sexp.to_string_hum
     @@ [%sexp_of:
-         string * Session.backend * string * int * string * int * string * string * int * NodeUI.prec]
+         string (* * Session.backend *)
+         * string
+         * int
+         * string
+         * int (* * string *)
+         * string
+         * int
+         * string
+         * NodeUI.prec]
          ( (if virtualize then "virtu." else "non-v."),
-           executor,
+           (* executor, *)
            "gcc-opt",
            opti_level,
-           "inlining",
+           "inline",
            inlining_cutoff,
-           (if inline_constants then "..." else "NIC"),
+           (* (if inline_constants then "..." else "NIC"), *)
            "parallel",
            num_parallel_tasks,
+           (if update_params_pip then "PIP" else "PNP"),
            precision )
   in
   Stdio.prerr_endline @@ "\n\n****** Benchmarking virtualized: " ^ bench_title ^ " for "
-  ^ Int.to_string epochs ^ " epochs  (NIC = Not Inlining Constants) ******";
+  ^ Int.to_string epochs ^ " epochs ******";
   CDSL.debug_virtual_nodes := false;
   CDSL.virtualize_settings.virtualize <- virtualize;
   CDSL.virtualize_settings.max_visits <- inlining_cutoff;
   CDSL.virtualize_settings.inline_constants <- inline_constants;
+  SDSL.update_params_in_parallel := update_params_pip;
   SDSL.set_executor executor;
   SDSL.default_value_prec := precision;
   SDSL.default_grad_prec := precision;
@@ -213,7 +223,7 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
     SDSL.refresh_session ();
     let loss = total_loss.@[0] in
     epoch_loss := !epoch_loss +. loss;
-    if Float.(loss > 1000.0 (* * !min_loss && loss > (!min_loss + !max_loss) / 2.0 *)) then stop := true;
+    (* if Float.(loss > 1000.0 * !min_loss && loss > (!min_loss + !max_loss) / 2.0) then stop := true; *)
     if Float.(loss < !min_loss) then min_loss := loss;
     if Float.(loss > !max_loss) then max_loss := loss;
     if !step % n_batches = 0 || !stop then (
@@ -229,9 +239,9 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
     if !step % n_batches = 0 && not !stop then epoch_loss := 0.0;
     Int.incr step
   done;
-  let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
-  let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
-  let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
+  (* let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in *)
+  (* let classes = SDSL.value_1d_points ~xdim:0 moons_classes in *)
+  (* let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in *)
   (* let train_mem = Mem_usage.info () in *)
   let final_time = Time_now.nanoseconds_since_unix_epoch () in
   let time_in_sec = Int63.(to_float @@ (final_time - init_time)) /. 1000_000_000. in
@@ -247,7 +257,7 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   in
   SDSL.close_session ();
   Stdio.print_endline "\nSession closed.";
-  (* FIMXE: *)
+  (* FIMXE: *
   let%nn_op point = (* [ 0; 0 ] *) "point" 2 in
   let mlp_result = mlp point in
   SDSL.refresh_session ();
@@ -267,7 +277,7 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   in
   Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n%!";
   PrintBox_text.output Stdio.stdout plot_moons;
-  (* *)
+  * *)
   Stdio.printf "\nEpoch (cumulative) loss curve:\n%!";
   let plot_loss =
     let open PrintBox_utils in
@@ -304,22 +314,72 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
 
 let benchmarks =
   [
-    classify_moons ~virtualize:false Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:8 CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~inline_constants:false
-      ~num_parallel_tasks:8 CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:8 CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~inline_constants:false
-      ~num_parallel_tasks:8 CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:8 CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:9 ~inline_constants:false
-      ~num_parallel_tasks:8 CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:9 ~num_parallel_tasks:8 CDSL.single;
+    (* classify_moons ~virtualize:false Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:1 ~update_params_pip:true CDSL.single; *)
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:1
+      ~update_params_pip:true CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:1
+      ~update_params_pip:true CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:1
+      ~update_params_pip:false CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:1
+      ~update_params_pip:false CDSL.single;
+    (* classify_moons ~virtualize:false Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:2 ~update_params_pip:true CDSL.single; *)
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:2
+      ~update_params_pip:true CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:2
+      ~update_params_pip:true CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:2
+      ~update_params_pip:false CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:2
+      ~update_params_pip:false CDSL.single;
+    (* classify_moons ~virtualize:false Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:4 ~update_params_pip:true CDSL.single; *)
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:4
+      ~update_params_pip:true CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:4
+      ~update_params_pip:true CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:4
+      ~update_params_pip:false CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:4
+      ~update_params_pip:false CDSL.single;
+    (* classify_moons ~virtualize:false Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:10
+       ~update_params_pip:true CDSL.single; *)
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:10
+      ~update_params_pip:true CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:10
+      ~update_params_pip:true CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:10
+      ~update_params_pip:false CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:10
+      ~update_params_pip:false CDSL.single;
+    (* classify_moons ~virtualize:false Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:20
+       ~update_params_pip:true CDSL.single; *)
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:20
+      ~update_params_pip:true CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:20
+      ~update_params_pip:true CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:20
+      ~update_params_pip:false CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:20
+      ~update_params_pip:false CDSL.single;
+    (* classify_moons ~virtualize:false Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:30
+       ~update_params_pip:true CDSL.single; *)
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:30
+      ~update_params_pip:true CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:30
+      ~update_params_pip:true CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:30
+      ~update_params_pip:false CDSL.single;
+    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:30
+      ~update_params_pip:false CDSL.single;
+    (* classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:9 ~inline_constants:false
+         ~num_parallel_tasks:4 ~update_params_pip:true CDSL.single;
+       classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:9 ~num_parallel_tasks:4 ~update_params_pip:true CDSL.single; *)
   ]
 
 let _suspended () =
   ignore
-  @@ classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:8 CDSL.single
-       ()
+  @@ classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:21
+       ~update_params_pip:true CDSL.single ()
 
 let () =
   List.map benchmarks ~f:(fun bench -> bench ()) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout

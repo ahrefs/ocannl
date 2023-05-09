@@ -295,15 +295,29 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
         !session_step_update_routine ~task_id
       done
     else
-      Domainslib.Task.run task_pool (fun () ->
-          Domainslib.Task.parallel_for task_pool ~start:0 ~finish:(!Shape.num_parallel_tasks - 1)
-            ~body:(fun task_id -> !session_step_update_routine ~task_id));
-    if !Shape.num_parallel_tasks = 1 && not !update_params_in_parallel then ()
-    else if not !update_params_in_parallel then
-      List.iter !update_params_routines ~f:(fun routine -> routine ())
-    else
-      let tasks = List.map ~f:(Domainslib.Task.async task_pool) !update_params_routines in
-      Domainslib.Task.run task_pool (fun () -> List.iter tasks ~f:(Domainslib.Task.await task_pool)))
+      (* Domainslib.Task.run task_pool (fun () ->
+         Domainslib.Task.parallel_for task_pool ~start:0 ~finish:(!Shape.num_parallel_tasks - 1)
+           ~body:(fun task_id -> !session_step_update_routine ~task_id)); *)
+
+      (* let tasks = ref [] in
+         for task_id = 0 to !Shape.num_parallel_tasks - 1 do
+           tasks := Domainslib.Task.async task_pool (fun () -> !session_step_update_routine ~task_id) :: !tasks
+         done;
+         Domainslib.Task.run task_pool (fun () ->
+             Domainslib.Task.run task_pool (fun () -> List.iter !tasks ~f:(Domainslib.Task.await task_pool))); *)
+      let tasks = ref [] in
+      for task_id = 0 to !Shape.num_parallel_tasks - 1 do
+        tasks := Caml.Domain.spawn (fun () -> !session_step_update_routine ~task_id) :: !tasks
+      done;
+      List.rev !tasks |> List.iter ~f:Caml.Domain.join;
+      if !Shape.num_parallel_tasks = 1 && not !update_params_in_parallel then ()
+      else if not !update_params_in_parallel then
+        List.iter !update_params_routines ~f:(fun routine -> routine ())
+      else
+        (* let tasks = List.map ~f:(Domainslib.Task.async task_pool) !update_params_routines in
+           Domainslib.Task.run task_pool (fun () -> List.iter tasks ~f:(Domainslib.Task.await task_pool)) *)
+        let tasks = List.map ~f:Caml.Domain.spawn !update_params_routines in
+        List.iter ~f:Caml.Domain.join tasks)
 
 (** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id].
     Discards all computations (forward, backward, update params, data fetches), but keeps
