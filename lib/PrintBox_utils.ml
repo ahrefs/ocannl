@@ -73,6 +73,8 @@ type plot_spec =
   | Line_plot of { points : float array; pixel : string }
   | Boundary_map of { callback : float * float -> bool; pixel_true : string; pixel_false : string }
 
+let with_debug = ref false
+
 let plot_canvas ?canvas ?size specs =
   let open Float in
   (* Unfortunately "x" and "y" of a "matrix" are opposite to how we want them displayed --
@@ -117,7 +119,7 @@ let plot_canvas ?canvas ?size specs =
   let to_int v =
     try to_int v
     with Invalid_argument _ ->
-      Stdio.eprintf "\nPrintBox_tools: cannot plot number %f\n%!" v;
+      if !with_debug then Stdio.eprintf "\nPrintBox_tools: cannot plot number %f\n%!" v;
       0
   in
   let scale_1d y = to_int @@ (of_int Int.(dimy - 1) * (y - miny) / spany) in
