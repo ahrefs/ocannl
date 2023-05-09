@@ -68,6 +68,20 @@ let prec_to_kind prec =
 
 let prec_is_double = function NodeUI.Double_prec _ -> true | _ -> false
 
+let is_builtin_op = function
+  | Code.Add | Code.Mul -> true
+  | Code.ToPowOf | Code.Relu_gate | Code.Arg2 | Code.Arg1 -> false
+
+let builtin_op = function
+  | Code.Add -> Gccjit.Plus
+  | Code.Mul -> Gccjit.Mult
+  | Code.ToPowOf | Code.Relu_gate | Code.Arg2 | Code.Arg1 ->
+      invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
+
+let tensor_ptr_name = function
+  | NodeUI.{ id; field = Value } -> "n" ^ Int.to_string id ^ "_value"
+  | NodeUI.{ id; field = Grad } -> "n" ^ Int.to_string id ^ "_grad"
+
 let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_level) : Gccjit.block =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
@@ -75,10 +89,29 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
   let c_float = Type.get ctx Type.Float in
   let c_double = Type.get ctx Type.Double in
   let cast_bool num_typ v = RValue.cast ctx (RValue.cast ctx v c_int) num_typ in
-  (* Local scope ids can be non-unique due to inlining. *)
-  let scope_uid = ref 0 in
+  (* Local scope ids can be non-unique due to inlining.
+     We also need unique ids for computation ordering lvalues. *)
+  let uid = ref 0 in
   let locals = ref Map.Poly.empty in
   let current_block = ref initial_block in
+  let loop_binop op ~num_typ ~is_double ~v1 ~v2 =
+    match op with
+    | Code.Add -> RValue.binary_op ctx Plus num_typ v1 v2
+    | Code.Mul -> RValue.binary_op ctx Mult num_typ v1 v2
+    | Code.ToPowOf when is_double ->
+        let base = RValue.cast ctx v1 c_double in
+        let expon = RValue.cast ctx v2 c_double in
+        RValue.cast ctx (RValue.call ctx (Function.builtin ctx "pow") [ base; expon ]) num_typ
+    | Code.ToPowOf ->
+        let base = RValue.cast ctx v1 c_float in
+        let expon = RValue.cast ctx v2 c_float in
+        RValue.cast ctx (RValue.call ctx (Function.builtin ctx "powf") [ base; expon ]) num_typ
+    | Code.Relu_gate ->
+        let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) v1 in
+        RValue.binary_op ctx Mult num_typ cmp @@ v2
+    | Code.Arg2 -> v2
+    | Code.Arg1 -> v1
+  in
   let lookup ?provider_dim (env, dyn_env) indices =
     Array.map indices ~f:(function
       | Shape.Fixed_idx i -> RValue.int ctx c_index i
@@ -93,6 +126,31 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
     | Code.Lines lines ->
         Array.iteri lines ~f:(fun i line -> loop_proc ~name:(name ^ "_at_line_" ^ Int.to_string i) ~env line)
     | For_loop { index; from_; to_; body } -> jit_for_loop ~env index ~from_ ~to_ (Either.First body)
+    | Set (data_node, idcs, Binop (op, Get (tensor, idcs2), c2))
+      when NodeUI.equal_tensor_ptr data_node tensor
+           && [%equal: Code.index array] idcs idcs2
+           && is_builtin_op op ->
+        let tensor = get_tensor ctx data_node in
+        let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
+        let idcs = lookup env idcs in
+        let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
+        let lhs = LValue.access_array tensor.ptr offset in
+        Block.assign_op !current_block lhs (builtin_op op) value
+    | Set (data_node, idcs, Binop (op, (Get (tensor, _) as c1), c2))
+      when NodeUI.equal_tensor_ptr data_node tensor ->
+        (* FIXME: doesn't seem to help, check precisely. *)
+        let tensor = get_tensor ctx data_node in
+        let v2 = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
+        (* Force the ordering of computations. *)
+        Int.incr uid;
+        let l2 = Function.local func tensor.num_typ (tensor_ptr_name data_node ^ "_" ^ Int.to_string !uid) in
+        Block.assign !current_block l2 v2;
+        let idcs = lookup env idcs in
+        let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
+        let lhs = LValue.access_array tensor.ptr offset in
+        let v1 = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c1 in
+        Block.assign !current_block lhs
+        @@ loop_binop op ~num_typ:tensor.num_typ ~is_double:tensor.is_double ~v1 ~v2:(RValue.lvalue l2)
     | Set (data_node, idcs, value) ->
         let tensor = get_tensor ctx data_node in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
@@ -115,8 +173,8 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
         (* Scope ids can be non-unique due to inlining. *)
         let v_name =
           Int.(
-            incr scope_uid;
-            "v" ^ to_string i ^ "_" ^ to_string !scope_uid)
+            incr uid;
+            "v" ^ to_string i ^ "_" ^ to_string !uid)
         in
         let lvalue = Function.local func typ v_name in
         (* Tensors are initialized to 0 by default. However, there is typically an explicit
@@ -147,21 +205,9 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
         RValue.lvalue @@ LValue.access_array tensor.ptr offset
-    | Binop (Code.Add, c1, c2) -> RValue.binary_op ctx Plus num_typ (loop c1) (loop c2)
-    | Binop (Code.Mul, c1, c2) -> RValue.binary_op ctx Mult num_typ (loop c1) (loop c2)
-    | Binop (Code.ToPowOf, c1, c2) when is_double ->
-        let base = RValue.cast ctx (loop c1) c_double in
-        let expon = RValue.cast ctx (loop c2) c_double in
-        RValue.cast ctx (RValue.call ctx (Function.builtin ctx "pow") [ base; expon ]) num_typ
-    | Binop (Code.ToPowOf, c1, c2) ->
-        let base = RValue.cast ctx (loop c1) c_float in
-        let expon = RValue.cast ctx (loop c2) c_float in
-        RValue.cast ctx (RValue.call ctx (Function.builtin ctx "powf") [ base; expon ]) num_typ
-    | Binop (Code.Relu_gate, c1, c2) ->
-        let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) @@ loop c1 in
-        RValue.binary_op ctx Mult num_typ cmp @@ loop c2
     | Binop (Code.Arg2, _, c2) -> loop c2
     | Binop (Code.Arg1, c1, _) -> loop c1
+    | Binop (op, c1, c2) -> loop_binop op ~num_typ ~is_double ~v1:(loop c1) ~v2:(loop c2)
     | Unop (Code.Identity, c) -> loop c
     | Unop (Code.Relu, c) ->
         let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) @@ loop c in
@@ -224,20 +270,20 @@ let jit_func ~name ctx proc =
   let task_id = Param.create ctx Type.(get ctx Int) "task_id" in
   let func = Function.create ctx fkind (Type.get ctx Void) name [ task_id ] in
   let block = Block.create ~name func in
-  (let after_proc = jit_code ~name ~env ~task_id ctx func block proc in
-   Block.return_void after_proc;
-   if !Code.with_debug then (
-     let suf = "-gccjit-debug.c" in
-     let f_name =
-       if !Code.keep_files_in_run_directory then name ^ suf else Caml.Filename.temp_file (name ^ "-") suf
-     in
-     Context.dump_to_file ctx ~update_locs:true f_name))
-  (* match !compiled_session_globals with
-     | None ->
-       Context.dump_to_file !session_context ~update_locs:true "globals-gccjit-debug.c";
-       let globals = Context.compile !session_context in
-        compiled_session_globals := Some globals
-     | Some _ -> () *)
+  let after_proc = jit_code ~name ~env ~task_id ctx func block proc in
+  Block.return_void after_proc;
+  if !Code.with_debug then
+    let suf = "-gccjit-debug.c" in
+    let f_name =
+      if !Code.keep_files_in_run_directory then name ^ suf else Caml.Filename.temp_file (name ^ "-") suf
+    in
+    Context.dump_to_file ctx ~update_locs:true f_name
+(* match !compiled_session_globals with
+   | None ->
+     Context.dump_to_file !session_context ~update_locs:true "globals-gccjit-debug.c";
+     let globals = Context.compile !session_context in
+      compiled_session_globals := Some globals
+   | Some _ -> () *)
 
 let error_message ~name ~prefix ?extra_error_msg ~contents exc =
   let backtrace = Caml.Printexc.get_backtrace () in
