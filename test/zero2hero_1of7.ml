@@ -13,7 +13,6 @@ let%expect_test "Graph drawing recompile" =
   SDSL.drop_all_sessions ();
   Random.init 0;
   let%nn_op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
-  SDSL.set_non_virtual x;
   SDSL.refresh_session ();
   SDSL.print_node_tree ~with_grad:true ~depth:9 f.id;
   [%expect
