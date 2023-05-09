@@ -174,13 +174,6 @@ let compile_routine ~name code =
   !exec_unit_func ~name compiled
 
 let session_params () = NodeUI.param_nodes ~from_id:!Formula.first_session_id ()
-
-let generate_params_update ~(minus_lr : Formula.t) ?params () =
-  let params = match params with Some p -> p | None -> Hashtbl.data @@ session_params () in
-  let module CDSL = Code.CDSL in
-  let module NFDSL = Operation.NFDSL in
-  Code.all_parallel @@ List.map params ~f:(fun n -> [%nn_cd n =+ minus_lr * n.grad ~logic:"."])
-
 let minus_learning_rate : Formula.t option ref = ref None
 let last_refresh_roots = ref !Formula.global_roots
 let last_with_backprop = ref false
@@ -188,8 +181,16 @@ let last_update_params = ref false
 let session_step_update = ref Code.Noop
 let session_step_update_compiled = ref Code.(Comment "Noop")
 let session_step_update_routine = ref (fun ~task_id:_ -> ())
-let session_update_params = ref Code.Noop
-let session_update_params_compiled = ref Code.(Comment "Noop")
+let update_params_code = ref []
+let update_params_compiled = ref []
+let update_params_routines = ref []
+let update_params_in_parallel = ref false
+
+let generate_params_update ~(minus_lr : Formula.t) ?params () =
+  let params = match params with Some p -> p | None -> Hashtbl.data @@ session_params () in
+  let module CDSL = Code.CDSL in
+  let module NFDSL = Operation.NFDSL in
+  List.map params ~f:(fun n -> [%nn_cd n =+ minus_lr * n.grad ~logic:"."])
 
 let print_session_code ?(compiled = false) () =
   let open Code in
@@ -240,29 +241,62 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
                        Option.some_if (Option.value_exn root.form).needs_gradient
                        @@ get_toplevel_backprop root) ) )
     in
-    let params_update =
-      match (update_params, !minus_learning_rate) with
-      | true, Some minus_lr -> Block_comment ("Params update", generate_params_update ~minus_lr ())
-      | _ -> Noop
-    in
+    (match (update_params, !minus_learning_rate) with
+    | true, Some minus_lr -> update_params_code := generate_params_update ~minus_lr ()
+    | _ -> ());
     (* Roots at the time of compilation are not virtual, so that they can be consumed downstream. *)
     Map.iter_keys !Formula.global_roots ~f:(fun id -> (NodeUI.get id).cannot_be_virtual <- true);
-    session_step_update := sequential [ forward; backprop; params_update ]);
+    if !update_params_in_parallel || !Shape.num_parallel_tasks > 1 then
+      session_step_update := sequential [ forward; backprop ]
+    else
+      let params_update = Block_comment ("Params update", all_parallel !update_params_code) in
+      session_step_update := sequential [ forward; backprop; params_update ];
+      update_params_compiled := [];
+      update_params_routines := []);
   let name = "session_step_update" in
-  if generating then session_step_update_compiled := Code.compile_proc ~name !session_step_update;
+  if generating then (
+    session_step_update_compiled := Code.compile_proc ~name !session_step_update;
+    if !Shape.num_parallel_tasks = 1 && not !update_params_in_parallel then update_params_compiled := []
+    else if not !update_params_in_parallel then
+      update_params_compiled :=
+        Code.
+          [
+            compile_proc ~name:"params_update"
+            @@ Block_comment ("Params update", all_parallel !update_params_code);
+          ]
+    else
+      (* TODO: retrieve the actual param name. *)
+      update_params_compiled :=
+        List.mapi !update_params_code ~f:(fun i ->
+            Code.compile_proc ~name:("params_update" ^ Int.to_string i)));
   if generating || reinit || roots_changed then (
     let num_inits = List.length !session_initializations in
     let to_init = num_inits - !session_initialized in
     perform_initialization @@ List.take !session_initializations to_init;
     session_initialized := num_inits);
-  if (not force_no_init) && (generating || reinit) then
+  if (not force_no_init) && (generating || reinit) then (
     session_step_update_routine := !exec_task_id_func ~name !session_step_update_compiled;
-  if run then
+    if !Shape.num_parallel_tasks = 1 && not !update_params_in_parallel then update_params_routines := []
+    else if not !update_params_in_parallel then
+      update_params_routines :=
+        [ !exec_unit_func ~name:"params_update" @@ Code.Lines (Array.of_list !update_params_compiled) ]
+    else
+      (* TODO: retrieve the actual param name. *)
+      update_params_routines :=
+        List.mapi !update_params_compiled ~f:(fun i ->
+            !exec_unit_func ~name:("params_update_" ^ Int.to_string i)));
+  if run then (
     if !Shape.num_parallel_tasks = 1 then !session_step_update_routine ~task_id:0
     else
       Domainslib.Task.run task_pool (fun () ->
           Domainslib.Task.parallel_for task_pool ~start:0 ~finish:(!Shape.num_parallel_tasks - 1)
-            ~body:(fun task_id -> !session_step_update_routine ~task_id))
+            ~body:(fun task_id -> !session_step_update_routine ~task_id));
+    if !Shape.num_parallel_tasks = 1 && not !update_params_in_parallel then ()
+    else if not !update_params_in_parallel then
+      List.iter !update_params_routines ~f:(fun routine -> routine ())
+    else
+      let tasks = List.map ~f:(Domainslib.Task.async task_pool) !update_params_routines in
+      Domainslib.Task.run task_pool (fun () -> List.iter tasks ~f:(Domainslib.Task.await task_pool)))
 
 (** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id].
     Discards all computations (forward, backward, update params, data fetches), but keeps
@@ -276,6 +310,8 @@ let close_session () =
   Formula.session_prepare_forward := [];
   Formula.session_prepare_backprop := [];
   session_step_update := Noop;
+  session_step_update_compiled := Comment "Noop";
+  (session_step_update_routine := fun ~task_id:_ -> ());
   minus_learning_rate := None;
   !cleanup_executor_session ()
 
@@ -407,4 +443,5 @@ module SDSL = struct
   let global_size_in_bytes () = Node.global_size_in_bytes ()
   let num_parallel_tasks = Shape.num_parallel_tasks
   let num_domains = num_domains
+  let update_params_in_parallel = update_params_in_parallel
 end
