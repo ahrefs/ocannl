@@ -7,7 +7,7 @@ module SDSL = Session.SDSL
 
 let () = SDSL.set_executor Gccjit
 
-let () =
+let _suspended () =
   SDSL.drop_all_sessions ();
   Random.init 0;
   let%nn_op n = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
@@ -20,6 +20,20 @@ let () =
   SDSL.print_session_code ~compiled:true ();
   Stdio.printf "\n%!"
 
+let () =
+  SDSL.drop_all_sessions ();
+  Random.init 0;
+  SDSL.set_executor Interpreter;
+  SDSL.enable_all_debugs ~trace_interpreter:true ~sequentialize:true ();
+  CDSL.debug_virtual_nodes := true;
+  SDSL.num_parallel_tasks := 1;
+  let%nn_op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
+  let%nn_op f5 = f 5 in
+  SDSL.refresh_session ();
+  Stdio.printf "\n%!";
+  SDSL.print_node_tree ~with_grad:false ~depth:9 f5.id;
+  Stdio.printf "\n%!"
+
 let _suspended () =
   let open SDSL.O in
   SDSL.drop_all_sessions ();
@@ -28,8 +42,8 @@ let _suspended () =
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   let x_flat =
-    FDSL.term ~needs_gradient:true ~label:"x_flat" ~batch_dims:[ Dim size ] ~input_dims:[] ~output_dims:[ Dim 1 ]
-      ~init_op:(Constant_fill xs) ()
+    FDSL.term ~needs_gradient:true ~label:"x_flat" ~batch_dims:[ Dim size ] ~input_dims:[]
+      ~output_dims:[ Dim 1 ] ~init_op:(Constant_fill xs) ()
   in
   let%nn_dt session_step ~o:1 = n =+ 1 in
   let%nn_op x = x_flat @.| session_step in

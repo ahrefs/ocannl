@@ -13,6 +13,7 @@ let%expect_test "Graph drawing recompile" =
   SDSL.drop_all_sessions ();
   Random.init 0;
   let%nn_op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
+  SDSL.set_non_virtual x;
   SDSL.refresh_session ();
   SDSL.print_node_tree ~with_grad:true ~depth:9 f.id;
   [%expect
@@ -21,18 +22,18 @@ let%expect_test "Graph drawing recompile" =
                                                6.00e+1
                                               Gradient
                                                1.00e+0
-                                       [12] <+>                                    │[2] <5> virtual
-                                        5.50e+1                                    │<void>
-                                       Gradient                                    │
-                                        1.00e+0                                    │
-                 [9] <*.>              │                [11] <*.>                  │
-                  7.50e+1              │                 -2.00e+1                  │
-                 Gradient              │                Gradient                   │
-                  1.00e+0              │                 1.00e+0                   │
-    [8] <3> virtual│     [6] <**.>     │[10] <-1> virtual│       [4] <*.>          │
-    <void>         │      2.50e+1      │<void>           │        2.00e+1          │
-                   │     Gradient      │                 │       Gradient          │
-                   │      3.00e+0      │                 │        -1.00e+0         │
+                                   [12] <+> virtual                                │[2] <5> virtual
+                                   <void>                                          │<void>
+                                   Gradient                                        │
+                                   <void>                                          │
+             [9] <*.> virtual          │             [11] <*.> virtual             │
+             <void>                    │             <void>                        │
+             Gradient                  │             Gradient                      │
+             <void>                    │             <void>                        │
+    [8] <3> virtual│ [6] <**.> virtual │[10] <-1> virtual│    [4] <*.> virtual     │
+    <void>         │ <void>            │<void>           │    <void>               │
+                   │ Gradient          │                 │    Gradient             │
+                   │ <void>            │                 │    <void>               │
                    │[1]│[5] <2> virtual│                 │[3] <4> virtual│[1] <x>  │
                    │   │<void>         │                 │<void>         │ 5.00e+0 │
                    │   │               │                 │               │Gradient │
@@ -147,39 +148,39 @@ let%expect_test "Graph drawing fetch" =
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect
     {|
-     9.703e+1 │                                                                          #
+     1.000e+2 │                                                                          #
               │#
-              │ ##
+              │#
+              │ #
               │  #
-              │   #
+              │  ##
               │    #
               │     #
-              │      #
+              │     ##
               │       #
               │        #
-              │         #
-              │          ##
-              │           #                                                            ##
-              │            ##                                                         #
-              │              #                                                       #
-    f         │               ##                                                   ##
-    (         │                 #                                                 ##
-    x         │                 ##                                              ##
-    )         │                   ##                                           ##
-              │#                    ##                                       ##       ***
-              │                       ##                                   ##    ******
-              │                         ##                               ##  ****
-              │                          ####                         ##*****
-              │                             ####                   *****
-              │                                ######         *****
-              │                                      ####******
-              │-  -   -   -   -  -   -   -   -  -   -***-   -  -   -   -   -  -   -   -
-              │                                ******
-              │                            *****
-              │                       *****
-              │                  ******
-              │              ****
-              │        ******
+              │         #                                                               #
+              │          ##                                                            #
+              │           #                                                           #
+              │            ##                                                       ##
+    f         │              #                                                     #
+    (         │               ##                                                 ##
+    x         │                 #                                               #
+    )         │                  ##                                           ##
+              │                    #                                         #          *
+              │                     ###                                   ###      *****
+              │                       ###                               ###   *****
+              │                          ##                           ## *****
+              │                            ###                     #*****
+              │                               #####           #******
+              │                                    ########****
+              │-  -   -   -   -  -   -   -   -  -   -***-** -  -   -   -   -  -   -   -
+              │                                 ******
+              │                             ****
+              │                       ******
+              │                   *****
+              │              *****
+              │         *****
               │    *****
      -3.400e+1│****                                                                      *
     ──────────┼───────────────────────────────────────────────────────────────────────────
@@ -203,14 +204,14 @@ let%expect_test "Simple gradients" =
                      -8.00e+0
                     Gradient
                      1.00e+0
-              [5] d <+>            │[6] <f>
-               4.00e+0             │ -2.00e+0
-              Gradient             │Gradient
-               -2.00e+0            │ 4.00e+0
-         [3] e <*.>     │[4] <c>   │
-          -6.00e+0      │ 1.00e+1  │
-         Gradient       │Gradient  │
-          -2.00e+0      │ -2.00e+0 │
+           [5] d <+> virtual       │[6] <f>
+            4.00e+0                │ -2.00e+0
+           Gradient                │Gradient
+            -2.00e+0               │ 4.00e+0
+     [3] e <*.> virtual │[4] <c>   │
+      -6.00e+0          │ 1.00e+1  │
+     Gradient           │Gradient  │
+      -2.00e+0          │ -2.00e+0 │
     [1] <a>  │[2] <b>   │          │
      2.00e+0 │ -3.00e+0 │          │
     Gradient │Gradient  │          │
@@ -225,14 +226,14 @@ let%expect_test "Simple gradients" =
                      -8.00e+0
                     Gradient
                      1.00e+0
-              [5] d <+>            │[6] <f>
-               4.00e+0             │ -1.60e+0
-              Gradient             │Gradient
-               -2.00e+0            │ 4.00e+0
-         [3] e <*.>     │[4] <c>   │
-          -6.00e+0      │ 9.80e+0  │
-         Gradient       │Gradient  │
-          -2.00e+0      │ -2.00e+0 │
+           [5] d <+> virtual       │[6] <f>
+            4.00e+0                │ -1.60e+0
+           Gradient                │Gradient
+            -2.00e+0               │ 4.00e+0
+     [3] e <*.> virtual │[4] <c>   │
+      -6.00e+0          │ 9.80e+0  │
+     Gradient           │Gradient  │
+      -2.00e+0          │ -2.00e+0 │
     [1] <a>  │[2] <b>   │          │
      2.60e+0 │ -3.40e+0 │          │
     Gradient │Gradient  │          │
@@ -247,14 +248,14 @@ let%expect_test "Simple gradients" =
                        -1.54e+0
                       Gradient
                        1.00e+0
-                [5] d <+>            │[6] <f>
-                 9.60e-1             │ -1.60e+0
-                Gradient             │Gradient
-                 -1.60e+0            │ 9.60e-1
-           [3] e <*.>     │[4] <c>   │
-            -8.84e+0      │ 9.80e+0  │
-           Gradient       │Gradient  │
-            -1.60e+0      │ -1.60e+0 │
+             [5] d <+> virtual       │[6] <f>
+              9.60e-1                │ -1.60e+0
+             Gradient                │Gradient
+              -1.60e+0               │ 9.60e-1
+       [3] e <*.> virtual │[4] <c>   │
+        -8.84e+0          │ 9.80e+0  │
+       Gradient           │Gradient  │
+        -1.60e+0          │ -1.60e+0 │
       [1] <a>  │[2] <b>   │          │
        2.60e+0 │ -3.40e+0 │          │
       Gradient │Gradient  │          │

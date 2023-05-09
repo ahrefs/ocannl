@@ -236,7 +236,7 @@ let rec to_low_level (code : t) : unit low_level =
 
 let interpreter_print_comments = ref false
 let keep_files_in_run_directory = ref false
-let with_debug = ref true
+let with_debug = ref false
 let debug_virtual_nodes = ref false
 
 type int_env = (sym_index, int) Base.Map.Poly.t * (Shape.symbol, int) Base.Map.Poly.t
@@ -444,16 +444,15 @@ type data_node = {
   id : int;
   kind : NodeUI.data_kind;
   prec : NodeUI.prec;
-  assign_index_bag : sym_index Hash_set.t;
   mutable computations : (index array option * unit low_level) list;
       (** The computations (of the data node) are retrieved for optimization just as they are populated,
           so that the inlined code corresponds precisely to the changes to the tensors that would happen
           up till that point. Within the code blocks paired with an index tuple, all assignments and accesses
           must happen via the index tuple; if this is not the case for some assignment, the node cannot
           be virtual. Currently, we only allow for-loop symbols in assignment indices of virtual nodes. *)
+  assignments : int array Hash_set.t;
   accesses : (int array, visits) Hashtbl.t;
       (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
-  mutable fill : float low_level option;
   mutable non_virtual : bool;
   mutable scalar : float option;
 }
@@ -465,10 +464,9 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         id = uid.id;
         kind = uid.field;
         prec = NodeUI.node_prec uid;
-        assign_index_bag = Hash_set.Poly.create ();
         computations = [];
+        assignments = Hash_set.Poly.create ();
         accesses = Hashtbl.Poly.create ();
-        fill = None;
         non_virtual = (NodeUI.get uid.id).cannot_be_virtual;
         scalar = None;
       })
@@ -521,14 +519,15 @@ let precompute_constants ?idcs node_store top_node llv =
     (* In principle we might conclude again that the node is to be inlined as scalar, that's OK. *)
     top_node.scalar <- None
 
-let visit fill assign_bag old =
-  if Option.is_none fill && Hash_set.is_empty assign_bag then Recurrent
+let visit is_assigned old =
+  if not is_assigned then Recurrent
   else match old with None -> Visits 1 | Some (Visits i) -> Visits (i + 1) | Some Recurrent -> Recurrent
 
 let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
   let nodes = Hash_set.create (module Int) in
-  let lookup ?provider_dim ~(task_id : int) (env, dyn_env) indices =
+  let lookup ?provider_dim ~task_id dem_env indices =
+    let env, dyn_env = dem_env in
     Array.map indices ~f:(function
       | Shape.Fixed_idx i -> i
       | Iterator s -> Map.find_exn env s
@@ -536,7 +535,7 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
       | Dynamic_provider _ -> Option.value_exn provider_dim
       | Task_id -> task_id)
   in
-  let rec loop_proc ~task_id env llc : unit =
+  let rec loop_proc ~task_id env llc =
     let loop = loop_proc ~task_id env in
     match llc with
     | Lines body -> Array.iter ~f:loop body
@@ -547,17 +546,16 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
     | Set (tensor, idcs, llv) ->
         loop_float ~task_id env llv;
         Hash_set.add nodes tensor.id;
-        let node = get_node node_store tensor in
-        if virtualize_settings.inline_constants then precompute_constants ~idcs node_store node llv;
+        let set_node : data_node = get_node node_store tensor in
+        Hash_set.add set_node.assignments (lookup ~task_id env idcs);
+        if virtualize_settings.inline_constants then precompute_constants ~idcs node_store set_node llv;
         Array.iter idcs ~f:(function
-          | Shape.Fixed_idx _ | Shape.Dynamic_provider _ | Shape.Dynamic_recipient _ ->
-              node.non_virtual <- true
-          | Task_id -> ()
+          | Shape.Dynamic_provider _ | Shape.Dynamic_recipient _ -> set_node.non_virtual <- true
+          | Shape.Fixed_idx _ | Task_id -> ()
           | Shape.Iterator s ->
               let old_tensor = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tensor) in
               (* TODO(#134): this prevents multiple virtual tensors from sharing for loops. *)
-              assert (NodeUI.equal_tensor_ptr old_tensor tensor);
-              Hash_set.add node.assign_index_bag s)
+              assert (NodeUI.equal_tensor_ptr old_tensor tensor));
     | Set_local (_, llv) -> loop_float ~task_id env llv
     | Comment _ -> ()
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
@@ -572,10 +570,10 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
     match llv with
     | Constant _ -> ()
     | Get (tensor, indices) ->
-        let data_node = get_node node_store tensor in
-        Hash_set.add nodes data_node.id;
-        Hashtbl.update data_node.accesses (lookup ~task_id env indices)
-          ~f:(visit data_node.fill data_node.assign_index_bag)
+        let get_node : data_node = get_node node_store tensor in
+        Hash_set.add nodes get_node.id;
+        let at_pos = lookup ~task_id env indices in
+        Hashtbl.update get_node.accesses at_pos ~f:(visit @@ Hash_set.mem get_node.assignments at_pos);
     | Local_scope { body; _ } -> loop_proc ~task_id env body
     | Get_local _ -> ()
     | Get_global _ -> ()
@@ -589,7 +587,7 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
     let env =
       Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
           let at_pos = lookup ~provider_dim ~task_id env tensor_idcs in
-          Hashtbl.update node.accesses at_pos ~f:(visit node.fill node.assign_index_bag);
+          Hashtbl.update node.accesses at_pos ~f:(visit @@ Hash_set.mem node.assignments at_pos);
           (fst env, Map.add_exn ~key ~data:0 @@ snd env))
     in
     loop_proc ~task_id env body
@@ -598,7 +596,7 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
     loop_proc ~task_id (Map.Poly.empty, Map.Poly.empty) llc
   done;
   Hash_set.iter nodes ~f:(fun node_id ->
-      let value_node = get_node node_store { id = node_id; field = Value } in
+      let value_node : data_node = get_node node_store { id = node_id; field = Value } in
       if Hashtbl.exists value_node.accesses ~f:is_too_many then (
         value_node.non_virtual <- true;
         (* TODO(#135): For now, value and gradient are non-virtual reciprocically. *)
