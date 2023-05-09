@@ -36,7 +36,7 @@ type projections_slot = LHS | RHS1 | RHS2 | Nonslot | Undet [@@deriving equal, s
 let assignment_op expr =
   let loc = expr.pexp_loc in
   match expr with
-  | [%expr ( =: )] -> (true, [%expr Code.Arg2])
+  | [%expr ( =: )] -> (false, [%expr Code.Arg2])
   | [%expr ( =+ )] -> (false, [%expr Code.Add])
   | [%expr ( =* )] -> (false, [%expr Code.Mul])
   | [%expr ( =** )] -> (false, [%expr Code.ToPowOf])
