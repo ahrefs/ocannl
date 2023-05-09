@@ -134,6 +134,7 @@ type backend = Interpreter | Gccjit [@@deriving sexp, equal]
 
 let num_domains = Caml.Domain.recommended_domain_count ()
 let task_pool = Domainslib.Task.setup_pool ~name:"session_task_pool" ~num_domains ()
+let debug_sequentialize_parallel_tasks = ref false
 let exec_task_id_func = ref Exec_as_gccjit.jit_task_id_func
 let exec_unit_func = ref Exec_as_gccjit.jit_unit_func
 let executor_error_message = ref Exec_as_gccjit.error_message
@@ -287,6 +288,10 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
             !exec_unit_func ~name:("params_update_" ^ Int.to_string i)));
   if run then (
     if !Shape.num_parallel_tasks = 1 then !session_step_update_routine ~task_id:0
+    else if !debug_sequentialize_parallel_tasks then
+      for task_id = 0 to !Shape.num_parallel_tasks - 1 do
+        !session_step_update_routine ~task_id
+      done
     else
       Domainslib.Task.run task_pool (fun () ->
           Domainslib.Task.parallel_for task_pool ~start:0 ~finish:(!Shape.num_parallel_tasks - 1)
@@ -426,16 +431,20 @@ module SDSL = struct
     | None -> [||]
     | Some a -> NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim a
 
-  let enable_all_debugs ?(trace_interpreter = false) () =
+  let enable_all_debugs ?(trace_interpreter = false) ?(sequentialize = false) () =
     Code.CDSL.with_debug := true;
     Code.CDSL.keep_files_in_run_directory := true;
     if trace_interpreter then Code.CDSL.debug_trace_interpretation := true;
+    if sequentialize then (
+      debug_sequentialize_parallel_tasks := true;
+      update_params_in_parallel := false);
     Code.CDSL.debug_virtual_nodes := true
 
   let disable_all_debugs () =
     Code.CDSL.debug_trace_interpretation := false;
     Code.CDSL.with_debug := false;
     Code.CDSL.keep_files_in_run_directory := false;
+    debug_sequentialize_parallel_tasks := false;
     Code.CDSL.debug_virtual_nodes := false
 
   let default_value_prec = Formula.default_value_prec
@@ -444,4 +453,5 @@ module SDSL = struct
   let num_parallel_tasks = Shape.num_parallel_tasks
   let num_domains = num_domains
   let update_params_in_parallel = update_params_in_parallel
+  let debug_sequentialize_parallel_tasks = debug_sequentialize_parallel_tasks
 end
