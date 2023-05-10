@@ -32,12 +32,12 @@ Warning disclaimer: this project is still "not announced". The features describe
 
 For past milestones see [CHANGES](CHANGES.md).
 
-* **v0.1.2-multicore**: thread-local formula `cpu_id`; minimal example of multicore SGD, might waste some computations.
-* **v0.1.3-interfaces**: `.mli` files and maybe more documentation.
-* **v0.2-GPU**: a CUDA backend.
-* **v0.2.1-tiling**: the tiling optimization.
-* **v0.3.X-usability**: examples covering most of Andrej Karpathy's "Neural Networks Zero to Hero" series; data loading; checkpointing.
-* **v0.4.X-scale**: distributed computation; runtime-autotuning optimization settings.
+* **v0.2-multicore**: thread-local parameter `task_id`; multicore SGD that actually speeds things up even if there's wasted efficiency.
+* **v0.3-GPU**: a CUDA backend.
+* **v0.3.1-tiling**: the tiling optimization.
+* **v0.4-usability**: examples covering most of Andrej Karpathy's "Neural Networks Zero to Hero" series; data loading; checkpointing.
+* **v0.5-documentation**: `.mli` files and maybe more documentation.
+* **v0.6-scale**: distributed computation; runtime-autotuning optimization settings.
 * **v1-completeness**: whatever not-yet-implemented features that still seem needed and impact the framework design. (E.g. at the time of v0.1.X, convolutions, reshaping, concatenation are not easily expressible.)
 
 ## Why not just use [OWL](https://ocaml.xyz/)?
