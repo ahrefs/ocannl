@@ -239,9 +239,9 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
     if !step % n_batches = 0 && not !stop then epoch_loss := 0.0;
     Int.incr step
   done;
-  (* let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in *)
-  (* let classes = SDSL.value_1d_points ~xdim:0 moons_classes in *)
-  (* let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in *)
+  let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
+  let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
+  let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   (* let train_mem = Mem_usage.info () in *)
   let final_time = Time_now.nanoseconds_since_unix_epoch () in
   let time_in_sec = Int63.(to_float @@ (final_time - init_time)) /. 1000_000_000. in
@@ -257,7 +257,7 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   in
   SDSL.close_session ();
   Stdio.print_endline "\nSession closed.";
-  (* FIMXE: *
+  SDSL.num_parallel_tasks := 1;
   let%nn_op point = (* [ 0; 0 ] *) "point" 2 in
   let mlp_result = mlp point in
   SDSL.refresh_session ();
@@ -277,7 +277,6 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   in
   Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n%!";
   PrintBox_text.output Stdio.stdout plot_moons;
-  * *)
   Stdio.printf "\nEpoch (cumulative) loss curve:\n%!";
   let plot_loss =
     let open PrintBox_utils in
