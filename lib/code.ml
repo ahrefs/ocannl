@@ -28,6 +28,7 @@ type fetch_op = Constant of float | Synthetic of t | Imported of global_identifi
 
 and t =
   | Synchronize of string  (** Wait for all tasks to reach this point before proceeding. *)
+  | Rebalance of t  (** Assume this computation is not using [Shape.Parallel] dimensions and rebalance it. *)
   | Par of t * t  (** These tasks can proceed in parallel, there is no interaction. *)
   | ParHint of t * t
       (** Computing [ParHint (c1, c2)] can proceed in parallel on [c1] and [c2], but when [c2] reads values
@@ -222,6 +223,9 @@ let to_low_level (code : t) : unit low_level =
     | Synchronize info ->
         Int.incr synchronizer_stage;
         Synchronize { stage = !synchronizer_stage; info }
+    | Rebalance c ->
+        (* FIXME: implement actual rebalancing. *)
+        If_task_id_is { for_task_id = 0; body = loop c }
     | Par (c1, c2) | ParHint (c1, c2) | Seq (c1, c2) -> (
         (* TODO: this ignores parallelization altogether, don't! *)
         let ll1 = loop c1 in

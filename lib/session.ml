@@ -257,18 +257,19 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
     Hashtbl.iter ~f:(fun n -> n.NodeUI.cannot_be_virtual <- true) @@ session_params ();
     if List.is_empty update_params_code then
       session_step_update :=
-        sequential [ preparation; Synchronize "post-preparation"; forward; backprop; Synchronize "finish" ]
+        sequential
+          [ Rebalance preparation; Synchronize "post-preparation"; forward; backprop; Synchronize "finish" ]
     else
       let params_update = Block_comment ("Params update", all_parallel update_params_code) in
       session_step_update :=
         sequential
           [
-            preparation;
+            Rebalance preparation;
             Synchronize "post-preparation";
             forward;
             backprop;
             Synchronize "pre-params-update";
-            params_update;
+            Rebalance params_update;
             Synchronize "finish";
           ]);
   let name = "session_step_update" in
