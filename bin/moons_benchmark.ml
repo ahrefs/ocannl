@@ -82,11 +82,16 @@ let _suspended () =
      in *)
   let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..minibatch) + (0.001 *. reg_loss) in
   SDSL.refresh_session ();
-  SDSL.print_decimals_precision := 9;
   Stdio.print_endline "\nPreamble:\n";
   SDSL.print_preamble ();
+  Stdio.print_endline "\nHigh-level code:\n";
+  SDSL.print_session_code ();
+  Stdio.print_endline "\nLow-level code:\n";
+  SDSL.print_session_code ~compiled:true ();
+  SDSL.print_decimals_precision := 9;
   Stdio.printf "\nStep 1: loss %f\n%!" total_loss.@[0];
-  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id
+(*;
   List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
       SDSL.print_formula ~with_grad:true ~with_code:false `Default f);
@@ -102,10 +107,10 @@ let _suspended () =
   SDSL.refresh_session ();
   Stdio.printf "\nStep 4: loss %f\n%!" total_loss.@[0];
   SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
-  Stdio.printf "\nSize in bytes: %d\n%!" (SDSL.global_size_in_bytes ())
+  Stdio.printf "\nSize in bytes: %d\n%!" (SDSL.global_size_in_bytes ()) *)
 
 let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_constants = true)
-    ~num_parallel_tasks ~update_params_pip precision () =
+    ~num_parallel_tasks precision () =
   (* let epochs = 20000 in *)
   (* let epochs = 2000 in *)
   (* let epochs = 200 in *)
@@ -120,7 +125,6 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
          * int (* * string *)
          * string
          * int
-         * string
          * NodeUI.prec]
          ( (if virtualize then "virtu." else "non-v."),
            (* executor, *)
@@ -131,7 +135,6 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
            (* (if inline_constants then "..." else "NIC"), *)
            "parallel",
            num_parallel_tasks,
-           (if update_params_pip then "PIP" else "PNP"),
            precision )
   in
   Stdio.prerr_endline @@ "\n\n****** Benchmarking virtualized: " ^ bench_title ^ " for "
@@ -140,7 +143,6 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   CDSL.virtualize_settings.virtualize <- virtualize;
   CDSL.virtualize_settings.max_visits <- inlining_cutoff;
   CDSL.virtualize_settings.inline_constants <- inline_constants;
-  SDSL.update_params_in_parallel := update_params_pip;
   SDSL.set_executor executor;
   SDSL.default_value_prec := precision;
   SDSL.default_grad_prec := precision;
@@ -203,15 +205,13 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = moons_flat @.| session_step in
   let%nn_op moons_class = moons_classes @.| session_step in
-  let minibatch_loglosses = ref [] in
   let min_loss = ref Float.infinity in
   let max_loss = ref 0.0 in
-  let epoch_loss = ref 0.0 in
   let losses = ref [] in
   let log_losses = ref [] in
   let learning_rates = ref [] in
   let stop = ref false in
-  let step = ref 1 in
+  let step = ref 0 in
   let%nn_op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
   let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in
   let reg_loss =
@@ -219,25 +219,22 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   in
   (* let reg_loss = List.map ~f:ssq [ w1; w2; b1; b2 ] |> List.reduce_exn ~f:FDSL.O.( + ) in *)
   let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..minibatch) + (0.0001 *. reg_loss) in
+  let%nn_dt epoch_loss ~o:1 = n =+ total_loss in
   while not !stop do
-    SDSL.refresh_session ();
-    let loss = total_loss.@[0] in
-    epoch_loss := !epoch_loss +. loss;
-    (* if Float.(loss > 1000.0 * !min_loss && loss > (!min_loss + !max_loss) / 2.0) then stop := true; *)
+    SDSL.refresh_session ~run_for_steps:n_batches ();
+    step := !step + n_batches;
+    let loss = epoch_loss.@[0] in
     if Float.(loss < !min_loss) then min_loss := loss;
     if Float.(loss > !max_loss) then max_loss := loss;
-    if !step % n_batches = 0 || !stop then (
-      learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
-      minibatch_loglosses := Float.log loss :: !losses;
-      losses := !epoch_loss :: !losses;
-      log_losses := Float.log !epoch_loss :: !log_losses;
-      if !step / n_batches % (epochs / 10) = 0 || !stop then (
-        Stdio.printf "Minus learning rate over minibatch for step %d of %d: %f\n%!" !step steps minus_lr.@[0];
-        Stdio.printf "Loss over minibatch for step %d: %f; epoch loss: %f; min loss: %f; max loss: %f\n%!"
-          !step loss !epoch_loss !min_loss !max_loss));
+    learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
+    losses := loss :: !losses;
+    log_losses := Float.log loss :: !log_losses;
+    if !step / n_batches % (epochs / 10) = 0 || !stop then (
+      Stdio.printf "Minus learning rate over minibatch for step %d of %d: %f\n%!" !step steps minus_lr.@[0];
+      Stdio.printf "Epoch loss for step %d: %f; min loss: %f; max loss: %f\n%!" !step
+        loss !min_loss !max_loss);
+    epoch_loss.@[0] <- 0.0;
     if !step >= steps then stop := true;
-    if !step % n_batches = 0 && not !stop then epoch_loss := 0.0;
-    Int.incr step
   done;
   let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
@@ -252,7 +249,7 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
         time_in_sec;
         total_size_in_bytes = SDSL.global_size_in_bytes ();
         result_label = "min minibatch loss, last epoch loss";
-        result = [%sexp_of: float * float] (!min_loss, !epoch_loss);
+        result = [%sexp_of: float * float] (!min_loss, epoch_loss.@[0]);
       }
   in
   SDSL.close_session ();
@@ -291,13 +288,6 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
       [ Line_plot { points = Array.of_list_rev !log_losses; pixel = "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_loss;
-  Stdio.printf "\nMinibatch log-loss:\n%!";
-  let plot_loss =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"log loss"
-      [ Line_plot { points = Array.of_list_rev !minibatch_loglosses; pixel = "-" } ]
-  in
-  PrintBox_text.output Stdio.stdout plot_loss;
   Stdio.printf "\nLearning rate:\n%!";
   let plot_lr =
     let open PrintBox_utils in
@@ -311,74 +301,50 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   Stdio.printf "\n%!";
   result
 
-let benchmarks =
-  [
-    (* classify_moons ~virtualize:false Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:1 ~update_params_pip:true CDSL.single; *)
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:1
-      ~update_params_pip:true CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:1
-      ~update_params_pip:true CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:1
-      ~update_params_pip:false CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:1
-      ~update_params_pip:false CDSL.single;
-    (* classify_moons ~virtualize:false Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:2 ~update_params_pip:true CDSL.single; *)
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:2
-      ~update_params_pip:true CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:2
-      ~update_params_pip:true CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:2
-      ~update_params_pip:false CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:2
-      ~update_params_pip:false CDSL.single;
-    (* classify_moons ~virtualize:false Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:4 ~update_params_pip:true CDSL.single; *)
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:4
-      ~update_params_pip:true CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:4
-      ~update_params_pip:true CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:4
-      ~update_params_pip:false CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:4
-      ~update_params_pip:false CDSL.single;
-    (* classify_moons ~virtualize:false Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:10
-       ~update_params_pip:true CDSL.single; *)
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:10
-      ~update_params_pip:true CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:10
-      ~update_params_pip:true CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:10
-      ~update_params_pip:false CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:10
-      ~update_params_pip:false CDSL.single;
-    (* classify_moons ~virtualize:false Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:20
-       ~update_params_pip:true CDSL.single; *)
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:20
-      ~update_params_pip:true CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:20
-      ~update_params_pip:true CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:20
-      ~update_params_pip:false CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:20
-      ~update_params_pip:false CDSL.single;
-    (* classify_moons ~virtualize:false Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:30
-       ~update_params_pip:true CDSL.single; *)
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:30
-      ~update_params_pip:true CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:30
-      ~update_params_pip:true CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:30
-      ~update_params_pip:false CDSL.single;
-    classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:30
-      ~update_params_pip:false CDSL.single;
-    (* classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:9 ~inline_constants:false
-         ~num_parallel_tasks:4 ~update_params_pip:true CDSL.single;
-       classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:9 ~num_parallel_tasks:4 ~update_params_pip:true CDSL.single; *)
-  ]
+let benchmark_executor = SDSL.Interpreter
 
 let _suspended () =
   ignore
-  @@ classify_moons ~virtualize:true Gccjit ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:21
-       ~update_params_pip:true CDSL.single ()
+  @@ classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:5
+       ~num_parallel_tasks:21 CDSL.single ()
+
+let benchmarks =
+  [
+    (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:1 CDSL.single; *)
+    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:1
+      CDSL.single;
+    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:1
+      CDSL.single;
+    (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:2 CDSL.single; *)
+    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:2
+      CDSL.single;
+    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:2
+      CDSL.single;
+    (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:4 CDSL.single; *)
+    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:4
+      CDSL.single;
+    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:4
+      CDSL.single;
+    (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:10
+       CDSL.single; *)
+    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:10
+      CDSL.single;
+    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:10
+      CDSL.single;
+    (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:20
+       CDSL.single; *)
+    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:20
+      CDSL.single;
+    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:20
+      CDSL.single;
+    (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:30
+       CDSL.single; *)
+    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:30
+      CDSL.single;
+    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:30
+      CDSL.single;
+    (* classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:9 ~num_parallel_tasks:20 CDSL.single; *)
+  ]
 
 let () =
   List.map benchmarks ~f:(fun bench -> bench ()) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout

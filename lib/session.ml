@@ -179,13 +179,10 @@ let minus_learning_rate : Formula.t option ref = ref None
 let last_refresh_roots = ref !Formula.global_roots
 let last_with_backprop = ref false
 let last_update_params = ref false
+let last_run_for_steps = ref 1
 let session_step_update = ref Code.Noop
 let session_step_update_compiled = ref Code.(Comment "Noop")
 let session_step_update_routine = ref (fun ~task_id:_ -> ())
-let update_params_code = ref []
-let update_params_compiled = ref []
-let update_params_routines = ref []
-let update_params_in_parallel = ref false
 
 let generate_params_update ~(minus_lr : Formula.t) ?params () =
   let params = match params with Some p -> p | None -> Hashtbl.data @@ session_params () in
@@ -202,8 +199,10 @@ let print_session_code ?(compiled = false) () =
   else Caml.Format.printf "Session step update code:@ %a" fprint_code !session_step_update;
   Caml.Format.print_newline ()
 
+let macrobatch_loop_symbol = Shape.get_symbol ()
+
 let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_params = true) ?(reinit = false)
-    ?(run = true) ?(force_no_init = false) () =
+    ?(run_for_steps = 1) ?(run = true) ?(force_no_init = false) () =
   let open Formula in
   if force_no_init && reinit then invalid_arg "refresh_session: ~force_no_init conflicts with ~reinit";
   if update_params && not with_backprop then
@@ -215,109 +214,86 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
   last_with_backprop := with_backprop;
   let update_params_changed = Bool.(!last_update_params <> update_params) in
   last_update_params := update_params;
+  let run_for_steps_changed = !last_run_for_steps <> run_for_steps in
+  last_run_for_steps := run_for_steps;
   if regenerate || roots_changed then List.iter !session_shape_updates ~f:Shape.propagate_shapes;
   if regenerate then session_initialized := 0;
-  let generating = regenerate || roots_changed || backprop_changed || update_params_changed in
+  let generating =
+    regenerate || roots_changed || backprop_changed || update_params_changed || run_for_steps_changed
+  in
   if generating then (
     let open Code in
+    let preparation =
+      Block_comment
+        ( "Preparation",
+          Par
+            ( Block_comment ("Prepare forward pass", all_parallel !Formula.session_prepare_forward),
+              Block_comment ("Prepare backprop pass", all_parallel !Formula.session_prepare_backprop) ) )
+    in
     let forward =
       Block_comment
         ( "Forward pass",
-          Seq
-            ( Block_comment ("Prepare forward pass", all_parallel !Formula.session_prepare_forward),
-              sequential
-              @@ List.map (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
-                     get_toplevel_forward root) ) )
+          sequential
+          @@ List.map (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
+                 get_toplevel_forward root) )
     in
     let backprop =
       if not with_backprop then Noop
       else
         Block_comment
           ( "Backprop pass",
-            Seq
-              ( Block_comment ("Prepare backprop pass", all_parallel !Formula.session_prepare_backprop),
-                sequential
-                @@ List.filter_map (Map.to_alist ~key_order:`Decreasing !global_roots)
-                     ~f:(fun (_node_id, root) ->
-                       Option.some_if (Option.value_exn root.form).needs_gradient
-                       @@ get_toplevel_backprop root) ) )
+            sequential
+            @@ List.filter_map (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
+                   Option.some_if (Option.value_exn root.form).needs_gradient @@ get_toplevel_backprop root)
+          )
     in
-    (match (update_params, !minus_learning_rate) with
-    | true, Some minus_lr -> update_params_code := generate_params_update ~minus_lr ()
-    | _ -> update_params_code := []);
+    let update_params_code =
+      match (update_params, !minus_learning_rate) with
+      | true, Some minus_lr -> generate_params_update ~minus_lr ()
+      | _ -> []
+    in
     (* Roots at the time of compilation are not virtual, so that they can be consumed downstream. *)
     Map.iter_keys !Formula.global_roots ~f:(fun id -> (NodeUI.get id).cannot_be_virtual <- true);
     (* Params are not virtual either, so that the gradients can be used for update. *)
     Hashtbl.iter ~f:(fun n -> n.NodeUI.cannot_be_virtual <- true) @@ session_params ();
-    if !update_params_in_parallel || !Shape.num_parallel_tasks > 1 then
-      session_step_update := sequential [ forward; backprop ]
+    if List.is_empty update_params_code then
+      session_step_update := sequential [ preparation; Synchronize; forward; backprop; Synchronize ]
     else
-      let params_update = Block_comment ("Params update", all_parallel !update_params_code) in
-      session_step_update := sequential [ forward; backprop; params_update ];
-      update_params_compiled := [];
-      update_params_routines := []);
+      let params_update = Block_comment ("Params update", all_parallel update_params_code) in
+      session_step_update :=
+        sequential [ preparation; Synchronize; forward; backprop; Synchronize; params_update; Synchronize ]);
   let name = "session_step_update" in
-  if generating then (
-    session_step_update_compiled := Code.compile_proc ~name !session_step_update;
-    if !Shape.num_parallel_tasks = 1 && not !update_params_in_parallel then update_params_compiled := []
-    else if not !update_params_in_parallel then
-      update_params_compiled :=
-        Code.
-          [
-            compile_proc ~name:"params_update"
-            @@ Block_comment ("Params update", all_parallel !update_params_code);
-          ]
-    else
-      (* TODO: retrieve the actual param name. *)
-      update_params_compiled :=
-        List.mapi !update_params_code ~f:(fun i ->
-            Code.compile_proc ~name:("params_update" ^ Int.to_string i)));
+  (if generating && run_for_steps <= 1 then
+     session_step_update_compiled := Code.compile_proc ~name !session_step_update
+   else if generating then
+     session_step_update_compiled :=
+       Code.(
+         For_loop
+           {
+             index = Code.new_sym_index macrobatch_loop_symbol;
+             from_ = 0;
+             to_ = run_for_steps;
+             body = compile_proc ~name !session_step_update;
+           }));
   if generating || reinit || roots_changed then (
     let num_inits = List.length !session_initializations in
     let to_init = num_inits - !session_initialized in
     perform_initialization @@ List.take !session_initializations to_init;
     session_initialized := num_inits);
-  if (not force_no_init) && (generating || reinit) then (
+  if (not force_no_init) && (generating || reinit) then
     session_step_update_routine := !exec_task_id_func ~name !session_step_update_compiled;
-    if !Shape.num_parallel_tasks = 1 && not !update_params_in_parallel then update_params_routines := []
-    else if not !update_params_in_parallel then
-      update_params_routines :=
-        [ !exec_unit_func ~name:"params_update" @@ Code.Lines (Array.of_list !update_params_compiled) ]
-    else
-      (* TODO: retrieve the actual param name. *)
-      update_params_routines :=
-        List.mapi !update_params_compiled ~f:(fun i ->
-            !exec_unit_func ~name:("params_update_" ^ Int.to_string i)));
-  if run then (
+  if run && run_for_steps > 0 then (
     if !Shape.num_parallel_tasks = 1 then !session_step_update_routine ~task_id:0
     else if !debug_sequentialize_parallel_tasks then
       for task_id = 0 to !Shape.num_parallel_tasks - 1 do
         !session_step_update_routine ~task_id
       done
     else
-      (* Domainslib.Task.run task_pool (fun () ->
-         Domainslib.Task.parallel_for task_pool ~start:0 ~finish:(!Shape.num_parallel_tasks - 1)
-           ~body:(fun task_id -> !session_step_update_routine ~task_id)); *)
-
-      (* let tasks = ref [] in
-         for task_id = 0 to !Shape.num_parallel_tasks - 1 do
-           tasks := Domainslib.Task.async task_pool (fun () -> !session_step_update_routine ~task_id) :: !tasks
-         done;
-         Domainslib.Task.run task_pool (fun () ->
-             Domainslib.Task.run task_pool (fun () -> List.iter !tasks ~f:(Domainslib.Task.await task_pool))); *)
       let tasks = ref [] in
       for task_id = 0 to !Shape.num_parallel_tasks - 1 do
         tasks := Caml.Domain.spawn (fun () -> !session_step_update_routine ~task_id) :: !tasks
       done;
-      List.rev !tasks |> List.iter ~f:Caml.Domain.join;
-      if !Shape.num_parallel_tasks = 1 && not !update_params_in_parallel then ()
-      else if not !update_params_in_parallel then
-        List.iter !update_params_routines ~f:(fun routine -> routine ())
-      else
-        (* let tasks = List.map ~f:(Domainslib.Task.async task_pool) !update_params_routines in
-           Domainslib.Task.run task_pool (fun () -> List.iter tasks ~f:(Domainslib.Task.await task_pool)) *)
-        let tasks = List.map ~f:Caml.Domain.spawn !update_params_routines in
-        List.iter ~f:Caml.Domain.join tasks)
+      List.rev !tasks |> List.iter ~f:Caml.Domain.join)
 
 (** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id].
     Discards all computations (forward, backward, update params, data fetches), but keeps
@@ -451,9 +427,7 @@ module SDSL = struct
     Code.CDSL.with_debug := true;
     Code.CDSL.keep_files_in_run_directory := true;
     if trace_interpreter then Code.CDSL.debug_trace_interpretation := true;
-    if sequentialize then (
-      debug_sequentialize_parallel_tasks := true;
-      update_params_in_parallel := false);
+    if sequentialize then debug_sequentialize_parallel_tasks := true;
     Code.CDSL.debug_virtual_nodes := true
 
   let disable_all_debugs () =
@@ -468,6 +442,5 @@ module SDSL = struct
   let global_size_in_bytes () = Node.global_size_in_bytes ()
   let num_parallel_tasks = Shape.num_parallel_tasks
   let num_domains = num_domains
-  let update_params_in_parallel = update_params_in_parallel
   let debug_sequentialize_parallel_tasks = debug_sequentialize_parallel_tasks
 end
