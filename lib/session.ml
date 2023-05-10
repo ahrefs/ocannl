@@ -220,6 +220,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
   let generating =
     regenerate || roots_changed || backprop_changed || update_params_changed || run_for_steps_changed
   in
+  let name = "session_step_update" in
   if generating then (
     let open Code in
     let preparation =
@@ -257,34 +258,31 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
     Hashtbl.iter ~f:(fun n -> n.NodeUI.cannot_be_virtual <- true) @@ session_params ();
     if List.is_empty update_params_code then
       session_step_update :=
-        sequential
-          [ Rebalance preparation; Synchronize "post-preparation"; forward; backprop; Synchronize "finish" ]
+        sequential [ Synchronize "post-preparation"; forward; backprop; Synchronize "finish" ]
     else
       let params_update = Block_comment ("Params update", all_parallel update_params_code) in
       session_step_update :=
         sequential
           [
-            Rebalance preparation;
+            preparation;
             Synchronize "post-preparation";
             forward;
             backprop;
             Synchronize "pre-params-update";
-            Rebalance params_update;
+            params_update;
             Synchronize "finish";
-          ]);
-  let name = "session_step_update" in
-  (if generating && run_for_steps <= 1 then
-     session_step_update_compiled := Code.compile_proc ~name !session_step_update
-   else if generating then
-     session_step_update_compiled :=
-       Code.(
-         For_loop
-           {
-             index = Code.new_sym_index macrobatch_loop_symbol;
-             from_ = 0;
-             to_ = run_for_steps;
-             body = Lines [| Reset_synchronizer; compile_proc ~name !session_step_update |];
-           }));
+          ];
+      if run_for_steps <= 1 then session_step_update_compiled := compile_proc ~name !session_step_update
+      else
+        session_step_update_compiled :=
+          Code.(
+            For_loop
+              {
+                index = Code.new_sym_index macrobatch_loop_symbol;
+                from_ = 0;
+                to_ = run_for_steps - 1;
+                body = Lines [| Reset_synchronizer; compile_proc ~name !session_step_update |];
+              }));
   if generating || reinit || roots_changed then (
     let num_inits = List.length !session_initializations in
     let to_init = num_inits - !session_initialized in

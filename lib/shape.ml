@@ -45,7 +45,7 @@ type dim =
   | Parallel
       (** An axis of size [!num_parallel_tasks], such that if an index is derived for it, the index
           will be [Task_id]. *)
-[@@deriving equal, compare, sexp]
+[@@deriving equal, compare, sexp, variants]
 
 type parsed_axis_labels = {
   bcast_batch : bool;

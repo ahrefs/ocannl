@@ -83,6 +83,14 @@ let remove_updates tensor c =
 let all_parallel = List.fold ~init:Noop ~f:(fun sts st -> Par (st, sts))
 let sequential = List.fold_right ~init:Noop ~f:(fun st sts -> Seq (st, sts))
 
+let rec flat_parallel ts =
+  Array.concat_map ts ~f:(function
+    | Par (t1, t2) -> flat_parallel [| t1; t2 |]
+    | Block_comment (_, Noop) as t -> [|t|]
+    | Block_comment (s, t) -> flat_parallel [| Block_comment (s, Noop); t |]
+    | Noop -> [||]
+    | t -> [| t |])
+
 type scope_id = { tensor : NodeUI.tensor_ptr; scope_id : int } [@@deriving sexp, equal, hash]
 (** *** Low-level representation. *)
 
@@ -136,6 +144,35 @@ type _ low_level =
 
 let binop ~op ~rhs1 ~rhs2 = match op with Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Binop (op, rhs1, rhs2)
 let unop ~op ~rhs = match op with Identity -> rhs | _ -> Unop (op, rhs)
+
+let rec flat_lines ts = Array.concat_map ts ~f:(function Lines ts -> flat_lines ts | t -> [| t |])
+
+let rebalance llcs =
+  (* FIXME: implement actual rebalancing. *)
+  If_task_id_is { for_task_id = 0; body = Lines (flat_lines llcs) }
+
+let rec has_parallel_dim : type a. a low_level -> bool = function
+  | Comment _ -> false
+  | Lines ls -> Array.exists ~f:has_parallel_dim ls
+  | For_loop { body; _ } -> has_parallel_dim body
+  | If_task_id_is { body; _ } -> has_parallel_dim body
+  | Synchronize _ -> false
+  | Reset_synchronizer -> false
+  | Dynamic_indices { tensor = _; tensor_idcs; dynamic_idcs = _; target_dims; body } ->
+      Array.exists tensor_idcs ~f:Shape.is_task_id
+      || Array.exists ~f:Shape.is_parallel target_dims
+      || has_parallel_dim body
+  | Set (_, indices, llv) -> Array.exists indices ~f:Shape.is_task_id || has_parallel_dim llv
+  | Set_local (_, llv) -> has_parallel_dim llv
+  | Local_scope { body; orig_indices; _ } ->
+      Array.exists orig_indices ~f:Shape.is_task_id || has_parallel_dim body
+  | Get_local _ -> false
+  | Get_global Task_id -> true
+  | Get_global _ -> false
+  | Get (_, indices) -> Array.exists indices ~f:Shape.is_task_id
+  | Binop (_, llv1, llv2) -> has_parallel_dim llv1 || has_parallel_dim llv2
+  | Unop (_, llv) -> has_parallel_dim llv
+  | Constant _ -> false
 
 let to_low_level (code : t) : unit low_level =
   let synchronizer_stage = ref 0 in
@@ -223,9 +260,12 @@ let to_low_level (code : t) : unit low_level =
     | Synchronize info ->
         Int.incr synchronizer_stage;
         Synchronize { stage = !synchronizer_stage; info }
-    | Rebalance c ->
-        (* FIXME: implement actual rebalancing. *)
-        If_task_id_is { for_task_id = 0; body = loop c }
+    | Rebalance c -> rebalance @@ [| loop c |]
+    | Block_comment (s, (Par _ as par_code)) ->
+        let ts = flat_parallel [| par_code |] in
+        let task_ts, nontask_ts = Array.partition_tf ~f:has_parallel_dim @@ Array.map ts ~f:loop in
+        Lines (flat_lines [| Comment s; rebalance nontask_ts; Lines task_ts |])
+    | Block_comment (s, c) -> Lines [| Comment s; loop c |]
     | Par (c1, c2) | ParHint (c1, c2) | Seq (c1, c2) -> (
         (* TODO: this ignores parallelization altogether, don't! *)
         let ll1 = loop c1 in
