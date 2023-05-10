@@ -502,3 +502,12 @@ let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_value =
     =
   to_dag ?single_node ?entries_per_axis ~with_id ~with_value ~with_grad n_id
   |> PrintBox_utils.reformat_dag depth
+
+let print_node_preamble id =
+  try
+    let n = get id in
+    Stdio.printf "Node %s %s;\n%!" (node_header n) (if n.virtual_ then " (virtual)" else "")
+  with Not_found_s _ | Caml.Not_found -> ()
+
+let print_preamble ?(from = 0) () =
+  for id = from to Node.global.unique_id - 1 do print_node_preamble id done

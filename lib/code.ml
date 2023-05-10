@@ -374,7 +374,17 @@ let interpret_code ?task_id synchronizer llc =
             Sexp.pp_hum
             ([%sexp_of: int array] idcs)
             (get_as_float ptr idcs) result;
-        set_from_float ptr idcs @@ result
+        try set_from_float ptr idcs result
+        with e ->
+          Caml.Format.printf "ERROR: %a [%a -> %a] <- %f -- indices out of bounds\n%!" Sexp.pp_hum
+            ([%sexp_of: NodeUI.tensor_ptr] ptr)
+            Sexp.pp_hum
+            ([%sexp_of: index array] indices)
+            Sexp.pp_hum
+            ([%sexp_of: int array] idcs)
+            result;
+          (* if task_id () = 0 then *) NodeUI.print_node_preamble ptr.id;
+          raise e
     | Set_local (id, llv) -> locals := Map.update !locals id ~f:(fun _ -> loop_float env llv)
     | Comment message when !with_debug && !interpreter_print_comments -> Stdio.printf "%s\n%!" message
     | Dynamic_indices { tensor = { id; field = Value }; tensor_idcs; dynamic_idcs; target_dims; body } ->
@@ -402,7 +412,18 @@ let interpret_code ?task_id synchronizer llc =
             Sexp.pp_hum
             ([%sexp_of: index array] indices);
         let idcs = lookup env indices in
-        let result = get_as_float ptr idcs in
+        let result =
+          try get_as_float ptr idcs
+          with e ->
+            Caml.Format.printf "ERROR: %a [%a -> %a] -- indices out of bounds\n%!" Sexp.pp_hum
+              ([%sexp_of: NodeUI.tensor_ptr] ptr)
+              Sexp.pp_hum
+              ([%sexp_of: index array] indices)
+              Sexp.pp_hum
+              ([%sexp_of: int array] idcs);
+            (* if Int.(task_id () = 0) then *) NodeUI.print_node_preamble ptr.id;
+            raise e
+        in
         if !debug_trace_interpretation then
           Caml.Format.printf "TRACE: %a [%a -> %a] -> %f}\n%!" Sexp.pp_hum
             ([%sexp_of: NodeUI.tensor_ptr] ptr)
@@ -424,7 +445,18 @@ let interpret_code ?task_id synchronizer llc =
         let result = Map.find_exn !locals id in
         locals := old_locals;
         let idcs = lookup env orig_indices in
-        if !debug_virtual_nodes then set_from_float id.tensor idcs result;
+        if !debug_virtual_nodes then (
+          try set_from_float id.tensor idcs result
+          with e ->
+            Caml.Format.printf "ERROR: virtual %a [%a -> %a] -- original indices out of bounds\n%!"
+              Sexp.pp_hum
+              ([%sexp_of: NodeUI.tensor_ptr] id.tensor)
+              Sexp.pp_hum
+              ([%sexp_of: index array] orig_indices)
+              Sexp.pp_hum
+              ([%sexp_of: int array] idcs);
+            (* if Int.(task_id () = 0) then *) NodeUI.print_node_preamble id.tensor.id;
+            raise e);
         if !debug_trace_interpretation then
           Caml.Format.printf "TRACE: %a [%a / %a] (%f) <-> %f}\n%!" Sexp.pp_hum
             ([%sexp_of: NodeUI.tensor_ptr] id.tensor)
@@ -453,7 +485,16 @@ let interpret_code ?task_id synchronizer llc =
   and dynamic_indices env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body =
     let env =
       Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
-          let actual = N.get_as_int tensor @@ lookup ~provider_dim env tensor_idcs in
+          let idcs = lookup ~provider_dim env tensor_idcs in
+          let actual =
+            try N.get_as_int tensor idcs
+            with e ->
+              Caml.Format.printf "ERROR: dynamic index at [%a -> %a] -- indices out of bounds\n%!" Sexp.pp_hum
+                ([%sexp_of: index array] tensor_idcs)
+                Sexp.pp_hum
+                ([%sexp_of: int array] idcs);
+              raise e
+          in
           let target_dim =
             match target_dims.(provider_dim) with Dim d -> d | Parallel -> !Shape.num_parallel_tasks
           in
@@ -1021,7 +1062,11 @@ let compile_proc ~name proc =
 let synchronizer = ref None
 
 let interpret_task_id_func ~name:_ compiled ~task_id =
-  if task_id = 0 then synchronizer := Some (Synchronizer.make !Shape.num_parallel_tasks)
+  if task_id = 0 then (
+    synchronizer := Some (Synchronizer.make !Shape.num_parallel_tasks);
+    if !debug_trace_interpretation then
+    Caml.Format.printf "TRACE: Interpreted program:@ %a\n%!" Sexp.pp_hum
+    @@ sexp_of_low_level Unit.sexp_of_t compiled)
   else
     while Option.is_none !synchronizer do
       Caml.Domain.cpu_relax ()

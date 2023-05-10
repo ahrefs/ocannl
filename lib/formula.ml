@@ -69,6 +69,7 @@ exception Session_error of string * t option [@@deriving sexp]
 
 (** Prefix the input with the header information of all nodes within the current session. *)
 let prefix_with_preamble content =
+  (* FIXME: remove or move to NodeUI? *)
   let result = Buffer.create 16 in
   let ap = Buffer.add_string result in
   for id = !first_session_id to Node.global.unique_id - 1 do
