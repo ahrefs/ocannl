@@ -145,6 +145,11 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
         loop_proc ~name ~env body;
         Block.jump !current_block b_after_if;
         current_block := b_after_if
+    | Synchronize ->
+        (* FIXME: lock-free implementation with an int for each task that counts the stage the task
+           is at, and a busy loop waiting for all other stages to arrive at the current task's
+           (incremented) stage. *)
+        failwith "Exec_as_gccjit.jit_code.Synchronize: NOT IMPLEMENTED YET"
     | Set (data_node, idcs, Binop (op, Get (tensor, idcs2), c2))
       when NodeUI.equal_tensor_ptr data_node tensor
            && [%equal: Code.index array] idcs idcs2

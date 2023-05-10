@@ -27,6 +27,7 @@ type init_op = N.init_op =
 type fetch_op = Constant of float | Synthetic of t | Imported of global_identifier [@@deriving sexp]
 
 and t =
+  | Synchronize  (** Wait for all tasks to reach this point before proceeding. *)
   | Par of t * t  (** These tasks can proceed in parallel, there is no interaction. *)
   | ParHint of t * t
       (** Computing [ParHint (c1, c2)] can proceed in parallel on [c1] and [c2], but when [c2] reads values
@@ -105,6 +106,7 @@ type _ low_level =
   | Lines : unit low_level array -> unit low_level
   | For_loop : { index : sym_index; from_ : int; to_ : int; body : unit low_level } -> unit low_level
   | If_task_id_is : { for_task_id : int; body : unit low_level } -> unit low_level
+  | Synchronize : unit low_level
   | Dynamic_indices : {
       tensor : NodeUI.tensor_ptr;
       tensor_idcs : index array;
@@ -211,6 +213,7 @@ let rec to_low_level (code : t) : unit low_level =
       else for_loops
   | Block_comment (s, c) -> Lines [| Comment s; to_low_level c |]
   | Noop -> Lines [||]
+  | Synchronize -> Synchronize
   | Par (c1, c2) | ParHint (c1, c2) | Seq (c1, c2) -> (
       (* TODO: this ignores parallelization altogether, don't! *)
       let ll1 = to_low_level c1 in
@@ -262,7 +265,7 @@ let get_as_float ptr idcs =
 
 let debug_trace_interpretation = ref false
 
-let interpret_code ?task_id llc =
+let interpret_code ?task_id synchronizer llc =
   (* Local scope ids can be non-unique due to inlining. *)
   let locals = ref Map.Poly.empty in
   let task_id () =
@@ -292,7 +295,8 @@ let interpret_code ?task_id llc =
         for data = from_ to to_ do
           loop_proc (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
-    | If_task_id_is { for_task_id; body } -> if (task_id ()) = for_task_id then loop body
+    | If_task_id_is { for_task_id; body } -> if task_id () = for_task_id then loop body
+    | Synchronize -> Synchronizer.synchronize synchronizer;
     | Set (ptr, indices, llv) ->
         if !debug_trace_interpretation then
           Caml.Format.printf "{TRACE: %a [%a] <- ...\n%!" Sexp.pp_hum
@@ -546,6 +550,7 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
           loop_proc ~task_id (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
     | If_task_id_is { for_task_id; body } -> if task_id = for_task_id then loop body
+    | Synchronize -> ()
     | Set (tensor, idcs, llv) ->
         loop_float ~task_id env llv;
         Hash_set.add nodes tensor.id;
@@ -650,6 +655,7 @@ let process_computation node_store node top_llc =
     | Lines body -> Array.iter ~f:loop body
     | For_loop { index; from_ = _; to_ = _; body } -> loop_proc ~env_dom:(Set.add env_dom index) body
     | If_task_id_is { for_task_id = _; body } -> loop body
+    | Synchronize -> raise Non_virtual
     | Set (tensor, indices, llv) ->
         if NodeUI.equal_tensor_ptr tensor top_data then (
           check_idcs indices;
@@ -737,6 +743,7 @@ let inline_computation ~id node call_args =
           Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop body
       | If_task_id_is { for_task_id; body } ->
           Option.map ~f:(fun body -> If_task_id_is { for_task_id; body }) @@ loop body
+      | Synchronize -> Some Synchronize
       | Set (tensor, indices, llv) when NodeUI.equal_tensor_ptr tensor at_data ->
           assert ([%equal: index array option] (Some indices) def_args);
           Some (Set_local (id, loop_float llv))
@@ -783,6 +790,7 @@ let virtual_llc node_store reverse_node_map (llc : unit low_level) : unit low_le
             result
         | _ -> For_loop { index; from_; to_; body = loop body })
     | If_task_id_is { for_task_id; body } -> If_task_id_is { for_task_id; body = loop body }
+    | Synchronize -> Synchronize
     | Set (tensor, indices, llv) ->
         let node : data_node = Hashtbl.find_exn node_store tensor in
         let next = if node.non_virtual then process_for else Set.add process_for tensor in
@@ -841,6 +849,7 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
         | None -> Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop_proc ~env_dom body)
     | If_task_id_is { for_task_id; body } ->
         Option.map ~f:(fun body -> If_task_id_is { for_task_id; body }) @@ loop_proc ~env_dom body
+    | Synchronize -> Some Synchronize
     | Set (tensor, indices, llv) ->
         if is_inline tensor then None
         else (
@@ -944,8 +953,12 @@ let compile_proc ~name proc =
       ~data:(Sexp.to_string_hum @@ sexp_of_low_level Unit.sexp_of_t result);
   result
 
-let interpret_task_id_func ~name:_ compiled ~task_id = interpret_code ~task_id compiled
-let interpret_unit_func ~name:_ compiled () = interpret_code compiled
+let interpret_task_id_func ~name:_ compiled ~task_id =
+  let synchronizer = Synchronizer.make !Shape.num_parallel_tasks in
+  interpret_code ~task_id synchronizer compiled
+let interpret_unit_func ~name:_ compiled () =
+  let synchronizer = Synchronizer.make 1 in
+  interpret_code synchronizer compiled
 
 module CDSL = struct
   let value_of_id id : NodeUI.tensor_ptr = { id; field = Value }
