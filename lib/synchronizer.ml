@@ -1,27 +1,26 @@
+open Base
 (** Synchronizers are like semaphores, but instead of guarding N resources, they guard
     a synchronization point among N threads. *)
 
-type t = {
-  mut : Mutex.t; (* protects [v] *)
-  mutable v : int; (* the current value *)
-  zero : Condition.t; (* signaled when [v = 0] *)
-}
+type t = { task_stages : int array }
 
 let make v =
   if v < 1 then invalid_arg "Synchronizer.make: wrong initial value";
-  { mut = Mutex.create (); v; zero = Condition.create () }
+  { task_stages = Array.create ~len:v 0 }
 
-let synchronize s =
-  Mutex.lock s.mut;
-  if s.v = 0 then (
-    Mutex.unlock s.mut;
-    invalid_arg "Synchronizer.acquire: synchronization point already met.");
-  s.v <- s.v - 1;
-  if s.v = 0 then Condition.signal s.zero;
-  while s.v > 0 do
-    Condition.wait s.zero s.mut
-  done;
-  s.v <- s.v + 1;
-  Mutex.unlock s.mut
+let synchronize ~task_id ~stage s =
+  if s.task_stages.(task_id) >= stage then
+    invalid_arg "Synchronizer.synchronize: task already at or past the given stage";
+  s.task_stages.(task_id) <- stage;
+  while Array.exists s.task_stages ~f:(fun other_stage -> other_stage >= 0 && other_stage < stage) do
+    Caml.Domain.cpu_relax ()
+  done
 
-let get_value s = s.v
+let synchronize_and_reset ~task_id s =
+  let final_stage = s.task_stages.(task_id) in
+  if final_stage > 0 then (
+    s.task_stages.(task_id) <- -1;
+    while Array.exists s.task_stages ~f:(fun other_stage -> other_stage >= final_stage) do
+      Caml.Domain.cpu_relax ()
+    done;
+    s.task_stages.(task_id) <- 0)

@@ -10,7 +10,7 @@ let _suspended () =
   (* let open Operation.FDSL in *)
   let open SDSL.O in
   SDSL.set_executor Interpreter;
-  SDSL.enable_all_debugs ~trace_interpreter:true ~sequentialize:true ();
+  SDSL.enable_all_debugs ~trace_interpreter:true ();
   CDSL.virtualize_settings.virtualize <- true;
   CDSL.virtualize_settings.inline_constants <- true;
   SDSL.drop_all_sessions ();
@@ -81,7 +81,8 @@ let _suspended () =
        List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
      in *)
   let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..minibatch) + (0.001 *. reg_loss) in
-  SDSL.refresh_session ();
+  let%nn_dt epoch_loss ~o:1 = n =+ total_loss in
+  SDSL.refresh_session ~run_for_steps:n_batches ();
   Stdio.print_endline "\nPreamble:\n";
   SDSL.print_preamble ();
   Stdio.print_endline "\nHigh-level code:\n";
@@ -89,9 +90,8 @@ let _suspended () =
   Stdio.print_endline "\nLow-level code:\n";
   SDSL.print_session_code ~compiled:true ();
   SDSL.print_decimals_precision := 9;
-  Stdio.printf "\nStep 1: loss %f\n%!" total_loss.@[0];
-  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id
-(*;
+  Stdio.printf "\nStep 1: loss %f\n%!" epoch_loss.@[0];
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
   List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
       SDSL.print_formula ~with_grad:true ~with_code:false `Default f);
@@ -107,7 +107,7 @@ let _suspended () =
   SDSL.refresh_session ();
   Stdio.printf "\nStep 4: loss %f\n%!" total_loss.@[0];
   SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
-  Stdio.printf "\nSize in bytes: %d\n%!" (SDSL.global_size_in_bytes ()) *)
+  Stdio.printf "\nSize in bytes: %d\n%!" (SDSL.global_size_in_bytes ())
 
 let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_constants = true)
     ~num_parallel_tasks precision () =
@@ -303,9 +303,9 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
 
 let benchmark_executor = SDSL.Interpreter
 
-let _suspended () =
+let  () =
   ignore
-  @@ classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:5
+  @@ classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
        ~num_parallel_tasks:21 CDSL.single ()
 
 let benchmarks =
@@ -339,14 +339,14 @@ let benchmarks =
       CDSL.single;
     (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:30
        CDSL.single; *)
-    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:30
-      CDSL.single;
-    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:30
-      CDSL.single;
+    (* classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:30
+      CDSL.single; *)
+    (* classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:30
+      CDSL.single; *)
     (* classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:9 ~num_parallel_tasks:20 CDSL.single; *)
   ]
 
-let () =
+let _suspended () =
   List.map benchmarks ~f:(fun bench -> bench ()) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
 (* Example output from back when using core_bench, 200 epochs (all are non-virtual):

@@ -27,7 +27,7 @@ type init_op = N.init_op =
 type fetch_op = Constant of float | Synthetic of t | Imported of global_identifier [@@deriving sexp]
 
 and t =
-  | Synchronize  (** Wait for all tasks to reach this point before proceeding. *)
+  | Synchronize of string  (** Wait for all tasks to reach this point before proceeding. *)
   | Par of t * t  (** These tasks can proceed in parallel, there is no interaction. *)
   | ParHint of t * t
       (** Computing [ParHint (c1, c2)] can proceed in parallel on [c1] and [c2], but when [c2] reads values
@@ -106,7 +106,8 @@ type _ low_level =
   | Lines : unit low_level array -> unit low_level
   | For_loop : { index : sym_index; from_ : int; to_ : int; body : unit low_level } -> unit low_level
   | If_task_id_is : { for_task_id : int; body : unit low_level } -> unit low_level
-  | Synchronize : unit low_level
+  | Synchronize : { stage : int; info : string } -> unit low_level
+  | Reset_synchronizer : unit low_level
   | Dynamic_indices : {
       tensor : NodeUI.tensor_ptr;
       tensor_idcs : index array;
@@ -135,108 +136,117 @@ type _ low_level =
 let binop ~op ~rhs1 ~rhs2 = match op with Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Binop (op, rhs1, rhs2)
 let unop ~op ~rhs = match op with Identity -> rhs | _ -> Unop (op, rhs)
 
-let rec to_low_level (code : t) : unit low_level =
-  match code with
-  | Accum_binop { zero_out; accum; op; lhs; rhs1; rhs2; projections } ->
-      let projections = projections () in
-      let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
-      let rhs1_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
-      let rhs2_idx =
-        match projections.project_rhs2 with
-        | None -> invalid_arg "accum_binop: projections missing project_rhs2"
-        | Some rhs2 -> Shape.(derive_index projections.product_iterators rhs2)
-      in
-      let basecase rev_iters =
-        let iters = Array.of_list_rev rev_iters in
-        let rhs1_idcs = rhs1_idx iters in
-        let rhs2_idcs = rhs2_idx iters in
-        let lhs_idcs = lhs_idx iters in
-        let lhs_ll = Get (lhs, lhs_idcs) in
-        let rhs1_ll = Get (rhs1, rhs1_idcs) in
-        let rhs2_ll = Get (rhs2, rhs2_idcs) in
-        let body =
-          Set (lhs, lhs_idcs, binop ~op:accum ~rhs1:lhs_ll ~rhs2:(binop ~op ~rhs1:rhs1_ll ~rhs2:rhs2_ll))
+let to_low_level (code : t) : unit low_level =
+  let synchronizer_stage = ref 0 in
+  let rec loop code =
+    match code with
+    | Accum_binop { zero_out; accum; op; lhs; rhs1; rhs2; projections } ->
+        let projections = projections () in
+        let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
+        let rhs1_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
+        let rhs2_idx =
+          match projections.project_rhs2 with
+          | None -> invalid_arg "accum_binop: projections missing project_rhs2"
+          | Some rhs2 -> Shape.(derive_index projections.product_iterators rhs2)
         in
-        match Array.find rhs2_idcs ~f:Shape.is_dynamic_provider with
-        | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
-            Dynamic_indices { tensor = rhs2; tensor_idcs = rhs2_idcs; dynamic_idcs; target_dims; body }
-        | _ -> (
-            match Array.find rhs1_idcs ~f:Shape.is_dynamic_provider with
-            | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
-                Dynamic_indices { tensor = rhs1; tensor_idcs = rhs1_idcs; dynamic_idcs; target_dims; body }
-            | _ -> (
-                match Array.find lhs_idcs ~f:Shape.is_dynamic_provider with
-                | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
-                    Dynamic_indices { tensor = lhs; tensor_idcs = lhs_idcs; dynamic_idcs; target_dims; body }
-                | _ -> body))
-      in
-      let rec loop rev_iters = function
-        | [], [] -> basecase rev_iters
-        | Shape.Dim dim :: product, it :: iters ->
-            let it = new_sym_index it in
-            For_loop { index = it; from_ = 0; to_ = dim - 1; body = loop (it :: rev_iters) (product, iters) }
-        | Shape.Parallel :: _product, _it :: _iters ->
-            (* FIXME: was this filtered out? *)
-            invalid_arg "Code.to_low_level: Accum_binop projections parallel dim found in product space"
-        | _ -> invalid_arg "Code.to_low_level: Accum_binop projections dims-iterators mismatch"
-      in
-      let for_loops =
-        loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators)
-      in
-      if zero_out then Lines [| to_low_level (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
-      else for_loops
-  | Accum_unop { zero_out; accum; op; lhs; rhs; projections } ->
-      let projections = projections () in
-      let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
-      let rhs_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
-      let basecase rev_iters =
-        let iters = Array.of_list_rev rev_iters in
-        let lhs_idcs = lhs_idx iters in
-        let lhs_ll = Get (lhs, lhs_idcs) in
-        let rhs_ll = Get (rhs, rhs_idx iters) in
-        Set (lhs, lhs_idcs, binop ~op:accum ~rhs1:lhs_ll ~rhs2:(unop ~op ~rhs:rhs_ll))
-      in
-      let rec loop rev_iters = function
-        | [], [] -> basecase rev_iters
-        | Shape.Dim dim :: product, it :: iters ->
-            let it = new_sym_index it in
-            For_loop { index = it; from_ = 0; to_ = dim - 1; body = loop (it :: rev_iters) (product, iters) }
-        | Parallel :: _product, _it :: _iters ->
-            (* FIXME: was this filtered out? *)
-            invalid_arg "Code.to_low_level: Accum_binop projections parallel dim found in product space"
-        | _ -> invalid_arg "Code.to_low_level: Accum_unop projections dims-iterators mismatch"
-      in
-      let for_loops =
-        loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators)
-      in
-      if zero_out then Lines [| to_low_level (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
-      else for_loops
-  | Block_comment (s, c) -> Lines [| Comment s; to_low_level c |]
-  | Noop -> Lines [||]
-  | Synchronize -> Synchronize
-  | Par (c1, c2) | ParHint (c1, c2) | Seq (c1, c2) -> (
-      (* TODO: this ignores parallelization altogether, don't! *)
-      let ll1 = to_low_level c1 in
-      let ll2 = to_low_level c2 in
-      match (ll1, ll2) with
-      | Lines ls1, Lines ls2 -> Lines (Array.append ls1 ls2)
-      | _, Lines ls2 -> Lines (Array.append [| ll1 |] ls2)
-      | Lines ls1, _ -> Lines (Array.append ls1 [| ll2 |])
-      | _ -> Lines [| ll1; ll2 |])
-  | Fetch { tensor; fetch_op = Constant c } ->
-      let product_space : Shape.dim array = Shape.to_dims (NodeUI.get tensor.id).shape in
-      let rec loop rev_idcs = function
-        | [] -> Set (tensor, Array.of_list_rev rev_idcs, Constant c)
-        | Shape.Dim dim :: product ->
-            let it = new_sym_index (Shape.get_symbol ()) in
-            let idx = Shape.Iterator it in
-            For_loop { index = it; from_ = 0; to_ = dim - 1; body = loop (idx :: rev_idcs) product }
-        | Parallel :: product -> loop (Shape.Task_id :: rev_idcs) product
-      in
-      let for_loops = loop [] (Array.to_list product_space) in
-      for_loops
-  | Fetch { tensor = _; fetch_op = Synthetic gen } -> to_low_level gen
-  | Fetch { tensor = _; fetch_op = Imported _ } -> failwith "to_low_level: Imported NOT IMPLEMENTED YET"
+        let basecase rev_iters =
+          let iters = Array.of_list_rev rev_iters in
+          let rhs1_idcs = rhs1_idx iters in
+          let rhs2_idcs = rhs2_idx iters in
+          let lhs_idcs = lhs_idx iters in
+          let lhs_ll = Get (lhs, lhs_idcs) in
+          let rhs1_ll = Get (rhs1, rhs1_idcs) in
+          let rhs2_ll = Get (rhs2, rhs2_idcs) in
+          let body =
+            Set (lhs, lhs_idcs, binop ~op:accum ~rhs1:lhs_ll ~rhs2:(binop ~op ~rhs1:rhs1_ll ~rhs2:rhs2_ll))
+          in
+          match Array.find rhs2_idcs ~f:Shape.is_dynamic_provider with
+          | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
+              Dynamic_indices { tensor = rhs2; tensor_idcs = rhs2_idcs; dynamic_idcs; target_dims; body }
+          | _ -> (
+              match Array.find rhs1_idcs ~f:Shape.is_dynamic_provider with
+              | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
+                  Dynamic_indices { tensor = rhs1; tensor_idcs = rhs1_idcs; dynamic_idcs; target_dims; body }
+              | _ -> (
+                  match Array.find lhs_idcs ~f:Shape.is_dynamic_provider with
+                  | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
+                      Dynamic_indices
+                        { tensor = lhs; tensor_idcs = lhs_idcs; dynamic_idcs; target_dims; body }
+                  | _ -> body))
+        in
+        let rec for_loop rev_iters = function
+          | [], [] -> basecase rev_iters
+          | Shape.Dim dim :: product, it :: iters ->
+              let it = new_sym_index it in
+              For_loop
+                { index = it; from_ = 0; to_ = dim - 1; body = for_loop (it :: rev_iters) (product, iters) }
+          | Shape.Parallel :: _product, _it :: _iters ->
+              (* FIXME: was this filtered out? *)
+              invalid_arg "Code.to_low_level: Accum_binop projections parallel dim found in product space"
+          | _ -> invalid_arg "Code.to_low_level: Accum_binop projections dims-iterators mismatch"
+        in
+        let for_loops =
+          for_loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators)
+        in
+        if zero_out then Lines [| loop (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
+        else for_loops
+    | Accum_unop { zero_out; accum; op; lhs; rhs; projections } ->
+        let projections = projections () in
+        let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
+        let rhs_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in
+        let basecase rev_iters =
+          let iters = Array.of_list_rev rev_iters in
+          let lhs_idcs = lhs_idx iters in
+          let lhs_ll = Get (lhs, lhs_idcs) in
+          let rhs_ll = Get (rhs, rhs_idx iters) in
+          Set (lhs, lhs_idcs, binop ~op:accum ~rhs1:lhs_ll ~rhs2:(unop ~op ~rhs:rhs_ll))
+        in
+        let rec for_loop rev_iters = function
+          | [], [] -> basecase rev_iters
+          | Shape.Dim dim :: product, it :: iters ->
+              let it = new_sym_index it in
+              For_loop
+                { index = it; from_ = 0; to_ = dim - 1; body = for_loop (it :: rev_iters) (product, iters) }
+          | Parallel :: _product, _it :: _iters ->
+              (* FIXME: was this filtered out? *)
+              invalid_arg "Code.to_low_level: Accum_binop projections parallel dim found in product space"
+          | _ -> invalid_arg "Code.to_low_level: Accum_unop projections dims-iterators mismatch"
+        in
+        let for_loops =
+          for_loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators)
+        in
+        if zero_out then Lines [| loop (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
+        else for_loops
+    | Block_comment (s, c) -> Lines [| Comment s; loop c |]
+    | Noop -> Lines [||]
+    | Synchronize info ->
+        Int.incr synchronizer_stage;
+        Synchronize { stage = !synchronizer_stage; info }
+    | Par (c1, c2) | ParHint (c1, c2) | Seq (c1, c2) -> (
+        (* TODO: this ignores parallelization altogether, don't! *)
+        let ll1 = loop c1 in
+        let ll2 = loop c2 in
+        match (ll1, ll2) with
+        | Lines ls1, Lines ls2 -> Lines (Array.append ls1 ls2)
+        | _, Lines ls2 -> Lines (Array.append [| ll1 |] ls2)
+        | Lines ls1, _ -> Lines (Array.append ls1 [| ll2 |])
+        | _ -> Lines [| ll1; ll2 |])
+    | Fetch { tensor; fetch_op = Constant c } ->
+        let product_space : Shape.dim array = Shape.to_dims (NodeUI.get tensor.id).shape in
+        let rec loop rev_idcs = function
+          | [] -> Set (tensor, Array.of_list_rev rev_idcs, Constant c)
+          | Shape.Dim dim :: product ->
+              let it = new_sym_index (Shape.get_symbol ()) in
+              let idx = Shape.Iterator it in
+              For_loop { index = it; from_ = 0; to_ = dim - 1; body = loop (idx :: rev_idcs) product }
+          | Parallel :: product -> loop (Shape.Task_id :: rev_idcs) product
+        in
+        let for_loops = loop [] (Array.to_list product_space) in
+        for_loops
+    | Fetch { tensor = _; fetch_op = Synthetic gen } -> loop gen
+    | Fetch { tensor = _; fetch_op = Imported _ } -> failwith "to_low_level: Imported NOT IMPLEMENTED YET"
+  in
+  loop code
 
 let interpreter_print_comments = ref false
 let keep_files_in_run_directory = ref false
@@ -296,7 +306,14 @@ let interpret_code ?task_id synchronizer llc =
           loop_proc (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
     | If_task_id_is { for_task_id; body } -> if task_id () = for_task_id then loop body
-    | Synchronize -> Synchronizer.synchronize synchronizer;
+    | Synchronize { stage; info } ->
+        let task_id = task_id () in
+        if !debug_trace_interpretation then
+          Caml.Format.printf "TRACE: synchronize task_id %d for %d: %s\n%!" task_id stage info;
+        Synchronizer.synchronize ~task_id ~stage synchronizer;
+        if !debug_trace_interpretation then
+          Caml.Format.printf "TRACE: task_id %d synchronized for %d: %s\n%!" task_id stage info
+    | Reset_synchronizer -> Synchronizer.synchronize_and_reset ~task_id:(task_id ()) synchronizer
     | Set (ptr, indices, llv) ->
         if !debug_trace_interpretation then
           Caml.Format.printf "{TRACE: %a [%a] <- ...\n%!" Sexp.pp_hum
@@ -550,7 +567,7 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
           loop_proc ~task_id (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
     | If_task_id_is { for_task_id; body } -> if task_id = for_task_id then loop body
-    | Synchronize -> ()
+    | Synchronize _ | Reset_synchronizer -> ()
     | Set (tensor, idcs, llv) ->
         loop_float ~task_id env llv;
         Hash_set.add nodes tensor.id;
@@ -655,7 +672,8 @@ let process_computation node_store node top_llc =
     | Lines body -> Array.iter ~f:loop body
     | For_loop { index; from_ = _; to_ = _; body } -> loop_proc ~env_dom:(Set.add env_dom index) body
     | If_task_id_is { for_task_id = _; body } -> loop body
-    | Synchronize -> raise Non_virtual
+    | Synchronize _ -> raise Non_virtual
+    | Reset_synchronizer -> raise Non_virtual
     | Set (tensor, indices, llv) ->
         if NodeUI.equal_tensor_ptr tensor top_data then (
           check_idcs indices;
@@ -743,7 +761,8 @@ let inline_computation ~id node call_args =
           Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop body
       | If_task_id_is { for_task_id; body } ->
           Option.map ~f:(fun body -> If_task_id_is { for_task_id; body }) @@ loop body
-      | Synchronize -> Some Synchronize
+      | Synchronize info -> Some (Synchronize info)
+      | Reset_synchronizer -> Some Reset_synchronizer
       | Set (tensor, indices, llv) when NodeUI.equal_tensor_ptr tensor at_data ->
           assert ([%equal: index array option] (Some indices) def_args);
           Some (Set_local (id, loop_float llv))
@@ -790,7 +809,8 @@ let virtual_llc node_store reverse_node_map (llc : unit low_level) : unit low_le
             result
         | _ -> For_loop { index; from_; to_; body = loop body })
     | If_task_id_is { for_task_id; body } -> If_task_id_is { for_task_id; body = loop body }
-    | Synchronize -> Synchronize
+    | Synchronize info -> Synchronize info
+    | Reset_synchronizer -> Reset_synchronizer
     | Set (tensor, indices, llv) ->
         let node : data_node = Hashtbl.find_exn node_store tensor in
         let next = if node.non_virtual then process_for else Set.add process_for tensor in
@@ -849,7 +869,8 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
         | None -> Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop_proc ~env_dom body)
     | If_task_id_is { for_task_id; body } ->
         Option.map ~f:(fun body -> If_task_id_is { for_task_id; body }) @@ loop_proc ~env_dom body
-    | Synchronize -> Some Synchronize
+    | Synchronize info -> Some (Synchronize info)
+    | Reset_synchronizer -> Some Reset_synchronizer
     | Set (tensor, indices, llv) ->
         if is_inline tensor then None
         else (
@@ -953,9 +974,17 @@ let compile_proc ~name proc =
       ~data:(Sexp.to_string_hum @@ sexp_of_low_level Unit.sexp_of_t result);
   result
 
+let synchronizer = ref None
+
 let interpret_task_id_func ~name:_ compiled ~task_id =
-  let synchronizer = Synchronizer.make !Shape.num_parallel_tasks in
-  interpret_code ~task_id synchronizer compiled
+  if task_id = 0 then synchronizer := Some (Synchronizer.make !Shape.num_parallel_tasks)
+  else
+    while Option.is_none !synchronizer do
+      Caml.Domain.cpu_relax ()
+    done;
+  interpret_code ~task_id (Option.value_exn !synchronizer) compiled;
+  synchronizer := None
+
 let interpret_unit_func ~name:_ compiled () =
   let synchronizer = Synchronizer.make 1 in
   interpret_code synchronizer compiled

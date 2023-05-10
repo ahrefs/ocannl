@@ -24,7 +24,7 @@ let () =
   SDSL.drop_all_sessions ();
   Random.init 0;
   SDSL.set_executor Interpreter;
-  SDSL.enable_all_debugs ~trace_interpreter:true ~sequentialize:true ();
+  SDSL.enable_all_debugs ~trace_interpreter:true ();
   CDSL.debug_virtual_nodes := true;
   SDSL.num_parallel_tasks := 1;
   let%nn_op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
