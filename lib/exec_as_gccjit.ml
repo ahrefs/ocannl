@@ -89,9 +89,13 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
   let c_float = Type.get ctx Type.Float in
   let c_double = Type.get ctx Type.Double in
   let cast_bool num_typ v = RValue.cast ctx (RValue.cast ctx v c_int) num_typ in
-  (* Local scope ids can be non-unique due to inlining.
+  (* Source of unique identifiers. E.g. local scope ids can be non-unique due to inlining.
      We also need unique ids for computation ordering lvalues. *)
   let uid = ref 0 in
+  let get_uid () =
+    let id = !uid in
+    Int.to_string id
+  in
   let locals = ref Map.Poly.empty in
   let current_block = ref initial_block in
   let loop_binop op ~num_typ ~is_double ~v1 ~v2 =
@@ -126,6 +130,21 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
     | Code.Lines lines ->
         Array.iteri lines ~f:(fun i line -> loop_proc ~name:(name ^ "_at_line_" ^ Int.to_string i) ~env line)
     | For_loop { index; from_; to_; body } -> jit_for_loop ~env index ~from_ ~to_ (Either.First body)
+    | If_task_id_is { for_task_id; body } ->
+        let open Gccjit in
+        let id = get_uid () in
+        let b_if_body =
+          Block.create ~name:("body_if_task_id_is_" ^ Int.to_string for_task_id ^ "_" ^ id) func
+        in
+        let b_after_if =
+          Block.create ~name:("after_if_task_id_is_" ^ Int.to_string for_task_id ^ "_" ^ id) func
+        in
+        let guard = RValue.comparison ctx Eq (RValue.param task_id) (RValue.int ctx c_index for_task_id) in
+        Block.cond_jump !current_block guard b_if_body (* on true *) b_after_if (* on false *);
+        current_block := b_if_body;
+        loop_proc ~name ~env body;
+        Block.jump !current_block b_after_if;
+        current_block := b_after_if
     | Set (data_node, idcs, Binop (op, Get (tensor, idcs2), c2))
       when NodeUI.equal_tensor_ptr data_node tensor
            && [%equal: Code.index array] idcs idcs2
@@ -142,8 +161,7 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
         let tensor = get_tensor ctx data_node in
         let v2 = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
         (* Force the ordering of computations. *)
-        Int.incr uid;
-        let l2 = Function.local func tensor.num_typ (tensor_ptr_name data_node ^ "_" ^ Int.to_string !uid) in
+        let l2 = Function.local func tensor.num_typ (tensor_ptr_name data_node ^ "_" ^ get_uid ()) in
         Block.assign !current_block l2 v2;
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
@@ -171,11 +189,7 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
     | Local_scope { id = { scope_id = i; tensor } as id; prec; body; orig_indices } ->
         let typ = Type.get ctx @@ prec_to_kind prec in
         (* Scope ids can be non-unique due to inlining. *)
-        let v_name =
-          Int.(
-            incr uid;
-            "v" ^ to_string i ^ "_" ^ to_string !uid)
-        in
+        let v_name = Int.("v" ^ to_string i ^ "_" ^ get_uid ()) in
         let lvalue = Function.local func typ v_name in
         (* Tensors are initialized to 0 by default. However, there is typically an explicit
            initialization for virtual nodes. *)

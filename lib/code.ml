@@ -104,6 +104,7 @@ type _ low_level =
   | Comment : string -> unit low_level
   | Lines : unit low_level array -> unit low_level
   | For_loop : { index : sym_index; from_ : int; to_ : int; body : unit low_level } -> unit low_level
+  | If_task_id_is : { for_task_id : int; body : unit low_level } -> unit low_level
   | Dynamic_indices : {
       tensor : NodeUI.tensor_ptr;
       tensor_idcs : index array;
@@ -291,6 +292,7 @@ let interpret_code ?task_id llc =
         for data = from_ to to_ do
           loop_proc (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
+    | If_task_id_is { for_task_id; body } -> if (task_id ()) = for_task_id then loop body
     | Set (ptr, indices, llv) ->
         if !debug_trace_interpretation then
           Caml.Format.printf "{TRACE: %a [%a] <- ...\n%!" Sexp.pp_hum
@@ -543,6 +545,7 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
         for data = from_ to to_ do
           loop_proc ~task_id (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
+    | If_task_id_is { for_task_id; body } -> if task_id = for_task_id then loop body
     | Set (tensor, idcs, llv) ->
         loop_float ~task_id env llv;
         Hash_set.add nodes tensor.id;
@@ -555,7 +558,7 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
           | Shape.Iterator s ->
               let old_tensor = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tensor) in
               (* TODO(#134): this prevents multiple virtual tensors from sharing for loops. *)
-              assert (NodeUI.equal_tensor_ptr old_tensor tensor));
+              assert (NodeUI.equal_tensor_ptr old_tensor tensor))
     | Set_local (_, llv) -> loop_float ~task_id env llv
     | Comment _ -> ()
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
@@ -573,7 +576,7 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
         let get_node : data_node = get_node node_store tensor in
         Hash_set.add nodes get_node.id;
         let at_pos = lookup ~task_id env indices in
-        Hashtbl.update get_node.accesses at_pos ~f:(visit @@ Hash_set.mem get_node.assignments at_pos);
+        Hashtbl.update get_node.accesses at_pos ~f:(visit @@ Hash_set.mem get_node.assignments at_pos)
     | Local_scope { body; _ } -> loop_proc ~task_id env body
     | Get_local _ -> ()
     | Get_global _ -> ()
@@ -646,6 +649,7 @@ let process_computation node_store node top_llc =
     match llc with
     | Lines body -> Array.iter ~f:loop body
     | For_loop { index; from_ = _; to_ = _; body } -> loop_proc ~env_dom:(Set.add env_dom index) body
+    | If_task_id_is { for_task_id = _; body } -> loop body
     | Set (tensor, indices, llv) ->
         if NodeUI.equal_tensor_ptr tensor top_data then (
           check_idcs indices;
@@ -731,6 +735,8 @@ let inline_computation ~id node call_args =
       | For_loop { index; body; _ } when Map.mem env index -> loop body
       | For_loop { index; from_; to_; body } ->
           Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop body
+      | If_task_id_is { for_task_id; body } ->
+          Option.map ~f:(fun body -> If_task_id_is { for_task_id; body }) @@ loop body
       | Set (tensor, indices, llv) when NodeUI.equal_tensor_ptr tensor at_data ->
           assert ([%equal: index array option] (Some indices) def_args);
           Some (Set_local (id, loop_float llv))
@@ -776,6 +782,7 @@ let virtual_llc node_store reverse_node_map (llc : unit low_level) : unit low_le
             if not node.non_virtual then process_computation node_store node result;
             result
         | _ -> For_loop { index; from_; to_; body = loop body })
+    | If_task_id_is { for_task_id; body } -> If_task_id_is { for_task_id; body = loop body }
     | Set (tensor, indices, llv) ->
         let node : data_node = Hashtbl.find_exn node_store tensor in
         let next = if node.non_virtual then process_for else Set.add process_for tensor in
@@ -832,6 +839,8 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
             if is_inline tensor then None
             else Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop_proc ~env_dom body
         | None -> Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop_proc ~env_dom body)
+    | If_task_id_is { for_task_id; body } ->
+        Option.map ~f:(fun body -> If_task_id_is { for_task_id; body }) @@ loop_proc ~env_dom body
     | Set (tensor, indices, llv) ->
         if is_inline tensor then None
         else (
