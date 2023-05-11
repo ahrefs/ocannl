@@ -316,7 +316,8 @@ let to_low_level (code : t) : unit low_level =
         let product_space : Shape.dim array = Shape.to_dims (NodeUI.get tensor.id).shape in
         let rec loop rev_idcs = function
           | [] -> Set (tensor, Array.of_list_rev rev_idcs, Constant c)
-          | Shape.Dim dim :: product ->
+          | Shape.Dim 1 :: product -> loop (Fixed_idx 0 :: rev_idcs) product
+          | Dim dim :: product ->
               let it = new_sym_index (Shape.get_symbol ()) in
               let idx = Shape.Iterator it in
               For_loop { index = it; from_ = 0; to_ = dim - 1; body = loop (idx :: rev_idcs) product }
@@ -651,8 +652,8 @@ let precompute_constants ?idcs node_store top_node llv =
         let v = loop llv in
         Float.(if v > 0.0 then v else 0.0)
   in
+  let n = NodeUI.get top_node.id in
   try
-    let n = NodeUI.get top_node.id in
     if n.cannot_be_virtual then raise @@ Non_literal 8;
     if (not @@ Hashtbl.is_empty top_node.accesses) && not n.literal then raise @@ Non_literal 6;
     (match idcs with
@@ -660,7 +661,9 @@ let precompute_constants ?idcs node_store top_node llv =
     | Some idcs ->
         if Array.exists idcs ~f:(function Shape.Fixed_idx 0 -> false | _ -> true) then raise @@ Non_literal 7);
     top_node.scalar <- Some (loop llv)
-  with Non_literal _ ->
+  with Non_literal i ->
+    if !with_debug && !debug_trace_interpretation then
+      Caml.Format.printf "TRACE: Node #%d is non-literal because no. %d\n%!" n.id i;
     (* In principle we might conclude again that the node is to be inlined as scalar, that's OK. *)
     top_node.scalar <- None
 
@@ -739,9 +742,8 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
     in
     loop_proc ~task_id env body
   in
-  for task_id = 0 to !Shape.num_parallel_tasks - 1 do
-    loop_proc ~task_id (Map.Poly.empty, Map.Poly.empty) llc
-  done;
+  (* Do not penalize parallel use. *)
+  loop_proc ~task_id:0 (Map.Poly.empty, Map.Poly.empty) llc;
   Hash_set.iter nodes ~f:(fun node_id ->
       let value_node : data_node = get_node node_store { id = node_id; field = Value } in
       if Hashtbl.exists value_node.accesses ~f:is_too_many then (
@@ -971,9 +973,7 @@ let virtual_llc node_store reverse_node_map (llc : unit low_level) : unit low_le
 let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : unit low_level =
   let is_inline tensor =
     let node = Hashtbl.find_exn node_store tensor in
-    (* Being defensive here to guarantee scalar constant tensors are populated when debugging. *)
-    (virtualize_settings.inline_constants && Option.is_some node.scalar && not !debug_virtual_nodes)
-    || not node.non_virtual
+    (virtualize_settings.inline_constants && Option.is_some node.scalar) || not node.non_virtual
   in
   (* The current position is within scope of the definitions of the process_for virtual tensors. *)
   let rec loop_proc ~(env_dom : sym_indices) (llc : unit low_level) : unit low_level option =
@@ -1000,7 +1000,8 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
           Some (Set (tensor, indices, loop_float ~env_dom llv)))
     | Set_local (id, llv) ->
         let node = Hashtbl.find_exn node_store id.tensor in
-        if virtualize_settings.inline_constants && Option.is_some node.scalar then None
+        if virtualize_settings.inline_constants && Option.is_some node.scalar && not !debug_virtual_nodes then
+          None
         else (
           assert (not node.non_virtual);
           Some (Set_local (id, loop_float ~env_dom llv)))
@@ -1018,14 +1019,21 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
     | Get (tensor, indices) -> (
         let node = get_node node_store tensor in
         match node.scalar with
+        | Some c when virtualize_settings.inline_constants && !debug_virtual_nodes ->
+            let id = get_scope tensor in
+            Local_scope { id; prec = node.prec; body = Set_local (id, Constant c); orig_indices = indices }
         | Some c when virtualize_settings.inline_constants -> Constant c
         | _ ->
-            assert node.non_virtual;
+            if not node.non_virtual then
+              Caml.Format.printf "WARNING: unexpected Get of a virtual tensor, details:@ %a\n%!" Sexp.pp_hum
+                (sexp_of_data_node node);
             assert (Array.for_all indices ~f:(function Shape.Iterator s -> Set.mem env_dom s | _ -> true));
             llv)
     | Local_scope { id; prec; body; orig_indices } -> (
         let node = get_node node_store id.tensor in
         match node.scalar with
+        | Some c when virtualize_settings.inline_constants && !debug_virtual_nodes ->
+            Local_scope { id; prec; body = Set_local (id, Constant c); orig_indices }
         | Some c when virtualize_settings.inline_constants -> Constant c
         | _ ->
             assert (
