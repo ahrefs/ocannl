@@ -893,10 +893,14 @@ let inline_computation ~id node call_args =
       | For_loop { index; body; _ } when Map.mem env index -> loop body
       | For_loop { index; from_; to_; body } ->
           Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop body
-      | If_task_id_is { for_task_id; body } ->
-          Option.map ~f:(fun body -> If_task_id_is { for_task_id; body }) @@ loop body
-      | Synchronize info -> Some (Synchronize info)
-      | Reset_synchronizer -> Some Reset_synchronizer
+      | If_task_id_is { for_task_id = _; body } ->
+          (* Inlined computations are governed by the inlining context, and cannot interfere across tasks.
+             Undo parallelization. *)
+          loop body
+      | Synchronize _ ->
+          (* Undo parallelization. *)
+          None
+      | Reset_synchronizer -> raise Non_virtual
       | Set (tensor, indices, llv) when NodeUI.equal_tensor_ptr tensor at_data ->
           assert ([%equal: index array option] (Some indices) def_args);
           Some (Set_local (id, loop_float llv))
