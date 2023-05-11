@@ -28,13 +28,10 @@ type fetch_op = Constant of float | Synthetic of t | Imported of global_identifi
 
 and t =
   | Synchronize of string  (** Wait for all tasks to reach this point before proceeding. *)
-  | Rebalance of t  (** Assume this computation is not using [Shape.Parallel] dimensions and rebalance it. *)
   | Par of t * t  (** These tasks can proceed in parallel, there is no interaction. *)
   | ParHint of t * t
       (** Computing [ParHint (c1, c2)] can proceed in parallel on [c1] and [c2], but when [c2] reads values
-      that [c1] writes, the writes in [c1] must occur before the reads in [c2]. If a backend does not
-      support detection of when [ParHint (c1, c2)] is safe to parallelize, it should provide an option
-      [force_unsafe_parhint] which always parallelizes. *)
+      that [c1] writes, the writes in [c1] must occur before the reads in [c2]. *)
   | Seq of t * t
       (** These tasks can only benefit from mutual parallelism via operator fusion / loop fusion. *)
   | Accum_binop of {
@@ -58,6 +55,11 @@ and t =
   | Block_comment of string * t
   | Noop
 [@@deriving sexp]
+
+(** If a backend does not support detection of when [ParHint (c1, c2)] is safe to parallelize,
+    one can try setting [force_unsafe_parhint] to always parallelize if the particular code
+    does not have a form of computation sharing that would get broken. *)
+let force_unsafe_parhint = ref false
 
 type create = { tensor : NodeUI.tensor_ptr; dims : unit -> Shape.dim array; init_op : init_op }
 (** Information to create a tensor, once its shape is inferred. *)
@@ -83,11 +85,12 @@ let remove_updates tensor c =
 let all_parallel = List.fold ~init:Noop ~f:(fun sts st -> Par (st, sts))
 let sequential = List.fold_right ~init:Noop ~f:(fun st sts -> Seq (st, sts))
 
-let rec flat_parallel ts =
+let rec flat_parallel ~force_hints ts =
   Array.concat_map ts ~f:(function
-    | Par (t1, t2) -> flat_parallel [| t1; t2 |]
-    | Block_comment (_, Noop) as t -> [|t|]
-    | Block_comment (s, t) -> flat_parallel [| Block_comment (s, Noop); t |]
+    | Par (t1, t2) -> flat_parallel ~force_hints [| t1; t2 |]
+    | ParHint (t1, t2) when force_hints -> flat_parallel ~force_hints [| t1; t2 |]
+    | Block_comment (_, Noop) as t -> [| t |]
+    | Block_comment (s, t) -> flat_parallel ~force_hints [| Block_comment (s, Noop); t |]
     | Noop -> [||]
     | t -> [| t |])
 
@@ -144,8 +147,23 @@ type _ low_level =
 
 let binop ~op ~rhs1 ~rhs2 = match op with Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Binop (op, rhs1, rhs2)
 let unop ~op ~rhs = match op with Identity -> rhs | _ -> Unop (op, rhs)
-
 let rec flat_lines ts = Array.concat_map ts ~f:(function Lines ts -> flat_lines ts | t -> [| t |])
+
+let partition_tf_with_comments t ~f =
+  let both = Array.map t ~f:(fun x -> if f x then Either.First x else Either.Second x) in
+  let trues =
+    Array.filter_map both ~f:(function
+      | First x -> Some x
+      | Second (Comment _ as x) -> Some x
+      | Second _ -> None)
+  in
+  let falses =
+    Array.filter_map both ~f:(function
+      | First (Comment _ as x) -> Some x
+      | First _ -> None
+      | Second x -> Some x)
+  in
+  (trues, falses)
 
 let rebalance llcs =
   (* FIXME: implement actual rebalancing. *)
@@ -260,13 +278,32 @@ let to_low_level (code : t) : unit low_level =
     | Synchronize info ->
         Int.incr synchronizer_stage;
         Synchronize { stage = !synchronizer_stage; info }
-    | Rebalance c -> rebalance @@ [| loop c |]
-    | Block_comment (s, (Par _ as par_code)) ->
-        let ts = flat_parallel [| par_code |] in
-        let task_ts, nontask_ts = Array.partition_tf ~f:has_parallel_dim @@ Array.map ts ~f:loop in
-        Lines (flat_lines [| Comment s; rebalance nontask_ts; Lines task_ts |])
+    | Block_comment (s, (Par _ as c)) ->
+        let ts = flat_parallel ~force_hints:!force_unsafe_parhint [| c |] in
+        let task_ts, nontask_ts = partition_tf_with_comments ~f:has_parallel_dim @@ Array.map ts ~f:loop in
+        Int.incr synchronizer_stage;
+        let sync = Synchronize { stage = !synchronizer_stage; info = "past-par-" ^ s } in
+        Lines (flat_lines [| Comment s; rebalance nontask_ts; Lines task_ts; sync |])
+    | Block_comment (s, (ParHint _ as c)) when !force_unsafe_parhint ->
+        let ts = flat_parallel ~force_hints:true [| c |] in
+        let task_ts, nontask_ts = partition_tf_with_comments ~f:has_parallel_dim @@ Array.map ts ~f:loop in
+        Int.incr synchronizer_stage;
+        let sync = Synchronize { stage = !synchronizer_stage; info = "past-parhint-" ^ s } in
+        Lines (flat_lines [| Comment s; rebalance nontask_ts; Lines task_ts; sync |])
+    | Par _ ->
+        let ts = flat_parallel ~force_hints:!force_unsafe_parhint [| code |] in
+        let task_ts, nontask_ts = partition_tf_with_comments ~f:has_parallel_dim @@ Array.map ts ~f:loop in
+        Int.incr synchronizer_stage;
+        let sync = Synchronize { stage = !synchronizer_stage; info = "past-parallel" } in
+        Lines (flat_lines [| rebalance nontask_ts; Lines task_ts; sync |])
+    | ParHint _ when !force_unsafe_parhint ->
+        let ts = flat_parallel ~force_hints:!force_unsafe_parhint [| code |] in
+        let task_ts, nontask_ts = partition_tf_with_comments ~f:has_parallel_dim @@ Array.map ts ~f:loop in
+        Int.incr synchronizer_stage;
+        let sync = Synchronize { stage = !synchronizer_stage; info = "past-parallel-hint" } in
+        Lines (flat_lines [| rebalance nontask_ts; Lines task_ts; sync |])
     | Block_comment (s, c) -> Lines [| Comment s; loop c |]
-    | Par (c1, c2) | ParHint (c1, c2) | Seq (c1, c2) -> (
+    | ParHint (c1, c2) | Seq (c1, c2) -> (
         (* TODO: this ignores parallelization altogether, don't! *)
         let ll1 = loop c1 in
         let ll2 = loop c2 in
@@ -1051,9 +1088,6 @@ let optimize_proc llc =
 
 let compile_proc ~name proc =
   let result = optimize_proc @@ to_low_level proc in
-  if !debug_trace_interpretation then
-    Caml.Format.printf "TRACE: Compiled program:@ %a\n%!" Sexp.pp_hum
-    @@ sexp_of_low_level Unit.sexp_of_t result;
   if !with_debug && !keep_files_in_run_directory then
     Stdio.Out_channel.write_all (name ^ ".llc")
       ~data:(Sexp.to_string_hum @@ sexp_of_low_level Unit.sexp_of_t result);
@@ -1065,8 +1099,8 @@ let interpret_task_id_func ~name:_ compiled ~task_id =
   if task_id = 0 then (
     synchronizer := Some (Synchronizer.make !Shape.num_parallel_tasks);
     if !debug_trace_interpretation then
-    Caml.Format.printf "TRACE: Interpreted program:@ %a\n%!" Sexp.pp_hum
-    @@ sexp_of_low_level Unit.sexp_of_t compiled)
+      Caml.Format.printf "TRACE: Interpreted program:@ %a\n%!" Sexp.pp_hum
+      @@ sexp_of_low_level Unit.sexp_of_t compiled)
   else
     while Option.is_none !synchronizer do
       Caml.Domain.cpu_relax ()
