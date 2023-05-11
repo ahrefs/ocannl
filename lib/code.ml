@@ -149,17 +149,17 @@ let binop ~op ~rhs1 ~rhs2 = match op with Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Bin
 let unop ~op ~rhs = match op with Identity -> rhs | _ -> Unop (op, rhs)
 let rec flat_lines ts = Array.concat_map ts ~f:(function Lines ts -> flat_lines ts | t -> [| t |])
 
-let partition_tf_with_comments t ~f =
-  let both = Array.map t ~f:(fun x -> if f x then Either.First x else Either.Second x) in
+let partition_tf_with_comment t ~f =
+  let both = Array.map t ~f:(fun tc -> if f tc then Either.First tc else Either.Second tc) in
   let trues =
     Array.filter_map both ~f:(function
       | First x -> Some x
-      | Second (Comment _ as x) -> Some x
+      | Second ((_, Comment _) as x) -> Some x
       | Second _ -> None)
   in
   let falses =
     Array.filter_map both ~f:(function
-      | First (Comment _ as x) -> Some x
+      | First ((_, Comment _) as x) -> Some x
       | First _ -> None
       | Second x -> Some x)
   in
@@ -192,9 +192,17 @@ let rec has_parallel_dim : type a. a low_level -> bool = function
   | Unop (_, llv) -> has_parallel_dim llv
   | Constant _ -> false
 
+let rec has_synchronize = function
+  | Par (t1, t2) | ParHint (t1, t2) | Seq (t1, t2) -> has_synchronize t1 || has_synchronize t2
+  | Block_comment (_, t) -> has_synchronize t
+  | Accum_binop _ | Accum_unop _ | Fetch _ | Noop -> false
+  | Synchronize _ -> true
+
+let parallelizable (t, c) = not (has_parallel_dim c || has_synchronize t)
+
 let to_low_level (code : t) : unit low_level =
   let synchronizer_stage = ref 0 in
-  let rec loop code =
+  let rec loop ~single_task code =
     match code with
     | Accum_binop { zero_out; accum; op; lhs; rhs1; rhs2; projections } ->
         let projections = projections () in
@@ -216,6 +224,7 @@ let to_low_level (code : t) : unit low_level =
           let body =
             Set (lhs, lhs_idcs, binop ~op:accum ~rhs1:lhs_ll ~rhs2:(binop ~op ~rhs1:rhs1_ll ~rhs2:rhs2_ll))
           in
+          let body = if single_task || has_parallel_dim body then body else rebalance [| body |] in
           match Array.find rhs2_idcs ~f:Shape.is_dynamic_provider with
           | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
               Dynamic_indices { tensor = rhs2; tensor_idcs = rhs2_idcs; dynamic_idcs; target_dims; body }
@@ -244,7 +253,8 @@ let to_low_level (code : t) : unit low_level =
         let for_loops =
           for_loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators)
         in
-        if zero_out then Lines [| loop (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
+        if zero_out then
+          Lines [| loop ~single_task (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
         else for_loops
     | Accum_unop { zero_out; accum; op; lhs; rhs; projections } ->
         let projections = projections () in
@@ -255,7 +265,8 @@ let to_low_level (code : t) : unit low_level =
           let lhs_idcs = lhs_idx iters in
           let lhs_ll = Get (lhs, lhs_idcs) in
           let rhs_ll = Get (rhs, rhs_idx iters) in
-          Set (lhs, lhs_idcs, binop ~op:accum ~rhs1:lhs_ll ~rhs2:(unop ~op ~rhs:rhs_ll))
+          let body = Set (lhs, lhs_idcs, binop ~op:accum ~rhs1:lhs_ll ~rhs2:(unop ~op ~rhs:rhs_ll)) in
+          if single_task || has_parallel_dim body then body else rebalance [| body |]
         in
         let rec for_loop rev_iters = function
           | [], [] -> basecase rev_iters
@@ -271,42 +282,23 @@ let to_low_level (code : t) : unit low_level =
         let for_loops =
           for_loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators)
         in
-        if zero_out then Lines [| loop (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
+        if zero_out then
+          Lines [| loop ~single_task (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
         else for_loops
-    | Block_comment (s, c) -> Lines [| Comment s; loop c |]
     | Noop -> Lines [||]
     | Synchronize info ->
+        assert (not single_task);
         Int.incr synchronizer_stage;
         Synchronize { stage = !synchronizer_stage; info }
-    | Block_comment (s, (Par _ as c)) ->
-        let ts = flat_parallel ~force_hints:!force_unsafe_parhint [| c |] in
-        let task_ts, nontask_ts = partition_tf_with_comments ~f:has_parallel_dim @@ Array.map ts ~f:loop in
-        Int.incr synchronizer_stage;
-        let sync = Synchronize { stage = !synchronizer_stage; info = "past-par-" ^ s } in
-        Lines (flat_lines [| Comment s; rebalance nontask_ts; Lines task_ts; sync |])
-    | Block_comment (s, (ParHint _ as c)) when !force_unsafe_parhint ->
-        let ts = flat_parallel ~force_hints:true [| c |] in
-        let task_ts, nontask_ts = partition_tf_with_comments ~f:has_parallel_dim @@ Array.map ts ~f:loop in
-        Int.incr synchronizer_stage;
-        let sync = Synchronize { stage = !synchronizer_stage; info = "past-parhint-" ^ s } in
-        Lines (flat_lines [| Comment s; rebalance nontask_ts; Lines task_ts; sync |])
-    | Par _ ->
-        let ts = flat_parallel ~force_hints:!force_unsafe_parhint [| code |] in
-        let task_ts, nontask_ts = partition_tf_with_comments ~f:has_parallel_dim @@ Array.map ts ~f:loop in
-        Int.incr synchronizer_stage;
-        let sync = Synchronize { stage = !synchronizer_stage; info = "past-parallel" } in
-        Lines (flat_lines [| rebalance nontask_ts; Lines task_ts; sync |])
-    | ParHint _ when !force_unsafe_parhint ->
-        let ts = flat_parallel ~force_hints:!force_unsafe_parhint [| code |] in
-        let task_ts, nontask_ts = partition_tf_with_comments ~f:has_parallel_dim @@ Array.map ts ~f:loop in
-        Int.incr synchronizer_stage;
-        let sync = Synchronize { stage = !synchronizer_stage; info = "past-parallel-hint" } in
-        Lines (flat_lines [| rebalance nontask_ts; Lines task_ts; sync |])
-    | Block_comment (s, c) -> Lines [| Comment s; loop c |]
-    | ParHint (c1, c2) | Seq (c1, c2) -> (
+    | Block_comment (s, (Par _ as c)) when not single_task -> loop_par ~s c
+    | Block_comment (s, (ParHint _ as c)) when !force_unsafe_parhint && not single_task -> loop_par ~s c
+    | Par _ when not single_task -> loop_par code
+    | ParHint _ when !force_unsafe_parhint && not single_task -> loop_par code
+    | Block_comment (s, c) -> Lines [| Comment s; loop ~single_task c |]
+    | Par (c1, c2) | ParHint (c1, c2) | Seq (c1, c2) -> (
         (* TODO: this ignores parallelization altogether, don't! *)
-        let ll1 = loop c1 in
-        let ll2 = loop c2 in
+        let ll1 = loop ~single_task c1 in
+        let ll2 = loop ~single_task c2 in
         match (ll1, ll2) with
         | Lines ls1, Lines ls2 -> Lines (Array.append ls1 ls2)
         | _, Lines ls2 -> Lines (Array.append [| ll1 |] ls2)
@@ -325,10 +317,28 @@ let to_low_level (code : t) : unit low_level =
         in
         let for_loops = loop [] (Array.to_list product_space) in
         for_loops
-    | Fetch { tensor = _; fetch_op = Synthetic gen } -> loop gen
+    | Fetch { tensor = _; fetch_op = Synthetic gen } -> loop ~single_task gen
     | Fetch { tensor = _; fetch_op = Imported _ } -> failwith "to_low_level: Imported NOT IMPLEMENTED YET"
+  and loop_par ?s c =
+    let ts = flat_parallel ~force_hints:!force_unsafe_parhint [| c |] in
+    let t_c_s = Array.map ts ~f:(fun t -> (t, loop ~single_task:false t)) in
+    let nontask_ts, task_ts = partition_tf_with_comment ~f:parallelizable t_c_s in
+    Int.incr synchronizer_stage;
+    let sync =
+      Synchronize
+        {
+          stage = !synchronizer_stage;
+          info = (match s with Some s -> "past-par-" ^ s | None -> "past-parallel");
+        }
+    in
+    let nontask_ts = rebalance @@ Array.map nontask_ts ~f:(fun (t, _) -> loop ~single_task:true t) in
+    let task_ts = Lines (Array.map ~f:snd task_ts) in
+    match s with
+    | None -> Lines (flat_lines [| nontask_ts; task_ts; sync |])
+    | Some s -> Lines (flat_lines [| Comment s; nontask_ts; task_ts; sync |])
   in
-  loop code
+
+  loop ~single_task:false code
 
 let interpreter_print_comments = ref false
 let keep_files_in_run_directory = ref false
