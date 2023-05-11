@@ -125,11 +125,11 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
       | Dynamic_provider _ -> Option.value_exn provider_dim)
   in
   let rec loop_proc ~name ~env (body : unit Code.low_level) : unit =
-    (* TODO: consider matching gccjit's assign_op-style pattern (but probably no benefit). *)
     match body with
     | Code.Lines lines ->
         Array.iteri lines ~f:(fun i line -> loop_proc ~name:(name ^ "_at_line_" ^ Int.to_string i) ~env line)
     | For_loop { index; from_; to_; body } -> jit_for_loop ~env index ~from_ ~to_ (Either.First body)
+    | If_task_id_is { for_task_id = _; body } when !Shape.num_parallel_tasks <= 1 -> loop_proc ~name ~env body
     | If_task_id_is { for_task_id; body } ->
         let open Gccjit in
         let id = get_uid () in
@@ -145,11 +145,13 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
         loop_proc ~name ~env body;
         Block.jump !current_block b_after_if;
         current_block := b_after_if
+    | Synchronize _ when !Shape.num_parallel_tasks <= 1 -> ()
     | Synchronize info ->
         (* FIXME: lock-free implementation with an int for each task that counts the stage the task
            is at, and a busy loop waiting for all other stages to arrive at the current task's
            (incremented) stage. *)
         failwith ("Exec_as_gccjit.jit_code.Synchronize: NOT IMPLEMENTED YET -- at " ^ info.info)
+    | Reset_synchronizer when !Shape.num_parallel_tasks <= 1 -> ()
     | Reset_synchronizer -> failwith "Exec_as_gccjit.jit_code.Reset_synchronizer: NOT IMPLEMENTED YET"
     | Set (data_node, idcs, Binop (op, Get (tensor, idcs2), c2))
       when NodeUI.equal_tensor_ptr data_node tensor

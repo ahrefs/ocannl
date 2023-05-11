@@ -256,22 +256,22 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
     Map.iter_keys !Formula.global_roots ~f:(fun id -> (NodeUI.get id).cannot_be_virtual <- true);
     (* Params are not virtual either, so that the gradients can be used for update. *)
     Hashtbl.iter ~f:(fun n -> n.NodeUI.cannot_be_virtual <- true) @@ session_params ();
-    if List.is_empty update_params_code then session_step_update := Seq (forward, backprop)
+    (if List.is_empty update_params_code then session_step_update := Seq (forward, backprop)
+     else
+       let params_update = Block_comment ("Params update", all_parallel update_params_code) in
+       session_step_update :=
+         sequential [ preparation; forward; backprop; Synchronize "pre-params-update"; params_update ]);
+    if run_for_steps <= 1 then session_step_update_compiled := compile_proc ~name !session_step_update
     else
-      let params_update = Block_comment ("Params update", all_parallel update_params_code) in
-      session_step_update :=
-        sequential [ preparation; forward; backprop; Synchronize "pre-params-update"; params_update ];
-      if run_for_steps <= 1 then session_step_update_compiled := compile_proc ~name !session_step_update
-      else
-        session_step_update_compiled :=
-          Code.(
-            For_loop
-              {
-                index = Code.new_sym_index macrobatch_loop_symbol;
-                from_ = 0;
-                to_ = run_for_steps - 1;
-                body = Lines [| Reset_synchronizer; compile_proc ~name !session_step_update |];
-              }));
+      session_step_update_compiled :=
+        Code.(
+          For_loop
+            {
+              index = Code.new_sym_index macrobatch_loop_symbol;
+              from_ = 0;
+              to_ = run_for_steps - 1;
+              body = Lines [| Reset_synchronizer; compile_proc ~name !session_step_update |];
+            }));
   if generating || reinit || roots_changed then (
     let num_inits = List.length !session_initializations in
     let to_init = num_inits - !session_initialized in
