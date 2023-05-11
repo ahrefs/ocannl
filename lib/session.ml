@@ -256,7 +256,8 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
     Map.iter_keys !Formula.global_roots ~f:(fun id -> (NodeUI.get id).cannot_be_virtual <- true);
     (* Params are not virtual either, so that the gradients can be used for update. *)
     Hashtbl.iter ~f:(fun n -> n.NodeUI.cannot_be_virtual <- true) @@ session_params ();
-    (if List.is_empty update_params_code then session_step_update := Seq (forward, backprop)
+    (if List.is_empty update_params_code then
+       session_step_update := sequential [ preparation; forward; backprop ]
      else
        let params_update = Block_comment ("Params update", all_parallel update_params_code) in
        session_step_update :=
