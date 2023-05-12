@@ -11,7 +11,7 @@ let _suspended () =
   let open SDSL.O in
   SDSL.set_executor Interpreter;
   SDSL.enable_all_debugs ~trace_interpreter:true ();
-  CDSL.virtualize_settings.virtualize <- true;
+  CDSL.virtualize_settings.enable_virtual <- true;
   CDSL.virtualize_settings.inline_constants <- true;
   SDSL.drop_all_sessions ();
   Random.init 0;
@@ -118,7 +118,7 @@ let _suspended () =
   SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
   Stdio.printf "\nSize in bytes: %d\n%!" (SDSL.global_size_in_bytes ())
 
-let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_constants = true)
+let classify_moons ~virtualize ~on_device executor ~opti_level ~inlining_cutoff ?(inline_constants = true)
     ~num_parallel_tasks precision () =
   (* let epochs = 20000 in *)
   let epochs = 2000 in
@@ -127,7 +127,7 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   let bench_title =
     Sexp.to_string_hum
     @@ [%sexp_of:
-         string (* * Session.backend *)
+         string * string (* * Session.backend *)
          * string
          * int
          * string
@@ -136,6 +136,7 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
          * int
          * NodeUI.prec]
          ( (if virtualize then "virtu." else "non-v."),
+         (if on_device then "on-dev" else "non-d."),
            (* executor, *)
            "gcc-opt",
            opti_level,
@@ -149,7 +150,8 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   Stdio.prerr_endline @@ "\n\n****** Benchmarking virtualized: " ^ bench_title ^ " for "
   ^ Int.to_string epochs ^ " epochs ******";
   CDSL.debug_virtual_nodes := false;
-  CDSL.virtualize_settings.virtualize <- virtualize;
+  CDSL.virtualize_settings.enable_virtual <- virtualize;
+  CDSL.virtualize_settings.enable_device_only <- on_device;
   CDSL.virtualize_settings.max_visits <- inlining_cutoff;
   CDSL.virtualize_settings.inline_constants <- inline_constants;
   SDSL.set_executor executor;
@@ -328,41 +330,33 @@ let benchmark_executor = SDSL.Gccjit
 
 let _suspended () =
   ignore
-  @@ classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
+  @@ classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
        ~num_parallel_tasks:21 CDSL.single ()
 
 let benchmarks =
   [
-    (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:1 CDSL.single; *)
-    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:1
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:1
       CDSL.single;
-    (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:2 CDSL.single; *)
-    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:2
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:2
       CDSL.single;
-    (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:4 CDSL.single; *)
-    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:4
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:4
       CDSL.single;
-    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:5
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:5
       CDSL.single;
-    (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:10
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:10
+      CDSL.single;
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:12
+      CDSL.single;
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:15
+      CDSL.single;
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:18
+      CDSL.single;
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:21
+      CDSL.single;
+    (* classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:30
        CDSL.single; *)
-    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:10
-      CDSL.single;
-    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:12
-      CDSL.single;
-    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:15
-      CDSL.single;
-    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:18
-      CDSL.single;
-    (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:20
+    (* classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:42
        CDSL.single; *)
-    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:21
-      CDSL.single;
-    (* classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:30
-       CDSL.single; *)
-    (* classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:42
-       CDSL.single; *)
-    (* classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:9 ~num_parallel_tasks:20 CDSL.single; *)
   ]
 
 let () =

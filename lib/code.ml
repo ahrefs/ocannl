@@ -616,14 +616,21 @@ let interpreter_error_message ~name ~prefix ?extra_error_msg ~contents exc =
 (** *** Optimization *** *)
 
 type virtualize_settings = {
-  mutable virtualize : bool;
+  mutable enable_virtual : bool;
+  mutable enable_device_only : bool;
   mutable max_visits : int;
   mutable consider_grads : bool;
   mutable inline_constants : bool;
 }
 
 let virtualize_settings =
-  { virtualize = true; max_visits = 3; consider_grads = false; inline_constants = true }
+  {
+    enable_virtual = true;
+    enable_device_only = true;
+    max_visits = 3;
+    consider_grads = false;
+    inline_constants = true;
+  }
 
 type visits =
   | Visits of int
@@ -644,12 +651,14 @@ type data_node = {
   accesses : (int array, visits) Hashtbl.t;
       (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
   mutable non_virtual : bool;
+  mutable non_device_only : bool;
   mutable scalar : float option;
 }
 [@@deriving sexp_of]
 
 let get_node store (uid : NodeUI.tensor_ptr) =
   Hashtbl.find_or_add store uid ~default:(fun () ->
+      let n = NodeUI.get uid.id in
       {
         id = uid.id;
         kind = uid.field;
@@ -657,7 +666,8 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         computations = [];
         assignments = Hash_set.Poly.create ();
         accesses = Hashtbl.Poly.create ();
-        non_virtual = (NodeUI.get uid.id).cannot_be_virtual;
+        non_virtual = n.always_hosted;
+        non_device_only = n.always_hosted;
         scalar = None;
       })
 
@@ -698,7 +708,7 @@ let precompute_constants ?idcs node_store top_node llv =
   in
   let n = NodeUI.get top_node.id in
   try
-    if n.cannot_be_virtual then raise @@ Non_literal 8;
+    if n.always_hosted then raise @@ Non_literal 8;
     if (not @@ Hashtbl.is_empty top_node.accesses) && not n.literal then raise @@ Non_literal 6;
     (match idcs with
     | None -> ()
@@ -897,7 +907,7 @@ let process_computation node_store node top_llc =
     if not !has_setter then raise Non_virtual;
     node.computations <- (!at_idcs, top_llc) :: node.computations
   with Non_virtual ->
-    (NodeUI.get node.id).cannot_be_virtual <- true;
+    (* (NodeUI.get node.id).always_hosted <- true; *)
     node.non_virtual <- true;
     other_node.non_virtual <- true
 
@@ -1119,7 +1129,7 @@ let optimize_proc llc =
   let node_store : (NodeUI.tensor_ptr, data_node) Hashtbl.t = Hashtbl.Poly.create () in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
   let reverse_node_map : (sym_index, NodeUI.tensor_ptr) Hashtbl.t = Hashtbl.Poly.create () in
-  if not virtualize_settings.virtualize then llc
+  if not virtualize_settings.enable_virtual then llc
   else
     let result =
       visit_llc node_store reverse_node_map ~max_visits:virtualize_settings.max_visits

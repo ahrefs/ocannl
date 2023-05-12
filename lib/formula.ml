@@ -328,7 +328,7 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
           let fetch_op = fetch_op ~n in
           let fetch = Fetch { tensor = { id; field = Value }; fetch_op } in
           session_prepare_forward := fetch :: !session_prepare_forward;
-          (match fetch_op with Constant _ -> () | _ -> n.cannot_be_virtual <- true);
+          (match fetch_op with Constant _ -> () | _ -> n.always_hosted <- true);
           false)
   in
   if not is_form then

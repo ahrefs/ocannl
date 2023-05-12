@@ -11,12 +11,17 @@ type t = {
   desc_label : string option;
   shape : Shape.t;
   mutable virtual_ : bool;
-  mutable cannot_be_virtual : bool;
+  (* If true, this node is never materialized, its computations are inlined on a per-scalar basis. *)
+  mutable device_only : bool;
+  (* If true, this node is only materialized on the devices it is computed on, it is not persisted
+     outside of a step update. *)
+  mutable always_hosted : bool;
+  (* If true, this node is never virutal nor device-only. *)
   literal : bool;
       (** To avoid confusion, try to maintain the following for a literal:
       - empty [children],
       - [op_label] stores the approximate human-readable numerical value or representation of the node,
-      - [cannot_be_virtual] is never true,
+      - [always_hosted] is never true,
       - [node.grad] is always [None]. *)
 }
 [@@deriving sexp_of]
@@ -119,7 +124,8 @@ let create ~(value_prec : prec) ?(grad_prec : prec option) ?(literal = false) ~n
       children;
       shape;
       virtual_ = false;
-      cannot_be_virtual = false;
+      device_only = false;
+      always_hosted = false;
       literal;
     }
   in
