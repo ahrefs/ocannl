@@ -1,3 +1,22 @@
+## [0.1.2] -- 2023-05-12
+
+### Added
+
+- Thread-local parameter `task_id` for automated iteration over a dimension `Parallel`.
+  - This implements multicore SGD.
+  - Rebalancing of computations that don't use `Parallel`, and synchronization in the `Gccjit` backend, are left as future work.
+  - Already provides significant speedups in the interpreter (6-7x for me), but that's a moot point.
+  - Giving up further work this approach for now, because the bottleneck is the memory access with `Gccjit`.
+  - Keeping the new representation capability around, maybe it will be a stepping stone to other things.
+- Monolithic step update with "macrobatch" (multiple steps within one backend call).
+
+### Changed
+
+- Streamlined the source code, e.g. removed the `OCaml` backend.
+- Better syntax for `%nn_dt` and `%nn_op` shape specification, allows identifiers.
+- Improved virtual node and scalar constant inlining.
+- Better debugging, e.g. an option to "trace" `Gccjit` execution by printing the comments.
+
 ## [0.1.1] -- 2023-05-06
 
 ### Added

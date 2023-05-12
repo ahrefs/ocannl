@@ -32,7 +32,7 @@ Warning disclaimer: this project is still "not announced". The features describe
 
 For past milestones see [CHANGES](CHANGES.md).
 
-* **v0.2-multicore**: thread-local parameter `task_id`; multicore SGD that actually speeds things up even if there's wasted efficiency.
+* Skipping v0.2.
 * **v0.3-GPU**: a CUDA backend.
 * **v0.3.1-tiling**: the tiling optimization.
 * **v0.4-usability**: examples covering most of Andrej Karpathy's "Neural Networks Zero to Hero" series; data loading; checkpointing.
