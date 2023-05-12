@@ -13,7 +13,7 @@
    (instance Types)
    (functor Gccjit_bindings_types))
   (function_description
-   (concurrency sequential)
+   (concurrency unlocked)
    (instance Functions)
    (functor Gccjit_bindings))
   (generated_types Types_generated)
