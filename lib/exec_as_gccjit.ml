@@ -124,6 +124,14 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
       | Dynamic_recipient s -> Map.find_exn dyn_env s
       | Dynamic_provider _ -> Option.value_exn provider_dim)
   in
+  let log_comment c =
+    (if !Code.with_debug && !Code.executor_print_comments then
+       let f = Function.builtin ctx "printf" in
+       Block.eval !current_block
+       @@ RValue.call ctx f
+            [ RValue.string_literal ctx ("\nComment for task %d: " ^ c ^ "\n"); RValue.param task_id ]);
+    Block.comment !current_block c
+  in
   let rec loop_proc ~name ~env (body : unit Code.low_level) : unit =
     match body with
     | Code.Lines lines ->
@@ -150,9 +158,12 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
         (* FIXME: lock-free implementation with an int for each task that counts the stage the task
            is at, and a busy loop waiting for all other stages to arrive at the current task's
            (incremented) stage. *)
-        failwith ("Exec_as_gccjit.jit_code.Synchronize: NOT IMPLEMENTED YET -- at " ^ info.info)
+        (* failwith ("Exec_as_gccjit.jit_code.Synchronize: NOT IMPLEMENTED YET -- at " ^ info.info) *)
+        log_comment ("NOT IMPLEMENTED SYNCHRONIZATION: " ^ info.info)
     | Reset_synchronizer when !Shape.num_parallel_tasks <= 1 -> ()
-    | Reset_synchronizer -> failwith "Exec_as_gccjit.jit_code.Reset_synchronizer: NOT IMPLEMENTED YET"
+    | Reset_synchronizer ->
+        (* failwith "Exec_as_gccjit.jit_code.Reset_synchronizer: NOT IMPLEMENTED YET" *)
+        log_comment ("NOT IMPLEMENTED RESET SYNCHRONIZATER")
     | Set (data_node, idcs, Binop (op, Get (tensor, idcs2), c2))
       when NodeUI.equal_tensor_ptr data_node tensor
            && [%equal: Code.index array] idcs idcs2
@@ -165,10 +176,9 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
         Block.assign_op !current_block lhs (builtin_op op) value
     | Set (data_node, idcs, Binop (op, (Get (tensor, _) as c1), c2))
       when NodeUI.equal_tensor_ptr data_node tensor ->
-        (* FIXME: doesn't seem to help, check precisely. *)
         let tensor = get_tensor ctx data_node in
         let v2 = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
-        (* Force the ordering of computations. *)
+        (* Force the ordering of computations to reduce race conditions. *)
         let l2 = Function.local func tensor.num_typ (tensor_ptr_name data_node ^ "_" ^ get_uid ()) in
         Block.assign !current_block l2 v2;
         let idcs = lookup env idcs in
@@ -188,13 +198,7 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
         let lhs, num_typ, is_double = Map.find_exn !locals id in
         let value = loop_float ~name ~env ~num_typ ~is_double value in
         Block.assign !current_block lhs value
-    | Comment c ->
-        (if !Code.with_debug && !Code.executor_print_comments then
-         let f = Function.builtin ctx "printf" in
-         Block.eval !current_block
-         @@ RValue.call ctx f
-              [ RValue.string_literal ctx ("\nComment for task %d: " ^ c ^ "\n"); RValue.param task_id ]);
-        Block.comment !current_block c
+    | Comment c -> log_comment c
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
         jit_dynamic_indices ~name ~env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
   and loop_float ~name ~env ~num_typ ~is_double value : rvalue =

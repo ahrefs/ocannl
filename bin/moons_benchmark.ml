@@ -68,7 +68,7 @@ let _suspended () =
              + ("w5" * !/("b4" 4 + ("w4" * !/("b3" 8 + ("w3" * !/("b2" 8 + ("w2" * !/("b1" 16 + ("w1" * x)))))))))
              )
      in *)
-  let%nn_dt session_step ~o:1 = n =+ 1 /. !..num_parallel_tasks in
+  let%nn_dt session_step ~o:1 = n =+ 1 in
   let%nn_dt minus_lr ~o:1 = n =: -0.0001 *. (!..steps - session_step) /. !..steps in
 
   SDSL.minus_learning_rate := Some minus_lr;
@@ -82,7 +82,8 @@ let _suspended () =
      in *)
   let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..minibatch) + (0.001 *. reg_loss) in
   let%nn_dt epoch_loss ~o:1 = n =+ total_loss in
-  SDSL.refresh_session ~run_for_steps:n_batches ();
+  let run_for_steps = 1 (* n_batches *) in
+  SDSL.refresh_session ~run_for_steps ();
   Stdio.print_endline "\nPreamble:\n";
   SDSL.print_preamble ();
   Stdio.print_endline "\nHigh-level code:\n";
@@ -90,31 +91,39 @@ let _suspended () =
   Stdio.print_endline "\nLow-level code:\n";
   SDSL.print_session_code ~compiled:true ();
   SDSL.print_decimals_precision := 9;
+  Stdio.printf "Step 1: session_step: %f\n%!" session_step.@[0];
+  Stdio.printf "Step 1: Minus learning rate: %f\n%!" minus_lr.@[0];
   Stdio.printf "\nStep 1: loss %f\n%!" epoch_loss.@[0];
   SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
-  List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
+  (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
-      SDSL.print_formula ~with_grad:true ~with_code:false `Default f);
+      SDSL.print_formula ~with_grad:true ~with_code:false `Default f); *)
   SDSL.refresh_session ();
-  Stdio.printf "\nStep 2: loss %f\n%!" total_loss.@[0];
+  Stdio.printf "Step 2: session_step: %f\n%!" session_step.@[0];
+  Stdio.printf "\nStep 2: Minus learning rate: %f\n%!" minus_lr.@[0];
+  Stdio.printf "\nStep 2: loss %f\n%!" epoch_loss.@[0];
   SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
-  List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
+  (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
-      SDSL.print_formula ~with_grad:true ~with_code:false `Default f);
+      SDSL.print_formula ~with_grad:true ~with_code:false `Default f); *)
   SDSL.refresh_session ();
-  Stdio.printf "\nStep 3: loss %f\n%!" total_loss.@[0];
+  Stdio.printf "Step 3: session_step: %f\n%!" session_step.@[0];
+  Stdio.printf "\nStep 3: Minus learning rate: %f\n%!" minus_lr.@[0];
+  Stdio.printf "\nStep 3: loss %f\n%!" epoch_loss.@[0];
   SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
   SDSL.refresh_session ();
-  Stdio.printf "\nStep 4: loss %f\n%!" total_loss.@[0];
+  Stdio.printf "Step 4: session_step: %f\n%!" session_step.@[0];
+  Stdio.printf "\nStep 4: Minus learning rate: %f\n%!" minus_lr.@[0];
+  Stdio.printf "\nStep 4: loss %f\n%!" epoch_loss.@[0];
   SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
   Stdio.printf "\nSize in bytes: %d\n%!" (SDSL.global_size_in_bytes ())
 
 let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_constants = true)
     ~num_parallel_tasks precision () =
   (* let epochs = 20000 in *)
-  (* let epochs = 2000 in *)
+  let epochs = 2000 in
   (* let epochs = 200 in *)
-  let epochs = 20 in
+  (* let epochs = 20 in *)
   let bench_title =
     Sexp.to_string_hum
     @@ [%sexp_of:
@@ -149,6 +158,7 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   Exec_as_gccjit.optimization_level := opti_level;
   SDSL.num_parallel_tasks := num_parallel_tasks;
   SDSL.disable_all_debugs ();
+  (* SDSL.enable_all_debugs (); *)
   SDSL.drop_all_sessions ();
   let open SDSL.O in
   Random.init 0;
@@ -156,11 +166,15 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   let hid_2_3 = Shape.Dim 8 in
   let hid_4_5 = Shape.Dim 4 in
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
-  let len = 420 in
+  let len = 4200 in
+  (* let len = 420 in *)
   let minibatch = 10 in
   let batch = minibatch * num_parallel_tasks in
   let n_batches = 2 * len / batch in
   let steps = epochs * n_batches in
+  (* let run_for_steps = 10000 * n_batches in *)
+  let run_for_steps = 100 * n_batches in
+  (* let run_for_steps = n_batches in *)
   let noise () = Random.float_range (-0.1) 0.1 in
   let moons_flat =
     Array.concat_map (Array.create ~len ())
@@ -200,8 +214,8 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
              )
      in *)
   (* let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 16 + ("w1" * x))) in *)
-  let%nn_dt session_step ~o:1 = n =+ 1 /. !..num_parallel_tasks in
-  let%nn_dt minus_lr ~o:1 = n =: -0.1 *. (!..steps - session_step) /. !..steps in
+  let%nn_dt session_step ~o:1 = n =+ 1 in
+  let%nn_dt minus_lr ~o:1 = n =: -0.01 *. (!..steps - session_step) /. !..steps in
   SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = moons_flat @.| session_step in
   let%nn_op moons_class = moons_classes @.| session_step in
@@ -219,22 +233,29 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   in
   (* let reg_loss = List.map ~f:ssq [ w1; w2; b1; b2 ] |> List.reduce_exn ~f:FDSL.O.( + ) in *)
   let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..minibatch) + (0.0001 *. reg_loss) in
+  (* This is not really an epoch loss, it's a run_for_steps cumulative loss. *)
   let%nn_dt epoch_loss ~o:1 = n =+ total_loss in
+  let loss = ref 0.0 in
+  Stdio.printf "\n%!";
   while not !stop do
-    SDSL.refresh_session ~run_for_steps:n_batches ();
-    step := !step + n_batches;
-    let loss = epoch_loss.@[0] in
-    if Float.(loss < !min_loss) then min_loss := loss;
-    if Float.(loss > !max_loss) then max_loss := loss;
+    SDSL.refresh_session ~run_for_steps ();
+    step := !step + run_for_steps;
+    loss := epoch_loss.@[0];
+    if Float.(!loss < !min_loss) then min_loss := !loss;
+    if Float.(!loss > !max_loss) then max_loss := !loss;
     learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
-    losses := loss :: !losses;
-    log_losses := Float.log loss :: !log_losses;
+    losses := !loss :: !losses;
+    log_losses := Float.log !loss :: !log_losses;
     if !step / n_batches % (epochs / 10) = 0 || !stop then (
       Stdio.printf "Minus learning rate over minibatch for step %d of %d: %f\n%!" !step steps minus_lr.@[0];
-      Stdio.printf "Epoch loss for step %d: %f; min loss: %f; max loss: %f\n%!" !step
-        loss !min_loss !max_loss);
+      Stdio.printf "Epoch loss for step %d: %f; min loss: %f; max loss: %f\n%!" !step !loss !min_loss
+        !max_loss);
+    (* Stdio.printf "\nPreamble:\n%!";
+       SDSL.print_preamble ();
+       Stdio.printf "\nTree:\n%!";
+       SDSL.print_node_tree ~with_grad:true ~depth:9 total_loss.id; *)
     epoch_loss.@[0] <- 0.0;
-    if !step >= steps then stop := true;
+    if !step >= steps then stop := true
   done;
   let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
@@ -242,14 +263,16 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   (* let train_mem = Mem_usage.info () in *)
   let final_time = Time_now.nanoseconds_since_unix_epoch () in
   let time_in_sec = Int63.(to_float @@ (final_time - init_time)) /. 1000_000_000. in
+  Stdio.printf "\nTime in sec: %f\n%!" time_in_sec;
   let result =
     PrintBox_utils.Benchmark
       {
         bench_title;
         time_in_sec;
         total_size_in_bytes = SDSL.global_size_in_bytes ();
-        result_label = "min minibatch loss, last epoch loss";
-        result = [%sexp_of: float * float] (!min_loss, epoch_loss.@[0]);
+        result_label = "min epoch loss, last epoch loss";
+        (* This is not really an epoch loss, it's a run_for_steps cumulative loss. *)
+        result = [%sexp_of: float * float] (!min_loss, !loss);
       }
   in
   SDSL.close_session ();
@@ -301,9 +324,9 @@ let classify_moons ~virtualize executor ~opti_level ~inlining_cutoff ?(inline_co
   Stdio.printf "\n%!";
   result
 
-let benchmark_executor = SDSL.Interpreter
+let benchmark_executor = SDSL.Gccjit
 
-let  () =
+let _suspended () =
   ignore
   @@ classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
        ~num_parallel_tasks:21 CDSL.single ()
@@ -313,43 +336,39 @@ let benchmarks =
     (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:1 CDSL.single; *)
     classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:1
       CDSL.single;
-    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:1
-      CDSL.single;
     (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:2 CDSL.single; *)
     classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:2
-      CDSL.single;
-    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:2
       CDSL.single;
     (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:4 CDSL.single; *)
     classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:4
       CDSL.single;
-    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:4
+    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:5
       CDSL.single;
     (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:10
        CDSL.single; *)
     classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:10
       CDSL.single;
-    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:10
+    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:12
+      CDSL.single;
+    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:15
+      CDSL.single;
+    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:18
       CDSL.single;
     (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:20
        CDSL.single; *)
-    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:20
+    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:21
       CDSL.single;
-    classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:20
-      CDSL.single;
-    (* classify_moons ~virtualize:false benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:30
-       CDSL.single; *)
     (* classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:30
-      CDSL.single; *)
-    (* classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:5 ~num_parallel_tasks:30
-      CDSL.single; *)
+       CDSL.single; *)
+    (* classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:42
+       CDSL.single; *)
     (* classify_moons ~virtualize:true benchmark_executor ~opti_level:3 ~inlining_cutoff:9 ~num_parallel_tasks:20 CDSL.single; *)
   ]
 
-let _suspended () =
+let () =
   List.map benchmarks ~f:(fun bench -> bench ()) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
-(* Example output from back when using core_bench, 200 epochs (all are non-virtual):
+(* Early example output from back when using core_bench, 200 epochs (all are non-virtual):
 
     ┌────────────────────────────────┬──────────────┬─────────────┬────────────┬────────────┬────────────┐
     │ Name                           │     Time/Run │     mWd/Run │   mjWd/Run │   Prom/Run │ Percentage │
@@ -380,67 +399,21 @@ let _suspended () =
     │ virtualized gccjit O3 double   │   2_237.71ms │      9.06Mw │   875.33kw │   867.32kw │      1.80% │
     └────────────────────────────────┴──────────────┴─────────────┴────────────┴────────────┴────────────┘
 
-    Example output from back when using core_bench, 20000 epochs (all are non-virtual):
+   Parallelization turned out to be a failed sub-project, because the Gccjit-compiled code has too much
+   memory contention. There is no benefit from running it in parallel unless we prepare a "working-memory"
+   copy of the specific sub-tensors that each task operates on.
 
-    ┌──────────────────────────────┬──────────┬─────────┬──────────┬──────────┬────────────┐
-    │ Name                         │ Time/Run │ mWd/Run │ mjWd/Run │ Prom/Run │ Percentage │
-    ├──────────────────────────────┼──────────┼─────────┼──────────┼──────────┼────────────┤
-    │ non-virt. gccjit O0 single   │   96.55s │ 96.35Mw │   1.32Mw │   1.07Mw │     91.57% │
-    │ non-virt. gccjit O1 single   │   27.81s │ 96.34Mw │   1.31Mw │   1.07Mw │     26.38% │
-    │ non-virt. gccjit O2 single   │   18.43s │ 96.35Mw │   1.31Mw │   1.07Mw │     17.48% │
-    │ non-virt. gccjit O3 single   │   16.09s │ 96.35Mw │   1.31Mw │   1.07Mw │     15.26% │
-    │ virtualized gccjit O0 single │   92.85s │ 99.03Mw │   1.43Mw │   1.18Mw │     88.06% │
-    │ virtualized gccjit O1 single │   24.11s │ 99.03Mw │   1.42Mw │   1.18Mw │     22.86% │
-    │ virtualized gccjit O2 single │   18.44s │ 99.03Mw │   1.42Mw │   1.18Mw │     17.49% │
-    │ virtualized gccjit O3 single │   15.00s │ 99.03Mw │   1.42Mw │   1.18Mw │     14.23% │
-    │ non-virt. gccjit O0 double   │  105.44s │ 96.35Mw │   1.31Mw │   1.07Mw │    100.00% │
-    │ non-virt. gccjit O1 double   │   28.42s │ 96.35Mw │   1.31Mw │   1.07Mw │     26.95% │
-    │ non-virt. gccjit O2 double   │   21.55s │ 96.35Mw │   1.31Mw │   1.07Mw │     20.44% │
-    │ non-virt. gccjit O3 double   │   17.42s │ 96.35Mw │   1.31Mw │   1.07Mw │     16.53% │
-    │ virtualized gccjit O0 double │   93.55s │ 99.03Mw │   1.42Mw │   1.18Mw │     88.73% │
-    │ virtualized gccjit O1 double │   24.92s │ 99.03Mw │   1.42Mw │   1.18Mw │     23.64% │
-    │ virtualized gccjit O2 double │   20.29s │ 99.03Mw │   1.42Mw │   1.18Mw │     19.25% │
-    │ virtualized gccjit O3 double │   17.72s │ 99.03Mw │   1.42Mw │   1.18Mw │     16.80% │
-    └──────────────────────────────┴──────────┴─────────┴──────────┴──────────┴────────────┘
-
-    Example 20000 epochs, NIC = Not Inlining Constants:
-
-    ┌────────────────────────────────────────────────────┬─────────────┬───────────────┬───────┬────────┬─────────────────────────────────────────────┐
-    │Benchmarks                                          │Time in sec  │Memory in bytes│Speedup│Mem gain│min minibatch loss, last epoch loss          │
-    ├────────────────────────────────────────────────────┼─────────────┼───────────────┼───────┼────────┼─────────────────────────────────────────────┤
-    │(non-v. Gccjit gcc-opt 0 inlining 3 ... Single_prec)│101.021516776│38072          │1.045  │2.000   │(0.00042827261495403945 0.034261809196323156)│
-    │(non-v. Gccjit gcc-opt 2 inlining 3 ... Single_prec)│19.912496753 │38072          │5.301  │2.000   │(0.00042827261495403945 0.034261809196323156)│
-    │(non-v. Gccjit gcc-opt 3 inlining 3 ... Single_prec)│15.544545288 │38072          │6.790  │2.000   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtu. Gccjit gcc-opt 0 inlining 3 NIC Single_prec)│94.163581659 │24472          │1.121  │3.111   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtu. Gccjit gcc-opt 2 inlining 3 NIC Single_prec)│18.416218613 │24472          │5.732  │3.111   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtu. Gccjit gcc-opt 3 inlining 3 NIC Single_prec)│14.896624094 │24472          │7.086  │3.111   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtu. Gccjit gcc-opt 0 inlining 3 ... Single_prec)│94.430359833 │24372          │1.118  │3.124   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtu. Gccjit gcc-opt 2 inlining 3 ... Single_prec)│17.247103467 │24372          │6.120  │3.124   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtu. Gccjit gcc-opt 3 inlining 3 ... Single_prec)│13.818436994 │24372          │7.639  │3.124   │(0.00042827261495403945 0.034261809196323156)│
-    │(non-v. Gccjit gcc-opt 3 inlining 3 ... Double_prec)│16.689233327 │76144          │6.325  │1.000   │(0.00039677893178988915 0.031742315389520596)│
-    │(virtu. Gccjit gcc-opt 3 inlining 3 NIC Double_prec)│15.8861714   │48944          │6.644  │1.556   │(0.000423889497540527 0.033911160707398469)  │
-    │(virtu. Gccjit gcc-opt 3 inlining 3 ... Double_prec)│14.124670616 │48744          │7.473  │1.562   │(0.00040795928131523104 0.032636843225462668)│
-    │(virtu. Gccjit gcc-opt 0 inlining 5 NIC Single_prec)│105.55315567 │24152          │1.000  │3.153   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtu. Gccjit gcc-opt 2 inlining 5 NIC Single_prec)│19.026866424 │24152          │5.548  │3.153   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtu. Gccjit gcc-opt 3 inlining 5 NIC Single_prec)│15.752430923 │24152          │6.701  │3.153   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtu. Gccjit gcc-opt 0 inlining 5 ... Single_prec)│104.954749848│24052          │1.006  │3.166   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtu. Gccjit gcc-opt 2 inlining 5 ... Single_prec)│17.903592128 │24052          │5.896  │3.166   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtu. Gccjit gcc-opt 3 inlining 5 ... Single_prec)│15.010505377 │24052          │7.032  │3.166   │(0.00042827261495403945 0.034261809196323156)│
-    │(virtu. Gccjit gcc-opt 3 inlining 5 NIC Double_prec)│16.499116244 │48304          │6.398  │1.576   │(0.000423889497540527 0.033911160707398469)  │
-    │(virtu. Gccjit gcc-opt 3 inlining 5 ... Double_prec)│15.14814802  │48104          │6.968  │1.583   │(0.00040795928131523104 0.032636843225462668)│
-    └────────────────────────────────────────────────────┴─────────────┴───────────────┴───────┴────────┴─────────────────────────────────────────────┘
-
-    Another example 20 epochs:
-
-    ┌────────────────────────────────────────────────────┬───────────┬───────────────┬───────┬────────┬──────────────────────────────────────┐
-    │Benchmarks                                          │Time in sec│Memory in bytes│Speedup│Mem gain│min minibatch loss, last epoch loss   │
-    ├────────────────────────────────────────────────────┼───────────┼───────────────┼───────┼────────┼──────────────────────────────────────┤
-    │(non-v. Gccjit gcc-opt 3 inlining 3 ... Single_prec)│1.774250802│38072          │2.412  │1.000   │(1.1707446575164795 93.65994119644165)│
-    │(virtu. Gccjit gcc-opt 3 inlining 3 NIC Single_prec)│1.207835761│24472          │3.543  │1.556   │(1.1707446575164795 93.65994119644165)│
-    │(virtu. Gccjit gcc-opt 3 inlining 3 ... Single_prec)│1.236990811│24372          │3.460  │1.562   │(1.1707446575164795 93.65994119644165)│
-    │(virtu. Gccjit gcc-opt 3 inlining 5 NIC Single_prec)│1.304117912│24152          │3.282  │1.576   │(1.1707446575164795 93.65994119644165)│
-    │(virtu. Gccjit gcc-opt 3 inlining 5 ... Single_prec)│1.255166352│24052          │3.410  │1.583   │(1.1707446575164795 93.65994119644165)│
-    │(virtu. Gccjit gcc-opt 3 inlining 9 NIC Single_prec)│4.279828003│20632          │1.000  │1.845   │(1.1707446575164795 93.65994119644165)│
-    │(virtu. Gccjit gcc-opt 3 inlining 9 ... Single_prec)│3.924971464│20532          │1.090  │1.854   │(1.1707446575164795 93.65994119644165)│
-    └────────────────────────────────────────────────────┴───────────┴───────────────┴───────┴────────┴──────────────────────────────────────┘
+    ┌───────────────────────────────────────────────────┬────────────┬───────────────┬───────┬────────┬───────────────────────────────────────┐
+    │Benchmarks                                         │Time in sec │Memory in bytes│Speedup│Mem gain│min epoch loss, last epoch loss        │
+    ├───────────────────────────────────────────────────┼────────────┼───────────────┼───────┼────────┼───────────────────────────────────────┤
+    │(virtu. gcc-opt 3 inline 3 parallel 1 Single_prec) │11.504924748│114572         │1.106  │2.941   │(60.326202392578125 60.326202392578125)│
+    │(virtu. gcc-opt 3 inline 3 parallel 2 Single_prec) │8.327399981 │125692         │1.528  │2.681   │(42008.91796875 42008.91796875)        │
+    │(virtu. gcc-opt 3 inline 3 parallel 4 Single_prec) │8.970155171 │147932         │1.419  │2.278   │(13.373936653137207 13.373936653137207)│
+    │(virtu. gcc-opt 3 inline 3 parallel 5 Single_prec) │9.000583522 │159052         │1.414  │2.119   │(16807.171875 16807.171875)            │
+    │(virtu. gcc-opt 3 inline 3 parallel 10 Single_prec)│11.491387089│214652         │1.108  │1.570   │(8406.435546875 8407.2265625)          │
+    │(virtu. gcc-opt 3 inline 3 parallel 12 Single_prec)│10.743618418│236892         │1.185  │1.422   │(7006.48681640625 7008.13037109375)    │
+    │(virtu. gcc-opt 3 inline 3 parallel 15 Single_prec)│11.777287131│270252         │1.081  │1.247   │(5603.9892578125 5605.5009765625)      │
+    │(virtu. gcc-opt 3 inline 3 parallel 18 Single_prec)│11.590590388│302172         │1.098  │1.115   │(2.7644500732421875 3.0231761932373047)│
+    │(virtu. gcc-opt 3 inline 3 parallel 21 Single_prec)│12.726874021│336972         │1.000  │1.000   │(3.4613373279571533 3.8374130725860596)│
+    └───────────────────────────────────────────────────┴────────────┴───────────────┴───────┴────────┴───────────────────────────────────────┘
 *)
