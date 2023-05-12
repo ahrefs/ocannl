@@ -246,7 +246,6 @@ let to_low_level (code : t) : unit low_level =
               For_loop
                 { index = it; from_ = 0; to_ = dim - 1; body = for_loop (it :: rev_iters) (product, iters) }
           | Shape.Parallel :: _product, _it :: _iters ->
-              (* FIXME: was this filtered out? *)
               invalid_arg "Code.to_low_level: Accum_binop projections parallel dim found in product space"
           | _ -> invalid_arg "Code.to_low_level: Accum_binop projections dims-iterators mismatch"
         in
@@ -275,7 +274,6 @@ let to_low_level (code : t) : unit low_level =
               For_loop
                 { index = it; from_ = 0; to_ = dim - 1; body = for_loop (it :: rev_iters) (product, iters) }
           | Parallel :: _product, _it :: _iters ->
-              (* FIXME: was this filtered out? *)
               invalid_arg "Code.to_low_level: Accum_binop projections parallel dim found in product space"
           | _ -> invalid_arg "Code.to_low_level: Accum_unop projections dims-iterators mismatch"
         in
@@ -340,7 +338,7 @@ let to_low_level (code : t) : unit low_level =
 
   loop ~single_task:false code
 
-let interpreter_print_comments = ref false
+let executor_print_comments = ref false
 let keep_files_in_run_directory = ref false
 let with_debug = ref false
 let debug_virtual_nodes = ref false
@@ -366,6 +364,16 @@ let get_as_float ptr idcs =
   | Grad -> N.get_as_float (Option.value_exn (N.get ptr.id).grad) idcs
 
 let debug_trace_interpretation = ref false
+
+let interpret_binop op v1 v2 =
+  let open Float in
+  match op with
+  | Arg1 -> v1
+  | Arg2 -> v2
+  | Add -> v1 + v2
+  | Mul -> v1 * v2
+  | ToPowOf -> if is_integer v2 then int_pow v1 @@ to_int v2 else v1 ** v2
+  | Relu_gate -> if v1 > 0.0 then v2 else 0.0
 
 let interpret_code ?task_id synchronizer llc =
   (* Local scope ids can be non-unique due to inlining. *)
@@ -434,11 +442,13 @@ let interpret_code ?task_id synchronizer llc =
           (* if task_id () = 0 then *) NodeUI.print_node_preamble ptr.id;
           raise e
     | Set_local (id, llv) -> locals := Map.update !locals id ~f:(fun _ -> loop_float env llv)
-    | Comment message when !with_debug && !interpreter_print_comments -> Stdio.printf "%s\n%!" message
-    | Dynamic_indices { tensor = { id; field = Value }; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        dynamic_indices env (N.get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body
-    | Dynamic_indices { tensor = { id; field = Grad }; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        dynamic_indices env (Option.value_exn (N.get id).grad) ~tensor_idcs ~dynamic_idcs ~target_dims body
+    | Comment message when !with_debug && !executor_print_comments -> Stdio.printf "%s\n%!" message
+    | Dynamic_indices
+        { tensor = { id; field = Value }; tensor_idcs; dynamic_idcs; target_dims; body } ->
+        dynamic_indices env (N.get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body;
+    | Dynamic_indices
+        { tensor = { id; field = Grad }; tensor_idcs; dynamic_idcs; target_dims; body } ->
+        dynamic_indices env (Option.value_exn (N.get id).grad) ~tensor_idcs ~dynamic_idcs ~target_dims body;
     | Comment c ->
         if !debug_trace_interpretation then (
           Caml.Format.printf "TRACE: %s -- prior state of nodes: {\n%!" c;
@@ -519,13 +529,7 @@ let interpret_code ?task_id synchronizer llc =
     | Get_global (C_function _) -> failwith "NOT IMPLEMENTED YET: jit-dynloading C calls in the interpreter"
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
-    | Binop (Add, llv1, llv2) -> loop llv1 + loop llv2
-    | Binop (Mul, llv1, llv2) -> loop llv1 * loop llv2
-    | Binop (ToPowOf, llv1, llv2) ->
-        let v1 = loop llv1 in
-        let v2 = loop llv2 in
-        Float.(if is_integer v2 then int_pow v1 @@ to_int v2 else v1 ** v2)
-    | Binop (Relu_gate, llv1, llv2) -> if loop llv1 > 0.0 then loop llv2 else 0.0
+    | Binop (op, llv1, llv2) -> interpret_binop op (loop llv1) (loop llv2)
     | Unop (Identity, llv) -> loop llv
     | Unop (Relu, llv) ->
         let v = loop llv in
@@ -1120,7 +1124,7 @@ let synchronizer = ref None
 let interpret_task_id_func ~name:_ compiled ~task_id =
   if task_id = 0 then (
     synchronizer := Some (Synchronizer.make !Shape.num_parallel_tasks);
-    if !debug_trace_interpretation then
+    if !debug_trace_interpretation && task_id = 0 then
       Caml.Format.printf "TRACE: Interpreted program:@ %a\n%!" Sexp.pp_hum
       @@ sexp_of_low_level Unit.sexp_of_t compiled)
   else
@@ -1140,7 +1144,7 @@ module CDSL = struct
   let data_of_node field (n : NodeUI.t) : NodeUI.tensor_ptr = { id = n.id; field }
   let single = NodeUI.single
   let double = NodeUI.double
-  let interpreter_print_comments = interpreter_print_comments
+  let executor_print_comments = executor_print_comments
   let keep_files_in_run_directory = keep_files_in_run_directory
   let with_debug = with_debug
   let virtualize_settings = virtualize_settings
