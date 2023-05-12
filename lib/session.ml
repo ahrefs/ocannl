@@ -155,11 +155,11 @@ let perform_initialization =
   List.iter ~f:(function
     | { Code.tensor = { id; field = Value }; dims; init_op } ->
         (* FIXME(#135): Defensive. For now, value and gradient should be non-virtual reciprocically. *)
-        if !Code.debug_virtual_nodes || not (NodeUI.get id).virtual_ then
+        if (not (NodeUI.get id).virtual_) && not (NodeUI.get id).device_only then
           (NodeUI.N.get id).value <- NodeUI.create_ndarray !Formula.default_value_prec (dims ()) init_op
     | { tensor = { id; field = Grad }; dims; init_op } ->
         let n = NodeUI.N.get id in
-        if !Code.debug_virtual_nodes || not (NodeUI.get id).virtual_ then
+        if (not (NodeUI.get id).virtual_) && not (NodeUI.get id).device_only then
           n.grad <- Some (NodeUI.create_ndarray !Formula.default_grad_prec (dims ()) init_op)
         else assert (Option.is_some n.grad))
 
@@ -426,17 +426,21 @@ module SDSL = struct
     | None -> [||]
     | Some a -> NodeUI.retrieve_2d_points ?from_axis ~xdim ~ydim a
 
-  let enable_all_debugs ?(trace_interpreter = false) () =
+  let enable_all_debugs ?(trace_interpreter = false) ?(hosted_only = true) () =
     Code.CDSL.with_debug := true;
     Code.CDSL.keep_files_in_run_directory := true;
-    if trace_interpreter then Code.CDSL.debug_trace_interpretation := true;
-    Code.CDSL.debug_virtual_nodes := true
+    if hosted_only then (
+      Code.CDSL.virtualize_settings.enable_device_only <- false;
+      Code.CDSL.virtualize_settings.enable_virtual <- false);
+    if trace_interpreter then Code.CDSL.debug_trace_interpretation := true
 
-  let disable_all_debugs () =
+  let disable_all_debugs ?(restore_defaults = false) () =
     Code.CDSL.debug_trace_interpretation := false;
     Code.CDSL.with_debug := false;
     Code.CDSL.keep_files_in_run_directory := false;
-    Code.CDSL.debug_virtual_nodes := false
+    if restore_defaults then (
+      Code.CDSL.virtualize_settings.enable_device_only <- true;
+      Code.CDSL.virtualize_settings.enable_virtual <- true)
 
   let default_value_prec = Formula.default_value_prec
   let default_grad_prec = Formula.default_grad_prec

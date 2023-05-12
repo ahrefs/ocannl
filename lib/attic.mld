@@ -226,15 +226,6 @@ type nulop =
 
 
 
-        if !debug_virtual_nodes then (
-          try set_from_float id.tensor (lookup env idcs_for_debug) result
-          with e ->
-            Stdio.eprintf "\nError interpreter debug: idcs=\n%s\nenv=\n%s\n%!"
-              (Sexp.to_string_hum @@ [%sexp_of: index array] idcs_for_debug)
-              (Sexp.to_string_hum @@ sexp_of_int_env env);
-            raise e);
-
-
 
 let get_value (type val_t arr_t) (prec : (val_t, arr_t) precision) uid : arr_t =
   let n = Hashtbl.find_exn global.node_store uid in

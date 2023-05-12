@@ -149,7 +149,6 @@ let classify_moons ~virtualize ~on_device executor ~opti_level ~inlining_cutoff 
   in
   Stdio.prerr_endline @@ "\n\n****** Benchmarking virtualized: " ^ bench_title ^ " for "
   ^ Int.to_string epochs ^ " epochs ******";
-  CDSL.debug_virtual_nodes := false;
   CDSL.virtualize_settings.enable_virtual <- virtualize;
   CDSL.virtualize_settings.enable_device_only <- on_device;
   CDSL.virtualize_settings.max_visits <- inlining_cutoff;

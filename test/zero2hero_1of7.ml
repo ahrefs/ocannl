@@ -96,7 +96,8 @@ let%expect_test "Graph drawing fetch" =
   let open SDSL.O in
   SDSL.drop_all_sessions ();
   Random.init 0;
-  CDSL.debug_virtual_nodes := true;
+  CDSL.virtualize_settings.enable_virtual <- false;
+  CDSL.virtualize_settings.enable_device_only <- false;
   CDSL.virtualize_settings.inline_constants <- false;
   let%nn_op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%nn_op f5 = f 5 in

@@ -341,7 +341,6 @@ let to_low_level (code : t) : unit low_level =
 let executor_print_comments = ref false
 let keep_files_in_run_directory = ref false
 let with_debug = ref false
-let debug_virtual_nodes = ref false
 
 type int_env = (sym_index, int) Base.Map.Poly.t * (Shape.symbol, int) Base.Map.Poly.t
 
@@ -533,18 +532,6 @@ let interpret_code ?task_id synchronizer llc =
         let result = Map.find_exn !locals id in
         locals := old_locals;
         let idcs = lookup env orig_indices in
-        if !debug_virtual_nodes then (
-          try set_from_float id.tensor idcs result
-          with e ->
-            Caml.Format.printf "ERROR: virtual %a [%a -> %a] -- original indices out of bounds\n%!"
-              Sexp.pp_hum
-              ([%sexp_of: NodeUI.tensor_ptr] id.tensor)
-              Sexp.pp_hum
-              ([%sexp_of: index array] orig_indices)
-              Sexp.pp_hum
-              ([%sexp_of: int array] idcs);
-            if Int.(task_id () = 0) then NodeUI.print_node_preamble id.tensor.id;
-            raise e);
         if !debug_trace_interpretation then
           Caml.Format.printf "TRACE: %a [%a / %a] (%f) <-> %f}\n%!" Sexp.pp_hum
             ([%sexp_of: NodeUI.tensor_ptr] id.tensor)
@@ -1058,8 +1045,7 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
           Some (Set (tensor, indices, loop_float ~env_dom llv)))
     | Set_local (id, llv) ->
         let node = Hashtbl.find_exn node_store id.tensor in
-        if virtualize_settings.inline_constants && Option.is_some node.scalar && not !debug_virtual_nodes then
-          None
+        if virtualize_settings.inline_constants && Option.is_some node.scalar then None
         else (
           assert (not node.non_virtual);
           Some (Set_local (id, loop_float ~env_dom llv)))
@@ -1077,9 +1063,6 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
     | Get (tensor, indices) -> (
         let node = get_node node_store tensor in
         match node.scalar with
-        | Some c when virtualize_settings.inline_constants && !debug_virtual_nodes ->
-            let id = get_scope tensor in
-            Local_scope { id; prec = node.prec; body = Set_local (id, Constant c); orig_indices = indices }
         | Some c when virtualize_settings.inline_constants -> Constant c
         | _ ->
             if not node.non_virtual then
@@ -1090,8 +1073,6 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
     | Local_scope { id; prec; body; orig_indices } -> (
         let node = get_node node_store id.tensor in
         match node.scalar with
-        | Some c when virtualize_settings.inline_constants && !debug_virtual_nodes ->
-            Local_scope { id; prec; body = Set_local (id, Constant c); orig_indices }
         | Some c when virtualize_settings.inline_constants -> Constant c
         | _ ->
             assert (
@@ -1188,6 +1169,5 @@ module CDSL = struct
   let keep_files_in_run_directory = keep_files_in_run_directory
   let with_debug = with_debug
   let virtualize_settings = virtualize_settings
-  let debug_virtual_nodes = debug_virtual_nodes
   let debug_trace_interpretation = debug_trace_interpretation
 end
