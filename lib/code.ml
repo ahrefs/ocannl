@@ -414,6 +414,38 @@ let interpret_code ?task_id synchronizer llc =
         if !debug_trace_interpretation then
           Caml.Format.printf "TRACE: task_id %d synchronized for %d: %s\n%!" task_id stage info
     | Reset_synchronizer -> Synchronizer.synchronize_and_reset ~task_id:(task_id ()) synchronizer
+    | Set (ptr, indices, Binop (op, Get (ptr2, indices2), c2))
+      when NodeUI.equal_tensor_ptr ptr ptr2 && [%equal: index array] indices indices2 ->
+        if !debug_trace_interpretation then
+          Caml.Format.printf "{TRACE: update %a [%a] <- ...\n%!" Sexp.pp_hum
+            ([%sexp_of: NodeUI.tensor_ptr] ptr)
+            Sexp.pp_hum
+            ([%sexp_of: index array] indices);
+        let idcs = lookup env indices in
+        (* Order computation to reduce prevalence of race conditions. *)
+        let v2 = loop_float env c2 in
+        let v1 =
+          try get_as_float ptr idcs
+          with e ->
+            Caml.Format.printf "ERROR: %a [%a -> %a] -- indices out of bounds\n%!" Sexp.pp_hum
+              ([%sexp_of: NodeUI.tensor_ptr] ptr)
+              Sexp.pp_hum
+              ([%sexp_of: index array] indices)
+              Sexp.pp_hum
+              ([%sexp_of: int array] idcs);
+            if task_id () = 0 then NodeUI.print_node_preamble ptr.id;
+            raise e
+        in
+        let result = interpret_binop op v1 v2 in
+        if !debug_trace_interpretation then
+          Caml.Format.printf "TRACE: %a [%a -> %a] (%f) <- %f}\n%!" Sexp.pp_hum
+            ([%sexp_of: NodeUI.tensor_ptr] ptr)
+            Sexp.pp_hum
+            ([%sexp_of: index array] indices)
+            Sexp.pp_hum
+            ([%sexp_of: int array] idcs)
+            v1 result;
+        set_from_float ptr idcs result
     | Set (ptr, indices, llv) ->
         if !debug_trace_interpretation then
           Caml.Format.printf "{TRACE: %a [%a] <- ...\n%!" Sexp.pp_hum
