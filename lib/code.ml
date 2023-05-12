@@ -446,7 +446,7 @@ let interpret_code ?task_id synchronizer llc =
             ([%sexp_of: int array] idcs)
             v1 result;
         set_from_float ptr idcs result
-    | Set (ptr, indices, llv) ->
+    | Set (ptr, indices, llv) -> (
         if !debug_trace_interpretation then
           Caml.Format.printf "{TRACE: %a [%a] <- ...\n%!" Sexp.pp_hum
             ([%sexp_of: NodeUI.tensor_ptr] ptr)
@@ -471,16 +471,14 @@ let interpret_code ?task_id synchronizer llc =
             Sexp.pp_hum
             ([%sexp_of: int array] idcs)
             result;
-          (* if task_id () = 0 then *) NodeUI.print_node_preamble ptr.id;
-          raise e
+          if task_id () = 0 then NodeUI.print_node_preamble ptr.id;
+          raise e)
     | Set_local (id, llv) -> locals := Map.update !locals id ~f:(fun _ -> loop_float env llv)
     | Comment message when !with_debug && !executor_print_comments -> Stdio.printf "%s\n%!" message
-    | Dynamic_indices
-        { tensor = { id; field = Value }; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        dynamic_indices env (N.get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body;
-    | Dynamic_indices
-        { tensor = { id; field = Grad }; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        dynamic_indices env (Option.value_exn (N.get id).grad) ~tensor_idcs ~dynamic_idcs ~target_dims body;
+    | Dynamic_indices { tensor = { id; field = Value }; tensor_idcs; dynamic_idcs; target_dims; body } ->
+        dynamic_indices env (N.get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body
+    | Dynamic_indices { tensor = { id; field = Grad }; tensor_idcs; dynamic_idcs; target_dims; body } ->
+        dynamic_indices env (Option.value_exn (N.get id).grad) ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Comment c ->
         if !debug_trace_interpretation then (
           Caml.Format.printf "TRACE: %s -- prior state of nodes: {\n%!" c;
@@ -545,7 +543,7 @@ let interpret_code ?task_id synchronizer llc =
               ([%sexp_of: index array] orig_indices)
               Sexp.pp_hum
               ([%sexp_of: int array] idcs);
-            (* if Int.(task_id () = 0) then *) NodeUI.print_node_preamble id.tensor.id;
+            if Int.(task_id () = 0) then NodeUI.print_node_preamble id.tensor.id;
             raise e);
         if !debug_trace_interpretation then
           Caml.Format.printf "TRACE: %a [%a / %a] (%f) <-> %f}\n%!" Sexp.pp_hum
