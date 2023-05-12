@@ -294,6 +294,9 @@ module FDSL = struct
   let init_const ~l ?(b = []) ?(i = []) ?(o = []) cs =
     term ~label:l ~needs_gradient:false ~batch_dims:b ~input_dims:i ~output_dims:o ~init_op:(Constant_fill cs)
       ()
+  let init_param ~l ?(b = []) ?(i = []) ?(o = []) cs =
+    term ~label:l ~needs_gradient:true ~batch_dims:b ~input_dims:i ~output_dims:o ~init_op:(Constant_fill cs)
+      ()
 end
 
 module NFO = struct
