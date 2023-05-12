@@ -271,7 +271,9 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
               index = Code.new_sym_index macrobatch_loop_symbol;
               from_ = 0;
               to_ = run_for_steps - 1;
-              body = Lines [| Reset_synchronizer; compile_proc ~name !session_step_update |];
+              body =
+                Lines
+                  [| Comment "Update sub-step"; Reset_synchronizer; compile_proc ~name !session_step_update |];
             }));
   if generating || reinit || roots_changed then (
     let num_inits = List.length !session_initializations in
@@ -280,14 +282,19 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
     session_initialized := num_inits);
   if (not force_no_init) && (generating || reinit) then
     session_step_update_routine := !exec_task_id_func ~name !session_step_update_compiled;
-  if run && run_for_steps > 0 then (
+  if run && run_for_steps > 0 then
     if !Shape.num_parallel_tasks = 1 then !session_step_update_routine ~task_id:0
     else
-      let tasks = ref [] in
-      for task_id = 0 to !Shape.num_parallel_tasks - 1 do
-        tasks := Caml.Domain.spawn (fun () -> !session_step_update_routine ~task_id) :: !tasks
-      done;
-      List.rev !tasks |> List.iter ~f:Caml.Domain.join)
+      Domainslib.Task.run task_pool (fun () ->
+          Domainslib.Task.parallel_for task_pool ~start:0 ~finish:(!Shape.num_parallel_tasks - 1)
+            ~body:(fun task_id -> !session_step_update_routine ~task_id))
+(* Alternative (non)parallelization loops for performance debugging: *)
+(* let tasks = ref [] in
+   for task_id = 0 to !Shape.num_parallel_tasks - 1 do
+     tasks := Caml.Domain.spawn (fun () -> !session_step_update_routine ~task_id) :: !tasks
+   done;
+   List.rev !tasks |> List.iter ~f:Caml.Domain.join *)
+(* for task_id = 0 to !Shape.num_parallel_tasks - 1 do !session_step_update_routine ~task_id done *)
 
 (** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id].
     Discards all computations (forward, backward, update params, data fetches), but keeps

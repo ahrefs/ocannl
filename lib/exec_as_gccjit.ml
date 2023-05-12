@@ -188,7 +188,13 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
         let lhs, num_typ, is_double = Map.find_exn !locals id in
         let value = loop_float ~name ~env ~num_typ ~is_double value in
         Block.assign !current_block lhs value
-    | Comment c -> Block.comment !current_block c
+    | Comment c ->
+        (if !Code.with_debug && !Code.executor_print_comments then
+         let f = Function.builtin ctx "printf" in
+         Block.eval !current_block
+         @@ RValue.call ctx f
+              [ RValue.string_literal ctx ("\nComment for task %d: " ^ c ^ "\n"); RValue.param task_id ]);
+        Block.comment !current_block c
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
         jit_dynamic_indices ~name ~env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
   and loop_float ~name ~env ~num_typ ~is_double value : rvalue =
