@@ -65,7 +65,8 @@ Some ideas regarding installation (skip or substitute equivalent actions etc.):
 * opam switch create 5.0-flambda ocaml-variants.5.0.0+options ocaml-option-flambda
 * eval $(opam env --switch=5.0-flambda)
 * opam install lsp ocaml-lsp-server ocamlformat
-* gh repo clone savonet/ocaml-mem_usage; cd ocaml-mem_usage; dune build; dune install
+* cd ~; gh repo clone savonet/ocaml-mem_usage; cd ocaml-mem_usage; dune build; dune install
+* cd ~; gh repo clone lukstafi/ppx_minidebug; cd ppx_minidebug; opam install .
 * cd ~/ocannl
 * opam install . --deps-only
 * eval $(opam env)

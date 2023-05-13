@@ -9,7 +9,7 @@
   domainslib
   dynlink
   str
-  mem_usage
+  ; mem_usage
   gccjit
   ppx_minidebug.runtime)
  (preprocess
