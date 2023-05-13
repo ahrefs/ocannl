@@ -253,11 +253,17 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
       | _ -> []
     in
     (* Roots at the time of compilation are hosted, so that they can be consumed downstream. *)
-    Map.iter_keys !Formula.global_roots ~f:(fun id -> (NodeUI.get id).always_hosted <- true);
+    Map.iter_keys !Formula.global_roots ~f:(fun id ->
+        let n = NodeUI.get id in
+        n.never_virtual <- true;
+        n.never_device_only <- true);
     (* Params are hosted also, so they can be updated over multiple steps, stored, updated etc.
        Params would typically be automatically found non-virtual and non-device-only, but there
        are corner cases we prevent here. *)
-    Hashtbl.iter ~f:(fun n -> n.NodeUI.always_hosted <- true) @@ session_params ();
+    Hashtbl.iter ~f:(fun n ->
+        n.NodeUI.never_virtual <- true;
+        n.never_device_only <- true)
+    @@ session_params ();
     (if List.is_empty update_params_code then
        session_step_update := sequential [ preparation; forward; backprop ]
      else
@@ -408,7 +414,8 @@ module SDSL = struct
   let get_node = get_node
   let set_values m cs = Node.(init_ndarray (Constant_fill cs) m.Formula.node.node.value)
   let set_grads m cs = Node.(init_ndarray (Constant_fill cs) (Option.value_exn m.Formula.node.node.grad))
-  let set_non_virtual m = m.Formula.node.always_hosted <- true
+  let set_non_virtual m = m.Formula.node.never_virtual <- true
+  let set_non_device_only m = m.Formula.node.never_device_only <- true
 
   let value_1d_points ?from_axis ~xdim m =
     NodeUI.retrieve_1d_points ?from_axis ~xdim m.Formula.node.node.value

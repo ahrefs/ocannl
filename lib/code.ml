@@ -653,8 +653,8 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         computations = [];
         assignments = Hash_set.Poly.create ();
         accesses = Hashtbl.Poly.create ();
-        non_virtual = n.always_hosted;
-        non_device_only = n.always_hosted;
+        non_virtual = n.never_virtual;
+        non_device_only = n.never_device_only;
         scalar = None;
       })
 
@@ -695,7 +695,7 @@ let precompute_constants ?idcs node_store top_node llv =
   in
   let n = NodeUI.get top_node.id in
   try
-    if n.always_hosted then raise @@ Non_literal 8;
+    if n.never_virtual || n.never_device_only then raise @@ Non_literal 8;
     if (not @@ Hashtbl.is_empty top_node.accesses) && not n.literal then raise @@ Non_literal 6;
     (match idcs with
     | None -> ()
@@ -894,7 +894,7 @@ let process_computation node_store node top_llc =
     if not !has_setter then raise Non_virtual;
     node.computations <- (!at_idcs, top_llc) :: node.computations
   with Non_virtual ->
-    (* (NodeUI.get node.id).always_hosted <- true; *)
+    (NodeUI.get node.id).never_virtual <- true;
     node.non_virtual <- true;
     other_node.non_virtual <- true
 
