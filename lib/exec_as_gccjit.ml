@@ -9,8 +9,13 @@ let session_context =
   ref ctx
 
 type tensor = {
-  ptr : Gccjit.rvalue;  (** Pointer to the first value of the associated [Bigarray]. *)
+  hosted_ptr : Gccjit.rvalue option;
+      (** Pointer to the first value of the associated [Bigarray], if hosted. *)
+  local : Gccjit.lvalue option;
+      (** A local array, if any. If both [hosted_ptr] and [local] are set,
+      they are synchronized initially and at the synchronization points. *)
   dims : int array;  (** Dimensions (shape) of the tensor. *)
+  size_in_bytes : int;
   num_typ : Gccjit.type_;
       (** The type of the stored values: [signed char] (corresponds to precision [Byte]),
       [short] (precision [Half]), [float] (precision [Single]), [double] (precision [Double]). *)
@@ -20,22 +25,41 @@ type tensor = {
 let session_results : Gccjit.result list ref = ref []
 let hoist_dynamic_indices = ref false
 
-let get_tensor ctx data : tensor =
-  let open Node in
+type state = {
+  ctx : Gccjit.context;
+  func : Gccjit.function_;
+  tensors : (NodeUI.tensor_ptr, tensor) Hashtbl.Poly.t;
+  task_init_block : Gccjit.block;
+}
+
+let get_tensor { ctx; func; tensors; task_init_block } ptr : tensor =
   let open Gccjit in
-  let tensor c_typ is_double arr =
-    let num_typ = Type.(get ctx c_typ) in
-    let ptr = RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray arr in
-    let dims = Bigarray.Genarray.dims arr in
-    { ptr; dims; num_typ; is_double }
-  in
-  let open NodeUI in
-  let arr = Option.value_exn @@ get_tensor data in
-  match arr with
-  | Byte_as_int_nd arr -> tensor Type.Signed_char false arr
-  | Half_as_int_nd arr -> tensor Type.Short false arr
-  | Single_nd arr -> tensor Type.Float false arr
-  | Double_nd arr -> tensor Type.Double true arr
+  Hashtbl.find_or_add tensors ptr ~default:(fun () ->
+      let n = NodeUI.(get ptr.id) in
+      let size = Node.shape_size n.node in
+      let size_in_bytes = NodeUI.size_in_bytes ptr in
+      let tensor c_typ is_double arr =
+        let num_typ = Type.(get ctx c_typ) in
+        let hosted_ptr =
+          Some (RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray arr)
+        in
+        let arr_typ = Type.array ctx num_typ size in
+        let local = Function.local func arr_typ @@ NodeUI.tensor_ptr_name ptr in
+        (if size_in_bytes > 0 then
+           let c_index = Type.get ctx Type.Size_t in
+           Block.eval task_init_block
+           @@ RValue.call ctx (Function.builtin ctx "memcpy")
+                [ RValue.lvalue @@ local; Option.value_exn hosted_ptr; RValue.int ctx c_index size_in_bytes ]);
+        let dims = Bigarray.Genarray.dims arr in
+        { hosted_ptr; local = Some local; size_in_bytes; dims; num_typ; is_double }
+      in
+      let open NodeUI in
+      let arr = Option.value_exn @@ get_tensor ptr in
+      match arr with
+      | Byte_as_int_nd arr -> tensor Type.Signed_char false arr
+      | Half_as_int_nd arr -> tensor Type.Short false arr
+      | Single_nd arr -> tensor Type.Float false arr
+      | Double_nd arr -> tensor Type.Double true arr)
 
 let cleanup_session () =
   let open Gccjit in
@@ -73,11 +97,20 @@ let builtin_op = function
   | Code.ToPowOf | Code.Relu_gate | Code.Arg2 | Code.Arg1 ->
       invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
 
-let tensor_ptr_name = function
-  | NodeUI.{ id; field = Value } -> "n" ^ Int.to_string id ^ "_value"
-  | NodeUI.{ id; field = Grad } -> "n" ^ Int.to_string id ^ "_grad"
+let get_ptr tensor =
+  match (tensor.hosted_ptr, tensor.local) with
+  | _, Some lv -> Gccjit.RValue.lvalue lv
+  | Some rv, _ -> rv
+  | None, None -> assert false
 
-let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_level) : Gccjit.block =
+let get_sync_ptr tensor =
+  match (tensor.hosted_ptr, tensor.local) with
+  | Some rv, _ -> rv
+  | _, Some lv -> Gccjit.RValue.lvalue lv
+  | None, None -> assert false
+
+let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body : unit Code.low_level) :
+    Gccjit.block =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
@@ -158,36 +191,37 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
     | Reset_synchronizer when !Shape.num_parallel_tasks <= 1 -> ()
     | Reset_synchronizer ->
         (* failwith "Exec_as_gccjit.jit_code.Reset_synchronizer: NOT IMPLEMENTED YET" *)
-        log_comment ("NOT IMPLEMENTED RESET SYNCHRONIZATER")
+        log_comment "NOT IMPLEMENTED RESET SYNCHRONIZATER"
     | Set (data_node, idcs, Binop (op, Get (tensor, idcs2), c2))
       when NodeUI.equal_tensor_ptr data_node tensor
            && [%equal: Code.index array] idcs idcs2
            && is_builtin_op op ->
-        let tensor = get_tensor ctx data_node in
+        let tensor = get_tensor state data_node in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
-        let lhs = LValue.access_array tensor.ptr offset in
+        let lhs = LValue.access_array (get_sync_ptr tensor) offset in
         Block.assign_op !current_block lhs (builtin_op op) value
-    | Set (data_node, idcs, Binop (op, (Get (tensor, _) as c1), c2))
-      when NodeUI.equal_tensor_ptr data_node tensor ->
-        let tensor = get_tensor ctx data_node in
+    | Set (ptr, idcs, Binop (op, (Get (tensor, _) as c1), c2))
+      when NodeUI.equal_tensor_ptr ptr tensor ->
+        let tensor = get_tensor state ptr in
         let v2 = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
         (* Force the ordering of computations to reduce race conditions. *)
-        let l2 = Function.local func tensor.num_typ (tensor_ptr_name data_node ^ "_" ^ get_uid ()) in
+        let l2 = Function.local func tensor.num_typ (NodeUI.tensor_ptr_name ptr ^ "_" ^ get_uid ()) in
         Block.assign !current_block l2 v2;
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
-        let lhs = LValue.access_array tensor.ptr offset in
+        (* FIXME: do not need to reorder if we don't use get_sync_ptr. *)
+        let lhs = LValue.access_array (get_ptr tensor) offset in
         let v1 = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c1 in
         Block.assign !current_block lhs
         @@ loop_binop op ~num_typ:tensor.num_typ ~is_double:tensor.is_double ~v1 ~v2:(RValue.lvalue l2)
     | Set (data_node, idcs, value) ->
-        let tensor = get_tensor ctx data_node in
+        let tensor = get_tensor state data_node in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
-        let lhs = LValue.access_array tensor.ptr offset in
+        let lhs = LValue.access_array (get_ptr tensor) offset in
         Block.assign !current_block lhs value
     | Set_local (id, value) ->
         let lhs, num_typ, is_double = Map.find_exn !locals id in
@@ -222,10 +256,10 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
         let f = Function.builtin ctx f_name in
         RValue.call ctx f []
     | Get (tensor, idcs) ->
-        let tensor = get_tensor ctx tensor in
+        let tensor = get_tensor state tensor in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
-        RValue.lvalue @@ LValue.access_array tensor.ptr offset
+        RValue.lvalue @@ LValue.access_array (get_ptr tensor) offset
     | Binop (Code.Arg2, _, c2) -> loop c2
     | Binop (Code.Arg1, c1, _) -> loop c1
     | Binop (op, c1, c2) -> loop_binop op ~num_typ ~is_double ~v1:(loop c1) ~v2:(loop c2)
@@ -254,7 +288,7 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
     Block.jump !current_block b_loop_cond;
     current_block := b_after_loop
   and jit_dynamic_indices ~name ~env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body =
-    let tensor = get_tensor ctx tensor in
+    let tensor = get_tensor state tensor in
     let env =
       Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env (Symbol s as key) ->
           let target_dim =
@@ -266,7 +300,7 @@ let jit_code ~name ~env ~task_id ctx func initial_block (body : unit Code.low_le
           let provider_dim = RValue.int ctx c_int provider_dim in
           let idcs = lookup ~provider_dim env tensor_idcs in
           let prov_offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
-          let dyn_index = RValue.lvalue @@ LValue.access_array tensor.ptr prov_offset in
+          let dyn_index = RValue.lvalue @@ LValue.access_array (get_ptr tensor) prov_offset in
           let dyn_index = RValue.cast ctx dyn_index c_index in
           let dyn_index = RValue.binary_op ctx Modulo c_index dyn_index target_dim in
           let data =
@@ -290,8 +324,10 @@ let jit_func ~name ctx proc =
   let env = (Map.Poly.empty, Map.Poly.empty) in
   let task_id = Param.create ctx Type.(get ctx Int) "task_id" in
   let func = Function.create ctx fkind (Type.get ctx Void) name [ task_id ] in
-  let block = Block.create ~name func in
-  let after_proc = jit_code ~name ~env ~task_id ctx func block proc in
+  let task_init_block = Block.create ~name func in
+  let main_block = Block.create ~name func in
+  let state = { ctx; func; task_init_block; tensors = Hashtbl.Poly.create () } in
+  let after_proc = jit_code ~name ~env ~task_id state main_block proc in
   Block.return_void after_proc;
   if !Code.with_debug then
     let suf = "-gccjit-debug.c" in
