@@ -45,6 +45,9 @@ type dim =
   | Parallel
       (** An axis of size [!num_parallel_tasks], such that if an index is derived for it, the index
           will be [Task_id]. *)
+  | Frozen of int
+      (** An axis that should be indexed at a single position during a single `refresh_session`:
+          a dynamic index into it will be a [Frozen_recipient]. *)
 [@@deriving equal, compare, sexp, variants]
 
 type parsed_axis_labels = {
@@ -71,9 +74,13 @@ let given_of_kind = function
   | AxisKey.Input -> given_input
   | AxisKey.Output -> given_output
 
-let dim_to_string = function Dim d -> Int.to_string d | Parallel -> "parallel"
-let dim_1 = equal_dim @@ Dim 1
-let map_dim ~f = function Dim d -> Dim (f d) | Parallel -> Parallel
+let dim_to_string = function
+  | Dim d -> Int.to_string d
+  | Frozen d -> "frozen " ^ Int.to_string d
+  | Parallel -> "parallel"
+
+let dim_1 = function Dim 1 | Frozen 1 -> true | _ -> false
+let map_dim ~f = function Dim d -> Dim (f d) | Frozen d -> Frozen (f d) | Parallel -> Parallel
 
 type dims =
   | Given of dim list
@@ -652,12 +659,17 @@ let rec propagate_shapes (update : update_step) =
       Map.merge ls_xhs.labels sh_xhs ~f:(fun ~key:axis -> function
         | `Both (Either.First label, dim) -> Some (label, (axis, dim))
         | `Left (First label) -> Some (label, (axis, Inferred []))
-        | `Both (Second (Dim at), (Given [ Dim dim ] | Fixed [ Dim dim ] | Inferred [ Dim dim ]))
+        | `Both
+            ( Second (Dim at | Frozen at),
+              ( Given [ (Dim dim | Frozen dim) ]
+              | Fixed [ (Dim dim | Frozen dim) ]
+              | Inferred [ (Dim dim | Frozen dim) ] ) )
           when at >= dim ->
             raise
             @@ Shape_error ("Specified dimension outside bounds for its axis: " ^ debug_spec, debug_sh, cur_sh)
         | `Both (Second _, dim) -> Some (gen_label_of_axis axis, (axis, dim))
         | `Left (Second (Dim at)) -> Some (gen_label_of_axis axis, (axis, Inferred [ Dim (at + 1) ]))
+        | `Left (Second (Frozen at)) -> Some (gen_label_of_axis axis, (axis, Inferred [ Frozen (at + 1) ]))
         | `Left (Second Parallel) ->
             Some (gen_label_of_axis axis, (axis, Inferred [ Parallel ])) (* FIXME: is it correct? *)
         | `Right (Given [] | Fixed [] | Inferred [] | Unknown) -> None
@@ -879,6 +891,7 @@ let rec propagate_shapes (update : update_step) =
       let subs =
         match Option.value ~default:(Dim 1) @@ List.last @@ list_of_dims sh2.output with
         | Parallel -> 1
+        | Frozen d -> d
         | Dim d -> d
       in
       let output = map_dims sh2.output ~f:List.drop_last_exn in
@@ -1003,7 +1016,6 @@ let get_symbol () =
   Symbol !unique_id
 
 let iterated = function Dim d when d > 1 -> true | _ -> false
-
 let opt_symbol d = Option.some_if (iterated d) @@ get_symbol ()
 
 (** An index into a single axis for doing computations over multiple [Shape]-derived [Code]s. *)
@@ -1021,6 +1033,8 @@ type 'a axis_index =
       the translation from the high-level to the low-level representation, and later [Dynamic_provider]
       is used as a place-holder filled in with the axis number of the recipient. *)
   | Task_id  (** The index that resolves to the task id of the computation. *)
+  | Frozen_recipient of symbol
+      (** Like [Dynamic_recipient] and [Fixed_idx], but the index value is not updated during an update step. *)
 [@@deriving compare, equal, sexp, variants]
 
 let opt_iterator = function None -> Fixed_idx 0 | Some sym -> Iterator sym
@@ -1178,6 +1192,9 @@ let rec derive_projections (shapes : update_step) : projections =
         match Map.find_exn label_iterators label with None -> Fixed_idx 0 | Some sym -> Iterator sym)
     | Second (Dim pos) -> Fixed_idx pos
     | Second Parallel -> Task_id
+    | Second (Frozen pos) ->
+        (* TODO: what's the best we can do here? *)
+        Fixed_idx pos
   in
 
   (* For binary cases, we cannot rely on [cur_sh] containing all axes, since in principle it could
@@ -1429,6 +1446,7 @@ let rec derive_projections (shapes : update_step) : projections =
         match Option.value ~default:(Dim 1) @@ List.last @@ list_of_dims sh2.output with
         | Dim d -> d
         | Parallel -> !num_parallel_tasks
+        | Frozen d -> d
       in
       let output = map_dims sh2.output ~f:List.drop_last_exn in
       let reduced_sh2 = { sh2 with output } in
@@ -1534,14 +1552,14 @@ let derive_index iterator_symbols (projection : symbol axis_index array) =
       | Fixed_idx i -> Fixed_idx i
       | Task_id -> Task_id
       | Iterator (Symbol s) -> Iterator (Map.find_exn sym_to_i s)
-      | (Dynamic_provider _ | Dynamic_recipient _) as dyn -> dyn)
+      | (Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _) as dyn -> dyn)
   in
   fun product ->
     Array.map positions ~f:(function
       | Fixed_idx i -> Fixed_idx i
       | Iterator p -> Iterator product.(p)
       | Task_id -> Task_id
-      | (Dynamic_provider _ | Dynamic_recipient _) as dyn -> dyn)
+      | (Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _) as dyn -> dyn)
 
 let make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~id () =
   let input = match input_dims with None -> Unknown | Some dims -> Given dims in
@@ -1555,7 +1573,8 @@ let make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~id () =
         Map.map (axis_labels_of_spec spec).labels ~f:(function
           | Either.First label -> label
           | Second (Dim it) -> Int.to_string it
-          | Second Parallel -> "parallel")
+          | Second Parallel -> "parallel"
+          | Second (Frozen it) -> "frozen " ^ Int.to_string it)
   in
   { input; output; batch; deduce_within_shape_constraints; axis_labels; id }
 

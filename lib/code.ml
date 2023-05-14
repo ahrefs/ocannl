@@ -307,7 +307,7 @@ let to_low_level (code : t) : unit low_level =
         let rec loop rev_idcs = function
           | [] -> Set (tensor, Array.of_list_rev rev_idcs, Constant c)
           | Shape.Dim 1 :: product -> loop (Fixed_idx 0 :: rev_idcs) product
-          | Dim dim :: product ->
+          | (Dim dim | Frozen dim) :: product ->
               let it = new_sym_index (Shape.get_symbol ()) in
               let idx = Shape.Iterator it in
               For_loop { index = it; from_ = 0; to_ = dim - 1; body = loop (idx :: rev_idcs) product }
@@ -389,6 +389,7 @@ let interpret_code ?task_id synchronizer llc =
         | Task_id -> task_id ()
         | Iterator s -> Map.find_exn env s
         | Dynamic_recipient s -> Map.find_exn dyn_env s
+        | Frozen_recipient s -> Map.find_exn dyn_env s
         | Dynamic_provider _ -> Option.value_exn provider_dim)
     with Caml.Not_found | Not_found_s _ ->
       if !debug_trace_interpretation then
@@ -565,7 +566,7 @@ let interpret_code ?task_id synchronizer llc =
               raise e
           in
           let target_dim =
-            match target_dims.(provider_dim) with Dim d -> d | Parallel -> !Shape.num_parallel_tasks
+            match target_dims.(provider_dim) with Dim d | Frozen d -> d | Parallel -> !Shape.num_parallel_tasks
           in
           (fst env, Map.add_exn ~key ~data:(actual % target_dim) @@ snd env))
     in
@@ -654,14 +655,14 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         assignments = Hash_set.Poly.create ();
         accesses = Hashtbl.Poly.create ();
         non_virtual = n.never_virtual;
-        non_device_only = n.never_device_only;
+        non_device_only = n.never_device_only || n.is_recurrent;
         scalar = None;
       })
 
 let get_other_node node_store ptr =
   get_node node_store
     { ptr with field = (if NodeUI.equal_data_kind ptr.NodeUI.field Value then Grad else Value) }
-
+    
 let precompute_constants ?idcs node_store top_node llv =
   let exception Non_literal of int in
   let rec loop llv =
@@ -721,6 +722,7 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
       | Shape.Fixed_idx i -> i
       | Iterator s -> Map.find_exn env s
       | Dynamic_recipient s -> Map.find_exn dyn_env s
+      | Frozen_recipient s -> Map.find_exn dyn_env s
       | Dynamic_provider _ -> Option.value_exn provider_dim
       | Task_id -> task_id)
   in
@@ -741,9 +743,9 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
         Hash_set.add set_node.assignments (lookup ~task_id env idcs);
         if virtualize_settings.inline_constants then precompute_constants ~idcs node_store set_node llv;
         Array.iter idcs ~f:(function
-          | Shape.Dynamic_provider _ | Shape.Dynamic_recipient _ -> set_node.non_virtual <- true
-          | Shape.Fixed_idx _ | Task_id -> ()
-          | Shape.Iterator s ->
+          | Shape.Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _ -> set_node.non_virtual <- true
+          | Fixed_idx _ | Task_id -> ()
+          | Iterator s ->
               let old_tensor = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tensor) in
               (* TODO(#134): this prevents multiple virtual tensors from sharing for loops. *)
               assert (NodeUI.equal_tensor_ptr old_tensor tensor))
@@ -795,7 +797,7 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
           ~f:(fun grad_node -> grad_node.non_virtual <- true));
       if Hashtbl.exists value_node.accesses ~f:is_recurrent then (
         value_node.non_device_only <- true;
-        (NodeUI.get value_node.id).never_device_only <- true;
+        (NodeUI.get value_node.id).is_recurrent <- true;
         (* TODO(#135): For now, value and gradient are non-device-only reciprocically. *)
         Option.iter
           (Hashtbl.find node_store { id = node_id; field = Grad })
@@ -831,7 +833,7 @@ let process_computation node_store node top_llc =
            ~f:
              Shape.(
                function
-               | Task_id | Fixed_idx _ | Dynamic_recipient _ | Dynamic_provider _ -> None
+               | Task_id | Fixed_idx _ | Dynamic_recipient _ | Frozen_recipient _ | Dynamic_provider _ -> None
                | Iterator s -> Some s)
     in
     let num_syms = Array.count indices ~f:(function Iterator _ -> true | _ -> false) in

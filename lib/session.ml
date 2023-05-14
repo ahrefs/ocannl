@@ -53,7 +53,7 @@ let print_formula ~with_grad ~with_code ?(with_low_level = false) (style : NodeU
         in
         let p_labels = Shape.(axis_labels_of_spec priorities).labels |> Map.map ~f in
         Array.map (Shape.axis_map_to_dims_index p_labels) ~f:(function
-          | Dim d -> d
+          | Dim d | Frozen d -> d
           | Parallel ->
               raise @@ Session_error ("`Label_layout found an unexpected <parallel>: " ^ priorities, Some m))
     | `Label_layout label_idcs ->

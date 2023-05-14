@@ -17,6 +17,7 @@ type t = {
      outside of a step update. *)
   mutable never_virtual : bool;
   mutable never_device_only : bool;
+  mutable is_recurrent : bool;
   literal : bool;
       (** To avoid confusion, try to maintain the following for a literal:
       - empty [children],
@@ -90,7 +91,7 @@ let node_prec tensor =
   | Some (N.Double_nd _) -> double
 
 let create_ndarray prec dims =
-  let dims = Array.map dims ~f:(function Shape.Dim d -> d | Parallel -> !Shape.num_parallel_tasks) in
+  let dims = Array.map dims ~f:(function Shape.Dim d | Frozen d -> d | Parallel -> !Shape.num_parallel_tasks) in
   match prec with
   | Void_prec -> assert false
   | Byte_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
@@ -137,6 +138,7 @@ let create ~(value_prec : prec) ?(grad_prec : prec option) ?(literal = false) ~n
       device_only = false;
       never_virtual = false;
       never_device_only = false;
+      is_recurrent = false;
       literal;
     }
   in

@@ -14,8 +14,10 @@ type tensor = {
   local : Gccjit.lvalue option;
       (** A local array, if any. If both [hosted_ptr] and [local] are set,
       they are synchronized initially and at the synchronization points. *)
+  update_on_host : bool;
+      (** If true, in case of update assignment ([Block.assign_op]), the assignment will happen directly
+          on the host. *)
   dims : int array;  (** Dimensions (shape) of the tensor. *)
-  size_in_bytes : int;
   num_typ : Gccjit.type_;
       (** The type of the stored values: [signed char] (corresponds to precision [Byte]),
       [short] (precision [Half]), [float] (precision [Single]), [double] (precision [Double]). *)
@@ -37,21 +39,20 @@ let get_tensor { ctx; func; tensors; task_init_block } ptr : tensor =
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
       let n = NodeUI.(get ptr.id) in
       let size = Node.shape_size n.node in
-      let size_in_bytes = NodeUI.size_in_bytes ptr in
       let tensor c_typ is_double arr =
         let num_typ = Type.(get ctx c_typ) in
         let hosted_ptr =
-          Some (RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray arr)
+          if Array.is_empty @@ Node.A.dims arr then None
+          else Some (RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray arr)
         in
         let arr_typ = Type.array ctx num_typ size in
         let local = Function.local func arr_typ @@ NodeUI.tensor_ptr_name ptr in
-        (if size_in_bytes > 0 then
-           let c_index = Type.get ctx Type.Size_t in
-           Block.eval task_init_block
-           @@ RValue.call ctx (Function.builtin ctx "memcpy")
-                [ RValue.lvalue @@ local; Option.value_exn hosted_ptr; RValue.int ctx c_index size_in_bytes ]);
+        Option.iter hosted_ptr ~f:(fun hosted_ptr ->
+            (* FIXME: NOT IMPLEMENTED YET *)
+            ignore (task_init_block, hosted_ptr));
+        let update_on_host = n.is_recurrent in
         let dims = Bigarray.Genarray.dims arr in
-        { hosted_ptr; local = Some local; size_in_bytes; dims; num_typ; is_double }
+        { hosted_ptr; local = Some local; update_on_host; dims; num_typ; is_double }
       in
       let open NodeUI in
       let arr = Option.value_exn @@ get_tensor ptr in
@@ -105,8 +106,9 @@ let get_ptr tensor =
 
 let get_sync_ptr tensor =
   match (tensor.hosted_ptr, tensor.local) with
-  | Some rv, _ -> rv
+  | Some rv, _ when tensor.update_on_host -> rv
   | _, Some lv -> Gccjit.RValue.lvalue lv
+  | Some rv, _ -> rv
   | None, None -> assert false
 
 let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body : unit Code.low_level) :
@@ -114,6 +116,19 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
+  let lookup ?provider_dim ~on_host (env, dyn_env) indices =
+    let open Gccjit in
+    let c_index = Type.get ctx Type.Int in
+    Array.map indices ~f:(function
+      | Shape.Fixed_idx i -> RValue.int ctx c_index i
+      | Iterator s -> Map.find_exn env s
+      | Task_id when on_host -> RValue.param task_id
+      | Task_id -> RValue.zero ctx c_index
+      | Dynamic_recipient s -> Map.find_exn dyn_env s
+      | Dynamic_provider _ -> Option.value_exn provider_dim
+      | Frozen_recipient s when on_host -> Map.find_exn dyn_env s
+      | Frozen_recipient _ -> RValue.zero ctx c_index)
+  in
   let c_float = Type.get ctx Type.Float in
   let c_double = Type.get ctx Type.Double in
   let cast_bool num_typ v = RValue.cast ctx (RValue.cast ctx v c_int) num_typ in
@@ -143,14 +158,6 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
         RValue.binary_op ctx Mult num_typ cmp @@ v2
     | Code.Arg2 -> v2
     | Code.Arg1 -> v1
-  in
-  let lookup ?provider_dim (env, dyn_env) indices =
-    Array.map indices ~f:(function
-      | Shape.Fixed_idx i -> RValue.int ctx c_index i
-      | Iterator s -> Map.find_exn env s
-      | Task_id -> RValue.param task_id
-      | Dynamic_recipient s -> Map.find_exn dyn_env s
-      | Dynamic_provider _ -> Option.value_exn provider_dim)
   in
   let log_comment c =
     (if !Code.with_debug && !Code.executor_print_comments then
@@ -198,18 +205,17 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
            && is_builtin_op op ->
         let tensor = get_tensor state data_node in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
-        let idcs = lookup env idcs in
+        let idcs = lookup ~on_host:tensor.update_on_host env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
         let lhs = LValue.access_array (get_sync_ptr tensor) offset in
         Block.assign_op !current_block lhs (builtin_op op) value
-    | Set (ptr, idcs, Binop (op, (Get (tensor, _) as c1), c2))
-      when NodeUI.equal_tensor_ptr ptr tensor ->
+    | Set (ptr, idcs, Binop (op, (Get (tensor, _) as c1), c2)) when NodeUI.equal_tensor_ptr ptr tensor ->
         let tensor = get_tensor state ptr in
         let v2 = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
         (* Force the ordering of computations to reduce race conditions. *)
         let l2 = Function.local func tensor.num_typ (NodeUI.tensor_ptr_name ptr ^ "_" ^ get_uid ()) in
         Block.assign !current_block l2 v2;
-        let idcs = lookup env idcs in
+        let idcs = lookup ~on_host:false env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
         (* FIXME: do not need to reorder if we don't use get_sync_ptr. *)
         let lhs = LValue.access_array (get_ptr tensor) offset in
@@ -219,7 +225,7 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
     | Set (data_node, idcs, value) ->
         let tensor = get_tensor state data_node in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
-        let idcs = lookup env idcs in
+        let idcs = lookup ~on_host:false env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
         let lhs = LValue.access_array (get_ptr tensor) offset in
         Block.assign !current_block lhs value
@@ -257,7 +263,7 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
         RValue.call ctx f []
     | Get (tensor, idcs) ->
         let tensor = get_tensor state tensor in
-        let idcs = lookup env idcs in
+        let idcs = lookup ~on_host:false env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
         RValue.lvalue @@ LValue.access_array (get_ptr tensor) offset
     | Binop (Code.Arg2, _, c2) -> loop c2
@@ -294,11 +300,11 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
           let target_dim =
             RValue.int ctx c_int
               (match target_dims.(provider_dim) with
-              | Shape.Dim d -> d
+              | Shape.Dim d | Frozen d -> d
               | Parallel -> !Shape.num_parallel_tasks)
           in
           let provider_dim = RValue.int ctx c_int provider_dim in
-          let idcs = lookup ~provider_dim env tensor_idcs in
+          let idcs = lookup ~provider_dim ~on_host:false env tensor_idcs in
           let prov_offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
           let dyn_index = RValue.lvalue @@ LValue.access_array (get_ptr tensor) prov_offset in
           let dyn_index = RValue.cast ctx dyn_index c_index in
