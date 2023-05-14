@@ -18,7 +18,6 @@ type tensor = {
 }
 
 let session_results : Gccjit.result list ref = ref []
-let compiled_session_globals : Gccjit.result option ref = ref None
 let hoist_dynamic_indices = ref false
 
 let get_tensor ctx data : tensor =
@@ -28,8 +27,6 @@ let get_tensor ctx data : tensor =
     let num_typ = Type.(get ctx c_typ) in
     let ptr = RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray arr in
     let dims = Bigarray.Genarray.dims arr in
-    Option.iter !compiled_session_globals ~f:Result.release;
-    compiled_session_globals := None;
     { ptr; dims; num_typ; is_double }
   in
   let open NodeUI in
@@ -43,8 +40,6 @@ let get_tensor ctx data : tensor =
 let cleanup_session () =
   let open Gccjit in
   List.iter !session_results ~f:Result.release;
-  Option.iter !compiled_session_globals ~f:Result.release;
-  compiled_session_globals := None;
   Context.release !session_context;
   session_context := Context.create ();
   Context.set_option !session_context Optimization_level !optimization_level;
@@ -304,12 +299,6 @@ let jit_func ~name ctx proc =
       if !Code.keep_files_in_run_directory then name ^ suf else Caml.Filename.temp_file (name ^ "-") suf
     in
     Context.dump_to_file ctx ~update_locs:true f_name
-(* match !compiled_session_globals with
-   | None ->
-     Context.dump_to_file !session_context ~update_locs:true "globals-gccjit-debug.c";
-     let globals = Context.compile !session_context in
-      compiled_session_globals := Some globals
-   | Some _ -> () *)
 
 let error_message ~name ~prefix ?extra_error_msg ~contents exc =
   let backtrace = Caml.Printexc.get_backtrace () in
