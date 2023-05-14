@@ -198,6 +198,10 @@ let empty prec = create_array prec [||] (Constant_fill [| 0.0 |])
 
 type t = { mutable value : ndarray; mutable grad : ndarray option; id : int } [@@deriving sexp_of]
 
+let shape_size n =
+  let dims = map_as_bigarray { f=A.dims } n.value in
+  if Array.is_empty dims then 0 else Array.fold dims ~init:1 ~f:( * )
+
 let size_in_bytes n =
   (* Cheating here because 1 number Bigarray is same size as empty Bigarray:
      it's more informative to report the cases differently. *)

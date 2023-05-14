@@ -11,9 +11,9 @@ type t = {
   desc_label : string option;
   shape : Shape.t;
   mutable virtual_ : bool;
-  (** If true, this node is never materialized, its computations are inlined on a per-scalar basis. *)
+      (** If true, this node is never materialized, its computations are inlined on a per-scalar basis. *)
   mutable device_only : bool;
-  (** If true, this node is only materialized on the devices it is computed on, it is not persisted
+      (** If true, this node is only materialized on the devices it is computed on, it is not persisted
      outside of a step update. *)
   mutable never_virtual : bool;
   mutable never_device_only : bool;
@@ -35,9 +35,19 @@ let get uid = Hashtbl.find_exn global_node_store uid
 type data_kind = Value | Grad [@@deriving sexp, equal, hash]
 type tensor_ptr = { id : int; field : data_kind } [@@deriving sexp, equal, hash]
 
+let tensor_ptr_name { id; field } =
+  match field with Value -> "n" ^ Int.to_string id ^ "_value" | Grad -> "n" ^ Int.to_string id ^ "_grad"
+
 let get_tensor tensor =
   let n = N.get tensor.id in
   match tensor.field with Value -> Some n.value | Grad -> n.grad
+
+let size_in_bytes ptr =
+  (* 1 number bigarray is reporting the same size as an empty bigarray, but we use size 0 to indicate
+     that the bigarray is empty. *)
+  let open Node in
+  let f arr = if Array.is_empty @@ A.dims arr then 0 else A.size_in_bytes arr in
+  Option.value ~default:0 @@ Option.map ~f:(map_as_bigarray { f }) @@ get_tensor ptr
 
 type prec =
   | Void_prec : prec
@@ -517,4 +527,6 @@ let print_node_preamble id =
   with Not_found_s _ | Caml.Not_found -> ()
 
 let print_preamble ?(from = 0) () =
-  for id = from to Node.global.unique_id - 1 do print_node_preamble id done
+  for id = from to Node.global.unique_id - 1 do
+    print_node_preamble id
+  done
