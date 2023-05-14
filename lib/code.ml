@@ -622,7 +622,7 @@ let virtualize_settings =
 type visits =
   | Visits of int
   | Recurrent  (** A [Recurrent] visit is when there is an access prior to any assignment in an update. *)
-[@@deriving sexp, equal]
+[@@deriving sexp, equal, variants]
 
 type data_node = {
   id : int;
@@ -793,6 +793,13 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
         Option.iter
           (Hashtbl.find node_store { id = node_id; field = Grad })
           ~f:(fun grad_node -> grad_node.non_virtual <- true));
+      if Hashtbl.exists value_node.accesses ~f:is_recurrent then (
+        value_node.non_device_only <- true;
+        (NodeUI.get value_node.id).never_device_only <- true;
+        (* TODO(#135): For now, value and gradient are non-device-only reciprocically. *)
+        Option.iter
+          (Hashtbl.find node_store { id = node_id; field = Grad })
+          ~f:(fun grad_node -> grad_node.non_device_only <- true));
       if consider_grads then
         Option.iter
           (Hashtbl.find node_store { id = node_id; field = Grad })
