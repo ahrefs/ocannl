@@ -5,12 +5,14 @@ module NFDSL = Operation.NFDSL
 module CDSL = Code.CDSL
 module SDSL = Session.SDSL
 
-let _suspended () =
+let () =
   (* Code.CDSL.with_debug := false; *)
   (* let open Operation.FDSL in *)
   let open SDSL.O in
-  SDSL.set_executor Interpreter;
-  SDSL.enable_all_debugs ~trace_interpreter:true ();
+  (* SDSL.set_executor Interpreter;
+  SDSL.enable_all_debugs ~trace_interpreter:true (); *)
+  SDSL.set_executor Gccjit;
+  (* SDSL.enable_all_debugs (); *)
   CDSL.virtualize_settings.enable_virtual <- true;
   CDSL.virtualize_settings.inline_constants <- true;
   SDSL.drop_all_sessions ();
@@ -18,13 +20,14 @@ let _suspended () =
   let num_parallel_tasks = SDSL.num_domains - 1 in
   Stdio.printf "\n****** num_parallel_tasks = %d\n%!" num_parallel_tasks;
   SDSL.num_parallel_tasks := num_parallel_tasks;
-  let minibatch = 2 in
-  (* Easier to make it divisible. *)
-  let len = 4 * minibatch * num_parallel_tasks in
-  let batch = minibatch * num_parallel_tasks in
-  let n_batches = 2 * len / batch in
+  let minibatch = 4 in
+  let refresh_batch = 2 in
+  let batch = refresh_batch * num_parallel_tasks * minibatch in
+  let n_batches = 2 in
+  let len = n_batches * batch / 2 in
   let epochs = 100 in
-  let steps = epochs * n_batches in
+  let refreshes = epochs * n_batches in
+  let steps = refreshes * refresh_batch in
   let noise () = Random.float_range (-0.1) 0.1 in
   let moons_flat =
     Array.concat_map (Array.create ~len ())
@@ -36,19 +39,10 @@ let _suspended () =
             let c = cos v and s = sin v in
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
-  let moons_flat =
-    FDSL.init_const ~l:"moons_flat"
-      ~b:Shape.[ Dim n_batches; Parallel; Dim minibatch ]
-      ~o:Shape.[ Dim 2 ]
-      moons_flat
-  in
+  let b = Shape.[ Frozen n_batches; Parallel; Dim refresh_batch; Dim minibatch ] in
+  let moons_flat = FDSL.init_const ~l:"moons_flat" ~b ~o:Shape.[ Dim 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes =
-    FDSL.init_const ~l:"moons_classes"
-      ~b:Shape.[ Dim n_batches; Parallel; Dim minibatch ]
-      ~o:Shape.[ Dim 1 ]
-      moons_classes
-  in
+  let moons_classes = FDSL.init_const ~l:"moons_classes" ~b ~o:Shape.[ Dim 1 ] moons_classes in
   let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 2 + ("w1" * x))) in
   (* let%nn_op mlp x =
        "b6" 1
@@ -69,20 +63,22 @@ let _suspended () =
              )
      in *)
   let%nn_dt session_step ~o:1 = n =+ 1 in
+  let%nn_dt session_refresh ~o:1 = n =+ 1 /. !..refresh_batch in
   let%nn_dt minus_lr ~o:1 = n =: -0.0001 *. (!..steps - session_step) /. !..steps in
 
   SDSL.minus_learning_rate := Some minus_lr;
-  let%nn_op moons_input = moons_flat @.| session_step in
-  let%nn_op moons_class = moons_classes @.| session_step in
+  let%nn_op moons_input = (moons_flat @.| session_refresh) @.| session_step in
+  let%nn_op moons_class = (moons_classes @.| session_refresh) @.| session_step in
   let%nn_op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
   let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in
   let reg_loss = List.map ~f:ssq [ w1; w2; b1; b2 ] |> List.reduce_exn ~f:FDSL.O.( + ) in
   (* let reg_loss =
        List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
      in *)
-  let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..minibatch) + (0.001 *. reg_loss) in
+  let step_batch = num_parallel_tasks * minibatch in
+  let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..step_batch) + (0.001 *. reg_loss) in
   let%nn_dt epoch_loss ~o:1 = n =+ total_loss in
-  let run_for_steps = 1 (* n_batches *) in
+  let run_for_steps = refresh_batch in
   SDSL.refresh_session ~run_for_steps ();
   Stdio.print_endline "\nPreamble:\n";
   SDSL.print_preamble ();
@@ -127,7 +123,8 @@ let classify_moons ~virtualize ~on_device executor ~opti_level ~inlining_cutoff 
   let bench_title =
     Sexp.to_string_hum
     @@ [%sexp_of:
-         string * string (* * Session.backend *)
+         string
+         * string (* * Session.backend *)
          * string
          * int
          * string
@@ -136,7 +133,7 @@ let classify_moons ~virtualize ~on_device executor ~opti_level ~inlining_cutoff 
          * int
          * NodeUI.prec]
          ( (if virtualize then "virtu." else "non-v."),
-         (if on_device then "on-dev" else "non-d."),
+           (if on_device then "on-dev" else "non-d."),
            (* executor, *)
            "gcc-opt",
            opti_level,
@@ -334,31 +331,31 @@ let _suspended () =
 
 let benchmarks =
   [
-    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:1
-      CDSL.single;
-    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:2
-      CDSL.single;
-    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:4
-      CDSL.single;
-    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:5
-      CDSL.single;
-    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:10
-      CDSL.single;
-    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:12
-      CDSL.single;
-    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:15
-      CDSL.single;
-    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:18
-      CDSL.single;
-    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:21
-      CDSL.single;
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
+      ~num_parallel_tasks:1 CDSL.single;
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
+      ~num_parallel_tasks:2 CDSL.single;
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
+      ~num_parallel_tasks:4 CDSL.single;
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
+      ~num_parallel_tasks:5 CDSL.single;
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
+      ~num_parallel_tasks:10 CDSL.single;
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
+      ~num_parallel_tasks:12 CDSL.single;
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
+      ~num_parallel_tasks:15 CDSL.single;
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
+      ~num_parallel_tasks:18 CDSL.single;
+    classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
+      ~num_parallel_tasks:21 CDSL.single;
     (* classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:30
        CDSL.single; *)
     (* classify_moons ~virtualize:true ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:42
        CDSL.single; *)
   ]
 
-let () =
+let _suspended () =
   List.map benchmarks ~f:(fun bench -> bench ()) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
 (* Early example output from back when using core_bench, 200 epochs (all are non-virtual):
