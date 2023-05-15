@@ -10,7 +10,8 @@ let session_context =
 
 type tensor = {
   hosted_ptr : Gccjit.rvalue option;
-      (** Pointer to the first value of the associated [Bigarray], if hosted. *)
+      (** Pointer to the first value of the associated [Bigarray], if hosted. Usually it does not correspond
+          to the local tensor (e.g. if task id > 0). *)
   local : Gccjit.lvalue option;
       (** A local array, if any. If both [hosted_ptr] and [local] are set,
       they are synchronized initially and at the synchronization points. *)
@@ -18,6 +19,10 @@ type tensor = {
       (** If true, in case of update assignment ([Block.assign_op]), the assignment will happen directly
           on the host. *)
   dims : int array;  (** Dimensions (shape) of the tensor. *)
+  host_size_in_bytes : int;  (** Size of the full host's tensor. *)
+  local_is_slice_of_host : bool;
+      (** If true, the local tensor is a slice of the host tensor. If false, the local tensor needs to be
+          iterated with a jitted code to copy it to/from the host tensor. *)
   num_typ : Gccjit.type_;
       (** The type of the stored values: [signed char] (corresponds to precision [Byte]),
       [short] (precision [Half]), [float] (precision [Single]), [double] (precision [Double]). *)
@@ -34,25 +39,61 @@ type state = {
   task_init_block : Gccjit.block;
 }
 
-let get_tensor { ctx; func; tensors; task_init_block } ptr : tensor =
+let jit_array_offset ctx ~idcs ~dims =
+  let open Gccjit in
+  let c_index = Type.get ctx Type.Int in
+  Array.fold2_exn idcs dims ~init:(RValue.zero ctx c_index) ~f:(fun offset idx dim ->
+      RValue.binary_op ctx Plus c_index idx
+      @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
+
+let get_tensor { ctx; func; tensors; task_init_block } ~host_idcs ptr : tensor =
   let open Gccjit in
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
       let n = NodeUI.(get ptr.id) in
       let size = Node.shape_size n.node in
+      let axes = Shape.to_dims n.shape in
+      let local_is_slice_of_host =
+        Array.fold_until axes ~init:true
+          ~f:
+            (fun was_frozen -> function
+              | Shape.Parallel | Frozen _ -> if was_frozen then Continue true else Stop false
+              | _ -> if was_frozen then Stop false else Continue false)
+          ~finish:(fun _ -> true)
+      in
       let tensor c_typ is_double arr =
         let num_typ = Type.(get ctx c_typ) in
         let hosted_ptr =
           if Array.is_empty @@ Node.A.dims arr then None
           else Some (RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray arr)
         in
+        let host_size_in_bytes = NodeUI.size_in_bytes ptr in
         let arr_typ = Type.array ctx num_typ size in
         let local = Function.local func arr_typ @@ NodeUI.tensor_ptr_name ptr in
-        Option.iter hosted_ptr ~f:(fun hosted_ptr ->
-            (* FIXME: NOT IMPLEMENTED YET *)
-            ignore (task_init_block, hosted_ptr));
-        let update_on_host = n.is_recurrent in
         let dims = Bigarray.Genarray.dims arr in
-        { hosted_ptr; local = Some local; update_on_host; dims; num_typ; is_double }
+        Option.iter hosted_ptr ~f:(fun hosted_ptr ->
+            let c_index = Type.get ctx Type.Size_t in
+            if local_is_slice_of_host then
+              let offset_idcs =
+                Array.map2_exn host_idcs axes ~f:(fun idx -> function
+                  | Frozen _ | Parallel -> idx | Dim _ -> RValue.zero ctx c_index)
+              in
+              let offset = jit_array_offset ctx ~idcs:offset_idcs ~dims in
+              let lhs = LValue.access_array hosted_ptr offset in
+              Block.eval task_init_block
+              @@ RValue.call ctx (Function.builtin ctx "memcpy")
+                   [ RValue.lvalue @@ local; RValue.lvalue lhs; RValue.int ctx c_index host_size_in_bytes ]
+            else failwith "Exec_as_gccjit: non-slice hosted: NOT IMPLEMENTED YET");
+        let update_on_host = n.is_recurrent in
+        {
+          hosted_ptr;
+          local = Some local;
+          update_on_host;
+          dims;
+          host_size_in_bytes;
+          local_is_slice_of_host;
+          num_typ;
+          is_double;
+        }
       in
       let open NodeUI in
       let arr = Option.value_exn @@ get_tensor ptr in
@@ -69,13 +110,6 @@ let cleanup_session () =
   session_context := Context.create ();
   Context.set_option !session_context Optimization_level !optimization_level;
   session_results := []
-
-let jit_array_offset ctx ~idcs ~dims =
-  let open Gccjit in
-  let c_index = Type.get ctx Type.Int in
-  Array.fold2_exn idcs dims ~init:(RValue.zero ctx c_index) ~f:(fun offset idx dim ->
-      RValue.binary_op ctx Plus c_index idx
-      @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
 
 let prec_to_kind prec =
   let open Gccjit in
@@ -203,14 +237,16 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
       when NodeUI.equal_tensor_ptr data_node tensor
            && [%equal: Code.index array] idcs idcs2
            && is_builtin_op op ->
-        let tensor = get_tensor state data_node in
+        let host_idcs = lookup ~on_host:true env idcs in
+        let tensor = get_tensor state ~host_idcs data_node in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
         let idcs = lookup ~on_host:tensor.update_on_host env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
         let lhs = LValue.access_array (get_sync_ptr tensor) offset in
         Block.assign_op !current_block lhs (builtin_op op) value
     | Set (ptr, idcs, Binop (op, (Get (tensor, _) as c1), c2)) when NodeUI.equal_tensor_ptr ptr tensor ->
-        let tensor = get_tensor state ptr in
+        let host_idcs = lookup ~on_host:true env idcs in
+        let tensor = get_tensor state ~host_idcs ptr in
         let v2 = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
         (* Force the ordering of computations to reduce race conditions. *)
         let l2 = Function.local func tensor.num_typ (NodeUI.tensor_ptr_name ptr ^ "_" ^ get_uid ()) in
@@ -223,7 +259,8 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
         Block.assign !current_block lhs
         @@ loop_binop op ~num_typ:tensor.num_typ ~is_double:tensor.is_double ~v1 ~v2:(RValue.lvalue l2)
     | Set (data_node, idcs, value) ->
-        let tensor = get_tensor state data_node in
+        let host_idcs = lookup ~on_host:true env idcs in
+        let tensor = get_tensor state ~host_idcs data_node in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
         let idcs = lookup ~on_host:false env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
@@ -262,7 +299,8 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
         let f = Function.builtin ctx f_name in
         RValue.call ctx f []
     | Get (tensor, idcs) ->
-        let tensor = get_tensor state tensor in
+        let host_idcs = lookup ~on_host:true env idcs in
+        let tensor = get_tensor state ~host_idcs tensor in
         let idcs = lookup ~on_host:false env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
         RValue.lvalue @@ LValue.access_array (get_ptr tensor) offset
@@ -294,7 +332,8 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
     Block.jump !current_block b_loop_cond;
     current_block := b_after_loop
   and jit_dynamic_indices ~name ~env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body =
-    let tensor = get_tensor state tensor in
+    let host_idcs = lookup ~on_host:true env tensor_idcs in
+    let tensor = get_tensor state ~host_idcs tensor in
     let env =
       Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env (Symbol s as key) ->
           let target_dim =
