@@ -30,14 +30,6 @@ end
 
 type 'a axis_map = 'a Map.M(AxisKey).t [@@deriving compare, sexp]
 
-let shift_axes_of_kind kind (axes : 'a axis_map) ~f =
-  Map.of_alist_exn (module AxisKey)
-  @@ List.filter_map (Map.to_alist axes) ~f:(fun (({ in_axes; from_end }, v) as kv) ->
-         if not @@ AxisKey.equal_kind kind in_axes then Some kv
-         else
-           let from_end = f from_end in
-           if from_end < 1 then None else Some ({ in_axes; from_end }, v))
-
 let num_parallel_tasks = ref 1
 
 type dim =
@@ -155,6 +147,14 @@ let update_kind ~f kind sh =
 
 let list_of_dims = function Given ls | Fixed ls | Inferred ls -> ls | Unknown -> []
 
+let shift_axes_of_kind kind sh ~f =
+  Map.of_alist_exn (module AxisKey)
+  @@ List.filter_map (Map.to_alist sh.axis_labels) ~f:(fun (({ in_axes; from_end }, v) as kv) ->
+         if not @@ AxisKey.equal_kind kind in_axes then Some kv
+         else
+           let from_end = f from_end in
+           if from_end < 1 then None else Some ({ in_axes; from_end }, v))
+
 let append_all_axes ?prefix ?suffix ~main () =
   let affix, left =
     match (prefix, suffix) with
@@ -209,7 +209,8 @@ type compose_type =
       (** Uses RHS2 as an index into RHS1. The values of RHS2 along the last (output) axis are used to
       fix the RHS1 [over_kind] axes. If RHS1 has more [over_kind] axes than the size of RHS2's last
       axis, the remaining right axes are kept if [from_left] is true, otherwise the left axes
-      are kept. The fixed axes are dropped from the shape of LHS. If RHS2 has more than one axis,
+      are kept. The [Parallel] axes are preserved -- skipped over, never dynamically indexed.
+      The fixed axes are dropped from the shape of LHS. If RHS2 has more than one axis,
       [other_axes_pointwise] decides what to do with the other axes: if true, they are traversed
       pointwise with the corresponding axes of RHS1. For the pointwise alignment, we drop the last
       output axis of RHS2 and the fixed axes of RHS1. If [other_axes_pointwise] is false,
@@ -517,6 +518,27 @@ type axis_plab_map = (AxisKey.t, (string, dim) Either.t, AxisKey.comparator_witn
 
 let sexp_of_axis_plab_map (map : axis_plab_map) =
   Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: AxisKey.t * (string, dim) Either.t])
+
+let rec drop_keeping_parallel subs = function
+  | Parallel :: dims -> drop_keeping_parallel subs dims
+  | _ :: dims when subs > 0 -> drop_keeping_parallel (subs - 1) dims
+  | dims -> dims
+
+let take_skipping_parallel subs dims =
+  let rec loop acc subs = function
+    | Parallel :: dims -> loop acc subs dims
+    | dim :: dims when subs > 0 -> loop (dim :: acc) (subs - 1) dims
+    | _ -> List.rev acc
+  in
+  loop [] subs dims
+
+let count_parallel_among subs dims =
+  let rec loop acc subs = function
+    | Parallel :: dims -> loop (acc + 1) subs dims
+    | _ :: dims when subs > 0 -> loop acc (subs - 1) dims
+    | _ -> acc
+  in
+  loop 0 subs dims
 
 (** Performs a local step of shape inference, propagates information into and out of the parent shape
     and the child shape(s). *)
@@ -897,16 +919,16 @@ let rec propagate_shapes (update : update_step) =
       let output = map_dims sh2.output ~f:List.drop_last_exn in
       let reduced_sh2 = { sh2 with output } in
       let reduced_sh2 =
-        { reduced_sh2 with axis_labels = shift_axes_of_kind AxisKey.Output sh2.axis_labels ~f:(( - ) 1) }
+        { reduced_sh2 with axis_labels = shift_axes_of_kind AxisKey.Output sh2 ~f:(( - ) 1) }
       in
+      let sh1_size = List.length @@ list_of_dims @@ dims_of_kind over_kind sh1 in
       (if from_left then (
-         let reduced_dims over_dims = map_dims over_dims ~f:(fun d -> List.drop d subs) in
+         let n_par_axes = dims_of_kind over_kind sh1 |> list_of_dims |> count_parallel_among subs in
+         let reduced_dims over_dims = map_dims over_dims ~f:(drop_keeping_parallel subs) in
          let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
-         let sh1_size = List.length @@ list_of_dims @@ dims_of_kind over_kind sh1 in
-         let drop_left from_end = if from_end > sh1_size - subs then -1 else from_end in
-         let reduced_sh1 =
-           { reduced_sh1 with axis_labels = shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_left }
-         in
+         let drop_left from_end = if from_end > sh1_size - subs - n_par_axes then -1 else from_end in
+         (* TODO: unfortunately we ignore labels on parallel axes. *)
+         let reduced_sh1 = { reduced_sh1 with axis_labels = shift_axes_of_kind over_kind sh1 ~f:drop_left } in
          let extended_sh, logic =
            if other_axes_pointwise then (None, Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2))
            else
@@ -917,22 +939,26 @@ let rec propagate_shapes (update : update_step) =
          propagate_shapes update_other_axes;
          match extended_sh with
          | None ->
-             let push_left from_end = if from_end > sh1_size - subs then from_end + subs else from_end in
-             let sh1_axis_labels = shift_axes_of_kind over_kind sh1.axis_labels ~f:push_left in
+             let push_left from_end =
+               if from_end > sh1_size - subs - n_par_axes then from_end + subs + n_par_axes else from_end
+             in
+             let sh1_axis_labels = shift_axes_of_kind over_kind sh1 ~f:push_left in
              let sh1_axis_labels =
                Map.fold sh1.axis_labels ~init:sh1_axis_labels
                  ~f:(fun ~key:({ in_axes; from_end } as key) ~data labels ->
-                   if AxisKey.equal_kind over_kind in_axes && from_end > sh1_size - subs then
+                   if AxisKey.equal_kind over_kind in_axes && from_end > sh1_size - subs - n_par_axes then
                      Map.add_exn labels ~key ~data
                    else labels)
              in
              sh1.axis_labels <- sh1_axis_labels;
-             let added_dims, updated_dims =
+             let added_dims, updated_dims_with_par_axes =
                dims_of_kind over_kind reduced_sh1 |> list_of_dims |> fun d ->
                List.split_n d @@ (List.length d - sh1_size - subs)
              in
+             let updated_dims = List.drop updated_dims_with_par_axes n_par_axes in
              let restored_dims over_dims =
-               map_dims over_dims ~f:(fun d -> List.concat [ added_dims; List.take d subs; updated_dims ])
+               map_dims over_dims ~f:(fun d ->
+                   List.concat [ added_dims; List.take d (subs + n_par_axes); updated_dims ])
              in
              if not @@ is_given_or_fixed @@ dims_of_kind over_kind sh1 then
                update_kind over_kind sh1 ~f:restored_dims
@@ -940,13 +966,16 @@ let rec propagate_shapes (update : update_step) =
              (* FIXME: NOT IMPLEMENTED restoring inferred shapes and axis labels. *)
              ignore extended_sh)
        else
+         let n_par_axes =
+           dims_of_kind over_kind sh1 |> list_of_dims |> List.rev |> count_parallel_among subs
+         in
          let reduced_dims over_dims =
-           map_dims over_dims ~f:(fun d -> List.take d @@ (List.length d - subs))
+           map_dims over_dims ~f:(fun d -> List.rev d |> drop_keeping_parallel subs |> List.rev)
          in
          let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
-         let drop_right from_end = from_end - subs in
+         let drop_right from_end = from_end - subs - n_par_axes in
          let reduced_sh1 =
-           { reduced_sh1 with axis_labels = shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_right }
+           { reduced_sh1 with axis_labels = shift_axes_of_kind over_kind sh1 ~f:drop_right }
          in
          let extended_sh, logic =
            if other_axes_pointwise then (None, Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2))
@@ -958,26 +987,32 @@ let rec propagate_shapes (update : update_step) =
          propagate_shapes update_other_axes;
          match extended_sh with
          | None ->
-             let push_right from_end = from_end + subs in
-             let sh1_axis_labels = shift_axes_of_kind over_kind sh1.axis_labels ~f:push_right in
+             let push_right from_end = from_end + subs + n_par_axes in
+             (* TODO: unfortunately we ignore labels on parallel axes. *)
+             let sh1_axis_labels = shift_axes_of_kind over_kind sh1 ~f:push_right in
              let sh1_axis_labels =
                Map.fold sh1.axis_labels ~init:sh1_axis_labels
                  ~f:(fun ~key:({ in_axes; from_end } as key) ~data labels ->
-                   if AxisKey.equal_kind over_kind in_axes && from_end <= subs then
+                   if AxisKey.equal_kind over_kind in_axes && from_end <= subs + n_par_axes then
                      Map.add_exn labels ~key ~data
                    else labels)
              in
              sh1.axis_labels <- sh1_axis_labels;
-             let inferred_dims = dims_of_kind over_kind reduced_sh1 |> list_of_dims in
+             let inferred_dims_with_par_axes = dims_of_kind over_kind reduced_sh1 |> list_of_dims in
+             let added_and_updated_dims =
+               if n_par_axes = 0 then inferred_dims_with_par_axes
+               else inferred_dims_with_par_axes |> fun d -> List.take d (List.length d - n_par_axes)
+             in
              let restored_dims over_dims =
-               map_dims over_dims ~f:(fun d -> inferred_dims @ List.drop d @@ (List.length d - subs))
+               map_dims over_dims ~f:(fun d ->
+                   List.concat [ added_and_updated_dims; List.drop d (sh1_size - subs - n_par_axes) ])
              in
              if not @@ is_given_or_fixed @@ dims_of_kind over_kind sh1 then
                update_kind over_kind sh1 ~f:restored_dims
          | Some extended_sh ->
              (* FIXME: NOT IMPLEMENTED restoring inferred shapes and axis labels. *)
              ignore extended_sh);
-      let sh2_axis_labels = shift_axes_of_kind AxisKey.Output reduced_sh2.axis_labels ~f:(( + ) 1) in
+      let sh2_axis_labels = shift_axes_of_kind AxisKey.Output reduced_sh2 ~f:(( + ) 1) in
       let k1 = AxisKey.{ in_axes = Output; from_end = 1 } in
       let sh2_axis_labels =
         match Map.find sh2.axis_labels k1 with
@@ -1451,19 +1486,19 @@ let rec derive_projections (shapes : update_step) : projections =
       let output = map_dims sh2.output ~f:List.drop_last_exn in
       let reduced_sh2 = { sh2 with output } in
       let reduced_sh2 =
-        { reduced_sh2 with axis_labels = shift_axes_of_kind AxisKey.Output sh2.axis_labels ~f:(( - ) 1) }
+        { reduced_sh2 with axis_labels = shift_axes_of_kind AxisKey.Output sh2 ~f:(( - ) 1) }
       in
       let reduced_sh1, target_dims, logic =
         if from_left then
-          let reduced_dims over_dims = map_dims over_dims ~f:(fun d -> List.drop d subs) in
+          let reduced_dims over_dims = map_dims over_dims ~f:(drop_keeping_parallel subs) in
           let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
           let sh1_size = List.length @@ list_of_dims @@ dims_of_kind over_kind sh1 in
           let target_dims =
-            dims_of_kind over_kind sh1 |> list_of_dims |> Fn.flip List.take subs |> Array.of_list
+            dims_of_kind over_kind sh1 |> list_of_dims |> take_skipping_parallel subs |> Array.of_list
           in
           let drop_left from_end = if from_end > sh1_size - subs then -1 else from_end in
           let reduced_sh1 =
-            { reduced_sh1 with axis_labels = shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_left }
+            { reduced_sh1 with axis_labels = shift_axes_of_kind over_kind sh1 ~f:drop_left }
           in
           if other_axes_pointwise then
             (reduced_sh1, target_dims, Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2))
@@ -1482,7 +1517,7 @@ let rec derive_projections (shapes : update_step) : projections =
           in
           let drop_right from_end = from_end - subs in
           let reduced_sh1 =
-            { reduced_sh1 with axis_labels = shift_axes_of_kind over_kind sh1.axis_labels ~f:drop_right }
+            { reduced_sh1 with axis_labels = shift_axes_of_kind over_kind sh1 ~f:drop_right }
           in
           if other_axes_pointwise then
             (reduced_sh1, target_dims, Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2))

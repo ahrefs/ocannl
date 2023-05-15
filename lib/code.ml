@@ -566,7 +566,9 @@ let interpret_code ?task_id synchronizer llc =
               raise e
           in
           let target_dim =
-            match target_dims.(provider_dim) with Dim d | Frozen d -> d | Parallel -> !Shape.num_parallel_tasks
+            match target_dims.(provider_dim) with
+            | Dim d | Frozen d -> d
+            | Parallel -> invalid_arg "Code.interpreter: dynamic indexing should skip parallel axes"
           in
           (fst env, Map.add_exn ~key ~data:(actual % target_dim) @@ snd env))
     in
@@ -662,7 +664,7 @@ let get_node store (uid : NodeUI.tensor_ptr) =
 let get_other_node node_store ptr =
   get_node node_store
     { ptr with field = (if NodeUI.equal_data_kind ptr.NodeUI.field Value then Grad else Value) }
-    
+
 let precompute_constants ?idcs node_store top_node llv =
   let exception Non_literal of int in
   let rec loop llv =
@@ -743,7 +745,8 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
         Hash_set.add set_node.assignments (lookup ~task_id env idcs);
         if virtualize_settings.inline_constants then precompute_constants ~idcs node_store set_node llv;
         Array.iter idcs ~f:(function
-          | Shape.Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _ -> set_node.non_virtual <- true
+          | Shape.Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _ ->
+              set_node.non_virtual <- true
           | Fixed_idx _ | Task_id -> ()
           | Iterator s ->
               let old_tensor = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tensor) in
