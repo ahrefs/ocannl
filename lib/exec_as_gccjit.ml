@@ -57,9 +57,12 @@ let get_tensor { ctx; func; tensors; task_init_block } ~host_idcs ptr : tensor =
           ~f:
             (fun was_frozen -> function
               | Shape.Parallel | Frozen _ -> if was_frozen then Continue true else Stop false
-              | _ -> if was_frozen then Stop false else Continue false)
+              | _ -> Continue false)
           ~finish:(fun _ -> true)
       in
+      let c_void_ptr = Type.(get ctx Type.Void_ptr) in
+      let c_index = Type.get ctx Type.Size_t in
+      let c_int = Type.get ctx Type.Int in
       let tensor c_typ is_double arr =
         let num_typ = Type.(get ctx c_typ) in
         let hosted_ptr =
@@ -71,17 +74,26 @@ let get_tensor { ctx; func; tensors; task_init_block } ~host_idcs ptr : tensor =
         let local = Function.local func arr_typ @@ NodeUI.tensor_ptr_name ptr in
         let dims = Bigarray.Genarray.dims arr in
         Option.iter hosted_ptr ~f:(fun hosted_ptr ->
-            let c_index = Type.get ctx Type.Size_t in
             if local_is_slice_of_host then
               let offset_idcs =
-                Array.map2_exn host_idcs axes ~f:(fun idx -> function
-                  | Frozen _ | Parallel -> idx | Dim _ -> RValue.zero ctx c_index)
+                try
+                  Array.map2_exn host_idcs axes ~f:(fun idx -> function
+                    | Frozen _ | Parallel -> idx | Dim _ -> RValue.zero ctx c_int)
+                with e ->
+                  Caml.Format.printf "\nMismatch host_idcs axes = %a\n%!" Sexp.pp_hum
+                    ([%sexp_of: Shape.dim array] axes);
+                  raise e
               in
               let offset = jit_array_offset ctx ~idcs:offset_idcs ~dims in
               let lhs = LValue.access_array hosted_ptr offset in
+              let cast_void rv = RValue.cast ctx rv c_void_ptr in
               Block.eval task_init_block
               @@ RValue.call ctx (Function.builtin ctx "memcpy")
-                   [ RValue.lvalue @@ local; RValue.lvalue lhs; RValue.int ctx c_index host_size_in_bytes ]
+                   [
+                     cast_void @@ LValue.address local;
+                     cast_void @@ LValue.address lhs;
+                     RValue.int ctx c_index host_size_in_bytes;
+                   ]
             else failwith "Exec_as_gccjit: non-slice hosted: NOT IMPLEMENTED YET");
         let update_on_host = n.is_recurrent in
         {
@@ -150,15 +162,15 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
-  let lookup ?provider_dim ~on_host (env, dyn_env) indices =
+  let lookup ?provider_dim ?(example_only = false) ~on_host (env, dyn_env) indices =
     let open Gccjit in
-    let c_index = Type.get ctx Type.Int in
     Array.map indices ~f:(function
       | Shape.Fixed_idx i -> RValue.int ctx c_index i
       | Iterator s -> Map.find_exn env s
       | Task_id when on_host -> RValue.param task_id
       | Task_id -> RValue.zero ctx c_index
       | Dynamic_recipient s -> Map.find_exn dyn_env s
+      | Dynamic_provider _ when example_only -> RValue.zero ctx c_index
       | Dynamic_provider _ -> Option.value_exn provider_dim
       | Frozen_recipient s when on_host -> Map.find_exn dyn_env s
       | Frozen_recipient _ -> RValue.zero ctx c_index)
@@ -332,7 +344,7 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
     Block.jump !current_block b_loop_cond;
     current_block := b_after_loop
   and jit_dynamic_indices ~name ~env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body =
-    let host_idcs = lookup ~on_host:true env tensor_idcs in
+    let host_idcs = lookup ~on_host:true ~example_only:true env tensor_idcs in
     let tensor = get_tensor state ~host_idcs tensor in
     let env =
       Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env (Symbol s as key) ->

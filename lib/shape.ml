@@ -1153,7 +1153,7 @@ let rec derive_projections (shapes : update_step) : projections =
       | Some _idx, Parallel ->
           Task_id
           (* FIXME: what about idx? What about identifying the inlining code block using idx?
-             Note we are excluding Parallel from project_iterators via opt_symbol. *)
+             Note we are excluding Parallel from product_iterators via opt_symbol. *)
       | None, Parallel -> Task_id
       | _, Dim 1 | None, _ -> Fixed_idx 0
       | Some idx, _ -> Iterator idx
