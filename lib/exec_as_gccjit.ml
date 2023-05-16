@@ -385,6 +385,7 @@ let jit_func ~name ctx proc =
   let main_block = Block.create ~name func in
   let state = { ctx; func; task_init_block; tensors = Hashtbl.Poly.create () } in
   let after_proc = jit_code ~name ~env ~task_id state main_block proc in
+  Block.jump task_init_block main_block;
   Block.return_void after_proc;
   if !Code.with_debug then
     let suf = "-gccjit-debug.c" in
