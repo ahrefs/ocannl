@@ -532,6 +532,14 @@ let take_skipping_parallel subs dims =
   in
   loop [] subs dims
 
+let take_keeping_parallel subs dims =
+  let rec loop acc subs = function
+    | Parallel :: dims -> loop (Parallel :: acc) subs dims
+    | dim :: dims when subs > 0 -> loop (dim :: acc) (subs - 1) dims
+    | _ -> List.rev acc
+  in
+  loop [] subs dims
+
 let count_parallel_among subs dims =
   let rec loop acc subs = function
     | Parallel :: dims -> loop (acc + 1) subs dims
@@ -1128,6 +1136,20 @@ let project_broad d1 d2 =
   | Parallel, Parallel -> Parallel
   | _ -> assert false
 
+let project_dyn_indexing dynamic_idcs targets_and_skipped =
+  let remaining_syms, idcs =
+    List.fold_left
+      ~init:(Array.to_list dynamic_idcs, [])
+      (Array.to_list targets_and_skipped)
+      ~f:(fun (syms, idcs) dim ->
+        match dim with
+        | Parallel -> (syms, Task_id :: idcs)
+        | Frozen _ -> (List.tl_exn syms, Frozen_recipient (List.hd_exn syms) :: idcs)
+        | Dim _ -> (List.tl_exn syms, Dynamic_recipient (List.hd_exn syms) :: idcs))
+  in
+  assert (List.is_empty remaining_syms);
+  Array.of_list_rev idcs
+
 (** Computes the indexing into subformulas given the shape information of a formula. The processing
     mirrors [propagate_shapes], but [derive_projections] should only be invoked when the shapes
     are inferred already. *)
@@ -1489,7 +1511,7 @@ let rec derive_projections (shapes : update_step) : projections =
         { reduced_sh2 with axis_labels = shift_axes_of_kind AxisKey.Output sh2 ~f:(( - ) 1) }
       in
       let sh1_size = List.length @@ list_of_dims @@ dims_of_kind over_kind sh1 in
-      let reduced_sh1, target_dims, logic =
+      let reduced_sh1, targets_and_skipped, target_dims, logic =
         if from_left then
           let n_par_axes = dims_of_kind over_kind sh1 |> list_of_dims |> count_parallel_among subs in
           let reduced_dims over_dims = map_dims over_dims ~f:(drop_keeping_parallel subs) in
@@ -1497,15 +1519,21 @@ let rec derive_projections (shapes : update_step) : projections =
           let target_dims =
             dims_of_kind over_kind sh1 |> list_of_dims |> take_skipping_parallel subs |> Array.of_list
           in
+          let targets_and_skipped =
+            dims_of_kind over_kind sh1 |> list_of_dims |> take_keeping_parallel subs |> Array.of_list
+          in
           let drop_left from_end = if from_end > sh1_size - subs - n_par_axes then -1 else from_end in
           let reduced_sh1 =
             { reduced_sh1 with axis_labels = shift_axes_of_kind over_kind sh1 ~f:drop_left }
           in
           if other_axes_pointwise then
-            (reduced_sh1, target_dims, Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2))
+            ( reduced_sh1,
+              targets_and_skipped,
+              target_dims,
+              Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2) )
           else
             let extended_sh = append_all_axes ~prefix:reduced_sh2 ~main:reduced_sh1 () in
-            (reduced_sh1, target_dims, Transpose (Pointwise_un, extended_sh))
+            (reduced_sh1, targets_and_skipped, target_dims, Transpose (Pointwise_un, extended_sh))
         else
           let n_par_axes =
             dims_of_kind over_kind sh1 |> list_of_dims |> List.rev |> count_parallel_among subs
@@ -1518,45 +1546,44 @@ let rec derive_projections (shapes : update_step) : projections =
             dims_of_kind over_kind sh1 |> list_of_dims |> List.rev |> take_skipping_parallel subs
             |> Array.of_list_rev
           in
+          let targets_and_skipped =
+            dims_of_kind over_kind sh1 |> list_of_dims |> List.rev |> take_keeping_parallel subs
+            |> Array.of_list_rev
+          in
           let drop_right from_end = from_end - subs - n_par_axes in
           let reduced_sh1 =
             { reduced_sh1 with axis_labels = shift_axes_of_kind over_kind sh1 ~f:drop_right }
           in
           if other_axes_pointwise then
-            (reduced_sh1, target_dims, Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2))
+            ( reduced_sh1,
+              targets_and_skipped,
+              target_dims,
+              Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2) )
           else
             let extended_sh = append_all_axes ~suffix:reduced_sh2 ~main:reduced_sh1 () in
-            (reduced_sh1, target_dims, Transpose (Pointwise_un, extended_sh))
+            (reduced_sh1, targets_and_skipped, target_dims, Transpose (Pointwise_un, extended_sh))
       in
       let update_other_axes = { shape = cur_sh; logic } in
       let projections = derive_projections update_other_axes in
       let dynamic_idcs = Array.init subs ~f:(fun _ -> get_symbol ()) in
       let proj_b, proj_i, proj_o = indices_bio reduced_sh1 projections.project_rhs1 in
       let project_rhs1 =
-        let f s = function
-          | Dim _ -> Dynamic_recipient s
-          | Frozen _ -> Frozen_recipient s
-          | Parallel -> assert false
-        in
         if from_left then
           match over_kind with
-          | AxisKey.Batch -> Array.append (Array.map2_exn dynamic_idcs target_dims ~f) projections.project_rhs1
+          | AxisKey.Batch ->
+              Array.append (project_dyn_indexing dynamic_idcs targets_and_skipped) projections.project_rhs1
           | AxisKey.Input ->
-              Array.concat
-                [ proj_b; Array.map2_exn dynamic_idcs target_dims ~f; proj_i; proj_o ]
+              Array.concat [ proj_b; project_dyn_indexing dynamic_idcs targets_and_skipped; proj_i; proj_o ]
           | AxisKey.Output ->
-              Array.concat
-                [ proj_b; proj_i; Array.map2_exn dynamic_idcs target_dims ~f; proj_o ]
+              Array.concat [ proj_b; proj_i; project_dyn_indexing dynamic_idcs targets_and_skipped; proj_o ]
         else
           match over_kind with
           | AxisKey.Batch ->
-              Array.concat
-                [ proj_b; Array.map2_exn dynamic_idcs target_dims ~f; proj_i; proj_o ]
+              Array.concat [ proj_b; project_dyn_indexing dynamic_idcs targets_and_skipped; proj_i; proj_o ]
           | AxisKey.Input ->
-              Array.concat
-                [ proj_b; proj_i; Array.map2_exn dynamic_idcs target_dims ~f; proj_o ]
+              Array.concat [ proj_b; proj_i; project_dyn_indexing dynamic_idcs targets_and_skipped; proj_o ]
           | AxisKey.Output ->
-              Array.append projections.project_rhs1 (Array.map2_exn dynamic_idcs target_dims ~f)
+              Array.append projections.project_rhs1 (project_dyn_indexing dynamic_idcs targets_and_skipped)
       in
       let project_rhs2 =
         Some
