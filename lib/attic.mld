@@ -256,4 +256,12 @@ let get_grad (type val_t arr_t) (prec : (val_t, arr_t) precision) uid : arr_t =
              Some n )
   | _, None -> raise @@ Runtime_error ("get_grad: non-form node", Some n)
 
+
+    let nontask_ts, task_ts = partition_tf_with_comment ~f:parallelizable t_c_s in
+    let nontask_ts = rebalance @@ Array.map nontask_ts ~f:(fun (t, _) -> loop ~single_task:true t) in
+    let task_ts = Lines (Array.map ~f:snd task_ts) in
+    match s with
+    | None -> Lines (flat_lines [| nontask_ts; task_ts |])
+    | Some s -> Lines (flat_lines [| Comment s; nontask_ts; task_ts |])
+
 ]}

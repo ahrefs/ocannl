@@ -247,7 +247,10 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
     | Code.Lines lines ->
         Array.iteri lines ~f:(fun i line -> loop ~name:(name ^ "_at_line_" ^ Int.to_string i) line)
     | For_loop { index; from_; to_; body } -> jit_for_loop ~env index ~from_ ~to_ (Either.First body)
-    | If_task_id_is { for_task_id = _; body } when !Shape.num_parallel_tasks <= 1 -> loop ~name body
+    | Rebalance (_, cs) ->
+      (* FIXME: NOT IMPLEMENTED YET *)
+      Array.iteri cs ~f:(fun i line -> loop ~name:(name ^ "_at_par_line_" ^ Int.to_string i) line)
+      | If_task_id_is { for_task_id = _; body } when !Shape.num_parallel_tasks <= 1 -> loop ~name body
     | If_task_id_is { for_task_id; body } ->
         let open Gccjit in
         let id = get_uid () in

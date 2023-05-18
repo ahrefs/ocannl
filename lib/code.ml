@@ -117,6 +117,7 @@ type _ low_level =
   | Lines : unit low_level array -> unit low_level
   | For_loop : { index : sym_index; from_ : int; to_ : int; body : unit low_level } -> unit low_level
   | If_task_id_is : { for_task_id : int; body : unit low_level } -> unit low_level
+  | Rebalance : string option * unit low_level array -> unit low_level
   | Dynamic_indices : {
       tensor : NodeUI.tensor_ptr;
       tensor_idcs : index array;
@@ -146,17 +147,17 @@ let binop ~op ~rhs1 ~rhs2 = match op with Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Bin
 let unop ~op ~rhs = match op with Identity -> rhs | _ -> Unop (op, rhs)
 let rec flat_lines ts = Array.concat_map ts ~f:(function Lines ts -> flat_lines ts | t -> [| t |])
 
-let partition_tf_with_comment t ~f =
-  let both = Array.map t ~f:(fun tc -> if f tc then Either.First tc else Either.Second tc) in
+let partition_tf_with_comment cs ~f =
+  let both = Array.map cs ~f:(fun c -> if f c then Either.First c else Either.Second c) in
   let trues =
     Array.filter_map both ~f:(function
       | First x -> Some x
-      | Second ((_, Comment _) as x) -> Some x
+      | Second (Comment _ as x) -> Some x
       | Second _ -> None)
   in
   let falses =
     Array.filter_map both ~f:(function
-      | First ((_, Comment _) as x) -> Some x
+      | First (Comment _ as x) -> Some x
       | First _ -> None
       | Second x -> Some x)
   in
@@ -167,6 +168,9 @@ let localize_tensors ~for_task_id llc =
   let rec loop = function
     | Lines llcs -> Array.iter ~f:loop llcs
     | For_loop { body; _ } | Dynamic_indices { body; _ } -> loop body
+    | Rebalance (_, cs) ->
+        (* FIXME: NOT IMPLEMENTED YET *)
+        Array.iter ~f:loop cs
     | Set (ptr, _, llv) ->
         let n = NodeUI.get ptr.id in
         if Option.is_some n.localized_to then assert ([%equal: int option] n.localized_to for_task)
@@ -202,6 +206,9 @@ let rec has_parallel_dim : type a. a low_level -> bool = function
   | Comment _ -> false
   | Lines ls -> Array.exists ~f:has_parallel_dim ls
   | For_loop { body; _ } -> has_parallel_dim body
+  | Rebalance (_, cs) ->
+      (* FIXME: NOT IMPLEMENTED YET *)
+      Array.exists ~f:has_parallel_dim cs
   | If_task_id_is { body; _ } -> has_parallel_dim body
   | Dynamic_indices { tensor = _; tensor_idcs; dynamic_idcs = _; target_dims; body } ->
       Array.exists tensor_idcs ~f:Shape.is_task_id
@@ -219,10 +226,8 @@ let rec has_parallel_dim : type a. a low_level -> bool = function
   | Unop (_, llv) -> has_parallel_dim llv
   | Constant _ -> false
 
-let parallelizable (_, c) = not (has_parallel_dim c)
-
 let to_low_level (code : t) : unit low_level =
-  let rec loop ~single_task code =
+  let rec loop code =
     match code with
     | Accum_binop { zero_out; accum; op; lhs; rhs1; rhs2; projections } ->
         let projections = projections () in
@@ -244,7 +249,6 @@ let to_low_level (code : t) : unit low_level =
           let body =
             Set (lhs, lhs_idcs, binop ~op:accum ~rhs1:lhs_ll ~rhs2:(binop ~op ~rhs1:rhs1_ll ~rhs2:rhs2_ll))
           in
-          let body = if single_task || has_parallel_dim body then body else rebalance [| body |] in
           match Array.find rhs2_idcs ~f:Shape.is_dynamic_provider with
           | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
               Dynamic_indices { tensor = rhs2; tensor_idcs = rhs2_idcs; dynamic_idcs; target_dims; body }
@@ -272,8 +276,7 @@ let to_low_level (code : t) : unit low_level =
         let for_loops =
           for_loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators)
         in
-        if zero_out then
-          Lines [| loop ~single_task (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
+        if zero_out then Lines [| loop (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
         else for_loops
     | Accum_unop { zero_out; accum; op; lhs; rhs; projections } ->
         let projections = projections () in
@@ -284,8 +287,7 @@ let to_low_level (code : t) : unit low_level =
           let lhs_idcs = lhs_idx iters in
           let lhs_ll = Get (lhs, lhs_idcs) in
           let rhs_ll = Get (rhs, rhs_idx iters) in
-          let body = Set (lhs, lhs_idcs, binop ~op:accum ~rhs1:lhs_ll ~rhs2:(unop ~op ~rhs:rhs_ll)) in
-          if single_task || has_parallel_dim body then body else rebalance [| body |]
+          Set (lhs, lhs_idcs, binop ~op:accum ~rhs1:lhs_ll ~rhs2:(unop ~op ~rhs:rhs_ll))
         in
         let rec for_loop rev_iters = function
           | [], [] -> basecase rev_iters
@@ -300,19 +302,18 @@ let to_low_level (code : t) : unit low_level =
         let for_loops =
           for_loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators)
         in
-        if zero_out then
-          Lines [| loop ~single_task (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
+        if zero_out then Lines [| loop (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
         else for_loops
     | Noop -> Lines [||]
-    | Block_comment (s, (Par _ as c)) when not single_task -> loop_par ~s c
-    | Block_comment (s, (ParHint _ as c)) when !force_unsafe_parhint && not single_task -> loop_par ~s c
-    | Par _ when not single_task -> loop_par code
-    | ParHint _ when !force_unsafe_parhint && not single_task -> loop_par code
-    | Block_comment (s, c) -> Lines [| Comment s; loop ~single_task c |]
-    | Par (c1, c2) | ParHint (c1, c2) | Seq (c1, c2) -> (
+    | Block_comment (s, (Par _ as c)) -> loop_par ~s c
+    | Block_comment (s, (ParHint _ as c)) when !force_unsafe_parhint -> loop_par ~s c
+    | Par _ -> loop_par code
+    | ParHint _ when !force_unsafe_parhint -> loop_par code
+    | Block_comment (s, c) -> Lines [| Comment s; loop c |]
+    | ParHint (c1, c2) | Seq (c1, c2) -> (
         (* TODO: this ignores parallelization altogether, don't! *)
-        let ll1 = loop ~single_task c1 in
-        let ll2 = loop ~single_task c2 in
+        let ll1 = loop c1 in
+        let ll2 = loop c2 in
         match (ll1, ll2) with
         | Lines ls1, Lines ls2 -> Lines (Array.append ls1 ls2)
         | _, Lines ls2 -> Lines (Array.append [| ll1 |] ls2)
@@ -331,20 +332,14 @@ let to_low_level (code : t) : unit low_level =
         in
         let for_loops = loop [] (Array.to_list product_space) in
         for_loops
-    | Fetch { tensor = _; fetch_op = Synthetic gen } -> loop ~single_task gen
+    | Fetch { tensor = _; fetch_op = Synthetic gen } -> loop gen
     | Fetch { tensor = _; fetch_op = Imported _ } -> failwith "to_low_level: Imported NOT IMPLEMENTED YET"
   and loop_par ?s c =
     let ts = flat_parallel ~force_hints:!force_unsafe_parhint [| c |] in
-    let t_c_s = Array.map ts ~f:(fun t -> (t, loop ~single_task:false t)) in
-    let nontask_ts, task_ts = partition_tf_with_comment ~f:parallelizable t_c_s in
-    let nontask_ts = rebalance @@ Array.map nontask_ts ~f:(fun (t, _) -> loop ~single_task:true t) in
-    let task_ts = Lines (Array.map ~f:snd task_ts) in
-    match s with
-    | None -> Lines (flat_lines [| nontask_ts; task_ts |])
-    | Some s -> Lines (flat_lines [| Comment s; nontask_ts; task_ts |])
+    Rebalance (s, Array.map ts ~f:loop)
   in
 
-  loop ~single_task:false code
+  loop code
 
 let executor_print_comments = ref false
 let keep_files_in_run_directory = ref false
@@ -413,6 +408,9 @@ let interpret_code ?task_id llc =
         for data = from_ to to_ do
           loop_proc (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
+    | Rebalance (_, cs) ->
+        (* FIXME: NOT IMPLEMENTED YET *)
+        Array.iter ~f:loop cs
     | If_task_id_is { for_task_id; body } -> if task_id () = for_task_id then loop body
     | Set (ptr, indices, Binop (op, Get (ptr2, indices2), c2))
       when NodeUI.equal_tensor_ptr ptr ptr2 && [%equal: index array] indices indices2 ->
@@ -737,6 +735,9 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
         for data = from_ to to_ do
           loop_proc ~task_id (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
+    | Rebalance (_, cs) ->
+        (* FIXME: NOT IMPLEMENTED YET *)
+        Array.iter ~f:loop cs
     | If_task_id_is { for_task_id; body } -> if task_id = for_task_id then loop body
     | Set (tensor, idcs, llv) ->
         loop_float ~task_id env llv;
@@ -855,6 +856,9 @@ let process_computation node_store node top_llc =
     match llc with
     | Lines body -> Array.iter ~f:loop body
     | For_loop { index; from_ = _; to_ = _; body } -> loop_proc ~env_dom:(Set.add env_dom index) body
+    | Rebalance (_, cs) ->
+        (* FIXME: NOT IMPLEMENTED YET *)
+        Array.iter ~f:loop cs
     | If_task_id_is { for_task_id = _; body } -> loop body
     | Set (tensor, indices, llv) ->
         if NodeUI.equal_tensor_ptr tensor top_data then (
@@ -941,6 +945,10 @@ let inline_computation ~id node call_args =
       | For_loop { index; body; _ } when Map.mem env index -> loop body
       | For_loop { index; from_; to_; body } ->
           Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop body
+      | Rebalance (s, cs) ->
+          (* FIXME: NOT IMPLEMENTED YET *)
+          let cs = Array.filter_map ~f:loop cs in
+          if Array.is_empty cs then None else Some (Rebalance (s, cs))
       | If_task_id_is { for_task_id = _; body } ->
           (* Inlined computations are governed by the inlining context, and cannot interfere across tasks.
              Undo parallelization. *)
@@ -990,6 +998,9 @@ let virtual_llc node_store reverse_node_map (llc : unit low_level) : unit low_le
             if not node.non_virtual then process_computation node_store node result;
             result
         | _ -> For_loop { index; from_; to_; body = loop body })
+    | Rebalance (s, cs) ->
+        (* FIXME: NOT IMPLEMENTED YET *)
+        Rebalance (s, Array.map ~f:loop cs)
     | If_task_id_is { for_task_id; body } -> If_task_id_is { for_task_id; body = loop body }
     | Set (tensor, indices, llv) ->
         let node : data_node = Hashtbl.find_exn node_store tensor in
@@ -1045,6 +1056,19 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
             if is_inline tensor then None
             else Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop_proc ~env_dom body
         | None -> Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop_proc ~env_dom body)
+    | Rebalance (s, cs) -> (
+        let multitask, unitask = partition_tf_with_comment ~f:has_parallel_dim cs in
+        let rebalanced =
+          if Array.is_empty unitask then None else Some (rebalance @@ Array.filter_map unitask ~f:loop)
+        in
+        let multitask = flat_lines @@ Array.filter_map ~f:loop multitask in
+        if Array.is_empty multitask && Option.is_none rebalanced then None
+        else
+          match s with
+          | None -> Some (Lines (Array.append (Option.to_array rebalanced) multitask))
+          | Some s ->
+              Some
+                (Lines (flat_lines @@ Array.concat [ [| Comment s |]; Option.to_array rebalanced; multitask ])))
     | If_task_id_is { for_task_id; body } ->
         Option.map ~f:(fun body -> If_task_id_is { for_task_id; body }) @@ loop_proc ~env_dom body
     | Set (tensor, indices, llv) ->
