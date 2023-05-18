@@ -26,8 +26,8 @@ type t = {
   mutable is_recurrent : bool;
       (** If true, there is a cell in the value tensor that is read before it is written. *)
   mutable only_reads_and_updates : bool;
-      (** If true, the only writes into the tensor are updates. An update is a read immediately followed
-          by a write of the same cell, as in accumulation operations [=+], [=*]. *)
+      (** If true, the only non-constant writes into the tensor are updates. An update is a read immediately
+          followed by a write of the same cell, as in accumulation operations [=+], [=*]. *)
   mutable backend_info : string;
       (** Information about e.g. the memory strategy that the most recent backend chose for the tensor. *)
 }

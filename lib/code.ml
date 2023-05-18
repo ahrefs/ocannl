@@ -717,6 +717,7 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
         | Binop (_, Get (tensor2, idcs2), _)
           when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: index array] idcs idcs2 ->
             ()
+        | Constant _ -> ()
         | _ -> (NodeUI.get tensor.id).only_reads_and_updates <- false);
         Array.iter idcs ~f:(function
           | Shape.Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _ ->
