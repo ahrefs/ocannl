@@ -166,6 +166,12 @@ let create_array (type arr_t) (prec : (float, arr_t) precision) dims (init_op : 
 
 let create_ndarray prec dims init_op = as_ndarray prec @@ create_array prec dims init_op
 
+let precision_in_bytes = function
+  | Byte_as_int_nd _ -> 1
+  | Half_as_int_nd _ -> 2
+  | Single_nd _ -> 4
+  | Double_nd _ -> 8
+
 type 'c cast_map_as_bigarray = {
   ff :
     'a 'b.

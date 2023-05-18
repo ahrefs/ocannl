@@ -1098,6 +1098,7 @@ let optimize_proc llc =
     in
     Hashtbl.iter node_store ~f:(fun dn ->
         let n = NodeUI.get dn.id in
+        if not dn.non_device_only then n.device_only <- true;
         if is_inline dn then
           if Option.is_none n.node.grad then n.virtual_ <- true
           else

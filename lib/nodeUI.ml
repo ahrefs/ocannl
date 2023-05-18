@@ -503,6 +503,7 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
     let desc_l = match n.desc_label with None -> "" | Some l -> l ^ " " in
     let op_l = match n.op_label with "" -> "" | l -> "<" ^ l ^ ">" in
     let prefix = "[" ^ id ^ "] " ^ desc_l ^ op_l ^ if n.virtual_ then " virtual" else "" in
+    let prefix = if String.is_empty n.backend_info then prefix else prefix ^ " " ^ n.backend_info in
     let labels = Shape.axis_map_to_dims_index ~default:"" n.shape.axis_labels in
     let indices = default_display_indices n.shape in
     match (computed_externally, with_value, with_grad, n.node.grad) with
@@ -535,7 +536,9 @@ let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_value =
 let print_node_preamble id =
   try
     let n = get id in
-    Stdio.printf "Node %s %s;\n%!" (node_header n) (if n.virtual_ then " (virtual)" else "")
+    Stdio.printf "Node %s%s%s;\n%!" (node_header n)
+      (if n.virtual_ then " (virtual)" else "")
+      (if String.is_empty n.backend_info then "" else " " ^ n.backend_info)
   with Not_found_s _ | Caml.Not_found -> ()
 
 let print_preamble ?(from = 0) () =
