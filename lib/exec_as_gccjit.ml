@@ -41,7 +41,7 @@ type state = {
   tensors : (NodeUI.tensor_ptr, tensor) Hashtbl.Poly.t;
   task_init_block : Gccjit.block;
   task_finalize_block : Gccjit.block;
-  task_zero_finalize_block : Gccjit.block;
+  localized_finalize_block : Gccjit.block;
 }
 
 let jit_array_offset ctx ~idcs ~dims =
@@ -51,7 +51,7 @@ let jit_array_offset ctx ~idcs ~dims =
       RValue.binary_op ctx Plus c_index idx
       @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
 
-let get_tensor { ctx; func; tensors; task_init_block; task_finalize_block; task_zero_finalize_block }
+let get_tensor { ctx; func; tensors; task_init_block; task_finalize_block; localized_finalize_block }
     ~jit_code ~host_idcs ptr : tensor =
   let open Gccjit in
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
@@ -108,7 +108,7 @@ let get_tensor { ctx; func; tensors; task_init_block; task_finalize_block; task_
                        RValue.int ctx c_index device_size_in_bytes;
                      ];
               if is_parallel || not update_on_host then
-                Block.eval (if is_parallel then task_finalize_block else task_zero_finalize_block)
+                Block.eval (if is_parallel then task_finalize_block else localized_finalize_block)
                 @@ RValue.call ctx (Function.builtin ctx "memcpy")
                      [
                        cast_void @@ LValue.address local;
@@ -417,7 +417,7 @@ let jit_func ~name ctx proc =
   let func = Function.create ctx fkind (Type.get ctx Void) name [ task_id ] in
   let task_init_block = Block.create ~name:("init_" ^ name) func in
   let task_finalize_block = Block.create ~name:("finalize_" ^ name) func in
-  let task_zero_finalize_block = Block.create ~name:("finalize_task_zero_" ^ name) func in
+  let localized_finalize_block = Block.create ~name:("finalize_task_zero_" ^ name) func in
   let main_block = Block.create ~name func in
   let state =
     {
@@ -425,7 +425,7 @@ let jit_func ~name ctx proc =
       func;
       task_init_block;
       task_finalize_block;
-      task_zero_finalize_block;
+      localized_finalize_block;
       tensors = Hashtbl.Poly.create ();
     }
   in
@@ -435,8 +435,8 @@ let jit_func ~name ctx proc =
   let c_index = Type.get ctx Type.Int in
   let b_after_if = Block.create ~name:("after_finalize_task_zero_" ^ name) func in
   let guard = RValue.comparison ctx Eq (RValue.param task_id) (RValue.zero ctx c_index) in
-  Block.cond_jump task_finalize_block guard task_zero_finalize_block (* on true *) b_after_if (* on false *);
-  Block.jump task_zero_finalize_block b_after_if;
+  Block.cond_jump task_finalize_block guard localized_finalize_block (* on true *) b_after_if (* on false *);
+  Block.jump localized_finalize_block b_after_if;
   Block.return_void b_after_if;
   if !Code.with_debug then
     let suf = "-gccjit-debug.c" in
