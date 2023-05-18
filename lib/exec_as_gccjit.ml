@@ -13,8 +13,7 @@ type tensor = {
       (** Pointer to the first value of the associated [Bigarray], if hosted. Usually it does not correspond
           to the local tensor (e.g. if task id > 0). *)
   local : Gccjit.lvalue option;
-      (** A local array, if any. If both [hosted_ptr] and [local] are set,
-      they are synchronized initially and at the synchronization points. *)
+      (** A local array, if any. *)
   update_on_host : bool;
       (** If true, in case of update assignment ([Block.assign_op]), the assignment will happen directly
           on the host. *)
@@ -254,17 +253,6 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
         loop ~name body;
         Block.jump !current_block b_after_if;
         current_block := b_after_if
-    | Synchronize _ when !Shape.num_parallel_tasks <= 1 -> ()
-    | Synchronize info ->
-        (* FIXME: lock-free implementation with an int for each task that counts the stage the task
-           is at, and a busy loop waiting for all other stages to arrive at the current task's
-           (incremented) stage. *)
-        (* failwith ("Exec_as_gccjit.jit_code.Synchronize: NOT IMPLEMENTED YET -- at " ^ info.info) *)
-        log_comment ("NOT IMPLEMENTED SYNCHRONIZATION: " ^ info.info)
-    | Reset_synchronizer when !Shape.num_parallel_tasks <= 1 -> ()
-    | Reset_synchronizer ->
-        (* failwith "Exec_as_gccjit.jit_code.Reset_synchronizer: NOT IMPLEMENTED YET" *)
-        log_comment "NOT IMPLEMENTED RESET SYNCHRONIZATER"
     | Set (_, _, Binop (Arg2, Get (_, _), _)) -> assert false
     | Set (data_node, idcs, Binop (op, Get (tensor, idcs2), c2))
       when NodeUI.equal_tensor_ptr data_node tensor

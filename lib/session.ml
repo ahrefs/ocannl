@@ -269,7 +269,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
      else
        let params_update = Block_comment ("Params update", all_parallel update_params_code) in
        session_step_update :=
-         sequential [ preparation; forward; backprop; Synchronize "pre-params-update"; params_update ]);
+         sequential [ preparation; forward; backprop; params_update ]);
     if run_for_steps <= 1 then session_step_update_compiled := compile_proc ~name !session_step_update
     else
       session_step_update_compiled :=
@@ -281,7 +281,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
               to_ = run_for_steps - 1;
               body =
                 Lines
-                  [| Comment "Update sub-step"; Reset_synchronizer; compile_proc ~name !session_step_update |];
+                  [| Comment "Update sub-step"; compile_proc ~name !session_step_update |];
             }));
   if generating || reinit || roots_changed then (
     let num_inits = List.length !session_initializations in

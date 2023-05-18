@@ -27,7 +27,6 @@ type init_op = N.init_op =
 type fetch_op = Constant of float | Synthetic of t | Imported of global_identifier [@@deriving sexp]
 
 and t =
-  | Synchronize of string  (** Wait for all tasks to reach this point before proceeding. *)
   | Par of t * t  (** These tasks can proceed in parallel, there is no interaction. *)
   | ParHint of t * t
       (** Computing [ParHint (c1, c2)] can proceed in parallel on [c1] and [c2], but when [c2] reads values
@@ -118,8 +117,6 @@ type _ low_level =
   | Lines : unit low_level array -> unit low_level
   | For_loop : { index : sym_index; from_ : int; to_ : int; body : unit low_level } -> unit low_level
   | If_task_id_is : { for_task_id : int; body : unit low_level } -> unit low_level
-  | Synchronize : { stage : int; info : string } -> unit low_level
-  | Reset_synchronizer : unit low_level
   | Dynamic_indices : {
       tensor : NodeUI.tensor_ptr;
       tensor_idcs : index array;
@@ -174,8 +171,6 @@ let rec has_parallel_dim : type a. a low_level -> bool = function
   | Lines ls -> Array.exists ~f:has_parallel_dim ls
   | For_loop { body; _ } -> has_parallel_dim body
   | If_task_id_is { body; _ } -> has_parallel_dim body
-  | Synchronize _ -> false
-  | Reset_synchronizer -> false
   | Dynamic_indices { tensor = _; tensor_idcs; dynamic_idcs = _; target_dims; body } ->
       Array.exists tensor_idcs ~f:Shape.is_task_id
       || Array.exists ~f:Shape.is_parallel target_dims
@@ -192,16 +187,9 @@ let rec has_parallel_dim : type a. a low_level -> bool = function
   | Unop (_, llv) -> has_parallel_dim llv
   | Constant _ -> false
 
-let rec has_synchronize = function
-  | Par (t1, t2) | ParHint (t1, t2) | Seq (t1, t2) -> has_synchronize t1 || has_synchronize t2
-  | Block_comment (_, t) -> has_synchronize t
-  | Accum_binop _ | Accum_unop _ | Fetch _ | Noop -> false
-  | Synchronize _ -> true
-
-let parallelizable (t, c) = not (has_parallel_dim c || has_synchronize t)
+let parallelizable (_, c) = not (has_parallel_dim c)
 
 let to_low_level (code : t) : unit low_level =
-  let synchronizer_stage = ref 0 in
   let rec loop ~single_task code =
     match code with
     | Accum_binop { zero_out; accum; op; lhs; rhs1; rhs2; projections } ->
@@ -284,10 +272,6 @@ let to_low_level (code : t) : unit low_level =
           Lines [| loop ~single_task (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
         else for_loops
     | Noop -> Lines [||]
-    | Synchronize info ->
-        assert (not single_task);
-        Int.incr synchronizer_stage;
-        Synchronize { stage = !synchronizer_stage; info }
     | Block_comment (s, (Par _ as c)) when not single_task -> loop_par ~s c
     | Block_comment (s, (ParHint _ as c)) when !force_unsafe_parhint && not single_task -> loop_par ~s c
     | Par _ when not single_task -> loop_par code
@@ -321,19 +305,11 @@ let to_low_level (code : t) : unit low_level =
     let ts = flat_parallel ~force_hints:!force_unsafe_parhint [| c |] in
     let t_c_s = Array.map ts ~f:(fun t -> (t, loop ~single_task:false t)) in
     let nontask_ts, task_ts = partition_tf_with_comment ~f:parallelizable t_c_s in
-    Int.incr synchronizer_stage;
-    let sync =
-      Synchronize
-        {
-          stage = !synchronizer_stage;
-          info = (match s with Some s -> "past-par-" ^ s | None -> "past-parallel");
-        }
-    in
     let nontask_ts = rebalance @@ Array.map nontask_ts ~f:(fun (t, _) -> loop ~single_task:true t) in
     let task_ts = Lines (Array.map ~f:snd task_ts) in
     match s with
-    | None -> Lines (flat_lines [| nontask_ts; task_ts; sync |])
-    | Some s -> Lines (flat_lines [| Comment s; nontask_ts; task_ts; sync |])
+    | None -> Lines (flat_lines [| nontask_ts; task_ts |])
+    | Some s -> Lines (flat_lines [| Comment s; nontask_ts; task_ts |])
   in
 
   loop ~single_task:false code
@@ -374,7 +350,7 @@ let interpret_binop op v1 v2 =
   | ToPowOf -> if is_integer v2 then int_pow v1 @@ to_int v2 else v1 ** v2
   | Relu_gate -> if v1 > 0.0 then v2 else 0.0
 
-let interpret_code ?task_id synchronizer llc =
+let interpret_code ?task_id llc =
   (* Local scope ids can be non-unique due to inlining. *)
   let locals = ref Map.Poly.empty in
   let task_id () =
@@ -406,14 +382,6 @@ let interpret_code ?task_id synchronizer llc =
           loop_proc (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
     | If_task_id_is { for_task_id; body } -> if task_id () = for_task_id then loop body
-    | Synchronize { stage; info } ->
-        let task_id = task_id () in
-        if !debug_trace_interpretation then
-          Caml.Format.printf "TRACE: synchronize task_id %d for %d: %s\n%!" task_id stage info;
-        Synchronizer.synchronize ~task_id ~stage synchronizer;
-        if !debug_trace_interpretation then
-          Caml.Format.printf "TRACE: task_id %d synchronized for %d: %s\n%!" task_id stage info
-    | Reset_synchronizer -> Synchronizer.synchronize_and_reset ~task_id:(task_id ()) synchronizer
     | Set (ptr, indices, Binop (op, Get (ptr2, indices2), c2))
       when NodeUI.equal_tensor_ptr ptr ptr2 && [%equal: index array] indices indices2 ->
         if !debug_trace_interpretation then
@@ -738,7 +706,6 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
           loop_proc ~task_id (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
     | If_task_id_is { for_task_id; body } -> if task_id = for_task_id then loop body
-    | Synchronize _ | Reset_synchronizer -> ()
     | Set (tensor, idcs, llv) ->
         loop_float ~task_id env llv;
         Hash_set.add nodes tensor.id;
@@ -856,8 +823,6 @@ let process_computation node_store node top_llc =
     | Lines body -> Array.iter ~f:loop body
     | For_loop { index; from_ = _; to_ = _; body } -> loop_proc ~env_dom:(Set.add env_dom index) body
     | If_task_id_is { for_task_id = _; body } -> loop body
-    | Synchronize _ -> raise Non_virtual
-    | Reset_synchronizer -> raise Non_virtual
     | Set (tensor, indices, llv) ->
         if NodeUI.equal_tensor_ptr tensor top_data then (
           check_idcs indices;
@@ -947,10 +912,6 @@ let inline_computation ~id node call_args =
           (* Inlined computations are governed by the inlining context, and cannot interfere across tasks.
              Undo parallelization. *)
           loop body
-      | Synchronize _ ->
-          (* Undo parallelization. *)
-          None
-      | Reset_synchronizer -> raise Non_virtual
       | Set (tensor, indices, llv) when NodeUI.equal_tensor_ptr tensor at_data ->
           assert ([%equal: index array option] (Some indices) def_args);
           Some (Set_local (id, loop_float llv))
@@ -997,8 +958,6 @@ let virtual_llc node_store reverse_node_map (llc : unit low_level) : unit low_le
             result
         | _ -> For_loop { index; from_; to_; body = loop body })
     | If_task_id_is { for_task_id; body } -> If_task_id_is { for_task_id; body = loop body }
-    | Synchronize info -> Synchronize info
-    | Reset_synchronizer -> Reset_synchronizer
     | Set (tensor, indices, llv) ->
         let node : data_node = Hashtbl.find_exn node_store tensor in
         let next = if node.non_virtual then process_for else Set.add process_for tensor in
@@ -1055,8 +1014,6 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
         | None -> Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop_proc ~env_dom body)
     | If_task_id_is { for_task_id; body } ->
         Option.map ~f:(fun body -> If_task_id_is { for_task_id; body }) @@ loop_proc ~env_dom body
-    | Synchronize info -> Some (Synchronize info)
-    | Reset_synchronizer -> Some Reset_synchronizer
     | Set (tensor, indices, llv) ->
         if is_inline tensor then None
         else (
@@ -1159,24 +1116,13 @@ let compile_proc ~name proc =
       ~data:(Sexp.to_string_hum @@ sexp_of_low_level Unit.sexp_of_t result);
   result
 
-let synchronizer = ref None
-
 let interpret_task_id_func ~name:_ compiled ~task_id =
-  if task_id = 0 then (
-    synchronizer := Some (Synchronizer.make !Shape.num_parallel_tasks);
-    if !debug_trace_interpretation && task_id = 0 then
-      Caml.Format.printf "TRACE: Interpreted program:@ %a\n%!" Sexp.pp_hum
-      @@ sexp_of_low_level Unit.sexp_of_t compiled)
-  else
-    while Option.is_none !synchronizer do
-      Caml.Domain.cpu_relax ()
-    done;
-  interpret_code ~task_id (Option.value_exn !synchronizer) compiled;
-  synchronizer := None
+  if !debug_trace_interpretation && task_id = 0 then
+    Caml.Format.printf "TRACE: Interpreted program:@ %a\n%!" Sexp.pp_hum
+    @@ sexp_of_low_level Unit.sexp_of_t compiled;
+  interpret_code ~task_id compiled
 
-let interpret_unit_func ~name:_ compiled () =
-  let synchronizer = Synchronizer.make 1 in
-  interpret_code synchronizer compiled
+let interpret_unit_func ~name:_ compiled () = interpret_code compiled
 
 module CDSL = struct
   let value_of_id id : NodeUI.tensor_ptr = { id; field = Value }

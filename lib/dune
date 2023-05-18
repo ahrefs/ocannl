@@ -15,7 +15,6 @@
  (preprocess
   (pps ppx_jane ppx_ocannl ppx_minidebug))
  (modules
-  synchronizer
   PrintBox_utils
   node
   nodeUI
