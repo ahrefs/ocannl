@@ -30,6 +30,12 @@ type t = {
           followed by a write of the same cell, as in accumulation operations [=+], [=*]. *)
   mutable backend_info : string;
       (** Information about e.g. the memory strategy that the most recent backend chose for the tensor. *)
+  mutable localized_to : int option;
+      (** The ID of the task to which the tensor is localized. A non-none value by itself does not guarantee
+          that all of the tensor's computations are localized to a single task, only that those which are
+          only use the given task. *)
+  mutable read_by_localized : int list;
+      (** Tasks from which this tensor is read by localized computations. *)
 }
 [@@deriving sexp_of]
 (** A DAG of decorated [Node]s, also storing the shape information. *)
@@ -150,6 +156,8 @@ let create ~(value_prec : prec) ?(grad_prec : prec option) ?(literal = false) ~n
       only_reads_and_updates = true;
       literal;
       backend_info = "";
+      localized_to = None;
+      read_by_localized = [];
     }
   in
   Hashtbl.add_exn global_node_store ~key:node.id ~data;
@@ -536,9 +544,10 @@ let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_value =
 let print_node_preamble id =
   try
     let n = get id in
-    Stdio.printf "Node %s%s%s;\n%!" (node_header n)
+    Caml.Format.printf "Node %s%s%s,@ read-by-task-id: %a;\n%!" (node_header n)
       (if n.virtual_ then " (virtual)" else "")
       (if String.is_empty n.backend_info then "" else " " ^ n.backend_info)
+      Sexp.pp_hum ([%sexp_of: int list] n.read_by_localized)
   with Not_found_s _ | Caml.Not_found -> ()
 
 let print_preamble ?(from = 0) () =

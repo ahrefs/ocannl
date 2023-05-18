@@ -162,9 +162,41 @@ let partition_tf_with_comment t ~f =
   in
   (trues, falses)
 
+let localize_tensors ~for_task_id llc =
+  let for_task = Some for_task_id in
+  let rec loop = function
+    | Lines llcs -> Array.iter ~f:loop llcs
+    | For_loop { body; _ } | Dynamic_indices { body; _ } -> loop body
+    | Set (ptr, _, llv) ->
+        let n = NodeUI.get ptr.id in
+        if Option.is_some n.localized_to then assert ([%equal: int option] n.localized_to for_task)
+        else n.localized_to <- Some for_task_id;
+        loop_float llv
+    | Set_local (_, llv) -> loop_float llv
+    | Comment _ -> ()
+    | If_task_id_is { for_task_id = id2; body; _ } ->
+        assert (id2 = for_task_id);
+        loop body
+  and loop_float = function
+    | Local_scope { body; _ } -> loop body
+    | Get_local _ | Get_global _ -> ()
+    | Get (ptr, _) ->
+        let n = NodeUI.get ptr.id in
+        n.read_by_localized <- for_task_id :: n.read_by_localized
+    | Constant _ -> ()
+    | Binop (_, v1, v2) ->
+        loop_float v1;
+        loop_float v2
+    | Unop (_, v) -> loop_float v
+  in
+  loop llc
+
 let rebalance llcs =
   (* FIXME: implement actual rebalancing. *)
-  If_task_id_is { for_task_id = 0; body = Lines (flat_lines llcs) }
+  let for_task_id = 0 in
+  let body = Lines (flat_lines llcs) in
+  localize_tensors ~for_task_id body;
+  If_task_id_is { for_task_id; body }
 
 let rec has_parallel_dim : type a. a low_level -> bool = function
   | Comment _ -> false
@@ -626,7 +658,7 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         assignments = Hash_set.Poly.create ();
         accesses = Hashtbl.Poly.create ();
         non_virtual = n.never_virtual;
-        non_device_only = n.never_device_only || n.is_recurrent;
+        non_device_only = n.never_device_only || n.is_recurrent || (not @@ List.is_empty n.read_by_localized);
         scalar = None;
       })
 

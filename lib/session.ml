@@ -127,7 +127,9 @@ let print_global_roots ~with_grad ~with_code (style : NodeUI.array_print_style) 
       assert (id = root.id);
       print_formula ~with_grad ~with_code style root)
 
-let print_preamble () = Stdio.printf "%s\n%!" (Formula.prefix_with_preamble "")
+let print_preamble () =
+   (* Stdio.printf "%s\n%!" (Formula.prefix_with_preamble "") *)
+   NodeUI.print_preamble ()
 
 (** *** Session management. *** *)
 type backend = Interpreter | Gccjit [@@deriving sexp, equal]
