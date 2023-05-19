@@ -77,9 +77,11 @@ let () =
        List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
      in *)
   let step_batch = num_parallel_tasks * minibatch in
-  let%nn_op subtotal = margin_loss ++ "...|... => ...|0" in
-  SDSL.set_non_virtual subtotal;
-  let%nn_op total_loss = ((subtotal ++ "...|0 => 0") /. !..step_batch) + (0.001 *. reg_loss) in
+  let%nn_op subsubtotal = margin_loss ++ "...|... => ...|0" in
+  SDSL.set_non_virtual subsubtotal;
+  let%nn_op subtotal = subsubtotal ++ "...|0 => 0" in
+  SDSL.set_non_device_only subtotal;
+  let%nn_op total_loss = (subtotal /. !..step_batch) + (0.001 *. reg_loss) in
   let%nn_dt epoch_loss ~o:1 = n =+ total_loss in
   let run_for_steps = refresh_batch in
   SDSL.refresh_session ~run_for_steps ();

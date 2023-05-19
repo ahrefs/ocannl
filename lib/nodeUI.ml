@@ -36,6 +36,7 @@ type t = {
           only use the given task. *)
   mutable read_by_localized : int list;
       (** Tasks from which this tensor is read by localized computations. *)
+  mutable debug_read_by_localized : string list;
 }
 [@@deriving sexp_of]
 (** A DAG of decorated [Node]s, also storing the shape information. *)
@@ -158,6 +159,7 @@ let create ~(value_prec : prec) ?(grad_prec : prec option) ?(literal = false) ~n
       backend_info = "";
       localized_to = None;
       read_by_localized = [];
+      debug_read_by_localized = [];
     }
   in
   Hashtbl.add_exn global_node_store ~key:node.id ~data;
@@ -544,10 +546,13 @@ let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_value =
 let print_node_preamble id =
   try
     let n = get id in
-    Caml.Format.printf "Node %s%s%s,@ read-by-task-id: %a;\n%!" (node_header n)
+    Caml.Format.printf "Node %s%s%s,@ read-by-task-id: %a@ via %a;\n%!" (node_header n)
       (if n.virtual_ then " (virtual)" else "")
       (if String.is_empty n.backend_info then "" else " " ^ n.backend_info)
-      Sexp.pp_hum ([%sexp_of: int list] n.read_by_localized)
+      Sexp.pp_hum
+      ([%sexp_of: int list] n.read_by_localized)
+      Sexp.pp_hum
+      ([%sexp_of: string list] n.debug_read_by_localized)
   with Not_found_s _ | Caml.Not_found -> ()
 
 let print_preamble ?(from = 0) () =
