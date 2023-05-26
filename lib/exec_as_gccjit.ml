@@ -111,8 +111,8 @@ let get_tensor { ctx; func; tensors; task_init_block; task_finalize_block; local
                 Block.eval (if is_parallel then task_finalize_block else localized_finalize_block)
                 @@ RValue.call ctx (Function.builtin ctx "memcpy")
                      [
-                       cast_void @@ LValue.address local;
                        cast_void @@ LValue.address lhs;
+                       cast_void @@ LValue.address local;
                        RValue.int ctx c_index device_size_in_bytes;
                      ])
             else (
@@ -420,7 +420,7 @@ let jit_func ~name ctx proc =
   let func = Function.create ctx fkind (Type.get ctx Void) name [ task_id ] in
   let task_init_block = Block.create ~name:("init_" ^ name) func in
   let task_finalize_block = Block.create ~name:("finalize_" ^ name) func in
-  let localized_finalize_block = Block.create ~name:("finalize_task_zero_" ^ name) func in
+  let localized_finalize_block = Block.create ~name:("finalize_localized_" ^ name) func in
   let main_block = Block.create ~name func in
   let state =
     {
@@ -436,7 +436,7 @@ let jit_func ~name ctx proc =
   Block.jump task_init_block main_block;
   Block.jump after_proc task_finalize_block;
   let c_index = Type.get ctx Type.Int in
-  let b_after_if = Block.create ~name:("after_finalize_task_zero_" ^ name) func in
+  let b_after_if = Block.create ~name:("after_finalize_localized_" ^ name) func in
   let guard = RValue.comparison ctx Eq (RValue.param task_id) (RValue.zero ctx c_index) in
   Block.cond_jump task_finalize_block guard localized_finalize_block (* on true *) b_after_if (* on false *);
   Block.jump localized_finalize_block b_after_if;
