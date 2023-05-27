@@ -25,7 +25,7 @@ type t = {
       - [node.grad] is always [None]. *)
   mutable is_recurrent : bool;
       (** If true, there is a cell in the value tensor that is read before it is written. *)
-  mutable only_reads_and_updates : bool;
+  mutable reduced_racyness_node : bool;
       (** If true, the only non-constant writes into the tensor are updates. An update is a read immediately
           followed by a write of the same cell, as in accumulation operations [=+], [=*]. *)
   mutable backend_info : string;
@@ -154,7 +154,7 @@ let create ~(value_prec : prec) ?(grad_prec : prec option) ?(literal = false) ~n
       never_virtual = false;
       never_device_only = false;
       is_recurrent = false;
-      only_reads_and_updates = true;
+      reduced_racyness_node = true;
       literal;
       backend_info = "";
       localized_to = None;

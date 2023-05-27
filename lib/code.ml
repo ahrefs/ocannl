@@ -574,7 +574,7 @@ type data_node = {
 let get_node store (uid : NodeUI.tensor_ptr) =
   Hashtbl.find_or_add store uid ~default:(fun () ->
       let n = NodeUI.get uid.id in
-      n.only_reads_and_updates <- true;
+      n.reduced_racyness_node <- true;
       {
         id = uid.id;
         kind = uid.field;
@@ -748,16 +748,22 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
     | Set (tensor, idcs, llv) ->
         loop_float ~task_id env llv;
         Hash_set.add nodes tensor.id;
-        (* get_node will initialize only_reads_and_updates to true.  *)
+        (* get_node will initialize reduced_racyness_node to true.  *)
         let set_node : data_node = get_node node_store tensor in
         Hash_set.add set_node.assignments (lookup ~task_id env idcs);
         if virtualize_settings.inline_constants then precompute_constants ~idcs node_store set_node llv;
         (match llv with
+        | Get (tensor2, _) ->
+            let n = NodeUI.get tensor2.id in
+            if n.literal then () else n.reduced_racyness_node <- false
         | Binop (_, Get (tensor2, idcs2), _)
           when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: index array] idcs idcs2 ->
             ()
+        | Binop (_, _, Get (tensor2, idcs2))
+          when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: index array] idcs idcs2 ->
+            ()
         | Constant _ -> ()
-        | _ -> (NodeUI.get tensor.id).only_reads_and_updates <- false);
+        | _ -> (NodeUI.get tensor.id).reduced_racyness_node <- false);
         Array.iter idcs ~f:(function
           | Shape.Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _ ->
               set_node.non_virtual <- true

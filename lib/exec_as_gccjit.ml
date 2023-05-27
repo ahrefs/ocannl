@@ -84,7 +84,7 @@ let get_tensor { ctx; func; tensors; task_init_block; task_finalize_block; local
         let local = Function.local func arr_typ @@ NodeUI.tensor_ptr_name ptr in
         let host_dims = Bigarray.Genarray.dims arr in
         let is_parallel = Array.exists ~f:Shape.is_parallel @@ Shape.to_dims n.shape in
-        let update_on_host = (not is_parallel) && n.only_reads_and_updates && Option.is_some hosted_ptr in
+        let update_on_host = (not is_parallel) && n.reduced_racyness_node && Option.is_some hosted_ptr in
         Option.iter hosted_ptr ~f:(fun hosted_ptr ->
             if local_is_slice_of_host then (
               let offset_idcs =
@@ -248,9 +248,9 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
         Array.iteri lines ~f:(fun i line -> loop ~name:(name ^ "_at_line_" ^ Int.to_string i) line)
     | For_loop { index; from_; to_; body } -> jit_for_loop ~env index ~from_ ~to_ (Either.First body)
     | Rebalance (_, cs) ->
-      (* FIXME: NOT IMPLEMENTED YET *)
-      Array.iteri cs ~f:(fun i line -> loop ~name:(name ^ "_at_par_line_" ^ Int.to_string i) line)
-      | If_task_id_is { for_task_id = _; body } when !Shape.num_parallel_tasks <= 1 -> loop ~name body
+        (* FIXME: NOT IMPLEMENTED YET *)
+        Array.iteri cs ~f:(fun i line -> loop ~name:(name ^ "_at_par_line_" ^ Int.to_string i) line)
+    | If_task_id_is { for_task_id = _; body } when !Shape.num_parallel_tasks <= 1 -> loop ~name body
     | If_task_id_is { for_task_id; body } ->
         let open Gccjit in
         let id = get_uid () in
@@ -267,13 +267,12 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
         Block.jump !current_block b_after_if;
         current_block := b_after_if
     | Set (_, _, Binop (Arg2, Get (_, _), _)) -> assert false
-    | Set (data_node, idcs, Binop (op, Get (tensor, idcs2), c2))
-      when NodeUI.equal_tensor_ptr data_node tensor
-           && [%equal: Code.index array] idcs idcs2
-           && is_builtin_op op ->
+    | Set (tensor, idcs, Binop (op, Get (tensor2, idcs2), c2))
+      when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: Code.index array] idcs idcs2 && is_builtin_op op
+      ->
         (* FIXME: maybe it's not worth it? *)
         let host_idcs = lookup ~on_host:true env idcs in
-        let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs data_node in
+        let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
         let idcs = lookup ~on_host:tensor.update_on_host env idcs in
         let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
@@ -305,6 +304,29 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
           let rhs =
             loop_binop op ~num_typ:tensor.num_typ ~is_double:tensor.is_double ~v1:(RValue.lvalue device_lhs)
               ~v2:value
+          in
+          Block.assign !current_block device_lhs rhs
+    | Set (tensor, idcs, Binop (op, c2, Get (tensor2, idcs2)))
+      when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: Code.index array] idcs idcs2 ->
+        let host_idcs = lookup ~on_host:true env idcs in
+        let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
+        let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
+        let idcs = lookup ~on_host:tensor.update_on_host env idcs in
+        let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
+        let device_lhs = LValue.access_array (get_ptr tensor) device_offset in
+        if tensor.update_on_host then (
+          let host_offset = jit_array_offset ctx ~idcs:host_idcs ~dims:tensor.host_dims in
+          let host_lhs = LValue.access_array (get_sync_ptr tensor) host_offset in
+          let result =
+            loop_binop op ~num_typ:tensor.num_typ ~is_double:tensor.is_double ~v1:value
+              ~v2:(RValue.lvalue host_lhs)
+          in
+          Block.assign !current_block host_lhs result;
+          Block.assign !current_block device_lhs result)
+        else
+          let rhs =
+            loop_binop op ~num_typ:tensor.num_typ ~is_double:tensor.is_double ~v1:value
+              ~v2:(RValue.lvalue device_lhs)
           in
           Block.assign !current_block device_lhs rhs
     | Set (data_node, idcs, value) ->
