@@ -530,6 +530,9 @@ let jit_unit_func ~name compiled =
   jit_func ~name ctx compiled;
   let result = Context.compile ctx in
   session_results := result :: !session_results;
-  let routine = Result.code result name Ctypes.(void @-> returning void) in
+  (* FIXME(159): adapt to not emitting task-specific code. *)
+  (* let routine = Result.code result name Ctypes.(void @-> returning void) in *)
+  let routine = Result.code result name Ctypes.(int @-> returning void) in
   Context.release ctx;
-  routine
+  (* routine *)
+  fun () -> routine 0
