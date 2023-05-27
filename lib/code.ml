@@ -531,7 +531,6 @@ let interpreter_error_message ~name ~prefix ?extra_error_msg ~contents exc =
 (** *** Optimization *** *)
 
 type virtualize_settings = {
-  mutable enable_virtual : bool;
   mutable enable_device_only : bool;
   mutable max_visits : int;
   mutable consider_grads : bool;
@@ -540,7 +539,6 @@ type virtualize_settings = {
 
 let virtualize_settings =
   {
-    enable_virtual = true;
     enable_device_only = true;
     max_visits = 3;
     consider_grads = false;
@@ -1164,12 +1162,12 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
   in
   Option.value_exn @@ loop_proc ~balanced:false ~env_dom:Set.Poly.empty llc
 
-let optimize_proc llc =
+type traced_store = (NodeUI.tensor_ptr, traced_node) Base.Hashtbl.t
+  
+let optimize_proc llc: traced_store * unit low_level =
   let node_store : (NodeUI.tensor_ptr, traced_node) Hashtbl.t = Hashtbl.Poly.create () in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
   let reverse_node_map : (sym_index, NodeUI.tensor_ptr) Hashtbl.t = Hashtbl.Poly.create () in
-  if not virtualize_settings.enable_virtual then llc
-  else
     let result =
       visit_llc node_store reverse_node_map ~max_visits:virtualize_settings.max_visits
         ~consider_grads:virtualize_settings.consider_grads llc;
@@ -1190,22 +1188,22 @@ let optimize_proc llc =
             with
             | Some other_n when not @@ is_inline other_n -> ()
             | _ -> n.virtual_ <- true);
-    result
+    node_store, result
 
 let compile_proc ~name proc =
   let result = optimize_proc @@ to_low_level proc in
   if !with_debug && !keep_files_in_run_directory then
     Stdio.Out_channel.write_all (name ^ ".llc")
-      ~data:(Sexp.to_string_hum @@ sexp_of_low_level Unit.sexp_of_t result);
+      ~data:(Sexp.to_string_hum @@ sexp_of_low_level Unit.sexp_of_t @@ snd result);
   result
 
-let interpret_task_id_func ~name:_ compiled ~task_id =
+let interpret_task_id_func ~name:_ ((_traced_store : traced_store), compiled) ~task_id =
   if !debug_trace_interpretation && task_id = 0 then
     Caml.Format.printf "TRACE: Interpreted program:@ %a\n%!" Sexp.pp_hum
     @@ sexp_of_low_level Unit.sexp_of_t compiled;
   interpret_code ~task_id compiled
 
-let interpret_unit_func ~name:_ compiled () = interpret_code compiled
+let interpret_unit_func ~name:_ ((_ : traced_store), compiled) () = interpret_code compiled
 
 module CDSL = struct
   let value_of_id id : NodeUI.tensor_ptr = { id; field = Value }

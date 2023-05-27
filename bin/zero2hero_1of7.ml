@@ -20,12 +20,11 @@ let _suspended () =
   SDSL.print_session_code ~compiled:true ();
   Stdio.printf "\n%!"
 
-let () =
+let _suspended () =
   SDSL.drop_all_sessions ();
   Random.init 0;
   SDSL.set_executor Interpreter;
   SDSL.enable_all_debugs ~trace_interpreter:true ();
-  CDSL.virtualize_settings.enable_virtual <- false;
   CDSL.virtualize_settings.enable_device_only <- false;
   SDSL.num_parallel_tasks := 1;
   let%nn_op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
@@ -75,5 +74,32 @@ let _suspended () =
         Scatterplot { points = Array.zip_exn xs dys; pixel = "*" };
         Line_plot { points = Array.create ~len:20 0.; pixel = "-" };
       ]
+  in
+  PrintBox_text.output Stdio.stdout plot_box
+
+let () =
+  (* %expect_test "Graph drawing recompile" *)
+  (* let open Operation.FDSL in *)
+  let open SDSL.O in
+  SDSL.drop_all_sessions ();
+  Random.init 0;
+  Stdio.print_endline "\nFirst refresh:";
+  let%nn_op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
+  SDSL.refresh_session ();
+  SDSL.print_node_tree ~with_grad:true ~depth:9 f.id;
+  let xs = Array.init 10 ~f:Float.(fun i -> of_int i - 5.) in
+  let ys =
+    Array.map xs ~f:(fun v ->
+        (* This is inefficient because it compiles the argument update inside the loop. *)
+        SDSL.compile_routine [%nn_cd x =: !.v] ~name:"assign_x" ();
+        SDSL.refresh_session ();
+        Stdio.printf "\nUpdated refresh for x=%f:\n%!" v;
+        SDSL.print_node_tree ~with_grad:true ~depth:9 f.id;
+        f.@[0])
+  in
+  let plot_box =
+    let open PrintBox_utils in
+    plot ~size:(75, 35) ~x_label:"x" ~y_label:"f(x)"
+      [ Scatterplot { points = Array.zip_exn xs ys; pixel = "#" } ]
   in
   PrintBox_text.output Stdio.stdout plot_box

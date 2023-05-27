@@ -17,7 +17,7 @@ let%expect_test "Graph drawing recompile" =
   SDSL.print_node_tree ~with_grad:true ~depth:9 f.id;
   [%expect
     {|
-                                              [13] f <+>
+                                              [13] f <+> replicated
                                                6.00e+1
                                               Gradient
                                                1.00e+0
@@ -96,7 +96,6 @@ let%expect_test "Graph drawing fetch" =
   let open SDSL.O in
   SDSL.drop_all_sessions ();
   Random.init 0;
-  CDSL.virtualize_settings.enable_virtual <- false;
   CDSL.virtualize_settings.enable_device_only <- false;
   CDSL.virtualize_settings.inline_constants <- false;
   let%nn_op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in

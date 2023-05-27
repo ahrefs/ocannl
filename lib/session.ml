@@ -128,8 +128,8 @@ let print_global_roots ~with_grad ~with_code (style : NodeUI.array_print_style) 
       print_formula ~with_grad ~with_code style root)
 
 let print_preamble () =
-   (* Stdio.printf "%s\n%!" (Formula.prefix_with_preamble "") *)
-   NodeUI.print_preamble ()
+  (* Stdio.printf "%s\n%!" (Formula.prefix_with_preamble "") *)
+  NodeUI.print_preamble ()
 
 (** *** Session management. *** *)
 type backend = Interpreter | Gccjit [@@deriving sexp, equal]
@@ -170,10 +170,10 @@ let compile_routine ~name code =
   let num_inits = List.length !session_initializations in
   let to_init = num_inits - !session_initialized in
   session_initialized := num_inits;
-  let compiled = Code.compile_proc ~name code in
+  let traced_store, compiled = Code.compile_proc ~name code in
   (* Only initialize after compilation, to know which nodes are virtual. *)
   perform_initialization @@ List.take !session_initializations to_init;
-  !exec_unit_func ~name compiled
+  !exec_unit_func ~name (traced_store, compiled)
 
 let session_params () = NodeUI.param_nodes ~from_id:!Formula.first_session_id ()
 let minus_learning_rate : Formula.t option ref = ref None
@@ -182,7 +182,7 @@ let last_with_backprop = ref false
 let last_update_params = ref false
 let last_run_for_steps = ref 1
 let session_step_update = ref Code.Noop
-let session_step_update_compiled = ref Code.(Comment "Noop")
+let session_step_update_compiled = ref (Hashtbl.Poly.create (), Code.(Comment "Noop"))
 let session_step_update_routine = ref (fun ~task_id:_ -> ())
 
 let generate_params_update ~(minus_lr : Formula.t) ?params () =
@@ -196,7 +196,7 @@ let print_session_code ?(compiled = false) () =
   (* FIXME: figure out if / why this isn't idempotent. *)
   if compiled then
     Caml.Format.printf "Compiled session step update code:@ %a" Sexp.pp_hum
-      (sexp_of_low_level Unit.sexp_of_t !session_step_update_compiled)
+      (sexp_of_low_level Unit.sexp_of_t @@ snd !session_step_update_compiled)
   else Caml.Format.printf "Session step update code:@ %a" fprint_code !session_step_update;
   Caml.Format.print_newline ()
 
@@ -270,21 +270,20 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
        session_step_update := sequential [ preparation; forward; backprop ]
      else
        let params_update = Block_comment ("Params update", all_parallel update_params_code) in
-       session_step_update :=
-         sequential [ preparation; forward; backprop; params_update ]);
+       session_step_update := sequential [ preparation; forward; backprop; params_update ]);
     if run_for_steps <= 1 then session_step_update_compiled := compile_proc ~name !session_step_update
     else
+      let traced_store, compiled = compile_proc ~name !session_step_update in
       session_step_update_compiled :=
-        Code.(
-          For_loop
-            {
-              index = Code.new_sym_index macrobatch_loop_symbol;
-              from_ = 0;
-              to_ = run_for_steps - 1;
-              body =
-                Lines
-                  [| Comment "Update sub-step"; compile_proc ~name !session_step_update |];
-            }));
+        ( traced_store,
+          Code.(
+            For_loop
+              {
+                index = Code.new_sym_index macrobatch_loop_symbol;
+                from_ = 0;
+                to_ = run_for_steps - 1;
+                body = Lines [| Comment "Update sub-step"; compiled |];
+              }) ));
   if generating || reinit || roots_changed then (
     let num_inits = List.length !session_initializations in
     let to_init = num_inits - !session_initialized in
@@ -318,7 +317,7 @@ let close_session () =
   Formula.session_prepare_forward := [];
   Formula.session_prepare_backprop := [];
   session_step_update := Noop;
-  session_step_update_compiled := Comment "Noop";
+  session_step_update_compiled := (Hashtbl.Poly.create (), Comment "Noop");
   (session_step_update_routine := fun ~task_id:_ -> ());
   minus_learning_rate := None;
   !cleanup_executor_session ()
@@ -438,18 +437,14 @@ module SDSL = struct
   let enable_all_debugs ?(trace_interpreter = false) ?(hosted_only = true) () =
     Code.CDSL.with_debug := true;
     Code.CDSL.keep_files_in_run_directory := true;
-    if hosted_only then (
-      Code.CDSL.virtualize_settings.enable_device_only <- false;
-      Code.CDSL.virtualize_settings.enable_virtual <- false);
+    if hosted_only then Code.CDSL.virtualize_settings.enable_device_only <- false;
     if trace_interpreter then Code.CDSL.debug_trace_interpretation := true
 
   let disable_all_debugs ?(restore_defaults = false) () =
     Code.CDSL.debug_trace_interpretation := false;
     Code.CDSL.with_debug := false;
     Code.CDSL.keep_files_in_run_directory := false;
-    if restore_defaults then (
-      Code.CDSL.virtualize_settings.enable_device_only <- true;
-      Code.CDSL.virtualize_settings.enable_virtual <- true)
+    if restore_defaults then Code.CDSL.virtualize_settings.enable_device_only <- true
 
   let default_value_prec = Formula.default_value_prec
   let default_grad_prec = Formula.default_grad_prec
