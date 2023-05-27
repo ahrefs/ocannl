@@ -210,5 +210,5 @@ let table rows =
              ("Memory in bytes", vlist_map ~bars:false int_ sizes);
              ("Speedup", vlist_map ~bars:false small_float speedups);
              ("Mem gain", vlist_map ~bars:false small_float mem_gains);
-             (List.hd_exn result_labels, vlist_map ~bars:false line results)
+             (List.hd_exn result_labels, vlist_map ~bars:false line results);
            ])

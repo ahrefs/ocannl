@@ -161,7 +161,7 @@ let ndarray_constant expr =
 let convert_dsl_dims dims =
   List.map dims ~f:(function
     | { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = loc; _ } as i -> [%expr Shape.Dim [%e i]]
-    | { pexp_desc = Pexp_ident ({txt = Lident "parallel"; loc}); pexp_loc = _; _ } -> [%expr Shape.Parallel]
+    | { pexp_desc = Pexp_ident { txt = Lident "parallel"; loc }; pexp_loc = _; _ } -> [%expr Shape.Parallel]
     | e -> e)
 
 let let_opt ~loc vbs expr =

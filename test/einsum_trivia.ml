@@ -40,7 +40,10 @@ let%expect_test "einsum1 permute axes" =
     ││      │ 2.00e+0  1.40e+1 │ 5.00e+0  1.70e+1 │ 8.00e+0  2.00e+1 │ 1.10e+1  2.30e+1 ││
     │└──────┴──────────────────┴──────────────────┴──────────────────┴──────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  let hey2 = FDSL.range_of_shape ~batch_dims:[ Dim 2; Dim 3 ] ~input_dims:[ Dim 4; Dim 5 ] ~output_dims:[ Dim 6; Dim 7 ] () in
+  let hey2 =
+    FDSL.range_of_shape ~batch_dims:[ Dim 2; Dim 3 ] ~input_dims:[ Dim 4; Dim 5 ]
+      ~output_dims:[ Dim 6; Dim 7 ] ()
+  in
   let%nn_op ho2 = hey2 ++ "ab|cd->ef => cf|ae->db" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey2;
@@ -286,7 +289,10 @@ let%expect_test "einsum1 sum out axes" =
     ││      │ 6.60e+1  7.00e+1  7.40e+1 ││
     │└──────┴───────────────────────────┘│
     └────────────────────────────────────┘ |}];
-  let hey2 = FDSL.range_of_shape ~batch_dims:[ Dim 2; Dim 3 ] ~input_dims:[ Dim 4; Dim 5 ] ~output_dims:[ Dim 6; Dim 7 ] () in
+  let hey2 =
+    FDSL.range_of_shape ~batch_dims:[ Dim 2; Dim 3 ] ~input_dims:[ Dim 4; Dim 5 ]
+      ~output_dims:[ Dim 6; Dim 7 ] ()
+  in
   let%nn_op ho2 = hey2 ++ "ab|cd->ef => c|a->d" in
   refresh_session ();
   (* Axis 5 of hey2, i.e. d in the einsum spec, has the lowest variation (progresses by 1),
@@ -685,7 +691,10 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└──────┴───────────────────────────┴───────────────────────────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
 
-  let hey2 = FDSL.range_of_shape ~batch_dims:[ Dim 2; Dim 3 ] ~input_dims:[ Dim 4; Dim 5 ] ~output_dims:[ Dim 6; Dim 7 ] () in
+  let hey2 =
+    FDSL.range_of_shape ~batch_dims:[ Dim 2; Dim 3 ] ~input_dims:[ Dim 4; Dim 5 ]
+      ~output_dims:[ Dim 6; Dim 7 ] ()
+  in
   let%nn_op ho3 = hey2 ++ "...b|...i->...o => ...i|...o->...b" in
   refresh_session ();
   print_formula ~with_code:false ~with_grad:false `Default @@ hey2;

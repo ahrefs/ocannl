@@ -538,12 +538,7 @@ type virtualize_settings = {
 }
 
 let virtualize_settings =
-  {
-    enable_device_only = true;
-    max_visits = 3;
-    consider_grads = false;
-    inline_constants = true;
-  }
+  { enable_device_only = true; max_visits = 3; consider_grads = false; inline_constants = true }
 
 type visits =
   | Visits of int
@@ -1163,32 +1158,32 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
   Option.value_exn @@ loop_proc ~balanced:false ~env_dom:Set.Poly.empty llc
 
 type traced_store = (NodeUI.tensor_ptr, traced_node) Base.Hashtbl.t
-  
-let optimize_proc llc: traced_store * unit low_level =
+
+let optimize_proc llc : traced_store * unit low_level =
   let node_store : (NodeUI.tensor_ptr, traced_node) Hashtbl.t = Hashtbl.Poly.create () in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
   let reverse_node_map : (sym_index, NodeUI.tensor_ptr) Hashtbl.t = Hashtbl.Poly.create () in
-    let result =
-      visit_llc node_store reverse_node_map ~max_visits:virtualize_settings.max_visits
-        ~consider_grads:virtualize_settings.consider_grads llc;
-      cleanup_virtual_llc node_store reverse_node_map @@ virtual_llc node_store reverse_node_map llc
-    in
-    let is_inline node =
-      (virtualize_settings.inline_constants && Option.is_some node.scalar) || not node.non_virtual
-    in
-    Hashtbl.iter node_store ~f:(fun dn ->
-        let n = NodeUI.get dn.id in
-        if not dn.non_device_only then n.device_only <- true;
-        if is_inline dn then
-          if Option.is_none n.node.grad then n.virtual_ <- true
-          else
-            match
-              Hashtbl.find node_store
-                { id = dn.id; field = (if NodeUI.equal_data_kind dn.kind Value then Grad else Value) }
-            with
-            | Some other_n when not @@ is_inline other_n -> ()
-            | _ -> n.virtual_ <- true);
-    node_store, result
+  let result =
+    visit_llc node_store reverse_node_map ~max_visits:virtualize_settings.max_visits
+      ~consider_grads:virtualize_settings.consider_grads llc;
+    cleanup_virtual_llc node_store reverse_node_map @@ virtual_llc node_store reverse_node_map llc
+  in
+  let is_inline node =
+    (virtualize_settings.inline_constants && Option.is_some node.scalar) || not node.non_virtual
+  in
+  Hashtbl.iter node_store ~f:(fun dn ->
+      let n = NodeUI.get dn.id in
+      if not dn.non_device_only then n.device_only <- true;
+      if is_inline dn then
+        if Option.is_none n.node.grad then n.virtual_ <- true
+        else
+          match
+            Hashtbl.find node_store
+              { id = dn.id; field = (if NodeUI.equal_data_kind dn.kind Value then Grad else Value) }
+          with
+          | Some other_n when not @@ is_inline other_n -> ()
+          | _ -> n.virtual_ <- true);
+  (node_store, result)
 
 let compile_proc ~name proc =
   let result = optimize_proc @@ to_low_level proc in

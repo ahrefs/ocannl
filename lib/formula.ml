@@ -411,7 +411,9 @@ let ndarray ?desc_label ~is_form ?(needs_gradient = false) ?(batch_dims = []) ?(
         Caml.Format.pp_set_geometry Caml.Format.str_formatter ~max_indent:!max_sublabel_length
           ~margin:(!max_sublabel_length * 2);
         let ( ! ) =
-          Array.of_list_map ~f:(function Shape.Parallel -> !Shape.num_parallel_tasks | Dim d | Frozen d -> d)
+          Array.of_list_map ~f:(function
+            | Shape.Parallel -> !Shape.num_parallel_tasks
+            | Dim d | Frozen d -> d)
         in
         let dims = Array.concat [ !batch_dims; !output_dims; !input_dims ] in
         let ndarr = Node.create_ndarray Double dims (Constant_fill values) in

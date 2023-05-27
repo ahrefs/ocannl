@@ -91,7 +91,9 @@ let%expect_test "Micrograd half-moons example" =
   in
   let moons_flat = FDSL.init_const ~l:"moons_flat" ~b:[ Dim epochs; Dim batch ] ~o:[ Dim 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes = FDSL.init_const ~l:"moons_classes" ~b:[ Dim epochs; Dim batch ] ~o:[ Dim 1 ] moons_classes in
+  let moons_classes =
+    FDSL.init_const ~l:"moons_classes" ~b:[ Dim epochs; Dim batch ] ~o:[ Dim 1 ] moons_classes
+  in
   let%nn_op mlp x = "b3" 1 + ("w3" * !/("b2" 16 + ("w2" * !/("b1" 16 + ("w1" * x))))) in
   let steps = epochs * 2 * len / batch in
   let%nn_dt session_step ~o:1 = n =+ 1 in

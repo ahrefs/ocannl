@@ -205,7 +205,7 @@ let empty prec = create_array prec [||] (Constant_fill [| 0.0 |])
 type t = { mutable value : ndarray; mutable grad : ndarray option; id : int } [@@deriving sexp_of]
 
 let shape_size n =
-  let dims = map_as_bigarray { f=A.dims } n.value in
+  let dims = map_as_bigarray { f = A.dims } n.value in
   if Array.is_empty dims then 0 else Array.fold dims ~init:1 ~f:( * )
 
 let size_in_bytes n =
@@ -215,16 +215,9 @@ let size_in_bytes n =
   let size = map_as_bigarray { f } in
   size n.value + Option.value_map ~f:size n.grad ~default:0
 
-type state = {
-  mutable unique_id : int;
-  node_store : (int, t) Hashtbl.t;
-}
+type state = { mutable unique_id : int; node_store : (int, t) Hashtbl.t }
 
-let global =
-  {
-    unique_id = 1;
-    node_store = Hashtbl.create (module Int);
-  }
+let global = { unique_id = 1; node_store = Hashtbl.create (module Int) }
 
 let global_size_in_bytes () =
   Hashtbl.fold global.node_store ~init:0 ~f:(fun ~key:_ ~data sum -> sum + size_in_bytes data)
