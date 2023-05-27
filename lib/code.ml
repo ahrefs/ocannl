@@ -806,8 +806,9 @@ let visit_llc traced_store reverse_node_map ~max_visits ~consider_grads llc =
     in
     loop_proc ~task_id env body
   in
-  (* Do not penalize parallel use. *)
-  loop_proc ~task_id:0 (Map.Poly.empty, Map.Poly.empty) llc;
+  for task_id = 0 to !Shape.num_parallel_tasks - 1 do
+    loop_proc ~task_id (Map.Poly.empty, Map.Poly.empty) llc
+  done;
   Hash_set.iter nodes ~f:(fun node_id ->
       let value_node : traced_tensor = get_node traced_store { id = node_id; field = Value } in
       if Hashtbl.exists value_node.accesses ~f:is_too_many then (
