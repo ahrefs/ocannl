@@ -39,6 +39,7 @@ type state = {
   ctx : Gccjit.context;
   func : Gccjit.function_;
   tensors : (NodeUI.tensor_ptr, tensor) Hashtbl.Poly.t;
+  traced_store : Code.traced_store;
   task_init_block : Gccjit.block;
   task_finalize_block : Gccjit.block;
   localized_finalize_block : Gccjit.block;
@@ -51,11 +52,12 @@ let jit_array_offset ctx ~idcs ~dims =
       RValue.binary_op ctx Plus c_index idx
       @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
 
-let get_tensor { ctx; func; tensors; task_init_block; task_finalize_block; localized_finalize_block }
+let get_tensor { ctx; func; tensors; traced_store; task_init_block; task_finalize_block; localized_finalize_block }
     ~jit_code ~host_idcs ptr : tensor =
   let open Gccjit in
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
       let n = NodeUI.(get ptr.id) in
+      let tn = Code.(get_node traced_store ptr) in
       let size = Node.shape_size n.node in
       let host_size_in_bytes = NodeUI.size_in_bytes ptr in
       let axes = Shape.to_dims n.shape in
@@ -99,7 +101,7 @@ let get_tensor { ctx; func; tensors; task_init_block; task_finalize_block; local
               let offset = jit_array_offset ctx ~idcs:offset_idcs ~dims:host_dims in
               let lhs = LValue.access_array hosted_ptr offset in
               let cast_void rv = RValue.cast ctx rv c_void_ptr in
-              if n.is_recurrent then
+              if tn.read_before_write then
                 Block.eval task_init_block
                 @@ RValue.call ctx (Function.builtin ctx "memcpy")
                      [
@@ -434,7 +436,7 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
   loop_proc ~name ~env body;
   !current_block
 
-let jit_func ~name ctx proc =
+let jit_func ~name ctx (traced_store, proc) =
   let open Gccjit in
   let fkind = Function.Exported in
   let env = (Map.Poly.empty, Map.Poly.empty) in
@@ -448,6 +450,7 @@ let jit_func ~name ctx proc =
     {
       ctx;
       func;
+      traced_store;
       task_init_block;
       task_finalize_block;
       localized_finalize_block;
@@ -499,7 +502,7 @@ let error_message ~name ~prefix ?extra_error_msg ~contents exc =
   msg contents;
   Buffer.contents message
 
-let jit_task_id_func ~name ((_traced_store : Code.traced_store), compiled) =
+let jit_task_id_func ~name compiled =
   let open Gccjit in
   let ctx = Context.create_child !session_context in
   Context.set_option ctx Context.Optimization_level !optimization_level;
@@ -515,7 +518,7 @@ let jit_task_id_func ~name ((_traced_store : Code.traced_store), compiled) =
   Context.release ctx;
   fun ~task_id -> routine task_id
 
-let jit_unit_func ~name ((_traced_store : Code.traced_store), compiled) =
+let jit_unit_func ~name compiled =
   let open Gccjit in
   let ctx = Context.create_child !session_context in
   Context.set_option ctx Context.Optimization_level !optimization_level;

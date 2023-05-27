@@ -561,6 +561,9 @@ type traced_node = {
   mutable non_virtual : bool;
   mutable non_device_only : bool;
   mutable scalar : float option;
+  mutable read_before_write : bool;
+      (** The node is read before it is written. If [read_before_write] is true for a session step update
+          code, we record that as [node.NodeUI.is_recurrent] on the corresponding node. *)
 }
 [@@deriving sexp_of]
 
@@ -578,6 +581,7 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         non_virtual = n.never_virtual;
         non_device_only = n.never_device_only || n.is_recurrent;
         scalar = None;
+        read_before_write = false;
       })
 
 let get_other_node node_store ptr =
@@ -813,7 +817,7 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
           ~f:(fun grad_node -> grad_node.non_virtual <- true));
       if Hashtbl.exists value_node.accesses ~f:is_recurrent then (
         value_node.non_device_only <- true;
-        (NodeUI.get value_node.id).is_recurrent <- true;
+        value_node.read_before_write <- true;
         (* TODO(#135): For now, value and gradient are non-device-only reciprocically. *)
         Option.iter
           (Hashtbl.find node_store { id = node_id; field = Grad })
@@ -1185,11 +1189,13 @@ let optimize_proc llc : traced_store * unit low_level =
           | _ -> n.virtual_ <- true);
   (node_store, result)
 
-let compile_proc ~name proc =
+let compile_proc ~name ~for_step_update proc =
   let result = optimize_proc @@ to_low_level proc in
   if !with_debug && !keep_files_in_run_directory then
     Stdio.Out_channel.write_all (name ^ ".llc")
       ~data:(Sexp.to_string_hum @@ sexp_of_low_level Unit.sexp_of_t @@ snd result);
+  if for_step_update then
+    Hashtbl.iter (fst result) ~f:(fun n -> if n.read_before_write then (NodeUI.get n.id).is_recurrent <- true);
   result
 
 let interpret_task_id_func ~name:_ ((_traced_store : traced_store), compiled) ~task_id =

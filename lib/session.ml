@@ -170,7 +170,7 @@ let compile_routine ~name code =
   let num_inits = List.length !session_initializations in
   let to_init = num_inits - !session_initialized in
   session_initialized := num_inits;
-  let traced_store, compiled = Code.compile_proc ~name code in
+  let traced_store, compiled = Code.compile_proc ~name ~for_step_update:false code in
   (* Only initialize after compilation, to know which nodes are virtual. *)
   perform_initialization @@ List.take !session_initializations to_init;
   !exec_unit_func ~name (traced_store, compiled)
@@ -271,9 +271,10 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
      else
        let params_update = Block_comment ("Params update", all_parallel update_params_code) in
        session_step_update := sequential [ preparation; forward; backprop; params_update ]);
-    if run_for_steps <= 1 then session_step_update_compiled := compile_proc ~name !session_step_update
+    if run_for_steps <= 1 then
+      session_step_update_compiled := compile_proc ~name ~for_step_update:true !session_step_update
     else
-      let traced_store, compiled = compile_proc ~name !session_step_update in
+      let traced_store, compiled = compile_proc ~name ~for_step_update:true !session_step_update in
       session_step_update_compiled :=
         ( traced_store,
           Code.(
