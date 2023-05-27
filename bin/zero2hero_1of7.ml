@@ -82,6 +82,8 @@ let () =
   (* let open Operation.FDSL in *)
   let open SDSL.O in
   SDSL.drop_all_sessions ();
+  Code.with_debug := true;
+  Code.keep_files_in_run_directory := true;
   Random.init 0;
   Stdio.print_endline "\nFirst refresh:";
   let%nn_op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
@@ -93,8 +95,6 @@ let () =
         (* This is inefficient because it compiles the argument update inside the loop. *)
         SDSL.compile_routine [%nn_cd x =: !.v] ~name:"assign_x" ();
         SDSL.refresh_session ();
-        Stdio.printf "\nUpdated refresh for x=%f:\n%!" v;
-        SDSL.print_node_tree ~with_grad:true ~depth:9 f.id;
         f.@[0])
   in
   let plot_box =

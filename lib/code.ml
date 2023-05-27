@@ -568,6 +568,7 @@ type traced_tensor = {
       (** If true, the only non-constant writes into the tensor are updates, and a constant write is never
           the last write. An update is a read immediately followed by a write of the same cell, as in
           accumulation operations [=+], [=*]. *)
+  mutable last_write_non_update : bool;
 }
 [@@deriving sexp_of]
 
@@ -586,6 +587,7 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         scalar = None;
         read_before_write = false;
         reduced_racyness = true;
+        last_write_non_update = false;
       })
 
 let get_other_node traced_store ptr =
@@ -754,15 +756,19 @@ let visit_llc traced_store reverse_node_map ~max_visits ~consider_grads llc =
         Hash_set.add traced.assignments (lookup ~task_id env idcs);
         if virtualize_settings.inline_constants then precompute_constants ~idcs traced_store traced llv;
         (match llv with
-        | Get (tensor2, _) -> if (NodeUI.get tensor2.id).literal then () else traced.reduced_racyness <- false
+        | Get (tensor2, _) ->
+            traced.last_write_non_update <- true;
+            if (NodeUI.get tensor2.id).literal then () else traced.reduced_racyness <- false
         | Binop (_, Get (tensor2, idcs2), _)
           when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: index array] idcs idcs2 ->
-            ()
+            traced.last_write_non_update <- false
         | Binop (_, _, Get (tensor2, idcs2))
           when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: index array] idcs idcs2 ->
-            ()
-        | Constant _ -> ()
-        | _ -> traced.reduced_racyness <- false);
+            traced.last_write_non_update <- false
+        | Constant _ -> traced.last_write_non_update <- true
+        | _ ->
+            traced.reduced_racyness <- false;
+            traced.last_write_non_update <- true);
         Array.iter idcs ~f:(function
           | Shape.Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _ -> traced.non_virtual <- true
           | Fixed_idx _ | Task_id -> ()
@@ -810,16 +816,17 @@ let visit_llc traced_store reverse_node_map ~max_visits ~consider_grads llc =
     loop_proc ~task_id (Map.Poly.empty, Map.Poly.empty) llc
   done;
   Hash_set.iter nodes ~f:(fun node_id ->
-      let value_node : traced_tensor = get_node traced_store { id = node_id; field = Value } in
-      if Hashtbl.exists value_node.accesses ~f:is_too_many then (
-        value_node.non_virtual <- true;
+      let traced : traced_tensor = get_node traced_store { id = node_id; field = Value } in
+      if traced.last_write_non_update then traced.reduced_racyness <- false;
+      if Hashtbl.exists traced.accesses ~f:is_too_many then (
+        traced.non_virtual <- true;
         (* TODO(#135): For now, value and gradient are non-virtual reciprocically. *)
         Option.iter
           (Hashtbl.find traced_store { id = node_id; field = Grad })
           ~f:(fun grad_node -> grad_node.non_virtual <- true));
-      if Hashtbl.exists value_node.accesses ~f:is_recurrent then (
-        value_node.non_device_only <- true;
-        value_node.read_before_write <- true;
+      if Hashtbl.exists traced.accesses ~f:is_recurrent then (
+        traced.non_device_only <- true;
+        traced.read_before_write <- true;
         (* TODO(#135): For now, value and gradient are non-device-only reciprocically. *)
         Option.iter
           (Hashtbl.find traced_store { id = node_id; field = Grad })
@@ -830,8 +837,8 @@ let visit_llc traced_store reverse_node_map ~max_visits ~consider_grads llc =
           ~f:(fun grad_node ->
             if Hashtbl.exists grad_node.accesses ~f:is_too_many then grad_node.non_virtual <- true;
             (* TODO(#135): For now, value and gradient are non-virtual reciprocically. *)
-            if value_node.non_virtual then grad_node.non_virtual <- true;
-            if grad_node.non_virtual then value_node.non_virtual <- true))
+            if traced.non_virtual then grad_node.non_virtual <- true;
+            if grad_node.non_virtual then traced.non_virtual <- true))
 
 type tensor_ptrs = NodeUI.tensor_ptr Set.Poly.t
 type sym_indices = sym_index Set.Poly.t
