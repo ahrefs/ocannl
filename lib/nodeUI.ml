@@ -549,7 +549,8 @@ let print_node_preamble id =
       ([%sexp_of: int list] n.read_by_localized)
       Sexp.pp_hum
       ([%sexp_of: string list] n.debug_read_by_localized)
-  with Not_found_s _ | Caml.Not_found -> ()
+  with Not_found_s _ | Caml.Not_found ->
+    Caml.Format.printf "Node #%d does not exist.\n%!" id
 
 let print_preamble ?(from = 0) () =
   for id = from to Node.global.unique_id - 1 do

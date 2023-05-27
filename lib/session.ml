@@ -403,8 +403,10 @@ module SDSL = struct
   let minus_learning_rate = minus_learning_rate
 
   let print_node_tree ?entries_per_axis ?with_id ?with_value ~with_grad ~depth id =
-    PrintBox_text.output Stdio.stdout
-    @@ NodeUI.to_printbox ?entries_per_axis ?with_id ?with_value ~with_grad ~depth id
+    try
+      PrintBox_text.output Stdio.stdout
+      @@ NodeUI.to_printbox ?entries_per_axis ?with_id ?with_value ~with_grad ~depth id
+    with Not_found_s _ | Caml.Not_found -> Caml.Format.printf "Node #%d does not exist.\n%!" id
 
   let max_sublabel_length = Formula.max_sublabel_length
   let print_formula = print_formula
