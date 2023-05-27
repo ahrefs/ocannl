@@ -86,7 +86,7 @@ let get_tensor { ctx; func; tensors; traced_store; task_init_block; task_finaliz
         let local = Function.local func arr_typ @@ NodeUI.tensor_ptr_name ptr in
         let host_dims = Bigarray.Genarray.dims arr in
         let is_parallel = Array.exists ~f:Shape.is_parallel @@ Shape.to_dims n.shape in
-        let update_on_host = (not is_parallel) && n.reduced_racyness_node && Option.is_some hosted_ptr in
+        let update_on_host = (not is_parallel) && tn.reduced_racyness && Option.is_some hosted_ptr in
         Option.iter hosted_ptr ~f:(fun hosted_ptr ->
             if local_is_slice_of_host then (
               let offset_idcs =

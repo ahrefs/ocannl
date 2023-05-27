@@ -564,13 +564,16 @@ type traced_tensor = {
   mutable read_before_write : bool;
       (** The node is read before it is written. If [read_before_write] is true for a session step update
           code, we record that as [node.NodeUI.is_recurrent] on the corresponding node. *)
+  mutable reduced_racyness : bool;
+      (** If true, the only non-constant writes into the tensor are updates, and a constant write is never
+          the last write. An update is a read immediately followed by a write of the same cell, as in
+          accumulation operations [=+], [=*]. *)
 }
 [@@deriving sexp_of]
 
 let get_node store (uid : NodeUI.tensor_ptr) =
   Hashtbl.find_or_add store uid ~default:(fun () ->
       let n = NodeUI.get uid.id in
-      n.reduced_racyness_node <- true;
       {
         id = uid.id;
         kind = uid.field;
@@ -582,6 +585,7 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         non_device_only = n.never_device_only || n.is_recurrent;
         scalar = None;
         read_before_write = false;
+        reduced_racyness = true;
       })
 
 let get_other_node traced_store ptr =
@@ -745,14 +749,12 @@ let visit_llc traced_store reverse_node_map ~max_visits ~consider_grads llc =
     | Set (tensor, idcs, llv) ->
         loop_float ~task_id env llv;
         Hash_set.add nodes tensor.id;
-        (* get_node will initialize reduced_racyness_node to true.  *)
-        let set_node : traced_tensor = get_node traced_store tensor in
-        Hash_set.add set_node.assignments (lookup ~task_id env idcs);
-        if virtualize_settings.inline_constants then precompute_constants ~idcs traced_store set_node llv;
+        (* get_node will initialize reduced_racyness to true.  *)
+        let traced : traced_tensor = get_node traced_store tensor in
+        Hash_set.add traced.assignments (lookup ~task_id env idcs);
+        if virtualize_settings.inline_constants then precompute_constants ~idcs traced_store traced llv;
         (match llv with
-        | Get (tensor2, _) ->
-            let n = NodeUI.get tensor2.id in
-            if n.literal then () else n.reduced_racyness_node <- false
+        | Get (tensor2, _) -> if (NodeUI.get tensor2.id).literal then () else traced.reduced_racyness <- false
         | Binop (_, Get (tensor2, idcs2), _)
           when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: index array] idcs idcs2 ->
             ()
@@ -760,10 +762,9 @@ let visit_llc traced_store reverse_node_map ~max_visits ~consider_grads llc =
           when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: index array] idcs idcs2 ->
             ()
         | Constant _ -> ()
-        | _ -> (NodeUI.get tensor.id).reduced_racyness_node <- false);
+        | _ -> traced.reduced_racyness <- false);
         Array.iter idcs ~f:(function
-          | Shape.Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _ ->
-              set_node.non_virtual <- true
+          | Shape.Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _ -> traced.non_virtual <- true
           | Fixed_idx _ | Task_id -> ()
           | Iterator s ->
               let old_tensor = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tensor) in
