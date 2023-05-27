@@ -283,10 +283,10 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
           Block.assign_op !current_block host_lhs (builtin_op op) value;
           Block.assign !current_block device_lhs (RValue.lvalue host_lhs))
         else Block.assign_op !current_block device_lhs (builtin_op op) value
-    | Set (data_node, idcs, Binop (op, Get (tensor, idcs2), c2))
-      when NodeUI.equal_tensor_ptr data_node tensor && [%equal: Code.index array] idcs idcs2 ->
+    | Set (tensor, idcs, Binop (op, Get (tensor2, idcs2), c2))
+      when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: Code.index array] idcs idcs2 ->
         let host_idcs = lookup ~on_host:true env idcs in
-        let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs data_node in
+        let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
         let idcs = lookup ~on_host:tensor.update_on_host env idcs in
         let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
@@ -329,9 +329,9 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
               ~v2:(RValue.lvalue device_lhs)
           in
           Block.assign !current_block device_lhs rhs
-    | Set (data_node, idcs, value) ->
+    | Set (ptr, idcs, value) ->
         let host_idcs = lookup ~on_host:true env idcs in
-        let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs data_node in
+        let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs ptr in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
         let idcs = lookup ~on_host:false env idcs in
         let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in

@@ -552,7 +552,7 @@ type visits =
   | Recurrent  (** A [Recurrent] visit is when there is an access prior to any assignment in an update. *)
 [@@deriving sexp, equal, variants]
 
-type data_node = {
+type traced_node = {
   id : int;
   kind : NodeUI.data_kind;
   prec : NodeUI.prec;
@@ -749,7 +749,7 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
         loop_float ~task_id env llv;
         Hash_set.add nodes tensor.id;
         (* get_node will initialize reduced_racyness_node to true.  *)
-        let set_node : data_node = get_node node_store tensor in
+        let set_node : traced_node = get_node node_store tensor in
         Hash_set.add set_node.assignments (lookup ~task_id env idcs);
         if virtualize_settings.inline_constants then precompute_constants ~idcs node_store set_node llv;
         (match llv with
@@ -775,18 +775,18 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
     | Set_local (_, llv) -> loop_float ~task_id env llv
     | Comment _ -> ()
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        let data_node = get_node node_store tensor in
+        let traced_node = get_node node_store tensor in
         (* FIXME(132): implement virtual dynamic indices. *)
-        data_node.non_virtual <- true;
-        data_node.scalar <- None;
-        Hash_set.add nodes data_node.id;
-        dynamic_indices data_node ~task_id env ~tensor_idcs ~dynamic_idcs ~target_dims body
+        traced_node.non_virtual <- true;
+        traced_node.scalar <- None;
+        Hash_set.add nodes traced_node.id;
+        dynamic_indices traced_node ~task_id env ~tensor_idcs ~dynamic_idcs ~target_dims body
   and loop_float ~task_id env llv =
     let loop = loop_float ~task_id env in
     match llv with
     | Constant _ -> ()
     | Get (tensor, indices) ->
-        let get_node : data_node = get_node node_store tensor in
+        let get_node : traced_node = get_node node_store tensor in
         Hash_set.add nodes get_node.id;
         let at_pos = lookup ~task_id env indices in
         Hashtbl.update get_node.accesses at_pos ~f:(visit @@ Hash_set.mem get_node.assignments at_pos)
@@ -811,7 +811,7 @@ let visit_llc node_store reverse_node_map ~max_visits ~consider_grads llc =
   (* Do not penalize parallel use. *)
   loop_proc ~task_id:0 (Map.Poly.empty, Map.Poly.empty) llc;
   Hash_set.iter nodes ~f:(fun node_id ->
-      let value_node : data_node = get_node node_store { id = node_id; field = Value } in
+      let value_node : traced_node = get_node node_store { id = node_id; field = Value } in
       if Hashtbl.exists value_node.accesses ~f:is_too_many then (
         value_node.non_virtual <- true;
         (* TODO(#135): For now, value and gradient are non-virtual reciprocically. *)
@@ -1003,7 +1003,7 @@ let virtual_llc node_store reverse_node_map (llc : unit low_level) : unit low_le
     | For_loop { index; from_; to_; body } -> (
         match Hashtbl.find reverse_node_map index with
         | Some tensor when not @@ Set.mem process_for tensor ->
-            let node : data_node = Hashtbl.find_exn node_store tensor in
+            let node : traced_node = Hashtbl.find_exn node_store tensor in
             let result = loop_proc ~process_for:(Set.add process_for tensor) llc in
             if not node.non_virtual then process_computation node_store node result;
             result
@@ -1013,7 +1013,7 @@ let virtual_llc node_store reverse_node_map (llc : unit low_level) : unit low_le
         Rebalance (s, Array.map ~f:loop cs)
     | If_task_id_is { for_task_id; body } -> If_task_id_is { for_task_id; body = loop body }
     | Set (tensor, indices, llv) ->
-        let node : data_node = Hashtbl.find_exn node_store tensor in
+        let node : traced_node = Hashtbl.find_exn node_store tensor in
         let next = if node.non_virtual then process_for else Set.add process_for tensor in
         let result = Set (tensor, indices, loop_float ~process_for:next llv) in
         if (not @@ Set.mem process_for tensor) && not node.non_virtual then
@@ -1031,7 +1031,7 @@ let virtual_llc node_store reverse_node_map (llc : unit low_level) : unit low_le
         (* [Get_local] will replace this [Get] during [inline_computation] if [tensor] remains virtual. *)
         llv
     | Get (tensor, indices) ->
-        let node : data_node = get_node node_store tensor in
+        let node : traced_node = get_node node_store tensor in
         if node.non_virtual then llv
         else
           let id = get_scope tensor in
@@ -1125,7 +1125,7 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
         | _ ->
             if not node.non_virtual then
               Caml.Format.printf "WARNING: unexpected Get of a virtual tensor, details:@ %a\n%!" Sexp.pp_hum
-                (sexp_of_data_node node);
+                (sexp_of_traced_node node);
             assert (Array.for_all indices ~f:(function Shape.Iterator s -> Set.mem env_dom s | _ -> true));
             llv)
     | Local_scope { id; prec; body; orig_indices } -> (
@@ -1144,8 +1144,8 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
                      %!"
                     Sexp.pp_hum
                     (NodeUI.sexp_of_tensor_ptr id.tensor)
-                    Sexp.pp_hum (sexp_of_data_node node) Sexp.pp_hum
-                    (sexp_of_data_node @@ get_other_node node_store id.tensor)
+                    Sexp.pp_hum (sexp_of_traced_node node) Sexp.pp_hum
+                    (sexp_of_traced_node @@ get_other_node node_store id.tensor)
                     Sexp.pp_hum
                     (NodeUI.sexp_of_t @@ NodeUI.get id.tensor.id);
                   Get (id.tensor, orig_indices))
@@ -1165,7 +1165,7 @@ let cleanup_virtual_llc node_store reverse_node_map (llc : unit low_level) : uni
   Option.value_exn @@ loop_proc ~balanced:false ~env_dom:Set.Poly.empty llc
 
 let optimize_proc llc =
-  let node_store : (NodeUI.tensor_ptr, data_node) Hashtbl.t = Hashtbl.Poly.create () in
+  let node_store : (NodeUI.tensor_ptr, traced_node) Hashtbl.t = Hashtbl.Poly.create () in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
   let reverse_node_map : (sym_index, NodeUI.tensor_ptr) Hashtbl.t = Hashtbl.Poly.create () in
   if not virtualize_settings.enable_virtual then llc
