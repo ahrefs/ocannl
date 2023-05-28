@@ -48,7 +48,7 @@ let get_tensor tensor =
   let n = N.get tensor.id in
   match tensor.field with Value -> Some n.value | Grad -> n.grad
 
-let size_in_bytes ptr =
+let host_size_in_bytes ptr =
   (* 1 number bigarray is reporting the same size as an empty bigarray, but we use size 0 to indicate
      that the bigarray is empty. *)
   let open Node in

@@ -465,7 +465,7 @@ module SDSL = struct
 
   let default_value_prec = Formula.default_value_prec
   let default_grad_prec = Formula.default_grad_prec
-  let global_size_in_bytes () = Node.global_size_in_bytes ()
+  let global_host_size_in_bytes () = Node.global_host_size_in_bytes ()
   let num_parallel_tasks = Shape.num_parallel_tasks
   let num_domains = num_domains
 end

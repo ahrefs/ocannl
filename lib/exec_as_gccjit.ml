@@ -59,8 +59,7 @@ let get_tensor
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
       let n = NodeUI.(get ptr.id) in
       let tn = Code.(get_node traced_store ptr) in
-      let size = Node.shape_size n.node in
-      let host_size_in_bytes = NodeUI.size_in_bytes ptr in
+      let host_size_in_bytes = NodeUI.host_size_in_bytes ptr in
       let axes = Shape.to_dims n.shape in
       let device_dims = axes |> Array.map ~f:(function Shape.Parallel -> 1 | Frozen _ -> 1 | Dim d -> d) in
       let device_size = Array.fold ~init:1 ~f:( * ) device_dims in
@@ -83,7 +82,7 @@ let get_tensor
           if Array.is_empty @@ Node.A.dims arr then None
           else Some (RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray arr)
         in
-        let arr_typ = Type.array ctx num_typ size in
+        let arr_typ = Type.array ctx num_typ device_size in
         let local = Function.local func arr_typ @@ NodeUI.tensor_ptr_name ptr in
         let host_dims = Bigarray.Genarray.dims arr in
         let is_parallel = Array.exists ~f:Shape.is_parallel @@ Shape.to_dims n.shape in

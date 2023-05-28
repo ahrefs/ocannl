@@ -583,8 +583,8 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         | NodeUI.Value -> n.value_never_device_only
         | NodeUI.Grad -> n.grad_never_device_only
       in
-      let non_virtual = never_virtual || NodeUI.size_in_bytes uid > 0 in
-      let non_device_only = never_device_only || NodeUI.size_in_bytes uid > 0 in
+      let non_virtual = never_virtual || NodeUI.host_size_in_bytes uid > 0 in
+      let non_device_only = never_device_only || NodeUI.host_size_in_bytes uid > 0 in
       {
         id = uid.id;
         kind = uid.field;

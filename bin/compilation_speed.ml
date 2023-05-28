@@ -37,7 +37,7 @@ let recompiling_graph executor opti () =
       {
         bench_title;
         time_in_sec;
-        total_size_in_bytes = SDSL.global_size_in_bytes ();
+        host_size_in_bytes = SDSL.global_host_size_in_bytes ();
         result_label = "x, f(x)";
         result = [%sexp_of: (float * float) list] @@ [ (xs.(0), ys.(0)); (xs.(50), ys.(50)) ];
       }

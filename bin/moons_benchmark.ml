@@ -15,6 +15,8 @@ let () =
   (* SDSL.enable_all_debugs (); *)
   CDSL.virtualize_settings.enable_device_only <- true;
   CDSL.virtualize_settings.inline_constants <- true;
+  Code.with_debug := true;
+  Code.keep_files_in_run_directory := true;
   SDSL.drop_all_sessions ();
   Random.init 0;
   let num_parallel_tasks = SDSL.num_domains - 1 in
@@ -77,9 +79,9 @@ let () =
      in *)
   let step_batch = num_parallel_tasks * minibatch in
   let%nn_op subsubtotal = margin_loss ++ "...|... => ...|0" in
-  SDSL.set_non_virtual subsubtotal;
+  subsubtotal.node.value_never_virtual <- true;
   let%nn_op subtotal = subsubtotal ++ "...|0 => 0" in
-  SDSL.set_non_device_only subtotal;
+  subtotal.node.value_never_device_only <- true;
   let%nn_op total_loss = (subtotal /. !..step_batch) + (0.001 *. reg_loss) in
   let%nn_dt epoch_loss ~o:1 = n =+ total_loss in
   let run_for_steps = refresh_batch in
@@ -116,7 +118,7 @@ let () =
   Stdio.printf "\nStep 4: Minus learning rate: %f\n%!" minus_lr.@[0];
   Stdio.printf "\nStep 4: loss %f\n%!" epoch_loss.@[0];
   SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
-  Stdio.printf "\nSize in bytes: %d\n%!" (SDSL.global_size_in_bytes ())
+  Stdio.printf "\nHost size in bytes: %d\n%!" (SDSL.global_host_size_in_bytes ())
 
 let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_constants = true)
     ~num_parallel_tasks precision () =
@@ -268,7 +270,7 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
       {
         bench_title;
         time_in_sec;
-        total_size_in_bytes = SDSL.global_size_in_bytes ();
+        host_size_in_bytes = SDSL.global_host_size_in_bytes ();
         result_label = "min epoch loss, last epoch loss";
         (* This is not really an epoch loss, it's a run_for_steps cumulative loss. *)
         result = [%sexp_of: float * float] (!min_loss, !loss);
