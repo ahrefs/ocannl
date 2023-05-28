@@ -13,6 +13,8 @@ let%expect_test "Graph drawing recompile" =
   SDSL.drop_all_sessions ();
   Random.init 0;
   let%nn_op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
+  SDSL.set_non_virtual x;
+  SDSL.set_non_device_only x;
   SDSL.refresh_session ();
   SDSL.print_node_tree ~with_grad:true ~depth:9 f.id;
   [%expect
@@ -124,6 +126,8 @@ let%expect_test "Graph drawing fetch" =
   in
   let%nn_dt session_step ~o:1 = n =+ 1 in
   let%nn_op x = x_flat @.| session_step in
+  SDSL.set_non_virtual x;
+  SDSL.set_non_device_only x;
   let%nn_op fx = f x in
   let ys =
     Array.map xs ~f:(fun _ ->

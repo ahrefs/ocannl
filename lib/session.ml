@@ -153,15 +153,16 @@ let set_executor = function
       executor_error_message := Exec_as_gccjit.error_message;
       cleanup_executor_session := Exec_as_gccjit.cleanup_session
 
-let perform_initialization =
+let perform_initialization traced_store =
   List.iter ~f:(function
-    | { Code.tensor = { id; field = Value }; dims; init_op } ->
-        (* FIXME(#135): Defensive. For now, value and gradient should be non-virtual reciprocically. *)
-        if (not (NodeUI.get id).virtual_) && not (NodeUI.get id).device_only then
+    | { Code.tensor = { id; field = Value } as ptr; dims; init_op } ->
+        let tn = Code.get_node traced_store ptr in
+        if tn.non_virtual && tn.non_device_only then
           (NodeUI.N.get id).value <- NodeUI.create_ndarray !Formula.default_value_prec (dims ()) init_op
-    | { tensor = { id; field = Grad }; dims; init_op } ->
+    | { tensor = { id; field = Grad } as ptr; dims; init_op } ->
+        let tn = Code.get_node traced_store ptr in
         let n = NodeUI.N.get id in
-        if (not (NodeUI.get id).virtual_) && not (NodeUI.get id).device_only then
+        if tn.non_virtual && tn.non_device_only then
           n.grad <- Some (NodeUI.create_ndarray !Formula.default_grad_prec (dims ()) init_op)
         else assert (Option.is_some n.grad))
 
@@ -172,7 +173,7 @@ let compile_routine ~name code =
   session_initialized := num_inits;
   let traced_store, compiled = Code.compile_proc ~name ~for_step_update:false code in
   (* Only initialize after compilation, to know which nodes are virtual. *)
-  perform_initialization @@ List.take !session_initializations to_init;
+  perform_initialization traced_store @@ List.take !session_initializations to_init;
   !exec_unit_func ~name (traced_store, compiled)
 
 let session_params () = NodeUI.param_nodes ~from_id:!Formula.first_session_id ()
@@ -288,7 +289,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
   if generating || reinit || roots_changed then (
     let num_inits = List.length !session_initializations in
     let to_init = num_inits - !session_initialized in
-    perform_initialization @@ List.take !session_initializations to_init;
+    perform_initialization (fst !session_step_update_compiled) @@ List.take !session_initializations to_init;
     session_initialized := num_inits);
   if (not force_no_init) && (generating || reinit) then
     session_step_update_routine := !exec_task_id_func ~name !session_step_update_compiled;

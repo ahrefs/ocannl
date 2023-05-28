@@ -10,11 +10,6 @@ type t = {
   op_label : string;
   desc_label : string option;
   shape : Shape.t;
-  mutable virtual_ : bool;
-      (** If true, this node is never materialized, its computations are inlined on a per-scalar basis. *)
-  mutable device_only : bool;
-      (** If true, this node is only materialized on the devices it is computed on, it is not persisted
-     outside of a step update. *)
   mutable never_virtual : bool;
   mutable never_device_only : bool;
   literal : bool;
@@ -144,8 +139,6 @@ let create ~(value_prec : prec) ?(grad_prec : prec option) ?(literal = false) ~n
       desc_label;
       children;
       shape;
-      virtual_ = false;
-      device_only = false;
       never_virtual = false;
       never_device_only = false;
       literal;
@@ -506,7 +499,7 @@ let to_dag ?(single_node = false) ?entries_per_axis ?(with_backend_info = false)
     let children = if single_node then [] else List.map ~f:to_dag n.children in
     let desc_l = match n.desc_label with None -> "" | Some l -> l ^ " " in
     let op_l = match n.op_label with "" -> "" | l -> "<" ^ l ^ ">" in
-    let prefix = "[" ^ id ^ "] " ^ desc_l ^ op_l ^ if n.virtual_ then " virtual" else "" in
+    let prefix = "[" ^ id ^ "] " ^ desc_l ^ op_l in
     let prefix =
       if String.is_empty n.backend_info || not with_backend_info then prefix
       else prefix ^ " " ^ n.backend_info
@@ -543,8 +536,7 @@ let to_printbox ?single_node ?entries_per_axis ?with_backend_info ?(with_id = fa
 let print_node_preamble id =
   try
     let n = get id in
-    Caml.Format.printf "Node %s%s%s,@ read-by-task-id: %a@ via %a;\n%!" (node_header n)
-      (if n.virtual_ then " (virtual)" else "")
+    Caml.Format.printf "Node %s%s,@ read-by-task-id: %a@ via %a;\n%!" (node_header n)
       (if String.is_empty n.backend_info then "" else " " ^ n.backend_info)
       Sexp.pp_hum
       ([%sexp_of: int list] n.read_by_localized)

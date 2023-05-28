@@ -76,7 +76,6 @@ let prefix_with_preamble content =
     let n = NodeUI.get id in
     ap "Node ";
     ap @@ NodeUI.node_header n;
-    if n.virtual_ then ap " (virtual)";
     ap ";\n"
   done;
   ap content;

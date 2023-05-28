@@ -556,8 +556,12 @@ type traced_tensor = {
   assignments : int array Hash_set.t;
   accesses : (int array, visits) Hashtbl.t;
       (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
-  mutable non_virtual : bool;  (** A tensor that already exists (has size > 0) will not be virtual. *)
+  mutable non_virtual : bool;
+      (** If false, this tensor is never materialized, its computations are inlined on a per-scalar basis.
+          A tensor that already exists (has size > 0) will not be virtual. *)
   mutable non_device_only : bool;
+      (** If false, this node is only materialized on the devices it is computed on, it is not persisted
+          outside of a step update. *)
   mutable scalar : float option;
   mutable read_before_write : bool;  (** The node is read before it is written (i.e. it is recurrent). *)
   mutable reduced_racyness : bool;
@@ -571,7 +575,8 @@ type traced_tensor = {
 let get_node store (uid : NodeUI.tensor_ptr) =
   Hashtbl.find_or_add store uid ~default:(fun () ->
       let n = NodeUI.get uid.id in
-      let non_virtual = n.never_virtual || NodeUI.size_in_bytes uid = 0 in
+      let non_virtual = n.never_virtual || NodeUI.size_in_bytes uid > 0 in
+      let non_device_only = n.never_device_only || NodeUI.size_in_bytes uid > 0 in
       {
         id = uid.id;
         kind = uid.field;
@@ -580,7 +585,7 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         assignments = Hash_set.Poly.create ();
         accesses = Hashtbl.Poly.create ();
         non_virtual;
-        non_device_only = n.never_device_only;
+        non_device_only;
         scalar = None;
         read_before_write = false;
         reduced_racyness = true;
@@ -1146,21 +1151,6 @@ let optimize_proc llc : traced_store * unit low_level =
     visit_llc traced_store reverse_node_map ~max_visits:virtualize_settings.max_visits llc;
     cleanup_virtual_llc traced_store reverse_node_map @@ virtual_llc traced_store reverse_node_map llc
   in
-  let is_inline node =
-    (virtualize_settings.inline_constants && Option.is_some node.scalar) || not node.non_virtual
-  in
-  Hashtbl.iter traced_store ~f:(fun dn ->
-      let n = NodeUI.get dn.id in
-      if not dn.non_device_only then n.device_only <- true;
-      if is_inline dn then
-        if Option.is_none n.node.grad then n.virtual_ <- true
-        else
-          match
-            Hashtbl.find traced_store
-              { id = dn.id; field = (if NodeUI.equal_data_kind dn.kind Value then Grad else Value) }
-          with
-          | Some other_n when not @@ is_inline other_n -> ()
-          | _ -> n.virtual_ <- true);
   (traced_store, result)
 
 let compile_proc ~name ~for_step_update:_ proc =
