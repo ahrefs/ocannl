@@ -114,14 +114,14 @@ let () =
   let%nn_op l = d *. "f" [ -2 ] in
   SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ Dim 1 ] [| 0.1 |]);
   SDSL.refresh_session ~update_params:false ();
-  (* We did not update the params: all values and gradients will be at initial points, which are
-     specified in the formula in the brackets. *)
+  Stdio.print_endline "\nWe did not update the params: all values and gradients will be at initial points,
+    which are specified in the formula in the brackets.";
   SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
   SDSL.refresh_session ~update_params:true ();
-  (* Now we updated the params, but after the forward and backward passes: only params values
-     will change, compared to the above. *)
+  Stdio.print_endline "\nNow we updated the params, but after the forward and backward passes:
+    only params values will change, compared to the above.";
   SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
   SDSL.refresh_session ~update_params:false ();
-  (* Now again we did not update the params, they will remain as above, but both param gradients
-     and the values and gradients of other nodes will change thanks to the forward and backward passes. *)
+  Stdio.print_endline "\nNow again we did not update the params, they will remain as above, but both param
+    gradients and the values and gradients of other nodes will change thanks to the forward and backward passes.";
   SDSL.print_node_tree ~with_grad:true ~depth:9 l.id
