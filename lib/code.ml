@@ -732,7 +732,7 @@ let precompute_constants ?idcs traced_store top_node llv =
   in
   try
     if never_virtual || never_device_only then raise @@ Non_literal 8;
-    if (not @@ Hashtbl.is_empty top_node.accesses) && not n.literal then raise @@ Non_literal 6;
+    if (not n.literal) && Hashtbl.exists top_node.accesses ~f:is_recurrent then raise @@ Non_literal 6;
     (match idcs with
     | None -> ()
     | Some idcs ->
