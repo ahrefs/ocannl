@@ -23,8 +23,6 @@ type t = {
       - [op_label] stores the approximate human-readable numerical value or representation of the node,
       - [never_virtual] and [never_device_only] are never true,
       - [node.grad] is always [None]. *)
-  mutable is_recurrent : bool;
-      (** If true, there is a cell in the value tensor that is read before it is written. *)
   mutable backend_info : string;
       (** Information about e.g. the memory strategy that the most recent backend chose for the tensor. *)
   mutable localized_to : int option;
@@ -150,7 +148,6 @@ let create ~(value_prec : prec) ?(grad_prec : prec option) ?(literal = false) ~n
       device_only = false;
       never_virtual = false;
       never_device_only = false;
-      is_recurrent = false;
       literal;
       backend_info = "";
       localized_to = None;

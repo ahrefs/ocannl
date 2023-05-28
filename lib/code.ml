@@ -559,9 +559,7 @@ type traced_tensor = {
   mutable non_virtual : bool;  (** A tensor that already exists (has size > 0) will not be virtual. *)
   mutable non_device_only : bool;
   mutable scalar : float option;
-  mutable read_before_write : bool;
-      (** The node is read before it is written. If [read_before_write] is true for a session step update
-          code, we record that as [node.NodeUI.is_recurrent] on the corresponding node. *)
+  mutable read_before_write : bool;  (** The node is read before it is written (i.e. it is recurrent). *)
   mutable reduced_racyness : bool;
       (** If true, the only non-constant writes into the tensor are updates, and a constant write is never
           the last write. An update is a read immediately followed by a write of the same cell, as in
@@ -582,7 +580,7 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         assignments = Hash_set.Poly.create ();
         accesses = Hashtbl.Poly.create ();
         non_virtual;
-        non_device_only = n.never_device_only || n.is_recurrent;
+        non_device_only = n.never_device_only;
         scalar = None;
         read_before_write = false;
         reduced_racyness = true;
@@ -902,8 +900,7 @@ let process_computation node top_llc =
     loop_proc ~env_dom:Set.Poly.empty top_llc;
     if not !has_setter then raise Non_virtual;
     node.computations <- (!at_idcs, top_llc) :: node.computations
-  with Non_virtual ->
-    node.non_virtual <- true
+  with Non_virtual -> node.non_virtual <- true
 
 let inline_computation ~id node call_args =
   let exception Non_virtual in
@@ -1166,13 +1163,13 @@ let optimize_proc llc : traced_store * unit low_level =
           | _ -> n.virtual_ <- true);
   (traced_store, result)
 
-let compile_proc ~name ~for_step_update proc =
+let compile_proc ~name ~for_step_update:_ proc =
   let result = optimize_proc @@ to_low_level proc in
   if !with_debug && !keep_files_in_run_directory then
     Stdio.Out_channel.write_all (name ^ ".llc")
       ~data:(Sexp.to_string_hum @@ sexp_of_low_level Unit.sexp_of_t @@ snd result);
-  if for_step_update then
-    Hashtbl.iter (fst result) ~f:(fun n -> if n.read_before_write then (NodeUI.get n.id).is_recurrent <- true);
+  (* if for_step_update then
+     Hashtbl.iter (fst result) ~f:(fun n -> if n.read_before_write then (NodeUI.get n.id).is_recurrent <- true); *)
   result
 
 let interpret_task_id_func ~name:_ ((_traced_store : traced_store), compiled) ~task_id =
