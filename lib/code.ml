@@ -815,9 +815,10 @@ let visit_llc traced_store reverse_node_map ~max_visits ~consider_grads llc =
   for task_id = 0 to !Shape.num_parallel_tasks - 1 do
     loop_proc ~task_id (Map.Poly.empty, Map.Poly.empty) llc
   done;
+  Hashtbl.iter traced_store ~f:(fun traced ->
+      if traced.last_write_non_update then traced.reduced_racyness <- false);
   Hash_set.iter nodes ~f:(fun node_id ->
       let traced : traced_tensor = get_node traced_store { id = node_id; field = Value } in
-      if traced.last_write_non_update then traced.reduced_racyness <- false;
       if Hashtbl.exists traced.accesses ~f:is_too_many then (
         traced.non_virtual <- true;
         (* TODO(#135): For now, value and gradient are non-virtual reciprocically. *)

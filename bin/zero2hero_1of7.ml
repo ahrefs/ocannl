@@ -77,13 +77,13 @@ let _suspended () =
   in
   PrintBox_text.output Stdio.stdout plot_box
 
-let () =
+let _suspended () =
   (* %expect_test "Graph drawing recompile" *)
   (* let open Operation.FDSL in *)
   let open SDSL.O in
   SDSL.drop_all_sessions ();
-  Code.with_debug := true;
-  Code.keep_files_in_run_directory := true;
+  (* Code.with_debug := true;
+  Code.keep_files_in_run_directory := true; *)
   Random.init 0;
   Stdio.print_endline "\nFirst refresh:";
   let%nn_op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
@@ -103,3 +103,25 @@ let () =
       [ Scatterplot { points = Array.zip_exn xs ys; pixel = "#" } ]
   in
   PrintBox_text.output Stdio.stdout plot_box
+
+let () =
+  SDSL.drop_all_sessions ();
+  Code.with_debug := true;
+  Code.keep_files_in_run_directory := true;
+  Random.init 0;
+  let%nn_op e = "a" [ 2 ] *. "b" [ -3 ] in
+  let%nn_op d = e + "c" [ 10 ] in
+  let%nn_op l = d *. "f" [ -2 ] in
+  SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ Dim 1 ] [| 0.1 |]);
+  SDSL.refresh_session ~update_params:false ();
+  (* We did not update the params: all values and gradients will be at initial points, which are
+     specified in the formula in the brackets. *)
+  SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
+  SDSL.refresh_session ~update_params:true ();
+  (* Now we updated the params, but after the forward and backward passes: only params values
+     will change, compared to the above. *)
+  SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
+  SDSL.refresh_session ~update_params:false ();
+  (* Now again we did not update the params, they will remain as above, but both param gradients
+     and the values and gradients of other nodes will change thanks to the forward and backward passes. *)
+  SDSL.print_node_tree ~with_grad:true ~depth:9 l.id
