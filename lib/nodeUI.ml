@@ -10,8 +10,10 @@ type t = {
   op_label : string;
   desc_label : string option;
   shape : Shape.t;
-  mutable never_virtual : bool;
-  mutable never_device_only : bool;
+  mutable value_never_virtual : bool;
+  mutable value_never_device_only : bool;
+  mutable grad_never_virtual : bool;
+  mutable grad_never_device_only : bool;
   literal : bool;
       (** To avoid confusion, try to maintain the following for a literal:
       - empty [children],
@@ -139,8 +141,10 @@ let create ~(value_prec : prec) ?(grad_prec : prec option) ?(literal = false) ~n
       desc_label;
       children;
       shape;
-      never_virtual = false;
-      never_device_only = false;
+      value_never_virtual = false;
+      value_never_device_only = false;
+      grad_never_virtual = false;
+      grad_never_device_only = false;
       literal;
       backend_info = "";
       localized_to = None;

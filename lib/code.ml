@@ -575,8 +575,16 @@ type traced_tensor = {
 let get_node store (uid : NodeUI.tensor_ptr) =
   Hashtbl.find_or_add store uid ~default:(fun () ->
       let n = NodeUI.get uid.id in
-      let non_virtual = n.never_virtual || NodeUI.size_in_bytes uid > 0 in
-      let non_device_only = n.never_device_only || NodeUI.size_in_bytes uid > 0 in
+      let never_virtual =
+        match uid.field with NodeUI.Value -> n.value_never_virtual | NodeUI.Grad -> n.grad_never_virtual
+      in
+      let never_device_only =
+        match uid.field with
+        | NodeUI.Value -> n.value_never_device_only
+        | NodeUI.Grad -> n.grad_never_device_only
+      in
+      let non_virtual = never_virtual || NodeUI.size_in_bytes uid > 0 in
+      let non_device_only = never_device_only || NodeUI.size_in_bytes uid > 0 in
       {
         id = uid.id;
         kind = uid.field;
@@ -623,7 +631,12 @@ let localize_tensors store ~for_task_id llc =
         let n = NodeUI.get ptr.id in
         if Option.is_some n.localized_to then assert ([%equal: int option] n.localized_to for_task)
         else n.localized_to <- Some for_task_id;
-        if n.never_device_only then (
+        let never_device_only =
+          match ptr.field with
+          | NodeUI.Value -> n.value_never_device_only
+          | NodeUI.Grad -> n.grad_never_device_only
+        in
+        if never_device_only then (
           debug := NodeUI.tensor_ptr_name ptr;
           loop_float llv)
     | Set_local (_, llv) -> loop_float llv
@@ -709,8 +722,16 @@ let precompute_constants ?idcs traced_store top_node llv =
         Float.(if v > 0.0 then v else 0.0)
   in
   let n = NodeUI.get top_node.id in
+  let never_virtual =
+    match top_node.kind with NodeUI.Value -> n.value_never_virtual | NodeUI.Grad -> n.grad_never_virtual
+  in
+  let never_device_only =
+    match top_node.kind with
+    | NodeUI.Value -> n.value_never_device_only
+    | NodeUI.Grad -> n.grad_never_device_only
+  in
   try
-    if n.never_virtual || n.never_device_only then raise @@ Non_literal 8;
+    if never_virtual || never_device_only then raise @@ Non_literal 8;
     if (not @@ Hashtbl.is_empty top_node.accesses) && not n.literal then raise @@ Non_literal 6;
     (match idcs with
     | None -> ()

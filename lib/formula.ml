@@ -329,8 +329,8 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
           (match fetch_op with
           | Constant _ -> ()
           | _ ->
-              n.never_virtual <- true;
-              n.never_device_only <- true);
+              n.value_never_virtual <- true;
+              n.value_never_device_only <- true);
           false)
   in
   if not is_form then
