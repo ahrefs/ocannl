@@ -18,26 +18,26 @@ let%expect_test "Graph drawing recompile" =
   SDSL.print_node_tree ~with_grad:true ~depth:9 f.id;
   [%expect
     {|
-                                              [13] f <+> replicated
-                                               6.00e+1
-                                              Gradient
-                                               1.00e+0
-                                   [12] <+> virtual                                │[2] <5> virtual
-                                   <void>                                          │<void>
-                                   Gradient                                        │
-                                   <void>                                          │
-             [9] <*.> virtual          │             [11] <*.> virtual             │
-             <void>                    │             <void>                        │
-             Gradient                  │             Gradient                      │
-             <void>                    │             <void>                        │
-    [8] <3> virtual│ [6] <**.> virtual │[10] <-1> virtual│    [4] <*.> virtual     │
-    <void>         │ <void>            │<void>           │    <void>               │
-                   │ Gradient          │                 │    Gradient             │
-                   │ <void>            │                 │    <void>               │
-                   │[1]│[5] <2> virtual│                 │[3] <4> virtual│[1] <x>  │
-                   │   │<void>         │                 │<void>         │ 5.00e+0 │
-                   │   │               │                 │               │Gradient │
-                   │   │               │                 │               │ 2.60e+1 │ |}];
+                          [13] f <+>
+                           6.00e+1
+                          Gradient
+                          <void>
+                       [12] <+>                    │[2] <5>
+                       <void>                      │<void>
+                       Gradient                    │
+                       <void>                      │
+         [9] <*.>      │         [11] <*.>         │
+         <void>        │         <void>            │
+         Gradient      │         Gradient          │
+         <void>        │         <void>            │
+    [8] <3>│ [6] <**.> │[10] <-1>│    [4] <*.>     │
+    <void> │ <void>    │<void>   │    <void>       │
+           │ Gradient  │         │    Gradient     │
+           │ <void>    │         │    <void>       │
+           │[1]│[5] <2>│         │[3] <4>│[1] <x>  │
+           │   │<void> │         │<void> │ 5.00e+0 │
+           │   │       │         │       │Gradient │
+           │   │       │         │       │ 2.60e+1 │ |}];
   let xs = Array.init 10 ~f:Float.(fun i -> of_int i - 5.) in
   let ys =
     Array.map xs ~f:(fun v ->
@@ -101,20 +101,21 @@ let%expect_test "Graph drawing fetch" =
   CDSL.virtualize_settings.inline_constants <- false;
   let%nn_op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%nn_op f5 = f 5 in
+  SDSL.everything_fully_on_host ();
   SDSL.refresh_session ();
   SDSL.print_node_tree ~with_grad:false ~depth:9 f5.id;
   [%expect
     {|
-                                 [12] f <+>
-                                  6.00e+1
-                         [11] <+> virtual                     │[2] <5>
-                          5.50e+1                             │ 5.00e+0
-         [8] <*.> virtual      │      [10] <*.> virtual       │
-          7.50e+1              │       -2.00e+1               │
-    [7] <3>  │[6] <**.> virtual│[9] <-1>  │ [4] <*.> virtual  │
-     3.00e+0 │ 2.50e+1         │ -1.00e+0 │  2.00e+1          │
-             │[1]│  [5] <2>    │          │[3] <4>  │[1] <5>  │
-             │   │   2.00e+0   │          │ 4.00e+0 │ 5.00e+0 │ |}];
+                               [12] f <+>
+                                6.00e+1
+                          [11] <+>                        │[2] <5>
+                           5.50e+1                        │ 5.00e+0
+           [8] <*.>        │          [10] <*.>           │
+            7.50e+1        │           -2.00e+1           │
+    [7] <3>  │  [6] <**.>  │[9] <-1>  │     [4] <*.>      │
+     3.00e+0 │   2.50e+1   │ -1.00e+0 │      2.00e+1      │
+             │[1]│[5] <2>  │          │[3] <4>  │[1] <5>  │
+             │   │ 2.00e+0 │          │ 4.00e+0 │ 5.00e+0 │ |}];
   (* close_session is not necessary. *)
   SDSL.close_session ();
   let size = 100 in
@@ -189,13 +190,14 @@ let%expect_test "Graph drawing fetch" =
               │-5.000e+0                                                          4.900e+0
               │                                     x |}]
 
-let%expect_test "Simple gradients" =
+let%expect_test "Simple gradients materialized" =
   SDSL.drop_all_sessions ();
   Random.init 0;
   let%nn_op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%nn_op d = e + "c" [ 10 ] in
   let%nn_op l = d *. "f" [ -2 ] in
   SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ Dim 1 ] [| 0.1 |]);
+  SDSL.everything_fully_on_host ();
   SDSL.refresh_session ~update_params:false ();
   (* We did not update the params: all values and gradients will be at initial points, which are
      specified in the formula in the brackets. *)
@@ -206,21 +208,23 @@ let%expect_test "Simple gradients" =
                      -8.00e+0
                     Gradient
                      1.00e+0
-           [5] d <+> virtual       │[6] <f>
-            4.00e+0                │ -2.00e+0
-           Gradient                │Gradient
-            -2.00e+0               │ 4.00e+0
-     [3] e <*.> virtual │[4] <c>   │
-      -6.00e+0          │ 1.00e+1  │
-     Gradient           │Gradient  │
-      -2.00e+0          │ -2.00e+0 │
+              [5] d <+>            │[6] <f>
+               4.00e+0             │ -2.00e+0
+              Gradient             │Gradient
+               -2.00e+0            │ 4.00e+0
+         [3] e <*.>     │[4] <c>   │
+          -6.00e+0      │ 1.00e+1  │
+         Gradient       │Gradient  │
+          -2.00e+0      │ -2.00e+0 │
     [1] <a>  │[2] <b>   │          │
      2.00e+0 │ -3.00e+0 │          │
     Gradient │Gradient  │          │
      6.00e+0 │ -4.00e+0 │          │ |}];
   SDSL.refresh_session ~update_params:true ();
   (* Now we updated the params, but after the forward and backward passes: only params values
-     will change, compared to the above. *)
+     will change, compared to the above, as long as gradient tensors are materialized.
+     Since virtual tensors are computed by-need, they will always be recomputed using the latest
+     parameter state. When parameter gradients are virtual, this will lead to different parameter updates. *)
   SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
   [%expect
     {|
@@ -228,14 +232,14 @@ let%expect_test "Simple gradients" =
                      -8.00e+0
                     Gradient
                      1.00e+0
-           [5] d <+> virtual       │[6] <f>
-            4.00e+0                │ -1.60e+0
-           Gradient                │Gradient
-            -2.00e+0               │ 4.00e+0
-     [3] e <*.> virtual │[4] <c>   │
-      -6.00e+0          │ 9.80e+0  │
-     Gradient           │Gradient  │
-      -2.00e+0          │ -2.00e+0 │
+              [5] d <+>            │[6] <f>
+               4.00e+0             │ -1.60e+0
+              Gradient             │Gradient
+               -2.00e+0            │ 4.00e+0
+         [3] e <*.>     │[4] <c>   │
+          -6.00e+0      │ 9.80e+0  │
+         Gradient       │Gradient  │
+          -2.00e+0      │ -2.00e+0 │
     [1] <a>  │[2] <b>   │          │
      2.60e+0 │ -3.40e+0 │          │
     Gradient │Gradient  │          │
@@ -250,28 +254,105 @@ let%expect_test "Simple gradients" =
                        -1.54e+0
                       Gradient
                        1.00e+0
-             [5] d <+> virtual       │[6] <f>
-              9.60e-1                │ -1.60e+0
-             Gradient                │Gradient
-              -1.60e+0               │ 9.60e-1
-       [3] e <*.> virtual │[4] <c>   │
-        -8.84e+0          │ 9.80e+0  │
-       Gradient           │Gradient  │
-        -1.60e+0          │ -1.60e+0 │
+                [5] d <+>            │[6] <f>
+                 9.60e-1             │ -1.60e+0
+                Gradient             │Gradient
+                 -1.60e+0            │ 9.60e-1
+           [3] e <*.>     │[4] <c>   │
+            -8.84e+0      │ 9.80e+0  │
+           Gradient       │Gradient  │
+            -1.60e+0      │ -1.60e+0 │
       [1] <a>  │[2] <b>   │          │
        2.60e+0 │ -3.40e+0 │          │
       Gradient │Gradient  │          │
        5.44e+0 │ -4.16e+0 │          │ |}]
 
+let%expect_test "Simple gradients virtual" =
+  SDSL.drop_all_sessions ();
+  Random.init 0;
+  let%nn_op e = "a" [ 2 ] *. "b" [ -3 ] in
+  let%nn_op d = e + "c" [ 10 ] in
+  let%nn_op l = d *. "f" [ -2 ] in
+  SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ Dim 1 ] [| 0.1 |]);
+  SDSL.refresh_session ~update_params:false ();
+  (* We did not update the params: all values and gradients will be at initial points, which are
+     specified in the formula in the brackets. *)
+  SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
+  [%expect
+    {|
+                   [7] l <*.>
+                    -8.00e+0
+                   Gradient
+                   <void>
+              [5] d <+>           │[6] <f>
+              <void>              │ -2.00e+0
+              Gradient            │Gradient
+              <void>              │<void>
+         [3] e <*.>     │[4] <c>  │
+         <void>         │ 1.00e+1 │
+         Gradient       │Gradient │
+         <void>         │<void>   │
+    [1] <a>  │[2] <b>   │         │
+     2.00e+0 │ -3.00e+0 │         │
+    Gradient │Gradient  │         │
+    <void>   │<void>    │         │ |}];
+  SDSL.refresh_session ~update_params:true ();
+  (* Now we updated the params, but after the forward and backward passes: only params values
+     will change, compared to the above, as long as gradient tensors are materialized.
+     Since virtual tensors are computed by-need, they will always be recomputed using the latest
+     parameter state. When parameter gradients are virtual, this will lead to different parameter updates. *)
+  SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
+  [%expect
+    {|
+                   [7] l <*.>
+                    -8.00e+0
+                   Gradient
+                   <void>
+              [5] d <+>           │[6] <f>
+              <void>              │ -1.62e+0
+              Gradient            │Gradient
+              <void>              │<void>
+         [3] e <*.>     │[4] <c>  │
+         <void>         │ 9.80e+0 │
+         Gradient       │Gradient │
+         <void>         │<void>   │
+    [1] <a>  │[2] <b>   │         │
+     2.54e+0 │ -3.32e+0 │         │
+    Gradient │Gradient  │         │
+    <void>   │<void>    │         │ |}];
+  SDSL.refresh_session ~update_params:false ();
+  (* Now again we did not update the params, they will remain as above, but both param gradients
+     and the values and gradients of other nodes will change thanks to the forward and backward passes. *)
+  SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
+  [%expect
+    {|
+                     [7] l <*.>
+                      -2.21e+0
+                     Gradient
+                     <void>
+                [5] d <+>           │[6] <f>
+                <void>              │ -1.62e+0
+                Gradient            │Gradient
+                <void>              │<void>
+           [3] e <*.>     │[4] <c>  │
+           <void>         │ 9.80e+0 │
+           Gradient       │Gradient │
+           <void>         │<void>   │
+      [1] <a>  │[2] <b>   │         │
+       2.54e+0 │ -3.32e+0 │         │
+      Gradient │Gradient  │         │
+      <void>   │<void>    │         │ |}]
+
 let%expect_test "tanh plot" =
   (* TODO: NOT IMPLEMENTED *)
   ()
 
-let%expect_test "2D neuron" =
+let%expect_test "2D neuron materialized" =
   SDSL.drop_all_sessions ();
   Random.init 0;
   let%nn_op n = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   (* No need for [~update_params:false] because we have not set [minus_learning_rate]. *)
+  SDSL.everything_fully_on_host ();
   SDSL.refresh_session ();
   SDSL.print_node_tree ~with_grad:true ~depth:9 n.id;
   [%expect
@@ -288,3 +369,25 @@ let%expect_test "2D neuron" =
      -3.00e+0  1.00e+0 │ 2.00e+0  0.00e+0  │
     Gradient           │Gradient           │
      2.00e+0  0.00e+0  │ -3.00e+0  1.00e+0 │ |}]
+
+let%expect_test "2D neuron virtual" =
+  SDSL.drop_all_sessions ();
+  Random.init 0;
+  let%nn_op n = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
+  (* No need for [~update_params:false] because we have not set [minus_learning_rate]. *)
+  SDSL.refresh_session ();
+  SDSL.print_node_tree ~with_grad:true ~depth:9 n.id;
+  [%expect
+    {|
+                       [5] n <+>
+                        7.00e-1
+                       Gradient
+                       <void>
+                  [4] <*>                 │[1] <b>
+                   -6.00e+0               │ 6.70e+0
+                  Gradient                │Gradient
+                  <void>                  │<void>
+    [2] <w>            │[3] <x>           │
+     -3.00e+0  1.00e+0 │ 2.00e+0  0.00e+0 │
+    Gradient           │Gradient          │
+    <void>             │<void>            │ |}]
