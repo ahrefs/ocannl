@@ -285,6 +285,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
                 from_ = 0;
                 to_ = run_for_steps - 1;
                 body = Lines [| Comment "Update sub-step"; compiled |];
+                trace_it = false;
               }) ));
   if generating || reinit || roots_changed then (
     let num_inits = List.length !session_initializations in

@@ -115,7 +115,14 @@ let new_sym_index =
 type _ low_level =
   | Comment : string -> unit low_level
   | Lines : unit low_level array -> unit low_level
-  | For_loop : { index : sym_index; from_ : int; to_ : int; body : unit low_level } -> unit low_level
+  | For_loop : {
+      index : sym_index;
+      from_ : int;
+      to_ : int;
+      body : unit low_level;
+      trace_it : bool;
+    }
+      -> unit low_level
   | If_task_id_is : { for_task_id : int; body : unit low_level } -> unit low_level
   | Rebalance : string option * unit low_level array -> unit low_level
   | Dynamic_indices : {
@@ -189,7 +196,13 @@ let to_low_level (code : t) : unit low_level =
           | Shape.Dim dim :: product, it :: iters ->
               let it = new_sym_index it in
               For_loop
-                { index = it; from_ = 0; to_ = dim - 1; body = for_loop (it :: rev_iters) (product, iters) }
+                {
+                  index = it;
+                  from_ = 0;
+                  to_ = dim - 1;
+                  body = for_loop (it :: rev_iters) (product, iters);
+                  trace_it = true;
+                }
           | Shape.Parallel :: _product, _it :: _iters ->
               invalid_arg "Code.to_low_level: Accum_binop projections parallel dim found in product space"
           | _ -> invalid_arg "Code.to_low_level: Accum_binop projections dims-iterators mismatch"
@@ -218,7 +231,13 @@ let to_low_level (code : t) : unit low_level =
           | Shape.Dim dim :: product, it :: iters ->
               let it = new_sym_index it in
               For_loop
-                { index = it; from_ = 0; to_ = dim - 1; body = for_loop (it :: rev_iters) (product, iters) }
+                {
+                  index = it;
+                  from_ = 0;
+                  to_ = dim - 1;
+                  body = for_loop (it :: rev_iters) (product, iters);
+                  trace_it = true;
+                }
           | Parallel :: _product, _it :: _iters ->
               invalid_arg "Code.to_low_level: Accum_binop projections parallel dim found in product space"
           | _ -> invalid_arg "Code.to_low_level: Accum_unop projections dims-iterators mismatch"
@@ -254,7 +273,14 @@ let to_low_level (code : t) : unit low_level =
           | (Dim dim | Frozen dim) :: product ->
               let it = new_sym_index (Shape.get_symbol ()) in
               let idx = Shape.Iterator it in
-              For_loop { index = it; from_ = 0; to_ = dim - 1; body = loop (idx :: rev_idcs) product }
+              For_loop
+                {
+                  index = it;
+                  from_ = 0;
+                  to_ = dim - 1;
+                  body = loop (idx :: rev_idcs) product;
+                  trace_it = true;
+                }
           | Parallel :: product -> loop (Shape.Task_id :: rev_idcs) product
         in
         let for_loops = loop [] (Array.to_list product_space) in
@@ -331,7 +357,7 @@ let interpret_code ?task_id llc =
     let loop = loop_proc env in
     match llc with
     | Lines body -> Array.iter ~f:loop body
-    | For_loop { index = key; from_; to_; body } ->
+    | For_loop { index = key; from_; to_; body; trace_it = _ } ->
         for data = from_ to to_ do
           loop_proc (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
@@ -764,7 +790,9 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
     let loop = loop_proc ~task_id env in
     match llc with
     | Lines body -> Array.iter ~f:loop body
-    | For_loop { index = key; from_; to_; body } ->
+    | For_loop { index = key; from_; to_ = _; body; trace_it = false } ->
+        loop_proc ~task_id (Map.add_exn ~key ~data:from_ @@ fst env, snd env) body
+    | For_loop { index = key; from_; to_; body; trace_it = true } ->
         for data = from_ to to_ do
           loop_proc ~task_id (Map.add_exn ~key ~data @@ fst env, snd env) body
         done
@@ -831,9 +859,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
     in
     loop_proc ~task_id env body
   in
-  for task_id = 0 to !Shape.num_parallel_tasks - 1 do
-    loop_proc ~task_id (Map.Poly.empty, Map.Poly.empty) llc
-  done;
+  loop_proc ~task_id:0 (Map.Poly.empty, Map.Poly.empty) llc;
   Hashtbl.iter traced_store ~f:(fun traced ->
       if traced.last_write_non_update then traced.reduced_racyness <- false;
       if Hashtbl.exists traced.accesses ~f:is_too_many then traced.non_virtual <- true;
@@ -875,7 +901,9 @@ let process_computation node top_llc =
     let loop = loop_proc ~env_dom in
     match llc with
     | Lines body -> Array.iter ~f:loop body
-    | For_loop { index; from_ = _; to_ = _; body } -> loop_proc ~env_dom:(Set.add env_dom index) body
+    | For_loop { trace_it = false; _ } -> assert false
+    | For_loop { index; body; from_ = _; to_ = _; trace_it = true } ->
+        loop_proc ~env_dom:(Set.add env_dom index) body
     | Rebalance (_, cs) -> Array.iter ~f:loop cs
     | If_task_id_is { for_task_id = _; body } -> loop body
     | Set (tensor, indices, llv) ->
@@ -951,9 +979,10 @@ let inline_computation ~id node call_args =
       | Lines body ->
           let body = Array.filter_map ~f:loop body in
           if Array.is_empty body then None else Some (Lines body)
+      | For_loop { trace_it = false; _ } -> assert false
       | For_loop { index; body; _ } when Map.mem env index -> loop body
-      | For_loop { index; from_; to_; body } ->
-          Option.map ~f:(fun body -> For_loop { index; from_; to_; body }) @@ loop body
+      | For_loop { index; from_; to_; body; trace_it } ->
+          Option.map ~f:(fun body -> For_loop { index; from_; to_; body; trace_it }) @@ loop body
       | Rebalance (s, cs) ->
           (* FIXME: NOT IMPLEMENTED YET *)
           let cs = Array.filter_map ~f:loop cs in
@@ -999,14 +1028,14 @@ let virtual_llc traced_store reverse_node_map (llc : unit low_level) : unit low_
     let loop = loop_proc ~process_for in
     match llc with
     | Lines body -> Lines (Array.map ~f:loop body)
-    | For_loop { index; from_; to_; body } -> (
+    | For_loop ({ index; body; _ } as for_config) -> (
         match Hashtbl.find reverse_node_map index with
         | Some tensor when not @@ Set.mem process_for tensor ->
             let node : traced_tensor = Hashtbl.find_exn traced_store tensor in
             let result = loop_proc ~process_for:(Set.add process_for tensor) llc in
             if not node.non_virtual then process_computation node result;
             result
-        | _ -> For_loop { index; from_; to_; body = loop body })
+        | _ -> For_loop { for_config with body = loop body })
     | Rebalance (s, cs) ->
         (* FIXME: NOT IMPLEMENTED YET *)
         Rebalance (s, Array.map ~f:loop cs)
@@ -1057,17 +1086,17 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit low_level) : u
     | Lines body ->
         let body = Array.filter_map ~f:loop body in
         if Array.is_empty body then None else Some (Lines body)
-    | For_loop { index; from_; to_; body } -> (
+    | For_loop ({ index; body; _ } as for_config) -> (
         let env_dom = Set.add env_dom index in
         match Hashtbl.find reverse_node_map index with
         | Some tensor ->
             if is_inline tensor then None
             else
-              Option.map ~f:(fun body -> For_loop { index; from_; to_; body })
+              Option.map ~f:(fun body -> For_loop { for_config with body })
               @@ loop_proc ~balanced ~env_dom body
         | None ->
-            Option.map ~f:(fun body -> For_loop { index; from_; to_; body })
-            @@ loop_proc ~balanced ~env_dom body)
+            Option.map ~f:(fun body -> For_loop { for_config with body }) @@ loop_proc ~balanced ~env_dom body
+        )
     | Rebalance (s, cs) when balanced -> (
         let cs = flat_lines @@ Array.filter_map cs ~f:loop in
         match (s, cs) with

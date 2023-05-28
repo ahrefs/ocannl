@@ -255,7 +255,7 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
     match body with
     | Code.Lines lines ->
         Array.iteri lines ~f:(fun i line -> loop ~name:(name ^ "_at_line_" ^ Int.to_string i) line)
-    | For_loop { index; from_; to_; body } -> jit_for_loop ~env index ~from_ ~to_ (Either.First body)
+    | For_loop { index; from_; to_; body; trace_it = _ } -> jit_for_loop ~env index ~from_ ~to_ (Either.First body)
     | Rebalance (_, cs) ->
         (* FIXME: NOT IMPLEMENTED YET *)
         Array.iteri cs ~f:(fun i line -> loop ~name:(name ^ "_at_par_line_" ^ Int.to_string i) line)
