@@ -52,7 +52,8 @@ let jit_array_offset ctx ~idcs ~dims =
       RValue.binary_op ctx Plus c_index idx
       @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
 
-let get_tensor { ctx; func; tensors; traced_store; task_init_block; task_finalize_block; localized_finalize_block }
+let get_tensor
+    { ctx; func; tensors; traced_store; task_init_block; task_finalize_block; localized_finalize_block }
     ~jit_code ~host_idcs ptr : tensor =
   let open Gccjit in
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
@@ -120,11 +121,16 @@ let get_tensor { ctx; func; tensors; traced_store; task_init_block; task_finaliz
             else (
               ignore jit_code;
               failwith "Exec_as_gccjit: non-slice hosted: NOT IMPLEMENTED YET"));
-        n.backend_info <-
-          (if is_parallel then "parallelized"
-           else if update_on_host then "sync-on-update"
-           else if Option.is_none hosted_ptr then "device-only"
-           else "replicated");
+        let backend_info =
+          (if NodeUI.equal_data_kind ptr.field Value then "v:" else "g:")
+          ^ (if is_parallel then "parallelized"
+             else if update_on_host then "sync-on-update"
+             else if Option.is_none hosted_ptr then "device-only"
+             else "replicated")
+          ^ ";"
+        in
+        if not @@ String.is_substring n.backend_info ~substring:backend_info then
+          n.backend_info <- n.backend_info ^ backend_info;
         {
           hosted_ptr;
           local = Some local;
