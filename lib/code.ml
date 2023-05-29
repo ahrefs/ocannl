@@ -150,6 +150,28 @@ type _ low_level =
   | Constant : float -> float low_level
 [@@deriving sexp_of]
 
+let rec has_parallel_dim : type a. a low_level -> bool = function
+  | Comment _ -> false
+  | Lines ls -> Array.exists ~f:has_parallel_dim ls
+  | For_loop { body; _ } -> has_parallel_dim body
+  | Rebalance (_, cs) -> Array.exists ~f:has_parallel_dim cs
+  | If_task_id_is { body; _ } -> has_parallel_dim body
+  | Dynamic_indices { tensor = _; tensor_idcs; dynamic_idcs = _; target_dims; body } ->
+      Array.exists tensor_idcs ~f:Shape.is_task_id
+      || Array.exists ~f:Shape.is_parallel target_dims
+      || has_parallel_dim body
+  | Set (_, indices, llv) -> Array.exists indices ~f:Shape.is_task_id || has_parallel_dim llv
+  | Set_local (_, llv) -> has_parallel_dim llv
+  | Local_scope { body; orig_indices; _ } ->
+      Array.exists orig_indices ~f:Shape.is_task_id || has_parallel_dim body
+  | Get_local _ -> false
+  | Get_global Task_id -> true
+  | Get_global _ -> false
+  | Get (_, indices) -> Array.exists indices ~f:Shape.is_task_id
+  | Binop (_, llv1, llv2) -> has_parallel_dim llv1 || has_parallel_dim llv2
+  | Unop (_, llv) -> has_parallel_dim llv
+  | Constant _ -> false
+
 let binop ~op ~rhs1 ~rhs2 = match op with Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Binop (op, rhs1, rhs2)
 let unop ~op ~rhs = match op with Identity -> rhs | _ -> Unop (op, rhs)
 let rec flat_lines ts = Array.concat_map ts ~f:(function Lines ts -> flat_lines ts | t -> [| t |])
@@ -212,8 +234,7 @@ let to_low_level (code : t) : unit low_level =
         in
         let s = Comment ("Computing node " ^ NodeUI.tensor_ptr_name lhs) in
         (* Note: it might be invalid to replicate computation across tasks. *)
-        if zero_out then
-          Lines [| s; loop (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
+        if zero_out then Lines [| s; loop (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
         else Lines [| s; for_loops |]
     | Accum_unop { zero_out; accum; op; lhs; rhs; projections } ->
         let projections = projections () in
@@ -247,8 +268,7 @@ let to_low_level (code : t) : unit low_level =
         in
         let s = Comment ("Computing node " ^ NodeUI.tensor_ptr_name lhs) in
         (* Note: it might be invalid to replicate computation across tasks. *)
-        if zero_out then
-          Lines [| s; loop (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
+        if zero_out then Lines [| s; loop (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
         else Lines [| s; for_loops |]
     | Noop -> Lines [||]
     | Block_comment (s, (Par _ as c)) -> loop_par ~s c
@@ -1032,8 +1052,8 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit low_level) : u
             Option.map ~f:(fun body -> For_loop { for_config with body }) @@ loop_proc ~balanced ~env_dom body
         )
     | Rebalance (s, cs) ->
-      let cs = Array.filter_map cs ~f:loop in
-       if Array.is_empty cs then None else Some (Rebalance (s, cs))
+        let cs = Array.filter_map cs ~f:loop in
+        if Array.is_empty cs then None else Some (Rebalance (s, cs))
     | If_task_id_is { for_task_id; body } ->
         Option.map ~f:(fun body -> If_task_id_is { for_task_id; body }) @@ loop body
     | Set (tensor, indices, llv) ->
