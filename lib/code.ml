@@ -527,7 +527,7 @@ let interpret_code ?task_id llc =
   in
   loop_proc (Map.Poly.empty, Map.Poly.empty) llc
 
-let code_sexp_margin = ref !code_sexp_margin
+let code_sexp_margin = ref 200
   
 let fprint_code ppf c =
   (* TODO: something nicely concise. *)
@@ -691,7 +691,7 @@ let localize_tensors store ~for_task_id llc =
   in
   loop llc
 
-let rebalance_across_tasks = ref true
+let rebalance_across_tasks = ref false
 
 let rebalance store llcs =
   if not !rebalance_across_tasks then (
