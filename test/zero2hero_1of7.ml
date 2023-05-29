@@ -383,10 +383,10 @@ let%expect_test "2D neuron virtual" =
                         7.00e-1
                        Gradient
                        <void>
-                  [4] <*>                 │[1] <b>
-                   -6.00e+0               │ 6.70e+0
-                  Gradient                │Gradient
-                  <void>                  │<void>
+                   [4] <*>                │[1] <b>
+                   <void>                 │ 6.70e+0
+                   Gradient               │Gradient
+                   <void>                 │<void>
     [2] <w>            │[3] <x>           │
      -3.00e+0  1.00e+0 │ 2.00e+0  0.00e+0 │
     Gradient           │Gradient          │
