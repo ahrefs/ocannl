@@ -114,7 +114,13 @@ let get_tensor
               else if is_parallel then Parallel_dim
               else if update_on_host then Update_on_host
               else if can_be_replicated || !Shape.num_parallel_tasks <= 1 then Replicated
-              else raise Unknown_synchronization)
+              else (
+                if !Code.with_debug then
+                  Caml.Format.printf "\nWARNING: No sync for tensor: %a@ node: %a\n%!" Sexp.pp_hum
+                    ([%sexp_of: Code.traced_tensor] tn)
+                    Sexp.pp_hum
+                    ([%sexp_of: NodeUI.t] n);
+                raise Unknown_synchronization))
         in
         Option.iter hosted_ptr ~f:(fun hosted_ptr ->
             if local_is_slice_of_host then (

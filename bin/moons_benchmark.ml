@@ -158,13 +158,13 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
   SDSL.num_parallel_tasks := num_parallel_tasks;
   SDSL.disable_all_debugs ();
   Code.with_debug := true;
-     Code.keep_files_in_run_directory := true;
+  Code.keep_files_in_run_directory := true;
   (* SDSL.enable_all_debugs (); *)
   SDSL.drop_all_sessions ();
   let open SDSL.O in
   Random.init 0;
   (* let init_mem = Mem_usage.info () in *)
-  let epochs = 10000 / per_refresh in
+  let epochs = 1000 / per_refresh in
   let orig_dataset = 200 in
   let minibatch = 20 in
   let refresh_batch = 20 * per_refresh / num_parallel_tasks in
@@ -230,32 +230,34 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
   let learning_rates = ref [] in
   let stop = ref false in
   let step = ref 0 in
-  let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in
-  let reg_loss =
+  (* let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in *)
+  (*let reg_loss =
     List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
-  in
+  in*)
   (* let reg_loss = List.map ~f:ssq [ w1; w2; b1; b2 ] |> List.reduce_exn ~f:FDSL.O.( + ) in *)
   let step_batch = num_parallel_tasks * minibatch in
-  let%nn_op subsubtotal = margin_loss ++ "...|... => ...|0" in
-  subsubtotal.node.value_never_virtual <- true;
-  let%nn_op subtotal = subsubtotal ++ "...|0 => 0" in
-  subtotal.node.value_never_device_only <- true;
-  let%nn_op total_loss = (subtotal /. !..step_batch) + (0.00001 *. reg_loss) in
-  let%nn_dt epoch_loss ~o:1 = n =+ total_loss in
+  (* Split the sum into stages so that only the outer sum is updated via the host. *)
+  let%nn_op subtotal = margin_loss ++ "...|... => ...|0" in
+  let%nn_op total_loss =
+    ((subtotal ++ "...|0 => 0") /. !..step_batch)
+  in
+  (* FIXME: Start computing epoch_loss only after the first total_loss is known. *)
+  (* let%nn_dt epoch_loss ~o:1 = n =+ total_loss in *)
   let loss = ref 0.0 in
   Stdio.printf "\n%!";
   SDSL.refresh_session ~run_for_steps ();
-  Stdio.printf "\nTotal loss:\n%!";
-  SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss.id;
-  Stdio.printf "\nEpoch loss:\n%!";
-  SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 epoch_loss.id;
-  Stdio.printf "\nMinus learning rate:\n%!";
-  SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 minus_lr.id;
+  (* Stdio.printf "\nTotal loss:\n%!";
+     SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss.id; *)
+  (* Stdio.printf "\nEpoch loss:\n%!";
+     SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 epoch_loss.id; *)
+  (* Stdio.printf "\nMinus learning rate:\n%!";
+     SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 minus_lr.id; *)
   Stdio.printf "\nTrain loop.\n%!";
   let start_time = Time_now.nanoseconds_since_unix_epoch () in
   while not !stop do
     step := !step + advance_per_run;
-    loss := epoch_loss.@[0];
+    (* loss := epoch_loss.@[0]; *)
+    loss := total_loss.@[0];
     if Float.(!loss < !min_loss) then min_loss := !loss;
     if Float.(!loss > !max_loss) then max_loss := !loss;
     learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
@@ -269,7 +271,8 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
        SDSL.print_preamble ();
        Stdio.printf "\nTree:\n%!";
        SDSL.print_node_tree ~with_grad:true ~depth:9 total_loss.id; *)
-    epoch_loss.@[0] <- 0.0;
+    (* FIXME: DEBUG: *)
+    (* epoch_loss.@[0] <- 0.0; *)
     if !step >= steps then stop := true;
     SDSL.refresh_session ~run_for_steps ()
   done;
