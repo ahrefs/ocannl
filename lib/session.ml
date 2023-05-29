@@ -195,6 +195,7 @@ let generate_params_update ~(minus_lr : Formula.t) ?params () =
 let print_session_code ?(compiled = false) () =
   let open Code in
   (* FIXME: figure out if / why this isn't idempotent. *)
+  Caml.Format.set_margin !Code.code_sexp_margin;
   if compiled then
     Caml.Format.printf "Compiled session step update code:@ %a" Sexp.pp_hum
       (sexp_of_low_level Unit.sexp_of_t @@ snd !session_step_update_compiled)

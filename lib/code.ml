@@ -527,12 +527,16 @@ let interpret_code ?task_id llc =
   in
   loop_proc (Map.Poly.empty, Map.Poly.empty) llc
 
+let code_sexp_margin = ref !code_sexp_margin
+  
 let fprint_code ppf c =
   (* TODO: something nicely concise. *)
+  Caml.Format.pp_set_margin ppf !code_sexp_margin;
   Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_t c
 
 let fprint_low_level ppf c =
   (* TODO: something nicely concise. *)
+  Caml.Format.pp_set_margin ppf !code_sexp_margin;
   Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_low_level Unit.sexp_of_t (to_low_level c)
 
 let interpreter_error_message ~name ~prefix ?extra_error_msg ~contents exc =
@@ -687,12 +691,20 @@ let localize_tensors store ~for_task_id llc =
   in
   loop llc
 
+let rebalance_across_tasks = ref true
+
 let rebalance store llcs =
-  (* FIXME: implement actual rebalancing. *)
-  let for_task_id = 0 in
-  let body = Lines (flat_lines llcs) in
-  localize_tensors store ~for_task_id body;
-  If_task_id_is { for_task_id; body }
+  if not !rebalance_across_tasks then (
+    let for_task_id = 0 in
+    let body = Lines (flat_lines llcs) in
+    localize_tensors store ~for_task_id body;
+    If_task_id_is { for_task_id; body })
+  else
+    let tasks =
+      Array.mapi llcs ~f:(fun task body ->
+          If_task_id_is { for_task_id = task % !Shape.num_parallel_tasks; body })
+    in
+    Lines tasks
 
 let rec has_parallel_dim : type a. a low_level -> bool = function
   | Comment _ -> false
@@ -1205,17 +1217,21 @@ let optimize_proc llc : traced_store * unit low_level =
 
 let compile_proc ~name ~for_step_update:_ proc =
   let result = optimize_proc @@ to_low_level proc in
-  if !with_debug && !keep_files_in_run_directory then
-    Stdio.Out_channel.write_all (name ^ ".llc")
-      ~data:(Sexp.to_string_hum @@ sexp_of_low_level Unit.sexp_of_t @@ snd result);
+  if !with_debug && !keep_files_in_run_directory then (
+    let fname = name ^ ".llc" in
+    let f = Stdio.Out_channel.create fname in
+    let ppf = Caml.Format.formatter_of_out_channel f in
+    Caml.Format.pp_set_margin ppf !code_sexp_margin;
+    Caml.Format.fprintf ppf "%a" Sexp.pp_hum (sexp_of_low_level Unit.sexp_of_t @@ snd result));
   (* if for_step_update then
      Hashtbl.iter (fst result) ~f:(fun n -> if n.read_before_write then (NodeUI.get n.id).is_recurrent <- true); *)
   result
 
 let interpret_task_id_func ~name:_ ((_traced_store : traced_store), compiled) ~task_id =
-  if !debug_trace_interpretation && task_id = 0 then
+  if !debug_trace_interpretation && task_id = 0 then (
+    Caml.Format.set_margin !code_sexp_margin;
     Caml.Format.printf "TRACE: Interpreted program:@ %a\n%!" Sexp.pp_hum
-    @@ sexp_of_low_level Unit.sexp_of_t compiled;
+    @@ sexp_of_low_level Unit.sexp_of_t compiled);
   interpret_code ~task_id compiled
 
 let interpret_unit_func ~name:_ ((_ : traced_store), compiled) () = interpret_code compiled
@@ -1231,4 +1247,5 @@ module CDSL = struct
   let with_debug = with_debug
   let virtualize_settings = virtualize_settings
   let debug_trace_interpretation = debug_trace_interpretation
+  let code_sexp_margin = code_sexp_margin
 end
