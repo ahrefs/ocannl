@@ -264,4 +264,128 @@ let get_grad (type val_t arr_t) (prec : (val_t, arr_t) precision) uid : arr_t =
     | None -> Lines (flat_lines [| nontask_ts; task_ts |])
     | Some s -> Lines (flat_lines [| Comment s; nontask_ts; task_ts |])
 
+
+
+
+
+  mutable localized_to : int option;
+      (** The ID of the task to which the tensor is localized. A non-none value by itself does not guarantee
+          that all of the tensor's computations are localized to a single task, only that those which are
+          only use the given task. *)
+  mutable read_by_localized : int list;
+      (** Tasks from which this tensor is read by localized computations. *)
+  mutable debug_read_by_localized : string list;
+
+
+let localize_tensors store ~for_task_id llc =
+  let for_task = Some for_task_id in
+  let debug = ref "" in
+  let rec loop = function
+    | Lines llcs -> Array.iter ~f:loop llcs
+    | For_loop { body; _ } | Dynamic_indices { body; _ } -> loop body
+    | Rebalance (_, cs) -> Array.iter ~f:loop cs
+    | Set (ptr, _, llv) ->
+        let n = NodeUI.get ptr.id in
+        if Option.is_some n.localized_to then assert ([%equal: int option] n.localized_to for_task)
+        else n.localized_to <- Some for_task_id;
+        let never_device_only =
+          match ptr.field with
+          | NodeUI.Value -> n.value_never_device_only
+          | NodeUI.Grad -> n.grad_never_device_only
+        in
+        if never_device_only then (
+          debug := NodeUI.tensor_ptr_name ptr;
+          loop_float llv)
+    | Set_local (_, llv) -> loop_float llv
+    | Comment _ -> ()
+    | If_task_id_is { for_task_id = id2; body; _ } ->
+        assert (id2 = for_task_id);
+        loop body
+  and loop_float = function
+    | Local_scope { body; _ } -> loop body
+    | Get_local _ | Get_global _ -> ()
+    | Get (ptr, _) ->
+        let n = NodeUI.get ptr.id in
+        let dn = get_node store ptr in
+        dn.non_device_only <- true;
+        n.read_by_localized <- for_task_id :: n.read_by_localized;
+        n.debug_read_by_localized <- !debug :: n.debug_read_by_localized
+    | Constant _ -> ()
+    | Binop (_, v1, v2) ->
+        loop_float v1;
+        loop_float v2
+    | Unop (_, v) -> loop_float v
+  in
+  loop llc
+
+
+let rebalance_across_tasks = ref true
+
+let rebalance store llcs =
+  if not !rebalance_across_tasks then (
+    let for_task_id = 0 in
+    let body = Lines (flat_lines llcs) in
+    localize_tensors store ~for_task_id body;
+    If_task_id_is { for_task_id; body })
+  else
+    let tasks = Array.create ~len:!Shape.num_parallel_tasks [] in
+    Array.iteri llcs ~f:(fun task body ->
+        let i = task % !Shape.num_parallel_tasks in
+        tasks.(i) <- body :: tasks.(i));
+    Lines
+      (Array.map tasks ~f:(Fn.compose flat_lines Array.of_list_rev)
+      |> Array.mapi ~f:(fun for_task_id lines ->
+             let body = Lines (flat_lines lines) in
+             If_task_id_is { for_task_id; body }))
+
+
+(* Inside cleanup_virtual_llc: *)
+    | Rebalance (s, cs) when balanced -> (
+        let cs = flat_lines @@ Array.filter_map cs ~f:loop in
+        match (s, cs) with
+        | _, [||] -> None
+        | None, [| c |] -> Some c
+        | _, cs ->
+            let c = Array.map ~f:(fun s -> Comment s) @@ Option.to_array s in
+            Some (Lines (Array.append c cs)))
+    | Rebalance (s, cs) -> (
+        (* Don't flatten lines before rebalancing: keep elements of [cs] as single units. *)
+        let multitask, unitask = partition_tf_with_comment ~f:has_parallel_dim cs in
+        let rebalanced =
+          let unitask = Array.filter_map unitask ~f:(loop_proc ~balanced:true ~env_dom) in
+          if Array.is_empty unitask then None else Some (rebalance traced_store unitask)
+        in
+        let multitask = flat_lines @@ Array.filter_map ~f:loop multitask in
+        if Array.is_empty multitask && Option.is_none rebalanced then None
+        else
+          match s with
+          | None -> Some (Lines (Array.append (Option.to_array rebalanced) multitask))
+          | Some s ->
+              Some
+                (Lines (flat_lines @@ Array.concat [ [| Comment s |]; Option.to_array rebalanced; multitask ]))
+        )
+
+
+let rec has_parallel_dim : type a. a low_level -> bool = function
+  | Comment _ -> false
+  | Lines ls -> Array.exists ~f:has_parallel_dim ls
+  | For_loop { body; _ } -> has_parallel_dim body
+  | Rebalance (_, cs) -> Array.exists ~f:has_parallel_dim cs
+  | If_task_id_is { body; _ } -> has_parallel_dim body
+  | Dynamic_indices { tensor = _; tensor_idcs; dynamic_idcs = _; target_dims; body } ->
+      Array.exists tensor_idcs ~f:Shape.is_task_id
+      || Array.exists ~f:Shape.is_parallel target_dims
+      || has_parallel_dim body
+  | Set (_, indices, llv) -> Array.exists indices ~f:Shape.is_task_id || has_parallel_dim llv
+  | Set_local (_, llv) -> has_parallel_dim llv
+  | Local_scope { body; orig_indices; _ } ->
+      Array.exists orig_indices ~f:Shape.is_task_id || has_parallel_dim body
+  | Get_local _ -> false
+  | Get_global Task_id -> true
+  | Get_global _ -> false
+  | Get (_, indices) -> Array.exists indices ~f:Shape.is_task_id
+  | Binop (_, llv1, llv2) -> has_parallel_dim llv1 || has_parallel_dim llv2
+  | Unop (_, llv) -> has_parallel_dim llv
+  | Constant _ -> false
+
 ]}

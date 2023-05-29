@@ -8,15 +8,25 @@ let session_context =
   set_option ctx Optimization_level !optimization_level;
   ref ctx
 
+type sync_properties =
+  | Device_only  (** The tensor is only needed for a task-local computation and does not exist on host. *)
+  | Update_on_host
+      (** All assignments are update assignments. They happen directly on the host, simultaneously
+          syncing the tensor's cell value. *)
+  | Parallel_dim
+      (** The shape of the tensor has a [Parallel] dimension. Each task computes a slice of this dimension,
+          independently transferring to the host. *)
+  | Replicated
+      (** If true, the tensor computation happens on-device in all tasks, but result is transferred to host
+          on only one task ([task_id = 0]). *)
+[@@deriving sexp, equal, compare, variants]
+
 type tensor = {
   hosted_ptr : Gccjit.rvalue option;
       (** Pointer to the first value of the associated [Bigarray], if hosted. Usually it does not correspond
           to the local tensor (e.g. if task id > 0). *)
   local : Gccjit.lvalue option;  (** A local array, if any. *)
-  update_on_host : bool;
-      (** If true, in case of update assignment ([Block.assign_op]), the assignment will happen directly
-          on the host. *)
-  is_parallel : bool;  (** Whether the shape of the tensor has a [Parallel] dimension. *)
+  sync : sync_properties;
   host_dims : int array;
       (** Dimensions (shape) of the tensor as a whole, or an empty array if [hosted_ptr]
                               is [None]. *)
@@ -86,8 +96,20 @@ let get_tensor
         let local = Function.local func arr_typ @@ NodeUI.tensor_ptr_name ptr in
         let host_dims = Bigarray.Genarray.dims arr in
         let is_parallel = Array.exists ~f:Shape.is_parallel @@ Shape.to_dims n.shape in
+        let can_be_replicated =
+          (* TODO: currently we do not check for gradient tensors, since their computation dependencies are
+             different than the node dependencies. *)
+          NodeUI.(equal_data_kind ptr.field Value && (not @@ has_parallel_deps n))
+        in
         let update_on_host =
           (not is_parallel) && tn.read_before_write && tn.reduced_racyness && Option.is_some hosted_ptr
+        in
+        let sync =
+          if Option.is_none hosted_ptr then Device_only
+          else if is_parallel then Parallel_dim
+          else if update_on_host then Update_on_host
+          else if can_be_replicated || !Shape.num_parallel_tasks <= 1 then Replicated
+          else failwith "exec_as_gccjit: synchronization pattern NOT IMPLEMENTED YET"
         in
         Option.iter hosted_ptr ~f:(fun hosted_ptr ->
             if local_is_slice_of_host then (
@@ -135,8 +157,7 @@ let get_tensor
         {
           hosted_ptr;
           local = Some local;
-          update_on_host;
-          is_parallel;
+          sync;
           host_dims;
           device_dims;
           host_size_in_bytes;
@@ -189,7 +210,7 @@ let get_ptr tensor =
 
 let get_sync_ptr tensor =
   match (tensor.hosted_ptr, tensor.local) with
-  | Some rv, _ when tensor.update_on_host -> rv
+  | Some rv, _ when is_update_on_host tensor.sync -> rv
   | _, Some lv -> Gccjit.RValue.lvalue lv
   | Some rv, _ -> rv
   | None, None -> assert false
@@ -287,10 +308,10 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
-        let idcs = lookup ~on_host:tensor.update_on_host env idcs in
+        let idcs = lookup ~on_host:(is_update_on_host tensor.sync) env idcs in
         let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
         let device_lhs = LValue.access_array (get_ptr tensor) device_offset in
-        if tensor.update_on_host then (
+        if is_update_on_host tensor.sync then (
           let host_offset = jit_array_offset ctx ~idcs:host_idcs ~dims:tensor.host_dims in
           let host_lhs = LValue.access_array (get_sync_ptr tensor) host_offset in
           Block.assign_op !current_block host_lhs (builtin_op op) value;
@@ -301,10 +322,10 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
-        let idcs = lookup ~on_host:tensor.update_on_host env idcs in
+        let idcs = lookup ~on_host:(is_update_on_host tensor.sync) env idcs in
         let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
         let device_lhs = LValue.access_array (get_ptr tensor) device_offset in
-        if tensor.update_on_host then (
+        if is_update_on_host tensor.sync then (
           let host_offset = jit_array_offset ctx ~idcs:host_idcs ~dims:tensor.host_dims in
           let host_lhs = LValue.access_array (get_sync_ptr tensor) host_offset in
           let result =
@@ -324,10 +345,10 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
-        let idcs = lookup ~on_host:tensor.update_on_host env idcs in
+        let idcs = lookup ~on_host:(is_update_on_host tensor.sync) env idcs in
         let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
         let device_lhs = LValue.access_array (get_ptr tensor) device_offset in
-        if tensor.update_on_host then (
+        if is_update_on_host tensor.sync then (
           let host_offset = jit_array_offset ctx ~idcs:host_idcs ~dims:tensor.host_dims in
           let host_lhs = LValue.access_array (get_sync_ptr tensor) host_offset in
           let result =

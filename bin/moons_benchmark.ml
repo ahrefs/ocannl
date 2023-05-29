@@ -157,8 +157,8 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
   Exec_as_gccjit.optimization_level := opti_level;
   SDSL.num_parallel_tasks := num_parallel_tasks;
   SDSL.disable_all_debugs ();
-  (* Code.with_debug := true;
-     Code.keep_files_in_run_directory := true; *)
+  Code.with_debug := true;
+     Code.keep_files_in_run_directory := true;
   (* SDSL.enable_all_debugs (); *)
   SDSL.drop_all_sessions ();
   let open SDSL.O in
@@ -245,6 +245,13 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
   let loss = ref 0.0 in
   Stdio.printf "\n%!";
   SDSL.refresh_session ~run_for_steps ();
+  Stdio.printf "\nTotal loss:\n%!";
+  SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss.id;
+  Stdio.printf "\nEpoch loss:\n%!";
+  SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 epoch_loss.id;
+  Stdio.printf "\nMinus learning rate:\n%!";
+  SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 minus_lr.id;
+  Stdio.printf "\nTrain loop.\n%!";
   let start_time = Time_now.nanoseconds_since_unix_epoch () in
   while not !stop do
     step := !step + advance_per_run;

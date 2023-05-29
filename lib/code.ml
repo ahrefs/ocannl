@@ -650,28 +650,6 @@ let partition_tf_with_comment cs ~f =
   in
   (trues, falses)
 
-let rec has_parallel_dim : type a. a low_level -> bool = function
-  | Comment _ -> false
-  | Lines ls -> Array.exists ~f:has_parallel_dim ls
-  | For_loop { body; _ } -> has_parallel_dim body
-  | Rebalance (_, cs) -> Array.exists ~f:has_parallel_dim cs
-  | If_task_id_is { body; _ } -> has_parallel_dim body
-  | Dynamic_indices { tensor = _; tensor_idcs; dynamic_idcs = _; target_dims; body } ->
-      Array.exists tensor_idcs ~f:Shape.is_task_id
-      || Array.exists ~f:Shape.is_parallel target_dims
-      || has_parallel_dim body
-  | Set (_, indices, llv) -> Array.exists indices ~f:Shape.is_task_id || has_parallel_dim llv
-  | Set_local (_, llv) -> has_parallel_dim llv
-  | Local_scope { body; orig_indices; _ } ->
-      Array.exists orig_indices ~f:Shape.is_task_id || has_parallel_dim body
-  | Get_local _ -> false
-  | Get_global Task_id -> true
-  | Get_global _ -> false
-  | Get (_, indices) -> Array.exists indices ~f:Shape.is_task_id
-  | Binop (_, llv1, llv2) -> has_parallel_dim llv1 || has_parallel_dim llv2
-  | Unop (_, llv) -> has_parallel_dim llv
-  | Constant _ -> false
-
 let precompute_constants ?idcs traced_store top_node llv =
   let exception Non_literal of int in
   let rec loop llv =
