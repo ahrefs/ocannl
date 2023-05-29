@@ -157,6 +157,8 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
   Exec_as_gccjit.optimization_level := opti_level;
   SDSL.num_parallel_tasks := num_parallel_tasks;
   SDSL.disable_all_debugs ();
+  (* Code.with_debug := true;
+     Code.keep_files_in_run_directory := true; *)
   (* SDSL.enable_all_debugs (); *)
   SDSL.drop_all_sessions ();
   let open SDSL.O in
@@ -264,9 +266,6 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
     if !step >= steps then stop := true;
     SDSL.refresh_session ~run_for_steps ()
   done;
-  let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
-  let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
-  let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   (* let train_mem = Mem_usage.info () in *)
   let final_time = Time_now.nanoseconds_since_unix_epoch () in
   (* TODO: include init time in benchmarks? *)
@@ -284,6 +283,9 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
         result = [%sexp_of: float * float] (!min_loss, !loss);
       }
   in
+  let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
+  let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
+  let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   SDSL.close_session ();
   Stdio.print_endline "\nSession closed.";
   SDSL.num_parallel_tasks := 1;

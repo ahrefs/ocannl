@@ -219,7 +219,7 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
      We also need unique ids for computation ordering lvalues. *)
   let uid = ref 0 in
   let get_uid () =
-    let id = !uid in
+    let id = Int.incr uid; !uid in
     Int.to_string id
   in
   let locals = ref Map.Poly.empty in
