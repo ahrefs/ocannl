@@ -5,7 +5,7 @@ module NFDSL = Operation.NFDSL
 module CDSL = Code.CDSL
 module SDSL = Session.SDSL
 
-let () =
+let _suspended () =
   (* Code.CDSL.with_debug := false; *)
   (* let open Operation.FDSL in *)
   let open SDSL.O in
@@ -66,7 +66,7 @@ let () =
      in *)
   let%nn_dt session_step ~o:1 = n =+ 1 in
   let%nn_dt session_refresh ~o:1 = n =+ 1 /. !..refresh_batch in
-  let%nn_dt minus_lr ~o:1 = n =: -0.0001 *. (!..steps - session_step) /. !..steps in
+  let%nn_dt minus_lr ~o:1 = n =: -0.01 *. (!..steps - session_step) /. !..steps in
 
   SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = (moons_flat @.| session_refresh) @.| session_step in
@@ -121,11 +121,7 @@ let () =
   Stdio.printf "\nHost size in bytes: %d\n%!" (SDSL.global_host_size_in_bytes ())
 
 let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_constants = true)
-    ~num_parallel_tasks precision () =
-  (* let epochs = 20000 in *)
-  let epochs = 2000 in
-  (* let epochs = 200 in *)
-  (* let epochs = 20 in *)
+    ~num_parallel_tasks ~per_refresh precision () =
   let bench_title =
     Sexp.to_string_hum
     @@ [%sexp_of:
@@ -134,6 +130,8 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
          * int
          * string
          * int (* * string *)
+         * string
+         * int
          * string
          * int
          * NodeUI.prec]
@@ -146,10 +144,10 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
            (* (if inline_constants then "..." else "NIC"), *)
            "parallel",
            num_parallel_tasks,
+           "per-refr.",
+           per_refresh,
            precision )
   in
-  Stdio.prerr_endline @@ "\n\n****** Benchmarking virtualized: " ^ bench_title ^ " for "
-  ^ Int.to_string epochs ^ " epochs ******";
   CDSL.virtualize_settings.enable_device_only <- on_device;
   CDSL.virtualize_settings.max_visits <- inlining_cutoff;
   CDSL.virtualize_settings.inline_constants <- inline_constants;
@@ -164,18 +162,20 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
   let open SDSL.O in
   Random.init 0;
   (* let init_mem = Mem_usage.info () in *)
-  let hid_2_3 = Shape.Dim 8 in
-  let hid_4_5 = Shape.Dim 4 in
-  let init_time = Time_now.nanoseconds_since_unix_epoch () in
-  let len = 4200 in
-  (* let len = 420 in *)
-  let minibatch = 10 in
-  let batch = minibatch * num_parallel_tasks in
-  let n_batches = 2 * len / batch in
-  let steps = epochs * n_batches in
-  (* let run_for_steps = 10000 * n_batches in *)
-  let run_for_steps = 100 * n_batches in
-  (* let run_for_steps = n_batches in *)
+  let epochs = 10000 / per_refresh in
+  let orig_dataset = 200 in
+  let minibatch = 20 in
+  let refresh_batch = 20 * per_refresh / num_parallel_tasks in
+  (* let batch = refresh_batch * num_parallel_tasks * minibatch in *)
+  let n_batches = 2 in
+  (* let len = n_batches * batch / 2 in *)
+  let len = orig_dataset in
+  let refreshes = epochs * n_batches in
+  let steps = refreshes * num_parallel_tasks * refresh_batch in
+  let run_for_steps = refresh_batch in
+  let advance_per_run = num_parallel_tasks * refresh_batch in
+  Stdio.prerr_endline @@ "\n\n****** Benchmarking virtualized: " ^ bench_title ^ " for " ^ Int.to_string steps
+  ^ " steps ******";
   let noise () = Random.float_range (-0.1) 0.1 in
   let moons_flat =
     Array.concat_map (Array.create ~len ())
@@ -187,15 +187,13 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
             let c = cos v and s = sin v in
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
-  let moons_flat =
-    FDSL.init_const ~l:"moons_flat" ~b:[ Dim n_batches; Parallel; Dim minibatch ] ~o:[ Dim 2 ] moons_flat
-  in
+  let b = Shape.[ Frozen n_batches; Parallel; Dim refresh_batch; Dim minibatch ] in
+  let moons_flat = FDSL.init_const ~l:"moons_flat" ~b ~o:Shape.[ Dim 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes =
-    FDSL.init_const ~l:"moons_classes"
-      ~b:[ Dim n_batches; Parallel; Dim minibatch ]
-      ~o:[ Dim 1 ] moons_classes
-  in
+  let moons_classes = FDSL.init_const ~l:"moons_classes" ~b ~o:Shape.[ Dim 1 ] moons_classes in
+  let hid_2_3 = Shape.Dim 8 in
+  let hid_4_5 = Shape.Dim 4 in
+  let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let%nn_op mlp x =
     "b6" 1
     + "w6"
@@ -216,10 +214,13 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
      in *)
   (* let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 16 + ("w1" * x))) in *)
   let%nn_dt session_step ~o:1 = n =+ 1 in
+  let%nn_dt session_refresh ~o:1 = n =+ 1 /. !..refresh_batch in
   let%nn_dt minus_lr ~o:1 = n =: -0.01 *. (!..steps - session_step) /. !..steps in
+
   SDSL.minus_learning_rate := Some minus_lr;
-  let%nn_op moons_input = moons_flat @.| session_step in
-  let%nn_op moons_class = moons_classes @.| session_step in
+  let%nn_op moons_input = (moons_flat @.| session_refresh) @.| session_step in
+  let%nn_op moons_class = (moons_classes @.| session_refresh) @.| session_step in
+  let%nn_op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
   let min_loss = ref Float.infinity in
   let max_loss = ref 0.0 in
   let losses = ref [] in
@@ -227,27 +228,31 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
   let learning_rates = ref [] in
   let stop = ref false in
   let step = ref 0 in
-  let%nn_op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
   let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in
   let reg_loss =
     List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
   in
   (* let reg_loss = List.map ~f:ssq [ w1; w2; b1; b2 ] |> List.reduce_exn ~f:FDSL.O.( + ) in *)
-  let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..minibatch) + (0.0001 *. reg_loss) in
-  (* This is not really an epoch loss, it's a run_for_steps cumulative loss. *)
+  let step_batch = num_parallel_tasks * minibatch in
+  let%nn_op subsubtotal = margin_loss ++ "...|... => ...|0" in
+  subsubtotal.node.value_never_virtual <- true;
+  let%nn_op subtotal = subsubtotal ++ "...|0 => 0" in
+  subtotal.node.value_never_device_only <- true;
+  let%nn_op total_loss = (subtotal /. !..step_batch) + (0.00001 *. reg_loss) in
   let%nn_dt epoch_loss ~o:1 = n =+ total_loss in
   let loss = ref 0.0 in
   Stdio.printf "\n%!";
+  SDSL.refresh_session ~run_for_steps ();
+  let start_time = Time_now.nanoseconds_since_unix_epoch () in
   while not !stop do
-    SDSL.refresh_session ~run_for_steps ();
-    step := !step + run_for_steps;
+    step := !step + advance_per_run;
     loss := epoch_loss.@[0];
     if Float.(!loss < !min_loss) then min_loss := !loss;
     if Float.(!loss > !max_loss) then max_loss := !loss;
     learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
     losses := !loss :: !losses;
     log_losses := Float.log !loss :: !log_losses;
-    if !step / n_batches % (epochs / 10) = 0 || !stop then (
+    if !step % (steps / 20) = 0 || !stop then (
       Stdio.printf "Minus learning rate over minibatch for step %d of %d: %f\n%!" !step steps minus_lr.@[0];
       Stdio.printf "Epoch loss for step %d: %f; min loss: %f; max loss: %f\n%!" !step !loss !min_loss
         !max_loss);
@@ -256,14 +261,17 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
        Stdio.printf "\nTree:\n%!";
        SDSL.print_node_tree ~with_grad:true ~depth:9 total_loss.id; *)
     epoch_loss.@[0] <- 0.0;
-    if !step >= steps then stop := true
+    if !step >= steps then stop := true;
+    SDSL.refresh_session ~run_for_steps ()
   done;
   let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   (* let train_mem = Mem_usage.info () in *)
   let final_time = Time_now.nanoseconds_since_unix_epoch () in
-  let time_in_sec = Int63.(to_float @@ (final_time - init_time)) /. 1000_000_000. in
+  (* TODO: include init time in benchmarks? *)
+  ignore init_time;
+  let time_in_sec = Int63.(to_float @@ (final_time - start_time)) /. 1000_000_000. in
   Stdio.printf "\nTime in sec: %f\n%!" time_in_sec;
   let result =
     PrintBox_utils.Benchmark
@@ -329,36 +337,50 @@ let benchmark_executor = SDSL.Gccjit
 
 let _suspended () =
   ignore
-  @@ classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:21
-       CDSL.single ()
+  @@ classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:20
+       ~per_refresh:10 CDSL.single ()
 
 let benchmarks =
   [
     classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:1
-      CDSL.single;
+      ~per_refresh:1 CDSL.single;
     classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:2
-      CDSL.single;
+      ~per_refresh:1 CDSL.single;
     classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:4
-      CDSL.single;
-    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:5
-      CDSL.single;
+      ~per_refresh:1 CDSL.single;
+    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:8
+      ~per_refresh:1 CDSL.single;
     classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:10
-      CDSL.single;
-    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:12
-      CDSL.single;
-    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:15
-      CDSL.single;
-    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:18
-      CDSL.single;
-    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:21
-      CDSL.single;
-    (* classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:30
-       CDSL.single; *)
-    (* classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:42
-       CDSL.single; *)
+      ~per_refresh:1 CDSL.single;
+    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:20
+      ~per_refresh:1 CDSL.single;
+    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:1
+      ~per_refresh:10 CDSL.single;
+    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:2
+      ~per_refresh:10 CDSL.single;
+    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:4
+      ~per_refresh:10 CDSL.single;
+    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:8
+      ~per_refresh:10 CDSL.single;
+    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:10
+      ~per_refresh:10 CDSL.single;
+    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:20
+      ~per_refresh:10 CDSL.single;
+    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:1
+      ~per_refresh:100 CDSL.single;
+    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:2
+      ~per_refresh:100 CDSL.single;
+    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:4
+      ~per_refresh:100 CDSL.single;
+    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:8
+      ~per_refresh:100 CDSL.single;
+    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:10
+      ~per_refresh:100 CDSL.single;
+    classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3 ~num_parallel_tasks:20
+      ~per_refresh:100 CDSL.single;
   ]
 
-let _suspended () =
+let () =
   List.map benchmarks ~f:(fun bench -> bench ()) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
 (* Early example output from back when using core_bench, 200 epochs (all are non-virtual):
