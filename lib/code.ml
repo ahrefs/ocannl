@@ -210,11 +210,11 @@ let to_low_level (code : t) : unit low_level =
         let for_loops =
           for_loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators)
         in
-        let s = Some ("Computing node " ^ NodeUI.tensor_ptr_name lhs) in
-        (* In case the computation is neither virtual nor parallelized, it would be invalid to replicate it. *)
+        let s = Comment ("Computing node " ^ NodeUI.tensor_ptr_name lhs) in
+        (* Note: it might be invalid to replicate computation across tasks. *)
         if zero_out then
-          Rebalance (s, [| Lines [| loop (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |] |])
-        else Rebalance (s, [| for_loops |])
+          Lines [| s; loop (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
+        else Lines [| s; for_loops |]
     | Accum_unop { zero_out; accum; op; lhs; rhs; projections } ->
         let projections = projections () in
         let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
@@ -245,11 +245,11 @@ let to_low_level (code : t) : unit low_level =
         let for_loops =
           for_loop [] (Array.to_list projections.product_space, Array.to_list projections.product_iterators)
         in
-        let s = Some ("Computing node " ^ NodeUI.tensor_ptr_name lhs) in
-        (* In case the computation is neither virtual nor parallelized, it would be invalid to replicate it. *)
+        let s = Comment ("Computing node " ^ NodeUI.tensor_ptr_name lhs) in
+        (* Note: it might be invalid to replicate computation across tasks. *)
         if zero_out then
-          Rebalance (s, [| Lines [| loop (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |] |])
-        else Rebalance (s, [| for_loops |])
+          Lines [| s; loop (Fetch { tensor = lhs; fetch_op = Constant 0. }); for_loops |]
+        else Lines [| s; for_loops |]
     | Noop -> Lines [||]
     | Block_comment (s, (Par _ as c)) -> loop_par ~s c
     | Block_comment (s, (ParHint _ as c)) when !force_unsafe_parhint -> loop_par ~s c
@@ -528,7 +528,7 @@ let interpret_code ?task_id llc =
   loop_proc (Map.Poly.empty, Map.Poly.empty) llc
 
 let code_sexp_margin = ref 200
-  
+
 let fprint_code ppf c =
   (* TODO: something nicely concise. *)
   Caml.Format.pp_set_margin ppf !code_sexp_margin;
@@ -649,62 +649,6 @@ let partition_tf_with_comment cs ~f =
       | Second x -> Some x)
   in
   (trues, falses)
-
-let localize_tensors store ~for_task_id llc =
-  let for_task = Some for_task_id in
-  let debug = ref "" in
-  let rec loop = function
-    | Lines llcs -> Array.iter ~f:loop llcs
-    | For_loop { body; _ } | Dynamic_indices { body; _ } -> loop body
-    | Rebalance (_, cs) -> Array.iter ~f:loop cs
-    | Set (ptr, _, llv) ->
-        let n = NodeUI.get ptr.id in
-        if Option.is_some n.localized_to then assert ([%equal: int option] n.localized_to for_task)
-        else n.localized_to <- Some for_task_id;
-        let never_device_only =
-          match ptr.field with
-          | NodeUI.Value -> n.value_never_device_only
-          | NodeUI.Grad -> n.grad_never_device_only
-        in
-        if never_device_only then (
-          debug := NodeUI.tensor_ptr_name ptr;
-          loop_float llv)
-    | Set_local (_, llv) -> loop_float llv
-    | Comment _ -> ()
-    | If_task_id_is { for_task_id = id2; body; _ } ->
-        assert (id2 = for_task_id);
-        loop body
-  and loop_float = function
-    | Local_scope { body; _ } -> loop body
-    | Get_local _ | Get_global _ -> ()
-    | Get (ptr, _) ->
-        let n = NodeUI.get ptr.id in
-        let dn = get_node store ptr in
-        dn.non_device_only <- true;
-        n.read_by_localized <- for_task_id :: n.read_by_localized;
-        n.debug_read_by_localized <- !debug :: n.debug_read_by_localized
-    | Constant _ -> ()
-    | Binop (_, v1, v2) ->
-        loop_float v1;
-        loop_float v2
-    | Unop (_, v) -> loop_float v
-  in
-  loop llc
-
-let rebalance_across_tasks = ref false
-
-let rebalance store llcs =
-  if not !rebalance_across_tasks then (
-    let for_task_id = 0 in
-    let body = Lines (flat_lines llcs) in
-    localize_tensors store ~for_task_id body;
-    If_task_id_is { for_task_id; body })
-  else
-    let tasks =
-      Array.mapi llcs ~f:(fun task body ->
-          If_task_id_is { for_task_id = task % !Shape.num_parallel_tasks; body })
-    in
-    Lines tasks
 
 let rec has_parallel_dim : type a. a low_level -> bool = function
   | Comment _ -> false
@@ -1109,30 +1053,9 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit low_level) : u
         | None ->
             Option.map ~f:(fun body -> For_loop { for_config with body }) @@ loop_proc ~balanced ~env_dom body
         )
-    | Rebalance (s, cs) when balanced -> (
-        let cs = flat_lines @@ Array.filter_map cs ~f:loop in
-        match (s, cs) with
-        | _, [||] -> None
-        | None, [| c |] -> Some c
-        | _, cs ->
-            let c = Array.map ~f:(fun s -> Comment s) @@ Option.to_array s in
-            Some (Lines (Array.append c cs)))
-    | Rebalance (s, cs) -> (
-        (* Don't flatten lines before rebalancing: keep elements of [cs] as single units. *)
-        let multitask, unitask = partition_tf_with_comment ~f:has_parallel_dim cs in
-        let rebalanced =
-          let unitask = Array.filter_map unitask ~f:(loop_proc ~balanced:true ~env_dom) in
-          if Array.is_empty unitask then None else Some (rebalance traced_store unitask)
-        in
-        let multitask = flat_lines @@ Array.filter_map ~f:loop multitask in
-        if Array.is_empty multitask && Option.is_none rebalanced then None
-        else
-          match s with
-          | None -> Some (Lines (Array.append (Option.to_array rebalanced) multitask))
-          | Some s ->
-              Some
-                (Lines (flat_lines @@ Array.concat [ [| Comment s |]; Option.to_array rebalanced; multitask ]))
-        )
+    | Rebalance (s, cs) ->
+      let cs = Array.filter_map cs ~f:loop in
+       if Array.is_empty cs then None else Some (Rebalance (s, cs))
     | If_task_id_is { for_task_id; body } ->
         Option.map ~f:(fun body -> If_task_id_is { for_task_id; body }) @@ loop body
     | Set (tensor, indices, llv) ->

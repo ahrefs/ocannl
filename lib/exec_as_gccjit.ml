@@ -42,7 +42,7 @@ type state = {
   traced_store : Code.traced_store;
   task_init_block : Gccjit.block;
   task_finalize_block : Gccjit.block;
-  localized_finalize_block : Gccjit.block;
+  replicated_finalize_block : Gccjit.block;
 }
 
 let jit_array_offset ctx ~idcs ~dims =
@@ -53,7 +53,7 @@ let jit_array_offset ctx ~idcs ~dims =
       @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
 
 let get_tensor
-    { ctx; func; tensors; traced_store; task_init_block; task_finalize_block; localized_finalize_block }
+    { ctx; func; tensors; traced_store; task_init_block; task_finalize_block; replicated_finalize_block }
     ~jit_code ~host_idcs ptr : tensor =
   let open Gccjit in
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
@@ -112,7 +112,7 @@ let get_tensor
                        RValue.int ctx c_index device_size_in_bytes;
                      ];
               if is_parallel || not update_on_host then
-                Block.eval (if is_parallel then task_finalize_block else localized_finalize_block)
+                Block.eval (if is_parallel then task_finalize_block else replicated_finalize_block)
                 @@ RValue.call ctx (Function.builtin ctx "memcpy")
                      [
                        cast_void @@ LValue.address lhs;
@@ -219,7 +219,10 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
      We also need unique ids for computation ordering lvalues. *)
   let uid = ref 0 in
   let get_uid () =
-    let id = Int.incr uid; !uid in
+    let id =
+      Int.incr uid;
+      !uid
+    in
     Int.to_string id
   in
   let locals = ref Map.Poly.empty in
@@ -255,9 +258,10 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
     match body with
     | Code.Lines lines ->
         Array.iteri lines ~f:(fun i line -> loop ~name:(name ^ "_at_line_" ^ Int.to_string i) line)
-    | For_loop { index; from_; to_; body; trace_it = _ } -> jit_for_loop ~env index ~from_ ~to_ (Either.First body)
+    | For_loop { index; from_; to_; body; trace_it = _ } ->
+        jit_for_loop ~env index ~from_ ~to_ (Either.First body)
     | Rebalance (_, cs) ->
-        (* FIXME: NOT IMPLEMENTED YET *)
+        (* This backend does not implement a relevant form of fine-grain parallelism. *)
         Array.iteri cs ~f:(fun i line -> loop ~name:(name ^ "_at_par_line_" ^ Int.to_string i) line)
     | If_task_id_is { for_task_id = _; body } when !Shape.num_parallel_tasks <= 1 -> loop ~name body
     | If_task_id_is { for_task_id; body } ->
@@ -451,7 +455,7 @@ let jit_func ~name ctx (traced_store, proc) =
   let func = Function.create ctx fkind (Type.get ctx Void) name [ task_id ] in
   let task_init_block = Block.create ~name:("init_" ^ name) func in
   let task_finalize_block = Block.create ~name:("finalize_" ^ name) func in
-  let localized_finalize_block = Block.create ~name:("finalize_localized_" ^ name) func in
+  let replicated_finalize_block = Block.create ~name:("finalize_replicated_" ^ name) func in
   let main_block = Block.create ~name func in
   let state =
     {
@@ -460,7 +464,7 @@ let jit_func ~name ctx (traced_store, proc) =
       traced_store;
       task_init_block;
       task_finalize_block;
-      localized_finalize_block;
+      replicated_finalize_block;
       tensors = Hashtbl.Poly.create ();
     }
   in
@@ -468,10 +472,10 @@ let jit_func ~name ctx (traced_store, proc) =
   Block.jump task_init_block main_block;
   Block.jump after_proc task_finalize_block;
   let c_index = Type.get ctx Type.Int in
-  let b_after_if = Block.create ~name:("after_finalize_localized_" ^ name) func in
+  let b_after_if = Block.create ~name:("after_finalize_replicated_" ^ name) func in
   let guard = RValue.comparison ctx Eq (RValue.param task_id) (RValue.zero ctx c_index) in
-  Block.cond_jump task_finalize_block guard localized_finalize_block (* on true *) b_after_if (* on false *);
-  Block.jump localized_finalize_block b_after_if;
+  Block.cond_jump task_finalize_block guard replicated_finalize_block (* on true *) b_after_if (* on false *);
+  Block.jump replicated_finalize_block b_after_if;
   Block.return_void b_after_if;
   if !Code.with_debug then
     let suf = "-gccjit-debug.c" in

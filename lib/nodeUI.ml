@@ -22,13 +22,6 @@ type t = {
       - [node.grad] is always [None]. *)
   mutable backend_info : string;
       (** Information about e.g. the memory strategy that the most recent backend chose for the tensor. *)
-  mutable localized_to : int option;
-      (** The ID of the task to which the tensor is localized. A non-none value by itself does not guarantee
-          that all of the tensor's computations are localized to a single task, only that those which are
-          only use the given task. *)
-  mutable read_by_localized : int list;
-      (** Tasks from which this tensor is read by localized computations. *)
-  mutable debug_read_by_localized : string list;
 }
 [@@deriving sexp_of]
 (** A DAG of decorated [Node]s, also storing the shape information. *)
@@ -147,9 +140,6 @@ let create ~(value_prec : prec) ?(grad_prec : prec option) ?(literal = false) ~n
       grad_never_device_only = false;
       literal;
       backend_info = "";
-      localized_to = None;
-      read_by_localized = [];
-      debug_read_by_localized = [];
     }
   in
   Hashtbl.add_exn global_node_store ~key:node.id ~data;
@@ -540,12 +530,8 @@ let to_printbox ?single_node ?entries_per_axis ?with_backend_info ?(with_id = fa
 let print_node_preamble id =
   try
     let n = get id in
-    Caml.Format.printf "Node %s%s,@ read-by-task-id: %a@ via %a;\n%!" (node_header n)
+    Caml.Format.printf "Node %s%s\n%!" (node_header n)
       (if String.is_empty n.backend_info then "" else " " ^ n.backend_info)
-      Sexp.pp_hum
-      ([%sexp_of: int list] n.read_by_localized)
-      Sexp.pp_hum
-      ([%sexp_of: string list] n.debug_read_by_localized)
   with Not_found_s _ | Caml.Not_found -> Caml.Format.printf "Node #%d does not exist.\n%!" id
 
 let print_preamble ?(from = 0) () =
