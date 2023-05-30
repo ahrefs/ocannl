@@ -324,6 +324,7 @@ let close_session () =
   Formula.session_initialized := 0;
   Formula.session_prepare_forward := [];
   Formula.session_prepare_backprop := [];
+  Formula.session_postprocess := [];
   session_step_update := Noop;
   session_step_update_compiled := (Hashtbl.Poly.create (), Comment "Noop");
   (session_step_update_routine := fun ~task_id:_ -> ());

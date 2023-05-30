@@ -294,7 +294,6 @@ module FDSL = struct
   let range = range ~is_form:true
   let range_of_shape = range_of_shape ~is_form:true
   let data = data
-  let result = result
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient
 
@@ -321,6 +320,7 @@ module NFDSL = struct
   let einsum ?desc_label s = einsum ?desc_label s ~is_form:false
   let einsum1 ?desc_label s = einsum1 ?desc_label s ~is_form:false
   let term = Formula.term ~is_form:false
+  let result = result
   let range = range ~is_form:false
   let range_of_shape = range_of_shape ~is_form:false
 end

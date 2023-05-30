@@ -724,7 +724,7 @@ let translate_dt ~is_result ?desc_label (expr : expression) : expression =
         in
         if is_result then
           [%expr
-            FDSL.result ?desc_label:[%e opt_pat2string ~loc desc_label] ~label:[%e label]
+            NFDSL.result ?desc_label:[%e opt_pat2string ~loc desc_label] ~label:[%e label]
               ?batch_dims:[%e opt_expr ~loc @@ edims batch_dims]
               ?input_dims:[%e opt_expr ~loc @@ edims input_dims]
               ?output_dims:[%e opt_expr ~loc @@ edims output_dims]
