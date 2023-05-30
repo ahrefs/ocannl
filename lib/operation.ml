@@ -195,6 +195,12 @@ let data ?desc_label ?axis_labels ?(needs_gradient = false) ~label ?(batch_dims 
   Formula.term ?desc_label ~label ~is_form:true ~needs_gradient ~batch_dims ~input_dims ~output_dims
     ?axis_labels ~fetch_op ()
 
+(** Non-form computations that happen at the end (potentially in parallel). *)
+let result ?desc_label ?axis_labels ~label ?(batch_dims = []) ?(input_dims = []) ?(output_dims = [])
+    postprocess_op =
+  Formula.term ?desc_label ~label ~is_form:false ~needs_gradient:false ~batch_dims ~input_dims ~output_dims
+    ?axis_labels ~postprocess_op ()
+
 let assign =
   let module NFDSL = struct
     module O = struct end
@@ -288,6 +294,7 @@ module FDSL = struct
   let range = range ~is_form:true
   let range_of_shape = range_of_shape ~is_form:true
   let data = data
+  let result = result
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient
 

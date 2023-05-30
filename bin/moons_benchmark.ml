@@ -83,7 +83,7 @@ let _suspended () =
   let%nn_op subtotal = subsubtotal ++ "...|0 => 0" in
   subtotal.node.value_never_device_only <- true;
   let%nn_op total_loss = (subtotal /. !..step_batch) + (0.001 *. reg_loss) in
-  let%nn_dt epoch_loss ~o:1 = n =+ total_loss in
+  let%nn_rs epoch_loss ~o:1 = n =+ total_loss in
   let run_for_steps = refresh_batch in
   SDSL.refresh_session ~run_for_steps ();
   Stdio.print_endline "\nPreamble:\n";
@@ -241,8 +241,7 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
   let%nn_op total_loss =
     ((subtotal ++ "...|0 => 0") /. !..step_batch)
   in
-  (* FIXME: Start computing epoch_loss only after the first total_loss is known. *)
-  (* let%nn_dt epoch_loss ~o:1 = n =+ total_loss in *)
+  let%nn_rs epoch_loss ~o:1 = n =+ total_loss in
   let loss = ref 0.0 in
   Stdio.printf "\n%!";
   SDSL.refresh_session ~run_for_steps ();
@@ -256,8 +255,7 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
   let start_time = Time_now.nanoseconds_since_unix_epoch () in
   while not !stop do
     step := !step + advance_per_run;
-    (* loss := epoch_loss.@[0]; *)
-    loss := total_loss.@[0];
+    loss := epoch_loss.@[0];
     if Float.(!loss < !min_loss) then min_loss := !loss;
     if Float.(!loss > !max_loss) then max_loss := !loss;
     learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
@@ -271,8 +269,7 @@ let classify_moons ~on_device executor ~opti_level ~inlining_cutoff ?(inline_con
        SDSL.print_preamble ();
        Stdio.printf "\nTree:\n%!";
        SDSL.print_node_tree ~with_grad:true ~depth:9 total_loss.id; *)
-    (* FIXME: DEBUG: *)
-    (* epoch_loss.@[0] <- 0.0; *)
+    epoch_loss.@[0] <- 0.0;
     if !step >= steps then stop := true;
     SDSL.refresh_session ~run_for_steps ()
   done;

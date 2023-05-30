@@ -55,6 +55,10 @@ let session_prepare_forward : Code.t list ref = ref []
 
 let session_prepare_backprop : Code.t list ref = ref []
 
+(** This code will be executed on each [Session.refresh_session ~run:true] call ([~run:true]
+    is implicit), after a [forward] and [backprop] step. Execution potentially in parallel. *)
+let session_postprocess : Code.t list ref = ref []
+
 (** A current session is the range of nodes from [!first_session_id] to [Node.global.unique_id - 1],
     or an empty range if [!first_session_id = Node.global.unique_id].
     Subformulas with [id] before this range are no longer updated by {!Session.SDSL.refresh_session}
@@ -283,12 +287,15 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
 
 (** A terminal: a constant, a parameter, an input of the model. *)
 let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?output_dims ?axis_labels
-    ?deduced ?init_op ?fetch_op () =
+    ?deduced ?init_op ?fetch_op ?postprocess_op () =
   if needs_gradient && not is_form then
     raise @@ Session_error ("Formula.term ~needs_gradient:true: a non-form formula cannot need gradient", None);
   let literal : bool =
     if needs_gradient then false
-    else match (init_op, fetch_op) with Some (Code.Constant_fill [| _ |]), None -> true | _ -> false
+    else
+      match (init_op, fetch_op, postprocess_op) with
+      | Some (Code.Constant_fill [| _ |]), None, None -> true
+      | _ -> false
   in
   let op_label : string = label in
   let n : NodeUI.t =
@@ -318,21 +325,24 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
      in
      let fetch = Code.Fetch { tensor = { id; field = Value }; fetch_op } in
      session_prepare_forward := fetch :: !session_prepare_forward);
-  let cross_session_persistent =
-    Code.(
-      match fetch_op with
-      | None -> true
-      | Some fetch_op ->
+  let cross_session_persistent = Option.is_none fetch_op && Option.is_none postprocess_op in
+  Option.iter fetch_op
+    ~f:
+      Code.(
+        fun fetch_op ->
           let fetch_op = fetch_op ~n in
           let fetch = Fetch { tensor = { id; field = Value }; fetch_op } in
           session_prepare_forward := fetch :: !session_prepare_forward;
-          (match fetch_op with
+          match fetch_op with
           | Constant _ -> ()
           | _ ->
               n.value_never_virtual <- true;
               n.value_never_device_only <- true);
-          false)
-  in
+  Option.iter postprocess_op ~f:(fun postprocess_op ->
+      let postprocess_op = postprocess_op ~n in
+      session_postprocess := postprocess_op :: !session_postprocess;
+      n.value_never_virtual <- true;
+      n.value_never_device_only <- true);
   if not is_form then
     { forward_body; form = None; id; node = n; shape_logic; shape; cross_session_persistent }
   else

@@ -256,6 +256,14 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
       | true, Some minus_lr -> generate_params_update ~minus_lr ()
       | _ -> []
     in
+    let params_update =
+      if List.is_empty update_params_code then Noop
+      else Block_comment ("Params update", all_parallel update_params_code)
+    in
+    let postprocess =
+      if List.is_empty !Formula.session_postprocess then Noop
+      else Block_comment ("Postprocess", all_parallel !Formula.session_postprocess)
+    in
     (* Roots at the time of compilation are hosted, so that they can be consumed downstream. *)
     Map.iter_keys !Formula.global_roots ~f:(fun id ->
         let n = NodeUI.get id in
@@ -268,11 +276,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
         n.NodeUI.value_never_virtual <- true;
         n.value_never_device_only <- true)
     @@ session_params ();
-    (if List.is_empty update_params_code then
-       session_step_update := sequential [ preparation; forward; backprop ]
-     else
-       let params_update = Block_comment ("Params update", all_parallel update_params_code) in
-       session_step_update := sequential [ preparation; forward; backprop; params_update ]);
+    session_step_update := sequential [ preparation; forward; backprop; params_update; postprocess ];
     if run_for_steps <= 1 then
       session_step_update_compiled := compile_proc ~name ~for_step_update:true !session_step_update
     else

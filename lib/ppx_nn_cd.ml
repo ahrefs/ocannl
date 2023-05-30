@@ -672,7 +672,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       (Unknown, Undet, [%expr [%e expr] ?desc_label:[%e opt_pat2string ~loc desc_label]])
   | _ -> (Unknown, Undet, expr)
 
-let translate_dt ?desc_label (expr : expression) : expression =
+let translate_dt ~is_result ?desc_label (expr : expression) : expression =
   let rec loop ?label ?batch_dims ?input_dims ?output_dims expr =
     let loc = expr.pexp_loc in
     match expr with
@@ -722,12 +722,20 @@ let translate_dt ?desc_label (expr : expression) : expression =
                 edims ~dims_loc @@ convert_dsl_dims [ d ]
             | e -> e)
         in
-        [%expr
-          FDSL.data ?desc_label:[%e opt_pat2string ~loc desc_label] ~label:[%e label]
-            ?batch_dims:[%e opt_expr ~loc @@ edims batch_dims]
-            ?input_dims:[%e opt_expr ~loc @@ edims input_dims]
-            ?output_dims:[%e opt_expr ~loc @@ edims output_dims]
-            (fun ~n -> Code.Synthetic [%e body])]
+        if is_result then
+          [%expr
+            FDSL.result ?desc_label:[%e opt_pat2string ~loc desc_label] ~label:[%e label]
+              ?batch_dims:[%e opt_expr ~loc @@ edims batch_dims]
+              ?input_dims:[%e opt_expr ~loc @@ edims input_dims]
+              ?output_dims:[%e opt_expr ~loc @@ edims output_dims]
+              (fun ~n -> [%e body])]
+        else
+          [%expr
+            FDSL.data ?desc_label:[%e opt_pat2string ~loc desc_label] ~label:[%e label]
+              ?batch_dims:[%e opt_expr ~loc @@ edims batch_dims]
+              ?input_dims:[%e opt_expr ~loc @@ edims input_dims]
+              ?output_dims:[%e opt_expr ~loc @@ edims output_dims]
+              (fun ~n -> Code.Synthetic [%e body])]
   in
   loop expr
 
@@ -735,13 +743,18 @@ let translate ?desc_label (expr : expression) : expression =
   let _, _, v = translate ?desc_label expr in
   v
 
+type extension = Cd | Dt | Rs [@@deriving equal, variants]
+
 let expr_expander ~dt ~loc ~path:_ payload =
   match payload with
   | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
       (* We are at the %ocannl annotation level: do not tranlsate the body. *)
       let bindings =
         List.map bindings ~f:(fun vb ->
-            let v = (if dt then translate_dt else translate) ~desc_label:vb.pvb_pat vb.pvb_expr in
+            let v =
+              (if is_cd dt then translate else translate_dt ~is_result:(is_rs dt))
+                ~desc_label:vb.pvb_pat vb.pvb_expr
+            in
             {
               vb with
               pvb_expr =
@@ -752,7 +765,7 @@ let expr_expander ~dt ~loc ~path:_ payload =
       in
       { payload with pexp_desc = Pexp_let (recflag, bindings, body) }
   | expr ->
-      let expr = (if dt then translate_dt else translate) expr in
+      let expr = (if is_cd dt then translate else translate_dt ~is_result:(is_rs dt)) expr in
       [%expr
         let open! NFDSL.O in
         [%e expr]]
@@ -767,7 +780,7 @@ let flatten_str ~loc ~path:_ items =
 let translate_str ~dt ({ pstr_desc; _ } as str) =
   match pstr_desc with
   | Pstr_eval (expr, attrs) ->
-      let expr = if dt then translate_dt expr else translate expr in
+      let expr = (if is_cd dt then translate else translate_dt ~is_result:(is_rs dt)) expr in
       let loc = expr.pexp_loc in
       {
         str with
@@ -781,7 +794,10 @@ let translate_str ~dt ({ pstr_desc; _ } as str) =
   | Pstr_value (recf, bindings) ->
       let f vb =
         let loc = vb.pvb_loc in
-        let v = (if dt then translate_dt else translate) ~desc_label:vb.pvb_pat vb.pvb_expr in
+        let v =
+          (if is_cd dt then translate else translate_dt ~is_result:(is_rs dt))
+            ~desc_label:vb.pvb_pat vb.pvb_expr
+        in
         {
           vb with
           pvb_expr =
@@ -794,7 +810,11 @@ let translate_str ~dt ({ pstr_desc; _ } as str) =
   | _ -> str
 
 let str_expander ~loc ~path (payload : structure_item list) =
-  flatten_str ~loc ~path @@ List.map payload ~f:(translate_str ~dt:false)
+  flatten_str ~loc ~path @@ List.map payload ~f:(translate_str ~dt:Cd)
 
 let str_expander_dt ~loc ~path (payload : structure_item list) =
-  flatten_str ~loc ~path @@ List.map payload ~f:(translate_str ~dt:true)
+  flatten_str ~loc ~path @@ List.map payload ~f:(translate_str ~dt:Dt)
+
+  let str_expander_rs ~loc ~path (payload : structure_item list) =
+    flatten_str ~loc ~path @@ List.map payload ~f:(translate_str ~dt:Rs)
+  
