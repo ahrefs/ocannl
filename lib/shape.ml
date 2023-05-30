@@ -1150,6 +1150,9 @@ let project_dyn_indexing dynamic_idcs targets_and_skipped =
   assert (List.is_empty remaining_syms);
   Array.of_list_rev idcs
 
+let project_parallel_only targets_and_skipped =
+  Array.filter_map targets_and_skipped ~f:(function Parallel -> Some Task_id | _ -> None)
+
 (** Computes the indexing into subformulas given the shape information of a formula. The processing
     mirrors [propagate_shapes], but [derive_projections] should only be invoked when the shapes
     are inferred already. *)
@@ -1567,6 +1570,24 @@ let rec derive_projections (shapes : update_step) : projections =
       let projections = derive_projections update_other_axes in
       let dynamic_idcs = Array.init subs ~f:(fun _ -> get_symbol ()) in
       let proj_b, proj_i, proj_o = indices_bio reduced_sh1 projections.project_rhs1 in
+      let project_lhs =
+        if from_left then
+          match over_kind with
+          | AxisKey.Batch ->
+              Array.append (project_parallel_only targets_and_skipped) projections.project_lhs
+          | AxisKey.Input ->
+              Array.concat [ proj_b; project_parallel_only targets_and_skipped; proj_i; proj_o ]
+          | AxisKey.Output ->
+              Array.concat [ proj_b; proj_i; project_parallel_only targets_and_skipped; proj_o ]
+        else
+          match over_kind with
+          | AxisKey.Batch ->
+              Array.concat [ proj_b; project_parallel_only targets_and_skipped; proj_i; proj_o ]
+          | AxisKey.Input ->
+              Array.concat [ proj_b; proj_i; project_parallel_only targets_and_skipped; proj_o ]
+          | AxisKey.Output ->
+              Array.append projections.project_rhs1 (project_parallel_only targets_and_skipped)
+      in
       let project_rhs1 =
         if from_left then
           match over_kind with
@@ -1591,7 +1612,7 @@ let rec derive_projections (shapes : update_step) : projections =
              (Option.value_exn projections.project_rhs2)
              [| Dynamic_provider { idcs = dynamic_idcs; target_dims } |])
       in
-      { projections with project_rhs1; project_rhs2 }
+      { projections with project_lhs; project_rhs1; project_rhs2 }
 
 let backprop1 projections =
   { projections with project_lhs = projections.project_rhs1; project_rhs1 = projections.project_lhs }
