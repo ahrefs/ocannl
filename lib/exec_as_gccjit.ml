@@ -94,9 +94,6 @@ let get_tensor
           if Array.is_empty @@ Node.A.dims arr then None
           else Some (RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray arr)
         in
-        let arr_typ = Type.array ctx num_typ device_size in
-        let local = Function.local func arr_typ @@ NodeUI.tensor_ptr_name ptr in
-        let host_dims = Bigarray.Genarray.dims arr in
         let is_parallel = Array.exists ~f:Shape.is_parallel @@ Shape.to_dims n.shape in
         let can_be_replicated =
           (* TODO: defensively we do not allow gradient tensors, since their computation dependencies are
@@ -122,6 +119,9 @@ let get_tensor
                     ([%sexp_of: NodeUI.t] n);
                 raise Unknown_synchronization))
         in
+        let arr_typ = Type.array ctx num_typ device_size in
+        let local = Function.local func arr_typ @@ NodeUI.tensor_ptr_name ptr in
+        let host_dims = Bigarray.Genarray.dims arr in
         Option.iter hosted_ptr ~f:(fun hosted_ptr ->
             if local_is_slice_of_host then (
               let offset_idcs =
