@@ -1137,7 +1137,14 @@ let optimize_proc llc : traced_store * unit low_level =
   (traced_store, result)
 
 let compile_proc ~name ~for_step_update:_ proc =
-  let result = optimize_proc @@ to_low_level proc in
+  let llc = to_low_level proc in
+  if !with_debug && !keep_files_in_run_directory then (
+    let fname = name ^ "-unoptimized.llc" in
+    let f = Stdio.Out_channel.create fname in
+    let ppf = Caml.Format.formatter_of_out_channel f in
+    Caml.Format.pp_set_margin ppf !code_sexp_margin;
+    Caml.Format.fprintf ppf "%a" Sexp.pp_hum (sexp_of_low_level Unit.sexp_of_t llc));
+  let result = optimize_proc llc in
   if !with_debug && !keep_files_in_run_directory then (
     let fname = name ^ ".llc" in
     let f = Stdio.Out_channel.create fname in
