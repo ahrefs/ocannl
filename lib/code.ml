@@ -404,7 +404,7 @@ let interpret_code ?task_id llc =
               ([%sexp_of: index array] indices)
               Sexp.pp_hum
               ([%sexp_of: int array] idcs);
-            if task_id () = 0 then NodeUI.print_node_preamble ptr.id;
+            if task_id () = 0 then NodeUI.print_node_preamble ~full_shape:false ptr.id;
             raise e
         in
         let result = interpret_binop op v1 v2 in
@@ -442,7 +442,7 @@ let interpret_code ?task_id llc =
             Sexp.pp_hum
             ([%sexp_of: int array] idcs)
             result;
-          if task_id () = 0 then NodeUI.print_node_preamble ptr.id;
+          if task_id () = 0 then NodeUI.print_node_preamble ~full_shape:false ptr.id;
           raise e)
     | Set_local (id, llv) -> locals := Map.update !locals id ~f:(fun _ -> loop_float env llv)
     | Comment message when !with_debug && !executor_print_comments -> Stdio.printf "%s\n%!" message
@@ -480,7 +480,7 @@ let interpret_code ?task_id llc =
               ([%sexp_of: index array] indices)
               Sexp.pp_hum
               ([%sexp_of: int array] idcs);
-            (* if Int.(task_id () = 0) then *) NodeUI.print_node_preamble ptr.id;
+            (* if Int.(task_id () = 0) then *) NodeUI.print_node_preamble ~full_shape:false ptr.id;
             raise e
         in
         if !debug_trace_interpretation then

@@ -533,14 +533,16 @@ let to_printbox ?single_node ?entries_per_axis ?with_backend_info ?(with_id = fa
   to_dag ?single_node ?entries_per_axis ?with_backend_info ~with_id ~with_value ~with_grad n_id
   |> PrintBox_utils.reformat_dag depth
 
-let print_node_preamble id =
+let print_node_preamble ?(print_missing=true) ~full_shape id =
   try
     let n = get id in
-    Caml.Format.printf "Node %s%s\n%!" (node_header n)
-      (if String.is_empty n.backend_info then "" else " " ^ n.backend_info)
-  with Not_found_s _ | Caml.Not_found -> Caml.Format.printf "Node #%d does not exist.\n%!" id
+    Caml.Format.printf "Node %s%s" (node_header n)
+      (if String.is_empty n.backend_info then "" else " " ^ n.backend_info);
+    if full_shape then Caml.Format.printf " -- full shape:@ %a\n%!" Sexp.pp_hum (Shape.sexp_of_t n.shape)
+    else Caml.Format.printf "\n%!"
+  with (Not_found_s _ | Caml.Not_found) when print_missing -> Caml.Format.printf "Node #%d does not exist.\n%!" id
 
-let print_preamble ?(from = 0) () =
+let print_preamble ?(from = 0) ?(full_shape=false) () =
   for id = from to Node.global.unique_id - 1 do
-    print_node_preamble id
+    print_node_preamble ~print_missing:false ~full_shape id
   done
