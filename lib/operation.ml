@@ -94,6 +94,8 @@ let dynamic_subtensor ~over_kind ~from_left ~other_axes_pointwise =
   end in
   let%nn_cd op_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~(n2 : NodeUI.t) ~projections = n =: n1 -@> n2 in
   let%nn_cd grad_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~(n2 : NodeUI.t) ~projections =
+    (* [projections] tracks the dynamic indexing for [n] (and not [n1]) as a slice.
+       [-@>] simply means [Arg1]: take the first argument, ignore the second argument. *)
     n1.grad =+ n.grad -@> n2
   in
   let compose_op = Shape.Dynamic_index { over_kind; from_left; other_axes_pointwise } in

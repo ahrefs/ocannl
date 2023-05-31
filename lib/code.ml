@@ -131,6 +131,8 @@ type _ low_level =
       dynamic_idcs : Shape.symbol array;
       target_dims : Shape.dim array;
       body : unit low_level;
+      slice : NodeUI.tensor_ptr option;
+          (** Provided when we know the dynamic indexing was used to define this tensor. *)
     }
       -> unit low_level
   | Set : NodeUI.tensor_ptr * index array * float low_level -> unit low_level
@@ -156,7 +158,7 @@ let rec has_parallel_dim : type a. a low_level -> bool = function
   | For_loop { body; _ } -> has_parallel_dim body
   | Rebalance (_, cs) -> Array.exists ~f:has_parallel_dim cs
   | If_task_id_is { body; _ } -> has_parallel_dim body
-  | Dynamic_indices { tensor = _; tensor_idcs; dynamic_idcs = _; target_dims; body } ->
+  | Dynamic_indices { tensor = _; tensor_idcs; dynamic_idcs = _; target_dims; body; slice = _ } ->
       Array.exists tensor_idcs ~f:Shape.is_task_id
       || Array.exists ~f:Shape.is_parallel target_dims
       || has_parallel_dim body
@@ -199,18 +201,21 @@ let to_low_level (code : t) : unit low_level =
           let body =
             Set (lhs, lhs_idcs, binop ~op:accum ~rhs1:lhs_ll ~rhs2:(binop ~op ~rhs1:rhs1_ll ~rhs2:rhs2_ll))
           in
+          let slice = Some lhs in
           match Array.find rhs2_idcs ~f:Shape.is_dynamic_provider with
           | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
-              Dynamic_indices { tensor = rhs2; tensor_idcs = rhs2_idcs; dynamic_idcs; target_dims; body }
+              Dynamic_indices
+                { tensor = rhs2; tensor_idcs = rhs2_idcs; dynamic_idcs; target_dims; body; slice }
           | _ -> (
               match Array.find rhs1_idcs ~f:Shape.is_dynamic_provider with
               | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
-                  Dynamic_indices { tensor = rhs1; tensor_idcs = rhs1_idcs; dynamic_idcs; target_dims; body }
+                  Dynamic_indices
+                    { tensor = rhs1; tensor_idcs = rhs1_idcs; dynamic_idcs; target_dims; body; slice }
               | _ -> (
                   match Array.find lhs_idcs ~f:Shape.is_dynamic_provider with
                   | Some (Dynamic_provider { idcs = dynamic_idcs; target_dims }) ->
                       Dynamic_indices
-                        { tensor = lhs; tensor_idcs = lhs_idcs; dynamic_idcs; target_dims; body }
+                        { tensor = lhs; tensor_idcs = lhs_idcs; dynamic_idcs; target_dims; body; slice }
                   | _ -> body))
         in
         let rec for_loop rev_iters = function
@@ -446,9 +451,11 @@ let interpret_code ?task_id llc =
           raise e)
     | Set_local (id, llv) -> locals := Map.update !locals id ~f:(fun _ -> loop_float env llv)
     | Comment message when !with_debug && !executor_print_comments -> Stdio.printf "%s\n%!" message
-    | Dynamic_indices { tensor = { id; field = Value }; tensor_idcs; dynamic_idcs; target_dims; body } ->
+    | Dynamic_indices
+        { tensor = { id; field = Value }; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
         dynamic_indices env (N.get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body
-    | Dynamic_indices { tensor = { id; field = Grad }; tensor_idcs; dynamic_idcs; target_dims; body } ->
+    | Dynamic_indices
+        { tensor = { id; field = Grad }; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
         dynamic_indices env (Option.value_exn (N.get id).grad) ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Comment c ->
         if !debug_trace_interpretation then (
@@ -584,9 +591,16 @@ type virtualize_settings = {
   mutable enable_device_only : bool;
   mutable max_visits : int;
   mutable inline_constants : bool;
+  mutable always_inline_dynamic_indexing : bool;
 }
 
-let virtualize_settings = { enable_device_only = true; max_visits = 3; inline_constants = true }
+let virtualize_settings =
+  {
+    enable_device_only = true;
+    max_visits = 3;
+    inline_constants = true;
+    always_inline_dynamic_indexing = true;
+  }
 
 type visits =
   | Visits of int
@@ -619,6 +633,8 @@ type traced_tensor = {
           the last write. An update is a read immediately followed by a write of the same cell, as in
           accumulation operations [=+], [=*]. *)
   mutable last_write_non_update : bool;
+  mutable is_dynamic_slice : bool;
+      (** If true, the tensor is a dynamic slice (i.e. a result of dynamic indexing). *)
 }
 [@@deriving sexp_of]
 
@@ -648,6 +664,7 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         read_before_write = false;
         reduced_racyness = true;
         last_write_non_update = false;
+        is_dynamic_slice = false;
       })
 
 let get_other_node traced_store ptr =
@@ -731,12 +748,13 @@ let visit is_assigned old =
 let visit_llc traced_store reverse_node_map ~max_visits llc =
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
   let lookup ?provider_dim ~task_id dem_env indices =
-    let env, dyn_env = dem_env in
+    let env, _dyn_env = dem_env in
+    (* For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
     Array.map indices ~f:(function
       | Shape.Fixed_idx i -> i
       | Iterator s -> Map.find_exn env s
-      | Dynamic_recipient s -> Map.find_exn dyn_env s
-      | Frozen_recipient s -> Map.find_exn dyn_env s
+      (* | Dynamic_recipient s | Frozen_recipient s -> Map.find_exn dyn_env s *)
+      | Dynamic_recipient _ | Frozen_recipient _ -> 0
       | Dynamic_provider _ -> Option.value_exn provider_dim
       | Task_id -> task_id)
   in
@@ -759,8 +777,10 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         Hash_set.add traced.assignments (lookup ~task_id env idcs);
         if virtualize_settings.inline_constants then precompute_constants ~idcs traced_store traced llv;
         (match llv with
-        | Get (tensor2, _) ->
+        | Get (tensor2, idcs2) ->
             traced.last_write_non_update <- true;
+            if Array.exists idcs2 ~f:Shape.(fun i -> is_dynamic_recipient i || is_frozen_recipient i) then
+              assert traced.is_dynamic_slice;
             if (NodeUI.get tensor2.id).literal then () else traced.reduced_racyness <- false
         | Binop (_, Get (tensor2, idcs2), _)
           when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: index array] idcs idcs2 ->
@@ -773,7 +793,11 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
             traced.reduced_racyness <- false;
             traced.last_write_non_update <- true);
         Array.iter idcs ~f:(function
-          | Shape.Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _ -> traced.non_virtual <- true
+          | Shape.Dynamic_provider _ ->
+              if not virtualize_settings.always_inline_dynamic_indexing then traced.non_virtual <- true
+          | Dynamic_recipient _ | Frozen_recipient _ ->
+              (* TODO(#133): We don't support inlining tensors with complex write patterns. *)
+              traced.non_virtual <- true
           | Fixed_idx _ | Task_id -> ()
           | Iterator s ->
               let old_tensor = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tensor) in
@@ -781,20 +805,21 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
               assert (NodeUI.equal_tensor_ptr old_tensor tensor))
     | Set_local (_, llv) -> loop_float ~task_id env llv
     | Comment _ -> ()
-    | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
+    | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice } ->
         let traced_tensor = get_node traced_store tensor in
-        (* FIXME(132): implement virtual dynamic indices. *)
-        traced_tensor.non_virtual <- true;
-        traced_tensor.scalar <- None;
+        (* if not virtualize_settings.always_inline_dynamic_indexing then (
+           traced_tensor.non_virtual <- true;
+           traced_tensor.scalar <- None); *)
+        Option.iter slice ~f:(fun ptr -> (get_node traced_store ptr).is_dynamic_slice <- true);
         dynamic_indices traced_tensor ~task_id env ~tensor_idcs ~dynamic_idcs ~target_dims body
   and loop_float ~task_id env llv =
     let loop = loop_float ~task_id env in
     match llv with
     | Constant _ -> ()
-    | Get (tensor, indices) ->
-        let get_node : traced_tensor = get_node traced_store tensor in
+    | Get (ptr, indices) ->
+        let tensor : traced_tensor = get_node traced_store ptr in
         let at_pos = lookup ~task_id env indices in
-        Hashtbl.update get_node.accesses at_pos ~f:(visit @@ Hash_set.mem get_node.assignments at_pos)
+        Hashtbl.update tensor.accesses at_pos ~f:(visit @@ Hash_set.mem tensor.assignments at_pos)
     | Local_scope { body; _ } -> loop_proc ~task_id env body
     | Get_local _ -> ()
     | Get_global _ -> ()
@@ -816,7 +841,10 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
   loop_proc ~task_id:0 (Map.Poly.empty, Map.Poly.empty) llc;
   Hashtbl.iter traced_store ~f:(fun traced ->
       if traced.last_write_non_update then traced.reduced_racyness <- false;
-      if Hashtbl.exists traced.accesses ~f:is_too_many then traced.non_virtual <- true;
+      if
+        (not (virtualize_settings.always_inline_dynamic_indexing && traced.is_dynamic_slice))
+        && Hashtbl.exists traced.accesses ~f:is_too_many
+      then traced.non_virtual <- true;
       if Hashtbl.exists traced.accesses ~f:is_recurrent then (
         traced.non_virtual <- true;
         traced.non_device_only <- true;
@@ -952,7 +980,7 @@ let inline_computation ~id node call_args =
       | Set_local (id, llv) -> Some (Set_local (id, loop_float llv))
       | Comment _ -> Some llc
       | Dynamic_indices dyn_idcs ->
-          (* FIXME(132): implement virtual dynamic indices. *)
+          (* Dynamic_indices is introduced by to_low_level in the innermost scope. *)
           Option.map ~f:(fun body -> Dynamic_indices { dyn_idcs with body }) @@ loop dyn_idcs.body
     and loop_float llv : float low_level =
       match llv with
@@ -994,17 +1022,24 @@ let virtual_llc traced_store reverse_node_map (llc : unit low_level) : unit low_
         (* FIXME: NOT IMPLEMENTED YET *)
         Rebalance (s, Array.map ~f:loop cs)
     | If_task_id_is { for_task_id; body } -> If_task_id_is { for_task_id; body = loop body }
-    | Set (tensor, indices, llv) ->
-        let node : traced_tensor = Hashtbl.find_exn traced_store tensor in
-        let next = if node.non_virtual then process_for else Set.add process_for tensor in
-        let result = Set (tensor, indices, loop_float ~process_for:next llv) in
-        if (not @@ Set.mem process_for tensor) && not node.non_virtual then process_computation node result;
+    | Set (ptr, indices, llv) ->
+        let tensor : traced_tensor = Hashtbl.find_exn traced_store ptr in
+        let next = if tensor.non_virtual then process_for else Set.add process_for ptr in
+        let result = Set (ptr, indices, loop_float ~process_for:next llv) in
+        if (not @@ Set.mem process_for ptr) && not tensor.non_virtual then process_computation tensor result;
         result
     | Set_local (id, llv) -> Set_local (id, loop_float ~process_for llv)
     | Comment _ -> llc
-    | Dynamic_indices dyn_idcs ->
-        (* FIXME(132): implement virtual dynamic indices. *)
-        Dynamic_indices { dyn_idcs with body = loop dyn_idcs.body }
+    | Dynamic_indices dyn_idcs -> (
+        match dyn_idcs.slice with
+        | None -> Dynamic_indices { dyn_idcs with body = loop dyn_idcs.body }
+        | Some ptr ->
+            let tensor : traced_tensor = Hashtbl.find_exn traced_store ptr in
+            let next = if tensor.non_virtual then process_for else Set.add process_for ptr in
+            let result = Dynamic_indices { dyn_idcs with body = loop_proc ~process_for:next dyn_idcs.body } in
+            if (not @@ Set.mem process_for ptr) && not tensor.non_virtual then
+              process_computation tensor result;
+            result)
   and loop_float ~(process_for : tensor_ptrs) (llv : float low_level) : float low_level =
     match llv with
     | Constant _ -> llv
@@ -1068,12 +1103,13 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit low_level) : u
           assert (not node.non_virtual);
           Some (Set_local (id, loop_float ~balanced ~env_dom llv)))
     | Comment _ -> Some llc
-    | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
-        assert (Array.for_all tensor_idcs ~f:(function Shape.Iterator s -> Set.mem env_dom s | _ -> true));
+    | Dynamic_indices dyn_idcs -> (
+        assert (
+          Array.for_all dyn_idcs.tensor_idcs ~f:(function Shape.Iterator s -> Set.mem env_dom s | _ -> true));
         (* Dynamic indices use a separate environment. *)
-        (* FIXME(132): implement virtual dynamic indices. *)
-        Option.map ~f:(fun body -> Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body })
-        @@ loop body
+        match dyn_idcs.slice with
+        | Some tensor when is_inline tensor -> None
+        | _ -> Option.map ~f:(fun body -> Dynamic_indices { dyn_idcs with body }) @@ loop dyn_idcs.body)
   and loop_float ~balanced ~(env_dom : sym_indices) (llv : float low_level) : float low_level =
     let loop = loop_float ~balanced ~env_dom in
     match llv with

@@ -400,7 +400,7 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
                        Set (ptr, idcs, Binop (Add, Get (ptr, idcs), c1));
                        Set (ptr, idcs, Binop (Add, Get (ptr, idcs), c2));
                      |]
-           (* | Binop (Mul, c1, c2) ->
+            | Binop (Mul, c1, c2) ->
                 cache_sync ();
                 loop ~name
                 @@ Lines
@@ -408,14 +408,14 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
                        Set (ptr, idcs, Constant 1.0);
                        Set (ptr, idcs, Binop (Mul, Get (ptr, idcs), c1));
                        Set (ptr, idcs, Binop (Mul, Get (ptr, idcs), c2));
-                     |] *)
+                     |] 
             | _ -> raise Unknown_synchronization))
     | Set_local (id, value) ->
         let lhs, num_typ, is_double = Map.find_exn !locals id in
         let value = loop_float ~name ~env ~num_typ ~is_double value in
         Block.assign !current_block lhs value
     | Comment c -> log_comment c
-    | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body } ->
+    | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
         jit_dynamic_indices ~name ~env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
   and loop_float ~name ~env ~num_typ ~is_double value : rvalue =
     let loop = loop_float ~name ~env ~num_typ ~is_double in
