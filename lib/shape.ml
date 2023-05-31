@@ -1573,8 +1573,7 @@ let rec derive_projections (shapes : update_step) : projections =
       let project_lhs =
         if from_left then
           match over_kind with
-          | AxisKey.Batch ->
-              Array.append (project_parallel_only targets_and_skipped) projections.project_lhs
+          | AxisKey.Batch -> Array.append (project_parallel_only targets_and_skipped) projections.project_rhs1
           | AxisKey.Input ->
               Array.concat [ proj_b; project_parallel_only targets_and_skipped; proj_i; proj_o ]
           | AxisKey.Output ->
