@@ -1103,13 +1103,12 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit low_level) : u
           assert (not node.non_virtual);
           Some (Set_local (id, loop_float ~balanced ~env_dom llv)))
     | Comment _ -> Some llc
-    | Dynamic_indices dyn_idcs -> (
+    | Dynamic_indices dyn_idcs ->
         assert (
           Array.for_all dyn_idcs.tensor_idcs ~f:(function Shape.Iterator s -> Set.mem env_dom s | _ -> true));
-        (* Dynamic indices use a separate environment. *)
-        match dyn_idcs.slice with
-        | Some tensor when is_inline tensor -> None
-        | _ -> Option.map ~f:(fun body -> Dynamic_indices { dyn_idcs with body }) @@ loop dyn_idcs.body)
+        (* Dynamic indices use a separate environment. Note that dynamic indices are do not appear
+           in the LHSes of slice definitions, so are not erased when inlining. *)
+        Option.map ~f:(fun body -> Dynamic_indices { dyn_idcs with body }) @@ loop dyn_idcs.body
   and loop_float ~balanced ~(env_dom : sym_indices) (llv : float low_level) : float low_level =
     let loop = loop_float ~balanced ~env_dom in
     match llv with
