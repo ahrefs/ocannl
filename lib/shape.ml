@@ -205,18 +205,25 @@ type compose_type =
       Currently, we support two variants of the [einsum] syntax: either all the axes are provided,
       or all input, output axes are provided but none of the batch axes.
       Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
-  | Dynamic_index of { over_kind : AxisKey.kind; from_left : bool; other_axes_pointwise : bool }
+  | Dynamic_index of {
+      over_kind : AxisKey.kind;
+      from_left : bool;
+      other_axes_pointwise : bool;
+      indexed_dims : int list option;
+    }
       (** Uses RHS2 as an index into RHS1. The values of RHS2 along the last (output) axis are used to
       fix the RHS1 [over_kind] axes. If RHS1 has more [over_kind] axes than the size of RHS2's last
       axis, the remaining right axes are kept if [from_left] is true, otherwise the left axes
       are kept. The [Parallel] axes are preserved -- skipped over, never dynamically indexed.
-      The fixed axes are dropped from the shape of LHS. If RHS2 has more than one axis,
+      The fixed (indexed-into) axes are dropped from the shape of LHS. If RHS2 has more than one axis,
       [other_axes_pointwise] decides what to do with the other axes: if true, they are traversed
       pointwise with the corresponding axes of RHS1. For the pointwise alignment, we drop the last
       output axis of RHS2 and the fixed axes of RHS1. If [other_axes_pointwise] is false,
       the other axes of RHS2 are prepended to the remaining axes of RHS1 (of the corresponding
       kind). ([other_axes_pointwise] being true is akin to an inner product, being false is akin to
-      an outer product.) *)
+      an outer product.) If [indexed_dims] are not given, the shape of the indexed tensor (RHS1) must be given.
+      Otherwise, [indexed_dims] provide the dimensions of the indexed axes.
+      If otherwise unknown, [RHS2]'s output axis is inferred to be [Dim 1]. *)
 [@@deriving sexp, equal]
 
 type transpose_type =
@@ -519,30 +526,37 @@ type axis_plab_map = (AxisKey.t, (string, dim) Either.t, AxisKey.comparator_witn
 let sexp_of_axis_plab_map (map : axis_plab_map) =
   Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: AxisKey.t * (string, dim) Either.t])
 
-let rec drop_keeping_parallel subs = function
-  | Parallel :: dims -> drop_keeping_parallel subs dims
-  | _ :: dims when subs > 0 -> drop_keeping_parallel (subs - 1) dims
-  | dims -> dims
+let drop_keeping_parallel subs dims =
+  let rec loop subs par = function
+    | (Parallel as p) :: dims when subs > 0 -> loop subs (p :: par) dims
+    | _ :: dims when subs > 0 -> loop (subs - 1) par dims
+    | dims -> List.rev_append par dims
+  in
+  loop subs [] dims
 
 let take_skipping_parallel subs dims =
   let rec loop acc subs = function
-    | Parallel :: dims -> loop acc subs dims
+    | Parallel :: dims when subs > 0 -> loop acc subs dims
     | dim :: dims when subs > 0 -> loop (dim :: acc) (subs - 1) dims
     | _ -> List.rev acc
   in
   loop [] subs dims
 
-let take_keeping_parallel subs dims =
+let take_keeping_parallel ~debug_sh1 ~debug_sh2 ?(indexed_dims = []) subs dims =
   let rec loop acc subs = function
-    | Parallel :: dims -> loop (Parallel :: acc) subs dims
-    | dim :: dims when subs > 0 -> loop (dim :: acc) (subs - 1) dims
+    | indexed_dims, Parallel :: dims when subs > 0 -> loop (Parallel :: acc) subs (indexed_dims, dims)
+    | [], dim :: dims when subs > 0 -> loop (dim :: acc) (subs - 1) ([], dims)
+    | ind_dim :: indexed_dims, dim :: dims when subs > 0 ->
+        if not @@ (equal_dim (Dim ind_dim) dim || equal_dim (Frozen ind_dim) dim) then
+          raise (Shape_error ("Dynamic indexing: axis size requirement not met", debug_sh1, debug_sh2));
+        loop (dim :: acc) (subs - 1) (indexed_dims, dims)
     | _ -> List.rev acc
   in
-  loop [] subs dims
+  loop [] subs (indexed_dims, dims)
 
 let count_parallel_among subs dims =
   let rec loop acc subs = function
-    | Parallel :: dims -> loop (acc + 1) subs dims
+    | Parallel :: dims when subs > 0 -> loop (acc + 1) subs dims
     | _ :: dims when subs > 0 -> loop acc (subs - 1) dims
     | _ -> acc
   in
@@ -917,109 +931,94 @@ let rec propagate_shapes (update : update_step) =
       sh1.axis_labels <- rhs1_axis_labels;
       let rhs2_axis_labels : axis_str_map = Map.filter_map rhs2_labels ~f:(Map.find all_axis_labels) in
       sh2.axis_labels <- rhs2_axis_labels
-  | Broadcast (Dynamic_index { over_kind; from_left; other_axes_pointwise }, sh1, sh2) ->
+  | Broadcast (Dynamic_index { over_kind; from_left; other_axes_pointwise; indexed_dims }, sh1, sh2) ->
       let subs =
-        match Option.value ~default:(Dim 1) @@ List.last @@ list_of_dims sh2.output with
-        | Parallel -> 1
-        | Frozen d -> d
-        | Dim d -> d
+        match List.last @@ list_of_dims sh2.output with
+        | None ->
+            sh2.output <- Given [ Dim 1 ];
+            1
+        | Some Parallel -> !num_parallel_tasks
+        | Some (Frozen d | Dim d) -> d
       in
-      let output = map_dims sh2.output ~f:List.drop_last_exn in
-      let reduced_sh2 = { sh2 with output } in
+      let check_no_axes indexed_dims =
+        if List.length indexed_dims <> subs then
+          raise
+            (Shape_error
+               ( "Dynamic indexing: provided dimensions and indices assume a different number of axes",
+                 sh1,
+                 sh2 ))
+      in
       let reduced_sh2 =
-        { reduced_sh2 with axis_labels = shift_axes_of_kind AxisKey.Output sh2 ~f:(( - ) 1) }
+        {
+          sh2 with
+          output = map_dims sh2.output ~f:List.drop_last_exn;
+          axis_labels = shift_axes_of_kind AxisKey.Output sh2 ~f:(( - ) 1);
+        }
       in
-      let sh1_size = List.length @@ list_of_dims @@ dims_of_kind over_kind sh1 in
-      (if from_left then (
-         let n_par_axes = dims_of_kind over_kind sh1 |> list_of_dims |> count_parallel_among subs in
-         let reduced_dims over_dims = map_dims over_dims ~f:(drop_keeping_parallel subs) in
-         let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
-         let drop_left from_end = if from_end > sh1_size - subs - n_par_axes then -1 else from_end in
-         (* TODO: unfortunately we ignore labels on parallel axes. *)
-         let reduced_sh1 = { reduced_sh1 with axis_labels = shift_axes_of_kind over_kind sh1 ~f:drop_left } in
-         let extended_sh, logic =
-           if other_axes_pointwise then (None, Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2))
-           else
-             let extended_sh = append_all_axes ~prefix:reduced_sh2 ~main:reduced_sh1 () in
-             (Some extended_sh, Transpose (Pointwise_un, extended_sh))
-         in
-         let update_other_axes = { shape = cur_sh; logic } in
-         propagate_shapes update_other_axes;
-         match extended_sh with
-         | None ->
-             let push_left from_end =
-               if from_end > sh1_size - subs - n_par_axes then from_end + subs + n_par_axes else from_end
-             in
-             let sh1_axis_labels = shift_axes_of_kind over_kind sh1 ~f:push_left in
-             let sh1_axis_labels =
-               Map.fold sh1.axis_labels ~init:sh1_axis_labels
-                 ~f:(fun ~key:({ in_axes; from_end } as key) ~data labels ->
-                   if AxisKey.equal_kind over_kind in_axes && from_end > sh1_size - subs - n_par_axes then
-                     Map.add_exn labels ~key ~data
-                   else labels)
-             in
-             sh1.axis_labels <- sh1_axis_labels;
-             let added_dims, updated_dims_with_par_axes =
-               dims_of_kind over_kind reduced_sh1 |> list_of_dims |> fun d ->
-               List.split_n d @@ (List.length d - sh1_size - subs)
-             in
-             let updated_dims = List.drop updated_dims_with_par_axes n_par_axes in
-             let restored_dims over_dims =
-               map_dims over_dims ~f:(fun d ->
-                   List.concat [ added_dims; List.take d (subs + n_par_axes); updated_dims ])
-             in
-             if not @@ is_given_or_fixed @@ dims_of_kind over_kind sh1 then
-               update_kind over_kind sh1 ~f:restored_dims
-         | Some extended_sh ->
-             (* FIXME: NOT IMPLEMENTED restoring inferred shapes and axis labels. *)
-             ignore extended_sh)
-       else
-         let n_par_axes =
-           dims_of_kind over_kind sh1 |> list_of_dims |> List.rev |> count_parallel_among subs
-         in
-         let reduced_dims over_dims =
-           map_dims over_dims ~f:(fun d -> List.rev d |> drop_keeping_parallel subs |> List.rev)
-         in
-         let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
-         let drop_right from_end = from_end - subs - n_par_axes in
-         let reduced_sh1 =
-           { reduced_sh1 with axis_labels = shift_axes_of_kind over_kind sh1 ~f:drop_right }
-         in
-         let extended_sh, logic =
-           if other_axes_pointwise then (None, Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2))
-           else
-             let extended_sh = append_all_axes ~suffix:reduced_sh2 ~main:reduced_sh1 () in
-             (Some extended_sh, Transpose (Pointwise_un, extended_sh))
-         in
-         let update_other_axes = { shape = cur_sh; logic } in
-         propagate_shapes update_other_axes;
-         match extended_sh with
-         | None ->
-             let push_right from_end = from_end + subs + n_par_axes in
-             (* TODO: unfortunately we ignore labels on parallel axes. *)
-             let sh1_axis_labels = shift_axes_of_kind over_kind sh1 ~f:push_right in
-             let sh1_axis_labels =
-               Map.fold sh1.axis_labels ~init:sh1_axis_labels
-                 ~f:(fun ~key:({ in_axes; from_end } as key) ~data labels ->
-                   if AxisKey.equal_kind over_kind in_axes && from_end <= subs + n_par_axes then
-                     Map.add_exn labels ~key ~data
-                   else labels)
-             in
-             sh1.axis_labels <- sh1_axis_labels;
-             let inferred_dims_with_par_axes = dims_of_kind over_kind reduced_sh1 |> list_of_dims in
-             let added_and_updated_dims =
-               if n_par_axes = 0 then inferred_dims_with_par_axes
-               else inferred_dims_with_par_axes |> fun d -> List.take d (List.length d - n_par_axes)
-             in
-             let restored_dims over_dims =
-               map_dims over_dims ~f:(fun d ->
-                   List.concat [ added_and_updated_dims; List.drop d (sh1_size - subs - n_par_axes) ])
-             in
-             if not @@ is_given_or_fixed @@ dims_of_kind over_kind sh1 then
-               update_kind over_kind sh1 ~f:restored_dims
-         | Some extended_sh ->
-             (* FIXME: NOT IMPLEMENTED restoring inferred shapes and axis labels. *)
-             ignore extended_sh);
+      let list_dims sh = list_of_dims @@ dims_of_kind over_kind sh in
+      if
+        Option.is_some indexed_dims
+        && List.is_empty (list_dims sh1)
+        && is_unknown (dims_of_kind over_kind cur_sh)
+      then (* Wait for more information. *) ()
+      else if Option.is_none indexed_dims && List.length (list_dims sh1) < subs then
+        raise (Shape_error ("Insufficient indexed axes information for dynamic indexing", sh1, sh2))
+      else if from_left then (
+        let n_par_axes =
+          match (indexed_dims, dims_of_kind over_kind sh1) with
+          | Some indexed_dims, (Unknown | Inferred []) ->
+              check_no_axes indexed_dims;
+              (* Infer and fix the dimensions -- preserve "indexing from the left". *)
+              let indexed_dims = List.map ~f:dim indexed_dims in
+              let lhs_dims = list_dims cur_sh in
+              update_kind ~f:(fun _ -> Given (indexed_dims @ lhs_dims)) over_kind sh1;
+              0
+          | None, _ ->
+              let dims = list_dims sh1 in
+              (* Fix the dimensions: we don't want new axes inferred to the left of indexed axes. *)
+              update_kind ~f:(fun _ -> Given dims) over_kind sh1;
+              count_parallel_among subs dims
+          | Some indexed_dims, _ ->
+              check_no_axes indexed_dims;
+              let dims = list_dims sh1 in
+              (* Verify the dimensions of the indexed axes. *)
+              let _indexed_dims_with_par =
+                take_keeping_parallel ~debug_sh1:sh1 ~debug_sh2:sh2 ~indexed_dims subs dims
+              in
+              (* Fix the dimensions: we don't want new axes inferred to the left of indexed axes. *)
+              update_kind ~f:(fun _ -> Given dims) over_kind sh1;
+              count_parallel_among subs dims
+        in
+        let sh1_size = List.length @@ list_dims sh1 in
+        let reduced_dims over_dims = map_dims over_dims ~f:(drop_keeping_parallel subs) in
+        let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
+        let drop_left from_end = if from_end > sh1_size - subs - n_par_axes then -1 else from_end in
+        (* TODO: unfortunately we ignore labels on parallel axes. *)
+        let reduced_sh1 = { reduced_sh1 with axis_labels = shift_axes_of_kind over_kind sh1 ~f:drop_left } in
+        let extended_sh, logic =
+          if other_axes_pointwise then (None, Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2))
+          else
+            let extended_sh = append_all_axes ~prefix:reduced_sh2 ~main:reduced_sh1 () in
+            (Some extended_sh, Transpose (Pointwise_un, extended_sh))
+        in
+        let update_other_axes = { shape = cur_sh; logic } in
+        propagate_shapes update_other_axes;
+        match extended_sh with
+        | None ->
+            (* Add back the indexed axes labels. *)
+            let sh1_axis_labels =
+              Map.fold sh1.axis_labels ~init:reduced_sh1.axis_labels
+                ~f:(fun ~key:({ in_axes; from_end } as key) ~data labels ->
+                  if AxisKey.equal_kind over_kind in_axes && from_end > sh1_size - subs - n_par_axes then
+                    Map.add_exn labels ~key ~data
+                  else labels)
+            in
+            sh1.axis_labels <- sh1_axis_labels
+        | Some extended_sh ->
+            (* FIXME: NOT IMPLEMENTED restoring inferred shapes and axis labels. *)
+            ignore extended_sh)
+      else (* FIXME: NOT IMPLEMENTED YET *)
+        failwith "NOT IMPLEMENTED YET";
       let sh2_axis_labels = shift_axes_of_kind AxisKey.Output reduced_sh2 ~f:(( + ) 1) in
       let k1 = AxisKey.{ in_axes = Output; from_end = 1 } in
       let sh2_axis_labels =
@@ -1028,6 +1027,7 @@ let rec propagate_shapes (update : update_step) =
         | Some v -> Map.add_exn sh2_axis_labels ~key:k1 ~data:v
       in
       sh2.axis_labels <- sh2_axis_labels;
+      (* FIXME: not sure about this behavior. *)
       if not @@ is_given_or_fixed sh2.output then
         sh2.output <- map_dims reduced_sh2.output ~f:(fun d -> d @ [ Dim subs ])
 
@@ -1501,7 +1501,7 @@ let rec derive_projections (shapes : update_step) : projections =
       let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
       { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
-  | Broadcast (Dynamic_index { over_kind; from_left; other_axes_pointwise }, sh1, sh2) ->
+  | Broadcast (Dynamic_index { over_kind; from_left; other_axes_pointwise; _ }, sh1, sh2) ->
       let subs =
         match Option.value ~default:(Dim 1) @@ List.last @@ list_of_dims sh2.output with
         | Dim d -> d
@@ -1523,7 +1523,9 @@ let rec derive_projections (shapes : update_step) : projections =
             dims_of_kind over_kind sh1 |> list_of_dims |> take_skipping_parallel subs |> Array.of_list
           in
           let targets_and_skipped =
-            dims_of_kind over_kind sh1 |> list_of_dims |> take_keeping_parallel subs |> Array.of_list
+            dims_of_kind over_kind sh1 |> list_of_dims
+            |> take_keeping_parallel ~debug_sh1:sh1 ~debug_sh2:sh2 subs
+            |> Array.of_list
           in
           let drop_left from_end = if from_end > sh1_size - subs - n_par_axes then -1 else from_end in
           let reduced_sh1 =
@@ -1537,81 +1539,58 @@ let rec derive_projections (shapes : update_step) : projections =
           else
             let extended_sh = append_all_axes ~prefix:reduced_sh2 ~main:reduced_sh1 () in
             (reduced_sh1, targets_and_skipped, target_dims, Transpose (Pointwise_un, extended_sh))
-        else
-          let n_par_axes =
-            dims_of_kind over_kind sh1 |> list_of_dims |> List.rev |> count_parallel_among subs
-          in
-          let reduced_dims over_dims =
-            map_dims over_dims ~f:(fun d -> List.rev d |> drop_keeping_parallel subs |> List.rev)
-          in
-          let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
-          let target_dims =
-            dims_of_kind over_kind sh1 |> list_of_dims |> List.rev |> take_skipping_parallel subs
-            |> Array.of_list_rev
-          in
-          let targets_and_skipped =
-            dims_of_kind over_kind sh1 |> list_of_dims |> List.rev |> take_keeping_parallel subs
-            |> Array.of_list_rev
-          in
-          let drop_right from_end = from_end - subs - n_par_axes in
-          let reduced_sh1 =
-            { reduced_sh1 with axis_labels = shift_axes_of_kind over_kind sh1 ~f:drop_right }
-          in
-          if other_axes_pointwise then
-            ( reduced_sh1,
-              targets_and_skipped,
-              target_dims,
-              Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2) )
-          else
-            let extended_sh = append_all_axes ~suffix:reduced_sh2 ~main:reduced_sh1 () in
-            (reduced_sh1, targets_and_skipped, target_dims, Transpose (Pointwise_un, extended_sh))
+        else (* FIXME: NOT IMPLEMENTED YET *)
+          failwith "NOT IMPLEMENTED YET"
       in
+      let n_par_axes = Array.count targets_and_skipped ~f:is_parallel in
+      let drop_left_par proj = Array.sub ~pos:n_par_axes ~len:(Array.length proj - n_par_axes) proj in
+      let drop_right_par proj = Array.sub ~pos:0 ~len:(Array.length proj - n_par_axes) proj in
       let update_other_axes = { shape = cur_sh; logic } in
-      let projections = derive_projections update_other_axes in
+      let reduced_projections = derive_projections update_other_axes in
       let dynamic_idcs = Array.init subs ~f:(fun _ -> get_symbol ()) in
-      let proj_b, proj_i, proj_o = indices_bio reduced_sh1 projections.project_rhs1 in
-      let project_lhs =
-        if from_left then
-          match over_kind with
-          | AxisKey.Batch -> Array.append (project_parallel_only targets_and_skipped) projections.project_rhs1
-          | AxisKey.Input ->
-              Array.concat [ proj_b; project_parallel_only targets_and_skipped; proj_i; proj_o ]
-          | AxisKey.Output ->
-              Array.concat [ proj_b; proj_i; project_parallel_only targets_and_skipped; proj_o ]
-        else
-          match over_kind with
-          | AxisKey.Batch ->
-              Array.concat [ proj_b; project_parallel_only targets_and_skipped; proj_i; proj_o ]
-          | AxisKey.Input ->
-              Array.concat [ proj_b; proj_i; project_parallel_only targets_and_skipped; proj_o ]
-          | AxisKey.Output ->
-              Array.append projections.project_rhs1 (project_parallel_only targets_and_skipped)
-      in
+      let proj_b, proj_i, proj_o = indices_bio reduced_sh1 reduced_projections.project_rhs1 in
       let project_rhs1 =
         if from_left then
           match over_kind with
           | AxisKey.Batch ->
-              Array.append (project_dyn_indexing dynamic_idcs targets_and_skipped) projections.project_rhs1
+              Array.concat
+                [
+                  project_dyn_indexing dynamic_idcs targets_and_skipped; drop_left_par proj_b; proj_i; proj_o;
+                ]
           | AxisKey.Input ->
-              Array.concat [ proj_b; project_dyn_indexing dynamic_idcs targets_and_skipped; proj_i; proj_o ]
+              Array.concat
+                [
+                  proj_b; project_dyn_indexing dynamic_idcs targets_and_skipped; drop_left_par proj_i; proj_o;
+                ]
           | AxisKey.Output ->
-              Array.concat [ proj_b; proj_i; project_dyn_indexing dynamic_idcs targets_and_skipped; proj_o ]
+              Array.concat
+                [
+                  proj_b; proj_i; project_dyn_indexing dynamic_idcs targets_and_skipped; drop_left_par proj_o;
+                ]
         else
           match over_kind with
           | AxisKey.Batch ->
-              Array.concat [ proj_b; project_dyn_indexing dynamic_idcs targets_and_skipped; proj_i; proj_o ]
+              Array.concat
+                [
+                  drop_right_par proj_b; project_dyn_indexing dynamic_idcs targets_and_skipped; proj_i; proj_o;
+                ]
           | AxisKey.Input ->
-              Array.concat [ proj_b; proj_i; project_dyn_indexing dynamic_idcs targets_and_skipped; proj_o ]
+              Array.concat
+                [
+                  proj_b; drop_right_par proj_i; project_dyn_indexing dynamic_idcs targets_and_skipped; proj_o;
+                ]
           | AxisKey.Output ->
-              Array.append projections.project_rhs1 (project_dyn_indexing dynamic_idcs targets_and_skipped)
+              Array.append
+                (drop_right_par reduced_projections.project_rhs1)
+                (project_dyn_indexing dynamic_idcs targets_and_skipped)
       in
       let project_rhs2 =
         Some
           (Array.append
-             (Option.value_exn projections.project_rhs2)
+             (Option.value_exn reduced_projections.project_rhs2)
              [| Dynamic_provider { idcs = dynamic_idcs; target_dims } |])
       in
-      { projections with project_lhs; project_rhs1; project_rhs2 }
+      { reduced_projections with project_rhs1; project_rhs2 }
 
 let backprop1 projections =
   { projections with project_lhs = projections.project_rhs1; project_rhs1 = projections.project_lhs }

@@ -87,7 +87,7 @@ let subtensor_label ~over_kind ~from_left ~other_axes_pointwise =
   let pointwise_spec = if other_axes_pointwise then "." else "^" in
   if from_left then "@" ^ pointwise_spec ^ kind_spec else "@" ^ kind_spec ^ pointwise_spec
 
-let dynamic_subtensor ~over_kind ~from_left ~other_axes_pointwise =
+let dynamic_subtensor ?indexed_dims ~over_kind ~from_left ~other_axes_pointwise =
   let open Code in
   let module NFDSL = struct
     module O = struct end
@@ -98,7 +98,7 @@ let dynamic_subtensor ~over_kind ~from_left ~other_axes_pointwise =
        [-@>] simply means [Arg1]: take the first argument, ignore the second argument. *)
     n1.grad =+ n.grad -@> n2
   in
-  let compose_op = Shape.Dynamic_index { over_kind; from_left; other_axes_pointwise } in
+  let compose_op = Shape.Dynamic_index { over_kind; from_left; other_axes_pointwise; indexed_dims } in
   let op_label = subtensor_label ~over_kind ~from_left ~other_axes_pointwise in
   Formula.binop ~compose_op ~op_label ~op_body ~grad_body
 
