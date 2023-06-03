@@ -30,15 +30,22 @@ Warning disclaimer: this project is still "not announced". The features describe
   
 ## Future milestones
 
-For past milestones see [CHANGES](CHANGES.md).
-
-* Skipping v0.2.
 * **v0.3-GPU**: a CUDA backend.
 * **v0.3.1-tiling**: the tiling optimization.
 * **v0.4-usability**: examples covering most of Andrej Karpathy's "Neural Networks Zero to Hero" series; data loading; checkpointing.
 * **v0.5-documentation**: `.mli` files and maybe more documentation.
 * **v0.6-scale**: distributed computation; runtime-autotuning optimization settings.
 * **v1-completeness**: whatever not-yet-implemented features that still seem needed and impact the framework design. (E.g. at the time of v0.1.X, convolutions, reshaping, concatenation are not easily expressible.)
+
+### Releases
+
+For details, see [CHANGES](CHANGES.md).
+
+* **v0.2**: for multicore CPU, improve cache locality and reduce cache contention by treating the C function stack as the "device memory".
+* **v0.1.2**: multicore computations using a thread-local "task id" index.
+* **v0.1.1**: inlining scalar constants, improved inlining for virtual nodes.
+* **v0.1.0**: a `Gccjit` backend, single and double precision floats, code compiled as a monolithic update step function.
+
 
 ## Why not just use [OWL](https://ocaml.xyz/)?
 

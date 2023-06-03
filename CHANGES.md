@@ -1,3 +1,32 @@
+## [0.2.0] -- 2023-06-03
+
+### Added
+
+- The Gccjit backend operates using "on device" copies of tensors, where the "device memory" is the stack of the C function. This is intended to improve cache locality and reduce cache contention.
+  - Three / four synchronization heuristics:
+    - "parallel": a slice of the tensor is copied host-to-device at the beginning and device-to-host at the end, without interference because each task has a different slice.
+    - "update on host": the tensor is copied host-to-device at the beginning; each write is an update, it reads the old value from host to update it on the host. Thus each write is a synchronization point.
+    - "replicated": the tensor is copied host-to-device at the beginning; only task 0 copies device-to-host.
+    - "device-only": no copying to/from host.
+- On-device-only tensors that are not materialized on the OCaml side.
+- A new category of axis dimensions is introduced: `Frozen`. It is analogous to the `Parallel` axis category in that a single task execution / "device call" only processes a 1D slice of the axis.
+  - Currently, for tensors processed in parallel, we only support processing of a contiguous tensor slice (copied "to device" using `memcpy`).
+- A new syntax `%nn_rs` ("postprocess results" variant of `%nn_dt`) for computations that should happen at the end of task execution / refresh step. It's meant to prepare the data to be copied back to the host.
+
+### Changed
+
+- Got rid of backend-agnostic synchronization. It was not worth the complexity / implementation effort at this point.
+  - Keeping the `Rebalance` constructor around, but it is not playing any role.
+- Got rid of `debug_virtual_nodes`, was tricky to maintain.
+- Dynamic indexing now skips over parallel axes: when there is a `Parallel` axis on the left, it is preserved in the resulting tensor (slice), and the next-right axis is indexed into instead.
+  - Removed the "indexing axes from-right" functionality for now (fails as not implemented).
+- Dynamic indexing now can produce virtual nodes.
+
+### Fixed
+
+- Dynamic indexing fixes.
+
+
 ## [0.1.2] -- 2023-05-12
 
 ### Added
