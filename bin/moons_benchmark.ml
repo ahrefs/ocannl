@@ -287,7 +287,6 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
         result = [%sexp_of: float * float] (!min_loss, !loss);
       }
   in
-  (*
   let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
@@ -337,19 +336,19 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   (* Stdio.printf "\nProcess memory delta: %d\n%!"
      (train_mem.process_physical_memory - init_mem.process_physical_memory); *)
   Exec_as_gccjit.optimization_level := 3;
-  Stdio.printf "\n%!";*)
+  Stdio.printf "\n%!";
   result
 
 let benchmark_executor = SDSL.Gccjit
 
-let () =
+let  () =
   Node.fixed_state_for_init := Some 14;
   ignore
-  @@ classify_moons ~random_seed:0 ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
+  @@ classify_moons ~random_seed:3 ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
        ~num_parallel_tasks:20 ~per_refresh:100 CDSL.single ()
 
 let benchmarks =
-  List.concat_map [ 0; 3; 5 ] ~f:(fun inlining_cutoff ->
+  List.concat_map [ (* 0; 3; 5 *) 3 ] ~f:(fun inlining_cutoff ->
       List.concat_map [ 1; 2; 4; 8; 10; 20 ] ~f:(fun num_parallel_tasks ->
           List.concat_map [ 1; 10; 100 ] ~f:(fun per_refresh ->
               [
@@ -360,15 +359,7 @@ let benchmarks =
 let time_of = function PrintBox_utils.Benchmark { time_in_sec; _ } -> time_in_sec
 
 let nth_best nth bench =
-  let results =
-    [
-      bench ~random_seed:0 ();
-      bench ~random_seed:1 ();
-      bench ~random_seed:2 ();
-      bench ~random_seed:3 ();
-      bench ~random_seed:4 ();
-    ]
-  in
+  let results = List.init 5 ~f:(fun random_seed -> bench ~random_seed ()) in
   let sorted = List.sort results ~compare:(fun r1 r2 -> Float.compare (time_of r1) (time_of r2)) in
   List.nth_exn sorted (nth - 1)
 

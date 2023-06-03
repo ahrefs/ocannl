@@ -376,6 +376,8 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
           Block.assign !current_block device_lhs rhs
     | Set (ptr, idcs, value) -> (
         let host_idcs = lookup ~on_host:true env idcs in
+        let n = NodeUI.get ptr.id in
+        let distributive = NodeUI.equal_data_kind ptr.field Grad || n.value_distributes_over_sum in
         match get_tensor state ~dependencies:value ~jit_code:loop_proc ~host_idcs ptr with
         | tensor ->
             let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
@@ -383,33 +385,12 @@ let jit_code ~name ~env ~task_id ({ ctx; func; _ } as state) initial_block (body
             let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
             let device_lhs = LValue.access_array (get_ptr tensor) device_offset in
             Block.assign !current_block device_lhs value
-        | exception Unknown_synchronization -> (
+        | exception Unknown_synchronization when distributive ->
             (* Cache the tensor with an Update_on_host synchronization, then recompile as an update. *)
-            let cache_sync () =
-              ignore
-              @@ get_tensor state ~dependencies:value ~force_sync:Update_on_host ~jit_code:loop_proc ~host_idcs
-                   ptr
-            in
-            match value with
-            | Binop (Add, c1, c2) ->
-                cache_sync ();
-                loop ~name
-                @@ Lines
-                     [|
-                       Set (ptr, idcs, Constant 0.0);
-                       Set (ptr, idcs, Binop (Add, Get (ptr, idcs), c1));
-                       Set (ptr, idcs, Binop (Add, Get (ptr, idcs), c2));
-                     |]
-            | Binop (Mul, c1, c2) ->
-                cache_sync ();
-                loop ~name
-                @@ Lines
-                     [|
-                       Set (ptr, idcs, Constant 1.0);
-                       Set (ptr, idcs, Binop (Mul, Get (ptr, idcs), c1));
-                       Set (ptr, idcs, Binop (Mul, Get (ptr, idcs), c2));
-                     |] 
-            | _ -> raise Unknown_synchronization))
+            ignore
+            @@ get_tensor state ~dependencies:value ~force_sync:Update_on_host ~jit_code:loop_proc ~host_idcs
+                 ptr;
+            loop ~name @@ Set (ptr, idcs, Binop (Add, Get (ptr, idcs), value)))
     | Set_local (id, value) ->
         let lhs, num_typ, is_double = Map.find_exn !locals id in
         let value = loop_float ~name ~env ~num_typ ~is_double value in

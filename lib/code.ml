@@ -182,6 +182,21 @@ let to_low_level (code : t) : unit low_level =
   let rec loop code =
     match code with
     | Accum_binop { zero_out; accum; op; lhs; rhs1; rhs2; projections } ->
+        let lhs_n = NodeUI.get lhs.id in
+        (match (accum, op) with
+        | Add, _ -> lhs_n.value_distributes_over_sum <- true
+        | Arg2, Mul ->
+            let rhs1_n = NodeUI.get rhs1.id in
+            let rhs2_n = NodeUI.get rhs2.id in
+            lhs_n.value_distributes_over_sum <-
+              (rhs1_n.value_distributes_over_sum && not rhs2_n.value_distributes_over_sum)
+              || (rhs2_n.value_distributes_over_sum && not rhs1_n.value_distributes_over_sum)
+        | Arg2, Add ->
+            let rhs1_n = NodeUI.get rhs1.id in
+            let rhs2_n = NodeUI.get rhs2.id in
+            lhs_n.value_distributes_over_sum <-
+              rhs1_n.value_distributes_over_sum || rhs2_n.value_distributes_over_sum
+        | _ -> lhs_n.value_distributes_over_sum <- false);
         let projections = projections () in
         let lhs_idx = Shape.(derive_index projections.product_iterators projections.project_lhs) in
         let rhs1_idx = Shape.(derive_index projections.product_iterators projections.project_rhs1) in

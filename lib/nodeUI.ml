@@ -14,6 +14,8 @@ type t = {
   mutable value_never_device_only : bool;
   mutable grad_never_virtual : bool;
   mutable grad_never_device_only : bool;
+  mutable value_distributes_over_sum : bool;
+      (** [value_distributes_over_sum] is a heuristic marker for deciding synchronization strategies. *)
   literal : bool;
       (** To avoid confusion, try to maintain the following for a literal:
       - empty [children],
@@ -144,6 +146,7 @@ let create ~(value_prec : prec) ?(grad_prec : prec option) ?(literal = false) ~n
       value_never_device_only = false;
       grad_never_virtual = false;
       grad_never_device_only = false;
+      value_distributes_over_sum = false;
       literal;
       backend_info = "";
     }
