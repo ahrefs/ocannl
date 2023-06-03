@@ -155,7 +155,10 @@ let init_array_of_prec (type val_t arr_t) (prec : (val_t, arr_t) precision) dims
 let indices_to_offset ~dims ~idcs =
   Array.fold2_exn dims idcs ~init:0 ~f:(fun accu dim idx -> (accu * dim) + idx)
 
+let fixed_state_for_init = ref None
+
 let create_array (type arr_t) (prec : (float, arr_t) precision) dims (init_op : init_op) : arr_t =
+  Option.iter !fixed_state_for_init ~f:(fun seed -> Random.init seed);
   match init_op with
   | Constant_fill cs ->
       let size = Array.length cs in
