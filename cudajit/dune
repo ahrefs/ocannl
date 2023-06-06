@@ -1,0 +1,4 @@
+(library
+ (name cudajit)
+;  (modules cudajit)
+ (libraries cuda_ffi nvrtc_ffi))

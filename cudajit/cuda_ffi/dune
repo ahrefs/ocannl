@@ -1,0 +1,20 @@
+(library
+ (name cuda_ffi)
+ (libraries ctypes.foreign)
+ (flags :standard -cclib -lcuda -w -9-11-27)
+ (ctypes
+  (external_library_name libcuda)
+  (build_flags_resolver
+   (vendored
+    (c_library_flags -lcuda)))
+  (headers
+   (include "cuda.h"))
+  (type_description
+   (instance Types)
+   (functor Bindings_types))
+  (function_description
+   (concurrency unlocked)
+   (instance Functions)
+   (functor Bindings))
+  (generated_types Types_generated)
+  (generated_entry_point C)))

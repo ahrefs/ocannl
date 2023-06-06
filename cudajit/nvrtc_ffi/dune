@@ -1,0 +1,21 @@
+(library
+ (name nvrtc_ffi)
+ ; (modules nvrtc_bindings_types nvrtc_bindings)
+ (libraries ctypes.foreign)
+ (flags :standard -cclib -lnvrtc -w -9-11-27)
+ (ctypes
+  (external_library_name libnvrtc)
+  (build_flags_resolver
+   (vendored
+    (c_library_flags -lnvrtc)))
+  (headers
+   (include "nvrtc.h"))
+  (type_description
+   (instance Types)
+   (functor Bindings_types))
+  (function_description
+   (concurrency unlocked)
+   (instance Functions)
+   (functor Bindings))
+  (generated_types Types_generated)
+  (generated_entry_point C)))
