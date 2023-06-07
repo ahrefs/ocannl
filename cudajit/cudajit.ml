@@ -24,6 +24,7 @@ let compile_to_ptx ~cu_src ~name ~options ~with_debug =
   let status = Nvrtc.nvrtc_compile_program !@prog num_options @@ CArray.start c_options in
   let log_msg log = Option.value log ~default:"no compilation log" in
   let error prefix status log =
+    ignore @@ Nvrtc.nvrtc_destroy_program prog;
     raise @@ Error { status = Nvrtc_error status; message = prefix ^ " " ^ name ^ ": " ^ log_msg log }
   in
   let log =
@@ -46,4 +47,5 @@ let compile_to_ptx ~cu_src ~name ~options ~with_debug =
   let ptx = allocate_n char ~count in
   let status = Nvrtc.nvrtc_get_PTX !@prog ptx in
   if status <> NVRTC_SUCCESS then error "nvrtc_get_PTX" status log;
+  ignore @@ Nvrtc.nvrtc_destroy_program prog;
   { log; ptx = string_from_ptr ptx ~length:(count - 1) }
