@@ -1,5 +1,5 @@
 (library
- (name cudatests)
+ (name cudajit_test)
  (inline_tests)
  (libraries base dynlink cudajit)
  (preprocess

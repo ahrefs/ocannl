@@ -22,7 +22,7 @@ module Functions (F : Ctypes.FOREIGN) = struct
     F.foreign "nvrtcDestroyProgram" F.(ptr nvrtc_program @-> returning E.nvrtc_result)
 
   let nvrtc_compile_program =
-    F.foreign "nvrtcCompileProgram" F.(nvrtc_program @-> int @-> ptr string @-> returning E.nvrtc_result)
+    F.foreign "nvrtcCompileProgram" F.(nvrtc_program @-> int @-> ptr (ptr char) @-> returning E.nvrtc_result)
 
   let nvrtc_get_PTX_size =
     F.foreign "nvrtcGetPTXSize" F.(nvrtc_program @-> ptr size_t @-> returning E.nvrtc_result)
