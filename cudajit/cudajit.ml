@@ -80,8 +80,8 @@ type bigstring = (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.
 
 (* Note: bool corresponds to C int (0=false). *)
 type jit_option =
-  | JIT_MAX_REGISTERS of Unsigned.uint
-  | JIT_THREADS_PER_BLOCK of Unsigned.uint
+  | JIT_MAX_REGISTERS of int
+  | JIT_THREADS_PER_BLOCK of int
   | JIT_WALL_TIME of { milliseconds : float }
   | JIT_INFO_LOG_BUFFER of bigstring
   | JIT_ERROR_LOG_BUFFER of bigstring
@@ -159,6 +159,7 @@ let cu_module_load_data_ex ptx options =
                (* | JIT_POSITION_INDEPENDENT_CODE _ -> [CU_JIT_POSITION_INDEPENDENT_CODE] *))
          options
   in
+  let i2u2vp i = coerce (ptr uint) (ptr void) @@ allocate uint @@ Unsigned.UInt.of_int i in
   let u2vp u = coerce (ptr uint) (ptr void) @@ allocate uint u in
   let f2vp f = coerce (ptr float) (ptr void) @@ allocate float f in
   let i2vp i = coerce (ptr int) (ptr void) @@ allocate int i in
@@ -168,8 +169,8 @@ let cu_module_load_data_ex ptx options =
     CArray.of_list (ptr void)
     @@ List.concat_map
          (function
-           | JIT_MAX_REGISTERS v -> [ u2vp v ]
-           | JIT_THREADS_PER_BLOCK v -> [ u2vp v ]
+           | JIT_MAX_REGISTERS v -> [ i2u2vp v ]
+           | JIT_THREADS_PER_BLOCK v -> [ i2u2vp v ]
            | JIT_WALL_TIME { milliseconds } -> [ f2vp milliseconds ]
            | JIT_INFO_LOG_BUFFER b ->
                let size = u2vp @@ Unsigned.UInt.of_int @@ Bigarray.Array1.size_in_bytes b in
