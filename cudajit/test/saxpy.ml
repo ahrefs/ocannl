@@ -70,3 +70,8 @@ let%expect_test "SAXPY compilation" =
     	ret;
 
     } |} ]
+
+let%expect_test "SAXPY" =
+  let _prog = Cudajit.compile_to_ptx ~cu_src:kernel ~name:"saxpy" ~options:["--use_fast_math"] ~with_debug:true in
+	Cudajit.cu_init 0
+	(* let _context = Cudajit.cu_ctx_create  *)

@@ -1,5 +1,6 @@
 open Nvrtc_ffi.Bindings_types
 module Nvrtc = Nvrtc_ffi.C.Functions
+module Cuda = Cuda_ffi.C.Functions
 open Cuda_ffi.Bindings_types
 
 type error_code = Nvrtc_error of nvrtc_result | Cuda_error of cu_result
@@ -50,6 +51,29 @@ let compile_to_ptx ~cu_src ~name ~options ~with_debug =
   ignore @@ Nvrtc.nvrtc_destroy_program prog;
   { log; ptx; ptx_length = count - 1 }
 
-  let string_from_ptx prog =
-    Ctypes.string_from_ptr prog.ptx ~length:prog.ptx_length
+let string_from_ptx prog = Ctypes.string_from_ptr prog.ptx ~length:prog.ptx_length
 
+let check message status =
+  if status <> CUDA_SUCCESS then raise @@ Error { status = Cuda_error status; message }
+
+    let cu_init flags = check "cu_init" @@ Cuda.cu_init flags
+
+let cu_device_get_count () =
+  let open Ctypes in
+  let count = allocate int 0 in
+  check "cu_device_get_count" @@ Cuda.cu_device_get_count count;
+  !@count
+
+let cu_device_get ~ordinal =
+  let open Ctypes in
+  let device = allocate Cuda_ffi.Types_generated.cu_device (Cu_device 0) in
+  check "cu_device_get" @@ Cuda.cu_device_get device ordinal;
+  !@device
+
+let cu_ctx_create ~flags cu_device =
+  let open Ctypes in
+  let ctx = allocate_n cu_context ~count:1 in
+  check "cu_ctx_create" @@ Cuda.cu_ctx_create ctx flags cu_device;
+  !@ctx
+
+  
