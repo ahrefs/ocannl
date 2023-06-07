@@ -2,11 +2,11 @@ open Nvrtc_ffi.Bindings_types
 module Nvrtc = Nvrtc_ffi.C.Functions
 open Cuda_ffi.Bindings_types
 
-type error_code = Nvrtc_error of nvrtc_result | Cuda_error of cuda_result
+type error_code = Nvrtc_error of nvrtc_result | Cuda_error of cu_result
 
 exception Error of { status : error_code; message : string }
 
-type compile_to_ptx_result = { log : string option; ptx : string }
+type compile_to_ptx_result = { log : string option; ptx : char Ctypes.ptr; ptx_length : int }
 
 let compile_to_ptx ~cu_src ~name ~options ~with_debug =
   let open Ctypes in
@@ -48,4 +48,8 @@ let compile_to_ptx ~cu_src ~name ~options ~with_debug =
   let status = Nvrtc.nvrtc_get_PTX !@prog ptx in
   if status <> NVRTC_SUCCESS then error "nvrtc_get_PTX" status log;
   ignore @@ Nvrtc.nvrtc_destroy_program prog;
-  { log; ptx = string_from_ptr ptx ~length:(count - 1) }
+  { log; ptx; ptx_length = count - 1 }
+
+  let string_from_ptx prog =
+    Ctypes.string_from_ptr prog.ptx ~length:prog.ptx_length
+
