@@ -124,6 +124,12 @@ type cu_jit_option =
   | CU_JIT_PREC_DIV
   | CU_JIT_PREC_SQRT
   | CU_JIT_FMA
+  (*| CU_JIT_REFERENCED_KERNEL_NAMES
+    | CU_JIT_REFERENCED_KERNEL_COUNT
+    | CU_JIT_REFERENCED_VARIABLE_NAMES
+    | CU_JIT_REFERENCED_VARIABLE_COUNT
+    | CU_JIT_OPTIMIZE_UNUSED_DEVICE_VARIABLES
+    | CU_JIT_POSITION_INDEPENDENT_CODE *)
   | CU_JIT_NUM_OPTIONS
   | CU_JIT_UNCATEGORIZED of int64
 
@@ -148,6 +154,36 @@ type cu_stream_t
 type cu_stream = cu_stream_t structure ptr
 
 let cu_stream : cu_stream typ = typedef (ptr @@ structure "CUstream_st") "CUstream"
+
+type cu_jit_target =
+  | CU_TARGET_COMPUTE_30
+  | CU_TARGET_COMPUTE_32
+  | CU_TARGET_COMPUTE_35
+  | CU_TARGET_COMPUTE_37
+  | CU_TARGET_COMPUTE_50
+  | CU_TARGET_COMPUTE_52
+  | CU_TARGET_COMPUTE_53
+  | CU_TARGET_COMPUTE_60
+  | CU_TARGET_COMPUTE_61
+  | CU_TARGET_COMPUTE_62
+  | CU_TARGET_COMPUTE_70
+  | CU_TARGET_COMPUTE_72
+  | CU_TARGET_COMPUTE_75
+  | CU_TARGET_COMPUTE_80
+  | CU_TARGET_COMPUTE_86
+  (* | CU_TARGET_COMPUTE_87
+     | CU_TARGET_COMPUTE_89
+     | CU_TARGET_COMPUTE_90
+     | CU_TARGET_COMPUTE_90A *)
+  | CU_TARGET_UNCATEGORIZED of int64
+
+type cu_jit_fallback = CU_PREFER_PTX | CU_PREFER_BINARY | CU_PREFER_UNCATEGORIZED of int64
+
+type cu_jit_cache_mode =
+  | CU_JIT_CACHE_OPTION_NONE
+  | CU_JIT_CACHE_OPTION_CG
+  | CU_JIT_CACHE_OPTION_CA
+  | CU_JIT_CACHE_OPTION_UNCATEGORIZED of int64
 
 module Types (T : Ctypes.TYPE) = struct
   let cu_device_v1 = T.typedef T.int "CUdevice_v1"
@@ -388,6 +424,13 @@ module Types (T : Ctypes.TYPE) = struct
   let cu_jit_prec_div = T.constant "CU_JIT_PREC_DIV" T.int64_t
   let cu_jit_prec_sqrt = T.constant "CU_JIT_PREC_SQRT" T.int64_t
   let cu_jit_fma = T.constant "CU_JIT_FMA" T.int64_t
+
+  (* let cu_jit_referenced_kernel_names = T.constant "CU_JIT_REFERENCED_KERNEL_NAMES" T.int64_t
+     let cu_jit_referenced_kernel_count = T.constant "CU_JIT_REFERENCED_KERNEL_COUNT" T.int64_t
+     let cu_jit_referenced_variable_names = T.constant "CU_JIT_REFERENCED_VARIABLE_NAMES" T.int64_t
+     let cu_jit_referenced_variable_count = T.constant "CU_JIT_REFERENCED_VARIABLE_COUNT" T.int64_t
+     let cu_jit_optimize_unused_device_variables = T.constant "CU_JIT_OPTIMIZE_UNUSED_DEVICE_VARIABLES" T.int64_t
+     let cu_jit_position_independent_code = T.constant "CU_JIT_POSITION_INDEPENDENT_CODE" T.int64_t *)
   let cu_jit_num_options = T.constant "CU_JIT_NUM_OPTIONS" T.int64_t
 
   let cu_jit_option =
@@ -420,6 +463,81 @@ module Types (T : Ctypes.TYPE) = struct
         (CU_JIT_PREC_DIV, cu_jit_prec_div);
         (CU_JIT_PREC_SQRT, cu_jit_prec_sqrt);
         (CU_JIT_FMA, cu_jit_fma);
+        (* (CU_JIT_REFERENCED_KERNEL_NAMES, cu_jit_referenced_kernel_names);
+           (CU_JIT_REFERENCED_KERNEL_COUNT, cu_jit_referenced_kernel_count);
+           (CU_JIT_REFERENCED_VARIABLE_NAMES, cu_jit_referenced_variable_names);
+           (CU_JIT_REFERENCED_VARIABLE_COUNT, cu_jit_referenced_variable_count);
+           (CU_JIT_OPTIMIZE_UNUSED_DEVICE_VARIABLES, cu_jit_optimize_unused_device_variables);
+           (CU_JIT_POSITION_INDEPENDENT_CODE, cu_jit_position_independent_code); *)
         (CU_JIT_NUM_OPTIONS, cu_jit_num_options);
+      ]
+
+  let cu_target_compute_30 = T.constant "CU_TARGET_COMPUTE_30" T.int64_t
+  let cu_target_compute_32 = T.constant "CU_TARGET_COMPUTE_32" T.int64_t
+  let cu_target_compute_35 = T.constant "CU_TARGET_COMPUTE_35" T.int64_t
+  let cu_target_compute_37 = T.constant "CU_TARGET_COMPUTE_37" T.int64_t
+  let cu_target_compute_50 = T.constant "CU_TARGET_COMPUTE_50" T.int64_t
+  let cu_target_compute_52 = T.constant "CU_TARGET_COMPUTE_52" T.int64_t
+  let cu_target_compute_53 = T.constant "CU_TARGET_COMPUTE_53" T.int64_t
+  let cu_target_compute_60 = T.constant "CU_TARGET_COMPUTE_60" T.int64_t
+  let cu_target_compute_61 = T.constant "CU_TARGET_COMPUTE_61" T.int64_t
+  let cu_target_compute_62 = T.constant "CU_TARGET_COMPUTE_62" T.int64_t
+  let cu_target_compute_70 = T.constant "CU_TARGET_COMPUTE_70" T.int64_t
+  let cu_target_compute_72 = T.constant "CU_TARGET_COMPUTE_72" T.int64_t
+  let cu_target_compute_75 = T.constant "CU_TARGET_COMPUTE_75" T.int64_t
+  let cu_target_compute_80 = T.constant "CU_TARGET_COMPUTE_80" T.int64_t
+  let cu_target_compute_86 = T.constant "CU_TARGET_COMPUTE_86" T.int64_t
+  (* let cu_target_compute_87 = T.constant "CU_TARGET_COMPUTE_87" T.int64_t
+     let cu_target_compute_89 = T.constant "CU_TARGET_COMPUTE_89" T.int64_t
+     let cu_target_compute_90 = T.constant "CU_TARGET_COMPUTE_90" T.int64_t
+     let cu_target_compute_90a = T.constant "CU_TARGET_COMPUTE_90A" T.int64_t *)
+
+  let cu_jit_target =
+    T.enum ~typedef:true
+      ~unexpected:(fun error_code -> CU_TARGET_UNCATEGORIZED error_code)
+      "CUjit_target"
+      [
+        (CU_TARGET_COMPUTE_30, cu_target_compute_30);
+        (CU_TARGET_COMPUTE_32, cu_target_compute_32);
+        (CU_TARGET_COMPUTE_35, cu_target_compute_35);
+        (CU_TARGET_COMPUTE_37, cu_target_compute_37);
+        (CU_TARGET_COMPUTE_50, cu_target_compute_50);
+        (CU_TARGET_COMPUTE_52, cu_target_compute_52);
+        (CU_TARGET_COMPUTE_53, cu_target_compute_53);
+        (CU_TARGET_COMPUTE_60, cu_target_compute_60);
+        (CU_TARGET_COMPUTE_61, cu_target_compute_61);
+        (CU_TARGET_COMPUTE_62, cu_target_compute_62);
+        (CU_TARGET_COMPUTE_70, cu_target_compute_70);
+        (CU_TARGET_COMPUTE_72, cu_target_compute_72);
+        (CU_TARGET_COMPUTE_75, cu_target_compute_75);
+        (CU_TARGET_COMPUTE_80, cu_target_compute_80);
+        (CU_TARGET_COMPUTE_86, cu_target_compute_86);
+        (* (CU_TARGET_COMPUTE_87, cu_target_compute_87);
+           (CU_TARGET_COMPUTE_89, cu_target_compute_89);
+           (CU_TARGET_COMPUTE_90, cu_target_compute_90);
+           (CU_TARGET_COMPUTE_90A, cu_target_compute_90a); *)
+      ]
+
+  let cu_prefer_ptx = T.constant "CU_PREFER_PTX" T.int64_t
+  let cu_prefer_binary = T.constant "CU_PREFER_BINARY" T.int64_t
+
+  let cu_jit_fallback =
+    T.enum ~typedef:true
+      ~unexpected:(fun error_code -> CU_PREFER_UNCATEGORIZED error_code)
+      "CUjit_fallback"
+      [ (CU_PREFER_PTX, cu_prefer_ptx); (CU_PREFER_BINARY, cu_prefer_binary) ]
+
+  let cu_jit_cache_option_none = T.constant "CU_JIT_CACHE_OPTION_NONE" T.int64_t
+  let cu_jit_cache_option_cg = T.constant "CU_JIT_CACHE_OPTION_CG" T.int64_t
+  let cu_jit_cache_option_ca = T.constant "CU_JIT_CACHE_OPTION_CA" T.int64_t
+
+  let cu_jit_cache_mode =
+    T.enum ~typedef:true
+      ~unexpected:(fun error_code -> CU_JIT_CACHE_OPTION_UNCATEGORIZED error_code)
+      "CUjit_cacheMode"
+      [
+        (CU_JIT_CACHE_OPTION_NONE, cu_jit_cache_option_none);
+        (CU_JIT_CACHE_OPTION_CG, cu_jit_cache_option_cg);
+        (CU_JIT_CACHE_OPTION_CA, cu_jit_cache_option_ca);
       ]
 end
