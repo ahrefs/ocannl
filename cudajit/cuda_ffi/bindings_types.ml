@@ -147,6 +147,9 @@ type cu_function_t
 type cu_function = cu_function_t structure ptr
 
 let cu_function : cu_function typ = typedef (ptr @@ structure "CUfunc_st") "CUfunction"
+
+(** CUdeviceptr is defined as an unsigned integer type whose size matches the size of a pointer on
+    the target platform. *)
 let cu_deviceptr_v2 = typedef uint64_t "CUdeviceptr_v2"
 let cu_deviceptr = typedef cu_deviceptr_v2 "CUdeviceptr"
 

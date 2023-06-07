@@ -72,6 +72,10 @@ let%expect_test "SAXPY compilation" =
     } |} ]
 
 let%expect_test "SAXPY" =
-  let _prog = Cudajit.compile_to_ptx ~cu_src:kernel ~name:"saxpy" ~options:["--use_fast_math"] ~with_debug:true in
-	Cudajit.cu_init 0
-	(* let _context = Cudajit.cu_ctx_create  *)
+  let prog = Cudajit.compile_to_ptx ~cu_src:kernel ~name:"saxpy" ~options:["--use_fast_math"] ~with_debug:true in
+	Cudajit.cu_init 0;
+	let device = Cudajit.cu_device_get ~ordinal:0 in
+	let _context = Cudajit.cu_ctx_create ~flags:0 device in
+	let module_ = Cudajit.cu_module_load_data_ex prog [] in
+	let _kernel = Cudajit.cu_module_get_function module_ ~name:"saxpy" in
+	()

@@ -195,3 +195,19 @@ let cu_module_load_data_ex ptx options =
        (coerce (ptr char) (ptr void) ptx.ptx)
        n_opts (CArray.start c_options) @@ CArray.start c_opts_args;
   !@cu_mod
+
+let cu_module_get_function module_ ~name =
+  let open Ctypes in
+  let func = allocate_n cu_function ~count:1 in
+  check "cu_module_get_function" @@ Cuda.cu_module_get_function func module_ name;
+  !@func
+
+let cu_mem_alloc ~byte_size =
+  let open Ctypes in
+  let device = allocate_n cu_deviceptr ~count:1 in
+  check "cu_mem_alloc" @@ Cuda.cu_mem_alloc device @@ Unsigned.Size_t.of_int byte_size;
+  !@device
+
+let cu_memcpy_H_to_D ~dst_device ~src_host ~byte_size =
+  check "cu_memcpy_H_to_D" @@ Cuda.cu_memcpy_H_to_D dst_device src_host @@ Unsigned.Size_t.of_int byte_size
+
