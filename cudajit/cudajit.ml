@@ -209,12 +209,12 @@ let mem_alloc ~byte_size =
   check "cu_mem_alloc" @@ Cuda.cu_mem_alloc device @@ Unsigned.Size_t.of_int byte_size;
   Deviceptr !@device
 
-let memcpy_H_to_D ?offset ?length ~dst:(Deviceptr dst) ~src () =
+let memcpy_H_to_D ?host_offset ?length ~dst:(Deviceptr dst) ~src () =
   let full_size = Bigarray.Genarray.size_in_bytes src in
   let c_typ = Ctypes.typ_of_bigarray_kind @@ Bigarray.Genarray.kind src in
   let elem_bytes = Ctypes.sizeof c_typ in
   let byte_size =
-    match (offset, length) with
+    match (host_offset, length) with
     | None, None -> full_size
     | Some offset, None -> full_size - (elem_bytes * offset)
     | None, Some length -> elem_bytes * length
@@ -222,7 +222,7 @@ let memcpy_H_to_D ?offset ?length ~dst:(Deviceptr dst) ~src () =
   in
   let open Ctypes in
   let host = bigarray_start genarray src in
-  let host = match offset with None -> host | Some offset -> host +@ offset in
+  let host = match host_offset with None -> host | Some offset -> host +@ offset in
   check "cu_memcpy_H_to_D"
   @@ Cuda.cu_memcpy_H_to_D dst (coerce (ptr c_typ) (ptr void) host)
   @@ Unsigned.Size_t.of_int byte_size
@@ -262,3 +262,27 @@ let launch_kernel func ~grid_dim_x ?(grid_dim_y = 1) ?(grid_dim_z = 1) ~block_di
   @@ Cuda.cu_launch_kernel func (i2u grid_dim_x) (i2u grid_dim_y) (i2u grid_dim_z) (i2u block_dim_x)
        (i2u block_dim_y) (i2u block_dim_z) (i2u shared_mem_bytes) stream c_kernel_params
   @@ coerce (ptr void) (ptr @@ ptr void) null
+
+let ctx_synchronize () = check "cu_ctx_synchronize" @@ Cuda.cu_ctx_synchronize ()
+
+let memcpy_D_to_H ?host_offset ?length ~dst ~src:(Deviceptr src) () =
+  let full_size = Bigarray.Genarray.size_in_bytes dst in
+  let c_typ = Ctypes.typ_of_bigarray_kind @@ Bigarray.Genarray.kind dst in
+  let elem_bytes = Ctypes.sizeof c_typ in
+  let byte_size =
+    match (host_offset, length) with
+    | None, None -> full_size
+    | Some offset, None -> full_size - (elem_bytes * offset)
+    | None, Some length -> elem_bytes * length
+    | Some offset, Some length -> elem_bytes * (length - offset)
+  in
+  let open Ctypes in
+  let host = bigarray_start genarray dst in
+  let host = match host_offset with None -> host | Some offset -> host +@ offset in
+  check "cu_memcpy_D_to_H"
+  @@ Cuda.cu_memcpy_D_to_H (coerce (ptr c_typ) (ptr void) host) src
+  @@ Unsigned.Size_t.of_int byte_size
+
+let mem_free (Deviceptr dev) = check "cu_mem_free" @@ Cuda.cu_mem_free dev
+let module_unload cu_mod = check "cu_module_unload" @@ Cuda.cu_module_unload cu_mod
+let ctx_destroy ctx = check "cu_ctx_destroy" @@ Cuda.cu_ctx_destroy ctx

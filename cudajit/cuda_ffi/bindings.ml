@@ -35,6 +35,10 @@ module Functions (F : Ctypes.FOREIGN) = struct
         @-> returning E.cu_result)
 
   let cu_ctx_synchronize = F.foreign "cuCtxSynchronize" F.(void @-> returning E.cu_result)
+
+  let cu_memcpy_D_to_H =
+    F.foreign "cuMemcpyDtoH" F.(ptr void @-> cu_deviceptr @-> size_t @-> returning E.cu_result)
+
   let cu_mem_free = F.foreign "cuMemFree" F.(cu_deviceptr @-> returning E.cu_result)
   let cu_module_unload = F.foreign "cuModuleUnload" F.(cu_module @-> returning E.cu_result)
   let cu_ctx_destroy = F.foreign "cuCtxDestroy" F.(cu_context @-> returning E.cu_result)
