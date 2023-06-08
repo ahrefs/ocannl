@@ -56,24 +56,24 @@ let string_from_ptx prog = Ctypes.string_from_ptr prog.ptx ~length:prog.ptx_leng
 let check message status =
   if status <> CUDA_SUCCESS then raise @@ Error { status = Cuda_error status; message }
 
-let cu_init flags = check "cu_init" @@ Cuda.cu_init flags
+let init flags = check "cu_init" @@ Cuda.cu_init flags
 
-let cu_device_get_count () =
+let device_get_count () =
   let open Ctypes in
   let count = allocate int 0 in
   check "cu_device_get_count" @@ Cuda.cu_device_get_count count;
   !@count
 
-let cu_device_get ~ordinal =
+let device_get ~ordinal =
   let open Ctypes in
   let device = allocate Cuda_ffi.Types_generated.cu_device (Cu_device 0) in
   check "cu_device_get" @@ Cuda.cu_device_get device ordinal;
   !@device
 
-let cu_ctx_create ~flags cu_device =
+let ctx_create ~flags device =
   let open Ctypes in
   let ctx = allocate_n cu_context ~count:1 in
-  check "cu_ctx_create" @@ Cuda.cu_ctx_create ctx flags cu_device;
+  check "cu_ctx_create" @@ Cuda.cu_ctx_create ctx flags device;
   !@ctx
 
 type bigstring = (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
@@ -134,7 +134,7 @@ let uint_of_cu_jit_cache_mode c =
   | CU_JIT_CACHE_OPTION_CA -> Unsigned.UInt.of_int64 cu_jit_cache_option_ca
   | CU_JIT_CACHE_OPTION_UNCATEGORIZED c -> Unsigned.UInt.of_int64 c
 
-let cu_module_load_data_ex ptx options =
+let module_load_data_ex ptx options =
   let open Ctypes in
   let cu_mod = allocate_n cu_module ~count:1 in
   let n_opts = List.length options in
@@ -195,7 +195,7 @@ let cu_module_load_data_ex ptx options =
   @@ CArray.start c_opts_args;
   !@cu_mod
 
-let cu_module_get_function module_ ~name =
+let module_get_function module_ ~name =
   let open Ctypes in
   let func = allocate_n cu_function ~count:1 in
   check "cu_module_get_function" @@ Cuda.cu_module_get_function func module_ name;
@@ -203,13 +203,13 @@ let cu_module_get_function module_ ~name =
 
 type deviceptr = Deviceptr of Unsigned.uint64
 
-let cu_mem_alloc ~byte_size =
+let mem_alloc ~byte_size =
   let open Ctypes in
   let device = allocate_n cu_deviceptr ~count:1 in
   check "cu_mem_alloc" @@ Cuda.cu_mem_alloc device @@ Unsigned.Size_t.of_int byte_size;
   Deviceptr !@device
 
-let cu_memcpy_H_to_D ~dst:(Deviceptr dst) ~src_host ~byte_size =
+let memcpy_H_to_D ~dst:(Deviceptr dst) ~src_host ~byte_size =
   check "cu_memcpy_H_to_D" @@ Cuda.cu_memcpy_H_to_D dst src_host @@ Unsigned.Size_t.of_int byte_size
 
 type kernel_param =
@@ -221,7 +221,7 @@ type kernel_param =
 
 let no_stream = Ctypes.(coerce (ptr void) cu_stream null)
   
-let cu_launch_kernel func ~grid_dim_x ?(grid_dim_y = 1) ?(grid_dim_z = 1) ~block_dim_x ?(block_dim_y = 1)
+let launch_kernel func ~grid_dim_x ?(grid_dim_y = 1) ?(grid_dim_z = 1) ~block_dim_x ?(block_dim_y = 1)
     ?(block_dim_z = 1) ~shared_mem_bytes stream kernel_params =
   let i2u = Unsigned.UInt.of_int in
   let open Ctypes in

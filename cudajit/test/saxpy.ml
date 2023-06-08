@@ -78,21 +78,18 @@ let%expect_test "SAXPY compilation" =
 let%expect_test "SAXPY" =
   let num_blocks = 32 in
   let num_threads = 128 in
-	let open Cudajit in
-  let prog =
-    compile_to_ptx ~cu_src:kernel ~name:"saxpy" ~options:[ "--use_fast_math" ] ~with_debug:true
-  in
-  cu_init 0;
-  let device = cu_device_get ~ordinal:0 in
-  let _context = cu_ctx_create ~flags:0 device in
-  let module_ = cu_module_load_data_ex prog [] in
-  let kernel = cu_module_get_function module_ ~name:"saxpy" in
-	let byte_size = num_threads * num_blocks * 4 in
-	let dX = cu_mem_alloc ~byte_size in
-	let dY = cu_mem_alloc ~byte_size in
-	let dOut = cu_mem_alloc ~byte_size in
-  cu_launch_kernel kernel ~grid_dim_x:num_blocks ~block_dim_x:num_threads ~shared_mem_bytes:0
-    no_stream
+  let module Cu = Cudajit in
+  let prog = Cu.compile_to_ptx ~cu_src:kernel ~name:"saxpy" ~options:[ "--use_fast_math" ] ~with_debug:true in
+  Cu.init 0;
+  let device = Cu.device_get ~ordinal:0 in
+  let _context = Cu.ctx_create ~flags:0 device in
+  let module_ = Cu.module_load_data_ex prog [] in
+  let kernel = Cu.module_get_function module_ ~name:"saxpy" in
+  let byte_size = num_threads * num_blocks * 4 in
+  let dX = Cu.mem_alloc ~byte_size in
+  let dY = Cu.mem_alloc ~byte_size in
+  let dOut = Cu.mem_alloc ~byte_size in
+  Cu.launch_kernel kernel ~grid_dim_x:num_blocks ~block_dim_x:num_threads ~shared_mem_bytes:0 Cu.no_stream
     [
       Single 5.1;
       Tensor dX;
