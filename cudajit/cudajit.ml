@@ -209,8 +209,29 @@ let mem_alloc ~byte_size =
   check "cu_mem_alloc" @@ Cuda.cu_mem_alloc device @@ Unsigned.Size_t.of_int byte_size;
   Deviceptr !@device
 
-let memcpy_H_to_D ~dst:(Deviceptr dst) ~src_host ~byte_size =
-  check "cu_memcpy_H_to_D" @@ Cuda.cu_memcpy_H_to_D dst src_host @@ Unsigned.Size_t.of_int byte_size
+let memcpy_H_to_D ?offset ?length ~dst:(Deviceptr dst) ~src () =
+  let full_size = Bigarray.Genarray.size_in_bytes src in
+  let c_typ = Ctypes.typ_of_bigarray_kind @@ Bigarray.Genarray.kind src in
+  let elem_bytes = Ctypes.sizeof c_typ in
+  let byte_size =
+    match (offset, length) with
+    | None, None -> full_size
+    | Some offset, None -> full_size - (elem_bytes * offset)
+    | None, Some length -> elem_bytes * length
+    | Some offset, Some length -> elem_bytes * (length - offset)
+  in
+  let open Ctypes in
+  let host = bigarray_start genarray src in
+  let host = match offset with None -> host | Some offset -> host +@ offset in
+  check "cu_memcpy_H_to_D"
+  @@ Cuda.cu_memcpy_H_to_D dst (coerce (ptr c_typ) (ptr void) host)
+  @@ Unsigned.Size_t.of_int byte_size
+
+let alloc_and_memcpy src =
+  let byte_size = Bigarray.Genarray.size_in_bytes src in
+  let dst = mem_alloc ~byte_size in
+  memcpy_H_to_D ~dst ~src ();
+  dst
 
 type kernel_param =
   | Tensor of deviceptr
@@ -220,7 +241,7 @@ type kernel_param =
   | Double of float
 
 let no_stream = Ctypes.(coerce (ptr void) cu_stream null)
-  
+
 let launch_kernel func ~grid_dim_x ?(grid_dim_y = 1) ?(grid_dim_z = 1) ~block_dim_x ?(block_dim_y = 1)
     ?(block_dim_z = 1) ~shared_mem_bytes stream kernel_params =
   let i2u = Unsigned.UInt.of_int in
