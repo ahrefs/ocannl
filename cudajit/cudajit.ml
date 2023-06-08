@@ -191,9 +191,8 @@ let cu_module_load_data_ex ptx options =
   in
   (* allocate_n Cuda_ffi.Types_generated.cu_jit_option ~count:n_opts in *)
   check "cu_module_load_data_ex"
-  @@ Cuda.cu_module_load_data_ex cu_mod
-       (coerce (ptr char) (ptr void) ptx.ptx)
-       n_opts (CArray.start c_options) @@ CArray.start c_opts_args;
+  @@ Cuda.cu_module_load_data_ex cu_mod (coerce (ptr char) (ptr void) ptx.ptx) n_opts (CArray.start c_options)
+  @@ CArray.start c_opts_args;
   !@cu_mod
 
 let cu_module_get_function module_ ~name =
@@ -202,12 +201,43 @@ let cu_module_get_function module_ ~name =
   check "cu_module_get_function" @@ Cuda.cu_module_get_function func module_ name;
   !@func
 
+type deviceptr = Deviceptr of Unsigned.uint64
+
 let cu_mem_alloc ~byte_size =
   let open Ctypes in
   let device = allocate_n cu_deviceptr ~count:1 in
   check "cu_mem_alloc" @@ Cuda.cu_mem_alloc device @@ Unsigned.Size_t.of_int byte_size;
-  !@device
+  Deviceptr !@device
 
-let cu_memcpy_H_to_D ~dst_device ~src_host ~byte_size =
-  check "cu_memcpy_H_to_D" @@ Cuda.cu_memcpy_H_to_D dst_device src_host @@ Unsigned.Size_t.of_int byte_size
+let cu_memcpy_H_to_D ~dst:(Deviceptr dst) ~src_host ~byte_size =
+  check "cu_memcpy_H_to_D" @@ Cuda.cu_memcpy_H_to_D dst src_host @@ Unsigned.Size_t.of_int byte_size
 
+type kernel_param =
+  | Tensor of deviceptr
+  | Int of int
+  | Size_t of Unsigned.size_t
+  | Single of float
+  | Double of float
+
+let no_stream = Ctypes.(coerce (ptr void) cu_stream null)
+  
+let cu_launch_kernel func ~grid_dim_x ?(grid_dim_y = 1) ?(grid_dim_z = 1) ~block_dim_x ?(block_dim_y = 1)
+    ?(block_dim_z = 1) ~shared_mem_bytes stream kernel_params =
+  let i2u = Unsigned.UInt.of_int in
+  let open Ctypes in
+  let c_kernel_params =
+    List.map
+      (function
+        | Tensor (Deviceptr dev) -> coerce (ptr uint64_t) (ptr void) @@ allocate uint64_t dev
+        | Int i -> coerce (ptr int) (ptr void) @@ allocate int i
+        | Size_t u -> coerce (ptr size_t) (ptr void) @@ allocate size_t u
+        | Single u -> coerce (ptr float) (ptr void) @@ allocate float u
+        | Double u -> coerce (ptr double) (ptr void) @@ allocate double u)
+      kernel_params
+    |> CArray.of_list (ptr void)
+    |> CArray.start
+  in
+  check "cu_launch_kernel"
+  @@ Cuda.cu_launch_kernel func (i2u grid_dim_x) (i2u grid_dim_y) (i2u grid_dim_z) (i2u block_dim_x)
+       (i2u block_dim_y) (i2u block_dim_z) (i2u shared_mem_bytes) stream c_kernel_params
+  @@ coerce (ptr void) (ptr @@ ptr void) null
