@@ -151,6 +151,7 @@ let cu_function : cu_function typ = typedef (ptr @@ structure "CUfunc_st") "CUfu
 (** CUdeviceptr is defined as an unsigned integer type whose size matches the size of a pointer on
     the target platform. *)
 let cu_deviceptr_v2 = typedef uint64_t "CUdeviceptr_v2"
+
 let cu_deviceptr = typedef cu_deviceptr_v2 "CUdeviceptr"
 
 type cu_stream_t
@@ -187,6 +188,147 @@ type cu_jit_cache_mode =
   | CU_JIT_CACHE_OPTION_CG
   | CU_JIT_CACHE_OPTION_CA
   | CU_JIT_CACHE_OPTION_UNCATEGORIZED of int64
+
+type cu_device_attribute =
+  | CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK
+  | CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_X
+  | CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Y
+  | CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Z
+  | CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X
+  | CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Y
+  | CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Z
+  | CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK
+  | CU_DEVICE_ATTRIBUTE_TOTAL_CONSTANT_MEMORY
+  | CU_DEVICE_ATTRIBUTE_WARP_SIZE
+  | CU_DEVICE_ATTRIBUTE_MAX_PITCH
+  | CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_BLOCK
+  | CU_DEVICE_ATTRIBUTE_CLOCK_RATE
+  | CU_DEVICE_ATTRIBUTE_TEXTURE_ALIGNMENT
+  | CU_DEVICE_ATTRIBUTE_GPU_OVERLAP
+  | CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT
+  | CU_DEVICE_ATTRIBUTE_KERNEL_EXEC_TIMEOUT
+  | CU_DEVICE_ATTRIBUTE_INTEGRATED
+  | CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY
+  | CU_DEVICE_ATTRIBUTE_COMPUTE_MODE
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_HEIGHT
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_HEIGHT
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_DEPTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LAYERED_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LAYERED_HEIGHT
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LAYERED_LAYERS
+  | CU_DEVICE_ATTRIBUTE_SURFACE_ALIGNMENT
+  | CU_DEVICE_ATTRIBUTE_CONCURRENT_KERNELS
+  | CU_DEVICE_ATTRIBUTE_ECC_ENABLED
+  | CU_DEVICE_ATTRIBUTE_PCI_BUS_ID
+  | CU_DEVICE_ATTRIBUTE_PCI_DEVICE_ID
+  | CU_DEVICE_ATTRIBUTE_TCC_DRIVER
+  | CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE
+  | CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH
+  | CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE
+  | CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR
+  | CU_DEVICE_ATTRIBUTE_ASYNC_ENGINE_COUNT
+  (* | CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING *)
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_LAYERED_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_LAYERED_LAYERS
+  | CU_DEVICE_ATTRIBUTE_CAN_TEX2D_GATHER
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_GATHER_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_GATHER_HEIGHT
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_WIDTH_ALTERNATE
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_HEIGHT_ALTERNATE
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_DEPTH_ALTERNATE
+  | CU_DEVICE_ATTRIBUTE_PCI_DOMAIN_ID
+  | CU_DEVICE_ATTRIBUTE_TEXTURE_PITCH_ALIGNMENT
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_LAYERED_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_LAYERED_LAYERS
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_HEIGHT
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_HEIGHT
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_DEPTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_LAYERED_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_LAYERED_LAYERS
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_HEIGHT
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_LAYERS
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_LAYERED_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_LAYERED_LAYERS
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_LINEAR_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LINEAR_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LINEAR_HEIGHT
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LINEAR_PITCH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_MIPMAPPED_WIDTH
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_MIPMAPPED_HEIGHT
+  | CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR
+  | CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR
+  | CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_MIPMAPPED_WIDTH
+  | CU_DEVICE_ATTRIBUTE_STREAM_PRIORITIES_SUPPORTED
+  | CU_DEVICE_ATTRIBUTE_GLOBAL_L1_CACHE_SUPPORTED
+  | CU_DEVICE_ATTRIBUTE_LOCAL_L1_CACHE_SUPPORTED
+  | CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR
+  | CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_MULTIPROCESSOR
+  | CU_DEVICE_ATTRIBUTE_MANAGED_MEMORY
+  | CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD
+  | CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD_GROUP_ID
+  | CU_DEVICE_ATTRIBUTE_HOST_NATIVE_ATOMIC_SUPPORTED
+  | CU_DEVICE_ATTRIBUTE_SINGLE_TO_DOUBLE_PRECISION_PERF_RATIO
+  | CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS
+  | CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS
+  | CU_DEVICE_ATTRIBUTE_COMPUTE_PREEMPTION_SUPPORTED
+  | CU_DEVICE_ATTRIBUTE_CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM
+  | CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH
+  | CU_DEVICE_ATTRIBUTE_COOPERATIVE_MULTI_DEVICE_LAUNCH
+  | CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN
+  | CU_DEVICE_ATTRIBUTE_CAN_FLUSH_REMOTE_WRITES
+  | CU_DEVICE_ATTRIBUTE_HOST_REGISTER_SUPPORTED
+  | CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS_USES_HOST_PAGE_TABLES
+  | CU_DEVICE_ATTRIBUTE_DIRECT_MANAGED_MEM_ACCESS_FROM_HOST
+  | CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED
+  | CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR_SUPPORTED
+  | CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_WIN32_HANDLE_SUPPORTED
+  | CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_WIN32_KMT_HANDLE_SUPPORTED
+  | CU_DEVICE_ATTRIBUTE_MAX_BLOCKS_PER_MULTIPROCESSOR
+  | CU_DEVICE_ATTRIBUTE_GENERIC_COMPRESSION_SUPPORTED
+  | CU_DEVICE_ATTRIBUTE_MAX_PERSISTING_L2_CACHE_SIZE
+  | CU_DEVICE_ATTRIBUTE_MAX_ACCESS_POLICY_WINDOW_SIZE
+  | CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WITH_CUDA_VMM_SUPPORTED
+  | CU_DEVICE_ATTRIBUTE_RESERVED_SHARED_MEMORY_PER_BLOCK
+  | CU_DEVICE_ATTRIBUTE_SPARSE_CUDA_ARRAY_SUPPORTED
+  | CU_DEVICE_ATTRIBUTE_READ_ONLY_HOST_REGISTER_SUPPORTED
+  | CU_DEVICE_ATTRIBUTE_TIMELINE_SEMAPHORE_INTEROP_SUPPORTED
+  (* | CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED *)
+  | CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_SUPPORTED
+  | CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_FLUSH_WRITES_OPTIONS
+  | CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING
+  | CU_DEVICE_ATTRIBUTE_MEMPOOL_SUPPORTED_HANDLE_TYPES
+  (* | CU_DEVICE_ATTRIBUTE_CLUSTER_LAUNCH *)
+  (* | CU_DEVICE_ATTRIBUTE_DEFERRED_MAPPING_CUDA_ARRAY_SUPPORTED *)
+  | CU_DEVICE_ATTRIBUTE_CAN_USE_64_BIT_STREAM_MEM_OPS
+  | CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_WAIT_VALUE_NOR
+  (* | CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED *)
+  (* | CU_DEVICE_ATTRIBUTE_IPC_EVENT_SUPPORTED *)
+  (* | CU_DEVICE_ATTRIBUTE_MEM_SYNC_DOMAIN_COUNT *)
+  (* | CU_DEVICE_ATTRIBUTE_TENSOR_MAP_ACCESS_SUPPORTED *)
+  (* | CU_DEVICE_ATTRIBUTE_UNIFIED_FUNCTION_POINTERS *)
+  (* | CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED *)
+  | CU_DEVICE_ATTRIBUTE_MAX
+  | CU_DEVICE_ATTRIBUTE_UNCATEGORIZED of int64
+
+type cu_computemode =
+  | CU_COMPUTEMODE_DEFAULT
+  | CU_COMPUTEMODE_PROHIBITED
+  | CU_COMPUTEMODE_EXCLUSIVE_PROCESS
+  | CU_COMPUTEMODE_UNCATEGORIZED of int64
+
+type cu_flush_GPU_direct_RDMA_writes_options =
+  | CU_FLUSH_GPU_DIRECT_RDMA_WRITES_OPTION_HOST
+  | CU_FLUSH_GPU_DIRECT_RDMA_WRITES_OPTION_MEMOPS
+  | CU_FLUSH_GPU_DIRECT_RDMA_WRITES_OPTION_UNCATEGORIZED of int64
 
 module Types (T : Ctypes.TYPE) = struct
   let cu_device_v1 = T.typedef T.int "CUdevice_v1"
@@ -542,5 +684,560 @@ module Types (T : Ctypes.TYPE) = struct
         (CU_JIT_CACHE_OPTION_NONE, cu_jit_cache_option_none);
         (CU_JIT_CACHE_OPTION_CG, cu_jit_cache_option_cg);
         (CU_JIT_CACHE_OPTION_CA, cu_jit_cache_option_ca);
+      ]
+
+  let cu_device_attribute_max_threads_per_block =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK" T.int64_t
+
+  let cu_device_attribute_max_block_dim_x = T.constant "CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_X" T.int64_t
+  let cu_device_attribute_max_block_dim_y = T.constant "CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Y" T.int64_t
+  let cu_device_attribute_max_block_dim_z = T.constant "CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Z" T.int64_t
+  let cu_device_attribute_max_grid_dim_x = T.constant "CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X" T.int64_t
+  let cu_device_attribute_max_grid_dim_y = T.constant "CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Y" T.int64_t
+  let cu_device_attribute_max_grid_dim_z = T.constant "CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Z" T.int64_t
+
+  let cu_device_attribute_max_shared_memory_per_block =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK" T.int64_t
+
+  let cu_device_attribute_shared_memory_per_block =
+    T.constant "CU_DEVICE_ATTRIBUTE_SHARED_MEMORY_PER_BLOCK" T.int64_t
+
+  let cu_device_attribute_total_constant_memory =
+    T.constant "CU_DEVICE_ATTRIBUTE_TOTAL_CONSTANT_MEMORY" T.int64_t
+
+  let cu_device_attribute_warp_size = T.constant "CU_DEVICE_ATTRIBUTE_WARP_SIZE" T.int64_t
+  let cu_device_attribute_max_pitch = T.constant "CU_DEVICE_ATTRIBUTE_MAX_PITCH" T.int64_t
+
+  let cu_device_attribute_max_registers_per_block =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_BLOCK" T.int64_t
+
+  let cu_device_attribute_clock_rate = T.constant "CU_DEVICE_ATTRIBUTE_CLOCK_RATE" T.int64_t
+  let cu_device_attribute_texture_alignment = T.constant "CU_DEVICE_ATTRIBUTE_TEXTURE_ALIGNMENT" T.int64_t
+  let cu_device_attribute_gpu_overlap = T.constant "CU_DEVICE_ATTRIBUTE_GPU_OVERLAP" T.int64_t
+
+  let cu_device_attribute_multiprocessor_count =
+    T.constant "CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT" T.int64_t
+
+  let cu_device_attribute_kernel_exec_timeout = T.constant "CU_DEVICE_ATTRIBUTE_KERNEL_EXEC_TIMEOUT" T.int64_t
+  let cu_device_attribute_integrated = T.constant "CU_DEVICE_ATTRIBUTE_INTEGRATED" T.int64_t
+  let cu_device_attribute_can_map_host_memory = T.constant "CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY" T.int64_t
+  let cu_device_attribute_compute_mode = T.constant "CU_DEVICE_ATTRIBUTE_COMPUTE_MODE" T.int64_t
+
+  let cu_device_attribute_maximum_texture1d_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_texture2d_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_texture2d_height =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_HEIGHT" T.int64_t
+
+  let cu_device_attribute_maximum_texture3d_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_texture3d_height =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_HEIGHT" T.int64_t
+
+  let cu_device_attribute_maximum_texture3d_depth =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_DEPTH" T.int64_t
+
+  let cu_device_attribute_maximum_texture2d_layered_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LAYERED_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_texture2d_layered_height =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LAYERED_HEIGHT" T.int64_t
+
+  let cu_device_attribute_maximum_texture2d_layered_layers =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LAYERED_LAYERS" T.int64_t
+
+  let cu_device_attribute_maximum_texture2d_array_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_ARRAY_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_texture2d_array_height =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_ARRAY_HEIGHT" T.int64_t
+
+  let cu_device_attribute_maximum_texture2d_array_numslices =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_ARRAY_NUMSLICES" T.int64_t
+
+  let cu_device_attribute_surface_alignment = T.constant "CU_DEVICE_ATTRIBUTE_SURFACE_ALIGNMENT" T.int64_t
+  let cu_device_attribute_concurrent_kernels = T.constant "CU_DEVICE_ATTRIBUTE_CONCURRENT_KERNELS" T.int64_t
+  let cu_device_attribute_ecc_enabled = T.constant "CU_DEVICE_ATTRIBUTE_ECC_ENABLED" T.int64_t
+  let cu_device_attribute_pci_bus_id = T.constant "CU_DEVICE_ATTRIBUTE_PCI_BUS_ID" T.int64_t
+  let cu_device_attribute_pci_device_id = T.constant "CU_DEVICE_ATTRIBUTE_PCI_DEVICE_ID" T.int64_t
+  let cu_device_attribute_tcc_driver = T.constant "CU_DEVICE_ATTRIBUTE_TCC_DRIVER" T.int64_t
+  let cu_device_attribute_memory_clock_rate = T.constant "CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE" T.int64_t
+
+  let cu_device_attribute_global_memory_bus_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH" T.int64_t
+
+  let cu_device_attribute_l2_cache_size = T.constant "CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE" T.int64_t
+
+  let cu_device_attribute_max_threads_per_multiprocessor =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR" T.int64_t
+
+  let cu_device_attribute_async_engine_count = T.constant "CU_DEVICE_ATTRIBUTE_ASYNC_ENGINE_COUNT" T.int64_t
+  (* let cu_device_attribute_unified_addressing = T.constant "CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING" T.int64_t *)
+
+  let cu_device_attribute_maximum_texture1d_layered_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_LAYERED_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_texture1d_layered_layers =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_LAYERED_LAYERS" T.int64_t
+
+  let cu_device_attribute_can_tex2d_gather = T.constant "CU_DEVICE_ATTRIBUTE_CAN_TEX2D_GATHER" T.int64_t
+
+  let cu_device_attribute_maximum_texture2d_gather_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_GATHER_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_texture2d_gather_height =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_GATHER_HEIGHT" T.int64_t
+
+  let cu_device_attribute_maximum_texture3d_width_alternate =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_WIDTH_ALTERNATE" T.int64_t
+
+  let cu_device_attribute_maximum_texture3d_height_alternate =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_HEIGHT_ALTERNATE" T.int64_t
+
+  let cu_device_attribute_maximum_texture3d_depth_alternate =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_DEPTH_ALTERNATE" T.int64_t
+
+  let cu_device_attribute_pci_domain_id = T.constant "CU_DEVICE_ATTRIBUTE_PCI_DOMAIN_ID" T.int64_t
+
+  let cu_device_attribute_texture_pitch_alignment =
+    T.constant "CU_DEVICE_ATTRIBUTE_TEXTURE_PITCH_ALIGNMENT" T.int64_t
+
+  let cu_device_attribute_maximum_texturecubemap_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_texturecubemap_layered_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_LAYERED_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_texturecubemap_layered_layers =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_LAYERED_LAYERS" T.int64_t
+
+  let cu_device_attribute_maximum_surface1d_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_surface2d_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_surface2d_height =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_HEIGHT" T.int64_t
+
+  let cu_device_attribute_maximum_surface3d_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_surface3d_height =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_HEIGHT" T.int64_t
+
+  let cu_device_attribute_maximum_surface3d_depth =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_DEPTH" T.int64_t
+
+  let cu_device_attribute_maximum_surface1d_layered_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_LAYERED_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_surface1d_layered_layers =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_LAYERED_LAYERS" T.int64_t
+
+  let cu_device_attribute_maximum_surface2d_layered_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_surface2d_layered_height =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_HEIGHT" T.int64_t
+
+  let cu_device_attribute_maximum_surface2d_layered_layers =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_LAYERS" T.int64_t
+
+  let cu_device_attribute_maximum_surfacecubemap_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_surfacecubemap_layered_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_LAYERED_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_surfacecubemap_layered_layers =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_LAYERED_LAYERS" T.int64_t
+
+  let cu_device_attribute_maximum_texture1d_linear_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_LINEAR_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_texture2d_linear_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LINEAR_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_texture2d_linear_height =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LINEAR_HEIGHT" T.int64_t
+
+  let cu_device_attribute_maximum_texture2d_linear_pitch =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LINEAR_PITCH" T.int64_t
+
+  let cu_device_attribute_maximum_texture2d_mipmapped_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_MIPMAPPED_WIDTH" T.int64_t
+
+  let cu_device_attribute_maximum_texture2d_mipmapped_height =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_MIPMAPPED_HEIGHT" T.int64_t
+
+  let cu_device_attribute_compute_capability_major =
+    T.constant "CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR" T.int64_t
+
+  let cu_device_attribute_compute_capability_minor =
+    T.constant "CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR" T.int64_t
+
+  let cu_device_attribute_maximum_texture1d_mipmapped_width =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_MIPMAPPED_WIDTH" T.int64_t
+
+  let cu_device_attribute_stream_priorities_supported =
+    T.constant "CU_DEVICE_ATTRIBUTE_STREAM_PRIORITIES_SUPPORTED" T.int64_t
+
+  let cu_device_attribute_global_l1_cache_supported =
+    T.constant "CU_DEVICE_ATTRIBUTE_GLOBAL_L1_CACHE_SUPPORTED" T.int64_t
+
+  let cu_device_attribute_local_l1_cache_supported =
+    T.constant "CU_DEVICE_ATTRIBUTE_LOCAL_L1_CACHE_SUPPORTED" T.int64_t
+
+  let cu_device_attribute_max_shared_memory_per_multiprocessor =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR" T.int64_t
+
+  let cu_device_attribute_max_registers_per_multiprocessor =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_MULTIPROCESSOR" T.int64_t
+
+  let cu_device_attribute_managed_memory = T.constant "CU_DEVICE_ATTRIBUTE_MANAGED_MEMORY" T.int64_t
+  let cu_device_attribute_multi_gpu_board = T.constant "CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD" T.int64_t
+
+  let cu_device_attribute_multi_gpu_board_group_id =
+    T.constant "CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD_GROUP_ID" T.int64_t
+
+  let cu_device_attribute_host_native_atomic_supported =
+    T.constant "CU_DEVICE_ATTRIBUTE_HOST_NATIVE_ATOMIC_SUPPORTED" T.int64_t
+
+  let cu_device_attribute_single_to_double_precision_perf_ratio =
+    T.constant "CU_DEVICE_ATTRIBUTE_SINGLE_TO_DOUBLE_PRECISION_PERF_RATIO" T.int64_t
+
+  let cu_device_attribute_pageable_memory_access =
+    T.constant "CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS" T.int64_t
+
+  let cu_device_attribute_concurrent_managed_access =
+    T.constant "CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS" T.int64_t
+
+  let cu_device_attribute_compute_preemption_supported =
+    T.constant "CU_DEVICE_ATTRIBUTE_COMPUTE_PREEMPTION_SUPPORTED" T.int64_t
+
+  let cu_device_attribute_can_use_host_pointer_for_registered_mem =
+    T.constant "CU_DEVICE_ATTRIBUTE_CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM" T.int64_t
+
+  let cu_device_attribute_cooperative_launch = T.constant "CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH" T.int64_t
+
+  let cu_device_attribute_cooperative_multi_device_launch =
+    T.constant "CU_DEVICE_ATTRIBUTE_COOPERATIVE_MULTI_DEVICE_LAUNCH" T.int64_t
+
+  let cu_device_attribute_max_shared_memory_per_block_optin =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN" T.int64_t
+
+  let cu_device_attribute_can_flush_remote_writes =
+    T.constant "CU_DEVICE_ATTRIBUTE_CAN_FLUSH_REMOTE_WRITES" T.int64_t
+
+  let cu_device_attribute_host_register_supported =
+    T.constant "CU_DEVICE_ATTRIBUTE_HOST_REGISTER_SUPPORTED" T.int64_t
+
+  let cu_device_attribute_pageable_memory_access_uses_host_page_tables =
+    T.constant "CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS_USES_HOST_PAGE_TABLES" T.int64_t
+
+  let cu_device_attribute_direct_managed_mem_access_from_host =
+    T.constant "CU_DEVICE_ATTRIBUTE_DIRECT_MANAGED_MEM_ACCESS_FROM_HOST" T.int64_t
+
+  let cu_device_attribute_virtual_address_management_supported =
+    T.constant "CU_DEVICE_ATTRIBUTE_VIRTUAL_ADDRESS_MANAGEMENT_SUPPORTED" T.int64_t
+
+  let cu_device_attribute_virtual_memory_management_supported =
+    T.constant "CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED" T.int64_t
+
+  let cu_device_attribute_handle_type_posix_file_descriptor_supported =
+    T.constant "CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR_SUPPORTED" T.int64_t
+
+  let cu_device_attribute_handle_type_win32_handle_supported =
+    T.constant "CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_WIN32_HANDLE_SUPPORTED" T.int64_t
+
+  let cu_device_attribute_handle_type_win32_kmt_handle_supported =
+    T.constant "CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_WIN32_KMT_HANDLE_SUPPORTED" T.int64_t
+
+  let cu_device_attribute_max_blocks_per_multiprocessor =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAX_BLOCKS_PER_MULTIPROCESSOR" T.int64_t
+
+  let cu_device_attribute_generic_compression_supported =
+    T.constant "CU_DEVICE_ATTRIBUTE_GENERIC_COMPRESSION_SUPPORTED" T.int64_t
+
+  let cu_device_attribute_max_persisting_l2_cache_size =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAX_PERSISTING_L2_CACHE_SIZE" T.int64_t
+
+  let cu_device_attribute_max_access_policy_window_size =
+    T.constant "CU_DEVICE_ATTRIBUTE_MAX_ACCESS_POLICY_WINDOW_SIZE" T.int64_t
+
+  let cu_device_attribute_gpu_direct_rdma_with_cuda_vmm_supported =
+    T.constant "CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WITH_CUDA_VMM_SUPPORTED" T.int64_t
+
+  let cu_device_attribute_reserved_shared_memory_per_block =
+    T.constant "CU_DEVICE_ATTRIBUTE_RESERVED_SHARED_MEMORY_PER_BLOCK" T.int64_t
+
+  let cu_device_attribute_sparse_cuda_array_supported =
+    T.constant "CU_DEVICE_ATTRIBUTE_SPARSE_CUDA_ARRAY_SUPPORTED" T.int64_t
+
+  let cu_device_attribute_read_only_host_register_supported =
+    T.constant "CU_DEVICE_ATTRIBUTE_READ_ONLY_HOST_REGISTER_SUPPORTED" T.int64_t
+
+  let cu_device_attribute_timeline_semaphore_interop_supported =
+    T.constant "CU_DEVICE_ATTRIBUTE_TIMELINE_SEMAPHORE_INTEROP_SUPPORTED" T.int64_t
+
+  (* let cu_device_attribute_memory_pools_supported =
+     T.constant "CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED" T.int64_t *)
+
+  let cu_device_attribute_gpu_direct_rdma_supported =
+    T.constant "CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_SUPPORTED" T.int64_t
+
+  let cu_device_attribute_gpu_direct_rdma_flush_writes_options =
+    T.constant "CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_FLUSH_WRITES_OPTIONS" T.int64_t
+
+  let cu_device_attribute_gpu_direct_rdma_writes_ordering =
+    T.constant "CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING" T.int64_t
+
+  let cu_device_attribute_mempool_supported_handle_types =
+    T.constant "CU_DEVICE_ATTRIBUTE_MEMPOOL_SUPPORTED_HANDLE_TYPES" T.int64_t
+
+  (* let cu_device_attribute_cluster_launch = T.constant "CU_DEVICE_ATTRIBUTE_CLUSTER_LAUNCH" T.int64_t *)
+
+  (* let cu_device_attribute_deferred_mapping_cuda_array_supported =
+     T.constant "CU_DEVICE_ATTRIBUTE_DEFERRED_MAPPING_CUDA_ARRAY_SUPPORTED" T.int64_t *)
+
+  let cu_device_attribute_can_use_64_bit_stream_mem_ops =
+    T.constant "CU_DEVICE_ATTRIBUTE_CAN_USE_64_BIT_STREAM_MEM_OPS" T.int64_t
+
+  let cu_device_attribute_can_use_stream_wait_value_nor =
+    T.constant "CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_WAIT_VALUE_NOR" T.int64_t
+
+  (* let cu_device_attribute_dma_buf_supported = T.constant "CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED" T.int64_t *)
+  (* let cu_device_attribute_ipc_event_supported = T.constant "CU_DEVICE_ATTRIBUTE_IPC_EVENT_SUPPORTED" T.int64_t *)
+
+  (* let cu_device_attribute_mem_sync_domain_count =
+     T.constant "CU_DEVICE_ATTRIBUTE_MEM_SYNC_DOMAIN_COUNT" T.int64_t *)
+
+  (* let cu_device_attribute_tensor_map_access_supported =
+     T.constant "CU_DEVICE_ATTRIBUTE_TENSOR_MAP_ACCESS_SUPPORTED" T.int64_t *)
+
+  (* let cu_device_attribute_unified_function_pointers =
+     T.constant "CU_DEVICE_ATTRIBUTE_UNIFIED_FUNCTION_POINTERS" T.int64_t *)
+
+  (* let cu_device_attribute_multicast_supported = T.constant "CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED" T.int64_t *)
+  let cu_device_attribute_max = T.constant "CU_DEVICE_ATTRIBUTE_MAX" T.int64_t
+
+  let cu_device_attribute =
+    T.enum ~typedef:true
+      ~unexpected:(fun error_code -> CU_DEVICE_ATTRIBUTE_UNCATEGORIZED error_code)
+      "CUdevice_attribute"
+      [
+        (CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK, cu_device_attribute_max_threads_per_block);
+        (CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_X, cu_device_attribute_max_block_dim_x);
+        (CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Y, cu_device_attribute_max_block_dim_y);
+        (CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Z, cu_device_attribute_max_block_dim_z);
+        (CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X, cu_device_attribute_max_grid_dim_x);
+        (CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Y, cu_device_attribute_max_grid_dim_y);
+        (CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Z, cu_device_attribute_max_grid_dim_z);
+        (CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK, cu_device_attribute_max_shared_memory_per_block);
+        (CU_DEVICE_ATTRIBUTE_TOTAL_CONSTANT_MEMORY, cu_device_attribute_total_constant_memory);
+        (CU_DEVICE_ATTRIBUTE_WARP_SIZE, cu_device_attribute_warp_size);
+        (CU_DEVICE_ATTRIBUTE_MAX_PITCH, cu_device_attribute_max_pitch);
+        (CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_BLOCK, cu_device_attribute_max_registers_per_block);
+        (CU_DEVICE_ATTRIBUTE_CLOCK_RATE, cu_device_attribute_clock_rate);
+        (CU_DEVICE_ATTRIBUTE_TEXTURE_ALIGNMENT, cu_device_attribute_texture_alignment);
+        (CU_DEVICE_ATTRIBUTE_GPU_OVERLAP, cu_device_attribute_gpu_overlap);
+        (CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, cu_device_attribute_multiprocessor_count);
+        (CU_DEVICE_ATTRIBUTE_KERNEL_EXEC_TIMEOUT, cu_device_attribute_kernel_exec_timeout);
+        (CU_DEVICE_ATTRIBUTE_INTEGRATED, cu_device_attribute_integrated);
+        (CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY, cu_device_attribute_can_map_host_memory);
+        (CU_DEVICE_ATTRIBUTE_COMPUTE_MODE, cu_device_attribute_compute_mode);
+        (CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_WIDTH, cu_device_attribute_maximum_texture1d_width);
+        (CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_WIDTH, cu_device_attribute_maximum_texture2d_width);
+        (CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_HEIGHT, cu_device_attribute_maximum_texture2d_height);
+        (CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_WIDTH, cu_device_attribute_maximum_texture3d_width);
+        (CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_HEIGHT, cu_device_attribute_maximum_texture3d_height);
+        (CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_DEPTH, cu_device_attribute_maximum_texture3d_depth);
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LAYERED_WIDTH,
+          cu_device_attribute_maximum_texture2d_layered_width );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LAYERED_HEIGHT,
+          cu_device_attribute_maximum_texture2d_layered_height );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LAYERED_LAYERS,
+          cu_device_attribute_maximum_texture2d_layered_layers );
+        (CU_DEVICE_ATTRIBUTE_SURFACE_ALIGNMENT, cu_device_attribute_surface_alignment);
+        (CU_DEVICE_ATTRIBUTE_CONCURRENT_KERNELS, cu_device_attribute_concurrent_kernels);
+        (CU_DEVICE_ATTRIBUTE_ECC_ENABLED, cu_device_attribute_ecc_enabled);
+        (CU_DEVICE_ATTRIBUTE_PCI_BUS_ID, cu_device_attribute_pci_bus_id);
+        (CU_DEVICE_ATTRIBUTE_PCI_DEVICE_ID, cu_device_attribute_pci_device_id);
+        (CU_DEVICE_ATTRIBUTE_TCC_DRIVER, cu_device_attribute_tcc_driver);
+        (CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE, cu_device_attribute_memory_clock_rate);
+        (CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, cu_device_attribute_global_memory_bus_width);
+        (CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE, cu_device_attribute_l2_cache_size);
+        ( CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR,
+          cu_device_attribute_max_threads_per_multiprocessor );
+        (CU_DEVICE_ATTRIBUTE_ASYNC_ENGINE_COUNT, cu_device_attribute_async_engine_count);
+        (* (CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING, cu_device_attribute_unified_addressing); *)
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_LAYERED_WIDTH,
+          cu_device_attribute_maximum_texture1d_layered_width );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_LAYERED_LAYERS,
+          cu_device_attribute_maximum_texture1d_layered_layers );
+        (CU_DEVICE_ATTRIBUTE_CAN_TEX2D_GATHER, cu_device_attribute_can_tex2d_gather);
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_GATHER_WIDTH,
+          cu_device_attribute_maximum_texture2d_gather_width );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_GATHER_HEIGHT,
+          cu_device_attribute_maximum_texture2d_gather_height );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_WIDTH_ALTERNATE,
+          cu_device_attribute_maximum_texture3d_width_alternate );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_HEIGHT_ALTERNATE,
+          cu_device_attribute_maximum_texture3d_height_alternate );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_DEPTH_ALTERNATE,
+          cu_device_attribute_maximum_texture3d_depth_alternate );
+        (CU_DEVICE_ATTRIBUTE_PCI_DOMAIN_ID, cu_device_attribute_pci_domain_id);
+        (CU_DEVICE_ATTRIBUTE_TEXTURE_PITCH_ALIGNMENT, cu_device_attribute_texture_pitch_alignment);
+        (CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_WIDTH, cu_device_attribute_maximum_texturecubemap_width);
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_LAYERED_WIDTH,
+          cu_device_attribute_maximum_texturecubemap_layered_width );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_LAYERED_LAYERS,
+          cu_device_attribute_maximum_texturecubemap_layered_layers );
+        (CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_WIDTH, cu_device_attribute_maximum_surface1d_width);
+        (CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_WIDTH, cu_device_attribute_maximum_surface2d_width);
+        (CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_HEIGHT, cu_device_attribute_maximum_surface2d_height);
+        (CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_WIDTH, cu_device_attribute_maximum_surface3d_width);
+        (CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_HEIGHT, cu_device_attribute_maximum_surface3d_height);
+        (CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_DEPTH, cu_device_attribute_maximum_surface3d_depth);
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_LAYERED_WIDTH,
+          cu_device_attribute_maximum_surface1d_layered_width );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_LAYERED_LAYERS,
+          cu_device_attribute_maximum_surface1d_layered_layers );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_WIDTH,
+          cu_device_attribute_maximum_surface2d_layered_width );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_HEIGHT,
+          cu_device_attribute_maximum_surface2d_layered_height );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_LAYERS,
+          cu_device_attribute_maximum_surface2d_layered_layers );
+        (CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_WIDTH, cu_device_attribute_maximum_surfacecubemap_width);
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_LAYERED_WIDTH,
+          cu_device_attribute_maximum_surfacecubemap_layered_width );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_LAYERED_LAYERS,
+          cu_device_attribute_maximum_surfacecubemap_layered_layers );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_LINEAR_WIDTH,
+          cu_device_attribute_maximum_texture1d_linear_width );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LINEAR_WIDTH,
+          cu_device_attribute_maximum_texture2d_linear_width );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LINEAR_HEIGHT,
+          cu_device_attribute_maximum_texture2d_linear_height );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LINEAR_PITCH,
+          cu_device_attribute_maximum_texture2d_linear_pitch );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_MIPMAPPED_WIDTH,
+          cu_device_attribute_maximum_texture2d_mipmapped_width );
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_MIPMAPPED_HEIGHT,
+          cu_device_attribute_maximum_texture2d_mipmapped_height );
+        (CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, cu_device_attribute_compute_capability_major);
+        (CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, cu_device_attribute_compute_capability_minor);
+        ( CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_MIPMAPPED_WIDTH,
+          cu_device_attribute_maximum_texture1d_mipmapped_width );
+        (CU_DEVICE_ATTRIBUTE_STREAM_PRIORITIES_SUPPORTED, cu_device_attribute_stream_priorities_supported);
+        (CU_DEVICE_ATTRIBUTE_GLOBAL_L1_CACHE_SUPPORTED, cu_device_attribute_global_l1_cache_supported);
+        (CU_DEVICE_ATTRIBUTE_LOCAL_L1_CACHE_SUPPORTED, cu_device_attribute_local_l1_cache_supported);
+        ( CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR,
+          cu_device_attribute_max_shared_memory_per_multiprocessor );
+        ( CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_MULTIPROCESSOR,
+          cu_device_attribute_max_registers_per_multiprocessor );
+        (CU_DEVICE_ATTRIBUTE_MANAGED_MEMORY, cu_device_attribute_managed_memory);
+        (CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD, cu_device_attribute_multi_gpu_board);
+        (CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD_GROUP_ID, cu_device_attribute_multi_gpu_board_group_id);
+        (CU_DEVICE_ATTRIBUTE_HOST_NATIVE_ATOMIC_SUPPORTED, cu_device_attribute_host_native_atomic_supported);
+        ( CU_DEVICE_ATTRIBUTE_SINGLE_TO_DOUBLE_PRECISION_PERF_RATIO,
+          cu_device_attribute_single_to_double_precision_perf_ratio );
+        (CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS, cu_device_attribute_pageable_memory_access);
+        (CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS, cu_device_attribute_concurrent_managed_access);
+        (CU_DEVICE_ATTRIBUTE_COMPUTE_PREEMPTION_SUPPORTED, cu_device_attribute_compute_preemption_supported);
+        ( CU_DEVICE_ATTRIBUTE_CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM,
+          cu_device_attribute_can_use_host_pointer_for_registered_mem );
+        (* (CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_MEM_OPS_V1, cu_device_attribute_can_use_stream_mem_ops_v1); *)
+        (* ( CU_DEVICE_ATTRIBUTE_CAN_USE_64_BIT_STREAM_MEM_OPS_V1,
+           cu_device_attribute_can_use_64_bit_stream_mem_ops_v1 ); *)
+        (* ( CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_WAIT_VALUE_NOR_V1,
+           cu_device_attribute_can_use_stream_wait_value_nor_v1 ); *)
+        (CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH, cu_device_attribute_cooperative_launch);
+        ( CU_DEVICE_ATTRIBUTE_COOPERATIVE_MULTI_DEVICE_LAUNCH,
+          cu_device_attribute_cooperative_multi_device_launch );
+        ( CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
+          cu_device_attribute_max_shared_memory_per_block_optin );
+        (CU_DEVICE_ATTRIBUTE_CAN_FLUSH_REMOTE_WRITES, cu_device_attribute_can_flush_remote_writes);
+        (CU_DEVICE_ATTRIBUTE_HOST_REGISTER_SUPPORTED, cu_device_attribute_host_register_supported);
+        ( CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS_USES_HOST_PAGE_TABLES,
+          cu_device_attribute_pageable_memory_access_uses_host_page_tables );
+        ( CU_DEVICE_ATTRIBUTE_DIRECT_MANAGED_MEM_ACCESS_FROM_HOST,
+          cu_device_attribute_direct_managed_mem_access_from_host );
+        ( CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED,
+          cu_device_attribute_virtual_memory_management_supported );
+        ( CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR_SUPPORTED,
+          cu_device_attribute_handle_type_posix_file_descriptor_supported );
+        ( CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_WIN32_HANDLE_SUPPORTED,
+          cu_device_attribute_handle_type_win32_handle_supported );
+        ( CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_WIN32_KMT_HANDLE_SUPPORTED,
+          cu_device_attribute_handle_type_win32_kmt_handle_supported );
+        (CU_DEVICE_ATTRIBUTE_MAX_BLOCKS_PER_MULTIPROCESSOR, cu_device_attribute_max_blocks_per_multiprocessor);
+        (CU_DEVICE_ATTRIBUTE_GENERIC_COMPRESSION_SUPPORTED, cu_device_attribute_generic_compression_supported);
+        (CU_DEVICE_ATTRIBUTE_MAX_PERSISTING_L2_CACHE_SIZE, cu_device_attribute_max_persisting_l2_cache_size);
+        (CU_DEVICE_ATTRIBUTE_MAX_ACCESS_POLICY_WINDOW_SIZE, cu_device_attribute_max_access_policy_window_size);
+        ( CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WITH_CUDA_VMM_SUPPORTED,
+          cu_device_attribute_gpu_direct_rdma_with_cuda_vmm_supported );
+        ( CU_DEVICE_ATTRIBUTE_RESERVED_SHARED_MEMORY_PER_BLOCK,
+          cu_device_attribute_reserved_shared_memory_per_block );
+        (CU_DEVICE_ATTRIBUTE_SPARSE_CUDA_ARRAY_SUPPORTED, cu_device_attribute_sparse_cuda_array_supported);
+        ( CU_DEVICE_ATTRIBUTE_READ_ONLY_HOST_REGISTER_SUPPORTED,
+          cu_device_attribute_read_only_host_register_supported );
+        ( CU_DEVICE_ATTRIBUTE_TIMELINE_SEMAPHORE_INTEROP_SUPPORTED,
+          cu_device_attribute_timeline_semaphore_interop_supported );
+        (* (CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED, cu_device_attribute_memory_pools_supported); *)
+        (CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_SUPPORTED, cu_device_attribute_gpu_direct_rdma_supported);
+        ( CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_FLUSH_WRITES_OPTIONS,
+          cu_device_attribute_gpu_direct_rdma_flush_writes_options );
+        ( CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING,
+          cu_device_attribute_gpu_direct_rdma_writes_ordering );
+        ( CU_DEVICE_ATTRIBUTE_MEMPOOL_SUPPORTED_HANDLE_TYPES,
+          cu_device_attribute_mempool_supported_handle_types );
+        (* (CU_DEVICE_ATTRIBUTE_CLUSTER_LAUNCH, cu_device_attribute_cluster_launch); *)
+        (* ( CU_DEVICE_ATTRIBUTE_DEFERRED_MAPPING_CUDA_ARRAY_SUPPORTED,
+           cu_device_attribute_deferred_mapping_cuda_array_supported ); *)
+        (CU_DEVICE_ATTRIBUTE_CAN_USE_64_BIT_STREAM_MEM_OPS, cu_device_attribute_can_use_64_bit_stream_mem_ops);
+        (CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_WAIT_VALUE_NOR, cu_device_attribute_can_use_stream_wait_value_nor);
+        (* (CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED, cu_device_attribute_dma_buf_supported); *)
+        (* (CU_DEVICE_ATTRIBUTE_IPC_EVENT_SUPPORTED, cu_device_attribute_ipc_event_supported); *)
+        (* (CU_DEVICE_ATTRIBUTE_MEM_SYNC_DOMAIN_COUNT, cu_device_attribute_mem_sync_domain_count); *)
+        (* (CU_DEVICE_ATTRIBUTE_TENSOR_MAP_ACCESS_SUPPORTED, cu_device_attribute_tensor_map_access_supported); *)
+        (* (CU_DEVICE_ATTRIBUTE_UNIFIED_FUNCTION_POINTERS, cu_device_attribute_unified_function_pointers); *)
+        (* (CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED, cu_device_attribute_multicast_supported); *)
+        (CU_DEVICE_ATTRIBUTE_MAX, cu_device_attribute_max);
+      ]
+
+  let cu_computemode_default = T.constant "CU_COMPUTEMODE_DEFAULT" T.int64_t
+  let cu_computemode_prohibited = T.constant "CU_COMPUTEMODE_PROHIBITED" T.int64_t
+  let cu_computemode_exclusive_process = T.constant "CU_COMPUTEMODE_EXCLUSIVE_PROCESS" T.int64_t
+
+  let cu_computemode =
+    T.enum ~typedef:true
+      ~unexpected:(fun error_code -> CU_COMPUTEMODE_UNCATEGORIZED error_code)
+      "CUcomputemode"
+      [
+        (CU_COMPUTEMODE_DEFAULT, cu_computemode_default);
+        (CU_COMPUTEMODE_PROHIBITED, cu_computemode_prohibited);
+        (CU_COMPUTEMODE_EXCLUSIVE_PROCESS, cu_computemode_exclusive_process);
+      ]
+
+  let cu_flush_gpu_direct_rdma_writes_option_host =
+    T.constant "CU_FLUSH_GPU_DIRECT_RDMA_WRITES_OPTION_HOST" T.int64_t
+
+  let cu_flush_gpu_direct_rdma_writes_option_memops =
+    T.constant "CU_FLUSH_GPU_DIRECT_RDMA_WRITES_OPTION_MEMOPS" T.int64_t
+
+  let cu_flush_GPU_direct_RDMA_writes_options =
+    T.enum ~typedef:true
+      ~unexpected:(fun error_code -> CU_FLUSH_GPU_DIRECT_RDMA_WRITES_OPTION_UNCATEGORIZED error_code)
+      "CUflushGPUDirectRDMAWritesOptions"
+      [
+        (CU_FLUSH_GPU_DIRECT_RDMA_WRITES_OPTION_HOST, cu_flush_gpu_direct_rdma_writes_option_host);
+        (CU_FLUSH_GPU_DIRECT_RDMA_WRITES_OPTION_MEMOPS, cu_flush_gpu_direct_rdma_writes_option_memops);
       ]
 end
