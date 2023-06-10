@@ -56,7 +56,7 @@ let string_from_ptx prog = Ctypes.string_from_ptr prog.ptx ~length:prog.ptx_leng
 let check message status =
   if status <> CUDA_SUCCESS then raise @@ Error { status = Cuda_error status; message }
 
-let init flags = check "cu_init" @@ Cuda.cu_init flags
+let init ?(flags=0) () = check "cu_init" @@ Cuda.cu_init flags
 
 let device_get_count () =
   let open Ctypes in

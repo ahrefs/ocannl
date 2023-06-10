@@ -80,7 +80,7 @@ let%expect_test "SAXPY" =
   let num_threads = 128 in
   let module Cu = Cudajit in
   let prog = Cu.compile_to_ptx ~cu_src:kernel ~name:"saxpy" ~options:[ "--use_fast_math" ] ~with_debug:true in
-  Cu.init 0;
+  Cu.init ();
   let device = Cu.device_get ~ordinal:0 in
   let context = Cu.ctx_create ~flags:0 device in
   let module_ = Cu.module_load_data_ex prog [] in
