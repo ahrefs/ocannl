@@ -1,4 +1,5 @@
 open Ctypes
+open Sexplib0.Sexp_conv
 
 type cu_result =
   | CUDA_SUCCESS
@@ -95,8 +96,9 @@ type cu_result =
   (* | CUDA_ERROR_INVALID_CLUSTER_SIZE *)
   | CUDA_ERROR_UNKNOWN
   | CUDA_ERROR_UNCATEGORIZED of int64
+[@@deriving sexp]
 
-type cu_device = Cu_device of int
+type cu_device = Cu_device of int [@@deriving sexp]
 
 type cu_jit_option =
   | CU_JIT_MAX_REGISTERS
@@ -132,6 +134,7 @@ type cu_jit_option =
     | CU_JIT_POSITION_INDEPENDENT_CODE *)
   | CU_JIT_NUM_OPTIONS
   | CU_JIT_UNCATEGORIZED of int64
+[@@deriving sexp]
 
 type cu_context_t
 type cu_context = cu_context_t structure ptr
@@ -180,14 +183,16 @@ type cu_jit_target =
      | CU_TARGET_COMPUTE_90
      | CU_TARGET_COMPUTE_90A *)
   | CU_TARGET_UNCATEGORIZED of int64
+[@@deriving sexp]
 
-type cu_jit_fallback = CU_PREFER_PTX | CU_PREFER_BINARY | CU_PREFER_UNCATEGORIZED of int64
+type cu_jit_fallback = CU_PREFER_PTX | CU_PREFER_BINARY | CU_PREFER_UNCATEGORIZED of int64 [@@deriving sexp]
 
 type cu_jit_cache_mode =
   | CU_JIT_CACHE_OPTION_NONE
   | CU_JIT_CACHE_OPTION_CG
   | CU_JIT_CACHE_OPTION_CA
   | CU_JIT_CACHE_OPTION_UNCATEGORIZED of int64
+[@@deriving sexp]
 
 type cu_device_attribute =
   | CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK
@@ -318,17 +323,20 @@ type cu_device_attribute =
   (* | CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED *)
   | CU_DEVICE_ATTRIBUTE_MAX
   | CU_DEVICE_ATTRIBUTE_UNCATEGORIZED of int64
+[@@deriving sexp]
 
 type cu_computemode =
   | CU_COMPUTEMODE_DEFAULT
   | CU_COMPUTEMODE_PROHIBITED
   | CU_COMPUTEMODE_EXCLUSIVE_PROCESS
   | CU_COMPUTEMODE_UNCATEGORIZED of int64
+[@@deriving sexp]
 
 type cu_flush_GPU_direct_RDMA_writes_options =
   | CU_FLUSH_GPU_DIRECT_RDMA_WRITES_OPTION_HOST
   | CU_FLUSH_GPU_DIRECT_RDMA_WRITES_OPTION_MEMOPS
   | CU_FLUSH_GPU_DIRECT_RDMA_WRITES_OPTION_UNCATEGORIZED of int64
+[@@deriving sexp]
 
 module Types (T : Ctypes.TYPE) = struct
   let cu_device_v1 = T.typedef T.int "CUdevice_v1"

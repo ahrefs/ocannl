@@ -2,10 +2,20 @@ open Nvrtc_ffi.Bindings_types
 module Nvrtc = Nvrtc_ffi.C.Functions
 module Cuda = Cuda_ffi.C.Functions
 open Cuda_ffi.Bindings_types
+open Sexplib0.Sexp_conv
 
-type error_code = Nvrtc_error of nvrtc_result | Cuda_error of cu_result
+type error_code = Nvrtc_error of nvrtc_result | Cuda_error of cu_result [@@deriving sexp]
 
 exception Error of { status : error_code; message : string }
+
+let error_printer = function
+  | Error {status; message} ->
+     ignore @@ Format.flush_str_formatter();
+     Format.fprintf Format.str_formatter "%s:@ %a" message Sexplib0.Sexp.pp_hum (sexp_of_error_code status);
+      Some (Format.flush_str_formatter())
+  | _ -> None
+
+let () = Printexc.register_printer error_printer
 
 type compile_to_ptx_result = { log : string option; ptx : char Ctypes.ptr; ptx_length : int }
 
@@ -83,8 +93,8 @@ type jit_option =
   | JIT_MAX_REGISTERS of int
   | JIT_THREADS_PER_BLOCK of int
   | JIT_WALL_TIME of { milliseconds : float }
-  | JIT_INFO_LOG_BUFFER of bigstring
-  | JIT_ERROR_LOG_BUFFER of bigstring
+  | JIT_INFO_LOG_BUFFER of (bigstring [@sexp.opaque])
+  | JIT_ERROR_LOG_BUFFER of (bigstring [@sexp.opaque])
   | JIT_OPTIMIZATION_LEVEL of int
   | JIT_TARGET_FROM_CUCONTEXT
   | JIT_TARGET of cu_jit_target
@@ -94,6 +104,7 @@ type jit_option =
   | JIT_GENERATE_LINE_INFO of bool
   | JIT_CACHE_MODE of cu_jit_cache_mode
 (* | JIT_POSITION_INDEPENDENT_CODE of bool *)
+[@@deriving sexp]
 
 let uint_of_cu_jit_target c =
   let open Cuda_ffi.Types_generated in
@@ -412,6 +423,7 @@ type device_attributes = {
       (* unified_function_pointers: bool; *)
       (* multicast_supported: bool; *)
 }
+[@@deriving sexp]
 
 let device_get_attributes device =
   let open Ctypes in

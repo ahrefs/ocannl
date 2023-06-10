@@ -2,7 +2,10 @@ open Ctypes
 
 type nvrtc_program_t
 type nvrtc_program = nvrtc_program_t structure ptr
+
 let nvrtc_program : nvrtc_program typ = ptr (structure "nvrtcProgram")
+
+open Sexplib0.Sexp_conv
 
 type nvrtc_result =
   | NVRTC_SUCCESS
@@ -20,6 +23,7 @@ type nvrtc_result =
   (* Only available in recent versions of nvrtc.h: *)
   (* | NVRTC_ERROR_TIME_FILE_WRITE_FAILED *)
   | NVRTC_ERROR_UNCATEGORIZED of int64
+[@@deriving sexp]
 
 module Types (T : Ctypes.TYPE) = struct
   let nvrtc_result_success = T.constant "NVRTC_SUCCESS" T.int64_t
