@@ -49,4 +49,10 @@ module Functions (F : Ctypes.FOREIGN) = struct
   let cu_device_get_attribute =
     F.foreign "cuDeviceGetAttribute"
       F.(ptr int @-> E.cu_device_attribute @-> E.cu_device @-> returning E.cu_result)
+
+  let cu_computemode_of_int mode =
+    if mode = Int64.to_int E.cu_computemode_default then CU_COMPUTEMODE_DEFAULT
+    else if mode = Int64.to_int E.cu_computemode_exclusive_process then CU_COMPUTEMODE_EXCLUSIVE_PROCESS
+    else if mode = Int64.to_int E.cu_computemode_prohibited then CU_COMPUTEMODE_PROHIBITED
+    else CU_COMPUTEMODE_UNCATEGORIZED (Int64.of_int mode)
 end

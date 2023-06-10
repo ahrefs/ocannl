@@ -9,10 +9,10 @@ type error_code = Nvrtc_error of nvrtc_result | Cuda_error of cu_result [@@deriv
 exception Error of { status : error_code; message : string }
 
 let error_printer = function
-  | Error {status; message} ->
-     ignore @@ Format.flush_str_formatter();
-     Format.fprintf Format.str_formatter "%s:@ %a" message Sexplib0.Sexp.pp_hum (sexp_of_error_code status);
-      Some (Format.flush_str_formatter())
+  | Error { status; message } ->
+      ignore @@ Format.flush_str_formatter ();
+      Format.fprintf Format.str_formatter "%s:@ %a" message Sexplib0.Sexp.pp_hum (sexp_of_error_code status);
+      Some (Format.flush_str_formatter ())
   | _ -> None
 
 let () = Printexc.register_printer error_printer
@@ -66,7 +66,7 @@ let string_from_ptx prog = Ctypes.string_from_ptr prog.ptx ~length:prog.ptx_leng
 let check message status =
   if status <> CUDA_SUCCESS then raise @@ Error { status = Cuda_error status; message }
 
-let init ?(flags=0) () = check "cu_init" @@ Cuda.cu_init flags
+let init ?(flags = 0) () = check "cu_init" @@ Cuda.cu_init flags
 
 let device_get_count () =
   let open Ctypes in
@@ -93,8 +93,8 @@ type jit_option =
   | JIT_MAX_REGISTERS of int
   | JIT_THREADS_PER_BLOCK of int
   | JIT_WALL_TIME of { milliseconds : float }
-  | JIT_INFO_LOG_BUFFER of (bigstring [@sexp.opaque])
-  | JIT_ERROR_LOG_BUFFER of (bigstring [@sexp.opaque])
+  | JIT_INFO_LOG_BUFFER of (bigstring[@sexp.opaque])
+  | JIT_ERROR_LOG_BUFFER of (bigstring[@sexp.opaque])
   | JIT_OPTIMIZATION_LEVEL of int
   | JIT_TARGET_FROM_CUCONTEXT
   | JIT_TARGET of cu_jit_target
@@ -507,7 +507,7 @@ let device_get_attributes device =
   let compute_mode = allocate int 0 in
   check "cu_device_get_attribute"
   @@ Cuda.cu_device_get_attribute compute_mode CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY device;
-  let compute_mode = coerce int Cuda_ffi.Types_generated.cu_computemode !@compute_mode in
+  let compute_mode = Cuda.cu_computemode_of_int !@compute_mode in
   let maximum_texture1d_width = allocate int 0 in
   check "cu_device_get_attribute"
   @@ Cuda.cu_device_get_attribute maximum_texture1d_width CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_WIDTH device;
