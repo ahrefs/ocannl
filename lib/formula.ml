@@ -409,7 +409,8 @@ let float_to_label v = Float.to_string_hum ~strip_zero:true v
 let number ?desc_label ~is_form ?(axis_label = "") c =
   (* Note: no axis label so that we do not conflict with user labels. *)
   term ?desc_label ~label:(float_to_label c) ~is_form ~needs_gradient:false ~batch_dims:[] ~input_dims:[]
-    ~output_dims:[ Dim 1 ] ~axis_labels:axis_label ~init_op:(Constant_fill [| c |]) ()
+    ~output_dims:[ Shape.dim 1 ]
+    ~axis_labels:axis_label ~init_op:(Constant_fill [| c |]) ()
 
 let ndarray ?desc_label ~is_form ?(needs_gradient = false) ?(batch_dims = []) ?(input_dims = [])
     ?(output_dims = []) ?axis_labels ?label values =
@@ -419,11 +420,7 @@ let ndarray ?desc_label ~is_form ?(needs_gradient = false) ?(batch_dims = []) ?(
     | None ->
         Caml.Format.pp_set_geometry Caml.Format.str_formatter ~max_indent:!max_sublabel_length
           ~margin:(!max_sublabel_length * 2);
-        let ( ! ) =
-          Array.of_list_map ~f:(function
-            | Shape.Parallel -> !Shape.num_parallel_tasks
-            | Dim d | Frozen d -> d)
-        in
+        let ( ! ) = Array.of_list_map ~f:(fun d -> d.Shape.dim) in
         let dims = Array.concat [ !batch_dims; !output_dims; !input_dims ] in
         let ndarr = Node.create_ndarray Double dims (Constant_fill values) in
         let ( ! ) = List.length in

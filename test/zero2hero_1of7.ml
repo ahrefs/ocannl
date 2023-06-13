@@ -121,8 +121,8 @@ let%expect_test "Graph drawing fetch" =
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   let x_flat =
-    FDSL.term ~needs_gradient:true ~label:"x_flat" ~batch_dims:[ Dim size ] ~input_dims:[]
-      ~output_dims:[ Dim 1 ] ~init_op:(Constant_fill xs) ()
+    FDSL.term ~needs_gradient:true ~label:"x_flat" ~batch_dims:[ CDSL.dim size ] ~input_dims:[]
+      ~output_dims:[ CDSL.dim 1 ] ~init_op:(Constant_fill xs) ()
   in
   let%nn_dt session_step ~o:1 = n =+ 1 in
   let%nn_op x = x_flat @.| session_step in
@@ -196,7 +196,7 @@ let%expect_test "Simple gradients materialized" =
   let%nn_op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%nn_op d = e + "c" [ 10 ] in
   let%nn_op l = d *. "f" [ -2 ] in
-  SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ Dim 1 ] [| 0.1 |]);
+  SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ CDSL.dim 1 ] [| 0.1 |]);
   SDSL.everything_fully_on_host ();
   SDSL.refresh_session ~update_params:false ();
   (* We did not update the params: all values and gradients will be at initial points, which are
@@ -273,7 +273,7 @@ let%expect_test "Simple gradients virtual" =
   let%nn_op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%nn_op d = e + "c" [ 10 ] in
   let%nn_op l = d *. "f" [ -2 ] in
-  SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ Dim 1 ] [| 0.1 |]);
+  SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ CDSL.dim 1 ] [| 0.1 |]);
   SDSL.refresh_session ~update_params:false ();
   (* We did not update the params: all values and gradients will be at initial points, which are
      specified in the formula in the brackets. *)

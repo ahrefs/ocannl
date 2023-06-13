@@ -53,7 +53,10 @@ let host_size_in_bytes ptr =
 (** Whether the node or any of its descendants have a [Parallel] dimension in their shape.
     The negative can only be guaranteed after shape inference. *)
 let rec has_parallel_deps n =
-  if Array.exists ~f:Shape.is_parallel @@ Shape.to_dims n.shape then true
+  if
+    Array.exists ~f:Shape.(function { special = Dedicated Task_id; _ } -> true | _ -> false)
+    @@ Shape.to_dims n.shape
+  then true
   else List.exists ~f:has_parallel_deps @@ List.map n.children ~f:(fun sn -> get sn.sub_node_id)
 
 type prec =
@@ -97,9 +100,7 @@ let node_prec tensor =
   | Some (N.Double_nd _) -> double
 
 let create_ndarray prec dims =
-  let dims =
-    Array.map dims ~f:(function Shape.Dim d | Frozen d -> d | Parallel -> !Shape.num_parallel_tasks)
-  in
+  let dims = Array.map dims ~f:(fun d -> d.Shape.dim) in
   match prec with
   | Void_prec -> assert false
   | Byte_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
@@ -251,7 +252,7 @@ let dims_to_string ?(with_axis_numbers = false) dims =
   else String.concat_array ~sep:"x" @@ Array.map dims ~f:Shape.dim_to_string
 
 let int_dims_to_string ?with_axis_numbers dims =
-  dims_to_string ?with_axis_numbers @@ Array.map ~f:(fun d -> Shape.Dim d) dims
+  dims_to_string ?with_axis_numbers @@ Array.map ~f:(fun d -> Shape.dim d) dims
 
 let ndarray_dims_to_string ?(with_axis_numbers = false) arr =
   N.ndarray_precision_to_string arr ^ " prec " ^ int_dims_to_string ~with_axis_numbers @@ N.dims arr

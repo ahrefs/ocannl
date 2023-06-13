@@ -22,9 +22,9 @@ let _suspended () =
   let num_parallel_tasks = SDSL.num_domains - 1 in
   Stdio.printf "\n****** num_parallel_tasks = %d\n%!" num_parallel_tasks;
   SDSL.num_parallel_tasks := num_parallel_tasks;
-  let minibatch = 4 in
+  let minib = 4 in
   let refresh_batch = 2 in
-  let batch = refresh_batch * num_parallel_tasks * minibatch in
+  let batch = refresh_batch * num_parallel_tasks * minib in
   let n_batches = 2 in
   let len = n_batches * batch / 2 in
   (* let epochs = 100 in *)
@@ -42,10 +42,17 @@ let _suspended () =
             let c = cos v and s = sin v in
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
-  let b = Shape.[ Frozen n_batches; Parallel; Dim refresh_batch; Dim minibatch ] in
-  let moons_flat = FDSL.init_const ~l:"moons_flat" ~b ~o:Shape.[ Dim 2 ] moons_flat in
+  let b =
+    [
+      Shape.{ special = Frozen; dim = n_batches };
+      CDSL.parallel num_parallel_tasks;
+      CDSL.dim refresh_batch;
+      CDSL.minibatch minib;
+    ]
+  in
+  let moons_flat = FDSL.init_const ~l:"moons_flat" ~b ~o:[ CDSL.dim 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes = FDSL.init_const ~l:"moons_classes" ~b ~o:Shape.[ Dim 1 ] moons_classes in
+  let moons_classes = FDSL.init_const ~l:"moons_classes" ~b ~o:[ CDSL.dim 1 ] moons_classes in
   let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 2 + ("w1" * x))) in
   (* let%nn_op mlp x =
        "b6" 1
@@ -79,7 +86,7 @@ let _suspended () =
   (* let reg_loss =
        List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
      in *)
-  let step_batch = num_parallel_tasks * minibatch in
+  let step_batch = num_parallel_tasks * minib in
   let%nn_op subtotal = margin_loss ++ "...|... => ...|0" in
   let%nn_op total_loss = ((subtotal ++ "...|0 => 0") /. !..step_batch) + (0.0001 *. reg_loss) in
   let%nn_rs epoch_loss ~o:1 = n =+ total_loss in
@@ -168,7 +175,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   let target_loss = 3.0 in
   let epochs = 1000 / per_refresh in
   let orig_dataset = 200 in
-  let minibatch = 20 in
+  let minib = 20 in
   let refresh_batch = 20 * per_refresh / num_parallel_tasks in
   (* let batch = refresh_batch * num_parallel_tasks * minibatch in *)
   let n_batches = 2 in
@@ -191,12 +198,19 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
             let c = cos v and s = sin v in
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
-  let b = Shape.[ Frozen n_batches; Parallel; Dim refresh_batch; Dim minibatch ] in
-  let moons_flat = FDSL.init_const ~l:"moons_flat" ~b ~o:Shape.[ Dim 2 ] moons_flat in
+  let b =
+    [
+      Shape.{ special = Frozen; dim = n_batches };
+      CDSL.parallel num_parallel_tasks;
+      CDSL.dim refresh_batch;
+      CDSL.minibatch minib;
+    ]
+  in
+  let moons_flat = FDSL.init_const ~l:"moons_flat" ~b ~o:[ CDSL.dim 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes = FDSL.init_const ~l:"moons_classes" ~b ~o:Shape.[ Dim 1 ] moons_classes in
-  let hid_2_3 = Shape.Dim 8 in
-  let hid_4_5 = Shape.Dim 4 in
+  let moons_classes = FDSL.init_const ~l:"moons_classes" ~b ~o:[ CDSL.dim 1 ] moons_classes in
+  let hid_2_3 = CDSL.dim 8 in
+  let hid_4_5 = CDSL.dim 4 in
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let%nn_op mlp x =
     "b6" 1
@@ -341,7 +355,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
 
 let benchmark_executor = SDSL.Gccjit
 
-let  () =
+let () =
   Node.fixed_state_for_init := Some 14;
   ignore
   @@ classify_moons ~random_seed:3 ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3

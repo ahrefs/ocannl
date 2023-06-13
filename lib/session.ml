@@ -52,10 +52,7 @@ let print_formula ~with_grad ~with_code ?(with_low_level = false) (style : NodeU
           | First _ -> invalid_arg "`N5_layout requires integer-only labels"
         in
         let p_labels = Shape.(axis_labels_of_spec priorities).labels |> Map.map ~f in
-        Array.map (Shape.axis_map_to_dims_index p_labels) ~f:(function
-          | Dim d | Frozen d -> d
-          | Parallel ->
-              raise @@ Session_error ("`Label_layout found an unexpected <parallel>: " ^ priorities, Some m))
+        Array.map (Shape.axis_map_to_dims_index p_labels) ~f:(fun d -> d.dim)
     | `Label_layout label_idcs ->
         let inv_labels =
           Map.to_alist sh.axis_labels |> List.map ~f:(fun (a, b) -> (b, a)) |> Map.of_alist (module String)
@@ -127,31 +124,48 @@ let print_global_roots ~with_grad ~with_code (style : NodeUI.array_print_style) 
       assert (id = root.id);
       print_formula ~with_grad ~with_code style root)
 
-let print_preamble ?(full_shape=false) () =
+let print_preamble ?(full_shape = false) () =
   (* Stdio.printf "%s\n%!" (Formula.prefix_with_preamble "") *)
   NodeUI.print_preamble ~full_shape ()
 
 (** *** Session management. *** *)
-type backend = Interpreter | Gccjit [@@deriving sexp, equal]
+type backend = Interpreter | Gccjit | Cuda [@@deriving sexp, equal]
 
+let num_parallel_tasks = ref 1
 let num_domains = Caml.Domain.recommended_domain_count ()
 let task_pool = Domainslib.Task.setup_pool ~name:"session_task_pool" ~num_domains ()
-let exec_task_id_func = ref Exec_as_gccjit.jit_task_id_func
+
+let multicore_step_func jit_task_id_func ~name jit_args =
+  let task_id_func = jit_task_id_func ~name jit_args in
+  fun () ->
+    if !num_parallel_tasks = 1 then task_id_func ~task_id:0
+    else
+      Domainslib.Task.run task_pool (fun () ->
+          Domainslib.Task.parallel_for task_pool ~start:0 ~finish:(!num_parallel_tasks - 1)
+            ~body:(fun task_id -> task_id_func ~task_id))
+
+let gccjit_jit_step_func = multicore_step_func Exec_as_gccjit.jit_task_id_func
+let exec_step_func = ref gccjit_jit_step_func
 let exec_unit_func = ref Exec_as_gccjit.jit_unit_func
 let executor_error_message = ref Exec_as_gccjit.error_message
 let cleanup_executor_session = ref Exec_as_gccjit.cleanup_session
 
 let set_executor = function
   | Interpreter ->
-      exec_task_id_func := Code.interpret_task_id_func;
+      exec_step_func := multicore_step_func Code.interpret_task_id_func;
       exec_unit_func := Code.interpret_unit_func;
       executor_error_message := Code.interpreter_error_message;
       cleanup_executor_session := fun () -> ()
   | Gccjit ->
-      exec_task_id_func := Exec_as_gccjit.jit_task_id_func;
+      exec_step_func := multicore_step_func Exec_as_gccjit.jit_task_id_func;
       exec_unit_func := Exec_as_gccjit.jit_unit_func;
       executor_error_message := Exec_as_gccjit.error_message;
       cleanup_executor_session := Exec_as_gccjit.cleanup_session
+  | Cuda ->
+      exec_step_func := Exec_as_cuda.jit_step_func;
+      exec_unit_func := Exec_as_cuda.jit_unit_func;
+      executor_error_message := Exec_as_cuda.error_message;
+      cleanup_executor_session := Exec_as_cuda.cleanup_session
 
 let perform_initialization traced_store =
   List.iter ~f:(function
@@ -184,7 +198,7 @@ let last_update_params = ref false
 let last_run_for_steps = ref 1
 let session_step_update = ref Code.Noop
 let session_step_update_compiled = ref (Hashtbl.Poly.create (), Code.(Comment "Noop"))
-let session_step_update_routine = ref (fun ~task_id:_ -> ())
+let session_step_update_routine = ref (fun () -> ())
 
 let generate_params_update ~(minus_lr : Formula.t) ?params () =
   let params = match params with Some p -> p | None -> Hashtbl.data @@ session_params () in
@@ -286,7 +300,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
           Code.(
             For_loop
               {
-                index = Code.new_sym_index macrobatch_loop_symbol;
+                index = Iterator (Code.new_sym_index macrobatch_loop_symbol);
                 from_ = 0;
                 to_ = run_for_steps - 1;
                 body = Lines [| Comment "Update sub-step"; compiled |];
@@ -298,20 +312,8 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
     perform_initialization (fst !session_step_update_compiled) @@ List.take !session_initializations to_init;
     session_initialized := num_inits);
   if (not force_no_init) && (generating || reinit) then
-    session_step_update_routine := !exec_task_id_func ~name !session_step_update_compiled;
-  if run && run_for_steps > 0 then
-    if !Shape.num_parallel_tasks = 1 then !session_step_update_routine ~task_id:0
-    else
-      Domainslib.Task.run task_pool (fun () ->
-          Domainslib.Task.parallel_for task_pool ~start:0 ~finish:(!Shape.num_parallel_tasks - 1)
-            ~body:(fun task_id -> !session_step_update_routine ~task_id))
-(* Alternative (non)parallelization loops for performance debugging: *)
-(* let tasks = ref [] in
-   for task_id = 0 to !Shape.num_parallel_tasks - 1 do
-     tasks := Caml.Domain.spawn (fun () -> !session_step_update_routine ~task_id) :: !tasks
-   done;
-   List.rev !tasks |> List.iter ~f:Caml.Domain.join *)
-(* for task_id = 0 to !Shape.num_parallel_tasks - 1 do !session_step_update_routine ~task_id done *)
+    session_step_update_routine := !exec_step_func ~name !session_step_update_compiled;
+  if run && run_for_steps > 0 then !session_step_update_routine ()
 
 (** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id].
     Discards all computations (forward, backward, update params, data fetches), but keeps
@@ -327,7 +329,7 @@ let close_session () =
   Formula.session_postprocess := [];
   session_step_update := Noop;
   session_step_update_compiled := (Hashtbl.Poly.create (), Comment "Noop");
-  (session_step_update_routine := fun ~task_id:_ -> ());
+  (session_step_update_routine := fun () -> ());
   minus_learning_rate := None;
   !cleanup_executor_session ()
 
@@ -397,7 +399,7 @@ module O = struct
 end
 
 module SDSL = struct
-  type nonrec backend = backend = Interpreter | Gccjit
+  type nonrec backend = backend = Interpreter | Gccjit | Cuda
 
   module O = O
 
@@ -473,6 +475,6 @@ module SDSL = struct
   let default_value_prec = Formula.default_value_prec
   let default_grad_prec = Formula.default_grad_prec
   let global_host_size_in_bytes () = Node.global_host_size_in_bytes ()
-  let num_parallel_tasks = Shape.num_parallel_tasks
+  let num_parallel_tasks = num_parallel_tasks
   let num_domains = num_domains
 end

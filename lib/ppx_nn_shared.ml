@@ -155,13 +155,16 @@ let ndarray_constant expr =
       | `Output_dims dim -> (batch_dims, eint ~loc dim :: output_dims, input_dims)
       | `Batch_dims dim -> (eint ~loc dim :: batch_dims, output_dims, input_dims))
   in
-  let to_dim dims = List.rev_map dims ~f:(fun d -> [%expr Shape.Dim [%e d]]) in
+  let to_dim dims = List.rev_map dims ~f:(fun d -> [%expr Shape.dim [%e d]]) in
   (values, to_dim batch_dims, to_dim output_dims, to_dim input_dims)
 
 let convert_dsl_dims dims =
   List.map dims ~f:(function
-    | { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = loc; _ } as i -> [%expr Shape.Dim [%e i]]
-    | { pexp_desc = Pexp_ident { txt = Lident "parallel"; loc }; pexp_loc = _; _ } -> [%expr Shape.Parallel]
+    | { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = loc; _ } as i -> [%expr Shape.dim [%e i]]
+    | { pexp_desc = Pexp_ident { txt = Lident "parallel"; loc }; pexp_loc = _; _ } ->
+        [%expr Shape.{ special = Dedicated Task_id; dim = !Session.num_parallel_tasks }]
+    (* | { pexp_desc = Pexp_ident { txt = Lident "minibatch"; loc }; pexp_loc = _; _ } ->
+        [%expr Shape.{ special = Dedicated Sample_num; dim =  }] *)
     | e -> e)
 
 let let_opt ~loc vbs expr =

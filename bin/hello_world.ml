@@ -1,5 +1,6 @@
 open Base
 open Ocannl
+module CDSL = Code.CDSL
 module FDSL = Operation.FDSL
 
 let () = Session.SDSL.set_executor Gccjit
@@ -11,7 +12,10 @@ let hello1 () =
   let open Session.SDSL in
   (* Hey is inferred to be a matrix. *)
   let hey =
-    range_of_shape ~batch_dims:[ Dim 7 ] ~input_dims:[ Dim 9; Dim 10; Dim 11 ] ~output_dims:[ Dim 13; Dim 14 ]
+    range_of_shape
+      ~batch_dims:[ CDSL.dim 7 ]
+      ~input_dims:[ CDSL.dim 9; CDSL.dim 10; CDSL.dim 11 ]
+      ~output_dims:[ CDSL.dim 13; CDSL.dim 14 ]
       ()
   in
   let%nn_op hoo = ((1 + 1) * hey) - 10 in

@@ -14,15 +14,15 @@ let () =
   Random.init 0;
   let num_tasks = 10 in
   SDSL.num_parallel_tasks := num_tasks;
-  let a = FDSL.init_param ~l:"a" ~o:[ Dim 1 ] [| 2.0 |] in
-  (* let a = FDSL.init_param ~l:"a" ~o:[ Parallel ] @@ Array.create ~len:num_tasks 2.0 in *)
-  let b = FDSL.init_param ~l:"b" ~o:[ Parallel ] @@ Array.create ~len:num_tasks (-3.0) in
-  let c = FDSL.init_param ~l:"c" ~o:[ Parallel ] @@ Array.create ~len:num_tasks 10.0 in
-  let f = FDSL.init_param ~l:"f" ~o:[ Parallel ] @@ Array.create ~len:num_tasks (-2.0) in
+  let a = FDSL.init_param ~l:"a" ~o:[ CDSL.dim 1 ] [| 2.0 |] in
+  (* let a = FDSL.init_param ~l:"a" ~o:[ CDSL.parallel num_tasks ] @@ Array.create ~len:num_tasks 2.0 in *)
+  let b = FDSL.init_param ~l:"b" ~o:[ CDSL.parallel num_tasks ] @@ Array.create ~len:num_tasks (-3.0) in
+  let c = FDSL.init_param ~l:"c" ~o:[ CDSL.parallel num_tasks ] @@ Array.create ~len:num_tasks 10.0 in
+  let f = FDSL.init_param ~l:"f" ~o:[ CDSL.parallel num_tasks ] @@ Array.create ~len:num_tasks (-2.0) in
   let%nn_op e = a *. b in
   let%nn_op d = e + c in
   let%nn_op l = d *. f in
-  SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ Dim 1 ] [| 0.1 |]);
+  SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ CDSL.dim 1 ] [| 0.1 |]);
   SDSL.refresh_session ~update_params:false ();
   (* We did not update the params: all values and gradients will be at initial points, which are
      specified in the formula in the brackets. *)
