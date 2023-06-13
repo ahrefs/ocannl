@@ -11,6 +11,7 @@
   str
   ; mem_usage
   gccjit
+  cudajit
   ppx_minidebug.runtime)
  (preprocess
   (pps ppx_jane ppx_ocannl ppx_minidebug))
@@ -23,7 +24,8 @@
   formula
   operation
   session
-  exec_as_gccjit)
+  exec_as_gccjit
+  exec_as_cuda)
  (modes byte native))
 
 (library

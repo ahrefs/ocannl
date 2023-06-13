@@ -1100,3 +1100,7 @@ let device_get_attributes device =
     (* unified_function_pointers; *)
     (* multicast_supported; *)
   }
+
+type context = cu_context
+type func = cu_function
+type stream = cu_stream
