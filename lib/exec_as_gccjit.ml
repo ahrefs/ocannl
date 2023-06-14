@@ -140,6 +140,23 @@ let get_tensor
               let offset = jit_array_offset ctx ~idcs:offset_idcs ~dims:host_dims in
               let lhs = LValue.access_array hosted_ptr offset in
               let cast_void rv = RValue.cast ctx rv c_void_ptr in
+              if tn.zero_initialized then
+                if update_on_host then
+                  Block.eval task_init_block
+                  @@ RValue.call ctx (Function.builtin ctx "memset")
+                       [
+                         cast_void @@ LValue.address lhs;
+                         RValue.zero ctx c_int;
+                         RValue.int ctx c_index device_size_in_bytes;
+                       ]
+                else
+                  Block.eval task_init_block
+                  @@ RValue.call ctx (Function.builtin ctx "memset")
+                       [
+                         cast_void @@ LValue.address local;
+                         RValue.zero ctx c_int;
+                         RValue.int ctx c_index device_size_in_bytes;
+                       ];
               if tn.read_before_write then
                 Block.eval task_init_block
                 @@ RValue.call ctx (Function.builtin ctx "memcpy")
@@ -408,6 +425,12 @@ let jit_code ~name ~env ({ ctx; func; _ } as state) initial_block (body : unit C
             @@ get_tensor state ~dependencies:value ~force_sync:Update_on_host ~jit_code:loop_proc ~host_idcs
                  ptr;
             loop ~name @@ Set (ptr, idcs, Binop (Add, Get (ptr, idcs), value)))
+    | Zero_out ptr ->
+        if Hashtbl.mem state.tensors ptr then
+          failwith "exec_as_gccjit: Non-initialization zeroing-out NOT IMPLEMENTED YET";
+        let tn = Code.(get_node state.traced_store ptr) in
+        assert tn.zero_initialized
+        (* The initialization will be emitted by get_tensor. *)
     | Set_local (id, value) ->
         let lhs, num_typ, is_double = Map.find_exn !locals id in
         let value = loop_float ~name ~env ~num_typ ~is_double value in

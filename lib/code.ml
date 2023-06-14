@@ -109,9 +109,9 @@ type loop_index = Iterator of sym_index | Special_iterator of Shape.dedicated_ax
 [@@deriving sexp, equal, compare]
 
 let loop_index_lident = function
-| Iterator {sym = Symbol s; uid} -> "i" ^ Int.to_string s ^ "_" ^ Int.to_string uid
-| Special_iterator Task_id -> "i_task_id"
-| Special_iterator Sample_num -> "i_sample_num"
+  | Iterator { sym = Symbol s; uid } -> "i" ^ Int.to_string s ^ "_" ^ Int.to_string uid
+  | Special_iterator Task_id -> "i_task_id"
+  | Special_iterator Sample_num -> "i_sample_num"
 
 let new_sym_index =
   let uid = ref 0 in
@@ -151,6 +151,7 @@ type _ low_level =
           (** Provided when we know the dynamic indexing was used to define this tensor. *)
     }
       -> unit low_level
+  | Zero_out : NodeUI.tensor_ptr -> unit low_level
   | Set : NodeUI.tensor_ptr * index array * float low_level -> unit low_level
   | Set_local : scope_id * float low_level -> unit low_level
   | Local_scope : {
@@ -180,6 +181,7 @@ let rec has_parallel_dim : type a. a low_level -> bool = function
            ~f:Shape.(function { special = Dedicated Task_id; _ } -> true | _ -> false)
            target_dims
       || has_parallel_dim body
+  | Zero_out _ -> false
   | Set (_, indices, llv) ->
       Array.exists indices ~f:(function Shape.Special_iterator Task_id -> true | _ -> false)
       || has_parallel_dim llv
@@ -323,6 +325,7 @@ let to_low_level (code : t) : unit low_level =
         | _, Lines ls2 -> Lines (Array.append [| ll1 |] ls2)
         | Lines ls1, _ -> Lines (Array.append ls1 [| ll2 |])
         | _ -> Lines [| ll1; ll2 |])
+    | Fetch { tensor; fetch_op = Constant 0.0 } -> Zero_out tensor
     | Fetch { tensor; fetch_op = Constant c } ->
         let product_space : Shape.dim array = Shape.to_dims (NodeUI.get tensor.id).shape in
         let rec loop rev_idcs = function
@@ -436,6 +439,7 @@ let interpret_code ?task_id llc =
         Array.iter ~f:loop cs
     | If_task_id_is { for_task_id; body } ->
         if Option.value ~default:for_task_id env.task_id = for_task_id then loop body
+    | Zero_out ptr -> Node.fill_from_float (Option.value_exn @@ NodeUI.get_tensor ptr) 0.0
     | Set (ptr, indices, Binop (op, Get (ptr2, indices2), c2))
       when NodeUI.equal_tensor_ptr ptr ptr2 && [%equal: index array] indices indices2 ->
         if !debug_trace_interpretation then
@@ -670,6 +674,8 @@ type traced_tensor = {
       (** If false, this node is only materialized on the devices it is computed on, it is not persisted
           outside of a step update. *)
   mutable scalar : float option;
+  mutable zero_initialized : bool;
+  mutable zeroed_out : bool;
   mutable read_before_write : bool;  (** The node is read before it is written (i.e. it is recurrent). *)
   mutable reduced_racyness : bool;
       (** If true, the only non-constant writes into the tensor are updates, and a constant write is never
@@ -704,6 +710,8 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         non_virtual;
         non_device_only;
         scalar = None;
+        zero_initialized = false;
+        zeroed_out = false;
         read_before_write = false;
         reduced_racyness = true;
         last_write_non_update = false;
@@ -815,6 +823,11 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
     | Rebalance (_, cs) -> Array.iter ~f:loop cs
     | If_task_id_is { for_task_id; body } ->
         if Option.value ~default:for_task_id env.task_id = for_task_id then loop body
+    | Zero_out ptr ->
+        let traced : traced_tensor = get_node traced_store ptr in
+        if Hash_set.is_empty traced.assignments && Hashtbl.is_empty traced.accesses then
+          traced.zero_initialized <- true;
+        traced.zeroed_out <- true
     | Set (tensor, idcs, llv) ->
         loop_float env llv;
         (* get_node will initialize reduced_racyness to true.  *)
@@ -864,7 +877,8 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
     | Get (ptr, indices) ->
         let tensor : traced_tensor = get_node traced_store ptr in
         let at_pos = lookup env indices in
-        Hashtbl.update tensor.accesses at_pos ~f:(visit @@ Hash_set.mem tensor.assignments at_pos)
+        Hashtbl.update tensor.accesses at_pos
+          ~f:(visit (tensor.zeroed_out || Hash_set.mem tensor.assignments at_pos))
     | Local_scope { body; _ } -> loop_proc env body
     | Get_local _ -> ()
     | Get_global _ -> ()
@@ -878,7 +892,8 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
     let env =
       Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
           let at_pos = lookup ~provider_dim env tensor_idcs in
-          Hashtbl.update node.accesses at_pos ~f:(visit @@ Hash_set.mem node.assignments at_pos);
+          Hashtbl.update node.accesses at_pos
+            ~f:(visit (node.zeroed_out || Hash_set.mem node.assignments at_pos));
           { env with dyn_env = Map.add_exn ~key ~data:0 env.dyn_env })
     in
     loop_proc env body
@@ -940,6 +955,7 @@ let process_computation node top_llc =
         raise Non_virtual
     | Rebalance (_, cs) -> Array.iter ~f:loop cs
     | If_task_id_is { for_task_id = _; body } -> loop body
+    | Zero_out tensor -> if NodeUI.equal_tensor_ptr tensor top_data then has_setter := true
     | Set (tensor, indices, llv) ->
         if NodeUI.equal_tensor_ptr tensor top_data then (
           check_idcs indices;
@@ -1025,9 +1041,11 @@ let inline_computation ~id node call_args =
           (* Inlined computations are governed by the inlining context, and cannot interfere across tasks.
              Undo parallelization. *)
           loop body
+      | Zero_out tensor when NodeUI.equal_tensor_ptr tensor at_data -> Some (Set_local (id, Constant 0.0))
       | Set (tensor, indices, llv) when NodeUI.equal_tensor_ptr tensor at_data ->
           assert ([%equal: index array option] (Some indices) def_args);
           Some (Set_local (id, loop_float llv))
+      | Zero_out _ -> None
       | Set _ -> None
       | Set_local (id, llv) -> Some (Set_local (id, loop_float llv))
       | Comment _ -> Some llc
@@ -1075,6 +1093,10 @@ let virtual_llc traced_store reverse_node_map (llc : unit low_level) : unit low_
         (* FIXME: NOT IMPLEMENTED YET *)
         Rebalance (s, Array.map ~f:loop cs)
     | If_task_id_is { for_task_id; body } -> If_task_id_is { for_task_id; body = loop body }
+    | Zero_out ptr ->
+        let tensor : traced_tensor = Hashtbl.find_exn traced_store ptr in
+        if (not @@ Set.mem process_for ptr) && not tensor.non_virtual then process_computation tensor llc;
+        llc
     | Set (ptr, indices, llv) ->
         let tensor : traced_tensor = Hashtbl.find_exn traced_store ptr in
         let next = if tensor.non_virtual then process_for else Set.add process_for ptr in
@@ -1146,6 +1168,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit low_level) : u
         if Array.is_empty cs then None else Some (Rebalance (s, cs))
     | If_task_id_is { for_task_id; body } ->
         Option.map ~f:(fun body -> If_task_id_is { for_task_id; body }) @@ loop body
+    | Zero_out tensor -> if is_inline tensor then None else Some llc
     | Set (tensor, indices, llv) ->
         if is_inline tensor then None
         else (
