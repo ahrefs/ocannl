@@ -241,20 +241,15 @@ let get_sync_ptr tensor =
   | Some rv, _ -> rv
   | None, None -> assert false
 
-let add_to_env key data env =
-  match key with
-  | Code.Iterator key -> Code.{ env with env = Map.add_exn ~key ~data env.env }
-  | Special_iterator Task_id -> { env with task_id = Some data }
-  | Special_iterator Sample_num -> { env with sample_num = Some data }
-
 (* task_id = RValue.param task_id *)
-let jit_code ~name ~env ({ ctx; func; _ } as state) initial_block (body : unit Code.low_level) : Gccjit.block
+let jit_code ~name ~(env: Gccjit.rvalue Code.environment) ({ ctx; func; _ } as state) initial_block (body : unit Code.low_level) : Gccjit.block
     =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
   let lookup ?provider_dim ?(example_only = false) ~on_host env indices =
     let open Gccjit in
+    try
     Array.map indices ~f:(function
       | Shape.Fixed_idx i -> RValue.int ctx c_index i
       | Iterator s -> Map.find_exn env.Code.env s
@@ -266,6 +261,11 @@ let jit_code ~name ~env ({ ctx; func; _ } as state) initial_block (body : unit C
       | Dynamic_provider _ -> Option.value_exn provider_dim
       | Frozen_recipient s when on_host -> Map.find_exn env.dyn_env s
       | Frozen_recipient _ -> RValue.zero ctx c_index)
+    with e ->
+      Caml.Format.eprintf "exec_as_gccjit: missing index from@ %a@ among environment keys:@ %a\n%!"
+      Sexp.pp_hum ([%sexp_of: Code.sym_index Shape.axis_index array] indices)
+      Sexp.pp_hum ([%sexp_of: Sexp.t list] @@ Code.environment_keys env);
+      raise e
   in
   let c_float = Type.get ctx Type.Float in
   let c_double = Type.get ctx Type.Double in
@@ -311,13 +311,13 @@ let jit_code ~name ~env ({ ctx; func; _ } as state) initial_block (body : unit C
        Block.eval !current_block @@ RValue.call ctx f print_args);
     Block.comment !current_block c
   in
-  let rec loop_proc ~env ~name (body : unit Code.low_level) : unit =
+  let rec loop_proc ~(env: rvalue Code.environment) ~name (body : unit Code.low_level) : unit =
     let loop = loop_proc ~env in
     match body with
     | Code.Lines lines ->
         Array.iteri lines ~f:(fun i line -> loop ~name:(name ^ "_at_line_" ^ Int.to_string i) line)
     | For_loop { index; from_; to_; body; trace_it = _ } ->
-        jit_for_loop ~env index ~from_ ~to_ (Either.First body)
+        jit_for_loop ~env index ~from_ ~to_ body
     | Rebalance (_, cs) ->
         (* This backend does not implement a relevant form of fine-grain parallelism. *)
         Array.iteri cs ~f:(fun i line -> loop ~name:(name ^ "_at_par_line_" ^ Int.to_string i) line)
@@ -419,7 +419,9 @@ let jit_code ~name ~env ({ ctx; func; _ } as state) initial_block (body : unit C
             loop ~name @@ Set (ptr, idcs, Binop (Add, Get (ptr, idcs), value)))
     | Zero_out ptr ->
         if Hashtbl.mem state.tensors ptr then
-          failwith "exec_as_gccjit: Non-initialization zeroing-out NOT IMPLEMENTED YET";
+          failwith (
+            "exec_as_gccjit: Non-initialization zeroing-out NOT IMPLEMENTED YET: "^
+            (Sexp.to_string_hum @@ [%sexp_of: NodeUI.tensor_ptr] ptr));
         let tn = Code.(get_node state.traced_store ptr) in
         assert tn.zero_initialized
         (* The initialization will be emitted by get_tensor. *)
@@ -473,7 +475,7 @@ let jit_code ~name ~env ({ ctx; func; _ } as state) initial_block (body : unit C
     let open Gccjit in
     let i = Code.loop_index_lident key in
     let index = Function.local func c_index i in
-    let env = add_to_env key (RValue.lvalue index) env in
+    let env = Code.environment_add key (RValue.lvalue index) env in
     let b_loop_cond = Block.create ~name:("loop_cond_" ^ i) func in
     let b_loop_body = Block.create ~name:("loop_body_" ^ i) func in
     let b_after_loop = Block.create ~name:("after_loop_" ^ i) func in
@@ -482,9 +484,7 @@ let jit_code ~name ~env ({ ctx; func; _ } as state) initial_block (body : unit C
     let guard = RValue.comparison ctx Gt (RValue.lvalue index) (RValue.int ctx c_index to_) in
     Block.cond_jump b_loop_cond guard b_after_loop (* on true *) b_loop_body (* on false *);
     current_block := b_loop_body;
-    (match body with
-    | Either.First body -> loop_proc ~env ~name body
-    | Second callback -> callback (RValue.lvalue index));
+    loop_proc ~env ~name body;
     Block.assign_op !current_block index Plus (RValue.one ctx c_index);
     Block.jump !current_block b_loop_cond;
     current_block := b_after_loop

@@ -401,6 +401,25 @@ type 'a environment = {
   sample_num : 'a option;
 }
 
+let environment_keys env =
+  (List.map ~f:[%sexp_of: sym_index] @@ Map.Poly.keys env.env)
+  @ (List.map ~f:[%sexp_of: Shape.symbol] @@ Map.Poly.keys env.dyn_env)
+  @ List.map ~f:(fun _ -> [%sexp_of: string] "task_id") (* @@ Option.to_list *) [ env.task_id ]
+  @ List.map ~f:(fun _ -> [%sexp_of: string] "sample_num")
+  @@ Option.to_list env.sample_num
+
+let environment_add key data env =
+  match key with
+  | Iterator key -> { env with env = Map.add_exn ~key ~data env.env }
+  | Special_iterator Task_id -> { env with task_id = Some data }
+  | Special_iterator Sample_num -> { env with sample_num = Some data }
+
+let environment_mem key env =
+  match key with
+  | Iterator key -> Map.mem env.env key
+  | Special_iterator Task_id -> Option.is_some env.task_id
+  | Special_iterator Sample_num -> Option.is_some env.sample_num
+
 let interpret_code ?task_id llc =
   (* Local scope ids can be non-unique due to inlining. *)
   let locals = ref Map.Poly.empty in
@@ -920,10 +939,8 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         traced.read_before_write <- true))
 
 type tensor_ptrs = NodeUI.tensor_ptr Set.Poly.t
-type sym_indices = sym_index Set.Poly.t
 
 let sexp_of_tensor_ptrs ts = Fn.compose [%sexp_of: NodeUI.tensor_ptr list] Set.to_list ts
-let sexp_of_sym_indices s = [%sexp_of: sym_index list] @@ Set.to_list s
 
 let process_computation node top_llc =
   let exception Non_virtual in
@@ -950,18 +967,15 @@ let process_computation node top_llc =
     if Set.length syms <> num_syms then raise Non_virtual
   in
   (* Traverse the float code too, for completeness / future use-cases. *)
-  let rec loop_proc ~(env_dom : sym_indices) llc =
+  let rec loop_proc ~(env_dom : unit environment) llc =
     let loop = loop_proc ~env_dom in
     match llc with
     | Lines body -> Array.iter ~f:loop body
     | For_loop { trace_it = false; _ } ->
         (* assert false *)
         raise Non_virtual
-    | For_loop { index = Iterator it; body; from_ = _; to_ = _; trace_it = true } ->
-        loop_proc ~env_dom:(Set.add env_dom it) body
-    | For_loop { index = Special_iterator _; body = _; from_ = _; to_ = _; trace_it = _ } ->
-        (* loop_proc ~env_dom body *)
-        raise Non_virtual
+    | For_loop { index; body; from_ = _; to_ = _; trace_it = true } ->
+        loop_proc ~env_dom:(environment_add index () env_dom) body
     | Rebalance (_, cs) -> Array.iter ~f:loop cs
     | If_task_id_is { for_task_id = _; body } -> loop body
     | Zero_out tensor -> if NodeUI.equal_tensor_ptr tensor top_data then has_setter := true
@@ -973,10 +987,19 @@ let process_computation node top_llc =
           (* Check for escaping variables. *)
           Array.iter indices ~f:(function
             | Iterator s ->
-                if not @@ Set.mem env_dom s then (
+                if not @@ environment_mem (Iterator s) env_dom then (
                   if !with_debug then
                     Caml.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
                       Sexp.pp_hum (sexp_of_sym_index s) Sexp.pp_hum
+                      ([%sexp_of: unit low_level] top_llc);
+                  raise Non_virtual)
+            | Special_iterator idx ->
+                if not @@ environment_mem (Special_iterator idx) env_dom then (
+                  if !with_debug then
+                    Caml.Format.printf "INFO: Inlining candidate has an escaping special index %a:@ %a\n%!"
+                      Sexp.pp_hum
+                      ([%sexp_of: Shape.dedicated_axis] idx)
+                      Sexp.pp_hum
                       ([%sexp_of: unit low_level] top_llc);
                   raise Non_virtual)
             | _ -> ());
@@ -984,7 +1007,7 @@ let process_computation node top_llc =
     | Set_local (_, llv) -> loop_float ~env_dom llv
     | Comment _ -> ()
     | Dynamic_indices { body; _ } -> loop body
-  and loop_float ~(env_dom : sym_indices) llv =
+  and loop_float ~env_dom llv =
     match llv with
     | Constant _ -> ()
     | Get (tensor, idcs) ->
@@ -993,10 +1016,19 @@ let process_computation node top_llc =
           (* Check for escaping variables. *)
           Array.iter idcs ~f:(function
             | Iterator s ->
-                if not @@ Set.mem env_dom s then (
+                if not @@ environment_mem (Iterator s) env_dom then (
                   if !with_debug then
                     Caml.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
                       Sexp.pp_hum (sexp_of_sym_index s) Sexp.pp_hum
+                      ([%sexp_of: unit low_level] top_llc);
+                  raise Non_virtual)
+            | Special_iterator idx ->
+                if not @@ environment_mem (Special_iterator idx) env_dom then (
+                  if !with_debug then
+                    Caml.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
+                      Sexp.pp_hum
+                      ([%sexp_of: Shape.dedicated_axis] idx)
+                      Sexp.pp_hum
                       ([%sexp_of: unit low_level] top_llc);
                   raise Non_virtual)
             | _ -> ())
@@ -1010,7 +1042,10 @@ let process_computation node top_llc =
   in
   try
     if node.non_virtual then raise Non_virtual;
-    loop_proc ~env_dom:Set.Poly.empty top_llc;
+    (* FIXME: we allow task_id, but not sample_num, that's not consistent (shouldn't allow task_id?) *)
+    loop_proc
+      ~env_dom:{ env = Map.Poly.empty; dyn_env = Map.Poly.empty; task_id = Some (); sample_num = None }
+      top_llc;
     if not !has_setter then raise Non_virtual;
     node.computations <- (!at_idcs, top_llc) :: node.computations
   with Non_virtual -> node.non_virtual <- true
@@ -1153,7 +1188,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit low_level) : u
     (virtualize_settings.inline_constants && Option.is_some node.scalar) || not node.non_virtual
   in
   (* The current position is within scope of the definitions of the process_for virtual tensors. *)
-  let rec loop_proc ~balanced ~(env_dom : sym_indices) (llc : unit low_level) : unit low_level option =
+  let rec loop_proc ~balanced ~env_dom (llc : unit low_level) : unit low_level option =
     let loop = loop_proc ~balanced ~env_dom in
     match llc with
     | Lines body ->
@@ -1196,7 +1231,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit low_level) : u
         (* Dynamic indices use a separate environment. Note that dynamic indices are do not appear
            in the LHSes of slice definitions, so are not erased when inlining. *)
         Option.map ~f:(fun body -> Dynamic_indices { dyn_idcs with body }) @@ loop dyn_idcs.body
-  and loop_float ~balanced ~(env_dom : sym_indices) (llv : float low_level) : float low_level =
+  and loop_float ~balanced ~env_dom (llv : float low_level) : float low_level =
     let loop = loop_float ~balanced ~env_dom in
     match llv with
     | Constant _ -> llv
