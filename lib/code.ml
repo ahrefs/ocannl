@@ -169,34 +169,37 @@ type _ low_level =
   | Constant : float -> float low_level
 [@@deriving sexp_of]
 
-let rec has_parallel_dim : type a. a low_level -> bool = function
-  | Comment _ -> false
-  | Lines ls -> Array.exists ~f:has_parallel_dim ls
-  | For_loop { body; _ } -> has_parallel_dim body
-  | Rebalance (_, cs) -> Array.exists ~f:has_parallel_dim cs
-  | If_task_id_is { body; _ } -> has_parallel_dim body
-  | Dynamic_indices { tensor = _; tensor_idcs; dynamic_idcs = _; target_dims; body; slice = _ } ->
-      Array.exists tensor_idcs ~f:(function Shape.Special_iterator Task_id -> true | _ -> false)
-      || Array.exists
-           ~f:Shape.(function { special = Dedicated Task_id; _ } -> true | _ -> false)
-           target_dims
-      || has_parallel_dim body
-  | Zero_out _ -> false
-  | Set (_, indices, llv) ->
-      Array.exists indices ~f:(function Shape.Special_iterator Task_id -> true | _ -> false)
-      || has_parallel_dim llv
-  | Set_local (_, llv) -> has_parallel_dim llv
-  | Local_scope { body; orig_indices; _ } ->
-      Array.exists orig_indices ~f:(function Shape.Special_iterator Task_id -> true | _ -> false)
-      || has_parallel_dim body
-  | Get_local _ -> false
-  | Get_global Task_id -> true
-  | Get_global _ -> false
-  | Get (_, indices) ->
-      Array.exists indices ~f:(function Shape.Special_iterator Task_id -> true | _ -> false)
-  | Binop (_, llv1, llv2) -> has_parallel_dim llv1 || has_parallel_dim llv2
-  | Unop (_, llv) -> has_parallel_dim llv
-  | Constant _ -> false
+let check_not_replicable ~cached_replicable llc =
+  let rec loop : type a. a low_level -> bool = function
+    | Comment _ -> false
+    | Lines ls -> Array.exists ~f:loop ls
+    | For_loop { body; _ } -> loop body
+    | Rebalance (_, cs) -> Array.exists ~f:loop cs
+    | If_task_id_is { body; _ } -> loop body
+    | Dynamic_indices { tensor = _; tensor_idcs; dynamic_idcs = _; target_dims; body; slice = _ } ->
+        Array.exists tensor_idcs ~f:(function Shape.Special_iterator Task_id -> true | _ -> false)
+        || Array.exists
+             ~f:Shape.(function { special = Dedicated Task_id; _ } -> true | _ -> false)
+             target_dims
+        || loop body
+    | Zero_out _ -> false
+    | Set (_, indices, llv) ->
+        Array.exists indices ~f:(function Shape.Special_iterator Task_id -> true | _ -> false) || loop llv
+    | Set_local (_, llv) -> loop llv
+    | Local_scope { body; orig_indices; _ } ->
+        Array.exists orig_indices ~f:(function Shape.Special_iterator Task_id -> true | _ -> false)
+        || loop body
+    | Get_local _ -> false
+    | Get_global Task_id -> true
+    | Get_global _ -> false
+    | Get (ptr, indices) ->
+        (not (cached_replicable ptr))
+        || Array.exists indices ~f:(function Shape.Special_iterator Task_id -> true | _ -> false)
+    | Binop (_, llv1, llv2) -> loop llv1 || loop llv2
+    | Unop (_, llv) -> loop llv
+    | Constant _ -> false
+  in
+  loop llc
 
 let binop ~op ~rhs1 ~rhs2 = match op with Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Binop (op, rhs1, rhs2)
 let unop ~op ~rhs = match op with Identity -> rhs | _ -> Unop (op, rhs)
@@ -684,6 +687,9 @@ type traced_tensor = {
   mutable last_write_non_update : bool;
   mutable is_dynamic_slice : bool;
       (** If true, the tensor is a dynamic slice (i.e. a result of dynamic indexing). *)
+  mutable is_replicable : bool;
+      (** If true, in case of parallelization, the tensor's update is identical on all tasks, and the final
+          update of the host should only be performed from one task rather than accumulated across tasks. *)
 }
 [@@deriving sexp_of]
 
@@ -716,6 +722,7 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         reduced_racyness = true;
         last_write_non_update = false;
         is_dynamic_slice = false;
+        is_replicable = true;
       })
 
 let get_other_node traced_store ptr =
@@ -809,6 +816,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
       | Special_iterator Task_id -> Option.value_exn dem_env.task_id
       | Special_iterator Sample_num -> Option.value_exn dem_env.sample_num)
   in
+  let cached_replicable ptr = (get_node traced_store ptr).is_replicable in
   let rec loop_proc env llc =
     let loop = loop_proc env in
     match llc with
@@ -834,6 +842,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         let traced : traced_tensor = get_node traced_store tensor in
         Hash_set.add traced.assignments (lookup env idcs);
         if virtualize_settings.inline_constants then precompute_constants ~idcs traced_store traced llv;
+        if check_not_replicable ~cached_replicable llc then traced.is_replicable <- false;
         (match llv with
         | Get (tensor2, idcs2) ->
             traced.last_write_non_update <- true;
