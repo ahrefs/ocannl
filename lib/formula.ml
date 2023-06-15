@@ -15,6 +15,7 @@ type form = {
 type t = {
   forward_body : Code.t;  (** Computes the values at each session step. *)
   form : form option;
+  nonform_forward_body : Code.t;  (** Same as [forward_body] if [form] is [None], otherwise [Code.Noop]. *)
   id : int;
   node : NodeUI.t;  (** Tracks the computation node. *)
   shape_logic : Shape.logic;
@@ -168,7 +169,12 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
   (* The code needs to be included in the order it was computed! *)
   let forward_body =
     Code.(
-      match (m1_processed, m1.forward_body, m2_processed, m2.forward_body) with
+      match
+        ( m1_processed,
+          (if is_form then m1.forward_body else m1.nonform_forward_body),
+          m2_processed,
+          if is_form then m2.forward_body else m2.nonform_forward_body )
+      with
       | true, _, true, _ | true, _, _, Noop | _, Noop, true, _ | _, Noop, _, Noop -> op_body
       | false, m1_body, false, m2_body when m1_first -> Seq (ParHint (m1_body, m2_body), op_body)
       | false, m1_body, false, m2_body -> Seq (ParHint (m2_body, m1_body), op_body)
@@ -178,7 +184,16 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
   let init_values_body = create ~id Value shape in
   session_initializations := init_values_body :: !session_initializations;
   if not is_form then
-    { forward_body; form = None; id; node = n; shape_logic; shape; cross_session_persistent = false }
+    {
+      forward_body;
+      form = None;
+      nonform_forward_body = forward_body;
+      id;
+      node = n;
+      shape_logic;
+      shape;
+      cross_session_persistent = false;
+    }
   else
     let form1, form2 =
       match (m1.form, m2.form) with
@@ -215,7 +230,16 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
     if not m2_processed then global_roots := Map.remove !global_roots m2.id;
     let form = Some { backprop_body; needs_gradient } in
     let formula =
-      { forward_body; form; id; node = n; shape_logic; shape; cross_session_persistent = false }
+      {
+        forward_body;
+        form;
+        nonform_forward_body = Code.Noop;
+        id;
+        node = n;
+        shape_logic;
+        shape;
+        cross_session_persistent = false;
+      }
     in
     global_roots := Map.add_exn !global_roots ~key:id ~data:formula;
     formula
@@ -247,14 +271,22 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
   let op_body = op_body ~n ~n1 ~projections in
   (* The code needs to be included in the order it was computed! *)
   let forward_body =
-    Code.(
-      match (m1_processed, m1.forward_body) with
-      | true, _ | _, Noop -> op_body
-      | false, m_body -> Seq (m_body, op_body))
+    if m1_processed then op_body
+    else if is_form then Code.Seq (m1.forward_body, op_body)
+    else Seq (m1.nonform_forward_body, op_body)
   in
   session_initializations := create ~id Value shape :: !session_initializations;
   if not is_form then
-    { forward_body; form = None; id; node = n; shape_logic; shape; cross_session_persistent = false }
+    {
+      forward_body;
+      form = None;
+      nonform_forward_body = forward_body;
+      id;
+      node = n;
+      shape_logic;
+      shape;
+      cross_session_persistent = false;
+    }
   else
     let form1 =
       match m1.form with
@@ -280,7 +312,16 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
     if not m1_processed then global_roots := Map.remove !global_roots m1.id;
     let form = Some { backprop_body; needs_gradient } in
     let formula =
-      { forward_body; form; id; node = n; shape_logic; shape; cross_session_persistent = false }
+      {
+        forward_body;
+        form;
+        nonform_forward_body = Code.Noop;
+        id;
+        node = n;
+        shape_logic;
+        shape;
+        cross_session_persistent = false;
+      }
     in
     global_roots := Map.add_exn !global_roots ~key:id ~data:formula;
     formula
@@ -344,7 +385,16 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
       n.value_never_virtual <- true;
       n.value_never_device_only <- true);
   if not is_form then
-    { forward_body; form = None; id; node = n; shape_logic; shape; cross_session_persistent }
+    {
+      forward_body;
+      form = None;
+      nonform_forward_body = forward_body;
+      id;
+      node = n;
+      shape_logic;
+      shape;
+      cross_session_persistent;
+    }
   else
     let backprop_body = Code.Noop in
     (if needs_gradient then
@@ -353,7 +403,18 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
     (* Very unlikely someone will want dw/dw. *)
     if needs_gradient then session_initializations := create ~id Grad shape :: !session_initializations;
     let form = Some { backprop_body; needs_gradient } in
-    let formula = { forward_body; form; id; node = n; shape_logic; shape; cross_session_persistent } in
+    let formula =
+      {
+        forward_body;
+        form;
+        nonform_forward_body = Code.Noop;
+        id;
+        node = n;
+        shape_logic;
+        shape;
+        cross_session_persistent;
+      }
+    in
     global_roots := Map.add_exn !global_roots ~key:id ~data:formula;
     formula
 

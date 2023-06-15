@@ -100,7 +100,7 @@ let setup_data hs_pat (hs_typ, slot, hs) =
   let loc = hs.pexp_loc in
   match hs_typ with
   | Formula_nf ->
-      ( Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].forward_body]),
+      ( Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].nonform_forward_body]),
         hs_typ,
         slot,
         [%expr CDSL.value_of_id [%e pat2expr hs_pat].id] )
@@ -114,7 +114,7 @@ let setup_node_id hs_pat (hs_typ, slot, hs) =
   let loc = hs.pexp_loc in
   match hs_typ with
   | Formula_nf ->
-      ( Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].forward_body]),
+      ( Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].nonform_forward_body]),
         hs_typ,
         slot,
         [%expr [%e pat2expr hs_pat].id] )
@@ -728,14 +728,14 @@ let translate_dt ~is_result ?desc_label (expr : expression) : expression =
               ?batch_dims:[%e opt_expr ~loc @@ edims batch_dims]
               ?input_dims:[%e opt_expr ~loc @@ edims input_dims]
               ?output_dims:[%e opt_expr ~loc @@ edims output_dims]
-              (fun ~n -> [%e body])]
+              (fun ~n -> Code.Block_comment ([%e label] ^ "%nn_rs", [%e body]))]
         else
           [%expr
             FDSL.data ?desc_label:[%e opt_pat2string ~loc desc_label] ~label:[%e label]
               ?batch_dims:[%e opt_expr ~loc @@ edims batch_dims]
               ?input_dims:[%e opt_expr ~loc @@ edims input_dims]
               ?output_dims:[%e opt_expr ~loc @@ edims output_dims]
-              (fun ~n -> Code.Synthetic [%e body])]
+              (fun ~n -> Code.Synthetic (Code.Block_comment ([%e label] ^ "%nn_dt", [%e body])))]
   in
   loop expr
 
@@ -815,6 +815,5 @@ let str_expander ~loc ~path (payload : structure_item list) =
 let str_expander_dt ~loc ~path (payload : structure_item list) =
   flatten_str ~loc ~path @@ List.map payload ~f:(translate_str ~dt:Dt)
 
-  let str_expander_rs ~loc ~path (payload : structure_item list) =
-    flatten_str ~loc ~path @@ List.map payload ~f:(translate_str ~dt:Rs)
-  
+let str_expander_rs ~loc ~path (payload : structure_item list) =
+  flatten_str ~loc ~path @@ List.map payload ~f:(translate_str ~dt:Rs)
