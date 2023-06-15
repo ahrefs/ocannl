@@ -1300,14 +1300,19 @@ let compile_proc ~name ~for_step_update:_ proc =
     let f = Stdio.Out_channel.create fname in
     let ppf = Caml.Format.formatter_of_out_channel f in
     Caml.Format.pp_set_margin ppf !code_sexp_margin;
-    Caml.Format.fprintf ppf "%a" Sexp.pp_hum (sexp_of_low_level Unit.sexp_of_t llc));
+    Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_low_level Unit.sexp_of_t llc);
+    let fname = name ^ ".hlc" in
+    let f = Stdio.Out_channel.create fname in
+    let ppf = Caml.Format.formatter_of_out_channel f in
+    Caml.Format.pp_set_margin ppf !code_sexp_margin;
+    Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t proc));
   let result = optimize_proc llc in
   if !with_debug && !keep_files_in_run_directory then (
     let fname = name ^ ".llc" in
     let f = Stdio.Out_channel.create fname in
     let ppf = Caml.Format.formatter_of_out_channel f in
     Caml.Format.pp_set_margin ppf !code_sexp_margin;
-    Caml.Format.fprintf ppf "%a" Sexp.pp_hum (sexp_of_low_level Unit.sexp_of_t @@ snd result));
+    Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_low_level Unit.sexp_of_t @@ snd result));
   (* if for_step_update then
      Hashtbl.iter (fst result) ~f:(fun n -> if n.read_before_write then (NodeUI.get n.id).is_recurrent <- true); *)
   result
