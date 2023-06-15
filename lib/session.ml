@@ -300,7 +300,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
           Code.(
             For_loop
               {
-                index = Iterator (Code.new_sym_index macrobatch_loop_symbol);
+                index = Code.new_loop_index macrobatch_loop_symbol (Shape.dim run_for_steps);
                 from_ = 0;
                 to_ = run_for_steps - 1;
                 body = Lines [| Comment "Update sub-step"; compiled |];

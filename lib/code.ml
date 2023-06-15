@@ -102,30 +102,39 @@ let get_scope =
     Int.incr uid;
     { tensor; scope_id = !uid }
 
+type loop_symbol = Iterator of Shape.symbol | Special_iterator of Shape.dedicated_axis
+[@@deriving sexp, equal, compare]
+
+type loop_index = { loop_sym : loop_symbol; uid : int } [@@deriving sexp, equal, compare]
 type sym_index = { sym : Shape.symbol; uid : int } [@@deriving sexp, equal, compare]
 type index = sym_index Shape.axis_index [@@deriving sexp, equal, compare]
 
-type loop_index = Iterator of sym_index | Special_iterator of Shape.dedicated_axis
-[@@deriving sexp, equal, compare]
+let global_task_id_idx = { loop_sym = Special_iterator Shape.Task_id; uid = -1 }
+let global_sample_num_idx = { loop_sym = Special_iterator Shape.Sample_num; uid = -1 }
 
 let loop_index_lident = function
-  | Iterator { sym = Symbol s; uid } -> "i" ^ Int.to_string s ^ "_" ^ Int.to_string uid
-  | Special_iterator Task_id -> "i_task_id"
-  | Special_iterator Sample_num -> "i_sample_num"
+  | { loop_sym = Iterator (Symbol s); uid } -> "i" ^ Int.to_string s ^ "_" ^ Int.to_string uid
+  | { loop_sym = Special_iterator Task_id; uid } -> "i_task_id_" ^ Int.to_string uid
+  | { loop_sym = Special_iterator Sample_num; uid } -> "i_sample_num_" ^ Int.to_string uid
 
-let new_sym_index =
+let new_uid =
   let uid = ref 0 in
-  fun sym ->
+  fun loop_sym ->
     Int.incr uid;
-    { sym; uid = !uid }
+    { loop_sym; uid = !uid }
 
 let new_loop_index it = function
-  | Shape.{ special = Dedicated idx; _ } -> Special_iterator idx
-  | _ -> Iterator (new_sym_index it)
+  | Shape.{ special = Dedicated idx; _ } -> new_uid (Special_iterator idx)
+  | _ -> new_uid (Iterator it)
 
 let to_shape_index = function
-  | Iterator it -> Shape.Iterator it
-  | Special_iterator idx -> Shape.Special_iterator idx
+  | { loop_sym = Iterator sym; uid } -> Shape.Iterator { sym; uid }
+  | { loop_sym = Special_iterator idx; _ } -> Shape.Special_iterator idx
+
+let to_loop_index = function
+  | Shape.Iterator { sym; uid } -> { loop_sym = Iterator sym; uid }
+  | Special_iterator idx -> { loop_sym = Special_iterator idx; uid = -1 }
+  | _ -> invalid_arg "not a loop index"
 
 (** Cases: [unit low_level] -- code, [float low_level] -- single number at some precision. *)
 type _ low_level =
@@ -397,28 +406,33 @@ let interpret_binop op v1 v2 =
 type 'a environment = {
   env : (sym_index, 'a) Map.Poly.t;
   dyn_env : (Shape.symbol, 'a) Map.Poly.t;
-  task_id : 'a option;
-  sample_num : 'a option;
+  task_id : (loop_index * 'a) option;  (** We keep track of [loop_index] for debugging purposes. *)
+  sample_num : (loop_index * 'a) option;
 }
 
 let environment_keys env =
   (List.map ~f:[%sexp_of: sym_index] @@ Map.Poly.keys env.env)
   @ (List.map ~f:[%sexp_of: Shape.symbol] @@ Map.Poly.keys env.dyn_env)
-  @ List.map ~f:(fun _ -> [%sexp_of: string] "task_id") (* @@ Option.to_list *) [ env.task_id ]
-  @ List.map ~f:(fun _ -> [%sexp_of: string] "sample_num")
+  @ (List.map ~f:(fun (sym, _) -> [%sexp_of: string * loop_index] ("task_env", sym))
+    @@ Option.to_list env.task_id)
+  @ List.map ~f:(fun (sym, _) -> [%sexp_of: string * loop_index] ("sample_env", sym))
   @@ Option.to_list env.sample_num
 
-let environment_add key data env =
-  match key with
-  | Iterator key -> { env with env = Map.add_exn ~key ~data env.env }
-  | Special_iterator Task_id -> { env with task_id = Some data }
-  | Special_iterator Sample_num -> { env with sample_num = Some data }
+let environment_add idx data env =
+  match idx with
+  | { loop_sym = Iterator sym; uid } -> { env with env = Map.add_exn ~key:{ sym; uid } ~data env.env }
+  | { loop_sym = Special_iterator Task_id; _ } ->
+      (* assert (Option.is_none env.task_id); *)
+      { env with task_id = Option.first_some env.task_id @@ Some (idx, data) }
+  | { loop_sym = Special_iterator Sample_num; _ } ->
+      (* assert (Option.is_none env.sample_num); *)
+      { env with sample_num = Option.first_some env.sample_num @@ Some (idx, data) }
 
 let environment_mem key env =
   match key with
-  | Iterator key -> Map.mem env.env key
-  | Special_iterator Task_id -> Option.is_some env.task_id
-  | Special_iterator Sample_num -> Option.is_some env.sample_num
+  | { loop_sym = Iterator sym; uid } -> Map.mem env.env { sym; uid }
+  | { loop_sym = Special_iterator Task_id; _ } -> Option.is_some env.task_id
+  | { loop_sym = Special_iterator Sample_num; _ } -> Option.is_some env.sample_num
 
 let interpret_code ?task_id llc =
   (* Local scope ids can be non-unique due to inlining. *)
@@ -427,40 +441,32 @@ let interpret_code ?task_id llc =
     try
       Array.map indices ~f:(function
         | Shape.Fixed_idx i -> i
-        | Special_iterator Task_id -> Option.value_exn env.task_id
-        | Special_iterator Sample_num -> Option.value_exn env.sample_num
-        | Iterator s -> Map.find_exn env.env s
+        | Special_iterator Task_id -> snd @@ Option.value_exn env.task_id
+        | Special_iterator Sample_num -> snd @@ Option.value_exn env.sample_num
+        | Iterator it -> Map.find_exn env.env it
         | Dynamic_recipient s -> Map.find_exn env.dyn_env s
         | Frozen_recipient s -> Map.find_exn env.dyn_env s
         | Dynamic_provider _ -> Option.value_exn provider_dim)
     with Caml.Not_found | Not_found_s _ ->
       if !debug_trace_interpretation then
-        Caml.Format.printf "TRACE: lookup error for env=@ %a\n%!" Sexp.pp_hum
+        Caml.Format.printf "TRACE: lookup error for env keys=@ %a\n%!" Sexp.pp_hum
           (* FIXME: missing full env *)
-          ([%sexp_of: (sym_index * int) list] @@ Map.to_alist env.env (* @ Map.to_alist env.dyn_env *));
+          ([%sexp_of: Sexp.t list] @@ environment_keys env);
       failwith "interpret_code: index lookup error, set CDSL.debug_trace_interpretation for details"
   in
   let rec loop_proc env llc : unit =
     let loop = loop_proc env in
     match llc with
     | Lines body -> Array.iter ~f:loop body
-    | For_loop { index = Iterator key; from_; to_; body; trace_it = _ } ->
+    | For_loop { index; from_; to_; body; trace_it = _ } ->
         for data = from_ to to_ do
-          loop_proc { env with env = Map.add_exn ~key ~data env.env } body
-        done
-    | For_loop { index = Special_iterator Sample_num; from_; to_; body; trace_it = _ } ->
-        for data = from_ to to_ do
-          loop_proc { env with sample_num = Some data } body
-        done
-    | For_loop { index = Special_iterator Task_id; from_; to_; body; trace_it = _ } ->
-        for data = from_ to to_ do
-          loop_proc { env with task_id = Some data } body
+          loop_proc (environment_add index data env) body
         done
     | Rebalance (_, cs) ->
         (* FIXME: NOT IMPLEMENTED YET *)
         Array.iter ~f:loop cs
     | If_task_id_is { for_task_id; body } ->
-        if Option.value ~default:for_task_id env.task_id = for_task_id then loop body
+        if Option.fold ~init:for_task_id ~f:(fun _ (_, i) -> i) env.task_id = for_task_id then loop body
     | Zero_out ptr -> Node.fill_from_float (Option.value_exn @@ NodeUI.get_tensor ptr) 0.0
     | Set (ptr, indices, Binop (op, Get (ptr2, indices2), c2))
       when NodeUI.equal_tensor_ptr ptr ptr2 && [%equal: index array] indices indices2 ->
@@ -481,7 +487,7 @@ let interpret_code ?task_id llc =
               ([%sexp_of: index array] indices)
               Sexp.pp_hum
               ([%sexp_of: int array] idcs);
-            if Option.value ~default:0 env.task_id = 0 then
+            if Option.fold ~init:0 ~f:(fun _ (_, i) -> i) env.task_id = 0 then
               NodeUI.print_node_preamble ~full_shape:false ptr.id;
             raise e
         in
@@ -520,7 +526,8 @@ let interpret_code ?task_id llc =
             Sexp.pp_hum
             ([%sexp_of: int array] idcs)
             result;
-          if Option.value ~default:0 env.task_id = 0 then NodeUI.print_node_preamble ~full_shape:false ptr.id;
+          if Option.fold ~init:0 ~f:(fun _ (_, i) -> i) env.task_id = 0 then
+            NodeUI.print_node_preamble ~full_shape:false ptr.id;
           raise e)
     | Set_local (id, llv) -> locals := Map.update !locals id ~f:(fun _ -> loop_float env llv)
     | Comment message when !with_debug && !executor_print_comments -> Stdio.printf "%s\n%!" message
@@ -594,7 +601,7 @@ let interpret_code ?task_id llc =
             (get_as_float id.tensor idcs) result;
         result
     | Get_local id -> Map.find_exn !locals id
-    | Get_global Task_id -> Float.of_int @@ Option.value_exn env.task_id
+    | Get_global Task_id -> Float.of_int @@ snd @@ Option.value_exn env.task_id
     | Get_global (C_function _) -> failwith "NOT IMPLEMENTED YET: jit-dynloading C calls in the interpreter"
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
@@ -621,7 +628,14 @@ let interpret_code ?task_id llc =
     in
     loop_proc env body
   in
-  loop_proc { env = Map.Poly.empty; dyn_env = Map.Poly.empty; task_id; sample_num = None } llc
+  loop_proc
+    {
+      env = Map.Poly.empty;
+      dyn_env = Map.Poly.empty;
+      task_id = Option.map task_id ~f:(fun i -> (global_task_id_idx, i));
+      sample_num = None;
+    }
+    llc
 
 let code_sexp_margin = ref 200
 
@@ -832,24 +846,25 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
       (* | Dynamic_recipient s | Frozen_recipient s -> Map.find_exn dem_env.dyn_env s *)
       | Dynamic_recipient _ | Frozen_recipient _ -> 0
       | Dynamic_provider _ -> Option.value_exn provider_dim
-      | Special_iterator Task_id -> Option.value_exn dem_env.task_id
-      | Special_iterator Sample_num -> Option.value_exn dem_env.sample_num)
+      | Special_iterator Task_id -> snd @@ Option.value_exn dem_env.task_id
+      | Special_iterator Sample_num -> snd @@ Option.value_exn dem_env.sample_num)
   in
   let cached_replicable ptr = (get_node traced_store ptr).is_replicable in
   let rec loop_proc env llc =
     let loop = loop_proc env in
     match llc with
     | Lines body -> Array.iter ~f:loop body
-    | For_loop { index = Iterator key; from_; to_ = _; body; trace_it = false } ->
-        loop_proc { env with env = Map.add_exn ~key ~data:from_ env.env } body
-    | For_loop { index = Iterator key; from_; to_; body; trace_it = true } ->
+    | For_loop { index = { loop_sym = Iterator sym; uid }; from_; to_ = _; body; trace_it = false } ->
+        loop_proc { env with env = Map.add_exn ~key:{ sym; uid } ~data:from_ env.env } body
+    | For_loop { index = { loop_sym = Iterator _; _ } as index; from_; to_; body; trace_it = true } ->
         for data = from_ to to_ do
-          loop_proc { env with env = Map.add_exn ~key ~data env.env } body
+          loop_proc (environment_add index data env) body
         done
-    | For_loop { index = Special_iterator _; from_ = _; to_ = _; body; trace_it = _ } -> loop_proc env body
+    | For_loop { index; from_ = _; to_ = _; body; trace_it = _ } ->
+        loop_proc (environment_add index 0 env) body
     | Rebalance (_, cs) -> Array.iter ~f:loop cs
     | If_task_id_is { for_task_id; body } ->
-        if Option.value ~default:for_task_id env.task_id = for_task_id then loop body
+        if Option.fold ~init:for_task_id ~f:(fun _ (_, i) -> i) env.task_id = for_task_id then loop body
     | Zero_out ptr ->
         let traced : traced_tensor = get_node traced_store ptr in
         if Hash_set.is_empty traced.assignments && Hashtbl.is_empty traced.accesses then
@@ -926,7 +941,14 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
     in
     loop_proc env body
   in
-  loop_proc { env = Map.Poly.empty; dyn_env = Map.Poly.empty; task_id = Some 0; sample_num = Some 0 } llc;
+  loop_proc
+    {
+      env = Map.Poly.empty;
+      dyn_env = Map.Poly.empty;
+      task_id = Some (global_task_id_idx, 0);
+      sample_num = None;
+    }
+    llc;
   Hashtbl.iter traced_store ~f:(fun traced ->
       if traced.last_write_non_update then traced.reduced_racyness <- false;
       if
@@ -986,19 +1008,12 @@ let process_computation node top_llc =
         else
           (* Check for escaping variables. *)
           Array.iter indices ~f:(function
-            | Iterator s ->
-                if not @@ environment_mem (Iterator s) env_dom then (
+            | (Iterator _ | Special_iterator _) as idx ->
+                if not @@ environment_mem (to_loop_index idx) env_dom then (
                   if !with_debug then
                     Caml.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
-                      Sexp.pp_hum (sexp_of_sym_index s) Sexp.pp_hum
-                      ([%sexp_of: unit low_level] top_llc);
-                  raise Non_virtual)
-            | Special_iterator idx ->
-                if not @@ environment_mem (Special_iterator idx) env_dom then (
-                  if !with_debug then
-                    Caml.Format.printf "INFO: Inlining candidate has an escaping special index %a:@ %a\n%!"
                       Sexp.pp_hum
-                      ([%sexp_of: Shape.dedicated_axis] idx)
+                      (sexp_of_loop_index @@ to_loop_index idx)
                       Sexp.pp_hum
                       ([%sexp_of: unit low_level] top_llc);
                   raise Non_virtual)
@@ -1015,19 +1030,12 @@ let process_computation node top_llc =
         else
           (* Check for escaping variables. *)
           Array.iter idcs ~f:(function
-            | Iterator s ->
-                if not @@ environment_mem (Iterator s) env_dom then (
-                  if !with_debug then
-                    Caml.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
-                      Sexp.pp_hum (sexp_of_sym_index s) Sexp.pp_hum
-                      ([%sexp_of: unit low_level] top_llc);
-                  raise Non_virtual)
-            | Special_iterator idx ->
-                if not @@ environment_mem (Special_iterator idx) env_dom then (
+            | (Iterator _ | Special_iterator _) as idx ->
+                if not @@ environment_mem (to_loop_index idx) env_dom then (
                   if !with_debug then
                     Caml.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
                       Sexp.pp_hum
-                      ([%sexp_of: Shape.dedicated_axis] idx)
+                      (sexp_of_loop_index @@ to_loop_index idx)
                       Sexp.pp_hum
                       ([%sexp_of: unit low_level] top_llc);
                   raise Non_virtual)
@@ -1044,7 +1052,13 @@ let process_computation node top_llc =
     if node.non_virtual then raise Non_virtual;
     (* FIXME: we allow task_id, but not sample_num, that's not consistent (shouldn't allow task_id?) *)
     loop_proc
-      ~env_dom:{ env = Map.Poly.empty; dyn_env = Map.Poly.empty; task_id = Some (); sample_num = None }
+      ~env_dom:
+        {
+          env = Map.Poly.empty;
+          dyn_env = Map.Poly.empty;
+          task_id = Some (global_task_id_idx, ());
+          sample_num = None;
+        }
       top_llc;
     if not !has_setter then raise Non_virtual;
     node.computations <- (!at_idcs, top_llc) :: node.computations
@@ -1074,7 +1088,8 @@ let inline_computation ~id node call_args =
           let body = Array.filter_map ~f:loop body in
           if Array.is_empty body then None else Some (Lines body)
       | For_loop { trace_it = false; _ } -> assert false
-      | For_loop { index = Iterator it; body; _ } when Map.mem env it -> loop body
+      | For_loop { index = { loop_sym = Iterator sym; uid }; body; _ } when Map.mem env { sym; uid } ->
+          loop body
       | For_loop { index; from_; to_; body; trace_it } ->
           Option.map ~f:(fun body -> For_loop { index; from_; to_; body; trace_it }) @@ loop body
       | Rebalance (s, cs) ->
@@ -1124,8 +1139,8 @@ let virtual_llc traced_store reverse_node_map (llc : unit low_level) : unit low_
     let loop = loop_proc ~process_for in
     match llc with
     | Lines body -> Lines (Array.map ~f:loop body)
-    | For_loop ({ index = Iterator it; body; _ } as for_config) -> (
-        match Hashtbl.find reverse_node_map it with
+    | For_loop ({ index = { loop_sym = Iterator sym; uid }; body; _ } as for_config) -> (
+        match Hashtbl.find reverse_node_map { sym; uid } with
         | Some tensor when not @@ Set.mem process_for tensor ->
             let node : traced_tensor = Hashtbl.find_exn traced_store tensor in
             let result = loop_proc ~process_for:(Set.add process_for tensor) llc in
@@ -1194,9 +1209,9 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit low_level) : u
     | Lines body ->
         let body = Array.filter_map ~f:loop body in
         if Array.is_empty body then None else Some (Lines body)
-    | For_loop ({ index = Iterator it; body; _ } as for_config) -> (
-        let env_dom = Set.add env_dom it in
-        match Hashtbl.find reverse_node_map it with
+    | For_loop ({ index = { loop_sym = Iterator sym; uid }; body; _ } as for_config) -> (
+        let env_dom = Set.add env_dom { sym; uid } in
+        match Hashtbl.find reverse_node_map { sym; uid } with
         | Some tensor ->
             if is_inline tensor then None
             else
@@ -1205,7 +1220,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit low_level) : u
         | None ->
             Option.map ~f:(fun body -> For_loop { for_config with body }) @@ loop_proc ~balanced ~env_dom body
         )
-    | For_loop ({ index = Special_iterator _; body; _ } as for_config) ->
+    | For_loop ({ index = { loop_sym = Special_iterator _; _ }; body; _ } as for_config) ->
         Option.map ~f:(fun body -> For_loop { for_config with body }) @@ loop_proc ~balanced ~env_dom body
     | Rebalance (s, cs) ->
         let cs = Array.filter_map cs ~f:loop in
@@ -1286,7 +1301,7 @@ type traced_store = (NodeUI.tensor_ptr, traced_tensor) Base.Hashtbl.t
 let optimize_proc llc : traced_store * unit low_level =
   let traced_store : (NodeUI.tensor_ptr, traced_tensor) Hashtbl.t = Hashtbl.Poly.create () in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
-  let reverse_node_map : (sym_index, NodeUI.tensor_ptr) Hashtbl.t = Hashtbl.Poly.create () in
+  let reverse_node_map = Hashtbl.Poly.create () in
   let result =
     visit_llc traced_store reverse_node_map ~max_visits:virtualize_settings.max_visits llc;
     cleanup_virtual_llc traced_store reverse_node_map @@ virtual_llc traced_store reverse_node_map llc

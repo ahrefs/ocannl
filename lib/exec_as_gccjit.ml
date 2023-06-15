@@ -172,10 +172,7 @@ let get_tensor
               failwith "Exec_as_gccjit: non-slice hosted: NOT IMPLEMENTED YET"));
         let backend_info =
           (if NodeUI.equal_data_kind ptr.field Value then "v:" else "g:")
-          ^ (if is_parallel then "parallelized"
-             else if update_on_host then "sync-on-update"
-             else if Option.is_none hosted_ptr then "device-only"
-             else "replicated")
+          ^ (Sexp.to_string_hum @@ sexp_of_sync_properties sync)
           ^ ";"
         in
         if not @@ String.is_substring n.backend_info ~substring:backend_info then
@@ -242,29 +239,31 @@ let get_sync_ptr tensor =
   | None, None -> assert false
 
 (* task_id = RValue.param task_id *)
-let jit_code ~name ~(env: Gccjit.rvalue Code.environment) ({ ctx; func; _ } as state) initial_block (body : unit Code.low_level) : Gccjit.block
-    =
+let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as state) initial_block
+    (body : unit Code.low_level) : Gccjit.block =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
   let lookup ?provider_dim ?(example_only = false) ~on_host env indices =
     let open Gccjit in
     try
-    Array.map indices ~f:(function
-      | Shape.Fixed_idx i -> RValue.int ctx c_index i
-      | Iterator s -> Map.find_exn env.Code.env s
-      | Special_iterator Task_id when on_host -> Option.value_exn env.task_id
-      | Special_iterator Task_id -> RValue.zero ctx c_index
-      | Special_iterator Sample_num -> Option.value_exn env.sample_num
-      | Dynamic_recipient s -> Map.find_exn env.dyn_env s
-      | Dynamic_provider _ when example_only -> RValue.zero ctx c_index
-      | Dynamic_provider _ -> Option.value_exn provider_dim
-      | Frozen_recipient s when on_host -> Map.find_exn env.dyn_env s
-      | Frozen_recipient _ -> RValue.zero ctx c_index)
+      Array.map indices ~f:(function
+        | Shape.Fixed_idx i -> RValue.int ctx c_index i
+        | Iterator s -> Map.find_exn env.Code.env s
+        | Special_iterator Task_id when on_host -> snd @@ Option.value_exn env.task_id
+        | Special_iterator Task_id -> RValue.zero ctx c_index
+        | Special_iterator Sample_num -> snd @@ Option.value_exn env.sample_num
+        | Dynamic_recipient s -> Map.find_exn env.dyn_env s
+        | Dynamic_provider _ when example_only -> RValue.zero ctx c_index
+        | Dynamic_provider _ -> Option.value_exn provider_dim
+        | Frozen_recipient s when on_host -> Map.find_exn env.dyn_env s
+        | Frozen_recipient _ -> RValue.zero ctx c_index)
     with e ->
       Caml.Format.eprintf "exec_as_gccjit: missing index from@ %a@ among environment keys:@ %a\n%!"
-      Sexp.pp_hum ([%sexp_of: Code.sym_index Shape.axis_index array] indices)
-      Sexp.pp_hum ([%sexp_of: Sexp.t list] @@ Code.environment_keys env);
+        Sexp.pp_hum
+        ([%sexp_of: Code.sym_index Shape.axis_index array] indices)
+        Sexp.pp_hum
+        ([%sexp_of: Sexp.t list] @@ Code.environment_keys env);
       raise e
   in
   let c_float = Type.get ctx Type.Float in
@@ -305,25 +304,24 @@ let jit_code ~name ~(env: Gccjit.rvalue Code.environment) ({ ctx; func; _ } as s
        let f = Function.builtin ctx "printf" in
        let print_args =
          match env.Code.task_id with
-         | Some task_id -> [ RValue.string_literal ctx ("\nComment for task %d: " ^ c ^ "\n"); task_id ]
+         | Some (_, task_id) -> [ RValue.string_literal ctx ("\nComment for task %d: " ^ c ^ "\n"); task_id ]
          | None -> [ RValue.string_literal ctx ("\nComment: " ^ c ^ "\n") ]
        in
        Block.eval !current_block @@ RValue.call ctx f print_args);
     Block.comment !current_block c
   in
-  let rec loop_proc ~(env: rvalue Code.environment) ~name (body : unit Code.low_level) : unit =
+  let rec loop_proc ~(env : rvalue Code.environment) ~name (body : unit Code.low_level) : unit =
     let loop = loop_proc ~env in
     match body with
     | Code.Lines lines ->
         Array.iteri lines ~f:(fun i line -> loop ~name:(name ^ "_at_line_" ^ Int.to_string i) line)
-    | For_loop { index; from_; to_; body; trace_it = _ } ->
-        jit_for_loop ~env index ~from_ ~to_ body
+    | For_loop { index; from_; to_; body; trace_it = _ } -> jit_for_loop ~env index ~from_ ~to_ body
     | Rebalance (_, cs) ->
         (* This backend does not implement a relevant form of fine-grain parallelism. *)
         Array.iteri cs ~f:(fun i line -> loop ~name:(name ^ "_at_par_line_" ^ Int.to_string i) line)
     | If_task_id_is { for_task_id; body } -> (
         match env.Code.task_id with
-        | Some task_id ->
+        | Some (_, task_id) ->
             let open Gccjit in
             let id = get_uid () in
             let b_if_body =
@@ -419,9 +417,9 @@ let jit_code ~name ~(env: Gccjit.rvalue Code.environment) ({ ctx; func; _ } as s
             loop ~name @@ Set (ptr, idcs, Binop (Add, Get (ptr, idcs), value)))
     | Zero_out ptr ->
         if Hashtbl.mem state.tensors ptr then
-          failwith (
-            "exec_as_gccjit: Non-initialization zeroing-out NOT IMPLEMENTED YET: "^
-            (Sexp.to_string_hum @@ [%sexp_of: NodeUI.tensor_ptr] ptr));
+          failwith
+            ("exec_as_gccjit: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
+            @@ [%sexp_of: NodeUI.tensor_ptr] ptr);
         let tn = Code.(get_node state.traced_store ptr) in
         assert tn.zero_initialized
         (* The initialization will be emitted by get_tensor. *)
@@ -452,7 +450,7 @@ let jit_code ~name ~(env: Gccjit.rvalue Code.environment) ({ ctx; func; _ } as s
         let lvalue, _typ, _local_is_double = Map.find_exn !locals id in
         (* FIXME: Convert according to local_is_double ?= is_double. *)
         RValue.lvalue lvalue
-    | Get_global Task_id -> RValue.cast ctx (Option.value_exn env.task_id) num_typ
+    | Get_global Task_id -> RValue.cast ctx (snd @@ Option.value_exn env.task_id) num_typ
     | Get_global (C_function f_name) ->
         (* TODO: this is too limiting. *)
         let f = Function.builtin ctx f_name in
@@ -529,7 +527,7 @@ let jit_func ~name ctx (traced_store, proc) =
       {
         env = Map.Poly.empty;
         dyn_env = Map.Poly.empty;
-        task_id = Some (RValue.param task_id);
+        task_id = Some (Code.global_task_id_idx, RValue.param task_id);
         sample_num = None;
       }
   in
