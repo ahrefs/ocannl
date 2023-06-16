@@ -716,6 +716,7 @@ type traced_tensor = {
   mutable zero_initialized : bool;
   mutable zeroed_out : bool;
   mutable read_before_write : bool;  (** The node is read before it is written (i.e. it is recurrent). *)
+  mutable read_only : bool;
   mutable reduced_racyness : bool;
       (** If true, the only non-constant writes into the tensor are updates, and a constant write is never
           the last write. An update is a read immediately followed by a write of the same cell, as in
@@ -755,6 +756,7 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         zero_initialized = false;
         zeroed_out = false;
         read_before_write = false;
+        read_only = false;
         reduced_racyness = true;
         last_write_non_update = false;
         is_dynamic_slice = false;
@@ -958,6 +960,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         (not (virtualize_settings.always_inline_dynamic_indexing && traced.is_dynamic_slice))
         && Hashtbl.exists traced.accesses ~f:is_too_many
       then traced.non_virtual <- true;
+      if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then traced.read_only <- true;
       if Hashtbl.exists traced.accesses ~f:is_recurrent then (
         traced.non_virtual <- true;
         traced.non_device_only <- true;
@@ -1071,7 +1074,7 @@ let inline_computation ~id node call_args =
   let exception Non_virtual in
   let make_subst i lhs_ind =
     let rhs_ind = call_args.(i) in
-    match lhs_ind, rhs_ind with
+    match (lhs_ind, rhs_ind) with
     | Shape.Iterator lhs_s, Shape.Iterator rhs_s -> Some (lhs_s, rhs_s)
     | _ when Shape.equal_axis_index equal_sym_index lhs_ind rhs_ind -> None
     | _ -> raise Non_virtual
@@ -1084,7 +1087,10 @@ let inline_computation ~id node call_args =
       | None -> Map.Poly.empty
       | Some def_args -> Map.Poly.of_alist_exn @@ Array.to_list @@ Array.filter_mapi def_args ~f:make_subst
     in
-    let subst env = function Shape.Iterator s when Map.mem env s -> Shape.Iterator (Map.find_exn env s) | idx -> idx in
+    let subst env = function
+      | Shape.Iterator s when Map.mem env s -> Shape.Iterator (Map.find_exn env s)
+      | idx -> idx
+    in
     let rec loop env llc : unit low_level option =
       match llc with
       | Lines body ->
@@ -1131,7 +1137,12 @@ let inline_computation ~id node call_args =
       | Get (tensor, indices) -> Get (tensor, Array.map ~f:(subst env) indices)
       | Local_scope { id; prec; body; orig_indices } ->
           Local_scope
-            { id; prec; body = Option.value_exn @@ loop env body; orig_indices = Array.map ~f:(subst env) orig_indices }
+            {
+              id;
+              prec;
+              body = Option.value_exn @@ loop env body;
+              orig_indices = Array.map ~f:(subst env) orig_indices;
+            }
       | Get_local _ -> llv
       | Get_global _ -> llv
       | Binop (op, llv1, llv2) -> Binop (op, loop_float env llv1, loop_float env llv2)

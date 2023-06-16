@@ -158,7 +158,7 @@ let get_tensor
                        cast_void @@ LValue.address lhs;
                        RValue.int ctx c_index device_size_in_bytes;
                      ];
-              if is_parallel || not update_on_host then
+              if not tn.read_only && not update_on_host then
                 Block.eval (if is_replicated sync then replicated_finalize_block else task_finalize_block)
                 @@ RValue.call ctx (Function.builtin ctx "memcpy")
                      [
