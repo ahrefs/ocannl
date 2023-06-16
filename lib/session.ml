@@ -444,6 +444,13 @@ module SDSL = struct
       n.grad_never_device_only <- true
     done
 
+  let everything_on_host_or_inlined () =
+    for id = !Formula.first_session_id to Node.global.unique_id - 1 do
+      let n = NodeUI.get id in
+      n.value_never_device_only <- true;
+      n.grad_never_device_only <- true
+    done
+
   let value_1d_points ?from_axis ~xdim m =
     NodeUI.retrieve_1d_points ?from_axis ~xdim m.Formula.node.node.value
 
