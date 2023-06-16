@@ -158,14 +158,26 @@ let get_tensor
                        cast_void @@ LValue.address lhs;
                        RValue.int ctx c_index device_size_in_bytes;
                      ];
-              if not tn.read_only && not update_on_host then
+              if (not tn.read_only) && not update_on_host then (
+                (* let f = Function.builtin ctx "printf" in
+                let print_args =
+                  [
+                    RValue.string_literal ctx
+                      ("\nDEBUG: copy to host "
+                      ^ Sexp.to_string_hum ([%sexp_of: NodeUI.tensor_ptr] ptr)
+                      ^ " -- index: %d; size: %d: \n");
+                      offset;
+                      RValue.int ctx c_index device_size_in_bytes;
+                  ]
+                in
+                Block.eval task_finalize_block @@ RValue.call ctx f print_args; *)
                 Block.eval (if is_replicated sync then replicated_finalize_block else task_finalize_block)
                 @@ RValue.call ctx (Function.builtin ctx "memcpy")
                      [
                        cast_void @@ LValue.address lhs;
                        cast_void @@ LValue.address local;
                        RValue.int ctx c_index device_size_in_bytes;
-                     ])
+                     ]))
             else (
               ignore jit_code;
               failwith "Exec_as_gccjit: non-slice hosted: NOT IMPLEMENTED YET"));

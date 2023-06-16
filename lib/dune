@@ -26,7 +26,8 @@
   session
   exec_as_gccjit
   exec_as_cuda)
- (modes byte native))
+ (modes byte native)
+ (c_library_flags -pthread))
 
 (library
  (name ppx_ocannl)
