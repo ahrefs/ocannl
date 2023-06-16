@@ -117,15 +117,18 @@ let loop_index_lident = function
   | { loop_sym = Special_iterator Task_id; uid } -> "i_task_id_" ^ Int.to_string uid
   | { loop_sym = Special_iterator Sample_num; uid } -> "i_sample_num_" ^ Int.to_string uid
 
-let new_uid =
+let new_loop_uid, new_sym_uid =
   let uid = ref 0 in
-  fun loop_sym ->
-    Int.incr uid;
-    { loop_sym; uid = !uid }
+  ( (fun loop_sym ->
+      Int.incr uid;
+      { loop_sym; uid = !uid }),
+    fun sym ->
+      Int.incr uid;
+      { sym; uid = !uid } )
 
 let new_loop_index it = function
-  | Shape.{ special = Dedicated idx; _ } -> new_uid (Special_iterator idx)
-  | _ -> new_uid (Iterator it)
+  | Shape.{ special = Dedicated idx; _ } -> new_loop_uid (Special_iterator idx)
+  | _ -> new_loop_uid (Iterator it)
 
 let to_shape_index = function
   | { loop_sym = Iterator sym; uid } -> Shape.Iterator { sym; uid }
@@ -1068,8 +1071,8 @@ let inline_computation ~id node call_args =
   let exception Non_virtual in
   let make_subst i lhs_ind =
     let rhs_ind = call_args.(i) in
-    match lhs_ind with
-    | Shape.Iterator s -> Some (s, rhs_ind)
+    match lhs_ind, rhs_ind with
+    | Shape.Iterator lhs_s, Shape.Iterator rhs_s -> Some (lhs_s, rhs_s)
     | _ when Shape.equal_axis_index equal_sym_index lhs_ind rhs_ind -> None
     | _ -> raise Non_virtual
   in
@@ -1081,52 +1084,60 @@ let inline_computation ~id node call_args =
       | None -> Map.Poly.empty
       | Some def_args -> Map.Poly.of_alist_exn @@ Array.to_list @@ Array.filter_mapi def_args ~f:make_subst
     in
-    let subst = function Shape.Iterator s when Map.mem env s -> Map.find_exn env s | idx -> idx in
-    let rec loop llc : unit low_level option =
+    let subst env = function Shape.Iterator s when Map.mem env s -> Shape.Iterator (Map.find_exn env s) | idx -> idx in
+    let rec loop env llc : unit low_level option =
       match llc with
       | Lines body ->
-          let body = Array.filter_map ~f:loop body in
+          let body = Array.filter_map ~f:(loop env) body in
           if Array.is_empty body then None else Some (Lines body)
       | For_loop { trace_it = false; _ } -> assert false
       | For_loop { index = { loop_sym = Iterator sym; uid }; body; _ } when Map.mem env { sym; uid } ->
-          loop body
+          loop env body
+      | For_loop { index = { loop_sym = Iterator sym; uid }; from_; to_; body; trace_it } ->
+          (* Freshen the binding. *)
+          let fresh = new_sym_uid sym in
+          let env = Map.Poly.add_exn ~key:{ sym; uid } ~data:fresh env in
+          Option.map ~f:(fun body ->
+              For_loop
+                { index = { loop_sym = Iterator fresh.sym; uid = fresh.uid }; from_; to_; body; trace_it })
+          @@ loop env body
       | For_loop { index; from_; to_; body; trace_it } ->
-          Option.map ~f:(fun body -> For_loop { index; from_; to_; body; trace_it }) @@ loop body
+          Option.map ~f:(fun body -> For_loop { index; from_; to_; body; trace_it }) @@ loop env body
       | Rebalance (s, cs) ->
           (* FIXME: NOT IMPLEMENTED YET *)
-          let cs = Array.filter_map ~f:loop cs in
+          let cs = Array.filter_map ~f:(loop env) cs in
           if Array.is_empty cs then None else Some (Rebalance (s, cs))
       | If_task_id_is { for_task_id = _; body } ->
           (* Inlined computations are governed by the inlining context, and cannot interfere across tasks.
              Undo parallelization. *)
-          loop body
+          loop env body
       | Zero_out tensor when NodeUI.equal_tensor_ptr tensor at_data -> Some (Set_local (id, Constant 0.0))
       | Set (tensor, indices, llv) when NodeUI.equal_tensor_ptr tensor at_data ->
           assert ([%equal: index array option] (Some indices) def_args);
-          Some (Set_local (id, loop_float llv))
+          Some (Set_local (id, loop_float env llv))
       | Zero_out _ -> None
       | Set _ -> None
-      | Set_local (id, llv) -> Some (Set_local (id, loop_float llv))
+      | Set_local (id, llv) -> Some (Set_local (id, loop_float env llv))
       | Comment _ -> Some llc
       | Dynamic_indices dyn_idcs ->
           (* Dynamic_indices is introduced by to_low_level in the innermost scope. *)
-          Option.map ~f:(fun body -> Dynamic_indices { dyn_idcs with body }) @@ loop dyn_idcs.body
-    and loop_float llv : float low_level =
+          Option.map ~f:(fun body -> Dynamic_indices { dyn_idcs with body }) @@ loop env dyn_idcs.body
+    and loop_float env llv : float low_level =
       match llv with
       | Constant _ -> llv
       | Get (tensor, indices) when NodeUI.equal_tensor_ptr tensor at_data ->
           assert ([%equal: index array option] (Some indices) def_args);
           Get_local id
-      | Get (tensor, indices) -> Get (tensor, Array.map ~f:subst indices)
+      | Get (tensor, indices) -> Get (tensor, Array.map ~f:(subst env) indices)
       | Local_scope { id; prec; body; orig_indices } ->
           Local_scope
-            { id; prec; body = Option.value_exn @@ loop body; orig_indices = Array.map ~f:subst orig_indices }
+            { id; prec; body = Option.value_exn @@ loop env body; orig_indices = Array.map ~f:(subst env) orig_indices }
       | Get_local _ -> llv
       | Get_global _ -> llv
-      | Binop (op, llv1, llv2) -> Binop (op, loop_float llv1, loop_float llv2)
-      | Unop (op, llv) -> Unop (op, loop_float llv)
+      | Binop (op, llv1, llv2) -> Binop (op, loop_float env llv1, loop_float env llv2)
+      | Unop (op, llv) -> Unop (op, loop_float env llv)
     in
-    loop def
+    loop env def
   in
   try Some (Lines (Array.filter_opt @@ Array.of_list_rev_map ~f:loop_proc node.computations))
   with Non_virtual ->
