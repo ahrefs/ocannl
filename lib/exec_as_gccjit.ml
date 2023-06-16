@@ -120,6 +120,15 @@ let get_tensor
         let arr_typ = Type.array ctx num_typ device_size in
         let local = Function.local func arr_typ @@ NodeUI.tensor_ptr_name ptr in
         let host_dims = Bigarray.Genarray.dims arr in
+        let cast_void rv = RValue.cast ctx rv c_void_ptr in
+        if tn.zero_initialized && not update_on_host then
+          Block.eval task_init_block
+          @@ RValue.call ctx (Function.builtin ctx "memset")
+               [
+                 cast_void @@ LValue.address local;
+                 RValue.zero ctx c_int;
+                 RValue.int ctx c_index device_size_in_bytes;
+               ];
         Option.iter hosted_ptr ~f:(fun hosted_ptr ->
             if local_is_slice_of_host then (
               let offset_idcs =
@@ -133,24 +142,14 @@ let get_tensor
               in
               let offset = jit_array_offset ctx ~idcs:offset_idcs ~dims:host_dims in
               let lhs = LValue.access_array hosted_ptr offset in
-              let cast_void rv = RValue.cast ctx rv c_void_ptr in
-              if tn.zero_initialized then
-                if update_on_host then
-                  Block.eval task_init_block
-                  @@ RValue.call ctx (Function.builtin ctx "memset")
-                       [
-                         cast_void @@ LValue.address lhs;
-                         RValue.zero ctx c_int;
-                         RValue.int ctx c_index device_size_in_bytes;
-                       ]
-                else
-                  Block.eval task_init_block
-                  @@ RValue.call ctx (Function.builtin ctx "memset")
-                       [
-                         cast_void @@ LValue.address local;
-                         RValue.zero ctx c_int;
-                         RValue.int ctx c_index device_size_in_bytes;
-                       ];
+              if tn.zero_initialized && update_on_host then
+                Block.eval task_init_block
+                @@ RValue.call ctx (Function.builtin ctx "memset")
+                     [
+                       cast_void @@ LValue.address lhs;
+                       RValue.zero ctx c_int;
+                       RValue.int ctx c_index device_size_in_bytes;
+                     ];
               if tn.read_before_write then
                 Block.eval task_init_block
                 @@ RValue.call ctx (Function.builtin ctx "memcpy")
