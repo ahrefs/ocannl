@@ -30,21 +30,28 @@ Warning disclaimer: this project is still "not announced". The features describe
   
 ## Future milestones
 
-* **v0.3-GPU**: a CUDA backend.
-* **v0.3.1-tiling**: the tiling optimization.
-* **v0.4-usability**: examples covering most of Andrej Karpathy's "Neural Networks Zero to Hero" series; data loading; checkpointing.
-* **v0.5-documentation**: `.mli` files and maybe more documentation.
-* **v0.6-scale**: distributed computation; runtime-autotuning optimization settings.
-* **v1-completeness**: whatever not-yet-implemented features that still seem needed and impact the framework design. (E.g. at the time of v0.1.X, convolutions, reshaping, concatenation are not easily expressible.)
+* **v0.2.1 cuda**: a super-naive no-model-parallelism CUDA backend.
+* **v0.2.2 tiling**: a slightly-less-naive CUDA backend with some model parallelism, and maybe tiling.
+* **v0.3 LLVM and Triton**:
+  * **v0.3.1 triton-C**: a Triton backend.
+  * **v0.3.2 llvm**: an LLVM backend as an alternative to the GCCJIT backend. This one would be a more CPU-centric release. Blocked by LLVM 17 being released (i.e. aiming to start work around end of July).
+  * **v0.3.2 triton-llvm**: an LLVM-based Triton backend.
+* **v0.4 usability**: examples covering most of Andrej Karpathy's "Neural Networks Zero to Hero" series; data loading; checkpointing.
+* **v0.5 documentation**: `.mli` files and maybe more documentation.
+* **v0.6 scale**: basic distributed computation; runtime-autotuning optimization settings; data ingestion.
+* **v1 completeness**: whatever not-yet-implemented features that still seem needed and impact the framework design. (E.g. at the time of v0.1.X, convolutions, reshaping, concatenation are not easily expressible.)
 
 ### Releases
 
 For details, see [CHANGES](CHANGES.md).
 
-* **v0.2**: for multicore CPU, improve cache locality and reduce cache contention by treating the C function stack as the "device memory".
-* **v0.1.2**: multicore computations using a thread-local "task id" index.
-* **v0.1.1**: inlining scalar constants, improved inlining for virtual nodes.
-* **v0.1.0**: a `Gccjit` backend, single and double precision floats, code compiled as a monolithic update step function.
+* **v0.2 inching toward GPU**:
+  * **v0.2.0 stack-as-device**: for multicore CPU, improve cache locality and reduce cache contention by treating the C function stack as the "device memory".
+* **v0.1 GCCJIT backend**:
+  * **v0.1.2**: multicore computations using a thread-local "task id" index.
+  * **v0.1.1**: inlining scalar constants, improved inlining for virtual nodes.
+  * **v0.1.0**: a `Gccjit` backend, single and double precision floats, code compiled as a monolithic update step function.
+* **v0.0 untagged**: basic design around shape inference, high-level and low-level code representation. Now-abandoned Meta-OCaml and OCaml backends.
 
 
 ## Why not just use [OWL](https://ocaml.xyz/)?
