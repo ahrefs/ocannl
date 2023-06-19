@@ -216,8 +216,6 @@ let print_session_code ?(compiled = false) () =
   else Caml.Format.printf "Session step update code:@ %a" fprint_code !session_step_update;
   Caml.Format.print_newline ()
 
-let macrobatch_loop_symbol = Shape.get_symbol ()
-
 let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_params = true) ?(reinit = false)
     ?(run_for_steps = 1) ?(run = true) ?(force_no_init = false) () =
   let open Formula in
@@ -300,7 +298,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
           Code.(
             For_loop
               {
-                index = Code.new_loop_index macrobatch_loop_symbol (Shape.dim run_for_steps);
+                index = Shape.get_sym_for_axis Shape.Dim;
                 from_ = 0;
                 to_ = run_for_steps - 1;
                 body = Lines [| Comment "Update sub-step"; compiled |];

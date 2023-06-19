@@ -53,6 +53,7 @@ type state = {
   task_init_block : Gccjit.block;
   task_finalize_block : Gccjit.block;
   replicated_finalize_block : Gccjit.block;
+  task_id : Gccjit.param option;
 }
 
 let jit_array_offset ctx ~idcs ~dims =
@@ -65,8 +66,16 @@ let jit_array_offset ctx ~idcs ~dims =
 exception Unknown_synchronization
 
 let get_tensor
-    { ctx; func; tensors; traced_store; task_init_block; task_finalize_block; replicated_finalize_block }
-    ?force_sync ~jit_code ~host_idcs ptr : tensor =
+    {
+      ctx;
+      func;
+      tensors;
+      traced_store;
+      task_init_block;
+      task_finalize_block;
+      replicated_finalize_block;
+      task_id = _;
+    } ?force_sync ~jit_code ~host_idcs ptr : tensor =
   let open Gccjit in
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
       let n = NodeUI.(get ptr.id) in
@@ -158,26 +167,26 @@ let get_tensor
                        cast_void @@ LValue.address lhs;
                        RValue.int ctx c_index device_size_in_bytes;
                      ];
-              if (not tn.read_only) && not update_on_host then (
+              if (not tn.read_only) && not update_on_host then
                 (* let f = Function.builtin ctx "printf" in
-                let print_args =
-                  [
-                    RValue.string_literal ctx
-                      ("\nDEBUG: copy to host "
-                      ^ Sexp.to_string_hum ([%sexp_of: NodeUI.tensor_ptr] ptr)
-                      ^ " -- index: %d; size: %d: \n");
-                      offset;
-                      RValue.int ctx c_index device_size_in_bytes;
-                  ]
-                in
-                Block.eval task_finalize_block @@ RValue.call ctx f print_args; *)
+                   let print_args =
+                     [
+                       RValue.string_literal ctx
+                         ("\nDEBUG: copy to host "
+                         ^ Sexp.to_string_hum ([%sexp_of: NodeUI.tensor_ptr] ptr)
+                         ^ " -- index: %d; size: %d: \n");
+                         offset;
+                         RValue.int ctx c_index device_size_in_bytes;
+                     ]
+                   in
+                   Block.eval task_finalize_block @@ RValue.call ctx f print_args; *)
                 Block.eval (if is_replicated sync then replicated_finalize_block else task_finalize_block)
                 @@ RValue.call ctx (Function.builtin ctx "memcpy")
                      [
                        cast_void @@ LValue.address lhs;
                        cast_void @@ LValue.address local;
                        RValue.int ctx c_index device_size_in_bytes;
-                     ]))
+                     ])
             else (
               ignore jit_code;
               failwith "Exec_as_gccjit: non-slice hosted: NOT IMPLEMENTED YET"));
@@ -260,21 +269,23 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
     try
       Array.map indices ~f:(function
         | Shape.Fixed_idx i -> RValue.int ctx c_index i
-        | Iterator s -> Map.find_exn env.Code.env s
-        | Special_iterator Task_id when on_host -> snd @@ Option.value_exn env.task_id
-        | Special_iterator Task_id -> RValue.zero ctx c_index
-        | Special_iterator Sample_num -> snd @@ Option.value_exn env.sample_num
-        | Dynamic_recipient s -> Map.find_exn env.dyn_env s
+        | Iterator s -> Map.find_exn env s
+        | Special_iterator (Task_id, _) when on_host && Option.is_some state.task_id ->
+            RValue.param @@ Option.value_exn state.task_id
+        | Special_iterator (Task_id, s) when on_host -> Map.find_exn env s
+        | Special_iterator (Task_id, _) -> RValue.zero ctx c_index
+        | Special_iterator (Sample_num, s) -> Map.find_exn env s
+        | Dynamic_recipient s -> Map.find_exn env s
         | Dynamic_provider _ when example_only -> RValue.zero ctx c_index
         | Dynamic_provider _ -> Option.value_exn provider_dim
-        | Frozen_recipient s when on_host -> Map.find_exn env.dyn_env s
+        | Frozen_recipient s when on_host -> Map.find_exn env s
         | Frozen_recipient _ -> RValue.zero ctx c_index)
     with e ->
       Caml.Format.eprintf "exec_as_gccjit: missing index from@ %a@ among environment keys:@ %a\n%!"
         Sexp.pp_hum
-        ([%sexp_of: Code.sym_index Shape.axis_index array] indices)
+        ([%sexp_of: Shape.axis_index array] indices)
         Sexp.pp_hum
-        ([%sexp_of: Sexp.t list] @@ Code.environment_keys env);
+        ([%sexp_of: Shape.symbol list] @@ Map.keys env);
       raise e
   in
   let c_float = Type.get ctx Type.Float in
@@ -314,8 +325,9 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
     (if !Code.with_debug && !Code.executor_print_comments then
        let f = Function.builtin ctx "printf" in
        let print_args =
-         match env.Code.task_id with
-         | Some (_, task_id) -> [ RValue.string_literal ctx ("\nComment for task %d: " ^ c ^ "\n"); task_id ]
+         match state.task_id with
+         | Some task_id ->
+             [ RValue.string_literal ctx ("\nComment for task %d: " ^ c ^ "\n"); RValue.param task_id ]
          | None -> [ RValue.string_literal ctx ("\nComment: " ^ c ^ "\n") ]
        in
        Block.eval !current_block @@ RValue.call ctx f print_args);
@@ -331,8 +343,8 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
         (* This backend does not implement a relevant form of fine-grain parallelism. *)
         Array.iteri cs ~f:(fun i line -> loop ~name:(name ^ "_at_par_line_" ^ Int.to_string i) line)
     | If_task_id_is { for_task_id; body } -> (
-        match env.Code.task_id with
-        | Some (_, task_id) ->
+        match state.task_id with
+        | Some task_id ->
             let open Gccjit in
             let id = get_uid () in
             let b_if_body =
@@ -341,7 +353,9 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
             let b_after_if =
               Block.create ~name:("after_if_task_id_is_" ^ Int.to_string for_task_id ^ "_" ^ id) func
             in
-            let guard = RValue.comparison ctx Eq task_id (RValue.int ctx c_index for_task_id) in
+            let guard =
+              RValue.comparison ctx Eq (RValue.param task_id) (RValue.int ctx c_index for_task_id)
+            in
             Block.cond_jump !current_block guard b_if_body (* on true *) b_after_if (* on false *);
             current_block := b_if_body;
             loop ~name body;
@@ -350,8 +364,9 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
         | None -> loop ~name body)
     | Set (_, _, Binop (Arg2, Get (_, _), _)) -> assert false
     | Set (tensor, idcs, Binop (op, Get (tensor2, idcs2), c2))
-      when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: Code.index array] idcs idcs2 && is_builtin_op op
-      ->
+      when NodeUI.equal_tensor_ptr tensor tensor2
+           && [%equal: Shape.axis_index array] idcs idcs2
+           && is_builtin_op op ->
         (* FIXME: maybe it's not worth it? *)
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
@@ -366,7 +381,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
           Block.assign !current_block device_lhs (RValue.lvalue host_lhs))
         else Block.assign_op !current_block device_lhs (builtin_op op) value
     | Set (tensor, idcs, Binop (op, Get (tensor2, idcs2), c2))
-      when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: Code.index array] idcs idcs2 ->
+      when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
@@ -389,7 +404,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
           in
           Block.assign !current_block device_lhs rhs
     | Set (tensor, idcs, Binop (op, c2, Get (tensor2, idcs2)))
-      when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: Code.index array] idcs idcs2 ->
+      when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
@@ -461,7 +476,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
         let lvalue, _typ, _local_is_double = Map.find_exn !locals id in
         (* FIXME: Convert according to local_is_double ?= is_double. *)
         RValue.lvalue lvalue
-    | Get_global Task_id -> RValue.cast ctx (snd @@ Option.value_exn env.task_id) num_typ
+    | Get_global Task_id -> RValue.cast ctx (RValue.param @@ Option.value_exn state.task_id) num_typ
     | Get_global (C_function f_name) ->
         (* TODO: this is too limiting. *)
         let f = Function.builtin ctx f_name in
@@ -482,9 +497,9 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
     | Constant v -> RValue.double ctx num_typ v
   and jit_for_loop ~env key ~from_ ~to_ body : unit =
     let open Gccjit in
-    let i = Code.loop_index_lident key in
+    let i = "i" ^ (match key with Symbol s -> Int.to_string s) in
     let index = Function.local func c_index i in
-    let env = Code.environment_add key (RValue.lvalue index) env in
+    let env = Map.add_exn ~key ~data:(RValue.lvalue index) env in
     let b_loop_cond = Block.create ~name:("loop_cond_" ^ i) func in
     let b_loop_body = Block.create ~name:("loop_body_" ^ i) func in
     let b_after_loop = Block.create ~name:("after_loop_" ^ i) func in
@@ -516,7 +531,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
               RValue.lvalue sym_index)
             else dyn_index
           in
-          { env with dyn_env = Map.add_exn ~key ~data env.dyn_env })
+          Map.add_exn ~key ~data env)
     in
     loop_proc ~name ~env body
   in
@@ -533,15 +548,7 @@ let jit_func ~name ctx (traced_store, proc) =
   let task_finalize_block = Block.create ~name:("finalize_" ^ name) func in
   let replicated_finalize_block = Block.create ~name:("finalize_replicated_" ^ name) func in
   let main_block = Block.create ~name func in
-  let env =
-    Code.
-      {
-        env = Map.Poly.empty;
-        dyn_env = Map.Poly.empty;
-        task_id = Some (Code.global_task_id_idx, RValue.param task_id);
-        sample_num = None;
-      }
-  in
+  let env = Code.empty_env in
   let state =
     {
       ctx;
@@ -551,6 +558,7 @@ let jit_func ~name ctx (traced_store, proc) =
       task_finalize_block;
       replicated_finalize_block;
       tensors = Hashtbl.Poly.create ();
+      task_id = Some task_id;
     }
   in
   let after_proc = jit_code ~name ~env state main_block proc in

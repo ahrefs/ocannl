@@ -1053,13 +1053,45 @@ let to_dims (sh : t) : dim array =
 
 type symbol = Symbol of int [@@deriving compare, equal, sexp, hash, variants]
 
-let unique_id = ref 0
+let unique_id = ref 1
 
 let get_symbol () =
+  let uid = !unique_id in
   Int.incr unique_id;
-  Symbol !unique_id
+  Symbol uid
 
+module CompareSymbol = struct
+  type t = symbol = Symbol of int [@@deriving compare, equal, sexp, hash, variants]
+end
+
+module Symbol = struct
+  include CompareSymbol
+  include Comparator.Make (CompareSymbol)
+end
+
+let task_id_symbols = Hash_set.create (module Symbol)
+let sample_num_symbols = Hash_set.create (module Symbol)
+
+let get_sym_for_axis = function
+  | Dim -> get_symbol ()
+  | Dedicated Task_id ->
+      let uid = get_symbol () in
+      Hash_set.add task_id_symbols uid;
+      uid
+  | Dedicated Sample_num ->
+      let uid = get_symbol () in
+      Hash_set.add sample_num_symbols uid;
+      uid
+  | Frozen -> get_symbol ()
+
+let task_id_sym = Hash_set.mem task_id_symbols
+let sample_num_sym = Hash_set.mem sample_num_symbols
 let iterate_sample_num = ref true
+
+let fresh_symbol sym =
+  if task_id_sym sym then get_sym_for_axis (Dedicated Task_id)
+  else if sample_num_sym sym then get_sym_for_axis (Dedicated Sample_num)
+  else get_symbol ()
 
 let iterated = function
   | { special = Dim; dim } when dim > 1 -> true
@@ -1069,9 +1101,10 @@ let iterated = function
 let opt_symbol d = Option.some_if (iterated d) @@ get_symbol ()
 
 (** An index into a single axis for doing computations over multiple [Shape]-derived [Code]s. *)
-type 'a axis_index =
+type axis_index =
   | Fixed_idx of int  (** The specific position along an axis. *)
-  | Iterator of 'a  (** The given member of the [product_space] corresponding to some [product_iterators]. *)
+  | Iterator of symbol
+      (** The given member of the [product_space] corresponding to some [product_iterators]. *)
   | Dynamic_recipient of symbol
       (** [Dynamic_recipient s] gets the index from the [s] member of an [Dynamic_provider sl]
       axis. *)
@@ -1082,7 +1115,7 @@ type 'a axis_index =
       dimensions of the recipient axes. The contents stored with a [Dynamic_provider] are used during
       the translation from the high-level to the low-level representation, and later [Dynamic_provider]
       is used as a place-holder filled in with the axis number of the recipient. *)
-  | Special_iterator of dedicated_axis  (** The index that resolves to one particular iterator. *)
+  | Special_iterator of dedicated_axis * symbol  (** The index that resolves to one particular iterator. *)
   | Frozen_recipient of symbol
       (** Like [Dynamic_recipient] and [Fixed_idx], but the index value is not updated during an update step. *)
 [@@deriving compare, equal, sexp, variants]
@@ -1106,13 +1139,13 @@ type projections = {
   product_iterators : symbol array;
       (** The product space iterators (concatentation of the relevant batch, output, input axes)
       for iterating over the [product_space] axes, where same axes are at same array indices. *)
-  project_lhs : symbol axis_index array;
+  project_lhs : axis_index array;
       (** A projection that takes an [product_space]-bound index and produces an index into the result of
       an operation. *)
-  project_rhs1 : symbol axis_index array;
+  project_rhs1 : axis_index array;
       (** A projection that takes an [product_space]-bound index and produces an index into the (first)
       argument of an operation. *)
-  project_rhs2 : symbol axis_index array option;
+  project_rhs2 : axis_index array option;
       (** A projection that takes an [product_space]-bound index and produces an index into the second
       argument of a binary operation. *)
 }
@@ -1142,18 +1175,20 @@ let project_broad d1 d2 =
   | { dim = 1; _ }, d | d, { dim = 1; _ } -> d
   | _ -> assert false
 
-let project_dyn_indexing dynamic_idcs targets_and_skipped =
-  let remaining_syms, idcs =
+let project_dyn_indexing ~dynamic_syms ~dedicated_syms targets_and_skipped =
+  let remaining_dyn_syms, remaining_ded_syms, idcs =
     List.fold_left
-      ~init:(Array.to_list dynamic_idcs, [])
+      ~init:(Array.to_list dynamic_syms, Array.to_list dedicated_syms, [])
       (Array.to_list targets_and_skipped)
-      ~f:(fun (syms, idcs) dim ->
+      ~f:(fun (dyn_syms, ded_syms, idcs) dim ->
         match dim.special with
-        | Dedicated idx -> (syms, Special_iterator idx :: idcs)
-        | Frozen -> (List.tl_exn syms, Frozen_recipient (List.hd_exn syms) :: idcs)
-        | Dim -> (List.tl_exn syms, Dynamic_recipient (List.hd_exn syms) :: idcs))
+        | Dedicated idx ->
+            (dyn_syms, List.tl_exn ded_syms, Special_iterator (idx, List.hd_exn ded_syms) :: idcs)
+        | Frozen -> (List.tl_exn dyn_syms, ded_syms, Frozen_recipient (List.hd_exn dyn_syms) :: idcs)
+        | Dim -> (List.tl_exn dyn_syms, ded_syms, Dynamic_recipient (List.hd_exn dyn_syms) :: idcs))
   in
-  assert (List.is_empty remaining_syms);
+  assert (List.is_empty remaining_dyn_syms);
+  assert (List.is_empty remaining_ded_syms);
   Array.of_list_rev idcs
 
 (** Computes the indexing into subformulas given the shape information of a formula. The processing
@@ -1176,13 +1211,11 @@ let rec derive_projections (shapes : update_step) : projections =
         broad_back_dims [] (List.rev dims1, List.rev dims2)
   in
   let broadcast_sh sh1 kind1 sh2 kind2 = broadcast_dims (dims_of_kind kind1 sh1) (dims_of_kind kind2 sh2) in
-  let project_into_dims (product_idcs : symbol option list) (sh1_dims : dims) : symbol axis_index list =
+  let project_into_dims (product_idcs : symbol option list) (sh1_dims : dims) : axis_index list =
     let project_dim = function
-      | Some _idx, { special = Dedicated idx; _ } ->
-          Special_iterator idx
-          (* FIXME: what about idx? What about identifying the inlining code block using idx?
-             Note we are excluding Parallel from product_iterators via opt_symbol. *)
-      | None, { special = Dedicated idx; _ } -> Special_iterator idx
+      | Some idx, { special = Dedicated special; _ } -> Special_iterator (special, idx)
+      (* Note we are excluding Parallel from product_iterators via opt_symbol. *)
+      (* | None, { special = Dedicated idx; _ } -> Special_iterator idx *)
       | _, { dim = 1; _ } | None, _ ->
           (* We preserve [Special_iterator] even for 1-dimensional axes. *)
           Fixed_idx 0
@@ -1255,11 +1288,8 @@ let rec derive_projections (shapes : update_step) : projections =
   let inferred_for_label label_iterators = function
     | Either.First label -> (
         match Map.find_exn label_iterators label with None -> Fixed_idx 0 | Some sym -> Iterator sym)
-    | Second { special = Dim; dim = pos } -> Fixed_idx pos
-    | Second { special = Dedicated idx; _ } -> Special_iterator idx
-    | Second { special = Frozen; dim = pos } ->
-        (* TODO: what's the best we can do here? *)
-        Fixed_idx pos
+    | Second { special = _; dim = pos } -> Fixed_idx pos
+    (* FIXME: I'm unsure about what happens for Special_iterator when inferred_for_label is called. *)
   in
 
   (* For binary cases, we cannot rely on [cur_sh] containing all axes, since in principle it could
@@ -1337,25 +1367,25 @@ let rec derive_projections (shapes : update_step) : projections =
       let f = inferred_for_label label_iterators in
       let inferred_lhs = Map.map lhs_labels ~f in
       let b_lhs, i_lhs, o_lhs = axis_map_to_dims_bio inferred_lhs in
-      let lhs_batch : symbol axis_index list = map_with_dims cur_sh.batch b_lhs ~f:project_iterator in
-      let lhs_input : symbol axis_index list = map_with_dims cur_sh.input i_lhs ~f:project_iterator in
-      let lhs_output : symbol axis_index list = map_with_dims cur_sh.output o_lhs ~f:project_iterator in
+      let lhs_batch : axis_index list = map_with_dims cur_sh.batch b_lhs ~f:project_iterator in
+      let lhs_input : axis_index list = map_with_dims cur_sh.input i_lhs ~f:project_iterator in
+      let lhs_output : axis_index list = map_with_dims cur_sh.output o_lhs ~f:project_iterator in
       let rhs_labels : axis_plab_map = axes_with_inf_labels ~all_labels:label_dims ls_rhs in
       let inferred_rhs = Map.map rhs_labels ~f in
       let b_rhs, i_rhs, o_rhs = axis_map_to_dims_bio inferred_rhs in
-      let rhs_batch : symbol axis_index list =
+      let rhs_batch : axis_index list =
         map_with_dims sh.batch b_rhs ~f:(fun d it -> if dim_1 d then Fixed_idx 0 else it)
       in
-      let rhs_input : symbol axis_index list =
+      let rhs_input : axis_index list =
         map_with_dims sh.input i_rhs ~f:(fun d it -> if dim_1 d then Fixed_idx 0 else it)
       in
-      let rhs_output : symbol axis_index list =
+      let rhs_output : axis_index list =
         map_with_dims sh.output o_rhs ~f:(fun d it -> if dim_1 d then Fixed_idx 0 else it)
       in
-      let project_lhs : symbol axis_index array =
+      let project_lhs : axis_index array =
         Array.of_list @@ List.concat [ lhs_batch; lhs_output; lhs_input ]
       in
-      let project_rhs1 : symbol axis_index array =
+      let project_rhs1 : axis_index array =
         Array.of_list @@ List.concat [ rhs_batch; rhs_output; rhs_input ]
       in
       let product_space = Array.filter ~f:iterated product_space in
@@ -1368,40 +1398,40 @@ let rec derive_projections (shapes : update_step) : projections =
         | Fixed dims | Inferred dims -> dims
       in
       let iters_inp : symbol option list = List.map product_inp ~f:opt_symbol in
-      let lhs1_input : symbol axis_index list = project_into iters_inp cur_sh Input in
+      let lhs1_input : axis_index list = project_into iters_inp cur_sh Input in
       let product_out : dim list =
         match cur_sh.output with
         | Given _ | Unknown -> broadcast_sh sh1 Output sh2 Output
         | Fixed dims | Inferred dims -> dims
       in
       let iters_out : symbol option list = List.map product_out ~f:opt_symbol in
-      let lhs1_output : symbol axis_index list = project_into iters_out cur_sh Output in
+      let lhs1_output : axis_index list = project_into iters_out cur_sh Output in
       let product_bch : dim list =
         match cur_sh.batch with
         | Given _ | Unknown -> broadcast_sh sh1 Batch sh2 Batch
         | Fixed dims | Inferred dims -> dims
       in
       let iters_bch : symbol option list = List.map product_bch ~f:opt_symbol in
-      let lhs1_batch : symbol axis_index list = project_into iters_bch cur_sh Batch in
-      let rhs1_input : symbol axis_index list = project_into iters_inp sh1 Input in
-      let rhs1_output : symbol axis_index list = project_into iters_out sh1 Output in
-      let rhs1_batch : symbol axis_index list = project_into iters_bch sh1 Batch in
-      let rhs2_input : symbol axis_index list = project_into iters_inp sh2 Input in
-      let rhs2_output : symbol axis_index list = project_into iters_out sh2 Output in
-      let rhs2_batch : symbol axis_index list = project_into iters_bch sh2 Batch in
+      let lhs1_batch : axis_index list = project_into iters_bch cur_sh Batch in
+      let rhs1_input : axis_index list = project_into iters_inp sh1 Input in
+      let rhs1_output : axis_index list = project_into iters_out sh1 Output in
+      let rhs1_batch : axis_index list = project_into iters_bch sh1 Batch in
+      let rhs2_input : axis_index list = project_into iters_inp sh2 Input in
+      let rhs2_output : axis_index list = project_into iters_out sh2 Output in
+      let rhs2_batch : axis_index list = project_into iters_bch sh2 Batch in
       let product_space : dim array =
         Array.of_list @@ List.concat [ product_bch; product_out; product_inp ]
       in
       let product_iterators : symbol option array =
         Array.of_list @@ List.concat [ iters_bch; iters_out; iters_inp ]
       in
-      let project_lhs : symbol axis_index array =
+      let project_lhs : axis_index array =
         Array.of_list @@ List.concat [ lhs1_batch; lhs1_output; lhs1_input ]
       in
-      let project_rhs1 : symbol axis_index array =
+      let project_rhs1 : axis_index array =
         Array.of_list @@ List.concat [ rhs1_batch; rhs1_output; rhs1_input ]
       in
-      let project_rhs2 : symbol axis_index array option =
+      let project_rhs2 : axis_index array option =
         Some (Array.of_list @@ List.concat [ rhs2_batch; rhs2_output; rhs2_input ])
       in
       let product_space = Array.filter ~f:iterated product_space in
@@ -1412,17 +1442,17 @@ let rec derive_projections (shapes : update_step) : projections =
          I.e. [cur.I = sh2.I, cur.O = sh1.O, sh2.O = sh1.I]. *)
       let product_inp : dim list = broadcast_sh cur_sh Input sh2 Input in
       let iters_inp : symbol option list = List.map product_inp ~f:opt_symbol in
-      let lhs_input : symbol axis_index list = project_into iters_inp cur_sh Input in
+      let lhs_input : axis_index list = project_into iters_inp cur_sh Input in
       let product_out : dim list = broadcast_sh cur_sh Output sh1 Output in
       let iters_out : symbol option list = List.map product_out ~f:opt_symbol in
-      let lhs_output : symbol axis_index list = project_into iters_out cur_sh Output in
+      let lhs_output : axis_index list = project_into iters_out cur_sh Output in
       let product_bch : dim list =
         match cur_sh.batch with
         | Given _ | Unknown -> broadcast_sh sh1 Batch sh2 Batch
         | Fixed dims | Inferred dims -> dims
       in
       let iters_bch : symbol option list = List.map product_bch ~f:opt_symbol in
-      let lhs1_batch : symbol axis_index list = project_into iters_bch cur_sh Batch in
+      let lhs1_batch : axis_index list = project_into iters_bch cur_sh Batch in
 
       let product_hid = broadcast_sh sh1 Input sh2 Output in
       let iters_hid = List.map product_hid ~f:opt_symbol in
@@ -1479,28 +1509,28 @@ let rec derive_projections (shapes : update_step) : projections =
       let f = inferred_for_label label_iterators in
       let inferred_lhs = Map.map lhs_labels ~f in
       let b_lhs, i_lhs, o_lhs = axis_map_to_dims_bio inferred_lhs in
-      let lhs_batch : symbol axis_index list = map_with_dims cur_sh.batch b_lhs ~f:project_iterator in
-      let lhs_input : symbol axis_index list = map_with_dims cur_sh.input i_lhs ~f:project_iterator in
-      let lhs_output : symbol axis_index list = map_with_dims cur_sh.output o_lhs ~f:project_iterator in
+      let lhs_batch : axis_index list = map_with_dims cur_sh.batch b_lhs ~f:project_iterator in
+      let lhs_input : axis_index list = map_with_dims cur_sh.input i_lhs ~f:project_iterator in
+      let lhs_output : axis_index list = map_with_dims cur_sh.output o_lhs ~f:project_iterator in
       let rhs1_labels : axis_plab_map = axes_with_inf_labels ~all_labels:label_dims ls_rhs1 in
       let inferred_rhs1 = Map.map rhs1_labels ~f in
       let b_rhs1, i_rhs1, o_rhs1 = axis_map_to_dims_bio inferred_rhs1 in
-      let rhs1_batch : symbol axis_index list = map_with_dims sh1.batch b_rhs1 ~f:project_iterator in
-      let rhs1_input : symbol axis_index list = map_with_dims sh1.input i_rhs1 ~f:project_iterator in
-      let rhs1_output : symbol axis_index list = map_with_dims sh1.output o_rhs1 ~f:project_iterator in
+      let rhs1_batch : axis_index list = map_with_dims sh1.batch b_rhs1 ~f:project_iterator in
+      let rhs1_input : axis_index list = map_with_dims sh1.input i_rhs1 ~f:project_iterator in
+      let rhs1_output : axis_index list = map_with_dims sh1.output o_rhs1 ~f:project_iterator in
       let rhs2_labels : axis_plab_map = axes_with_inf_labels ~all_labels:label_dims ls_rhs2 in
       let inferred_rhs2 = Map.map rhs2_labels ~f in
       let b_rhs2, i_rhs2, o_rhs2 = axis_map_to_dims_bio inferred_rhs2 in
-      let rhs2_batch : symbol axis_index list = map_with_dims sh2.batch b_rhs2 ~f:project_iterator in
-      let rhs2_input : symbol axis_index list = map_with_dims sh2.input i_rhs2 ~f:project_iterator in
-      let rhs2_output : symbol axis_index list = map_with_dims sh2.output o_rhs2 ~f:project_iterator in
-      let project_lhs : symbol axis_index array =
+      let rhs2_batch : axis_index list = map_with_dims sh2.batch b_rhs2 ~f:project_iterator in
+      let rhs2_input : axis_index list = map_with_dims sh2.input i_rhs2 ~f:project_iterator in
+      let rhs2_output : axis_index list = map_with_dims sh2.output o_rhs2 ~f:project_iterator in
+      let project_lhs : axis_index array =
         Array.of_list @@ List.concat [ lhs_batch; lhs_output; lhs_input ]
       in
-      let project_rhs1 : symbol axis_index array =
+      let project_rhs1 : axis_index array =
         Array.of_list @@ List.concat [ rhs1_batch; rhs1_output; rhs1_input ]
       in
-      let project_rhs2 : symbol axis_index array option =
+      let project_rhs2 : axis_index array option =
         Some (Array.of_list @@ List.concat [ rhs2_batch; rhs2_output; rhs2_input ])
       in
       let product_space = Array.filter ~f:iterated product_space in
@@ -1543,52 +1573,76 @@ let rec derive_projections (shapes : update_step) : projections =
           failwith "NOT IMPLEMENTED YET"
       in
       let n_par_axes = Array.count targets_and_skipped ~f:(fun d -> is_dedicated d.special) in
-      let drop_left_par proj = Array.sub ~pos:n_par_axes ~len:(Array.length proj - n_par_axes) proj in
-      let drop_right_par proj = Array.sub ~pos:0 ~len:(Array.length proj - n_par_axes) proj in
+      let drop_left_par proj =
+        let result = Array.sub ~pos:n_par_axes ~len:(Array.length proj - n_par_axes) proj in
+        let ded_syms =
+          Array.sub ~pos:0 ~len:n_par_axes proj
+          |> Array.filter_map ~f:(function Special_iterator (_, s) -> Some s | _ -> None)
+        in
+        (result, ded_syms)
+      in
+      let drop_right_par proj =
+        let result = Array.sub ~pos:0 ~len:(Array.length proj - n_par_axes) proj in
+        let ded_syms =
+          Array.sub ~pos:(Array.length proj - n_par_axes) ~len:n_par_axes proj
+          |> Array.filter_map ~f:(function Special_iterator (_, s) -> Some s | _ -> None)
+        in
+        (result, ded_syms)
+      in
       let update_other_axes = { shape = cur_sh; logic } in
       let reduced_projections = derive_projections update_other_axes in
-      let dynamic_idcs = Array.init subs ~f:(fun _ -> get_symbol ()) in
+      let dynamic_syms = Array.init subs ~f:(fun _ -> get_symbol ()) in
       let proj_b, proj_i, proj_o = indices_bio reduced_sh1 reduced_projections.project_rhs1 in
       let project_rhs1 =
         if from_left then
           match over_kind with
           | AxisKey.Batch ->
+              let proj_b, dedicated_syms = drop_left_par proj_b in
               Array.concat
                 [
-                  project_dyn_indexing dynamic_idcs targets_and_skipped; drop_left_par proj_b; proj_i; proj_o;
+                  project_dyn_indexing ~dynamic_syms ~dedicated_syms targets_and_skipped;
+                  proj_b;
+                  proj_o;
+                  proj_i;
                 ]
           | AxisKey.Input ->
-              Array.concat
+            let proj_i, dedicated_syms = drop_left_par proj_i in
+            Array.concat
                 [
-                  proj_b; project_dyn_indexing dynamic_idcs targets_and_skipped; drop_left_par proj_i; proj_o;
+                  proj_b; proj_o; project_dyn_indexing ~dynamic_syms ~dedicated_syms targets_and_skipped; proj_i;
                 ]
           | AxisKey.Output ->
+            let proj_o, dedicated_syms = drop_left_par proj_o in
               Array.concat
                 [
-                  proj_b; proj_i; project_dyn_indexing dynamic_idcs targets_and_skipped; drop_left_par proj_o;
+                  proj_b; project_dyn_indexing ~dynamic_syms ~dedicated_syms targets_and_skipped; proj_o; proj_i;
                 ]
         else
           match over_kind with
           | AxisKey.Batch ->
-              Array.concat
+            let proj_b, dedicated_syms = drop_right_par proj_b in
+            Array.concat
                 [
-                  drop_right_par proj_b; project_dyn_indexing dynamic_idcs targets_and_skipped; proj_i; proj_o;
+                  proj_b; project_dyn_indexing ~dynamic_syms ~dedicated_syms targets_and_skipped; proj_o; proj_i;
                 ]
           | AxisKey.Input ->
+            let proj_i, dedicated_syms = drop_right_par proj_i in
               Array.concat
                 [
-                  proj_b; drop_right_par proj_i; project_dyn_indexing dynamic_idcs targets_and_skipped; proj_o;
+                  proj_b; proj_o; proj_i; project_dyn_indexing ~dynamic_syms ~dedicated_syms targets_and_skipped;
                 ]
           | AxisKey.Output ->
-              Array.append
-                (drop_right_par reduced_projections.project_rhs1)
-                (project_dyn_indexing dynamic_idcs targets_and_skipped)
+            let proj_o, dedicated_syms = drop_right_par proj_o in
+            Array.concat
+            [
+              proj_b; proj_o; project_dyn_indexing ~dynamic_syms ~dedicated_syms targets_and_skipped; proj_i;
+            ]
       in
       let project_rhs2 =
         Some
           (Array.append
              (Option.value_exn reduced_projections.project_rhs2)
-             [| Dynamic_provider { idcs = dynamic_idcs; target_dims } |])
+             [| Dynamic_provider { idcs = dynamic_syms; target_dims } |])
       in
       { reduced_projections with project_rhs1; project_rhs2 }
 
@@ -1609,25 +1663,18 @@ let backprop_unary projections =
     project_rhs2 = Some projections.project_lhs;
   }
 
-let derive_index iterator_symbols (projection : symbol axis_index array) =
+let derive_index ~product_syms ~(projection : axis_index array) =
   let sym_to_i =
-    Array.mapi iterator_symbols ~f:(fun i (Symbol s) -> (s, i))
-    |> Array.to_list
-    |> Map.of_alist_exn (module Int)
+    Array.mapi product_syms ~f:(fun i (Symbol s) -> (s, i)) |> Array.to_list |> Map.of_alist_exn (module Int)
   in
   let positions =
     Array.map projection ~f:(function
-      | Iterator (Symbol s) -> Iterator (Map.find_exn sym_to_i s)
+      | Iterator (Symbol s) -> Either.First (Map.find_exn sym_to_i s)
       | (Fixed_idx _ | Special_iterator _ | Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _) as
         it ->
-          it)
+          Second it)
   in
-  fun product ->
-    Array.map positions ~f:(function
-      | Iterator p -> product.(p)
-      | (Fixed_idx _ | Special_iterator _ | Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _) as
-        it ->
-          it)
+  fun ~product -> Array.map positions ~f:(function First p -> product.(p) | Second it -> it)
 
 let make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~id () =
   let input = match input_dims with None -> Unknown | Some dims -> Given dims in
@@ -1677,15 +1724,3 @@ let to_string_hum ?(style = `Axis_size) sh =
   else if String.is_empty batch_dims then input_dims ^ "->" ^ output_dims
   else if String.is_empty input_dims then batch_dims ^ "|" ^ output_dims
   else batch_dims ^ "|" ^ input_dims ^ "->" ^ output_dims
-
-module CompareSymbol = struct
-  type t = symbol
-
-  let compare = compare_symbol
-  let sexp_of_t = sexp_of_symbol
-end
-
-module Symbol = struct
-  include CompareSymbol
-  include Comparator.Make (CompareSymbol)
-end
