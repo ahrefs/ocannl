@@ -43,6 +43,10 @@ module Functions (F : Ctypes.FOREIGN) = struct
   let cu_module_unload = F.foreign "cuModuleUnload" F.(cu_module @-> returning E.cu_result)
   let cu_ctx_destroy = F.foreign "cuCtxDestroy" F.(cu_context @-> returning E.cu_result)
 
+  let cu_memset_d8 = F.foreign "cuMemsetD8" F.(cu_deviceptr @-> uchar @-> size_t @-> returning E.cu_result)
+  let cu_memset_d16 = F.foreign "cuMemsetD16" F.(cu_deviceptr @-> ushort @-> size_t @-> returning E.cu_result)
+  let cu_memset_d32 = F.foreign "cuMemsetD32" F.(cu_deviceptr @-> uint32_t @-> size_t @-> returning E.cu_result)
+
   let cu_device_get_name =
     F.foreign "cuDeviceGetName" F.(ptr char @-> int @-> E.cu_device @-> returning E.cu_result)
 

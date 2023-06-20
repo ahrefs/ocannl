@@ -298,6 +298,15 @@ let mem_free (Deviceptr dev) = check "cu_mem_free" @@ Cuda.cu_mem_free dev
 let module_unload cu_mod = check "cu_module_unload" @@ Cuda.cu_module_unload cu_mod
 let ctx_destroy ctx = check "cu_ctx_destroy" @@ Cuda.cu_ctx_destroy ctx
 
+let memset_d8 (Deviceptr dev) v ~length =
+  check "cu_memset_d8" @@ Cuda.cu_memset_d8 dev v @@ Unsigned.Size_t.of_int length
+
+let memset_d16 (Deviceptr dev) v ~length =
+  check "cu_memset_d16" @@ Cuda.cu_memset_d16 dev v @@ Unsigned.Size_t.of_int length
+
+let memset_d32 (Deviceptr dev) v ~length =
+  check "cu_memset_d32" @@ Cuda.cu_memset_d32 dev v @@ Unsigned.Size_t.of_int length
+
 type device_attributes = {
   name : string;
   max_threads_per_block : int;
@@ -1104,3 +1113,4 @@ let device_get_attributes device =
 type context = cu_context
 type func = cu_function
 type stream = cu_stream
+type module_ = cu_module
