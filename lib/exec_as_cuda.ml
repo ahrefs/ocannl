@@ -114,7 +114,8 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~host_idcs ptr : tensor =
         Array.fold_until axes ~init:true
           ~f:
             (fun was_frozen -> function
-              | Shape.{ special = Frozen | Dedicated Task_id; _ } ->
+            (* Currently for Cuda, parallel dims are part of a slice. *)
+              | Shape.{ special = Frozen; _ } ->
                   if was_frozen then Continue true else Stop false
               | _ -> Continue false)
           ~finish:(fun _ -> true)
@@ -154,7 +155,7 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~host_idcs ptr : tensor =
                 let _offset_idcs =
                   try
                     Array.map2_exn host_idcs axes ~f:(fun idx -> function
-                      | Shape.{ special = Frozen | Dedicated Task_id; _ } -> idx | _ -> 0)
+                      | Shape.{ special = Frozen; _ } -> idx | _ -> 0)
                   with e ->
                     Caml.Format.printf "\nMismatch host_idcs axes = %a\n%!" Sexp.pp_hum
                       ([%sexp_of: Shape.dim array] axes);
@@ -220,8 +221,7 @@ let jit_code (ppf : Caml.Format.formatter) ~traced_store llc : unit =
     Array.map indices ~f:(function
       | Shape.Fixed_idx i -> Int.to_string i
       | Iterator (Symbol s) -> "i" ^ Int.to_string s
-      | Dedicated_iterator (Task_id, Symbol s) when on_host -> "task_id_" ^ Int.to_string s
-      | Dedicated_iterator (Task_id, _) -> Int.to_string 0
+      | Dedicated_iterator (Task_id, Symbol s) -> "task_id_" ^ Int.to_string s
       | Dedicated_iterator (Sample_num, Symbol s) -> "sample_num_" ^ Int.to_string s
       | Dynamic_recipient (Symbol s) -> "i" ^ Int.to_string s
       | Dynamic_provider _ when example_only -> Int.to_string 0

@@ -1086,7 +1086,7 @@ let get_sym_for_axis = function
 
 let task_id_sym = Hash_set.mem task_id_symbols
 let sample_num_sym = Hash_set.mem sample_num_symbols
-let iterate_sample_num = ref true
+(* let iterate_sample_num = ref true *)
 
 let fresh_symbol sym =
   if task_id_sym sym then get_sym_for_axis (Dedicated Task_id)
@@ -1095,7 +1095,8 @@ let fresh_symbol sym =
 
 let iterated = function
   | { special = Dim; dim } when dim > 1 -> true
-  | { special = Dedicated Sample_num; dim } when !iterate_sample_num && dim > 1 -> true
+  (* | { special = Dedicated Sample_num; dim } when !iterate_sample_num && dim > 1 -> true *)
+  | { special = Dedicated _; _ } -> true
   | _ -> false
 
 let opt_symbol d = Option.some_if (iterated d) @@ get_symbol ()
@@ -1218,12 +1219,10 @@ let rec derive_projections (shapes : update_step) : projections =
   let broadcast_sh sh1 kind1 sh2 kind2 = broadcast_dims (dims_of_kind kind1 sh1) (dims_of_kind kind2 sh2) in
   let project_into_dims (product_idcs : symbol option list) (sh1_dims : dims) : axis_index list =
     let project_dim = function
+      (* We preserve [Dedicated_iterator] even for 1-dimensional axes. *)
       | Some idx, { special = Dedicated special; _ } -> Dedicated_iterator (special, idx)
-      (* Note we are excluding Parallel from product_iterators via opt_symbol. *)
       (* | None, { special = Dedicated idx; _ } -> Dedicated_iterator idx *)
-      | _, { dim = 1; _ } | None, _ ->
-          (* We preserve [Dedicated_iterator] even for 1-dimensional axes. *)
-          Fixed_idx 0
+      | _, { dim = 1; _ } | None, _ -> Fixed_idx 0
       | Some idx, _ -> Iterator idx
     in
     let rec project_dims ~is_fixed accu_idcs = function
