@@ -492,12 +492,13 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
     | Binop (op, c1, c2) -> loop_binop op ~num_typ ~is_double ~v1:(loop c1) ~v2:(loop c2)
     | Unop (Code.Identity, c) -> loop c
     | Unop (Code.Relu, c) ->
+        (* FIXME: don't recompute c *)
         let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) @@ loop c in
         RValue.binary_op ctx Mult num_typ cmp @@ loop c
     | Constant v -> RValue.double ctx num_typ v
   and jit_for_loop ~env key ~from_ ~to_ body : unit =
     let open Gccjit in
-    let i = "i" ^ (match key with Symbol s -> Int.to_string s) in
+    let i = "i" ^ match key with Symbol s -> Int.to_string s in
     let index = Function.local func c_index i in
     let env = Map.add_exn ~key ~data:(RValue.lvalue index) env in
     let b_loop_cond = Block.create ~name:("loop_cond_" ^ i) func in
