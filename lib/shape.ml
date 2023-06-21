@@ -35,7 +35,7 @@ type axis_special =
   | Dim  (** A "randomly accessed" or "frequently reduced" axis -- no optimization hint. *)
   | Dedicated of dedicated_axis
       (** An axis whose iteration can have special treatment on some backends. All axes of a single
-          [dedicated_axis] kind are translated to a single [Special_iterator] index. *)
+          [dedicated_axis] kind are translated to a single [Dedicated_iterator] index. *)
   | Frozen
       (** An axis that should be indexed at a single position during a single `refresh_session`:
           a dynamic index into it will be a [Frozen_recipient]. *)
@@ -1115,7 +1115,7 @@ type axis_index =
       dimensions of the recipient axes. The contents stored with a [Dynamic_provider] are used during
       the translation from the high-level to the low-level representation, and later [Dynamic_provider]
       is used as a place-holder filled in with the axis number of the recipient. *)
-  | Special_iterator of dedicated_axis * symbol  (** The index that resolves to one particular iterator. *)
+  | Dedicated_iterator of dedicated_axis * symbol  (** The index that resolves to one particular iterator. *)
   | Frozen_recipient of symbol
       (** Like [Dynamic_recipient] and [Fixed_idx], but the index value is not updated during an update step. *)
 [@@deriving compare, equal, sexp, variants]
@@ -1183,7 +1183,7 @@ let project_dyn_indexing ~dynamic_syms ~dedicated_syms targets_and_skipped =
       ~f:(fun (dyn_syms, ded_syms, idcs) dim ->
         match dim.special with
         | Dedicated idx ->
-            (dyn_syms, List.tl_exn ded_syms, Special_iterator (idx, List.hd_exn ded_syms) :: idcs)
+            (dyn_syms, List.tl_exn ded_syms, Dedicated_iterator (idx, List.hd_exn ded_syms) :: idcs)
         | Frozen -> (List.tl_exn dyn_syms, ded_syms, Frozen_recipient (List.hd_exn dyn_syms) :: idcs)
         | Dim -> (List.tl_exn dyn_syms, ded_syms, Dynamic_recipient (List.hd_exn dyn_syms) :: idcs))
   in
@@ -1213,11 +1213,11 @@ let rec derive_projections (shapes : update_step) : projections =
   let broadcast_sh sh1 kind1 sh2 kind2 = broadcast_dims (dims_of_kind kind1 sh1) (dims_of_kind kind2 sh2) in
   let project_into_dims (product_idcs : symbol option list) (sh1_dims : dims) : axis_index list =
     let project_dim = function
-      | Some idx, { special = Dedicated special; _ } -> Special_iterator (special, idx)
+      | Some idx, { special = Dedicated special; _ } -> Dedicated_iterator (special, idx)
       (* Note we are excluding Parallel from product_iterators via opt_symbol. *)
-      (* | None, { special = Dedicated idx; _ } -> Special_iterator idx *)
+      (* | None, { special = Dedicated idx; _ } -> Dedicated_iterator idx *)
       | _, { dim = 1; _ } | None, _ ->
-          (* We preserve [Special_iterator] even for 1-dimensional axes. *)
+          (* We preserve [Dedicated_iterator] even for 1-dimensional axes. *)
           Fixed_idx 0
       | Some idx, _ -> Iterator idx
     in
@@ -1289,7 +1289,7 @@ let rec derive_projections (shapes : update_step) : projections =
     | Either.First label -> (
         match Map.find_exn label_iterators label with None -> Fixed_idx 0 | Some sym -> Iterator sym)
     | Second { special = _; dim = pos } -> Fixed_idx pos
-    (* FIXME: I'm unsure about what happens for Special_iterator when inferred_for_label is called. *)
+    (* FIXME: I'm unsure about what happens for Dedicated_iterator when inferred_for_label is called. *)
   in
 
   (* For binary cases, we cannot rely on [cur_sh] containing all axes, since in principle it could
@@ -1577,7 +1577,7 @@ let rec derive_projections (shapes : update_step) : projections =
         let result = Array.sub ~pos:n_par_axes ~len:(Array.length proj - n_par_axes) proj in
         let ded_syms =
           Array.sub ~pos:0 ~len:n_par_axes proj
-          |> Array.filter_map ~f:(function Special_iterator (_, s) -> Some s | _ -> None)
+          |> Array.filter_map ~f:(function Dedicated_iterator (_, s) -> Some s | _ -> None)
         in
         (result, ded_syms)
       in
@@ -1585,7 +1585,7 @@ let rec derive_projections (shapes : update_step) : projections =
         let result = Array.sub ~pos:0 ~len:(Array.length proj - n_par_axes) proj in
         let ded_syms =
           Array.sub ~pos:(Array.length proj - n_par_axes) ~len:n_par_axes proj
-          |> Array.filter_map ~f:(function Special_iterator (_, s) -> Some s | _ -> None)
+          |> Array.filter_map ~f:(function Dedicated_iterator (_, s) -> Some s | _ -> None)
         in
         (result, ded_syms)
       in
@@ -1670,7 +1670,7 @@ let derive_index ~product_syms ~(projection : axis_index array) =
   let positions =
     Array.map projection ~f:(function
       | Iterator (Symbol s) -> Either.First (Map.find_exn sym_to_i s)
-      | (Fixed_idx _ | Special_iterator _ | Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _) as
+      | (Fixed_idx _ | Dedicated_iterator _ | Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _) as
         it ->
           Second it)
   in

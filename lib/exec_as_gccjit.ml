@@ -270,11 +270,11 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
       Array.map indices ~f:(function
         | Shape.Fixed_idx i -> RValue.int ctx c_index i
         | Iterator s -> Map.find_exn env s
-        | Special_iterator (Task_id, _) when on_host && Option.is_some state.task_id ->
+        | Dedicated_iterator (Task_id, _) when on_host && Option.is_some state.task_id ->
             RValue.param @@ Option.value_exn state.task_id
-        | Special_iterator (Task_id, s) when on_host -> Map.find_exn env s
-        | Special_iterator (Task_id, _) -> RValue.zero ctx c_index
-        | Special_iterator (Sample_num, s) -> Map.find_exn env s
+        | Dedicated_iterator (Task_id, s) when on_host -> Map.find_exn env s
+        | Dedicated_iterator (Task_id, _) -> RValue.zero ctx c_index
+        | Dedicated_iterator (Sample_num, s) -> Map.find_exn env s
         | Dynamic_recipient s -> Map.find_exn env s
         | Dynamic_provider _ when example_only -> RValue.zero ctx c_index
         | Dynamic_provider _ -> Option.value_exn provider_dim

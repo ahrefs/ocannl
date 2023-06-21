@@ -74,8 +74,8 @@ let pp_index_axis ?provider_dim ppf =
   let open Shape in
   function
   | Iterator (Symbol s) -> Caml.Format.fprintf ppf "i%d" s
-  | Special_iterator (Task_id, Symbol s) -> Caml.Format.fprintf ppf "task_id_%d" s
-  | Special_iterator (Sample_num, Symbol s) -> Caml.Format.fprintf ppf "sample_num_%d" s
+  | Dedicated_iterator (Task_id, Symbol s) -> Caml.Format.fprintf ppf "task_id_%d" s
+  | Dedicated_iterator (Sample_num, Symbol s) -> Caml.Format.fprintf ppf "sample_num_%d" s
   | Frozen_recipient (Symbol s) -> Caml.Format.fprintf ppf "i%d" s
   | Dynamic_recipient (Symbol s) -> Caml.Format.fprintf ppf "i%d" s
   | Fixed_idx i -> Caml.Format.fprintf ppf "%d" i
@@ -220,9 +220,9 @@ let jit_code (ppf : Caml.Format.formatter) ~traced_store llc : unit =
     Array.map indices ~f:(function
       | Shape.Fixed_idx i -> Int.to_string i
       | Iterator (Symbol s) -> "i" ^ Int.to_string s
-      | Special_iterator (Task_id, Symbol s) when on_host -> "task_id_" ^ Int.to_string s
-      | Special_iterator (Task_id, _) -> Int.to_string 0
-      | Special_iterator (Sample_num, Symbol s) -> "sample_num_" ^ Int.to_string s
+      | Dedicated_iterator (Task_id, Symbol s) when on_host -> "task_id_" ^ Int.to_string s
+      | Dedicated_iterator (Task_id, _) -> Int.to_string 0
+      | Dedicated_iterator (Sample_num, Symbol s) -> "sample_num_" ^ Int.to_string s
       | Dynamic_recipient (Symbol s) -> "i" ^ Int.to_string s
       | Dynamic_provider _ when example_only -> Int.to_string 0
       | Dynamic_provider _ -> Int.to_string @@ Option.value_exn provider_dim
