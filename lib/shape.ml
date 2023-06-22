@@ -33,9 +33,7 @@ type dedicated_axis = Task_id | Sample_num [@@deriving equal, compare, sexp, var
 
 type axis_special =
   | Dim  (** A "randomly accessed" or "frequently reduced" axis -- no optimization hint. *)
-  | Dedicated of dedicated_axis
-      (** An axis whose iteration can have special treatment on some backends. All axes of a single
-          [dedicated_axis] kind are translated to a single [Dedicated_iterator] index. *)
+  | Dedicated of dedicated_axis  (** An axis whose iteration can have special treatment on some backends. *)
   | Frozen
       (** An axis that should be indexed at a single position during a single `refresh_session`:
           a dynamic index into it will be a [Frozen_recipient]. *)
@@ -1098,6 +1096,8 @@ let symbol_ident (Symbol s as sym) =
   else if sample_num_sym sym then "sample_num_" ^ Int.to_string s
   else "i" ^ Int.to_string s
 
+let is_dedicated sym = task_id_sym sym || sample_num_sym sym
+
 let iterated = function
   | { special = Dim; dim } when dim > 1 -> true
   (* | { special = Dedicated Sample_num; dim } when !iterate_sample_num && dim > 1 -> true *)
@@ -1121,7 +1121,6 @@ type axis_index =
       dimensions of the recipient axes. The contents stored with a [Dynamic_provider] are used during
       the translation from the high-level to the low-level representation, and later [Dynamic_provider]
       is used as a place-holder filled in with the axis number of the recipient. *)
-  | Dedicated_iterator of dedicated_axis * symbol  (** The index that resolves to one particular iterator. *)
   | Frozen_recipient of symbol
       (** Like [Dynamic_recipient] and [Fixed_idx], but the index value is not updated during an update step. *)
 [@@deriving compare, equal, sexp, variants]
@@ -1193,8 +1192,7 @@ let project_dyn_indexing ~(dynamic_syms : symbol array) ~(dedicated_syms : symbo
       (Array.to_list targets_and_skipped)
       ~f:(fun (dyn_syms, ded_syms, idcs) dim ->
         match dim.special with
-        | Dedicated idx ->
-            (dyn_syms, List.tl_exn ded_syms, Dedicated_iterator (idx, List.hd_exn ded_syms) :: idcs)
+        | Dedicated _ -> (dyn_syms, List.tl_exn ded_syms, Iterator (List.hd_exn ded_syms) :: idcs)
         | Frozen -> (List.tl_exn dyn_syms, ded_syms, Frozen_recipient (List.hd_exn dyn_syms) :: idcs)
         | Dim -> (List.tl_exn dyn_syms, ded_syms, Dynamic_recipient (List.hd_exn dyn_syms) :: idcs))
   in
@@ -1224,9 +1222,8 @@ let rec derive_projections (shapes : update_step) : projections =
   let broadcast_sh sh1 kind1 sh2 kind2 = broadcast_dims (dims_of_kind kind1 sh1) (dims_of_kind kind2 sh2) in
   let project_into_dims (product_idcs : symbol option list) (sh1_dims : dims) : axis_index list =
     let project_dim = function
-      (* We preserve [Dedicated_iterator] even for 1-dimensional axes. *)
-      | Some idx, { special = Dedicated special; _ } -> Dedicated_iterator (special, idx)
-      (* | None, { special = Dedicated idx; _ } -> Dedicated_iterator idx *)
+      (* We preserve dedicated iterators even for 1-dimensional axes. *)
+      | Some idx, { special = Dedicated _; _ } -> Iterator idx
       | _, { dim = 1; _ } | None, _ -> Fixed_idx 0
       | Some idx, _ -> Iterator idx
     in
@@ -1298,7 +1295,6 @@ let rec derive_projections (shapes : update_step) : projections =
     | Either.First label -> (
         match Map.find_exn label_iterators label with None -> Fixed_idx 0 | Some sym -> Iterator sym)
     | Second { special = _; dim = pos } -> Fixed_idx pos
-    (* FIXME: I'm unsure about what happens for Dedicated_iterator when inferred_for_label is called. *)
   in
 
   (* For binary cases, we cannot rely on [cur_sh] containing all axes, since in principle it could
@@ -1557,14 +1553,16 @@ let rec derive_projections (shapes : update_step) : projections =
         else (* FIXME: NOT IMPLEMENTED YET *)
           failwith "NOT IMPLEMENTED YET"
       in
-      let n_par_axes : int = Array.count targets_and_skipped ~f:(fun d -> is_dedicated d.special) in
+      let n_par_axes : int =
+        Array.count targets_and_skipped ~f:(function { special = Dedicated _; _ } -> true | _ -> false)
+      in
       let drop_left_par (proj : axis_index array) : axis_index array * symbol array =
         let result : axis_index array =
           Array.sub ~pos:n_par_axes ~len:(Array.length proj - n_par_axes) proj
         in
         let ded_syms : symbol array =
           Array.sub ~pos:0 ~len:n_par_axes proj
-          |> Array.filter_map ~f:(function Dedicated_iterator (_, s) -> Some s | _ -> None)
+          |> Array.filter_map ~f:(function Iterator s when is_dedicated s -> Some s | _ -> None)
         in
         (result, ded_syms)
       in
@@ -1572,7 +1570,7 @@ let rec derive_projections (shapes : update_step) : projections =
         let result : axis_index array = Array.sub ~pos:0 ~len:(Array.length proj - n_par_axes) proj in
         let ded_syms : symbol array =
           Array.sub ~pos:(Array.length proj - n_par_axes) ~len:n_par_axes proj
-          |> Array.filter_map ~f:(function Dedicated_iterator (_, s) -> Some s | _ -> None)
+          |> Array.filter_map ~f:(function Iterator s when is_dedicated s -> Some s | _ -> None)
         in
         (result, ded_syms)
       in
@@ -1671,10 +1669,10 @@ let derive_index ~product_syms ~(projection : axis_index array) =
   in
   let positions =
     Array.map projection ~f:(function
-      | Iterator (Symbol s) -> Either.First (Map.find_exn sym_to_i s)
-      | Dedicated_iterator (_, Symbol s) when Map.mem sym_to_i s -> Either.First (Map.find_exn sym_to_i s)
-      | (Fixed_idx _ | Dedicated_iterator _ | Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _)
-        as it ->
+      | Iterator (Symbol s) when Map.mem sym_to_i s -> Either.First (Map.find_exn sym_to_i s)
+      | (Fixed_idx _ | Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _) as it -> Second it
+      | Iterator s as it ->
+          assert (is_dedicated s);
           Second it)
   in
   fun ~product -> Array.map positions ~f:(function First p -> product.(p) | Second it -> it)

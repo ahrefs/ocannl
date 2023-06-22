@@ -71,7 +71,6 @@ let pp_index_axis ?provider_dim ppf =
   let open Shape in
   function
   | Iterator it 
-  | Dedicated_iterator (_, it) 
   | Frozen_recipient it
   | Dynamic_recipient it -> pp_index ppf it
   | Fixed_idx i -> Caml.Format.fprintf ppf "%d" i
@@ -216,7 +215,7 @@ let jit_code (ppf : Caml.Format.formatter) ~traced_store llc : unit =
   let lookup ?provider_dim ?(example_only = false) ~on_host indices =
     Array.map indices ~f:(function
       | Shape.Fixed_idx i -> Int.to_string i
-      | Iterator it | Dedicated_iterator (_, it) | Dynamic_recipient it -> Shape.symbol_ident it
+      | Iterator it | Dynamic_recipient it -> Shape.symbol_ident it
       | Dynamic_provider _ when example_only -> Int.to_string 0
       | Dynamic_provider _ -> Int.to_string @@ Option.value_exn provider_dim
       | Frozen_recipient it when on_host -> Shape.symbol_ident it

@@ -269,12 +269,11 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
     try
       Array.map indices ~f:(function
         | Shape.Fixed_idx i -> RValue.int ctx c_index i
-        | Iterator s -> Map.find_exn env s
-        | Dedicated_iterator (Task_id, _) when on_host && Option.is_some state.task_id ->
+        | Iterator s when on_host && Shape.task_id_sym s && Option.is_some state.task_id ->
             RValue.param @@ Option.value_exn state.task_id
-        | Dedicated_iterator (Task_id, s) when on_host -> Map.find_exn env s
-        | Dedicated_iterator (Task_id, _) -> RValue.zero ctx c_index
-        | Dedicated_iterator (Sample_num, s) -> Map.find_exn env s
+        | Iterator s when on_host && Shape.task_id_sym s -> Map.find_exn env s
+        | Iterator s when Shape.task_id_sym s -> RValue.zero ctx c_index
+        | Iterator s -> Map.find_exn env s
         | Dynamic_recipient s -> Map.find_exn env s
         | Dynamic_provider _ when example_only -> RValue.zero ctx c_index
         | Dynamic_provider _ -> Option.value_exn provider_dim
@@ -338,6 +337,10 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
     match body with
     | Code.Lines lines ->
         Array.iteri lines ~f:(fun i line -> loop ~name:(name ^ "_at_line_" ^ Int.to_string i) line)
+    | For_loop { index; from_ = _; to_ = _; body; trace_it = _ }
+      when Shape.task_id_sym index && Option.is_some state.task_id ->
+        let env = Map.add_exn ~key:index ~data:(RValue.param @@ Option.value_exn state.task_id) env in
+        loop_proc ~env ~name body
     | For_loop { index; from_; to_; body; trace_it = _ } -> jit_for_loop ~env index ~from_ ~to_ body
     | Rebalance (_, cs) ->
         (* This backend does not implement a relevant form of fine-grain parallelism. *)

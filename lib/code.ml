@@ -152,25 +152,24 @@ let check_not_replicable ~cached_replicable llc =
     | Rebalance (_, cs) -> Array.exists ~f:loop cs
     | If_task_id_is { body; _ } -> loop body
     | Dynamic_indices { tensor = _; tensor_idcs; dynamic_idcs = _; target_dims; body; slice = _ } ->
-        Array.exists tensor_idcs ~f:(function Shape.Dedicated_iterator (Task_id, _) -> true | _ -> false)
+        Array.exists tensor_idcs ~f:(function Shape.Iterator s -> Shape.task_id_sym s | _ -> false)
         || Array.exists
              ~f:Shape.(function { special = Dedicated Task_id; _ } -> true | _ -> false)
              target_dims
         || loop body
     | Zero_out _ -> false
     | Set (_, indices, llv) ->
-        Array.exists indices ~f:(function Shape.Dedicated_iterator (Task_id, _) -> true | _ -> false)
-        || loop llv
+        Array.exists indices ~f:(function Shape.Iterator s -> Shape.task_id_sym s | _ -> false) || loop llv
     | Set_local (_, llv) -> loop llv
     | Local_scope { body; orig_indices; _ } ->
-        Array.exists orig_indices ~f:(function Shape.Dedicated_iterator (Task_id, _) -> true | _ -> false)
+        Array.exists orig_indices ~f:(function Shape.Iterator s -> Shape.task_id_sym s | _ -> false)
         || loop body
     | Get_local _ -> false
     | Get_global Task_id -> true
     | Get_global _ -> false
     | Get (ptr, indices) ->
         (not (cached_replicable ptr))
-        || Array.exists indices ~f:(function Shape.Dedicated_iterator (Task_id, _) -> true | _ -> false)
+        || Array.exists indices ~f:(function Shape.Iterator s -> Shape.task_id_sym s | _ -> false)
     | Binop (_, llv1, llv2) -> loop llv1 || loop llv2
     | Unop (_, llv) -> loop llv
     | Constant _ -> false
@@ -385,8 +384,7 @@ let interpret_code ?task_id llc =
     try
       Array.map indices ~f:(function
         | Shape.Fixed_idx i -> i
-        | Dedicated_iterator (Task_id, _) when Option.is_some task_id -> Option.value_exn task_id
-        | Dedicated_iterator (_, it) -> Map.find_exn env it
+        | Iterator it when Shape.task_id_sym it && Option.is_some task_id -> Option.value_exn task_id
         | Iterator it -> Map.find_exn env it
         | Dynamic_recipient s -> Map.find_exn env s
         | Frozen_recipient s -> Map.find_exn env s
@@ -401,6 +399,9 @@ let interpret_code ?task_id llc =
     let loop = loop_proc env in
     match llc with
     | Lines body -> Array.iter ~f:loop body
+    | For_loop { index; from_ = _; to_ = _; body; trace_it = _ }
+      when Option.is_some task_id && Shape.task_id_sym index ->
+        loop_proc (Map.add_exn env ~key:index ~data:(Option.value_exn task_id)) body
     | For_loop { index; from_; to_; body; trace_it = _ } ->
         for data = from_ to to_ do
           (* We could allow replacement, but in fact we do not want repeated indices because backends
@@ -785,10 +786,10 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
     (* For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
     Array.map indices ~f:(function
       | Shape.Fixed_idx i -> i
-      | Iterator s -> Map.find_exn env s
-      | (Dynamic_recipient s | Frozen_recipient s | Dedicated_iterator (_, s)) when Map.mem env s ->
+      | Iterator s when not (Shape.is_dedicated s) -> Map.find_exn env s
+      | (Dynamic_recipient s | Frozen_recipient s | Iterator s) when Map.mem env s ->
           Map.find_exn env s
-      | Dynamic_recipient _ | Frozen_recipient _ | Dedicated_iterator _ -> 0
+      | Dynamic_recipient _ | Frozen_recipient _ | Iterator _ -> 0
       | Dynamic_provider _ -> Option.value_exn provider_dim)
   in
   let cached_replicable ptr = (get_node traced_store ptr).is_replicable in
@@ -838,7 +839,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
           | Dynamic_recipient _ | Frozen_recipient _ ->
               (* TODO(#133): We don't support inlining tensors with complex write patterns. *)
               traced.non_virtual <- true
-          | Fixed_idx _ | Dedicated_iterator _ -> ()
+          | Fixed_idx _ -> ()
           | Iterator s ->
               let old_tensor = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tensor) in
               (* TODO(#134): this prevents multiple virtual tensors from sharing for loops. *)
@@ -913,7 +914,10 @@ let process_computation node top_llc =
            ~f:
              Shape.(
                function
-               | Dedicated_iterator _ | Fixed_idx _ | Dynamic_recipient _ | Frozen_recipient _
+               | Iterator s when Shape.is_dedicated s ->
+                   (* Dedicated indices are non-substitutable. *)
+                   None
+                   | Fixed_idx _ | Dynamic_recipient _ | Frozen_recipient _
                | Dynamic_provider _ ->
                    None
                | Iterator s -> Some s)
@@ -941,7 +945,7 @@ let process_computation node top_llc =
         else
           (* Check for escaping variables. *)
           Array.iter indices ~f:(function
-            | (Iterator s | Dedicated_iterator (_, s)) as idx ->
+            | (Iterator s) as idx ->
                 if not @@ Map.mem env_dom s then (
                   if !with_debug then
                     Caml.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
@@ -963,7 +967,7 @@ let process_computation node top_llc =
         else
           (* Check for escaping variables. *)
           Array.iter idcs ~f:(function
-            | (Iterator s | Dedicated_iterator (_, s)) as idx ->
+            | (Iterator s) as idx ->
                 if not @@ Map.mem env_dom s then (
                   if !with_debug then
                     Caml.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
@@ -1016,16 +1020,12 @@ let inline_computation ~id node call_args =
           let body = Array.filter_map ~f:(loop env) body in
           if Array.is_empty body then None else Some (Lines body)
       | For_loop { trace_it = false; _ } -> assert false
-      | For_loop { index; body; _ } when Map.mem env index ->
-          loop env body
+      | For_loop { index; body; _ } when Map.mem env index -> loop env body
       | For_loop { index; from_; to_; body; trace_it } ->
           (* Freshen the binding. *)
           let fresh = Shape.fresh_symbol index in
           let env = Map.Poly.add_exn ~key:index ~data:fresh env in
-          Option.map ~f:(fun body ->
-              For_loop
-                { index = fresh; from_; to_; body; trace_it })
-          @@ loop env body
+          Option.map ~f:(fun body -> For_loop { index = fresh; from_; to_; body; trace_it }) @@ loop env body
       | Rebalance (s, cs) ->
           (* FIXME: NOT IMPLEMENTED YET *)
           let cs = Array.filter_map ~f:(loop env) cs in
