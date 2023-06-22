@@ -1096,7 +1096,9 @@ let symbol_ident (Symbol s as sym) =
   else if sample_num_sym sym then "sample_num_" ^ Int.to_string s
   else "i" ^ Int.to_string s
 
-let is_dedicated sym = task_id_sym sym || sample_num_sym sym
+let is_dedicated_any sym = task_id_sym sym || sample_num_sym sym
+let is_dedicated_kind = function Task_id -> task_id_sym | Sample_num -> sample_num_sym
+
 
 let iterated = function
   | { special = Dim; dim } when dim > 1 -> true
@@ -1562,7 +1564,7 @@ let rec derive_projections (shapes : update_step) : projections =
         in
         let ded_syms : symbol array =
           Array.sub ~pos:0 ~len:n_par_axes proj
-          |> Array.filter_map ~f:(function Iterator s when is_dedicated s -> Some s | _ -> None)
+          |> Array.filter_map ~f:(function Iterator s when is_dedicated_any s -> Some s | _ -> None)
         in
         (result, ded_syms)
       in
@@ -1570,7 +1572,7 @@ let rec derive_projections (shapes : update_step) : projections =
         let result : axis_index array = Array.sub ~pos:0 ~len:(Array.length proj - n_par_axes) proj in
         let ded_syms : symbol array =
           Array.sub ~pos:(Array.length proj - n_par_axes) ~len:n_par_axes proj
-          |> Array.filter_map ~f:(function Iterator s when is_dedicated s -> Some s | _ -> None)
+          |> Array.filter_map ~f:(function Iterator s when is_dedicated_any s -> Some s | _ -> None)
         in
         (result, ded_syms)
       in
@@ -1672,7 +1674,7 @@ let derive_index ~product_syms ~(projection : axis_index array) =
       | Iterator (Symbol s) when Map.mem sym_to_i s -> Either.First (Map.find_exn sym_to_i s)
       | (Fixed_idx _ | Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _) as it -> Second it
       | Iterator s as it ->
-          assert (is_dedicated s);
+          assert (is_dedicated_any s);
           Second it)
   in
   fun ~product -> Array.map positions ~f:(function First p -> product.(p) | Second it -> it)

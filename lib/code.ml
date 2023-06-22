@@ -144,7 +144,7 @@ type _ low_level =
   | Constant : float -> float low_level
 [@@deriving sexp_of]
 
-let check_not_replicable ~cached_replicable llc =
+let check_dedicated_dep d ~cached_dedicated llc =
   let rec loop : type a. a low_level -> bool = function
     | Comment _ -> false
     | Lines ls -> Array.exists ~f:loop ls
@@ -152,24 +152,27 @@ let check_not_replicable ~cached_replicable llc =
     | Rebalance (_, cs) -> Array.exists ~f:loop cs
     | If_task_id_is { body; _ } -> loop body
     | Dynamic_indices { tensor = _; tensor_idcs; dynamic_idcs = _; target_dims; body; slice = _ } ->
-        Array.exists tensor_idcs ~f:(function Shape.Iterator s -> Shape.task_id_sym s | _ -> false)
+        Array.exists tensor_idcs ~f:(function Shape.Iterator s -> Shape.is_dedicated_kind d s | _ -> false)
         || Array.exists
-             ~f:Shape.(function { special = Dedicated Task_id; _ } -> true | _ -> false)
+             ~f:
+               Shape.(
+                 function { special = Dedicated d2; _ } -> Shape.equal_dedicated_axis d d2 | _ -> false)
              target_dims
         || loop body
     | Zero_out _ -> false
     | Set (_, indices, llv) ->
-        Array.exists indices ~f:(function Shape.Iterator s -> Shape.task_id_sym s | _ -> false) || loop llv
+        Array.exists indices ~f:(function Shape.Iterator s -> Shape.is_dedicated_kind d s | _ -> false)
+        || loop llv
     | Set_local (_, llv) -> loop llv
     | Local_scope { body; orig_indices; _ } ->
-        Array.exists orig_indices ~f:(function Shape.Iterator s -> Shape.task_id_sym s | _ -> false)
+        Array.exists orig_indices ~f:(function Shape.Iterator s -> Shape.is_dedicated_kind d s | _ -> false)
         || loop body
     | Get_local _ -> false
     | Get_global Task_id -> true
     | Get_global _ -> false
     | Get (ptr, indices) ->
-        (not (cached_replicable ptr))
-        || Array.exists indices ~f:(function Shape.Iterator s -> Shape.task_id_sym s | _ -> false)
+        cached_dedicated ptr
+        || Array.exists indices ~f:(function Shape.Iterator s -> Shape.is_dedicated_kind d s | _ -> false)
     | Binop (_, llv1, llv2) -> loop llv1 || loop llv2
     | Unop (_, llv) -> loop llv
     | Constant _ -> false
@@ -666,6 +669,7 @@ type traced_tensor = {
   mutable is_replicable : bool;
       (** If true, in case of parallelization, the tensor's update is identical on all tasks, and the final
           update of the host should only be performed from one task rather than accumulated across tasks. *)
+  mutable rhses : float low_level list;
 }
 [@@deriving sexp_of]
 
@@ -700,6 +704,7 @@ let get_node store (uid : NodeUI.tensor_ptr) =
         last_write_non_update = false;
         is_dynamic_slice = false;
         is_replicable = true;
+        rhses = [];
       })
 
 let get_other_node traced_store ptr =
@@ -786,9 +791,8 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
     (* For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
     Array.map indices ~f:(function
       | Shape.Fixed_idx i -> i
-      | Iterator s when not (Shape.is_dedicated s) -> Map.find_exn env s
-      | (Dynamic_recipient s | Frozen_recipient s | Iterator s) when Map.mem env s ->
-          Map.find_exn env s
+      | Iterator s when not (Shape.is_dedicated_any s) -> Map.find_exn env s
+      | (Dynamic_recipient s | Frozen_recipient s | Iterator s) when Map.mem env s -> Map.find_exn env s
       | Dynamic_recipient _ | Frozen_recipient _ | Iterator _ -> 0
       | Dynamic_provider _ -> Option.value_exn provider_dim)
   in
@@ -815,8 +819,10 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         (* get_node will initialize reduced_racyness to true.  *)
         let traced : traced_tensor = get_node traced_store tensor in
         Hash_set.add traced.assignments (lookup env idcs);
+        traced.rhses <- llv :: traced.rhses;
         if virtualize_settings.inline_constants then precompute_constants ~idcs traced_store traced llv;
-        if check_not_replicable ~cached_replicable llc then traced.is_replicable <- false;
+        if check_dedicated_dep Shape.Task_id ~cached_dedicated:cached_replicable llc then
+          traced.is_replicable <- false;
         (match llv with
         | Get (tensor2, idcs2) ->
             traced.last_write_non_update <- true;
@@ -914,12 +920,10 @@ let process_computation node top_llc =
            ~f:
              Shape.(
                function
-               | Iterator s when Shape.is_dedicated s ->
+               | Iterator s when Shape.is_dedicated_any s ->
                    (* Dedicated indices are non-substitutable. *)
                    None
-                   | Fixed_idx _ | Dynamic_recipient _ | Frozen_recipient _
-               | Dynamic_provider _ ->
-                   None
+               | Fixed_idx _ | Dynamic_recipient _ | Frozen_recipient _ | Dynamic_provider _ -> None
                | Iterator s -> Some s)
     in
     let num_syms = Array.count indices ~f:(function Iterator _ -> true | _ -> false) in
@@ -945,7 +949,7 @@ let process_computation node top_llc =
         else
           (* Check for escaping variables. *)
           Array.iter indices ~f:(function
-            | (Iterator s) as idx ->
+            | Iterator s as idx ->
                 if not @@ Map.mem env_dom s then (
                   if !with_debug then
                     Caml.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
@@ -967,7 +971,7 @@ let process_computation node top_llc =
         else
           (* Check for escaping variables. *)
           Array.iter idcs ~f:(function
-            | (Iterator s) as idx ->
+            | Iterator s as idx ->
                 if not @@ Map.mem env_dom s then (
                   if !with_debug then
                     Caml.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"

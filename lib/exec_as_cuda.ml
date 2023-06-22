@@ -5,20 +5,19 @@ let optimization_level = ref 3
 (* let session_context = *)
 
 type sync_properties =
-  | Thread_only
-  (* | Block_only *)
+  | Thread_only  (** Thread-local tensor. *)
+  | Block_only  (** Shared memory tensor. *)
   | Update_globally_for_thread
       (** All assignments are update assignments. They happen directly in global memory, simultaneously
           syncing the tensor's cell value for a thread. *)
-  (* | Update_globally_for_block *)
-  (* All assignments are update assignments. They happen directly in global memory, simultaneously
-      syncing the tensor's cell value for a block (via a shared array). *)
+  | Update_globally_for_block
+      (** All assignments are update assignments. They happen directly in global memory, simultaneously
+          syncing the tensor's cell value for a block (via a shared array). *)
   | Constant
       (** This tensor is accessed directly in the global memory but is not modified by the step update. *)
   | Thread_parallel
       (** Each thread computes a slice of the tensor, independently transferring to global memory. *)
-  (* | Block_parallel *)
-  (* Each block computes a slice of the tensor. *)
+  | Block_parallel  (** Each block computes a slice of the tensor. *)
   | Global  (** This tensor is accessed directly in the global memory, we did not manage to optimize it. *)
 [@@deriving sexp, equal, compare, variants]
 
@@ -64,15 +63,12 @@ let session_state =
 let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
 let pp_comma ppf () = Caml.Format.fprintf ppf ",@ "
 let pp_symbol ppf (Shape.Symbol s) = Caml.Format.fprintf ppf "i%d" s
-
 let pp_index ppf sym = Caml.Format.fprintf ppf "%s" @@ Shape.symbol_ident sym
 
 let pp_index_axis ?provider_dim ppf =
   let open Shape in
   function
-  | Iterator it 
-  | Frozen_recipient it
-  | Dynamic_recipient it -> pp_index ppf it
+  | Iterator it | Frozen_recipient it | Dynamic_recipient it -> pp_index ppf it
   | Fixed_idx i -> Caml.Format.fprintf ppf "%d" i
   | Dynamic_provider _ -> Caml.Format.fprintf ppf "%d" @@ Option.value_exn provider_dim
 
@@ -109,27 +105,46 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~host_idcs ptr : tensor =
         Array.fold_until axes ~init:true
           ~f:
             (fun was_frozen -> function
-            (* Currently for Cuda, parallel dims are part of a slice. *)
-              | Shape.{ special = Frozen; _ } ->
-                  if was_frozen then Continue true else Stop false
+              (* Currently for Cuda, parallel dims are part of a slice. *)
+              | Shape.{ special = Frozen; _ } -> if was_frozen then Continue true else Stop false
               | _ -> Continue false)
           ~finish:(fun _ -> true)
       in
       let tensor prec is_double arr =
         let num_typ = prec_to_c_type prec in
-        let is_parallel =
+        let is_block_parallel =
           Array.exists ~f:Shape.(function { special = Dedicated Task_id; _ } -> true | _ -> false)
           @@ Shape.to_dims n.shape
         in
+        let is_thread_parallel =
+          Array.exists ~f:Shape.(function { special = Dedicated Sample_num; _ } -> true | _ -> false)
+          @@ Shape.to_dims n.shape
+        in
         let can_be_replicated = tn.is_replicable in
-        let update_on_host =
-          (not is_parallel) && tn.read_before_write && tn.reduced_racyness && Option.is_some hosted
+        let computed_directly_across_blocks =
+          List.exists tn.rhses ~f:(Code.check_dedicated_dep Shape.Task_id ~cached_dedicated:(fun _ -> false))
+        in
+        (* tn.is_replicable is the negation of: computed (directly or) indirectly across blocks. *)
+        let computed_directly_across_threads =
+          List.exists tn.rhses
+            ~f:(Code.check_dedicated_dep Shape.Sample_num ~cached_dedicated:(fun _ -> false))
+        in
+        let update_globally =
+          (not is_block_parallel) && (not tn.is_replicable) && tn.read_before_write && tn.reduced_racyness
         in
         let sync =
           Option.value_or_thunk force_sync ~default:(fun () ->
-              if Option.is_none hosted then Thread_only
-              else if is_parallel then Thread_parallel
-              else if update_on_host then Update_globally_for_thread
+              if
+                Option.is_none hosted
+                && (is_block_parallel || not computed_directly_across_blocks)
+                && (is_thread_parallel || not computed_directly_across_threads)
+              then Thread_only
+              else if Option.is_none hosted && (is_block_parallel || not computed_directly_across_blocks) then
+                Block_only
+              else if is_block_parallel && is_thread_parallel then Thread_parallel
+              else if is_block_parallel then Block_parallel
+              else if update_globally && not is_thread_parallel then Update_globally_for_thread
+              else if update_globally then Update_globally_for_block
               else if can_be_replicated then Global
               else (
                 if !Code.with_debug then
@@ -393,8 +408,8 @@ let jit_func ~name (traced_store, llc) =
       ~shared_mem_bytes:0 Cu.no_stream args;
     List.iter tensors ~f:(function
       | ptr, { hosted = Some ndarray; global_ptr = Some src; host_offset; device_length; _ } ->
-        let host_offset = Option.map host_offset ~f:(fun f -> f ()) in
-        let tn = Code.(get_node traced_store ptr) in
+          let host_offset = Option.map host_offset ~f:(fun f -> f ()) in
+          let tn = Code.(get_node traced_store ptr) in
           if not tn.read_only then
             let f dst = Cu.memcpy_D_to_H ?host_offset ~length:device_length ~dst ~src () in
             Node.map_as_bigarray { f } ndarray

@@ -50,15 +50,6 @@ let host_size_in_bytes ptr =
   let f arr = if Array.is_empty @@ A.dims arr then 0 else A.size_in_bytes arr in
   Option.value ~default:0 @@ Option.map ~f:(map_as_bigarray { f }) @@ get_tensor ptr
 
-(** Whether the node or any of its descendants have a [Parallel] dimension in their shape.
-    The negative can only be guaranteed after shape inference. *)
-let rec has_parallel_deps n =
-  if
-    Array.exists ~f:Shape.(function { special = Dedicated Task_id; _ } -> true | _ -> false)
-    @@ Shape.to_dims n.shape
-  then true
-  else List.exists ~f:has_parallel_deps @@ List.map n.children ~f:(fun sn -> get sn.sub_node_id)
-
 type prec =
   | Void_prec : prec
   (* | Bit_as_bool: (bool, bit_as_bool_nd) precision *)
