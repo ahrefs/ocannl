@@ -498,7 +498,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
     | Constant v -> RValue.double ctx num_typ v
   and jit_for_loop ~env key ~from_ ~to_ body : unit =
     let open Gccjit in
-    let i = "i" ^ match key with Symbol s -> Int.to_string s in
+    let i = Shape.symbol_ident key in
     let index = Function.local func c_index i in
     let env = Map.add_exn ~key ~data:(RValue.lvalue index) env in
     let b_loop_cond = Block.create ~name:("loop_cond_" ^ i) func in
@@ -517,7 +517,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
     let host_idcs = lookup ~on_host:true ~example_only:true env tensor_idcs in
     let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
     let env =
-      Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env (Symbol s as key) ->
+      Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
           let target_dim = RValue.int ctx c_int target_dims.(provider_dim).dim in
           let provider_dim = RValue.int ctx c_int provider_dim in
           let idcs = lookup ~provider_dim ~on_host:false env tensor_idcs in
@@ -527,7 +527,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
           let dyn_index = RValue.binary_op ctx Modulo c_index dyn_index target_dim in
           let data =
             if !hoist_dynamic_indices then (
-              let sym_index = Function.local func c_index ("i" ^ Int.to_string s) in
+              let sym_index = Function.local func c_index (Shape.symbol_ident key) in
               Block.assign !current_block sym_index dyn_index;
               RValue.lvalue sym_index)
             else dyn_index

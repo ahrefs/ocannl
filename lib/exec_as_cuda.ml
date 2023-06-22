@@ -65,19 +65,15 @@ let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
 let pp_comma ppf () = Caml.Format.fprintf ppf ",@ "
 let pp_symbol ppf (Shape.Symbol s) = Caml.Format.fprintf ppf "i%d" s
 
-let pp_index ppf = function
-  | Shape.Symbol s as sym when Shape.task_id_sym sym -> Caml.Format.fprintf ppf "task_id_%d" s
-  | Shape.Symbol s as sym when Shape.sample_num_sym sym -> Caml.Format.fprintf ppf "sample_num_%d" s
-  | Shape.Symbol s -> Caml.Format.fprintf ppf "i%d" s
+let pp_index ppf sym = Caml.Format.fprintf ppf "%s" @@ Shape.symbol_ident sym
 
 let pp_index_axis ?provider_dim ppf =
   let open Shape in
   function
-  | Iterator (Symbol s) -> Caml.Format.fprintf ppf "i%d" s
-  | Dedicated_iterator (Task_id, Symbol s) -> Caml.Format.fprintf ppf "task_id_%d" s
-  | Dedicated_iterator (Sample_num, Symbol s) -> Caml.Format.fprintf ppf "sample_num_%d" s
-  | Frozen_recipient (Symbol s) -> Caml.Format.fprintf ppf "i%d" s
-  | Dynamic_recipient (Symbol s) -> Caml.Format.fprintf ppf "i%d" s
+  | Iterator it 
+  | Dedicated_iterator (_, it) 
+  | Frozen_recipient it
+  | Dynamic_recipient it -> pp_index ppf it
   | Fixed_idx i -> Caml.Format.fprintf ppf "%d" i
   | Dynamic_provider _ -> Caml.Format.fprintf ppf "%d" @@ Option.value_exn provider_dim
 
@@ -220,13 +216,10 @@ let jit_code (ppf : Caml.Format.formatter) ~traced_store llc : unit =
   let lookup ?provider_dim ?(example_only = false) ~on_host indices =
     Array.map indices ~f:(function
       | Shape.Fixed_idx i -> Int.to_string i
-      | Iterator (Symbol s) -> "i" ^ Int.to_string s
-      | Dedicated_iterator (Task_id, Symbol s) -> "task_id_" ^ Int.to_string s
-      | Dedicated_iterator (Sample_num, Symbol s) -> "sample_num_" ^ Int.to_string s
-      | Dynamic_recipient (Symbol s) -> "i" ^ Int.to_string s
+      | Iterator it | Dedicated_iterator (_, it) | Dynamic_recipient it -> Shape.symbol_ident it
       | Dynamic_provider _ when example_only -> Int.to_string 0
       | Dynamic_provider _ -> Int.to_string @@ Option.value_exn provider_dim
-      | Frozen_recipient (Symbol s) when on_host -> "i" ^ Int.to_string s
+      | Frozen_recipient it when on_host -> Shape.symbol_ident it
       | Frozen_recipient _ -> Int.to_string 0)
   in
   let locals = ref Map.Poly.empty in

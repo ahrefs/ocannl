@@ -1093,13 +1093,18 @@ let fresh_symbol sym =
   else if sample_num_sym sym then get_sym_for_axis (Dedicated Sample_num)
   else get_symbol ()
 
+let symbol_ident (Symbol s as sym) =
+  if task_id_sym sym then "task_id_" ^ Int.to_string s
+  else if sample_num_sym sym then "sample_num_" ^ Int.to_string s
+  else "i" ^ Int.to_string s
+
 let iterated = function
   | { special = Dim; dim } when dim > 1 -> true
   (* | { special = Dedicated Sample_num; dim } when !iterate_sample_num && dim > 1 -> true *)
   | { special = Dedicated _; _ } -> true
   | _ -> false
 
-let opt_symbol d = Option.some_if (iterated d) @@ get_symbol ()
+let opt_symbol d = Option.some_if (iterated d) @@ get_sym_for_axis d.special
 
 (** An index into a single axis for doing computations over multiple [Shape]-derived [Code]s. *)
 type axis_index =
@@ -1667,6 +1672,7 @@ let derive_index ~product_syms ~(projection : axis_index array) =
   let positions =
     Array.map projection ~f:(function
       | Iterator (Symbol s) -> Either.First (Map.find_exn sym_to_i s)
+      | Dedicated_iterator (_, Symbol s) when Map.mem sym_to_i s -> Either.First (Map.find_exn sym_to_i s)
       | (Fixed_idx _ | Dedicated_iterator _ | Dynamic_provider _ | Dynamic_recipient _ | Frozen_recipient _)
         as it ->
           Second it)
