@@ -796,7 +796,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
       | Dynamic_recipient _ | Frozen_recipient _ | Iterator _ -> 0
       | Dynamic_provider _ -> Option.value_exn provider_dim)
   in
-  let cached_replicable ptr = (get_node traced_store ptr).is_replicable in
+  let cached_not_replicable ptr = not (get_node traced_store ptr).is_replicable in
   let rec loop_proc env llc =
     let loop = loop_proc env in
     match llc with
@@ -821,7 +821,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         Hash_set.add traced.assignments (lookup env idcs);
         traced.rhses <- llv :: traced.rhses;
         if virtualize_settings.inline_constants then precompute_constants ~idcs traced_store traced llv;
-        if check_dedicated_dep Shape.Task_id ~cached_dedicated:cached_replicable llc then
+        if check_dedicated_dep Shape.Task_id ~cached_dedicated:cached_not_replicable llc then
           traced.is_replicable <- false;
         (match llv with
         | Get (tensor2, idcs2) ->
