@@ -393,6 +393,16 @@ let jit_func ~name (traced_store, llc) =
       }|}]
   in
   let ptx = Cu.compile_to_ptx ~cu_src ~name ~options:[ "--use_fast_math" ] ~with_debug:!Code.with_debug in
+  (* TODO: save jitted source and ptx to files when Code.keep_files_in_run_directory is true. *)
+  if !Code.with_debug && !Code.keep_files_in_run_directory then (
+    let f_name = name ^ "cudajit-debug" in
+    let oc = Out_channel.open_text @@ f_name ^ ".ptx" in
+    Stdio.Out_channel.output_string oc @@ Ctypes.string_from_ptr ptx.ptx ~length:ptx.ptx_length;
+    let oc = Out_channel.open_text @@ f_name ^ ".cu_log" in
+    Stdio.Out_channel.output_string oc @@ Option.value_exn ptx.log;
+    let oc = Out_channel.open_text @@ f_name ^ ".cu" in
+    Stdio.Out_channel.output_string oc cu_src;    
+  );
   let module_ = Cu.module_load_data_ex ptx [] in
   session_state.last_module <- Some module_;
   let func = Cu.module_get_function module_ ~name in
