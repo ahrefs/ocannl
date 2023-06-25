@@ -224,8 +224,6 @@ let pp_array_offset ppf ~idcs ~dims =
 let pp_indices ?provider_dim () ppf idcs =
   Caml.Format.pp_print_list ~pp_sep:pp_comma (pp_index_axis ?provider_dim) ppf @@ Array.to_list idcs
 
-let finalize_device_to_host (ptr : Cudajit.deviceptr) = ignore ptr
-
 let jit_code (ppf : Caml.Format.formatter) ~traced_store llc : unit =
   let open Code in
   let open Caml.Format in
@@ -275,23 +273,27 @@ let jit_code (ppf : Caml.Format.formatter) ~traced_store llc : unit =
     | Set (ptr, idcs, v) ->
         (* let host_idcs = lookup ~on_host:true idcs in *)
         let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~host_idcs:idcs ptr in
+        let old_locals = !locals in
         let num_closing_braces = pp_top_locals ~dyn_env ppf v in
         fprintf ppf "@[<2>%a[@,%a] =@ %a;@]@ " pp_get_ptr tensor (pp_indices ()) idcs
           (pp_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double)
           v;
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]}@ "
-        done
+        done;
+        locals := old_locals
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
         jit_dynamic_indices ~dyn_env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Comment message -> fprintf ppf "/* %s */@ " message
     | Set_local (({ scope_id; _ } as id), value) ->
         let num_typ, is_double = Map.find_exn !locals id in
+        let old_locals = !locals in
         let num_closing_braces = pp_top_locals ~dyn_env ppf value in
         fprintf ppf "@[<2>v%d =@ %a;@]@ " scope_id ((pp_float ~dyn_env) ~num_typ ~is_double) value;
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]}@ "
-        done
+        done;
+        locals := old_locals
   and pp_top_locals ~dyn_env ppf vcomp =
     match vcomp with
     | Local_scope { id = { scope_id = i; _ } as id; prec; body; orig_indices = _ } ->
@@ -299,16 +301,14 @@ let jit_code (ppf : Caml.Format.formatter) ~traced_store llc : unit =
         (* Tensors are initialized to 0 by default. However, there is typically an explicit
            initialization for virtual nodes. *)
         fprintf ppf "@[{%s v%d = 0;@ " typ i;
-        let old_locals = !locals in
         locals := Map.update !locals id ~f:(fun _ -> (typ, prec_is_double prec));
         pp_ll ~dyn_env ppf body;
-        locals := old_locals;
         1
     | Get_local _ | Get_global _ | Get _ | Constant _ -> 0
-    | Binop (Arg1, v1, _v2) -> (pp_top_locals ~dyn_env) ppf v1
-    | Binop (Arg2, _v1, v2) -> (pp_top_locals ~dyn_env) ppf v2
-    | Binop (_, v1, v2) -> (pp_top_locals ~dyn_env) ppf v1 + (pp_top_locals ~dyn_env) ppf v2
-    | Unop (_, v) -> (pp_top_locals ~dyn_env) ppf v
+    | Binop (Arg1, v1, _v2) -> pp_top_locals ~dyn_env ppf v1
+    | Binop (Arg2, _v1, v2) -> pp_top_locals ~dyn_env ppf v2
+    | Binop (_, v1, v2) -> pp_top_locals ~dyn_env ppf v1 + pp_top_locals ~dyn_env ppf v2
+    | Unop (_, v) -> pp_top_locals ~dyn_env ppf v
   and pp_float ~dyn_env ~num_typ ~is_double ppf value =
     let loop = pp_float ~dyn_env ~num_typ ~is_double in
     match value with
@@ -361,6 +361,7 @@ let new_context ?(device_num = 0) () =
     Some (Cudajit.ctx_create ~flags:0 device)
 
 let cleanup_session () =
+  if Option.is_none session_state.ctx then Cudajit.init ();
   Option.iter session_state.last_module ~f:Cudajit.module_unload;
   session_state.last_module <- None;
   Hashtbl.iter session_state.tensors ~f:(fun tensor -> Option.iter tensor.global_ptr ~f:Cudajit.mem_free);
