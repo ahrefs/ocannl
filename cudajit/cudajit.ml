@@ -307,6 +307,13 @@ let memset_d16 (Deviceptr dev) v ~length =
 let memset_d32 (Deviceptr dev) v ~length =
   check "cu_memset_d32" @@ Cuda.cu_memset_d32 dev v @@ Unsigned.Size_t.of_int length
 
+let module_get_global module_ ~name =
+  let open Ctypes in
+  let device = allocate_n cu_deviceptr ~count:1 in
+  let byte_size = allocate size_t Unsigned.Size_t.zero in
+  check "cu_module_get_global" @@ Cuda.cu_module_get_global device byte_size module_ name;
+  (Deviceptr !@device, !@byte_size)
+
 type device_attributes = {
   name : string;
   max_threads_per_block : int;
