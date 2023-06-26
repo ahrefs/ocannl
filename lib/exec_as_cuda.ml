@@ -166,6 +166,7 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~host_idcs ptr : ten
           | Constant ->
               lazy
                 (let ptr, size =
+                   (* Defer till after compilation, to access the compiled-into module. *)
                    Cudajit.module_get_global
                      (Option.value_exn session_state.last_module)
                      ~name:(NodeUI.tensor_ptr_name ptr)
@@ -450,9 +451,9 @@ let jit_func ~name (traced_store, llc) =
   let ptx = Cu.compile_to_ptx ~cu_src ~name ~options:[ "--use_fast_math" ] ~with_debug:!Code.with_debug in
   (* TODO: save jitted source and ptx to files when Code.keep_files_in_run_directory is true. *)
   if !Code.with_debug && !Code.keep_files_in_run_directory then (
-    let f_name = name ^ "cudajit-debug" in
+    let f_name = name ^ "-cudajit-debug" in
     let oc = Out_channel.open_text @@ f_name ^ ".ptx" in
-    Stdio.Out_channel.output_string oc @@ Ctypes.string_from_ptr ptx.ptx ~length:ptx.ptx_length;
+    Stdio.Out_channel.output_string oc @@ Cudajit.string_from_ptx ptx;
     let oc = Out_channel.open_text @@ f_name ^ ".cu_log" in
     Stdio.Out_channel.output_string oc @@ Option.value_exn ptx.log;
     let oc = Out_channel.open_text @@ f_name ^ ".cu" in
