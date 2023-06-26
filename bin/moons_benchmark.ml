@@ -5,6 +5,119 @@ module NFDSL = Operation.NFDSL
 module CDSL = Code.CDSL
 module SDSL = Session.SDSL
 
+let () =
+  (* Code.CDSL.with_debug := false; *)
+  (* let open Operation.FDSL in *)
+  let open SDSL.O in
+  (* SDSL.set_executor Interpreter;
+     SDSL.enable_all_debugs ~trace_interpreter:true (); *)
+  SDSL.set_executor Gccjit;
+  (* SDSL.enable_all_debugs (); *)
+  CDSL.virtualize_settings.enable_device_only <- true;
+  CDSL.virtualize_settings.inline_constants <- true;
+  Code.with_debug := true;
+  Code.keep_files_in_run_directory := true;
+  SDSL.drop_all_sessions ();
+  Random.init 0;
+  let num_parallel_tasks = 18 in
+  Stdio.printf "\n****** num_parallel_tasks = %d\n%!" num_parallel_tasks;
+  (* FIXME: *)
+  SDSL.num_parallel_tasks := num_parallel_tasks;
+  let refresh_batch = 1 in
+  let batch = refresh_batch * num_parallel_tasks in
+  let n_batches = 2 in
+  let len = n_batches * batch / 2 in
+  (* let epochs = 100 in *)
+  let epochs = 2 in
+  let refreshes = epochs * n_batches in
+  let steps = refreshes * refresh_batch in
+  let noise () = Random.float_range (-0.1) 0.1 in
+  let moons_flat =
+    Array.concat_map (Array.create ~len ())
+      ~f:
+        Float.(
+          fun () ->
+            let i = Random.int len in
+            let v = of_int i * pi / of_int len in
+            let c = cos v and s = sin v in
+            [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
+  in
+  (* FIXME: *)
+  let b =
+    [
+      Shape.{ special = Frozen; dim = n_batches };
+      CDSL.parallel num_parallel_tasks;
+      CDSL.dim refresh_batch;
+      CDSL.minibatch 20;
+    ]
+  in
+  let moons_flat = FDSL.init_const ~l:"moons_flat" ~b ~o:[ CDSL.dim 2 ] moons_flat in
+  let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
+  let moons_classes = FDSL.init_const ~l:"moons_classes" ~b ~o:[ CDSL.dim 1 ] moons_classes in
+  (* let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 2 + ("w1" * x))) in *)
+  let%nn_op mlp x = "b1" 1 + ("w1" * x) in
+  
+  let%nn_dt session_step ~o:1 = n =+ 1 in
+  let%nn_dt session_refresh ~o:1 = n =+ 1 /. !..refresh_batch in
+  let%nn_dt minus_lr ~o:1 = n =: -0.0001 in
+
+  SDSL.minus_learning_rate := Some minus_lr;
+  let%nn_op moons_input = (moons_flat @.| session_refresh) @.| session_step in
+  let%nn_op moons_class = (moons_classes @.| session_refresh) @.| session_step in
+  let%nn_op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
+  (* let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in *)
+  (* let reg_loss = List.map ~f:ssq [ w1; w2; b1; b2 ] |> List.reduce_exn ~f:FDSL.O.( + ) in *)
+  (* let reg_loss =
+       List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
+     in *)
+  (* let%nn_op weighted_reg_loss = 0.00001 *. reg_loss /. !..num_parallel_tasks in *)
+  (* let step_batch = num_parallel_tasks * minib in *)
+  let%nn_op batch_of_losses = margin_loss ++ "...|... => ...|0" in
+  let%nn_rs epoch_loss ~o:1 = n =+ batch_of_losses ++ "...|0 => 0" in
+  let run_for_steps = refresh_batch in
+  (* SDSL.everything_fully_on_host (); *)
+  (* SDSL.everything_on_host_or_inlined (); *)
+  SDSL.refresh_session ~run_for_steps ();
+  Stdio.print_endline "\nPreamble:\n";
+  SDSL.print_preamble ~full_shape:true ();
+  Stdio.print_endline "\nHigh-level code:\n";
+  SDSL.print_session_code ();
+  Stdio.print_endline "\nLow-level code:\n";
+  SDSL.print_session_code ~compiled:true ();
+  SDSL.print_decimals_precision := 9;
+  Stdio.printf "Step 1: session_step: %f, session_refresh: %f, of steps %d\n%!" session_step.@[0]
+    session_refresh.@[0] steps;
+  Stdio.printf "Step 1: Minus learning rate: %f\n%!" minus_lr.@[0];
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 minus_lr.id;
+  let step_1_loss = epoch_loss.@[0] in
+  Stdio.printf "\nStep 1: loss %f\n%!" step_1_loss;
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~with_backend_info:true ~depth:9 batch_of_losses.id;
+  (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
+      Stdio.print_endline "\n";
+      SDSL.print_formula ~with_grad:true ~with_code:false `Default f); *)
+  SDSL.refresh_session ();
+  Stdio.printf "Step 2: session_step: %f\n%!" session_step.@[0];
+  Stdio.printf "\nStep 2: Minus learning rate: %f\n%!" minus_lr.@[0];
+  let step_2_loss = epoch_loss.@[0] in
+  Stdio.printf "\nStep 2: cumulative loss %f, step loss %f\n%!" step_2_loss (step_2_loss -. step_1_loss);
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~with_backend_info:true ~depth:9 batch_of_losses.id;
+  (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
+      Stdio.print_endline "\n";
+      SDSL.print_formula ~with_grad:true ~with_code:false `Default f); *)
+  SDSL.refresh_session ();
+  Stdio.printf "Step 3: session_step: %f\n%!" session_step.@[0];
+  Stdio.printf "\nStep 3: Minus learning rate: %f\n%!" minus_lr.@[0];
+  let step_3_loss = epoch_loss.@[0] in
+  Stdio.printf "\nStep 3: cumulative loss %f, step loss %f\n%!" step_3_loss (step_3_loss -. step_2_loss);
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~with_backend_info:true ~depth:9 batch_of_losses.id;
+  SDSL.refresh_session ();
+  Stdio.printf "Step 4: session_step: %f\n%!" session_step.@[0];
+  Stdio.printf "\nStep 4: Minus learning rate: %f\n%!" minus_lr.@[0];
+  let step_4_loss = epoch_loss.@[0] in
+  Stdio.printf "\nStep 4: cumulative loss %f, step loss %f\n%!" step_4_loss (step_4_loss -. step_3_loss);
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~with_backend_info:true ~depth:9 batch_of_losses.id;
+  Stdio.printf "\nHost size in bytes: %d\n%!" (SDSL.global_host_size_in_bytes ())
+
 let _suspended () =
   (* Code.CDSL.with_debug := false; *)
   (* let open Operation.FDSL in *)
@@ -21,9 +134,10 @@ let _suspended () =
   Random.init 0;
   let num_parallel_tasks = SDSL.num_domains - 1 in
   Stdio.printf "\n****** num_parallel_tasks = %d\n%!" num_parallel_tasks;
+  (* FIXME: *)
   SDSL.num_parallel_tasks := num_parallel_tasks;
   let minib = 4 in
-  let refresh_batch = 2 in
+  let refresh_batch = 4 in
   let batch = refresh_batch * num_parallel_tasks * minib in
   let n_batches = 2 in
   let len = n_batches * batch / 2 in
@@ -42,6 +156,7 @@ let _suspended () =
             let c = cos v and s = sin v in
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
+  (* FIXME: *)
   let b =
     [
       Shape.{ special = Frozen; dim = n_batches };
@@ -72,9 +187,8 @@ let _suspended () =
              + ("w5" * !/("b4" 4 + ("w4" * !/("b3" 8 + ("w3" * !/("b2" 8 + ("w2" * !/("b1" 16 + ("w1" * x)))))))))
              )
      in *)
-  let%nn_dt session_step ~o:1 = n =+ 1 /. !..num_parallel_tasks in
-  let refresh_delta = refresh_batch * num_parallel_tasks in
-  let%nn_dt session_refresh ~o:1 = n =+ 1 /. !..refresh_delta in
+  let%nn_dt session_step ~o:1 = n =+ 1 in
+  let%nn_dt session_refresh ~o:1 = n =+ 1 /. !..refresh_batch in
   let%nn_dt minus_lr ~o:1 = n =: -0.001 *. (!..steps - session_step) /. !..steps in
 
   SDSL.minus_learning_rate := Some minus_lr;
@@ -86,10 +200,10 @@ let _suspended () =
   (* let reg_loss =
        List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
      in *)
-  let step_batch = num_parallel_tasks * minib in
-  let%nn_op subtotal = margin_loss ++ "...|... => ...|0" in
-  let%nn_op total_loss = ((subtotal ++ "...|0 => 0") /. !..step_batch) + (0.0001 *. reg_loss) in
-  let%nn_rs epoch_loss ~o:1 = n =+ total_loss in
+  let%nn_op weighted_reg_loss = 0.00001 *. reg_loss /. !..num_parallel_tasks in
+  (* let step_batch = num_parallel_tasks * minib in *)
+  let%nn_op batch_of_losses = margin_loss ++ "...|... => ...|0" in
+  let%nn_rs epoch_loss ~o:1 = n =+ batch_of_losses ++ "...|0 => 0" + weighted_reg_loss in
   let run_for_steps = refresh_batch in
   SDSL.refresh_session ~run_for_steps ();
   Stdio.print_endline "\nPreamble:\n";
@@ -104,7 +218,7 @@ let _suspended () =
   Stdio.printf "Step 1: Minus learning rate: %f\n%!" minus_lr.@[0];
   SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 minus_lr.id;
   Stdio.printf "\nStep 1: loss %f\n%!" epoch_loss.@[0];
-  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~with_backend_info:true ~depth:9 batch_of_losses.id;
   (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
       SDSL.print_formula ~with_grad:true ~with_code:false `Default f); *)
@@ -112,7 +226,7 @@ let _suspended () =
   Stdio.printf "Step 2: session_step: %f\n%!" session_step.@[0];
   Stdio.printf "\nStep 2: Minus learning rate: %f\n%!" minus_lr.@[0];
   Stdio.printf "\nStep 2: loss %f\n%!" epoch_loss.@[0];
-  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~with_backend_info:true ~depth:9 batch_of_losses.id;
   (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
       SDSL.print_formula ~with_grad:true ~with_code:false `Default f); *)
@@ -120,12 +234,12 @@ let _suspended () =
   Stdio.printf "Step 3: session_step: %f\n%!" session_step.@[0];
   Stdio.printf "\nStep 3: Minus learning rate: %f\n%!" minus_lr.@[0];
   Stdio.printf "\nStep 3: loss %f\n%!" epoch_loss.@[0];
-  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~with_backend_info:true ~depth:9 batch_of_losses.id;
   SDSL.refresh_session ();
   Stdio.printf "Step 4: session_step: %f\n%!" session_step.@[0];
   Stdio.printf "\nStep 4: Minus learning rate: %f\n%!" minus_lr.@[0];
   Stdio.printf "\nStep 4: loss %f\n%!" epoch_loss.@[0];
-  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 total_loss.id;
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~with_backend_info:true ~depth:9 batch_of_losses.id;
   Stdio.printf "\nHost size in bytes: %d\n%!" (SDSL.global_host_size_in_bytes ())
 
 let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff ?(inline_constants = true)
@@ -290,6 +404,8 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   ignore init_time;
   let time_in_sec = Int63.(to_float @@ (final_time - start_time)) /. 1000_000_000. in
   Stdio.printf "\nTime in sec: %f\n%!" time_in_sec;
+  SDSL.print_preamble ();
+  Stdio.print_endline "\n";
   let result =
     PrintBox_utils.Benchmark
       {
@@ -355,7 +471,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
 
 let benchmark_executor = SDSL.Gccjit
 
-let () =
+let _suspended () =
   Node.fixed_state_for_init := Some 14;
   ignore
   @@ classify_moons ~random_seed:3 ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
