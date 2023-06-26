@@ -11,7 +11,7 @@ let () =
   let open SDSL.O in
   (* SDSL.set_executor Interpreter;
      SDSL.enable_all_debugs ~trace_interpreter:true (); *)
-  SDSL.set_executor Gccjit;
+  SDSL.set_executor Cuda;
   (* SDSL.enable_all_debugs (); *)
   CDSL.virtualize_settings.enable_device_only <- true;
   CDSL.virtualize_settings.inline_constants <- true;

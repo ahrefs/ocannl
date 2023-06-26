@@ -22,9 +22,10 @@ type sync_properties =
 [@@deriving sexp, equal, compare, variants]
 
 type tensor = {
-  hosted : Node.ndarray option;  (** Pointer to the first value of the associated [Bigarray], if hosted. *)
+  hosted : (Node.ndarray[@sexp.opaque]) option;
+      (** Pointer to the first value of the associated [Bigarray], if hosted. *)
   global : string option;  (** A global device array, if any. *)
-  global_ptr : Cudajit.deviceptr Lazy.t option;
+  global_ptr : (Cudajit.deviceptr Lazy.t[@sexp.opaque]) option;
   local : string option;  (** Either a thread-local or shared (block-local) memory, if any. *)
   sync : sync_properties;
   host_dims : int array;
@@ -45,6 +46,7 @@ type tensor = {
       [short] (precision [Half]), [float] (precision [Single]), [double] (precision [Double]). *)
   is_double : bool;
 }
+[@@deriving sexp_of]
 
 (* let session_results = ref [] *)
 let hoist_dynamic_indices = ref false
@@ -132,10 +134,11 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~host_idcs ptr : ten
           List.exists tn.rhses
             ~f:(Code.check_dedicated_dep Shape.Sample_num ~cached_dedicated:(fun _ -> false))
         in
-        let update_globally =
-          (not is_block_parallel) && (not tn.is_replicable) && tn.read_before_write && tn.reduced_racyness
+        let update_globally : bool =
+          (* Note: not requiring tn.read_before_write *)
+          (not is_block_parallel) && (not tn.is_replicable) && tn.reduced_racyness
         in
-        let sync =
+        let sync : sync_properties =
           Option.value_or_thunk force_sync ~default:(fun () ->
               if
                 Option.is_none hosted
@@ -244,7 +247,7 @@ let pp_array_offset ppf ~idcs ~dims =
 let pp_indices ?provider_dim () ppf idcs =
   Caml.Format.pp_print_list ~pp_sep:pp_comma (pp_index_axis ?provider_dim) ppf @@ Array.to_list idcs
 
-let jit_code (ppf : Caml.Format.formatter) ~traced_store llc : unit =
+let jit_code ppf ~traced_store llc : unit =
   let open Code in
   let open Caml.Format in
   (* let lookup ?provider_dim ?(example_only = false) ~on_host indices =
@@ -257,7 +260,7 @@ let jit_code (ppf : Caml.Format.formatter) ~traced_store llc : unit =
          | Frozen_recipient _ -> Int.to_string 0)
      in *)
   let locals = ref Map.Poly.empty in
-  let rec pp_ll ~dyn_env (ppf : formatter) (c : unit low_level) =
+  let rec pp_ll ~dyn_env ppf (c : unit low_level) : unit =
     match c with
     | Lines [||] -> ()
     | Lines lines ->
@@ -314,7 +317,7 @@ let jit_code (ppf : Caml.Format.formatter) ~traced_store llc : unit =
           fprintf ppf "@]}@ "
         done;
         locals := old_locals
-  and pp_top_locals ~dyn_env ppf vcomp =
+  and pp_top_locals ~dyn_env ppf (vcomp : float low_level) : int =
     match vcomp with
     | Local_scope { id = { scope_id = i; _ } as id; prec; body; orig_indices = _ } ->
         let typ = prec_to_c_type prec in
@@ -398,9 +401,11 @@ let jit_func ~name (traced_store, llc) =
   session_state.last_module <- None;
   if Option.is_none session_state.ctx then cleanup_session ();
   if Option.is_none session_state.ctx then invalid_arg "Exec_as_cuda: no device found";
-  ignore @@ Caml.Format.flush_str_formatter ();
-  jit_code Caml.Format.str_formatter ~traced_store llc;
-  let cu_body = Caml.Format.flush_str_formatter () in
+  let b = Buffer.create 4096 in
+  let ppf = Caml.Format.formatter_of_buffer b in
+  jit_code ppf ~traced_store llc;
+  Caml.Format.pp_print_newline ppf ();
+  let cu_body = Buffer.contents b in
   let tensors = Hashtbl.to_alist session_state.tensors in
   let params =
     List.filter_map tensors ~f:(fun (_, tn) ->
@@ -448,16 +453,23 @@ let jit_func ~name (traced_store, llc) =
       }|}]
   in
   (* Constants will be referred to via cuModuleGetGlobal. *)
+  let f_name = name ^ "-cudajit-debug" in
+  if !Code.with_debug && !Code.keep_files_in_run_directory then (
+    let oc = Out_channel.open_text @@ f_name ^ ".cu" in
+    Stdio.Out_channel.output_string oc cu_src;
+    Stdio.Out_channel.flush oc;
+    Stdio.Out_channel.close oc);
   let ptx = Cu.compile_to_ptx ~cu_src ~name ~options:[ "--use_fast_math" ] ~with_debug:!Code.with_debug in
-  (* TODO: save jitted source and ptx to files when Code.keep_files_in_run_directory is true. *)
   if !Code.with_debug && !Code.keep_files_in_run_directory then (
     let f_name = name ^ "-cudajit-debug" in
     let oc = Out_channel.open_text @@ f_name ^ ".ptx" in
     Stdio.Out_channel.output_string oc @@ Cudajit.string_from_ptx ptx;
+    Stdio.Out_channel.flush oc;
+    Stdio.Out_channel.close oc;
     let oc = Out_channel.open_text @@ f_name ^ ".cu_log" in
     Stdio.Out_channel.output_string oc @@ Option.value_exn ptx.log;
-    let oc = Out_channel.open_text @@ f_name ^ ".cu" in
-    Stdio.Out_channel.output_string oc cu_src);
+    Stdio.Out_channel.flush oc;
+    Stdio.Out_channel.close oc);
   let module_ = Cu.module_load_data_ex ptx [] in
   session_state.last_module <- Some module_;
   let func = Cu.module_get_function module_ ~name in

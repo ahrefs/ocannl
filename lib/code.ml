@@ -846,7 +846,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         (* get_node will initialize reduced_racyness to true.  *)
         let traced : traced_tensor = get_node traced_store tensor in
         Hash_set.add traced.assignments (lookup env idcs);
-        traced.rhses <- llv :: traced.rhses;
+        traced.rhses <- List.dedup_and_sort ~compare:Caml.compare @@ llv :: traced.rhses;
         if virtualize_settings.inline_constants then precompute_constants ~idcs traced_store traced llv;
         if check_dedicated_dep Shape.Task_id ~cached_dedicated:cached_not_replicable llc then
           traced.is_replicable <- false;
