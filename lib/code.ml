@@ -582,6 +582,33 @@ let interpret_code ?task_id llc =
   in
   loop_proc empty_env llc
 
+let rec lookup_dyn_ind ?provider_dim dyn_env idx =
+  let lookup ?provider_dim dyn_env indices = Array.map indices ~f:(lookup_dyn_ind ?provider_dim dyn_env) in
+  try
+    match idx with
+    | Shape.Fixed_idx i -> i
+    | Dynamic_recipient s | Frozen_recipient s ->
+        let tensor_ptr, provider_dim, tensor_idcs, target_dim = Map.find_exn dyn_env s in
+        let tensor = Option.value_exn @@ NodeUI.get_tensor tensor_ptr in
+        let idcs = lookup ~provider_dim dyn_env tensor_idcs in
+        let actual =
+          try N.get_as_int tensor idcs
+          with e ->
+            Caml.Format.printf "ERROR: dynamic index at [%a -> %a] -- indices out of bounds\n%!" Sexp.pp_hum
+              ([%sexp_of: Shape.axis_index array] tensor_idcs)
+              Sexp.pp_hum
+              ([%sexp_of: int array] idcs);
+            raise e
+        in
+        actual % target_dim
+    | Iterator it -> raise @@ Not_found_s ([%sexp_of: Shape.symbol] it)
+    | Dynamic_provider _ -> Option.value_exn provider_dim
+  with Caml.Not_found | Not_found_s _ ->
+    if !debug_trace_interpretation then
+      Caml.Format.printf "TRACE: lookup error for dynamic env keys=@ %a\n%!" Sexp.pp_hum
+        ([%sexp_of: Shape.symbol list] @@ Map.keys dyn_env);
+    failwith "Code.lookup_idcs: index lookup error, set CDSL.debug_trace_interpretation for details"
+
 let code_sexp_margin = ref 200
 
 let fprint_code ppf c =

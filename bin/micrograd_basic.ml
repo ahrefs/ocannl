@@ -9,6 +9,9 @@ let () = SDSL.set_executor Gccjit
 
 let () =
   SDSL.drop_all_sessions ();
+  SDSL.set_executor Cuda;
+  Code.with_debug := true;
+  Code.keep_files_in_run_directory := true;
   Random.init 0;
   let%nn_op c = "a" [ -4 ] + "b" [ 2 ] in
   let%nn_op d = (a *. b) + (b **. 3) in

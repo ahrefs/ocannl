@@ -24,7 +24,7 @@ type sync_properties =
 type tensor = {
   hosted : Node.ndarray option;  (** Pointer to the first value of the associated [Bigarray], if hosted. *)
   global : string option;  (** A global device array, if any. *)
-  global_ptr : Cudajit.deviceptr option;
+  global_ptr : Cudajit.deviceptr Lazy.t option;
   local : string option;  (** Either a thread-local or shared (block-local) memory, if any. *)
   sync : sync_properties;
   host_dims : int array;
@@ -89,7 +89,10 @@ let prec_is_double = function NodeUI.Double_prec _ -> true | _ -> false
 
 exception Unknown_synchronization
 
-let get_tensor ~traced_store ?force_sync ~jit_code ~host_idcs ptr : tensor =
+let compute_array_offset ~idcs ~dims =
+  Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx + (offset * dim))
+
+let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~host_idcs ptr : tensor =
   let { tensors; _ } = session_state in
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
       let n = NodeUI.(get ptr.id) in
@@ -154,24 +157,43 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~host_idcs ptr : tensor =
                     ([%sexp_of: NodeUI.t] n);
                 raise Unknown_synchronization))
         in
-        let global_ptr = Some (Cudajit.mem_alloc ~byte_size:device_size_in_bytes) in
-        let global = Some (NodeUI.tensor_ptr_name ptr) in
+        let has_global_mem = not (is_thread_only sync || is_block_only sync) in
+        let has_local_mem = not (is_constant sync || is_global sync) in
+        let global_ptr =
+          Option.some_if has_global_mem
+          @@
+          match sync with
+          | Constant ->
+              lazy
+                (let ptr, size =
+                   Cudajit.module_get_global
+                     (Option.value_exn session_state.last_module)
+                     ~name:(NodeUI.tensor_ptr_name ptr)
+                 in
+                 assert (Unsigned.Size_t.to_int size = device_size_in_bytes);
+                 ptr)
+          | _ ->
+              (* The general case does not require laziness, but it should be OK. *)
+              lazy (Cudajit.mem_alloc ~byte_size:device_size_in_bytes)
+        in
+        let global = Option.some_if has_global_mem @@ NodeUI.tensor_ptr_name ptr in
+        let local = Option.some_if has_local_mem @@ NodeUI.tensor_ptr_name ptr in
         let host_dims = Bigarray.Genarray.dims arr in
-        let host_idcs = (* FIXME: *) Array.map ~f:(fun _ -> 0) host_idcs in
         let host_offset =
-          (* FIXME: *)
           Option.bind hosted ~f:(fun _ ->
               if local_is_slice_of_host then
-                let _offset_idcs =
-                  try
-                    Array.map2_exn host_idcs axes ~f:(fun idx -> function
-                      | Shape.{ special = Frozen; _ } -> idx | _ -> 0)
-                  with e ->
-                    Caml.Format.printf "\nMismatch host_idcs axes = %a\n%!" Sexp.pp_hum
-                      ([%sexp_of: Shape.dim array] axes);
-                    raise e
-                in
-                (* fun () -> compute_array_offset ~idcs:offset_idcs ~dims:host_dims *) None
+                Some
+                  (fun () ->
+                    let offset_idcs =
+                      try
+                        Array.map2_exn host_idcs axes ~f:(fun idx -> function
+                          | Shape.{ special = Frozen; _ } -> Code.lookup_dyn_ind dyn_env idx | _ -> 0)
+                      with e ->
+                        Caml.Format.printf "\nMismatch host_idcs axes = %a\n%!" Sexp.pp_hum
+                          ([%sexp_of: Shape.dim array] axes);
+                        raise e
+                    in
+                    compute_array_offset ~idcs:offset_idcs ~dims:host_dims)
               else (
                 ignore jit_code;
                 failwith "Exec_as_gccjit: non-slice hosted: NOT IMPLEMENTED YET"))
@@ -185,7 +207,7 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~host_idcs ptr : tensor =
           n.backend_info <- n.backend_info ^ backend_info;
         {
           hosted;
-          local = None;
+          local;
           sync;
           host_dims;
           device_dims;
@@ -221,45 +243,43 @@ let pp_array_offset ppf ~idcs ~dims =
 let pp_indices ?provider_dim () ppf idcs =
   Caml.Format.pp_print_list ~pp_sep:pp_comma (pp_index_axis ?provider_dim) ppf @@ Array.to_list idcs
 
-let finalize_device_to_host (ptr : Cudajit.deviceptr) = ignore ptr
-
 let jit_code (ppf : Caml.Format.formatter) ~traced_store llc : unit =
-  (* ignore (name, ctx, func, state, as_toplevel, ppf, c) *)
   let open Code in
   let open Caml.Format in
-  let lookup ?provider_dim ?(example_only = false) ~on_host indices =
-    Array.map indices ~f:(function
-      | Shape.Fixed_idx i -> Int.to_string i
-      | Iterator it | Dynamic_recipient it -> Shape.symbol_ident it
-      | Dynamic_provider _ when example_only -> Int.to_string 0
-      | Dynamic_provider _ -> Int.to_string @@ Option.value_exn provider_dim
-      | Frozen_recipient it when on_host -> Shape.symbol_ident it
-      | Frozen_recipient _ -> Int.to_string 0)
-  in
+  (* let lookup ?provider_dim ?(example_only = false) ~on_host indices =
+       Array.map indices ~f:(function
+         | Shape.Fixed_idx i -> Int.to_string i
+         | Iterator it | Dynamic_recipient it -> Shape.symbol_ident it
+         | Dynamic_provider _ when example_only -> Int.to_string 0
+         | Dynamic_provider _ -> Int.to_string @@ Option.value_exn provider_dim
+         | Frozen_recipient it when on_host -> Shape.symbol_ident it
+         | Frozen_recipient _ -> Int.to_string 0)
+     in *)
   let locals = ref Map.Poly.empty in
-  let rec pp_ll (ppf : formatter) (c : unit low_level) =
+  let rec pp_ll ~dyn_env (ppf : formatter) (c : unit low_level) =
     match c with
     | Lines [||] -> ()
     | Lines lines ->
         (* Note: no separator. *)
-        (pp_print_list pp_ll ppf @@ Array.to_list lines : unit)
+        (pp_print_list (pp_ll ~dyn_env) ppf @@ Array.to_list lines : unit)
     | For_loop { index = i; from_; to_; body; trace_it = _ } when Shape.task_id_sym i ->
         assert (from_ = 0);
         session_state.num_blocks <- to_ + 1;
         fprintf ppf "@[<2>{@ size_t %a = blockIdx.x;@ " pp_index i;
-        pp_ll ppf body;
+        pp_ll ~dyn_env ppf body;
         fprintf ppf "@]}@ "
     | For_loop { index = i; from_; to_; body; trace_it = _ } when Shape.sample_num_sym i ->
         assert (from_ = 0);
         session_state.num_threads <- to_ + 1;
         fprintf ppf "@[<2>{@ size_t %a = threadIdx.x;@ " pp_index i;
-        pp_ll ppf body;
+        pp_ll ~dyn_env ppf body;
         fprintf ppf "@]}@ "
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
         fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]}@ " pp_index i from_ pp_index i to_
-          pp_index i pp_ll body
+          pp_index i (pp_ll ~dyn_env) body
     | Rebalance (s, lines) ->
-        pp_ll ppf @@ Lines (Array.append (Option.to_array @@ Option.map s ~f:(fun s -> Comment s)) lines)
+        pp_ll ~dyn_env ppf
+        @@ Lines (Array.append (Option.to_array @@ Option.map s ~f:(fun s -> Comment s)) lines)
     | If_task_id_is _ -> ()
     | Zero_out ptr ->
         if Hashtbl.mem session_state.tensors ptr then
@@ -270,44 +290,46 @@ let jit_code (ppf : Caml.Format.formatter) ~traced_store llc : unit =
         assert tn.zero_initialized
         (* The initialization will be emitted by get_tensor. *)
     | Set (ptr, idcs, v) ->
-        let host_idcs = lookup ~on_host:true idcs in
-        let tensor = get_tensor ~traced_store ~jit_code:pp_ll ~host_idcs ptr in
-        let num_closing_braces = pp_top_locals ppf v in
+        (* let host_idcs = lookup ~on_host:true idcs in *)
+        let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~host_idcs:idcs ptr in
+        let old_locals = !locals in
+        let num_closing_braces = pp_top_locals ~dyn_env ppf v in
         fprintf ppf "@[<2>%a[@,%a] =@ %a;@]@ " pp_get_ptr tensor (pp_indices ()) idcs
-          (pp_float ~num_typ:tensor.num_typ ~is_double:tensor.is_double)
+          (pp_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double)
           v;
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]}@ "
-        done
+        done;
+        locals := old_locals
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
-        jit_dynamic_indices tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
+        jit_dynamic_indices ~dyn_env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Comment message -> fprintf ppf "/* %s */@ " message
     | Set_local (({ scope_id; _ } as id), value) ->
         let num_typ, is_double = Map.find_exn !locals id in
-        let num_closing_braces = pp_top_locals ppf value in
-        fprintf ppf "@[<2>v%d =@ %a;@]@ " scope_id (pp_float ~num_typ ~is_double) value;
+        let old_locals = !locals in
+        let num_closing_braces = pp_top_locals ~dyn_env ppf value in
+        fprintf ppf "@[<2>v%d =@ %a;@]@ " scope_id ((pp_float ~dyn_env) ~num_typ ~is_double) value;
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]}@ "
-        done
-  and pp_top_locals ppf vcomp =
+        done;
+        locals := old_locals
+  and pp_top_locals ~dyn_env ppf vcomp =
     match vcomp with
     | Local_scope { id = { scope_id = i; _ } as id; prec; body; orig_indices = _ } ->
         let typ = prec_to_c_type prec in
         (* Tensors are initialized to 0 by default. However, there is typically an explicit
            initialization for virtual nodes. *)
         fprintf ppf "@[{%s v%d = 0;@ " typ i;
-        let old_locals = !locals in
         locals := Map.update !locals id ~f:(fun _ -> (typ, prec_is_double prec));
-        pp_ll ppf body;
-        locals := old_locals;
+        pp_ll ~dyn_env ppf body;
         1
     | Get_local _ | Get_global _ | Get _ | Constant _ -> 0
-    | Binop (Arg1, v1, _v2) -> pp_top_locals ppf v1
-    | Binop (Arg2, _v1, v2) -> pp_top_locals ppf v2
-    | Binop (_, v1, v2) -> pp_top_locals ppf v1 + pp_top_locals ppf v2
-    | Unop (_, v) -> pp_top_locals ppf v
-  and pp_float ~num_typ ~is_double ppf value =
-    let loop = pp_float ~num_typ ~is_double in
+    | Binop (Arg1, v1, _v2) -> pp_top_locals ~dyn_env ppf v1
+    | Binop (Arg2, _v1, v2) -> pp_top_locals ~dyn_env ppf v2
+    | Binop (_, v1, v2) -> pp_top_locals ~dyn_env ppf v1 + pp_top_locals ~dyn_env ppf v2
+    | Unop (_, v) -> pp_top_locals ~dyn_env ppf v
+  and pp_float ~dyn_env ~num_typ ~is_double ppf value =
+    let loop = pp_float ~dyn_env ~num_typ ~is_double in
     match value with
     | Local_scope { id; _ } ->
         (* Embedding of Local_scope is done by pp_top_locals. *)
@@ -318,8 +340,8 @@ let jit_code (ppf : Caml.Format.formatter) ~traced_store llc : unit =
         fprintf ppf "v%d" id.scope_id
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (ptr, idcs) ->
-        let host_idcs = lookup ~on_host:true idcs in
-        let tensor = get_tensor ~traced_store ~jit_code:pp_ll ~host_idcs ptr in
+        (* let host_idcs = lookup ~on_host:true idcs in *)
+        let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~host_idcs:idcs ptr in
         fprintf ppf "@[<2>%a[%a@]]" pp_get_ptr tensor (pp_indices ()) idcs
     | Constant c -> fprintf ppf "(%f)" c
     | Binop (Arg1, v1, _v2) -> loop ppf v1
@@ -330,22 +352,25 @@ let jit_code (ppf : Caml.Format.formatter) ~traced_store llc : unit =
     | Binop (ToPowOf, v1, v2) -> fprintf ppf "@[<2>powf(%a,@ %a@]@,)" loop v1 loop v2
     | Binop (Relu_gate, v1, v2) ->
         fprintf ppf "@[<2>(%a > 0.0 ?@ %a : 0.0@])" loop v1 loop v2
-        (* fprintf ppf "@[<2>((int)(%a > 0.0) *@ (%a)@])" pp_ll v1 pp_ll v2 *)
+        (* fprintf ppf "@[<2>((int)(%a > 0.0) *@ (%a)@])" (pp_ll ~dyn_env) v1 (pp_ll ~dyn_env) v2 *)
     | Unop (Identity, v) -> loop ppf v
     | Unop (Relu, v) ->
         (* FIXME: don't recompute v *)
         fprintf ppf "@[<2>(%a > 0.0 ?@ %a : 0.0@])" loop v loop v
-  and jit_dynamic_indices tensor ~tensor_idcs ~dynamic_idcs ~target_dims body =
-    let host_idcs = lookup ~on_host:true ~example_only:true tensor_idcs in
-    let tensor = get_tensor ~traced_store ~jit_code:pp_ll ~host_idcs tensor in
-    Array.iteri dynamic_idcs ~f:(fun provider_dim sym ->
-        let target_dim = target_dims.(provider_dim).dim in
-        fprintf ppf "size_t %a =@ (size_t)(%a[%a]) %% %d;@ " pp_symbol sym pp_get_ptr tensor
-          (pp_indices ~provider_dim ()) tensor_idcs target_dim);
-    pp_ll ppf body
-    (* fprintf ppf "%a" (pp_ll ~env) body *)
+  and jit_dynamic_indices ~dyn_env ptr ~tensor_idcs ~dynamic_idcs ~target_dims body =
+    (* let host_idcs = lookup ~on_host:true ~example_only:true tensor_idcs in *)
+    let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~host_idcs:tensor_idcs ptr in
+    let dyn_env =
+      Array.foldi dynamic_idcs ~init:dyn_env ~f:(fun provider_dim dyn_env sym ->
+          let target_dim = target_dims.(provider_dim).dim in
+          fprintf ppf "size_t %a =@ (size_t)(%a[%a]) %% %d;@ " pp_symbol sym pp_get_ptr tensor
+            (pp_indices ~provider_dim ()) tensor_idcs target_dim;
+          Map.add_exn dyn_env ~key:sym ~data:(ptr, provider_dim, tensor_idcs, target_dim))
+    in
+    pp_ll ~dyn_env ppf body
+    (* fprintf ppf "%a" (pp_ll ~dyn_env ~env) body *)
   in
-  pp_ll ppf llc
+  pp_ll ~dyn_env:Code.empty_env ppf llc
 
 let new_context ?(device_num = 0) () =
   let num_devices = Cudajit.device_get_count () in
@@ -355,9 +380,11 @@ let new_context ?(device_num = 0) () =
     Some (Cudajit.ctx_create ~flags:0 device)
 
 let cleanup_session () =
+  if Option.is_none session_state.ctx then Cudajit.init ();
   Option.iter session_state.last_module ~f:Cudajit.module_unload;
   session_state.last_module <- None;
-  Hashtbl.iter session_state.tensors ~f:(fun tensor -> Option.iter tensor.global_ptr ~f:Cudajit.mem_free);
+  Hashtbl.iter session_state.tensors ~f:(fun tensor ->
+      Option.iter tensor.global_ptr ~f:(fun (lazy ptr) -> Cudajit.mem_free ptr));
   Option.iter session_state.ctx ~f:Cudajit.ctx_destroy;
   (* For now we stick with device 0. *)
   session_state.ctx <- new_context ()
@@ -376,23 +403,69 @@ let jit_func ~name (traced_store, llc) =
   let tensors = Hashtbl.to_alist session_state.tensors in
   let params =
     List.filter_map tensors ~f:(fun (_, tn) ->
-        Option.map tn.global ~f:(fun t_name -> tn.num_typ ^ " *" ^ t_name))
+        match tn.sync with
+        | Thread_only | Block_only | Constant -> None
+        | _ -> Option.map tn.global ~f:(fun t_name -> tn.num_typ ^ " *" ^ t_name))
+  in
+  (* TODO: optimize zero-initializations? E.g.
+     https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
+  let shared_decls =
+    List.filter_map tensors ~f:(fun (ptr, tn) ->
+        match tn.sync with
+        | Block_only ->
+            Option.map tn.local ~f:(fun t_name ->
+                "__shared__ " ^ tn.num_typ ^ " " ^ t_name ^ "[" ^ Int.to_string tn.device_length
+                ^ if Code.(get_node traced_store ptr).zero_initialized then "] = {0};" else "];")
+        | _ -> None)
+  in
+  let local_decls =
+    List.filter_map tensors ~f:(fun (ptr, tn) ->
+        match tn.sync with
+        | Thread_only ->
+            Option.map tn.local ~f:(fun t_name ->
+                tn.num_typ ^ " " ^ t_name ^ "[" ^ Int.to_string tn.device_length
+                ^ if Code.(get_node traced_store ptr).zero_initialized then "] = {0};" else "];")
+        | _ -> None)
+  in
+  let constant_defs =
+    List.filter_map tensors ~f:(fun (ptr, tn) ->
+        match tn.sync with
+        | Constant ->
+            Option.map tn.global ~f:(fun t_name ->
+                "__constant__ " ^ tn.num_typ ^ " " ^ t_name ^ "[" ^ Int.to_string tn.device_length
+                ^ if Code.(get_node traced_store ptr).zero_initialized then "] = {0};" else "];")
+        | _ -> None)
   in
   let cu_src =
     [%string
       {|
+      %{String.concat ~sep:"\n" constant_defs}
       extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
+        %{String.concat ~sep:"\n" shared_decls}
+        %{String.concat ~sep:"\n" local_decls}
         %{cu_body}
       }|}]
   in
+  (* Constants will be referred to via cuModuleGetGlobal. *)
   let ptx = Cu.compile_to_ptx ~cu_src ~name ~options:[ "--use_fast_math" ] ~with_debug:!Code.with_debug in
+  (* TODO: save jitted source and ptx to files when Code.keep_files_in_run_directory is true. *)
+  if !Code.with_debug && !Code.keep_files_in_run_directory then (
+    let f_name = name ^ "cudajit-debug" in
+    let oc = Out_channel.open_text @@ f_name ^ ".ptx" in
+    Stdio.Out_channel.output_string oc @@ Ctypes.string_from_ptr ptx.ptx ~length:ptx.ptx_length;
+    let oc = Out_channel.open_text @@ f_name ^ ".cu_log" in
+    Stdio.Out_channel.output_string oc @@ Option.value_exn ptx.log;
+    let oc = Out_channel.open_text @@ f_name ^ ".cu" in
+    Stdio.Out_channel.output_string oc cu_src);
   let module_ = Cu.module_load_data_ex ptx [] in
   session_state.last_module <- Some module_;
   let func = Cu.module_get_function module_ ~name in
-  let args = List.filter_map tensors ~f:(fun (_, tn) -> Option.map tn.global_ptr ~f:(fun p -> Cu.Tensor p)) in
+  let args =
+    List.filter_map tensors ~f:(fun (_, tn) -> Option.map tn.global_ptr ~f:(fun (lazy p) -> Cu.Tensor p))
+  in
   fun () ->
     List.iter tensors ~f:(function
-      | ptr, { hosted = Some ndarray; global_ptr = Some dst; host_offset; device_length; _ } ->
+      | ptr, { hosted = Some ndarray; global_ptr = Some (lazy dst); host_offset; device_length; _ } ->
           let host_offset = Option.map host_offset ~f:(fun f -> f ()) in
           let tn = Code.(get_node traced_store ptr) in
           if tn.read_before_write then
@@ -400,14 +473,14 @@ let jit_func ~name (traced_store, llc) =
             Node.map_as_bigarray { f } ndarray
       | _ -> ());
     List.iter tensors ~f:(function
-      | ptr, { global_ptr = Some device; device_size_in_bytes; _ } ->
+      | ptr, { global_ptr = Some (lazy device); device_size_in_bytes; _ } ->
           let tn = Code.(get_node traced_store ptr) in
           if tn.zero_initialized then Cu.memset_d8 device Unsigned.UChar.zero ~length:device_size_in_bytes
       | _ -> ());
     Cu.launch_kernel func ~grid_dim_x:session_state.num_blocks ~block_dim_x:session_state.num_threads
       ~shared_mem_bytes:0 Cu.no_stream args;
     List.iter tensors ~f:(function
-      | ptr, { hosted = Some ndarray; global_ptr = Some src; host_offset; device_length; _ } ->
+      | ptr, { hosted = Some ndarray; global_ptr = Some (lazy src); host_offset; device_length; _ } ->
           let host_offset = Option.map host_offset ~f:(fun f -> f ()) in
           let tn = Code.(get_node traced_store ptr) in
           if not tn.read_only then
