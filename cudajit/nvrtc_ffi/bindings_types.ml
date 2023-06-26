@@ -3,7 +3,7 @@ open Ctypes
 type nvrtc_program_t
 type nvrtc_program = nvrtc_program_t structure ptr
 
-let nvrtc_program : nvrtc_program typ = ptr (structure "nvrtcProgram")
+let nvrtc_program : nvrtc_program typ = ptr (structure "_nvrtcProgram")
 
 open Sexplib0.Sexp_conv
 
