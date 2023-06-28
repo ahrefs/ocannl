@@ -260,7 +260,7 @@ let get_sync_ptr tensor =
 
 (* task_id = RValue.param task_id *)
 let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as state) initial_block
-    (body : unit Code.low_level) : Gccjit.block =
+    (body : Code.unit_low_level) : Gccjit.block =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
@@ -332,7 +332,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
        Block.eval !current_block @@ RValue.call ctx f print_args);
     Block.comment !current_block c
   in
-  let rec loop_proc ~(env : rvalue Code.environment) ~name (body : unit Code.low_level) : unit =
+  let rec loop_proc ~(env : rvalue Code.environment) ~name (body : Code.unit_low_level) : unit =
     let loop = loop_proc ~env in
     match body with
     | Code.Lines lines ->

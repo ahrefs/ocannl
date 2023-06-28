@@ -102,55 +102,49 @@ let get_scope =
     Int.incr uid;
     { tensor; scope_id = !uid }
 
-(** Cases: [unit low_level] -- code, [float low_level] -- single number at some precision. *)
-type _ low_level =
-  | Comment : string -> unit low_level
-  | Lines : unit low_level array -> unit low_level
-  | For_loop : {
-      index : Shape.symbol;
-      from_ : int;
-      to_ : int;
-      body : unit low_level;
-      trace_it : bool;
-    }
-      -> unit low_level
-  | If_task_id_is : { for_task_id : int; body : unit low_level } -> unit low_level
-  | Rebalance : string option * unit low_level array -> unit low_level
-  | Dynamic_indices : {
+(** Cases: [unit_low_level] -- code, [float_low_level] -- single number at some precision. *)
+type unit_low_level =
+  | Comment of string
+  | Lines of unit_low_level array
+  | For_loop of { index : Shape.symbol; from_ : int; to_ : int; body : unit_low_level; trace_it : bool }
+  | If_task_id_is of { for_task_id : int; body : unit_low_level }
+  | Rebalance of string option * unit_low_level array
+  | Dynamic_indices of {
       tensor : NodeUI.tensor_ptr;
       tensor_idcs : Shape.axis_index array;
       dynamic_idcs : Shape.symbol array;
       target_dims : Shape.dim array;
-      body : unit low_level;
+      body : unit_low_level;
       slice : NodeUI.tensor_ptr option;
           (** Provided when we know the dynamic indexing was used to define this tensor. *)
     }
-      -> unit low_level
-  | Zero_out : NodeUI.tensor_ptr -> unit low_level
-  | Set : NodeUI.tensor_ptr * Shape.axis_index array * float low_level -> unit low_level
-  | Set_local : scope_id * float low_level -> unit low_level
-  | Local_scope : {
+  | Zero_out of NodeUI.tensor_ptr
+  | Set of NodeUI.tensor_ptr * Shape.axis_index array * float_low_level
+  | Set_local of scope_id * float_low_level
+[@@deriving sexp]
+
+and float_low_level =
+  | Local_scope of {
       id : scope_id;
       prec : NodeUI.prec;
-      body : unit low_level;
+      body : unit_low_level;
       orig_indices : Shape.axis_index array;
     }
-      -> float low_level
-  | Get_local : scope_id -> float low_level
-  | Get_global : global_identifier -> float low_level
-  | Get : NodeUI.tensor_ptr * Shape.axis_index array -> float low_level
-  | Binop : binop * float low_level * float low_level -> float low_level
-  | Unop : unop * float low_level -> float low_level
-  | Constant : float -> float low_level
-[@@deriving sexp_of]
+  | Get_local of scope_id
+  | Get_global of global_identifier
+  | Get of NodeUI.tensor_ptr * Shape.axis_index array
+  | Binop of binop * float_low_level * float_low_level
+  | Unop of unop * float_low_level
+  | Constant of float
+[@@deriving sexp]
 
-let check_dedicated_dep d ~cached_dedicated llc =
-  let rec loop : type a. a low_level -> bool = function
+let check_dedicated_dep d ~cached_dedicated =
+  let rec loop_proc = function
     | Comment _ -> false
-    | Lines ls -> Array.exists ~f:loop ls
-    | For_loop { body; _ } -> loop body
-    | Rebalance (_, cs) -> Array.exists ~f:loop cs
-    | If_task_id_is { body; _ } -> loop body
+    | Lines ls -> Array.exists ~f:loop_proc ls
+    | For_loop { body; _ } -> loop_proc body
+    | Rebalance (_, cs) -> Array.exists ~f:loop_proc cs
+    | If_task_id_is { body; _ } -> loop_proc body
     | Dynamic_indices { tensor = _; tensor_idcs; dynamic_idcs = _; target_dims; body; slice = _ } ->
         Array.exists tensor_idcs ~f:(function Shape.Iterator s -> Shape.is_dedicated_kind d s | _ -> false)
         || Array.exists
@@ -158,32 +152,33 @@ let check_dedicated_dep d ~cached_dedicated llc =
                Shape.(
                  function { special = Dedicated d2; _ } -> Shape.equal_dedicated_axis d d2 | _ -> false)
              target_dims
-        || loop body
+        || loop_proc body
     | Zero_out _ -> false
     | Set (_, indices, llv) ->
         Array.exists indices ~f:(function Shape.Iterator s -> Shape.is_dedicated_kind d s | _ -> false)
-        || loop llv
-    | Set_local (_, llv) -> loop llv
+        || loop_float llv
+    | Set_local (_, llv) -> loop_float llv
+    and loop_float = function
     | Local_scope { body; orig_indices; _ } ->
         Array.exists orig_indices ~f:(function Shape.Iterator s -> Shape.is_dedicated_kind d s | _ -> false)
-        || loop body
+        || loop_proc body
     | Get_local _ -> false
     | Get_global Task_id -> true
     | Get_global _ -> false
     | Get (ptr, indices) ->
         cached_dedicated ptr
         || Array.exists indices ~f:(function Shape.Iterator s -> Shape.is_dedicated_kind d s | _ -> false)
-    | Binop (_, llv1, llv2) -> loop llv1 || loop llv2
-    | Unop (_, llv) -> loop llv
+    | Binop (_, llv1, llv2) -> loop_float llv1 || loop_float llv2
+    | Unop (_, llv) -> loop_float llv
     | Constant _ -> false
   in
-  loop llc
+  loop_proc, loop_float
 
 let binop ~op ~rhs1 ~rhs2 = match op with Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Binop (op, rhs1, rhs2)
 let unop ~op ~rhs = match op with Identity -> rhs | _ -> Unop (op, rhs)
 let rec flat_lines ts = Array.concat_map ts ~f:(function Lines ts -> flat_lines ts | t -> [| t |])
 
-let to_low_level (code : t) : unit low_level =
+let to_low_level (code : t) : unit_low_level =
   let rec loop code =
     match code with
     | Accum_binop { zero_out; accum; op; lhs; rhs1; rhs2; projections } ->
@@ -619,7 +614,7 @@ let fprint_code ppf c =
 let fprint_low_level ppf c =
   (* TODO: something nicely concise. *)
   Caml.Format.pp_set_margin ppf !code_sexp_margin;
-  Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_low_level Unit.sexp_of_t (to_low_level c)
+  Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_unit_low_level (to_low_level c)
 
 let interpreter_error_message ~name ~prefix ?extra_error_msg ~contents exc =
   let backtrace = Caml.Printexc.get_backtrace () in
@@ -666,7 +661,7 @@ type traced_tensor = {
   id : int;
   kind : NodeUI.data_kind;
   prec : NodeUI.prec;
-  mutable computations : (Shape.axis_index array option * unit low_level) list;
+  mutable computations : (Shape.axis_index array option * unit_low_level) list;
       (** The computations (of the data node) are retrieved for optimization just as they are populated,
           so that the inlined code corresponds precisely to the changes to the tensors that would happen
           up till that point. Within the code blocks paired with an index tuple, all assignments and accesses
@@ -696,7 +691,7 @@ type traced_tensor = {
   mutable is_replicable : bool;
       (** If true, in case of parallelization, the tensor's update is identical on all tasks, and the final
           update of the host should only be performed from one task rather than accumulated across tasks. *)
-  mutable rhses : float low_level list;
+  mutable rhses : float_low_level list;
 }
 [@@deriving sexp_of]
 
@@ -846,9 +841,9 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         (* get_node will initialize reduced_racyness to true.  *)
         let traced : traced_tensor = get_node traced_store tensor in
         Hash_set.add traced.assignments (lookup env idcs);
-        traced.rhses <- List.dedup_and_sort ~compare:Caml.compare @@ llv :: traced.rhses;
+        traced.rhses <- List.dedup_and_sort ~compare:Caml.compare @@ (llv :: traced.rhses);
         if virtualize_settings.inline_constants then precompute_constants ~idcs traced_store traced llv;
-        if check_dedicated_dep Shape.Task_id ~cached_dedicated:cached_not_replicable llc then
+        if fst (check_dedicated_dep Shape.Task_id ~cached_dedicated:cached_not_replicable) llc then
           traced.is_replicable <- false;
         (match llv with
         | Get (tensor2, idcs2) ->
@@ -983,7 +978,7 @@ let process_computation node top_llc =
                       Sexp.pp_hum
                       ([%sexp_of: Shape.axis_index] idx)
                       Sexp.pp_hum
-                      ([%sexp_of: unit low_level] top_llc);
+                      ([%sexp_of: unit_low_level] top_llc);
                   raise Non_virtual)
             | _ -> ());
         loop_float ~env_dom llv
@@ -1005,7 +1000,7 @@ let process_computation node top_llc =
                       Sexp.pp_hum
                       ([%sexp_of: Shape.axis_index] idx)
                       Sexp.pp_hum
-                      ([%sexp_of: unit low_level] top_llc);
+                      ([%sexp_of: unit_low_level] top_llc);
                   raise Non_virtual)
             | _ -> ())
     | Local_scope { body; _ } -> loop_proc ~env_dom body
@@ -1035,7 +1030,7 @@ let inline_computation ~id node call_args =
   in
   let at_data = { id = node.id; NodeUI.field = node.kind } in
   (* In the order of computation. *)
-  let loop_proc (def_args, def) : unit low_level option =
+  let loop_proc (def_args, def) : unit_low_level option =
     let env =
       match def_args with
       | None -> Map.Poly.empty
@@ -1045,7 +1040,7 @@ let inline_computation ~id node call_args =
       | Shape.Iterator s when Map.mem env s -> Shape.Iterator (Map.find_exn env s)
       | idx -> idx
     in
-    let rec loop env llc : unit low_level option =
+    let rec loop env llc : unit_low_level option =
       match llc with
       | Lines body ->
           let body = Array.filter_map ~f:(loop env) body in
@@ -1076,7 +1071,7 @@ let inline_computation ~id node call_args =
       | Dynamic_indices dyn_idcs ->
           (* Dynamic_indices is introduced by to_low_level in the innermost scope. *)
           Option.map ~f:(fun body -> Dynamic_indices { dyn_idcs with body }) @@ loop env dyn_idcs.body
-    and loop_float env llv : float low_level =
+    and loop_float env llv : float_low_level =
       match llv with
       | Constant _ -> llv
       | Get (tensor, indices) when NodeUI.equal_tensor_ptr tensor at_data ->
@@ -1103,9 +1098,9 @@ let inline_computation ~id node call_args =
     node.non_virtual <- true;
     None
 
-let virtual_llc traced_store reverse_node_map (llc : unit low_level) : unit low_level =
+let virtual_llc traced_store reverse_node_map (llc : unit_low_level) : unit_low_level =
   (* The current position is within scope of the definitions of the process_for virtual tensors. *)
-  let rec loop_proc ~(process_for : tensor_ptrs) (llc : unit low_level) : unit low_level =
+  let rec loop_proc ~(process_for : tensor_ptrs) (llc : unit_low_level) : unit_low_level =
     let loop = loop_proc ~process_for in
     match llc with
     | Lines body -> Lines (Array.map ~f:loop body)
@@ -1143,7 +1138,7 @@ let virtual_llc traced_store reverse_node_map (llc : unit low_level) : unit low_
             if (not @@ Set.mem process_for ptr) && not tensor.non_virtual then
               process_computation tensor result;
             result)
-  and loop_float ~(process_for : tensor_ptrs) (llv : float low_level) : float low_level =
+  and loop_float ~(process_for : tensor_ptrs) (llv : float_low_level) : float_low_level =
     match llv with
     | Constant _ -> llv
     | Get (tensor, _) when Set.mem process_for tensor ->
@@ -1166,13 +1161,13 @@ let virtual_llc traced_store reverse_node_map (llc : unit low_level) : unit low_
   in
   loop_proc ~process_for:Set.Poly.empty llc
 
-let cleanup_virtual_llc traced_store reverse_node_map (llc : unit low_level) : unit low_level =
+let cleanup_virtual_llc traced_store reverse_node_map (llc : unit_low_level) : unit_low_level =
   let is_inline tensor =
     let node = Hashtbl.find_exn traced_store tensor in
     (virtualize_settings.inline_constants && Option.is_some node.scalar) || not node.non_virtual
   in
   (* The current position is within scope of the definitions of the process_for virtual tensors. *)
-  let rec loop_proc ~balanced ~env_dom (llc : unit low_level) : unit low_level option =
+  let rec loop_proc ~balanced ~env_dom (llc : unit_low_level) : unit_low_level option =
     let loop = loop_proc ~balanced ~env_dom in
     match llc with
     | Lines body ->
@@ -1213,7 +1208,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit low_level) : u
         (* Dynamic indices use a separate environment. Note that dynamic indices are do not appear
            in the LHSes of slice definitions, so are not erased when inlining. *)
         Option.map ~f:(fun body -> Dynamic_indices { dyn_idcs with body }) @@ loop dyn_idcs.body
-  and loop_float ~balanced ~env_dom (llv : float low_level) : float low_level =
+  and loop_float ~balanced ~env_dom (llv : float_low_level) : float_low_level =
     let loop = loop_float ~balanced ~env_dom in
     match llv with
     | Constant _ -> llv
@@ -1265,7 +1260,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit low_level) : u
 
 type traced_store = (NodeUI.tensor_ptr, traced_tensor) Base.Hashtbl.t
 
-let optimize_proc llc : traced_store * unit low_level =
+let optimize_proc llc : traced_store * unit_low_level =
   let traced_store : (NodeUI.tensor_ptr, traced_tensor) Hashtbl.t = Hashtbl.Poly.create () in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
   let reverse_node_map = Hashtbl.Poly.create () in
@@ -1282,7 +1277,7 @@ let compile_proc ~name ~for_step_update:_ proc =
     let f = Stdio.Out_channel.create fname in
     let ppf = Caml.Format.formatter_of_out_channel f in
     Caml.Format.pp_set_margin ppf !code_sexp_margin;
-    Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_low_level Unit.sexp_of_t llc);
+    Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_unit_low_level llc);
     let fname = name ^ ".hlc" in
     let f = Stdio.Out_channel.create fname in
     let ppf = Caml.Format.formatter_of_out_channel f in
@@ -1294,16 +1289,34 @@ let compile_proc ~name ~for_step_update:_ proc =
     let f = Stdio.Out_channel.create fname in
     let ppf = Caml.Format.formatter_of_out_channel f in
     Caml.Format.pp_set_margin ppf !code_sexp_margin;
-    Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_low_level Unit.sexp_of_t @@ snd result));
+    Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_unit_low_level @@ snd result));
   (* if for_step_update then
      Hashtbl.iter (fst result) ~f:(fun n -> if n.read_before_write then (NodeUI.get n.id).is_recurrent <- true); *)
   result
+
+let loop_over_dims ~skip_frozen dims ~body =
+  let rec for_loop rev_idcs = function
+    | [] -> body @@ Array.of_list_rev rev_idcs
+    | { Shape.special = Frozen; _ } :: product when skip_frozen ->
+        for_loop (Shape.Fixed_idx 0 :: rev_idcs) product
+    | d :: product ->
+        let index = Shape.get_sym_for_axis d.Shape.special in
+        For_loop
+          {
+            index;
+            from_ = 0;
+            to_ = d.dim - 1;
+            body = for_loop (Shape.Iterator index :: rev_idcs) product;
+            trace_it = true;
+          }
+  in
+  for_loop [] (Array.to_list dims)
 
 let interpret_task_id_func ~name:_ ((_traced_store : traced_store), compiled) ~task_id =
   if !debug_trace_interpretation && task_id = 0 then (
     Caml.Format.set_margin !code_sexp_margin;
     Caml.Format.printf "TRACE: Interpreted program:@ %a\n%!" Sexp.pp_hum
-    @@ sexp_of_low_level Unit.sexp_of_t compiled);
+    @@ sexp_of_unit_low_level compiled);
   interpret_code ~task_id compiled
 
 let interpret_unit_func ~name:_ ((_ : traced_store), compiled) () = interpret_code compiled
