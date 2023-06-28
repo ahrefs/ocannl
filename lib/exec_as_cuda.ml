@@ -502,7 +502,7 @@ let jit_func ~name (traced_store, llc) =
     Array.of_list tensors
     |> Array.filter_map ~f:(fun (ptr, tn) ->
            let n = Code.get_node traced_store ptr in
-           if n.read_before_write then None
+           if not n.read_before_write then None
            else
              match tn.run_scope with
              | Thread | Shared ->
@@ -512,7 +512,7 @@ let jit_func ~name (traced_store, llc) =
                      let body idcs =
                        Code.Staged_compilation
                          (fun () ->
-                           Caml.Format.fprintf ppf "@[<2>%s[%a] =@ %s[%a];@]" l_name
+                           Caml.Format.fprintf ppf "@[<2>%s@[<1>[%a@]] =@ %s@[<1>[%a@]];@]" l_name
                              (pp_array_offset tn.run_scope) (idcs, tn.dims) g_name (pp_array_offset Global)
                              (idcs, tn.dims))
                      in
