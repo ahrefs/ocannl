@@ -235,7 +235,7 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~idcs ptr : tensor =
               lazy (Cudajit.mem_alloc ~byte_size:global_size_in_bytes)
         in
         let global = Option.some_if has_global_mem @@ NodeUI.tensor_ptr_name ptr in
-        let local = Option.some_if has_local_mem @@ (NodeUI.tensor_ptr_name ptr ^ "_local") in
+        let local = Option.some_if has_local_mem @@ NodeUI.tensor_ptr_name ptr ^ "_local" in
         let host_dims = Bigarray.Genarray.dims arr in
         let host_offset =
           Option.bind hosted ~f:(fun _ ->
