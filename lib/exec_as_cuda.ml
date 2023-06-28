@@ -423,9 +423,9 @@ let jit_code ppf ~traced_store llc : unit =
             (tensor_idcs, tensor.dims) target_dim;
           Map.add_exn dyn_env ~key:sym ~data:(ptr, provider_dim, tensor_idcs, target_dim))
     in
-    fprintf ppf "@]@ }@,";
-    pp_ll ~dyn_env ppf body
-    (* fprintf ppf "%a" (pp_ll ~dyn_env ~env) body *)
+    pp_ll ~dyn_env ppf body;
+    (* fprintf ppf "%a" (pp_ll ~dyn_env ~env) body; *)
+    fprintf ppf "@]@ }@,"
   in
   pp_ll ~dyn_env:Code.empty_env ppf llc
 
@@ -509,7 +509,7 @@ let jit_func ~name (traced_store, llc) =
                      let body idcs =
                        Code.Staged_compilation
                          (fun () ->
-                           Caml.Format.fprintf ppf "%s[%a] =@ %s[%a];" l_name (pp_array_offset tn.run_scope)
+                           Caml.Format.fprintf ppf "@[<2>%s[%a] =@ %s[%a];@]" l_name (pp_array_offset tn.run_scope)
                              (idcs, tn.dims) g_name (pp_array_offset Global) (idcs, tn.dims))
                      in
                      let loops = Code.(Lines [| loop_over_dims ~skip_frozen:true tn.dims ~body |]) in
@@ -529,7 +529,7 @@ let jit_func ~name (traced_store, llc) =
                    let body idcs =
                      Code.Staged_compilation
                        (fun () ->
-                         Caml.Format.fprintf ppf "%s[%a] =@ %s[%a];" g_name (pp_array_offset Global)
+                         Caml.Format.fprintf ppf "@[<2>%s[%a] =@ %s[%a];@]" g_name (pp_array_offset Global)
                            (idcs, tn.dims) l_name (pp_array_offset tn.run_scope) (idcs, tn.dims))
                    in
                    let loops = Code.loop_over_dims ~skip_frozen:true tn.dims ~body in
