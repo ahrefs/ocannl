@@ -306,8 +306,13 @@ let jit_code ppf ~traced_store llc : unit =
     match c with
     | Lines [||] -> ()
     | Lines lines ->
-        (* Note: no separator. *)
-        fprintf ppf "@[<v 0>%a@]" (pp_print_list (pp_ll ~dyn_env)) (Array.to_list lines)
+        (* Note: no separator. Filter out some entries known to not generate code to avoid whitespace. *)
+        fprintf ppf "@[<v 0>%a@]"
+          (pp_print_list (pp_ll ~dyn_env))
+          (Array.to_list
+          @@ Array.filter lines ~f:(function
+               | Zero_out ptr -> not Code.(get_node traced_store ptr).zero_initialized
+               | _ -> true))
     | For_loop { index = i; from_; to_; body; trace_it = _ } when Shape.task_id_sym i ->
         assert (from_ = 0);
         session_state.num_blocks <- to_ + 1;
@@ -491,57 +496,62 @@ let jit_func ~name (traced_store, llc) =
         | _ -> None)
   in
   let inits =
-    List.filter_map tensors ~f:(fun (ptr, tn) ->
-        let n = Code.get_node traced_store ptr in
-        if n.read_before_write then None
-        else
-          match tn.run_scope with
-          | Thread | Shared ->
-              Option.map2 tn.local tn.global ~f:(fun l_name g_name ->
-                  let b = Buffer.create 4096 in
-                  let ppf = Caml.Format.formatter_of_buffer b in
-                  let body idcs =
-                    Code.Staged_compilation
-                      (fun () ->
-                        Caml.Format.fprintf ppf "%s[%a] =@ %s[%a];" l_name (pp_array_offset tn.run_scope)
-                          (idcs, tn.dims) g_name (pp_array_offset Global) (idcs, tn.dims))
-                  in
-                  let loops = Code.loop_over_dims ~skip_frozen:true tn.dims ~body in
-                  jit_code ppf ~traced_store loops;
-                  Caml.Format.pp_print_newline ppf ();
-                  Buffer.contents b)
-          | _ -> None)
+    Array.of_list tensors
+    |> Array.filter_map ~f:(fun (ptr, tn) ->
+           let n = Code.get_node traced_store ptr in
+           if n.read_before_write then None
+           else
+             match tn.run_scope with
+             | Thread | Shared ->
+                 Option.map2 tn.local tn.global ~f:(fun l_name g_name ->
+                     let b = Buffer.create 4096 in
+                     let ppf = Caml.Format.formatter_of_buffer b in
+                     let body idcs =
+                       Code.Staged_compilation
+                         (fun () ->
+                           Caml.Format.fprintf ppf "%s[%a] =@ %s[%a];" l_name (pp_array_offset tn.run_scope)
+                             (idcs, tn.dims) g_name (pp_array_offset Global) (idcs, tn.dims))
+                     in
+                     let loops = Code.(Lines [| loop_over_dims ~skip_frozen:true tn.dims ~body |]) in
+                     jit_code ppf ~traced_store loops;
+                     Caml.Format.pp_print_newline ppf ();
+                     Buffer.contents b)
+             | _ -> None)
   in
   let finalizers =
-    List.filter_map tensors ~f:(fun (_, tn) ->
-        match tn.run_scope with
-        | Thread | Shared ->
-            Option.map2 tn.local tn.global ~f:(fun l_name g_name ->
-                let b = Buffer.create 4096 in
-                let ppf = Caml.Format.formatter_of_buffer b in
-                let body idcs =
-                  Code.Staged_compilation
-                    (fun () ->
-                      Caml.Format.fprintf ppf "%s[%a] =@ %s[%a];" g_name (pp_array_offset Global)
-                        (idcs, tn.dims) l_name (pp_array_offset tn.run_scope) (idcs, tn.dims))
-                in
-                let loops = Code.loop_over_dims ~skip_frozen:true tn.dims ~body in
-                jit_code ppf ~traced_store loops;
-                Caml.Format.pp_print_newline ppf ();
-                Buffer.contents b)
-        | _ -> None)
+    Array.of_list tensors
+    |> Array.filter_map ~f:(fun (_, tn) ->
+           match tn.run_scope with
+           | Thread | Shared ->
+               Option.map2 tn.local tn.global ~f:(fun l_name g_name ->
+                   let b = Buffer.create 4096 in
+                   let ppf = Caml.Format.formatter_of_buffer b in
+                   let body idcs =
+                     Code.Staged_compilation
+                       (fun () ->
+                         Caml.Format.fprintf ppf "%s[%a] =@ %s[%a];" g_name (pp_array_offset Global)
+                           (idcs, tn.dims) l_name (pp_array_offset tn.run_scope) (idcs, tn.dims))
+                   in
+                   let loops = Code.loop_over_dims ~skip_frozen:true tn.dims ~body in
+                   jit_code ppf ~traced_store loops;
+                   Caml.Format.pp_print_newline ppf ();
+                   Buffer.contents b)
+           | _ -> None)
   in
   let cu_src =
     [%string
       {|
-      %{String.concat ~sep:"\n" constant_defs}
-      extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
-        %{String.concat ~sep:"\n        " shared_decls}
-        %{String.concat ~sep:"\n        " thread_decls}
-        %{String.concat ~sep:"\n        " inits}
-        %{cu_body}
-        %{String.concat ~sep:"\n        " finalizers}
-      }|}]
+%{String.concat ~sep:"\n" constant_defs}
+extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
+  %{String.concat ~sep:"\n  " shared_decls}
+  %{String.concat ~sep:"\n  " thread_decls}
+  %{String.concat_array ~sep:"\n  "
+    @@ Array.map inits ~f:(String.substr_replace_all ~pattern:"\n" ~with_:"\n  ")}
+  %{String.substr_replace_all cu_body ~pattern:"\n" ~with_:"\n  "}
+  %{String.concat_array ~sep:"\n  "
+    @@ Array.map finalizers ~f:(String.substr_replace_all ~pattern:"\n" ~with_:"\n  ")}
+}
+|}]
   in
   (* Constants will be referred to via cuModuleGetGlobal. *)
   let f_name = name ^ "-cudajit-debug" in
