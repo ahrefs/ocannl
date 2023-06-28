@@ -101,7 +101,7 @@ let pp_array_offset ?provider_dim scope ppf (idcs, dims) =
     else fprintf ppf "%a" (pp_index_axis ?provider_dim scope) idcs.(i)
   done;
   for _ = 0 to Array.length idcs - 2 do
-    fprintf ppf "@])"
+    fprintf ppf "@]@,)"
   done
 
 let pp_get_run_ptr ppf tensor =
@@ -307,21 +307,21 @@ let jit_code ppf ~traced_store llc : unit =
     | Lines [||] -> ()
     | Lines lines ->
         (* Note: no separator. *)
-        (pp_print_list (pp_ll ~dyn_env) ppf @@ Array.to_list lines : unit)
+        fprintf ppf "@[<v 0>%a@]" (pp_print_list (pp_ll ~dyn_env)) (Array.to_list lines)
     | For_loop { index = i; from_; to_; body; trace_it = _ } when Shape.task_id_sym i ->
         assert (from_ = 0);
         session_state.num_blocks <- to_ + 1;
         fprintf ppf "@[<2>{@ size_t %a = blockIdx.x;@ " pp_index i;
         pp_ll ~dyn_env ppf body;
-        fprintf ppf "@]}@ "
+        fprintf ppf "@]@ }@,"
     | For_loop { index = i; from_; to_; body; trace_it = _ } when Shape.sample_num_sym i ->
         assert (from_ = 0);
         session_state.num_threads <- to_ + 1;
         fprintf ppf "@[<2>{@ size_t %a = threadIdx.x;@ " pp_index i;
         pp_ll ~dyn_env ppf body;
-        fprintf ppf "@]}@ "
+        fprintf ppf "@]@ }@,"
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-        fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]}@ " pp_index i from_ pp_index i to_
+        fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_ pp_index i to_
           pp_index i (pp_ll ~dyn_env) body
     | Rebalance (s, lines) ->
         pp_ll ~dyn_env ppf
@@ -339,12 +339,13 @@ let jit_code ppf ~traced_store llc : unit =
         let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
         let old_locals = !locals in
         let num_closing_braces = pp_top_locals ~dyn_env ppf v in
-        fprintf ppf "@[<2>%a[@,%a] =@ %a;@]@ " pp_get_run_ptr tensor (pp_array_offset tensor.run_scope)
+        (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
+        fprintf ppf "@[<2>%a[@,%a] =@ %a;@]" pp_get_run_ptr tensor (pp_array_offset tensor.run_scope)
           (idcs, tensor.dims)
           (pp_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double)
           v;
         for _ = 1 to num_closing_braces do
-          fprintf ppf "@]}@ "
+          fprintf ppf "@]@ }@,"
         done;
         locals := old_locals
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
@@ -355,9 +356,9 @@ let jit_code ppf ~traced_store llc : unit =
         let num_typ, is_double = Map.find_exn !locals id in
         let old_locals = !locals in
         let num_closing_braces = pp_top_locals ~dyn_env ppf value in
-        fprintf ppf "@[<2>v%d =@ %a;@]@ " scope_id ((pp_float ~dyn_env) ~num_typ ~is_double) value;
+        fprintf ppf "@[<2>v%d =@ %a;@]" scope_id ((pp_float ~dyn_env) ~num_typ ~is_double) value;
         for _ = 1 to num_closing_braces do
-          fprintf ppf "@]}@ "
+          fprintf ppf "@]@ }@,"
         done;
         locals := old_locals
   and pp_top_locals ~dyn_env ppf (vcomp : float_low_level) : int =
@@ -366,7 +367,7 @@ let jit_code ppf ~traced_store llc : unit =
         let typ = prec_to_c_type prec in
         (* Tensors are initialized to 0 by default. However, there is typically an explicit
            initialization for virtual nodes. *)
-        fprintf ppf "@[{%s v%d = 0;@ " typ i;
+        fprintf ppf "@[<2>{%s v%d = 0;@ " typ i;
         locals := Map.update !locals id ~f:(fun _ -> (typ, prec_is_double prec));
         pp_ll ~dyn_env ppf body;
         1
@@ -408,6 +409,7 @@ let jit_code ppf ~traced_store llc : unit =
   and jit_dynamic_indices ~dyn_env ptr ~tensor_idcs ~dynamic_idcs ~target_dims body =
     (* let host_idcs = lookup ~on_host:true ~example_only:true tensor_idcs in *)
     let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs:tensor_idcs ptr in
+    fprintf ppf "@[<2>{";
     let dyn_env =
       Array.foldi dynamic_idcs ~init:dyn_env ~f:(fun provider_dim dyn_env sym ->
           let target_dim = target_dims.(provider_dim).dim in
@@ -416,6 +418,7 @@ let jit_code ppf ~traced_store llc : unit =
             (tensor_idcs, tensor.dims) target_dim;
           Map.add_exn dyn_env ~key:sym ~data:(ptr, provider_dim, tensor_idcs, target_dim))
     in
+    fprintf ppf "@]@ }@,";
     pp_ll ~dyn_env ppf body
     (* fprintf ppf "%a" (pp_ll ~dyn_env ~env) body *)
   in
