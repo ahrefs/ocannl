@@ -86,7 +86,9 @@ let pp_index_axis ?provider_dim scope ppf =
 
 let pp_array_offset ?provider_dim scope ppf (idcs, dims) =
   let open Caml.Format in
-  let offset = ref 0 in
+  for _ = 0 to Array.length idcs - 3 do
+    fprintf ppf "@[<1>("
+  done;
   for i = 0 to Array.length idcs - 1 do
     let dim =
       match dims.(i).Shape.special with
@@ -95,13 +97,10 @@ let pp_array_offset ?provider_dim scope ppf (idcs, dims) =
       | Dedicated _ when equal_mem_scope scope Thread -> 1
       | _ -> dims.(i).dim
     in
-    offset := dim * !offset;
-    if i < Array.length idcs - 1 then
-      fprintf ppf "@[(%a +@ %d *@ " (pp_index_axis ?provider_dim scope) idcs.(i) !offset
-    else fprintf ppf "%a" (pp_index_axis ?provider_dim scope) idcs.(i)
-  done;
-  for _ = 0 to Array.length idcs - 2 do
-    fprintf ppf "@]@,)"
+    if i = 0 then fprintf ppf "%a" (pp_index_axis ?provider_dim scope) idcs.(i)
+    else if i = Array.length idcs - 1 then
+      fprintf ppf " * %d +@ %a" dim (pp_index_axis ?provider_dim scope) idcs.(i)
+    else fprintf ppf " * %d +@ %a@])" dim (pp_index_axis ?provider_dim scope) idcs.(i)
   done
 
 let pp_get_run_ptr ppf tensor =
@@ -400,17 +399,17 @@ let jit_code ppf ~traced_store llc : unit =
     | Constant c -> fprintf ppf "(%f)" c
     | Binop (Arg1, v1, _v2) -> loop ppf v1
     | Binop (Arg2, _v1, v2) -> loop ppf v2
-    | Binop (Add, v1, v2) -> fprintf ppf "@[<2>((%a) +@ (%a)@]@,)" loop v1 loop v2
-    | Binop (Mul, v1, v2) -> fprintf ppf "@[<2>((%a) *@ (%a)@]@,)" loop v1 loop v2
+    | Binop (Add, v1, v2) -> fprintf ppf "@[<1>((%a) +@ (%a)@]@,)" loop v1 loop v2
+    | Binop (Mul, v1, v2) -> fprintf ppf "@[<1>((%a) *@ (%a)@]@,)" loop v1 loop v2
     | Binop (Code.ToPowOf, v1, v2) when is_double -> fprintf ppf "@[<2>pow(%a,@ %a@]@,)" loop v1 loop v2
-    | Binop (ToPowOf, v1, v2) -> fprintf ppf "@[<2>powf(%a,@ %a@]@,)" loop v1 loop v2
+    | Binop (ToPowOf, v1, v2) -> fprintf ppf "@[<1>powf(%a,@ %a@]@,)" loop v1 loop v2
     | Binop (Relu_gate, v1, v2) ->
-        fprintf ppf "@[<2>(%a > 0.0 ?@ %a : 0.0@])" loop v1 loop v2
-        (* fprintf ppf "@[<2>((int)(%a > 0.0) *@ (%a)@])" (pp_ll ~dyn_env) v1 (pp_ll ~dyn_env) v2 *)
+        fprintf ppf "@[<1>(%a > 0.0 ?@ %a : 0.0@])" loop v1 loop v2
+        (* fprintf ppf "@[<1>((int)(%a > 0.0) *@ (%a)@])" (pp_ll ~dyn_env) v1 (pp_ll ~dyn_env) v2 *)
     | Unop (Identity, v) -> loop ppf v
     | Unop (Relu, v) ->
         (* FIXME: don't recompute v *)
-        fprintf ppf "@[<2>(%a > 0.0 ?@ %a : 0.0@])" loop v loop v
+        fprintf ppf "@[<1>(%a > 0.0 ?@ %a : 0.0@])" loop v loop v
   and jit_dynamic_indices ~dyn_env ptr ~tensor_idcs ~dynamic_idcs ~target_dims body =
     (* let host_idcs = lookup ~on_host:true ~example_only:true tensor_idcs in *)
     let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs:tensor_idcs ptr in
@@ -509,8 +508,9 @@ let jit_func ~name (traced_store, llc) =
                      let body idcs =
                        Code.Staged_compilation
                          (fun () ->
-                           Caml.Format.fprintf ppf "@[<2>%s[%a] =@ %s[%a];@]" l_name (pp_array_offset tn.run_scope)
-                             (idcs, tn.dims) g_name (pp_array_offset Global) (idcs, tn.dims))
+                           Caml.Format.fprintf ppf "@[<2>%s[%a] =@ %s[%a];@]" l_name
+                             (pp_array_offset tn.run_scope) (idcs, tn.dims) g_name (pp_array_offset Global)
+                             (idcs, tn.dims))
                      in
                      let loops = Code.(Lines [| loop_over_dims ~skip_frozen:true tn.dims ~body |]) in
                      jit_code ppf ~traced_store loops;
