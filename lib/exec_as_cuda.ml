@@ -70,7 +70,7 @@ let session_state =
 
 let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
 let pp_comma ppf () = Caml.Format.fprintf ppf ",@ "
-let pp_symbol ppf (Shape.Symbol s) = Caml.Format.fprintf ppf "i%d" s
+let pp_symbol ppf sym = Caml.Format.fprintf ppf "%s" @@ Shape.symbol_ident sym
 let pp_index ppf sym = Caml.Format.fprintf ppf "%s" @@ Shape.symbol_ident sym
 
 let pp_index_axis ?provider_dim scope ppf =
@@ -80,6 +80,8 @@ let pp_index_axis ?provider_dim scope ppf =
       match scope with
       | Thread when sample_num_sym it || task_id_sym it -> Caml.Format.fprintf ppf "0"
       | Shared when task_id_sym it -> Caml.Format.fprintf ppf "0"
+      | _ when sample_num_sym it -> Caml.Format.fprintf ppf "threadIdx.x"
+      | _ when task_id_sym it -> Caml.Format.fprintf ppf "blockIdx.x"
       | _ -> pp_index ppf it)
   | Fixed_idx i -> Caml.Format.fprintf ppf "%d" i
   | Dynamic_provider _ -> Caml.Format.fprintf ppf "%d" @@ Option.value_exn provider_dim
@@ -315,15 +317,17 @@ let jit_code ppf ~traced_store llc : unit =
     | For_loop { index = i; from_; to_; body; trace_it = _ } when Shape.task_id_sym i ->
         assert (from_ = 0);
         session_state.num_blocks <- to_ + 1;
-        fprintf ppf "@[<2>{@ size_t %a = blockIdx.x;@ " pp_index i;
-        pp_ll ~dyn_env ppf body;
-        fprintf ppf "@]@ }@,"
+        (* Instead of binding the iterator, we translate the iterator directly as blockIdx.x. *)
+        (* fprintf ppf "@[<2>{@ size_t %a = blockIdx.x;@ " pp_index i; *)
+        pp_ll ~dyn_env ppf body
+        (* fprintf ppf "@]@ }@," *)
     | For_loop { index = i; from_; to_; body; trace_it = _ } when Shape.sample_num_sym i ->
         assert (from_ = 0);
         session_state.num_threads <- to_ + 1;
-        fprintf ppf "@[<2>{@ size_t %a = threadIdx.x;@ " pp_index i;
-        pp_ll ~dyn_env ppf body;
-        fprintf ppf "@]@ }@,"
+        (* Instead of binding the iterator, we translate the iterator directly as threadIdx.x. *)
+        (* fprintf ppf "@[<2>{@ size_t %a = threadIdx.x;@ " pp_index i; *)
+        pp_ll ~dyn_env ppf body
+        (* fprintf ppf "@]@ }@," *)
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
         fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_ pp_index i to_
           pp_index i (pp_ll ~dyn_env) body
