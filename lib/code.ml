@@ -105,6 +105,7 @@ let get_scope =
 (** Cases: [unit_low_level] -- code, [float_low_level] -- single number at some precision. *)
 type unit_low_level =
   | Comment of string
+  | Staged_compilation of (unit -> unit)
   | Lines of unit_low_level array
   | For_loop of { index : Shape.symbol; from_ : int; to_ : int; body : unit_low_level; trace_it : bool }
   | If_task_id_is of { for_task_id : int; body : unit_low_level }
@@ -141,6 +142,7 @@ and float_low_level =
 let check_dedicated_dep d ~cached_dedicated =
   let rec loop_proc = function
     | Comment _ -> false
+    | Staged_compilation _ -> false
     | Lines ls -> Array.exists ~f:loop_proc ls
     | For_loop { body; _ } -> loop_proc body
     | Rebalance (_, cs) -> Array.exists ~f:loop_proc cs
@@ -476,6 +478,7 @@ let interpret_code ?task_id llc =
           raise e)
     | Set_local (id, llv) -> locals := Map.update !locals id ~f:(fun _ -> loop_float env llv)
     | Comment message when !with_debug && !executor_print_comments -> Stdio.printf "%s\n%!" message
+    | Staged_compilation exp -> exp ()
     | Dynamic_indices
         { tensor = { id; field = Value }; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
         dynamic_indices env (N.get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body
@@ -874,6 +877,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
               assert (NodeUI.equal_tensor_ptr old_tensor tensor))
     | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
+    | Staged_compilation _ -> ()
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice } ->
         let traced_tensor = get_node traced_store tensor in
         (* if not virtualize_settings.always_inline_dynamic_indexing then (
@@ -984,6 +988,7 @@ let process_computation node top_llc =
         loop_float ~env_dom llv
     | Set_local (_, llv) -> loop_float ~env_dom llv
     | Comment _ -> ()
+    | Staged_compilation _ -> ()
     | Dynamic_indices { body; _ } -> loop body
   and loop_float ~env_dom llv =
     match llv with
@@ -1068,6 +1073,7 @@ let inline_computation ~id node call_args =
       | Set _ -> None
       | Set_local (id, llv) -> Some (Set_local (id, loop_float env llv))
       | Comment _ -> Some llc
+      | Staged_compilation _ -> Some llc
       | Dynamic_indices dyn_idcs ->
           (* Dynamic_indices is introduced by to_low_level in the innermost scope. *)
           Option.map ~f:(fun body -> Dynamic_indices { dyn_idcs with body }) @@ loop env dyn_idcs.body
@@ -1128,6 +1134,7 @@ let virtual_llc traced_store reverse_node_map (llc : unit_low_level) : unit_low_
         result
     | Set_local (id, llv) -> Set_local (id, loop_float ~process_for llv)
     | Comment _ -> llc
+    | Staged_compilation _ -> llc
     | Dynamic_indices dyn_idcs -> (
         match dyn_idcs.slice with
         | None -> Dynamic_indices { dyn_idcs with body = loop dyn_idcs.body }
@@ -1202,6 +1209,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit_low_level) : u
           assert (not node.non_virtual);
           Some (Set_local (id, loop_float ~balanced ~env_dom llv)))
     | Comment _ -> Some llc
+    | Staged_compilation _ -> Some llc
     | Dynamic_indices dyn_idcs ->
         assert (
           Array.for_all dyn_idcs.tensor_idcs ~f:(function Shape.Iterator s -> Set.mem env_dom s | _ -> true));

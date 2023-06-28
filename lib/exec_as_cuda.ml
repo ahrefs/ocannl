@@ -308,6 +308,7 @@ let jit_code ppf ~traced_store llc : unit =
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
         jit_dynamic_indices ~dyn_env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Comment message -> fprintf ppf "/* %s */@ " message
+    | Staged_compilation callback -> callback ()
     | Set_local (({ scope_id; _ } as id), value) ->
         let num_typ, is_double = Map.find_exn !locals id in
         let old_locals = !locals in

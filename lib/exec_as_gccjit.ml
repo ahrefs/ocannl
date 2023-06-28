@@ -457,6 +457,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
         let value = loop_float ~name ~env ~num_typ ~is_double value in
         Block.assign !current_block lhs value
     | Comment c -> log_comment c
+    | Staged_compilation exp -> exp ()
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
         jit_dynamic_indices ~name ~env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
   and loop_float ~name ~env ~num_typ ~is_double value : rvalue =
