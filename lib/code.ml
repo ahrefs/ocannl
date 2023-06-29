@@ -1307,6 +1307,8 @@ let loop_over_dims ~skip_frozen dims ~body =
     | [] -> body @@ Array.of_list_rev rev_idcs
     | { Shape.special = Frozen; _ } :: product when skip_frozen ->
         for_loop (Shape.Fixed_idx 0 :: rev_idcs) product
+    | { dim = 1; _ } :: product when skip_frozen ->
+        for_loop (Shape.Fixed_idx 0 :: rev_idcs) product
     | d :: product ->
         let index = Shape.get_sym_for_axis d.Shape.special in
         For_loop

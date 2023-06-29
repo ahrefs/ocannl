@@ -338,7 +338,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
           + ("b5" hid_4_5 + ("w5" * !/(b4 + (w4 * !/(b3 + (w3 * !/(b2 + (w2 * !/(b1 + (w1 * x)))))))))))
   in
   let%nn_dt session_step ~o:1 = n =+ 1 in
-  let%nn_dt session_refresh ~o:1 = n =+ 1 /. !..refresh_batch in
+  let%nn_dt session_refresh ~o:1 = n =+ 1.001 /. !..refresh_batch in
   let%nn_dt minus_lr ~o:1 = n =: -0.001 *. (!..steps - session_step) /. !..steps in
 
   SDSL.minus_learning_rate := Some minus_lr;
