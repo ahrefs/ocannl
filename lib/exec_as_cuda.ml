@@ -302,6 +302,17 @@ let jit_code ppf ~traced_store llc : unit =
          | Frozen_recipient it when on_host -> Shape.symbol_ident it
          | Frozen_recipient _ -> Int.to_string 0)
      in *)
+  let loop_binop ~num_typ:_ ~is_double ppf op =
+    match op with
+    | Arg1 -> fun loop1 v1 _loop2 _v2 -> loop1 ppf v1
+    | Arg2 -> fun _loop1 _v1 loop2 v2 -> loop2 ppf v2
+    | Add -> fun loop1 v1 loop2 v2 -> fprintf ppf "@[<1>((%a) +@ (%a)@]@,)" loop1 v1 loop2 v2
+    | Mul -> fun loop1 v1 loop2 v2 -> fprintf ppf "@[<1>((%a) *@ (%a)@]@,)" loop1 v1 loop2 v2
+    | ToPowOf when is_double -> fun loop1 v1 loop2 v2 -> fprintf ppf "@[<2>pow(%a,@ %a@]@,)" loop1 v1 loop2 v2
+    | ToPowOf -> fun loop1 v1 loop2 v2 -> fprintf ppf "@[<1>powf(%a,@ %a@]@,)" loop1 v1 loop2 v2
+    | Relu_gate -> fun loop1 v1 loop2 v2 -> fprintf ppf "@[<1>(%a > 0.0 ?@ %a : 0.0@])" loop1 v1 loop2 v2
+    (* fprintf ppf "@[<1>((int)(%a > 0.0) *@ (%a)@])" (pp_ll ~dyn_env) v1 (pp_ll ~dyn_env) v2 *)
+  in
   let locals = ref Map.Poly.empty in
   let rec pp_ll ~dyn_env ppf (c : unit_low_level) : unit =
     match c with
@@ -317,14 +328,14 @@ let jit_code ppf ~traced_store llc : unit =
     | For_loop { index = i; from_; to_; body; trace_it = _ } when Shape.task_id_sym i ->
         assert (from_ = 0);
         session_state.num_blocks <- to_ + 1;
-        (* Instead of binding the iterator, we translate the iterator directly as blockIdx.x. *)
+        (* Instead of binding the iterator, we will translate the iterator directly as blockIdx.x. *)
         (* fprintf ppf "@[<2>{@ size_t %a = blockIdx.x;@ " pp_index i; *)
         pp_ll ~dyn_env ppf body
         (* fprintf ppf "@]@ }@," *)
     | For_loop { index = i; from_; to_; body; trace_it = _ } when Shape.sample_num_sym i ->
         assert (from_ = 0);
         session_state.num_threads <- to_ + 1;
-        (* Instead of binding the iterator, we translate the iterator directly as threadIdx.x. *)
+        (* Instead of binding the iterator, we will translate the iterator directly as threadIdx.x. *)
         (* fprintf ppf "@[<2>{@ size_t %a = threadIdx.x;@ " pp_index i; *)
         pp_ll ~dyn_env ppf body
         (* fprintf ppf "@]@ }@," *)
@@ -343,6 +354,34 @@ let jit_code ppf ~traced_store llc : unit =
         let tn = Code.(get_node traced_store ptr) in
         assert tn.zero_initialized
         (* The initialization will be emitted by get_tensor. *)
+    | Set (ptr, idcs, (Binop (op, Get (ptr2, idcs2), v2) as v))
+      when NodeUI.equal_tensor_ptr ptr ptr2 && [%equal: Shape.axis_index array] idcs idcs2 ->
+        let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
+        let old_locals = !locals in
+        let num_typ = tensor.num_typ and is_double = tensor.is_double in
+        let loop_f = pp_float ~dyn_env ~num_typ ~is_double in
+        let num_closing_braces = pp_top_locals ~dyn_env ppf v2 in
+        if
+          List.exists ~f:(equal_sync_properties tensor.sync)
+            [ Update_globally_for_thread; Update_globally_for_block ]
+        then (
+          fprintf ppf "@[<2>%s[%a] =@ " (Option.value_exn tensor.global) (pp_array_offset Global)
+            (idcs, tensor.dims);
+          loop_binop ~num_typ ~is_double ppf op
+            (fun ppf () ->
+              fprintf ppf "%s[%a]" (Option.value_exn tensor.global) (pp_array_offset Global)
+                (idcs, tensor.dims))
+            () loop_f v2;
+          fprintf ppf ";@;<1 -2>%s[%a] =@ %s[%a];@]" (Option.value_exn tensor.local)
+            (pp_array_offset tensor.run_scope) (idcs, tensor.dims) (Option.value_exn tensor.global)
+            (pp_array_offset Global) (idcs, tensor.dims))
+        else
+          fprintf ppf "@[<2>%a[@,%a] =@ %a;@]" pp_get_run_ptr tensor (pp_array_offset tensor.run_scope)
+            (idcs, tensor.dims) loop_f v;
+        for _ = 1 to num_closing_braces do
+          fprintf ppf "@]@ }@,"
+        done;
+        locals := old_locals
     | Set (ptr, idcs, v) ->
         let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
         let old_locals = !locals in
@@ -401,15 +440,7 @@ let jit_code ppf ~traced_store llc : unit =
         fprintf ppf "@[<2>%a[%a@]]" pp_get_run_ptr tensor (pp_array_offset tensor.run_scope)
           (idcs, tensor.dims)
     | Constant c -> fprintf ppf "(%f)" c
-    | Binop (Arg1, v1, _v2) -> loop ppf v1
-    | Binop (Arg2, _v1, v2) -> loop ppf v2
-    | Binop (Add, v1, v2) -> fprintf ppf "@[<1>((%a) +@ (%a)@]@,)" loop v1 loop v2
-    | Binop (Mul, v1, v2) -> fprintf ppf "@[<1>((%a) *@ (%a)@]@,)" loop v1 loop v2
-    | Binop (Code.ToPowOf, v1, v2) when is_double -> fprintf ppf "@[<2>pow(%a,@ %a@]@,)" loop v1 loop v2
-    | Binop (ToPowOf, v1, v2) -> fprintf ppf "@[<1>powf(%a,@ %a@]@,)" loop v1 loop v2
-    | Binop (Relu_gate, v1, v2) ->
-        fprintf ppf "@[<1>(%a > 0.0 ?@ %a : 0.0@])" loop v1 loop v2
-        (* fprintf ppf "@[<1>((int)(%a > 0.0) *@ (%a)@])" (pp_ll ~dyn_env) v1 (pp_ll ~dyn_env) v2 *)
+    | Binop (op, v1, v2) -> loop_binop ~num_typ ~is_double ppf op loop v1 loop v2
     | Unop (Identity, v) -> loop ppf v
     | Unop (Relu, v) ->
         (* FIXME: don't recompute v *)
