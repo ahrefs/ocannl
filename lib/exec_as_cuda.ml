@@ -18,6 +18,8 @@ type sync_properties =
   | Thread_parallel
       (** Each thread computes a slice of the tensor, independently transferring to global memory. *)
   | Block_parallel  (** Each block computes a slice of the tensor. *)
+  | Replicated
+      (** Each thread operates on a local copy of the tensor, but only a single thread copies local-to-global. *)
   | Non_local  (** This tensor is accessed directly in the global memory, we did not manage to optimize it. *)
 [@@deriving sexp, equal, compare, variants]
 
@@ -120,12 +122,11 @@ let prec_to_c_type = function
 
 let prec_is_double = function NodeUI.Double_prec _ -> true | _ -> false
 
-exception Unknown_synchronization
-
 let scope_of_sync = function
   | Thread_only | Update_globally_for_thread | Thread_parallel -> Thread
   | Block_only | Update_globally_for_block | Block_parallel -> Shared
   | Constant | Non_local -> Global
+  | Replicated -> Thread
 
 let compute_array_offset ~idcs ~dims =
   Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx + (offset * dim))
@@ -205,14 +206,14 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~idcs ptr : tensor =
               else if is_block_parallel then Block_parallel
               else if update_globally && not is_thread_parallel then Update_globally_for_thread
               else if update_globally then Update_globally_for_block
-              else if can_be_replicated then Non_local
+              else if can_be_replicated then Replicated
               else (
                 if !Code.with_debug then
-                  Caml.Format.printf "\nWARNING: No sync for tensor: %a@ node: %a\n%!" Sexp.pp_hum
+                  Caml.Format.printf "\nWARNING: Non-local sync for tensor: %a@ node: %a\n%!" Sexp.pp_hum
                     ([%sexp_of: Code.traced_tensor] tn)
                     Sexp.pp_hum
                     ([%sexp_of: NodeUI.t] n);
-                raise Unknown_synchronization))
+                Non_local))
         in
         let has_global_mem = not (is_thread_only sync || is_block_only sync) in
         let has_local_mem = not (is_constant sync || is_non_local sync) in
@@ -524,7 +525,7 @@ let jit_func ~name (traced_store, llc) =
   let thread_decls =
     List.filter_map tensors ~f:(fun (ptr, tn) ->
         match tn.sync with
-        | Thread_only | Update_globally_for_thread | Thread_parallel ->
+        | Thread_only | Update_globally_for_thread | Thread_parallel | Replicated ->
             Option.map tn.local ~f:(fun t_name ->
                 tn.num_typ ^ " " ^ t_name ^ "[" ^ Int.to_string tn.thread_length
                 ^ if Code.(get_node traced_store ptr).zero_initialized then "] = {0};" else "];")
@@ -574,7 +575,11 @@ let jit_func ~name (traced_store, llc) =
                              (idcs, tn.dims) l_name (pp_array_offset tn.run_scope) (idcs, tn.dims))
                      in
                      let loops = Code.loop_over_dims ~skip_frozen:true tn.dims ~body in
-                     jit_code ppf ~traced_store loops;
+                     if is_replicated tn.sync then
+                       Caml.Format.fprintf ppf
+                         "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@])@ @[<2>{@ %a@ @]}@]"
+                         (jit_code ~traced_store) loops
+                     else jit_code ppf ~traced_store loops;
                      Caml.Format.pp_print_newline ppf ();
                      Buffer.contents b)
              | _ -> None)
