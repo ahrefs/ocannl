@@ -1,6 +1,6 @@
 open Base
 
-let optimization_level = ref 3
+let sync_threads_on_update = ref true
 
 (* let session_context = *)
 
@@ -367,14 +367,15 @@ let jit_code ppf ~traced_store llc : unit =
         then (
           (* Because of SIMD-like computation over warps, updates must be atomic. *)
           if Code.equal_binop op Add then
-            fprintf ppf "@[<2>atomicAdd@[<2>(%s + %a,@ %a@])" (Option.value_exn tensor.global)
+            fprintf ppf "@[<0>atomicAdd@[<2>(%s + %a,@ %a@])" (Option.value_exn tensor.global)
               (pp_array_offset Global) (idcs, tensor.dims) loop_f v2
           else
             failwith @@ "Exec_as_cuda: atomic updates only implemented for addition: "
             ^ Sexp.to_string_hum ([%sexp_of: unit_low_level] llc);
-          fprintf ppf ";@;<1 -2>%s[%a] =@ %s[%a];@]" (Option.value_exn tensor.local)
-            (pp_array_offset tensor.run_scope) (idcs, tensor.dims) (Option.value_exn tensor.global)
-            (pp_array_offset Global) (idcs, tensor.dims))
+          fprintf ppf ";@ %s@,%s[%a] =@ %s[%a];@]"
+            (if !sync_threads_on_update then "__syncthreads(); " else "")
+            (Option.value_exn tensor.local) (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
+            (Option.value_exn tensor.global) (pp_array_offset Global) (idcs, tensor.dims))
         else
           fprintf ppf "@[<2>%a[@,%a] =@ %a;@]" pp_get_run_ptr tensor (pp_array_offset tensor.run_scope)
             (idcs, tensor.dims) loop_f v;

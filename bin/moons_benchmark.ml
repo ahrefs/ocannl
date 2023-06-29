@@ -59,7 +59,7 @@ let () =
   
   let%nn_dt session_step ~o:1 = n =+ 1 in
   let%nn_dt session_refresh ~o:1 = n =+ 1 /. !..refresh_batch in
-  let%nn_dt minus_lr ~o:1 = n =: -0.0001 in
+  let%nn_dt minus_lr ~o:1 = n =: -0.00001 in
 
   SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = (moons_flat @.| session_refresh) @.| session_step in
