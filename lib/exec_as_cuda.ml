@@ -365,13 +365,13 @@ let jit_code ppf ~traced_store llc : unit =
           List.exists ~f:(equal_sync_properties tensor.sync)
             [ Update_globally_for_thread; Update_globally_for_block ]
         then (
-          fprintf ppf "@[<2>%s[%a] =@ " (Option.value_exn tensor.global) (pp_array_offset Global)
-            (idcs, tensor.dims);
-          loop_binop ~num_typ ~is_double ppf op
-            (fun ppf () ->
-              fprintf ppf "%s[%a]" (Option.value_exn tensor.global) (pp_array_offset Global)
-                (idcs, tensor.dims))
-            () loop_f v2;
+          (* Because of SIMD-like computation over warps, updates must be atomic. *)
+          if Code.equal_binop op Add then
+            fprintf ppf "@[<2>atomicAdd@[<2>(%s + %a,@ %a@])" (Option.value_exn tensor.global)
+              (pp_array_offset Global) (idcs, tensor.dims) loop_f v2
+          else
+            failwith @@ "Exec_as_cuda: atomic updates only implemented for addition: "
+            ^ Sexp.to_string_hum ([%sexp_of: unit_low_level] llc);
           fprintf ppf ";@;<1 -2>%s[%a] =@ %s[%a];@]" (Option.value_exn tensor.local)
             (pp_array_offset tensor.run_scope) (idcs, tensor.dims) (Option.value_exn tensor.global)
             (pp_array_offset Global) (idcs, tensor.dims))

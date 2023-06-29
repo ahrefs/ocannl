@@ -365,5 +365,39 @@ let rebalance store llcs =
                 (Lines (flat_lines @@ Array.concat [ [| Comment s |]; Option.to_array rebalanced; multitask ]))
         )
 
+Set (ptr, idcs, (Binop (op, Get (ptr2, idcs2), v2) as v))
+      when NodeUI.equal_tensor_ptr ptr ptr2 && [%equal: Shape.axis_index array] idcs idcs2 ->
+        let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
+        let old_locals = !locals in
+        let num_typ = tensor.num_typ and is_double = tensor.is_double in
+        let loop_f = pp_float ~dyn_env ~num_typ ~is_double in
+        let num_closing_braces = pp_top_locals ~dyn_env ppf v2 in
+        if
+          List.exists ~f:(equal_sync_properties tensor.sync)
+            [ Update_globally_for_thread; Update_globally_for_block ]
+        then (
+          (* Because of SIMD-like computation over warps, updates must be atomic. *)
+          if Code.equal_binop op Add then
+            fprintf ppf "@[<2>atomicAdd@[<2>(%s + %a,@ %a@])" (Option.value_exn tensor.global) (pp_array_offset Global)
+              (idcs, tensor.dims) loop_f v2
+          else failwith @@ "Exec_as_cuda: atomic updates only implemented for addition: " ^ Sexp.to_string_hum ([%sexp_of: unit_low_level] llc) (*
+            fprintf ppf "@[<2>%s[%a] =@ " (Option.value_exn tensor.global) (pp_array_offset Global)
+              (idcs, tensor.dims);
+            loop_binop ~num_typ ~is_double ppf op
+              (fun ppf () ->
+                fprintf ppf "%s[%a]" (Option.value_exn tensor.global) (pp_array_offset Global)
+                  (idcs, tensor.dims))
+              () loop_f v2 *);
+          fprintf ppf ";@;<1 -2>%s[%a] =@ %s[%a];@]" (Option.value_exn tensor.local)
+            (pp_array_offset tensor.run_scope) (idcs, tensor.dims) (Option.value_exn tensor.global)
+            (pp_array_offset Global) (idcs, tensor.dims))
+        else
+          fprintf ppf "@[<2>%a[@,%a] =@ %a;@]" pp_get_run_ptr tensor (pp_array_offset tensor.run_scope)
+            (idcs, tensor.dims) loop_f v;
+        for _ = 1 to num_closing_braces do
+          fprintf ppf "@]@ }@,"
+        done;
+        locals := old_locals
+    
 
 ]}

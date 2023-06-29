@@ -2,9 +2,9 @@ open Base
 (** The code for operating on n-dimensional arrays. *)
 
 (** *** High-level representation. *** *)
-type binop = Add | Mul | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp]
+type binop = Add | Mul | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp, compare, equal]
 
-type unop = Identity | Relu [@@deriving sexp]
+type unop = Identity | Relu [@@deriving sexp, compare, equal]
 
 module N = Node
 
