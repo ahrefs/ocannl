@@ -367,17 +367,17 @@ let jit_code ppf ~traced_store llc : unit =
         then (
           (* Because of SIMD-like computation over warps, updates must be atomic. *)
           if Code.equal_binop op Add then
-            fprintf ppf "@[<0>atomicAdd@[<2>(%s + %a,@ %a@])" (Option.value_exn tensor.global)
+            fprintf ppf "atomicAdd@[<2>(%s + %a,@ %a@])" (Option.value_exn tensor.global)
               (pp_array_offset Global) (idcs, tensor.dims) loop_f v2
           else
             failwith @@ "Exec_as_cuda: atomic updates only implemented for addition: "
             ^ Sexp.to_string_hum ([%sexp_of: unit_low_level] llc);
-          fprintf ppf ";@ %s@,%s[%a] =@ %s[%a];@]"
+          fprintf ppf ";@ %s@,@[<2>%s@[<2>[%a@]] =@ %s@[<2>[%a@]];@]"
             (if !sync_threads_on_update then "__syncthreads(); " else "")
             (Option.value_exn tensor.local) (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
             (Option.value_exn tensor.global) (pp_array_offset Global) (idcs, tensor.dims))
         else
-          fprintf ppf "@[<2>%a[@,%a] =@ %a;@]" pp_get_run_ptr tensor (pp_array_offset tensor.run_scope)
+          fprintf ppf "@[<2>%a@[<2>[%a@]] =@ %a;@]" pp_get_run_ptr tensor (pp_array_offset tensor.run_scope)
             (idcs, tensor.dims) loop_f v;
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]@ }@,"
@@ -388,7 +388,7 @@ let jit_code ppf ~traced_store llc : unit =
         let old_locals = !locals in
         let num_closing_braces = pp_top_locals ~dyn_env ppf v in
         (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
-        fprintf ppf "@[<2>%a[@,%a] =@ %a;@]" pp_get_run_ptr tensor (pp_array_offset tensor.run_scope)
+        fprintf ppf "@[<2>%a[@,%a] =@ %a;@]@ " pp_get_run_ptr tensor (pp_array_offset tensor.run_scope)
           (idcs, tensor.dims)
           (pp_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double)
           v;
@@ -415,9 +415,9 @@ let jit_code ppf ~traced_store llc : unit =
         let typ = prec_to_c_type prec in
         (* Tensors are initialized to 0 by default. However, there is typically an explicit
            initialization for virtual nodes. *)
-        fprintf ppf "@[<2>{%s v%d = 0;@ " typ i;
+        fprintf ppf "@[<2>{@ %s v%d = 0;@ " typ i;
         locals := Map.update !locals id ~f:(fun _ -> (typ, prec_is_double prec));
-        pp_ll ~dyn_env ppf body;
+        pp_ll ~dyn_env ppf body; pp_print_space ppf ();
         1
     | Get_local _ | Get_global _ | Get _ | Constant _ -> 0
     | Binop (Arg1, v1, _v2) -> pp_top_locals ~dyn_env ppf v1

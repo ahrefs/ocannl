@@ -5,7 +5,7 @@ module NFDSL = Operation.NFDSL
 module CDSL = Code.CDSL
 module SDSL = Session.SDSL
 
-let () =
+let _suspended () =
   (* Code.CDSL.with_debug := false; *)
   (* let open Operation.FDSL in *)
   let open SDSL.O in
@@ -276,7 +276,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   SDSL.set_executor executor;
   SDSL.default_value_prec := precision;
   SDSL.default_grad_prec := precision;
-  Exec_as_gccjit.optimization_level := opti_level;
+  (* Exec_as_gccjit.optimization_level := opti_level; *)
   SDSL.num_parallel_tasks := num_parallel_tasks;
   SDSL.disable_all_debugs ();
   Code.with_debug := true;
@@ -469,9 +469,9 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   Stdio.printf "\n%!";
   result
 
-let benchmark_executor = SDSL.Gccjit
+let benchmark_executor = SDSL.Cuda
 
-let _suspended () =
+let () =
   Node.fixed_state_for_init := Some 14;
   ignore
   @@ classify_moons ~random_seed:3 ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
