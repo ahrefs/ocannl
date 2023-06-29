@@ -578,11 +578,20 @@ let jit_func ~name (traced_store, llc) =
       {|
 %{String.concat ~sep:"\n" constant_defs}
 extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
+  /* Shared: block-local declarations. */
   %{String.concat ~sep:"\n  " shared_decls}
+  
+  /* Thread-local declarations. */
   %{String.concat ~sep:"\n  " thread_decls}
+
+  /* Initialization: copy global-to-local. */
   %{String.concat_array ~sep:"\n  "
     @@ Array.map inits ~f:(String.substr_replace_all ~pattern:"\n" ~with_:"\n  ")}
+
+  /* Main logic. */
   %{String.substr_replace_all cu_body ~pattern:"\n" ~with_:"\n  "}
+
+  /* Finalization: copy local-to-global. */
   %{String.concat_array ~sep:"\n  "
     @@ Array.map finalizers ~f:(String.substr_replace_all ~pattern:"\n" ~with_:"\n  ")}
 }
