@@ -56,7 +56,7 @@ let _suspended () =
   let moons_classes = FDSL.init_const ~l:"moons_classes" ~b ~o:[ CDSL.dim 1 ] moons_classes in
   (* let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 2 + ("w1" * x))) in *)
   let%nn_op mlp x = "b1" 1 + ("w1" * x) in
-  
+
   let%nn_dt session_step ~o:1 = n =+ 1 in
   let%nn_dt session_refresh ~o:1 = n =+ 1 /. !..refresh_batch in
   let%nn_dt minus_lr ~o:1 = n =: -0.00001 in
@@ -287,7 +287,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   Random.init random_seed;
   (* let init_mem = Mem_usage.info () in *)
   let target_loss = 3.0 in
-  let epochs = 1000 / per_refresh in
+  let epochs = 200 / per_refresh in
   let orig_dataset = 200 in
   let minib = 20 in
   let refresh_batch = 20 * per_refresh / num_parallel_tasks in
@@ -300,7 +300,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   let run_for_steps = refresh_batch in
   let advance_per_run = num_parallel_tasks * refresh_batch in
   Stdio.prerr_endline @@ "\n\n****** Benchmarking virtualized: " ^ bench_title ^ " for " ^ Int.to_string steps
-  ^ " steps ******";
+  ^ " steps, refresh batch " ^ Int.to_string refresh_batch ^ " ******";
   let noise () = Random.float_range (-0.1) 0.1 in
   let moons_flat =
     Array.concat_map (Array.create ~len ())
@@ -352,20 +352,20 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   let learning_rates = ref [] in
   let stop = ref false in
   let step = ref 0 in
-  let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in
-  (* *)
-  let reg_loss =
-    List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
-  in
-  let%nn_op weighted_reg_loss = 0.00001 *. reg_loss /. !..num_parallel_tasks in
-  (* *)
+  (* let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in *)
+  (* *
+     let reg_loss =
+       List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
+     in
+     let%nn_op weighted_reg_loss = 0.00001 *. reg_loss /. !..num_parallel_tasks in
+     * *)
   (* let step_batch = num_parallel_tasks * minibatch in *)
   (* Split the sum into stages so that only the outer sum is updated via the host. *)
   let%nn_op batch_of_losses = margin_loss ++ "...|... => ...|0" in
   (* let%nn_op total_loss =
        ((batch_loss ++ "...|0 => 0") /. !..step_batch)
      in *)
-  let%nn_rs epoch_loss ~o:1 = n =+ batch_of_losses ++ "...|0 => 0" + weighted_reg_loss in
+  let%nn_rs epoch_loss ~o:1 = n =+ batch_of_losses ++ "...|0 => 0" (* + weighted_reg_loss *) in
   Stdio.printf "\n%!";
   SDSL.refresh_session ~run_for_steps ();
   (*Stdio.printf "\nPreamble:\n%!";
@@ -390,9 +390,10 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
     losses := !loss :: !losses;
     log_losses := Float.log !loss :: !log_losses;
     if !step % (steps / 20) = 0 || !stop then (
-      Stdio.printf "Minus learning rate over minibatch for step %d of %d: %f\n%!" !step steps minus_lr.@[0];
-      Stdio.printf "Epoch loss for step %d: %f; min loss: %f; max loss: %f\n%!" !step !loss !min_loss
-        !max_loss);
+      Stdio.printf "Step %d of %d: session_step: %f, session_refresh: %f\n%!" !step steps session_step.@[0]
+        session_refresh.@[0];
+      Stdio.printf "Minus learning rate: %f\n%!" minus_lr.@[0];
+      Stdio.printf "Epoch loss: %f; min loss: %f; max loss: %f\n%!" !loss !min_loss !max_loss);
     epoch_loss.@[0] <- 0.0;
     if !step >= steps then stop := true;
     if Float.(!loss <= target_loss) then stop := true;
@@ -417,6 +418,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
         result = [%sexp_of: float * float] (!min_loss, !loss);
       }
   in
+  (*
   let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
@@ -466,7 +468,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   (* Stdio.printf "\nProcess memory delta: %d\n%!"
      (train_mem.process_physical_memory - init_mem.process_physical_memory); *)
   Exec_as_gccjit.optimization_level := 3;
-  Stdio.printf "\n%!";
+  Stdio.printf "\n%!"; *)
   result
 
 let benchmark_executor = SDSL.Cuda
