@@ -418,7 +418,8 @@ let jit_code ppf ~traced_store llc : unit =
            initialization for virtual nodes. *)
         fprintf ppf "@[<2>{@ %s v%d = 0;@ " typ i;
         locals := Map.update !locals id ~f:(fun _ -> (typ, prec_is_double prec));
-        pp_ll ~dyn_env ppf body; pp_print_space ppf ();
+        pp_ll ~dyn_env ppf body;
+        pp_print_space ppf ();
         1
     | Get_local _ | Get_global _ | Get _ | Constant _ -> 0
     | Binop (Arg1, v1, _v2) -> pp_top_locals ~dyn_env ppf v1
@@ -454,11 +455,12 @@ let jit_code ppf ~traced_store llc : unit =
     let dyn_env =
       Array.foldi dynamic_idcs ~init:dyn_env ~f:(fun provider_dim dyn_env sym ->
           let target_dim = target_dims.(provider_dim).dim in
-          fprintf ppf "size_t %a =@ (size_t)(%a[%a]) %% %d;@ " pp_symbol sym pp_get_run_ptr tensor
+          fprintf ppf "@ size_t %a =@ (size_t)(%a[%a]) %% %d;" pp_symbol sym pp_get_run_ptr tensor
             (pp_array_offset ~provider_dim tensor.run_scope)
             (tensor_idcs, tensor.dims) target_dim;
           Map.add_exn dyn_env ~key:sym ~data:(ptr, provider_dim, tensor_idcs, target_dim))
     in
+    pp_print_space ppf ();
     pp_ll ~dyn_env ppf body;
     (* fprintf ppf "%a" (pp_ll ~dyn_env ~env) body; *)
     fprintf ppf "@]@ }@,"
