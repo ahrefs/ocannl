@@ -556,22 +556,27 @@ let jit_func ~name (traced_store, llc) =
   let finalizers =
     Array.of_list tensors
     |> Array.filter_map ~f:(fun (_, tn) ->
-           match tn.run_scope with
-           | Thread | Shared ->
-               Option.map2 tn.local tn.global ~f:(fun l_name g_name ->
-                   let b = Buffer.create 4096 in
-                   let ppf = Caml.Format.formatter_of_buffer b in
-                   let body idcs =
-                     Code.Staged_compilation
-                       (fun () ->
-                         Caml.Format.fprintf ppf "@[<2>%s[%a] =@ %s[%a];@]" g_name (pp_array_offset Global)
-                           (idcs, tn.dims) l_name (pp_array_offset tn.run_scope) (idcs, tn.dims))
-                   in
-                   let loops = Code.loop_over_dims ~skip_frozen:true tn.dims ~body in
-                   jit_code ppf ~traced_store loops;
-                   Caml.Format.pp_print_newline ppf ();
-                   Buffer.contents b)
-           | _ -> None)
+           if
+             List.exists ~f:(equal_sync_properties tn.sync)
+               [ Update_globally_for_thread; Update_globally_for_block ]
+           then None
+           else
+             match tn.run_scope with
+             | Thread | Shared ->
+                 Option.map2 tn.local tn.global ~f:(fun l_name g_name ->
+                     let b = Buffer.create 4096 in
+                     let ppf = Caml.Format.formatter_of_buffer b in
+                     let body idcs =
+                       Code.Staged_compilation
+                         (fun () ->
+                           Caml.Format.fprintf ppf "@[<2>%s[%a] =@ %s[%a];@]" g_name (pp_array_offset Global)
+                             (idcs, tn.dims) l_name (pp_array_offset tn.run_scope) (idcs, tn.dims))
+                     in
+                     let loops = Code.loop_over_dims ~skip_frozen:true tn.dims ~body in
+                     jit_code ppf ~traced_store loops;
+                     Caml.Format.pp_print_newline ppf ();
+                     Buffer.contents b)
+             | _ -> None)
   in
   let cu_src =
     [%string
