@@ -160,7 +160,7 @@ let check_dedicated_dep d ~cached_dedicated =
         Array.exists indices ~f:(function Shape.Iterator s -> Shape.is_dedicated_kind d s | _ -> false)
         || loop_float llv
     | Set_local (_, llv) -> loop_float llv
-    and loop_float = function
+  and loop_float = function
     | Local_scope { body; orig_indices; _ } ->
         Array.exists orig_indices ~f:(function Shape.Iterator s -> Shape.is_dedicated_kind d s | _ -> false)
         || loop_proc body
@@ -174,7 +174,7 @@ let check_dedicated_dep d ~cached_dedicated =
     | Unop (_, llv) -> loop_float llv
     | Constant _ -> false
   in
-  loop_proc, loop_float
+  (loop_proc, loop_float)
 
 let binop ~op ~rhs1 ~rhs2 = match op with Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Binop (op, rhs1, rhs2)
 let unop ~op ~rhs = match op with Identity -> rhs | _ -> Unop (op, rhs)
@@ -1268,17 +1268,20 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit_low_level) : u
 
 type traced_store = (NodeUI.tensor_ptr, traced_tensor) Base.Hashtbl.t
 
-let optimize_proc llc : traced_store * unit_low_level =
+let optimize_proc ?(verbose = false) llc : traced_store * unit_low_level =
   let traced_store : (NodeUI.tensor_ptr, traced_tensor) Hashtbl.t = Hashtbl.Poly.create () in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
   let reverse_node_map = Hashtbl.Poly.create () in
+  if verbose then Stdio.printf "Code.optimize_proc: tracing\n%!";
+  visit_llc traced_store reverse_node_map ~max_visits:virtualize_settings.max_visits llc;
+  if verbose then Stdio.printf "Code.optimize_proc: optimizing\n%!";
   let result =
-    visit_llc traced_store reverse_node_map ~max_visits:virtualize_settings.max_visits llc;
     cleanup_virtual_llc traced_store reverse_node_map @@ virtual_llc traced_store reverse_node_map llc
   in
   (traced_store, result)
 
-let compile_proc ~name ~for_step_update:_ proc =
+let compile_proc ~name ?(verbose = false) ~for_step_update:_ proc =
+  if verbose then Stdio.printf "Code.compile_proc: generating the initial low-level code\n%!";
   let llc = to_low_level proc in
   if !with_debug && !keep_files_in_run_directory then (
     let fname = name ^ "-unoptimized.llc" in
@@ -1291,7 +1294,7 @@ let compile_proc ~name ~for_step_update:_ proc =
     let ppf = Caml.Format.formatter_of_out_channel f in
     Caml.Format.pp_set_margin ppf !code_sexp_margin;
     Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t proc));
-  let result = optimize_proc llc in
+  let result = optimize_proc ~verbose llc in
   if !with_debug && !keep_files_in_run_directory then (
     let fname = name ^ ".llc" in
     let f = Stdio.Out_channel.create fname in
@@ -1300,6 +1303,7 @@ let compile_proc ~name ~for_step_update:_ proc =
     Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_unit_low_level @@ snd result));
   (* if for_step_update then
      Hashtbl.iter (fst result) ~f:(fun n -> if n.read_before_write then (NodeUI.get n.id).is_recurrent <- true); *)
+  if verbose then Stdio.printf "Code.compile_proc: finished\n%!";
   result
 
 let loop_over_dims ~skip_frozen dims ~body =
@@ -1307,8 +1311,7 @@ let loop_over_dims ~skip_frozen dims ~body =
     | [] -> body @@ Array.of_list_rev rev_idcs
     | { Shape.special = Frozen; _ } :: product when skip_frozen ->
         for_loop (Shape.Fixed_idx 0 :: rev_idcs) product
-    | { dim = 1; _ } :: product when skip_frozen ->
-        for_loop (Shape.Fixed_idx 0 :: rev_idcs) product
+    | { dim = 1; _ } :: product when skip_frozen -> for_loop (Shape.Fixed_idx 0 :: rev_idcs) product
     | d :: product ->
         let index = Shape.get_sym_for_axis d.Shape.special in
         For_loop
@@ -1322,11 +1325,11 @@ let loop_over_dims ~skip_frozen dims ~body =
   in
   for_loop [] (Array.to_list dims)
 
-let interpret_task_id_func ~name:_ ((_traced_store : traced_store), compiled) ~task_id =
+let interpret_task_id_func ~name:_ ?verbose:_ ((_traced_store : traced_store), compiled) ~task_id =
+  (* TODO: add verbose logs *)
   if !debug_trace_interpretation && task_id = 0 then (
     Caml.Format.set_margin !code_sexp_margin;
-    Caml.Format.printf "TRACE: Interpreted program:@ %a\n%!" Sexp.pp_hum
-    @@ sexp_of_unit_low_level compiled);
+    Caml.Format.printf "TRACE: Interpreted program:@ %a\n%!" Sexp.pp_hum @@ sexp_of_unit_low_level compiled);
   interpret_code ~task_id compiled
 
 let interpret_unit_func ~name:_ ((_ : traced_store), compiled) () = interpret_code compiled

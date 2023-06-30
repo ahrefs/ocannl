@@ -611,7 +611,8 @@ let error_message ~name ~prefix ?extra_error_msg ~contents exc =
   msg contents;
   Buffer.contents message
 
-let jit_task_id_func ~name compiled =
+let jit_task_id_func ~name ?verbose:_ compiled =
+  (* TODO: add verbose logs *)
   let open Gccjit in
   let ctx = Context.create_child !session_context in
   Context.set_option ctx Context.Optimization_level !optimization_level;

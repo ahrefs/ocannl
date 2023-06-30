@@ -486,12 +486,15 @@ let cleanup_session () =
 
 let error_message ~name:_ ~prefix:_ ?extra_error_msg:_ ~contents:_ _exc = ""
 
-let jit_func ~name (traced_store, llc) =
+let jit_func ~name ?(verbose = false) (traced_store, llc) =
   let module Cu = Cudajit in
   Option.iter session_state.last_module ~f:Cu.module_unload;
   session_state.last_module <- None;
-  if Option.is_none session_state.ctx then cleanup_session ();
+  if Option.is_none session_state.ctx then (
+    if verbose then Stdio.printf "Exec_as_cuda.jit_func: initializing the CUDA context\n%!";
+    cleanup_session ());
   if Option.is_none session_state.ctx then invalid_arg "Exec_as_cuda: no device found";
+  if verbose then Stdio.printf "Exec_as_cuda.jit_func: generating the .cu source\n%!";
   let b = Buffer.create 4096 in
   let ppf = Caml.Format.formatter_of_buffer b in
   jit_code ppf ~traced_store llc;
@@ -579,7 +582,7 @@ let jit_func ~name (traced_store, llc) =
                      let loops = Code.loop_over_dims ~skip_frozen:true tn.dims ~body in
                      if is_replicated tn.sync then
                        Caml.Format.fprintf ppf
-                         "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@])@ @[<2>{@ %a@ @]}@]"
+                         "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ %a@ @]}"
                          (jit_code ~traced_store) loops
                      else jit_code ppf ~traced_store loops;
                      Caml.Format.pp_print_newline ppf ();
@@ -617,6 +620,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
     Stdio.Out_channel.output_string oc cu_src;
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);
+  if verbose then Stdio.printf "Exec_as_cuda.jit_func: compiling to PTX\n%!";
   let ptx = Cu.compile_to_ptx ~cu_src ~name ~options:[ "--use_fast_math" ] ~with_debug:!Code.with_debug in
   if !Code.with_debug && !Code.keep_files_in_run_directory then (
     let f_name = name ^ "-cudajit-debug" in
@@ -634,7 +638,10 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
   let args =
     List.filter_map tensors ~f:(fun (_, tn) -> Option.map tn.global_ptr ~f:(fun (lazy p) -> Cu.Tensor p))
   in
+  if verbose then Stdio.printf "Exec_as_cuda.jit_func: compilation finished\n%!";
   fun () ->
+    if verbose then
+      Stdio.printf "Exec_as_cuda.jit_func: copying host-to-device and zeroing-out global memory\n%!";
     List.iter tensors ~f:(function
       | ptr, { hosted = Some ndarray; global_ptr = Some (lazy dst); host_offset; global_length; _ } ->
           let host_offset = Option.map host_offset ~f:(fun f -> f ()) in
@@ -648,8 +655,10 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
           let tn = Code.(get_node traced_store ptr) in
           if tn.zero_initialized then Cu.memset_d8 device Unsigned.UChar.zero ~length:global_size_in_bytes
       | _ -> ());
+    if verbose then Stdio.printf "Exec_as_cuda.jit_func: running the kernel\n%!";
     Cu.launch_kernel func ~grid_dim_x:session_state.num_blocks ~block_dim_x:session_state.num_threads
       ~shared_mem_bytes:0 Cu.no_stream args;
+    if verbose then Stdio.printf "Exec_as_cuda.jit_func: copying device-to-host\n%!";
     List.iter tensors ~f:(function
       | ptr, { hosted = Some ndarray; global_ptr = Some (lazy src); host_offset; global_length; _ } ->
           let host_offset = Option.map host_offset ~f:(fun f -> f ()) in
@@ -657,7 +666,8 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
           if not tn.read_only then
             let f dst = Cu.memcpy_D_to_H ?host_offset ~length:global_length ~dst ~src () in
             Node.map_as_bigarray { f } ndarray
-      | _ -> ())
+      | _ -> ());
+    if verbose then Stdio.printf "Exec_as_cuda.jit_func: kernel run finished\n%!"
 
 let jit_step_func = jit_func
-let jit_unit_func = jit_func
+let jit_unit_func = jit_func ~verbose:false

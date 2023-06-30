@@ -135,8 +135,8 @@ let num_parallel_tasks = ref 1
 let num_domains = Caml.Domain.recommended_domain_count ()
 let task_pool = Domainslib.Task.setup_pool ~name:"session_task_pool" ~num_domains ()
 
-let multicore_step_func jit_task_id_func ~name jit_args =
-  let task_id_func = jit_task_id_func ~name jit_args in
+let multicore_step_func jit_task_id_func ~name ?verbose jit_args =
+  let task_id_func = jit_task_id_func ~name ?verbose jit_args in
   fun () ->
     if !num_parallel_tasks = 1 then task_id_func ~task_id:0
     else
@@ -167,7 +167,7 @@ let set_executor = function
       executor_error_message := Exec_as_cuda.error_message;
       cleanup_executor_session := Exec_as_cuda.cleanup_session
 
-let perform_initialization traced_store =
+let initialize_host_tensors traced_store =
   List.iter ~f:(function
     | { Code.tensor = { id; field = Value } as ptr; dims; init_op } ->
         let tn = Code.get_node traced_store ptr in
@@ -187,7 +187,7 @@ let compile_routine ~name code =
   session_initialized := num_inits;
   let traced_store, compiled = Code.compile_proc ~name ~for_step_update:false code in
   (* Only initialize after compilation, to know which nodes are virtual. *)
-  perform_initialization traced_store @@ List.take !session_initializations to_init;
+  initialize_host_tensors traced_store @@ List.take !session_initializations to_init;
   !exec_unit_func ~name (traced_store, compiled)
 
 let session_params () = NodeUI.param_nodes ~from_id:!Formula.first_session_id ()
@@ -217,8 +217,11 @@ let print_session_code ?(compiled = false) () =
   Caml.Format.print_newline ()
 
 let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_params = true) ?(reinit = false)
-    ?(run_for_steps = 1) ?(run = true) ?(force_no_init = false) () =
+    ?(run_for_steps = 1) ?(run = true) ?(force_no_init = false) ?(verbose = false) () =
   let open Formula in
+  if verbose then
+    Stdio.printf "refresh_session: regenerate=%b, update_params=%b, reinit=%b, run=%b, force_no_init=%b\n%!"
+      regenerate update_params reinit run force_no_init;
   if force_no_init && reinit then invalid_arg "refresh_session: ~force_no_init conflicts with ~reinit";
   if update_params && not with_backprop then
     invalid_arg "refresh_session: ~update_params:true requires ~with_backprop:true";
@@ -289,10 +292,11 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
         n.value_never_device_only <- true)
     @@ session_params ();
     session_step_update := sequential [ preparation; forward; backprop; params_update; postprocess ];
+    if verbose then Stdio.printf "refresh_session: compiling\n%!";
     if run_for_steps <= 1 then
-      session_step_update_compiled := compile_proc ~name ~for_step_update:true !session_step_update
+      session_step_update_compiled := compile_proc ~name ~verbose ~for_step_update:true !session_step_update
     else
-      let traced_store, compiled = compile_proc ~name ~for_step_update:true !session_step_update in
+      let traced_store, compiled = compile_proc ~name ~verbose ~for_step_update:true !session_step_update in
       session_step_update_compiled :=
         ( traced_store,
           Code.(
@@ -307,11 +311,15 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_param
   if generating || reinit || roots_changed then (
     let num_inits = List.length !session_initializations in
     let to_init = num_inits - !session_initialized in
-    perform_initialization (fst !session_step_update_compiled) @@ List.take !session_initializations to_init;
+    if verbose then Stdio.printf "refresh_session: initializing host tensors\n%!";
+    initialize_host_tensors (fst !session_step_update_compiled) @@ List.take !session_initializations to_init;
     session_initialized := num_inits);
   if (not force_no_init) && (generating || reinit) then
-    session_step_update_routine := !exec_step_func ~name !session_step_update_compiled;
-  if run && run_for_steps > 0 then !session_step_update_routine ()
+    session_step_update_routine := !exec_step_func ~name ~verbose !session_step_update_compiled;
+  if run && run_for_steps > 0 then (
+    if verbose then Stdio.printf "refresh_session: running\n%!";
+    !session_step_update_routine ();
+    if verbose then Stdio.printf "refresh_session: finished\n%!")
 
 (** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id].
     Discards all computations (forward, backward, update params, data fetches), but keeps

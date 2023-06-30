@@ -273,6 +273,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   CDSL.virtualize_settings.enable_device_only <- on_device;
   CDSL.virtualize_settings.max_visits <- inlining_cutoff;
   CDSL.virtualize_settings.inline_constants <- inline_constants;
+  Stdio.printf "Set the executor.\n%!";
   SDSL.set_executor executor;
   SDSL.default_value_prec := precision;
   SDSL.default_grad_prec := precision;
@@ -282,6 +283,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   Code.with_debug := true;
   Code.keep_files_in_run_directory := true;
   (* SDSL.enable_all_debugs (); *)
+  Stdio.printf "Clean up the session for a clean slate.\n%!";
   SDSL.drop_all_sessions ();
   let open SDSL.O in
   Random.init random_seed;
@@ -302,6 +304,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   Stdio.prerr_endline @@ "\n\n****** Benchmarking virtualized: " ^ bench_title ^ " for " ^ Int.to_string steps
   ^ " steps, refresh batch " ^ Int.to_string refresh_batch ^ " ******";
   let noise () = Random.float_range (-0.1) 0.1 in
+  Stdio.printf "Compute the synthetic dataset on the OCaml side.\n%!";
   let moons_flat =
     Array.concat_map (Array.create ~len ())
       ~f:
@@ -320,6 +323,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
       CDSL.minibatch minib;
     ]
   in
+  Stdio.printf "Define the model.\n%!";
   let moons_flat = FDSL.init_const ~l:"moons_flat" ~b ~o:[ CDSL.dim 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let moons_classes = FDSL.init_const ~l:"moons_classes" ~b ~o:[ CDSL.dim 1 ] moons_classes in
@@ -339,7 +343,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   in
   let%nn_dt session_step ~o:1 = n =+ 1 in
   let%nn_dt session_refresh ~o:1 = n =+ 1.001 /. !..refresh_batch in
-  let%nn_dt minus_lr ~o:1 = n =: -0.001 *. (!..steps - session_step) /. !..steps in
+  let%nn_dt minus_lr ~o:1 = n =: -0.0001 *. (!..steps - session_step) /. !..steps in
 
   SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = (moons_flat @.| session_refresh) @.| session_step in
@@ -366,8 +370,9 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
        ((batch_loss ++ "...|0 => 0") /. !..step_batch)
      in *)
   let%nn_rs epoch_loss ~o:1 = n =+ batch_of_losses ++ "...|0 => 0" (* + weighted_reg_loss *) in
+  Stdio.printf "Initialize everything: compile etc.\n%!";
   Stdio.printf "\n%!";
-  SDSL.refresh_session ~run_for_steps ();
+  SDSL.refresh_session ~run_for_steps ~verbose:true ();
   (*Stdio.printf "\nPreamble:\n%!";
     SDSL.print_preamble ~full_shape:true ();
     Stdio.printf "\nBatch losses:\n%!";
@@ -418,7 +423,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
         result = [%sexp_of: float * float] (!min_loss, !loss);
       }
   in
-  (*
+  (* *
   let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
@@ -468,12 +473,12 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   (* Stdio.printf "\nProcess memory delta: %d\n%!"
      (train_mem.process_physical_memory - init_mem.process_physical_memory); *)
   Exec_as_gccjit.optimization_level := 3;
-  Stdio.printf "\n%!"; *)
+  Stdio.printf "\n%!"; * *)
   result
 
 let benchmark_executor = SDSL.Cuda
 
-let () =
+let  () =
   Node.fixed_state_for_init := Some 14;
   ignore
   @@ classify_moons ~random_seed:3 ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
