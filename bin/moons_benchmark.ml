@@ -65,15 +65,15 @@ let _suspended () =
   let%nn_op moons_input = (moons_flat @.| session_refresh) @.| session_step in
   let%nn_op moons_class = (moons_classes @.| session_refresh) @.| session_step in
   let%nn_op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
-  (* let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in *)
-  (* let reg_loss = List.map ~f:ssq [ w1; w2; b1; b2 ] |> List.reduce_exn ~f:FDSL.O.( + ) in *)
+  let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in
+  let reg_loss = List.map ~f:ssq [ w1; b1 ] |> List.reduce_exn ~f:FDSL.O.( + ) in
   (* let reg_loss =
        List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
      in *)
-  (* let%nn_op weighted_reg_loss = 0.00001 *. reg_loss /. !..num_parallel_tasks in *)
+  let%nn_op weighted_reg_loss = 0.00001 *. reg_loss in
   (* let step_batch = num_parallel_tasks * minib in *)
   let%nn_op batch_of_losses = margin_loss ++ "...|... => ...|0" in
-  let%nn_rs epoch_loss ~o:1 = n =+ batch_of_losses ++ "...|0 => 0" in
+  let%nn_rs epoch_loss ~o:1 = n =+ batch_of_losses ++ "...|0 => 0" + weighted_reg_loss in
   let run_for_steps = refresh_batch in
   (* SDSL.everything_fully_on_host (); *)
   (* SDSL.everything_on_host_or_inlined (); *)
@@ -423,7 +423,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
         result = [%sexp_of: float * float] (!min_loss, !loss);
       }
   in
-  (* *
+  (* *)
   let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
@@ -432,10 +432,10 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   SDSL.num_parallel_tasks := 1;
   let%nn_op point = (* [ 0; 0 ] *) "point" 2 in
   let mlp_result = mlp point in
-  SDSL.refresh_session ();
+  SDSL.refresh_session ~with_backprop:false ();
   let callback (x, y) =
     SDSL.set_values point [| x; y |];
-    SDSL.refresh_session ();
+    SDSL.refresh_session ~with_backprop:false ();
     Float.(mlp_result.@[0] >= 0.)
   in
   let plot_moons =
@@ -473,7 +473,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   (* Stdio.printf "\nProcess memory delta: %d\n%!"
      (train_mem.process_physical_memory - init_mem.process_physical_memory); *)
   Exec_as_gccjit.optimization_level := 3;
-  Stdio.printf "\n%!"; * *)
+  Stdio.printf "\n%!"; (* *)
   result
 
 let benchmark_executor = SDSL.Cuda

@@ -206,6 +206,7 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~idcs ptr : tensor =
               else if is_block_parallel then Block_parallel
               else if update_globally && not is_thread_parallel then Update_globally_for_thread
               else if update_globally then Update_globally_for_block
+              else if Option.is_some hosted && tn.read_only then Constant
               else if can_be_replicated then Replicated
               else (
                 if !Code.with_debug then

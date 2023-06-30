@@ -125,10 +125,10 @@ let%expect_test "Micrograd half-moons example" =
   SDSL.close_session ();
   let%nn_op point = [ 0; 0 ] in
   let mlp_result = mlp point in
-  SDSL.refresh_session ();
+  SDSL.refresh_session ~with_backprop:false ();
   let callback (x, y) =
     SDSL.set_values point [| x; y |];
-    SDSL.refresh_session ();
+    SDSL.refresh_session ~with_backprop:false ();
     Float.(mlp_result.@[0] >= 0.)
   in
   let plot_moons =

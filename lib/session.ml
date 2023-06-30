@@ -216,9 +216,10 @@ let print_session_code ?(compiled = false) () =
   else Caml.Format.printf "Session step update code:@ %a" fprint_code !session_step_update;
   Caml.Format.print_newline ()
 
-let refresh_session ?(regenerate = false) ?(with_backprop = true) ?(update_params = true) ?(reinit = false)
+let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params ?(reinit = false)
     ?(run_for_steps = 1) ?(run = true) ?(force_no_init = false) ?(verbose = false) () =
   let open Formula in
+  let update_params = Option.value update_params ~default:with_backprop in
   if verbose then
     Stdio.printf "refresh_session: regenerate=%b, update_params=%b, reinit=%b, run=%b, force_no_init=%b\n%!"
       regenerate update_params reinit run force_no_init;
