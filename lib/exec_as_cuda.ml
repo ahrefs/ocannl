@@ -63,12 +63,10 @@ type session_state = {
   mutable ctx : Cudajit.context option;
   tensors : (NodeUI.tensor_ptr, tensor) Hashtbl.Poly.t;
   mutable last_module : Cudajit.module_ option;
-  mutable num_blocks : int;
-  mutable num_threads : int;
 }
 
 let session_state =
-  { ctx = None; tensors = Hashtbl.Poly.create (); last_module = None; num_blocks = 1; num_threads = 1 }
+  { ctx = None; tensors = Hashtbl.Poly.create (); last_module = None }
 
 let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
 let pp_comma ppf () = Caml.Format.fprintf ppf ",@ "
@@ -292,7 +290,7 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~idcs ptr : tensor =
       | Single_nd arr -> tensor NodeUI.single false arr
       | Double_nd arr -> tensor NodeUI.double true arr)
 
-let jit_code ppf ~traced_store llc : unit =
+let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
   let open Code in
   let open Caml.Format in
   (* let lookup ?provider_dim ?(example_only = false) ~on_host indices =
@@ -329,14 +327,14 @@ let jit_code ppf ~traced_store llc : unit =
                | _ -> true))
     | For_loop { index = i; from_; to_; body; trace_it = _ } when Shape.task_id_sym i ->
         assert (from_ = 0);
-        session_state.num_blocks <- to_ + 1;
+        num_blocks := to_ + 1;
         (* Instead of binding the iterator, we will translate the iterator directly as blockIdx.x. *)
         (* fprintf ppf "@[<2>{@ size_t %a = blockIdx.x;@ " pp_index i; *)
         pp_ll ~dyn_env ppf body
         (* fprintf ppf "@]@ }@," *)
     | For_loop { index = i; from_; to_; body; trace_it = _ } when Shape.sample_num_sym i ->
         assert (from_ = 0);
-        session_state.num_threads <- to_ + 1;
+        num_threads := to_ + 1;
         (* Instead of binding the iterator, we will translate the iterator directly as threadIdx.x. *)
         (* fprintf ppf "@[<2>{@ size_t %a = threadIdx.x;@ " pp_index i; *)
         pp_ll ~dyn_env ppf body
@@ -499,7 +497,8 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
   if verbose then Stdio.printf "Exec_as_cuda.jit_func: generating the .cu source\n%!";
   let b = Buffer.create 4096 in
   let ppf = Caml.Format.formatter_of_buffer b in
-  jit_code ppf ~traced_store llc;
+  let num_threads = ref 1 and num_blocks = ref 1 in
+  jit_code ~num_threads ~num_blocks ~traced_store ppf llc;
   Caml.Format.pp_print_newline ppf ();
   let cu_body = Buffer.contents b in
   let tensors = Hashtbl.to_alist session_state.tensors in
@@ -557,7 +556,7 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
                              (idcs, tn.dims))
                      in
                      let loops = Code.(Lines [| loop_over_dims ~skip_frozen:true tn.dims ~body |]) in
-                     jit_code ppf ~traced_store loops;
+                     jit_code ~num_threads ~num_blocks ~traced_store ppf loops;
                      Caml.Format.pp_print_newline ppf ();
                      Buffer.contents b)
              | _ -> None)
@@ -585,8 +584,8 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
                      if is_replicated tn.sync then
                        Caml.Format.fprintf ppf
                          "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ %a@ @]}"
-                         (jit_code ~traced_store) loops
-                     else jit_code ppf ~traced_store loops;
+                         (jit_code ~num_threads ~num_blocks ~traced_store) loops
+                     else jit_code ~num_threads ~num_blocks ~traced_store ppf loops;
                      Caml.Format.pp_print_newline ppf ();
                      Buffer.contents b)
              | _ -> None)
@@ -658,7 +657,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
           if tn.zero_initialized then Cu.memset_d8 device Unsigned.UChar.zero ~length:global_size_in_bytes
       | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit_func: running the kernel\n%!";
-    Cu.launch_kernel func ~grid_dim_x:session_state.num_blocks ~block_dim_x:session_state.num_threads
+    Cu.launch_kernel func ~grid_dim_x:!num_blocks ~block_dim_x:!num_threads
       ~shared_mem_bytes:0 Cu.no_stream args;
     if verbose then Stdio.printf "Exec_as_cuda.jit_func: copying device-to-host\n%!";
     List.iter tensors ~f:(function
