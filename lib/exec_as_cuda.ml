@@ -480,6 +480,7 @@ let cleanup_session () =
   session_state.last_module <- None;
   Hashtbl.iter session_state.tensors ~f:(fun tensor ->
       Option.iter tensor.global_ptr ~f:(fun (lazy ptr) -> Cudajit.mem_free ptr));
+  Hashtbl.clear session_state.tensors;
   Option.iter session_state.ctx ~f:Cudajit.ctx_destroy;
   (* For now we stick with device 0. *)
   session_state.ctx <- new_context ()

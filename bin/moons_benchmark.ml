@@ -289,7 +289,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   Random.init random_seed;
   (* let init_mem = Mem_usage.info () in *)
   let target_loss = 3.0 in
-  let epochs = 200 / per_refresh in
+  let epochs = 1000 / per_refresh in
   let orig_dataset = 200 in
   let minib = 20 in
   let refresh_batch = 20 * per_refresh / num_parallel_tasks in
