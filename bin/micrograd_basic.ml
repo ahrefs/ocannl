@@ -23,10 +23,11 @@ let () =
   let%nn_op f = e *. e in
   let%nn_op g = f /. 2 in
   let%nn_op g = g + (10. /. f) in
-  SDSL.set_fully_on_host g;
+  (* SDSL.set_fully_on_host g;
   SDSL.set_fully_on_host a;
-  SDSL.set_fully_on_host b;
-  SDSL.refresh_session ();
+  SDSL.set_fully_on_host b; *)
+  SDSL.everything_fully_on_host ();
+  SDSL.refresh_session ~verbose:true ();
   SDSL.print_node_tree ~with_grad:true ~depth:9 g.id;
   SDSL.print_formula ~with_code:false ~with_grad:false `Default @@ g;
   SDSL.print_formula ~with_code:false ~with_grad:true `Default @@ a;

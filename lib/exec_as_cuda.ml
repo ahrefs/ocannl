@@ -65,9 +65,7 @@ type session_state = {
   mutable last_module : Cudajit.module_ option;
 }
 
-let session_state =
-  { ctx = None; tensors = Hashtbl.Poly.create (); last_module = None }
-
+let session_state = { ctx = None; tensors = Hashtbl.Poly.create (); last_module = None }
 let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
 let pp_comma ppf () = Caml.Format.fprintf ppf ",@ "
 let pp_symbol ppf sym = Caml.Format.fprintf ppf "%s" @@ Shape.symbol_ident sym
@@ -584,7 +582,8 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
                      if is_replicated tn.sync then
                        Caml.Format.fprintf ppf
                          "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ %a@ @]}"
-                         (jit_code ~num_threads ~num_blocks ~traced_store) loops
+                         (jit_code ~num_threads ~num_blocks ~traced_store)
+                         loops
                      else jit_code ~num_threads ~num_blocks ~traced_store ppf loops;
                      Caml.Format.pp_print_newline ppf ();
                      Buffer.contents b)
@@ -647,9 +646,11 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
       | ptr, { hosted = Some ndarray; global_ptr = Some (lazy dst); host_offset; global_length; _ } ->
           let host_offset = Option.map host_offset ~f:(fun f -> f ()) in
           let tn = Code.(get_node traced_store ptr) in
-          if tn.read_before_write then
+          if tn.read_before_write then (
             let f src = Cu.memcpy_H_to_D ?host_offset ~length:global_length ~dst ~src () in
-            Node.map_as_bigarray { f } ndarray
+            if verbose && !Code.with_debug then
+              Stdio.printf "Exec_as_cuda.jit_func: memcpy_H_to_D for %s\n%!" (NodeUI.tensor_ptr_name ptr);
+            Node.map_as_bigarray { f } ndarray)
       | _ -> ());
     List.iter tensors ~f:(function
       | ptr, { global_ptr = Some (lazy device); global_size_in_bytes; _ } ->
@@ -657,8 +658,8 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
           if tn.zero_initialized then Cu.memset_d8 device Unsigned.UChar.zero ~length:global_size_in_bytes
       | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit_func: running the kernel\n%!";
-    Cu.launch_kernel func ~grid_dim_x:!num_blocks ~block_dim_x:!num_threads
-      ~shared_mem_bytes:0 Cu.no_stream args;
+    Cu.launch_kernel func ~grid_dim_x:!num_blocks ~block_dim_x:!num_threads ~shared_mem_bytes:0 Cu.no_stream
+      args;
     if verbose then Stdio.printf "Exec_as_cuda.jit_func: copying device-to-host\n%!";
     List.iter tensors ~f:(function
       | ptr, { hosted = Some ndarray; global_ptr = Some (lazy src); host_offset; global_length; _ } ->
@@ -666,6 +667,8 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
           let tn = Code.(get_node traced_store ptr) in
           if not tn.read_only then
             let f dst = Cu.memcpy_D_to_H ?host_offset ~length:global_length ~dst ~src () in
+            if verbose && !Code.with_debug then
+              Stdio.printf "Exec_as_cuda.jit_func: memcpy_D_to_H for %s\n%!" (NodeUI.tensor_ptr_name ptr);
             Node.map_as_bigarray { f } ndarray
       | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit_func: kernel run finished\n%!"
