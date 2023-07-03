@@ -660,16 +660,17 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
     if verbose then Stdio.printf "Exec_as_cuda.jit_func: running the kernel\n%!";
     Cu.launch_kernel func ~grid_dim_x:!num_blocks ~block_dim_x:!num_threads ~shared_mem_bytes:0 Cu.no_stream
       args;
+    Cu.ctx_synchronize ();
     if verbose then Stdio.printf "Exec_as_cuda.jit_func: copying device-to-host\n%!";
     List.iter tensors ~f:(function
       | ptr, { hosted = Some ndarray; global_ptr = Some (lazy src); host_offset; global_length; _ } ->
           let host_offset = Option.map host_offset ~f:(fun f -> f ()) in
           let tn = Code.(get_node traced_store ptr) in
-          if not tn.read_only then
+          if not tn.read_only then (
             let f dst = Cu.memcpy_D_to_H ?host_offset ~length:global_length ~dst ~src () in
             if verbose && !Code.with_debug then
               Stdio.printf "Exec_as_cuda.jit_func: memcpy_D_to_H for %s\n%!" (NodeUI.tensor_ptr_name ptr);
-            Node.map_as_bigarray { f } ndarray
+            Node.map_as_bigarray { f } ndarray)
       | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit_func: kernel run finished\n%!"
 
