@@ -500,11 +500,12 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
   Caml.Format.pp_print_newline ppf ();
   let cu_body = Buffer.contents b in
   let tensors = Hashtbl.to_alist session_state.tensors in
-  let params =
-    List.filter_map tensors ~f:(fun (_, tn) ->
-        match tn.sync with
-        | Thread_only | Block_only | Constant -> None
-        | _ -> Option.map tn.global ~f:(fun t_name -> tn.num_typ ^ " *" ^ t_name))
+  let params, args =
+    List.unzip
+    @@ List.filter_map tensors ~f:(fun (_, tn) ->
+           match tn.sync with
+           | Thread_only | Block_only | Constant -> None
+           | _ -> Option.map tn.global ~f:(fun t_name -> (tn.num_typ ^ " *" ^ t_name, tn.global_ptr)))
   in
   (* TODO: optimize zero-initializations? E.g.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
@@ -635,9 +636,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
   let module_ = Cu.module_load_data_ex ptx [] in
   session_state.last_module <- Some module_;
   let func = Cu.module_get_function module_ ~name in
-  let args =
-    List.filter_map tensors ~f:(fun (_, tn) -> Option.map tn.global_ptr ~f:(fun (lazy p) -> Cu.Tensor p))
-  in
+  let args = List.map args ~f:(function Some (lazy p) -> Cu.Tensor p | None -> assert false) in
   if verbose then Stdio.printf "Exec_as_cuda.jit_func: compilation finished\n%!";
   fun () ->
     if verbose then

@@ -33,8 +33,8 @@
   } while (0)
 
 const char *ker_const = "\n\
-extern \"C\" __constant__ float n2_value[1];\n\
-extern \"C\" __constant__ float n1_value[1];\n\
+__constant__ float n2_value[1];\n\
+__constant__ float n1_value[1];\n\
 extern \"C\" __global__ void ker_const(\n\
     float *n2_grad, float *n3_value, float *n3_grad, float *n1_grad) {\n\
   float n2_grad_local[1] = {0};\n\
@@ -86,6 +86,9 @@ int main()
   // Destroy the program.
   NVRTC_SAFE_CALL(nvrtcDestroyProgram(&prog));
   // Load the generated PTX and get a handle to the SAXPY kernel.
+  // std::cout << "PTX: {" << std::endl
+  //           << ptx << std::endl
+  //           << "}" << std::endl;
   CUdevice cuDevice;
   CUcontext context;
   CUmodule module;
