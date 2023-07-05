@@ -52,31 +52,23 @@ let host_size_in_bytes ptr =
 
 type prec =
   | Void_prec : prec
-  (* | Bit_as_bool: (bool, bit_as_bool_nd) precision *)
-  | Byte_as_int_prec : (int, N.byte_as_int_nd) N.precision -> prec
-  | Half_as_int_prec : (int, N.half_as_int_nd) N.precision -> prec
-  (* | Bit_prec: (float, (bool, Bigarray.bool_elt, Bigarray.c_layout) bigarray) N.precision -> prec*)
-  (* | Byte_prec: (float, (float, Bigarray.float8_elt, Bigarray.c_layout) bigarray) N.precision -> prec *)
-  (* | Half_prec: (float, (float, Bigarray.float16_elt, Bigarray.c_layout) bigarray) N.precision -> prec*)
-  | Single_prec : (float, N.single_nd) N.precision -> prec
-  | Double_prec : (float, N.double_nd) N.precision -> prec
+  | Half_prec: N.half_nd N.precision -> prec
+  | Single_prec : N.single_nd N.precision -> prec
+  | Double_prec : N.double_nd N.precision -> prec
 
-let byte_as_int = Byte_as_int_prec N.Byte_as_int
-let half_as_int = Half_as_int_prec N.Half_as_int
+let half = Half_prec N.Half
 let single = Single_prec N.Single
 let double = Double_prec N.Double
 
 let sexp_of_prec = function
   | Void_prec -> Sexp.Atom "Void_prec"
-  | Byte_as_int_prec _ -> Sexp.Atom "Byte_as_int_prec"
-  | Half_as_int_prec _ -> Sexp.Atom "Half_as_int_prec"
+  | Half_prec _ -> Sexp.Atom "Half_prec"
   | Single_prec _ -> Sexp.Atom "Single_prec"
   | Double_prec _ -> Sexp.Atom "Double_prec"
 
 let prec_of_sexp = function
-  | Sexp.Atom "Void" -> Void_prec
-  | Sexp.Atom "Byte_as_int_prec" -> byte_as_int
-  | Sexp.Atom "Half_as_int_prec" -> half_as_int
+  | Sexp.Atom "Void_prec" -> Void_prec
+  | Sexp.Atom "Half_prec" -> half
   | Sexp.Atom "Single_prec" -> single
   | Sexp.Atom "Double_prec" -> double
   | Sexp.List _ -> invalid_arg "prec_of_sexp: expected atom, found list"
@@ -85,8 +77,7 @@ let prec_of_sexp = function
 let node_prec tensor =
   match get_tensor tensor with
   | None -> Void_prec
-  | Some (N.Byte_as_int_nd _) -> byte_as_int
-  | Some (N.Half_as_int_nd _) -> half_as_int
+  | Some (N.Half_nd _) -> half
   | Some (N.Single_nd _) -> single
   | Some (N.Double_nd _) -> double
 
@@ -94,8 +85,7 @@ let create_ndarray prec dims =
   let dims = Array.map dims ~f:(fun d -> d.Shape.dim) in
   match prec with
   | Void_prec -> assert false
-  | Byte_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
-  | Half_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
+  | Half_prec prec -> N.create_ndarray prec dims
   | Single_prec prec -> N.create_ndarray prec dims
   | Double_prec prec -> N.create_ndarray prec dims
 
@@ -106,22 +96,25 @@ let create ~(value_prec : prec) ?(grad_prec : prec option) ?(literal = false) ~n
   let node =
     match value_prec with
     | Void_prec -> assert false
-    | Byte_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
-    | Half_as_int_prec _ -> failwith "NodeUI.create: int prec not supported yet"
+    | Half_prec value_prec -> (
+        match grad_prec with
+        | None -> N.create ~value_prec ~needs_gradient ()
+        | Some Void_prec -> assert false
+        | Some (Half_prec grad_prec) -> N.create ~value_prec ~grad_prec ~needs_gradient ()
+        | Some (Single_prec grad_prec) -> N.create ~value_prec ~grad_prec ~needs_gradient ()
+        | Some (Double_prec grad_prec) -> N.create ~value_prec ~grad_prec ~needs_gradient ())
     | Single_prec value_prec -> (
         match grad_prec with
         | None -> N.create ~value_prec ~needs_gradient ()
         | Some Void_prec -> assert false
-        | Some (Byte_as_int_prec _) -> failwith "NodeUI.create: int prec not supported yet"
-        | Some (Half_as_int_prec _) -> failwith "NodeUI.create: int prec not supported yet"
+        | Some (Half_prec grad_prec) -> N.create ~value_prec ~grad_prec ~needs_gradient ()
         | Some (Single_prec grad_prec) -> N.create ~value_prec ~grad_prec ~needs_gradient ()
         | Some (Double_prec grad_prec) -> N.create ~value_prec ~grad_prec ~needs_gradient ())
     | Double_prec value_prec -> (
         match grad_prec with
         | None -> N.create ~value_prec ~needs_gradient ()
         | Some Void_prec -> assert false
-        | Some (Byte_as_int_prec _) -> failwith "NodeUI.create: int prec not supported yet"
-        | Some (Half_as_int_prec _) -> failwith "NodeUI.create: int prec not supported yet"
+        | Some (Half_prec grad_prec) -> N.create ~value_prec ~grad_prec ~needs_gradient ()
         | Some (Single_prec grad_prec) -> N.create ~value_prec ~grad_prec ~needs_gradient ()
         | Some (Double_prec grad_prec) -> N.create ~value_prec ~grad_prec ~needs_gradient ())
   in

@@ -111,8 +111,7 @@ let pp_get_run_ptr ppf tensor =
 
 let prec_to_c_type = function
   | NodeUI.Void_prec -> "void"
-  | Byte_as_int_prec _ -> "char"
-  | Half_as_int_prec _ -> "short"
+  | Half_prec _ -> (* FIXME: *) "uint16"
   | Single_prec _ -> "float"
   | Double_prec _ -> "double"
 
@@ -283,8 +282,7 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~idcs ptr : tensor =
         }
       in
       match arr with
-      | Byte_as_int_nd arr -> tensor NodeUI.byte_as_int false arr
-      | Half_as_int_nd arr -> tensor NodeUI.half_as_int false arr
+      | Half_nd arr -> tensor NodeUI.half false arr
       | Single_nd arr -> tensor NodeUI.single false arr
       | Double_nd arr -> tensor NodeUI.double true arr)
 

@@ -211,8 +211,7 @@ let get_tensor
         }
       in
       match arr with
-      | Byte_as_int_nd arr -> tensor Type.Signed_char false arr
-      | Half_as_int_nd arr -> tensor Type.Short false arr
+      | Half_nd arr -> (* FIXME: *) tensor Type.Float false arr
       | Single_nd arr -> tensor Type.Float false arr
       | Double_nd arr -> tensor Type.Double true arr)
 
@@ -228,8 +227,7 @@ let prec_to_kind prec =
   let open Gccjit in
   match prec with
   | NodeUI.Void_prec -> Type.Void
-  | Byte_as_int_prec _ -> Type.Signed_char
-  | Half_as_int_prec _ -> Type.Short
+  | Half_prec _ -> (* FIXME: *) Type.Unsigned_short
   | Single_prec _ -> Type.Float
   | Double_prec _ -> Type.Double
 
