@@ -33,7 +33,7 @@ and sub_node = { sub_node_id : int; computed_externally : bool } [@@deriving sex
 let global_node_store = Hashtbl.create (module Int)
 let get uid = Hashtbl.find_exn global_node_store uid
 
-type data_kind = Value | Grad [@@deriving sexp, equal, hash]
+type data_kind = Value | Grad [@@deriving sexp, equal, hash, variants]
 type tensor_ptr = { id : int; field : data_kind } [@@deriving sexp, equal, hash]
 
 let tensor_ptr_name { id; field } =

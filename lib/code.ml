@@ -698,23 +698,23 @@ type traced_tensor = {
 }
 [@@deriving sexp_of]
 
-let get_node store (uid : NodeUI.tensor_ptr) =
-  Hashtbl.find_or_add store uid ~default:(fun () ->
-      let n = NodeUI.get uid.id in
+let get_node store (ptr : NodeUI.tensor_ptr) =
+  Hashtbl.find_or_add store ptr ~default:(fun () ->
+      let n = NodeUI.get ptr.id in
       let never_virtual =
-        match uid.field with NodeUI.Value -> n.value_never_virtual | NodeUI.Grad -> n.grad_never_virtual
+        match ptr.field with NodeUI.Value -> n.value_never_virtual | NodeUI.Grad -> n.grad_never_virtual
       in
       let never_device_only =
-        match uid.field with
+        match ptr.field with
         | NodeUI.Value -> n.value_never_device_only
         | NodeUI.Grad -> n.grad_never_device_only
       in
-      let non_virtual = never_virtual || NodeUI.host_size_in_bytes uid > 0 in
-      let non_device_only = never_device_only || NodeUI.host_size_in_bytes uid > 0 in
+      let non_virtual = never_virtual || NodeUI.host_size_in_bytes ptr > 0 in
+      let non_device_only = never_device_only || NodeUI.host_size_in_bytes ptr > 0 in
       {
-        id = uid.id;
-        kind = uid.field;
-        prec = NodeUI.node_prec uid;
+        id = ptr.id;
+        kind = ptr.field;
+        prec = NodeUI.node_prec ptr;
         computations = [];
         assignments = Hash_set.Poly.create ();
         accesses = Hashtbl.Poly.create ();
