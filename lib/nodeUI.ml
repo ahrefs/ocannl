@@ -52,7 +52,7 @@ let host_size_in_bytes ptr =
 
 type prec =
   | Void_prec : prec
-  | Half_prec: N.half_nd N.precision -> prec
+  | Half_prec : N.half_nd N.precision -> prec
   | Single_prec : N.single_nd N.precision -> prec
   | Double_prec : N.double_nd N.precision -> prec
 
@@ -274,7 +274,18 @@ let render_tensor ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labe
     (arr : N.ndarray) =
   let module B = PrintBox in
   let dims = N.dims arr in
-  let header = prefix in
+  let has_nan = N.fold_ndarray ~init:false ~f:(fun has_nan _ v -> has_nan || Float.is_nan v) arr in
+  let has_inf = N.fold_ndarray ~init:false ~f:(fun has_inf _ v -> has_inf || Float.(v = infinity)) arr in
+  let has_neg_inf =
+    N.fold_ndarray ~init:false ~f:(fun has_neg_inf _ v -> has_neg_inf || Float.(v = neg_infinity)) arr
+  in
+  let header =
+    prefix
+    ^ (if has_nan || has_inf || has_neg_inf then " includes" else "")
+    ^ (if has_nan then " NaN" else "")
+    ^ (if has_inf then " pos. inf." else "")
+    ^ if has_neg_inf then " neg. inf." else ""
+  in
   if Array.is_empty dims then B.vlist ~bars:false [ B.text header; B.line "<void>" ]
   else
     let indices = Array.copy indices in
