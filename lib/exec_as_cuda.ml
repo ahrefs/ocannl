@@ -230,7 +230,10 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~idcs ptr : tensor =
                  ptr)
           | _ ->
               (* The general case does not require laziness, but it should be OK. *)
-              lazy (Cudajit.mem_alloc ~byte_size:global_size_in_bytes)
+              lazy
+                (if !Code.with_debug then
+                   Stdio.printf "Exec_as_cuda.get_tensor: mem_alloc %s\n%!" (NodeUI.tensor_ptr_name ptr);
+                 Cudajit.mem_alloc ~byte_size:global_size_in_bytes)
         in
         let global = Option.some_if has_global_mem @@ NodeUI.tensor_ptr_name ptr in
         let local = Option.some_if has_local_mem @@ NodeUI.tensor_ptr_name ptr ^ "_local" in
@@ -475,7 +478,10 @@ let cleanup_session () =
   session_state.last_module <- None;
   Hashtbl.iter session_state.tensors ~f:(fun tensor ->
       Option.iter tensor.global_ptr ~f:(fun (lazy ptr) ->
-          if not @@ is_constant tensor.sync then Cudajit.mem_free ptr));
+          if not @@ is_constant tensor.sync then (
+            if !Code.with_debug then
+              Stdio.printf "Exec_as_cuda.cleanup_session: mem_free %s\n%!" (Option.value_exn tensor.global);
+            Cudajit.mem_free ptr)));
   Hashtbl.clear session_state.tensors;
   Option.iter session_state.ctx ~f:Cudajit.ctx_destroy;
   (* For now we stick with device 0. *)
@@ -485,6 +491,7 @@ let error_message ~name:_ ~prefix:_ ?extra_error_msg:_ ~contents:_ _exc = ""
 
 let jit_func ~name ?(verbose = false) (traced_store, llc) =
   let module Cu = Cudajit in
+  Hashtbl.filter_inplace session_state.tensors ~f:(fun tensor -> not @@ is_constant tensor.sync);
   Option.iter session_state.last_module ~f:Cu.module_unload;
   session_state.last_module <- None;
   if Option.is_none session_state.ctx then (
