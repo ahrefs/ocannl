@@ -12,8 +12,7 @@
   str
   ; mem_usage
   gccjit
-  cudajit
-  ppx_minidebug.runtime)
+  cudajit)
  (preprocess
   (pps ppx_jane ppx_ocannl ppx_minidebug))
  (modules

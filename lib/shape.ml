@@ -1181,10 +1181,6 @@ let project_broad d1 d2 =
   | { dim = 1; _ }, d | d, { dim = 1; _ } -> d
   | _ -> assert false
 
-(* module Debug_runtime = Minidebug_runtime.Flushing (struct
-     let debug_ch = Out_channel.stdout
-   end) *)
-
 let project_dyn_indexing ~(dynamic_syms : symbol array) ~(dedicated_syms : symbol array)
     (targets_and_skipped : dim array) : axis_index array =
   let remaining_dyn_syms, remaining_ded_syms, idcs =
