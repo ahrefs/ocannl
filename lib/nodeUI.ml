@@ -40,8 +40,8 @@ let tensor_ptr_name { id; field } =
   match field with Value -> "n" ^ Int.to_string id ^ "_value" | Grad -> "n" ^ Int.to_string id ^ "_grad"
 
 let get_tensor tensor =
-  let n = N.get tensor.id in
-  match tensor.field with Value -> Some n.value | Grad -> n.grad
+  let n = get tensor.id in
+  match tensor.field with Value -> Some n.node.value | Grad -> n.node.grad
 
 let host_size_in_bytes ptr =
   (* 1 number bigarray is reporting the same size as an empty bigarray, but we use size 0 to indicate

@@ -346,21 +346,9 @@ let sexp_of_int_env env =
   [%sexp_of: (sym_index * int) list * (Shape.symbol * int) list] (Map.to_alist env, Map.to_alist dyn_env)
 *)
 
-let set_from_float ptr idcs value =
-  match ptr.NodeUI.field with
-  | Value -> N.set_from_float (N.get ptr.id).value idcs value
-  | Grad -> N.set_from_float (Option.value_exn (N.get ptr.id).grad) idcs value
-
-let fill_from_float ptr value =
-  match ptr.NodeUI.field with
-  | Value -> N.fill_from_float (N.get ptr.id).value value
-  | Grad -> N.fill_from_float (Option.value_exn (N.get ptr.id).grad) value
-
-let get_as_float ptr idcs =
-  match ptr.NodeUI.field with
-  | Value -> N.get_as_float (N.get ptr.id).value idcs
-  | Grad -> N.get_as_float (Option.value_exn (N.get ptr.id).grad) idcs
-
+let set_from_float ptr idcs value = N.set_from_float (Option.value_exn @@ NodeUI.get_tensor ptr) idcs value
+let fill_from_float ptr value = N.fill_from_float (Option.value_exn @@ NodeUI.get_tensor ptr) value
+let get_as_float ptr idcs = N.get_as_float (Option.value_exn @@ NodeUI.get_tensor ptr) idcs
 let debug_trace_interpretation = ref false
 
 let interpret_binop op v1 v2 =
@@ -479,12 +467,10 @@ let interpret_code ?task_id llc =
     | Set_local (id, llv) -> locals := Map.update !locals id ~f:(fun _ -> loop_float env llv)
     | Comment message when !with_debug && !executor_print_comments -> Stdio.printf "%s\n%!" message
     | Staged_compilation exp -> exp ()
-    | Dynamic_indices
-        { tensor = { id; field = Value }; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
-        dynamic_indices env (N.get id).value ~tensor_idcs ~dynamic_idcs ~target_dims body
-    | Dynamic_indices
-        { tensor = { id; field = Grad }; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
-        dynamic_indices env (Option.value_exn (N.get id).grad) ~tensor_idcs ~dynamic_idcs ~target_dims body
+    | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
+        dynamic_indices env
+          (Option.value_exn @@ NodeUI.get_tensor tensor)
+          ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Comment c ->
         if !debug_trace_interpretation then (
           Caml.Format.printf "TRACE: %s -- prior state of nodes: {\n%!" c;

@@ -168,8 +168,6 @@ let global = { unique_id = 1; node_store = Hashtbl.create (module Int) }
 let global_host_size_in_bytes () =
   Hashtbl.fold global.node_store ~init:0 ~f:(fun ~key:_ ~data sum -> sum + host_size_in_bytes data)
 
-let get uid = Hashtbl.find_exn global.node_store uid
-
 (** Constructs a node with empty tensors of the specified precision and registers it in the global store.
     Note that the precision for gradients should not be lower than the precision for values. *)
 let create (type grad_elt_t value_elt_t) ~(value_prec : value_elt_t bigarray precision)
