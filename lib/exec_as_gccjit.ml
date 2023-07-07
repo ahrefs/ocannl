@@ -48,7 +48,7 @@ let hoist_dynamic_indices = ref false
 type state = {
   ctx : Gccjit.context;
   func : Gccjit.function_;
-  tensors : (NodeUI.tensor_ptr, tensor) Hashtbl.Poly.t;
+  tensors : (Node.tensor_ptr, tensor) Hashtbl.Poly.t;
   traced_store : Code.traced_store;
   task_init_block : Gccjit.block;
   task_finalize_block : Gccjit.block;
@@ -78,14 +78,14 @@ let get_tensor
     } ?force_sync ~jit_code ~host_idcs ptr : tensor =
   let open Gccjit in
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
-      let n = NodeUI.(get ptr.id) in
+      let n = Node.(get ptr.id) in
       let tn = Code.(get_node traced_store ptr) in
-      let host_size_in_bytes = NodeUI.host_size_in_bytes ptr in
+      let host_size_in_bytes = Node.host_size_in_bytes ptr in
       let axes = Shape.to_dims n.shape in
       let device_dims = axes |> Array.map ~f:(fun d -> d.dim) in
       let device_size = Array.fold ~init:1 ~f:( * ) device_dims in
-      let arr = Option.value_exn @@ NodeUI.get_tensor ptr in
-      let device_size_in_bytes = device_size * Node.precision_in_bytes arr in
+      let arr = Option.value_exn @@ Node.get_tensor ptr in
+      let device_size_in_bytes = device_size * Ndarray.precision_in_bytes arr in
       let local_is_slice_of_host =
         Array.fold_until axes ~init:true
           ~f:
@@ -101,7 +101,7 @@ let get_tensor
       let tensor c_typ is_double arr =
         let num_typ = Type.(get ctx c_typ) in
         let hosted_ptr =
-          if Array.is_empty @@ Node.A.dims arr then None
+          if Array.is_empty @@ Ndarray.A.dims arr then None
           else Some (RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray arr)
         in
         let is_parallel =
@@ -123,11 +123,11 @@ let get_tensor
                   Caml.Format.printf "\nWARNING: No sync for tensor: %a@ node: %a\n%!" Sexp.pp_hum
                     ([%sexp_of: Code.traced_tensor] tn)
                     Sexp.pp_hum
-                    ([%sexp_of: NodeUI.t] n);
+                    ([%sexp_of: Node.t] n);
                 raise Unknown_synchronization))
         in
         let arr_typ = Type.array ctx num_typ device_size in
-        let local = Function.local func arr_typ @@ NodeUI.tensor_ptr_name ptr in
+        let local = Function.local func arr_typ @@ Node.tensor_ptr_name ptr in
         let host_dims = Bigarray.Genarray.dims arr in
         let cast_void rv = RValue.cast ctx rv c_void_ptr in
         if tn.zero_initialized && not update_on_host then
@@ -173,7 +173,7 @@ let get_tensor
                      [
                        RValue.string_literal ctx
                          ("\nDEBUG: copy to host "
-                         ^ Sexp.to_string_hum ([%sexp_of: NodeUI.tensor_ptr] ptr)
+                         ^ Sexp.to_string_hum ([%sexp_of: Node.tensor_ptr] ptr)
                          ^ " -- index: %d; size: %d: \n");
                          offset;
                          RValue.int ctx c_index device_size_in_bytes;
@@ -191,7 +191,7 @@ let get_tensor
               ignore jit_code;
               failwith "Exec_as_gccjit: non-slice hosted: NOT IMPLEMENTED YET"));
         let backend_info =
-          (if NodeUI.equal_data_kind ptr.field Value then "v:" else "g:")
+          (if Node.equal_data_kind ptr.field Value then "v:" else "g:")
           ^ (Sexp.to_string_hum @@ sexp_of_sync_properties sync)
           ^ ";"
         in
@@ -226,12 +226,12 @@ let cleanup_session () =
 let prec_to_kind prec =
   let open Gccjit in
   match prec with
-  | NodeUI.Void_prec -> Type.Void
+  | Node.Void_prec -> Type.Void
   | Half_prec _ -> (* FIXME: *) Type.Unsigned_short
   | Single_prec _ -> Type.Float
   | Double_prec _ -> Type.Double
 
-let prec_is_double = function NodeUI.Double_prec _ -> true | _ -> false
+let prec_is_double = function Node.Double_prec _ -> true | _ -> false
 
 let is_builtin_op = function
   | Code.Add | Code.Mul -> true
@@ -365,7 +365,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
         | None -> loop ~name body)
     | Set (_, _, Binop (Arg2, Get (_, _), _)) -> assert false
     | Set (tensor, idcs, Binop (op, Get (tensor2, idcs2), c2))
-      when NodeUI.equal_tensor_ptr tensor tensor2
+      when Node.equal_tensor_ptr tensor tensor2
            && [%equal: Shape.axis_index array] idcs idcs2
            && is_builtin_op op ->
         (* FIXME: maybe it's not worth it? *)
@@ -382,7 +382,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
           Block.assign !current_block device_lhs (RValue.lvalue host_lhs))
         else Block.assign_op !current_block device_lhs (builtin_op op) value
     | Set (tensor, idcs, Binop (op, Get (tensor2, idcs2), c2))
-      when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
+      when Node.equal_tensor_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
@@ -405,7 +405,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
           in
           Block.assign !current_block device_lhs rhs
     | Set (tensor, idcs, Binop (op, c2, Get (tensor2, idcs2)))
-      when NodeUI.equal_tensor_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
+      when Node.equal_tensor_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
@@ -429,8 +429,8 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
           Block.assign !current_block device_lhs rhs
     | Set (ptr, idcs, value) -> (
         let host_idcs = lookup ~on_host:true env idcs in
-        let n = NodeUI.get ptr.id in
-        let distributive = NodeUI.equal_data_kind ptr.field Grad || n.value_distributes_over_sum in
+        let n = Node.get ptr.id in
+        let distributive = Node.equal_data_kind ptr.field Grad || n.value_distributes_over_sum in
         match get_tensor state ~jit_code:loop_proc ~host_idcs ptr with
         | tensor ->
             let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
@@ -446,7 +446,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
         if Hashtbl.mem state.tensors ptr then
           failwith
             ("exec_as_gccjit: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
-            @@ [%sexp_of: NodeUI.tensor_ptr] ptr);
+            @@ [%sexp_of: Node.tensor_ptr] ptr);
         let tn = Code.(get_node state.traced_store ptr) in
         assert tn.zero_initialized
         (* The initialization will be emitted by get_tensor. *)

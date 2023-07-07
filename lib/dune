@@ -17,8 +17,8 @@
   (pps ppx_jane ppx_ocannl ppx_minidebug))
  (modules
   PrintBox_utils
+  ndarray
   node
-  nodeUI
   shape
   code
   formula

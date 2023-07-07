@@ -8,8 +8,8 @@ let add =
   let module NFDSL = struct
     module O = struct end
   end in
-  let%nn_cd op_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~(n2 : NodeUI.t) ~projections = n =: n1 + n2 in
-  let%nn_cd grad_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~(n2 : NodeUI.t) ~projections =
+  let%nn_cd op_body ~(n : Node.t) ~(n1 : Node.t) ~(n2 : Node.t) ~projections = n =: n1 + n2 in
+  let%nn_cd grad_body ~(n : Node.t) ~(n1 : Node.t) ~(n2 : Node.t) ~projections =
     n1.grad =+ n.grad || n2.grad =+ n.grad
   in
   Formula.binop ~compose_op:Pointwise_bin ~op_label:"+" ~op_body ~grad_body
@@ -19,8 +19,8 @@ let pointmul =
   let module NFDSL = struct
     module O = struct end
   end in
-  let%nn_cd op_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~(n2 : NodeUI.t) ~projections = n =: n1 * n2 in
-  let%nn_cd grad_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~(n2 : NodeUI.t) ~projections =
+  let%nn_cd op_body ~(n : Node.t) ~(n1 : Node.t) ~(n2 : Node.t) ~projections = n =: n1 * n2 in
+  let%nn_cd grad_body ~(n : Node.t) ~(n1 : Node.t) ~(n2 : Node.t) ~projections =
     n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad
   in
   Formula.binop ~compose_op:Pointwise_bin ~op_label:"*." ~op_body ~grad_body
@@ -37,8 +37,8 @@ let matmul =
   let module NFDSL = struct
     module O = struct end
   end in
-  let%nn_cd op_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~(n2 : NodeUI.t) ~projections = n =:+ n1 * n2 in
-  let%nn_cd grad_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~(n2 : NodeUI.t) ~projections =
+  let%nn_cd op_body ~(n : Node.t) ~(n1 : Node.t) ~(n2 : Node.t) ~projections = n =:+ n1 * n2 in
+  let%nn_cd grad_body ~(n : Node.t) ~(n1 : Node.t) ~(n2 : Node.t) ~projections =
     n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad
   in
   Formula.binop ~compose_op:Compose ~op_label:"*" ~op_body ~grad_body
@@ -53,8 +53,8 @@ let einsum ?desc_label spec =
   let module NFDSL = struct
     module O = struct end
   end in
-  let%nn_cd op_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~(n2 : NodeUI.t) ~projections = n =:+ n1 * n2 in
-  let%nn_cd grad_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~(n2 : NodeUI.t) ~projections =
+  let%nn_cd op_body ~(n : Node.t) ~(n1 : Node.t) ~(n2 : Node.t) ~projections = n =:+ n1 * n2 in
+  let%nn_cd grad_body ~(n : Node.t) ~(n1 : Node.t) ~(n2 : Node.t) ~projections =
     n1.grad =+ n.grad * n2 || n2.grad =+ n1 * n.grad
   in
   Formula.binop ?desc_label ~compose_op:(Einsum spec) ~op_label:";=>" ~op_body ~grad_body
@@ -69,8 +69,8 @@ let einsum1 ?desc_label spec =
   let module NFDSL = struct
     module O = struct end
   end in
-  let%nn_cd op_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~projections = n =:+ n1 in
-  let%nn_cd grad_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~projections = n1.grad =+ n.grad in
+  let%nn_cd op_body ~(n : Node.t) ~(n1 : Node.t) ~projections = n =:+ n1 in
+  let%nn_cd grad_body ~(n : Node.t) ~(n1 : Node.t) ~projections = n1.grad =+ n.grad in
   Formula.unop ?desc_label ~transpose_op:(Permute spec) ~op_label:"=>" ~op_body ~grad_body
 
 let relu =
@@ -78,8 +78,8 @@ let relu =
   let module NFDSL = struct
     module O = struct end
   end in
-  let%nn_cd op_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~projections = n =: !/n1 ~projections in
-  let%nn_cd grad_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~projections = n1.grad =+ n -?/ n.grad in
+  let%nn_cd op_body ~(n : Node.t) ~(n1 : Node.t) ~projections = n =: !/n1 ~projections in
+  let%nn_cd grad_body ~(n : Node.t) ~(n1 : Node.t) ~projections = n1.grad =+ n -?/ n.grad in
   Formula.unop ~transpose_op:Pointwise_un ~op_label:"r" ~op_body ~grad_body
 
 let subtensor_label ~over_kind ~from_left ~other_axes_pointwise =
@@ -92,8 +92,8 @@ let dynamic_subtensor ?indexed_dims ~over_kind ~from_left ~other_axes_pointwise 
   let module NFDSL = struct
     module O = struct end
   end in
-  let%nn_cd op_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~(n2 : NodeUI.t) ~projections = n =: n1 -@> n2 in
-  let%nn_cd grad_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~(n2 : NodeUI.t) ~projections =
+  let%nn_cd op_body ~(n : Node.t) ~(n1 : Node.t) ~(n2 : Node.t) ~projections = n =: n1 -@> n2 in
+  let%nn_cd grad_body ~(n : Node.t) ~(n1 : Node.t) ~(n2 : Node.t) ~projections =
     (* [projections] tracks the dynamic indexing for [n] (and not [n1]) as a slice.
        [-@>] simply means [Arg1]: take the first argument, ignore the second argument. *)
     n1.grad =+ n.grad -@> n2
@@ -165,14 +165,14 @@ let rec pointpow ?desc_label ~is_form p m1 : Formula.t =
   end in
   let open Code in
   let p_f = Formula.number ~is_form p in
-  let%nn_cd op_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~(n2 : NodeUI.t) ~projections =
+  let%nn_cd op_body ~(n : Node.t) ~(n1 : Node.t) ~(n2 : Node.t) ~projections =
     n =: n1 ** n2 ~projections
   in
   let%nn_cd grad_body =
     if not is_form then fun ~n:_ ~n1:_ ~n2:_ ~projections:_ -> Noop
-    else if Float.equal p 2.0 then fun ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~n2:_ ~projections ->
+    else if Float.equal p 2.0 then fun ~(n : Node.t) ~(n1 : Node.t) ~n2:_ ~projections ->
       n1.grad =+ p_f *. m1 * n.grad
-    else fun ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~n2:_ ~projections ->
+    else fun ~(n : Node.t) ~(n1 : Node.t) ~n2:_ ~projections ->
       n1.grad =+ p_f *. (m1 **. (p -. 1.)) * n.grad
   in
   Formula.binop ?desc_label ~compose_op:Pointwise_bin ~op_label:"**." ~op_body ~grad_body ~is_form m1 p_f
@@ -188,7 +188,7 @@ let range_of_shape ?desc_label ~is_form ?(batch_dims = []) ?(input_dims = []) ?(
     () =
   let dims = Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list in
   Formula.term ?desc_label ~is_form ~needs_gradient:false ~batch_dims ~input_dims ~output_dims ?axis_labels
-    ~label:("r" ^ NodeUI.dims_to_string dims)
+    ~label:("r" ^ Node.dims_to_string dims)
     ~init_op:Range_over_offsets ()
 
 (** In {!Formula.term} the omitted axes are {!Shape.Unknown} -- to be inferred, here they are known and empty.  *)
@@ -207,12 +207,12 @@ let assign =
   let module NFDSL = struct
     module O = struct end
   end in
-  let%nn_cd assign ~(lhs : NodeUI.tensor_ptr) ~(rhs : NodeUI.tensor_ptr) ~projections =
+  let%nn_cd assign ~(lhs : Node.tensor_ptr) ~(rhs : Node.tensor_ptr) ~projections =
     lhs =: rhs ~projections
   in
   assign
 
-let assign_op field ~(n : NodeUI.t) ~(n1 : NodeUI.t) ~projections =
+let assign_op field ~(n : Node.t) ~(n1 : Node.t) ~projections =
   assign ~lhs:(field n) ~rhs:(field n1) ~projections
 
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
@@ -227,7 +227,7 @@ let stop_broadcast m = Shape.set_dims_type m.Formula.shape Shape.fixed
 
 (** [identity] introduces a new node, which is an identity in both the forward and backward pass. *)
 let identity ?desc_label ~is_form m =
-  let grad_body ~(n : NodeUI.t) ~(n1 : NodeUI.t) = assign_op (Code.CDSL.data_of_node Grad) ~n:n1 ~n1:n in
+  let grad_body ~(n : Node.t) ~(n1 : Node.t) = assign_op (Code.CDSL.data_of_node Grad) ~n:n1 ~n1:n in
   let op_body = assign_op @@ Code.CDSL.data_of_node Value in
   Formula.(
     unop ?desc_label ~init_shape:m.shape ~transpose_op:Pointwise_un ~op_label:"=" ~op_body ~grad_body ~is_form)

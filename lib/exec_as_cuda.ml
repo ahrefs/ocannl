@@ -26,7 +26,7 @@ type sync_properties =
 type mem_scope = Thread | Shared | Global [@@deriving sexp, equal, compare, variants]
 
 type tensor = {
-  hosted : (Node.ndarray[@sexp.opaque]) option;
+  hosted : (Ndarray.t[@sexp.opaque]) option;
       (** Pointer to the first value of the associated [Bigarray], if hosted. *)
   global : string option;  (** A global device array, if any. *)
   global_ptr : (Cudajit.deviceptr Lazy.t[@sexp.opaque]) option;
@@ -61,7 +61,7 @@ let hoist_dynamic_indices = ref false
 
 type session_state = {
   mutable ctx : Cudajit.context option;
-  tensors : (NodeUI.tensor_ptr, tensor) Hashtbl.Poly.t;
+  tensors : (Node.tensor_ptr, tensor) Hashtbl.Poly.t;
   mutable last_module : Cudajit.module_ option;
 }
 
@@ -110,12 +110,12 @@ let pp_get_run_ptr ppf tensor =
   | None, None -> assert false
 
 let prec_to_c_type = function
-  | NodeUI.Void_prec -> "void"
+  | Node.Void_prec -> "void"
   | Half_prec _ -> (* FIXME: *) "uint16"
   | Single_prec _ -> "float"
   | Double_prec _ -> "double"
 
-let prec_is_double = function NodeUI.Double_prec _ -> true | _ -> false
+let prec_is_double = function Node.Double_prec _ -> true | _ -> false
 
 let scope_of_sync = function
   | Thread_only | Update_globally_for_thread | Thread_parallel -> Thread
@@ -129,18 +129,18 @@ let compute_array_offset ~idcs ~dims =
 let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~idcs ptr : tensor =
   let { tensors; _ } = session_state in
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
-      let n = NodeUI.(get ptr.id) in
+      let n = Node.(get ptr.id) in
       let tn = Code.(get_node traced_store ptr) in
-      let host_size_in_bytes = NodeUI.host_size_in_bytes ptr in
+      let host_size_in_bytes = Node.host_size_in_bytes ptr in
       let dims = Shape.to_dims n.shape in
       let global_length =
         dims
         |> Array.filter_map ~f:(function Shape.{ special = Frozen; _ } -> None | d -> Some d.dim)
         |> Array.fold ~init:1 ~f:( * )
       in
-      let arr = Option.value_exn @@ NodeUI.get_tensor ptr in
-      let hosted = if Array.is_empty @@ Node.dims arr then None else Some arr in
-      let global_size_in_bytes = global_length * Node.precision_in_bytes arr in
+      let arr = Option.value_exn @@ Node.get_tensor ptr in
+      let hosted = if Array.is_empty @@ Ndarray.dims arr then None else Some arr in
+      let global_size_in_bytes = global_length * Ndarray.precision_in_bytes arr in
       let global_is_slice_of_host =
         Array.fold_until dims ~init:true
           ~f:
@@ -208,7 +208,7 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~idcs ptr : tensor =
                   Caml.Format.printf "\nWARNING: Non-local sync for tensor: %a@ node: %a\n%!" Sexp.pp_hum
                     ([%sexp_of: Code.traced_tensor] tn)
                     Sexp.pp_hum
-                    ([%sexp_of: NodeUI.t] n);
+                    ([%sexp_of: Node.t] n);
                 Non_local))
         in
         let has_global_mem = not (is_thread_only sync || is_block_only sync) in
@@ -224,7 +224,7 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~idcs ptr : tensor =
                    (* Defer till after compilation, to access the compiled-into module. *)
                    Cudajit.module_get_global
                      (Option.value_exn session_state.last_module)
-                     ~name:(NodeUI.tensor_ptr_name ptr)
+                     ~name:(Node.tensor_ptr_name ptr)
                  in
                  assert (Unsigned.Size_t.to_int size = global_size_in_bytes);
                  ptr)
@@ -232,11 +232,11 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~idcs ptr : tensor =
               (* The general case does not require laziness, but it should be OK. *)
               lazy
                 (if !Code.with_debug then
-                   Stdio.printf "Exec_as_cuda.get_tensor: mem_alloc %s\n%!" (NodeUI.tensor_ptr_name ptr);
+                   Stdio.printf "Exec_as_cuda.get_tensor: mem_alloc %s\n%!" (Node.tensor_ptr_name ptr);
                  Cudajit.mem_alloc ~byte_size:global_size_in_bytes)
         in
-        let global = Option.some_if has_global_mem @@ NodeUI.tensor_ptr_name ptr in
-        let local = Option.some_if has_local_mem @@ NodeUI.tensor_ptr_name ptr ^ "_local" in
+        let global = Option.some_if has_global_mem @@ Node.tensor_ptr_name ptr in
+        let local = Option.some_if has_local_mem @@ Node.tensor_ptr_name ptr ^ "_local" in
         let host_dims = Bigarray.Genarray.dims arr in
         let host_offset =
           Option.bind hosted ~f:(fun _ ->
@@ -258,7 +258,7 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~idcs ptr : tensor =
                 failwith "Exec_as_gccjit: non-slice hosted: NOT IMPLEMENTED YET"))
         in
         let backend_info =
-          (if NodeUI.equal_data_kind ptr.field Value then "v:" else "g:")
+          (if Node.equal_data_kind ptr.field Value then "v:" else "g:")
           ^ (Sexp.to_string_hum @@ sexp_of_sync_properties sync)
           ^ ";"
         in
@@ -285,9 +285,9 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~idcs ptr : tensor =
         }
       in
       match arr with
-      | Half_nd arr -> tensor NodeUI.half false arr
-      | Single_nd arr -> tensor NodeUI.single false arr
-      | Double_nd arr -> tensor NodeUI.double true arr)
+      | Half_nd arr -> tensor Node.half false arr
+      | Single_nd arr -> tensor Node.single false arr
+      | Double_nd arr -> tensor Node.double true arr)
 
 let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
   let open Code in
@@ -349,12 +349,12 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         if Hashtbl.mem session_state.tensors ptr then
           failwith
             ("exec_as_cuda: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
-            @@ [%sexp_of: NodeUI.tensor_ptr] ptr);
+            @@ [%sexp_of: Node.tensor_ptr] ptr);
         let tn = Code.(get_node traced_store ptr) in
         assert tn.zero_initialized
         (* The initialization will be emitted by get_tensor. *)
     | Set (ptr, idcs, (Binop (op, Get (ptr2, idcs2), v2) as v))
-      when NodeUI.equal_tensor_ptr ptr ptr2 && [%equal: Shape.axis_index array] idcs idcs2 ->
+      when Node.equal_tensor_ptr ptr ptr2 && [%equal: Shape.axis_index array] idcs idcs2 ->
         let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
         let old_locals = !locals in
         let num_typ = tensor.num_typ and is_double = tensor.is_double in
@@ -654,8 +654,8 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
           if tn.read_before_write then (
             let f src = Cu.memcpy_H_to_D ?host_offset ~length:global_length ~dst ~src () in
             if verbose && !Code.with_debug then
-              Stdio.printf "Exec_as_cuda.jit_func: memcpy_H_to_D for %s\n%!" (NodeUI.tensor_ptr_name ptr);
-            Node.map_as_bigarray { f } ndarray)
+              Stdio.printf "Exec_as_cuda.jit_func: memcpy_H_to_D for %s\n%!" (Node.tensor_ptr_name ptr);
+            Ndarray.map_as_bigarray { f } ndarray)
       | _ -> ());
     List.iter tensors ~f:(function
       | ptr, { global_ptr = Some (lazy device); global_size_in_bytes; _ } ->
@@ -674,8 +674,8 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
           if not tn.read_only then (
             let f dst = Cu.memcpy_D_to_H ?host_offset ~length:global_length ~dst ~src () in
             if verbose && !Code.with_debug then
-              Stdio.printf "Exec_as_cuda.jit_func: memcpy_D_to_H for %s\n%!" (NodeUI.tensor_ptr_name ptr);
-            Node.map_as_bigarray { f } ndarray)
+              Stdio.printf "Exec_as_cuda.jit_func: memcpy_D_to_H for %s\n%!" (Node.tensor_ptr_name ptr);
+            Ndarray.map_as_bigarray { f } ndarray)
       | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit_func: kernel run finished\n%!"
 

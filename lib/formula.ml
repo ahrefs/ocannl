@@ -17,7 +17,7 @@ type t = {
   form : form option;
   nonform_forward_body : Code.t;  (** Same as [forward_body] if [form] is [None], otherwise [Code.Noop]. *)
   id : int;
-  node : NodeUI.t;  (** Tracks the computation node. *)
+  node : Node.t;  (** Tracks the computation node. *)
   shape_logic : Shape.logic;
       (** How to do the last update of [t.shape] when finalizing the formula.
       It is stored with the formula for debugging (shape inference does not need to retrieve it). *)
@@ -67,20 +67,20 @@ let session_postprocess : Code.t list ref = ref []
     fetching operations. This condition is checked automatically. *)
 let first_session_id = ref 1
 
-let default_value_prec = ref NodeUI.single
-let default_grad_prec = ref NodeUI.single
+let default_value_prec = ref Node.single
+let default_grad_prec = ref Node.single
 
 exception Session_error of string * t option [@@deriving sexp]
 
 (** Prefix the input with the header information of all nodes within the current session. *)
 let prefix_with_preamble content =
-  (* FIXME: remove or move to NodeUI? *)
+  (* FIXME: remove or move to Node? *)
   let result = Buffer.create 16 in
   let ap = Buffer.add_string result in
-  for id = !first_session_id to Node.global.unique_id - 1 do
-    let n = NodeUI.get id in
+  for id = !first_session_id to !Node.unique_id - 1 do
+    let n = Node.get id in
     ap "Node ";
-    ap @@ NodeUI.node_header n;
+    ap @@ Node.node_header n;
     ap ";\n"
   done;
   ap content;
@@ -101,9 +101,9 @@ let create ~id ?(init_op = Code.Constant_fill [| 0.0 |]) field shape =
 let max_sublabel_length = ref 25
 
 let raw_binop ~zero_out ~accum ~lhs_id ~lhs_is_grad ~op ~rhs1_id ~rhs1_is_grad ~rhs2_id ~rhs2_is_grad ~logic =
-  let n = NodeUI.get lhs_id in
-  let n1 = NodeUI.get rhs1_id in
-  let n2 = NodeUI.get rhs2_id in
+  let n = Node.get lhs_id in
+  let n1 = Node.get rhs1_id in
+  let n2 = Node.get rhs2_id in
   let shape = n.shape in
   let shape_logic = Shape.Broadcast (logic, n1.shape, n2.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
@@ -116,8 +116,8 @@ let raw_binop ~zero_out ~accum ~lhs_id ~lhs_is_grad ~op ~rhs1_id ~rhs1_is_grad ~
   Code.Accum_binop { zero_out; accum; lhs; op; rhs1; rhs2; projections }
 
 let raw_unop ~zero_out ~accum ~lhs_id ~lhs_is_grad ~op ~rhs_id ~rhs_is_grad ~logic =
-  let n = NodeUI.get lhs_id in
-  let n1 = NodeUI.get rhs_id in
+  let n = Node.get lhs_id in
+  let n1 = Node.get rhs_id in
   let shape = n.shape in
   let shape_logic = Shape.Transpose (logic, n1.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
@@ -141,7 +141,7 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
   in
   let children =
     [
-      { NodeUI.sub_node_id = m1.id; computed_externally = m1_processed };
+      { Node.sub_node_id = m1.id; computed_externally = m1_processed };
       { sub_node_id = m2.id; computed_externally = m2_processed };
     ]
   in
@@ -153,7 +153,7 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
     | _ -> false
   in
   let n =
-    NodeUI.create_of_promoted_precision ~needs_gradient m1.node.node m2.node.node ~op_label ?desc_label
+    Node.create_of_promoted_precision ~needs_gradient m1.node.node m2.node.node ~op_label ?desc_label
       ~children ()
   in
   let id = n.id in
@@ -247,10 +247,10 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
 let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1 : t =
   (* Note: do not capture m in any closure, so it can be GC'd. *)
   let m1_processed = Option.is_some m1.form && (not @@ Map.mem !global_roots m1.id) in
-  let children = [ { NodeUI.sub_node_id = m1.id; computed_externally = m1_processed } ] in
+  let children = [ { Node.sub_node_id = m1.id; computed_externally = m1_processed } ] in
   let needs_gradient = match m1.form with Some form1 -> form1.needs_gradient | None -> false in
   let n =
-    NodeUI.create_of_same_precision_as ~needs_gradient m1.node.node ~op_label ?desc_label ~children ()
+    Node.create_of_same_precision_as ~needs_gradient m1.node.node ~op_label ?desc_label ~children ()
   in
   let id = n.id in
   let shape = n.shape in
@@ -339,8 +339,8 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
       | _ -> false
   in
   let op_label : string = label in
-  let n : NodeUI.t =
-    NodeUI.create ~value_prec:!default_value_prec ~grad_prec:!default_grad_prec ~literal ~needs_gradient ()
+  let n : Node.t =
+    Node.create ~value_prec:!default_value_prec ~grad_prec:!default_grad_prec ~literal ~needs_gradient ()
       ~op_label ?desc_label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children:[] ()
   in
   let id = n.id in
@@ -483,15 +483,15 @@ let ndarray ?desc_label ~is_form ?(needs_gradient = false) ?(batch_dims = []) ?(
           ~margin:(!max_sublabel_length * 2);
         let ( ! ) = Array.of_list_map ~f:(fun d -> d.Shape.dim) in
         let dims = Array.concat [ !batch_dims; !output_dims; !input_dims ] in
-        let ndarr = Node.create_ndarray Double dims (Constant_fill values) in
+        let ndarr = Ndarray.create Double dims (Constant_fill values) in
         let ( ! ) = List.length in
-        NodeUI.pp_tensor_inline ~num_batch_axes:!batch_dims ~num_output_axes:!output_dims
+        Node.pp_tensor_inline ~num_batch_axes:!batch_dims ~num_output_axes:!output_dims
           ~num_input_axes:!input_dims Caml.Format.str_formatter ndarr;
         Caml.Format.flush_str_formatter ()
   in
   let label =
     if String.contains label '\n' then
-      "c" ^ NodeUI.dims_to_string
+      "c" ^ Node.dims_to_string
       @@ Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list
     else label
   in
