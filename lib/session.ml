@@ -172,8 +172,7 @@ let initialize_host_tensors traced_store =
     | { Code.tensor = { id; field = Value } as ptr; dims; init_op } ->
         let tn = Code.get_node traced_store ptr in
         if tn.non_virtual && tn.non_device_only then
-          (NodeUI.get id).node.value <-
-            NodeUI.create_ndarray !Formula.default_value_prec (dims ()) init_op
+          (NodeUI.get id).node.value <- NodeUI.create_ndarray !Formula.default_value_prec (dims ()) init_op
     | { tensor = { id; field = Grad } as ptr; dims; init_op } ->
         let tn = Code.get_node traced_store ptr in
         let n = (NodeUI.get id).node in

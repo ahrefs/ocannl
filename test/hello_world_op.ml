@@ -439,8 +439,11 @@ let%expect_test "Very big tensor" =
   drop_all_sessions ();
   Random.init 0;
   let hey =
-    FDSL.range_of_shape ~batch_dims:[ CDSL.dim 6 ] ~input_dims:[ CDSL.dim 7; CDSL.dim 8; CDSL.dim 9 ]
-      ~output_dims:[ CDSL.dim 10; CDSL.dim 11 ] ()
+    FDSL.range_of_shape
+      ~batch_dims:[ CDSL.dim 6 ]
+      ~input_dims:[ CDSL.dim 7; CDSL.dim 8; CDSL.dim 9 ]
+      ~output_dims:[ CDSL.dim 10; CDSL.dim 11 ]
+      ()
   in
   let%nn_op hoo = (hey * (1 + 1)) - 10 in
   refresh_session ();

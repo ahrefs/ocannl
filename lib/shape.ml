@@ -1099,7 +1099,6 @@ let symbol_ident (Symbol s as sym) =
 let is_dedicated_any sym = task_id_sym sym || sample_num_sym sym
 let is_dedicated_kind = function Task_id -> task_id_sym | Sample_num -> sample_num_sym
 
-
 let iterated = function
   | { special = Dim; dim } when dim > 1 -> true
   (* | { special = Dedicated Sample_num; dim } when !iterate_sample_num && dim > 1 -> true *)

@@ -163,7 +163,7 @@ let convert_dsl_dims dims =
     | { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = loc; _ } as i -> [%expr Shape.dim [%e i]]
     | { pexp_desc = Pexp_ident { txt = Lident "parallel"; loc }; pexp_loc = _; _ } ->
         [%expr Shape.{ special = Dedicated Task_id; dim = !Session.num_parallel_tasks }]
-        (* FIXME: *)
+    (* FIXME: *)
     (* | { pexp_desc = Pexp_ident { txt = Lident "minibatch"; loc }; pexp_loc = _; _ } ->
         [%expr Shape.{ special = Dedicated Sample_num; dim =  }] *)
     | e -> e)
