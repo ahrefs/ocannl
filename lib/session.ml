@@ -361,6 +361,15 @@ let drop_all_sessions () =
   Hashtbl.clear Node.global.node_store;
   Node.global.unique_id <- 1
 
+let save_all_tensors ~name =
+  let out = Npy.Npz.open_out (name ^ ".npz") in
+  Hashtbl.iter NodeUI.global_node_store ~f:(fun n ->
+      let save field arr = Npy.Npz.write out NodeUI.(tensor_ptr_name { id = n.id; field }) arr in
+      let f arr = save Value arr in
+      Node.map_as_bigarray { f } n.node.value;
+      let f arr = save Grad arr in
+      Option.iter n.node.grad ~f:(Node.map_as_bigarray { f }))
+
 let value_1d_points ?from_axis ~xdim m = NodeUI.retrieve_1d_points ?from_axis ~xdim m.Formula.node.node.value
 
 let value_2d_points ?from_axis ~xdim ~ydim m =

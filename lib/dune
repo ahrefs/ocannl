@@ -5,6 +5,7 @@
   core
   printbox
   printbox-text
+  npy
   stdio
   domainslib
   dynlink

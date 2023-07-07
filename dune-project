@@ -34,6 +34,7 @@
   domainslib
   printbox
   printbox-text
+  npy
   stdio
   ppxlib
   ppx_jane
