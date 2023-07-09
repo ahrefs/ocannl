@@ -369,6 +369,28 @@ let save_all_tensors ~name =
       let f arr = save Grad arr in
       Option.iter n.node.grad ~f:(Ndarray.map { f }))
 
+(** Restores the content of already-existing tensors from the file [name ^ ".npz"]. With [~partially:true],
+    does not complain about tensors missing in the file. *)
+let restore_tensors ?(partially = false) f_name =
+  let inp = Npy.Npz.open_in (f_name ^ ".npz") in
+  Hashtbl.iteri Node.global_node_store ~f:(fun ~key:id ~data:n ->
+      let restore field =
+        let ptr = Node.{ id; field } in
+        match Node.get_tensor ptr with
+        | None -> ()
+        | Some arr ->
+            let t_name = Node.(tensor_ptr_name { id = n.id; field }) in
+            let src = Npy.Npz.read inp t_name in
+            let f prec dst =
+              match Npy.to_bigarray Bigarray.c_layout (Ndarray.precision_to_bigarray_kind prec) src with
+              | None -> if not partially then failwith ("Session.restore_tensors: missing tensor " ^ t_name)
+              | Some src -> Ndarray.A.blit src dst
+            in
+            Ndarray.map_with_prec { f } arr
+      in
+      restore Value;
+      restore Node.Grad)
+
 let value_1d_points ?from_axis ~xdim m = Ndarray.retrieve_1d_points ?from_axis ~xdim m.Formula.node.node.value
 
 let value_2d_points ?from_axis ~xdim ~ydim m =
