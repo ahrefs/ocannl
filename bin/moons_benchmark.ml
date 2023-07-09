@@ -266,7 +266,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
          * int
          * string
          * int
-         * Node.prec]
+         * Ndarray.prec]
          ( (if on_device then "on-dev" else "non-d."),
            (* executor, *)
            "gcc-opt",

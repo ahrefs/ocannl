@@ -67,8 +67,8 @@ let session_postprocess : Code.t list ref = ref []
     fetching operations. This condition is checked automatically. *)
 let first_session_id = ref 1
 
-let default_value_prec = ref Node.single
-let default_grad_prec = ref Node.single
+let default_value_prec = ref Ndarray.single
+let default_grad_prec = ref Ndarray.single
 
 exception Session_error of string * t option [@@deriving sexp]
 
@@ -483,7 +483,7 @@ let ndarray ?desc_label ~is_form ?(needs_gradient = false) ?(batch_dims = []) ?(
           ~margin:(!max_sublabel_length * 2);
         let ( ! ) = Array.of_list_map ~f:(fun d -> d.Shape.dim) in
         let dims = Array.concat [ !batch_dims; !output_dims; !input_dims ] in
-        let ndarr = Ndarray.create Double dims (Constant_fill values) in
+        let ndarr = Ndarray.create Ndarray.double dims (Constant_fill values) in
         let ( ! ) = List.length in
         Node.pp_tensor_inline ~num_batch_axes:!batch_dims ~num_output_axes:!output_dims
           ~num_input_axes:!input_dims Caml.Format.str_formatter ndarr;

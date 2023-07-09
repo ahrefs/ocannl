@@ -43,30 +43,55 @@ let as_t (type arr_t) (prec : arr_t precision) (arr : arr_t) =
   match prec with Half -> Half_nd arr | Single -> Single_nd arr | Double -> Double_nd arr
 
 let precision_to_bigarray_kind (type elt_t) (prec : elt_t bigarray precision) : (float, elt_t) Bigarray.kind =
-  match prec with
-  | Half -> float16
-  | Single -> Bigarray.Float32
-  | Double -> Bigarray.Float64
-  | _ -> . (* invalid_arg "precision_to_bigarray_kind: not a Bigarray precision" *)
+  match prec with Half -> float16 | Single -> Bigarray.Float32 | Double -> Bigarray.Float64
 
 let precision_to_string (type arr_t) (prec : arr_t precision) =
   match prec with Half -> "half" | Single -> "single" | Double -> "double"
 
-let precision_string = function
-  | Half_nd _ -> "half"
-  | Single_nd _ -> "single"
-  | Double_nd _ -> "double"
-
+let precision_string = function Half_nd _ -> "half" | Single_nd _ -> "single" | Double_nd _ -> "double"
 let default_kind = Single
+
+type prec =
+  | Void_prec : prec
+  | Half_prec : half_nd precision -> prec
+  | Single_prec : single_nd precision -> prec
+  | Double_prec : double_nd precision -> prec
+
+let half = Half_prec Half
+let single = Single_prec Single
+let double = Double_prec Double
+
+let is_double_prec_t = function Double_nd _ -> true | _ -> false
+let is_double (type arr_t) (prec : arr_t precision) = match prec with Double -> true | _ -> false
+let is_double_prec = function Double_prec _ -> true | _ -> false
+
+let sexp_of_prec = function
+  | Void_prec -> Sexp.Atom "Void_prec"
+  | Half_prec _ -> Sexp.Atom "Half_prec"
+  | Single_prec _ -> Sexp.Atom "Single_prec"
+  | Double_prec _ -> Sexp.Atom "Double_prec"
+
+let prec_of_sexp = function
+  | Sexp.Atom "Void_prec" -> Void_prec
+  | Sexp.Atom "Half_prec" -> half
+  | Sexp.Atom "Single_prec" -> single
+  | Sexp.Atom "Double_prec" -> double
+  | Sexp.List _ -> invalid_arg "prec_of_sexp: expected atom, found list"
+  | Sexp.Atom s -> invalid_arg @@ "prec_of_sexp: unknown precision " ^ s
+
+let pack_prec (type a) (prec : a precision) =
+  match prec with Half -> half | Single -> single | Double -> double
+
+let get_prec = function Half_nd _ -> half | Single_nd _ -> single | Double_nd _ -> double
 
 type 'r map_as_bigarray = { f : 'a. 'a bigarray -> 'r }
 
-let map_as_bigarray { f } = function Half_nd arr -> f arr | Single_nd arr -> f arr | Double_nd arr -> f arr
-let dims = map_as_bigarray { f = A.dims }
+let map { f } = function Half_nd arr -> f arr | Single_nd arr -> f arr | Double_nd arr -> f arr
+let dims = map { f = A.dims }
 
 let get_as_float arr idx =
   let f x = A.get x idx in
-  map_as_bigarray { f } arr
+  map { f } arr
 
 let get_as_int arr idx =
   let f x =
@@ -76,13 +101,36 @@ let get_as_int arr idx =
       Stdio.eprintf "\nOCANNL Runtime error: get_as_int invalid float: %f\n%!" v;
       0
   in
-  map_as_bigarray { f } arr
+  map { f } arr
 
 let set_from_float arr idx v =
   let f x = A.set x idx in
-  map_as_bigarray { f } arr v
+  map { f } arr v
 
-let fill_from_float arr v = map_as_bigarray { f = A.fill } arr v
+let fill_from_float arr v = map { f = A.fill } arr v
+
+type 'r map_prec = { f : 'a. 'a bigarray precision -> 'r }
+
+let iter_prec { f } = function
+  | Void_prec -> ()
+  | Half_prec (Half | Single) -> f Half
+  | Single_prec (Single | Half) -> f Single
+  | Double_prec Double -> f Double
+  | _ -> .
+
+let map_prec ?default { f } = function
+  | Void_prec -> Option.value_or_thunk default ~default:(fun () -> invalid_arg "map_prec: Void_prec")
+  | Half_prec (Half | Single) -> f Half
+  | Single_prec (Single | Half) -> f Single
+  | Double_prec Double -> f Double
+  | _ -> .
+
+type 'r map_with_prec = { f : 'a. 'a bigarray precision -> 'a bigarray -> 'r }
+
+let map_with_prec { f } = function
+  | Half_nd arr -> f Half arr
+  | Single_nd arr -> f Single arr
+  | Double_nd arr -> f Double arr
 
 (** Initializes or resets a tensor by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op =
@@ -115,7 +163,10 @@ let create_array (type elt_t) (prec : elt_t bigarray precision) dims (init_op : 
       init_array_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
   | Standard_uniform -> init_array_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
 
-let create prec dims init_op = as_t prec @@ create_array prec dims init_op
+let create prec dims init_op =
+  let f prec = as_t prec @@ create_array prec dims init_op in
+  map_prec { f } prec
+
 let precision_in_bytes = function Half_nd _ -> 2 | Single_nd _ -> 4 | Double_nd _ -> 8
 
 let reset_bigarray arr ~f =
@@ -159,11 +210,11 @@ let init_bigarray (init_op : init_op) (type b) (arr : b bigarray) =
 
 let init init_op arr =
   let f arr = init_bigarray init_op arr in
-  map_as_bigarray { f } arr
+  map { f } arr
 
 let fold ~init ~f arr =
   let f arr = fold_bigarray ~init ~f arr in
-  map_as_bigarray { f } arr
+  map { f } arr
 
 let retrieve_2d_points ?from_axis ~xdim ~ydim arr =
   let dims = dims arr in

@@ -9,7 +9,7 @@ let host_size_in_bytes n =
   (* Cheating here because 1 number Bigarray is same size as empty Bigarray:
      it's more informative to report the cases differently. *)
   let f arr = if Array.is_empty @@ Nd.A.dims arr then 0 else Nd.A.size_in_bytes arr in
-  let size = Nd.map_as_bigarray { f } in
+  let size = Nd.map { f } in
   size n.value + Option.value_map ~f:size n.grad ~default:0
 
 let unique_id = ref 1
@@ -78,50 +78,16 @@ let host_size_in_bytes ptr =
   (* 1 number bigarray is reporting the same size as an empty bigarray, but we use size 0 to indicate
      that the bigarray is empty. *)
   let f arr = if Array.is_empty @@ Nd.A.dims arr then 0 else Nd.A.size_in_bytes arr in
-  Option.value ~default:0 @@ Option.map ~f:(Nd.map_as_bigarray { f }) @@ get_tensor ptr
+  Option.value ~default:0 @@ Option.map ~f:(Nd.map { f }) @@ get_tensor ptr
 
-type prec =
-  | Void_prec : prec
-  | Half_prec : Nd.half_nd Nd.precision -> prec
-  | Single_prec : Nd.single_nd Nd.precision -> prec
-  | Double_prec : Nd.double_nd Nd.precision -> prec
-
-let half = Half_prec Nd.Half
-let single = Single_prec Nd.Single
-let double = Double_prec Nd.Double
-
-let sexp_of_prec = function
-  | Void_prec -> Sexp.Atom "Void_prec"
-  | Half_prec _ -> Sexp.Atom "Half_prec"
-  | Single_prec _ -> Sexp.Atom "Single_prec"
-  | Double_prec _ -> Sexp.Atom "Double_prec"
-
-let prec_of_sexp = function
-  | Sexp.Atom "Void_prec" -> Void_prec
-  | Sexp.Atom "Half_prec" -> half
-  | Sexp.Atom "Single_prec" -> single
-  | Sexp.Atom "Double_prec" -> double
-  | Sexp.List _ -> invalid_arg "prec_of_sexp: expected atom, found list"
-  | Sexp.Atom s -> invalid_arg @@ "prec_of_sexp: unknown precision " ^ s
-
-let node_prec tensor =
-  match get_tensor tensor with
-  | None -> Void_prec
-  | Some (Nd.Half_nd _) -> half
-  | Some (Nd.Single_nd _) -> single
-  | Some (Nd.Double_nd _) -> double
-
-let create_ndarray prec dims =
-  let dims = Array.map dims ~f:(fun d -> d.Shape.dim) in
-  match prec with
-  | Void_prec -> assert false
-  | Half_prec prec -> Nd.create prec dims
-  | Single_prec prec -> Nd.create prec dims
-  | Double_prec prec -> Nd.create prec dims
+let get_prec ptr =
+  match get_tensor ptr with
+  | None -> Nd.Void_prec
+  | Some arr -> Nd.get_prec arr
 
 (** Constructs a node with empty tensors of the specified precision and registers it in the global store.
     Note that the precision for gradients should not be lower than the precision for values. *)
-let create ~(value_prec : prec) ?(grad_prec : prec option) ?(literal = false) ~needs_gradient () ~op_label
+let create ~(value_prec : Nd.prec) ?(grad_prec : Nd.prec option) ?(literal = false) ~needs_gradient () ~op_label
     ?desc_label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children () =
   let node =
     match value_prec with
@@ -171,9 +137,9 @@ let create ~(value_prec : prec) ?(grad_prec : prec option) ?(literal = false) ~n
 
 let create_of_same_precision_as ~needs_gradient node =
   match (node.value, node.grad) with
-  | Single_nd _, (Some (Single_nd _) | None) -> create ~value_prec:single ~grad_prec:single ~needs_gradient ()
-  | Single_nd _, Some (Double_nd _) -> create ~value_prec:single ~grad_prec:double ~needs_gradient ()
-  | Double_nd _, (Some (Double_nd _) | None) -> create ~value_prec:double ~grad_prec:double ~needs_gradient ()
+  | Single_nd _, (Some (Single_nd _) | None) -> create ~value_prec:Nd.single ~grad_prec:Nd.single ~needs_gradient ()
+  | Single_nd _, Some (Double_nd _) -> create ~value_prec:Nd.single ~grad_prec:Nd.double ~needs_gradient ()
+  | Double_nd _, (Some (Double_nd _) | None) -> create ~value_prec:Nd.double ~grad_prec:Nd.double ~needs_gradient ()
   | _, Some grad ->
       invalid_arg @@ "create_of_same_precision_as: unsupported combination of precisions value: "
       ^ Nd.precision_string node.value
@@ -187,9 +153,9 @@ let create_of_promoted_precision ~needs_gradient n1 n2 =
   | Single_nd _, Single_nd _ -> (
       match (n1.grad, n2.grad) with
       | _, Some (Double_nd _) | Some (Double_nd _), _ ->
-          create ~value_prec:single ~grad_prec:double ~needs_gradient ()
-      | _ -> create ~value_prec:single ~grad_prec:single ~needs_gradient ())
-  | _, Double_nd _ | Double_nd _, _ -> create ~value_prec:double ~grad_prec:double ~needs_gradient ()
+          create ~value_prec:Nd.single ~grad_prec:Nd.double ~needs_gradient ()
+      | _ -> create ~value_prec:Nd.single ~grad_prec:Nd.single ~needs_gradient ())
+  | _, Double_nd _ | Double_nd _, _ -> create ~value_prec:Nd.double ~grad_prec:Nd.double ~needs_gradient ()
   | _ ->
       invalid_arg @@ "create_of_promoted_precision: unsupported combination of precisions n1 value: "
       ^ Nd.precision_string n1.value

@@ -110,12 +110,10 @@ let pp_get_run_ptr ppf tensor =
   | None, None -> assert false
 
 let prec_to_c_type = function
-  | Node.Void_prec -> "void"
+  | Ndarray.Void_prec -> "void"
   | Half_prec _ -> (* FIXME: *) "uint16"
   | Single_prec _ -> "float"
   | Double_prec _ -> "double"
-
-let prec_is_double = function Node.Double_prec _ -> true | _ -> false
 
 let scope_of_sync = function
   | Thread_only | Update_globally_for_thread | Thread_parallel -> Thread
@@ -284,10 +282,8 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~idcs ptr : tensor =
           global_ptr;
         }
       in
-      match arr with
-      | Half_nd arr -> tensor Node.half false arr
-      | Single_nd arr -> tensor Node.single false arr
-      | Double_nd arr -> tensor Node.double true arr)
+      let f big = tensor (Ndarray.get_prec arr) (Ndarray.is_double_prec_t arr) big in
+      Ndarray.map { f } arr)
 
 let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
   let open Code in
@@ -415,7 +411,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         (* Tensors are initialized to 0 by default. However, there is typically an explicit
            initialization for virtual nodes. *)
         fprintf ppf "@[<2>{@ %s v%d = 0;@ " typ i;
-        locals := Map.update !locals id ~f:(fun _ -> (typ, prec_is_double prec));
+        locals := Map.update !locals id ~f:(fun _ -> (typ, Ndarray.is_double_prec prec));
         pp_ll ~dyn_env ppf body;
         pp_print_space ppf ();
         1
@@ -655,7 +651,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
             let f src = Cu.memcpy_H_to_D ?host_offset ~length:global_length ~dst ~src () in
             if verbose && !Code.with_debug then
               Stdio.printf "Exec_as_cuda.jit_func: memcpy_H_to_D for %s\n%!" (Node.tensor_ptr_name ptr);
-            Ndarray.map_as_bigarray { f } ndarray)
+            Ndarray.map { f } ndarray)
       | _ -> ());
     List.iter tensors ~f:(function
       | ptr, { global_ptr = Some (lazy device); global_size_in_bytes; _ } ->
@@ -675,7 +671,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
             let f dst = Cu.memcpy_D_to_H ?host_offset ~length:global_length ~dst ~src () in
             if verbose && !Code.with_debug then
               Stdio.printf "Exec_as_cuda.jit_func: memcpy_D_to_H for %s\n%!" (Node.tensor_ptr_name ptr);
-            Ndarray.map_as_bigarray { f } ndarray)
+            Ndarray.map { f } ndarray)
       | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit_func: kernel run finished\n%!"
 

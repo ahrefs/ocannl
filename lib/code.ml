@@ -128,7 +128,7 @@ type unit_low_level =
 and float_low_level =
   | Local_scope of {
       id : scope_id;
-      prec : Node.prec;
+      prec : Nd.prec;
       body : unit_low_level;
       orig_indices : Shape.axis_index array;
     }
@@ -650,7 +650,7 @@ type visits =
 type traced_tensor = {
   id : int;
   kind : Node.data_kind;
-  prec : Node.prec;
+  prec : Nd.prec;
   mutable computations : (Shape.axis_index array option * unit_low_level) list;
       (** The computations (of the data node) are retrieved for optimization just as they are populated,
           so that the inlined code corresponds precisely to the changes to the tensors that would happen
@@ -701,7 +701,7 @@ let get_node store (ptr : Node.tensor_ptr) =
       {
         id = ptr.id;
         kind = ptr.field;
-        prec = Node.node_prec ptr;
+        prec = Node.get_prec ptr;
         computations = [];
         assignments = Hash_set.Poly.create ();
         accesses = Hashtbl.Poly.create ();
@@ -1328,8 +1328,8 @@ module CDSL = struct
   let value_of_id id : Node.tensor_ptr = { id; field = Value }
   let grad_of_id id : Node.tensor_ptr = { id; field = Grad }
   let data_of_node field (n : Node.t) : Node.tensor_ptr = { id = n.id; field }
-  let single = Node.single
-  let double = Node.double
+  let single = Nd.single
+  let double = Nd.double
   let executor_print_comments = executor_print_comments
   let keep_files_in_run_directory = keep_files_in_run_directory
   let with_debug = with_debug

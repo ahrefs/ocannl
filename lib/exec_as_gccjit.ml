@@ -226,12 +226,12 @@ let cleanup_session () =
 let prec_to_kind prec =
   let open Gccjit in
   match prec with
-  | Node.Void_prec -> Type.Void
+  | Ndarray.Void_prec -> Type.Void
   | Half_prec _ -> (* FIXME: *) Type.Unsigned_short
   | Single_prec _ -> Type.Float
   | Double_prec _ -> Type.Double
 
-let prec_is_double = function Node.Double_prec _ -> true | _ -> false
+let prec_is_double = function Ndarray.Double_prec _ -> true | _ -> false
 
 let is_builtin_op = function
   | Code.Add | Code.Mul -> true

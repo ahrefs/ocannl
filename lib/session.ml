@@ -10,8 +10,7 @@ let get_root id =
       let msg =
         if id >= !first_session_id && id < !Node.unique_id then
           "get_root: Node " ^ Int.to_string id ^ " is a subformula"
-        else if id >= !Node.unique_id then
-          "get_root: Node " ^ Int.to_string id ^ " has not been created yet"
+        else if id >= !Node.unique_id then "get_root: Node " ^ Int.to_string id ^ " has not been created yet"
         else if id < 1 then "get_root: Node IDs start from 1"
         else "get_root: Node " ^ Int.to_string id ^ " is outside the current session"
       in
@@ -170,14 +169,16 @@ let set_executor = function
 let initialize_host_tensors traced_store =
   List.iter ~f:(function
     | { Code.tensor = { id; field = Value } as ptr; dims; init_op } ->
+        let dims = Array.map ~f:(fun d -> d.Shape.dim) @@ dims () in
         let tn = Code.get_node traced_store ptr in
         if tn.non_virtual && tn.non_device_only then
-          (Node.get id).node.value <- Node.create_ndarray !Formula.default_value_prec (dims ()) init_op
+          (Node.get id).node.value <- Ndarray.create !Formula.default_value_prec dims init_op
     | { tensor = { id; field = Grad } as ptr; dims; init_op } ->
+        let dims = Array.map ~f:(fun d -> d.Shape.dim) @@ dims () in
         let tn = Code.get_node traced_store ptr in
         let n = (Node.get id).node in
         if tn.non_virtual && tn.non_device_only then
-          n.grad <- Some (Node.create_ndarray !Formula.default_grad_prec (dims ()) init_op)
+          n.grad <- Some (Ndarray.create !Formula.default_grad_prec dims init_op)
         else assert (Option.is_some n.grad))
 
 let compile_routine ~name code =
@@ -364,9 +365,9 @@ let save_all_tensors ~name =
   Hashtbl.iter Node.global_node_store ~f:(fun n ->
       let save field arr = Npy.Npz.write out Node.(tensor_ptr_name { id = n.id; field }) arr in
       let f arr = save Value arr in
-      Ndarray.map_as_bigarray { f } n.node.value;
+      Ndarray.map { f } n.node.value;
       let f arr = save Grad arr in
-      Option.iter n.node.grad ~f:(Ndarray.map_as_bigarray { f }))
+      Option.iter n.node.grad ~f:(Ndarray.map { f }))
 
 let value_1d_points ?from_axis ~xdim m = Ndarray.retrieve_1d_points ?from_axis ~xdim m.Formula.node.node.value
 
