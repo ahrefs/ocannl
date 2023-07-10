@@ -60,7 +60,6 @@ type prec =
 let half = Half_prec Half
 let single = Single_prec Single
 let double = Double_prec Double
-
 let is_double_prec_t = function Double_nd _ -> true | _ -> false
 let is_double (type arr_t) (prec : arr_t precision) = match prec with Double -> true | _ -> false
 let is_double_prec = function Double_prec _ -> true | _ -> false

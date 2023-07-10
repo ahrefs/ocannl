@@ -692,9 +692,7 @@ let get_node store (ptr : Node.tensor_ptr) =
         match ptr.field with Node.Value -> n.value_never_virtual | Node.Grad -> n.grad_never_virtual
       in
       let never_device_only =
-        match ptr.field with
-        | Node.Value -> n.value_never_device_only
-        | Node.Grad -> n.grad_never_device_only
+        match ptr.field with Node.Value -> n.value_never_device_only | Node.Grad -> n.grad_never_device_only
       in
       let non_virtual = never_virtual || Node.host_size_in_bytes ptr > 0 in
       let non_device_only = never_device_only || Node.host_size_in_bytes ptr > 0 in
@@ -775,9 +773,7 @@ let precompute_constants ?idcs traced_store top_node llv =
     match top_node.kind with Node.Value -> n.value_never_virtual | Node.Grad -> n.grad_never_virtual
   in
   let never_device_only =
-    match top_node.kind with
-    | Node.Value -> n.value_never_device_only
-    | Node.Grad -> n.grad_never_device_only
+    match top_node.kind with Node.Value -> n.value_never_device_only | Node.Grad -> n.grad_never_device_only
   in
   try
     if never_virtual || never_device_only then raise @@ Non_literal 8;
@@ -1231,9 +1227,8 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit_low_level) : u
                     "WARNING: unexpected non-eliminable virtual tensor:@ %a@ Compilation data:@ %a@ \
                      Compilation for the other tensor:@ %a@ Node:@ %a\n\
                      %!"
+                    Sexp.pp_hum (Node.sexp_of_tensor_ptr id.tensor) Sexp.pp_hum (sexp_of_traced_tensor node)
                     Sexp.pp_hum
-                    (Node.sexp_of_tensor_ptr id.tensor)
-                    Sexp.pp_hum (sexp_of_traced_tensor node) Sexp.pp_hum
                     (sexp_of_traced_tensor @@ get_other_node traced_store id.tensor)
                     Sexp.pp_hum
                     (Node.sexp_of_t @@ Node.get id.tensor.id);

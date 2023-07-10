@@ -249,9 +249,7 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
   let m1_processed = Option.is_some m1.form && (not @@ Map.mem !global_roots m1.id) in
   let children = [ { Node.sub_node_id = m1.id; computed_externally = m1_processed } ] in
   let needs_gradient = match m1.form with Some form1 -> form1.needs_gradient | None -> false in
-  let n =
-    Node.create_of_same_precision_as ~needs_gradient m1.node.node ~op_label ?desc_label ~children ()
-  in
+  let n = Node.create_of_same_precision_as ~needs_gradient m1.node.node ~op_label ?desc_label ~children () in
   let id = n.id in
   let shape = n.shape in
   (match init_shape with
@@ -491,8 +489,7 @@ let ndarray ?desc_label ~is_form ?(needs_gradient = false) ?(batch_dims = []) ?(
   in
   let label =
     if String.contains label '\n' then
-      "c" ^ Node.dims_to_string
-      @@ Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list
+      "c" ^ Node.dims_to_string @@ Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list
     else label
   in
   term ?desc_label ~needs_gradient ~is_form ~batch_dims ~input_dims ~output_dims ?axis_labels

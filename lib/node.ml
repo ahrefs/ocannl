@@ -80,15 +80,12 @@ let host_size_in_bytes ptr =
   let f arr = if Array.is_empty @@ Nd.A.dims arr then 0 else Nd.A.size_in_bytes arr in
   Option.value ~default:0 @@ Option.map ~f:(Nd.map { f }) @@ get_tensor ptr
 
-let get_prec ptr =
-  match get_tensor ptr with
-  | None -> Nd.Void_prec
-  | Some arr -> Nd.get_prec arr
+let get_prec ptr = match get_tensor ptr with None -> Nd.Void_prec | Some arr -> Nd.get_prec arr
 
 (** Constructs a node with empty tensors of the specified precision and registers it in the global store.
     Note that the precision for gradients should not be lower than the precision for values. *)
-let create ~(value_prec : Nd.prec) ?(grad_prec : Nd.prec option) ?(literal = false) ~needs_gradient () ~op_label
-    ?desc_label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children () =
+let create ~(value_prec : Nd.prec) ?(grad_prec : Nd.prec option) ?(literal = false) ~needs_gradient ()
+    ~op_label ?desc_label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children () =
   let node =
     match value_prec with
     | Void_prec -> assert false
@@ -137,13 +134,14 @@ let create ~(value_prec : Nd.prec) ?(grad_prec : Nd.prec option) ?(literal = fal
 
 let create_of_same_precision_as ~needs_gradient node =
   match (node.value, node.grad) with
-  | Single_nd _, (Some (Single_nd _) | None) -> create ~value_prec:Nd.single ~grad_prec:Nd.single ~needs_gradient ()
+  | Single_nd _, (Some (Single_nd _) | None) ->
+      create ~value_prec:Nd.single ~grad_prec:Nd.single ~needs_gradient ()
   | Single_nd _, Some (Double_nd _) -> create ~value_prec:Nd.single ~grad_prec:Nd.double ~needs_gradient ()
-  | Double_nd _, (Some (Double_nd _) | None) -> create ~value_prec:Nd.double ~grad_prec:Nd.double ~needs_gradient ()
+  | Double_nd _, (Some (Double_nd _) | None) ->
+      create ~value_prec:Nd.double ~grad_prec:Nd.double ~needs_gradient ()
   | _, Some grad ->
       invalid_arg @@ "create_of_same_precision_as: unsupported combination of precisions value: "
-      ^ Nd.precision_string node.value
-      ^ ", grad: " ^ Nd.precision_string grad
+      ^ Nd.precision_string node.value ^ ", grad: " ^ Nd.precision_string grad
   | _ ->
       invalid_arg @@ "create_of_same_precision_as: unsupported combination of precisions value: "
       ^ Nd.precision_string node.value
@@ -158,9 +156,7 @@ let create_of_promoted_precision ~needs_gradient n1 n2 =
   | _, Double_nd _ | Double_nd _, _ -> create ~value_prec:Nd.double ~grad_prec:Nd.double ~needs_gradient ()
   | _ ->
       invalid_arg @@ "create_of_promoted_precision: unsupported combination of precisions n1 value: "
-      ^ Nd.precision_string n1.value
-      ^ ", n2 value: "
-      ^ Nd.precision_string n2.value
+      ^ Nd.precision_string n1.value ^ ", n2 value: " ^ Nd.precision_string n2.value
 
 let param_nodes ?(from_id = 0) () =
   Hashtbl.filter global_node_store ~f:(fun n ->

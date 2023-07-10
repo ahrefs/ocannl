@@ -165,15 +165,12 @@ let rec pointpow ?desc_label ~is_form p m1 : Formula.t =
   end in
   let open Code in
   let p_f = Formula.number ~is_form p in
-  let%nn_cd op_body ~(n : Node.t) ~(n1 : Node.t) ~(n2 : Node.t) ~projections =
-    n =: n1 ** n2 ~projections
-  in
+  let%nn_cd op_body ~(n : Node.t) ~(n1 : Node.t) ~(n2 : Node.t) ~projections = n =: n1 ** n2 ~projections in
   let%nn_cd grad_body =
     if not is_form then fun ~n:_ ~n1:_ ~n2:_ ~projections:_ -> Noop
     else if Float.equal p 2.0 then fun ~(n : Node.t) ~(n1 : Node.t) ~n2:_ ~projections ->
       n1.grad =+ p_f *. m1 * n.grad
-    else fun ~(n : Node.t) ~(n1 : Node.t) ~n2:_ ~projections ->
-      n1.grad =+ p_f *. (m1 **. (p -. 1.)) * n.grad
+    else fun ~(n : Node.t) ~(n1 : Node.t) ~n2:_ ~projections -> n1.grad =+ p_f *. (m1 **. (p -. 1.)) * n.grad
   in
   Formula.binop ?desc_label ~compose_op:Pointwise_bin ~op_label:"**." ~op_body ~grad_body ~is_form m1 p_f
 
@@ -207,9 +204,7 @@ let assign =
   let module NFDSL = struct
     module O = struct end
   end in
-  let%nn_cd assign ~(lhs : Node.tensor_ptr) ~(rhs : Node.tensor_ptr) ~projections =
-    lhs =: rhs ~projections
-  in
+  let%nn_cd assign ~(lhs : Node.tensor_ptr) ~(rhs : Node.tensor_ptr) ~projections = lhs =: rhs ~projections in
   assign
 
 let assign_op field ~(n : Node.t) ~(n1 : Node.t) ~projections =
