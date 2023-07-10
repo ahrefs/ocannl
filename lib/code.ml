@@ -784,8 +784,8 @@ let precompute_constants ?idcs traced_store top_node llv =
         if Array.exists idcs ~f:(function Shape.Fixed_idx 0 -> false | _ -> true) then raise @@ Non_literal 7);
     top_node.scalar <- Some (loop llv)
   with Non_literal i ->
-    if !with_debug && !debug_verbose_trace then
-      Caml.Format.printf "TRACE: Node #%d is non-literal because no. %d\n%!" n.id i;
+    (* if !with_debug && !debug_verbose_trace then
+       Caml.Format.printf "TRACE: Node #%d is non-literal because no. %d\n%!" n.id i; *)
     (* In principle we might conclude again that the node is to be inlined as scalar, that's OK. *)
     top_node.scalar <- None
 
