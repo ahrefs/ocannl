@@ -103,11 +103,8 @@ let pp_array_offset ?provider_dim scope ppf (idcs, dims) =
     else fprintf ppf " * %d +@ %a@])" dim (pp_index_axis ?provider_dim scope) idcs.(i)
   done
 
-let pp_get_run_ptr ppf tensor =
-  match (tensor.global, tensor.local) with
-  | _, Some lv -> Caml.Format.pp_print_string ppf lv
-  | Some rv, _ -> Caml.Format.pp_print_string ppf rv
-  | None, None -> assert false
+let get_run_ptr tensor =
+  match (tensor.global, tensor.local) with _, Some lv -> lv | Some rv, _ -> rv | None, None -> assert false
 
 let prec_to_c_type = function
   | Ndarray.Void_prec -> "void"
@@ -285,6 +282,17 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~idcs ptr : tensor =
       let f big = tensor (Ndarray.get_prec arr) (Ndarray.is_double_prec_t arr) big in
       Ndarray.map { f } arr)
 
+let jit_binop ~num_typ:_ ~is_double op =
+  match op with
+  | Code.Arg1 -> assert false
+  | Arg2 -> assert false
+  | Add -> ("(", " +", ")")
+  | Mul -> ("(", " *", ")")
+  | ToPowOf when is_double -> ("pow(", ",", ")")
+  | ToPowOf -> ("powf(", ",", ")")
+  | Relu_gate -> ("(", " > 0.0 ?", " : 0.0)")
+(* "((int)(", "> 0.0) * ", ")" *)
+
 let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
   let open Code in
   let open Caml.Format in
@@ -297,35 +305,6 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
          | Frozen_recipient it when on_host -> Shape.symbol_ident it
          | Frozen_recipient _ -> Int.to_string 0)
      in *)
-  let loop_binop ~multiline ~num_typ:_ ~is_double ppf op =
-    match op with
-    | Arg1 -> fun loop1 v1 _loop2 _v2 -> loop1 ppf v1
-    | Arg2 -> fun _loop1 _v1 loop2 v2 -> loop2 ppf v2
-    | Add ->
-        fun loop1 v1 loop2 v2 ->
-          (if multiline then fprintf ppf "@[<1>((%a) +@ (%a)@]@,)" else fprintf ppf "(%a + %a)")
-            loop1 v1 loop2 v2
-    | Mul ->
-        fun loop1 v1 loop2 v2 ->
-          (if multiline then fprintf ppf "@[<1>((%a) *@ (%a)@]@,)" else fprintf ppf "(%a * %a)")
-            loop1 v1 loop2 v2
-    | ToPowOf when is_double ->
-        fun loop1 v1 loop2 v2 ->
-          (if multiline then fprintf ppf "@[<2>pow(%a,@ %a@]@,)" else fprintf ppf "pow(%a, %a)")
-            loop1 v1 loop2 v2
-    | ToPowOf ->
-        fun loop1 v1 loop2 v2 ->
-          (if multiline then fprintf ppf "@[<1>powf(%a,@ %a@]@,)" else fprintf ppf "powf(%a, %a)")
-            loop1 v1 loop2 v2
-    | Relu_gate ->
-        fun loop1 v1 loop2 v2 ->
-          (if multiline then fprintf ppf "@[<1>(%a > 0.0 ?@ %a : 0.0@])"
-           else fprintf ppf "(%a > 0.0 ? %a : 0.0)")
-            loop1 v1 loop2 v2
-    (* (if multiline then fprintf ppf "@[<1>((int)(%a > 0.0) *@ (%a)@])"
-        else fprintf ppf "((int)(%a > 0.0) * %a)")
-          (pp_ll ~dyn_env) v1 (pp_ll ~dyn_env) v2 *)
-  in
   let locals = ref Map.Poly.empty in
   let rec pp_ll ~dyn_env ppf (c : unit_low_level) : unit =
     match c with
@@ -372,7 +351,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
         let old_locals = !locals in
         let loop_f = pp_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double in
-        let loop_debug_f = pp_debug_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double in
+        let loop_debug_f = debug_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double in
         let num_closing_braces = pp_top_locals ~dyn_env ppf v2 in
         if
           List.exists ~f:(equal_sync_properties tensor.sync)
@@ -390,37 +369,47 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
             (Option.value_exn tensor.local) (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
             (Option.value_exn tensor.global) (pp_array_offset Global) (idcs, tensor.dims))
         else
-          fprintf ppf "@[<2>%a@[<2>[%a@]] =@ %a;@]" pp_get_run_ptr tensor (pp_array_offset tensor.run_scope)
+          fprintf ppf "@[<2>%s@[<2>[%a@]] =@ %a;@]" (get_run_ptr tensor) (pp_array_offset tensor.run_scope)
             (idcs, tensor.dims) loop_f v;
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]@ }@,"
         done;
         locals := old_locals;
         if !Code.debug_verbose_trace then
+          let v_code, v_idcs = loop_debug_f v in
           fprintf ppf
-            "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %a[%%d] = %%f = \
-             %%s\\n\"@], %a, %a[%a],@ @[<h>\"%a\"@]);@ @]}"
-            pp_get_run_ptr tensor (pp_array_offset tensor.run_scope) (idcs, tensor.dims) pp_get_run_ptr tensor
-            (pp_array_offset tensor.run_scope) (idcs, tensor.dims) loop_debug_f v
+            "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %s[%%d] = %%f = \
+             %s\\n\"@],@ %a,@ %s[%a]%a@]);@ }"
+            (get_run_ptr tensor) v_code (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
+            (get_run_ptr tensor) (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
+            ( pp_print_list @@ fun ppf (run_scope, idx) ->
+              pp_comma ppf ();
+              pp_array_offset run_scope ppf idx )
+            v_idcs
     | Set (ptr, idcs, v) ->
         let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
         let old_locals = !locals in
         let loop_f = pp_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double in
-        let loop_debug_f = pp_debug_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double in
+        let loop_debug_f = debug_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double in
         let num_closing_braces = pp_top_locals ~dyn_env ppf v in
         (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
-        fprintf ppf "@[<2>%a[@,%a] =@ %a;@]@ " pp_get_run_ptr tensor (pp_array_offset tensor.run_scope)
+        fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr tensor) (pp_array_offset tensor.run_scope)
           (idcs, tensor.dims) loop_f v;
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]@ }@,"
         done;
         locals := old_locals;
         if !Code.debug_verbose_trace then
+          let v_code, v_idcs = loop_debug_f v in
           fprintf ppf
-            "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %a[%%d] = %%f = \
-             %%s\\n\"@], %a, %a[%a],@ @[<h>\"%a\"@]);@ @]}"
-            pp_get_run_ptr tensor (pp_array_offset tensor.run_scope) (idcs, tensor.dims) pp_get_run_ptr tensor
-            (pp_array_offset tensor.run_scope) (idcs, tensor.dims) loop_debug_f v
+            "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %s[%%d] = %%f = \
+             %s\\n\"@],@ %a,@ %s[%a]%a@]);@ }"
+            (get_run_ptr tensor) v_code (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
+            (get_run_ptr tensor) (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
+            ( pp_print_list @@ fun ppf (run_scope, idx) ->
+              pp_comma ppf ();
+              pp_array_offset run_scope ppf idx )
+            v_idcs
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
         jit_dynamic_indices ~dyn_env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Comment message -> fprintf ppf "/* %s */@ " message
@@ -464,35 +453,45 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
     | Get (ptr, idcs) ->
         (* let host_idcs = lookup ~on_host:true idcs in *)
         let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
-        fprintf ppf "@[<2>%a[%a@]]" pp_get_run_ptr tensor (pp_array_offset tensor.run_scope)
-          (idcs, tensor.dims)
+        fprintf ppf "@[<2>%s[%a@]]" (get_run_ptr tensor) (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
     | Constant c -> fprintf ppf "(%f)" c
-    | Binop (op, v1, v2) -> loop_binop ~multiline:true ~num_typ ~is_double ppf op loop v1 loop v2
+    | Binop (Arg1, v1, _v2) -> loop ppf v1
+    | Binop (Arg2, _v1, v2) -> loop ppf v2
+    | Binop (op, v1, v2) ->
+        let prefix, infix, postfix = jit_binop ~num_typ ~is_double op in
+        fprintf ppf "@[<1>%s%a%s@ %a@]%s" prefix loop v1 infix loop v2 postfix
     | Unop (Identity, v) -> loop ppf v
     | Unop (Relu, v) ->
         (* FIXME: don't recompute v *)
         fprintf ppf "@[<1>(%a > 0.0 ?@ %a : 0.0@])" loop v loop v
-  and pp_debug_float ~dyn_env ~num_typ ~is_double ppf value =
-    let loop = pp_debug_float ~dyn_env ~num_typ ~is_double in
+  and debug_float ~dyn_env ~num_typ ~is_double (value : float_low_level) : string * 'a list =
+    let loop = debug_float ~dyn_env ~num_typ ~is_double in
     match value with
     | Local_scope { id; _ } ->
-        (* Embedding of Local_scope is done by pp_top_locals. *)
-        loop ppf @@ Get_local id
+        (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug logs. *)
+        loop @@ Get_local id
     | Get_local id ->
         let typ, _local_is_double = Map.find_exn !locals id in
-        if not @@ String.equal num_typ typ then fprintf ppf "(%s)" num_typ;
-        fprintf ppf "v%d" id.scope_id
+        ( (if not @@ String.equal num_typ typ then "(" ^ num_typ ^ ")" else "")
+          ^ "v" ^ Int.to_string id.scope_id,
+          [] )
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (ptr, idcs) ->
         (* let host_idcs = lookup ~on_host:true idcs in *)
         let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
-        fprintf ppf "%a[.]" pp_get_run_ptr tensor
-    | Constant c -> fprintf ppf "%f" c
-    | Binop (op, v1, v2) -> loop_binop ~multiline:false ~num_typ ~is_double ppf op loop v1 loop v2
-    | Unop (Identity, v) -> loop ppf v
+        (get_run_ptr tensor ^ "[%d]", [ (tensor.run_scope, (idcs, tensor.dims)) ])
+    | Constant c -> (Float.to_string c, [])
+    | Binop (Arg1, v1, _v2) -> loop v1
+    | Binop (Arg2, _v1, v2) -> loop v2
+    | Binop (op, v1, v2) ->
+        let prefix, infix, postfix = jit_binop ~num_typ ~is_double op in
+        let v1, idcs1 = loop v1 in
+        let v2, idcs2 = loop v2 in
+        (String.concat [ prefix; v1; infix; " "; v2; postfix ], idcs1 @ idcs2)
+    | Unop (Identity, v) -> loop v
     | Unop (Relu, v) ->
-        (* FIXME: don't recompute v *)
-        fprintf ppf "(%a > 0.0 ? %a : 0.0)" loop v loop v
+        let v, idcs = loop v in
+        (String.concat [ "("; v; " > 0.0 ? "; v; " : 0.0)" ], idcs)
   and jit_dynamic_indices ~dyn_env ptr ~tensor_idcs ~dynamic_idcs ~target_dims body =
     (* let host_idcs = lookup ~on_host:true ~example_only:true tensor_idcs in *)
     let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs:tensor_idcs ptr in
@@ -500,7 +499,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
     let dyn_env =
       Array.foldi dynamic_idcs ~init:dyn_env ~f:(fun provider_dim dyn_env sym ->
           let target_dim = target_dims.(provider_dim).dim in
-          fprintf ppf "@ size_t %a =@ (size_t)(%a[%a]) %% %d;" pp_symbol sym pp_get_run_ptr tensor
+          fprintf ppf "@ size_t %a =@ (size_t)(%s[%a]) %% %d;" pp_symbol sym (get_run_ptr tensor)
             (pp_array_offset ~provider_dim tensor.run_scope)
             (tensor_idcs, tensor.dims) target_dim;
           Map.add_exn dyn_env ~key:sym ~data:(ptr, provider_dim, tensor_idcs, target_dim))
