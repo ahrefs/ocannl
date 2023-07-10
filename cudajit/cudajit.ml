@@ -1130,3 +1130,4 @@ type context = cu_context
 type func = cu_function
 type stream = cu_stream
 type module_ = cu_module
+type limit = cu_limit

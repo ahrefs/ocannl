@@ -353,8 +353,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
       when Node.equal_tensor_ptr ptr ptr2 && [%equal: Shape.axis_index array] idcs idcs2 ->
         let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
         let old_locals = !locals in
-        let num_typ = tensor.num_typ and is_double = tensor.is_double in
-        let loop_f = pp_float ~dyn_env ~num_typ ~is_double in
+        let loop_f = pp_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double in
         let num_closing_braces = pp_top_locals ~dyn_env ppf v2 in
         if
           List.exists ~f:(equal_sync_properties tensor.sync)
@@ -377,20 +376,31 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]@ }@,"
         done;
-        locals := old_locals
+        locals := old_locals;
+        if !Code.debug_verbose_trace then
+          fprintf ppf
+            "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %a[%%d] = %%f\
+             \\n\"@], %a, %a[%a]);@ @]}"
+            pp_get_run_ptr tensor (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
+            pp_get_run_ptr tensor (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
     | Set (ptr, idcs, v) ->
         let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
         let old_locals = !locals in
+        let loop_f = pp_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double in
         let num_closing_braces = pp_top_locals ~dyn_env ppf v in
         (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
         fprintf ppf "@[<2>%a[@,%a] =@ %a;@]@ " pp_get_run_ptr tensor (pp_array_offset tensor.run_scope)
-          (idcs, tensor.dims)
-          (pp_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double)
-          v;
+          (idcs, tensor.dims) loop_f v;
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]@ }@,"
         done;
-        locals := old_locals
+        locals := old_locals;
+        if !Code.debug_verbose_trace then
+          fprintf ppf
+            "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %a[%%d] = %%f\
+             \\n\"@], %a, %a[%a]);@ @]}"
+            pp_get_run_ptr tensor (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
+            pp_get_run_ptr tensor (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
         jit_dynamic_indices ~dyn_env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Comment message -> fprintf ppf "/* %s */@ " message
@@ -595,6 +605,7 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
   let cu_src =
     [%string
       {|
+%{if !Code.debug_verbose_trace then "__device__ int printf (const char * format, ... );" else ""}
 %{String.concat ~sep:"\n" constant_defs}
 extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
   /* Shared: block-local declarations. */
@@ -659,6 +670,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
           if tn.zero_initialized then Cu.memset_d8 device Unsigned.UChar.zero ~length:global_size_in_bytes
       | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit_func: running the kernel\n%!";
+    (* if !Code.debug_verbose_trace then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
     Cu.launch_kernel func ~grid_dim_x:!num_blocks ~block_dim_x:!num_threads ~shared_mem_bytes:0 Cu.no_stream
       args;
     Cu.ctx_synchronize ();
