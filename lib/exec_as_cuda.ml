@@ -379,7 +379,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
           let v_code, v_idcs = loop_debug_f v in
           fprintf ppf
             "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %s[%%d] = %%f = \
-             %s\\n\"@],@ %a,@ %s[%a]%a@]);@ }"
+             %s\\n\"@],@ %a,@ %s[%a]%a);@ @]}"
             (get_run_ptr tensor) v_code (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
             (get_run_ptr tensor) (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
             ( pp_print_list @@ fun ppf (run_scope, idx) ->
@@ -403,7 +403,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
           let v_code, v_idcs = loop_debug_f v in
           fprintf ppf
             "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %s[%%d] = %%f = \
-             %s\\n\"@],@ %a,@ %s[%a]%a@]);@ }"
+             %s\\n\"@],@ %a,@ %s[%a]%a);@ @]}"
             (get_run_ptr tensor) v_code (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
             (get_run_ptr tensor) (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
             ( pp_print_list @@ fun ppf (run_scope, idx) ->
@@ -412,7 +412,12 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
             v_idcs
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
         jit_dynamic_indices ~dyn_env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
-    | Comment message -> fprintf ppf "/* %s */@ " message
+    | Comment message ->
+        fprintf ppf "/* %s */@ " message;
+        if !Code.debug_verbose_trace then
+          fprintf ppf
+            "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %s\\n\"@]);@ @]}"
+            message
     | Staged_compilation callback -> callback ()
     | Set_local (({ scope_id; _ } as id), value) ->
         let num_typ, is_double = Map.find_exn !locals id in
