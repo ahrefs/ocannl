@@ -64,4 +64,7 @@ module Functions (F : Ctypes.FOREIGN) = struct
     else if mode = Int64.to_int E.cu_computemode_exclusive_process then CU_COMPUTEMODE_EXCLUSIVE_PROCESS
     else if mode = Int64.to_int E.cu_computemode_prohibited then CU_COMPUTEMODE_PROHIBITED
     else CU_COMPUTEMODE_UNCATEGORIZED (Int64.of_int mode)
+
+  let cu_ctx_set_limit = F.foreign "cuCtxSetLimit" F.(E.cu_limit @-> size_t @-> returning E.cu_result)
+  let cu_ctx_get_limit = F.foreign "cuCtxGetLimit" F.(ptr size_t @-> E.cu_limit @-> returning E.cu_result)
 end

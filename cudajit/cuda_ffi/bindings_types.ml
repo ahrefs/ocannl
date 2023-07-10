@@ -338,6 +338,18 @@ type cu_flush_GPU_direct_RDMA_writes_options =
   | CU_FLUSH_GPU_DIRECT_RDMA_WRITES_OPTION_UNCATEGORIZED of int64
 [@@deriving sexp]
 
+type cu_limit =
+  | CU_LIMIT_STACK_SIZE
+  | CU_LIMIT_PRINTF_FIFO_SIZE
+  | CU_LIMIT_MALLOC_HEAP_SIZE
+  | CU_LIMIT_DEV_RUNTIME_SYNC_DEPTH
+  | CU_LIMIT_DEV_RUNTIME_PENDING_LAUNCH_COUNT
+  | CU_LIMIT_MAX_L2_FETCH_GRANULARITY
+  | CU_LIMIT_PERSISTING_L2_CACHE_SIZE
+  | CU_LIMIT_MAX
+  | CU_LIMIT_UNCATEGORIZED of int64
+[@@deriving sexp]
+
 module Types (T : Ctypes.TYPE) = struct
   let cu_device_v1 = T.typedef T.int "CUdevice_v1"
   let cu_device_t = T.typedef cu_device_v1 "CUdevice"
@@ -1247,5 +1259,32 @@ module Types (T : Ctypes.TYPE) = struct
       [
         (CU_FLUSH_GPU_DIRECT_RDMA_WRITES_OPTION_HOST, cu_flush_gpu_direct_rdma_writes_option_host);
         (CU_FLUSH_GPU_DIRECT_RDMA_WRITES_OPTION_MEMOPS, cu_flush_gpu_direct_rdma_writes_option_memops);
+      ]
+
+  let cu_limit_stack_size = T.constant "CU_LIMIT_STACK_SIZE" T.int64_t
+  let cu_limit_printf_fifo_size = T.constant "CU_LIMIT_PRINTF_FIFO_SIZE" T.int64_t
+  let cu_limit_malloc_heap_size = T.constant "CU_LIMIT_MALLOC_HEAP_SIZE" T.int64_t
+  let cu_limit_dev_runtime_sync_depth = T.constant "CU_LIMIT_DEV_RUNTIME_SYNC_DEPTH" T.int64_t
+
+  let cu_limit_dev_runtime_pending_launch_count =
+    T.constant "CU_LIMIT_DEV_RUNTIME_PENDING_LAUNCH_COUNT" T.int64_t
+
+  let cu_limit_max_l2_fetch_granularity = T.constant "CU_LIMIT_MAX_L2_FETCH_GRANULARITY" T.int64_t
+  let cu_limit_persisting_l2_cache_size = T.constant "CU_LIMIT_PERSISTING_L2_CACHE_SIZE" T.int64_t
+  let cu_limit_max = T.constant "CU_LIMIT_MAX" T.int64_t
+
+  let cu_limit =
+    T.enum ~typedef:true
+      ~unexpected:(fun error_code -> CU_LIMIT_UNCATEGORIZED error_code)
+      "CUlimit"
+      [
+        (CU_LIMIT_STACK_SIZE, cu_limit_stack_size);
+        (CU_LIMIT_PRINTF_FIFO_SIZE, cu_limit_printf_fifo_size);
+        (CU_LIMIT_MALLOC_HEAP_SIZE, cu_limit_malloc_heap_size);
+        (CU_LIMIT_DEV_RUNTIME_SYNC_DEPTH, cu_limit_dev_runtime_sync_depth);
+        (CU_LIMIT_DEV_RUNTIME_PENDING_LAUNCH_COUNT, cu_limit_dev_runtime_pending_launch_count);
+        (CU_LIMIT_MAX_L2_FETCH_GRANULARITY, cu_limit_max_l2_fetch_granularity);
+        (CU_LIMIT_PERSISTING_L2_CACHE_SIZE, cu_limit_persisting_l2_cache_size);
+        (CU_LIMIT_MAX, cu_limit_max);
       ]
 end

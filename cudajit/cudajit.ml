@@ -1117,6 +1117,15 @@ let device_get_attributes device =
     (* multicast_supported; *)
   }
 
+let ctx_set_limit limit value =
+  check "cu_ctx_set_limit" @@ Cuda.cu_ctx_set_limit limit @@ Unsigned.Size_t.of_int value
+
+let ctx_get_limit limit =
+  let open Ctypes in
+  let value = allocate size_t Unsigned.Size_t.zero in
+  check "cu_ctx_set_limit" @@ Cuda.cu_ctx_get_limit value limit;
+  !@value
+
 type context = cu_context
 type func = cu_function
 type stream = cu_stream
