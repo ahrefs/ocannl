@@ -508,10 +508,10 @@ module SDSL = struct
     Code.CDSL.with_debug := true;
     Code.CDSL.keep_files_in_run_directory := true;
     if hosted_only then Code.CDSL.virtualize_settings.enable_device_only <- false;
-    if trace_interpreter then Code.CDSL.debug_trace_interpretation := true
+    if trace_interpreter then Code.CDSL.debug_verbose_trace := true
 
   let disable_all_debugs ?(restore_defaults = false) () =
-    Code.CDSL.debug_trace_interpretation := false;
+    Code.CDSL.debug_verbose_trace := false;
     Code.CDSL.with_debug := false;
     Code.CDSL.keep_files_in_run_directory := false;
     if restore_defaults then Code.CDSL.virtualize_settings.enable_device_only <- true

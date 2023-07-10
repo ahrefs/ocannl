@@ -350,7 +350,7 @@ let sexp_of_int_env env =
 let set_from_float ptr idcs value = Nd.set_from_float (Option.value_exn @@ Node.get_tensor ptr) idcs value
 let fill_from_float ptr value = Nd.fill_from_float (Option.value_exn @@ Node.get_tensor ptr) value
 let get_as_float ptr idcs = Nd.get_as_float (Option.value_exn @@ Node.get_tensor ptr) idcs
-let debug_trace_interpretation = ref false
+let debug_verbose_trace = ref false
 
 let interpret_binop op v1 v2 =
   let open Float in
@@ -379,10 +379,10 @@ let interpret_code ?task_id llc =
         | Frozen_recipient s -> Map.find_exn env s
         | Dynamic_provider _ -> Option.value_exn provider_dim)
     with Caml.Not_found | Not_found_s _ ->
-      if !debug_trace_interpretation then
+      if !debug_verbose_trace then
         Caml.Format.printf "TRACE: lookup error for env keys=@ %a\n%!" Sexp.pp_hum
           ([%sexp_of: Shape.symbol list] @@ Map.keys env);
-      failwith "interpret_code: index lookup error, set CDSL.debug_trace_interpretation for details"
+      failwith "interpret_code: index lookup error, set CDSL.debug_verbose_trace for details"
   in
   let rec loop_proc env llc : unit =
     let loop = loop_proc env in
@@ -406,7 +406,7 @@ let interpret_code ?task_id llc =
     | Zero_out ptr -> Ndarray.fill_from_float (Option.value_exn @@ Node.get_tensor ptr) 0.0
     | Set (ptr, indices, Binop (op, Get (ptr2, indices2), c2))
       when Node.equal_tensor_ptr ptr ptr2 && [%equal: Shape.axis_index array] indices indices2 ->
-        if !debug_trace_interpretation then
+        if !debug_verbose_trace then
           Caml.Format.printf "{TRACE: update %a [%a] <- ...\n%!" Sexp.pp_hum
             ([%sexp_of: Node.tensor_ptr] ptr)
             Sexp.pp_hum
@@ -428,7 +428,7 @@ let interpret_code ?task_id llc =
             raise e
         in
         let result = interpret_binop op v1 v2 in
-        if !debug_trace_interpretation then
+        if !debug_verbose_trace then
           Caml.Format.printf "TRACE: %a [%a -> %a] (%f) <- %f}\n%!" Sexp.pp_hum
             ([%sexp_of: Node.tensor_ptr] ptr)
             Sexp.pp_hum
@@ -438,14 +438,14 @@ let interpret_code ?task_id llc =
             v1 result;
         set_from_float ptr idcs result
     | Set (ptr, indices, llv) -> (
-        if !debug_trace_interpretation then
+        if !debug_verbose_trace then
           Caml.Format.printf "{TRACE: %a [%a] <- ...\n%!" Sexp.pp_hum
             ([%sexp_of: Node.tensor_ptr] ptr)
             Sexp.pp_hum
             ([%sexp_of: Shape.axis_index array] indices);
         let idcs = lookup env indices in
         let result = loop_float env llv in
-        if !debug_trace_interpretation then
+        if !debug_verbose_trace then
           Caml.Format.printf "TRACE: %a [%a -> %a] (%f) <- %f}\n%!" Sexp.pp_hum
             ([%sexp_of: Node.tensor_ptr] ptr)
             Sexp.pp_hum
@@ -473,7 +473,7 @@ let interpret_code ?task_id llc =
           (Option.value_exn @@ Node.get_tensor tensor)
           ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Comment c ->
-        if !debug_trace_interpretation then (
+        if !debug_verbose_trace then (
           Caml.Format.printf "TRACE: %s -- prior state of nodes: {\n%!" c;
           Node.print_decimals_precision := 9;
           for i = 1 to !Node.unique_id - 1 do
@@ -487,7 +487,7 @@ let interpret_code ?task_id llc =
     match llv with
     | Constant c -> c
     | Get (ptr, indices) ->
-        if !debug_trace_interpretation then
+        if !debug_verbose_trace then
           Caml.Format.printf "{TRACE: %a [%a] -> ...\n%!" Sexp.pp_hum
             ([%sexp_of: Node.tensor_ptr] ptr)
             Sexp.pp_hum
@@ -505,7 +505,7 @@ let interpret_code ?task_id llc =
             (* if Int.(task_id () = 0) then *) Node.print_node_preamble ~full_shape:false ptr.id;
             raise e
         in
-        if !debug_trace_interpretation then
+        if !debug_verbose_trace then
           Caml.Format.printf "TRACE: %a [%a -> %a] -> %f}\n%!" Sexp.pp_hum
             ([%sexp_of: Node.tensor_ptr] ptr)
             Sexp.pp_hum
@@ -515,7 +515,7 @@ let interpret_code ?task_id llc =
             result;
         result
     | Local_scope { id; prec = _; body; orig_indices } ->
-        if !debug_trace_interpretation then
+        if !debug_verbose_trace then
           Caml.Format.printf "{TRACE: %a [%a] <-> ...\n%!" Sexp.pp_hum
             ([%sexp_of: Node.tensor_ptr] id.tensor)
             Sexp.pp_hum
@@ -526,7 +526,7 @@ let interpret_code ?task_id llc =
         let result = Map.find_exn !locals id in
         locals := old_locals;
         let idcs = lookup env orig_indices in
-        if !debug_trace_interpretation then
+        if !debug_verbose_trace then
           Caml.Format.printf "TRACE: %a [%a / %a] (%f) <-> %f}\n%!" Sexp.pp_hum
             ([%sexp_of: Node.tensor_ptr] id.tensor)
             Sexp.pp_hum
@@ -589,10 +589,10 @@ let rec lookup_dyn_ind ?provider_dim dyn_env idx =
     | Iterator it -> raise @@ Not_found_s ([%sexp_of: Shape.symbol] it)
     | Dynamic_provider _ -> Option.value_exn provider_dim
   with Caml.Not_found | Not_found_s _ ->
-    if !debug_trace_interpretation then
+    if !debug_verbose_trace then
       Caml.Format.printf "TRACE: lookup error for dynamic env keys=@ %a\n%!" Sexp.pp_hum
         ([%sexp_of: Shape.symbol list] @@ Map.keys dyn_env);
-    failwith "Code.lookup_idcs: index lookup error, set CDSL.debug_trace_interpretation for details"
+    failwith "Code.lookup_idcs: index lookup error, set CDSL.debug_verbose_trace for details"
 
 let code_sexp_margin = ref 200
 
@@ -788,7 +788,7 @@ let precompute_constants ?idcs traced_store top_node llv =
         if Array.exists idcs ~f:(function Shape.Fixed_idx 0 -> false | _ -> true) then raise @@ Non_literal 7);
     top_node.scalar <- Some (loop llv)
   with Non_literal i ->
-    if !with_debug && !debug_trace_interpretation then
+    if !with_debug && !debug_verbose_trace then
       Caml.Format.printf "TRACE: Node #%d is non-literal because no. %d\n%!" n.id i;
     (* In principle we might conclude again that the node is to be inlined as scalar, that's OK. *)
     top_node.scalar <- None
@@ -1314,7 +1314,7 @@ let loop_over_dims ~skip_frozen dims ~body =
 
 let interpret_task_id_func ~name:_ ?verbose:_ ((_traced_store : traced_store), compiled) ~task_id =
   (* TODO: add verbose logs *)
-  if !debug_trace_interpretation && task_id = 0 then (
+  if !debug_verbose_trace && task_id = 0 then (
     Caml.Format.set_margin !code_sexp_margin;
     Caml.Format.printf "TRACE: Interpreted program:@ %a\n%!" Sexp.pp_hum @@ sexp_of_unit_low_level compiled);
   interpret_code ~task_id compiled
@@ -1334,6 +1334,6 @@ module CDSL = struct
   let keep_files_in_run_directory = keep_files_in_run_directory
   let with_debug = with_debug
   let virtualize_settings = virtualize_settings
-  let debug_trace_interpretation = debug_trace_interpretation
+  let debug_verbose_trace = debug_verbose_trace
   let code_sexp_margin = code_sexp_margin
 end
