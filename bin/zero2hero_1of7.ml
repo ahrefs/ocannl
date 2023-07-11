@@ -26,7 +26,6 @@ let _suspended () =
   SDSL.set_executor Interpreter;
   SDSL.enable_all_debugs ~trace_interpreter:true ();
   CDSL.virtualize_settings.enable_device_only <- false;
-  SDSL.num_parallel_tasks := 1;
   let%nn_op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%nn_op f5 = f 5 in
   SDSL.refresh_session ();

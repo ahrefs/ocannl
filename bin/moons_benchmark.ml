@@ -21,12 +21,11 @@ let _suspended () =
   Code.keep_files_in_run_directory := true;
   SDSL.drop_all_sessions ();
   Random.init 0;
-  let num_parallel_tasks = 1 in
-  Stdio.printf "\n****** num_parallel_tasks = %d\n%!" num_parallel_tasks;
+  let parallel_dims = 1 in
+  Stdio.printf "\n****** parallel_dims = %d\n%!" parallel_dims;
   (* FIXME: *)
-  SDSL.num_parallel_tasks := num_parallel_tasks;
   let refresh_batch = 1 in
-  let batch = refresh_batch * num_parallel_tasks in
+  let batch = refresh_batch * parallel_dims in
   let n_batches = 2 in
   let len = n_batches * batch / 2 in
   (* let epochs = 100 in *)
@@ -48,7 +47,7 @@ let _suspended () =
   let b =
     [
       Shape.{ special = Frozen; dim = n_batches };
-      CDSL.parallel num_parallel_tasks;
+      CDSL.parallel parallel_dims;
       CDSL.dim refresh_batch;
       CDSL.minibatch 20;
     ]
@@ -74,13 +73,14 @@ let _suspended () =
        List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
      in *)
   let%nn_op weighted_reg_loss = 0.00001 *. reg_loss in
-  (* let step_batch = num_parallel_tasks * minib in *)
+  (* let step_batch = parallel_dims * minib in *)
   let%nn_op batch_of_losses = margin_loss ++ "...|... => ...|0" in
   let%nn_rs epoch_loss ~o:1 = n =+ batch_of_losses ++ "...|0 => 0" + weighted_reg_loss in
-  let run_for_steps = refresh_batch in
+  let steps_per_sync = refresh_batch in
+  let syncs_per_run = 1 in
   SDSL.everything_fully_on_host ();
   (* SDSL.everything_on_host_or_inlined (); *)
-  SDSL.refresh_session ~run_for_steps ();
+  SDSL.refresh_session ~steps_per_sync ~syncs_per_run ();
   Stdio.print_endline "\nPreamble:\n";
   SDSL.print_preamble ~full_shape:true ();
   Stdio.print_endline "\nHigh-level code:\n";
@@ -142,13 +142,12 @@ let _suspended () =
   Code.keep_files_in_run_directory := true;
   SDSL.drop_all_sessions ();
   Random.init 0;
-  let num_parallel_tasks = SDSL.num_domains - 1 in
-  Stdio.printf "\n****** num_parallel_tasks = %d\n%!" num_parallel_tasks;
+  let parallel_dims = SDSL.num_domains - 1 in
+  Stdio.printf "\n****** parallel_dims = %d\n%!" parallel_dims;
   (* FIXME: *)
-  SDSL.num_parallel_tasks := num_parallel_tasks;
   let minib = 4 in
   let refresh_batch = 4 in
-  let batch = refresh_batch * num_parallel_tasks * minib in
+  let batch = refresh_batch * parallel_dims * minib in
   let n_batches = 2 in
   let len = n_batches * batch / 2 in
   (* let epochs = 100 in *)
@@ -170,7 +169,7 @@ let _suspended () =
   let b =
     [
       Shape.{ special = Frozen; dim = n_batches };
-      CDSL.parallel num_parallel_tasks;
+      CDSL.parallel parallel_dims;
       CDSL.dim refresh_batch;
       CDSL.minibatch minib;
     ]
@@ -210,12 +209,12 @@ let _suspended () =
   (* let reg_loss =
        List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
      in *)
-  let%nn_op weighted_reg_loss = 0.00001 *. reg_loss /. !..num_parallel_tasks in
-  (* let step_batch = num_parallel_tasks * minib in *)
+  let%nn_op weighted_reg_loss = 0.00001 *. reg_loss /. !..parallel_dims in
+  (* let step_batch = parallel_dims * minib in *)
   let%nn_op batch_of_losses = margin_loss ++ "...|... => ...|0" in
   let%nn_rs epoch_loss ~o:1 = n =+ batch_of_losses ++ "...|0 => 0" + weighted_reg_loss in
-  let run_for_steps = refresh_batch in
-  SDSL.refresh_session ~run_for_steps ();
+  let steps_per_sync = refresh_batch in
+  let syncs_per_run = 1 in
   Stdio.print_endline "\nPreamble:\n";
   SDSL.print_preamble ~full_shape:true ();
   Stdio.print_endline "\nHigh-level code:\n";
@@ -223,6 +222,7 @@ let _suspended () =
   Stdio.print_endline "\nLow-level code:\n";
   SDSL.print_session_code ~compiled:true ();
   SDSL.print_decimals_precision := 9;
+  SDSL.refresh_session ~steps_per_sync ~syncs_per_run ();
   Stdio.printf "Step 1: session_step: %f, session_refresh: %f, of steps %d\n%!" session_step.@[0]
     session_refresh.@[0] steps;
   Stdio.printf "Step 1: Minus learning rate: %f\n%!" minus_lr.@[0];
@@ -232,7 +232,7 @@ let _suspended () =
   (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
       SDSL.print_formula ~with_grad:true ~with_code:false `Default f); *)
-  SDSL.refresh_session ();
+  SDSL.refresh_session ~steps_per_sync ~syncs_per_run ();
   Stdio.printf "Step 2: session_step: %f\n%!" session_step.@[0];
   Stdio.printf "\nStep 2: Minus learning rate: %f\n%!" minus_lr.@[0];
   Stdio.printf "\nStep 2: loss %f\n%!" epoch_loss.@[0];
@@ -240,12 +240,12 @@ let _suspended () =
   (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
       SDSL.print_formula ~with_grad:true ~with_code:false `Default f); *)
-  SDSL.refresh_session ();
+  SDSL.refresh_session ~steps_per_sync ~syncs_per_run ();
   Stdio.printf "Step 3: session_step: %f\n%!" session_step.@[0];
   Stdio.printf "\nStep 3: Minus learning rate: %f\n%!" minus_lr.@[0];
   Stdio.printf "\nStep 3: loss %f\n%!" epoch_loss.@[0];
   SDSL.print_node_tree ~with_id:true ~with_grad:true ~with_backend_info:true ~depth:9 batch_of_losses.id;
-  SDSL.refresh_session ();
+  SDSL.refresh_session ~steps_per_sync ~syncs_per_run ();
   Stdio.printf "Step 4: session_step: %f\n%!" session_step.@[0];
   Stdio.printf "\nStep 4: Minus learning rate: %f\n%!" minus_lr.@[0];
   Stdio.printf "\nStep 4: loss %f\n%!" epoch_loss.@[0];
@@ -253,7 +253,7 @@ let _suspended () =
   Stdio.printf "\nHost size in bytes: %d\n%!" (SDSL.global_host_size_in_bytes ())
 
 let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff ?(inline_constants = true)
-    ~num_parallel_tasks ~per_refresh precision () =
+    ~parallel_dims ~per_refresh precision () =
   let bench_title =
     Sexp.to_string_hum
     @@ [%sexp_of:
@@ -275,7 +275,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
            inlining_cutoff,
            (* (if inline_constants then "..." else "NIC"), *)
            "parallel",
-           num_parallel_tasks,
+           parallel_dims,
            "per-refr.",
            per_refresh,
            precision )
@@ -288,7 +288,6 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   SDSL.default_value_prec := precision;
   SDSL.default_grad_prec := precision;
   (* Exec_as_gccjit.optimization_level := opti_level; *)
-  SDSL.num_parallel_tasks := num_parallel_tasks;
   SDSL.disable_all_debugs ();
   Code.with_debug := true;
   Code.keep_files_in_run_directory := true;
@@ -302,15 +301,16 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   let epochs = 10 / per_refresh in
   let orig_dataset = 200 in
   let minib = 20 in
-  let refresh_batch = 20 * per_refresh / num_parallel_tasks in
-  (* let batch = refresh_batch * num_parallel_tasks * minibatch in *)
+  let refresh_batch = 20 * per_refresh / parallel_dims in
+  (* let batch = refresh_batch * parallel_dims * minibatch in *)
   let n_batches = 2 in
   (* let len = n_batches * batch / 2 in *)
   let len = orig_dataset in
   let refreshes = epochs * n_batches in
-  let steps = refreshes * num_parallel_tasks * refresh_batch in
-  let run_for_steps = refresh_batch in
-  (* let advance_per_run = num_parallel_tasks * refresh_batch in *)
+  let steps = refreshes * parallel_dims * refresh_batch in
+  (* let steps_per_sync = refresh_batch in
+  let syncs_per_run = 1 in *)
+  (* let advance_per_run = parallel_dims * refresh_batch in *)
   Stdio.prerr_endline @@ "\n\n****** Benchmarking virtualized: " ^ bench_title ^ " for " ^ Int.to_string steps
   ^ " steps, refresh batch " ^ Int.to_string refresh_batch ^ " ******";
   let noise () = Random.float_range (-0.1) 0.1 in
@@ -328,7 +328,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   let b =
     [
       Shape.{ special = Frozen; dim = n_batches };
-      CDSL.parallel num_parallel_tasks;
+      CDSL.parallel parallel_dims;
       CDSL.dim refresh_batch;
       CDSL.minibatch minib;
     ]
@@ -341,24 +341,26 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   (* let hid_4_5 = CDSL.dim 4 in *)
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   (* let%nn_op mlp x =
-    "b6" 1
-    + "w6"
-      * !/("b4" hid_4_5
-          + "w4"
-            * !/("b2" hid_2_3
-                + ("w2" * !/("b1" 16 + ("w1" * x)))
-                + "b3" hid_2_3
-                + ("w3" * !/(b2 + (w2 * !/(b1 + (w1 * x))))))
-          + ("b5" hid_4_5 + ("w5" * !/(b4 + (w4 * !/(b3 + (w3 * !/(b2 + (w2 * !/(b1 + (w1 * x)))))))))))
-  in *)
-  (* *) let%nn_op mlp x =
        "b6" 1
        + "w6"
-         * !/("b5" 4
-             + ("w5" * !/("b4" 4 + ("w4" * !/("b3" 8 + ("w3" * !/("b2" 8 + ("w2" * !/("b1" 16 + ("w1" * x)))))))))
-             )
-     in (* *)
-     let%nn_dt session_step ~o:1 = n =+ 1 in
+         * !/("b4" hid_4_5
+             + "w4"
+               * !/("b2" hid_2_3
+                   + ("w2" * !/("b1" 16 + ("w1" * x)))
+                   + "b3" hid_2_3
+                   + ("w3" * !/(b2 + (w2 * !/(b1 + (w1 * x))))))
+             + ("b5" hid_4_5 + ("w5" * !/(b4 + (w4 * !/(b3 + (w3 * !/(b2 + (w2 * !/(b1 + (w1 * x)))))))))))
+     in *)
+  (* *)
+  let%nn_op mlp x =
+    "b6" 1
+    + "w6"
+      * !/("b5" 4
+          + ("w5" * !/("b4" 4 + ("w4" * !/("b3" 8 + ("w3" * !/("b2" 8 + ("w2" * !/("b1" 16 + ("w1" * x)))))))))
+          )
+  in
+  (* *)
+  let%nn_dt session_step ~o:1 = n =+ 1 in
   let%nn_dt session_refresh ~o:1 = n =+ 1.001 /. !..refresh_batch in
   let%nn_dt minus_lr ~o:1 = n =: -0.00001 *. (!..steps - session_step) /. !..steps in
 
@@ -367,14 +369,14 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   let%nn_op moons_class = (moons_classes @.| session_refresh) @.| session_step in
   let%nn_op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
   let min_loss = ref Float.infinity in
-  (*  *
-  let max_loss = ref 0.0 in
-  let losses = ref [] in
-  let log_losses = ref [] in
-  let learning_rates = ref [] in
-  let stop = ref false in
-  let step = ref 0 in
-  *  *)
+  (* *
+     let max_loss = ref 0.0 in
+     let losses = ref [] in
+     let log_losses = ref [] in
+     let learning_rates = ref [] in
+     let stop = ref false in
+     let step = ref 0 in
+     * *)
   (* let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in *)
   (* *)
   let%nn_op ssq w = (w *. w) ++ "...|...->... => 0" in
@@ -383,7 +385,7 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   in
   let%nn_op weighted_reg_loss = 0.0001 *. reg_loss in
   (* *)
-  (* let step_batch = num_parallel_tasks * minibatch in *)
+  (* let step_batch = parallel_dims * minibatch in *)
   (* Split the sum into stages so that only the outer sum is updated via the host. *)
   let%nn_op batch_of_losses = margin_loss ++ "...|... => ...|0" in
   (* let%nn_op total_loss =
@@ -393,10 +395,13 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   Stdio.printf "Initialize everything: compile etc.\n%!";
   Stdio.printf "\n%!";
   SDSL.everything_fully_on_host ();
-  SDSL.refresh_session ~run_for_steps (* ~update_params:false *) ~verbose:true ();
+  CDSL.debug_verbose_trace := true;
+  let steps_per_sync = refresh_batch in
+  let syncs_per_run = 1 in
+  SDSL.refresh_session ~steps_per_sync ~syncs_per_run (* ~update_params:false *) ~verbose:true ();
   (* *)
   (* Stdio.printf "\nPreamble:\n%!";
-  SDSL.print_preamble ~full_shape:true (); *)
+     SDSL.print_preamble ~full_shape:true (); *)
   Stdio.printf "\nBatch losses:\n%!";
   SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 batch_of_losses.id;
   Stdio.printf "\nRegularizer:\n%!";
@@ -406,42 +411,42 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
   Stdio.printf "\nMinus learning rate:\n%!";
   SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 minus_lr.id;
   (* DEBUG: *)
-  (* SDSL.refresh_session ~run_for_steps ~update_params:true ~verbose:true ();
-  (* *)
-  (* Stdio.printf "\nPreamble:\n%!";
-  SDSL.print_preamble ~full_shape:true (); *)
-  Stdio.printf "\nBatch losses:\n%!";
-  SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 batch_of_losses.id;
-  Stdio.printf "\nRegularizer:\n%!";
-  SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 weighted_reg_loss.id;
-  Stdio.printf "\nEpoch loss:\n%!";
-  SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 epoch_loss.id;
-  Stdio.printf "\nMinus learning rate:\n%!";
-  SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 minus_lr.id; *)
+  (* SDSL.refresh_session ~steps_per_sync ~syncs_per_run ~update_params:true ~verbose:true ();
+     (* *)
+     (* Stdio.printf "\nPreamble:\n%!";
+     SDSL.print_preamble ~full_shape:true (); *)
+     Stdio.printf "\nBatch losses:\n%!";
+     SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 batch_of_losses.id;
+     Stdio.printf "\nRegularizer:\n%!";
+     SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 weighted_reg_loss.id;
+     Stdio.printf "\nEpoch loss:\n%!";
+     SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 epoch_loss.id;
+     Stdio.printf "\nMinus learning rate:\n%!";
+     SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 minus_lr.id; *)
   Stdio.printf "\nTrain loop.\n%!";
   let start_time = Time_now.nanoseconds_since_unix_epoch () in
   let loss = ref 0.0 in
   (* *
-  while not !stop do
-    step := !step + advance_per_run;
-    loss := epoch_loss.@[0];
-    if Float.(!loss < !min_loss) then min_loss := !loss;
-    if Float.(!loss > !max_loss) then max_loss := !loss;
-    learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
-    losses := !loss :: !losses;
-    log_losses := Float.log !loss :: !log_losses;
-    (* if !step % (steps / 20) = 0 || !stop then ( *)
-      Stdio.printf "Step %d of %d: session_step: %f, session_refresh: %f\n%!" !step steps session_step.@[0]
-        session_refresh.@[0];
-      Stdio.printf "Minus learning rate: %f\n%!" minus_lr.@[0];
-      Stdio.printf "Epoch loss: %f; min loss: %f; max loss: %f\n%!" !loss !min_loss !max_loss;
-      (* ); *)
-    epoch_loss.@[0] <- 0.0;
-    if !step >= steps then stop := true;
-    if Float.(!loss <= target_loss) then stop := true;
-    SDSL.refresh_session ~run_for_steps ()
-  done;
-  * *)
+     while not !stop do
+       step := !step + advance_per_run;
+       loss := epoch_loss.@[0];
+       if Float.(!loss < !min_loss) then min_loss := !loss;
+       if Float.(!loss > !max_loss) then max_loss := !loss;
+       learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
+       losses := !loss :: !losses;
+       log_losses := Float.log !loss :: !log_losses;
+       (* if !step % (steps / 20) = 0 || !stop then ( *)
+         Stdio.printf "Step %d of %d: session_step: %f, session_refresh: %f\n%!" !step steps session_step.@[0]
+           session_refresh.@[0];
+         Stdio.printf "Minus learning rate: %f\n%!" minus_lr.@[0];
+         Stdio.printf "Epoch loss: %f; min loss: %f; max loss: %f\n%!" !loss !min_loss !max_loss;
+         (* ); *)
+       epoch_loss.@[0] <- 0.0;
+       if !step >= steps then stop := true;
+       if Float.(!loss <= target_loss) then stop := true;
+       SDSL.refresh_session ~run_for_steps ()
+     done;
+     * *)
   (* let train_mem = Mem_usage.info () in *)
   let final_time = Time_now.nanoseconds_since_unix_epoch () in
   (* TODO: include init time in benchmarks? *)
@@ -462,74 +467,74 @@ let classify_moons ~random_seed ~on_device executor ~opti_level ~inlining_cutoff
       }
   in
   (* *
-  let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
-  let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
-  let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
-  SDSL.close_session ();
-  Stdio.print_endline "\nSession closed.";
-  SDSL.num_parallel_tasks := 1;
-  let%nn_op point = (* [ 0; 0 ] *) "point" 2 in
-  let mlp_result = mlp point in
-  SDSL.refresh_session ~with_backprop:false ();
-  let callback (x, y) =
-    SDSL.set_values point [| x; y |];
-    SDSL.refresh_session ~with_backprop:false ();
-    Float.(mlp_result.@[0] >= 0.)
-  in
-  let plot_moons =
-    let open PrintBox_utils in
-    plot ~size:(120, 40) ~x_label:"ixes" ~y_label:"ygreks"
-      [
-        Scatterplot { points = points1; pixel = "#" };
-        Scatterplot { points = points2; pixel = "%" };
-        Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
-      ]
-  in
-  Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n%!";
-  PrintBox_text.output Stdio.stdout plot_moons;
-  Stdio.printf "\nEpoch (cumulative) loss curve:\n%!";
-  let plot_loss =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"loss"
-      [ Line_plot { points = Array.of_list_rev !losses; pixel = "-" } ]
-  in
-  PrintBox_text.output Stdio.stdout plot_loss;
-  Stdio.printf "\nLog-loss, for better visibility:\n%!";
-  let plot_loss =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"log loss"
-      [ Line_plot { points = Array.of_list_rev !log_losses; pixel = "-" } ]
-  in
-  PrintBox_text.output Stdio.stdout plot_loss;
-  Stdio.printf "\nLearning rate:\n%!";
-  let plot_lr =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"learning rate"
-      [ Line_plot { points = Array.of_list_rev !learning_rates; pixel = "-" } ]
-  in
-  PrintBox_text.output Stdio.stdout plot_lr;
-  (* Stdio.printf "\nProcess memory delta: %d\n%!"
-     (train_mem.process_physical_memory - init_mem.process_physical_memory); *)
-  Exec_as_gccjit.optimization_level := 3;
-  Stdio.printf "\n%!";
-  * *)
+     let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
+     let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
+     let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
+     SDSL.close_session ();
+     Stdio.print_endline "\nSession closed.";
+     SDSL.parallel_dims := 1;
+     let%nn_op point = (* [ 0; 0 ] *) "point" 2 in
+     let mlp_result = mlp point in
+     SDSL.refresh_session ~with_backprop:false ();
+     let callback (x, y) =
+       SDSL.set_values point [| x; y |];
+       SDSL.refresh_session ~with_backprop:false ();
+       Float.(mlp_result.@[0] >= 0.)
+     in
+     let plot_moons =
+       let open PrintBox_utils in
+       plot ~size:(120, 40) ~x_label:"ixes" ~y_label:"ygreks"
+         [
+           Scatterplot { points = points1; pixel = "#" };
+           Scatterplot { points = points2; pixel = "%" };
+           Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
+         ]
+     in
+     Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n%!";
+     PrintBox_text.output Stdio.stdout plot_moons;
+     Stdio.printf "\nEpoch (cumulative) loss curve:\n%!";
+     let plot_loss =
+       let open PrintBox_utils in
+       plot ~size:(120, 30) ~x_label:"step" ~y_label:"loss"
+         [ Line_plot { points = Array.of_list_rev !losses; pixel = "-" } ]
+     in
+     PrintBox_text.output Stdio.stdout plot_loss;
+     Stdio.printf "\nLog-loss, for better visibility:\n%!";
+     let plot_loss =
+       let open PrintBox_utils in
+       plot ~size:(120, 30) ~x_label:"step" ~y_label:"log loss"
+         [ Line_plot { points = Array.of_list_rev !log_losses; pixel = "-" } ]
+     in
+     PrintBox_text.output Stdio.stdout plot_loss;
+     Stdio.printf "\nLearning rate:\n%!";
+     let plot_lr =
+       let open PrintBox_utils in
+       plot ~size:(120, 30) ~x_label:"step" ~y_label:"learning rate"
+         [ Line_plot { points = Array.of_list_rev !learning_rates; pixel = "-" } ]
+     in
+     PrintBox_text.output Stdio.stdout plot_lr;
+     (* Stdio.printf "\nProcess memory delta: %d\n%!"
+        (train_mem.process_physical_memory - init_mem.process_physical_memory); *)
+     Exec_as_gccjit.optimization_level := 3;
+     Stdio.printf "\n%!";
+     * *)
   result
 
 let benchmark_executor = SDSL.Cuda
 
-let  () =
+let () =
   Ndarray.fixed_state_for_init := Some 14;
   ignore
   @@ classify_moons ~random_seed:3 ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
-       ~num_parallel_tasks:1 ~per_refresh:1 CDSL.single ()
+       ~parallel_dims:1 ~per_refresh:1 CDSL.single ()
 
 let benchmarks =
   List.concat_map [ (* 0; 3; 5 *) 3 ] ~f:(fun inlining_cutoff ->
-      List.concat_map [ 1; 2; 4; 8; 10; 20 ] ~f:(fun num_parallel_tasks ->
+      List.concat_map [ 1; 2; 4; 8; 10; 20 ] ~f:(fun parallel_dims ->
           List.concat_map [ 1; 10; 100 ] ~f:(fun per_refresh ->
               [
                 classify_moons ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff
-                  ~num_parallel_tasks ~per_refresh CDSL.single;
+                  ~parallel_dims ~per_refresh CDSL.single;
               ])))
 
 let time_of = function PrintBox_utils.Benchmark { time_in_sec; _ } -> time_in_sec
@@ -542,7 +547,7 @@ let nth_best nth bench =
 let fixed_seed_search seed =
   Ndarray.fixed_state_for_init := Some seed;
   classify_moons ~random_seed:0 ~on_device:true benchmark_executor ~opti_level:3 ~inlining_cutoff:3
-    ~num_parallel_tasks:1 ~per_refresh:1 CDSL.single ()
+    ~parallel_dims:1 ~per_refresh:1 CDSL.single ()
 
 let _suspended () =
   List.init 20 ~f:fixed_seed_search |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout

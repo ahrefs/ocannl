@@ -298,9 +298,6 @@ let localize_tensors store ~for_task_id llc =
           loop_float llv)
     | Set_local (_, llv) -> loop_float llv
     | Comment _ -> ()
-    | If_task_id_is { for_task_id = id2; body; _ } ->
-        assert (id2 = for_task_id);
-        loop body
   and loop_float = function
     | Local_scope { body; _ } -> loop body
     | Get_local _ | Get_global _ -> ()
@@ -399,5 +396,25 @@ Set (ptr, idcs, (Binop (op, Get (ptr2, idcs2), v2) as v))
         done;
         locals := old_locals
     
-
+(* Conditional on task id for Exec_as_gccjit: *)
+ | If_task_id_is { for_task_id; body } -> (
+        match state.task_id with
+        | Some task_id ->
+            let open Gccjit in
+            let id = get_uid () in
+            let b_if_body =
+              Block.create ~name:("body_if_task_id_is_" ^ Int.to_string for_task_id ^ "_" ^ id) func
+            in
+            let b_after_if =
+              Block.create ~name:("after_if_task_id_is_" ^ Int.to_string for_task_id ^ "_" ^ id) func
+            in
+            let guard =
+              RValue.comparison ctx Eq (RValue.param task_id) (RValue.int ctx c_index for_task_id)
+            in
+            Block.cond_jump !current_block guard b_if_body (* on true *) b_after_if (* on false *);
+            current_block := b_if_body;
+            loop ~name body;
+            Block.jump !current_block b_after_if;
+            current_block := b_after_if
+        | None -> loop ~name body)
 ]}

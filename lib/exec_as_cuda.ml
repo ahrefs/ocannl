@@ -319,6 +319,8 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
                | _ -> true))
     | For_loop { index = i; from_; to_; body; trace_it = _ } when Shape.task_id_sym i ->
         assert (from_ = 0);
+        if not (!num_blocks = 1 || !num_blocks = to_ + 1) then
+          invalid_arg [%string "Exec_as_cuda: parallel dims mismatch: %{!num_blocks#Int} vs. %{to_ + 1#Int}"];
         num_blocks := to_ + 1;
         (* Instead of binding the iterator, we will translate the iterator directly as blockIdx.x. *)
         (* fprintf ppf "@[<2>{@ size_t %a = blockIdx.x;@ " pp_index i; *)
@@ -337,7 +339,6 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
     | Rebalance (s, lines) ->
         pp_ll ~dyn_env ppf
         @@ Lines (Array.append (Option.to_array @@ Option.map s ~f:(fun s -> Comment s)) lines)
-    | If_task_id_is _ -> ()
     | Zero_out ptr ->
         if Hashtbl.mem session_state.tensors ptr then
           failwith
@@ -731,6 +732,3 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
             Ndarray.map { f } ndarray)
       | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit_func: kernel run finished\n%!"
-
-let jit_step_func = jit_func
-let jit_unit_func = jit_func ~verbose:false

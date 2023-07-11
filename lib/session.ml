@@ -130,39 +130,21 @@ let print_preamble ?(full_shape = false) () =
 (** *** Session management. *** *)
 type backend = Interpreter | Gccjit | Cuda [@@deriving sexp, equal]
 
-let num_parallel_tasks = ref 1
-let num_domains = Caml.Domain.recommended_domain_count ()
-let task_pool = Domainslib.Task.setup_pool ~name:"session_task_pool" ~num_domains ()
-
-let multicore_step_func jit_task_id_func ~name ?verbose jit_args =
-  let task_id_func = jit_task_id_func ~name ?verbose jit_args in
-  fun () ->
-    if !num_parallel_tasks = 1 then task_id_func ~task_id:0
-    else
-      Domainslib.Task.run task_pool (fun () ->
-          Domainslib.Task.parallel_for task_pool ~start:0 ~finish:(!num_parallel_tasks - 1)
-            ~body:(fun task_id -> task_id_func ~task_id))
-
-let gccjit_jit_step_func = multicore_step_func Exec_as_gccjit.jit_task_id_func
-let exec_step_func = ref gccjit_jit_step_func
-let exec_unit_func = ref Exec_as_gccjit.jit_unit_func
+let exec_func = ref Exec_as_gccjit.jit_func
 let executor_error_message = ref Exec_as_gccjit.error_message
 let cleanup_executor_session = ref Exec_as_gccjit.cleanup_session
 
 let set_executor = function
   | Interpreter ->
-      exec_step_func := multicore_step_func Code.interpret_task_id_func;
-      exec_unit_func := Code.interpret_unit_func;
+      exec_func := Exec_as_gccjit.jit_func;
       executor_error_message := Code.interpreter_error_message;
       cleanup_executor_session := fun () -> ()
   | Gccjit ->
-      exec_step_func := multicore_step_func Exec_as_gccjit.jit_task_id_func;
-      exec_unit_func := Exec_as_gccjit.jit_unit_func;
+      exec_func := Exec_as_gccjit.jit_func;
       executor_error_message := Exec_as_gccjit.error_message;
       cleanup_executor_session := Exec_as_gccjit.cleanup_session
   | Cuda ->
-      exec_step_func := Exec_as_cuda.jit_step_func;
-      exec_unit_func := Exec_as_cuda.jit_unit_func;
+      exec_func := Exec_as_cuda.jit_func;
       executor_error_message := Exec_as_cuda.error_message;
       cleanup_executor_session := Exec_as_cuda.cleanup_session
 
@@ -189,7 +171,7 @@ let compile_routine ~name code =
   let traced_store, compiled = Code.compile_proc ~name ~for_step_update:false code in
   (* Only initialize after compilation, to know which nodes are virtual. *)
   initialize_host_tensors traced_store @@ List.take !session_initializations to_init;
-  !exec_unit_func ~name (traced_store, compiled)
+  !exec_func ~name (traced_store, compiled)
 
 let session_params () = Node.param_nodes ~from_id:!Formula.first_session_id ()
 let minus_learning_rate : Formula.t option ref = ref None
@@ -317,7 +299,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
     initialize_host_tensors (fst !session_step_update_compiled) @@ List.take !session_initializations to_init;
     session_initialized := num_inits);
   if (not force_no_init) && (generating || reinit) then
-    session_step_update_routine := !exec_step_func ~name ~verbose !session_step_update_compiled;
+    session_step_update_routine := !exec_func ~name ~verbose !session_step_update_compiled;
   if run && run_for_steps > 0 then (
     if verbose then Stdio.printf "refresh_session: running\n%!";
     !session_step_update_routine ();
@@ -519,6 +501,5 @@ module SDSL = struct
   let default_value_prec = Formula.default_value_prec
   let default_grad_prec = Formula.default_grad_prec
   let global_host_size_in_bytes () = Node.global_host_size_in_bytes ()
-  let num_parallel_tasks = num_parallel_tasks
-  let num_domains = num_domains
+  let num_domains = Node.num_domains
 end

@@ -1,5 +1,8 @@
 open Base
-(** Utilities for working with [Node] that do not belong in the runtime. *)
+(** Computation nodes; global state not directly related to code generation or session management. *)
+
+let num_domains = Caml.Domain.recommended_domain_count ()
+let task_pool = Domainslib.Task.setup_pool ~name:"session_task_pool" ~num_domains ()
 
 module Nd = Ndarray
 

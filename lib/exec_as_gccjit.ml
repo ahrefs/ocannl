@@ -257,8 +257,8 @@ let get_sync_ptr tensor =
   | None, None -> assert false
 
 (* task_id = RValue.param task_id *)
-let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as state) initial_block
-    (body : Code.unit_low_level) : Gccjit.block =
+let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as state)
+    initial_block body =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
@@ -335,34 +335,19 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
     match body with
     | Code.Lines lines ->
         Array.iteri lines ~f:(fun i line -> loop ~name:(name ^ "_at_line_" ^ Int.to_string i) line)
-    | For_loop { index; from_ = _; to_ = _; body; trace_it = _ }
+    | For_loop { index; from_; to_; body; trace_it = _ }
       when Shape.task_id_sym index && Option.is_some state.task_id ->
+        assert (from_ = 0);
+        if not (!num_parallel_tasks = 1 || !num_parallel_tasks = to_ + 1) then
+          invalid_arg
+            [%string "Exec_as_gccjit: parallel dims mismatch: %{!num_parallel_tasks#Int} vs. %{to_ + 1#Int}"];
+        num_parallel_tasks := to_ + 1;
         let env = Map.add_exn ~key:index ~data:(RValue.param @@ Option.value_exn state.task_id) env in
         loop_proc ~env ~name body
     | For_loop { index; from_; to_; body; trace_it = _ } -> jit_for_loop ~env index ~from_ ~to_ body
     | Rebalance (_, cs) ->
         (* This backend does not implement a relevant form of fine-grain parallelism. *)
         Array.iteri cs ~f:(fun i line -> loop ~name:(name ^ "_at_par_line_" ^ Int.to_string i) line)
-    | If_task_id_is { for_task_id; body } -> (
-        match state.task_id with
-        | Some task_id ->
-            let open Gccjit in
-            let id = get_uid () in
-            let b_if_body =
-              Block.create ~name:("body_if_task_id_is_" ^ Int.to_string for_task_id ^ "_" ^ id) func
-            in
-            let b_after_if =
-              Block.create ~name:("after_if_task_id_is_" ^ Int.to_string for_task_id ^ "_" ^ id) func
-            in
-            let guard =
-              RValue.comparison ctx Eq (RValue.param task_id) (RValue.int ctx c_index for_task_id)
-            in
-            Block.cond_jump !current_block guard b_if_body (* on true *) b_after_if (* on false *);
-            current_block := b_if_body;
-            loop ~name body;
-            Block.jump !current_block b_after_if;
-            current_block := b_after_if
-        | None -> loop ~name body)
     | Set (_, _, Binop (Arg2, Get (_, _), _)) -> assert false
     | Set (tensor, idcs, Binop (op, Get (tensor2, idcs2), c2))
       when Node.equal_tensor_ptr tensor tensor2
@@ -478,7 +463,6 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
         let lvalue, _typ, _local_is_double = Map.find_exn !locals id in
         (* FIXME: Convert according to local_is_double ?= is_double. *)
         RValue.lvalue lvalue
-    | Get_global Task_id -> RValue.cast ctx (RValue.param @@ Option.value_exn state.task_id) num_typ
     | Get_global (C_function f_name) ->
         (* TODO: this is too limiting. *)
         let f = Function.builtin ctx f_name in
@@ -542,7 +526,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as 
   loop_proc ~name ~env body;
   !current_block
 
-let jit_func ~name ctx (traced_store, proc) =
+let jit_func ~num_parallel_tasks ~name ctx (traced_store, proc) =
   let open Gccjit in
   let fkind = Function.Exported in
   let task_id = Param.create ctx Type.(get ctx Int) "task_id" in
@@ -564,7 +548,7 @@ let jit_func ~name ctx (traced_store, proc) =
       task_id = Some task_id;
     }
   in
-  let after_proc = jit_code ~name ~env state main_block proc in
+  let after_proc = jit_code ~num_parallel_tasks ~name ~env state main_block proc in
   Block.jump task_init_block main_block;
   Block.jump after_proc task_finalize_block;
   let c_index = Type.get ctx Type.Int in
@@ -609,7 +593,7 @@ let error_message ~name ~prefix ?extra_error_msg ~contents exc =
   msg contents;
   Buffer.contents message
 
-let jit_task_id_func ~name ?verbose:_ compiled =
+let jit_func ~name ?verbose:_ compiled =
   (* TODO: add verbose logs *)
   let open Gccjit in
   let ctx = Context.create_child !session_context in
@@ -619,28 +603,15 @@ let jit_task_id_func ~name ?verbose:_ compiled =
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)
-  jit_func ~name ctx compiled;
+  let num_parallel_tasks = ref 1 in
+  jit_func ~num_parallel_tasks ~name ctx compiled;
   let result = Context.compile ctx in
   session_results := result :: !session_results;
   let routine = Result.code result name Ctypes.(int @-> returning void) in
   Context.release ctx;
-  fun ~task_id -> routine task_id
-
-let jit_unit_func ~name compiled =
-  let open Gccjit in
-  let ctx = Context.create_child !session_context in
-  Context.set_option ctx Context.Optimization_level !optimization_level;
-  (*
-  if !Code.with_debug && !Code.keep_files_in_run_directory then (
-    Context.set_option ctx Context.Keep_intermediates true;
-    Context.set_option ctx Context.Dump_everything true);
-  *)
-  jit_func ~name ctx compiled;
-  let result = Context.compile ctx in
-  session_results := result :: !session_results;
-  (* FIXME(159): adapt to not emitting task-specific code. *)
-  (* let routine = Result.code result name Ctypes.(void @-> returning void) in *)
-  let routine = Result.code result name Ctypes.(int @-> returning void) in
-  Context.release ctx;
-  (* routine *)
-  fun () -> routine 0
+  fun () ->
+    if !num_parallel_tasks = 1 then routine 0
+    else
+      Domainslib.Task.run Node.task_pool (fun () ->
+          Domainslib.Task.parallel_for Node.task_pool ~start:0 ~finish:(!num_parallel_tasks - 1)
+            ~body:(fun task_id -> routine task_id))
