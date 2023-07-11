@@ -138,14 +138,17 @@ let set_executor = function
   | Interpreter ->
       exec_func := Exec_as_gccjit.jit_func;
       executor_error_message := Code.interpreter_error_message;
+      Code.virtualize_settings.sequential_minibatch <- false;
       cleanup_executor_session := fun () -> ()
   | Gccjit ->
       exec_func := Exec_as_gccjit.jit_func;
       executor_error_message := Exec_as_gccjit.error_message;
+      Code.virtualize_settings.sequential_minibatch <- false;
       cleanup_executor_session := Exec_as_gccjit.cleanup_session
   | Cuda ->
       exec_func := Exec_as_cuda.jit_func;
       executor_error_message := Exec_as_cuda.error_message;
+      Code.virtualize_settings.sequential_minibatch <- true;
       cleanup_executor_session := Exec_as_cuda.cleanup_session
 
 let initialize_host_tensors traced_store =

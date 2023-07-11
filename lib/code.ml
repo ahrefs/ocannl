@@ -615,6 +615,7 @@ type virtualize_settings = {
   mutable max_visits : int;
   mutable inline_constants : bool;
   mutable always_inline_dynamic_indexing : bool;
+  mutable sequential_minibatch : bool;
 }
 
 let virtualize_settings =
@@ -623,6 +624,7 @@ let virtualize_settings =
     max_visits = 3;
     inline_constants = true;
     always_inline_dynamic_indexing = true;
+    sequential_minibatch = false;
   }
 
 type visits =
@@ -813,6 +815,10 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         if virtualize_settings.inline_constants then precompute_constants ~idcs traced_store traced llv;
         if fst (check_dedicated_dep Shape.Task_id ~cached_dedicated:cached_not_replicable) llc then
           traced.is_replicable <- false;
+        if
+          (not virtualize_settings.sequential_minibatch)
+          && fst (check_dedicated_dep Shape.Sample_num ~cached_dedicated:cached_not_replicable) llc
+        then traced.is_replicable <- false;
         (match llv with
         | Get (tensor2, idcs2) ->
             traced.last_write_non_update <- true;
@@ -982,7 +988,6 @@ let process_computation node top_llc =
   in
   try
     if node.non_virtual then raise Non_virtual;
-    (* FIXME: we allow task_id, but not sample_num, that's not consistent (shouldn't allow task_id?) *)
     loop_proc ~env_dom:empty_env top_llc;
     if not !has_setter then raise Non_virtual;
     node.computations <- (!at_idcs, top_llc) :: node.computations
