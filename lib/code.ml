@@ -1066,6 +1066,13 @@ let inline_computation ~id node call_args =
     node.non_virtual <- true;
     None
 
+let optimize_integer_pow = ref true
+
+let rec unroll_pow ~(base : float_low_level) ~(exp : int) : float_low_level =
+  if exp < 0 then unroll_pow ~base:(Binop (ToPowOf, base, Constant (-1.))) ~exp:(Int.neg exp)
+  else if exp = 0 then Constant 1.
+  else Fn.apply_n_times ~n:(exp - 1) (fun accu -> Binop (Mul, base, accu)) base
+
 let virtual_llc traced_store reverse_node_map (llc : unit_low_level) : unit_low_level =
   (* The current position is within scope of the definitions of the process_for virtual tensors. *)
   let rec loop_proc ~(process_for : tensor_ptrs) (llc : unit_low_level) : unit_low_level =
@@ -1113,7 +1120,7 @@ let virtual_llc traced_store reverse_node_map (llc : unit_low_level) : unit_low_
         (* [Get_local] will replace this [Get] during [inline_computation] if [tensor] remains virtual. *)
         llv
     | Get (tensor, indices) ->
-        let node : traced_tensor = get_node traced_store tensor in
+        let node = get_node traced_store tensor in
         if node.non_virtual then llv
         else
           let id = get_scope tensor in
@@ -1224,6 +1231,65 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit_low_level) : u
   in
   Option.value_exn @@ loop_proc ~balanced:false ~env_dom:Set.Poly.empty llc
 
+let simplify_llc traced_store llc =
+  let rec loop_proc (llc : unit_low_level) : unit_low_level =
+    let loop = loop_proc in
+    match llc with
+    | Lines body -> Lines (Array.map ~f:loop body)
+    | For_loop for_config -> For_loop { for_config with body = loop for_config.body }
+    | Rebalance (s, cs) ->
+        (* FIXME: NOT IMPLEMENTED YET *)
+        Rebalance (s, Array.map ~f:loop cs)
+    | Zero_out _ -> llc
+    | Set (ptr, indices, llv) ->
+        let result = Set (ptr, indices, loop_float llv) in
+        result
+    | Set_local (id, llv) -> Set_local (id, loop_float llv)
+    | Comment _ -> llc
+    | Staged_compilation _ -> llc
+    | Dynamic_indices dyn_idcs -> Dynamic_indices { dyn_idcs with body = loop dyn_idcs.body }
+  and loop_float (llv : float_low_level) : float_low_level =
+    (* FIXME: consider merging scalar simplification to here? *)
+    match llv with
+    | Constant _ -> llv
+    | Get (_ptr, _indices) -> llv
+    | Local_scope
+        {
+          id;
+          body =
+            Set_local (id2, v) | Lines [| Set_local (id2, v) |] | Lines [| Comment _; Set_local (id2, v) |];
+          _;
+        }
+      when equal_scope_id id id2 ->
+        loop_float v
+    | Local_scope opts -> Local_scope { opts with body = loop_proc opts.body }
+    | Get_local _ -> llv
+    | Get_global _ -> llv
+    | Binop (Arg1, llv1, _) -> loop_float llv1
+    | Binop (Arg2, _, llv2) -> loop_float llv2
+    | Binop (ToPowOf, llv1, llv2) -> (
+        let llv1 : float_low_level = loop_float llv1 in
+        let llv2 : float_low_level = loop_float llv2 in
+        let result : float_low_level = Binop (ToPowOf, llv1, llv2) in
+        if not !optimize_integer_pow then result
+        else
+          match llv2 with
+          | Constant c when Float.is_integer c -> unroll_pow ~base:llv1 ~exp:(Float.to_int c)
+          | Get (ptr, _) -> (
+              let node : traced_tensor = get_node traced_store ptr in
+              match node.scalar with
+              | Some c when Float.is_integer c -> unroll_pow ~base:llv1 ~exp:(Float.to_int c)
+              | _ ->
+                  let _debug : string = "non-integer-scalar" in
+                  result)
+          | _ ->
+              let _debug : string = "composite float expr" in
+              result)
+    | Binop (op, llv1, llv2) -> Binop (op, loop_float llv1, loop_float llv2)
+    | Unop (op, llv) -> Unop (op, loop_float llv)
+  in
+  loop_proc llc
+
 type traced_store = (Node.tensor_ptr, traced_tensor) Base.Hashtbl.t
 
 let optimize_proc ?(verbose = false) llc : traced_store * unit_low_level =
@@ -1234,7 +1300,9 @@ let optimize_proc ?(verbose = false) llc : traced_store * unit_low_level =
   visit_llc traced_store reverse_node_map ~max_visits:virtualize_settings.max_visits llc;
   if verbose then Stdio.printf "Code.optimize_proc: optimizing\n%!";
   let result =
-    cleanup_virtual_llc traced_store reverse_node_map @@ virtual_llc traced_store reverse_node_map llc
+    simplify_llc traced_store
+    @@ cleanup_virtual_llc traced_store reverse_node_map
+    @@ virtual_llc traced_store reverse_node_map llc
   in
   (traced_store, result)
 
@@ -1283,8 +1351,7 @@ let loop_over_dims ~skip_frozen dims ~body =
   in
   for_loop [] (Array.to_list dims)
 
-let interpret_func ~name:_ ?verbose:_ ((_traced_store : traced_store), compiled)
-    ~syncs_per_run =
+let interpret_func ~name:_ ?verbose:_ ((_traced_store : traced_store), compiled) ~syncs_per_run =
   (* TODO: add verbose logs *)
   if !debug_verbose_trace then (
     Caml.Format.set_margin !code_sexp_margin;
