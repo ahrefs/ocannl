@@ -757,11 +757,8 @@ let precompute_constants ?idcs traced_store top_node llv =
   let never_virtual =
     match top_node.kind with Node.Value -> n.value_never_virtual | Node.Grad -> n.grad_never_virtual
   in
-  let never_device_only =
-    match top_node.kind with Node.Value -> n.value_never_device_only | Node.Grad -> n.grad_never_device_only
-  in
   try
-    if never_virtual || never_device_only then raise @@ Non_literal 8;
+    if never_virtual then raise @@ Non_literal 8;
     if (not n.literal) && Hashtbl.exists top_node.accesses ~f:is_recurrent then raise @@ Non_literal 6;
     (match idcs with
     | None -> ()
