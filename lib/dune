@@ -11,6 +11,7 @@
   dynlink
   str
   ; mem_usage
+  ppx_minidebug.runtime
   gccjit
   cudajit)
  (preprocess
