@@ -42,6 +42,7 @@ type axis_special =
 type dim = { special : axis_special; dim : int } [@@deriving equal, compare, sexp]
 
 let dim dim = { special = Dim; dim }
+let frozen dim = { special = Frozen; dim }
 let parallel dim = { special = Dedicated Task_id; dim }
 let minibatch dim = { special = Dedicated Sample_num; dim }
 let dim_1 = function { special = Dedicated _; _ } -> false | { dim = 1; _ } -> true | _ -> false

@@ -1362,6 +1362,7 @@ let interpret_func ~name:_ ?verbose:_ ((_traced_store : traced_store), compiled)
 
 module CDSL = struct
   let dim = Shape.dim
+  let frozen = Shape.frozen
   let parallel = Shape.parallel
   let minibatch = Shape.minibatch
   let value_of_id id : Node.tensor_ptr = { id; field = Value }
