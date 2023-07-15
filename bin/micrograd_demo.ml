@@ -28,11 +28,11 @@ let () =
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
   let moons_flat =
-    FDSL.init_const ~l:"moons_flat" ~b:[ CDSL.dim epochs; CDSL.dim batch ] ~o:[ CDSL.dim 2 ] moons_flat
+    FDSL.init_const ~l:"moons_flat" ~b:[ CDSL.frozen epochs; CDSL.dim batch ] ~o:[ CDSL.dim 2 ] moons_flat
   in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let moons_classes =
-    FDSL.init_const ~l:"moons_classes" ~b:[ CDSL.dim epochs; CDSL.dim batch ] ~o:[ CDSL.dim 1 ] moons_classes
+    FDSL.init_const ~l:"moons_classes" ~b:[ CDSL.frozen epochs; CDSL.dim batch ] ~o:[ CDSL.dim 1 ] moons_classes
   in
   let%nn_op mlp x = "b3" 1 + ("w3" * !/("b2" 16 + ("w2" * !/("b1" 16 + ("w1" * x))))) in
   let steps = epochs * 2 * len / batch in
