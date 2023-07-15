@@ -227,9 +227,8 @@ let memcpy_H_to_D ?host_offset ?length ~dst:(Deviceptr dst) ~src () =
   let byte_size =
     match (host_offset, length) with
     | None, None -> full_size
-    | Some offset, None -> full_size - (elem_bytes * offset)
-    | None, Some length -> elem_bytes * length
-    | Some offset, Some length -> elem_bytes * (length - offset)
+    | Some _, None -> invalid_arg "Cudajit.memcpy_H_to_D: providing offset requires providing length"
+    | _, Some length -> elem_bytes * length
   in
   let open Ctypes in
   let host = bigarray_start genarray src in
