@@ -103,6 +103,13 @@ let pp_array_offset ?provider_dim scope ppf (idcs, dims) =
     else fprintf ppf " * %d +@ %a@])" dim (pp_index_axis ?provider_dim scope) idcs.(i)
   done
 
+let array_offset_to_string ?provider_dim scope (idcs, dims) =
+  let b = Buffer.create 32 in
+  let ppf = Caml.Format.formatter_of_buffer b in
+  pp_array_offset ?provider_dim scope ppf (idcs, dims);
+  Caml.Format.pp_print_flush ppf ();
+  Buffer.contents b
+
 let get_run_ptr tensor =
   match (tensor.global, tensor.local) with _, Some lv -> lv | Some rv, _ -> rv | None, None -> assert false
 
@@ -372,9 +379,6 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         else
           fprintf ppf "@[<2>%s@[<2>[%a@]] =@ %a;@]" (get_run_ptr tensor) (pp_array_offset tensor.run_scope)
             (idcs, tensor.dims) loop_f v;
-        for _ = 1 to num_closing_braces do
-          fprintf ppf "@]@ }@,"
-        done;
         (if !Code.debug_verbose_trace then
            let v_code, v_idcs = loop_debug_f v in
            fprintf ppf
@@ -382,10 +386,17 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
               %s\\n\"@],@ %a,@ %s[%a]%a);@ @]}"
              (get_run_ptr tensor) v_code (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
              (get_run_ptr tensor) (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
-             ( pp_print_list @@ fun ppf (run_scope, idx) ->
-               pp_comma ppf ();
-               pp_array_offset run_scope ppf idx )
+             ( pp_print_list @@ fun ppf -> function
+               | `Accessor (run_scope, idx) ->
+                   pp_comma ppf ();
+                   pp_array_offset run_scope ppf idx
+               | `Value v ->
+                   pp_comma ppf ();
+                   pp_print_string ppf v )
              v_idcs);
+        for _ = 1 to num_closing_braces do
+          fprintf ppf "@]@ }@,"
+        done;
         locals := old_locals
     | Set (ptr, idcs, v) ->
         let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
@@ -396,9 +407,6 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
         fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr tensor) (pp_array_offset tensor.run_scope)
           (idcs, tensor.dims) loop_f v;
-        for _ = 1 to num_closing_braces do
-          fprintf ppf "@]@ }@,"
-        done;
         (if !Code.debug_verbose_trace then
            let v_code, v_idcs = loop_debug_f v in
            fprintf ppf
@@ -406,10 +414,17 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
               %s\\n\"@],@ %a,@ %s[%a]%a);@ @]}"
              (get_run_ptr tensor) v_code (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
              (get_run_ptr tensor) (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
-             ( pp_print_list @@ fun ppf (run_scope, idx) ->
-               pp_comma ppf ();
-               pp_array_offset run_scope ppf idx )
+             ( pp_print_list @@ fun ppf -> function
+               | `Accessor (run_scope, idx) ->
+                   pp_comma ppf ();
+                   pp_array_offset run_scope ppf idx
+               | `Value v ->
+                   pp_comma ppf ();
+                   pp_print_string ppf v )
              v_idcs);
+        for _ = 1 to num_closing_braces do
+          fprintf ppf "@]@ }@,"
+        done;
         locals := old_locals
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
         jit_dynamic_indices ~dyn_env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
@@ -418,7 +433,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         if !Code.debug_verbose_trace then
           fprintf ppf
             "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %s\\n\"@]);@ @]}"
-            message
+            (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
     | Staged_compilation callback -> callback ()
     | Set_local (({ scope_id; _ } as id), value) ->
         let num_typ, is_double = Map.find_exn !locals id in
@@ -478,14 +493,20 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         loop @@ Get_local id
     | Get_local id ->
         let typ, _local_is_double = Map.find_exn !locals id in
-        ( (if not @@ String.equal num_typ typ then "(" ^ num_typ ^ ")" else "")
-          ^ "v" ^ Int.to_string id.scope_id,
-          [] )
+        let v =
+          (if not @@ String.equal num_typ typ then "(" ^ num_typ ^ ")" else "")
+          ^ "v" ^ Int.to_string id.scope_id
+        in
+        (v ^ "{=%f}", [ `Value v ])
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (ptr, idcs) ->
         (* let host_idcs = lookup ~on_host:true idcs in *)
         let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
-        (get_run_ptr tensor ^ "[%d]", [ (tensor.run_scope, (idcs, tensor.dims)) ])
+        let v =
+          sprintf "@[<2>%s[%s@]]" (get_run_ptr tensor)
+            (array_offset_to_string tensor.run_scope (idcs, tensor.dims))
+        in
+        (get_run_ptr tensor ^ "[%d]{=%f}", [ `Accessor (tensor.run_scope, (idcs, tensor.dims)); `Value v ])
     | Constant c -> (Float.to_string c, [])
     | Binop (Arg1, v1, _v2) -> loop v1
     | Binop (Arg2, _v1, v2) -> loop v2
@@ -707,7 +728,10 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
           if tn.read_before_write then (
             let f src = Cu.memcpy_H_to_D ?host_offset ~length:global_length ~dst ~src () in
             if verbose && !Code.with_debug then
-              Stdio.printf "Exec_as_cuda.jit_func: memcpy_H_to_D for %s\n%!" (Node.tensor_ptr_name ptr);
+              Stdio.printf "Exec_as_cuda.jit_func: memcpy_H_to_D for %s, offset: %s, length: %d\n%!"
+                (Node.tensor_ptr_name ptr)
+                (Sexp.to_string_hum @@ [%sexp_of: int option] host_offset)
+                global_length;
             Ndarray.map { f } ndarray)
       | _ -> ());
     List.iter tensors ~f:(function

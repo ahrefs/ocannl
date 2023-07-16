@@ -12,10 +12,14 @@ let () =
   SDSL.drop_all_sessions ();
   Code.with_debug := true;
   Code.keep_files_in_run_directory := true;
+  Code.debug_verbose_trace := true;
   Random.init 0;
-  let len = 200 in
-  let batch = 20 in
-  let epochs = 50 in
+  let hid_dim = CDSL.dim (* 16 *) 4 in
+  let len = (* 100 *) 10 in
+  let batch = (* 20 *) 2 in
+  let n_batches = 2 * len / batch in
+  let epochs = (* 50 *) 1 in
+  let steps = epochs * n_batches in
   let noise () = Random.float_range (-0.1) 0.1 in
   let moons_flat =
     Array.concat_map (Array.create ~len ())
@@ -28,14 +32,16 @@ let () =
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
   let moons_flat =
-    FDSL.init_const ~l:"moons_flat" ~b:[ CDSL.frozen epochs; CDSL.dim batch ] ~o:[ CDSL.dim 2 ] moons_flat
+    FDSL.init_const ~l:"moons_flat" ~b:[ CDSL.frozen n_batches; CDSL.dim batch ] ~o:[ CDSL.dim 2 ] moons_flat
   in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let moons_classes =
-    FDSL.init_const ~l:"moons_classes" ~b:[ CDSL.frozen epochs; CDSL.dim batch ] ~o:[ CDSL.dim 1 ] moons_classes
+    FDSL.init_const ~l:"moons_classes"
+      ~b:[ CDSL.frozen n_batches; CDSL.dim batch ]
+      ~o:[ CDSL.dim 1 ]
+      moons_classes
   in
-  let%nn_op mlp x = "b3" 1 + ("w3" * !/("b2" 16 + ("w2" * !/("b1" 16 + ("w1" * x))))) in
-  let steps = epochs * 2 * len / batch in
+  let%nn_op mlp x = "b3" 1 + ("w3" * !/("b2" hid_dim + ("w2" * !/("b1" hid_dim + ("w1" * x))))) in
   let%nn_dt session_step ~o:1 = n =+ 1 in
   let%nn_dt minus_lr ~o:1 = n =: -0.1 *. (!..steps - session_step) /. !..steps in
   SDSL.minus_learning_rate := Some minus_lr;
@@ -49,8 +55,17 @@ let () =
   let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:FDSL.O.( + ) in
   let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..batch) + (0.0001 *. reg_loss) in
   SDSL.everything_on_host_or_inlined ();
-  for _step = 1 to steps do
-    SDSL.refresh_session ();
+  for step = 1 to steps do
+    SDSL.refresh_session ~verbose:true ();
+    let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
+    let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
+    Stdio.printf
+      "DEBUG: step=%d, session_step=%f, -lr=%f, loss=%f, moons_input[0]=(%f, %f), moons_class[0]=%f\n%!" step
+      session_step.@[0] minus_lr.@[0] total_loss.@[0]
+      (fst points.(0))
+      (snd points.(0))
+      classes.(0);
+    (* SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss.id; *)
     learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
     losses := total_loss.@[0] :: !losses;
     log_losses := Float.log total_loss.@[0] :: !log_losses
@@ -87,7 +102,7 @@ let () =
       [ Line_plot { points = Array.of_list_rev !losses; pixel = "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_loss;
-  
+
   Stdio.printf "Log-loss, for better visibility:\n%!";
   let plot_loss =
     let open PrintBox_utils in
@@ -95,7 +110,7 @@ let () =
       [ Line_plot { points = Array.of_list_rev !log_losses; pixel = "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_loss;
-  
+
   Stdio.printf "\nLearning rate:\n%!";
   let plot_lr =
     let open PrintBox_utils in
