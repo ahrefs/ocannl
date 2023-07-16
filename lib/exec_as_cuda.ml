@@ -518,7 +518,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
     | Unop (Identity, v) -> loop v
     | Unop (Relu, v) ->
         let v, idcs = loop v in
-        (String.concat [ "("; v; " > 0.0 ? "; v; " : 0.0)" ], idcs)
+        (String.concat [ "("; v; " > 0.0 ? "; v; " : 0.0)" ], idcs @ idcs)
   and jit_dynamic_indices ~dyn_env ptr ~tensor_idcs ~dynamic_idcs ~target_dims body =
     (* let host_idcs = lookup ~on_host:true ~example_only:true tensor_idcs in *)
     let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs:tensor_idcs ptr in
