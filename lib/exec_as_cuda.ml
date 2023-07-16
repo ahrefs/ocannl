@@ -330,18 +330,18 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
           invalid_arg [%string "Exec_as_cuda: parallel dims mismatch: %{!num_blocks#Int} vs. %{to_ + 1#Int}"];
         num_blocks := to_ + 1;
         (* Instead of binding the iterator, we will translate the iterator directly as blockIdx.x. *)
-        (* fprintf ppf "@[<2>{@ size_t %a = blockIdx.x;@ " pp_index i; *)
+        (* fprintf ppf "@[<2>{@ unsigned int %a = blockIdx.x;@ " pp_index i; *)
         pp_ll ~dyn_env ppf body
         (* fprintf ppf "@]@ }@," *)
     | For_loop { index = i; from_; to_; body; trace_it = _ } when Shape.sample_num_sym i ->
         assert (from_ = 0);
         num_threads := to_ + 1;
         (* Instead of binding the iterator, we will translate the iterator directly as threadIdx.x. *)
-        (* fprintf ppf "@[<2>{@ size_t %a = threadIdx.x;@ " pp_index i; *)
+        (* fprintf ppf "@[<2>{@ unsigned int %a = threadIdx.x;@ " pp_index i; *)
         pp_ll ~dyn_env ppf body
         (* fprintf ppf "@]@ }@," *)
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-        fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_ pp_index i to_
+        fprintf ppf "@[<2>for (unsigned int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_ pp_index i to_
           pp_index i (pp_ll ~dyn_env) body
     | Rebalance (s, lines) ->
         pp_ll ~dyn_env ppf
@@ -382,7 +382,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         (if !Code.debug_verbose_trace then
            let v_code, v_idcs = loop_debug_f v in
            fprintf ppf
-             "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %s[%%d] = %%f = \
+             "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %s[%%u] = %%f = \
               %s\\n\"@],@ %a,@ %s[%a]%a);@ @]}"
              (get_run_ptr tensor) v_code (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
              (get_run_ptr tensor) (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
@@ -410,7 +410,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         (if !Code.debug_verbose_trace then
            let v_code, v_idcs = loop_debug_f v in
            fprintf ppf
-             "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %s[%%d] = %%f = \
+             "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %s[%%u] = %%f = \
               %s\\n\"@],@ %a,@ %s[%a]%a);@ @]}"
              (get_run_ptr tensor) v_code (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
              (get_run_ptr tensor) (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
@@ -506,7 +506,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
           sprintf "@[<2>%s[%s@]]" (get_run_ptr tensor)
             (array_offset_to_string tensor.run_scope (idcs, tensor.dims))
         in
-        (get_run_ptr tensor ^ "[%d]{=%f}", [ `Accessor (tensor.run_scope, (idcs, tensor.dims)); `Value v ])
+        (get_run_ptr tensor ^ "[%u]{=%f}", [ `Accessor (tensor.run_scope, (idcs, tensor.dims)); `Value v ])
     | Constant c -> (Float.to_string c, [])
     | Binop (Arg1, v1, _v2) -> loop v1
     | Binop (Arg2, _v1, v2) -> loop v2
@@ -526,7 +526,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
     let dyn_env =
       Array.foldi dynamic_idcs ~init:dyn_env ~f:(fun provider_dim dyn_env sym ->
           let target_dim = target_dims.(provider_dim).dim in
-          fprintf ppf "@ size_t %a =@ (size_t)(%s[%a]) %% %d;" pp_symbol sym (get_run_ptr tensor)
+          fprintf ppf "@ unsigned int %a =@ (unsigned int)(%s[%a]) %% %d;" pp_symbol sym (get_run_ptr tensor)
             (pp_array_offset ~provider_dim tensor.run_scope)
             (tensor_idcs, tensor.dims) target_dim;
           Map.add_exn dyn_env ~key:sym ~data:(ptr, provider_dim, tensor_idcs, target_dim))
