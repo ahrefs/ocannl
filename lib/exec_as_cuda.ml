@@ -74,7 +74,8 @@ let pp_index ppf sym = Caml.Format.fprintf ppf "%s" @@ Shape.symbol_ident sym
 let pp_index_axis ?provider_dim scope ppf =
   let open Shape in
   function
-  | Iterator it | Frozen_recipient it | Dynamic_recipient it -> (
+  | Frozen_recipient it -> Caml.Format.fprintf ppf "0 /* frozen %a */" pp_index it
+  | Iterator it | Dynamic_recipient it -> (
       match scope with
       | Thread when sample_num_sym it || task_id_sym it -> Caml.Format.fprintf ppf "0"
       | Shared when task_id_sym it -> Caml.Format.fprintf ppf "0"

@@ -10,15 +10,15 @@ let () = SDSL.set_executor Cuda
 let () =
   let open SDSL.O in
   SDSL.drop_all_sessions ();
-  Code.with_debug := true;
+  (* Code.with_debug := true; *)
   Code.keep_files_in_run_directory := true;
-  Code.debug_verbose_trace := true;
+  (* Code.debug_verbose_trace := true; *)
   Random.init 0;
-  let hid_dim = CDSL.dim (* 16 *) 4 in
-  let len = (* 100 *) 10 in
-  let batch = (* 20 *) 2 in
+  let hid_dim = CDSL.dim 16 in
+  let len = 200 in
+  let batch = 20 in
   let n_batches = 2 * len / batch in
-  let epochs = (* 50 *) 1 in
+  let epochs = 75 in
   let steps = epochs * n_batches in
   let noise () = Random.float_range (-0.1) 0.1 in
   let moons_flat =
@@ -56,7 +56,7 @@ let () =
   let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..batch) + (0.0001 *. reg_loss) in
   SDSL.everything_on_host_or_inlined ();
   for step = 1 to steps do
-    SDSL.refresh_session ~verbose:true ();
+    SDSL.refresh_session ();
     let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
     let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
     Stdio.printf
