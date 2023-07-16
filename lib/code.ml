@@ -1316,25 +1316,33 @@ let simplify_llc traced_store llc =
     | Binop (Mul, Constant c1, (Binop (Mul, Constant c2, llv) | Binop (Mul, llv, Constant c2))) ->
         loop_float @@ Binop (Mul, Constant (c1 *. c2), llv)
     | Binop (ToPowOf, llv1, llv2) -> (
-        let llv1 : float_low_level = loop_float llv1 in
-        let llv2 : float_low_level = loop_float llv2 in
-        let result : float_low_level = Binop (ToPowOf, llv1, llv2) in
+        let v1 : float_low_level = loop_float llv1 in
+        let v2 : float_low_level = loop_float llv2 in
+        let result : float_low_level = Binop (ToPowOf, v1, v2) in
         if not !optimize_integer_pow then result
         else
-          match llv2 with
-          | Constant c when Float.is_integer c -> unroll_pow ~base:llv1 ~exp:(Float.to_int c)
+          match v2 with
+          | Constant c when Float.is_integer c -> loop_float @@ unroll_pow ~base:v1 ~exp:(Float.to_int c)
           | Get (ptr, _) -> (
               let node : traced_tensor = get_node traced_store ptr in
               match node.scalar with
-              | Some c when Float.is_integer c -> unroll_pow ~base:llv1 ~exp:(Float.to_int c)
+              | Some c when Float.is_integer c -> loop_float @@ unroll_pow ~base:v1 ~exp:(Float.to_int c)
               | _ ->
                   let _debug : string = "non-integer-scalar" in
                   result)
           | _ ->
               let _debug : string = "composite float expr" in
               result)
-    | Binop (op, llv1, llv2) -> Binop (op, loop_float llv1, loop_float llv2)
-    | Unop (op, llv) -> Unop (op, loop_float llv)
+    | Binop (op, llv1, llv2) ->
+        let v1 = loop_float llv1 in
+        let v2 = loop_float llv2 in
+        let result = Binop (op, v1, v2) in
+        if equal_float_low_level llv1 v1 && equal_float_low_level llv2 v2 then result else loop_float result
+    | Unop (Identity, llv) -> loop_float llv
+    | Unop (op, llv) ->
+      let v = loop_float llv in
+      let result = Unop (op, v) in
+      if equal_float_low_level llv v then result else loop_float result
   in
   loop_proc llc
 
