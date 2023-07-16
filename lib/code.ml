@@ -104,7 +104,7 @@ let get_scope =
 (** Cases: [unit_low_level] -- code, [float_low_level] -- single number at some precision. *)
 type unit_low_level =
   | Comment of string
-  | Staged_compilation of (unit -> unit)
+  | Staged_compilation of ((unit -> unit)[@equal.ignore])
   | Lines of unit_low_level array
   | For_loop of { index : Shape.symbol; from_ : int; to_ : int; body : unit_low_level; trace_it : bool }
   | Rebalance of string option * unit_low_level array
@@ -120,12 +120,12 @@ type unit_low_level =
   | Zero_out of Node.tensor_ptr
   | Set of Node.tensor_ptr * Shape.axis_index array * float_low_level
   | Set_local of scope_id * float_low_level
-[@@deriving sexp]
+[@@deriving sexp, equal]
 
 and float_low_level =
   | Local_scope of {
       id : scope_id;
-      prec : Nd.prec;
+      prec : (Nd.prec[@equal.ignore]);
       body : unit_low_level;
       orig_indices : Shape.axis_index array;
     }
@@ -135,7 +135,7 @@ and float_low_level =
   | Binop of binop * float_low_level * float_low_level
   | Unop of unop * float_low_level
   | Constant of float
-[@@deriving sexp]
+[@@deriving sexp, equal]
 
 let check_dedicated_dep d ~cached_dedicated =
   let rec loop_proc = function
@@ -1231,6 +1231,38 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit_low_level) : u
   in
   Option.value_exn @@ loop_proc ~balanced:false ~env_dom:Set.Poly.empty llc
 
+let rec substitute_float ~var ~value llv =
+  let loop_float = substitute_float ~var ~value in
+  let loop_proc = substitute_proc ~var ~value in
+  if equal_float_low_level var llv then value
+  else
+    match llv with
+    | Constant _ -> llv
+    | Get (_ptr, _indices) -> llv
+    | Local_scope opts -> Local_scope { opts with body = loop_proc opts.body }
+    | Get_local _ -> llv
+    | Get_global _ -> llv
+    | Binop (op, llv1, llv2) -> Binop (op, loop_float llv1, loop_float llv2)
+    | Unop (op, llv) -> Unop (op, loop_float llv)
+
+and substitute_proc ~var ~value llc =
+  let loop_float = substitute_float ~var ~value in
+  let loop_proc = substitute_proc ~var ~value in
+  match llc with
+  | Lines body -> Lines (Array.map ~f:loop_proc body)
+  | For_loop for_config -> For_loop { for_config with body = loop_proc for_config.body }
+  | Rebalance (s, cs) ->
+      (* FIXME: NOT IMPLEMENTED YET *)
+      Rebalance (s, Array.map ~f:loop_proc cs)
+  | Zero_out _ -> llc
+  | Set (ptr, indices, llv) ->
+      let result = Set (ptr, indices, loop_float llv) in
+      result
+  | Set_local (id, llv) -> Set_local (id, loop_float llv)
+  | Comment _ -> llc
+  | Staged_compilation _ -> llc
+  | Dynamic_indices dyn_idcs -> Dynamic_indices { dyn_idcs with body = loop_proc dyn_idcs.body }
+
 let simplify_llc traced_store llc =
   let rec loop_proc (llc : unit_low_level) : unit_low_level =
     let loop = loop_proc in
@@ -1262,6 +1294,16 @@ let simplify_llc traced_store llc =
         }
       when equal_scope_id id id2 ->
         loop_float v
+    | Local_scope
+        {
+          id;
+          body =
+            ( Lines [| Set_local (id1, v1); Set_local (id2, v2) |]
+            | Lines [| Comment _; Set_local (id1, v1); Set_local (id2, v2) |] );
+          _;
+        }
+      when equal_scope_id id id1 && equal_scope_id id id2 ->
+        loop_float @@ substitute_float ~var:(Get_local id) ~value:v1 v2
     | Local_scope opts -> Local_scope { opts with body = loop_proc opts.body }
     | Get_local _ -> llv
     | Get_global _ -> llv
