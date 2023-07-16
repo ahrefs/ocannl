@@ -1255,9 +1255,7 @@ and substitute_proc ~var ~value llc =
       (* FIXME: NOT IMPLEMENTED YET *)
       Rebalance (s, Array.map ~f:loop_proc cs)
   | Zero_out _ -> llc
-  | Set (ptr, indices, llv) ->
-      let result = Set (ptr, indices, loop_float llv) in
-      result
+  | Set (ptr, indices, llv) -> Set (ptr, indices, loop_float llv)
   | Set_local (id, llv) -> Set_local (id, loop_float llv)
   | Comment _ -> llc
   | Staged_compilation _ -> llc
@@ -1273,9 +1271,7 @@ let simplify_llc traced_store llc =
         (* FIXME: NOT IMPLEMENTED YET *)
         Rebalance (s, Array.map ~f:loop cs)
     | Zero_out _ -> llc
-    | Set (ptr, indices, llv) ->
-        let result = Set (ptr, indices, loop_float llv) in
-        result
+    | Set (ptr, indices, llv) -> Set (ptr, indices, loop_float llv)
     | Set_local (id, llv) -> Set_local (id, loop_float llv)
     | Comment _ -> llc
     | Staged_compilation _ -> llc
@@ -1309,6 +1305,16 @@ let simplify_llc traced_store llc =
     | Get_global _ -> llv
     | Binop (Arg1, llv1, _) -> loop_float llv1
     | Binop (Arg2, _, llv2) -> loop_float llv2
+    | Binop (Add, Constant c1, Constant c2) -> Constant (c1 +. c2)
+    | Binop (Mul, Constant c1, Constant c2) -> Constant (c1 *. c2)
+    | Binop (Add, llv, Constant 0.) | Binop (Add, Constant 0., llv) -> loop_float llv
+    | Binop (Mul, llv, Constant 1.) | Binop (Mul, Constant 1., llv) -> loop_float llv
+    | Binop (Add, (Binop (Add, Constant c2, llv) | Binop (Add, llv, Constant c2)), Constant c1)
+    | Binop (Add, Constant c1, (Binop (Add, Constant c2, llv) | Binop (Add, llv, Constant c2))) ->
+        loop_float @@ Binop (Add, Constant (c1 +. c2), llv)
+    | Binop (Mul, (Binop (Mul, Constant c2, llv) | Binop (Mul, llv, Constant c2)), Constant c1)
+    | Binop (Mul, Constant c1, (Binop (Mul, Constant c2, llv) | Binop (Mul, llv, Constant c2))) ->
+        loop_float @@ Binop (Mul, Constant (c1 *. c2), llv)
     | Binop (ToPowOf, llv1, llv2) -> (
         let llv1 : float_low_level = loop_float llv1 in
         let llv2 : float_low_level = loop_float llv2 in
