@@ -685,11 +685,13 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
   /* Initialization: copy global-to-local. */
   %{String.concat_array ~sep:"\n  "
     @@ Array.map inits ~f:(String.substr_replace_all ~pattern:"\n" ~with_:"\n  ")}
+  __syncthreads();
 
   /* Main logic. */
   %{String.substr_replace_all cu_body ~pattern:"\n" ~with_:"\n  "}
 
   /* Finalization: copy local-to-global. */
+  __syncthreads();
   %{String.concat_array ~sep:"\n  "
     @@ Array.map finalizers ~f:(String.substr_replace_all ~pattern:"\n" ~with_:"\n  ")}
 }
