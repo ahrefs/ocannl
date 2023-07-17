@@ -11,9 +11,11 @@ let () =
   let open SDSL.O in
   SDSL.drop_all_sessions ();
   (* Code.with_debug := true; *)
-  Code.keep_files_in_run_directory := true;
+  (* Code.keep_files_in_run_directory := true; *)
   (* Code.debug_verbose_trace := true; *)
   Random.init 0;
+  (* The seeds 0, 6, 8 are unlucky. Seeds 2-5, 7, 9 are good. From better to worse: 4, 2, 9, 7, 1, 5, 3. *)
+  Ndarray.fixed_state_for_init := Some 4;
   let hid_dim = CDSL.dim 16 in
   let len = 200 in
   let batch = 20 in
@@ -32,12 +34,15 @@ let () =
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
   let moons_flat =
-    FDSL.init_const ~l:"moons_flat" ~b:[ CDSL.frozen n_batches; CDSL.dim batch ] ~o:[ CDSL.dim 2 ] moons_flat
+    FDSL.init_const ~l:"moons_flat"
+      ~b:[ CDSL.frozen n_batches; CDSL.minibatch batch ]
+      ~o:[ CDSL.dim 2 ]
+      moons_flat
   in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let moons_classes =
     FDSL.init_const ~l:"moons_classes"
-      ~b:[ CDSL.frozen n_batches; CDSL.dim batch ]
+      ~b:[ CDSL.frozen n_batches; CDSL.minibatch batch ]
       ~o:[ CDSL.dim 1 ]
       moons_classes
   in
@@ -54,18 +59,13 @@ let () =
   let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in
   let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:FDSL.O.( + ) in
   let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..batch) + (0.0001 *. reg_loss) in
-  SDSL.everything_on_host_or_inlined ();
+  (* SDSL.everything_on_host_or_inlined (); *)
   for step = 1 to steps do
     SDSL.refresh_session ();
-    let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
-    let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
-    Stdio.printf
-      "DEBUG: step=%d, session_step=%f, -lr=%f, loss=%f, moons_input[0]=(%f, %f), moons_class[0]=%f\n%!" step
-      session_step.@[0] minus_lr.@[0] total_loss.@[0]
-      (fst points.(0))
-      (snd points.(0))
-      classes.(0);
-    (* SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss.id; *)
+    if step % (len / batch) = 1 || step = steps then
+      Stdio.printf "Step=%d, session_step=%f, -lr=%f, loss=%f\n%!" step session_step.@[0] minus_lr.@[0]
+        total_loss.@[0]
+      (* SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss.id *);
     learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
     losses := total_loss.@[0] :: !losses;
     log_losses := Float.log total_loss.@[0] :: !log_losses
