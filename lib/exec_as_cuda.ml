@@ -365,11 +365,12 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         let loop_f = pp_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double in
         let loop_debug_f = debug_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double in
         let num_closing_braces = pp_top_locals ~dyn_env ppf v2 in
+        (* Because of SIMD-like computation over warps, updates must be atomic, for both global
+           and shared variables. *)
         if
           List.exists ~f:(equal_sync_properties tensor.sync)
             [ Update_globally_for_thread; Update_globally_for_block ]
         then (
-          (* Because of SIMD-like computation over warps, updates must be atomic. *)
           if Code.equal_binop op Add then
             fprintf ppf "atomicAdd@[<2>(%s + %a,@ %a@])" (Option.value_exn tensor.global)
               (pp_array_offset Global) (idcs, tensor.dims) loop_f v2
@@ -380,6 +381,13 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
             (if !sync_threads_on_update then "__syncthreads(); " else "")
             (Option.value_exn tensor.local) (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
             (Option.value_exn tensor.global) (pp_array_offset Global) (idcs, tensor.dims))
+        else if List.exists ~f:(equal_sync_properties tensor.sync) [ Block_only; Block_parallel ] then
+          if Code.equal_binop op Add then
+            fprintf ppf "atomicAdd@[<2>(%s + %a,@ %a@]);" (get_run_ptr tensor)
+              (pp_array_offset tensor.run_scope) (idcs, tensor.dims) loop_f v2
+          else
+            failwith @@ "Exec_as_cuda: atomic updates only implemented for addition: "
+            ^ Sexp.to_string_hum ([%sexp_of: unit_low_level] llc)
         else
           fprintf ppf "@[<2>%s@[<2>[%a@]] =@ %a;@]" (get_run_ptr tensor) (pp_array_offset tensor.run_scope)
             (idcs, tensor.dims) loop_f v;
@@ -614,12 +622,11 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
         | _ -> None)
   in
   let shared_decls =
-    List.filter_map tensors ~f:(fun (ptr, tn) ->
+    List.filter_map tensors ~f:(fun (_, tn) ->
         match tn.sync with
         | Block_only | Update_globally_for_block | Block_parallel ->
             Option.map tn.local ~f:(fun t_name ->
-                "__shared__ " ^ tn.num_typ ^ " " ^ t_name ^ "[" ^ Int.to_string tn.shared_length
-                ^ if Code.(get_node traced_store ptr).zero_initialized then "] = {0};" else "];")
+                "__shared__ " ^ tn.num_typ ^ " " ^ t_name ^ "[" ^ Int.to_string tn.shared_length ^ "];")
         | _ -> None)
   in
   let thread_decls =
@@ -635,7 +642,27 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
     Array.of_list tensors
     |> Array.filter_map ~f:(fun (ptr, tn) ->
            let n = Code.get_node traced_store ptr in
-           if not n.read_before_write then None
+           if not n.read_before_write then
+             (* __shared__ variables cannot have initializers. *)
+             if n.zero_initialized then
+               match tn.sync with
+               | Block_only | Update_globally_for_block | Block_parallel ->
+                   Option.map tn.local ~f:(fun l_name ->
+                       let b = Buffer.create 4096 in
+                       let ppf = Caml.Format.formatter_of_buffer b in
+                       let body idcs =
+                         Code.Staged_compilation
+                           (fun () ->
+                             Caml.Format.fprintf ppf
+                               "@[<2>if (threadIdx.x == 0) {@ @[<2>%s@[<1>[%a@]] =@ 0;@]@ @]}" l_name
+                               (pp_array_offset tn.run_scope) (idcs, tn.dims))
+                       in
+                       let loops = Code.(Lines [| loop_over_dims ~skip_frozen:true tn.dims ~body |]) in
+                       jit_code ~num_threads ~num_blocks ~traced_store ppf loops;
+                       Caml.Format.pp_print_newline ppf ();
+                       Buffer.contents b)
+               | _ -> None
+             else None
            else
              match tn.run_scope with
              | Thread | Shared ->
@@ -697,7 +724,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
   /* Thread-local declarations. */
   %{String.concat ~sep:"\n  " thread_decls}
 
-  /* Initialization: copy global-to-local. */
+  /* Initialization: copy global-to-local and zero-initialize shared variables. */
   %{String.concat_array ~sep:"\n  "
     @@ Array.map inits ~f:(String.substr_replace_all ~pattern:"\n" ~with_:"\n  ")}
   __syncthreads();
