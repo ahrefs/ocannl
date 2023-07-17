@@ -129,7 +129,7 @@ let scope_of_sync = function
 let compute_array_offset ~idcs ~dims =
   Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx + (offset * dim))
 
-let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~idcs ptr : tensor =
+let get_tensor ~traced_store ~num_threads:_ ~num_blocks ?force_sync ~jit_code ~dyn_env ~idcs ptr =
   let { tensors; _ } = session_state in
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
       let n = Node.(get ptr.id) in
@@ -200,12 +200,12 @@ let get_tensor ~traced_store ?force_sync ~jit_code ~dyn_env ~idcs ptr : tensor =
               then Thread_only
               else if Option.is_none hosted && (is_block_parallel || not computed_directly_across_blocks) then
                 Block_only
-              else if is_block_parallel && is_thread_parallel then Thread_parallel
+              else if (is_block_parallel || num_blocks <= 1) && is_thread_parallel then Thread_parallel
               else if is_block_parallel then Block_parallel
               else if update_globally && not is_thread_parallel then Update_globally_for_thread
               else if update_globally then Update_globally_for_block
               else if Option.is_some hosted && tn.read_only then Constant
-              else if can_be_replicated then Replicated
+              else if can_be_replicated && not is_thread_parallel then Replicated
               else (
                 if !Code.with_debug then
                   Caml.Format.printf "\nWARNING: Non-local sync for tensor: %a@ node: %a\n%!" Sexp.pp_hum
@@ -342,8 +342,8 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         pp_ll ~dyn_env ppf body
         (* fprintf ppf "@]@ }@," *)
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-        fprintf ppf "@[<2>for (unsigned int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_ pp_index i to_
-          pp_index i (pp_ll ~dyn_env) body
+        fprintf ppf "@[<2>for (unsigned int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_
+          pp_index i to_ pp_index i (pp_ll ~dyn_env) body
     | Rebalance (s, lines) ->
         pp_ll ~dyn_env ppf
         @@ Lines (Array.append (Option.to_array @@ Option.map s ~f:(fun s -> Comment s)) lines)
@@ -357,7 +357,10 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         (* The initialization will be emitted by get_tensor. *)
     | Set (ptr, idcs, (Binop (op, Get (ptr2, idcs2), v2) as v))
       when Node.equal_tensor_ptr ptr ptr2 && [%equal: Shape.axis_index array] idcs idcs2 ->
-        let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
+        let tensor =
+          get_tensor ~traced_store ~num_threads:!num_threads ~num_blocks:!num_blocks
+            ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr
+        in
         let old_locals = !locals in
         let loop_f = pp_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double in
         let loop_debug_f = debug_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double in
@@ -400,7 +403,10 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         done;
         locals := old_locals
     | Set (ptr, idcs, v) ->
-        let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
+        let tensor =
+          get_tensor ~traced_store ~num_threads:!num_threads ~num_blocks:!num_blocks
+            ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr
+        in
         let old_locals = !locals in
         let loop_f = pp_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double in
         let loop_debug_f = debug_float ~dyn_env ~num_typ:tensor.num_typ ~is_double:tensor.is_double in
@@ -474,7 +480,10 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (ptr, idcs) ->
         (* let host_idcs = lookup ~on_host:true idcs in *)
-        let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
+        let tensor =
+          get_tensor ~traced_store ~num_threads:!num_threads ~num_blocks:!num_blocks
+            ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr
+        in
         fprintf ppf "@[<2>%s[%a@]]" (get_run_ptr tensor) (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
     | Constant c -> fprintf ppf "(%f)" c
     | Binop (Arg1, v1, _v2) -> loop ppf v1
@@ -502,7 +511,10 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (ptr, idcs) ->
         (* let host_idcs = lookup ~on_host:true idcs in *)
-        let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
+        let tensor =
+          get_tensor ~traced_store ~num_threads:!num_threads ~num_blocks:!num_blocks
+            ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr
+        in
         let v =
           sprintf "@[<2>%s[%s@]]" (get_run_ptr tensor)
             (array_offset_to_string tensor.run_scope (idcs, tensor.dims))
@@ -522,7 +534,10 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         (String.concat [ "("; v; " > 0.0 ? "; v; " : 0.0)" ], idcs @ idcs)
   and jit_dynamic_indices ~dyn_env ptr ~tensor_idcs ~dynamic_idcs ~target_dims body =
     (* let host_idcs = lookup ~on_host:true ~example_only:true tensor_idcs in *)
-    let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs:tensor_idcs ptr in
+    let tensor =
+      get_tensor ~traced_store ~num_threads:!num_threads ~num_blocks:!num_blocks ~jit_code:(pp_ll ~dyn_env)
+        ~dyn_env ~idcs:tensor_idcs ptr
+    in
     fprintf ppf "@[<2>{";
     let dyn_env =
       Array.foldi dynamic_idcs ~init:dyn_env ~f:(fun provider_dim dyn_env sym ->
