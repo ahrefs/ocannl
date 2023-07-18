@@ -328,7 +328,7 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
 let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?output_dims ?axis_labels
     ?deduced ?init_op ?fetch_op ?postprocess_op () =
   if needs_gradient && not is_form then
-    raise @@ Session_error ("Formula.term ~needs_gradient:true: a non-form formula cannot need gradient", None);
+    invalid_arg "Formula.term ~needs_gradient:true: a non-form formula cannot need gradient";
   let literal : bool =
     if needs_gradient then false
     else

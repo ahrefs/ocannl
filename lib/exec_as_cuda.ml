@@ -87,6 +87,7 @@ let pp_index_axis ?provider_dim scope ppf =
 
 let pp_array_offset ?provider_dim scope ppf (idcs, dims) =
   let open Caml.Format in
+  assert (not @@ Array.is_empty idcs);
   for _ = 0 to Array.length idcs - 3 do
     fprintf ppf "@[<1>("
   done;
