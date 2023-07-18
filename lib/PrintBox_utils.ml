@@ -187,10 +187,12 @@ type table_row_spec =
       result : Sexp.t;
     }
 
+let nolines = String.substr_replace_all ~pattern:"\n" ~with_:";"
+
 let table rows =
   if List.is_empty rows then PrintBox.empty
   else
-    let titles = List.map rows ~f:(fun (Benchmark { bench_title; _ }) -> bench_title) in
+    let titles = List.map rows ~f:(fun (Benchmark { bench_title; _ }) -> nolines bench_title) in
     let times = List.map rows ~f:(fun (Benchmark { time_in_sec; _ }) -> time_in_sec) in
     let sizes = List.map rows ~f:(fun (Benchmark { host_size_in_bytes; _ }) -> host_size_in_bytes) in
     let max_time = List.reduce_exn ~f:Float.max times in
@@ -198,8 +200,8 @@ let table rows =
     let speedups = List.map times ~f:(fun x -> max_time /. x) in
     let mem_gains = List.map sizes ~f:Float.(fun x -> of_int max_size / of_int x) in
     let small_float = Fn.compose PrintBox.line (Printf.sprintf "%.3f") in
-    let results = List.map rows ~f:(fun (Benchmark { result; _ }) -> Sexp.to_string_hum result) in
-    let result_labels = List.map rows ~f:(fun (Benchmark { result_label; _ }) -> result_label) in
+    let results = List.map rows ~f:(fun (Benchmark { result; _ }) -> nolines @@ Sexp.to_string_hum result) in
+    let result_labels = List.map rows ~f:(fun (Benchmark { result_label; _ }) -> nolines result_label) in
     (* TODO(#140): partition by unique result_label and output a vlist of records. *)
     PrintBox.(
       frame
