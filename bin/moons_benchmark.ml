@@ -183,11 +183,12 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
   (* Code.debug_verbose_trace := true; *)
   Random.init (* random_seed *) 0;
   Ndarray.fixed_state_for_init := Some random_seed;
-  let hid_2_3 = CDSL.dim 8 in
-  let hid_4_5 = CDSL.dim 4 in
-  (* let hid_dim = CDSL.dim 16 in *)
+  (* let hid_2_3 = CDSL.dim 8 in
+     let hid_4_5 = CDSL.dim 4 in *)
+  let hid_dim = CDSL.dim 16 in
   let repeats = steps_per_sync * syncs_per_run in
   let len = 320 in
+  (* let len = 10240 in *)
   let batch_size = parallel_dims * minibatch_size in
   let n_batches = 2 * len / batch_size in
   let epochs = 100 / repeats in
@@ -217,18 +218,18 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
       moons_classes
   in
   (* *
-  let%nn_op mlp x =
-    "b6" 1
-    + "w6"
-      * !/("b4" hid_4_5
-          + "w4"
-            * !/("b2" hid_2_3
-                + ("w2" * !/("b1" 16 + ("w1" * x)))
-                + "b3" hid_2_3
-                + ("w3" * !/(b2 + (w2 * !/(b1 + (w1 * x))))))
-          + ("b5" hid_4_5 + ("w5" * !/(b4 + (w4 * !/(b3 + (w3 * !/(b2 + (w2 * !/(b1 + (w1 * x)))))))))))
-  in
-  * *)
+     let%nn_op mlp x =
+       "b6" 1
+       + "w6"
+         * !/("b4" hid_4_5
+             + "w4"
+               * !/("b2" hid_2_3
+                   + ("w2" * !/("b1" 16 + ("w1" * x)))
+                   + "b3" hid_2_3
+                   + ("w3" * !/(b2 + (w2 * !/(b1 + (w1 * x))))))
+             + ("b5" hid_4_5 + ("w5" * !/(b4 + (w4 * !/(b3 + (w3 * !/(b2 + (w2 * !/(b1 + (w1 * x)))))))))))
+     in
+     * *)
   let%nn_op mlp x = "b3" 1 + ("w3" * !/("b2" hid_dim + ("w2" * !/("b1" hid_dim + ("w1" * x))))) in
   let%nn_dt session_step ~o:1 = n =+ 1 in
   let steps = epochs * n_batches in
@@ -241,8 +242,8 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
     if with_reg then
       let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in
       (* let reg_loss =
-        List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
-      in *)
+           List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
+         in *)
       let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:FDSL.O.( + ) in
       let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..batch_size) + (0.0001 *. reg_loss) in
       total_loss
@@ -268,8 +269,9 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
       batch_losses := total_loss.@[0] :: !batch_losses;
       batch_log_losses := Float.log total_loss.@[0] :: !batch_log_losses;
       if
-        false
-        && (epochs / 10 = 0 || epoch = epochs || epoch % (epochs / 10) = 1)
+        (* false
+           && *)
+        (epochs / 10 = 0 || epoch = epochs || epoch % (epochs / 10) = 1)
         && (n_batches / 5 = 0 || batch_n = n_batches || batch_n % (n_batches / 5) = 1)
       then
         Stdio.printf "Epoch=%d, batch=%d, session_step=%f, -lr=%f, batch loss=%f, epoch loss=%f\n%!" epoch
@@ -371,12 +373,12 @@ let _suspended () =
 
 let benchmarks =
   List.concat_map [ (* 0; 3; 5 *) 3 ] ~f:(fun inlining_cutoff ->
-      List.concat_map [ 1; 2; (* 4; 8; *) 10; 16; 20 ] ~f:(fun parallel_dims ->
-          List.concat_map [ (* 1; *) 8; 32 (* ; 128 *) ] ~f:(fun minibatch_size ->
+      List.concat_map [ 1; (* 2; 4; 8; 10; *) 16 (* ; 20 *) ] ~f:(fun parallel_dims ->
+          List.concat_map [ (* 1; 8; *) 32; 64; 128 (* ; 256; 512; 1024 *) ] ~f:(fun minibatch_size ->
               List.concat_map [ 1 (* ; 10; 100 *) ] ~f:(fun steps_per_sync ->
                   List.concat_map [ 1 (* ; 10; 100 *) ] ~f:(fun syncs_per_run ->
-                      List.concat_map [ 0; 1; 2; 3; 4 ] ~f:(fun random_seed ->
-                          List.concat_map [ SDSL.Cuda (* ; Gccjit *) ] ~f:(fun executor ->
+                      List.concat_map [ 0; 1; 2 (* ; 3; 4 *) ] ~f:(fun random_seed ->
+                          List.concat_map [ SDSL.Cuda (* ; SDSL.Gccjit *) ] ~f:(fun executor ->
                               [
                                 classify_moons ~random_seed ~on_device:true executor ~inlining_cutoff
                                   ~parallel_dims ~minibatch_size ~steps_per_sync ~syncs_per_run CDSL.single;
