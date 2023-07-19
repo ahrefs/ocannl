@@ -82,7 +82,10 @@ let get_tensor
       let tn = Code.(get_node traced_store ptr) in
       let host_size_in_bytes = Node.host_size_in_bytes ptr in
       let axes = Shape.to_dims n.shape in
-      let device_dims = axes |> Array.map ~f:(fun d -> d.dim) in
+      let device_dims = axes |> Array.map ~f:(function
+      | {special = Frozen; _ } -> 1
+      | {special = Dedicated Task_id; _ } -> 1
+      | {dim; _} -> dim) in
       let device_size = Array.fold ~init:1 ~f:( * ) device_dims in
       let arr = Option.value_exn @@ Node.get_tensor ptr in
       let device_size_in_bytes = device_size * Ndarray.precision_in_bytes arr in
@@ -243,18 +246,15 @@ let builtin_op = function
   | Code.ToPowOf | Code.Relu_gate | Code.Arg2 | Code.Arg1 ->
       invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
 
-let get_ptr tensor =
-  match (tensor.hosted_ptr, tensor.local) with
-  | _, Some lv -> Gccjit.RValue.lvalue lv
-  | Some rv, _ -> rv
-  | None, None -> assert false
+let get_local_ptr tensor =
+  match tensor.local with
+  | Some lv -> Gccjit.RValue.lvalue lv
+  | None -> assert false
 
 let get_sync_ptr tensor =
-  match (tensor.hosted_ptr, tensor.local) with
-  | Some rv, _ when is_update_on_host tensor.sync -> rv
-  | _, Some lv -> Gccjit.RValue.lvalue lv
-  | Some rv, _ -> rv
-  | None, None -> assert false
+  match tensor.hosted_ptr with
+  | Some rv when is_update_on_host tensor.sync -> rv
+  | _ -> assert false
 
 (* task_id = RValue.param task_id *)
 let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as state)
@@ -359,7 +359,7 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
         let idcs = lookup ~on_host:(is_update_on_host tensor.sync) env idcs in
         let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
-        let device_lhs = LValue.access_array (get_ptr tensor) device_offset in
+        let device_lhs = LValue.access_array (get_local_ptr tensor) device_offset in
         if is_update_on_host tensor.sync then (
           let host_offset = jit_array_offset ctx ~idcs:host_idcs ~dims:tensor.host_dims in
           let host_lhs = LValue.access_array (get_sync_ptr tensor) host_offset in
@@ -373,7 +373,7 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
         let idcs = lookup ~on_host:(is_update_on_host tensor.sync) env idcs in
         let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
-        let device_lhs = LValue.access_array (get_ptr tensor) device_offset in
+        let device_lhs = LValue.access_array (get_local_ptr tensor) device_offset in
         if is_update_on_host tensor.sync then (
           let host_offset = jit_array_offset ctx ~idcs:host_idcs ~dims:tensor.host_dims in
           let host_lhs = LValue.access_array (get_sync_ptr tensor) host_offset in
@@ -396,7 +396,7 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
         let idcs = lookup ~on_host:(is_update_on_host tensor.sync) env idcs in
         let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
-        let device_lhs = LValue.access_array (get_ptr tensor) device_offset in
+        let device_lhs = LValue.access_array (get_local_ptr tensor) device_offset in
         if is_update_on_host tensor.sync then (
           let host_offset = jit_array_offset ctx ~idcs:host_idcs ~dims:tensor.host_dims in
           let host_lhs = LValue.access_array (get_sync_ptr tensor) host_offset in
@@ -421,7 +421,7 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
             let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
             let idcs = lookup ~on_host:false env idcs in
             let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
-            let device_lhs = LValue.access_array (get_ptr tensor) device_offset in
+            let device_lhs = LValue.access_array (get_local_ptr tensor) device_offset in
             Block.assign !current_block device_lhs value
         | exception Unknown_synchronization when distributive ->
             (* Cache the tensor with an Update_on_host synchronization, then recompile as an update. *)
@@ -472,7 +472,7 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let idcs = lookup ~on_host:false env idcs in
         let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
-        RValue.lvalue @@ LValue.access_array (get_ptr tensor) device_offset
+        RValue.lvalue @@ LValue.access_array (get_local_ptr tensor) device_offset
     | Binop (Code.Arg2, _, c2) -> loop c2
     | Binop (Code.Arg1, c1, _) -> loop c1
     | Binop (op, c1, c2) -> loop_binop op ~num_typ ~is_double ~v1:(loop c1) ~v2:(loop c2)
@@ -508,7 +508,7 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
           let provider_dim = RValue.int ctx c_int provider_dim in
           let idcs = lookup ~provider_dim ~on_host:false env tensor_idcs in
           let device_prov_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
-          let dyn_index = RValue.lvalue @@ LValue.access_array (get_ptr tensor) device_prov_offset in
+          let dyn_index = RValue.lvalue @@ LValue.access_array (get_local_ptr tensor) device_prov_offset in
           let dyn_index = RValue.cast ctx dyn_index c_index in
           let dyn_index = RValue.binary_op ctx Modulo c_index dyn_index target_dim in
           let data =
