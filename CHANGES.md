@@ -1,3 +1,40 @@
+## [0.2.1] -- 2023-07-19
+
+### Added
+
+- The Cuda backend.
+  - The Cudajit interface based on Nvrtc and the Cuda driver API.
+  - A naive `Exec_as_cuda` backend where the dedicated `Task_id` axis parallelizes over blocks, and a new dedicated `Sample_num` axis parallelizes over threads in a block.
+  - When outputting debug files, stores the source `.cu` code and the assembly `.ptx` code.
+  - Supports thread-only tensors, tensors with thread-local "replicated" working copies, constant tensors, and globally updated tensors.
+  - The backend uses atomic adds for shared updates, and within-block synchronization to minimize update races and parameter staleness.
+  - Debugging: full trace (for thread 0) by logging assignments with the assigned value and indices for the LHS tensor and the RHS tensors, the expression used to compute the assigned value, of values of subexpressions.
+- Cuda FFI for retrieving GPU specs and for getting and setting limits.
+- `Zero_out` low-level-code primitive using `memset`.
+- `Staged_compilation` low-level-code primitive: a (stateful) callback for use by backends.
+- When outputting debug files, also stores the high-level code.
+- Saving and restoring tensor content to `.npz` (`.npy` archive) files (untested).
+- Low-level code based optimizations:
+  - unrolls `ToPowOf` with integer exponent,
+  - simplifies local computations that are just expressions,
+  - some arithmetic simplifications.
+
+### Changed
+
+- Monomorphic `axis_index`, simplified the axes-related types.
+- Splits `'a low_level` into monomorphic `unit_low_level` and `float_low_level`.
+- Removes integer bigarray types.
+- Refactors `Node` + `NodeUI` into `Ndarray` + `Node`.
+- Tensor printouts include whether a tensor contains `NaN` or `infinity`.
+- Simplifies the `Task_id` functionality: removes `If_task_id_is` and `Global Task_id`; emoves parallelism from `interpret_code`; removes `task_id_func` vs `unit_func` duplication.
+
+
+### Fixed
+
+- "Non-form" code inclusion.
+- Ensures unique indices/symbols also for the `task_id` and `sample_num` bindings.
+- Removes endlines from `PrintBox_utils` benchmark tables cells.
+
 ## [0.2.0] -- 2023-06-03
 
 ### Added
