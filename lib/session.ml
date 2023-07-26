@@ -261,7 +261,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
     in
     let params_update =
       if List.is_empty update_params_code then Noop
-      else Block_comment ("Params update", all_parallel update_params_code)
+      else Synchronize ("Params update", all_parallel update_params_code)
     in
     let postprocess =
       if List.is_empty !Formula.session_postprocess then Noop

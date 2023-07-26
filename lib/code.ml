@@ -51,6 +51,7 @@ and t =
     }
   | Fetch of { tensor : Node.tensor_ptr; fetch_op : fetch_op }
   | Block_comment of string * t
+  | Synchronize of string * t  (** Synchronize information flow around the code block. *)
   | Noop
 [@@deriving sexp]
 
@@ -108,6 +109,7 @@ type unit_low_level =
   | Lines of unit_low_level array
   | For_loop of { index : Shape.symbol; from_ : int; to_ : int; body : unit_low_level; trace_it : bool }
   | Rebalance of string option * unit_low_level array
+  | Synchronize of string  (** Force synchronization of the information flow. *)
   | Dynamic_indices of {
       tensor : Node.tensor_ptr;
       tensor_idcs : Shape.axis_index array;
@@ -141,6 +143,7 @@ let check_dedicated_dep d ~cached_dedicated =
   let rec loop_proc = function
     | Comment _ -> false
     | Staged_compilation _ -> false
+    | Synchronize _ -> false
     | Lines ls -> Array.exists ~f:loop_proc ls
     | For_loop { body; _ } -> loop_proc body
     | Rebalance (_, cs) -> Array.exists ~f:loop_proc cs
@@ -294,6 +297,7 @@ let to_low_level (code : t) : unit_low_level =
     | Par _ -> loop_par code
     | ParHint _ when !force_unsafe_parhint -> loop_par code
     | Block_comment (s, c) -> Lines [| Comment s; loop c |]
+    | Synchronize (s, c) -> Lines [| Synchronize ("Begin " ^ s); loop c; Synchronize ("End " ^ s) |]
     | ParHint (c1, c2) | Seq (c1, c2) -> (
         (* TODO: this ignores parallelization altogether, don't! *)
         let ll1 = loop c1 in
@@ -454,6 +458,9 @@ let interpret_code llc =
     | Set_local (id, llv) -> locals := Map.update !locals id ~f:(fun _ -> loop_float env llv)
     | Comment message when !with_debug && !executor_print_comments -> Stdio.printf "%s\n%!" message
     | Staged_compilation exp -> exp ()
+    | Synchronize _ ->
+        (* Assuming the interpreter is single-threaded. *)
+        ()
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
         dynamic_indices env
           (Option.value_exn @@ Node.get_tensor tensor)
@@ -837,6 +844,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
     | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
     | Staged_compilation _ -> ()
+    | Synchronize _ -> ()
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice } ->
         let traced_tensor = get_node traced_store tensor in
         (* if not virtualize_settings.always_inline_dynamic_indexing then (
@@ -946,6 +954,7 @@ let process_computation node top_llc =
     | Set_local (_, llv) -> loop_float ~env_dom llv
     | Comment _ -> ()
     | Staged_compilation _ -> ()
+    | Synchronize _ -> ()
     | Dynamic_indices { body; _ } -> loop body
   and loop_float ~env_dom llv =
     match llv with
@@ -1026,6 +1035,7 @@ let inline_computation ~id node call_args =
       | Set_local (id, llv) -> Some (Set_local (id, loop_float env llv))
       | Comment _ -> Some llc
       | Staged_compilation _ -> Some llc
+      | Synchronize _ -> Some llc
       | Dynamic_indices dyn_idcs ->
           (* Dynamic_indices is introduced by to_low_level in the innermost scope. *)
           Option.map ~f:(fun body -> Dynamic_indices { dyn_idcs with body }) @@ loop env dyn_idcs.body
@@ -1093,6 +1103,7 @@ let virtual_llc traced_store reverse_node_map (llc : unit_low_level) : unit_low_
     | Set_local (id, llv) -> Set_local (id, loop_float ~process_for llv)
     | Comment _ -> llc
     | Staged_compilation _ -> llc
+    | Synchronize _ -> llc
     | Dynamic_indices dyn_idcs -> (
         match dyn_idcs.slice with
         | None -> Dynamic_indices { dyn_idcs with body = loop dyn_idcs.body }
@@ -1166,6 +1177,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit_low_level) : u
           Some (Set_local (id, loop_float ~balanced ~env_dom llv)))
     | Comment _ -> Some llc
     | Staged_compilation _ -> Some llc
+    | Synchronize _ -> Some llc
     | Dynamic_indices dyn_idcs ->
         assert (
           Array.for_all dyn_idcs.tensor_idcs ~f:(function Shape.Iterator s -> Set.mem env_dom s | _ -> true));
@@ -1249,6 +1261,7 @@ and substitute_proc ~var ~value llc =
   | Set_local (id, llv) -> Set_local (id, loop_float llv)
   | Comment _ -> llc
   | Staged_compilation _ -> llc
+  | Synchronize _ -> llc
   | Dynamic_indices dyn_idcs -> Dynamic_indices { dyn_idcs with body = loop_proc dyn_idcs.body }
 
 let simplify_llc traced_store llc =
@@ -1265,6 +1278,7 @@ let simplify_llc traced_store llc =
     | Set_local (id, llv) -> Set_local (id, loop_float llv)
     | Comment _ -> llc
     | Staged_compilation _ -> llc
+    | Synchronize _ -> llc
     | Dynamic_indices dyn_idcs -> Dynamic_indices { dyn_idcs with body = loop dyn_idcs.body }
   and loop_float (llv : float_low_level) : float_low_level =
     (* FIXME: consider merging scalar simplification to here? *)
