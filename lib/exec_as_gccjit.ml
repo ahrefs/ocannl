@@ -10,9 +10,6 @@ let session_context =
 
 type sync_properties =
   | Device_only  (** The tensor is only needed for a task-local computation and does not exist on host. *)
-  | Update_on_host
-      (** All assignments are update assignments. They happen directly on the host, simultaneously
-          syncing the tensor's cell value. *)
   | Parallel_dim
       (** The shape of the tensor has a [Parallel] dimension. Each task computes a slice of this dimension,
           independently transferring to the host. *)
@@ -82,10 +79,13 @@ let get_tensor
       let tn = Code.(get_node traced_store ptr) in
       let host_size_in_bytes = Node.host_size_in_bytes ptr in
       let axes = Shape.to_dims n.shape in
-      let device_dims = axes |> Array.map ~f:(function
-      | {special = Frozen; _ } -> 1
-      | {special = Dedicated Task_id; _ } -> 1
-      | {dim; _} -> dim) in
+      let device_dims =
+        axes
+        |> Array.map ~f:(function
+             | { special = Frozen; _ } -> 1
+             | { special = Dedicated Task_id; _ } -> 1
+             | { dim; _ } -> dim)
+      in
       let device_size = Array.fold ~init:1 ~f:( * ) device_dims in
       let arr = Option.value_exn @@ Node.get_tensor ptr in
       let device_size_in_bytes = device_size * Ndarray.precision_in_bytes arr in
@@ -112,14 +112,10 @@ let get_tensor
           @@ Shape.to_dims n.shape
         in
         let can_be_replicated = tn.is_replicable in
-        let update_on_host =
-          (not is_parallel) && tn.read_before_write && tn.reduced_racyness && Option.is_some hosted_ptr
-        in
         let sync =
           Option.value_or_thunk force_sync ~default:(fun () ->
               if Option.is_none hosted_ptr then Device_only
               else if is_parallel then Parallel_dim
-              else if update_on_host then Update_on_host
               else if can_be_replicated then Replicated
               else (
                 if !Code.with_debug then
@@ -133,7 +129,7 @@ let get_tensor
         let local = Function.local func arr_typ @@ Node.tensor_ptr_name ptr in
         let host_dims = Bigarray.Genarray.dims arr in
         let cast_void rv = RValue.cast ctx rv c_void_ptr in
-        if tn.zero_initialized && not update_on_host then
+        if tn.zero_initialized then
           Block.eval task_init_block
           @@ RValue.call ctx (Function.builtin ctx "memset")
                [
@@ -154,7 +150,7 @@ let get_tensor
               in
               let offset = jit_array_offset ctx ~idcs:offset_idcs ~dims:host_dims in
               let lhs = LValue.access_array hosted_ptr offset in
-              if tn.zero_initialized && update_on_host then
+              if tn.zero_initialized then
                 Block.eval task_init_block
                 @@ RValue.call ctx (Function.builtin ctx "memset")
                      [
@@ -170,7 +166,7 @@ let get_tensor
                        cast_void @@ LValue.address lhs;
                        RValue.int ctx c_index device_size_in_bytes;
                      ];
-              if (not tn.read_only) && not update_on_host then
+              if not tn.read_only then
                 (* let f = Function.builtin ctx "printf" in
                    let print_args =
                      [
@@ -246,15 +242,7 @@ let builtin_op = function
   | Code.ToPowOf | Code.Relu_gate | Code.Arg2 | Code.Arg1 ->
       invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
 
-let get_local_ptr tensor =
-  match tensor.local with
-  | Some lv -> Gccjit.RValue.lvalue lv
-  | None -> assert false
-
-let get_sync_ptr tensor =
-  match tensor.hosted_ptr with
-  | Some rv when is_update_on_host tensor.sync -> rv
-  | _ -> assert false
+let get_local_ptr tensor = match tensor.local with Some lv -> Gccjit.RValue.lvalue lv | None -> assert false
 
 (* task_id = RValue.param task_id *)
 let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as state)
@@ -357,76 +345,45 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
-        let idcs = lookup ~on_host:(is_update_on_host tensor.sync) env idcs in
+        let idcs = lookup ~on_host:false env idcs in
         let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
         let device_lhs = LValue.access_array (get_local_ptr tensor) device_offset in
-        if is_update_on_host tensor.sync then (
-          let host_offset = jit_array_offset ctx ~idcs:host_idcs ~dims:tensor.host_dims in
-          let host_lhs = LValue.access_array (get_sync_ptr tensor) host_offset in
-          Block.assign_op !current_block host_lhs (builtin_op op) value;
-          Block.assign !current_block device_lhs (RValue.lvalue host_lhs))
-        else Block.assign_op !current_block device_lhs (builtin_op op) value
+        Block.assign_op !current_block device_lhs (builtin_op op) value
     | Set (tensor, idcs, Binop (op, Get (tensor2, idcs2), c2))
       when Node.equal_tensor_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
-        let idcs = lookup ~on_host:(is_update_on_host tensor.sync) env idcs in
+        let idcs = lookup ~on_host:false env idcs in
         let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
         let device_lhs = LValue.access_array (get_local_ptr tensor) device_offset in
-        if is_update_on_host tensor.sync then (
-          let host_offset = jit_array_offset ctx ~idcs:host_idcs ~dims:tensor.host_dims in
-          let host_lhs = LValue.access_array (get_sync_ptr tensor) host_offset in
-          let result =
-            loop_binop op ~num_typ:tensor.num_typ ~is_double:tensor.is_double ~v1:(RValue.lvalue host_lhs)
-              ~v2:value
-          in
-          Block.assign !current_block host_lhs result;
-          Block.assign !current_block device_lhs result)
-        else
-          let rhs =
-            loop_binop op ~num_typ:tensor.num_typ ~is_double:tensor.is_double ~v1:(RValue.lvalue device_lhs)
-              ~v2:value
-          in
-          Block.assign !current_block device_lhs rhs
+        let rhs =
+          loop_binop op ~num_typ:tensor.num_typ ~is_double:tensor.is_double ~v1:(RValue.lvalue device_lhs)
+            ~v2:value
+        in
+        Block.assign !current_block device_lhs rhs
     | Set (tensor, idcs, Binop (op, c2, Get (tensor2, idcs2)))
       when Node.equal_tensor_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
-        let idcs = lookup ~on_host:(is_update_on_host tensor.sync) env idcs in
+        let idcs = lookup ~on_host:false env idcs in
         let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
         let device_lhs = LValue.access_array (get_local_ptr tensor) device_offset in
-        if is_update_on_host tensor.sync then (
-          let host_offset = jit_array_offset ctx ~idcs:host_idcs ~dims:tensor.host_dims in
-          let host_lhs = LValue.access_array (get_sync_ptr tensor) host_offset in
-          let result =
-            loop_binop op ~num_typ:tensor.num_typ ~is_double:tensor.is_double ~v1:value
-              ~v2:(RValue.lvalue host_lhs)
-          in
-          Block.assign !current_block host_lhs result;
-          Block.assign !current_block device_lhs result)
-        else
-          let rhs =
-            loop_binop op ~num_typ:tensor.num_typ ~is_double:tensor.is_double ~v1:value
-              ~v2:(RValue.lvalue device_lhs)
-          in
-          Block.assign !current_block device_lhs rhs
-    | Set (ptr, idcs, value) -> (
+        let rhs =
+          loop_binop op ~num_typ:tensor.num_typ ~is_double:tensor.is_double ~v1:value
+            ~v2:(RValue.lvalue device_lhs)
+        in
+        Block.assign !current_block device_lhs rhs
+    | Set (ptr, idcs, value) ->
         let host_idcs = lookup ~on_host:true env idcs in
-        let n = Node.get ptr.id in
-        let distributive = Node.equal_data_kind ptr.field Grad || n.value_distributes_over_sum in
-        match get_tensor state ~jit_code:loop_proc ~host_idcs ptr with
-        | tensor ->
-            let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
-            let idcs = lookup ~on_host:false env idcs in
-            let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
-            let device_lhs = LValue.access_array (get_local_ptr tensor) device_offset in
-            Block.assign !current_block device_lhs value
-        | exception Unknown_synchronization when distributive ->
-            (* Cache the tensor with an Update_on_host synchronization, then recompile as an update. *)
-            ignore @@ get_tensor state ~force_sync:Update_on_host ~jit_code:loop_proc ~host_idcs ptr;
-            loop ~name @@ Set (ptr, idcs, Binop (Add, Get (ptr, idcs), value)))
+        (* let n = Node.get ptr.id in *)
+        let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs ptr in
+        let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
+        let idcs = lookup ~on_host:false env idcs in
+        let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
+        let device_lhs = LValue.access_array (get_local_ptr tensor) device_offset in
+        Block.assign !current_block device_lhs value
     | Zero_out ptr ->
         if Hashtbl.mem state.tensors ptr then
           failwith

@@ -656,10 +656,6 @@ type traced_tensor = {
   mutable zeroed_out : bool;
   mutable read_before_write : bool;  (** The node is read before it is written (i.e. it is recurrent). *)
   mutable read_only : bool;
-  mutable reduced_racyness : bool;
-      (** If true, the only non-constant writes into the tensor are updates, and a constant write is never
-          the last write. An update is a read immediately followed by a write of the same cell, as in
-          accumulation operations [=+], [=*]. *)
   mutable last_write_non_update : bool;
   mutable is_dynamic_slice : bool;
       (** If true, the tensor is a dynamic slice (i.e. a result of dynamic indexing). *)
@@ -695,7 +691,6 @@ let get_node store (ptr : Node.tensor_ptr) =
         zeroed_out = false;
         read_before_write = false;
         read_only = false;
-        reduced_racyness = true;
         last_write_non_update = false;
         is_dynamic_slice = false;
         is_replicable = true;
@@ -805,7 +800,6 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         traced.zeroed_out <- true
     | Set (tensor, idcs, llv) ->
         loop_float env llv;
-        (* get_node will initialize reduced_racyness to true.  *)
         let traced : traced_tensor = get_node traced_store tensor in
         Hash_set.add traced.assignments (lookup env idcs);
         traced.rhses <- List.dedup_and_sort ~compare:Caml.compare @@ (llv :: traced.rhses);
@@ -817,11 +811,10 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
           && fst (check_dedicated_dep Shape.Sample_num ~cached_dedicated:cached_not_replicable) llc
         then traced.is_replicable <- false;
         (match llv with
-        | Get (tensor2, idcs2) ->
+        | Get (_tensor2, idcs2) ->
             traced.last_write_non_update <- true;
             if Array.exists idcs2 ~f:Shape.(fun i -> is_dynamic_recipient i || is_frozen_recipient i) then
-              assert traced.is_dynamic_slice;
-            if (Node.get tensor2.id).literal then () else traced.reduced_racyness <- false
+              assert traced.is_dynamic_slice
         | Binop (_, Get (tensor2, idcs2), _)
           when Node.equal_tensor_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
             traced.last_write_non_update <- false
@@ -829,9 +822,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
           when Node.equal_tensor_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
             traced.last_write_non_update <- false
         | Constant _ -> traced.last_write_non_update <- true
-        | _ ->
-            traced.reduced_racyness <- false;
-            traced.last_write_non_update <- true);
+        | _ -> traced.last_write_non_update <- true);
         Array.iter idcs ~f:(function
           | Shape.Dynamic_provider _ ->
               if not virtualize_settings.always_inline_dynamic_indexing then traced.non_virtual <- true
@@ -883,7 +874,6 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
   in
   loop_proc empty_env llc;
   Hashtbl.iter traced_store ~f:(fun traced ->
-      if traced.last_write_non_update then traced.reduced_racyness <- false;
       if
         (not (virtualize_settings.always_inline_dynamic_indexing && traced.is_dynamic_slice))
         && Hashtbl.exists traced.accesses ~f:is_too_many
@@ -1340,9 +1330,9 @@ let simplify_llc traced_store llc =
         if equal_float_low_level llv1 v1 && equal_float_low_level llv2 v2 then result else loop_float result
     | Unop (Identity, llv) -> loop_float llv
     | Unop (op, llv) ->
-      let v = loop_float llv in
-      let result = Unop (op, v) in
-      if equal_float_low_level llv v then result else loop_float result
+        let v = loop_float llv in
+        let result = Unop (op, v) in
+        if equal_float_low_level llv v then result else loop_float result
   in
   loop_proc llc
 

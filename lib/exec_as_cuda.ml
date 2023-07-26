@@ -7,12 +7,6 @@ let sync_threads_on_update = ref true
 type sync_properties =
   | Thread_only  (** Thread-local tensor. *)
   | Block_only  (** Shared memory tensor. *)
-  | Update_globally_for_thread
-      (** All assignments are update assignments. They happen directly in global memory, simultaneously
-          syncing the tensor's cell value for a thread. *)
-  | Update_globally_for_block
-      (** All assignments are update assignments. They happen directly in global memory, simultaneously
-          syncing the tensor's cell value for a block (via a shared array). *)
   | Constant
       (** This tensor is accessed directly in the global memory but is not modified by the step update. *)
   | Thread_parallel
@@ -122,8 +116,8 @@ let prec_to_c_type = function
   | Double_prec _ -> "double"
 
 let scope_of_sync = function
-  | Thread_only | Update_globally_for_thread | Thread_parallel -> Thread
-  | Block_only | Update_globally_for_block | Block_parallel -> Shared
+  | Thread_only | Thread_parallel -> Thread
+  | Block_only | Block_parallel -> Shared
   | Constant | Non_local -> Global
   | Replicated -> Thread
 
@@ -188,10 +182,6 @@ let get_tensor ~traced_store ~num_threads:_ ~num_blocks ?force_sync ~jit_code ~d
           List.exists tn.rhses
             ~f:(snd @@ Code.check_dedicated_dep Shape.Sample_num ~cached_dedicated:(fun _ -> false))
         in
-        let update_globally : bool =
-          (* Note: not requiring tn.read_before_write *)
-          (not is_block_parallel) && (not tn.is_replicable) && tn.reduced_racyness
-        in
         let sync : sync_properties =
           Option.value_or_thunk force_sync ~default:(fun () ->
               if
@@ -203,8 +193,6 @@ let get_tensor ~traced_store ~num_threads:_ ~num_blocks ?force_sync ~jit_code ~d
                 Block_only
               else if (is_block_parallel || num_blocks <= 1) && is_thread_parallel then Thread_parallel
               else if is_block_parallel then Block_parallel
-              else if update_globally && not is_thread_parallel then Update_globally_for_thread
-              else if update_globally then Update_globally_for_block
               else if Option.is_some hosted && tn.read_only then Constant
               else if can_be_replicated && not is_thread_parallel then Replicated
               else (
@@ -368,21 +356,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         let num_closing_braces = pp_top_locals ~dyn_env ppf v2 in
         (* Because of SIMD-like computation over warps, updates must be atomic, for both global
            and shared variables. *)
-        if
-          List.exists ~f:(equal_sync_properties tensor.sync)
-            [ Update_globally_for_thread; Update_globally_for_block ]
-        then (
-          if Code.equal_binop op Add then
-            fprintf ppf "atomicAdd@[<2>(%s + %a,@ %a@])" (Option.value_exn tensor.global)
-              (pp_array_offset Global) (idcs, tensor.dims) loop_f v2
-          else
-            failwith @@ "Exec_as_cuda: atomic updates only implemented for addition: "
-            ^ Sexp.to_string_hum ([%sexp_of: unit_low_level] llc);
-          fprintf ppf ";@ %s@,@[<2>%s@[<2>[%a@]] =@ %s@[<2>[%a@]];@]"
-            (if !sync_threads_on_update then "__syncthreads(); " else "")
-            (Option.value_exn tensor.local) (pp_array_offset tensor.run_scope) (idcs, tensor.dims)
-            (Option.value_exn tensor.global) (pp_array_offset Global) (idcs, tensor.dims))
-        else if List.exists ~f:(equal_sync_properties tensor.sync) [ Block_only; Block_parallel ] then
+        if List.exists ~f:(equal_sync_properties tensor.sync) [ Block_only; Block_parallel ] then
           if Code.equal_binop op Add then
             fprintf ppf "atomicAdd@[<2>(%s + %a,@ %a@]);" (get_run_ptr tensor)
               (pp_array_offset tensor.run_scope) (idcs, tensor.dims) loop_f v2
@@ -625,7 +599,7 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
   let shared_decls =
     List.filter_map tensors ~f:(fun (_, tn) ->
         match tn.sync with
-        | Block_only | Update_globally_for_block | Block_parallel ->
+        | Block_only | Block_parallel ->
             Option.map tn.local ~f:(fun t_name ->
                 "__shared__ " ^ tn.num_typ ^ " " ^ t_name ^ "[" ^ Int.to_string tn.shared_length ^ "];")
         | _ -> None)
@@ -633,7 +607,7 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
   let thread_decls =
     List.filter_map tensors ~f:(fun (ptr, tn) ->
         match tn.sync with
-        | Thread_only | Update_globally_for_thread | Thread_parallel | Replicated ->
+        | Thread_only | Thread_parallel | Replicated ->
             Option.map tn.local ~f:(fun t_name ->
                 tn.num_typ ^ " " ^ t_name ^ "[" ^ Int.to_string tn.thread_length
                 ^ if Code.(get_node traced_store ptr).zero_initialized then "] = {0};" else "];")
@@ -647,7 +621,7 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
              (* __shared__ variables cannot have initializers. *)
              if n.zero_initialized then
                match tn.sync with
-               | Block_only | Update_globally_for_block | Block_parallel ->
+               | Block_only | Block_parallel ->
                    Option.map tn.local ~f:(fun l_name ->
                        let b = Buffer.create 4096 in
                        let ppf = Caml.Format.formatter_of_buffer b in
@@ -686,32 +660,26 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
   let finalizers =
     Array.of_list tensors
     |> Array.filter_map ~f:(fun (_, tn) ->
-           if
-             List.exists ~f:(equal_sync_properties tn.sync)
-               [ Update_globally_for_thread; Update_globally_for_block ]
-           then None
-           else
-             match tn.run_scope with
-             | Thread | Shared ->
-                 Option.map2 tn.local tn.global ~f:(fun l_name g_name ->
-                     let b = Buffer.create 4096 in
-                     let ppf = Caml.Format.formatter_of_buffer b in
-                     let body idcs =
-                       Code.Staged_compilation
-                         (fun () ->
-                           Caml.Format.fprintf ppf "@[<2>%s[%a] =@ %s[%a];@]" g_name (pp_array_offset Global)
-                             (idcs, tn.dims) l_name (pp_array_offset tn.run_scope) (idcs, tn.dims))
-                     in
-                     let loops = Code.loop_over_dims ~skip_frozen:true tn.dims ~body in
-                     if is_replicated tn.sync then
-                       Caml.Format.fprintf ppf
-                         "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ %a@ @]}"
-                         (jit_code ~num_threads ~num_blocks ~traced_store)
-                         loops
-                     else jit_code ~num_threads ~num_blocks ~traced_store ppf loops;
-                     Caml.Format.pp_print_newline ppf ();
-                     Buffer.contents b)
-             | _ -> None)
+           match tn.run_scope with
+           | Thread | Shared ->
+               Option.map2 tn.local tn.global ~f:(fun l_name g_name ->
+                   let b = Buffer.create 4096 in
+                   let ppf = Caml.Format.formatter_of_buffer b in
+                   let body idcs =
+                     Code.Staged_compilation
+                       (fun () ->
+                         Caml.Format.fprintf ppf "@[<2>%s[%a] =@ %s[%a];@]" g_name (pp_array_offset Global)
+                           (idcs, tn.dims) l_name (pp_array_offset tn.run_scope) (idcs, tn.dims))
+                   in
+                   let loops = Code.loop_over_dims ~skip_frozen:true tn.dims ~body in
+                   if is_replicated tn.sync then
+                     Caml.Format.fprintf ppf "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ %a@ @]}"
+                       (jit_code ~num_threads ~num_blocks ~traced_store)
+                       loops
+                   else jit_code ~num_threads ~num_blocks ~traced_store ppf loops;
+                   Caml.Format.pp_print_newline ppf ();
+                   Buffer.contents b)
+           | _ -> None)
   in
   let cu_src =
     [%string
