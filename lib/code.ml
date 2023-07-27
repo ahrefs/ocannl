@@ -1472,7 +1472,7 @@ let loop_over_dims ~skip_frozen dims ~body =
   in
   for_loop [] (Array.to_list dims)
 
-let interpret_func ~name:_ ?verbose:_ ((_traced_store : traced_store), compiled) ~syncs_per_run =
+let interpret ~name:_ ?verbose:_ ((_traced_store : traced_store), compiled) ~syncs_per_run =
   (* TODO: add verbose logs *)
   if !debug_verbose_trace then (
     Caml.Format.set_margin !code_sexp_margin;

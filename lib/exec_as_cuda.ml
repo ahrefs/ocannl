@@ -568,10 +568,10 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
   Option.iter session_state.last_module ~f:Cu.module_unload;
   session_state.last_module <- None;
   if Option.is_none session_state.ctx then (
-    if verbose then Stdio.printf "Exec_as_cuda.jit_func: initializing the CUDA context\n%!";
+    if verbose then Stdio.printf "Exec_as_cuda.jit: initializing the CUDA context\n%!";
     cleanup_session ());
   if Option.is_none session_state.ctx then invalid_arg "Exec_as_cuda: no device found";
-  if verbose then Stdio.printf "Exec_as_cuda.jit_func: generating the .cu source\n%!";
+  if verbose then Stdio.printf "Exec_as_cuda.jit: generating the .cu source\n%!";
   let b = Buffer.create 4096 in
   let ppf = Caml.Format.formatter_of_buffer b in
   let num_threads = ref 1 and num_blocks = ref 1 in
@@ -633,7 +633,9 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
                                "@[<2>if (threadIdx.x == 0) {@ @[<2>%s@[<1>[%a@]] =@ 0;@]@ @]}" l_name
                                (pp_array_offset tn.run_scope) (idcs, tn.dims))
                        in
-                       let loops = Code.(Lines [| loop_over_dims ~skip_frozen:true tn.dims ~body |]) in
+                       let loops =
+                         Code.((Lines [| loop_over_dims ~skip_frozen:true tn.dims ~body |] : unit_low_level))
+                       in
                        jit_code ~num_threads ~num_blocks ~traced_store ppf loops;
                        Caml.Format.pp_print_newline ppf ();
                        Buffer.contents b)
@@ -652,7 +654,9 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
                              (pp_array_offset tn.run_scope) (idcs, tn.dims) g_name (pp_array_offset Global)
                              (idcs, tn.dims))
                      in
-                     let loops = Code.(Lines [| loop_over_dims ~skip_frozen:true tn.dims ~body |]) in
+                     let loops =
+                       Code.((Lines [| loop_over_dims ~skip_frozen:true tn.dims ~body |] : unit_low_level))
+                     in
                      jit_code ~num_threads ~num_blocks ~traced_store ppf loops;
                      Caml.Format.pp_print_newline ppf ();
                      Buffer.contents b)
@@ -716,7 +720,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
     Stdio.Out_channel.output_string oc cu_src;
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);
-  if verbose then Stdio.printf "Exec_as_cuda.jit_func: compiling to PTX\n%!";
+  if verbose then Stdio.printf "Exec_as_cuda.jit: compiling to PTX\n%!";
   let ptx = Cu.compile_to_ptx ~cu_src ~name ~options:[ "--use_fast_math" ] ~with_debug:!Code.with_debug in
   if !Code.with_debug && !Code.keep_files_in_run_directory then (
     let f_name = name ^ "-cudajit-debug" in
@@ -732,10 +736,9 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
   session_state.last_module <- Some module_;
   let func = Cu.module_get_function module_ ~name in
   let args = List.map args ~f:(function Some (lazy p) -> Cu.Tensor p | None -> assert false) in
-  if verbose then Stdio.printf "Exec_as_cuda.jit_func: compilation finished\n%!";
+  if verbose then Stdio.printf "Exec_as_cuda.jit: compilation finished\n%!";
   fun ~syncs_per_run ->
-    if verbose then
-      Stdio.printf "Exec_as_cuda.jit_func: copying host-to-device and zeroing-out global memory\n%!";
+    if verbose then Stdio.printf "Exec_as_cuda.jit: copying host-to-device and zeroing-out global memory\n%!";
     List.iter tensors ~f:(function
       | ptr, { hosted = Some ndarray; global_ptr = Some (lazy dst); host_offset; global_length; _ } ->
           let host_offset = Option.map host_offset ~f:(fun f -> f ()) in
@@ -743,7 +746,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
           if tn.read_before_write then (
             let f src = Cu.memcpy_H_to_D ?host_offset ~length:global_length ~dst ~src () in
             if verbose && !Code.with_debug then
-              Stdio.printf "Exec_as_cuda.jit_func: memcpy_H_to_D for %s, offset: %s, length: %d\n%!"
+              Stdio.printf "Exec_as_cuda.jit: memcpy_H_to_D for %s, offset: %s, length: %d\n%!"
                 (Node.tensor_ptr_name ptr)
                 (Sexp.to_string_hum @@ [%sexp_of: int option] host_offset)
                 global_length;
@@ -754,14 +757,14 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
           let tn = Code.(get_node traced_store ptr) in
           if tn.zero_initialized then Cu.memset_d8 device Unsigned.UChar.zero ~length:global_size_in_bytes
       | _ -> ());
-    if verbose then Stdio.printf "Exec_as_cuda.jit_func: running the kernel\n%!";
+    if verbose then Stdio.printf "Exec_as_cuda.jit: running the kernel\n%!";
     (* if !Code.debug_verbose_trace then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
     for _ = 0 to syncs_per_run - 1 do
       Cu.launch_kernel func ~grid_dim_x:!num_blocks ~block_dim_x:!num_threads ~shared_mem_bytes:0 Cu.no_stream
         args;
       Cu.ctx_synchronize ()
     done;
-    if verbose then Stdio.printf "Exec_as_cuda.jit_func: copying device-to-host\n%!";
+    if verbose then Stdio.printf "Exec_as_cuda.jit: copying device-to-host\n%!";
     List.iter tensors ~f:(function
       | ptr, { hosted = Some ndarray; global_ptr = Some (lazy src); host_offset; global_length; _ } ->
           let host_offset = Option.map host_offset ~f:(fun f -> f ()) in
@@ -769,7 +772,9 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
           if not tn.read_only then (
             let f dst = Cu.memcpy_D_to_H ?host_offset ~length:global_length ~dst ~src () in
             if verbose && !Code.with_debug then
-              Stdio.printf "Exec_as_cuda.jit_func: memcpy_D_to_H for %s\n%!" (Node.tensor_ptr_name ptr);
+              Stdio.printf "Exec_as_cuda.jit: memcpy_D_to_H for %s\n%!" (Node.tensor_ptr_name ptr);
             Ndarray.map { f } ndarray)
       | _ -> ());
-    if verbose then Stdio.printf "Exec_as_cuda.jit_func: kernel run finished\n%!"
+    if verbose then Stdio.printf "Exec_as_cuda.jit: kernel run finished\n%!"
+
+let jit = jit_func

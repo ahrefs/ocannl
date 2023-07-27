@@ -130,23 +130,23 @@ let print_preamble ?(full_shape = false) () =
 (** *** Session management. *** *)
 type backend = Interpreter | Gccjit | Cuda [@@deriving sexp, equal]
 
-let exec_func = ref Exec_as_gccjit.jit_func
+let exec = ref Exec_as_gccjit.jit
 let executor_error_message = ref Exec_as_gccjit.error_message
 let cleanup_executor_session = ref Exec_as_gccjit.cleanup_session
 
 let set_executor = function
   | Interpreter ->
-      exec_func := Exec_as_gccjit.jit_func;
+      exec := Code.interpret;
       executor_error_message := Code.interpreter_error_message;
       Code.virtualize_settings.sequential_minibatch <- true;
       cleanup_executor_session := fun () -> ()
   | Gccjit ->
-      exec_func := Exec_as_gccjit.jit_func;
+      exec := Exec_as_gccjit.jit;
       executor_error_message := Exec_as_gccjit.error_message;
       Code.virtualize_settings.sequential_minibatch <- true;
       cleanup_executor_session := Exec_as_gccjit.cleanup_session
   | Cuda ->
-      exec_func := Exec_as_cuda.jit_func;
+      exec := Exec_as_cuda.jit;
       executor_error_message := Exec_as_cuda.error_message;
       Code.virtualize_settings.sequential_minibatch <- false;
       cleanup_executor_session := Exec_as_cuda.cleanup_session
@@ -174,7 +174,7 @@ let compile_routine ~name code =
   let traced_store, compiled = Code.compile_proc ~name ~for_step_update:false code in
   (* Only initialize after compilation, to know which nodes are virtual. *)
   initialize_host_tensors traced_store @@ List.take !session_initializations to_init;
-  let callback = !exec_func ~name (traced_store, compiled) in
+  let callback = !exec ~name (traced_store, compiled) in
   fun () -> callback ~syncs_per_run:1
 
 let session_params () = Node.param_nodes ~from_id:!Formula.first_session_id ()
@@ -303,7 +303,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
     initialize_host_tensors (fst !session_step_update_compiled) @@ List.take !session_initializations to_init;
     session_initialized := num_inits);
   if (not force_no_init) && (generating || reinit) then
-    session_step_update_routine := !exec_func ~name ~verbose !session_step_update_compiled;
+    session_step_update_routine := !exec ~name ~verbose !session_step_update_compiled;
   if run && steps_per_sync > 0 && syncs_per_run > 0 then (
     if verbose then Stdio.printf "refresh_session: running\n%!";
     !session_step_update_routine ~syncs_per_run;

@@ -551,7 +551,7 @@ let error_message ~name ~prefix ?extra_error_msg ~contents exc =
   msg contents;
   Buffer.contents message
 
-let jit_func ~name ?verbose:_ compiled =
+let jit ~name ?verbose:_ compiled =
   (* TODO: add verbose logs *)
   let open Gccjit in
   let ctx = Context.create_child !session_context in
@@ -576,3 +576,4 @@ let jit_func ~name ?verbose:_ compiled =
             Domainslib.Task.parallel_for Node.task_pool ~start:0 ~finish:(!num_parallel_tasks - 1)
               ~body:(fun task_id -> routine task_id))
     done
+
