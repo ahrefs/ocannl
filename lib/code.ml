@@ -335,6 +335,66 @@ let to_low_level (code : t) : unit_low_level =
 
   loop code
 
+type ('a, 'b) synchronized =
+  | Lines of ('a, 'b) synchronized array
+  | For_loop of { index : Shape.symbol; from_ : int; to_ : int; body : ('a, 'b) synchronized }
+  | Rebalance of string option * ('a, 'b) synchronized array
+  | Code of (Shape.symbol * 'a) list * 'b
+[@@deriving sexp, equal]
+
+type synchronized_low_level = (unit, unit_low_level) synchronized [@@deriving sexp, equal]
+
+let separate ~is_sep l =
+  let rec loop l =
+    let prefix, more = List.split_while ~f:(Fn.non is_sep) l in
+    let sep, remains = List.split_while ~f:is_sep more in
+    match loop remains with
+    | [] -> [ prefix @ sep ]
+    | [ last ] -> [ prefix; sep @ last ]
+    | next :: rest -> prefix :: (sep @ next) :: rest
+  in
+  loop l
+
+let to_synchronized llc : synchronized_low_level =
+  let rec flatten env =
+    let loop = flatten env in
+    function
+    | (Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_local _ | Dynamic_indices _) as llc ->
+        [| Code (env, llc) |]
+    | Lines body ->
+        Array.of_list_map ~f:(flatten_block env)
+        @@ separate ~is_sep:(function Synchronize _ -> true | _ -> false)
+        @@ Array.to_list body
+    | For_loop { index; from_; to_; body; trace_it } -> (
+        let env = (index, ()) :: env in
+        match map_one env body with
+        | Code (env, body) -> [| Code (env, For_loop { index; from_; to_; body; trace_it }) |]
+        | body -> [| For_loop { index; from_; to_; body } |])
+    | Rebalance (None, [| body |]) -> loop body
+    | Rebalance (Some s, [| body |]) -> loop (Lines [| Comment s; body |])
+    | Rebalance (s, body) ->
+        [|
+          (match flatten_block env @@ Array.to_list body with
+          | Code (env, Lines parallel) -> Code (env, Rebalance (s, parallel))
+          | Lines parallel -> Rebalance (s, parallel)
+          | result -> result);
+        |]
+    | Synchronize s -> [| Code (env, Comment s) |]
+  and flatten_block env block =
+    match List.map block ~f:(map_one env) with
+    | [] -> Lines [||]
+    | Code (env, _) :: _ as results when List.for_all results ~f:(function Code _ -> true | _ -> false) ->
+        Code (env, Lines (Array.of_list_map results ~f:(function Code (_, c) -> c | _ -> assert false)))
+    | [ result ] -> result
+    | results -> Lines (Array.of_list results)
+  and map_one env llc =
+    match flatten env llc with
+    | [||] -> Code (env, Lines [||])
+    | [| result |] -> result
+    | results -> Lines results
+  in
+  map_one [] llc
+
 let executor_print_comments = ref false
 let keep_files_in_run_directory = ref false
 let with_debug = ref false
@@ -384,9 +444,9 @@ let interpret_code llc =
   in
   let rec loop_proc env llc : unit =
     let loop = loop_proc env in
-    match llc with
-    | Lines body -> Array.iter ~f:loop body
-    | For_loop { index; from_; to_; body; trace_it = _ } ->
+    match (llc : unit_low_level) with
+    | (Lines body : unit_low_level) -> Array.iter ~f:loop body
+    | (For_loop { index; from_; to_; body; trace_it = _ } : unit_low_level) ->
         for data = from_ to to_ do
           (* We could allow replacement, but in fact we do not want repeated indices because backends
              like Gccjit require unique indices (for convenience). *)
@@ -792,7 +852,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
   let rec loop_proc env llc =
     let loop = loop_proc env in
     match llc with
-    | Lines body -> Array.iter ~f:loop body
+    | (Lines body : unit_low_level) -> Array.iter ~f:loop body
     | For_loop { index; from_; to_ = _; body; trace_it = false } ->
         loop_proc (Map.add_exn ~key:index ~data:from_ env) body
     | For_loop { index; from_; to_; body; trace_it = true } ->
@@ -925,7 +985,7 @@ let process_computation node top_llc =
   let rec loop_proc ~(env_dom : unit environment) llc =
     let loop = loop_proc ~env_dom in
     match llc with
-    | Lines body -> Array.iter ~f:loop body
+    | (Lines body : unit_low_level) -> Array.iter ~f:loop body
     | For_loop { trace_it = false; _ } ->
         (* assert false *)
         raise Non_virtual
@@ -1012,7 +1072,7 @@ let inline_computation ~id node call_args =
     in
     let rec loop env llc : unit_low_level option =
       match llc with
-      | Lines body ->
+      | (Lines body : unit_low_level) ->
           let body = Array.filter_map ~f:(loop env) body in
           if Array.is_empty body then None else Some (Lines body)
       | For_loop { trace_it = false; _ } -> assert false
@@ -1021,7 +1081,8 @@ let inline_computation ~id node call_args =
           (* Freshen the binding. *)
           let fresh = Shape.fresh_symbol index in
           let env = Map.Poly.add_exn ~key:index ~data:fresh env in
-          Option.map ~f:(fun body -> For_loop { index = fresh; from_; to_; body; trace_it }) @@ loop env body
+          Option.map ~f:(fun body : unit_low_level -> For_loop { index = fresh; from_; to_; body; trace_it })
+          @@ loop env body
       | Rebalance (s, cs) ->
           (* FIXME: NOT IMPLEMENTED YET *)
           let cs = Array.filter_map ~f:(loop env) cs in
@@ -1061,7 +1122,7 @@ let inline_computation ~id node call_args =
     in
     loop env def
   in
-  try Some (Lines (Array.filter_opt @@ Array.of_list_rev_map ~f:loop_proc node.computations))
+  try Some (Lines (Array.filter_opt @@ Array.of_list_rev_map ~f:loop_proc node.computations) : unit_low_level)
   with Non_virtual ->
     node.non_virtual <- true;
     None
@@ -1155,11 +1216,11 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit_low_level) : u
         | Some tensor ->
             if is_inline tensor then None
             else
-              Option.map ~f:(fun body -> For_loop { for_config with body })
+              Option.map ~f:(fun body : unit_low_level -> For_loop { for_config with body })
               @@ loop_proc ~balanced ~env_dom body
         | None ->
-            Option.map ~f:(fun body -> For_loop { for_config with body }) @@ loop_proc ~balanced ~env_dom body
-        )
+            Option.map ~f:(fun body : unit_low_level -> For_loop { for_config with body })
+            @@ loop_proc ~balanced ~env_dom body)
     | Rebalance (s, cs) ->
         let cs = Array.filter_map cs ~f:loop in
         if Array.is_empty cs then None else Some (Rebalance (s, cs))
@@ -1393,7 +1454,7 @@ let compile_proc ~name ?(verbose = false) ~for_step_update:_ proc =
   result
 
 let loop_over_dims ~skip_frozen dims ~body =
-  let rec for_loop rev_idcs = function
+  let rec for_loop rev_idcs : _ -> unit_low_level = function
     | [] -> body @@ Array.of_list_rev rev_idcs
     | { Shape.special = Frozen; _ } :: product when skip_frozen ->
         for_loop (Shape.Fixed_idx 0 :: rev_idcs) product
