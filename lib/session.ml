@@ -174,18 +174,17 @@ let compile_routine ~name code =
   let traced_store, compiled = Code.compile_proc ~name ~for_step_update:false code in
   (* Only initialize after compilation, to know which nodes are virtual. *)
   initialize_host_tensors traced_store @@ List.take !session_initializations to_init;
-  let callback = !exec ~name (traced_store, compiled) in
-  fun () -> callback ~syncs_per_run:1
+  !exec ~name (traced_store, compiled)
 
 let session_params () = Node.param_nodes ~from_id:!Formula.first_session_id ()
 let minus_learning_rate : Formula.t option ref = ref None
 let last_refresh_roots = ref !Formula.global_roots
 let last_with_backprop = ref false
 let last_update_params = ref false
-let last_steps_per_sync = ref 1
+let last_updates_per_run = ref 1
 let session_step_update = ref Code.Noop
 let session_step_update_compiled = ref (Hashtbl.Poly.create (), Code.(Comment "Noop"))
-let session_step_update_routine = ref (fun ~syncs_per_run:_ -> ())
+let session_step_update_routine = ref (fun () -> ())
 
 let generate_params_update ~(minus_lr : Formula.t) ?params () =
   let params = match params with Some p -> p | None -> Hashtbl.data @@ session_params () in
@@ -204,7 +203,7 @@ let print_session_code ?(compiled = false) () =
   Caml.Format.print_newline ()
 
 let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params ?(reinit = false)
-    ?(steps_per_sync = 1) ?(syncs_per_run = 1) ?(run = true) ?(force_no_init = false) ?(verbose = false) () =
+    ?(updates_per_run = 1) ?(run = true) ?(force_no_init = false) ?(verbose = false) () =
   let open Formula in
   let update_params = Option.value update_params ~default:with_backprop in
   if verbose then
@@ -220,12 +219,12 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
   last_with_backprop := with_backprop;
   let update_params_changed = Bool.(!last_update_params <> update_params) in
   last_update_params := update_params;
-  let steps_per_sync_changed = !last_steps_per_sync <> steps_per_sync in
-  last_steps_per_sync := steps_per_sync;
+  let updates_per_run_changed = !last_updates_per_run <> updates_per_run in
+  last_updates_per_run := updates_per_run;
   if regenerate || roots_changed then List.iter !session_shape_updates ~f:Shape.propagate_shapes;
   if regenerate then session_initialized := 0;
   let generating =
-    regenerate || roots_changed || backprop_changed || update_params_changed || steps_per_sync_changed
+    regenerate || roots_changed || backprop_changed || update_params_changed || updates_per_run_changed
   in
   let name = "session_step_update" in
   if generating then (
@@ -281,7 +280,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
     @@ session_params ();
     session_step_update := sequential [ preparation; forward; backprop; params_update; postprocess ];
     if verbose then Stdio.printf "refresh_session: compiling\n%!";
-    if steps_per_sync <= 1 then
+    if updates_per_run <= 1 then
       session_step_update_compiled := compile_proc ~name ~verbose ~for_step_update:true !session_step_update
     else
       let traced_store, compiled = compile_proc ~name ~verbose ~for_step_update:true !session_step_update in
@@ -292,7 +291,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
               {
                 index = Shape.get_sym_for_axis Shape.Dim;
                 from_ = 0;
-                to_ = steps_per_sync - 1;
+                to_ = updates_per_run - 1;
                 body = Lines [| Comment "Update sub-step"; compiled |];
                 trace_it = false;
               }) ));
@@ -304,9 +303,9 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
     session_initialized := num_inits);
   if (not force_no_init) && (generating || reinit) then
     session_step_update_routine := !exec ~name ~verbose !session_step_update_compiled;
-  if run && steps_per_sync > 0 && syncs_per_run > 0 then (
+  if run && updates_per_run > 0 then (
     if verbose then Stdio.printf "refresh_session: running\n%!";
-    !session_step_update_routine ~syncs_per_run;
+    !session_step_update_routine ();
     if verbose then Stdio.printf "refresh_session: finished\n%!")
 
 (** Discards global roots, advances [Formula.first_session_id] to [Node.state.unique_id].
@@ -323,7 +322,7 @@ let close_session () =
   Formula.session_postprocess := [];
   session_step_update := Noop;
   session_step_update_compiled := (Hashtbl.Poly.create (), Comment "Noop");
-  (session_step_update_routine := fun ~syncs_per_run:_ -> ());
+  (session_step_update_routine := fun () -> ());
   minus_learning_rate := None;
   !cleanup_executor_session ()
 

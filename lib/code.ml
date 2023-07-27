@@ -1472,14 +1472,12 @@ let loop_over_dims ~skip_frozen dims ~body =
   in
   for_loop [] (Array.to_list dims)
 
-let interpret ~name:_ ?verbose:_ ((_traced_store : traced_store), compiled) ~syncs_per_run =
+let interpret ~name:_ ?verbose:_ ((_traced_store : traced_store), compiled) =
   (* TODO: add verbose logs *)
   if !debug_verbose_trace then (
     Caml.Format.set_margin !code_sexp_margin;
     Caml.Format.printf "TRACE: Interpreted program:@ %a\n%!" Sexp.pp_hum @@ sexp_of_unit_low_level compiled);
-  for _ = 0 to syncs_per_run - 1 do
-    interpret_code compiled
-  done
+  fun () -> interpret_code compiled
 
 module CDSL = struct
   let dim = Shape.dim

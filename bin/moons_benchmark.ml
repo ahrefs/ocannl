@@ -76,11 +76,10 @@ let _suspended () =
   (* let step_batch = parallel_dims * minib in *)
   let%nn_op batch_of_losses = margin_loss ++ "...|... => ...|0" in
   let%nn_rs epoch_loss ~o:1 = n =+ batch_of_losses ++ "...|0 => 0" + weighted_reg_loss in
-  let steps_per_sync = refresh_batch in
-  let syncs_per_run = 1 in
+  let updates_per_run = refresh_batch in
   SDSL.everything_fully_on_host ();
   (* SDSL.everything_on_host_or_inlined (); *)
-  SDSL.refresh_session ~steps_per_sync ~syncs_per_run ();
+  SDSL.refresh_session ~updates_per_run ();
   Stdio.print_endline "\nPreamble:\n";
   SDSL.print_preamble ~full_shape:true ();
   Stdio.print_endline "\nHigh-level code:\n";
@@ -129,7 +128,7 @@ let _suspended () =
   Stdio.printf "\nHost size in bytes: %d\n%!" (SDSL.global_host_size_in_bytes ())
 
 let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?(inline_constants = true)
-    ~parallel_dims ~minibatch_size ~steps_per_sync ~syncs_per_run precision () =
+    ~parallel_dims ~minibatch_size ~updates_per_run precision () =
   (* ignore random_seed; *)
   let bench_title =
     Sexp.to_string_hum
@@ -139,8 +138,6 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
          * string
          * string
          * Session.backend
-         * string
-         * int
          * string
          * int
          * string
@@ -163,9 +160,7 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
            "minibatch",
            minibatch_size,
            "per-sync",
-           steps_per_sync,
-           "per-run",
-           syncs_per_run,
+           updates_per_run,
            precision )
   in
   Stdio.printf "\n*** %s ***\n%!" bench_title;
@@ -186,7 +181,7 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
   (* let hid_2_3 = CDSL.dim 8 in
      let hid_4_5 = CDSL.dim 4 in *)
   let hid_dim = CDSL.dim 16 in
-  let repeats = steps_per_sync * syncs_per_run in
+  let repeats = updates_per_run in
   let len = 320 in
   (* let len = 10240 in *)
   let batch_size = parallel_dims * minibatch_size in
@@ -253,7 +248,7 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
   in
   let%nn_rs epoch_loss ~o:1 = n =+ total_loss in
   (* Warmup step, with update. *)
-  SDSL.refresh_session ~steps_per_sync ~syncs_per_run ();
+  SDSL.refresh_session ~updates_per_run ();
   let losses = ref [] in
   let log_losses = ref [] in
   let batch_losses = ref [] in
@@ -265,7 +260,7 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
   let start_time = Time_now.nanoseconds_since_unix_epoch () in
   for epoch = 1 to epochs do
     for batch_n = 1 to n_batches do
-      SDSL.refresh_session ~steps_per_sync ~syncs_per_run ();
+      SDSL.refresh_session ~updates_per_run ();
       batch_losses := total_loss.@[0] :: !batch_losses;
       batch_log_losses := Float.log total_loss.@[0] :: !batch_log_losses;
       if
@@ -369,20 +364,19 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
 let _suspended () =
   ignore
   @@ classify_moons ~with_reg:false ~random_seed:3 ~on_device:true SDSL.Cuda ~inlining_cutoff:3
-       ~parallel_dims:1 ~minibatch_size:20 ~steps_per_sync:1 ~syncs_per_run:1 CDSL.single ()
+       ~parallel_dims:1 ~minibatch_size:20 ~updates_per_run:1 CDSL.single ()
 
 let benchmarks =
   List.concat_map [ (* 0; 3; 5 *) 3 ] ~f:(fun inlining_cutoff ->
       List.concat_map [ 1; (* 2; 4; 8; 10; *) 16 (* ; 20 *) ] ~f:(fun parallel_dims ->
           List.concat_map [ (* 1; 8; *) 32; 64; 128 (* ; 256; 512; 1024 *) ] ~f:(fun minibatch_size ->
-              List.concat_map [ 1 (* ; 10; 100 *) ] ~f:(fun steps_per_sync ->
-                  List.concat_map [ 1 (* ; 10; 100 *) ] ~f:(fun syncs_per_run ->
-                      List.concat_map [ 0; 1; 2 (* ; 3; 4 *) ] ~f:(fun random_seed ->
-                          List.concat_map [ SDSL.Cuda (* ; SDSL.Gccjit *) ] ~f:(fun executor ->
-                              [
-                                classify_moons ~random_seed ~on_device:true executor ~inlining_cutoff
-                                  ~parallel_dims ~minibatch_size ~steps_per_sync ~syncs_per_run CDSL.single;
-                              ])))))))
+              List.concat_map [ 1 (* ; 10; 100 *) ] ~f:(fun updates_per_run ->
+                  List.concat_map [ 0; 1; 2 (* ; 3; 4 *) ] ~f:(fun random_seed ->
+                      List.concat_map [ SDSL.Cuda (* ; SDSL.Gccjit *) ] ~f:(fun executor ->
+                          [
+                            classify_moons ~random_seed ~on_device:true executor ~inlining_cutoff
+                              ~parallel_dims ~minibatch_size ~updates_per_run CDSL.single;
+                          ]))))))
 
 (*
 let time_of = function PrintBox_utils.Benchmark { time_in_sec; _ } -> time_in_sec
@@ -394,7 +388,7 @@ let nth_best nth bench =
 
 let fixed_seed_search random_seed =
   classify_moons ~with_reg:false ~random_seed ~on_device:true SDSL.Cuda ~inlining_cutoff:3 ~parallel_dims:1
-    ~minibatch_size:32 ~steps_per_sync:1 ~syncs_per_run:1 CDSL.single ()
+    ~minibatch_size:32 ~updates_per_run:1 CDSL.single ()
 
 let _suspended () =
   List.init 20 ~f:fixed_seed_search |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout

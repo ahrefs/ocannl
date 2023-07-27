@@ -567,13 +567,9 @@ let jit ~name ?verbose:_ compiled =
   session_results := result :: !session_results;
   let routine = Result.code result name Ctypes.(int @-> returning void) in
   Context.release ctx;
-  fun ~syncs_per_run ->
-    for _ = 0 to syncs_per_run - 1 do
-      if !num_parallel_tasks = 1 then routine 0
-      else
-        Domainslib.Task.run Node.task_pool
-          (fun () ->
-            Domainslib.Task.parallel_for Node.task_pool ~start:0 ~finish:(!num_parallel_tasks - 1)
-              ~body:(fun task_id -> routine task_id))
-    done
-
+  fun () ->
+    if !num_parallel_tasks = 1 then routine 0
+    else
+      Domainslib.Task.run Node.task_pool (fun () ->
+          Domainslib.Task.parallel_for Node.task_pool ~start:0 ~finish:(!num_parallel_tasks - 1)
+            ~body:(fun task_id -> routine task_id))

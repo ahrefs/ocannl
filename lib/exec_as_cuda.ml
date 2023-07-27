@@ -737,7 +737,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
   let func = Cu.module_get_function module_ ~name in
   let args = List.map args ~f:(function Some (lazy p) -> Cu.Tensor p | None -> assert false) in
   if verbose then Stdio.printf "Exec_as_cuda.jit: compilation finished\n%!";
-  fun ~syncs_per_run ->
+  fun () ->
     if verbose then Stdio.printf "Exec_as_cuda.jit: copying host-to-device and zeroing-out global memory\n%!";
     List.iter tensors ~f:(function
       | ptr, { hosted = Some ndarray; global_ptr = Some (lazy dst); host_offset; global_length; _ } ->
@@ -759,11 +759,9 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
       | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit: running the kernel\n%!";
     (* if !Code.debug_verbose_trace then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
-    for _ = 0 to syncs_per_run - 1 do
-      Cu.launch_kernel func ~grid_dim_x:!num_blocks ~block_dim_x:!num_threads ~shared_mem_bytes:0 Cu.no_stream
-        args;
-      Cu.ctx_synchronize ()
-    done;
+    Cu.launch_kernel func ~grid_dim_x:!num_blocks ~block_dim_x:!num_threads ~shared_mem_bytes:0 Cu.no_stream
+      args;
+    Cu.ctx_synchronize ();
     if verbose then Stdio.printf "Exec_as_cuda.jit: copying device-to-host\n%!";
     List.iter tensors ~f:(function
       | ptr, { hosted = Some ndarray; global_ptr = Some (lazy src); host_offset; global_length; _ } ->
