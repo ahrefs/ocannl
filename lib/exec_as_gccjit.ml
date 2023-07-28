@@ -551,7 +551,7 @@ let error_message ~name ~prefix ?extra_error_msg ~contents exc =
   msg contents;
   Buffer.contents message
 
-let jit ~name ?verbose:_ compiled =
+let jit ~name ?verbose:_ (traced_store, llc) =
   (* TODO: add verbose logs *)
   let open Gccjit in
   let ctx = Context.create_child !session_context in
@@ -561,15 +561,51 @@ let jit ~name ?verbose:_ compiled =
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)
-  let num_parallel_tasks = ref 1 in
-  jit_func ~num_parallel_tasks ~name ctx compiled;
+  let code = Code.to_synchronized llc in
+  let proc_count = ref 0 in
+  let rec compile = function
+    | Code.Lines_sc ls -> Code.Lines_sc (Array.map ls ~f:compile)
+    | For_loop_sc opts -> For_loop_sc { opts with body = compile opts.body }
+    | Rebalance_sc (s, ls) -> Rebalance_sc (s, Array.map ls ~f:compile)
+    | Code (env_keys, body) ->
+        let suffix = Code.extract_block_name body in
+        let i =
+          Int.incr proc_count;
+          !proc_count
+        in
+        let name =
+          [%string {|%{name}_%{Int.to_string i}_%{if String.is_empty suffix then "" else "_" ^ suffix}|}]
+        in
+        let num_parallel_tasks = ref 1 in
+        jit_func ~num_parallel_tasks ~name ctx (traced_store, body);
+        Code.Code (env_keys, (!num_parallel_tasks, name))
+  in
+  let code = compile code in
   let result = Context.compile ctx in
   session_results := result :: !session_results;
-  let routine = Result.code result name Ctypes.(int @-> returning void) in
+  let rec link = function
+    | Code.Lines_sc ls -> Code.Lines_sc (Array.map ls ~f:link)
+    | For_loop_sc opts -> For_loop_sc { opts with body = link opts.body }
+    | Rebalance_sc (s, ls) -> Rebalance_sc (s, Array.map ls ~f:link)
+    | Code (env_keys, (num_parallel_tasks, name)) ->
+        let routine = Result.code result name Ctypes.(int @-> returning void) in
+        Code.Code (env_keys, (num_parallel_tasks, routine))
+  in
+  let code = link code in
+  let rec run env = function
+    | Code.Lines_sc ls -> Array.iter ls ~f:(run env)
+    | For_loop_sc { index; from_; to_; body } ->
+        for i = from_ to to_ do
+          run ((index, i) :: env) body
+        done
+    | Rebalance_sc (_s, ls) -> (* FIXME: NOT IMPLEMENTED *) Array.iter ls ~f:(run env)
+    | Code (_env_keys, (num_parallel_tasks, routine)) ->
+        if num_parallel_tasks = 1 then routine 0
+        else
+          Domainslib.Task.run Node.task_pool (fun () ->
+              Domainslib.Task.parallel_for Node.task_pool ~start:0 ~finish:(num_parallel_tasks - 1)
+                ~body:(fun task_id -> routine task_id))
+  in
+
   Context.release ctx;
-  fun () ->
-    if !num_parallel_tasks = 1 then routine 0
-    else
-      Domainslib.Task.run Node.task_pool (fun () ->
-          Domainslib.Task.parallel_for Node.task_pool ~start:0 ~finish:(!num_parallel_tasks - 1)
-            ~body:(fun task_id -> routine task_id))
+  fun () -> run [] code

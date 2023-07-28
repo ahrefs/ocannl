@@ -334,11 +334,24 @@ let to_low_level (code : t) : unit_low_level =
   in
 
   loop code
+  
+let comment_to_name =
+  let nonliteral = Str.regexp {|[^a-zA-Z0-9_]|} in
+   Str.global_replace nonliteral "_"
+
+let rec extract_block_name llc =
+  match llc with
+  | Comment s -> comment_to_name s
+  | Rebalance (Some s, _) -> comment_to_name s
+  | Rebalance (None, [||]) | Lines [||] -> ""
+  (* | Rebalance (None, llc) -> extract_block_name llc.(0) *)
+   | Lines ls -> extract_block_name ls.(0)
+   | _ -> ""
 
 type ('a, 'b) synchronized =
-  | Lines of ('a, 'b) synchronized array
-  | For_loop of { index : Shape.symbol; from_ : int; to_ : int; body : ('a, 'b) synchronized }
-  | Rebalance of string option * ('a, 'b) synchronized array
+  | Lines_sc of ('a, 'b) synchronized array
+  | For_loop_sc of { index : Shape.symbol; from_ : int; to_ : int; body : ('a, 'b) synchronized }
+  | Rebalance_sc of string option * ('a, 'b) synchronized array
   | Code of (Shape.symbol * 'a) list * 'b
 [@@deriving sexp, equal]
 
@@ -369,29 +382,29 @@ let to_synchronized llc : synchronized_low_level =
         let env = (index, ()) :: env in
         match map_one env body with
         | Code (env, body) -> [| Code (env, For_loop { index; from_; to_; body; trace_it }) |]
-        | body -> [| For_loop { index; from_; to_; body } |])
+        | body -> [| For_loop_sc { index; from_; to_; body } |])
     | Rebalance (None, [| body |]) -> loop body
     | Rebalance (Some s, [| body |]) -> loop (Lines [| Comment s; body |])
     | Rebalance (s, body) ->
         [|
           (match flatten_block env @@ Array.to_list body with
           | Code (env, Lines parallel) -> Code (env, Rebalance (s, parallel))
-          | Lines parallel -> Rebalance (s, parallel)
+          | Lines_sc parallel -> Rebalance_sc (s, parallel)
           | result -> result);
         |]
     | Synchronize s -> [| Code (env, Comment s) |]
   and flatten_block env block =
     match List.map block ~f:(map_one env) with
-    | [] -> Lines [||]
+    | [] -> Lines_sc [||]
     | Code (env, _) :: _ as results when List.for_all results ~f:(function Code _ -> true | _ -> false) ->
         Code (env, Lines (Array.of_list_map results ~f:(function Code (_, c) -> c | _ -> assert false)))
     | [ result ] -> result
-    | results -> Lines (Array.of_list results)
+    | results -> Lines_sc (Array.of_list results)
   and map_one env llc =
     match flatten env llc with
     | [||] -> Code (env, Lines [||])
     | [| result |] -> result
-    | results -> Lines results
+    | results -> Lines_sc results
   in
   map_one [] llc
 
