@@ -372,7 +372,6 @@ let separate ~is_sep l =
 
 let to_synchronized llc : synchronized_low_level =
   let rec flatten env =
-    let loop = flatten env in
     function
     | (Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_local _ | Dynamic_indices _) as llc ->
         [| Code (env, llc) |]
@@ -385,8 +384,8 @@ let to_synchronized llc : synchronized_low_level =
         match map_one env body with
         | Code (env, body) -> [| Code (env, For_loop { index; from_; to_; body; trace_it }) |]
         | body -> [| For_loop_sc { index; from_; to_; body } |])
-    | Rebalance (None, [| body |]) -> loop body
-    | Rebalance (Some s, [| body |]) -> loop (Lines [| Comment s; body |])
+    | Rebalance (None, [| body |]) -> flatten env body
+    | Rebalance (Some s, [| body |]) -> flatten env (Lines [| Comment s; body |])
     | Rebalance (s, body) ->
         [|
           (match flatten_block env @@ Array.to_list body with
