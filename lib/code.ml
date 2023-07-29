@@ -334,10 +334,10 @@ let to_low_level (code : t) : unit_low_level =
   in
 
   loop code
-  
+
 let comment_to_name =
   let nonliteral = Str.regexp {|[^a-zA-Z0-9_]|} in
-   Str.global_replace nonliteral "_"
+  Str.global_replace nonliteral "_"
 
 let rec extract_block_name llc =
   match llc with
@@ -345,8 +345,8 @@ let rec extract_block_name llc =
   | Rebalance (Some s, _) -> comment_to_name s
   | Rebalance (None, [||]) | Lines [||] -> ""
   (* | Rebalance (None, llc) -> extract_block_name llc.(0) *)
-   | Lines ls -> extract_block_name ls.(0)
-   | _ -> ""
+  | Lines ls -> extract_block_name ls.(0)
+  | _ -> ""
 
 type ('a, 'b) synchronized =
   | Lines_sc of ('a, 'b) synchronized array
@@ -361,10 +361,12 @@ let separate ~is_sep l =
   let rec loop l =
     let prefix, more = List.split_while ~f:(Fn.non is_sep) l in
     let sep, remains = List.split_while ~f:is_sep more in
-    match loop remains with
-    | [] -> [ prefix @ sep ]
-    | [ last ] -> [ prefix; sep @ last ]
-    | next :: rest -> prefix :: (sep @ next) :: rest
+    if List.is_empty remains then [ prefix @ sep ]
+    else
+      match loop remains with
+      | [] -> [ prefix @ sep ]
+      | [ last ] -> [ prefix; sep @ last ]
+      | next :: rest -> prefix :: (sep @ next) :: rest
   in
   loop l
 
