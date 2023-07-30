@@ -1001,7 +1001,8 @@ let process_computation node top_llc =
     match llc with
     | (Lines body : unit_low_level) -> Array.iter ~f:loop body
     | For_loop { trace_it = false; _ } ->
-        (* assert false *)
+        (* TODO: small loops could be unrolled. The loop is internal to the computation of the cell
+           (the loop index is not in [at_idcs]). *)
         raise Non_virtual
     | For_loop { index; body; from_ = _; to_ = _; trace_it = true } ->
         loop_proc ~env_dom:(Map.add_exn ~key:index ~data:() env_dom) body
@@ -1027,8 +1028,8 @@ let process_computation node top_llc =
         loop_float ~env_dom llv
     | Set_local (_, llv) -> loop_float ~env_dom llv
     | Comment _ -> ()
-    | Staged_compilation _ -> ()
-    | Synchronize _ -> ()
+    | Staged_compilation _ -> raise Non_virtual
+    | Synchronize _ -> raise Non_virtual
     | Dynamic_indices { body; _ } -> loop body
   and loop_float ~env_dom llv =
     match llv with
