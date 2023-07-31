@@ -1001,8 +1001,6 @@ let process_computation node top_llc =
     match llc with
     | (Lines body : unit_low_level) -> Array.iter ~f:loop body
     | For_loop { trace_it = false; _ } ->
-        (* TODO: small loops could be unrolled. The loop is internal to the computation of the cell
-           (the loop index is not in [at_idcs]). *)
         raise Non_virtual
     | For_loop { index; body; from_ = _; to_ = _; trace_it = true } ->
         loop_proc ~env_dom:(Map.add_exn ~key:index ~data:() env_dom) body
