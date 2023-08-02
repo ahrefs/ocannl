@@ -91,7 +91,6 @@ type tensor_ptr_iset = Set.M(Tensor_ptr).t
 let sexp_of_tensor_ptr_iset s = [%sexp_of: tensor_ptr Sequence.t] @@ Set.to_sequence s
 let tensor_ptr_iset_of_sexp l = Set.of_list (module Tensor_ptr) @@ List.t_of_sexp tensor_ptr_of_sexp l
 let equal_tensor_ptr_iset (s1 : tensor_ptr_iset) (s2 : tensor_ptr_iset) = Set.equal s1 s2
-let tensor_ptr_iset = Set.empty (module Tensor_ptr)
 
 let host_size_in_bytes ptr =
   (* 1 number bigarray is reporting the same size as an empty bigarray, but we use size 0 to indicate

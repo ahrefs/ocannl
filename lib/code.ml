@@ -348,14 +348,14 @@ let rec extract_block_name llc =
   | Lines ls -> extract_block_name ls.(0)
   | _ -> ""
 
-type ('a, 'b) synchronized =
-  | Lines_sc of ('a, 'b) synchronized array
-  | For_loop_sc of { index : Shape.symbol; from_ : int; to_ : int; body : ('a, 'b) synchronized }
-  | Rebalance_sc of string option * ('a, 'b) synchronized array
-  | Code of (Shape.symbol * 'a) list * 'b
+type 'a synchronized =
+  | Lines_sc of 'a synchronized array
+  | For_loop_sc of { index : Shape.symbol; from_ : int; to_ : int; body : 'a synchronized }
+  | Rebalance_sc of string option * 'a synchronized array
+  | Code of Shape.symbol list * 'a
 [@@deriving sexp, equal]
 
-type synchronized_low_level = (unit, unit_low_level) synchronized [@@deriving sexp, equal]
+type synchronized_low_level = unit_low_level synchronized [@@deriving sexp, equal]
 
 let separate ~is_sep l =
   let rec loop l =
@@ -371,8 +371,7 @@ let separate ~is_sep l =
   loop l
 
 let to_synchronized llc : synchronized_low_level =
-  let rec flatten env =
-    function
+  let rec flatten env = function
     | (Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_local _ | Dynamic_indices _) as llc ->
         [| Code (env, llc) |]
     | Lines body ->
@@ -380,7 +379,7 @@ let to_synchronized llc : synchronized_low_level =
         @@ separate ~is_sep:(function Synchronize _ -> true | _ -> false)
         @@ Array.to_list body
     | For_loop { index; from_; to_; body; trace_it } -> (
-        let env = (index, ()) :: env in
+        let env = index :: env in
         match map_one env body with
         | Code (env, body) -> [| Code (env, For_loop { index; from_; to_; body; trace_it }) |]
         | body -> [| For_loop_sc { index; from_; to_; body } |])
@@ -408,6 +407,18 @@ let to_synchronized llc : synchronized_low_level =
     | results -> Lines_sc results
   in
   map_one [] llc
+
+type annotation = {
+  code : unit_low_level;
+  read_only : Node.tensor_ptr_iset;
+  write_only : Node.tensor_ptr_iset;
+  write_first : Node.tensor_ptr_iset;
+      (** The tensors are both written and read in the annotated code, but are determinately written first. *)
+  mixed_accesses : Node.tensor_ptr_iset;  (** The remaining used tensors. *)
+}
+[@@deriving sexp, equal]
+
+type annotated = annotation synchronized [@@deriving sexp, equal]
 
 let executor_print_comments = ref false
 let keep_files_in_run_directory = ref false
@@ -966,10 +977,6 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         traced.non_device_only <- true;
         traced.read_before_write <- true))
 
-type tensor_ptrs = Node.tensor_ptr Set.Poly.t
-
-let sexp_of_tensor_ptrs ts = Fn.compose [%sexp_of: Node.tensor_ptr list] Set.to_list ts
-
 let process_computation node top_llc =
   let exception Non_virtual in
   let top_data = { Node.id = node.id; field = node.kind } in
@@ -1000,8 +1007,7 @@ let process_computation node top_llc =
     let loop = loop_proc ~env_dom in
     match llc with
     | (Lines body : unit_low_level) -> Array.iter ~f:loop body
-    | For_loop { trace_it = false; _ } ->
-        raise Non_virtual
+    | For_loop { trace_it = false; _ } -> raise Non_virtual
     | For_loop { index; body; from_ = _; to_ = _; trace_it = true } ->
         loop_proc ~env_dom:(Map.add_exn ~key:index ~data:() env_dom) body
     | Rebalance (_, cs) -> Array.iter ~f:loop cs
@@ -1149,7 +1155,7 @@ let rec unroll_pow ~(base : float_low_level) ~(exp : int) : float_low_level =
 
 let virtual_llc traced_store reverse_node_map (llc : unit_low_level) : unit_low_level =
   (* The current position is within scope of the definitions of the process_for virtual tensors. *)
-  let rec loop_proc ~(process_for : tensor_ptrs) (llc : unit_low_level) : unit_low_level =
+  let rec loop_proc ~(process_for : Node.tensor_ptr_iset) (llc : unit_low_level) : unit_low_level =
     let loop = loop_proc ~process_for in
     match llc with
     | Lines body -> Lines (Array.map ~f:loop body)
@@ -1188,7 +1194,7 @@ let virtual_llc traced_store reverse_node_map (llc : unit_low_level) : unit_low_
             if (not @@ Set.mem process_for ptr) && not tensor.non_virtual then
               process_computation tensor result;
             result)
-  and loop_float ~(process_for : tensor_ptrs) (llv : float_low_level) : float_low_level =
+  and loop_float ~(process_for : Node.tensor_ptr_iset) (llv : float_low_level) : float_low_level =
     match llv with
     | Constant _ -> llv
     | Get (tensor, _) when Set.mem process_for tensor ->
@@ -1209,7 +1215,7 @@ let virtual_llc traced_store reverse_node_map (llc : unit_low_level) : unit_low_
     | Binop (op, llv1, llv2) -> Binop (op, loop_float ~process_for llv1, loop_float ~process_for llv2)
     | Unop (op, llv) -> Unop (op, loop_float ~process_for llv)
   in
-  loop_proc ~process_for:Set.Poly.empty llc
+  loop_proc ~process_for:(Set.empty (module Node.Tensor_ptr)) llc
 
 let cleanup_virtual_llc traced_store reverse_node_map (llc : unit_low_level) : unit_low_level =
   let is_inline tensor =
@@ -1465,6 +1471,66 @@ let compile_proc ~name ?(verbose = false) ~for_step_update:_ proc =
      Hashtbl.iter (fst result) ~f:(fun n -> if n.read_before_write then (Node.get n.id).is_recurrent <- true); *)
   if verbose then Stdio.printf "Code.compile_proc: finished\n%!";
   result
+
+let analyze llc =
+  let open Utils in
+  let empty = Set.empty (module Node.Tensor_ptr) in
+  let single = Set.singleton (module Node.Tensor_ptr) in
+  let parallel code { code = _; read_only = r1; write_only = w1; write_first = wr1; mixed_accesses = rw1 }
+      { code = _; read_only = r2; write_only = w2; mixed_accesses = rw2; write_first = wr2 } =
+    let read_only = Set_O.(r1 + r2 - w1 - rw1 - wr1 - w2 - rw2 - wr2) in
+    {
+      code;
+      read_only;
+      write_only = Set_O.(w1 + w2 - r1 - rw1 - wr1 - r2 - rw2 - wr2);
+      mixed_accesses = Set_O.(rw1 + rw2 + r1 + r2 - read_only);
+      write_first = Set_O.(wr1 + wr2 - r1 - rw1 - r2 - rw2);
+    }
+  in
+  let rec loop_proc code =
+    let parallel = parallel code in
+    let forward { code = _; read_only = r1; write_only = w1; mixed_accesses = rw1; write_first = wr1 }
+        { code = _; read_only = r2; write_only = w2; mixed_accesses = rw2; write_first = wr2 } =
+      {
+        code;
+        read_only = Set_O.(r1 + r2 - w1 - rw1 - wr1 - w2 - rw2 - wr2);
+        write_only = Set_O.(w1 + w2 - r1 - rw1 - wr1 - r2 - rw2 - wr2);
+        mixed_accesses = Set_O.(rw1 + (r1 & (rw2 + w2 + wr2)) + (rw2 - w1 - wr1));
+        write_first = Set_O.(wr1 + (w1 & (wr2 + r2 + rw2)) + (wr2 - r1 - rw1));
+      }
+    in
+    let init = { code; read_only = empty; write_only = empty; mixed_accesses = empty; write_first = empty } in
+    match code with
+    | Comment _ -> init
+    | Staged_compilation _ -> invalid_arg "Code.analyze: Staged_compilation not supported"
+    | Lines l -> Array.fold ~f:forward ~init @@ Array.map ~f:loop_proc l
+    | For_loop { body; _ } -> loop_proc body
+    | Rebalance (_, l) -> Array.fold ~f:parallel ~init @@ Array.map ~f:loop_proc l
+    | Synchronize _ -> init
+    | Dynamic_indices { tensor; body; _ } -> forward { init with read_only = single tensor } (loop_proc body)
+    | Zero_out ptr -> { init with write_only = single ptr }
+    | Set (ptr, _, llv) -> forward (loop_float code llv) { init with write_only = single ptr }
+    | Set_local (_, llv) -> loop_float code llv
+  and loop_float code llv =
+    let parallel = parallel code in
+    let init = { code; read_only = empty; write_only = empty; mixed_accesses = empty; write_first = empty } in
+    match llv with
+    | Local_scope _ -> init
+    | Get_local _ -> init
+    | Get_global _ -> init
+    | Get (ptr, _) -> { init with read_only = single ptr }
+    | Binop (_, v1, v2) -> parallel (loop_float code v1) (loop_float code v2)
+    | Unop (_, v) -> loop_float code v
+    | Constant _ -> init
+  in
+  loop_proc llc
+
+let rec analyze_synced (sc : synchronized_low_level) =
+  match sc with
+  | Lines_sc l -> Lines_sc (Array.map l ~f:analyze_synced)
+  | For_loop_sc opts -> For_loop_sc { opts with body = analyze_synced opts.body }
+  | Rebalance_sc (s, l) -> Rebalance_sc (s, Array.map l ~f:analyze_synced)
+  | Code (idcs, body) -> Code (idcs, analyze body)
 
 let loop_over_dims ~skip_frozen dims ~body =
   let rec for_loop rev_idcs : _ -> unit_low_level = function
