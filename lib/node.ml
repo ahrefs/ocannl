@@ -67,8 +67,8 @@ let get uid = Hashtbl.find_exn global_node_store uid
 let global_host_size_in_bytes () =
   Hashtbl.fold global_node_store ~init:0 ~f:(fun ~key:_ ~data sum -> sum + host_size_in_bytes data.node)
 
-type data_kind = Value | Grad [@@deriving sexp, equal, hash, variants]
-type tensor_ptr = { id : int; field : data_kind } [@@deriving sexp, equal, hash]
+type data_kind = Value | Grad [@@deriving compare, sexp, equal, hash, variants]
+type tensor_ptr = { id : int; field : data_kind } [@@deriving compare, sexp, equal, hash]
 
 let tensor_ptr_name { id; field } =
   match field with Value -> "n" ^ Int.to_string id ^ "_value" | Grad -> "n" ^ Int.to_string id ^ "_grad"
@@ -76,6 +76,22 @@ let tensor_ptr_name { id; field } =
 let get_tensor tensor =
   let n = get tensor.id in
   match tensor.field with Value -> Some n.node.value | Grad -> n.node.grad
+
+module Compare_tensor_ptr = struct
+  type t = tensor_ptr = { id : int; field : data_kind } [@@deriving compare, sexp, equal, hash]
+end
+
+module Tensor_ptr = struct
+  include Compare_tensor_ptr
+  include Comparator.Make (Compare_tensor_ptr)
+end
+
+type tensor_ptr_iset = Set.M(Tensor_ptr).t
+
+let sexp_of_tensor_ptr_iset s = [%sexp_of: tensor_ptr Sequence.t] @@ Set.to_sequence s
+let tensor_ptr_iset_of_sexp l = Set.of_list (module Tensor_ptr) @@ List.t_of_sexp tensor_ptr_of_sexp l
+let equal_tensor_ptr_iset (s1 : tensor_ptr_iset) (s2 : tensor_ptr_iset) = Set.equal s1 s2
+let tensor_ptr_iset = Set.empty (module Tensor_ptr)
 
 let host_size_in_bytes ptr =
   (* 1 number bigarray is reporting the same size as an empty bigarray, but we use size 0 to indicate
