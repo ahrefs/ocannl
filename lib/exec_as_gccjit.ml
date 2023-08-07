@@ -561,14 +561,14 @@ let jit ~name ?verbose:_ (traced_store, llc) =
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)
-  let code = Code.to_synchronized llc in
   let proc_count = ref 0 in
   let rec compile = function
     | Code.Lines_sc ls -> Code.Lines_sc (Array.map ls ~f:compile)
     | For_loop_sc opts -> For_loop_sc { opts with body = compile opts.body }
     | Rebalance_sc (s, ls) -> Rebalance_sc (s, Array.map ls ~f:compile)
-    | Code (env_keys, body) ->
-        let suffix = Code.extract_block_name body in
+    | Code (_, { Code.code = None; _ }) -> assert false
+    | Code (env_keys, { Code.code = Some code; _ }) ->
+        let suffix = Code.extract_block_name code in
         let i =
           Int.incr proc_count;
           !proc_count
@@ -577,10 +577,9 @@ let jit ~name ?verbose:_ (traced_store, llc) =
           [%string {|%{name}_%{Int.to_string i}_%{if String.is_empty suffix then "" else "_" ^ suffix}|}]
         in
         let num_parallel_tasks = ref 1 in
-        jit_func ~num_parallel_tasks ~name ctx (traced_store, body);
+        jit_func ~num_parallel_tasks ~name ctx (traced_store, code);
         Code.Code (env_keys, (!num_parallel_tasks, name))
   in
-  let code = compile code in
   let result = Context.compile ctx in
   session_results := result :: !session_results;
   let rec link = function
@@ -591,7 +590,7 @@ let jit ~name ?verbose:_ (traced_store, llc) =
         let routine = Result.code result name Ctypes.(int @-> returning void) in
         Code.Code (env_keys, (num_parallel_tasks, routine))
   in
-  let code = link code in
+  let code = Code.(llc |> to_synchronized |> analyze_synced ~next_sc:None |> compile |> link) in
   let rec run env = function
     | Code.Lines_sc ls -> Array.iter ls ~f:(run env)
     | For_loop_sc { index; from_; to_; body } ->

@@ -408,18 +408,6 @@ let to_synchronized llc : synchronized_low_level =
   in
   map_one [] llc
 
-type annotation = {
-  code : unit_low_level;
-  read_only : Node.tensor_ptr_iset;
-  write_only : Node.tensor_ptr_iset;
-  write_first : Node.tensor_ptr_iset;
-      (** The tensors are both written and read in the annotated code, but are determinately written first. *)
-  mixed_accesses : Node.tensor_ptr_iset;  (** The remaining used tensors. *)
-}
-[@@deriving sexp, equal]
-
-type annotated = annotation synchronized [@@deriving sexp, equal]
-
 let executor_print_comments = ref false
 let keep_files_in_run_directory = ref false
 let with_debug = ref false
@@ -1472,12 +1460,42 @@ let compile_proc ~name ?(verbose = false) ~for_step_update:_ proc =
   if verbose then Stdio.printf "Code.compile_proc: finished\n%!";
   result
 
-let analyze llc =
-  let open Utils in
-  let empty = Set.empty (module Node.Tensor_ptr) in
-  let single = Set.singleton (module Node.Tensor_ptr) in
-  let parallel code { code = _; read_only = r1; write_only = w1; write_first = wr1; mixed_accesses = rw1 }
-      { code = _; read_only = r2; write_only = w2; mixed_accesses = rw2; write_first = wr2 } =
+type annotation = {
+  code : unit_low_level option;
+  read_only : Node.tensor_ptr_iset;
+  write_only : Node.tensor_ptr_iset;
+  write_first : Node.tensor_ptr_iset;
+      (** The tensors are both written and read in the annotated code, but are determinately written first. *)
+  mixed_accesses : Node.tensor_ptr_iset;  (** The remaining used tensors. *)
+  next_sc : annotation option;
+  mutable loopback_sc : annotation option;
+}
+[@@deriving sexp, equal]
+
+type annotated = annotation synchronized [@@deriving sexp, equal]
+
+let rec parallel code
+    ({
+       code = _;
+       read_only = r1;
+       write_only = w1;
+       write_first = wr1;
+       mixed_accesses = rw1;
+       next_sc = nsc1;
+       loopback_sc = lsc1;
+     } as sc1)
+    ({
+       code = _;
+       read_only = r2;
+       write_only = w2;
+       mixed_accesses = rw2;
+       write_first = wr2;
+       next_sc = nsc2;
+       loopback_sc = lsc2;
+     } as sc2) =
+  if equal_annotation sc1 sc2 then sc1
+  else
+    let open Utils in
     let read_only = Set_O.(r1 + r2 - w1 - rw1 - wr1 - w2 - rw2 - wr2) in
     {
       code;
@@ -1485,22 +1503,59 @@ let analyze llc =
       write_only = Set_O.(w1 + w2 - r1 - rw1 - wr1 - r2 - rw2 - wr2);
       mixed_accesses = Set_O.(rw1 + rw2 + r1 + r2 - read_only);
       write_first = Set_O.(wr1 + wr2 - r1 - rw1 - r2 - rw2);
+      next_sc = Option.merge nsc1 nsc2 ~f:(parallel code);
+      loopback_sc = Option.merge lsc1 lsc2 ~f:(parallel code);
     }
-  in
-  let rec loop_proc code =
+
+let forward code
+    {
+      code = _;
+      read_only = r1;
+      write_only = w1;
+      mixed_accesses = rw1;
+      write_first = wr1;
+      next_sc = _;
+      loopback_sc = _;
+    }
+    {
+      code = _;
+      read_only = r2;
+      write_only = w2;
+      mixed_accesses = rw2;
+      write_first = wr2;
+      next_sc;
+      loopback_sc;
+    } =
+  let open Utils in
+  {
+    code;
+    read_only = Set_O.(r1 + r2 - w1 - rw1 - wr1 - w2 - rw2 - wr2);
+    write_only = Set_O.(w1 + w2 - r1 - rw1 - wr1 - r2 - rw2 - wr2);
+    mixed_accesses = Set_O.(rw1 + (r1 & (rw2 + w2 + wr2)) + (rw2 - w1 - wr1));
+    write_first = Set_O.(wr1 + (w1 & (wr2 + r2 + rw2)) + (wr2 - r1 - rw1));
+    next_sc;
+    loopback_sc;
+  }
+
+let analyze ~next_sc llc =
+  let empty = Set.empty (module Node.Tensor_ptr) in
+  let single = Set.singleton (module Node.Tensor_ptr) in
+  let rec loop_proc llc =
+    let code = Some llc in
     let parallel = parallel code in
-    let forward { code = _; read_only = r1; write_only = w1; mixed_accesses = rw1; write_first = wr1 }
-        { code = _; read_only = r2; write_only = w2; mixed_accesses = rw2; write_first = wr2 } =
+    let forward = forward code in
+    let init =
       {
         code;
-        read_only = Set_O.(r1 + r2 - w1 - rw1 - wr1 - w2 - rw2 - wr2);
-        write_only = Set_O.(w1 + w2 - r1 - rw1 - wr1 - r2 - rw2 - wr2);
-        mixed_accesses = Set_O.(rw1 + (r1 & (rw2 + w2 + wr2)) + (rw2 - w1 - wr1));
-        write_first = Set_O.(wr1 + (w1 & (wr2 + r2 + rw2)) + (wr2 - r1 - rw1));
+        read_only = empty;
+        write_only = empty;
+        mixed_accesses = empty;
+        write_first = empty;
+        next_sc;
+        loopback_sc = None;
       }
     in
-    let init = { code; read_only = empty; write_only = empty; mixed_accesses = empty; write_first = empty } in
-    match code with
+    match llc with
     | Comment _ -> init
     | Staged_compilation _ -> invalid_arg "Code.analyze: Staged_compilation not supported"
     | Lines l -> Array.fold ~f:forward ~init @@ Array.map ~f:loop_proc l
@@ -1513,7 +1568,17 @@ let analyze llc =
     | Set_local (_, llv) -> loop_float code llv
   and loop_float code llv =
     let parallel = parallel code in
-    let init = { code; read_only = empty; write_only = empty; mixed_accesses = empty; write_first = empty } in
+    let init =
+      {
+        code;
+        read_only = empty;
+        write_only = empty;
+        mixed_accesses = empty;
+        write_first = empty;
+        next_sc;
+        loopback_sc = None;
+      }
+    in
     match llv with
     | Local_scope _ -> init
     | Get_local _ -> init
@@ -1525,12 +1590,42 @@ let analyze llc =
   in
   loop_proc llc
 
-let rec analyze_synced (sc : synchronized_low_level) =
+let rec last_sc_entry = function
+  | Lines_sc [||] -> []
+  | Lines_sc l -> last_sc_entry @@ Array.last l
+  | For_loop_sc { body; _ } -> last_sc_entry body
+  | Rebalance_sc (_, l) -> List.concat_map ~f:last_sc_entry @@ Array.to_list l
+  | Code (_, c) -> [ c ]
+
+let rec first_sc_entry = function
+  | Lines_sc [||] -> []
+  | Lines_sc l -> first_sc_entry l.(0)
+  | For_loop_sc { body; _ } -> first_sc_entry body
+  | Rebalance_sc (_, l) -> List.concat_map ~f:first_sc_entry @@ Array.to_list l
+  | Code (_, c) -> [ c ]
+
+let rec analyze_synced ~next_sc sc : annotated =
   match sc with
-  | Lines_sc l -> Lines_sc (Array.map l ~f:analyze_synced)
-  | For_loop_sc opts -> For_loop_sc { opts with body = analyze_synced opts.body }
-  | Rebalance_sc (s, l) -> Rebalance_sc (s, Array.map l ~f:analyze_synced)
-  | Code (idcs, body) -> Code (idcs, analyze body)
+  | Lines_sc l ->
+      let f sc acc =
+        let next_sc =
+          match (next_sc, acc) with
+          | _, next_sc :: _ -> List.reduce ~f:(parallel None) @@ first_sc_entry next_sc
+          | (Some _ as next_sc), [] -> next_sc
+          | None, [] -> None
+        in
+        let sc = analyze_synced ~next_sc sc in
+        sc :: acc
+      in
+      let result = Array.of_list @@ Array.fold_right l ~init:[] ~f in
+      Lines_sc result
+  | For_loop_sc opts ->
+      let body = analyze_synced ~next_sc opts.body in
+      let loopback_sc = List.reduce ~f:(parallel None) @@ first_sc_entry body in
+      List.iter ~f:(fun a -> a.loopback_sc <- loopback_sc) @@ last_sc_entry body;
+      For_loop_sc { opts with body }
+  | Rebalance_sc (s, l) -> Rebalance_sc (s, Array.map l ~f:(analyze_synced ~next_sc))
+  | Code (idcs, body) -> Code (idcs, analyze ~next_sc body)
 
 let loop_over_dims ~skip_frozen dims ~body =
   let rec for_loop rev_idcs : _ -> unit_low_level = function
