@@ -182,20 +182,8 @@ let param_nodes ?(from_id = 0) () =
 
 (* *** Printing *** *)
 
-(** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
-    Outputs ["-"] for empty dimensions. *)
-let dims_to_string ?(with_axis_numbers = false) dims =
-  if Array.is_empty dims then "-"
-  else if with_axis_numbers then
-    String.concat_array ~sep:" x "
-    @@ Array.mapi dims ~f:Shape.(fun d s -> Int.to_string d ^ ":" ^ dim_to_string s)
-  else String.concat_array ~sep:"x" @@ Array.map dims ~f:Shape.dim_to_string
-
-let int_dims_to_string ?with_axis_numbers dims =
-  dims_to_string ?with_axis_numbers @@ Array.map ~f:(fun d -> Shape.dim d) dims
-
 let ndarray_dims_to_string ?(with_axis_numbers = false) arr =
-  Nd.precision_string arr ^ " prec " ^ int_dims_to_string ~with_axis_numbers @@ Nd.dims arr
+  Nd.precision_string arr ^ " prec " ^ Nd.int_dims_to_string ~with_axis_numbers @@ Nd.dims arr
 
 (** Converts ID, label and the dimensions of a node to a string. *)
 let node_header n =
@@ -210,169 +198,6 @@ let node_header n =
   ^ String.concat ~sep:"," (List.map n.children ~f:(fun { sub_node_id = i; _ } -> Int.to_string i))
   ^ "]"
 (*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box n.label)*)
-
-(** When rendering tensors, outputs this many decimal digits. *)
-let print_decimals_precision = ref 2
-
-(** Prints 0-based [indices] entries out of [arr], where a number between [-5] and [-1] in an axis means
-    to print out the axis, and a non-negative number means to print out only the indexed dimension of the axis.
-    Prints up to [entries_per_axis] or [entries_per_axis+1] entries per axis, possibly with ellipsis
-    in the middle. [labels] provides the axis labels for all axes (use [""] or ["_"] for no label).
-    The last label corresponds to axis [-1] etc. The printed out axes are arranged as:
-    * -1: a horizontal segment in an inner rectangle (i.e. column numbers of the inner rectangle),
-    * -2: a sequence of segments in a line of text (i.e. column numbers of an outer rectangle),
-    * -3: a vertical segment in an inner rectangle (i.e. row numbers of the inner rectangle),
-    * -4: a vertical sequence of segments (i.e. column numbers of an outer rectangle),
-    * -5: a sequence of screens of text (i.e. stack numbers of outer rectangles).
-    Printing out of axis [-5] is interrupted when a callback called in between each outer rectangle
-    returns true. *)
-let render_tensor ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labels = [||]) ~indices
-    (arr : Nd.t) =
-  let module B = PrintBox in
-  let dims = Nd.dims arr in
-  let has_nan = Nd.fold ~init:false ~f:(fun has_nan _ v -> has_nan || Float.is_nan v) arr in
-  let has_inf = Nd.fold ~init:false ~f:(fun has_inf _ v -> has_inf || Float.(v = infinity)) arr in
-  let has_neg_inf =
-    Nd.fold ~init:false ~f:(fun has_neg_inf _ v -> has_neg_inf || Float.(v = neg_infinity)) arr
-  in
-  let header =
-    prefix
-    ^ (if has_nan || has_inf || has_neg_inf then " includes" else "")
-    ^ (if has_nan then " NaN" else "")
-    ^ (if has_inf then " pos. inf." else "")
-    ^ if has_neg_inf then " neg. inf." else ""
-  in
-  if Array.is_empty dims then B.vlist ~bars:false [ B.text header; B.line "<void>" ]
-  else
-    let indices = Array.copy indices in
-    let entries_per_axis = if entries_per_axis % 2 = 0 then entries_per_axis + 1 else entries_per_axis in
-    let var_indices = Array.filter_mapi indices ~f:(fun i d -> if d <= -1 then Some (5 + d, i) else None) in
-    let extra_indices =
-      [| (0, -1); (1, -1); (2, -1); (3, -1); (4, -1) |]
-      |> Array.filter ~f:(Fn.non @@ Array.mem var_indices ~equal:(fun (a, _) (b, _) -> Int.equal a b))
-    in
-    let var_indices = Array.append extra_indices var_indices in
-    Array.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b) var_indices;
-    let var_indices = Array.map ~f:snd @@ var_indices in
-    let ind0, ind1, ind2, ind3, ind4 =
-      match var_indices with
-      | [| ind0; ind1; ind2; ind3; ind4 |] -> (ind0, ind1, ind2, ind3, ind4)
-      | _ -> invalid_arg "Node.render: indices should contain at most 5 negative numbers"
-    in
-    let labels = Array.map labels ~f:(fun l -> if String.is_empty l then "" else l ^ "=") in
-    let entries_per_axis = (entries_per_axis / 2 * 2) + 1 in
-    let size0 = if ind0 = -1 then 1 else min dims.(ind0) entries_per_axis in
-    let size1 = if ind1 = -1 then 1 else min dims.(ind1) entries_per_axis in
-    let size2 = if ind2 = -1 then 1 else min dims.(ind2) entries_per_axis in
-    let size3 = if ind3 = -1 then 1 else min dims.(ind3) entries_per_axis in
-    let size4 = if ind4 = -1 then 1 else min dims.(ind4) entries_per_axis in
-    let no_label ind = Array.length labels <= ind in
-    let label0 = if ind0 = -1 || no_label ind0 then "" else labels.(ind0) in
-    let label1 = if ind1 = -1 || no_label ind1 then "" else labels.(ind1) in
-    let label2 = if ind2 = -1 || no_label ind2 then "" else labels.(ind2) in
-    let label3 = if ind3 = -1 || no_label ind3 then "" else labels.(ind3) in
-    let label4 = if ind4 = -1 || no_label ind4 then "" else labels.(ind4) in
-    (* FIXME: handle ellipsis. *)
-    let halfpoint = (entries_per_axis / 2) + 1 in
-    let expand i ~ind =
-      if dims.(ind) <= entries_per_axis then i
-      else if i < halfpoint then i
-      else dims.(ind) - entries_per_axis + i
-    in
-    let update_indices v i j k l =
-      if ind0 <> -1 then indices.(ind0) <- expand v ~ind:ind0;
-      if ind1 <> -1 then indices.(ind1) <- expand i ~ind:ind1;
-      if ind2 <> -1 then indices.(ind2) <- expand j ~ind:ind2;
-      if ind3 <> -1 then indices.(ind3) <- expand k ~ind:ind3;
-      if ind4 <> -1 then indices.(ind4) <- expand l ~ind:ind4
-    in
-    let elide_for i ~ind = ind >= 0 && dims.(ind) > entries_per_axis && i + 1 = halfpoint in
-    let is_ellipsis () = Array.existsi indices ~f:(fun ind i -> elide_for i ~ind) in
-    let inner_grid v i j =
-      B.init_grid ~bars:false ~line:size3 ~col:size4 (fun ~line ~col ->
-          update_indices v i j line col;
-          try
-            B.hpad 1 @@ B.line
-            @@
-            if is_ellipsis () then "..."
-            else PrintBox_utils.concise_float ~prec:!print_decimals_precision (Nd.get_as_float arr indices)
-          with Invalid_argument _ as error ->
-            Stdio.Out_channel.printf "Invalid indices: %s into array: %s\n%!" (int_dims_to_string indices)
-              (int_dims_to_string dims);
-            raise error)
-    in
-    let tag ?pos label ind =
-      if ind = -1 then ""
-      else
-        match pos with
-        | Some pos when elide_for pos ~ind -> "~~~~~"
-        | Some pos when pos >= 0 -> Int.to_string (expand pos ~ind) ^ " @ " ^ label ^ Int.to_string ind
-        | _ -> "axis " ^ label ^ Int.to_string ind
-    in
-    let nlines = if brief then size1 else size1 + 1 in
-    let ncols = if brief then size2 else size2 + 1 in
-    let outer_grid v =
-      (if brief then Fn.id else B.frame)
-      @@ B.init_grid ~bars:true ~line:nlines ~col:ncols (fun ~line ~col ->
-             if (not brief) && line = 0 && col = 0 then
-               B.lines @@ List.filter ~f:(Fn.non String.is_empty) @@ [ tag ~pos:v label0 ind0 ]
-             else if (not brief) && line = 0 then
-               B.lines
-               @@ List.filter ~f:(Fn.non String.is_empty)
-               @@ [ tag ~pos:(col - 1) label2 ind2; tag label4 ind4 ]
-             else if (not brief) && col = 0 then
-               B.lines
-               @@ List.filter ~f:(Fn.non String.is_empty)
-               @@ [ tag ~pos:(line - 1) label1 ind1; tag label3 ind3 ]
-             else
-               let nline = if brief then line else line - 1 in
-               let ncol = if brief then col else col - 1 in
-               if elide_for ncol ~ind:ind2 || elide_for nline ~ind:ind1 then B.hpad 1 @@ B.line "..."
-               else inner_grid v nline ncol)
-    in
-    let screens =
-      B.init_grid ~bars:true ~line:size0 ~col:1 (fun ~line ~col:_ ->
-          if elide_for line ~ind:ind0 then B.hpad 1 @@ B.line "..." else outer_grid line)
-    in
-    (if brief then Fn.id else B.frame) @@ B.vlist ~bars:false [ B.text header; screens ]
-
-let pp_tensor fmt ?prefix ?entries_per_axis ?labels ~indices arr =
-  PrintBox_text.pp fmt @@ render_tensor ?prefix ?entries_per_axis ?labels ~indices arr
-
-(** Prints the whole tensor in an inline syntax. *)
-let pp_tensor_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?labels_spec arr =
-  let dims = Nd.dims arr in
-  let num_all_axes = num_batch_axes + num_output_axes + num_input_axes in
-  let open Caml.Format in
-  let ind = Array.copy dims in
-  (match labels_spec with None -> () | Some spec -> fprintf fmt "\"%s\" " spec);
-  let rec loop axis =
-    let sep =
-      if axis < num_batch_axes then ";" else if axis < num_batch_axes + num_output_axes then ";" else ","
-    in
-    let open_delim =
-      if axis < num_batch_axes then "[|"
-      else if axis < num_batch_axes + num_output_axes then "["
-      else if axis = num_batch_axes + num_output_axes then ""
-      else "("
-    in
-    let close_delim =
-      if axis < num_batch_axes then "|]"
-      else if axis < num_batch_axes + num_output_axes then "]"
-      else if axis = num_batch_axes + num_output_axes then ""
-      else ")"
-    in
-    if axis = num_all_axes then fprintf fmt "%.*f" !print_decimals_precision (Nd.get_as_float arr ind)
-    else (
-      fprintf fmt "@[<hov 2>%s@," open_delim;
-      for i = 0 to dims.(axis) - 1 do
-        ind.(axis) <- i;
-        loop (axis + 1);
-        if i < dims.(axis) - 1 then fprintf fmt "%s@ " sep
-      done;
-      fprintf fmt "@,%s@]" close_delim)
-  in
-  loop 0
 
 type array_print_style =
   [ `Default
@@ -467,16 +292,16 @@ let to_dag ?(single_node = false) ?entries_per_axis ?(with_backend_info = false)
         let txt = if with_id then prefix else desc_l ^ n.op_label in
         `Subtree_with_ID (id, `Tree (`Text txt, children))
     | _, true, false, _ | _, true, true, None ->
-        let node = `Box (render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices n.node.value) in
+        let node = `Box (Nd.render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices n.node.value) in
         `Subtree_with_ID (id, `Tree (node, children))
     | _, false, true, Some grad ->
         let prefix = prefix ^ " Gradient" in
-        let node = `Box (render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices grad) in
+        let node = `Box (Nd.render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices grad) in
         `Subtree_with_ID (id, `Tree (node, children))
     | _, true, true, Some grad ->
         let node =
-          let value = render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices n.node.value in
-          let grad = render_tensor ~brief:true ~prefix:"Gradient" ?entries_per_axis ~labels ~indices grad in
+          let value = Nd.render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices n.node.value in
+          let grad = Nd.render_tensor ~brief:true ~prefix:"Gradient" ?entries_per_axis ~labels ~indices grad in
           `Vlist (false, [ `Box value; `Box grad ])
         in
         `Subtree_with_ID (id, `Tree (node, children))

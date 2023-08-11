@@ -483,13 +483,13 @@ let ndarray ?desc_label ~is_form ?(needs_gradient = false) ?(batch_dims = []) ?(
         let dims = Array.concat [ !batch_dims; !output_dims; !input_dims ] in
         let ndarr = Ndarray.create Ndarray.double dims (Constant_fill values) in
         let ( ! ) = List.length in
-        Node.pp_tensor_inline ~num_batch_axes:!batch_dims ~num_output_axes:!output_dims
+        Ndarray.pp_tensor_inline ~num_batch_axes:!batch_dims ~num_output_axes:!output_dims
           ~num_input_axes:!input_dims Caml.Format.str_formatter ndarr;
         Caml.Format.flush_str_formatter ()
   in
   let label =
     if String.contains label '\n' then
-      "c" ^ Node.dims_to_string @@ Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list
+      "c" ^ Ndarray.dims_to_string @@ Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list
     else label
   in
   term ?desc_label ~needs_gradient ~is_form ~batch_dims ~input_dims ~output_dims ?axis_labels

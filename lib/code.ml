@@ -541,7 +541,7 @@ let interpret_code llc =
     | Comment c ->
         if !debug_verbose_trace then (
           Caml.Format.printf "TRACE: %s -- prior state of nodes: {\n%!" c;
-          Node.print_decimals_precision := 9;
+          Ndarray.print_decimals_precision := 9;
           for i = 1 to !Node.unique_id - 1 do
             Caml.Format.printf "TRACE: %a\n%!" PrintBox_text.pp
               (Node.to_printbox ~single_node:true ~with_grad:true ~depth:9 i)

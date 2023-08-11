@@ -82,19 +82,19 @@ let print_formula ~with_grad ~with_code ?(with_low_level = false) (style : Node.
   let num_output_axes = num_axes Shape.AxisKey.Output in
   (match style with
   | `Inline ->
-      Node.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
+      Ndarray.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
         ?labels_spec m.node.node.value
   | _ ->
-      Node.pp_tensor Caml.Format.std_formatter ~prefix ~labels ~indices m.node.node.value;
+      Ndarray.pp_tensor Caml.Format.std_formatter ~prefix ~labels ~indices m.node.node.value;
       Caml.Format.print_newline ());
   (if with_grad then
      match (style, m.node.node.grad) with
      | `Inline, Some grad ->
-         Node.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
+         Ndarray.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
            ?labels_spec grad;
          Caml.Format.print_newline ()
      | _, Some grad ->
-         Node.pp_tensor Caml.Format.std_formatter ~prefix:(prefix ^ " Gradient ") ~labels ~indices grad;
+         Ndarray.pp_tensor Caml.Format.std_formatter ~prefix:(prefix ^ " Gradient ") ~labels ~indices grad;
          Caml.Format.print_newline ()
      | _ -> ());
   if with_code then (
@@ -445,7 +445,7 @@ module SDSL = struct
   let print_global_roots = print_global_roots
   let print_preamble = print_preamble
   let print_session_code = print_session_code
-  let print_decimals_precision = Node.print_decimals_precision
+  let print_decimals_precision = Ndarray.print_decimals_precision
   let get_root = get_root
   let get_node = get_node
   let set_values m cs = Ndarray.(init (Constant_fill cs) m.Formula.node.node.value)
