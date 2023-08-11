@@ -489,7 +489,8 @@ let ndarray ?desc_label ~is_form ?(needs_gradient = false) ?(batch_dims = []) ?(
   in
   let label =
     if String.contains label '\n' then
-      "c" ^ Ndarray.dims_to_string @@ Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list
+      "c" ^ Shape.dims_to_string
+      @@ Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list
     else label
   in
   term ?desc_label ~needs_gradient ~is_form ~batch_dims ~input_dims ~output_dims ?axis_labels

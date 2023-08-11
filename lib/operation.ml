@@ -185,7 +185,7 @@ let range_of_shape ?desc_label ~is_form ?(batch_dims = []) ?(input_dims = []) ?(
     () =
   let dims = Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list in
   Formula.term ?desc_label ~is_form ~needs_gradient:false ~batch_dims ~input_dims ~output_dims ?axis_labels
-    ~label:("r" ^ Ndarray.dims_to_string dims)
+    ~label:("r" ^ Shape.dims_to_string dims)
     ~init_op:Range_over_offsets ()
 
 (** In {!Formula.term} the omitted axes are {!Shape.Unknown} -- to be inferred, here they are known and empty.  *)

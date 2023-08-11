@@ -271,16 +271,12 @@ let retrieve_1d_points ?from_axis ~xdim arr =
 
 (** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
     Outputs ["-"] for empty dimensions. *)
-    let dims_to_string ?(with_axis_numbers = false) dims =
-      if Array.is_empty dims then "-"
-      else if with_axis_numbers then
-        String.concat_array ~sep:" x "
-        @@ Array.mapi dims ~f:Shape.(fun d s -> Int.to_string d ^ ":" ^ dim_to_string s)
-      else String.concat_array ~sep:"x" @@ Array.map dims ~f:Shape.dim_to_string
+let int_dims_to_string ?(with_axis_numbers = false) dims =
+  if Array.is_empty dims then "-"
+  else if with_axis_numbers then
+    String.concat_array ~sep:" x " @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ Int.to_string s)
+  else String.concat_array ~sep:"x" @@ Array.map dims ~f:Int.to_string
 
-let int_dims_to_string ?with_axis_numbers dims =
-  dims_to_string ?with_axis_numbers @@ Array.map ~f:(fun d -> Shape.dim d) dims
-    
 (** When rendering tensors, outputs this many decimal digits. *)
 let print_decimals_precision = ref 2
 
@@ -296,8 +292,7 @@ let print_decimals_precision = ref 2
     * -5: a sequence of screens of text (i.e. stack numbers of outer rectangles).
     Printing out of axis [-5] is interrupted when a callback called in between each outer rectangle
     returns true. *)
-let render_tensor ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labels = [||]) ~indices
-    (arr : t) =
+let render_tensor ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labels = [||]) ~indices arr =
   let module B = PrintBox in
   let dims = dims arr in
   let has_nan = fold ~init:false ~f:(fun has_nan _ v -> has_nan || Float.is_nan v) arr in

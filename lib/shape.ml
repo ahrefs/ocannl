@@ -77,6 +77,15 @@ let dim_to_string = function
   | { special = Dedicated Task_id; dim } -> "parallel " ^ Int.to_string dim
   | { special = Dedicated Sample_num; dim } -> "minibatch " ^ Int.to_string dim
 
+(** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
+    Outputs ["-"] for empty dimensions. *)
+let dims_to_string ?(with_axis_numbers = false) dims =
+  if Array.is_empty dims then "-"
+  else if with_axis_numbers then
+    String.concat_array ~sep:" x "
+    @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ dim_to_string s)
+  else String.concat_array ~sep:"x" @@ Array.map dims ~f:dim_to_string
+
 type dims =
   | Given of dim list
       (** User-provided dimensions. They will not change but will be broadcasted to bigger sizes. *)
