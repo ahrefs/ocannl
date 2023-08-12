@@ -17,7 +17,7 @@ type t = {
   form : form option;
   nonform_forward_body : Code.t;  (** Same as [forward_body] if [form] is [None], otherwise [Code.Noop]. *)
   id : int;
-  node : Node.t;  (** Tracks the computation node. *)
+  node : Code.node;  (** Tracks the computation node. *)
   shape_logic : Shape.logic;
       (** How to do the last update of [t.shape] when finalizing the formula.
       It is stored with the formula for debugging (shape inference does not need to retrieve it). *)
@@ -78,7 +78,7 @@ let prefix_with_preamble content =
   let result = Buffer.create 16 in
   let ap = Buffer.add_string result in
   for id = !first_session_id to !Node.unique_id - 1 do
-    let n = Node.get id in
+    let n = Code.get id in
     ap "Node ";
     ap @@ Node.node_header n;
     ap ";\n"
@@ -101,13 +101,13 @@ let create ~id ?(init_op = Code.Constant_fill [| 0.0 |]) field shape =
 let max_sublabel_length = ref 25
 
 let raw_binop ~zero_out ~accum ~lhs_id ~lhs_is_grad ~op ~rhs1_id ~rhs1_is_grad ~rhs2_id ~rhs2_is_grad ~logic =
-  let n = Node.get lhs_id in
-  let n1 = Node.get rhs1_id in
-  let n2 = Node.get rhs2_id in
-  let shape = n.shape in
-  let shape_logic = Shape.Broadcast (logic, n1.shape, n2.shape) in
+  let n = Code.get lhs_id in
+  let n1 = Code.get rhs1_id in
+  let n2 = Code.get rhs2_id in
+  let shape = n.annot.shape in
+  let shape_logic = Shape.Broadcast (logic, n1.annot.shape, n2.annot.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
-  Shape.propagate_shapes local_shape_update;
+  Code.update_shape local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections () = Shape.derive_projections local_shape_update in
   let lhs = Code.CDSL.(if lhs_is_grad then grad_of_id lhs_id else value_of_id lhs_id) in
@@ -116,12 +116,12 @@ let raw_binop ~zero_out ~accum ~lhs_id ~lhs_is_grad ~op ~rhs1_id ~rhs1_is_grad ~
   Code.Accum_binop { zero_out; accum; lhs; op; rhs1; rhs2; projections }
 
 let raw_unop ~zero_out ~accum ~lhs_id ~lhs_is_grad ~op ~rhs_id ~rhs_is_grad ~logic =
-  let n = Node.get lhs_id in
-  let n1 = Node.get rhs_id in
-  let shape = n.shape in
-  let shape_logic = Shape.Transpose (logic, n1.shape) in
+  let n = Code.get lhs_id in
+  let n1 = Code.get rhs_id in
+  let shape = n.annot.shape in
+  let shape_logic = Shape.Transpose (logic, n1.annot.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
-  Shape.propagate_shapes local_shape_update;
+  Code.update_shape local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections () = Shape.derive_projections local_shape_update in
   let lhs = Code.CDSL.(if lhs_is_grad then grad_of_id lhs_id else value_of_id lhs_id) in
@@ -141,8 +141,8 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
   in
   let children =
     [
-      { Node.sub_node_id = m1.id; computed_externally = m1_processed };
-      { sub_node_id = m2.id; computed_externally = m2_processed };
+      { Node.sub_node = m1.node; computed_externally = m1_processed };
+      { sub_node = m2.node; computed_externally = m2_processed };
     ]
   in
   let needs_gradient =
@@ -152,17 +152,18 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
     | _, Some form2 -> form2.needs_gradient
     | _ -> false
   in
+  let fixme_fragile = !Node.unique_id in
+  let shape = Shape.make ~id:fixme_fragile () in
   let n =
-    Node.create_of_promoted_precision ~needs_gradient m1.node.node m2.node.node ~op_label ?desc_label
-      ~children ()
+    Code.create_node_promoted_precision ~needs_gradient m1.node.node m2.node.node ~op_label ?desc_label
+      ~children shape
   in
   let id = n.id in
-  let shape = n.shape in
   let shape_logic = Shape.Broadcast (compose_op, m1.shape, m2.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
   let n1 = m1.node in
   let n2 = m2.node in
-  Shape.propagate_shapes local_shape_update;
+  Code.update_shape local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections () = Shape.derive_projections local_shape_update in
   let op_body = op_body ~n ~n1 ~n2 ~projections in
@@ -247,11 +248,14 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
 let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1 : t =
   (* Note: do not capture m in any closure, so it can be GC'd. *)
   let m1_processed = Option.is_some m1.form && (not @@ Map.mem !global_roots m1.id) in
-  let children = [ { Node.sub_node_id = m1.id; computed_externally = m1_processed } ] in
+  let children = [ { Node.sub_node = m1.node; computed_externally = m1_processed } ] in
   let needs_gradient = match m1.form with Some form1 -> form1.needs_gradient | None -> false in
-  let n = Node.create_of_same_precision_as ~needs_gradient m1.node.node ~op_label ?desc_label ~children () in
+  let fixme_fragile = !Node.unique_id in
+  let shape = Shape.make ~id:fixme_fragile () in
+  let n =
+    Code.create_node_same_precision_as ~needs_gradient m1.node.node ~op_label ?desc_label ~children shape
+  in
   let id = n.id in
-  let shape = n.shape in
   (match init_shape with
   | None -> ()
   | Some init ->
@@ -263,7 +267,7 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
   let shape_logic = Shape.Transpose (transpose_op, m1.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
   let n1 = m1.node in
-  Shape.propagate_shapes local_shape_update;
+  Code.update_shape local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections () = Shape.derive_projections local_shape_update in
   let op_body = op_body ~n ~n1 ~projections in
@@ -337,17 +341,18 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
       | _ -> false
   in
   let op_label : string = label in
-  let n : Node.t =
-    Node.create ~value_prec:!default_value_prec ~grad_prec:!default_grad_prec ~literal ~needs_gradient ()
-      ~op_label ?desc_label ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~children:[] ()
+  let fixme_fragile = !Node.unique_id in
+  let shape = Shape.make ~id:fixme_fragile ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced () in
+  let n : Code.node =
+    Code.create_node ~value_prec:!default_value_prec ~grad_prec:!default_grad_prec ~literal ~needs_gradient
+      ~op_label ?desc_label ~children:[] shape
   in
   let id = n.id in
-  let shape = n.shape in
   let shape_logic = Shape.Terminal in
   (* NOTE: this update does not do any work, but that might change in the future,
      and having it in the update sequence might help with debuggability. *)
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
-  Shape.propagate_shapes local_shape_update;
+  Code.update_shape local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
 
   let forward_body = Code.Noop in
@@ -375,13 +380,13 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
           match fetch_op with
           | Constant _ -> ()
           | _ ->
-              n.value_never_virtual <- true;
-              n.value_never_device_only <- true);
+              n.annot.value_never_virtual <- true;
+              n.annot.value_never_device_only <- true);
   Option.iter postprocess_op ~f:(fun postprocess_op ->
       let postprocess_op = postprocess_op ~n in
       session_postprocess := postprocess_op :: !session_postprocess;
-      n.value_never_virtual <- true;
-      n.value_never_device_only <- true);
+      n.annot.value_never_virtual <- true;
+      n.annot.value_never_device_only <- true);
   if not is_form then
     {
       forward_body;

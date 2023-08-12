@@ -81,7 +81,7 @@ let _suspended () =
   (* SDSL.everything_on_host_or_inlined (); *)
   SDSL.refresh_session ~updates_per_run ();
   Stdio.print_endline "\nPreamble:\n";
-  SDSL.print_preamble ~full_shape:true ();
+  SDSL.print_preamble ();
   Stdio.print_endline "\nHigh-level code:\n";
   SDSL.print_session_code ();
   Stdio.print_endline "\nLow-level code:\n";
@@ -291,7 +291,7 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
       {
         bench_title;
         time_in_sec;
-        host_size_in_bytes = SDSL.global_host_size_in_bytes ();
+        mem_in_bytes = SDSL.global_host_size_in_bytes ();
         result_label = "min epoch loss, last epoch loss";
         (* This is not really an epoch loss, it's a run_for_steps cumulative loss. *)
         result = [%sexp_of: float * float] (!min_loss, !last_loss);

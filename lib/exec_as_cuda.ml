@@ -127,16 +127,16 @@ let compute_array_offset ~idcs ~dims =
 let get_tensor ~traced_store ~num_threads:_ ~num_blocks ?force_sync ~jit_code ~dyn_env ~idcs ptr =
   let { tensors; _ } = session_state in
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
-      let n = Node.(get ptr.id) in
+      let n = Code.get ptr.id in
       let tn = Code.(get_node traced_store ptr) in
-      let host_size_in_bytes = Node.host_size_in_bytes ptr in
-      let dims = Shape.to_dims n.shape in
+      let host_size_in_bytes = Node.size_in_bytes n.node in
+      let dims = Shape.to_dims n.annot.shape in
       let global_length =
         dims
         |> Array.filter_map ~f:(function Shape.{ special = Frozen; _ } -> None | d -> Some d.dim)
         |> Array.fold ~init:1 ~f:( * )
       in
-      let arr = Option.value_exn @@ Node.get_tensor ptr in
+      let arr = Option.value_exn @@ Code.get_tensor ptr in
       let hosted = if Array.is_empty @@ Ndarray.dims arr then None else Some arr in
       let global_size_in_bytes = global_length * Ndarray.precision_in_bytes arr in
       let global_is_slice_of_host =
@@ -166,11 +166,11 @@ let get_tensor ~traced_store ~num_threads:_ ~num_blocks ?force_sync ~jit_code ~d
         let num_typ = prec_to_c_type prec in
         let is_block_parallel =
           Array.exists ~f:Shape.(function { special = Dedicated Task_id; _ } -> true | _ -> false)
-          @@ Shape.to_dims n.shape
+          @@ Shape.to_dims n.annot.shape
         in
         let is_thread_parallel =
           Array.exists ~f:Shape.(function { special = Dedicated Sample_num; _ } -> true | _ -> false)
-          @@ Shape.to_dims n.shape
+          @@ Shape.to_dims n.annot.shape
         in
         let can_be_replicated = tn.is_replicable in
         let computed_directly_across_blocks =
@@ -200,7 +200,7 @@ let get_tensor ~traced_store ~num_threads:_ ~num_blocks ?force_sync ~jit_code ~d
                   Caml.Format.printf "\nWARNING: Non-local sync for tensor: %a@ node: %a\n%!" Sexp.pp_hum
                     ([%sexp_of: Code.traced_tensor] tn)
                     Sexp.pp_hum
-                    ([%sexp_of: Node.t] n);
+                    ([%sexp_of: Code.node] n);
                 Non_local))
         in
         let has_global_mem = not (is_thread_only sync || is_block_only sync) in
@@ -254,8 +254,8 @@ let get_tensor ~traced_store ~num_threads:_ ~num_blocks ?force_sync ~jit_code ~d
           ^ (Sexp.to_string_hum @@ sexp_of_sync_properties sync)
           ^ ";"
         in
-        if not @@ String.is_substring n.backend_info ~substring:backend_info then
-          n.backend_info <- n.backend_info ^ backend_info;
+        if not @@ String.is_substring n.annot.backend_info ~substring:backend_info then
+          n.annot.backend_info <- n.annot.backend_info ^ backend_info;
         {
           hosted;
           local;
@@ -291,7 +291,6 @@ let jit_binop ~num_typ:_ ~is_double op =
 (* "((int)(", "> 0.0) * ", ")" *)
 
 let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
-  let open Code in
   let open Caml.Format in
   (* let lookup ?provider_dim ?(example_only = false) ~on_host indices =
        Array.map indices ~f:(function
@@ -303,9 +302,9 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
          | Frozen_recipient _ -> Int.to_string 0)
      in *)
   let locals = ref Map.Poly.empty in
-  let rec pp_ll ~dyn_env ppf (c : unit_low_level) : unit =
+  let rec pp_ll ~dyn_env ppf c : unit =
     match c with
-    | Lines [||] -> ()
+    | Code.Lines [||] -> ()
     | Lines lines ->
         (* Note: no separator. Filter out some entries known to not generate code to avoid whitespace. *)
         fprintf ppf "@[<v 0>%a@]"
@@ -335,7 +334,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
           pp_index i to_ pp_index i (pp_ll ~dyn_env) body
     | Rebalance (s, lines) ->
         pp_ll ~dyn_env ppf
-        @@ Lines (Array.append (Option.to_array @@ Option.map s ~f:(fun s -> Comment s)) lines)
+        @@ Lines (Array.append (Option.to_array @@ Option.map s ~f:(fun s -> Code.Comment s)) lines)
     | Zero_out ptr ->
         if Hashtbl.mem session_state.tensors ptr then
           failwith
@@ -362,7 +361,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
               (pp_array_offset tensor.run_scope) (idcs, tensor.dims) loop_f v2
           else
             failwith @@ "Exec_as_cuda: atomic updates only implemented for addition: "
-            ^ Sexp.to_string_hum ([%sexp_of: unit_low_level] llc)
+            ^ Sexp.to_string_hum ([%sexp_of: Code.unit_low_level] llc)
         else
           fprintf ppf "@[<2>%s@[<2>[%a@]] =@ %a;@]" (get_run_ptr tensor) (pp_array_offset tensor.run_scope)
             (idcs, tensor.dims) loop_f v;
@@ -435,7 +434,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
           fprintf ppf "@]@ }@,"
         done;
         locals := old_locals
-  and pp_top_locals ~dyn_env ppf (vcomp : float_low_level) : int =
+  and pp_top_locals ~dyn_env ppf (vcomp : Code.float_low_level) : int =
     match vcomp with
     | Local_scope { id = { scope_id = i; _ } as id; prec; body; orig_indices = _ } ->
         let typ = prec_to_c_type prec in
@@ -479,7 +478,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
     | Unop (Relu, v) ->
         (* FIXME: don't recompute v *)
         fprintf ppf "@[<1>(%a > 0.0 ?@ %a : 0.0@])" loop v loop v
-  and debug_float ~dyn_env ~num_typ ~is_double (value : float_low_level) : string * 'a list =
+  and debug_float ~dyn_env ~num_typ ~is_double (value : Code.float_low_level) : string * 'a list =
     let loop = debug_float ~dyn_env ~num_typ ~is_double in
     match value with
     | Local_scope { id; _ } ->

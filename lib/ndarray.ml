@@ -215,6 +215,12 @@ let fold ~init ~f arr =
   let f arr = fold_bigarray ~init ~f arr in
   map { f } arr
 
+let size_in_bytes n =
+  (* Cheating here because 1 number Bigarray is same size as empty Bigarray:
+     it's more informative to report the cases differently. *)
+  let f arr = if Array.is_empty @@ A.dims arr then 0 else A.size_in_bytes arr in
+  Option.value_map ~f:(map { f }) ~default:0 n
+
 let retrieve_2d_points ?from_axis ~xdim ~ydim arr =
   let dims = dims arr in
   if Array.is_empty dims then [||]
@@ -322,7 +328,7 @@ let render_tensor ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labe
     let ind0, ind1, ind2, ind3, ind4 =
       match var_indices with
       | [| ind0; ind1; ind2; ind3; ind4 |] -> (ind0, ind1, ind2, ind3, ind4)
-      | _ -> invalid_arg "Node.render: indices should contain at most 5 negative numbers"
+      | _ -> invalid_arg "render: indices should contain at most 5 negative numbers"
     in
     let labels = Array.map labels ~f:(fun l -> if String.is_empty l then "" else l ^ "=") in
     let entries_per_axis = (entries_per_axis / 2 * 2) + 1 in

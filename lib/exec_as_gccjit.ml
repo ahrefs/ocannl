@@ -75,10 +75,10 @@ let get_tensor
     } ?force_sync ~jit_code ~host_idcs ptr : tensor =
   let open Gccjit in
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
-      let n = Node.(get ptr.id) in
+      let n = Code.get ptr.id in
       let tn = Code.(get_node traced_store ptr) in
-      let host_size_in_bytes = Node.host_size_in_bytes ptr in
-      let axes = Shape.to_dims n.shape in
+      let host_size_in_bytes = Node.size_in_bytes n.node in
+      let axes = Shape.to_dims n.annot.shape in
       let device_dims =
         axes
         |> Array.map ~f:(function
@@ -87,7 +87,7 @@ let get_tensor
              | { dim; _ } -> dim)
       in
       let device_size = Array.fold ~init:1 ~f:( * ) device_dims in
-      let arr = Option.value_exn @@ Node.get_tensor ptr in
+      let arr = Option.value_exn @@ Code.get_tensor ptr in
       let device_size_in_bytes = device_size * Ndarray.precision_in_bytes arr in
       let local_is_slice_of_host =
         Array.fold_until axes ~init:true
@@ -109,7 +109,7 @@ let get_tensor
         in
         let is_parallel =
           Array.exists ~f:Shape.(function { special = Dedicated Task_id; _ } -> true | _ -> false)
-          @@ Shape.to_dims n.shape
+          @@ Shape.to_dims n.annot.shape
         in
         let can_be_replicated = tn.is_replicable in
         let sync =
@@ -122,7 +122,7 @@ let get_tensor
                   Caml.Format.printf "\nWARNING: No sync for tensor: %a@ node: %a\n%!" Sexp.pp_hum
                     ([%sexp_of: Code.traced_tensor] tn)
                     Sexp.pp_hum
-                    ([%sexp_of: Node.t] n);
+                    ([%sexp_of: Code.node] n);
                 raise Unknown_synchronization))
         in
         let arr_typ = Type.array ctx num_typ device_size in
@@ -194,8 +194,8 @@ let get_tensor
           ^ (Sexp.to_string_hum @@ sexp_of_sync_properties sync)
           ^ ";"
         in
-        if not @@ String.is_substring n.backend_info ~substring:backend_info then
-          n.backend_info <- n.backend_info ^ backend_info;
+        if not @@ String.is_substring n.annot.backend_info ~substring:backend_info then
+          n.annot.backend_info <- n.annot.backend_info ^ backend_info;
         {
           hosted_ptr;
           local = Some local;
@@ -377,7 +377,6 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
         Block.assign !current_block device_lhs rhs
     | Set (ptr, idcs, value) ->
         let host_idcs = lookup ~on_host:true env idcs in
-        (* let n = Node.get ptr.id in *)
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs ptr in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
         let idcs = lookup ~on_host:false env idcs in

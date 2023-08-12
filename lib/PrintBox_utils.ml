@@ -182,7 +182,7 @@ type table_row_spec =
   | Benchmark of {
       bench_title : string;
       time_in_sec : float;
-      host_size_in_bytes : int;
+      mem_in_bytes : int;
       result_label : string;
       result : Sexp.t;
     }
@@ -194,7 +194,7 @@ let table rows =
   else
     let titles = List.map rows ~f:(fun (Benchmark { bench_title; _ }) -> nolines bench_title) in
     let times = List.map rows ~f:(fun (Benchmark { time_in_sec; _ }) -> time_in_sec) in
-    let sizes = List.map rows ~f:(fun (Benchmark { host_size_in_bytes; _ }) -> host_size_in_bytes) in
+    let sizes = List.map rows ~f:(fun (Benchmark { mem_in_bytes; _ }) -> mem_in_bytes) in
     let max_time = List.reduce_exn ~f:Float.max times in
     let max_size = List.reduce_exn ~f:Int.max sizes in
     let speedups = List.map times ~f:(fun x -> max_time /. x) in

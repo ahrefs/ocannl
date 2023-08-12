@@ -82,8 +82,7 @@ let dim_to_string = function
 let dims_to_string ?(with_axis_numbers = false) dims =
   if Array.is_empty dims then "-"
   else if with_axis_numbers then
-    String.concat_array ~sep:" x "
-    @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ dim_to_string s)
+    String.concat_array ~sep:" x " @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ dim_to_string s)
   else String.concat_array ~sep:"x" @@ Array.map dims ~f:dim_to_string
 
 type dims =
@@ -489,6 +488,46 @@ let axes_with_inf_labels ~all_labels ls_xhs =
 let axes_with_pseudo_labels =
   Map.mapi ~f:(fun ~key ~data ->
       match data with Either.First l -> l | Either.Second _ -> gen_label_of_axis key)
+
+let default_display_indices sh =
+  let axes = axis_keys_to_idcs sh |> Map.map ~f:(fun _ -> 0) in
+  let occupied = Array.create ~len:5 false in
+  let set_occu prio =
+    occupied.(prio + 5) <- true;
+    prio
+  in
+  let occu prio = occupied.(prio + 5) in
+  let num_input_axes = List.length (list_of_dims @@ dims_of_kind Input sh) in
+  let remaining =
+    Stack.of_list
+    @@ List.filter ~f:(Map.mem axes)
+    @@ AxisKey.
+         [
+           { in_axes = Input; from_end = 1 };
+           { in_axes = Output; from_end = 1 };
+           { in_axes = Input; from_end = 2 };
+           { in_axes = Output; from_end = 2 };
+           (if num_input_axes > 1 then { in_axes = Batch; from_end = 1 }
+            else { in_axes = Output; from_end = 3 });
+           { in_axes = Batch; from_end = 1 };
+           { in_axes = Batch; from_end = 2 };
+           { in_axes = Input; from_end = 3 };
+           { in_axes = Output; from_end = 3 };
+           { in_axes = Input; from_end = 4 };
+           { in_axes = Output; from_end = 4 };
+           { in_axes = Input; from_end = 5 };
+           { in_axes = Output; from_end = 5 };
+         ]
+  in
+  let rec loop offset axes =
+    if Stack.is_empty remaining || offset > 5 then axes
+    else if Fn.non occu ~-offset then
+      loop (offset + 1)
+      @@ Map.change axes (Stack.pop_exn remaining) ~f:(Option.map ~f:(fun _ -> set_occu ~-offset))
+    else loop (offset + 1) axes
+  in
+  let axes = loop 1 axes in
+  axis_map_to_dims_index axes
 
 let is_given_or_fixed dims = is_given dims || is_fixed dims
 

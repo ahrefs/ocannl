@@ -17,12 +17,11 @@ let get_root id =
       raise @@ Session_error (msg, None)
 
 let get_node id =
-  let open Node in
-  match Hashtbl.find global_node_store id with
+  match Hashtbl.find Code.global_node_store id with
   | Some r -> r
   | None ->
       let msg =
-        if id >= !unique_id then "get_node: Node " ^ Int.to_string id ^ " has not been created yet"
+        if id >= !Node.unique_id then "get_node: Node " ^ Int.to_string id ^ " has not been created yet"
         else if id < 1 then "get_root: Node IDs start from 1"
         else "get_node: Node " ^ Int.to_string id ^ " has been removed or lives on a different machine"
       in
@@ -44,7 +43,7 @@ let print_formula ~with_grad ~with_code ?(with_low_level = false) (style : Node.
   in
   let indices =
     match style with
-    | `Default -> Node.default_display_indices sh
+    | `Default -> Shape.default_display_indices sh
     | `N5_layout priorities ->
         let f = function
           | Either.Second i -> i
@@ -123,9 +122,9 @@ let print_global_roots ~with_grad ~with_code (style : Node.array_print_style) =
       assert (id = root.id);
       print_formula ~with_grad ~with_code style root)
 
-let print_preamble ?(full_shape = false) () =
+let print_preamble () =
   (* Stdio.printf "%s\n%!" (Formula.prefix_with_preamble "") *)
-  Node.print_preamble ~full_shape ()
+  Code.print_preamble ()
 
 (** *** Session management. *** *)
 type backend = Interpreter | Gccjit | Cuda [@@deriving sexp, equal]
@@ -157,11 +156,11 @@ let initialize_host_tensors traced_store =
         let dims = Array.map ~f:(fun d -> d.Shape.dim) @@ dims () in
         let tn = Code.get_node traced_store ptr in
         if tn.non_virtual && tn.non_device_only then
-          (Node.get id).node.value <- Ndarray.create !Formula.default_value_prec dims init_op
+          (Code.get id).node.value <- Ndarray.create !Formula.default_value_prec dims init_op
     | { tensor = { id; field = Grad } as ptr; dims; init_op } ->
         let dims = Array.map ~f:(fun d -> d.Shape.dim) @@ dims () in
         let tn = Code.get_node traced_store ptr in
-        let n = (Node.get id).node in
+        let n = (Code.get id).node in
         if tn.non_virtual && tn.non_device_only then
           n.grad <- Some (Ndarray.create !Formula.default_grad_prec dims init_op)
         else assert (Option.is_some n.grad))
@@ -176,7 +175,7 @@ let compile_routine ~name code =
   initialize_host_tensors traced_store @@ List.take !session_initializations to_init;
   !exec ~name (traced_store, compiled)
 
-let session_params () = Node.param_nodes ~from_id:!Formula.first_session_id ()
+let session_params () = Code.param_nodes ~from_id:!Formula.first_session_id ()
 let minus_learning_rate : Formula.t option ref = ref None
 let last_refresh_roots = ref !Formula.global_roots
 let last_with_backprop = ref false
@@ -221,7 +220,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
   last_update_params := update_params;
   let updates_per_run_changed = !last_updates_per_run <> updates_per_run in
   last_updates_per_run := updates_per_run;
-  if regenerate || roots_changed then List.iter !session_shape_updates ~f:Shape.propagate_shapes;
+  if regenerate || roots_changed then List.iter !session_shape_updates ~f:Code.update_shape;
   if regenerate then session_initialized := 0;
   let generating =
     regenerate || roots_changed || backprop_changed || update_params_changed || updates_per_run_changed
@@ -268,15 +267,15 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
     in
     (* Roots at the time of compilation are hosted, so that they can be consumed downstream. *)
     Map.iter_keys !Formula.global_roots ~f:(fun id ->
-        let n = Node.get id in
-        n.value_never_virtual <- true;
-        n.value_never_device_only <- true);
+        let n = Code.get id in
+        n.annot.value_never_virtual <- true;
+        n.annot.value_never_device_only <- true);
     (* Params are hosted also, so they can be updated over multiple steps, stored, updated etc.
        Params would typically be automatically found non-virtual and non-device-only, but there
        are corner cases we prevent here. *)
     Hashtbl.iter ~f:(fun n ->
-        n.Node.value_never_virtual <- true;
-        n.value_never_device_only <- true)
+        n.Node.annot.value_never_virtual <- true;
+        n.Node.annot.value_never_device_only <- true)
     @@ session_params ();
     session_step_update := sequential [ preparation; forward; backprop; params_update; postprocess ];
     if verbose then Stdio.printf "refresh_session: compiling\n%!";
@@ -333,7 +332,7 @@ let drop_session () =
   close_session ();
   Formula.first_session_id := beginning_of_session;
   for i = !Formula.first_session_id to !Node.unique_id - 1 do
-    Hashtbl.remove Node.global_node_store i
+    Hashtbl.remove Code.global_node_store i
   done;
   Node.unique_id := !Formula.first_session_id
 
@@ -342,12 +341,12 @@ let drop_session () =
 let drop_all_sessions () =
   Formula.first_session_id := 1;
   drop_session ();
-  Hashtbl.clear Node.global_node_store;
+  Hashtbl.clear Code.global_node_store;
   Node.unique_id := 1
 
 let save_all_tensors ~name =
   let out = Npy.Npz.open_out (name ^ ".npz") in
-  Hashtbl.iter Node.global_node_store ~f:(fun n ->
+  Hashtbl.iter Code.global_node_store ~f:(fun n ->
       let save field arr = Npy.Npz.write out Node.(tensor_ptr_name { id = n.id; field }) arr in
       let f arr = save Value arr in
       Ndarray.map { f } n.node.value;
@@ -358,10 +357,10 @@ let save_all_tensors ~name =
     does not complain about tensors missing in the file. *)
 let restore_tensors ?(partially = false) f_name =
   let inp = Npy.Npz.open_in (f_name ^ ".npz") in
-  Hashtbl.iteri Node.global_node_store ~f:(fun ~key:id ~data:n ->
+  Hashtbl.iteri Code.global_node_store ~f:(fun ~key:id ~data:n ->
       let restore field =
         let ptr = Node.{ id; field } in
-        match Node.get_tensor ptr with
+        match Code.get_tensor ptr with
         | None -> ()
         | Some arr ->
             let t_name = Node.(tensor_ptr_name { id = n.id; field }) in
@@ -434,10 +433,13 @@ module SDSL = struct
   let session_params = session_params
   let minus_learning_rate = minus_learning_rate
 
-  let print_node_tree ?entries_per_axis ?with_backend_info ?with_id ?with_value ~with_grad ~depth id =
+  let print_node_tree ?entries_per_axis ?(with_backend_info = false) ?with_id ?with_value ~with_grad ~depth id
+      =
+    let extra_prefix = if with_backend_info then Some (fun annot -> annot.Code.backend_info) else None in
     try
+      let n = Code.get id in
       PrintBox_text.output Stdio.stdout
-      @@ Node.to_printbox ?entries_per_axis ?with_backend_info ?with_id ?with_value ~with_grad ~depth id
+      @@ Node.to_printbox ?entries_per_axis ?with_id ?with_value ~with_grad ?extra_prefix ~depth n
     with Not_found_s _ | Caml.Not_found -> Caml.Format.printf "Node #%d does not exist.\n%!" id
 
   let max_sublabel_length = Formula.max_sublabel_length
@@ -452,25 +454,25 @@ module SDSL = struct
   let set_grads m cs = Ndarray.(init (Constant_fill cs) (Option.value_exn m.Formula.node.node.grad))
 
   let set_fully_on_host m =
-    m.Formula.node.value_never_virtual <- true;
-    m.node.grad_never_virtual <- true;
-    m.Formula.node.value_never_device_only <- true;
-    m.node.grad_never_device_only <- true
+    m.Formula.node.annot.value_never_virtual <- true;
+    m.node.annot.grad_never_virtual <- true;
+    m.Formula.node.annot.value_never_device_only <- true;
+    m.node.annot.grad_never_device_only <- true
 
   let everything_fully_on_host () =
     for id = !Formula.first_session_id to !Node.unique_id - 1 do
-      let n = Node.get id in
-      n.value_never_virtual <- true;
-      n.grad_never_virtual <- true;
-      n.value_never_device_only <- true;
-      n.grad_never_device_only <- true
+      let n = Code.get id in
+      n.annot.value_never_virtual <- true;
+      n.annot.grad_never_virtual <- true;
+      n.annot.value_never_device_only <- true;
+      n.annot.grad_never_device_only <- true
     done
 
   let everything_on_host_or_inlined () =
     for id = !Formula.first_session_id to !Node.unique_id - 1 do
-      let n = Node.get id in
-      n.value_never_device_only <- true;
-      n.grad_never_device_only <- true
+      let n = Code.get id in
+      n.annot.value_never_device_only <- true;
+      n.annot.grad_never_device_only <- true
     done
 
   let value_1d_points ?from_axis ~xdim m =
@@ -503,6 +505,6 @@ module SDSL = struct
 
   let default_value_prec = Formula.default_value_prec
   let default_grad_prec = Formula.default_grad_prec
-  let global_host_size_in_bytes () = Node.global_host_size_in_bytes ()
+  let global_host_size_in_bytes () = Code.global_host_size_in_bytes ()
   let num_domains = Node.num_domains
 end

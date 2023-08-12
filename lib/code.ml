@@ -9,6 +9,81 @@ type unop = Identity | Relu [@@deriving sexp, compare, equal]
 module Nd = Ndarray
 module N = Node
 
+type annot = {
+  mutable value_never_virtual : bool;
+  mutable value_never_device_only : bool;
+  mutable grad_never_virtual : bool;
+  mutable grad_never_device_only : bool;
+  mutable value_distributes_over_sum : bool;
+      (** [value_distributes_over_sum] is a heuristic marker for deciding synchronization strategies. *)
+  mutable backend_info : string;
+  shape : Shape.t;
+}
+[@@deriving sexp]
+
+let annot shape =
+  {
+    value_never_virtual = false;
+    value_never_device_only = false;
+    grad_never_virtual = false;
+    grad_never_device_only = false;
+    value_distributes_over_sum = false;
+    backend_info = "";
+    shape;
+  }
+
+type node = annot Node.t [@@deriving sexp_of]
+(** A DAG of decorated [Node]s, also storing the shape information. *)
+
+let global_node_store = Hashtbl.create (module Int)
+let get uid = Hashtbl.find_exn global_node_store uid
+
+let update_shape local_update =
+  let n = get local_update.Shape.shape.id in
+  assert (phys_equal local_update.Shape.shape n.Node.annot.shape);
+  Shape.propagate_shapes local_update;
+  n.Node.axis_labels := Shape.axis_map_to_dims_index @@ local_update.shape.axis_labels;
+  n.Node.default_display_indices := Shape.default_display_indices local_update.shape
+
+let print_preamble ?(from = 0) ?extra_prefix () =
+  for id = from to !Node.unique_id - 1 do
+    Node.print_node_preamble ~print_missing:false ?extra_prefix (get id)
+  done
+
+let get_tensor tensor =
+  let n = get tensor.Node.id in
+  match tensor.Node.field with Value -> Some n.node.value | Grad -> n.node.grad
+
+let get_prec ptr = match get_tensor ptr with None -> Nd.Void_prec | Some arr -> Nd.get_prec arr
+
+let create_node_helper data shape =
+  let annot = annot shape in
+  let axis_labels = ref @@ Shape.axis_map_to_dims_index @@ shape.axis_labels in
+  let default_display_indices = ref @@ Shape.default_display_indices shape in
+  let data : node = data ~axis_labels ~default_display_indices annot in
+  Hashtbl.add_exn global_node_store ~key:data.id ~data;
+  data
+
+let create_node ~(value_prec : Nd.prec) ?(grad_prec : Nd.prec option) ?(literal = false) ~needs_gradient
+    ~op_label ?desc_label ~children shape =
+  let data = Node.create ~value_prec ?grad_prec ~literal ~needs_gradient () ~op_label ?desc_label ~children in
+  create_node_helper data shape
+
+let create_node_promoted_precision n1 n2 ~needs_gradient ~op_label ?desc_label ~children shape =
+  let data = Node.create_of_promoted_precision ~needs_gradient n1 n2 ~op_label ?desc_label ~children in
+  create_node_helper data shape
+
+let create_node_same_precision_as ~needs_gradient ?literal n ~op_label ?desc_label ~children shape =
+  let data = Node.create_of_same_precision_as ~needs_gradient ?literal n ~op_label ?desc_label ~children in
+  create_node_helper data shape
+
+let global_host_size_in_bytes () =
+  Hashtbl.fold global_node_store ~init:0 ~f:(fun ~key:_ ~data sum -> sum + Node.size_in_bytes data.node)
+
+let param_nodes ?(from_id = 0) () =
+  Hashtbl.filter global_node_store ~f:(fun n ->
+      n.node.id >= from_id && List.is_empty n.children && Option.is_some n.node.grad)
+
 type global_identifier = C_function of string  (** Calls a no-argument C function. *)
 [@@deriving sexp, equal, compare]
 
@@ -183,21 +258,21 @@ let to_low_level (code : t) : unit_low_level =
   let rec loop code =
     match code with
     | Accum_binop { zero_out; accum; op; lhs; rhs1; rhs2; projections } ->
-        let lhs_n = Node.get lhs.id in
+        let lhs_n = get lhs.id in
         (match (accum, op) with
-        | Add, _ -> lhs_n.value_distributes_over_sum <- true
+        | Add, _ -> lhs_n.annot.value_distributes_over_sum <- true
         | Arg2, Mul ->
-            let rhs1_n = Node.get rhs1.id in
-            let rhs2_n = Node.get rhs2.id in
-            lhs_n.value_distributes_over_sum <-
-              (rhs1_n.value_distributes_over_sum && not rhs2_n.value_distributes_over_sum)
-              || (rhs2_n.value_distributes_over_sum && not rhs1_n.value_distributes_over_sum)
+            let rhs1_n = get rhs1.id in
+            let rhs2_n = get rhs2.id in
+            lhs_n.annot.value_distributes_over_sum <-
+              (rhs1_n.annot.value_distributes_over_sum && not rhs2_n.annot.value_distributes_over_sum)
+              || (rhs2_n.annot.value_distributes_over_sum && not rhs1_n.annot.value_distributes_over_sum)
         | Arg2, Add ->
-            let rhs1_n = Node.get rhs1.id in
-            let rhs2_n = Node.get rhs2.id in
-            lhs_n.value_distributes_over_sum <-
-              rhs1_n.value_distributes_over_sum || rhs2_n.value_distributes_over_sum
-        | _ -> lhs_n.value_distributes_over_sum <- false);
+            let rhs1_n = get rhs1.id in
+            let rhs2_n = get rhs2.id in
+            lhs_n.annot.value_distributes_over_sum <-
+              rhs1_n.annot.value_distributes_over_sum || rhs2_n.annot.value_distributes_over_sum
+        | _ -> lhs_n.annot.value_distributes_over_sum <- false);
         let projections = projections () in
         let lhs_idx =
           Shape.(derive_index ~product_syms:projections.product_iterators ~projection:projections.project_lhs)
@@ -309,7 +384,7 @@ let to_low_level (code : t) : unit_low_level =
         | _ -> Lines [| ll1; ll2 |])
     | Fetch { tensor; fetch_op = Constant 0.0 } -> Zero_out tensor
     | Fetch { tensor; fetch_op = Constant c } ->
-        let product_space : Shape.dim array = Shape.to_dims (Node.get tensor.id).shape in
+        let product_space : Shape.dim array = Shape.to_dims (get tensor.id).annot.shape in
         let rec loop rev_idcs = function
           | [] -> Set (tensor, Array.of_list_rev rev_idcs, Constant c)
           | d :: product when Shape.dim_1 d -> loop (Fixed_idx 0 :: rev_idcs) product
@@ -419,9 +494,9 @@ let sexp_of_int_env env =
   [%sexp_of: (sym_index * int) list * (Shape.symbol * int) list] (Map.to_alist env, Map.to_alist dyn_env)
 *)
 
-let set_from_float ptr idcs value = Nd.set_from_float (Option.value_exn @@ Node.get_tensor ptr) idcs value
-let fill_from_float ptr value = Nd.fill_from_float (Option.value_exn @@ Node.get_tensor ptr) value
-let get_as_float ptr idcs = Nd.get_as_float (Option.value_exn @@ Node.get_tensor ptr) idcs
+let set_from_float ptr idcs value = Nd.set_from_float (Option.value_exn @@ get_tensor ptr) idcs value
+let fill_from_float ptr value = Nd.fill_from_float (Option.value_exn @@ get_tensor ptr) value
+let get_as_float ptr idcs = Nd.get_as_float (Option.value_exn @@ get_tensor ptr) idcs
 let debug_verbose_trace = ref false
 
 let interpret_binop op v1 v2 =
@@ -468,7 +543,7 @@ let interpret_code llc =
     | Rebalance (_, cs) ->
         (* FIXME: NOT IMPLEMENTED YET *)
         Array.iter ~f:loop cs
-    | Zero_out ptr -> Ndarray.fill_from_float (Option.value_exn @@ Node.get_tensor ptr) 0.0
+    | Zero_out ptr -> Ndarray.fill_from_float (Option.value_exn @@ get_tensor ptr) 0.0
     | Set (ptr, indices, Binop (op, Get (ptr2, indices2), c2))
       when Node.equal_tensor_ptr ptr ptr2 && [%equal: Shape.axis_index array] indices indices2 ->
         if !debug_verbose_trace then
@@ -488,7 +563,7 @@ let interpret_code llc =
               ([%sexp_of: Shape.axis_index array] indices)
               Sexp.pp_hum
               ([%sexp_of: int array] idcs);
-            Node.print_node_preamble ~full_shape:false ptr.id;
+            Node.print_node_preamble @@ get ptr.id;
             raise e
         in
         let result = interpret_binop op v1 v2 in
@@ -526,7 +601,7 @@ let interpret_code llc =
             Sexp.pp_hum
             ([%sexp_of: int array] idcs)
             result;
-          Node.print_node_preamble ~full_shape:false ptr.id;
+          Node.print_node_preamble @@ get ptr.id;
           raise e)
     | Set_local (id, llv) -> locals := Map.update !locals id ~f:(fun _ -> loop_float env llv)
     | Comment message when !with_debug && !executor_print_comments -> Stdio.printf "%s\n%!" message
@@ -536,7 +611,7 @@ let interpret_code llc =
         ()
     | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
         dynamic_indices env
-          (Option.value_exn @@ Node.get_tensor tensor)
+          (Option.value_exn @@ get_tensor tensor)
           ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Comment c ->
         if !debug_verbose_trace then (
@@ -544,7 +619,7 @@ let interpret_code llc =
           Ndarray.print_decimals_precision := 9;
           for i = 1 to !Node.unique_id - 1 do
             Caml.Format.printf "TRACE: %a\n%!" PrintBox_text.pp
-              (Node.to_printbox ~single_node:true ~with_grad:true ~depth:9 i)
+              (Node.to_printbox ~single_node:true ~with_grad:true ~depth:9 @@ get i)
           done;
           Caml.Format.printf "}\n%!")
   and loop_float env llv =
@@ -568,7 +643,7 @@ let interpret_code llc =
               ([%sexp_of: Shape.axis_index array] indices)
               Sexp.pp_hum
               ([%sexp_of: int array] idcs);
-            Node.print_node_preamble ~full_shape:false ptr.id;
+            Node.print_node_preamble @@ get ptr.id;
             raise e
         in
         if !debug_verbose_trace then
@@ -637,7 +712,7 @@ let rec lookup_dyn_ind ?provider_dim dyn_env idx =
     | Shape.Fixed_idx i -> i
     | Dynamic_recipient s | Frozen_recipient s ->
         let tensor_ptr, provider_dim, tensor_idcs, target_dim = Map.find_exn dyn_env s in
-        let tensor = Option.value_exn @@ Node.get_tensor tensor_ptr in
+        let tensor = Option.value_exn @@ get_tensor tensor_ptr in
         let idcs = lookup ~provider_dim dyn_env tensor_idcs in
         let actual =
           try Nd.get_as_int tensor idcs
@@ -748,19 +823,23 @@ type traced_tensor = {
 
 let get_node store (ptr : Node.tensor_ptr) =
   Hashtbl.find_or_add store ptr ~default:(fun () ->
-      let n = Node.get ptr.id in
+      let n = get ptr.id in
       let never_virtual =
-        match ptr.field with Node.Value -> n.value_never_virtual | Node.Grad -> n.grad_never_virtual
+        match ptr.field with
+        | Node.Value -> n.annot.value_never_virtual
+        | Node.Grad -> n.annot.grad_never_virtual
       in
       let never_device_only =
-        match ptr.field with Node.Value -> n.value_never_device_only | Node.Grad -> n.grad_never_device_only
+        match ptr.field with
+        | Node.Value -> n.annot.value_never_device_only
+        | Node.Grad -> n.annot.grad_never_device_only
       in
-      let non_virtual = never_virtual || Node.host_size_in_bytes ptr > 0 in
-      let non_device_only = never_device_only || Node.host_size_in_bytes ptr > 0 in
+      let non_virtual = never_virtual || Ndarray.size_in_bytes (get_tensor ptr) > 0 in
+      let non_device_only = never_device_only || Ndarray.size_in_bytes (get_tensor ptr) > 0 in
       {
         id = ptr.id;
         kind = ptr.field;
-        prec = Node.get_prec ptr;
+        prec = get_prec ptr;
         computations = [];
         assignments = Hash_set.Poly.create ();
         accesses = Hashtbl.Poly.create ();
@@ -828,9 +907,11 @@ let precompute_constants ?idcs traced_store top_node llv =
         let v = loop llv in
         Float.(if v > 0.0 then v else 0.0)
   in
-  let n = Node.get top_node.id in
+  let n = get top_node.id in
   let never_virtual =
-    match top_node.kind with Node.Value -> n.value_never_virtual | Node.Grad -> n.grad_never_virtual
+    match top_node.kind with
+    | Node.Value -> n.annot.value_never_virtual
+    | Node.Grad -> n.annot.grad_never_virtual
   in
   try
     if never_virtual then raise @@ Non_literal 8;
@@ -1284,7 +1365,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : unit_low_level) : u
                     Sexp.pp_hum
                     (sexp_of_traced_tensor @@ get_other_node traced_store id.tensor)
                     Sexp.pp_hum
-                    (Node.sexp_of_t @@ Node.get id.tensor.id);
+                    (sexp_of_node @@ get id.tensor.id);
                   Get (id.tensor, orig_indices))
               @@ Option.map ~f:(fun body -> Local_scope { id; prec; orig_indices; body })
               @@ loop_proc ~balanced ~env_dom body)
@@ -1660,7 +1741,7 @@ module CDSL = struct
   let minibatch = Shape.minibatch
   let value_of_id id : Node.tensor_ptr = { id; field = Value }
   let grad_of_id id : Node.tensor_ptr = { id; field = Grad }
-  let data_of_node field (n : Node.t) : Node.tensor_ptr = { id = n.id; field }
+  let data_of_node field (n : 'a Node.t) : Node.tensor_ptr = { id = n.id; field }
   let single = Nd.single
   let double = Nd.double
   let executor_print_comments = executor_print_comments
