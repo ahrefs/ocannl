@@ -20,11 +20,8 @@ end
 
 let symbol_ident (Symbol s) = "i" ^ Int.to_string s
 
-type dedicated_axis = Task_id | Sample_num [@@deriving equal, compare, sexp, variants]
-
 type axis_special =
-  | Dim  (** A "randomly accessed" or "frequently reduced" axis -- no optimization hint. *)
-  | Dedicated of dedicated_axis  (** An axis whose iteration can have special treatment on some backends. *)
+  | Dim  (** A "randomly accessed" axis. *)
   | Frozen
       (** An axis that should be indexed at a single position during a single `refresh_session`:
           a dynamic index into it will be a [Frozen_recipient]. *)
@@ -34,15 +31,11 @@ type dim = { special : axis_special; dim : int } [@@deriving equal, compare, sex
 
 let dim dim = { special = Dim; dim }
 let frozen dim = { special = Frozen; dim }
-let parallel dim = { special = Dedicated Task_id; dim }
-let minibatch dim = { special = Dedicated Sample_num; dim }
-let dim_1 = function { special = Dedicated _; _ } -> false | { dim = 1; _ } -> true | _ -> false
+let dim_1 = function { dim = 1; _ } -> true | _ -> false
 
 let dim_to_string = function
   | { special = Dim; dim } -> Int.to_string dim
   | { special = Frozen; dim } -> "frozen " ^ Int.to_string dim
-  | { special = Dedicated Task_id; dim } -> "parallel " ^ Int.to_string dim
-  | { special = Dedicated Sample_num; dim } -> "minibatch " ^ Int.to_string dim
 
 (** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
     Outputs ["-"] for empty dimensions. *)
@@ -67,8 +60,7 @@ let sexp_of_str_osym_map (map : str_osym_map) =
 type projections = {
   product_space : dim array;
       (** The product space dimensions that an operation should parallelize (map-reduce) over. *)
-  lhs_dims : dim array;
-      (** The dimensions of the LHS tensor. *)
+  lhs_dims : dim array;  (** The dimensions of the LHS tensor. *)
   product_iterators : symbol array;
       (** The product space iterators (concatentation of the relevant batch, output, input axes)
       for iterating over the [product_space] axes, where same axes are at same array indices. *)
@@ -85,41 +77,8 @@ type projections = {
 [@@deriving compare, equal, sexp]
 (** All the information relevant for [Code] code generation contained in a completed [update_step]. *)
 
-let task_id_symbols = Hash_set.create (module Symbol)
-let sample_num_symbols = Hash_set.create (module Symbol)
-
-let get_sym_for_axis = function
-  | Dim -> get_symbol ()
-  | Dedicated Task_id ->
-      let uid = get_symbol () in
-      Hash_set.add task_id_symbols uid;
-      uid
-  | Dedicated Sample_num ->
-      let uid = get_symbol () in
-      Hash_set.add sample_num_symbols uid;
-      uid
-  | Frozen -> get_symbol ()
-
-let task_id_sym = Hash_set.mem task_id_symbols
-let sample_num_sym = Hash_set.mem sample_num_symbols
-(* let iterate_sample_num = ref true *)
-
-let fresh_symbol sym =
-  if task_id_sym sym then get_sym_for_axis (Dedicated Task_id)
-  else if sample_num_sym sym then get_sym_for_axis (Dedicated Sample_num)
-  else get_symbol ()
-
-let is_dedicated_any sym = task_id_sym sym || sample_num_sym sym
-let is_dedicated_kind = function Task_id -> task_id_sym | Sample_num -> sample_num_sym
-
-let iterated = function
-  | { special = Dim; dim } when dim > 1 -> true
-  (* | { special = Dedicated Sample_num; dim } when !iterate_sample_num && dim > 1 -> true *)
-  | { special = Dedicated _; _ } -> true
-  | _ -> false
-
-let opt_symbol d = Option.some_if (iterated d) @@ get_sym_for_axis d.special
-
+let iterated = function { special = Dim; dim } when dim > 1 -> true | _ -> false
+let opt_symbol d = if iterated d then Some (get_symbol ()) else None
 let opt_iterator = function None -> Fixed_idx 0 | Some sym -> Iterator sym
 
 (** Projections for iterating over a terminal, or for a pointwise unary operator. *)
@@ -132,15 +91,11 @@ let identity_projections ~lhs_dims =
 
 let derive_index ~product_syms ~(projection : axis_index array) =
   let sym_to_i =
-    Array.mapi product_syms ~f:(fun i (Symbol s) -> (s, i)) |> Array.to_list |> Map.of_alist_exn (module Int)
+    Array.mapi product_syms ~f:(fun i s -> (s, i)) |> Array.to_list |> Map.of_alist_exn (module Symbol)
   in
   let positions =
     Array.map projection ~f:(function
-      | Iterator (Symbol s) when Map.mem sym_to_i s -> Either.First (Map.find_exn sym_to_i s)
-      | Fixed_idx _ as it -> Second it
-      | Iterator s as it ->
-          assert (is_dedicated_any s);
-          Second it)
+      | Iterator s when Map.mem sym_to_i s -> Either.First (Map.find_exn sym_to_i s)
+      | it -> Second it)
   in
   fun ~product -> Array.map positions ~f:(function First p -> product.(p) | Second it -> it)
-

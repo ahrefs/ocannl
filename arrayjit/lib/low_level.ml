@@ -280,12 +280,9 @@ let visit is_assigned old =
 let visit_llc traced_store reverse_node_map ~max_visits llc =
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
   let lookup env indices =
-    (* For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
     Array.map indices ~f:(function
       | Indexing.Fixed_idx i -> i
-      | Iterator s when not (Indexing.is_dedicated_any s) -> Map.find_exn env s
-      | Iterator s when Map.mem env s -> Map.find_exn env s
-      | Iterator _ -> 0)
+      | Iterator s (* when Map.mem env s *) -> Map.find_exn env s)
   in
   let rec loop_proc env llc =
     let loop = loop_proc env in
@@ -369,16 +366,8 @@ let process_computation traced top_llc =
     | Some at -> if not @@ [%equal: Indexing.axis_index array] at indices then raise Non_virtual);
     (* TODO(#133): For non-recursive accesses, non-linearity is not supported yet. *)
     let syms =
-      Set.Poly.of_array
-      @@ Array.filter_map indices
-           ~f:
-             Indexing.(
-               function
-               | Iterator s when Indexing.is_dedicated_any s ->
-                   (* Dedicated indices are non-substitutable. *)
-                   None
-               | Fixed_idx _ -> None
-               | Iterator s -> Some s)
+      Set.of_array (module Indexing.Symbol)
+      @@ Array.filter_map indices ~f:Indexing.(function Fixed_idx _ -> None | Iterator s -> Some s)
     in
     let num_syms = Array.count indices ~f:(function Iterator _ -> true | _ -> false) in
     if Set.length syms <> num_syms then raise Non_virtual
@@ -479,7 +468,7 @@ let inline_computation ~id traced call_args =
       | For_loop { index; body; _ } when Map.mem env index -> loop env body
       | For_loop { index; from_; to_; body; trace_it } ->
           (* Freshen the binding. *)
-          let fresh = Indexing.fresh_symbol index in
+          let fresh = Indexing.get_symbol () in
           let env = Map.Poly.add_exn ~key:index ~data:fresh env in
           Option.map ~f:(fun body : t -> For_loop { index = fresh; from_; to_; body; trace_it })
           @@ loop env body
@@ -810,7 +799,7 @@ let loop_over_dims ~skip_frozen dims ~body =
         for_loop (Indexing.Fixed_idx 0 :: rev_idcs) product
     | { dim = 1; _ } :: product when skip_frozen -> for_loop (Indexing.Fixed_idx 0 :: rev_idcs) product
     | d :: product ->
-        let index = Indexing.get_sym_for_axis d.Indexing.special in
+        let index = Indexing.get_symbol () in
         For_loop
           {
             index;
@@ -825,8 +814,6 @@ let loop_over_dims ~skip_frozen dims ~body =
 module CDSL = struct
   let dim = Indexing.dim
   let frozen = Indexing.frozen
-  let parallel = Indexing.parallel
-  let minibatch = Indexing.minibatch
   let single = Nd.single
   let double = Nd.double
   let executor_print_comments = executor_print_comments

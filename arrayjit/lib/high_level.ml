@@ -85,12 +85,12 @@ let to_low_level (code : t) : Low_level.t =
         let rec for_loop rev_iters = function
           | [] -> basecase rev_iters
           | d :: product ->
-              let index = Indexing.get_sym_for_axis d.Indexing.special in
+              let index = Indexing.get_symbol () in
               For_loop
                 {
                   index;
                   from_ = 0;
-                  to_ = d.dim - 1;
+                  to_ = d.Indexing.dim - 1;
                   body = for_loop (index :: rev_iters) product;
                   trace_it = true;
                 }
@@ -123,12 +123,12 @@ let to_low_level (code : t) : Low_level.t =
         let rec for_loop rev_iters = function
           | [] -> basecase rev_iters
           | d :: product ->
-              let index = Indexing.get_sym_for_axis d.Indexing.special in
+              let index = Indexing.get_symbol () in
               For_loop
                 {
                   index;
                   from_ = 0;
-                  to_ = d.dim - 1;
+                  to_ = d.Indexing.dim - 1;
                   body = for_loop (index :: rev_iters) product;
                   trace_it = true;
                 }
