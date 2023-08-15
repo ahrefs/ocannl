@@ -294,7 +294,7 @@ let localize_tensors store ~for_task_id llc =
           | Node.Grad -> n.grad_never_device_only
         in
         if never_device_only then (
-          debug := Node.tensor_ptr_name ptr;
+          debug := Ndarray.ptr_name ptr;
           loop_float llv)
     | Set_local (_, llv) -> loop_float llv
     | Comment _ -> ()
@@ -363,7 +363,7 @@ let rebalance store llcs =
         )
 
 Set (ptr, idcs, (Binop (op, Get (ptr2, idcs2), v2) as v))
-      when Node.equal_tensor_ptr ptr ptr2 && [%equal: Shape.axis_index array] idcs idcs2 ->
+      when Nd.equal_ptr ptr ptr2 && [%equal: Shape.axis_index array] idcs idcs2 ->
         let tensor = get_tensor ~traced_store ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr in
         let old_locals = !locals in
         let num_typ = tensor.num_typ and is_double = tensor.is_double in
@@ -377,7 +377,7 @@ Set (ptr, idcs, (Binop (op, Get (ptr2, idcs2), v2) as v))
           if Code.equal_binop op Add then
             fprintf ppf "@[<2>atomicAdd@[<2>(%s + %a,@ %a@])" (Option.value_exn tensor.global) (pp_array_offset Global)
               (idcs, tensor.dims) loop_f v2
-          else failwith @@ "Exec_as_cuda: atomic updates only implemented for addition: " ^ Sexp.to_string_hum ([%sexp_of: unit_low_level] llc) (*
+          else failwith @@ "Exec_as_cuda: atomic updates only implemented for addition: " ^ Sexp.to_string_hum ([%sexp_of: Low_level.t] llc) (*
             fprintf ppf "@[<2>%s[%a] =@ " (Option.value_exn tensor.global) (pp_array_offset Global)
               (idcs, tensor.dims);
             loop_binop ~num_typ ~is_double ppf op
@@ -417,4 +417,241 @@ Set (ptr, idcs, (Binop (op, Get (ptr2, idcs2), v2) as v))
             Block.jump !current_block b_after_if;
             current_block := b_after_if
         | None -> loop ~name body)
+
+
+
+
+type annot = {
+  mutable never_virtual : bool;
+  mutable never_device_only : bool;
+  mutable backend_info : string;
+  shape : Shape.t;
+}
+[@@deriving sexp]
+
+let annot shape =
+  {
+    value_never_virtual = false;
+    value_never_device_only = false;
+    grad_never_virtual = false;
+    grad_never_device_only = false;
+    value_distributes_over_sum = false;
+    backend_info = "";
+    shape;
+  }
+
+let update_shape local_update =
+  let n = get local_update.Shape.shape.id in
+  assert (phys_equal local_update.Shape.shape n.Node.annot.shape);
+  Shape.propagate_shapes local_update;
+  n.Node.axis_labels := Shape.axis_map_to_dims_index @@ local_update.shape.axis_labels;
+  n.Node.default_display_indices := Shape.default_display_indices local_update.shape
+
+
+(*
+type int_env = int env
+
+let sexp_of_int_env env =
+  [%sexp_of: (sym_index * int) list * (Indexing.symbol * int) list] (Map.to_alist env, Map.to_alist dyn_env)
+*)
+
+let set_from_float ptr idcs value = Nd.set_from_float (Option.value_exn @@ get_tensor ptr) idcs value
+let fill_from_float ptr value = Nd.fill_from_float (Option.value_exn @@ get_tensor ptr) value
+let get_as_float ptr idcs = Nd.get_as_float (Option.value_exn @@ get_tensor ptr) idcs
+let debug_verbose_trace = ref false
+
+
+
+let interpret_code llc =
+  (* Local scope ids can be non-unique due to inlining. *)
+  let locals = ref Map.Poly.empty in
+  let lookup ?provider_dim env indices =
+    try
+      Array.map indices ~f:(function
+        | Indexing.Fixed_idx i -> i
+        | Iterator it -> Map.find_exn env it
+        | Dynamic_recipient s -> Map.find_exn env s
+        | Frozen_recipient s -> Map.find_exn env s
+        | Dynamic_provider _ -> Option.value_exn provider_dim)
+    with Caml.Not_found | Not_found_s _ ->
+      if !debug_verbose_trace then
+        Caml.Format.printf "TRACE: lookup error for env keys=@ %a\n%!" Sexp.pp_hum
+          ([%sexp_of: Indexing.symbol list] @@ Map.keys env);
+      failwith "interpret_code: index lookup error, set CDSL.debug_verbose_trace for details"
+  in
+  let rec loop_proc env llc : unit =
+    let loop = loop_proc env in
+    match (llc : t) with
+    | (Lines body : t) -> Array.iter ~f:loop body
+    | (For_loop { index; from_; to_; body; trace_it = _ } : t) ->
+        for data = from_ to to_ do
+          (* We could allow replacement, but in fact we do not want repeated indices because backends
+             like Gccjit require unique indices (for convenience). *)
+          loop_proc (Map.add_exn env ~key:index ~data) body
+        done
+    | Rebalance (_, cs) ->
+        (* FIXME: NOT IMPLEMENTED YET *)
+        Array.iter ~f:loop cs
+    | Zero_out ptr -> Ndarray.fill_from_float (Option.value_exn @@ get_tensor ptr) 0.0
+    | Set (ptr, indices, Binop (op, Get (ptr2, indices2), c2))
+      when Nd.equal_ptr ptr ptr2 && [%equal: Indexing.axis_index array] indices indices2 ->
+        if !debug_verbose_trace then
+          Caml.Format.printf "{TRACE: update %a [%a] <- ...\n%!" Sexp.pp_hum
+            ([%sexp_of: Ndarray.ptr] ptr)
+            Sexp.pp_hum
+            ([%sexp_of: Indexing.axis_index array] indices);
+        let idcs = lookup env indices in
+        (* Order computation to reduce prevalence of race conditions. *)
+        let v2 = loop_float env c2 in
+        let v1 =
+          try get_as_float ptr idcs
+          with e ->
+            Caml.Format.printf "ERROR: %a [%a -> %a] -- indices out of bounds\n%!" Sexp.pp_hum
+              ([%sexp_of: Ndarray.ptr] ptr)
+              Sexp.pp_hum
+              ([%sexp_of: Indexing.axis_index array] indices)
+              Sexp.pp_hum
+              ([%sexp_of: int array] idcs);
+            Node.print_node_preamble @@ get ptr.id;
+            raise e
+        in
+        let result = interpret_binop op v1 v2 in
+        if !debug_verbose_trace then
+          Caml.Format.printf "TRACE: %a [%a -> %a] (%f) <- %f}\n%!" Sexp.pp_hum
+            ([%sexp_of: Ndarray.ptr] ptr)
+            Sexp.pp_hum
+            ([%sexp_of: Indexing.axis_index array] indices)
+            Sexp.pp_hum
+            ([%sexp_of: int array] idcs)
+            v1 result;
+        set_from_float ptr idcs result
+    | Set (ptr, indices, llv) -> (
+        if !debug_verbose_trace then
+          Caml.Format.printf "{TRACE: %a [%a] <- ...\n%!" Sexp.pp_hum
+            ([%sexp_of: Ndarray.ptr] ptr)
+            Sexp.pp_hum
+            ([%sexp_of: Indexing.axis_index array] indices);
+        let idcs = lookup env indices in
+        let result = loop_float env llv in
+        if !debug_verbose_trace then
+          Caml.Format.printf "TRACE: %a [%a -> %a] (%f) <- %f}\n%!" Sexp.pp_hum
+            ([%sexp_of: Ndarray.ptr] ptr)
+            Sexp.pp_hum
+            ([%sexp_of: Indexing.axis_index array] indices)
+            Sexp.pp_hum
+            ([%sexp_of: int array] idcs)
+            (get_as_float ptr idcs) result;
+        try set_from_float ptr idcs result
+        with e ->
+          Caml.Format.printf "ERROR: %a [%a -> %a] <- %f -- indices out of bounds\n%!" Sexp.pp_hum
+            ([%sexp_of: Ndarray.ptr] ptr)
+            Sexp.pp_hum
+            ([%sexp_of: Indexing.axis_index array] indices)
+            Sexp.pp_hum
+            ([%sexp_of: int array] idcs)
+            result;
+          Node.print_node_preamble @@ get ptr.id;
+          raise e)
+    | Set_local (id, llv) -> locals := Map.update !locals id ~f:(fun _ -> loop_float env llv)
+    | Comment message when !with_debug && !executor_print_comments -> Stdio.printf "%s\n%!" message
+    | Staged_compilation exp -> exp ()
+    | Synchronize _ ->
+        (* Assuming the interpreter is single-threaded. *)
+        ()
+    | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
+        dynamic_indices env
+          (Option.value_exn @@ get_tensor tensor)
+          ~tensor_idcs ~dynamic_idcs ~target_dims body
+    | Comment c ->
+        if !debug_verbose_trace then (
+          Caml.Format.printf "TRACE: %s -- prior state of nodes: {\n%!" c;
+          Ndarray.print_decimals_precision := 9;
+          for i = 1 to !Node.unique_id - 1 do
+            Caml.Format.printf "TRACE: %a\n%!" PrintBox_text.pp
+              (Node.to_printbox ~single_node:true ~with_grad:true ~depth:9 @@ get i)
+          done;
+          Caml.Format.printf "}\n%!")
+  and loop_float env llv =
+    let open Float in
+    let loop = loop_float env in
+    match llv with
+    | Constant c -> c
+    | Get (ptr, indices) ->
+        if !debug_verbose_trace then
+          Caml.Format.printf "{TRACE: %a [%a] -> ...\n%!" Sexp.pp_hum
+            ([%sexp_of: Ndarray.ptr] ptr)
+            Sexp.pp_hum
+            ([%sexp_of: Indexing.axis_index array] indices);
+        let idcs = lookup env indices in
+        let result =
+          try get_as_float ptr idcs
+          with e ->
+            Caml.Format.printf "ERROR: %a [%a -> %a] -- indices out of bounds\n%!" Sexp.pp_hum
+              ([%sexp_of: Ndarray.ptr] ptr)
+              Sexp.pp_hum
+              ([%sexp_of: Indexing.axis_index array] indices)
+              Sexp.pp_hum
+              ([%sexp_of: int array] idcs);
+            Node.print_node_preamble @@ get ptr.id;
+            raise e
+        in
+        if !debug_verbose_trace then
+          Caml.Format.printf "TRACE: %a [%a -> %a] -> %f}\n%!" Sexp.pp_hum
+            ([%sexp_of: Ndarray.ptr] ptr)
+            Sexp.pp_hum
+            ([%sexp_of: Indexing.axis_index array] indices)
+            Sexp.pp_hum
+            ([%sexp_of: int array] idcs)
+            result;
+        result
+    | Local_scope { id; prec = _; body; orig_indices } ->
+        if !debug_verbose_trace then
+          Caml.Format.printf "{TRACE: %a [%a] <-> ...\n%!" Sexp.pp_hum
+            ([%sexp_of: Ndarray.ptr] id.tensor)
+            Sexp.pp_hum
+            ([%sexp_of: Indexing.axis_index array] orig_indices);
+        let old_locals = !locals in
+        locals := Map.update !locals id ~f:(fun _ -> 0.0);
+        loop_proc env body;
+        let result = Map.find_exn !locals id in
+        locals := old_locals;
+        let idcs = lookup env orig_indices in
+        if !debug_verbose_trace then
+          Caml.Format.printf "TRACE: %a [%a / %a] (%f) <-> %f}\n%!" Sexp.pp_hum
+            ([%sexp_of: Ndarray.ptr] id.tensor)
+            Sexp.pp_hum
+            ([%sexp_of: Indexing.axis_index array] orig_indices)
+            Sexp.pp_hum
+            ([%sexp_of: int array] idcs)
+            (get_as_float id.tensor idcs) result;
+        result
+    | Get_local id -> Map.find_exn !locals id
+    | Get_global (C_function _) -> failwith "NOT IMPLEMENTED YET: jit-dynloading C calls in the interpreter"
+    | Binop (Arg1, llv1, _llv2) -> loop llv1
+    | Binop (Arg2, _llv1, llv2) -> loop llv2
+    | Binop (op, llv1, llv2) -> interpret_binop op (loop llv1) (loop llv2)
+    | Unop (Identity, llv) -> loop llv
+    | Unop (Relu, llv) ->
+        let v = loop llv in
+        if v > 0.0 then v else 0.0
+  and dynamic_indices env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body =
+    let env =
+      Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
+          let idcs = lookup ~provider_dim env tensor_idcs in
+          let actual =
+            try Nd.get_as_int tensor idcs
+            with e ->
+              Caml.Format.printf "ERROR: dynamic index at [%a -> %a] -- indices out of bounds\n%!" Sexp.pp_hum
+                ([%sexp_of: Indexing.axis_index array] tensor_idcs)
+                Sexp.pp_hum
+                ([%sexp_of: int array] idcs);
+              raise e
+          in
+          let target_dim = target_dims.(provider_dim).dim in
+          Map.add_exn ~key ~data:(actual % target_dim) env)
+    in
+    loop_proc env body
+  in
+  loop_proc empty_env llc
+
 ]}

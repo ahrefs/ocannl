@@ -1,0 +1,25 @@
+(library
+ (name arrayjit)
+ (libraries
+  base
+  core
+  printbox
+  printbox-text
+  stdio
+  str
+  gccjit
+  cudajit
+  ppx_minidebug.runtime)
+ (preprocess
+  (pps ppx_jane ppx_minidebug))
+ (modules
+  ndarray indexing low_level high_level exec_as_cuda exec_as_gccjit dims_annot)
+ (modes byte native))
+
+(library
+ (name ppx_ndarray)
+ (kind ppx_rewriter)
+ (modules ppx_helper ppx_ndarray)
+ (libraries base ppxlib str)
+ (preprocess
+  (pps ppx_jane ppxlib.metaquot)))

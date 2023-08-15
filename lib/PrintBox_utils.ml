@@ -145,13 +145,8 @@ let plot_canvas ?canvas ?size specs =
                   canvas.(dmj).(i) <- (if callback (x, y) then pixel_true else pixel_false))));
   (minx, miny, maxx, maxy, canvas)
 
-let concise_float ~prec v =
-  Printf.sprintf "%.*e" prec v
-  |> (* The C99 standard requires at least two digits for the exponent, but the leading zero
-        is a waste of space. *)
-  String.substr_replace_first ~pattern:"e+0" ~with_:"e+"
-  |> String.substr_replace_first ~pattern:"e-0" ~with_:"e-"
-
+let concise_float = Arrayjit.Ndarray.concise_float
+  
 let plot ?(prec = 3) ?canvas ?size ~x_label ~y_label specs =
   let minx, miny, maxx, maxy, canvas = plot_canvas ?canvas ?size specs in
   let open PrintBox in

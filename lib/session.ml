@@ -192,12 +192,11 @@ let generate_params_update ~(minus_lr : Formula.t) ?params () =
   List.map params ~f:(fun n -> [%nn_cd n =+ minus_lr * n.grad ~logic:"."])
 
 let print_session_code ?(compiled = false) () =
-  let open Code in
   (* FIXME: figure out if / why this isn't idempotent. *)
-  Caml.Format.set_margin !Code.code_sexp_margin;
+  Caml.Format.set_margin !Arrayjit.Low_level.code_sexp_margin;
   if compiled then
     Caml.Format.printf "Compiled session step update code:@ %a" Sexp.pp_hum
-      (sexp_of_unit_low_level @@ snd !session_step_update_compiled)
+      (sexp_of_t @@ snd !session_step_update_compiled)
   else Caml.Format.printf "Session step update code:@ %a" fprint_code !session_step_update;
   Caml.Format.print_newline ()
 

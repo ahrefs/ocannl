@@ -15,9 +15,7 @@ let size_in_bytes n =
   let size = Nd.map { f } in
   size n.value + Option.value_map ~f:size n.grad ~default:0
 
-let unique_id = ref 1
-
-(** Constructs a node with empty tensors of the specified precision and registers it in the global store.
+(** Constructs a node with empty tensors of the specified precision.
     Note that the precision for gradients should not be lower than the precision for values. *)
 let create_node (type grad_elt_t value_elt_t) ~(value_prec : value_elt_t Nd.bigarray Nd.precision)
     ?(grad_prec : grad_elt_t Nd.bigarray Nd.precision option) ~needs_gradient () =
@@ -43,7 +41,6 @@ type 'a t = {
   axis_labels : string array ref;
   default_display_indices : int array ref;
   annot : 'a;
-  literal : bool;
       (** To avoid confusion, try to maintain the following for a literal:
       - empty [children],
       - [op_label] stores the approximate human-readable numerical value or representation of the node,
@@ -245,3 +242,50 @@ let print_node_preamble ?(print_missing = true) ?extra_prefix n =
     Caml.Format.printf "\n%!"
   with Not_found_s _ | Caml.Not_found ->
     if print_missing then Caml.Format.printf "Node #%d does not exist.\n%!" n.id
+
+(* *** Global store *** *)
+let global_node_store = Hashtbl.create (module Int)
+let get uid = Hashtbl.find_exn global_node_store uid
+
+
+let print_preamble ?(from = 0) ?extra_prefix () =
+  for id = from to !Node.unique_id - 1 do
+    Node.print_node_preamble ~print_missing:false ?extra_prefix (get id)
+  done
+
+let get_tensor tensor =
+  let n = get tensor.Node.id in
+  match tensor.Node.field with Value -> Some n.node.value | Grad -> n.node.grad
+
+let get_prec ptr = match get_tensor ptr with None -> Nd.Void_prec | Some arr -> Nd.get_prec arr
+
+let create_node_helper data shape =
+  let annot = annot shape in
+  let axis_labels = ref @@ Shape.axis_map_to_dims_index @@ shape.axis_labels in
+  let default_display_indices = ref @@ Shape.default_display_indices shape in
+  let data : node = data ~axis_labels ~default_display_indices annot in
+  Hashtbl.add_exn global_node_store ~key:data.id ~data;
+  data
+
+(** Constructs a node with empty tensors of the specified precision and registers it in the global store.
+    Note that the precision for gradients should not be lower than the precision for values. *)
+let create_node ~(value_prec : Nd.prec) ?(grad_prec : Nd.prec option) ?(literal = false) ~needs_gradient
+    ~op_label ?desc_label ~children shape =
+  let data = Node.create ~value_prec ?grad_prec ~literal ~needs_gradient () ~op_label ?desc_label ~children in
+  create_node_helper data shape
+
+let create_node_promoted_precision n1 n2 ~needs_gradient ~op_label ?desc_label ~children shape =
+  let data = Node.create_of_promoted_precision ~needs_gradient n1 n2 ~op_label ?desc_label ~children in
+  create_node_helper data shape
+
+let create_node_same_precision_as ~needs_gradient ?literal n ~op_label ?desc_label ~children shape =
+  let data = Node.create_of_same_precision_as ~needs_gradient ?literal n ~op_label ?desc_label ~children in
+  create_node_helper data shape
+
+  let global_host_size_in_bytes () =
+    Hashtbl.fold global_node_store ~init:0 ~f:(fun ~key:_ ~data sum -> sum + Node.size_in_bytes data.node)
+  
+  let param_nodes ?(from_id = 0) () =
+    Hashtbl.filter global_node_store ~f:(fun n ->
+        n.node.id >= from_id && List.is_empty n.children && Option.is_some n.node.grad)
+  

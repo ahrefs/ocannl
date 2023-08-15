@@ -55,7 +55,7 @@ let hoist_dynamic_indices = ref false
 
 type session_state = {
   mutable ctx : Cudajit.context option;
-  tensors : (Node.tensor_ptr, tensor) Hashtbl.Poly.t;
+  tensors : (Ndarray.ptr, tensor) Hashtbl.Poly.t;
   mutable last_module : Cudajit.module_ option;
 }
 
@@ -216,7 +216,7 @@ let get_tensor ~traced_store ~num_threads:_ ~num_blocks ?force_sync ~jit_code ~d
                    (* Defer till after compilation, to access the compiled-into module. *)
                    Cudajit.module_get_global
                      (Option.value_exn session_state.last_module)
-                     ~name:(Node.tensor_ptr_name ptr)
+                     ~name:(Ndarray.ptr_name ptr)
                  in
                  assert (Unsigned.Size_t.to_int size = global_size_in_bytes);
                  ptr)
@@ -224,11 +224,11 @@ let get_tensor ~traced_store ~num_threads:_ ~num_blocks ?force_sync ~jit_code ~d
               (* The general case does not require laziness, but it should be OK. *)
               lazy
                 (if !Code.with_debug then
-                   Stdio.printf "Exec_as_cuda.get_tensor: mem_alloc %s\n%!" (Node.tensor_ptr_name ptr);
+                   Stdio.printf "Exec_as_cuda.get_tensor: mem_alloc %s\n%!" (Ndarray.ptr_name ptr);
                  Cudajit.mem_alloc ~byte_size:global_size_in_bytes)
         in
-        let global = Option.some_if has_global_mem @@ Node.tensor_ptr_name ptr in
-        let local = Option.some_if has_local_mem @@ Node.tensor_ptr_name ptr ^ "_local" in
+        let global = Option.some_if has_global_mem @@ Ndarray.ptr_name ptr in
+        let local = Option.some_if has_local_mem @@ Ndarray.ptr_name ptr ^ "_local" in
         let host_dims = Bigarray.Genarray.dims arr in
         let host_offset =
           Option.bind hosted ~f:(fun _ ->
@@ -339,12 +339,12 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         if Hashtbl.mem session_state.tensors ptr then
           failwith
             ("exec_as_cuda: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
-            @@ [%sexp_of: Node.tensor_ptr] ptr);
+            @@ [%sexp_of: Ndarray.ptr] ptr);
         let tn = Code.(get_node traced_store ptr) in
         assert tn.zero_initialized
         (* The initialization will be emitted by get_tensor. *)
     | Set (ptr, idcs, (Binop (op, Get (ptr2, idcs2), v2) as v))
-      when Node.equal_tensor_ptr ptr ptr2 && [%equal: Shape.axis_index array] idcs idcs2 ->
+      when Nd.equal_ptr ptr ptr2 && [%equal: Shape.axis_index array] idcs idcs2 ->
         let tensor =
           get_tensor ~traced_store ~num_threads:!num_threads ~num_blocks:!num_blocks
             ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr
@@ -361,7 +361,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
               (pp_array_offset tensor.run_scope) (idcs, tensor.dims) loop_f v2
           else
             failwith @@ "Exec_as_cuda: atomic updates only implemented for addition: "
-            ^ Sexp.to_string_hum ([%sexp_of: Code.unit_low_level] llc)
+            ^ Sexp.to_string_hum ([%sexp_of: Low_level.t] llc)
         else
           fprintf ppf "@[<2>%s@[<2>[%a@]] =@ %a;@]" (get_run_ptr tensor) (pp_array_offset tensor.run_scope)
             (idcs, tensor.dims) loop_f v;
@@ -434,7 +434,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
           fprintf ppf "@]@ }@,"
         done;
         locals := old_locals
-  and pp_top_locals ~dyn_env ppf (vcomp : Code.float_low_level) : int =
+  and pp_top_locals ~dyn_env ppf (vcomp : Low_level.float_t) : int =
     match vcomp with
     | Local_scope { id = { scope_id = i; _ } as id; prec; body; orig_indices = _ } ->
         let typ = prec_to_c_type prec in
@@ -478,7 +478,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
     | Unop (Relu, v) ->
         (* FIXME: don't recompute v *)
         fprintf ppf "@[<1>(%a > 0.0 ?@ %a : 0.0@])" loop v loop v
-  and debug_float ~dyn_env ~num_typ ~is_double (value : Code.float_low_level) : string * 'a list =
+  and debug_float ~dyn_env ~num_typ ~is_double (value : Low_level.float_t) : string * 'a list =
     let loop = debug_float ~dyn_env ~num_typ ~is_double in
     match value with
     | Local_scope { id; _ } ->
@@ -633,7 +633,7 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
                                (pp_array_offset tn.run_scope) (idcs, tn.dims))
                        in
                        let loops =
-                         Code.((Lines [| loop_over_dims ~skip_frozen:true tn.dims ~body |] : unit_low_level))
+                         Code.((Lines [| loop_over_dims ~skip_frozen:true tn.dims ~body |] : Low_level.t))
                        in
                        jit_code ~num_threads ~num_blocks ~traced_store ppf loops;
                        Caml.Format.pp_print_newline ppf ();
@@ -654,7 +654,7 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
                              (idcs, tn.dims))
                      in
                      let loops =
-                       Code.((Lines [| loop_over_dims ~skip_frozen:true tn.dims ~body |] : unit_low_level))
+                       Code.((Lines [| loop_over_dims ~skip_frozen:true tn.dims ~body |] : Low_level.t))
                      in
                      jit_code ~num_threads ~num_blocks ~traced_store ppf loops;
                      Caml.Format.pp_print_newline ppf ();
@@ -746,7 +746,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
             let f src = Cu.memcpy_H_to_D ?host_offset ~length:global_length ~dst ~src () in
             if verbose && !Code.with_debug then
               Stdio.printf "Exec_as_cuda.jit: memcpy_H_to_D for %s, offset: %s, length: %d\n%!"
-                (Node.tensor_ptr_name ptr)
+                (Ndarray.ptr_name ptr)
                 (Sexp.to_string_hum @@ [%sexp_of: int option] host_offset)
                 global_length;
             Ndarray.map { f } ndarray)
@@ -769,7 +769,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
           if not tn.read_only then (
             let f dst = Cu.memcpy_D_to_H ?host_offset ~length:global_length ~dst ~src () in
             if verbose && !Code.with_debug then
-              Stdio.printf "Exec_as_cuda.jit: memcpy_D_to_H for %s\n%!" (Node.tensor_ptr_name ptr);
+              Stdio.printf "Exec_as_cuda.jit: memcpy_D_to_H for %s\n%!" (Ndarray.ptr_name ptr);
             Ndarray.map { f } ndarray)
       | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit: kernel run finished\n%!"

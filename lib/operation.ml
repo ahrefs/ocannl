@@ -212,7 +212,7 @@ let assign =
   let module NFDSL = struct
     module O = struct end
   end in
-  let%nn_cd assign ~(lhs : Node.tensor_ptr) ~(rhs : Node.tensor_ptr) ~projections = lhs =: rhs ~projections in
+  let%nn_cd assign ~(lhs : Ndarray.ptr) ~(rhs : Ndarray.ptr) ~projections = lhs =: rhs ~projections in
   assign
 
 let assign_op field ~(n : Code.node) ~(n1 : Code.node) ~projections =

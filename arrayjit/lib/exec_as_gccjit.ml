@@ -45,7 +45,7 @@ let hoist_dynamic_indices = ref false
 type state = {
   ctx : Gccjit.context;
   func : Gccjit.function_;
-  tensors : (Node.tensor_ptr, tensor) Hashtbl.Poly.t;
+  tensors : (Ndarray.ptr, tensor) Hashtbl.Poly.t;
   traced_store : Code.traced_store;
   task_init_block : Gccjit.block;
   task_finalize_block : Gccjit.block;
@@ -126,7 +126,7 @@ let get_tensor
                 raise Unknown_synchronization))
         in
         let arr_typ = Type.array ctx num_typ device_size in
-        let local = Function.local func arr_typ @@ Node.tensor_ptr_name ptr in
+        let local = Function.local func arr_typ @@ Ndarray.ptr_name ptr in
         let host_dims = Bigarray.Genarray.dims arr in
         let cast_void rv = RValue.cast ctx rv c_void_ptr in
         if tn.zero_initialized then
@@ -172,7 +172,7 @@ let get_tensor
                      [
                        RValue.string_literal ctx
                          ("\nDEBUG: copy to host "
-                         ^ Sexp.to_string_hum ([%sexp_of: Node.tensor_ptr] ptr)
+                         ^ Sexp.to_string_hum ([%sexp_of: Ndarray.ptr] ptr)
                          ^ " -- index: %d; size: %d: \n");
                          offset;
                          RValue.int ctx c_index device_size_in_bytes;
@@ -318,7 +318,7 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
        Block.eval !current_block @@ RValue.call ctx f print_args);
     Block.comment !current_block c
   in
-  let rec loop_proc ~(env : rvalue Code.environment) ~name (body : Code.unit_low_level) : unit =
+  let rec loop_proc ~(env : rvalue Code.environment) ~name (body : Low_level.t) : unit =
     let loop = loop_proc ~env in
     match body with
     | Code.Lines lines ->
@@ -338,7 +338,7 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
         Array.iteri cs ~f:(fun i line -> loop ~name:(name ^ "_at_par_line_" ^ Int.to_string i) line)
     | Set (_, _, Binop (Arg2, Get (_, _), _)) -> assert false
     | Set (tensor, idcs, Binop (op, Get (tensor2, idcs2), c2))
-      when Node.equal_tensor_ptr tensor tensor2
+      when Nd.equal_ptr tensor tensor2
            && [%equal: Shape.axis_index array] idcs idcs2
            && is_builtin_op op ->
         (* FIXME: maybe it's not worth it? *)
@@ -350,7 +350,7 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
         let device_lhs = LValue.access_array (get_local_ptr tensor) device_offset in
         Block.assign_op !current_block device_lhs (builtin_op op) value
     | Set (tensor, idcs, Binop (op, Get (tensor2, idcs2), c2))
-      when Node.equal_tensor_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
+      when Nd.equal_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
@@ -363,7 +363,7 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
         in
         Block.assign !current_block device_lhs rhs
     | Set (tensor, idcs, Binop (op, c2, Get (tensor2, idcs2)))
-      when Node.equal_tensor_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
+      when Nd.equal_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
@@ -387,7 +387,7 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
         if Hashtbl.mem state.tensors ptr then
           failwith
             ("exec_as_gccjit: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
-            @@ [%sexp_of: Node.tensor_ptr] ptr);
+            @@ [%sexp_of: Ndarray.ptr] ptr);
         let tn = Code.(get_node state.traced_store ptr) in
         assert tn.zero_initialized
         (* The initialization will be emitted by get_tensor. *)

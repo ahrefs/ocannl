@@ -17,39 +17,11 @@ type float32_elt = Bigarray.float32_elt
 let float16 : (float, float16_elt) Bigarray.kind = Bigarray.float32
 
 type half_nd = float16_elt bigarray
-
-let sexp_of_half_nd (arr : half_nd) =
-  let dims = A.dims arr in
-  Sexp.Atom ("half_nd_dims_" ^ String.concat_array ~sep:"x" (Array.map dims ~f:Int.to_string))
-
 type single_nd = Bigarray.float32_elt bigarray
-
-let sexp_of_single_nd (arr : single_nd) =
-  let dims = A.dims arr in
-  Sexp.Atom ("single_nd_dims_" ^ String.concat_array ~sep:"x" (Array.map dims ~f:Int.to_string))
-
 type double_nd = Bigarray.float64_elt bigarray
-
-let sexp_of_double_nd (arr : double_nd) =
-  let dims = A.dims arr in
-  Sexp.Atom ("double_nd_dims_" ^ String.concat_array ~sep:"x" (Array.map dims ~f:Int.to_string))
-
-type t = Half_nd of half_nd | Single_nd of single_nd | Double_nd of double_nd [@@deriving sexp_of]
 
 type 'a precision = Half : half_nd precision | Single : single_nd precision | Double : double_nd precision
 [@@deriving sexp_of]
-
-let as_t (type arr_t) (prec : arr_t precision) (arr : arr_t) =
-  match prec with Half -> Half_nd arr | Single -> Single_nd arr | Double -> Double_nd arr
-
-let precision_to_bigarray_kind (type elt_t) (prec : elt_t bigarray precision) : (float, elt_t) Bigarray.kind =
-  match prec with Half -> float16 | Single -> Bigarray.Float32 | Double -> Bigarray.Float64
-
-let precision_to_string (type arr_t) (prec : arr_t precision) =
-  match prec with Half -> "half" | Single -> "single" | Double -> "double"
-
-let precision_string = function Half_nd _ -> "half" | Single_nd _ -> "single" | Double_nd _ -> "double"
-let default_kind = Single
 
 type prec =
   | Void_prec : prec
@@ -60,9 +32,6 @@ type prec =
 let half = Half_prec Half
 let single = Single_prec Single
 let double = Double_prec Double
-let is_double_prec_t = function Double_nd _ -> true | _ -> false
-let is_double (type arr_t) (prec : arr_t precision) = match prec with Double -> true | _ -> false
-let is_double_prec = function Double_prec _ -> true | _ -> false
 
 let sexp_of_prec = function
   | Void_prec -> Sexp.Atom "Void_prec"
@@ -77,6 +46,48 @@ let prec_of_sexp = function
   | Sexp.Atom "Double_prec" -> double
   | Sexp.List _ -> invalid_arg "prec_of_sexp: expected atom, found list"
   | Sexp.Atom s -> invalid_arg @@ "prec_of_sexp: unknown precision " ^ s
+
+type ndarray =
+  | Half_nd of (half_nd[@sexp.opaque])
+  | Single_nd of (single_nd[@sexp.opaque])
+  | Double_nd of (double_nd[@sexp.opaque])
+[@@deriving sexp_of]
+
+type 'a t = {
+  array : (ndarray[@compare.ignore] [@equal.ignore]);
+  id : int;
+  annot : ('a[@compare.ignore] [@equal.ignore]);
+}
+[@@deriving sexp_of, compare, equal]
+
+type ptr = Ptr of int [@@deriving sexp, compare, equal, hash]
+
+let ptr { id; _ } = Ptr id
+let get_name { id; _ } = "#" ^ Int.to_string id
+
+let as_array (type arr_t) (prec : arr_t precision) (arr : arr_t) =
+  match prec with Half -> Half_nd arr | Single -> Single_nd arr | Double -> Double_nd arr
+
+module ComparePtr = struct
+  type t = ptr = Ptr of int [@@deriving sexp, compare, equal, hash]
+end
+
+module Ptr = struct
+  include ComparePtr
+  include Comparator.Make (ComparePtr)
+end
+
+let precision_to_bigarray_kind (type elt_t) (prec : elt_t bigarray precision) : (float, elt_t) Bigarray.kind =
+  match prec with Half -> float16 | Single -> Bigarray.Float32 | Double -> Bigarray.Float64
+
+let precision_to_string (type arr_t) (prec : arr_t precision) =
+  match prec with Half -> "half" | Single -> "single" | Double -> "double"
+
+let precision_string = function Half_nd _ -> "half" | Single_nd _ -> "single" | Double_nd _ -> "double"
+let default_kind = Single
+let is_double_prec_t = function Double_nd _ -> true | _ -> false
+let is_double (type arr_t) (prec : arr_t precision) = match prec with Double -> true | _ -> false
+let is_double_prec = function Double_prec _ -> true | _ -> false
 
 let pack_prec (type a) (prec : a precision) =
   match prec with Half -> half | Single -> single | Double -> double
@@ -97,7 +108,7 @@ let get_as_int arr idx =
     let v = A.get x idx in
     try Float.to_int v
     with Invalid_argument _ ->
-      Stdio.eprintf "\nOCANNL Runtime error: get_as_int invalid float: %f\n%!" v;
+      Stdio.eprintf "\nRuntime error: Ndarray.get_as_int invalid float: %f\n%!" v;
       0
   in
   map { f } arr
@@ -140,10 +151,10 @@ type init_op =
   | Standard_uniform  (** Draws the values from U(0,1). *)
 [@@deriving sexp]
 
-let create_array_of_prec (type elt_t) (prec : elt_t bigarray precision) dims : elt_t bigarray =
+let create_bigarray_of_prec (type elt_t) (prec : elt_t bigarray precision) dims : elt_t bigarray =
   A.create (precision_to_bigarray_kind prec) Bigarray.C_layout dims
 
-let init_array_of_prec (type elt_t) (prec : elt_t bigarray precision) dims ~(f : int array -> float) :
+let init_bigarray_of_prec (type elt_t) (prec : elt_t bigarray precision) dims ~(f : int array -> float) :
     elt_t bigarray =
   A.init (precision_to_bigarray_kind prec) Bigarray.C_layout dims f
 
@@ -152,19 +163,26 @@ let indices_to_offset ~dims ~idcs =
 
 let fixed_state_for_init = ref None
 
-let create_array (type elt_t) (prec : elt_t bigarray precision) dims (init_op : init_op) : elt_t bigarray =
+let create_bigarray (type elt_t) (prec : elt_t bigarray precision) dims (init_op : init_op) : elt_t bigarray =
   Option.iter !fixed_state_for_init ~f:(fun seed -> Random.init seed);
   match init_op with
   | Constant_fill cs ->
       let size = Array.length cs in
-      init_array_of_prec prec dims ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
+      init_bigarray_of_prec prec dims ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
   | Range_over_offsets ->
-      init_array_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Standard_uniform -> init_array_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
+      init_bigarray_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
+  | Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
 
-let create prec dims init_op =
-  let f prec = as_t prec @@ create_array prec dims init_op in
+let create_array prec dims init_op =
+  let f prec = as_array prec @@ create_bigarray prec dims init_op in
   map_prec { f } prec
+
+let unique_id = ref 1
+
+let create prec dims init_op annot =
+  let id = !unique_id in
+  Int.incr unique_id;
+  { array = create_array prec dims init_op; id; annot }
 
 let precision_in_bytes = function Half_nd _ -> 2 | Single_nd _ -> 4 | Double_nd _ -> 8
 
@@ -286,6 +304,13 @@ let int_dims_to_string ?(with_axis_numbers = false) dims =
 (** When rendering tensors, outputs this many decimal digits. *)
 let print_decimals_precision = ref 2
 
+let concise_float ~prec v =
+  Printf.sprintf "%.*e" prec v
+  |> (* The C99 standard requires at least two digits for the exponent, but the leading zero
+        is a waste of space. *)
+  String.substr_replace_first ~pattern:"e+0" ~with_:"e+"
+  |> String.substr_replace_first ~pattern:"e-0" ~with_:"e-"
+
 (** Prints 0-based [indices] entries out of [arr], where a number between [-5] and [-1] in an axis means
     to print out the axis, and a non-negative number means to print out only the indexed dimension of the axis.
     Prints up to [entries_per_axis] or [entries_per_axis+1] entries per axis, possibly with ellipsis
@@ -366,7 +391,7 @@ let render_tensor ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labe
             B.hpad 1 @@ B.line
             @@
             if is_ellipsis () then "..."
-            else PrintBox_utils.concise_float ~prec:!print_decimals_precision (get_as_float arr indices)
+            else concise_float ~prec:!print_decimals_precision (get_as_float arr indices)
           with Invalid_argument _ as error ->
             Stdio.Out_channel.printf "Invalid indices: %s into array: %s\n%!" (int_dims_to_string indices)
               (int_dims_to_string dims);
