@@ -1,6 +1,9 @@
-open Base
+(* open Base *)
 open Ppxlib
 
+(* open Ppx_helper *)
+
+(*
 let expr_expander ~loc ~path:_ payload =
   match payload with
   | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
@@ -77,5 +80,5 @@ let rules =
     Ppxlib.Context_free.Rule.extension
     @@ Extension.declare "nndarray" Extension.Context.structure_item Ast_pattern.(pstr __) str_expander;
   ]
-
-let () = Driver.register_transformation ~rules "ppx_nndarray"
+*)
+let () = Driver.register_transformation ~rules:[] "ppx_nndarray"

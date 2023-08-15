@@ -1,5 +1,6 @@
 open Base
 open Ppxlib
+open Ppx_arrayjit.Ppx_helper
 open Ppx_nn_shared
 
 let ndarray_op ?desc_label ?axis_labels ?label expr =

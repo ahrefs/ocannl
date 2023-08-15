@@ -17,7 +17,7 @@
  (modes byte native))
 
 (library
- (name ppx_ndarray)
+ (name ppx_arrayjit)
  (kind ppx_rewriter)
  (modules ppx_helper ppx_ndarray)
  (libraries base ppxlib str)

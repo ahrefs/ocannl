@@ -50,11 +50,6 @@ let rec pat2expr pat =
       @@ Location.error_extensionf ~loc
            "ppx_ocannl does not recognize/support the pattern; maybe try using an `as` alias."
 
-let dim_spec_to_string = function
-  | `Input_dims dim -> "input (tuple) of dim " ^ Int.to_string dim
-  | `Output_dims dim -> "output (list) of dim " ^ Int.to_string dim
-  | `Batch_dims dim -> "batch (array) of dim " ^ Int.to_string dim
-
 let alphanum_regexp = Str.regexp "^[^a-zA-Z0-9]+$"
 let is_operator ident = Str.string_match alphanum_regexp ident 0
 

@@ -8,6 +8,11 @@ let rec collect_list accu = function
   | [%expr []] -> List.rev accu
   | expr -> List.rev (expr :: accu)
 
+let dim_spec_to_string = function
+  | `Input_dims dim -> "input (tuple) of dim " ^ Int.to_string dim
+  | `Output_dims dim -> "output (list) of dim " ^ Int.to_string dim
+  | `Batch_dims dim -> "batch (array) of dim " ^ Int.to_string dim
+
 let ndarray_constant expr =
   let loc = expr.pexp_loc in
   (* Traverse the backbone of the ndarray to collect the dimensions. *)
