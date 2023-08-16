@@ -388,7 +388,6 @@ extern "C" __global__ void %{name}(bool is_final, %{String.concat ~sep:", " para
   %{String.substr_replace_all cu_body ~pattern:"\n" ~with_:"\n  "}
 
   /* Finalization: copy local-to-global. */
-  __syncthreads();
   if (is_final) {
     %{String.concat_array ~sep:"\n    "
     @@ Array.map finalizers ~f:(String.substr_replace_all ~pattern:"\n" ~with_:"\n    ")}
