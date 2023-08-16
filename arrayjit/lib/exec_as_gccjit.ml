@@ -8,14 +8,11 @@ let session_context =
   set_option ctx Optimization_level !optimization_level;
   ref ctx
 
-type sync_properties =
-  | Device_only  (** The tensor is only needed for a task-local computation and does not exist on host. *)
-  | Parallel_dim
-      (** The shape of the tensor has a [Parallel] dimension. Each task computes a slice of this dimension,
-          independently transferring to the host. *)
-  | Replicated
-      (** If true, the tensor computation happens on-device in all tasks, but result is transferred to host
-          on only one task ([task_id = 0]). *)
+type mem_properties =
+  | Local_only  (** The tensor is only needed for a local computation and does not exist on host. *)
+  | Local_finally_host
+      (** The tensor is computed locally and then copied to host, if the flag [final] is true. *)
+  | Host_only  (** The tensor is read from or updated directly on the host. *)
 [@@deriving sexp, equal, compare, variants]
 
 type tensor = {
@@ -23,19 +20,12 @@ type tensor = {
       (** Pointer to the first value of the associated [Bigarray], if hosted. Usually it does not correspond
           to the local tensor (e.g. if task id > 0). *)
   local : Gccjit.lvalue option;  (** A local array, if any. *)
-  sync : sync_properties;
-  host_dims : int array;
-      (** Dimensions (shape) of the tensor as a whole, or an empty array if [hosted_ptr]
-                              is [None]. *)
-  device_dims : int array;  (** Dimensions (shape) of the per-task slice of the tensor. *)
-  host_size_in_bytes : int;  (** Size of the full host's tensor. *)
-  device_size_in_bytes : int;  (** Size of the per-task slice of the tensor. *)
-  local_is_slice_of_host : bool;
-      (** If true, the local tensor is a slice of the host tensor. If false, the local tensor needs to be
-          iterated with a jitted code to copy it to/from the host tensor. *)
+  sync : mem_properties;
+  dims : int array;
+  size_in_bytes : int;
   num_typ : Gccjit.type_;
-      (** The type of the stored values: [signed char] (corresponds to precision [Byte]),
-      [short] (precision [Half]), [float] (precision [Single]), [double] (precision [Double]). *)
+      (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]),
+          [double] (precision [Double]). *)
   is_double : bool;
 }
 
@@ -45,12 +35,11 @@ let hoist_dynamic_indices = ref false
 type state = {
   ctx : Gccjit.context;
   func : Gccjit.function_;
-  tensors : (Ndarray.ptr, tensor) Hashtbl.Poly.t;
+  tensors : (Ndarray.ptr, tensor) Hashtbl.t;
   traced_store : Low_level.traced_store;
-  task_init_block : Gccjit.block;
-  task_finalize_block : Gccjit.block;
-  replicated_finalize_block : Gccjit.block;
-  task_id : Gccjit.param option;
+  init_block : Gccjit.block;
+  finalize_block : Gccjit.block;  (** Only executed when [is_final] is true. *)
+  is_final : Gccjit.param option;
 }
 
 let jit_array_offset ctx ~idcs ~dims =
@@ -60,129 +49,56 @@ let jit_array_offset ctx ~idcs ~dims =
       RValue.binary_op ctx Plus c_index idx
       @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
 
-exception Unknown_synchronization
-
-let get_tensor
-    {
-      ctx;
-      func;
-      tensors;
-      traced_store;
-      task_init_block;
-      task_finalize_block;
-      replicated_finalize_block;
-      task_id = _;
-    } ?force_sync ~jit_code ~host_idcs ptr : tensor =
+let get_tensor { ctx; func; tensors; traced_store; init_block; finalize_block; is_final } ~jit_code n : tensor
+    =
   let open Gccjit in
+  let ptr = Ndarray.ptr n in
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
-      let n = Code.get ptr.id in
-      let tn = Code.(get_node traced_store ptr) in
-      let host_size_in_bytes = Node.size_in_bytes n.node in
-      let axes = Shape.to_dims n.annot.shape in
-      let local_size = Array.fold ~init:1 ~f:( * ) local_dims in
-      let arr = Option.value_exn @@ Code.get_tensor ptr in
-      let local_size_in_bytes = local_size * Ndarray.precision_in_bytes arr in
+      let tn = Low_level.(get_node traced_store n) in
+      let host_size_in_bytes = Ndarray.size_in_bytes (Some n.array) in
+      let dims = n.annot.dims in
+      let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
+      let arr = n.array in
+      let size_in_bytes = size_in_elems * Ndarray.precision_in_bytes arr in
+      let is_on_host = host_size_in_bytes > 0 in
+      if is_on_host then assert (host_size_in_bytes = size_in_bytes);
+      let is_write_first = not tn.read_before_write in
       let c_void_ptr = Type.(get ctx Type.Void_ptr) in
       let c_index = Type.get ctx Type.Size_t in
       let c_int = Type.get ctx Type.Int in
       let tensor c_typ is_double arr =
         let num_typ = Type.(get ctx c_typ) in
         let hosted_ptr =
-          if Array.is_empty @@ Ndarray.A.dims arr then None
+          if not is_on_host then None
           else Some (RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray arr)
         in
-        let is_parallel =
-          Array.exists ~f:Shape.(function { special = Dedicated Task_id; _ } -> true | _ -> false)
-          @@ Shape.to_dims n.annot.shape
-        in
-        let can_be_replicated = tn.is_replicable in
         let sync =
-          Option.value_or_thunk force_sync ~default:(fun () ->
-              if Option.is_none hosted_ptr then Local_only
-              else if is_parallel then Parallel_dim
-              else if can_be_replicated then Replicated
-              else (
-                if !Code.with_debug then
-                  Caml.Format.printf "\nWARNING: No sync for tensor: %a@ node: %a\n%!" Sexp.pp_hum
-                    ([%sexp_of: Code.traced_tensor] tn)
-                    Sexp.pp_hum
-                    ([%sexp_of: Code.node] n);
-                raise Unknown_synchronization))
+          if not is_on_host then Local_only else if is_write_first then Local_finally_host else Host_only
         in
-        let arr_typ = Type.array ctx num_typ local_size in
-        let local = Function.local func arr_typ @@ Ndarray.ptr_name ptr in
-        let host_dims = Bigarray.Genarray.dims arr in
+        let arr_typ = Type.array ctx num_typ size_in_elems in
+        let local =
+          if is_host_only sync then None else Some (Function.local func arr_typ @@ Ndarray.get_name n)
+        in
         let cast_void rv = RValue.cast ctx rv c_void_ptr in
         if tn.zero_initialized then
-          Block.eval task_init_block
-          @@ RValue.call ctx (Function.builtin ctx "memset")
-               [
-                 cast_void @@ LValue.address local;
-                 RValue.zero ctx c_int;
-                 RValue.int ctx c_index local_size_in_bytes;
-               ];
+          Option.first_some (Option.map local ~f:(Fn.compose cast_void LValue.address)) hosted_ptr
+          |> Option.iter ~f:(fun rv_ptr ->
+                 Block.eval init_block
+                 @@ RValue.call ctx (Function.builtin ctx "memset")
+                      [ rv_ptr; RValue.zero ctx c_int; RValue.int ctx c_index size_in_bytes ]);
         Option.iter hosted_ptr ~f:(fun hosted_ptr ->
-            if local_is_slice_of_host then (
-              let offset = jit_array_offset ctx ~idcs:offset_idcs ~dims:host_dims in
-              let lhs = LValue.access_array hosted_ptr offset in
-              if tn.zero_initialized then
-                Block.eval task_init_block
-                @@ RValue.call ctx (Function.builtin ctx "memset")
-                     [
-                       cast_void @@ LValue.address lhs;
-                       RValue.zero ctx c_int;
-                       RValue.int ctx c_index local_size_in_bytes;
-                     ];
-              if tn.read_before_write then
-                Block.eval task_init_block
-                @@ RValue.call ctx (Function.builtin ctx "memcpy")
-                     [
-                       cast_void @@ LValue.address local;
-                       cast_void @@ LValue.address lhs;
-                       RValue.int ctx c_index local_size_in_bytes;
-                     ];
-              if not tn.read_only then
-                (* let f = Function.builtin ctx "printf" in
-                   let print_args =
-                     [
-                       RValue.string_literal ctx
-                         ("\nDEBUG: copy to host "
-                         ^ Sexp.to_string_hum ([%sexp_of: Ndarray.ptr] ptr)
-                         ^ " -- index: %d; size: %d: \n");
-                         offset;
-                         RValue.int ctx c_index local_size_in_bytes;
-                     ]
-                   in
-                   Block.eval task_finalize_block @@ RValue.call ctx f print_args; *)
-                Block.eval (if is_replicated sync then replicated_finalize_block else task_finalize_block)
-                @@ RValue.call ctx (Function.builtin ctx "memcpy")
-                     [
-                       cast_void @@ LValue.address lhs;
-                       cast_void @@ LValue.address local;
-                       RValue.int ctx c_index local_size_in_bytes;
-                     ])
-            else (
-              ignore jit_code;
-              failwith "Exec_as_gccjit: non-slice hosted: NOT IMPLEMENTED YET"));
-        let backend_info =
-          (if Node.equal_data_kind ptr.field Value then "v:" else "g:")
-          ^ (Sexp.to_string_hum @@ sexp_of_mem_properties sync)
-          ^ ";"
-        in
+            if is_local_finally_host sync then
+              Block.eval finalize_block
+              @@ RValue.call ctx (Function.builtin ctx "memcpy")
+                   [
+                     cast_void hosted_ptr;
+                     cast_void @@ LValue.address @@ Option.value_exn local;
+                     RValue.int ctx c_index size_in_bytes;
+                   ]);
+        let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties sync) ^ ";" in
         if not @@ String.is_substring n.annot.backend_info ~substring:backend_info then
           n.annot.backend_info <- n.annot.backend_info ^ backend_info;
-        {
-          hosted_ptr;
-          local = Some local;
-          sync;
-          host_dims;
-          local_dims;
-          host_size_in_bytes;
-          local_size_in_bytes;
-          local_is_slice_of_host;
-          num_typ;
-          is_double;
-        }
+        { hosted_ptr; local; sync; dims; size_in_bytes; num_typ; is_double }
       in
       match arr with
       | Half_nd arr -> (* FIXME: *) tensor Type.Float false arr
@@ -208,39 +124,35 @@ let prec_to_kind prec =
 let prec_is_double = function Ndarray.Double_prec _ -> true | _ -> false
 
 let is_builtin_op = function
-  | Code.Add | Code.Mul -> true
-  | Code.ToPowOf | Code.Relu_gate | Code.Arg2 | Code.Arg1 -> false
+  | Low_level.Add | Low_level.Mul -> true
+  | Low_level.ToPowOf | Low_level.Relu_gate | Low_level.Arg2 | Low_level.Arg1 -> false
 
 let builtin_op = function
-  | Code.Add -> Gccjit.Plus
-  | Code.Mul -> Gccjit.Mult
-  | Code.ToPowOf | Code.Relu_gate | Code.Arg2 | Code.Arg1 ->
+  | Low_level.Add -> Gccjit.Plus
+  | Low_level.Mul -> Gccjit.Mult
+  | Low_level.ToPowOf | Low_level.Relu_gate | Low_level.Arg2 | Low_level.Arg1 ->
       invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
 
-let get_local_ptr tensor = match tensor.local with Some lv -> Gccjit.RValue.lvalue lv | None -> assert false
+let get_ptr tensor =
+  match tensor.local with Some lv -> Gccjit.RValue.lvalue lv | None -> Option.value_exn tensor.hosted_ptr
 
-(* task_id = RValue.param task_id *)
-let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) ({ ctx; func; _ } as state)
-    initial_block body =
+let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ } as state) initial_block body
+    =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
-  let lookup ?provider_dim ?(example_only = false) ~on_host env indices =
+  let lookup env indices =
     let open Gccjit in
     try
       Array.map indices ~f:(function
-        | Shape.Fixed_idx i -> RValue.int ctx c_index i
-        | Iterator s when on_host && Shape.task_id_sym s && Option.is_some state.task_id ->
-            RValue.param @@ Option.value_exn state.task_id
-        | Iterator s when on_host && Shape.task_id_sym s -> Map.find_exn env s
-        | Iterator s when Shape.task_id_sym s -> RValue.zero ctx c_index
+        | Indexing.Fixed_idx i -> RValue.int ctx c_index i
         | Iterator s -> Map.find_exn env s)
     with e ->
       Caml.Format.eprintf "exec_as_gccjit: missing index from@ %a@ among environment keys:@ %a\n%!"
         Sexp.pp_hum
-        ([%sexp_of: Shape.axis_index array] indices)
+        ([%sexp_of: Indexing.axis_index array] indices)
         Sexp.pp_hum
-        ([%sexp_of: Shape.symbol list] @@ Map.keys env);
+        ([%sexp_of: Indexing.symbol list] @@ Map.keys env);
       raise e
   in
   let c_float = Type.get ctx Type.Float in
@@ -260,103 +172,61 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
   let current_block = ref initial_block in
   let loop_binop op ~num_typ ~is_double ~v1 ~v2 =
     match op with
-    | Code.Add -> RValue.binary_op ctx Plus num_typ v1 v2
-    | Code.Mul -> RValue.binary_op ctx Mult num_typ v1 v2
-    | Code.ToPowOf when is_double ->
+    | Low_level.Add -> RValue.binary_op ctx Plus num_typ v1 v2
+    | Low_level.Mul -> RValue.binary_op ctx Mult num_typ v1 v2
+    | Low_level.ToPowOf when is_double ->
         let base = RValue.cast ctx v1 c_double in
         let expon = RValue.cast ctx v2 c_double in
         RValue.cast ctx (RValue.call ctx (Function.builtin ctx "pow") [ base; expon ]) num_typ
-    | Code.ToPowOf ->
+    | Low_level.ToPowOf ->
         let base = RValue.cast ctx v1 c_float in
         let expon = RValue.cast ctx v2 c_float in
         RValue.cast ctx (RValue.call ctx (Function.builtin ctx "powf") [ base; expon ]) num_typ
-    | Code.Relu_gate ->
+    | Low_level.Relu_gate ->
         let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) v1 in
         RValue.binary_op ctx Mult num_typ cmp @@ v2
-    | Code.Arg2 -> v2
-    | Code.Arg1 -> v1
+    | Low_level.Arg2 -> v2
+    | Low_level.Arg1 -> v1
   in
   let log_comment c =
-    (if !Code.with_debug && !Code.executor_print_comments then
+    (if !Low_level.with_debug && !Low_level.executor_print_comments then
        let f = Function.builtin ctx "printf" in
-       let print_args =
-         match state.task_id with
-         | Some task_id ->
-             [ RValue.string_literal ctx ("\nComment for task %d: " ^ c ^ "\n"); RValue.param task_id ]
-         | None -> [ RValue.string_literal ctx ("\nComment: " ^ c ^ "\n") ]
-       in
-       Block.eval !current_block @@ RValue.call ctx f print_args);
+       Block.eval !current_block @@ RValue.call ctx f [ RValue.string_literal ctx ("\nComment: " ^ c ^ "\n") ]);
     Block.comment !current_block c
   in
-  let rec loop_proc ~(env : rvalue Code.environment) ~name (body : Low_level.t) : unit =
-    let loop = loop_proc ~env in
+  let rec loop_proc ~(env : rvalue Low_level.environment) ~name (body : Low_level.t) : unit =
+    let loop = loop_proc ~env ~name in
     match body with
-    | Code.Lines lines ->
-        Array.iteri lines ~f:(fun i line -> loop ~name:(name ^ "_at_line_" ^ Int.to_string i) line)
-    | For_loop { index; from_; to_; body; trace_it = _ }
-      when Shape.task_id_sym index && Option.is_some state.task_id ->
-        assert (from_ = 0);
-        if not (!num_parallel_tasks = 1 || !num_parallel_tasks = to_ + 1) then
-          invalid_arg
-            [%string "Exec_as_gccjit: parallel dims mismatch: %{!num_parallel_tasks#Int} vs. %{to_ + 1#Int}"];
-        num_parallel_tasks := to_ + 1;
-        let env = Map.add_exn ~key:index ~data:(RValue.param @@ Option.value_exn state.task_id) env in
-        loop_proc ~env ~name body
+    | Noop -> ()
+    | Low_level.Seq (c1, c2) ->
+        loop c1;
+        loop c2
     | For_loop { index; from_; to_; body; trace_it = _ } -> jit_for_loop ~env index ~from_ ~to_ body
-    | Rebalance (_, cs) ->
-        (* This backend does not implement a relevant form of fine-grain parallelism. *)
-        Array.iteri cs ~f:(fun i line -> loop ~name:(name ^ "_at_par_line_" ^ Int.to_string i) line)
     | Set (_, _, Binop (Arg2, Get (_, _), _)) -> assert false
     | Set (tensor, idcs, Binop (op, Get (tensor2, idcs2), c2))
-      when Nd.equal_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 && is_builtin_op op ->
+      when Low_level.equal_ndarray tensor tensor2
+           && [%equal: Indexing.axis_index array] idcs idcs2
+           && is_builtin_op op ->
         (* FIXME: maybe it's not worth it? *)
-        let host_idcs = lookup ~on_host:true env idcs in
-        let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
+        let tensor = get_tensor state ~jit_code:loop_proc tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
-        let idcs = lookup ~on_host:false env idcs in
-        let local_offset = jit_array_offset ctx ~idcs ~dims:tensor.local_dims in
-        let local_lhs = LValue.access_array (get_local_ptr tensor) local_offset in
-        Block.assign_op !current_block local_lhs (builtin_op op) value
-    | Set (tensor, idcs, Binop (op, Get (tensor2, idcs2), c2))
-      when Nd.equal_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
-        let host_idcs = lookup ~on_host:true env idcs in
-        let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
-        let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
-        let idcs = lookup ~on_host:false env idcs in
-        let local_offset = jit_array_offset ctx ~idcs ~dims:tensor.local_dims in
-        let local_lhs = LValue.access_array (get_local_ptr tensor) local_offset in
-        let rhs =
-          loop_binop op ~num_typ:tensor.num_typ ~is_double:tensor.is_double ~v1:(RValue.lvalue local_lhs)
-            ~v2:value
-        in
-        Block.assign !current_block local_lhs rhs
-    | Set (tensor, idcs, Binop (op, c2, Get (tensor2, idcs2)))
-      when Nd.equal_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
-        let host_idcs = lookup ~on_host:true env idcs in
-        let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
-        let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
-        let idcs = lookup ~on_host:false env idcs in
-        let local_offset = jit_array_offset ctx ~idcs ~dims:tensor.local_dims in
-        let local_lhs = LValue.access_array (get_local_ptr tensor) local_offset in
-        let rhs =
-          loop_binop op ~num_typ:tensor.num_typ ~is_double:tensor.is_double ~v1:value
-            ~v2:(RValue.lvalue local_lhs)
-        in
-        Block.assign !current_block local_lhs rhs
+        let idcs = lookup env idcs in
+        let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
+        let lhs = LValue.access_array (get_ptr tensor) offset in
+        Block.assign_op !current_block lhs (builtin_op op) value
     | Set (ptr, idcs, value) ->
-        let host_idcs = lookup ~on_host:true env idcs in
-        let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs ptr in
+        let tensor = get_tensor state ~jit_code:loop_proc ptr in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
-        let idcs = lookup ~on_host:false env idcs in
-        let local_offset = jit_array_offset ctx ~idcs ~dims:tensor.local_dims in
-        let local_lhs = LValue.access_array (get_local_ptr tensor) local_offset in
-        Block.assign !current_block local_lhs value
-    | Zero_out ptr ->
-        if Hashtbl.mem state.tensors ptr then
+        let idcs = lookup env idcs in
+        let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
+        let lhs = LValue.access_array (get_ptr tensor) offset in
+        Block.assign !current_block lhs value
+    | Zero_out tensor ->
+        if Hashtbl.mem state.tensors (Ndarray.ptr tensor) then
           failwith
             ("exec_as_gccjit: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
-            @@ [%sexp_of: Ndarray.ptr] ptr);
-        let tn = Code.(get_node state.traced_store ptr) in
+            @@ [%sexp_of: Low_level.ndarray] tensor);
+        let tn = Low_level.(get_node state.traced_store tensor) in
         assert tn.zero_initialized
         (* The initialization will be emitted by get_tensor. *)
     | Set_local (id, value) ->
@@ -365,9 +235,6 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
         Block.assign !current_block lhs value
     | Comment c -> log_comment c
     | Staged_compilation exp -> exp ()
-    | Synchronize s -> invalid_arg @@ "Exec_as_gccjit: Uneliminated synchronization: " ^ s
-    | Dynamic_indices { tensor; tensor_idcs; dynamic_idcs; target_dims; body; slice = _ } ->
-        jit_dynamic_indices ~name ~env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
   and loop_float ~name ~env ~num_typ ~is_double value : rvalue =
     let loop = loop_float ~name ~env ~num_typ ~is_double in
     match value with
@@ -393,23 +260,22 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
         let f = Function.builtin ctx f_name in
         RValue.call ctx f []
     | Get (tensor, idcs) ->
-        let host_idcs = lookup ~on_host:true env idcs in
-        let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
-        let idcs = lookup ~on_host:false env idcs in
-        let local_offset = jit_array_offset ctx ~idcs ~dims:tensor.local_dims in
-        RValue.lvalue @@ LValue.access_array (get_local_ptr tensor) local_offset
-    | Binop (Code.Arg2, _, c2) -> loop c2
-    | Binop (Code.Arg1, c1, _) -> loop c1
+        let tensor = get_tensor state ~jit_code:loop_proc tensor in
+        let idcs = lookup env idcs in
+        let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
+        RValue.lvalue @@ LValue.access_array (get_ptr tensor) offset
+    | Binop (Low_level.Arg2, _, c2) -> loop c2
+    | Binop (Low_level.Arg1, c1, _) -> loop c1
     | Binop (op, c1, c2) -> loop_binop op ~num_typ ~is_double ~v1:(loop c1) ~v2:(loop c2)
-    | Unop (Code.Identity, c) -> loop c
-    | Unop (Code.Relu, c) ->
+    | Unop (Low_level.Identity, c) -> loop c
+    | Unop (Low_level.Relu, c) ->
         (* FIXME: don't recompute c *)
         let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) @@ loop c in
         RValue.binary_op ctx Mult num_typ cmp @@ loop c
     | Constant v -> RValue.double ctx num_typ v
   and jit_for_loop ~env key ~from_ ~to_ body : unit =
     let open Gccjit in
-    let i = Shape.symbol_ident key in
+    let i = Indexing.symbol_ident key in
     let index = Function.local func c_index i in
     let env = Map.add_exn ~key ~data:(RValue.lvalue index) env in
     let b_loop_cond = Block.create ~name:("loop_cond_" ^ i) func in
@@ -424,101 +290,46 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
     Block.assign_op !current_block index Plus (RValue.one ctx c_index);
     Block.jump !current_block b_loop_cond;
     current_block := b_after_loop
-  and jit_dynamic_indices ~name ~env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body =
-    let host_idcs = lookup ~on_host:true ~example_only:true env tensor_idcs in
-    let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
-    let env =
-      Array.foldi dynamic_idcs ~init:env ~f:(fun provider_dim env key ->
-          let target_dim = RValue.int ctx c_int target_dims.(provider_dim).dim in
-          let provider_dim = RValue.int ctx c_int provider_dim in
-          let idcs = lookup ~provider_dim ~on_host:false env tensor_idcs in
-          let local_prov_offset = jit_array_offset ctx ~idcs ~dims:tensor.local_dims in
-          let dyn_index = RValue.lvalue @@ LValue.access_array (get_local_ptr tensor) local_prov_offset in
-          let dyn_index = RValue.cast ctx dyn_index c_index in
-          let dyn_index = RValue.binary_op ctx Modulo c_index dyn_index target_dim in
-          let data =
-            if !hoist_dynamic_indices then (
-              let sym_index = Function.local func c_index (Shape.symbol_ident key) in
-              Block.assign !current_block sym_index dyn_index;
-              RValue.lvalue sym_index)
-            else dyn_index
-          in
-          Map.add_exn ~key ~data env)
-    in
-    loop_proc ~name ~env body
   in
 
   loop_proc ~name ~env body;
   !current_block
 
-let jit_func ~num_parallel_tasks ~name ctx (traced_store, proc) =
+let jit_func ~name ctx (traced_store, proc) =
   let open Gccjit in
   let fkind = Function.Exported in
-  let task_id = Param.create ctx Type.(get ctx Int) "task_id" in
-  let func = Function.create ctx fkind (Type.get ctx Void) name [ task_id ] in
-  let task_init_block = Block.create ~name:("init_" ^ name) func in
-  let task_finalize_block = Block.create ~name:("finalize_" ^ name) func in
-  let replicated_finalize_block = Block.create ~name:("finalize_replicated_" ^ name) func in
+  let is_final = Param.create ctx Type.(get ctx Bool) "is_final" in
+  let func = Function.create ctx fkind (Type.get ctx Void) name [ is_final ] in
+  let init_block = Block.create ~name:("init_" ^ name) func in
+  let finalize_block = Block.create ~name:("finalize_" ^ name) func in
   let main_block = Block.create ~name func in
-  let env = Code.empty_env in
+  let env = Low_level.empty_env in
   let state =
     {
       ctx;
       func;
       traced_store;
-      task_init_block;
-      task_finalize_block;
-      replicated_finalize_block;
+      init_block;
+      finalize_block;
       tensors = Hashtbl.Poly.create ();
-      task_id = Some task_id;
+      is_final = Some is_final;
     }
   in
-  let after_proc = jit_code ~num_parallel_tasks ~name ~env state main_block proc in
-  Block.jump task_init_block main_block;
-  Block.jump after_proc task_finalize_block;
-  let c_index = Type.get ctx Type.Int in
+  let after_proc = jit_code ~name ~env state main_block proc in
+  Block.jump init_block main_block;
   let b_after_if = Block.create ~name:("after_finalize_replicated_" ^ name) func in
-  let guard = RValue.comparison ctx Eq (RValue.param task_id) (RValue.zero ctx c_index) in
-  Block.cond_jump task_finalize_block guard replicated_finalize_block (* on true *) b_after_if (* on false *);
-  Block.jump replicated_finalize_block b_after_if;
+  let guard = RValue.param is_final in
+  Block.cond_jump after_proc guard finalize_block (* on true *) b_after_if (* on false *);
+  Block.jump finalize_block b_after_if;
   Block.return_void b_after_if;
-  if !Code.with_debug then
+  if !Low_level.with_debug then
     let suf = "-gccjit-debug.c" in
     let f_name =
-      if !Code.keep_files_in_run_directory then name ^ suf else Caml.Filename.temp_file (name ^ "-") suf
+      if !Low_level.keep_files_in_run_directory then name ^ suf else Caml.Filename.temp_file (name ^ "-") suf
     in
     Context.dump_to_file ctx ~update_locs:true f_name
 
-let error_message ~name ~prefix ?extra_error_msg ~contents exc =
-  let backtrace = Caml.Printexc.get_backtrace () in
-  let exc_str = Caml.Printexc.to_string exc in
-  let message = Buffer.create (String.length contents + String.length backtrace + String.length exc_str) in
-  let msg = Buffer.add_string message in
-  msg name;
-  msg ": ";
-  msg prefix;
-  msg exc_str;
-  msg "\n";
-  msg backtrace;
-  (match extra_error_msg with
-  | None -> ()
-  | Some extra ->
-      msg "\nIn the context of:\n";
-      msg extra);
-  (* let from_pos, to_pos = first_file_span ~contents ~message:(Buffer.contents message) in
-     let from_pos = Int.min from_pos @@ String.length contents - 1 in
-     let to_pos = Int.min to_pos @@ String.length contents - 1 in
-     msg "\nIn code span ";
-     msg error_opening_delimiter; msg "..."; msg error_closing_delimiter; msg ":\n";
-     msg @@ String.sub contents ~pos:0 ~len:from_pos;
-     msg error_opening_delimiter;
-     msg @@ String.sub contents ~pos:from_pos ~len:(to_pos - from_pos);
-     msg error_closing_delimiter;
-     msg @@ String.sub contents ~pos:to_pos ~len:(String.length contents - to_pos); *)
-  msg contents;
-  Buffer.contents message
-
-let jit ~name ?verbose:_ (traced_store, llc) =
+let jit ~name ?verbose:_ compiled =
   (* TODO: add verbose logs *)
   let open Gccjit in
   let ctx = Context.create_child !session_context in
@@ -528,50 +339,9 @@ let jit ~name ?verbose:_ (traced_store, llc) =
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)
-  let proc_count = ref 0 in
-  let rec compile = function
-    | Code.Lines_sc ls -> Code.Lines_sc (Array.map ls ~f:compile)
-    | For_loop_sc opts -> For_loop_sc { opts with body = compile opts.body }
-    | Rebalance_sc (s, ls) -> Rebalance_sc (s, Array.map ls ~f:compile)
-    | Code (_, { Code.code = None; _ }) -> assert false
-    | Code (env_keys, { Code.code = Some code; _ }) ->
-        let suffix = Code.extract_block_name code in
-        let i =
-          Int.incr proc_count;
-          !proc_count
-        in
-        let name =
-          [%string {|%{name}_%{Int.to_string i}_%{if String.is_empty suffix then "" else "_" ^ suffix}|}]
-        in
-        let num_parallel_tasks = ref 1 in
-        jit_func ~num_parallel_tasks ~name ctx (traced_store, code);
-        Code.Code (env_keys, (!num_parallel_tasks, name))
-  in
+  jit_func ~name ctx compiled;
   let result = Context.compile ctx in
   session_results := result :: !session_results;
-  let rec link = function
-    | Code.Lines_sc ls -> Code.Lines_sc (Array.map ls ~f:link)
-    | For_loop_sc opts -> For_loop_sc { opts with body = link opts.body }
-    | Rebalance_sc (s, ls) -> Rebalance_sc (s, Array.map ls ~f:link)
-    | Code (env_keys, (num_parallel_tasks, name)) ->
-        let routine = Result.code result name Ctypes.(int @-> returning void) in
-        Code.Code (env_keys, (num_parallel_tasks, routine))
-  in
-  let code = Code.(llc |> to_synchronized |> analyze_synced ~next_sc:None |> compile |> link) in
-  let rec run env = function
-    | Code.Lines_sc ls -> Array.iter ls ~f:(run env)
-    | For_loop_sc { index; from_; to_; body } ->
-        for i = from_ to to_ do
-          run ((index, i) :: env) body
-        done
-    | Rebalance_sc (_s, ls) -> (* FIXME: NOT IMPLEMENTED *) Array.iter ls ~f:(run env)
-    | Code (_env_keys, (num_parallel_tasks, routine)) ->
-        if num_parallel_tasks = 1 then routine 0
-        else
-          Domainslib.Task.run Node.task_pool (fun () ->
-              Domainslib.Task.parallel_for Node.task_pool ~start:0 ~finish:(num_parallel_tasks - 1)
-                ~body:(fun task_id -> routine task_id))
-  in
-
+  let routine = Result.code result name Ctypes.(bool @-> returning void) in
   Context.release ctx;
-  fun () -> run [] code
+  fun ~is_initial:_ ~is_final -> routine is_final
