@@ -20,14 +20,14 @@ type sync_properties =
 type mem_scope = Thread | Shared | Global [@@deriving sexp, equal, compare, variants]
 
 type tensor = {
-  hosted : (Ndarray.t[@sexp.opaque]) option;
+  hosted : Low_level.ndarray option;
       (** Pointer to the first value of the associated [Bigarray], if hosted. *)
   global : string option;  (** A global device array, if any. *)
   global_ptr : (Cudajit.deviceptr Lazy.t[@sexp.opaque]) option;
   local : string option;  (** Either a thread-local or shared (block-local) memory, if any. *)
   sync : sync_properties;
   run_scope : mem_scope;
-  dims : Shape.dim array;
+  dims : int array;
   host_dims : int array;
       (** Dimensions (shape) of the tensor as a whole, or an empty array if [hosted_ptr]
                               is [None]. *)
@@ -62,22 +62,14 @@ type session_state = {
 let session_state = { ctx = None; tensors = Hashtbl.Poly.create (); last_module = None }
 let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
 let pp_comma ppf () = Caml.Format.fprintf ppf ",@ "
-let pp_symbol ppf sym = Caml.Format.fprintf ppf "%s" @@ Shape.symbol_ident sym
-let pp_index ppf sym = Caml.Format.fprintf ppf "%s" @@ Shape.symbol_ident sym
+let pp_symbol ppf sym = Caml.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym
+let pp_index ppf sym = Caml.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym
 
-let pp_index_axis scope ppf =
-  let open Shape in
-  function
-  | Iterator it -> (
-      match scope with
-      | Thread when sample_num_sym it || task_id_sym it -> Caml.Format.fprintf ppf "0"
-      | Shared when task_id_sym it -> Caml.Format.fprintf ppf "0"
-      | _ when sample_num_sym it -> Caml.Format.fprintf ppf "threadIdx.x"
-      | _ when task_id_sym it -> Caml.Format.fprintf ppf "blockIdx.x"
-      | _ -> pp_index ppf it)
+let pp_index_axis ppf = function
+  | Indexing.Iterator it -> pp_index ppf it
   | Fixed_idx i -> Caml.Format.fprintf ppf "%d" i
 
-let pp_array_offset scope ppf (idcs, dims) =
+let pp_array_offset ppf (idcs, dims) =
   let open Caml.Format in
   assert (not @@ Array.is_empty idcs);
   for _ = 0 to Array.length idcs - 3 do
@@ -85,15 +77,15 @@ let pp_array_offset scope ppf (idcs, dims) =
   done;
   for i = 0 to Array.length idcs - 1 do
     let dim = dims.(i) in
-    if i = 0 then fprintf ppf "%a" (pp_index_axis scope) idcs.(i)
-    else if i = Array.length idcs - 1 then fprintf ppf " * %d +@ %a" dim (pp_index_axis scope) idcs.(i)
-    else fprintf ppf " * %d +@ %a@])" dim (pp_index_axis scope) idcs.(i)
+    if i = 0 then fprintf ppf "%a" pp_index_axis idcs.(i)
+    else if i = Array.length idcs - 1 then fprintf ppf " * %d +@ %a" dim pp_index_axis idcs.(i)
+    else fprintf ppf " * %d +@ %a@])" dim pp_index_axis idcs.(i)
   done
 
-let array_offset_to_string scope (idcs, dims) =
+let array_offset_to_string (idcs, dims) =
   let b = Buffer.create 32 in
   let ppf = Caml.Format.formatter_of_buffer b in
-  pp_array_offset scope ppf (idcs, dims);
+  pp_array_offset ppf (idcs, dims);
   Caml.Format.pp_print_flush ppf ();
   Buffer.contents b
 
@@ -115,39 +107,21 @@ let scope_of_sync = function
 let compute_array_offset ~idcs ~dims =
   Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx + (offset * dim))
 
-let get_tensor ~traced_store ~num_threads:_ ~num_blocks ?force_sync ~jit_code ~dyn_env ~idcs ptr =
+let get_tensor ~traced_store ~num_threads:_ ~num_blocks ?force_sync ~idcs n =
   let { tensors; _ } = session_state in
+  let ptr = Ndarray.ptr n in
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
-      let n = Code.get ptr.id in
-      let tn = Code.(get_node traced_store ptr) in
-      let host_size_in_bytes = Node.size_in_bytes n.node in
-      let dims = Shape.to_dims n.annot.shape in
+      let tn = Low_level.get_node traced_store n in
+      let host_size_in_bytes = Ndarray.size_in_bytes (Some n.array) in
+      let dims = n.annot.dims in
       let global_length = Array.fold ~init:1 ~f:( * ) dims in
-      let arr = Option.value_exn @@ Code.get_tensor ptr in
+      let arr = n.array in
       let hosted = if Array.is_empty @@ Ndarray.dims arr then None else Some arr in
       let global_size_in_bytes = global_length * Ndarray.precision_in_bytes arr in
       let thread_length = Array.fold ~init:1 ~f:( * ) dims in
       let shared_length = thread_length in
       let tensor prec is_double arr =
         let num_typ = prec_to_c_type prec in
-        let is_block_parallel =
-          Array.exists ~f:Shape.(function { special = Dedicated Task_id; _ } -> true | _ -> false)
-          @@ Shape.to_dims n.annot.shape
-        in
-        let is_thread_parallel =
-          Array.exists ~f:Shape.(function { special = Dedicated Sample_num; _ } -> true | _ -> false)
-          @@ Shape.to_dims n.annot.shape
-        in
-        let can_be_replicated = tn.is_replicable in
-        let computed_directly_across_blocks =
-          List.exists tn.rhses
-            ~f:(snd @@ Code.check_dedicated_dep Shape.Task_id ~cached_dedicated:(fun _ -> false))
-        in
-        (* tn.is_replicable is the negation of: computed (directly or) indirectly across blocks. *)
-        let computed_directly_across_threads =
-          List.exists tn.rhses
-            ~f:(snd @@ Code.check_dedicated_dep Shape.Sample_num ~cached_dedicated:(fun _ -> false))
-        in
         let sync : sync_properties =
           Option.value_or_thunk force_sync ~default:(fun () ->
               if
@@ -162,11 +136,11 @@ let get_tensor ~traced_store ~num_threads:_ ~num_blocks ?force_sync ~jit_code ~d
               else if Option.is_some hosted && tn.read_only then Constant
               else if can_be_replicated && not is_thread_parallel then Replicated
               else (
-                if !Code.with_debug then
+                if !Low_level.with_debug then
                   Caml.Format.printf "\nWARNING: Non-local sync for tensor: %a@ node: %a\n%!" Sexp.pp_hum
-                    ([%sexp_of: Code.traced_tensor] tn)
+                    ([%sexp_of: Low_level.traced_tensor] tn)
                     Sexp.pp_hum
-                    ([%sexp_of: Code.node] n);
+                    ([%sexp_of: Low_level.ndarray] n);
                 Non_local))
         in
         let has_global_mem = not (is_thread_only sync || is_block_only sync) in
@@ -182,19 +156,19 @@ let get_tensor ~traced_store ~num_threads:_ ~num_blocks ?force_sync ~jit_code ~d
                    (* Defer till after compilation, to access the compiled-into module. *)
                    Cudajit.module_get_global
                      (Option.value_exn session_state.last_module)
-                     ~name:(Ndarray.ptr_name ptr)
+                     ~name:(Ndarray.get_name n)
                  in
                  assert (Unsigned.Size_t.to_int size = global_size_in_bytes);
                  ptr)
           | _ ->
               (* The general case does not require laziness, but it should be OK. *)
               lazy
-                (if !Code.with_debug then
-                   Stdio.printf "Exec_as_cuda.get_tensor: mem_alloc %s\n%!" (Ndarray.ptr_name ptr);
+                (if !Low_level.with_debug then
+                   Stdio.printf "Exec_as_cuda.get_tensor: mem_alloc %s\n%!" (Ndarray.get_name n);
                  Cudajit.mem_alloc ~byte_size:global_size_in_bytes)
         in
-        let global = Option.some_if has_global_mem @@ Ndarray.ptr_name ptr in
-        let local = Option.some_if has_local_mem @@ Ndarray.ptr_name ptr ^ "_local" in
+        let global = Option.some_if has_global_mem @@ Ndarray.get_name n in
+        let local = Option.some_if has_local_mem @@ Ndarray.get_name n ^ "_local" in
         let host_dims = Bigarray.Genarray.dims arr in
         let backend_info =
           (if Node.equal_data_kind ptr.field Value then "v:" else "g:")
@@ -242,16 +216,16 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
   let locals = ref Map.Poly.empty in
   let rec pp_ll ~dyn_env ppf c : unit =
     match c with
-    | Code.Lines [||] -> ()
+    | Low_level.Lines [||] -> ()
     | Lines lines ->
         (* Note: no separator. Filter out some entries known to not generate code to avoid whitespace. *)
         fprintf ppf "@[<v 0>%a@]"
           (pp_print_list (pp_ll ~dyn_env))
           (Array.to_list
           @@ Array.filter lines ~f:(function
-               | Zero_out ptr -> not Code.(get_node traced_store ptr).zero_initialized
+               | Zero_out ptr -> not Low_level.(get_node traced_store ptr).zero_initialized
                | _ -> true))
-    | For_loop { index = i; from_; to_; body; trace_it = _ } when Shape.task_id_sym i ->
+    | For_loop { index = i; from_; to_; body; trace_it = _ } when Indexing.task_id_sym i ->
         assert (from_ = 0);
         if not (!num_blocks = 1 || !num_blocks = to_ + 1) then
           invalid_arg [%string "Exec_as_cuda: parallel dims mismatch: %{!num_blocks#Int} vs. %{to_ + 1#Int}"];
@@ -260,7 +234,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         (* fprintf ppf "@[<2>{@ unsigned int %a = blockIdx.x;@ " pp_index i; *)
         pp_ll ~dyn_env ppf body
         (* fprintf ppf "@]@ }@," *)
-    | For_loop { index = i; from_; to_; body; trace_it = _ } when Shape.sample_num_sym i ->
+    | For_loop { index = i; from_; to_; body; trace_it = _ } when Indexing.sample_num_sym i ->
         assert (from_ = 0);
         num_threads := to_ + 1;
         (* Instead of binding the iterator, we will translate the iterator directly as threadIdx.x. *)
@@ -272,17 +246,17 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
           pp_index i to_ pp_index i (pp_ll ~dyn_env) body
     | Rebalance (s, lines) ->
         pp_ll ~dyn_env ppf
-        @@ Lines (Array.append (Option.to_array @@ Option.map s ~f:(fun s -> Code.Comment s)) lines)
+        @@ Lines (Array.append (Option.to_array @@ Option.map s ~f:(fun s -> Low_level.Comment s)) lines)
     | Zero_out ptr ->
         if Hashtbl.mem session_state.tensors ptr then
           failwith
             ("exec_as_cuda: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
             @@ [%sexp_of: Ndarray.ptr] ptr);
-        let tn = Code.(get_node traced_store ptr) in
+        let tn = Low_level.(get_node traced_store ptr) in
         assert tn.zero_initialized
         (* The initialization will be emitted by get_tensor. *)
     | Set (ptr, idcs, (Binop (op, Get (ptr2, idcs2), v2) as v))
-      when Nd.equal_ptr ptr ptr2 && [%equal: Shape.axis_index array] idcs idcs2 ->
+      when Nd.equal_ptr ptr ptr2 && [%equal: Indexing.axis_index array] idcs idcs2 ->
         let tensor =
           get_tensor ~traced_store ~num_threads:!num_threads ~num_blocks:!num_blocks
             ~jit_code:(pp_ll ~dyn_env) ~dyn_env ~idcs ptr
@@ -294,7 +268,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         (* Because of SIMD-like computation over warps, updates must be atomic, for both global
            and shared variables. *)
         if List.exists ~f:(equal_sync_properties tensor.sync) [ Block_only; Block_parallel ] then
-          if Code.equal_binop op Add then
+          if Low_level.equal_binop op Add then
             fprintf ppf "atomicAdd@[<2>(%s + %a,@ %a@]);" (get_run_ptr tensor)
               (pp_array_offset tensor.run_scope) (idcs, tensor.dims) loop_f v2
           else
@@ -303,7 +277,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         else
           fprintf ppf "@[<2>%s@[<2>[%a@]] =@ %a;@]" (get_run_ptr tensor) (pp_array_offset tensor.run_scope)
             (idcs, tensor.dims) loop_f v;
-        (if !Code.debug_verbose_trace then
+        (if !Low_level.debug_verbose_trace then
            let v_code, v_idcs = loop_debug_f v in
            fprintf ppf
              "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %s[%%u] = %%f = \
@@ -334,7 +308,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
         fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr tensor) (pp_array_offset tensor.run_scope)
           (idcs, tensor.dims) loop_f v;
-        (if !Code.debug_verbose_trace then
+        (if !Low_level.debug_verbose_trace then
            let v_code, v_idcs = loop_debug_f v in
            fprintf ppf
              "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %s[%%u] = %%f = \
@@ -357,7 +331,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
         jit_dynamic_indices ~dyn_env tensor ~tensor_idcs ~dynamic_idcs ~target_dims body
     | Comment message ->
         fprintf ppf "/* %s */@ " message;
-        if !Code.debug_verbose_trace then
+        if !Low_level.debug_verbose_trace then
           fprintf ppf
             "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %s\\n\"@]);@ @]}"
             (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
@@ -473,7 +447,7 @@ let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
     (* fprintf ppf "%a" (pp_ll ~dyn_env ~env) body; *)
     fprintf ppf "@]@ }@,"
   in
-  pp_ll ~dyn_env:Code.empty_env ppf llc
+  pp_ll ~dyn_env:Low_level.empty_env ppf llc
 
 let new_context ?(device_num = 0) () =
   let num_devices = Cudajit.device_get_count () in
@@ -489,7 +463,7 @@ let cleanup_session () =
   Hashtbl.iter session_state.tensors ~f:(fun tensor ->
       Option.iter tensor.global_ptr ~f:(fun (lazy ptr) ->
           if not @@ is_constant tensor.sync then (
-            if !Code.with_debug then
+            if !Low_level.with_debug then
               Stdio.printf "Exec_as_cuda.cleanup_session: mem_free %s\n%!" (Option.value_exn tensor.global);
             Cudajit.mem_free ptr)));
   Hashtbl.clear session_state.tensors;
@@ -531,7 +505,7 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
         | Constant ->
             Option.map tn.global ~f:(fun t_name ->
                 "__constant__ " ^ tn.num_typ ^ " " ^ t_name ^ "[" ^ Int.to_string tn.global_length
-                ^ if Code.(get_node traced_store ptr).zero_initialized then "] = {0};" else "];")
+                ^ if Low_level.(get_node traced_store ptr).zero_initialized then "] = {0};" else "];")
         | _ -> None)
   in
   let shared_decls =
@@ -548,13 +522,13 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
         | Thread_only | Thread_parallel | Replicated ->
             Option.map tn.local ~f:(fun t_name ->
                 tn.num_typ ^ " " ^ t_name ^ "[" ^ Int.to_string tn.thread_length
-                ^ if Code.(get_node traced_store ptr).zero_initialized then "] = {0};" else "];")
+                ^ if Low_level.(get_node traced_store ptr).zero_initialized then "] = {0};" else "];")
         | _ -> None)
   in
   let inits =
     Array.of_list tensors
     |> Array.filter_map ~f:(fun (ptr, tn) ->
-           let n = Code.get_node traced_store ptr in
+           let n = Low_level.get_node traced_store ptr in
            if not n.read_before_write then
              (* __shared__ variables cannot have initializers. *)
              if n.zero_initialized then
@@ -564,15 +538,13 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
                        let b = Buffer.create 4096 in
                        let ppf = Caml.Format.formatter_of_buffer b in
                        let body idcs =
-                         Code.Staged_compilation
+                         Low_level.Staged_compilation
                            (fun () ->
                              Caml.Format.fprintf ppf
                                "@[<2>if (threadIdx.x == 0) {@ @[<2>%s@[<1>[%a@]] =@ 0;@]@ @]}" l_name
                                (pp_array_offset tn.run_scope) (idcs, tn.dims))
                        in
-                       let loops =
-                         Code.((Lines [| loop_over_dims tn.dims ~body |] : Low_level.t))
-                       in
+                       let loops = Low_level.((Lines [| loop_over_dims tn.dims ~body |] : Low_level.t)) in
                        jit_code ~num_threads ~num_blocks ~traced_store ppf loops;
                        Caml.Format.pp_print_newline ppf ();
                        Buffer.contents b)
@@ -585,15 +557,13 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
                      let b = Buffer.create 4096 in
                      let ppf = Caml.Format.formatter_of_buffer b in
                      let body idcs =
-                       Code.Staged_compilation
+                       Low_level.Staged_compilation
                          (fun () ->
                            Caml.Format.fprintf ppf "@[<2>%s@[<1>[%a@]] =@ %s@[<1>[%a@]];@]" l_name
                              (pp_array_offset tn.run_scope) (idcs, tn.dims) g_name (pp_array_offset Global)
                              (idcs, tn.dims))
                      in
-                     let loops =
-                       Code.((Lines [| loop_over_dims tn.dims ~body |] : Low_level.t))
-                     in
+                     let loops = Low_level.((Lines [| loop_over_dims tn.dims ~body |] : Low_level.t)) in
                      jit_code ~num_threads ~num_blocks ~traced_store ppf loops;
                      Caml.Format.pp_print_newline ppf ();
                      Buffer.contents b)
@@ -608,12 +578,12 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
                    let b = Buffer.create 4096 in
                    let ppf = Caml.Format.formatter_of_buffer b in
                    let body idcs =
-                     Code.Staged_compilation
+                     Low_level.Staged_compilation
                        (fun () ->
                          Caml.Format.fprintf ppf "@[<2>%s[%a] =@ %s[%a];@]" g_name (pp_array_offset Global)
                            (idcs, tn.dims) l_name (pp_array_offset tn.run_scope) (idcs, tn.dims))
                    in
-                   let loops = Code.loop_over_dims tn.dims ~body in
+                   let loops = Low_level.loop_over_dims tn.dims ~body in
                    if is_replicated tn.sync then
                      Caml.Format.fprintf ppf "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ %a@ @]}"
                        (jit_code ~num_threads ~num_blocks ~traced_store)
@@ -626,7 +596,7 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
   let cu_src =
     [%string
       {|
-%{if !Code.debug_verbose_trace then "__device__ int printf (const char * format, ... );" else ""}
+%{if !Low_level.debug_verbose_trace then "__device__ int printf (const char * format, ... );" else ""}
 %{String.concat ~sep:"\n" constant_defs}
 extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
   /* Shared: block-local declarations. */
@@ -652,14 +622,16 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
   in
   (* Constants will be referred to via cuModuleGetGlobal. *)
   let f_name = name ^ "-cudajit-debug" in
-  if !Code.with_debug && !Code.keep_files_in_run_directory then (
+  if !Low_level.with_debug && !Low_level.keep_files_in_run_directory then (
     let oc = Out_channel.open_text @@ f_name ^ ".cu" in
     Stdio.Out_channel.output_string oc cu_src;
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);
   if verbose then Stdio.printf "Exec_as_cuda.jit: compiling to PTX\n%!";
-  let ptx = Cu.compile_to_ptx ~cu_src ~name ~options:[ "--use_fast_math" ] ~with_debug:!Code.with_debug in
-  if !Code.with_debug && !Code.keep_files_in_run_directory then (
+  let ptx =
+    Cu.compile_to_ptx ~cu_src ~name ~options:[ "--use_fast_math" ] ~with_debug:!Low_level.with_debug
+  in
+  if !Low_level.with_debug && !Low_level.keep_files_in_run_directory then (
     let f_name = name ^ "-cudajit-debug" in
     let oc = Out_channel.open_text @@ f_name ^ ".ptx" in
     Stdio.Out_channel.output_string oc @@ Cudajit.string_from_ptx ptx;
@@ -679,23 +651,23 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
     List.iter tensors ~f:(function
       | ptr, { hosted = Some ndarray; global_ptr = Some (lazy dst); host_offset; global_length; _ } ->
           let host_offset = Option.map host_offset ~f:(fun f -> f ()) in
-          let tn = Code.(get_node traced_store ptr) in
+          let tn = Low_level.(get_node traced_store ptr) in
           if tn.read_before_write then (
             let f src = Cu.memcpy_H_to_D ?host_offset ~length:global_length ~dst ~src () in
-            if verbose && !Code.with_debug then
+            if verbose && !Low_level.with_debug then
               Stdio.printf "Exec_as_cuda.jit: memcpy_H_to_D for %s, offset: %s, length: %d\n%!"
-                (Ndarray.ptr_name ptr)
+                (Ndarray.get_name n)
                 (Sexp.to_string_hum @@ [%sexp_of: int option] host_offset)
                 global_length;
             Ndarray.map { f } ndarray)
       | _ -> ());
     List.iter tensors ~f:(function
       | ptr, { global_ptr = Some (lazy device); global_size_in_bytes; _ } ->
-          let tn = Code.(get_node traced_store ptr) in
+          let tn = Low_level.(get_node traced_store ptr) in
           if tn.zero_initialized then Cu.memset_d8 device Unsigned.UChar.zero ~length:global_size_in_bytes
       | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit: running the kernel\n%!";
-    (* if !Code.debug_verbose_trace then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
+    (* if !Low_level.debug_verbose_trace then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
     Cu.launch_kernel func ~grid_dim_x:!num_blocks ~block_dim_x:!num_threads ~shared_mem_bytes:0 Cu.no_stream
       args;
     Cu.ctx_synchronize ();
@@ -703,11 +675,11 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
     List.iter tensors ~f:(function
       | ptr, { hosted = Some ndarray; global_ptr = Some (lazy src); host_offset; global_length; _ } ->
           let host_offset = Option.map host_offset ~f:(fun f -> f ()) in
-          let tn = Code.(get_node traced_store ptr) in
+          let tn = Low_level.(get_node traced_store ptr) in
           if not tn.read_only then (
             let f dst = Cu.memcpy_D_to_H ?host_offset ~length:global_length ~dst ~src () in
-            if verbose && !Code.with_debug then
-              Stdio.printf "Exec_as_cuda.jit: memcpy_D_to_H for %s\n%!" (Ndarray.ptr_name ptr);
+            if verbose && !Low_level.with_debug then
+              Stdio.printf "Exec_as_cuda.jit: memcpy_D_to_H for %s\n%!" (Ndarray.get_name n);
             Ndarray.map { f } ndarray)
       | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit: kernel run finished\n%!"
