@@ -1,6 +1,8 @@
-(** Tensor shape types and inference. *)
+(** Tensor shape types, shape inference, projection inference. *)
 
 open Base
+
+(** *** Shape types and inference *** *)
 
 (** An index pointing to any of a shape's axes, including the kind of the axis ([Batch, Input, Output])
     and the position (which is counted from the end to facilitate broadcasting).
@@ -37,7 +39,7 @@ type parsed_axis_labels = {
   given_batch : int;
   given_input : int;
   given_output : int;
-  labels : (string, dim) Either.t axis_map;
+  labels : (string, int) Either.t axis_map;
 }
 [@@deriving compare, sexp, fields]
 (** The labels are strings assigned to [AxisKey] axes. Moreover the [bcast_] fields represent whether
@@ -55,13 +57,13 @@ let given_of_kind = function
   | AxisKey.Output -> given_output
 
 type dims =
-  | Given of dim list
+  | Given of int list
       (** User-provided dimensions. They will not change but will be broadcasted to bigger sizes. *)
-  | Fixed of dim list
+  | Fixed of int list
       (** User-provided dimensions that will fail if used in a different size context, even if broadcastable.
       Note that [Operation.stop_broadcast] implements additional shape logic:
       it converts the (bottom-up i.e. partially inferred) shape into a [Fixed] variant. *)
-  | Inferred of dim list
+  | Inferred of int list
       (** Dimensions that will itself change to a bigger size: they adapt to the broadcasted size. *)
   | Unknown
       (** User-provided and will be replaced through inference. Prefer using [Unknown] to [Inferred []]. *)
@@ -90,9 +92,7 @@ let deduce_dims from : deduce_dims -> dims = function
       | Unknown -> Unknown
       | Given dims | Fixed dims | Inferred dims ->
           Inferred
-            (List.map dims ~f:(fun d ->
-                 if d.dim = 1 || not (is_dim d.special) then d
-                 else { d with dim = Float.(iround_exn ~dir:`Up @@ (sc * of_int d.dim)) })))
+            (List.map dims ~f:(fun d -> if d = 1 then d else Float.(iround_exn ~dir:`Up @@ (sc * of_int d)))))
 
 type t = {
   mutable batch : dims;
@@ -185,25 +185,6 @@ type compose_type =
       Currently, we support two variants of the [einsum] syntax: either all the axes are provided,
       or all input, output axes are provided but none of the batch axes.
       Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
-  | Dynamic_index of {
-      over_kind : AxisKey.kind;
-      from_left : bool;
-      other_axes_pointwise : bool;
-      indexed_dims : int list option;
-    }
-      (** Uses RHS2 as an index into RHS1. The values of RHS2 along the last (output) axis are used to
-      fix the RHS1 [over_kind] axes. If RHS1 has more [over_kind] axes than the size of RHS2's last
-      axis, the remaining right axes are kept if [from_left] is true, otherwise the left axes
-      are kept. The [Parallel] axes are preserved -- skipped over, never dynamically indexed.
-      The fixed (indexed-into) axes are dropped from the shape of LHS. If RHS2 has more than one axis,
-      [other_axes_pointwise] decides what to do with the other axes: if true, they are traversed
-      pointwise with the corresponding axes of RHS1. For the pointwise alignment, we drop the last
-      output axis of RHS2 and the fixed axes of RHS1. If [other_axes_pointwise] is false,
-      the other axes of RHS2 are prepended to the remaining axes of RHS1 (of the corresponding
-      kind). ([other_axes_pointwise] being true is akin to an inner product, being false is akin to
-      an outer product.) If [indexed_dims] are not given, the shape of the indexed tensor (RHS1) must be given.
-      Otherwise, [indexed_dims] provide the dimensions of the indexed axes.
-      If otherwise unknown, [RHS2]'s output axis is inferred to be [Dim 1]. *)
 [@@deriving sexp, equal]
 
 type transpose_type =
@@ -242,9 +223,7 @@ let axis_labels_of_spec spec : parsed_axis_labels =
       let parse_label labels_num from_start s =
         let key = AxisKey.{ in_axes; from_end = labels_num - from_start } in
         if String.equal s "_" then None
-        else
-          try Some (key, Either.Second { special = Dim; dim = Int.of_string s })
-          with _ -> Some (key, First s)
+        else try Some (key, Either.Second (Int.of_string s)) with _ -> Some (key, First s)
       in
       if List.exists ~f:(String.contains spec) on then
         let labels = String.split_on_chars spec ~on |> List.filter ~f:(fun s -> not @@ String.is_empty s) in
@@ -504,90 +483,53 @@ type eq_slot = [ `Lhs | `Rhs1 | `Rhs2 ] [@@deriving sexp]
 type eqs_map = (string, (AxisKey.t * dims) list, Base.String.comparator_witness) Base.Map.t
 
 type eqs_p_map =
-  (string, (AxisKey.t * (dims, dim * dims) Either.t) list, Base.String.comparator_witness) Base.Map.t
+  (string, (AxisKey.t * (dims, int * dims) Either.t) list, Base.String.comparator_witness) Base.Map.t
 
 let sexp_of_eqs_map (map : eqs_map) =
   Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: string * (AxisKey.t * dims) list])
 
 let sexp_of_eqs_p_map (map : eqs_p_map) =
   Sexp.List
-    (Map.to_alist map |> List.map ~f:[%sexp_of: string * (AxisKey.t * (dims, dim * dims) Either.t) list])
+    (Map.to_alist map |> List.map ~f:[%sexp_of: string * (AxisKey.t * (dims, int * dims) Either.t) list])
 
 type str_str_map = (string, string, Base.String.comparator_witness) Base.Map.t
 
 let sexp_of_str_str_map (map : str_str_map) =
   Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: string * string])
 
-type str_dim_map = (string, dim, Base.String.comparator_witness) Base.Map.t
+type str_dim_map = (string, int, Base.String.comparator_witness) Base.Map.t
 
 let sexp_of_str_dim_map (map : str_dim_map) =
-  Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: string * dim])
+  Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: string * int])
 
-type str_fdim_map = (string, bool * dim, Base.String.comparator_witness) Base.Map.t
+type str_fdim_map = (string, bool * int, Base.String.comparator_witness) Base.Map.t
 
 let sexp_of_str_fdim_map (map : str_fdim_map) =
-  Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: string * (bool * dim)])
+  Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: string * (bool * int)])
 
-type axis_dim_map = (AxisKey.t, dim, AxisKey.comparator_witness) Base.Map.t
+type axis_dim_map = (AxisKey.t, int, AxisKey.comparator_witness) Base.Map.t
 
 let sexp_of_axis_dim_map (map : axis_dim_map) =
-  Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: AxisKey.t * dim])
+  Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: AxisKey.t * int])
 
-type axis_fdim_map = (AxisKey.t, bool * dim, AxisKey.comparator_witness) Base.Map.t
+type axis_fdim_map = (AxisKey.t, bool * int, AxisKey.comparator_witness) Base.Map.t
 
 let sexp_of_axis_fdim_map (map : axis_fdim_map) =
-  Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: AxisKey.t * (bool * dim)])
+  Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: AxisKey.t * (bool * int)])
 
 type axis_str_map = (AxisKey.t, string, AxisKey.comparator_witness) Base.Map.t
 
 let sexp_of_axis_str_map (map : axis_str_map) =
   Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: AxisKey.t * string])
 
-type axis_plab_map = (AxisKey.t, (string, dim) Either.t, AxisKey.comparator_witness) Base.Map.t
+type axis_plab_map = (AxisKey.t, (string, int) Either.t, AxisKey.comparator_witness) Base.Map.t
 
 let sexp_of_axis_plab_map (map : axis_plab_map) =
-  Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: AxisKey.t * (string, dim) Either.t])
-
-let drop_keeping_special subs dims =
-  let rec loop subs par = function
-    | ({ special = Dedicated _; _ } as p) :: dims when subs > 0 -> loop subs (p :: par) dims
-    | _ :: dims when subs > 0 -> loop (subs - 1) par dims
-    | dims -> List.rev_append par dims
-  in
-  loop subs [] dims
-
-let take_skipping_special subs dims =
-  let rec loop acc subs = function
-    | { special = Dedicated _; _ } :: dims when subs > 0 -> loop acc subs dims
-    | dim :: dims when subs > 0 -> loop (dim :: acc) (subs - 1) dims
-    | _ -> List.rev acc
-  in
-  loop [] subs dims
-
-let take_keeping_special ~debug_sh1 ~debug_sh2 ?(indexed_dims = []) subs dims =
-  let rec loop acc subs = function
-    | indexed_dims, ({ special = Dedicated _; _ } as p) :: dims when subs > 0 ->
-        loop (p :: acc) subs (indexed_dims, dims)
-    | [], dim :: dims when subs > 0 -> loop (dim :: acc) (subs - 1) ([], dims)
-    | ind_dim :: indexed_dims, dim :: dims when subs > 0 ->
-        if not (ind_dim.dim = dim.dim) then
-          raise (Shape_error ("Dynamic indexing: axis size requirement not met", debug_sh1, debug_sh2));
-        loop (dim :: acc) (subs - 1) (indexed_dims, dims)
-    | _ -> List.rev acc
-  in
-  loop [] subs (indexed_dims, dims)
-
-let count_special_among subs dims =
-  let rec loop acc subs = function
-    | { special = Dedicated _; _ } :: dims when subs > 0 -> loop (acc + 1) subs dims
-    | _ :: dims when subs > 0 -> loop acc (subs - 1) dims
-    | _ -> acc
-  in
-  loop 0 subs dims
+  Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: AxisKey.t * (string, int) Either.t])
 
 (** Performs a local step of shape inference, propagates information into and out of the parent shape
     and the child shape(s). *)
-let rec propagate_shapes (update : update_step) =
+let propagate_shapes (update : update_step) =
   let pointwise_labels debug1 debug2 ls1 ls2 =
     Map.merge ls1 ls2 ~f:(fun ~key -> function
       | `Both (l1, l2) ->
@@ -601,14 +543,14 @@ let rec propagate_shapes (update : update_step) =
       | `Right l | `Left l -> Some l)
   in
   let broad_dim ~fixed_left ~fixed_right debug1 debug2 axis_key label = function
-    | d1, d2 when equal_dim d1 d2 -> d1
-    | { dim = 1; _ }, d when not fixed_left -> d
-    | d, { dim = 1; _ } when not fixed_right -> d
+    | d1, d2 when d1 = d2 -> d1
+    | 1, d when not fixed_left -> d
+    | d, 1 when not fixed_right -> d
     | d1, d2 ->
         let opt_label = match label with None -> "" | Some l -> " (" ^ l ^ ")" in
         let error =
-          "Dimension mismatch for axis " ^ AxisKey.to_string axis_key ^ opt_label ^ ": " ^ dim_to_string d1
-          ^ " vs. " ^ dim_to_string d2
+          "Dimension mismatch for axis " ^ AxisKey.to_string axis_key ^ opt_label ^ ": " ^ Int.to_string d1
+          ^ " vs. " ^ Int.to_string d2
         in
         raise @@ Shape_error (error, debug1, debug2)
   in
@@ -678,15 +620,15 @@ let rec propagate_shapes (update : update_step) =
         | None, Fixed [ dim2 ] ->
             assert (not is_fixed);
             (true, Some dim2)
-        | Some dim1, (Inferred [ dim2 ] | Given [ dim2 ]) when equal_dim dim1 dim2 -> accu
-        | Some dim1, Fixed [ dim2 ] when equal_dim dim1 dim2 -> (true, dim)
-        | Some { dim = 1; _ }, (Inferred [ dim2 ] | Given [ dim2 ]) when not is_fixed -> (false, Some dim2)
+        | Some dim1, (Inferred [ dim2 ] | Given [ dim2 ]) when dim1 = dim2 -> accu
+        | Some dim1, Fixed [ dim2 ] when dim1 = dim2 -> (true, dim)
+        | Some 1, (Inferred [ dim2 ] | Given [ dim2 ]) when not is_fixed -> (false, Some dim2)
         | Some dim1, (Inferred [ dim2 ] | Given [ dim2 ] | Fixed [ dim2 ]) ->
             raise
             @@ Shape_error
-                 ( ("Dimension mismatch " ^ dim_to_string dim1 ^ " vs. " ^ dim_to_string dim2
+                 ( ("Dimension mismatch " ^ Int.to_string dim1 ^ " vs. " ^ Int.to_string dim2
                   ^ " for einsum pseudo-label " ^ label ^ " of " ^ debug_spec
-                   ^ if dim1.dim = 1 || dim2.dim = 1 then " (broadcast prevented)" else ""),
+                   ^ if dim1 = 1 || dim2 = 1 then " (broadcast prevented)" else ""),
                    debug1,
                    debug2 )
         | _, Fixed [] ->
@@ -707,7 +649,7 @@ let rec propagate_shapes (update : update_step) =
   in
   let einsum_one_dim debug_spec debug1 debug2 ~key ~data =
     match einsum_one_dim_opt debug_spec debug1 debug2 key data with
-    | false, None -> (false, { special = Dim; dim = 1 } (* which can still be expanded/broadcasted *))
+    | false, None -> (false, 1 (* which can still be expanded/broadcasted *))
     | true, None -> assert false
     | is_fixed, Some dim -> (is_fixed, dim)
   in
@@ -726,13 +668,11 @@ let rec propagate_shapes (update : update_step) =
       Map.merge ls_xhs.labels sh_xhs ~f:(fun ~key:axis -> function
         | `Both (Either.First label, dim) -> Some (label, (axis, dim))
         | `Left (First label) -> Some (label, (axis, Inferred []))
-        | `Both
-            (Second { dim = at; _ }, (Given [ { dim; _ } ] | Fixed [ { dim; _ } ] | Inferred [ { dim; _ } ]))
-          when at >= dim ->
+        | `Both (Second at, (Given [ dim ] | Fixed [ dim ] | Inferred [ dim ])) when at >= dim ->
             raise
             @@ Shape_error ("Specified dimension outside bounds for its axis: " ^ debug_spec, debug_sh, cur_sh)
         | `Both (Second _, dim) -> Some (gen_label_of_axis axis, (axis, dim))
-        | `Left (Second d) -> Some (gen_label_of_axis axis, (axis, Inferred [ { d with dim = d.dim + 1 } ]))
+        | `Left (Second d) -> Some (gen_label_of_axis axis, (axis, Inferred [ d + 1 ]))
         | `Right (Given [] | Fixed [] | Inferred [] | Unknown) -> None
         | `Right _dim when not (bcast_of_kind axis.in_axes ls_xhs) ->
             raise
@@ -948,108 +888,9 @@ let rec propagate_shapes (update : update_step) =
       sh1.axis_labels <- rhs1_axis_labels;
       let rhs2_axis_labels : axis_str_map = Map.filter_map rhs2_labels ~f:(Map.find all_axis_labels) in
       sh2.axis_labels <- rhs2_axis_labels
-  | Broadcast (Dynamic_index { over_kind; from_left; other_axes_pointwise; indexed_dims }, sh1, sh2) ->
-      let subs =
-        match List.last @@ list_of_dims sh2.output with
-        | None ->
-            sh2.output <- Given [ { special = Dim; dim = 1 } ];
-            1
-        | Some d -> d.dim
-      in
-      let check_no_axes indexed_dims =
-        if List.length indexed_dims <> subs then
-          raise
-            (Shape_error
-               ( "Dynamic indexing: provided dimensions and indices assume a different number of axes",
-                 sh1,
-                 sh2 ))
-      in
-      let reduced_sh2 =
-        {
-          sh2 with
-          output = map_dims sh2.output ~f:List.drop_last_exn;
-          axis_labels = shift_axes_of_kind AxisKey.Output sh2 ~f:(( - ) 1);
-        }
-      in
-      let list_dims sh = list_of_dims @@ dims_of_kind over_kind sh in
-      if
-        Option.is_some indexed_dims
-        && List.is_empty (list_dims sh1)
-        && is_unknown (dims_of_kind over_kind cur_sh)
-      then (* Wait for more information. *) ()
-      else if Option.is_none indexed_dims && List.length (list_dims sh1) < subs then
-        raise (Shape_error ("Insufficient indexed axes information for dynamic indexing", sh1, sh2))
-      else if from_left then (
-        let n_par_axes =
-          match (indexed_dims, dims_of_kind over_kind sh1) with
-          | Some indexed_dims, (Unknown | Inferred []) ->
-              check_no_axes indexed_dims;
-              (* Infer and fix the dimensions -- preserve "indexing from the left". *)
-              let indexed_dims = List.map ~f:dim indexed_dims in
-              let lhs_dims = list_dims cur_sh in
-              update_kind ~f:(fun _ -> Given (indexed_dims @ lhs_dims)) over_kind sh1;
-              0
-          | None, _ ->
-              let dims = list_dims sh1 in
-              (* Fix the dimensions: we don't want new axes inferred to the left of indexed axes. *)
-              update_kind ~f:(fun _ -> Given dims) over_kind sh1;
-              count_special_among subs dims
-          | Some indexed_dims, _ ->
-              check_no_axes indexed_dims;
-              let indexed_dims = List.map ~f:dim indexed_dims in
-              let dims = list_dims sh1 in
-              (* Verify the dimensions of the indexed axes. *)
-              let _indexed_dims_with_par =
-                take_keeping_special ~debug_sh1:sh1 ~debug_sh2:sh2 ~indexed_dims subs dims
-              in
-              (* Fix the dimensions: we don't want new axes inferred to the left of indexed axes. *)
-              update_kind ~f:(fun _ -> Given dims) over_kind sh1;
-              count_special_among subs dims
-        in
-        let sh1_size = List.length @@ list_dims sh1 in
-        let reduced_dims over_dims = map_dims over_dims ~f:(drop_keeping_special subs) in
-        let reduced_sh1 = map_over_kind over_kind ~f:reduced_dims sh1 in
-        let drop_left from_end = if from_end > sh1_size - subs - n_par_axes then -1 else from_end in
-        (* TODO: unfortunately we ignore labels on parallel axes. *)
-        let reduced_sh1 = { reduced_sh1 with axis_labels = shift_axes_of_kind over_kind sh1 ~f:drop_left } in
-        let extended_sh, logic =
-          if other_axes_pointwise then (None, Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2))
-          else
-            let extended_sh = append_all_axes ~prefix:reduced_sh2 ~main:reduced_sh1 () in
-            (Some extended_sh, Transpose (Pointwise_un, extended_sh))
-        in
-        let update_other_axes = { shape = cur_sh; logic } in
-        propagate_shapes update_other_axes;
-        match extended_sh with
-        | None ->
-            (* Add back the indexed axes labels. *)
-            let sh1_axis_labels =
-              Map.fold sh1.axis_labels ~init:reduced_sh1.axis_labels
-                ~f:(fun ~key:({ in_axes; from_end } as key) ~data labels ->
-                  if AxisKey.equal_kind over_kind in_axes && from_end > sh1_size - subs - n_par_axes then
-                    Map.add_exn labels ~key ~data
-                  else labels)
-            in
-            sh1.axis_labels <- sh1_axis_labels
-        | Some extended_sh ->
-            (* FIXME: NOT IMPLEMENTED restoring inferred shapes and axis labels. *)
-            ignore extended_sh)
-      else (* FIXME: NOT IMPLEMENTED YET *)
-        failwith "NOT IMPLEMENTED YET";
-      let sh2_axis_labels = shift_axes_of_kind AxisKey.Output reduced_sh2 ~f:(( + ) 1) in
-      let k1 = AxisKey.{ in_axes = Output; from_end = 1 } in
-      let sh2_axis_labels =
-        match Map.find sh2.axis_labels k1 with
-        | None -> sh2_axis_labels
-        | Some v -> Map.add_exn sh2_axis_labels ~key:k1 ~data:v
-      in
-      sh2.axis_labels <- sh2_axis_labels;
-      (* FIXME: not sure about this behavior. *)
-      if not @@ is_given_or_fixed sh2.output then
-        sh2.output <- map_dims reduced_sh2.output ~f:(fun d -> d @ [ dim subs ])
 
 (** Uses the matrix convention of putting the input axes last. *)
-let to_dims (sh : t) : dim array =
+let to_dims (sh : t) : int array =
   let b_dims =
     match sh.batch with
     | Unknown -> raise @@ Shape_error ("Batch dimensions still unknown", sh, sh)
@@ -1067,10 +908,12 @@ let to_dims (sh : t) : dim array =
   in
   Array.concat [ b_dims; o_dims; i_dims ]
 
+(*
 type axis_osym_map = (AxisKey.t, symbol option, AxisKey.comparator_witness) Base.Map.t
 
 let sexp_of_axis_osym_map (map : axis_osym_map) =
   Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: AxisKey.t * symbol option])
+*)
 
 let indices_bio sh (type v) (arr : v array) =
   let n_batch = List.length @@ list_of_dims sh.batch in
@@ -1082,17 +925,18 @@ let indices_bio sh (type v) (arr : v array) =
   (batch, input, output)
 
 let project_broad d1 d2 =
-  match (d1, d2) with
-  | d1, d2 when equal_dim d1 d2 -> d1
-  | { dim = 1; _ }, d | d, { dim = 1; _ } -> d
-  | _ -> assert false
+  match (d1, d2) with d1, d2 when d1 = d2 -> d1 | 1, d | d, 1 -> d | _ -> assert false
+
+(** *** Projection inference *** *)
+
+open Arrayjit.Indexing
 
 (** Computes the indexing into subformulas given the shape information of a formula. The processing
     mirrors [propagate_shapes], but [derive_projections] should only be invoked when the shapes
     are inferred already. *)
-let rec derive_projections (shapes : update_step) : projections =
+let derive_projections (shapes : update_step) : projections =
   (* Broadcasts symmetrically to iterate all axes. *)
-  let broadcast_dims (sh1_dims : dims) (sh2_dims : dims) : dim list =
+  let broadcast_dims (sh1_dims : dims) (sh2_dims : dims) : int list =
     let rec broad_back_dims accu = function
       | [], [] -> accu
       | dims, [] | [], dims -> List.rev_append dims accu
@@ -1108,12 +952,7 @@ let rec derive_projections (shapes : update_step) : projections =
   in
   let broadcast_sh sh1 kind1 sh2 kind2 = broadcast_dims (dims_of_kind kind1 sh1) (dims_of_kind kind2 sh2) in
   let project_into_dims (product_idcs : symbol option list) (sh1_dims : dims) : axis_index list =
-    let project_dim = function
-      (* We preserve dedicated iterators even for 1-dimensional axes. *)
-      | Some idx, { special = Dedicated _; _ } -> Iterator idx
-      | _, { dim = 1; _ } | None, _ -> Fixed_idx 0
-      | Some idx, _ -> Iterator idx
-    in
+    let project_dim = function _, 1 | None, _ -> Fixed_idx 0 | Some idx, _ -> Iterator idx in
     let rec project_dims ~is_fixed accu_idcs = function
       | [], [] -> accu_idcs
       | _idcs, [] ->
@@ -1137,7 +976,7 @@ let rec derive_projections (shapes : update_step) : projections =
   let cur_sh = shapes.shape in
   (* Computes the corresponding dimension in the product space. *)
   let einsum_one_dim terms =
-    List.fold terms ~init:(dim 1) ~f:(fun d ((_side, _axis), dims) ->
+    List.fold terms ~init:1 ~f:(fun d ((_side, _axis), dims) ->
         match dims with
         | Either.First Unknown -> d
         (* | Second (_, Unknown) -> dim *)
@@ -1145,18 +984,18 @@ let rec derive_projections (shapes : update_step) : projections =
             ( Inferred [ dim2 ]
             | Given [ dim2 ]
             | Fixed [ dim2 ] (* | Second (_, (Inferred [dim2] | Given [dim2] | Fixed [dim2])) *) )
-          when equal_dim d dim2 ->
+          when d = dim2 ->
             d
         | First
             ( Inferred [ dim2 ]
             | Given [ dim2 ]
             | Fixed [ dim2 ] (* | Second (_, (Inferred [dim2] | Given [dim2] | Fixed [dim2])) *) )
-          when d.dim = 1 ->
+          when d = 1 ->
             dim2
         | First (Inferred [] | Given [] | Fixed [])
         (* | Second (_, (Inferred [] | Given [] | Fixed [])) -> dim *)
         | Second _ ->
-            dim 1
+            1
         | _ -> assert false)
   in
   let map_with_dims dims idcs ~f =
@@ -1181,13 +1020,14 @@ let rec derive_projections (shapes : update_step) : projections =
   let inferred_for_label label_iterators = function
     | Either.First label -> (
         match Map.find_exn label_iterators label with None -> Fixed_idx 0 | Some sym -> Iterator sym)
-    | Second { special = _; dim = pos } -> Fixed_idx pos
+    | Second pos -> Fixed_idx pos
   in
 
   (* For binary cases, we cannot rely on [cur_sh] containing all axes, since in principle it could
      have been restricted by an initial [Given] setting to efficiently implement map-reduce. *)
+  let lhs_dims = to_dims shapes.shape in
   match shapes.logic with
-  | Terminal -> identity_projections @@ to_dims cur_sh
+  | Terminal -> identity_projections ~lhs_dims:(to_dims cur_sh)
   | Transpose (Transpose, sh) ->
       let product_inp = broadcast_sh cur_sh Input sh Output in
       let iters_inp = List.map product_inp ~f:opt_symbol in
@@ -1207,7 +1047,7 @@ let rec derive_projections (shapes : update_step) : projections =
       let project_rhs1 = Array.of_list @@ List.concat [ rhs_batch; rhs_output; rhs_input ] in
       let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
-      { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 = None }
+      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs1; project_rhs2 = None }
   | Transpose (Pointwise_un, sh) ->
       let product_inp = broadcast_sh cur_sh Input sh Input in
       let iters_inp = List.map product_inp ~f:opt_symbol in
@@ -1227,7 +1067,7 @@ let rec derive_projections (shapes : update_step) : projections =
       let project_rhs1 = Array.of_list @@ List.concat [ rhs_batch; rhs_output; rhs_input ] in
       let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
-      { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 = None }
+      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs1; project_rhs2 = None }
   | Transpose (Permute spec, sh) ->
       let ls_rhs, ls_lhs =
         match einsum_of_spec spec with
@@ -1265,14 +1105,14 @@ let rec derive_projections (shapes : update_step) : projections =
       let rhs_labels = axes_with_inf_labels ~all_labels:label_dims ls_rhs in
       let inferred_rhs = Map.map rhs_labels ~f in
       let b_rhs, i_rhs, o_rhs = axis_map_to_dims_bio inferred_rhs in
-      let rhs_batch = map_with_dims sh.batch b_rhs ~f:(fun d it -> if dim_1 d then Fixed_idx 0 else it) in
-      let rhs_input = map_with_dims sh.input i_rhs ~f:(fun d it -> if dim_1 d then Fixed_idx 0 else it) in
-      let rhs_output = map_with_dims sh.output o_rhs ~f:(fun d it -> if dim_1 d then Fixed_idx 0 else it) in
+      let rhs_batch = map_with_dims sh.batch b_rhs ~f:(fun d it -> if d = 1 then Fixed_idx 0 else it) in
+      let rhs_input = map_with_dims sh.input i_rhs ~f:(fun d it -> if d = 1 then Fixed_idx 0 else it) in
+      let rhs_output = map_with_dims sh.output o_rhs ~f:(fun d it -> if d = 1 then Fixed_idx 0 else it) in
       let project_lhs = Array.of_list @@ List.concat [ lhs_batch; lhs_output; lhs_input ] in
       let project_rhs1 = Array.of_list @@ List.concat [ rhs_batch; rhs_output; rhs_input ] in
       let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
-      { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 = None }
+      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs1; project_rhs2 = None }
   | Broadcast (Pointwise_bin, sh1, sh2) ->
       let product_inp =
         match cur_sh.input with
@@ -1308,7 +1148,7 @@ let rec derive_projections (shapes : update_step) : projections =
       let project_rhs2 = Some (Array.of_list @@ List.concat [ rhs2_batch; rhs2_output; rhs2_input ]) in
       let product_space = Array.filter ~f:iterated product_space in
       let product_iterators : symbol array = Array.filter_map ~f:Fn.id product_iterators in
-      { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
+      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs1; project_rhs2 }
   | Broadcast (Compose, sh1, sh2) ->
       (* [sh2] is the value or the function that gets applied first: [cur_sh(x) = sh1(sh2(x))].
          I.e. [cur.I = sh2.I, cur.O = sh1.O, sh2.O = sh1.I]. *)
@@ -1343,7 +1183,7 @@ let rec derive_projections (shapes : update_step) : projections =
       let project_rhs2 = Some (Array.of_list @@ List.concat [ rhs2_batch; rhs2_output; rhs2_input ]) in
       let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
-      { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
+      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs1; project_rhs2 }
   | Broadcast (Einsum spec, sh1, sh2) ->
       let ls_rhs1, ls_rhs2, ls_lhs =
         match einsum_of_spec spec with
@@ -1401,137 +1241,7 @@ let rec derive_projections (shapes : update_step) : projections =
       let project_rhs2 = Some (Array.of_list @@ List.concat [ rhs2_batch; rhs2_output; rhs2_input ]) in
       let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
-      { product_space; product_iterators; project_lhs; project_rhs1; project_rhs2 }
-  | Broadcast (Dynamic_index { over_kind; from_left; other_axes_pointwise; _ }, sh1, sh2) ->
-      let subs : int = (Option.value ~default:(dim 1) @@ List.last @@ list_of_dims sh2.output).dim in
-      let output : dims = map_dims sh2.output ~f:List.drop_last_exn in
-      let reduced_sh2 : t = { sh2 with output } in
-      let reduced_sh2 : t =
-        { reduced_sh2 with axis_labels = shift_axes_of_kind AxisKey.Output sh2 ~f:(( - ) 1) }
-      in
-      let sh1_size : int = List.length @@ list_of_dims @@ dims_of_kind over_kind sh1 in
-      let reduced_sh1, targets_and_skipped, target_dims, logic =
-        if from_left then
-          let n_par_axes : int = dims_of_kind over_kind sh1 |> list_of_dims |> count_special_among subs in
-          let reduced_dims (over_dims : dims) : dims = map_dims over_dims ~f:(drop_keeping_special subs) in
-          let reduced_sh1 : t = map_over_kind over_kind ~f:reduced_dims sh1 in
-          let target_dims : dim array =
-            dims_of_kind over_kind sh1 |> list_of_dims |> take_skipping_special subs |> Array.of_list
-          in
-          let targets_and_skipped : dim array =
-            dims_of_kind over_kind sh1 |> list_of_dims
-            |> take_keeping_special ~debug_sh1:sh1 ~debug_sh2:sh2 subs
-            |> Array.of_list
-          in
-          let drop_left (from_end : int) : int =
-            if from_end > sh1_size - subs - n_par_axes then -1 else from_end
-          in
-          let reduced_sh1 : t =
-            { reduced_sh1 with axis_labels = shift_axes_of_kind over_kind sh1 ~f:drop_left }
-          in
-          if other_axes_pointwise then
-            ( reduced_sh1,
-              targets_and_skipped,
-              target_dims,
-              Broadcast (Pointwise_bin, reduced_sh1, reduced_sh2) )
-          else
-            let extended_sh : t = append_all_axes ~prefix:reduced_sh2 ~main:reduced_sh1 () in
-            (reduced_sh1, targets_and_skipped, target_dims, Transpose (Pointwise_un, extended_sh))
-        else (* FIXME: NOT IMPLEMENTED YET *)
-          failwith "NOT IMPLEMENTED YET"
-      in
-      let n_par_axes : int =
-        Array.count targets_and_skipped ~f:(function { special = Dedicated _; _ } -> true | _ -> false)
-      in
-      let drop_left_par (proj : axis_index array) : axis_index array * symbol array =
-        let result : axis_index array =
-          Array.sub ~pos:n_par_axes ~len:(Array.length proj - n_par_axes) proj
-        in
-        let ded_syms : symbol array =
-          Array.sub ~pos:0 ~len:n_par_axes proj
-          |> Array.filter_map ~f:(function Iterator s when is_dedicated_any s -> Some s | _ -> None)
-        in
-        (result, ded_syms)
-      in
-      let drop_right_par (proj : axis_index array) : axis_index array * symbol array =
-        let result : axis_index array = Array.sub ~pos:0 ~len:(Array.length proj - n_par_axes) proj in
-        let ded_syms : symbol array =
-          Array.sub ~pos:(Array.length proj - n_par_axes) ~len:n_par_axes proj
-          |> Array.filter_map ~f:(function Iterator s when is_dedicated_any s -> Some s | _ -> None)
-        in
-        (result, ded_syms)
-      in
-      let update_other_axes : update_step = { shape = cur_sh; logic } in
-      let reduced_projections : projections = derive_projections update_other_axes in
-      let dynamic_syms : symbol array = Array.init subs ~f:(fun _ -> get_symbol ()) in
-      let proj_b, proj_i, proj_o = indices_bio reduced_sh1 reduced_projections.project_rhs1 in
-      let project_rhs1 : axis_index array =
-        if from_left then
-          match over_kind with
-          | AxisKey.Batch ->
-              let proj_b, dedicated_syms = drop_left_par proj_b in
-              Array.concat
-                [
-                  project_dyn_indexing ~dynamic_syms ~dedicated_syms targets_and_skipped;
-                  proj_b;
-                  proj_o;
-                  proj_i;
-                ]
-          | AxisKey.Input ->
-              let proj_i, dedicated_syms = drop_left_par proj_i in
-              Array.concat
-                [
-                  proj_b;
-                  proj_o;
-                  project_dyn_indexing ~dynamic_syms ~dedicated_syms targets_and_skipped;
-                  proj_i;
-                ]
-          | AxisKey.Output ->
-              let proj_o, dedicated_syms = drop_left_par proj_o in
-              Array.concat
-                [
-                  proj_b;
-                  project_dyn_indexing ~dynamic_syms ~dedicated_syms targets_and_skipped;
-                  proj_o;
-                  proj_i;
-                ]
-        else
-          match over_kind with
-          | AxisKey.Batch ->
-              let proj_b, dedicated_syms = drop_right_par proj_b in
-              Array.concat
-                [
-                  proj_b;
-                  project_dyn_indexing ~dynamic_syms ~dedicated_syms targets_and_skipped;
-                  proj_o;
-                  proj_i;
-                ]
-          | AxisKey.Input ->
-              let proj_i, dedicated_syms = drop_right_par proj_i in
-              Array.concat
-                [
-                  proj_b;
-                  proj_o;
-                  proj_i;
-                  project_dyn_indexing ~dynamic_syms ~dedicated_syms targets_and_skipped;
-                ]
-          | AxisKey.Output ->
-              let proj_o, dedicated_syms = drop_right_par proj_o in
-              Array.concat
-                [
-                  proj_b;
-                  proj_o;
-                  project_dyn_indexing ~dynamic_syms ~dedicated_syms targets_and_skipped;
-                  proj_i;
-                ]
-      in
-      let project_rhs2 =
-        Some
-          (Array.append
-             (Option.value_exn reduced_projections.project_rhs2)
-             [| Dynamic_provider { idcs = dynamic_syms; target_dims } |])
-      in
-      { reduced_projections with project_rhs1; project_rhs2 }
+      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs1; project_rhs2 }
 
 let backprop1 projections =
   { projections with project_lhs = projections.project_rhs1; project_rhs1 = projections.project_lhs }
@@ -1579,11 +1289,11 @@ let to_string_hum ?(style = `Axis_size) sh =
            in
            match (style, Map.find sh.axis_labels key) with
            | `Only_labels, None -> "_"
-           | `Axis_size, None -> dim_to_string d
-           | `Axis_number_and_size, None -> Int.to_string num ^ ":" ^ dim_to_string d
+           | `Axis_size, None -> Int.to_string d
+           | `Axis_number_and_size, None -> Int.to_string num ^ ":" ^ Int.to_string d
            | `Only_labels, Some l -> l
-           | `Axis_size, Some l -> l ^ ":" ^ dim_to_string d
-           | `Axis_number_and_size, Some l -> l ^ "=" ^ Int.to_string num ^ ":" ^ dim_to_string d)
+           | `Axis_size, Some l -> l ^ ":" ^ Int.to_string d
+           | `Axis_number_and_size, Some l -> l ^ "=" ^ Int.to_string num ^ ":" ^ Int.to_string d)
   in
   let batch_dims = dims_to_string Batch in
   let input_dims = dims_to_string Input in
