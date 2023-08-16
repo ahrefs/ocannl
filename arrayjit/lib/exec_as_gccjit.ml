@@ -46,7 +46,7 @@ type state = {
   ctx : Gccjit.context;
   func : Gccjit.function_;
   tensors : (Ndarray.ptr, tensor) Hashtbl.Poly.t;
-  traced_store : Code.traced_store;
+  traced_store : Low_level.traced_store;
   task_init_block : Gccjit.block;
   task_finalize_block : Gccjit.block;
   replicated_finalize_block : Gccjit.block;
@@ -79,25 +79,9 @@ let get_tensor
       let tn = Code.(get_node traced_store ptr) in
       let host_size_in_bytes = Node.size_in_bytes n.node in
       let axes = Shape.to_dims n.annot.shape in
-      let device_dims =
-        axes
-        |> Array.map ~f:(function
-             | { special = Frozen; _ } -> 1
-             | { special = Dedicated Task_id; _ } -> 1
-             | { dim; _ } -> dim)
-      in
-      let device_size = Array.fold ~init:1 ~f:( * ) device_dims in
+      let local_size = Array.fold ~init:1 ~f:( * ) local_dims in
       let arr = Option.value_exn @@ Code.get_tensor ptr in
-      let device_size_in_bytes = device_size * Ndarray.precision_in_bytes arr in
-      let local_is_slice_of_host =
-        Array.fold_until axes ~init:true
-          ~f:
-            (fun was_frozen -> function
-              | Shape.{ special = Frozen | Dedicated Task_id; _ } ->
-                  if was_frozen then Continue true else Stop false
-              | _ -> Continue false)
-          ~finish:(fun _ -> true)
-      in
+      let local_size_in_bytes = local_size * Ndarray.precision_in_bytes arr in
       let c_void_ptr = Type.(get ctx Type.Void_ptr) in
       let c_index = Type.get ctx Type.Size_t in
       let c_int = Type.get ctx Type.Int in
@@ -114,7 +98,7 @@ let get_tensor
         let can_be_replicated = tn.is_replicable in
         let sync =
           Option.value_or_thunk force_sync ~default:(fun () ->
-              if Option.is_none hosted_ptr then Device_only
+              if Option.is_none hosted_ptr then Local_only
               else if is_parallel then Parallel_dim
               else if can_be_replicated then Replicated
               else (
@@ -125,7 +109,7 @@ let get_tensor
                     ([%sexp_of: Code.node] n);
                 raise Unknown_synchronization))
         in
-        let arr_typ = Type.array ctx num_typ device_size in
+        let arr_typ = Type.array ctx num_typ local_size in
         let local = Function.local func arr_typ @@ Ndarray.ptr_name ptr in
         let host_dims = Bigarray.Genarray.dims arr in
         let cast_void rv = RValue.cast ctx rv c_void_ptr in
@@ -135,19 +119,10 @@ let get_tensor
                [
                  cast_void @@ LValue.address local;
                  RValue.zero ctx c_int;
-                 RValue.int ctx c_index device_size_in_bytes;
+                 RValue.int ctx c_index local_size_in_bytes;
                ];
         Option.iter hosted_ptr ~f:(fun hosted_ptr ->
             if local_is_slice_of_host then (
-              let offset_idcs =
-                try
-                  Array.map2_exn host_idcs axes ~f:(fun idx -> function
-                    | Shape.{ special = Frozen | Dedicated Task_id; _ } -> idx | _ -> RValue.zero ctx c_int)
-                with e ->
-                  Caml.Format.printf "\nMismatch host_idcs axes = %a\n%!" Sexp.pp_hum
-                    ([%sexp_of: Shape.dim array] axes);
-                  raise e
-              in
               let offset = jit_array_offset ctx ~idcs:offset_idcs ~dims:host_dims in
               let lhs = LValue.access_array hosted_ptr offset in
               if tn.zero_initialized then
@@ -156,7 +131,7 @@ let get_tensor
                      [
                        cast_void @@ LValue.address lhs;
                        RValue.zero ctx c_int;
-                       RValue.int ctx c_index device_size_in_bytes;
+                       RValue.int ctx c_index local_size_in_bytes;
                      ];
               if tn.read_before_write then
                 Block.eval task_init_block
@@ -164,7 +139,7 @@ let get_tensor
                      [
                        cast_void @@ LValue.address local;
                        cast_void @@ LValue.address lhs;
-                       RValue.int ctx c_index device_size_in_bytes;
+                       RValue.int ctx c_index local_size_in_bytes;
                      ];
               if not tn.read_only then
                 (* let f = Function.builtin ctx "printf" in
@@ -175,7 +150,7 @@ let get_tensor
                          ^ Sexp.to_string_hum ([%sexp_of: Ndarray.ptr] ptr)
                          ^ " -- index: %d; size: %d: \n");
                          offset;
-                         RValue.int ctx c_index device_size_in_bytes;
+                         RValue.int ctx c_index local_size_in_bytes;
                      ]
                    in
                    Block.eval task_finalize_block @@ RValue.call ctx f print_args; *)
@@ -184,14 +159,14 @@ let get_tensor
                      [
                        cast_void @@ LValue.address lhs;
                        cast_void @@ LValue.address local;
-                       RValue.int ctx c_index device_size_in_bytes;
+                       RValue.int ctx c_index local_size_in_bytes;
                      ])
             else (
               ignore jit_code;
               failwith "Exec_as_gccjit: non-slice hosted: NOT IMPLEMENTED YET"));
         let backend_info =
           (if Node.equal_data_kind ptr.field Value then "v:" else "g:")
-          ^ (Sexp.to_string_hum @@ sexp_of_sync_properties sync)
+          ^ (Sexp.to_string_hum @@ sexp_of_mem_properties sync)
           ^ ";"
         in
         if not @@ String.is_substring n.annot.backend_info ~substring:backend_info then
@@ -201,9 +176,9 @@ let get_tensor
           local = Some local;
           sync;
           host_dims;
-          device_dims;
+          local_dims;
           host_size_in_bytes;
-          device_size_in_bytes;
+          local_size_in_bytes;
           local_is_slice_of_host;
           num_typ;
           is_double;
@@ -259,12 +234,7 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
             RValue.param @@ Option.value_exn state.task_id
         | Iterator s when on_host && Shape.task_id_sym s -> Map.find_exn env s
         | Iterator s when Shape.task_id_sym s -> RValue.zero ctx c_index
-        | Iterator s -> Map.find_exn env s
-        | Dynamic_recipient s -> Map.find_exn env s
-        | Dynamic_provider _ when example_only -> RValue.zero ctx c_index
-        | Dynamic_provider _ -> Option.value_exn provider_dim
-        | Frozen_recipient s when on_host -> Map.find_exn env s
-        | Frozen_recipient _ -> RValue.zero ctx c_index)
+        | Iterator s -> Map.find_exn env s)
     with e ->
       Caml.Format.eprintf "exec_as_gccjit: missing index from@ %a@ among environment keys:@ %a\n%!"
         Sexp.pp_hum
@@ -338,51 +308,49 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
         Array.iteri cs ~f:(fun i line -> loop ~name:(name ^ "_at_par_line_" ^ Int.to_string i) line)
     | Set (_, _, Binop (Arg2, Get (_, _), _)) -> assert false
     | Set (tensor, idcs, Binop (op, Get (tensor2, idcs2), c2))
-      when Nd.equal_ptr tensor tensor2
-           && [%equal: Shape.axis_index array] idcs idcs2
-           && is_builtin_op op ->
+      when Nd.equal_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 && is_builtin_op op ->
         (* FIXME: maybe it's not worth it? *)
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
         let idcs = lookup ~on_host:false env idcs in
-        let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
-        let device_lhs = LValue.access_array (get_local_ptr tensor) device_offset in
-        Block.assign_op !current_block device_lhs (builtin_op op) value
+        let local_offset = jit_array_offset ctx ~idcs ~dims:tensor.local_dims in
+        let local_lhs = LValue.access_array (get_local_ptr tensor) local_offset in
+        Block.assign_op !current_block local_lhs (builtin_op op) value
     | Set (tensor, idcs, Binop (op, Get (tensor2, idcs2), c2))
       when Nd.equal_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
         let idcs = lookup ~on_host:false env idcs in
-        let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
-        let device_lhs = LValue.access_array (get_local_ptr tensor) device_offset in
+        let local_offset = jit_array_offset ctx ~idcs ~dims:tensor.local_dims in
+        let local_lhs = LValue.access_array (get_local_ptr tensor) local_offset in
         let rhs =
-          loop_binop op ~num_typ:tensor.num_typ ~is_double:tensor.is_double ~v1:(RValue.lvalue device_lhs)
+          loop_binop op ~num_typ:tensor.num_typ ~is_double:tensor.is_double ~v1:(RValue.lvalue local_lhs)
             ~v2:value
         in
-        Block.assign !current_block device_lhs rhs
+        Block.assign !current_block local_lhs rhs
     | Set (tensor, idcs, Binop (op, c2, Get (tensor2, idcs2)))
       when Nd.equal_ptr tensor tensor2 && [%equal: Shape.axis_index array] idcs idcs2 ->
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
         let idcs = lookup ~on_host:false env idcs in
-        let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
-        let device_lhs = LValue.access_array (get_local_ptr tensor) device_offset in
+        let local_offset = jit_array_offset ctx ~idcs ~dims:tensor.local_dims in
+        let local_lhs = LValue.access_array (get_local_ptr tensor) local_offset in
         let rhs =
           loop_binop op ~num_typ:tensor.num_typ ~is_double:tensor.is_double ~v1:value
-            ~v2:(RValue.lvalue device_lhs)
+            ~v2:(RValue.lvalue local_lhs)
         in
-        Block.assign !current_block device_lhs rhs
+        Block.assign !current_block local_lhs rhs
     | Set (ptr, idcs, value) ->
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs ptr in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
         let idcs = lookup ~on_host:false env idcs in
-        let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
-        let device_lhs = LValue.access_array (get_local_ptr tensor) device_offset in
-        Block.assign !current_block device_lhs value
+        let local_offset = jit_array_offset ctx ~idcs ~dims:tensor.local_dims in
+        let local_lhs = LValue.access_array (get_local_ptr tensor) local_offset in
+        Block.assign !current_block local_lhs value
     | Zero_out ptr ->
         if Hashtbl.mem state.tensors ptr then
           failwith
@@ -428,8 +396,8 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
         let host_idcs = lookup ~on_host:true env idcs in
         let tensor = get_tensor state ~jit_code:loop_proc ~host_idcs tensor in
         let idcs = lookup ~on_host:false env idcs in
-        let device_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
-        RValue.lvalue @@ LValue.access_array (get_local_ptr tensor) device_offset
+        let local_offset = jit_array_offset ctx ~idcs ~dims:tensor.local_dims in
+        RValue.lvalue @@ LValue.access_array (get_local_ptr tensor) local_offset
     | Binop (Code.Arg2, _, c2) -> loop c2
     | Binop (Code.Arg1, c1, _) -> loop c1
     | Binop (op, c1, c2) -> loop_binop op ~num_typ ~is_double ~v1:(loop c1) ~v2:(loop c2)
@@ -464,8 +432,8 @@ let jit_code ~num_parallel_tasks ~name ~(env : Gccjit.rvalue Code.environment) (
           let target_dim = RValue.int ctx c_int target_dims.(provider_dim).dim in
           let provider_dim = RValue.int ctx c_int provider_dim in
           let idcs = lookup ~provider_dim ~on_host:false env tensor_idcs in
-          let device_prov_offset = jit_array_offset ctx ~idcs ~dims:tensor.device_dims in
-          let dyn_index = RValue.lvalue @@ LValue.access_array (get_local_ptr tensor) device_prov_offset in
+          let local_prov_offset = jit_array_offset ctx ~idcs ~dims:tensor.local_dims in
+          let dyn_index = RValue.lvalue @@ LValue.access_array (get_local_ptr tensor) local_prov_offset in
           let dyn_index = RValue.cast ctx dyn_index c_index in
           let dyn_index = RValue.binary_op ctx Modulo c_index dyn_index target_dim in
           let data =

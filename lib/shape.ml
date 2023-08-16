@@ -1087,22 +1087,6 @@ let project_broad d1 d2 =
   | { dim = 1; _ }, d | d, { dim = 1; _ } -> d
   | _ -> assert false
 
-let project_dyn_indexing ~(dynamic_syms : symbol array) ~(dedicated_syms : symbol array)
-    (targets_and_skipped : dim array) : axis_index array =
-  let remaining_dyn_syms, remaining_ded_syms, idcs =
-    List.fold_left
-      ~init:(Array.to_list dynamic_syms, Array.to_list dedicated_syms, [])
-      (Array.to_list targets_and_skipped)
-      ~f:(fun (dyn_syms, ded_syms, idcs) dim ->
-        match dim.special with
-        | Dedicated _ -> (dyn_syms, List.tl_exn ded_syms, Iterator (List.hd_exn ded_syms) :: idcs)
-        | Frozen -> (List.tl_exn dyn_syms, ded_syms, Frozen_recipient (List.hd_exn dyn_syms) :: idcs)
-        | Dim -> (List.tl_exn dyn_syms, ded_syms, Dynamic_recipient (List.hd_exn dyn_syms) :: idcs))
-  in
-  assert (List.is_empty remaining_dyn_syms);
-  assert (List.is_empty remaining_ded_syms);
-  Array.of_list_rev idcs
-
 (** Computes the indexing into subformulas given the shape information of a formula. The processing
     mirrors [propagate_shapes], but [derive_projections] should only be invoked when the shapes
     are inferred already. *)
@@ -1193,7 +1177,7 @@ let rec derive_projections (shapes : update_step) : projections =
     in
     Map.of_alist_multi (module String) @@ Map.data eqs
   in
-  let project_iterator d it = match d with { special = Dim | Frozen; dim = 1 } -> Fixed_idx 0 | _ -> it in
+  let project_iterator d it = if d = 1 then Fixed_idx 0 else it in
   let inferred_for_label label_iterators = function
     | Either.First label -> (
         match Map.find_exn label_iterators label with None -> Fixed_idx 0 | Some sym -> Iterator sym)
@@ -1577,13 +1561,7 @@ let make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~id () =
     | Some spec ->
         Map.map (axis_labels_of_spec spec).labels ~f:(function
           | Either.First label -> label
-          | Second { special; dim } ->
-              (match special with
-              | Dim -> ""
-              | Frozen -> "frozen "
-              | Dedicated Task_id -> "parallel "
-              | Dedicated Sample_num -> "minibatch ")
-              ^ Int.to_string dim)
+          | Second dim -> Int.to_string dim)
   in
   { input; output; batch; deduce_within_shape_constraints; axis_labels; id }
 

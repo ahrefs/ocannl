@@ -10,7 +10,7 @@ type annot = {
   mutable never_virtual : bool;
   mutable never_device_only : bool;
   mutable backend_info : string;
-  mutable dims : Indexing.dim array;
+  mutable dims : int array;
   literal : bool;
 }
 [@@deriving sexp, equal]
@@ -46,7 +46,7 @@ module Nd_comparator = struct
   end)
 end
 
-type create = { tensor : ndarray; dims : unit -> Indexing.dim array; init_op : init_op }
+type create = { tensor : ndarray; dims : unit -> int array; init_op : init_op }
 (** Information to create a tensor, once its shape is inferred. *)
 
 type scope_id = { nd : ndarray; scope_id : int } [@@deriving sexp_of, equal, hash]
@@ -792,19 +792,17 @@ let compile_proc ~name ?(verbose = false) ~for_step_update:_ llc =
   if verbose then Stdio.printf "Code.compile_proc: finished\n%!";
   result
 
-let loop_over_dims ~skip_frozen dims ~body =
+let loop_over_dims dims ~body =
   let rec for_loop rev_idcs : _ -> t = function
     | [] -> body @@ Array.of_list_rev rev_idcs
-    | { Indexing.special = Frozen; _ } :: product when skip_frozen ->
-        for_loop (Indexing.Fixed_idx 0 :: rev_idcs) product
-    | { dim = 1; _ } :: product when skip_frozen -> for_loop (Indexing.Fixed_idx 0 :: rev_idcs) product
+    | d :: product when not @@ Indexing.iterated d -> for_loop (Indexing.Fixed_idx 0 :: rev_idcs) product
     | d :: product ->
         let index = Indexing.get_symbol () in
         For_loop
           {
             index;
             from_ = 0;
-            to_ = d.dim - 1;
+            to_ = d - 1;
             body = for_loop (Indexing.Iterator index :: rev_idcs) product;
             trace_it = true;
           }
@@ -812,8 +810,6 @@ let loop_over_dims ~skip_frozen dims ~body =
   for_loop [] (Array.to_list dims)
 
 module CDSL = struct
-  let dim = Indexing.dim
-  let frozen = Indexing.frozen
   let single = Nd.single
   let double = Nd.double
   let executor_print_comments = executor_print_comments

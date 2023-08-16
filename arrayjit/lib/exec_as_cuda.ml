@@ -65,11 +65,10 @@ let pp_comma ppf () = Caml.Format.fprintf ppf ",@ "
 let pp_symbol ppf sym = Caml.Format.fprintf ppf "%s" @@ Shape.symbol_ident sym
 let pp_index ppf sym = Caml.Format.fprintf ppf "%s" @@ Shape.symbol_ident sym
 
-let pp_index_axis ?provider_dim scope ppf =
+let pp_index_axis scope ppf =
   let open Shape in
   function
-  | Frozen_recipient it -> Caml.Format.fprintf ppf "0 /* frozen %a */" pp_index it
-  | Iterator it | Dynamic_recipient it -> (
+  | Iterator it -> (
       match scope with
       | Thread when sample_num_sym it || task_id_sym it -> Caml.Format.fprintf ppf "0"
       | Shared when task_id_sym it -> Caml.Format.fprintf ppf "0"
@@ -77,32 +76,24 @@ let pp_index_axis ?provider_dim scope ppf =
       | _ when task_id_sym it -> Caml.Format.fprintf ppf "blockIdx.x"
       | _ -> pp_index ppf it)
   | Fixed_idx i -> Caml.Format.fprintf ppf "%d" i
-  | Dynamic_provider _ -> Caml.Format.fprintf ppf "%d" @@ Option.value_exn provider_dim
 
-let pp_array_offset ?provider_dim scope ppf (idcs, dims) =
+let pp_array_offset scope ppf (idcs, dims) =
   let open Caml.Format in
   assert (not @@ Array.is_empty idcs);
   for _ = 0 to Array.length idcs - 3 do
     fprintf ppf "@[<1>("
   done;
   for i = 0 to Array.length idcs - 1 do
-    let dim =
-      match dims.(i).Shape.special with
-      | Frozen -> 1
-      | Dedicated Task_id when equal_mem_scope scope Shared -> 1
-      | Dedicated _ when equal_mem_scope scope Thread -> 1
-      | _ -> dims.(i).dim
-    in
-    if i = 0 then fprintf ppf "%a" (pp_index_axis ?provider_dim scope) idcs.(i)
-    else if i = Array.length idcs - 1 then
-      fprintf ppf " * %d +@ %a" dim (pp_index_axis ?provider_dim scope) idcs.(i)
-    else fprintf ppf " * %d +@ %a@])" dim (pp_index_axis ?provider_dim scope) idcs.(i)
+    let dim = dims.(i) in
+    if i = 0 then fprintf ppf "%a" (pp_index_axis scope) idcs.(i)
+    else if i = Array.length idcs - 1 then fprintf ppf " * %d +@ %a" dim (pp_index_axis scope) idcs.(i)
+    else fprintf ppf " * %d +@ %a@])" dim (pp_index_axis scope) idcs.(i)
   done
 
-let array_offset_to_string ?provider_dim scope (idcs, dims) =
+let array_offset_to_string scope (idcs, dims) =
   let b = Buffer.create 32 in
   let ppf = Caml.Format.formatter_of_buffer b in
-  pp_array_offset ?provider_dim scope ppf (idcs, dims);
+  pp_array_offset scope ppf (idcs, dims);
   Caml.Format.pp_print_flush ppf ();
   Buffer.contents b
 
@@ -131,37 +122,12 @@ let get_tensor ~traced_store ~num_threads:_ ~num_blocks ?force_sync ~jit_code ~d
       let tn = Code.(get_node traced_store ptr) in
       let host_size_in_bytes = Node.size_in_bytes n.node in
       let dims = Shape.to_dims n.annot.shape in
-      let global_length =
-        dims
-        |> Array.filter_map ~f:(function Shape.{ special = Frozen; _ } -> None | d -> Some d.dim)
-        |> Array.fold ~init:1 ~f:( * )
-      in
+      let global_length = Array.fold ~init:1 ~f:( * ) dims in
       let arr = Option.value_exn @@ Code.get_tensor ptr in
       let hosted = if Array.is_empty @@ Ndarray.dims arr then None else Some arr in
       let global_size_in_bytes = global_length * Ndarray.precision_in_bytes arr in
-      let global_is_slice_of_host =
-        Array.fold_until dims ~init:true
-          ~f:
-            (fun was_frozen -> function
-              (* For Cuda, parallel dims are part of a global slice. *)
-              | Shape.{ special = Frozen; _ } -> if was_frozen then Continue true else Stop false
-              | _ -> Continue false)
-          ~finish:(fun _ -> true)
-      in
-      let thread_length =
-        dims
-        |> Array.filter_map ~f:(function
-             | Shape.{ special = Frozen | Dedicated _; _ } -> None
-             | d -> Some d.dim)
-        |> Array.fold ~init:1 ~f:( * )
-      in
-      let shared_length =
-        dims
-        |> Array.filter_map ~f:(function
-             | Shape.{ special = Frozen | Dedicated Task_id; _ } -> None
-             | d -> Some d.dim)
-        |> Array.fold ~init:1 ~f:( * )
-      in
+      let thread_length = Array.fold ~init:1 ~f:( * ) dims in
+      let shared_length = thread_length in
       let tensor prec is_double arr =
         let num_typ = prec_to_c_type prec in
         let is_block_parallel =
@@ -230,25 +196,6 @@ let get_tensor ~traced_store ~num_threads:_ ~num_blocks ?force_sync ~jit_code ~d
         let global = Option.some_if has_global_mem @@ Ndarray.ptr_name ptr in
         let local = Option.some_if has_local_mem @@ Ndarray.ptr_name ptr ^ "_local" in
         let host_dims = Bigarray.Genarray.dims arr in
-        let host_offset =
-          Option.bind hosted ~f:(fun _ ->
-              if global_is_slice_of_host then
-                Some
-                  (fun () ->
-                    let offset_idcs =
-                      try
-                        Array.map2_exn idcs dims ~f:(fun idx -> function
-                          | Shape.{ special = Frozen; _ } -> Code.lookup_dyn_ind dyn_env idx | _ -> 0)
-                      with e ->
-                        Caml.Format.printf "\nMismatch idcs axes = %a\n%!" Sexp.pp_hum
-                          ([%sexp_of: Shape.dim array] dims);
-                        raise e
-                    in
-                    compute_array_offset ~idcs:offset_idcs ~dims:host_dims)
-              else (
-                ignore jit_code;
-                failwith "Exec_as_gccjit: non-slice hosted: NOT IMPLEMENTED YET"))
-        in
         let backend_info =
           (if Node.equal_data_kind ptr.field Value then "v:" else "g:")
           ^ (Sexp.to_string_hum @@ sexp_of_sync_properties sync)
@@ -281,7 +228,7 @@ let get_tensor ~traced_store ~num_threads:_ ~num_blocks ?force_sync ~jit_code ~d
 
 let jit_binop ~num_typ:_ ~is_double op =
   match op with
-  | Code.Arg1 -> assert false
+  | Low_level.Arg1 -> assert false
   | Arg2 -> assert false
   | Add -> ("(", " +", ")")
   | Mul -> ("(", " *", ")")
@@ -292,15 +239,6 @@ let jit_binop ~num_typ:_ ~is_double op =
 
 let jit_code ~num_threads ~num_blocks ~traced_store ppf llc : unit =
   let open Caml.Format in
-  (* let lookup ?provider_dim ?(example_only = false) ~on_host indices =
-       Array.map indices ~f:(function
-         | Shape.Fixed_idx i -> Int.to_string i
-         | Iterator it | Dynamic_recipient it -> Shape.symbol_ident it
-         | Dynamic_provider _ when example_only -> Int.to_string 0
-         | Dynamic_provider _ -> Int.to_string @@ Option.value_exn provider_dim
-         | Frozen_recipient it when on_host -> Shape.symbol_ident it
-         | Frozen_recipient _ -> Int.to_string 0)
-     in *)
   let locals = ref Map.Poly.empty in
   let rec pp_ll ~dyn_env ppf c : unit =
     match c with
@@ -633,7 +571,7 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
                                (pp_array_offset tn.run_scope) (idcs, tn.dims))
                        in
                        let loops =
-                         Code.((Lines [| loop_over_dims ~skip_frozen:true tn.dims ~body |] : Low_level.t))
+                         Code.((Lines [| loop_over_dims tn.dims ~body |] : Low_level.t))
                        in
                        jit_code ~num_threads ~num_blocks ~traced_store ppf loops;
                        Caml.Format.pp_print_newline ppf ();
@@ -654,7 +592,7 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
                              (idcs, tn.dims))
                      in
                      let loops =
-                       Code.((Lines [| loop_over_dims ~skip_frozen:true tn.dims ~body |] : Low_level.t))
+                       Code.((Lines [| loop_over_dims tn.dims ~body |] : Low_level.t))
                      in
                      jit_code ~num_threads ~num_blocks ~traced_store ppf loops;
                      Caml.Format.pp_print_newline ppf ();
@@ -675,7 +613,7 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
                          Caml.Format.fprintf ppf "@[<2>%s[%a] =@ %s[%a];@]" g_name (pp_array_offset Global)
                            (idcs, tn.dims) l_name (pp_array_offset tn.run_scope) (idcs, tn.dims))
                    in
-                   let loops = Code.loop_over_dims ~skip_frozen:true tn.dims ~body in
+                   let loops = Code.loop_over_dims tn.dims ~body in
                    if is_replicated tn.sync then
                      Caml.Format.fprintf ppf "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ %a@ @]}"
                        (jit_code ~num_threads ~num_blocks ~traced_store)

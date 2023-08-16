@@ -46,10 +46,10 @@ let _suspended () =
   (* FIXME: *)
   let b =
     [
-      Shape.{ special = Frozen; dim = n_batches };
-      CDSL.parallel parallel_dims;
-      CDSL.dim refresh_batch;
-      CDSL.minibatch 20;
+      n_batches;
+      parallel_dims;
+      refresh_batch;
+      20;
     ]
   in
   let moons_flat = FDSL.init_const ~l:"moons_flat" ~b ~o:[ CDSL.dim 2 ] moons_flat in
@@ -202,14 +202,14 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let moons_flat =
     FDSL.init_const ~l:"moons_flat"
-      ~b:[ CDSL.frozen n_batches; CDSL.parallel parallel_dims; CDSL.minibatch minibatch_size ]
-      ~o:[ CDSL.dim 2 ]
+      ~b:[ n_batches; parallel_dims; minibatch_size ]
+      ~o:[ 2 ]
       moons_flat
   in
   let moons_classes =
     FDSL.init_const ~l:"moons_classes"
-      ~b:[ CDSL.frozen n_batches; CDSL.parallel parallel_dims; CDSL.minibatch minibatch_size ]
-      ~o:[ CDSL.dim 1 ]
+      ~b:[ n_batches; parallel_dims; minibatch_size ]
+      ~o:[ 1 ]
       moons_classes
   in
   (* *

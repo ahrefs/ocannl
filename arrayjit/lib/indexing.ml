@@ -20,30 +20,13 @@ end
 
 let symbol_ident (Symbol s) = "i" ^ Int.to_string s
 
-type axis_special =
-  | Dim  (** A "randomly accessed" axis. *)
-  | Frozen
-      (** An axis that should be indexed at a single position during a single `refresh_session`:
-          a dynamic index into it will be a [Frozen_recipient]. *)
-[@@deriving equal, compare, sexp, variants]
-
-type dim = { special : axis_special; dim : int } [@@deriving equal, compare, sexp]
-
-let dim dim = { special = Dim; dim }
-let frozen dim = { special = Frozen; dim }
-let dim_1 = function { dim = 1; _ } -> true | _ -> false
-
-let dim_to_string = function
-  | { special = Dim; dim } -> Int.to_string dim
-  | { special = Frozen; dim } -> "frozen " ^ Int.to_string dim
-
 (** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
     Outputs ["-"] for empty dimensions. *)
 let dims_to_string ?(with_axis_numbers = false) dims =
   if Array.is_empty dims then "-"
   else if with_axis_numbers then
-    String.concat_array ~sep:" x " @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ dim_to_string s)
-  else String.concat_array ~sep:"x" @@ Array.map dims ~f:dim_to_string
+    String.concat_array ~sep:" x " @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ Int.to_string s)
+  else String.concat_array ~sep:"x" @@ Array.map dims ~f:Int.to_string
 
 (** An index into a single axis for doing computations over multiple [Shape]-derived [Code]s. *)
 type axis_index =
@@ -58,9 +41,9 @@ let sexp_of_str_osym_map (map : str_osym_map) =
   Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: string * symbol option])
 
 type projections = {
-  product_space : dim array;
+  product_space : int array;
       (** The product space dimensions that an operation should parallelize (map-reduce) over. *)
-  lhs_dims : dim array;  (** The dimensions of the LHS tensor. *)
+  lhs_dims : int array;  (** The dimensions of the LHS tensor. *)
   product_iterators : symbol array;
       (** The product space iterators (concatentation of the relevant batch, output, input axes)
       for iterating over the [product_space] axes, where same axes are at same array indices. *)
@@ -77,7 +60,7 @@ type projections = {
 [@@deriving compare, equal, sexp]
 (** All the information relevant for [Code] code generation contained in a completed [update_step]. *)
 
-let iterated = function { special = Dim; dim } when dim > 1 -> true | _ -> false
+let iterated dim = dim > 1
 let opt_symbol d = if iterated d then Some (get_symbol ()) else None
 let opt_iterator = function None -> Fixed_idx 0 | Some sym -> Iterator sym
 

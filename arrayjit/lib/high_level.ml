@@ -27,7 +27,7 @@ and t =
       rhs : ndarray;
       projections : unit -> Indexing.projections;
     }
-  | Fetch of { tensor : ndarray; fetch_op : fetch_op; dims : unit -> Indexing.dim array }
+  | Fetch of { tensor : ndarray; fetch_op : fetch_op; dims : unit -> int array }
   | Block_comment of string * t
   | Noop
 [@@deriving sexp_of]
@@ -90,7 +90,7 @@ let to_low_level (code : t) : Low_level.t =
                 {
                   index;
                   from_ = 0;
-                  to_ = d.Indexing.dim - 1;
+                  to_ = d - 1;
                   body = for_loop (index :: rev_iters) product;
                   trace_it = true;
                 }
@@ -128,7 +128,7 @@ let to_low_level (code : t) : Low_level.t =
                 {
                   index;
                   from_ = 0;
-                  to_ = d.Indexing.dim - 1;
+                  to_ = d - 1;
                   body = for_loop (index :: rev_iters) product;
                   trace_it = true;
                 }
@@ -145,7 +145,7 @@ let to_low_level (code : t) : Low_level.t =
     | Seq (c1, c2) -> Seq (loop c1, loop c2)
     | Fetch { tensor; fetch_op = Constant 0.0; dims = _ } -> Zero_out tensor
     | Fetch { tensor; fetch_op = Constant c; dims } ->
-        Low_level.loop_over_dims ~skip_frozen:false (dims ()) ~body:(fun idcs ->
+        Low_level.loop_over_dims (dims ()) ~body:(fun idcs ->
             Set (tensor, idcs, Constant c))
         (* let rec loop rev_idcs = function
              | [] -> Set (tensor, Array.of_list_rev rev_idcs, Constant c)
