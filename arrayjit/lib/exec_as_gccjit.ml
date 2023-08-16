@@ -11,14 +11,13 @@ let session_context =
 type mem_properties =
   | Local_only  (** The tensor is only needed for a local computation and does not exist on host. *)
   | Local_finally_host
-      (** The tensor is computed locally and then copied to host, if the flag [final] is true. *)
+      (** The tensor is computed locally and then copied to host, if the flag [is_final] is true. *)
   | Host_only  (** The tensor is read from or updated directly on the host. *)
 [@@deriving sexp, equal, compare, variants]
 
 type tensor = {
   hosted_ptr : Gccjit.rvalue option;
-      (** Pointer to the first value of the associated [Bigarray], if hosted. Usually it does not correspond
-          to the local tensor (e.g. if task id > 0). *)
+      (** Pointer to the first value of the associated [Bigarray], if hosted. *)
   local : Gccjit.lvalue option;  (** A local array, if any. *)
   mem : mem_properties;
   dims : int array;
@@ -49,8 +48,7 @@ let jit_array_offset ctx ~idcs ~dims =
       RValue.binary_op ctx Plus c_index idx
       @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
 
-let get_tensor { ctx; func; tensors; traced_store; init_block; finalize_block; is_final=_ } n : tensor
-    =
+let get_tensor { ctx; func; tensors; traced_store; init_block; finalize_block; is_final = _ } n : tensor =
   let open Gccjit in
   let ptr = Ndarray.ptr n in
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
@@ -61,7 +59,6 @@ let get_tensor { ctx; func; tensors; traced_store; init_block; finalize_block; i
       let size_in_bytes = size_in_elems * Ndarray.precision_in_bytes n.array in
       let is_on_host = host_size_in_bytes > 0 in
       if is_on_host then assert (host_size_in_bytes = size_in_bytes);
-      let is_write_first = not tn.read_before_write in
       let c_void_ptr = Type.(get ctx Type.Void_ptr) in
       let c_index = Type.get ctx Type.Size_t in
       let c_int = Type.get ctx Type.Int in
@@ -72,7 +69,9 @@ let get_tensor { ctx; func; tensors; traced_store; init_block; finalize_block; i
           else Some (RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray arr)
         in
         let mem =
-          if not is_on_host then Local_only else if is_write_first then Local_finally_host else Host_only
+          if not is_on_host then Local_only
+          else if not tn.read_before_write then Local_finally_host
+          else Host_only
         in
         let arr_typ = Type.array ctx num_typ size_in_elems in
         let local =
@@ -213,8 +212,8 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
         let lhs = LValue.access_array (get_ptr tensor) offset in
         Block.assign_op !current_block lhs (builtin_op op) value
-    | Set (ptr, idcs, value) ->
-        let tensor = get_tensor state ptr in
+    | Set (tensor, idcs, value) ->
+        let tensor = get_tensor state tensor in
         let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in

@@ -103,6 +103,7 @@ let extract_block_name llc = match flat_lines llc with Comment s :: _ -> comment
 let executor_print_comments = ref false
 let keep_files_in_run_directory = ref false
 let with_debug = ref false
+let debug_verbose_trace = ref false
 
 let interpret_binop op v1 v2 =
   let open Float in
@@ -268,7 +269,7 @@ let precompute_constants ?idcs traced_store top_ptr llv =
           raise @@ Non_literal 7);
     top_n.scalar <- Some (loop llv)
   with Non_literal _i ->
-    (* if !with_debug && !debug_verbose_trace then
+    (* if !with_debug then
        Caml.Format.printf "TRACE: Tensor #%d is non-literal because no. %d\n%!" n.id i; *)
     (* In principle we might conclude again that the node is to be inlined as scalar, that's OK. *)
     top_n.scalar <- None
@@ -815,6 +816,7 @@ module CDSL = struct
   let executor_print_comments = executor_print_comments
   let keep_files_in_run_directory = keep_files_in_run_directory
   let with_debug = with_debug
+  let debug_verbose_trace = debug_verbose_trace
   let virtualize_settings = virtualize_settings
   let code_sexp_margin = code_sexp_margin
 end
