@@ -3,7 +3,31 @@ open Base
 type dims_annot = { batch : int list; input : int list; output : int list }
 type node = dims_annot Ndarray.t
 
-let pp_tensor_inline fmt ?labels_spec n =
+let get_shape_string ?(style = `Axis_size) n =
+  let n_outputs = List.length n.Ndarray.annot.output in
+  let n_batch = List.length n.annot.batch in
+  let dims_to_string kind_dims kind =
+    String.concat ~sep:","
+    @@ List.mapi kind_dims ~f:(fun i d ->
+           let num =
+             match kind with `Input -> n_batch + n_outputs + i | `Output -> n_batch + i | `Batch -> i
+           in
+           match style with
+           | `Axis_size -> Int.to_string d
+           | `Axis_number_and_size -> Int.to_string num ^ ":" ^ Int.to_string d)
+  in
+  let batch_dims = dims_to_string n.annot.batch `Batch in
+  let input_dims = dims_to_string n.annot.input `Input in
+  let output_dims = dims_to_string n.annot.output `Output in
+  if String.is_empty batch_dims && String.is_empty input_dims then output_dims
+  else if String.is_empty batch_dims then input_dims ^ "->" ^ output_dims
+  else if String.is_empty input_dims then batch_dims ^ "|" ^ output_dims
+  else batch_dims ^ "|" ^ input_dims ^ "->" ^ output_dims
+
+let pp_tensor_inline fmt n =
+  let axes_spec =
+    if List.exists ~f:(( = ) 1) n.Ndarray.annot.input then Some (get_shape_string n) else None
+  in
   let a = n.Ndarray.annot in
   let num_batch_axes = List.length a.batch in
   let num_output_axes = List.length a.output in
@@ -53,8 +77,16 @@ let default_display_indices ~num_batch_axes ~num_output_axes ~num_input_axes ~di
   in
   loop 1
 
-let default_value_prec = ref Ndarray.single
-let default_grad_prec = ref Ndarray.single
+let pp_tensor ?shape_style ?entries_per_axis fmt n =
+  let dims = Ndarray.dims n.Ndarray.array in
+  let prefix = get_shape_string ?style:shape_style n in
+  let indices =
+    default_display_indices ~num_batch_axes:(List.length n.annot.batch)
+      ~num_output_axes:(List.length n.annot.output) ~num_input_axes:(List.length n.annot.input) ~dims
+  in
+  Ndarray.pp_tensor fmt ~prefix ?entries_per_axis ~indices n.array
+
+let default_prec = ref Ndarray.single
 (*
    let create ?(batch=[]) ?(input=[]) ?(output=[]) values =
 *)
