@@ -29,7 +29,118 @@ let get_node id =
 
 (** *** Printing. *** *)
 
-let print_formula ~with_grad ~with_code ?(with_low_level = false) (style : Node.array_print_style) m =
+let ndarray_dims_to_string ?(with_axis_numbers = false) arr =
+  Nd.precision_string arr ^ " prec " ^ Nd.int_dims_to_string ~with_axis_numbers @@ Nd.dims arr
+
+(** Converts ID, label and the dimensions of a node to a string. *)
+let node_header n =
+  let v_dims_s = ndarray_dims_to_string n.node.value in
+  let g_dims_s = match n.node.grad with None -> "<no-grad>" | Some grad -> ndarray_dims_to_string grad in
+  let dims_s =
+    if String.equal v_dims_s g_dims_s then "dims " ^ v_dims_s
+    else "dims val " ^ v_dims_s ^ " grad " ^ g_dims_s
+  in
+  let desc_l = match n.desc_label with None -> "" | Some l -> " " ^ l in
+  "#" ^ Int.to_string n.id ^ desc_l ^ " op " ^ n.op_label ^ " " ^ dims_s ^ " ["
+  ^ String.concat ~sep:"," (List.map n.children ~f:(fun { sub_node = { id; _ }; _ } -> Int.to_string id))
+  ^ "]"
+(*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box n.label)*)
+
+type array_print_style =
+  [ `Default
+    (** The inner rectangles comprise both an input and an output axis, if available. Similarly,
+      the outer rectangle comprises a second-from-end input axis and a second-from-end output axis,
+      if available. At least one batch axis is output, when available.
+      The axes that couldn't be output are printed at position/dimension [0]. *)
+  | `N5_layout of string
+    (** The string should provide exclusively non-negative integer pseudo-labels. The numbers [0]-[4] represent
+      the priorities of the axes to be printed out, where the priorities correspond to, from highest:
+      horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the outer
+      rectangle, repetition (see also [Node.pp_print]). The numbers [n >= 5] stand for the actual
+      positions [n - 5] within the corresponding axes. *)
+  | `Label_layout of (string * int) list
+    (** The association from axis labels to integers. The negative numbers [-5] to [-1] represent
+      the priorities of the axes to be printed out, where the priorities correspond to, from highest:
+      horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the outer
+      rectangle, repetition (as above). The numbers [n >= 0] stand for the actual positions
+      within the corresponding axes. Unspecified axes are printed at position [0]. *)
+  | `Inline
+    (** The tensors are printed linearly, in a bracketed manner, optionally prefixed with the labels
+        specification. Note that the syntax causes ambiguity for 1-dimensional input axes (underscores are
+        used for axes without explicit labels); when there is a 1-dimensional input axis, we output
+        the labels specification even if there are no axis labels as a way to display the number of axes.
+        The axis nesting is right-to-left (rightmost is innermost).
+        The input axes are innermost and the batch axes outermost. The input axes use [,] as a separator
+        and [()] as axis delimiters, but the delimiter for the outermost (i.e. leftmost) axis is omitted.
+        The output axes use [;] as a separator and [[]] as axis delimiters (obligatory).
+        The batch axes use [;] as a separator and [[||]] as axis delimiters (obligatory). *)
+  ]
+(** We print out up to 5 axes when printing a tensor, as a grid (outer rectangle) of (inner)
+    rectangles, possibly repeated (screens). *)
+
+let to_dag ?(single_node = false) ?entries_per_axis ?extra_prefix ~with_id ~with_value ~with_grad n =
+  let rec to_dag { sub_node = n; computed_externally } : PrintBox_utils.dag =
+    let id = Int.to_string n.id in
+    let children = if single_node then [] else List.map ~f:to_dag n.children in
+    let desc_l = match n.desc_label with None -> "" | Some l -> l ^ " " in
+    let op_l = match n.op_label with "" -> "" | l -> "<" ^ l ^ ">" in
+    let prefix = "[" ^ id ^ "] " ^ desc_l ^ op_l in
+    let prefix =
+      match extra_prefix with
+      | None -> prefix
+      | Some f ->
+          let extra = f n.annot in
+          if String.is_empty extra then prefix else prefix ^ " " ^ extra
+    in
+    let labels = !(n.axis_labels) in
+    let indices = !(n.default_display_indices) in
+    match (computed_externally, with_value, with_grad, n.node.grad) with
+    | true, _, _, _ -> `Embed_subtree_ID (Int.to_string n.id)
+    | _, false, false, _ | _, false, true, None ->
+        let txt = if with_id then prefix else desc_l ^ n.op_label in
+        `Subtree_with_ID (id, `Tree (`Text txt, children))
+    | _, true, false, _ | _, true, true, None ->
+        let node =
+          `Box (Nd.render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices n.node.value)
+        in
+        `Subtree_with_ID (id, `Tree (node, children))
+    | _, false, true, Some grad ->
+        let prefix = prefix ^ " Gradient" in
+        let node = `Box (Nd.render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices grad) in
+        `Subtree_with_ID (id, `Tree (node, children))
+    | _, true, true, Some grad ->
+        let node =
+          let value = Nd.render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices n.node.value in
+          let grad =
+            Nd.render_tensor ~brief:true ~prefix:"Gradient" ?entries_per_axis ~labels ~indices grad
+          in
+          `Vlist (false, [ `Box value; `Box grad ])
+        in
+        `Subtree_with_ID (id, `Tree (node, children))
+  in
+  to_dag { sub_node = n; computed_externally = false }
+
+let to_printbox ?single_node ?entries_per_axis ?extra_prefix ?(with_id = false) ?(with_value = true)
+    ~with_grad ~depth n_id =
+  to_dag ?single_node ?entries_per_axis ?extra_prefix ~with_id ~with_value ~with_grad n_id
+  |> PrintBox_utils.reformat_dag depth
+
+let print_node_preamble ?(print_missing = true) ?extra_prefix n =
+  try
+    let prefix = node_header n in
+    let prefix =
+      match extra_prefix with
+      | None -> prefix
+      | Some f ->
+          let extra = f n.annot in
+          if String.is_empty extra then prefix else prefix ^ " " ^ extra
+    in
+    Caml.Format.printf "Node %s" prefix;
+    Caml.Format.printf "\n%!"
+  with Not_found_s _ | Caml.Not_found ->
+    if print_missing then Caml.Format.printf "Node #%d does not exist.\n%!" n.id
+
+let print_formula ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style) m =
   let open Formula in
   let sh = m.shape in
   let label =
@@ -116,7 +227,7 @@ let print_formula ~with_grad ~with_code ?(with_low_level = false) (style : Node.
     | None -> ());
   Stdio.printf "\n%!"
 
-let print_global_roots ~with_grad ~with_code (style : Node.array_print_style) =
+let print_global_roots ~with_grad ~with_code (style : array_print_style) =
   let open Formula in
   List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (id, root) ->
       assert (id = root.id);

@@ -101,7 +101,7 @@ let setup_data hs_pat (hs_typ, slot, hs) =
   let loc = hs.pexp_loc in
   match hs_typ with
   | Formula_nf ->
-      ( Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].nonform_forward_body]),
+      ( Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].nondiff_forward_body]),
         hs_typ,
         slot,
         [%expr CDSL.value_of_id [%e pat2expr hs_pat].id] )
@@ -115,7 +115,7 @@ let setup_node_id hs_pat (hs_typ, slot, hs) =
   let loc = hs.pexp_loc in
   match hs_typ with
   | Formula_nf ->
-      ( Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].nonform_forward_body]),
+      ( Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].nondiff_forward_body]),
         hs_typ,
         slot,
         [%expr [%e pat2expr hs_pat].id] )
@@ -242,11 +242,11 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
   | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections]))] ->
       let zero_out, accu_op = assignment_op accu_op in
       let lhs_setup, _lhs_typ, _lhs_slot, lhs =
-        setup_data [%pat? nonform___lhs] @@ translate ?desc_label ?proj_in_scope lhs
+        setup_data [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
       in
       let _, bin_op = binary_op bin_op in
-      let rhs1_setup, _rhs1_typ, _rhs1_slot, rhs1 = setup_data [%pat? nonform___rhs1] @@ translate rhs1 in
-      let rhs2_setup, _rhs2_typ, _rhs2_slot, rhs2 = setup_data [%pat? nonform___rhs2] @@ translate rhs2 in
+      let rhs1_setup, _rhs1_typ, _rhs1_slot, rhs1 = setup_data [%pat? nondiff___rhs1] @@ translate rhs1 in
+      let rhs2_setup, _rhs2_typ, _rhs2_slot, rhs2 = setup_data [%pat? nondiff___rhs2] @@ translate rhs2 in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let body =
         [%expr
@@ -268,10 +268,10 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
       let zero_out, accu_op = assignment_op accu_op in
       let lhs_setup, _lhs_typ, _lhs_slot, lhs =
-        setup_data [%pat? nonform___lhs] @@ translate ?desc_label ?proj_in_scope lhs
+        setup_data [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
       in
       let _, un_op = unary_op un_op in
-      let rhs_setup, _rhs_typ, _rhs_slot, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
+      let rhs_setup, _rhs_typ, _rhs_slot, rhs = setup_data [%pat? nondiff___rhs] @@ translate rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let body =
         [%expr
@@ -290,9 +290,9 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
   | [%expr [%e? accu_op] [%e? lhs] ([%e? rhs] ~projections:[%e? projections])] ->
       let zero_out, accu_op = assignment_op accu_op in
       let lhs_setup, _lhs_typ, _lhs_slot, lhs =
-        setup_data [%pat? nonform___lhs] @@ translate ?desc_label ?proj_in_scope lhs
+        setup_data [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
       in
-      let rhs_setup, _rhs_typ, _rhs_slot, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
+      let rhs_setup, _rhs_typ, _rhs_slot, rhs = setup_data [%pat? nondiff___rhs] @@ translate rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let body =
         [%expr
@@ -323,14 +323,14 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       in
       let zero_out, accu_op = assignment_op accu_op in
       let lhs_setup, lhs_typ, _lhs_slot, lhs_id =
-        setup_node_id [%pat? nonform___lhs] @@ translate ?desc_label ?proj_in_scope lhs
+        setup_node_id [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
       in
       let _, bin_op = binary_op bin_op in
       let rhs1_setup, rhs1_typ, _rhs1_slot, rhs1_id =
-        setup_node_id [%pat? nonform___rhs1] @@ translate rhs1
+        setup_node_id [%pat? nondiff___rhs1] @@ translate rhs1
       in
       let rhs2_setup, rhs2_typ, _rhs2_slot, rhs2_id =
-        setup_node_id [%pat? nonform___rhs2] @@ translate rhs2
+        setup_node_id [%pat? nondiff___rhs2] @@ translate rhs2
       in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let lhs_is_grad = if is_grad lhs_typ then [%expr true] else [%expr false] in
@@ -365,10 +365,10 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       in
       let zero_out, accu_op = assignment_op accu_op in
       let lhs_setup, lhs_typ, _lhs_slot, lhs_id =
-        setup_node_id [%pat? nonform___lhs] @@ translate ?desc_label ?proj_in_scope lhs
+        setup_node_id [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
       in
       let _, un_op = unary_op un_op in
-      let rhs_setup, rhs_typ, _rhs_slot, rhs_id = setup_node_id [%pat? nonform___rhs] @@ translate rhs in
+      let rhs_setup, rhs_typ, _rhs_slot, rhs_id = setup_node_id [%pat? nondiff___rhs] @@ translate rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let lhs_is_grad = if is_grad lhs_typ then [%expr true] else [%expr false] in
       let rhs_is_grad = if is_grad rhs_typ then [%expr true] else [%expr false] in
@@ -383,9 +383,9 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
   | [%expr [%e? accu_op] [%e? lhs] ([%e? rhs] ~logic:[%e? logic])] ->
       let zero_out, accu_op = assignment_op accu_op in
       let lhs_setup, _lhs_typ, _lhs_slot, lhs_id =
-        setup_node_id [%pat? nonform___lhs] @@ translate ?desc_label ?proj_in_scope lhs
+        setup_node_id [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
       in
-      let rhs_setup, _rhs_typ, _rhs_slot, rhs_id = setup_node_id [%pat? nonform___rhs] @@ translate rhs in
+      let rhs_setup, _rhs_typ, _rhs_slot, rhs_id = setup_node_id [%pat? nondiff___rhs] @@ translate rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let body =
         [%expr
@@ -401,11 +401,11 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
     when is_assignment accu_ident && is_binary_op binop_ident && Option.value proj_in_scope ~default:false ->
       let zero_out, accu_op = assignment_op accu_op in
       let lhs_setup, _lhs_typ, lhs_slot, lhs =
-        setup_data [%pat? nonform___lhs] @@ translate ?desc_label ?proj_in_scope lhs
+        setup_data [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
       in
       let _, bin_op = binary_op bin_op in
-      let rhs1_setup, _rhs1_typ, rhs1_slot, rhs1 = setup_data [%pat? nonform___rhs1] @@ translate rhs1 in
-      let rhs2_setup, _rhs2_typ, rhs2_slot, rhs2 = setup_data [%pat? nonform___rhs2] @@ translate rhs2 in
+      let rhs1_setup, _rhs1_typ, rhs1_slot, rhs1 = setup_data [%pat? nondiff___rhs1] @@ translate rhs1 in
+      let rhs2_setup, _rhs2_typ, rhs2_slot, rhs2 = setup_data [%pat? nondiff___rhs2] @@ translate rhs2 in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let projections =
         let project_lhs = project_xhs "LHS" lhs.pexp_loc lhs_slot in
@@ -444,10 +444,10 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
     when is_assignment accu_ident && is_unary_op unop_ident && Option.value proj_in_scope ~default:false ->
       let zero_out, accu_op = assignment_op accu_op in
       let lhs_setup, _lhs_typ, lhs_slot, lhs =
-        setup_data [%pat? nonform___lhs] @@ translate ?desc_label ?proj_in_scope lhs
+        setup_data [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
       in
       let _, un_op = unary_op un_op in
-      let rhs_setup, _rhs_typ, rhs_slot, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
+      let rhs_setup, _rhs_typ, rhs_slot, rhs = setup_data [%pat? nondiff___rhs] @@ translate rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let project_lhs = project_xhs "LHS" lhs.pexp_loc lhs_slot in
       let project_rhs1 = project_xhs "RHS1" rhs.pexp_loc rhs_slot in
@@ -477,9 +477,9 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
       let zero_out, accu_op = assignment_op accu_op in
       let lhs_setup, _lhs_typ, lhs_slot, lhs =
-        setup_data [%pat? nonform___lhs] @@ translate ?desc_label ?proj_in_scope lhs
+        setup_data [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
       in
-      let rhs_setup, _rhs_typ, rhs_slot, rhs = setup_data [%pat? nonform___rhs] @@ translate rhs in
+      let rhs_setup, _rhs_typ, rhs_slot, rhs = setup_data [%pat? nondiff___rhs] @@ translate rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let project_lhs = project_xhs "LHS" lhs.pexp_loc lhs_slot in
       let project_rhs1 = project_xhs "RHS1" rhs.pexp_loc rhs_slot in
@@ -511,14 +511,14 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
     when is_assignment accu_ident && is_binary_op binop_ident ->
       let zero_out, accu_op = assignment_op accu_op in
       let lhs_setup, lhs_typ, _lhs_slot, lhs_id =
-        setup_node_id [%pat? nonform___lhs] @@ translate ?desc_label ?proj_in_scope lhs
+        setup_node_id [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
       in
       let logic, bin_op = binary_op bin_op in
       let rhs1_setup, rhs1_typ, _rhs1_slot, rhs1_id =
-        setup_node_id [%pat? nonform___rhs1] @@ translate rhs1
+        setup_node_id [%pat? nondiff___rhs1] @@ translate rhs1
       in
       let rhs2_setup, rhs2_typ, _rhs2_slot, rhs2_id =
-        setup_node_id [%pat? nonform___rhs2] @@ translate rhs2
+        setup_node_id [%pat? nondiff___rhs2] @@ translate rhs2
       in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let lhs_is_grad = if is_grad lhs_typ then [%expr true] else [%expr false] in
@@ -541,10 +541,10 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
       let zero_out, accu_op = assignment_op accu_op in
       let lhs_setup, lhs_typ, _lhs_slot, lhs_id =
-        setup_node_id [%pat? nonform___lhs] @@ translate ?desc_label ?proj_in_scope lhs
+        setup_node_id [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
       in
       let logic, un_op = unary_op un_op in
-      let rhs_setup, rhs_typ, _rhs_slot, rhs_id = setup_node_id [%pat? nonform___rhs] @@ translate rhs in
+      let rhs_setup, rhs_typ, _rhs_slot, rhs_id = setup_node_id [%pat? nondiff___rhs] @@ translate rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let lhs_is_grad = if is_grad lhs_typ then [%expr true] else [%expr false] in
       let rhs_is_grad = if is_grad rhs_typ then [%expr true] else [%expr false] in
@@ -560,9 +560,9 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
     when is_assignment op_ident ->
       let zero_out, accu_op = assignment_op accu_op in
       let lhs_setup, lhs_typ, _lhs_slot, lhs_id =
-        setup_node_id [%pat? nonform___lhs] @@ translate ?desc_label ?proj_in_scope lhs
+        setup_node_id [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
       in
-      let rhs_setup, rhs_typ, _rhs_slot, rhs_id = setup_node_id [%pat? nonform___rhs] @@ translate rhs in
+      let rhs_setup, rhs_typ, _rhs_slot, rhs_id = setup_node_id [%pat? nondiff___rhs] @@ translate rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let lhs_is_grad = if is_grad lhs_typ then [%expr true] else [%expr false] in
       let rhs_is_grad = if is_grad rhs_typ then [%expr true] else [%expr false] in

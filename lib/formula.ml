@@ -2,22 +2,25 @@
 
 open Base
 
-type form = {
-  backprop_body : Code.t;
+open Arrayjit
+
+type diff = {
+  grad : Low_level.ndarray;
+  backprop_body : High_level.t;
       (** Performs backpropagation for the formula at each session step, which typically means adding
       partial gradients to the gradient tensor of the subformulas. *)
   needs_gradient : bool;
       (** An optimization setting: whether gradients should be backpropagated into the formula.
       If any subformula needs gradients, this formula also needs gradients. *)
 }
-[@@deriving sexp]
+[@@deriving sexp_of]
 
 type t = {
-  forward_body : Code.t;  (** Computes the values at each session step. *)
-  form : form option;
-  nonform_forward_body : Code.t;  (** Same as [forward_body] if [form] is [None], otherwise [Code.Noop]. *)
-  id : int;
-  node : Code.node;  (** Tracks the computation node. *)
+  forward_body : High_level.t;  (** Computes the values at each session step. *)
+  diff : diff option;
+  nondiff_forward_body : High_level.t;  (** Same as [forward_body] if [diff] is [None], otherwise [Code.Noop]. *)
+  id : int;  (** Same as [value.id]. *)
+  value : Low_level.ndarray;
   shape_logic : Shape.logic;
       (** How to do the last update of [t.shape] when finalizing the formula.
       It is stored with the formula for debugging (shape inference does not need to retrieve it). *)
@@ -42,7 +45,7 @@ let global_roots = ref @@ Map.empty (module Int)
     first in postfix order while computing [t], then in prefix order by iterating over this stack. *)
 let session_shape_updates : Shape.update_step list ref = ref []
 
-(** This code will usually be executed only once, after the shapes are inferred. But it will also
+(** This code will usually be executed once, after the shapes are inferred. But it will also
     be executed by each [Session.refresh_session ~regenerate:true] and 
     [Session.refresh_session ~reinit:true] call, except if [~force_no_init:true].
     Execution potentially in parallel. *)
@@ -172,9 +175,9 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
     Code.(
       match
         ( m1_processed,
-          (if is_form then m1.forward_body else m1.nonform_forward_body),
+          (if is_form then m1.forward_body else m1.nondiff_forward_body),
           m2_processed,
-          if is_form then m2.forward_body else m2.nonform_forward_body )
+          if is_form then m2.forward_body else m2.nondiff_forward_body )
       with
       | true, _, true, _ | true, _, _, Noop | _, Noop, true, _ | _, Noop, _, Noop -> op_body
       | false, m1_body, false, m2_body when m1_first -> Seq (ParHint (m1_body, m2_body), op_body)
@@ -188,7 +191,7 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
     {
       forward_body;
       form = None;
-      nonform_forward_body = forward_body;
+      nondiff_forward_body = forward_body;
       id;
       node = n;
       shape_logic;
@@ -234,7 +237,7 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
       {
         forward_body;
         form;
-        nonform_forward_body = Code.Noop;
+        nondiff_forward_body = Code.Noop;
         id;
         node = n;
         shape_logic;
@@ -275,14 +278,14 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
   let forward_body =
     if m1_processed then op_body
     else if is_form then Code.Seq (m1.forward_body, op_body)
-    else Seq (m1.nonform_forward_body, op_body)
+    else Seq (m1.nondiff_forward_body, op_body)
   in
   session_initializations := create ~id Value shape :: !session_initializations;
   if not is_form then
     {
       forward_body;
       form = None;
-      nonform_forward_body = forward_body;
+      nondiff_forward_body = forward_body;
       id;
       node = n;
       shape_logic;
@@ -317,7 +320,7 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
       {
         forward_body;
         form;
-        nonform_forward_body = Code.Noop;
+        nondiff_forward_body = Code.Noop;
         id;
         node = n;
         shape_logic;
@@ -391,7 +394,7 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
     {
       forward_body;
       form = None;
-      nonform_forward_body = forward_body;
+      nondiff_forward_body = forward_body;
       id;
       node = n;
       shape_logic;
@@ -410,7 +413,7 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
       {
         forward_body;
         form;
-        nonform_forward_body = Code.Noop;
+        nondiff_forward_body = Code.Noop;
         id;
         node = n;
         shape_logic;
