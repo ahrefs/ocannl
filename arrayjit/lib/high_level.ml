@@ -8,8 +8,9 @@ type fetch_op = Constant of float | Synthetic of t | Imported of Low_level.globa
 [@@deriving sexp_of]
 
 and t =
+  | Noop
   | Seq of t * t
-      (** These tasks can only benefit from mutual parallelism via operator fusion / loop fusion. *)
+  | Block_comment of string * t
   | Accum_binop of {
       zero_out : bool;
       accum : Low_level.binop;
@@ -28,14 +29,7 @@ and t =
       projections : unit -> Indexing.projections;
     }
   | Fetch of { tensor : ndarray; fetch_op : fetch_op; dims : unit -> int array }
-  | Block_comment of string * t
-  | Noop
 [@@deriving sexp_of]
-
-(** If a backend does not support detection of when [ParHint (c1, c2)] is safe to parallelize,
-    one can try setting [force_unsafe_parhint] to always parallelize if the particular code
-    does not have a form of computation sharing that would get broken. *)
-let force_unsafe_parhint = ref false
 
 module Nd = Ndarray
 
@@ -145,8 +139,7 @@ let to_low_level (code : t) : Low_level.t =
     | Seq (c1, c2) -> Seq (loop c1, loop c2)
     | Fetch { tensor; fetch_op = Constant 0.0; dims = _ } -> Zero_out tensor
     | Fetch { tensor; fetch_op = Constant c; dims } ->
-        Low_level.loop_over_dims (dims ()) ~body:(fun idcs ->
-            Set (tensor, idcs, Constant c))
+        Low_level.loop_over_dims (dims ()) ~body:(fun idcs -> Set (tensor, idcs, Constant c))
         (* let rec loop rev_idcs = function
              | [] -> Set (tensor, Array.of_list_rev rev_idcs, Constant c)
              | d :: product when Indexing.dim_1 d -> loop (Fixed_idx 0 :: rev_idcs) product
@@ -171,11 +164,11 @@ let to_low_level (code : t) : Low_level.t =
 
 let compile_proc ~name ?(verbose = false) ~for_step_update proc =
   if verbose then Stdio.printf "Code.compile_proc: generating the initial low-level code\n%!";
-  let llc = to_low_level proc in
   if !Low_level.with_debug && !Low_level.keep_files_in_run_directory then (
     let fname = name ^ ".hlc" in
     let f = Stdio.Out_channel.create fname in
     let ppf = Caml.Format.formatter_of_out_channel f in
     Caml.Format.pp_set_margin ppf !Low_level.code_sexp_margin;
     Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t proc));
+  let llc = to_low_level proc in
   Low_level.compile_proc ~name ~verbose ~for_step_update llc
