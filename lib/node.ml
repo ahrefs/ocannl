@@ -1,6 +1,8 @@
 open Base
 (** Computation nodes; global state not directly related to code generation or session management. *)
 
+open Arrayjit
+
 let num_domains = Caml.Domain.recommended_domain_count ()
 let task_pool = Domainslib.Task.setup_pool ~name:"session_task_pool" ~num_domains ()
 
@@ -258,6 +260,9 @@ let get_tensor tensor =
   match tensor.Node.field with Value -> Some n.node.value | Grad -> n.node.grad
 
 let get_prec ptr = match get_tensor ptr with None -> Nd.Void_prec | Some arr -> Nd.get_prec arr
+
+let default_value_prec = ref Ndarray.single
+let default_grad_prec = ref Ndarray.single
 
 let create_node_helper data shape =
   let annot = annot shape in

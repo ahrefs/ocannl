@@ -88,7 +88,7 @@ let get_tensor ~traced_store n =
   let ptr = Ndarray.ptr n in
   Hashtbl.find_or_add tensors ptr ~default:(fun () ->
       let tn = Low_level.get_node traced_store n in
-      let host_size_in_bytes = Ndarray.size_in_bytes (Some n.array) in
+      let host_size_in_bytes = Ndarray.size_in_bytes n.array in
       let dims = n.annot.dims in
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
       let hosted = if host_size_in_bytes = 0 then None else Some n.array in

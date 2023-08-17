@@ -125,25 +125,6 @@ let fprint_code ppf c =
   Caml.Format.pp_set_margin ppf !code_sexp_margin;
   Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_t c
 
-let interpreter_error_message ~name ~prefix ?extra_error_msg ~contents exc =
-  let backtrace = Caml.Printexc.get_backtrace () in
-  let exc_str = Caml.Printexc.to_string exc in
-  let message = Buffer.create (String.length contents + String.length backtrace + String.length exc_str) in
-  let msg = Buffer.add_string message in
-  msg name;
-  msg ": ";
-  msg prefix;
-  msg exc_str;
-  msg "\n";
-  msg backtrace;
-  (match extra_error_msg with
-  | None -> ()
-  | Some extra ->
-      msg "\nIn the context of:\n";
-      msg extra);
-  msg contents;
-  Buffer.contents message
-
 (** *** Optimization *** *)
 
 type virtualize_settings = {

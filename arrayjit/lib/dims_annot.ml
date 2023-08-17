@@ -8,7 +8,7 @@ let pp_tensor_inline fmt ?labels_spec n =
   let num_batch_axes = List.length a.batch in
   let num_output_axes = List.length a.output in
   let num_input_axes = List.length a.input in
-  Ndarray.pp_tensor_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?labels_spec n.array
+  Ndarray.pp_tensor_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?axes_spec n.array
 
 let default_display_indices ~num_batch_axes ~num_output_axes ~num_input_axes ~dims =
   let axes = Array.create ~len:(Array.length dims) 0 in

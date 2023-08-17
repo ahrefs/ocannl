@@ -74,7 +74,7 @@ let print_formula ~with_grad ~with_code ?(with_low_level = false) (style : Node.
     || Shape.(List.exists ~f:Shape.dim_1 @@ list_of_dims @@ dims_of_kind Input sh)
   in
   let labels = Shape.axis_map_to_dims_index ~default:"" sh.axis_labels in
-  let labels_spec = if needs_spec then Some (Shape.to_string_hum ~style:`Only_labels sh) else None in
+  let axes_spec = if needs_spec then Some (Shape.to_string_hum ~style:`Only_labels sh) else None in
   let num_axes kind = List.length Shape.(list_of_dims @@ dims_of_kind kind sh) in
   let num_batch_axes = num_axes Shape.AxisKey.Batch in
   let num_input_axes = num_axes Shape.AxisKey.Input in
@@ -82,7 +82,7 @@ let print_formula ~with_grad ~with_code ?(with_low_level = false) (style : Node.
   (match style with
   | `Inline ->
       Ndarray.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
-        ?labels_spec m.node.node.value
+        ?axes_spec m.node.node.value
   | _ ->
       Ndarray.pp_tensor Caml.Format.std_formatter ~prefix ~labels ~indices m.node.node.value;
       Caml.Format.print_newline ());
@@ -90,7 +90,7 @@ let print_formula ~with_grad ~with_code ?(with_low_level = false) (style : Node.
      match (style, m.node.node.grad) with
      | `Inline, Some grad ->
          Ndarray.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
-           ?labels_spec grad;
+           ?axes_spec grad;
          Caml.Format.print_newline ()
      | _, Some grad ->
          Ndarray.pp_tensor Caml.Format.std_formatter ~prefix:(prefix ^ " Gradient ") ~labels ~indices grad;

@@ -237,7 +237,7 @@ let size_in_bytes n =
   (* Cheating here because 1 number Bigarray is same size as empty Bigarray:
      it's more informative to report the cases differently. *)
   let f arr = if Array.is_empty @@ A.dims arr then 0 else A.size_in_bytes arr in
-  Option.value_map ~f:(map { f }) ~default:0 n
+  map { f } n
 
 let retrieve_2d_points ?from_axis ~xdim ~ydim arr =
   let dims = dims arr in
@@ -436,12 +436,12 @@ let pp_tensor fmt ?prefix ?entries_per_axis ?labels ~indices arr =
   PrintBox_text.pp fmt @@ render_tensor ?prefix ?entries_per_axis ?labels ~indices arr
 
 (** Prints the whole tensor in an inline syntax. *)
-let pp_tensor_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?labels_spec arr =
+let pp_tensor_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?axes_spec arr =
   let dims = dims arr in
   let num_all_axes = num_batch_axes + num_output_axes + num_input_axes in
   let open Caml.Format in
   let ind = Array.copy dims in
-  (match labels_spec with None -> () | Some spec -> fprintf fmt "\"%s\" " spec);
+  (match axes_spec with None -> () | Some spec -> fprintf fmt "\"%s\" " spec);
   let rec loop axis =
     let sep =
       if axis < num_batch_axes then ";" else if axis < num_batch_axes + num_output_axes then ";" else ","
