@@ -19,7 +19,7 @@
   utils
   PrintBox_utils
   shape
-  formula
+  tensor
   operation
   session)
  (modes byte native)

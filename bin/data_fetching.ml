@@ -14,8 +14,8 @@ let () =
   let%nn_dt session_step ~o:1 = n =+ 1 in
   let%nn_dt fetch_callback ~b:1 ~o:(2, 3) = n =+ session_step *. 100 in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ fetch_callback;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ fetch_callback;
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ fetch_callback;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ fetch_callback;
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ fetch_callback
+  print_tensor ~with_code:false ~with_grad:false `Default @@ fetch_callback

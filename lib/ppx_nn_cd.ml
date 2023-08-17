@@ -9,12 +9,12 @@ let ndarray_op ?desc_label ?axis_labels ?label expr =
   let edims dims = Ast_builder.Default.elist ~loc dims in
   let op =
     match (axis_labels, label) with
-    | None, None -> [%expr Formula.NFDSL.ndarray]
-    | Some axis_labels, None -> [%expr Formula.NFDSL.ndarray ~axis_labels:[%e axis_labels]]
-    | None, Some label -> [%expr Formula.NFDSL.ndarray ~label:[%e label]]
+    | None, None -> [%expr Tensor.NFDSL.ndarray]
+    | Some axis_labels, None -> [%expr Tensor.NFDSL.ndarray ~axis_labels:[%e axis_labels]]
+    | None, Some label -> [%expr Tensor.NFDSL.ndarray ~label:[%e label]]
     | Some axis_labels, Some label ->
         [%expr
-          Formula.NFDSL.ndarray ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_labels:[%e axis_labels]
+          Tensor.NFDSL.ndarray ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_labels:[%e axis_labels]
             ~label:[%e label]]
   in
   [%expr
@@ -23,8 +23,8 @@ let ndarray_op ?desc_label ?axis_labels ?label expr =
 
 type expr_type =
   | Code
-  | Formula_nf
-  | Formula_or_node_or_data
+  | Tensor_nf
+  | Tensor_or_node_or_data
   | Grad_of_source of expression
   | Grad_of_code of expression
   | Unknown
@@ -100,12 +100,12 @@ let rec data_of_code hs =
 let setup_data hs_pat (hs_typ, slot, hs) =
   let loc = hs.pexp_loc in
   match hs_typ with
-  | Formula_nf ->
+  | Tensor_nf ->
       ( Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].nondiff_forward_body]),
         hs_typ,
         slot,
         [%expr CDSL.value_of_id [%e pat2expr hs_pat].id] )
-  | Unknown | Formula_or_node_or_data -> (None, hs_typ, slot, [%expr CDSL.value_of_id [%e hs].id])
+  | Unknown | Tensor_or_node_or_data -> (None, hs_typ, slot, [%expr CDSL.value_of_id [%e hs].id])
   | Grad_of_source expr -> (None, hs_typ, slot, [%expr CDSL.grad_of_id [%e expr].id])
   | Grad_of_code expr ->
       (Some (hs_pat, hs, pat2expr hs_pat), hs_typ, slot, [%expr CDSL.grad_of_id [%e data_of_code expr].id])
@@ -114,13 +114,13 @@ let setup_data hs_pat (hs_typ, slot, hs) =
 let setup_node_id hs_pat (hs_typ, slot, hs) =
   let loc = hs.pexp_loc in
   match hs_typ with
-  | Formula_nf ->
+  | Tensor_nf ->
       ( Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].nondiff_forward_body]),
         hs_typ,
         slot,
         [%expr [%e pat2expr hs_pat].id] )
   | Grad_of_source expr -> (None, hs_typ, slot, [%expr [%e expr].id])
-  | Unknown | Formula_or_node_or_data -> (None, hs_typ, slot, [%expr [%e hs].id])
+  | Unknown | Tensor_or_node_or_data -> (None, hs_typ, slot, [%expr [%e hs].id])
   | Grad_of_code expr -> (Some (hs_pat, hs, pat2expr hs_pat), hs_typ, slot, [%expr [%e data_of_code expr].id])
   | Code -> (Some (hs_pat, hs, pat2expr hs_pat), hs_typ, slot, [%expr [%e data_of_code hs].id])
 
@@ -155,42 +155,42 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
   let loc = expr.pexp_loc in
   match expr with
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
-      ( Formula_nf,
+      ( Tensor_nf,
         Undet,
-        [%expr Formula.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] [%e expr]] )
+        [%expr Tensor.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] [%e expr]] )
   | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
-      ( Formula_nf,
+      ( Tensor_nf,
         Undet,
-        [%expr Formula.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] (Float.of_int [%e expr])]
+        [%expr Tensor.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] (Float.of_int [%e expr])]
       )
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
         [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
       let axis = Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None)) in
-      ( Formula_nf,
+      ( Tensor_nf,
         Undet,
         [%expr
-          Formula.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis] [%e f]]
+          Tensor.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis] [%e f]]
       )
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
         [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
       let axis = Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None)) in
-      ( Formula_nf,
+      ( Tensor_nf,
         Undet,
         [%expr
-          Formula.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis]
+          Tensor.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis]
             (Float.of_int [%e i])] )
   | { pexp_desc = Pexp_array _; _ } | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
-      (Formula_nf, Undet, ndarray_op expr)
-  | { pexp_desc = Pexp_ident { txt = Lident ("n" | "lhs"); _ }; _ } -> (Formula_or_node_or_data, LHS, expr)
+      (Tensor_nf, Undet, ndarray_op expr)
+  | { pexp_desc = Pexp_ident { txt = Lident ("n" | "lhs"); _ }; _ } -> (Tensor_or_node_or_data, LHS, expr)
   | { pexp_desc = Pexp_ident { txt = Lident ("n1" | "m1" | "rhs1" | "rhs"); _ }; _ } ->
-      (* [m1], [m2] have their forward code included by [Formula.binop/unop] *)
-      (Formula_or_node_or_data, RHS1, expr)
+      (* [m1], [m2] have their forward code included by [Tensor.binop/unop] *)
+      (Tensor_or_node_or_data, RHS1, expr)
   | { pexp_desc = Pexp_ident { txt = Lident ("n2" | "m2" | "rhs2"); _ }; _ } ->
-      (Formula_or_node_or_data, RHS2, expr)
+      (Tensor_or_node_or_data, RHS2, expr)
   | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_operator op_ident ->
-      (Formula_nf, Undet, expr)
+      (Tensor_nf, Undet, expr)
   | [%expr [%e? expr1] || [%e? expr2]] ->
       (* Check this before the generic application pattern. *)
       let _typ1, _slot1, expr1 = translate ?desc_label ?proj_in_scope expr1 in
@@ -198,12 +198,12 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       (* We could warn if typ is not Code and slot is not Nonslot, but that could be annoying. *)
       (Code, Nonslot, [%expr Code.ParHint ([%e expr1], [%e expr2])])
   | [%expr [%e? expr1] **. [%e? expr2]] ->
-      (* If converting code or a node to a formula was possible we would do it here.
+      (* If converting code or a node to a tensor was possible we would do it here.
          Since it's not, we let OCaml handle the type errors. Same further below. *)
       let _typ1, slot1, expr1 = translate expr1 in
-      ( Formula_nf,
+      ( Tensor_nf,
         slot1,
-        [%expr pointpow ?desc_label:[%e opt_pat2string ~loc desc_label] ~is_form:false [%e expr2] [%e expr1]]
+        [%expr pointpow ?desc_label:[%e opt_pat2string ~loc desc_label] ~is_diff:false [%e expr2] [%e expr1]]
       )
   | [%expr
       [%e? expr1]
@@ -214,30 +214,30 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       let slot =
         Option.value ~default:Undet @@ List.find ~f:(function Undet -> false | _ -> true) [ slot1; slot2 ]
       in
-      ( Formula_nf,
+      ( Tensor_nf,
         slot,
         [%expr NFDSL.einsum ?desc_label:[%e opt_pat2string ~loc desc_label] [%e spec] [%e expr1] [%e expr2]]
       )
   | [%expr [%e? expr1] ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]]
     when String.contains spec_str '>' ->
       let _typ1, slot1, expr1 = translate expr1 in
-      ( Formula_nf,
+      ( Tensor_nf,
         slot1,
         [%expr NFDSL.einsum1 ?desc_label:[%e opt_pat2string ~loc desc_label] [%e spec] [%e expr1]] )
   | [%expr [%e? expr1].grad] -> (
       let typ1, slot1, expr1 = translate ?desc_label ?proj_in_scope expr1 in
       match typ1 with
       | Grad_of_code _ | Grad_of_source _ -> (typ1, slot1, expr1)
-      | Unknown | Formula_or_node_or_data ->
+      | Unknown | Tensor_or_node_or_data ->
           (Grad_of_source expr1, slot1, [%expr CDSL.grad_of_id [%e expr1].id])
       | Code ->
           let id_expr = data_of_code expr1 in
           (Grad_of_code expr1, slot1, [%expr CDSL.grad_of_id [%e id_expr].id])
-      | Formula_nf ->
+      | Tensor_nf ->
           ( Grad_of_source expr1,
             slot1,
             Ast_builder.Default.pexp_extension ~loc
-            @@ Location.error_extensionf ~loc "ppx_ocannl %%nn_cd: non-form formulas do not have a gradient"
+            @@ Location.error_extensionf ~loc "ppx_ocannl %%nn_cd: non-diff tensors do not have a gradient"
           ))
   | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections]))] ->
       let zero_out, accu_op = assignment_op accu_op in
@@ -338,7 +338,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       let rhs2_is_grad = if is_grad rhs2_typ then [%expr true] else [%expr false] in
       let body =
         [%expr
-          Formula.raw_binop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id]
+          Tensor.raw_binop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id]
             ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e bin_op] ~rhs1_id:[%e rhs1_id]
             ~rhs1_is_grad:[%e rhs1_is_grad] ~rhs2_id:[%e rhs2_id] ~rhs2_is_grad:[%e rhs2_is_grad]
             ~logic:[%e logic]]
@@ -374,7 +374,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       let rhs_is_grad = if is_grad rhs_typ then [%expr true] else [%expr false] in
       let body =
         [%expr
-          Formula.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id]
+          Tensor.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id]
             ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e un_op] ~rhs_id:[%e rhs_id] ~rhs_is_grad:[%e rhs_is_grad]
             ~logic:[%e logic]]
       in
@@ -389,7 +389,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let body =
         [%expr
-          Formula.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id] ~op:Code.Identity
+          Tensor.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id] ~op:Code.Identity
             ~rhs_id:[%e rhs_id] ~logic:[%e logic]]
       in
       let setups = List.filter_map ~f:Fn.id [ lhs_setup; rhs_setup ] in
@@ -526,7 +526,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       let rhs2_is_grad = if is_grad rhs2_typ then [%expr true] else [%expr false] in
       let body =
         [%expr
-          Formula.raw_binop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id]
+          Tensor.raw_binop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id]
             ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e bin_op] ~rhs1_id:[%e rhs1_id]
             ~rhs1_is_grad:[%e rhs1_is_grad] ~rhs2_id:[%e rhs2_id] ~rhs2_is_grad:[%e rhs2_is_grad]
             ~logic:[%e logic]]
@@ -550,7 +550,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       let rhs_is_grad = if is_grad rhs_typ then [%expr true] else [%expr false] in
       let body =
         [%expr
-          Formula.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id]
+          Tensor.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id]
             ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e un_op] ~rhs_id:[%e rhs_id] ~rhs_is_grad:[%e rhs_is_grad]
             ~logic:[%e logic]]
       in
@@ -568,7 +568,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       let rhs_is_grad = if is_grad rhs_typ then [%expr true] else [%expr false] in
       let body =
         [%expr
-          Formula.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id]
+          Tensor.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id]
             ~lhs_is_grad:[%e lhs_is_grad] ~op:Code.Identity ~rhs_id:[%e rhs_id] ~rhs_is_grad:[%e rhs_is_grad]
             ~logic:Shape.Pointwise_un]
       in

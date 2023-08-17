@@ -22,7 +22,7 @@ let%expect_test "Synthetic data" =
       ()
   in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ c_data;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ c_data;
   [%expect
     {|
     ┌────────────────────────────────────────┐
@@ -36,7 +36,7 @@ let%expect_test "Synthetic data" =
     │└──────┴───────────────────────────┘    │
     └────────────────────────────────────────┘ |}];
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ c_data;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ c_data;
   [%expect
     {|
     ┌────────────────────────────────────────┐
@@ -50,7 +50,7 @@ let%expect_test "Synthetic data" =
     │└──────┴───────────────────────────┘    │
     └────────────────────────────────────────┘ |}];
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ c_data;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ c_data;
   [%expect
     {|
     ┌────────────────────────────────────────┐

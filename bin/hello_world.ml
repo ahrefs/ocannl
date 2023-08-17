@@ -21,7 +21,7 @@ let hello1 () =
   let%nn_op hoo = ((1 + 1) * hey) - 10 in
   refresh_session ();
   print_node_tree ~with_grad:false ~depth:99 hoo.id;
-  print_formula ~with_code:false ~with_grad:false `Default hoo
+  print_tensor ~with_code:false ~with_grad:false `Default hoo
 (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
 
 let hello2 () =
@@ -33,8 +33,8 @@ let hello2 () =
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   refresh_session ();
   print_preamble ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ hey;
-  print_formula ~with_code:false ~with_grad:false `Default @@ y
+  print_tensor ~with_code:false ~with_grad:false `Default @@ hey;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ y
 
 let hello3 () =
   let open Session.SDSL in
@@ -48,11 +48,11 @@ let hello3 () =
   print_preamble ();
   print_session_code ();
   Caml.Format.print_newline ();
-  print_formula ~with_code:true ~with_grad:false `Inline zero_to_twenty;
+  print_tensor ~with_code:true ~with_grad:false `Inline zero_to_twenty;
   Caml.Format.print_newline ();
-  print_formula ~with_code:true ~with_grad:false `Default zero_to_twenty;
+  print_tensor ~with_code:true ~with_grad:false `Default zero_to_twenty;
   Caml.Format.print_newline ();
-  print_formula ~with_code:true ~with_grad:false `Default hey
+  print_tensor ~with_code:true ~with_grad:false `Default hey
 
 let () =
   ignore (hello1, hello2);

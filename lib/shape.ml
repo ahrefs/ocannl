@@ -287,7 +287,7 @@ let einsum_of_spec spec =
   if String.is_empty rhs2_spec then (rhs1_ls, None, lhs_ls)
   else (rhs1_ls, Some (axis_labels_of_spec rhs2_spec), lhs_ls)
 
-(** How to propagate shape updates and do the last update of [Formula.t.shape] when finalizing the formula.
+(** How to propagate shape updates and do the last update of [Tensor.t.shape] when finalizing the tensor.
     Axes are broadcast-expanded on a bottom-up update to fit the incoming shape. *)
 type logic =
   | Broadcast of compose_type * t * t
@@ -399,9 +399,9 @@ let to_axis_map (sh : t) : dims axis_map =
   Map.of_alist_exn (module AxisKey) @@ List.concat [ b_dims; i_dims; o_dims ]
 
 (* Design choice: tensor shapes are decided while code is constructed, although not immediately.
-   Due to mutable updates during shape inference, it is not possible to reuse the same formula with
-   different shapes. The inference is finalized by invoking the [Formula.subtree_shape_updates] once
-   on the root formula. *)
+   Due to mutable updates during shape inference, it is not possible to reuse the same tensor with
+   different shapes. The inference is finalized by invoking the [Tensor.subtree_shape_updates] once
+   on the root tensor. *)
 
 (** Generate a label into a broadcasted axis given an einsum-like spec. Axes that are part of the spec
     do not count, so that we can use the labels to align axes across different shapes (lhs, rhs1,
@@ -931,7 +931,7 @@ let project_broad d1 d2 =
 
 open Arrayjit.Indexing
 
-(** Computes the indexing into subformulas given the shape information of a formula. The processing
+(** Computes the indexing into subtensors given the shape information of a tensor. The processing
     mirrors [propagate_shapes], but [derive_projections] should only be invoked when the shapes
     are inferred already. *)
 let derive_projections (shapes : update_step) : projections =

@@ -96,7 +96,7 @@ let _suspended () =
   SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses.id;
   (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
-      SDSL.print_formula ~with_grad:true ~with_code:false `Default f); *)
+      SDSL.print_tensor ~with_grad:true ~with_code:false `Default f); *)
   SDSL.refresh_session ();
   Stdio.printf "Step 2: session_step: %f\n%!" session_step.@[0];
   Stdio.printf "\nStep 2: Minus learning rate: %f\n%!" minus_lr.@[0];
@@ -105,7 +105,7 @@ let _suspended () =
   SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses.id;
   (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
-      SDSL.print_formula ~with_grad:true ~with_code:false `Default f); *)
+      SDSL.print_tensor ~with_grad:true ~with_code:false `Default f); *)
   SDSL.refresh_session ();
   Stdio.printf "Step 3: session_step: %f\n%!" session_step.@[0];
   Stdio.printf "\nStep 3: Minus learning rate: %f\nStep 3 weighted reg. loss:\n%!" minus_lr.@[0];
@@ -120,7 +120,7 @@ let _suspended () =
   Stdio.printf "\nStep 4 weighted reg. loss:\n%!";
   SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *)
     ~depth:9 weighted_reg_loss.id;
-  Stdio.printf "\nStep 4 epoch loss formula:\n%!";
+  Stdio.printf "\nStep 4 epoch loss tensor:\n%!";
   SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 epoch_loss.id;
   let step_4_loss = epoch_loss.@[0] in
   Stdio.printf "\nStep 4: cumulative loss %f, step loss %f\n%!" step_4_loss (step_4_loss -. step_3_loss);

@@ -1,4 +1,4 @@
-Specification of a terminal [Formula.t]'s shape. The [string] occurrences refer to [axis_labels]
+Specification of a terminal [Tensor.t]'s shape. The [string] occurrences refer to [axis_labels]
     specs. Note: the specification is just a helper in constructing shapes.
 {[type term_spec =
   | Unknown_shape
@@ -143,7 +143,7 @@ type nulop =
   let r_data = FDSL.data ~label:"big_range" ~batch_dims:[2] ~output_dims:[3;5]
       (fun ~n:_ -> Init_op (Constant_fill big_range)) in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ r_data;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ r_data;
   [%expect {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[1]: <big_range> shape 0:2|1:3,2:5                                                                  │
@@ -157,7 +157,7 @@ type nulop =
     │└──────┴─────────────────────────────────────────────┴─────────────────────────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ r_data;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ r_data;
   [%expect {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[1]: <big_range> shape 0:2|1:3,2:5                                                                  │
@@ -171,7 +171,7 @@ type nulop =
     │└──────┴─────────────────────────────────────────────┴─────────────────────────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ r_data;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ r_data;
   [%expect {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[1]: <big_range> shape 0:2|1:3,2:5                                                                  │
@@ -254,7 +254,7 @@ let get_grad (type val_t arr_t) (prec : (val_t, arr_t) precision) uid : arr_t =
            ( "Precision mismatch: expected " ^ precision_to_string prec ^ ", got "
              ^ ndarray_precision_to_string arr,
              Some n )
-  | _, None -> raise @@ Runtime_error ("get_grad: non-form node", Some n)
+  | _, None -> raise @@ Runtime_error ("get_grad: non-diff node", Some n)
 
 
     let nontask_ts, task_ts = partition_tf_with_comment ~f:parallelizable t_c_s in

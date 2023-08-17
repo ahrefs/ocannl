@@ -7,11 +7,11 @@ open Arrayjit
 type diff = {
   grad : Low_level.ndarray;
   backprop_body : High_level.t;
-      (** Performs backpropagation for the formula at each session step, which typically means adding
-      partial gradients to the gradient tensor of the subformulas. *)
+      (** Performs backpropagation for the tensor at each session step, which typically means adding
+      partial gradients to the gradient tensor of the subtensors. *)
   needs_gradient : bool;
-      (** An optimization setting: whether gradients should be backpropagated into the formula.
-      If any subformula needs gradients, this formula also needs gradients. *)
+      (** An optimization setting: whether gradients should be backpropagated into the tensor.
+      If any subtensor needs gradients, this tensor also needs gradients. *)
 }
 [@@deriving sexp_of]
 
@@ -22,26 +22,26 @@ type t = {
   id : int;  (** Same as [value.id]. *)
   value : Low_level.ndarray;
   shape_logic : Shape.logic;
-      (** How to do the last update of [t.shape] when finalizing the formula.
-      It is stored with the formula for debugging (shape inference does not need to retrieve it). *)
+      (** How to do the last update of [t.shape] when finalizing the tensor.
+      It is stored with the tensor for debugging (shape inference does not need to retrieve it). *)
   shape : Shape.t;
       (** The eventual shape of [.!(t.node).value] and [.!(t.node).grad], incorporating the current state of
       shape inference. *)
   cross_session_persistent : bool;
-      (** A subformula is cross-session persistent if [forward_body] is [Noop], and the formula does
+      (** A subtensor is cross-session persistent if [forward_body] is [Noop], and the tensor does
       not require data fetching. *)
 }
 [@@deriving sexp_of]
 (** Information needed for compositional code generation. The code generation is suspended so that
     it can incorporate inferred shape information. *)
 
-(** A global root is a formula that is not (currently) a subformula of another formula.
+(** A global root is a tensor that is not (currently) a subtensor of another tensor.
 
-    If a formula with [id >= !first_session_id] is not among global roots, it must be a subformula
+    If a tensor with [id >= !first_session_id] is not among global roots, it must be a subtensor
     of a global root. *)
 let global_roots = ref @@ Map.empty (module Int)
 
-(** We perform each update (at least) twice to propagate information between all subformulas:
+(** We perform each update (at least) twice to propagate information between all subtensors:
     first in postfix order while computing [t], then in prefix order by iterating over this stack. *)
 let session_shape_updates : Shape.update_step list ref = ref []
 
@@ -65,8 +65,8 @@ let session_postprocess : Code.t list ref = ref []
 
 (** A current session is the range of nodes from [!first_session_id] to [Node.global.unique_id - 1],
     or an empty range if [!first_session_id = Node.global.unique_id].
-    Subformulas with [id] before this range are no longer updated by {!Session.SDSL.refresh_session}
-    and can only be used in new formulas if they are cross-session-persistent: not depending on
+    Subtensors with [id] before this range are no longer updated by {!Session.SDSL.refresh_session}
+    and can only be used in new tensors if they are cross-session-persistent: not depending on
     fetching operations. This condition is checked automatically. *)
 let first_session_id = ref 1
 
@@ -131,16 +131,16 @@ let raw_unop ~zero_out ~accum ~lhs_id ~lhs_is_grad ~op ~rhs_id ~rhs_is_grad ~log
   let rhs = Code.CDSL.(if rhs_is_grad then grad_of_id rhs_id else value_of_id rhs_id) in
   Code.Accum_unop { zero_out; accum; lhs; op; rhs; projections }
 
-let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~grad_body ~is_form m1 m2 =
+let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~grad_body ~is_diff m1 m2 =
   (* Note: do not capture m1, m2 in any closure, so they can be GC'd. *)
   if m1.id < !first_session_id && not m1.cross_session_persistent then
-    raise @@ Session_error ("The subformula is outside of current session", Some m1);
+    raise @@ Session_error ("The subtensor is outside of current session", Some m1);
   if m2.id < !first_session_id && not m2.cross_session_persistent then
-    raise @@ Session_error ("The subformula is outside of current session", Some m2);
+    raise @@ Session_error ("The subtensor is outside of current session", Some m2);
   let m1_first = m1.id <= m2.id in
-  let m1_processed : bool = Option.is_some m1.form && (not @@ Map.mem !global_roots m1.id) in
+  let m1_processed : bool = Option.is_some m1.diff && (not @@ Map.mem !global_roots m1.id) in
   let m2_processed : bool =
-    Option.is_some m2.form && (m2.id = m1.id || (not @@ Map.mem !global_roots m2.id))
+    Option.is_some m2.diff && (m2.id = m1.id || (not @@ Map.mem !global_roots m2.id))
   in
   let children =
     [
@@ -149,7 +149,7 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
     ]
   in
   let needs_gradient =
-    match (m1.form, m2.form) with
+    match (m1.diff, m2.diff) with
     | Some form1, Some form2 -> form1.needs_gradient || form2.needs_gradient
     | Some form1, _ -> form1.needs_gradient
     | _, Some form2 -> form2.needs_gradient
@@ -175,9 +175,9 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
     Code.(
       match
         ( m1_processed,
-          (if is_form then m1.forward_body else m1.nondiff_forward_body),
+          (if is_diff then m1.forward_body else m1.nondiff_forward_body),
           m2_processed,
-          if is_form then m2.forward_body else m2.nondiff_forward_body )
+          if is_diff then m2.forward_body else m2.nondiff_forward_body )
       with
       | true, _, true, _ | true, _, _, Noop | _, Noop, true, _ | _, Noop, _, Noop -> op_body
       | false, m1_body, false, m2_body when m1_first -> Seq (ParHint (m1_body, m2_body), op_body)
@@ -187,10 +187,10 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
   in
   let init_values_body = create ~id Value shape in
   session_initializations := init_values_body :: !session_initializations;
-  if not is_form then
+  if not is_diff then
     {
       forward_body;
-      form = None;
+      diff = None;
       nondiff_forward_body = forward_body;
       id;
       node = n;
@@ -200,10 +200,10 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
     }
   else
     let form1, form2 =
-      match (m1.form, m2.form) with
+      match (m1.diff, m2.diff) with
       | Some form1, Some form2 -> (form1, form2)
-      | None, _ -> raise @@ Session_error ("binop ~is_form:true but subformula is non-form", Some m1)
-      | _, None -> raise @@ Session_error ("binop ~is_form:true but subformula is non-form", Some m2)
+      | None, _ -> raise @@ Session_error ("binop ~is_diff:true but subtensor is non-diff", Some m1)
+      | _, None -> raise @@ Session_error ("binop ~is_diff:true but subtensor is non-diff", Some m2)
     in
     let m1_no_grad = m1_processed || not form1.needs_gradient in
     let m2_no_grad = m2_processed || not form2.needs_gradient in
@@ -232,11 +232,11 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     if not m1_processed then global_roots := Map.remove !global_roots m1.id;
     if not m2_processed then global_roots := Map.remove !global_roots m2.id;
-    let form = Some { backprop_body; needs_gradient } in
-    let formula =
+    let diff = Some { backprop_body; needs_gradient } in
+    let tensor =
       {
         forward_body;
-        form;
+        diff;
         nondiff_forward_body = Code.Noop;
         id;
         node = n;
@@ -245,14 +245,14 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
         cross_session_persistent = false;
       }
     in
-    global_roots := Map.add_exn !global_roots ~key:id ~data:formula;
-    formula
+    global_roots := Map.add_exn !global_roots ~key:id ~data:tensor;
+    tensor
 
-let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_form m1 : t =
+let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_diff m1 : t =
   (* Note: do not capture m in any closure, so it can be GC'd. *)
-  let m1_processed = Option.is_some m1.form && (not @@ Map.mem !global_roots m1.id) in
+  let m1_processed = Option.is_some m1.diff && (not @@ Map.mem !global_roots m1.id) in
   let children = [ { Node.sub_node = m1.node; computed_externally = m1_processed } ] in
-  let needs_gradient = match m1.form with Some form1 -> form1.needs_gradient | None -> false in
+  let needs_gradient = match m1.diff with Some form1 -> form1.needs_gradient | None -> false in
   let fixme_fragile = !Node.unique_id in
   let shape = Shape.make ~id:fixme_fragile () in
   let n =
@@ -277,14 +277,14 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
   (* The code needs to be included in the order it was computed! *)
   let forward_body =
     if m1_processed then op_body
-    else if is_form then Code.Seq (m1.forward_body, op_body)
+    else if is_diff then Code.Seq (m1.forward_body, op_body)
     else Seq (m1.nondiff_forward_body, op_body)
   in
   session_initializations := create ~id Value shape :: !session_initializations;
-  if not is_form then
+  if not is_diff then
     {
       forward_body;
-      form = None;
+      diff = None;
       nondiff_forward_body = forward_body;
       id;
       node = n;
@@ -294,9 +294,9 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
     }
   else
     let form1 =
-      match m1.form with
-      | Some form -> form
-      | None -> raise @@ Session_error ("binop ~is_form:true but subformula is non-form", Some m1)
+      match m1.diff with
+      | Some diff -> diff
+      | None -> raise @@ Session_error ("binop ~is_diff:true but subtensor is non-diff", Some m1)
     in
     let m1_no_grad = m1_processed || not form1.needs_gradient in
     (if needs_gradient then
@@ -315,11 +315,11 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
     if needs_gradient then session_initializations := create ~id Grad shape :: !session_initializations;
 
     if not m1_processed then global_roots := Map.remove !global_roots m1.id;
-    let form = Some { backprop_body; needs_gradient } in
-    let formula =
+    let diff = Some { backprop_body; needs_gradient } in
+    let tensor =
       {
         forward_body;
-        form;
+        diff;
         nondiff_forward_body = Code.Noop;
         id;
         node = n;
@@ -328,14 +328,14 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
         cross_session_persistent = false;
       }
     in
-    global_roots := Map.add_exn !global_roots ~key:id ~data:formula;
-    formula
+    global_roots := Map.add_exn !global_roots ~key:id ~data:tensor;
+    tensor
 
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?output_dims ?axis_labels
+let term ~label ?desc_label ~needs_gradient ~is_diff ?batch_dims ?input_dims ?output_dims ?axis_labels
     ?deduced ?init_op ?fetch_op ?postprocess_op () =
-  if needs_gradient && not is_form then
-    invalid_arg "Formula.term ~needs_gradient:true: a non-form formula cannot need gradient";
+  if needs_gradient && not is_diff then
+    invalid_arg "Tensor.term ~needs_gradient:true: a non-diff tensor cannot need gradient";
   let literal : bool =
     if needs_gradient then false
     else
@@ -390,10 +390,10 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
       session_postprocess := postprocess_op :: !session_postprocess;
       n.annot.value_never_virtual <- true;
       n.annot.value_never_device_only <- true);
-  if not is_form then
+  if not is_diff then
     {
       forward_body;
-      form = None;
+      diff = None;
       nondiff_forward_body = forward_body;
       id;
       node = n;
@@ -408,11 +408,11 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
        session_prepare_backprop := zero_grads :: !session_prepare_backprop);
     (* Very unlikely someone will want dw/dw. *)
     if needs_gradient then session_initializations := create ~id Grad shape :: !session_initializations;
-    let form = Some { backprop_body; needs_gradient } in
-    let formula =
+    let diff = Some { backprop_body; needs_gradient } in
+    let tensor =
       {
         forward_body;
-        form;
+        diff;
         nondiff_forward_body = Code.Noop;
         id;
         node = n;
@@ -421,8 +421,8 @@ let term ~label ?desc_label ~needs_gradient ~is_form ?batch_dims ?input_dims ?ou
         cross_session_persistent;
       }
     in
-    global_roots := Map.add_exn !global_roots ~key:id ~data:formula;
-    formula
+    global_roots := Map.add_exn !global_roots ~key:id ~data:tensor;
+    tensor
 
 let error_if_unknown_shape m =
   match m.shape with
@@ -441,7 +441,7 @@ let get_toplevel_backprop m =
   error_if_unknown_shape m;
   Code.Block_comment
     ( "Backprop #" ^ Int.to_string m.id,
-      Seq (fetch_ones ~id:m.id Grad m.shape, (Option.value_exn m.form).backprop_body) )
+      Seq (fetch_ones ~id:m.id Grad m.shape, (Option.value_exn m.diff).backprop_body) )
 
 (* FIXME: not inlining here gives an error about PrintBox.Simple.t_of_sexp missing *)
 type printbox =
@@ -457,7 +457,7 @@ type printbox =
 
 let sexp_of_t m =
   (* TODO: output more *)
-  Sexp.message "Formula"
+  Sexp.message "Tensor"
     [
       ("id", Int.sexp_of_t m.id);
       ("op_label", String.sexp_of_t m.node.op_label);
@@ -473,13 +473,13 @@ end)
 
 let float_to_label v = Float.to_string_hum ~strip_zero:true v
 
-let number ?desc_label ~is_form ?(axis_label = "") c =
+let number ?desc_label ~is_diff ?(axis_label = "") c =
   (* Note: no axis label so that we do not conflict with user labels. *)
-  term ?desc_label ~label:(float_to_label c) ~is_form ~needs_gradient:false ~batch_dims:[] ~input_dims:[]
+  term ?desc_label ~label:(float_to_label c) ~is_diff ~needs_gradient:false ~batch_dims:[] ~input_dims:[]
     ~output_dims:[ Shape.dim 1 ]
     ~axis_labels:axis_label ~init_op:(Constant_fill [| c |]) ()
 
-let ndarray ?desc_label ~is_form ?(needs_gradient = false) ?(batch_dims = []) ?(input_dims = [])
+let ndarray ?desc_label ~is_diff ?(needs_gradient = false) ?(batch_dims = []) ?(input_dims = [])
     ?(output_dims = []) ?axis_labels ?label values =
   let label =
     match label with
@@ -501,29 +501,29 @@ let ndarray ?desc_label ~is_form ?(needs_gradient = false) ?(batch_dims = []) ?(
       @@ Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list
     else label
   in
-  term ?desc_label ~needs_gradient ~is_form ~batch_dims ~input_dims ~output_dims ?axis_labels
+  term ?desc_label ~needs_gradient ~is_diff ~batch_dims ~input_dims ~output_dims ?axis_labels
     ~deduced:Not_constrained ~label ~init_op:(Constant_fill values) ()
 
 let params ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?values ?value label =
   let init_op =
     match (values, value) with
-    | Some _, Some _ -> invalid_arg "Formula.params: do not provide both ~values and ~value"
+    | Some _, Some _ -> invalid_arg "Tensor.params: do not provide both ~values and ~value"
     | Some values, _ -> Code.Constant_fill values
     | _, Some value -> Code.Constant_fill [| value |]
     | None, None -> Standard_uniform
   in
-  term ?desc_label ~needs_gradient:true ~is_form:true ~batch_dims:[] ?input_dims ?output_dims ?axis_labels
+  term ?desc_label ~needs_gradient:true ~is_diff:true ~batch_dims:[] ?input_dims ?output_dims ?axis_labels
     ?deduced ~label ~init_op ()
 
 module FDSL = struct
-  let term = term ~is_form:true
-  let number = number ~is_form:true
-  let ndarray = ndarray ~is_form:true
+  let term = term ~is_diff:true
+  let number = number ~is_diff:true
+  let ndarray = ndarray ~is_diff:true
   let params = params
 end
 
 module NFDSL = struct
-  let term = term ~is_form:false
-  let number = number ~is_form:false
-  let ndarray = ndarray ~is_form:false
+  let term = term ~is_diff:false
+  let number = number ~is_diff:false
+  let ndarray = ndarray ~is_diff:false
 end

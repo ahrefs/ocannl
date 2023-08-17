@@ -17,7 +17,7 @@ let%expect_test "Pointwise multiplication dims 1" =
   (* "Hey" is inferred to be a scalar. *)
   let%nn_op y = 2 *. "hey" in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ y;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ y;
   [%expect
     {|
     ┌──────────────────────┐
@@ -37,7 +37,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
   let%nn_op y = ("hey" * 'q' 2.0) + 'p' 1.0 in
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ hey;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
     ┌──────────────────────────────┐
@@ -48,7 +48,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
     ││axis p=0│ 1.34e-1 │          │
     │└────────┴─────────┘          │
     └──────────────────────────────┘ |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ y;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ y;
   [%expect
     {|
     ┌───────────────────────┐
@@ -66,9 +66,9 @@ let%expect_test "Print constant tensor" =
   let open Session.SDSL in
   let%nn_op hey = [ (1, 2, 3); (4, 5, 6) ] in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Inline @@ hey;
+  print_tensor ~with_code:false ~with_grad:false `Inline @@ hey;
   [%expect {| [1.00, 2.00, 3.00; 4.00, 5.00, 6.00] |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ hey;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
     ┌───────────────────────────────────────────────────────────────┐
@@ -82,9 +82,9 @@ let%expect_test "Print constant tensor" =
     └───────────────────────────────────────────────────────────────┘ |}];
   let%nn_op hoo = [| [ 1; 2; 3 ]; [ 4; 5; 6 ] |] in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Inline @@ hoo;
+  print_tensor ~with_code:false ~with_grad:false `Inline @@ hoo;
   [%expect {| [|[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]|] |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ hoo;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ hoo;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────────┐
@@ -105,14 +105,14 @@ let%expect_test "Print constant tensor" =
     ]
   in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Inline @@ hey2;
+  print_tensor ~with_code:false ~with_grad:false `Inline @@ hey2;
   [%expect
     {|
     [(1.00, 2.00, 3.00), (4.00, 5.00, 6.00);
       (7.00, 8.00, 9.00), (10.00, 11.00, 12.00);
       (13.00, 14.00, 15.00), (16.00, 17.00, 18.00);
       (19.00, 20.00, 21.00), (22.00, 23.00, 24.00)] |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ hey2;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ hey2;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────┐
@@ -136,14 +136,14 @@ let%expect_test "Print constant tensor" =
     |]
   in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Inline @@ hoo2;
+  print_tensor ~with_code:false ~with_grad:false `Inline @@ hoo2;
   [%expect
     {|
     [|[[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]];
       [[7.00; 8.00; 9.00]; [10.00; 11.00; 12.00]];
       [[13.00; 14.00; 15.00]; [16.00; 17.00; 18.00]];
       [[19.00; 20.00; 21.00]; [22.00; 23.00; 24.00]]|] |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ hoo2;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ hoo2;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -165,14 +165,14 @@ let%expect_test "Print constant tensor" =
     |]
   in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Inline @@ heyhoo;
+  print_tensor ~with_code:false ~with_grad:false `Inline @@ heyhoo;
   [%expect
     {|
     [|[|[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]|];
       [|[7.00; 8.00; 9.00]; [10.00; 11.00; 12.00]|];
       [|[13.00; 14.00; 15.00]; [16.00; 17.00; 18.00]|];
       [|[19.00; 20.00; 21.00]; [22.00; 23.00; 24.00]|]|] |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ heyhoo;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ heyhoo;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -194,7 +194,7 @@ let%expect_test "Print constant tensor" =
     |]
   in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Inline @@ heyhoo2;
+  print_tensor ~with_code:false ~with_grad:false `Inline @@ heyhoo2;
   [%expect
     {|
     [|
@@ -206,7 +206,7 @@ let%expect_test "Print constant tensor" =
         [[16.00; 46.00]; [17.00; 47.00]; [18.00; 48.00]]|];
       [|[[19.00; 49.00]; [20.00; 50.00]; [21.00; 51.00]];
         [[22.00; 52.00]; [23.00; 53.00]; [24.00; 54.00]]|]|] |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ heyhoo2;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ heyhoo2;
   [%expect
     {|
     ┌──────────────────────────────────────────────┐
@@ -245,7 +245,7 @@ let%expect_test "Print constant tensor" =
     |]
   in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Inline @@ heyhoo3;
+  print_tensor ~with_code:false ~with_grad:false `Inline @@ heyhoo3;
   [%expect
     {|
     [|
@@ -259,7 +259,7 @@ let%expect_test "Print constant tensor" =
           [[16.00; 46.00]; [17.00; 47.00]; [18.00; 48.00]]];
         [[[19.00; 49.00]; [20.00; 50.00]; [21.00; 51.00]];
           [[22.00; 52.00]; [23.00; 53.00]; [24.00; 54.00]]]|]|] |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ heyhoo3;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ heyhoo3;
   [%expect
     {|
     ┌────────────────────────────────────────────────────┐
@@ -303,7 +303,7 @@ let%expect_test "Print constant tensor" =
     |]
   in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Inline @@ heyhoo4;
+  print_tensor ~with_code:false ~with_grad:false `Inline @@ heyhoo4;
   [%expect
     {|
     [|
@@ -317,7 +317,7 @@ let%expect_test "Print constant tensor" =
           [16.00, 46.00; 17.00, 47.00; 18.00, 48.00]];
         [[19.00, 49.00; 20.00, 50.00; 21.00, 51.00];
           [22.00, 52.00; 23.00, 53.00; 24.00, 54.00]]]|] |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ heyhoo4;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ heyhoo4;
   [%expect
     {|
     ┌─────────────────────────────────────────────────────┐
@@ -357,7 +357,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
   let%nn_op hey = "hey" in
   let%nn_op y = (hey * [ 2; 3 ]) + [ 4; 5; 6 ] in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ hey;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
     ┌───────────────────────────┐
@@ -370,7 +370,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
     ││      │ 3.56e-2  5.87e-1 ││
     │└──────┴──────────────────┘│
     └───────────────────────────┘ |}];
-  print_formula ~with_code:false ~with_grad:false `Default @@ y;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ y;
   [%expect
     {|
     ┌──────────────────────────────┐
@@ -391,12 +391,12 @@ let%expect_test "Big matrix" =
   let zero_to_twenty = FDSL.range 20 in
   let y = FDSL.O.((hey * zero_to_twenty) + zero_to_twenty) in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Inline zero_to_twenty;
+  print_tensor ~with_code:false ~with_grad:false `Inline zero_to_twenty;
   [%expect
     {|
       [0.00; 1.00; 2.00; 3.00; 4.00; 5.00; 6.00; 7.00; 8.00; 9.00; 10.00; 11.00;
         12.00; 13.00; 14.00; 15.00; 16.00; 17.00; 18.00; 19.00; 20.00] |}];
-  print_formula ~with_code:false ~with_grad:false `Default zero_to_twenty;
+  print_tensor ~with_code:false ~with_grad:false `Default zero_to_twenty;
   [%expect
     {|
       ┌────────────────────────────────────────────┐
@@ -407,7 +407,7 @@ let%expect_test "Big matrix" =
       │││ 0.00e+0  1.00e+0  ...  1.90e+1  2.00e+1 ││
       │└┴─────────────────────────────────────────┘│
       └────────────────────────────────────────────┘ |}];
-  print_formula ~with_code:false ~with_grad:false `Default hey;
+  print_tensor ~with_code:false ~with_grad:false `Default hey;
   [%expect
     {|
       ┌──────────────────────────────────────────────────┐
@@ -422,7 +422,7 @@ let%expect_test "Big matrix" =
       ││      │ 8.50e-1  4.69e-1  ...  6.16e-2  8.49e-1 ││
       │└──────┴─────────────────────────────────────────┘│
       └──────────────────────────────────────────────────┘ |}];
-  print_formula ~with_code:false ~with_grad:false `Default y;
+  print_tensor ~with_code:false ~with_grad:false `Default y;
   [%expect
     {|
       ┌────────────────────────────────────────────┐
@@ -447,7 +447,7 @@ let%expect_test "Very big tensor" =
   in
   let%nn_op hoo = (hey * (1 + 1)) - 10 in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default hey;
+  print_tensor ~with_code:false ~with_grad:false `Default hey;
   [%expect
     {|
       ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -582,7 +582,7 @@ let%expect_test "Very big tensor" =
       ││      │ 3.32e+5  3.32e+5  ...  3.32e+5  3.32e+5 │ 3.32e+5  3.32e+5  ...  3.32e+5  3.32e+5 │      │ 3.32e+5  3.32e+5  ...  3.32e+5  3.32e+5 │ 3.32e+5  3.32e+5  ...  3.32e+5  3.32e+5 ││
       │└──────┴─────────────────────────────────────────┴─────────────────────────────────────────┴──────┴─────────────────────────────────────────┴─────────────────────────────────────────┘│
       └───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  print_formula ~with_code:false ~with_grad:false `Default hoo;
+  print_tensor ~with_code:false ~with_grad:false `Default hoo;
   (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
   [%expect
     {|

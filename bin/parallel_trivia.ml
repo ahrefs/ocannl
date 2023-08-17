@@ -24,7 +24,7 @@ let () =
   SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ CDSL.dim 1 ] [| 0.1 |]);
   SDSL.refresh_session ~update_params:false ();
   (* We did not update the params: all values and gradients will be at initial points, which are
-     specified in the formula in the brackets. *)
+     specified in the tensor in the brackets. *)
   Stdio.printf "\n%!";
   SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
   Stdio.printf "\n%!";

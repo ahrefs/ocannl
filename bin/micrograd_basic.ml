@@ -23,9 +23,9 @@ let _suspended () =
   SDSL.refresh_session ~verbose:true ();
   SDSL.print_node_tree ~with_grad:true ~depth:9 c.id;
   Stdio.print_endline "\n";
-  SDSL.print_formula ~with_code:false ~with_grad:false `Default @@ c;
-  SDSL.print_formula ~with_code:false ~with_grad:true `Default @@ a;
-  SDSL.print_formula ~with_code:false ~with_grad:true `Default @@ b
+  SDSL.print_tensor ~with_code:false ~with_grad:false `Default @@ c;
+  SDSL.print_tensor ~with_code:false ~with_grad:true `Default @@ a;
+  SDSL.print_tensor ~with_code:false ~with_grad:true `Default @@ b
 
 let () =
   SDSL.drop_all_sessions ();
@@ -52,6 +52,6 @@ let () =
   SDSL.refresh_session ~verbose:true ();
   SDSL.print_node_tree ~with_grad:true ~depth:9 g.id;
   Stdio.print_endline "\n";
-  SDSL.print_formula ~with_code:false ~with_grad:false `Default @@ g;
-  SDSL.print_formula ~with_code:false ~with_grad:true `Default @@ a;
-  SDSL.print_formula ~with_code:false ~with_grad:true `Default @@ b
+  SDSL.print_tensor ~with_code:false ~with_grad:false `Default @@ g;
+  SDSL.print_tensor ~with_code:false ~with_grad:true `Default @@ a;
+  SDSL.print_tensor ~with_code:false ~with_grad:true `Default @@ b

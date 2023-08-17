@@ -117,7 +117,7 @@ let rec translate ?desc_label expr =
       (no_vbs, ndarray_op ?desc_label expr)
   | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
       (* We need to hardcode these two patterns to prevent the numbers from being converted
-         to formulas. *)
+         to tensors. *)
       let vbs, e1 = translate expr1 in
       (vbs, [%expr FDSL.O.( **. ) ?desc_label:[%e opt_pat2string ~loc desc_label] [%e e1] [%e f]])
   | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->

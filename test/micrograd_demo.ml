@@ -24,7 +24,7 @@ let%expect_test "Micrograd README basic example" =
   SDSL.set_fully_on_host a;
   SDSL.set_fully_on_host b;
   SDSL.refresh_session ();
-  SDSL.print_formula ~with_code:false ~with_grad:false `Default @@ g;
+  SDSL.print_tensor ~with_code:false ~with_grad:false `Default @@ g;
   [%expect
     {|
     ┌──────────────────────┐
@@ -35,7 +35,7 @@ let%expect_test "Micrograd README basic example" =
     │││ 2.47e+1 │          │
     │└┴─────────┘          │
     └──────────────────────┘ |}];
-  SDSL.print_formula ~with_code:false ~with_grad:true `Default @@ a;
+  SDSL.print_tensor ~with_code:false ~with_grad:true `Default @@ a;
   [%expect
     {|
     ┌───────────────────┐
@@ -54,7 +54,7 @@ let%expect_test "Micrograd README basic example" =
     │││ 1.39e+2 │                 │
     │└┴─────────┘                 │
     └─────────────────────────────┘ |}];
-  SDSL.print_formula ~with_code:false ~with_grad:true `Default @@ b;
+  SDSL.print_tensor ~with_code:false ~with_grad:true `Default @@ b;
   [%expect
     {|
     ┌───────────────────┐

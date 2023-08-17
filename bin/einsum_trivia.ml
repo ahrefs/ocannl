@@ -17,6 +17,6 @@ let () =
   in
   let%nn_op c = a *+ "...|i->1; ...|...->i => ...|i" b in
   refresh_session ();
-  print_formula ~with_code:false ~with_grad:false `Default @@ a;
-  print_formula ~with_code:false ~with_grad:false `Default @@ b;
-  print_formula ~with_code:false ~with_grad:false `Default @@ c
+  print_tensor ~with_code:false ~with_grad:false `Default @@ a;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ b;
+  print_tensor ~with_code:false ~with_grad:false `Default @@ c

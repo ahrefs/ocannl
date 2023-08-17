@@ -31,7 +31,7 @@
 
 ### Fixed
 
-- "Non-form" code inclusion.
+- "Non-diff" code inclusion.
 - Ensures unique indices/symbols also for the `task_id` and `sample_num` bindings.
 - Removes endlines from `PrintBox_utils` benchmark tables cells.
 

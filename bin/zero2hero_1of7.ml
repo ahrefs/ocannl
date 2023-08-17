@@ -53,7 +53,7 @@ let _suspended () =
   Stdio.print_endline "\n";
   SDSL.print_node_tree ~with_id:true ~with_value:false ~with_grad:false ~depth:9 fx.id;
   Stdio.print_endline "\n";
-  (* print_formula ~with_grad:true ~with_code:true ~with_low_level:true `Default fx; *)
+  (* print_tensor ~with_grad:true ~with_code:true ~with_low_level:true `Default fx; *)
   let ys =
     Array.map xs ~f:(fun _ ->
         SDSL.refresh_session ();
@@ -120,7 +120,7 @@ let () =
   Stdio.print_endline
     "\n\
      We did not update the params: all values and gradients will be at initial points,\n\
-    \    which are specified in the formula in the brackets.";
+    \    which are specified in the tensor in the brackets.";
   SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
   SDSL.refresh_session ~update_params:true ();
   Stdio.print_endline

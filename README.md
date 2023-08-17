@@ -18,7 +18,7 @@ Warning disclaimer: this project is still "not announced". The features describe
 * Offers only two levels of abstraction.
   * Differentiable computations, centered around the [`%nn_op`](lib/ppx_nn_op.ml) syntax extension.
   * Plain computations, centered around the [`%nn_cd` and `%nn_dt`](lib/ppx_nn_cd.ml) syntax extension.
-  * Both abstraction levels share infrastructure. [`Formula.t`](lib/formula.ml) represent tensors, and are usually potentially differentiable (we call them _form_ formulas), but need not be (_non-form_ formulas). _non-form_ (non-differentiable) formulas cannot be subformulas of differentiable formulas. The [`%nn_cd`](lib/ppx_nn_cd.ml) syntax can be used to build up _non-form_ formulas, but also to express "primitive/glue" computations ([`Code.t`](lib/code.ml)) that do not introduce new tensors.
+  * Both abstraction levels share infrastructure. [`Tensor.t`](lib/tensor.ml) represent tensors, and are usually potentially differentiable (we call them _form_ tensors), but need not be (_non-diff_ tensors). _non-diff_ (non-differentiable) tensors cannot be subtensors of differentiable tensors. The [`%nn_cd`](lib/ppx_nn_cd.ml) syntax can be used to build up _non-diff_ tensors, but also to express "primitive/glue" computations ([`Code.t`](lib/code.ml)) that do not introduce new tensors.
 * Supports mixed-precision computations, e.g. higher-precision network components, or gradients at a higher precision than values.
 * Should be easily extensible.
 * Model surgery should be starightforward (not sure if we are there yet).
@@ -63,12 +63,12 @@ OCANNL follows different design choices than [OWL](https://ocaml.xyz/). For exam
 * OCANNL only supports backpropagation, while OWL supports full forward and backward auto-diff.
 * Some aspects are more centralized in OCANNL than in OWL and form the "infrastructure", with less of an intention to be extended or even read by end-users:
   * Shape inference is fully handled by [`Shape`](lib/shape.ml).
-  * [`Formula`](lib/formula.ml) implements "putting pieces together".
+  * [`Tensor`](lib/tensor.ml) implements "putting pieces together".
   * [`Session`](lib/session.ml) implements the session logic.
   * [`Code`](lib/code.ml) generates the code and performs backend-agnostic optimizations (_virtual nodes_ whose computation is inlined).
 * Some aspects that are more core to OWL are "delegated to user-land" in OCANNL.
   * [`Operation`](lib/operation.ml) is just a bunch of functions, what users implementing new computational primitives would do.
-  * Specific network architectures, e.g. MLP, CNN, Transformer, can hopefully be concisely formulated and belong to individual projects in OCANNL -- while it seems to me they are more part of the library in OWL. In this regard working on new architectures is not impeded by OCANNL.
+  * Specific network architectures, e.g. MLP, CNN, Transformer, can hopefully be concisely tensorted and belong to individual projects in OCANNL -- while it seems to me they are more part of the library in OWL. In this regard working on new architectures is not impeded by OCANNL.
   * But the enabling mechanisms, such as "generalized `einsum`", belong to the OCANNL library/infrastructure. In this regard OCANNL is less extensible.
 * OCANNL provides lower-level compilation backends than OWL, it is more self-contained in this sense.
 

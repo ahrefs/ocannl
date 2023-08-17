@@ -1,5 +1,5 @@
 open Base
-(** `Node`: the computation type, global state and utils which the `Formula` staged code uses. *)
+(** `Node`: the computation type, global state and utils which the `Tensor` staged code uses. *)
 
 module A = Bigarray.Genarray
 
