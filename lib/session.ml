@@ -338,18 +338,21 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
   let name = "session_step_update" in
   if generating then (
     let open Code in
-    let preparation =
-      Block_comment
-        ( "Preparation",
-          Par
-            ( Block_comment ("Prepare backprop pass", all_parallel !Tensor.session_prepare_backprop) ) )
-    in
     let forward =
       Block_comment
         ( "Forward pass",
           sequential
           @@ List.map (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (_node_id, root) ->
                  get_toplevel_forward root) )
+    in
+    let zero_grads =
+      if not with_backprop then Noop
+      else
+        Block_comment
+          ( "Zero grads",
+            sequential
+            @@ List.filter_map (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
+                   Option.some_if (Option.value_exn root.diff).needs_gradient @@ root) )
     in
     let backprop =
       if not with_backprop then Noop
@@ -358,8 +361,8 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
           ( "Backprop pass",
             sequential
             @@ List.filter_map (Map.to_alist ~key_order:`Decreasing !global_roots) ~f:(fun (_node_id, root) ->
-                   Option.some_if (Option.value_exn root.diff).needs_gradient @@ get_toplevel_backprop root)
-          )
+                   Option.some_if (Option.value_exn root.diff).needs_gradient
+                     (Option.value_exn root.diff).backprop_body) )
     in
     let update_params_code =
       match (update_params, !minus_learning_rate) with
@@ -425,7 +428,6 @@ let close_session () =
   Tensor.session_shape_updates := [];
   Tensor.session_initializations := [];
   Tensor.session_initialized := 0;
-  Tensor.session_prepare_backprop := [];
   Tensor.session_postprocess := [];
   session_step_update := Noop;
   session_step_update_compiled := (Hashtbl.Poly.create (), Comment "Noop");
