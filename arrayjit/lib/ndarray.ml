@@ -56,6 +56,7 @@ type ndarray =
 type 'a t = {
   array : (ndarray[@compare.ignore] [@equal.ignore]);
   id : int;
+  label : string; (** An optional information about the array. *)
   annot : ('a[@compare.ignore] [@equal.ignore]);
 }
 [@@deriving sexp_of, compare, equal]
@@ -179,10 +180,10 @@ let create_array prec dims init_op =
 
 let unique_id = ref 1
 
-let create prec dims init_op annot =
+let create prec ~label ~dims init_op annot =
   let id = !unique_id in
   Int.incr unique_id;
-  { array = create_array prec dims init_op; id; annot }
+  { array = create_array prec dims init_op; id; label; annot }
 
 let precision_in_bytes = function Half_nd _ -> 2 | Single_nd _ -> 4 | Double_nd _ -> 8
 
