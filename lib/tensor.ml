@@ -1,7 +1,6 @@
 (** Construction of runtime-compiled code supporting backpropagation. *)
 
 open Base
-
 open Arrayjit
 
 type diff = {
@@ -18,7 +17,8 @@ type diff = {
 type t = {
   forward_body : High_level.t;  (** Computes the values at each session step. *)
   diff : diff option;
-  nondiff_forward_body : High_level.t;  (** Same as [forward_body] if [diff] is [None], otherwise [Code.Noop]. *)
+  nondiff_forward_body : High_level.t;
+      (** Same as [forward_body] if [diff] is [None], otherwise [Code.Noop]. *)
   id : int;  (** Same as [value.id]. *)
   value : Low_level.ndarray;
   shape_logic : Shape.logic;
@@ -49,7 +49,7 @@ let session_shape_updates : Shape.update_step list ref = ref []
     be executed by each [Session.refresh_session ~regenerate:true] and 
     [Session.refresh_session ~reinit:true] call, except if [~force_no_init:true].
     Execution potentially in parallel. *)
-let session_initializations : Code.create list ref = ref []
+let session_initializations : Low_level.create list ref = ref []
 
 let session_initialized = ref 0
 
@@ -57,7 +57,7 @@ let session_prepare_backprop : High_level.t list ref = ref []
 
 (** This code will be executed on each [Session.refresh_session ~run:true] call ([~run:true]
     is implicit), after a [forward] and [backprop] step. Execution potentially in parallel. *)
-let session_postprocess : Code.t list ref = ref []
+let session_postprocess : High_level.t list ref = ref []
 
 (** A current session is the range of nodes from [!first_session_id] to [Node.global.unique_id - 1],
     or an empty range if [!first_session_id = Node.global.unique_id].
@@ -71,42 +71,29 @@ let default_grad_prec = ref Ndarray.single
 
 exception Session_error of string * t option [@@deriving sexp]
 
-(** Prefix the input with the header information of all nodes within the current session. *)
-let prefix_with_preamble content =
-  (* FIXME: remove or move to Node? *)
-  let result = Buffer.create 16 in
-  let ap = Buffer.add_string result in
-  for id = !first_session_id to !Node.unique_id - 1 do
-    let n = Code.get id in
-    ap "Node ";
-    ap @@ Node.node_header n;
-    ap ";\n"
-  done;
-  ap content;
-  Buffer.contents result
-
 let session_error_printer = function
-  | Session_error (msg, None) -> Some (prefix_with_preamble msg)
-  | Session_error (msg, Some m) -> Some (prefix_with_preamble @@ "For #" ^ Int.to_string_hum m.id ^ ": " ^ msg)
+  | Session_error (msg, None) -> Some msg
+  | Session_error (msg, Some m) -> Some ("For #" ^ Int.to_string_hum m.id ^ ": " ^ msg)
   | _ -> None
 
 let () = Caml.Printexc.register_printer session_error_printer
-let fetch_zeros ~id field _shape = Code.Fetch { tensor = { id; field }; fetch_op = Constant 0. }
-let fetch_ones ~id field _shape = Code.Fetch { tensor = { id; field }; fetch_op = Constant 1. }
 
-let create ~id ?(init_op = Code.Constant_fill [| 0.0 |]) field shape =
-  { Code.tensor = { id; field }; dims = (fun () -> Shape.to_dims shape); init_op }
+let fetch_zeros tensor shape =
+  High_level.Fetch { tensor; fetch_op = Constant 0.; dims = (fun () -> Shape.to_dims shape) }
+
+let fetch_ones tensor shape =
+  High_level.Fetch { tensor; fetch_op = Constant 1.; dims = (fun () -> Shape.to_dims shape) }
+
+let create ?(init_op = Low_level.Constant_fill [| 0.0 |]) tensor shape =
+  { tensor; Low_level.dims = (fun () -> Shape.to_dims shape); init_op }
 
 let max_sublabel_length = ref 25
 
-let raw_binop ~zero_out ~accum ~lhs_id ~lhs_is_grad ~op ~rhs1_id ~rhs1_is_grad ~rhs2_id ~rhs2_is_grad ~logic =
-  let n = Code.get lhs_id in
-  let n1 = Code.get rhs1_id in
-  let n2 = Code.get rhs2_id in
+let raw_binop ~zero_out ~accum ~lhs ~op ~rhs1 ~rhs2 ~logic =
   let shape = n.annot.shape in
   let shape_logic = Shape.Broadcast (logic, n1.annot.shape, n2.annot.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
-  Code.update_shape local_shape_update;
+  Shape.propagate_shapes local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections () = Shape.derive_projections local_shape_update in
   let lhs = Code.CDSL.(if lhs_is_grad then grad_of_id lhs_id else value_of_id lhs_id) in
@@ -120,7 +107,7 @@ let raw_unop ~zero_out ~accum ~lhs_id ~lhs_is_grad ~op ~rhs_id ~rhs_is_grad ~log
   let shape = n.annot.shape in
   let shape_logic = Shape.Transpose (logic, n1.annot.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
-  Code.update_shape local_shape_update;
+  Shape.propagate_shapes local_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections () = Shape.derive_projections local_shape_update in
   let lhs = Code.CDSL.(if lhs_is_grad then grad_of_id lhs_id else value_of_id lhs_id) in
@@ -162,7 +149,7 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
   let n1 = m1.node in
   let n2 = m2.node in
-  Code.update_shape local_shape_update;
+  Shape.propagate_shapes local_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections () = Shape.derive_projections local_shape_update in
   let op_body = op_body ~n ~n1 ~n2 ~projections in
@@ -266,7 +253,7 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
   let shape_logic = Shape.Transpose (transpose_op, m1.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
   let n1 = m1.node in
-  Code.update_shape local_shape_update;
+  Shape.propagate_shapes local_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections () = Shape.derive_projections local_shape_update in
   let op_body = op_body ~n ~n1 ~projections in
@@ -336,7 +323,7 @@ let term ~label ?desc_label ~needs_gradient ~is_diff ?batch_dims ?input_dims ?ou
     if needs_gradient then false
     else
       match (init_op, fetch_op, postprocess_op) with
-      | Some (Code.Constant_fill [| _ |]), None, None -> true
+      | Some (Low_level.Constant_fill [| _ |]), None, None -> true
       | _ -> false
   in
   let op_label : string = label in
@@ -352,7 +339,7 @@ let term ~label ?desc_label ~needs_gradient ~is_diff ?batch_dims ?input_dims ?ou
   (* NOTE: this update does not do any work, but that might change in the future,
      and having it in the update sequence might help with debuggability. *)
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
-  Code.update_shape local_shape_update;
+  Shape.propagate_shapes local_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
 
   let init_op : Code.init_op =
@@ -501,8 +488,8 @@ let params ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?values ?v
   let init_op =
     match (values, value) with
     | Some _, Some _ -> invalid_arg "Tensor.params: do not provide both ~values and ~value"
-    | Some values, _ -> Code.Constant_fill values
-    | _, Some value -> Code.Constant_fill [| value |]
+    | Some values, _ -> Low_level.Constant_fill values
+    | _, Some value -> Low_level.Constant_fill [| value |]
     | None, None -> Standard_uniform
   in
   term ?desc_label ~needs_gradient:true ~is_diff:true ~batch_dims:[] ?input_dims ?output_dims ?axis_labels
