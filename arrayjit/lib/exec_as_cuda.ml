@@ -17,7 +17,7 @@ type mem_properties =
 [@@deriving sexp, equal, compare, variants]
 
 type tensor = {
-  hosted : Ndarray.ndarray option;
+  hosted : Ndarray.t option;
   global : string option;  (** A global device array, if any. *)
   global_ptr : (Cudajit.deviceptr Lazy.t[@sexp.opaque]) option;
   local : string option;  (** A local name, if any. *)
@@ -34,14 +34,15 @@ type tensor = {
 
 (* let session_results = ref [] *)
 let hoist_dynamic_indices = ref false
+module LA = Low_level.Lazy_array
 
 type session_state = {
   mutable ctx : Cudajit.context option;
-  tensors : (Ndarray.ptr, tensor) Hashtbl.Poly.t;
+  tensors : (LA.t, tensor) Hashtbl.t;
   mutable last_module : Cudajit.module_ option;
 }
 
-let session_state = { ctx = None; tensors = Hashtbl.Poly.create (); last_module = None }
+let session_state = { ctx = None; tensors = Hashtbl.create (module LA); last_module = None }
 let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
 let pp_comma ppf () = Caml.Format.fprintf ppf ",@ "
 let pp_symbol ppf sym = Caml.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym
@@ -85,19 +86,16 @@ let compute_array_offset ~idcs ~dims =
 
 let get_tensor ~traced_store n =
   let { tensors; _ } = session_state in
-  let ptr = Ndarray.ptr n in
-  Hashtbl.find_or_add tensors ptr ~default:(fun () ->
+  Hashtbl.find_or_add tensors n ~default:(fun () ->
       let tn = Low_level.get_node traced_store n in
-      let host_size_in_bytes = Ndarray.size_in_bytes n.array in
-      let dims = n.annot.dims () in
+      (* let host_size_in_bytes = Ndarray.size_in_bytes n.array in *)
+      let dims = Lazy.force n.dims in
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
-      let hosted = if host_size_in_bytes = 0 then None else Some n.array in
-      let size_in_bytes = size_in_elems * Ndarray.precision_in_bytes n.array in
-      let is_on_host = host_size_in_bytes > 0 in
-      if is_on_host then assert (host_size_in_bytes = size_in_bytes);
-      let prec = Ndarray.get_prec n.array in
-      let is_double = Ndarray.is_double_prec_t n.array in
-      let num_typ = prec_to_c_type prec in
+      let hosted = Lazy.force n.array in
+      let size_in_bytes = size_in_elems * Ndarray.prec_in_bytes n.prec in
+      let is_on_host = !(n.materialized) in
+      let is_double = Ndarray.is_double_prec n.prec in
+      let num_typ = prec_to_c_type n.prec in
       let mem =
         if not is_on_host then Local_only
         else if tn.read_only then Constant
@@ -114,7 +112,7 @@ let get_tensor ~traced_store n =
                  (* Defer till after compilation, to access the compiled-into module. *)
                  Cudajit.module_get_global
                    (Option.value_exn session_state.last_module)
-                   ~name:(Ndarray.get_name n)
+                   ~name:(LA.name n)
                in
                assert (Unsigned.Size_t.to_int size = size_in_bytes);
                ptr)
@@ -122,14 +120,14 @@ let get_tensor ~traced_store n =
             (* The general case does not require laziness, but it should be OK. *)
             lazy
               (if !Low_level.with_debug then
-                 Stdio.printf "Exec_as_cuda.get_tensor: mem_alloc %s\n%!" (Ndarray.get_name n);
+                 Stdio.printf "Exec_as_cuda.get_tensor: mem_alloc %s\n%!" (LA.name n);
                Cudajit.mem_alloc ~byte_size:size_in_bytes)
       in
-      let global = Option.some_if (not @@ is_local_only mem) @@ Ndarray.get_name n in
-      let local = Option.some_if (is_local_only mem) @@ Ndarray.get_name n ^ "_local" in
+      let global = Option.some_if (not @@ is_local_only mem) @@ LA.name n in
+      let local = Option.some_if (is_local_only mem) @@ LA.name n ^ "_local" in
       let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
-      if not @@ String.is_substring n.annot.backend_info ~substring:backend_info then
-        n.annot.backend_info <- n.annot.backend_info ^ backend_info;
+      if not @@ String.is_substring n.backend_info ~substring:backend_info then
+        n.backend_info <- n.backend_info ^ backend_info;
       { hosted; local; mem; dims; size_in_bytes; size_in_elems; num_typ; is_double; global; global_ptr })
 
 let jit_binop ~num_typ:_ ~is_double op =
@@ -160,10 +158,10 @@ let jit_code ~traced_store ppf llc : unit =
         fprintf ppf "@[<2>for (unsigned int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_
           pp_index i to_ pp_index i pp_ll body
     | Zero_out tensor ->
-        if Hashtbl.mem session_state.tensors (Ndarray.ptr tensor) then
+        if Hashtbl.mem session_state.tensors tensor then
           failwith
             ("exec_as_cuda: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
-            @@ [%sexp_of: Low_level.ndarray] tensor);
+            @@ [%sexp_of: LA.t] tensor);
         let tn = Low_level.(get_node traced_store tensor) in
         assert tn.zero_initialized
         (* The initialization will be emitted by get_tensor. *)

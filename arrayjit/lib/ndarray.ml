@@ -24,10 +24,10 @@ type 'a precision = Half : half_nd precision | Single : single_nd precision | Do
 [@@deriving sexp_of]
 
 type prec =
-  | Void_prec : prec
-  | Half_prec : half_nd precision -> prec
-  | Single_prec : single_nd precision -> prec
-  | Double_prec : double_nd precision -> prec
+  | Void_prec
+  | Half_prec of half_nd precision
+  | Single_prec of single_nd precision
+  | Double_prec of double_nd precision
 
 let half = Half_prec Half
 let single = Single_prec Single
@@ -47,36 +47,22 @@ let prec_of_sexp = function
   | Sexp.List _ -> invalid_arg "prec_of_sexp: expected atom, found list"
   | Sexp.Atom s -> invalid_arg @@ "prec_of_sexp: unknown precision " ^ s
 
-type ndarray =
+let equal_prec p1 p2 =
+  match (p1, p2) with
+  | Void_prec, Void_prec -> true
+  | Half_prec _, Half_prec _ -> true
+  | Single_prec _, Single_prec _ -> true
+  | Double_prec _, Double_prec _ -> true
+  | Void_prec, _ | Half_prec _, _ | Single_prec _, _ | Double_prec _, _ -> false
+
+type t =
   | Half_nd of (half_nd[@sexp.opaque])
   | Single_nd of (single_nd[@sexp.opaque])
   | Double_nd of (double_nd[@sexp.opaque])
 [@@deriving sexp_of]
 
-type 'a t = {
-  array : (ndarray[@compare.ignore] [@equal.ignore]);
-  id : int;
-  label : string; (** An optional information about the array. *)
-  annot : ('a[@compare.ignore] [@equal.ignore]);
-}
-[@@deriving sexp_of, compare, equal]
-
-type ptr = Ptr of int [@@deriving sexp, compare, equal, hash]
-
-let ptr { id; _ } = Ptr id
-let get_name { id; _ } = "#" ^ Int.to_string id
-
 let as_array (type arr_t) (prec : arr_t precision) (arr : arr_t) =
   match prec with Half -> Half_nd arr | Single -> Single_nd arr | Double -> Double_nd arr
-
-module ComparePtr = struct
-  type t = ptr = Ptr of int [@@deriving sexp, compare, equal, hash]
-end
-
-module Ptr = struct
-  include ComparePtr
-  include Comparator.Make (ComparePtr)
-end
 
 let precision_to_bigarray_kind (type elt_t) (prec : elt_t bigarray precision) : (float, elt_t) Bigarray.kind =
   match prec with Half -> float16 | Single -> Bigarray.Float32 | Double -> Bigarray.Float64
@@ -164,7 +150,8 @@ let indices_to_offset ~dims ~idcs =
 
 let fixed_state_for_init = ref None
 
-let create_bigarray (type elt_t) (prec : elt_t bigarray precision) dims (init_op : init_op) : elt_t bigarray =
+let create_bigarray (type elt_t) (prec : elt_t bigarray precision) ~dims (init_op : init_op) : elt_t bigarray
+    =
   Option.iter !fixed_state_for_init ~f:(fun seed -> Random.init seed);
   match init_op with
   | Constant_fill cs ->
@@ -174,18 +161,12 @@ let create_bigarray (type elt_t) (prec : elt_t bigarray precision) dims (init_op
       init_bigarray_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
   | Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
 
-let create_array prec dims init_op =
-  let f prec = as_array prec @@ create_bigarray prec dims init_op in
+let create_array prec ~dims init_op =
+  let f prec = as_array prec @@ create_bigarray prec ~dims init_op in
   map_prec { f } prec
 
-let unique_id = ref 1
-
-let create prec ~label ~dims init_op annot =
-  let id = !unique_id in
-  Int.incr unique_id;
-  { array = create_array prec dims init_op; id; label; annot }
-
 let precision_in_bytes = function Half_nd _ -> 2 | Single_nd _ -> 4 | Double_nd _ -> 8
+let prec_in_bytes = function Void_prec -> 0 | Half_prec _ -> 2 | Single_prec _ -> 4 | Double_prec _ -> 8
 
 let reset_bigarray arr ~f =
   let dims = A.dims arr in
@@ -215,7 +196,7 @@ let fold_bigarray arr ~init ~f =
   cloop (Array.create ~len 0) 0;
   !accu
 
-let empty prec = create_array prec [||] (Constant_fill [| 0.0 |])
+let empty_array prec = create_array prec ~dims:[||] (Constant_fill [| 0.0 |])
 
 let init_bigarray (init_op : init_op) (type b) (arr : b bigarray) =
   let dims = A.dims arr in

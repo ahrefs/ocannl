@@ -1,7 +1,7 @@
 open Base
 (** The code for operating on n-dimensional arrays. *)
 
-type ndarray = Low_level.ndarray [@@deriving sexp_of, equal]
+module LA = Low_level.Lazy_array
 
 (** Resets a tensor by performing the specified computation or data fetching. *)
 type fetch_op = Constant of float | Synthetic of t | Imported of Low_level.global_identifier
@@ -16,20 +16,20 @@ and t =
       zero_out : bool;
       accum : Low_level.binop;
       op : Low_level.binop;
-      lhs : ndarray;
-      rhs1 : ndarray;
-      rhs2 : ndarray;
+      lhs : LA.t;
+      rhs1 : LA.t;
+      rhs2 : LA.t;
       projections : unit -> Indexing.projections;
     }
   | Accum_unop of {
       zero_out : bool;
       accum : Low_level.binop;
       op : Low_level.unop;
-      lhs : ndarray;
-      rhs : ndarray;
+      lhs : LA.t;
+      rhs : LA.t;
       projections : unit -> Indexing.projections;
     }
-  | Fetch of { tensor : ndarray; fetch_op : fetch_op; dims : unit -> int array }
+  | Fetch of { tensor : LA.t; fetch_op : fetch_op; dims : unit -> int array }
 [@@deriving sexp_of]
 
 module Nd = Ndarray
@@ -39,9 +39,9 @@ let remove_updates tensor c =
     | ( Seq ((Accum_binop { lhs; _ } | Accum_unop { lhs; _ }), t)
       | Seq (t, (Accum_binop { lhs; _ } | Accum_unop { lhs; _ })) ) as c
       when check ->
-        if equal_ndarray tensor lhs then rm true t else rm false c
+        if LA.equal tensor lhs then rm true t else rm false c
     | Seq (t1, t2) -> Seq (rm true t1, rm true t2)
-    | (Accum_binop { lhs; _ } | Accum_unop { lhs; _ }) when equal_ndarray tensor lhs -> Noop
+    | (Accum_binop { lhs; _ } | Accum_unop { lhs; _ }) when LA.equal tensor lhs -> Noop
     | c -> c
   in
   rm true c
@@ -91,7 +91,7 @@ let to_low_level (code : t) : Low_level.t =
                 }
         in
         let for_loops = for_loop [] (Array.to_list projections.product_space) in
-        let s = Low_level.Comment ("Computing tensor " ^ Ndarray.get_name lhs) in
+        let s = Low_level.Comment ("Computing tensor " ^ LA.name lhs) in
         (* Note: it might be invalid to replicate computation across tasks. *)
         if zero_out then
           let dims () = projections.lhs_dims in
@@ -129,7 +129,7 @@ let to_low_level (code : t) : Low_level.t =
                 }
         in
         let for_loops = for_loop [] (Array.to_list projections.product_space) in
-        let s = Low_level.Comment ("Computing node " ^ Ndarray.get_name lhs) in
+        let s = Low_level.Comment ("Computing node " ^ LA.name lhs) in
         (* Note: it might be invalid to replicate computation across tasks. *)
         if zero_out then
           let dims () = projections.lhs_dims in

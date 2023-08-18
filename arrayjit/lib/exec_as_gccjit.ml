@@ -31,10 +31,12 @@ type tensor = {
 let session_results : Gccjit.result list ref = ref []
 let hoist_dynamic_indices = ref false
 
+module LA = Low_level.Lazy_array
+
 type state = {
   ctx : Gccjit.context;
   func : Gccjit.function_;
-  tensors : (Ndarray.ptr, tensor) Hashtbl.t;
+  tensors : (LA.t, tensor) Hashtbl.t;
   traced_store : Low_level.traced_store;
   init_block : Gccjit.block;
   finalize_block : Gccjit.block;  (** Only executed when [is_final] is true. *)
@@ -50,23 +52,24 @@ let jit_array_offset ctx ~idcs ~dims =
 
 let get_tensor { ctx; func; tensors; traced_store; init_block; finalize_block; is_final = _ } n : tensor =
   let open Gccjit in
-  let ptr = Ndarray.ptr n in
-  Hashtbl.find_or_add tensors ptr ~default:(fun () ->
+  Hashtbl.find_or_add tensors n ~default:(fun () ->
       let tn = Low_level.(get_node traced_store n) in
-      let host_size_in_bytes = Ndarray.size_in_bytes n.array in
-      let dims = n.annot.dims () in
+      let dims = Lazy.force n.dims in
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
-      let size_in_bytes = size_in_elems * Ndarray.precision_in_bytes n.array in
-      let is_on_host = host_size_in_bytes > 0 in
-      if is_on_host then assert (host_size_in_bytes = size_in_bytes);
+      let size_in_bytes = size_in_elems * Ndarray.prec_in_bytes n.prec in
+      let is_on_host = !(n.materialized) in
       let c_void_ptr = Type.(get ctx Type.Void_ptr) in
       let c_index = Type.get ctx Type.Size_t in
       let c_int = Type.get ctx Type.Int in
+      (* TODO: is the complexity of introducing this function and matching on Ndarray.t needed? *)
       let tensor c_typ is_double arr =
         let num_typ = Type.(get ctx c_typ) in
         let hosted_ptr =
-          if not is_on_host then None
-          else Some (RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray arr)
+          Option.map arr
+            ~f:
+              (Fn.compose
+                 (RValue.ptr ctx @@ Type.pointer num_typ)
+                 (Ctypes.bigarray_start Ctypes_static.Genarray))
         in
         let mem =
           if not is_on_host then Local_only
@@ -74,9 +77,7 @@ let get_tensor { ctx; func; tensors; traced_store; init_block; finalize_block; i
           else Host_only
         in
         let arr_typ = Type.array ctx num_typ size_in_elems in
-        let local =
-          if is_host_only mem then None else Some (Function.local func arr_typ @@ Ndarray.get_name n)
-        in
+        let local = if is_host_only mem then None else Some (Function.local func arr_typ @@ LA.name n) in
         let cast_void rv = RValue.cast ctx rv c_void_ptr in
         if tn.zero_initialized then
           Option.first_some (Option.map local ~f:(Fn.compose cast_void LValue.address)) hosted_ptr
@@ -94,14 +95,19 @@ let get_tensor { ctx; func; tensors; traced_store; init_block; finalize_block; i
                      RValue.int ctx c_index size_in_bytes;
                    ]);
         let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
-        if not @@ String.is_substring n.annot.backend_info ~substring:backend_info then
-          n.annot.backend_info <- n.annot.backend_info ^ backend_info;
+        if not @@ String.is_substring n.backend_info ~substring:backend_info then
+          n.backend_info <- n.backend_info ^ backend_info;
         { hosted_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
       in
-      match n.array with
-      | Half_nd arr -> (* FIXME: *) tensor Type.Float false arr
-      | Single_nd arr -> tensor Type.Float false arr
-      | Double_nd arr -> tensor Type.Double true arr)
+      match n.prec, Lazy.force n.array with
+      | _, Some (Half_nd arr) -> (* FIXME: *) tensor Type.Float false (Some arr)
+      | _, Some (Single_nd arr) -> tensor Type.Float false (Some arr)
+      | _, Some (Double_nd arr) -> tensor Type.Double true (Some arr)
+      | Half_prec _, None -> (* FIXME: *) tensor Type.Float false None
+      | Single_prec _, None -> tensor Type.Float false None
+      | Double_prec _, None -> tensor Type.Double true None
+      | Void_prec, None -> assert false
+      )
 
 let cleanup_session () =
   let open Gccjit in
@@ -202,7 +208,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
     | For_loop { index; from_; to_; body; trace_it = _ } -> jit_for_loop ~env index ~from_ ~to_ body
     | Set (_, _, Binop (Arg2, Get (_, _), _)) -> assert false
     | Set (tensor, idcs, Binop (op, Get (tensor2, idcs2), c2))
-      when Low_level.equal_ndarray tensor tensor2
+      when LA.equal tensor tensor2
            && [%equal: Indexing.axis_index array] idcs idcs2
            && is_builtin_op op ->
         (* FIXME: maybe it's not worth it? *)
@@ -220,10 +226,10 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
         let lhs = LValue.access_array (get_ptr tensor) offset in
         Block.assign !current_block lhs value
     | Zero_out tensor ->
-        if Hashtbl.mem state.tensors (Ndarray.ptr tensor) then
+        if Hashtbl.mem state.tensors tensor then
           failwith
             ("exec_as_gccjit: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
-            @@ [%sexp_of: Low_level.ndarray] tensor);
+            @@ [%sexp_of: LA.t] tensor);
         let tn = Low_level.(get_node state.traced_store tensor) in
         assert tn.zero_initialized
         (* The initialization will be emitted by get_tensor. *)

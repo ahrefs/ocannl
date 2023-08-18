@@ -6,14 +6,63 @@ type unop = Identity | Relu [@@deriving sexp, compare, equal]
 
 module Nd = Ndarray
 
-type annot = {
-  mutable never_virtual : bool;
-  mutable never_device_only : bool;
-  mutable backend_info : string;
-  dims : unit -> int array [@sexp.opaque] [@equal.ignore];
-  literal : bool;
-}
-[@@deriving sexp, equal]
+module Lazy_array = struct
+  type t = {
+    array : Nd.t option Lazy.t;
+    prec : Nd.prec;
+    dims : int array Lazy.t;
+    id : int;
+    label : string;  (** An optional display information. *)
+    literal : bool;
+    materialized : bool ref;
+    mutable never_virtual : bool;
+    mutable never_device_only : bool;
+    mutable backend_info : string;
+  }
+
+  let name { id; _ } = "#" ^ Int.to_string id
+  let compare a1 a2 = compare_int a1.id a2.id
+  let sexp_of_t a = Sexp.Atom (name a)
+
+  include Comparator.Make (struct
+    type nonrec t = t
+
+    let compare = compare
+    let sexp_of_t = sexp_of_t
+  end)
+
+  let equal a1 a2 = equal_int a1.id a2.id
+  let hash nd = Int.hash nd.id
+  let hash_fold_t acc nd = hash_fold_int acc nd.id
+  let hash_t = hash
+
+  let get_exn a =
+    match a.array with
+    | (lazy (Some nd)) -> nd
+    | _ -> invalid_arg @@ "Lazy_array.get_exn: array " ^ name a ^ " is not materialized"
+
+  let has a = match a.array with (lazy (Some _)) -> true | _ -> false
+
+  let create prec ~id ~label ~dims ?(literal = false) init_op =
+    let materialized = ref false in
+    let array =
+      lazy (if !materialized then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None)
+    in
+    {
+      array;
+      prec;
+      id;
+      label;
+      literal;
+      materialized;
+      never_virtual = false;
+      never_device_only = false;
+      backend_info = "";
+      dims;
+    }
+end
+
+module LA = Lazy_array
 
 type global_identifier = C_function of string  (** Calls a no-argument C function. *)
 [@@deriving sexp, equal, compare]
@@ -28,28 +77,10 @@ type init_op = Nd.init_op =
   | Standard_uniform  (** Draws the values from U(0,1). *)
 [@@deriving sexp]
 
-type ndarray = annot Ndarray.t [@@deriving equal]
-
-let sexp_of_ndarray nd = Sexp.Atom (Nd.get_name nd)
-let hash_ndarray nd = Int.hash nd.Nd.id
-let hash_fold_ndarray acc nd = hash_fold_int acc nd.Nd.id
-let compare_ndarray nd1 nd2 = compare_int nd1.Nd.id nd2.Nd.id
-
-module Nd_comparator = struct
-  type t = ndarray
-
-  include Comparator.Make (struct
-    type t = ndarray
-
-    let compare = compare_ndarray
-    let sexp_of_t = sexp_of_ndarray
-  end)
-end
-
-type create = { tensor : ndarray; dims : unit -> int array; init_op : init_op }
+type create = { tensor : LA.t; dims : unit -> int array; init_op : init_op }
 (** Information to create a tensor, once its shape is inferred. *)
 
-type scope_id = { nd : ndarray; scope_id : int } [@@deriving sexp_of, equal, hash]
+type scope_id = { nd : LA.t; scope_id : int } [@@deriving sexp_of, equal, hash]
 (** *** Low-level representation. *)
 
 let get_scope =
@@ -65,8 +96,8 @@ type t =
   | Staged_compilation of ((unit -> unit)[@equal.ignore])
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
-  | Zero_out of ndarray
-  | Set of ndarray * Indexing.axis_index array * float_t
+  | Zero_out of LA.t
+  | Set of LA.t * Indexing.axis_index array * float_t
   | Set_local of scope_id * float_t
 [@@deriving sexp_of, equal]
 
@@ -79,7 +110,7 @@ and float_t =
     }
   | Get_local of scope_id
   | Get_global of global_identifier
-  | Get of ndarray * Indexing.axis_index array
+  | Get of LA.t * Indexing.axis_index array
   | Binop of binop * float_t * float_t
   | Unop of unop * float_t
   | Constant of float
@@ -143,8 +174,7 @@ type visits =
 [@@deriving sexp, equal, variants]
 
 type traced_tensor = {
-  nd : annot Nd.t;
-  prec : Nd.prec;
+  nd : LA.t;
   mutable computations : (Indexing.axis_index array option * t) list;
       (** The computations (of the data node) are retrieved for optimization just as they are populated,
           so that the inlined code corresponds precisely to the changes to the tensors that would happen
@@ -156,7 +186,7 @@ type traced_tensor = {
       (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
   mutable non_virtual : bool;
       (** If false, this tensor is never materialized, its computations are inlined on a per-scalar basis.
-          A tensor that already exists (has size > 0) will not be virtual. *)
+          A tensor that is already materialized will not be virtual. *)
   mutable non_device_only : bool;
       (** If false, this node is only materialized on the devices it is computed on, it is not persisted
           outside of a step update. *)
@@ -171,12 +201,11 @@ type traced_tensor = {
 [@@deriving sexp_of]
 
 let get_node store nd =
-  Hashtbl.find_or_add store (Nd.ptr nd) ~default:(fun () ->
-      let non_virtual = nd.Nd.annot.never_virtual in
-      let non_device_only = nd.annot.never_device_only in
+  Hashtbl.find_or_add store nd ~default:(fun () ->
+      let non_virtual = nd.LA.never_virtual in
+      let non_device_only = nd.never_device_only in
       {
         nd;
-        prec = Nd.get_prec nd.array;
         computations = [];
         assignments = Hash_set.Poly.create ();
         accesses = Hashtbl.Poly.create ();
@@ -241,8 +270,7 @@ let precompute_constants ?idcs traced_store top_ptr llv =
   let top_n = get_node traced_store top_ptr in
   try
     if top_n.non_virtual then raise @@ Non_literal 8;
-    if (not top_n.nd.annot.literal) && Hashtbl.exists top_n.accesses ~f:is_recurrent then
-      raise @@ Non_literal 6;
+    if (not top_n.nd.literal) && Hashtbl.exists top_n.accesses ~f:is_recurrent then raise @@ Non_literal 6;
     (match idcs with
     | None -> ()
     | Some idcs ->
@@ -293,10 +321,10 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         (match llv with
         | Get (_tensor2, _idcs2) -> traced.last_write_non_update <- true
         | Binop (_, Get (tensor2, idcs2), _)
-          when equal_ndarray tensor tensor2 && [%equal: Indexing.axis_index array] idcs idcs2 ->
+          when LA.equal tensor tensor2 && [%equal: Indexing.axis_index array] idcs idcs2 ->
             traced.last_write_non_update <- false
         | Binop (_, _, Get (tensor2, idcs2))
-          when equal_ndarray tensor tensor2 && [%equal: Indexing.axis_index array] idcs idcs2 ->
+          when LA.equal tensor tensor2 && [%equal: Indexing.axis_index array] idcs idcs2 ->
             traced.last_write_non_update <- false
         | Constant _ -> traced.last_write_non_update <- true
         | _ -> traced.last_write_non_update <- true);
@@ -305,7 +333,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
           | Iterator s ->
               let old_tensor = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tensor) in
               (* TODO(#134): this prevents multiple virtual tensors from sharing for loops. *)
-              assert (equal_ndarray old_tensor tensor))
+              assert (LA.equal old_tensor tensor))
     | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
     | Staged_compilation _ -> ()
@@ -365,9 +393,9 @@ let process_computation traced top_llc =
     | For_loop { trace_it = false; _ } -> raise Non_virtual
     | For_loop { index; body; from_ = _; to_ = _; trace_it = true } ->
         loop_proc ~env_dom:(Map.add_exn ~key:index ~data:() env_dom) body
-    | Zero_out tensor -> if equal_ndarray tensor top_tensor then has_setter := true
+    | Zero_out tensor -> if LA.equal tensor top_tensor then has_setter := true
     | Set (tensor, indices, llv) ->
-        if equal_ndarray tensor top_tensor then (
+        if LA.equal tensor top_tensor then (
           check_idcs indices;
           has_setter := true)
         else
@@ -391,7 +419,7 @@ let process_computation traced top_llc =
     match llv with
     | Constant _ -> ()
     | Get (tensor, idcs) ->
-        if equal_ndarray tensor top_tensor then check_idcs idcs
+        if LA.equal tensor top_tensor then check_idcs idcs
         else
           (* Check for escaping variables. *)
           Array.iter idcs ~f:(function
@@ -454,8 +482,8 @@ let inline_computation ~id traced call_args =
           let env = Map.Poly.add_exn ~key:index ~data:fresh env in
           Option.map ~f:(fun body : t -> For_loop { index = fresh; from_; to_; body; trace_it })
           @@ loop env body
-      | Zero_out tensor when equal_ndarray tensor traced.nd -> Some (Set_local (id, Constant 0.0))
-      | Set (tensor, indices, llv) when equal_ndarray tensor traced.nd ->
+      | Zero_out tensor when LA.equal tensor traced.nd -> Some (Set_local (id, Constant 0.0))
+      | Set (tensor, indices, llv) when LA.equal tensor traced.nd ->
           assert ([%equal: Indexing.axis_index array option] (Some indices) def_args);
           Some (Set_local (id, loop_float env llv))
       | Zero_out _ -> None
@@ -466,7 +494,7 @@ let inline_computation ~id traced call_args =
     and loop_float env llv : float_t =
       match llv with
       | Constant _ -> llv
-      | Get (tensor, indices) when equal_ndarray tensor traced.nd ->
+      | Get (tensor, indices) when LA.equal tensor traced.nd ->
           assert ([%equal: Indexing.axis_index array option] (Some indices) def_args);
           Get_local id
       | Get (tensor, indices) -> Get (tensor, Array.map ~f:(subst env) indices)
@@ -539,7 +567,7 @@ let virtual_llc traced_store reverse_node_map (llc : t) : t =
           let id = get_scope tensor in
           Option.value ~default:llv
           @@ Option.map (inline_computation ~id traced indices) ~f:(fun body ->
-                 Local_scope { id; prec = traced.prec; body; orig_indices = indices })
+                 Local_scope { id; prec = traced.nd.prec; body; orig_indices = indices })
     | Local_scope opts ->
         Local_scope { opts with body = loop_proc ~process_for:(Set.add process_for opts.id.nd) opts.body }
     | Get_local _ -> llv
@@ -547,7 +575,7 @@ let virtual_llc traced_store reverse_node_map (llc : t) : t =
     | Binop (op, llv1, llv2) -> Binop (op, loop_float ~process_for llv1, loop_float ~process_for llv2)
     | Unop (op, llv) -> Unop (op, loop_float ~process_for llv)
   in
-  loop_proc ~process_for:(Set.empty (module Nd_comparator)) llc
+  loop_proc ~process_for:(Set.empty (module Lazy_array)) llc
 
 let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
   let is_inline tensor =
@@ -613,7 +641,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
               Option.value_or_thunk ~default:(fun () ->
                   Caml.Format.printf
                     "WARNING: unexpected non-eliminable virtual tensor:@ %a@ Compilation data:@ %a@ \n%!"
-                    Sexp.pp_hum (sexp_of_ndarray id.nd) Sexp.pp_hum (sexp_of_traced_tensor traced);
+                    Sexp.pp_hum (LA.sexp_of_t id.nd) Sexp.pp_hum (sexp_of_traced_tensor traced);
                   Get (id.nd, orig_indices))
               @@ Option.map ~f:(fun body -> Local_scope { id; prec; orig_indices; body })
               @@ loop_proc ~balanced ~env_dom body)
@@ -738,10 +766,10 @@ let simplify_llc traced_store llc =
   in
   loop_proc llc
 
-type traced_store = (Ndarray.ptr, traced_tensor) Base.Hashtbl.t
+type traced_store = (LA.t, traced_tensor) Base.Hashtbl.t
 
 let optimize_proc ?(verbose = false) llc : traced_store * t =
-  let traced_store : (Ndarray.ptr, traced_tensor) Hashtbl.t = Hashtbl.Poly.create () in
+  let traced_store : traced_store = Hashtbl.create (module Lazy_array) in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
   let reverse_node_map = Hashtbl.Poly.create () in
   if verbose then Stdio.printf "Code.optimize_proc: tracing\n%!";

@@ -3,8 +3,10 @@
 open Base
 open Arrayjit
 
+module LA = Low_level.Lazy_array
+
 type diff = {
-  grad : Low_level.ndarray;
+  grad : LA.t;
   zero_grads : High_level.t;
       (** Prepares for backpropagation. Always compile as: [backprop = Seq (zero_grads, backprop_body)]. *)
   backprop_body : High_level.t;
@@ -22,7 +24,7 @@ type t = {
   nondiff_forward_body : High_level.t;
       (** Same as [forward_body] if [diff] is [None], otherwise [Code.Noop]. *)
   id : int;  (** Same as [value.id]. *)
-  value : Low_level.ndarray;
+  value : LA.t;
   shape_logic : Shape.logic;
       (** How to do the last update of [t.shape] when finalizing the tensor.
           It is stored with the tensor for debugging (shape inference does not need to retrieve it). *)
