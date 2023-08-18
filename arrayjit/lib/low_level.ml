@@ -10,7 +10,7 @@ type annot = {
   mutable never_virtual : bool;
   mutable never_device_only : bool;
   mutable backend_info : string;
-  mutable dims : int array;
+  dims : unit -> int array [@sexp.opaque] [@equal.ignore];
   literal : bool;
 }
 [@@deriving sexp, equal]
