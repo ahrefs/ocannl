@@ -18,7 +18,7 @@ Warning disclaimer: this project is still "not announced". The features describe
 * Offers only two levels of abstraction.
   * Differentiable computations, centered around the [`%nn_op`](lib/ppx_nn_op.ml) syntax extension.
   * Plain computations, centered around the [`%nn_cd` and `%nn_dt`](lib/ppx_nn_cd.ml) syntax extension.
-  * Both abstraction levels share infrastructure. [`Tensor.t`](lib/tensor.ml) represent tensors, and are usually potentially differentiable (we call them _form_ tensors), but need not be (_non-diff_ tensors). _non-diff_ (non-differentiable) tensors cannot be subtensors of differentiable tensors. The [`%nn_cd`](lib/ppx_nn_cd.ml) syntax can be used to build up _non-diff_ tensors, but also to express "primitive/glue" computations ([`Code.t`](lib/code.ml)) that do not introduce new tensors.
+  * Both abstraction levels share infrastructure. [`Tensor.t`](lib/tensor.ml) represent tensors, and are usually potentially differentiable (we call them _form_ tensors), but need not be (_non-diff_ tensors). _non-diff_ (non-differentiable) tensors cannot be subtensors of differentiable tensors. The [`%nn_cd`](lib/ppx_nn_cd.ml) syntax can be used to build up _non-diff_ tensors, but also to express "primitive/glue" computations ([`High_level.t`](lib/code.ml)) that do not introduce new tensors.
 * Supports mixed-precision computations, e.g. higher-precision network components, or gradients at a higher precision than values.
 * Should be easily extensible.
 * Model surgery should be starightforward (not sure if we are there yet).

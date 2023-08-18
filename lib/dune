@@ -17,7 +17,6 @@
   (pps ppx_jane ppx_ocannl ppx_minidebug))
  (modules
   utils
-  PrintBox_utils
   shape
   tensor
   operation

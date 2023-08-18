@@ -13,7 +13,15 @@
  (preprocess
   (pps ppx_jane ppx_minidebug))
  (modules
-  ndarray indexing low_level high_level exec_as_cuda exec_as_gccjit dims_annot)
+  ndarray
+  indexing
+  low_level
+  high_level
+  PrintBox_utils
+  forest
+  exec_as_cuda
+  exec_as_gccjit
+  dims_annot)
  (modes byte native))
 
 (library
