@@ -39,7 +39,7 @@ type t = {
 
 (** A global root is a tensor that is not (currently) a subtensor of another tensor.
 
-    If a tensor with [id >= !first_session_id] is not among global roots, it must be a subtensor
+    If a tensor with [id >= session_state.first_session_id] is not among global roots, it must be a subtensor
     of a global root. *)
 let global_roots = ref @@ Map.empty (module Int)
 
@@ -58,13 +58,6 @@ let session_initialized = ref 0
 (** This code will be executed on each [Session.refresh_session ~run:true] call ([~run:true]
     is implicit), after a [forward] and [backprop] step. Execution potentially in parallel. *)
 let session_postprocess : High_level.t list ref = ref []
-
-(** A current session is the range of nodes from [!first_session_id] to [Node.global.unique_id - 1],
-    or an empty range if [!first_session_id = Node.global.unique_id].
-    Subtensors with [id] before this range are no longer updated by {!Session.SDSL.refresh_session}
-    and can only be used in new tensors if they are cross-session-persistent: not depending on
-    fetching operations. This condition is checked automatically. *)
-let first_session_id = ref 1
 
 let default_value_prec = ref Ndarray.single
 let default_grad_prec = ref Ndarray.single
@@ -112,11 +105,21 @@ let raw_unop ~zero_out ~accum ~m ~lhs_is_grad ~op ~m1 ~rhs_is_grad ~logic =
   let rhs = if rhs_is_grad then m1.value else (Option.value_exn m1.diff).grad in
   High_level.Accum_unop { zero_out; accum; lhs; op; rhs; projections }
 
+type session_state = { mutable first_session_id : int; mutable next_session_id : int }
+(** A current session is the range of nodes from [session_state.first_session_id] to
+    [session_state.next_session_id - 1] (possibly empty).
+
+    TODO: Subtensors with [id] before this range are no longer updated
+    and can only be used in new tensors if they are cross-session-persistent: not depending on
+    fetching operations. This condition is checked automatically. *)
+
+let session_state = { first_session_id = 0; next_session_id = 0 }
+
 let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~grad_body ~is_diff m1 m2 =
   (* Note: do not capture m1, m2 in any closure, so they can be GC'd. *)
-  if m1.id < !first_session_id && not m1.cross_session_persistent then
+  if m1.id < session_state.first_session_id && not m1.cross_session_persistent then
     raise @@ Session_error ("The subtensor is outside of current session", Some m1);
-  if m2.id < !first_session_id && not m2.cross_session_persistent then
+  if m2.id < session_state.first_session_id && not m2.cross_session_persistent then
     raise @@ Session_error ("The subtensor is outside of current session", Some m2);
   let m1_first = m1.id <= m2.id in
   let m1_processed : bool = Option.is_some m1.diff && (not @@ Map.mem !global_roots m1.id) in
@@ -130,7 +133,7 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
     | _, Some form2 -> form2.needs_gradient
     | _ -> false
   in
-  let fixme_fragile = !Node.unique_id in
+  let fixme_fragile = session_state.next_session_id in
   let shape = Shape.make ~id:fixme_fragile () in
   let n =
     Code.create_node_promoted_precision ~needs_gradient m1.node.node m2.node.node ~op_label ?desc_label
@@ -183,8 +186,13 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
     let m1_no_grad = m1_processed || not diff1.needs_gradient in
     let m2_no_grad = m2_processed || not diff2.needs_gradient in
     let zero_grads =
-      List.filter [m1_no_grad, diff1.zero_grads; m2_no_grad, diff2.zero_grads; needs_gradient, fetch_zeros n shape]
-      ~f:fst |> List.map ~f:snd |> High_level.sequential in
+      List.filter
+        [
+          (m1_no_grad, diff1.zero_grads); (m2_no_grad, diff2.zero_grads); (needs_gradient, fetch_zeros n shape);
+        ]
+        ~f:fst
+      |> List.map ~f:snd |> High_level.sequential
+    in
     (* The code needs to be included in the reverse order to which it was computed! This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
@@ -228,7 +236,7 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
   let m1_processed = Option.is_some m1.diff && (not @@ Map.mem !global_roots m1.id) in
   let children = [ { Node.sub_node = m1.node; computed_externally = m1_processed } ] in
   let needs_gradient = match m1.diff with Some form1 -> form1.needs_gradient | None -> false in
-  let fixme_fragile = !Node.unique_id in
+  let fixme_fragile = session_state.next_session_id in
   let shape = Shape.make ~id:fixme_fragile () in
   let n =
     Code.create_node_same_precision_as ~needs_gradient m1.node.node ~op_label ?desc_label ~children shape
@@ -275,8 +283,9 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
     in
     let m1_no_grad = m1_processed || not diff1.needs_gradient in
     let zero_grads =
-      List.filter [m1_no_grad, diff1.zero_grads; needs_gradient, fetch_zeros n shape]
-      ~f:fst |> List.map ~f:snd |> High_level.sequential in
+      List.filter [ (m1_no_grad, diff1.zero_grads); (needs_gradient, fetch_zeros n shape) ] ~f:fst
+      |> List.map ~f:snd |> High_level.sequential
+    in
     let grad_body = if needs_gradient then grad_body ~n ~n1 ~projections else Code.Noop in
     let grad_body =
       if diff1.needs_gradient then grad_body else Code.remove_updates { id = m1.id; field = Grad } grad_body
@@ -319,7 +328,7 @@ let term ~label ?desc_label ~needs_gradient ~is_diff ?batch_dims ?input_dims ?ou
       | _ -> false
   in
   let op_label : string = label in
-  let fixme_fragile = !Node.unique_id in
+  let fixme_fragile = session_state.next_session_id in
   let shape = Shape.make ~id:fixme_fragile ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced () in
   let dims () = Shape.to_dims shape in
   let n : Code.node =

@@ -8,9 +8,9 @@ let get_root id =
   | Some r -> r
   | None ->
       let msg =
-        if id >= !first_session_id && id < !Node.unique_id then
+        if id >= !first_session_id && id < session_state.next_session_id then
           "get_root: Node " ^ Int.to_string id ^ " is a subtensor"
-        else if id >= !Node.unique_id then "get_root: Node " ^ Int.to_string id ^ " has not been created yet"
+        else if id >= session_state.next_session_id then "get_root: Node " ^ Int.to_string id ^ " has not been created yet"
         else if id < 1 then "get_root: Node IDs start from 1"
         else "get_root: Node " ^ Int.to_string id ^ " is outside the current session"
       in
@@ -21,7 +21,7 @@ let get_node id =
   | Some r -> r
   | None ->
       let msg =
-        if id >= !Node.unique_id then "get_node: Node " ^ Int.to_string id ^ " has not been created yet"
+        if id >= session_state.next_session_id then "get_node: Node " ^ Int.to_string id ^ " has not been created yet"
         else if id < 1 then "get_root: Node IDs start from 1"
         else "get_node: Node " ^ Int.to_string id ^ " has been removed or lives on a different machine"
       in
@@ -423,7 +423,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
     Discards all computations (forward, backward, update params, data fetches), but keeps
     the already computed data / parameters. *)
 let close_session () =
-  Tensor.first_session_id := !Node.unique_id;
+  Tensor.first_session_id := session_state.next_session_id;
   Tensor.global_roots := Map.empty (module Int);
   Tensor.session_shape_updates := [];
   Tensor.session_initializations := [];
@@ -441,7 +441,7 @@ let drop_session () =
   let beginning_of_session = !Tensor.first_session_id in
   close_session ();
   Tensor.first_session_id := beginning_of_session;
-  for i = !Tensor.first_session_id to !Node.unique_id - 1 do
+  for i = !Tensor.first_session_id to session_state.next_session_id - 1 do
     Hashtbl.remove Code.global_node_store i
   done;
   Node.unique_id := !Tensor.first_session_id
@@ -570,7 +570,7 @@ module SDSL = struct
     m.node.annot.grad_never_device_only <- true
 
   let everything_fully_on_host () =
-    for id = !Tensor.first_session_id to !Node.unique_id - 1 do
+    for id = !Tensor.first_session_id to session_state.next_session_id - 1 do
       let n = Code.get id in
       n.annot.value_never_virtual <- true;
       n.annot.grad_never_virtual <- true;
@@ -579,7 +579,7 @@ module SDSL = struct
     done
 
   let everything_on_host_or_inlined () =
-    for id = !Tensor.first_session_id to !Node.unique_id - 1 do
+    for id = !Tensor.first_session_id to session_state.next_session_id - 1 do
       let n = Code.get id in
       n.annot.value_never_device_only <- true;
       n.annot.grad_never_device_only <- true
