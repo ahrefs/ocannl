@@ -89,30 +89,28 @@ let create ?(init_op = Low_level.Constant_fill [| 0.0 |]) tensor shape =
 
 let max_sublabel_length = ref 25
 
-let raw_binop ~zero_out ~accum ~lhs ~op ~rhs1 ~rhs2 ~logic =
-  let shape = n.annot.shape in
-  let shape_logic = Shape.Broadcast (logic, n1.annot.shape, n2.annot.shape) in
+let raw_binop ~zero_out ~accum ~m ~lhs_is_grad ~op ~m1 ~rhs1_is_grad ~m2 ~rhs2_is_grad ~logic =
+  let shape = m.shape in
+  let shape_logic = Shape.Broadcast (logic, m1.shape, m2.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
   Shape.propagate_shapes local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections () = Shape.derive_projections local_shape_update in
-  let lhs = Code.CDSL.(if lhs_is_grad then grad_of_id lhs_id else value_of_id lhs_id) in
-  let rhs1 = Code.CDSL.(if rhs1_is_grad then grad_of_id rhs1_id else value_of_id rhs1_id) in
-  let rhs2 = Code.CDSL.(if rhs2_is_grad then grad_of_id rhs2_id else value_of_id rhs2_id) in
-  Code.Accum_binop { zero_out; accum; lhs; op; rhs1; rhs2; projections }
+  let lhs = if lhs_is_grad then m.value else (Option.value_exn m.diff).grad in
+  let rhs1 = if rhs1_is_grad then m1.value else (Option.value_exn m1.diff).grad in
+  let rhs2 = if rhs2_is_grad then m2.value else (Option.value_exn m2.diff).grad in
+  High_level.Accum_binop { zero_out; accum; lhs; op; rhs1; rhs2; projections }
 
-let raw_unop ~zero_out ~accum ~lhs_id ~lhs_is_grad ~op ~rhs_id ~rhs_is_grad ~logic =
-  let n = Code.get lhs_id in
-  let n1 = Code.get rhs_id in
-  let shape = n.annot.shape in
-  let shape_logic = Shape.Transpose (logic, n1.annot.shape) in
+let raw_unop ~zero_out ~accum ~m ~lhs_is_grad ~op ~m1 ~rhs_is_grad ~logic =
+  let shape = m.shape in
+  let shape_logic = Shape.Transpose (logic, m1.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
-  Shape.propagate_shapes local_update;
+  Shape.propagate_shapes local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections () = Shape.derive_projections local_shape_update in
-  let lhs = Code.CDSL.(if lhs_is_grad then grad_of_id lhs_id else value_of_id lhs_id) in
-  let rhs = Code.CDSL.(if rhs_is_grad then grad_of_id rhs_id else value_of_id rhs_id) in
-  Code.Accum_unop { zero_out; accum; lhs; op; rhs; projections }
+  let lhs = if lhs_is_grad then m.value else (Option.value_exn m.diff).grad in
+  let rhs = if rhs_is_grad then m1.value else (Option.value_exn m1.diff).grad in
+  High_level.Accum_unop { zero_out; accum; lhs; op; rhs; projections }
 
 let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~grad_body ~is_diff m1 m2 =
   (* Note: do not capture m1, m2 in any closure, so they can be GC'd. *)
@@ -349,7 +347,7 @@ let term ~label ?desc_label ~needs_gradient ~is_diff ?batch_dims ?input_dims ?ou
   let cross_session_persistent = Option.is_none fetch_op && Option.is_none postprocess_op in
   let forward_body =
   Option.value ~default:High_level.Noop fetch_op @@ (
-    match fetch_op with ->
+    match fetch_op with
       | None ->
         if literal && Code.virtualize_settings.inline_constants then
           let fetch_op =
@@ -364,7 +362,7 @@ let term ~label ?desc_label ~needs_gradient ~is_diff ?batch_dims ?input_dims ?ou
           | _ ->
               n.annot.value_never_virtual <- true;
               n.annot.value_never_device_only <- true);
-              Fetch { tensor; fetch_op; dims }  in
+              Fetch { tensor; fetch_op; dims })  in
   Option.iter postprocess_op ~f:(fun postprocess_op ->
       let postprocess_op = postprocess_op ~n in
       session_postprocess := postprocess_op :: !session_postprocess;
