@@ -53,11 +53,7 @@ let session_initializations : Code.create list ref = ref []
 
 let session_initialized = ref 0
 
-(** This code will be executed on each [Session.refresh_session ~run:true] call ([~run:true]
-    is implicit), before any [forward] or [backprop] code. Execution potentially in parallel. *)
-let session_prepare_forward : Code.t list ref = ref []
-
-let session_prepare_backprop : Code.t list ref = ref []
+let session_prepare_backprop : High_level.t list ref = ref []
 
 (** This code will be executed on each [Session.refresh_session ~run:true] call ([~run:true]
     is implicit), after a [forward] and [backprop] step. Execution potentially in parallel. *)
@@ -346,6 +342,7 @@ let term ~label ?desc_label ~needs_gradient ~is_diff ?batch_dims ?input_dims ?ou
   let op_label : string = label in
   let fixme_fragile = !Node.unique_id in
   let shape = Shape.make ~id:fixme_fragile ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced () in
+  let dims = fun () -> Shape.to_dims shape in
   let n : Code.node =
     Code.create_node ~value_prec:!default_value_prec ~grad_prec:!default_grad_prec ~literal ~needs_gradient
       ~op_label ?desc_label ~children:[] shape
@@ -358,33 +355,29 @@ let term ~label ?desc_label ~needs_gradient ~is_diff ?batch_dims ?input_dims ?ou
   Code.update_shape local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
 
-  let forward_body = Code.Noop in
-  (* Note: we could embed the fetching code in the forward computation instead, but then we miss out
-      on potential optimizations. E.g. fetching latency means it's important to do it early and
-     in parallel. *)
   let init_op : Code.init_op =
-    Option.value_or_thunk init_op ~default:(fun () -> Code.Constant_fill [| 0.0 |])
+    Option.value_or_thunk init_op ~default:(fun () -> Low_level.Constant_fill [| 0.0 |])
   in
   session_initializations := create ~id ~init_op Value shape :: !session_initializations;
-  (if literal && Code.virtualize_settings.inline_constants then
-     let fetch_op : Code.fetch_op =
-       match init_op with Constant_fill [| c |] -> Constant c | _ -> assert false
-     in
-     let fetch = Code.Fetch { tensor = { id; field = Value }; fetch_op } in
-     session_prepare_forward := fetch :: !session_prepare_forward);
   let cross_session_persistent = Option.is_none fetch_op && Option.is_none postprocess_op in
-  Option.iter fetch_op
-    ~f:
-      Code.(
-        fun fetch_op ->
+  let forward_body =
+  Option.value ~default:High_level.Noop fetch_op @@ (
+    match fetch_op with ->
+      | None ->
+        if literal && Code.virtualize_settings.inline_constants then
+          let fetch_op =
+            match init_op with Constant_fill [| c |] -> Constant c | _ -> assert false
+          in
+          High_level.Fetch { tensor; fetch_op; dims }
+        else Noop
+      | Some fetch_op ->
           let fetch_op = fetch_op ~n in
-          let fetch = Fetch { tensor = { id; field = Value }; fetch_op } in
-          session_prepare_forward := fetch :: !session_prepare_forward;
-          match fetch_op with
+          (match fetch_op with
           | Constant _ -> ()
           | _ ->
               n.annot.value_never_virtual <- true;
               n.annot.value_never_device_only <- true);
+              Fetch { tensor; fetch_op; dims }  in
   Option.iter postprocess_op ~f:(fun postprocess_op ->
       let postprocess_op = postprocess_op ~n in
       session_postprocess := postprocess_op :: !session_postprocess;

@@ -342,8 +342,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
       Block_comment
         ( "Preparation",
           Par
-            ( Block_comment ("Prepare forward pass", all_parallel !Tensor.session_prepare_forward),
-              Block_comment ("Prepare backprop pass", all_parallel !Tensor.session_prepare_backprop) ) )
+            ( Block_comment ("Prepare backprop pass", all_parallel !Tensor.session_prepare_backprop) ) )
     in
     let forward =
       Block_comment
@@ -426,7 +425,6 @@ let close_session () =
   Tensor.session_shape_updates := [];
   Tensor.session_initializations := [];
   Tensor.session_initialized := 0;
-  Tensor.session_prepare_forward := [];
   Tensor.session_prepare_backprop := [];
   Tensor.session_postprocess := [];
   session_step_update := Noop;
