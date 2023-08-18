@@ -10,7 +10,8 @@ type fetch_op = Constant of float | Synthetic of t | Imported of Low_level.globa
 and t =
   | Noop
   | Seq of t * t
-  | Block_comment of string * t
+  | Block_comment of string * t (** Same as the given code, with a comment. *)
+  | Comment_reference of t (** Same as [Noop], the given code is just for documentation. *)
   | Accum_binop of {
       zero_out : bool;
       accum : Low_level.binop;
@@ -134,7 +135,7 @@ let to_low_level (code : t) : Low_level.t =
           let dims () = projections.lhs_dims in
           Low_level.unflat_lines [ s; loop (Fetch { tensor = lhs; fetch_op = Constant 0.; dims }); for_loops ]
         else Seq (s, for_loops)
-    | Noop -> Low_level.Noop
+    | Noop | Comment_reference _ -> Low_level.Noop
     | Block_comment (s, c) -> Low_level.Seq (Comment s, loop c)
     | Seq (c1, c2) -> Seq (loop c1, loop c2)
     | Fetch { tensor; fetch_op = Constant 0.0; dims = _ } -> Zero_out tensor

@@ -5,5 +5,5 @@ let rec last_array = function
   | High_level.Noop -> None
   | Seq (c1, c2) ->
       Option.value_or_thunk ~default:(fun () -> last_array c1) @@ Option.(map ~f:some @@ last_array c2)
-  | Block_comment (_, c) -> last_array c
+  | Block_comment (_, c) | Comment_reference c -> last_array c
   | Accum_binop { lhs; _ } | Accum_unop { lhs; _ } | Fetch { tensor = lhs; _ } -> Some lhs
