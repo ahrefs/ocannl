@@ -45,10 +45,10 @@ let _suspended () =
   SDSL.drop_all_sessions ();
   SDSL.enable_all_debugs ();
   Random.init 0;
-  let%nn_op n = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
+  let%nn_op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   SDSL.refresh_session ();
   Stdio.printf "\n%!";
-  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 n.id;
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 v.id;
   Stdio.printf "\nHigh-level code:\n%!";
   SDSL.print_session_code ();
   Stdio.printf "\nCompiled code:\n%!";

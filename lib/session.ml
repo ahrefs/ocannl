@@ -33,18 +33,18 @@ let ndarray_dims_to_string ?(with_axis_numbers = false) arr =
   Nd.precision_string arr ^ " prec " ^ Nd.int_dims_to_string ~with_axis_numbers @@ Nd.dims arr
 
 (** Converts ID, label and the dimensions of a node to a string. *)
-let node_header n =
-  let v_dims_s = ndarray_dims_to_string n.node.value in
-  let g_dims_s = match n.node.grad with None -> "<no-grad>" | Some grad -> ndarray_dims_to_string grad in
+let node_header v =
+  let v_dims_s = ndarray_dims_to_string v.node.value in
+  let g_dims_s = match v.node.grad with None -> "<no-grad>" | Some grad -> ndarray_dims_to_string grad in
   let dims_s =
     if String.equal v_dims_s g_dims_s then "dims " ^ v_dims_s
     else "dims val " ^ v_dims_s ^ " grad " ^ g_dims_s
   in
-  let desc_l = match n.desc_label with None -> "" | Some l -> " " ^ l in
-  "#" ^ Int.to_string n.id ^ desc_l ^ " op " ^ n.op_label ^ " " ^ dims_s ^ " ["
-  ^ String.concat ~sep:"," (List.map n.children ~f:(fun { sub_node = { id; _ }; _ } -> Int.to_string id))
+  let desc_l = match v.desc_label with None -> "" | Some l -> " " ^ l in
+  "#" ^ Int.to_string v.id ^ desc_l ^ " op " ^ v.op_label ^ " " ^ dims_s ^ " ["
+  ^ String.concat ~sep:"," (List.map v.children ~f:(fun { sub_node = { id; _ }; _ } -> Int.to_string id))
   ^ "]"
-(*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box n.label)*)
+(*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box v.label)*)
 
 type array_print_style =
   [ `Default
@@ -78,30 +78,30 @@ type array_print_style =
 (** We print out up to 5 axes when printing a tensor, as a grid (outer rectangle) of (inner)
     rectangles, possibly repeated (screens). *)
 
-let to_dag ?(single_node = false) ?entries_per_axis ?extra_prefix ~with_id ~with_value ~with_grad n =
-  let rec to_dag { sub_node = n; computed_externally } : PrintBox_utils.dag =
-    let id = Int.to_string n.id in
-    let children = if single_node then [] else List.map ~f:to_dag n.children in
-    let desc_l = match n.desc_label with None -> "" | Some l -> l ^ " " in
-    let op_l = match n.op_label with "" -> "" | l -> "<" ^ l ^ ">" in
+let to_dag ?(single_node = false) ?entries_per_axis ?extra_prefix ~with_id ~with_value ~with_grad v =
+  let rec to_dag { sub_node = v; computed_externally } : PrintBox_utils.dag =
+    let id = Int.to_string v.id in
+    let children = if single_node then [] else List.map ~f:to_dag v.children in
+    let desc_l = match v.desc_label with None -> "" | Some l -> l ^ " " in
+    let op_l = match v.op_label with "" -> "" | l -> "<" ^ l ^ ">" in
     let prefix = "[" ^ id ^ "] " ^ desc_l ^ op_l in
     let prefix =
       match extra_prefix with
       | None -> prefix
       | Some f ->
-          let extra = f n.annot in
+          let extra = f v.annot in
           if String.is_empty extra then prefix else prefix ^ " " ^ extra
     in
-    let labels = !(n.axis_labels) in
-    let indices = !(n.default_display_indices) in
-    match (computed_externally, with_value, with_grad, n.node.grad) with
-    | true, _, _, _ -> `Embed_subtree_ID (Int.to_string n.id)
+    let labels = !(v.axis_labels) in
+    let indices = !(v.default_display_indices) in
+    match (computed_externally, with_value, with_grad, v.node.grad) with
+    | true, _, _, _ -> `Embed_subtree_ID (Int.to_string v.id)
     | _, false, false, _ | _, false, true, None ->
-        let txt = if with_id then prefix else desc_l ^ n.op_label in
+        let txt = if with_id then prefix else desc_l ^ v.op_label in
         `Subtree_with_ID (id, `Tree (`Text txt, children))
     | _, true, false, _ | _, true, true, None ->
         let node =
-          `Box (Nd.render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices n.node.value)
+          `Box (Nd.render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices v.node.value)
         in
         `Subtree_with_ID (id, `Tree (node, children))
     | _, false, true, Some grad ->
@@ -110,7 +110,7 @@ let to_dag ?(single_node = false) ?entries_per_axis ?extra_prefix ~with_id ~with
         `Subtree_with_ID (id, `Tree (node, children))
     | _, true, true, Some grad ->
         let node =
-          let value = Nd.render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices n.node.value in
+          let value = Nd.render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices v.node.value in
           let grad =
             Nd.render_tensor ~brief:true ~prefix:"Gradient" ?entries_per_axis ~labels ~indices grad
           in
@@ -118,37 +118,37 @@ let to_dag ?(single_node = false) ?entries_per_axis ?extra_prefix ~with_id ~with
         in
         `Subtree_with_ID (id, `Tree (node, children))
   in
-  to_dag { sub_node = n; computed_externally = false }
+  to_dag { sub_node = v; computed_externally = false }
 
 let to_printbox ?single_node ?entries_per_axis ?extra_prefix ?(with_id = false) ?(with_value = true)
     ~with_grad ~depth n_id =
   to_dag ?single_node ?entries_per_axis ?extra_prefix ~with_id ~with_value ~with_grad n_id
   |> PrintBox_utils.reformat_dag depth
 
-let print_node_preamble ?(print_missing = true) ?extra_prefix n =
+let print_node_preamble ?(print_missing = true) ?extra_prefix v =
   try
-    let prefix = node_header n in
+    let prefix = node_header v in
     let prefix =
       match extra_prefix with
       | None -> prefix
       | Some f ->
-          let extra = f n.annot in
+          let extra = f v.annot in
           if String.is_empty extra then prefix else prefix ^ " " ^ extra
     in
     Caml.Format.printf "Node %s" prefix;
     Caml.Format.printf "\n%!"
   with Not_found_s _ | Caml.Not_found ->
-    if print_missing then Caml.Format.printf "Node #%d does not exist.\n%!" n.id
+    if print_missing then Caml.Format.printf "Node #%d does not exist.\n%!" v.id
 
-let print_tensor ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style) m =
+let print_tensor ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style) t =
   let open Tensor in
-  let sh = m.shape in
+  let sh = t.shape in
   let label =
-    (match m.node.desc_label with None -> "" | Some l -> l ^ " ")
-    ^ match m.node.op_label with "" -> "" | l -> "<" ^ l ^ "> "
+    (match t.node.desc_label with None -> "" | Some l -> l ^ " ")
+    ^ match t.node.op_label with "" -> "" | l -> "<" ^ l ^ "> "
   in
   let prefix =
-    "[" ^ Int.to_string m.id ^ "]: " ^ label ^ "shape "
+    "[" ^ Int.to_string t.id ^ "]: " ^ label ^ "shape "
     ^ Shape.to_string_hum ~style:`Axis_number_and_size sh
     ^ " "
   in
@@ -168,14 +168,14 @@ let print_tensor ~with_grad ~with_code ?(with_low_level = false) (style : array_
         in
         let inv_labels =
           match inv_labels with
-          | `Duplicate_key l -> raise @@ Session_error ("`Label_layout found a repeating label: " ^ l, Some m)
+          | `Duplicate_key l -> raise @@ Session_error ("`Label_layout found a repeating label: " ^ l, Some t)
           | `Ok inv_labels -> inv_labels
         in
         let idcs =
           List.map label_idcs ~f:(fun (l, i) ->
               match Map.find inv_labels l with
               | Some axis -> (axis, i)
-              | None -> raise @@ Session_error ("`Label_layout label not found in shape: " ^ l, Some m))
+              | None -> raise @@ Session_error ("`Label_layout label not found in shape: " ^ l, Some t))
         in
         Shape.axis_map_to_dims_index @@ Map.of_alist_exn (module Shape.AxisKey) idcs
     | `Inline -> [||]
@@ -193,12 +193,12 @@ let print_tensor ~with_grad ~with_code ?(with_low_level = false) (style : array_
   (match style with
   | `Inline ->
       Ndarray.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
-        ?axes_spec m.node.node.value
+        ?axes_spec t.node.node.value
   | _ ->
-      Ndarray.pp_tensor Caml.Format.std_formatter ~prefix ~labels ~indices m.node.node.value;
+      Ndarray.pp_tensor Caml.Format.std_formatter ~prefix ~labels ~indices t.node.node.value;
       Caml.Format.print_newline ());
   (if with_grad then
-     match (style, m.node.node.grad) with
+     match (style, t.node.node.grad) with
      | `Inline, Some grad ->
          Ndarray.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
            ?axes_spec grad;
@@ -208,19 +208,19 @@ let print_tensor ~with_grad ~with_code ?(with_low_level = false) (style : array_
          Caml.Format.print_newline ()
      | _ -> ());
   if with_code then (
-    (match m.forward_body with
+    (match t.forward_body with
     | Noop -> ()
     | fwd_code -> Caml.Format.printf "Current forward body:@ %a@ " Code.fprint_code fwd_code);
-    match m.diff with
+    match t.diff with
     | Some { backprop_body = Noop; _ } -> ()
     | Some { backprop_body = bwd_code; _ } ->
         Caml.Format.printf "Current backprop body:@ %a@ " Code.fprint_code bwd_code
     | None -> ());
   if with_low_level then (
-    (match m.forward_body with
+    (match t.forward_body with
     | Noop -> ()
     | fwd_code -> Caml.Format.printf "Current forward low-level body:@ %a@ " Code.fprint_low_level fwd_code);
-    match m.diff with
+    match t.diff with
     | Some { backprop_body = Noop; _ } -> ()
     | Some { backprop_body = bwd_code; _ } ->
         Caml.Format.printf "Current backprop low-level body:@ %a@ " Code.fprint_low_level bwd_code
@@ -271,10 +271,10 @@ let initialize_host_tensors traced_store =
     | { tensor = { id; field = Grad } as ptr; dims; init_op } ->
         let dims = Array.map ~f:(fun d -> d.Shape.dim) @@ dims () in
         let tn = Code.get_node traced_store ptr in
-        let n = (Code.get id).node in
+        let v = (Code.get id).node in
         if tn.non_virtual && tn.non_device_only then
-          n.grad <- Some (Ndarray.create !Tensor.default_grad_prec dims init_op)
-        else assert (Option.is_some n.grad))
+          g <- Some (Ndarray.create !Tensor.default_grad_prec dims init_op)
+        else assert (Option.is_some g))
 
 let compile_routine ~name code =
   let open Tensor in
@@ -300,7 +300,7 @@ let generate_params_update ~(minus_lr : Tensor.t) ?params () =
   let params = match params with Some p -> p | None -> Hashtbl.data @@ session_params () in
   let module CDSL = Code.CDSL in
   let module NFDSL = Operation.NFDSL in
-  List.map params ~f:(fun n -> [%nn_cd n =+ minus_lr * n.grad ~logic:"."])
+  List.map params ~f:(fun v -> [%nn_cd v =+ minus_lr * g ~logic:"."])
 
 let print_session_code ?(compiled = false) () =
   (* FIXME: figure out if / why this isn't idempotent. *)
@@ -379,15 +379,15 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
     in
     (* Roots at the time of compilation are hosted, so that they can be consumed downstream. *)
     Map.iter_keys !Tensor.global_roots ~f:(fun id ->
-        let n = Code.get id in
-        n.annot.value_never_virtual <- true;
-        n.annot.value_never_device_only <- true);
+        let v = Code.get id in
+        v.annot.value_never_virtual <- true;
+        v.annot.value_never_device_only <- true);
     (* Params are hosted also, so they can be updated over multiple steps, stored, updated etc.
        Params would typically be automatically found non-virtual and non-device-only, but there
        are corner cases we prevent here. *)
-    Hashtbl.iter ~f:(fun n ->
-        n.Node.annot.value_never_virtual <- true;
-        n.Node.annot.value_never_device_only <- true)
+    Hashtbl.iter ~f:(fun v ->
+        v.Node.annot.value_never_virtual <- true;
+        v.Node.annot.value_never_device_only <- true)
     @@ session_params ();
     session_step_update := sequential [ preparation; forward; backprop; params_update; postprocess ];
     if verbose then Stdio.printf "refresh_session: compiling\n%!";
@@ -456,12 +456,12 @@ let drop_all_sessions () =
 
 let save_all_tensors ~name =
   let out = Npy.Npz.open_out (name ^ ".npz") in
-  Hashtbl.iter Code.global_node_store ~f:(fun n ->
-      let save field arr = Npy.Npz.write out Node.(tensor_ptr_name { id = n.id; field }) arr in
+  Hashtbl.iter Code.global_node_store ~f:(fun v ->
+      let save field arr = Npy.Npz.write out Node.(tensor_ptr_name { id = v.id; field }) arr in
       let f arr = save Value arr in
-      Ndarray.map { f } n.node.value;
+      Ndarray.map { f } v.node.value;
       let f arr = save Grad arr in
-      Option.iter n.node.grad ~f:(Ndarray.map { f }))
+      Option.iter v.node.grad ~f:(Ndarray.map { f }))
 
 (** Restores the content of already-existing tensors from the file [name ^ ".npz"]. With [~partially:true],
     does not complain about tensors missing in the file. *)
@@ -473,7 +473,7 @@ let restore_tensors ?(partially = false) f_name =
         match Code.get_tensor ptr with
         | None -> ()
         | Some arr ->
-            let t_name = Node.(tensor_ptr_name { id = n.id; field }) in
+            let t_name = Node.(tensor_ptr_name { id = v.id; field }) in
             let src = Npy.Npz.read inp t_name in
             let f prec dst =
               match Npy.to_bigarray Bigarray.c_layout (Ndarray.precision_to_bigarray_kind prec) src with
@@ -485,23 +485,23 @@ let restore_tensors ?(partially = false) f_name =
       restore Value;
       restore Node.Grad)
 
-let value_1d_points ?from_axis ~xdim m = Ndarray.retrieve_1d_points ?from_axis ~xdim m.Tensor.node.node.value
+let value_1d_points ?from_axis ~xdim t = Ndarray.retrieve_1d_points ?from_axis ~xdim t.Tensor.node.node.value
 
-let value_2d_points ?from_axis ~xdim ~ydim m =
-  Ndarray.retrieve_2d_points ?from_axis ~xdim ~ydim m.Tensor.node.node.value
+let value_2d_points ?from_axis ~xdim ~ydim t =
+  Ndarray.retrieve_2d_points ?from_axis ~xdim ~ydim t.Tensor.node.node.value
 
-let grad_1d_points ?from_axis ~xdim m =
-  match m.Tensor.node.node.grad with None -> [||] | Some a -> Ndarray.retrieve_1d_points ?from_axis ~xdim a
+let grad_1d_points ?from_axis ~xdim t =
+  match t.Tensor.node.node.grad with None -> [||] | Some a -> Ndarray.retrieve_1d_points ?from_axis ~xdim a
 
-let grad_2d_points ?from_axis ~xdim ~ydim m =
-  match m.Tensor.node.node.grad with
+let grad_2d_points ?from_axis ~xdim ~ydim t =
+  match t.Tensor.node.node.grad with
   | None -> [||]
   | Some a -> Ndarray.retrieve_2d_points ?from_axis ~xdim ~ydim a
 
-let set_value m = Ndarray.set_from_float m.Tensor.node.node.value
-let get_value m = Ndarray.get_as_float m.Tensor.node.node.value
-let set_grad m = Ndarray.set_from_float (Option.value_exn m.Tensor.node.node.grad)
-let get_grad m = Ndarray.get_as_float (Option.value_exn m.Tensor.node.node.grad)
+let set_value t = Ndarray.set_from_float t.Tensor.node.node.value
+let get_value t = Ndarray.get_as_float t.Tensor.node.node.value
+let set_grad t = Ndarray.set_from_float (Option.value_exn t.Tensor.node.node.grad)
+let get_grad t = Ndarray.get_as_float (Option.value_exn t.Tensor.node.node.grad)
 
 module O = struct
   (** Get the value at the given indices. *)
@@ -517,16 +517,16 @@ module O = struct
   let ( .@%{}<- ) = set_grad
 
   (** Get the value at the given index from a single-axis shape tensor. *)
-  let ( .@[] ) m indx = get_value m [| indx |]
+  let ( .@[] ) t indx = get_value t [| indx |]
 
   (** Set the value at the given index for a single-axis shape tensor. *)
-  let ( .@[]<- ) m indx = set_value m [| indx |]
+  let ( .@[]<- ) t indx = set_value t [| indx |]
 
   (** Get the gradient at the given index from a single-axis shape tensor. *)
-  let ( .@%[] ) m indx = get_grad m [| indx |]
+  let ( .@%[] ) t indx = get_grad t [| indx |]
 
   (** Set the gradient at the given index for a single-axis shape tensor. *)
-  let ( .@%[]<- ) m indx = set_grad m [| indx |]
+  let ( .@%[]<- ) t indx = set_grad t [| indx |]
 end
 
 module SDSL = struct
@@ -547,9 +547,9 @@ module SDSL = struct
       =
     let extra_prefix = if with_backend_info then Some (fun annot -> annot.Code.backend_info) else None in
     try
-      let n = Code.get id in
+      let v = Code.get id in
       PrintBox_text.output Stdio.stdout
-      @@ Node.to_printbox ?entries_per_axis ?with_id ?with_value ~with_grad ?extra_prefix ~depth n
+      @@ Node.to_printbox ?entries_per_axis ?with_id ?with_value ~with_grad ?extra_prefix ~depth v
     with Not_found_s _ | Caml.Not_found -> Caml.Format.printf "Node #%d does not exist.\n%!" id
 
   let max_sublabel_length = Tensor.max_sublabel_length
@@ -560,44 +560,44 @@ module SDSL = struct
   let print_decimals_precision = Ndarray.print_decimals_precision
   let get_root = get_root
   let get_node = get_node
-  let set_values m cs = Ndarray.(init (Constant_fill cs) m.Tensor.node.node.value)
-  let set_grads m cs = Ndarray.(init (Constant_fill cs) (Option.value_exn m.Tensor.node.node.grad))
+  let set_values t cs = Ndarray.(init (Constant_fill cs) t.Tensor.node.node.value)
+  let set_grads t cs = Ndarray.(init (Constant_fill cs) (Option.value_exn t.Tensor.node.node.grad))
 
-  let set_fully_on_host m =
-    m.Tensor.node.annot.value_never_virtual <- true;
-    m.node.annot.grad_never_virtual <- true;
-    m.Tensor.node.annot.value_never_device_only <- true;
-    m.node.annot.grad_never_device_only <- true
+  let set_fully_on_host t =
+    t.Tensor.node.annot.value_never_virtual <- true;
+    t.node.annot.grad_never_virtual <- true;
+    t.Tensor.node.annot.value_never_device_only <- true;
+    t.node.annot.grad_never_device_only <- true
 
   let everything_fully_on_host () =
     for id = !Tensor.first_session_id to session_state.next_session_id - 1 do
-      let n = Code.get id in
-      n.annot.value_never_virtual <- true;
-      n.annot.grad_never_virtual <- true;
-      n.annot.value_never_device_only <- true;
-      n.annot.grad_never_device_only <- true
+      let v = Code.get id in
+      v.annot.value_never_virtual <- true;
+      v.annot.grad_never_virtual <- true;
+      v.annot.value_never_device_only <- true;
+      v.annot.grad_never_device_only <- true
     done
 
   let everything_on_host_or_inlined () =
     for id = !Tensor.first_session_id to session_state.next_session_id - 1 do
-      let n = Code.get id in
-      n.annot.value_never_device_only <- true;
-      n.annot.grad_never_device_only <- true
+      let v = Code.get id in
+      v.annot.value_never_device_only <- true;
+      v.annot.grad_never_device_only <- true
     done
 
-  let value_1d_points ?from_axis ~xdim m =
-    Ndarray.retrieve_1d_points ?from_axis ~xdim m.Tensor.node.node.value
+  let value_1d_points ?from_axis ~xdim t =
+    Ndarray.retrieve_1d_points ?from_axis ~xdim t.Tensor.node.node.value
 
-  let value_2d_points ?from_axis ~xdim ~ydim m =
-    Ndarray.retrieve_2d_points ?from_axis ~xdim ~ydim m.Tensor.node.node.value
+  let value_2d_points ?from_axis ~xdim ~ydim t =
+    Ndarray.retrieve_2d_points ?from_axis ~xdim ~ydim t.Tensor.node.node.value
 
-  let grad_1d_points ?from_axis ~xdim m =
-    match m.Tensor.node.node.grad with
+  let grad_1d_points ?from_axis ~xdim t =
+    match t.Tensor.node.node.grad with
     | None -> [||]
     | Some a -> Ndarray.retrieve_1d_points ?from_axis ~xdim a
 
-  let grad_2d_points ?from_axis ~xdim ~ydim m =
-    match m.Tensor.node.node.grad with
+  let grad_2d_points ?from_axis ~xdim ~ydim t =
+    match t.Tensor.node.node.grad with
     | None -> [||]
     | Some a -> Ndarray.retrieve_2d_points ?from_axis ~xdim ~ydim a
 

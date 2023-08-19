@@ -276,7 +276,7 @@ let precompute_constants ?idcs traced_store top_ptr llv =
     top_n.scalar <- Some (loop llv)
   with Non_literal _i ->
     (* if !with_debug then
-       Caml.Format.printf "TRACE: Array #%d is non-literal because no. %d\n%!" n.id i; *)
+       Caml.Format.printf "TRACE: Array #%d is non-literal because no. %d\n%!" v.id i; *)
     (* In principle we might conclude again that the node is to be inlined as scalar, that's OK. *)
     top_n.scalar <- None
 
@@ -794,8 +794,8 @@ let compile_proc ~name ?(verbose = false) ~for_step_update:_ llc =
     let ppf = Caml.Format.formatter_of_out_channel f in
     Caml.Format.pp_set_margin ppf !code_sexp_margin;
     Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t @@ snd result));
-  Hashtbl.iter (fst result) ~f:(fun n ->
-    if n.non_virtual && n.non_device_only then n.nd.materialized := true);
+  Hashtbl.iter (fst result) ~f:(fun v ->
+    if v.non_virtual && v.non_device_only then v.nd.materialized := true);
   if verbose then Stdio.printf "Code.compile_proc: finished\n%!";
   result
 

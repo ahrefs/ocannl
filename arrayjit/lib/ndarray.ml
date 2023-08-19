@@ -215,11 +215,11 @@ let fold ~init ~f arr =
   let f arr = fold_bigarray ~init ~f arr in
   map { f } arr
 
-let size_in_bytes n =
+let size_in_bytes v =
   (* Cheating here because 1 number Bigarray is same size as empty Bigarray:
      it's more informative to report the cases differently. *)
   let f arr = if Array.is_empty @@ A.dims arr then 0 else A.size_in_bytes arr in
-  map { f } n
+  map { f } v
 
 let retrieve_2d_points ?from_axis ~xdim ~ydim arr =
   let dims = dims arr in

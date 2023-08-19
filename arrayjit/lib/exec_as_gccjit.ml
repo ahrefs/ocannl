@@ -50,14 +50,14 @@ let jit_array_offset ctx ~idcs ~dims =
       RValue.binary_op ctx Plus c_index idx
       @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
 
-let get_array { ctx; func; arrays; traced_store; init_block; finalize_block; is_final = _ } n : ndarray =
+let get_array { ctx; func; arrays; traced_store; init_block; finalize_block; is_final = _ } v : ndarray =
   let open Gccjit in
-  Hashtbl.find_or_add arrays n ~default:(fun () ->
-      let tn = Low_level.(get_node traced_store n) in
-      let dims = Lazy.force n.dims in
+  Hashtbl.find_or_add arrays v ~default:(fun () ->
+      let tn = Low_level.(get_node traced_store v) in
+      let dims = Lazy.force v.dims in
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
-      let size_in_bytes = size_in_elems * Ndarray.prec_in_bytes n.prec in
-      let is_on_host = !(n.materialized) in
+      let size_in_bytes = size_in_elems * Ndarray.prec_in_bytes v.prec in
+      let is_on_host = !(v.materialized) in
       let c_void_ptr = Type.(get ctx Type.Void_ptr) in
       let c_index = Type.get ctx Type.Size_t in
       let c_int = Type.get ctx Type.Int in
@@ -77,7 +77,7 @@ let get_array { ctx; func; arrays; traced_store; init_block; finalize_block; is_
           else Host_only
         in
         let arr_typ = Type.array ctx num_typ size_in_elems in
-        let local = if is_host_only mem then None else Some (Function.local func arr_typ @@ LA.name n) in
+        let local = if is_host_only mem then None else Some (Function.local func arr_typ @@ LA.name v) in
         let cast_void rv = RValue.cast ctx rv c_void_ptr in
         if tn.zero_initialized then
           Option.first_some (Option.map local ~f:(Fn.compose cast_void LValue.address)) hosted_ptr
@@ -95,11 +95,11 @@ let get_array { ctx; func; arrays; traced_store; init_block; finalize_block; is_
                      RValue.int ctx c_index size_in_bytes;
                    ]);
         let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
-        if not @@ String.is_substring n.backend_info ~substring:backend_info then
-          n.backend_info <- n.backend_info ^ backend_info;
+        if not @@ String.is_substring v.backend_info ~substring:backend_info then
+          v.backend_info <- v.backend_info ^ backend_info;
         { hosted_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
       in
-      match n.prec, Lazy.force n.array with
+      match v.prec, Lazy.force v.array with
       | _, Some (Half_nd arr) -> (* FIXME: *) array Type.Float false (Some arr)
       | _, Some (Single_nd arr) -> array Type.Float false (Some arr)
       | _, Some (Double_nd arr) -> array Type.Double true (Some arr)

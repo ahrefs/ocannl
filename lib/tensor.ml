@@ -77,27 +77,27 @@ let default_init_op = Low_level.Constant_fill [| 0.0 |]
 
 let max_sublabel_length = ref 25
 
-let raw_binop ~zero_out ~accum ~m ~lhs_is_grad ~op ~m1 ~rhs1_is_grad ~m2 ~rhs2_is_grad ~logic =
-  let shape = m.shape in
-  let shape_logic = Shape.Broadcast (logic, m1.shape, m2.shape) in
+let raw_binop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs1_is_grad ~t2 ~rhs2_is_grad ~logic =
+  let shape = t.shape in
+  let shape_logic = Shape.Broadcast (logic, t1.shape, t2.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
   Shape.propagate_shapes local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections () = Shape.derive_projections local_shape_update in
-  let lhs = if lhs_is_grad then m.value else (Option.value_exn m.diff).grad in
-  let rhs1 = if rhs1_is_grad then m1.value else (Option.value_exn m1.diff).grad in
-  let rhs2 = if rhs2_is_grad then m2.value else (Option.value_exn m2.diff).grad in
+  let lhs = if lhs_is_grad then t.value else (Option.value_exn t.diff).grad in
+  let rhs1 = if rhs1_is_grad then t1.value else (Option.value_exn t1.diff).grad in
+  let rhs2 = if rhs2_is_grad then t2.value else (Option.value_exn t2.diff).grad in
   High_level.Accum_binop { zero_out; accum; lhs; op; rhs1; rhs2; projections }
 
-let raw_unop ~zero_out ~accum ~m ~lhs_is_grad ~op ~m1 ~rhs_is_grad ~logic =
-  let shape = m.shape in
-  let shape_logic = Shape.Transpose (logic, m1.shape) in
+let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
+  let shape = t.shape in
+  let shape_logic = Shape.Transpose (logic, t1.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
   Shape.propagate_shapes local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections () = Shape.derive_projections local_shape_update in
-  let lhs = if lhs_is_grad then m.value else (Option.value_exn m.diff).grad in
-  let rhs = if rhs_is_grad then m1.value else (Option.value_exn m1.diff).grad in
+  let lhs = if lhs_is_grad then t.value else (Option.value_exn t.diff).grad in
+  let rhs = if rhs_is_grad then t1.value else (Option.value_exn t1.diff).grad in
   High_level.Accum_unop { zero_out; accum; lhs; op; rhs; projections }
 
 type session_state = { mutable first_session_id : int; mutable next_session_id : int }
@@ -110,19 +110,19 @@ type session_state = { mutable first_session_id : int; mutable next_session_id :
 
 let session_state = { first_session_id = 0; next_session_id = 0 }
 
-let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~grad_body ~is_diff m1 m2 =
-  (* Note: do not capture m1, m2 in any closure, so they can be GC'd. *)
-  if m1.id < session_state.first_session_id && not m1.cross_session_persistent then
-    raise @@ Session_error ("The subtensor is outside of current session", Some m1);
-  if m2.id < session_state.first_session_id && not m2.cross_session_persistent then
-    raise @@ Session_error ("The subtensor is outside of current session", Some m2);
-  let m1_first = m1.id <= m2.id in
-  let m1_processed : bool = Option.is_some m1.diff && (not @@ Map.mem !global_roots m1.id) in
-  let m2_processed : bool =
-    Option.is_some m2.diff && (m2.id = m1.id || (not @@ Map.mem !global_roots m2.id))
+let binop ~op_label ?(desc_label="") ?(compose_op = Shape.Pointwise_bin) ~op_body ~grad_body ~is_diff t1 t2 =
+  (* Note: do not capture t1, t2 in any closure, so they can be GC'd. *)
+  if t1.id < session_state.first_session_id && not t1.cross_session_persistent then
+    raise @@ Session_error ("The subtensor is outside of current session", Some t1);
+  if t2.id < session_state.first_session_id && not t2.cross_session_persistent then
+    raise @@ Session_error ("The subtensor is outside of current session", Some t2);
+  let t1_first = t1.id <= t2.id in
+  let t1_processed : bool = Option.is_some t1.diff && (not @@ Map.mem !global_roots t1.id) in
+  let t2_processed : bool =
+    Option.is_some t2.diff && (t2.id = t1.id || (not @@ Map.mem !global_roots t2.id))
   in
   let needs_gradient =
-    match (m1.diff, m2.diff) with
+    match (t1.diff, t2.diff) with
     | Some form1, Some form2 -> form1.needs_gradient || form2.needs_gradient
     | Some form1, _ -> form1.needs_gradient
     | _, Some form2 -> form2.needs_gradient
@@ -142,21 +142,21 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
   Shape.propagate_shapes local_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections () = Shape.derive_projections local_shape_update in
-  let op_body = op_body ~n ~n1 ~n2 ~projections in
+  let op_body = op_body ~v ~v1 ~v2 ~projections in
   (* The code needs to be included in the order it was computed! *)
   let forward_body =
-    Code.(
+    High_level.(
       match
-        ( m1_processed,
-          (if is_diff then m1.forward_body else m1.nondiff_forward_body),
-          m2_processed,
-          if is_diff then m2.forward_body else m2.nondiff_forward_body )
+        ( t1_processed,
+          (if is_diff then t1.forward_body else t1.nondiff_forward_body),
+          t2_processed,
+          if is_diff then t2.forward_body else t2.nondiff_forward_body )
       with
       | true, _, true, _ | true, _, _, Noop | _, Noop, true, _ | _, Noop, _, Noop -> op_body
-      | false, m1_body, false, m2_body when m1_first -> Seq (ParHint (m1_body, m2_body), op_body)
-      | false, m1_body, false, m2_body -> Seq (ParHint (m2_body, m1_body), op_body)
-      | _, _, false, m2_body -> Seq (m2_body, op_body)
-      | false, m1_body, _, _ -> Seq (m1_body, op_body))
+      | false, t1_body, false, t2_body when t1_first -> Seq (ParHint (t1_body, t2_body), op_body)
+      | false, t1_body, false, t2_body -> Seq (ParHint (t2_body, t1_body), op_body)
+      | _, _, false, t2_body -> Seq (t2_body, op_body)
+      | false, t1_body, _, _ -> Seq (t1_body, op_body))
   in
   let init_values_body = create ~id Value shape in
   session_initializations := init_values_body :: !session_initializations;
@@ -166,24 +166,24 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
       diff = None;
       nondiff_forward_body = forward_body;
       id;
-      node = n;
+      node = v;
       shape_logic;
       shape;
       cross_session_persistent = false;
     }
   else
     let diff1, diff2 =
-      match (m1.diff, m2.diff) with
+      match (t1.diff, t2.diff) with
       | Some form1, Some form2 -> (form1, form2)
-      | None, _ -> raise @@ Session_error ("binop ~is_diff:true but subtensor is non-diff", Some m1)
-      | _, None -> raise @@ Session_error ("binop ~is_diff:true but subtensor is non-diff", Some m2)
+      | None, _ -> raise @@ Session_error ("binop ~is_diff:true but subtensor is non-diff", Some t1)
+      | _, None -> raise @@ Session_error ("binop ~is_diff:true but subtensor is non-diff", Some t2)
     in
-    let m1_no_grad = m1_processed || not diff1.needs_gradient in
-    let m2_no_grad = m2_processed || not diff2.needs_gradient in
+    let t1_no_grad = t1_processed || not diff1.needs_gradient in
+    let t2_no_grad = t2_processed || not diff2.needs_gradient in
     let zero_grads =
       List.filter
         [
-          (m1_no_grad, diff1.zero_grads); (m2_no_grad, diff2.zero_grads); (needs_gradient, fetch_zeros n shape);
+          (t1_no_grad, diff1.zero_grads); (t2_no_grad, diff2.zero_grads); (needs_gradient, fetch_zeros v shape);
         ]
         ~f:fst
       |> List.map ~f:snd |> High_level.sequential
@@ -191,25 +191,25 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
     (* The code needs to be included in the reverse order to which it was computed! This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
-    let grad_body = if needs_gradient then grad_body ~n ~n1 ~n2 ~projections else Code.Noop in
+    let grad_body = if needs_gradient then grad_body ~n ~v1 ~v2 ~projections else Code.Noop in
     let grad_body =
-      if diff1.needs_gradient then grad_body else Code.remove_updates { id = m1.id; field = Grad } grad_body
+      if diff1.needs_gradient then grad_body else Code.remove_updates { id = t1.id; field = Grad } grad_body
     in
     let grad_body =
-      if diff2.needs_gradient then grad_body else Code.remove_updates { id = m2.id; field = Grad } grad_body
+      if diff2.needs_gradient then grad_body else Code.remove_updates { id = t2.id; field = Grad } grad_body
     in
     let backprop_body =
-      match (m1_no_grad, diff1.backprop_body, m2_no_grad, diff2.backprop_body) with
+      match (t1_no_grad, diff1.backprop_body, t2_no_grad, diff2.backprop_body) with
       | true, _, true, _ | true, _, _, Noop | _, Noop, true, _ | _, Noop, _, Noop -> grad_body
-      | false, m1_body, false, m2_body when m1_first -> Seq (grad_body, ParHint (m2_body, m1_body))
-      | false, m1_body, false, m2_body -> Seq (grad_body, ParHint (m1_body, m2_body))
-      | _, _, false, m2_body -> Seq (grad_body, m2_body)
-      | false, m1_body, _, _ -> Seq (grad_body, m1_body)
+      | false, t1_body, false, t2_body when t1_first -> Seq (grad_body, ParHint (t2_body, t1_body))
+      | false, t1_body, false, t2_body -> Seq (grad_body, ParHint (t1_body, t2_body))
+      | _, _, false, t2_body -> Seq (grad_body, t2_body)
+      | false, t1_body, _, _ -> Seq (grad_body, t1_body)
     in
     if needs_gradient then session_initializations := create ~id Grad shape :: !session_initializations;
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
-    if not m1_processed then global_roots := Map.remove !global_roots m1.id;
-    if not m2_processed then global_roots := Map.remove !global_roots m2.id;
+    if not t1_processed then global_roots := Map.remove !global_roots t1.id;
+    if not t2_processed then global_roots := Map.remove !global_roots t2.id;
     let diff = Some { zero_grads; backprop_body; needs_gradient } in
     let tensor =
       {
@@ -217,7 +217,7 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
         diff;
         nondiff_forward_body = Code.Noop;
         id;
-        node = n;
+        node = v;
         shape_logic;
         shape;
         cross_session_persistent = false;
@@ -226,17 +226,17 @@ let binop ~op_label ?desc_label ?(compose_op = Shape.Pointwise_bin) ~op_body ~gr
     global_roots := Map.add_exn !global_roots ~key:id ~data:tensor;
     tensor
 
-let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_diff m1 : t =
+let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_diff t1 : t =
   (* Note: do not capture m in any closure, so it can be GC'd. *)
-  let m1_processed = Option.is_some m1.diff && (not @@ Map.mem !global_roots m1.id) in
-  let children = [ { Node.sub_node = m1.node; computed_externally = m1_processed } ] in
-  let needs_gradient = match m1.diff with Some form1 -> form1.needs_gradient | None -> false in
+  let t1_processed = Option.is_some t1.diff && (not @@ Map.mem !global_roots t1.id) in
+  let children = [ { Node.sub_node = t1.node; computed_externally = t1_processed } ] in
+  let needs_gradient = match t1.diff with Some form1 -> form1.needs_gradient | None -> false in
   let fixme_fragile = session_state.next_session_id in
   let shape = Shape.make ~id:fixme_fragile () in
-  let n =
-    Code.create_node_same_precision_as ~needs_gradient m1.node.node ~op_label ?desc_label ~children shape
+  let v =
+    Code.create_node_same_precision_as ~needs_gradient t1.node.node ~op_label ?desc_label ~children shape
   in
-  let id = n.id in
+  let id = v.id in
   (match init_shape with
   | None -> ()
   | Some init ->
@@ -245,18 +245,18 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
       shape.input <- init.input;
       shape.output <- init.output;
       shape.axis_labels <- init.axis_labels);
-  let shape_logic = Shape.Transpose (transpose_op, m1.shape) in
+  let shape_logic = Shape.Transpose (transpose_op, t1.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
-  let n1 = m1.node in
+  let v1 = t1.node in
   Shape.propagate_shapes local_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections () = Shape.derive_projections local_shape_update in
-  let op_body = op_body ~n ~n1 ~projections in
+  let op_body = op_body ~n ~v1 ~projections in
   (* The code needs to be included in the order it was computed! *)
   let forward_body =
-    if m1_processed then op_body
-    else if is_diff then Code.Seq (m1.forward_body, op_body)
-    else Seq (m1.nondiff_forward_body, op_body)
+    if t1_processed then op_body
+    else if is_diff then Code.Seq (t1.forward_body, op_body)
+    else Seq (t1.nondiff_forward_body, op_body)
   in
   session_initializations := create ~id Value shape :: !session_initializations;
   if not is_diff then
@@ -265,35 +265,35 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
       diff = None;
       nondiff_forward_body = forward_body;
       id;
-      node = n;
+      node = v;
       shape_logic;
       shape;
       cross_session_persistent = false;
     }
   else
     let diff1 =
-      match m1.diff with
+      match t1.diff with
       | Some diff -> diff
-      | None -> raise @@ Session_error ("binop ~is_diff:true but subtensor is non-diff", Some m1)
+      | None -> raise @@ Session_error ("binop ~is_diff:true but subtensor is non-diff", Some t1)
     in
-    let m1_no_grad = m1_processed || not diff1.needs_gradient in
+    let t1_no_grad = t1_processed || not diff1.needs_gradient in
     let zero_grads =
-      List.filter [ (m1_no_grad, diff1.zero_grads); (needs_gradient, fetch_zeros n shape) ] ~f:fst
+      List.filter [ (t1_no_grad, diff1.zero_grads); (needs_gradient, fetch_zeros v shape) ] ~f:fst
       |> List.map ~f:snd |> High_level.sequential
     in
-    let grad_body = if needs_gradient then grad_body ~n ~n1 ~projections else Code.Noop in
+    let grad_body = if needs_gradient then grad_body ~n ~v1 ~projections else Code.Noop in
     let grad_body =
-      if diff1.needs_gradient then grad_body else Code.remove_updates { id = m1.id; field = Grad } grad_body
+      if diff1.needs_gradient then grad_body else Code.remove_updates { id = t1.id; field = Grad } grad_body
     in
     (* The code needs to be included in the reverse order to which it was computed! *)
     let backprop_body =
-      match (m1_no_grad, diff1.backprop_body) with
+      match (t1_no_grad, diff1.backprop_body) with
       | true, _ | _, Noop -> grad_body
-      | false, m1_body -> Seq (grad_body, m1_body)
+      | false, t1_body -> Seq (grad_body, t1_body)
     in
     if needs_gradient then session_initializations := create ~id Grad shape :: !session_initializations;
 
-    if not m1_processed then global_roots := Map.remove !global_roots m1.id;
+    if not t1_processed then global_roots := Map.remove !global_roots t1.id;
     let diff = Some { backprop_body; needs_gradient } in
     let tensor =
       {
@@ -301,7 +301,7 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
         diff;
         nondiff_forward_body = Code.Noop;
         id;
-        node = n;
+        node = v;
         shape_logic;
         shape;
         cross_session_persistent = false;
@@ -326,11 +326,11 @@ let term ~label ?desc_label ~needs_gradient ~is_diff ?batch_dims ?input_dims ?ou
   let fixme_fragile = session_state.next_session_id in
   let shape = Shape.make ~id:fixme_fragile ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced () in
   let dims () = Shape.to_dims shape in
-  let n : Code.node =
+  let v : Code.node =
     Code.create_node ~value_prec:!default_value_prec ~grad_prec:!default_grad_prec ~literal ~needs_gradient
       ~op_label ?desc_label ~children:[] shape
   in
-  let id = n.id in
+  let id = v.id in
   let shape_logic = Shape.Terminal in
   (* NOTE: this update does not do any work, but that might change in the future,
      and having it in the update sequence might help with debuggability. *)
@@ -357,29 +357,29 @@ let term ~label ?desc_label ~needs_gradient ~is_diff ?batch_dims ?input_dims ?ou
         (match fetch_op with
         | Constant _ -> ()
         | _ ->
-            n.annot.value_never_virtual <- true;
-            n.annot.value_never_device_only <- true);
+            v.annot.value_never_virtual <- true;
+            v.annot.value_never_device_only <- true);
         Fetch { tensor; fetch_op; dims }
   in
   Option.iter postprocess_op ~f:(fun postprocess_op ->
       let postprocess_op = postprocess_op ~n in
       session_postprocess := postprocess_op :: !session_postprocess;
-      n.annot.value_never_virtual <- true;
-      n.annot.value_never_device_only <- true);
+      v.annot.value_never_virtual <- true;
+      v.annot.value_never_device_only <- true);
   if not is_diff then
     {
       forward_body;
       diff = None;
       nondiff_forward_body = forward_body;
       id;
-      node = n;
+      node = v;
       shape_logic;
       shape;
       cross_session_persistent;
     }
   else
     let backprop_body = Code.Noop in
-    let zero_grads = if needs_gradient then fetch_zeros n shape else High_level.Noop in
+    let zero_grads = if needs_gradient then fetch_zeros v shape else High_level.Noop in
     (* Very unlikely someone will want dw/dw. *)
     if needs_gradient then session_initializations := create ~id Grad shape :: !session_initializations;
     let diff = Some { zero_grads; backprop_body; needs_gradient } in
@@ -389,7 +389,7 @@ let term ~label ?desc_label ~needs_gradient ~is_diff ?batch_dims ?input_dims ?ou
         diff;
         nondiff_forward_body = Code.Noop;
         id;
-        node = n;
+        node = v;
         shape_logic;
         shape;
         cross_session_persistent;
@@ -441,7 +441,7 @@ let sexp_of_t m =
 include Comparator.Make (struct
   type nonrec t = t
 
-  let compare m1 m2 = Int.compare m1.id m2.id
+  let compare t1 t2 = Int.compare t1.id t2.id
   let sexp_of_t = sexp_of_t
 end)
 

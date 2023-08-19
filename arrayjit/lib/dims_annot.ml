@@ -4,9 +4,9 @@ module LA = Low_level.Lazy_array
 type dims_annot = { batch : int list; input : int list; output : int list }
 type node = { shape : dims_annot; array : LA.t }
 
-let get_shape_string ?(style = `Axis_size) n =
-  let n_outputs = List.length n.output in
-  let n_batch = List.length n.batch in
+let get_shape_string ?(style = `Axis_size) v =
+  let n_outputs = List.length v.output in
+  let n_batch = List.length v.batch in
   let dims_to_string kind_dims kind =
     String.concat ~sep:","
     @@ List.mapi kind_dims ~f:(fun i d ->
@@ -17,21 +17,21 @@ let get_shape_string ?(style = `Axis_size) n =
            | `Axis_size -> Int.to_string d
            | `Axis_number_and_size -> Int.to_string num ^ ":" ^ Int.to_string d)
   in
-  let batch_dims = dims_to_string n.batch `Batch in
-  let input_dims = dims_to_string n.input `Input in
-  let output_dims = dims_to_string n.output `Output in
+  let batch_dims = dims_to_string v.batch `Batch in
+  let input_dims = dims_to_string v.input `Input in
+  let output_dims = dims_to_string v.output `Output in
   if String.is_empty batch_dims && String.is_empty input_dims then output_dims
   else if String.is_empty batch_dims then input_dims ^ "->" ^ output_dims
   else if String.is_empty input_dims then batch_dims ^ "|" ^ output_dims
   else batch_dims ^ "|" ^ input_dims ^ "->" ^ output_dims
 
-let pp_array_inline fmt n =
-  let axes_spec = if List.exists ~f:(( = ) 1) n.shape.input then Some (get_shape_string n.shape) else None in
-  let num_batch_axes = List.length n.shape.batch in
-  let num_output_axes = List.length n.shape.output in
-  let num_input_axes = List.length n.shape.input in
+let pp_array_inline fmt v =
+  let axes_spec = if List.exists ~f:(( = ) 1) v.shape.input then Some (get_shape_string v.shape) else None in
+  let num_batch_axes = List.length v.shape.batch in
+  let num_output_axes = List.length v.shape.output in
+  let num_input_axes = List.length v.shape.input in
   Ndarray.pp_array_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?axes_spec
-  @@ LA.get_exn n.array
+  @@ LA.get_exn v.array
 
 let default_display_indices ~num_batch_axes ~num_output_axes ~num_input_axes ~dims =
   let axes = Array.create ~len:(Array.length dims) 0 in
@@ -76,14 +76,14 @@ let default_display_indices ~num_batch_axes ~num_output_axes ~num_input_axes ~di
   in
   loop 1
 
-let pp_array ?shape_style ?entries_per_axis fmt n =
-  let dims = Lazy.force n.array.dims in
-  let prefix = get_shape_string ?style:shape_style n.shape in
+let pp_array ?shape_style ?entries_per_axis fmt v =
+  let dims = Lazy.force v.array.dims in
+  let prefix = get_shape_string ?style:shape_style v.shape in
   let indices =
-    default_display_indices ~num_batch_axes:(List.length n.shape.batch) ~num_output_axes:(List.length n.shape.output)
-      ~num_input_axes:(List.length n.shape.input) ~dims
+    default_display_indices ~num_batch_axes:(List.length v.shape.batch) ~num_output_axes:(List.length v.shape.output)
+      ~num_input_axes:(List.length v.shape.input) ~dims
   in
-  Ndarray.pp_array fmt ~prefix ?entries_per_axis ~indices @@ LA.get_exn n.array
+  Ndarray.pp_array fmt ~prefix ?entries_per_axis ~indices @@ LA.get_exn v.array
 
 let default_prec = ref Ndarray.single
 (*

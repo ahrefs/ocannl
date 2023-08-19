@@ -84,18 +84,18 @@ let prec_to_c_type = function
 let compute_array_offset ~idcs ~dims =
   Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx + (offset * dim))
 
-let get_array ~traced_store n =
+let get_array ~traced_store v =
   let { arrays; _ } = session_state in
-  Hashtbl.find_or_add arrays n ~default:(fun () ->
-      let tn = Low_level.get_node traced_store n in
-      (* let host_size_in_bytes = Ndarray.size_in_bytes n.array in *)
-      let dims = Lazy.force n.dims in
+  Hashtbl.find_or_add arrays v ~default:(fun () ->
+      let tn = Low_level.get_node traced_store v in
+      (* let host_size_in_bytes = Ndarray.size_in_bytes v.array in *)
+      let dims = Lazy.force v.dims in
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
-      let hosted = Lazy.force n.array in
-      let size_in_bytes = size_in_elems * Ndarray.prec_in_bytes n.prec in
-      let is_on_host = !(n.materialized) in
-      let is_double = Ndarray.is_double_prec n.prec in
-      let num_typ = prec_to_c_type n.prec in
+      let hosted = Lazy.force v.array in
+      let size_in_bytes = size_in_elems * Ndarray.prec_in_bytes v.prec in
+      let is_on_host = !(v.materialized) in
+      let is_double = Ndarray.is_double_prec v.prec in
+      let num_typ = prec_to_c_type v.prec in
       let mem =
         if not is_on_host then Local_only
         else if tn.read_only then Constant
@@ -112,7 +112,7 @@ let get_array ~traced_store n =
                  (* Defer till after compilation, to access the compiled-into module. *)
                  Cudajit.module_get_global
                    (Option.value_exn session_state.last_module)
-                   ~name:(LA.name n)
+                   ~name:(LA.name v)
                in
                assert (Unsigned.Size_t.to_int size = size_in_bytes);
                ptr)
@@ -120,14 +120,14 @@ let get_array ~traced_store n =
             (* The general case does not require laziness, but it should be OK. *)
             lazy
               (if !Low_level.with_debug then
-                 Stdio.printf "Exec_as_cuda.get_array: mem_alloc %s\n%!" (LA.name n);
+                 Stdio.printf "Exec_as_cuda.get_array: mem_alloc %s\n%!" (LA.name v);
                Cudajit.mem_alloc ~byte_size:size_in_bytes)
       in
-      let global = Option.some_if (not @@ is_local_only mem) @@ LA.name n in
-      let local = Option.some_if (is_local_only mem) @@ LA.name n ^ "_local" in
+      let global = Option.some_if (not @@ is_local_only mem) @@ LA.name v in
+      let local = Option.some_if (is_local_only mem) @@ LA.name v ^ "_local" in
       let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
-      if not @@ String.is_substring n.backend_info ~substring:backend_info then
-        n.backend_info <- n.backend_info ^ backend_info;
+      if not @@ String.is_substring v.backend_info ~substring:backend_info then
+        v.backend_info <- v.backend_info ^ backend_info;
       { hosted; local; mem; dims; size_in_bytes; size_in_elems; num_typ; is_double; global; global_ptr })
 
 let jit_binop ~num_typ:_ ~is_double op =

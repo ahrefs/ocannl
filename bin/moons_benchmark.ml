@@ -58,9 +58,9 @@ let _suspended () =
   (* let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 2 + ("w1" * x))) in *)
   let%nn_op mlp x = "b1" 1 + ("w1" * x) in
 
-  let%nn_dt session_step ~o:1 = n =+ 1 in
-  let%nn_dt session_refresh ~o:1 = n =+ 1 /. !..refresh_batch in
-  let%nn_dt minus_lr ~o:1 = n =: -0.00001 in
+  let%nn_dt session_step ~o:1 = v =+ 1 in
+  let%nn_dt session_refresh ~o:1 = v =+ 1 /. !..refresh_batch in
+  let%nn_dt minus_lr ~o:1 = v =: -0.00001 in
 
   SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = (moons_flat @.| session_refresh) @.| session_step in
@@ -75,7 +75,7 @@ let _suspended () =
   let%nn_op weighted_reg_loss = 0.00001 *. reg_loss in
   (* let step_batch = parallel_dims * minib in *)
   let%nn_op batch_of_losses = margin_loss ++ "...|... => ...|0" in
-  let%nn_rs epoch_loss ~o:1 = n =+ batch_of_losses ++ "...|0 => 0" + weighted_reg_loss in
+  let%nn_rs epoch_loss ~o:1 = v =+ batch_of_losses ++ "...|0 => 0" + weighted_reg_loss in
   let updates_per_run = refresh_batch in
   SDSL.everything_fully_on_host ();
   (* SDSL.everything_on_host_or_inlined (); *)
@@ -226,9 +226,9 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
      in
      * *)
   let%nn_op mlp x = "b3" 1 + ("w3" * !/("b2" hid_dim + ("w2" * !/("b1" hid_dim + ("w1" * x))))) in
-  let%nn_dt session_step ~o:1 = n =+ 1 in
+  let%nn_dt session_step ~o:1 = v =+ 1 in
   let steps = epochs * n_batches in
-  let%nn_dt minus_lr ~o:1 = n =: -0.1 *. (!..steps - session_step) /. !..steps in
+  let%nn_dt minus_lr ~o:1 = v =: -0.1 *. (!..steps - session_step) /. !..steps in
   SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = moons_flat @.| session_step in
   let%nn_op moons_class = moons_classes @.| session_step in
@@ -246,7 +246,7 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
       let%nn_op total_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
       total_loss
   in
-  let%nn_rs epoch_loss ~o:1 = n =+ total_loss in
+  let%nn_rs epoch_loss ~o:1 = v =+ total_loss in
   (* Warmup step, with update. *)
   SDSL.refresh_session ~updates_per_run ();
   let losses = ref [] in

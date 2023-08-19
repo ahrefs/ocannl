@@ -149,7 +149,7 @@ let project_xhs debug loc slot =
   | Undet ->
       Ast_builder.Default.pexp_extension ~loc
       @@ Location.error_extensionf ~loc "ppx_ocannl %%nn_cd: insufficient slot filler information at %s %s"
-           debug "(incorporate one of: n, n1, n2, m1, m2, lhs, rhs, rhs1, rhs2)"
+           debug "(incorporate one of: v, v1, v2, t1, t2, lhs, rhs, rhs1, rhs2)"
 
 let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * projections_slot * expression =
   let loc = expr.pexp_loc in
@@ -183,11 +183,11 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
             (Float.of_int [%e i])] )
   | { pexp_desc = Pexp_array _; _ } | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
       (Tensor_nf, Undet, ndarray_op expr)
-  | { pexp_desc = Pexp_ident { txt = Lident ("n" | "lhs"); _ }; _ } -> (Tensor_or_node_or_data, LHS, expr)
-  | { pexp_desc = Pexp_ident { txt = Lident ("n1" | "m1" | "rhs1" | "rhs"); _ }; _ } ->
-      (* [m1], [m2] have their forward code included by [Tensor.binop/unop] *)
+  | { pexp_desc = Pexp_ident { txt = Lident ("v" | "lhs"); _ }; _ } -> (Tensor_or_node_or_data, LHS, expr)
+  | { pexp_desc = Pexp_ident { txt = Lident ("v1" | "t1" | "rhs1" | "rhs"); _ }; _ } ->
+      (* [t1], [t2] have their forward code included by [Tensor.binop/unop] *)
       (Tensor_or_node_or_data, RHS1, expr)
-  | { pexp_desc = Pexp_ident { txt = Lident ("n2" | "m2" | "rhs2"); _ }; _ } ->
+  | { pexp_desc = Pexp_ident { txt = Lident ("v2" | "t2" | "rhs2"); _ }; _ } ->
       (Tensor_or_node_or_data, RHS2, expr)
   | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_operator op_ident ->
       (Tensor_nf, Undet, expr)

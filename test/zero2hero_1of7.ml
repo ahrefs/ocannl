@@ -127,7 +127,7 @@ let%expect_test "Graph drawing fetch" =
       ~output_dims:[ CDSL.dim 1 ]
       ~init_op:(Constant_fill xs) ()
   in
-  let%nn_dt session_step ~o:1 = n =+ 1 in
+  let%nn_dt session_step ~o:1 = v =+ 1 in
   let%nn_op x = x_flat @.| session_step in
   SDSL.set_fully_on_host x;
   let%nn_op fx = f x in
@@ -353,14 +353,14 @@ let%expect_test "tanh plot" =
 let%expect_test "2D neuron materialized" =
   SDSL.drop_all_sessions ();
   Random.init 0;
-  let%nn_op n = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
+  let%nn_op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   (* No need for [~update_params:false] because we have not set [minus_learning_rate]. *)
   SDSL.everything_fully_on_host ();
   SDSL.refresh_session ();
-  SDSL.print_node_tree ~with_grad:true ~depth:9 n.id;
+  SDSL.print_node_tree ~with_grad:true ~depth:9 v.id;
   [%expect
     {|
-                        [5] n <+>
+                        [5] v <+>
                          7.00e-1
                         Gradient
                          1.00e+0
@@ -376,13 +376,13 @@ let%expect_test "2D neuron materialized" =
 let%expect_test "2D neuron virtual" =
   SDSL.drop_all_sessions ();
   Random.init 0;
-  let%nn_op n = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
+  let%nn_op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   (* No need for [~update_params:false] because we have not set [minus_learning_rate]. *)
   SDSL.refresh_session ();
-  SDSL.print_node_tree ~with_grad:true ~depth:9 n.id;
+  SDSL.print_node_tree ~with_grad:true ~depth:9 v.id;
   [%expect
     {|
-                       [5] n <+>
+                       [5] v <+>
                         7.00e-1
                        Gradient
                        <void>

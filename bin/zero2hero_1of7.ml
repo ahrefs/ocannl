@@ -10,10 +10,10 @@ let () = SDSL.set_executor Gccjit
 let _suspended () =
   SDSL.drop_all_sessions ();
   Random.init 0;
-  let%nn_op n = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
+  let%nn_op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   SDSL.refresh_session ();
   Stdio.printf "\n%!";
-  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 n.id;
+  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 v.id;
   Stdio.printf "\nHigh-level code:\n%!";
   SDSL.print_session_code ();
   Stdio.printf "\nCompiled code:\n%!";
@@ -47,7 +47,7 @@ let _suspended () =
       ~output_dims:[ CDSL.dim 1 ]
       ~init_op:(Constant_fill xs) ()
   in
-  let%nn_dt session_step ~o:1 = n =+ 1 in
+  let%nn_dt session_step ~o:1 = v =+ 1 in
   let%nn_op x = x_flat @.| session_step in
   let%nn_op fx = f x in
   Stdio.print_endline "\n";
