@@ -6,17 +6,17 @@ let sync_threads_on_update = ref true
 
 type mem_properties =
   | Local_only
-      (** The tensor is only needed for a single computation and is allocated locally (or spilled). *)
+      (** The array is only needed for a single computation and is allocated locally (or spilled). *)
   | Device_finally_host
-      (** The tensor is computed on-device and then copied to host, if the flag [is_final] is true. *)
+      (** The array is computed on-device and then copied to host, if the flag [is_final] is true. *)
   | Constant
-      (** The tensor is accessed directly in the global memory but is not modified by the computation. *)
+      (** The array is accessed directly in the global memory but is not modified by the computation. *)
   | From_host
-      (** The tensor is copied from host when [is_initial], modified in the global memory, and copied
+      (** The array is copied from host when [is_initial], modified in the global memory, and copied
           to host when [is_final]. *)
 [@@deriving sexp, equal, compare, variants]
 
-type tensor = {
+type ndarray = {
   hosted : Ndarray.t option;
   global : string option;  (** A global device array, if any. *)
   global_ptr : (Cudajit.deviceptr Lazy.t[@sexp.opaque]) option;
@@ -38,11 +38,11 @@ module LA = Low_level.Lazy_array
 
 type session_state = {
   mutable ctx : Cudajit.context option;
-  tensors : (LA.t, tensor) Hashtbl.t;
+  arrays : (LA.t, ndarray) Hashtbl.t;
   mutable last_module : Cudajit.module_ option;
 }
 
-let session_state = { ctx = None; tensors = Hashtbl.create (module LA); last_module = None }
+let session_state = { ctx = None; arrays = Hashtbl.create (module LA); last_module = None }
 let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
 let pp_comma ppf () = Caml.Format.fprintf ppf ",@ "
 let pp_symbol ppf sym = Caml.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym
@@ -72,8 +72,8 @@ let array_offset_to_string (idcs, dims) =
   Caml.Format.pp_print_flush ppf ();
   Buffer.contents b
 
-let get_run_ptr tensor =
-  match (tensor.global, tensor.local) with _, Some lv -> lv | Some rv, _ -> rv | None, None -> assert false
+let get_run_ptr array =
+  match (array.global, array.local) with _, Some lv -> lv | Some rv, _ -> rv | None, None -> assert false
 
 let prec_to_c_type = function
   | Ndarray.Void_prec -> "void"
@@ -84,9 +84,9 @@ let prec_to_c_type = function
 let compute_array_offset ~idcs ~dims =
   Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx + (offset * dim))
 
-let get_tensor ~traced_store n =
-  let { tensors; _ } = session_state in
-  Hashtbl.find_or_add tensors n ~default:(fun () ->
+let get_array ~traced_store n =
+  let { arrays; _ } = session_state in
+  Hashtbl.find_or_add arrays n ~default:(fun () ->
       let tn = Low_level.get_node traced_store n in
       (* let host_size_in_bytes = Ndarray.size_in_bytes n.array in *)
       let dims = Lazy.force n.dims in
@@ -120,7 +120,7 @@ let get_tensor ~traced_store n =
             (* The general case does not require laziness, but it should be OK. *)
             lazy
               (if !Low_level.with_debug then
-                 Stdio.printf "Exec_as_cuda.get_tensor: mem_alloc %s\n%!" (LA.name n);
+                 Stdio.printf "Exec_as_cuda.get_array: mem_alloc %s\n%!" (LA.name n);
                Cudajit.mem_alloc ~byte_size:size_in_bytes)
       in
       let global = Option.some_if (not @@ is_local_only mem) @@ LA.name n in
@@ -157,30 +157,30 @@ let jit_code ~traced_store ppf llc : unit =
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
         fprintf ppf "@[<2>for (unsigned int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_
           pp_index i to_ pp_index i pp_ll body
-    | Zero_out tensor ->
-        if Hashtbl.mem session_state.tensors tensor then
+    | Zero_out array ->
+        if Hashtbl.mem session_state.arrays array then
           failwith
             ("exec_as_cuda: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
-            @@ [%sexp_of: LA.t] tensor);
-        let tn = Low_level.(get_node traced_store tensor) in
+            @@ [%sexp_of: LA.t] array);
+        let tn = Low_level.(get_node traced_store array) in
         assert tn.zero_initialized
-        (* The initialization will be emitted by get_tensor. *)
-    | Set (tensor, idcs, v) ->
-        let tensor = get_tensor ~traced_store tensor in
+        (* The initialization will be emitted by get_array. *)
+    | Set (array, idcs, v) ->
+        let array = get_array ~traced_store array in
         let old_locals = !locals in
-        let loop_f = pp_float ~num_typ:tensor.num_typ ~is_double:tensor.is_double in
-        let loop_debug_f = debug_float ~num_typ:tensor.num_typ ~is_double:tensor.is_double in
+        let loop_f = pp_float ~num_typ:array.num_typ ~is_double:array.is_double in
+        let loop_debug_f = debug_float ~num_typ:array.num_typ ~is_double:array.is_double in
         let num_closing_braces = pp_top_locals ppf v in
         (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
-        fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr tensor) pp_array_offset (idcs, tensor.dims) loop_f
+        fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr array) pp_array_offset (idcs, array.dims) loop_f
           v;
         (if !Low_level.debug_verbose_trace then
            let v_code, v_idcs = loop_debug_f v in
            fprintf ppf
              "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %s[%%u] = %%f = \
               %s\\n\"@],@ %a,@ %s[%a]%a);@ @]}"
-             (get_run_ptr tensor) v_code pp_array_offset (idcs, tensor.dims) (get_run_ptr tensor)
-             pp_array_offset (idcs, tensor.dims)
+             (get_run_ptr array) v_code pp_array_offset (idcs, array.dims) (get_run_ptr array)
+             pp_array_offset (idcs, array.dims)
              ( pp_print_list @@ fun ppf -> function
                | `Accessor idx ->
                    pp_comma ppf ();
@@ -213,7 +213,7 @@ let jit_code ~traced_store ppf llc : unit =
     match vcomp with
     | Local_scope { id = { scope_id = i; _ } as id; prec; body; orig_indices = _ } ->
         let typ = prec_to_c_type prec in
-        (* Tensors are initialized to 0 by default. However, there is typically an explicit
+        (* Arrays are initialized to 0 by default. However, there is typically an explicit
            initialization for virtual nodes. *)
         fprintf ppf "@[<2>{@ %s v%d = 0;@ " typ i;
         locals := Map.update !locals id ~f:(fun _ -> (typ, Ndarray.is_double_prec prec));
@@ -236,9 +236,9 @@ let jit_code ~traced_store ppf llc : unit =
         if not @@ String.equal num_typ typ then fprintf ppf "(%s)" num_typ;
         fprintf ppf "v%d" id.scope_id
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
-    | Get (tensor, idcs) ->
-        let tensor = get_tensor ~traced_store tensor in
-        fprintf ppf "@[<2>%s[%a@]]" (get_run_ptr tensor) pp_array_offset (idcs, tensor.dims)
+    | Get (array, idcs) ->
+        let array = get_array ~traced_store array in
+        fprintf ppf "@[<2>%s[%a@]]" (get_run_ptr array) pp_array_offset (idcs, array.dims)
     | Constant c -> fprintf ppf "(%f)" c
     | Binop (Arg1, v1, _v2) -> loop ppf v1
     | Binop (Arg2, _v1, v2) -> loop ppf v2
@@ -264,9 +264,9 @@ let jit_code ~traced_store ppf llc : unit =
         (v ^ "{=%f}", [ `Value v ])
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (ptr, idcs) ->
-        let tensor = get_tensor ~traced_store ptr in
-        let v = sprintf "@[<2>%s[%s@]]" (get_run_ptr tensor) (array_offset_to_string (idcs, tensor.dims)) in
-        (get_run_ptr tensor ^ "[%u]{=%f}", [ `Accessor (idcs, tensor.dims); `Value v ])
+        let array = get_array ~traced_store ptr in
+        let v = sprintf "@[<2>%s[%s@]]" (get_run_ptr array) (array_offset_to_string (idcs, array.dims)) in
+        (get_run_ptr array ^ "[%u]{=%f}", [ `Accessor (idcs, array.dims); `Value v ])
     | Constant c -> (Float.to_string c, [])
     | Binop (Arg1, v1, _v2) -> loop v1
     | Binop (Arg2, _v1, v2) -> loop v2
@@ -293,13 +293,13 @@ let cleanup_session () =
   if Option.is_none session_state.ctx then Cudajit.init ();
   Option.iter session_state.last_module ~f:Cudajit.module_unload;
   session_state.last_module <- None;
-  Hashtbl.iter session_state.tensors ~f:(fun tensor ->
-      Option.iter tensor.global_ptr ~f:(fun (lazy ptr) ->
-          if not @@ is_constant tensor.mem then (
+  Hashtbl.iter session_state.arrays ~f:(fun array ->
+      Option.iter array.global_ptr ~f:(fun (lazy ptr) ->
+          if not @@ is_constant array.mem then (
             if !Low_level.with_debug then
-              Stdio.printf "Exec_as_cuda.cleanup_session: mem_free %s\n%!" (Option.value_exn tensor.global);
+              Stdio.printf "Exec_as_cuda.cleanup_session: mem_free %s\n%!" (Option.value_exn array.global);
             Cudajit.mem_free ptr)));
-  Hashtbl.clear session_state.tensors;
+  Hashtbl.clear session_state.arrays;
   Option.iter session_state.ctx ~f:Cudajit.ctx_destroy;
   (* For now we stick with device 0. *)
   session_state.ctx <- new_context ()
@@ -308,7 +308,7 @@ let error_message ~name:_ ~prefix:_ ?extra_error_msg:_ ~contents:_ _exc = ""
 
 let jit_func ~name ?(verbose = false) (traced_store, llc) =
   let module Cu = Cudajit in
-  Hashtbl.filter_inplace session_state.tensors ~f:(fun tensor -> not @@ is_constant tensor.mem);
+  Hashtbl.filter_inplace session_state.arrays ~f:(fun array -> not @@ is_constant array.mem);
   Option.iter session_state.last_module ~f:Cu.module_unload;
   session_state.last_module <- None;
   if Option.is_none session_state.ctx then (
@@ -321,10 +321,10 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
   jit_code ~traced_store ppf llc;
   Caml.Format.pp_print_newline ppf ();
   let cu_body = Buffer.contents b in
-  let tensors = Hashtbl.to_alist session_state.tensors in
+  let arrays = Hashtbl.to_alist session_state.arrays in
   let params, args =
     List.unzip
-    @@ List.filter_map tensors ~f:(fun (_, tn) ->
+    @@ List.filter_map arrays ~f:(fun (_, tn) ->
            match tn.mem with
            | Local_only | Constant -> None
            | From_host | Device_finally_host ->
@@ -333,7 +333,7 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
   (* TODO: optimize zero-initializations? E.g.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
   let constant_defs =
-    List.filter_map tensors ~f:(fun (ptr, tn) ->
+    List.filter_map arrays ~f:(fun (ptr, tn) ->
         match tn.mem with
         | Constant ->
             Option.map tn.global ~f:(fun t_name ->
@@ -342,7 +342,7 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
         | _ -> None)
   in
   let thread_decls =
-    List.filter_map tensors ~f:(fun (ptr, tn) ->
+    List.filter_map arrays ~f:(fun (ptr, tn) ->
         match tn.mem with
         | Local_only ->
             Option.map tn.local ~f:(fun t_name ->
@@ -351,7 +351,7 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
         | _ -> None)
   in
   let finalizers =
-    Array.of_list tensors
+    Array.of_list arrays
     |> Array.filter_map ~f:(fun (_, tn) ->
            match tn.mem with
            | Device_finally_host ->
@@ -422,7 +422,7 @@ extern "C" __global__ void %{name}(bool is_final, %{String.concat ~sep:", " para
   fun ~is_initial ~is_final ->
     if is_initial then (
       if verbose then Stdio.printf "Exec_as_cuda.jit: copying host-to-device\n%!";
-      List.iter tensors ~f:(function
+      List.iter arrays ~f:(function
         | ptr, { hosted = Some ndarray; global = Some name; global_ptr = Some (lazy dst); size_in_elems; _ }
           ->
             let tn = Hashtbl.find_exn traced_store ptr in
@@ -433,7 +433,7 @@ extern "C" __global__ void %{name}(bool is_final, %{String.concat ~sep:", " para
               Ndarray.map { f } ndarray)
         | _ -> ()));
     if verbose then Stdio.printf "Exec_as_cuda.jit: zeroing-out global memory\n%!";
-    List.iter tensors ~f:(function
+    List.iter arrays ~f:(function
       | ptr, { global_ptr = Some (lazy device); size_in_bytes; _ } ->
           let tn = Hashtbl.find_exn traced_store ptr in
           if tn.zero_initialized then Cu.memset_d8 device Unsigned.UChar.zero ~length:size_in_bytes
@@ -444,7 +444,7 @@ extern "C" __global__ void %{name}(bool is_final, %{String.concat ~sep:", " para
     Cu.ctx_synchronize ();
     if is_final then (
       if verbose then Stdio.printf "Exec_as_cuda.jit: copying device-to-host\n%!";
-      List.iter tensors ~f:(function
+      List.iter arrays ~f:(function
         | ptr, { hosted = Some ndarray; global = Some name; global_ptr = Some (lazy src); size_in_elems; _ }
           ->
             let tn = Hashtbl.find_exn traced_store ptr in

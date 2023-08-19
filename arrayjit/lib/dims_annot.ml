@@ -25,12 +25,12 @@ let get_shape_string ?(style = `Axis_size) n =
   else if String.is_empty input_dims then batch_dims ^ "|" ^ output_dims
   else batch_dims ^ "|" ^ input_dims ^ "->" ^ output_dims
 
-let pp_tensor_inline fmt n =
+let pp_array_inline fmt n =
   let axes_spec = if List.exists ~f:(( = ) 1) n.shape.input then Some (get_shape_string n.shape) else None in
   let num_batch_axes = List.length n.shape.batch in
   let num_output_axes = List.length n.shape.output in
   let num_input_axes = List.length n.shape.input in
-  Ndarray.pp_tensor_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?axes_spec
+  Ndarray.pp_array_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?axes_spec
   @@ LA.get_exn n.array
 
 let default_display_indices ~num_batch_axes ~num_output_axes ~num_input_axes ~dims =
@@ -76,14 +76,14 @@ let default_display_indices ~num_batch_axes ~num_output_axes ~num_input_axes ~di
   in
   loop 1
 
-let pp_tensor ?shape_style ?entries_per_axis fmt n =
+let pp_array ?shape_style ?entries_per_axis fmt n =
   let dims = Lazy.force n.array.dims in
   let prefix = get_shape_string ?style:shape_style n.shape in
   let indices =
     default_display_indices ~num_batch_axes:(List.length n.shape.batch) ~num_output_axes:(List.length n.shape.output)
       ~num_input_axes:(List.length n.shape.input) ~dims
   in
-  Ndarray.pp_tensor fmt ~prefix ?entries_per_axis ~indices @@ LA.get_exn n.array
+  Ndarray.pp_array fmt ~prefix ?entries_per_axis ~indices @@ LA.get_exn n.array
 
 let default_prec = ref Ndarray.single
 (*

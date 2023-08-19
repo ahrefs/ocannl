@@ -73,14 +73,14 @@ let session_error_printer = function
 
 let () = Caml.Printexc.register_printer session_error_printer
 
-let fetch_zeros tensor shape =
-  High_level.Fetch { tensor; fetch_op = Constant 0.; dims = (fun () -> Shape.to_dims shape) }
+let fetch_zeros array shape =
+  High_level.Fetch { array; fetch_op = Constant 0.; dims = (fun () -> Shape.to_dims shape) }
 
-let fetch_ones tensor shape =
-  High_level.Fetch { tensor; fetch_op = Constant 1.; dims = (fun () -> Shape.to_dims shape) }
+let fetch_ones array shape =
+  High_level.Fetch { array; fetch_op = Constant 1.; dims = (fun () -> Shape.to_dims shape) }
 
-let create ?(init_op = Low_level.Constant_fill [| 0.0 |]) tensor shape =
-  { tensor; Low_level.dims = (fun () -> Shape.to_dims shape); init_op }
+let create ?(init_op = Low_level.Constant_fill [| 0.0 |]) array shape =
+  { array; Low_level.dims = (fun () -> Shape.to_dims shape); init_op }
 
 let max_sublabel_length = ref 25
 
@@ -472,7 +472,7 @@ let ndarray ?desc_label ~is_diff ?(needs_gradient = false) ?(batch_dims = []) ?(
         let dims = Array.concat [ !batch_dims; !output_dims; !input_dims ] in
         let ndarr = Ndarray.create Ndarray.double dims (Constant_fill values) in
         let ( ! ) = List.length in
-        Ndarray.pp_tensor_inline ~num_batch_axes:!batch_dims ~num_output_axes:!output_dims
+        Ndarray.pp_array_inline ~num_batch_axes:!batch_dims ~num_output_axes:!output_dims
           ~num_input_axes:!input_dims Caml.Format.str_formatter ndarr;
         Caml.Format.flush_str_formatter ()
   in

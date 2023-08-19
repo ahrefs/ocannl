@@ -3,7 +3,7 @@ open Base
 
 module LA = Low_level.Lazy_array
 
-(** Resets a tensor by performing the specified computation or data fetching. *)
+(** Resets a array by performing the specified computation or data fetching. *)
 type fetch_op = Constant of float | Synthetic of t | Imported of Low_level.global_identifier
 [@@deriving sexp_of]
 
@@ -29,19 +29,19 @@ and t =
       rhs : LA.t;
       projections : unit -> Indexing.projections;
     }
-  | Fetch of { tensor : LA.t; fetch_op : fetch_op; dims : unit -> int array }
+  | Fetch of { array : LA.t; fetch_op : fetch_op; dims : unit -> int array }
 [@@deriving sexp_of]
 
 module Nd = Ndarray
 
-let remove_updates tensor c =
+let remove_updates array c =
   let rec rm check = function
     | ( Seq ((Accum_binop { lhs; _ } | Accum_unop { lhs; _ }), t)
       | Seq (t, (Accum_binop { lhs; _ } | Accum_unop { lhs; _ })) ) as c
       when check ->
-        if LA.equal tensor lhs then rm true t else rm false c
+        if LA.equal array lhs then rm true t else rm false c
     | Seq (t1, t2) -> Seq (rm true t1, rm true t2)
-    | (Accum_binop { lhs; _ } | Accum_unop { lhs; _ }) when LA.equal tensor lhs -> Noop
+    | (Accum_binop { lhs; _ } | Accum_unop { lhs; _ }) when LA.equal array lhs -> Noop
     | c -> c
   in
   rm true c
@@ -91,11 +91,11 @@ let to_low_level (code : t) : Low_level.t =
                 }
         in
         let for_loops = for_loop [] (Array.to_list projections.product_space) in
-        let s = Low_level.Comment ("Computing tensor " ^ LA.name lhs) in
+        let s = Low_level.Comment ("Computing array " ^ LA.name lhs) in
         (* Note: it might be invalid to replicate computation across tasks. *)
         if zero_out then
           let dims () = projections.lhs_dims in
-          Low_level.unflat_lines [ s; loop (Fetch { tensor = lhs; fetch_op = Constant 0.; dims }); for_loops ]
+          Low_level.unflat_lines [ s; loop (Fetch { array = lhs; fetch_op = Constant 0.; dims }); for_loops ]
         else Low_level.Seq (s, for_loops)
     | Accum_unop { zero_out; accum; op; lhs; rhs; projections } ->
         let projections = projections () in
@@ -133,16 +133,16 @@ let to_low_level (code : t) : Low_level.t =
         (* Note: it might be invalid to replicate computation across tasks. *)
         if zero_out then
           let dims () = projections.lhs_dims in
-          Low_level.unflat_lines [ s; loop (Fetch { tensor = lhs; fetch_op = Constant 0.; dims }); for_loops ]
+          Low_level.unflat_lines [ s; loop (Fetch { array = lhs; fetch_op = Constant 0.; dims }); for_loops ]
         else Seq (s, for_loops)
     | Noop | Comment_reference _ -> Low_level.Noop
     | Block_comment (s, c) -> Low_level.Seq (Comment s, loop c)
     | Seq (c1, c2) -> Seq (loop c1, loop c2)
-    | Fetch { tensor; fetch_op = Constant 0.0; dims = _ } -> Zero_out tensor
-    | Fetch { tensor; fetch_op = Constant c; dims } ->
-        Low_level.loop_over_dims (dims ()) ~body:(fun idcs -> Set (tensor, idcs, Constant c))
+    | Fetch { array; fetch_op = Constant 0.0; dims = _ } -> Zero_out array
+    | Fetch { array; fetch_op = Constant c; dims } ->
+        Low_level.loop_over_dims (dims ()) ~body:(fun idcs -> Set (array, idcs, Constant c))
         (* let rec loop rev_idcs = function
-             | [] -> Set (tensor, Array.of_list_rev rev_idcs, Constant c)
+             | [] -> Set (array, Array.of_list_rev rev_idcs, Constant c)
              | d :: product when Indexing.dim_1 d -> loop (Fixed_idx 0 :: rev_idcs) product
              | d :: product ->
                  let index = Indexing.get_sym_for_axis d.Indexing.special in
@@ -156,8 +156,8 @@ let to_low_level (code : t) : Low_level.t =
                    }
            in
            loop [] (Array.to_list product_space) *)
-    | Fetch { tensor = _; fetch_op = Synthetic gen; dims = _ } -> loop gen
-    | Fetch { tensor = _; fetch_op = Imported _; dims = _ } ->
+    | Fetch { array = _; fetch_op = Synthetic gen; dims = _ } -> loop gen
+    | Fetch { array = _; fetch_op = Imported _; dims = _ } ->
         failwith "to_low_level: Imported NOT IMPLEMENTED YET"
   in
 

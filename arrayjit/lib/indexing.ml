@@ -43,7 +43,7 @@ let sexp_of_str_osym_map (map : str_osym_map) =
 type projections = {
   product_space : int array;
       (** The product space dimensions that an operation should parallelize (map-reduce) over. *)
-  lhs_dims : int array;  (** The dimensions of the LHS tensor. *)
+  lhs_dims : int array;  (** The dimensions of the LHS array. *)
   product_iterators : symbol array;
       (** The product space iterators (concatentation of the relevant batch, output, input axes)
       for iterating over the [product_space] axes, where same axes are at same array indices. *)

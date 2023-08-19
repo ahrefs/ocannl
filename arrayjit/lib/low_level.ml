@@ -67,7 +67,7 @@ module LA = Lazy_array
 type global_identifier = C_function of string  (** Calls a no-argument C function. *)
 [@@deriving sexp, equal, compare]
 
-(** Initializes a tensor by filling in the corresponding numbers, at the appropriate precision. *)
+(** Initializes a array by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op = Nd.init_op =
   | Constant_fill of float array
       (** Fills in the numbers where the rightmost axis is contiguous, looping over the provided values
@@ -77,8 +77,8 @@ type init_op = Nd.init_op =
   | Standard_uniform  (** Draws the values from U(0,1). *)
 [@@deriving sexp]
 
-type create = { tensor : LA.t; dims : unit -> int array; init_op : init_op }
-(** Information to create a tensor, once its shape is inferred. *)
+type create = { array : LA.t; dims : unit -> int array; init_op : init_op }
+(** Information to create a array, once its shape is inferred. *)
 
 type scope_id = { nd : LA.t; scope_id : int } [@@deriving sexp_of, equal, hash]
 (** *** Low-level representation. *)
@@ -173,11 +173,11 @@ type visits =
   | Recurrent  (** A [Recurrent] visit is when there is an access prior to any assignment in an update. *)
 [@@deriving sexp, equal, variants]
 
-type traced_tensor = {
+type traced_array = {
   nd : LA.t;
   mutable computations : (Indexing.axis_index array option * t) list;
       (** The computations (of the data node) are retrieved for optimization just as they are populated,
-          so that the inlined code corresponds precisely to the changes to the tensors that would happen
+          so that the inlined code corresponds precisely to the changes to the arrays that would happen
           up till that point. Within the code blocks paired with an index tuple, all assignments and accesses
           must happen via the index tuple; if this is not the case for some assignment, the node cannot
           be virtual. Currently, we only allow for-loop symbols in assignment indices of virtual nodes. *)
@@ -185,8 +185,8 @@ type traced_tensor = {
   accesses : (int array, visits) Hashtbl.t;
       (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
   mutable non_virtual : bool;
-      (** If false, this tensor is never materialized, its computations are inlined on a per-scalar basis.
-          A tensor that is already materialized will not be virtual. *)
+      (** If false, this array is never materialized, its computations are inlined on a per-scalar basis.
+          A array that is already materialized will not be virtual. *)
   mutable non_device_only : bool;
       (** If false, this node is only materialized on the devices it is computed on, it is not persisted
           outside of a step update. It is marked as [not !(nd.materialized)]. *)
@@ -279,7 +279,7 @@ let precompute_constants ?idcs traced_store top_ptr llv =
     top_n.scalar <- Some (loop llv)
   with Non_literal _i ->
     (* if !with_debug then
-       Caml.Format.printf "TRACE: Tensor #%d is non-literal because no. %d\n%!" n.id i; *)
+       Caml.Format.printf "TRACE: Array #%d is non-literal because no. %d\n%!" n.id i; *)
     (* In principle we might conclude again that the node is to be inlined as scalar, that's OK. *)
     top_n.scalar <- None
 
@@ -307,33 +307,33 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         for data = from_ to to_ do
           loop_proc (Map.add_exn ~key:index ~data env) body
         done
-    | Zero_out tensor ->
-        let traced : traced_tensor = get_node traced_store tensor in
+    | Zero_out array ->
+        let traced : traced_array = get_node traced_store array in
         if Hash_set.is_empty traced.assignments && Hashtbl.is_empty traced.accesses then
           traced.zero_initialized <- true;
         traced.zeroed_out <- true
-    | Set (tensor, idcs, llv) ->
+    | Set (array, idcs, llv) ->
         loop_float env llv;
-        let traced : traced_tensor = get_node traced_store tensor in
+        let traced : traced_array = get_node traced_store array in
         Hash_set.add traced.assignments (lookup env idcs);
         traced.rhses <- List.dedup_and_sort ~compare:Caml.compare @@ (llv :: traced.rhses);
-        if virtualize_settings.inline_constants then precompute_constants ~idcs traced_store tensor llv;
+        if virtualize_settings.inline_constants then precompute_constants ~idcs traced_store array llv;
         (match llv with
-        | Get (_tensor2, _idcs2) -> traced.last_write_non_update <- true
-        | Binop (_, Get (tensor2, idcs2), _)
-          when LA.equal tensor tensor2 && [%equal: Indexing.axis_index array] idcs idcs2 ->
+        | Get (_array2, _idcs2) -> traced.last_write_non_update <- true
+        | Binop (_, Get (array2, idcs2), _)
+          when LA.equal array array2 && [%equal: Indexing.axis_index array] idcs idcs2 ->
             traced.last_write_non_update <- false
-        | Binop (_, _, Get (tensor2, idcs2))
-          when LA.equal tensor tensor2 && [%equal: Indexing.axis_index array] idcs idcs2 ->
+        | Binop (_, _, Get (array2, idcs2))
+          when LA.equal array array2 && [%equal: Indexing.axis_index array] idcs idcs2 ->
             traced.last_write_non_update <- false
         | Constant _ -> traced.last_write_non_update <- true
         | _ -> traced.last_write_non_update <- true);
         Array.iter idcs ~f:(function
           | Fixed_idx _ -> ()
           | Iterator s ->
-              let old_tensor = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tensor) in
-              (* TODO(#134): this prevents multiple virtual tensors from sharing for loops. *)
-              assert (LA.equal old_tensor tensor))
+              let old_array = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> array) in
+              (* TODO(#134): this prevents multiple virtual arrays from sharing for loops. *)
+              assert (LA.equal old_array array))
     | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
     | Staged_compilation _ -> ()
@@ -342,10 +342,10 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
     match llv with
     | Constant _ -> ()
     | Get (ptr, indices) ->
-        let tensor : traced_tensor = get_node traced_store ptr in
+        let array : traced_array = get_node traced_store ptr in
         let at_pos = lookup env indices in
-        Hashtbl.update tensor.accesses at_pos
-          ~f:(visit (tensor.zeroed_out || Hash_set.mem tensor.assignments at_pos))
+        Hashtbl.update array.accesses at_pos
+          ~f:(visit (array.zeroed_out || Hash_set.mem array.assignments at_pos))
     | Local_scope { body; _ } -> loop_proc env body
     | Get_local _ -> ()
     | Get_global _ -> ()
@@ -369,7 +369,7 @@ let process_computation traced top_llc =
   let exception Non_virtual in
   let at_idcs = ref None in
   let has_setter = ref false in
-  let top_tensor = traced.nd in
+  let top_array = traced.nd in
   let check_idcs indices =
     (match !at_idcs with
     | None -> at_idcs := Some indices
@@ -393,9 +393,9 @@ let process_computation traced top_llc =
     | For_loop { trace_it = false; _ } -> raise Non_virtual
     | For_loop { index; body; from_ = _; to_ = _; trace_it = true } ->
         loop_proc ~env_dom:(Map.add_exn ~key:index ~data:() env_dom) body
-    | Zero_out tensor -> if LA.equal tensor top_tensor then has_setter := true
-    | Set (tensor, indices, llv) ->
-        if LA.equal tensor top_tensor then (
+    | Zero_out array -> if LA.equal array top_array then has_setter := true
+    | Set (array, indices, llv) ->
+        if LA.equal array top_array then (
           check_idcs indices;
           has_setter := true)
         else
@@ -418,8 +418,8 @@ let process_computation traced top_llc =
   and loop_float ~env_dom llv =
     match llv with
     | Constant _ -> ()
-    | Get (tensor, idcs) ->
-        if LA.equal tensor top_tensor then check_idcs idcs
+    | Get (array, idcs) ->
+        if LA.equal array top_array then check_idcs idcs
         else
           (* Check for escaping variables. *)
           Array.iter idcs ~f:(function
@@ -482,8 +482,8 @@ let inline_computation ~id traced call_args =
           let env = Map.Poly.add_exn ~key:index ~data:fresh env in
           Option.map ~f:(fun body : t -> For_loop { index = fresh; from_; to_; body; trace_it })
           @@ loop env body
-      | Zero_out tensor when LA.equal tensor traced.nd -> Some (Set_local (id, Constant 0.0))
-      | Set (tensor, indices, llv) when LA.equal tensor traced.nd ->
+      | Zero_out array when LA.equal array traced.nd -> Some (Set_local (id, Constant 0.0))
+      | Set (array, indices, llv) when LA.equal array traced.nd ->
           assert ([%equal: Indexing.axis_index array option] (Some indices) def_args);
           Some (Set_local (id, loop_float env llv))
       | Zero_out _ -> None
@@ -494,10 +494,10 @@ let inline_computation ~id traced call_args =
     and loop_float env llv : float_t =
       match llv with
       | Constant _ -> llv
-      | Get (tensor, indices) when LA.equal tensor traced.nd ->
+      | Get (array, indices) when LA.equal array traced.nd ->
           assert ([%equal: Indexing.axis_index array option] (Some indices) def_args);
           Get_local id
-      | Get (tensor, indices) -> Get (tensor, Array.map ~f:(subst env) indices)
+      | Get (array, indices) -> Get (array, Array.map ~f:(subst env) indices)
       | Local_scope { id; prec; body; orig_indices } ->
           Local_scope
             {
@@ -526,7 +526,7 @@ let rec unroll_pow ~(base : float_t) ~(exp : int) : float_t =
   else Fn.apply_n_times ~n:(exp - 1) (fun accu -> Binop (Mul, base, accu)) base
 
 let virtual_llc traced_store reverse_node_map (llc : t) : t =
-  (* The current position is within scope of the definitions of the process_for virtual tensors. *)
+  (* The current position is within scope of the definitions of the process_for virtual arrays. *)
   let rec loop_proc ~process_for (llc : t) : t =
     let loop = loop_proc ~process_for in
     match llc with
@@ -534,21 +534,21 @@ let virtual_llc traced_store reverse_node_map (llc : t) : t =
     | Seq (c1, c2) -> Seq (loop c1, loop c2)
     | For_loop ({ index; body; _ } as for_config) -> (
         match Hashtbl.find reverse_node_map index with
-        | Some tensor when not @@ Set.mem process_for tensor ->
-            let node : traced_tensor = get_node traced_store tensor in
-            let result = loop_proc ~process_for:(Set.add process_for tensor) llc in
+        | Some array when not @@ Set.mem process_for array ->
+            let node : traced_array = get_node traced_store array in
+            let result = loop_proc ~process_for:(Set.add process_for array) llc in
             if not node.non_virtual then process_computation node result;
             result
         | _ -> For_loop { for_config with body = loop body })
-    | Zero_out tensor ->
-        let traced : traced_tensor = get_node traced_store tensor in
-        if (not @@ Set.mem process_for tensor) && not traced.non_virtual then process_computation traced llc;
+    | Zero_out array ->
+        let traced : traced_array = get_node traced_store array in
+        if (not @@ Set.mem process_for array) && not traced.non_virtual then process_computation traced llc;
         llc
-    | Set (tensor, indices, llv) ->
-        let traced : traced_tensor = get_node traced_store tensor in
-        let next = if traced.non_virtual then process_for else Set.add process_for tensor in
-        let result = Set (tensor, indices, loop_float ~process_for:next llv) in
-        if (not @@ Set.mem process_for tensor) && not traced.non_virtual then
+    | Set (array, indices, llv) ->
+        let traced : traced_array = get_node traced_store array in
+        let next = if traced.non_virtual then process_for else Set.add process_for array in
+        let result = Set (array, indices, loop_float ~process_for:next llv) in
+        if (not @@ Set.mem process_for array) && not traced.non_virtual then
           process_computation traced result;
         result
     | Set_local (id, llv) -> Set_local (id, loop_float ~process_for llv)
@@ -557,14 +557,14 @@ let virtual_llc traced_store reverse_node_map (llc : t) : t =
   and loop_float ~process_for (llv : float_t) : float_t =
     match llv with
     | Constant _ -> llv
-    | Get (tensor, _) when Set.mem process_for tensor ->
-        (* [Get_local] will replace this [Get] during [inline_computation] if [tensor] remains virtual. *)
+    | Get (array, _) when Set.mem process_for array ->
+        (* [Get_local] will replace this [Get] during [inline_computation] if [array] remains virtual. *)
         llv
-    | Get (tensor, indices) ->
-        let traced = get_node traced_store tensor in
+    | Get (array, indices) ->
+        let traced = get_node traced_store array in
         if traced.non_virtual then llv
         else
-          let id = get_scope tensor in
+          let id = get_scope array in
           Option.value ~default:llv
           @@ Option.map (inline_computation ~id traced indices) ~f:(fun body ->
                  Local_scope { id; prec = traced.nd.prec; body; orig_indices = indices })
@@ -578,11 +578,11 @@ let virtual_llc traced_store reverse_node_map (llc : t) : t =
   loop_proc ~process_for:(Set.empty (module Lazy_array)) llc
 
 let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
-  let is_inline tensor =
-    let node = get_node traced_store tensor in
+  let is_inline array =
+    let node = get_node traced_store array in
     (virtualize_settings.inline_constants && Option.is_some node.scalar) || not node.non_virtual
   in
-  (* The current position is within scope of the definitions of the process_for virtual tensors. *)
+  (* The current position is within scope of the definitions of the process_for virtual arrays. *)
   let rec loop_proc ~balanced ~env_dom (llc : t) : t option =
     let loop = loop_proc ~balanced ~env_dom in
     match llc with
@@ -593,20 +593,20 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
     | For_loop ({ index; body; _ } as for_config) -> (
         let env_dom = Set.add env_dom index in
         match Hashtbl.find reverse_node_map index with
-        | Some tensor ->
-            if is_inline tensor then None
+        | Some array ->
+            if is_inline array then None
             else
               Option.map ~f:(fun body : t -> For_loop { for_config with body })
               @@ loop_proc ~balanced ~env_dom body
         | None ->
             Option.map ~f:(fun body : t -> For_loop { for_config with body })
             @@ loop_proc ~balanced ~env_dom body)
-    | Zero_out tensor -> if is_inline tensor then None else Some llc
-    | Set (tensor, indices, llv) ->
-        if is_inline tensor then None
+    | Zero_out array -> if is_inline array then None else Some llc
+    | Set (array, indices, llv) ->
+        if is_inline array then None
         else (
           assert (Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
-          Some (Set (tensor, indices, loop_float ~balanced ~env_dom llv)))
+          Some (Set (array, indices, loop_float ~balanced ~env_dom llv)))
     | Set_local (id, llv) ->
         let node = get_node traced_store id.nd in
         if virtualize_settings.inline_constants && Option.is_some node.scalar then None
@@ -619,14 +619,14 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
     let loop = loop_float ~balanced ~env_dom in
     match llv with
     | Constant _ -> llv
-    | Get (tensor, indices) -> (
-        let node = get_node traced_store tensor in
+    | Get (array, indices) -> (
+        let node = get_node traced_store array in
         match node.scalar with
         | Some c when virtualize_settings.inline_constants -> Constant c
         | _ ->
             if not node.non_virtual then
-              Caml.Format.printf "WARNING: unexpected Get of a virtual tensor, details:@ %a\n%!" Sexp.pp_hum
-                (sexp_of_traced_tensor node);
+              Caml.Format.printf "WARNING: unexpected Get of a virtual array, details:@ %a\n%!" Sexp.pp_hum
+                (sexp_of_traced_array node);
             assert (Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
             llv)
     | Local_scope { id; prec; body; orig_indices } -> (
@@ -640,8 +640,8 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
             else
               Option.value_or_thunk ~default:(fun () ->
                   Caml.Format.printf
-                    "WARNING: unexpected non-eliminable virtual tensor:@ %a@ Compilation data:@ %a@ \n%!"
-                    Sexp.pp_hum (LA.sexp_of_t id.nd) Sexp.pp_hum (sexp_of_traced_tensor traced);
+                    "WARNING: unexpected non-eliminable virtual array:@ %a@ Compilation data:@ %a@ \n%!"
+                    Sexp.pp_hum (LA.sexp_of_t id.nd) Sexp.pp_hum (sexp_of_traced_array traced);
                   Get (id.nd, orig_indices))
               @@ Option.map ~f:(fun body -> Local_scope { id; prec; orig_indices; body })
               @@ loop_proc ~balanced ~env_dom body)
@@ -680,7 +680,7 @@ and substitute_proc ~var ~value llc =
   | Seq (c1, c2) -> Seq (loop_proc c1, loop_proc c2)
   | For_loop for_config -> For_loop { for_config with body = loop_proc for_config.body }
   | Zero_out _ -> llc
-  | Set (tensor, indices, llv) -> Set (tensor, indices, loop_float llv)
+  | Set (array, indices, llv) -> Set (array, indices, loop_float llv)
   | Set_local (id, llv) -> Set_local (id, loop_float llv)
   | Comment _ -> llc
   | Staged_compilation _ -> llc
@@ -693,7 +693,7 @@ let simplify_llc traced_store llc =
     | Seq (c1, c2) -> Seq (loop c1, loop c2)
     | For_loop for_config -> For_loop { for_config with body = loop for_config.body }
     | Zero_out _ -> llc
-    | Set (tensor, indices, llv) -> Set (tensor, indices, loop_float llv)
+    | Set (array, indices, llv) -> Set (array, indices, loop_float llv)
     | Set_local (id, llv) -> Set_local (id, loop_float llv)
     | Comment _ -> llc
     | Staged_compilation _ -> llc
@@ -744,7 +744,7 @@ let simplify_llc traced_store llc =
           match v2 with
           | Constant c when Float.is_integer c -> loop_float @@ unroll_pow ~base:v1 ~exp:(Float.to_int c)
           | Get (ptr, _) -> (
-              let node : traced_tensor = get_node traced_store ptr in
+              let node : traced_array = get_node traced_store ptr in
               match node.scalar with
               | Some c when Float.is_integer c -> loop_float @@ unroll_pow ~base:v1 ~exp:(Float.to_int c)
               | _ ->
@@ -766,7 +766,7 @@ let simplify_llc traced_store llc =
   in
   loop_proc llc
 
-type traced_store = (LA.t, traced_tensor) Base.Hashtbl.t
+type traced_store = (LA.t, traced_array) Base.Hashtbl.t
 
 let optimize_proc ?(verbose = false) llc : traced_store * t =
   let traced_store : traced_store = Hashtbl.create (module Lazy_array) in

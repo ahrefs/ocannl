@@ -9,13 +9,13 @@ let session_context =
   ref ctx
 
 type mem_properties =
-  | Local_only  (** The tensor is only needed for a local computation and does not exist on host. *)
+  | Local_only  (** The array is only needed for a local computation and does not exist on host. *)
   | Local_finally_host
-      (** The tensor is computed locally and then copied to host, if the flag [is_final] is true. *)
-  | Host_only  (** The tensor is read from or updated directly on the host. *)
+      (** The array is computed locally and then copied to host, if the flag [is_final] is true. *)
+  | Host_only  (** The array is read from or updated directly on the host. *)
 [@@deriving sexp, equal, compare, variants]
 
-type tensor = {
+type ndarray = {
   hosted_ptr : Gccjit.rvalue option;
       (** Pointer to the first value of the associated [Bigarray], if hosted. *)
   local : Gccjit.lvalue option;  (** A local array, if any. *)
@@ -36,7 +36,7 @@ module LA = Low_level.Lazy_array
 type state = {
   ctx : Gccjit.context;
   func : Gccjit.function_;
-  tensors : (LA.t, tensor) Hashtbl.t;
+  arrays : (LA.t, ndarray) Hashtbl.t;
   traced_store : Low_level.traced_store;
   init_block : Gccjit.block;
   finalize_block : Gccjit.block;  (** Only executed when [is_final] is true. *)
@@ -50,9 +50,9 @@ let jit_array_offset ctx ~idcs ~dims =
       RValue.binary_op ctx Plus c_index idx
       @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
 
-let get_tensor { ctx; func; tensors; traced_store; init_block; finalize_block; is_final = _ } n : tensor =
+let get_array { ctx; func; arrays; traced_store; init_block; finalize_block; is_final = _ } n : ndarray =
   let open Gccjit in
-  Hashtbl.find_or_add tensors n ~default:(fun () ->
+  Hashtbl.find_or_add arrays n ~default:(fun () ->
       let tn = Low_level.(get_node traced_store n) in
       let dims = Lazy.force n.dims in
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
@@ -62,7 +62,7 @@ let get_tensor { ctx; func; tensors; traced_store; init_block; finalize_block; i
       let c_index = Type.get ctx Type.Size_t in
       let c_int = Type.get ctx Type.Int in
       (* TODO: is the complexity of introducing this function and matching on Ndarray.t needed? *)
-      let tensor c_typ is_double arr =
+      let array c_typ is_double arr =
         let num_typ = Type.(get ctx c_typ) in
         let hosted_ptr =
           Option.map arr
@@ -100,12 +100,12 @@ let get_tensor { ctx; func; tensors; traced_store; init_block; finalize_block; i
         { hosted_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
       in
       match n.prec, Lazy.force n.array with
-      | _, Some (Half_nd arr) -> (* FIXME: *) tensor Type.Float false (Some arr)
-      | _, Some (Single_nd arr) -> tensor Type.Float false (Some arr)
-      | _, Some (Double_nd arr) -> tensor Type.Double true (Some arr)
-      | Half_prec _, None -> (* FIXME: *) tensor Type.Float false None
-      | Single_prec _, None -> tensor Type.Float false None
-      | Double_prec _, None -> tensor Type.Double true None
+      | _, Some (Half_nd arr) -> (* FIXME: *) array Type.Float false (Some arr)
+      | _, Some (Single_nd arr) -> array Type.Float false (Some arr)
+      | _, Some (Double_nd arr) -> array Type.Double true (Some arr)
+      | Half_prec _, None -> (* FIXME: *) array Type.Float false None
+      | Single_prec _, None -> array Type.Float false None
+      | Double_prec _, None -> array Type.Double true None
       | Void_prec, None -> assert false
       )
 
@@ -137,8 +137,8 @@ let builtin_op = function
   | Low_level.ToPowOf | Low_level.Relu_gate | Low_level.Arg2 | Low_level.Arg1 ->
       invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
 
-let get_ptr tensor =
-  match tensor.local with Some lv -> Gccjit.RValue.lvalue lv | None -> Option.value_exn tensor.hosted_ptr
+let get_ptr array =
+  match array.local with Some lv -> Gccjit.RValue.lvalue lv | None -> Option.value_exn array.hosted_ptr
 
 let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ } as state) initial_block body
     =
@@ -207,32 +207,32 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
         loop c2
     | For_loop { index; from_; to_; body; trace_it = _ } -> jit_for_loop ~env index ~from_ ~to_ body
     | Set (_, _, Binop (Arg2, Get (_, _), _)) -> assert false
-    | Set (tensor, idcs, Binop (op, Get (tensor2, idcs2), c2))
-      when LA.equal tensor tensor2
+    | Set (array, idcs, Binop (op, Get (array2, idcs2), c2))
+      when LA.equal array array2
            && [%equal: Indexing.axis_index array] idcs idcs2
            && is_builtin_op op ->
         (* FIXME: maybe it's not worth it? *)
-        let tensor = get_tensor state tensor in
-        let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double c2 in
+        let array = get_array state array in
+        let value = loop_float ~name ~env ~num_typ:array.num_typ ~is_double:array.is_double c2 in
         let idcs = lookup env idcs in
-        let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
-        let lhs = LValue.access_array (get_ptr tensor) offset in
+        let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
+        let lhs = LValue.access_array (get_ptr array) offset in
         Block.assign_op !current_block lhs (builtin_op op) value
-    | Set (tensor, idcs, value) ->
-        let tensor = get_tensor state tensor in
-        let value = loop_float ~name ~env ~num_typ:tensor.num_typ ~is_double:tensor.is_double value in
+    | Set (array, idcs, value) ->
+        let array = get_array state array in
+        let value = loop_float ~name ~env ~num_typ:array.num_typ ~is_double:array.is_double value in
         let idcs = lookup env idcs in
-        let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
-        let lhs = LValue.access_array (get_ptr tensor) offset in
+        let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
+        let lhs = LValue.access_array (get_ptr array) offset in
         Block.assign !current_block lhs value
-    | Zero_out tensor ->
-        if Hashtbl.mem state.tensors tensor then
+    | Zero_out array ->
+        if Hashtbl.mem state.arrays array then
           failwith
             ("exec_as_gccjit: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
-            @@ [%sexp_of: LA.t] tensor);
-        let tn = Low_level.(get_node state.traced_store tensor) in
+            @@ [%sexp_of: LA.t] array);
+        let tn = Low_level.(get_node state.traced_store array) in
         assert tn.zero_initialized
-        (* The initialization will be emitted by get_tensor. *)
+        (* The initialization will be emitted by get_array. *)
     | Set_local (id, value) ->
         let lhs, num_typ, is_double = Map.find_exn !locals id in
         let value = loop_float ~name ~env ~num_typ ~is_double value in
@@ -247,7 +247,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
         (* Scope ids can be non-unique due to inlining. *)
         let v_name = Int.("v" ^ to_string i ^ "_" ^ get_uid ()) in
         let lvalue = Function.local func typ v_name in
-        (* Tensors are initialized to 0 by default. However, there is typically an explicit
+        (* Arrays are initialized to 0 by default. However, there is typically an explicit
            initialization for virtual nodes. *)
         Block.assign !current_block lvalue @@ RValue.zero ctx typ;
         let old_locals = !locals in
@@ -263,11 +263,11 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
         (* TODO: this is too limiting. *)
         let f = Function.builtin ctx f_name in
         RValue.call ctx f []
-    | Get (tensor, idcs) ->
-        let tensor = get_tensor state tensor in
+    | Get (array, idcs) ->
+        let array = get_array state array in
         let idcs = lookup env idcs in
-        let offset = jit_array_offset ctx ~idcs ~dims:tensor.dims in
-        RValue.lvalue @@ LValue.access_array (get_ptr tensor) offset
+        let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
+        RValue.lvalue @@ LValue.access_array (get_ptr array) offset
     | Binop (Low_level.Arg2, _, c2) -> loop c2
     | Binop (Low_level.Arg1, c1, _) -> loop c1
     | Binop (op, c1, c2) -> loop_binop op ~num_typ ~is_double ~v1:(loop c1) ~v2:(loop c2)
@@ -315,7 +315,7 @@ let jit_func ~name ctx (traced_store, proc) =
       traced_store;
       init_block;
       finalize_block;
-      tensors = Hashtbl.Poly.create ();
+      arrays = Hashtbl.Poly.create ();
       is_final = Some is_final;
     }
   in

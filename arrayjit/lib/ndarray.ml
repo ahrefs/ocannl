@@ -1,5 +1,5 @@
 open Base
-(** `Node`: the computation type, global state and utils which the `Tensor` staged code uses. *)
+(** `Node`: the computation type, global state and utils which the `Array` staged code uses. *)
 
 module A = Bigarray.Genarray
 
@@ -129,7 +129,7 @@ let map_with_prec { f } = function
   | Single_nd arr -> f Single arr
   | Double_nd arr -> f Double arr
 
-(** Initializes or resets a tensor by filling in the corresponding numbers, at the appropriate precision. *)
+(** Initializes or resets a array by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op =
   | Constant_fill of float array
       (** Fills in the numbers where the rightmost axis is contiguous, looping over the provided values. *)
@@ -283,7 +283,7 @@ let int_dims_to_string ?(with_axis_numbers = false) dims =
     String.concat_array ~sep:" x " @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ Int.to_string s)
   else String.concat_array ~sep:"x" @@ Array.map dims ~f:Int.to_string
 
-(** When rendering tensors, outputs this many decimal digits. *)
+(** When rendering arrays, outputs this many decimal digits. *)
 let print_decimals_precision = ref 2
 
 let concise_float ~prec v =
@@ -305,7 +305,7 @@ let concise_float ~prec v =
     * -5: a sequence of screens of text (i.e. stack numbers of outer rectangles).
     Printing out of axis [-5] is interrupted when a callback called in between each outer rectangle
     returns true. *)
-let render_tensor ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labels = [||]) ~indices arr =
+let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labels = [||]) ~indices arr =
   let module B = PrintBox in
   let dims = dims arr in
   let has_nan = fold ~init:false ~f:(fun has_nan _ v -> has_nan || Float.is_nan v) arr in
@@ -414,11 +414,11 @@ let render_tensor ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labe
     in
     (if brief then Fn.id else B.frame) @@ B.vlist ~bars:false [ B.text header; screens ]
 
-let pp_tensor fmt ?prefix ?entries_per_axis ?labels ~indices arr =
-  PrintBox_text.pp fmt @@ render_tensor ?prefix ?entries_per_axis ?labels ~indices arr
+let pp_array fmt ?prefix ?entries_per_axis ?labels ~indices arr =
+  PrintBox_text.pp fmt @@ render_array ?prefix ?entries_per_axis ?labels ~indices arr
 
-(** Prints the whole tensor in an inline syntax. *)
-let pp_tensor_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?axes_spec arr =
+(** Prints the whole array in an inline syntax. *)
+let pp_array_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?axes_spec arr =
   let dims = dims arr in
   let num_all_axes = num_batch_axes + num_output_axes + num_input_axes in
   let open Caml.Format in
