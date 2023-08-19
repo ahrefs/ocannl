@@ -49,12 +49,6 @@ let global_roots = ref @@ Map.empty (module Int)
     first in postfix order while computing [t], then in prefix order by iterating over this stack. *)
 let session_shape_updates : Shape.update_step list ref = ref []
 
-(** This code will usually be executed once, after the shapes are inferred. But it will also
-    be executed by each [Session.refresh_session ~regenerate:true] and 
-    [Session.refresh_session ~reinit:true] call, except if [~force_no_init:true].
-    Execution potentially in parallel. *)
-let session_initializations : Low_level.create list ref = ref []
-
 let session_initialized = ref 0
 
 (** This code will be executed on each [Session.refresh_session ~run:true] call ([~run:true]
@@ -79,8 +73,7 @@ let fetch_zeros array shape =
 let fetch_ones array shape =
   High_level.Fetch { array; fetch_op = Constant 1.; dims = (fun () -> Shape.to_dims shape) }
 
-let create ?(init_op = Low_level.Constant_fill [| 0.0 |]) array shape =
-  { array; Low_level.dims = (fun () -> Shape.to_dims shape); init_op }
+let default_init_op = Low_level.Constant_fill [| 0.0 |]
 
 let max_sublabel_length = ref 25
 

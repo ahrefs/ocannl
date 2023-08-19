@@ -77,9 +77,6 @@ type init_op = Nd.init_op =
   | Standard_uniform  (** Draws the values from U(0,1). *)
 [@@deriving sexp]
 
-type create = { array : LA.t; dims : unit -> int array; init_op : init_op }
-(** Information to create a array, once its shape is inferred. *)
-
 type scope_id = { nd : LA.t; scope_id : int } [@@deriving sexp_of, equal, hash]
 (** *** Low-level representation. *)
 
