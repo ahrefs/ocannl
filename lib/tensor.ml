@@ -2,7 +2,6 @@
 
 open Base
 open Arrayjit
-
 module LA = Low_level.Lazy_array
 
 type diff = {
@@ -10,19 +9,14 @@ type diff = {
   zero_grads : High_level.t;
       (** Prepares for backpropagation. Always compile as: [backprop = Seq (zero_grads, backprop_body)]. *)
   backprop_body : High_level.t;
-      (** Performs backpropagation for the tensor at each session step, which typically means adding
-           partial gradients to the gradient tensor of the subtensors. *)
-  needs_gradient : bool;
-      (** An optimization setting: whether gradients should be backpropagated into the tensor.
-          If any subtensor needs gradients, this tensor also needs gradients. *)
+      (** Backpropagates for the tensor and its descendants; which typically means adding
+          partial gradients to the gradient tensor of the subtensors, then for sub-subtensors etc. *)
 }
 [@@deriving sexp_of]
 
 type t = {
-  forward_body : High_level.t;  (** Computes the values at each session step. *)
+  forward_body : High_level.t;
   diff : diff option;
-  nondiff_forward_body : High_level.t;
-      (** Same as [forward_body] if [diff] is [None], otherwise [Code.Noop]. *)
   id : int;  (** Same as [value.id]. *)
   value : LA.t;
   shape_logic : Shape.logic;
@@ -39,11 +33,12 @@ type t = {
 (** Information needed for compositional code generation. The code generation is suspended so that
     it can incorporate inferred shape information. *)
 
-(** A global root is a tensor that is not (currently) a subtensor of another tensor.
+(** A forward root is a tensor that is not (currently) used to compute another tensor. *)
+let forward_roots = ref @@ Map.empty (module Int)
 
-    If a tensor with [id >= session_state.first_session_id] is not among global roots, it must be a subtensor
-    of a global root. *)
-let global_roots = ref @@ Map.empty (module Int)
+(** A backprop root is a tensor with a gradient that is not (currently) receiving gradients from
+    another tensor. I.e. it is not currently used to compute a tensor with a gradient. *)
+let backprop_roots = ref @@ Map.empty (module Int)
 
 (** We perform each update (at least) twice to propagate information between all subtensors:
     first in postfix order while computing [t], then in prefix order by iterating over this stack. *)
@@ -74,7 +69,6 @@ let fetch_ones array shape =
   High_level.Fetch { array; fetch_op = Constant 1.; dims = (fun () -> Shape.to_dims shape) }
 
 let default_init_op = Low_level.Constant_fill [| 0.0 |]
-
 let max_sublabel_length = ref 25
 
 let raw_binop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs1_is_grad ~t2 ~rhs2_is_grad ~logic =
@@ -110,120 +104,91 @@ type session_state = { mutable first_session_id : int; mutable next_session_id :
 
 let session_state = { first_session_id = 0; next_session_id = 0 }
 
-let binop ~op_label ?(desc_label="") ?(compose_op = Shape.Pointwise_bin) ~op_body ~grad_body ~is_diff t1 t2 =
-  (* Note: do not capture t1, t2 in any closure, so they can be GC'd. *)
+type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
+
+let binop ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ~op_body ~grad_body
+    ?(grad_spec = If_needed) t1 t2 =
   if t1.id < session_state.first_session_id && not t1.cross_session_persistent then
     raise @@ Session_error ("The subtensor is outside of current session", Some t1);
   if t2.id < session_state.first_session_id && not t2.cross_session_persistent then
     raise @@ Session_error ("The subtensor is outside of current session", Some t2);
   let t1_first = t1.id <= t2.id in
-  let t1_processed : bool = Option.is_some t1.diff && (not @@ Map.mem !global_roots t1.id) in
-  let t2_processed : bool =
-    Option.is_some t2.diff && (t2.id = t1.id || (not @@ Map.mem !global_roots t2.id))
-  in
-  let needs_gradient =
-    match (t1.diff, t2.diff) with
-    | Some form1, Some form2 -> form1.needs_gradient || form2.needs_gradient
-    | Some form1, _ -> form1.needs_gradient
-    | _, Some form2 -> form2.needs_gradient
-    | _ -> false
-  in
-  let fixme_fragile = session_state.next_session_id in
-  let shape = Shape.make ~id:fixme_fragile () in
-  let n =
-    Code.create_node_promoted_precision ~needs_gradient m1.node.node m2.node.node ~op_label ?desc_label
-      ~children shape
-  in
-  let id = n.id in
-  let shape_logic = Shape.Broadcast (compose_op, m1.shape, m2.shape) in
+  let t1_fwd_processed = not @@ Map.mem !forward_roots t1.id in
+  let t2_fwd_processed = t2.id = t1.id || (not @@ Map.mem !forward_roots t2.id) in
+  if not t1_fwd_processed then forward_roots := Map.remove !forward_roots t1.id;
+  if not t2_fwd_processed then forward_roots := Map.remove !forward_roots t2.id;
+  let id = session_state.next_session_id in
+  session_state.next_session_id <- session_state.next_session_id + 1;
+  let shape = Shape.make ~id () in
+  let v1 = t1.value in
+  let v2 = t2.value in
+  let dims = lazy (Shape.to_dims shape) in
+  let label = op_label ^ if String.is_empty desc_label then "" else "/" ^ desc_label in
+  let v = LA.create (Ndarray.promote_prec v1.prec v2.prec) ~id ~label ~dims ~literal:false default_init_op in
+  let shape_logic = Shape.Broadcast (compose_op, t1.shape, t2.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
-  let n1 = m1.node in
-  let n2 = m2.node in
-  Shape.propagate_shapes local_update;
+  Shape.propagate_shapes local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections () = Shape.derive_projections local_shape_update in
   let op_body = op_body ~v ~v1 ~v2 ~projections in
-  (* The code needs to be included in the order it was computed! *)
+  (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let forward_body =
-    High_level.(
-      match
-        ( t1_processed,
-          (if is_diff then t1.forward_body else t1.nondiff_forward_body),
-          t2_processed,
-          if is_diff then t2.forward_body else t2.nondiff_forward_body )
-      with
-      | true, _, true, _ | true, _, _, Noop | _, Noop, true, _ | _, Noop, _, Noop -> op_body
-      | false, t1_body, false, t2_body when t1_first -> Seq (ParHint (t1_body, t2_body), op_body)
-      | false, t1_body, false, t2_body -> Seq (ParHint (t2_body, t1_body), op_body)
-      | _, _, false, t2_body -> Seq (t2_body, op_body)
-      | false, t1_body, _, _ -> Seq (t1_body, op_body))
+    let open High_level in
+    let fwd1 = if t1_fwd_processed then Comment_reference t1.forward_body else t1.forward_body in
+    let fwd2 = if t2_fwd_processed then Comment_reference t2.forward_body else t2.forward_body in
+    let subfwd = if t1_first then Seq (fwd1, fwd2) else Seq (fwd2, fwd1) in
+    Seq (subfwd, op_body)
   in
-  let init_values_body = create ~id Value shape in
-  session_initializations := init_values_body :: !session_initializations;
-  if not is_diff then
-    {
-      forward_body;
-      diff = None;
-      nondiff_forward_body = forward_body;
-      id;
-      node = v;
-      shape_logic;
-      shape;
-      cross_session_persistent = false;
-    }
-  else
-    let diff1, diff2 =
-      match (t1.diff, t2.diff) with
-      | Some form1, Some form2 -> (form1, form2)
-      | None, _ -> raise @@ Session_error ("binop ~is_diff:true but subtensor is non-diff", Some t1)
-      | _, None -> raise @@ Session_error ("binop ~is_diff:true but subtensor is non-diff", Some t2)
+  if
+    is_prohibit_grad grad_spec
+    || (Fn.non is_require_grad grad_spec && Option.is_none t1.diff && Option.is_none t2.diff)
+  then (
+    let tensor =
+      { forward_body; diff = None; id; value = v; shape_logic; shape; cross_session_persistent = false }
     in
-    let t1_no_grad = t1_processed || not diff1.needs_gradient in
-    let t2_no_grad = t2_processed || not diff2.needs_gradient in
+    forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
+    tensor)
+  else
+    let t1_bck_processed = not @@ Map.mem !backprop_roots t1.id in
+    let t2_bck_processed = t2.id = t1.id || (not @@ Map.mem !backprop_roots t2.id) in
+    if not t1_bck_processed then backprop_roots := Map.remove !backprop_roots t1.id;
+    if not t2_bck_processed then backprop_roots := Map.remove !backprop_roots t2.id;
+    let g1 = Option.map t1.diff ~f:(fun diff1 -> diff1.grad) in
+    let g2 = Option.map t1.diff ~f:(fun diff2 -> diff2.grad) in
+    let g_prec =
+      let f g = Option.map g ~f:(fun g -> g.LA.prec) in
+      List.hd_exn @@ List.filter_opt
+      @@ [ Option.map2 ~f:Ndarray.promote_prec (f g1) (f g2); f g1; f g2; Some !default_grad_prec ]
+    in
+    let g = LA.create g_prec ~id ~label ~dims ~literal:false default_init_op in
     let zero_grads =
-      List.filter
-        [
-          (t1_no_grad, diff1.zero_grads); (t2_no_grad, diff2.zero_grads); (needs_gradient, fetch_zeros v shape);
-        ]
-        ~f:fst
-      |> List.map ~f:snd |> High_level.sequential
+      let open High_level in
+      let zer1 = Option.value_map t1.diff ~default:Noop ~f:(fun diff -> diff.zero_grads) in
+      let zer2 = Option.value_map t2.diff ~default:Noop ~f:(fun diff -> diff.zero_grads) in
+      let zer1 = if t1_bck_processed then Comment_reference zer1 else zer1 in
+      let zer2 = if t2_bck_processed then Comment_reference zer2 else zer2 in
+      Seq (Seq (zer1, zer2), fetch_zeros g shape)
     in
     (* The code needs to be included in the reverse order to which it was computed! This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
-    let grad_body = if needs_gradient then grad_body ~n ~v1 ~v2 ~projections else Code.Noop in
-    let grad_body =
-      if diff1.needs_gradient then grad_body else Code.remove_updates { id = t1.id; field = Grad } grad_body
-    in
-    let grad_body =
-      if diff2.needs_gradient then grad_body else Code.remove_updates { id = t2.id; field = Grad } grad_body
-    in
+    let grad_body = grad_body ~v ~v1 ~v2 ~g ~g1 ~g2 ~projections in
     let backprop_body =
-      match (t1_no_grad, diff1.backprop_body, t2_no_grad, diff2.backprop_body) with
-      | true, _, true, _ | true, _, _, Noop | _, Noop, true, _ | _, Noop, _, Noop -> grad_body
-      | false, t1_body, false, t2_body when t1_first -> Seq (grad_body, ParHint (t2_body, t1_body))
-      | false, t1_body, false, t2_body -> Seq (grad_body, ParHint (t1_body, t2_body))
-      | _, _, false, t2_body -> Seq (grad_body, t2_body)
-      | false, t1_body, _, _ -> Seq (grad_body, t1_body)
+      let open High_level in
+      let bck1 = Option.value_map t1.diff ~default:Noop ~f:(fun diff -> diff.backprop_body) in
+      let bck2 = Option.value_map t2.diff ~default:Noop ~f:(fun diff -> diff.backprop_body) in
+      let bck1 = if t1_bck_processed then Comment_reference bck1 else bck1 in
+      let bck2 = if t2_bck_processed then Comment_reference bck2 else bck2 in
+      let subbck = if t1_first then Seq (bck2, bck1) else Seq (bck1, bck2) in
+      Seq (grad_body, subbck)
     in
-    if needs_gradient then session_initializations := create ~id Grad shape :: !session_initializations;
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
-    if not t1_processed then global_roots := Map.remove !global_roots t1.id;
-    if not t2_processed then global_roots := Map.remove !global_roots t2.id;
-    let diff = Some { zero_grads; backprop_body; needs_gradient } in
+    let diff = Some { grad = g; zero_grads; backprop_body } in
     let tensor =
-      {
-        forward_body;
-        diff;
-        nondiff_forward_body = Code.Noop;
-        id;
-        node = v;
-        shape_logic;
-        shape;
-        cross_session_persistent = false;
-      }
+      { forward_body; diff; id; value = v; shape_logic; shape; cross_session_persistent = false }
     in
-    global_roots := Map.add_exn !global_roots ~key:id ~data:tensor;
+    forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
+    backprop_roots := Map.add_exn !backprop_roots ~key:id ~data:tensor;
     tensor
 
 let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_diff t1 : t =
@@ -271,11 +236,7 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
       cross_session_persistent = false;
     }
   else
-    let diff1 =
-      match t1.diff with
-      | Some diff -> diff
-      | None -> raise @@ Session_error ("binop ~is_diff:true but subtensor is non-diff", Some t1)
-    in
+    let diff1 = match t1.diff with Some diff -> diff in
     let t1_no_grad = t1_processed || not diff1.needs_gradient in
     let zero_grads =
       List.filter [ (t1_no_grad, diff1.zero_grads); (needs_gradient, fetch_zeros v shape) ] ~f:fst
@@ -311,10 +272,8 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
     tensor
 
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label ?desc_label ~needs_gradient ~is_diff ?batch_dims ?input_dims ?output_dims ?axis_labels
-    ?deduced ?init_op ?fetch_op ?postprocess_op () =
-  if needs_gradient && not is_diff then
-    invalid_arg "Tensor.term ~needs_gradient:true: a non-diff tensor cannot need gradient";
+let term ~label ?desc_label ~needs_gradient ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced
+    ?init_op ?fetch_op ?postprocess_op () =
   let literal : bool =
     if needs_gradient then false
     else

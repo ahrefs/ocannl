@@ -168,6 +168,16 @@ let create_array prec ~dims init_op =
 let precision_in_bytes = function Half_nd _ -> 2 | Single_nd _ -> 4 | Double_nd _ -> 8
 let prec_in_bytes = function Void_prec -> 0 | Half_prec _ -> 2 | Single_prec _ -> 4 | Double_prec _ -> 8
 
+let promote_prec p1 p2 =
+  match (p1, p2) with
+  | Double_prec _, _ -> p1
+  | _, Double_prec _ -> p2
+  | Single_prec _, _ -> p1
+  | _, Single_prec _ -> p2
+  | Half_prec _, _ -> p1
+  | _, Half_prec _ -> p2
+  | Void_prec, Void_prec -> Void_prec
+
 let reset_bigarray arr ~f =
   let dims = A.dims arr in
   let rec cloop idx f col =

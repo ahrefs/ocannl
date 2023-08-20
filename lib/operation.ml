@@ -199,7 +199,7 @@ let data ?desc_label ?axis_labels ?(needs_gradient = false) ~label ?(batch_dims 
   Tensor.term ?desc_label ~label ~is_diff:true ~needs_gradient ~batch_dims ~input_dims ~output_dims
     ?axis_labels ~fetch_op ()
 
-(** Non-diff computations that happen at the end (potentially in parallel). *)
+(** No-gradient computations that happen at the end (potentially in parallel). *)
 let result ?desc_label ?axis_labels ~label ?(batch_dims = []) ?(input_dims = []) ?(output_dims = [])
     postprocess_op =
   if List.for_all ~f:List.is_empty [ batch_dims; input_dims; output_dims ] then

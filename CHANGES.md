@@ -1,3 +1,14 @@
+## [0.3.0]
+
+Major rewrite.
+
+### Changed
+
+- Factored out the `arrayjit` library / package containing compilation (former Ndarray, Node, Code).
+- Renamed `Formula` -> `Tensor`
+- No more "form vs. non-form" formulas / tensors.
+  - Formula/tensor roots are split into forward roots and backprop roots.
+
 ## [0.2.1] -- 2023-07-19
 
 ### Added
