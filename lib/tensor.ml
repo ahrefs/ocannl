@@ -25,9 +25,6 @@ type t = {
   shape : Shape.t;
       (** The eventual shape of [.!(t.node).value] and [.!(t.node).grad], incorporating the current state of
           shape inference. *)
-  cross_session_persistent : bool;
-      (** A subtensor is cross-session persistent if [forward_body] is [Noop], and the tensor does
-          not require data fetching. *)
 }
 [@@deriving sexp_of]
 (** Information needed for compositional code generation. The code generation is suspended so that
@@ -94,24 +91,14 @@ let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
   let rhs = if rhs_is_grad then t1.value else (Option.value_exn t1.diff).grad in
   High_level.Accum_unop { zero_out; accum; lhs; op; rhs; projections }
 
-type session_state = { mutable first_session_id : int; mutable next_session_id : int }
-(** A current session is the range of nodes from [session_state.first_session_id] to
-    [session_state.next_session_id - 1] (possibly empty).
+type session_state = { mutable next_session_id : int }
 
-    TODO: Subtensors with [id] before this range are no longer updated
-    and can only be used in new tensors if they are cross-session-persistent: not depending on
-    fetching operations. This condition is checked automatically. *)
-
-let session_state = { first_session_id = 0; next_session_id = 0 }
+let session_state = { next_session_id = 0 }
 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
 let binop ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ~op_body ~grad_body
     ?(grad_spec = If_needed) t1 t2 =
-  if t1.id < session_state.first_session_id && not t1.cross_session_persistent then
-    raise @@ Session_error ("The subtensor is outside of current session", Some t1);
-  if t2.id < session_state.first_session_id && not t2.cross_session_persistent then
-    raise @@ Session_error ("The subtensor is outside of current session", Some t2);
   let t1_first = t1.id <= t2.id in
   let t1_fwd_processed = not @@ Map.mem !forward_roots t1.id in
   let t2_fwd_processed = t2.id = t1.id || (not @@ Map.mem !forward_roots t2.id) in
@@ -144,7 +131,7 @@ let binop ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ~op_b
     || (Fn.non is_require_grad grad_spec && Option.is_none t1.diff && Option.is_none t2.diff)
   then (
     let tensor =
-      { forward_body; diff = None; id; value = v; shape_logic; shape; cross_session_persistent = false }
+      { forward_body; diff = None; id; value = v; shape_logic; shape }
     in
     forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
     tensor)
@@ -185,7 +172,7 @@ let binop ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ~op_b
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop_body } in
     let tensor =
-      { forward_body; diff; id; value = v; shape_logic; shape; cross_session_persistent = false }
+      { forward_body; diff; id; value = v; shape_logic; shape }
     in
     forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
     backprop_roots := Map.add_exn !backprop_roots ~key:id ~data:tensor;
@@ -233,7 +220,6 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
       node = v;
       shape_logic;
       shape;
-      cross_session_persistent = false;
     }
   else
     let diff1 = match t1.diff with Some diff -> diff in
@@ -265,7 +251,6 @@ let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is
         node = v;
         shape_logic;
         shape;
-        cross_session_persistent = false;
       }
     in
     global_roots := Map.add_exn !global_roots ~key:id ~data:tensor;
@@ -301,7 +286,6 @@ let term ~label ?desc_label ~needs_gradient ?batch_dims ?input_dims ?output_dims
     Option.value_or_thunk init_op ~default:(fun () -> Low_level.Constant_fill [| 0.0 |])
   in
   session_initializations := create ~id ~init_op Value shape :: !session_initializations;
-  let cross_session_persistent = Option.is_none fetch_op && Option.is_none postprocess_op in
   let forward_body =
     Option.value ~default:High_level.Noop fetch_op
     @@
@@ -334,7 +318,6 @@ let term ~label ?desc_label ~needs_gradient ?batch_dims ?input_dims ?output_dims
       node = v;
       shape_logic;
       shape;
-      cross_session_persistent;
     }
   else
     let backprop_body = Code.Noop in
@@ -351,7 +334,6 @@ let term ~label ?desc_label ~needs_gradient ?batch_dims ?input_dims ?output_dims
         node = v;
         shape_logic;
         shape;
-        cross_session_persistent;
       }
     in
     global_roots := Map.add_exn !global_roots ~key:id ~data:tensor;
