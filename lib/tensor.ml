@@ -30,6 +30,24 @@ type t = {
 
 and subtensor = { subtensor : t; embedded : bool }
 
+let rec sexp_of_t t =
+  Sexp.message "Tensor"
+    [
+      ("id", Int.sexp_of_t t.id);
+      ("label", sexp_of_string t.value.label);
+      ("children", [%sexp_of: subtensor list] t.children);
+    ]
+
+and sexp_of_subtensor ch =
+  Sexp.message "child" [ ("", sexp_of_t ch.subtensor); ("embedded", sexp_of_bool ch.embedded) ]
+
+include Comparator.Make (struct
+  type nonrec t = t
+
+  let compare t1 t2 = Int.compare t1.id t2.id
+  let sexp_of_t = sexp_of_t
+end)
+
 (** A forward root is a tensor that is not (currently) used to compute another tensor. *)
 let forward_roots = ref @@ Map.empty (module Int)
 
@@ -229,29 +247,6 @@ let error_if_unknown_shape m =
   | { output = Inferred []; _ } ->
       raise @@ Session_error ("Shape of outputs is still empty -- missing shape information", Some m)
   | { input = _; output = _; batch = _; axis_labels = _; deduce_within_shape_constraints = _; id = _ } -> ()
-
-(* FIXME: not inlining here gives an error about PrintBox.Simple.t_of_sexp missing *)
-type printbox =
-  (* PrintBox.Simple.t *)
-  [ `Empty
-  | `Hlist of printbox list
-  | `Pad of printbox
-  | `Table of printbox array array
-  | `Text of string
-  | `Tree of printbox * printbox list
-  | `Vlist of printbox list ]
-[@@deriving sexp, compare]
-
-let sexp_of_t t =
-  (* TODO: output more *)
-  Sexp.message "Tensor" [ ("id", Int.sexp_of_t t.id) ]
-
-include Comparator.Make (struct
-  type nonrec t = t
-
-  let compare t1 t2 = Int.compare t1.id t2.id
-  let sexp_of_t = sexp_of_t
-end)
 
 let float_to_label v = Float.to_string_hum ~strip_zero:true v
 

@@ -714,4 +714,18 @@ let create_of_promoted_precision ~needs_gradient n1 n2 =
       invalid_arg @@ "create_of_promoted_precision: unsupported combination of precisions n1 value: "
       ^ Nd.precision_string n1.value ^ ", n2 value: " ^ Nd.precision_string n2.value
 
+
+
+(* FIXME: not inlining here gives an error about PrintBox.Simple.t_of_sexp missing *)
+type printbox =
+  (* PrintBox.Simple.t *)
+  [ `Empty
+  | `Hlist of printbox list
+  | `Pad of printbox
+  | `Table of printbox array array
+  | `Text of string
+  | `Tree of printbox * printbox list
+  | `Vlist of printbox list ]
+[@@deriving sexp, compare]
+
 ]}
