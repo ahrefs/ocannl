@@ -29,7 +29,7 @@ and t =
       rhs : LA.t;
       projections : unit -> Indexing.projections;
     }
-  | Fetch of { array : LA.t; fetch_op : fetch_op; dims : unit -> int array }
+  | Fetch of { array : LA.t; fetch_op : fetch_op; dims : int array Lazy.t }
 [@@deriving sexp_of]
 
 module Nd = Ndarray
@@ -94,7 +94,7 @@ let to_low_level (code : t) : Low_level.t =
         let s = Low_level.Comment ("Computing array " ^ LA.name lhs) in
         (* Note: it might be invalid to replicate computation across tasks. *)
         if zero_out then
-          let dims () = projections.lhs_dims in
+          let dims = lazy projections.lhs_dims in
           Low_level.unflat_lines [ s; loop (Fetch { array = lhs; fetch_op = Constant 0.; dims }); for_loops ]
         else Low_level.Seq (s, for_loops)
     | Accum_unop { zero_out; accum; op; lhs; rhs; projections } ->
@@ -132,7 +132,7 @@ let to_low_level (code : t) : Low_level.t =
         let s = Low_level.Comment ("Computing node " ^ LA.name lhs) in
         (* Note: it might be invalid to replicate computation across tasks. *)
         if zero_out then
-          let dims () = projections.lhs_dims in
+          let dims = lazy projections.lhs_dims in
           Low_level.unflat_lines [ s; loop (Fetch { array = lhs; fetch_op = Constant 0.; dims }); for_loops ]
         else Seq (s, for_loops)
     | Noop | Comment_reference _ -> Low_level.Noop
@@ -140,7 +140,7 @@ let to_low_level (code : t) : Low_level.t =
     | Seq (c1, c2) -> Seq (loop c1, loop c2)
     | Fetch { array; fetch_op = Constant 0.0; dims = _ } -> Zero_out array
     | Fetch { array; fetch_op = Constant c; dims } ->
-        Low_level.loop_over_dims (dims ()) ~body:(fun idcs -> Set (array, idcs, Constant c))
+        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs -> Set (array, idcs, Constant c))
         (* let rec loop rev_idcs = function
              | [] -> Set (array, Array.of_list_rev rev_idcs, Constant c)
              | d :: product when Indexing.dim_1 d -> loop (Fixed_idx 0 :: rev_idcs) product

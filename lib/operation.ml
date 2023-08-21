@@ -228,13 +228,6 @@ let stop_gradient =
     a [Fixed] marker on the dimensions. This way we avoid introducing a new node. *)
 let stop_broadcast t = Shape.set_dims_type t.Tensor.shape Shape.fixed
 
-(** [identity] introduces a new node, which is an identity in both the forward and backward pass. *)
-let identity ?desc_label ~is_diff t =
-  let grad_body ~(v : Code.node) ~(v1 : Code.node) = assign_op (Code.CDSL.data_of_node Grad) ~n:v1 ~v1:n in
-  let op_body = assign_op @@ Code.CDSL.data_of_node Value in
-  Tensor.(
-    unop ?desc_label ~init_shape:t.shape ~transpose_op:Pointwise_un ~op_label:"=" ~op_body ~grad_body ~is_diff)
-
 module O = struct
   let ( * ) = matmul ~is_diff:true
   let ( *. ) = pointmul ~is_diff:true

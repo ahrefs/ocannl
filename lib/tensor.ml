@@ -60,10 +60,10 @@ let session_error_printer = function
 let () = Caml.Printexc.register_printer session_error_printer
 
 let fetch_zeros array shape =
-  High_level.Fetch { array; fetch_op = Constant 0.; dims = (fun () -> Shape.to_dims shape) }
+  High_level.Fetch { array; fetch_op = Constant 0.; dims = lazy (Shape.to_dims shape) }
 
 let fetch_ones array shape =
-  High_level.Fetch { array; fetch_op = Constant 1.; dims = (fun () -> Shape.to_dims shape) }
+  High_level.Fetch { array; fetch_op = Constant 1.; dims = lazy (Shape.to_dims shape) }
 
 let default_init_op = Low_level.Constant_fill [| 0.0 |]
 let max_sublabel_length = ref 25
@@ -117,22 +117,19 @@ let binop ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ~op_b
   Shape.propagate_shapes local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections () = Shape.derive_projections local_shape_update in
-  let op_body = op_body ~v ~v1 ~v2 ~projections in
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let forward_body =
     let open High_level in
     let fwd1 = if t1_fwd_processed then Comment_reference t1.forward_body else t1.forward_body in
     let fwd2 = if t2_fwd_processed then Comment_reference t2.forward_body else t2.forward_body in
     let subfwd = if t1_first then Seq (fwd1, fwd2) else Seq (fwd2, fwd1) in
-    Seq (subfwd, op_body)
+    Seq (subfwd, op_body ~v ~v1 ~v2 ~projections)
   in
   if
     is_prohibit_grad grad_spec
     || (Fn.non is_require_grad grad_spec && Option.is_none t1.diff && Option.is_none t2.diff)
   then (
-    let tensor =
-      { forward_body; diff = None; id; value = v; shape_logic; shape }
-    in
+    let tensor = { forward_body; diff = None; id; value = v; shape_logic; shape } in
     forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
     tensor)
   else
@@ -141,13 +138,13 @@ let binop ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ~op_b
     if not t1_bck_processed then backprop_roots := Map.remove !backprop_roots t1.id;
     if not t2_bck_processed then backprop_roots := Map.remove !backprop_roots t2.id;
     let g1 = Option.map t1.diff ~f:(fun diff1 -> diff1.grad) in
-    let g2 = Option.map t1.diff ~f:(fun diff2 -> diff2.grad) in
+    let g2 = Option.map t2.diff ~f:(fun diff2 -> diff2.grad) in
     let g_prec =
       let f g = Option.map g ~f:(fun g -> g.LA.prec) in
       List.hd_exn @@ List.filter_opt
       @@ [ Option.map2 ~f:Ndarray.promote_prec (f g1) (f g2); f g1; f g2; Some !default_grad_prec ]
     in
-    let g = LA.create g_prec ~id ~label ~dims ~literal:false default_init_op in
+    let g = LA.create g_prec ~id ~label:("grad " ^ label) ~dims ~literal:false default_init_op in
     let zero_grads =
       let open High_level in
       let zer1 = Option.value_map t1.diff ~default:Noop ~f:(fun diff -> diff.zero_grads) in
@@ -171,172 +168,120 @@ let binop ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ~op_b
     in
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop_body } in
-    let tensor =
-      { forward_body; diff; id; value = v; shape_logic; shape }
-    in
+    let tensor = { forward_body; diff; id; value = v; shape_logic; shape } in
     forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
     backprop_roots := Map.add_exn !backprop_roots ~key:id ~data:tensor;
     tensor
 
-let unop ~op_label ?desc_label ?init_shape ~transpose_op ~op_body ~grad_body ~is_diff t1 : t =
-  (* Note: do not capture m in any closure, so it can be GC'd. *)
-  let t1_processed = Option.is_some t1.diff && (not @@ Map.mem !global_roots t1.id) in
-  let children = [ { Node.sub_node = t1.node; computed_externally = t1_processed } ] in
-  let needs_gradient = match t1.diff with Some form1 -> form1.needs_gradient | None -> false in
-  let fixme_fragile = session_state.next_session_id in
-  let shape = Shape.make ~id:fixme_fragile () in
-  let v =
-    Code.create_node_same_precision_as ~needs_gradient t1.node.node ~op_label ?desc_label ~children shape
-  in
-  let id = v.id in
-  (match init_shape with
-  | None -> ()
-  | Some init ->
-      let open Shape in
-      shape.batch <- init.batch;
-      shape.input <- init.input;
-      shape.output <- init.output;
-      shape.axis_labels <- init.axis_labels);
+let unop ~op_label ?(desc_label = "") ~transpose_op ~op_body ~grad_body ?(grad_spec = If_needed) t1 =
+  let t1_fwd_processed = not @@ Map.mem !forward_roots t1.id in
+  if not t1_fwd_processed then forward_roots := Map.remove !forward_roots t1.id;
+  let id = session_state.next_session_id in
+  session_state.next_session_id <- session_state.next_session_id + 1;
+  let shape = Shape.make ~id () in
+  let v1 = t1.value in
+  let dims = lazy (Shape.to_dims shape) in
+  let label = op_label ^ if String.is_empty desc_label then "" else "/" ^ desc_label in
+  let v = LA.create v1.prec ~id ~label ~dims ~literal:false default_init_op in
   let shape_logic = Shape.Transpose (transpose_op, t1.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
-  let v1 = t1.node in
-  Shape.propagate_shapes local_update;
+  Shape.propagate_shapes local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
   let projections () = Shape.derive_projections local_shape_update in
-  let op_body = op_body ~n ~v1 ~projections in
-  (* The code needs to be included in the order it was computed! *)
+  (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let forward_body =
-    if t1_processed then op_body
-    else if is_diff then Code.Seq (t1.forward_body, op_body)
-    else Seq (t1.nondiff_forward_body, op_body)
+    let fwd1 = if t1_fwd_processed then High_level.Comment_reference t1.forward_body else t1.forward_body in
+    High_level.Seq (fwd1, op_body ~v ~v1 ~projections)
   in
-  session_initializations := create ~id Value shape :: !session_initializations;
-  if not is_diff then
-    {
-      forward_body;
-      diff = None;
-      nondiff_forward_body = forward_body;
-      id;
-      node = v;
-      shape_logic;
-      shape;
-    }
+  if is_prohibit_grad grad_spec || (Fn.non is_require_grad grad_spec && Option.is_none t1.diff) then (
+    let tensor = { forward_body; diff = None; id; value = v; shape_logic; shape } in
+    forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
+    tensor)
   else
-    let diff1 = match t1.diff with Some diff -> diff in
-    let t1_no_grad = t1_processed || not diff1.needs_gradient in
+    let t1_bck_processed = not @@ Map.mem !backprop_roots t1.id in
+    if not t1_bck_processed then backprop_roots := Map.remove !backprop_roots t1.id;
+    let g1 = Option.map t1.diff ~f:(fun diff1 -> diff1.grad) in
+    let g_prec = Option.value_map g1 ~f:(fun g -> g.LA.prec) ~default:!default_grad_prec in
+    let g = LA.create g_prec ~id ~label:("grad " ^ label) ~dims ~literal:false default_init_op in
     let zero_grads =
-      List.filter [ (t1_no_grad, diff1.zero_grads); (needs_gradient, fetch_zeros v shape) ] ~f:fst
-      |> List.map ~f:snd |> High_level.sequential
+      let open High_level in
+      let zer1 = Option.value_map t1.diff ~default:Noop ~f:(fun diff -> diff.zero_grads) in
+      let zer1 = if t1_bck_processed then Comment_reference zer1 else zer1 in
+      Seq (zer1, fetch_zeros g shape)
     in
-    let grad_body = if needs_gradient then grad_body ~n ~v1 ~projections else Code.Noop in
-    let grad_body =
-      if diff1.needs_gradient then grad_body else Code.remove_updates { id = t1.id; field = Grad } grad_body
-    in
-    (* The code needs to be included in the reverse order to which it was computed! *)
+    (* The code needs to be included in the reverse order to which it was computed! This guarantees
+       that all ancestors of a node are backpropagated before the node is backpropagated, even for
+       non-tree DAGs. *)
     let backprop_body =
-      match (t1_no_grad, diff1.backprop_body) with
-      | true, _ | _, Noop -> grad_body
-      | false, t1_body -> Seq (grad_body, t1_body)
+      let open High_level in
+      let bck1 = Option.value_map t1.diff ~default:Noop ~f:(fun diff -> diff.backprop_body) in
+      let bck1 = if t1_bck_processed then Comment_reference bck1 else bck1 in
+      Seq (grad_body ~v ~v1 ~g ~g1 ~projections, bck1)
     in
-    if needs_gradient then session_initializations := create ~id Grad shape :: !session_initializations;
-
-    if not t1_processed then global_roots := Map.remove !global_roots t1.id;
-    let diff = Some { backprop_body; needs_gradient } in
-    let tensor =
-      {
-        forward_body;
-        diff;
-        nondiff_forward_body = Code.Noop;
-        id;
-        node = v;
-        shape_logic;
-        shape;
-      }
-    in
-    global_roots := Map.add_exn !global_roots ~key:id ~data:tensor;
+    (* The order is not relevant, we keep the same order as in backprop for readability. *)
+    let diff = Some { grad = g; zero_grads; backprop_body } in
+    let tensor = { forward_body; diff; id; value = v; shape_logic; shape } in
+    forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
+    backprop_roots := Map.add_exn !backprop_roots ~key:id ~data:tensor;
     tensor
 
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label ?desc_label ~needs_gradient ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced
+let term ~label ?(desc_label = "") ~grad_spec ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced
     ?init_op ?fetch_op ?postprocess_op () =
   let literal : bool =
-    if needs_gradient then false
+    if is_require_grad grad_spec then false
     else
       match (init_op, fetch_op, postprocess_op) with
       | Some (Low_level.Constant_fill [| _ |]), None, None -> true
       | _ -> false
   in
-  let op_label : string = label in
-  let fixme_fragile = session_state.next_session_id in
-  let shape = Shape.make ~id:fixme_fragile ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced () in
-  let dims () = Shape.to_dims shape in
-  let v : Code.node =
-    Code.create_node ~value_prec:!default_value_prec ~grad_prec:!default_grad_prec ~literal ~needs_gradient
-      ~op_label ?desc_label ~children:[] shape
-  in
-  let id = v.id in
+  let id = session_state.next_session_id in
+  session_state.next_session_id <- session_state.next_session_id + 1;
+  let shape = Shape.make ~id ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced () in
+  let dims = lazy (Shape.to_dims shape) in
+  let label = label ^ if String.is_empty desc_label then "" else "/" ^ desc_label in
+  let init_op = Option.value init_op ~default:default_init_op in
+  let v = LA.create !default_value_prec ~id ~label ~dims ~literal:false init_op in
   let shape_logic = Shape.Terminal in
   (* NOTE: this update does not do any work, but that might change in the future,
      and having it in the update sequence might help with debuggability. *)
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
-  Shape.propagate_shapes local_update;
+  Shape.propagate_shapes local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
-
-  let init_op : Code.init_op =
-    Option.value_or_thunk init_op ~default:(fun () -> Low_level.Constant_fill [| 0.0 |])
-  in
-  session_initializations := create ~id ~init_op Value shape :: !session_initializations;
   let forward_body =
-    Option.value ~default:High_level.Noop fetch_op
-    @@
+    let open High_level in
     match fetch_op with
     | None ->
-        if literal && Code.virtualize_settings.inline_constants then
+        if literal && Low_level.virtualize_settings.inline_constants then
           let fetch_op = match init_op with Constant_fill [| c |] -> Constant c | _ -> assert false in
-          High_level.Fetch { tensor; fetch_op; dims }
+          Fetch { array = v; fetch_op; dims }
         else Noop
     | Some fetch_op ->
-        let fetch_op = fetch_op ~n in
+        let fetch_op = fetch_op ~v in
         (match fetch_op with
         | Constant _ -> ()
         | _ ->
-            v.annot.value_never_virtual <- true;
-            v.annot.value_never_device_only <- true);
-        Fetch { tensor; fetch_op; dims }
+            v.never_virtual <- true;
+            v.never_device_only <- true);
+        Fetch { array = v; fetch_op; dims }
   in
   Option.iter postprocess_op ~f:(fun postprocess_op ->
-      let postprocess_op = postprocess_op ~n in
+      let postprocess_op = postprocess_op ~v in
       session_postprocess := postprocess_op :: !session_postprocess;
-      v.annot.value_never_virtual <- true;
-      v.annot.value_never_device_only <- true);
-  if not is_diff then
-    {
-      forward_body;
-      diff = None;
-      nondiff_forward_body = forward_body;
-      id;
-      node = v;
-      shape_logic;
-      shape;
-    }
+      v.never_virtual <- true;
+      v.never_device_only <- true);
+  if is_prohibit_grad grad_spec || (Fn.non is_require_grad grad_spec && (literal || Option.is_some fetch_op))
+  then (
+    let tensor = { forward_body; diff = None; id; value = v; shape_logic; shape } in
+    forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
+    tensor)
   else
-    let backprop_body = Code.Noop in
-    let zero_grads = if needs_gradient then fetch_zeros v shape else High_level.Noop in
-    (* Very unlikely someone will want dw/dw. *)
-    if needs_gradient then session_initializations := create ~id Grad shape :: !session_initializations;
-    let diff = Some { zero_grads; backprop_body; needs_gradient } in
-    let tensor =
-      {
-        forward_body;
-        diff;
-        nondiff_forward_body = Code.Noop;
-        id;
-        node = v;
-        shape_logic;
-        shape;
-      }
-    in
-    global_roots := Map.add_exn !global_roots ~key:id ~data:tensor;
+    let zero_grads = fetch_zeros v shape in
+    let g = LA.create !default_grad_prec ~id ~label:("grad " ^ label) ~dims ~literal:false default_init_op in
+    let diff = Some { grad = g; zero_grads; backprop_body = High_level.Noop } in
+    let tensor = { forward_body; diff; id; value = v; shape_logic; shape } in
+    forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
+    backprop_roots := Map.add_exn !backprop_roots ~key:id ~data:tensor;
     tensor
 
 let error_if_unknown_shape m =
@@ -347,16 +292,6 @@ let error_if_unknown_shape m =
   | { output = Inferred []; _ } ->
       raise @@ Session_error ("Shape of outputs is still empty -- missing shape information", Some m)
   | { input = _; output = _; batch = _; axis_labels = _; deduce_within_shape_constraints = _; id = _ } -> ()
-
-let get_toplevel_forward m =
-  error_if_unknown_shape m;
-  Code.Block_comment ("Forward #" ^ Int.to_string m.id, m.forward_body)
-
-let get_toplevel_backprop m =
-  error_if_unknown_shape m;
-  Code.Block_comment
-    ( "Backprop #" ^ Int.to_string m.id,
-      Seq (fetch_ones ~id:m.id Grad m.shape, (Option.value_exn m.diff).backprop_body) )
 
 (* FIXME: not inlining here gives an error about PrintBox.Simple.t_of_sexp missing *)
 type printbox =
@@ -370,14 +305,9 @@ type printbox =
   | `Vlist of printbox list ]
 [@@deriving sexp, compare]
 
-let sexp_of_t m =
+let sexp_of_t t =
   (* TODO: output more *)
-  Sexp.message "Tensor"
-    [
-      ("id", Int.sexp_of_t m.id);
-      ("op_label", String.sexp_of_t m.node.op_label);
-      ("desc_label", Option.sexp_of_t String.sexp_of_t m.node.desc_label);
-    ]
+  Sexp.message "Tensor" [ ("id", Int.sexp_of_t t.id) ]
 
 include Comparator.Make (struct
   type nonrec t = t
@@ -388,23 +318,21 @@ end)
 
 let float_to_label v = Float.to_string_hum ~strip_zero:true v
 
-let number ?desc_label ~is_diff ?(axis_label = "") c =
+let number ?desc_label ?(axis_label = "") ?(grad_spec = Prohibit_grad) c =
   (* Note: no axis label so that we do not conflict with user labels. *)
-  term ?desc_label ~label:(float_to_label c) ~is_diff ~needs_gradient:false ~batch_dims:[] ~input_dims:[]
-    ~output_dims:[ Shape.dim 1 ]
+  term ?desc_label ~label:(float_to_label c) ~grad_spec ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ]
     ~axis_labels:axis_label ~init_op:(Constant_fill [| c |]) ()
 
-let ndarray ?desc_label ~is_diff ?(needs_gradient = false) ?(batch_dims = []) ?(input_dims = [])
-    ?(output_dims = []) ?axis_labels ?label values =
+let ndarray ?desc_label ?(grad_spec = Prohibit_grad) ?(batch_dims = []) ?(input_dims = []) ?(output_dims = [])
+    ?axis_labels ?label values =
   let label =
     match label with
     | Some label -> label
     | None ->
         Caml.Format.pp_set_geometry Caml.Format.str_formatter ~max_indent:!max_sublabel_length
           ~margin:(!max_sublabel_length * 2);
-        let ( ! ) = Array.of_list_map ~f:(fun d -> d.Shape.dim) in
-        let dims = Array.concat [ !batch_dims; !output_dims; !input_dims ] in
-        let ndarr = Ndarray.create Ndarray.double dims (Constant_fill values) in
+        let dims = Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list in
+        let ndarr = Ndarray.create_array Ndarray.double ~dims (Constant_fill values) in
         let ( ! ) = List.length in
         Ndarray.pp_array_inline ~num_batch_axes:!batch_dims ~num_output_axes:!output_dims
           ~num_input_axes:!input_dims Caml.Format.str_formatter ndarr;
@@ -412,33 +340,23 @@ let ndarray ?desc_label ~is_diff ?(needs_gradient = false) ?(batch_dims = []) ?(
   in
   let label =
     if String.contains label '\n' then
-      "c" ^ Shape.dims_to_string
+      "c" ^ Indexing.dims_to_string
       @@ Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list
     else label
   in
-  term ?desc_label ~needs_gradient ~is_diff ~batch_dims ~input_dims ~output_dims ?axis_labels
-    ~deduced:Not_constrained ~label ~init_op:(Constant_fill values) ()
+  term ?desc_label ~grad_spec ~batch_dims ~input_dims ~output_dims ?axis_labels ~deduced:Not_constrained
+    ~label ~init_op:(Constant_fill values) ()
 
-let params ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?values ?value label =
+let params ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?values label =
   let init_op =
-    match (values, value) with
-    | Some _, Some _ -> invalid_arg "Tensor.params: do not provide both ~values and ~value"
-    | Some values, _ -> Low_level.Constant_fill values
-    | _, Some value -> Low_level.Constant_fill [| value |]
-    | None, None -> Standard_uniform
+    match values with Some values -> Low_level.Constant_fill values | None -> Standard_uniform
   in
-  term ?desc_label ~needs_gradient:true ~is_diff:true ~batch_dims:[] ?input_dims ?output_dims ?axis_labels
-    ?deduced ~label ~init_op ()
+  term ?desc_label ~grad_spec:Require_grad ~batch_dims:[] ?input_dims ?output_dims ?axis_labels ?deduced
+    ~label ~init_op ()
 
-module FDSL = struct
-  let term = term ~is_diff:true
-  let number = number ~is_diff:true
-  let ndarray = ndarray ~is_diff:true
+module TDSL = struct
+  let term = term
+  let number = number
+  let ndarray = ndarray
   let params = params
-end
-
-module NFDSL = struct
-  let term = term ~is_diff:false
-  let number = number ~is_diff:false
-  let ndarray = ndarray ~is_diff:false
 end
