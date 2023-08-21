@@ -50,12 +50,8 @@ type projections = {
   project_lhs : axis_index array;
       (** A projection that takes an [product_space]-bound index and produces an index into the result of
       an operation. *)
-  project_rhs1 : axis_index array;
-      (** A projection that takes an [product_space]-bound index and produces an index into the (first)
-      argument of an operation. *)
-  project_rhs2 : axis_index array option;
-      (** A projection that takes an [product_space]-bound index and produces an index into the second
-      argument of a binary operation. *)
+  project_rhs : axis_index array array;
+      (** [project_rhs1.(i)] Produces an index into the [i+1]th argument of an operation. *)
 }
 [@@deriving compare, equal, sexp]
 (** All the information relevant for [Code] code generation contained in a completed [update_step]. *)
@@ -70,7 +66,7 @@ let identity_projections ~lhs_dims =
   let project_lhs = Array.map product_iterators ~f:opt_iterator in
   let product_space = Array.filter ~f:iterated lhs_dims in
   let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
-  { product_space; lhs_dims; product_iterators; project_lhs; project_rhs1 = project_lhs; project_rhs2 = None }
+  { product_space; lhs_dims; product_iterators; project_lhs; project_rhs = [|project_lhs|] }
 
 let derive_index ~product_syms ~(projection : axis_index array) =
   let sym_to_i =

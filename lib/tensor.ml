@@ -69,7 +69,7 @@ let raw_binop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs1_is_grad ~t2 ~rhs2_i
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
   Shape.propagate_shapes local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
-  let projections () = Shape.derive_projections local_shape_update in
+  let projections = lazy (Shape.derive_projections local_shape_update) in
   let lhs = if lhs_is_grad then t.value else (Option.value_exn t.diff).grad in
   let rhs1 = if rhs1_is_grad then t1.value else (Option.value_exn t1.diff).grad in
   let rhs2 = if rhs2_is_grad then t2.value else (Option.value_exn t2.diff).grad in
@@ -81,7 +81,7 @@ let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
   Shape.propagate_shapes local_shape_update;
   session_shape_updates := local_shape_update :: !session_shape_updates;
-  let projections () = Shape.derive_projections local_shape_update in
+  let projections = lazy (Shape.derive_projections local_shape_update) in
   let lhs = if lhs_is_grad then t.value else (Option.value_exn t.diff).grad in
   let rhs = if rhs_is_grad then t1.value else (Option.value_exn t1.diff).grad in
   High_level.Accum_unop { zero_out; accum; lhs; op; rhs; projections }

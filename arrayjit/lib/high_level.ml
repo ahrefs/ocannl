@@ -10,7 +10,7 @@ type fetch_op = Constant of float | Synthetic of t | Imported of Low_level.globa
 and t =
   | Noop
   | Seq of t * t
-  | Block_comment of string * t (** Same as the given code, with a comment. *)
+  | Block_comment of string * t  (** Same as the given code, with a comment. *)
   | Accum_binop of {
       zero_out : bool;
       accum : Low_level.binop;
@@ -18,7 +18,7 @@ and t =
       lhs : LA.t;
       rhs1 : LA.t;
       rhs2 : LA.t;
-      projections : unit -> Indexing.projections;
+      projections : Indexing.projections Lazy.t;
     }
   | Accum_unop of {
       zero_out : bool;
@@ -26,7 +26,7 @@ and t =
       op : Low_level.unop;
       lhs : LA.t;
       rhs : LA.t;
-      projections : unit -> Indexing.projections;
+      projections : Indexing.projections Lazy.t;
     }
   | Fetch of { array : LA.t; fetch_op : fetch_op; dims : int array Lazy.t }
 [@@deriving sexp_of]
@@ -48,22 +48,19 @@ let remove_updates array c =
 let sequential = List.fold_right ~init:Noop ~f:(fun st sts -> Seq (st, sts))
 
 let to_low_level (code : t) : Low_level.t =
+  let open Indexing in
   let rec loop code =
     match code with
     | Accum_binop { zero_out; accum; op; lhs; rhs1; rhs2; projections } ->
-        let projections = projections () in
+        let projections = Lazy.force projections in
         let lhs_idx =
-          Indexing.(
-            derive_index ~product_syms:projections.product_iterators ~projection:projections.project_lhs)
+            derive_index ~product_syms:projections.product_iterators ~projection:projections.project_lhs
         in
         let rhs1_idx =
-          Indexing.(
-            derive_index ~product_syms:projections.product_iterators ~projection:projections.project_rhs1)
+            derive_index ~product_syms:projections.product_iterators ~projection:projections.project_rhs.(0)
         in
         let rhs2_idx =
-          match projections.project_rhs2 with
-          | None -> invalid_arg "accum_binop: projections missing project_rhs2"
-          | Some rhs2 -> Indexing.(derive_index ~product_syms:projections.product_iterators ~projection:rhs2)
+            derive_index ~product_syms:projections.product_iterators ~projection:projections.project_rhs.(1)
         in
         let basecase rev_iters =
           let product = Array.of_list_rev_map rev_iters ~f:(fun s -> Indexing.Iterator s) in
@@ -97,14 +94,12 @@ let to_low_level (code : t) : Low_level.t =
           Low_level.unflat_lines [ s; loop (Fetch { array = lhs; fetch_op = Constant 0.; dims }); for_loops ]
         else Low_level.Seq (s, for_loops)
     | Accum_unop { zero_out; accum; op; lhs; rhs; projections } ->
-        let projections = projections () in
+        let projections = Lazy.force projections in
         let lhs_idx =
-          Indexing.(
-            derive_index ~product_syms:projections.product_iterators ~projection:projections.project_lhs)
+            derive_index ~product_syms:projections.product_iterators ~projection:projections.project_lhs
         in
         let rhs_idx =
-          Indexing.(
-            derive_index ~product_syms:projections.product_iterators ~projection:projections.project_rhs1)
+            derive_index ~product_syms:projections.product_iterators ~projection:projections.project_rhs.(0)
         in
         let basecase rev_iters =
           let product = Array.of_list_rev_map rev_iters ~f:(fun s -> Indexing.Iterator s) in
@@ -140,21 +135,6 @@ let to_low_level (code : t) : Low_level.t =
     | Fetch { array; fetch_op = Constant 0.0; dims = _ } -> Zero_out array
     | Fetch { array; fetch_op = Constant c; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs -> Set (array, idcs, Constant c))
-        (* let rec loop rev_idcs = function
-             | [] -> Set (array, Array.of_list_rev rev_idcs, Constant c)
-             | d :: product when Indexing.dim_1 d -> loop (Fixed_idx 0 :: rev_idcs) product
-             | d :: product ->
-                 let index = Indexing.get_sym_for_axis d.Indexing.special in
-                 For_loop
-                   {
-                     index;
-                     from_ = 0;
-                     to_ = d.dim - 1;
-                     body = loop (Indexing.Iterator index :: rev_idcs) product;
-                     trace_it = true;
-                   }
-           in
-           loop [] (Array.to_list product_space) *)
     | Fetch { array = _; fetch_op = Synthetic gen; dims = _ } -> loop gen
     | Fetch { array = _; fetch_op = Imported _; dims = _ } ->
         failwith "to_low_level: Imported NOT IMPLEMENTED YET"

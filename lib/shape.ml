@@ -1044,10 +1044,10 @@ let derive_projections (shapes : update_step) : projections =
       let product_space = Array.of_list @@ List.concat [ product_bch; product_out; product_inp ] in
       let product_iterators = Array.of_list @@ List.concat [ iters_bch; iters_out; iters_inp ] in
       let project_lhs = Array.of_list @@ List.concat [ lhs_batch; lhs_output; lhs_input ] in
-      let project_rhs1 = Array.of_list @@ List.concat [ rhs_batch; rhs_output; rhs_input ] in
+      let project_rhs = [| Array.of_list @@ List.concat [ rhs_batch; rhs_output; rhs_input ] |] in
       let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
-      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs1; project_rhs2 = None }
+      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs }
   | Transpose (Pointwise_un, sh) ->
       let product_inp = broadcast_sh cur_sh Input sh Input in
       let iters_inp = List.map product_inp ~f:opt_symbol in
@@ -1064,10 +1064,10 @@ let derive_projections (shapes : update_step) : projections =
       let product_space = Array.of_list @@ List.concat [ product_bch; product_out; product_inp ] in
       let product_iterators = Array.of_list @@ List.concat [ iters_bch; iters_out; iters_inp ] in
       let project_lhs = Array.of_list @@ List.concat [ lhs_batch; lhs_output; lhs_input ] in
-      let project_rhs1 = Array.of_list @@ List.concat [ rhs_batch; rhs_output; rhs_input ] in
+      let project_rhs = [| Array.of_list @@ List.concat [ rhs_batch; rhs_output; rhs_input ] |] in
       let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
-      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs1; project_rhs2 = None }
+      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs }
   | Transpose (Permute spec, sh) ->
       let ls_rhs, ls_lhs =
         match einsum_of_spec spec with
@@ -1109,10 +1109,10 @@ let derive_projections (shapes : update_step) : projections =
       let rhs_input = map_with_dims sh.input i_rhs ~f:(fun d it -> if d = 1 then Fixed_idx 0 else it) in
       let rhs_output = map_with_dims sh.output o_rhs ~f:(fun d it -> if d = 1 then Fixed_idx 0 else it) in
       let project_lhs = Array.of_list @@ List.concat [ lhs_batch; lhs_output; lhs_input ] in
-      let project_rhs1 = Array.of_list @@ List.concat [ rhs_batch; rhs_output; rhs_input ] in
+      let project_rhs = [| Array.of_list @@ List.concat [ rhs_batch; rhs_output; rhs_input ] |] in
       let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
-      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs1; project_rhs2 = None }
+      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs }
   | Broadcast (Pointwise_bin, sh1, sh2) ->
       let product_inp =
         match cur_sh.input with
@@ -1144,11 +1144,15 @@ let derive_projections (shapes : update_step) : projections =
       let product_space = Array.of_list @@ List.concat [ product_bch; product_out; product_inp ] in
       let product_iterators = Array.of_list @@ List.concat [ iters_bch; iters_out; iters_inp ] in
       let project_lhs = Array.of_list @@ List.concat [ lhs1_batch; lhs1_output; lhs1_input ] in
-      let project_rhs1 = Array.of_list @@ List.concat [ rhs1_batch; rhs1_output; rhs1_input ] in
-      let project_rhs2 = Some (Array.of_list @@ List.concat [ rhs2_batch; rhs2_output; rhs2_input ]) in
+      let project_rhs =
+        [|
+          Array.of_list @@ List.concat [ rhs1_batch; rhs1_output; rhs1_input ];
+          Array.of_list @@ List.concat [ rhs2_batch; rhs2_output; rhs2_input ];
+        |]
+      in
       let product_space = Array.filter ~f:iterated product_space in
       let product_iterators : symbol array = Array.filter_map ~f:Fn.id product_iterators in
-      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs1; project_rhs2 }
+      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs }
   | Broadcast (Compose, sh1, sh2) ->
       (* [sh2] is the value or the function that gets applied first: [cur_sh(x) = sh1(sh2(x))].
          I.e. [cur.I = sh2.I, cur.O = sh1.O, sh2.O = sh1.I]. *)
@@ -1179,11 +1183,15 @@ let derive_projections (shapes : update_step) : projections =
       in
       let product_iterators = Array.of_list @@ List.concat [ iters_bch; iters_out; iters_hid; iters_inp ] in
       let project_lhs = Array.of_list @@ List.concat [ lhs1_batch; lhs_output; lhs_input ] in
-      let project_rhs1 = Array.of_list @@ List.concat [ rhs1_batch; rhs1_output; rhs1_input ] in
-      let project_rhs2 = Some (Array.of_list @@ List.concat [ rhs2_batch; rhs2_output; rhs2_input ]) in
+      let project_rhs =
+        [|
+          Array.of_list @@ List.concat [ rhs1_batch; rhs1_output; rhs1_input ];
+          Array.of_list @@ List.concat [ rhs2_batch; rhs2_output; rhs2_input ];
+        |]
+      in
       let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
-      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs1; project_rhs2 }
+      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs }
   | Broadcast (Einsum spec, sh1, sh2) ->
       let ls_rhs1, ls_rhs2, ls_lhs =
         match einsum_of_spec spec with
@@ -1237,28 +1245,21 @@ let derive_projections (shapes : update_step) : projections =
       let rhs2_input = map_with_dims sh2.input i_rhs2 ~f:project_iterator in
       let rhs2_output = map_with_dims sh2.output o_rhs2 ~f:project_iterator in
       let project_lhs = Array.of_list @@ List.concat [ lhs_batch; lhs_output; lhs_input ] in
-      let project_rhs1 = Array.of_list @@ List.concat [ rhs1_batch; rhs1_output; rhs1_input ] in
-      let project_rhs2 = Some (Array.of_list @@ List.concat [ rhs2_batch; rhs2_output; rhs2_input ]) in
+      let project_rhs =
+        [|
+          Array.of_list @@ List.concat [ rhs1_batch; rhs1_output; rhs1_input ];
+          Array.of_list @@ List.concat [ rhs2_batch; rhs2_output; rhs2_input ];
+        |]
+      in
       let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
-      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs1; project_rhs2 }
+      { product_space; product_iterators; lhs_dims; project_lhs; project_rhs }
 
-let backprop1 projections =
-  { projections with project_lhs = projections.project_rhs1; project_rhs1 = projections.project_lhs }
-
-let backprop2 projections =
-  match projections.project_rhs2 with
-  | None -> invalid_arg "Shape.backprop2: unary shapes (project_rhs2 is None)"
-  | Some project_rhs2 ->
-      { projections with project_lhs = project_rhs2; project_rhs2 = Some projections.project_lhs }
-
-let backprop_unary projections =
-  {
-    projections with
-    project_lhs = projections.project_rhs1;
-    project_rhs1 = projections.project_lhs;
-    project_rhs2 = Some projections.project_lhs;
-  }
+let backprop_ith_arg ~from_1 projections =
+  let project_lhs = projections.project_rhs.(from_1 - 1) in
+  let project_rhs = Array.copy projections.project_rhs in
+  project_rhs.(from_1 - 1) <- projections.project_lhs;
+  { projections with project_lhs; project_rhs }
 
 let make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ~id () =
   let input = match input_dims with None -> Unknown | Some dims -> Given dims in
