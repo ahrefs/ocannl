@@ -25,10 +25,13 @@ type t = {
   shape : Shape.t;
       (** The eventual shape of [.!(t.node).value] and [.!(t.node).grad], incorporating the current state of
           shape inference. *)
+  children : subtensor list;
 }
 [@@deriving sexp_of]
 (** Information needed for compositional code generation. The code generation is suspended so that
     it can incorporate inferred shape information. *)
+
+and subtensor = { subtensor : t; embedded : bool }
 
 (** A forward root is a tensor that is not (currently) used to compute another tensor. *)
 let forward_roots = ref @@ Map.empty (module Int)
@@ -104,6 +107,7 @@ let binop ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ~op_b
   let t2_fwd_processed = t2.id = t1.id || (not @@ Map.mem !forward_roots t2.id) in
   if not t1_fwd_processed then forward_roots := Map.remove !forward_roots t1.id;
   if not t2_fwd_processed then forward_roots := Map.remove !forward_roots t2.id;
+  let children = [ { subtensor = t1; embedded=not t1_fwd_processed };{ subtensor = t2; embedded=not t2_fwd_processed } ] in
   let id = session_state.next_session_id in
   session_state.next_session_id <- session_state.next_session_id + 1;
   let shape = Shape.make ~id () in
@@ -129,7 +133,7 @@ let binop ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ~op_b
     is_prohibit_grad grad_spec
     || (Fn.non is_require_grad grad_spec && Option.is_none t1.diff && Option.is_none t2.diff)
   then (
-    let tensor = { forward_body; diff = None; id; value = v; shape_logic; shape } in
+    let tensor = { forward_body; diff = None; id; value = v; shape_logic; shape; children } in
     forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
     tensor)
   else
@@ -168,7 +172,7 @@ let binop ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ~op_b
     in
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop_body } in
-    let tensor = { forward_body; diff; id; value = v; shape_logic; shape } in
+    let tensor = { forward_body; diff; id; value = v; shape_logic; shape; children } in
     forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
     backprop_roots := Map.add_exn !backprop_roots ~key:id ~data:tensor;
     tensor
@@ -176,6 +180,7 @@ let binop ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ~op_b
 let unop ~op_label ?(desc_label = "") ~transpose_op ~op_body ~grad_body ?(grad_spec = If_needed) t1 =
   let t1_fwd_processed = not @@ Map.mem !forward_roots t1.id in
   if not t1_fwd_processed then forward_roots := Map.remove !forward_roots t1.id;
+  let children = [ { subtensor = t1; embedded=not t1_fwd_processed } ] in
   let id = session_state.next_session_id in
   session_state.next_session_id <- session_state.next_session_id + 1;
   let shape = Shape.make ~id () in
@@ -194,7 +199,7 @@ let unop ~op_label ?(desc_label = "") ~transpose_op ~op_body ~grad_body ?(grad_s
     High_level.Seq (fwd1, op_body ~v ~v1 ~projections)
   in
   if is_prohibit_grad grad_spec || (Fn.non is_require_grad grad_spec && Option.is_none t1.diff) then (
-    let tensor = { forward_body; diff = None; id; value = v; shape_logic; shape } in
+    let tensor = { forward_body; diff = None; id; value = v; shape_logic; shape; children } in
     forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
     tensor)
   else
@@ -220,7 +225,7 @@ let unop ~op_label ?(desc_label = "") ~transpose_op ~op_body ~grad_body ?(grad_s
     in
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop_body } in
-    let tensor = { forward_body; diff; id; value = v; shape_logic; shape } in
+    let tensor = { forward_body; diff; id; value = v; shape_logic; shape; children } in
     forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
     backprop_roots := Map.add_exn !backprop_roots ~key:id ~data:tensor;
     tensor
@@ -272,14 +277,14 @@ let term ~label ?(desc_label = "") ~grad_spec ?batch_dims ?input_dims ?output_di
       v.never_device_only <- true);
   if is_prohibit_grad grad_spec || (Fn.non is_require_grad grad_spec && (literal || Option.is_some fetch_op))
   then (
-    let tensor = { forward_body; diff = None; id; value = v; shape_logic; shape } in
+    let tensor = { forward_body; diff = None; id; value = v; shape_logic; shape; children = [] } in
     forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
     tensor)
   else
     let zero_grads = fetch_zeros v shape in
     let g = LA.create !default_grad_prec ~id ~label:("grad " ^ label) ~dims ~literal:false default_init_op in
     let diff = Some { grad = g; zero_grads; backprop_body = High_level.Noop } in
-    let tensor = { forward_body; diff; id; value = v; shape_logic; shape } in
+    let tensor = { forward_body; diff; id; value = v; shape_logic; shape; children = [] } in
     forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
     backprop_roots := Map.add_exn !backprop_roots ~key:id ~data:tensor;
     tensor

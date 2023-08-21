@@ -145,7 +145,7 @@ let plot_canvas ?canvas ?size specs =
                   canvas.(dmj).(i) <- (if callback (x, y) then pixel_true else pixel_false))));
   (minx, miny, maxx, maxy, canvas)
 
-let concise_float = Ndarray.concise_float
+let concise_float = Arrayjit.Ndarray.concise_float
   
 let plot ?(prec = 3) ?canvas ?size ~x_label ~y_label specs =
   let minx, miny, maxx, maxy, canvas = plot_canvas ?canvas ?size specs in
