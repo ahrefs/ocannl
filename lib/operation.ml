@@ -195,18 +195,9 @@ let range_of_shape ?desc_label ~is_diff ?(batch_dims = []) ?(input_dims = []) ?(
 let data ?desc_label ?axis_labels ?(needs_gradient = false) ~label ?(batch_dims = []) ?(input_dims = [])
     ?(output_dims = []) fetch_op =
   if List.for_all ~f:List.is_empty [ batch_dims; input_dims; output_dims ] then
-    invalid_arg "Operation.result: data and the `%nn_dt` syntax do not support shape inference, specify dims";
+    invalid_arg "Operation.data: data and the `%nn_dt` syntax do not support shape inference, specify dims";
   Tensor.term ?desc_label ~label ~is_diff:true ~needs_gradient ~batch_dims ~input_dims ~output_dims
     ?axis_labels ~fetch_op ()
-
-(** No-gradient computations that happen at the end (potentially in parallel). *)
-let result ?desc_label ?axis_labels ~label ?(batch_dims = []) ?(input_dims = []) ?(output_dims = [])
-    postprocess_op =
-  if List.for_all ~f:List.is_empty [ batch_dims; input_dims; output_dims ] then
-    invalid_arg
-      "Operation.result: results and the `%nn_rs` syntax do not support shape inference, specify dims";
-  Tensor.term ?desc_label ~label ~is_diff:false ~needs_gradient:false ~batch_dims ~input_dims ~output_dims
-    ?axis_labels ~postprocess_op ()
 
 let assign =
   let module NFDSL = struct
@@ -318,7 +309,6 @@ module NFDSL = struct
   let einsum ?desc_label s = einsum ?desc_label s ~is_diff:false
   let einsum1 ?desc_label s = einsum1 ?desc_label s ~is_diff:false
   let term = Tensor.term ~is_diff:false
-  let result = result
   let range = range ~is_diff:false
   let range_of_shape = range_of_shape ~is_diff:false
 end

@@ -11,7 +11,7 @@ let expr_expander ~loc ~path:_ payload =
       let bindings =
         List.map bindings ~f:(fun vb ->
             let v =
-              (if is_cd dt then translate else translate_dt ~is_result:(is_rs dt))
+              (if is_cd dt then translate else translate_dt)
                 ~desc_label:vb.pvb_pat vb.pvb_expr
             in
             {
@@ -24,7 +24,7 @@ let expr_expander ~loc ~path:_ payload =
       in
       { payload with pexp_desc = Pexp_let (recflag, bindings, body) }
   | expr ->
-      let expr = (if is_cd dt then translate else translate_dt ~is_result:(is_rs dt)) expr in
+      let expr = (if is_cd dt then translate else translate_dt) expr in
       [%expr
         let open! NFDSL.O in
         [%e expr]]
@@ -39,7 +39,7 @@ let flatten_str ~loc ~path:_ items =
 let translate_str ~dt ({ pstr_desc; _ } as str) =
   match pstr_desc with
   | Pstr_eval (expr, attrs) ->
-      let expr = (if is_cd dt then translate else translate_dt ~is_result:(is_rs dt)) expr in
+      let expr = (if is_cd dt then translate else translate_dt) expr in
       let loc = expr.pexp_loc in
       {
         str with
@@ -54,7 +54,7 @@ let translate_str ~dt ({ pstr_desc; _ } as str) =
       let f vb =
         let loc = vb.pvb_loc in
         let v =
-          (if is_cd dt then translate else translate_dt ~is_result:(is_rs dt))
+          (if is_cd dt then translate else translate_dt)
             ~desc_label:vb.pvb_pat vb.pvb_expr
         in
         {

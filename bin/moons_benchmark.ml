@@ -75,7 +75,6 @@ let _suspended () =
   let%nn_op weighted_reg_loss = 0.00001 *. reg_loss in
   (* let step_batch = parallel_dims * minib in *)
   let%nn_op batch_of_losses = margin_loss ++ "...|... => ...|0" in
-  let%nn_rs epoch_loss ~o:1 = v =+ batch_of_losses ++ "...|0 => 0" + weighted_reg_loss in
   let updates_per_run = refresh_batch in
   SDSL.everything_fully_on_host ();
   (* SDSL.everything_on_host_or_inlined (); *)
@@ -91,7 +90,7 @@ let _suspended () =
     session_refresh.@[0] steps;
   Stdio.printf "Step 1: Minus learning rate: %f\n%!" minus_lr.@[0];
   SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 minus_lr.id;
-  let step_1_loss = epoch_loss.@[0] in
+  let step_1_loss = batch_loss.@[0] in
   Stdio.printf "\nStep 1: loss %f\n%!" step_1_loss;
   SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses.id;
   (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
@@ -100,7 +99,7 @@ let _suspended () =
   SDSL.refresh_session ();
   Stdio.printf "Step 2: session_step: %f\n%!" session_step.@[0];
   Stdio.printf "\nStep 2: Minus learning rate: %f\n%!" minus_lr.@[0];
-  let step_2_loss = epoch_loss.@[0] in
+  let step_2_loss = batch_loss.@[0] in
   Stdio.printf "\nStep 2: cumulative loss %f, step loss %f\n%!" step_2_loss (step_2_loss -. step_1_loss);
   SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses.id;
   (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
@@ -111,7 +110,7 @@ let _suspended () =
   Stdio.printf "\nStep 3: Minus learning rate: %f\nStep 3 weighted reg. loss:\n%!" minus_lr.@[0];
   SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *)
     ~depth:9 weighted_reg_loss.id;
-  let step_3_loss = epoch_loss.@[0] in
+  let step_3_loss = batch_loss.@[0] in
   Stdio.printf "\nStep 3: cumulative loss %f, step loss %f\n%!" step_3_loss (step_3_loss -. step_2_loss);
   SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses.id;
   SDSL.refresh_session ();
@@ -121,8 +120,8 @@ let _suspended () =
   SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *)
     ~depth:9 weighted_reg_loss.id;
   Stdio.printf "\nStep 4 epoch loss tensor:\n%!";
-  SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 epoch_loss.id;
-  let step_4_loss = epoch_loss.@[0] in
+  SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_loss.id;
+  let step_4_loss = batch_loss.@[0] in
   Stdio.printf "\nStep 4: cumulative loss %f, step loss %f\n%!" step_4_loss (step_4_loss -. step_3_loss);
   SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses.id;
   Stdio.printf "\nHost size in bytes: %d\n%!" (SDSL.global_host_size_in_bytes ())
@@ -246,7 +245,6 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
       let%nn_op total_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
       total_loss
   in
-  let%nn_rs epoch_loss ~o:1 = v =+ total_loss in
   (* Warmup step, with update. *)
   SDSL.refresh_session ~updates_per_run ();
   let losses = ref [] in
@@ -269,17 +267,16 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
         (epochs / 10 = 0 || epoch = epochs || epoch % (epochs / 10) = 1)
         && (n_batches / 5 = 0 || batch_n = n_batches || batch_n % (n_batches / 5) = 1)
       then
-        Stdio.printf "Epoch=%d, batch=%d, session_step=%f, -lr=%f, batch loss=%f, epoch loss=%f\n%!" epoch
-          batch_n session_step.@[0] minus_lr.@[0] total_loss.@[0] epoch_loss.@[0]
+        Stdio.printf "Epoch=%d, batch=%d, session_step=%f, -lr=%f, batch loss=%f\n%!" epoch
+          batch_n session_step.@[0] minus_lr.@[0] total_loss.@[0]
         (* SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss.id; *)
     done;
     learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
-    last_loss := epoch_loss.@[0];
+    last_loss := batch_loss.@[0];
     losses := !last_loss :: !losses;
     min_loss := Float.min !min_loss !last_loss;
     max_loss := Float.max !max_loss !last_loss;
-    log_losses := Float.log !last_loss :: !log_losses;
-    epoch_loss.@[0] <- 0.0
+    log_losses := Float.log !last_loss :: !log_losses
   done;
   let final_time = Time_now.nanoseconds_since_unix_epoch () in
   (* TODO: include init time in benchmarks? *)

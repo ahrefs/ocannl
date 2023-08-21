@@ -373,10 +373,6 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
       if List.is_empty update_params_code then Noop
       else Synchronize ("Params update", all_parallel update_params_code)
     in
-    let postprocess =
-      if List.is_empty !Tensor.session_postprocess then Noop
-      else Block_comment ("Postprocess", all_parallel !Tensor.session_postprocess)
-    in
     (* Roots at the time of compilation are hosted, so that they can be consumed downstream. *)
     Map.iter_keys !Tensor.global_roots ~f:(fun id ->
         let v = Code.get id in
@@ -389,7 +385,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
         v.Node.annot.value_never_virtual <- true;
         v.Node.annot.value_never_device_only <- true)
     @@ session_params ();
-    session_step_update := sequential [ preparation; forward; backprop; params_update; postprocess ];
+    session_step_update := sequential [ preparation; forward; backprop; params_update ];
     if verbose then Stdio.printf "refresh_session: compiling\n%!";
     if updates_per_run <= 1 then
       session_step_update_compiled := compile_proc ~name ~verbose ~for_step_update:true !session_step_update
@@ -428,7 +424,6 @@ let close_session () =
   Tensor.session_shape_updates := [];
   Tensor.session_initializations := [];
   Tensor.session_initialized := 0;
-  Tensor.session_postprocess := [];
   session_step_update := Noop;
   session_step_update_compiled := (Hashtbl.Poly.create (), Comment "Noop");
   (session_step_update_routine := fun () -> ());

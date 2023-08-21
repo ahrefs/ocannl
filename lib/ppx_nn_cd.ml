@@ -155,9 +155,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
   let loc = expr.pexp_loc in
   match expr with
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
-      ( Tensor_nf,
-        Undet,
-        [%expr Tensor.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] [%e expr]] )
+      (Tensor_nf, Undet, [%expr Tensor.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] [%e expr]])
   | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
       ( Tensor_nf,
         Undet,
@@ -170,8 +168,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       ( Tensor_nf,
         Undet,
         [%expr
-          Tensor.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis] [%e f]]
-      )
+          Tensor.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis] [%e f]] )
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
         [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
@@ -237,8 +234,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
           ( Grad_of_source expr1,
             slot1,
             Ast_builder.Default.pexp_extension ~loc
-            @@ Location.error_extensionf ~loc "ppx_ocannl %%nn_cd: non-diff tensors do not have a gradient"
-          ))
+            @@ Location.error_extensionf ~loc "ppx_ocannl %%nn_cd: non-diff tensors do not have a gradient" ))
   | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections]))] ->
       let zero_out, accu_op = assignment_op accu_op in
       let lhs_setup, _lhs_typ, _lhs_slot, lhs =
@@ -673,7 +669,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       (Unknown, Undet, [%expr [%e expr] ?desc_label:[%e opt_pat2string ~loc desc_label]])
   | _ -> (Unknown, Undet, expr)
 
-let translate_dt ~is_result ?desc_label (expr : expression) : expression =
+let translate_dt ?desc_label (expr : expression) : expression =
   let rec loop ?label ?batch_dims ?input_dims ?output_dims expr =
     let loc = expr.pexp_loc in
     match expr with
@@ -723,20 +719,12 @@ let translate_dt ~is_result ?desc_label (expr : expression) : expression =
                 edims ~dims_loc @@ convert_dsl_dims [ d ]
             | e -> e)
         in
-        if is_result then
-          [%expr
-            NFDSL.result ?desc_label:[%e opt_pat2string ~loc desc_label] ~label:[%e label]
-              ?batch_dims:[%e opt_expr ~loc @@ edims batch_dims]
-              ?input_dims:[%e opt_expr ~loc @@ edims input_dims]
-              ?output_dims:[%e opt_expr ~loc @@ edims output_dims]
-              (fun ~n -> Code.Block_comment ([%e label] ^ "%nn_rs", [%e body]))]
-        else
-          [%expr
-            FDSL.data ?desc_label:[%e opt_pat2string ~loc desc_label] ~label:[%e label]
-              ?batch_dims:[%e opt_expr ~loc @@ edims batch_dims]
-              ?input_dims:[%e opt_expr ~loc @@ edims input_dims]
-              ?output_dims:[%e opt_expr ~loc @@ edims output_dims]
-              (fun ~n -> Code.Synthetic (Code.Block_comment ([%e label] ^ "%nn_dt", [%e body])))]
+        [%expr
+          FDSL.data ?desc_label:[%e opt_pat2string ~loc desc_label] ~label:[%e label]
+            ?batch_dims:[%e opt_expr ~loc @@ edims batch_dims]
+            ?input_dims:[%e opt_expr ~loc @@ edims input_dims]
+            ?output_dims:[%e opt_expr ~loc @@ edims output_dims]
+            (fun ~n -> Code.Synthetic (Code.Block_comment ([%e label] ^ "%nn_dt", [%e body])))]
   in
   loop expr
 
@@ -753,7 +741,7 @@ let expr_expander ~dt ~loc ~path:_ payload =
       let bindings =
         List.map bindings ~f:(fun vb ->
             let v =
-              (if is_cd dt then translate else translate_dt ~is_result:(is_rs dt))
+              (if is_cd dt then translate else translate_dt)
                 ~desc_label:vb.pvb_pat vb.pvb_expr
             in
             {
@@ -766,7 +754,7 @@ let expr_expander ~dt ~loc ~path:_ payload =
       in
       { payload with pexp_desc = Pexp_let (recflag, bindings, body) }
   | expr ->
-      let expr = (if is_cd dt then translate else translate_dt ~is_result:(is_rs dt)) expr in
+      let expr = (if is_cd dt then translate else translate_dt) expr in
       [%expr
         let open! NFDSL.O in
         [%e expr]]
@@ -781,7 +769,7 @@ let flatten_str ~loc ~path:_ items =
 let translate_str ~dt ({ pstr_desc; _ } as str) =
   match pstr_desc with
   | Pstr_eval (expr, attrs) ->
-      let expr = (if is_cd dt then translate else translate_dt ~is_result:(is_rs dt)) expr in
+      let expr = (if is_cd dt then translate else translate_dt) expr in
       let loc = expr.pexp_loc in
       {
         str with
@@ -796,7 +784,7 @@ let translate_str ~dt ({ pstr_desc; _ } as str) =
       let f vb =
         let loc = vb.pvb_loc in
         let v =
-          (if is_cd dt then translate else translate_dt ~is_result:(is_rs dt))
+          (if is_cd dt then translate else translate_dt)
             ~desc_label:vb.pvb_pat vb.pvb_expr
         in
         {

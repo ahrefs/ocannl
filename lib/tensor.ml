@@ -43,10 +43,6 @@ let session_shape_updates : Shape.update_step list ref = ref []
 
 let session_initialized = ref 0
 
-(** This code will be executed on each [Session.refresh_session ~run:true] call ([~run:true]
-    is implicit), after a [forward] and [backprop] step. Execution potentially in parallel. *)
-let session_postprocess : High_level.t list ref = ref []
-
 let default_value_prec = ref Ndarray.single
 let default_grad_prec = ref Ndarray.single
 
@@ -201,12 +197,12 @@ let unop ~op_label ?desc_label ?compose_op ~op_body ~grad_body ?grad_spec t1 =
 
 (** A terminal: a constant, a parameter, an input of the model. *)
 let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced
-    ?init_op ?fetch_op ?postprocess_op () =
+    ?init_op ?fetch_op () =
   let literal : bool =
     if is_require_grad grad_spec then false
     else
-      match (init_op, fetch_op, postprocess_op) with
-      | Some (Low_level.Constant_fill [| _ |]), None, None -> true
+      match (init_op, fetch_op) with
+      | Some (Low_level.Constant_fill [| _ |]), None -> true
       | _ -> false
   in
   let op_body ~v ~vs:_ ~projections =
