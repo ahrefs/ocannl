@@ -33,13 +33,14 @@ and subtensor = { subtensor : t; embedded : bool }
 let rec sexp_of_t t =
   Sexp.message "Tensor"
     [
-      ("id", Int.sexp_of_t t.id);
+      ("id", sexp_of_int t.id);
       ("label", sexp_of_string t.value.label);
       ("children", [%sexp_of: subtensor list] t.children);
     ]
 
 and sexp_of_subtensor ch =
-  Sexp.message "child" [ ("", sexp_of_t ch.subtensor); ("embedded", sexp_of_bool ch.embedded) ]
+  Sexp.message "child"
+    [ (if ch.embedded then ("", sexp_of_t ch.subtensor) else ("ref-id", sexp_of_int ch.subtensor.id)) ]
 
 include Comparator.Make (struct
   type nonrec t = t
