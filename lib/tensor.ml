@@ -19,9 +19,6 @@ type t = {
   diff : diff option;
   id : int;  (** Same as [value.id]. *)
   value : LA.t;
-  shape_logic : Shape.logic;
-      (** How to do the last update of [t.shape] when finalizing the tensor.
-          It is stored with the tensor for debugging (shape inference does not need to retrieve it). *)
   shape : Shape.t;
       (** The eventual shape of [.!(t.node).value] and [.!(t.node).grad], incorporating the current state of
           shape inference. *)
@@ -100,138 +97,110 @@ let session_state = { next_session_id = 0 }
 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
-let binop ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ~op_body ~grad_body
-    ?(grad_spec = If_needed) t1 t2 =
-  let t1_first = t1.id <= t2.id in
-  let t1_fwd_processed = not @@ Map.mem !forward_roots t1.id in
-  let t2_fwd_processed = t2.id = t1.id || (not @@ Map.mem !forward_roots t2.id) in
-  if not t1_fwd_processed then forward_roots := Map.remove !forward_roots t1.id;
-  if not t2_fwd_processed then forward_roots := Map.remove !forward_roots t2.id;
-  let children = [ { subtensor = t1; embedded=not t1_fwd_processed };{ subtensor = t2; embedded=not t2_fwd_processed } ] in
+let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un)
+    ~op_body ~grad_body ?(grad_spec = If_needed) make_shape ts =
+  let ts = List.sort ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
+  let fwd_embed = List.map ts ~f:(fun ti -> Map.mem !forward_roots ti.id) in
+  List.iter2_exn ts fwd_embed ~f:(fun ti e -> if e then forward_roots := Map.remove !forward_roots ti.id);
+  let children = List.map2_exn ts fwd_embed ~f:(fun ti embedded -> { subtensor = ti; embedded }) in
   let id = session_state.next_session_id in
   session_state.next_session_id <- session_state.next_session_id + 1;
-  let shape = Shape.make ~id () in
-  let v1 = t1.value in
-  let v2 = t2.value in
+  let shape = make_shape ~id in
+  let vs = List.map ts ~f:(fun ti -> ti.value) in
   let dims = lazy (Shape.to_dims shape) in
   let label = op_label ^ if String.is_empty desc_label then "" else "/" ^ desc_label in
-  let v = LA.create (Ndarray.promote_prec v1.prec v2.prec) ~id ~label ~dims ~literal:false default_init_op in
-  let shape_logic = Shape.Broadcast (compose_op, t1.shape, t2.shape) in
-  let local_shape_update = Shape.{ shape; logic = shape_logic } in
-  Shape.propagate_shapes local_shape_update;
-  session_shape_updates := local_shape_update :: !session_shape_updates;
-  let projections () = Shape.derive_projections local_shape_update in
-  (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
-  let forward_body =
-    let open High_level in
-    let fwd1 = if t1_fwd_processed then Comment_reference t1.forward_body else t1.forward_body in
-    let fwd2 = if t2_fwd_processed then Comment_reference t2.forward_body else t2.forward_body in
-    let subfwd = if t1_first then Seq (fwd1, fwd2) else Seq (fwd2, fwd1) in
-    Seq (subfwd, op_body ~v ~v1 ~v2 ~projections)
+  let prec =
+    List.map vs ~f:(fun v -> v.prec)
+    |> List.reduce ~f:Ndarray.promote_prec
+    |> Option.value ~default:!default_value_prec
   in
+  let v = LA.create prec ~id ~label ~dims ~literal:false default_init_op in
+  let rec shape_logics = function
+    | [] -> [ Shape.Terminal ]
+    | [ t1 ] -> [ Shape.Transpose (transpose_op, t1.shape) ]
+    | [ t1; t2 ] -> [ Shape.Broadcast (compose_op, t1.shape, t2.shape) ]
+    | t1 :: (t2 :: _ as ts) -> Shape.Broadcast (compose_op, t1.shape, t2.shape) :: shape_logics ts
+  in
+  let local_shape_updates = List.map ~f:(fun logic -> Shape.{ shape; logic }) @@ shape_logics ts in
+  List.iter ~f:Shape.propagate_shapes local_shape_updates;
+  session_shape_updates := local_shape_updates @ !session_shape_updates;
+  let projections () =
+    (* FIXME: ternary ops need an [rhs3] projection! I'll also convert to Lazy. *)
+    Shape.derive_projections @@ List.hd_exn local_shape_updates
+  in
+  (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
+  let fwds =
+    List.map2_exn ts fwd_embed ~f:(fun ti e ->
+        if not e then High_level.Comment_reference ti.forward_body else ti.forward_body)
+  in
+  let forward_body = High_level.sequential @@ fwds @ [ op_body ~v ~vs ~projections ] in
   if
     is_prohibit_grad grad_spec
-    || (Fn.non is_require_grad grad_spec && Option.is_none t1.diff && Option.is_none t2.diff)
+    || (Fn.non is_require_grad grad_spec && List.for_all ts ~f:(fun ti -> Option.is_none ti.diff))
   then (
-    let tensor = { forward_body; diff = None; id; value = v; shape_logic; shape; children } in
+    let tensor = { forward_body; diff = None; id; value = v; shape; children } in
     forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
     tensor)
   else
-    let t1_bck_processed = not @@ Map.mem !backprop_roots t1.id in
-    let t2_bck_processed = t2.id = t1.id || (not @@ Map.mem !backprop_roots t2.id) in
-    if not t1_bck_processed then backprop_roots := Map.remove !backprop_roots t1.id;
-    if not t2_bck_processed then backprop_roots := Map.remove !backprop_roots t2.id;
-    let g1 = Option.map t1.diff ~f:(fun diff1 -> diff1.grad) in
-    let g2 = Option.map t2.diff ~f:(fun diff2 -> diff2.grad) in
+    let bck_embed = List.map ts ~f:(fun ti -> Map.mem !backprop_roots ti.id) in
+    List.iter2_exn ts bck_embed ~f:(fun ti e -> if e then backprop_roots := Map.remove !backprop_roots ti.id);
+    let gs = List.map ts ~f:(fun ti -> Option.map ti.diff ~f:(fun d -> d.grad)) in
     let g_prec =
       let f g = Option.map g ~f:(fun g -> g.LA.prec) in
-      List.hd_exn @@ List.filter_opt
-      @@ [ Option.map2 ~f:Ndarray.promote_prec (f g1) (f g2); f g1; f g2; Some !default_grad_prec ]
+      Option.value ~default:!default_grad_prec @@ List.reduce ~f:Ndarray.promote_prec @@ List.filter_map gs ~f
     in
     let g = LA.create g_prec ~id ~label:("grad " ^ label) ~dims ~literal:false default_init_op in
+    let dcode ti = Option.value_map ti.diff ~default:High_level.Noop in
     let zero_grads =
-      let open High_level in
-      let zer1 = Option.value_map t1.diff ~default:Noop ~f:(fun diff -> diff.zero_grads) in
-      let zer2 = Option.value_map t2.diff ~default:Noop ~f:(fun diff -> diff.zero_grads) in
-      let zer1 = if t1_bck_processed then Comment_reference zer1 else zer1 in
-      let zer2 = if t2_bck_processed then Comment_reference zer2 else zer2 in
-      Seq (Seq (zer1, zer2), fetch_zeros g shape)
+      let f = dcode ~f:(fun diff -> diff.zero_grads) in
+      let zeros =
+        List.map2_exn (List.map ~f ts) bck_embed ~f:(fun z e ->
+            if not e then High_level.Comment_reference z else z)
+      in
+      High_level.sequential @@ zeros @ [ fetch_zeros g shape ]
     in
     (* The code needs to be included in the reverse order to which it was computed! This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
-    let grad_body = grad_body ~v ~v1 ~v2 ~g ~g1 ~g2 ~projections in
     let backprop_body =
-      let open High_level in
-      let bck1 = Option.value_map t1.diff ~default:Noop ~f:(fun diff -> diff.backprop_body) in
-      let bck2 = Option.value_map t2.diff ~default:Noop ~f:(fun diff -> diff.backprop_body) in
-      let bck1 = if t1_bck_processed then Comment_reference bck1 else bck1 in
-      let bck2 = if t2_bck_processed then Comment_reference bck2 else bck2 in
-      let subbck = if t1_first then Seq (bck2, bck1) else Seq (bck1, bck2) in
-      Seq (grad_body, subbck)
+      let f = dcode ~f:(fun diff -> diff.backprop_body) in
+      let bcks =
+        List.map2_exn (List.map ~f ts) bck_embed ~f:(fun z e ->
+            if not e then High_level.Comment_reference z else z)
+      in
+      High_level.sequential @@ (grad_body ~v ~vs ~g ~gs ~projections :: List.rev bcks)
     in
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop_body } in
-    let tensor = { forward_body; diff; id; value = v; shape_logic; shape; children } in
+    let tensor = { forward_body; diff; id; value = v; shape; children } in
     forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
     backprop_roots := Map.add_exn !backprop_roots ~key:id ~data:tensor;
     tensor
 
-let unop ~op_label ?(desc_label = "") ~transpose_op ~op_body ~grad_body ?(grad_spec = If_needed) t1 =
-  let t1_fwd_processed = not @@ Map.mem !forward_roots t1.id in
-  if not t1_fwd_processed then forward_roots := Map.remove !forward_roots t1.id;
-  let children = [ { subtensor = t1; embedded=not t1_fwd_processed } ] in
-  let id = session_state.next_session_id in
-  session_state.next_session_id <- session_state.next_session_id + 1;
-  let shape = Shape.make ~id () in
-  let v1 = t1.value in
-  let dims = lazy (Shape.to_dims shape) in
-  let label = op_label ^ if String.is_empty desc_label then "" else "/" ^ desc_label in
-  let v = LA.create v1.prec ~id ~label ~dims ~literal:false default_init_op in
-  let shape_logic = Shape.Transpose (transpose_op, t1.shape) in
-  let local_shape_update = Shape.{ shape; logic = shape_logic } in
-  Shape.propagate_shapes local_shape_update;
-  session_shape_updates := local_shape_update :: !session_shape_updates;
-  let projections () = Shape.derive_projections local_shape_update in
-  (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
-  let forward_body =
-    let fwd1 = if t1_fwd_processed then High_level.Comment_reference t1.forward_body else t1.forward_body in
-    High_level.Seq (fwd1, op_body ~v ~v1 ~projections)
+let binop ~op_label ?desc_label ?compose_op ~op_body ~grad_body ?grad_spec t1 t2 =
+  let op_body ~v ~vs ~projections =
+    match vs with [ v1; v2 ] -> op_body ~v ~v1 ~v2 ~projections | _ -> assert false
   in
-  if is_prohibit_grad grad_spec || (Fn.non is_require_grad grad_spec && Option.is_none t1.diff) then (
-    let tensor = { forward_body; diff = None; id; value = v; shape_logic; shape; children } in
-    forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
-    tensor)
-  else
-    let t1_bck_processed = not @@ Map.mem !backprop_roots t1.id in
-    if not t1_bck_processed then backprop_roots := Map.remove !backprop_roots t1.id;
-    let g1 = Option.map t1.diff ~f:(fun diff1 -> diff1.grad) in
-    let g_prec = Option.value_map g1 ~f:(fun g -> g.LA.prec) ~default:!default_grad_prec in
-    let g = LA.create g_prec ~id ~label:("grad " ^ label) ~dims ~literal:false default_init_op in
-    let zero_grads =
-      let open High_level in
-      let zer1 = Option.value_map t1.diff ~default:Noop ~f:(fun diff -> diff.zero_grads) in
-      let zer1 = if t1_bck_processed then Comment_reference zer1 else zer1 in
-      Seq (zer1, fetch_zeros g shape)
-    in
-    (* The code needs to be included in the reverse order to which it was computed! This guarantees
-       that all ancestors of a node are backpropagated before the node is backpropagated, even for
-       non-tree DAGs. *)
-    let backprop_body =
-      let open High_level in
-      let bck1 = Option.value_map t1.diff ~default:Noop ~f:(fun diff -> diff.backprop_body) in
-      let bck1 = if t1_bck_processed then Comment_reference bck1 else bck1 in
-      Seq (grad_body ~v ~v1 ~g ~g1 ~projections, bck1)
-    in
-    (* The order is not relevant, we keep the same order as in backprop for readability. *)
-    let diff = Some { grad = g; zero_grads; backprop_body } in
-    let tensor = { forward_body; diff; id; value = v; shape_logic; shape; children } in
-    forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
-    backprop_roots := Map.add_exn !backprop_roots ~key:id ~data:tensor;
-    tensor
+  let grad_body ~v ~vs ~g ~gs ~projections =
+    match (vs, gs) with
+    | [ v1; v2 ], [ g1; g2 ] -> grad_body ~v ~v1 ~v2 ~g ~g1 ~g2 ~projections
+    | _ -> assert false
+  in
+  op ~op_label ?desc_label ?compose_op ?transpose_op:None ~op_body ~grad_body ?grad_spec (Shape.make ())
+    [ t1; t2 ]
+
+let unop ~op_label ?desc_label ?compose_op ~op_body ~grad_body ?grad_spec t1 =
+  let op_body ~v ~vs ~projections =
+    match vs with [ v1 ] -> op_body ~v ~v1 ~projections | _ -> assert false
+  in
+  let grad_body ~v ~vs ~g ~gs ~projections =
+    match (vs, gs) with [ v1 ], [ g1 ] -> grad_body ~v ~v1 ~g ~g1 ~projections | _ -> assert false
+  in
+  op ~op_label ?desc_label ?compose_op ?transpose_op:None ~op_body ~grad_body ?grad_spec (Shape.make ())
+    [ t1 ]
 
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label ?(desc_label = "") ~grad_spec ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced
+let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced
     ?init_op ?fetch_op ?postprocess_op () =
   let literal : bool =
     if is_require_grad grad_spec then false
@@ -240,25 +209,15 @@ let term ~label ?(desc_label = "") ~grad_spec ?batch_dims ?input_dims ?output_di
       | Some (Low_level.Constant_fill [| _ |]), None, None -> true
       | _ -> false
   in
-  let id = session_state.next_session_id in
-  session_state.next_session_id <- session_state.next_session_id + 1;
-  let shape = Shape.make ~id ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced () in
-  let dims = lazy (Shape.to_dims shape) in
-  let label = label ^ if String.is_empty desc_label then "" else "/" ^ desc_label in
-  let init_op = Option.value init_op ~default:default_init_op in
-  let v = LA.create !default_value_prec ~id ~label ~dims ~literal:false init_op in
-  let shape_logic = Shape.Terminal in
-  (* NOTE: this update does not do any work, but that might change in the future,
-     and having it in the update sequence might help with debuggability. *)
-  let local_shape_update = Shape.{ shape; logic = shape_logic } in
-  Shape.propagate_shapes local_shape_update;
-  session_shape_updates := local_shape_update :: !session_shape_updates;
-  let forward_body =
+  let op_body ~v ~vs:_ ~projections =
     let open High_level in
+    let dims = lazy (projections ()).Indexing.lhs_dims in
     match fetch_op with
     | None ->
         if literal && Low_level.virtualize_settings.inline_constants then
-          let fetch_op = match init_op with Constant_fill [| c |] -> Constant c | _ -> assert false in
+          let fetch_op =
+            match init_op with Some (Low_level.Constant_fill [| c |]) -> Constant c | _ -> assert false
+          in
           Fetch { array = v; fetch_op; dims }
         else Noop
     | Some fetch_op ->
@@ -270,24 +229,9 @@ let term ~label ?(desc_label = "") ~grad_spec ?batch_dims ?input_dims ?output_di
             v.never_device_only <- true);
         Fetch { array = v; fetch_op; dims }
   in
-  Option.iter postprocess_op ~f:(fun postprocess_op ->
-      let postprocess_op = postprocess_op ~v in
-      session_postprocess := postprocess_op :: !session_postprocess;
-      v.never_virtual <- true;
-      v.never_device_only <- true);
-  if is_prohibit_grad grad_spec || (Fn.non is_require_grad grad_spec && (literal || Option.is_some fetch_op))
-  then (
-    let tensor = { forward_body; diff = None; id; value = v; shape_logic; shape; children = [] } in
-    forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
-    tensor)
-  else
-    let zero_grads = fetch_zeros v shape in
-    let g = LA.create !default_grad_prec ~id ~label:("grad " ^ label) ~dims ~literal:false default_init_op in
-    let diff = Some { grad = g; zero_grads; backprop_body = High_level.Noop } in
-    let tensor = { forward_body; diff; id; value = v; shape_logic; shape; children = [] } in
-    forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
-    backprop_roots := Map.add_exn !backprop_roots ~key:id ~data:tensor;
-    tensor
+  let grad_body ~v:_ ~vs:_ ~g:_ ~gs:_ ~projections:_ = High_level.Noop in
+  let make_shape = Shape.make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced () in
+  op ~op_label:label ?desc_label ?compose_op:None ?transpose_op:None ~op_body ~grad_body ~grad_spec make_shape []
 
 let error_if_unknown_shape m =
   match m.shape with
