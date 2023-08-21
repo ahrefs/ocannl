@@ -299,7 +299,7 @@ let session_step_update_routine = ref (fun () -> ())
 let generate_params_update ~(minus_lr : Tensor.t) ?params () =
   let params = match params with Some p -> p | None -> Hashtbl.data @@ session_params () in
   let module CDSL = Code.CDSL in
-  let module NFDSL = Operation.NFDSL in
+  let module NTDSL = Operation.NTDSL in
   List.map params ~f:(fun v -> [%nn_cd v =+ minus_lr * g ~logic:"."])
 
 let print_session_code ?(compiled = false) () =

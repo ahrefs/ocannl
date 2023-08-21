@@ -1,14 +1,14 @@
 open Base
 open Ocannl
 module CDSL = Code.CDSL
-module FDSL = Operation.FDSL
-module NFDSL = Operation.NFDSL
+module TDSL = Operation.TDSL
+module NTDSL = Operation.NTDSL
 module SDSL = Session.SDSL
 
 let () = SDSL.set_executor Gccjit
 
 let%expect_test "Graph drawing recompile" =
-  (* let open Operation.FDSL in *)
+  (* let open Operation.TDSL in *)
   let open SDSL.O in
   SDSL.drop_all_sessions ();
   Random.init 0;
@@ -121,7 +121,7 @@ let%expect_test "Graph drawing fetch" =
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   let x_flat =
-    FDSL.term ~needs_gradient:true ~label:"x_flat"
+    TDSL.term ~grad_spec:Require_grad ~label:"x_flat"
       ~batch_dims:[ CDSL.dim size ]
       ~input_dims:[]
       ~output_dims:[ CDSL.dim 1 ]
@@ -199,7 +199,7 @@ let%expect_test "Simple gradients materialized" =
   let%nn_op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%nn_op d = e + "c" [ 10 ] in
   let%nn_op l = d *. "f" [ -2 ] in
-  SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ CDSL.dim 1 ] [| 0.1 |]);
+  SDSL.minus_learning_rate := Some (TDSL.init_const ~l:"minus_lr" ~o:[ CDSL.dim 1 ] [| 0.1 |]);
   SDSL.everything_fully_on_host ();
   SDSL.refresh_session ~update_params:false ();
   (* We did not update the params: all values and gradients will be at initial points, which are
@@ -276,7 +276,7 @@ let%expect_test "Simple gradients virtual" =
   let%nn_op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%nn_op d = e + "c" [ 10 ] in
   let%nn_op l = d *. "f" [ -2 ] in
-  SDSL.minus_learning_rate := Some (FDSL.init_const ~l:"minus_lr" ~o:[ CDSL.dim 1 ] [| 0.1 |]);
+  SDSL.minus_learning_rate := Some (TDSL.init_const ~l:"minus_lr" ~o:[ CDSL.dim 1 ] [| 0.1 |]);
   SDSL.refresh_session ~update_params:false ();
   (* We did not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)

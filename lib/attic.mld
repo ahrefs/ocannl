@@ -122,7 +122,7 @@ let init_callback ~op_or_id arr =
   init init_op arr
 
 
-  let point_input = FDSL.data ~label:"point_input" ~batch_dims:[1] ~output_dims:[2]
+  let point_input = TDSL.data ~label:"point_input" ~batch_dims:[1] ~output_dims:[2]
       (Compute_point (fun ~session_step:_ ~dims:_ ~idcs -> point.(idcs.(1)))) in
 
     let size = Array.length cs in
@@ -140,7 +140,7 @@ type nulop =
 
 
   let big_range = Array.init 300 ~f:(Int.to_float) in
-  let r_data = FDSL.data ~label:"big_range" ~batch_dims:[2] ~output_dims:[3;5]
+  let r_data = TDSL.data ~label:"big_range" ~batch_dims:[2] ~output_dims:[3;5]
       (fun ~n:_ -> Init_op (Constant_fill big_range)) in
   refresh_session ();
   print_tensor ~with_code:false ~with_grad:false `Default @@ r_data;
@@ -658,43 +658,43 @@ let interpret_code llc =
 
 (** Constructs a node with empty tensors of the specified precision and registers it in the global store.
     Note that the precision for gradients should not be lower than the precision for values. *)
-let create ~(value_prec : Nd.prec) ?(grad_prec : Nd.prec option) ?(literal = false) ~needs_gradient ()
+let create ~(value_prec : Nd.prec) ?(grad_prec : Nd.prec option) ?(literal = false) ()
     ~op_label ?desc_label ~axis_labels ~default_display_indices ~children annot =
   let node =
     match value_prec with
     | Void_prec -> assert false
     | Half_prec value_prec -> (
         match grad_prec with
-        | None -> create_node ~value_prec ~needs_gradient ()
+        | None -> create_node ~value_prec ()
         | Some Void_prec -> assert false
-        | Some (Half_prec grad_prec) -> create_node ~value_prec ~grad_prec ~needs_gradient ()
-        | Some (Single_prec grad_prec) -> create_node ~value_prec ~grad_prec ~needs_gradient ()
-        | Some (Double_prec grad_prec) -> create_node ~value_prec ~grad_prec ~needs_gradient ())
+        | Some (Half_prec grad_prec) -> create_node ~value_prec ~grad_prec ()
+        | Some (Single_prec grad_prec) -> create_node ~value_prec ~grad_prec ()
+        | Some (Double_prec grad_prec) -> create_node ~value_prec ~grad_prec ())
     | Single_prec value_prec -> (
         match grad_prec with
-        | None -> create_node ~value_prec ~needs_gradient ()
+        | None -> create_node ~value_prec ()
         | Some Void_prec -> assert false
-        | Some (Half_prec grad_prec) -> create_node ~value_prec ~grad_prec ~needs_gradient ()
-        | Some (Single_prec grad_prec) -> create_node ~value_prec ~grad_prec ~needs_gradient ()
-        | Some (Double_prec grad_prec) -> create_node ~value_prec ~grad_prec ~needs_gradient ())
+        | Some (Half_prec grad_prec) -> create_node ~value_prec ~grad_prec ()
+        | Some (Single_prec grad_prec) -> create_node ~value_prec ~grad_prec ()
+        | Some (Double_prec grad_prec) -> create_node ~value_prec ~grad_prec ())
     | Double_prec value_prec -> (
         match grad_prec with
-        | None -> create_node ~value_prec ~needs_gradient ()
+        | None -> create_node ~value_prec ()
         | Some Void_prec -> assert false
-        | Some (Half_prec grad_prec) -> create_node ~value_prec ~grad_prec ~needs_gradient ()
-        | Some (Single_prec grad_prec) -> create_node ~value_prec ~grad_prec ~needs_gradient ()
-        | Some (Double_prec grad_prec) -> create_node ~value_prec ~grad_prec ~needs_gradient ())
+        | Some (Half_prec grad_prec) -> create_node ~value_prec ~grad_prec ()
+        | Some (Single_prec grad_prec) -> create_node ~value_prec ~grad_prec ()
+        | Some (Double_prec grad_prec) -> create_node ~value_prec ~grad_prec ())
   in
   { id = node.id; node; op_label; desc_label; children; axis_labels; default_display_indices; annot; literal }
 
-let create_of_same_precision_as ~needs_gradient ?literal node =
+let create_of_same_precision_as ?literal node =
   match (node.value, node.grad) with
   | Single_nd _, (Some (Single_nd _) | None) ->
-      create ~value_prec:Nd.single ~grad_prec:Nd.single ~needs_gradient ?literal ()
+      create ~value_prec:Nd.single ~grad_prec:Nd.single ?literal ()
   | Single_nd _, Some (Double_nd _) ->
-      create ~value_prec:Nd.single ~grad_prec:Nd.double ~needs_gradient ?literal ()
+      create ~value_prec:Nd.single ~grad_prec:Nd.double ?literal ()
   | Double_nd _, (Some (Double_nd _) | None) ->
-      create ~value_prec:Nd.double ~grad_prec:Nd.double ~needs_gradient ?literal ()
+      create ~value_prec:Nd.double ~grad_prec:Nd.double ?literal ()
   | _, Some grad ->
       invalid_arg @@ "create_of_same_precision_as: unsupported combination of precisions value: "
       ^ Nd.precision_string node.value ^ ", grad: " ^ Nd.precision_string grad
@@ -702,14 +702,14 @@ let create_of_same_precision_as ~needs_gradient ?literal node =
       invalid_arg @@ "create_of_same_precision_as: unsupported combination of precisions value: "
       ^ Nd.precision_string node.value
 
-let create_of_promoted_precision ~needs_gradient n1 n2 =
+let create_of_promoted_precision n1 n2 =
   match (n1.value, n2.value) with
   | Single_nd _, Single_nd _ -> (
       match (n1.grad, n2.grad) with
       | _, Some (Double_nd _) | Some (Double_nd _), _ ->
-          create ~value_prec:Nd.single ~grad_prec:Nd.double ~needs_gradient ()
-      | _ -> create ~value_prec:Nd.single ~grad_prec:Nd.single ~needs_gradient ())
-  | _, Double_nd _ | Double_nd _, _ -> create ~value_prec:Nd.double ~grad_prec:Nd.double ~needs_gradient ()
+          create ~value_prec:Nd.single ~grad_prec:Nd.double ()
+      | _ -> create ~value_prec:Nd.single ~grad_prec:Nd.single ())
+  | _, Double_nd _ | Double_nd _, _ -> create ~value_prec:Nd.double ~grad_prec:Nd.double ()
   | _ ->
       invalid_arg @@ "create_of_promoted_precision: unsupported combination of precisions n1 value: "
       ^ Nd.precision_string n1.value ^ ", n2 value: " ^ Nd.precision_string n2.value

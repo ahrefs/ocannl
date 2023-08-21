@@ -1,7 +1,7 @@
 open Base
 open Ocannl
-module FDSL = Operation.FDSL
-module NFDSL = Operation.NFDSL
+module TDSL = Operation.TDSL
+module NTDSL = Operation.NTDSL
 module CDSL = Code.CDSL
 module SDSL = Session.SDSL
 
@@ -12,7 +12,7 @@ let recompiling_graph executor opti () =
   Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ bench_title ^ " ******";
   let () = SDSL.set_executor executor in
   Exec_as_gccjit.optimization_level := opti;
-  (* let open Operation.FDSL in *)
+  (* let open Operation.TDSL in *)
   SDSL.drop_all_sessions ();
   Random.init 0;
   let init_time = Time_now.nanoseconds_since_unix_epoch () in

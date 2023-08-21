@@ -9,12 +9,12 @@ let ndarray_op ?desc_label ?axis_labels ?label expr =
   let edims dims = Ast_builder.Default.elist ~loc dims in
   let op =
     match (axis_labels, label) with
-    | None, None -> [%expr Tensor.NFDSL.ndarray]
-    | Some axis_labels, None -> [%expr Tensor.NFDSL.ndarray ~axis_labels:[%e axis_labels]]
-    | None, Some label -> [%expr Tensor.NFDSL.ndarray ~label:[%e label]]
+    | None, None -> [%expr Tensor.NTDSL.ndarray]
+    | Some axis_labels, None -> [%expr Tensor.NTDSL.ndarray ~axis_labels:[%e axis_labels]]
+    | None, Some label -> [%expr Tensor.NTDSL.ndarray ~label:[%e label]]
     | Some axis_labels, Some label ->
         [%expr
-          Tensor.NFDSL.ndarray ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_labels:[%e axis_labels]
+          Tensor.NTDSL.ndarray ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_labels:[%e axis_labels]
             ~label:[%e label]]
   in
   [%expr
@@ -155,11 +155,11 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
   let loc = expr.pexp_loc in
   match expr with
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
-      (Tensor_nf, Undet, [%expr Tensor.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] [%e expr]])
+      (Tensor_nf, Undet, [%expr Tensor.NTDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] [%e expr]])
   | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
       ( Tensor_nf,
         Undet,
-        [%expr Tensor.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] (Float.of_int [%e expr])]
+        [%expr Tensor.NTDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] (Float.of_int [%e expr])]
       )
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
@@ -168,7 +168,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       ( Tensor_nf,
         Undet,
         [%expr
-          Tensor.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis] [%e f]] )
+          Tensor.NTDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis] [%e f]] )
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
         [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
@@ -176,7 +176,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       ( Tensor_nf,
         Undet,
         [%expr
-          Tensor.NFDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis]
+          Tensor.NTDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis]
             (Float.of_int [%e i])] )
   | { pexp_desc = Pexp_array _; _ } | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
       (Tensor_nf, Undet, ndarray_op expr)
@@ -200,7 +200,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       let _typ1, slot1, expr1 = translate expr1 in
       ( Tensor_nf,
         slot1,
-        [%expr pointpow ?desc_label:[%e opt_pat2string ~loc desc_label] ~is_diff:false [%e expr2] [%e expr1]]
+        [%expr pointpow ?desc_label:[%e opt_pat2string ~loc desc_label] ~grad_spec:Prohibit_grad [%e expr2] [%e expr1]]
       )
   | [%expr
       [%e? expr1]
@@ -213,14 +213,14 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       in
       ( Tensor_nf,
         slot,
-        [%expr NFDSL.einsum ?desc_label:[%e opt_pat2string ~loc desc_label] [%e spec] [%e expr1] [%e expr2]]
+        [%expr NTDSL.einsum ?desc_label:[%e opt_pat2string ~loc desc_label] [%e spec] [%e expr1] [%e expr2]]
       )
   | [%expr [%e? expr1] ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]]
     when String.contains spec_str '>' ->
       let _typ1, slot1, expr1 = translate expr1 in
       ( Tensor_nf,
         slot1,
-        [%expr NFDSL.einsum1 ?desc_label:[%e opt_pat2string ~loc desc_label] [%e spec] [%e expr1]] )
+        [%expr NTDSL.einsum1 ?desc_label:[%e opt_pat2string ~loc desc_label] [%e spec] [%e expr1]] )
   | [%expr [%e? expr1].grad] -> (
       let typ1, slot1, expr1 = translate ?desc_label ?proj_in_scope expr1 in
       match typ1 with
@@ -720,7 +720,7 @@ let translate_dt ?desc_label (expr : expression) : expression =
             | e -> e)
         in
         [%expr
-          FDSL.data ?desc_label:[%e opt_pat2string ~loc desc_label] ~label:[%e label]
+          TDSL.data ?desc_label:[%e opt_pat2string ~loc desc_label] ~label:[%e label]
             ?batch_dims:[%e opt_expr ~loc @@ edims batch_dims]
             ?input_dims:[%e opt_expr ~loc @@ edims input_dims]
             ?output_dims:[%e opt_expr ~loc @@ edims output_dims]
@@ -748,7 +748,7 @@ let expr_expander ~dt ~loc ~path:_ payload =
               vb with
               pvb_expr =
                 [%expr
-                  let open! NFDSL.O in
+                  let open! NTDSL.O in
                   [%e v]];
             })
       in
@@ -756,7 +756,7 @@ let expr_expander ~dt ~loc ~path:_ payload =
   | expr ->
       let expr = (if is_cd dt then translate else translate_dt) expr in
       [%expr
-        let open! NFDSL.O in
+        let open! NTDSL.O in
         [%e expr]]
 
 let flatten_str ~loc ~path:_ items =
@@ -776,7 +776,7 @@ let translate_str ~dt ({ pstr_desc; _ } as str) =
         pstr_desc =
           Pstr_eval
             ( [%expr
-                let open! NFDSL.O in
+                let open! NTDSL.O in
                 [%e expr]],
               attrs );
       }
@@ -791,7 +791,7 @@ let translate_str ~dt ({ pstr_desc; _ } as str) =
           vb with
           pvb_expr =
             [%expr
-              let open! NFDSL.O in
+              let open! NTDSL.O in
               [%e v]];
         }
       in

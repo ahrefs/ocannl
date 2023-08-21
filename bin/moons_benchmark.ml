@@ -1,13 +1,13 @@
 open Base
 open Ocannl
-module FDSL = Operation.FDSL
-module NFDSL = Operation.NFDSL
+module TDSL = Operation.TDSL
+module NTDSL = Operation.NTDSL
 module CDSL = Code.CDSL
 module SDSL = Session.SDSL
 
 let _suspended () =
   (* Code.CDSL.with_debug := false; *)
-  (* let open Operation.FDSL in *)
+  (* let open Operation.TDSL in *)
   let open SDSL.O in
   (* SDSL.set_executor Interpreter;
      SDSL.enable_all_debugs ~trace_interpreter:true (); *)
@@ -52,9 +52,9 @@ let _suspended () =
       20;
     ]
   in
-  let moons_flat = FDSL.init_const ~l:"moons_flat" ~b ~o:[ CDSL.dim 2 ] moons_flat in
+  let moons_flat = TDSL.init_const ~l:"moons_flat" ~b ~o:[ CDSL.dim 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes = FDSL.init_const ~l:"moons_classes" ~b ~o:[ CDSL.dim 1 ] moons_classes in
+  let moons_classes = TDSL.init_const ~l:"moons_classes" ~b ~o:[ CDSL.dim 1 ] moons_classes in
   (* let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 2 + ("w1" * x))) in *)
   let%nn_op mlp x = "b1" 1 + ("w1" * x) in
 
@@ -68,9 +68,9 @@ let _suspended () =
   let%nn_op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
   (* let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in *)
   let%nn_op ssq w = (w *. w) ++ "...|...->... => 0" in
-  let reg_loss = List.map ~f:ssq [ w1; b1 ] |> List.reduce_exn ~f:FDSL.O.( + ) in
+  let reg_loss = List.map ~f:ssq [ w1; b1 ] |> List.reduce_exn ~f:TDSL.O.( + ) in
   (* let reg_loss =
-       List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
+       List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:TDSL.O.( + )
      in *)
   let%nn_op weighted_reg_loss = 0.00001 *. reg_loss in
   (* let step_batch = parallel_dims * minib in *)
@@ -200,13 +200,13 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let moons_flat =
-    FDSL.init_const ~l:"moons_flat"
+    TDSL.init_const ~l:"moons_flat"
       ~b:[ n_batches; parallel_dims; minibatch_size ]
       ~o:[ 2 ]
       moons_flat
   in
   let moons_classes =
-    FDSL.init_const ~l:"moons_classes"
+    TDSL.init_const ~l:"moons_classes"
       ~b:[ n_batches; parallel_dims; minibatch_size ]
       ~o:[ 1 ]
       moons_classes
@@ -236,9 +236,9 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
     if with_reg then
       let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in
       (* let reg_loss =
-           List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:FDSL.O.( + )
+           List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:TDSL.O.( + )
          in *)
-      let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:FDSL.O.( + ) in
+      let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:TDSL.O.( + ) in
       let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..batch_size) + (0.0001 *. reg_loss) in
       total_loss
     else

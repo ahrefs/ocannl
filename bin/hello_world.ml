@@ -1,14 +1,14 @@
 open Base
 open Ocannl
 module CDSL = Code.CDSL
-module FDSL = Operation.FDSL
+module TDSL = Operation.TDSL
 
 let () = Session.SDSL.set_executor Gccjit
 
 let hello1 () =
   Session.drop_all_sessions ();
   Random.init 0;
-  let open Operation.FDSL in
+  let open Operation.TDSL in
   let open Session.SDSL in
   (* Hey is inferred to be a matrix. *)
   let hey =
@@ -41,9 +41,9 @@ let hello3 () =
   drop_all_sessions ();
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
-  let hey = FDSL.O.(!~"hey") in
-  let zero_to_twenty = FDSL.range 20 in
-  let _y = FDSL.O.((hey * zero_to_twenty) + zero_to_twenty) in
+  let hey = TDSL.O.(!~"hey") in
+  let zero_to_twenty = TDSL.range 20 in
+  let _y = TDSL.O.((hey * zero_to_twenty) + zero_to_twenty) in
   refresh_session ();
   print_preamble ();
   print_session_code ();

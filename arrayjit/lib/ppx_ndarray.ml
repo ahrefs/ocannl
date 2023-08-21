@@ -18,7 +18,7 @@ let expr_expander ~loc ~path:_ payload =
               vb with
               pvb_expr =
                 [%expr
-                  let open! NFDSL.O in
+                  let open! NTDSL.O in
                   [%e v]];
             })
       in
@@ -26,7 +26,7 @@ let expr_expander ~loc ~path:_ payload =
   | expr ->
       let expr = (if is_cd dt then translate else translate_dt) expr in
       [%expr
-        let open! NFDSL.O in
+        let open! NTDSL.O in
         [%e expr]]
 
 let flatten_str ~loc ~path:_ items =
@@ -46,7 +46,7 @@ let translate_str ~dt ({ pstr_desc; _ } as str) =
         pstr_desc =
           Pstr_eval
             ( [%expr
-                let open! NFDSL.O in
+                let open! NTDSL.O in
                 [%e expr]],
               attrs );
       }
@@ -61,7 +61,7 @@ let translate_str ~dt ({ pstr_desc; _ } as str) =
           vb with
           pvb_expr =
             [%expr
-              let open! NFDSL.O in
+              let open! NTDSL.O in
               [%e v]];
         }
       in

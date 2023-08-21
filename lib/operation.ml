@@ -3,11 +3,13 @@
 open Base
 module CDSL = Code.CDSL
 
+module Empty_DSL = struct
+  module O = struct end
+end
+
 let add =
   let open Code in
-  let module NFDSL = struct
-    module O = struct end
-  end in
+  let module NTDSL = Empty_DSL in
   let%nn_cd op_body ~(v : Code.node) ~(v1 : Code.node) ~(v2 : Code.node) ~projections = v =: v1 + v2 in
   let%nn_cd grad_body ~(v : Code.node) ~(v1 : Code.node) ~(v2 : Code.node) ~projections =
     g1 =+ g || g2 =+ g
@@ -16,9 +18,7 @@ let add =
 
 let pointmul =
   let open Code in
-  let module NFDSL = struct
-    module O = struct end
-  end in
+  let module NTDSL = Empty_DSL in
   let%nn_cd op_body ~(v : Code.node) ~(v1 : Code.node) ~(v2 : Code.node) ~projections = v =: v1 * v2 in
   let%nn_cd grad_body ~(v : Code.node) ~(v1 : Code.node) ~(v2 : Code.node) ~projections =
     g1 =+ g * v2 || g2 =+ v1 * g
@@ -34,9 +34,7 @@ let pointmul =
 
 let matmul =
   let open Code in
-  let module NFDSL = struct
-    module O = struct end
-  end in
+  let module NTDSL = Empty_DSL in
   let%nn_cd op_body ~(v : Code.node) ~(v1 : Code.node) ~(v2 : Code.node) ~projections = v =:+ v1 * v2 in
   let%nn_cd grad_body ~(v : Code.node) ~(v1 : Code.node) ~(v2 : Code.node) ~projections =
     g1 =+ g * v2 || g2 =+ v1 * g
@@ -50,9 +48,7 @@ let matmul =
     and the output axes. *)
 let einsum ?desc_label spec =
   let open Code in
-  let module NFDSL = struct
-    module O = struct end
-  end in
+  let module NTDSL = Empty_DSL in
   let%nn_cd op_body ~(v : Code.node) ~(v1 : Code.node) ~(v2 : Code.node) ~projections = v =:+ v1 * v2 in
   let%nn_cd grad_body ~(v : Code.node) ~(v1 : Code.node) ~(v2 : Code.node) ~projections =
     g1 =+ g * v2 || g2 =+ v1 * g
@@ -66,18 +62,14 @@ let einsum ?desc_label spec =
     and the output axes. *)
 let einsum1 ?desc_label spec =
   let open Code in
-  let module NFDSL = struct
-    module O = struct end
-  end in
+  let module NTDSL = Empty_DSL in
   let%nn_cd op_body ~(v : Code.node) ~(v1 : Code.node) ~projections = v =:+ v1 in
   let%nn_cd grad_body ~(v : Code.node) ~(v1 : Code.node) ~projections = g1 =+ g in
   Tensor.unop ?desc_label ~transpose_op:(Permute spec) ~op_label:"=>" ~op_body ~grad_body
 
 let relu =
   let open Code in
-  let module NFDSL = struct
-    module O = struct end
-  end in
+  let module NTDSL = Empty_DSL in
   let%nn_cd op_body ~(v : Code.node) ~(v1 : Code.node) ~projections = v =: !/v1 ~projections in
   let%nn_cd grad_body ~(v : Code.node) ~(v1 : Code.node) ~projections = g1 =+ v -?/ g in
   Tensor.unop ~transpose_op:Pointwise_un ~op_label:"r" ~op_body ~grad_body
@@ -89,7 +81,7 @@ let subtensor_label ~over_kind ~from_left ~other_axes_pointwise =
 
 let dynamic_subtensor ?indexed_dims ~over_kind ~from_left ~other_axes_pointwise =
   let open Code in
-  let module NFDSL = struct
+  let module NTDSL = struct
     module O = struct end
   end in
   let%nn_cd op_body ~(v : Code.node) ~(v1 : Code.node) ~(v2 : Code.node) ~projections = v =: v1 -@> v2 in
@@ -102,107 +94,105 @@ let dynamic_subtensor ?indexed_dims ~over_kind ~from_left ~other_axes_pointwise 
   let op_label = subtensor_label ~over_kind ~from_left ~other_axes_pointwise in
   Tensor.binop ~compose_op ~op_label ~op_body ~grad_body
 
-module NFO_without_pow = struct
-  let ( * ) = matmul ~is_diff:false
-  let ( *. ) = pointmul ~is_diff:false
-  let ( + ) = add ~is_diff:false
-  let ( !/ ) = relu ~is_diff:false
-  let ( !. ) = Tensor.number ~is_diff:false
-  let ( !.. ) ?desc_label i = Tensor.number ?desc_label ~is_diff:false @@ Float.of_int i
+module NDO_without_pow = struct
+  let ( * ) = matmul ~grad_spec:Prohibit_grad
+  let ( *. ) = pointmul ~grad_spec:Prohibit_grad
+  let ( + ) = add ~grad_spec:Prohibit_grad
+  let ( !/ ) = relu ~grad_spec:Prohibit_grad
+  let ( !. ) = Tensor.number ~grad_spec:Prohibit_grad
+  let ( !.. ) ?desc_label i = Tensor.number ?desc_label ~grad_spec:Prohibit_grad @@ Float.of_int i
   let ( - ) ?desc_label t1 t2 = ( + ) ?desc_label t1 (!.(-1.) *. t2)
   let ( ~- ) ?desc_label t = ( *. ) ?desc_label !.(-1.) t
 
   let ( @.| ) =
-    dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:true ~other_axes_pointwise:true ~is_diff:false
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:true ~other_axes_pointwise:true
+      ~grad_spec:Prohibit_grad
 
   let ( @./ ) =
-    dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:true ~other_axes_pointwise:true ~is_diff:false
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:true ~other_axes_pointwise:true
+      ~grad_spec:Prohibit_grad
 
   let ( @.- ) =
     dynamic_subtensor ~over_kind:Shape.AxisKey.Output ~from_left:true ~other_axes_pointwise:true
-      ~is_diff:false
+      ~grad_spec:Prohibit_grad
 
   let ( @^| ) =
     dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:true ~other_axes_pointwise:false
-      ~is_diff:false
+      ~grad_spec:Prohibit_grad
 
   let ( @^/ ) =
     dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:true ~other_axes_pointwise:false
-      ~is_diff:false
+      ~grad_spec:Prohibit_grad
 
   let ( @^- ) =
     dynamic_subtensor ~over_kind:Shape.AxisKey.Output ~from_left:true ~other_axes_pointwise:false
-      ~is_diff:false
+      ~grad_spec:Prohibit_grad
 
   let ( @|. ) =
     dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:false ~other_axes_pointwise:true
-      ~is_diff:false
+      ~grad_spec:Prohibit_grad
 
   let ( @/. ) =
     dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:false ~other_axes_pointwise:true
-      ~is_diff:false
+      ~grad_spec:Prohibit_grad
 
   let ( @-. ) =
     dynamic_subtensor ~over_kind:Shape.AxisKey.Output ~from_left:false ~other_axes_pointwise:true
-      ~is_diff:false
+      ~grad_spec:Prohibit_grad
 
   let ( @|^ ) =
     dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:false ~other_axes_pointwise:false
-      ~is_diff:false
+      ~grad_spec:Prohibit_grad
 
   let ( @/^ ) =
     dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:false ~other_axes_pointwise:false
-      ~is_diff:false
+      ~grad_spec:Prohibit_grad
 
   let ( @-^ ) =
     dynamic_subtensor ~over_kind:Shape.AxisKey.Output ~from_left:false ~other_axes_pointwise:false
-      ~is_diff:false
+      ~grad_spec:Prohibit_grad
 end
 
-let rec pointpow ?desc_label ~is_diff p t1 : Tensor.t =
-  let module NFDSL = struct
-    module O = NFO_without_pow
+let rec pointpow ?desc_label ~grad_spec p t1 : Tensor.t =
+  let module NTDSL = struct
+    module O = NDO_without_pow
   end in
   let open Code in
-  let p_f = Tensor.number ~is_diff p in
+  let p_f = Tensor.number ~grad_spec p in
   let%nn_cd op_body ~(v : Code.node) ~(v1 : Code.node) ~(v2 : Code.node) ~projections =
     v =: v1 ** v2 ~projections
   in
   let%nn_cd grad_body =
-    if not is_diff then fun ~n:_ ~v1:_ ~v2:_ ~projections:_ -> Noop
+    if not grad_spec then fun ~n:_ ~v1:_ ~v2:_ ~projections:_ -> Noop
     else if Float.equal p 2.0 then fun ~(v : Code.node) ~(v1 : Code.node) ~v2:_ ~projections ->
       g1 =+ p_f *. t1 * g
-    else fun ~(v : Code.node) ~(v1 : Code.node) ~v2:_ ~projections ->
-      g1 =+ p_f *. (t1 **. (p -. 1.)) * g
+    else fun ~(v : Code.node) ~(v1 : Code.node) ~v2:_ ~projections -> g1 =+ p_f *. (t1 **. (p -. 1.)) * g
   in
-  Tensor.binop ?desc_label ~compose_op:Pointwise_bin ~op_label:"**." ~op_body ~grad_body ~is_diff t1 p_f
+  Tensor.binop ?desc_label ~compose_op:Pointwise_bin ~op_label:"**." ~op_body ~grad_body ~grad_spec t1 p_f
 
-let range ?desc_label ~is_diff ?axis_label upto =
-  Tensor.term ?desc_label ~is_diff ~needs_gradient:false
+let range ?desc_label ?(grad_spec = Tensor.Prohibit_grad) ?axis_label upto =
+  Tensor.term ?desc_label ~grad_spec
     ~label:("0" ^ "..." ^ Int.to_string upto)
     ~batch_dims:[] ~input_dims:[]
     ~output_dims:[ Shape.dim (upto + 1) ]
     ?axis_labels:axis_label ~init_op:Range_over_offsets ()
 
-let range_of_shape ?desc_label ~is_diff ?(batch_dims = []) ?(input_dims = []) ?(output_dims = []) ?axis_labels
-    () =
+let range_of_shape ?desc_label ?(grad_spec = Tensor.Prohibit_grad) ?(batch_dims = []) ?(input_dims = [])
+    ?(output_dims = []) ?axis_labels () =
   let dims = Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list in
-  Tensor.term ?desc_label ~is_diff ~needs_gradient:false ~batch_dims ~input_dims ~output_dims ?axis_labels
+  Tensor.term ?desc_label ~grad_spec ~batch_dims ~input_dims ~output_dims ?axis_labels
     ~label:("r" ^ Shape.dims_to_string dims)
     ~init_op:Range_over_offsets ()
 
 (** In {!Tensor.term} the omitted axes are {!Shape.Unknown} -- to be inferred, here they are known and empty.  *)
-let data ?desc_label ?axis_labels ?(needs_gradient = false) ~label ?(batch_dims = []) ?(input_dims = [])
-    ?(output_dims = []) fetch_op =
+let data ?desc_label ?axis_labels ?(grad_spec = Tensor.Prohibit_grad) ~label ?(batch_dims = [])
+    ?(input_dims = []) ?(output_dims = []) fetch_op =
   if List.for_all ~f:List.is_empty [ batch_dims; input_dims; output_dims ] then
     invalid_arg "Operation.data: data and the `%nn_dt` syntax do not support shape inference, specify dims";
-  Tensor.term ?desc_label ~label ~is_diff:true ~needs_gradient ~batch_dims ~input_dims ~output_dims
-    ?axis_labels ~fetch_op ()
+  Tensor.term ?desc_label ~label ~grad_spec ~batch_dims ~input_dims ~output_dims ?axis_labels ~fetch_op ()
 
 let assign =
-  let module NFDSL = struct
-    module O = struct end
-  end in
+  let module NTDSL = Empty_DSL in
   let%nn_cd assign ~(lhs : Ndarray.ptr) ~(rhs : Ndarray.ptr) ~projections = lhs =: rhs ~projections in
   assign
 
@@ -213,102 +203,109 @@ let assign_op field ~(v : Code.node) ~(v1 : Code.node) ~projections =
 let stop_gradient =
   let grad_body ~n:_ ~v1:_ ~projections:_ = Code.Noop in
   let op_body = assign_op @@ Code.CDSL.data_of_node Value in
-  Tensor.unop ~transpose_op:Pointwise_un ~op_label:"stop_grad" ~op_body ~grad_body ~is_diff:true
+  Tensor.unop ~transpose_op:Pointwise_un ~op_label:"stop_grad" ~op_body ~grad_body ~grad_spec:Prohibit_grad
 
 (** A [stop_broadcast] mutates the partially-inferred shape of a tensor in-place, substituting-in
     a [Fixed] marker on the dimensions. This way we avoid introducing a new node. *)
 let stop_broadcast t = Shape.set_dims_type t.Tensor.shape Shape.fixed
 
 module O = struct
-  let ( * ) = matmul ~is_diff:true
-  let ( *. ) = pointmul ~is_diff:true
-  let ( + ) = add ~is_diff:true
-  let ( **. ) ?desc_label base exp = pointpow ?desc_label exp base ~is_diff:true
-  let ( !/ ) = relu ~is_diff:true
+  let ( * ) = matmul ~grad_spec:If_needed
+  let ( *. ) = pointmul ~grad_spec:If_needed
+  let ( + ) = add ~grad_spec:If_needed
+  let ( **. ) ?desc_label base exp = pointpow ?desc_label exp base ~grad_spec:If_needed
+  let ( !/ ) = relu ~grad_spec:If_needed
   let ( !~ ) ?desc_label label = Tensor.params ?desc_label label
-  let ( !. ) = Tensor.number ~is_diff:true
-  let ( !.. ) ?desc_label i = Tensor.number ?desc_label ~is_diff:true @@ Float.of_int i
+  let ( !. ) = Tensor.number ~grad_spec:If_needed
+  let ( !.. ) ?desc_label i = Tensor.number ?desc_label ~grad_spec:If_needed @@ Float.of_int i
   let ( - ) ?desc_label t1 t2 = ( + ) ?desc_label t1 (!.(-1.) *. t2)
   let ( ~- ) ?desc_label t = ( *. ) ?desc_label !.(-1.) t
   let ( /. ) ?desc_label t1 t2 = ( *. ) ?desc_label t1 (t2 **. -1.0)
 
   let ( @.| ) =
-    dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:true ~other_axes_pointwise:true ~is_diff:true
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:true ~other_axes_pointwise:true
+      ~grad_spec:If_needed
 
   let ( @./ ) =
-    dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:true ~other_axes_pointwise:true ~is_diff:true
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:true ~other_axes_pointwise:true
+      ~grad_spec:If_needed
 
   let ( @.- ) =
-    dynamic_subtensor ~over_kind:Shape.AxisKey.Output ~from_left:true ~other_axes_pointwise:true ~is_diff:true
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Output ~from_left:true ~other_axes_pointwise:true
+      ~grad_spec:If_needed
 
   let ( @^| ) =
-    dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:true ~other_axes_pointwise:false ~is_diff:true
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:true ~other_axes_pointwise:false
+      ~grad_spec:If_needed
 
   let ( @^/ ) =
-    dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:true ~other_axes_pointwise:false ~is_diff:true
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:true ~other_axes_pointwise:false
+      ~grad_spec:If_needed
 
   let ( @^- ) =
     dynamic_subtensor ~over_kind:Shape.AxisKey.Output ~from_left:true ~other_axes_pointwise:false
-      ~is_diff:true
+      ~grad_spec:If_needed
 
   let ( @|. ) =
-    dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:false ~other_axes_pointwise:true ~is_diff:true
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:false ~other_axes_pointwise:true
+      ~grad_spec:If_needed
 
   let ( @/. ) =
-    dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:false ~other_axes_pointwise:true ~is_diff:true
+    dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:false ~other_axes_pointwise:true
+      ~grad_spec:If_needed
 
   let ( @-. ) =
     dynamic_subtensor ~over_kind:Shape.AxisKey.Output ~from_left:false ~other_axes_pointwise:true
-      ~is_diff:true
+      ~grad_spec:If_needed
 
   let ( @|^ ) =
     dynamic_subtensor ~over_kind:Shape.AxisKey.Batch ~from_left:false ~other_axes_pointwise:false
-      ~is_diff:true
+      ~grad_spec:If_needed
 
   let ( @/^ ) =
     dynamic_subtensor ~over_kind:Shape.AxisKey.Input ~from_left:false ~other_axes_pointwise:false
-      ~is_diff:true
+      ~grad_spec:If_needed
 
   let ( @-^ ) =
     dynamic_subtensor ~over_kind:Shape.AxisKey.Output ~from_left:false ~other_axes_pointwise:false
-      ~is_diff:true
+      ~grad_spec:If_needed
 end
 
-module FDSL = struct
-  include Tensor.FDSL
+module TDSL = struct
+  include Tensor.TDSL
   module O = O
 
-  let einsum ?desc_label s = einsum ?desc_label s ~is_diff:true
-  let einsum1 ?desc_label s = einsum1 ?desc_label s ~is_diff:true
-  let range = range ~is_diff:true
-  let range_of_shape = range_of_shape ~is_diff:true
+  let einsum ?desc_label s = einsum ?desc_label s ~grad_spec:If_needed
+  let einsum1 ?desc_label s = einsum1 ?desc_label s ~grad_spec:If_needed
+  let range = range ~grad_spec:If_needed
+  let range_of_shape = range_of_shape ~grad_spec:If_needed
   let data = data
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient
 
   let init_const ~l ?(b = []) ?(i = []) ?(o = []) cs =
-    term ~label:l ~needs_gradient:false ~batch_dims:b ~input_dims:i ~output_dims:o ~init_op:(Constant_fill cs)
-      ()
+    term ~label:l ~grad_spec:Prohibit_grad ~batch_dims:b ~input_dims:i ~output_dims:o
+      ~init_op:(Constant_fill cs) ()
 
   let init_param ~l ?(b = []) ?(i = []) ?(o = []) cs =
-    term ~label:l ~needs_gradient:true ~batch_dims:b ~input_dims:i ~output_dims:o ~init_op:(Constant_fill cs)
-      ()
+    term ~label:l ~grad_spec:Require_grad ~batch_dims:b ~input_dims:i ~output_dims:o
+      ~init_op:(Constant_fill cs) ()
 end
 
-module NFO = struct
-  include NFO_without_pow
+module NDO = struct
+  include NDO_without_pow
 
-  let ( **. ) ?desc_label base exp = pointpow ?desc_label exp base ~is_diff:false
+  let ( **. ) ?desc_label base exp = pointpow ?desc_label exp base ~grad_spec:Prohibit_grad
   let ( /. ) ?desc_label t1 t2 = ( *. ) ?desc_label t1 (t2 **. -1.0)
 end
 
-module NFDSL = struct
-  include Tensor.NFDSL
-  module O = NFO
+module NTDSL = struct
+  include Tensor.NTDSL
+  module O = NDO
 
-  let einsum ?desc_label s = einsum ?desc_label s ~is_diff:false
-  let einsum1 ?desc_label s = einsum1 ?desc_label s ~is_diff:false
-  let term = Tensor.term ~is_diff:false
-  let range = range ~is_diff:false
-  let range_of_shape = range_of_shape ~is_diff:false
+  let einsum ?desc_label s = einsum ?desc_label s ~grad_spec:Prohibit_grad
+  let einsum1 ?desc_label s = einsum1 ?desc_label s ~grad_spec:Prohibit_grad
+  let term = Tensor.term ~grad_spec:Prohibit_grad
+  let range = range ~grad_spec:Prohibit_grad
+  let range_of_shape = range_of_shape ~grad_spec:Prohibit_grad
 end

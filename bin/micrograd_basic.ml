@@ -1,8 +1,8 @@
 open Base
 open Ocannl
 module CDSL = Code.CDSL
-module FDSL = Operation.FDSL
-module NFDSL = Operation.NFDSL
+module TDSL = Operation.TDSL
+module NTDSL = Operation.NTDSL
 module SDSL = Session.SDSL
 
 let () = SDSL.set_executor Gccjit

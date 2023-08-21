@@ -1,7 +1,7 @@
 open Base
 open Ocannl
 module CDSL = Code.CDSL
-module FDSL = Operation.FDSL
+module TDSL = Operation.TDSL
 module SDSL = Session.SDSL
 
 let () = SDSL.set_executor Gccjit
@@ -387,9 +387,9 @@ let%expect_test "Big matrix" =
   drop_all_sessions ();
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
-  let hey = FDSL.O.(!~"hey") in
-  let zero_to_twenty = FDSL.range 20 in
-  let y = FDSL.O.((hey * zero_to_twenty) + zero_to_twenty) in
+  let hey = TDSL.O.(!~"hey") in
+  let zero_to_twenty = TDSL.range 20 in
+  let y = TDSL.O.((hey * zero_to_twenty) + zero_to_twenty) in
   refresh_session ();
   print_tensor ~with_code:false ~with_grad:false `Inline zero_to_twenty;
   [%expect
@@ -439,7 +439,7 @@ let%expect_test "Very big tensor" =
   drop_all_sessions ();
   Random.init 0;
   let hey =
-    FDSL.range_of_shape
+    TDSL.range_of_shape
       ~batch_dims:[ CDSL.dim 6 ]
       ~input_dims:[ CDSL.dim 7; CDSL.dim 8; CDSL.dim 9 ]
       ~output_dims:[ CDSL.dim 10; CDSL.dim 11 ]

@@ -1,7 +1,7 @@
 open Base
 open Ocannl
-module FDSL = Operation.FDSL
-module NFDSL = Operation.NFDSL
+module TDSL = Operation.TDSL
+module NTDSL = Operation.NTDSL
 module CDSL = Code.CDSL
 module SDSL = Session.SDSL
 
@@ -34,14 +34,14 @@ let () =
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
   let moons_flat =
-    FDSL.init_const ~l:"moons_flat"
+    TDSL.init_const ~l:"moons_flat"
       ~b:[ n_batches; batch ]
       ~o:[ 2 ]
       moons_flat
   in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let moons_classes =
-    FDSL.init_const ~l:"moons_classes"
+    TDSL.init_const ~l:"moons_classes"
       ~b:[ n_batches; batch ]
       ~o:[ 1 ]
       moons_classes
@@ -57,7 +57,7 @@ let () =
   let learning_rates = ref [] in
   let%nn_op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
   let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in
-  let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:FDSL.O.( + ) in
+  let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:TDSL.O.( + ) in
   let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..batch) + (0.0001 *. reg_loss) in
   (* SDSL.everything_on_host_or_inlined (); *)
   for step = 1 to steps do

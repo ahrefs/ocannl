@@ -1,19 +1,19 @@
 open Base
 open Ocannl
-module FDSL = Operation.FDSL
-module NFDSL = Operation.NFDSL
+module TDSL = Operation.TDSL
+module NTDSL = Operation.NTDSL
 module CDSL = Code.CDSL
 
 let () = Session.SDSL.set_executor Gccjit
 
 let%expect_test "Synthetic data" =
-  (* let open Operation.FDSL in *)
+  (* let open Operation.TDSL in *)
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;
   let%nn_dt session_step ~o:1 = v =+ 1 in
   let c_data =
-    FDSL.term ~label:"fetch_callback" ~needs_gradient:false
+    TDSL.term ~label:"fetch_callback" ~grad_spec:Prohibit_grad
       ~batch_dims:[ CDSL.dim 1 ]
       ~input_dims:[]
       ~output_dims:[ CDSL.dim 2; CDSL.dim 3 ]

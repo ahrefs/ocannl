@@ -9,10 +9,10 @@ let ndarray_op ?desc_label ?axis_labels ?label expr =
   let edims dims = Ast_builder.Default.elist ~loc dims in
   let op =
     match (axis_labels, label) with
-    | None, None -> [%expr FDSL.ndarray]
-    | Some axis_labels, None -> [%expr FDSL.ndarray ~axis_labels:[%e axis_labels]]
-    | None, Some label -> [%expr FDSL.ndarray ~label:[%e label]]
-    | Some axis_labels, Some label -> [%expr FDSL.ndarray ~axis_labels:[%e axis_labels] ~label:[%e label]]
+    | None, None -> [%expr TDSL.ndarray]
+    | Some axis_labels, None -> [%expr TDSL.ndarray ~axis_labels:[%e axis_labels]]
+    | None, Some label -> [%expr TDSL.ndarray ~label:[%e label]]
+    | Some axis_labels, Some label -> [%expr TDSL.ndarray ~axis_labels:[%e axis_labels] ~label:[%e label]]
   in
   [%expr
     [%e op] ?desc_label:[%e opt_pat2string ~loc desc_label] ~batch_dims:[%e edims batch_dims]
@@ -21,7 +21,7 @@ let ndarray_op ?desc_label ?axis_labels ?label expr =
 let make_vb ?value ~loc ~str_loc ~ident string =
   let pat = Ast_helper.Pat.var ~loc { loc = str_loc; txt = ident } in
   let value = match value with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
-  let v = [%expr FDSL.params ?value:[%e value] [%e string]] in
+  let v = [%expr TDSL.params ?value:[%e value] [%e string]] in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
@@ -31,7 +31,7 @@ let make_vb_dims ~loc ~str_loc ~ident ~dims ~dims_loc string =
     let loc = dims_loc in
     List.fold_right dims ~init:[%expr []] ~f:(fun d ds -> [%expr [%e d] :: [%e ds]])
   in
-  let v = [%expr FDSL.params ~output_dims:[%e dims] [%e string]] in
+  let v = [%expr TDSL.params ~output_dims:[%e dims] [%e string]] in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
@@ -47,8 +47,8 @@ let make_vb_nd ~loc ~str_loc ?axis_labels ~ident ~init_nd string =
       let edims dims = Ast_builder.Default.elist ~loc dims in
       let op =
         match axis_labels with
-        | None -> [%expr FDSL.params]
-        | Some axis_labels -> [%expr FDSL.params ~axis_labels:[%e axis_labels]]
+        | None -> [%expr TDSL.params]
+        | Some axis_labels -> [%expr TDSL.params ~axis_labels:[%e axis_labels]]
       in
       [%expr
         [%e op] ~input_dims:[%e edims input_dims] ~output_dims:[%e edims output_dims] ~values:[%e values]
@@ -61,22 +61,22 @@ let rec translate ?desc_label expr =
   let loc = expr.pexp_loc in
   match expr with
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
-      (no_vbs, [%expr FDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] [%e expr]])
+      (no_vbs, [%expr TDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] [%e expr]])
   | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
-      (no_vbs, [%expr FDSL.number (Float.of_int [%e expr])])
+      (no_vbs, [%expr TDSL.number (Float.of_int [%e expr])])
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
         [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
       let axis = Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None)) in
       ( no_vbs,
-        [%expr FDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis] [%e f]] )
+        [%expr TDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis] [%e f]] )
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
         [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
       let axis = Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None)) in
       ( no_vbs,
         [%expr
-          FDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis]
+          TDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis]
             (Float.of_int [%e i])] )
   | [%expr
       [%e? expr1]
@@ -85,11 +85,11 @@ let rec translate ?desc_label expr =
       let vbs1, e1 = translate expr1 in
       let vbs2, e2 = translate expr2 in
       ( reduce_vbss [ vbs1; vbs2 ],
-        [%expr FDSL.einsum ?desc_label:[%e opt_pat2string ~loc desc_label] [%e spec] [%e e1] [%e e2]] )
+        [%expr TDSL.einsum ?desc_label:[%e opt_pat2string ~loc desc_label] [%e spec] [%e e1] [%e e2]] )
   | [%expr [%e? expr1] ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]]
     when String.contains spec_str '>' ->
       let vbs1, e1 = translate expr1 in
-      (vbs1, [%expr FDSL.einsum1 ?desc_label:[%e opt_pat2string ~loc desc_label] [%e spec] [%e e1]])
+      (vbs1, [%expr TDSL.einsum1 ?desc_label:[%e opt_pat2string ~loc desc_label] [%e spec] [%e e1]])
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
         [%e?
@@ -119,11 +119,11 @@ let rec translate ?desc_label expr =
       (* We need to hardcode these two patterns to prevent the numbers from being converted
          to tensors. *)
       let vbs, e1 = translate expr1 in
-      (vbs, [%expr FDSL.O.( **. ) ?desc_label:[%e opt_pat2string ~loc desc_label] [%e e1] [%e f]])
+      (vbs, [%expr TDSL.O.( **. ) ?desc_label:[%e opt_pat2string ~loc desc_label] [%e e1] [%e f]])
   | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
       let vbs, e1 = translate expr1 in
       ( vbs,
-        [%expr FDSL.O.( **. ) ?desc_label:[%e opt_pat2string ~loc desc_label] [%e e1] (Float.of_int [%e i])]
+        [%expr TDSL.O.( **. ) ?desc_label:[%e opt_pat2string ~loc desc_label] [%e e1] (Float.of_int [%e i])]
       )
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3]] ->
       let vbs1, e1 = translate ?desc_label expr1 in
@@ -235,7 +235,7 @@ let expr_expander ~loc ~path:_ payload =
                    vb with
                    pvb_expr =
                      [%expr
-                       let open! FDSL.O in
+                       let open! TDSL.O in
                        [%e v]];
                  } ))
       in
@@ -267,7 +267,7 @@ let translate_str ({ pstr_desc; pstr_loc = loc; _ } as str) =
           vb with
           pvb_expr =
             [%expr
-              let open! FDSL.O in
+              let open! TDSL.O in
               [%e v]];
         }
       in
