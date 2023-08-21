@@ -42,7 +42,6 @@ let backprop_roots = ref @@ Map.empty (module Int)
 let session_shape_updates : Shape.update_step list ref = ref []
 
 let session_initialized = ref 0
-
 let default_value_prec = ref Ndarray.single
 let default_grad_prec = ref Ndarray.single
 
@@ -125,10 +124,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
     Shape.derive_projections @@ List.hd_exn local_shape_updates
   in
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
-  let fwds =
-    List.map2_exn ts fwd_embed ~f:(fun ti e ->
-        if not e then High_level.Comment_reference ti.forward_body else ti.forward_body)
-  in
+  let fwds = List.map2_exn ts fwd_embed ~f:(fun ti e -> if not e then High_level.Noop else ti.forward_body) in
   let forward_body = High_level.sequential @@ fwds @ [ op_body ~v ~vs ~projections ] in
   if
     is_prohibit_grad grad_spec
@@ -150,8 +146,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
     let zero_grads =
       let f = dcode ~f:(fun diff -> diff.zero_grads) in
       let zeros =
-        List.map2_exn (List.map ~f ts) bck_embed ~f:(fun z e ->
-            if not e then High_level.Comment_reference z else z)
+        List.map2_exn (List.map ~f ts) bck_embed ~f:(fun z e -> if not e then High_level.Noop else z)
       in
       High_level.sequential @@ zeros @ [ fetch_zeros g shape ]
     in
@@ -161,8 +156,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
     let backprop_body =
       let f = dcode ~f:(fun diff -> diff.backprop_body) in
       let bcks =
-        List.map2_exn (List.map ~f ts) bck_embed ~f:(fun z e ->
-            if not e then High_level.Comment_reference z else z)
+        List.map2_exn (List.map ~f ts) bck_embed ~f:(fun z e -> if not e then High_level.Noop else z)
       in
       High_level.sequential @@ (grad_body ~v ~vs ~g ~gs ~projections :: List.rev bcks)
     in
@@ -196,14 +190,11 @@ let unop ~op_label ?desc_label ?compose_op ~op_body ~grad_body ?grad_spec t1 =
     [ t1 ]
 
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced
-    ?init_op ?fetch_op () =
+let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ?init_op
+    ?fetch_op () =
   let literal : bool =
     if is_require_grad grad_spec then false
-    else
-      match (init_op, fetch_op) with
-      | Some (Low_level.Constant_fill [| _ |]), None -> true
-      | _ -> false
+    else match (init_op, fetch_op) with Some (Low_level.Constant_fill [| _ |]), None -> true | _ -> false
   in
   let op_body ~v ~vs:_ ~projections =
     let open High_level in
@@ -227,7 +218,8 @@ let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axi
   in
   let grad_body ~v:_ ~vs:_ ~g:_ ~gs:_ ~projections:_ = High_level.Noop in
   let make_shape = Shape.make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced () in
-  op ~op_label:label ?desc_label ?compose_op:None ?transpose_op:None ~op_body ~grad_body ~grad_spec make_shape []
+  op ~op_label:label ?desc_label ?compose_op:None ?transpose_op:None ~op_body ~grad_body ~grad_spec make_shape
+    []
 
 let error_if_unknown_shape m =
   match m.shape with
