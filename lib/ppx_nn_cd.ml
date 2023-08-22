@@ -37,15 +37,15 @@ type projections_slot = LHS | RHS1 | RHS2 | Nonslot | Undet [@@deriving equal, s
 let assignment_op expr =
   let loc = expr.pexp_loc in
   match expr with
-  | [%expr ( =: )] -> (false, [%expr Code.Arg2])
-  | [%expr ( =+ )] -> (false, [%expr Code.Add])
-  | [%expr ( =* )] -> (false, [%expr Code.Mul])
-  | [%expr ( =** )] -> (false, [%expr Code.ToPowOf])
-  | [%expr ( =?/ )] -> (false, [%expr Code.Relu_gate])
-  | [%expr ( =:+ )] -> (true, [%expr Code.Add])
-  | [%expr ( =:* )] -> (true, [%expr Code.Mul])
-  | [%expr ( =:** )] -> (true, [%expr Code.ToPowOf])
-  | [%expr ( =:?/ )] -> (true, [%expr Code.Relu_gate])
+  | [%expr ( =: )] -> (false, [%expr Low_level.Arg2])
+  | [%expr ( =+ )] -> (false, [%expr Low_level.Add])
+  | [%expr ( =* )] -> (false, [%expr Low_level.Mul])
+  | [%expr ( =** )] -> (false, [%expr Low_level.ToPowOf])
+  | [%expr ( =?/ )] -> (false, [%expr Low_level.Relu_gate])
+  | [%expr ( =:+ )] -> (true, [%expr Low_level.Add])
+  | [%expr ( =:* )] -> (true, [%expr Low_level.Mul])
+  | [%expr ( =:** )] -> (true, [%expr Low_level.ToPowOf])
+  | [%expr ( =:?/ )] -> (true, [%expr Low_level.Relu_gate])
   | _ ->
       ( false,
         Ast_builder.Default.pexp_extension ~loc
@@ -56,17 +56,17 @@ let assignment_op expr =
 let binary_op expr =
   let loc = expr.pexp_loc in
   match expr with
-  | [%expr ( + )] -> ([%expr Shape.Pointwise_bin], [%expr Code.Add])
+  | [%expr ( + )] -> ([%expr Shape.Pointwise_bin], [%expr Low_level.Add])
   | [%expr ( * )] ->
       ( Ast_builder.Default.pexp_extension ~loc
         @@ Location.error_extensionf ~loc
              "No default compose type for binary `*`, try e.g. ~logic:\".\" for pointwise, %s"
              "~logic:\"@\" for matrix multiplication",
-        [%expr Code.Mul] )
-  | [%expr ( ** )] -> ([%expr Shape.Pointwise_bin], [%expr Code.ToPowOf])
-  | [%expr ( -?/ )] -> ([%expr Shape.Pointwise_bin], [%expr Code.Relu_gate])
-  | [%expr ( -/> )] -> ([%expr Shape.Pointwise_bin], [%expr Code.Arg2])
-  | [%expr ( -@> )] -> ([%expr Shape.Pointwise_bin], [%expr Code.Arg1])
+        [%expr Low_level.Mul] )
+  | [%expr ( ** )] -> ([%expr Shape.Pointwise_bin], [%expr Low_level.ToPowOf])
+  | [%expr ( -?/ )] -> ([%expr Shape.Pointwise_bin], [%expr Low_level.Relu_gate])
+  | [%expr ( -/> )] -> ([%expr Shape.Pointwise_bin], [%expr Low_level.Arg2])
+  | [%expr ( -@> )] -> ([%expr Shape.Pointwise_bin], [%expr Low_level.Arg1])
   | _ ->
       ( [%expr Shape.Pointwise_bin],
         Ast_builder.Default.pexp_extension ~loc
@@ -78,8 +78,8 @@ let is_binary_op ident = List.mem [ "+"; "*"; "**"; "-?/"; "-/>"; "-@>" ] ident 
 let unary_op expr =
   let loc = expr.pexp_loc in
   match expr with
-  | [%expr ( ~= )] -> ([%expr Shape.Pointwise_un], [%expr Code.Identity])
-  | [%expr ( !/ )] -> ([%expr Shape.Pointwise_un], [%expr Code.Relu])
+  | [%expr ( ~= )] -> ([%expr Shape.Pointwise_un], [%expr Low_level.Identity])
+  | [%expr ( !/ )] -> ([%expr Shape.Pointwise_un], [%expr Low_level.Relu])
   | _ ->
       ( [%expr Shape.Pointwise_un],
         Ast_builder.Default.pexp_extension ~loc
@@ -129,13 +129,13 @@ let with_forward_args setups body =
   let bindings = List.map setups ~f:(fun (pat, v, _) -> Ast_helper.Vb.mk ~loc pat v) in
   let forward_args =
     List.map setups ~f:(fun (_, _, fwd) -> fwd)
-    |> List.reduce ~f:(fun code fwd -> [%expr Code.Par ([%e code], [%e fwd])])
+    |> List.reduce ~f:(fun code fwd -> [%expr Low_level.Par ([%e code], [%e fwd])])
   in
   ( Code,
     Nonslot,
     match forward_args with
     | None -> body
-    | Some fwd -> Ast_helper.Exp.let_ ~loc Nonrecursive bindings [%expr Code.Seq ([%e fwd], [%e body])] )
+    | Some fwd -> Ast_helper.Exp.let_ ~loc Nonrecursive bindings [%expr Low_level.Seq ([%e fwd], [%e body])] )
 
 let project_xhs debug loc slot =
   match slot with
@@ -193,7 +193,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       let _typ1, _slot1, expr1 = translate ?desc_label ?proj_in_scope expr1 in
       let _typ2, _slot2, expr2 = translate ?desc_label ?proj_in_scope expr2 in
       (* We could warn if typ is not Code and slot is not Nonslot, but that could be annoying. *)
-      (Code, Nonslot, [%expr Code.ParHint ([%e expr1], [%e expr2])])
+      (Code, Nonslot, [%expr Low_level.ParHint ([%e expr1], [%e expr2])])
   | [%expr [%e? expr1] **. [%e? expr2]] ->
       (* If converting code or a node to a tensor was possible we would do it here.
          Since it's not, we let OCaml handle the type errors. Same further below. *)
@@ -246,7 +246,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let body =
         [%expr
-          Code.Accum_binop
+          Low_level.Accum_binop
             {
               zero_out = [%e zero_out];
               accum = [%e accu_op];
@@ -271,7 +271,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let body =
         [%expr
-          Code.Accum_unop
+          Low_level.Accum_unop
             {
               zero_out = [%e zero_out];
               accum = [%e accu_op];
@@ -292,12 +292,12 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let body =
         [%expr
-          Code.Accum_unop
+          Low_level.Accum_unop
             {
               zero_out = [%e zero_out];
               accum = [%e accu_op];
               lhs = [%e lhs];
-              op = Code.Identity;
+              op = Low_level.Identity;
               rhs = [%e rhs];
               projections = [%e projections];
             }]
@@ -385,7 +385,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let body =
         [%expr
-          Tensor.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id] ~op:Code.Identity
+          Tensor.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id] ~op:Low_level.Identity
             ~rhs_id:[%e rhs_id] ~logic:[%e logic]]
       in
       let setups = List.filter_map ~f:Fn.id [ lhs_setup; rhs_setup ] in
@@ -420,7 +420,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       in
       let body =
         [%expr
-          Code.Accum_binop
+          Low_level.Accum_binop
             {
               zero_out = [%e zero_out];
               accum = [%e accu_op];
@@ -456,7 +456,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       in
       let body =
         [%expr
-          Code.Accum_unop
+          Low_level.Accum_unop
             {
               zero_out = [%e zero_out];
               accum = [%e accu_op];
@@ -488,12 +488,12 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       in
       let body =
         [%expr
-          Code.Accum_unop
+          Low_level.Accum_unop
             {
               zero_out = [%e zero_out];
               accum = [%e accu_op];
               lhs = [%e lhs];
-              op = Code.Identity;
+              op = Low_level.Identity;
               rhs = [%e rhs];
               projections = [%e projections];
             }]
@@ -565,7 +565,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       let body =
         [%expr
           Tensor.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id]
-            ~lhs_is_grad:[%e lhs_is_grad] ~op:Code.Identity ~rhs_id:[%e rhs_id] ~rhs_is_grad:[%e rhs_is_grad]
+            ~lhs_is_grad:[%e lhs_is_grad] ~op:Low_level.Identity ~rhs_id:[%e rhs_id] ~rhs_is_grad:[%e rhs_is_grad]
             ~logic:Shape.Pointwise_un]
       in
       let setups = List.filter_map ~f:Fn.id [ lhs_setup; rhs_setup ] in
@@ -627,7 +627,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       [%e? expr2]] ->
       let _typ1, _slot1, expr1 = translate expr1 in
       let _typ2, _slot1, expr2 = translate ?desc_label ?proj_in_scope expr2 in
-      (Code, Nonslot, [%expr Code.Seq ([%e expr1], [%e expr2])])
+      (Code, Nonslot, [%expr Low_level.Seq ([%e expr1], [%e expr2])])
   | [%expr if [%e? expr1] then [%e? expr2] else [%e? expr3]] ->
       let typ2, slot2, expr2 = translate ?desc_label ?proj_in_scope expr2 in
       let typ3, slot3, expr3 = translate ?desc_label ?proj_in_scope expr3 in
@@ -638,7 +638,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       (typ, slot, [%expr if [%e expr1] then [%e expr2] else [%e expr3]])
   | [%expr if [%e? expr1] then [%e? expr2]] ->
       let _typ2, _slot2, expr2 = translate ?desc_label ?proj_in_scope expr2 in
-      (Code, Nonslot, [%expr if [%e expr1] then [%e expr2] else Code.Noop])
+      (Code, Nonslot, [%expr if [%e expr1] then [%e expr2] else Low_level.Noop])
   | { pexp_desc = Pexp_match (expr1, cases); _ } ->
       let typs, slots, cases =
         List.unzip3
@@ -724,7 +724,7 @@ let translate_dt ?desc_label (expr : expression) : expression =
             ?batch_dims:[%e opt_expr ~loc @@ edims batch_dims]
             ?input_dims:[%e opt_expr ~loc @@ edims input_dims]
             ?output_dims:[%e opt_expr ~loc @@ edims output_dims]
-            (fun ~n -> Code.Synthetic (Code.Block_comment ([%e label] ^ "%nn_dt", [%e body])))]
+            (fun ~n -> Low_level.Synthetic (Low_level.Block_comment ([%e label] ^ "%nn_dt", [%e body])))]
   in
   loop expr
 

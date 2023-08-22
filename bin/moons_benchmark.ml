@@ -2,11 +2,11 @@ open Base
 open Ocannl
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Code.CDSL
+module CDSL = Low_level.CDSL
 module SDSL = Session.SDSL
 
 let _suspended () =
-  (* Code.CDSL.with_debug := false; *)
+  (* Low_level.CDSL.with_debug := false; *)
   (* let open Operation.TDSL in *)
   let open SDSL.O in
   (* SDSL.set_executor Interpreter;
@@ -17,8 +17,8 @@ let _suspended () =
   CDSL.virtualize_settings.enable_device_only <- true;
   CDSL.virtualize_settings.inline_constants <- true;
   *)
-  Code.with_debug := true;
-  Code.keep_files_in_run_directory := true;
+  Low_level.with_debug := true;
+  Low_level.keep_files_in_run_directory := true;
   SDSL.drop_all_sessions ();
   Random.init 0;
   let parallel_dims = 1 in
@@ -172,9 +172,9 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
   SDSL.default_grad_prec := precision;
   let open SDSL.O in
   SDSL.drop_all_sessions ();
-  (* Code.with_debug := true; *)
-  (* Code.keep_files_in_run_directory := true; *)
-  (* Code.debug_verbose_trace := true; *)
+  (* Low_level.with_debug := true; *)
+  (* Low_level.keep_files_in_run_directory := true; *)
+  (* Low_level.debug_verbose_trace := true; *)
   Random.init (* random_seed *) 0;
   Ndarray.fixed_state_for_init := Some random_seed;
   (* let hid_2_3 = CDSL.dim 8 in
@@ -294,8 +294,8 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
         result = [%sexp_of: float * float] (!min_loss, !last_loss);
       }
   in
-  Code.with_debug := false;
-  Code.keep_files_in_run_directory := false;
+  Low_level.with_debug := false;
+  Low_level.keep_files_in_run_directory := false;
   let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in

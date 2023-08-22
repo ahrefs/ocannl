@@ -287,9 +287,15 @@ let params ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?values la
   term ?desc_label ~grad_spec:Require_grad ~batch_dims:[] ?input_dims ?output_dims ?axis_labels ?deduced
     ~label ~init_op ()
 
+module NTDSL = struct
+  let term = term ~grad_spec:Prohibit_grad
+  let number = number ~grad_spec:Prohibit_grad
+  let ndarray = ndarray ~grad_spec:Prohibit_grad
+end
+
 module TDSL = struct
-  let term = term
-  let number = number
-  let ndarray = ndarray
+  let term = term ~grad_spec:If_needed
+  let number = number ~grad_spec:If_needed
+  let ndarray = ndarray ~grad_spec:If_needed
   let params = params
 end

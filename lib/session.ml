@@ -17,7 +17,7 @@ let get_root id =
       raise @@ Session_error (msg, None)
 
 let get_node id =
-  match Hashtbl.find Code.global_node_store id with
+  match Hashtbl.find Low_level.global_node_store id with
   | Some r -> r
   | None ->
       let msg =
@@ -210,20 +210,20 @@ let print_tensor ~with_grad ~with_code ?(with_low_level = false) (style : array_
   if with_code then (
     (match t.forward_body with
     | Noop -> ()
-    | fwd_code -> Caml.Format.printf "Current forward body:@ %a@ " Code.fprint_code fwd_code);
+    | fwd_code -> Caml.Format.printf "Current forward body:@ %a@ " Low_level.fprint_code fwd_code);
     match t.diff with
     | Some { backprop_body = Noop; _ } -> ()
     | Some { backprop_body = bwd_code; _ } ->
-        Caml.Format.printf "Current backprop body:@ %a@ " Code.fprint_code bwd_code
+        Caml.Format.printf "Current backprop body:@ %a@ " Low_level.fprint_code bwd_code
     | None -> ());
   if with_low_level then (
     (match t.forward_body with
     | Noop -> ()
-    | fwd_code -> Caml.Format.printf "Current forward low-level body:@ %a@ " Code.fprint_low_level fwd_code);
+    | fwd_code -> Caml.Format.printf "Current forward low-level body:@ %a@ " Low_level.fprint_low_level fwd_code);
     match t.diff with
     | Some { backprop_body = Noop; _ } -> ()
     | Some { backprop_body = bwd_code; _ } ->
-        Caml.Format.printf "Current backprop low-level body:@ %a@ " Code.fprint_low_level bwd_code
+        Caml.Format.printf "Current backprop low-level body:@ %a@ " Low_level.fprint_low_level bwd_code
     | None -> ());
   Stdio.printf "\n%!"
 
@@ -235,7 +235,7 @@ let print_global_roots ~with_grad ~with_code (style : array_print_style) =
 
 let print_preamble () =
   (* Stdio.printf "%s\n%!" (Tensor.prefix_with_preamble "") *)
-  Code.print_preamble ()
+  Low_level.print_preamble ()
 
 (** *** Session management. *** *)
 type backend = Interpreter | Gccjit | Cuda [@@deriving sexp, equal]
@@ -246,32 +246,32 @@ let cleanup_executor_session = ref Exec_as_gccjit.cleanup_session
 
 let set_executor = function
   | Interpreter ->
-      exec := Code.interpret;
-      executor_error_message := Code.interpreter_error_message;
-      Code.virtualize_settings.sequential_minibatch <- true;
+      exec := Low_level.interpret;
+      executor_error_message := Low_level.interpreter_error_message;
+      Low_level.virtualize_settings.sequential_minibatch <- true;
       cleanup_executor_session := fun () -> ()
   | Gccjit ->
       exec := Exec_as_gccjit.jit;
       executor_error_message := Exec_as_gccjit.error_message;
-      Code.virtualize_settings.sequential_minibatch <- true;
+      Low_level.virtualize_settings.sequential_minibatch <- true;
       cleanup_executor_session := Exec_as_gccjit.cleanup_session
   | Cuda ->
       exec := Exec_as_cuda.jit;
       executor_error_message := Exec_as_cuda.error_message;
-      Code.virtualize_settings.sequential_minibatch <- false;
+      Low_level.virtualize_settings.sequential_minibatch <- false;
       cleanup_executor_session := Exec_as_cuda.cleanup_session
 
 let initialize_host_tensors traced_store =
   List.iter ~f:(function
-    | { Code.tensor = { id; field = Value } as ptr; dims; init_op } ->
+    | { Low_level.tensor = { id; field = Value } as ptr; dims; init_op } ->
         let dims = Array.map ~f:(fun d -> d.Shape.dim) @@ dims () in
-        let tn = Code.get_node traced_store ptr in
+        let tn = Low_level.get_node traced_store ptr in
         if tn.non_virtual && tn.non_device_only then
-          (Code.get id).node.value <- Ndarray.create !Tensor.default_value_prec dims init_op
+          (Low_level.get id).node.value <- Ndarray.create !Tensor.default_value_prec dims init_op
     | { tensor = { id; field = Grad } as ptr; dims; init_op } ->
         let dims = Array.map ~f:(fun d -> d.Shape.dim) @@ dims () in
-        let tn = Code.get_node traced_store ptr in
-        let v = (Code.get id).node in
+        let tn = Low_level.get_node traced_store ptr in
+        let v = (Low_level.get id).node in
         if tn.non_virtual && tn.non_device_only then
           g <- Some (Ndarray.create !Tensor.default_grad_prec dims init_op)
         else assert (Option.is_some g))
@@ -281,24 +281,24 @@ let compile_routine ~name code =
   let num_inits = List.length !session_initializations in
   let to_init = num_inits - !session_initialized in
   session_initialized := num_inits;
-  let traced_store, compiled = Code.compile_proc ~name ~for_step_update:false code in
+  let traced_store, compiled = Low_level.compile_proc ~name ~for_step_update:false code in
   (* Only initialize after compilation, to know which nodes are virtual. *)
   initialize_host_tensors traced_store @@ List.take !session_initializations to_init;
   !exec ~name (traced_store, compiled)
 
-let session_params () = Code.param_nodes ~from_id:!Tensor.first_session_id ()
+let session_params () = Low_level.param_nodes ~from_id:!Tensor.first_session_id ()
 let minus_learning_rate : Tensor.t option ref = ref None
 let last_refresh_roots = ref !Tensor.global_roots
 let last_with_backprop = ref false
 let last_update_params = ref false
 let last_updates_per_run = ref 1
-let session_step_update = ref Code.Noop
-let session_step_update_compiled = ref (Hashtbl.Poly.create (), Code.(Comment "Noop"))
+let session_step_update = ref Low_level.Noop
+let session_step_update_compiled = ref (Hashtbl.Poly.create (), Low_level.(Comment "Noop"))
 let session_step_update_routine = ref (fun () -> ())
 
 let generate_params_update ~(minus_lr : Tensor.t) ?params () =
   let params = match params with Some p -> p | None -> Hashtbl.data @@ session_params () in
-  let module CDSL = Code.CDSL in
+  let module CDSL = Low_level.CDSL in
   let module NTDSL = Operation.NTDSL in
   List.map params ~f:(fun v -> [%nn_cd v =+ minus_lr * g ~logic:"."])
 
@@ -330,7 +330,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
   last_update_params := update_params;
   let updates_per_run_changed = !last_updates_per_run <> updates_per_run in
   last_updates_per_run := updates_per_run;
-  if regenerate || roots_changed then List.iter !session_shape_updates ~f:Code.update_shape;
+  if regenerate || roots_changed then List.iter !session_shape_updates ~f:Low_level.update_shape;
   if regenerate then session_initialized := 0;
   let generating =
     regenerate || roots_changed || backprop_changed || update_params_changed || updates_per_run_changed
@@ -375,7 +375,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
     in
     (* Roots at the time of compilation are hosted, so that they can be consumed downstream. *)
     Map.iter_keys !Tensor.global_roots ~f:(fun id ->
-        let v = Code.get id in
+        let v = Low_level.get id in
         v.annot.value_never_virtual <- true;
         v.annot.value_never_device_only <- true);
     (* Params are hosted also, so they can be updated over multiple steps, stored, updated etc.
@@ -393,7 +393,7 @@ let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params
       let traced_store, compiled = compile_proc ~name ~verbose ~for_step_update:true !session_step_update in
       session_step_update_compiled :=
         ( traced_store,
-          Code.(
+          Low_level.(
             For_loop
               {
                 index = Shape.get_sym_for_axis Shape.Dim;
@@ -437,7 +437,7 @@ let drop_session () =
   close_session ();
   Tensor.first_session_id := beginning_of_session;
   for i = !Tensor.first_session_id to session_state.next_session_id - 1 do
-    Hashtbl.remove Code.global_node_store i
+    Hashtbl.remove Low_level.global_node_store i
   done;
   Node.unique_id := !Tensor.first_session_id
 
@@ -446,12 +446,12 @@ let drop_session () =
 let drop_all_sessions () =
   Tensor.first_session_id := 1;
   drop_session ();
-  Hashtbl.clear Code.global_node_store;
+  Hashtbl.clear Low_level.global_node_store;
   Node.unique_id := 1
 
 let save_all_tensors ~name =
   let out = Npy.Npz.open_out (name ^ ".npz") in
-  Hashtbl.iter Code.global_node_store ~f:(fun v ->
+  Hashtbl.iter Low_level.global_node_store ~f:(fun v ->
       let save field arr = Npy.Npz.write out Node.(tensor_ptr_name { id = v.id; field }) arr in
       let f arr = save Value arr in
       Ndarray.map { f } v.node.value;
@@ -462,10 +462,10 @@ let save_all_tensors ~name =
     does not complain about tensors missing in the file. *)
 let restore_tensors ?(partially = false) f_name =
   let inp = Npy.Npz.open_in (f_name ^ ".npz") in
-  Hashtbl.iteri Code.global_node_store ~f:(fun ~key:id ~data:n ->
+  Hashtbl.iteri Low_level.global_node_store ~f:(fun ~key:id ~data:n ->
       let restore field =
         let ptr = Node.{ id; field } in
-        match Code.get_tensor ptr with
+        match Low_level.get_tensor ptr with
         | None -> ()
         | Some arr ->
             let t_name = Node.(tensor_ptr_name { id = v.id; field }) in
@@ -540,9 +540,9 @@ module SDSL = struct
 
   let print_node_tree ?entries_per_axis ?(with_backend_info = false) ?with_id ?with_value ~with_grad ~depth id
       =
-    let extra_prefix = if with_backend_info then Some (fun annot -> annot.Code.backend_info) else None in
+    let extra_prefix = if with_backend_info then Some (fun annot -> annot.Low_level.backend_info) else None in
     try
-      let v = Code.get id in
+      let v = Low_level.get id in
       PrintBox_text.output Stdio.stdout
       @@ Node.to_printbox ?entries_per_axis ?with_id ?with_value ~with_grad ?extra_prefix ~depth v
     with Not_found_s _ | Caml.Not_found -> Caml.Format.printf "Node #%d does not exist.\n%!" id
@@ -566,7 +566,7 @@ module SDSL = struct
 
   let everything_fully_on_host () =
     for id = !Tensor.first_session_id to session_state.next_session_id - 1 do
-      let v = Code.get id in
+      let v = Low_level.get id in
       v.annot.value_never_virtual <- true;
       v.annot.grad_never_virtual <- true;
       v.annot.value_never_device_only <- true;
@@ -575,7 +575,7 @@ module SDSL = struct
 
   let everything_on_host_or_inlined () =
     for id = !Tensor.first_session_id to session_state.next_session_id - 1 do
-      let v = Code.get id in
+      let v = Low_level.get id in
       v.annot.value_never_device_only <- true;
       v.annot.grad_never_device_only <- true
     done
@@ -597,19 +597,19 @@ module SDSL = struct
     | Some a -> Ndarray.retrieve_2d_points ?from_axis ~xdim ~ydim a
 
   let enable_all_debugs ?(trace_interpreter = false) ?(hosted_only = true) () =
-    Code.CDSL.with_debug := true;
-    Code.CDSL.keep_files_in_run_directory := true;
-    if hosted_only then Code.CDSL.virtualize_settings.enable_device_only <- false;
-    if trace_interpreter then Code.CDSL.debug_verbose_trace := true
+    Low_level.CDSL.with_debug := true;
+    Low_level.CDSL.keep_files_in_run_directory := true;
+    if hosted_only then Low_level.CDSL.virtualize_settings.enable_device_only <- false;
+    if trace_interpreter then Low_level.CDSL.debug_verbose_trace := true
 
   let disable_all_debugs ?(restore_defaults = false) () =
-    Code.CDSL.debug_verbose_trace := false;
-    Code.CDSL.with_debug := false;
-    Code.CDSL.keep_files_in_run_directory := false;
-    if restore_defaults then Code.CDSL.virtualize_settings.enable_device_only <- true
+    Low_level.CDSL.debug_verbose_trace := false;
+    Low_level.CDSL.with_debug := false;
+    Low_level.CDSL.keep_files_in_run_directory := false;
+    if restore_defaults then Low_level.CDSL.virtualize_settings.enable_device_only <- true
 
   let default_value_prec = Tensor.default_value_prec
   let default_grad_prec = Tensor.default_grad_prec
-  let global_host_size_in_bytes () = Code.global_host_size_in_bytes ()
+  let global_host_size_in_bytes () = Low_level.global_host_size_in_bytes ()
   let num_domains = Node.num_domains
 end

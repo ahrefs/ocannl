@@ -2,7 +2,7 @@ open Base
 open Ocannl
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Code.CDSL
+module CDSL = Low_level.CDSL
 
 let () = Session.SDSL.set_executor Gccjit
 

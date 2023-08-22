@@ -2,7 +2,7 @@ open Base
 open Ocannl
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Code.CDSL
+module CDSL = Low_level.CDSL
 module SDSL = Session.SDSL
 
 let () = SDSL.set_executor Cuda
@@ -10,9 +10,9 @@ let () = SDSL.set_executor Cuda
 let () =
   let open SDSL.O in
   SDSL.drop_all_sessions ();
-  (* Code.with_debug := true; *)
-  (* Code.keep_files_in_run_directory := true; *)
-  (* Code.debug_verbose_trace := true; *)
+  (* Low_level.with_debug := true; *)
+  (* Low_level.keep_files_in_run_directory := true; *)
+  (* Low_level.debug_verbose_trace := true; *)
   Random.init 0;
   (* The seeds 0, 6, 8 are unlucky. Seeds 2-5, 7, 9 are good. From better to worse: 4, 2, 9, 7, 1, 5, 3. *)
   Ndarray.fixed_state_for_init := Some 4;
@@ -70,8 +70,8 @@ let () =
     losses := total_loss.@[0] :: !losses;
     log_losses := Float.log total_loss.@[0] :: !log_losses
   done;
-  Code.with_debug := false;
-  Code.keep_files_in_run_directory := false;
+  Low_level.with_debug := false;
+  Low_level.keep_files_in_run_directory := false;
   let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in

@@ -769,9 +769,9 @@ let optimize_proc ?(verbose = false) llc : traced_store * t =
   let traced_store : traced_store = Hashtbl.create (module Lazy_array) in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
   let reverse_node_map = Hashtbl.Poly.create () in
-  if verbose then Stdio.printf "Code.optimize_proc: tracing\n%!";
+  if verbose then Stdio.printf "Low_level.optimize_proc: tracing\n%!";
   visit_llc traced_store reverse_node_map ~max_visits:virtualize_settings.max_visits llc;
-  if verbose then Stdio.printf "Code.optimize_proc: optimizing\n%!";
+  if verbose then Stdio.printf "Low_level.optimize_proc: optimizing\n%!";
   let result =
     simplify_llc traced_store
     @@ cleanup_virtual_llc traced_store reverse_node_map
@@ -796,7 +796,7 @@ let compile_proc ~name ?(verbose = false) ~for_step_update:_ llc =
     Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t @@ snd result));
   Hashtbl.iter (fst result) ~f:(fun v ->
     if v.non_virtual && v.non_device_only then v.nd.materialized := true);
-  if verbose then Stdio.printf "Code.compile_proc: finished\n%!";
+  if verbose then Stdio.printf "Low_level.compile_proc: finished\n%!";
   result
 
 let loop_over_dims dims ~body =

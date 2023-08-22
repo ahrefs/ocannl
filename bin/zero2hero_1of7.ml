@@ -1,6 +1,6 @@
 open Base
 open Ocannl
-module CDSL = Code.CDSL
+module CDSL = Low_level.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module SDSL = Session.SDSL
@@ -84,8 +84,8 @@ let _suspended () =
   (* let open Operation.TDSL in *)
   let open SDSL.O in
   SDSL.drop_all_sessions ();
-  (* Code.with_debug := true;
-     Code.keep_files_in_run_directory := true; *)
+  (* Low_level.with_debug := true;
+     Low_level.keep_files_in_run_directory := true; *)
   Random.init 0;
   Stdio.print_endline "\nFirst refresh:";
   let%nn_op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
@@ -108,8 +108,8 @@ let _suspended () =
 
 let () =
   SDSL.drop_all_sessions ();
-  Code.with_debug := true;
-  Code.keep_files_in_run_directory := true;
+  Low_level.with_debug := true;
+  Low_level.keep_files_in_run_directory := true;
   Random.init 0;
   let%nn_op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%nn_op d = e + "c" [ 10 ] in

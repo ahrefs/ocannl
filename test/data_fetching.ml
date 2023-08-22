@@ -2,7 +2,7 @@ open Base
 open Ocannl
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Code.CDSL
+module CDSL = Low_level.CDSL
 
 let () = Session.SDSL.set_executor Gccjit
 
@@ -17,7 +17,7 @@ let%expect_test "Synthetic data" =
       ~batch_dims:[ CDSL.dim 1 ]
       ~input_dims:[]
       ~output_dims:[ CDSL.dim 2; CDSL.dim 3 ]
-      ~init_op:Code.Range_over_offsets
+      ~init_op:Low_level.Range_over_offsets
       ~fetch_op:(fun ~n -> Synthetic [%nn_cd v =+ session_step *. 100])
       ()
   in

@@ -28,7 +28,6 @@ let dims_to_string ?(with_axis_numbers = false) dims =
     String.concat_array ~sep:" x " @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ Int.to_string s)
   else String.concat_array ~sep:"x" @@ Array.map dims ~f:Int.to_string
 
-(** An index into a single axis for doing computations over multiple [Shape]-derived [Code]s. *)
 type axis_index =
   | Fixed_idx of int  (** The specific position along an axis. *)
   | Iterator of symbol
@@ -54,7 +53,7 @@ type projections = {
       (** [project_rhs1.(i)] Produces an index into the [i+1]th argument of an operation. *)
 }
 [@@deriving compare, equal, sexp]
-(** All the information relevant for [Code] code generation contained in a completed [update_step]. *)
+(** All the information relevant for code generation. *)
 
 let iterated dim = dim > 1
 let opt_symbol d = if iterated d then Some (get_symbol ()) else None

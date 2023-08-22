@@ -60,11 +60,11 @@ OCANNL follows different design choices than [OWL](https://ocaml.xyz/). For exam
 * OCANNL has fewer abstraction layers.
 * OCANNL has arguably a more powerful shape inference.
 * OCANNL only supports backpropagation, while OWL supports full forward and backward auto-diff.
-* Some aspects are more centralized in OCANNL than in OWL and form the "infrastructure", with less of an intention to be extended or even read by end-users:
+* Some aspects are more centralized in OCANNL than in OWL and form the "infrastructure":
   * Shape inference is fully handled by [`Shape`](lib/shape.ml).
   * [`Tensor`](lib/tensor.ml) implements "putting pieces together".
   * [`Session`](lib/session.ml) implements the session logic.
-  * [`Code`](lib/code.ml) generates the code and performs backend-agnostic optimizations (_virtual nodes_ whose computation is inlined).
+  * [`arrayjit/Low_level`](arrayjit/) generates the code and performs backend-agnostic optimizations (_virtual nodes_ whose computation is inlined).
 * Some aspects that are more core to OWL are "delegated to user-land" in OCANNL.
   * [`Operation`](lib/operation.ml) is just a bunch of functions, what users implementing new computational primitives would do.
   * Specific network architectures, e.g. MLP, CNN, Transformer, can hopefully be concisely tensorted and belong to individual projects in OCANNL -- while it seems to me they are more part of the library in OWL. In this regard working on new architectures is not impeded by OCANNL.

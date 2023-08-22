@@ -1,6 +1,6 @@
 open Base
 open Ocannl
-module CDSL = Code.CDSL
+module CDSL = Low_level.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module SDSL = Session.SDSL
@@ -10,8 +10,8 @@ let () = SDSL.set_executor Gccjit
 let _suspended () =
   SDSL.drop_all_sessions ();
   SDSL.set_executor Cuda;
-  Code.with_debug := true;
-  Code.keep_files_in_run_directory := true;
+  Low_level.with_debug := true;
+  Low_level.keep_files_in_run_directory := true;
   Random.init 0;
   let%nn_op c = "a" [ -4 ] + "b" [ 2 ] in
   (* let%nn_op c = c + c + 1 in
@@ -30,8 +30,8 @@ let _suspended () =
 let () =
   SDSL.drop_all_sessions ();
   SDSL.set_executor Cuda;
-  Code.with_debug := true;
-  Code.keep_files_in_run_directory := true;
+  Low_level.with_debug := true;
+  Low_level.keep_files_in_run_directory := true;
   Random.init 0;
   let%nn_op c = "a" [ -4 ] + "b" [ 2 ] in
   let%nn_op d = (a *. b) + (b **. 3) in

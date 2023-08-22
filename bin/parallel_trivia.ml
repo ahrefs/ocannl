@@ -1,6 +1,6 @@
 open Base
 open Ocannl
-module CDSL = Code.CDSL
+module CDSL = Low_level.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module SDSL = Session.SDSL

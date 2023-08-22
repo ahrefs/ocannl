@@ -339,7 +339,7 @@ let jit ~name ?verbose:_ compiled =
   let ctx = Context.create_child !session_context in
   Context.set_option ctx Context.Optimization_level !optimization_level;
   (*
-  if !Code.with_debug && !Code.keep_files_in_run_directory then (
+  if !Low_level.with_debug && !Low_level.keep_files_in_run_directory then (
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)

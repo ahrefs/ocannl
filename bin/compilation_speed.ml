@@ -2,7 +2,7 @@ open Base
 open Ocannl
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Code.CDSL
+module CDSL = Low_level.CDSL
 module SDSL = Session.SDSL
 
 let recompiling_graph executor opti () =
