@@ -52,6 +52,9 @@ end)
 (** A forward root is a tensor that is not (currently) used to compute another tensor. *)
 let forward_roots = ref @@ Map.empty (module Int)
 
+let is_fwd_root t = Map.mem !forward_roots t.id
+let remove_fwd_root t = forward_roots := Map.remove !forward_roots t.id
+
 (** A backprop root is a tensor with a gradient that is not (currently) receiving gradients from
     another tensor. I.e. it is not currently used to compute a tensor with a gradient. *)
 let backprop_roots = ref @@ Map.empty (module Int)
@@ -114,8 +117,8 @@ type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equa
 let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un)
     ~op_body ~grad_body ?(grad_spec = If_needed) make_shape ts =
   let ts = List.sort ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
-  let fwd_embed = List.map ts ~f:(fun ti -> Map.mem !forward_roots ti.id) in
-  List.iter2_exn ts fwd_embed ~f:(fun ti e -> if e then forward_roots := Map.remove !forward_roots ti.id);
+  let fwd_embed = List.map ts ~f:is_fwd_root in
+  List.iter2_exn ts fwd_embed ~f:(fun ti e -> if e then remove_fwd_root ti);
   let children = List.map2_exn ts fwd_embed ~f:(fun ti embedded -> { subtensor = ti; embedded }) in
   let id = session_state.next_session_id in
   session_state.next_session_id <- session_state.next_session_id + 1;

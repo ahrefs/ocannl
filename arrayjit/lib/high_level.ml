@@ -31,6 +31,8 @@ and t =
   | Fetch of { array : LA.t; fetch_op : fetch_op; dims : int array Lazy.t }
 [@@deriving sexp_of]
 
+let is_noop = function Noop -> true | _ -> false
+
 module Nd = Ndarray
 
 let remove_updates array c =

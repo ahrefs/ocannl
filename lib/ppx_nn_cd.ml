@@ -21,7 +21,7 @@ let ndarray_op ?desc_label ?axis_labels ?label expr =
     [%e op] ?desc_label:[%e opt_pat2string ~loc desc_label] ~batch_dims:[%e edims batch_dims]
       ~input_dims:[%e edims input_dims] ~output_dims:[%e edims output_dims] [%e values]]
 
-type expr_type = Code | Array | Array_opt | Tensor | Unknown
+type expr_type = Code | Array | Array_opt | Grad_of_tensor of expression | Tensor | Unknown
 
 let is_unknown = function Unknown -> true | _ -> false
 
@@ -85,25 +85,32 @@ let rec array_of_code c =
   let loc = c.pexp_loc in
   [%expr
     match [%e c] with
-    | Accum_binop { lhs; _ } | Accum_unop { lhs; _ } -> lhs
+    | High_level.Accum_binop { lhs; _ } | Accum_unop { lhs; _ } -> lhs
     | Fetch { array; _ } -> array
     | Seq (_, subexpr) | Block_comment (_, subexpr) -> [%e array_of_code [%expr subexpr]]
     | Noop -> Location.error_extensionf ~loc "ppx_ocannl %%nn_cd: Noop code does not refer to any data"]
 
-type binding_setup = { var : pattern; bind_to : expression; fwd_code : expression }
+type binding_setup = { var : pattern; lazy_bind_to : expression; fwd_code_or_noop : expression }
 
 let with_forward_args setups body =
   let loc = body.pexp_loc in
-  let bindings = List.map setups ~f:(fun { var; bind_to; _ } -> Ast_helper.Vb.mk ~loc var bind_to) in
+  let bindings =
+    List.map setups ~f:(fun { var; lazy_bind_to; _ } ->
+        Ast_helper.Vb.mk ~loc var [%expr Lazy.force [%e lazy_bind_to]])
+  in
   let forward_args =
-    List.map setups ~f:(fun { fwd_code; _ } -> fwd_code)
-    |> List.reduce ~f:(fun code fwd -> [%expr Low_level.Seq ([%e code], [%e fwd])])
+    List.map setups ~f:(fun { fwd_code_or_noop; _ } -> fwd_code_or_noop)
+    |> List.reduce ~f:(fun code fwd -> [%expr High_level.Seq ([%e code], [%e fwd])])
   in
   ( Code,
     Nonslot,
     match forward_args with
     | None -> body
-    | Some fwd -> Ast_helper.Exp.let_ ~loc Nonrecursive bindings [%expr Low_level.Seq ([%e fwd], [%e body])]
+    | Some fwd ->
+        [%expr
+          if High_level.is_noop [%e body] then High_level.Noop
+          else
+            [%e Ast_helper.Exp.let_ ~loc Nonrecursive bindings [%expr High_level.Seq ([%e fwd], [%e body])]]]
   )
 
 let project_p_slot debug loc slot =
@@ -119,6 +126,47 @@ let project_p_slot debug loc slot =
       Ast_builder.Default.pexp_extension ~loc
       @@ Location.error_extensionf ~loc "ppx_ocannl %%nn_cd: insufficient slot filler information at %s %s"
            debug "(incorporate one of: v, v1, v2, g, g1, g2, lhs, rhs, rhs1, rhs2)"
+
+type array_setup = {
+  slot : projections_slot;
+  filler_typ : expr_type;
+  binding : binding_setup option;
+  array_opt : expression;
+}
+
+let setup_array filler_pat (filler_typ, slot, filler) =
+  let loc = filler.pexp_loc in
+  match filler_typ with
+  | Tensor | Unknown ->
+      let t = pat2expr filler_pat in
+      let fwd_code_or_noop =
+        [%expr
+          if Tensor.is_fwd_root [%e t] then (
+            Tensor.remove_fwd_root [%e t];
+            [%e t].forward_body)
+          else High_level.Noop]
+      in
+      {
+        binding = Some { var = filler_pat; lazy_bind_to = [%expr lazy [%e filler]]; fwd_code_or_noop };
+        filler_typ;
+        slot;
+        array_opt = [%expr Some [%e t].value];
+      }
+  | Code ->
+      {
+        binding =
+          Some
+            {
+              var = filler_pat;
+              lazy_bind_to = [%expr lazy [%e filler]];
+              fwd_code_or_noop = pat2expr filler_pat;
+            };
+        filler_typ;
+        slot;
+        array_opt = [%expr Some [%e array_of_code filler]];
+      }
+  | Array -> { binding = None; filler_typ; slot; array_opt = [%expr Some [%e filler]] }
+  | Grad_of_tensor _ | Array_opt -> { binding = None; filler_typ; slot; array_opt = filler }
 
 let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * projections_slot * expression =
   let loc = expr.pexp_loc in
@@ -149,19 +197,20 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       (Tensor, Undet, ndarray_op expr)
   | { pexp_desc = Pexp_ident { txt = Lident ("v" | "lhs"); _ }; _ } -> (Array, LHS, expr)
   | { pexp_desc = Pexp_ident { txt = Lident "g"; _ }; _ } -> (Array_opt, LHS, expr)
-  | { pexp_desc = Pexp_ident { txt = Lident ("v1" | "rhs1" | "rhs"); _ }; _ } -> (Array, RHS1, expr)
-  | { pexp_desc = Pexp_ident { txt = Lident "g1"; _ }; _ } -> (Array_opt, RHS1, expr)
-  | { pexp_desc = Pexp_ident { txt = Lident ("v2" | "rhs2"); _ }; _ } -> (Array, RHS2, expr)
-  | { pexp_desc = Pexp_ident { txt = Lident ("g2"); _ }; _ } -> (Array_opt, RHS2, expr)
+  | { pexp_desc = Pexp_ident { txt = Lident "rhs1"; _ }; _ } -> (Array, RHS1, expr)
+  | { pexp_desc = Pexp_ident { txt = Lident "t1"; _ }; _ } -> (Tensor, RHS1, expr)
+  | { pexp_desc = Pexp_ident { txt = Lident "v1"; _ }; _ } -> (Array, RHS1, [%expr t1.Tensor.value])
+  | { pexp_desc = Pexp_ident { txt = Lident "g1"; _ }; _ } ->
+      (Array_opt, RHS1, [%expr Option.map t1.Tensor.diff ~f:(fun d -> d.Tensor.grad)])
+  | { pexp_desc = Pexp_ident { txt = Lident "rhs2"; _ }; _ } -> (Array, RHS2, expr)
+  | { pexp_desc = Pexp_ident { txt = Lident "t2"; _ }; _ } -> (Tensor, RHS2, expr)
+  | { pexp_desc = Pexp_ident { txt = Lident "v2"; _ }; _ } -> (Array, RHS2, [%expr t2.Tensor.value])
+  | { pexp_desc = Pexp_ident { txt = Lident "g2"; _ }; _ } ->
+      (Array_opt, RHS2, [%expr Option.map t2.Tensor.diff ~f:(fun d -> d.Tensor.grad)])
   | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_operator op_ident ->
       (Tensor, Undet, expr)
-  | [%expr [%e? expr1] || [%e? expr2]] ->
-      (* Check this before the generic application pattern. *)
-      let _typ1, _slot1, expr1 = translate ?desc_label ?proj_in_scope expr1 in
-      let _typ2, _slot2, expr2 = translate ?desc_label ?proj_in_scope expr2 in
-      (* We could warn if typ is not Code and slot is not Nonslot, but that could be annoying. *)
-      (Code, Nonslot, [%expr Low_level.ParHint ([%e expr1], [%e expr2])])
   | [%expr [%e? expr1] **. [%e? expr2]] ->
+      (* FIXME: the hard-coding is ugly. *)
       (* If converting code or a node to a tensor was possible we would do it here.
          Since it's not, we let OCaml handle the type errors. Same further below. *)
       let _typ1, slot1, expr1 = translate expr1 in
@@ -192,85 +241,91 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
   | [%expr [%e? expr1].grad] -> (
       let typ1, slot1, expr1 = translate ?desc_label ?proj_in_scope expr1 in
       match typ1 with
-      | Grad_of_code _ | Grad_of_source _ -> (typ1, slot1, expr1)
-      | Unknown | Tensor_or_node_or_data ->
-          (Grad_of_source expr1, slot1, [%expr CDSL.grad_of_id [%e expr1].id])
-      | Code ->
-          let id_expr = data_of_code expr1 in
-          (Grad_of_code expr1, slot1, [%expr CDSL.grad_of_id [%e id_expr].id])
-      | Tensor ->
-          ( Grad_of_source expr1,
+      | Unknown | Tensor ->
+          (Grad_of_tensor expr1, slot1, [%expr Option.map [%e expr1].Tensor.diff ~f:(fun d -> d.Tensor.grad)])
+      | Code | Array | Array_opt | Grad_of_tensor _ ->
+          ( Array_opt,
             slot1,
             Ast_builder.Default.pexp_extension ~loc
-            @@ Location.error_extensionf ~loc "ppx_ocannl %%nn_cd: non-diff tensors do not have a gradient" ))
+            @@ Location.error_extensionf ~loc "ppx_ocannl %%nn_cd: only tensors have a gradient" ))
+  | [%expr [%e? expr1].value] -> (
+      let ((typ1, slot1, expr1) as result) = translate ?desc_label ?proj_in_scope expr1 in
+      (* TODO: maybe this is too permissive? *)
+      match typ1 with
+      | Unknown | Tensor -> (Array, slot1, [%expr [%e expr1].Tensor.value])
+      | Code -> (Array, slot1, array_of_code expr1)
+      | Array | Array_opt | Grad_of_tensor _ -> result)
   | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections]))] ->
       let zero_out, accu_op = assignment_op accu_op in
-      let lhs_setup, _lhs_typ, _lhs_slot, lhs =
-        setup_array [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
-      in
+      let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs in
       let _, bin_op = binary_op bin_op in
-      let rhs1_setup, _rhs1_typ, _rhs1_slot, rhs1 = setup_array [%pat? nondiff___rhs1] @@ translate rhs1 in
-      let rhs2_setup, _rhs2_typ, _rhs2_slot, rhs2 = setup_array [%pat? nondiff___rhs2] @@ translate rhs2 in
+      let setup_r1 = setup_array [%pat? nondiff___rhs1] @@ translate rhs1 in
+      let setup_r2 = setup_array [%pat? nondiff___rhs2] @@ translate rhs2 in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
+      (* TODO: might be better to treat missing [rhs1, rhs2] as zeros rather than eliding the code. *)
       let body =
         [%expr
-          High_level.Accum_binop
-            {
-              zero_out = [%e zero_out];
-              accum = [%e accu_op];
-              lhs = [%e lhs];
-              op = [%e bin_op];
-              rhs1 = [%e rhs1];
-              rhs2 = [%e rhs2];
-              projections = [%e projections];
-            }]
+          Option.value ~default:High_level.Noop
+          @@ Option.map3 [%e setup_l.array_opt] [%e setup_r1.array_opt] [%e setup_r2.array_opt]
+               ~f:(fun lhs rhs1 rhs2 ->
+                 High_level.Accum_binop
+                   {
+                     zero_out = [%e zero_out];
+                     accum = [%e accu_op];
+                     lhs;
+                     op = [%e bin_op];
+                     rhs1;
+                     rhs2;
+                     projections = [%e projections];
+                   })]
       in
-      let setups = List.filter_map ~f:Fn.id [ lhs_setup; rhs1_setup; rhs2_setup ] in
+      let setups = List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r1; setup_r2 ] in
       with_forward_args setups body
   | [%expr [%e? accu_op] [%e? lhs] (([%e? un_op] [%e? rhs]) ~projections:[%e? projections])]
   | [%expr [%e? accu_op] [%e? lhs] ([%e? un_op] ([%e? rhs] ~projections:[%e? projections]))] ->
       (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
       let zero_out, accu_op = assignment_op accu_op in
-      let lhs_setup, _lhs_typ, _lhs_slot, lhs =
-        setup_array [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
-      in
+      let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs in
       let _, un_op = unary_op un_op in
-      let rhs_setup, _rhs_typ, _rhs_slot, rhs = setup_array [%pat? nondiff___rhs] @@ translate rhs in
+      let setup_r = setup_array [%pat? nondiff___rhs] @@ translate rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
+      (* TODO: might be better to treat missing [rhs] as zeros rather than eliding the code. *)
       let body =
         [%expr
-          High_level.Accum_unop
-            {
-              zero_out = [%e zero_out];
-              accum = [%e accu_op];
-              lhs = [%e lhs];
-              op = [%e un_op];
-              rhs = [%e rhs];
-              projections = [%e projections];
-            }]
+          Option.value ~default:High_level.Noop
+          @@ Option.map2 [%e setup_l.array_opt] [%e setup_r.array_opt] ~f:(fun lhs rhs1 rhs2 ->
+                 High_level.Accum_unop
+                   {
+                     zero_out = [%e zero_out];
+                     accum = [%e accu_op];
+                     lhs;
+                     op = [%e un_op];
+                     rhs;
+                     projections = [%e projections];
+                   })]
       in
-      let setups = List.filter_map ~f:Fn.id [ lhs_setup; rhs_setup ] in
+      let setups = List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r ] in
       with_forward_args setups body
   | [%expr [%e? accu_op] [%e? lhs] ([%e? rhs] ~projections:[%e? projections])] ->
       let zero_out, accu_op = assignment_op accu_op in
-      let lhs_setup, _lhs_typ, _lhs_slot, lhs =
-        setup_array [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
-      in
-      let rhs_setup, _rhs_typ, _rhs_slot, rhs = setup_array [%pat? nondiff___rhs] @@ translate rhs in
+      let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs in
+      let setup_r = setup_array [%pat? nondiff___rhs] @@ translate rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let body =
         [%expr
-          High_level.Accum_unop
-            {
-              zero_out = [%e zero_out];
-              accum = [%e accu_op];
-              lhs = [%e lhs];
-              op = Low_level.Identity;
-              rhs = [%e rhs];
-              projections = [%e projections];
-            }]
+          Option.value ~default:High_level.Noop
+          @@ Option.map2 [%e setup_l.array_opt] [%e setup_r.array_opt] ~f:(fun lhs rhs1 rhs2 ->
+                 High_level.Accum_unop
+                   {
+                     zero_out = [%e zero_out];
+                     accum = [%e accu_op];
+                     lhs;
+                     op = Low_level.Identity;
+                     rhs;
+                     projections = [%e projections];
+                   })]
       in
-      let setups = List.filter_map ~f:Fn.id [ lhs_setup; rhs_setup ] in
+      let setups = List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r ] in
       with_forward_args setups body
   | [%expr
       [%e? accu_op]
@@ -286,28 +341,36 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
         else [%expr Shape.Einsum [%e logic]]
       in
       let zero_out, accu_op = assignment_op accu_op in
-      let lhs_setup, lhs_typ, _lhs_slot, lhs_id =
-        setup_node_id [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
-      in
+      let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs in
       let _, bin_op = binary_op bin_op in
-      let rhs1_setup, rhs1_typ, _rhs1_slot, rhs1_id =
-        setup_node_id [%pat? nondiff___rhs1] @@ translate rhs1
-      in
-      let rhs2_setup, rhs2_typ, _rhs2_slot, rhs2_id =
-        setup_node_id [%pat? nondiff___rhs2] @@ translate rhs2
-      in
+      let setup_r1 = setup_array [%pat? nondiff___rhs1] @@ translate rhs1 in
+      let setup_r2 = setup_array [%pat? nondiff___rhs2] @@ translate rhs2 in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
-      let lhs_is_grad = if is_grad lhs_typ then [%expr true] else [%expr false] in
-      let rhs1_is_grad = if is_grad rhs1_typ then [%expr true] else [%expr false] in
-      let rhs2_is_grad = if is_grad rhs2_typ then [%expr true] else [%expr false] in
+      let args_for xhs_typ xhs =
+        match xhs_typ with
+        | Grad_of_tensor t -> (t, [%expr true])
+        | Tensor | Unknown -> (xhs, [%expr false])
+        | _ ->
+            ( Ast_builder.Default.pexp_extension ~loc
+              @@ Location.error_extensionf ~loc
+                   "ppx_ocannl %%nn_cd: cannot use `~logic` (infer shapes) for arrays, use tensors or \
+                    `.grad` notation",
+              [%expr false] )
+      in
+      let t_expr, lhs_is_grad = args_for setup_l.filler_typ lhs in
+      let t1_expr, rhs1_is_grad = args_for setup_r1.filler_typ rhs1 in
+      let t2_expr, rhs2_is_grad = args_for setup_r2.filler_typ rhs2 in
       let body =
         [%expr
-          Tensor.raw_binop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id]
-            ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e bin_op] ~rhs1_id:[%e rhs1_id]
-            ~rhs1_is_grad:[%e rhs1_is_grad] ~rhs2_id:[%e rhs2_id] ~rhs2_is_grad:[%e rhs2_is_grad]
-            ~logic:[%e logic]]
+          Option.value ~default:High_level.Noop
+          @@ Option.map3 [%e setup_l.array_opt] [%e setup_r1.array_opt] [%e setup_r2.array_opt]
+               ~f:(fun lhs rhs1 rhs2 ->
+                 Tensor.raw_binop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~t:[%e t_expr]
+                   ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e bin_op] ~t1:[%e t1_expr]
+                   ~rhs1_is_grad:[%e rhs1_is_grad] ~t2:[%e t2_expr] ~rhs2_is_grad:[%e rhs2_is_grad]
+                   ~logic:[%e logic])]
       in
-      let setups = List.filter_map ~f:Fn.id [ lhs_setup; rhs1_setup; rhs2_setup ] in
+      let setups = List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r1; setup_r2 ] in
       with_forward_args setups body
   | [%expr
       [%e? accu_op]
@@ -328,35 +391,32 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
         else [%expr Shape.Permute [%e logic]]
       in
       let zero_out, accu_op = assignment_op accu_op in
-      let lhs_setup, lhs_typ, _lhs_slot, lhs_id =
-        setup_node_id [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
-      in
+      let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs in
       let _, un_op = unary_op un_op in
-      let rhs_setup, rhs_typ, _rhs_slot, rhs_id = setup_node_id [%pat? nondiff___rhs] @@ translate rhs in
+      let setup_r = setup_array [%pat? nondiff___rhs] @@ translate rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
-      let lhs_is_grad = if is_grad lhs_typ then [%expr true] else [%expr false] in
-      let rhs_is_grad = if is_grad rhs_typ then [%expr true] else [%expr false] in
+      let args_for xhs_typ xhs =
+        match xhs_typ with
+        | Grad_of_tensor t -> (t, [%expr true])
+        | Tensor | Unknown -> (xhs, [%expr false])
+        | _ ->
+            ( Ast_builder.Default.pexp_extension ~loc
+              @@ Location.error_extensionf ~loc
+                   "ppx_ocannl %%nn_cd: cannot use `~logic` (infer shapes) for arrays, use tensors or \
+                    `.grad` notation",
+              [%expr false] )
+      in
+      let t_expr, lhs_is_grad = args_for setup_l.filler_typ lhs in
+      let t1_expr, rhs_is_grad = args_for setup_r.filler_typ rhs in
       let body =
         [%expr
-          Tensor.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id]
-            ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e un_op] ~rhs_id:[%e rhs_id] ~rhs_is_grad:[%e rhs_is_grad]
-            ~logic:[%e logic]]
+          Option.value ~default:High_level.Noop
+          @@ Option.map2 [%e setup_l.array_opt] [%e setup_r.array_opt] ~f:(fun lhs rhs ->
+                 Tensor.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~t:[%e t_expr]
+                   ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e un_op] ~t1:[%e t1_expr] ~rhs_is_grad:[%e rhs_is_grad]
+                   ~logic:[%e logic])]
       in
-      let setups = List.filter_map ~f:Fn.id [ lhs_setup; rhs_setup ] in
-      with_forward_args setups body
-  | [%expr [%e? accu_op] [%e? lhs] ([%e? rhs] ~logic:[%e? logic])] ->
-      let zero_out, accu_op = assignment_op accu_op in
-      let lhs_setup, _lhs_typ, _lhs_slot, lhs_id =
-        setup_node_id [%pat? nondiff___lhs] @@ translate ?desc_label ?proj_in_scope lhs
-      in
-      let rhs_setup, _rhs_typ, _rhs_slot, rhs_id = setup_node_id [%pat? nondiff___rhs] @@ translate rhs in
-      let zero_out = if zero_out then [%expr true] else [%expr false] in
-      let body =
-        [%expr
-          Tensor.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~lhs_id:[%e lhs_id]
-            ~op:Low_level.Identity ~rhs_id:[%e rhs_id] ~logic:[%e logic]]
-      in
-      let setups = List.filter_map ~f:Fn.id [ lhs_setup; rhs_setup ] in
+      let setups = List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r ] in
       with_forward_args setups body
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
@@ -376,15 +436,15 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
         let project_rhs1 = project_slot "RHS1" rhs1.pexp_loc rhs1_slot in
         let project_rhs2 = project_slot "RHS2" rhs2.pexp_loc rhs2_slot in
         [%expr
-          fun () ->
-            let p = projections () in
-            Shape.
-              {
-                p with
-                project_lhs = [%e project_lhs];
-                project_rhs1 = [%e project_rhs1];
-                project_rhs2 = Some [%e project_rhs2];
-              }]
+          lazy
+            (let p = Lazy.force projections in
+             Shape.
+               {
+                 p with
+                 project_lhs = [%e project_lhs];
+                 project_rhs1 = [%e project_rhs1];
+                 project_rhs2 = Some [%e project_rhs2];
+               })]
       in
       let body =
         [%expr
@@ -595,7 +655,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       [%e? expr2]] ->
       let _typ1, _slot1, expr1 = translate expr1 in
       let _typ2, _slot1, expr2 = translate ?desc_label ?proj_in_scope expr2 in
-      (Code, Nonslot, [%expr Low_level.Seq ([%e expr1], [%e expr2])])
+      (Code, Nonslot, [%expr High_level.Seq ([%e expr1], [%e expr2])])
   | [%expr if [%e? expr1] then [%e? expr2] else [%e? expr3]] ->
       let typ2, slot2, expr2 = translate ?desc_label ?proj_in_scope expr2 in
       let typ3, slot3, expr3 = translate ?desc_label ?proj_in_scope expr3 in
@@ -606,7 +666,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       (typ, slot, [%expr if [%e expr1] then [%e expr2] else [%e expr3]])
   | [%expr if [%e? expr1] then [%e? expr2]] ->
       let _typ2, _slot2, expr2 = translate ?desc_label ?proj_in_scope expr2 in
-      (Code, Nonslot, [%expr if [%e expr1] then [%e expr2] else Low_level.Noop])
+      (Code, Nonslot, [%expr if [%e expr1] then [%e expr2] else High_level.Noop])
   | { pexp_desc = Pexp_match (expr1, cases); _ } ->
       let typs, slots, cases =
         List.unzip3

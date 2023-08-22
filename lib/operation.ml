@@ -13,14 +13,14 @@ let add =
   let open Low_level in
   let module NTDSL = Empty_DSL in
   let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =: v1 + v2 in
-  let%nn_cd grad_body ~v ~g ~t1 ~t2 ~projections = g1 =+ g || g2 =+ g in
+  let%nn_cd grad_body ~v ~g ~t1 ~t2 ~projections = g1 =+ g; g2 =+ g in
   Tensor.binop ~compose_op:Pointwise_bin ~op_label:"+" ~op_body ~grad_body
 
 let pointmul =
   let open Low_level in
   let module NTDSL = Empty_DSL in
   let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =: v1 * v2 in
-  let%nn_cd grad_body ~v ~g ~t1 ~t2 ~projections = g1 =+ g * v2 || g2 =+ v1 * g in
+  let%nn_cd grad_body ~v ~g ~t1 ~t2 ~projections = g1 =+ g * v2; g2 =+ v1 * g in
   Tensor.binop ~compose_op:Pointwise_bin ~op_label:"*." ~op_body ~grad_body
 
 (* N1: AxB, N2 BxC, v: AxC, A: output of N1, B: input/output of N1/N2, C: input of N2.
@@ -34,7 +34,7 @@ let matmul =
   let open Low_level in
   let module NTDSL = Empty_DSL in
   let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
-  let%nn_cd grad_body ~v ~g ~t1 ~t2 ~projections = g1 =+ g * v2 || g2 =+ v1 * g in
+  let%nn_cd grad_body ~v ~g ~t1 ~t2 ~projections = g1 =+ g * v2; g2 =+ v1 * g in
   Tensor.binop ~compose_op:Compose ~op_label:"*" ~op_body ~grad_body
 
 (** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of
@@ -46,7 +46,7 @@ let einsum ?desc_label spec =
   let open Low_level in
   let module NTDSL = Empty_DSL in
   let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
-  let%nn_cd grad_body ~v ~g ~t1 ~t2 ~projections = g1 =+ g * v2 || g2 =+ v1 * g in
+  let%nn_cd grad_body ~v ~g ~t1 ~t2 ~projections = g1 =+ g * v2; g2 =+ v1 * g in
   Tensor.binop ?desc_label ~compose_op:(Einsum spec) ~op_label:";=>" ~op_body ~grad_body
 
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract diagonals,
