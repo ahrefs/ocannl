@@ -728,4 +728,33 @@ type printbox =
   | `Vlist of printbox list ]
 [@@deriving sexp, compare]
 
+
+
+let setup_array hs_pat (hs_typ, slot, hs) =
+  let loc = hs.pexp_loc in
+  match hs_typ with
+  | Tensor ->
+      ( Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].nondiff_forward_body]),
+        hs_typ,
+        slot,
+        [%expr CDSL.value_of_id [%e pat2expr hs_pat].id] )
+  | Unknown | Tensor_or_node_or_data -> (None, hs_typ, slot, [%expr CDSL.value_of_id [%e hs].id])
+  | Grad_of_source expr -> (None, hs_typ, slot, [%expr CDSL.grad_of_id [%e expr].id])
+  | Grad_of_code expr ->
+      (Some (hs_pat, hs, pat2expr hs_pat), hs_typ, slot, [%expr CDSL.grad_of_id [%e data_of_code expr].id])
+  | Code -> (Some (hs_pat, hs, pat2expr hs_pat), hs_typ, slot, data_of_code hs)
+
+let setup_node_id hs_pat (hs_typ, slot, hs) =
+  let loc = hs.pexp_loc in
+  match hs_typ with
+  | Tensor ->
+      ( Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].nondiff_forward_body]),
+        hs_typ,
+        slot,
+        [%expr [%e pat2expr hs_pat].id] )
+  | Grad_of_source expr -> (None, hs_typ, slot, [%expr [%e expr].id])
+  | Unknown | Tensor_or_node_or_data -> (None, hs_typ, slot, [%expr [%e hs].id])
+  | Grad_of_code expr -> (Some (hs_pat, hs, pat2expr hs_pat), hs_typ, slot, [%expr [%e data_of_code expr].id])
+  | Code -> (Some (hs_pat, hs, pat2expr hs_pat), hs_typ, slot, [%expr [%e data_of_code hs].id])
+
 ]}

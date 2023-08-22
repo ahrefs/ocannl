@@ -1,6 +1,7 @@
 (** Computational primitives for neural networks, integrating [Tensor] with [Low_level]. *)
 
 open Base
+open Arrayjit
 module CDSL = Low_level.CDSL
 
 module Empty_DSL = struct
@@ -84,14 +85,14 @@ let rec pointpow ?desc_label ~grad_spec p t1 : Tensor.t =
     module O = NDO_without_pow
   end in
   let open Low_level in
-  let p_f = Tensor.number ~grad_spec p in
+  let p_t = NTDSL.number p in
   let%nn_cd op_body ~v ~v1 ~v2 ~projections = v =: v1 ** v2 ~projections in
   let%nn_cd grad_body =
-    if not grad_spec then fun ~n:_ ~v1:_ ~v2:_ ~projections:_ -> Noop
-    else if Float.equal p 2.0 then fun ~v ~v1 ~v2:_ ~g ~g1 ~g2:_ ~projections -> g1 =+ p_f *. t1 * g
-    else fun ~v ~v1 ~v2:_ ~g ~g1 ~g2:_ ~projections -> g1 =+ p_f *. (t1 **. (p -. 1.)) * g
+    if not grad_spec then fun ~v:_ ~v1:_ ~v2:_ ~projections:_ -> Noop
+    else if Float.equal p 2.0 then fun ~v ~v1 ~v2:_ ~g ~g1 ~g2:_ ~projections -> g1 =+ p_t *. v1 * g
+    else fun ~v ~v1 ~v2:_ ~g ~g1 ~g2:_ ~projections -> g1 =+ p_t *. (v1 **. (p -. 1.)) * g
   in
-  Tensor.binop ?desc_label ~compose_op:Pointwise_bin ~op_label:"**." ~op_body ~grad_body ~grad_spec t1 p_f
+  Tensor.binop ?desc_label ~compose_op:Pointwise_bin ~op_label:"**." ~op_body ~grad_body ~grad_spec t1 p_t
 
 let range ?desc_label ?(grad_spec = Tensor.Prohibit_grad) ?axis_label upto =
   Tensor.term ?desc_label ~grad_spec
