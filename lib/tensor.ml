@@ -120,11 +120,10 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
   let id = session_state.next_session_id in
   session_state.next_session_id <- session_state.next_session_id + 1;
   let shape = make_shape ~id in
-  let vs = List.map ts ~f:(fun ti -> ti.value) in
   let dims = lazy (Shape.to_dims shape) in
   let label = op_label ^ if String.is_empty desc_label then "" else "/" ^ desc_label in
   let prec =
-    List.map vs ~f:(fun v -> v.prec)
+    List.map ts ~f:(fun ti -> ti.value.prec)
     |> List.reduce ~f:Ndarray.promote_prec
     |> Option.value ~default:!default_value_prec
   in
@@ -144,7 +143,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
   in
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let fwds = List.map2_exn ts fwd_embed ~f:(fun ti e -> if not e then High_level.Noop else ti.forward_body) in
-  let forward_body = High_level.sequential @@ fwds @ [ op_body ~v ~vs ~projections ] in
+  let forward_body = High_level.sequential @@ fwds @ [ op_body ~v ~projections ] in
   if
     is_prohibit_grad grad_spec
     || (Fn.non is_require_grad grad_spec && List.for_all ts ~f:(fun ti -> Option.is_none ti.diff))
@@ -155,10 +154,9 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
   else
     let bck_embed = List.map ts ~f:(fun ti -> Map.mem !backprop_roots ti.id) in
     List.iter2_exn ts bck_embed ~f:(fun ti e -> if e then backprop_roots := Map.remove !backprop_roots ti.id);
-    let gs = List.map ts ~f:(fun ti -> Option.map ti.diff ~f:(fun d -> d.grad)) in
     let g_prec =
-      let f g = Option.map g ~f:(fun g -> g.LA.prec) in
-      Option.value ~default:!default_grad_prec @@ List.reduce ~f:Ndarray.promote_prec @@ List.filter_map gs ~f
+      let f ti = Option.map ti.diff ~f:(fun d -> d.grad.LA.prec) in
+      Option.value ~default:!default_grad_prec @@ List.reduce ~f:Ndarray.promote_prec @@ List.filter_map ts ~f
     in
     let g = LA.create g_prec ~id ~label:("grad " ^ label) ~dims ~literal:false default_init_op in
     let dcode ti = Option.value_map ti.diff ~default:High_level.Noop in
@@ -177,7 +175,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
       let bcks =
         List.map2_exn (List.map ~f ts) bck_embed ~f:(fun z e -> if not e then High_level.Noop else z)
       in
-      High_level.sequential @@ (grad_body ~v ~vs ~g ~gs ~projections :: List.rev bcks)
+      High_level.sequential @@ (grad_body ~v ~g ~projections :: List.rev bcks)
     in
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop_body } in
@@ -187,24 +185,14 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
     tensor
 
 let binop ~op_label ?desc_label ?compose_op ~op_body ~grad_body ?grad_spec t1 t2 =
-  let op_body ~v ~vs ~projections =
-    match vs with [ v1; v2 ] -> op_body ~v ~v1 ~v2 ~projections | _ -> assert false
-  in
-  let grad_body ~v ~vs ~g ~gs ~projections =
-    match (vs, gs) with
-    | [ v1; v2 ], [ g1; g2 ] -> grad_body ~v ~v1 ~v2 ~g ~g1 ~g2 ~projections
-    | _ -> assert false
-  in
+  let op_body ~v ~projections = op_body ~v ~t1 ~t2 ~projections in
+  let grad_body ~v ~g ~projections = grad_body ~v ~g ~t1 ~t2 ~projections in
   op ~op_label ?desc_label ?compose_op ?transpose_op:None ~op_body ~grad_body ?grad_spec (Shape.make ())
     [ t1; t2 ]
 
 let unop ~op_label ?desc_label ?compose_op ~op_body ~grad_body ?grad_spec t1 =
-  let op_body ~v ~vs ~projections =
-    match vs with [ v1 ] -> op_body ~v ~v1 ~projections | _ -> assert false
-  in
-  let grad_body ~v ~vs ~g ~gs ~projections =
-    match (vs, gs) with [ v1 ], [ g1 ] -> grad_body ~v ~v1 ~g ~g1 ~projections | _ -> assert false
-  in
+  let op_body ~v ~projections = op_body ~v ~t1 ~projections in
+  let grad_body ~v ~g ~projections = grad_body ~v ~g ~t1 ~projections in
   op ~op_label ?desc_label ?compose_op ?transpose_op:None ~op_body ~grad_body ?grad_spec (Shape.make ())
     [ t1 ]
 
@@ -215,7 +203,7 @@ let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axi
     if is_require_grad grad_spec then false
     else match (init_op, fetch_op) with Some (Low_level.Constant_fill [| _ |]), None -> true | _ -> false
   in
-  let op_body ~v ~vs:_ ~projections =
+  let op_body ~v ~projections =
     let open High_level in
     let dims = lazy (projections ()).Indexing.lhs_dims in
     match fetch_op with
@@ -235,7 +223,7 @@ let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axi
             v.never_device_only <- true);
         Fetch { array = v; fetch_op; dims }
   in
-  let grad_body ~v:_ ~vs:_ ~g:_ ~gs:_ ~projections:_ = High_level.Noop in
+  let grad_body ~v:_ ~g:_ ~projections:_ = High_level.Noop in
   let make_shape = Shape.make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced () in
   op ~op_label:label ?desc_label ?compose_op:None ?transpose_op:None ~op_body ~grad_body ~grad_spec make_shape
     []

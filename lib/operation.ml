@@ -12,15 +12,15 @@ end
 let add =
   let open Low_level in
   let module NTDSL = Empty_DSL in
-  let%nn_cd op_body ~v ~v1 ~v2 ~projections = v =: v1 + v2 in
-  let%nn_cd grad_body ~v ~v1 ~v2 ~g ~g1 ~g2 ~projections = g1 =+ g || g2 =+ g in
+  let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =: v1 + v2 in
+  let%nn_cd grad_body ~v ~g ~t1 ~t2 ~projections = g1 =+ g || g2 =+ g in
   Tensor.binop ~compose_op:Pointwise_bin ~op_label:"+" ~op_body ~grad_body
 
 let pointmul =
   let open Low_level in
   let module NTDSL = Empty_DSL in
-  let%nn_cd op_body ~v ~v1 ~v2 ~projections = v =: v1 * v2 in
-  let%nn_cd grad_body ~v ~v1 ~v2 ~g ~g1 ~g2 ~projections = g1 =+ g * v2 || g2 =+ v1 * g in
+  let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =: v1 * v2 in
+  let%nn_cd grad_body ~v ~g ~t1 ~t2 ~projections = g1 =+ g * v2 || g2 =+ v1 * g in
   Tensor.binop ~compose_op:Pointwise_bin ~op_label:"*." ~op_body ~grad_body
 
 (* N1: AxB, N2 BxC, v: AxC, A: output of N1, B: input/output of N1/N2, C: input of N2.
@@ -33,8 +33,8 @@ let pointmul =
 let matmul =
   let open Low_level in
   let module NTDSL = Empty_DSL in
-  let%nn_cd op_body ~v ~v1 ~v2 ~projections = v =:+ v1 * v2 in
-  let%nn_cd grad_body ~v ~v1 ~v2 ~g ~g1 ~g2 ~projections = g1 =+ g * v2 || g2 =+ v1 * g in
+  let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
+  let%nn_cd grad_body ~v ~g ~t1 ~t2 ~projections = g1 =+ g * v2 || g2 =+ v1 * g in
   Tensor.binop ~compose_op:Compose ~op_label:"*" ~op_body ~grad_body
 
 (** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of
@@ -45,8 +45,8 @@ let matmul =
 let einsum ?desc_label spec =
   let open Low_level in
   let module NTDSL = Empty_DSL in
-  let%nn_cd op_body ~v ~v1 ~v2 ~projections = v =:+ v1 * v2 in
-  let%nn_cd grad_body ~v ~v1 ~v2 ~g ~g1 ~g2 ~projections = g1 =+ g * v2 || g2 =+ v1 * g in
+  let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
+  let%nn_cd grad_body ~v ~g ~t1 ~t2 ~projections = g1 =+ g * v2 || g2 =+ v1 * g in
   Tensor.binop ?desc_label ~compose_op:(Einsum spec) ~op_label:";=>" ~op_body ~grad_body
 
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract diagonals,
@@ -57,15 +57,15 @@ let einsum ?desc_label spec =
 let einsum1 ?desc_label spec =
   let open Low_level in
   let module NTDSL = Empty_DSL in
-  let%nn_cd op_body ~v ~v1 ~projections = v =:+ v1 in
-  let%nn_cd grad_body ~v ~v1 ~g ~g1 ~projections = g1 =+ g in
+  let%nn_cd op_body ~v ~t1 ~projections = v =:+ v1 in
+  let%nn_cd grad_body ~v ~g ~t1 ~projections = g1 =+ g in
   Tensor.unop ?desc_label ~transpose_op:(Permute spec) ~op_label:"=>" ~op_body ~grad_body
 
 let relu =
   let open Low_level in
   let module NTDSL = Empty_DSL in
-  let%nn_cd op_body ~v ~v1 ~projections = v =: !/v1 ~projections in
-  let%nn_cd grad_body ~v ~v1 ~g ~g1 ~projections = g1 =+ v -?/ g in
+  let%nn_cd op_body ~v ~t1 ~projections = v =: !/v1 ~projections in
+  let%nn_cd grad_body ~v ~g ~t1 ~projections = g1 =+ v -?/ g in
   Tensor.unop ~transpose_op:Pointwise_un ~op_label:"r" ~op_body ~grad_body
 
 module NDO_without_pow = struct
@@ -86,11 +86,11 @@ let rec pointpow ?desc_label ~grad_spec p t1 : Tensor.t =
   end in
   let open Low_level in
   let p_t = NTDSL.number p in
-  let%nn_cd op_body ~v ~v1 ~v2 ~projections = v =: v1 ** v2 ~projections in
+  let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections in
   let%nn_cd grad_body =
-    if not grad_spec then fun ~v:_ ~v1:_ ~v2:_ ~projections:_ -> Noop
-    else if Float.equal p 2.0 then fun ~v ~v1 ~v2:_ ~g ~g1 ~g2:_ ~projections -> g1 =+ p_t *. v1 * g
-    else fun ~v ~v1 ~v2:_ ~g ~g1 ~g2:_ ~projections -> g1 =+ p_t *. (v1 **. (p -. 1.)) * g
+    if not grad_spec then fun ~v:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ -> Noop
+    else if Float.equal p 2.0 then fun ~v ~g ~t1 ~t2:_ ~projections -> g1 =+ p_t *. t1 * g
+    else fun ~v ~g ~t1 ~t2:_ ~projections -> g1 =+ p_t *. (t1 **. (p -. 1.)) * g
   in
   Tensor.binop ?desc_label ~compose_op:Pointwise_bin ~op_label:"**." ~op_body ~grad_body ~grad_spec t1 p_t
 
@@ -118,8 +118,8 @@ let data ?desc_label ?axis_labels ?(grad_spec = Tensor.Prohibit_grad) ~label ?(b
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient =
   let module NTDSL = Empty_DSL in
-  let grad_body ~v:_ ~v1:_ ~g:_ ~g1:_ ~projections:_ = High_level.Noop in
-  let%nn_cd op_body ~v ~v1 ~projections = v =: v1 in
+  let grad_body ~v:_ ~g:_ ~t1:_ ~projections:_ = High_level.Noop in
+  let%nn_cd op_body ~v ~t1 ~projections = v =: v1 in
   Tensor.unop ~transpose_op:Pointwise_un ~op_label:"stop_grad" ~op_body ~grad_body ~grad_spec:Prohibit_grad
 
 (** A [stop_broadcast] mutates the partially-inferred shape of a tensor in-place, substituting-in
