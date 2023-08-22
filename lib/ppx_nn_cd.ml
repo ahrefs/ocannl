@@ -9,12 +9,12 @@ let ndarray_op ?desc_label ?axis_labels ?label expr =
   let edims dims = Ast_builder.Default.elist ~loc dims in
   let op =
     match (axis_labels, label) with
-    | None, None -> [%expr Tensor.NTDSL.ndarray]
-    | Some axis_labels, None -> [%expr Tensor.NTDSL.ndarray ~axis_labels:[%e axis_labels]]
-    | None, Some label -> [%expr Tensor.NTDSL.ndarray ~label:[%e label]]
+    | None, None -> [%expr NTDSL.ndarray]
+    | Some axis_labels, None -> [%expr NTDSL.ndarray ~axis_labels:[%e axis_labels]]
+    | None, Some label -> [%expr NTDSL.ndarray ~label:[%e label]]
     | Some axis_labels, Some label ->
         [%expr
-          Tensor.NTDSL.ndarray ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_labels:[%e axis_labels]
+          NTDSL.ndarray ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_labels:[%e axis_labels]
             ~label:[%e label]]
   in
   [%expr
@@ -155,11 +155,11 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
   let loc = expr.pexp_loc in
   match expr with
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
-      (Tensor_nf, Undet, [%expr Tensor.NTDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] [%e expr]])
+      (Tensor, Undet, [%expr NTDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] [%e expr]])
   | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
-      ( Tensor_nf,
+      ( Tensor,
         Undet,
-        [%expr Tensor.NTDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] (Float.of_int [%e expr])]
+        [%expr NTDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] (Float.of_int [%e expr])]
       )
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
@@ -168,7 +168,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       ( Tensor_nf,
         Undet,
         [%expr
-          Tensor.NTDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis] [%e f]] )
+          NTDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis] [%e f]] )
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
         [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
@@ -176,7 +176,7 @@ let rec translate ?desc_label ?proj_in_scope (expr : expression) : expr_type * p
       ( Tensor_nf,
         Undet,
         [%expr
-          Tensor.NTDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis]
+          NTDSL.number ?desc_label:[%e opt_pat2string ~loc desc_label] ~axis_label:[%e axis]
             (Float.of_int [%e i])] )
   | { pexp_desc = Pexp_array _; _ } | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
       (Tensor_nf, Undet, ndarray_op expr)
