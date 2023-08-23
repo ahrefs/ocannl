@@ -5,22 +5,17 @@ module NTDSL = Operation.NTDSL
 module CDSL = Session.CDSL
 
 let () = Session.SDSL.set_executor Gccjit
-(*
+
 let%expect_test "Synthetic data" =
-  (* let open Operation.TDSL in *)
   let open Session.SDSL in
   (* drop_all_sessions (); *)
   Random.init 0;
-  let%nn_dt session_step ~o:1 = t =+ 1 in
-  let c_data =
-    TDSL.term ~label:"fetch_callback" ~grad_spec:Prohibit_grad
-      ~batch_dims:[ 1 ]
-      ~input_dims:[]
-      ~output_dims:[ 2; 3 ]
-      ~init_op:Low_level.Range_over_offsets
-      ~fetch_op:(fun ~n -> Synthetic [%nn_cd t =+ session_step *. 100])
-      ()
-  in
+  let open NTDSL in
+  let session_step = O.(counter !..1) in
+  print_tensor ~with_code:false ~with_grad:false `Default session_step;
+  let c_data = O.(counter (session_step *. !..100)) in
+  print_tensor ~with_code:false ~with_grad:false `Default c_data
+  (*
   refresh_session ();
   print_tensor ~with_code:false ~with_grad:false `Default @@ c_data;
   [%expect

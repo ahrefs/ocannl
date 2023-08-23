@@ -117,7 +117,7 @@ let range_of_shape ?desc_label ?(grad_spec = Tensor.Prohibit_grad) ?(batch_dims 
 let data ?desc_label ?axis_labels ?(grad_spec = Tensor.Prohibit_grad) ~label ?(batch_dims = [])
     ?(input_dims = []) ?(output_dims = []) fetch_op =
   if List.for_all ~f:List.is_empty [ batch_dims; input_dims; output_dims ] then
-    invalid_arg "Operation.data: data and the `%nn_dt` syntax do not support shape inference, specify dims";
+    invalid_arg "Operation.data: data ops do not support shape inference, specify dims";
   Tensor.term ?desc_label ~label ~grad_spec ~batch_dims ~input_dims ~output_dims ?axis_labels ~fetch_op ()
 
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
@@ -183,4 +183,10 @@ module NTDSL = struct
   let term = Tensor.term ~grad_spec:Prohibit_grad
   let range = range ~grad_spec:Prohibit_grad
   let range_of_shape = range_of_shape ~grad_spec:Prohibit_grad
+
+  let counter =
+    let module NTDSL = Empty_DSL in
+    let%nn_cd op_body ~v ~t1 ~projections = v =+ t1 ~projections in
+    let grad_body ~v:_ ~g:_ ~t1:_ ~projections:_ = High_level.Noop in
+    Tensor.unop ~op_label:"counter" ~transpose_op:Pointwise_un ~op_body ~grad_body ~grad_spec:Prohibit_grad
 end
