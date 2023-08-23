@@ -11,14 +11,14 @@ let%expect_test "Synthetic data" =
   let open Session.SDSL in
   drop_all_sessions ();
   Random.init 0;
-  let%nn_dt session_step ~o:1 = v =+ 1 in
+  let%nn_dt session_step ~o:1 = t =+ 1 in
   let c_data =
     TDSL.term ~label:"fetch_callback" ~grad_spec:Prohibit_grad
       ~batch_dims:[ CDSL.dim 1 ]
       ~input_dims:[]
       ~output_dims:[ CDSL.dim 2; CDSL.dim 3 ]
       ~init_op:Low_level.Range_over_offsets
-      ~fetch_op:(fun ~n -> Synthetic [%nn_cd v =+ session_step *. 100])
+      ~fetch_op:(fun ~n -> Synthetic [%nn_cd t =+ session_step *. 100])
       ()
   in
   refresh_session ();

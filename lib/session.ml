@@ -300,7 +300,7 @@ let generate_params_update ~(minus_lr : Tensor.t) ?params () =
   let params = match params with Some p -> p | None -> Hashtbl.data @@ session_params () in
   let module CDSL = Low_level.CDSL in
   let module NTDSL = Operation.NTDSL in
-  List.map params ~f:(fun v -> [%nn_cd v =+ minus_lr * g ~logic:"."])
+  List.map params ~f:(fun v -> [%nn_cd t =+ minus_lr * t.grad ~logic:"."])
 
 let print_session_code ?(compiled = false) () =
   (* FIXME: figure out if / why this isn't idempotent. *)

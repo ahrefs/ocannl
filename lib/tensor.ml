@@ -140,10 +140,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
   let local_shape_updates = List.map ~f:(fun logic -> Shape.{ shape; logic }) @@ shape_logics ts in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
   session_shape_updates := local_shape_updates @ !session_shape_updates;
-  let projections () =
-    (* FIXME: ternary ops need an [rhs3] projection! I'll also convert to Lazy. *)
-    Shape.derive_projections @@ List.hd_exn local_shape_updates
-  in
+  let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let fwds = List.map2_exn ts fwd_embed ~f:(fun ti e -> if not e then High_level.Noop else ti.forward_body) in
   let forward_body = High_level.sequential @@ fwds @ [ op_body ~v ~projections ] in
@@ -193,10 +190,10 @@ let binop ~op_label ?desc_label ?compose_op ~op_body ~grad_body ?grad_spec t1 t2
   op ~op_label ?desc_label ?compose_op ?transpose_op:None ~op_body ~grad_body ?grad_spec (Shape.make ())
     [ t1; t2 ]
 
-let unop ~op_label ?desc_label ?compose_op ~op_body ~grad_body ?grad_spec t1 =
+let unop ~op_label ?desc_label ?transpose_op ~op_body ~grad_body ?grad_spec t1 =
   let op_body ~v ~projections = op_body ~v ~t1 ~projections in
   let grad_body ~v ~g ~projections = grad_body ~v ~g ~t1 ~projections in
-  op ~op_label ?desc_label ?compose_op ?transpose_op:None ~op_body ~grad_body ?grad_spec (Shape.make ())
+  op ~op_label ?desc_label ?compose_op:None ?transpose_op ~op_body ~grad_body ?grad_spec (Shape.make ())
     [ t1 ]
 
 (** A terminal: a constant, a parameter, an input of the model. *)
@@ -208,7 +205,7 @@ let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axi
   in
   let op_body ~v ~projections =
     let open High_level in
-    let dims = lazy (projections ()).Indexing.lhs_dims in
+    let dims = lazy (Lazy.force projections).Indexing.lhs_dims in
     match fetch_op with
     | None ->
         if literal && Low_level.virtualize_settings.inline_constants then
