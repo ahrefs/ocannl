@@ -145,7 +145,7 @@ let setup_array filler_pat (filler_typ, slot, filler) =
         [%expr
           if Tensor.is_fwd_root [%e t] then (
             Tensor.remove_fwd_root [%e t];
-            [%e t].forward_body)
+            [%e t].Tensor.forward_body)
           else Arrayjit.High_level.Noop]
       in
       {
@@ -432,7 +432,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
         [%expr
           lazy
             (let p = Lazy.force projections in
-             Indexing.
+             Arrayjit.Indexing.
                {
                  p with
                  project_lhs = [%e project_lhs];
@@ -473,7 +473,8 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
         [%expr
           lazy
             (let p = Lazy.force projections in
-             Indexing.{ p with project_lhs = [%e project_lhs]; project_rhs = [| [%e project_rhs1] |] })]
+             Arrayjit.Indexing.
+               { p with project_lhs = [%e project_lhs]; project_rhs = [| [%e project_rhs1] |] })]
       in
       let body =
         [%expr
@@ -503,7 +504,8 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
         [%expr
           lazy
             (let p = Lazy.force projections in
-             Indexing.{ p with project_lhs = [%e project_lhs]; project_rhs = [| [%e project_rhs1] |] })]
+             Arrayjit.Indexing.
+               { p with project_lhs = [%e project_lhs]; project_rhs = [| [%e project_rhs1] |] })]
       in
       let body =
         [%expr
