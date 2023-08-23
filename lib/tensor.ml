@@ -49,21 +49,28 @@ include Comparator.Make (struct
   let sexp_of_t = sexp_of_t
 end)
 
-(** A forward root is a tensor that is not (currently) used to compute another tensor. *)
-let forward_roots = ref @@ Map.empty (module Int)
+type session_state = {
+  mutable next_id : int;
+  mutable forward_roots : t Map.M(Int).t;
+      (** A forward root is a tensor that is not (currently) used to compute another tensor. *)
+  mutable backprop_roots : t Map.M(Int).t;
+      (** A backprop root is a tensor with a gradient that is not (currently) receiving gradients from
+          another tensor. I.e. it is not currently used to compute a tensor with a gradient. *)
+  mutable shape_updates : Shape.update_step list;
+      (** We perform each update (at least) twice to propagate information between all subtensors:
+          first in postfix order while computing [t], then in prefix order by iterating over this stack. *)
+}
 
-let is_fwd_root t = Map.mem !forward_roots t.id
-let remove_fwd_root t = forward_roots := Map.remove !forward_roots t.id
+let session_state =
+  {
+    next_id = 0;
+    forward_roots = Map.empty (module Int);
+    backprop_roots = Map.empty (module Int);
+    shape_updates = [];
+  }
 
-(** A backprop root is a tensor with a gradient that is not (currently) receiving gradients from
-    another tensor. I.e. it is not currently used to compute a tensor with a gradient. *)
-let backprop_roots = ref @@ Map.empty (module Int)
-
-(** We perform each update (at least) twice to propagate information between all subtensors:
-    first in postfix order while computing [t], then in prefix order by iterating over this stack. *)
-let session_shape_updates : Shape.update_step list ref = ref []
-
-let session_initialized = ref 0
+let is_fwd_root t = Map.mem session_state.forward_roots t.id
+let remove_fwd_root t = session_state.forward_roots <- Map.remove session_state.forward_roots t.id
 let default_value_prec = ref Ndarray.single
 let default_grad_prec = ref Ndarray.single
 
@@ -90,7 +97,7 @@ let raw_binop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs1_is_grad ~t2 ~rhs2_i
   let shape_logic = Shape.Broadcast (logic, t1.shape, t2.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
   Shape.propagate_shapes local_shape_update;
-  session_shape_updates := local_shape_update :: !session_shape_updates;
+  session_state.shape_updates <- local_shape_update :: session_state.shape_updates;
   let projections = lazy (Shape.derive_projections local_shape_update) in
   let lhs = if lhs_is_grad then t.value else (Option.value_exn t.diff).grad in
   let rhs1 = if rhs1_is_grad then t1.value else (Option.value_exn t1.diff).grad in
@@ -102,15 +109,11 @@ let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
   let shape_logic = Shape.Transpose (logic, t1.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
   Shape.propagate_shapes local_shape_update;
-  session_shape_updates := local_shape_update :: !session_shape_updates;
+  session_state.shape_updates <- local_shape_update :: session_state.shape_updates;
   let projections = lazy (Shape.derive_projections local_shape_update) in
   let lhs = if lhs_is_grad then t.value else (Option.value_exn t.diff).grad in
   let rhs = if rhs_is_grad then t1.value else (Option.value_exn t1.diff).grad in
   High_level.Accum_unop { zero_out; accum; lhs; op; rhs; projections }
-
-type session_state = { mutable next_session_id : int }
-
-let session_state = { next_session_id = 0 }
 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
@@ -120,8 +123,8 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
   let fwd_embed = List.map ts ~f:is_fwd_root in
   List.iter2_exn ts fwd_embed ~f:(fun ti e -> if e then remove_fwd_root ti);
   let children = List.map2_exn ts fwd_embed ~f:(fun ti embedded -> { subtensor = ti; embedded }) in
-  let id = session_state.next_session_id in
-  session_state.next_session_id <- session_state.next_session_id + 1;
+  let id = session_state.next_id in
+  session_state.next_id <- session_state.next_id + 1;
   let shape = make_shape ~id in
   let dims = lazy (Shape.to_dims shape) in
   let label = op_label ^ if String.is_empty desc_label then "" else "/" ^ desc_label in
@@ -139,7 +142,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
   in
   let local_shape_updates = List.map ~f:(fun logic -> Shape.{ shape; logic }) @@ shape_logics ts in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
-  session_shape_updates := local_shape_updates @ !session_shape_updates;
+  session_state.shape_updates <- local_shape_updates @ session_state.shape_updates;
   let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let fwds = List.map2_exn ts fwd_embed ~f:(fun ti e -> if not e then High_level.Noop else ti.forward_body) in
@@ -149,11 +152,12 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
     || (Fn.non is_require_grad grad_spec && List.for_all ts ~f:(fun ti -> Option.is_none ti.diff))
   then (
     let tensor = { forward_body; diff = None; id; value = v; shape; children } in
-    forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
+    session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     tensor)
   else
-    let bck_embed = List.map ts ~f:(fun ti -> Map.mem !backprop_roots ti.id) in
-    List.iter2_exn ts bck_embed ~f:(fun ti e -> if e then backprop_roots := Map.remove !backprop_roots ti.id);
+    let bck_embed = List.map ts ~f:(fun ti -> Map.mem session_state.backprop_roots ti.id) in
+    List.iter2_exn ts bck_embed ~f:(fun ti e ->
+        if e then session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.id);
     let g_prec =
       let f ti = Option.map ti.diff ~f:(fun d -> d.grad.LA.prec) in
       Option.value ~default:!default_grad_prec @@ List.reduce ~f:Ndarray.promote_prec @@ List.filter_map ts ~f
@@ -180,8 +184,8 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop_body } in
     let tensor = { forward_body; diff; id; value = v; shape; children } in
-    forward_roots := Map.add_exn !forward_roots ~key:id ~data:tensor;
-    backprop_roots := Map.add_exn !backprop_roots ~key:id ~data:tensor;
+    session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
+    session_state.backprop_roots <- Map.add_exn session_state.backprop_roots ~key:id ~data:tensor;
     tensor
 
 let binop ~op_label ?desc_label ?compose_op ~op_body ~grad_body ?grad_spec t1 t2 =
