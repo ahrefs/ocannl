@@ -4,7 +4,7 @@ open Base
 module LA = Low_level.Lazy_array
 
 (** Resets a array by performing the specified computation or data fetching. *)
-type fetch_op = Constant of float | Synthetic of t | Imported of Low_level.global_identifier
+type fetch_op = Constant of float | Imported of Low_level.global_identifier
 [@@deriving sexp_of]
 
 and t =
@@ -137,7 +137,6 @@ let to_low_level (code : t) : Low_level.t =
     | Fetch { array; fetch_op = Constant 0.0; dims = _ } -> Zero_out array
     | Fetch { array; fetch_op = Constant c; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs -> Set (array, idcs, Constant c))
-    | Fetch { array = _; fetch_op = Synthetic gen; dims = _ } -> loop gen
     | Fetch { array = _; fetch_op = Imported _; dims = _ } ->
         failwith "to_low_level: Imported NOT IMPLEMENTED YET"
   in

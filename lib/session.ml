@@ -258,7 +258,7 @@ let generate_params_update ~(minus_lr : Tensor.t) ?params () =
   let params = match params with Some p -> p | None -> Hashtbl.data @@ session_params () in
   let module CDSL = Low_level.CDSL in
   let module NTDSL = Operation.NTDSL in
-  List.map params ~f:(fun v -> [%nn_cd t =+ minus_lr * t.grad ~logic:"."])
+  List.map params ~f:(fun t -> [%nn_cd t =+ minus_lr * t.grad ~logic:"."])
 
 let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params ?(reinit = false)
     ?(updates_per_run = 1) ?(run = true) ?(force_no_init = false) ?(verbose = false) () =

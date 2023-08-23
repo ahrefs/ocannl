@@ -8,6 +8,7 @@ Major rewrite.
 - Renamed `Formula` -> `Tensor`
 - No more "form vs. non-form" formulas / tensors.
   - Formula/tensor roots are split into forward roots and backprop roots.
+- No more `%nn_rs`, `%nn_dt` syntaxes and `Synthetic` fetch primitive.
 
 ## [0.2.1] -- 2023-07-19
 

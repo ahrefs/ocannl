@@ -6,6 +6,7 @@ module CDSL = Session.CDSL
 
 let () = Session.SDSL.set_executor Gccjit
 
+(*
 let () =
   (* let open Operation.TDSL in *)
   let open Session.SDSL in
@@ -19,3 +20,4 @@ let () =
   print_tensor ~with_code:false ~with_grad:false `Default @@ fetch_callback;
   refresh_session ();
   print_tensor ~with_code:false ~with_grad:false `Default @@ fetch_callback
+*)

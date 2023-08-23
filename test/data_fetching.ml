@@ -5,7 +5,7 @@ module NTDSL = Operation.NTDSL
 module CDSL = Session.CDSL
 
 let () = Session.SDSL.set_executor Gccjit
-
+(*
 let%expect_test "Synthetic data" =
   (* let open Operation.TDSL in *)
   let open Session.SDSL in
@@ -63,3 +63,4 @@ let%expect_test "Synthetic data" =
     ││      │ 6.03e+2  6.04e+2  6.05e+2 │    │
     │└──────┴───────────────────────────┘    │
     └────────────────────────────────────────┘ |}]
+*)
