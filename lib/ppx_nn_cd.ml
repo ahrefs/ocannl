@@ -259,10 +259,10 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       | Array | Array_opt | Grad_of_tensor _ -> result)
   | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections]))] ->
       let zero_out, accu_op = assignment_op accu_op in
-      let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?desc_label ~proj_in_scope lhs in
+      let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?desc_label ~proj_in_scope:true lhs in
       let _, bin_op = binary_op bin_op in
-      let setup_r1 = setup_array [%pat? nondiff___rhs1] @@ translate ~proj_in_scope rhs1 in
-      let setup_r2 = setup_array [%pat? nondiff___rhs2] @@ translate ~proj_in_scope rhs2 in
+      let setup_r1 = setup_array [%pat? nondiff___rhs1] @@ translate ~proj_in_scope:true rhs1 in
+      let setup_r2 = setup_array [%pat? nondiff___rhs2] @@ translate ~proj_in_scope:true rhs2 in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       (* TODO: might be better to treat missing [rhs1, rhs2] as zeros rather than eliding the code. *)
       let body =
@@ -287,9 +287,9 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
   | [%expr [%e? accu_op] [%e? lhs] ([%e? un_op] ([%e? rhs] ~projections:[%e? projections]))] ->
       (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
       let zero_out, accu_op = assignment_op accu_op in
-      let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?desc_label ~proj_in_scope lhs in
+      let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?desc_label ~proj_in_scope:true lhs in
       let _, un_op = unary_op un_op in
-      let setup_r = setup_array [%pat? nondiff___rhs] @@ translate ~proj_in_scope rhs in
+      let setup_r = setup_array [%pat? nondiff___rhs] @@ translate ~proj_in_scope:true rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       (* TODO: might be better to treat missing [rhs] as zeros rather than eliding the code. *)
       let body =
@@ -310,8 +310,8 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       with_forward_args setups body
   | [%expr [%e? accu_op] [%e? lhs] ([%e? rhs] ~projections:[%e? projections])] ->
       let zero_out, accu_op = assignment_op accu_op in
-      let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?desc_label ~proj_in_scope lhs in
-      let setup_r = setup_array [%pat? nondiff___rhs] @@ translate ~proj_in_scope rhs in
+      let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?desc_label ~proj_in_scope:true lhs in
+      let setup_r = setup_array [%pat? nondiff___rhs] @@ translate ~proj_in_scope:true rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let body =
         [%expr
