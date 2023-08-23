@@ -56,13 +56,13 @@ let to_low_level (code : t) : Low_level.t =
     | Accum_binop { zero_out; accum; op; lhs; rhs1; rhs2; projections } ->
         let projections = Lazy.force projections in
         let lhs_idx =
-            derive_index ~product_syms:projections.product_iterators ~projection:projections.project_lhs
+          derive_index ~product_syms:projections.product_iterators ~projection:projections.project_lhs
         in
         let rhs1_idx =
-            derive_index ~product_syms:projections.product_iterators ~projection:projections.project_rhs.(0)
+          derive_index ~product_syms:projections.product_iterators ~projection:projections.project_rhs.(0)
         in
         let rhs2_idx =
-            derive_index ~product_syms:projections.product_iterators ~projection:projections.project_rhs.(1)
+          derive_index ~product_syms:projections.product_iterators ~projection:projections.project_rhs.(1)
         in
         let basecase rev_iters =
           let product = Array.of_list_rev_map rev_iters ~f:(fun s -> Indexing.Iterator s) in
@@ -98,10 +98,10 @@ let to_low_level (code : t) : Low_level.t =
     | Accum_unop { zero_out; accum; op; lhs; rhs; projections } ->
         let projections = Lazy.force projections in
         let lhs_idx =
-            derive_index ~product_syms:projections.product_iterators ~projection:projections.project_lhs
+          derive_index ~product_syms:projections.product_iterators ~projection:projections.project_lhs
         in
         let rhs_idx =
-            derive_index ~product_syms:projections.product_iterators ~projection:projections.project_rhs.(0)
+          derive_index ~product_syms:projections.product_iterators ~projection:projections.project_rhs.(0)
         in
         let basecase rev_iters =
           let product = Array.of_list_rev_map rev_iters ~f:(fun s -> Indexing.Iterator s) in
@@ -154,3 +154,8 @@ let compile_proc ~name ?(verbose = false) ~for_step_update proc =
     Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t proc));
   let llc = to_low_level proc in
   Low_level.compile_proc ~name ~verbose ~for_step_update llc
+
+let fprint_code ppf c =
+  (* TODO: something nicely concise. *)
+  Caml.Format.pp_set_margin ppf !Low_level.code_sexp_margin;
+  Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_t c

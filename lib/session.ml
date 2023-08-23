@@ -3,6 +3,7 @@
 open Base
 module Nd = Arrayjit.Ndarray
 module LA = Arrayjit.Low_level.Lazy_array
+open Arrayjit
 
 (** *** Printing. *** *)
 
@@ -125,10 +126,7 @@ let print_tensor_preamble t =
 let print_tensor ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style) t =
   let open Tensor in
   let sh = t.shape in
-  let label =
-    (match t.node.desc_label with None -> "" | Some l -> l ^ " ")
-    ^ match t.node.op_label with "" -> "" | l -> "<" ^ l ^ "> "
-  in
+  let label = t.value.label in
   let prefix =
     "[" ^ Int.to_string t.id ^ "]: " ^ label ^ "shape "
     ^ Shape.to_string_hum ~style:`Axis_number_and_size sh
@@ -143,7 +141,7 @@ let print_tensor ~with_grad ~with_code ?(with_low_level = false) (style : array_
           | First _ -> invalid_arg "`N5_layout requires integer-only labels"
         in
         let p_labels = Shape.(axis_labels_of_spec priorities).labels |> Map.map ~f in
-        Array.map (Shape.axis_map_to_dims_index p_labels) ~f:(fun d -> d.dim)
+        Shape.axis_map_to_dims_index p_labels
     | `Label_layout label_idcs ->
         let inv_labels =
           Map.to_alist sh.axis_labels |> List.map ~f:(fun (a, b) -> (b, a)) |> Map.of_alist (module String)
@@ -164,7 +162,7 @@ let print_tensor ~with_grad ~with_code ?(with_low_level = false) (style : array_
   in
   let needs_spec =
     Fn.non Map.is_empty sh.axis_labels
-    || Shape.(List.exists ~f:Shape.dim_1 @@ list_of_dims @@ dims_of_kind Input sh)
+    || Shape.(List.exists ~f:(( = ) 1) @@ list_of_dims @@ dims_of_kind Input sh)
   in
   let labels = Shape.axis_map_to_dims_index ~default:"" sh.axis_labels in
   let axes_spec = if needs_spec then Some (Shape.to_string_hum ~style:`Only_labels sh) else None in
@@ -172,102 +170,82 @@ let print_tensor ~with_grad ~with_code ?(with_low_level = false) (style : array_
   let num_batch_axes = num_axes Shape.AxisKey.Batch in
   let num_input_axes = num_axes Shape.AxisKey.Input in
   let num_output_axes = num_axes Shape.AxisKey.Output in
-  (match style with
-  | `Inline ->
-      Ndarray.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
-        ?axes_spec t.node.node.value
-  | _ ->
-      Ndarray.pp_tensor Caml.Format.std_formatter ~prefix ~labels ~indices t.node.node.value;
-      Caml.Format.print_newline ());
-  (if with_grad then
-     match (style, t.node.node.grad) with
-     | `Inline, Some grad ->
-         Ndarray.pp_tensor_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
-           ?axes_spec grad;
-         Caml.Format.print_newline ()
-     | _, Some grad ->
-         Ndarray.pp_tensor Caml.Format.std_formatter ~prefix:(prefix ^ " Gradient ") ~labels ~indices grad;
-         Caml.Format.print_newline ()
-     | _ -> ());
+  (* TODO: code sharing with [to_dag] *)
+  (if not @@ Lazy.is_val t.value.array then Caml.Format.printf "<not-in-yet>@ "
+   else
+     match (style, t.value.array) with
+     | `Inline, (lazy None) -> Caml.Format.printf "<virtual>@ "
+     | `Inline, (lazy (Some arr)) ->
+         Nd.pp_array_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
+           ?axes_spec arr
+     | _, (lazy None) -> Caml.Format.printf "<virtual>@ "
+     | _, (lazy (Some arr)) ->
+         Nd.pp_array Caml.Format.std_formatter ~prefix ~labels ~indices arr;
+         Caml.Format.print_newline ());
+  if with_grad then
+    Option.iter t.diff ~f:(fun diff ->
+        if not @@ Lazy.is_val diff.grad.array then Caml.Format.printf "Gradient <not-in-yet>@ "
+        else
+          match (style, diff.grad.array) with
+          | `Inline, (lazy (Some arr)) ->
+              Nd.pp_array_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
+                ?axes_spec arr;
+              Caml.Format.print_newline ()
+          | _, (lazy (Some arr)) ->
+              Nd.pp_array Caml.Format.std_formatter ~prefix:(prefix ^ " Gradient ") ~labels ~indices arr;
+              Caml.Format.print_newline ()
+          | _, (lazy None) -> Caml.Format.printf "Gradient <virtual>@ ");
   if with_code then (
     (match t.forward_body with
     | Noop -> ()
-    | fwd_code -> Caml.Format.printf "Current forward body:@ %a@ " Low_level.fprint_code fwd_code);
+    | fwd_code -> Caml.Format.printf "Current forward body:@ %a@ " High_level.fprint_code fwd_code);
     match t.diff with
     | Some { backprop_body = Noop; _ } -> ()
     | Some { backprop_body = bwd_code; _ } ->
-        Caml.Format.printf "Current backprop body:@ %a@ " Low_level.fprint_code bwd_code
+        Caml.Format.printf "Current backprop body:@ %a@ " High_level.fprint_code bwd_code
     | None -> ());
   if with_low_level then (
     (match t.forward_body with
     | Noop -> ()
     | fwd_code ->
-        Caml.Format.printf "Current forward low-level body:@ %a@ " Low_level.fprint_low_level fwd_code);
+        Caml.Format.printf "Current forward low-level body:@ %a@ " Low_level.fprint_code
+        @@ High_level.to_low_level fwd_code);
     match t.diff with
     | Some { backprop_body = Noop; _ } -> ()
     | Some { backprop_body = bwd_code; _ } ->
-        Caml.Format.printf "Current backprop low-level body:@ %a@ " Low_level.fprint_low_level bwd_code
+        Caml.Format.printf "Current backprop low-level body:@ %a@ " Low_level.fprint_code
+        @@ High_level.to_low_level bwd_code
     | None -> ());
   Stdio.printf "\n%!"
 
 let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
   let open Tensor in
-  List.iter (Map.to_alist ~key_order:`Increasing !forward_roots) ~f:(fun (id, root) ->
+  List.iter (Map.to_alist ~key_order:`Increasing Tensor.session_state.forward_roots) ~f:(fun (id, root) ->
       assert (id = root.id);
       print_tensor ~with_grad ~with_code style root)
 
 (** *** Session management. *** *)
-type backend = Interpreter | Gccjit | Cuda [@@deriving sexp, equal]
+type backend = Gccjit | Cuda [@@deriving sexp, equal]
 
 let exec = ref Exec_as_gccjit.jit
-let executor_error_message = ref Exec_as_gccjit.error_message
 let cleanup_executor_session = ref Exec_as_gccjit.cleanup_session
 
 let set_executor = function
-  | Interpreter ->
-      exec := Low_level.interpret;
-      executor_error_message := Low_level.interpreter_error_message;
-      Low_level.virtualize_settings.sequential_minibatch <- true;
-      cleanup_executor_session := fun () -> ()
   | Gccjit ->
       exec := Exec_as_gccjit.jit;
-      executor_error_message := Exec_as_gccjit.error_message;
       Low_level.virtualize_settings.sequential_minibatch <- true;
       cleanup_executor_session := Exec_as_gccjit.cleanup_session
   | Cuda ->
       exec := Exec_as_cuda.jit;
-      executor_error_message := Exec_as_cuda.error_message;
       Low_level.virtualize_settings.sequential_minibatch <- false;
       cleanup_executor_session := Exec_as_cuda.cleanup_session
 
-let initialize_host_tensors traced_store =
-  List.iter ~f:(function
-    | { Low_level.tensor = { id; field = Value } as ptr; dims; init_op } ->
-        let dims = Array.map ~f:(fun d -> d.Shape.dim) @@ dims () in
-        let tn = Low_level.get_node traced_store ptr in
-        if tn.non_virtual && tn.non_device_only then
-          (Low_level.get id).node.value <- Ndarray.create !Tensor.default_value_prec dims init_op
-    | { tensor = { id; field = Grad } as ptr; dims; init_op } ->
-        let dims = Array.map ~f:(fun d -> d.Shape.dim) @@ dims () in
-        let tn = Low_level.get_node traced_store ptr in
-        let v = (Low_level.get id).node in
-        if tn.non_virtual && tn.non_device_only then
-          g <- Some (Ndarray.create !Tensor.default_grad_prec dims init_op)
-        else assert (Option.is_some g))
-
 let compile_routine ~name code =
-  let open Tensor in
-  let num_inits = List.length !session_initializations in
-  let to_init = num_inits - !session_initialized in
-  session_initialized := num_inits;
-  let traced_store, compiled = Low_level.compile_proc ~name ~for_step_update:false code in
-  (* Only initialize after compilation, to know which nodes are virtual. *)
-  initialize_host_tensors traced_store @@ List.take !session_initializations to_init;
-  !exec ~name (traced_store, compiled)
+  !exec ~name @@ Low_level.compile_proc ~name ~for_step_update:false @@ High_level.to_low_level code
 
-let session_params () = Low_level.param_nodes ~from_id:!Tensor.first_session_id ()
+(*
 let minus_learning_rate : Tensor.t option ref = ref None
-let last_refresh_roots = ref !Tensor.global_roots
+let last_refresh_roots = ref Tensor.session_state.forward_roots
 let last_with_backprop = ref false
 let last_update_params = ref false
 let last_updates_per_run = ref 1
@@ -280,15 +258,6 @@ let generate_params_update ~(minus_lr : Tensor.t) ?params () =
   let module CDSL = Low_level.CDSL in
   let module NTDSL = Operation.NTDSL in
   List.map params ~f:(fun v -> [%nn_cd t =+ minus_lr * t.grad ~logic:"."])
-
-let print_session_code ?(compiled = false) () =
-  (* FIXME: figure out if / why this isn't idempotent. *)
-  Caml.Format.set_margin !Arrayjit.Low_level.code_sexp_margin;
-  if compiled then
-    Caml.Format.printf "Compiled session step update code:@ %a" Sexp.pp_hum
-      (sexp_of_t @@ snd !session_step_update_compiled)
-  else Caml.Format.printf "Session step update code:@ %a" fprint_code !session_step_update;
-  Caml.Format.print_newline ()
 
 let refresh_session ?(regenerate = false) ?(with_backprop = true) ?update_params ?(reinit = false)
     ?(updates_per_run = 1) ?(run = true) ?(force_no_init = false) ?(verbose = false) () =
@@ -427,15 +396,17 @@ let drop_all_sessions () =
   drop_session ();
   Hashtbl.clear Low_level.global_node_store;
   Node.unique_id := 1
+*)
 
-let save_all_tensors ~name =
+(*
+let save_tensors ~name =
   let out = Npy.Npz.open_out (name ^ ".npz") in
   Hashtbl.iter Low_level.global_node_store ~f:(fun v ->
       let save field arr = Npy.Npz.write out Node.(tensor_ptr_name { id = v.id; field }) arr in
       let f arr = save Value arr in
-      Ndarray.map { f } v.node.value;
+      Nd.map { f } v.node.value;
       let f arr = save Grad arr in
-      Option.iter v.node.grad ~f:(Ndarray.map { f }))
+      Option.iter v.node.grad ~f:(Nd.map { f }))
 
 (** Restores the content of already-existing tensors from the file [name ^ ".npz"]. With [~partially:true],
     does not complain about tensors missing in the file. *)
@@ -450,32 +421,39 @@ let restore_tensors ?(partially = false) f_name =
             let t_name = Node.(tensor_ptr_name { id = v.id; field }) in
             let src = Npy.Npz.read inp t_name in
             let f prec dst =
-              match Npy.to_bigarray Bigarray.c_layout (Ndarray.precision_to_bigarray_kind prec) src with
+              match Npy.to_bigarray Bigarray.c_layout (Nd.precision_to_bigarray_kind prec) src with
               | None -> if not partially then failwith ("Session.restore_tensors: missing tensor " ^ t_name)
-              | Some src -> Ndarray.A.blit src dst
+              | Some src -> Nd.A.blit src dst
             in
-            Ndarray.map_with_prec { f } arr
+            Nd.map_with_prec { f } arr
       in
       restore Value;
       restore Node.Grad)
-
-let value_1d_points ?from_axis ~xdim t = Ndarray.retrieve_1d_points ?from_axis ~xdim t.Tensor.node.node.value
+*)
+let value_1d_points ?from_axis ~xdim t =
+  Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_1d_points ?from_axis ~xdim arr)
+  @@ Lazy.force t.Tensor.value.array
 
 let value_2d_points ?from_axis ~xdim ~ydim t =
-  Ndarray.retrieve_2d_points ?from_axis ~xdim ~ydim t.Tensor.node.node.value
+  Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_2d_points ?from_axis ~xdim ~ydim arr)
+  @@ Lazy.force t.Tensor.value.array
 
 let grad_1d_points ?from_axis ~xdim t =
-  match t.Tensor.node.node.grad with None -> [||] | Some a -> Ndarray.retrieve_1d_points ?from_axis ~xdim a
+  match t.Tensor.diff with
+  | None -> [||]
+  | Some diff ->
+      Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_1d_points ?from_axis ~xdim arr)
+      @@ Lazy.force diff.grad.array
 
 let grad_2d_points ?from_axis ~xdim ~ydim t =
-  match t.Tensor.node.node.grad with
+  match t.Tensor.diff with
   | None -> [||]
-  | Some a -> Ndarray.retrieve_2d_points ?from_axis ~xdim ~ydim a
+  | Some diff ->
+      Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_2d_points ?from_axis ~xdim ~ydim arr)
+      @@ Lazy.force diff.grad.array
 
-let set_value t = Ndarray.set_from_float t.Tensor.node.node.value
-let get_value t = Ndarray.get_as_float t.Tensor.node.node.value
-let set_grad t = Ndarray.set_from_float (Option.value_exn t.Tensor.node.node.grad)
-let get_grad t = Ndarray.get_as_float (Option.value_exn t.Tensor.node.node.grad)
+let set_value t = Nd.set_from_float @@ Option.value_exn @@ Lazy.force t.Tensor.value.array
+let get_value t = Nd.get_as_float @@ Option.value_exn @@ Lazy.force t.Tensor.value.array
 
 module O = struct
   (** Get the value at the given indices. *)
@@ -484,96 +462,51 @@ module O = struct
   (** Set the value at the given indices. *)
   let ( .@{}<- ) = set_value
 
-  (** Get the gradient at the given indices. *)
-  let ( .@%{} ) = get_grad
-
-  (** Set the gradient at the given indices. *)
-  let ( .@%{}<- ) = set_grad
-
   (** Get the value at the given index from a single-axis shape tensor. *)
   let ( .@[] ) t indx = get_value t [| indx |]
 
   (** Set the value at the given index for a single-axis shape tensor. *)
   let ( .@[]<- ) t indx = set_value t [| indx |]
-
-  (** Get the gradient at the given index from a single-axis shape tensor. *)
-  let ( .@%[] ) t indx = get_grad t [| indx |]
-
-  (** Set the gradient at the given index for a single-axis shape tensor. *)
-  let ( .@%[]<- ) t indx = set_grad t [| indx |]
 end
 
 module SDSL = struct
-  type nonrec backend = backend = Interpreter | Gccjit | Cuda
+  type nonrec backend = backend = Gccjit | Cuda
 
   module O = O
 
   let set_executor = set_executor
+
+  (*
   let refresh_session = refresh_session
   let drop_session = drop_session
   let drop_all_sessions = drop_all_sessions
   let close_session = close_session
-  let compile_routine = compile_routine
   let session_params = session_params
   let minus_learning_rate = minus_learning_rate
+  *)
 
-  let print_node_tree ?entries_per_axis ?(with_backend_info = false) ?with_id ?with_value ~with_grad ~depth id
-      =
-    let extra_prefix = if with_backend_info then Some (fun annot -> annot.Low_level.backend_info) else None in
-    try
-      let v = Low_level.get id in
-      PrintBox_text.output Stdio.stdout
-      @@ Node.to_printbox ?entries_per_axis ?with_id ?with_value ~with_grad ?extra_prefix ~depth v
-    with Not_found_s _ | Caml.Not_found -> Caml.Format.printf "Node #%d does not exist.\n%!" id
+  let compile_routine = compile_routine
+
+  let print_tree ?entries_per_axis ?(with_backend_info = false) ?(with_id = true) ?(with_value = true)
+      ~with_grad ~depth t =
+    (* FIXME: print backend info *)
+    ignore with_backend_info;
+    PrintBox_text.output Stdio.stdout @@ PrintBox_utils.dag_to_box @@ PrintBox_utils.boxify depth
+    @@ to_dag ?entries_per_axis ~with_id ~with_value ~with_grad t
 
   let max_sublabel_length = Tensor.max_sublabel_length
   let print_tensor = print_tensor
-  let print_global_roots = print_global_roots
-  let print_preamble = print_preamble
-  let print_session_code = print_session_code
-  let print_decimals_precision = Ndarray.print_decimals_precision
-  let get_root = get_root
-  let get_node = get_node
-  let set_values t cs = Ndarray.(init (Constant_fill cs) t.Tensor.node.node.value)
-  let set_grads t cs = Ndarray.(init (Constant_fill cs) (Option.value_exn t.Tensor.node.node.grad))
+  let print_forward_roots = print_forward_roots
+  let print_tensor_preamble = print_tensor_preamble
+  let print_decimals_precision = Nd.print_decimals_precision
+  let set_values t cs = Nd.(init (Constant_fill cs) @@ Option.value_exn @@ Lazy.force t.Tensor.value.array)
 
   let set_fully_on_host t =
-    t.Tensor.node.annot.value_never_virtual <- true;
-    t.node.annot.grad_never_virtual <- true;
-    t.Tensor.node.annot.value_never_device_only <- true;
-    t.node.annot.grad_never_device_only <- true
-
-  let everything_fully_on_host () =
-    for id = !Tensor.first_session_id to session_state.next_session_id - 1 do
-      let v = Low_level.get id in
-      v.annot.value_never_virtual <- true;
-      v.annot.grad_never_virtual <- true;
-      v.annot.value_never_device_only <- true;
-      v.annot.grad_never_device_only <- true
-    done
-
-  let everything_on_host_or_inlined () =
-    for id = !Tensor.first_session_id to session_state.next_session_id - 1 do
-      let v = Low_level.get id in
-      v.annot.value_never_device_only <- true;
-      v.annot.grad_never_device_only <- true
-    done
-
-  let value_1d_points ?from_axis ~xdim t =
-    Ndarray.retrieve_1d_points ?from_axis ~xdim t.Tensor.node.node.value
-
-  let value_2d_points ?from_axis ~xdim ~ydim t =
-    Ndarray.retrieve_2d_points ?from_axis ~xdim ~ydim t.Tensor.node.node.value
-
-  let grad_1d_points ?from_axis ~xdim t =
-    match t.Tensor.node.node.grad with
-    | None -> [||]
-    | Some a -> Ndarray.retrieve_1d_points ?from_axis ~xdim a
-
-  let grad_2d_points ?from_axis ~xdim ~ydim t =
-    match t.Tensor.node.node.grad with
-    | None -> [||]
-    | Some a -> Ndarray.retrieve_2d_points ?from_axis ~xdim ~ydim a
+    t.Tensor.value.never_virtual <- true;
+    t.Tensor.value.never_device_only <- true;
+    Option.iter t.diff ~f:(fun diff ->
+        diff.grad.never_virtual <- true;
+        diff.grad.never_device_only <- true)
 
   let enable_all_debugs ?(trace_interpreter = false) ?(hosted_only = true) () =
     Low_level.CDSL.with_debug := true;
@@ -589,6 +522,4 @@ module SDSL = struct
 
   let default_value_prec = Tensor.default_value_prec
   let default_grad_prec = Tensor.default_grad_prec
-  let global_host_size_in_bytes () = Low_level.global_host_size_in_bytes ()
-  let num_domains = Node.num_domains
 end
