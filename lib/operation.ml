@@ -10,7 +10,6 @@ module Empty_DSL = struct
 end
 
 let add =
-  let open Low_level in
   let module NTDSL = Empty_DSL in
   let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =: v1 + v2 in
   let%nn_cd grad_body ~v:_ ~g ~t1 ~t2 ~projections =
@@ -20,10 +19,9 @@ let add =
   Tensor.binop ~compose_op:Pointwise_bin ~op_label:"+" ~op_body ~grad_body
 
 let pointmul =
-  let open Low_level in
   let module NTDSL = Empty_DSL in
   let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =: v1 * v2 in
-  let%nn_cd grad_body ~v ~g ~t1 ~t2 ~projections =
+  let%nn_cd grad_body ~v:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g * v2;
     g2 =+ v1 * g
   in
@@ -37,10 +35,9 @@ let pointmul =
    corresponding matrices. *)
 
 let matmul =
-  let open Low_level in
   let module NTDSL = Empty_DSL in
   let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
-  let%nn_cd grad_body ~v ~g ~t1 ~t2 ~projections =
+  let%nn_cd grad_body ~v:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g * v2;
     g2 =+ v1 * g
   in
@@ -52,10 +49,9 @@ let matmul =
     Note that ["a,b->c"] from [numpy] is ["a;b=>c"] in OCANNL, since ["->"] is used to separate the input
     and the output axes. *)
 let einsum ?desc_label spec =
-  let open Low_level in
   let module NTDSL = Empty_DSL in
   let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
-  let%nn_cd grad_body ~v ~g ~t1 ~t2 ~projections =
+  let%nn_cd grad_body ~v:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g * v2;
     g2 =+ v1 * g
   in
@@ -67,14 +63,12 @@ let einsum ?desc_label spec =
     Note that ["a->c"] from [numpy] is ["a=>c"] in OCANNL, since ["->"] is used to separate the input
     and the output axes. *)
 let einsum1 ?desc_label spec =
-  let open Low_level in
   let module NTDSL = Empty_DSL in
   let%nn_cd op_body ~v ~t1 ~projections = v =:+ v1 in
   let%nn_cd grad_body ~v:_ ~g ~t1 ~projections = g1 =+ g in
   Tensor.unop ?desc_label ~transpose_op:(Shape.Permute spec) ~op_label:"=>" ~op_body ~grad_body
 
 let relu =
-  let open Low_level in
   let module NTDSL = Empty_DSL in
   let%nn_cd op_body ~v ~t1 ~projections = v =: !/v1 ~projections in
   let%nn_cd grad_body ~v ~g ~t1 ~projections = g1 =+ v -?/ g in
@@ -96,11 +90,10 @@ let rec pointpow ?desc_label ~grad_spec p t1 : Tensor.t =
     include Tensor.NTDSL
     module O = NDO_without_pow
   end in
-  let open Low_level in
   let p_t = NTDSL.number p in
   let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections in
   let%nn_cd grad_body =
-    if not grad_spec then fun ~v:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ -> High_level.Noop
+    if Tensor.is_prohibit_grad grad_spec then fun ~v:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ -> High_level.Noop
     else if Float.equal p 2.0 then fun ~v:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ p_t *. t1 * g
     else fun ~v:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ p_t *. (t1 **. (p -. 1.)) * g
   in
@@ -165,11 +158,12 @@ module TDSL = struct
   let stop_gradient = stop_gradient
 
   let init_const ~l ?(b = []) ?(i = []) ?(o = []) cs =
-    term ~label:l ~grad_spec:Prohibit_grad ~batch_dims:b ~input_dims:i ~output_dims:o
+    Tensor.term ~label:l ~grad_spec:Prohibit_grad ~batch_dims:b ~input_dims:i ~output_dims:o
       ~init_op:(Constant_fill cs) ()
 
+  (** It's like `Tensor.params` but without shape inference. *)
   let init_param ~l ?(b = []) ?(i = []) ?(o = []) cs =
-    term ~label:l ~grad_spec:Require_grad ~batch_dims:b ~input_dims:i ~output_dims:o
+    Tensor.term ~label:l ~grad_spec:Require_grad ~batch_dims:b ~input_dims:i ~output_dims:o
       ~init_op:(Constant_fill cs) ()
 end
 
