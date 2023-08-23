@@ -825,4 +825,5 @@ module CDSL = struct
   let debug_verbose_trace = debug_verbose_trace
   let virtualize_settings = virtualize_settings
   let code_sexp_margin = code_sexp_margin
+  let fixed_state_for_init = Ndarray.fixed_state_for_init
 end

@@ -2,7 +2,7 @@ open Base
 open Ocannl
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Low_level.CDSL
+module CDSL = Session.CDSL
 module SDSL = Session.SDSL
 
 let recompiling_graph executor opti () =
@@ -11,9 +11,9 @@ let recompiling_graph executor opti () =
   let bench_title = Sexp.to_string_hum ([%sexp_of: Session.backend * int] (executor, opti)) in
   Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ bench_title ^ " ******";
   let () = SDSL.set_executor executor in
-  Exec_as_gccjit.optimization_level := opti;
+  Arrayjit.Exec_as_gccjit.optimization_level := opti;
   (* let open Operation.TDSL in *)
-  SDSL.drop_all_sessions ();
+  (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let%nn_op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
@@ -43,7 +43,7 @@ let recompiling_graph executor opti () =
       }
   in
   PrintBox_text.output Stdio.stdout plot_box;
-  Exec_as_gccjit.optimization_level := 3;
+  Arrayjit.Exec_as_gccjit.optimization_level := 3;
   Stdio.print_endline "\n";
   result
 

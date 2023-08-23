@@ -3,6 +3,7 @@
 open Base
 module Nd = Arrayjit.Ndarray
 module LA = Arrayjit.Low_level.Lazy_array
+module CDSL = Arrayjit.Low_level.CDSL
 open Arrayjit
 
 (** *** Printing. *** *)

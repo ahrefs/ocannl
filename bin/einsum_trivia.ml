@@ -1,19 +1,19 @@
 open Base
 open Ocannl
-module CDSL = Low_level.CDSL
+module CDSL = Session.CDSL
 module TDSL = Operation.TDSL
 
 let () = Session.SDSL.set_executor Gccjit
 
 let () =
   let open Session.SDSL in
-  drop_all_sessions ();
+  (* drop_all_sessions (); *)
   Random.init 0;
   let a =
-    TDSL.range_of_shape ~batch_dims:[ CDSL.dim 3 ] ~input_dims:[ CDSL.dim 4 ] ~output_dims:[ CDSL.dim 2 ] ()
+    TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] ()
   in
   let b =
-    TDSL.range_of_shape ~batch_dims:[ CDSL.dim 3 ] ~input_dims:[ CDSL.dim 1 ] ~output_dims:[ CDSL.dim 4 ] ()
+    TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] ()
   in
   let%nn_op c = a *+ "...|i->1; ...|...->i => ...|i" b in
   refresh_session ();

@@ -1,6 +1,6 @@
 open Base
 open Ocannl
-module CDSL = Low_level.CDSL
+module CDSL = Session.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module SDSL = Session.SDSL
@@ -10,12 +10,12 @@ let () = SDSL.set_executor Gccjit
 let%expect_test "Graph drawing recompile" =
   (* let open Operation.TDSL in *)
   let open SDSL.O in
-  SDSL.drop_all_sessions ();
+  (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let%nn_op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   SDSL.set_fully_on_host x;
   SDSL.refresh_session ();
-  SDSL.print_node_tree ~with_grad:true ~depth:9 f.id;
+  SDSL.print_tree ~with_grad:true ~depth:9 f;
   [%expect
     {|
                           [13] f <+>
@@ -95,7 +95,7 @@ let%expect_test "Graph drawing recompile" =
 
 let%expect_test "Graph drawing fetch" =
   let open SDSL.O in
-  SDSL.drop_all_sessions ();
+  (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   CDSL.virtualize_settings.enable_device_only <- false;
   CDSL.virtualize_settings.inline_constants <- false;
@@ -103,7 +103,7 @@ let%expect_test "Graph drawing fetch" =
   let%nn_op f5 = f 5 in
   SDSL.everything_fully_on_host ();
   SDSL.refresh_session ();
-  SDSL.print_node_tree ~with_grad:false ~depth:9 f5.id;
+  SDSL.print_tree ~with_grad:false ~depth:9 f5;
   [%expect
     {|
                                [12] f <+>
@@ -122,9 +122,9 @@ let%expect_test "Graph drawing fetch" =
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   let x_flat =
     TDSL.term ~grad_spec:Require_grad ~label:"x_flat"
-      ~batch_dims:[ CDSL.dim size ]
+      ~batch_dims:[ size ]
       ~input_dims:[]
-      ~output_dims:[ CDSL.dim 1 ]
+      ~output_dims:[ 1 ]
       ~init_op:(Constant_fill xs) ()
   in
   let%nn_dt session_step ~o:1 = t =+ 1 in
@@ -194,17 +194,17 @@ let%expect_test "Graph drawing fetch" =
               │                                     x |}]
 
 let%expect_test "Simple gradients materialized" =
-  SDSL.drop_all_sessions ();
+  (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let%nn_op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%nn_op d = e + "c" [ 10 ] in
   let%nn_op l = d *. "f" [ -2 ] in
-  SDSL.minus_learning_rate := Some (TDSL.init_const ~l:"minus_lr" ~o:[ CDSL.dim 1 ] [| 0.1 |]);
+  SDSL.minus_learning_rate := Some (TDSL.init_const ~l:"minus_lr" ~o:[ 1 ] [| 0.1 |]);
   SDSL.everything_fully_on_host ();
   SDSL.refresh_session ~update_params:false ();
   (* We did not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
-  SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
+  SDSL.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
                     [7] l <*.>
@@ -228,7 +228,7 @@ let%expect_test "Simple gradients materialized" =
      will change, compared to the above, as long as gradient tensors are materialized.
      Since virtual tensors are computed by-need, they will always be recomputed using the latest
      parameter state. When parameter gradients are virtual, this will lead to different parameter updates. *)
-  SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
+  SDSL.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
                     [7] l <*.>
@@ -250,7 +250,7 @@ let%expect_test "Simple gradients materialized" =
   SDSL.refresh_session ~update_params:false ();
   (* Now again we did not update the params, they will remain as above, but both param gradients
      and the values and gradients of other nodes will change thanks to the forward and backward passes. *)
-  SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
+  SDSL.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
                       [7] l <*.>
@@ -271,16 +271,16 @@ let%expect_test "Simple gradients materialized" =
        5.44e+0 │ -4.16e+0 │          │ |}]
 
 let%expect_test "Simple gradients virtual" =
-  SDSL.drop_all_sessions ();
+  (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let%nn_op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%nn_op d = e + "c" [ 10 ] in
   let%nn_op l = d *. "f" [ -2 ] in
-  SDSL.minus_learning_rate := Some (TDSL.init_const ~l:"minus_lr" ~o:[ CDSL.dim 1 ] [| 0.1 |]);
+  SDSL.minus_learning_rate := Some (TDSL.init_const ~l:"minus_lr" ~o:[ 1 ] [| 0.1 |]);
   SDSL.refresh_session ~update_params:false ();
   (* We did not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
-  SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
+  SDSL.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
                    [7] l <*.>
@@ -304,7 +304,7 @@ let%expect_test "Simple gradients virtual" =
      will change, compared to the above, as long as gradient tensors are materialized.
      Since virtual tensors are computed by-need, they will always be recomputed using the latest
      parameter state. When parameter gradients are virtual, this will lead to different parameter updates. *)
-  SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
+  SDSL.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
                    [7] l <*.>
@@ -326,7 +326,7 @@ let%expect_test "Simple gradients virtual" =
   SDSL.refresh_session ~update_params:false ();
   (* Now again we did not update the params, they will remain as above, but both param gradients
      and the values and gradients of other nodes will change thanks to the forward and backward passes. *)
-  SDSL.print_node_tree ~with_grad:true ~depth:9 l.id;
+  SDSL.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
                      [7] l <*.>
@@ -351,13 +351,13 @@ let%expect_test "tanh plot" =
   ()
 
 let%expect_test "2D neuron materialized" =
-  SDSL.drop_all_sessions ();
+  (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let%nn_op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   (* No need for [~update_params:false] because we have not set [minus_learning_rate]. *)
   SDSL.everything_fully_on_host ();
   SDSL.refresh_session ();
-  SDSL.print_node_tree ~with_grad:true ~depth:9 v.id;
+  SDSL.print_tree ~with_grad:true ~depth:9 v;
   [%expect
     {|
                         [5] v <+>
@@ -374,12 +374,12 @@ let%expect_test "2D neuron materialized" =
      2.00e+0  0.00e+0  │ -3.00e+0  1.00e+0 │ |}]
 
 let%expect_test "2D neuron virtual" =
-  SDSL.drop_all_sessions ();
+  (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let%nn_op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   (* No need for [~update_params:false] because we have not set [minus_learning_rate]. *)
   SDSL.refresh_session ();
-  SDSL.print_node_tree ~with_grad:true ~depth:9 v.id;
+  SDSL.print_tree ~with_grad:true ~depth:9 v;
   [%expect
     {|
                        [5] v <+>

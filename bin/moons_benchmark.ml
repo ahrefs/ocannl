@@ -2,24 +2,23 @@ open Base
 open Ocannl
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Low_level.CDSL
+module CDSL = Session.CDSL
 module SDSL = Session.SDSL
 
 let _suspended () =
-  (* Low_level.CDSL.with_debug := false; *)
+  (* Session.CDSL.with_debug := false; *)
   (* let open Operation.TDSL in *)
   let open SDSL.O in
-  (* SDSL.set_executor Interpreter;
-     SDSL.enable_all_debugs ~trace_interpreter:true (); *)
+  (* SDSL.enable_all_debugs (); *)
   SDSL.set_executor Cuda;
   (* SDSL.enable_all_debugs (); *)
   (*
   CDSL.virtualize_settings.enable_device_only <- true;
   CDSL.virtualize_settings.inline_constants <- true;
   *)
-  Low_level.with_debug := true;
-  Low_level.keep_files_in_run_directory := true;
-  SDSL.drop_all_sessions ();
+  CDSL.with_debug := true;
+  CDSL.keep_files_in_run_directory := true;
+  (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let parallel_dims = 1 in
   Stdio.printf "\n****** parallel_dims = %d\n%!" parallel_dims;
@@ -52,9 +51,9 @@ let _suspended () =
       20;
     ]
   in
-  let moons_flat = TDSL.init_const ~l:"moons_flat" ~b ~o:[ CDSL.dim 2 ] moons_flat in
+  let moons_flat = TDSL.init_const ~l:"moons_flat" ~b ~o:[ 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes = TDSL.init_const ~l:"moons_classes" ~b ~o:[ CDSL.dim 1 ] moons_classes in
+  let moons_classes = TDSL.init_const ~l:"moons_classes" ~b ~o:[ 1 ] moons_classes in
   (* let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 2 + ("w1" * x))) in *)
   let%nn_op mlp x = "b1" 1 + ("w1" * x) in
 
@@ -89,10 +88,10 @@ let _suspended () =
   Stdio.printf "Step 1: session_step: %f, session_refresh: %f, of steps %d\n%!" session_step.@[0]
     session_refresh.@[0] steps;
   Stdio.printf "Step 1: Minus learning rate: %f\n%!" minus_lr.@[0];
-  SDSL.print_node_tree ~with_id:true ~with_grad:true ~depth:9 minus_lr.id;
+  SDSL.print_tree ~with_id:true ~with_grad:true ~depth:9 minus_lr;
   let step_1_loss = batch_loss.@[0] in
   Stdio.printf "\nStep 1: loss %f\n%!" step_1_loss;
-  SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses.id;
+  SDSL.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses;
   (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
       SDSL.print_tensor ~with_grad:true ~with_code:false `Default f); *)
@@ -101,29 +100,29 @@ let _suspended () =
   Stdio.printf "\nStep 2: Minus learning rate: %f\n%!" minus_lr.@[0];
   let step_2_loss = batch_loss.@[0] in
   Stdio.printf "\nStep 2: cumulative loss %f, step loss %f\n%!" step_2_loss (step_2_loss -. step_1_loss);
-  SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses.id;
+  SDSL.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses;
   (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
       SDSL.print_tensor ~with_grad:true ~with_code:false `Default f); *)
   SDSL.refresh_session ();
   Stdio.printf "Step 3: session_step: %f\n%!" session_step.@[0];
   Stdio.printf "\nStep 3: Minus learning rate: %f\nStep 3 weighted reg. loss:\n%!" minus_lr.@[0];
-  SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *)
-    ~depth:9 weighted_reg_loss.id;
+  SDSL.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *)
+    ~depth:9 weighted_reg_loss;
   let step_3_loss = batch_loss.@[0] in
   Stdio.printf "\nStep 3: cumulative loss %f, step loss %f\n%!" step_3_loss (step_3_loss -. step_2_loss);
-  SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses.id;
+  SDSL.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses;
   SDSL.refresh_session ();
   Stdio.printf "Step 4: session_step: %f\n%!" session_step.@[0];
   Stdio.printf "\nStep 4: Minus learning rate: %f\n%!" minus_lr.@[0];
   Stdio.printf "\nStep 4 weighted reg. loss:\n%!";
-  SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *)
-    ~depth:9 weighted_reg_loss.id;
+  SDSL.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *)
+    ~depth:9 weighted_reg_loss;
   Stdio.printf "\nStep 4 epoch loss tensor:\n%!";
-  SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_loss.id;
+  SDSL.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_loss;
   let step_4_loss = batch_loss.@[0] in
   Stdio.printf "\nStep 4: cumulative loss %f, step loss %f\n%!" step_4_loss (step_4_loss -. step_3_loss);
-  SDSL.print_node_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses.id;
+  SDSL.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses;
   Stdio.printf "\nHost size in bytes: %d\n%!" (SDSL.global_host_size_in_bytes ())
 
 let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?(inline_constants = true)
@@ -171,15 +170,15 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
   SDSL.default_value_prec := precision;
   SDSL.default_grad_prec := precision;
   let open SDSL.O in
-  SDSL.drop_all_sessions ();
-  (* Low_level.with_debug := true; *)
-  (* Low_level.keep_files_in_run_directory := true; *)
+  (* SDSL.drop_all_sessions (); *)
+  (* CDSL.with_debug := true; *)
+  (* CDSL.keep_files_in_run_directory := true; *)
   (* Low_level.debug_verbose_trace := true; *)
   Random.init (* random_seed *) 0;
-  Ndarray.fixed_state_for_init := Some random_seed;
-  (* let hid_2_3 = CDSL.dim 8 in
-     let hid_4_5 = CDSL.dim 4 in *)
-  let hid_dim = CDSL.dim 16 in
+  CDSL.fixed_state_for_init := Some random_seed;
+  (* let hid_2_3 = 8 in
+     let hid_4_5 = 4 in *)
+  let hid_dim = 16 in
   let repeats = updates_per_run in
   let len = 320 in
   (* let len = 10240 in *)
@@ -269,7 +268,7 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
       then
         Stdio.printf "Epoch=%d, batch=%d, session_step=%f, -lr=%f, batch loss=%f\n%!" epoch
           batch_n session_step.@[0] minus_lr.@[0] total_loss.@[0]
-        (* SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss.id; *)
+        (* SDSL.print_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss; *)
     done;
     learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
     last_loss := batch_loss.@[0];
@@ -294,8 +293,8 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
         result = [%sexp_of: float * float] (!min_loss, !last_loss);
       }
   in
-  Low_level.with_debug := false;
-  Low_level.keep_files_in_run_directory := false;
+  CDSL.with_debug := false;
+  CDSL.keep_files_in_run_directory := false;
   let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in

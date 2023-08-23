@@ -1,6 +1,6 @@
 open Base
 open Ocannl
-module CDSL = Low_level.CDSL
+module CDSL = Session.CDSL
 module TDSL = Operation.TDSL
 module SDSL = Session.SDSL
 
@@ -12,7 +12,7 @@ let%expect_test "Hello World" =
 
 let%expect_test "Pointwise multiplication dims 1" =
   let open Session.SDSL in
-  drop_all_sessions ();
+  (* drop_all_sessions (); *)
   Random.init 0;
   (* "Hey" is inferred to be a scalar. *)
   let%nn_op y = 2 *. "hey" in
@@ -31,7 +31,7 @@ let%expect_test "Pointwise multiplication dims 1" =
 
 let%expect_test "Matrix multiplication dims 1x1" =
   let open Session.SDSL in
-  drop_all_sessions ();
+  (* drop_all_sessions (); *)
   Random.init 0;
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
   let%nn_op y = ("hey" * 'q' 2.0) + 'p' 1.0 in
@@ -61,7 +61,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
     └───────────────────────┘ |}]
 
 let%expect_test "Print constant tensor" =
-  Session.drop_all_sessions ();
+  (* Session.drop_all_sessions (); *)
   Random.init 0;
   let open Session.SDSL in
   let%nn_op hey = [ (1, 2, 3); (4, 5, 6) ] in
@@ -351,7 +351,7 @@ let%expect_test "Print constant tensor" =
 
 let%expect_test "Matrix multiplication dims 2x3" =
   let open Session.SDSL in
-  drop_all_sessions ();
+  (* drop_all_sessions (); *)
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
   let%nn_op hey = "hey" in
@@ -384,7 +384,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
 
 let%expect_test "Big matrix" =
   let open Session.SDSL in
-  drop_all_sessions ();
+  (* drop_all_sessions (); *)
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
   let hey = TDSL.O.(!~"hey") in
@@ -436,13 +436,13 @@ let%expect_test "Big matrix" =
 
 let%expect_test "Very big tensor" =
   let open Session.SDSL in
-  drop_all_sessions ();
+  (* drop_all_sessions (); *)
   Random.init 0;
   let hey =
     TDSL.range_of_shape
-      ~batch_dims:[ CDSL.dim 6 ]
-      ~input_dims:[ CDSL.dim 7; CDSL.dim 8; CDSL.dim 9 ]
-      ~output_dims:[ CDSL.dim 10; CDSL.dim 11 ]
+      ~batch_dims:[ 6 ]
+      ~input_dims:[ 7; 8; 9 ]
+      ~output_dims:[ 10; 11 ]
       ()
   in
   let%nn_op hoo = (hey * (1 + 1)) - 10 in

@@ -1,26 +1,26 @@
 open Base
 open Ocannl
-module CDSL = Low_level.CDSL
+module CDSL = Session.CDSL
 module TDSL = Operation.TDSL
 
 let () = Session.SDSL.set_executor Gccjit
 
 let hello1 () =
-  Session.drop_all_sessions ();
+  (* Session.drop_all_sessions (); *)
   Random.init 0;
   let open Operation.TDSL in
   let open Session.SDSL in
   (* Hey is inferred to be a matrix. *)
   let hey =
     range_of_shape
-      ~batch_dims:[ CDSL.dim 7 ]
-      ~input_dims:[ CDSL.dim 9; CDSL.dim 10; CDSL.dim 11 ]
-      ~output_dims:[ CDSL.dim 13; CDSL.dim 14 ]
+      ~batch_dims:[ 7 ]
+      ~input_dims:[ 9; 10; 11 ]
+      ~output_dims:[ 13; 14 ]
       ()
   in
   let%nn_op hoo = ((1 + 1) * hey) - 10 in
   refresh_session ();
-  print_node_tree ~with_grad:false ~depth:99 hoo.id;
+  print_tree ~with_grad:false ~depth:99 hoo;
   print_tensor ~with_code:false ~with_grad:false `Default hoo
 (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
 
@@ -38,7 +38,7 @@ let hello2 () =
 
 let hello3 () =
   let open Session.SDSL in
-  drop_all_sessions ();
+  (* drop_all_sessions (); *)
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
   let hey = TDSL.O.(!~"hey") in

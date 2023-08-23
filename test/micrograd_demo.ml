@@ -2,13 +2,13 @@ open Base
 open Ocannl
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Low_level.CDSL
+module CDSL = Session.CDSL
 module SDSL = Session.SDSL
 
 let () = SDSL.set_executor Gccjit
 
 let%expect_test "Micrograd README basic example" =
-  SDSL.drop_all_sessions ();
+  (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let%nn_op c = "a" [ -4 ] + "b" [ 2 ] in
   let%nn_op d = (a *. b) + (b **. 3) in
@@ -76,7 +76,7 @@ let%expect_test "Micrograd README basic example" =
 
 let%expect_test "Micrograd half-moons example" =
   let open SDSL.O in
-  SDSL.drop_all_sessions ();
+  (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let len = 200 in
   let batch = 10 in
@@ -93,11 +93,11 @@ let%expect_test "Micrograd half-moons example" =
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
   let moons_flat =
-    TDSL.init_const ~l:"moons_flat" ~b:[ CDSL.dim epochs; CDSL.dim batch ] ~o:[ CDSL.dim 2 ] moons_flat
+    TDSL.init_const ~l:"moons_flat" ~b:[ epochs; batch ] ~o:[ 2 ] moons_flat
   in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let moons_classes =
-    TDSL.init_const ~l:"moons_classes" ~b:[ CDSL.dim epochs; CDSL.dim batch ] ~o:[ CDSL.dim 1 ] moons_classes
+    TDSL.init_const ~l:"moons_classes" ~b:[ epochs; batch ] ~o:[ 1 ] moons_classes
   in
   let%nn_op mlp x = "b3" 1 + ("w3" * !/("b2" 16 + ("w2" * !/("b1" 16 + ("w1" * x))))) in
   let steps = epochs * 2 * len / batch in

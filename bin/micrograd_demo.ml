@@ -2,21 +2,21 @@ open Base
 open Ocannl
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Low_level.CDSL
+module CDSL = Session.CDSL
 module SDSL = Session.SDSL
 
 let () = SDSL.set_executor Cuda
 
 let () =
   let open SDSL.O in
-  SDSL.drop_all_sessions ();
-  (* Low_level.with_debug := true; *)
-  (* Low_level.keep_files_in_run_directory := true; *)
+  (* SDSL.drop_all_sessions (); *)
+  (* CDSL.with_debug := true; *)
+  (* CDSL.keep_files_in_run_directory := true; *)
   (* Low_level.debug_verbose_trace := true; *)
   Random.init 0;
   (* The seeds 0, 6, 8 are unlucky. Seeds 2-5, 7, 9 are good. From better to worse: 4, 2, 9, 7, 1, 5, 3. *)
-  Ndarray.fixed_state_for_init := Some 4;
-  let hid_dim = CDSL.dim 16 in
+  CDSL.fixed_state_for_init := Some 4;
+  let hid_dim = 16 in
   let len = 200 in
   let batch = 20 in
   let n_batches = 2 * len / batch in
@@ -65,13 +65,13 @@ let () =
     if step % (len / batch) = 1 || step = steps then
       Stdio.printf "Step=%d, session_step=%f, -lr=%f, loss=%f\n%!" step session_step.@[0] minus_lr.@[0]
         total_loss.@[0]
-      (* SDSL.print_node_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss.id *);
+      (* SDSL.print_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss *);
     learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
     losses := total_loss.@[0] :: !losses;
     log_losses := Float.log total_loss.@[0] :: !log_losses
   done;
-  Low_level.with_debug := false;
-  Low_level.keep_files_in_run_directory := false;
+  CDSL.with_debug := false;
+  CDSL.keep_files_in_run_directory := false;
   let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in

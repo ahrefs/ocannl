@@ -1,16 +1,16 @@
 open Base
 open Ocannl
-module CDSL = Low_level.CDSL
+module CDSL = Session.CDSL
 module TDSL = Operation.TDSL
 
 let () = Session.SDSL.set_executor Gccjit
 
 let%expect_test "einsum1 permute axes" =
   let open Session.SDSL in
-  drop_all_sessions ();
+  (* drop_all_sessions (); *)
   Random.init 0;
   let hey =
-    TDSL.range_of_shape ~batch_dims:[ CDSL.dim 2 ] ~input_dims:[ CDSL.dim 3 ] ~output_dims:[ CDSL.dim 4 ] ()
+    TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] ()
   in
   let%nn_op ho = hey ++ "b|i->o => o|b->i" in
   refresh_session ();
@@ -45,9 +45,9 @@ let%expect_test "einsum1 permute axes" =
     └────────────────────────────────────────────────────────────────────────────────────┘ |}];
   let hey2 =
     TDSL.range_of_shape
-      ~batch_dims:[ CDSL.dim 2; CDSL.dim 3 ]
-      ~input_dims:[ CDSL.dim 4; CDSL.dim 5 ]
-      ~output_dims:[ CDSL.dim 6; CDSL.dim 7 ]
+      ~batch_dims:[ 2; 3 ]
+      ~input_dims:[ 4; 5 ]
+      ~output_dims:[ 6; 7 ]
       ()
   in
   let%nn_op ho2 = hey2 ++ "ab|cd->ef => cf|ae->db" in
@@ -263,10 +263,10 @@ let%expect_test "einsum1 permute axes" =
 
 let%expect_test "einsum1 sum out axes" =
   let open Session.SDSL in
-  drop_all_sessions ();
+  (* drop_all_sessions (); *)
   Random.init 0;
   let hey =
-    TDSL.range_of_shape ~batch_dims:[ CDSL.dim 2 ] ~input_dims:[ CDSL.dim 3 ] ~output_dims:[ CDSL.dim 4 ] ()
+    TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] ()
   in
   let%nn_op ho = hey ++ "b|i->o => b|i" in
   refresh_session ();
@@ -299,9 +299,9 @@ let%expect_test "einsum1 sum out axes" =
     └────────────────────────────────────┘ |}];
   let hey2 =
     TDSL.range_of_shape
-      ~batch_dims:[ CDSL.dim 2; CDSL.dim 3 ]
-      ~input_dims:[ CDSL.dim 4; CDSL.dim 5 ]
-      ~output_dims:[ CDSL.dim 6; CDSL.dim 7 ]
+      ~batch_dims:[ 2; 3 ]
+      ~input_dims:[ 4; 5 ]
+      ~output_dims:[ 6; 7 ]
       ()
   in
   let%nn_op ho2 = hey2 ++ "ab|cd->ef => c|a->d" in
@@ -327,10 +327,10 @@ let%expect_test "einsum1 sum out axes" =
 
 let%expect_test "einsum outer product" =
   let open Session.SDSL in
-  drop_all_sessions ();
+  (* drop_all_sessions (); *)
   Random.init 0;
-  let a = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ CDSL.dim 2 ] () in
-  let b = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ CDSL.dim 3 ] () in
+  let a = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
+  let b = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] () in
   let%nn_op c = (a + 1) *+ "i; j => i->j" b in
   refresh_session ();
   print_tensor ~with_code:false ~with_grad:false `Default @@ a;
@@ -369,10 +369,10 @@ let%expect_test "einsum outer product" =
     │└──────┴──────────────────┘ │
     └────────────────────────────┘ |}];
   let a =
-    TDSL.range_of_shape ~batch_dims:[ CDSL.dim 2 ] ~input_dims:[ CDSL.dim 3 ] ~output_dims:[ CDSL.dim 4 ] ()
+    TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] ()
   in
   let b =
-    TDSL.range_of_shape ~batch_dims:[ CDSL.dim 5 ] ~input_dims:[ CDSL.dim 6 ] ~output_dims:[ CDSL.dim 7 ] ()
+    TDSL.range_of_shape ~batch_dims:[ 5 ] ~input_dims:[ 6 ] ~output_dims:[ 7 ] ()
   in
   let%nn_op c = a *+ "i|j->k; l|m->n => il|jm->kn" b in
   refresh_session ();
@@ -560,13 +560,13 @@ let%expect_test "einsum outer product" =
 
 let%expect_test "einsum matrix/inner+outer products" =
   let open Session.SDSL in
-  drop_all_sessions ();
+  (* drop_all_sessions (); *)
   Random.init 0;
   let a =
-    TDSL.range_of_shape ~batch_dims:[ CDSL.dim 2 ] ~input_dims:[ CDSL.dim 3 ] ~output_dims:[ CDSL.dim 4 ] ()
+    TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] ()
   in
   let b =
-    TDSL.range_of_shape ~batch_dims:[ CDSL.dim 2 ] ~input_dims:[ CDSL.dim 4 ] ~output_dims:[ CDSL.dim 5 ] ()
+    TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] ()
   in
   let%nn_op a2 = a *+ "b|i->o; b|i->o => b|i->o" a in
   let%nn_op c = b *+ "b|h->o; b|i->h => b|i->o" a in
@@ -660,10 +660,10 @@ let%expect_test "einsum matrix/inner+outer products" =
 
 let%expect_test "einsum1 broadcast or sum out prefix axes" =
   let open Session.SDSL in
-  drop_all_sessions ();
+  (* drop_all_sessions (); *)
   Random.init 0;
   let hey =
-    TDSL.range_of_shape ~batch_dims:[ CDSL.dim 2 ] ~input_dims:[ CDSL.dim 3 ] ~output_dims:[ CDSL.dim 4 ] ()
+    TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] ()
   in
   let%nn_op ho = hey ++ "...|i->o => ...|o->i" in
   refresh_session ();
@@ -714,9 +714,9 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
 
   let hey2 =
     TDSL.range_of_shape
-      ~batch_dims:[ CDSL.dim 2; CDSL.dim 3 ]
-      ~input_dims:[ CDSL.dim 4; CDSL.dim 5 ]
-      ~output_dims:[ CDSL.dim 6; CDSL.dim 7 ]
+      ~batch_dims:[ 2; 3 ]
+      ~input_dims:[ 4; 5 ]
+      ~output_dims:[ 6; 7 ]
       ()
   in
   let%nn_op ho3 = hey2 ++ "...b|...i->...o => ...i|...o->...b" in
@@ -992,7 +992,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │││ 4.20e+1  6.00e+1  7.80e+1  9.60e+1 ││
     │└┴────────────────────────────────────┘│
     └───────────────────────────────────────┘ |}];
-  let hey3 = TDSL.range_of_shape ~output_dims:[ CDSL.dim 3; CDSL.dim 4 ] () in
+  let hey3 = TDSL.range_of_shape ~output_dims:[ 3; 4 ] () in
   let%nn_op ho6 = hey3 ++ "...|...->...o => o" in
   refresh_session ();
   print_tensor ~with_code:false ~with_grad:false `Default @@ hey3;
@@ -1020,7 +1020,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└┴────────────────────────────────────┘│
     └───────────────────────────────────────┘ |}];
   (* Broadcast with a shift. *)
-  let hey4 = TDSL.range_of_shape ~input_dims:[ CDSL.dim 2 ] ~output_dims:[ CDSL.dim 3; CDSL.dim 4 ] () in
+  let hey4 = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3; 4 ] () in
   let%nn_op ho7 = hey4 ++ "i->...o => ...io" in
   refresh_session ();
   print_tensor ~with_code:false ~with_grad:false `Default @@ hey4;
@@ -1059,13 +1059,13 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
 
 let%expect_test "einsum broadcast or sum out prefix axes" =
   let open Session.SDSL in
-  drop_all_sessions ();
+  (* drop_all_sessions (); *)
   Random.init 0;
   let a =
-    TDSL.range_of_shape ~batch_dims:[ CDSL.dim 3 ] ~input_dims:[ CDSL.dim 4 ] ~output_dims:[ CDSL.dim 2 ] ()
+    TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] ()
   in
   let b =
-    TDSL.range_of_shape ~batch_dims:[ CDSL.dim 3 ] ~input_dims:[ CDSL.dim 1 ] ~output_dims:[ CDSL.dim 4 ] ()
+    TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] ()
   in
   let%nn_op c = a *+ "...|i->...; ...|...->i => ...|i" b in
   refresh_session ();
@@ -1111,8 +1111,8 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
     │└──────┴────────────────────────────────────┘│
     └─────────────────────────────────────────────┘ |}];
   (* Broadcast with a shift. *)
-  let d = TDSL.range_of_shape ~input_dims:[ CDSL.dim 2 ] ~output_dims:[ CDSL.dim 3 ] () in
-  let e = TDSL.range_of_shape ~input_dims:[ CDSL.dim 4 ] ~output_dims:[ CDSL.dim 3 ] () in
+  let d = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
+  let e = TDSL.range_of_shape ~input_dims:[ 4 ] ~output_dims:[ 3 ] () in
   let%nn_op f = d *+ "i->...;j->... => ...ij" e in
   refresh_session ();
   print_tensor ~with_code:false ~with_grad:false `Default @@ d;
@@ -1162,10 +1162,10 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
 
 let%expect_test "einsum1 fixed dim axis" =
   let open Session.SDSL in
-  drop_all_sessions ();
+  (* drop_all_sessions (); *)
   Random.init 0;
   let hey =
-    TDSL.range_of_shape ~batch_dims:[ CDSL.dim 2 ] ~input_dims:[ CDSL.dim 3 ] ~output_dims:[ CDSL.dim 4 ] ()
+    TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] ()
   in
   let%nn_op ho = hey ++ "...|1->... => ...|..." in
   refresh_session ();
@@ -1225,7 +1225,7 @@ let%expect_test "einsum1 fixed dim axis" =
     ││axis 1│ 1.80e+1  2.20e+1  2.60e+1 │ 6.60e+1  7.00e+1  7.40e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
-  let hey2 = TDSL.range_of_shape ~input_dims:[ CDSL.dim 2 ] ~output_dims:[ CDSL.dim 3 ] () in
+  let hey2 = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
   let%nn_op ho3 = hey2 ++ "...|...->... => 0" in
   refresh_session ();
   print_tensor ~with_code:false ~with_grad:false `Default @@ hey2;
@@ -1260,13 +1260,13 @@ let%expect_test "einsum1 fixed dim axis" =
 
 let%expect_test "einsum with fixed dim axes" =
   let open Session.SDSL in
-  drop_all_sessions ();
+  (* drop_all_sessions (); *)
   Random.init 0;
   let a =
-    TDSL.range_of_shape ~batch_dims:[ CDSL.dim 3 ] ~input_dims:[ CDSL.dim 4 ] ~output_dims:[ CDSL.dim 2 ] ()
+    TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] ()
   in
   let b =
-    TDSL.range_of_shape ~batch_dims:[ CDSL.dim 3 ] ~input_dims:[ CDSL.dim 1 ] ~output_dims:[ CDSL.dim 4 ] ()
+    TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] ()
   in
   let%nn_op c = a *+ "...|i->1; ...|...->i => ...|i" b in
   refresh_session ();

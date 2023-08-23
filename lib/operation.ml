@@ -2,7 +2,7 @@
 
 open Base
 open Arrayjit
-module CDSL = Low_level.CDSL
+module CDSL = Session.CDSL
 
 module Empty_DSL = struct
   include Tensor.NTDSL
