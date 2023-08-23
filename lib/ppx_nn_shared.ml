@@ -58,16 +58,6 @@ let is_assignment ident =
   && Char.equal ident.[0] '='
   && (not @@ List.mem [ "=="; "==="; "=>"; "==>"; "=>>" ] ident ~equal:String.equal)
 
-let convert_dsl_dims dims =
-  List.map dims ~f:(function
-    | { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = loc; _ } as i -> [%expr Shape.dim [%e i]]
-    (* FIXME: *)
-    (* | { pexp_desc = Pexp_ident { txt = Lident "parallel"; loc }; pexp_loc = _; _ } ->
-        [%expr Shape.{ special = Dedicated Task_id; dim =  }]
-    | { pexp_desc = Pexp_ident { txt = Lident "minibatch"; loc }; pexp_loc = _; _ } ->
-        [%expr Shape.{ special = Dedicated Sample_num; dim =  }] *)
-    | e -> e)
-
 let let_opt ~loc vbs expr =
   if Map.is_empty vbs then expr else Ast_helper.Exp.let_ ~loc Nonrecursive (Map.data vbs) expr
 

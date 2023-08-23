@@ -754,10 +754,10 @@ let translate_dt ?desc_label (expr : expression) : expression =
         let edims =
           Option.map ~f:(function
             | { pexp_desc = Pexp_tuple dims; pexp_loc = dims_loc; _ } ->
-                edims ~dims_loc @@ convert_dsl_dims dims
+                edims ~dims_loc dims
             | ( { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = dims_loc; _ }
               | { pexp_desc = Pexp_ident _; pexp_loc = dims_loc; _ } ) as d ->
-                edims ~dims_loc @@ convert_dsl_dims [ d ]
+                edims ~dims_loc [ d ]
             | e -> e)
         in
         [%expr

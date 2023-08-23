@@ -100,5 +100,4 @@ let ndarray_constant expr =
       | `Output_dims dim -> (batch_dims, eint ~loc dim :: output_dims, input_dims)
       | `Batch_dims dim -> (eint ~loc dim :: batch_dims, output_dims, input_dims))
   in
-  let to_dim dims = List.rev_map dims ~f:(fun d -> [%expr Shape.dim [%e d]]) in
-  (values, to_dim batch_dims, to_dim output_dims, to_dim input_dims)
+  (values, List.rev batch_dims, List.rev output_dims, List.rev input_dims)

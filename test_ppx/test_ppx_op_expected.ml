@@ -22,13 +22,13 @@ let y2 =
 let a =
   let open! TDSL.O in
     TDSL.ndarray ?desc_label:(Some "a") ~batch_dims:[]
-      ~input_dims:[Shape.dim 3] ~output_dims:[Shape.dim 2]
+      ~input_dims:[3] ~output_dims:[2]
       [|(Float.of_int 1);(Float.of_int 2);(Float.of_int 3);(Float.of_int 4);(
         Float.of_int 5);(Float.of_int 6)|]
 let b =
   let open! TDSL.O in
-    TDSL.ndarray ?desc_label:(Some "b") ~batch_dims:[Shape.dim 2]
-      ~input_dims:[] ~output_dims:[Shape.dim 2]
+    TDSL.ndarray ?desc_label:(Some "b") ~batch_dims:[2]
+      ~input_dims:[] ~output_dims:[2]
       [|(Float.of_int 7);(Float.of_int 8);(Float.of_int 9);(Float.of_int 10)|]
 let y =
   let open! TDSL.O in

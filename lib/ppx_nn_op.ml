@@ -95,7 +95,7 @@ let rec translate ?desc_label expr =
         [%e?
           ( { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = dims_loc; _ }
           | { pexp_desc = Pexp_ident _; pexp_loc = dims_loc; _ } ) as d]] ->
-      let pat, vb = make_vb_dims ~loc ~str_loc ~ident ~dims:(convert_dsl_dims [ d ]) ~dims_loc s in
+      let pat, vb = make_vb_dims ~loc ~str_loc ~ident ~dims:[ d ] ~dims_loc s in
       (Map.singleton (module String) ident vb, pat2expr pat)
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
@@ -107,7 +107,6 @@ let rec translate ?desc_label expr =
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
         [%e? { pexp_desc = Pexp_tuple dims; pexp_loc = dims_loc; _ }]] ->
-      let dims = convert_dsl_dims dims in
       let pat, vb = make_vb_dims ~loc ~str_loc ~ident ~dims ~dims_loc s in
       (Map.singleton (module String) ident vb, pat2expr pat)
   | { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } ->
