@@ -1,48 +1,28 @@
 (** Managing a computation session. *)
 
 open Base
-
-let get_root id =
-  let open Tensor in
-  match Map.find !global_roots id with
-  | Some r -> r
-  | None ->
-      let msg =
-        if id >= !first_session_id && id < session_state.next_session_id then
-          "get_root: Node " ^ Int.to_string id ^ " is a subtensor"
-        else if id >= session_state.next_session_id then "get_root: Node " ^ Int.to_string id ^ " has not been created yet"
-        else if id < 1 then "get_root: Node IDs start from 1"
-        else "get_root: Node " ^ Int.to_string id ^ " is outside the current session"
-      in
-      raise @@ Session_error (msg, None)
-
-let get_node id =
-  match Hashtbl.find Low_level.global_node_store id with
-  | Some r -> r
-  | None ->
-      let msg =
-        if id >= session_state.next_session_id then "get_node: Node " ^ Int.to_string id ^ " has not been created yet"
-        else if id < 1 then "get_root: Node IDs start from 1"
-        else "get_node: Node " ^ Int.to_string id ^ " has been removed or lives on a different machine"
-      in
-      raise @@ Tensor.Session_error (msg, None)
+module Nd = Arrayjit.Ndarray
+module LA = Arrayjit.Low_level.Lazy_array
 
 (** *** Printing. *** *)
 
-let ndarray_dims_to_string ?(with_axis_numbers = false) arr =
-  Nd.precision_string arr ^ " prec " ^ Nd.int_dims_to_string ~with_axis_numbers @@ Nd.dims arr
+let la_dims_to_string ?(with_axis_numbers = false) arr =
+  let dims_s =
+    if Lazy.is_val arr.LA.dims then Nd.int_dims_to_string ~with_axis_numbers @@ Lazy.force arr.dims
+    else "<not-in-yet>"
+  in
+  Nd.prec_string arr.prec ^ " prec " ^ dims_s
 
 (** Converts ID, label and the dimensions of a node to a string. *)
-let node_header v =
-  let v_dims_s = ndarray_dims_to_string v.node.value in
-  let g_dims_s = match v.node.grad with None -> "<no-grad>" | Some grad -> ndarray_dims_to_string grad in
+let tensor_header t =
+  let v_dims_s = la_dims_to_string t.Tensor.value in
+  let g_dims_s = match t.diff with None -> "<no-grad>" | Some diff -> la_dims_to_string diff.grad in
   let dims_s =
     if String.equal v_dims_s g_dims_s then "dims " ^ v_dims_s
     else "dims val " ^ v_dims_s ^ " grad " ^ g_dims_s
   in
-  let desc_l = match v.desc_label with None -> "" | Some l -> " " ^ l in
-  "#" ^ Int.to_string v.id ^ desc_l ^ " op " ^ v.op_label ^ " " ^ dims_s ^ " ["
-  ^ String.concat ~sep:"," (List.map v.children ~f:(fun { sub_node = { id; _ }; _ } -> Int.to_string id))
+  "#" ^ Int.to_string t.id ^ " " ^ t.value.label ^ " " ^ dims_s ^ " ["
+  ^ String.concat ~sep:"," (List.map t.children ~f:(fun { subtensor = { id; _ }; _ } -> Int.to_string id))
   ^ "]"
 (*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box v.label)*)
 
@@ -78,67 +58,69 @@ type array_print_style =
 (** We print out up to 5 axes when printing a tensor, as a grid (outer rectangle) of (inner)
     rectangles, possibly repeated (screens). *)
 
-let to_dag ?(single_node = false) ?entries_per_axis ?extra_prefix ~with_id ~with_value ~with_grad v =
-  let rec to_dag { sub_node = v; computed_externally } : PrintBox_utils.dag =
-    let id = Int.to_string v.id in
-    let children = if single_node then [] else List.map ~f:to_dag v.children in
-    let desc_l = match v.desc_label with None -> "" | Some l -> l ^ " " in
-    let op_l = match v.op_label with "" -> "" | l -> "<" ^ l ^ ">" in
-    let prefix = "[" ^ id ^ "] " ^ desc_l ^ op_l in
-    let prefix =
-      match extra_prefix with
-      | None -> prefix
-      | Some f ->
-          let extra = f v.annot in
-          if String.is_empty extra then prefix else prefix ^ " " ^ extra
-    in
-    let labels = !(v.axis_labels) in
-    let indices = !(v.default_display_indices) in
-    match (computed_externally, with_value, with_grad, v.node.grad) with
-    | true, _, _, _ -> `Embed_subtree_ID (Int.to_string v.id)
-    | _, false, false, _ | _, false, true, None ->
-        let txt = if with_id then prefix else desc_l ^ v.op_label in
-        `Subtree_with_ID (id, `Tree (`Text txt, children))
-    | _, true, false, _ | _, true, true, None ->
+let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_grad t =
+  (* let la_to_box la = in *)
+  let rec to_dag { Tensor.subtensor = t; embedded } : PrintBox_utils.dag =
+    let id = Int.to_string t.id in
+    let children = if single_node then [] else List.map ~f:to_dag t.children in
+    let prefix = "[" ^ id ^ "] " ^ t.value.label in
+    let labels = Shape.axis_map_to_dims_index t.shape.axis_labels in
+    let indices = Shape.default_display_indices t.shape in
+    let txt = if with_id then prefix else t.value.label in
+    match (not embedded, with_value, with_grad, t.value.array, t.diff) with
+    | true, _, _, _, _ -> `Embed_subtree_ID (Int.to_string t.id)
+    | _, false, false, _, _ | _, false, true, _, None -> `Subtree_with_ID (id, `Tree (`Text txt, children))
+    | _, true, false, (lazy (Some v_array)), _ | _, true, true, (lazy (Some v_array)), None ->
+        let node = `Box (Nd.render_array ~brief:true ~prefix ?entries_per_axis ~labels ~indices @@ v_array) in
+        `Subtree_with_ID (id, `Tree (node, children))
+    | _, true, false, (lazy None), _ | _, true, true, (lazy None), None ->
+        let node = `Text (txt ^ " <virtual>") in
+        `Subtree_with_ID (id, `Tree (node, children))
+    | _, false, true, _, Some diff ->
+        let prefix = prefix ^ " Gradient" in
         let node =
-          `Box (Nd.render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices v.node.value)
+          match Lazy.force diff.grad.array with
+          | Some g_array ->
+              `Box (Nd.render_array ~brief:true ~prefix ?entries_per_axis ~labels ~indices g_array)
+          | None -> `Text (diff.grad.label ^ " <virtual>")
         in
         `Subtree_with_ID (id, `Tree (node, children))
-    | _, false, true, Some grad ->
-        let prefix = prefix ^ " Gradient" in
-        let node = `Box (Nd.render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices grad) in
-        `Subtree_with_ID (id, `Tree (node, children))
-    | _, true, true, Some grad ->
+    | _, true, true, (lazy (Some v_array)), Some diff ->
         let node =
-          let value = Nd.render_tensor ~brief:true ~prefix ?entries_per_axis ~labels ~indices v.node.value in
+          let value = Nd.render_array ~brief:true ~prefix ?entries_per_axis ~labels ~indices v_array in
           let grad =
-            Nd.render_tensor ~brief:true ~prefix:"Gradient" ?entries_per_axis ~labels ~indices grad
+            match Lazy.force diff.grad.array with
+            | Some g_array ->
+                `Box
+                  (Nd.render_array ~brief:true ~prefix:"Gradient" ?entries_per_axis ~labels ~indices g_array)
+            | None -> `Text (diff.grad.label ^ "Gradient <virtual>")
           in
-          `Vlist (false, [ `Box value; `Box grad ])
+          `Vlist (false, [ `Box value; grad ])
+        in
+        `Subtree_with_ID (id, `Tree (node, children))
+    | _, true, true, (lazy None), Some diff ->
+        let node =
+          let value = `Text (prefix ^ " " ^ t.value.label ^ " <virtual>") in
+          let grad =
+            match Lazy.force diff.grad.array with
+            | Some g_array ->
+                `Box
+                  (Nd.render_array ~brief:true ~prefix:"Gradient" ?entries_per_axis ~labels ~indices g_array)
+            | None -> `Text (diff.grad.label ^ "Gradient <virtual>")
+          in
+          `Vlist (false, [ value; grad ])
         in
         `Subtree_with_ID (id, `Tree (node, children))
   in
-  to_dag { sub_node = v; computed_externally = false }
+  to_dag { subtensor = t; embedded = true }
 
-let to_printbox ?single_node ?entries_per_axis ?extra_prefix ?(with_id = false) ?(with_value = true)
-    ~with_grad ~depth n_id =
-  to_dag ?single_node ?entries_per_axis ?extra_prefix ~with_id ~with_value ~with_grad n_id
-  |> PrintBox_utils.reformat_dag depth
+let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_value = true) ~with_grad ~depth t =
+  to_dag ?single_node ?entries_per_axis ~with_id ~with_value ~with_grad t |> PrintBox_utils.reformat_dag depth
 
-let print_node_preamble ?(print_missing = true) ?extra_prefix v =
-  try
-    let prefix = node_header v in
-    let prefix =
-      match extra_prefix with
-      | None -> prefix
-      | Some f ->
-          let extra = f v.annot in
-          if String.is_empty extra then prefix else prefix ^ " " ^ extra
-    in
-    Caml.Format.printf "Node %s" prefix;
-    Caml.Format.printf "\n%!"
-  with Not_found_s _ | Caml.Not_found ->
-    if print_missing then Caml.Format.printf "Node #%d does not exist.\n%!" v.id
+let print_tensor_preamble t =
+  let prefix = tensor_header t in
+  Caml.Format.printf "Tensor %s" prefix;
+  Caml.Format.printf "\n%!"
 
 let print_tensor ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style) t =
   let open Tensor in
@@ -219,7 +201,8 @@ let print_tensor ~with_grad ~with_code ?(with_low_level = false) (style : array_
   if with_low_level then (
     (match t.forward_body with
     | Noop -> ()
-    | fwd_code -> Caml.Format.printf "Current forward low-level body:@ %a@ " Low_level.fprint_low_level fwd_code);
+    | fwd_code ->
+        Caml.Format.printf "Current forward low-level body:@ %a@ " Low_level.fprint_low_level fwd_code);
     match t.diff with
     | Some { backprop_body = Noop; _ } -> ()
     | Some { backprop_body = bwd_code; _ } ->
@@ -227,15 +210,11 @@ let print_tensor ~with_grad ~with_code ?(with_low_level = false) (style : array_
     | None -> ());
   Stdio.printf "\n%!"
 
-let print_global_roots ~with_grad ~with_code (style : array_print_style) =
+let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
   let open Tensor in
-  List.iter (Map.to_alist ~key_order:`Increasing !global_roots) ~f:(fun (id, root) ->
+  List.iter (Map.to_alist ~key_order:`Increasing !forward_roots) ~f:(fun (id, root) ->
       assert (id = root.id);
       print_tensor ~with_grad ~with_code style root)
-
-let print_preamble () =
-  (* Stdio.printf "%s\n%!" (Tensor.prefix_with_preamble "") *)
-  Low_level.print_preamble ()
 
 (** *** Session management. *** *)
 type backend = Interpreter | Gccjit | Cuda [@@deriving sexp, equal]

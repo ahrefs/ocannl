@@ -47,6 +47,12 @@ let prec_of_sexp = function
   | Sexp.List _ -> invalid_arg "prec_of_sexp: expected atom, found list"
   | Sexp.Atom s -> invalid_arg @@ "prec_of_sexp: unknown precision " ^ s
 
+let prec_string = function
+  | Void_prec -> "void"
+  | Half_prec _ -> "half"
+  | Single_prec _ -> "single"
+  | Double_prec _ -> "double"
+
 let equal_prec p1 p2 =
   match (p1, p2) with
   | Void_prec, Void_prec -> true
