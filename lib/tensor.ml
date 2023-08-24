@@ -72,6 +72,11 @@ let session_state =
 
 let is_fwd_root t = Map.mem session_state.forward_roots t.id
 let remove_fwd_root t = session_state.forward_roots <- Map.remove session_state.forward_roots t.id
+
+let propagate_shape_updates () =
+  List.iter ~f:Shape.propagate_shapes session_state.shape_updates;
+  session_state.shape_updates <- []
+
 let default_value_prec = ref Ndarray.single
 let default_grad_prec = ref Ndarray.single
 
@@ -84,12 +89,18 @@ let session_error_printer = function
 
 let () = Caml.Printexc.register_printer session_error_printer
 
-let fetch_zeros array shape =
-  High_level.Fetch { array; fetch_op = Constant 0.; dims = lazy (Shape.to_dims shape) }
+let lazy_to_dims shape =
+  lazy
+    (propagate_shape_updates ();
+     Shape.to_dims shape)
 
-let fetch_ones array shape =
-  High_level.Fetch { array; fetch_op = Constant 1.; dims = lazy (Shape.to_dims shape) }
+let lazy_projections shape_update =
+  lazy
+    (propagate_shape_updates ();
+     Shape.derive_projections shape_update)
 
+let fetch_zeros array shape = High_level.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
+let fetch_ones array shape = High_level.Fetch { array; fetch_op = Constant 1.; dims = lazy_to_dims shape }
 let default_init_op = Low_level.Constant_fill [| 0.0 |]
 let max_sublabel_length = ref 25
 
@@ -99,7 +110,7 @@ let raw_binop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs1_is_grad ~t2 ~rhs2_i
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
   Shape.propagate_shapes local_shape_update;
   session_state.shape_updates <- local_shape_update :: session_state.shape_updates;
-  let projections = lazy (Shape.derive_projections local_shape_update) in
+  let projections = lazy_projections local_shape_update in
   let lhs = if lhs_is_grad then t.value else (Option.value_exn t.diff).grad in
   let rhs1 = if rhs1_is_grad then t1.value else (Option.value_exn t1.diff).grad in
   let rhs2 = if rhs2_is_grad then t2.value else (Option.value_exn t2.diff).grad in
@@ -111,7 +122,7 @@ let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
   Shape.propagate_shapes local_shape_update;
   session_state.shape_updates <- local_shape_update :: session_state.shape_updates;
-  let projections = lazy (Shape.derive_projections local_shape_update) in
+  let projections = lazy_projections local_shape_update in
   let lhs = if lhs_is_grad then t.value else (Option.value_exn t.diff).grad in
   let rhs = if rhs_is_grad then t1.value else (Option.value_exn t1.diff).grad in
   High_level.Accum_unop { zero_out; accum; lhs; op; rhs; projections }
@@ -127,7 +138,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
   let id = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
   let shape = make_shape ~id in
-  let dims = lazy (Shape.to_dims shape) in
+  let dims = lazy_to_dims shape in
   let label = op_label ^ if String.is_empty desc_label then "" else "/" ^ desc_label in
   let prec =
     List.map ts ~f:(fun ti -> ti.value.prec)
@@ -144,7 +155,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
   let local_shape_updates = List.map ~f:(fun logic -> Shape.{ shape; logic }) @@ shape_logics ts in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
   session_state.shape_updates <- local_shape_updates @ session_state.shape_updates;
-  let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
+  let projections = lazy_projections @@ List.hd_exn local_shape_updates in
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let fwds = List.map2_exn ts fwd_embed ~f:(fun ti e -> if not e then High_level.Noop else ti.forward) in
   let forward = High_level.sequential @@ fwds @ [ op_eqs ~v ~projections ] in
@@ -209,7 +220,7 @@ let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axi
   in
   let op_eqs ~v ~projections =
     let open High_level in
-    let dims = lazy (Lazy.force projections).Indexing.lhs_dims in
+    let dims = lazy (propagate_shape_updates (); (Lazy.force projections).Indexing.lhs_dims) in
     match fetch_op with
     | None ->
         if literal && Low_level.virtualize_settings.inline_constants then

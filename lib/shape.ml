@@ -398,11 +398,6 @@ let to_axis_map (sh : t) : dims axis_map =
   let o_dims = kind_dims Output in
   Map.of_alist_exn (module AxisKey) @@ List.concat [ b_dims; i_dims; o_dims ]
 
-(* Design choice: tensor shapes are decided while code is constructed, although not immediately.
-   Due to mutable updates during shape inference, it is not possible to reuse the same tensor with
-   different shapes. The inference is finalized by invoking the [Tensor.subtree_shape_updates] once
-   on the root tensor. *)
-
 (** Generate a label into a broadcasted axis given an einsum-like spec. Axes that are part of the spec
     do not count, so that we can use the labels to align axes across different shapes (lhs, rhs1,
     rhs2). *)
