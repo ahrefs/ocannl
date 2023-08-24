@@ -734,7 +734,7 @@ let setup_array hs_pat (hs_typ, slot, hs) =
   let loc = hs.pexp_loc in
   match hs_typ with
   | Tensor ->
-      ( Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].nondiff_forward_body]),
+      ( Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].nondiff_forward]),
         hs_typ,
         slot,
         [%expr CDSL.value_of_id [%e pat2expr hs_pat].id] )
@@ -748,7 +748,7 @@ let setup_node_id hs_pat (hs_typ, slot, hs) =
   let loc = hs.pexp_loc in
   match hs_typ with
   | Tensor ->
-      ( Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].nondiff_forward_body]),
+      ( Some (hs_pat, hs, [%expr [%e pat2expr hs_pat].nondiff_forward]),
         hs_typ,
         slot,
         [%expr [%e pat2expr hs_pat].id] )

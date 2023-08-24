@@ -145,7 +145,7 @@ let setup_array filler_pat (filler_typ, slot, filler) =
         [%expr
           if Tensor.is_fwd_root [%e t] then (
             Tensor.remove_fwd_root [%e t];
-            [%e t].Tensor.forward_body)
+            [%e t].Tensor.forward)
           else Arrayjit.High_level.Noop]
       in
       {

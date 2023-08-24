@@ -8,15 +8,15 @@ open Arrayjit
 type diff = {
   grad : LA.t;
   zero_grads : High_level.t;
-      (** Prepares for backpropagation. Always compile as: [backprop = Seq (zero_grads, backprop_body)]. *)
-  backprop_body : High_level.t;
+      (** Prepares for backpropagation. Always compile as: [Seq (zero_grads, backprop)]. *)
+  backprop : High_level.t;
       (** Backpropagates for the tensor and its descendants; which typically means adding
           partial gradients to the gradient tensor of the subtensors, then for sub-subtensors etc. *)
 }
 [@@deriving sexp_of]
 
 type t = {
-  forward_body : High_level.t;
+  forward : High_level.t;
   diff : diff option;
   id : int;  (** Same as [value.id]. *)
   value : LA.t;
@@ -119,7 +119,7 @@ let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
 let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un)
-    ~op_body ~grad_body ?(grad_spec = If_needed) make_shape ts =
+    ~op_eqs ~grad_eqs ?(grad_spec = If_needed) make_shape ts =
   let ts = List.sort ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
   let fwd_embed = List.map ts ~f:is_fwd_root in
   List.iter2_exn ts fwd_embed ~f:(fun ti e -> if e then remove_fwd_root ti);
@@ -146,13 +146,13 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
   session_state.shape_updates <- local_shape_updates @ session_state.shape_updates;
   let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
-  let fwds = List.map2_exn ts fwd_embed ~f:(fun ti e -> if not e then High_level.Noop else ti.forward_body) in
-  let forward_body = High_level.sequential @@ fwds @ [ op_body ~v ~projections ] in
+  let fwds = List.map2_exn ts fwd_embed ~f:(fun ti e -> if not e then High_level.Noop else ti.forward) in
+  let forward = High_level.sequential @@ fwds @ [ op_eqs ~v ~projections ] in
   if
     is_prohibit_grad grad_spec
     || (Fn.non is_require_grad grad_spec && List.for_all ts ~f:(fun ti -> Option.is_none ti.diff))
   then (
-    let tensor = { forward_body; diff = None; id; value = v; shape; children } in
+    let tensor = { forward; diff = None; id; value = v; shape; children } in
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     tensor)
   else
@@ -175,30 +175,30 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
     (* The code needs to be included in the reverse order to which it was computed! This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
-    let backprop_body =
-      let f = dcode ~f:(fun diff -> diff.backprop_body) in
+    let backprop =
+      let f = dcode ~f:(fun diff -> diff.backprop) in
       let bcks =
         List.map2_exn (List.map ~f ts) bck_embed ~f:(fun z e -> if not e then High_level.Noop else z)
       in
-      High_level.sequential @@ (grad_body ~v ~g ~projections :: List.rev bcks)
+      High_level.sequential @@ (grad_eqs ~v ~g ~projections :: List.rev bcks)
     in
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
-    let diff = Some { grad = g; zero_grads; backprop_body } in
-    let tensor = { forward_body; diff; id; value = v; shape; children } in
+    let diff = Some { grad = g; zero_grads; backprop } in
+    let tensor = { forward; diff; id; value = v; shape; children } in
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     session_state.backprop_roots <- Map.add_exn session_state.backprop_roots ~key:id ~data:tensor;
     tensor
 
-let binop ~op_label ?desc_label ?compose_op ~op_body ~grad_body ?grad_spec t1 t2 =
-  let op_body ~v ~projections = op_body ~v ~t1 ~t2 ~projections in
-  let grad_body ~v ~g ~projections = grad_body ~v ~g ~t1 ~t2 ~projections in
-  op ~op_label ?desc_label ?compose_op ?transpose_op:None ~op_body ~grad_body ?grad_spec (Shape.make ())
+let binop ~op_label ?desc_label ?compose_op ~op_eqs ~grad_eqs ?grad_spec t1 t2 =
+  let op_eqs ~v ~projections = op_eqs ~v ~t1 ~t2 ~projections in
+  let grad_eqs ~v ~g ~projections = grad_eqs ~v ~g ~t1 ~t2 ~projections in
+  op ~op_label ?desc_label ?compose_op ?transpose_op:None ~op_eqs ~grad_eqs ?grad_spec (Shape.make ())
     [ t1; t2 ]
 
-let unop ~op_label ?desc_label ?transpose_op ~op_body ~grad_body ?grad_spec t1 =
-  let op_body ~v ~projections = op_body ~v ~t1 ~projections in
-  let grad_body ~v ~g ~projections = grad_body ~v ~g ~t1 ~projections in
-  op ~op_label ?desc_label ?compose_op:None ?transpose_op ~op_body ~grad_body ?grad_spec (Shape.make ())
+let unop ~op_label ?desc_label ?transpose_op ~op_eqs ~grad_eqs ?grad_spec t1 =
+  let op_eqs ~v ~projections = op_eqs ~v ~t1 ~projections in
+  let grad_eqs ~v ~g ~projections = grad_eqs ~v ~g ~t1 ~projections in
+  op ~op_label ?desc_label ?compose_op:None ?transpose_op ~op_eqs ~grad_eqs ?grad_spec (Shape.make ())
     [ t1 ]
 
 (** A terminal: a constant, a parameter, an input of the model. *)
@@ -208,7 +208,7 @@ let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axi
     if is_require_grad grad_spec then false
     else match (init_op, fetch_op) with Some (Low_level.Constant_fill [| _ |]), None -> true | _ -> false
   in
-  let op_body ~v ~projections =
+  let op_eqs ~v ~projections =
     let open High_level in
     let dims = lazy (Lazy.force projections).Indexing.lhs_dims in
     match fetch_op with
@@ -228,9 +228,9 @@ let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axi
             v.never_device_only <- true);
         Fetch { array = v; fetch_op; dims }
   in
-  let grad_body ~v:_ ~g:_ ~projections:_ = High_level.Noop in
+  let grad_eqs ~v:_ ~g:_ ~projections:_ = High_level.Noop in
   let make_shape = Shape.make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced () in
-  op ~op_label:label ?desc_label ?compose_op:None ?transpose_op:None ~op_body ~grad_body ~grad_spec make_shape
+  op ~op_label:label ?desc_label ?compose_op:None ?transpose_op:None ~op_eqs ~grad_eqs ~grad_spec make_shape
     []
 
 let error_if_unknown_shape m =
@@ -465,23 +465,23 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
               Caml.Format.print_newline ()
           | _, (lazy None) -> Caml.Format.printf "Gradient <virtual>@ ");
   if with_code then (
-    (match t.forward_body with
+    (match t.forward with
     | Noop -> ()
     | fwd_code -> Caml.Format.printf "Current forward body:@ %a@ " High_level.fprint_code fwd_code);
     match t.diff with
-    | Some { backprop_body = Noop; _ } -> ()
-    | Some { backprop_body = bwd_code; _ } ->
+    | Some { backprop = Noop; _ } -> ()
+    | Some { backprop = bwd_code; _ } ->
         Caml.Format.printf "Current backprop body:@ %a@ " High_level.fprint_code bwd_code
     | None -> ());
   if with_low_level then (
-    (match t.forward_body with
+    (match t.forward with
     | Noop -> ()
     | fwd_code ->
         Caml.Format.printf "Current forward low-level body:@ %a@ " Low_level.fprint_code
         @@ High_level.to_low_level fwd_code);
     match t.diff with
-    | Some { backprop_body = Noop; _ } -> ()
-    | Some { backprop_body = bwd_code; _ } ->
+    | Some { backprop = Noop; _ } -> ()
+    | Some { backprop = bwd_code; _ } ->
         Caml.Format.printf "Current backprop low-level body:@ %a@ " Low_level.fprint_code
         @@ High_level.to_low_level bwd_code
     | None -> ());
