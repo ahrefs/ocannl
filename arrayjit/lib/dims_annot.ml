@@ -1,5 +1,5 @@
 open Base
-module LA = Low_level.Lazy_array
+module LA = Lazy_array
 
 type dims_annot = { batch : int list; input : int list; output : int list }
 type node = { shape : dims_annot; array : LA.t }

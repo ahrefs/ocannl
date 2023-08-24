@@ -15,6 +15,7 @@
  (modules
   ndarray
   indexing
+  lazy_array
   low_level
   high_level
   exec_as_cuda

@@ -2,7 +2,7 @@
 
 open Base
 module Nd = Arrayjit.Ndarray
-module LA = Arrayjit.Low_level.Lazy_array
+module LA = Arrayjit.Lazy_array
 open Arrayjit
 
 type diff = {

@@ -1,7 +1,7 @@
 open Base
 (** The code for operating on n-dimensional arrays. *)
 
-module LA = Low_level.Lazy_array
+module LA = Lazy_array
 
 (** Resets a array by performing the specified computation or data fetching. *)
 type fetch_op = Constant of float | Imported of Low_level.global_identifier

@@ -34,7 +34,7 @@ type ndarray = {
 
 (* let session_results = ref [] *)
 let hoist_dynamic_indices = ref false
-module LA = Low_level.Lazy_array
+module LA = Lazy_array
 
 type session_state = {
   mutable ctx : Cudajit.context option;
