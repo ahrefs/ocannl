@@ -158,10 +158,11 @@ let fprint_code ppf c =
 type virtualize_settings = {
   mutable enable_device_only : bool;
   mutable max_visits : int;
+  mutable max_tracing_dim : int;
   mutable inline_constants : bool;
 }
 
-let virtualize_settings = { enable_device_only = true; max_visits = 3; inline_constants = true }
+let virtualize_settings = { enable_device_only = true; max_visits = 3; max_tracing_dim = 5; inline_constants = true }
 
 type visits =
   | Visits of int
@@ -299,7 +300,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
     | For_loop { index; from_; to_ = _; body; trace_it = false } ->
         loop_proc (Map.add_exn ~key:index ~data:from_ env) body
     | For_loop { index; from_; to_; body; trace_it = true } ->
-        for data = from_ to to_ do
+        for data = from_ to min to_ (from_ + virtualize_settings.max_tracing_dim) do
           loop_proc (Map.add_exn ~key:index ~data env) body
         done
     | Zero_out array ->
