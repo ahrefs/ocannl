@@ -15,11 +15,9 @@ let cleanup_executor_session = ref Exec_as_gccjit.cleanup_session
 let set_executor = function
   | Gccjit ->
       exec := Exec_as_gccjit.jit;
-      Low_level.virtualize_settings.sequential_minibatch <- true;
       cleanup_executor_session := Exec_as_gccjit.cleanup_session
   | Cuda ->
       exec := Exec_as_cuda.jit;
-      Low_level.virtualize_settings.sequential_minibatch <- false;
       cleanup_executor_session := Exec_as_cuda.cleanup_session
 
 let compile_routine ~name code =

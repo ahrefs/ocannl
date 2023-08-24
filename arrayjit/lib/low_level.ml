@@ -159,11 +159,10 @@ type virtualize_settings = {
   mutable enable_device_only : bool;
   mutable max_visits : int;
   mutable inline_constants : bool;
-  mutable sequential_minibatch : bool;
 }
 
 let virtualize_settings =
-  { enable_device_only = true; max_visits = 3; inline_constants = true; sequential_minibatch = false }
+  { enable_device_only = true; max_visits = 3; inline_constants = true }
 
 type visits =
   | Visits of int
