@@ -1,11 +1,11 @@
 open Base
 open Ocannl
-module CDSL = Session.CDSL
+module CDSL = Arrayjit.Low_level.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module SDSL = Session.SDSL
 
-let () = SDSL.set_executor Gccjit
+
+
 
 let _suspended () =
   (* SDSL.drop_all_sessions (); *)
@@ -16,16 +16,16 @@ let _suspended () =
   let%nn_op c = "a" [ -4 ] + "b" [ 2 ] in
   (* let%nn_op c = c + c + 1 in
      let%nn_op c = c + 1 + c + ~-a in *)
-  (* SDSL.set_fully_on_host g;
-     SDSL.set_fully_on_host a;
-     SDSL.set_fully_on_host b; *)
+  (* Tensor.set_fully_on_host g;
+     Tensor.set_fully_on_host a;
+     Tensor.set_fully_on_host b; *)
   SDSL.everything_fully_on_host ();
   SDSL.refresh_session ~verbose:true ();
   SDSL.print_tree ~with_grad:true ~depth:9 c;
   Stdio.print_endline "\n";
-  SDSL.print_tensor ~with_code:false ~with_grad:false `Default @@ c;
-  SDSL.print_tensor ~with_code:false ~with_grad:true `Default @@ a;
-  SDSL.print_tensor ~with_code:false ~with_grad:true `Default @@ b
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ c;
+  Tensor.print ~with_code:false ~with_grad:true `Default @@ a;
+  Tensor.print ~with_code:false ~with_grad:true `Default @@ b
 
 let () =
   (* SDSL.drop_all_sessions (); *)
@@ -44,14 +44,14 @@ let () =
   let%nn_op g = f /. 2 in
   let%nn_op g = g + (10. /. f) in
   (* *)
-  SDSL.set_fully_on_host g;
-  SDSL.set_fully_on_host a;
-  SDSL.set_fully_on_host b;
+  Tensor.set_fully_on_host g;
+  Tensor.set_fully_on_host a;
+  Tensor.set_fully_on_host b;
   (* *)
   (* SDSL.everything_fully_on_host (); *)
   SDSL.refresh_session ~verbose:true ();
   SDSL.print_tree ~with_grad:true ~depth:9 g;
   Stdio.print_endline "\n";
-  SDSL.print_tensor ~with_code:false ~with_grad:false `Default @@ g;
-  SDSL.print_tensor ~with_code:false ~with_grad:true `Default @@ a;
-  SDSL.print_tensor ~with_code:false ~with_grad:true `Default @@ b
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ g;
+  Tensor.print ~with_code:false ~with_grad:true `Default @@ a;
+  Tensor.print ~with_code:false ~with_grad:true `Default @@ b

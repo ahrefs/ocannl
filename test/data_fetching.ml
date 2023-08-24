@@ -2,12 +2,12 @@ open Base
 open Ocannl
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Session.CDSL
+module CDSL = Arrayjit.Low_level.CDSL
 
-let () = Session.SDSL.set_executor Gccjit
+
 
 let%expect_test "Synthetic data" =
-  let open Session.SDSL in
+
   (* drop_all_sessions (); *)
   Random.init 0;
   let open NTDSL in

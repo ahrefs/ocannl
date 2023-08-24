@@ -20,8 +20,7 @@
   utils
   shape
   tensor
-  operation
-  session)
+  operation)
  (modes byte native)
  (c_library_flags -pthread))
 

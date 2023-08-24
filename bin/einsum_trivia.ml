@@ -1,12 +1,12 @@
 open Base
 open Ocannl
-module CDSL = Session.CDSL
+module CDSL = Arrayjit.Low_level.CDSL
 module TDSL = Operation.TDSL
 
-let () = Session.SDSL.set_executor Gccjit
+
 
 let () =
-  let open Session.SDSL in
+
   (* drop_all_sessions (); *)
   Random.init 0;
   let a =

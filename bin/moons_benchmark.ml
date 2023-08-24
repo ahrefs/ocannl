@@ -2,16 +2,16 @@ open Base
 open Ocannl
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Session.CDSL
-module SDSL = Session.SDSL
+module CDSL = Arrayjit.Low_level.CDSL
+
 
 let _suspended () =
   (* Session.CDSL.with_debug := false; *)
   (* let open Operation.TDSL in *)
-  let open SDSL.O in
-  (* SDSL.enable_all_debugs (); *)
+  let open Tensor.O in
+  (* CDSL.enable_all_debugs (); *)
   SDSL.set_executor Cuda;
-  (* SDSL.enable_all_debugs (); *)
+  (* CDSL.enable_all_debugs (); *)
   (*
   CDSL.virtualize_settings.enable_device_only <- true;
   CDSL.virtualize_settings.inline_constants <- true;
@@ -94,7 +94,7 @@ let _suspended () =
   SDSL.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses;
   (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
-      SDSL.print_tensor ~with_grad:true ~with_code:false `Default f); *)
+      Tensor.print ~with_grad:true ~with_code:false `Default f); *)
   SDSL.refresh_session ();
   Stdio.printf "Step 2: session_step: %f\n%!" session_step.@[0];
   Stdio.printf "\nStep 2: Minus learning rate: %f\n%!" minus_lr.@[0];
@@ -103,7 +103,7 @@ let _suspended () =
   SDSL.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses;
   (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
-      SDSL.print_tensor ~with_grad:true ~with_code:false `Default f); *)
+      Tensor.print ~with_grad:true ~with_code:false `Default f); *)
   SDSL.refresh_session ();
   Stdio.printf "Step 3: session_step: %f\n%!" session_step.@[0];
   Stdio.printf "\nStep 3: Minus learning rate: %f\nStep 3 weighted reg. loss:\n%!" minus_lr.@[0];
@@ -169,7 +169,7 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
   SDSL.set_executor executor;
   SDSL.default_value_prec := precision;
   SDSL.default_grad_prec := precision;
-  let open SDSL.O in
+  let open Tensor.O in
   (* SDSL.drop_all_sessions (); *)
   (* CDSL.with_debug := true; *)
   (* CDSL.keep_files_in_run_directory := true; *)

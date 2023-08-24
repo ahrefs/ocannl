@@ -1,12 +1,12 @@
 open Base
 open Ocannl
-module CDSL = Session.CDSL
+module CDSL = Arrayjit.Low_level.CDSL
 module TDSL = Operation.TDSL
 
-let () = Session.SDSL.set_executor Gccjit
+
 
 let%expect_test "einsum1 permute axes" =
-  let open Session.SDSL in
+
   (* drop_all_sessions (); *)
   Random.init 0;
   let hey =
@@ -262,7 +262,7 @@ let%expect_test "einsum1 permute axes" =
       └────────────────────────────────────────────────────────────────────────────────────────────┘ |}]
 
 let%expect_test "einsum1 sum out axes" =
-  let open Session.SDSL in
+
   (* drop_all_sessions (); *)
   Random.init 0;
   let hey =
@@ -326,7 +326,7 @@ let%expect_test "einsum1 sum out axes" =
       └────────────────────────────────────────────────────────────────────────────────────┘ |}]
 
 let%expect_test "einsum outer product" =
-  let open Session.SDSL in
+
   (* drop_all_sessions (); *)
   Random.init 0;
   let a = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
@@ -559,7 +559,7 @@ let%expect_test "einsum outer product" =
     └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}]
 
 let%expect_test "einsum matrix/inner+outer products" =
-  let open Session.SDSL in
+
   (* drop_all_sessions (); *)
   Random.init 0;
   let a =
@@ -659,7 +659,7 @@ let%expect_test "einsum matrix/inner+outer products" =
       └────────────────────────────────────┘ |}]
 
 let%expect_test "einsum1 broadcast or sum out prefix axes" =
-  let open Session.SDSL in
+
   (* drop_all_sessions (); *)
   Random.init 0;
   let hey =
@@ -1058,7 +1058,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     └─────────────────────────────────────────────┘ |}]
 
 let%expect_test "einsum broadcast or sum out prefix axes" =
-  let open Session.SDSL in
+
   (* drop_all_sessions (); *)
   Random.init 0;
   let a =
@@ -1161,7 +1161,7 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
     └─────────────────────────────────────────────┘ |}]
 
 let%expect_test "einsum1 fixed dim axis" =
-  let open Session.SDSL in
+
   (* drop_all_sessions (); *)
   Random.init 0;
   let hey =
@@ -1259,7 +1259,7 @@ let%expect_test "einsum1 fixed dim axis" =
     <void> |}]
 
 let%expect_test "einsum with fixed dim axes" =
-  let open Session.SDSL in
+
   (* drop_all_sessions (); *)
   Random.init 0;
   let a =

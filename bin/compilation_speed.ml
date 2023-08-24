@@ -2,18 +2,15 @@ open Base
 open Ocannl
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Session.CDSL
-module SDSL = Session.SDSL
+module CDSL = Arrayjit.Low_level.CDSL
 
 let recompiling_graph executor opti () =
-  let open SDSL.O in
-  SDSL.disable_all_debugs ();
+  CDSL.disable_all_debugs ();
   let bench_title = Sexp.to_string_hum ([%sexp_of: Session.backend * int] (executor, opti)) in
   Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ bench_title ^ " ******";
   let () = SDSL.set_executor executor in
   Arrayjit.Exec_as_gccjit.optimization_level := opti;
   (* let open Operation.TDSL in *)
-  (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let%nn_op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in

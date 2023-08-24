@@ -1,19 +1,19 @@
 open Base
 open Ocannl
-module CDSL = Session.CDSL
+module CDSL = Arrayjit.Low_level.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module SDSL = Session.SDSL
 
-let () = SDSL.set_executor Gccjit
+
+
 
 let%expect_test "Graph drawing recompile" =
   (* let open Operation.TDSL in *)
-  let open SDSL.O in
+  let open Tensor.O in
   (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let%nn_op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
-  SDSL.set_fully_on_host x;
+  Tensor.set_fully_on_host x;
   SDSL.refresh_session ();
   SDSL.print_tree ~with_grad:true ~depth:9 f;
   [%expect
@@ -94,7 +94,7 @@ let%expect_test "Graph drawing recompile" =
              │                                     x |}]
 
 let%expect_test "Graph drawing fetch" =
-  let open SDSL.O in
+  let open Tensor.O in
   (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   CDSL.virtualize_settings.enable_device_only <- false;
@@ -129,7 +129,7 @@ let%expect_test "Graph drawing fetch" =
   in
   let session_step = NTDSL.O.(NTDSL.counter !..1) in
   let%nn_op x = x_flat @.| session_step in
-  SDSL.set_fully_on_host x;
+  Tensor.set_fully_on_host x;
   let%nn_op fx = f x in
   let ys =
     Array.map xs ~f:(fun _ ->

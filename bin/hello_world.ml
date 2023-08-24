@@ -1,15 +1,15 @@
 open Base
 open Ocannl
-module CDSL = Session.CDSL
+module CDSL = Arrayjit.Low_level.CDSL
 module TDSL = Operation.TDSL
 
-let () = Session.SDSL.set_executor Gccjit
+
 
 let hello1 () =
   (* Session.drop_all_sessions (); *)
   Random.init 0;
   let open Operation.TDSL in
-  let open Session.SDSL in
+
   (* Hey is inferred to be a matrix. *)
   let hey =
     range_of_shape
@@ -25,7 +25,7 @@ let hello1 () =
 (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
 
 let hello2 () =
-  let open Session.SDSL in
+
   drop_all_sessions ();
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
@@ -37,7 +37,7 @@ let hello2 () =
   print_tensor ~with_code:false ~with_grad:false `Default @@ y
 
 let hello3 () =
-  let open Session.SDSL in
+
   (* drop_all_sessions (); *)
   Random.init 0;
   (* Hey is inferred to be a matrix. *)

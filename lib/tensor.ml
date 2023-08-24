@@ -498,3 +498,51 @@ let print_tree ?entries_per_axis ?(with_backend_info = false) ?(with_id = true) 
   ignore with_backend_info;
   PrintBox_text.output Stdio.stdout @@ PrintBox_utils.dag_to_box @@ PrintBox_utils.boxify depth
   @@ to_dag ?entries_per_axis ~with_id ~with_value ~with_grad t
+
+(** *** Accessors *** *)
+
+let value_1d_points ?from_axis ~xdim t =
+  Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_1d_points ?from_axis ~xdim arr)
+  @@ Lazy.force t.value.array
+
+let value_2d_points ?from_axis ~xdim ~ydim t =
+  Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_2d_points ?from_axis ~xdim ~ydim arr)
+  @@ Lazy.force t.value.array
+
+let grad_1d_points ?from_axis ~xdim t =
+  match t.diff with
+  | None -> [||]
+  | Some diff ->
+      Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_1d_points ?from_axis ~xdim arr)
+      @@ Lazy.force diff.grad.array
+
+let grad_2d_points ?from_axis ~xdim ~ydim t =
+  match t.diff with
+  | None -> [||]
+  | Some diff ->
+      Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_2d_points ?from_axis ~xdim ~ydim arr)
+      @@ Lazy.force diff.grad.array
+
+let set_value t = Nd.set_from_float @@ Option.value_exn @@ Lazy.force t.value.array
+let get_value t = Nd.get_as_float @@ Option.value_exn @@ Lazy.force t.value.array
+
+module O = struct
+  (** Get the value at the given indices. *)
+  let ( .@{} ) = get_value
+
+  (** Set the value at the given indices. *)
+  let ( .@{}<- ) = set_value
+
+  (** Get the value at the given index from a single-axis shape tensor. *)
+  let ( .@[] ) t indx = get_value t [| indx |]
+
+  (** Set the value at the given index for a single-axis shape tensor. *)
+  let ( .@[]<- ) t indx = set_value t [| indx |]
+end
+
+let set_fully_on_host t =
+  t.value.never_virtual <- true;
+  t.value.never_device_only <- true;
+  Option.iter t.diff ~f:(fun diff ->
+      diff.grad.never_virtual <- true;
+      diff.grad.never_device_only <- true)

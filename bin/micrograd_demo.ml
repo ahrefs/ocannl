@@ -2,13 +2,13 @@ open Base
 open Ocannl
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Session.CDSL
-module SDSL = Session.SDSL
+module CDSL = Arrayjit.Low_level.CDSL
+
 
 let () = SDSL.set_executor Cuda
 
 let () =
-  let open SDSL.O in
+  let open Tensor.O in
   (* SDSL.drop_all_sessions (); *)
   (* CDSL.with_debug := true; *)
   (* CDSL.keep_files_in_run_directory := true; *)

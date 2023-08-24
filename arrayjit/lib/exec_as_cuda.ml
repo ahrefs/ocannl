@@ -304,8 +304,6 @@ let cleanup_session () =
   (* For now we stick with device 0. *)
   session_state.ctx <- new_context ()
 
-let error_message ~name:_ ~prefix:_ ?extra_error_msg:_ ~contents:_ _exc = ""
-
 let jit_func ~name ?(verbose = false) (traced_store, llc) =
   let module Cu = Cudajit in
   Hashtbl.filter_inplace session_state.arrays ~f:(fun array -> not @@ is_constant array.mem);

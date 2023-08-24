@@ -1,11 +1,11 @@
 open Base
 open Ocannl
-module CDSL = Session.CDSL
+module CDSL = Arrayjit.Low_level.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module SDSL = Session.SDSL
 
-let () = SDSL.set_executor Gccjit
+
+
 
 let _suspended () =
   (* SDSL.drop_all_sessions (); *)
@@ -23,7 +23,7 @@ let _suspended () =
 let _suspended () =
   (* SDSL.drop_all_sessions (); *)
   Random.init 0;
-  SDSL.enable_all_debugs ();
+  CDSL.enable_all_debugs ();
   CDSL.virtualize_settings.enable_device_only <- false;
   let%nn_op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%nn_op f5 = f 5 in
@@ -33,7 +33,7 @@ let _suspended () =
   Stdio.printf "\n%!"
 
 let _suspended () =
-  let open SDSL.O in
+  let open Tensor.O in
   (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let%nn_op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
@@ -81,7 +81,7 @@ let _suspended () =
 let _suspended () =
   (* %expect_test "Graph drawing recompile" *)
   (* let open Operation.TDSL in *)
-  let open SDSL.O in
+  let open Tensor.O in
   (* SDSL.drop_all_sessions (); *)
   (* CDSL.with_debug := true;
      CDSL.keep_files_in_run_directory := true; *)

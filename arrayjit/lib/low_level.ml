@@ -161,8 +161,7 @@ type virtualize_settings = {
   mutable inline_constants : bool;
 }
 
-let virtualize_settings =
-  { enable_device_only = true; max_visits = 3; inline_constants = true }
+let virtualize_settings = { enable_device_only = true; max_visits = 3; inline_constants = true }
 
 type visits =
   | Visits of int
@@ -544,8 +543,7 @@ let virtual_llc traced_store reverse_node_map (llc : t) : t =
         let traced : traced_array = get_node traced_store array in
         let next = if traced.non_virtual then process_for else Set.add process_for array in
         let result = Set (array, indices, loop_float ~process_for:next llv) in
-        if (not @@ Set.mem process_for array) && not traced.non_virtual then
-          process_computation traced result;
+        if (not @@ Set.mem process_for array) && not traced.non_virtual then process_computation traced result;
         result
     | Set_local (id, llv) -> Set_local (id, loop_float ~process_for llv)
     | Comment _ -> llc
@@ -778,7 +776,7 @@ let optimize_proc ?(verbose = false) llc : traced_store * t =
   in
   (traced_store, result)
 
-let compile_proc ~name ?(verbose = false) ~for_step_update:_ llc =
+let compile_proc ~name ?(verbose = false) llc =
   if verbose then Stdio.printf "Low_level.compile_proc: generating the initial low-level code\n%!";
   if !with_debug && !keep_files_in_run_directory then (
     let fname = name ^ "-unoptimized.llc" in
@@ -793,8 +791,7 @@ let compile_proc ~name ?(verbose = false) ~for_step_update:_ llc =
     let ppf = Caml.Format.formatter_of_out_channel f in
     Caml.Format.pp_set_margin ppf !code_sexp_margin;
     Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t @@ snd result));
-  Hashtbl.iter (fst result) ~f:(fun v ->
-    if v.non_virtual && v.non_device_only then v.nd.materialized := true);
+  Hashtbl.iter (fst result) ~f:(fun v -> if v.non_virtual && v.non_device_only then v.nd.materialized := true);
   if verbose then Stdio.printf "Low_level.compile_proc: finished\n%!";
   result
 
@@ -825,4 +822,16 @@ module CDSL = struct
   let virtualize_settings = virtualize_settings
   let code_sexp_margin = code_sexp_margin
   let fixed_state_for_init = Ndarray.fixed_state_for_init
+
+  let enable_all_debugs ?(trace_interpreter = false) ?(hosted_only = true) () =
+    with_debug := true;
+    keep_files_in_run_directory := true;
+    if hosted_only then virtualize_settings.enable_device_only <- false;
+    if trace_interpreter then debug_verbose_trace := true
+
+  let disable_all_debugs ?(restore_defaults = false) () =
+    debug_verbose_trace := false;
+    with_debug := false;
+    keep_files_in_run_directory := false;
+    if restore_defaults then virtualize_settings.enable_device_only <- true
 end

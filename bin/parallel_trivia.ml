@@ -1,16 +1,15 @@
 open Base
 open Ocannl
-module CDSL = Session.CDSL
+module CDSL = Arrayjit.Low_level.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module SDSL = Session.SDSL
 
-let () = SDSL.set_executor Gccjit
+
 
 let () =
   (* FIXME: this doesn't do anything parallel. *)
   (* SDSL.drop_all_sessions (); *)
-  SDSL.enable_all_debugs ();
+  CDSL.enable_all_debugs ();
   Random.init 0;
   let num_tasks = 10 in
   let a = TDSL.init_param ~l:"a" ~o:[ 1 ] [| 2.0 |] in

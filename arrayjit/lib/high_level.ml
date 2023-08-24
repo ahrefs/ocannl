@@ -143,7 +143,7 @@ let to_low_level (code : t) : Low_level.t =
 
   loop code
 
-let compile_proc ~name ?(verbose = false) ~for_step_update proc =
+let compile_proc ~name ?(verbose = false) proc =
   if verbose then Stdio.printf "High_level.compile_proc: generating the initial low-level code\n%!";
   if !Low_level.with_debug && !Low_level.keep_files_in_run_directory then (
     let fname = name ^ ".hlc" in
@@ -152,7 +152,7 @@ let compile_proc ~name ?(verbose = false) ~for_step_update proc =
     Caml.Format.pp_set_margin ppf !Low_level.code_sexp_margin;
     Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t proc));
   let llc = to_low_level proc in
-  Low_level.compile_proc ~name ~verbose ~for_step_update llc
+  Low_level.compile_proc ~name ~verbose llc
 
 let fprint_code ppf c =
   (* TODO: something nicely concise. *)

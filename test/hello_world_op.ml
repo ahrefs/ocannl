@@ -1,17 +1,17 @@
 open Base
 open Ocannl
-module CDSL = Session.CDSL
+module CDSL = Arrayjit.Low_level.CDSL
 module TDSL = Operation.TDSL
-module SDSL = Session.SDSL
 
-let () = SDSL.set_executor Gccjit
+
+
 
 let%expect_test "Hello World" =
   Stdio.printf "Hello World!\n";
   [%expect {| Hello World! |}]
 
 let%expect_test "Pointwise multiplication dims 1" =
-  let open Session.SDSL in
+
   (* drop_all_sessions (); *)
   Random.init 0;
   (* "Hey" is inferred to be a scalar. *)
@@ -30,7 +30,7 @@ let%expect_test "Pointwise multiplication dims 1" =
     └──────────────────────┘ |}]
 
 let%expect_test "Matrix multiplication dims 1x1" =
-  let open Session.SDSL in
+
   (* drop_all_sessions (); *)
   Random.init 0;
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
@@ -63,7 +63,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
 let%expect_test "Print constant tensor" =
   (* Session.drop_all_sessions (); *)
   Random.init 0;
-  let open Session.SDSL in
+
   let%nn_op hey = [ (1, 2, 3); (4, 5, 6) ] in
   refresh_session ();
   print_tensor ~with_code:false ~with_grad:false `Inline @@ hey;
@@ -350,7 +350,7 @@ let%expect_test "Print constant tensor" =
     └─────────────────────────────────────────────────────┘ |}]
 
 let%expect_test "Matrix multiplication dims 2x3" =
-  let open Session.SDSL in
+
   (* drop_all_sessions (); *)
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
@@ -383,7 +383,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
     └──────────────────────────────┘ |}]
 
 let%expect_test "Big matrix" =
-  let open Session.SDSL in
+
   (* drop_all_sessions (); *)
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
@@ -435,7 +435,7 @@ let%expect_test "Big matrix" =
       └────────────────────────────────────────────┘ |}]
 
 let%expect_test "Very big tensor" =
-  let open Session.SDSL in
+
   (* drop_all_sessions (); *)
   Random.init 0;
   let hey =

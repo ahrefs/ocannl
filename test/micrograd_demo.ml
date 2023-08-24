@@ -2,10 +2,10 @@ open Base
 open Ocannl
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Session.CDSL
-module SDSL = Session.SDSL
+module CDSL = Arrayjit.Low_level.CDSL
 
-let () = SDSL.set_executor Gccjit
+
+
 
 let%expect_test "Micrograd README basic example" =
   (* SDSL.drop_all_sessions (); *)
@@ -20,11 +20,11 @@ let%expect_test "Micrograd README basic example" =
   let%nn_op f = e *. e in
   let%nn_op g = f /. 2 in
   let%nn_op g = g + (10. /. f) in
-  SDSL.set_fully_on_host g;
-  SDSL.set_fully_on_host a;
-  SDSL.set_fully_on_host b;
+  Tensor.set_fully_on_host g;
+  Tensor.set_fully_on_host a;
+  Tensor.set_fully_on_host b;
   SDSL.refresh_session ();
-  SDSL.print_tensor ~with_code:false ~with_grad:false `Default @@ g;
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ g;
   [%expect
     {|
     ┌──────────────────────┐
@@ -35,7 +35,7 @@ let%expect_test "Micrograd README basic example" =
     │││ 2.47e+1 │          │
     │└┴─────────┘          │
     └──────────────────────┘ |}];
-  SDSL.print_tensor ~with_code:false ~with_grad:true `Default @@ a;
+  Tensor.print ~with_code:false ~with_grad:true `Default @@ a;
   [%expect
     {|
     ┌───────────────────┐
@@ -54,7 +54,7 @@ let%expect_test "Micrograd README basic example" =
     │││ 1.39e+2 │                 │
     │└┴─────────┘                 │
     └─────────────────────────────┘ |}];
-  SDSL.print_tensor ~with_code:false ~with_grad:true `Default @@ b;
+  Tensor.print ~with_code:false ~with_grad:true `Default @@ b;
   [%expect
     {|
     ┌───────────────────┐
@@ -75,7 +75,7 @@ let%expect_test "Micrograd README basic example" =
     └─────────────────────────────┘ |}]
 
 let%expect_test "Micrograd half-moons example" =
-  let open SDSL.O in
+  let open Tensor.O in
   (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let len = 200 in
