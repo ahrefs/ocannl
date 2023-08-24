@@ -21,7 +21,7 @@ let ndarray_op ?desc_label ?axis_labels ?label expr =
 let make_vb ?value ~loc ~str_loc ~ident string =
   let pat = Ast_helper.Pat.var ~loc { loc = str_loc; txt = ident } in
   let value = match value with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
-  let v = [%expr TDSL.params ?value:[%e value] [%e string]] in
+  let v = [%expr TDSL.params ?values:[%e value] [%e string]] in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
