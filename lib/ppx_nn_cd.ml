@@ -211,16 +211,19 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       (Array_opt, RHS2, [%expr Option.map t2.Tensor.diff ~f:(fun d -> d.Tensor.grad)])
   | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_operator op_ident ->
       (Tensor, Undet, expr)
-  | [%expr [%e? expr1] **. [%e? expr2]] ->
-      (* FIXME: the hard-coding is ugly. *)
-      (* If converting code or a node to a tensor was possible we would do it here.
-         Since it's not, we let OCaml handle the type errors. Same further below. *)
-      let _typ1, slot1, expr1 = translate ~proj_in_scope expr1 in
+  | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
+      (* We need to hardcode these two patterns to prevent the numbers from being converted
+         to tensors. *)
+      let _typ1, slot1, e1 = translate ~proj_in_scope expr1 in
       ( Tensor,
         slot1,
-        [%expr
-          pointpow ?desc_label:[%e opt_pat2string ~loc desc_label] ~grad_spec:Prohibit_grad [%e expr2]
-            [%e expr1]] )
+        [%expr NTDSL.O.( **. ) ?desc_label:[%e opt_pat2string ~loc desc_label] [%e e1] (Float.of_int [%e i])]
+      )
+  | [%expr [%e? expr1] **. [%e? expr2]] ->
+      let _typ1, slot1, e1 = translate ~proj_in_scope expr1 in
+      ( Tensor,
+        slot1,
+        [%expr NTDSL.O.( **. ) ?desc_label:[%e opt_pat2string ~loc desc_label] [%e e1] [%e expr2]] )
   | [%expr
       [%e? expr1]
       *+ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec] [%e? expr2]]

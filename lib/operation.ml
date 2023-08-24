@@ -88,7 +88,12 @@ end
 let rec pointpow ?desc_label ~grad_spec p t1 : Tensor.t =
   let module NTDSL = struct
     include Tensor.NTDSL
-    module O = NDO_without_pow
+
+    module O = struct
+      include NDO_without_pow
+
+      let ( **. ) ?desc_label base exp = pointpow ?desc_label exp base ~grad_spec:Tensor.Prohibit_grad
+    end
   end in
   let p_t = NTDSL.number p in
   let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections in

@@ -114,16 +114,16 @@ let rec translate ?desc_label expr =
       (Map.singleton (module String) ident vb, pat2expr pat)
   | { pexp_desc = Pexp_array _; _ } | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
       (no_vbs, ndarray_op ?desc_label expr)
-  | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
+  | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
       (* We need to hardcode these two patterns to prevent the numbers from being converted
          to tensors. *)
-      let vbs, e1 = translate expr1 in
-      (vbs, [%expr TDSL.O.( **. ) ?desc_label:[%e opt_pat2string ~loc desc_label] [%e e1] [%e f]])
-  | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
       let vbs, e1 = translate expr1 in
       ( vbs,
         [%expr TDSL.O.( **. ) ?desc_label:[%e opt_pat2string ~loc desc_label] [%e e1] (Float.of_int [%e i])]
       )
+  | [%expr [%e? expr1] **. [%e? expr2]] ->
+      let vbs, e1 = translate expr1 in
+      (vbs, [%expr TDSL.O.( **. ) ?desc_label:[%e opt_pat2string ~loc desc_label] [%e e1] [%e expr2]])
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3]] ->
       let vbs1, e1 = translate ?desc_label expr1 in
       let vbs2, e2 = translate expr2 in
