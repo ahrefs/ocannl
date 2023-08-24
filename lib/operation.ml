@@ -1,16 +1,27 @@
 (** Computational primitives for neural networks, integrating [Tensor] with [Low_level]. *)
 
 open Base
-open Arrayjit
-module CDSL = Session.CDSL
+module CDSL = Arrayjit.Low_level.CDSL
 
-module Empty_DSL = struct
-  include Tensor.NTDSL
+open Arrayjit
+
+module Initial_NTDSL = struct
+  let term = Tensor.term ~grad_spec:Prohibit_grad
+  let number = Tensor.number ~grad_spec:Prohibit_grad
+  let ndarray = Tensor.ndarray ~grad_spec:Prohibit_grad
+  module O = struct end
+end
+
+module Initial_TDSL = struct
+  let term = Tensor.term ~grad_spec:If_needed
+  let number = Tensor.number ~grad_spec:If_needed
+  let ndarray = Tensor.ndarray ~grad_spec:If_needed
+  let params = Tensor.params
   module O = struct end
 end
 
 let add =
-  let module NTDSL = Empty_DSL in
+  let module NTDSL = Initial_NTDSL in
   let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =: v1 + v2 in
   let%nn_cd grad_body ~v:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g;
@@ -19,7 +30,7 @@ let add =
   Tensor.binop ~compose_op:Pointwise_bin ~op_label:"+" ~op_body ~grad_body
 
 let pointmul =
-  let module NTDSL = Empty_DSL in
+  let module NTDSL = Initial_NTDSL in
   let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =: v1 * v2 in
   let%nn_cd grad_body ~v:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g * v2;
@@ -35,7 +46,7 @@ let pointmul =
    corresponding matrices. *)
 
 let matmul =
-  let module NTDSL = Empty_DSL in
+  let module NTDSL = Initial_NTDSL in
   let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
   let%nn_cd grad_body ~v:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g * v2;
@@ -49,7 +60,7 @@ let matmul =
     Note that ["a,b->c"] from [numpy] is ["a;b=>c"] in OCANNL, since ["->"] is used to separate the input
     and the output axes. *)
 let einsum ?desc_label spec =
-  let module NTDSL = Empty_DSL in
+  let module NTDSL = Initial_NTDSL in
   let%nn_cd op_body ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
   let%nn_cd grad_body ~v:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g * v2;
@@ -63,13 +74,13 @@ let einsum ?desc_label spec =
     Note that ["a->c"] from [numpy] is ["a=>c"] in OCANNL, since ["->"] is used to separate the input
     and the output axes. *)
 let einsum1 ?desc_label spec =
-  let module NTDSL = Empty_DSL in
+  let module NTDSL = Initial_NTDSL in
   let%nn_cd op_body ~v ~t1 ~projections = v =:+ v1 in
   let%nn_cd grad_body ~v:_ ~g ~t1 ~projections = g1 =+ g in
   Tensor.unop ?desc_label ~transpose_op:(Shape.Permute spec) ~op_label:"=>" ~op_body ~grad_body
 
 let relu =
-  let module NTDSL = Empty_DSL in
+  let module NTDSL = Initial_NTDSL in
   let%nn_cd op_body ~v ~t1 ~projections = v =: !/v1 ~projections in
   let%nn_cd grad_body ~v ~g ~t1 ~projections = g1 =+ v -?/ g in
   Tensor.unop ~transpose_op:Pointwise_un ~op_label:"r" ~op_body ~grad_body
@@ -87,7 +98,7 @@ end
 
 let rec pointpow ?desc_label ~grad_spec p t1 : Tensor.t =
   let module NTDSL = struct
-    include Tensor.NTDSL
+    include Initial_NTDSL
 
     module O = struct
       include NDO_without_pow
@@ -128,7 +139,7 @@ let data ?desc_label ?axis_labels ?(grad_spec = Tensor.Prohibit_grad) ~label ?(b
 
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient =
-  let module NTDSL = Empty_DSL in
+  let module NTDSL = Initial_NTDSL in
   let grad_body ~v:_ ~g:_ ~t1:_ ~projections:_ = High_level.Noop in
   let%nn_cd op_body ~v ~t1 ~projections = v =: v1 in
   Tensor.unop ~transpose_op:Pointwise_un ~op_label:"stop_grad" ~op_body ~grad_body ~grad_spec:Prohibit_grad
@@ -137,7 +148,7 @@ let stop_gradient =
     a [Fixed] marker on the dimensions. This way we avoid introducing a new node. *)
 let stop_broadcast t = Shape.set_dims_type t.Tensor.shape Shape.fixed
 
-module O = struct
+module DO = struct
   let ( * ) = matmul ~grad_spec:If_needed
   let ( *. ) = pointmul ~grad_spec:If_needed
   let ( + ) = add ~grad_spec:If_needed
@@ -151,9 +162,16 @@ module O = struct
   let ( /. ) ?desc_label t1 t2 = ( *. ) ?desc_label t1 (t2 **. -1.0)
 end
 
+module NDO = struct
+  include NDO_without_pow
+
+  let ( **. ) ?desc_label base exp = pointpow ?desc_label exp base ~grad_spec:Prohibit_grad
+  let ( /. ) ?desc_label t1 t2 = ( *. ) ?desc_label t1 (t2 **. -1.0)
+end
+
 module TDSL = struct
-  include Tensor.TDSL
-  module O = O
+  include Initial_TDSL
+ module O = DO
 
   let einsum ?desc_label s = einsum ?desc_label s ~grad_spec:If_needed
   let einsum1 ?desc_label s = einsum1 ?desc_label s ~grad_spec:If_needed
@@ -173,15 +191,8 @@ module TDSL = struct
       ~init_op:(Constant_fill cs) ()
 end
 
-module NDO = struct
-  include NDO_without_pow
-
-  let ( **. ) ?desc_label base exp = pointpow ?desc_label exp base ~grad_spec:Prohibit_grad
-  let ( /. ) ?desc_label t1 t2 = ( *. ) ?desc_label t1 (t2 **. -1.0)
-end
-
 module NTDSL = struct
-  include Tensor.NTDSL
+  include Initial_NTDSL
   module O = NDO
 
   let einsum ?desc_label s = einsum ?desc_label s ~grad_spec:Prohibit_grad
@@ -191,7 +202,7 @@ module NTDSL = struct
   let range_of_shape = range_of_shape ~grad_spec:Prohibit_grad
 
   let counter =
-    let module NTDSL = Empty_DSL in
+    let module NTDSL = Initial_NTDSL in
     let%nn_cd op_body ~v ~t1 ~projections = v =+ t1 ~projections in
     let grad_body ~v:_ ~g:_ ~t1:_ ~projections:_ = High_level.Noop in
     Tensor.unop ~op_label:"counter" ~transpose_op:Pointwise_un ~op_body ~grad_body ~grad_spec:Prohibit_grad

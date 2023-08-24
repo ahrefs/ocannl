@@ -1,8 +1,9 @@
 (** Construction of runtime-compiled code supporting backpropagation. *)
 
 open Base
+module Nd = Arrayjit.Ndarray
+module LA = Arrayjit.Low_level.Lazy_array
 open Arrayjit
-module LA = Low_level.Lazy_array
 
 type diff = {
   grad : LA.t;
@@ -279,15 +280,221 @@ let params ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?values la
   term ?desc_label ~grad_spec:Require_grad ~batch_dims:[] ?input_dims ?output_dims ?axis_labels ?deduced
     ~label ~init_op ()
 
-module NTDSL = struct
-  let term = term ~grad_spec:Prohibit_grad
-  let number = number ~grad_spec:Prohibit_grad
-  let ndarray = ndarray ~grad_spec:Prohibit_grad
-end
+(** *** Printing. *** *)
 
-module TDSL = struct
-  let term = term ~grad_spec:If_needed
-  let number = number ~grad_spec:If_needed
-  let ndarray = ndarray ~grad_spec:If_needed
-  let params = params
-end
+let la_dims_to_string ?(with_axis_numbers = false) arr =
+  let dims_s =
+    if Lazy.is_val arr.LA.dims then Nd.int_dims_to_string ~with_axis_numbers @@ Lazy.force arr.dims
+    else "<not-in-yet>"
+  in
+  Nd.prec_string arr.prec ^ " prec " ^ dims_s
+
+(** Converts ID, label and the dimensions of a node to a string. *)
+let header t =
+  let v_dims_s = la_dims_to_string t.value in
+  let g_dims_s = match t.diff with None -> "<no-grad>" | Some diff -> la_dims_to_string diff.grad in
+  let dims_s =
+    if String.equal v_dims_s g_dims_s then "dims " ^ v_dims_s
+    else "dims val " ^ v_dims_s ^ " grad " ^ g_dims_s
+  in
+  "#" ^ Int.to_string t.id ^ " " ^ t.value.label ^ " " ^ dims_s ^ " ["
+  ^ String.concat ~sep:"," (List.map t.children ~f:(fun { subtensor = { id; _ }; _ } -> Int.to_string id))
+  ^ "]"
+(*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box v.label)*)
+
+type array_print_style =
+  [ `Default
+    (** The inner rectangles comprise both an input and an output axis, if available. Similarly,
+      the outer rectangle comprises a second-from-end input axis and a second-from-end output axis,
+      if available. At least one batch axis is output, when available.
+      The axes that couldn't be output are printed at position/dimension [0]. *)
+  | `N5_layout of string
+    (** The string should provide exclusively non-negative integer pseudo-labels. The numbers [0]-[4] represent
+      the priorities of the axes to be printed out, where the priorities correspond to, from highest:
+      horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the outer
+      rectangle, repetition (see also [Node.pp_print]). The numbers [n >= 5] stand for the actual
+      positions [n - 5] within the corresponding axes. *)
+  | `Label_layout of (string * int) list
+    (** The association from axis labels to integers. The negative numbers [-5] to [-1] represent
+      the priorities of the axes to be printed out, where the priorities correspond to, from highest:
+      horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the outer
+      rectangle, repetition (as above). The numbers [n >= 0] stand for the actual positions
+      within the corresponding axes. Unspecified axes are printed at position [0]. *)
+  | `Inline
+    (** The tensors are printed linearly, in a bracketed manner, optionally prefixed with the labels
+        specification. Note that the syntax causes ambiguity for 1-dimensional input axes (underscores are
+        used for axes without explicit labels); when there is a 1-dimensional input axis, we output
+        the labels specification even if there are no axis labels as a way to display the number of axes.
+        The axis nesting is right-to-left (rightmost is innermost).
+        The input axes are innermost and the batch axes outermost. The input axes use [,] as a separator
+        and [()] as axis delimiters, but the delimiter for the outermost (i.e. leftmost) axis is omitted.
+        The output axes use [;] as a separator and [[]] as axis delimiters (obligatory).
+        The batch axes use [;] as a separator and [[||]] as axis delimiters (obligatory). *)
+  ]
+(** We print out up to 5 axes when printing a tensor, as a grid (outer rectangle) of (inner)
+    rectangles, possibly repeated (screens). *)
+
+let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_grad t =
+  (* let la_to_box la = in *)
+  let rec to_dag { subtensor = t; embedded } : PrintBox_utils.dag =
+    let id = Int.to_string t.id in
+    let children = if single_node then [] else List.map ~f:to_dag t.children in
+    let prefix = "[" ^ id ^ "] " ^ t.value.label in
+    let labels = Shape.axis_map_to_dims_index t.shape.axis_labels in
+    let indices = Shape.default_display_indices t.shape in
+    let txt = if with_id then prefix else t.value.label in
+    match (not embedded, with_value, with_grad, t.value.array, t.diff) with
+    | true, _, _, _, _ -> `Embed_subtree_ID (Int.to_string t.id)
+    | _, false, false, _, _ | _, false, true, _, None -> `Subtree_with_ID (id, `Tree (`Text txt, children))
+    | _, true, false, (lazy (Some v_array)), _ | _, true, true, (lazy (Some v_array)), None ->
+        let node = `Box (Nd.render_array ~brief:true ~prefix ?entries_per_axis ~labels ~indices @@ v_array) in
+        `Subtree_with_ID (id, `Tree (node, children))
+    | _, true, false, (lazy None), _ | _, true, true, (lazy None), None ->
+        let node = `Text (txt ^ " <virtual>") in
+        `Subtree_with_ID (id, `Tree (node, children))
+    | _, false, true, _, Some diff ->
+        let prefix = prefix ^ " Gradient" in
+        let node =
+          match Lazy.force diff.grad.array with
+          | Some g_array ->
+              `Box (Nd.render_array ~brief:true ~prefix ?entries_per_axis ~labels ~indices g_array)
+          | None -> `Text (diff.grad.label ^ " <virtual>")
+        in
+        `Subtree_with_ID (id, `Tree (node, children))
+    | _, true, true, (lazy (Some v_array)), Some diff ->
+        let node =
+          let value = Nd.render_array ~brief:true ~prefix ?entries_per_axis ~labels ~indices v_array in
+          let grad =
+            match Lazy.force diff.grad.array with
+            | Some g_array ->
+                `Box
+                  (Nd.render_array ~brief:true ~prefix:"Gradient" ?entries_per_axis ~labels ~indices g_array)
+            | None -> `Text (diff.grad.label ^ "Gradient <virtual>")
+          in
+          `Vlist (false, [ `Box value; grad ])
+        in
+        `Subtree_with_ID (id, `Tree (node, children))
+    | _, true, true, (lazy None), Some diff ->
+        let node =
+          let value = `Text (prefix ^ " " ^ t.value.label ^ " <virtual>") in
+          let grad =
+            match Lazy.force diff.grad.array with
+            | Some g_array ->
+                `Box
+                  (Nd.render_array ~brief:true ~prefix:"Gradient" ?entries_per_axis ~labels ~indices g_array)
+            | None -> `Text (diff.grad.label ^ "Gradient <virtual>")
+          in
+          `Vlist (false, [ value; grad ])
+        in
+        `Subtree_with_ID (id, `Tree (node, children))
+  in
+  to_dag { subtensor = t; embedded = true }
+
+let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_value = true) ~with_grad ~depth t =
+  to_dag ?single_node ?entries_per_axis ~with_id ~with_value ~with_grad t |> PrintBox_utils.reformat_dag depth
+
+let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style) t =
+  let sh = t.shape in
+  let label = t.value.label in
+  let prefix =
+    "[" ^ Int.to_string t.id ^ "]: " ^ label ^ "shape "
+    ^ Shape.to_string_hum ~style:`Axis_number_and_size sh
+    ^ " "
+  in
+  let indices =
+    match style with
+    | `Default -> Shape.default_display_indices sh
+    | `N5_layout priorities ->
+        let f = function
+          | Either.Second i -> i
+          | First _ -> invalid_arg "`N5_layout requires integer-only labels"
+        in
+        let p_labels = Shape.(axis_labels_of_spec priorities).labels |> Map.map ~f in
+        Shape.axis_map_to_dims_index p_labels
+    | `Label_layout label_idcs ->
+        let inv_labels =
+          Map.to_alist sh.axis_labels |> List.map ~f:(fun (a, b) -> (b, a)) |> Map.of_alist (module String)
+        in
+        let inv_labels =
+          match inv_labels with
+          | `Duplicate_key l -> raise @@ Session_error ("`Label_layout found a repeating label: " ^ l, Some t)
+          | `Ok inv_labels -> inv_labels
+        in
+        let idcs =
+          List.map label_idcs ~f:(fun (l, i) ->
+              match Map.find inv_labels l with
+              | Some axis -> (axis, i)
+              | None -> raise @@ Session_error ("`Label_layout label not found in shape: " ^ l, Some t))
+        in
+        Shape.axis_map_to_dims_index @@ Map.of_alist_exn (module Shape.AxisKey) idcs
+    | `Inline -> [||]
+  in
+  let needs_spec =
+    Fn.non Map.is_empty sh.axis_labels
+    || Shape.(List.exists ~f:(( = ) 1) @@ list_of_dims @@ dims_of_kind Input sh)
+  in
+  let labels = Shape.axis_map_to_dims_index ~default:"" sh.axis_labels in
+  let axes_spec = if needs_spec then Some (Shape.to_string_hum ~style:`Only_labels sh) else None in
+  let num_axes kind = List.length Shape.(list_of_dims @@ dims_of_kind kind sh) in
+  let num_batch_axes = num_axes Shape.AxisKey.Batch in
+  let num_input_axes = num_axes Shape.AxisKey.Input in
+  let num_output_axes = num_axes Shape.AxisKey.Output in
+  (* TODO: code sharing with [to_dag] *)
+  (if not @@ Lazy.is_val t.value.array then Caml.Format.printf "<not-in-yet>@ "
+   else
+     match (style, t.value.array) with
+     | `Inline, (lazy None) -> Caml.Format.printf "<virtual>@ "
+     | `Inline, (lazy (Some arr)) ->
+         Nd.pp_array_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
+           ?axes_spec arr
+     | _, (lazy None) -> Caml.Format.printf "<virtual>@ "
+     | _, (lazy (Some arr)) ->
+         Nd.pp_array Caml.Format.std_formatter ~prefix ~labels ~indices arr;
+         Caml.Format.print_newline ());
+  if with_grad then
+    Option.iter t.diff ~f:(fun diff ->
+        if not @@ Lazy.is_val diff.grad.array then Caml.Format.printf "Gradient <not-in-yet>@ "
+        else
+          match (style, diff.grad.array) with
+          | `Inline, (lazy (Some arr)) ->
+              Nd.pp_array_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
+                ?axes_spec arr;
+              Caml.Format.print_newline ()
+          | _, (lazy (Some arr)) ->
+              Nd.pp_array Caml.Format.std_formatter ~prefix:(prefix ^ " Gradient ") ~labels ~indices arr;
+              Caml.Format.print_newline ()
+          | _, (lazy None) -> Caml.Format.printf "Gradient <virtual>@ ");
+  if with_code then (
+    (match t.forward_body with
+    | Noop -> ()
+    | fwd_code -> Caml.Format.printf "Current forward body:@ %a@ " High_level.fprint_code fwd_code);
+    match t.diff with
+    | Some { backprop_body = Noop; _ } -> ()
+    | Some { backprop_body = bwd_code; _ } ->
+        Caml.Format.printf "Current backprop body:@ %a@ " High_level.fprint_code bwd_code
+    | None -> ());
+  if with_low_level then (
+    (match t.forward_body with
+    | Noop -> ()
+    | fwd_code ->
+        Caml.Format.printf "Current forward low-level body:@ %a@ " Low_level.fprint_code
+        @@ High_level.to_low_level fwd_code);
+    match t.diff with
+    | Some { backprop_body = Noop; _ } -> ()
+    | Some { backprop_body = bwd_code; _ } ->
+        Caml.Format.printf "Current backprop low-level body:@ %a@ " Low_level.fprint_code
+        @@ High_level.to_low_level bwd_code
+    | None -> ());
+  Stdio.printf "\n%!"
+
+let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
+  List.iter (Map.to_alist ~key_order:`Increasing session_state.forward_roots) ~f:(fun (id, root) ->
+      assert (id = root.id);
+      print ~with_grad ~with_code style root)
+
+let print_tree ?entries_per_axis ?(with_backend_info = false) ?(with_id = true) ?(with_value = true)
+    ~with_grad ~depth t =
+  (* FIXME: print backend info *)
+  ignore with_backend_info;
+  PrintBox_text.output Stdio.stdout @@ PrintBox_utils.dag_to_box @@ PrintBox_utils.boxify depth
+  @@ to_dag ?entries_per_axis ~with_id ~with_value ~with_grad t
