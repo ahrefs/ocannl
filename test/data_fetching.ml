@@ -12,12 +12,12 @@ let%expect_test "Synthetic data" =
   Random.init 0;
   let open NTDSL in
   let session_step = O.(counter !..1) in
-  print_tensor ~with_code:false ~with_grad:false `Default session_step;
+  Tensor.print ~with_code:false ~with_grad:false `Default session_step;
   let c_data = O.(counter (session_step *. !..100)) in
-  print_tensor ~with_code:false ~with_grad:false `Default c_data
+  Tensor.print ~with_code:false ~with_grad:false `Default c_data
   (*
-  refresh_session ();
-  print_tensor ~with_code:false ~with_grad:false `Default @@ c_data;
+  (* refresh_session (); *)
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ c_data;
   [%expect
     {|
     ┌────────────────────────────────────────┐
@@ -30,8 +30,8 @@ let%expect_test "Synthetic data" =
     ││      │ 1.03e+2  1.04e+2  1.05e+2 │    │
     │└──────┴───────────────────────────┘    │
     └────────────────────────────────────────┘ |}];
-  refresh_session ();
-  print_tensor ~with_code:false ~with_grad:false `Default @@ c_data;
+  (* refresh_session (); *)
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ c_data;
   [%expect
     {|
     ┌────────────────────────────────────────┐
@@ -44,8 +44,8 @@ let%expect_test "Synthetic data" =
     ││      │ 3.03e+2  3.04e+2  3.05e+2 │    │
     │└──────┴───────────────────────────┘    │
     └────────────────────────────────────────┘ |}];
-  refresh_session ();
-  print_tensor ~with_code:false ~with_grad:false `Default @@ c_data;
+  (* refresh_session (); *)
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ c_data;
   [%expect
     {|
     ┌────────────────────────────────────────┐

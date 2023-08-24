@@ -10,7 +10,7 @@ let _suspended () =
   (* let open Operation.TDSL in *)
   let open Tensor.O in
   (* CDSL.enable_all_debugs (); *)
-  SDSL.set_executor Cuda;
+
   (* CDSL.enable_all_debugs (); *)
   (*
   CDSL.virtualize_settings.enable_device_only <- true;
@@ -61,7 +61,7 @@ let _suspended () =
   let session_refresh = NTDSL.O.(NTDSL.counter (!..1 /. !..refresh_batch)) in
   let%nn_op minus_lr = -0.00001 in
 
-  SDSL.minus_learning_rate := Some minus_lr;
+  (* minus_learning_rate := Some minus_lr; *)
   let%nn_op moons_input = (moons_flat @.| session_refresh) @.| session_step in
   let%nn_op moons_class = (moons_classes @.| session_refresh) @.| session_step in
   let%nn_op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
@@ -75,54 +75,54 @@ let _suspended () =
   (* let step_batch = parallel_dims * minib in *)
   let%nn_op batch_of_losses = margin_loss ++ "...|... => ...|0" in
   let updates_per_run = refresh_batch in
-  SDSL.everything_fully_on_host ();
+  (* everything_fully_on_host (); *)
   (* SDSL.everything_on_host_or_inlined (); *)
   SDSL.refresh_session ~updates_per_run ();
   Stdio.print_endline "\nPreamble:\n";
-  SDSL.print_preamble ();
+  (* print_preamble (); *)
   Stdio.print_endline "\nHigh-level code:\n";
-  SDSL.print_session_code ();
+  (* print_session_code (); *)
   Stdio.print_endline "\nLow-level code:\n";
-  SDSL.print_session_code ~compiled:true ();
+  (* print_session_code ~compiled:true (); *)
   SDSL.print_decimals_precision := 9;
   Stdio.printf "Step 1: session_step: %f, session_refresh: %f, of steps %d\n%!" session_step.@[0]
     session_refresh.@[0] steps;
   Stdio.printf "Step 1: Minus learning rate: %f\n%!" minus_lr.@[0];
-  SDSL.print_tree ~with_id:true ~with_grad:true ~depth:9 minus_lr;
+  Tensor.print_tree ~with_id:true ~with_grad:true ~depth:9 minus_lr;
   let step_1_loss = batch_loss.@[0] in
   Stdio.printf "\nStep 1: loss %f\n%!" step_1_loss;
-  SDSL.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses;
+  Tensor.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses;
   (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
       Tensor.print ~with_grad:true ~with_code:false `Default f); *)
-  SDSL.refresh_session ();
+  (* refresh_session (); *)
   Stdio.printf "Step 2: session_step: %f\n%!" session_step.@[0];
   Stdio.printf "\nStep 2: Minus learning rate: %f\n%!" minus_lr.@[0];
   let step_2_loss = batch_loss.@[0] in
   Stdio.printf "\nStep 2: cumulative loss %f, step loss %f\n%!" step_2_loss (step_2_loss -. step_1_loss);
-  SDSL.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses;
+  Tensor.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses;
   (* List.iter [ w1; w2; b1; b2 ] ~f:(fun f ->
       Stdio.print_endline "\n";
       Tensor.print ~with_grad:true ~with_code:false `Default f); *)
-  SDSL.refresh_session ();
+  (* refresh_session (); *)
   Stdio.printf "Step 3: session_step: %f\n%!" session_step.@[0];
   Stdio.printf "\nStep 3: Minus learning rate: %f\nStep 3 weighted reg. loss:\n%!" minus_lr.@[0];
-  SDSL.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *)
+  Tensor.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *)
     ~depth:9 weighted_reg_loss;
   let step_3_loss = batch_loss.@[0] in
   Stdio.printf "\nStep 3: cumulative loss %f, step loss %f\n%!" step_3_loss (step_3_loss -. step_2_loss);
-  SDSL.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses;
-  SDSL.refresh_session ();
+  Tensor.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses;
+  (* refresh_session (); *)
   Stdio.printf "Step 4: session_step: %f\n%!" session_step.@[0];
   Stdio.printf "\nStep 4: Minus learning rate: %f\n%!" minus_lr.@[0];
   Stdio.printf "\nStep 4 weighted reg. loss:\n%!";
-  SDSL.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *)
+  Tensor.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *)
     ~depth:9 weighted_reg_loss;
   Stdio.printf "\nStep 4 epoch loss tensor:\n%!";
-  SDSL.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_loss;
+  Tensor.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_loss;
   let step_4_loss = batch_loss.@[0] in
   Stdio.printf "\nStep 4: cumulative loss %f, step loss %f\n%!" step_4_loss (step_4_loss -. step_3_loss);
-  SDSL.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses;
+  Tensor.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses;
   Stdio.printf "\nHost size in bytes: %d\n%!" (SDSL.global_host_size_in_bytes ())
 
 let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?(inline_constants = true)
@@ -227,7 +227,7 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
   let session_step = NTDSL.O.(NTDSL.counter !..1) in
   let steps = epochs * n_batches in
   let%nn_op minus_lr = -0.1 *. (!..steps - session_step) /. !..steps in
-  SDSL.minus_learning_rate := Some minus_lr;
+  (* minus_learning_rate := Some minus_lr; *)
   let%nn_op moons_input = moons_flat @.| session_step in
   let%nn_op moons_class = moons_classes @.| session_step in
   let%nn_op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
@@ -268,7 +268,7 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
       then
         Stdio.printf "Epoch=%d, batch=%d, session_step=%f, -lr=%f, batch loss=%f\n%!" epoch
           batch_n session_step.@[0] minus_lr.@[0] total_loss.@[0]
-        (* SDSL.print_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss; *)
+        (* Tensor.print_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss; *)
     done;
     learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
     last_loss := batch_loss.@[0];
@@ -295,8 +295,8 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
   in
   CDSL.with_debug := false;
   CDSL.keep_files_in_run_directory := false;
-  let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
-  let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
+  let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
+  let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   SDSL.close_session ();
   let%nn_op point = [ 0; 0 ] in

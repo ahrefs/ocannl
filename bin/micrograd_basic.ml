@@ -9,7 +9,7 @@ module NTDSL = Operation.NTDSL
 
 let _suspended () =
   (* SDSL.drop_all_sessions (); *)
-  SDSL.set_executor Cuda;
+
   CDSL.with_debug := true;
   CDSL.keep_files_in_run_directory := true;
   Random.init 0;
@@ -19,9 +19,9 @@ let _suspended () =
   (* Tensor.set_fully_on_host g;
      Tensor.set_fully_on_host a;
      Tensor.set_fully_on_host b; *)
-  SDSL.everything_fully_on_host ();
-  SDSL.refresh_session ~verbose:true ();
-  SDSL.print_tree ~with_grad:true ~depth:9 c;
+  (* everything_fully_on_host (); *)
+  (* refresh_session ~verbose:true (); *)
+  Tensor.print_tree ~with_grad:true ~depth:9 c;
   Stdio.print_endline "\n";
   Tensor.print ~with_code:false ~with_grad:false `Default @@ c;
   Tensor.print ~with_code:false ~with_grad:true `Default @@ a;
@@ -29,7 +29,7 @@ let _suspended () =
 
 let () =
   (* SDSL.drop_all_sessions (); *)
-  SDSL.set_executor Cuda;
+
   CDSL.with_debug := true;
   CDSL.keep_files_in_run_directory := true;
   Random.init 0;
@@ -48,9 +48,9 @@ let () =
   Tensor.set_fully_on_host a;
   Tensor.set_fully_on_host b;
   (* *)
-  (* SDSL.everything_fully_on_host (); *)
-  SDSL.refresh_session ~verbose:true ();
-  SDSL.print_tree ~with_grad:true ~depth:9 g;
+  (* (* everything_fully_on_host (); *) *)
+  (* refresh_session ~verbose:true (); *)
+  Tensor.print_tree ~with_grad:true ~depth:9 g;
   Stdio.print_endline "\n";
   Tensor.print ~with_code:false ~with_grad:false `Default @@ g;
   Tensor.print ~with_code:false ~with_grad:true `Default @@ a;

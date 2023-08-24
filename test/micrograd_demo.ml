@@ -23,7 +23,7 @@ let%expect_test "Micrograd README basic example" =
   Tensor.set_fully_on_host g;
   Tensor.set_fully_on_host a;
   Tensor.set_fully_on_host b;
-  SDSL.refresh_session ();
+  (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ g;
   [%expect
     {|
@@ -103,7 +103,7 @@ let%expect_test "Micrograd half-moons example" =
   let steps = epochs * 2 * len / batch in
   let session_step = NTDSL.O.(NTDSL.counter !..1) in
   let%nn_op minus_lr = -0.1 *. (!..steps - session_step) /. !..steps in
-  SDSL.minus_learning_rate := Some minus_lr;
+  (* minus_learning_rate := Some minus_lr; *)
   let%nn_op moons_input = moons_flat @.| session_step in
   let%nn_op moons_class = moons_classes @.| session_step in
   let losses = ref [] in
@@ -114,13 +114,13 @@ let%expect_test "Micrograd half-moons example" =
   let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:TDSL.O.( + ) in
   let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..batch) + (0.0001 *. reg_loss) in
   for _step = 1 to steps do
-    SDSL.refresh_session ();
+    (* refresh_session (); *)
     learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
     losses := total_loss.@[0] :: !losses;
     log_losses := Float.log total_loss.@[0] :: !log_losses
   done;
-  let points = SDSL.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
-  let classes = SDSL.value_1d_points ~xdim:0 moons_classes in
+  let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
+  let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   SDSL.close_session ();
   let%nn_op point = [ 0; 0 ] in

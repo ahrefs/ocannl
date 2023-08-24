@@ -25,17 +25,17 @@ let () =
   (* We did not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
   Stdio.printf "\n%!";
-  SDSL.print_tree ~with_grad:true ~depth:9 l;
+  Tensor.print_tree ~with_grad:true ~depth:9 l;
   Stdio.printf "\n%!";
   SDSL.refresh_session ~update_params:true ();
   (* Now we updated the params, but after the forward and backward passes: only params values
      will change, compared to the above. *)
   Stdio.printf "\n%!";
-  SDSL.print_tree ~with_grad:true ~depth:9 l;
+  Tensor.print_tree ~with_grad:true ~depth:9 l;
   Stdio.printf "\n%!";
   SDSL.refresh_session ~update_params:false ();
   (* Now again we did not update the params, they will remain as above, but both param gradients
      and the values and gradients of other nodes will change thanks to the forward and backward passes. *)
   Stdio.printf "\n%!";
-  SDSL.print_tree ~with_grad:true ~depth:9 l;
+  Tensor.print_tree ~with_grad:true ~depth:9 l;
   Stdio.printf "\n%!"
