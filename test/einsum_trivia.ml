@@ -12,7 +12,7 @@ let%expect_test "einsum1 permute axes" =
   let hey =
     TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] ()
   in
-  let%nn_op ho = hey ++ "b|i->o => o|b->i" in
+  let%op ho = hey ++ "b|i->o => o|b->i" in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
@@ -50,7 +50,7 @@ let%expect_test "einsum1 permute axes" =
       ~output_dims:[ 6; 7 ]
       ()
   in
-  let%nn_op ho2 = hey2 ++ "ab|cd->ef => cf|ae->db" in
+  let%op ho2 = hey2 ++ "ab|cd->ef => cf|ae->db" in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey2;
   [%expect
@@ -268,7 +268,7 @@ let%expect_test "einsum1 sum out axes" =
   let hey =
     TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] ()
   in
-  let%nn_op ho = hey ++ "b|i->o => b|i" in
+  let%op ho = hey ++ "b|i->o => b|i" in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
@@ -304,7 +304,7 @@ let%expect_test "einsum1 sum out axes" =
       ~output_dims:[ 6; 7 ]
       ()
   in
-  let%nn_op ho2 = hey2 ++ "ab|cd->ef => c|a->d" in
+  let%op ho2 = hey2 ++ "ab|cd->ef => c|a->d" in
   (* refresh_session (); *)
   (* Axis 5 of hey2, i.e. d in the einsum spec, has the lowest variation (progresses by 1),
      that's why axis 1 of ho2 appears nearly constant. *)
@@ -331,7 +331,7 @@ let%expect_test "einsum outer product" =
   Random.init 0;
   let a = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] () in
-  let%nn_op c = (a + 1) *+ "i; j => i->j" b in
+  let%op c = (a + 1) *+ "i; j => i->j" b in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ a;
   [%expect
@@ -374,7 +374,7 @@ let%expect_test "einsum outer product" =
   let b =
     TDSL.range_of_shape ~batch_dims:[ 5 ] ~input_dims:[ 6 ] ~output_dims:[ 7 ] ()
   in
-  let%nn_op c = a *+ "i|j->k; l|m->n => il|jm->kn" b in
+  let%op c = a *+ "i|j->k; l|m->n => il|jm->kn" b in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ a;
   [%expect
@@ -568,11 +568,11 @@ let%expect_test "einsum matrix/inner+outer products" =
   let b =
     TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] ()
   in
-  let%nn_op a2 = a *+ "b|i->o; b|i->o => b|i->o" a in
-  let%nn_op c = b *+ "b|h->o; b|i->h => b|i->o" a in
-  let%nn_op d = a *+ "a|i->h; b|h->o => ab|i->o" b in
-  let%nn_op e = a *+ "b|i->h; b|h->o => i->o" b in
-  let%nn_op f = a *+ "a|i->h; b|h->o => i->o" b in
+  let%op a2 = a *+ "b|i->o; b|i->o => b|i->o" a in
+  let%op c = b *+ "b|h->o; b|i->h => b|i->o" a in
+  let%op d = a *+ "a|i->h; b|h->o => ab|i->o" b in
+  let%op e = a *+ "b|i->h; b|h->o => i->o" b in
+  let%op f = a *+ "a|i->h; b|h->o => i->o" b in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ a2;
   [%expect
@@ -665,7 +665,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   let hey =
     TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] ()
   in
-  let%nn_op ho = hey ++ "...|i->o => ...|o->i" in
+  let%op ho = hey ++ "...|i->o => ...|o->i" in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
@@ -696,7 +696,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     ││      │ 2.00e+0  5.00e+0  8.00e+0  1.10e+1 │ 1.40e+1  1.70e+1  2.00e+1  2.30e+1 ││
     │└──────┴────────────────────────────────────┴────────────────────────────────────┘│
     └──────────────────────────────────────────────────────────────────────────────────┘ |}];
-  let%nn_op ho2 = hey ++ "b|...->o => o|...->b" in
+  let%op ho2 = hey ++ "b|...->o => o|...->b" in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ ho2;
   [%expect
@@ -719,7 +719,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
       ~output_dims:[ 6; 7 ]
       ()
   in
-  let%nn_op ho3 = hey2 ++ "...b|...i->...o => ...i|...o->...b" in
+  let%op ho3 = hey2 ++ "...b|...i->...o => ...i|...o->...b" in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey2;
   [%expect
@@ -948,7 +948,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└──────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
 
-  let%nn_op ho4 = hey2 ++ "...b|...i->...o => i|o->b" in
+  let%op ho4 = hey2 ++ "...b|...i->...o => i|o->b" in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ ho4;
   [%expect
@@ -964,7 +964,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     ││      │ 1.58e+5  1.59e+5  ...  1.63e+5  1.64e+5 │ 1.58e+5  1.59e+5  ...  1.63e+5  1.64e+5 │ 1.58e+5  1.59e+5  ...  1.63e+5  1.64e+5 │ 1.58e+5  1.59e+5  ...  1.63e+5  1.64e+5 │ 1.58e+5  1.59e+5  ...  1.63e+5  1.64e+5 ││
     │└──────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┘│
     └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  let%nn_op ho5 = hey ++ "...|...->...o => o" in
+  let%op ho5 = hey ++ "...|...->...o => o" in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
@@ -993,7 +993,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└┴────────────────────────────────────┘│
     └───────────────────────────────────────┘ |}];
   let hey3 = TDSL.range_of_shape ~output_dims:[ 3; 4 ] () in
-  let%nn_op ho6 = hey3 ++ "...|...->...o => o" in
+  let%op ho6 = hey3 ++ "...|...->...o => o" in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey3;
   [%expect
@@ -1021,7 +1021,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     └───────────────────────────────────────┘ |}];
   (* Broadcast with a shift. *)
   let hey4 = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3; 4 ] () in
-  let%nn_op ho7 = hey4 ++ "i->...o => ...io" in
+  let%op ho7 = hey4 ++ "i->...o => ...io" in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey4;
   [%expect
@@ -1067,7 +1067,7 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
   let b =
     TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] ()
   in
-  let%nn_op c = a *+ "...|i->...; ...|...->i => ...|i" b in
+  let%op c = a *+ "...|i->...; ...|...->i => ...|i" b in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ a;
   [%expect
@@ -1113,7 +1113,7 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
   (* Broadcast with a shift. *)
   let d = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
   let e = TDSL.range_of_shape ~input_dims:[ 4 ] ~output_dims:[ 3 ] () in
-  let%nn_op f = d *+ "i->...;j->... => ...ij" e in
+  let%op f = d *+ "i->...;j->... => ...ij" e in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ d;
   [%expect
@@ -1167,7 +1167,7 @@ let%expect_test "einsum1 fixed dim axis" =
   let hey =
     TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] ()
   in
-  let%nn_op ho = hey ++ "...|1->... => ...|..." in
+  let%op ho = hey ++ "...|1->... => ...|..." in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
@@ -1196,7 +1196,7 @@ let%expect_test "einsum1 fixed dim axis" =
     ││      │ 1.30e+1  1.60e+1  1.90e+1  2.20e+1 ││
     │└──────┴────────────────────────────────────┘│
     └─────────────────────────────────────────────┘ |}];
-  let%nn_op ho2 = hey ++ "...|...->... => ...|...->0" in
+  let%op ho2 = hey ++ "...|...->... => ...|...->0" in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
@@ -1226,7 +1226,7 @@ let%expect_test "einsum1 fixed dim axis" =
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
   let hey2 = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
-  let%nn_op ho3 = hey2 ++ "...|...->... => 0" in
+  let%op ho3 = hey2 ++ "...|...->... => 0" in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey2;
   [%expect
@@ -1252,7 +1252,7 @@ let%expect_test "einsum1 fixed dim axis" =
     │││ 1.50e+1 │            │
     │└┴─────────┘            │
     └────────────────────────┘ |}];
-  let%nn_op ho4 = hey2 ++ "i->j => i0j" in
+  let%op ho4 = hey2 ++ "i->j => i0j" in
   Tensor.print ~with_code:false ~with_grad:false `Default @@ ho4;
   [%expect {|
     [6]: ho4 <=>> shape 0:2,1:1,2:3
@@ -1268,7 +1268,7 @@ let%expect_test "einsum with fixed dim axes" =
   let b =
     TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] ()
   in
-  let%nn_op c = a *+ "...|i->1; ...|...->i => ...|i" b in
+  let%op c = a *+ "...|i->1; ...|...->i => ...|i" b in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ a;
   [%expect

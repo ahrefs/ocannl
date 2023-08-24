@@ -4,16 +4,16 @@ open Ppxlib
 let rules =
   [
     Ppxlib.Context_free.Rule.extension
-    @@ Extension.declare "nn_cd" Extension.Context.expression Ast_pattern.(single_expr_payload __)
-    @@ Ppx_nn_cd.expr_expander;
+    @@ Extension.declare "cd" Extension.Context.expression Ast_pattern.(single_expr_payload __)
+    @@ Ppx_cd.expr_expander;
     Ppxlib.Context_free.Rule.extension
-    @@ Extension.declare "nn_cd" Extension.Context.structure_item Ast_pattern.(pstr __) Ppx_nn_cd.str_expander;
+    @@ Extension.declare "cd" Extension.Context.structure_item Ast_pattern.(pstr __) Ppx_cd.str_expander;
     Ppxlib.Context_free.Rule.extension
-    @@ Extension.declare "nn_op" Extension.Context.expression
+    @@ Extension.declare "op" Extension.Context.expression
          Ast_pattern.(single_expr_payload __)
-         Ppx_nn_op.expr_expander;
+         Ppx_op.expr_expander;
     Ppxlib.Context_free.Rule.extension
-    @@ Extension.declare "nn_op" Extension.Context.structure_item Ast_pattern.(pstr __) Ppx_nn_op.str_expander;
+    @@ Extension.declare "op" Extension.Context.structure_item Ast_pattern.(pstr __) Ppx_op.str_expander;
   ]
 
 let () = Driver.register_transformation ~rules "ppx_ocannl"

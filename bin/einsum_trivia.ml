@@ -15,7 +15,7 @@ let () =
   let b =
     TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] ()
   in
-  let%nn_op c = a *+ "...|i->1; ...|...->i => ...|i" b in
+  let%op c = a *+ "...|i->1; ...|...->i => ...|i" b in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ a;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ b;

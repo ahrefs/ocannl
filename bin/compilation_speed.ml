@@ -13,12 +13,12 @@ let recompiling_graph executor opti () =
   (* let open Operation.TDSL in *)
   Random.init 0;
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
-  let%nn_op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
+  let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   (* refresh_session (); *)
   let xs = Array.init 100 ~f:Float.(fun i -> of_int i - 50.) in
   let ys =
     Array.map xs ~f:(fun v ->
-        SDSL.compile_routine ~name:"assign_x" [%nn_cd x =: !.v] ();
+        SDSL.compile_routine ~name:"assign_x" [%cd x =: !.v] ();
         (* refresh_session (); *)
         f.@[0])
   in

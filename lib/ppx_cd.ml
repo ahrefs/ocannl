@@ -1,7 +1,7 @@
 open Base
 open Ppxlib
 open Ppx_arrayjit.Ppx_helper
-open Ppx_nn_shared
+open Ppx_shared
 
 let ndarray_op ?desc_label ?axis_labels ?label expr =
   let loc = expr.pexp_loc in
@@ -42,7 +42,7 @@ let assignment_op expr =
   | _ ->
       ( false,
         Ast_builder.Default.pexp_extension ~loc
-        @@ Location.error_extensionf ~loc "ppx_ocannl %%nn_cd: expected an assignment operator, one of: %s %s"
+        @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: expected an assignment operator, one of: %s %s"
              "=+ (Add), =* (Mul), =** (ToPowOf), =?/ (Relu_gate), =: (Arg2), =:+, =:*, =:**, =:?/"
              "(same with zeroing out the tensor before the start of the calculation)" )
 
@@ -63,7 +63,7 @@ let binary_op expr =
   | _ ->
       ( [%expr Shape.Pointwise_bin],
         Ast_builder.Default.pexp_extension ~loc
-        @@ Location.error_extensionf ~loc "ppx_ocannl %%nn_cd: expected a binary operator, one of: %s"
+        @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: expected a binary operator, one of: %s"
              "+ (Add), * (Mul), ** (ToPowOf), -?/ (Relu_gate), -/> (Arg2)" )
 
 let is_binary_op ident = List.mem [ "+"; "*"; "**"; "-?/"; "-/>"; "-@>" ] ident ~equal:String.equal
@@ -77,7 +77,7 @@ let unary_op expr =
       ( [%expr Shape.Pointwise_un],
         Ast_builder.Default.pexp_extension ~loc
         @@ Location.error_extensionf ~loc
-             "ppx_ocannl %%nn_cd: expected a unary operator, one of: = (Identity), !/ (Relu)" )
+             "ppx_ocannl %%cd: expected a unary operator, one of: = (Identity), !/ (Relu)" )
 
 let is_unary_op ident = List.mem [ "~="; "!/" ] ident ~equal:String.equal
 
@@ -88,7 +88,7 @@ let rec array_of_code c =
     | Arrayjit.High_level.Accum_binop { lhs; _ } | Accum_unop { lhs; _ } -> lhs
     | Fetch { array; _ } -> array
     | Seq (_, subexpr) | Block_comment (_, subexpr) -> [%e array_of_code [%expr subexpr]]
-    | Noop -> Location.error_extensionf ~loc "ppx_ocannl %%nn_cd: Noop code does not refer to any data"]
+    | Noop -> Location.error_extensionf ~loc "ppx_ocannl %%cd: Noop code does not refer to any data"]
 
 type binding_setup = { var : pattern; lazy_bind_to : expression; fwd_code_or_noop : expression }
 
@@ -123,10 +123,10 @@ let project_p_slot debug loc slot =
   | Nonslot ->
       Ast_builder.Default.pexp_extension ~loc
       @@ Location.error_extensionf ~loc
-           "ppx_ocannl %%nn_cd: not a valid accumulation/assignment slot filler at %s" debug
+           "ppx_ocannl %%cd: not a valid accumulation/assignment slot filler at %s" debug
   | Undet ->
       Ast_builder.Default.pexp_extension ~loc
-      @@ Location.error_extensionf ~loc "ppx_ocannl %%nn_cd: insufficient slot filler information at %s %s"
+      @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: insufficient slot filler information at %s %s"
            debug "(incorporate one of: v, v1, v2, g, g1, g2, lhs, rhs, rhs1, rhs2)"
 
 type array_setup = {
@@ -252,7 +252,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
           ( Array_opt,
             slot1,
             Ast_builder.Default.pexp_extension ~loc
-            @@ Location.error_extensionf ~loc "ppx_ocannl %%nn_cd: only tensors have a gradient" ))
+            @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: only tensors have a gradient" ))
   | [%expr [%e? expr1].value] -> (
       let ((typ1, slot1, expr1) as result) = translate ?desc_label ~proj_in_scope expr1 in
       (* TODO: maybe this is too permissive? *)
@@ -358,7 +358,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
         | _ ->
             ( Ast_builder.Default.pexp_extension ~loc
               @@ Location.error_extensionf ~loc
-                   "ppx_ocannl %%nn_cd: cannot use `~logic` (infer shapes) for arrays, use tensors or \
+                   "ppx_ocannl %%cd: cannot use `~logic` (infer shapes) for arrays, use tensors or \
                     `.grad` notation",
               [%expr false] )
       in
@@ -403,7 +403,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
         | _ ->
             ( Ast_builder.Default.pexp_extension ~loc
               @@ Location.error_extensionf ~loc
-                   "ppx_ocannl %%nn_cd: cannot use `~logic` (infer shapes) for arrays, use tensors or \
+                   "ppx_ocannl %%cd: cannot use `~logic` (infer shapes) for arrays, use tensors or \
                     `.grad` notation",
               [%expr false] )
       in
@@ -544,7 +544,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
         | _ ->
             ( Ast_builder.Default.pexp_extension ~loc
               @@ Location.error_extensionf ~loc
-                   "ppx_ocannl %%nn_cd: cannot use `~logic` (infer shapes) for arrays, use tensors or \
+                   "ppx_ocannl %%cd: cannot use `~logic` (infer shapes) for arrays, use tensors or \
                     `.grad` notation",
               [%expr false] )
       in
@@ -576,7 +576,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
         | _ ->
             ( Ast_builder.Default.pexp_extension ~loc
               @@ Location.error_extensionf ~loc
-                   "ppx_ocannl %%nn_cd: cannot use `~logic` (infer shapes) for arrays, use tensors or \
+                   "ppx_ocannl %%cd: cannot use `~logic` (infer shapes) for arrays, use tensors or \
                     `.grad` notation",
               [%expr false] )
       in
@@ -603,7 +603,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
         | _ ->
             ( Ast_builder.Default.pexp_extension ~loc
               @@ Location.error_extensionf ~loc
-                   "ppx_ocannl %%nn_cd: cannot use `~logic` (infer shapes) for arrays, use tensors or \
+                   "ppx_ocannl %%cd: cannot use `~logic` (infer shapes) for arrays, use tensors or \
                     `.grad` notation",
               [%expr false] )
       in
@@ -651,7 +651,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
         Nonslot,
         Ast_builder.Default.pexp_extension ~loc
         @@ Location.error_extensionf ~loc
-             "ppx_ocannl %%nn_cd: while: low-level code embeddings not supported yet" )
+             "ppx_ocannl %%cd: while: low-level code embeddings not supported yet" )
   | [%expr
       for [%p? _pat] = [%e? _init] to [%e? _final] do
         [%e? _body_expr]
@@ -660,7 +660,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
         Nonslot,
         Ast_builder.Default.pexp_extension ~loc
         @@ Location.error_extensionf ~loc
-             "ppx_ocannl %%nn_cd: for-to: low-level code embeddings not supported yet" )
+             "ppx_ocannl %%cd: for-to: low-level code embeddings not supported yet" )
   | [%expr
       for [%p? _pat] = [%e? _init] downto [%e? _final] do
         [%e? _body_expr]
@@ -669,7 +669,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
         Nonslot,
         Ast_builder.Default.pexp_extension ~loc
         @@ Location.error_extensionf ~loc
-             "ppx_ocannl %%nn_cd: for-downto: low-level code embeddings not supported yet" )
+             "ppx_ocannl %%cd: for-downto: low-level code embeddings not supported yet" )
   | [%expr
       [%e? expr1];
       [%e? expr2]] ->
@@ -702,7 +702,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       ( Unknown,
         Undet,
         Ast_builder.Default.pexp_extension ~loc
-        @@ Location.error_extensionf ~loc "ppx_ocannl %%nn_cd: let-in: local let-bindings not implemented yet"
+        @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: let-in: local let-bindings not implemented yet"
       )
   (* let bindings = List.map bindings
       ~f:(fun binding -> {binding with pvb_expr=translate binding.pvb_expr}) in

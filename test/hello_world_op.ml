@@ -15,7 +15,7 @@ let%expect_test "Pointwise multiplication dims 1" =
   (* drop_all_sessions (); *)
   Random.init 0;
   (* "Hey" is inferred to be a scalar. *)
-  let%nn_op y = 2 *. "hey" in
+  let%op y = 2 *. "hey" in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ y;
   [%expect
@@ -34,7 +34,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
   (* drop_all_sessions (); *)
   Random.init 0;
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
-  let%nn_op y = ("hey" * 'q' 2.0) + 'p' 1.0 in
+  let%op y = ("hey" * 'q' 2.0) + 'p' 1.0 in
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
@@ -64,7 +64,7 @@ let%expect_test "Print constant tensor" =
   (* Session.drop_all_sessions (); *)
   Random.init 0;
 
-  let%nn_op hey = [ (1, 2, 3); (4, 5, 6) ] in
+  let%op hey = [ (1, 2, 3); (4, 5, 6) ] in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Inline @@ hey;
   [%expect {| [1.00, 2.00, 3.00; 4.00, 5.00, 6.00] |}];
@@ -80,7 +80,7 @@ let%expect_test "Print constant tensor" =
     ││      │ 4.00e+0  5.00e+0  6.00e+0 │                           │
     │└──────┴───────────────────────────┘                           │
     └───────────────────────────────────────────────────────────────┘ |}];
-  let%nn_op hoo = [| [ 1; 2; 3 ]; [ 4; 5; 6 ] |] in
+  let%op hoo = [| [ 1; 2; 3 ]; [ 4; 5; 6 ] |] in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Inline @@ hoo;
   [%expect {| [|[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]|] |}];
@@ -96,7 +96,7 @@ let%expect_test "Print constant tensor" =
     ││      │ 4.00e+0  5.00e+0  6.00e+0 │                                │
     │└──────┴───────────────────────────┘                                │
     └────────────────────────────────────────────────────────────────────┘ |}];
-  let%nn_op hey2 =
+  let%op hey2 =
     [
       ((1, 2, 3), (4, 5, 6));
       ((7, 8, 9), (10, 11, 12));
@@ -127,7 +127,7 @@ let%expect_test "Print constant tensor" =
     ││      │ 1.90e+1  2.00e+1  2.10e+1 │ 2.20e+1  2.30e+1  2.40e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
-  let%nn_op hoo2 =
+  let%op hoo2 =
     [|
       [ [ 1; 2; 3 ]; [ 4; 5; 6 ] ];
       [ [ 7; 8; 9 ]; [ 10; 11; 12 ] ];
@@ -156,7 +156,7 @@ let%expect_test "Print constant tensor" =
     ││      │ 4.00e+0  5.00e+0  6.00e+0 │ 1.00e+1  1.10e+1  1.20e+1 │ 1.60e+1  1.70e+1  1.80e+1 │ 2.20e+1  2.30e+1  2.40e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  let%nn_op heyhoo =
+  let%op heyhoo =
     [|
       [| [ 1; 2; 3 ]; [ 4; 5; 6 ] |];
       [| [ 7; 8; 9 ]; [ 10; 11; 12 ] |];
@@ -185,7 +185,7 @@ let%expect_test "Print constant tensor" =
     ││      │ 4.00e+0  5.00e+0  6.00e+0 │ 1.00e+1  1.10e+1  1.20e+1 │ 1.60e+1  1.70e+1  1.80e+1 │ 2.20e+1  2.30e+1  2.40e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  let%nn_op heyhoo2 =
+  let%op heyhoo2 =
     [|
       [| [ [ 1; 31 ]; [ 2; 32 ]; [ 3; 33 ] ]; [ [ 4; 34 ]; [ 5; 35 ]; [ 6; 36 ] ] |];
       [| [ [ 7; 37 ]; [ 8; 38 ]; [ 9; 39 ] ]; [ [ 10; 40 ]; [ 11; 41 ]; [ 12; 42 ] ] |];
@@ -232,7 +232,7 @@ let%expect_test "Print constant tensor" =
     ││      │ 2.10e+1  5.10e+1 │ 2.40e+1  5.40e+1 ││
     │└──────┴──────────────────┴──────────────────┘│
     └──────────────────────────────────────────────┘ |}];
-  let%nn_op heyhoo3 =
+  let%op heyhoo3 =
     [|
       [|
         [ [ [ 1; 31 ]; [ 2; 32 ]; [ 3; 33 ] ]; [ [ 4; 34 ]; [ 5; 35 ]; [ 6; 36 ] ] ];
@@ -290,7 +290,7 @@ let%expect_test "Print constant tensor" =
     ││      │ 2.10e+1  5.10e+1 │ 2.40e+1  5.40e+1 │      │
     │└──────┴──────────────────┴──────────────────┘      │
     └────────────────────────────────────────────────────┘ |}];
-  let%nn_op heyhoo4 =
+  let%op heyhoo4 =
     [|
       [
         [ [ (1, 31); (2, 32); (3, 33) ]; [ (4, 34); (5, 35); (6, 36) ] ];
@@ -354,8 +354,8 @@ let%expect_test "Matrix multiplication dims 2x3" =
   (* drop_all_sessions (); *)
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
-  let%nn_op hey = "hey" in
-  let%nn_op y = (hey * [ 2; 3 ]) + [ 4; 5; 6 ] in
+  let%op hey = "hey" in
+  let%op y = (hey * [ 2; 3 ]) + [ 4; 5; 6 ] in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
@@ -445,7 +445,7 @@ let%expect_test "Very big tensor" =
       ~output_dims:[ 10; 11 ]
       ()
   in
-  let%nn_op hoo = (hey * (1 + 1)) - 10 in
+  let%op hoo = (hey * (1 + 1)) - 10 in
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default hey;
   [%expect

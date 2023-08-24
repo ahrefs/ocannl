@@ -27,7 +27,7 @@
 (library
  (name ppx_ocannl)
  (kind ppx_rewriter)
- (modules ppx_nn_shared ppx_nn_cd ppx_nn_op ppx_ocannl)
+ (modules ppx_shared ppx_cd ppx_op ppx_ocannl)
  (libraries base ppxlib str ppx_arrayjit)
  (preprocess
   (pps ppx_jane ppxlib.metaquot)))

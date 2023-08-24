@@ -18,7 +18,7 @@ let hello1 () =
       ~output_dims:[ 13; 14 ]
       ()
   in
-  let%nn_op hoo = ((1 + 1) * hey) - 10 in
+  let%op hoo = ((1 + 1) * hey) - 10 in
   (* refresh_session (); *)
   Tensor.print_tree ~with_grad:false ~depth:99 hoo;
   Tensor.print ~with_code:false ~with_grad:false `Default hoo
@@ -29,7 +29,7 @@ let hello2 () =
   (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
-  let%nn_op y = ("hey" * 'q' 2.0) + 'p' 1.0 in
+  let%op y = ("hey" * 'q' 2.0) + 'p' 1.0 in
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   (* refresh_session (); *)
   (* print_preamble (); *)

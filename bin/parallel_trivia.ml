@@ -17,9 +17,9 @@ let () =
   let b = TDSL.init_param ~l:"b" ~o:[ num_tasks ] @@ Array.create ~len:num_tasks (-3.0) in
   let c = TDSL.init_param ~l:"c" ~o:[ num_tasks ] @@ Array.create ~len:num_tasks 10.0 in
   let f = TDSL.init_param ~l:"f" ~o:[ num_tasks ] @@ Array.create ~len:num_tasks (-2.0) in
-  let%nn_op e = a *. b in
-  let%nn_op d = e + c in
-  let%nn_op l = d *. f in
+  let%op e = a *. b in
+  let%op d = e + c in
+  let%op l = d *. f in
   SDSL.minus_learning_rate := Some (TDSL.init_const ~l:"minus_lr" ~o:[ 1 ] [| 0.1 |]);
   SDSL.refresh_session ~update_params:false ();
   (* We did not update the params: all values and gradients will be at initial points, which are

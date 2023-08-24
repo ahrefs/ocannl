@@ -16,8 +16,8 @@ Warning disclaimer: this project is still "not announced". The features describe
   * Has multiple "backends": interpreted, compiled via OCaml, compiled via pure C, compiled via CUDA.
   * Currently, compiles all computation of a single step into a monolithic routine. But users can compile any additional routines at any time (and run them at approximately any other time within a session).
 * Offers only two levels of abstraction.
-  * Differentiable computations, centered around the [`%nn_op`](lib/ppx_nn_op.ml) syntax extension.
-  * Plain computations, centered around the [`%nn_cd`](lib/ppx_nn_cd.ml) syntax extension. It integrates the `arrayjit` backend library with shape inference.
+  * Differentiable computations, centered around the [`%op`](lib/ppx_op.ml) syntax extension.
+  * Plain computations, centered around the [`%cd`](lib/ppx_cd.ml) syntax extension. It integrates the `arrayjit` backend library with shape inference.
 * Supports mixed-precision computations, e.g. higher-precision network components, or gradients at a higher precision than values.
 * Should be easily extensible.
 * Model surgery should be starightforward (not sure if we are there yet).

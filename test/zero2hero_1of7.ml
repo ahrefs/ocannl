@@ -12,7 +12,7 @@ let%expect_test "Graph drawing recompile" =
   let open Tensor.O in
   (* SDSL.drop_all_sessions (); *)
   Random.init 0;
-  let%nn_op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
+  let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Tensor.set_fully_on_host x;
   (* refresh_session (); *)
   Tensor.print_tree ~with_grad:true ~depth:9 f;
@@ -42,7 +42,7 @@ let%expect_test "Graph drawing recompile" =
   let ys =
     Array.map xs ~f:(fun v ->
         (* This is inefficient because it compiles the argument update inside the loop. *)
-        SDSL.compile_routine [%nn_cd x =: !.v] ~name:"assign_x" ();
+        SDSL.compile_routine [%cd x =: !.v] ~name:"assign_x" ();
         (* refresh_session (); *)
         f.@[0])
   in
@@ -99,8 +99,8 @@ let%expect_test "Graph drawing fetch" =
   Random.init 0;
   CDSL.virtualize_settings.enable_device_only <- false;
   CDSL.virtualize_settings.inline_constants <- false;
-  let%nn_op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
-  let%nn_op f5 = f 5 in
+  let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
+  let%op f5 = f 5 in
   (* everything_fully_on_host (); *)
   (* refresh_session (); *)
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
@@ -128,9 +128,9 @@ let%expect_test "Graph drawing fetch" =
       ~init_op:(Constant_fill xs) ()
   in
   let session_step = NTDSL.O.(NTDSL.counter !..1) in
-  let%nn_op x = x_flat @.| session_step in
+  let%op x = x_flat @.| session_step in
   Tensor.set_fully_on_host x;
-  let%nn_op fx = f x in
+  let%op fx = f x in
   let ys =
     Array.map xs ~f:(fun _ ->
         (* refresh_session (); *)
@@ -196,9 +196,9 @@ let%expect_test "Graph drawing fetch" =
 let%expect_test "Simple gradients materialized" =
   (* SDSL.drop_all_sessions (); *)
   Random.init 0;
-  let%nn_op e = "a" [ 2 ] *. "b" [ -3 ] in
-  let%nn_op d = e + "c" [ 10 ] in
-  let%nn_op l = d *. "f" [ -2 ] in
+  let%op e = "a" [ 2 ] *. "b" [ -3 ] in
+  let%op d = e + "c" [ 10 ] in
+  let%op l = d *. "f" [ -2 ] in
   SDSL.minus_learning_rate := Some (TDSL.init_const ~l:"minus_lr" ~o:[ 1 ] [| 0.1 |]);
   (* everything_fully_on_host (); *)
   SDSL.refresh_session ~update_params:false ();
@@ -273,9 +273,9 @@ let%expect_test "Simple gradients materialized" =
 let%expect_test "Simple gradients virtual" =
   (* SDSL.drop_all_sessions (); *)
   Random.init 0;
-  let%nn_op e = "a" [ 2 ] *. "b" [ -3 ] in
-  let%nn_op d = e + "c" [ 10 ] in
-  let%nn_op l = d *. "f" [ -2 ] in
+  let%op e = "a" [ 2 ] *. "b" [ -3 ] in
+  let%op d = e + "c" [ 10 ] in
+  let%op l = d *. "f" [ -2 ] in
   SDSL.minus_learning_rate := Some (TDSL.init_const ~l:"minus_lr" ~o:[ 1 ] [| 0.1 |]);
   SDSL.refresh_session ~update_params:false ();
   (* We did not update the params: all values and gradients will be at initial points, which are
@@ -353,7 +353,7 @@ let%expect_test "tanh plot" =
 let%expect_test "2D neuron materialized" =
   (* SDSL.drop_all_sessions (); *)
   Random.init 0;
-  let%nn_op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
+  let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   (* No need for [~update_params:false] because we have not set [minus_learning_rate]. *)
   (* everything_fully_on_host (); *)
   (* refresh_session (); *)
@@ -376,7 +376,7 @@ let%expect_test "2D neuron materialized" =
 let%expect_test "2D neuron virtual" =
   (* SDSL.drop_all_sessions (); *)
   Random.init 0;
-  let%nn_op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
+  let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   (* No need for [~update_params:false] because we have not set [minus_learning_rate]. *)
   (* refresh_session (); *)
   Tensor.print_tree ~with_grad:true ~depth:9 v;

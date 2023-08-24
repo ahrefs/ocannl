@@ -54,26 +54,26 @@ let _suspended () =
   let moons_flat = TDSL.init_const ~l:"moons_flat" ~b ~o:[ 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let moons_classes = TDSL.init_const ~l:"moons_classes" ~b ~o:[ 1 ] moons_classes in
-  (* let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 2 + ("w1" * x))) in *)
-  let%nn_op mlp x = "b1" 1 + ("w1" * x) in
+  (* let%op mlp x = "b2" 1 + ("w2" * !/("b1" 2 + ("w1" * x))) in *)
+  let%op mlp x = "b1" 1 + ("w1" * x) in
 
   let session_step = NTDSL.O.(NTDSL.counter !..1) in
   let session_refresh = NTDSL.O.(NTDSL.counter (!..1 /. !..refresh_batch)) in
-  let%nn_op minus_lr = -0.00001 in
+  let%op minus_lr = -0.00001 in
 
   (* minus_learning_rate := Some minus_lr; *)
-  let%nn_op moons_input = (moons_flat @.| session_refresh) @.| session_step in
-  let%nn_op moons_class = (moons_classes @.| session_refresh) @.| session_step in
-  let%nn_op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
-  (* let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in *)
-  let%nn_op ssq w = (w *. w) ++ "...|...->... => 0" in
+  let%op moons_input = (moons_flat @.| session_refresh) @.| session_step in
+  let%op moons_class = (moons_classes @.| session_refresh) @.| session_step in
+  let%op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
+  (* let%op ssq w = (w **. 2) ++ "...|...->... => 0" in *)
+  let%op ssq w = (w *. w) ++ "...|...->... => 0" in
   let reg_loss = List.map ~f:ssq [ w1; b1 ] |> List.reduce_exn ~f:TDSL.O.( + ) in
   (* let reg_loss =
        List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:TDSL.O.( + )
      in *)
-  let%nn_op weighted_reg_loss = 0.00001 *. reg_loss in
+  let%op weighted_reg_loss = 0.00001 *. reg_loss in
   (* let step_batch = parallel_dims * minib in *)
-  let%nn_op batch_of_losses = margin_loss ++ "...|... => ...|0" in
+  let%op batch_of_losses = margin_loss ++ "...|... => ...|0" in
   let updates_per_run = refresh_batch in
   (* everything_fully_on_host (); *)
   (* SDSL.everything_on_host_or_inlined (); *)
@@ -211,7 +211,7 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
       moons_classes
   in
   (* *
-     let%nn_op mlp x =
+     let%op mlp x =
        "b6" 1
        + "w6"
          * !/("b4" hid_4_5
@@ -223,25 +223,25 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
              + ("b5" hid_4_5 + ("w5" * !/(b4 + (w4 * !/(b3 + (w3 * !/(b2 + (w2 * !/(b1 + (w1 * x)))))))))))
      in
      * *)
-  let%nn_op mlp x = "b3" 1 + ("w3" * !/("b2" hid_dim + ("w2" * !/("b1" hid_dim + ("w1" * x))))) in
+  let%op mlp x = "b3" 1 + ("w3" * !/("b2" hid_dim + ("w2" * !/("b1" hid_dim + ("w1" * x))))) in
   let session_step = NTDSL.O.(NTDSL.counter !..1) in
   let steps = epochs * n_batches in
-  let%nn_op minus_lr = -0.1 *. (!..steps - session_step) /. !..steps in
+  let%op minus_lr = -0.1 *. (!..steps - session_step) /. !..steps in
   (* minus_learning_rate := Some minus_lr; *)
-  let%nn_op moons_input = moons_flat @.| session_step in
-  let%nn_op moons_class = moons_classes @.| session_step in
-  let%nn_op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
+  let%op moons_input = moons_flat @.| session_step in
+  let%op moons_class = moons_classes @.| session_step in
+  let%op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
   let total_loss =
     if with_reg then
-      let%nn_op ssq w = (w **. 2) ++ "...|...->... => 0" in
+      let%op ssq w = (w **. 2) ++ "...|...->... => 0" in
       (* let reg_loss =
            List.map ~f:ssq [ w1; w2; w3; w4; w5; w6; b1; b2; b3; b4; b5; b6 ] |> List.reduce_exn ~f:TDSL.O.( + )
          in *)
       let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:TDSL.O.( + ) in
-      let%nn_op total_loss = ((margin_loss ++ "...|... => 0") /. !..batch_size) + (0.0001 *. reg_loss) in
+      let%op total_loss = ((margin_loss ++ "...|... => 0") /. !..batch_size) + (0.0001 *. reg_loss) in
       total_loss
     else
-      let%nn_op total_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
+      let%op total_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
       total_loss
   in
   (* Warmup step, with update. *)
@@ -299,7 +299,7 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
   let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   SDSL.close_session ();
-  let%nn_op point = [ 0; 0 ] in
+  let%op point = [ 0; 0 ] in
   let mlp_result = mlp point in
   SDSL.refresh_session ~with_backprop:false ();
   let callback (x, y) =
