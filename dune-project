@@ -31,6 +31,7 @@
   core
   ctypes
   ctypes-foreign
+  res
   domainslib
   printbox
   printbox-text

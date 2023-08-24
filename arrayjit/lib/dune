@@ -5,6 +5,7 @@
   core
   printbox
   printbox-text
+  res
   stdio
   str
   gccjit

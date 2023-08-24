@@ -1,5 +1,4 @@
 open Base
-
 module Nd = Ndarray
 
 type t = {
@@ -38,20 +37,53 @@ let get_exn a =
 
 let has a = match a.array with (lazy (Some _)) -> true | _ -> false
 
+let dims_to_string ?(with_axis_numbers = false) arr =
+  let dims_s =
+    if Lazy.is_val arr.dims then Nd.int_dims_to_string ~with_axis_numbers @@ Lazy.force arr.dims
+    else "<not-in-yet>"
+  in
+  Nd.prec_string arr.prec ^ " prec " ^ dims_s
+
+let header arr =
+  let mem_size =
+    if Lazy.is_val arr.array then
+      match arr.array with
+      | (lazy None) -> "<not-materialized>"
+      | (lazy (Some nd)) -> Int.to_string_hum @@ Nd.size_in_bytes nd
+    else "<not-in-yet>"
+  in
+  String.concat [ name arr; " "; arr.label; ": "; dims_to_string arr; "; mem in bytes: "; mem_size ]
+
+module Array = Res.Weak
+
+let registry = Array.empty ()
+
 let create prec ~id ~label ~dims ?(literal = false) init_op =
   let materialized = ref false in
   let array =
     lazy (if !materialized then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None)
   in
-  {
-    array;
-    prec;
-    id;
-    label;
-    literal;
-    materialized;
-    never_virtual = false;
-    never_device_only = false;
-    backend_info = "";
-    dims;
-  }
+  let arr =
+    {
+      array;
+      prec;
+      id;
+      label;
+      literal;
+      materialized;
+      never_virtual = false;
+      never_device_only = false;
+      backend_info = "";
+      dims;
+    }
+  in
+  registry.(arr.id) <- Some arr;
+  arr
+
+let find ~id = registry.(id)
+
+let print_accessible_headers () =
+  Stdio.printf "Lazy_array: collecting accessible arrays...%!\n";
+  Core.Gc.full_major ();
+  Array.iter (function Some arr -> Stdio.print_endline @@ header arr | None -> ()) registry;
+  Stdio.printf "Lazy_array: Finished printing headers.%!\n"

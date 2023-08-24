@@ -296,17 +296,10 @@ let set_fully_on_host t =
 
 (** *** Printing. *** *)
 
-let la_dims_to_string ?(with_axis_numbers = false) arr =
-  let dims_s =
-    if Lazy.is_val arr.LA.dims then Nd.int_dims_to_string ~with_axis_numbers @@ Lazy.force arr.dims
-    else "<not-in-yet>"
-  in
-  Nd.prec_string arr.prec ^ " prec " ^ dims_s
-
 (** Converts ID, label and the dimensions of a node to a string. *)
 let header t =
-  let v_dims_s = la_dims_to_string t.value in
-  let g_dims_s = match t.diff with None -> "<no-grad>" | Some diff -> la_dims_to_string diff.grad in
+  let v_dims_s = LA.dims_to_string t.value in
+  let g_dims_s = match t.diff with None -> "<no-grad>" | Some diff -> LA.dims_to_string diff.grad in
   let dims_s =
     if String.equal v_dims_s g_dims_s then "dims " ^ v_dims_s
     else "dims val " ^ v_dims_s ^ " grad " ^ g_dims_s
