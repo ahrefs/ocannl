@@ -198,8 +198,7 @@ let binop ~op_label ?desc_label ?compose_op ~op_eqs ~grad_eqs ?grad_spec t1 t2 =
 let unop ~op_label ?desc_label ?transpose_op ~op_eqs ~grad_eqs ?grad_spec t1 =
   let op_eqs ~v ~projections = op_eqs ~v ~t1 ~projections in
   let grad_eqs ~v ~g ~projections = grad_eqs ~v ~g ~t1 ~projections in
-  op ~op_label ?desc_label ?compose_op:None ?transpose_op ~op_eqs ~grad_eqs ?grad_spec (Shape.make ())
-    [ t1 ]
+  op ~op_label ?desc_label ?compose_op:None ?transpose_op ~op_eqs ~grad_eqs ?grad_spec (Shape.make ()) [ t1 ]
 
 (** A terminal: a constant, a parameter, an input of the model. *)
 let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ?init_op
@@ -277,8 +276,23 @@ let params ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?values la
   let init_op =
     match values with Some values -> Low_level.Constant_fill values | None -> Standard_uniform
   in
-  term ?desc_label ~grad_spec:Require_grad ~batch_dims:[] ?input_dims ?output_dims ?axis_labels ?deduced
-    ~label ~init_op ()
+  let t =
+    term ?desc_label ~grad_spec:Require_grad ~batch_dims:[] ?input_dims ?output_dims ?axis_labels ?deduced
+      ~label ~init_op ()
+  in
+  t.value.never_virtual <- true;
+  t.value.never_device_only <- true;
+  (* In principle, gradients can be device-only (in the global memory of the device). Gradients of params
+     cannot be inlined because backpropagation and params update are usually separate computations. *)
+  (Option.value_exn t.diff).grad.never_virtual <- true;
+  t
+
+let set_fully_on_host t =
+  t.value.never_virtual <- true;
+  t.value.never_device_only <- true;
+  Option.iter t.diff ~f:(fun diff ->
+      diff.grad.never_virtual <- true;
+      diff.grad.never_device_only <- true)
 
 (** *** Printing. *** *)
 
@@ -540,10 +554,3 @@ module O = struct
   (** Set the value at the given index for a single-axis shape tensor. *)
   let ( .@[]<- ) t indx = set_value t [| indx |]
 end
-
-let set_fully_on_host t =
-  t.value.never_virtual <- true;
-  t.value.never_device_only <- true;
-  Option.iter t.diff ~f:(fun diff ->
-      diff.grad.never_virtual <- true;
-      diff.grad.never_device_only <- true)
