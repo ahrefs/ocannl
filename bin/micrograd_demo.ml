@@ -47,8 +47,8 @@ let () =
       moons_classes
   in
   let%nn_op mlp x = "b3" 1 + ("w3" * !/("b2" hid_dim + ("w2" * !/("b1" hid_dim + ("w1" * x))))) in
-  let%nn_dt session_step ~o:1 = v =+ 1 in
-  let%nn_dt minus_lr ~o:1 = v =: -0.1 *. (!..steps - session_step) /. !..steps in
+  let session_step = NTDSL.O.(NTDSL.counter !..1) in
+  let%nn_op minus_lr = -0.1 *. (!..steps - session_step) /. !..steps in
   SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = moons_flat @.| session_step in
   let%nn_op moons_class = moons_classes @.| session_step in

@@ -17,8 +17,7 @@ let () =
   print_tensor ~with_code:false ~with_grad:false `Default session_step;
   let biggo = O.(counter (session_step *. !..100)) in
   print_tensor ~with_code:false ~with_grad:false `Default biggo
-(*  let%nn_dt fetch_callback ~b:1 ~o:(2, 3) = v =+ session_step *. 100 in
-  refresh_session ();
+(* refresh_session ();
   print_tensor ~with_code:false ~with_grad:false `Default @@ fetch_callback;
   refresh_session ();
   print_tensor ~with_code:false ~with_grad:false `Default @@ fetch_callback;

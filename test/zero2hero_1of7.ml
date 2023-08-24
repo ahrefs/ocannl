@@ -127,7 +127,7 @@ let%expect_test "Graph drawing fetch" =
       ~output_dims:[ 1 ]
       ~init_op:(Constant_fill xs) ()
   in
-  let%nn_dt session_step ~o:1 = t =+ 1 in
+  let session_step = NTDSL.O.(NTDSL.counter !..1) in
   let%nn_op x = x_flat @.| session_step in
   SDSL.set_fully_on_host x;
   let%nn_op fx = f x in

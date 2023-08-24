@@ -57,9 +57,9 @@ let _suspended () =
   (* let%nn_op mlp x = "b2" 1 + ("w2" * !/("b1" 2 + ("w1" * x))) in *)
   let%nn_op mlp x = "b1" 1 + ("w1" * x) in
 
-  let%nn_dt session_step ~o:1 = v =+ 1 in
-  let%nn_dt session_refresh ~o:1 = v =+ 1 /. !..refresh_batch in
-  let%nn_dt minus_lr ~o:1 = v =: -0.00001 in
+  let session_step = NTDSL.O.(NTDSL.counter !..1) in
+  let session_refresh = NTDSL.O.(NTDSL.counter (!..1 /. !..refresh_batch)) in
+  let%nn_op minus_lr = -0.00001 in
 
   SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = (moons_flat @.| session_refresh) @.| session_step in
@@ -224,9 +224,9 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
      in
      * *)
   let%nn_op mlp x = "b3" 1 + ("w3" * !/("b2" hid_dim + ("w2" * !/("b1" hid_dim + ("w1" * x))))) in
-  let%nn_dt session_step ~o:1 = v =+ 1 in
+  let session_step = NTDSL.O.(NTDSL.counter !..1) in
   let steps = epochs * n_batches in
-  let%nn_dt minus_lr ~o:1 = v =: -0.1 *. (!..steps - session_step) /. !..steps in
+  let%nn_op minus_lr = -0.1 *. (!..steps - session_step) /. !..steps in
   SDSL.minus_learning_rate := Some minus_lr;
   let%nn_op moons_input = moons_flat @.| session_step in
   let%nn_op moons_class = moons_classes @.| session_step in
