@@ -73,6 +73,9 @@ let session_state =
 let is_fwd_root t = Map.mem session_state.forward_roots t.id
 let remove_fwd_root t = session_state.forward_roots <- Map.remove session_state.forward_roots t.id
 
+let forward_roots () = session_state.forward_roots
+let backprop_roots () = session_state.backprop_roots
+
 let propagate_shape_updates () =
   List.iter ~f:Shape.propagate_shapes session_state.shape_updates;
   session_state.shape_updates <- []
