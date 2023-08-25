@@ -21,7 +21,6 @@ let backprop t =
 (** See: {!https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py}. *)
 let sgd_one ?(lr = 0.001) ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
   if not @@ is_param p then raise @@ Tensor.Session_error ("Train.sgd_one: not a parameter", Some p);
-  let module TDSL = NTDSL in
   let pg = NTDSL.term ~label:(p.value.label ^ " sgd delta") () in
   let b = NTDSL.term ~label:(p.value.label ^ " sgd momentum") () in
   [%cd
