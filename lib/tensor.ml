@@ -283,7 +283,7 @@ let ndarray ?desc_label ?(grad_spec = Prohibit_grad) ?(batch_dims = []) ?(input_
   term ?desc_label ~grad_spec ~batch_dims ~input_dims ~output_dims ?axis_labels ~deduced:Not_constrained
     ~label ~init_op:(Constant_fill values) ()
 
-let params ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?values label =
+let param ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?values label =
   let init_op =
     match values with Some values -> Low_level.Constant_fill values | None -> Standard_uniform
   in
@@ -293,8 +293,8 @@ let params ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?values la
   in
   t.value.never_virtual <- true;
   t.value.never_device_only <- true;
-  (* In principle, gradients can be device-only (in the global memory of the device). Gradients of params
-     cannot be inlined because backpropagation and params update are usually separate computations. *)
+  (* In principle, gradients can be device-only (in the global memory of the device). Gradients of param
+     cannot be inlined because backpropagation and param update are usually separate computations. *)
   (Option.value_exn t.diff).grad.never_virtual <- true;
   t
 

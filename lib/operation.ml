@@ -16,7 +16,7 @@ module Initial_TDSL = struct
   let term = Tensor.term ~grad_spec:If_needed
   let number = Tensor.number ~grad_spec:If_needed
   let ndarray = Tensor.ndarray ~grad_spec:If_needed
-  let params = Tensor.params
+  let param = Tensor.param
 
   module O = struct end
 end
@@ -183,7 +183,7 @@ module DO = struct
   let ( + ) = add ~grad_spec:If_needed
   let ( **. ) ?desc_label base exp = pointpow ?desc_label exp base ~grad_spec:If_needed
   let ( !/ ) = relu ~grad_spec:If_needed
-  let ( !~ ) ?desc_label label = Tensor.params ?desc_label label
+  let ( !~ ) ?desc_label label = Tensor.param ?desc_label label
   let ( !. ) = Tensor.number ~grad_spec:If_needed
   let ( !.. ) ?desc_label i = Tensor.number ?desc_label ~grad_spec:If_needed @@ Float.of_int i
   let ( - ) = sub ~grad_spec:If_needed
@@ -213,7 +213,7 @@ module TDSL = struct
     Tensor.term ~label:l ~grad_spec:Prohibit_grad ~batch_dims:b ~input_dims:i ~output_dims:o
       ~init_op:(Constant_fill cs) ()
 
-  (** It's like `Tensor.params` but without shape inference. *)
+  (** It's like `Tensor.param` but without shape inference. *)
   let init_param ~l ?(b = []) ?(i = []) ?(o = []) cs =
     Tensor.term ~label:l ~grad_spec:Require_grad ~batch_dims:b ~input_dims:i ~output_dims:o
       ~init_op:(Constant_fill cs) ()

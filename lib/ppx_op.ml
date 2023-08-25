@@ -21,7 +21,7 @@ let ndarray_op ?desc_label ?axis_labels ?label expr =
 let make_vb ?value ~loc ~str_loc ~ident string =
   let pat = Ast_helper.Pat.var ~loc { loc = str_loc; txt = ident } in
   let value = match value with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
-  let v = [%expr TDSL.params ?values:[%e value] [%e string]] in
+  let v = [%expr TDSL.param ?values:[%e value] [%e string]] in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
@@ -31,7 +31,7 @@ let make_vb_dims ~loc ~str_loc ~ident ~dims ~dims_loc string =
     let loc = dims_loc in
     List.fold_right dims ~init:[%expr []] ~f:(fun d ds -> [%expr [%e d] :: [%e ds]])
   in
-  let v = [%expr TDSL.params ~output_dims:[%e dims] [%e string]] in
+  let v = [%expr TDSL.param ~output_dims:[%e dims] [%e string]] in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
@@ -42,13 +42,13 @@ let make_vb_nd ~loc ~str_loc ?axis_labels ~ident ~init_nd string =
     if not @@ List.is_empty batch_dims then
       Ast_builder.Default.pexp_extension ~loc
       @@ Location.error_extensionf ~loc
-           "ppx_ocannl params cannot have batch dims: define a constant or remove the array syntax."
+           "ppx_ocannl param cannot have batch dims: define a constant or remove the array syntax."
     else
       let edims dims = Ast_builder.Default.elist ~loc dims in
       let op =
         match axis_labels with
-        | None -> [%expr TDSL.params]
-        | Some axis_labels -> [%expr TDSL.params ~axis_labels:[%e axis_labels]]
+        | None -> [%expr TDSL.param]
+        | Some axis_labels -> [%expr TDSL.param ~axis_labels:[%e axis_labels]]
       in
       [%expr
         [%e op] ~input_dims:[%e edims input_dims] ~output_dims:[%e edims output_dims] ~values:[%e values]
