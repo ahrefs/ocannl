@@ -135,7 +135,9 @@ let jit_binop ~num_typ:_ ~is_double op =
   | Low_level.Arg1 -> assert false
   | Arg2 -> assert false
   | Add -> ("(", " +", ")")
+  | Sub -> ("(", " -", ")")
   | Mul -> ("(", " *", ")")
+  | Div -> ("(", " /", ")")
   | ToPowOf when is_double -> ("pow(", ",", ")")
   | ToPowOf -> ("powf(", ",", ")")
   | Relu_gate -> ("(", " > 0.0 ?", " : 0.0)")

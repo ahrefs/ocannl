@@ -2,13 +2,13 @@
 
 open Base
 module CDSL = Arrayjit.Low_level.CDSL
-
 open Arrayjit
 
 module Initial_NTDSL = struct
   let term = Tensor.term ~grad_spec:Prohibit_grad
   let number = Tensor.number ~grad_spec:Prohibit_grad
   let ndarray = Tensor.ndarray ~grad_spec:Prohibit_grad
+
   module O = struct end
 end
 
@@ -17,6 +17,7 @@ module Initial_TDSL = struct
   let number = Tensor.number ~grad_spec:If_needed
   let ndarray = Tensor.ndarray ~grad_spec:If_needed
   let params = Tensor.params
+
   module O = struct end
 end
 
@@ -29,14 +30,25 @@ let add =
   in
   Tensor.binop ~compose_op:Pointwise_bin ~op_label:"+" ~op_eqs ~grad_eqs
 
-let pointmul =
+let sub =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_eqs ~v ~t1 ~t2 ~projections = v =: v1 - v2 in
+  let%cd grad_eqs ~v:_ ~g ~t1 ~t2 ~projections =
+    g1 =+ g;
+    g2 =- g
+  in
+  Tensor.binop ~compose_op:Pointwise_bin ~op_label:"+" ~op_eqs ~grad_eqs
+
+let mul compose_op =
   let module NTDSL = Initial_NTDSL in
   let%cd op_eqs ~v ~t1 ~t2 ~projections = v =: v1 * v2 in
   let%cd grad_eqs ~v:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g * v2;
     g2 =+ v1 * g
   in
-  Tensor.binop ~compose_op:Pointwise_bin ~op_label:"*." ~op_eqs ~grad_eqs
+  Tensor.binop ~compose_op ~op_label:"*." ~op_eqs ~grad_eqs
+
+let pointmul = mul Pointwise_bin
 
 (* N1: AxB, N2 BxC, v: AxC, A: output of N1, B: input/output of N1/N2, C: input of N2.
    Although the matrix algebra would require that we insert additional transposes in gradient multiplies:
@@ -45,14 +57,7 @@ let pointmul =
    in our setup there is no transposing to do, since the projections produce correct indices for their
    corresponding matrices. *)
 
-let matmul =
-  let module NTDSL = Initial_NTDSL in
-  let%cd op_eqs ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
-  let%cd grad_eqs ~v:_ ~g ~t1 ~t2 ~projections =
-    g1 =+ g * v2;
-    g2 =+ v1 * g
-  in
-  Tensor.binop ~compose_op:Compose ~op_label:"*" ~op_eqs ~grad_eqs
+let matmul = mul Compose
 
 (** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of
     matrix multiplication, inner and outer products, etc.
@@ -116,6 +121,30 @@ let rec pointpow ?desc_label ~grad_spec p t1 : Tensor.t =
   in
   Tensor.binop ?desc_label ~compose_op:Pointwise_bin ~op_label:"**." ~op_eqs ~grad_eqs ~grad_spec t1 p_t
 
+module NDO_without_div = struct
+  include NDO_without_pow
+
+  let ( **. ) ?desc_label base exp = pointpow ?desc_label exp base ~grad_spec:Tensor.Prohibit_grad
+end
+
+let rec pointdiv ?desc_label ~grad_spec t1 t2 =
+  let module NTDSL = struct
+    include Initial_NTDSL
+
+    module O = struct
+      include NDO_without_div
+
+      let ( /. ) = pointdiv ~grad_spec:Tensor.Prohibit_grad
+    end
+  end in
+  let%cd op_eqs ~v ~t1 ~t2 ~projections = v =: v1 / v2 in
+  (* We cannot use g in a tensor expression since it's an array, so we keep it to the left-hand-side. *)
+  let%cd grad_eqs ~v:_ ~g ~t1 ~t2 ~projections =
+    g1 =+ g / v2;
+    g2 =+ g * (-1 *. t1 /. (t2 **. 2))
+  in
+  Tensor.binop ~compose_op:Pointwise_bin ~op_label:"/." ~op_eqs ~grad_eqs ?desc_label ~grad_spec t1 t2
+
 let range ?desc_label ?(grad_spec = Tensor.Prohibit_grad) ?axis_label upto =
   Tensor.term ?desc_label ~grad_spec
     ~label:("0" ^ "..." ^ Int.to_string upto)
@@ -157,21 +186,20 @@ module DO = struct
   let ( !~ ) ?desc_label label = Tensor.params ?desc_label label
   let ( !. ) = Tensor.number ~grad_spec:If_needed
   let ( !.. ) ?desc_label i = Tensor.number ?desc_label ~grad_spec:If_needed @@ Float.of_int i
-  let ( - ) ?desc_label t1 t2 = ( + ) ?desc_label t1 (!.(-1.) *. t2)
+  let ( - ) = sub ~grad_spec:If_needed
   let ( ~- ) ?desc_label t = ( *. ) ?desc_label !.(-1.) t
-  let ( /. ) ?desc_label t1 t2 = ( *. ) ?desc_label t1 (t2 **. -1.0)
+  let ( /. ) = pointmul ~grad_spec:If_needed
 end
 
 module NDO = struct
-  include NDO_without_pow
+  include NDO_without_div
 
-  let ( **. ) ?desc_label base exp = pointpow ?desc_label exp base ~grad_spec:Prohibit_grad
-  let ( /. ) ?desc_label t1 t2 = ( *. ) ?desc_label t1 (t2 **. -1.0)
+  let ( /. ) = pointdiv ~grad_spec:Prohibit_grad
 end
 
 module TDSL = struct
   include Initial_TDSL
- module O = DO
+  module O = DO
 
   let einsum ?desc_label s = einsum ?desc_label s ~grad_spec:If_needed
   let einsum1 ?desc_label s = einsum1 ?desc_label s ~grad_spec:If_needed

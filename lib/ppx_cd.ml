@@ -32,30 +32,40 @@ let assignment_op expr =
   match expr with
   | [%expr ( =: )] -> (false, [%expr Arrayjit.Low_level.Arg2])
   | [%expr ( =+ )] -> (false, [%expr Arrayjit.Low_level.Add])
+  | [%expr ( =- )] -> (false, [%expr Arrayjit.Low_level.Sub])
   | [%expr ( =* )] -> (false, [%expr Arrayjit.Low_level.Mul])
+  | [%expr ( =/ )] -> (false, [%expr Arrayjit.Low_level.Div])
   | [%expr ( =** )] -> (false, [%expr Arrayjit.Low_level.ToPowOf])
   | [%expr ( =?/ )] -> (false, [%expr Arrayjit.Low_level.Relu_gate])
   | [%expr ( =:+ )] -> (true, [%expr Arrayjit.Low_level.Add])
+  | [%expr ( =:- )] -> (true, [%expr Arrayjit.Low_level.Sub])
   | [%expr ( =:* )] -> (true, [%expr Arrayjit.Low_level.Mul])
+  | [%expr ( =:/ )] -> (true, [%expr Arrayjit.Low_level.Div])
   | [%expr ( =:** )] -> (true, [%expr Arrayjit.Low_level.ToPowOf])
   | [%expr ( =:?/ )] -> (true, [%expr Arrayjit.Low_level.Relu_gate])
   | _ ->
       ( false,
         Ast_builder.Default.pexp_extension ~loc
         @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: expected an assignment operator, one of: %s %s"
-             "=+ (Add), =* (Mul), =** (ToPowOf), =?/ (Relu_gate), =: (Arg2), =:+, =:*, =:**, =:?/"
-             "(same with zeroing out the tensor before the start of the calculation)" )
+             "=+ (Add), =- (Sub), =* (Mul), =/ (Div), =** (ToPowOf), =?/ (Relu_gate), =: (Arg2), =:+, =:-,"
+             " =:*, =:/, =:**, =:?/ (same with zeroing out the tensor before the start of the calculation)" )
 
 let binary_op expr =
   let loc = expr.pexp_loc in
   match expr with
   | [%expr ( + )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Low_level.Add])
+  | [%expr ( - )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Low_level.Sub])
   | [%expr ( * )] ->
       ( Ast_builder.Default.pexp_extension ~loc
         @@ Location.error_extensionf ~loc
              "No default compose type for binary `*`, try e.g. ~logic:\".\" for pointwise, %s"
              "~logic:\"@\" for matrix multiplication",
         [%expr Arrayjit.Low_level.Mul] )
+  | [%expr ( / )] ->
+      ( Ast_builder.Default.pexp_extension ~loc
+        @@ Location.error_extensionf ~loc
+             "For clarity, no default compose type for binary `/`, use ~logic:\".\" for pointwise division",
+        [%expr Arrayjit.Low_level.Div] )
   | [%expr ( ** )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Low_level.ToPowOf])
   | [%expr ( -?/ )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Low_level.Relu_gate])
   | [%expr ( -/> )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Low_level.Arg2])
@@ -64,9 +74,9 @@ let binary_op expr =
       ( [%expr Shape.Pointwise_bin],
         Ast_builder.Default.pexp_extension ~loc
         @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: expected a binary operator, one of: %s"
-             "+ (Add), * (Mul), ** (ToPowOf), -?/ (Relu_gate), -/> (Arg2)" )
+             "+ (Add), - (Sub), * (Mul), / (Div), ** (ToPowOf), -?/ (Relu_gate), -/> (Arg2)" )
 
-let is_binary_op ident = List.mem [ "+"; "*"; "**"; "-?/"; "-/>"; "-@>" ] ident ~equal:String.equal
+let is_binary_op ident = List.mem [ "+"; "-"; "*"; "/"; "**"; "-?/"; "-/>"; "-@>" ] ident ~equal:String.equal
 
 let unary_op expr =
   let loc = expr.pexp_loc in

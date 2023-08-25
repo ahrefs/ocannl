@@ -1,11 +1,10 @@
 open Base
 (** The code for operating on n-dimensional arrays. *)
 
-type binop = Add | Mul | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp, compare, equal]
+type binop = Add | Sub | Mul | Div | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp, compare, equal]
 type unop = Identity | Relu [@@deriving sexp, compare, equal]
 
 module Nd = Ndarray
-
 module LA = Lazy_array
 
 type global_identifier = C_function of string  (** Calls a no-argument C function. *)
@@ -83,7 +82,9 @@ let interpret_binop op v1 v2 =
   | Arg1 -> v1
   | Arg2 -> v2
   | Add -> v1 + v2
+  | Sub -> v1 - v2
   | Mul -> v1 * v2
+  | Div -> v1 / v2
   | ToPowOf -> if is_integer v2 then int_pow v1 @@ to_int v2 else v1 ** v2
   | Relu_gate -> if v1 > 0.0 then v2 else 0.0
 
@@ -106,7 +107,8 @@ type virtualize_settings = {
   mutable inline_constants : bool;
 }
 
-let virtualize_settings = { enable_device_only = true; max_visits = 3; max_tracing_dim = 5; inline_constants = true }
+let virtualize_settings =
+  { enable_device_only = true; max_visits = 3; max_tracing_dim = 5; inline_constants = true }
 
 type visits =
   | Visits of int
@@ -196,7 +198,9 @@ let precompute_constants ?idcs traced_store top_ptr llv =
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
     | Binop (Add, llv1, llv2) -> Float.(loop llv1 + loop llv2)
+    | Binop (Sub, llv1, llv2) -> Float.(loop llv1 - loop llv2)
     | Binop (Mul, llv1, llv2) -> Float.(loop llv1 * loop llv2)
+    | Binop (Div, llv1, llv2) -> Float.(loop llv1 / loop llv2)
     | Binop (ToPowOf, llv1, llv2) ->
         let v1 = loop llv1 in
         let v2 = loop llv2 in
@@ -461,7 +465,7 @@ let inline_computation ~id traced call_args =
 let optimize_integer_pow = ref true
 
 let rec unroll_pow ~(base : float_t) ~(exp : int) : float_t =
-  if exp < 0 then unroll_pow ~base:(Binop (ToPowOf, base, Constant (-1.))) ~exp:(Int.neg exp)
+  if exp < 0 then unroll_pow ~base:(Binop (Div, Constant 1., base)) ~exp:(Int.neg exp)
   else if exp = 0 then Constant 1.
   else Fn.apply_n_times ~n:(exp - 1) (fun accu -> Binop (Mul, base, accu)) base
 
@@ -664,16 +668,36 @@ let simplify_llc traced_store llc =
     | Get_global _ -> llv
     | Binop (Arg1, llv1, _) -> loop_float llv1
     | Binop (Arg2, _, llv2) -> loop_float llv2
-    | Binop (Add, Constant c1, Constant c2) -> Constant (c1 +. c2)
-    | Binop (Mul, Constant c1, Constant c2) -> Constant (c1 *. c2)
-    | Binop (Add, llv, Constant 0.) | Binop (Add, Constant 0., llv) -> loop_float llv
-    | Binop (Mul, llv, Constant 1.) | Binop (Mul, Constant 1., llv) -> loop_float llv
+    | Binop (op, Constant c1, Constant c2) -> Constant (interpret_binop op c1 c2)
+    | Binop (Add, llv, Constant 0.) | Binop (Sub, llv, Constant 0.) | Binop (Add, Constant 0., llv) ->
+        loop_float llv
+    | Binop (Sub, Constant 0., llv) -> loop_float @@ Binop (Mul, Constant (-1.), llv)
+    | Binop (Mul, llv, Constant 1.) | Binop (Div, llv, Constant 1.) | Binop (Mul, Constant 1., llv) ->
+        loop_float llv
+    | Binop (Mul, _, Constant 0.) | Binop (Div, Constant 0., _) | Binop (Mul, Constant 0., _) -> Constant 0.
     | Binop (Add, (Binop (Add, Constant c2, llv) | Binop (Add, llv, Constant c2)), Constant c1)
     | Binop (Add, Constant c1, (Binop (Add, Constant c2, llv) | Binop (Add, llv, Constant c2))) ->
         loop_float @@ Binop (Add, Constant (c1 +. c2), llv)
+    | Binop (Sub, (Binop (Add, Constant c2, llv) | Binop (Add, llv, Constant c2)), Constant c1) ->
+        loop_float @@ Binop (Add, Constant (c2 -. c1), llv)
+    | Binop (Sub, Constant c1, (Binop (Add, Constant c2, llv) | Binop (Add, llv, Constant c2))) ->
+        loop_float @@ Binop (Sub, Constant (c1 -. c2), llv)
+    | Binop (Add, llv1, Binop (Sub, llv2, llv3)) | Binop (Add, Binop (Sub, llv2, llv3), llv1) ->
+        loop_float @@ Binop (Sub, Binop (Add, llv1, llv2), llv3)
+    | Binop (Sub, llv1, Binop (Sub, llv2, llv3)) -> loop_float @@ Binop (Sub, Binop (Add, llv1, llv3), llv2)
+    | Binop (Sub, Binop (Sub, llv1, llv2), llv3) -> loop_float @@ Binop (Sub, llv1, Binop (Add, llv2, llv3))
     | Binop (Mul, (Binop (Mul, Constant c2, llv) | Binop (Mul, llv, Constant c2)), Constant c1)
     | Binop (Mul, Constant c1, (Binop (Mul, Constant c2, llv) | Binop (Mul, llv, Constant c2))) ->
         loop_float @@ Binop (Mul, Constant (c1 *. c2), llv)
+    | Binop (Div, (Binop (Mul, Constant c2, llv) | Binop (Mul, llv, Constant c2)), Constant c1) ->
+        loop_float @@ Binop (Mul, Constant (c2 /. c1), llv)
+    | Binop (Div, Constant c1, (Binop (Mul, Constant c2, llv) | Binop (Mul, llv, Constant c2))) ->
+        (* TODO: this might worsen the conditioning in hand-designed formula cases. *)
+        loop_float @@ Binop (Div, Constant (c1 /. c2), llv)
+    | Binop (Mul, llv1, Binop (Div, llv2, llv3)) | Binop (Mul, Binop (Div, llv2, llv3), llv1) ->
+        loop_float @@ Binop (Div, Binop (Mul, llv1, llv2), llv3)
+    | Binop (Div, llv1, Binop (Div, llv2, llv3)) -> loop_float @@ Binop (Div, Binop (Mul, llv1, llv3), llv2)
+    | Binop (Div, Binop (Div, llv1, llv2), llv3) -> loop_float @@ Binop (Div, llv1, Binop (Mul, llv2, llv3))
     | Binop (ToPowOf, llv1, llv2) -> (
         let v1 : float_t = loop_float llv1 in
         let v2 : float_t = loop_float llv2 in
@@ -686,12 +710,8 @@ let simplify_llc traced_store llc =
               let node : traced_array = get_node traced_store ptr in
               match node.scalar with
               | Some c when Float.is_integer c -> loop_float @@ unroll_pow ~base:v1 ~exp:(Float.to_int c)
-              | _ ->
-                  let _debug : string = "non-integer-scalar" in
-                  result)
-          | _ ->
-              let _debug : string = "composite float expr" in
-              result)
+              | _ -> result)
+          | _ -> result)
     | Binop (op, llv1, llv2) ->
         let v1 = loop_float llv1 in
         let v2 = loop_float llv2 in

@@ -99,15 +99,14 @@ let get_array { ctx; func; arrays; traced_store; init_block; finalize_block; is_
           v.backend_info <- v.backend_info ^ backend_info;
         { hosted_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
       in
-      match v.prec, Lazy.force v.array with
+      match (v.prec, Lazy.force v.array) with
       | _, Some (Half_nd arr) -> (* FIXME: *) array Type.Float false (Some arr)
       | _, Some (Single_nd arr) -> array Type.Float false (Some arr)
       | _, Some (Double_nd arr) -> array Type.Double true (Some arr)
       | Half_prec _, None -> (* FIXME: *) array Type.Float false None
       | Single_prec _, None -> array Type.Float false None
       | Double_prec _, None -> array Type.Double true None
-      | Void_prec, None -> assert false
-      )
+      | Void_prec, None -> assert false)
 
 let cleanup_session () =
   let open Gccjit in
@@ -128,12 +127,14 @@ let prec_to_kind prec =
 let prec_is_double = function Ndarray.Double_prec _ -> true | _ -> false
 
 let is_builtin_op = function
-  | Low_level.Add | Low_level.Mul -> true
+  | Low_level.Add | Low_level.Sub | Low_level.Mul | Low_level.Div -> true
   | Low_level.ToPowOf | Low_level.Relu_gate | Low_level.Arg2 | Low_level.Arg1 -> false
 
 let builtin_op = function
   | Low_level.Add -> Gccjit.Plus
+  | Low_level.Sub -> Gccjit.Minus
   | Low_level.Mul -> Gccjit.Mult
+  | Low_level.Div -> Gccjit.Divide
   | Low_level.ToPowOf | Low_level.Relu_gate | Low_level.Arg2 | Low_level.Arg1 ->
       invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
 
@@ -177,7 +178,9 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
   let loop_binop op ~num_typ ~is_double ~v1 ~v2 =
     match op with
     | Low_level.Add -> RValue.binary_op ctx Plus num_typ v1 v2
+    | Low_level.Sub -> RValue.binary_op ctx Minus num_typ v1 v2
     | Low_level.Mul -> RValue.binary_op ctx Mult num_typ v1 v2
+    | Low_level.Div -> RValue.binary_op ctx Divide num_typ v1 v2
     | Low_level.ToPowOf when is_double ->
         let base = RValue.cast ctx v1 c_double in
         let expon = RValue.cast ctx v2 c_double in
@@ -208,9 +211,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
     | For_loop { index; from_; to_; body; trace_it = _ } -> jit_for_loop ~env index ~from_ ~to_ body
     | Set (_, _, Binop (Arg2, Get (_, _), _)) -> assert false
     | Set (array, idcs, Binop (op, Get (array2, idcs2), c2))
-      when LA.equal array array2
-           && [%equal: Indexing.axis_index array] idcs idcs2
-           && is_builtin_op op ->
+      when LA.equal array array2 && [%equal: Indexing.axis_index array] idcs idcs2 && is_builtin_op op ->
         (* FIXME: maybe it's not worth it? *)
         let array = get_array state array in
         let value = loop_float ~name ~env ~num_typ:array.num_typ ~is_double:array.is_double c2 in
