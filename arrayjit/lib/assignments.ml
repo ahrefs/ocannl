@@ -144,7 +144,7 @@ let to_low_level (code : t) : Low_level.t =
   loop code
 
 let compile_proc ~name ?(verbose = false) proc =
-  if verbose then Stdio.printf "High_level.compile_proc: generating the initial low-level code\n%!";
+  if verbose then Stdio.printf "Assignments.compile_proc: generating the initial low-level code\n%!";
   if !Low_level.with_debug && !Low_level.keep_files_in_run_directory then (
     let fname = name ^ ".hlc" in
     let f = Stdio.Out_channel.create fname in

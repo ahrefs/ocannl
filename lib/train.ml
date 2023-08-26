@@ -17,7 +17,7 @@ let update_loss l =
   match l.Tensor.diff with
   | Some diff ->
       let%cd init_grad = l.grad =: 1 in
-      High_level.sequential [ l.forward; diff.zero_grads; init_grad; diff.backprop ]
+      Assignments.sequential [ l.forward; diff.zero_grads; init_grad; diff.backprop ]
   | None -> raise @@ Tensor.Session_error ("Train.backprop: tensor is not differentiable", Some l)
 
 (** See: {!https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py}. *)
@@ -35,12 +35,12 @@ let sgd_one ?(lr = 0.001) ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = f
 let sgd_update ?lr ?momentum ?weight_decay ?nesterov t =
   params t |> Set.to_list
   |> List.map ~f:(sgd_one ?lr ?momentum ?weight_decay ?nesterov)
-  |> High_level.sequential
+  |> Assignments.sequential
 
 (* FIXME: figure out handling backend "session contexts". *)
 
 let run_on_cpu ?(name = "main") ?verbose code =
-  High_level.compile_proc ~name ?verbose code |> Exec_as_gccjit.jit ~name ?verbose
+  Assignments.compile_proc ~name ?verbose code |> Exec_as_gccjit.jit ~name ?verbose
 
 let run_on_gpu ?(name = "main") ?verbose code =
-  High_level.compile_proc ~name ?verbose code |> Exec_as_cuda.jit ~name ?verbose
+  Assignments.compile_proc ~name ?verbose code |> Exec_as_cuda.jit ~name ?verbose

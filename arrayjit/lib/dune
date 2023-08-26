@@ -18,7 +18,7 @@
   indexing
   lazy_array
   low_level
-  high_level
+  assignments
   exec_as_cuda
   exec_as_gccjit
   devices)

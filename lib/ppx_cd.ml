@@ -100,7 +100,7 @@ let rec array_of_code c =
   let loc = c.pexp_loc in
   [%expr
     match [%e c] with
-    | Arrayjit.High_level.Accum_binop { lhs; _ } | Accum_unop { lhs; _ } -> lhs
+    | Arrayjit.Assignments.Accum_binop { lhs; _ } | Accum_unop { lhs; _ } -> lhs
     | Fetch { array; _ } -> array
     | Seq (_, subexpr) | Block_comment (_, subexpr) -> [%e array_of_code [%expr subexpr]]
     | Noop -> Location.error_extensionf ~loc "ppx_ocannl %%cd: Noop code does not refer to any data"]
@@ -115,7 +115,7 @@ let with_forward_args setups body =
   in
   let forward_args =
     List.map setups ~f:(fun { fwd_code_or_noop; _ } -> fwd_code_or_noop)
-    |> List.reduce ~f:(fun code fwd -> [%expr Arrayjit.High_level.Seq ([%e code], [%e fwd])])
+    |> List.reduce ~f:(fun code fwd -> [%expr Arrayjit.Assignments.Seq ([%e code], [%e fwd])])
   in
   ( Code,
     Nonslot,
@@ -124,11 +124,11 @@ let with_forward_args setups body =
     | Some fwd ->
         [%expr
           (* FIXME: we do not want to force the computation unnecessarily, but we want the bindings? *)
-          (*if Arrayjit.High_level.is_noop [%e body] then Arrayjit.High_level.Noop
+          (*if Arrayjit.Assignments.is_noop [%e body] then Arrayjit.Assignments.Noop
             else*)
           [%e
             Ast_helper.Exp.let_ ~loc Nonrecursive bindings
-              [%expr Arrayjit.High_level.Seq ([%e fwd], [%e body])]]] )
+              [%expr Arrayjit.Assignments.Seq ([%e fwd], [%e body])]]] )
 
 let project_p_slot debug loc slot =
   match slot with
@@ -162,7 +162,7 @@ let setup_array filler_pat (filler_typ, slot, filler) =
           if Tensor.is_fwd_root [%e t] then (
             Tensor.remove_fwd_root [%e t];
             [%e t].Tensor.forward)
-          else Arrayjit.High_level.Noop]
+          else Arrayjit.Assignments.Noop]
       in
       {
         binding = Some { var = filler_pat; lazy_bind_to = [%expr lazy [%e filler]]; fwd_code_or_noop };
@@ -289,10 +289,10 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       (* TODO: might be better to treat missing [rhs1, rhs2] as zeros rather than eliding the code. *)
       let body =
         [%expr
-          Option.value ~default:Arrayjit.High_level.Noop
+          Option.value ~default:Arrayjit.Assignments.Noop
           @@ Option.map3 [%e setup_l.array_opt] [%e setup_r1.array_opt] [%e setup_r2.array_opt]
                ~f:(fun lhs rhs1 rhs2 ->
-                 Arrayjit.High_level.Accum_binop
+                 Arrayjit.Assignments.Accum_binop
                    {
                      zero_out = [%e zero_out];
                      accum = [%e accu_op];
@@ -316,9 +316,9 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       (* TODO: might be better to treat missing [rhs] as zeros rather than eliding the code. *)
       let body =
         [%expr
-          Option.value ~default:Arrayjit.High_level.Noop
+          Option.value ~default:Arrayjit.Assignments.Noop
           @@ Option.map2 [%e setup_l.array_opt] [%e setup_r.array_opt] ~f:(fun lhs rhs ->
-                 Arrayjit.High_level.Accum_unop
+                 Arrayjit.Assignments.Accum_unop
                    {
                      zero_out = [%e zero_out];
                      accum = [%e accu_op];
@@ -337,9 +337,9 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let body =
         [%expr
-          Option.value ~default:Arrayjit.High_level.Noop
+          Option.value ~default:Arrayjit.Assignments.Noop
           @@ Option.map2 [%e setup_l.array_opt] [%e setup_r.array_opt] ~f:(fun lhs rhs ->
-                 Arrayjit.High_level.Accum_unop
+                 Arrayjit.Assignments.Accum_unop
                    {
                      zero_out = [%e zero_out];
                      accum = [%e accu_op];
@@ -461,10 +461,10 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       in
       let body =
         [%expr
-          Option.value ~default:Arrayjit.High_level.Noop
+          Option.value ~default:Arrayjit.Assignments.Noop
           @@ Option.map3 [%e setup_l.array_opt] [%e setup_r1.array_opt] [%e setup_r2.array_opt]
                ~f:(fun lhs rhs1 rhs2 ->
-                 Arrayjit.High_level.Accum_binop
+                 Arrayjit.Assignments.Accum_binop
                    {
                      zero_out = [%e zero_out];
                      accum = [%e accu_op];
@@ -498,9 +498,9 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       in
       let body =
         [%expr
-          Option.value ~default:Arrayjit.High_level.Noop
+          Option.value ~default:Arrayjit.Assignments.Noop
           @@ Option.map2 [%e setup_l.array_opt] [%e setup_r1.array_opt] ~f:(fun lhs rhs ->
-                 Arrayjit.High_level.Accum_binop
+                 Arrayjit.Assignments.Accum_binop
                    {
                      zero_out = [%e zero_out];
                      accum = [%e accu_op];
@@ -529,9 +529,9 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       in
       let body =
         [%expr
-          Option.value ~default:Arrayjit.High_level.Noop
+          Option.value ~default:Arrayjit.Assignments.Noop
           @@ Option.map2 [%e setup_l.array_opt] [%e setup_r1.array_opt] ~f:(fun lhs rhs ->
-                 Arrayjit.High_level.Accum_unop
+                 Arrayjit.Assignments.Accum_unop
                    {
                      zero_out = [%e zero_out];
                      accum = [%e accu_op];
@@ -689,7 +689,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       [%e? expr2]] ->
       let _typ1, _slot1, expr1 = translate ~proj_in_scope expr1 in
       let _typ2, _slot1, expr2 = translate ?desc_label ~proj_in_scope expr2 in
-      (Code, Nonslot, [%expr Arrayjit.High_level.Seq ([%e expr1], [%e expr2])])
+      (Code, Nonslot, [%expr Arrayjit.Assignments.Seq ([%e expr1], [%e expr2])])
   | [%expr if [%e? expr1] then [%e? expr2] else [%e? expr3]] ->
       let typ2, slot2, expr2 = translate ?desc_label ~proj_in_scope expr2 in
       let typ3, slot3, expr3 = translate ?desc_label ~proj_in_scope expr3 in
@@ -700,7 +700,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       (typ, slot, [%expr if [%e expr1] then [%e expr2] else [%e expr3]])
   | [%expr if [%e? expr1] then [%e? expr2]] ->
       let _typ2, _slot2, expr2 = translate ?desc_label ~proj_in_scope expr2 in
-      (Code, Nonslot, [%expr if [%e expr1] then [%e expr2] else Arrayjit.High_level.Noop])
+      (Code, Nonslot, [%expr if [%e expr1] then [%e expr2] else Arrayjit.Assignments.Noop])
   | { pexp_desc = Pexp_match (expr1, cases); _ } ->
       let typs, slots, cases =
         List.unzip3
