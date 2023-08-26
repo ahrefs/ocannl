@@ -20,7 +20,8 @@
   low_level
   high_level
   exec_as_cuda
-  exec_as_gccjit)
+  exec_as_gccjit
+  devices)
  (modes byte native))
 
 (library

@@ -9,10 +9,9 @@ let session_context =
   ref ctx
 
 type mem_properties =
-  | Local_only  (** The array is only needed for a local computation and does not exist on host. *)
-  | Local_finally_host
-      (** The array is computed locally and then copied to host, if the flag [is_final] is true. *)
-  | Host_only  (** The array is read from or updated directly on the host. *)
+  | Local_only  (** The array is only needed for a local computation, is allocated on the stack. *)
+  | Global  (** The array has a copy allocated per-domain, in addition to existing on the host. *)
+  | Constant  (** The array is read directly from the host. *)
 [@@deriving sexp, equal, compare, variants]
 
 type ndarray = {
@@ -39,8 +38,6 @@ type state = {
   arrays : (LA.t, ndarray) Hashtbl.t;
   traced_store : Low_level.traced_store;
   init_block : Gccjit.block;
-  finalize_block : Gccjit.block;  (** Only executed when [is_final] is true. *)
-  is_final : Gccjit.param option;
 }
 
 let jit_array_offset ctx ~idcs ~dims =
@@ -50,13 +47,14 @@ let jit_array_offset ctx ~idcs ~dims =
       RValue.binary_op ctx Plus c_index idx
       @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
 
-let get_array { ctx; func; arrays; traced_store; init_block; finalize_block; is_final = _ } v : ndarray =
+let get_array { ctx; func; arrays; traced_store; init_block } v : ndarray =
   let open Gccjit in
   Hashtbl.find_or_add arrays v ~default:(fun () ->
       let tn = Low_level.(get_node traced_store v) in
       let dims = Lazy.force v.dims in
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
       let size_in_bytes = size_in_elems * Ndarray.prec_in_bytes v.prec in
+      (* FIXME: rename `materialized` to `hosted`. *)
       let is_on_host = !(v.materialized) in
       let c_void_ptr = Type.(get ctx Type.Void_ptr) in
       let c_index = Type.get ctx Type.Size_t in
@@ -73,11 +71,11 @@ let get_array { ctx; func; arrays; traced_store; init_block; finalize_block; is_
         in
         let mem =
           if not is_on_host then Local_only
-          else if not tn.read_before_write then Local_finally_host
-          else Host_only
+          else if tn.read_only then Constant
+          else Global
         in
         let arr_typ = Type.array ctx num_typ size_in_elems in
-        let local = if is_host_only mem then None else Some (Function.local func arr_typ @@ LA.name v) in
+        let local = if is_local_only mem then Some (Function.local func arr_typ @@ LA.name v) else None in
         let cast_void rv = RValue.cast ctx rv c_void_ptr in
         if tn.zero_initialized then
           Option.first_some (Option.map local ~f:(Fn.compose cast_void LValue.address)) hosted_ptr
@@ -85,15 +83,6 @@ let get_array { ctx; func; arrays; traced_store; init_block; finalize_block; is_
                  Block.eval init_block
                  @@ RValue.call ctx (Function.builtin ctx "memset")
                       [ rv_ptr; RValue.zero ctx c_int; RValue.int ctx c_index size_in_bytes ]);
-        Option.iter hosted_ptr ~f:(fun hosted_ptr ->
-            if is_local_finally_host mem then
-              Block.eval finalize_block
-              @@ RValue.call ctx (Function.builtin ctx "memcpy")
-                   [
-                     cast_void hosted_ptr;
-                     cast_void @@ LValue.address @@ Option.value_exn local;
-                     RValue.int ctx c_index size_in_bytes;
-                   ]);
         let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
         if not @@ String.is_substring v.backend_info ~substring:backend_info then
           v.backend_info <- v.backend_info ^ backend_info;
@@ -303,10 +292,8 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
 let jit_func ~name ctx (traced_store, proc) =
   let open Gccjit in
   let fkind = Function.Exported in
-  let is_final = Param.create ctx Type.(get ctx Bool) "is_final" in
-  let func = Function.create ctx fkind (Type.get ctx Void) name [ is_final ] in
+  let func = Function.create ctx fkind (Type.get ctx Void) name [ ] in
   let init_block = Block.create ~name:("init_" ^ name) func in
-  let finalize_block = Block.create ~name:("finalize_" ^ name) func in
   let main_block = Block.create ~name func in
   let env = Low_level.empty_env in
   let state =
@@ -315,18 +302,12 @@ let jit_func ~name ctx (traced_store, proc) =
       func;
       traced_store;
       init_block;
-      finalize_block;
       arrays = Hashtbl.Poly.create ();
-      is_final = Some is_final;
     }
   in
   let after_proc = jit_code ~name ~env state main_block proc in
   Block.jump init_block main_block;
-  let b_after_if = Block.create ~name:("after_finalize_replicated_" ^ name) func in
-  let guard = RValue.param is_final in
-  Block.cond_jump after_proc guard finalize_block (* on true *) b_after_if (* on false *);
-  Block.jump finalize_block b_after_if;
-  Block.return_void b_after_if;
+  Block.return_void after_proc;
   if !Low_level.with_debug then
     let suf = "-gccjit-debug.c" in
     let f_name =
@@ -347,6 +328,6 @@ let jit ~name ?verbose:_ compiled =
   jit_func ~name ctx compiled;
   let result = Context.compile ctx in
   session_results := result :: !session_results;
-  let routine = Result.code result name Ctypes.(bool @-> returning void) in
+  let routine = Result.code result name Ctypes.(void @-> returning void) in
   Context.release ctx;
-  fun ~is_initial:_ ~is_final -> routine is_final
+  routine

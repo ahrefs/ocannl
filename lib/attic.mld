@@ -1,6 +1,4 @@
 {[
-
-
   let big_range = Array.init 300 ~f:(Int.to_float) in
   let r_data = TDSL.data ~label:"big_range" ~batch_dims:[2] ~output_dims:[3;5]
       (fun ~n:_ -> Init_op (Constant_fill big_range)) in
@@ -46,22 +44,9 @@
     ││      │ 7.00e+1  7.10e+1  7.20e+1  7.30e+1  7.40e+1 │ 8.50e+1  8.60e+1  8.70e+1  8.80e+1  8.90e+1 ││
     │└──────┴─────────────────────────────────────────────┴─────────────────────────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
+]}
 
-
-
-(* FIXME: not inlining here gives an error about PrintBox.Simple.t_of_sexp missing *)
-type printbox =
-  (* PrintBox.Simple.t *)
-  [ `Empty
-  | `Hlist of printbox list
-  | `Pad of printbox
-  | `Table of printbox array array
-  | `Text of string
-  | `Tree of printbox * printbox list
-  | `Vlist of printbox list ]
-[@@deriving sexp, compare]
-
-
+{[
 let save_tensors ~name =
   let out = Npy.Npz.open_out (name ^ ".npz") in
   Hashtbl.iter Low_level.global_node_store ~f:(fun v ->
@@ -92,5 +77,80 @@ let restore_tensors ?(partially = false) f_name =
       in
       restore Value;
       restore Node.Grad)
+]}
+
+Exec_as_cuda [~is_initial] and [~is_final]:
+{[
+    if is_initial then (
+      if verbose then Stdio.printf "Exec_as_cuda.jit: copying host-to-device\n%!";
+      List.iter arrays ~f:(function
+        | ptr, { hosted = Some ndarray; global = Some name; global_ptr = Some (lazy dst); size_in_elems; _ }
+          ->
+            let tn = Hashtbl.find_exn traced_store ptr in
+            if tn.read_before_write then (
+              let f src = Cu.memcpy_H_to_D ~length:size_in_elems ~dst ~src () in
+              if verbose && !Low_level.with_debug then
+                Stdio.printf "Exec_as_cuda.jit: memcpy_H_to_D for %s, length: %d\n%!" name size_in_elems;
+              Ndarray.map { f } ndarray)
+        | _ -> ()));
+
+
+if is_final then (
+      if verbose then Stdio.printf "Exec_as_cuda.jit: copying device-to-host\n%!";
+      List.iter arrays ~f:(function
+        | ptr, { hosted = Some ndarray; global = Some name; global_ptr = Some (lazy src); size_in_elems; _ }
+          ->
+            let tn = Hashtbl.find_exn traced_store ptr in
+            if not tn.read_only then (
+              let f dst = Cu.memcpy_D_to_H ~length:size_in_elems ~dst ~src () in
+              if verbose && !Low_level.with_debug then
+                Stdio.printf "Exec_as_cuda.jit: memcpy_D_to_H for %s\n%!" name;
+              Ndarray.map { f } ndarray)
+        | _ -> ()));
+
+
+  let finalizers =
+    Array.of_list arrays
+    |> Array.filter_map ~f:(fun (_, tn) ->
+           match tn.mem with
+           | Device_finally_host ->
+               Option.map2 tn.local tn.global ~f:(fun l_name g_name ->
+                   let b = Buffer.create 4096 in
+                   let ppf = Caml.Format.formatter_of_buffer b in
+                   let body idcs =
+                     Low_level.Staged_compilation
+                       (fun () ->
+                         Caml.Format.fprintf ppf "@[<2>%s[%a] =@ %s[%a];@]" g_name pp_array_offset
+                           (idcs, tn.dims) l_name pp_array_offset (idcs, tn.dims))
+                   in
+                   let loops = Low_level.loop_over_dims tn.dims ~body in
+                   jit_code ~traced_store ppf loops;
+                   Caml.Format.pp_print_newline ppf ();
+                   Buffer.contents b)
+           | _ -> None)
+  in
+{|
+  /* Finalization: copy local-to-global. */
+  if (is_final) {
+    %{String.concat_array ~sep:"\n    "
+    @@ Array.map finalizers ~f:(String.substr_replace_all ~pattern:"\n" ~with_:"\n    ")}
+  } 
+|}
+        
+]}
+
+Exec_as_gccjit [~is_initial] and [~is_final]:
+{[
+Option.iter hosted_ptr ~f:(fun hosted_ptr ->
+            if is_local_finally_host mem then
+              Block.eval finalize_block
+              @@ RValue.call ctx (Function.builtin ctx "memcpy")
+                   [
+                     cast_void hosted_ptr;
+                     cast_void @@ LValue.address @@ Option.value_exn local;
+                     RValue.int ctx c_index size_in_bytes;
+                   ]);
+
+
 
 ]}

@@ -7,13 +7,10 @@ let sync_threads_on_update = ref true
 type mem_properties =
   | Local_only
       (** The array is only needed for a single computation and is allocated locally (or spilled). *)
-  | Device_finally_host
-      (** The array is computed on-device and then copied to host, if the flag [is_final] is true. *)
+  | Global
+      (** Could not perform optimizations: the array is computed directly in the global memory. *)
   | Constant
       (** The array is accessed directly in the global memory but is not modified by the computation. *)
-  | From_host
-      (** The array is copied from host when [is_initial], modified in the global memory, and copied
-          to host when [is_final]. *)
 [@@deriving sexp, equal, compare, variants]
 
 type ndarray = {
@@ -93,14 +90,14 @@ let get_array ~traced_store v =
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
       let hosted = Lazy.force v.array in
       let size_in_bytes = size_in_elems * Ndarray.prec_in_bytes v.prec in
+      (* FIXME: rename `materialized` to `hosted`. *)
       let is_on_host = !(v.materialized) in
       let is_double = Ndarray.is_double_prec v.prec in
       let num_typ = prec_to_c_type v.prec in
       let mem =
         if not is_on_host then Local_only
         else if tn.read_only then Constant
-        else if not tn.read_before_write then Device_finally_host
-        else From_host
+        else Global
       in
       let global_ptr =
         Option.some_if (not @@ is_local_only mem)
@@ -327,7 +324,7 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
     @@ List.filter_map arrays ~f:(fun (_, tn) ->
            match tn.mem with
            | Local_only | Constant -> None
-           | From_host | Device_finally_host ->
+           | Global ->
                Option.map tn.global ~f:(fun t_name -> (tn.num_typ ^ " *" ^ t_name, tn.global_ptr)))
   in
   (* TODO: optimize zero-initializations? E.g.
@@ -350,32 +347,12 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
                 ^ if (Hashtbl.find_exn traced_store ptr).zero_initialized then "] = {0};" else "];")
         | _ -> None)
   in
-  let finalizers =
-    Array.of_list arrays
-    |> Array.filter_map ~f:(fun (_, tn) ->
-           match tn.mem with
-           | Device_finally_host ->
-               Option.map2 tn.local tn.global ~f:(fun l_name g_name ->
-                   let b = Buffer.create 4096 in
-                   let ppf = Caml.Format.formatter_of_buffer b in
-                   let body idcs =
-                     Low_level.Staged_compilation
-                       (fun () ->
-                         Caml.Format.fprintf ppf "@[<2>%s[%a] =@ %s[%a];@]" g_name pp_array_offset
-                           (idcs, tn.dims) l_name pp_array_offset (idcs, tn.dims))
-                   in
-                   let loops = Low_level.loop_over_dims tn.dims ~body in
-                   jit_code ~traced_store ppf loops;
-                   Caml.Format.pp_print_newline ppf ();
-                   Buffer.contents b)
-           | _ -> None)
-  in
   let cu_src =
     [%string
       {|
 %{if !Low_level.debug_verbose_trace then "__device__ int printf (const char * format, ... );" else ""}
 %{String.concat ~sep:"\n" constant_defs}
-extern "C" __global__ void %{name}(bool is_final, %{String.concat ~sep:", " params}) {
+extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
   /* TODO: this initial toy prototype is single-threaded. */
   if (threadIdx.x != 0 || blockIdx.x != 0) { return; }
   
@@ -384,12 +361,6 @@ extern "C" __global__ void %{name}(bool is_final, %{String.concat ~sep:", " para
 
   /* Main logic. */
   %{String.substr_replace_all cu_body ~pattern:"\n" ~with_:"\n  "}
-
-  /* Finalization: copy local-to-global. */
-  if (is_final) {
-    %{String.concat_array ~sep:"\n    "
-    @@ Array.map finalizers ~f:(String.substr_replace_all ~pattern:"\n" ~with_:"\n    ")}
-  }
 }
 |}]
   in
@@ -419,19 +390,7 @@ extern "C" __global__ void %{name}(bool is_final, %{String.concat ~sep:", " para
   let func = Cu.module_get_function module_ ~name in
   let args = List.map args ~f:(function Some (lazy p) -> Cu.Tensor p | None -> assert false) in
   if verbose then Stdio.printf "Exec_as_cuda.jit: compilation finished\n%!";
-  fun ~is_initial ~is_final ->
-    if is_initial then (
-      if verbose then Stdio.printf "Exec_as_cuda.jit: copying host-to-device\n%!";
-      List.iter arrays ~f:(function
-        | ptr, { hosted = Some ndarray; global = Some name; global_ptr = Some (lazy dst); size_in_elems; _ }
-          ->
-            let tn = Hashtbl.find_exn traced_store ptr in
-            if tn.read_before_write then (
-              let f src = Cu.memcpy_H_to_D ~length:size_in_elems ~dst ~src () in
-              if verbose && !Low_level.with_debug then
-                Stdio.printf "Exec_as_cuda.jit: memcpy_H_to_D for %s, length: %d\n%!" name size_in_elems;
-              Ndarray.map { f } ndarray)
-        | _ -> ()));
+  fun () ->
     if verbose then Stdio.printf "Exec_as_cuda.jit: zeroing-out global memory\n%!";
     List.iter arrays ~f:(function
       | ptr, { global_ptr = Some (lazy device); size_in_bytes; _ } ->
@@ -442,18 +401,6 @@ extern "C" __global__ void %{name}(bool is_final, %{String.concat ~sep:", " para
     (* if !Low_level.debug_verbose_trace then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream args;
     Cu.ctx_synchronize ();
-    if is_final then (
-      if verbose then Stdio.printf "Exec_as_cuda.jit: copying device-to-host\n%!";
-      List.iter arrays ~f:(function
-        | ptr, { hosted = Some ndarray; global = Some name; global_ptr = Some (lazy src); size_in_elems; _ }
-          ->
-            let tn = Hashtbl.find_exn traced_store ptr in
-            if not tn.read_only then (
-              let f dst = Cu.memcpy_D_to_H ~length:size_in_elems ~dst ~src () in
-              if verbose && !Low_level.with_debug then
-                Stdio.printf "Exec_as_cuda.jit: memcpy_D_to_H for %s\n%!" name;
-              Ndarray.map { f } ndarray)
-        | _ -> ()));
     if verbose then Stdio.printf "Exec_as_cuda.jit: kernel run finished\n%!"
 
 let jit = jit_func
