@@ -21,7 +21,12 @@ let ndarray_op ?desc_label ?axis_labels ?label expr =
     [%e op] ?desc_label:[%e opt_pat2string ~loc desc_label] ~batch_dims:[%e edims batch_dims]
       ~input_dims:[%e edims input_dims] ~output_dims:[%e edims output_dims] [%e values]]
 
-type expr_type = Code | Array | Array_opt | Grad_of_tensor of expression | Tensor | Unknown
+type expr_type =
+  | Code
+  | Array
+  | Grad_of_tensor of expression
+  | Tensor
+  | Unknown
 
 let is_unknown = function Unknown -> true | _ -> false
 
@@ -136,14 +141,15 @@ let project_p_slot debug loc slot =
            "ppx_ocannl %%cd: not a valid accumulation/assignment slot filler at %s" debug
   | Undet ->
       Ast_builder.Default.pexp_extension ~loc
-      @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: insufficient slot filler information at %s %s"
-           debug "(incorporate one of: v, v1, v2, g, g1, g2, lhs, rhs, rhs1, rhs2)"
+      @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: insufficient slot filler information at %s %s" debug
+           "(incorporate one of: v, v1, v2, g, g1, g2, lhs, rhs, rhs1, rhs2)"
 
 type array_setup = {
   slot : projections_slot;
   filler_typ : expr_type;
   binding : binding_setup option;
   array_opt : expression;
+  tensor : expression option;
 }
 
 let setup_array filler_pat (filler_typ, slot, filler) =
@@ -163,6 +169,7 @@ let setup_array filler_pat (filler_typ, slot, filler) =
         filler_typ;
         slot;
         array_opt = [%expr Some [%e t].value];
+        tensor = Some t;
       }
   | Code ->
       {
@@ -176,9 +183,10 @@ let setup_array filler_pat (filler_typ, slot, filler) =
         filler_typ;
         slot;
         array_opt = [%expr Some [%e array_of_code filler]];
+        tensor = None;
       }
-  | Array -> { binding = None; filler_typ; slot; array_opt = [%expr Some [%e filler]] }
-  | Grad_of_tensor _ | Array_opt -> { binding = None; filler_typ; slot; array_opt = filler }
+  | Array -> { binding = None; filler_typ; slot; array_opt = [%expr Some [%e filler]]; tensor = None }
+  | Grad_of_tensor t -> { binding = None; filler_typ; slot; array_opt = filler; tensor = Some t }
 
 let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * projections_slot * expression =
   let loc = expr.pexp_loc in
@@ -213,15 +221,16 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
   | { pexp_desc = Pexp_ident { txt = Lident "t1"; _ }; _ } -> (Tensor, RHS1, expr)
   | { pexp_desc = Pexp_ident { txt = Lident "v1"; _ }; _ } -> (Array, RHS1, [%expr t1.Tensor.value])
   | { pexp_desc = Pexp_ident { txt = Lident "g1"; _ }; _ } ->
-      (Array_opt, RHS1, [%expr Option.map t1.Tensor.diff ~f:(fun d -> d.Tensor.grad)])
+      (Grad_of_tensor [%expr t1], RHS1, [%expr Option.map t1.Tensor.diff ~f:(fun d -> d.Tensor.grad)])
   | { pexp_desc = Pexp_ident { txt = Lident "rhs2"; _ }; _ } -> (Array, RHS2, expr)
   | { pexp_desc = Pexp_ident { txt = Lident "t2"; _ }; _ } -> (Tensor, RHS2, expr)
   | { pexp_desc = Pexp_ident { txt = Lident "v2"; _ }; _ } -> (Array, RHS2, [%expr t2.Tensor.value])
   | { pexp_desc = Pexp_ident { txt = Lident "g2"; _ }; _ } ->
-      (Array_opt, RHS2, [%expr Option.map t2.Tensor.diff ~f:(fun d -> d.Tensor.grad)])
+      (Grad_of_tensor [%expr t2], RHS2, [%expr Option.map t2.Tensor.diff ~f:(fun d -> d.Tensor.grad)])
   | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_operator op_ident ->
       (Tensor, Undet, expr)
   | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
+      (* FIXME: `**.` should take a tensor and require that it's a literal. *)
       (* We need to hardcode these two patterns to prevent the numbers from being converted
          to tensors. *)
       let _typ1, slot1, e1 = translate ~proj_in_scope expr1 in
@@ -258,18 +267,18 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       match typ1 with
       | Unknown | Tensor ->
           (Grad_of_tensor expr1, slot1, [%expr Option.map [%e expr1].Tensor.diff ~f:(fun d -> d.Tensor.grad)])
-      | Code | Array | Array_opt | Grad_of_tensor _ ->
-          ( Array_opt,
+      | Code | Array | Grad_of_tensor _ ->
+          ( Array,
             slot1,
             Ast_builder.Default.pexp_extension ~loc
             @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: only tensors have a gradient" ))
   | [%expr [%e? expr1].value] -> (
       let ((typ1, slot1, expr1) as result) = translate ?desc_label ~proj_in_scope expr1 in
-      (* TODO: maybe this is too permissive? *)
+      (* TODO: maybe this is too permissive? E.g. [t1.grad.value] is accepted. *)
       match typ1 with
       | Unknown | Tensor -> (Array, slot1, [%expr [%e expr1].Tensor.value])
       | Code -> (Array, slot1, array_of_code expr1)
-      | Array | Array_opt | Grad_of_tensor _ -> result)
+      | Array | Grad_of_tensor _ -> result)
   | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections]))] ->
       let zero_out, accu_op = assignment_op accu_op in
       let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?desc_label ~proj_in_scope:true lhs in
@@ -361,20 +370,19 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       let setup_r1 = setup_array [%pat? nondiff___rhs1] @@ translate ~proj_in_scope rhs1 in
       let setup_r2 = setup_array [%pat? nondiff___rhs2] @@ translate ~proj_in_scope rhs2 in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
-      let args_for xhs_typ xhs =
-        match xhs_typ with
-        | Grad_of_tensor t -> (t, [%expr true])
-        | Tensor | Unknown -> (xhs, [%expr false])
+      let args_for = function
+        | { filler_typ = Grad_of_tensor _; tensor = Some t; _ } -> (t, [%expr true])
+        | { filler_typ = _; tensor = Some t; _ } -> (t, [%expr false])
         | _ ->
             ( Ast_builder.Default.pexp_extension ~loc
               @@ Location.error_extensionf ~loc
-                   "ppx_ocannl %%cd: cannot use `~logic` (infer shapes) for arrays, use tensors or \
-                    `.grad` notation",
+                   "ppx_ocannl %%cd: cannot use `~logic` (infer shapes) for arrays, use tensors or `.grad` \
+                    notation",
               [%expr false] )
       in
-      let t_expr, lhs_is_grad = args_for setup_l.filler_typ lhs in
-      let t1_expr, rhs1_is_grad = args_for setup_r1.filler_typ rhs1 in
-      let t2_expr, rhs2_is_grad = args_for setup_r2.filler_typ rhs2 in
+      let t_expr, lhs_is_grad = args_for setup_l in
+      let t1_expr, rhs1_is_grad = args_for setup_r1 in
+      let t2_expr, rhs2_is_grad = args_for setup_r2 in
       let body =
         [%expr
           Tensor.raw_binop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~t:[%e t_expr]
@@ -406,19 +414,18 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       let _, un_op = unary_op un_op in
       let setup_r = setup_array [%pat? nondiff___rhs] @@ translate ~proj_in_scope rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
-      let args_for xhs_typ xhs =
-        match xhs_typ with
-        | Grad_of_tensor t -> (t, [%expr true])
-        | Tensor | Unknown -> (xhs, [%expr false])
-        | _ ->
-            ( Ast_builder.Default.pexp_extension ~loc
-              @@ Location.error_extensionf ~loc
-                   "ppx_ocannl %%cd: cannot use `~logic` (infer shapes) for arrays, use tensors or \
-                    `.grad` notation",
-              [%expr false] )
-      in
-      let t_expr, lhs_is_grad = args_for setup_l.filler_typ lhs in
-      let t1_expr, rhs_is_grad = args_for setup_r.filler_typ rhs in
+      let args_for = function
+      | { filler_typ = Grad_of_tensor _; tensor = Some t; _ } -> (t, [%expr true])
+      | { filler_typ = _; tensor = Some t; _ } -> (t, [%expr false])
+      | _ ->
+          ( Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc
+                 "ppx_ocannl %%cd: cannot use `~logic` (infer shapes) for arrays, use tensors or `.grad` \
+                  notation",
+            [%expr false] )
+    in
+      let t_expr, lhs_is_grad = args_for setup_l in
+      let t1_expr, rhs_is_grad = args_for setup_r in
       let body =
         [%expr
           Tensor.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~t:[%e t_expr]
@@ -547,20 +554,19 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       let setup_r1 = setup_array [%pat? nondiff___rhs1] @@ translate ~proj_in_scope rhs1 in
       let setup_r2 = setup_array [%pat? nondiff___rhs2] @@ translate ~proj_in_scope rhs2 in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
-      let args_for xhs_typ xhs =
-        match xhs_typ with
-        | Grad_of_tensor t -> (t, [%expr true])
-        | Tensor | Unknown -> (xhs, [%expr false])
-        | _ ->
-            ( Ast_builder.Default.pexp_extension ~loc
-              @@ Location.error_extensionf ~loc
-                   "ppx_ocannl %%cd: cannot use `~logic` (infer shapes) for arrays, use tensors or \
-                    `.grad` notation",
-              [%expr false] )
-      in
-      let t_expr, lhs_is_grad = args_for setup_l.filler_typ lhs in
-      let t1_expr, rhs1_is_grad = args_for setup_r1.filler_typ rhs1 in
-      let t2_expr, rhs2_is_grad = args_for setup_r2.filler_typ rhs2 in
+      let args_for = function
+      | { filler_typ = Grad_of_tensor _; tensor = Some t; _ } -> (t, [%expr true])
+      | { filler_typ = _; tensor = Some t; _ } -> (t, [%expr false])
+      | _ ->
+          ( Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc
+                 "ppx_ocannl %%cd: cannot use `~logic` (infer shapes) for arrays, use tensors or `.grad` \
+                  notation",
+            [%expr false] )
+    in
+      let t_expr, lhs_is_grad = args_for setup_l in
+      let t1_expr, rhs1_is_grad = args_for setup_r1 in
+      let t2_expr, rhs2_is_grad = args_for setup_r2 in
       let body =
         [%expr
           Tensor.raw_binop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~t:[%e t_expr]
@@ -579,19 +585,18 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       let logic, un_op = unary_op un_op in
       let setup_r = setup_array [%pat? nondiff___rhs] @@ translate ~proj_in_scope rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
-      let args_for xhs_typ xhs =
-        match xhs_typ with
-        | Grad_of_tensor t -> (t, [%expr true])
-        | Tensor | Unknown -> (xhs, [%expr false])
+      let args_for = function
+        | { filler_typ = Grad_of_tensor _; tensor = Some t; _ } -> (t, [%expr true])
+        | { filler_typ = _; tensor = Some t; _ } -> (t, [%expr false])
         | _ ->
             ( Ast_builder.Default.pexp_extension ~loc
               @@ Location.error_extensionf ~loc
-                   "ppx_ocannl %%cd: cannot use `~logic` (infer shapes) for arrays, use tensors or \
-                    `.grad` notation",
+                   "ppx_ocannl %%cd: cannot use `~logic` (infer shapes) for arrays, use tensors or `.grad` \
+                    notation",
               [%expr false] )
       in
-      let t_expr, lhs_is_grad = args_for setup_l.filler_typ lhs in
-      let t1_expr, rhs_is_grad = args_for setup_r.filler_typ rhs in
+      let t_expr, lhs_is_grad = args_for setup_l in
+      let t1_expr, rhs_is_grad = args_for setup_r in
       let body =
         [%expr
           Tensor.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~t:[%e t_expr]
@@ -606,19 +611,18 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?desc_label ~proj_in_scope lhs in
       let setup_r = setup_array [%pat? nondiff___rhs] @@ translate ~proj_in_scope rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
-      let args_for xhs_typ xhs =
-        match xhs_typ with
-        | Grad_of_tensor t -> (t, [%expr true])
-        | Tensor | Unknown -> (xhs, [%expr false])
+      let args_for = function
+        | { filler_typ = Grad_of_tensor _; tensor = Some t; _ } -> (t, [%expr true])
+        | { filler_typ = _; tensor = Some t; _ } -> (t, [%expr false])
         | _ ->
             ( Ast_builder.Default.pexp_extension ~loc
               @@ Location.error_extensionf ~loc
-                   "ppx_ocannl %%cd: cannot use `~logic` (infer shapes) for arrays, use tensors or \
-                    `.grad` notation",
+                   "ppx_ocannl %%cd: cannot use `~logic` (infer shapes) for arrays, use tensors or `.grad` \
+                    notation",
               [%expr false] )
       in
-      let t_expr, lhs_is_grad = args_for setup_l.filler_typ lhs in
-      let t1_expr, rhs_is_grad = args_for setup_r.filler_typ rhs in
+      let t_expr, lhs_is_grad = args_for setup_l in
+      let t1_expr, rhs_is_grad = args_for setup_r in
       let body =
         [%expr
           Tensor.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~t:[%e t_expr]
@@ -712,8 +716,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       ( Unknown,
         Undet,
         Ast_builder.Default.pexp_extension ~loc
-        @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: let-in: local let-bindings not implemented yet"
-      )
+        @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: let-in: local let-bindings not implemented yet" )
   (* let bindings = List.map bindings
       ~f:(fun binding -> {binding with pvb_expr=translate binding.pvb_expr}) in
      {expr with pexp_desc=Pexp_let (recflag, bindings, translate body)} *)
