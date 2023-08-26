@@ -20,14 +20,12 @@
   low_level
   high_level
   exec_as_cuda
-  exec_as_gccjit
-  dims_annot)
+  exec_as_gccjit)
  (modes byte native))
 
 (library
  (name ppx_arrayjit)
- (kind ppx_rewriter)
- (modules ppx_helper ppx_ndarray)
+ (modules ppx_helper)
  (libraries base ppxlib str)
  (preprocess
   (pps ppx_jane ppxlib.metaquot)))
