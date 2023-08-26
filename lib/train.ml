@@ -13,10 +13,12 @@ let params t =
   in
   loop (Set.empty (module Tensor)) { subtensor = t; embedded = true }
 
-let backprop t =
-  match t.Tensor.diff with
-  | Some diff -> High_level.Seq (diff.zero_grads, diff.backprop)
-  | None -> raise @@ Tensor.Session_error ("Train.backprop: tensor is not differentiable", Some t)
+let update_loss l =
+  match l.Tensor.diff with
+  | Some diff ->
+      let%cd init_grad = l.grad =: 1 in
+      High_level.sequential [ l.forward; diff.zero_grads; init_grad; diff.backprop ]
+  | None -> raise @@ Tensor.Session_error ("Train.backprop: tensor is not differentiable", Some l)
 
 (** See: {!https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py}. *)
 let sgd_one ?(lr = 0.001) ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
