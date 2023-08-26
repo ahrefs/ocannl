@@ -90,8 +90,7 @@ let get_array ~traced_store v =
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
       let hosted = Lazy.force v.array in
       let size_in_bytes = size_in_elems * Ndarray.prec_in_bytes v.prec in
-      (* FIXME: rename `materialized` to `hosted`. *)
-      let is_on_host = !(v.materialized) in
+      let is_on_host = !(v.hosted) in
       let is_double = Ndarray.is_double_prec v.prec in
       let num_typ = prec_to_c_type v.prec in
       let mem =

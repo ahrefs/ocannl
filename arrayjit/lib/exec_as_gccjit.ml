@@ -54,8 +54,7 @@ let get_array { ctx; func; arrays; traced_store; init_block } v : ndarray =
       let dims = Lazy.force v.dims in
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
       let size_in_bytes = size_in_elems * Ndarray.prec_in_bytes v.prec in
-      (* FIXME: rename `materialized` to `hosted`. *)
-      let is_on_host = !(v.materialized) in
+      let is_on_host = !(v.hosted) in
       let c_void_ptr = Type.(get ctx Type.Void_ptr) in
       let c_index = Type.get ctx Type.Size_t in
       let c_int = Type.get ctx Type.Int in

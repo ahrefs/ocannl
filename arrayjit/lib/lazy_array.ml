@@ -8,7 +8,7 @@ type t = {
   id : int;
   label : string;  (** An optional display information. *)
   literal : bool;
-  materialized : bool ref;
+  hosted : bool ref;
   mutable never_virtual : bool;
   mutable never_device_only : bool;
   mutable backend_info : string;
@@ -33,7 +33,7 @@ let hash_t = hash
 let get_exn a =
   match a.array with
   | (lazy (Some nd)) -> nd
-  | _ -> invalid_arg @@ "Lazy_array.get_exn: array " ^ name a ^ " is not materialized"
+  | _ -> invalid_arg @@ "Lazy_array.get_exn: array " ^ name a ^ " is not hosted"
 
 let has a = match a.array with (lazy (Some _)) -> true | _ -> false
 
@@ -48,7 +48,7 @@ let header arr =
   let mem_size =
     if Lazy.is_val arr.array then
       match arr.array with
-      | (lazy None) -> "<not-materialized>"
+      | (lazy None) -> "<not-hosted>"
       | (lazy (Some nd)) -> Int.to_string_hum @@ Nd.size_in_bytes nd
     else "<not-in-yet>"
   in
@@ -59,9 +59,9 @@ module Array = Res.Weak
 let registry = Array.empty ()
 
 let create prec ~id ~label ~dims ?(literal = false) init_op =
-  let materialized = ref false in
+  let hosted = ref false in
   let array =
-    lazy (if !materialized then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None)
+    lazy (if !hosted then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None)
   in
   let arr =
     {
@@ -70,7 +70,7 @@ let create prec ~id ~label ~dims ?(literal = false) init_op =
       id;
       label;
       literal;
-      materialized;
+      hosted;
       never_virtual = false;
       never_device_only = false;
       backend_info = "";

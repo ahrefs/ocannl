@@ -193,7 +193,7 @@ let%expect_test "Graph drawing fetch" =
               │-5.000e+0                                                          4.900e+0
               │                                     x |}]
 
-let%expect_test "Simple gradients materialized" =
+let%expect_test "Simple gradients hosted" =
   (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
@@ -225,7 +225,7 @@ let%expect_test "Simple gradients materialized" =
      6.00e+0 │ -4.00e+0 │          │ |}];
   SDSL.refresh_session ~update_params:true ();
   (* Now we updated the params, but after the forward and backward passes: only params values
-     will change, compared to the above, as long as gradient tensors are materialized.
+     will change, compared to the above, as long as gradient tensors are hosted.
      Since virtual tensors are computed by-need, they will always be recomputed using the latest
      parameter state. When parameter gradients are virtual, this will lead to different parameter updates. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
@@ -301,7 +301,7 @@ let%expect_test "Simple gradients virtual" =
     <void>   │<void>    │         │ |}];
   SDSL.refresh_session ~update_params:true ();
   (* Now we updated the params, but after the forward and backward passes: only params values
-     will change, compared to the above, as long as gradient tensors are materialized.
+     will change, compared to the above, as long as gradient tensors are hosted.
      Since virtual tensors are computed by-need, they will always be recomputed using the latest
      parameter state. When parameter gradients are virtual, this will lead to different parameter updates. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
@@ -350,7 +350,7 @@ let%expect_test "tanh plot" =
   (* TODO: NOT IMPLEMENTED *)
   ()
 
-let%expect_test "2D neuron materialized" =
+let%expect_test "2D neuron hosted" =
   (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in

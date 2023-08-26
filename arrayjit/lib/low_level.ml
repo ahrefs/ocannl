@@ -128,10 +128,10 @@ type traced_array = {
       (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
   mutable non_virtual : bool;
       (** If false, this array is never materialized, its computations are inlined on a per-scalar basis.
-          A array that is already materialized will not be virtual. *)
+          A array that is hosted will not be virtual. *)
   mutable non_device_only : bool;
       (** If false, this node is only materialized on the devices it is computed on, it is not persisted
-          outside of a step update. It is marked as [not !(nd.materialized)]. *)
+          outside of a step update. It is marked as [not !(nd.hosted)]. *)
   mutable scalar : float option;
   mutable zero_initialized : bool;
   mutable zeroed_out : bool;
@@ -756,7 +756,7 @@ let compile_proc ~name ?(verbose = false) llc =
     let ppf = Caml.Format.formatter_of_out_channel f in
     Caml.Format.pp_set_margin ppf !code_sexp_margin;
     Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t @@ snd result));
-  Hashtbl.iter (fst result) ~f:(fun v -> if v.non_virtual && v.non_device_only then v.nd.materialized := true);
+  Hashtbl.iter (fst result) ~f:(fun v -> if v.non_virtual && v.non_device_only then v.nd.hosted := true);
   if verbose then Stdio.printf "Low_level.compile_proc: finished\n%!";
   result
 
