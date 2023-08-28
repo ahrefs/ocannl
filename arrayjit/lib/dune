@@ -19,6 +19,7 @@
   lazy_array
   low_level
   assignments
+  backend
   exec_as_cuda
   exec_as_gccjit
   devices)

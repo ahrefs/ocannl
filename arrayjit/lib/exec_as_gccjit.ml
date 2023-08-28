@@ -2,23 +2,39 @@ open Base
 
 let optimization_level = ref 3
 
-let session_context =
-  let open Gccjit.Context in
-  let ctx = create () in
-  set_option ctx Optimization_level !optimization_level;
-  ref ctx
-
 type mem_properties =
   | Local_only  (** The array is only needed for a local computation, is allocated on the stack. *)
   | Global  (** The array has a copy allocated per-cpu-device, in addition to existing on the host. *)
   | Constant  (** The array is read directly from the host. *)
 [@@deriving sexp, equal, compare, variants]
 
+module LA = Lazy_array
+
+type context = {
+  parent_ctx : Gccjit.context;
+  mutable arrays : Ndarray.t Map.M(LA).t;
+  mutable results : Gccjit.result list;
+}
+
+let finalize ctx =
+  let open Gccjit in
+  List.iter ctx.results ~f:Result.release;
+  Context.release ctx.parent_ctx
+
+let init () =
+  let open Gccjit in
+  let parent_ctx = Context.create () in
+  Context.set_option parent_ctx Optimization_level !optimization_level;
+  let result = { parent_ctx; results = []; arrays = Map.empty (module LA) } in
+  Core.Gc.Expert.add_finalizer_exn result finalize;
+  result
+
+let initialize () = ()
+let unsafe_cleanup () = ()
+
 type ndarray = {
-  hosted_ptr : Gccjit.rvalue option;
-      (** Pointer to the first value of the associated hosted [Bigarray]. *)
-  global_ptr : Gccjit.rvalue option;
-      (** Pointer to the first value of the associated per-cpu-device [Bigarray]. *)
+  hosted_ptr : Gccjit.rvalue option;  (** Pointer to the first value of the associated hosted [Ndarray]. *)
+  global_ptr : Gccjit.rvalue option;  (** Pointer to the first value of [context.arrays]. *)
   local : Gccjit.lvalue option;  (** A local array, if any. *)
   mem : mem_properties;
   dims : int array;
@@ -29,17 +45,13 @@ type ndarray = {
   is_double : bool;
 }
 
-let session_results : Gccjit.result list ref = ref []
-let hoist_dynamic_indices = ref false
-
-module LA = Lazy_array
-
-type state = {
+type ctx_info = {
+  context : context;
   ctx : Gccjit.context;
   func : Gccjit.function_;
-  arrays : (LA.t, ndarray) Hashtbl.t;
   traced_store : Low_level.traced_store;
   init_block : Gccjit.block;
+  arrays : (LA.t, ndarray) Hashtbl.t;
 }
 
 let jit_array_offset ctx ~idcs ~dims =
@@ -49,64 +61,58 @@ let jit_array_offset ctx ~idcs ~dims =
       RValue.binary_op ctx Plus c_index idx
       @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
 
-let get_array { ctx; func; arrays; traced_store; init_block } v : ndarray =
+let get_array { context; ctx; func; arrays; traced_store; init_block } key : ndarray =
   let open Gccjit in
-  Hashtbl.find_or_add arrays v ~default:(fun () ->
-      let tn = Low_level.(get_node traced_store v) in
-      let dims = Lazy.force v.dims in
-      let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
-      let size_in_bytes = size_in_elems * Ndarray.prec_in_bytes v.prec in
-      let is_on_host = !(v.hosted) in
-      let c_void_ptr = Type.(get ctx Type.Void_ptr) in
-      let c_index = Type.get ctx Type.Size_t in
-      let c_int = Type.get ctx Type.Int in
-      (* TODO: is the complexity of introducing this function and matching on Ndarray.t needed? *)
-      let array c_typ is_double arr =
-        let num_typ = Type.(get ctx c_typ) in
-        let hosted_ptr =
-          Option.map arr
-            ~f:
-              (Fn.compose
-                 (RValue.ptr ctx @@ Type.pointer num_typ)
-                 (Ctypes.bigarray_start Ctypes_static.Genarray))
+  Hashtbl.find_or_add arrays key ~default:(fun () ->
+      let result =
+        let tn = Low_level.(get_node traced_store key) in
+        let dims = Lazy.force key.dims in
+        let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
+        let size_in_bytes = size_in_elems * Ndarray.prec_in_bytes key.prec in
+        let is_on_host = !(key.hosted) in
+        let c_void_ptr = Type.(get ctx Type.Void_ptr) in
+        let c_index = Type.get ctx Type.Size_t in
+        let c_int = Type.get ctx Type.Int in
+        (* TODO: is the complexity of introducing this function and matching on Ndarray.t needed? *)
+        let array c_typ is_double arr =
+          let num_typ = Type.(get ctx c_typ) in
+          let hosted_ptr =
+            Option.map arr
+              ~f:
+                (Fn.compose
+                   (RValue.ptr ctx @@ Type.pointer num_typ)
+                   (Ctypes.bigarray_start Ctypes_static.Genarray))
+          in
+          let mem = if not is_on_host then Local_only else if tn.read_only then Constant else Global in
+          let arr_typ = Type.array ctx num_typ size_in_elems in
+          let local = if is_local_only mem then Some (Function.local func arr_typ @@ LA.name key) else None in
+          (* FIXME: *)
+          let global_ptr = (* if is_global mem then Some () else *) None in
+          let cast_void rv = RValue.cast ctx rv c_void_ptr in
+          if tn.zero_initialized then
+            Option.first_some (Option.map local ~f:(Fn.compose cast_void LValue.address)) hosted_ptr
+            |> Option.iter ~f:(fun rv_ptr ->
+                   Block.eval init_block
+                   @@ RValue.call ctx (Function.builtin ctx "memset")
+                        [ rv_ptr; RValue.zero ctx c_int; RValue.int ctx c_index size_in_bytes ]);
+          let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
+          if not @@ String.is_substring key.backend_info ~substring:backend_info then
+            key.backend_info <- key.backend_info ^ backend_info;
+          { hosted_ptr; global_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
         in
-        let mem =
-          if not is_on_host then Local_only
-          else if tn.read_only then Constant
-          else Global
-        in
-        let arr_typ = Type.array ctx num_typ size_in_elems in
-        let local = if is_local_only mem then Some (Function.local func arr_typ @@ LA.name v) else None in
-        (* FIXME: *)
-        let global_ptr = (* if is_global mem then Some () else *) None in
-        let cast_void rv = RValue.cast ctx rv c_void_ptr in
-        if tn.zero_initialized then
-          Option.first_some (Option.map local ~f:(Fn.compose cast_void LValue.address)) hosted_ptr
-          |> Option.iter ~f:(fun rv_ptr ->
-                 Block.eval init_block
-                 @@ RValue.call ctx (Function.builtin ctx "memset")
-                      [ rv_ptr; RValue.zero ctx c_int; RValue.int ctx c_index size_in_bytes ]);
-        let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
-        if not @@ String.is_substring v.backend_info ~substring:backend_info then
-          v.backend_info <- v.backend_info ^ backend_info;
-        { hosted_ptr; global_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
+        match (key.prec, Lazy.force key.array) with
+        | _, Some (Half_nd arr) -> (* FIXME: *) array Type.Float false (Some arr)
+        | _, Some (Single_nd arr) -> array Type.Float false (Some arr)
+        | _, Some (Double_nd arr) -> array Type.Double true (Some arr)
+        | Half_prec _, None -> (* FIXME: *) array Type.Float false None
+        | Single_prec _, None -> array Type.Float false None
+        | Double_prec _, None -> array Type.Double true None
+        | Void_prec, None -> assert false
       in
-      match (v.prec, Lazy.force v.array) with
-      | _, Some (Half_nd arr) -> (* FIXME: *) array Type.Float false (Some arr)
-      | _, Some (Single_nd arr) -> array Type.Float false (Some arr)
-      | _, Some (Double_nd arr) -> array Type.Double true (Some arr)
-      | Half_prec _, None -> (* FIXME: *) array Type.Float false None
-      | Single_prec _, None -> array Type.Float false None
-      | Double_prec _, None -> array Type.Double true None
-      | Void_prec, None -> assert false)
-
-let cleanup_session () =
-  let open Gccjit in
-  List.iter !session_results ~f:Result.release;
-  Context.release !session_context;
-  session_context := Context.create ();
-  Context.set_option !session_context Optimization_level !optimization_level;
-  session_results := []
+      (if not @@ Map.mem context.arrays key then
+         let data = Ndarray.(create_array key.LA.prec ~dims:result.dims @@ Constant_fill [| 0. |]) in
+         context.arrays <- Map.add_exn ~key ~data context.arrays);
+      result)
 
 let prec_to_kind prec =
   let open Gccjit in
@@ -133,7 +139,7 @@ let builtin_op = function
 let get_ptr array =
   match array.local with Some lv -> Gccjit.RValue.lvalue lv | None -> Option.value_exn array.hosted_ptr
 
-let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ } as state) initial_block body
+let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ } as info) initial_block body
     =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
@@ -205,25 +211,25 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
     | Set (array, idcs, Binop (op, Get (array2, idcs2), c2))
       when LA.equal array array2 && [%equal: Indexing.axis_index array] idcs idcs2 && is_builtin_op op ->
         (* FIXME: maybe it's not worth it? *)
-        let array = get_array state array in
+        let array = get_array info array in
         let value = loop_float ~name ~env ~num_typ:array.num_typ ~is_double:array.is_double c2 in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         let lhs = LValue.access_array (get_ptr array) offset in
         Block.assign_op !current_block lhs (builtin_op op) value
     | Set (array, idcs, value) ->
-        let array = get_array state array in
+        let array = get_array info array in
         let value = loop_float ~name ~env ~num_typ:array.num_typ ~is_double:array.is_double value in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         let lhs = LValue.access_array (get_ptr array) offset in
         Block.assign !current_block lhs value
     | Zero_out array ->
-        if Hashtbl.mem state.arrays array then
+        if Hashtbl.mem info.arrays array then
           failwith
             ("exec_as_gccjit: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
             @@ [%sexp_of: LA.t] array);
-        let tn = Low_level.(get_node state.traced_store array) in
+        let tn = Low_level.(get_node info.traced_store array) in
         assert tn.zero_initialized
         (* The initialization will be emitted by get_array. *)
     | Set_local (id, value) ->
@@ -257,7 +263,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
         let f = Function.builtin ctx f_name in
         RValue.call ctx f []
     | Get (array, idcs) ->
-        let array = get_array state array in
+        let array = get_array info array in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         RValue.lvalue @@ LValue.access_array (get_ptr array) offset
@@ -292,23 +298,15 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
   loop_proc ~name ~env body;
   !current_block
 
-let jit_func ~name ctx (traced_store, proc) =
+let jit_func ~name context ctx (traced_store, proc) =
   let open Gccjit in
   let fkind = Function.Exported in
-  let func = Function.create ctx fkind (Type.get ctx Void) name [ ] in
+  let func = Function.create ctx fkind (Type.get ctx Void) name [] in
   let init_block = Block.create ~name:("init_" ^ name) func in
   let main_block = Block.create ~name func in
   let env = Low_level.empty_env in
-  let state =
-    {
-      ctx;
-      func;
-      traced_store;
-      init_block;
-      arrays = Hashtbl.Poly.create ();
-    }
-  in
-  let after_proc = jit_code ~name ~env state main_block proc in
+  let ctx_info = { context; ctx; func; traced_store; init_block; arrays = Hashtbl.Poly.create () } in
+  let after_proc = jit_code ~name ~env ctx_info main_block proc in
   Block.jump init_block main_block;
   Block.return_void after_proc;
   if !Low_level.with_debug then
@@ -318,19 +316,22 @@ let jit_func ~name ctx (traced_store, proc) =
     in
     Context.dump_to_file ctx ~update_locs:true f_name
 
-let jit ~name ?verbose:_ compiled =
+type compiled = { context : context; run : unit -> unit }
+
+let jit old_context ~name ?verbose:_ compiled =
   (* TODO: add verbose logs *)
   let open Gccjit in
-  let ctx = Context.create_child !session_context in
+  let ctx = Context.create_child old_context.parent_ctx in
   Context.set_option ctx Context.Optimization_level !optimization_level;
+  let context = { old_context with results = old_context.results } in
   (*
   if !Low_level.with_debug && !Low_level.keep_files_in_run_directory then (
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)
-  jit_func ~name ctx compiled;
+  jit_func ~name context ctx compiled;
   let result = Context.compile ctx in
-  session_results := result :: !session_results;
-  let routine = Result.code result name Ctypes.(void @-> returning void) in
+  context.results <- result :: context.results;
+  let run = Result.code result name Ctypes.(void @-> returning void) in
   Context.release ctx;
-  routine
+  { context; run }

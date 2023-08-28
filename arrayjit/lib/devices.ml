@@ -1,34 +1,28 @@
 open Base
 
-module type Device = sig
-  type t
-  type ndarray
-  type on_device_arrays = ndarray array Map.M(Lazy_array).t
+module Gccjit_device : Backend.No_device_backend with type context = Exec_as_gccjit.context = struct
+  type context = Exec_as_gccjit.context
+  type compiled = Exec_as_gccjit.compiled = { context : context; run : unit -> unit }
 
-  type compiled = {
-    source : Assignments.t;  (** Keeps the hosted ndarrays alive. *)
-    on_devices : on_device_arrays;
-        (** The compiler decides which arrays to maintain on the devices (across runs). *)
-    run : unit -> unit;
-  }
+  open Exec_as_gccjit
 
-  val compile : t -> name:string -> ?verbose:bool -> Assignments.t -> on_device_arrays -> compiled
-  val wait_for_all : unit -> unit
+  let initialize = initialize
+  let init = init
+  let finalize = finalize
 
-  val from_host : t -> on_device_arrays -> Lazy_array.t -> unit
+  let compile context ~name ?verbose code =
+    jit context ~name ?verbose @@ Assignments.compile_proc ~name ?verbose code
+
+  let unsafe_cleanup = unsafe_cleanup
+
+  let from_host context la =
+    ignore (context, la);
+    failwith "NOT IMPLEMENTED YET"
+
   (** Potentially asynchronous. *)
-
-  val to_host : ?accum:Low_level.binop -> t -> on_device_arrays -> Lazy_array.t -> unit
-  (** Potentially asynchronous. *)
-
-  val num_devices : unit -> int
-  val get_num : t -> int
-  val get_device : num:int -> t
-  val init_devices : unit -> unit
+  let to_host context ?accum la =
+    ignore (context, accum, la);
+    failwith "NOT IMPLEMENTED YET"
 end
 
-module CPU (* : Device *) = struct
-  module Domain = Domain [@warning "-3"]
-
-  let num_domains = Domain.recommended_domain_count () - 1
-end
+module Gccjit_backend = Backend.Multicore_backend (Gccjit_device)

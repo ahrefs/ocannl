@@ -1,9 +1,5 @@
 open Base
 
-let sync_threads_on_update = ref true
-
-(* let session_context = *)
-
 type mem_properties =
   | Local_only
       (** The array is only needed for a single computation and is allocated locally (or spilled). *)

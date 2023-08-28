@@ -36,11 +36,3 @@ let sgd_update ?lr ?momentum ?weight_decay ?nesterov t =
   params t |> Set.to_list
   |> List.map ~f:(sgd_one ?lr ?momentum ?weight_decay ?nesterov)
   |> Assignments.sequential
-
-(* FIXME: figure out handling backend "session contexts". *)
-
-let run_on_cpu ?(name = "main") ?verbose code =
-  Assignments.compile_proc ~name ?verbose code |> Exec_as_gccjit.jit ~name ?verbose
-
-let run_on_gpu ?(name = "main") ?verbose code =
-  Assignments.compile_proc ~name ?verbose code |> Exec_as_cuda.jit ~name ?verbose
