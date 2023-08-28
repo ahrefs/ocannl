@@ -112,7 +112,7 @@ module Context : sig
 
   val release : context -> unit
   (** Releases all resources associated with the given context.  Both the
-      context itsel and all of its object instances are cleared up.  It should
+      context itself and all of its object instances are cleared up.  It should
       be called exactly once on a given context.
 
       It is invalid to use the context or any of its {e contextual} objects
