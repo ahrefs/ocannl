@@ -10,13 +10,15 @@ let session_context =
 
 type mem_properties =
   | Local_only  (** The array is only needed for a local computation, is allocated on the stack. *)
-  | Global  (** The array has a copy allocated per-domain, in addition to existing on the host. *)
+  | Global  (** The array has a copy allocated per-cpu-device, in addition to existing on the host. *)
   | Constant  (** The array is read directly from the host. *)
 [@@deriving sexp, equal, compare, variants]
 
 type ndarray = {
   hosted_ptr : Gccjit.rvalue option;
-      (** Pointer to the first value of the associated [Bigarray], if hosted. *)
+      (** Pointer to the first value of the associated hosted [Bigarray]. *)
+  global_ptr : Gccjit.rvalue option;
+      (** Pointer to the first value of the associated per-cpu-device [Bigarray]. *)
   local : Gccjit.lvalue option;  (** A local array, if any. *)
   mem : mem_properties;
   dims : int array;
@@ -75,6 +77,8 @@ let get_array { ctx; func; arrays; traced_store; init_block } v : ndarray =
         in
         let arr_typ = Type.array ctx num_typ size_in_elems in
         let local = if is_local_only mem then Some (Function.local func arr_typ @@ LA.name v) else None in
+        (* FIXME: *)
+        let global_ptr = (* if is_global mem then Some () else *) None in
         let cast_void rv = RValue.cast ctx rv c_void_ptr in
         if tn.zero_initialized then
           Option.first_some (Option.map local ~f:(Fn.compose cast_void LValue.address)) hosted_ptr
@@ -85,7 +89,7 @@ let get_array { ctx; func; arrays; traced_store; init_block } v : ndarray =
         let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
         if not @@ String.is_substring v.backend_info ~substring:backend_info then
           v.backend_info <- v.backend_info ^ backend_info;
-        { hosted_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
+        { hosted_ptr; global_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
       in
       match (v.prec, Lazy.force v.array) with
       | _, Some (Half_nd arr) -> (* FIXME: *) array Type.Float false (Some arr)

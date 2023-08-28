@@ -727,7 +727,9 @@ let simplify_llc traced_store llc =
 
 type traced_store = (LA.t, traced_array) Base.Hashtbl.t
 
-let optimize_proc ?(verbose = false) llc : traced_store * t =
+type optimized = traced_store * t
+
+let optimize_proc ?(verbose = false) llc : optimized =
   let traced_store : traced_store = Hashtbl.create (module Lazy_array) in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
   let reverse_node_map = Hashtbl.Poly.create () in
@@ -741,7 +743,7 @@ let optimize_proc ?(verbose = false) llc : traced_store * t =
   in
   (traced_store, result)
 
-let compile_proc ~name ?(verbose = false) llc =
+let compile_proc ~name ?(verbose = false) llc : optimized =
   if verbose then Stdio.printf "Low_level.compile_proc: generating the initial low-level code\n%!";
   if !with_debug && !keep_files_in_run_directory then (
     let fname = name ^ "-unoptimized.llc" in
