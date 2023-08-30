@@ -3,16 +3,12 @@ open Base
 type mem_properties =
   | Local_only
       (** The array is only needed for a single computation and is allocated locally (or spilled). *)
-  | Global
-      (** Could not perform optimizations: the array is computed directly in the global memory. *)
-  | Constant
-      (** The array is accessed directly in the global memory but is not modified by the computation. *)
+  | Global  (** Could not perform optimizations: the array is computed directly in the global memory. *)
 [@@deriving sexp, equal, compare, variants]
 
 type ndarray = {
   hosted : Ndarray.t option;
-  global : string option;  (** A global device array, if any. *)
-  global_ptr : (Cudajit.deviceptr Lazy.t[@sexp.opaque]) option;
+  global : (string * (Cudajit.deviceptr[@sexp.opaque])) option;  (** A global device array, if any. *)
   local : string option;  (** A local name, if any. *)
   mem : mem_properties;
   dims : int array;
@@ -27,6 +23,7 @@ type ndarray = {
 
 (* let session_results = ref [] *)
 let hoist_dynamic_indices = ref false
+
 module LA = Lazy_array
 
 type session_state = {
@@ -66,7 +63,10 @@ let array_offset_to_string (idcs, dims) =
   Buffer.contents b
 
 let get_run_ptr array =
-  match (array.global, array.local) with _, Some lv -> lv | Some rv, _ -> rv | None, None -> assert false
+  match (array.global, array.local) with
+  | _, Some lv -> lv
+  | Some (rv, _), _ -> rv
+  | None, None -> assert false
 
 let prec_to_c_type = function
   | Ndarray.Void_prec -> "void"
@@ -77,10 +77,11 @@ let prec_to_c_type = function
 let compute_array_offset ~idcs ~dims =
   Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx + (offset * dim))
 
-let get_array ~traced_store v =
+let get_array ~traced_store:_ v =
   let { arrays; _ } = session_state in
   Hashtbl.find_or_add arrays v ~default:(fun () ->
-      let tn = Low_level.get_node traced_store v in
+      (* let tn = Low_level.get_node traced_store v in *)
+      (* TODO: We will need tn to perform more refined optimizations. *)
       (* let host_size_in_bytes = Ndarray.size_in_bytes v.array in *)
       let dims = Lazy.force v.dims in
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
@@ -89,38 +90,18 @@ let get_array ~traced_store v =
       let is_on_host = !(v.hosted) in
       let is_double = Ndarray.is_double_prec v.prec in
       let num_typ = prec_to_c_type v.prec in
-      let mem =
-        if not is_on_host then Local_only
-        else if tn.read_only then Constant
-        else Global
+      let mem = if not is_on_host then Local_only else Global in
+      let global =
+        if is_local_only mem then None
+        else (
+          if !Low_level.with_debug then Stdio.printf "Exec_as_cuda.get_array: mem_alloc %s\n%!" (LA.name v);
+          Some (LA.name v, Cudajit.mem_alloc ~byte_size:size_in_bytes))
       in
-      let global_ptr =
-        Option.some_if (not @@ is_local_only mem)
-        @@
-        match mem with
-        | Constant ->
-            lazy
-              (let ptr, size =
-                 (* Defer till after compilation, to access the compiled-into module. *)
-                 Cudajit.module_get_global
-                   (Option.value_exn session_state.last_module)
-                   ~name:(LA.name v)
-               in
-               assert (Unsigned.Size_t.to_int size = size_in_bytes);
-               ptr)
-        | _ ->
-            (* The general case does not require laziness, but it should be OK. *)
-            lazy
-              (if !Low_level.with_debug then
-                 Stdio.printf "Exec_as_cuda.get_array: mem_alloc %s\n%!" (LA.name v);
-               Cudajit.mem_alloc ~byte_size:size_in_bytes)
-      in
-      let global = Option.some_if (not @@ is_local_only mem) @@ LA.name v in
       let local = Option.some_if (is_local_only mem) @@ LA.name v ^ "_local" in
       let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
       if not @@ String.is_substring v.backend_info ~substring:backend_info then
         v.backend_info <- v.backend_info ^ backend_info;
-      { hosted; local; mem; dims; size_in_bytes; size_in_elems; num_typ; is_double; global; global_ptr })
+      { hosted; local; mem; dims; size_in_bytes; size_in_elems; num_typ; is_double; global })
 
 let jit_binop ~num_typ:_ ~is_double op =
   match op with
@@ -166,15 +147,14 @@ let jit_code ~traced_store ppf llc : unit =
         let loop_debug_f = debug_float ~num_typ:array.num_typ ~is_double:array.is_double in
         let num_closing_braces = pp_top_locals ppf v in
         (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
-        fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr array) pp_array_offset (idcs, array.dims) loop_f
-          v;
+        fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr array) pp_array_offset (idcs, array.dims) loop_f v;
         (if !Low_level.debug_verbose_trace then
            let v_code, v_idcs = loop_debug_f v in
            fprintf ppf
              "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %s[%%u] = %%f = \
               %s\\n\"@],@ %a,@ %s[%a]%a);@ @]}"
-             (get_run_ptr array) v_code pp_array_offset (idcs, array.dims) (get_run_ptr array)
-             pp_array_offset (idcs, array.dims)
+             (get_run_ptr array) v_code pp_array_offset (idcs, array.dims) (get_run_ptr array) pp_array_offset
+             (idcs, array.dims)
              ( pp_print_list @@ fun ppf -> function
                | `Accessor idx ->
                    pp_comma ppf ();
@@ -288,11 +268,10 @@ let cleanup_session () =
   Option.iter session_state.last_module ~f:Cudajit.module_unload;
   session_state.last_module <- None;
   Hashtbl.iter session_state.arrays ~f:(fun array ->
-      Option.iter array.global_ptr ~f:(fun (lazy ptr) ->
-          if not @@ is_constant array.mem then (
-            if !Low_level.with_debug then
-              Stdio.printf "Exec_as_cuda.cleanup_session: mem_free %s\n%!" (Option.value_exn array.global);
-            Cudajit.mem_free ptr)));
+      Option.iter array.global ~f:(fun (name, ptr) ->
+          if !Low_level.with_debug then
+            Stdio.printf "Exec_as_cuda.cleanup_session: mem_free %s\n%!" name;
+          Cudajit.mem_free ptr));
   Hashtbl.clear session_state.arrays;
   Option.iter session_state.ctx ~f:Cudajit.ctx_destroy;
   (* For now we stick with device 0. *)
@@ -300,7 +279,6 @@ let cleanup_session () =
 
 let jit_func ~name ?(verbose = false) (traced_store, llc) =
   let module Cu = Cudajit in
-  Hashtbl.filter_inplace session_state.arrays ~f:(fun array -> not @@ is_constant array.mem);
   Option.iter session_state.last_module ~f:Cu.module_unload;
   session_state.last_module <- None;
   if Option.is_none session_state.ctx then (
@@ -318,21 +296,11 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
     List.unzip
     @@ List.filter_map arrays ~f:(fun (_, tn) ->
            match tn.mem with
-           | Local_only | Constant -> None
-           | Global ->
-               Option.map tn.global ~f:(fun t_name -> (tn.num_typ ^ " *" ^ t_name, tn.global_ptr)))
+           | Local_only -> None
+           | Global -> Option.map tn.global ~f:(fun (n, ptr) -> (tn.num_typ ^ " *" ^ n, ptr)))
   in
   (* TODO: optimize zero-initializations? E.g.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
-  let constant_defs =
-    List.filter_map arrays ~f:(fun (ptr, tn) ->
-        match tn.mem with
-        | Constant ->
-            Option.map tn.global ~f:(fun t_name ->
-                "__constant__ " ^ tn.num_typ ^ " " ^ t_name ^ "[" ^ Int.to_string tn.size_in_elems
-                ^ if (Hashtbl.find_exn traced_store ptr).zero_initialized then "] = {0};" else "];")
-        | _ -> None)
-  in
   let thread_decls =
     List.filter_map arrays ~f:(fun (ptr, tn) ->
         match tn.mem with
@@ -346,7 +314,6 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
     [%string
       {|
 %{if !Low_level.debug_verbose_trace then "__device__ int printf (const char * format, ... );" else ""}
-%{String.concat ~sep:"\n" constant_defs}
 extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
   /* TODO: this initial toy prototype is single-threaded. */
   if (threadIdx.x != 0 || blockIdx.x != 0) { return; }
@@ -359,7 +326,6 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
 }
 |}]
   in
-  (* Constants will be referred to via cuModuleGetGlobal. *)
   let f_name = name ^ "-cudajit-debug" in
   if !Low_level.with_debug && !Low_level.keep_files_in_run_directory then (
     let oc = Out_channel.open_text @@ f_name ^ ".cu" in
@@ -383,14 +349,14 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
   let module_ = Cu.module_load_data_ex ptx [] in
   session_state.last_module <- Some module_;
   let func = Cu.module_get_function module_ ~name in
-  let args = List.map args ~f:(function Some (lazy p) -> Cu.Tensor p | None -> assert false) in
+  let args = List.map args ~f:(fun p -> Cu.Tensor p) in
   if verbose then Stdio.printf "Exec_as_cuda.jit: compilation finished\n%!";
   fun () ->
     if verbose then Stdio.printf "Exec_as_cuda.jit: zeroing-out global memory\n%!";
     List.iter arrays ~f:(function
-      | ptr, { global_ptr = Some (lazy device); size_in_bytes; _ } ->
+      | ptr, { global = Some (_, dev_ptr); size_in_bytes; _ } ->
           let tn = Hashtbl.find_exn traced_store ptr in
-          if tn.zero_initialized then Cu.memset_d8 device Unsigned.UChar.zero ~length:size_in_bytes
+          if tn.zero_initialized then Cu.memset_d8 dev_ptr Unsigned.UChar.zero ~length:size_in_bytes
       | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit: running the kernel\n%!";
     (* if !Low_level.debug_verbose_trace then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)

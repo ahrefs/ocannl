@@ -151,6 +151,36 @@ Option.iter hosted_ptr ~f:(fun hosted_ptr ->
                      RValue.int ctx c_index size_in_bytes;
                    ]);
 
+]}
+
+Exec_as_cuda constants:
+{[
+  let constant_defs =
+    List.filter_map arrays ~f:(fun (ptr, tn) ->
+        match tn.mem with
+        | Constant ->
+            Option.map tn.global ~f:(fun t_name ->
+                "__constant__ " ^ tn.num_typ ^ " " ^ t_name ^ "[" ^ Int.to_string tn.size_in_elems
+                ^ if (Hashtbl.find_exn traced_store ptr).zero_initialized then "] = {0};" else "];")
+        | _ -> None)
+  in
+
+{|
+%{String.concat ~sep:"\n" constant_defs}
+|}
+
+        match mem with
+        | Constant ->
+            lazy
+              (let ptr, size =
+                 (* Defer till after compilation, to access the compiled-into module. *)
+                 Cudajit.module_get_global
+                   (Option.value_exn session_state.last_module)
+                   ~name:(LA.name v)
+               in
+               assert (Unsigned.Size_t.to_int size = size_in_bytes);
+               ptr)
+        | _ ->
 
 
 ]}
