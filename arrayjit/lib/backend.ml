@@ -10,11 +10,14 @@ module type No_device_backend = sig
   val compile : context -> name:string -> ?verbose:bool -> Assignments.t -> compiled
   val unsafe_cleanup : unit -> unit
 
-  val from_host : context -> Lazy_array.t -> unit
-  (** Potentially asynchronous. *)
+  val from_host : context -> Lazy_array.t -> bool
+  (** If the array is both hosted and in-context, copies from host to context and returns true. *)
 
-  val to_host : context -> ?accum:Low_level.binop -> Lazy_array.t -> unit
-  (** Potentially asynchronous. *)
+  val to_host : context -> Lazy_array.t -> bool
+  (** If the array is both hosted and in-context, copies from context to host and returns true. *)
+
+  val merge : Lazy_array.t -> dst:context -> accum:Low_level.binop -> src:context -> compiled option
+  (** Merges the array from the source context into the destination context: [dst =: dst accum src]. *)
 end
 
 module type Backend = sig
@@ -26,6 +29,7 @@ module type Backend = sig
   val await : device -> unit
   val num_devices : unit -> int
   val get_device : ordinal:int -> device
+  val get_ctx_device : context -> device
   val to_ordinal : device -> int
 end
 
@@ -62,11 +66,17 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     in
     { context = { ctx = result.context; device }; run }
 
-  (** Potentially asynchronous. *)
   let from_host { ctx; _ } = Backend.from_host ctx
-
-  (** Potentially asynchronous. *)
   let to_host { ctx; _ } = Backend.to_host ctx
+
+  let merge la ~dst ~accum ~src =
+    Option.map (Backend.merge la ~dst:dst.ctx ~accum ~src:src.ctx) ~f:(fun result ->
+        let device = dst.device in
+        let run () =
+          await device;
+          device.next_task := Some result.run
+        in
+        { context = { ctx = result.context; device }; run })
 
   let num_devices () = Domain.recommended_domain_count () - 1
 
@@ -94,5 +104,6 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     Backend.unsafe_cleanup ()
 
   let get_device ~ordinal = devices.(ordinal)
+  let get_ctx_device { device; _ } = device
   let to_ordinal device = device.ordinal
 end

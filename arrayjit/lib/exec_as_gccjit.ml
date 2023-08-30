@@ -29,9 +29,6 @@ let init () =
   Core.Gc.Expert.add_finalizer_exn result finalize;
   result
 
-let initialize () = ()
-let unsafe_cleanup () = ()
-
 type ndarray = {
   hosted_ptr : Gccjit.rvalue option;  (** Pointer to the first value of the associated hosted [Ndarray]. *)
   global_ptr : Gccjit.rvalue option;  (** Pointer to the first value of [context.arrays]. *)
@@ -335,3 +332,15 @@ let jit old_context ~name ?verbose:_ compiled =
   let run = Result.code result name Ctypes.(void @-> returning void) in
   Context.release ctx;
   { context; run }
+
+let from_host context la =
+  ignore (context, la);
+  failwith "NOT IMPLEMENTED YET"
+
+let to_host context la =
+  ignore (context, la);
+  failwith "NOT IMPLEMENTED YET"
+
+let merge la ~dst ~accum ~src =
+  ignore (dst, accum, la, src);
+  failwith "NOT IMPLEMENTED YET"
