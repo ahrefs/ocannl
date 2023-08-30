@@ -16,10 +16,17 @@ module type No_device_backend = sig
   val to_host : context -> Lazy_array.t -> bool
   (** If the array is both hosted and in-context, copies from context to host and returns true. *)
 
-  val merge : Lazy_array.t -> dst:context -> accum:Low_level.binop -> src:context -> compiled option
+  val merge :
+    ?name_suffix:string ->
+    Lazy_array.t ->
+    dst:context ->
+    accum:Low_level.binop ->
+    src:context ->
+    compiled option
   (** Merges the array from the source context into the destination context: [dst =: dst accum src].
       If the array is hosted, its state on host is undefined after this operation. (A backend may chose
-      to use the host array as a buffer, if that is beneficial.) *)
+      to use the host array as a buffer, if that is beneficial.) [name_suffix] is appended to
+      the compiled function's name. *)
 end
 
 module type Backend = sig
@@ -72,8 +79,10 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let from_host { ctx; _ } = Backend.from_host ctx
   let to_host { ctx; _ } = Backend.to_host ctx
 
-  let merge la ~dst ~accum ~src =
-    Option.map (Backend.merge la ~dst:dst.ctx ~accum ~src:src.ctx) ~f:(fun result ->
+  let merge ?name_suffix la ~dst ~accum ~src =
+    let src_suffix = "_from_device_" ^ Int.to_string src.device.ordinal in
+    let name_suffix = Option.value name_suffix ~default:"" ^ src_suffix in
+    Option.map (Backend.merge ~name_suffix la ~dst:dst.ctx ~accum ~src:src.ctx) ~f:(fun result ->
         let device = dst.device in
         let run () =
           assert (Domain.is_main_domain ());

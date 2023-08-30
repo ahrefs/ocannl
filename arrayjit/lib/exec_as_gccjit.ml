@@ -12,7 +12,7 @@ module LA = Lazy_array
 
 type context = {
   parent_ctx : Gccjit.context;
-  mutable arrays : Ndarray.t Map.M(LA).t;
+  mutable ctx_arrays : Ndarray.t Map.M(LA).t;
   mutable results : Gccjit.result list;
 }
 
@@ -25,7 +25,7 @@ let init () =
   let open Gccjit in
   let parent_ctx = Context.create () in
   Context.set_option parent_ctx Optimization_level !optimization_level;
-  let result = { parent_ctx; results = []; arrays = Map.empty (module LA) } in
+  let result = { parent_ctx; results = []; ctx_arrays = Map.empty (module LA) } in
   Core.Gc.Expert.add_finalizer_exn result finalize;
   result
 
@@ -106,9 +106,9 @@ let get_array { context; ctx; func; arrays; traced_store; init_block } key : nda
         | Double_prec _, None -> array Type.Double true None
         | Void_prec, None -> assert false
       in
-      (if not @@ Map.mem context.arrays key then
+      (if not @@ Map.mem context.ctx_arrays key then
          let data = Ndarray.(create_array key.LA.prec ~dims:result.dims @@ Constant_fill [| 0. |]) in
-         context.arrays <- Map.add_exn ~key ~data context.arrays);
+         context.ctx_arrays <- Map.add_exn ~key ~data context.ctx_arrays);
       result)
 
 let prec_to_kind prec =
@@ -343,13 +343,34 @@ let jit old_context ~name ?verbose:_ compiled =
   { context; run }
 
 let from_host context la =
-  ignore (context, la);
-  failwith "NOT IMPLEMENTED YET"
+  match (la.LA.array, Map.find context.ctx_arrays la) with
+  | (lazy (Some h_arr)), Some c_arr ->
+      Ndarray.map2 { f2 = Ndarray.A.blit } h_arr c_arr;
+      true
+  | _ -> false
 
 let to_host context la =
-  ignore (context, la);
-  failwith "NOT IMPLEMENTED YET"
+  match (la.LA.array, Map.find context.ctx_arrays la) with
+  | (lazy (Some h_arr)), Some c_arr ->
+      Ndarray.map2 { f2 = Ndarray.A.blit } c_arr h_arr;
+      true
+  | _ -> false
 
-let merge la ~dst ~accum ~src =
-  ignore (dst, accum, la, src);
-  failwith "NOT IMPLEMENTED YET"
+let merge_from_global ?(name_suffix = "") context ~dst ~accum ~src =
+  let body idcs =
+    Low_level.(
+      Set
+        ( dst,
+          idcs,
+          Binop
+            ( accum,
+              Get (dst, idcs),
+              Get_global (External_unsafe { ptr = src; prec = dst.LA.prec; dims = dst.dims }, Some idcs) ) ))
+  in
+  let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
+  let name = [%string "merge_into_%{dst.Lazy_array.id#Int}%{name_suffix}"] in
+  jit context ~name ~verbose:false (Low_level.compile_proc ~name llc)
+
+let merge ?name_suffix la ~dst ~accum ~src =
+  Option.map (Map.find src.ctx_arrays la) ~f:(fun src ->
+      merge_from_global ?name_suffix dst ~dst:la ~accum ~src:(Ndarray.get_voidptr src))
