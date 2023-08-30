@@ -726,7 +726,6 @@ let simplify_llc traced_store llc =
   loop_proc llc
 
 type traced_store = (LA.t, traced_array) Base.Hashtbl.t
-
 type optimized = traced_store * t
 
 let optimize_proc ?(verbose = false) llc : optimized =

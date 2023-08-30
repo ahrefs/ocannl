@@ -126,7 +126,6 @@ let to_low_level (code : t) : Low_level.t =
         in
         let for_loops = for_loop [] (Array.to_list projections.product_space) in
         let s = Low_level.Comment ("Computing node " ^ LA.name lhs) in
-        (* Note: it might be invalid to replicate computation across tasks. *)
         if zero_out then
           let dims = lazy projections.lhs_dims in
           Low_level.unflat_lines [ s; loop (Fetch { array = lhs; fetch_op = Constant 0.; dims }); for_loops ]
