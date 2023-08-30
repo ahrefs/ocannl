@@ -17,7 +17,9 @@ module type No_device_backend = sig
   (** If the array is both hosted and in-context, copies from context to host and returns true. *)
 
   val merge : Lazy_array.t -> dst:context -> accum:Low_level.binop -> src:context -> compiled option
-  (** Merges the array from the source context into the destination context: [dst =: dst accum src]. *)
+  (** Merges the array from the source context into the destination context: [dst =: dst accum src].
+      If the array is hosted, its state on host is undefined after this operation. (A backend may chose
+      to use the host array as a buffer, if that is beneficial.) *)
 end
 
 module type Backend = sig
@@ -61,6 +63,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let compile { ctx; device } ~name ?verbose code =
     let result = Backend.compile ctx ~name ?verbose code in
     let run () =
+      assert (Domain.is_main_domain ());
       await device;
       device.next_task := Some result.run
     in
@@ -73,6 +76,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     Option.map (Backend.merge la ~dst:dst.ctx ~accum ~src:src.ctx) ~f:(fun result ->
         let device = dst.device in
         let run () =
+          assert (Domain.is_main_domain ());
           await device;
           device.next_task := Some result.run
         in
@@ -95,6 +99,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let devices = Array.init (num_devices ()) ~f:(fun ordinal -> spinup_device ~ordinal)
 
   let unsafe_cleanup () =
+    assert (Domain.is_main_domain ());
     let cleanup ordinal device =
       device.keep_spinning := false;
       Domain.join device.domain;
