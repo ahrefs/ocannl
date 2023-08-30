@@ -61,55 +61,48 @@ let jit_array_offset ctx ~idcs ~dims =
 let get_array { context; ctx; func; arrays; traced_store; init_block } key : ndarray =
   let open Gccjit in
   Hashtbl.find_or_add arrays key ~default:(fun () ->
-      let result =
-        let tn = Low_level.(get_node traced_store key) in
-        let dims = Lazy.force key.dims in
-        let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
-        let size_in_bytes = size_in_elems * Ndarray.prec_in_bytes key.prec in
-        let is_on_host = !(key.hosted) in
-        let c_void_ptr = Type.(get ctx Type.Void_ptr) in
-        let c_index = Type.get ctx Type.Size_t in
-        let c_int = Type.get ctx Type.Int in
-        (* TODO: is the complexity of introducing this function and matching on Ndarray.t needed? *)
-        let array c_typ is_double arr =
-          let num_typ = Type.(get ctx c_typ) in
-          let hosted_ptr =
-            Option.map arr
-              ~f:
-                (Fn.compose
-                   (RValue.ptr ctx @@ Type.pointer num_typ)
-                   (Ctypes.bigarray_start Ctypes_static.Genarray))
-          in
-          let mem = if not is_on_host then Local_only else if tn.read_only then Constant else Global in
-          let arr_typ = Type.array ctx num_typ size_in_elems in
-          let local = if is_local_only mem then Some (Function.local func arr_typ @@ LA.name key) else None in
-          (* FIXME: *)
-          let global_ptr = (* if is_global mem then Some () else *) None in
-          let cast_void rv = RValue.cast ctx rv c_void_ptr in
-          if tn.zero_initialized then
-            Option.first_some (Option.map local ~f:(Fn.compose cast_void LValue.address)) hosted_ptr
-            |> Option.iter ~f:(fun rv_ptr ->
-                   Block.eval init_block
-                   @@ RValue.call ctx (Function.builtin ctx "memset")
-                        [ rv_ptr; RValue.zero ctx c_int; RValue.int ctx c_index size_in_bytes ]);
-          let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
-          if not @@ String.is_substring key.backend_info ~substring:backend_info then
-            key.backend_info <- key.backend_info ^ backend_info;
-          { hosted_ptr; global_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
+      let tn = Low_level.(get_node traced_store key) in
+      let dims = Lazy.force key.dims in
+      let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
+      let size_in_bytes = size_in_elems * Ndarray.prec_in_bytes key.prec in
+      let is_on_host = !(key.hosted) in
+      let c_void_ptr = Type.(get ctx Type.Void_ptr) in
+      let c_index = Type.get ctx Type.Size_t in
+      let c_int = Type.get ctx Type.Int in
+      (* TODO: is the complexity of introducing this function and matching on Ndarray.t needed? *)
+      let array c_typ is_double arr =
+        let num_typ = Type.(get ctx c_typ) in
+        let get_c_ptr ba =
+          RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray ba
         in
-        match (key.prec, Lazy.force key.array) with
-        | _, Some (Half_nd arr) -> (* FIXME: *) array Type.Float false (Some arr)
-        | _, Some (Single_nd arr) -> array Type.Float false (Some arr)
-        | _, Some (Double_nd arr) -> array Type.Double true (Some arr)
-        | Half_prec _, None -> (* FIXME: *) array Type.Float false None
-        | Single_prec _, None -> array Type.Float false None
-        | Double_prec _, None -> array Type.Double true None
-        | Void_prec, None -> assert false
+        let hosted_ptr = Option.map arr ~f:get_c_ptr in
+        let mem = if not is_on_host then Local_only else if tn.read_only then Constant else Global in
+        let arr_typ = Type.array ctx num_typ size_in_elems in
+        let local = if is_local_only mem then Some (Function.local func arr_typ @@ LA.name key) else None in
+        (if is_global mem && (not @@ Map.mem context.ctx_arrays key) then
+           let data = Ndarray.create_array key.LA.prec ~dims @@ Constant_fill [| 0. |] in
+           context.ctx_arrays <- Map.add_exn ~key ~data context.ctx_arrays);
+        let global_ptr = Option.map (Map.find context.ctx_arrays key) ~f:Ndarray.(map { f = get_c_ptr }) in
+        let cast_void rv = RValue.cast ctx rv c_void_ptr in
+        if tn.zero_initialized then
+          Option.first_some (Option.map local ~f:(Fn.compose cast_void LValue.address)) hosted_ptr
+          |> Option.iter ~f:(fun rv_ptr ->
+                 Block.eval init_block
+                 @@ RValue.call ctx (Function.builtin ctx "memset")
+                      [ rv_ptr; RValue.zero ctx c_int; RValue.int ctx c_index size_in_bytes ]);
+        let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
+        if not @@ String.is_substring key.backend_info ~substring:backend_info then
+          key.backend_info <- key.backend_info ^ backend_info;
+        { hosted_ptr; global_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
       in
-      (if not @@ Map.mem context.ctx_arrays key then
-         let data = Ndarray.(create_array key.LA.prec ~dims:result.dims @@ Constant_fill [| 0. |]) in
-         context.ctx_arrays <- Map.add_exn ~key ~data context.ctx_arrays);
-      result)
+      match (key.prec, Lazy.force key.array) with
+      | _, Some (Half_nd arr) -> (* FIXME: *) array Type.Float false (Some arr)
+      | _, Some (Single_nd arr) -> array Type.Float false (Some arr)
+      | _, Some (Double_nd arr) -> array Type.Double true (Some arr)
+      | Half_prec _, None -> (* FIXME: *) array Type.Float false None
+      | Single_prec _, None -> array Type.Float false None
+      | Double_prec _, None -> array Type.Double true None
+      | Void_prec, None -> assert false)
 
 let prec_to_kind prec =
   let open Gccjit in
