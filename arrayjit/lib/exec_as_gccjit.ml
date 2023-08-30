@@ -253,16 +253,25 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
         RValue.lvalue lvalue
     | Get_local id ->
         let lvalue, _typ, _local_is_double = Map.find_exn !locals id in
-        (* FIXME: Convert according to local_is_double ?= is_double. *)
+        (* FIXME(194): Convert according to _typ ?= num_typ. *)
         RValue.lvalue lvalue
-    | Get_global (C_function f_name) ->
+    | Get_global (C_function f_name, None) ->
         (* TODO: this is too limiting. *)
         let f = Function.builtin ctx f_name in
         RValue.call ctx f []
+    | Get_global (External_unsafe { ptr; dims = (lazy dims); prec }, Some idcs) ->
+        let idcs = lookup env idcs in
+        let offset = jit_array_offset ctx ~idcs ~dims in
+        let typ = Type.get ctx @@ prec_to_kind prec in
+        let ptr = RValue.ptr ctx (Type.pointer typ) ptr in
+        (* FIXME(194): Convert according to typ ?= num_typ. *)
+        RValue.lvalue @@ LValue.access_array ptr offset
+    | Get_global _ -> failwith "NOT IMPLEMENTED YET"
     | Get (array, idcs) ->
         let array = get_array info array in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
+        (* FIXME(194): Convert according to array.typ ?= num_typ. *)
         RValue.lvalue @@ LValue.access_array (get_ptr array) offset
     | Binop (Low_level.Arg2, _, c2) -> loop c2
     | Binop (Low_level.Arg1, c1, _) -> loop c1

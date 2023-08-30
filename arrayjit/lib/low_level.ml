@@ -7,8 +7,18 @@ type unop = Identity | Relu [@@deriving sexp, compare, equal]
 module Nd = Ndarray
 module LA = Lazy_array
 
-type global_identifier = C_function of string  (** Calls a no-argument C function. *)
-[@@deriving sexp, equal, compare]
+type voidptr = unit Ctypes.ptr
+
+let equal_voidptr : voidptr -> voidptr -> bool = phys_equal
+
+type global_identifier =
+| C_function of string  (** Calls a no-argument C function. *)
+| External_unsafe of {
+  ptr : (voidptr[@sexp.opaque]);
+  prec : (Nd.prec[@equal.ignore][@compare.ignore]);
+  dims : int array Lazy.t;
+}
+[@@deriving sexp, equal]
 
 (** Initializes a array by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op = Nd.init_op =
@@ -49,7 +59,7 @@ and float_t =
       orig_indices : Indexing.axis_index array;
     }
   | Get_local of scope_id
-  | Get_global of global_identifier
+  | Get_global of global_identifier * Indexing.axis_index array option
   | Get of LA.t * Indexing.axis_index array
   | Binop of binop * float_t * float_t
   | Unop of unop * float_t

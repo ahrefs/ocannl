@@ -243,6 +243,11 @@ let alloc_and_memcpy src =
   memcpy_H_to_D ~dst ~src ();
   dst
 
+let memcpy_H_to_D_unsafe ~size_in_bytes ~dst:(Deviceptr dst) ~(src:unit Ctypes.ptr) () =
+  check "cu_memcpy_H_to_D"
+  @@ Cuda.cu_memcpy_H_to_D dst src
+  @@ Unsigned.Size_t.of_int size_in_bytes
+
 type kernel_param =
   | Tensor of deviceptr
   | Int of int

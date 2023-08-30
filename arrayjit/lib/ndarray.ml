@@ -90,7 +90,26 @@ let get_prec = function Half_nd _ -> half | Single_nd _ -> single | Double_nd _ 
 type 'r map_as_bigarray = { f : 'a. 'a bigarray -> 'r }
 
 let map { f } = function Half_nd arr -> f arr | Single_nd arr -> f arr | Double_nd arr -> f arr
+
+type 'r map2_as_bigarray = { f2 : 'a. 'a bigarray -> 'a bigarray -> 'r }
+
+let map2 { f2 } x1 x2 =
+  match (x1, x2) with
+  | Half_nd arr1, Half_nd arr2 -> f2 arr1 arr2
+  | Single_nd arr1, Single_nd arr2 -> f2 arr1 arr2
+  | Double_nd arr1, Double_nd arr2 -> f2 arr1 arr2
+  | _ -> invalid_arg "Ndarray.map2: precision mismatch"
+
 let dims = map { f = A.dims }
+
+let get_voidptr =
+  let f arr =
+    let open Ctypes in
+    coerce
+      (ptr @@ typ_of_bigarray_kind @@ Bigarray.Genarray.kind arr)
+      (ptr void) (bigarray_start genarray arr)
+  in
+  map { f }
 
 let get_as_float arr idx =
   let f x = A.get x idx in
