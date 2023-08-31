@@ -11,6 +11,28 @@ module Functions (F : Ctypes.FOREIGN) = struct
   let cu_ctx_create =
     F.foreign "cuCtxCreate" F.(ptr cu_context @-> int @-> E.cu_device @-> returning E.cu_result)
 
+  let cu_device_primary_ctx_retain =
+    F.foreign "cuDevicePrimaryCtxRetain" F.(ptr cu_context @-> E.cu_device @-> returning E.cu_result)
+
+  let cu_device_primary_ctx_release =
+    F.foreign "cuDevicePrimaryCtxRelease" F.(E.cu_device @-> returning E.cu_result)
+
+  let cu_device_primary_ctx_reset =
+    F.foreign "cuDevicePrimaryCtxReset" F.(E.cu_device @-> returning E.cu_result)
+  let cu_ctx_get_device = F.foreign "cuCtxGetDevice" F.(ptr E.cu_device @-> returning E.cu_result)
+
+  let cu_ctx_get_current =
+    F.foreign "cuCtxGetCurrent" F.(ptr cu_context @-> returning E.cu_result)
+
+  let cu_ctx_pop_current =
+    F.foreign "cuCtxPopCurrent" F.(ptr cu_context @-> returning E.cu_result)
+
+  let cu_ctx_set_current =
+    F.foreign "cuCtxSetCurrent" F.(cu_context @-> returning E.cu_result)
+
+  let cu_ctx_push_current =
+    F.foreign "cuCtxPushCurrent" F.(cu_context @-> returning E.cu_result)
+
   let cu_module_load_data_ex =
     F.foreign "cuModuleLoadDataEx"
       F.(

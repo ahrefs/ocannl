@@ -86,6 +86,39 @@ let ctx_create ~flags device =
   check "cu_ctx_create" @@ Cuda.cu_ctx_create ctx flags device;
   !@ctx
 
+let device_primary_ctx_release device =
+  check "cu_device_primary_ctx_release" @@ Cuda.cu_device_primary_ctx_release device
+
+let device_primary_ctx_reset device =
+  check "cu_device_primary_ctx_reset" @@ Cuda.cu_device_primary_ctx_reset device
+
+let device_primary_ctx_retain device =
+  let open Ctypes in
+  let ctx = allocate_n cu_context ~count:1 in
+  check "cu_device_primary_ctx_retain" @@ Cuda.cu_device_primary_ctx_retain ctx device;
+  !@ctx
+
+let ctx_get_device () =
+  let open Ctypes in
+  let device = allocate Cuda_ffi.Types_generated.cu_device (Cu_device 0) in
+  check "cu_ctx_get_device" @@ Cuda.cu_ctx_get_device device;
+  !@device
+
+let ctx_pop_current () =
+  let open Ctypes in
+  let ctx = allocate_n cu_context ~count:1 in
+  check "cu_ctx_pop_current" @@ Cuda.cu_ctx_pop_current ctx;
+  !@ctx
+
+let ctx_get_current () =
+  let open Ctypes in
+  let ctx = allocate_n cu_context ~count:1 in
+  check "cu_ctx_get_current" @@ Cuda.cu_ctx_get_current ctx;
+  !@ctx
+
+let ctx_push_current ctx = check "cu_ctx_push_current" @@ Cuda.cu_ctx_push_current ctx
+let ctx_set_current ctx = check "cu_ctx_set_current" @@ Cuda.cu_ctx_set_current ctx
+
 type bigstring = (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
 
 (* Note: bool corresponds to C int (0=false). *)
@@ -212,13 +245,14 @@ let module_get_function module_ ~name =
   check "cu_module_get_function" @@ Cuda.cu_module_get_function func module_ name;
   !@func
 
-type deviceptr = Deviceptr of Unsigned.uint64
+type deviceptr =
+  | Deviceptr of Unsigned.uint64  (** A pointer to an array on a device. (Not a pointer to a device!) *)
 
 let mem_alloc ~byte_size =
   let open Ctypes in
-  let device = allocate_n cu_deviceptr ~count:1 in
-  check "cu_mem_alloc" @@ Cuda.cu_mem_alloc device @@ Unsigned.Size_t.of_int byte_size;
-  Deviceptr !@device
+  let deviceptr = allocate_n cu_deviceptr ~count:1 in
+  check "cu_mem_alloc" @@ Cuda.cu_mem_alloc deviceptr @@ Unsigned.Size_t.of_int byte_size;
+  Deviceptr !@deviceptr
 
 let memcpy_H_to_D ?host_offset ?length ~dst:(Deviceptr dst) ~src () =
   let full_size = Bigarray.Genarray.size_in_bytes src in
@@ -243,10 +277,8 @@ let alloc_and_memcpy src =
   memcpy_H_to_D ~dst ~src ();
   dst
 
-let memcpy_H_to_D_unsafe ~size_in_bytes ~dst:(Deviceptr dst) ~(src:unit Ctypes.ptr) () =
-  check "cu_memcpy_H_to_D"
-  @@ Cuda.cu_memcpy_H_to_D dst src
-  @@ Unsigned.Size_t.of_int size_in_bytes
+let memcpy_H_to_D_unsafe ~size_in_bytes ~dst:(Deviceptr dst) ~(src : unit Ctypes.ptr) () =
+  check "cu_memcpy_H_to_D" @@ Cuda.cu_memcpy_H_to_D dst src @@ Unsigned.Size_t.of_int size_in_bytes
 
 type kernel_param =
   | Tensor of deviceptr
@@ -1135,3 +1167,4 @@ type func = cu_function
 type stream = cu_stream
 type module_ = cu_module
 type limit = cu_limit
+type device = cu_device
