@@ -8,24 +8,27 @@ type mem_properties =
   | Constant  (** The array is read directly from the host. *)
 [@@deriving sexp, equal, compare, variants]
 
+let root_ctx = ref None
+
 module LA = Lazy_array
 
-type context = {
-  parent_ctx : Gccjit.context;
-  mutable ctx_arrays : Ndarray.t Map.M(LA).t;
-  mutable results : Gccjit.result list;
-}
+type context = { arrays : Ndarray.t Map.M(LA).t; result : Gccjit.result option }
+
+let unsafe_cleanup () =
+  let open Gccjit in
+  Option.iter ~f:Context.release !root_ctx;
+  let ctx = Context.create () in
+  Context.set_option ctx Optimization_level !optimization_level;
+  root_ctx := Some ctx
+
+let initialize () = unsafe_cleanup ()
 
 let finalize ctx =
   let open Gccjit in
-  List.iter ctx.results ~f:Result.release;
-  Context.release ctx.parent_ctx
+  Option.iter ctx.result ~f:Result.release
 
 let init () =
-  let open Gccjit in
-  let parent_ctx = Context.create () in
-  Context.set_option parent_ctx Optimization_level !optimization_level;
-  let result = { parent_ctx; results = []; ctx_arrays = Map.empty (module LA) } in
+  let result = { result = None; arrays = Map.empty (module LA) } in
   Core.Gc.Expert.add_finalizer_exn result finalize;
   result
 
@@ -43,11 +46,11 @@ type ndarray = {
 }
 
 type ctx_info = {
-  context : context;
   ctx : Gccjit.context;
   func : Gccjit.function_;
   traced_store : Low_level.traced_store;
   init_block : Gccjit.block;
+  mutable ctx_arrays : Ndarray.t Map.M(LA).t;
   arrays : (LA.t, ndarray) Hashtbl.t;
 }
 
@@ -58,7 +61,7 @@ let jit_array_offset ctx ~idcs ~dims =
       RValue.binary_op ctx Plus c_index idx
       @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
 
-let get_array { context; ctx; func; arrays; traced_store; init_block } key : ndarray =
+let get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ctx_info) key : ndarray =
   let open Gccjit in
   Hashtbl.find_or_add arrays key ~default:(fun () ->
       let tn = Low_level.(get_node traced_store key) in
@@ -79,10 +82,10 @@ let get_array { context; ctx; func; arrays; traced_store; init_block } key : nda
         let mem = if not is_on_host then Local_only else if tn.read_only then Constant else Global in
         let arr_typ = Type.array ctx num_typ size_in_elems in
         let local = if is_local_only mem then Some (Function.local func arr_typ @@ LA.name key) else None in
-        (if is_global mem && (not @@ Map.mem context.ctx_arrays key) then
+        (if is_global mem && (not @@ Map.mem ctx_arrays key) then
            let data = Ndarray.create_array key.LA.prec ~dims @@ Constant_fill [| 0. |] in
-           context.ctx_arrays <- Map.add_exn ~key ~data context.ctx_arrays);
-        let global_ptr = Option.map (Map.find context.ctx_arrays key) ~f:Ndarray.(map { f = get_c_ptr }) in
+           ctx_info.ctx_arrays <- Map.add_exn ~key ~data ctx_arrays);
+        let global_ptr = Option.map (Map.find ctx_info.ctx_arrays key) ~f:Ndarray.(map { f = get_c_ptr }) in
         let cast_void rv = RValue.cast ctx rv c_void_ptr in
         if tn.zero_initialized then
           Option.first_some (Option.map local ~f:(Fn.compose cast_void LValue.address)) hosted_ptr
@@ -113,18 +116,14 @@ let prec_to_kind prec =
   | Double_prec _ -> Type.Double
 
 let prec_is_double = function Ops.Double_prec _ -> true | _ -> false
-
-let is_builtin_op = function
-  | Ops.Add | Sub | Mul | Div -> true
-  | ToPowOf | Relu_gate | Arg2 | Arg1 -> false
+let is_builtin_op = function Ops.Add | Sub | Mul | Div -> true | ToPowOf | Relu_gate | Arg2 | Arg1 -> false
 
 let builtin_op = function
   | Ops.Add -> Gccjit.Plus
   | Sub -> Gccjit.Minus
   | Mul -> Gccjit.Mult
   | Div -> Gccjit.Divide
-  | ToPowOf | Relu_gate | Arg2 | Arg1 ->
-      invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
+  | ToPowOf | Relu_gate | Arg2 | Arg1 -> invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
 
 let get_ptr array =
   match array.local with Some lv -> Gccjit.RValue.lvalue lv | None -> Option.value_exn array.hosted_ptr
@@ -297,59 +296,62 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
   loop_proc ~name ~env body;
   !current_block
 
-let jit_func ~name context ctx (traced_store, proc) =
+let jit_func ~name (context : context) ctx (traced_store, proc) =
   let open Gccjit in
   let fkind = Function.Exported in
   let func = Function.create ctx fkind (Type.get ctx Void) name [] in
   let init_block = Block.create ~name:("init_" ^ name) func in
   let main_block = Block.create ~name func in
   let env = Low_level.empty_env in
-  let ctx_info = { context; ctx; func; traced_store; init_block; arrays = Hashtbl.Poly.create () } in
+  let ctx_info =
+    { ctx; func; traced_store; init_block; ctx_arrays = context.arrays; arrays = Hashtbl.Poly.create () }
+  in
   let after_proc = jit_code ~name ~env ctx_info main_block proc in
   Block.jump init_block main_block;
   Block.return_void after_proc;
-  if !Low_level.with_debug then
-    let suf = "-gccjit-debug.c" in
-    let f_name =
-      if !Low_level.keep_files_in_run_directory then name ^ suf else Caml.Filename.temp_file (name ^ "-") suf
-    in
-    Context.dump_to_file ctx ~update_locs:true f_name
+  (if !Low_level.with_debug then
+     let suf = "-gccjit-debug.c" in
+     let f_name =
+       if !Low_level.keep_files_in_run_directory then name ^ suf else Caml.Filename.temp_file (name ^ "-") suf
+     in
+     Context.dump_to_file ctx ~update_locs:true f_name);
+  ctx_info
 
 type compiled = { context : context; run : unit -> unit }
 
 let jit old_context ~name ?verbose:_ compiled =
   (* TODO: add verbose logs *)
   let open Gccjit in
-  let ctx = Context.create_child old_context.parent_ctx in
+  if Option.is_none !root_ctx then initialize ();
+  let ctx = Context.create_child @@ Option.value_exn !root_ctx in
   Context.set_option ctx Context.Optimization_level !optimization_level;
-  let context = { old_context with results = old_context.results } in
   (*
   if !Low_level.with_debug && !Low_level.keep_files_in_run_directory then (
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)
-  jit_func ~name context ctx compiled;
+  let ctx_info = jit_func ~name old_context ctx compiled in
   let result = Context.compile ctx in
-  context.results <- result :: context.results;
+  let context = { arrays = ctx_info.ctx_arrays; result = Some result } in
   let run = Result.code result name Ctypes.(void @-> returning void) in
   Context.release ctx;
   { context; run }
 
-let from_host context la =
-  match (la.LA.array, Map.find context.ctx_arrays la) with
+let from_host (context : context) la =
+  match (la.LA.array, Map.find context.arrays la) with
   | (lazy (Some h_arr)), Some c_arr ->
       Ndarray.map2 { f2 = Ndarray.A.blit } h_arr c_arr;
       true
   | _ -> false
 
-let to_host context la =
-  match (la.LA.array, Map.find context.ctx_arrays la) with
+let to_host (context : context) la =
+  match (la.LA.array, Map.find context.arrays la) with
   | (lazy (Some h_arr)), Some c_arr ->
       Ndarray.map2 { f2 = Ndarray.A.blit } c_arr h_arr;
       true
   | _ -> false
 
-let merge_from_global ?(name_suffix = "") context ~dst ~accum ~src =
+let merge_from_global ?(name_suffix = "") (context : context) ~dst ~accum ~src =
   let body idcs =
     Low_level.(
       Set
@@ -364,6 +366,6 @@ let merge_from_global ?(name_suffix = "") context ~dst ~accum ~src =
   let name = [%string "merge_into_%{dst.Lazy_array.id#Int}%{name_suffix}"] in
   jit context ~name ~verbose:false (Low_level.compile_proc ~name llc)
 
-let merge ?name_suffix la ~dst ~accum ~src =
-  Option.map (Map.find src.ctx_arrays la) ~f:(fun src ->
+let merge ?name_suffix la ~dst ~accum ~(src : context) =
+  Option.map (Map.find src.arrays la) ~f:(fun src ->
       merge_from_global ?name_suffix dst ~dst:la ~accum ~src:(Ndarray.get_voidptr src))

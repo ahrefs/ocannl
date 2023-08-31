@@ -128,8 +128,8 @@ module Gccjit_device : No_device_backend with type context = Exec_as_gccjit.cont
 
   open Exec_as_gccjit
 
-  let initialize () = ()
-  let unsafe_cleanup () = ()
+  let initialize = initialize
+  let unsafe_cleanup = unsafe_cleanup
   let init = init
   let finalize = finalize
 
