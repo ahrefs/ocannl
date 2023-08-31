@@ -21,18 +21,60 @@ type ndarray = {
 }
 [@@deriving sexp_of]
 
-(* let session_results = ref [] *)
-let hoist_dynamic_indices = ref false
-
 module LA = Lazy_array
 
-type session_state = {
-  mutable ctx : Cudajit.context option;
-  arrays : (LA.t, ndarray) Hashtbl.t;
-  mutable last_module : Cudajit.module_ option;
+type device = { dev : Cudajit.device; ordinal : int; primary_context : Cudajit.context }
+
+type context = {
+  ctx : Cudajit.context;
+  device : device;
+  run_module : Cudajit.module_ option;
+      (** Code compiled for this context, independent of the parent and child contexts. *)
+  arrays : ndarray Map.M(LA).t;
 }
 
-let session_state = { ctx = None; arrays = Hashtbl.create (module LA); last_module = None }
+type ctx_info = {
+  ctx : Cudajit.context;  (** Code compiled for this context, independent of the parent and child contexts. *)
+  mutable ctx_arrays : ndarray Map.M(LA).t;
+  used_tensors : Hash_set.M(LA).t;
+}
+
+let init device = { ctx = device.primary_context; device; arrays = Map.empty (module LA); run_module = None }
+let initialize () = Cudajit.init ()
+let num_devices = Cudajit.device_get_count
+
+let get_device =
+  let module Array = Res.Weak in
+  let devices = Array.empty () in
+  fun ~ordinal ->
+    if num_devices () <= ordinal then
+      invalid_arg [%string "Exec_as_cuda.get_device %{ordinal#Int}: not enough devices"];
+    Option.value_or_thunk devices.(ordinal) ~default:(fun () ->
+        let dev = Cudajit.device_get ~ordinal in
+        let primary_context = Cudajit.device_primary_ctx_retain dev in
+        let result = { dev; ordinal; primary_context } in
+        Res.Weak.set devices ordinal (Some result);
+        result)
+
+let get_ctx_device { device; _ } = device
+let to_ordinal { ordinal; _ } = ordinal
+
+let set_ctx ctx =
+  let cur_ctx = Cudajit.ctx_get_current () in
+  if not @@ phys_equal ctx cur_ctx then Cudajit.ctx_set_current ctx
+
+let finalize ctx =
+  set_ctx ctx.device.primary_context;
+  Option.iter ctx.run_module ~f:Cudajit.module_unload;
+  Map.iter ctx.arrays ~f:(fun array ->
+      Option.iter array.global ~f:(fun (name, ptr) ->
+          if !Low_level.with_debug then Stdio.printf "Exec_as_cuda.cleanup_session: mem_free %s\n%!" name;
+          Cudajit.mem_free ptr))
+
+let await device =
+  set_ctx device.primary_context;
+  Cudajit.ctx_synchronize ()
+
 let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
 let pp_comma ppf () = Caml.Format.fprintf ppf ",@ "
 let pp_symbol ppf sym = Caml.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym
@@ -77,31 +119,35 @@ let prec_to_c_type = function
 let compute_array_offset ~idcs ~dims =
   Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx + (offset * dim))
 
-let get_array ~traced_store:_ v =
-  let { arrays; _ } = session_state in
-  Hashtbl.find_or_add arrays v ~default:(fun () ->
-      (* let tn = Low_level.get_node traced_store v in *)
-      (* TODO: We will need tn to perform more refined optimizations. *)
-      (* let host_size_in_bytes = Ndarray.size_in_bytes v.array in *)
-      let dims = Lazy.force v.dims in
-      let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
-      let hosted = Lazy.force v.array in
-      let size_in_bytes = size_in_elems * Ops.prec_in_bytes v.prec in
-      let is_on_host = !(v.hosted) in
-      let is_double = Ops.is_double_prec v.prec in
-      let num_typ = prec_to_c_type v.prec in
-      let mem = if not is_on_host then Local_only else Global in
-      let global =
-        if is_local_only mem then None
-        else (
-          if !Low_level.with_debug then Stdio.printf "Exec_as_cuda.get_array: mem_alloc %s\n%!" (LA.name v);
-          Some (LA.name v, Cudajit.mem_alloc ~byte_size:size_in_bytes))
-      in
-      let local = Option.some_if (is_local_only mem) @@ LA.name v ^ "_local" in
-      let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
-      if not @@ String.is_substring v.backend_info ~substring:backend_info then
-        v.backend_info <- v.backend_info ^ backend_info;
-      { hosted; local; mem; dims; size_in_bytes; size_in_elems; num_typ; is_double; global })
+let get_array ~traced_store:_ ctx_info (key : LA.t) =
+  let default () =
+    (* let tn = Low_level.get_node traced_store v in *)
+    (* TODO: We will need tn to perform more refined optimizations. *)
+    (* let host_size_in_bytes = Ndarray.size_in_bytes key.array in *)
+    let dims = Lazy.force key.dims in
+    let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
+    let hosted = Lazy.force key.array in
+    let size_in_bytes = size_in_elems * Ops.prec_in_bytes key.prec in
+    let is_on_host = !(key.hosted) in
+    let is_double = Ops.is_double_prec key.prec in
+    let num_typ = prec_to_c_type key.prec in
+    let mem = if not is_on_host then Local_only else Global in
+    let global =
+      if is_local_only mem then None
+      else (
+        if !Low_level.with_debug then Stdio.printf "Exec_as_cuda.get_array: mem_alloc %s\n%!" (LA.name key);
+        set_ctx ctx_info.ctx;
+        Some (LA.name key, Cudajit.mem_alloc ~byte_size:size_in_bytes))
+    in
+    let local = Option.some_if (is_local_only mem) @@ LA.name key ^ "_local" in
+    let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
+    if not @@ String.is_substring key.backend_info ~substring:backend_info then
+      key.backend_info <- key.backend_info ^ backend_info;
+    let data = { hosted; local; mem; dims; size_in_bytes; size_in_elems; num_typ; is_double; global } in
+    ctx_info.ctx_arrays <- Map.add_exn ctx_info.ctx_arrays ~key ~data;
+    data
+  in
+  Option.value_or_thunk (Map.find ctx_info.ctx_arrays key) ~default
 
 let jit_binop ~num_typ:_ ~is_double op =
   match op with
@@ -116,7 +162,7 @@ let jit_binop ~num_typ:_ ~is_double op =
   | Relu_gate -> ("(", " > 0.0 ?", " : 0.0)")
 (* "((int)(", "> 0.0) * ", ")" *)
 
-let jit_code ~traced_store ppf llc : unit =
+let jit_code ~traced_store info ppf llc : unit =
   let open Caml.Format in
   let locals = ref Map.Poly.empty in
   let rec pp_ll ppf c : unit =
@@ -133,7 +179,7 @@ let jit_code ~traced_store ppf llc : unit =
         fprintf ppf "@[<2>for (unsigned int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_
           pp_index i to_ pp_index i pp_ll body
     | Zero_out array ->
-        if Hashtbl.mem session_state.arrays array then
+        if Map.mem info.ctx_arrays array then
           failwith
             ("exec_as_cuda: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
             @@ [%sexp_of: LA.t] array);
@@ -141,7 +187,7 @@ let jit_code ~traced_store ppf llc : unit =
         assert tn.zero_initialized
         (* The initialization will be emitted by get_array. *)
     | Set (array, idcs, v) ->
-        let array = get_array ~traced_store array in
+        let array = get_array ~traced_store info array in
         let old_locals = !locals in
         let loop_f = pp_float ~num_typ:array.num_typ ~is_double:array.is_double in
         let loop_debug_f = debug_float ~num_typ:array.num_typ ~is_double:array.is_double in
@@ -211,7 +257,7 @@ let jit_code ~traced_store ppf llc : unit =
         fprintf ppf "v%d" id.scope_id
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (array, idcs) ->
-        let array = get_array ~traced_store array in
+        let array = get_array ~traced_store info array in
         fprintf ppf "@[<2>%s[%a@]]" (get_run_ptr array) pp_array_offset (idcs, array.dims)
     | Constant c -> fprintf ppf "(%f)" c
     | Binop (Arg1, v1, _v2) -> loop ppf v1
@@ -238,7 +284,7 @@ let jit_code ~traced_store ppf llc : unit =
         (v ^ "{=%f}", [ `Value v ])
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (ptr, idcs) ->
-        let array = get_array ~traced_store ptr in
+        let array = get_array ~traced_store info ptr in
         let v = sprintf "@[<2>%s[%s@]]" (get_run_ptr array) (array_offset_to_string (idcs, array.dims)) in
         (get_run_ptr array ^ "[%u]{=%f}", [ `Accessor (idcs, array.dims); `Value v ])
     | Constant c -> (Float.to_string c, [])
@@ -256,45 +302,22 @@ let jit_code ~traced_store ppf llc : unit =
   in
   pp_ll ppf llc
 
-let new_context ?(device_num = 0) () =
-  let num_devices = Cudajit.device_get_count () in
-  if num_devices <= device_num then None
-  else
-    let device = Cudajit.device_get ~ordinal:device_num in
-    Some (Cudajit.ctx_create ~flags:0 device)
-
-let cleanup_session () =
-  if Option.is_none session_state.ctx then Cudajit.init ();
-  Option.iter session_state.last_module ~f:Cudajit.module_unload;
-  session_state.last_module <- None;
-  Hashtbl.iter session_state.arrays ~f:(fun array ->
-      Option.iter array.global ~f:(fun (name, ptr) ->
-          if !Low_level.with_debug then
-            Stdio.printf "Exec_as_cuda.cleanup_session: mem_free %s\n%!" name;
-          Cudajit.mem_free ptr));
-  Hashtbl.clear session_state.arrays;
-  Option.iter session_state.ctx ~f:Cudajit.ctx_destroy;
-  (* For now we stick with device 0. *)
-  session_state.ctx <- new_context ()
-
-let jit_func ~name ?(verbose = false) (traced_store, llc) =
-  let module Cu = Cudajit in
-  Option.iter session_state.last_module ~f:Cu.module_unload;
-  session_state.last_module <- None;
-  if Option.is_none session_state.ctx then (
-    if verbose then Stdio.printf "Exec_as_cuda.jit: initializing the CUDA context\n%!";
-    cleanup_session ());
-  if Option.is_none session_state.ctx then invalid_arg "Exec_as_cuda: no device found";
+let jit_func ~name ?(verbose = false) (old_context : context) (traced_store, llc) =
+  set_ctx old_context.ctx;
   if verbose then Stdio.printf "Exec_as_cuda.jit: generating the .cu source\n%!";
+  let info =
+    { ctx = old_context.ctx; ctx_arrays = old_context.arrays; used_tensors = Hash_set.create (module LA) }
+  in
   let b = Buffer.create 4096 in
   let ppf = Caml.Format.formatter_of_buffer b in
-  jit_code ~traced_store ppf llc;
+  jit_code ~traced_store info ppf llc;
   Caml.Format.pp_print_newline ppf ();
   let cu_body = Buffer.contents b in
-  let arrays = Hashtbl.to_alist session_state.arrays in
+  let arrays = Hash_set.to_list info.used_tensors in
   let params, args =
     List.unzip
-    @@ List.filter_map arrays ~f:(fun (_, tn) ->
+    @@ List.filter_map arrays ~f:(fun la ->
+           let tn = Map.find_exn info.ctx_arrays la in
            match tn.mem with
            | Local_only -> None
            | Global -> Option.map tn.global ~f:(fun (n, ptr) -> (tn.num_typ ^ " *" ^ n, ptr)))
@@ -302,12 +325,13 @@ let jit_func ~name ?(verbose = false) (traced_store, llc) =
   (* TODO: optimize zero-initializations? E.g.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
   let thread_decls =
-    List.filter_map arrays ~f:(fun (ptr, tn) ->
+    List.filter_map arrays ~f:(fun la ->
+        let tn = Map.find_exn info.ctx_arrays la in
         match tn.mem with
         | Local_only ->
             Option.map tn.local ~f:(fun t_name ->
                 tn.num_typ ^ " " ^ t_name ^ "[" ^ Int.to_string tn.size_in_elems
-                ^ if (Hashtbl.find_exn traced_store ptr).zero_initialized then "] = {0};" else "];")
+                ^ if (Hashtbl.find_exn traced_store la).zero_initialized then "] = {0};" else "];")
         | _ -> None)
   in
   let cu_src =
@@ -333,35 +357,45 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);
   if verbose then Stdio.printf "Exec_as_cuda.jit: compiling to PTX\n%!";
+  let module Cu = Cudajit in
   let ptx =
     Cu.compile_to_ptx ~cu_src ~name ~options:[ "--use_fast_math" ] ~with_debug:!Low_level.with_debug
   in
   if !Low_level.with_debug && !Low_level.keep_files_in_run_directory then (
     let f_name = name ^ "-cudajit-debug" in
     let oc = Out_channel.open_text @@ f_name ^ ".ptx" in
-    Stdio.Out_channel.output_string oc @@ Cudajit.string_from_ptx ptx;
+    Stdio.Out_channel.output_string oc @@ Cu.string_from_ptx ptx;
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc;
     let oc = Out_channel.open_text @@ f_name ^ ".cu_log" in
     Stdio.Out_channel.output_string oc @@ Option.value_exn ptx.log;
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);
-  let module_ = Cu.module_load_data_ex ptx [] in
-  session_state.last_module <- Some module_;
-  let func = Cu.module_get_function module_ ~name in
+  let run_module = Cu.module_load_data_ex ptx [] in
+  let func = Cu.module_get_function run_module ~name in
   let args = List.map args ~f:(fun p -> Cu.Tensor p) in
   if verbose then Stdio.printf "Exec_as_cuda.jit: compilation finished\n%!";
-  fun () ->
+  ( func,
+    args,
+    { ctx = info.ctx; device = old_context.device; run_module = Some run_module; arrays = info.ctx_arrays } )
+
+type compiled = { context : context; run : unit -> unit  (** Potentially asynchronous. *) }
+
+let jit ~name ?(verbose = false) old_context ((traced_store, _) as compiled) =
+  let func, args, context = jit_func ~name ~verbose old_context compiled in
+  let run () =
     if verbose then Stdio.printf "Exec_as_cuda.jit: zeroing-out global memory\n%!";
-    List.iter arrays ~f:(function
-      | ptr, { global = Some (_, dev_ptr); size_in_bytes; _ } ->
-          let tn = Hashtbl.find_exn traced_store ptr in
-          if tn.zero_initialized then Cu.memset_d8 dev_ptr Unsigned.UChar.zero ~length:size_in_bytes
-      | _ -> ());
-    if verbose then Stdio.printf "Exec_as_cuda.jit: running the kernel\n%!";
+    set_ctx context.ctx;
+    let module Cu = Cudajit in
+    Map.iteri context.arrays ~f:(fun ~key:ptr ~data ->
+        match data with
+        | { global = Some (_, dev_ptr); size_in_bytes; _ } ->
+            let tn = Hashtbl.find_exn traced_store ptr in
+            if tn.zero_initialized then Cu.memset_d8 dev_ptr Unsigned.UChar.zero ~length:size_in_bytes
+        | _ -> ());
+    if verbose then Stdio.printf "Exec_as_cuda.jit: launching the kernel\n%!";
     (* if !Low_level.debug_verbose_trace then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream args;
-    Cu.ctx_synchronize ();
-    if verbose then Stdio.printf "Exec_as_cuda.jit: kernel run finished\n%!"
-
-let jit = jit_func
+    if verbose then Stdio.printf "Exec_as_cuda.jit: kernel launched\n%!"
+  in
+  { context; run }
