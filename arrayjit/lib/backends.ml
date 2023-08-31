@@ -17,12 +17,7 @@ module type No_device_backend = sig
   (** If the array is both hosted and in-context, copies from context to host and returns true. *)
 
   val merge :
-    ?name_suffix:string ->
-    Lazy_array.t ->
-    dst:context ->
-    accum:Ops.binop ->
-    src:context ->
-    compiled option
+    ?name_suffix:string -> Lazy_array.t -> dst:context -> accum:Ops.binop -> src:context -> compiled option
   (** Merges the array from the source context into the destination context: [dst =: dst accum src].
       If the array is hosted, its state on host is undefined after this operation. (A backend may chose
       to use the host array as a buffer, if that is beneficial.) [name_suffix] is appended to
@@ -142,3 +137,28 @@ module Gccjit_device : No_device_backend with type context = Exec_as_gccjit.cont
 end
 
 module Gccjit_backend = Multicore_backend (Gccjit_device)
+
+module Cuda_backend : Backend with type context = Exec_as_cuda.context = struct
+  type context = Exec_as_cuda.context
+  type device = Exec_as_cuda.device
+  type compiled = Exec_as_cuda.compiled = { context : context; run : unit -> unit }
+
+  open Exec_as_cuda
+
+  let initialize = initialize
+  let unsafe_cleanup = unsafe_cleanup
+  let init = init
+  let finalize = finalize
+
+  let compile context ~name ?verbose code =
+    jit context ~name ?verbose @@ Assignments.compile_proc ~name ?verbose code
+
+  let from_host = from_host
+  let to_host = to_host
+  let merge = merge
+  let await = await
+  let num_devices = num_devices
+  let get_device = get_device
+  let get_ctx_device = get_ctx_device
+  let to_ordinal = to_ordinal
+end

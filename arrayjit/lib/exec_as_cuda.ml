@@ -42,19 +42,18 @@ type ctx_info = {
 let init device = { ctx = device.primary_context; device; arrays = Map.empty (module LA); run_module = None }
 let initialize () = Cudajit.init ()
 let num_devices = Cudajit.device_get_count
+let devices = Res.Weak.empty ()
 
-let get_device =
+let get_device ~ordinal =
+  if num_devices () <= ordinal then
+    invalid_arg [%string "Exec_as_cuda.get_device %{ordinal#Int}: not enough devices"];
   let module Array = Res.Weak in
-  let devices = Array.empty () in
-  fun ~ordinal ->
-    if num_devices () <= ordinal then
-      invalid_arg [%string "Exec_as_cuda.get_device %{ordinal#Int}: not enough devices"];
-    Option.value_or_thunk devices.(ordinal) ~default:(fun () ->
-        let dev = Cudajit.device_get ~ordinal in
-        let primary_context = Cudajit.device_primary_ctx_retain dev in
-        let result = { dev; ordinal; primary_context } in
-        Res.Weak.set devices ordinal (Some result);
-        result)
+  Option.value_or_thunk devices.(ordinal) ~default:(fun () ->
+      let dev = Cudajit.device_get ~ordinal in
+      let primary_context = Cudajit.device_primary_ctx_retain dev in
+      let result = { dev; ordinal; primary_context } in
+      devices.(ordinal) <- Some result;
+      result)
 
 let get_ctx_device { device; _ } = device
 let to_ordinal { ordinal; _ } = ordinal
@@ -64,16 +63,52 @@ let set_ctx ctx =
   if not @@ phys_equal ctx cur_ctx then Cudajit.ctx_set_current ctx
 
 let finalize ctx =
-  set_ctx ctx.device.primary_context;
-  Option.iter ctx.run_module ~f:Cudajit.module_unload;
-  Map.iter ctx.arrays ~f:(fun array ->
-      Option.iter array.global ~f:(fun (name, ptr) ->
-          if !Low_level.with_debug then Stdio.printf "Exec_as_cuda.cleanup_session: mem_free %s\n%!" name;
-          Cudajit.mem_free ptr))
+  if Option.is_some @@ Res.Weak.get devices ctx.device.ordinal then (
+    set_ctx ctx.device.primary_context;
+    Option.iter ctx.run_module ~f:Cudajit.module_unload;
+    Map.iter ctx.arrays ~f:(fun array ->
+        Option.iter array.global ~f:(fun (_, ptr) -> Cudajit.mem_free ptr)))
+
+let unsafe_cleanup () =
+  Res.Weak.iter (function None -> () | Some device -> Cudajit.device_primary_ctx_release device.dev) devices;
+  Res.Weak.clear devices
 
 let await device =
   set_ctx device.primary_context;
   Cudajit.ctx_synchronize ()
+
+let from_host (ctx : context) la =
+  match Map.find ctx.arrays la with
+  | None -> false
+  | Some array -> (
+      match (array.hosted, array.global) with
+      | Some hosted, Some (_, dst) ->
+          set_ctx ctx.ctx;
+          let f src = Cudajit.memcpy_H_to_D ~dst ~src () in
+          Ndarray.map { f } hosted;
+          true
+      | _ -> false)
+
+let to_host (ctx : context) la =
+  match Map.find ctx.arrays la with
+  | None -> false
+  | Some array -> (
+      match (array.hosted, array.global) with
+      | Some hosted, Some (_, src) ->
+          set_ctx ctx.ctx;
+          let f dst = Cudajit.memcpy_D_to_H ~dst ~src () in
+          Ndarray.map { f } hosted;
+          true
+      | _ -> false)
+
+let merge ?(name_suffix = "") la ~dst ~accum ~src =
+  let ord ctx = ctx.device.ordinal in
+  let name =
+    [%string
+      "merge_into_%{la.Lazy_array.id#Int}_from_dev_%{ord src#Int}_to_dev_%{ord dst#Int}_%{name_suffix}"]
+  in
+  ignore (name, accum);
+  failwith "NOT IMPLEMENTED YET"
 
 let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
 let pp_comma ppf () = Caml.Format.fprintf ppf ",@ "
@@ -129,6 +164,7 @@ let get_array ~traced_store:_ ctx_info (key : LA.t) =
     let hosted = Lazy.force key.array in
     let size_in_bytes = size_in_elems * Ops.prec_in_bytes key.prec in
     let is_on_host = !(key.hosted) in
+    assert (Bool.(Option.is_some hosted = is_on_host));
     let is_double = Ops.is_double_prec key.prec in
     let num_typ = prec_to_c_type key.prec in
     let mem = if not is_on_host then Local_only else Global in
