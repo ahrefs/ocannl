@@ -80,8 +80,8 @@ let propagate_shape_updates () =
   List.iter ~f:Shape.propagate_shapes session_state.shape_updates;
   session_state.shape_updates <- []
 
-let default_value_prec = ref Ndarray.single
-let default_grad_prec = ref Ndarray.single
+let default_value_prec = ref Ops.single
+let default_grad_prec = ref Ops.single
 
 exception Session_error of string * t option [@@deriving sexp]
 
@@ -104,7 +104,7 @@ let lazy_projections shape_update =
 
 let fetch_zeros array shape = Assignments.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
 let fetch_ones array shape = Assignments.Fetch { array; fetch_op = Constant 1.; dims = lazy_to_dims shape }
-let default_init_op = Low_level.Constant_fill [| 0.0 |]
+let default_init_op = Ops.Constant_fill [| 0.0 |]
 let max_sublabel_length = ref 25
 
 let raw_binop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs1_is_grad ~t2 ~rhs2_is_grad ~logic =
@@ -145,7 +145,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
   let label = op_label ^ if String.is_empty desc_label then "" else "/" ^ desc_label in
   let prec =
     List.map ts ~f:(fun ti -> ti.value.prec)
-    |> List.reduce ~f:Ndarray.promote_prec
+    |> List.reduce ~f:Ops.promote_prec
     |> Option.value ~default:!default_value_prec
   in
   let v = LA.create prec ~id ~label ~dims ~literal:false default_init_op in
@@ -175,7 +175,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
         if e then session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.id);
     let g_prec =
       let f ti = Option.map ti.diff ~f:(fun d -> d.grad.LA.prec) in
-      Option.value ~default:!default_grad_prec @@ List.reduce ~f:Ndarray.promote_prec @@ List.filter_map ts ~f
+      Option.value ~default:!default_grad_prec @@ List.reduce ~f:Ops.promote_prec @@ List.filter_map ts ~f
     in
     let g = LA.create g_prec ~id ~label:("grad " ^ label) ~dims ~literal:false default_init_op in
     let dcode ti = Option.value_map ti.diff ~default:Assignments.Noop in
@@ -219,7 +219,7 @@ let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axi
     ?fetch_op () =
   let literal : bool =
     if is_require_grad grad_spec then false
-    else match (init_op, fetch_op) with Some (Low_level.Constant_fill [| _ |]), None -> true | _ -> false
+    else match (init_op, fetch_op) with Some (Ops.Constant_fill [| _ |]), None -> true | _ -> false
   in
   let op_asn ~v ~projections =
     let open Assignments in
@@ -228,7 +228,7 @@ let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axi
     | None ->
         if literal && Low_level.virtualize_settings.inline_constants then
           let fetch_op =
-            match init_op with Some (Low_level.Constant_fill [| c |]) -> Constant c | _ -> assert false
+            match init_op with Some (Ops.Constant_fill [| c |]) -> Constant c | _ -> assert false
           in
           Fetch { array = v; fetch_op; dims }
         else Noop
@@ -271,7 +271,7 @@ let ndarray ?desc_label ?(grad_spec = Prohibit_grad) ?(batch_dims = []) ?(input_
         Caml.Format.pp_set_geometry Caml.Format.str_formatter ~max_indent:!max_sublabel_length
           ~margin:(!max_sublabel_length * 2);
         let dims = Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list in
-        let ndarr = Ndarray.create_array Ndarray.double ~dims (Constant_fill values) in
+        let ndarr = Ndarray.create_array Ops.double ~dims (Constant_fill values) in
         let ( ! ) = List.length in
         Ndarray.pp_array_inline ~num_batch_axes:!batch_dims ~num_output_axes:!output_dims
           ~num_input_axes:!input_dims Caml.Format.str_formatter ndarr;
@@ -288,7 +288,7 @@ let ndarray ?desc_label ?(grad_spec = Prohibit_grad) ?(batch_dims = []) ?(input_
 
 let param ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?values label =
   let init_op =
-    match values with Some values -> Low_level.Constant_fill values | None -> Standard_uniform
+    match values with Some values -> Ops.Constant_fill values | None -> Standard_uniform
   in
   let t =
     term ?desc_label ~grad_spec:Require_grad ~batch_dims:[] ?input_dims ?output_dims ?axis_labels ?deduced

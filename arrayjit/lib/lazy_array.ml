@@ -3,7 +3,7 @@ module Nd = Ndarray
 
 type t = {
   array : Nd.t option Lazy.t;
-  prec : Nd.prec;
+  prec : Ops.prec;
   dims : int array Lazy.t;
   id : int;
   label : string;  (** An optional display information. *)
@@ -42,7 +42,7 @@ let dims_to_string ?(with_axis_numbers = false) arr =
     if Lazy.is_val arr.dims then Nd.int_dims_to_string ~with_axis_numbers @@ Lazy.force arr.dims
     else "<not-in-yet>"
   in
-  Nd.prec_string arr.prec ^ " prec " ^ dims_s
+  Ops.prec_string arr.prec ^ " prec " ^ dims_s
 
 let header arr =
   let mem_size =

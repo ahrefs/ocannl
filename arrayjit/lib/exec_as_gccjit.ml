@@ -64,7 +64,7 @@ let get_array { context; ctx; func; arrays; traced_store; init_block } key : nda
       let tn = Low_level.(get_node traced_store key) in
       let dims = Lazy.force key.dims in
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
-      let size_in_bytes = size_in_elems * Ndarray.prec_in_bytes key.prec in
+      let size_in_bytes = size_in_elems * Ops.prec_in_bytes key.prec in
       let is_on_host = !(key.hosted) in
       let c_void_ptr = Type.(get ctx Type.Void_ptr) in
       let c_index = Type.get ctx Type.Size_t in
@@ -107,23 +107,23 @@ let get_array { context; ctx; func; arrays; traced_store; init_block } key : nda
 let prec_to_kind prec =
   let open Gccjit in
   match prec with
-  | Ndarray.Void_prec -> Type.Void
+  | Ops.Void_prec -> Type.Void
   | Half_prec _ -> (* FIXME: *) Type.Unsigned_short
   | Single_prec _ -> Type.Float
   | Double_prec _ -> Type.Double
 
-let prec_is_double = function Ndarray.Double_prec _ -> true | _ -> false
+let prec_is_double = function Ops.Double_prec _ -> true | _ -> false
 
 let is_builtin_op = function
-  | Low_level.Add | Low_level.Sub | Low_level.Mul | Low_level.Div -> true
-  | Low_level.ToPowOf | Low_level.Relu_gate | Low_level.Arg2 | Low_level.Arg1 -> false
+  | Ops.Add | Sub | Mul | Div -> true
+  | ToPowOf | Relu_gate | Arg2 | Arg1 -> false
 
 let builtin_op = function
-  | Low_level.Add -> Gccjit.Plus
-  | Low_level.Sub -> Gccjit.Minus
-  | Low_level.Mul -> Gccjit.Mult
-  | Low_level.Div -> Gccjit.Divide
-  | Low_level.ToPowOf | Low_level.Relu_gate | Low_level.Arg2 | Low_level.Arg1 ->
+  | Ops.Add -> Gccjit.Plus
+  | Sub -> Gccjit.Minus
+  | Mul -> Gccjit.Mult
+  | Div -> Gccjit.Divide
+  | ToPowOf | Relu_gate | Arg2 | Arg1 ->
       invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
 
 let get_ptr array =
@@ -165,23 +165,23 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
   let current_block = ref initial_block in
   let loop_binop op ~num_typ ~is_double ~v1 ~v2 =
     match op with
-    | Low_level.Add -> RValue.binary_op ctx Plus num_typ v1 v2
-    | Low_level.Sub -> RValue.binary_op ctx Minus num_typ v1 v2
-    | Low_level.Mul -> RValue.binary_op ctx Mult num_typ v1 v2
-    | Low_level.Div -> RValue.binary_op ctx Divide num_typ v1 v2
-    | Low_level.ToPowOf when is_double ->
+    | Ops.Add -> RValue.binary_op ctx Plus num_typ v1 v2
+    | Sub -> RValue.binary_op ctx Minus num_typ v1 v2
+    | Mul -> RValue.binary_op ctx Mult num_typ v1 v2
+    | Div -> RValue.binary_op ctx Divide num_typ v1 v2
+    | ToPowOf when is_double ->
         let base = RValue.cast ctx v1 c_double in
         let expon = RValue.cast ctx v2 c_double in
         RValue.cast ctx (RValue.call ctx (Function.builtin ctx "pow") [ base; expon ]) num_typ
-    | Low_level.ToPowOf ->
+    | ToPowOf ->
         let base = RValue.cast ctx v1 c_float in
         let expon = RValue.cast ctx v2 c_float in
         RValue.cast ctx (RValue.call ctx (Function.builtin ctx "powf") [ base; expon ]) num_typ
-    | Low_level.Relu_gate ->
+    | Relu_gate ->
         let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) v1 in
         RValue.binary_op ctx Mult num_typ cmp @@ v2
-    | Low_level.Arg2 -> v2
-    | Low_level.Arg1 -> v1
+    | Arg2 -> v2
+    | Arg1 -> v1
   in
   let log_comment c =
     (if !Low_level.with_debug && !Low_level.executor_print_comments then
@@ -266,11 +266,11 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         (* FIXME(194): Convert according to array.typ ?= num_typ. *)
         RValue.lvalue @@ LValue.access_array (get_ptr array) offset
-    | Binop (Low_level.Arg2, _, c2) -> loop c2
-    | Binop (Low_level.Arg1, c1, _) -> loop c1
+    | Binop (Arg2, _, c2) -> loop c2
+    | Binop (Arg1, c1, _) -> loop c1
     | Binop (op, c1, c2) -> loop_binop op ~num_typ ~is_double ~v1:(loop c1) ~v2:(loop c2)
-    | Unop (Low_level.Identity, c) -> loop c
-    | Unop (Low_level.Relu, c) ->
+    | Unop (Identity, c) -> loop c
+    | Unop (Relu, c) ->
         (* FIXME: don't recompute c *)
         let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) @@ loop c in
         RValue.binary_op ctx Mult num_typ cmp @@ loop c

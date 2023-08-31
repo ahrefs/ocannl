@@ -1,0 +1,131 @@
+open Base
+(** Operation types shared by all backends; and precision types. *)
+
+(** {2 *** Operations ***} *)
+
+(** Initializes or resets a array by filling in the corresponding numbers, at the appropriate precision. *)
+type init_op =
+  | Constant_fill of float array
+      (** Fills in the numbers where the rightmost axis is contiguous, looping over the provided values. *)
+  | Range_over_offsets
+      (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
+  | Standard_uniform  (** Draws the values from U(0,1). *)
+[@@deriving sexp]
+
+type binop = Add | Sub | Mul | Div | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp, compare, equal]
+type unop = Identity | Relu [@@deriving sexp, compare, equal]
+
+let interpret_binop op v1 v2 =
+  let open Float in
+  match op with
+  | Arg1 -> v1
+  | Arg2 -> v2
+  | Add -> v1 + v2
+  | Sub -> v1 - v2
+  | Mul -> v1 * v2
+  | Div -> v1 / v2
+  | ToPowOf -> if is_integer v2 then int_pow v1 @@ to_int v2 else v1 ** v2
+  | Relu_gate -> if v1 > 0.0 then v2 else 0.0
+
+let interpret_unop op v =
+  let open Float in
+  match op with Identity -> v | Relu when v >= 0. -> v | Relu -> 0.
+
+(** {2 *** Precision ***} *)
+
+(* FIXME: Upcoming in OCaml 5.2.0. See:
+   https://github.com/ocaml/ocaml/pull/10775/commits/ba6a2c378056c8669fb1bb99bf07b12d69bd4a12 *)
+type float16_elt = Bigarray.float32_elt
+type float32_elt = Bigarray.float32_elt
+type float64_elt = Bigarray.float64_elt
+
+let float16 : (float, float16_elt) Bigarray.kind = Bigarray.float32
+
+type 'a precision =
+  | Half : float16_elt precision
+  | Single : float32_elt precision
+  | Double : float64_elt precision
+[@@deriving sexp_of]
+
+type prec =
+  | Void_prec
+  | Half_prec of float16_elt precision
+  | Single_prec of float32_elt precision
+  | Double_prec of float64_elt precision
+
+let half = Half_prec Half
+let single = Single_prec Single
+let double = Double_prec Double
+
+let sexp_of_prec = function
+  | Void_prec -> Sexp.Atom "Void_prec"
+  | Half_prec _ -> Sexp.Atom "Half_prec"
+  | Single_prec _ -> Sexp.Atom "Single_prec"
+  | Double_prec _ -> Sexp.Atom "Double_prec"
+
+let prec_of_sexp = function
+  | Sexp.Atom "Void_prec" -> Void_prec
+  | Sexp.Atom "Half_prec" -> half
+  | Sexp.Atom "Single_prec" -> single
+  | Sexp.Atom "Double_prec" -> double
+  | Sexp.List _ -> invalid_arg "prec_of_sexp: expected atom, found list"
+  | Sexp.Atom s -> invalid_arg @@ "prec_of_sexp: unknown precision " ^ s
+
+let precision_to_string (type elt_t) (prec : elt_t precision) =
+  match prec with Half -> "half" | Single -> "single" | Double -> "double"
+
+let prec_string = function
+  | Void_prec -> "void"
+  | Half_prec _ -> "half"
+  | Single_prec _ -> "single"
+  | Double_prec _ -> "double"
+
+let equal_prec p1 p2 =
+  match (p1, p2) with
+  | Void_prec, Void_prec -> true
+  | Half_prec _, Half_prec _ -> true
+  | Single_prec _, Single_prec _ -> true
+  | Double_prec _, Double_prec _ -> true
+  | Void_prec, _ | Half_prec _, _ | Single_prec _, _ | Double_prec _, _ -> false
+
+let prec_in_bytes = function Void_prec -> 0 | Half_prec _ -> 2 | Single_prec _ -> 4 | Double_prec _ -> 8
+
+let promote_prec p1 p2 =
+  match (p1, p2) with
+  | Double_prec _, _ -> p1
+  | _, Double_prec _ -> p2
+  | Single_prec _, _ -> p1
+  | _, Single_prec _ -> p2
+  | Half_prec _, _ -> p1
+  | _, Half_prec _ -> p2
+  | Void_prec, Void_prec -> Void_prec
+
+let is_double (type elt_t) (prec : elt_t precision) = match prec with Double -> true | _ -> false
+let is_double_prec = function Double_prec _ -> true | _ -> false
+
+let pack_prec (type elt_t) (prec : elt_t precision) =
+  match prec with Half -> half | Single -> single | Double -> double
+
+type 'r map_prec = { f : 'elt_t. 'elt_t precision -> 'r }
+
+let map_prec ?default { f } = function
+  | Void_prec -> Option.value_or_thunk default ~default:(fun () -> invalid_arg "map_prec: Void_prec")
+  | Half_prec (Half | Single) -> f Half
+  | Single_prec (Single | Half) -> f Single
+  | Double_prec Double -> f Double
+  | _ -> .
+
+(** {2 *** Global references ***} *)
+
+type voidptr = unit Ctypes.ptr
+
+let equal_voidptr : voidptr -> voidptr -> bool = phys_equal
+
+type global_identifier =
+  | C_function of string  (** Calls a no-argument or indices-arguments C function. *)
+  | External_unsafe of {
+      ptr : (voidptr[@sexp.opaque]);
+      prec : (prec[@equal.ignore] [@compare.ignore]);
+      dims : int array Lazy.t;
+    }
+[@@deriving sexp, equal]

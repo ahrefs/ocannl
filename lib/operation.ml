@@ -1,4 +1,4 @@
-(** Computational primitives for neural networks, integrating [Tensor] with [Low_level]. *)
+(** Computational primitives for neural networks, integrating [Tensor] with [Assignments]. *)
 
 open Base
 module CDSL = Arrayjit.Low_level.CDSL

@@ -35,19 +35,19 @@ type projections_slot = LHS | RHS1 | RHS2 | Nonslot | Undet [@@deriving equal, s
 let assignment_op expr =
   let loc = expr.pexp_loc in
   match expr with
-  | [%expr ( =: )] -> (false, [%expr Arrayjit.Low_level.Arg2])
-  | [%expr ( =+ )] -> (false, [%expr Arrayjit.Low_level.Add])
-  | [%expr ( =- )] -> (false, [%expr Arrayjit.Low_level.Sub])
-  | [%expr ( =* )] -> (false, [%expr Arrayjit.Low_level.Mul])
-  | [%expr ( =/ )] -> (false, [%expr Arrayjit.Low_level.Div])
-  | [%expr ( =** )] -> (false, [%expr Arrayjit.Low_level.ToPowOf])
-  | [%expr ( =?/ )] -> (false, [%expr Arrayjit.Low_level.Relu_gate])
-  | [%expr ( =:+ )] -> (true, [%expr Arrayjit.Low_level.Add])
-  | [%expr ( =:- )] -> (true, [%expr Arrayjit.Low_level.Sub])
-  | [%expr ( =:* )] -> (true, [%expr Arrayjit.Low_level.Mul])
-  | [%expr ( =:/ )] -> (true, [%expr Arrayjit.Low_level.Div])
-  | [%expr ( =:** )] -> (true, [%expr Arrayjit.Low_level.ToPowOf])
-  | [%expr ( =:?/ )] -> (true, [%expr Arrayjit.Low_level.Relu_gate])
+  | [%expr ( =: )] -> (false, [%expr Arrayjit.Ops.Arg2])
+  | [%expr ( =+ )] -> (false, [%expr Arrayjit.Ops.Add])
+  | [%expr ( =- )] -> (false, [%expr Arrayjit.Ops.Sub])
+  | [%expr ( =* )] -> (false, [%expr Arrayjit.Ops.Mul])
+  | [%expr ( =/ )] -> (false, [%expr Arrayjit.Ops.Div])
+  | [%expr ( =** )] -> (false, [%expr Arrayjit.Ops.ToPowOf])
+  | [%expr ( =?/ )] -> (false, [%expr Arrayjit.Ops.Relu_gate])
+  | [%expr ( =:+ )] -> (true, [%expr Arrayjit.Ops.Add])
+  | [%expr ( =:- )] -> (true, [%expr Arrayjit.Ops.Sub])
+  | [%expr ( =:* )] -> (true, [%expr Arrayjit.Ops.Mul])
+  | [%expr ( =:/ )] -> (true, [%expr Arrayjit.Ops.Div])
+  | [%expr ( =:** )] -> (true, [%expr Arrayjit.Ops.ToPowOf])
+  | [%expr ( =:?/ )] -> (true, [%expr Arrayjit.Ops.Relu_gate])
   | _ ->
       ( false,
         Ast_builder.Default.pexp_extension ~loc
@@ -58,23 +58,23 @@ let assignment_op expr =
 let binary_op expr =
   let loc = expr.pexp_loc in
   match expr with
-  | [%expr ( + )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Low_level.Add])
-  | [%expr ( - )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Low_level.Sub])
+  | [%expr ( + )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Add])
+  | [%expr ( - )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Sub])
   | [%expr ( * )] ->
       ( Ast_builder.Default.pexp_extension ~loc
         @@ Location.error_extensionf ~loc
              "No default compose type for binary `*`, try e.g. ~logic:\".\" for pointwise, %s"
              "~logic:\"@\" for matrix multiplication",
-        [%expr Arrayjit.Low_level.Mul] )
+        [%expr Arrayjit.Ops.Mul] )
   | [%expr ( / )] ->
       ( Ast_builder.Default.pexp_extension ~loc
         @@ Location.error_extensionf ~loc
              "For clarity, no default compose type for binary `/`, use ~logic:\".\" for pointwise division",
-        [%expr Arrayjit.Low_level.Div] )
-  | [%expr ( ** )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Low_level.ToPowOf])
-  | [%expr ( -?/ )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Low_level.Relu_gate])
-  | [%expr ( -/> )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Low_level.Arg2])
-  | [%expr ( -@> )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Low_level.Arg1])
+        [%expr Arrayjit.Ops.Div] )
+  | [%expr ( ** )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.ToPowOf])
+  | [%expr ( -?/ )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Relu_gate])
+  | [%expr ( -/> )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Arg2])
+  | [%expr ( -@> )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Arg1])
   | _ ->
       ( [%expr Shape.Pointwise_bin],
         Ast_builder.Default.pexp_extension ~loc
@@ -86,8 +86,8 @@ let is_binary_op ident = List.mem [ "+"; "-"; "*"; "/"; "**"; "-?/"; "-/>"; "-@>
 let unary_op expr =
   let loc = expr.pexp_loc in
   match expr with
-  | [%expr ( ~= )] -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Low_level.Identity])
-  | [%expr ( !/ )] -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Low_level.Relu])
+  | [%expr ( ~= )] -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Identity])
+  | [%expr ( !/ )] -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Relu])
   | _ ->
       ( [%expr Shape.Pointwise_un],
         Ast_builder.Default.pexp_extension ~loc
@@ -344,7 +344,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
                      zero_out = [%e zero_out];
                      accum = [%e accu_op];
                      lhs;
-                     op = Arrayjit.Low_level.Identity;
+                     op = Arrayjit.Ops.Identity;
                      rhs;
                      projections = [%e projections];
                    })]
@@ -536,7 +536,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
                      zero_out = [%e zero_out];
                      accum = [%e accu_op];
                      lhs;
-                     op = Arrayjit.Low_level.Identity;
+                     op = Arrayjit.Ops.Identity;
                      rhs;
                      projections = [%e projections];
                    })]
@@ -626,7 +626,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
       let body =
         [%expr
           Tensor.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~t:[%e t_expr]
-            ~lhs_is_grad:[%e lhs_is_grad] ~op:Arrayjit.Low_level.Identity ~t1:[%e t1_expr]
+            ~lhs_is_grad:[%e lhs_is_grad] ~op:Arrayjit.Ops.Identity ~t1:[%e t1_expr]
             ~rhs_is_grad:[%e rhs_is_grad] ~logic:Shape.Pointwise_un]
       in
       let setups = List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r ] in

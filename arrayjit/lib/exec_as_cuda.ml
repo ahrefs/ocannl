@@ -69,7 +69,7 @@ let get_run_ptr array =
   | None, None -> assert false
 
 let prec_to_c_type = function
-  | Ndarray.Void_prec -> "void"
+  | Ops.Void_prec -> "void"
   | Half_prec _ -> (* FIXME: *) "uint16"
   | Single_prec _ -> "float"
   | Double_prec _ -> "double"
@@ -86,9 +86,9 @@ let get_array ~traced_store:_ v =
       let dims = Lazy.force v.dims in
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
       let hosted = Lazy.force v.array in
-      let size_in_bytes = size_in_elems * Ndarray.prec_in_bytes v.prec in
+      let size_in_bytes = size_in_elems * Ops.prec_in_bytes v.prec in
       let is_on_host = !(v.hosted) in
-      let is_double = Ndarray.is_double_prec v.prec in
+      let is_double = Ops.is_double_prec v.prec in
       let num_typ = prec_to_c_type v.prec in
       let mem = if not is_on_host then Local_only else Global in
       let global =
@@ -105,7 +105,7 @@ let get_array ~traced_store:_ v =
 
 let jit_binop ~num_typ:_ ~is_double op =
   match op with
-  | Low_level.Arg1 -> assert false
+  | Ops.Arg1 -> assert false
   | Arg2 -> assert false
   | Add -> ("(", " +", ")")
   | Sub -> ("(", " -", ")")
@@ -190,7 +190,7 @@ let jit_code ~traced_store ppf llc : unit =
         (* Arrays are initialized to 0 by default. However, there is typically an explicit
            initialization for virtual nodes. *)
         fprintf ppf "@[<2>{@ %s v%d = 0;@ " typ i;
-        locals := Map.update !locals id ~f:(fun _ -> (typ, Ndarray.is_double_prec prec));
+        locals := Map.update !locals id ~f:(fun _ -> (typ, Ops.is_double_prec prec));
         pp_ll ppf body;
         pp_print_space ppf ();
         1

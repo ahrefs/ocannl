@@ -4,7 +4,7 @@ open Base
 module LA = Lazy_array
 
 (** Resets a array by performing the specified computation or data fetching. *)
-type fetch_op = Constant of float | Imported of Low_level.global_identifier
+type fetch_op = Constant of float | Imported of Ops.global_identifier
 [@@deriving sexp_of]
 
 and t =
@@ -13,8 +13,8 @@ and t =
   | Block_comment of string * t  (** Same as the given code, with a comment. *)
   | Accum_binop of {
       zero_out : bool;
-      accum : Low_level.binop;
-      op : Low_level.binop;
+      accum : Ops.binop;
+      op : Ops.binop;
       lhs : LA.t;
       rhs1 : LA.t;
       rhs2 : LA.t;
@@ -22,8 +22,8 @@ and t =
     }
   | Accum_unop of {
       zero_out : bool;
-      accum : Low_level.binop;
-      op : Low_level.unop;
+      accum : Ops.binop;
+      op : Ops.unop;
       lhs : LA.t;
       rhs : LA.t;
       projections : Indexing.projections Lazy.t;

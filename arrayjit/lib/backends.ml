@@ -20,7 +20,7 @@ module type No_device_backend = sig
     ?name_suffix:string ->
     Lazy_array.t ->
     dst:context ->
-    accum:Low_level.binop ->
+    accum:Ops.binop ->
     src:context ->
     compiled option
   (** Merges the array from the source context into the destination context: [dst =: dst accum src].

@@ -1,34 +1,8 @@
 open Base
 (** The code for operating on n-dimensional arrays. *)
 
-type binop = Add | Sub | Mul | Div | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp, compare, equal]
-type unop = Identity | Relu [@@deriving sexp, compare, equal]
-
 module Nd = Ndarray
 module LA = Lazy_array
-
-type voidptr = unit Ctypes.ptr
-
-let equal_voidptr : voidptr -> voidptr -> bool = phys_equal
-
-type global_identifier =
-| C_function of string  (** Calls a no-argument C function. *)
-| External_unsafe of {
-  ptr : (voidptr[@sexp.opaque]);
-  prec : (Nd.prec[@equal.ignore][@compare.ignore]);
-  dims : int array Lazy.t;
-}
-[@@deriving sexp, equal]
-
-(** Initializes a array by filling in the corresponding numbers, at the appropriate precision. *)
-type init_op = Nd.init_op =
-  | Constant_fill of float array
-      (** Fills in the numbers where the rightmost axis is contiguous, looping over the provided values
-      if necessary. *)
-  | Range_over_offsets
-      (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
-  | Standard_uniform  (** Draws the values from U(0,1). *)
-[@@deriving sexp]
 
 type scope_id = { nd : LA.t; scope_id : int } [@@deriving sexp_of, equal, hash]
 (** *** Low-level representation. *)
@@ -54,20 +28,20 @@ type t =
 and float_t =
   | Local_scope of {
       id : scope_id;
-      prec : (Nd.prec[@equal.ignore]);
+      prec : (Ops.prec[@equal.ignore]);
       body : t;
       orig_indices : Indexing.axis_index array;
     }
   | Get_local of scope_id
-  | Get_global of global_identifier * Indexing.axis_index array option
+  | Get_global of Ops.global_identifier * Indexing.axis_index array option
   | Get of LA.t * Indexing.axis_index array
-  | Binop of binop * float_t * float_t
-  | Unop of unop * float_t
+  | Binop of Ops.binop * float_t * float_t
+  | Unop of Ops.unop * float_t
   | Constant of float
 [@@deriving sexp_of, equal]
 
-let binop ~op ~rhs1 ~rhs2 = match op with Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Binop (op, rhs1, rhs2)
-let unop ~op ~rhs = match op with Identity -> rhs | _ -> Unop (op, rhs)
+let binop ~op ~rhs1 ~rhs2 = match op with Ops.Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Binop (op, rhs1, rhs2)
+let unop ~op ~rhs = match op with Ops.Identity -> rhs | _ -> Unop (op, rhs)
 let rec flat_lines ts = List.concat_map ts ~f:(function Seq (t1, t2) -> flat_lines [ t1; t2 ] | t -> [ t ])
 
 let rec unflat_lines = function
@@ -85,18 +59,6 @@ let executor_print_comments = ref false
 let keep_files_in_run_directory = ref false
 let with_debug = ref false
 let debug_verbose_trace = ref false
-
-let interpret_binop op v1 v2 =
-  let open Float in
-  match op with
-  | Arg1 -> v1
-  | Arg2 -> v2
-  | Add -> v1 + v2
-  | Sub -> v1 - v2
-  | Mul -> v1 * v2
-  | Div -> v1 / v2
-  | ToPowOf -> if is_integer v2 then int_pow v1 @@ to_int v2 else v1 ** v2
-  | Relu_gate -> if v1 > 0.0 then v2 else 0.0
 
 type 'a environment = 'a Map.M(Indexing.Symbol).t
 
@@ -678,7 +640,7 @@ let simplify_llc traced_store llc =
     | Get_global _ -> llv
     | Binop (Arg1, llv1, _) -> loop_float llv1
     | Binop (Arg2, _, llv2) -> loop_float llv2
-    | Binop (op, Constant c1, Constant c2) -> Constant (interpret_binop op c1 c2)
+    | Binop (op, Constant c1, Constant c2) -> Constant (Ops.interpret_binop op c1 c2)
     | Binop (Add, llv, Constant 0.) | Binop (Sub, llv, Constant 0.) | Binop (Add, Constant 0., llv) ->
         loop_float llv
     | Binop (Sub, Constant 0., llv) -> loop_float @@ Binop (Mul, Constant (-1.), llv)
@@ -728,6 +690,7 @@ let simplify_llc traced_store llc =
         let result = Binop (op, v1, v2) in
         if equal_float_t llv1 v1 && equal_float_t llv2 v2 then result else loop_float result
     | Unop (Identity, llv) -> loop_float llv
+    | Unop (op, Constant c) -> Constant (Ops.interpret_unop op c)
     | Unop (op, llv) ->
         let v = loop_float llv in
         let result = Unop (op, v) in
@@ -789,8 +752,8 @@ let loop_over_dims dims ~body =
   for_loop [] (Array.to_list dims)
 
 module CDSL = struct
-  let single = Nd.single
-  let double = Nd.double
+  let single = Ops.single
+  let double = Ops.double
   let executor_print_comments = executor_print_comments
   let keep_files_in_run_directory = keep_files_in_run_directory
   let with_debug = with_debug
