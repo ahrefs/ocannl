@@ -5,6 +5,7 @@ module type No_device_backend = sig
   type compiled = { context : context; run : unit -> unit  (** Potentially asynchronous. *) }
 
   val initialize : unit -> unit
+  val is_initialized : unit -> bool
   val init : unit -> context
   val finalize : context -> unit
   val compile : context -> name:string -> ?verbose:bool -> Assignments.t -> compiled
@@ -52,6 +53,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let init device = { device; ctx = Backend.init () }
   let initialize = Backend.initialize
+  let is_initialized = Backend.is_initialized
 
   let await device =
     while Option.is_some !(device.next_task) do
@@ -124,6 +126,7 @@ module Gccjit_device : No_device_backend with type context = Exec_as_gccjit.cont
   open Exec_as_gccjit
 
   let initialize = initialize
+  let is_initialized = is_initialized
   let unsafe_cleanup = unsafe_cleanup
   let init = init
   let finalize = finalize
@@ -146,6 +149,7 @@ module Cuda_backend : Backend with type context = Exec_as_cuda.context = struct
   open Exec_as_cuda
 
   let initialize = initialize
+  let is_initialized = is_initialized
   let unsafe_cleanup = unsafe_cleanup
   let init = init
   let finalize = finalize
@@ -162,3 +166,9 @@ module Cuda_backend : Backend with type context = Exec_as_cuda.context = struct
   let get_ctx_device = get_ctx_device
   let to_ordinal = to_ordinal
 end
+
+let reinitialize (module Backend : Backend) =
+  if not @@ Backend.is_initialized () then Backend.initialize ()
+  else (
+    Core.Gc.full_major ();
+    Backend.unsafe_cleanup ())

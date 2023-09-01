@@ -40,7 +40,14 @@ type ctx_info = {
 }
 
 let init device = { ctx = device.primary_context; device; arrays = Map.empty (module LA); run_module = None }
-let initialize () = Cudajit.init ()
+
+let is_initialized, initialize =
+  let initialized = ref false in
+  ( (fun () -> !initialized),
+    fun () ->
+      initialized := true;
+      Cudajit.init () )
+
 let num_devices = Cudajit.device_get_count
 let devices = Res.Weak.empty ()
 
@@ -66,10 +73,10 @@ let finalize ctx =
   if Option.is_some @@ Res.Weak.get devices ctx.device.ordinal then (
     set_ctx ctx.device.primary_context;
     Option.iter ctx.run_module ~f:Cudajit.module_unload;
-    Map.iter ctx.arrays ~f:(fun array ->
-        Option.iter array.global ~f:(fun (_, ptr) -> Cudajit.mem_free ptr)))
+    Map.iter ctx.arrays ~f:(fun array -> Option.iter array.global ~f:(fun (_, ptr) -> Cudajit.mem_free ptr)))
 
 let unsafe_cleanup () =
+  (* TODO: maybe better to do device_primary_ctx_reset. *)
   Res.Weak.iter (function None -> () | Some device -> Cudajit.device_primary_ctx_release device.dev) devices;
   Res.Weak.clear devices
 
