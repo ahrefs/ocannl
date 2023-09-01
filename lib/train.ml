@@ -2,6 +2,17 @@ open Base
 open Arrayjit
 module NTDSL = Operation.NTDSL
 
+let fresh_backend ?(verbose = true) () =
+  let open Arrayjit.Backends in
+  let backend =
+    match Utils.get_global_arg ~verbose ~arg_name:"backend" ~default:"gccjit" |> String.lowercase with
+    | "gccjit" -> (module Gccjit_backend : Backend)
+    | "cuda" -> (module Cuda_backend : Backend)
+    | backend -> invalid_arg [%string "Train.fresh_backend: unknown backend %{backend}"]
+  in
+  reinitialize backend;
+  backend
+
 let is_param t =
   match t with
   | { Tensor.children = []; value = { literal = false; _ }; diff = Some _; _ } -> true

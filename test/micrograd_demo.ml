@@ -4,9 +4,6 @@ module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Arrayjit.Low_level.CDSL
 
-
-
-
 let%expect_test "Micrograd README basic example" =
   (* SDSL.drop_all_sessions (); *)
   Random.init 0;
@@ -23,7 +20,11 @@ let%expect_test "Micrograd README basic example" =
   Tensor.set_fully_on_host g;
   Tensor.set_fully_on_host a;
   Tensor.set_fully_on_host b;
-  (* refresh_session (); *)
+  let module Backend = (val Train.fresh_backend ~verbose:false ()) in
+  Arrayjit.Backends.reinitialize (module Backend);
+  let ctx = Backend.(init @@ get_device ~ordinal:0) in
+  let step = Backend.compile ctx ~name:"g_step" @@ Train.update_loss g in
+  step.run ();
   Tensor.print ~with_code:false ~with_grad:false `Default @@ g;
   [%expect
     {|
@@ -92,13 +93,9 @@ let%expect_test "Micrograd half-moons example" =
             let c = cos v and s = sin v in
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
-  let moons_flat =
-    TDSL.init_const ~l:"moons_flat" ~b:[ epochs; batch ] ~o:[ 2 ] moons_flat
-  in
+  let moons_flat = TDSL.init_const ~l:"moons_flat" ~b:[ epochs; batch ] ~o:[ 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes =
-    TDSL.init_const ~l:"moons_classes" ~b:[ epochs; batch ] ~o:[ 1 ] moons_classes
-  in
+  let moons_classes = TDSL.init_const ~l:"moons_classes" ~b:[ epochs; batch ] ~o:[ 1 ] moons_classes in
   let%op mlp x = "b3" 1 + ("w3" * !/("b2" 16 + ("w2" * !/("b1" 16 + ("w1" * x))))) in
   let steps = epochs * 2 * len / batch in
   let session_step = NTDSL.O.(NTDSL.counter !..1) in
