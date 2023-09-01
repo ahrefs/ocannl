@@ -5,7 +5,7 @@ module NTDSL = Operation.NTDSL
 module CDSL = Arrayjit.Low_level.CDSL
 
 let%expect_test "Micrograd README basic example" =
-  (* SDSL.drop_all_sessions (); *)
+  let module Backend = (val Train.fresh_backend ~verbose:false ()) in
   Random.init 0;
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = (a *. b) + (b **. 3) in
@@ -14,14 +14,12 @@ let%expect_test "Micrograd README basic example" =
   let%op d = d + (d *. 2) + !/(b + a) in
   let%op d = d + (3 *. d) + !/(b - a) in
   let%op e = c - d in
-  let%op f = e *. e in
+  let%op f = e **. 2 in
   let%op g = f /. 2 in
   let%op g = g + (10. /. f) in
   Tensor.set_fully_on_host g;
   Tensor.set_fully_on_host a;
   Tensor.set_fully_on_host b;
-  let module Backend = (val Train.fresh_backend ~verbose:false ()) in
-  Arrayjit.Backends.reinitialize (module Backend);
   let ctx = Backend.(init @@ get_device ~ordinal:0) in
   let step = Backend.compile ctx ~name:"g_step" @@ Train.update_loss g in
   step.run ();
@@ -76,8 +74,8 @@ let%expect_test "Micrograd README basic example" =
     └─────────────────────────────┘ |}]
 
 let%expect_test "Micrograd half-moons example" =
+  let module Backend = (val Train.fresh_backend ~verbose:false ()) in
   let open Tensor.O in
-  (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let len = 200 in
   let batch = 10 in

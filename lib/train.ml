@@ -3,7 +3,7 @@ open Arrayjit
 module NTDSL = Operation.NTDSL
 
 let fresh_backend ?(verbose = true) () =
-  let open Arrayjit.Backends in
+  let open Backends in
   let backend =
     match Utils.get_global_arg ~verbose ~arg_name:"backend" ~default:"gccjit" |> String.lowercase with
     | "gccjit" -> (module Gccjit_backend : Backend)

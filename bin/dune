@@ -54,14 +54,6 @@
  (modes exe))
 
 (executable
- (name parallel_trivia)
- (modules parallel_trivia)
- (libraries ocannl base stdio)
- (preprocess
-  (pps ppx_jane ppx_ocannl))
- (modes exe))
-
-(executable
  (name micrograd_basic)
  (modules micrograd_basic)
  (libraries ocannl base stdio)
