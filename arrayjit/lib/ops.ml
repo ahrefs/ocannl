@@ -10,6 +10,7 @@ type init_op =
   | Range_over_offsets
       (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
   | Standard_uniform  (** Draws the values from U(0,1). *)
+  | File_mapped of string  (** Reads the data using [Unix.openfile] and [Unix.map_file]. *)
 [@@deriving sexp]
 
 type binop = Add | Sub | Mul | Div | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp, compare, equal]

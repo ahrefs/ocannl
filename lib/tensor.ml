@@ -546,7 +546,7 @@ let grad_2d_points ?from_axis ~xdim ~ydim t =
 
 let set_value t = Nd.set_from_float @@ Option.value_exn @@ Lazy.force t.value.array
 let get_value t = Nd.get_as_float @@ Option.value_exn @@ Lazy.force t.value.array
-let set_values t cs = Ndarray.(init (Constant_fill cs) @@ Option.value_exn @@ Lazy.force t.value.array)
+let set_values t cs = Ndarray.(reset (Constant_fill cs) @@ Option.value_exn @@ Lazy.force t.value.array)
 
 module O = struct
   (** Get the value at the given indices. *)

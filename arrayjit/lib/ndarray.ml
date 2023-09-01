@@ -30,7 +30,6 @@ let precision_to_bigarray_kind (type elt_t) (prec : elt_t Ops.precision) : (floa
 let precision_string = function Half_nd _ -> "half" | Single_nd _ -> "single" | Double_nd _ -> "double"
 let default_kind = Ops.Single
 let is_double_prec_t = function Double_nd _ -> true | _ -> false
-
 let get_prec = function Half_nd _ -> Ops.half | Single_nd _ -> Ops.single | Double_nd _ -> Ops.double
 
 type 'r map_with_prec = { f : 'elt_t. 'elt_t Ops.precision -> 'elt_t bigarray -> 'r }
@@ -52,8 +51,7 @@ let indices_to_offset ~dims ~idcs =
 
 let fixed_state_for_init = ref None
 
-let create_bigarray (type elt_t) (prec : elt_t Ops.precision) ~dims (init_op : Ops.init_op) : elt_t bigarray
-    =
+let create_bigarray (type elt_t) (prec : elt_t Ops.precision) ~dims (init_op : Ops.init_op) : elt_t bigarray =
   Option.iter !fixed_state_for_init ~f:(fun seed -> Random.init seed);
   match init_op with
   | Constant_fill cs ->
@@ -62,6 +60,17 @@ let create_bigarray (type elt_t) (prec : elt_t Ops.precision) ~dims (init_op : O
   | Range_over_offsets ->
       init_bigarray_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
   | Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
+  | File_mapped filename ->
+      (* See: https://github.com/janestreet/torch/blob/master/src/torch/dataset_helper.ml#L3 *)
+      let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
+      let len = Unix.lseek fd 0 Unix.SEEK_END in
+      ignore (Unix.lseek fd 0 Unix.SEEK_SET : int);
+      let ba =
+        Unix.map_file fd (precision_to_bigarray_kind prec) Bigarray.c_layout false [| len |]
+          ~pos:(Int64.of_int 0)
+      in
+      Unix.close fd;
+      ba
 
 let create_array prec ~dims init_op =
   let f prec = as_array prec @@ create_bigarray prec ~dims init_op in
@@ -115,7 +124,7 @@ let set_from_float arr idx v =
 
 let fill_from_float arr v = map { f = A.fill } arr v
 
-let reset_bigarray arr ~f =
+let set_bigarray arr ~f =
   let dims = A.dims arr in
   let rec cloop idx f col =
     if col = Array.length idx then A.set arr idx (f idx)
@@ -128,18 +137,20 @@ let reset_bigarray arr ~f =
   let len = Array.length dims in
   cloop (Array.create ~len 0) f 0
 
-let init_bigarray (init_op : Ops.init_op) (type b) (arr : b bigarray) =
+let reset_bigarray (init_op : Ops.init_op) (type b) (prec : b Ops.precision) (arr : b bigarray) =
   let dims = A.dims arr in
   match init_op with
   | Constant_fill cs ->
       let size = Array.length cs in
-      reset_bigarray arr ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
-  | Range_over_offsets -> reset_bigarray arr ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Standard_uniform -> reset_bigarray arr ~f:(fun _ -> Random.float_range 0.0 1.0)
+      set_bigarray arr ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
+  | Range_over_offsets -> set_bigarray arr ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
+  | Standard_uniform -> set_bigarray arr ~f:(fun _ -> Random.float_range 0.0 1.0)
+  | File_mapped _ ->
+    A.blit (create_bigarray prec ~dims init_op) arr
 
-let init init_op arr =
-  let f arr = init_bigarray init_op arr in
-  map { f } arr
+let reset init_op arr =
+  let f arr = reset_bigarray init_op arr in
+  map_with_prec { f } arr
 
 let fold_bigarray arr ~init ~f =
   let dims = A.dims arr in
