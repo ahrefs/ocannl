@@ -105,9 +105,11 @@ let get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ct
         { hosted_ptr; global_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
       in
       match (key.prec, Lazy.force key.array) with
+      | _, Some (Byte_nd arr) -> array Type.Unsigned_char false (Some arr)
       | _, Some (Half_nd arr) -> (* FIXME: *) array Type.Float false (Some arr)
       | _, Some (Single_nd arr) -> array Type.Float false (Some arr)
       | _, Some (Double_nd arr) -> array Type.Double true (Some arr)
+      | Byte_prec _, None -> array Type.Unsigned_char false None
       | Half_prec _, None -> (* FIXME: *) array Type.Float false None
       | Single_prec _, None -> array Type.Float false None
       | Double_prec _, None -> array Type.Double true None
@@ -117,6 +119,7 @@ let prec_to_kind prec =
   let open Gccjit in
   match prec with
   | Ops.Void_prec -> Type.Void
+  | Byte_prec _ -> Type.Unsigned_char
   | Half_prec _ -> (* FIXME: *) Type.Unsigned_short
   | Single_prec _ -> Type.Float
   | Double_prec _ -> Type.Double

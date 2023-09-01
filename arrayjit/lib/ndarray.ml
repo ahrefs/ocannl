@@ -5,45 +5,70 @@ module A = Bigarray.Genarray
 
 (** {2 *** Handling of precisions ***} *)
 
-type 'a bigarray = (float, 'a, Bigarray.c_layout) A.t
+type ('ocaml, 'elt_t) bigarray = ('ocaml, 'elt_t, Bigarray.c_layout) A.t
 
-let sexp_of_bigarray (arr : 'a bigarray) =
+let sexp_of_bigarray (arr : ('a, 'b) bigarray) =
   let dims = A.dims arr in
   Sexp.Atom ("bigarray_dims_" ^ String.concat_array ~sep:"x" (Array.map dims ~f:Int.to_string))
 
-type half_nd = Ops.float16_elt bigarray
-type single_nd = Ops.float32_elt bigarray
-type double_nd = Ops.float64_elt bigarray
+type byte_nd = (char, Ops.uint8_elt) bigarray
+type half_nd = (float, Ops.float16_elt) bigarray
+type single_nd = (float, Ops.float32_elt) bigarray
+type double_nd = (float, Ops.float64_elt) bigarray
 
 type t =
+  | Byte_nd of (byte_nd[@sexp.opaque])
   | Half_nd of (half_nd[@sexp.opaque])
   | Single_nd of (single_nd[@sexp.opaque])
   | Double_nd of (double_nd[@sexp.opaque])
 [@@deriving sexp_of]
 
-let as_array (type prec) (prec : prec Ops.precision) (arr : prec bigarray) =
-  match prec with Half -> Half_nd arr | Single -> Single_nd arr | Double -> Double_nd arr
+let as_array (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) (arr : (ocaml, elt_t) bigarray) =
+  match prec with
+  | Byte -> Byte_nd arr
+  | Half -> Half_nd arr
+  | Single -> Single_nd arr
+  | Double -> Double_nd arr
 
-let precision_to_bigarray_kind (type elt_t) (prec : elt_t Ops.precision) : (float, elt_t) Bigarray.kind =
-  match prec with Half -> Bigarray.Float32 | Single -> Bigarray.Float32 | Double -> Bigarray.Float64
+let precision_to_bigarray_kind (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) :
+    (ocaml, elt_t) Bigarray.kind =
+  match prec with
+  | Byte -> Bigarray.Char
+  | Half -> Bigarray.Float32
+  | Single -> Bigarray.Float32
+  | Double -> Bigarray.Float64
 
-let precision_string = function Half_nd _ -> "half" | Single_nd _ -> "single" | Double_nd _ -> "double"
+let precision_string = function
+  | Byte_nd _ -> "byte"
+  | Half_nd _ -> "half"
+  | Single_nd _ -> "single"
+  | Double_nd _ -> "double"
+
 let default_kind = Ops.Single
 let is_double_prec_t = function Double_nd _ -> true | _ -> false
-let get_prec = function Half_nd _ -> Ops.half | Single_nd _ -> Ops.single | Double_nd _ -> Ops.double
 
-type 'r map_with_prec = { f : 'elt_t. 'elt_t Ops.precision -> 'elt_t bigarray -> 'r }
+let get_prec = function
+  | Byte_nd _ -> Ops.byte
+  | Half_nd _ -> Ops.half
+  | Single_nd _ -> Ops.single
+  | Double_nd _ -> Ops.double
+
+type 'r map_with_prec = {
+  f : 'ocaml 'elt_t. ('ocaml, 'elt_t) Ops.precision -> ('ocaml, 'elt_t) bigarray -> 'r;
+}
 
 let map_with_prec { f } = function
+  | Byte_nd arr -> f Byte arr
   | Half_nd arr -> f Half arr
   | Single_nd arr -> f Single arr
   | Double_nd arr -> f Double arr
 
-let create_bigarray_of_prec (type elt_t) (prec : elt_t Ops.precision) dims : elt_t bigarray =
+let create_bigarray_of_prec (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) dims :
+    (ocaml, elt_t) bigarray =
   A.create (precision_to_bigarray_kind prec) Bigarray.C_layout dims
 
-let init_bigarray_of_prec (type elt_t) (prec : elt_t Ops.precision) dims ~(f : int array -> float) :
-    elt_t bigarray =
+let init_bigarray_of_prec (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) dims
+    ~(f : int array -> ocaml) : (ocaml, elt_t) bigarray =
   A.init (precision_to_bigarray_kind prec) Bigarray.C_layout dims f
 
 let indices_to_offset ~dims ~idcs =
@@ -51,16 +76,37 @@ let indices_to_offset ~dims ~idcs =
 
 let fixed_state_for_init = ref None
 
-let create_bigarray (type elt_t) (prec : elt_t Ops.precision) ~dims (init_op : Ops.init_op) : elt_t bigarray =
+let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~dims (init_op : Ops.init_op) :
+    (ocaml, elt_t) bigarray =
   Option.iter !fixed_state_for_init ~f:(fun seed -> Random.init seed);
-  match init_op with
-  | Constant_fill cs ->
+  (* TODO: reduce code duplication. *)
+  match (prec, init_op) with
+  | Ops.Half, Constant_fill cs ->
       let size = Array.length cs in
       init_bigarray_of_prec prec dims ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
-  | Range_over_offsets ->
+  | Ops.Half, Range_over_offsets ->
       init_bigarray_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
-  | File_mapped filename ->
+  | Ops.Half, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
+  | Ops.Single, Constant_fill cs ->
+      let size = Array.length cs in
+      init_bigarray_of_prec prec dims ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
+  | Ops.Single, Range_over_offsets ->
+      init_bigarray_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
+  | Ops.Single, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
+  | Ops.Double, Constant_fill cs ->
+      let size = Array.length cs in
+      init_bigarray_of_prec prec dims ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
+  | Ops.Double, Range_over_offsets ->
+      init_bigarray_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
+  | Ops.Double, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
+  | Ops.Byte, Constant_fill cs ->
+      let size = Array.length cs in
+      init_bigarray_of_prec prec dims ~f:(fun idcs ->
+          Char.of_int_exn @@ Int.of_float @@ cs.(indices_to_offset ~dims ~idcs % size))
+  | Ops.Byte, Range_over_offsets ->
+      init_bigarray_of_prec prec dims ~f:(fun idcs -> Char.of_int_exn @@ indices_to_offset ~dims ~idcs)
+  | Ops.Byte, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.char ())
+  | _, File_mapped filename ->
       (* See: https://github.com/janestreet/torch/blob/master/src/torch/dataset_helper.ml#L3 *)
       let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
       let len = Unix.lseek fd 0 Unix.SEEK_END in
@@ -80,14 +126,21 @@ let empty_array prec = create_array prec ~dims:[||] (Constant_fill [| 0.0 |])
 
 (** {2 *** Accessing ***} *)
 
-type 'r map_as_bigarray = { f : 'a. 'a bigarray -> 'r }
+type 'r map_as_bigarray = { f : 'ocaml 'elt_t. ('ocaml, 'elt_t) bigarray -> 'r }
 
-let map { f } = function Half_nd arr -> f arr | Single_nd arr -> f arr | Double_nd arr -> f arr
+let map { f } = function
+  | Byte_nd arr -> f arr
+  | Half_nd arr -> f arr
+  | Single_nd arr -> f arr
+  | Double_nd arr -> f arr
 
-type 'r map2_as_bigarray = { f2 : 'a. 'a bigarray -> 'a bigarray -> 'r }
+type 'r map2_as_bigarray = {
+  f2 : 'ocaml 'elt_t. ('ocaml, 'elt_t) bigarray -> ('ocaml, 'elt_t) bigarray -> 'r;
+}
 
 let map2 { f2 } x1 x2 =
   match (x1, x2) with
+  | Byte_nd arr1, Byte_nd arr2 -> f2 arr1 arr2
   | Half_nd arr1, Half_nd arr2 -> f2 arr1 arr2
   | Single_nd arr1, Single_nd arr2 -> f2 arr1 arr2
   | Double_nd arr1, Double_nd arr2 -> f2 arr1 arr2
@@ -105,24 +158,25 @@ let get_voidptr =
   map { f }
 
 let get_as_float arr idx =
-  let f x = A.get x idx in
-  map { f } arr
-
-let get_as_int arr idx =
-  let f x =
-    let v = A.get x idx in
-    try Float.to_int v
-    with Invalid_argument _ ->
-      Stdio.eprintf "\nRuntime error: Ndarray.get_as_int invalid float: %f\n%!" v;
-      0
-  in
-  map { f } arr
+  match arr with
+  | Byte_nd arr -> Float.of_int @@ Char.to_int @@ A.get arr idx
+  | Half_nd arr -> A.get arr idx
+  | Single_nd arr -> A.get arr idx
+  | Double_nd arr -> A.get arr idx
 
 let set_from_float arr idx v =
-  let f x = A.set x idx in
-  map { f } arr v
+  match arr with
+  | Byte_nd arr -> A.set arr idx @@ Char.of_int_exn @@ Int.of_float v
+  | Half_nd arr -> A.set arr idx v
+  | Single_nd arr -> A.set arr idx v
+  | Double_nd arr -> A.set arr idx v
 
-let fill_from_float arr v = map { f = A.fill } arr v
+let fill_from_float arr v =
+  match arr with
+  | Byte_nd arr -> A.fill arr @@ Char.of_int_exn @@ Int.of_float v
+  | Half_nd arr -> A.fill arr v
+  | Single_nd arr -> A.fill arr v
+  | Double_nd arr -> A.fill arr v
 
 let set_bigarray arr ~f =
   let dims = A.dims arr in
@@ -137,16 +191,35 @@ let set_bigarray arr ~f =
   let len = Array.length dims in
   cloop (Array.create ~len 0) f 0
 
-let reset_bigarray (init_op : Ops.init_op) (type b) (prec : b Ops.precision) (arr : b bigarray) =
+let reset_bigarray (init_op : Ops.init_op) (type o b) (prec : (o, b) Ops.precision) (arr : (o, b) bigarray) =
   let dims = A.dims arr in
-  match init_op with
-  | Constant_fill cs ->
+  match (prec, init_op) with
+  | Byte, Constant_fill cs ->
+      let size = Array.length cs in
+      set_bigarray arr ~f:(fun idcs ->
+          Char.of_int_exn @@ Int.of_float cs.(indices_to_offset ~dims ~idcs % size))
+  | Byte, Range_over_offsets ->
+      set_bigarray arr ~f:(fun idcs -> Char.of_int_exn @@ indices_to_offset ~dims ~idcs)
+  | Byte, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Random.char ())
+  | Half, Constant_fill cs ->
       let size = Array.length cs in
       set_bigarray arr ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
-  | Range_over_offsets -> set_bigarray arr ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Standard_uniform -> set_bigarray arr ~f:(fun _ -> Random.float_range 0.0 1.0)
-  | File_mapped _ ->
-    A.blit (create_bigarray prec ~dims init_op) arr
+  | Half, Range_over_offsets ->
+      set_bigarray arr ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
+  | Half, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Random.float_range 0.0 1.0)
+  | Single, Constant_fill cs ->
+      let size = Array.length cs in
+      set_bigarray arr ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
+  | Single, Range_over_offsets ->
+      set_bigarray arr ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
+  | Single, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Random.float_range 0.0 1.0)
+  | Double, Constant_fill cs ->
+      let size = Array.length cs in
+      set_bigarray arr ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
+  | Double, Range_over_offsets ->
+      set_bigarray arr ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
+  | Double, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Random.float_range 0.0 1.0)
+  | _, File_mapped _ -> A.blit (create_bigarray prec ~dims init_op) arr
 
 let reset init_op arr =
   let f arr = reset_bigarray init_op arr in
@@ -167,9 +240,12 @@ let fold_bigarray arr ~init ~f =
   cloop (Array.create ~len 0) 0;
   !accu
 
-let fold ~init ~f arr =
-  let f arr = fold_bigarray ~init ~f arr in
-  map { f } arr
+let fold_as_float ~init ~f arr =
+  match arr with
+  | Byte_nd arr -> fold_bigarray ~init ~f:(fun accu idx c -> f accu idx @@ Float.of_int @@ Char.to_int c) arr
+  | Half_nd arr -> fold_bigarray ~init ~f arr
+  | Single_nd arr -> fold_bigarray ~init ~f arr
+  | Double_nd arr -> fold_bigarray ~init ~f arr
 
 let size_in_bytes v =
   (* Cheating here because 1 number Bigarray is same size as empty Bigarray:
@@ -266,10 +342,10 @@ let concise_float ~prec v =
 let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labels = [||]) ~indices arr =
   let module B = PrintBox in
   let dims = dims arr in
-  let has_nan = fold ~init:false ~f:(fun has_nan _ v -> has_nan || Float.is_nan v) arr in
-  let has_inf = fold ~init:false ~f:(fun has_inf _ v -> has_inf || Float.(v = infinity)) arr in
+  let has_nan = fold_as_float ~init:false ~f:(fun has_nan _ v -> has_nan || Float.is_nan v) arr in
+  let has_inf = fold_as_float ~init:false ~f:(fun has_inf _ v -> has_inf || Float.(v = infinity)) arr in
   let has_neg_inf =
-    fold ~init:false ~f:(fun has_neg_inf _ v -> has_neg_inf || Float.(v = neg_infinity)) arr
+    fold_as_float ~init:false ~f:(fun has_neg_inf _ v -> has_neg_inf || Float.(v = neg_infinity)) arr
   in
   let header =
     prefix

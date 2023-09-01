@@ -154,6 +154,7 @@ let get_run_ptr array =
 
 let prec_to_c_type = function
   | Ops.Void_prec -> "void"
+  | Byte_prec _ -> "uint8"
   | Half_prec _ -> (* FIXME: *) "uint16"
   | Single_prec _ -> "float"
   | Double_prec _ -> "double"

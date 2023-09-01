@@ -184,3 +184,22 @@ Exec_as_cuda constants:
 
 
 ]}
+
+Ndarray:
+{[
+let get_as_int arr idx =
+  let f x =
+    let v = A.get x idx in
+    try Float.to_int v
+    with Invalid_argument _ ->
+      Stdio.eprintf "\nRuntime error: Ndarray.get_as_int invalid float: %f\n%!" v;
+      0
+  in
+  map { f } arr
+
+
+let fold ~init ~f arr =
+  let f arr = fold_bigarray ~init ~f arr in
+  map { f } arr
+
+]}

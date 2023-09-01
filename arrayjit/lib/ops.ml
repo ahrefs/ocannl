@@ -34,6 +34,7 @@ let interpret_unop op v =
 
 (** {2 *** Precision ***} *)
 
+type uint8_elt = Bigarray.int8_unsigned_elt
 (* FIXME: Upcoming in OCaml 5.2.0. See:
    https://github.com/ocaml/ocaml/pull/10775/commits/ba6a2c378056c8669fb1bb99bf07b12d69bd4a12 *)
 type float16_elt = Bigarray.float32_elt
@@ -42,41 +43,47 @@ type float64_elt = Bigarray.float64_elt
 
 let float16 : (float, float16_elt) Bigarray.kind = Bigarray.float32
 
-type 'a precision =
-  | Half : float16_elt precision
-  | Single : float32_elt precision
-  | Double : float64_elt precision
+type ('ocaml, 'impl) precision =
+  | Byte : (char, uint8_elt) precision
+  | Half : (float, float16_elt) precision
+  | Single : (float, float32_elt) precision
+  | Double : (float, float64_elt) precision
 [@@deriving sexp_of]
 
 type prec =
   | Void_prec
-  | Half_prec of float16_elt precision
-  | Single_prec of float32_elt precision
-  | Double_prec of float64_elt precision
+  | Byte_prec of (char, uint8_elt) precision
+  | Half_prec of (float, float16_elt) precision
+  | Single_prec of (float, float32_elt) precision
+  | Double_prec of (float, float64_elt) precision
 
+let byte = Byte_prec Byte
 let half = Half_prec Half
 let single = Single_prec Single
 let double = Double_prec Double
 
 let sexp_of_prec = function
   | Void_prec -> Sexp.Atom "Void_prec"
+  | Byte_prec _ -> Sexp.Atom "Byte_prec"
   | Half_prec _ -> Sexp.Atom "Half_prec"
   | Single_prec _ -> Sexp.Atom "Single_prec"
   | Double_prec _ -> Sexp.Atom "Double_prec"
 
 let prec_of_sexp = function
   | Sexp.Atom "Void_prec" -> Void_prec
+  | Sexp.Atom "Byte_prec" -> byte
   | Sexp.Atom "Half_prec" -> half
   | Sexp.Atom "Single_prec" -> single
   | Sexp.Atom "Double_prec" -> double
   | Sexp.List _ -> invalid_arg "prec_of_sexp: expected atom, found list"
   | Sexp.Atom s -> invalid_arg @@ "prec_of_sexp: unknown precision " ^ s
 
-let precision_to_string (type elt_t) (prec : elt_t precision) =
-  match prec with Half -> "half" | Single -> "single" | Double -> "double"
+let precision_to_string (type ocaml elt_t) (prec : (ocaml, elt_t) precision) =
+  match prec with Byte -> "byte" | Half -> "half" | Single -> "single" | Double -> "double"
 
 let prec_string = function
   | Void_prec -> "void"
+  | Byte_prec _ -> "byte"
   | Half_prec _ -> "half"
   | Single_prec _ -> "single"
   | Double_prec _ -> "double"
@@ -84,12 +91,13 @@ let prec_string = function
 let equal_prec p1 p2 =
   match (p1, p2) with
   | Void_prec, Void_prec -> true
+  | Byte_prec _, Byte_prec _ -> true
   | Half_prec _, Half_prec _ -> true
   | Single_prec _, Single_prec _ -> true
   | Double_prec _, Double_prec _ -> true
-  | Void_prec, _ | Half_prec _, _ | Single_prec _, _ | Double_prec _, _ -> false
+  | Void_prec, _ | Byte_prec _, _ | Half_prec _, _ | Single_prec _, _ | Double_prec _, _ -> false
 
-let prec_in_bytes = function Void_prec -> 0 | Half_prec _ -> 2 | Single_prec _ -> 4 | Double_prec _ -> 8
+let prec_in_bytes = function Void_prec -> 0 | Byte_prec _ -> 2 | Half_prec _ -> 2 | Single_prec _ -> 4 | Double_prec _ -> 8
 
 let promote_prec p1 p2 =
   match (p1, p2) with
@@ -99,18 +107,21 @@ let promote_prec p1 p2 =
   | _, Single_prec _ -> p2
   | Half_prec _, _ -> p1
   | _, Half_prec _ -> p2
+  | Byte_prec _, _ -> p1
+  | _, Byte_prec _ -> p2
   | Void_prec, Void_prec -> Void_prec
 
-let is_double (type elt_t) (prec : elt_t precision) = match prec with Double -> true | _ -> false
+let is_double (type ocaml elt_t) (prec : (ocaml, elt_t) precision) = match prec with Double -> true | _ -> false
 let is_double_prec = function Double_prec _ -> true | _ -> false
 
-let pack_prec (type elt_t) (prec : elt_t precision) =
-  match prec with Half -> half | Single -> single | Double -> double
+let pack_prec (type ocaml elt_t) (prec : (ocaml, elt_t) precision) =
+  match prec with Byte -> byte | Half -> half | Single -> single | Double -> double
 
-type 'r map_prec = { f : 'elt_t. 'elt_t precision -> 'r }
+type 'r map_prec = { f : 'ocaml 'elt_t. ('ocaml, 'elt_t) precision -> 'r }
 
 let map_prec ?default { f } = function
   | Void_prec -> Option.value_or_thunk default ~default:(fun () -> invalid_arg "map_prec: Void_prec")
+  | Byte_prec Byte -> f Byte
   | Half_prec (Half | Single) -> f Half
   | Single_prec (Single | Half) -> f Single
   | Double_prec Double -> f Double
