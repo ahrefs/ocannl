@@ -20,6 +20,17 @@ end
 
 let symbol_ident (Symbol s) = "i" ^ Int.to_string s
 
+type static_symbol = Static_symbol of symbol [@@deriving compare, equal, sexp, hash]
+
+type with_bindings =
+  | Result
+  | Bind of static_symbol * int ref * with_bindings [@@deriving compare, equal, sexp]
+
+let get_static_symbol bindings =
+  let s = Static_symbol (get_symbol ()) in
+  let r = ref 0 in
+  (s, r, Bind (s, r, bindings))
+
 (** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
     Outputs ["-"] for empty dimensions. *)
 let dims_to_string ?(with_axis_numbers = false) dims =
@@ -65,7 +76,7 @@ let identity_projections ~lhs_dims =
   let project_lhs = Array.map product_iterators ~f:opt_iterator in
   let product_space = Array.filter ~f:iterated lhs_dims in
   let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
-  { product_space; lhs_dims; product_iterators; project_lhs; project_rhs = [|project_lhs|] }
+  { product_space; lhs_dims; product_iterators; project_lhs; project_rhs = [| project_lhs |] }
 
 let derive_index ~product_syms ~(projection : axis_index array) =
   let sym_to_i =

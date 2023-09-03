@@ -423,9 +423,9 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
     args,
     { ctx = info.ctx; device = old_context.device; run_module = Some run_module; arrays = info.ctx_arrays } )
 
-type jitted = { context : context; run : unit -> unit  (** Potentially asynchronous. *) }
+type jitted = { context : context; run : unit -> unit; params : Indexing.with_bindings }
 
-let jit ~name ?(verbose = false) old_context ((traced_store, _) as compiled) =
+let jit ~name ?(verbose = false) old_context params ((traced_store, _) as compiled) =
   let func, args, context = jit_func ~name ~verbose old_context compiled in
   let run () =
     if verbose then Stdio.printf "Exec_as_cuda.jit: zeroing-out global memory\n%!";
@@ -442,4 +442,4 @@ let jit ~name ?(verbose = false) old_context ((traced_store, _) as compiled) =
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream args;
     if verbose then Stdio.printf "Exec_as_cuda.jit: kernel launched\n%!"
   in
-  { context; run }
+  { context; run; params }

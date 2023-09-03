@@ -326,9 +326,9 @@ let jit_func ~name (context : context) ctx (traced_store, proc) =
      Context.dump_to_file ctx ~update_locs:true f_name);
   ctx_info
 
-type jitted = { context : context; run : unit -> unit }
+type jitted = { context : context; run : unit -> unit; params : Indexing.with_bindings }
 
-let jit old_context ~name ?verbose:_ compiled =
+let jit old_context ~name ?verbose:_ params compiled =
   (* TODO: add verbose logs *)
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
@@ -344,7 +344,7 @@ let jit old_context ~name ?verbose:_ compiled =
   let context = { arrays = ctx_info.ctx_arrays; result = Some result } in
   let run = Result.code result name Ctypes.(void @-> returning void) in
   Context.release ctx;
-  { context; run }
+  { context; params; run }
 
 let from_host (context : context) la =
   match (la.LA.array, Map.find context.arrays la) with
@@ -373,7 +373,7 @@ let merge_from_global ?(name_suffix = "") (context : context) ~dst ~accum ~src =
   in
   let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
   let name = [%string "merge_into_%{dst.Lazy_array.id#Int}%{name_suffix}"] in
-  jit context ~name ~verbose:false (Low_level.compile_proc ~name llc)
+  jit context ~name ~verbose:false Indexing.Result (Low_level.compile_proc ~name llc)
 
 let merge ?name_suffix la ~dst ~accum ~(src : context) =
   Option.map (Map.find src.arrays la) ~f:(fun src ->

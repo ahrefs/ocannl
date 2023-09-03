@@ -4,7 +4,10 @@ open Base
 module LA = Lazy_array
 
 (** Resets a array by performing the specified computation or data fetching. *)
-type fetch_op = Constant of float | Imported of Ops.global_identifier
+type fetch_op =
+  | Constant of float
+  | Imported of Ops.global_identifier
+  | Slice of { batch_idx : Indexing.static_symbol; sliced : LA.t }
 [@@deriving sexp_of]
 
 and t =
@@ -136,6 +139,10 @@ let to_low_level (code : t) : Low_level.t =
     | Fetch { array; fetch_op = Constant 0.0; dims = _ } -> Zero_out array
     | Fetch { array; fetch_op = Constant c; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs -> Set (array, idcs, Constant c))
+    | Fetch { array; fetch_op = Slice { batch_idx = Static_symbol idx; sliced }; dims } ->
+        (* TODO: doublecheck this always gets optimized away. *)
+        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
+            Set (array, idcs, Get (sliced, Array.append [| Iterator idx |] idcs)))
     | Fetch { array = _; fetch_op = Imported _; dims = _ } ->
         failwith "to_low_level: Imported NOT IMPLEMENTED YET"
   in

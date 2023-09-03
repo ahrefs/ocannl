@@ -2,13 +2,18 @@ open Base
 
 module type No_device_backend = sig
   type context
-  type jitted = { context : context; run : unit -> unit  (** Potentially asynchronous. *) }
+
+  type jitted = {
+    context : context;
+    run : unit -> unit;
+    params : Indexing.with_bindings
+  }
 
   val initialize : unit -> unit
   val is_initialized : unit -> bool
   val init : unit -> context
   val finalize : context -> unit
-  val jit : context -> name:string -> ?verbose:bool -> Assignments.t -> jitted
+  val jit : context -> name:string -> ?verbose:bool -> Indexing.with_bindings -> Assignments.t -> jitted
   val unsafe_cleanup : unit -> unit
 
   val from_host : context -> Lazy_array.t -> bool
@@ -49,7 +54,11 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   }
 
   type context = { device : device; ctx : Backend.context }
-  type jitted = { context : context; run : unit -> unit }
+  type jitted = {
+    context : context;
+    run : unit -> unit;
+    params : Indexing.with_bindings
+  }
 
   let init device = { device; ctx = Backend.init () }
   let initialize = Backend.initialize
@@ -64,14 +73,16 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     await device;
     Backend.finalize ctx
 
-  let jit { ctx; device } ~name ?verbose code =
-    let result = Backend.jit ctx ~name ?verbose code in
+  let jit { ctx; device } ~name ?verbose params code : jitted =
+    let result = Backend.jit ctx ~name ?verbose params code in
     let run () =
       assert (Domain.is_main_domain ());
       await device;
       device.next_task := Some result.run
     in
-    { context = { ctx = result.context; device }; run }
+
+    (* let rec run : 'a. 'a = *)
+    { context = { ctx = result.context; device }; run; params }
 
   let from_host { ctx; _ } = Backend.from_host ctx
   let to_host { ctx; _ } = Backend.to_host ctx
@@ -86,7 +97,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
           await device;
           device.next_task := Some result.run
         in
-        { context = { ctx = result.context; device }; run })
+        { context = { ctx = result.context; device }; run; params = Indexing.Result })
 
   let num_devices () = Domain.recommended_domain_count () - 1
 
@@ -121,7 +132,11 @@ end
 
 module Gccjit_device : No_device_backend with type context = Exec_as_gccjit.context = struct
   type context = Exec_as_gccjit.context
-  type jitted = Exec_as_gccjit.jitted = { context : context; run : unit -> unit }
+  type jitted = Exec_as_gccjit.jitted = {
+    context : context;
+    run : unit -> unit;
+    params : Indexing.with_bindings
+  }
 
   open Exec_as_gccjit
 
@@ -131,8 +146,8 @@ module Gccjit_device : No_device_backend with type context = Exec_as_gccjit.cont
   let init = init
   let finalize = finalize
 
-  let jit context ~name ?verbose code =
-    jit context ~name ?verbose @@ Assignments.compile_proc ~name ?verbose code
+  let jit context ~name ?verbose params code =
+    jit context ~name ?verbose params @@ Assignments.compile_proc ~name ?verbose code
 
   let from_host = from_host
   let to_host = to_host
@@ -144,7 +159,7 @@ module Gccjit_backend = Multicore_backend (Gccjit_device)
 module Cuda_backend : Backend with type context = Exec_as_cuda.context = struct
   type context = Exec_as_cuda.context
   type device = Exec_as_cuda.device
-  type jitted = Exec_as_cuda.jitted = { context : context; run : unit -> unit }
+  type jitted = Exec_as_cuda.jitted = { context : context; run : unit -> unit; params : Indexing.with_bindings }
 
   open Exec_as_cuda
 
@@ -154,8 +169,8 @@ module Cuda_backend : Backend with type context = Exec_as_cuda.context = struct
   let init = init
   let finalize = finalize
 
-  let jit context ~name ?verbose code =
-    jit context ~name ?verbose @@ Assignments.compile_proc ~name ?verbose code
+  let jit context ~name ?verbose params code =
+    jit context ~name ?verbose params @@ Assignments.compile_proc ~name ?verbose code
 
   let from_host = from_host
   let to_host = to_host
