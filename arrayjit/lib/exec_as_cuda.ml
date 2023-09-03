@@ -29,12 +29,12 @@ type context = {
   ctx : Cudajit.context;
   device : device;
   run_module : Cudajit.module_ option;
-      (** Code compiled for this context, independent of the parent and child contexts. *)
+      (** Code jitted for this context, independent of the parent and child contexts. *)
   arrays : ndarray Map.M(LA).t;
 }
 
 type ctx_info = {
-  ctx : Cudajit.context;  (** Code compiled for this context, independent of the parent and child contexts. *)
+  ctx : Cudajit.context;  (** Context for jitting, independent of the parent and child contexts. *)
   mutable ctx_arrays : ndarray Map.M(LA).t;
   used_tensors : Hash_set.M(LA).t;
 }
@@ -423,7 +423,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
     args,
     { ctx = info.ctx; device = old_context.device; run_module = Some run_module; arrays = info.ctx_arrays } )
 
-type compiled = { context : context; run : unit -> unit  (** Potentially asynchronous. *) }
+type jitted = { context : context; run : unit -> unit  (** Potentially asynchronous. *) }
 
 let jit ~name ?(verbose = false) old_context ((traced_store, _) as compiled) =
   let func, args, context = jit_func ~name ~verbose old_context compiled in

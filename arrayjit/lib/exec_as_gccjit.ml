@@ -326,7 +326,7 @@ let jit_func ~name (context : context) ctx (traced_store, proc) =
      Context.dump_to_file ctx ~update_locs:true f_name);
   ctx_info
 
-type compiled = { context : context; run : unit -> unit }
+type jitted = { context : context; run : unit -> unit }
 
 let jit old_context ~name ?verbose:_ compiled =
   (* TODO: add verbose logs *)

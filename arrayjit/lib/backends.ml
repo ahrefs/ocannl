@@ -2,13 +2,13 @@ open Base
 
 module type No_device_backend = sig
   type context
-  type compiled = { context : context; run : unit -> unit  (** Potentially asynchronous. *) }
+  type jitted = { context : context; run : unit -> unit  (** Potentially asynchronous. *) }
 
   val initialize : unit -> unit
   val is_initialized : unit -> bool
   val init : unit -> context
   val finalize : context -> unit
-  val compile : context -> name:string -> ?verbose:bool -> Assignments.t -> compiled
+  val jit : context -> name:string -> ?verbose:bool -> Assignments.t -> jitted
   val unsafe_cleanup : unit -> unit
 
   val from_host : context -> Lazy_array.t -> bool
@@ -18,11 +18,11 @@ module type No_device_backend = sig
   (** If the array is both hosted and in-context, copies from context to host and returns true. *)
 
   val merge :
-    ?name_suffix:string -> Lazy_array.t -> dst:context -> accum:Ops.binop -> src:context -> compiled option
+    ?name_suffix:string -> Lazy_array.t -> dst:context -> accum:Ops.binop -> src:context -> jitted option
   (** Merges the array from the source context into the destination context: [dst =: dst accum src].
       If the array is hosted, its state on host is undefined after this operation. (A backend may chose
       to use the host array as a buffer, if that is beneficial.) [name_suffix] is appended to
-      the compiled function's name. *)
+      the jitted function's name. *)
 end
 
 module type Backend = sig
@@ -49,7 +49,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   }
 
   type context = { device : device; ctx : Backend.context }
-  type compiled = { context : context; run : unit -> unit }
+  type jitted = { context : context; run : unit -> unit }
 
   let init device = { device; ctx = Backend.init () }
   let initialize = Backend.initialize
@@ -64,8 +64,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     await device;
     Backend.finalize ctx
 
-  let compile { ctx; device } ~name ?verbose code =
-    let result = Backend.compile ctx ~name ?verbose code in
+  let jit { ctx; device } ~name ?verbose code =
+    let result = Backend.jit ctx ~name ?verbose code in
     let run () =
       assert (Domain.is_main_domain ());
       await device;
@@ -121,7 +121,7 @@ end
 
 module Gccjit_device : No_device_backend with type context = Exec_as_gccjit.context = struct
   type context = Exec_as_gccjit.context
-  type compiled = Exec_as_gccjit.compiled = { context : context; run : unit -> unit }
+  type jitted = Exec_as_gccjit.jitted = { context : context; run : unit -> unit }
 
   open Exec_as_gccjit
 
@@ -131,7 +131,7 @@ module Gccjit_device : No_device_backend with type context = Exec_as_gccjit.cont
   let init = init
   let finalize = finalize
 
-  let compile context ~name ?verbose code =
+  let jit context ~name ?verbose code =
     jit context ~name ?verbose @@ Assignments.compile_proc ~name ?verbose code
 
   let from_host = from_host
@@ -144,7 +144,7 @@ module Gccjit_backend = Multicore_backend (Gccjit_device)
 module Cuda_backend : Backend with type context = Exec_as_cuda.context = struct
   type context = Exec_as_cuda.context
   type device = Exec_as_cuda.device
-  type compiled = Exec_as_cuda.compiled = { context : context; run : unit -> unit }
+  type jitted = Exec_as_cuda.jitted = { context : context; run : unit -> unit }
 
   open Exec_as_cuda
 
@@ -154,7 +154,7 @@ module Cuda_backend : Backend with type context = Exec_as_cuda.context = struct
   let init = init
   let finalize = finalize
 
-  let compile context ~name ?verbose code =
+  let jit context ~name ?verbose code =
     jit context ~name ?verbose @@ Assignments.compile_proc ~name ?verbose code
 
   let from_host = from_host

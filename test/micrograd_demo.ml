@@ -21,7 +21,7 @@ let%expect_test "Micrograd README basic example" =
   Tensor.set_fully_on_host a;
   Tensor.set_fully_on_host b;
   let ctx = Backend.(init @@ get_device ~ordinal:0) in
-  let step = Backend.compile ctx ~name:"g_step" @@ Train.update_loss g in
+  let step = Backend.jit ctx ~name:"g_step" @@ Train.update_loss g in
   step.run ();
   Tensor.print ~with_code:false ~with_grad:false `Default @@ g;
   [%expect
