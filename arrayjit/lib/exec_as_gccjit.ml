@@ -137,8 +137,7 @@ let builtin_op = function
 let get_ptr array =
   match array.local with Some lv -> Gccjit.RValue.lvalue lv | None -> Option.value_exn array.hosted_ptr
 
-let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ } as info) initial_block body
-    =
+let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ } as info) initial_block body =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
@@ -197,7 +196,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
        Block.eval !current_block @@ RValue.call ctx f [ RValue.string_literal ctx ("\nComment: " ^ c ^ "\n") ]);
     Block.comment !current_block c
   in
-  let rec loop_proc ~(env : rvalue Low_level.environment) ~name (body : Low_level.t) : unit =
+  let rec loop_proc ~(env : rvalue Indexing.environment) ~name (body : Low_level.t) : unit =
     let loop = loop_proc ~env ~name in
     match body with
     | Noop -> ()
@@ -305,13 +304,18 @@ let jit_code ~name ~(env : Gccjit.rvalue Low_level.environment) ({ ctx; func; _ 
   loop_proc ~name ~env body;
   !current_block
 
-let jit_func ~name (context : context) ctx (traced_store, proc) =
+let jit_func ~name (context : context) ctx params (traced_store, proc) =
   let open Gccjit in
   let fkind = Function.Exported in
   let func = Function.create ctx fkind (Type.get ctx Void) name [] in
+  let params = Indexing.assoc_of_bindings params in
+  let env =
+    Map.of_alist_exn (module Indexing.Symbol)
+    @@ List.mapi params ~f:(fun pos (Indexing.Static_symbol s, _) ->
+           (s, RValue.param @@ Function.param func pos))
+  in
   let init_block = Block.create ~name:("init_" ^ name) func in
   let main_block = Block.create ~name func in
-  let env = Low_level.empty_env in
   let ctx_info =
     { ctx; func; traced_store; init_block; ctx_arrays = context.arrays; arrays = Hashtbl.Poly.create () }
   in
@@ -326,7 +330,7 @@ let jit_func ~name (context : context) ctx (traced_store, proc) =
      Context.dump_to_file ctx ~update_locs:true f_name);
   ctx_info
 
-type jitted = { context : context; run : unit -> unit; params : Indexing.with_bindings }
+type jitted = { context : context; run : unit -> unit; params : unit Indexing.bindings }
 
 let jit old_context ~name ?verbose:_ params compiled =
   (* TODO: add verbose logs *)
@@ -339,10 +343,19 @@ let jit old_context ~name ?verbose:_ params compiled =
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)
-  let ctx_info = jit_func ~name old_context ctx compiled in
+  let ctx_info = jit_func ~name old_context ctx params compiled in
   let result = Context.compile ctx in
   let context = { arrays = ctx_info.ctx_arrays; result = Some result } in
-  let run = Result.code result name Ctypes.(void @-> returning void) in
+  let run : unit -> unit =
+    let rec link : 'a. 'a Indexing.bindings -> 'a Ctypes.fn -> 'a Indexing.variadic =
+     fun (type b) (bs : b Indexing.bindings) (cs : b Ctypes.fn) ->
+      match bs with
+      | Base -> Indexing.Result (Result.code result name Ctypes.(void @-> cs))
+      | Bind (_, i, more) -> Param (i, link more Ctypes.(int @-> cs))
+    in
+    let runf = link params Ctypes.(returning void) in
+    fun () -> Indexing.apply runf
+  in
   Context.release ctx;
   { context; params; run }
 
@@ -373,7 +386,7 @@ let merge_from_global ?(name_suffix = "") (context : context) ~dst ~accum ~src =
   in
   let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
   let name = [%string "merge_into_%{dst.Lazy_array.id#Int}%{name_suffix}"] in
-  jit context ~name ~verbose:false Indexing.Result (Low_level.compile_proc ~name llc)
+  jit context ~name ~verbose:false Indexing.Base (Low_level.compile_proc ~name llc)
 
 let merge ?name_suffix la ~dst ~accum ~(src : context) =
   Option.map (Map.find src.arrays la) ~f:(fun src ->

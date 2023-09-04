@@ -20,11 +20,32 @@ end
 
 let symbol_ident (Symbol s) = "i" ^ Int.to_string s
 
-type static_symbol = Static_symbol of symbol [@@deriving compare, equal, sexp, hash]
+type 'a environment = 'a Map.M(Symbol).t
 
-type with_bindings =
-  | Result
-  | Bind of static_symbol * int ref * with_bindings [@@deriving compare, equal, sexp]
+let empty_env : 'a environment = Map.empty (module Symbol)
+
+type static_symbol = Static_symbol of symbol [@@deriving compare, equal, sexp, hash]
+type 'a bindings = Base : 'a bindings | Bind : static_symbol * int ref * (int -> 'a) bindings -> 'a bindings
+
+let rec sexp_of_bindings : 'a. 'a bindings -> Sexp.t =
+ fun (type a) (b : a bindings) ->
+  match b with
+  | Base -> Sexp.Atom "bindings"
+  | Bind (s, i, bs) -> Sexp.List [ sexp_of_static_symbol s; sexp_of_int !i; sexp_of_bindings bs ]
+
+let assoc_of_bindings bs =
+  let rec loop : 'a. 'a bindings -> (static_symbol, int ref) List.Assoc.t =
+   fun (type a) (b : a bindings) -> match b with Base -> [] | Bind (s, i, bs) -> (s, i) :: loop bs
+  in
+  loop bs
+
+(** Helps manipulating the bindings. *)
+type 'a variadic =
+  | Result of (unit -> 'a)
+  | Param of int ref * (int -> 'a) variadic
+
+let rec apply : 'a. 'a variadic -> 'a =
+ fun (type b) (f : b variadic) -> match f with Result rf -> rf () | Param (i, more) -> apply more !i
 
 let get_static_symbol bindings =
   let s = Static_symbol (get_symbol ()) in

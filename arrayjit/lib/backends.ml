@@ -2,18 +2,16 @@ open Base
 
 module type No_device_backend = sig
   type context
-
-  type jitted = {
-    context : context;
-    run : unit -> unit;
-    params : Indexing.with_bindings
-  }
+  type jitted = { context : context; run : unit -> unit; params : unit Indexing.bindings }
 
   val initialize : unit -> unit
   val is_initialized : unit -> bool
   val init : unit -> context
   val finalize : context -> unit
-  val jit : context -> name:string -> ?verbose:bool -> Indexing.with_bindings -> Assignments.t -> jitted
+
+  val jit :
+    context -> name:string -> ?verbose:bool -> unit Indexing.bindings -> Assignments.t -> jitted
+
   val unsafe_cleanup : unit -> unit
 
   val from_host : context -> Lazy_array.t -> bool
@@ -54,11 +52,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   }
 
   type context = { device : device; ctx : Backend.context }
-  type jitted = {
-    context : context;
-    run : unit -> unit;
-    params : Indexing.with_bindings
-  }
+  type jitted = { context : context; run : unit -> unit; params : unit Indexing.bindings }
 
   let init device = { device; ctx = Backend.init () }
   let initialize = Backend.initialize
@@ -97,7 +91,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
           await device;
           device.next_task := Some result.run
         in
-        { context = { ctx = result.context; device }; run; params = Indexing.Result })
+        { context = { ctx = result.context; device }; run; params = Indexing.Base })
 
   let num_devices () = Domain.recommended_domain_count () - 1
 
@@ -132,10 +126,11 @@ end
 
 module Gccjit_device : No_device_backend with type context = Exec_as_gccjit.context = struct
   type context = Exec_as_gccjit.context
+
   type jitted = Exec_as_gccjit.jitted = {
     context : context;
     run : unit -> unit;
-    params : Indexing.with_bindings
+    params : unit Indexing.bindings;
   }
 
   open Exec_as_gccjit
@@ -159,7 +154,7 @@ module Gccjit_backend = Multicore_backend (Gccjit_device)
 module Cuda_backend : Backend with type context = Exec_as_cuda.context = struct
   type context = Exec_as_cuda.context
   type device = Exec_as_cuda.device
-  type jitted = Exec_as_cuda.jitted = { context : context; run : unit -> unit; params : Indexing.with_bindings }
+  type jitted = Exec_as_cuda.jitted = { context : context; run : unit -> unit; params : unit Indexing.bindings }
 
   open Exec_as_cuda
 

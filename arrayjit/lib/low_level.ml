@@ -60,9 +60,6 @@ let keep_files_in_run_directory = ref false
 let with_debug = ref false
 let debug_verbose_trace = ref false
 
-type 'a environment = 'a Map.M(Indexing.Symbol).t
-
-let empty_env : 'a environment = Map.empty (module Indexing.Symbol)
 let code_sexp_margin = ref 200
 
 let fprint_code ppf c =
@@ -272,7 +269,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         loop llv2
     | Unop (_, llv) -> loop llv
   in
-  loop_proc empty_env llc;
+  loop_proc Indexing.empty_env llc;
   Hashtbl.iter traced_store ~f:(fun traced ->
       if Hashtbl.exists traced.accesses ~f:is_too_many then traced.non_virtual <- true;
       if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then traced.read_only <- true;
@@ -299,7 +296,7 @@ let process_computation traced top_llc =
     if Set.length syms <> num_syms then raise Non_virtual
   in
   (* Traverse the float code too, for completeness / future use-cases. *)
-  let rec loop_proc ~(env_dom : unit environment) llc =
+  let rec loop_proc ~(env_dom : unit Indexing.environment) llc =
     let loop = loop_proc ~env_dom in
     match llc with
     | Noop -> ()
@@ -359,7 +356,7 @@ let process_computation traced top_llc =
   in
   try
     if traced.non_virtual then raise Non_virtual;
-    loop_proc ~env_dom:empty_env top_llc;
+    loop_proc ~env_dom:Indexing.empty_env top_llc;
     if not !has_setter then raise Non_virtual;
     traced.computations <- (!at_idcs, top_llc) :: traced.computations
   with Non_virtual -> traced.non_virtual <- true
