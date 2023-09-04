@@ -346,7 +346,7 @@ let jit_code ~traced_store info ppf llc : unit =
   in
   pp_ll ppf llc
 
-let jit_func ~name ?(verbose = false) (old_context : context) (traced_store, llc) =
+let jit_func ~name ?(verbose = false) (old_context : context) idx_params (traced_store, llc) =
   set_ctx old_context.ctx;
   if verbose then Stdio.printf "Exec_as_cuda.jit: generating the .cu source\n%!";
   let info =
@@ -366,6 +366,9 @@ let jit_func ~name ?(verbose = false) (old_context : context) (traced_store, llc
            | Local_only -> None
            | Global -> Option.map tn.global ~f:(fun (n, ptr) -> (tn.num_typ ^ " *" ^ n, ptr)))
   in
+  let idx_params =
+    List.map idx_params ~f:(fun (Indexing.Static_symbol s) -> "int " ^ Indexing.symbol_ident s)
+  in
   (* TODO: optimize zero-initializations? E.g.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
   let thread_decls =
@@ -382,7 +385,7 @@ let jit_func ~name ?(verbose = false) (old_context : context) (traced_store, llc
     [%string
       {|
 %{if !Low_level.debug_verbose_trace then "__device__ int printf (const char * format, ... );" else ""}
-extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
+extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ params}) {
   /* TODO: this initial toy prototype is single-threaded. */
   if (threadIdx.x != 0 || blockIdx.x != 0) { return; }
   
@@ -426,7 +429,8 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " params}) {
 type jitted = { context : context; run : unit -> unit; params : unit Indexing.bindings }
 
 let jit ~name ?(verbose = false) old_context params ((traced_store, _) as compiled) =
-  let func, args, context = jit_func ~name ~verbose old_context compiled in
+  let idx_params, idx_args = List.unzip @@ Indexing.assoc_of_bindings params in
+  let func, args, context = jit_func ~name ~verbose old_context idx_params compiled in
   let run () =
     if verbose then Stdio.printf "Exec_as_cuda.jit: zeroing-out global memory\n%!";
     set_ctx context.ctx;
@@ -439,7 +443,8 @@ let jit ~name ?(verbose = false) old_context params ((traced_store, _) as compil
         | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit: launching the kernel\n%!";
     (* if !Low_level.debug_verbose_trace then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
-    Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream args;
+    let idx_args = List.map idx_args ~f:(fun i -> Cu.Int !i) in
+    Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream @@ idx_args @ args;
     if verbose then Stdio.printf "Exec_as_cuda.jit: kernel launched\n%!"
   in
   { context; run; params }
