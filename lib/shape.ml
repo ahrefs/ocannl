@@ -195,6 +195,7 @@ type transpose_type =
   | Permute of string
       (** [Permute (ls1^"=>"^ls2)] is a variant of the [einsum] syntax [Einsum (ls1^";"^ls1^"=>"^ls2)].
       Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
+  | Batch_slice of Arrayjit.Indexing.static_symbol  (** Removes the leftmost batch axis. *)
 [@@deriving sexp]
 
 (** Parses a labels specification.
@@ -526,7 +527,7 @@ let sexp_of_axis_plab_map (map : axis_plab_map) =
 
 (** Performs a local step of shape inference, propagates information into and out of the parent shape
     and the child shape(s). *)
-let propagate_shapes (update : update_step) =
+let rec propagate_shapes (update : update_step) =
   let pointwise_labels debug1 debug2 ls1 ls2 =
     Map.merge ls1 ls2 ~f:(fun ~key -> function
       | `Both (l1, l2) ->
@@ -760,6 +761,31 @@ let propagate_shapes (update : update_step) =
       cur_sh.axis_labels <- lhs_axis_labels;
       let rhs_axis_labels : axis_str_map = Map.filter_map rhs_labels ~f:(Map.find all_axis_labels) in
       sh.axis_labels <- rhs_axis_labels
+  | Transpose (Batch_slice _, sh) ->
+      let list_dims sh = list_of_dims @@ sh.batch in
+      let sh_size = List.length @@ list_dims sh in
+      let cur_size = List.length @@ list_dims cur_sh in
+      if sh_size = 0 && is_unknown cur_sh.batch then (* Wait for more information. *) ()
+      else if
+        sh_size = cur_size + 1
+        || (sh_size > cur_size + 1 && (is_unknown cur_sh.batch || is_inferred cur_sh.batch))
+      then (
+        if sh_size > cur_size + 1 then
+          update_kind Batch cur_sh
+            ~f:(map_dims ~f:(fun l -> List.take (List.tl_exn @@ list_dims sh) (sh_size - (cur_size + 1)) @ l));
+        let expand_dims over_dims = map_dims over_dims ~f:(fun l -> -1 :: l) in
+        update_kind Batch ~f:expand_dims cur_sh;
+        let logic = Transpose (Pointwise_un, sh) in
+        let update_other_axes = { shape = cur_sh; logic } in
+        propagate_shapes update_other_axes;
+        let reduce_dims over_dims = map_dims over_dims ~f:List.tl_exn in
+        update_kind Batch ~f:reduce_dims cur_sh;
+        let cur_axis_labels =
+          Map.filter_keys cur_sh.axis_labels ~f:(fun { in_axes; from_end } ->
+              (not (AxisKey.equal_kind Batch in_axes)) || from_end < sh_size)
+        in
+        cur_sh.axis_labels <- cur_axis_labels)
+      else raise (Shape_error ("Slicing batch axis: number of batch axes mismatch", cur_sh, sh))
   | Broadcast (Pointwise_bin, sh1, sh2) ->
       let up_labels = pointwise_labels sh1 sh2 sh1.axis_labels sh2.axis_labels in
       cur_sh.axis_labels <- up_labels;
@@ -934,7 +960,7 @@ open Arrayjit.Indexing
 (** Computes the indexing into subtensors given the shape information of a tensor. The processing
     mirrors [propagate_shapes], but [derive_projections] should only be invoked when the shapes
     are inferred already. *)
-let derive_projections (shapes : update_step) : projections =
+let rec derive_projections (shapes : update_step) : projections =
   (* Broadcasts symmetrically to iterate all axes. *)
   let broadcast_dims (sh1_dims : dims) (sh2_dims : dims) : int list =
     let rec broad_back_dims accu = function
@@ -1113,6 +1139,22 @@ let derive_projections (shapes : update_step) : projections =
       let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
       { product_space; product_iterators; lhs_dims; project_lhs; project_rhs }
+  | Transpose (Batch_slice (Static_symbol idx), sh) ->
+      let reduce_dims over_dims = map_dims over_dims ~f:List.tl_exn in
+      let reduced_sh = map_over_kind Batch ~f:reduce_dims sh in
+      let derive = { shape = cur_sh; logic = Transpose (Pointwise_un, reduced_sh) } in
+      let { product_space; product_iterators; lhs_dims; project_lhs; project_rhs } =
+        derive_projections derive
+      in
+      assert (Array.length project_rhs = 1);
+      let project_rhs1 = project_rhs.(0) in
+      {
+        product_space;
+        product_iterators;
+        lhs_dims;
+        project_lhs;
+        project_rhs = [| Array.append [| Iterator idx |] project_rhs1 |];
+      }
   | Broadcast (Pointwise_bin, sh1, sh2) ->
       let product_inp =
         match cur_sh.input with
