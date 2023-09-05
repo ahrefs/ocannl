@@ -111,9 +111,16 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
       let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
       let len = Unix.lseek fd 0 Unix.SEEK_END in
       ignore (Unix.lseek fd 0 Unix.SEEK_SET : int);
+      Option.iter
+        (Array.findi dims ~f:(fun _ -> ( = ) (-1)))
+        ~f:(fun (unknown, _) -> dims.(unknown) <- len / abs (Array.fold ~init:1 ~f:( * ) dims));
+      if len <> Array.fold ~init:1 ~f:( * ) dims then
+        invalid_arg
+          [%string
+            "Ndarray.create_bigarray: File_mapped: invalid file size %{len#Int}, expected %{Array.fold \
+             ~init:1 ~f:( * ) dims#Int}"];
       let ba =
-        Unix.map_file fd (precision_to_bigarray_kind prec) Bigarray.c_layout false [| len |]
-          ~pos:(Int64.of_int 0)
+        Unix.map_file fd (precision_to_bigarray_kind prec) Bigarray.c_layout false dims ~pos:(Int64.of_int 0)
       in
       Unix.close fd;
       ba
