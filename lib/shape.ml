@@ -56,6 +56,8 @@ let given_of_kind = function
   | AxisKey.Input -> given_input
   | AxisKey.Output -> given_output
 
+(** Dimensions of axes of a single kind. In addition to [Unknown] standing for an unknown number of axes,
+    [-1] stands for an unknown number of dimensions in a particular axis. *)
 type dims =
   | Given of int list
       (** User-provided dimensions. They will not change but will be broadcasted to bigger sizes. *)
@@ -539,6 +541,8 @@ let propagate_shapes (update : update_step) =
   in
   let broad_dim ~fixed_left ~fixed_right debug1 debug2 axis_key label = function
     | d1, d2 when d1 = d2 -> d1
+    | -1, d -> d
+    | d, -1 -> d
     | 1, d when not fixed_left -> d
     | d, 1 when not fixed_right -> d
     | d1, d2 ->
@@ -617,6 +621,7 @@ let propagate_shapes (update : update_step) =
             (true, Some dim2)
         | Some dim1, (Inferred [ dim2 ] | Given [ dim2 ]) when dim1 = dim2 -> accu
         | Some dim1, Fixed [ dim2 ] when dim1 = dim2 -> (true, dim)
+        | Some -1, (Inferred [ dim2 ] | Given [ dim2 ]) -> (is_fixed, Some dim2)
         | Some 1, (Inferred [ dim2 ] | Given [ dim2 ]) when not is_fixed -> (false, Some dim2)
         | Some dim1, (Inferred [ dim2 ] | Given [ dim2 ] | Fixed [ dim2 ]) ->
             raise
@@ -644,7 +649,7 @@ let propagate_shapes (update : update_step) =
   in
   let einsum_one_dim debug_spec debug1 debug2 ~key ~data =
     match einsum_one_dim_opt debug_spec debug1 debug2 key data with
-    | false, None -> (false, 1 (* which can still be expanded/broadcasted *))
+    | false, None -> (false, -1)
     | true, None -> assert false
     | is_fixed, Some dim -> (is_fixed, dim)
   in
@@ -920,7 +925,7 @@ let indices_bio sh (type v) (arr : v array) =
   (batch, input, output)
 
 let project_broad d1 d2 =
-  match (d1, d2) with d1, d2 when d1 = d2 -> d1 | 1, d | d, 1 -> d | _ -> assert false
+  match (d1, d2) with d1, d2 when d1 = d2 -> d1 | -1, d | d, -1 -> d | 1, d | d, 1 -> d | _ -> assert false
 
 (** *** Projection inference *** *)
 
