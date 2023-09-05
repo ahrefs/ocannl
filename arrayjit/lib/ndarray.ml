@@ -3,6 +3,8 @@ open Base
 
 module A = Bigarray.Genarray
 
+exception User_error of string
+
 (** {2 *** Handling of precisions ***} *)
 
 type ('ocaml, 'elt_t) bigarray = ('ocaml, 'elt_t, Bigarray.c_layout) A.t
@@ -115,10 +117,11 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
         (Array.findi dims ~f:(fun _ -> ( = ) (-1)))
         ~f:(fun (unknown, _) -> dims.(unknown) <- len / abs (Array.fold ~init:1 ~f:( * ) dims));
       if len <> Array.fold ~init:1 ~f:( * ) dims then
-        invalid_arg
-          [%string
-            "Ndarray.create_bigarray: File_mapped: invalid file size %{len#Int}, expected %{Array.fold \
-             ~init:1 ~f:( * ) dims#Int}"];
+        raise
+        @@ User_error
+             [%string
+               "Ndarray.create_bigarray: File_mapped: invalid file size %{len#Int}, expected %{Array.fold \
+                ~init:1 ~f:( * ) dims#Int}"];
       let ba =
         Unix.map_file fd (precision_to_bigarray_kind prec) Bigarray.c_layout false dims ~pos:(Int64.of_int 0)
       in
@@ -376,7 +379,7 @@ let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(label
     let ind0, ind1, ind2, ind3, ind4 =
       match var_indices with
       | [| ind0; ind1; ind2; ind3; ind4 |] -> (ind0, ind1, ind2, ind3, ind4)
-      | _ -> invalid_arg "render: indices should contain at most 5 negative numbers"
+      | _ -> raise @@ User_error "render: indices should contain at most 5 negative numbers"
     in
     let labels = Array.map labels ~f:(fun l -> if String.is_empty l then "" else l ^ "=") in
     let entries_per_axis = (entries_per_axis / 2 * 2) + 1 in
@@ -415,10 +418,11 @@ let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(label
             @@
             if is_ellipsis () then "..."
             else concise_float ~prec:!print_decimals_precision (get_as_float arr indices)
-          with Invalid_argument _ as error ->
-            Stdio.Out_channel.printf "Invalid indices: %s into array: %s\n%!" (int_dims_to_string indices)
-              (int_dims_to_string dims);
-            raise error)
+          with Invalid_argument _ ->
+            raise
+            @@ User_error
+                 [%string
+                   "Invalid indices: %{int_dims_to_string indices} into array: %{(int_dims_to_string dims)}"])
     in
     let tag ?pos label ind =
       if ind = -1 then ""
