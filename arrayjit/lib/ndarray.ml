@@ -112,20 +112,25 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
   | Ops.Byte, Range_over_offsets ->
       init_bigarray_of_prec prec dims ~f:(fun idcs -> Char.of_int_exn @@ indices_to_offset ~dims ~idcs)
   | Ops.Byte, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.char ())
-  | _, File_mapped filename ->
+  | _, File_mapped (filename, stored_prec) ->
       (* See: https://github.com/janestreet/torch/blob/master/src/torch/dataset_helper.ml#L3 *)
-      let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
-      let len = Unix.lseek fd 0 Unix.SEEK_END in
-      ignore (Unix.lseek fd 0 Unix.SEEK_SET : int);
-      Option.iter
-        (Array.findi dims ~f:(fun _ -> ( = ) (-1)))
-        ~f:(fun (unknown, _) -> dims.(unknown) <- len / abs (Array.fold ~init:1 ~f:( * ) dims));
-      let size = Array.fold ~init:1 ~f:( * ) dims in
-      if len <> size then
+      if not @@ Ops.equal_prec stored_prec (Ops.pack_prec prec) then
         raise
         @@ User_error
              [%string
-               "Ndarray.create_bigarray: File_mapped: invalid file size %{len#Int}, expected %{size#Int}"];
+               "Ndarray.create_bigarray: File_mapped: precision mismatch %{Ops.prec_string stored_prec} vs \
+                %{Ops.precision_to_string prec}"];
+      let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
+      let len = Unix.lseek fd 0 Unix.SEEK_END in
+      ignore (Unix.lseek fd 0 Unix.SEEK_SET : int);
+      let size = Array.fold ~init:1 ~f:( * ) dims in
+      if len / Ops.prec_in_bytes stored_prec <> size then (
+        Unix.close fd;
+        raise
+        @@ User_error
+             [%string
+               "Ndarray.create_bigarray: File_mapped: invalid file bytes %{len#Int}, expected %{size * \
+                Ops.prec_in_bytes stored_prec#Int}"]);
       let ba =
         Unix.map_file fd (precision_to_bigarray_kind prec) Bigarray.c_layout false dims ~pos:(Int64.of_int 0)
       in

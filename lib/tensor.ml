@@ -149,7 +149,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
   in
   let v = LA.create prec ~id ~label ~dims ~literal:false init_op in
   let rec shape_logics = function
-    | [] -> [ Shape.Terminal ]
+    | [] -> [ Shape.Terminal init_op ]
     | [ t1 ] -> [ Shape.Transpose (transpose_op, t1.shape) ]
     | [ t1; t2 ] -> [ Shape.Broadcast (compose_op, t1.shape, t2.shape) ]
     | t1 :: (t2 :: _ as ts) -> Shape.Broadcast (compose_op, t1.shape, t2.shape) :: shape_logics ts

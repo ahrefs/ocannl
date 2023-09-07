@@ -1,41 +1,10 @@
 open Base
 (** Operation types shared by all backends; and precision types. *)
 
-(** {2 *** Operations ***} *)
-
-(** Initializes or resets a array by filling in the corresponding numbers, at the appropriate precision. *)
-type init_op =
-  | Constant_fill of { values : float array; strict : bool }
-      (** Fills in the numbers where the rightmost axis is contiguous. If [strict=true], loops over
-          the provided values. *)
-  | Range_over_offsets
-      (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
-  | Standard_uniform  (** Draws the values from U(0,1). *)
-  | File_mapped of string  (** Reads the data using [Unix.openfile] and [Unix.map_file]. *)
-[@@deriving sexp]
-
-type binop = Add | Sub | Mul | Div | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp, compare, equal]
-type unop = Identity | Relu [@@deriving sexp, compare, equal]
-
-let interpret_binop op v1 v2 =
-  let open Float in
-  match op with
-  | Arg1 -> v1
-  | Arg2 -> v2
-  | Add -> v1 + v2
-  | Sub -> v1 - v2
-  | Mul -> v1 * v2
-  | Div -> v1 / v2
-  | ToPowOf -> if is_integer v2 then int_pow v1 @@ to_int v2 else v1 ** v2
-  | Relu_gate -> if v1 > 0.0 then v2 else 0.0
-
-let interpret_unop op v =
-  let open Float in
-  match op with Identity -> v | Relu when v >= 0. -> v | Relu -> 0.
-
 (** {2 *** Precision ***} *)
 
 type uint8_elt = Bigarray.int8_unsigned_elt
+
 (* FIXME: Upcoming in OCaml 5.2.0. See:
    https://github.com/ocaml/ocaml/pull/10775/commits/ba6a2c378056c8669fb1bb99bf07b12d69bd4a12 *)
 type float16_elt = Bigarray.float32_elt
@@ -98,7 +67,12 @@ let equal_prec p1 p2 =
   | Double_prec _, Double_prec _ -> true
   | Void_prec, _ | Byte_prec _, _ | Half_prec _, _ | Single_prec _, _ | Double_prec _, _ -> false
 
-let prec_in_bytes = function Void_prec -> 0 | Byte_prec _ -> 2 | Half_prec _ -> 2 | Single_prec _ -> 4 | Double_prec _ -> 8
+let prec_in_bytes = function
+  | Void_prec -> 0
+  | Byte_prec _ -> 2
+  | Half_prec _ -> 2
+  | Single_prec _ -> 4
+  | Double_prec _ -> 8
 
 let promote_prec p1 p2 =
   match (p1, p2) with
@@ -112,7 +86,9 @@ let promote_prec p1 p2 =
   | _, Byte_prec _ -> p2
   | Void_prec, Void_prec -> Void_prec
 
-let is_double (type ocaml elt_t) (prec : (ocaml, elt_t) precision) = match prec with Double -> true | _ -> false
+let is_double (type ocaml elt_t) (prec : (ocaml, elt_t) precision) =
+  match prec with Double -> true | _ -> false
+
 let is_double_prec = function Double_prec _ -> true | _ -> false
 
 let pack_prec (type ocaml elt_t) (prec : (ocaml, elt_t) precision) =
@@ -127,6 +103,38 @@ let map_prec ?default { f } = function
   | Single_prec (Single | Half) -> f Single
   | Double_prec Double -> f Double
   | _ -> .
+
+(** {2 *** Operations ***} *)
+
+(** Initializes or resets a array by filling in the corresponding numbers, at the appropriate precision. *)
+type init_op =
+  | Constant_fill of { values : float array; strict : bool }
+      (** Fills in the numbers where the rightmost axis is contiguous. If [strict=true], loops over
+          the provided values. *)
+  | Range_over_offsets
+      (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
+  | Standard_uniform  (** Draws the values from U(0,1). *)
+  | File_mapped of string * prec  (** Reads the data using [Unix.openfile] and [Unix.map_file]. *)
+[@@deriving sexp]
+
+type binop = Add | Sub | Mul | Div | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp, compare, equal]
+type unop = Identity | Relu [@@deriving sexp, compare, equal]
+
+let interpret_binop op v1 v2 =
+  let open Float in
+  match op with
+  | Arg1 -> v1
+  | Arg2 -> v2
+  | Add -> v1 + v2
+  | Sub -> v1 - v2
+  | Mul -> v1 * v2
+  | Div -> v1 / v2
+  | ToPowOf -> if is_integer v2 then int_pow v1 @@ to_int v2 else v1 ** v2
+  | Relu_gate -> if v1 > 0.0 then v2 else 0.0
+
+let interpret_unop op v =
+  let open Float in
+  match op with Identity -> v | Relu when v >= 0. -> v | Relu -> 0.
 
 (** {2 *** Global references ***} *)
 

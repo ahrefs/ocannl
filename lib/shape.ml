@@ -303,7 +303,9 @@ type logic =
   | Transpose of transpose_type * t
       (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of [s1],
       hence the name. *)
-  | Terminal
+  | Terminal of Arrayjit.Ops.init_op
+      (** Extracts any available shape information from the initialization from the initialization. E.g.
+      for [File_mapped fn], opens the file [fn] to check its length. *)
 [@@deriving sexp]
 
 type update_step = { shape : t; logic : logic } [@@deriving sexp]
@@ -400,6 +402,25 @@ let to_axis_map (sh : t) : dims axis_map =
   let i_dims = kind_dims Input in
   let o_dims = kind_dims Output in
   Map.of_alist_exn (module AxisKey) @@ List.concat [ b_dims; i_dims; o_dims ]
+
+(** Uses the matrix convention of putting the input axes last. *)
+let to_dims (sh : t) : int array =
+  let b_dims =
+    match sh.batch with
+    | Unknown -> raise @@ Shape_error ("Batch dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims
+  in
+  let i_dims =
+    match sh.input with
+    | Unknown -> raise @@ Shape_error ("Input dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims
+  in
+  let o_dims =
+    match sh.output with
+    | Unknown -> raise @@ Shape_error ("Output dimensions still unknown", sh, sh)
+    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims
+  in
+  Array.concat [ b_dims; o_dims; i_dims ]
 
 (** Generate a label into a broadcasted axis given an einsum-like spec. Axes that are part of the spec
     do not count, so that we can use the labels to align axes across different shapes (lhs, rhs1,
@@ -701,7 +722,43 @@ let rec propagate_shapes (update : update_step) =
           raise @@ Shape_error (error, debug1, debug2))
   in
   match update.logic with
-  | Terminal -> ()
+  | Terminal (Range_over_offsets | Standard_uniform | Constant_fill { strict = false; _ }) -> ()
+  | Terminal (Constant_fill { values; strict = true }) -> (
+      if is_unknown cur_sh.input || is_unknown cur_sh.output || is_unknown cur_sh.batch then ()
+      else
+        let dims = to_dims cur_sh in
+        let axis_dims = axis_keys_to_idcs cur_sh |> Map.map ~f:(fun i -> dims.(i)) in
+        match Map.filter axis_dims ~f:(( = ) (-1)) |> Map.to_alist with
+        | [] -> ()
+        | _ :: _ :: _ ->
+            (* Too many unknowns to infer. Maybe some will get resolved top-down. *)
+            ()
+        | [ (unk_axis, _) ] ->
+            let len = Array.length values in
+            let upd_dim = len / abs (Array.fold ~init:1 ~f:( * ) dims) in
+            let upd_map = Map.update axis_dims unk_axis ~f:(fun _ -> upd_dim) in
+            let batch, input, output = axis_map_to_dims_bio upd_map in
+            let updated = match unk_axis.in_axes with Batch -> batch | Input -> input | Output -> output in
+            update_kind unk_axis.in_axes cur_sh ~f:(map_dims ~f:(fun _ -> Array.to_list updated)))
+  | Terminal (File_mapped (filename, prec)) -> (
+      if is_unknown cur_sh.input || is_unknown cur_sh.output || is_unknown cur_sh.batch then ()
+      else
+        let dims = to_dims cur_sh in
+        let axis_dims = axis_keys_to_idcs cur_sh |> Map.map ~f:(fun i -> dims.(i)) in
+        match Map.filter axis_dims ~f:(( = ) (-1)) |> Map.to_alist with
+        | [] -> ()
+        | _ :: _ :: _ ->
+            (* Too many unknowns to infer. Maybe some will get resolved top-down. *)
+            ()
+        | [ (unk_axis, _) ] ->
+            let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
+            let len = Unix.lseek fd 0 Unix.SEEK_END / Arrayjit.Ops.prec_in_bytes prec in
+            Unix.close fd;
+            let upd_dim = len / abs (Array.fold ~init:1 ~f:( * ) dims) in
+            let upd_map = Map.update axis_dims unk_axis ~f:(fun _ -> upd_dim) in
+            let batch, input, output = axis_map_to_dims_bio upd_map in
+            let updated = match unk_axis.in_axes with Batch -> batch | Input -> input | Output -> output in
+            update_kind unk_axis.in_axes cur_sh ~f:(map_dims ~f:(fun _ -> Array.to_list updated)))
   | Transpose (Transpose, sh) ->
       cur_sh.input <- broadcast_into ~det:true cur_sh Input sh Output;
       cur_sh.output <- broadcast_into ~det:true cur_sh Output sh Input;
@@ -915,25 +972,6 @@ let rec propagate_shapes (update : update_step) =
       let rhs2_axis_labels : axis_str_map = Map.filter_map rhs2_labels ~f:(Map.find all_axis_labels) in
       sh2.axis_labels <- rhs2_axis_labels
 
-(** Uses the matrix convention of putting the input axes last. *)
-let to_dims (sh : t) : int array =
-  let b_dims =
-    match sh.batch with
-    | Unknown -> raise @@ Shape_error ("Batch dimensions still unknown", sh, sh)
-    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims
-  in
-  let i_dims =
-    match sh.input with
-    | Unknown -> raise @@ Shape_error ("Input dimensions still unknown", sh, sh)
-    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims
-  in
-  let o_dims =
-    match sh.output with
-    | Unknown -> raise @@ Shape_error ("Output dimensions still unknown", sh, sh)
-    | Inferred dims | Given dims | Fixed dims -> Array.of_list dims
-  in
-  Array.concat [ b_dims; o_dims; i_dims ]
-
 (*
 type axis_osym_map = (AxisKey.t, symbol option, AxisKey.comparator_witness) Base.Map.t
 
@@ -1053,7 +1091,7 @@ let rec derive_projections (shapes : update_step) : projections =
      have been restricted by an initial [Given] setting to efficiently implement map-reduce. *)
   let lhs_dims = to_dims shapes.shape in
   match shapes.logic with
-  | Terminal -> identity_projections ~lhs_dims:(to_dims cur_sh)
+  | Terminal _ -> identity_projections ~lhs_dims:(to_dims cur_sh)
   | Transpose (Transpose, sh) ->
       let product_inp = broadcast_sh cur_sh Input sh Output in
       let iters_inp = List.map product_inp ~f:opt_symbol in
