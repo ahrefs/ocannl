@@ -24,8 +24,10 @@ type 'a environment = 'a Map.M(Symbol).t
 
 let empty_env : 'a environment = Map.empty (module Symbol)
 
-type static_symbol = Static_symbol of symbol [@@deriving compare, equal, sexp, hash]
-type 'a bindings = Base : 'a bindings | Bind : static_symbol * int ref * (int -> 'a) bindings -> 'a bindings
+type static_symbol = { static_symbol : symbol; static_range : int option }
+[@@deriving compare, equal, sexp, hash]
+
+type 'a bindings = Base | Bind of static_symbol * int ref * (int -> 'a) bindings
 
 let rec sexp_of_bindings : 'a. 'a bindings -> Sexp.t =
  fun (type a) (b : a bindings) ->
@@ -40,15 +42,13 @@ let assoc_of_bindings bs =
   loop bs
 
 (** Helps manipulating the bindings. *)
-type 'a variadic =
-  | Result of (unit -> 'a)
-  | Param of int ref * (int -> 'a) variadic
+type 'a variadic = Result of (unit -> 'a) | Param of int ref * (int -> 'a) variadic
 
 let rec apply : 'a. 'a variadic -> 'a =
  fun (type b) (f : b variadic) -> match f with Result rf -> rf () | Param (i, more) -> apply more !i
 
-let get_static_symbol bindings =
-  let s = Static_symbol (get_symbol ()) in
+let get_static_symbol ?static_range bindings =
+  let s = { static_symbol = get_symbol (); static_range } in
   let r = ref 0 in
   (s, r, Bind (s, r, bindings))
 

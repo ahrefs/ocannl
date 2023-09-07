@@ -367,7 +367,7 @@ let jit_func ~name ?(verbose = false) (old_context : context) idx_params (traced
            | Global -> Option.map tn.global ~f:(fun (n, ptr) -> (tn.num_typ ^ " *" ^ n, ptr)))
   in
   let idx_params =
-    List.map idx_params ~f:(fun (Indexing.Static_symbol s) -> "int " ^ Indexing.symbol_ident s)
+    List.map idx_params ~f:(fun { Indexing.static_symbol; _ } -> "int " ^ Indexing.symbol_ident static_symbol)
   in
   (* TODO: optimize zero-initializations? E.g.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)

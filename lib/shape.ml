@@ -818,7 +818,7 @@ let rec propagate_shapes (update : update_step) =
       cur_sh.axis_labels <- lhs_axis_labels;
       let rhs_axis_labels : axis_str_map = Map.filter_map rhs_labels ~f:(Map.find all_axis_labels) in
       sh.axis_labels <- rhs_axis_labels
-  | Transpose (Batch_slice _, sh) ->
+  | Transpose (Batch_slice { static_symbol = _; static_range }, sh) ->
       let list_dims sh = list_of_dims @@ sh.batch in
       let sh_size = List.length @@ list_dims sh in
       let cur_size = List.length @@ list_dims cur_sh in
@@ -828,9 +828,11 @@ let rec propagate_shapes (update : update_step) =
         || (sh_size > cur_size + 1 && (is_unknown cur_sh.batch || is_inferred cur_sh.batch))
       then (
         if sh_size > cur_size + 1 then
+          (* Broadcast to more axes. *)
           update_kind Batch cur_sh
             ~f:(map_dims ~f:(fun l -> List.take (List.tl_exn @@ list_dims sh) (sh_size - (cur_size + 1)) @ l));
-        let expand_dims over_dims = map_dims over_dims ~f:(fun l -> -1 :: l) in
+        let static_range = Option.value static_range ~default:(-1) in
+        let expand_dims over_dims = map_dims over_dims ~f:(fun l -> static_range :: l) in
         update_kind Batch ~f:expand_dims cur_sh;
         let logic = Transpose (Pointwise_un, sh) in
         let update_other_axes = { shape = cur_sh; logic } in
@@ -1177,7 +1179,7 @@ let rec derive_projections (shapes : update_step) : projections =
       let product_space = Array.filter ~f:iterated product_space in
       let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
       { product_space; product_iterators; lhs_dims; project_lhs; project_rhs }
-  | Transpose (Batch_slice (Static_symbol idx), sh) ->
+  | Transpose (Batch_slice { static_symbol = idx; static_range = _ }, sh) ->
       let reduce_dims over_dims = map_dims over_dims ~f:List.tl_exn in
       let reduced_sh = map_over_kind Batch ~f:reduce_dims sh in
       let derive = { shape = cur_sh; logic = Transpose (Pointwise_un, reduced_sh) } in

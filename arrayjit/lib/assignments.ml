@@ -139,7 +139,7 @@ let to_low_level (code : t) : Low_level.t =
     | Fetch { array; fetch_op = Constant 0.0; dims = _ } -> Zero_out array
     | Fetch { array; fetch_op = Constant c; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs -> Set (array, idcs, Constant c))
-    | Fetch { array; fetch_op = Slice { batch_idx = Static_symbol idx; sliced }; dims } ->
+    | Fetch { array; fetch_op = Slice { batch_idx = { static_symbol = idx; _ }; sliced }; dims } ->
         (* TODO: doublecheck this always gets optimized away. *)
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             Set (array, idcs, Get (sliced, Array.append [| Iterator idx |] idcs)))

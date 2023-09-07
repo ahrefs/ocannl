@@ -313,8 +313,8 @@ let jit_func ~name (context : context) ctx params (traced_store, proc) =
   let params = Indexing.assoc_of_bindings params in
   let env =
     Map.of_alist_exn (module Indexing.Symbol)
-    @@ List.mapi params ~f:(fun pos (Indexing.Static_symbol s, _) ->
-           (s, RValue.param @@ Function.param func pos))
+    @@ List.mapi params ~f:(fun pos ({Indexing.static_symbol; _}, _) ->
+           (static_symbol, RValue.param @@ Function.param func pos))
   in
   let init_block = Block.create ~name:("init_" ^ name) func in
   let main_block = Block.create ~name func in
