@@ -5,8 +5,9 @@ open Base
 
 (** Initializes or resets a array by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op =
-  | Constant_fill of float array
-      (** Fills in the numbers where the rightmost axis is contiguous, looping over the provided values. *)
+  | Constant_fill of { values : float array; strict : bool }
+      (** Fills in the numbers where the rightmost axis is contiguous. If [strict=true], loops over
+          the provided values. *)
   | Range_over_offsets
       (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
   | Standard_uniform  (** Draws the values from U(0,1). *)

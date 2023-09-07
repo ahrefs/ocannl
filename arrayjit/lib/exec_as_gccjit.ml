@@ -89,7 +89,9 @@ let get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ct
         let arr_typ = Type.array ctx num_typ size_in_elems in
         let local = if is_local_only mem then Some (Function.local func arr_typ @@ LA.name key) else None in
         (if is_global mem && (not @@ Map.mem ctx_arrays key) then
-           let data = Ndarray.create_array key.LA.prec ~dims @@ Constant_fill [| 0. |] in
+           let data =
+             Ndarray.create_array key.LA.prec ~dims @@ Constant_fill { values = [| 0. |]; strict = false }
+           in
            ctx_info.ctx_arrays <- Map.add_exn ~key ~data ctx_arrays);
         let global_ptr = Option.map (Map.find ctx_info.ctx_arrays key) ~f:Ndarray.(map { f = get_c_ptr }) in
         let cast_void rv = RValue.cast ctx rv c_void_ptr in

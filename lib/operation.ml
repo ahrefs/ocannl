@@ -209,14 +209,14 @@ module TDSL = struct
   let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient
 
-  let init_const ~l ?(b = []) ?(i = []) ?(o = []) cs =
+  let init_const ~l ?(b = []) ?(i = []) ?(o = []) values =
     Tensor.term ~label:l ~grad_spec:Prohibit_grad ~batch_dims:b ~input_dims:i ~output_dims:o
-      ~init_op:(Constant_fill cs) ()
+      ~init_op:(Constant_fill { values; strict=false }) ()
 
   (** It's like `Tensor.param` but without shape inference. *)
-  let init_param ~l ?(b = []) ?(i = []) ?(o = []) cs =
+  let init_param ~l ?(b = []) ?(i = []) ?(o = []) values =
     Tensor.term ~label:l ~grad_spec:Require_grad ~batch_dims:b ~input_dims:i ~output_dims:o
-      ~init_op:(Constant_fill cs) ()
+      ~init_op:(Constant_fill { values; strict=false }) ()
 end
 
 module NTDSL = struct

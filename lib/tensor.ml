@@ -72,7 +72,6 @@ let session_state =
 
 let is_fwd_root t = Map.mem session_state.forward_roots t.id
 let remove_fwd_root t = session_state.forward_roots <- Map.remove session_state.forward_roots t.id
-
 let forward_roots () = session_state.forward_roots
 let backprop_roots () = session_state.backprop_roots
 
@@ -104,7 +103,7 @@ let lazy_projections shape_update =
 
 let fetch_zeros array shape = Assignments.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
 let fetch_ones array shape = Assignments.Fetch { array; fetch_op = Constant 1.; dims = lazy_to_dims shape }
-let default_init_op = Ops.Constant_fill [| 0.0 |]
+let default_init_op = Ops.Constant_fill { values = [| 0.0 |]; strict = false }
 let max_sublabel_length = ref 25
 
 let raw_binop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs1_is_grad ~t2 ~rhs2_is_grad ~logic =
@@ -217,18 +216,27 @@ let unop ~op_label ?desc_label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
 (** A terminal: a constant, a parameter, an input of the model. *)
 let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ?init_op
     ?fetch_op () =
-  let literal : bool =
+  let scalar_literal : bool =
     if is_require_grad grad_spec then false
-    else match (init_op, fetch_op) with Some (Ops.Constant_fill [| _ |]), None -> true | _ -> false
+    else
+      match (init_op, fetch_op) with
+      | Some (Ops.Constant_fill { values = [| _ |]; strict = _ }), None -> true
+      | _ -> false
   in
   let op_asn ~v ~projections =
     let open Assignments in
-    let dims = lazy (propagate_shape_updates (); (Lazy.force projections).Indexing.lhs_dims) in
+    let dims =
+      lazy
+        (propagate_shape_updates ();
+         (Lazy.force projections).Indexing.lhs_dims)
+    in
     match fetch_op with
     | None ->
-        if literal && Low_level.virtualize_settings.inline_constants then
+        if scalar_literal && Low_level.virtualize_settings.inline_constants then
           let fetch_op =
-            match init_op with Some (Ops.Constant_fill [| c |]) -> Constant c | _ -> assert false
+            match init_op with
+            | Some (Ops.Constant_fill { values = [| c |]; _ }) -> Constant c
+            | _ -> assert false
           in
           Fetch { array = v; fetch_op; dims }
         else Noop
@@ -260,10 +268,12 @@ let float_to_label v = Float.to_string_hum ~strip_zero:true v
 let number ?desc_label ?(axis_label = "") ?(grad_spec = Prohibit_grad) c =
   (* Note: no axis label so that we do not conflict with user labels. *)
   term ?desc_label ~label:(float_to_label c) ~grad_spec ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ]
-    ~axis_labels:axis_label ~init_op:(Constant_fill [| c |]) ()
+    ~axis_labels:axis_label
+    ~init_op:(Constant_fill { values = [| c |]; strict = true })
+    ()
 
 let ndarray ?desc_label ?(grad_spec = Prohibit_grad) ?(batch_dims = []) ?(input_dims = []) ?(output_dims = [])
-    ?axis_labels ?label values =
+    ?axis_labels ?label ?(strict = true) values =
   let label =
     match label with
     | Some label -> label
@@ -271,7 +281,7 @@ let ndarray ?desc_label ?(grad_spec = Prohibit_grad) ?(batch_dims = []) ?(input_
         Caml.Format.pp_set_geometry Caml.Format.str_formatter ~max_indent:!max_sublabel_length
           ~margin:(!max_sublabel_length * 2);
         let dims = Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list in
-        let ndarr = Ndarray.create_array Ops.double ~dims (Constant_fill values) in
+        let ndarr = Ndarray.create_array Ops.double ~dims (Constant_fill { values; strict }) in
         let ( ! ) = List.length in
         Ndarray.pp_array_inline ~num_batch_axes:!batch_dims ~num_output_axes:!output_dims
           ~num_input_axes:!input_dims Caml.Format.str_formatter ndarr;
@@ -284,11 +294,13 @@ let ndarray ?desc_label ?(grad_spec = Prohibit_grad) ?(batch_dims = []) ?(input_
     else label
   in
   term ?desc_label ~grad_spec ~batch_dims ~input_dims ~output_dims ?axis_labels ~deduced:Not_constrained
-    ~label ~init_op:(Constant_fill values) ()
+    ~label
+    ~init_op:(Constant_fill { values; strict })
+    ()
 
-let param ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?values label =
+let param ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?(strict = false) ?values label =
   let init_op =
-    match values with Some values -> Ops.Constant_fill values | None -> Standard_uniform
+    match values with Some values -> Ops.Constant_fill { values; strict } | None -> Standard_uniform
   in
   let t =
     term ?desc_label ~grad_spec:Require_grad ~batch_dims:[] ?input_dims ?output_dims ?axis_labels ?deduced
@@ -546,7 +558,9 @@ let grad_2d_points ?from_axis ~xdim ~ydim t =
 
 let set_value t = Nd.set_from_float @@ Option.value_exn @@ Lazy.force t.value.array
 let get_value t = Nd.get_as_float @@ Option.value_exn @@ Lazy.force t.value.array
-let set_values t cs = Ndarray.(reset (Constant_fill cs) @@ Option.value_exn @@ Lazy.force t.value.array)
+
+let set_values t values =
+  Ndarray.(reset (Constant_fill { values; strict = false }) @@ Option.value_exn @@ Lazy.force t.value.array)
 
 module O = struct
   (** Get the value at the given indices. *)

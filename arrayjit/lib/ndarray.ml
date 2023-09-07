@@ -81,30 +81,34 @@ let fixed_state_for_init = ref None
 let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~dims (init_op : Ops.init_op) :
     (ocaml, elt_t) bigarray =
   Option.iter !fixed_state_for_init ~f:(fun seed -> Random.init seed);
-  (* TODO: reduce code duplication. *)
+  let constant_fill_f f values strict =
+    let len = Array.length values in
+    if strict then (
+      let size = Array.fold ~init:1 ~f:( * ) dims in
+      if size <> len then
+        raise
+        @@ User_error
+             [%string
+               "Ndarray.create_bigarray: Constant_fill: invalid data size %{len#Int}, expected %{size#Int}"];
+      init_bigarray_of_prec prec dims ~f:(fun idcs -> f values.(indices_to_offset ~dims ~idcs)))
+    else init_bigarray_of_prec prec dims ~f:(fun idcs -> f values.(indices_to_offset ~dims ~idcs % len))
+  in
+  let constant_fill_float values strict = constant_fill_f Fn.id values strict in
   match (prec, init_op) with
-  | Ops.Half, Constant_fill cs ->
-      let size = Array.length cs in
-      init_bigarray_of_prec prec dims ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
+  | Ops.Half, Constant_fill { values; strict } -> constant_fill_float values strict
   | Ops.Half, Range_over_offsets ->
       init_bigarray_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
   | Ops.Half, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
-  | Ops.Single, Constant_fill cs ->
-      let size = Array.length cs in
-      init_bigarray_of_prec prec dims ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
+  | Ops.Single, Constant_fill { values; strict } -> constant_fill_float values strict
   | Ops.Single, Range_over_offsets ->
       init_bigarray_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
   | Ops.Single, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
-  | Ops.Double, Constant_fill cs ->
-      let size = Array.length cs in
-      init_bigarray_of_prec prec dims ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
+  | Ops.Double, Constant_fill { values; strict } -> constant_fill_float values strict
   | Ops.Double, Range_over_offsets ->
       init_bigarray_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
   | Ops.Double, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
-  | Ops.Byte, Constant_fill cs ->
-      let size = Array.length cs in
-      init_bigarray_of_prec prec dims ~f:(fun idcs ->
-          Char.of_int_exn @@ Int.of_float @@ cs.(indices_to_offset ~dims ~idcs % size))
+  | Ops.Byte, Constant_fill { values; strict } ->
+      constant_fill_f (Fn.compose Char.of_int_exn Int.of_float) values strict
   | Ops.Byte, Range_over_offsets ->
       init_bigarray_of_prec prec dims ~f:(fun idcs -> Char.of_int_exn @@ indices_to_offset ~dims ~idcs)
   | Ops.Byte, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.char ())
@@ -116,12 +120,12 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
       Option.iter
         (Array.findi dims ~f:(fun _ -> ( = ) (-1)))
         ~f:(fun (unknown, _) -> dims.(unknown) <- len / abs (Array.fold ~init:1 ~f:( * ) dims));
-      if len <> Array.fold ~init:1 ~f:( * ) dims then
+      let size = Array.fold ~init:1 ~f:( * ) dims in
+      if len <> size then
         raise
         @@ User_error
              [%string
-               "Ndarray.create_bigarray: File_mapped: invalid file size %{len#Int}, expected %{Array.fold \
-                ~init:1 ~f:( * ) dims#Int}"];
+               "Ndarray.create_bigarray: File_mapped: invalid file size %{len#Int}, expected %{size#Int}"];
       let ba =
         Unix.map_file fd (precision_to_bigarray_kind prec) Bigarray.c_layout false dims ~pos:(Int64.of_int 0)
       in
@@ -132,7 +136,7 @@ let create_array prec ~dims init_op =
   let f prec = as_array prec @@ create_bigarray prec ~dims init_op in
   Ops.map_prec { f } prec
 
-let empty_array prec = create_array prec ~dims:[||] (Constant_fill [| 0.0 |])
+let empty_array prec = create_array prec ~dims:[||] (Constant_fill { values = [| 0.0 |]; strict = false })
 
 (** {2 *** Accessing ***} *)
 
@@ -203,29 +207,34 @@ let set_bigarray arr ~f =
 
 let reset_bigarray (init_op : Ops.init_op) (type o b) (prec : (o, b) Ops.precision) (arr : (o, b) bigarray) =
   let dims = A.dims arr in
+  let constant_set_f f values strict =
+    let len = Array.length values in
+    if strict then (
+      let size = Array.fold ~init:1 ~f:( * ) dims in
+      if size <> len then
+        raise
+        @@ User_error
+             [%string
+               "Ndarray.reset_bigarray: Constant_fill: invalid data size %{len#Int}, expected %{size#Int}"];
+      set_bigarray arr ~f:(fun idcs -> f values.(indices_to_offset ~dims ~idcs)))
+    else set_bigarray arr ~f:(fun idcs -> f values.(indices_to_offset ~dims ~idcs % len))
+  in
+  let constant_set_float values strict = constant_set_f Fn.id values strict in
   match (prec, init_op) with
-  | Byte, Constant_fill cs ->
-      let size = Array.length cs in
-      set_bigarray arr ~f:(fun idcs ->
-          Char.of_int_exn @@ Int.of_float cs.(indices_to_offset ~dims ~idcs % size))
+  | Byte, Constant_fill { values; strict } ->
+      constant_set_f (Fn.compose Char.of_int_exn Int.of_float) values strict
   | Byte, Range_over_offsets ->
       set_bigarray arr ~f:(fun idcs -> Char.of_int_exn @@ indices_to_offset ~dims ~idcs)
   | Byte, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Random.char ())
-  | Half, Constant_fill cs ->
-      let size = Array.length cs in
-      set_bigarray arr ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
+  | Half, Constant_fill { values; strict } -> constant_set_float values strict
   | Half, Range_over_offsets ->
       set_bigarray arr ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
   | Half, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Random.float_range 0.0 1.0)
-  | Single, Constant_fill cs ->
-      let size = Array.length cs in
-      set_bigarray arr ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
+  | Single, Constant_fill { values; strict } -> constant_set_float values strict
   | Single, Range_over_offsets ->
       set_bigarray arr ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
   | Single, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Random.float_range 0.0 1.0)
-  | Double, Constant_fill cs ->
-      let size = Array.length cs in
-      set_bigarray arr ~f:(fun idcs -> cs.(indices_to_offset ~dims ~idcs % size))
+  | Double, Constant_fill { values; strict } -> constant_set_float values strict
   | Double, Range_over_offsets ->
       set_bigarray arr ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
   | Double, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Random.float_range 0.0 1.0)
