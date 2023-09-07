@@ -132,7 +132,7 @@ let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
 let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un)
-    ~op_asn ~grad_asn ?(grad_spec = If_needed) make_shape ts =
+    ?(init_op = default_init_op) ~op_asn ~grad_asn ?(grad_spec = If_needed) make_shape ts =
   let ts = List.sort ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
   let fwd_embed = List.map ts ~f:is_fwd_root in
   List.iter2_exn ts fwd_embed ~f:(fun ti e -> if e then remove_fwd_root ti);
@@ -147,7 +147,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
     |> List.reduce ~f:Ops.promote_prec
     |> Option.value ~default:!default_value_prec
   in
-  let v = LA.create prec ~id ~label ~dims ~literal:false default_init_op in
+  let v = LA.create prec ~id ~label ~dims ~literal:false init_op in
   let rec shape_logics = function
     | [] -> [ Shape.Terminal ]
     | [ t1 ] -> [ Shape.Transpose (transpose_op, t1.shape) ]
@@ -251,7 +251,7 @@ let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axi
   in
   let grad_asn ~v:_ ~g:_ ~projections:_ = Assignments.Noop in
   let make_shape = Shape.make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced () in
-  op ~op_label:label ?desc_label ?compose_op:None ?transpose_op:None ~op_asn ~grad_asn ~grad_spec make_shape
+  op ~op_label:label ?desc_label ?compose_op:None ?transpose_op:None ?init_op ~op_asn ~grad_asn ~grad_spec make_shape
     []
 
 let error_if_unknown_shape m =
