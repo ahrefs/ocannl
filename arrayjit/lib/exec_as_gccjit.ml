@@ -306,14 +306,14 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
   loop_proc ~name ~env body;
   !current_block
 
-let jit_func ~name (context : context) ctx params (traced_store, proc) =
+let jit_func ~name (context : context) ctx bindings (traced_store, proc) =
   let open Gccjit in
   let fkind = Function.Exported in
   let func = Function.create ctx fkind (Type.get ctx Void) name [] in
-  let params = Indexing.assoc_of_bindings params in
+  let bindings = Indexing.assoc_of_bindings bindings in
   let env =
     Map.of_alist_exn (module Indexing.Symbol)
-    @@ List.mapi params ~f:(fun pos ({ Indexing.static_symbol; _ }, _) ->
+    @@ List.mapi bindings ~f:(fun pos ({ Indexing.static_symbol; _ }, _) ->
            (static_symbol, RValue.param @@ Function.param func pos))
   in
   let init_block = Block.create ~name:("init_" ^ name) func in
@@ -332,9 +332,9 @@ let jit_func ~name (context : context) ctx params (traced_store, proc) =
      Context.dump_to_file ctx ~update_locs:true f_name);
   ctx_info
 
-type jitted = { context : context; run : unit -> unit; params : unit Indexing.bindings }
+type jitted = { context : context; run : unit -> unit; bindings : unit Indexing.bindings }
 
-let jit old_context ~name ?verbose:_ params compiled =
+let jit old_context ~name ?verbose:_ bindings compiled =
   (* TODO: add verbose logs *)
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
@@ -345,7 +345,7 @@ let jit old_context ~name ?verbose:_ params compiled =
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)
-  let ctx_info = jit_func ~name old_context ctx params compiled in
+  let ctx_info = jit_func ~name old_context ctx bindings compiled in
   let result = Context.compile ctx in
   let context = { arrays = ctx_info.ctx_arrays; result = Some result } in
   let run : unit -> unit =
@@ -369,11 +369,11 @@ let jit old_context ~name ?verbose:_ params compiled =
                         %{upto#Int}"]);
           Param (i, link more Ctypes.(int @-> cs))
     in
-    let runf = link params Ctypes.(returning void) in
+    let runf = link bindings Ctypes.(returning void) in
     fun () -> Indexing.apply runf
   in
   Context.release ctx;
-  { context; params; run }
+  { context; bindings; run }
 
 let from_host (context : context) la =
   match (la.LA.array, Map.find context.arrays la) with

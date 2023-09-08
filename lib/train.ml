@@ -93,5 +93,5 @@ let jit_and_run (type context) (backend : (module Backend_with_context with type
   let module Backend = (val backend) in
   let code = grad_update t in
   let jitted = Backend.jit Backend.active_context bindings code in
-  for_loop ~f:jitted.run jitted.params;
+  for_loop ~f:jitted.run jitted.bindings;
   jitted.context
