@@ -2,15 +2,8 @@ open Base
 open Arrayjit
 module NTDSL = Operation.NTDSL
 
-module type Backend_with_context = sig
-  include Backends.Backend
-
-  val active_context : context
-end
-
-(** Reinitializes a backend selected via a global [backend] flag, and creates an initial context on
-    the indicated device. *)
-let fresh_backend ?(verbose = true) ?(reinit = true) ?(on_device_num = 0) () =
+(** Reinitializes a backend selected via a global [backend] flag. *)
+let fresh_backend ?(verbose = true) () =
   let open Backends in
   let backend =
     match Utils.get_global_arg ~verbose ~arg_name:"backend" ~default:"gccjit" |> String.lowercase with
@@ -18,13 +11,8 @@ let fresh_backend ?(verbose = true) ?(reinit = true) ?(on_device_num = 0) () =
     | "cuda" -> (module Cuda_backend : Backend)
     | backend -> invalid_arg [%string "Train.fresh_backend: unknown backend %{backend}"]
   in
-  if reinit then reinitialize backend;
-  let module Backend = (val backend) in
-  (module struct
-    include Backend
-
-    let active_context = Backend.init @@ Backend.get_device ~ordinal:on_device_num
-  end : Backend_with_context)
+  reinitialize backend;
+  backend
 
 let is_param t =
   match t with
@@ -86,12 +74,3 @@ let for_loop ~f bindings =
             idx := old_idx)
   in
   loop @@ Indexing.assoc_of_bindings bindings
-
-(** A small helper that automates [Train.grad_update], [Backend.jit] and [Train.for_loop]. *)
-let jit_and_run (type context) (backend : (module Backend_with_context with type context = context)) bindings
-    t : context =
-  let module Backend = (val backend) in
-  let code = grad_update t in
-  let jitted = Backend.jit Backend.active_context bindings code in
-  for_loop ~f:jitted.run jitted.bindings;
-  jitted.context

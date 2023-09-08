@@ -23,7 +23,9 @@ let _suspended () =
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%op f5 = f 5 in
   let module Backend = (val Train.fresh_backend ()) in
-  let _ctx = Train.jit_and_run (module Backend) IDX.empty f5 in
+  let ctx = Backend.init @@ Backend.get_device ~ordinal:0 in
+  let jitted = Backend.jit ctx IDX.empty @@ Train.grad_update f5 in
+  jitted.run ();
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   Stdio.printf "\n%!"
@@ -46,7 +48,9 @@ let _suspended () =
   Tensor.print_tree ~with_id:true ~with_value:false ~with_grad:false ~depth:9 fx;
   Stdio.print_endline "\n";
   let module Backend = (val Train.fresh_backend ()) in
-  let _ctx = Train.jit_and_run (module Backend) bindings fx in
+  let ctx = Backend.init @@ Backend.get_device ~ordinal:0 in
+  let jitted = Backend.jit ctx IDX.empty @@ Train.grad_update fx in
+  jitted.run ();
   Tensor.print ~with_grad:true ~with_code:true ~with_low_level:true `Default fx;
   Stdio.print_endline "\n";
   Tensor.print_tree ~with_id:true ~with_value:true ~with_grad:true ~depth:9 fx;
@@ -72,13 +76,14 @@ let () =
   let%op l = d *. "f" [ -2 ] in
   List.iter ~f:Tensor.set_fully_on_host [ e; d; l ];
   let module Backend = (val Train.fresh_backend ()) in
-  let ctx = Train.jit_and_run (module Backend) IDX.empty l in
+  let jitted = Backend.(jit (init @@ get_device ~ordinal:0) IDX.empty @@ Train.grad_update l) in
+  jitted.run ();
   Stdio.print_endline
     "\n\
      We did not update the params: all values and gradients will be at initial points,\n\
     \    which are specified in the tensor in the brackets.";
   Tensor.print_tree ~with_grad:true ~depth:9 l;
-  let jitted = Backend.jit ctx IDX.empty @@ Train.sgd_update l in
+  let jitted = Backend.jit jitted.context IDX.empty @@ Train.sgd_update l in
   jitted.run ();
   Stdio.print_endline
     "\n\
@@ -86,7 +91,7 @@ let () =
     \    only params values will change, compared to the above.";
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   (* We could reuse the jitted code if we did not use `jit_and_run`. *)
-  let jitted = Backend.jit ctx IDX.empty @@ Train.grad_update l in
+  let jitted = Backend.jit jitted.context IDX.empty @@ Train.grad_update l in
   jitted.run ();
   Stdio.print_endline
     "\n\
