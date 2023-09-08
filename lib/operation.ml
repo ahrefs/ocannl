@@ -177,6 +177,41 @@ let stop_gradient =
     a [Fixed] marker on the dimensions. This way we avoid introducing a new node. *)
 let stop_broadcast t = Shape.set_dims_type t.Tensor.shape Shape.fixed
 
+let for_loop ~f bindings =
+  let rec loop = function
+    | [] -> f ()
+    | ({ Indexing.static_range; static_symbol }, idx) :: more -> (
+        match static_range with
+        | None ->
+            raise
+            @@ Tensor.Session_error
+                 ( [%string
+                     "Operation.for_loop: missing range for static symbol %{Indexing.symbol_ident \
+                      static_symbol}"],
+                   None )
+        | Some range ->
+            let old_idx = !idx in
+            for i = 0 to range - 1 do
+              idx := i;
+              loop more
+            done;
+            idx := old_idx)
+  in
+  loop @@ Indexing.assoc_of_bindings bindings
+
+let slice ?desc_label ~grad_spec (batch_idx : Indexing.static_symbol) t1 : Tensor.t =
+  let module NTDSL = Initial_NTDSL in
+  let op_asn ~v ~t1 ~projections =
+    Assignments.Fetch
+      {
+        array = v;
+        fetch_op = Slice { batch_idx; sliced = t1.Tensor.value };
+        dims = lazy (Lazy.force projections).Indexing.lhs_dims;
+      }
+  in
+  let%cd grad_asn ~v:_ ~g ~t1 ~projections = g1 =+ g in
+  Tensor.unop ?desc_label ~transpose_op:(Batch_slice batch_idx) ~op_label:"@|" ~op_asn ~grad_asn ~grad_spec t1
+
 module DO = struct
   let ( * ) = matmul ~grad_spec:If_needed
   let ( *. ) = pointmul ~grad_spec:If_needed
@@ -189,12 +224,14 @@ module DO = struct
   let ( - ) = sub ~grad_spec:If_needed
   let ( ~- ) ?desc_label t = ( *. ) ?desc_label !.(-1.) t
   let ( /. ) = pointmul ~grad_spec:If_needed
+  let ( @| ) ?desc_label t1 idx = slice ?desc_label ~grad_spec:If_needed idx t1
 end
 
 module NDO = struct
   include NDO_without_div
 
   let ( /. ) = pointdiv ~grad_spec:Prohibit_grad
+  let ( @| ) ?desc_label t1 idx = slice ?desc_label ~grad_spec:Prohibit_grad idx t1
 end
 
 module TDSL = struct
@@ -211,12 +248,14 @@ module TDSL = struct
 
   let init_const ~l ?(b = []) ?(i = []) ?(o = []) values =
     Tensor.term ~label:l ~grad_spec:Prohibit_grad ~batch_dims:b ~input_dims:i ~output_dims:o
-      ~init_op:(Constant_fill { values; strict=false }) ()
+      ~init_op:(Constant_fill { values; strict = false })
+      ()
 
   (** It's like `Tensor.param` but without shape inference. *)
   let init_param ~l ?(b = []) ?(i = []) ?(o = []) values =
     Tensor.term ~label:l ~grad_spec:Require_grad ~batch_dims:b ~input_dims:i ~output_dims:o
-      ~init_op:(Constant_fill { values; strict=false }) ()
+      ~init_op:(Constant_fill { values; strict = false })
+      ()
 end
 
 module NTDSL = struct

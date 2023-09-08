@@ -47,7 +47,7 @@ let _suspended () =
       ~init_op:(Constant_fill xs) ()
   in
   let session_step = NTDSL.O.(NTDSL.counter !..1) in
-  let%op x = x_flat @.| session_step in
+  let%op x = x_flat @| session_step in
   let%op fx = f x in
   Stdio.print_endline "\n";
   Tensor.print_tree ~with_id:true ~with_value:false ~with_grad:false ~depth:9 fx;

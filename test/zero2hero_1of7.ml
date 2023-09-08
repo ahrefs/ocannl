@@ -128,7 +128,7 @@ let%expect_test "Graph drawing fetch" =
       ~init_op:(Constant_fill xs) ()
   in
   let session_step = NTDSL.O.(NTDSL.counter !..1) in
-  let%op x = x_flat @.| session_step in
+  let%op x = x_flat @| session_step in
   Tensor.set_fully_on_host x;
   let%op fx = f x in
   let ys =

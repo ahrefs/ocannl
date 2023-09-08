@@ -62,8 +62,8 @@ let _suspended () =
   let%op minus_lr = -0.00001 in
 
   (* minus_learning_rate := Some minus_lr; *)
-  let%op moons_input = (moons_flat @.| session_refresh) @.| session_step in
-  let%op moons_class = (moons_classes @.| session_refresh) @.| session_step in
+  let%op moons_input = (moons_flat @| session_refresh) @| session_step in
+  let%op moons_class = (moons_classes @| session_refresh) @| session_step in
   let%op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
   (* let%op ssq w = (w **. 2) ++ "...|...->... => 0" in *)
   let%op ssq w = (w *. w) ++ "...|...->... => 0" in
@@ -228,8 +228,8 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
   let steps = epochs * n_batches in
   let%op minus_lr = -0.1 *. (!..steps - session_step) /. !..steps in
   (* minus_learning_rate := Some minus_lr; *)
-  let%op moons_input = moons_flat @.| session_step in
-  let%op moons_class = moons_classes @.| session_step in
+  let%op moons_input = moons_flat @| session_step in
+  let%op moons_class = moons_classes @| session_step in
   let%op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
   let total_loss =
     if with_reg then
