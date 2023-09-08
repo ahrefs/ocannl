@@ -10,7 +10,7 @@ module type No_device_backend = sig
   val finalize : context -> unit
 
   val jit :
-    context -> name:string -> ?verbose:bool -> unit Indexing.bindings -> Assignments.t -> jitted
+    context -> ?name:string -> ?verbose:bool -> unit Indexing.bindings -> Assignments.t -> jitted
 
   val unsafe_cleanup : unit -> unit
 
@@ -67,8 +67,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     await device;
     Backend.finalize ctx
 
-  let jit { ctx; device } ~name ?verbose params code : jitted =
-    let result = Backend.jit ctx ~name ?verbose params code in
+  let jit { ctx; device } ?name ?verbose params code : jitted =
+    let result = Backend.jit ctx ?name ?verbose params code in
     let run () =
       assert (Domain.is_main_domain ());
       await device;
@@ -141,7 +141,8 @@ module Gccjit_device : No_device_backend with type context = Exec_as_gccjit.cont
   let init = init
   let finalize = finalize
 
-  let jit context ~name ?verbose params code =
+  let jit context ?name ?verbose params code =
+    let name = Option.value name ~default:(Assignments.get_name code) in
     jit context ~name ?verbose params @@ Assignments.compile_proc ~name ?verbose code
 
   let from_host = from_host
@@ -164,7 +165,8 @@ module Cuda_backend : Backend with type context = Exec_as_cuda.context = struct
   let init = init
   let finalize = finalize
 
-  let jit context ~name ?verbose params code =
+  let jit context ?name ?verbose params code =
+    let name = Option.value name ~default:(Assignments.get_name code) in
     jit context ~name ?verbose params @@ Assignments.compile_proc ~name ?verbose code
 
   let from_host = from_host

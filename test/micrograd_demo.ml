@@ -1,5 +1,6 @@
 open Base
 open Ocannl
+module IDX = Arrayjit.Indexing.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Arrayjit.Low_level.CDSL
@@ -21,7 +22,7 @@ let%expect_test "Micrograd README basic example" =
   Tensor.set_fully_on_host a;
   Tensor.set_fully_on_host b;
   let ctx = Backend.(init @@ get_device ~ordinal:0) in
-  let step = Backend.jit ctx ~name:"g_step" @@ Train.update_loss g in
+  let step = Backend.jit ctx IDX.empty @@ Train.grad_update g in
   step.run ();
   Tensor.print ~with_code:false ~with_grad:false `Default @@ g;
   [%expect

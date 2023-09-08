@@ -37,11 +37,13 @@ let params t =
   in
   loop (Set.empty (module Tensor)) { subtensor = t; embedded = true }
 
-let update_loss l =
+let grad_update l =
   match l.Tensor.diff with
   | Some diff ->
       let%cd init_grad = l.grad =: 1 in
-      Assignments.sequential [ l.forward; diff.zero_grads; init_grad; diff.backprop ]
+      Assignments.(
+        Block_comment
+          (l.value.label ^ " grad update", sequential [ l.forward; diff.zero_grads; init_grad; diff.backprop ]))
   | None -> raise @@ Tensor.Session_error ("Train.backprop: tensor is not differentiable", Some l)
 
 (** See: {!https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py}. *)
@@ -57,9 +59,12 @@ let sgd_one ?(lr = 0.001) ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = f
     p =- !.lr *. pg]
 
 let sgd_update ?lr ?momentum ?weight_decay ?nesterov t =
-  params t |> Set.to_list
-  |> List.map ~f:(sgd_one ?lr ?momentum ?weight_decay ?nesterov)
-  |> Assignments.sequential
+  let code =
+    params t |> Set.to_list
+    |> List.map ~f:(sgd_one ?lr ?momentum ?weight_decay ?nesterov)
+    |> Assignments.sequential
+  in
+  Assignments.(Block_comment (t.value.label ^ " sgd update", code))
 
 let for_loop ~f bindings =
   let rec loop = function
@@ -82,11 +87,11 @@ let for_loop ~f bindings =
   in
   loop @@ Indexing.assoc_of_bindings bindings
 
-(** A small helper that automates [Train.update_loss], [Backend.jit] and [Train.for_loop]. *)
+(** A small helper that automates [Train.grad_update], [Backend.jit] and [Train.for_loop]. *)
 let jit_and_run (type context) (backend : (module Backend_with_context with type context = context)) bindings
     t : context =
   let module Backend = (val backend) in
-  let code = update_loss t in
-  let jitted = Backend.jit ~name:(t.value.label ^ "_fwd_bprop") Backend.active_context bindings code in
+  let code = grad_update t in
+  let jitted = Backend.jit Backend.active_context bindings code in
   for_loop ~f:jitted.run jitted.params;
   jitted.context

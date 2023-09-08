@@ -36,6 +36,16 @@ and t =
 
 let is_noop = function Noop -> true | _ -> false
 
+let rec get_name =
+  let punct_or_sp = Str.regexp "[-.;, ]" in
+  let punct_and_sp = Str.regexp {|[-.;,]\( |$\)|} in
+  function
+  | Block_comment (s, _) -> Str.global_replace punct_and_sp "" s |> Str.global_replace punct_or_sp "_"
+  | Seq (t1, t2) ->
+      let n1 = get_name t1 and n2 = get_name t2 in
+      if String.is_empty n1 || String.is_empty n2 then n1 ^ n2 else n1 ^ "_then_" ^ n2
+  | _ -> ""
+
 module Nd = Ndarray
 
 let remove_updates array c =

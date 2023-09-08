@@ -9,8 +9,8 @@ let _suspended () =
   Random.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
-  let code = Train.update_loss v in
-  let jitted = Backend.jit ~name:"affine_example" Backend.active_context IDX.empty code in
+  let code = Train.grad_update v in
+  let jitted = Backend.jit Backend.active_context IDX.empty code in
   jitted.run ();
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_id:true ~with_grad:true ~depth:9 v;
@@ -78,7 +78,7 @@ let () =
      We did not update the params: all values and gradients will be at initial points,\n\
     \    which are specified in the tensor in the brackets.";
   Tensor.print_tree ~with_grad:true ~depth:9 l;
-  let jitted = Backend.jit ~name:(l.value.label ^ "_sgd_update") ctx IDX.empty @@ Train.sgd_update l in
+  let jitted = Backend.jit ctx IDX.empty @@ Train.sgd_update l in
   jitted.run ();
   Stdio.print_endline
     "\n\
@@ -86,7 +86,7 @@ let () =
     \    only params values will change, compared to the above.";
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   (* We could reuse the jitted code if we did not use `jit_and_run`. *)
-  let jitted = Backend.jit ~name:(l.value.label ^ "_fwd_bprop_2") ctx IDX.empty @@ Train.update_loss l in
+  let jitted = Backend.jit ctx IDX.empty @@ Train.grad_update l in
   jitted.run ();
   Stdio.print_endline
     "\n\
