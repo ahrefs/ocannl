@@ -313,7 +313,7 @@ let jit_func ~name (context : context) ctx params (traced_store, proc) =
   let params = Indexing.assoc_of_bindings params in
   let env =
     Map.of_alist_exn (module Indexing.Symbol)
-    @@ List.mapi params ~f:(fun pos ({Indexing.static_symbol; _}, _) ->
+    @@ List.mapi params ~f:(fun pos ({ Indexing.static_symbol; _ }, _) ->
            (static_symbol, RValue.param @@ Function.param func pos))
   in
   let init_block = Block.create ~name:("init_" ^ name) func in
@@ -353,7 +353,21 @@ let jit old_context ~name ?verbose:_ params compiled =
      fun (type b) (bs : b Indexing.bindings) (cs : b Ctypes.fn) ->
       match bs with
       | Base -> Indexing.Result (Result.code result name Ctypes.(void @-> cs))
-      | Bind (_, i, more) -> Param (i, link more Ctypes.(int @-> cs))
+      | Bind ({ static_range; static_symbol }, i, more) ->
+          if !i < 0 then
+            raise
+            @@ Ndarray.User_error
+                 [%string
+                   "Exec_as_gccjit: static index %{Indexing.symbol_ident static_symbol} is negative: \
+                    %{!i#Int}"];
+          Option.iter static_range ~f:(fun upto ->
+              if !i >= upto then
+                raise
+                @@ Ndarray.User_error
+                     [%string
+                       "Exec_as_gccjit: static index %{Indexing.symbol_ident static_symbol} is too big: \
+                        %{upto#Int}"]);
+          Param (i, link more Ctypes.(int @-> cs))
     in
     let runf = link params Ctypes.(returning void) in
     fun () -> Indexing.apply runf

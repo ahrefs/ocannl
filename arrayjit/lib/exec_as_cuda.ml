@@ -443,7 +443,21 @@ let jit ~name ?(verbose = false) old_context params ((traced_store, _) as compil
         | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit: launching the kernel\n%!";
     (* if !Low_level.debug_verbose_trace then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
-    let idx_args = List.map idx_args ~f:(fun i -> Cu.Int !i) in
+    let idx_args = List.map2_exn idx_params idx_args ~f:(fun {static_symbol; static_range} i ->
+      if !i < 0 then
+        raise
+        @@ Ndarray.User_error
+             [%string
+               "Exec_as_cuda: static index %{Indexing.symbol_ident static_symbol} is negative: \
+                %{!i#Int}"];
+      Option.iter static_range ~f:(fun upto ->
+          if !i >= upto then
+            raise
+            @@ Ndarray.User_error
+                 [%string
+                   "Exec_as_cuda: static index %{Indexing.symbol_ident static_symbol} is too big: \
+                    %{upto#Int}"]);
+   Cu.Int !i) in
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream @@ idx_args @ args;
     if verbose then Stdio.printf "Exec_as_cuda.jit: kernel launched\n%!"
   in
