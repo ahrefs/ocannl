@@ -138,7 +138,7 @@ let rec pointdiv ?desc_label ~grad_spec t1 t2 =
     end
   end in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 / v2 in
-  (* We cannot use g in a tensor expression since it's an array, so we keep it to the left-hand-side. *)
+  (* We cannot use g in a tensor expression since it's an array, so we keep it to the left (RHS1). *)
   let%cd grad_asn ~v:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g / v2;
     g2 =+ g * (-1 *. t1 /. (t2 **. 2))
