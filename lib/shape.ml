@@ -818,7 +818,7 @@ let rec propagate_shapes (update : update_step) =
       cur_sh.axis_labels <- lhs_axis_labels;
       let rhs_axis_labels : axis_str_map = Map.filter_map rhs_labels ~f:(Map.find all_axis_labels) in
       sh.axis_labels <- rhs_axis_labels
-  | Transpose (Batch_slice { static_symbol = _; static_range }, sh) ->
+  | Transpose (Batch_slice static, sh) ->
       let list_dims sh = list_of_dims @@ sh.batch in
       let sh_size = List.length @@ list_dims sh in
       let cur_size = List.length @@ list_dims cur_sh in
@@ -831,12 +831,15 @@ let rec propagate_shapes (update : update_step) =
           (* Broadcast to more axes. *)
           update_kind Batch cur_sh
             ~f:(map_dims ~f:(fun l -> List.take (List.tl_exn @@ list_dims sh) (sh_size - (cur_size + 1)) @ l));
-        let static_range = Option.value static_range ~default:(-1) in
+        let static_range = Option.value static.static_range ~default:(-1) in
         let expand_dims over_dims = map_dims over_dims ~f:(fun l -> static_range :: l) in
         update_kind Batch ~f:expand_dims cur_sh;
         let logic = Transpose (Pointwise_un, sh) in
         let update_other_axes = { shape = cur_sh; logic } in
         propagate_shapes update_other_axes;
+        let range = List.hd_exn @@ list_dims cur_sh in
+        if range >= 0 && range < Option.value static.static_range ~default:0 then
+          static.static_range <- Some range;
         let reduce_dims over_dims = map_dims over_dims ~f:List.tl_exn in
         update_kind Batch ~f:reduce_dims cur_sh;
         let cur_axis_labels =

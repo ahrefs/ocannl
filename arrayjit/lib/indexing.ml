@@ -24,7 +24,10 @@ type 'a environment = 'a Map.M(Symbol).t
 
 let empty_env : 'a environment = Map.empty (module Symbol)
 
-type static_symbol = { static_symbol : symbol; static_range : int option }
+type static_symbol = {
+  static_symbol : symbol;
+  mutable static_range : int option; [@compare.ignore] [@equal.ignore]
+}
 [@@deriving compare, equal, sexp, hash]
 
 type 'a bindings = Base | Bind of static_symbol * int ref * (int -> 'a) bindings
