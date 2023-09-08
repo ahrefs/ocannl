@@ -2,7 +2,15 @@ open Base
 open Arrayjit
 module NTDSL = Operation.NTDSL
 
-let fresh_backend ?(verbose = true) () =
+module type Backend_with_context = sig
+  include Backends.Backend
+
+  val active_context : context
+end
+
+(** Reinitializes a backend selected via a global [backend] flag, and creates an initial context on
+    the indicated device. *)
+let fresh_backend ?(verbose = true) ?(reinit = true) ?(on_device_num = 0) () =
   let open Backends in
   let backend =
     match Utils.get_global_arg ~verbose ~arg_name:"backend" ~default:"gccjit" |> String.lowercase with
@@ -10,8 +18,13 @@ let fresh_backend ?(verbose = true) () =
     | "cuda" -> (module Cuda_backend : Backend)
     | backend -> invalid_arg [%string "Train.fresh_backend: unknown backend %{backend}"]
   in
-  reinitialize backend;
-  backend
+  if reinit then reinitialize backend;
+  let module Backend = (val backend) in
+  (module struct
+    include Backend
+
+    let active_context = Backend.init @@ Backend.get_device ~ordinal:on_device_num
+  end : Backend_with_context)
 
 let is_param t =
   match t with
@@ -47,3 +60,33 @@ let sgd_update ?lr ?momentum ?weight_decay ?nesterov t =
   params t |> Set.to_list
   |> List.map ~f:(sgd_one ?lr ?momentum ?weight_decay ?nesterov)
   |> Assignments.sequential
+
+let for_loop ~f bindings =
+  let rec loop = function
+    | [] -> f ()
+    | ({ Indexing.static_range; static_symbol }, idx) :: more -> (
+        match static_range with
+        | None ->
+            raise
+            @@ Tensor.Session_error
+                 ( [%string
+                     "Train.for_loop: missing range for static symbol %{Indexing.symbol_ident static_symbol}"],
+                   None )
+        | Some range ->
+            let old_idx = !idx in
+            for i = 0 to range - 1 do
+              idx := i;
+              loop more
+            done;
+            idx := old_idx)
+  in
+  loop @@ Indexing.assoc_of_bindings bindings
+
+(** A small helper that automates [Train.update_loss], [Backend.jit] and [Train.for_loop]. *)
+let jit_and_run (type context) (backend : (module Backend_with_context with type context = context)) bindings
+    t : context =
+  let module Backend = (val backend) in
+  let code = update_loss t in
+  let jitted = Backend.jit ~name:(t.value.label ^ "_fwd_bprop") Backend.active_context bindings code in
+  for_loop ~f:jitted.run jitted.params;
+  jitted.context

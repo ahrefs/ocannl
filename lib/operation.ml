@@ -177,28 +177,6 @@ let stop_gradient =
     a [Fixed] marker on the dimensions. This way we avoid introducing a new node. *)
 let stop_broadcast t = Shape.set_dims_type t.Tensor.shape Shape.fixed
 
-let for_loop ~f bindings =
-  let rec loop = function
-    | [] -> f ()
-    | ({ Indexing.static_range; static_symbol }, idx) :: more -> (
-        match static_range with
-        | None ->
-            raise
-            @@ Tensor.Session_error
-                 ( [%string
-                     "Operation.for_loop: missing range for static symbol %{Indexing.symbol_ident \
-                      static_symbol}"],
-                   None )
-        | Some range ->
-            let old_idx = !idx in
-            for i = 0 to range - 1 do
-              idx := i;
-              loop more
-            done;
-            idx := old_idx)
-  in
-  loop @@ Indexing.assoc_of_bindings bindings
-
 let slice ?desc_label ~grad_spec (batch_idx : Indexing.static_symbol) t1 : Tensor.t =
   let module NTDSL = Initial_NTDSL in
   let op_asn ~v ~t1 ~projections =

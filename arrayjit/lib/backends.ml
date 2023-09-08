@@ -91,7 +91,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
           await device;
           device.next_task := Some result.run
         in
-        { context = { ctx = result.context; device }; run; params = Indexing.Base })
+        { context = { ctx = result.context; device }; run; params = Indexing.Empty })
 
   let num_devices () = Domain.recommended_domain_count () - 1
 

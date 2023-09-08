@@ -1,133 +1,93 @@
 open Base
 open Ocannl
+module IDX = Arrayjit.Indexing.IDX
 module CDSL = Arrayjit.Low_level.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 
-
-
-
 let _suspended () =
-  (* SDSL.drop_all_sessions (); *)
   Random.init 0;
+  let module Backend = (val Train.fresh_backend ()) in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
-  (* refresh_session (); *)
+  let code = Train.update_loss v in
+  let jitted = Backend.jit ~name:"affine_example" Backend.active_context IDX.empty code in
+  jitted.run ();
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_id:true ~with_grad:true ~depth:9 v;
-  Stdio.printf "\nHigh-level code:\n%!";
-  (* print_session_code (); *)
-  Stdio.printf "\nCompiled code:\n%!";
-  (* print_session_code ~compiled:true (); *)
-  Stdio.printf "\n%!"
+  Caml.Format.printf "\nHigh-level code:\n%a\n%!" Sexp.pp_hum @@ [%sexp_of: Arrayjit.Assignments.t] code
 
 let _suspended () =
-  (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   CDSL.enable_all_debugs ();
   CDSL.virtualize_settings.enable_device_only <- false;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%op f5 = f 5 in
-  (* refresh_session (); *)
+  let module Backend = (val Train.fresh_backend ()) in
+  let _ctx = Train.jit_and_run (module Backend) IDX.empty f5 in
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   Stdio.printf "\n%!"
 
 let _suspended () =
-  let open Tensor.O in
-  (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let size = 100 in
-  let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
+  let values = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
+  (* Test that the batch axis dimensions will be inferred. *)
   let x_flat =
-    Tensor.term ~grad_spec:Tensor.Require_grad ~label:"x_flat"
-      ~batch_dims:[ size ]
-      ~input_dims:[]
-      ~output_dims:[ 1 ]
-      ~init_op:(Constant_fill xs) ()
+    Tensor.term ~grad_spec:Tensor.Require_grad ~label:"x_flat" ~input_dims:[] ~output_dims:[ 1 ]
+      ~init_op:(Constant_fill { values; strict = true })
+      ()
   in
-  let session_step = NTDSL.O.(NTDSL.counter !..1) in
+  let session_step, _, bindings = IDX.get_static_symbol IDX.empty in
   let%op x = x_flat @| session_step in
   let%op fx = f x in
   Stdio.print_endline "\n";
   Tensor.print_tree ~with_id:true ~with_value:false ~with_grad:false ~depth:9 fx;
   Stdio.print_endline "\n";
-  (* Tensor.print ~with_grad:true ~with_code:true ~with_low_level:true `Default fx; *)
-  let ys =
-    Array.map xs ~f:(fun _ ->
-        (* refresh_session (); *)
-        fx.@[0])
-  in
-  (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
-  let dys =
-    Array.map xs ~f:(fun _ ->
-        (* refresh_session (); *)
-        x.@%[0])
-  in
+  let module Backend = (val Train.fresh_backend ()) in
+  let _ctx = Train.jit_and_run (module Backend) bindings fx in
+  Tensor.print ~with_grad:true ~with_code:true ~with_low_level:true `Default fx;
   Stdio.print_endline "\n";
-  (* print_preamble (); *)
+  Tensor.print_tree ~with_id:true ~with_value:true ~with_grad:true ~depth:9 fx;
   Stdio.print_endline "\n";
   let plot_box =
     let open PrintBox_utils in
     plot ~size:(75, 35) ~x_label:"x" ~y_label:"f(x)"
       [
-        Scatterplot { points = Array.zip_exn xs ys; pixel = "#" };
-        Scatterplot { points = Array.zip_exn xs dys; pixel = "*" };
+        Scatterplot { points = Array.zip_exn values (Tensor.value_1d_points ~xdim:0 fx); pixel = "#" };
+        Scatterplot { points = Array.zip_exn values (Tensor.grad_1d_points ~xdim:0 fx); pixel = "*" };
         Line_plot { points = Array.create ~len:20 0.; pixel = "-" };
       ]
   in
   PrintBox_text.output Stdio.stdout plot_box
 
-let _suspended () =
-  (* %expect_test "Graph drawing recompile" *)
-  (* let open Operation.TDSL in *)
-  let open Tensor.O in
-  (* SDSL.drop_all_sessions (); *)
-  (* CDSL.with_debug := true;
-     CDSL.keep_files_in_run_directory := true; *)
-  Random.init 0;
-  Stdio.print_endline "\nFirst refresh:";
-  let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
-  (* refresh_session (); *)
-  Tensor.print_tree ~with_grad:true ~depth:9 f;
-  let xs = Array.init 10 ~f:Float.(fun i -> of_int i - 5.) in
-  let ys =
-    Array.map xs ~f:(fun v ->
-        (* This is inefficient because it compiles the argument update inside the loop. *)
-        SDSL.compile_routine [%cd x =: !.v] ~name:"assign_x" ();
-        (* refresh_session (); *)
-        f.@[0])
-  in
-  let plot_box =
-    let open PrintBox_utils in
-    plot ~size:(75, 35) ~x_label:"x" ~y_label:"f(x)"
-      [ Scatterplot { points = Array.zip_exn xs ys; pixel = "#" } ]
-  in
-  PrintBox_text.output Stdio.stdout plot_box
-
 let () =
-  (* SDSL.drop_all_sessions (); *)
+  Random.init 0;
   CDSL.with_debug := true;
   CDSL.keep_files_in_run_directory := true;
   Random.init 0;
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in
-  SDSL.minus_learning_rate := Some (TDSL.init_const ~l:"minus_lr" ~o:[ 1 ] [| 0.1 |]);
-  (* everything_fully_on_host (); *)
-  SDSL.refresh_session ~update_params:false ();
+  List.iter ~f:Tensor.set_fully_on_host [ e; d; l ];
+  let module Backend = (val Train.fresh_backend ()) in
+  let ctx = Train.jit_and_run (module Backend) IDX.empty l in
   Stdio.print_endline
     "\n\
      We did not update the params: all values and gradients will be at initial points,\n\
     \    which are specified in the tensor in the brackets.";
   Tensor.print_tree ~with_grad:true ~depth:9 l;
-  SDSL.refresh_session ~update_params:true ();
+  let jitted = Backend.jit ~name:(l.value.label ^ "_sgd_update") ctx IDX.empty @@ Train.sgd_update l in
+  jitted.run ();
   Stdio.print_endline
     "\n\
      Now we updated the params, but after the forward and backward passes:\n\
     \    only params values will change, compared to the above.";
   Tensor.print_tree ~with_grad:true ~depth:9 l;
-  SDSL.refresh_session ~update_params:false ();
+  (* We could reuse the jitted code if we did not use `jit_and_run`. *)
+  let jitted = Backend.jit ~name:(l.value.label ^ "_fwd_bprop_2") ctx IDX.empty @@ Train.update_loss l in
+  jitted.run ();
   Stdio.print_endline
     "\n\
      Now again we did not update the params, they will remain as above, but both param\n\

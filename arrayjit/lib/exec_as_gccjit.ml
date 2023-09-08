@@ -352,7 +352,7 @@ let jit old_context ~name ?verbose:_ params compiled =
     let rec link : 'a. 'a Indexing.bindings -> 'a Ctypes.fn -> 'a Indexing.variadic =
      fun (type b) (bs : b Indexing.bindings) (cs : b Ctypes.fn) ->
       match bs with
-      | Base -> Indexing.Result (Result.code result name Ctypes.(void @-> cs))
+      | Empty -> Indexing.Result (Result.code result name Ctypes.(void @-> cs))
       | Bind ({ static_range; static_symbol }, i, more) ->
           if !i < 0 then
             raise
@@ -402,7 +402,7 @@ let merge_from_global ?(name_suffix = "") (context : context) ~dst ~accum ~src =
   in
   let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
   let name = [%string "merge_into_%{dst.Lazy_array.id#Int}%{name_suffix}"] in
-  jit context ~name ~verbose:false Indexing.Base (Low_level.compile_proc ~name llc)
+  jit context ~name ~verbose:false Indexing.Empty (Low_level.compile_proc ~name llc)
 
 let merge ?name_suffix la ~dst ~accum ~(src : context) =
   Option.map (Map.find src.arrays la) ~f:(fun src ->

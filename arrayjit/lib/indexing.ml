@@ -30,17 +30,17 @@ type static_symbol = {
 }
 [@@deriving compare, equal, sexp, hash]
 
-type 'a bindings = Base | Bind of static_symbol * int ref * (int -> 'a) bindings
+type 'a bindings = Empty | Bind of static_symbol * int ref * (int -> 'a) bindings
 
 let rec sexp_of_bindings : 'a. 'a bindings -> Sexp.t =
  fun (type a) (b : a bindings) ->
   match b with
-  | Base -> Sexp.Atom "bindings"
+  | Empty -> Sexp.Atom "bindings"
   | Bind (s, i, bs) -> Sexp.List [ sexp_of_static_symbol s; sexp_of_int !i; sexp_of_bindings bs ]
 
 let assoc_of_bindings bs =
   let rec loop : 'a. 'a bindings -> (static_symbol, int ref) List.Assoc.t =
-   fun (type a) (b : a bindings) -> match b with Base -> [] | Bind (s, i, bs) -> (s, i) :: loop bs
+   fun (type a) (b : a bindings) -> match b with Empty -> [] | Bind (s, i, bs) -> (s, i) :: loop bs
   in
   loop bs
 
@@ -112,3 +112,8 @@ let derive_index ~product_syms ~(projection : axis_index array) =
       | it -> Second it)
   in
   fun ~product -> Array.map positions ~f:(function First p -> product.(p) | Second it -> it)
+
+module IDX = struct
+  let empty = Empty
+  let get_static_symbol = get_static_symbol
+end
