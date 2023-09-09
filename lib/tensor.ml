@@ -315,18 +315,10 @@ let param ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?(strict = 
   (Option.value_exn t.diff).grad.never_virtual <- true;
   t
 
-let set_fully_on_host t =
-  t.value.never_virtual <- true;
-  t.value.never_device_only <- true;
-  Option.iter t.diff ~f:(fun diff ->
-      diff.grad.never_virtual <- true;
-      diff.grad.never_device_only <- true)
-
-let rec iter_embedded_tree ~f t =
-  f t;
-  List.iter ~f:(fun ch -> if ch.embedded then iter_embedded_tree ~f ch.subtensor) t.children
-
-let everything_fully_on_host = iter_embedded_tree ~f:set_fully_on_host
+let rec iter_embedded_arrays ~f t =
+  f t.value;
+  Option.iter t.diff ~f:(fun diff -> f diff.grad);
+  List.iter ~f:(fun ch -> if ch.embedded then iter_embedded_arrays ~f ch.subtensor) t.children
 
 (** *** Printing. *** *)
 

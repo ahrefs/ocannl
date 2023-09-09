@@ -1,10 +1,11 @@
 open Base
-open Arrayjit
+module LA = Arrayjit.Lazy_array
 module NTDSL = Operation.NTDSL
+open Arrayjit
 
 (** Reinitializes a backend selected via a global [backend] flag. *)
 let fresh_backend ?(verbose = true) () =
-  let open Backends in
+  let open Arrayjit.Backends in
   let backend =
     match Utils.get_global_arg ~verbose ~arg_name:"backend" ~default:"gccjit" |> String.lowercase with
     | "gccjit" -> (module Gccjit_backend : Backend)
@@ -88,3 +89,9 @@ let for_loop ~f bindings =
             idx := old_idx)
   in
   loop @@ Indexing.assoc_of_bindings bindings
+
+let set_fully_on_host (a : LA.t) =
+  a.never_virtual <- true;
+  a.never_device_only <- true
+
+let everything_fully_on_host = Tensor.iter_embedded_arrays ~f:set_fully_on_host
