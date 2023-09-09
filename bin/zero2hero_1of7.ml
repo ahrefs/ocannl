@@ -80,7 +80,7 @@ let () =
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in
-  List.iter ~f:Tensor.set_fully_on_host [ e; d; l ];
+  Tensor.everything_fully_on_host l;
   let module Backend = (val Train.fresh_backend ()) in
   let jitted = Backend.(jit (init @@ get_device ~ordinal:0) IDX.empty @@ Train.grad_update l) in
   jitted.run ();

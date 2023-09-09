@@ -322,6 +322,12 @@ let set_fully_on_host t =
       diff.grad.never_virtual <- true;
       diff.grad.never_device_only <- true)
 
+let rec iter_embedded_tree ~f t =
+  f t;
+  List.iter ~f:(fun ch -> if ch.embedded then iter_embedded_tree ~f ch.subtensor) t.children
+
+let everything_fully_on_host = iter_embedded_tree ~f:set_fully_on_host
+
 (** *** Printing. *** *)
 
 (** Converts ID, label and the dimensions of a node to a string. *)
