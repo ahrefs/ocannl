@@ -25,13 +25,18 @@ let params t =
   in
   loop (Set.empty (module Tensor)) { subtensor = t; embedded = true }
 
+let desc_label_suffix s =
+  let pos = (Option.value ~default:(-1) (String.rindex s '#')) + 1 in
+  String.sub s ~pos ~len:(String.length s - pos)
+
 let grad_update l =
   match l.Tensor.diff with
   | Some diff ->
       let%cd init_grad = l.grad =: 1 in
       Assignments.(
         Block_comment
-          (l.value.label ^ " grad update", sequential [ l.forward; diff.zero_grads; init_grad; diff.backprop ]))
+          ( desc_label_suffix l.value.label ^ " grad update",
+            sequential [ l.forward; diff.zero_grads; init_grad; diff.backprop ] ))
   | None -> raise @@ Tensor.Session_error ("Train.backprop: tensor is not differentiable", Some l)
 
 (** See: {!https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py}. *)
@@ -52,7 +57,7 @@ let sgd_update ?lr ?momentum ?weight_decay ?nesterov t =
     |> List.map ~f:(sgd_one ?lr ?momentum ?weight_decay ?nesterov)
     |> Assignments.sequential
   in
-  Assignments.(Block_comment (t.value.label ^ " sgd update", code))
+  Assignments.(Block_comment (desc_label_suffix t.value.label ^ " sgd update", code))
 
 let for_loop ~f bindings =
   let rec loop = function

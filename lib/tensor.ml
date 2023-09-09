@@ -141,7 +141,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
   session_state.next_id <- session_state.next_id + 1;
   let shape = make_shape ~id in
   let dims = lazy_to_dims shape in
-  let label = op_label ^ if String.is_empty desc_label then "" else "/" ^ desc_label in
+  let label = op_label ^ if String.is_empty desc_label then "" else "#" ^ desc_label in
   let prec =
     List.map ts ~f:(fun ti -> ti.value.prec)
     |> List.reduce ~f:Ops.promote_prec

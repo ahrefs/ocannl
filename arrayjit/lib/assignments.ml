@@ -37,8 +37,8 @@ and t =
 let is_noop = function Noop -> true | _ -> false
 
 let rec get_name =
-  let punct_or_sp = Str.regexp "[-.;, ]" in
-  let punct_and_sp = Str.regexp {|[-.;,]\( |$\)|} in
+  let punct_or_sp = Str.regexp "[-@*/:.;, ]" in
+  let punct_and_sp = Str.regexp {|[-@*/:.;,]\( |$\)|} in
   function
   | Block_comment (s, _) -> Str.global_replace punct_and_sp "" s |> Str.global_replace punct_or_sp "_"
   | Seq (t1, t2) ->
