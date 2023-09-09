@@ -559,19 +559,26 @@ let grad_2d_points ?from_axis ~xdim ~ydim t =
 let set_value t = Nd.set_from_float @@ Option.value_exn @@ Lazy.force t.value.array
 let get_value t = Nd.get_as_float @@ Option.value_exn @@ Lazy.force t.value.array
 
+let set_grad t = Nd.set_from_float @@ Option.value_exn @@ Lazy.force @@ (Option.value_exn t.diff).grad.array
+let get_grad t = Nd.get_as_float @@ Option.value_exn @@ Lazy.force @@ (Option.value_exn t.diff).grad.array
+
 let set_values t values =
   Ndarray.(reset (Constant_fill { values; strict = false }) @@ Option.value_exn @@ Lazy.force t.value.array)
 
 module O = struct
   (** Get the value at the given indices. *)
   let ( .@{} ) = get_value
+  let ( .@%{} ) = get_grad
 
   (** Set the value at the given indices. *)
   let ( .@{}<- ) = set_value
+  let ( .@%{}<- ) = set_grad
 
   (** Get the value at the given index from a single-axis shape tensor. *)
   let ( .@[] ) t indx = get_value t [| indx |]
+  let ( .@%[] ) t indx = get_grad t [| indx |]
 
   (** Set the value at the given index for a single-axis shape tensor. *)
   let ( .@[]<- ) t indx = set_value t [| indx |]
+  let ( .@%[]<- ) t indx = set_grad t [| indx |]
 end

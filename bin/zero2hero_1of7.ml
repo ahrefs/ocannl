@@ -10,7 +10,7 @@ let _suspended () =
   let module Backend = (val Train.fresh_backend ()) in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   let code = Train.grad_update v in
-  let jitted = Backend.jit Backend.active_context IDX.empty code in
+  let jitted = Backend.(jit (init @@ get_device ~ordinal:0) IDX.empty code) in
   jitted.run ();
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_id:true ~with_grad:true ~depth:9 v;
@@ -23,8 +23,7 @@ let _suspended () =
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%op f5 = f 5 in
   let module Backend = (val Train.fresh_backend ()) in
-  let ctx = Backend.init @@ Backend.get_device ~ordinal:0 in
-  let jitted = Backend.jit ctx IDX.empty @@ Train.grad_update f5 in
+  let jitted = Backend.(jit (init @@ get_device ~ordinal:0) IDX.empty @@ Train.grad_update f5) in
   jitted.run ();
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
@@ -41,16 +40,23 @@ let _suspended () =
       ~init_op:(Constant_fill { values; strict = true })
       ()
   in
-  let session_step, _, bindings = IDX.get_static_symbol IDX.empty in
-  let%op x = x_flat @| session_step in
+  let step_sym, step_ref, bindings = IDX.get_static_symbol IDX.empty in
+  let%op x = x_flat @| step_sym in
   let%op fx = f x in
   Stdio.print_endline "\n";
   Tensor.print_tree ~with_id:true ~with_value:false ~with_grad:false ~depth:9 fx;
   Stdio.print_endline "\n";
   let module Backend = (val Train.fresh_backend ()) in
   let ctx = Backend.init @@ Backend.get_device ~ordinal:0 in
-  let jitted = Backend.jit ctx IDX.empty @@ Train.grad_update fx in
-  jitted.run ();
+  let jitted = Backend.jit ctx bindings @@ Train.grad_update fx in
+  let ys = Array.create ~len:size 0. and dys = Array.create ~len:size 0. in
+  let open Tensor.O in
+  let f () =
+    jitted.run ();
+    ys.(!step_ref) <- fx.@[0];
+    dys.(!step_ref) <- fx.@%[0]
+  in
+  Train.for_loop ~f bindings;
   Tensor.print ~with_grad:true ~with_code:true ~with_low_level:true `Default fx;
   Stdio.print_endline "\n";
   Tensor.print_tree ~with_id:true ~with_value:true ~with_grad:true ~depth:9 fx;
@@ -59,8 +65,8 @@ let _suspended () =
     let open PrintBox_utils in
     plot ~size:(75, 35) ~x_label:"x" ~y_label:"f(x)"
       [
-        Scatterplot { points = Array.zip_exn values (Tensor.value_1d_points ~xdim:0 fx); pixel = "#" };
-        Scatterplot { points = Array.zip_exn values (Tensor.grad_1d_points ~xdim:0 fx); pixel = "*" };
+        Scatterplot { points = Array.zip_exn values ys; pixel = "#" };
+        Scatterplot { points = Array.zip_exn values dys; pixel = "*" };
         Line_plot { points = Array.create ~len:20 0.; pixel = "-" };
       ]
   in
