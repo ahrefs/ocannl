@@ -26,17 +26,24 @@ let params t =
   loop (Set.empty (module Tensor)) { subtensor = t; embedded = true }
 
 let desc_label_suffix s =
-  let pos = (Option.value ~default:(-1) (String.rindex s '#')) + 1 in
+  let pos = Option.value ~default:(-1) (String.rindex s '#') + 1 in
   String.sub s ~pos ~len:(String.length s - pos)
 
 let grad_update l =
   match l.Tensor.diff with
   | Some diff ->
       let%cd init_grad = l.grad =: 1 in
+      let label = desc_label_suffix l.value.label in
       Assignments.(
         Block_comment
-          ( desc_label_suffix l.value.label ^ " grad update",
-            sequential [ l.forward; diff.zero_grads; init_grad; diff.backprop ] ))
+          ( label ^ " grad update",
+            sequential
+              [
+                Block_comment (label ^ " fwd", l.forward);
+                Block_comment (label ^ " zero grads", diff.zero_grads);
+                init_grad;
+                Block_comment (label ^ " bprop", diff.backprop);
+              ] ))
   | None -> raise @@ Tensor.Session_error ("Train.backprop: tensor is not differentiable", Some l)
 
 (** See: {!https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py}. *)
@@ -44,12 +51,14 @@ let sgd_one ?(lr = 0.001) ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = f
   if not @@ is_param p then raise @@ Tensor.Session_error ("Train.sgd_one: not a parameter", Some p);
   let pg = NTDSL.term ~label:(p.value.label ^ " sgd delta") () in
   let b = NTDSL.term ~label:(p.value.label ^ " sgd momentum") () in
-  [%cd
-    pg =: p.grad + (!.weight_decay *. p);
-    if Float.(momentum > 0.0) then (
-      b =: (!.momentum *. b) + pg;
-      if nesterov then pg =+ !.momentum *. b else pg =: b);
-    p =- !.lr *. pg]
+  Assignments.Block_comment
+    ( desc_label_suffix p.value.label ^ " param sgd step",
+      [%cd
+        pg =: p.grad + (!.weight_decay *. p);
+        if Float.(momentum > 0.0) then (
+          b =: (!.momentum *. b) + pg;
+          if nesterov then pg =+ !.momentum *. b else pg =: b);
+        p =- !.lr *. pg] )
 
 let sgd_update ?lr ?momentum ?weight_decay ?nesterov t =
   let code =
@@ -57,7 +66,7 @@ let sgd_update ?lr ?momentum ?weight_decay ?nesterov t =
     |> List.map ~f:(sgd_one ?lr ?momentum ?weight_decay ?nesterov)
     |> Assignments.sequential
   in
-  Assignments.(Block_comment (desc_label_suffix t.value.label ^ " sgd update", code))
+  Assignments.Block_comment (desc_label_suffix t.value.label ^ " sgd update", code)
 
 let for_loop ~f bindings =
   let rec loop = function
