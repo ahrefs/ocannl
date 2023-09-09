@@ -140,6 +140,7 @@ let interpret_unop op v =
 
 type voidptr = unit Ctypes.ptr
 
+let compare_voidptr = Ctypes.ptr_compare
 let equal_voidptr : voidptr -> voidptr -> bool = phys_equal
 
 type global_identifier =
@@ -149,4 +150,4 @@ type global_identifier =
       prec : (prec[@equal.ignore] [@compare.ignore]);
       dims : int array Lazy.t;
     }
-[@@deriving sexp, equal]
+[@@deriving sexp, equal, compare]

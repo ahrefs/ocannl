@@ -4,7 +4,7 @@ open Base
 module Nd = Ndarray
 module LA = Lazy_array
 
-type scope_id = { nd : LA.t; scope_id : int } [@@deriving sexp_of, equal, hash]
+type scope_id = { nd : LA.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
 (** *** Low-level representation. *)
 
 let get_scope =
@@ -17,7 +17,7 @@ let get_scope =
 type t =
   | Noop
   | Comment of string
-  | Staged_compilation of ((unit -> unit)[@equal.ignore])
+  | Staged_compilation of ((unit -> unit)[@equal.ignore] [@compare.ignore])
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
   | Zero_out of LA.t
@@ -28,7 +28,7 @@ type t =
 and float_t =
   | Local_scope of {
       id : scope_id;
-      prec : (Ops.prec[@equal.ignore]);
+      prec : (Ops.prec[@equal.ignore] [@compare.ignore]);
       body : t;
       orig_indices : Indexing.axis_index array;
     }
@@ -38,7 +38,7 @@ and float_t =
   | Binop of Ops.binop * float_t * float_t
   | Unop of Ops.unop * float_t
   | Constant of float
-[@@deriving sexp_of, equal]
+[@@deriving sexp_of, equal, compare]
 
 let binop ~op ~rhs1 ~rhs2 = match op with Ops.Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Binop (op, rhs1, rhs2)
 let unop ~op ~rhs = match op with Ops.Identity -> rhs | _ -> Unop (op, rhs)
@@ -59,7 +59,6 @@ let executor_print_comments = ref false
 let keep_files_in_run_directory = ref false
 let with_debug = ref false
 let debug_verbose_trace = ref false
-
 let code_sexp_margin = ref 200
 
 let fprint_code ppf c =
@@ -229,7 +228,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         loop_float env llv;
         let traced : traced_array = get_node traced_store array in
         Hash_set.add traced.assignments (lookup env idcs);
-        traced.rhses <- List.dedup_and_sort ~compare:Caml.compare @@ (llv :: traced.rhses);
+        traced.rhses <- List.dedup_and_sort ~compare:[%compare: float_t] @@ (llv :: traced.rhses);
         if virtualize_settings.inline_constants then precompute_constants ~idcs traced_store array llv;
         (match llv with
         | Get (_array2, _idcs2) -> traced.last_write_non_update <- true
