@@ -14,7 +14,7 @@ type t = {
   mutable backend_info : string;
 }
 
-let name { id; _ } = "#" ^ Int.to_string id
+let name { id; _ } = "n" ^ Int.to_string id
 let compare a1 a2 = compare_int a1.id a2.id
 let sexp_of_t a = Sexp.Atom (name a)
 
