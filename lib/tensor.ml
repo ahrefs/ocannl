@@ -378,6 +378,10 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
     let labels = Shape.axis_map_to_dims_index t.shape.axis_labels in
     let indices = Shape.default_display_indices t.shape in
     let txt = if with_id then prefix else t.value.label in
+    let grad_txt diff =
+      if String.is_substring (String.lowercase diff.grad.label) ~substring:"grad" then diff.grad.label
+      else diff.grad.label ^ " Gradient"
+    in
     match (not embedded, with_value, with_grad, t.value.array, t.diff) with
     | true, _, _, _, _ -> `Embed_subtree_ID (Int.to_string t.id)
     | _, false, false, _, _ | _, false, true, _, None -> `Subtree_with_ID (id, `Tree (`Text txt, children))
@@ -388,12 +392,12 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
         let node = `Text (txt ^ " <virtual>") in
         `Subtree_with_ID (id, `Tree (node, children))
     | _, false, true, _, Some diff ->
-        let prefix = prefix ^ " Gradient" in
+        let prefix = prefix ^ " " ^ grad_txt diff in
         let node =
           match Lazy.force diff.grad.array with
           | Some g_array ->
               `Box (Nd.render_array ~brief:true ~prefix ?entries_per_axis ~labels ~indices g_array)
-          | None -> `Text (diff.grad.label ^ " <virtual>")
+          | None -> `Text (prefix ^ " <virtual>")
         in
         `Subtree_with_ID (id, `Tree (node, children))
     | _, true, true, (lazy (Some v_array)), Some diff ->
@@ -403,8 +407,9 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
             match Lazy.force diff.grad.array with
             | Some g_array ->
                 `Box
-                  (Nd.render_array ~brief:true ~prefix:"Gradient" ?entries_per_axis ~labels ~indices g_array)
-            | None -> `Text (diff.grad.label ^ "Gradient <virtual>")
+                  (Nd.render_array ~brief:true ~prefix:(grad_txt diff) ?entries_per_axis ~labels ~indices
+                     g_array)
+            | None -> `Text (grad_txt diff ^ " <virtual>")
           in
           `Vlist (false, [ `Box value; grad ])
         in
@@ -416,8 +421,9 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
             match Lazy.force diff.grad.array with
             | Some g_array ->
                 `Box
-                  (Nd.render_array ~brief:true ~prefix:"Gradient" ?entries_per_axis ~labels ~indices g_array)
-            | None -> `Text (diff.grad.label ^ "Gradient <virtual>")
+                  (Nd.render_array ~brief:true ~prefix:(grad_txt diff) ?entries_per_axis ~labels ~indices
+                     g_array)
+            | None -> `Text (grad_txt diff ^ " <virtual>")
           in
           `Vlist (false, [ value; grad ])
         in
@@ -435,6 +441,10 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
     "[" ^ Int.to_string t.id ^ "]: " ^ label ^ "shape "
     ^ Shape.to_string_hum ~style:`Axis_number_and_size sh
     ^ " "
+  in
+  let grad_txt diff =
+    if String.is_substring (String.lowercase diff.grad.label) ~substring:"grad" then diff.grad.label
+    else diff.grad.label ^ " Gradient"
   in
   let indices =
     match style with
@@ -488,7 +498,7 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
          Caml.Format.print_newline ());
   if with_grad then
     Option.iter t.diff ~f:(fun diff ->
-        if not @@ Lazy.is_val diff.grad.array then Caml.Format.printf "Gradient <not-in-yet>@ "
+        if not @@ Lazy.is_val diff.grad.array then Caml.Format.printf "%s <not-in-yet>@ " (grad_txt diff)
         else
           match (style, diff.grad.array) with
           | `Inline, (lazy (Some arr)) ->
@@ -496,9 +506,11 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
                 ?axes_spec arr;
               Caml.Format.print_newline ()
           | _, (lazy (Some arr)) ->
-              Nd.pp_array Caml.Format.std_formatter ~prefix:(prefix ^ " Gradient ") ~labels ~indices arr;
+              Nd.pp_array Caml.Format.std_formatter
+                ~prefix:(prefix ^ " " ^ grad_txt diff)
+                ~labels ~indices arr;
               Caml.Format.print_newline ()
-          | _, (lazy None) -> Caml.Format.printf "Gradient <virtual>@ ");
+          | _, (lazy None) -> Caml.Format.printf "%s <virtual>@ " (grad_txt diff));
   if with_code then (
     (match t.forward with
     | Noop -> ()
