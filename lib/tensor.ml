@@ -176,7 +176,9 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
       let f ti = Option.map ti.diff ~f:(fun d -> d.grad.LA.prec) in
       Option.value ~default:!default_grad_prec @@ List.reduce ~f:Ops.promote_prec @@ List.filter_map ts ~f
     in
-    let g = LA.create g_prec ~id ~label:("grad " ^ label) ~dims ~literal:false default_init_op in
+    let grad_id = session_state.next_id in
+    session_state.next_id <- session_state.next_id + 1;
+    let g = LA.create g_prec ~id:grad_id ~label:("grad " ^ label) ~dims ~literal:false default_init_op in
     let dcode ti = Option.value_map ti.diff ~default:Assignments.Noop in
     let zero_grads =
       let f = dcode ~f:(fun diff -> diff.zero_grads) in
@@ -251,8 +253,8 @@ let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axi
   in
   let grad_asn ~v:_ ~g:_ ~projections:_ = Assignments.Noop in
   let make_shape = Shape.make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced () in
-  op ~op_label:label ?desc_label ?compose_op:None ?transpose_op:None ?init_op ~op_asn ~grad_asn ~grad_spec make_shape
-    []
+  op ~op_label:label ?desc_label ?compose_op:None ?transpose_op:None ?init_op ~op_asn ~grad_asn ~grad_spec
+    make_shape []
 
 let error_if_unknown_shape m =
   match m.shape with
@@ -558,7 +560,6 @@ let grad_2d_points ?from_axis ~xdim ~ydim t =
 
 let set_value t = Nd.set_from_float @@ Option.value_exn @@ Lazy.force t.value.array
 let get_value t = Nd.get_as_float @@ Option.value_exn @@ Lazy.force t.value.array
-
 let set_grad t = Nd.set_from_float @@ Option.value_exn @@ Lazy.force @@ (Option.value_exn t.diff).grad.array
 let get_grad t = Nd.get_as_float @@ Option.value_exn @@ Lazy.force @@ (Option.value_exn t.diff).grad.array
 
@@ -568,17 +569,21 @@ let set_values t values =
 module O = struct
   (** Get the value at the given indices. *)
   let ( .@{} ) = get_value
+
   let ( .@%{} ) = get_grad
 
   (** Set the value at the given indices. *)
   let ( .@{}<- ) = set_value
+
   let ( .@%{}<- ) = set_grad
 
   (** Get the value at the given index from a single-axis shape tensor. *)
   let ( .@[] ) t indx = get_value t [| indx |]
+
   let ( .@%[] ) t indx = get_grad t [| indx |]
 
   (** Set the value at the given index for a single-axis shape tensor. *)
   let ( .@[]<- ) t indx = set_value t [| indx |]
+
   let ( .@%[]<- ) t indx = set_grad t [| indx |]
 end
