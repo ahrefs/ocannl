@@ -113,9 +113,9 @@ let raw_binop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs1_is_grad ~t2 ~rhs2_i
   Shape.propagate_shapes local_shape_update;
   session_state.shape_updates <- local_shape_update :: session_state.shape_updates;
   let projections = lazy_projections local_shape_update in
-  let lhs = if lhs_is_grad then t.value else (Option.value_exn t.diff).grad in
-  let rhs1 = if rhs1_is_grad then t1.value else (Option.value_exn t1.diff).grad in
-  let rhs2 = if rhs2_is_grad then t2.value else (Option.value_exn t2.diff).grad in
+  let lhs = if lhs_is_grad then (Option.value_exn t.diff).grad else t.value in
+  let rhs1 = if rhs1_is_grad then (Option.value_exn t1.diff).grad else t1.value in
+  let rhs2 = if rhs2_is_grad then (Option.value_exn t2.diff).grad else t2.value in
   Assignments.Accum_binop { zero_out; accum; lhs; op; rhs1; rhs2; projections }
 
 let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
@@ -125,8 +125,8 @@ let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
   Shape.propagate_shapes local_shape_update;
   session_state.shape_updates <- local_shape_update :: session_state.shape_updates;
   let projections = lazy_projections local_shape_update in
-  let lhs = if lhs_is_grad then t.value else (Option.value_exn t.diff).grad in
-  let rhs = if rhs_is_grad then t1.value else (Option.value_exn t1.diff).grad in
+  let lhs = if lhs_is_grad then (Option.value_exn t.diff).grad else t.value in
+  let rhs = if rhs_is_grad then (Option.value_exn t1.diff).grad else t1.value in
   Assignments.Accum_unop { zero_out; accum; lhs; op; rhs; projections }
 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
