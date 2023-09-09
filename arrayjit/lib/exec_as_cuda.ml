@@ -49,17 +49,20 @@ let is_initialized, initialize =
       Cudajit.init () )
 
 let num_devices = Cudajit.device_get_count
-let devices = Res.Weak.empty ()
+let devices = ref @@ Core.Weak.create 0
 
 let get_device ~ordinal =
   if num_devices () <= ordinal then
     invalid_arg [%string "Exec_as_cuda.get_device %{ordinal#Int}: not enough devices"];
-  let module Array = Res.Weak in
-  Option.value_or_thunk devices.(ordinal) ~default:(fun () ->
+  if Core.Weak.length !devices <= ordinal then (
+    let old = !devices in
+    devices := Core.Weak.create (ordinal + 1);
+    Core.Weak.blit old 0 !devices 0 (Core.Weak.length old));
+  Option.value_or_thunk (Core.Weak.get !devices ordinal) ~default:(fun () ->
       let dev = Cudajit.device_get ~ordinal in
       let primary_context = Cudajit.device_primary_ctx_retain dev in
       let result = { dev; ordinal; primary_context } in
-      devices.(ordinal) <- Some result;
+      Core.Weak.set !devices ordinal (Some result);
       result)
 
 let get_ctx_device { device; _ } = device
@@ -70,15 +73,18 @@ let set_ctx ctx =
   if not @@ phys_equal ctx cur_ctx then Cudajit.ctx_set_current ctx
 
 let finalize ctx =
-  if Option.is_some @@ Res.Weak.get devices ctx.device.ordinal then (
+  if Option.is_some @@ Core.Weak.get !devices ctx.device.ordinal then (
     set_ctx ctx.device.primary_context;
     Option.iter ctx.run_module ~f:Cudajit.module_unload;
     Map.iter ctx.arrays ~f:(fun array -> Option.iter array.global ~f:(fun (_, ptr) -> Cudajit.mem_free ptr)))
 
 let unsafe_cleanup () =
+  let len = Core.Weak.length !devices in
   (* TODO: maybe better to do device_primary_ctx_reset. *)
-  Res.Weak.iter (function None -> () | Some device -> Cudajit.device_primary_ctx_release device.dev) devices;
-  Res.Weak.clear devices
+  for i = 0 to len - 1 do
+    Option.iter (Core.Weak.get !devices i) ~f:(fun device -> Cudajit.device_primary_ctx_release device.dev)
+  done;
+  Core.Weak.fill !devices 0 len None
 
 let await device =
   set_ctx device.primary_context;
@@ -443,21 +449,22 @@ let jit ~name ?(verbose = false) old_context bindings ((traced_store, _) as comp
         | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit: launching the kernel\n%!";
     (* if !Low_level.debug_verbose_trace then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
-    let idx_args = List.map2_exn idx_params idx_args ~f:(fun {static_symbol; static_range} i ->
-      if !i < 0 then
-        raise
-        @@ Ndarray.User_error
-             [%string
-               "Exec_as_cuda: static index %{Indexing.symbol_ident static_symbol} is negative: \
-                %{!i#Int}"];
-      Option.iter static_range ~f:(fun upto ->
-          if !i >= upto then
+    let idx_args =
+      List.map2_exn idx_params idx_args ~f:(fun { static_symbol; static_range } i ->
+          if !i < 0 then
             raise
             @@ Ndarray.User_error
                  [%string
-                   "Exec_as_cuda: static index %{Indexing.symbol_ident static_symbol} is too big: \
-                    %{upto#Int}"]);
-   Cu.Int !i) in
+                   "Exec_as_cuda: static index %{Indexing.symbol_ident static_symbol} is negative: %{!i#Int}"];
+          Option.iter static_range ~f:(fun upto ->
+              if !i >= upto then
+                raise
+                @@ Ndarray.User_error
+                     [%string
+                       "Exec_as_cuda: static index %{Indexing.symbol_ident static_symbol} is too big: \
+                        %{upto#Int}"]);
+          Cu.Int !i)
+    in
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream @@ idx_args @ args;
     if verbose then Stdio.printf "Exec_as_cuda.jit: kernel launched\n%!"
   in

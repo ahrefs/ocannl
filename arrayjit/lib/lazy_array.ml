@@ -54,15 +54,18 @@ let header arr =
   in
   String.concat [ name arr; " "; arr.label; ": "; dims_to_string arr; "; mem in bytes: "; mem_size ]
 
-module Array = Res.Weak
+module Registry = Core.Weak.Make (struct
+  type nonrec t = t
 
-let registry = Array.empty ()
+  let equal = equal
+  let hash = hash
+end)
+
+let registry = Registry.create 16
 
 let create prec ~id ~label ~dims ?(literal = false) init_op =
   let hosted = ref false in
-  let array =
-    lazy (if !hosted then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None)
-  in
+  let array = lazy (if !hosted then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None) in
   let arr =
     {
       array;
@@ -77,13 +80,11 @@ let create prec ~id ~label ~dims ?(literal = false) init_op =
       dims;
     }
   in
-  registry.(arr.id) <- Some arr;
+  Registry.add registry arr;
   arr
-
-let find ~id = registry.(id)
 
 let print_accessible_headers () =
   Stdio.printf "Lazy_array: collecting accessible arrays...%!\n";
   Core.Gc.full_major ();
-  Array.iter (function Some arr -> Stdio.print_endline @@ header arr | None -> ()) registry;
+  Registry.iter (fun arr -> Stdio.print_endline @@ header arr) registry;
   Stdio.printf "Lazy_array: Finished printing headers.%!\n"
