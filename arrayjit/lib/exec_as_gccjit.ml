@@ -95,13 +95,18 @@ let get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ct
            ctx_info.ctx_arrays <- Map.add_exn ~key ~data ctx_arrays);
         let global_ptr = Option.map (Map.find ctx_info.ctx_arrays key) ~f:Ndarray.(map { f = get_c_ptr }) in
         let cast_void rv = RValue.cast ctx rv c_void_ptr in
+        let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
+        let comment_on ptr = Option.value ~default:"not" @@ Option.map ptr ~f:RValue.to_string in
+        Block.comment init_block
+          [%string
+            "Array #%{key.id#Int} %{key.label}: %{backend_info} %{comment_on hosted_ptr} hosted, \
+             %{comment_on global_ptr} global, %{comment_on @@ Option.map ~f:RValue.lvalue local} local."];
         if tn.zero_initialized then
           Option.first_some (Option.map local ~f:(Fn.compose cast_void LValue.address)) hosted_ptr
           |> Option.iter ~f:(fun rv_ptr ->
                  Block.eval init_block
                  @@ RValue.call ctx (Function.builtin ctx "memset")
                       [ rv_ptr; RValue.zero ctx c_int; RValue.int ctx c_index size_in_bytes ]);
-        let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
         if not @@ String.is_substring key.backend_info ~substring:backend_info then
           key.backend_info <- key.backend_info ^ backend_info;
         { hosted_ptr; global_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
