@@ -142,7 +142,9 @@ let builtin_op = function
   | ToPowOf | Relu_gate | Arg2 | Arg1 -> invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
 
 let get_ptr array =
-  match array.local with Some lv -> Gccjit.RValue.lvalue lv | None -> Option.value_exn array.hosted_ptr
+  match array.local with
+  | Some lv -> Gccjit.RValue.lvalue lv
+  | None -> Option.value_exn @@ Option.first_some array.global_ptr array.hosted_ptr
 
 let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ } as info) initial_block body =
   let open Gccjit in

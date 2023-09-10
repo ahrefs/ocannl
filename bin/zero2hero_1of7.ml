@@ -84,8 +84,8 @@ let () =
   Train.everything_fully_on_host l;
   let module Backend = (val Train.fresh_backend ()) in
   let jitted = Backend.(jit (init @@ get_device ~ordinal:0) IDX.empty @@ Train.grad_update l) in
-  (* Tensor.iter_embedded_arrays l ~f:(fun a ->
-      if Backend.from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ LA.name a); *)
+  Tensor.iter_embedded_arrays l ~f:(fun a ->
+      if Backend.from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ LA.name a);
   jitted.run ();
   Tensor.iter_embedded_arrays l ~f:(fun a ->
       if Backend.to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ LA.name a);
