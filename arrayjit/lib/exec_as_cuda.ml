@@ -199,19 +199,6 @@ let get_array ~traced_store:_ ctx_info (key : LA.t) =
   in
   Option.value_or_thunk (Map.find ctx_info.ctx_arrays key) ~default
 
-let jit_binop ~num_typ:_ ~is_double op =
-  match op with
-  | Ops.Arg1 -> assert false
-  | Arg2 -> assert false
-  | Add -> ("(", " +", ")")
-  | Sub -> ("(", " -", ")")
-  | Mul -> ("(", " *", ")")
-  | Div -> ("(", " /", ")")
-  | ToPowOf when is_double -> ("pow(", ",", ")")
-  | ToPowOf -> ("powf(", ",", ")")
-  | Relu_gate -> ("(", " > 0.0 ?", " : 0.0)")
-(* "((int)(", "> 0.0) * ", ")" *)
-
 let jit_code ~traced_store info ppf llc : unit =
   let open Caml.Format in
   let locals = ref Map.Poly.empty in
@@ -313,7 +300,7 @@ let jit_code ~traced_store info ppf llc : unit =
     | Binop (Arg1, v1, _v2) -> loop ppf v1
     | Binop (Arg2, _v1, v2) -> loop ppf v2
     | Binop (op, v1, v2) ->
-        let prefix, infix, postfix = jit_binop ~num_typ ~is_double op in
+        let prefix, infix, postfix = Ops.binop_C_syntax ~is_double op in
         fprintf ppf "@[<1>%s%a%s@ %a@]%s" prefix loop v1 infix loop v2 postfix
     | Unop (Identity, v) -> loop ppf v
     | Unop (Relu, v) ->
@@ -341,7 +328,7 @@ let jit_code ~traced_store info ppf llc : unit =
     | Binop (Arg1, v1, _v2) -> loop v1
     | Binop (Arg2, _v1, v2) -> loop v2
     | Binop (op, v1, v2) ->
-        let prefix, infix, postfix = jit_binop ~num_typ ~is_double op in
+        let prefix, infix, postfix = Ops.binop_C_syntax ~is_double op in
         let v1, idcs1 = loop v1 in
         let v2, idcs2 = loop v2 in
         (String.concat [ prefix; v1; infix; " "; v2; postfix ], idcs1 @ idcs2)

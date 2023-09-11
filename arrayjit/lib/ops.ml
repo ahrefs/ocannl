@@ -136,6 +136,28 @@ let interpret_unop op v =
   let open Float in
   match op with Identity -> v | Relu when v >= 0. -> v | Relu -> 0.
 
+let binop_C_syntax ~is_double = function
+  | Arg1 -> invalid_arg "Ops.binop_C_syntax: Arg1 is not a C operator"
+  | Arg2 -> invalid_arg "Ops.binop_C_syntax: Arg2 is not a C operator"
+  | Add -> ("(", " +", ")")
+  | Sub -> ("(", " -", ")")
+  | Mul -> ("(", " *", ")")
+  | Div -> ("(", " /", ")")
+  | ToPowOf when is_double -> ("pow(", ",", ")")
+  | ToPowOf -> ("powf(", ",", ")")
+  | Relu_gate -> ("(", " > 0.0 ?", " : 0.0)")
+(* "((int)(", "> 0.0) *", ")" *)
+
+let assign_op_C_syntax = function
+  | Arg1 -> invalid_arg "Ops.assign_op_C_syntax: Arg1 is not a C assignment operator"
+  | Arg2 -> "="
+  | Add -> "+="
+  | Sub -> "-="
+  | Mul -> "*="
+  | Div -> "/="
+  | ToPowOf -> invalid_arg "Ops.assign_op_C_syntax: ToPowOf function is not a C assignment operator"
+  | Relu_gate -> invalid_arg "Ops.assign_op_C_syntax: Relu_gate is not a C assignment operator"
+
 (** {2 *** Global references ***} *)
 
 type voidptr = unit Ctypes.ptr
