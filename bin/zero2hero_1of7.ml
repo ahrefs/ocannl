@@ -77,25 +77,28 @@ let () =
   Random.init 0;
   CDSL.with_debug := true;
   CDSL.keep_files_in_run_directory := true;
+  CDSL.debug_verbose_trace := true;
   Random.init 0;
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in
   Train.everything_fully_on_host l;
-  let module Backend = (val Train.fresh_backend ()) in
-  let jitted = Backend.(jit (init @@ get_device ~ordinal:0) IDX.empty @@ Train.grad_update l) in
+  let open (val Train.fresh_backend ()) in
+  let device = get_device ~ordinal:0 in
+  let jitted = jit (init device) IDX.empty @@ Train.grad_update l in
   Tensor.iter_embedded_arrays l ~f:(fun a ->
-      if Backend.from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ LA.name a);
+      if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ LA.name a);
   jitted.run ();
+  await device;
   Tensor.iter_embedded_arrays l ~f:(fun a ->
-      if Backend.to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ LA.name a);
+      if to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ LA.name a);
   Stdio.print_endline
     "\n\
      We did not update the params: all values and gradients will be at initial points,\n\
     \    which are specified in the tensor in the brackets.";
   Tensor.print_tree ~with_grad:true ~depth:9 l
 (*;
-  let jitted = Backend.jit jitted.context IDX.empty @@ Train.sgd_update l in
+  let jitted = jit jitted.context IDX.empty @@ Train.sgd_update l in
   jitted.run ();
   Stdio.print_endline
     "\n\
@@ -103,7 +106,7 @@ let () =
     \    only params values will change, compared to the above.";
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   (* We could reuse the jitted code if we did not use `jit_and_run`. *)
-  let jitted = Backend.jit jitted.context IDX.empty @@ Train.grad_update l in
+  let jitted = jit jitted.context IDX.empty @@ Train.grad_update l in
   jitted.run ();
   Stdio.print_endline
     "\n\
