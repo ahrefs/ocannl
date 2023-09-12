@@ -102,7 +102,8 @@ let get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ct
             "Array #%{key.id#Int} %{key.label}: %{backend_info} %{comment_on hosted_ptr} hosted, \
              %{comment_on global_ptr} global, %{comment_on @@ Option.map ~f:RValue.lvalue local} local."];
         if tn.zero_initialized then
-          Option.first_some (Option.map local ~f:(Fn.compose cast_void LValue.address)) hosted_ptr
+          List.find_map ~f:Fn.id
+            [ Option.map local ~f:(Fn.compose cast_void LValue.address); global_ptr; hosted_ptr ]
           |> Option.iter ~f:(fun rv_ptr ->
                  Block.eval init_block
                  @@ RValue.call ctx (Function.builtin ctx "memset")
