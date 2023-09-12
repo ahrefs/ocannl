@@ -157,7 +157,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         | Indexing.Fixed_idx i -> RValue.int ctx c_index i
         | Iterator s -> Map.find_exn env s)
     with e ->
-      Caml.Format.eprintf "exec_as_gccjit: missing index from@ %a@ among environment keys:@ %a\n%!"
+      Stdlib.Format.eprintf "exec_as_gccjit: missing index from@ %a@ among environment keys:@ %a\n%!"
         Sexp.pp_hum
         ([%sexp_of: Indexing.axis_index array] indices)
         Sexp.pp_hum
@@ -387,7 +387,8 @@ let jit_func ~name (context : context) ctx bindings (traced_store, proc) =
   (if !Low_level.with_debug then
      let suf = "-gccjit-debug.c" in
      let f_name =
-       if !Low_level.keep_files_in_run_directory then name ^ suf else Caml.Filename.temp_file (name ^ "-") suf
+       if !Low_level.keep_files_in_run_directory then name ^ suf
+       else Stdlib.Filename.temp_file (name ^ "-") suf
      in
      Context.dump_to_file ctx ~update_locs:true f_name);
   ctx_info

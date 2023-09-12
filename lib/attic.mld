@@ -116,16 +116,16 @@ if is_final then (
            | Device_finally_host ->
                Option.map2 tn.local tn.global ~f:(fun l_name g_name ->
                    let b = Buffer.create 4096 in
-                   let ppf = Caml.Format.formatter_of_buffer b in
+                   let ppf = Stdlib.Format.formatter_of_buffer b in
                    let body idcs =
                      Low_level.Staged_compilation
                        (fun () ->
-                         Caml.Format.fprintf ppf "@[<2>%s[%a] =@ %s[%a];@]" g_name pp_array_offset
+                         Stdlib.Format.fprintf ppf "@[<2>%s[%a] =@ %s[%a];@]" g_name pp_array_offset
                            (idcs, tn.dims) l_name pp_array_offset (idcs, tn.dims))
                    in
                    let loops = Low_level.loop_over_dims tn.dims ~body in
                    jit_code ~traced_store ppf loops;
-                   Caml.Format.pp_print_newline ppf ();
+                   Stdlib.Format.pp_print_newline ppf ();
                    Buffer.contents b)
            | _ -> None)
   in

@@ -89,7 +89,7 @@ let session_error_printer = function
   | Session_error (msg, Some m) -> Some ("For #" ^ Int.to_string_hum m.id ^ ": " ^ msg)
   | _ -> None
 
-let () = Caml.Printexc.register_printer session_error_printer
+let () = Stdlib.Printexc.register_printer session_error_printer
 
 let lazy_to_dims shape =
   lazy
@@ -280,14 +280,14 @@ let ndarray ?desc_label ?(grad_spec = Prohibit_grad) ?(batch_dims = []) ?(input_
     match label with
     | Some label -> label
     | None ->
-        Caml.Format.pp_set_geometry Caml.Format.str_formatter ~max_indent:!max_sublabel_length
+        Stdlib.Format.pp_set_geometry Stdlib.Format.str_formatter ~max_indent:!max_sublabel_length
           ~margin:(!max_sublabel_length * 2);
         let dims = Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list in
         let ndarr = Ndarray.create_array Ops.double ~dims (Constant_fill { values; strict }) in
         let ( ! ) = List.length in
         Ndarray.pp_array_inline ~num_batch_axes:!batch_dims ~num_output_axes:!output_dims
-          ~num_input_axes:!input_dims Caml.Format.str_formatter ndarr;
-        Caml.Format.flush_str_formatter ()
+          ~num_input_axes:!input_dims Stdlib.Format.str_formatter ndarr;
+        Stdlib.Format.flush_str_formatter ()
   in
   let label =
     if String.contains label '\n' then
@@ -483,51 +483,51 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
   let num_input_axes = num_axes Shape.AxisKey.Input in
   let num_output_axes = num_axes Shape.AxisKey.Output in
   (* TODO: code sharing with [to_dag] *)
-  (if not @@ Lazy.is_val t.value.array then Caml.Format.printf "<not-in-yet>@ "
+  (if not @@ Lazy.is_val t.value.array then Stdlib.Format.printf "<not-in-yet>@ "
    else
      match (style, t.value.array) with
-     | `Inline, (lazy None) -> Caml.Format.printf "<virtual>@ "
+     | `Inline, (lazy None) -> Stdlib.Format.printf "<virtual>@ "
      | `Inline, (lazy (Some arr)) ->
-         Nd.pp_array_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
+         Nd.pp_array_inline Stdlib.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
            ?axes_spec arr
-     | _, (lazy None) -> Caml.Format.printf "<virtual>@ "
+     | _, (lazy None) -> Stdlib.Format.printf "<virtual>@ "
      | _, (lazy (Some arr)) ->
-         Nd.pp_array Caml.Format.std_formatter ~prefix ~labels ~indices arr;
-         Caml.Format.print_newline ());
+         Nd.pp_array Stdlib.Format.std_formatter ~prefix ~labels ~indices arr;
+         Stdlib.Format.print_newline ());
   if with_grad then
     Option.iter t.diff ~f:(fun diff ->
-        if not @@ Lazy.is_val diff.grad.array then Caml.Format.printf "%s <not-in-yet>@ " (grad_txt diff)
+        if not @@ Lazy.is_val diff.grad.array then Stdlib.Format.printf "%s <not-in-yet>@ " (grad_txt diff)
         else
           match (style, diff.grad.array) with
           | `Inline, (lazy (Some arr)) ->
-              Nd.pp_array_inline Caml.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
+              Nd.pp_array_inline Stdlib.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
                 ?axes_spec arr;
-              Caml.Format.print_newline ()
+              Stdlib.Format.print_newline ()
           | _, (lazy (Some arr)) ->
-              Nd.pp_array Caml.Format.std_formatter
+              Nd.pp_array Stdlib.Format.std_formatter
                 ~prefix:(prefix ^ " " ^ grad_txt diff)
                 ~labels ~indices arr;
-              Caml.Format.print_newline ()
-          | _, (lazy None) -> Caml.Format.printf "%s <virtual>@ " (grad_txt diff));
+              Stdlib.Format.print_newline ()
+          | _, (lazy None) -> Stdlib.Format.printf "%s <virtual>@ " (grad_txt diff));
   if with_code then (
     (match t.forward with
     | Noop -> ()
-    | fwd_code -> Caml.Format.printf "Current forward body:@ %a@ " Assignments.fprint_code fwd_code);
+    | fwd_code -> Stdlib.Format.printf "Current forward body:@ %a@ " Assignments.fprint_code fwd_code);
     match t.diff with
     | Some { backprop = Noop; _ } -> ()
     | Some { backprop = bwd_code; _ } ->
-        Caml.Format.printf "Current backprop body:@ %a@ " Assignments.fprint_code bwd_code
+        Stdlib.Format.printf "Current backprop body:@ %a@ " Assignments.fprint_code bwd_code
     | None -> ());
   if with_low_level then (
     (match t.forward with
     | Noop -> ()
     | fwd_code ->
-        Caml.Format.printf "Current forward low-level body:@ %a@ " Low_level.fprint_code
+        Stdlib.Format.printf "Current forward low-level body:@ %a@ " Low_level.fprint_code
         @@ Assignments.to_low_level fwd_code);
     match t.diff with
     | Some { backprop = Noop; _ } -> ()
     | Some { backprop = bwd_code; _ } ->
-        Caml.Format.printf "Current backprop low-level body:@ %a@ " Low_level.fprint_code
+        Stdlib.Format.printf "Current backprop low-level body:@ %a@ " Low_level.fprint_code
         @@ Assignments.to_low_level bwd_code
     | None -> ());
   Stdio.printf "\n%!"

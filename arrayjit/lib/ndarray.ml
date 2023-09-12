@@ -480,7 +480,7 @@ let pp_array fmt ?prefix ?entries_per_axis ?labels ~indices arr =
 let pp_array_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?axes_spec arr =
   let dims = dims arr in
   let num_all_axes = num_batch_axes + num_output_axes + num_input_axes in
-  let open Caml.Format in
+  let open Stdlib.Format in
   let ind = Array.copy dims in
   (match axes_spec with None -> () | Some spec -> fprintf fmt "\"%s\" " spec);
   let rec loop axis =

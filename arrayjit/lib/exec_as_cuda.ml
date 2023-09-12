@@ -123,17 +123,17 @@ let merge ?(name_suffix = "") la ~dst ~accum ~src =
   ignore (name, accum);
   failwith "NOT IMPLEMENTED YET"
 
-let pp_semi ppf () = Caml.Format.fprintf ppf ";@ "
-let pp_comma ppf () = Caml.Format.fprintf ppf ",@ "
-let pp_symbol ppf sym = Caml.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym
-let pp_index ppf sym = Caml.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym
+let pp_semi ppf () = Stdlib.Format.fprintf ppf ";@ "
+let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
+let pp_symbol ppf sym = Stdlib.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym
+let pp_index ppf sym = Stdlib.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym
 
 let pp_index_axis ppf = function
   | Indexing.Iterator it -> pp_index ppf it
-  | Fixed_idx i -> Caml.Format.fprintf ppf "%d" i
+  | Fixed_idx i -> Stdlib.Format.fprintf ppf "%d" i
 
 let pp_array_offset ppf (idcs, dims) =
-  let open Caml.Format in
+  let open Stdlib.Format in
   assert (not @@ Array.is_empty idcs);
   for _ = 0 to Array.length idcs - 3 do
     fprintf ppf "@[<1>("
@@ -147,9 +147,9 @@ let pp_array_offset ppf (idcs, dims) =
 
 let array_offset_to_string (idcs, dims) =
   let b = Buffer.create 32 in
-  let ppf = Caml.Format.formatter_of_buffer b in
+  let ppf = Stdlib.Format.formatter_of_buffer b in
   pp_array_offset ppf (idcs, dims);
-  Caml.Format.pp_print_flush ppf ();
+  Stdlib.Format.pp_print_flush ppf ();
   Buffer.contents b
 
 let get_run_ptr array =
@@ -200,7 +200,7 @@ let get_array ~traced_store:_ ctx_info (key : LA.t) =
   Option.value_or_thunk (Map.find ctx_info.ctx_arrays key) ~default
 
 let jit_code ~traced_store info ppf llc : unit =
-  let open Caml.Format in
+  let open Stdlib.Format in
   let locals = ref Map.Poly.empty in
   let rec pp_ll ppf c : unit =
     match c with
@@ -346,9 +346,9 @@ let jit_func ~name ?(verbose = false) (old_context : context) idx_params (traced
     { ctx = old_context.ctx; ctx_arrays = old_context.arrays; used_tensors = Hash_set.create (module LA) }
   in
   let b = Buffer.create 4096 in
-  let ppf = Caml.Format.formatter_of_buffer b in
+  let ppf = Stdlib.Format.formatter_of_buffer b in
   jit_code ~traced_store info ppf llc;
-  Caml.Format.pp_print_newline ppf ();
+  Stdlib.Format.pp_print_newline ppf ();
   let cu_body = Buffer.contents b in
   let arrays = Hash_set.to_list info.used_tensors in
   let params, args =

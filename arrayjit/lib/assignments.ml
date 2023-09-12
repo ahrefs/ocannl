@@ -164,13 +164,13 @@ let compile_proc ~name ?(verbose = false) proc =
   if !Low_level.with_debug && !Low_level.keep_files_in_run_directory then (
     let fname = name ^ ".hlc" in
     let f = Stdio.Out_channel.create fname in
-    let ppf = Caml.Format.formatter_of_out_channel f in
-    Caml.Format.pp_set_margin ppf !Low_level.code_sexp_margin;
-    Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t proc));
+    let ppf = Stdlib.Format.formatter_of_out_channel f in
+    Stdlib.Format.pp_set_margin ppf !Low_level.code_sexp_margin;
+    Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t proc));
   let llc = to_low_level proc in
   Low_level.compile_proc ~name ~verbose llc
 
 let fprint_code ppf c =
   (* TODO: something nicely concise. *)
-  Caml.Format.pp_set_margin ppf !Low_level.code_sexp_margin;
-  Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_t c
+  Stdlib.Format.pp_set_margin ppf !Low_level.code_sexp_margin;
+  Stdlib.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_t c

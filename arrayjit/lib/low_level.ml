@@ -63,8 +63,8 @@ let code_sexp_margin = ref 200
 
 let fprint_code ppf c =
   (* TODO: something nicely concise. *)
-  Caml.Format.pp_set_margin ppf !code_sexp_margin;
-  Caml.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_t c
+  Stdlib.Format.pp_set_margin ppf !code_sexp_margin;
+  Stdlib.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_t c
 
 (** *** Optimization *** *)
 
@@ -191,7 +191,7 @@ let precompute_constants ?idcs traced_store top_ptr llv =
     top_n.scalar <- Some (loop llv)
   with Non_literal _i ->
     (* if !with_debug then
-       Caml.Format.printf "TRACE: Array #%d is non-literal because no. %d\n%!" v.id i; *)
+       Stdlib.Format.printf "TRACE: Array #%d is non-literal because no. %d\n%!" v.id i; *)
     (* In principle we might conclude again that the node is to be inlined as scalar, that's OK. *)
     top_n.scalar <- None
 
@@ -316,7 +316,7 @@ let process_computation traced top_llc =
             | Iterator s as idx ->
                 if not @@ Map.mem env_dom s then (
                   if !with_debug then
-                    Caml.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
+                    Stdlib.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
                       Sexp.pp_hum
                       ([%sexp_of: Indexing.axis_index] idx)
                       Sexp.pp_hum
@@ -338,7 +338,7 @@ let process_computation traced top_llc =
             | Iterator s as idx ->
                 if not @@ Map.mem env_dom s then (
                   if !with_debug then
-                    Caml.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
+                    Stdlib.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
                       Sexp.pp_hum
                       ([%sexp_of: Indexing.axis_index] idx)
                       Sexp.pp_hum
@@ -536,7 +536,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
         | Some c when virtualize_settings.inline_constants -> Constant c
         | _ ->
             if not node.non_virtual then
-              Caml.Format.printf "WARNING: unexpected Get of a virtual array, details:@ %a\n%!" Sexp.pp_hum
+              Stdlib.Format.printf "WARNING: unexpected Get of a virtual array, details:@ %a\n%!" Sexp.pp_hum
                 (sexp_of_traced_array node);
             assert (Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
             llv)
@@ -550,7 +550,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
             if traced.non_virtual then Get (id.nd, orig_indices)
             else
               Option.value_or_thunk ~default:(fun () ->
-                  Caml.Format.printf
+                  Stdlib.Format.printf
                     "WARNING: unexpected non-eliminable virtual array:@ %a@ Compilation data:@ %a@ \n%!"
                     Sexp.pp_hum (LA.sexp_of_t id.nd) Sexp.pp_hum (sexp_of_traced_array traced);
                   Get (id.nd, orig_indices))
@@ -716,16 +716,16 @@ let compile_proc ~name ?(verbose = false) llc : optimized =
   if !with_debug && !keep_files_in_run_directory then (
     let fname = name ^ "-unoptimized.llc" in
     let f = Stdio.Out_channel.create fname in
-    let ppf = Caml.Format.formatter_of_out_channel f in
-    Caml.Format.pp_set_margin ppf !code_sexp_margin;
-    Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t llc));
+    let ppf = Stdlib.Format.formatter_of_out_channel f in
+    Stdlib.Format.pp_set_margin ppf !code_sexp_margin;
+    Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t llc));
   let result = optimize_proc ~verbose llc in
   if !with_debug && !keep_files_in_run_directory then (
     let fname = name ^ ".llc" in
     let f = Stdio.Out_channel.create fname in
-    let ppf = Caml.Format.formatter_of_out_channel f in
-    Caml.Format.pp_set_margin ppf !code_sexp_margin;
-    Caml.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t @@ snd result));
+    let ppf = Stdlib.Format.formatter_of_out_channel f in
+    Stdlib.Format.pp_set_margin ppf !code_sexp_margin;
+    Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t @@ snd result));
   Hashtbl.iter (fst result) ~f:(fun v -> if v.non_virtual && v.non_device_only then v.nd.hosted := true);
   if verbose then Stdio.printf "Low_level.compile_proc: finished\n%!";
   result

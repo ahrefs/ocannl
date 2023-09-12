@@ -47,11 +47,11 @@ let hello3 () =
   (* refresh_session (); *)
   (* print_preamble (); *)
   (* print_session_code (); *)
-  Caml.Format.print_newline ();
+  Stdlib.Format.print_newline ();
   Tensor.print ~with_code:true ~with_grad:false `Inline zero_to_twenty;
-  Caml.Format.print_newline ();
+  Stdlib.Format.print_newline ();
   Tensor.print ~with_code:true ~with_grad:false `Default zero_to_twenty;
-  Caml.Format.print_newline ();
+  Stdlib.Format.print_newline ();
   Tensor.print ~with_code:true ~with_grad:false `Default hey
 
 let () =

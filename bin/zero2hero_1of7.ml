@@ -15,7 +15,7 @@ let _suspended () =
   jitted.run ();
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_id:true ~with_grad:true ~depth:9 v;
-  Caml.Format.printf "\nHigh-level code:\n%a\n%!" Sexp.pp_hum @@ [%sexp_of: Arrayjit.Assignments.t] code
+  Stdlib.Format.printf "\nHigh-level code:\n%a\n%!" Sexp.pp_hum @@ [%sexp_of: Arrayjit.Assignments.t] code
 
 let _suspended () =
   Random.init 0;
