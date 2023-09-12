@@ -1,25 +1,39 @@
 open Base
 open Ocannl
+module LA = Arrayjit.Lazy_array
+module IDX = Arrayjit.Indexing.IDX
+module CDSL = Arrayjit.Low_level.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Arrayjit.Low_level.CDSL
 
-let recompiling_graph executor opti () =
+let benchmark_overhead backend () =
+  let open (val backend : Arrayjit.Backends.Backend) in
   CDSL.disable_all_debugs ();
-  let bench_title = Sexp.to_string_hum ([%sexp_of: Session.backend * int] (executor, opti)) in
-  Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ bench_title ^ " ******";
-  let () = SDSL.set_executor executor in
-  Arrayjit.Exec_as_gccjit.optimization_level := opti;
-  (* let open Operation.TDSL in *)
+  Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ name ^ " ******";
   Random.init 0;
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
-  (* refresh_session (); *)
+  Train.set_fully_on_host x.value;
+  Train.set_fully_on_host f.value;
+
+  let device = get_device ~ordinal:0 in
+  let ctx = init device in
+  let update_f = Train.grad_update f in
+  let jitted_f = jit ctx IDX.empty update_f in
+  Tensor.iter_embedded_arrays f ~f:(fun a ->
+      if from_host jitted_f.context a then Stdio.printf "Sent array %s.\n%!" @@ LA.name a);
+
   let xs = Array.init 100 ~f:Float.(fun i -> of_int i - 50.) in
+  let open Tensor.O in
   let ys =
     Array.map xs ~f:(fun v ->
-        SDSL.compile_routine ~name:"assign_x" [%cd x =: !.v] ();
-        (* refresh_session (); *)
+        let%cd update_x = x =: !.v in
+        let jitted_x = jit ~name:"assign_x" jitted_f.context IDX.empty update_x in
+        jitted_x.run ();
+        await device;
+        jitted_f.run ();
+        await device;
+        Tensor.iter_embedded_arrays f ~f:(fun a -> ignore (to_host jitted_f.context a : bool));
         f.@[0])
   in
   let plot_box =
@@ -32,60 +46,23 @@ let recompiling_graph executor opti () =
   let result =
     PrintBox_utils.Benchmark
       {
-        bench_title;
+        bench_title = name ^ " overhead";
         time_in_sec;
-        mem_in_bytes = SDSL.global_host_size_in_bytes ();
+        (* FIXME: global mem consumption *)
+        mem_in_bytes = 0;
         result_label = "x, f(x)";
         result = [%sexp_of: (float * float) list] @@ [ (xs.(0), ys.(0)); (xs.(50), ys.(50)) ];
       }
   in
   PrintBox_text.output Stdio.stdout plot_box;
-  Arrayjit.Exec_as_gccjit.optimization_level := 3;
   Stdio.print_endline "\n";
   result
 
 let benchmarks =
   [
-    recompiling_graph Interpreter 3;
-    recompiling_graph Gccjit 0;
-    recompiling_graph Gccjit 1;
-    recompiling_graph Gccjit 2;
-    recompiling_graph Gccjit 3;
+    benchmark_overhead (module Arrayjit.Backends.Gccjit_backend);
+    benchmark_overhead (module Arrayjit.Backends.Cuda_backend);
   ]
-
-let _suspended () = recompiling_graph Gccjit 3 ()
 
 let () =
   List.map benchmarks ~f:(fun bench -> bench ()) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
-
-(* Example output, before the single-use-not-memorized aka. virtual nodes optimization,
-       when still using core_bench:
-
-   ┌─────────────┬─────────────┬────────────┬────────────┬──────────┬────────────┐
-   │ Name        │    Time/Run │    mWd/Run │   mjWd/Run │ Prom/Run │ Percentage │
-   ├─────────────┼─────────────┼────────────┼────────────┼──────────┼────────────┤
-   │ Interpreter │      3.08ms │   970.34kw │   109.17kw │ 108.13kw │      0.02% │
-   │ OCaml       │ 12_698.98ms │ 1_082.35kw │ 1_205.24kw │  97.03kw │    100.00% │
-   │ gccjit O0   │ 10_561.48ms │   786.42kw │   100.28kw │ 100.28kw │     83.17% │
-   │ gccjit O1   │ 10_699.58ms │   786.42kw │   100.28kw │ 100.28kw │     84.26% │
-   │ gccjit O2   │ 10_683.29ms │   786.42kw │   100.28kw │ 100.28kw │     84.13% │
-   │ gccjit O3   │ 11_478.59ms │   786.42kw │   100.28kw │ 100.28kw │     90.39% │
-   └─────────────┴─────────────┴────────────┴────────────┴──────────┴────────────┘
-
-   More recent:
-   ┌───────────────┬────────────┬───────────────┬─────────────────┬──────────────────┐
-   │Benchmarks     │Time in sec │Memory in bytes│Speedup vs. worst│Mem gain vs. worst│
-   ├───────────────┼────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(Interpreter 3)│0.002409401 │500            │4846.12966501    │1.                │
-   ├───────────────┼────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(OCaml 3)      │11.582041125│500            │1.00813574524    │1.                │
-   ├───────────────┼────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(Gccjit 0)     │9.868432101 │500            │1.18319400098    │1.                │
-   ├───────────────┼────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(Gccjit 1)     │9.941047054 │500            │1.17455129199    │1.                │
-   ├───────────────┼────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(Gccjit 2)     │9.850038416 │500            │1.18540346422    │1.                │
-   ├───────────────┼────────────┼───────────────┼─────────────────┼──────────────────┤
-   │(Gccjit 3)     │11.676269661│500            │1.               │1.                │
-   └───────────────┴────────────┴───────────────┴─────────────────┴──────────────────┘
-*)

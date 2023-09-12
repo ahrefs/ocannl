@@ -4,6 +4,7 @@ module type No_device_backend = sig
   type context
   type jitted = { context : context; run : unit -> unit; bindings : unit Indexing.bindings }
 
+  val name : string
   val initialize : unit -> unit
   val is_initialized : unit -> bool
   val init : unit -> context
@@ -51,6 +52,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   type context = { device : device; ctx : Backend.context }
   type jitted = { context : context; run : unit -> unit; bindings : unit Indexing.bindings }
 
+  let name = "multicore " ^ Backend.name
   let init device = { device; ctx = Backend.init () }
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
@@ -133,6 +135,7 @@ module Gccjit_device : No_device_backend with type context = Exec_as_gccjit.cont
 
   open Exec_as_gccjit
 
+  let name = "gccjit"
   let initialize = initialize
   let is_initialized = is_initialized
   let unsafe_cleanup = unsafe_cleanup
@@ -162,6 +165,7 @@ module Cuda_backend : Backend with type context = Exec_as_cuda.context = struct
 
   open Exec_as_cuda
 
+  let name = "cuda"
   let initialize = initialize
   let is_initialized = is_initialized
   let unsafe_cleanup = unsafe_cleanup
