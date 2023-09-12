@@ -38,6 +38,7 @@ and float_t =
   | Binop of Ops.binop * float_t * float_t
   | Unop of Ops.unop * float_t
   | Constant of float
+  | Embed_index of Indexing.axis_index
 [@@deriving sexp_of, equal, compare]
 
 let binop ~op ~rhs1 ~rhs2 = match op with Ops.Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Binop (op, rhs1, rhs2)
@@ -163,6 +164,8 @@ let precompute_constants ?idcs traced_store top_ptr llv =
         let node = get_node traced_store scope_id.nd in
         Option.value_or_thunk node.scalar ~default:(fun () -> raise @@ Non_literal 5)
     | Get_global _ -> raise @@ Non_literal 9
+    | Embed_index (Fixed_idx i) -> Float.of_int i
+    | Embed_index (Iterator _) -> raise @@ Non_literal 10
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
     | Binop (Add, llv1, llv2) -> Float.(loop llv1 + loop llv2)
@@ -261,6 +264,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
     | Local_scope { body; _ } -> loop_proc env body
     | Get_local _ -> ()
     | Get_global _ -> ()
+    | Embed_index _ -> ()
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
     | Binop (_, llv1, llv2) ->
@@ -335,12 +339,12 @@ let process_computation traced top_llc =
         else
           (* Check for escaping variables. *)
           Array.iter idcs ~f:(function
-            | Iterator s as idx ->
+            | Iterator s ->
                 if not @@ Map.mem env_dom s then (
                   if !with_debug then
                     Stdlib.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
                       Sexp.pp_hum
-                      ([%sexp_of: Indexing.axis_index] idx)
+                      ([%sexp_of: Indexing.symbol] s)
                       Sexp.pp_hum
                       ([%sexp_of: t] top_llc);
                   raise Non_virtual)
@@ -348,6 +352,15 @@ let process_computation traced top_llc =
     | Local_scope { body; _ } -> loop_proc ~env_dom body
     | Get_local _ -> ()
     | Get_global _ -> ()
+    | Embed_index (Fixed_idx _) -> ()
+    | Embed_index (Iterator s) ->
+        if not @@ Map.mem env_dom s then (
+          if !with_debug then
+            Stdlib.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!" Sexp.pp_hum
+              ([%sexp_of: Indexing.symbol] s)
+              Sexp.pp_hum
+              ([%sexp_of: t] top_llc);
+          raise Non_virtual)
     | Binop (_, llv1, llv2) ->
         loop_float ~env_dom llv1;
         loop_float ~env_dom llv2
@@ -420,6 +433,7 @@ let inline_computation ~id traced call_args =
             }
       | Get_local _ -> llv
       | Get_global _ -> llv
+      | Embed_index idx -> Embed_index (subst env idx)
       | Binop (op, llv1, llv2) -> Binop (op, loop_float env llv1, loop_float env llv2)
       | Unop (op, llv) -> Unop (op, loop_float env llv)
     in
@@ -483,6 +497,7 @@ let virtual_llc traced_store reverse_node_map (llc : t) : t =
         Local_scope { opts with body = loop_proc ~process_for:(Set.add process_for opts.id.nd) opts.body }
     | Get_local _ -> llv
     | Get_global _ -> llv
+    | Embed_index _ -> llv
     | Binop (op, llv1, llv2) -> Binop (op, loop_float ~process_for llv1, loop_float ~process_for llv2)
     | Unop (op, llv) -> Unop (op, loop_float ~process_for llv)
   in
@@ -564,6 +579,10 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
             assert (not node.non_virtual);
             llv)
     | Get_global _ -> llv
+    | Embed_index (Fixed_idx _) -> llv
+    | Embed_index (Iterator s) ->
+        assert (Set.mem env_dom s);
+        llv
     | Binop (op, llv1, llv2) -> Binop (op, loop llv1, loop llv2)
     | Unop (op, llv) -> Unop (op, loop llv)
   in
@@ -580,6 +599,7 @@ let rec substitute_float ~var ~value llv =
     | Local_scope opts -> Local_scope { opts with body = loop_proc opts.body }
     | Get_local _ -> llv
     | Get_global _ -> llv
+    | Embed_index _ -> llv
     | Binop (op, llv1, llv2) -> Binop (op, loop_float llv1, loop_float llv2)
     | Unop (op, llv) -> Unop (op, loop_float llv)
 
@@ -634,6 +654,8 @@ let simplify_llc traced_store llc =
     | Local_scope opts -> Local_scope { opts with body = loop_proc opts.body }
     | Get_local _ -> llv
     | Get_global _ -> llv
+    | Embed_index (Fixed_idx i) -> Constant (Float.of_int i)
+    | Embed_index (Iterator _) -> llv
     | Binop (Arg1, llv1, _) -> loop_float llv1
     | Binop (Arg2, _, llv2) -> loop_float llv2
     | Binop (op, Constant c1, Constant c2) -> Constant (Ops.interpret_binop op c1 c2)

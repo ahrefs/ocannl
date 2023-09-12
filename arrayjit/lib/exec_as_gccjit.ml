@@ -233,6 +233,8 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         let v = to_d @@ RValue.lvalue @@ LValue.access_array (get_ptr array) offset in
         (RValue.to_string (get_ptr array) ^ "[%d]{=%g}", [ offset; v ])
     | Constant c -> (Float.to_string c, [])
+    | Embed_index (Fixed_idx i) -> (Int.to_string i, [])
+    | Embed_index (Iterator s) -> (Indexing.symbol_ident s ^ "{=%d}", [Map.find_exn env s])
     | Binop (Arg1, v1, _v2) -> loop v1
     | Binop (Arg2, _v1, v2) -> loop v2
     | Binop (op, v1, v2) ->
@@ -341,6 +343,16 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         (* FIXME(194): Convert according to array.typ ?= num_typ. *)
         RValue.lvalue @@ LValue.access_array (get_ptr array) offset
+    | Embed_index (Fixed_idx i) -> RValue.int ctx num_typ i
+    | Embed_index (Iterator s) -> (
+        try Map.find_exn env s
+        with e ->
+          Stdlib.Format.eprintf "exec_as_gccjit: missing index %a@ among environment keys:@ %a\n%!"
+            Sexp.pp_hum
+            ([%sexp_of: Indexing.symbol] s)
+            Sexp.pp_hum
+            ([%sexp_of: Indexing.symbol list] @@ Map.keys env);
+          raise e)
     | Binop (Arg2, _, c2) -> loop c2
     | Binop (Arg1, c1, _) -> loop c1
     | Binop (op, c1, c2) -> loop_binop op ~num_typ ~is_double ~v1:(loop c1) ~v2:(loop c2)

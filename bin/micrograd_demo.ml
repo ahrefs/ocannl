@@ -9,12 +9,7 @@ module CDSL = Arrayjit.Low_level.CDSL
 
 let () =
   let open Tensor.O in
-  (* SDSL.drop_all_sessions (); *)
-  (* CDSL.with_debug := true; *)
-  (* CDSL.keep_files_in_run_directory := true; *)
-  (* Low_level.debug_verbose_trace := true; *)
   Random.init 0;
-  (* The seeds 0, 6, 8 are unlucky. Seeds 2-5, 7, 9 are good. From better to worse: 4, 2, 9, 7, 1, 5, 3. *)
   CDSL.fixed_state_for_init := Some 4;
   let hid_dim = 16 in
   let len = 200 in
@@ -46,6 +41,7 @@ let () =
       ~o:[ 1 ]
       moons_classes
   in
+  let step_sym, step_ref, bindings = IDX.get_static_symbol IDX.empty in
   let%op mlp x = "b3" 1 + ("w3" * !/("b2" hid_dim + ("w2" * !/("b1" hid_dim + ("w1" * x))))) in
   let session_step = NTDSL.O.(NTDSL.counter !..1) in
   let%op minus_lr = -0.1 *. (!..steps - session_step) /. !..steps in

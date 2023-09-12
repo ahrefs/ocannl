@@ -8,6 +8,7 @@ type fetch_op =
   | Constant of float
   | Imported of Ops.global_identifier
   | Slice of { batch_idx : Indexing.static_symbol; sliced : LA.t }
+  | Embed_symbol of Indexing.static_symbol
 [@@deriving sexp_of]
 
 and t =
@@ -153,6 +154,9 @@ let to_low_level (code : t) : Low_level.t =
         (* TODO: doublecheck this always gets optimized away. *)
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             Set (array, idcs, Get (sliced, Array.append [| Iterator idx |] idcs)))
+    | Fetch { array; fetch_op = Embed_symbol s; dims } ->
+        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
+            Set (array, idcs, Embed_index (Iterator s.static_symbol)))
     | Fetch { array = _; fetch_op = Imported _; dims = _ } ->
         failwith "to_low_level: Imported NOT IMPLEMENTED YET"
   in

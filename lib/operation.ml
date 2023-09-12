@@ -190,6 +190,19 @@ let slice ?desc_label ~grad_spec (batch_idx : Indexing.static_symbol) t1 : Tenso
   let%cd grad_asn ~v:_ ~g ~t1 ~projections = g1 =+ g in
   Tensor.unop ?desc_label ~transpose_op:(Batch_slice batch_idx) ~op_label:"@|" ~op_asn ~grad_asn ~grad_spec t1
 
+let embed_symbol ?desc_label static_sym : Tensor.t =
+  let module NTDSL = Initial_NTDSL in
+  let op_asn ~v ~projections =
+    Assignments.Fetch
+      {
+        array = v;
+        fetch_op = Embed_symbol static_sym;
+        dims = lazy (Lazy.force projections).Indexing.lhs_dims;
+      }
+  in
+  let grad_asn ~v:_ ~g:_ ~projections:_ = Assignments.Noop in
+  Tensor.op ?desc_label ~op_label:"!@" ~op_asn ~grad_asn ~grad_spec:Prohibit_grad (Shape.make ~batch_dims:[] ~input_dims:[] ~output_dims:[1] ()) []
+
 module DO = struct
   let ( * ) = matmul ~grad_spec:If_needed
   let ( *. ) = pointmul ~grad_spec:If_needed
@@ -199,6 +212,7 @@ module DO = struct
   let ( !~ ) ?desc_label label = Tensor.param ?desc_label label
   let ( !. ) = Tensor.number ~grad_spec:If_needed
   let ( !.. ) ?desc_label i = Tensor.number ?desc_label ~grad_spec:If_needed @@ Float.of_int i
+  let ( !@ ) ?desc_label s = embed_symbol ?desc_label s
   let ( - ) = sub ~grad_spec:If_needed
   let ( ~- ) ?desc_label t = ( *. ) ?desc_label !.(-1.) t
   let ( /. ) = pointmul ~grad_spec:If_needed

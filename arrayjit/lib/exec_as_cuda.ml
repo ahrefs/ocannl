@@ -277,7 +277,7 @@ let jit_code ~traced_store info ppf llc : unit =
         pp_ll ppf body;
         pp_print_space ppf ();
         1
-    | Get_local _ | Get_global _ | Get _ | Constant _ -> 0
+    | Get_local _ | Get_global _ | Get _ | Constant _ | Embed_index _ -> 0
     | Binop (Arg1, v1, _v2) -> pp_top_locals ppf v1
     | Binop (Arg2, _v1, v2) -> pp_top_locals ppf v2
     | Binop (_, v1, v2) -> pp_top_locals ppf v1 + pp_top_locals ppf v2
@@ -297,6 +297,9 @@ let jit_code ~traced_store info ppf llc : unit =
         let array = get_array ~traced_store info array in
         fprintf ppf "@[<2>%s[%a@]]" (get_run_ptr array) pp_array_offset (idcs, array.dims)
     | Constant c -> fprintf ppf "(%f)" c
+    | Embed_index idx ->
+        if not @@ List.exists ~f:(String.equal num_typ) [ "int"; "size_t" ] then fprintf ppf "(%s)" num_typ;
+        pp_index_axis ppf idx
     | Binop (Arg1, v1, _v2) -> loop ppf v1
     | Binop (Arg2, _v1, v2) -> loop ppf v2
     | Binop (op, v1, v2) ->
@@ -325,6 +328,8 @@ let jit_code ~traced_store info ppf llc : unit =
         let v = sprintf "@[<2>%s[%s@]]" (get_run_ptr array) (array_offset_to_string (idcs, array.dims)) in
         (get_run_ptr array ^ "[%u]{=%f}", [ `Accessor (idcs, array.dims); `Value v ])
     | Constant c -> (Float.to_string c, [])
+    | Embed_index (Fixed_idx i) -> (Int.to_string i, [])
+    | Embed_index (Iterator s) -> (Indexing.symbol_ident s, [])
     | Binop (Arg1, v1, _v2) -> loop v1
     | Binop (Arg2, _v1, v2) -> loop v2
     | Binop (op, v1, v2) ->
