@@ -8,10 +8,7 @@ module type No_device_backend = sig
   val is_initialized : unit -> bool
   val init : unit -> context
   val finalize : context -> unit
-
-  val jit :
-    context -> ?name:string -> ?verbose:bool -> unit Indexing.bindings -> Assignments.t -> jitted
-
+  val jit : context -> ?name:string -> ?verbose:bool -> unit Indexing.bindings -> Assignments.t -> jitted
   val unsafe_cleanup : unit -> unit
 
   val from_host : context -> Lazy_array.t -> bool
@@ -100,8 +97,9 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     let keep_spinning = ref true in
     let worker () =
       while !keep_spinning do
-        Option.iter !next_task ~f:(fun f -> f ());
-        next_task := None;
+        Option.iter !next_task ~f:(fun f ->
+            f ();
+            next_task := None);
         Domain.cpu_relax ()
       done
     in
@@ -155,7 +153,12 @@ module Gccjit_backend = Multicore_backend (Gccjit_device)
 module Cuda_backend : Backend with type context = Exec_as_cuda.context = struct
   type context = Exec_as_cuda.context
   type device = Exec_as_cuda.device
-  type jitted = Exec_as_cuda.jitted = { context : context; run : unit -> unit; bindings : unit Indexing.bindings }
+
+  type jitted = Exec_as_cuda.jitted = {
+    context : context;
+    run : unit -> unit;
+    bindings : unit Indexing.bindings;
+  }
 
   open Exec_as_cuda
 
