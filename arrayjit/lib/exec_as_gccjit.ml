@@ -167,6 +167,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
   let c_float = Type.get ctx Type.Float in
   let c_double = Type.get ctx Type.Double in
   let cast_bool num_typ v = RValue.cast ctx (RValue.cast ctx v c_int) num_typ in
+  let to_d v = RValue.cast ctx v c_double in
   (* Source of unique identifiers. E.g. local scope ids can be non-unique due to inlining.
      We also need unique ids for computation ordering lvalues. *)
   let uid = ref 0 in
@@ -186,9 +187,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
     | Mul -> RValue.binary_op ctx Mult num_typ v1 v2
     | Div -> RValue.binary_op ctx Divide num_typ v1 v2
     | ToPowOf when is_double ->
-        let base = RValue.cast ctx v1 c_double in
-        let expon = RValue.cast ctx v2 c_double in
-        RValue.cast ctx (RValue.call ctx (Function.builtin ctx "pow") [ base; expon ]) num_typ
+        RValue.cast ctx (RValue.call ctx (Function.builtin ctx "pow") [ to_d v1; to_d v2 ]) num_typ
     | ToPowOf ->
         let base = RValue.cast ctx v1 c_float in
         let expon = RValue.cast ctx v2 c_float in
@@ -214,7 +213,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
     | Get_local id ->
         let lvalue, _typ, _local_is_double = Map.find_exn !locals id in
         (* FIXME(194): Convert according to _typ ?= num_typ. *)
-        ("v" ^ Int.to_string id.scope_id ^ "{=%f}", [ RValue.lvalue lvalue ])
+        ("v" ^ Int.to_string id.scope_id ^ "{=%g}", [ to_d @@ RValue.lvalue lvalue ])
     | Get_global (C_function f_name, None) -> ("<calls " ^ f_name ^ ">", [])
     | Get_global (External_unsafe { ptr; dims = (lazy dims); prec }, Some idcs) ->
         let idcs = lookup env idcs in
@@ -222,16 +221,16 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         let ptr = RValue.ptr ctx (Type.pointer typ) ptr in
         let offset = jit_array_offset ctx ~idcs ~dims in
         (* FIXME(194): Convert according to typ ?= num_typ. *)
-        let v = RValue.lvalue @@ LValue.access_array ptr offset in
-        ("external " ^ RValue.to_string ptr ^ "[%d]{=%f}", [ offset; v ])
+        let v = to_d @@ RValue.lvalue @@ LValue.access_array ptr offset in
+        ("external " ^ RValue.to_string ptr ^ "[%d]{=%g}", [ offset; v ])
     | Get_global _ -> failwith "NOT IMPLEMENTED YET"
     | Get (ptr, idcs) ->
         let array = get_array info ptr in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         (* FIXME(194): Convert according to array.typ ?= num_typ. *)
-        let v = RValue.lvalue @@ LValue.access_array (get_ptr array) offset in
-        (RValue.to_string (get_ptr array) ^ "[%d]{=%f}", [ offset; v ])
+        let v = to_d @@ RValue.lvalue @@ LValue.access_array (get_ptr array) offset in
+        (RValue.to_string (get_ptr array) ^ "[%d]{=%g}", [ offset; v ])
     | Constant c -> (Float.to_string c, [])
     | Binop (Arg1, v1, _v2) -> loop v1
     | Binop (Arg2, _v1, v2) -> loop v2
@@ -256,9 +255,10 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
       Block.eval !current_block @@ RValue.call ctx printf
       @@ RValue.string_literal ctx
            [%string
-             {|TRACE: %{RValue.to_string @@ get_ptr array}[%d] %{Ops.assign_op_C_syntax accum_op} %f = %{v_format}
+             {|TRACE: %{RValue.to_string @@ get_ptr array}[%d]{=%g} %{Ops.assign_op_C_syntax accum_op} %g = %{v_format}
 |}]
-         :: offset :: value :: v_fillers;
+         :: (to_d @@ RValue.lvalue @@ LValue.access_array (get_ptr array) offset)
+         :: offset :: to_d value :: v_fillers;
       Block.eval !current_block @@ RValue.call ctx fflush [ RValue.lvalue c_stdout ])
   in
   let rec loop_proc ~(env : rvalue Indexing.environment) ~name (body : Low_level.t) : unit =
@@ -278,16 +278,16 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         let lhs = LValue.access_array (get_ptr array) offset in
-        Block.assign_op !current_block lhs (builtin_op op) value;
-        log_trace_assignment idcs array op value c2
+        log_trace_assignment idcs array op value c2;
+        Block.assign_op !current_block lhs (builtin_op op) value
     | Set (array, idcs, v_code) ->
         let array = get_array info array in
         let value = loop_float ~name ~env ~num_typ:array.num_typ ~is_double:array.is_double v_code in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         let lhs = LValue.access_array (get_ptr array) offset in
-        Block.assign !current_block lhs value;
-        log_trace_assignment idcs array Ops.Arg2 value v_code
+        log_trace_assignment idcs array Ops.Arg2 value v_code;
+        Block.assign !current_block lhs value
     | Zero_out array ->
         if Hashtbl.mem info.arrays array then
           failwith
