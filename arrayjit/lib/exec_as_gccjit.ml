@@ -245,16 +245,21 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         let v, fillers = loop v in
         (String.concat [ "("; v; " > 0.0 ? "; v; " : 0.0)" ], fillers @ fillers)
   in
+  let printf = Function.builtin ctx "printf" in
+  let f_ptr = Type.get ctx Type.File_ptr in
+  let fflush = Function.create ctx Imported (Type.get ctx Void) "fflush" [ Param.create ctx f_ptr "f" ] in
+  let c_stdout = LValue.global ctx LValue.Imported f_ptr "stdout" in
   let log_trace_assignment idcs array accum_op value v_code =
-    if !Low_level.with_debug && !Low_level.debug_verbose_trace then
-      let f = Function.builtin ctx "printf" in
+    if !Low_level.with_debug && !Low_level.debug_verbose_trace then (
       let v_format, v_fillers = debug_float ~is_double:array.is_double v_code in
       let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
-      Block.eval !current_block @@ RValue.call ctx f
+      Block.eval !current_block @@ RValue.call ctx printf
       @@ RValue.string_literal ctx
            [%string
-             {|\nTRACE: %{RValue.to_string @@ get_ptr array}[%d] %{Ops.assign_op_C_syntax accum_op} %f = \n  %{v_format}\n|}]
-         :: offset :: value :: v_fillers
+             {|TRACE: %{RValue.to_string @@ get_ptr array}[%d] %{Ops.assign_op_C_syntax accum_op} %f = %{v_format}
+|}]
+         :: offset :: value :: v_fillers;
+      Block.eval !current_block @@ RValue.call ctx fflush [ RValue.lvalue c_stdout ])
   in
   let rec loop_proc ~(env : rvalue Indexing.environment) ~name (body : Low_level.t) : unit =
     let loop = loop_proc ~env ~name in
