@@ -91,7 +91,15 @@ let for_loop ~f bindings =
   loop @@ Indexing.assoc_of_bindings bindings
 
 let set_fully_on_host (a : LA.t) =
-  a.never_virtual <- true;
-  a.never_device_only <- true
+  if LA.is_true a.virtual_ then
+    raise
+    @@ Ndarray.User_error
+         [%string "Train.set_fully_on_host: array #%{a.id#Int} %{a.label} is already virtual"];
+  a.virtual_ <- Some false;
+  if LA.is_true a.device_only then
+    raise
+    @@ Ndarray.User_error
+         [%string "Train.set_fully_on_host: array #%{a.id#Int} %{a.label} is already device-only"];
+  a.device_only <- Some false
 
 let everything_fully_on_host = Tensor.iter_embedded_arrays ~f:set_fully_on_host

@@ -245,10 +245,12 @@ let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axi
     | Some fetch_op ->
         let fetch_op = fetch_op ~v in
         (match fetch_op with
-        | Constant _ -> ()
-        | _ ->
-            v.never_virtual <- true;
-            v.never_device_only <- true);
+        | Constant _ | Slice _ | Embed_symbol _ -> ()
+        | Imported _ ->
+            assert (LA.isnt_true v.virtual_);
+            v.virtual_ <- Some false;
+            assert (LA.isnt_true v.device_only);
+            v.device_only <- Some false);
         Fetch { array = v; fetch_op; dims }
   in
   let grad_asn ~v:_ ~g:_ ~projections:_ = Assignments.Noop in
@@ -308,11 +310,16 @@ let param ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?(strict = 
     term ?desc_label ~grad_spec:Require_grad ~batch_dims:[] ?input_dims ?output_dims ?axis_labels ?deduced
       ~label ~init_op ()
   in
-  t.value.never_virtual <- true;
-  t.value.never_device_only <- true;
+  let v = t.value in
+  assert (LA.isnt_true v.virtual_);
+  v.virtual_ <- Some false;
+  assert (LA.isnt_true v.device_only);
+  v.device_only <- Some false;
   (* In principle, gradients can be device-only (in the global memory of the device). Gradients of param
      cannot be inlined because backpropagation and param update are usually separate computations. *)
-  (Option.value_exn t.diff).grad.never_virtual <- true;
+  let g = (Option.value_exn t.diff).grad in
+  assert (LA.isnt_true g.virtual_);
+  g.virtual_ <- Some false;
   t
 
 let rec iter_embedded_arrays ~f t =
@@ -381,11 +388,14 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
       in
       if with_id then "#" ^ Int.to_string diff.grad.id ^ " " ^ label else label
     in
+    (* let where_located (la : LA.t) = if Option.is_some @@ Lazy.force la.array then "<hosted>" else if la. in *)
     match (not embedded, with_value, with_grad, t.value.array, t.diff) with
     | true, _, _, _, _ -> `Embed_subtree_ID (Int.to_string t.id)
     | _, false, false, _, _ | _, false, true, _, None -> `Subtree_with_ID (id, `Tree (`Text txt, children))
     | _, true, false, (lazy (Some v_array)), _ | _, true, true, (lazy (Some v_array)), None ->
-        let node = `Box (Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices @@ v_array) in
+        let node =
+          `Box (Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices @@ v_array)
+        in
         `Subtree_with_ID (id, `Tree (node, children))
     | _, true, false, (lazy None), _ | _, true, true, (lazy None), None ->
         let node = `Text (txt ^ " <virtual>") in

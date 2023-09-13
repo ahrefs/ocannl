@@ -9,10 +9,19 @@ type t = {
   label : string;  (** An optional display information. *)
   literal : bool;
   hosted : bool ref;
-  mutable never_virtual : bool;
-  mutable never_device_only : bool;
+  mutable virtual_ : bool option;
+      (** If true, this array is never materialized, its computations are inlined on a per-scalar basis.
+          A array that is hosted will not be virtual. *)
+  mutable device_only : bool option;
+      (** If true, this node is only materialized on the devices it is computed on, it is not persisted
+          outside of a step update. It is marked as [not !(nd.hosted)]. *)
   mutable backend_info : string;
 }
+
+let is_false opt = not @@ Option.value ~default:true opt
+let is_true opt = Option.value ~default:false opt
+let isnt_false opt = Option.value ~default:true opt
+let isnt_true opt = not @@ Option.value ~default:false opt
 
 let name { id; _ } = "n" ^ Int.to_string id
 let compare a1 a2 = compare_int a1.id a2.id
@@ -67,18 +76,7 @@ let create prec ~id ~label ~dims ?(literal = false) init_op =
   let hosted = ref false in
   let array = lazy (if !hosted then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None) in
   let arr =
-    {
-      array;
-      prec;
-      id;
-      label;
-      literal;
-      hosted;
-      never_virtual = false;
-      never_device_only = false;
-      backend_info = "";
-      dims;
-    }
+    { array; prec; id; label; literal; hosted; virtual_ = None; device_only = None; backend_info = ""; dims }
   in
   Registry.add registry arr;
   arr
