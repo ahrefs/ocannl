@@ -438,7 +438,9 @@ let inline_computation ~id traced call_args =
     in
     loop env def
   in
-  try Some (unflat_lines (List.rev_filter_map ~f:loop_proc traced.computations) : t)
+  try
+    let body = List.rev_filter_map ~f:loop_proc traced.computations in
+    if List.is_empty body then raise Non_virtual else Some (unflat_lines body)
   with Non_virtual ->
     traced.non_virtual <- true;
     None

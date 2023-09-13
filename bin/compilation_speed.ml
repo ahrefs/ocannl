@@ -7,6 +7,7 @@ module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 
 let benchmark_overhead backend () =
+  let n_data = 20 in
   Arrayjit.Backends.reinitialize backend;
   let open (val backend : Arrayjit.Backends.Backend) in
   CDSL.with_debug := true;
@@ -24,10 +25,11 @@ let benchmark_overhead backend () =
   let ctx = init device in
   let update_f = Train.grad_update f in
   let jitted_f = jit ctx IDX.empty update_f in
+  Tensor.print_tree ~with_grad:true ~depth:9 f;
   Tensor.iter_embedded_arrays f ~f:(fun a ->
       if from_host jitted_f.context a then Stdio.printf "Sent array %s.\n%!" @@ LA.name a);
 
-  let xs = Array.init 40 ~f:Float.(fun i -> of_int i - 20.) in
+  let xs = Array.init n_data ~f:Float.(fun i -> of_int i - (of_int n_data /. 2.)) in
   let open Tensor.O in
   let ys =
     Array.map xs ~f:(fun v ->
@@ -42,7 +44,7 @@ let benchmark_overhead backend () =
   in
   let plot_box =
     let open PrintBox_utils in
-    plot ~size:(40, 35) ~x_label:"x" ~y_label:"f(x)"
+    plot ~size:(40, 25) ~x_label:"x" ~y_label:"f(x)"
       [ Scatterplot { points = Array.zip_exn xs ys; pixel = "#" } ]
   in
   let final_time = Time_now.nanoseconds_since_unix_epoch () in
@@ -55,7 +57,7 @@ let benchmark_overhead backend () =
         (* FIXME: global mem consumption *)
         mem_in_bytes = 0;
         result_label = "x, f(x)";
-        result = [%sexp_of: (float * float) list] @@ [ (xs.(0), ys.(0)); (xs.(20), ys.(20)) ];
+        result = [%sexp_of: (float * float) list] @@ [ (xs.(0), ys.(0)); (xs.(n_data / 2), ys.(n_data / 2)) ];
       }
   in
   PrintBox_text.output Stdio.stdout plot_box;
