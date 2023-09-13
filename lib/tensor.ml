@@ -368,29 +368,30 @@ type array_print_style =
     rectangles, possibly repeated (screens). *)
 
 let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_grad t =
-  (* let la_to_box la = in *)
   let rec to_dag { subtensor = t; embedded } : PrintBox_utils.dag =
     let id = Int.to_string t.id in
     let children = if single_node then [] else List.map ~f:to_dag t.children in
-    let prefix = "[" ^ id ^ "] " ^ t.value.label in
     let labels = Shape.axis_map_to_dims_index t.shape.axis_labels in
     let indices = Shape.default_display_indices t.shape in
-    let txt = if with_id then prefix else t.value.label in
+    let txt = if with_id then "[" ^ id ^ "] " ^ t.value.label else t.value.label in
     let grad_txt diff =
-      if String.is_substring (String.lowercase diff.grad.label) ~substring:"grad" then diff.grad.label
-      else diff.grad.label ^ " Gradient"
+      let label =
+        if String.is_substring (String.lowercase diff.grad.label) ~substring:"grad " then diff.grad.label
+        else diff.grad.label ^ " Gradient"
+      in
+      if with_id then "[" ^ Int.to_string diff.grad.id ^ "] " ^ label else label
     in
     match (not embedded, with_value, with_grad, t.value.array, t.diff) with
     | true, _, _, _, _ -> `Embed_subtree_ID (Int.to_string t.id)
     | _, false, false, _, _ | _, false, true, _, None -> `Subtree_with_ID (id, `Tree (`Text txt, children))
     | _, true, false, (lazy (Some v_array)), _ | _, true, true, (lazy (Some v_array)), None ->
-        let node = `Box (Nd.render_array ~brief:true ~prefix ?entries_per_axis ~labels ~indices @@ v_array) in
+        let node = `Box (Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices @@ v_array) in
         `Subtree_with_ID (id, `Tree (node, children))
     | _, true, false, (lazy None), _ | _, true, true, (lazy None), None ->
         let node = `Text (txt ^ " <virtual>") in
         `Subtree_with_ID (id, `Tree (node, children))
     | _, false, true, _, Some diff ->
-        let prefix = prefix ^ " " ^ grad_txt diff in
+        let prefix = grad_txt diff in
         let node =
           match Lazy.force diff.grad.array with
           | Some g_array ->
@@ -400,7 +401,7 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
         `Subtree_with_ID (id, `Tree (node, children))
     | _, true, true, (lazy (Some v_array)), Some diff ->
         let node =
-          let value = Nd.render_array ~brief:true ~prefix ?entries_per_axis ~labels ~indices v_array in
+          let value = Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices v_array in
           let grad =
             match Lazy.force diff.grad.array with
             | Some g_array ->
@@ -414,7 +415,7 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
         `Subtree_with_ID (id, `Tree (node, children))
     | _, true, true, (lazy None), Some diff ->
         let node =
-          let value = `Text (prefix ^ " " ^ t.value.label ^ " <virtual>") in
+          let value = `Text (txt ^ " <virtual>") in
           let grad =
             match Lazy.force diff.grad.array with
             | Some g_array ->
