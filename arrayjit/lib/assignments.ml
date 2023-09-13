@@ -103,12 +103,10 @@ let to_low_level (code : t) : Low_level.t =
                 }
         in
         let for_loops = for_loop [] (Array.to_list projections.product_space) in
-        let s = Low_level.Comment ("Computing array " ^ LA.name lhs) in
-        (* Note: it might be invalid to replicate computation across tasks. *)
         if zero_out then
           let dims = lazy projections.lhs_dims in
-          Low_level.unflat_lines [ s; loop (Fetch { array = lhs; fetch_op = Constant 0.; dims }); for_loops ]
-        else Low_level.Seq (s, for_loops)
+          Low_level.Seq (loop (Fetch { array = lhs; fetch_op = Constant 0.; dims }), for_loops)
+        else for_loops
     | Accum_unop { zero_out; accum; op; lhs; rhs; projections } ->
         let projections = Lazy.force projections in
         let lhs_idx =
@@ -139,11 +137,10 @@ let to_low_level (code : t) : Low_level.t =
                 }
         in
         let for_loops = for_loop [] (Array.to_list projections.product_space) in
-        let s = Low_level.Comment ("Computing node " ^ LA.name lhs) in
         if zero_out then
           let dims = lazy projections.lhs_dims in
-          Low_level.unflat_lines [ s; loop (Fetch { array = lhs; fetch_op = Constant 0.; dims }); for_loops ]
-        else Seq (s, for_loops)
+          Low_level.Seq (loop (Fetch { array = lhs; fetch_op = Constant 0.; dims }), for_loops)
+        else for_loops
     | Noop -> Low_level.Noop
     | Block_comment (s, c) -> Low_level.Seq (Comment s, loop c)
     | Seq (c1, c2) -> Seq (loop c1, loop c2)
