@@ -373,13 +373,13 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
     let children = if single_node then [] else List.map ~f:to_dag t.children in
     let labels = Shape.axis_map_to_dims_index t.shape.axis_labels in
     let indices = Shape.default_display_indices t.shape in
-    let txt = if with_id then "[" ^ id ^ "] " ^ t.value.label else t.value.label in
+    let txt = if with_id then "#" ^ id ^ " " ^ t.value.label else t.value.label in
     let grad_txt diff =
       let label =
         if String.is_substring (String.lowercase diff.grad.label) ~substring:"grad " then diff.grad.label
         else diff.grad.label ^ " Gradient"
       in
-      if with_id then "[" ^ Int.to_string diff.grad.id ^ "] " ^ label else label
+      if with_id then "#" ^ Int.to_string diff.grad.id ^ " " ^ label else label
     in
     match (not embedded, with_value, with_grad, t.value.array, t.diff) with
     | true, _, _, _, _ -> `Embed_subtree_ID (Int.to_string t.id)
