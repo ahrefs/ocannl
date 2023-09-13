@@ -172,7 +172,6 @@ let get_array ~traced_store:_ ctx_info (key : LA.t) =
   let default () =
     (* let tn = Low_level.get_node traced_store v in *)
     (* TODO: We will need tn to perform more refined optimizations. *)
-    (* let host_size_in_bytes = Ndarray.size_in_bytes key.array in *)
     let dims = Lazy.force key.dims in
     let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
     let hosted = Lazy.force key.array in
@@ -195,6 +194,7 @@ let get_array ~traced_store:_ ctx_info (key : LA.t) =
       key.backend_info <- key.backend_info ^ backend_info;
     let data = { hosted; local; mem; dims; size_in_bytes; size_in_elems; num_typ; is_double; global } in
     ctx_info.ctx_arrays <- Map.add_exn ctx_info.ctx_arrays ~key ~data;
+    Hash_set.add ctx_info.used_tensors key;
     data
   in
   Option.value_or_thunk (Map.find ctx_info.ctx_arrays key) ~default
@@ -420,25 +420,27 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ par
   let func = Cu.module_get_function run_module ~name in
   let args = List.map args ~f:(fun p -> Cu.Tensor p) in
   if verbose then Stdio.printf "Exec_as_cuda.jit: compilation finished\n%!";
-  ( func,
-    args,
-    { ctx = info.ctx; device = old_context.device; run_module = Some run_module; arrays = info.ctx_arrays } )
+  (func, args, run_module, info)
 
 type jitted = { context : context; run : unit -> unit; bindings : unit Indexing.bindings }
 
 let jit ~name ?(verbose = false) old_context bindings ((traced_store, _) as compiled) =
   let idx_params, idx_args = List.unzip @@ Indexing.assoc_of_bindings bindings in
-  let func, args, context = jit_func ~name ~verbose old_context idx_params compiled in
+  let func, args, run_module, info = jit_func ~name ~verbose old_context idx_params compiled in
+  let context =
+    { ctx = info.ctx; device = old_context.device; run_module = Some run_module; arrays = info.ctx_arrays }
+  in
   let run () =
     if verbose then Stdio.printf "Exec_as_cuda.jit: zeroing-out global memory\n%!";
     set_ctx context.ctx;
     let module Cu = Cudajit in
     Map.iteri context.arrays ~f:(fun ~key:ptr ~data ->
-        match data with
-        | { global = Some (_, dev_ptr); size_in_bytes; _ } ->
-            let tn = Hashtbl.find_exn traced_store ptr in
-            if tn.zero_initialized then Cu.memset_d8 dev_ptr Unsigned.UChar.zero ~length:size_in_bytes
-        | _ -> ());
+        if Hash_set.mem info.used_tensors ptr then
+          match data with
+          | { global = Some (_, dev_ptr); size_in_bytes; _ } ->
+              let tn = Hashtbl.find_exn traced_store ptr in
+              if tn.zero_initialized then Cu.memset_d8 dev_ptr Unsigned.UChar.zero ~length:size_in_bytes
+          | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit: launching the kernel\n%!";
     (* if !Low_level.debug_verbose_trace then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
     let idx_args =
