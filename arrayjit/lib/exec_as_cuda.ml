@@ -251,7 +251,7 @@ let jit_code ~traced_store info ppf llc : unit =
         done;
         locals := old_locals
     | Comment message ->
-        if !Low_level.executor_print_comments then
+        if !Low_level.debug_verbose_trace then
           fprintf ppf
             "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"COMMENT: %s\\n\"@]);@ @]}"
             (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)

@@ -200,7 +200,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
     | Arg1 -> v1
   in
   let log_comment c =
-    if !Low_level.executor_print_comments then
+    if !Low_level.debug_verbose_trace then
        let f = Function.builtin ctx "printf" in
        Block.eval !current_block @@ RValue.call ctx f [ RValue.string_literal ctx ("\nCOMMENT: " ^ c ^ "\n") ]
     else Block.comment !current_block c

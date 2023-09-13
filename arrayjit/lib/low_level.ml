@@ -56,10 +56,9 @@ let comment_to_name =
   Str.global_replace nonliteral "_"
 
 let extract_block_name llc = match flat_lines llc with Comment s :: _ -> comment_to_name s | _ -> ""
-let executor_print_comments = ref false
+let debug_verbose_trace = ref false
 let keep_files_in_run_directory = ref false
 let with_debug = ref false
-let debug_verbose_trace = ref false
 let code_sexp_margin = ref 200
 
 let fprint_code ppf c =
@@ -772,19 +771,18 @@ let loop_over_dims dims ~body =
 module CDSL = struct
   let single = Ops.single
   let double = Ops.double
-  let executor_print_comments = executor_print_comments
+  let debug_verbose_trace = debug_verbose_trace
   let keep_files_in_run_directory = keep_files_in_run_directory
   let with_debug = with_debug
-  let debug_verbose_trace = debug_verbose_trace
   let virtualize_settings = virtualize_settings
   let code_sexp_margin = code_sexp_margin
   let fixed_state_for_init = Ndarray.fixed_state_for_init
 
-  let enable_all_debugs ?(trace_interpreter = false) ?(hosted_only = true) () =
+  let enable_all_debugs ?(tracing = false) ?(hosted_only = true) () =
     with_debug := true;
     keep_files_in_run_directory := true;
     if hosted_only then virtualize_settings.enable_device_only <- false;
-    if trace_interpreter then debug_verbose_trace := true
+    if tracing then debug_verbose_trace := true
 
   let disable_all_debugs ?(restore_defaults = false) () =
     debug_verbose_trace := false;
