@@ -94,11 +94,11 @@ type traced_array = {
   assignments : int array Hash_set.t;
   accesses : (int array, visits) Hashtbl.t;
       (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
-  mutable non_virtual : bool;
-      (** If false, this array is never materialized, its computations are inlined on a per-scalar basis.
+  mutable virtual_ : bool;
+      (** If true, this array is never materialized, its computations are inlined on a per-scalar basis.
           A array that is hosted will not be virtual. *)
-  mutable non_device_only : bool;
-      (** If false, this node is only materialized on the devices it is computed on, it is not persisted
+  mutable device_only : bool;
+      (** If true, this node is only materialized on the devices it is computed on, it is not persisted
           outside of a step update. It is marked as [not !(nd.hosted)]. *)
   mutable scalar : float option;
   mutable zero_initialized : bool;
@@ -112,15 +112,15 @@ type traced_array = {
 
 let get_node store nd =
   Hashtbl.find_or_add store nd ~default:(fun () ->
-      let non_virtual = nd.LA.never_virtual in
-      let non_device_only = nd.never_device_only in
+      let virtual_ = not nd.LA.never_virtual in
+      let device_only = not nd.never_device_only in
       {
         nd;
         computations = [];
         assignments = Hash_set.Poly.create ();
         accesses = Hashtbl.Poly.create ();
-        non_virtual;
-        non_device_only;
+        virtual_;
+        device_only;
         scalar = None;
         zero_initialized = false;
         zeroed_out = false;
@@ -183,7 +183,7 @@ let precompute_constants ?idcs traced_store top_ptr llv =
   in
   let top_n = get_node traced_store top_ptr in
   try
-    if top_n.non_virtual then raise @@ Non_literal 8;
+    if not top_n.virtual_ then raise @@ Non_literal 8;
     if (not top_n.nd.literal) && Hashtbl.exists top_n.accesses ~f:is_recurrent then raise @@ Non_literal 6;
     (match idcs with
     | None -> ()
@@ -273,11 +273,11 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
   in
   loop_proc Indexing.empty_env llc;
   Hashtbl.iter traced_store ~f:(fun traced ->
-      if Hashtbl.exists traced.accesses ~f:is_too_many then traced.non_virtual <- true;
+      if Hashtbl.exists traced.accesses ~f:is_too_many then traced.virtual_ <- false;
       if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then traced.read_only <- true;
       if Hashtbl.exists traced.accesses ~f:is_recurrent then (
-        traced.non_virtual <- true;
-        traced.non_device_only <- true;
+        traced.virtual_ <- false;
+        traced.device_only <- false;
         traced.read_before_write <- true))
 
 let process_computation traced top_llc =
@@ -366,11 +366,11 @@ let process_computation traced top_llc =
     | Unop (_, llv) -> loop_float ~env_dom llv
   in
   try
-    if traced.non_virtual then raise Non_virtual;
+    if not traced.virtual_ then raise Non_virtual;
     loop_proc ~env_dom:Indexing.empty_env top_llc;
     if not !has_setter then raise Non_virtual;
     traced.computations <- (!at_idcs, top_llc) :: traced.computations
-  with Non_virtual -> traced.non_virtual <- true
+  with Non_virtual -> traced.virtual_ <- false
 
 let inline_computation ~id traced call_args =
   let exception Non_virtual in
@@ -442,7 +442,7 @@ let inline_computation ~id traced call_args =
     let body = List.rev_filter_map ~f:loop_proc traced.computations in
     if List.is_empty body then raise Non_virtual else Some (unflat_lines body)
   with Non_virtual ->
-    traced.non_virtual <- true;
+    traced.virtual_ <- false;
     None
 
 let optimize_integer_pow = ref true
@@ -464,18 +464,18 @@ let virtual_llc traced_store reverse_node_map (llc : t) : t =
         | Some array when not @@ Set.mem process_for array ->
             let node : traced_array = get_node traced_store array in
             let result = loop_proc ~process_for:(Set.add process_for array) llc in
-            if not node.non_virtual then process_computation node result;
+            if not node.virtual_ then process_computation node result;
             result
         | _ -> For_loop { for_config with body = loop body })
     | Zero_out array ->
         let traced : traced_array = get_node traced_store array in
-        if (not @@ Set.mem process_for array) && not traced.non_virtual then process_computation traced llc;
+        if (not @@ Set.mem process_for array) && traced.virtual_ then process_computation traced llc;
         llc
     | Set (array, indices, llv) ->
         let traced : traced_array = get_node traced_store array in
-        let next = if traced.non_virtual then process_for else Set.add process_for array in
+        let next = if not traced.virtual_ then process_for else Set.add process_for array in
         let result = Set (array, indices, loop_float ~process_for:next llv) in
-        if (not @@ Set.mem process_for array) && not traced.non_virtual then process_computation traced result;
+        if (not @@ Set.mem process_for array) && traced.virtual_ then process_computation traced result;
         result
     | Set_local (id, llv) -> Set_local (id, loop_float ~process_for llv)
     | Comment _ -> llc
@@ -488,7 +488,7 @@ let virtual_llc traced_store reverse_node_map (llc : t) : t =
         llv
     | Get (array, indices) ->
         let traced = get_node traced_store array in
-        if traced.non_virtual then llv
+        if not traced.virtual_ then llv
         else
           let id = get_scope array in
           Option.value ~default:llv
@@ -507,7 +507,7 @@ let virtual_llc traced_store reverse_node_map (llc : t) : t =
 let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
   let is_inline array =
     let node = get_node traced_store array in
-    (virtualize_settings.inline_constants && Option.is_some node.scalar) || not node.non_virtual
+    (virtualize_settings.inline_constants && Option.is_some node.scalar) || node.virtual_
   in
   (* The current position is within scope of the definitions of the process_for virtual arrays. *)
   let rec loop_proc ~balanced ~env_dom (llc : t) : t option =
@@ -538,7 +538,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
         let node = get_node traced_store id.nd in
         if virtualize_settings.inline_constants && Option.is_some node.scalar then None
         else (
-          assert (not node.non_virtual);
+          assert node.virtual_;
           Some (Set_local (id, loop_float ~balanced ~env_dom llv)))
     | Comment _ -> Some llc
     | Staged_compilation _ -> Some llc
@@ -551,7 +551,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
         match node.scalar with
         | Some c when virtualize_settings.inline_constants -> Constant c
         | _ ->
-            if not node.non_virtual then
+            if node.virtual_ then
               Stdlib.Format.printf "WARNING: unexpected Get of a virtual array, details:@ %a\n%!" Sexp.pp_hum
                 (sexp_of_traced_array node);
             assert (Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
@@ -563,7 +563,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
         | _ ->
             assert (
               Array.for_all orig_indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
-            if traced.non_virtual then Get (id.nd, orig_indices)
+            if not traced.virtual_ then Get (id.nd, orig_indices)
             else
               Option.value_or_thunk ~default:(fun () ->
                   Stdlib.Format.printf
@@ -577,7 +577,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
         match node.scalar with
         | Some c when virtualize_settings.inline_constants -> Constant c
         | _ ->
-            assert (not node.non_virtual);
+            assert node.virtual_;
             llv)
     | Get_global _ -> llv
     | Embed_index (Fixed_idx _) -> llv
@@ -749,7 +749,7 @@ let compile_proc ~name ?(verbose = false) llc : optimized =
     let ppf = Stdlib.Format.formatter_of_out_channel f in
     Stdlib.Format.pp_set_margin ppf !code_sexp_margin;
     Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t @@ snd result));
-  Hashtbl.iter (fst result) ~f:(fun v -> if v.non_virtual && v.non_device_only then v.nd.hosted := true);
+  Hashtbl.iter (fst result) ~f:(fun v -> if not v.virtual_ && not v.device_only then v.nd.hosted := true);
   if verbose then Stdio.printf "Low_level.compile_proc: finished\n%!";
   result
 
