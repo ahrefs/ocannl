@@ -234,7 +234,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         (RValue.to_string (get_ptr array) ^ "[%d]{=%g}", [ offset; v ])
     | Constant c -> (Float.to_string c, [])
     | Embed_index (Fixed_idx i) -> (Int.to_string i, [])
-    | Embed_index (Iterator s) -> (Indexing.symbol_ident s ^ "{=%d}", [Map.find_exn env s])
+    | Embed_index (Iterator s) -> (Indexing.symbol_ident s ^ "{=%d}", [ Map.find_exn env s ])
     | Binop (Arg1, v1, _v2) -> loop v1
     | Binop (Arg2, _v1, v2) -> loop v2
     | Binop (op, v1, v2) ->
@@ -386,9 +386,14 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
 
 let jit_func ~name (context : context) ctx bindings (traced_store, proc) =
   let open Gccjit in
+  let c_index = Type.get ctx Type.Int in
   let fkind = Function.Exported in
-  let func = Function.create ctx fkind (Type.get ctx Void) name [] in
   let bindings = Indexing.assoc_of_bindings bindings in
+  let static_indices =
+    List.map bindings ~f:(fun ({ static_symbol; _ }, _) ->
+        Param.create ctx c_index @@ Indexing.symbol_ident static_symbol)
+  in
+  let func = Function.create ctx fkind (Type.get ctx Void) name static_indices in
   let env =
     Map.of_alist_exn (module Indexing.Symbol)
     @@ List.mapi bindings ~f:(fun pos ({ Indexing.static_symbol; _ }, _) ->
