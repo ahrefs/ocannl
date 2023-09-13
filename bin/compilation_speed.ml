@@ -7,8 +7,12 @@ module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 
 let benchmark_overhead backend () =
+  Arrayjit.Backends.reinitialize backend;
   let open (val backend : Arrayjit.Backends.Backend) in
-  CDSL.disable_all_debugs ();
+  CDSL.with_debug := true;
+  CDSL.keep_files_in_run_directory := true;
+  CDSL.debug_verbose_trace := true;
+  (* CDSL.disable_all_debugs (); *)
   Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ name ^ " ******";
   Random.init 0;
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
@@ -23,7 +27,7 @@ let benchmark_overhead backend () =
   Tensor.iter_embedded_arrays f ~f:(fun a ->
       if from_host jitted_f.context a then Stdio.printf "Sent array %s.\n%!" @@ LA.name a);
 
-  let xs = Array.init 100 ~f:Float.(fun i -> of_int i - 50.) in
+  let xs = Array.init 40 ~f:Float.(fun i -> of_int i - 20.) in
   let open Tensor.O in
   let ys =
     Array.map xs ~f:(fun v ->
@@ -38,7 +42,7 @@ let benchmark_overhead backend () =
   in
   let plot_box =
     let open PrintBox_utils in
-    plot ~size:(75, 35) ~x_label:"x" ~y_label:"f(x)"
+    plot ~size:(40, 35) ~x_label:"x" ~y_label:"f(x)"
       [ Scatterplot { points = Array.zip_exn xs ys; pixel = "#" } ]
   in
   let final_time = Time_now.nanoseconds_since_unix_epoch () in
@@ -51,7 +55,7 @@ let benchmark_overhead backend () =
         (* FIXME: global mem consumption *)
         mem_in_bytes = 0;
         result_label = "x, f(x)";
-        result = [%sexp_of: (float * float) list] @@ [ (xs.(0), ys.(0)); (xs.(50), ys.(50)) ];
+        result = [%sexp_of: (float * float) list] @@ [ (xs.(0), ys.(0)); (xs.(20), ys.(20)) ];
       }
   in
   PrintBox_text.output Stdio.stdout plot_box;

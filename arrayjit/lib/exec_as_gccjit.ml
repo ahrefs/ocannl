@@ -200,10 +200,10 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
     | Arg1 -> v1
   in
   let log_comment c =
-    (if !Low_level.with_debug && !Low_level.executor_print_comments then
+    if !Low_level.executor_print_comments then
        let f = Function.builtin ctx "printf" in
-       Block.eval !current_block @@ RValue.call ctx f [ RValue.string_literal ctx ("\nComment: " ^ c ^ "\n") ]);
-    Block.comment !current_block c
+       Block.eval !current_block @@ RValue.call ctx f [ RValue.string_literal ctx ("\nCOMMENT: " ^ c ^ "\n") ]
+    else Block.comment !current_block c
   in
   let rec debug_float ~is_double (value : Low_level.float_t) : string * 'a list =
     let loop = debug_float ~is_double in
@@ -252,7 +252,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
   let fflush = Function.create ctx Imported (Type.get ctx Void) "fflush" [ Param.create ctx f_ptr "f" ] in
   let c_stdout = LValue.global ctx LValue.Imported f_ptr "stdout" in
   let log_trace_assignment idcs array accum_op value v_code =
-    if !Low_level.with_debug && !Low_level.debug_verbose_trace then (
+    if !Low_level.debug_verbose_trace then (
       let v_format, v_fillers = debug_float ~is_double:array.is_double v_code in
       let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
       Block.eval !current_block @@ RValue.call ctx printf

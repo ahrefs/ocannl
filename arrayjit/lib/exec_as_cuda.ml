@@ -251,11 +251,11 @@ let jit_code ~traced_store info ppf llc : unit =
         done;
         locals := old_locals
     | Comment message ->
-        fprintf ppf "/* %s */@ " message;
-        if !Low_level.debug_verbose_trace then
+        if !Low_level.executor_print_comments then
           fprintf ppf
-            "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %s\\n\"@]);@ @]}"
+            "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"COMMENT: %s\\n\"@]);@ @]}"
             (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
+        else fprintf ppf "/* %s */@ " message
     | Staged_compilation callback -> callback ()
     | Set_local (({ scope_id; _ } as id), value) ->
         let num_typ, is_double = Map.find_exn !locals id in
