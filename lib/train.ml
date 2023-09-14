@@ -95,11 +95,11 @@ let set_fully_on_host (a : LA.t) =
     raise
     @@ Ndarray.User_error
          [%string "Train.set_fully_on_host: array #%{a.id#Int} %{a.label} is already virtual"];
-  a.virtual_ <- Some false;
+  a.virtual_ <- Some (false, 27);
   if LA.is_true a.device_only then
     raise
     @@ Ndarray.User_error
          [%string "Train.set_fully_on_host: array #%{a.id#Int} %{a.label} is already device-only"];
-  a.device_only <- Some false
+  a.device_only <- Some (false, 28)
 
 let everything_fully_on_host = Tensor.iter_embedded_arrays ~f:set_fully_on_host

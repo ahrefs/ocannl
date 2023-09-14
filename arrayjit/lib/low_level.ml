@@ -187,7 +187,7 @@ let precompute_constants ?idcs traced_store top_ptr llv =
     (* In principle we might conclude again that the node is to be inlined as scalar, that's OK. *)
     top_n.scalar <- None
 
-let visit is_assigned old =
+let visit ~is_assigned old =
   if not is_assigned then Recurrent
   else match old with None -> Visits 1 | Some (Visits i) -> Visits (i + 1) | Some Recurrent -> Recurrent
 
@@ -249,7 +249,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         let array : traced_array = get_node traced_store ptr in
         let at_pos = lookup env indices in
         Hashtbl.update array.accesses at_pos
-          ~f:(visit (array.zeroed_out || Hash_set.mem array.assignments at_pos))
+          ~f:(visit ~is_assigned:(array.zeroed_out || Hash_set.mem array.assignments at_pos))
     | Local_scope { body; _ } -> loop_proc env body
     | Get_local _ -> ()
     | Get_global _ -> ()
@@ -265,7 +265,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
   Hashtbl.iter traced_store ~f:(fun traced ->
       let a = traced.nd in
       if Option.is_none a.virtual_ && Hashtbl.exists traced.accesses ~f:is_too_many then
-        a.virtual_ <- Some false;
+        a.virtual_ <- Some (false, 1);
       if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then traced.read_only <- true;
       if Hashtbl.exists traced.accesses ~f:is_recurrent then (
         if LA.is_true a.virtual_ then
@@ -273,26 +273,26 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
           @@ Ndarray.User_error
                [%string
                  "Compiling: array #%{a.id#Int} %{a.label} is already virtual, does not support recurrence"];
-        a.virtual_ <- Some false;
-        if Option.is_none a.device_only then a.device_only <- Some false;
+        a.virtual_ <- Some (false, 2);
+        if Option.is_none a.device_only then a.device_only <- Some (false, 3);
         traced.read_before_write <- true))
 
 let process_computation traced top_llc =
-  let exception Non_virtual in
+  let exception Non_virtual of int in
   let at_idcs = ref None in
   let has_setter = ref false in
   let top_array = traced.nd in
   let check_idcs indices =
     (match !at_idcs with
     | None -> at_idcs := Some indices
-    | Some at -> if not @@ [%equal: Indexing.axis_index array] at indices then raise Non_virtual);
+    | Some at -> if not @@ [%equal: Indexing.axis_index array] at indices then raise @@ Non_virtual 4);
     (* TODO(#133): For non-recursive accesses, non-linearity is not supported yet. *)
     let syms =
       Set.of_array (module Indexing.Symbol)
       @@ Array.filter_map indices ~f:Indexing.(function Fixed_idx _ -> None | Iterator s -> Some s)
     in
     let num_syms = Array.count indices ~f:(function Iterator _ -> true | _ -> false) in
-    if Set.length syms <> num_syms then raise Non_virtual
+    if Set.length syms <> num_syms then raise @@ Non_virtual 5
   in
   (* Traverse the float code too, for completeness / future use-cases. *)
   let rec loop_proc ~(env_dom : unit Indexing.environment) llc =
@@ -302,7 +302,7 @@ let process_computation traced top_llc =
     | (Seq (c1, c2) : t) ->
         loop c1;
         loop c2
-    | For_loop { trace_it = false; _ } -> raise Non_virtual
+    | For_loop { trace_it = false; _ } -> raise @@ Non_virtual 6
     | For_loop { index; body; from_ = _; to_ = _; trace_it = true } ->
         loop_proc ~env_dom:(Map.add_exn ~key:index ~data:() env_dom) body
     | Zero_out array -> if LA.equal array top_array then has_setter := true
@@ -321,12 +321,12 @@ let process_computation traced top_llc =
                       ([%sexp_of: Indexing.axis_index] idx)
                       Sexp.pp_hum
                       ([%sexp_of: t] top_llc);
-                  raise Non_virtual)
+                  raise @@ Non_virtual 7)
             | _ -> ());
         loop_float ~env_dom llv
     | Set_local (_, llv) -> loop_float ~env_dom llv
     | Comment _ -> ()
-    | Staged_compilation _ -> raise Non_virtual
+    | Staged_compilation _ -> raise @@ Non_virtual 8
   and loop_float ~env_dom llv =
     match llv with
     | Constant _ -> ()
@@ -343,7 +343,7 @@ let process_computation traced top_llc =
                       ([%sexp_of: Indexing.symbol] s)
                       Sexp.pp_hum
                       ([%sexp_of: t] top_llc);
-                  raise Non_virtual)
+                  raise @@ Non_virtual 9)
             | _ -> ())
     | Local_scope { body; _ } -> loop_proc ~env_dom body
     | Get_local _ -> ()
@@ -356,18 +356,18 @@ let process_computation traced top_llc =
               ([%sexp_of: Indexing.symbol] s)
               Sexp.pp_hum
               ([%sexp_of: t] top_llc);
-          raise Non_virtual)
+          raise @@ Non_virtual 10)
     | Binop (_, llv1, llv2) ->
         loop_float ~env_dom llv1;
         loop_float ~env_dom llv2
     | Unop (_, llv) -> loop_float ~env_dom llv
   in
   try
-    if LA.is_false traced.nd.virtual_ then raise Non_virtual;
+    if LA.is_false traced.nd.virtual_ then raise @@ Non_virtual 11;
     loop_proc ~env_dom:Indexing.empty_env top_llc;
-    if not !has_setter then raise Non_virtual;
+    if not !has_setter then raise @@ Non_virtual 12;
     traced.computations <- (!at_idcs, top_llc) :: traced.computations
-  with Non_virtual ->
+  with Non_virtual i ->
     let a = traced.nd in
     if LA.is_true a.virtual_ then
       raise
@@ -375,16 +375,16 @@ let process_computation traced top_llc =
            [%string
              {|Compiling: array #%{a.id#Int} %{a.label} is already virtual, cannot compile:
 %{Sexp.to_string_hum @@ sexp_of_t top_llc}|}];
-    a.virtual_ <- Some false
+    a.virtual_ <- Some (false, i)
 
 let inline_computation ~id traced call_args =
-  let exception Non_virtual in
+  let exception Non_virtual of int in
   let make_subst i lhs_ind =
     let rhs_ind = call_args.(i) in
     match (lhs_ind, rhs_ind) with
     | Indexing.Iterator lhs_s, Indexing.Iterator rhs_s -> Some (lhs_s, rhs_s)
     | _ when Indexing.equal_axis_index lhs_ind rhs_ind -> None
-    | _ -> raise Non_virtual
+    | _ -> raise @@ Non_virtual 13
   in
   (* In the order of computation. *)
   let loop_proc (def_args, def) : t option =
@@ -415,8 +415,16 @@ let inline_computation ~id traced call_args =
       | Set (array, indices, llv) when LA.equal array traced.nd ->
           assert ([%equal: Indexing.axis_index array option] (Some indices) def_args);
           Some (Set_local (id, loop_float env llv))
-      | Zero_out _ -> None
-      | Set _ -> None
+      | Zero_out _ ->
+          (* Caml.Format.printf "DEBUG: [1]=%a\n%!" Sexp.pp_hum ([%sexp_of: t] @@ llc); *)
+          (* DEBUG: *)
+          (* Some llc *)
+          None
+      | Set _ ->
+          (* Caml.Format.printf "DEBUG: [2]=%a\n%!" Sexp.pp_hum ([%sexp_of: t] @@ llc); *)
+          (* DEBUG: *)
+          (* Some llc *)
+          None
       | Set_local (id, llv) -> Some (Set_local (id, loop_float env llv))
       | Comment _ -> Some llc
       | Staged_compilation _ -> Some llc
@@ -445,8 +453,10 @@ let inline_computation ~id traced call_args =
   in
   try
     let body = List.rev_filter_map ~f:loop_proc traced.computations in
-    if List.is_empty body then raise Non_virtual else Some (unflat_lines body)
-  with Non_virtual ->
+    (* Caml.Format.printf "DEBUG: [3]=%a\n%!" Sexp.pp_hum ([%sexp_of: t list] @@ body); *)
+    (* DEBUG: *)
+    if List.is_empty body then raise @@ Non_virtual 14 else Some (unflat_lines body)
+  with Non_virtual i ->
     let a = traced.nd in
     (if LA.is_true a.virtual_ then
        let body = unflat_lines @@ List.rev_map ~f:snd traced.computations in
@@ -455,7 +465,7 @@ let inline_computation ~id traced call_args =
             [%string
               {|Compiling: array #%{a.id#Int} %{a.label} is already virtual, cannot inline computation:
 %{Sexp.to_string_hum @@ sexp_of_t body}|}]);
-    a.virtual_ <- Some false;
+    a.virtual_ <- Some (false, i);
     None
 
 let optimize_integer_pow = ref true
@@ -538,7 +548,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
         | Some a ->
             if is_inline a then (
               assert (LA.isnt_false a.virtual_);
-              a.virtual_ <- Some true;
+              a.virtual_ <- Some (true, 15);
               None)
             else
               Option.map ~f:(fun body : t -> For_loop { for_config with body })
@@ -557,7 +567,7 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
         if virtualize_settings.inline_constants && Option.is_some node.scalar then None
         else (
           assert (LA.isnt_false id.nd.virtual_);
-          id.nd.virtual_ <- Some true;
+          id.nd.virtual_ <- Some (true, 16);
           Some (Set_local (id, loop_float ~balanced ~env_dom llv)))
     | Comment _ -> Some llc
     | Staged_compilation _ -> Some llc
@@ -571,7 +581,9 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
         | Some c when virtualize_settings.inline_constants -> Constant c
         | _ ->
             assert (LA.isnt_true a.virtual_);
-            a.virtual_ <- Some false;
+            (* Caml.Format.printf "DEBUG: [5]=%a\n%!" Sexp.pp_hum ([%sexp_of: float_t] @@ llv); *)
+            (* DEBUG: *)
+            a.virtual_ <- Some (false, 17);
             assert (Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
             llv)
     | Local_scope { id; prec; body; orig_indices } -> (
@@ -582,17 +594,20 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
             assert (
               Array.for_all orig_indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
             if LA.is_false id.nd.virtual_ then Get (id.nd, orig_indices)
-            else
+            else (
+              (* Caml.Format.printf "DEBUG: [6]=%a\n%!" Sexp.pp_hum ([%sexp_of: float_t] @@ llv); *)
+              (* DEBUG: *)
               let body = Option.value_exn @@ loop_proc ~balanced ~env_dom body in
-              id.nd.virtual_ <- Some true;
-              Local_scope { id; prec; orig_indices; body })
+              (* let body = Option.value ~default:Noop @@ loop_proc ~balanced ~env_dom body in *)
+              id.nd.virtual_ <- Some (true, 18);
+              Local_scope { id; prec; orig_indices; body }))
     | Get_local id -> (
         let node = get_node traced_store id.nd in
         match node.scalar with
         | Some c when virtualize_settings.inline_constants -> Constant c
         | _ ->
             assert (LA.isnt_false id.nd.virtual_);
-            id.nd.virtual_ <- Some true;
+            id.nd.virtual_ <- Some (true, 19);
             llv)
     | Get_global _ -> llv
     | Embed_index (Fixed_idx _) -> llv
@@ -765,7 +780,10 @@ let compile_proc ~name ?(verbose = false) llc : optimized =
     Stdlib.Format.pp_set_margin ppf !code_sexp_margin;
     Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t @@ snd result));
   Hashtbl.iter (fst result) ~f:(fun v ->
-      if LA.is_false v.nd.virtual_ && LA.is_false v.nd.device_only then v.nd.hosted := true);
+      if Option.is_none v.nd.virtual_ then v.nd.virtual_ <- Some (true, 20)
+      (* DEBUG: *)
+      else if Option.is_none v.nd.device_only then v.nd.device_only <- Some (true, 21);
+      if LA.isnt_true v.nd.virtual_ && LA.isnt_true v.nd.device_only then v.nd.hosted := true);
   if verbose then Stdio.printf "Low_level.compile_proc: finished\n%!";
   result
 

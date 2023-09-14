@@ -9,19 +9,19 @@ type t = {
   label : string;  (** An optional display information. *)
   literal : bool;
   hosted : bool ref;
-  mutable virtual_ : bool option;
+  mutable virtual_ : (bool * int) option;
       (** If true, this array is never materialized, its computations are inlined on a per-scalar basis.
           A array that is hosted will not be virtual. *)
-  mutable device_only : bool option;
+  mutable device_only : (bool * int) option;
       (** If true, this node is only materialized on the devices it is computed on, it is not persisted
           outside of a step update. It is marked as [not !(nd.hosted)]. *)
   mutable backend_info : string;
 }
 
-let is_false opt = not @@ Option.value ~default:true opt
-let is_true opt = Option.value ~default:false opt
-let isnt_false opt = Option.value ~default:true opt
-let isnt_true opt = not @@ Option.value ~default:false opt
+let is_false opt = not @@ Option.value ~default:true @@ Option.map ~f:fst opt
+let is_true opt = Option.value ~default:false @@ Option.map ~f:fst opt
+let isnt_false opt = Option.value ~default:true @@ Option.map ~f:fst opt
+let isnt_true opt = not @@ Option.value ~default:false @@ Option.map ~f:fst opt
 
 let name { id; _ } = "n" ^ Int.to_string id
 let compare a1 a2 = compare_int a1.id a2.id
