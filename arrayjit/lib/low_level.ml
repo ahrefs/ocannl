@@ -588,18 +588,19 @@ let simplify_llc llc =
     | Comment _ -> llc
     | Staged_compilation _ -> llc
   and loop_float (llv : float_t) : float_t =
-    let llv' =
+    let local_scope_body, llv' =
       match llv with
       | Local_scope opts ->
-          Local_scope
-            {
-              opts with
-              body =
-                unflat_lines
-                @@ List.filter ~f:(function Comment _ -> false | _ -> true)
-                @@ flat_lines [ opts.body ];
-            }
-      | _ -> llv
+          ( opts.body,
+            Local_scope
+              {
+                opts with
+                body =
+                  unflat_lines
+                  @@ List.filter ~f:(function Comment _ -> false | _ -> true)
+                  @@ flat_lines [ opts.body ];
+              } )
+      | _ -> (Noop, llv)
     in
     match llv' with
     | Constant _ -> llv
@@ -608,7 +609,7 @@ let simplify_llc llc =
     | Local_scope { id; body = Seq (Set_local (id1, v1), Set_local (id2, v2)); _ }
       when equal_scope_id id id1 && equal_scope_id id id2 ->
         loop_float @@ substitute_float ~var:(Get_local id) ~value:v1 v2
-    | Local_scope opts -> Local_scope { opts with body = loop_proc opts.body }
+    | Local_scope opts -> Local_scope { opts with body = loop_proc local_scope_body }
     | Get_local _ -> llv
     | Get_global _ -> llv
     | Embed_index (Fixed_idx i) -> Constant (Float.of_int i)
