@@ -14,7 +14,6 @@ let _suspended () =
   (* CDSL.enable_all_debugs (); *)
   (*
   CDSL.virtualize_settings.enable_device_only <- true;
-  CDSL.virtualize_settings.inline_constants <- true;
   *)
   CDSL.with_debug := true;
   CDSL.keep_files_in_run_directory := true;
@@ -125,7 +124,7 @@ let _suspended () =
   Tensor.print_tree ~with_id:true ~with_grad:true (* ~with_backend_info:true *) ~depth:9 batch_of_losses;
   Stdio.printf "\nHost size in bytes: %d\n%!" (SDSL.global_host_size_in_bytes ())
 
-let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?(inline_constants = true)
+let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff
     ~parallel_dims ~minibatch_size ~updates_per_run precision () =
   (* ignore random_seed; *)
   let bench_title =
@@ -152,7 +151,6 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
            executor,
            "inline",
            inlining_cutoff,
-           (* (if inline_constants then "..." else "NIC"), *)
            "parallel",
            parallel_dims,
            "minibatch",
@@ -164,7 +162,6 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff ?
   Stdio.printf "\n*** %s ***\n%!" bench_title;
   CDSL.virtualize_settings.enable_device_only <- on_device;
   CDSL.virtualize_settings.max_visits <- inlining_cutoff;
-  CDSL.virtualize_settings.inline_constants <- inline_constants;
   Stdio.printf "Set the executor.\n%!";
   SDSL.set_executor executor;
   SDSL.default_value_prec := precision;

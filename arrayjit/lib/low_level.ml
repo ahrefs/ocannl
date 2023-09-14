@@ -84,11 +84,9 @@ type virtualize_settings = {
   mutable enable_device_only : bool;
   mutable max_visits : int;
   mutable max_tracing_dim : int;
-  mutable inline_constants : bool;
 }
 
-let virtualize_settings =
-  { enable_device_only = true; max_visits = 3; max_tracing_dim = 5; inline_constants = true }
+let virtualize_settings = { enable_device_only = true; max_visits = 3; max_tracing_dim = 5 }
 
 type visits =
   | Visits of int
@@ -106,7 +104,6 @@ type traced_array = {
   assignments : int array Hash_set.t;
   accesses : (int array, visits) Hashtbl.t;
       (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
-  mutable scalar : float option;
   mutable zero_initialized : bool;
   mutable zeroed_out : bool;
   mutable read_before_write : bool;  (** The node is read before it is written (i.e. it is recurrent). *)
@@ -123,7 +120,6 @@ let get_node store nd =
         computations = [];
         assignments = Hash_set.Poly.create ();
         accesses = Hashtbl.Poly.create ();
-        scalar = None;
         zero_initialized = false;
         zeroed_out = false;
         read_before_write = false;
@@ -147,57 +143,6 @@ let partition_tf_with_comment cs ~f =
       | Second x -> Some x)
   in
   (trues, falses)
-
-let precompute_constants ?idcs traced_store top_ptr llv =
-  let exception Non_literal of int in
-  let rec loop llv =
-    match llv with
-    | Constant c -> c
-    | Get (nd, indices) ->
-        let node = get_node traced_store nd in
-        Array.iter indices ~f:(function Indexing.Fixed_idx 0 -> () | _ -> raise @@ Non_literal 1);
-        Option.value_or_thunk node.scalar ~default:(fun () -> raise @@ Non_literal 2)
-    | Local_scope { id; orig_indices; _ } ->
-        let node = get_node traced_store id.nd in
-        Array.iter orig_indices ~f:(function Indexing.Fixed_idx 0 -> () | _ -> raise @@ Non_literal 3);
-        Option.value_or_thunk node.scalar ~default:(fun () -> raise @@ Non_literal 4)
-    | Get_local scope_id ->
-        let node = get_node traced_store scope_id.nd in
-        Option.value_or_thunk node.scalar ~default:(fun () -> raise @@ Non_literal 5)
-    | Get_global _ -> raise @@ Non_literal 9
-    | Embed_index (Fixed_idx i) -> Float.of_int i
-    | Embed_index (Iterator _) -> raise @@ Non_literal 10
-    | Binop (Arg1, llv1, _llv2) -> loop llv1
-    | Binop (Arg2, _llv1, llv2) -> loop llv2
-    | Binop (Add, llv1, llv2) -> Float.(loop llv1 + loop llv2)
-    | Binop (Sub, llv1, llv2) -> Float.(loop llv1 - loop llv2)
-    | Binop (Mul, llv1, llv2) -> Float.(loop llv1 * loop llv2)
-    | Binop (Div, llv1, llv2) -> Float.(loop llv1 / loop llv2)
-    | Binop (ToPowOf, llv1, llv2) ->
-        let v1 = loop llv1 in
-        let v2 = loop llv2 in
-        Float.(if is_integer v2 then int_pow v1 @@ to_int v2 else v1 ** v2)
-    | Binop (Relu_gate, llv1, llv2) -> Float.(if loop llv1 > 0.0 then loop llv2 else 0.0)
-    | Unop (Identity, llv) -> loop llv
-    | Unop (Relu, llv) ->
-        let v = loop llv in
-        Float.(if v > 0.0 then v else 0.0)
-  in
-  let top_n = get_node traced_store top_ptr in
-  try
-    if LA.is_false top_ptr.virtual_ then raise @@ Non_literal 8;
-    if Hashtbl.exists top_n.accesses ~f:is_recurrent then raise @@ Non_literal 6;
-    (match idcs with
-    | None -> ()
-    | Some idcs ->
-        if Array.exists idcs ~f:(function Indexing.Fixed_idx 0 -> false | _ -> true) then
-          raise @@ Non_literal 7);
-    top_n.scalar <- Some (loop llv)
-  with Non_literal _i ->
-    (* if !with_debug then
-       Stdlib.Format.printf "TRACE: Array #%d is non-literal because no. %d\n%!" v.id i; *)
-    (* In principle we might conclude again that the node is to be inlined as scalar, that's OK. *)
-    top_n.scalar <- None
 
 let visit ~is_assigned old =
   if not is_assigned then Recurrent
@@ -233,7 +178,6 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         let traced : traced_array = get_node traced_store array in
         Hash_set.add traced.assignments (lookup env idcs);
         traced.rhses <- List.dedup_and_sort ~compare:[%compare: float_t] @@ (llv :: traced.rhses);
-        if virtualize_settings.inline_constants then precompute_constants ~idcs traced_store array llv;
         (match llv with
         | Get (_array2, _idcs2) -> traced.last_write_non_update <- true
         | Binop (_, Get (array2, idcs2), _)
@@ -541,11 +485,7 @@ let virtual_llc traced_store reverse_node_map (llc : t) : t =
   in
   loop_proc ~process_for:(Set.empty (module Lazy_array)) llc
 
-let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
-  let is_inline array =
-    let node = get_node traced_store array in
-    (virtualize_settings.inline_constants && Option.is_some node.scalar) || LA.isnt_false array.virtual_
-  in
+let cleanup_virtual_llc reverse_node_map (llc : t) : t =
   (* The current position is within scope of the definitions of the process_for virtual arrays. *)
   let rec loop_proc ~balanced ~env_dom (llc : t) : t option =
     let loop = loop_proc ~balanced ~env_dom in
@@ -558,8 +498,8 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
         let env_dom = Set.add env_dom index in
         match Hashtbl.find reverse_node_map index with
         | Some a ->
-            if is_inline a then (
-              assert (LA.isnt_false a.virtual_);
+            if LA.isnt_false a.LA.virtual_ then (
+              (* FIXME: *)
               a.virtual_ <- Some (true, 15);
               None)
             else
@@ -568,59 +508,49 @@ let cleanup_virtual_llc traced_store reverse_node_map (llc : t) : t =
         | None ->
             Option.map ~f:(fun body : t -> For_loop { for_config with body })
             @@ loop_proc ~balanced ~env_dom body)
-    | Zero_out array -> if is_inline array then None else Some llc
+    | Zero_out array ->
+        if LA.isnt_false array.virtual_ then (
+          (* FIXME: *)
+          array.virtual_ <- Some (true, 151);
+          None)
+        else Some llc
     | Set (array, indices, llv) ->
-        if is_inline array then None
+        if LA.isnt_false array.virtual_ then None
         else (
           assert (Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
           Some (Set (array, indices, loop_float ~balanced ~env_dom llv)))
     | Set_local (id, llv) ->
-        let node = get_node traced_store id.nd in
-        if virtualize_settings.inline_constants && Option.is_some node.scalar then None
-        else (
-          assert (LA.isnt_false id.nd.virtual_);
-          id.nd.virtual_ <- Some (true, 16);
-          Some (Set_local (id, loop_float ~balanced ~env_dom llv)))
+        assert (LA.isnt_false id.nd.virtual_);
+        id.nd.virtual_ <- Some (true, 16);
+        Some (Set_local (id, loop_float ~balanced ~env_dom llv))
     | Comment _ -> Some llc
     | Staged_compilation _ -> Some llc
   and loop_float ~balanced ~env_dom (llv : float_t) : float_t =
     let loop = loop_float ~balanced ~env_dom in
     match llv with
     | Constant _ -> llv
-    | Get (a, indices) -> (
-        let node = get_node traced_store a in
-        match node.scalar with
-        | Some c when virtualize_settings.inline_constants -> Constant c
-        | _ ->
-            assert (LA.isnt_true a.virtual_);
-            (* Caml.Format.printf "DEBUG: [5]=%a\n%!" Sexp.pp_hum ([%sexp_of: float_t] @@ llv); *)
-            (* DEBUG: *)
-            a.virtual_ <- Some (false, 17);
-            assert (Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
-            llv)
-    | Local_scope { id; prec; body; orig_indices } -> (
-        let traced = get_node traced_store id.nd in
-        match traced.scalar with
-        | Some c when virtualize_settings.inline_constants -> Constant c
-        | _ ->
-            assert (
-              Array.for_all orig_indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
-            if LA.is_false id.nd.virtual_ then Get (id.nd, orig_indices)
-            else (
-              (* Caml.Format.printf "DEBUG: [6]=%a\n%!" Sexp.pp_hum ([%sexp_of: float_t] @@ llv); *)
-              (* DEBUG: *)
-              let body = Option.value_exn @@ loop_proc ~balanced ~env_dom body in
-              (* let body = Option.value ~default:Noop @@ loop_proc ~balanced ~env_dom body in *)
-              id.nd.virtual_ <- Some (true, 18);
-              Local_scope { id; prec; orig_indices; body }))
-    | Get_local id -> (
-        let node = get_node traced_store id.nd in
-        match node.scalar with
-        | Some c when virtualize_settings.inline_constants -> Constant c
-        | _ ->
-            assert (LA.isnt_false id.nd.virtual_);
-            id.nd.virtual_ <- Some (true, 19);
-            llv)
+    | Get (a, indices) ->
+        assert (LA.isnt_true a.virtual_);
+        (* Caml.Format.printf "DEBUG: [5]=%a\n%!" Sexp.pp_hum ([%sexp_of: float_t] @@ llv); *)
+        (* DEBUG: *)
+        a.virtual_ <- Some (false, 17);
+        assert (Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
+        llv
+    | Local_scope { id; prec; body; orig_indices } ->
+        assert (
+          Array.for_all orig_indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
+        if LA.is_false id.nd.virtual_ then Get (id.nd, orig_indices)
+        else
+          (* Caml.Format.printf "DEBUG: [6]=%a\n%!" Sexp.pp_hum ([%sexp_of: float_t] @@ llv); *)
+          (* DEBUG: *)
+          let body = Option.value_exn @@ loop_proc ~balanced ~env_dom body in
+          (* let body = Option.value ~default:Noop @@ loop_proc ~balanced ~env_dom body in *)
+          id.nd.virtual_ <- Some (true, 18);
+          Local_scope { id; prec; orig_indices; body }
+    | Get_local id ->
+        assert (LA.isnt_false id.nd.virtual_);
+        id.nd.virtual_ <- Some (true, 19);
+        llv
     | Get_global _ -> llv
     | Embed_index (Fixed_idx _) -> llv
     | Embed_index (Iterator s) ->
@@ -659,7 +589,7 @@ and substitute_proc ~var ~value llc =
   | Comment _ -> llc
   | Staged_compilation _ -> llc
 
-let simplify_llc traced_store llc =
+let simplify_llc llc =
   let rec loop_proc (llc : t) : t =
     let loop = loop_proc in
     match llc with
@@ -739,11 +669,6 @@ let simplify_llc traced_store llc =
         else
           match v2 with
           | Constant c when Float.is_integer c -> loop_float @@ unroll_pow ~base:v1 ~exp:(Float.to_int c)
-          | Get (ptr, _) -> (
-              let node : traced_array = get_node traced_store ptr in
-              match node.scalar with
-              | Some c when Float.is_integer c -> loop_float @@ unroll_pow ~base:v1 ~exp:(Float.to_int c)
-              | _ -> result)
           | _ -> result)
     | Binop (op, llv1, llv2) ->
         let v1 = loop_float llv1 in
@@ -770,8 +695,8 @@ let optimize_proc ?(verbose = false) llc : optimized =
   visit_llc traced_store reverse_node_map ~max_visits:virtualize_settings.max_visits llc;
   if verbose then Stdio.printf "Low_level.optimize_proc: optimizing\n%!";
   let result =
-    simplify_llc traced_store
-    @@ cleanup_virtual_llc traced_store reverse_node_map
+    simplify_llc
+    @@ cleanup_virtual_llc reverse_node_map
     @@ virtual_llc traced_store reverse_node_map llc
   in
   (traced_store, result)
@@ -792,8 +717,7 @@ let compile_proc ~name ?(verbose = false) llc : optimized =
     Stdlib.Format.pp_set_margin ppf !code_sexp_margin;
     Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t @@ snd result));
   Hashtbl.iter (fst result) ~f:(fun v ->
-      if Option.is_none v.nd.virtual_ then v.nd.virtual_ <- Some (true, 20)
-      (* DEBUG: *)
+      if Option.is_none v.nd.virtual_ then v.nd.virtual_ <- Some (true, 20) (* DEBUG: *)
       else if Option.is_none v.nd.device_only then v.nd.device_only <- Some (true, 21);
       if LA.isnt_true v.nd.virtual_ && LA.isnt_true v.nd.device_only then v.nd.hosted := true);
   if verbose then Stdio.printf "Low_level.compile_proc: finished\n%!";

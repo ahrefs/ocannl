@@ -218,13 +218,6 @@ let unop ~op_label ?desc_label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
 (** A terminal: a constant, a parameter, an input of the model. *)
 let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ?init_op
     ?fetch_op () =
-  let scalar_literal : bool =
-    if is_require_grad grad_spec then false
-    else
-      match (init_op, fetch_op) with
-      | Some (Ops.Constant_fill { values = [| _ |]; strict = _ }), None -> true
-      | _ -> false
-  in
   let op_asn ~v ~projections =
     let open Assignments in
     let dims =
@@ -232,17 +225,17 @@ let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axi
         (propagate_shape_updates ();
          (Lazy.force projections).Indexing.lhs_dims)
     in
-    match fetch_op with
-    | None ->
-        if scalar_literal && Low_level.virtualize_settings.inline_constants then
-          let fetch_op =
-            match init_op with
-            | Some (Ops.Constant_fill { values = [| c |]; _ }) -> Constant c
-            | _ -> assert false
-          in
-          Fetch { array = v; fetch_op; dims }
-        else Noop
-    | Some fetch_op ->
+    match (fetch_op, init_op) with
+    | None, Some (Ops.Constant_fill { values = [| _ |]; strict = _ }) when not (is_require_grad grad_spec) ->
+        (* The scalar literal case. *)
+        let fetch_op =
+          match init_op with
+          | Some (Ops.Constant_fill { values = [| c |]; _ }) -> Constant c
+          | _ -> assert false
+        in
+        Fetch { array = v; fetch_op; dims }
+    | None, _ -> Noop
+    | Some fetch_op, _ ->
         let fetch_op = fetch_op ~v in
         (match fetch_op with
         | Constant _ | Slice _ | Embed_symbol _ -> ()
