@@ -147,9 +147,7 @@ let visit ~is_assigned old =
 let visit_llc traced_store reverse_node_map ~max_visits llc =
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
   let lookup env indices =
-    Array.map indices ~f:(function
-      | Indexing.Fixed_idx i -> i
-      | Iterator s -> Map.find_exn env s)
+    Array.map indices ~f:(function Indexing.Fixed_idx i -> i | Iterator s -> Map.find_exn env s)
   in
   let rec loop_proc env llc =
     let loop = loop_proc env in
@@ -331,8 +329,11 @@ let inline_computation ~id traced call_args =
   let loop_proc (def_args, def) : t option =
     let env =
       match def_args with
-      | None -> Map.Poly.empty
-      | Some def_args -> Map.Poly.of_alist_exn @@ Array.to_list @@ Array.filter_mapi def_args ~f:make_subst
+      | None -> Map.empty (module Indexing.Symbol)
+      | Some def_args ->
+          Map.of_alist_exn (module Indexing.Symbol)
+          @@ Array.to_list
+          @@ Array.filter_mapi def_args ~f:make_subst
     in
     let subst env = function
       | Indexing.Iterator s when Map.mem env s -> Indexing.Iterator (Map.find_exn env s)
@@ -349,7 +350,7 @@ let inline_computation ~id traced call_args =
       | For_loop { index; from_; to_; body; trace_it } ->
           (* Freshen the binding. *)
           let fresh = Indexing.get_symbol () in
-          let env = Map.Poly.add_exn ~key:index ~data:fresh env in
+          let env = Map.add_exn ~key:index ~data:fresh env in
           Option.map ~f:(fun body : t -> For_loop { index = fresh; from_; to_; body; trace_it })
           @@ loop env body
       | Zero_out array when LA.equal array traced.nd -> Some (Set_local (id, Constant 0.0))
@@ -544,7 +545,7 @@ let cleanup_virtual_llc reverse_node_map (llc : t) : t =
     | Binop (op, llv1, llv2) -> Binop (op, loop llv1, loop llv2)
     | Unop (op, llv) -> Unop (op, loop llv)
   in
-  Option.value_exn @@ loop_proc ~balanced:false ~env_dom:Set.Poly.empty llc
+  Option.value_exn @@ loop_proc ~balanced:false ~env_dom:(Set.empty (module Indexing.Symbol)) llc
 
 let rec substitute_float ~var ~value llv =
   let loop_float = substitute_float ~var ~value in
@@ -674,14 +675,12 @@ type optimized = traced_store * t
 let optimize_proc ?(verbose = false) llc : optimized =
   let traced_store : traced_store = Hashtbl.create (module Lazy_array) in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
-  let reverse_node_map = Hashtbl.Poly.create () in
+  let reverse_node_map = Hashtbl.create (module Indexing.Symbol) in
   if verbose then Stdio.printf "Low_level.optimize_proc: tracing\n%!";
   visit_llc traced_store reverse_node_map ~max_visits:virtualize_settings.max_visits llc;
   if verbose then Stdio.printf "Low_level.optimize_proc: optimizing\n%!";
   let result =
-    simplify_llc
-    @@ cleanup_virtual_llc reverse_node_map
-    @@ virtual_llc traced_store reverse_node_map llc
+    simplify_llc @@ cleanup_virtual_llc reverse_node_map @@ virtual_llc traced_store reverse_node_map llc
   in
   (traced_store, result)
 

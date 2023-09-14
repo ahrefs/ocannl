@@ -404,7 +404,7 @@ let jit_func ~name (context : context) ctx bindings (traced_store, proc) =
   let init_block = Block.create ~name:("init_" ^ name) func in
   let main_block = Block.create ~name func in
   let ctx_info =
-    { ctx; func; traced_store; init_block; ctx_arrays = context.arrays; arrays = Hashtbl.Poly.create () }
+    { ctx; func; traced_store; init_block; ctx_arrays = context.arrays; arrays = Hashtbl.create (module LA) }
   in
   let after_proc = jit_code ~name ~env ctx_info main_block proc in
   Block.jump init_block main_block;
