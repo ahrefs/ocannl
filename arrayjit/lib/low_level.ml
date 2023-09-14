@@ -4,7 +4,19 @@ open Base
 module Nd = Ndarray
 module LA = Lazy_array
 
-type scope_id = { nd : LA.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
+module Scope_id = struct
+  type t = { nd : LA.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
+
+  include Comparator.Make (struct
+    type nonrec t = t
+
+    let compare = compare
+    let sexp_of_t = sexp_of_t
+  end)
+end
+
+type scope_id = Scope_id.t = { nd : LA.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
+
 (** *** Low-level representation. *)
 
 let get_scope =

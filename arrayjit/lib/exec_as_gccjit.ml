@@ -179,7 +179,8 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
     in
     Int.to_string id
   in
-  let locals = ref Map.Poly.empty in
+  let locals = ref @@ Map.empty (module Low_level.Scope_id) in
+  let debug_locals = ref !locals in
   let current_block = ref initial_block in
   let loop_binop op ~num_typ ~is_double ~v1 ~v2 =
     match op with
@@ -201,8 +202,8 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
   in
   let log_comment c =
     if !Low_level.debug_verbose_trace then
-       let f = Function.builtin ctx "printf" in
-       Block.eval !current_block @@ RValue.call ctx f [ RValue.string_literal ctx ("\nCOMMENT: " ^ c ^ "\n") ]
+      let f = Function.builtin ctx "printf" in
+      Block.eval !current_block @@ RValue.call ctx f [ RValue.string_literal ctx ("\nCOMMENT: " ^ c ^ "\n") ]
     else Block.comment !current_block c
   in
   let rec debug_float ~is_double (value : Low_level.float_t) : string * 'a list =
@@ -212,9 +213,9 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug logs. *)
         loop @@ Get_local id
     | Get_local id ->
-        let lvalue, _typ, _local_is_double = Map.find_exn !locals id in
+        let lvalue, _typ, _local_is_double = Map.find_exn !debug_locals id in
         (* FIXME(194): Convert according to _typ ?= num_typ. *)
-        ("v" ^ Int.to_string id.scope_id ^ "{=%g}", [ to_d @@ RValue.lvalue lvalue ])
+        (LValue.to_string lvalue ^ "{=%g}", [ to_d @@ RValue.lvalue lvalue ])
     | Get_global (C_function f_name, None) -> ("<calls " ^ f_name ^ ">", [])
     | Get_global (External_unsafe { ptr; dims = (lazy dims); prec }, Some idcs) ->
         let idcs = lookup env idcs in
@@ -319,6 +320,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         let old_locals = !locals in
         locals := Map.update !locals id ~f:(fun _ -> (lvalue, typ, prec_is_double prec));
         loop_proc ~env ~name:(name ^ "_at_" ^ v_name) body;
+        debug_locals := Map.update !debug_locals id ~f:(fun _ -> (lvalue, typ, prec_is_double prec));
         locals := old_locals;
         RValue.lvalue lvalue
     | Get_local id ->

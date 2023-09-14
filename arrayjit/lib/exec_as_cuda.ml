@@ -201,7 +201,7 @@ let get_array ~traced_store:_ ctx_info (key : LA.t) =
 
 let jit_code ~traced_store info ppf llc : unit =
   let open Stdlib.Format in
-  let locals = ref Map.Poly.empty in
+  let locals = ref @@ Map.empty (module Low_level.Scope_id) in
   let rec pp_ll ppf c : unit =
     match c with
     | Low_level.Noop -> ()
