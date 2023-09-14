@@ -169,6 +169,7 @@ let compute_array_offset ~idcs ~dims =
   Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx + (offset * dim))
 
 let get_array ~traced_store:_ ctx_info (key : LA.t) =
+  Hash_set.add ctx_info.used_tensors key;
   let default () =
     (* let tn = Low_level.get_node traced_store v in *)
     (* TODO: We will need tn to perform more refined optimizations. *)
@@ -190,11 +191,13 @@ let get_array ~traced_store:_ ctx_info (key : LA.t) =
     in
     let local = Option.some_if (is_local_only mem) @@ LA.name key ^ "_local" in
     let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
+    if !Low_level.with_debug then
+      Stdio.printf "Exec_as_cuda: creating array #%d %s; mem=%s on host = %b; global = %b\n%!" key.id
+        key.label backend_info is_on_host (Option.is_some global);
     if not @@ String.is_substring key.backend_info ~substring:backend_info then
       key.backend_info <- key.backend_info ^ backend_info;
     let data = { hosted; local; mem; dims; size_in_bytes; size_in_elems; num_typ; is_double; global } in
     ctx_info.ctx_arrays <- Map.add_exn ctx_info.ctx_arrays ~key ~data;
-    Hash_set.add ctx_info.used_tensors key;
     data
   in
   Option.value_or_thunk (Map.find ctx_info.ctx_arrays key) ~default
@@ -360,6 +363,8 @@ let jit_func ~name ?(verbose = false) (old_context : context) idx_params (traced
     List.unzip
     @@ List.filter_map arrays ~f:(fun la ->
            let tn = Map.find_exn info.ctx_arrays la in
+           Stdio.printf "Exec_as_cuda.jit: array used: #%d %s; %s\n%!" la.id la.label
+             (Sexp.to_string_hum @@ sexp_of_mem_properties tn.mem);
            match tn.mem with
            | Local_only -> None
            | Global -> Option.map tn.global ~f:(fun (n, ptr) -> (tn.num_typ ^ " *" ^ n, ptr)))
@@ -424,7 +429,8 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ par
 
 type jitted = { context : context; run : unit -> unit; bindings : unit Indexing.bindings }
 
-let jit ~name ?(verbose = false) old_context bindings ((traced_store, _) as compiled) =
+let jit ~name ?(verbose = false) old_context bindings ((traced_store, llc) as compiled) =
+  if !Low_level.with_debug then Stdio.printf "Exec_as_cuda.jit: %s\n%!" (Low_level.extract_block_name [ llc ]);
   let idx_params, idx_args = List.unzip @@ Indexing.assoc_of_bindings bindings in
   let func, args, run_module, info = jit_func ~name ~verbose old_context idx_params compiled in
   let context =
