@@ -108,7 +108,6 @@ type traced_array = {
   mutable zeroed_out : bool;
   mutable read_before_write : bool;  (** The node is read before it is written (i.e. it is recurrent). *)
   mutable read_only : bool;
-  mutable last_write_non_update : bool;
 }
 [@@deriving sexp_of]
 
@@ -123,7 +122,6 @@ let get_node store nd =
         zeroed_out = false;
         read_before_write = false;
         read_only = false;
-        last_write_non_update = false;
       })
 
 let partition_tf_with_comment cs ~f =
@@ -151,7 +149,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
   let lookup env indices =
     Array.map indices ~f:(function
       | Indexing.Fixed_idx i -> i
-      | Iterator s (* when Map.mem env s *) -> Map.find_exn env s)
+      | Iterator s -> Map.find_exn env s)
   in
   let rec loop_proc env llc =
     let loop = loop_proc env in
@@ -175,16 +173,6 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         loop_float env llv;
         let traced : traced_array = get_node traced_store array in
         Hash_set.add traced.assignments (lookup env idcs);
-        (match llv with
-        | Get (_array2, _idcs2) -> traced.last_write_non_update <- true
-        | Binop (_, Get (array2, idcs2), _)
-          when LA.equal array array2 && [%equal: Indexing.axis_index array] idcs idcs2 ->
-            traced.last_write_non_update <- false
-        | Binop (_, _, Get (array2, idcs2))
-          when LA.equal array array2 && [%equal: Indexing.axis_index array] idcs idcs2 ->
-            traced.last_write_non_update <- false
-        | Constant _ -> traced.last_write_non_update <- true
-        | _ -> traced.last_write_non_update <- true);
         Array.iter idcs ~f:(function
           | Fixed_idx _ -> ()
           | Iterator s ->
