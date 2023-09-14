@@ -109,7 +109,6 @@ type traced_array = {
   mutable read_before_write : bool;  (** The node is read before it is written (i.e. it is recurrent). *)
   mutable read_only : bool;
   mutable last_write_non_update : bool;
-  mutable rhses : float_t list;
 }
 [@@deriving sexp_of]
 
@@ -125,7 +124,6 @@ let get_node store nd =
         read_before_write = false;
         read_only = false;
         last_write_non_update = false;
-        rhses = [];
       })
 
 let partition_tf_with_comment cs ~f =
@@ -177,7 +175,6 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         loop_float env llv;
         let traced : traced_array = get_node traced_store array in
         Hash_set.add traced.assignments (lookup env idcs);
-        traced.rhses <- List.dedup_and_sort ~compare:[%compare: float_t] @@ (llv :: traced.rhses);
         (match llv with
         | Get (_array2, _idcs2) -> traced.last_write_non_update <- true
         | Binop (_, Get (array2, idcs2), _)
@@ -602,7 +599,6 @@ let simplify_llc llc =
     | Comment _ -> llc
     | Staged_compilation _ -> llc
   and loop_float (llv : float_t) : float_t =
-    (* FIXME: consider merging scalar simplification to here? *)
     let llv =
       match llv with
       | Local_scope opts -> Local_scope { opts with body = unflat_lines @@ flat_lines [ opts.body ] }
