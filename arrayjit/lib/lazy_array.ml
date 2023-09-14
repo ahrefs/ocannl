@@ -7,7 +7,6 @@ type t = {
   dims : int array Lazy.t;
   id : int;
   label : string;  (** An optional display information. *)
-  literal : bool;
   hosted : bool ref;
   mutable virtual_ : (bool * int) option;
       (** If true, this array is never materialized, its computations are inlined on a per-scalar basis.
@@ -72,11 +71,11 @@ end)
 
 let registry = Registry.create 16
 
-let create prec ~id ~label ~dims ?(literal = false) init_op =
+let create prec ~id ~label ~dims init_op =
   let hosted = ref false in
   let array = lazy (if !hosted then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None) in
   let arr =
-    { array; prec; id; label; literal; hosted; virtual_ = None; device_only = None; backend_info = ""; dims }
+    { array; prec; id; label; hosted; virtual_ = None; device_only = None; backend_info = ""; dims }
   in
   Registry.add registry arr;
   arr

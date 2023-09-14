@@ -186,7 +186,7 @@ let precompute_constants ?idcs traced_store top_ptr llv =
   let top_n = get_node traced_store top_ptr in
   try
     if LA.is_false top_ptr.virtual_ then raise @@ Non_literal 8;
-    if (not top_n.nd.literal) && Hashtbl.exists top_n.accesses ~f:is_recurrent then raise @@ Non_literal 6;
+    if Hashtbl.exists top_n.accesses ~f:is_recurrent then raise @@ Non_literal 6;
     (match idcs with
     | None -> ()
     | Some idcs ->

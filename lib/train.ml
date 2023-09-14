@@ -17,7 +17,7 @@ let fresh_backend ?(verbose = true) () =
 
 let is_param t =
   match t with
-  | { Tensor.children = []; value = { literal = false; _ }; diff = Some _; _ } -> true
+  | { Tensor.children = []; diff = Some _; _ } -> true
   | _ -> false
 
 let params t =

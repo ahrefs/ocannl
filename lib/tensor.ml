@@ -147,7 +147,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
     |> List.reduce ~f:Ops.promote_prec
     |> Option.value ~default:!default_value_prec
   in
-  let v = LA.create prec ~id ~label ~dims ~literal:false init_op in
+  let v = LA.create prec ~id ~label ~dims init_op in
   let rec shape_logics = function
     | [] -> [ Shape.Terminal init_op ]
     | [ t1 ] -> [ Shape.Transpose (transpose_op, t1.shape) ]
@@ -178,7 +178,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
     in
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
-    let g = LA.create g_prec ~id:grad_id ~label:("grad " ^ label) ~dims ~literal:false default_init_op in
+    let g = LA.create g_prec ~id:grad_id ~label:("grad " ^ label) ~dims default_init_op in
     let dcode ti = Option.value_map ti.diff ~default:Assignments.Noop in
     let zero_grads =
       let f = dcode ~f:(fun diff -> diff.zero_grads) in
