@@ -37,7 +37,8 @@
   stdio
   ppxlib
   ppx_jane
-  ppx_expect)
+  ppx_expect
+  ppx_minidebug)
  (tags
   (deeplearning backprop jit gccjit CUDA)))
 
