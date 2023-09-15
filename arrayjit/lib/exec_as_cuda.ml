@@ -237,8 +237,8 @@ let jit_code ~traced_store info ppf llc : unit =
         (if !Low_level.debug_log_jitted then
            let v_code, v_idcs = loop_debug_f v in
            fprintf ppf
-             "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"DEBUG LOG: %s[%%u] = %%f = \
-              %s\\n\"@],@ %a,@ %s[%a]%a);@ @]}"
+             "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"DEBUG LOG: %s[%%u] = \
+              %%f = %s\\n\"@],@ %a,@ %s[%a]%a);@ @]}"
              (get_run_ptr array) v_code pp_array_offset (idcs, array.dims) (get_run_ptr array) pp_array_offset
              (idcs, array.dims)
              ( pp_print_list @@ fun ppf -> function
@@ -363,8 +363,9 @@ let jit_func ~name ?(verbose = false) (old_context : context) idx_params (traced
     List.unzip
     @@ List.filter_map arrays ~f:(fun la ->
            let tn = Map.find_exn info.ctx_arrays la in
-           Stdio.printf "Exec_as_cuda.jit: array used: #%d %s; %s\n%!" la.id la.label
-             (Sexp.to_string_hum @@ sexp_of_mem_properties tn.mem);
+           if !Low_level.with_debug then
+             Stdio.printf "Exec_as_cuda.jit: array used: #%d %s; %s\n%!" la.id la.label
+               (Sexp.to_string_hum @@ sexp_of_mem_properties tn.mem);
            match tn.mem with
            | Local_only -> None
            | Global -> Option.map tn.global ~f:(fun (n, ptr) -> (tn.num_typ ^ " *" ^ n, ptr)))
