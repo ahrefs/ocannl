@@ -77,7 +77,7 @@ let () =
   Random.init 0;
   CDSL.with_debug := true;
   CDSL.keep_files_in_run_directory := true;
-  CDSL.debug_verbose_trace := true;
+  CDSL.debug_log_jitted := true;
   Random.init 0;
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in

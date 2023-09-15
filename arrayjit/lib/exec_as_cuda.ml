@@ -234,10 +234,10 @@ let jit_code ~traced_store info ppf llc : unit =
         let num_closing_braces = pp_top_locals ppf v in
         (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
         fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr array) pp_array_offset (idcs, array.dims) loop_f v;
-        (if !Low_level.debug_verbose_trace then
+        (if !Low_level.debug_log_jitted then
            let v_code, v_idcs = loop_debug_f v in
            fprintf ppf
-             "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"TRACE: %s[%%u] = %%f = \
+             "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"DEBUG LOG: %s[%%u] = %%f = \
               %s\\n\"@],@ %a,@ %s[%a]%a);@ @]}"
              (get_run_ptr array) v_code pp_array_offset (idcs, array.dims) (get_run_ptr array) pp_array_offset
              (idcs, array.dims)
@@ -254,7 +254,7 @@ let jit_code ~traced_store info ppf llc : unit =
         done;
         locals := old_locals
     | Comment message ->
-        if !Low_level.debug_verbose_trace then
+        if !Low_level.debug_log_jitted then
           fprintf ppf
             "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"COMMENT: %s\\n\"@]);@ @]}"
             (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
@@ -387,7 +387,7 @@ let jit_func ~name ?(verbose = false) (old_context : context) idx_params (traced
   let cu_src =
     [%string
       {|
-%{if !Low_level.debug_verbose_trace then "__device__ int printf (const char * format, ... );" else ""}
+%{if !Low_level.debug_log_jitted then "__device__ int printf (const char * format, ... );" else ""}
 extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ params}) {
   /* TODO: this initial toy prototype is single-threaded. */
   if (threadIdx.x != 0 || blockIdx.x != 0) { return; }
@@ -448,7 +448,7 @@ let jit ~name ?(verbose = false) old_context bindings ((traced_store, llc) as co
               if tn.zero_initialized then Cu.memset_d8 dev_ptr Unsigned.UChar.zero ~length:size_in_bytes
           | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit: launching the kernel\n%!";
-    (* if !Low_level.debug_verbose_trace then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
+    (* if !Low_level.debug_log_jitted then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
     let idx_args =
       List.map2_exn idx_params idx_args ~f:(fun { static_symbol; static_range } i ->
           if !i < 0 then

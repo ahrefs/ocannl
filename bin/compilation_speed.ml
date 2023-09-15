@@ -12,7 +12,7 @@ let benchmark_overhead backend () =
   let open (val backend : Arrayjit.Backends.Backend) in
   CDSL.with_debug := true;
   CDSL.keep_files_in_run_directory := true;
-  CDSL.debug_verbose_trace := true;
+  CDSL.debug_log_jitted := true;
   (* CDSL.disable_all_debugs (); *)
   Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ name ^ " ******";
   Random.init 0;

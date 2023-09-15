@@ -201,7 +201,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
     | Arg1 -> v1
   in
   let log_comment c =
-    if !Low_level.debug_verbose_trace then
+    if !Low_level.debug_log_jitted then
       let f = Function.builtin ctx "printf" in
       Block.eval !current_block @@ RValue.call ctx f [ RValue.string_literal ctx ("\nCOMMENT: " ^ c ^ "\n") ]
     else Block.comment !current_block c
@@ -252,14 +252,14 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
   let f_ptr = Type.get ctx Type.File_ptr in
   let fflush = Function.create ctx Imported (Type.get ctx Void) "fflush" [ Param.create ctx f_ptr "f" ] in
   let c_stdout = LValue.global ctx LValue.Imported f_ptr "stdout" in
-  let log_trace_assignment idcs array accum_op value v_code =
-    if !Low_level.debug_verbose_trace then (
+  let debug_log_assignment idcs array accum_op value v_code =
+    if !Low_level.debug_log_jitted then (
       let v_format, v_fillers = debug_float ~is_double:array.is_double v_code in
       let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
       Block.eval !current_block @@ RValue.call ctx printf
       @@ RValue.string_literal ctx
            [%string
-             {|TRACE: %{RValue.to_string @@ get_ptr array}[%d]{=%g} %{Ops.assign_op_C_syntax accum_op} %g = %{v_format}
+             {|DEBUG LOG: %{RValue.to_string @@ get_ptr array}[%d]{=%g} %{Ops.assign_op_C_syntax accum_op} %g = %{v_format}
 |}]
          :: (to_d @@ RValue.lvalue @@ LValue.access_array (get_ptr array) offset)
          :: offset :: to_d value :: v_fillers;
@@ -282,7 +282,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         let lhs = LValue.access_array (get_ptr array) offset in
-        log_trace_assignment idcs array op value c2;
+        debug_log_assignment idcs array op value c2;
         Block.assign_op !current_block lhs (builtin_op op) value
     | Set (array, idcs, v_code) ->
         let array = get_array info array in
@@ -290,7 +290,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         let lhs = LValue.access_array (get_ptr array) offset in
-        log_trace_assignment idcs array Ops.Arg2 value v_code;
+        debug_log_assignment idcs array Ops.Arg2 value v_code;
         Block.assign !current_block lhs value
     | Zero_out array ->
         if Hashtbl.mem info.arrays array then

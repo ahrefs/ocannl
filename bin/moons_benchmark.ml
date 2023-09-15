@@ -170,7 +170,7 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff
   (* SDSL.drop_all_sessions (); *)
   (* CDSL.with_debug := true; *)
   (* CDSL.keep_files_in_run_directory := true; *)
-  (* Low_level.debug_verbose_trace := true; *)
+  (* Low_level.debug_log_jitted := true; *)
   Random.init (* random_seed *) 0;
   CDSL.fixed_state_for_init := Some random_seed;
   (* let hid_2_3 = 8 in
