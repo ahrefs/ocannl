@@ -31,7 +31,6 @@
   core
   ctypes
   ctypes-foreign
-  domainslib
   printbox
   printbox-text
   npy
