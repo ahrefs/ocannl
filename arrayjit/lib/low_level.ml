@@ -423,7 +423,10 @@ let virtual_llc traced_store reverse_node_map (llc : t) : t =
     let loop = loop_proc ~process_for in
     match llc with
     | Noop -> Noop
-    | Seq (c1, c2) -> Seq (loop c1, loop c2)
+    | Seq (c1, c2) ->
+        let c1 = loop c1 in
+        let c2 = loop c2 in
+        Seq (c1, c2)
     | For_loop ({ index; body; _ } as for_config) -> (
         match Hashtbl.find reverse_node_map index with
         | Some array when not @@ Set.mem process_for array ->
@@ -567,7 +570,10 @@ and substitute_proc ~var ~value llc =
   let loop_proc = substitute_proc ~var ~value in
   match llc with
   | Noop -> Noop
-  | Seq (c1, c2) -> Seq (loop_proc c1, loop_proc c2)
+  | Seq (c1, c2) ->
+      let c1 = loop_proc c1 in
+      let c2 = loop_proc c2 in
+      Seq (c1, c2)
   | For_loop for_config -> For_loop { for_config with body = loop_proc for_config.body }
   | Zero_out _ -> llc
   | Set (array, indices, llv) -> Set (array, indices, loop_float llv)
@@ -580,7 +586,10 @@ let simplify_llc llc =
     let loop = loop_proc in
     match llc with
     | Noop -> Noop
-    | Seq (c1, c2) -> Seq (loop c1, loop c2)
+    | Seq (c1, c2) ->
+        let c1 = loop c1 in
+        let c2 = loop c2 in
+        Seq (c1, c2)
     | For_loop for_config -> For_loop { for_config with body = loop for_config.body }
     | Zero_out _ -> llc
     | Set (array, indices, llv) -> Set (array, indices, loop_float llv)

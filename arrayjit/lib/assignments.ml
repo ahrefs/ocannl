@@ -143,7 +143,10 @@ let to_low_level (code : t) : Low_level.t =
         else for_loops
     | Noop -> Low_level.Noop
     | Block_comment (s, c) -> Low_level.Seq (Comment s, loop c)
-    | Seq (c1, c2) -> Seq (loop c1, loop c2)
+    | Seq (c1, c2) ->
+        let c1 = loop c1 in
+        let c2 = loop c2 in
+        Seq (c1, c2)
     | Fetch { array; fetch_op = Constant 0.0; dims = _ } -> Zero_out array
     | Fetch { array; fetch_op = Constant c; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs -> Set (array, idcs, Constant c))
