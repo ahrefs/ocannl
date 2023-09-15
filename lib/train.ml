@@ -52,7 +52,7 @@ let grad_update l =
   | None -> raise @@ Tensor.Session_error ("Train.backprop: tensor is not differentiable", Some l)
 
 (** See: {!https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py}. *)
-let sgd_one ?(lr = 0.001) ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
+let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
   if not @@ is_param p then raise @@ Tensor.Session_error ("Train.sgd_one: not a parameter", Some p);
   let pg = NTDSL.term ~label:(p.value.label ^ " sgd delta") () in
   let b = NTDSL.term ~label:(p.value.label ^ " sgd momentum") () in
@@ -63,12 +63,12 @@ let sgd_one ?(lr = 0.001) ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = f
         if Float.(momentum > 0.0) then (
           b =: (!.momentum *. b) + pg;
           if nesterov then pg =+ !.momentum *. b else pg =: b);
-        p =- !.lr *. pg] )
+        p =- learning_rate *. pg] )
 
-let sgd_update ?lr ?momentum ?weight_decay ?nesterov t =
+let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov t =
   let code =
     params t |> Set.to_list
-    |> List.map ~f:(sgd_one ?lr ?momentum ?weight_decay ?nesterov)
+    |> List.map ~f:(sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov)
     |> Assignments.sequential
   in
   Assignments.Block_comment (desc_label_suffix t.value.label ^ " sgd update", code)

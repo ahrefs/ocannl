@@ -1,15 +1,17 @@
 open Base
 open Ocannl
+module LA = Arrayjit.Lazy_array
+module IDX = Arrayjit.Indexing.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Arrayjit.Low_level.CDSL
 
-
-
-
 let () =
   let open Tensor.O in
   Random.init 0;
+  let open (val Train.fresh_backend ()) in
+  let device = get_device ~ordinal:0 in
+  let ctx = init device in
   CDSL.fixed_state_for_init := Some 4;
   let hid_dim = 16 in
   let len = 200 in
@@ -28,56 +30,46 @@ let () =
             let c = cos v and s = sin v in
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
-  let moons_flat =
-    TDSL.init_const ~l:"moons_flat"
-      ~b:[ n_batches; batch ]
-      ~o:[ 2 ]
-      moons_flat
-  in
+  let moons_flat = TDSL.init_const ~l:"moons_flat" ~b:[ n_batches; batch ] ~o:[ 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes =
-    TDSL.init_const ~l:"moons_classes"
-      ~b:[ n_batches; batch ]
-      ~o:[ 1 ]
-      moons_classes
-  in
+  let moons_classes = TDSL.init_const ~l:"moons_classes" ~b:[ n_batches; batch ] ~o:[ 1 ] moons_classes in
   let step_sym, step_ref, bindings = IDX.get_static_symbol IDX.empty in
   let%op mlp x = "b3" 1 + ("w3" * !/("b2" hid_dim + ("w2" * !/("b1" hid_dim + ("w1" * x))))) in
-  let session_step = NTDSL.O.(NTDSL.counter !..1) in
-  let%op minus_lr = -0.1 *. (!..steps - session_step) /. !..steps in
-  (* minus_learning_rate := Some minus_lr; *)
-  let%op moons_input = moons_flat @| session_step in
-  let%op moons_class = moons_classes @| session_step in
+  let%op learning_rate = 0.1 *. (!..steps - !@step_sym) /. !..steps in
+  let%op moons_input = moons_flat @| step_sym in
+  let%op moons_class = moons_classes @| step_sym in
   let losses = ref [] in
   let log_losses = ref [] in
   let learning_rates = ref [] in
   let%op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
-  let%op ssq w = (w **. 2) ++ "...|...->... => 0" in
-  let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:TDSL.O.( + ) in
-  let%op total_loss = ((margin_loss ++ "...|... => 0") /. !..batch) + (0.0001 *. reg_loss) in
-  (* SDSL.everything_on_host_or_inlined (); *)
+  (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update computation. *)
+  let weight_decay = 0.0001 in
+  let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in
+  let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
+  let sgd_jitted = jit ctx bindings sgd in
   for step = 1 to steps do
-    (* refresh_session (); *)
+    step_ref := step;
+    sgd_jitted.run ();
+    await device;
     if step % (len / batch) = 1 || step = steps then
-      Stdio.printf "Step=%d, session_step=%f, -lr=%f, loss=%f\n%!" step session_step.@[0] minus_lr.@[0]
-        total_loss.@[0]
-      (* Tensor.print_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss *);
-    learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
-    losses := total_loss.@[0] :: !losses;
-    log_losses := Float.log total_loss.@[0] :: !log_losses
+      Stdio.printf "Step=%d, lr=%f, loss=%f\n%!" step learning_rate.@[0] scalar_loss.@[0];
+    (* Tensor.print_tree ~with_backend_info:true ~with_grad:true ~depth:9 scalar_loss *)
+    learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
+    losses := scalar_loss.@[0] :: !losses;
+    log_losses := Float.log scalar_loss.@[0] :: !log_losses
   done;
-  CDSL.with_debug := false;
-  CDSL.keep_files_in_run_directory := false;
   let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
-  SDSL.close_session ();
   let%op point = [ 0; 0 ] in
   let mlp_result = mlp point in
-  SDSL.refresh_session ~with_backprop:false ();
+  let result_jitted =
+    jit ctx (* sgd_jitted.context *) IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
+  in
   let callback (x, y) =
-    SDSL.set_values point [| x; y |];
-    SDSL.refresh_session ~with_backprop:false ();
+    Tensor.set_values point [| x; y |];
+    result_jitted.run ();
+    await device;
     Float.(mlp_result.@[0] >= 0.)
   in
   let plot_moons =
