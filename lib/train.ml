@@ -15,10 +15,14 @@ let fresh_backend ?(verbose = true) () =
   reinitialize backend;
   backend
 
+let literal_heuristic (a : LA.t) =
+  try
+    ignore (Float.of_string a.label : float);
+    true
+  with _ -> false
+
 let is_param t =
-  match t with
-  | { Tensor.children = []; diff = Some _; _ } -> true
-  | _ -> false
+  match t with { Tensor.children = []; diff = Some _; _ } -> not @@ literal_heuristic t.value | _ -> false
 
 let params t =
   let rec loop accu { Tensor.subtensor = t; _ } =
@@ -95,11 +99,18 @@ let set_fully_on_host (a : LA.t) =
     raise
     @@ Ndarray.User_error
          [%string "Train.set_fully_on_host: array #%{a.id#Int} %{a.label} is already virtual"];
-  a.virtual_ <- Some (false, 27);
+  if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 27);
   if LA.is_true a.device_only then
     raise
     @@ Ndarray.User_error
          [%string "Train.set_fully_on_host: array #%{a.id#Int} %{a.label} is already device-only"];
   a.device_only <- Some (false, 28)
 
-let everything_fully_on_host = Tensor.iter_embedded_arrays ~f:set_fully_on_host
+let set_virtual (a : LA.t) =
+  if LA.is_false a.virtual_ then
+    raise
+    @@ Ndarray.User_error [%string "Train.set_virtua: array #%{a.id#Int} %{a.label} is already non-virtual"];
+  if Option.is_none a.virtual_ then a.virtual_ <- Some (true, 29)
+
+let every_non_literal_fully_on_host =
+  Tensor.iter_embedded_arrays ~f:(fun a -> if not @@ literal_heuristic a then set_fully_on_host a)

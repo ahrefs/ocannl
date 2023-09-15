@@ -100,7 +100,7 @@ let%expect_test "Graph drawing fetch" =
   CDSL.virtualize_settings.enable_device_only <- false;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%op f5 = f 5 in
-  (* everything_fully_on_host (); *)
+  (* every_non_literal_fully_on_host (); *)
   (* refresh_session (); *)
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   [%expect
@@ -199,7 +199,7 @@ let%expect_test "Simple gradients hosted" =
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in
   SDSL.minus_learning_rate := Some (TDSL.init_const ~l:"minus_lr" ~o:[ 1 ] [| 0.1 |]);
-  (* everything_fully_on_host (); *)
+  (* every_non_literal_fully_on_host (); *)
   SDSL.refresh_session ~update_params:false ();
   (* We did not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
@@ -354,7 +354,7 @@ let%expect_test "2D neuron hosted" =
   Random.init 0;
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   (* No need for [~update_params:false] because we have not set [minus_learning_rate]. *)
-  (* everything_fully_on_host (); *)
+  (* every_non_literal_fully_on_host (); *)
   (* refresh_session (); *)
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect

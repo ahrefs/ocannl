@@ -14,7 +14,7 @@ let _suspended () =
   (* Train.set_fully_on_host g.value;
      Train.set_fully_on_host a.value;
      Train.set_fully_on_host b.value; *)
-  Train.everything_fully_on_host c;
+  Train.every_non_literal_fully_on_host c;
   (* refresh_session ~verbose:true (); *)
   Tensor.print_tree ~with_grad:true ~depth:9 c;
   Stdio.print_endline "\n";
@@ -41,7 +41,7 @@ let () =
      Train.set_fully_on_host a.value;
      Train.set_fully_on_host b.value;
      * *)
-  Train.everything_fully_on_host g;
+  Train.every_non_literal_fully_on_host g;
   (* refresh_session ~verbose:true (); *)
   Tensor.print_tree ~with_grad:true ~depth:9 g;
   Stdio.print_endline "\n";

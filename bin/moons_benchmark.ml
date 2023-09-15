@@ -74,7 +74,7 @@ let _suspended () =
   (* let step_batch = parallel_dims * minib in *)
   let%op batch_of_losses = margin_loss ++ "...|... => ...|0" in
   let updates_per_run = refresh_batch in
-  (* everything_fully_on_host (); *)
+  (* every_non_literal_fully_on_host (); *)
   (* SDSL.everything_on_host_or_inlined (); *)
   SDSL.refresh_session ~updates_per_run ();
   Stdio.print_endline "\nPreamble:\n";
