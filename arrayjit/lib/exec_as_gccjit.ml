@@ -38,8 +38,9 @@ let init () =
   result
 
 type ndarray = {
+  nd : LA.t;  (** The original array. *)
   hosted_ptr : Gccjit.rvalue option;  (** Pointer to the first value of the associated hosted [Ndarray]. *)
-  global_ptr : Gccjit.rvalue option;  (** Pointer to the first value of [context.arrays]. *)
+  global_ptr : Gccjit.rvalue option;  (** Pointer to the first value of the associated [context.arrays]. *)
   local : Gccjit.lvalue option;  (** A local array, if any. *)
   mem : mem_properties;
   dims : int array;
@@ -110,7 +111,7 @@ let get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ct
                       [ rv_ptr; RValue.zero ctx c_int; RValue.int ctx c_index size_in_bytes ]);
         if not @@ String.is_substring key.backend_info ~substring:backend_info then
           key.backend_info <- key.backend_info ^ backend_info;
-        { hosted_ptr; global_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
+        { nd = key; hosted_ptr; global_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
       in
       match (key.prec, Lazy.force key.array) with
       | _, Some (Byte_nd arr) -> array Type.Unsigned_char false (Some arr)
@@ -146,6 +147,13 @@ let get_ptr array =
   match array.local with
   | Some lv -> Gccjit.RValue.lvalue lv
   | None -> Option.value_exn @@ Option.first_some array.global_ptr array.hosted_ptr
+
+let get_ptr_debug array =
+  match (array.local, array.global_ptr, array.hosted_ptr) with
+  | Some _, _, _ -> "local_" ^ LA.name array.nd
+  | None, Some _, _ -> "global_" ^ LA.name array.nd
+  | None, None, Some _ -> "hosted_" ^ LA.name array.nd
+  | None, None, None -> assert false
 
 let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ } as info) initial_block body =
   let open Gccjit in
@@ -232,7 +240,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         (* FIXME(194): Convert according to array.typ ?= num_typ. *)
         let v = to_d @@ RValue.lvalue @@ LValue.access_array (get_ptr array) offset in
-        (RValue.to_string (get_ptr array) ^ "[%d]{=%g}", [ offset; v ])
+        (get_ptr_debug array ^ "[%d]{=%g}", [ offset; v ])
     | Constant c -> (Float.to_string c, [])
     | Embed_index (Fixed_idx i) -> (Int.to_string i, [])
     | Embed_index (Iterator s) -> (Indexing.symbol_ident s ^ "{=%d}", [ Map.find_exn env s ])
@@ -259,7 +267,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
       Block.eval !current_block @@ RValue.call ctx printf
       @@ RValue.string_literal ctx
            [%string
-             {|DEBUG LOG: %{RValue.to_string @@ get_ptr array}[%d]{=%g} %{Ops.assign_op_C_syntax accum_op} %g = %{v_format}
+             {|DEBUG LOG: %{get_ptr_debug array}[%d]{=%g} %{Ops.assign_op_C_syntax accum_op} %g = %{v_format}
 |}]
          :: (to_d @@ RValue.lvalue @@ LValue.access_array (get_ptr array) offset)
          :: offset :: to_d value :: v_fillers;

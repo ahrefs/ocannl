@@ -158,6 +158,12 @@ let get_run_ptr array =
   | Some (rv, _), _ -> rv
   | None, None -> assert false
 
+let get_run_ptr_debug array =
+  match (array.global, array.local) with
+  | _, Some lv -> "local_" ^ lv
+  | Some (rv, _), _ -> "global_" ^ rv
+  | None, None -> assert false
+
 let prec_to_c_type = function
   | Ops.Void_prec -> "void"
   | Byte_prec _ -> "uint8"
@@ -239,8 +245,8 @@ let jit_code ~traced_store info ppf llc : unit =
            fprintf ppf
              "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"DEBUG LOG: %s[%%u] = \
               %%f = %s\\n\"@],@ %a,@ %s[%a]%a);@ @]}"
-             (get_run_ptr array) v_code pp_array_offset (idcs, array.dims) (get_run_ptr array) pp_array_offset
-             (idcs, array.dims)
+             (get_run_ptr_debug array) v_code pp_array_offset (idcs, array.dims) (get_run_ptr array)
+             pp_array_offset (idcs, array.dims)
              ( pp_print_list @@ fun ppf -> function
                | `Accessor idx ->
                    pp_comma ppf ();
@@ -329,7 +335,7 @@ let jit_code ~traced_store info ppf llc : unit =
     | Get (ptr, idcs) ->
         let array = get_array ~traced_store info ptr in
         let v = sprintf "@[<2>%s[%s@]]" (get_run_ptr array) (array_offset_to_string (idcs, array.dims)) in
-        (get_run_ptr array ^ "[%u]{=%f}", [ `Accessor (idcs, array.dims); `Value v ])
+        (get_run_ptr_debug array ^ "[%u]{=%f}", [ `Accessor (idcs, array.dims); `Value v ])
     | Constant c -> (Float.to_string c, [])
     | Embed_index (Fixed_idx i) -> (Int.to_string i, [])
     | Embed_index (Iterator s) -> (Indexing.symbol_ident s, [])
