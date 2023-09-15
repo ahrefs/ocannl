@@ -25,7 +25,7 @@ let benchmark_overhead backend () =
   let ctx = init device in
   let update_f = Train.grad_update f in
   let jitted_f = jit ctx IDX.empty update_f in
-  Tensor.print_tree ~with_grad:true ~depth:9 f;
+  Tensor.print_tree ~with_grad:true ~with_backend_info:true ~depth:9 f;
   Tensor.iter_embedded_arrays f ~f:(fun a ->
       if from_host jitted_f.context a then Stdio.printf "Sent array %s.\n%!" @@ LA.name a);
 

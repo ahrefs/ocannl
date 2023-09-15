@@ -212,11 +212,12 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
           @@ Ndarray.User_error
                [%string
                  "Compiling: array #%{a.id#Int} %{a.label} is already virtual, does not support recurrence"];
-        a.virtual_ <- Some (false, 2);
+        if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 2);
+        (* We allow the array to be device-only, but infer it to not be as the safer case. *)
         if Option.is_none a.device_only then a.device_only <- Some (false, 3);
         traced.read_before_write <- true))
 
-let process_computation traced top_llc =
+let check_and_store_virtual traced top_llc =
   let exception Non_virtual of int in
   let at_idcs = ref None in
   let has_setter = ref false in
@@ -314,7 +315,7 @@ let process_computation traced top_llc =
            [%string
              {|Compiling: array #%{a.id#Int} %{a.label} is already virtual, cannot compile:
 %{Sexp.to_string_hum @@ sexp_of_t top_llc}|}];
-    a.virtual_ <- Some (false, i)
+    if Option.is_none a.virtual_ then a.virtual_ <- Some (false, i)
 
 let inline_computation ~id traced call_args =
   let exception Non_virtual of int in
@@ -322,6 +323,7 @@ let inline_computation ~id traced call_args =
     let rhs_ind = call_args.(i) in
     match (lhs_ind, rhs_ind) with
     | Indexing.Iterator lhs_s, Indexing.Iterator rhs_s -> Some (lhs_s, rhs_s)
+    (* TODO: allow substituting by Fixed_idx *)
     | _ when Indexing.equal_axis_index lhs_ind rhs_ind -> None
     | _ -> raise @@ Non_virtual 13
   in
@@ -407,7 +409,7 @@ let inline_computation ~id traced call_args =
             [%string
               {|Compiling: array #%{a.id#Int} %{a.label} is already virtual, cannot inline computation:
 %{Sexp.to_string_hum @@ sexp_of_t body}|}]);
-    a.virtual_ <- Some (false, i);
+    if Option.is_none a.virtual_ then a.virtual_ <- Some (false, i);
     None
 
 let optimize_integer_pow = ref true
@@ -432,20 +434,20 @@ let virtual_llc traced_store reverse_node_map (llc : t) : t =
         | Some array when not @@ Set.mem process_for array ->
             let node : traced_array = get_node traced_store array in
             let result = loop_proc ~process_for:(Set.add process_for array) llc in
-            if LA.is_true node.nd.virtual_ then process_computation node result;
+            if LA.isnt_false node.nd.virtual_ then check_and_store_virtual node result;
             result
         | _ -> For_loop { for_config with body = loop body })
     | Zero_out array ->
         let traced : traced_array = get_node traced_store array in
         if (not @@ Set.mem process_for array) && LA.isnt_false traced.nd.virtual_ then
-          process_computation traced llc;
+          check_and_store_virtual traced llc;
         llc
     | Set (array, indices, llv) ->
         let traced : traced_array = get_node traced_store array in
         let next = if LA.is_false traced.nd.virtual_ then process_for else Set.add process_for array in
         let result = Set (array, indices, loop_float ~process_for:next llv) in
         if (not @@ Set.mem process_for array) && LA.isnt_false traced.nd.virtual_ then
-          process_computation traced result;
+          check_and_store_virtual traced result;
         result
     | Set_local (id, llv) -> Set_local (id, loop_float ~process_for llv)
     | Comment _ -> llc
@@ -504,7 +506,10 @@ let cleanup_virtual_llc reverse_node_map (llc : t) : t =
           None)
         else Some llc
     | Set (array, indices, llv) ->
-        if LA.isnt_false array.virtual_ then None
+        if LA.isnt_false array.virtual_ then (
+          (* FIXME: *)
+          array.virtual_ <- Some (true, 152);
+          None)
         else (
           assert (Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
           Some (Set (array, indices, loop_float ~balanced ~env_dom llv)))
@@ -522,7 +527,7 @@ let cleanup_virtual_llc reverse_node_map (llc : t) : t =
         assert (LA.isnt_true a.virtual_);
         (* Caml.Format.printf "DEBUG: [5]=%a\n%!" Sexp.pp_hum ([%sexp_of: float_t] @@ llv); *)
         (* DEBUG: *)
-        a.virtual_ <- Some (false, 17);
+        if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 17);
         assert (Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
         llv
     | Local_scope { id; prec; body; orig_indices } ->
@@ -582,6 +587,7 @@ and substitute_proc ~var ~value llc =
   | Staged_compilation _ -> llc
 
 let simplify_llc llc =
+  (* Implements top-down rewriting. *)
   let rec loop_proc (llc : t) : t =
     let loop = loop_proc in
     match llc with

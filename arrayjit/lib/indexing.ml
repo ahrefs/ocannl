@@ -20,7 +20,7 @@ end
 
 let symbol_ident (Symbol s) = "i" ^ Int.to_string s
 
-type 'a environment = 'a Map.M(Symbol).t
+type 'a environment = 'a Map.M(Symbol).t [@@deriving sexp]
 
 let empty_env : 'a environment = Map.empty (module Symbol)
 
