@@ -10,21 +10,24 @@ let benchmark_overhead backend () =
   let n_data = 20 in
   Arrayjit.Backends.reinitialize backend;
   let open (val backend : Arrayjit.Backends.Backend) in
-  CDSL.with_debug := true;
-  CDSL.keep_files_in_run_directory := true;
-  CDSL.debug_log_jitted := true;
-  (* CDSL.disable_all_debugs (); *)
+  (* CDSL.with_debug := true; *)
+  (* CDSL.keep_files_in_run_directory := true; *)
+  (* CDSL.debug_log_jitted := true; *)
+  CDSL.disable_all_debugs ();
   Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ name ^ " ******";
   Random.init 0;
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
-  Train.set_fully_on_host x.value;
   Train.set_fully_on_host f.value;
+  (* Train.every_non_literal_fully_on_host f; *)
 
   let device = get_device ~ordinal:0 in
   let ctx = init device in
   let update_f = Train.grad_update f in
-  let jitted_f = jit ctx IDX.empty update_f in
+  (* Initialize the context with a mock update of x to ensure that it is not optimized as a constant. *)
+  let%cd mock_update_x = x =: 42 in
+  let init_jitted_x = jit ~name:"init_assign_x" ctx IDX.empty mock_update_x in
+  let jitted_f = jit init_jitted_x.context IDX.empty update_f in
   Tensor.print_tree ~with_grad:true ~with_backend_info:true ~depth:9 f;
   Tensor.iter_embedded_arrays f ~f:(fun a ->
       if from_host jitted_f.context a then Stdio.printf "Sent array %s.\n%!" @@ LA.name a);
@@ -39,7 +42,7 @@ let benchmark_overhead backend () =
         await device;
         jitted_f.run ();
         await device;
-        Tensor.iter_embedded_arrays f ~f:(fun a -> ignore (to_host jitted_f.context a : bool));
+        ignore (to_host jitted_f.context f.value : bool);
         f.@[0])
   in
   let plot_box =
