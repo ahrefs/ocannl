@@ -41,7 +41,7 @@ let grad_update l =
       let label = desc_label_suffix l.value.label in
       Assignments.(
         Block_comment
-          ( label ^ " grad update",
+          ( label ^ " gradient update",
             sequential
               [
                 Block_comment (label ^ " fwd", l.forward);

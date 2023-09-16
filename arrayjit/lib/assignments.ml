@@ -44,7 +44,10 @@ let rec get_name =
   | Block_comment (s, _) -> Str.global_replace punct_and_sp "" s |> Str.global_replace punct_or_sp "_"
   | Seq (t1, t2) ->
       let n1 = get_name t1 and n2 = get_name t2 in
-      if String.is_empty n1 || String.is_empty n2 then n1 ^ n2 else n1 ^ "_then_" ^ n2
+      let prefix = String.common_prefix2_length n1 n2 in
+      let suffix = String.common_suffix2_length n1 n2 in
+      if String.is_empty n1 || String.is_empty n2 then n1 ^ n2
+      else String.drop_suffix n1 suffix ^ "_then_" ^ String.drop_prefix n2 prefix
   | _ -> ""
 
 module Nd = Ndarray
