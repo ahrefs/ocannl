@@ -144,7 +144,8 @@ module Gccjit_device : No_device_backend with type context = Exec_as_gccjit.cont
 
   let jit context ?name ?verbose bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
-    jit context ~name ?verbose bindings @@ Assignments.compile_proc ~name ?verbose code
+    jit context ~name ?verbose bindings
+    @@ Assignments.compile_proc ~name ?verbose (List.map ~f:fst @@ Indexing.assoc_of_bindings bindings) code
 
   let from_host = from_host
   let to_host = to_host
@@ -174,7 +175,8 @@ module Cuda_backend : Backend with type context = Exec_as_cuda.context = struct
 
   let jit context ?name ?verbose bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
-    jit context ~name ?verbose bindings @@ Assignments.compile_proc ~name ?verbose code
+    jit context ~name ?verbose bindings
+    @@ Assignments.compile_proc ~name ?verbose (List.map ~f:fst @@ Indexing.assoc_of_bindings bindings) code
 
   let from_host = from_host
   let to_host = to_host

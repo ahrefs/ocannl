@@ -176,7 +176,7 @@ let to_low_level (code : t) : Low_level.t =
 
   loop code
 
-let compile_proc ~name ?(verbose = false) proc =
+let compile_proc ~name ?(verbose = false) static_indices proc =
   if verbose then Stdio.printf "Assignments.compile_proc: generating the initial low-level code\n%!";
   if !Low_level.with_debug && !Low_level.keep_files_in_run_directory then (
     let fname = name ^ ".hlc" in
@@ -185,7 +185,7 @@ let compile_proc ~name ?(verbose = false) proc =
     Stdlib.Format.pp_set_margin ppf !Low_level.code_sexp_margin;
     Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t proc));
   let llc = to_low_level proc in
-  Low_level.compile_proc ~name ~verbose llc
+  Low_level.compile_proc ~name ~verbose static_indices llc
 
 let fprint_code ppf c =
   (* TODO: something nicely concise. *)

@@ -496,7 +496,7 @@ let merge_from_global ?(name_suffix = "") (context : context) ~dst ~accum ~src =
   in
   let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
   let name = [%string "merge_into_%{dst.Lazy_array.id#Int}%{name_suffix}"] in
-  jit context ~name ~verbose:false Indexing.Empty (Low_level.compile_proc ~name llc)
+  jit context ~name ~verbose:false Indexing.Empty (Low_level.compile_proc ~name [] llc)
 
 let merge ?name_suffix la ~dst ~accum ~(src : context) =
   Option.map (Map.find src.arrays la) ~f:(fun src ->

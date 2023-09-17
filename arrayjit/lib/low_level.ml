@@ -147,7 +147,9 @@ let visit ~is_assigned old =
 let visit_llc traced_store reverse_node_map ~max_visits llc =
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
   let lookup env indices =
-    Array.map indices ~f:(function Indexing.Fixed_idx i -> i | Iterator s -> Map.find_exn env s)
+    Array.map indices ~f:(function
+      | Indexing.Fixed_idx i -> i
+      | Iterator s -> Option.value ~default:(* static index *) 0 @@ Map.find env s)
   in
   let rec loop_proc env llc =
     let loop = loop_proc env in
@@ -217,8 +219,11 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         if Option.is_none a.device_only then a.device_only <- Some (false, 3);
         traced.read_before_write <- true))
 
-let check_and_store_virtual traced top_llc =
+let check_and_store_virtual traced static_indices top_llc =
   let exception Non_virtual of int in
+  let static_indices =
+    Set.of_list (module Indexing.Symbol) @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
+  in
   let at_idcs = ref None in
   let has_setter = ref false in
   let top_array = traced.nd in
@@ -229,9 +234,15 @@ let check_and_store_virtual traced top_llc =
     (* TODO(#133): For non-recursive accesses, non-linearity is not supported yet. *)
     let syms =
       Set.of_array (module Indexing.Symbol)
-      @@ Array.filter_map indices ~f:Indexing.(function Fixed_idx _ -> None | Iterator s -> Some s)
+      @@ Array.filter_map indices
+           ~f:
+             Indexing.(
+               function
+               | Fixed_idx _ -> None | Iterator s -> Option.some_if (not @@ Set.mem static_indices s) s)
     in
-    let num_syms = Array.count indices ~f:(function Iterator _ -> true | _ -> false) in
+    let num_syms =
+      Array.count indices ~f:(function Iterator s -> not @@ Set.mem static_indices s | _ -> false)
+    in
     if Set.length syms <> num_syms then raise @@ Non_virtual 5
   in
   (* Traverse the float code too, for completeness / future use-cases. *)
@@ -253,7 +264,7 @@ let check_and_store_virtual traced top_llc =
         else
           (* Check for escaping variables. *)
           Array.iter indices ~f:(function
-            | Iterator s as idx ->
+            | Iterator s as idx when not (Set.mem static_indices s) ->
                 if not @@ Map.mem env_dom s then (
                   if !with_debug then
                     Stdlib.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
@@ -275,7 +286,7 @@ let check_and_store_virtual traced top_llc =
         else
           (* Check for escaping variables. *)
           Array.iter idcs ~f:(function
-            | Iterator s ->
+            | Iterator s when not (Set.mem static_indices s) ->
                 if not @@ Map.mem env_dom s then (
                   if !with_debug then
                     Stdlib.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
@@ -291,7 +302,7 @@ let check_and_store_virtual traced top_llc =
     | Embed_index (Fixed_idx _) -> ()
     | Embed_index (Iterator s) ->
         if not @@ Map.mem env_dom s then (
-          if !with_debug then
+          if !with_debug && not (Set.mem static_indices s) then
             Stdlib.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!" Sexp.pp_hum
               ([%sexp_of: Indexing.symbol] s)
               Sexp.pp_hum
@@ -317,13 +328,15 @@ let check_and_store_virtual traced top_llc =
 %{Sexp.to_string_hum @@ sexp_of_t top_llc}|}];
     if Option.is_none a.virtual_ then a.virtual_ <- Some (false, i)
 
-let inline_computation ~id traced call_args =
+let inline_computation ~id traced static_indices call_args =
   let exception Non_virtual of int in
+  let static_indices =
+    Set.of_list (module Indexing.Symbol) @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
+  in
   let make_subst i lhs_ind =
     let rhs_ind = call_args.(i) in
-    match (lhs_ind, rhs_ind) with
-    | Indexing.Iterator lhs_s, Indexing.Iterator rhs_s -> Some (lhs_s, rhs_s)
-    (* TODO: allow substituting by Fixed_idx *)
+    match lhs_ind with
+    | Indexing.Iterator lhs_s when not (Set.mem static_indices lhs_s) -> Some (lhs_s, rhs_ind)
     | _ when Indexing.equal_axis_index lhs_ind rhs_ind -> None
     | _ -> raise @@ Non_virtual 13
   in
@@ -337,10 +350,7 @@ let inline_computation ~id traced call_args =
           @@ Array.to_list
           @@ Array.filter_mapi def_args ~f:make_subst
     in
-    let subst env = function
-      | Indexing.Iterator s when Map.mem env s -> Indexing.Iterator (Map.find_exn env s)
-      | idx -> idx
-    in
+    let subst env = function Indexing.Iterator s when Map.mem env s -> Map.find_exn env s | idx -> idx in
     let rec loop env llc : t option =
       match llc with
       | Noop -> None
@@ -352,23 +362,15 @@ let inline_computation ~id traced call_args =
       | For_loop { index; from_; to_; body; trace_it } ->
           (* Freshen the binding. *)
           let fresh = Indexing.get_symbol () in
-          let env = Map.add_exn ~key:index ~data:fresh env in
+          let env = Map.add_exn ~key:index ~data:(Indexing.Iterator fresh) env in
           Option.map ~f:(fun body : t -> For_loop { index = fresh; from_; to_; body; trace_it })
           @@ loop env body
       | Zero_out array when LA.equal array traced.nd -> Some (Set_local (id, Constant 0.0))
       | Set (array, indices, llv) when LA.equal array traced.nd ->
           assert ([%equal: Indexing.axis_index array option] (Some indices) def_args);
           Some (Set_local (id, loop_float env llv))
-      | Zero_out _ ->
-          (* Caml.Format.printf "DEBUG: [1]=%a\n%!" Sexp.pp_hum ([%sexp_of: t] @@ llc); *)
-          (* DEBUG: *)
-          (* Some llc *)
-          None
-      | Set _ ->
-          (* Caml.Format.printf "DEBUG: [2]=%a\n%!" Sexp.pp_hum ([%sexp_of: t] @@ llc); *)
-          (* DEBUG: *)
-          (* Some llc *)
-          None
+      | Zero_out _ -> None
+      | Set _ -> None
       | Set_local (id, llv) -> Some (Set_local (id, loop_float env llv))
       | Comment _ -> Some llc
       | Staged_compilation _ -> Some llc
@@ -419,7 +421,7 @@ let rec unroll_pow ~(base : float_t) ~(exp : int) : float_t =
   else if exp = 0 then Constant 1.
   else Fn.apply_n_times ~n:(exp - 1) (fun accu -> Binop (Mul, base, accu)) base
 
-let virtual_llc traced_store reverse_node_map (llc : t) : t =
+let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
   (* The current position is within scope of the definitions of the process_for virtual arrays. *)
   let rec loop_proc ~process_for (llc : t) : t =
     let loop = loop_proc ~process_for in
@@ -434,20 +436,20 @@ let virtual_llc traced_store reverse_node_map (llc : t) : t =
         | Some array when not @@ Set.mem process_for array ->
             let node : traced_array = get_node traced_store array in
             let result = loop_proc ~process_for:(Set.add process_for array) llc in
-            if LA.isnt_false node.nd.virtual_ then check_and_store_virtual node result;
+            if LA.isnt_false node.nd.virtual_ then check_and_store_virtual node static_indices result;
             result
         | _ -> For_loop { for_config with body = loop body })
     | Zero_out array ->
         let traced : traced_array = get_node traced_store array in
         if (not @@ Set.mem process_for array) && LA.isnt_false traced.nd.virtual_ then
-          check_and_store_virtual traced llc;
+          check_and_store_virtual traced static_indices llc;
         llc
     | Set (array, indices, llv) ->
         let traced : traced_array = get_node traced_store array in
         let next = if LA.is_false traced.nd.virtual_ then process_for else Set.add process_for array in
         let result = Set (array, indices, loop_float ~process_for:next llv) in
         if (not @@ Set.mem process_for array) && LA.isnt_false traced.nd.virtual_ then
-          check_and_store_virtual traced result;
+          check_and_store_virtual traced static_indices result;
         result
     | Set_local (id, llv) -> Set_local (id, loop_float ~process_for llv)
     | Comment _ -> llc
@@ -464,7 +466,7 @@ let virtual_llc traced_store reverse_node_map (llc : t) : t =
         else
           let id = get_scope array in
           Option.value ~default:llv
-          @@ Option.map (inline_computation ~id traced indices) ~f:(fun body ->
+          @@ Option.map (inline_computation ~id traced static_indices indices) ~f:(fun body ->
                  Local_scope { id; prec = traced.nd.prec; body; orig_indices = indices })
     | Local_scope opts ->
         Local_scope { opts with body = loop_proc ~process_for:(Set.add process_for opts.id.nd) opts.body }
@@ -476,7 +478,7 @@ let virtual_llc traced_store reverse_node_map (llc : t) : t =
   in
   loop_proc ~process_for:(Set.empty (module Lazy_array)) llc
 
-let cleanup_virtual_llc reverse_node_map (llc : t) : t =
+let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
   (* The current position is within scope of the definitions of the process_for virtual arrays. *)
   let rec loop_proc ~balanced ~env_dom (llc : t) : t option =
     let loop = loop_proc ~balanced ~env_dom in
@@ -553,7 +555,10 @@ let cleanup_virtual_llc reverse_node_map (llc : t) : t =
     | Binop (op, llv1, llv2) -> Binop (op, loop llv1, loop llv2)
     | Unop (op, llv) -> Unop (op, loop llv)
   in
-  Option.value_exn @@ loop_proc ~balanced:false ~env_dom:(Set.empty (module Indexing.Symbol)) llc
+  let static_indices =
+    Set.of_list (module Indexing.Symbol) @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
+  in
+  Option.value_exn @@ loop_proc ~balanced:false ~env_dom:static_indices llc
 
 let rec substitute_float ~var ~value llv =
   let loop_float = substitute_float ~var ~value in
@@ -687,7 +692,7 @@ let simplify_llc llc =
 type traced_store = (LA.t, traced_array) Base.Hashtbl.t
 type optimized = traced_store * t
 
-let optimize_proc ?(verbose = false) llc : optimized =
+let optimize_proc ?(verbose = false) static_indices llc : optimized =
   let traced_store : traced_store = Hashtbl.create (module Lazy_array) in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
   let reverse_node_map = Hashtbl.create (module Indexing.Symbol) in
@@ -695,11 +700,13 @@ let optimize_proc ?(verbose = false) llc : optimized =
   visit_llc traced_store reverse_node_map ~max_visits:virtualize_settings.max_visits llc;
   if verbose then Stdio.printf "Low_level.optimize_proc: optimizing\n%!";
   let result =
-    simplify_llc @@ cleanup_virtual_llc reverse_node_map @@ virtual_llc traced_store reverse_node_map llc
+    simplify_llc
+    @@ cleanup_virtual_llc reverse_node_map ~static_indices
+    @@ virtual_llc traced_store reverse_node_map static_indices llc
   in
   (traced_store, result)
 
-let compile_proc ~name ?(verbose = false) llc : optimized =
+let compile_proc ~name ?(verbose = false) static_indices llc : optimized =
   if verbose then Stdio.printf "Low_level.compile_proc: generating the initial low-level code\n%!";
   if !with_debug && !keep_files_in_run_directory then (
     let fname = name ^ "-unoptimized.llc" in
@@ -707,7 +714,7 @@ let compile_proc ~name ?(verbose = false) llc : optimized =
     let ppf = Stdlib.Format.formatter_of_out_channel f in
     Stdlib.Format.pp_set_margin ppf !code_sexp_margin;
     Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t llc));
-  let result = optimize_proc ~verbose llc in
+  let result = optimize_proc ~verbose static_indices llc in
   if !with_debug && !keep_files_in_run_directory then (
     let fname = name ^ ".llc" in
     let f = Stdio.Out_channel.create fname in
