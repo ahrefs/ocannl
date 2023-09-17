@@ -68,6 +68,16 @@ let sequential = List.fold_right ~init:Noop ~f:(fun st sts -> Seq (st, sts))
 
 let to_low_level (code : t) : Low_level.t =
   let open Indexing in
+  let get a idcs =
+    if not (Array.length idcs = Array.length (Lazy.force a.LA.dims)) then
+      Caml.Format.printf "DEBUG: get a=%a: %s@ idcs=%a dims=%a\n%!" Sexp.pp_hum ([%sexp_of: LA.t] @@ a) a.label Sexp.pp_hum ([%sexp_of: Indexing.axis_index array] @@ idcs) Sexp.pp_hum ([%sexp_of: int array] @@ Lazy.force a.dims);
+    assert (Array.length idcs = Array.length (Lazy.force a.LA.dims));
+    Low_level.Get (a, idcs) in
+  let set a idcs v =
+    if not (Array.length idcs = Array.length (Lazy.force a.LA.dims)) then
+      Caml.Format.printf "DEBUG: set a=%a: %s@ idcs=%a dims=%a\n%!" Sexp.pp_hum ([%sexp_of: LA.t] @@ a) a.label Sexp.pp_hum ([%sexp_of: Indexing.axis_index array] @@ idcs) Sexp.pp_hum ([%sexp_of: int array] @@ Lazy.force a.dims);
+    assert (Array.length idcs = Array.length (Lazy.force a.LA.dims));
+    Low_level.Set (a, idcs, v) in
   let rec loop code =
     match code with
     | Accum_binop { zero_out; accum; op; lhs; rhs1; rhs2; projections } ->
@@ -87,10 +97,10 @@ let to_low_level (code : t) : Low_level.t =
           let rhs2_idcs = rhs2_idx ~product in
           let lhs_idcs = lhs_idx ~product in
           let open Low_level in
-          let lhs_ll = Get (lhs, lhs_idcs) in
-          let rhs1_ll = Get (rhs1, rhs1_idcs) in
-          let rhs2_ll = Get (rhs2, rhs2_idcs) in
-          Set (lhs, lhs_idcs, binop ~op:accum ~rhs1:lhs_ll ~rhs2:(binop ~op ~rhs1:rhs1_ll ~rhs2:rhs2_ll))
+          let lhs_ll = get lhs lhs_idcs in
+          let rhs1_ll = get rhs1 rhs1_idcs in
+          let rhs2_ll = get rhs2 rhs2_idcs in
+          set lhs lhs_idcs @@ binop ~op:accum ~rhs1:lhs_ll ~rhs2:(binop ~op ~rhs1:rhs1_ll ~rhs2:rhs2_ll)
         in
         let rec for_loop rev_iters = function
           | [] -> basecase rev_iters
@@ -122,9 +132,9 @@ let to_low_level (code : t) : Low_level.t =
           let product = Array.of_list_rev_map rev_iters ~f:(fun s -> Indexing.Iterator s) in
           let lhs_idcs = lhs_idx ~product in
           let open Low_level in
-          let lhs_ll = Get (lhs, lhs_idcs) in
-          let rhs_ll = Get (rhs, rhs_idx ~product) in
-          Set (lhs, lhs_idcs, binop ~op:accum ~rhs1:lhs_ll ~rhs2:(unop ~op ~rhs:rhs_ll))
+          let lhs_ll = get lhs lhs_idcs in
+          let rhs_ll = get rhs @@ rhs_idx ~product in
+          set lhs lhs_idcs @@ binop ~op:accum ~rhs1:lhs_ll ~rhs2:(unop ~op ~rhs:rhs_ll)
         in
         let rec for_loop rev_iters = function
           | [] -> basecase rev_iters
@@ -152,14 +162,14 @@ let to_low_level (code : t) : Low_level.t =
         Seq (c1, c2)
     | Fetch { array; fetch_op = Constant 0.0; dims = _ } -> Zero_out array
     | Fetch { array; fetch_op = Constant c; dims } ->
-        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs -> Set (array, idcs, Constant c))
+        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs -> set array idcs @@ Constant c)
     | Fetch { array; fetch_op = Slice { batch_idx = { static_symbol = idx; _ }; sliced }; dims } ->
         (* TODO: doublecheck this always gets optimized away. *)
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
-            Set (array, idcs, Get (sliced, Array.append [| Iterator idx |] idcs)))
+            set array idcs @@ get sliced @@ Array.append [| Iterator idx |] idcs)
     | Fetch { array; fetch_op = Embed_symbol s; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
-            Set (array, idcs, Embed_index (Iterator s.static_symbol)))
+            set array idcs @@ Embed_index (Iterator s.static_symbol))
     | Fetch { array = _; fetch_op = Imported _; dims = _ } ->
         failwith "to_low_level: Imported NOT IMPLEMENTED YET"
   in
