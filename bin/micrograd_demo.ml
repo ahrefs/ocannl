@@ -10,6 +10,9 @@ let () =
   let open Tensor.O in
   Random.init 0;
   let open (val Train.fresh_backend ()) in
+  CDSL.with_debug := true;
+  CDSL.keep_files_in_run_directory := true;
+  (* CDSL.debug_log_jitted := true; *)
   let device = get_device ~ordinal:0 in
   let ctx = init device in
   CDSL.fixed_state_for_init := Some 4;
@@ -44,9 +47,11 @@ let () =
   let%op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
   (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update computation. *)
   let weight_decay = 0.0001 in
-  let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in
+  (* let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in *)
+  let scalar_loss = margin_loss in
+  let update = Train.grad_update scalar_loss in
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
-  let sgd_jitted = jit ctx bindings sgd in
+  let sgd_jitted = jit ctx bindings (Seq (update, sgd)) in
   for step = 1 to steps do
     step_ref := step;
     sgd_jitted.run ();

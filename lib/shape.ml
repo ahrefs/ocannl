@@ -108,7 +108,7 @@ type t = {
   id : int;  (** A node that has the same shape as this shape. *)
 }
 [@@deriving fields, sexp]
-(** The datatype from which the actual Code shapes are computed.
+(** The datatype from which the actual Tensor shapes are computed.
 
     Mutability is sufficient to perform inference, since there is no need for backtracking and
     no explicit unification variables for now. [Unknown] stands for "not yet specified". *)
@@ -128,47 +128,6 @@ let update_kind ~f kind sh =
   | AxisKey.Output -> sh.output <- f sh.output
 
 let list_of_dims = function Given ls | Fixed ls | Inferred ls -> ls | Unknown -> []
-
-let shift_axes_of_kind kind sh ~f =
-  Map.of_alist_exn (module AxisKey)
-  @@ List.filter_map (Map.to_alist sh.axis_labels) ~f:(fun (({ in_axes; from_end }, v) as kv) ->
-         if not @@ AxisKey.equal_kind kind in_axes then Some kv
-         else
-           let from_end = f from_end in
-           if from_end < 1 then None else Some ({ in_axes; from_end }, v))
-
-let append_all_axes ?prefix ?suffix ~main () =
-  let affix, left =
-    match (prefix, suffix) with
-    | Some affix, None -> (affix, true)
-    | None, Some affix -> (affix, false)
-    | _ -> assert false
-  in
-  let ap affix dims = if left then list_of_dims affix @ dims else dims @ list_of_dims affix in
-  let ap affix = function
-    | Unknown -> Inferred (list_of_dims affix)
-    | Inferred dims -> Inferred (ap affix dims)
-    | Given dims -> Given (ap affix dims)
-    | Fixed dims -> Fixed (ap affix dims)
-  in
-  let batch = ap affix.batch main.batch in
-  let input = ap affix.input main.input in
-  let output = ap affix.output main.output in
-  let f ({ AxisKey.in_axes; from_end }, v) =
-    let offset = List.length @@ list_of_dims @@ dims_of_kind in_axes (if left then main else affix) in
-    ({ AxisKey.in_axes; from_end = from_end + offset }, v)
-  in
-  let axis_labels =
-    if left then
-      Map.to_alist affix.axis_labels |> List.map ~f
-      |> Fn.flip List.append @@ Map.to_alist main.axis_labels
-      |> Map.of_alist_exn (module AxisKey)
-    else
-      Map.to_alist main.axis_labels |> List.map ~f
-      |> Fn.flip List.append @@ Map.to_alist affix.axis_labels
-      |> Map.of_alist_exn (module AxisKey)
-  in
-  { main with batch; input; output; axis_labels }
 
 type compose_type =
   | Pointwise_bin  (** NumPy-style broadcast matching batch, input and output axes, e.g. as in [s1 + s2]. *)
@@ -1191,6 +1150,9 @@ let rec derive_projections (shapes : update_step) : projections =
       in
       assert (Array.length project_rhs = 1);
       let project_rhs1 = project_rhs.(0) in
+      assert (Array.length lhs_dims = Array.length project_rhs1);
+      assert (Array.length (to_dims cur_sh) = Array.length project_lhs);
+      assert (Array.length (to_dims sh) = Array.length project_rhs1 + 1);
       {
         product_space;
         product_iterators;
