@@ -57,28 +57,15 @@ type session_state = {
   mutable backprop_roots : t Map.M(Int).t;
       (** A backprop root is a tensor with a gradient that is not (currently) receiving gradients from
           another tensor. I.e. it is not currently used to compute a tensor with a gradient. *)
-  mutable shape_updates : Shape.update_step list;
-      (** We perform each update (at least) twice to propagate information between all subtensors:
-          first in postfix order while computing [t], then in prefix order by iterating over this stack. *)
 }
 
 let session_state =
-  {
-    next_id = 0;
-    forward_roots = Map.empty (module Int);
-    backprop_roots = Map.empty (module Int);
-    shape_updates = [];
-  }
+  { next_id = 0; forward_roots = Map.empty (module Int); backprop_roots = Map.empty (module Int) }
 
 let is_fwd_root t = Map.mem session_state.forward_roots t.id
 let remove_fwd_root t = session_state.forward_roots <- Map.remove session_state.forward_roots t.id
 let forward_roots () = session_state.forward_roots
 let backprop_roots () = session_state.backprop_roots
-
-let propagate_shape_updates () =
-  List.iter ~f:Shape.propagate_shapes session_state.shape_updates;
-  session_state.shape_updates <- []
-
 let default_value_prec = ref Ops.single
 let default_grad_prec = ref Ops.single
 
@@ -90,17 +77,8 @@ let session_error_printer = function
   | _ -> None
 
 let () = Stdlib.Printexc.register_printer session_error_printer
-
-let lazy_to_dims shape =
-  lazy
-    (propagate_shape_updates ();
-     Shape.to_dims shape)
-
-let lazy_projections shape_update =
-  lazy
-    (propagate_shape_updates ();
-     Shape.derive_projections shape_update)
-
+let lazy_to_dims shape = lazy (Shape.to_dims shape)
+let lazy_projections shape_update = lazy (Shape.derive_projections shape_update)
 let fetch_zeros array shape = Assignments.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
 let fetch_ones array shape = Assignments.Fetch { array; fetch_op = Constant 1.; dims = lazy_to_dims shape }
 let default_init_op = Ops.Constant_fill { values = [| 0.0 |]; strict = false }
@@ -111,7 +89,6 @@ let raw_binop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs1_is_grad ~t2 ~rhs2_i
   let shape_logic = Shape.Broadcast (logic, t1.shape, t2.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
   Shape.propagate_shapes local_shape_update;
-  session_state.shape_updates <- local_shape_update :: session_state.shape_updates;
   let projections = lazy_projections local_shape_update in
   let lhs = if lhs_is_grad then (Option.value_exn t.diff).grad else t.value in
   let rhs1 = if rhs1_is_grad then (Option.value_exn t1.diff).grad else t1.value in
@@ -123,7 +100,6 @@ let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
   let shape_logic = Shape.Transpose (logic, t1.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic } in
   Shape.propagate_shapes local_shape_update;
-  session_state.shape_updates <- local_shape_update :: session_state.shape_updates;
   let projections = lazy_projections local_shape_update in
   let lhs = if lhs_is_grad then (Option.value_exn t.diff).grad else t.value in
   let rhs = if rhs_is_grad then (Option.value_exn t1.diff).grad else t1.value in
@@ -156,7 +132,6 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
   in
   let local_shape_updates = List.map ~f:(fun logic -> Shape.{ shape; logic }) @@ shape_logics ts in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
-  session_state.shape_updates <- local_shape_updates @ session_state.shape_updates;
   let projections = lazy_projections @@ List.hd_exn local_shape_updates in
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let fwds = List.map2_exn ts fwd_embed ~f:(fun ti e -> if not e then Assignments.Noop else ti.forward) in
@@ -220,11 +195,7 @@ let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axi
     ?fetch_op () =
   let op_asn ~v ~projections =
     let open Assignments in
-    let dims =
-      lazy
-        (propagate_shape_updates ();
-         (Lazy.force projections).Indexing.lhs_dims)
-    in
+    let dims = lazy (Lazy.force projections).Indexing.lhs_dims in
     match (fetch_op, init_op) with
     | None, Some (Ops.Constant_fill { values = [| _ |]; strict = _ }) when not (is_require_grad grad_spec) ->
         (* The scalar literal case. *)
