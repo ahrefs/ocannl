@@ -434,7 +434,7 @@ type row_eqs = (dims * dims) list
 let rec subst_dim dim_env = function
   | Scaled { num; denom; dim } -> Scaled { num; denom; dim = subst_dim dim_env dim }
   | Dim _ as d -> d
-  | Var v as default -> Option.value ~default @@ Map.find dim_env v
+  | Var v as default -> Option.value ~default @@ Option.map ~f:(subst_dim dim_env) @@ Map.find dim_env v
 
 let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
 let take_from_end l n = List.rev @@ List.take (List.rev l) n
@@ -468,9 +468,10 @@ let rec normalize_row row (dim_env, row_env) : dim_env * row_env =
       if n1 = n2 then normalize_row { dims; row = r1 } (dim_env, row_env)
       else raise @@ Shape_error ("Inconsistent Total_elems constraints on the row", Row_mismatch (row, row))
   | { dims; row = Total_elems (n, Row_var v) } -> (
-      let row1 = { dims; row = Total_elems (n, Broadcastable) } in
       match Map.find row_env v with
-      | None -> normalize_row row1 (dim_env, row_env)
+      | None ->
+          (* Wait for more shape inference. *)
+          (dim_env, row_env)
       | Some { dims = dims2; row = row2 } ->
           normalize_row { dims = dims2 @ dims; row = Total_elems (n, row2) } (dim_env, row_env))
   | { dims; row = Total_elems (n, r) } when not @@ is_row_var r -> (
@@ -556,49 +557,50 @@ and unify_dim dim_env row_env dim_eqs : dim_env * row_env =
       unify_dim dim_env row_env @@ ({ eq with d2 = scale ~force_conv:true ~num ~denom dim } :: dim_eqs)
   | { d1; d2; fix1 = _; fix2 = _ } :: _ -> raise @@ Shape_error ("unify_dim", Dim_mismatch (d1, d2))
 
-(*
-let rec propagate_shapes { shape = cur_sh; logic } =
+let unify_shapes dim_env row_env { shape = cur_sh; logic } =
   match logic with
-  | Terminal (Range_over_offsets | Standard_uniform | Constant_fill { strict = false; _ }) -> ()
-  | Terminal (Constant_fill { values; strict = true }) -> (
-      if is_unknown cur_sh.input || is_unknown cur_sh.output || is_unknown cur_sh.batch then ()
-      else
-        let dims = to_dims cur_sh in
-        let axis_dims = axis_keys_to_idcs cur_sh |> Map.map ~f:(fun i -> dims.(i)) in
-        match Map.filter axis_dims ~f:(( = ) (-1)) |> Map.to_alist with
-        | [] -> ()
-        | _ :: _ :: _ ->
-            (* Too many unknowns to infer. Maybe some will get resolved top-down. *)
-            ()
-        | [ (unk_axis, _) ] ->
-            let len = Array.length values in
-            let upd_dim = len / abs (Array.fold ~init:1 ~f:( * ) dims) in
-            let upd_map = Map.update axis_dims unk_axis ~f:(fun _ -> upd_dim) in
-            let batch, input, output = axis_map_to_dims_bio upd_map in
-            let updated = match unk_axis.in_axes with Batch -> batch | Input -> input | Output -> output in
-            update_kind unk_axis.in_axes cur_sh ~f:(map_dims ~f:(fun _ -> Array.to_list updated)))
-  | Terminal (File_mapped (filename, prec)) -> (
-      if is_unknown cur_sh.input || is_unknown cur_sh.output || is_unknown cur_sh.batch then ()
-      else
-        let dims = to_dims cur_sh in
-        let axis_dims = axis_keys_to_idcs cur_sh |> Map.map ~f:(fun i -> dims.(i)) in
-        match Map.filter axis_dims ~f:(( = ) (-1)) |> Map.to_alist with
-        | [] -> ()
-        | _ :: _ :: _ ->
-            (* Too many unknowns to infer. Maybe some will get resolved top-down. *)
-            ()
-        | [ (unk_axis, _) ] ->
-            let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
-            let len = Unix.lseek fd 0 Unix.SEEK_END / Arrayjit.Ops.prec_in_bytes prec in
-            Unix.close fd;
-            let upd_dim = len / abs (Array.fold ~init:1 ~f:( * ) dims) in
-            let upd_map = Map.update axis_dims unk_axis ~f:(fun _ -> upd_dim) in
-            let batch, input, output = axis_map_to_dims_bio upd_map in
-            let updated = match unk_axis.in_axes with Batch -> batch | Input -> input | Output -> output in
-            update_kind unk_axis.in_axes cur_sh ~f:(map_dims ~f:(fun _ -> Array.to_list updated)))
-  | Transpose (Transpose, sh) -> ()
-  | _ -> ()
-*)
+  | Terminal (Range_over_offsets | Standard_uniform | Constant_fill { strict = false; _ }) ->
+      (dim_env, row_env)
+  | Terminal (Constant_fill { values; strict = true }) ->
+      let len = Array.length values in
+      let io_dims =
+        try List.map ~f:dim_to_int_exn @@ cur_sh.output.dims @ cur_sh.input.dims
+        with Invalid_argument _ ->
+          raise
+          @@ Shape_error
+               ( "unify_shapes Constant_fill strict: non-batch dimensions must be known",
+                 Shape_mismatch (cur_sh, cur_sh) )
+      in
+      let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in
+      let b_row = { dims = []; row = Total_elems (batch_elems, get_row_var ()) } in
+      unify_dims dim_env row_env [] [ (b_row, cur_sh.batch) ]
+  | Terminal (File_mapped (filename, prec)) ->
+      let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
+      let len = Unix.lseek fd 0 Unix.SEEK_END / Arrayjit.Ops.prec_in_bytes prec in
+      Unix.close fd;
+      let io_dims =
+        try List.map ~f:dim_to_int_exn @@ cur_sh.output.dims @ cur_sh.input.dims
+        with Invalid_argument _ ->
+          raise
+          @@ Shape_error
+               ( "unify_shapes Constant_fill strict: non-batch dimensions must be known",
+                 Shape_mismatch (cur_sh, cur_sh) )
+      in
+      let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in
+      let b_row = { dims = []; row = Total_elems (batch_elems, get_row_var ()) } in
+      unify_dims dim_env row_env [] [ (cur_sh.batch, b_row) ]
+  | Transpose (Transpose, sh) ->
+      unify_dims dim_env row_env []
+        [ (cur_sh.batch, sh.batch); (cur_sh.input, sh.output); (cur_sh.output, sh.input) ]
+  | Transpose (Pointwise_un, sh) ->
+      unify_dims dim_env row_env []
+        [ (cur_sh.batch, sh.batch); (cur_sh.input, sh.input); (cur_sh.output, sh.output) ]
+       (* | Broadcast (Compose, sh1, sh2) ->
+          [ (cur_sh.batch, sh.batch); (cur_sh.input, sh.input); (cur_sh.output, sh.output) ]
+
+        | Transpose (Batch_slice _, _)
+        | Transpose ( _, _) *)
+  | _ -> (dim_env, row_env)
 
 let indices_bio sh (type v) (arr : v array) =
   let n_batch = List.length sh.batch.dims in
