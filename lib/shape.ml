@@ -462,6 +462,10 @@ let rec base_row_spec = function
   | (Broadcastable | Fixed | Row_var _) as row_spec -> row_spec
   | Total_elems (_, row_spec) -> base_row_spec row_spec
 
+let rec plus1_row_spec = function
+  | (Broadcastable | Fixed | Row_var _) as row_spec -> row_spec
+  | Total_elems (n, row_spec) -> Total_elems (n + 1, plus1_row_spec row_spec)
+
 let rec normalize_row row (dim_env, row_env) : dim_env * row_env =
   match row with
   | { dims; row = Total_elems (n1, (Total_elems (n2, _) as r1)) } ->
@@ -595,12 +599,35 @@ let unify_shapes dim_env row_env { shape = cur_sh; logic } =
   | Transpose (Pointwise_un, sh) ->
       unify_dims dim_env row_env []
         [ (cur_sh.batch, sh.batch); (cur_sh.input, sh.input); (cur_sh.output, sh.output) ]
-       (* | Broadcast (Compose, sh1, sh2) ->
-          [ (cur_sh.batch, sh.batch); (cur_sh.input, sh.input); (cur_sh.output, sh.output) ]
-
-        | Transpose (Batch_slice _, _)
-        | Transpose ( _, _) *)
-  | _ -> (dim_env, row_env)
+  | Broadcast (Compose, sh1, sh2) ->
+      unify_dims dim_env row_env []
+        [
+          (cur_sh.batch, sh1.batch);
+          (cur_sh.batch, sh2.batch);
+          (cur_sh.input, sh2.input);
+          (cur_sh.output, sh1.output);
+          (sh1.input, sh2.output);
+        ]
+  | Broadcast (Pointwise_bin, sh1, sh2) ->
+      unify_dims dim_env row_env []
+        [
+          (cur_sh.batch, sh1.batch);
+          (cur_sh.batch, sh2.batch);
+          (cur_sh.input, sh1.input);
+          (cur_sh.input, sh2.input);
+          (cur_sh.output, sh1.output);
+          (cur_sh.output, sh2.output);
+        ]
+  | Transpose (Batch_slice { static_range; static_symbol = _ }, sh) ->
+      let slice_var = Var (get_var ()) in
+      let range_eq =
+        Option.to_list static_range
+        |> List.map ~f:(fun range -> { d1 = Dim range; fix1 = false; d2 = slice_var; fix2 = false })
+      in
+      let expanded_batch = { dims = cur_sh.batch.dims @ [ slice_var ]; row = plus1_row_spec sh.batch.row } in
+      unify_dims dim_env row_env range_eq
+        [ (cur_sh.batch, expanded_batch); (cur_sh.input, sh.input); (cur_sh.output, sh.output) ]
+  | Transpose (Permute _spec, _sh) | Broadcast (Einsum _spec, _sh, _) -> (dim_env, row_env)
 
 let indices_bio sh (type v) (arr : v array) =
   let n_batch = List.length sh.batch.dims in
