@@ -723,7 +723,26 @@ let update_state (dim_env, row_env) =
   state.dim_env <- dim_env;
   state.row_env <- row_env
 
-let row_to_dims dim_env row_env =
+let propagate_shapes update_step =
+  update_state @@ unify_shapes state.dim_env state.row_env update_step;
+  let upd row =
+    let expanded = subst_row state.row_env row in
+    { expanded with dims = List.map expanded.dims ~f:(subst_dim state.dim_env) }
+  in
+  let upd sh =
+    sh.batch <- upd sh.batch;
+    sh.input <- upd sh.input;
+    sh.output <- upd sh.output
+  in
+  upd update_step.shape;
+  match update_step.logic with
+  | Terminal _ -> ()
+  | Transpose (_, sh1) -> upd sh1
+  | Broadcast (_, sh1, sh2) ->
+      upd sh1;
+      upd sh2
+
+let rec row_to_dims dim_env row_env =
   let rec f = function
     | Dim (d, _) -> d
     | Var v as d -> (
