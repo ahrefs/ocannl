@@ -308,7 +308,7 @@ type shape_error = Shape_mismatch of t * t | Row_mismatch of dims * dims | Dim_m
 exception Shape_error of string * shape_error [@@deriving sexp]
 
 (** Given a fully-inferred shape, maps axes to their corresponding positions in an index using the
-    [Shape.to_dims] semantics. *)
+    [force_to_dims] semantics. *)
 let axis_keys_to_idcs (sh : t) : int axis_map =
   let b_dims =
     (* Enumerate axes backwards. *)
@@ -353,7 +353,7 @@ let axis_map_to_dims_bio (type a) ?(default : a option) (idcs : a axis_map) =
     List.iter out_axes ~f:(fun (i, v) -> out.(out_size - i) <- v);
     (bch, inp, out)
 
-(** Converts an axes-keyed map into an array of values using the [Shape.to_dims] semantics of axes.
+(** Converts an axes-keyed map into an array of values using the [force_to_dims] semantics of axes.
     If the map is incomplete and the [~default] is not given, the result might be invalid: gaps in
     the array are filled with an arbitrary one of the provided values. *)
 let axis_map_to_dims_index (type a) ?(default : a option) (idcs : a axis_map) : a array =
@@ -742,7 +742,7 @@ let propagate_shapes update_step =
       upd sh1;
       upd sh2
 
-let rec row_to_dims dim_env row_env =
+let rec force_row_to_dims dim_env row_env =
   let rec f = function
     | Dim (d, _) -> d
     | Var v as d -> (
@@ -752,16 +752,40 @@ let rec row_to_dims dim_env row_env =
     | Scaled { num; denom; dim } -> f @@ scale ~num ~denom ~force_conv:true dim
   in
   function
-  | { dims; row = Row_var v } as row1 ->
-      (match Map.find row_env v with
-      | None -> state.row_env <- Map.add_exn state.row_env ~key:v ~data:{ dims; row = Broadcastable }
-      | Some row2 -> update_state @@ unify_dims state.dim_env state.row_env [] [ (row1, row2) ]);
-      Array.of_list_map dims ~f
-  | { dims; row = _ } -> Array.of_list_map dims ~f
+  | { dims; row = Row_var v } as row1 -> (
+      match Map.find row_env v with
+      | None ->
+          state.row_env <- Map.add_exn state.row_env ~key:v ~data:{ dims; row = Broadcastable };
+          Array.of_list_map dims ~f
+      | Some row2 ->
+          update_state @@ unify_dims state.dim_env state.row_env [] [ (row1, row2) ];
+          force_row_to_dims dim_env row_env { dims = row2.dims @ dims; row = row2.row })
+  | { dims; row = Total_elems (_, row) } -> force_row_to_dims dim_env row_env { dims; row }
+  | { dims; row = Broadcastable | Fixed } -> Array.of_list_map dims ~f
+
+(** Uses the matrix convention of putting the input axes last.
+    Note: [force_to_dims] is "destructive": it closes shapes that remain incomplete after inference. *)
+let force_to_dims (sh : t) : int array =
+  Array.concat_map ~f:(force_row_to_dims state.dim_env state.row_env) [| sh.batch; sh.output; sh.input |]
+
+let rec row_to_labels dim_env row_env =
+  let rec f = function
+    | Dim (_, Some l) -> l
+    | Dim (_, None) -> ""
+    | Var v -> ( match Map.find dim_env v with None -> Option.value v.label ~default:"" | Some dim -> f dim)
+    | Scaled { num; denom; dim } -> f @@ scale ~num ~denom ~force_conv:true dim
+  in
+  function
+  | { dims; row = Row_var v } -> (
+      match Map.find row_env v with
+      | None -> Array.of_list_map dims ~f
+      | Some row2 -> row_to_labels dim_env row_env { dims = row2.dims @ dims; row = row2.row })
+  | { dims; row = Total_elems (_, row) } -> row_to_labels dim_env row_env { dims; row }
+  | { dims; row = Broadcastable | Fixed } -> Array.of_list_map dims ~f
 
 (** Uses the matrix convention of putting the input axes last. *)
-let to_dims (sh : t) : int array =
-  Array.concat_map ~f:(row_to_dims state.dim_env state.row_env) [| sh.batch; sh.output; sh.input |]
+let to_labels (sh : t) : string array =
+  Array.concat_map ~f:(row_to_labels state.dim_env state.row_env) [| sh.batch; sh.output; sh.input |]
 
 (** *** Projection inference *** *)
 

@@ -77,7 +77,7 @@ let session_error_printer = function
   | _ -> None
 
 let () = Stdlib.Printexc.register_printer session_error_printer
-let lazy_to_dims shape = lazy (Shape.to_dims shape)
+let lazy_to_dims shape = lazy (Shape.force_to_dims shape)
 let lazy_projections shape_update = lazy (Shape.derive_projections shape_update)
 let fetch_zeros array shape = Assignments.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
 let fetch_ones array shape = Assignments.Fetch { array; fetch_op = Constant 1.; dims = lazy_to_dims shape }
