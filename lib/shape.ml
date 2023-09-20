@@ -113,9 +113,9 @@ type row =
 
 let uid = ref 0
 
-let get_var () =
+let get_var ?label () =
   Int.incr uid;
-  { id = !uid; label = None }
+  { id = !uid; label }
 
 let get_row_var () =
   Int.incr uid;
@@ -572,6 +572,24 @@ and unify_dim dim_env row_env dim_eqs : dim_env * row_env =
       unify_dim dim_env row_env @@ ({ eq with d2 = scale ~force_conv:true ~num ~denom dim } :: dim_eqs)
   | { d1; d2; fix1 = _; fix2 = _ } :: _ -> raise @@ Shape_error ("unify_dim", Dim_mismatch (d1, d2))
 
+let einsum_slot_spec_to_dims_bio ?b_row ?i_row ?o_row labels =
+  let b_dims, i_dims, o_dims = axis_map_to_dims_bio labels.labels in
+  let vars = Hashtbl.create (module String) in
+  let f = function
+    | Either.First label -> Var (Hashtbl.find_or_add vars label ~default:(fun () -> get_var ~label ()))
+    | Second _ -> Var (get_var ())
+  in
+  let to_dim = Array.(Fn.compose to_list @@ map ~f) in
+  let upd_row = function None, true -> Some (get_row_var ()) | old, _ -> old in
+  let b_row = upd_row (b_row, labels.bcast_batch) in
+  let i_row = upd_row (i_row, labels.bcast_input) in
+  let o_row = upd_row (o_row, labels.bcast_output) in
+  let to_row v = Option.value v ~default:Broadcastable in
+  let batch = { dims = to_dim b_dims; row = to_row b_row } in
+  let input = { dims = to_dim i_dims; row = to_row i_row } in
+  let output = { dims = to_dim o_dims; row = to_row o_row } in
+  (b_row, i_row, o_row, batch, input, output)
+
 let unify_shapes dim_env row_env { shape = cur_sh; logic } =
   match logic with
   | Terminal (Range_over_offsets | Standard_uniform | Constant_fill { strict = false; _ }) ->
@@ -639,7 +657,7 @@ let unify_shapes dim_env row_env { shape = cur_sh; logic } =
       unify_dims dim_env row_env range_eq
         [ (cur_sh.batch, expanded_batch); (cur_sh.input, sh.input); (cur_sh.output, sh.output) ]
   | Transpose (Permute spec, sh) ->
-      let _ls_rhs, _ls_lhs =
+      let ls_rhs, ls_lhs =
         match einsum_of_spec spec with
         | ls_rhs, None, ls_lhs -> (ls_rhs, ls_lhs)
         | _ ->
@@ -647,11 +665,43 @@ let unify_shapes dim_env row_env { shape = cur_sh; logic } =
             @@ Shape_error
                  ("Invalid permutation spec (expected one argument): " ^ spec, Shape_mismatch (sh, cur_sh))
       in
-      (* FIXME: NOT IMPLEMENTED YET *)
-      (dim_env, row_env)
-  | Broadcast (Einsum _spec, _sh, _) ->
-      (* FIXME: NOT IMPLEMENTED YET *)
-      (dim_env, row_env)
+      let b_row, i_row, o_row, b_rhs, i_rhs, o_rhs = einsum_slot_spec_to_dims_bio ls_rhs in
+      let _, _, _, b_lhs, i_lhs, o_lhs = einsum_slot_spec_to_dims_bio ?b_row ?i_row ?o_row ls_lhs in
+      unify_dims dim_env row_env []
+        [
+          (cur_sh.batch, b_lhs);
+          (sh.batch, b_rhs);
+          (cur_sh.input, i_lhs);
+          (sh.input, i_rhs);
+          (cur_sh.output, o_lhs);
+          (sh.output, o_rhs);
+        ]
+  | Broadcast (Einsum spec, sh1, sh2) ->
+      let ls_rhs1, ls_rhs2, ls_lhs =
+        match einsum_of_spec spec with
+        | ls_rhs1, Some ls_rhs2, ls_lhs -> (ls_rhs1, ls_rhs2, ls_lhs)
+        | _, None, _ ->
+            raise
+            @@ Shape_error
+                 ("Invalid permutation spec (expected one argument): " ^ spec, Shape_mismatch (sh1, sh2))
+      in
+      let b_row, i_row, o_row, b_rhs1, i_rhs1, o_rhs1 = einsum_slot_spec_to_dims_bio ls_rhs1 in
+      let b_row, i_row, o_row, b_rhs2, i_rhs2, o_rhs2 =
+        einsum_slot_spec_to_dims_bio ?b_row ?i_row ?o_row ls_rhs2
+      in
+      let _, _, _, b_lhs, i_lhs, o_lhs = einsum_slot_spec_to_dims_bio ?b_row ?i_row ?o_row ls_lhs in
+      unify_dims dim_env row_env []
+        [
+          (cur_sh.batch, b_lhs);
+          (sh1.batch, b_rhs1);
+          (sh2.batch, b_rhs2);
+          (cur_sh.input, i_lhs);
+          (sh1.input, i_rhs1);
+          (sh2.input, i_rhs2);
+          (cur_sh.output, o_lhs);
+          (sh1.output, o_rhs1);
+          (sh2.output, o_rhs2);
+        ]
 
 let indices_bio sh (type v) (arr : v array) =
   let n_batch = List.length sh.batch.dims in
