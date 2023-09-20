@@ -94,7 +94,7 @@ let iterated dim = dim > 1
 let opt_symbol d = if iterated d then Some (get_symbol ()) else None
 let opt_iterator = function None -> Fixed_idx 0 | Some sym -> Iterator sym
 
-(** Projections for iterating over a terminal, or for a pointwise unary operator. *)
+(** Projections for a pointwise unary operator. *)
 let identity_projections ~lhs_dims =
   let product_iterators = Array.map lhs_dims ~f:opt_symbol in
   let project_lhs = Array.map product_iterators ~f:opt_iterator in
