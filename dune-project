@@ -35,6 +35,7 @@
   printbox-text
   npy
   stdio
+  num
   ppxlib
   ppx_jane
   ppx_expect

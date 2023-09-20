@@ -7,7 +7,7 @@
   printbox-text
   npy
   stdio
-  dynlink
+  num
   str
   ; mem_usage
   ppx_minidebug.runtime
