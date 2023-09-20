@@ -572,14 +572,10 @@ and unify_dim dim_env row_env dim_eqs : dim_env * row_env =
       unify_dim dim_env row_env @@ ({ eq with d2 = scale ~force_conv:true ~num ~denom dim } :: dim_eqs)
   | { d1; d2; fix1 = _; fix2 = _ } :: _ -> raise @@ Shape_error ("unify_dim", Dim_mismatch (d1, d2))
 
-let einsum_slot_spec_to_dims_bio ?b_row ?i_row ?o_row labels =
+let axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels =
   let b_dims, i_dims, o_dims = axis_map_to_dims_bio labels.labels in
   let vars = Hashtbl.create (module String) in
-  let f = function
-    | Either.First label -> Var (Hashtbl.find_or_add vars label ~default:(fun () -> get_var ~label ()))
-    | Second _ -> Var (get_var ())
-  in
-  let to_dim = Array.(Fn.compose to_list @@ map ~f) in
+  let to_dim = Array.(Fn.compose to_list @@ map ~f:(f vars)) in
   let upd_row = function None, true -> Some (get_row_var ()) | old, _ -> old in
   let b_row = upd_row (b_row, labels.bcast_batch) in
   let i_row = upd_row (i_row, labels.bcast_input) in
@@ -589,6 +585,13 @@ let einsum_slot_spec_to_dims_bio ?b_row ?i_row ?o_row labels =
   let input = { dims = to_dim i_dims; row = to_row i_row } in
   let output = { dims = to_dim o_dims; row = to_row o_row } in
   (b_row, i_row, o_row, batch, input, output)
+
+let einsum_slot_spec_to_dims_bio ?b_row ?i_row ?o_row labels =
+  let f vars = function
+    | Either.First label -> Var (Hashtbl.find_or_add vars label ~default:(fun () -> get_var ~label ()))
+    | Second _ -> Var (get_var ())
+  in
+  axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels
 
 let unify_shapes dim_env row_env { shape = cur_sh; logic } =
   match logic with
@@ -797,6 +800,27 @@ let make ?(fix_b = false) ?(fix_i = false) ?(fix_o = false) ?batch_dims ?input_d
   let deduce_within_shape = Option.value deduced ~default:Not_constrained in
   { input; output; batch; deduce_within_shape; id }
 
+let shape_spec_to_dims_bio ?b_row ?i_row ?o_row labels =
+  let f vars = function
+    | Either.First s when String.contains s '=' -> (
+        let label, dim =
+          match String.split s ~on:'=' with
+          | [ l; d ] -> (l, d)
+          | _ -> invalid_arg "shape_spec_to_dims_bio: too many '='"
+        in
+        try Dim (Int.of_string dim, Some label)
+        with _ -> invalid_arg "shape_spec_to_dims_bio: int expected after '='")
+    | First label -> Var (Hashtbl.find_or_add vars label ~default:(fun () -> get_var ~label ()))
+    | Second d -> Dim (d, None)
+  in
+  axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels
+
+let of_spec ?deduced ~id spec =
+  let _, _, _, batch, input, output = shape_spec_to_dims_bio @@ axis_labels_of_spec spec in
+  let deduce_within_shape = Option.value deduced ~default:Not_constrained in
+  { input; output; batch; deduce_within_shape; id }
+
+  
 let to_string_hum ?(style = `Axis_size) sh =
   let n_outputs = List.length @@ sh.output.dims in
   let n_batch = List.length @@ sh.batch.dims in
