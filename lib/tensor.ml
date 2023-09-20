@@ -191,8 +191,8 @@ let unop ~op_label ?desc_label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
   op ~op_label ?desc_label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1 ]
 
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced ?init_op
-    ?fetch_op () =
+let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes
+    ?output_axes ?deduced ?init_op ?fetch_op () =
   let op_asn ~v ~projections =
     let open Assignments in
     let dims = lazy (Lazy.force projections).Indexing.lhs_dims in
@@ -218,61 +218,65 @@ let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?axi
         Fetch { array = v; fetch_op; dims }
   in
   let grad_asn ~v:_ ~g:_ ~projections:_ = Assignments.Noop in
-  let make_shape = Shape.make ?batch_dims ?input_dims ?output_dims ?axis_labels ?deduced () in
+  let make_shape =
+    Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced ()
+  in
   op ~op_label:label ?desc_label ?compose_op:None ?transpose_op:None ?init_op ~op_asn ~grad_asn ~grad_spec
     make_shape []
 
-let error_if_unknown_shape m =
-  match m.shape with
-  | { input = Unknown; _ } -> raise @@ Session_error ("Shape of inputs is still unknown", Some m)
-  | { output = Unknown; _ } -> raise @@ Session_error ("Shape of outputs is still unknown", Some m)
-  | { batch = Unknown; _ } -> raise @@ Session_error ("Shape of batching is still unknown", Some m)
-  | { output = Inferred []; _ } ->
-      raise @@ Session_error ("Shape of outputs is still empty -- missing shape information", Some m)
-  | { input = _; output = _; batch = _; axis_labels = _; deduce_within_shape_constraints = _; id = _ } -> ()
-
 let float_to_label v = Float.to_string_hum ~strip_zero:true v
 
-let number ?desc_label ?(axis_label = "") ?(grad_spec = Prohibit_grad) c =
+let number ?desc_label ?axis_label ?(grad_spec = Prohibit_grad) c =
   (* Note: no axis label so that we do not conflict with user labels. *)
-  term ?desc_label ~label:(float_to_label c) ~grad_spec ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ]
-    ~axis_labels:axis_label
-    ~init_op:(Constant_fill { values = [| c |]; strict = true })
-    ()
+  let label = float_to_label c in
+  let init_op = Ops.Constant_fill { values = [| c |]; strict = true } in
+  let result = term ?desc_label ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~init_op in
+  match axis_label with
+  | None -> result ~output_dims:[ 1 ] ()
+  | Some axis_label -> result ~output_axes:[ (axis_label, 1) ] ()
 
-let ndarray ?desc_label ?(grad_spec = Prohibit_grad) ?(batch_dims = []) ?(input_dims = []) ?(output_dims = [])
-    ?axis_labels ?label ?(strict = true) values =
+let ndarray ?desc_label ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?output_dims ?batch_axes
+    ?input_axes ?output_axes ?label ?(strict = true) values =
+  let to_dim_list dims axes =
+    Option.value ~default:[] @@ Option.first_some dims @@ Option.map axes ~f:(List.map ~f:snd)
+  in
+  let batch_ds = to_dim_list batch_dims batch_axes in
+  let output_ds = to_dim_list output_dims output_axes in
+  let input_ds = to_dim_list input_dims input_axes in
   let label =
     match label with
     | Some label -> label
     | None ->
         Stdlib.Format.pp_set_geometry Stdlib.Format.str_formatter ~max_indent:!max_sublabel_length
           ~margin:(!max_sublabel_length * 2);
-        let dims = Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list in
+        let dims = Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list in
         let ndarr = Ndarray.create_array Ops.double ~dims (Constant_fill { values; strict }) in
         let ( ! ) = List.length in
-        Ndarray.pp_array_inline ~num_batch_axes:!batch_dims ~num_output_axes:!output_dims
-          ~num_input_axes:!input_dims Stdlib.Format.str_formatter ndarr;
+        Ndarray.pp_array_inline ~num_batch_axes:!batch_ds ~num_output_axes:!output_ds
+          ~num_input_axes:!input_ds Stdlib.Format.str_formatter ndarr;
         Stdlib.Format.flush_str_formatter ()
   in
   let label =
     if String.contains label '\n' then
-      "c" ^ Indexing.dims_to_string
-      @@ Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list
+      "c" ^ Indexing.dims_to_string @@ Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list
     else label
   in
-  term ?desc_label ~grad_spec ~batch_dims ~input_dims ~output_dims ?axis_labels ~deduced:Not_constrained
-    ~label
+  let batch_dims = Option.first_some batch_dims @@ Option.some_if (Option.is_none batch_axes) [] in
+  let input_dims = Option.first_some input_dims @@ Option.some_if (Option.is_none input_axes) [] in
+  let output_dims = Option.first_some output_dims @@ Option.some_if (Option.is_none output_axes) [] in
+  term ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
+    ~deduced:Not_constrained ~label
     ~init_op:(Constant_fill { values; strict })
     ()
 
-let param ?desc_label ?axis_labels ?input_dims ?output_dims ?deduced ?(strict = false) ?values label =
+let param ?desc_label ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?(strict = false) ?values
+    label =
   let init_op =
     match values with Some values -> Ops.Constant_fill { values; strict } | None -> Standard_uniform
   in
   let t =
-    term ?desc_label ~grad_spec:Require_grad ~batch_dims:[] ?input_dims ?output_dims ?axis_labels ?deduced
-      ~label ~init_op ()
+    term ?desc_label ~grad_spec:Require_grad ~batch_dims:[] ?input_dims ?output_dims ?input_axes ?output_axes
+      ?deduced ~label ~init_op ()
   in
   let v = t.value in
   assert (LA.isnt_true v.virtual_);
@@ -342,8 +346,8 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
   let rec to_dag { subtensor = t; embedded } : PrintBox_utils.dag =
     let id = Int.to_string t.id in
     let children = if single_node then [] else List.map ~f:to_dag t.children in
-    let labels = Shape.axis_map_to_dims_index t.shape.axis_labels in
     let indices = Shape.default_display_indices t.shape in
+    let labels = Shape.to_labels t.shape in
     let where_located a =
       LA.(
         (* if Option.is_some @@ Lazy.force a.array then "<hosted>" else *)
@@ -434,6 +438,7 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
     if String.is_substring (String.lowercase diff.grad.label) ~substring:"grad" then diff.grad.label
     else diff.grad.label ^ " Gradient"
   in
+  let labels = Shape.to_labels t.shape in
   let indices =
     match style with
     | `Default -> Shape.default_display_indices sh
@@ -446,32 +451,29 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
         Shape.axis_map_to_dims_index p_labels
     | `Label_layout label_idcs ->
         let inv_labels =
-          Map.to_alist sh.axis_labels |> List.map ~f:(fun (a, b) -> (b, a)) |> Map.of_alist (module String)
+          Array.mapi labels ~f:(fun i l -> (l, i)) |> Array.to_list |> Map.of_alist (module String)
         in
         let inv_labels =
           match inv_labels with
           | `Duplicate_key l -> raise @@ Session_error ("`Label_layout found a repeating label: " ^ l, Some t)
           | `Ok inv_labels -> inv_labels
         in
-        let idcs =
-          List.map label_idcs ~f:(fun (l, i) ->
-              match Map.find inv_labels l with
-              | Some axis -> (axis, i)
-              | None -> raise @@ Session_error ("`Label_layout label not found in shape: " ^ l, Some t))
-        in
-        Shape.axis_map_to_dims_index @@ Map.of_alist_exn (module Shape.AxisKey) idcs
+        let result = Array.create ~len:(Array.length labels) 0 in
+        List.iter label_idcs ~f:(fun (l, priority) ->
+            match Map.find inv_labels l with
+            | Some pos -> result.(pos) <- priority
+            | None -> raise @@ Session_error ("`Label_layout label not found in shape: " ^ l, Some t));
+        result
     | `Inline -> [||]
   in
   let needs_spec =
-    Fn.non Map.is_empty sh.axis_labels
-    || Shape.(List.exists ~f:(( = ) 1) @@ list_of_dims @@ dims_of_kind Input sh)
+    Array.exists ~f:(Fn.non String.is_empty) labels
+    || Shape.(List.exists ~f:(equal_dim @@ Dim (1, None)) sh.input.dims)
   in
-  let labels = Shape.axis_map_to_dims_index ~default:"" sh.axis_labels in
   let axes_spec = if needs_spec then Some (Shape.to_string_hum ~style:`Only_labels sh) else None in
-  let num_axes kind = List.length Shape.(list_of_dims @@ dims_of_kind kind sh) in
-  let num_batch_axes = num_axes Shape.AxisKey.Batch in
-  let num_input_axes = num_axes Shape.AxisKey.Input in
-  let num_output_axes = num_axes Shape.AxisKey.Output in
+  let num_batch_axes = List.length sh.batch.dims in
+  let num_input_axes = List.length sh.input.dims in
+  let num_output_axes = List.length sh.output.dims in
   (* TODO: code sharing with [to_dag] *)
   (if not @@ Lazy.is_val t.value.array then Stdlib.Format.printf "<not-in-yet>@ "
    else

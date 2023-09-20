@@ -146,25 +146,44 @@ let rec pointdiv ?desc_label ~grad_spec t1 t2 =
   Tensor.binop ~compose_op:Pointwise_bin ~op_label:"/." ~op_asn ~grad_asn ?desc_label ~grad_spec t1 t2
 
 let range ?desc_label ?(grad_spec = Tensor.Prohibit_grad) ?axis_label upto =
-  Tensor.term ?desc_label ~grad_spec
-    ~label:("0" ^ "..." ^ Int.to_string upto)
-    ~batch_dims:[] ~input_dims:[]
-    ~output_dims:[ upto + 1 ]
-    ?axis_labels:axis_label ~init_op:Range_over_offsets ()
+  let result =
+    Tensor.term ?desc_label ~grad_spec
+      ~label:("0" ^ "..." ^ Int.to_string upto)
+      ~batch_dims:[] ~input_dims:[] ~init_op:Range_over_offsets
+  in
+  match axis_label with
+  | None -> result ~output_dims:[ upto + 1 ] ()
+  | Some l -> result ~output_axes:[ (l, upto + 1) ] ()
 
-let range_of_shape ?desc_label ?(grad_spec = Tensor.Prohibit_grad) ?(batch_dims = []) ?(input_dims = [])
-    ?(output_dims = []) ?axis_labels () =
-  let dims = Array.concat_map [| batch_dims; output_dims; input_dims |] ~f:Array.of_list in
-  Tensor.term ?desc_label ~grad_spec ~batch_dims ~input_dims ~output_dims ?axis_labels
+let range_of_shape ?desc_label ?(grad_spec = Tensor.Prohibit_grad) ?batch_dims ?input_dims ?output_dims
+    ?batch_axes ?input_axes ?output_axes () =
+  let f (dims, axes) =
+    Array.of_list @@ Option.value ~default:[] @@ Option.first_some dims
+    @@ Option.map axes ~f:(List.map ~f:snd)
+  in
+  let dims =
+    Array.concat_map ~f [| (batch_dims, batch_axes); (output_dims, output_axes); (input_dims, input_axes) |]
+  in
+  let batch_dims = Option.first_some batch_dims @@ Option.some_if (Option.is_none batch_axes) [] in
+  let input_dims = Option.first_some input_dims @@ Option.some_if (Option.is_none input_axes) [] in
+  let output_dims = Option.first_some output_dims @@ Option.some_if (Option.is_none output_axes) [] in
+  Tensor.term ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
     ~label:("r" ^ Indexing.dims_to_string dims)
     ~init_op:Range_over_offsets ()
 
 (** In {!Tensor.term} the omitted axes are {!Shape.Unknown} -- to be inferred, here they are known and empty.  *)
-let data ?desc_label ?axis_labels ?(grad_spec = Tensor.Prohibit_grad) ~label ?(batch_dims = [])
-    ?(input_dims = []) ?(output_dims = []) fetch_op =
-  if List.for_all ~f:List.is_empty [ batch_dims; input_dims; output_dims ] then
-    invalid_arg "Operation.data: data ops do not support shape inference, specify dims";
-  Tensor.term ?desc_label ~label ~grad_spec ~batch_dims ~input_dims ~output_dims ?axis_labels ~fetch_op ()
+let data ?desc_label ?(grad_spec = Tensor.Prohibit_grad) ~label ?batch_dims ?input_dims ?output_dims
+    ?batch_axes ?input_axes ?output_axes fetch_op =
+  let batch_dims = Option.first_some batch_dims @@ Option.some_if (Option.is_none batch_axes) [] in
+  let input_dims = Option.first_some input_dims @@ Option.some_if (Option.is_none input_axes) [] in
+  let output_dims = Option.first_some output_dims @@ Option.some_if (Option.is_none output_axes) [] in
+  if
+    List.for_all
+      ~f:(Fn.compose List.is_empty @@ Option.value ~default:[])
+      [ batch_dims; input_dims; output_dims ]
+  then invalid_arg "Operation.data: data ops do not support shape inference, specify dims";
+  Tensor.term ?desc_label ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes
+    ?output_axes ~fetch_op ()
 
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient =
@@ -172,10 +191,6 @@ let stop_gradient =
   let grad_asn ~v:_ ~g:_ ~t1:_ ~projections:_ = Assignments.Noop in
   let%cd op_asn ~v ~t1 ~projections = v =: v1 in
   Tensor.unop ~transpose_op:Pointwise_un ~op_label:"stop_grad" ~op_asn ~grad_asn ~grad_spec:Prohibit_grad
-
-(** A [stop_broadcast] mutates the partially-inferred shape of a tensor in-place, substituting-in
-    a [Fixed] marker on the dimensions. This way we avoid introducing a new node. *)
-let stop_broadcast t = Shape.set_dims_type t.Tensor.shape Shape.fixed
 
 let slice ?desc_label ~grad_spec (batch_idx : Indexing.static_symbol) t1 : Tensor.t =
   let module NTDSL = Initial_NTDSL in
@@ -201,7 +216,9 @@ let embed_symbol ?desc_label static_sym : Tensor.t =
       }
   in
   let grad_asn ~v:_ ~g:_ ~projections:_ = Assignments.Noop in
-  Tensor.op ?desc_label ~op_label:"!@" ~op_asn ~grad_asn ~grad_spec:Prohibit_grad (Shape.make ~batch_dims:[] ~input_dims:[] ~output_dims:[1] ()) []
+  Tensor.op ?desc_label ~op_label:"!@" ~op_asn ~grad_asn ~grad_spec:Prohibit_grad
+    (Shape.make ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ())
+    []
 
 module DO = struct
   let ( * ) = matmul ~grad_spec:If_needed
@@ -235,7 +252,6 @@ module TDSL = struct
   let range = range ~grad_spec:If_needed
   let range_of_shape = range_of_shape ~grad_spec:If_needed
   let data = data
-  let stop_broadcast = stop_broadcast
   let stop_gradient = stop_gradient
 
   let init_const ~l ?(b = []) ?(i = []) ?(o = []) values =

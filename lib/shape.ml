@@ -389,46 +389,6 @@ let axes_with_pseudo_labels =
   Map.mapi ~f:(fun ~key ~data ->
       match data with Either.First l -> l | Either.Second _ -> gen_label_of_axis key)
 
-let default_display_indices sh =
-  let axes = axis_keys_to_idcs sh |> Map.map ~f:(fun _ -> 0) in
-  let occupied = Array.create ~len:5 false in
-  let set_occu prio =
-    occupied.(prio + 5) <- true;
-    prio
-  in
-  let occu prio = occupied.(prio + 5) in
-  let num_input_axes = List.length sh.input.dims in
-  let remaining =
-    Stack.of_list
-    @@ List.filter ~f:(Map.mem axes)
-    @@ AxisKey.
-         [
-           { in_axes = Input; from_end = 1 };
-           { in_axes = Output; from_end = 1 };
-           { in_axes = Input; from_end = 2 };
-           { in_axes = Output; from_end = 2 };
-           (if num_input_axes > 1 then { in_axes = Batch; from_end = 1 }
-            else { in_axes = Output; from_end = 3 });
-           { in_axes = Batch; from_end = 1 };
-           { in_axes = Batch; from_end = 2 };
-           { in_axes = Input; from_end = 3 };
-           { in_axes = Output; from_end = 3 };
-           { in_axes = Input; from_end = 4 };
-           { in_axes = Output; from_end = 4 };
-           { in_axes = Input; from_end = 5 };
-           { in_axes = Output; from_end = 5 };
-         ]
-  in
-  let rec loop offset axes =
-    if Stack.is_empty remaining || offset > 5 then axes
-    else if Fn.non occu ~-offset then
-      loop (offset + 1)
-      @@ Map.change axes (Stack.pop_exn remaining) ~f:(Option.map ~f:(fun _ -> set_occu ~-offset))
-    else loop (offset + 1) axes
-  in
-  let axes = loop 1 axes in
-  axis_map_to_dims_index axes
-
 type dim_env = dim Map.M(Dim_var).t
 (** Note: The substituted variables can appear in the substitutions. *)
 
@@ -793,8 +753,10 @@ open Arrayjit.Indexing
 
 (** Computes the indexing into subtensors given the shape information of a tensor. The processing
     mirrors [propagate_shapes], but [derive_projections] should only be invoked when the shapes
-    are inferred already. *)
-let derive_projections _shape_update = identity_projections
+    are inferred already. Note: the shape will become closed. *)
+let derive_projections shape_update =
+  (* FIXME: NOT IMPLEMENTED YET *)
+  identity_projections ~lhs_dims:(force_to_dims shape_update.shape)
 
 let backprop_ith_arg ~from_1 projections =
   let project_lhs = projections.project_rhs.(from_1 - 1) in
@@ -802,19 +764,14 @@ let backprop_ith_arg ~from_1 projections =
   project_rhs.(from_1 - 1) <- projections.project_lhs;
   { projections with project_lhs; project_rhs }
 
+(** *** Shape builders *** *)
+
 let make ?(fix_b = false) ?(fix_i = false) ?(fix_o = false) ?batch_dims ?input_dims ?output_dims ?batch_axes
     ?input_axes ?output_axes ?deduced ~id () =
-  let make_row fix = function _ when fix -> Fixed | None -> get_row_var () | Some _ -> Broadcastable in
+  let make_row fix = if fix then Fixed else Broadcastable in
   (* FIXME: handle axis labels. *)
-  let make_dims fix ds =
-    { dims = List.map ~f:(fun d -> Dim (d, None)) @@ Option.value ~default:[] ds; row = make_row fix ds }
-  in
-  let make_axes fix ds =
-    {
-      dims = List.map ~f:(fun (l, d) -> Dim (d, Some l)) @@ Option.value ~default:[] ds;
-      row = make_row fix ds;
-    }
-  in
+  let make_dims fix ds = { dims = List.map ~f:(fun d -> Dim (d, None)) ds; row = make_row fix } in
+  let make_axes fix ds = { dims = List.map ~f:(fun (l, d) -> Dim (d, Some l)) ds; row = make_row fix } in
   let make_unknown () = { dims = []; row = get_row_var () } in
   let batch =
     match (batch_dims, batch_axes) with
@@ -863,7 +820,21 @@ let of_spec ?deduced ~id spec =
   let deduce_within_shape = Option.value deduced ~default:Not_constrained in
   { input; output; batch; deduce_within_shape; id }
 
-  
+(** A [stop_broadcast] mutates the partially-inferred shape of a tensor in-place, substituting-in
+    a [Fixed] marker on the dimensions. This way we avoid introducing a new tensor. *)
+let stop_broadcast sh =
+  let rec fix_base = function
+    | Broadcastable | Fixed -> Fixed
+    | Row_var _ as row ->
+        update_state
+        @@ unify_dims state.dim_env state.row_env [] [ ({ dims = []; row }, { dims = []; row = Fixed }) ];
+        Fixed
+    | Total_elems (n, row_spec) -> Total_elems (n, fix_base row_spec)
+  in
+  sh.batch <- { sh.batch with row = fix_base sh.batch.row };
+  sh.input <- { sh.input with row = fix_base sh.input.row };
+  sh.output <- { sh.output with row = fix_base sh.output.row }
+
 let to_string_hum ?(style = `Axis_size) sh =
   let n_outputs = List.length @@ sh.output.dims in
   let n_batch = List.length @@ sh.batch.dims in
@@ -894,3 +865,43 @@ let to_string_hum ?(style = `Axis_size) sh =
   else if String.is_empty batch_dims then input_dims ^ "->" ^ output_dims
   else if String.is_empty input_dims then batch_dims ^ "|" ^ output_dims
   else batch_dims ^ "|" ^ input_dims ^ "->" ^ output_dims
+
+let default_display_indices sh =
+  let axes = axis_keys_to_idcs sh |> Map.map ~f:(fun _ -> 0) in
+  let occupied = Array.create ~len:5 false in
+  let set_occu prio =
+    occupied.(prio + 5) <- true;
+    prio
+  in
+  let occu prio = occupied.(prio + 5) in
+  let num_input_axes = List.length sh.input.dims in
+  let remaining =
+    Stack.of_list
+    @@ List.filter ~f:(Map.mem axes)
+    @@ AxisKey.
+         [
+           { in_axes = Input; from_end = 1 };
+           { in_axes = Output; from_end = 1 };
+           { in_axes = Input; from_end = 2 };
+           { in_axes = Output; from_end = 2 };
+           (if num_input_axes > 1 then { in_axes = Batch; from_end = 1 }
+            else { in_axes = Output; from_end = 3 });
+           { in_axes = Batch; from_end = 1 };
+           { in_axes = Batch; from_end = 2 };
+           { in_axes = Input; from_end = 3 };
+           { in_axes = Output; from_end = 3 };
+           { in_axes = Input; from_end = 4 };
+           { in_axes = Output; from_end = 4 };
+           { in_axes = Input; from_end = 5 };
+           { in_axes = Output; from_end = 5 };
+         ]
+  in
+  let rec loop offset axes =
+    if Stack.is_empty remaining || offset > 5 then axes
+    else if Fn.non occu ~-offset then
+      loop (offset + 1)
+      @@ Map.change axes (Stack.pop_exn remaining) ~f:(Option.map ~f:(fun _ -> set_occu ~-offset))
+    else loop (offset + 1) axes
+  in
+  let axes = loop 1 axes in
+  axis_map_to_dims_index axes
