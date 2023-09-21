@@ -49,6 +49,11 @@ let () =
   let weight_decay = 0.0001 in
   (* let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in *)
   let scalar_loss = margin_loss in
+  Stdio.print_endline "\n******** scalar_loss **********";
+  Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 scalar_loss;
+  Stdio.print_endline "\n******** learning_rate **********";
+  Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
+  Stdio.print_endline "\n********";
   let update = Train.grad_update scalar_loss in
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
   let sgd_jitted = jit ctx bindings (Seq (update, sgd)) in
