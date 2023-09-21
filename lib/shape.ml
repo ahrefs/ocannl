@@ -452,7 +452,7 @@ and unify_dim env dim_eqs =
     }
     :: dim_eqs
     when d1 = d2 ->
-      let proj_env = Utils.union_add env.proj_env pid1 pid2 in
+      let proj_env = Utils.union_add ~equal:Int.equal env.proj_env pid1 pid2 in
       unify_dim { env with proj_env } dim_eqs
   | { d1 = Dim { d = 1; _ }; d2 = Dim _; fix1 = false; fix2 = _ } :: dim_eqs -> unify_dim env dim_eqs
   | { d1 = Dim _; d2 = Dim { d = 1; _ }; fix1 = _; fix2 = false } :: dim_eqs -> unify_dim env dim_eqs
@@ -692,7 +692,7 @@ let derive_projections update_step =
     let debug_sh1, debug_sh2 =
       match rhs with sh1 :: sh2 :: _ -> (sh1, sh2) | [ sh1 ] -> (lhs, sh1) | [] -> (lhs, lhs)
     in
-    let proj_repr proj_id = fst @@ Utils.union_find !state.proj_env ~key:proj_id ~rank:0 in
+    let proj_repr proj_id = fst @@ Utils.union_find ~equal:Int.equal !state.proj_env ~key:proj_id ~rank:0 in
     let get_proj = function
       | Dim { d; proj_id; _ } -> (proj_repr proj_id, d)
       | Var _ ->

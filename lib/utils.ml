@@ -40,12 +40,18 @@ let get_global_arg ~verbose ~default ~arg_name:n =
           if verbose then Stdio.printf "not found, using default <%s>.\n%!" default;
           default)
 
-let rec union_find map ~key ~rank =
-  match Map.find map key with None -> (key, rank) | Some data -> union_find map ~key:data ~rank:(rank + 1)
+let rec union_find ~equal map ~key ~rank =
+  match Map.find map key with
+  | None -> (key, rank)
+  | Some data -> if equal key data then (key, rank) else union_find ~equal map ~key:data ~rank:(rank + 1)
 
-let union_add map k1 k2 =
-  let root1, rank1 = union_find map ~key:k1 ~rank:0 and root2, rank2 = union_find map ~key:k2 ~rank:0 in
-  if rank1 < rank2 then Map.update map root1 ~f:(fun _ -> root2) else Map.update map root2 ~f:(fun _ -> root1)
+let union_add ~equal map k1 k2 =
+  if equal k1 k2 then map
+  else
+    let root1, rank1 = union_find ~equal map ~key:k1 ~rank:0
+    and root2, rank2 = union_find ~equal map ~key:k2 ~rank:0 in
+    if rank1 < rank2 then Map.update map root1 ~f:(fun _ -> root2)
+    else Map.update map root2 ~f:(fun _ -> root1)
 
 (** Filters the list keeping the first occurrence of each element. *)
 let unique_keep_first ~equal l =
