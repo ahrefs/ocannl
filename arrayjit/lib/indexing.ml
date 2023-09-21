@@ -86,6 +86,7 @@ type projections = {
       an operation. *)
   project_rhs : axis_index array array;
       (** [project_rhs1.(i)] Produces an index into the [i+1]th argument of an operation. *)
+  debug_info : Sexp.t;
 }
 [@@deriving compare, equal, sexp]
 (** All the information relevant for code generation. *)
@@ -95,12 +96,12 @@ let opt_symbol d = if iterated d then Some (get_symbol ()) else None
 let opt_iterator = function None -> Fixed_idx 0 | Some sym -> Iterator sym
 
 (** Projections for a pointwise unary operator. *)
-let identity_projections ~lhs_dims =
+let identity_projections ~debug_info ~lhs_dims =
   let product_iterators = Array.map lhs_dims ~f:opt_symbol in
   let project_lhs = Array.map product_iterators ~f:opt_iterator in
   let product_space = Array.filter ~f:iterated lhs_dims in
   let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
-  { product_space; lhs_dims; product_iterators; project_lhs; project_rhs = [| project_lhs |] }
+  { product_space; lhs_dims; product_iterators; project_lhs; project_rhs = [| project_lhs |]; debug_info }
 
 let derive_index ~product_syms ~(projection : axis_index array) =
   let sym_to_i =

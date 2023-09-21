@@ -721,6 +721,7 @@ let derive_projections update_step =
       product_iterators;
       project_lhs = f lhs;
       project_rhs = Array.of_list_map ~f rhs;
+      debug_info = sexp_of_update_step update_step;
     }
   in
   match update_step.logic with

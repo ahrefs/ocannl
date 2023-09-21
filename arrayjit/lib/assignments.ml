@@ -70,14 +70,26 @@ let to_low_level (code : t) : Low_level.t =
   let open Indexing in
   let get a idcs =
     if not (Array.length idcs = Array.length (Lazy.force a.LA.dims)) then
-      Stdlib.Format.printf "DEBUG: get a=%a: %s@ idcs=%a dims=%a\n%!" Sexp.pp_hum ([%sexp_of: LA.t] @@ a) a.label Sexp.pp_hum ([%sexp_of: Indexing.axis_index array] @@ idcs) Sexp.pp_hum ([%sexp_of: int array] @@ Lazy.force a.dims);
+      Stdlib.Format.printf "DEBUG: get a=%a: %s@ idcs=%a dims=%a\n%!" Sexp.pp_hum
+        ([%sexp_of: LA.t] @@ a)
+        a.label Sexp.pp_hum
+        ([%sexp_of: Indexing.axis_index array] @@ idcs)
+        Sexp.pp_hum
+        ([%sexp_of: int array] @@ Lazy.force a.dims);
     assert (Array.length idcs = Array.length (Lazy.force a.LA.dims));
-    Low_level.Get (a, idcs) in
+    Low_level.Get (a, idcs)
+  in
   let set a idcs v =
     if not (Array.length idcs = Array.length (Lazy.force a.LA.dims)) then
-      Stdlib.Format.printf "DEBUG: set a=%a: %s@ idcs=%a dims=%a\n%!" Sexp.pp_hum ([%sexp_of: LA.t] @@ a) a.label Sexp.pp_hum ([%sexp_of: Indexing.axis_index array] @@ idcs) Sexp.pp_hum ([%sexp_of: int array] @@ Lazy.force a.dims);
+      Stdlib.Format.printf "DEBUG: set a=%a: %s@ idcs=%a dims=%a\n%!" Sexp.pp_hum
+        ([%sexp_of: LA.t] @@ a)
+        a.label Sexp.pp_hum
+        ([%sexp_of: Indexing.axis_index array] @@ idcs)
+        Sexp.pp_hum
+        ([%sexp_of: int array] @@ Lazy.force a.dims);
     assert (Array.length idcs = Array.length (Lazy.force a.LA.dims));
-    Low_level.Set (a, idcs, v) in
+    Low_level.Set (a, idcs, v)
+  in
   let rec loop code =
     match code with
     | Accum_binop { zero_out; accum; op; lhs; rhs1; rhs2; projections } ->
@@ -115,7 +127,13 @@ let to_low_level (code : t) : Low_level.t =
                   trace_it = true;
                 }
         in
-        let for_loops = for_loop [] (Array.to_list projections.product_space) in
+        let for_loops =
+          try for_loop [] (Array.to_list projections.product_space)
+          with e ->
+            Caml.Format.printf "DEBUG: projections=@ %a\n%!" Sexp.pp_hum
+              ([%sexp_of: projections] @@ projections);
+            raise e
+        in
         if zero_out then
           let dims = lazy projections.lhs_dims in
           Low_level.Seq (loop (Fetch { array = lhs; fetch_op = Constant 0.; dims }), for_loops)
