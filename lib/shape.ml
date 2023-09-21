@@ -400,10 +400,19 @@ let rec normalize_row row env =
         | _ -> assert false)
   | _ -> env
 
+let rec eliminate_broadcastable = function
+  | (Row_var _ | Fixed) as d -> d
+  | Broadcastable -> get_row_var ()
+  | Total_elems (n, r) -> Total_elems (n, eliminate_broadcastable r)
+
 let rec unify_dims env dim_eqs row_eqs =
   match row_eqs with
   | [] -> unify_dim env dim_eqs
+  | ({ dims = []; row = Broadcastable }, _) :: row_eqs | (_, { dims = []; row = Broadcastable }) :: row_eqs ->
+      (* As an optimization, avoid substituting Broadcastable: it's an implicit existential quantifier. *)
+      unify_dims env dim_eqs row_eqs
   | ({ dims = []; row = Row_var v }, r2) :: row_eqs | (r2, { dims = []; row = Row_var v }) :: row_eqs ->
+      let r2 = { r2 with row = eliminate_broadcastable r2.row } in
       let row_eqs = match Map.find env.row_env v with None -> row_eqs | Some r1 -> (r1, r2) :: row_eqs in
       let row_env = Map.update env.row_env v ~f:(fun _ -> subst_row env.row_env r2) in
       unify_dims { env with row_env } dim_eqs row_eqs
@@ -412,8 +421,6 @@ let rec unify_dims env dim_eqs row_eqs =
       unify_dims env dim_eqs row_eqs
   | (({ dims = []; row = Fixed } as r1), r2) :: _ | (r2, ({ dims = []; row = Fixed } as r1)) :: _ ->
       raise @@ Shape_error ("unify_dims: Fixed-mode axis number mismatch", Row_mismatch (r1, r2))
-  | ({ dims = []; row = Broadcastable }, _) :: row_eqs | (_, { dims = []; row = Broadcastable }) :: row_eqs ->
-      unify_dims env dim_eqs row_eqs
   | (({ dims = []; row = Total_elems (n1, br1) } as r1), r2) :: row_eqs
   | (r2, ({ dims = []; row = Total_elems (n1, br1) } as r1)) :: row_eqs ->
       if n1 = 1 && not (is_row_var @@ base_row_spec br1) then
