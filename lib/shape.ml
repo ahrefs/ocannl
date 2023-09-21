@@ -545,9 +545,11 @@ let unify_shapes env { shape = cur_sh; logic } =
         Option.to_list static_range
         |> List.map ~f:(fun range -> { d1 = get_dim ~d:range (); fix1 = false; d2 = slice_var; fix2 = false })
       in
-      let expanded_batch = { dims = cur_sh.batch.dims @ [ slice_var ]; row = plus1_row_spec sh.batch.row } in
+      let expanded_batch =
+        { dims = cur_sh.batch.dims @ [ slice_var ]; row = plus1_row_spec cur_sh.batch.row }
+      in
       unify_dims env range_eq
-        [ (cur_sh.batch, expanded_batch); (cur_sh.input, sh.input); (cur_sh.output, sh.output) ]
+        [ (expanded_batch, sh.batch); (cur_sh.input, sh.input); (cur_sh.output, sh.output) ]
   | Transpose (Permute spec, sh) ->
       let ls_rhs, ls_lhs =
         match einsum_of_spec spec with
