@@ -75,10 +75,7 @@ module Dim_var = struct
 end
 
 (** A single axis in a shape. *)
-type dim =
-  | Var of dim_var
-  | Dim of { d : int; label : string option; proj_id : int }
-  | Scaled of { num : int; denom : int; dim : dim }
+type dim = Var of dim_var | Dim of { d : int; label : string option; proj_id : int }
 [@@deriving equal, hash, compare, sexp, variants]
 
 let uid = ref 0
@@ -91,59 +88,26 @@ let get_dim ~d ?label () =
   Int.incr uid;
   Dim { d; proj_id = !uid; label }
 
-(** A row specifies how axes of a single kind in a shape can adapt to other shapes. *)
+(** A row specifies how axes of a single kind in a shape (the shape-kind) can adapt to other shapes. *)
 type row =
-  | Row_var of int  (** The shape can be inferred to have more axes. *)
+  | Row_var of int  (** The shape-kind can be inferred to have more axes. *)
   | Broadcastable  (** The shape does not have more axes of this kind, but is "polymorphic". *)
   | Fixed  (** The shape fails in contexts expecting more axes of this kind -- it "stops broadcast". *)
   | Total_elems of int * row
+      (** The shape-kind, inclusive of the further row spec, has this many elements. *)
 [@@deriving equal, hash, compare, sexp, variants]
 
 let get_row_var () =
   Int.incr uid;
   Row_var !uid
 
-let rec scale ~num ~denom ?(force_conv = false) dim : dim =
-  let ratio = Num.(num_of_int num // num_of_int denom) in
-  let rat_to_int f n = Big_int.int_of_big_int @@ f @@ Ratio.normalize_ratio @@ Num.ratio_of_num n in
-  let to_num = rat_to_int Ratio.numerator_ratio in
-  let to_denom = rat_to_int Ratio.denominator_ratio in
-  let dim_of_num ?label res =
-    let num = to_num res and denom = to_denom res in
-    let label =
-      Option.map label ~f:(fun l ->
-          let n = Int.to_string num in
-          n ^ (if denom = 1 then "" else "/" ^ Int.to_string denom) ^ "*" ^ l)
-    in
-    get_dim ~d:(num / denom) ?label ()
-  in
-  let num = to_num ratio and denom = to_denom ratio in
-  match dim with
-  | Var _ -> Scaled { num; denom; dim }
-  | Dim { d; label; proj_id = _ } ->
-      let res = Num.(ratio */ num_of_int d) in
-      if to_denom res = 1 || force_conv then dim_of_num ?label res else Scaled { num; denom; dim }
-  | Scaled { num; denom; dim } ->
-      let ratio = Num.(ratio */ num_of_int num // num_of_int denom) in
-      let num = to_num ratio and denom = to_denom ratio in
-      if force_conv then scale ~num ~denom ~force_conv dim else Scaled { num; denom; dim }
-
 type dims = { dims : dim list; row : row } [@@deriving equal, hash, compare, sexp]
-
-type deduce_within_shape =
-  | Not_constrained
-  | Input_equals_output
-  | Input_to_output_scale of { num : int; denom : int }
-[@@deriving compare, sexp, variants]
+type deduce_within_shape = Not_constrained | Input_equals_output [@@deriving compare, sexp, variants]
 
 type t = {
   mutable batch : dims;
   mutable input : dims;
   mutable output : dims;
-  deduce_within_shape : deduce_within_shape;
-      (** Intended mostly for terminal node cases where both [input] and [output] are initially
-      unknown. It makes it trivial to implement dimension-preserving hidden layers: just set
-      [deduce_within_shape=Input_equals_output]. *)
   id : int;  (** A node that has the same shape as this shape. *)
 }
 [@@deriving fields, sexp]
@@ -367,35 +331,6 @@ let axis_map_to_dims_index (type a) ?(default : a option) (idcs : a axis_map) : 
   let bch, inp, out = axis_map_to_dims_bio ?default idcs in
   Array.concat [ bch; out; inp ]
 
-(** Generate a label into a broadcasted axis given an einsum-like spec. Axes that are part of the spec
-    do not count, so that we can use the labels to align axes across different shapes (lhs, rhs1,
-    rhs2). *)
-let gen_label_of_axis ?parsed_spec axis =
-  let open AxisKey in
-  let prefix, idx =
-    match parsed_spec with
-    | None -> ("_fix_", axis.from_end)
-    | Some parsed_spec -> ("_", axis.from_end - given_of_kind axis.in_axes parsed_spec)
-  in
-  prefix ^ (match axis.in_axes with Batch -> "__b" | Input -> "__i" | Output -> "__o") ^ Int.to_string idx
-
-(** Augment the pseudo-labels map of an einsum notation with the generated labels for broadcasted
-    axes. *)
-let axes_with_inf_labels ~all_labels ls_xhs =
-  let rec loop more kind accu =
-    let offset = given_of_kind kind ls_xhs in
-    let axis = AxisKey.{ in_axes = kind; from_end = offset + more } in
-    let label = gen_label_of_axis ~parsed_spec:ls_xhs axis in
-    if not @@ Map.mem all_labels label then accu
-    else loop (more + 1) kind @@ Map.add_exn accu ~key:axis ~data:(Either.First label)
-  in
-  let see kind accu = if bcast_of_kind kind ls_xhs then loop 1 kind accu else accu in
-  AxisKey.(see Batch @@ see Input @@ see Output @@ ls_xhs.labels)
-
-let axes_with_pseudo_labels =
-  Map.mapi ~f:(fun ~key ~data ->
-      match data with Either.First l -> l | Either.Second _ -> gen_label_of_axis key)
-
 type dim_env = dim Map.M(Dim_var).t
 (** Note: The substituted variables can appear in the substitutions. *)
 
@@ -408,7 +343,6 @@ type dim_eqs = dim_eq list
 type row_eqs = (dims * dims) list
 
 let rec subst_dim dim_env = function
-  | Scaled { num; denom; dim } -> Scaled { num; denom; dim = subst_dim dim_env dim }
   | Dim _ as d -> d
   | Var v as default -> Option.value ~default @@ Option.map ~f:(subst_dim dim_env) @@ Map.find dim_env v
 
@@ -426,13 +360,7 @@ let rec subst_row row_env ({ dims; row } as default) =
       | None -> default
       | Some { dims = more_dims; row } -> { dims = more_dims @ dims; row })
 
-let dim_to_int_exn = function
-  | Dim { d; _ } -> d
-  | Scaled { num; denom; dim } -> (
-      match scale ~num ~denom ~force_conv:true dim with
-      | Dim { d; _ } -> d
-      | _ -> invalid_arg "dim_to_int: dim still unknown")
-  | Var _ -> invalid_arg "dim_to_int: dim still unknown"
+let dim_to_int_exn = function Dim { d; _ } -> d | Var _ -> invalid_arg "dim_to_int: dim still unknown"
 
 let rec base_row_spec = function
   | (Broadcastable | Fixed | Row_var _) as row_spec -> row_spec
@@ -513,14 +441,6 @@ let rec unify_dims env dim_eqs (row_eqs : row_eqs) =
 and unify_dim env dim_eqs =
   match dim_eqs with
   | [] -> env
-  | ({ d1 = Scaled { num; denom; dim = Scaled _ as dim }; _ } as eq) :: dim_eqs ->
-      unify_dim env @@ ({ eq with d1 = scale ~num ~denom dim } :: dim_eqs)
-  | ({ d2 = Scaled { num; denom; dim = Scaled _ as dim }; _ } as eq) :: dim_eqs ->
-      unify_dim env @@ ({ eq with d2 = scale ~num ~denom dim } :: dim_eqs)
-  | ({ d1 = Scaled { num; denom; dim = Var _ as v }; d2; _ } as eq) :: dim_eqs ->
-      unify_dim env @@ ({ eq with d1 = v; d2 = scale ~num:denom ~denom:num d2 } :: dim_eqs)
-  | ({ d1; d2 = Scaled { num; denom; dim = Var _ as v }; _ } as eq) :: dim_eqs ->
-      unify_dim env @@ ({ eq with d1 = scale ~num:denom ~denom:num d1; d2 = v } :: dim_eqs)
   | { d1 = Dim { label = Some l1; _ } as d1; d2 = Dim { label = Some l2; _ } as d2; fix1 = _; fix2 = _ } :: _
     when not (String.equal l1 l2) ->
       raise @@ Shape_error ("unify_dim: different labels", Dim_mismatch (d1, d2))
@@ -542,10 +462,6 @@ and unify_dim env dim_eqs =
       in
       let dim_env = Map.update env.dim_env v ~f:(fun _ -> subst_dim env.dim_env d2) in
       unify_dim { env with dim_env } dim_eqs
-  | ({ d1 = Scaled { num; denom; dim }; _ } as eq) :: dim_eqs ->
-      unify_dim env @@ ({ eq with d1 = scale ~force_conv:true ~num ~denom dim } :: dim_eqs)
-  | ({ d2 = Scaled { num; denom; dim }; _ } as eq) :: dim_eqs ->
-      unify_dim env @@ ({ eq with d2 = scale ~force_conv:true ~num ~denom dim } :: dim_eqs)
   | { d1; d2; fix1 = _; fix2 = _ } :: _ -> raise @@ Shape_error ("unify_dim", Dim_mismatch (d1, d2))
 
 let axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels =
@@ -722,7 +638,6 @@ let rec force_row_to_dims =
         match Map.find !state.dim_env v with
         | None -> raise @@ Shape_error ("Dimensions still unknown", Dim_mismatch (d, d))
         | Some dim -> f dim)
-    | Scaled { num; denom; dim } -> f @@ scale ~num ~denom ~force_conv:true dim
   in
   function
   | { dims; row = Row_var v } -> (
@@ -746,7 +661,6 @@ let rec row_to_labels env =
     | Dim { label = None; _ } -> ""
     | Var v -> (
         match Map.find env.dim_env v with None -> Option.value v.label ~default:"" | Some dim -> f dim)
-    | Scaled { num; denom; dim } -> f @@ scale ~num ~denom ~force_conv:true dim
   in
   function
   | { dims; row = Row_var v } -> (
@@ -779,9 +693,8 @@ let derive_projections update_step =
       match rhs with sh1 :: sh2 :: _ -> (sh1, sh2) | [ sh1 ] -> (lhs, sh1) | [] -> (lhs, lhs)
     in
     let proj_repr proj_id = fst @@ Utils.union_find !state.proj_env ~key:proj_id ~rank:0 in
-    let rec get_proj = function
+    let get_proj = function
       | Dim { d; proj_id; _ } -> (proj_repr proj_id, d)
-      | Scaled { dim; _ } -> get_proj dim
       | Var _ ->
           raise
           @@ Shape_error
@@ -820,9 +733,8 @@ let backprop_ith_arg ~from_1 projections =
 (** *** Shape builders *** *)
 
 let make ?(fix_b = false) ?(fix_i = false) ?(fix_o = false) ?batch_dims ?input_dims ?output_dims ?batch_axes
-    ?input_axes ?output_axes ?deduced ~id () =
+    ?input_axes ?output_axes ?(deduced = Not_constrained) ~id () =
   let make_row fix = if fix then Fixed else Broadcastable in
-  (* FIXME: handle axis labels. *)
   let make_dims fix ds = { dims = List.map ~f:(fun d -> get_dim ~d ()) ds; row = make_row fix } in
   let make_axes fix ds =
     { dims = List.map ~f:(fun (label, d) -> get_dim ~d ~label ()) ds; row = make_row fix }
@@ -852,8 +764,10 @@ let make ?(fix_b = false) ?(fix_i = false) ?(fix_o = false) ?batch_dims ?input_d
     | Some _, Some _ -> invalid_arg "Shape.make: do not provide both output_dims, output_axes"
     | None, None -> invalid_arg "Shape.make: do not provide fix_b:true for unknown output axes"
   in
-  let deduce_within_shape = Option.value deduced ~default:Not_constrained in
-  { input; output; batch; deduce_within_shape; id }
+  (match deduced with
+  | Not_constrained -> ()
+  | Input_equals_output -> state := unify_dims !state [] [ (input, output) ]);
+  { input; output; batch; id }
 
 let shape_spec_to_dims_bio ?b_row ?i_row ?o_row labels =
   let f vars = function
@@ -870,10 +784,12 @@ let shape_spec_to_dims_bio ?b_row ?i_row ?o_row labels =
   in
   axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels
 
-let of_spec ?deduced ~id spec =
+let of_spec ?(deduced = Not_constrained) ~id spec =
   let _, _, _, batch, input, output = shape_spec_to_dims_bio @@ axis_labels_of_spec spec in
-  let deduce_within_shape = Option.value deduced ~default:Not_constrained in
-  { input; output; batch; deduce_within_shape; id }
+  (match deduced with
+  | Not_constrained -> ()
+  | Input_equals_output -> state := unify_dims !state [] [ (input, output) ]);
+  { input; output; batch; id }
 
 (** A [stop_broadcast] mutates the partially-inferred shape of a tensor in-place, substituting-in
     a [Fixed] marker on the dimensions. This way we avoid introducing a new tensor. *)
@@ -892,14 +808,13 @@ let stop_broadcast sh =
 let to_string_hum ?(style = `Axis_size) sh =
   let n_outputs = List.length @@ sh.output.dims in
   let n_batch = List.length @@ sh.batch.dims in
-  let rec dim_to_string = function
+  let dim_to_string = function
     | Dim { label = None; _ } when phys_equal style `Only_labels -> "_"
     | Dim { label = Some l; _ } when phys_equal style `Only_labels -> l
     | Dim { d; label = None; _ } -> Int.to_string d
     | Dim { d; label = Some l; _ } -> [%string "%{l}=%{d#Int}"]
     | Var { id; label = Some l } -> [%string "$%{id#Int}:%{l}"]
     | Var { id; label = None } -> "$" ^ Int.to_string id
-    | Scaled { num; denom; dim } -> [%string "%{num#Int}/%{denom#Int}*%{dim_to_string dim}"]
   in
   let dims_to_string kind =
     let dims = (dims_of_kind kind sh).dims in

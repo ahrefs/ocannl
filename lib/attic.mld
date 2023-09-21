@@ -203,3 +203,51 @@ let fold ~init ~f arr =
   map { f } arr
 
 ]}
+
+Shape:
+{[
+
+let rec scale ~num ~denom ?(force_conv = false) dim : dim =
+  let ratio = Num.(num_of_int num // num_of_int denom) in
+  let rat_to_int f n = Big_int.int_of_big_int @@ f @@ Ratio.normalize_ratio @@ Num.ratio_of_num n in
+  let to_num = rat_to_int Ratio.numerator_ratio in
+  let to_denom = rat_to_int Ratio.denominator_ratio in
+  let dim_of_num ?label res =
+    let num = to_num res and denom = to_denom res in
+    let label =
+      Option.map label ~f:(fun l ->
+          let n = Int.to_string num in
+          n ^ (if denom = 1 then "" else "/" ^ Int.to_string denom) ^ "*" ^ l)
+    in
+    get_dim ~d:(num / denom) ?label ()
+  in
+  let num = to_num ratio and denom = to_denom ratio in
+  match dim with
+  | Var _ -> Scaled { num; denom; dim }
+  | Dim { d; label; proj_id = _ } ->
+      let res = Num.(ratio */ num_of_int d) in
+      if to_denom res = 1 || force_conv then dim_of_num ?label res else Scaled { num; denom; dim }
+  | Scaled { num; denom; dim } ->
+      let ratio = Num.(ratio */ num_of_int num // num_of_int denom) in
+      let num = to_num ratio and denom = to_denom ratio in
+      if force_conv then scale ~num ~denom ~force_conv dim else Scaled { num; denom; dim }
+
+let rec unify_dim env dim_eqs =
+(* ... *)
+  | ({ d1 = Scaled { num; denom; dim = Var _ as v }; d2; _ } as eq) :: dim_eqs ->
+    unify_dim env @@ ({ eq with d1 = v; d2 = scale ~num:denom ~denom:num d2 } :: dim_eqs)
+| ({ d1; d2 = Scaled { num; denom; dim = Var _ as v }; _ } as eq) :: dim_eqs ->
+    unify_dim env @@ ({ eq with d1 = scale ~num:denom ~denom:num d1; d2 = v } :: dim_eqs)
+| ({ d1 = Scaled { num; denom; dim = Scaled _ as dim } as d1; _ } as eq) :: dim_eqs ->
+  let d1' = scale ~num ~denom dim in
+  if equal_dim d1 d1' then
+  else unify_dim env @@ ({ eq with d1 = d1' } :: dim_eqs)
+  | ({ d2 = Scaled { num; denom; dim = Scaled _ as dim }; _ } as eq) :: dim_eqs ->
+      unify_dim env @@ ({ eq with d2 = scale ~num ~denom dim } :: dim_eqs)
+(* ... *)
+  | ({ d1 = Scaled { num; denom; dim }; _ } as eq) :: dim_eqs ->
+      unify_dim env @@ ({ eq with d1 = scale ~force_conv:true ~num ~denom dim } :: dim_eqs)
+  | ({ d2 = Scaled { num; denom; dim }; _ } as eq) :: dim_eqs ->
+      unify_dim env @@ ({ eq with d2 = scale ~force_conv:true ~num ~denom dim } :: dim_eqs)
+
+]}
