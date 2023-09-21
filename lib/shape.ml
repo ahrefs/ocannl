@@ -331,16 +331,16 @@ let axis_map_to_dims_index (type a) ?(default : a option) (idcs : a axis_map) : 
   let bch, inp, out = axis_map_to_dims_bio ?default idcs in
   Array.concat [ bch; out; inp ]
 
-type dim_env = dim Map.M(Dim_var).t
+type dim_env = dim Map.M(Dim_var).t [@@deriving sexp]
 (** Note: The substituted variables can appear in the substitutions. *)
 
-type row_env = dims Map.M(Int).t
+type row_env = dims Map.M(Int).t [@@deriving sexp]
 (** Note: The substituted variables can appear in the substitutions. *)
 
-type environment = { dim_env : dim_env; row_env : row_env; proj_env : int Map.M(Int).t }
-type dim_eq = { d1 : dim; fix1 : bool; d2 : dim; fix2 : bool }
-type dim_eqs = dim_eq list
-type row_eqs = (dims * dims) list
+type environment = { dim_env : dim_env; row_env : row_env; proj_env : int Map.M(Int).t } [@@deriving sexp]
+type dim_eq = { d1 : dim; fix1 : bool; d2 : dim; fix2 : bool } [@@deriving sexp, equal, hash, compare]
+type dim_eqs = dim_eq list [@@deriving sexp]
+type row_eqs = (dims * dims) list [@@deriving sexp]
 
 let rec subst_dim dim_env = function
   | Dim _ as d -> d
@@ -400,7 +400,7 @@ let rec normalize_row row env =
         | _ -> assert false)
   | _ -> env
 
-let rec unify_dims env dim_eqs (row_eqs : row_eqs) =
+let rec unify_dims env dim_eqs row_eqs =
   match row_eqs with
   | [] -> unify_dim env dim_eqs
   | ({ dims = []; row = Row_var v }, r2) :: row_eqs | (r2, { dims = []; row = Row_var v }) :: row_eqs ->
@@ -655,7 +655,9 @@ let rec force_row_to_dims =
 (** Uses the matrix convention of putting the input axes last.
     Note: [force_to_dims] is "destructive": it closes shapes that remain incomplete after inference. *)
 let force_to_dims (sh : t) : int array =
-  Array.concat_map ~f:force_row_to_dims [| sh.batch; sh.output; sh.input |]
+  try Array.concat_map ~f:force_row_to_dims [| sh.batch; sh.output; sh.input |]
+  with Shape_error (_, Dim_mismatch _) ->
+    raise @@ Shape_error ("Dimensions still unknown", Shape_mismatch (sh, sh))
 
 let rec row_to_labels env =
   let rec f = function
