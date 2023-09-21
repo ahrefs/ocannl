@@ -93,15 +93,18 @@ type row =
   | Row_var of int  (** The shape-kind can be inferred to have more axes. *)
   | Broadcastable  (** The shape does not have more axes of this kind, but is "polymorphic". *)
   | Fixed  (** The shape fails in contexts expecting more axes of this kind -- it "stops broadcast". *)
-  | Total_elems of int * row
-      (** The shape-kind, inclusive of the further row spec, has this many elements. *)
+[@@deriving equal, hash, compare, sexp, variants]
+
+type dims_constraint =
+  | Unconstrained
+  | Total_elems of int  (** The shape-kind, inclusive of the further row spec, has this many elements. *)
 [@@deriving equal, hash, compare, sexp, variants]
 
 let get_row_var () =
   Int.incr uid;
   Row_var !uid
 
-type dims = { dims : dim list; row : row } [@@deriving equal, hash, compare, sexp]
+type dims = { dims : dim list; constr : dims_constraint; row : row } [@@deriving equal, hash, compare, sexp]
 type deduce_within_shape = Not_constrained | Input_equals_output [@@deriving compare, sexp, variants]
 
 type t = {
@@ -273,7 +276,11 @@ type update_step = { shape : t; logic : logic } [@@deriving sexp]
     top-down and bottom-up. The child should be identifiable within the parent via physical equality
     (allowing that a child fills both slots of a binary parent). *)
 
-type shape_error = Shape_mismatch of t * t | Row_mismatch of dims * dims | Dim_mismatch of dim * dim
+type shape_error =
+  | Shape_mismatch of t * t
+  | Row_mismatch of dims * dims
+  | Dim_mismatch of dim * dim
+  | Nested
 [@@deriving sexp]
 
 exception Shape_error of string * shape_error [@@deriving sexp]
@@ -349,103 +356,110 @@ let rec subst_dim dim_env = function
 let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
 let take_from_end l n = List.rev @@ List.take (List.rev l) n
 
-let rec subst_row row_env ({ dims; row } as default) =
-  match row with
-  | Broadcastable | Fixed -> default
-  | Total_elems (n, row) ->
-      let { dims; row } = subst_row row_env { dims; row } in
-      { dims; row = Total_elems (n, row) }
-  | Row_var v -> (
-      match Map.find row_env v with
-      | None -> default
-      | Some { dims = more_dims; row } -> { dims = more_dims @ dims; row })
+let meet more_constr constr =
+  match (more_constr, constr) with
+  | Unconstrained, c -> c
+  | c, Unconstrained -> c
+  | (Total_elems n1 as c), Total_elems n2 when n1 = n2 -> c
+  | Total_elems _, Total_elems _ -> raise @@ Shape_error ("Incompatible Total_elems constraints", Nested)
 
 let dim_to_int_exn = function Dim { d; _ } -> d | Var _ -> invalid_arg "dim_to_int: dim still unknown"
 
-let rec base_row_spec = function
-  | (Broadcastable | Fixed | Row_var _) as row_spec -> row_spec
-  | Total_elems (_, row_spec) -> base_row_spec row_spec
-
-let rec plus1_row_spec = function
-  | (Broadcastable | Fixed | Row_var _) as row_spec -> row_spec
-  | Total_elems (n, row_spec) -> Total_elems (n + 1, plus1_row_spec row_spec)
-
-let rec normalize_row row env =
+let subst_row row_env ({ dims; constr; row } as default) =
   match row with
-  | { dims; row = Total_elems (n1, (Total_elems (n2, _) as r1)) } ->
-      if n1 = n2 then normalize_row { dims; row = r1 } env
-      else raise @@ Shape_error ("Inconsistent Total_elems constraints on the row", Row_mismatch (row, row))
-  | { dims; row = Total_elems (n, Row_var v) } -> (
-      match Map.find env.row_env v with
-      | None ->
-          (* Wait for more shape inference. *)
-          env
-      | Some { dims = dims2; row = row2 } ->
-          normalize_row { dims = dims2 @ dims; row = Total_elems (n, row2) } env)
-  | { dims; row = Total_elems (n, r) } when not @@ is_row_var r -> (
-      let dims = List.map dims ~f:(subst_dim env.dim_env) in
-      let vars, nonvars = List.partition_tf dims ~f:is_var in
-      if List.is_empty nonvars || List.length vars > 1 then
-        raise @@ Shape_error ("Not enough information to resolve Total_elems", Row_mismatch (row, row))
-      else
-        let total = List.map nonvars ~f:dim_to_int_exn |> List.reduce_exn ~f:( * ) in
-        match vars with
-        | [] ->
-            if n <> total then raise @@ Shape_error ("Total_elems constraint failed", Row_mismatch (row, row))
-            else env
-        | [ Var v ] ->
-            let rem = n / total in
-            if rem = 0 then raise @@ Shape_error ("Total_elems constraint failed", Row_mismatch (row, row))
-            else { env with dim_env = Map.add_exn env.dim_env ~key:v ~data:(get_dim ~d:rem ()) }
-        | _ -> assert false)
-  | _ -> env
+  | Broadcastable | Fixed -> default
+  | Row_var v -> (
+      match Map.find row_env v with
+      | None -> default
+      | Some { dims = more_dims; constr = Unconstrained; row } -> { dims = more_dims @ dims; constr; row }
+      | Some { dims = more_dims; constr = Total_elems m; row } ->
+          let more_constr =
+            if List.for_all dims ~f:is_dim then
+              Total_elems (m * List.fold dims ~init:1 ~f:(fun n d -> n * dim_to_int_exn d))
+            else Unconstrained (* Wait for more shape inference. *)
+          in
+          { dims = more_dims @ dims; constr = meet more_constr constr; row })
 
-let rec eliminate_broadcastable = function
-  | (Row_var _ | Fixed) as d -> d
-  | Broadcastable -> get_row_var ()
-  | Total_elems (n, r) -> Total_elems (n, eliminate_broadcastable r)
+let apply_constraint r env =
+  let r = subst_row env.row_env r in
+  match r.constr with
+  | Unconstrained -> env
+  | Total_elems n -> (
+      match r.row with
+      | Row_var _ -> env (* Wait for more shape inference. *)
+      | Fixed | Broadcastable -> (
+          let dims = List.map r.dims ~f:(subst_dim env.dim_env) in
+          let vars, nonvars = List.partition_tf dims ~f:is_var in
+          if List.length vars > 1 then env (* Wait for more shape inference. *)
+          else
+            let known = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
+            match vars with
+            | [] ->
+                if n <> known then raise @@ Shape_error ("Total_elems constraint failed", Row_mismatch (r, r))
+                else env
+            | [ Var v ] ->
+                let rem = n / known in
+                if rem = 0 then raise @@ Shape_error ("Total_elems constraint failed", Row_mismatch (r, r))
+                else { env with dim_env = Map.add_exn env.dim_env ~key:v ~data:(get_dim ~d:rem ()) }
+            | _ -> assert false))
 
-let rec unify_dims env dim_eqs row_eqs =
+let eliminate_broadcastable = function (Row_var _ | Fixed) as d -> d | Broadcastable -> get_row_var ()
+
+module Debug_runtime = Minidebug_runtime.Flushing (struct
+  let debug_ch = Stdio.stdout
+  let time_tagged = false
+end)
+
+let%debug_sexp rec unify_dims (row_eqs : (dims * dims) list) (env : environment) : environment =
   match row_eqs with
-  | [] -> unify_dim env dim_eqs
-  | ({ dims = []; row = Broadcastable }, _) :: row_eqs | (_, { dims = []; row = Broadcastable }) :: row_eqs ->
-      (* As an optimization, avoid substituting Broadcastable: it's an implicit existential quantifier. *)
-      unify_dims env dim_eqs row_eqs
-  | ({ dims = []; row = Row_var v }, r2) :: row_eqs | (r2, { dims = []; row = Row_var v }) :: row_eqs ->
+  | [] -> env
+  | (r1, r2) :: row_eqs when equal_dims r1 r2 -> apply_constraint r1 env |> unify_dims row_eqs
+  | ( ({ dims = []; constr = _; row = Row_var _ } as r1),
+      ({ dims = []; constr = _; row = Broadcastable } as r2) )
+    :: row_eqs
+  | ( ({ dims = []; constr = _; row = Broadcastable } as r2),
+      ({ dims = []; constr = _; row = Row_var _ } as r1) )
+    :: row_eqs ->
+      (* Shortcut to avoid an uninformative polluting substitution. *)
+      apply_constraint r1 env |> apply_constraint r2 |> unify_dims row_eqs
+  | (({ dims = []; constr = _; row = Row_var v } as r1), r2) :: row_eqs
+  | (r2, ({ dims = []; constr = _; row = Row_var v } as r1)) :: row_eqs ->
+      if equal_row r1.row r2.row && (not @@ List.is_empty r2.dims) then
+        raise @@ Shape_error ("unify_dims: occurs check: infinite number of axes", Row_mismatch (r1, r2));
       let r2 = { r2 with row = eliminate_broadcastable r2.row } in
       let row_eqs = match Map.find env.row_env v with None -> row_eqs | Some r1 -> (r1, r2) :: row_eqs in
       let row_env = Map.update env.row_env v ~f:(fun _ -> subst_row env.row_env r2) in
-      unify_dims { env with row_env } dim_eqs row_eqs
-  | ({ dims = []; row = Fixed }, { dims = []; row = _ }) :: row_eqs
-  | ({ dims = []; row = _ }, { dims = []; row = Fixed }) :: row_eqs ->
-      unify_dims env dim_eqs row_eqs
-  | (({ dims = []; row = Fixed } as r1), r2) :: _ | (r2, ({ dims = []; row = Fixed } as r1)) :: _ ->
+      apply_constraint r1 { env with row_env } |> unify_dims row_eqs
+  | ({ dims = []; constr = constr1; row = Fixed }, { dims = []; constr = constr2; row = _ }) :: row_eqs
+  | ({ dims = []; constr = constr1; row = _ }, { dims = []; constr = constr2; row = Fixed }) :: row_eqs ->
+      let constr = meet constr1 constr2 in
+      apply_constraint { dims = []; constr; row = Fixed } env |> unify_dims row_eqs
+  | (({ dims = []; constr = _; row = Fixed } as r1), r2) :: _
+  | (r2, ({ dims = []; constr = _; row = Fixed } as r1)) :: _ ->
       raise @@ Shape_error ("unify_dims: Fixed-mode axis number mismatch", Row_mismatch (r1, r2))
-  | (({ dims = []; row = Total_elems (n1, br1) } as r1), r2) :: row_eqs
-  | (r2, ({ dims = []; row = Total_elems (n1, br1) } as r1)) :: row_eqs ->
-      if n1 = 1 && not (is_row_var @@ base_row_spec br1) then
-        unify_dims env dim_eqs @@ (({ dims = []; row = br1 }, r2) :: row_eqs)
-      else if not (is_row_var @@ base_row_spec br1) then
-        raise
-        @@ Shape_error ("unify_dims: Not enough elements for a Total_elems constraint", Row_mismatch (r1, r2))
-      else
-        unify_dims env dim_eqs
-        @@ (({ dims = []; row = br1 }, { dims = r2.dims; row = Total_elems (n1, r2.row) }) :: row_eqs)
-  | (({ dims = _ :: _ as ds1; row = r1 } as row1), ({ dims = _ :: _ as ds2; row = r2 } as row2)) :: row_eqs ->
-      let suffix = min (List.length ds1) (List.length ds2) in
+  | (({ dims = []; constr = _; row = Broadcastable } as r), _) :: row_eqs
+  | (_, ({ dims = []; constr = _; row = Broadcastable } as r)) :: row_eqs ->
+      apply_constraint r env |> unify_dims row_eqs
+  | ( { dims = _ :: _ as ds1; constr = constr1; row = r1 },
+      { dims = _ :: _ as ds2; constr = constr2; row = r2 } )
+    :: row_eqs ->
+      let constr = meet constr1 constr2 in
+      let len1 = List.length ds1 and len2 = List.length ds2 in
+      let suffix = min len1 len2 in
+      let dims, row = if len2 > len1 then (ds2, r2) else (ds1, r1) in
       let ds1_suf = take_from_end ds1 suffix in
       let ds2_suf = take_from_end ds2 suffix in
-      let br1 = base_row_spec r1 and br2 = base_row_spec r2 in
       let dim_eqs =
-        List.map2_exn ~f:(fun d1 d2 -> { d1; fix1 = is_fixed br1; d2; fix2 = is_fixed br2 }) ds1_suf ds2_suf
-        @ dim_eqs
+        List.map2_exn ~f:(fun d1 d2 -> { d1; fix1 = is_fixed r1; d2; fix2 = is_fixed r2 }) ds1_suf ds2_suf
       in
-      unify_dims env dim_eqs
-        (({ dims = drop_from_end ds1 suffix; row = br1 }, { dims = drop_from_end ds2 suffix; row = br2 })
-        :: row_eqs)
-      |> normalize_row row1 |> normalize_row row2
+      unify_dim dim_eqs env
+      |> apply_constraint { dims; constr; row }
+      |> unify_dims
+           (( { dims = drop_from_end ds1 suffix; constr = Unconstrained; row = r1 },
+              { dims = drop_from_end ds2 suffix; constr = Unconstrained; row = r2 } )
+           :: row_eqs)
 
-and unify_dim env dim_eqs =
+and unify_dim (dim_eqs : dim_eq list) (env : environment) : environment =
   match dim_eqs with
   | [] -> env
   | { d1 = Dim { label = Some l1; _ } as d1; d2 = Dim { label = Some l2; _ } as d2; fix1 = _; fix2 = _ } :: _
@@ -460,15 +474,15 @@ and unify_dim env dim_eqs =
     :: dim_eqs
     when d1 = d2 ->
       let proj_env = Utils.union_add ~equal:Int.equal env.proj_env pid1 pid2 in
-      unify_dim { env with proj_env } dim_eqs
-  | { d1 = Dim { d = 1; _ }; d2 = Dim _; fix1 = false; fix2 = _ } :: dim_eqs -> unify_dim env dim_eqs
-  | { d1 = Dim _; d2 = Dim { d = 1; _ }; fix1 = _; fix2 = false } :: dim_eqs -> unify_dim env dim_eqs
+      unify_dim dim_eqs { env with proj_env }
+  | { d1 = Dim { d = 1; _ }; d2 = Dim _; fix1 = false; fix2 = _ } :: dim_eqs -> unify_dim dim_eqs env
+  | { d1 = Dim _; d2 = Dim { d = 1; _ }; fix1 = _; fix2 = false } :: dim_eqs -> unify_dim dim_eqs env
   | ({ d1 = Var v; d2; fix1; fix2 } | { d2 = Var v; d1 = d2; fix1 = fix2; fix2 = fix1 }) :: dim_eqs ->
       let dim_eqs =
         match Map.find env.dim_env v with None -> dim_eqs | Some d1 -> { d1; d2; fix1; fix2 } :: dim_eqs
       in
       let dim_env = Map.update env.dim_env v ~f:(fun _ -> subst_dim env.dim_env d2) in
-      unify_dim { env with dim_env } dim_eqs
+      unify_dim dim_eqs { env with dim_env }
   | { d1; d2; fix1 = _; fix2 = _ } :: _ -> raise @@ Shape_error ("unify_dim", Dim_mismatch (d1, d2))
 
 let axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels =
@@ -480,9 +494,9 @@ let axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels =
   let i_row = upd_row (i_row, labels.bcast_input) in
   let o_row = upd_row (o_row, labels.bcast_output) in
   let to_row v = Option.value v ~default:Broadcastable in
-  let batch = { dims = to_dim b_dims; row = to_row b_row } in
-  let input = { dims = to_dim i_dims; row = to_row i_row } in
-  let output = { dims = to_dim o_dims; row = to_row o_row } in
+  let batch = { dims = to_dim b_dims; constr = Unconstrained; row = to_row b_row } in
+  let input = { dims = to_dim i_dims; constr = Unconstrained; row = to_row i_row } in
+  let output = { dims = to_dim o_dims; constr = Unconstrained; row = to_row o_row } in
   (b_row, i_row, o_row, batch, input, output)
 
 let einsum_slot_spec_to_dims_bio ?b_row ?i_row ?o_row labels =
@@ -506,8 +520,8 @@ let unify_shapes env { shape = cur_sh; logic } =
                  Shape_mismatch (cur_sh, cur_sh) )
       in
       let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in
-      let b_row = { dims = []; row = Total_elems (batch_elems, get_row_var ()) } in
-      unify_dims env [] [ (b_row, cur_sh.batch) ]
+      let b_row = { dims = []; constr = Total_elems batch_elems; row = get_row_var () } in
+      unify_dims [ (b_row, cur_sh.batch) ] env
   | Terminal (File_mapped (filename, prec)) ->
       let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
       let len = Unix.lseek fd 0 Unix.SEEK_END / Arrayjit.Ops.prec_in_bytes prec in
@@ -521,14 +535,14 @@ let unify_shapes env { shape = cur_sh; logic } =
                  Shape_mismatch (cur_sh, cur_sh) )
       in
       let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in
-      let b_row = { dims = []; row = Total_elems (batch_elems, get_row_var ()) } in
-      unify_dims env [] [ (cur_sh.batch, b_row) ]
+      let b_row = { dims = []; constr = Total_elems batch_elems; row = get_row_var () } in
+      unify_dims [ (cur_sh.batch, b_row) ] env
   | Transpose (Transpose, sh) ->
-      unify_dims env [] [ (cur_sh.batch, sh.batch); (cur_sh.input, sh.output); (cur_sh.output, sh.input) ]
+      unify_dims [ (cur_sh.batch, sh.batch); (cur_sh.input, sh.output); (cur_sh.output, sh.input) ] env
   | Transpose (Pointwise_un, sh) ->
-      unify_dims env [] [ (cur_sh.batch, sh.batch); (cur_sh.input, sh.input); (cur_sh.output, sh.output) ]
+      unify_dims [ (cur_sh.batch, sh.batch); (cur_sh.input, sh.input); (cur_sh.output, sh.output) ] env
   | Broadcast (Compose, sh1, sh2) ->
-      unify_dims env []
+      unify_dims
         [
           (cur_sh.batch, sh1.batch);
           (cur_sh.batch, sh2.batch);
@@ -536,8 +550,9 @@ let unify_shapes env { shape = cur_sh; logic } =
           (cur_sh.output, sh1.output);
           (sh1.input, sh2.output);
         ]
+        env
   | Broadcast (Pointwise_bin, sh1, sh2) ->
-      unify_dims env []
+      unify_dims
         [
           (cur_sh.batch, sh1.batch);
           (cur_sh.batch, sh2.batch);
@@ -546,6 +561,7 @@ let unify_shapes env { shape = cur_sh; logic } =
           (cur_sh.output, sh1.output);
           (cur_sh.output, sh2.output);
         ]
+        env
   | Transpose (Batch_slice { static_range; static_symbol = _ }, sh) ->
       let slice_var = Var (get_var ()) in
       let range_eq =
@@ -553,10 +569,11 @@ let unify_shapes env { shape = cur_sh; logic } =
         |> List.map ~f:(fun range -> { d1 = get_dim ~d:range (); fix1 = false; d2 = slice_var; fix2 = false })
       in
       let expanded_batch =
-        { dims = cur_sh.batch.dims @ [ slice_var ]; row = plus1_row_spec cur_sh.batch.row }
+        { dims = cur_sh.batch.dims @ [ slice_var ]; constr = Unconstrained; row = cur_sh.batch.row }
       in
-      unify_dims env range_eq
-        [ (expanded_batch, sh.batch); (cur_sh.input, sh.input); (cur_sh.output, sh.output) ]
+      unify_dim range_eq env
+      |> apply_constraint cur_sh.batch
+      |> unify_dims [ (expanded_batch, sh.batch); (cur_sh.input, sh.input); (cur_sh.output, sh.output) ]
   | Transpose (Permute spec, sh) ->
       let ls_rhs, ls_lhs =
         match einsum_of_spec spec with
@@ -568,7 +585,7 @@ let unify_shapes env { shape = cur_sh; logic } =
       in
       let b_row, i_row, o_row, b_rhs, i_rhs, o_rhs = einsum_slot_spec_to_dims_bio ls_rhs in
       let _, _, _, b_lhs, i_lhs, o_lhs = einsum_slot_spec_to_dims_bio ?b_row ?i_row ?o_row ls_lhs in
-      unify_dims env []
+      unify_dims
         [
           (cur_sh.batch, b_lhs);
           (sh.batch, b_rhs);
@@ -576,7 +593,7 @@ let unify_shapes env { shape = cur_sh; logic } =
           (sh.input, i_rhs);
           (cur_sh.output, o_lhs);
           (sh.output, o_rhs);
-        ]
+        ] env
   | Broadcast (Einsum spec, sh1, sh2) ->
       let ls_rhs1, ls_rhs2, ls_lhs =
         match einsum_of_spec spec with
@@ -591,7 +608,7 @@ let unify_shapes env { shape = cur_sh; logic } =
         einsum_slot_spec_to_dims_bio ?b_row ?i_row ?o_row ls_rhs2
       in
       let _, _, _, b_lhs, i_lhs, o_lhs = einsum_slot_spec_to_dims_bio ?b_row ?i_row ?o_row ls_lhs in
-      unify_dims env []
+      unify_dims
         [
           (cur_sh.batch, b_lhs);
           (sh1.batch, b_rhs1);
@@ -602,7 +619,7 @@ let unify_shapes env { shape = cur_sh; logic } =
           (cur_sh.output, o_lhs);
           (sh1.output, o_rhs1);
           (sh2.output, o_rhs2);
-        ]
+        ] env
 
 let indices_bio sh (type v) (arr : v array) =
   let n_batch = List.length sh.batch.dims in
@@ -649,15 +666,16 @@ let rec force_row_to_dims =
         | Some dim -> f dim)
   in
   function
-  | { dims; row = Row_var v } -> (
+  | { dims; constr; row = Row_var v } -> (
       match Map.find !state.row_env v with
       | None ->
-          let row_env = Map.add_exn !state.row_env ~key:v ~data:{ dims = []; row = Broadcastable } in
+          let row_env =
+            Map.add_exn !state.row_env ~key:v ~data:{ dims = []; constr = Unconstrained; row = Broadcastable }
+          in
           state := { !state with row_env };
           Array.of_list_map dims ~f
-      | Some row2 -> force_row_to_dims { dims = row2.dims @ dims; row = row2.row })
-  | { dims; row = Total_elems (_, row) } -> force_row_to_dims { dims; row }
-  | { dims; row = Broadcastable | Fixed } -> Array.of_list_map dims ~f
+      | Some row2 -> force_row_to_dims { dims = row2.dims @ dims; constr; row = row2.row })
+  | { dims; constr = _; row = Broadcastable | Fixed } -> Array.of_list_map dims ~f
 
 (** Uses the matrix convention of putting the input axes last.
     Note: [force_to_dims] is "destructive": it closes shapes that remain incomplete after inference. *)
@@ -674,12 +692,11 @@ let rec row_to_labels env =
         match Map.find env.dim_env v with None -> Option.value v.label ~default:"" | Some dim -> f dim)
   in
   function
-  | { dims; row = Row_var v } -> (
+  | { dims; constr; row = Row_var v } -> (
       match Map.find env.row_env v with
       | None -> Array.of_list_map dims ~f
-      | Some row2 -> row_to_labels env { dims = row2.dims @ dims; row = row2.row })
-  | { dims; row = Total_elems (_, row) } -> row_to_labels env { dims; row }
-  | { dims; row = Broadcastable | Fixed } -> Array.of_list_map dims ~f
+      | Some row2 -> row_to_labels env { dims = row2.dims @ dims; constr; row = row2.row })
+  | { dims; constr = _; row = Broadcastable | Fixed } -> Array.of_list_map dims ~f
 
 (** Uses the matrix convention of putting the input axes last. *)
 let to_labels (sh : t) : string array =
@@ -747,11 +764,17 @@ let backprop_ith_arg ~from_1 projections =
 let make ?(fix_b = false) ?(fix_i = false) ?(fix_o = false) ?batch_dims ?input_dims ?output_dims ?batch_axes
     ?input_axes ?output_axes ?(deduced = Not_constrained) ~id () =
   let make_row fix = if fix then Fixed else Broadcastable in
-  let make_dims fix ds = { dims = List.map ~f:(fun d -> get_dim ~d ()) ds; row = make_row fix } in
-  let make_axes fix ds =
-    { dims = List.map ~f:(fun (label, d) -> get_dim ~d ~label ()) ds; row = make_row fix }
+  let make_dims fix ds =
+    { dims = List.map ~f:(fun d -> get_dim ~d ()) ds; constr = Unconstrained; row = make_row fix }
   in
-  let make_unknown () = { dims = []; row = get_row_var () } in
+  let make_axes fix ds =
+    {
+      dims = List.map ~f:(fun (label, d) -> get_dim ~d ~label ()) ds;
+      constr = Unconstrained;
+      row = make_row fix;
+    }
+  in
+  let make_unknown () = { dims = []; constr = Unconstrained; row = get_row_var () } in
   let batch =
     match (batch_dims, batch_axes) with
     | Some batch_dims, None -> make_dims fix_b batch_dims
@@ -778,7 +801,7 @@ let make ?(fix_b = false) ?(fix_i = false) ?(fix_o = false) ?batch_dims ?input_d
   in
   (match deduced with
   | Not_constrained -> ()
-  | Input_equals_output -> state := unify_dims !state [] [ (input, output) ]);
+  | Input_equals_output -> state := unify_dims [ (input, output) ] !state);
   { input; output; batch; id }
 
 let shape_spec_to_dims_bio ?b_row ?i_row ?o_row labels =
@@ -800,22 +823,25 @@ let of_spec ?(deduced = Not_constrained) ~id spec =
   let _, _, _, batch, input, output = shape_spec_to_dims_bio @@ axis_labels_of_spec spec in
   (match deduced with
   | Not_constrained -> ()
-  | Input_equals_output -> state := unify_dims !state [] [ (input, output) ]);
+  | Input_equals_output -> state := unify_dims [ (input, output) ] !state);
   { input; output; batch; id }
 
 (** A [stop_broadcast] mutates the partially-inferred shape of a tensor in-place, substituting-in
     a [Fixed] marker on the dimensions. This way we avoid introducing a new tensor. *)
 let stop_broadcast sh =
-  let rec fix_base = function
+  let fix = function
     | Broadcastable | Fixed -> Fixed
     | Row_var _ as row ->
-        state := unify_dims !state [] [ ({ dims = []; row }, { dims = []; row = Fixed }) ];
+        state :=
+          unify_dims
+            [
+              ({ dims = []; constr = Unconstrained; row }, { dims = []; constr = Unconstrained; row = Fixed });
+            ] !state;
         Fixed
-    | Total_elems (n, row_spec) -> Total_elems (n, fix_base row_spec)
   in
-  sh.batch <- { sh.batch with row = fix_base sh.batch.row };
-  sh.input <- { sh.input with row = fix_base sh.input.row };
-  sh.output <- { sh.output with row = fix_base sh.output.row }
+  sh.batch <- { sh.batch with row = fix sh.batch.row };
+  sh.input <- { sh.input with row = fix sh.input.row };
+  sh.output <- { sh.output with row = fix sh.output.row }
 
 let to_string_hum ?(style = `Axis_size) sh =
   let n_outputs = List.length @@ sh.output.dims in
