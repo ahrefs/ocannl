@@ -78,7 +78,13 @@ let session_error_printer = function
 
 let () = Stdlib.Printexc.register_printer session_error_printer
 let lazy_to_dims shape = lazy (Shape.force_to_dims shape)
-let lazy_projections shape_update = lazy (Shape.derive_projections shape_update)
+
+let lazy_projections shape_update =
+  lazy
+    Shape.(
+      propagate_shapes shape_update;
+      derive_projections shape_update)
+
 let fetch_zeros array shape = Assignments.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
 let fetch_ones array shape = Assignments.Fetch { array; fetch_op = Constant 1.; dims = lazy_to_dims shape }
 let default_init_op = Ops.Constant_fill { values = [| 0.0 |]; strict = false }
@@ -116,14 +122,12 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
   let id = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
   let shape = make_shape ~id in
-  let dims = lazy_to_dims shape in
   let label = op_label ^ if String.is_empty desc_label then "" else "#" ^ desc_label in
   let prec =
     List.map ts ~f:(fun ti -> ti.value.prec)
     |> List.reduce ~f:Ops.promote_prec
     |> Option.value ~default:!default_value_prec
   in
-  let v = LA.create prec ~id ~label ~dims init_op in
   let rec shape_logics = function
     | [] -> [ Shape.Terminal init_op ]
     | [ t1 ] -> [ Shape.Transpose (transpose_op, t1.shape) ]
@@ -131,8 +135,15 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
     | t1 :: (t2 :: _ as ts) -> Shape.Broadcast (compose_op, t1.shape, t2.shape) :: shape_logics ts
   in
   let local_shape_updates = List.map ~f:(fun logic -> Shape.{ shape; logic }) @@ shape_logics ts in
+  let dims =
+    lazy
+      Shape.(
+        List.iter ~f:propagate_shapes local_shape_updates;
+        force_to_dims shape)
+  in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
   let projections = lazy_projections @@ List.hd_exn local_shape_updates in
+  let v = LA.create prec ~id ~label ~dims init_op in
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let fwds = List.map2_exn ts fwd_embed ~f:(fun ti e -> if not e then Assignments.Noop else ti.forward) in
   let forward = Assignments.sequential @@ fwds @ [ op_asn ~v ~projections ] in
