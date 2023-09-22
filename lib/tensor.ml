@@ -114,17 +114,17 @@ let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
 let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un)
-    ?(init_op = default_init_op) ~op_asn ~grad_asn ?(grad_spec = If_needed) make_shape ts =
-  let ts = List.sort ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
-  let fwd_embed = List.map ts ~f:is_fwd_root in
-  List.iter2_exn ts fwd_embed ~f:(fun ti e -> if e then remove_fwd_root ti);
-  let children = List.map2_exn ts fwd_embed ~f:(fun ti embedded -> { subtensor = ti; embedded }) in
+    ?(init_op = default_init_op) ~op_asn ~grad_asn ?(grad_spec = If_needed) make_shape orig_ts =
+  let ordered_ts = List.sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
+  let fwd_embed = List.map orig_ts ~f:is_fwd_root in
+  List.iter2_exn orig_ts fwd_embed ~f:(fun ti e -> if e then remove_fwd_root ti);
+  let children = List.map2_exn orig_ts fwd_embed ~f:(fun ti embedded -> { subtensor = ti; embedded }) in
   let id = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
   let shape = make_shape ~id in
   let label = op_label ^ if String.is_empty desc_label then "" else "#" ^ desc_label in
   let prec =
-    List.map ts ~f:(fun ti -> ti.value.prec)
+    List.map orig_ts ~f:(fun ti -> ti.value.prec)
     |> List.reduce ~f:Ops.promote_prec
     |> Option.value ~default:!default_value_prec
   in
@@ -134,7 +134,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
     | [ t1; t2 ] -> [ Shape.Broadcast (compose_op, t1.shape, t2.shape) ]
     | t1 :: (t2 :: _ as ts) -> Shape.Broadcast (compose_op, t1.shape, t2.shape) :: shape_logics ts
   in
-  let local_shape_updates = List.map ~f:(fun logic -> Shape.{ shape; logic }) @@ shape_logics ts in
+  let local_shape_updates = List.map ~f:(fun logic -> Shape.{ shape; logic }) @@ shape_logics orig_ts in
   let dims =
     lazy
       Shape.(
@@ -145,22 +145,25 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
   let projections = lazy_projections @@ List.hd_exn local_shape_updates in
   let v = LA.create prec ~id ~label ~dims init_op in
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
-  let fwds = List.map2_exn ts fwd_embed ~f:(fun ti e -> if not e then Assignments.Noop else ti.forward) in
+  let fwds =
+    List.map2_exn ordered_ts fwd_embed ~f:(fun ti e -> if not e then Assignments.Noop else ti.forward)
+  in
   let forward = Assignments.sequential @@ fwds @ [ op_asn ~v ~projections ] in
   if
     is_prohibit_grad grad_spec
-    || (Fn.non is_require_grad grad_spec && List.for_all ts ~f:(fun ti -> Option.is_none ti.diff))
+    || (Fn.non is_require_grad grad_spec && List.for_all orig_ts ~f:(fun ti -> Option.is_none ti.diff))
   then (
     let tensor = { forward; diff = None; id; value = v; shape; children } in
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     tensor)
   else
-    let bck_embed = List.map ts ~f:(fun ti -> Map.mem session_state.backprop_roots ti.id) in
-    List.iter2_exn ts bck_embed ~f:(fun ti e ->
+    let bck_embed = List.map ordered_ts ~f:(fun ti -> Map.mem session_state.backprop_roots ti.id) in
+    List.iter2_exn ordered_ts bck_embed ~f:(fun ti e ->
         if e then session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.id);
     let g_prec =
       let f ti = Option.map ti.diff ~f:(fun d -> d.grad.LA.prec) in
-      Option.value ~default:!default_grad_prec @@ List.reduce ~f:Ops.promote_prec @@ List.filter_map ts ~f
+      Option.value ~default:!default_grad_prec
+      @@ List.reduce ~f:Ops.promote_prec @@ List.filter_map orig_ts ~f
     in
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
@@ -169,7 +172,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
     let zero_grads =
       let f = dcode ~f:(fun diff -> diff.zero_grads) in
       let zeros =
-        List.map2_exn (List.map ~f ts) bck_embed ~f:(fun z e -> if not e then Assignments.Noop else z)
+        List.map2_exn (List.map ~f ordered_ts) bck_embed ~f:(fun z e -> if not e then Assignments.Noop else z)
       in
       Assignments.sequential @@ zeros @ [ fetch_zeros g shape ]
     in
@@ -179,7 +182,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
     let backprop =
       let f = dcode ~f:(fun diff -> diff.backprop) in
       let bcks =
-        List.map2_exn (List.map ~f ts) bck_embed ~f:(fun z e -> if not e then Assignments.Noop else z)
+        List.map2_exn (List.map ~f ordered_ts) bck_embed ~f:(fun z e -> if not e then Assignments.Noop else z)
       in
       Assignments.sequential @@ (grad_asn ~v ~g ~projections :: List.rev bcks)
     in
