@@ -324,6 +324,13 @@ let header t =
   ^ "]"
 (*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box v.label)*)
 
+let lazy_optional_payload ~present ~missing v =
+  if Lazy.is_val v then
+    match Lazy.force v with
+    | Some p -> present p
+    | None -> `Vlist (false, [ `Text (missing ()); `Text "<void>" ])
+  else `Vlist (false, [ `Text (missing ()); `Text "<not-in-yet> " ])
+
 type array_print_style =
   [ `Default
     (** The inner rectangles comprise both an input and an output axis, if available. Similarly,
@@ -371,7 +378,7 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
         else if is_false a.virtual_ then [%string "<non-virtual %{Option.value_exn a.virtual_ |> snd#Int}>"]
         else if is_false a.device_only then
           [%string "<non-device-only %{Option.value_exn a.device_only |> snd#Int}>"]
-        else (* assert false *) "<void>")
+        else "<waiting>")
     in
     let txt =
       if with_id then "#" ^ id ^ " " ^ t.value.label (* ^ " DEBUG: " ^ where_located t.value *)
@@ -386,18 +393,18 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
         "#" ^ Int.to_string diff.grad.id ^ " " ^ label (* ^ " DEBUG: " ^ where_located diff.grad *)
       else label
     in
-    match (not embedded, with_value, with_grad, t.value.array, t.diff) with
-    | true, _, _, _, _ -> `Embed_subtree_ID (Int.to_string t.id)
-    | _, false, false, _, _ | _, false, true, _, None -> `Subtree_with_ID (id, `Tree (`Text txt, children))
-    | _, true, false, (lazy (Some v_array)), _ | _, true, true, (lazy (Some v_array)), None ->
+    match (not embedded, with_value, with_grad, t.diff) with
+    | true, _, _, _ -> `Embed_subtree_ID (Int.to_string t.id)
+    | _, false, false, _ | _, false, true, None -> `Subtree_with_ID (id, `Tree (`Text txt, children))
+    | _, true, false, _ | _, true, true, None ->
         let node =
-          `Box (Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices @@ v_array)
+          lazy_optional_payload t.value.array
+            ~present:(fun v_array ->
+              `Box (Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices v_array))
+            ~missing:(fun () -> txt ^ " " ^ where_located t.value)
         in
         `Subtree_with_ID (id, `Tree (node, children))
-    | _, true, false, (lazy None), _ | _, true, true, (lazy None), None ->
-        let node = `Text (txt ^ " " ^ where_located t.value) in
-        `Subtree_with_ID (id, `Tree (node, children))
-    | _, false, true, _, Some diff ->
+    | _, false, true, Some diff ->
         let prefix = grad_txt diff in
         let node =
           match Lazy.force diff.grad.array with
@@ -406,30 +413,21 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
           | None -> `Text (prefix ^ " " ^ where_located diff.grad)
         in
         `Subtree_with_ID (id, `Tree (node, children))
-    | _, true, true, (lazy (Some v_array)), Some diff ->
+    | _, true, true, Some diff ->
         let node =
-          let value = Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices v_array in
-          let grad =
-            match Lazy.force diff.grad.array with
-            | Some g_array ->
-                `Box
-                  (Nd.render_array ~brief:true ~prefix:(grad_txt diff) ?entries_per_axis ~labels ~indices
-                     g_array)
-            | None -> `Text (grad_txt diff ^ " " ^ where_located diff.grad)
+          let value =
+            lazy_optional_payload t.value.array
+              ~present:(fun v_array ->
+                `Box (Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices v_array))
+              ~missing:(fun () -> txt ^ " " ^ where_located t.value)
           in
-          `Vlist (false, [ `Box value; grad ])
-        in
-        `Subtree_with_ID (id, `Tree (node, children))
-    | _, true, true, (lazy None), Some diff ->
-        let node =
-          let value = `Text (txt ^ " " ^ where_located t.value) in
           let grad =
-            match Lazy.force diff.grad.array with
-            | Some g_array ->
+            lazy_optional_payload diff.grad.array
+              ~present:(fun g_array ->
                 `Box
                   (Nd.render_array ~brief:true ~prefix:(grad_txt diff) ?entries_per_axis ~labels ~indices
-                     g_array)
-            | None -> `Text (grad_txt diff ^ " " ^ where_located diff.grad)
+                     g_array))
+              ~missing:(fun () -> grad_txt diff ^ " " ^ where_located diff.grad)
           in
           `Vlist (false, [ value; grad ])
         in

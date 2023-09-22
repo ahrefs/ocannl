@@ -7,7 +7,7 @@ type t = {
   dims : int array Lazy.t;
   id : int;
   label : string;  (** An optional display information. *)
-  hosted : bool ref;
+  hosted : bool option ref;
   mutable virtual_ : (bool * int) option;
       (** If true, this array is never materialized, its computations are inlined on a per-scalar basis.
           A array that is hosted will not be virtual. *)
@@ -21,7 +21,6 @@ let is_false opt = not @@ Option.value ~default:true @@ Option.map ~f:fst opt
 let is_true opt = Option.value ~default:false @@ Option.map ~f:fst opt
 let isnt_false opt = Option.value ~default:true @@ Option.map ~f:fst opt
 let isnt_true opt = not @@ Option.value ~default:false @@ Option.map ~f:fst opt
-
 let name { id; _ } = "n" ^ Int.to_string id
 let compare a1 a2 = compare_int a1.id a2.id
 let sexp_of_t a = Sexp.Atom (name a)
@@ -72,8 +71,11 @@ end)
 let registry = Registry.create 16
 
 let create prec ~id ~label ~dims init_op =
-  let hosted = ref false in
-  let array = lazy (if !hosted then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None) in
+  let hosted = ref None in
+  let array =
+    lazy
+      (if Option.value_exn !hosted then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None)
+  in
   let arr =
     { array; prec; id; label; hosted; virtual_ = None; device_only = None; backend_info = ""; dims }
   in

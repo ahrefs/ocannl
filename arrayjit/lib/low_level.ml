@@ -724,7 +724,12 @@ let compile_proc ~name ?(verbose = false) static_indices llc : optimized =
   Hashtbl.iter (fst result) ~f:(fun v ->
       if Option.is_none v.nd.virtual_ then v.nd.virtual_ <- Some (true, 20) (* DEBUG: *)
       else if Option.is_none v.nd.device_only then v.nd.device_only <- Some (true, 21);
-      if LA.isnt_true v.nd.virtual_ && LA.isnt_true v.nd.device_only then v.nd.hosted := true);
+      if LA.isnt_true v.nd.virtual_ && LA.isnt_true v.nd.device_only then (
+        assert (Option.value ~default:true !(v.nd.hosted));
+        v.nd.hosted := Some true)
+      else (
+        assert (not @@ Option.value ~default:false !(v.nd.hosted));
+        v.nd.hosted := Some false));
   if verbose then Stdio.printf "Low_level.compile_proc: finished\n%!";
   result
 

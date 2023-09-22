@@ -74,7 +74,7 @@ let get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ct
       let dims = Lazy.force key.dims in
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
       let size_in_bytes = size_in_elems * Ops.prec_in_bytes key.prec in
-      let is_on_host = !(key.hosted) in
+      let is_on_host = Option.value_exn !(key.hosted) in
       assert (Bool.(Option.is_some (Lazy.force key.array) = is_on_host));
       let c_void_ptr = Type.(get ctx Type.Void_ptr) in
       let c_index = Type.get ctx Type.Size_t in
