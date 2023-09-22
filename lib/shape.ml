@@ -104,7 +104,12 @@ let get_row_var () =
   Int.incr uid;
   Row_var !uid
 
-type dims = { dims : dim list; constr : dims_constraint; row : row; sh_id : int }
+type dims = {
+  dims : dim list;
+  constr : dims_constraint;
+  row : row;
+  sh_id : Set.M(Int).t; [@equal.ignore] [@compare.ignore] [@hash.ignore]
+}
 [@@deriving equal, hash, compare, sexp]
 
 type deduce_within_shape = Not_constrained | Input_equals_output [@@deriving compare, sexp, variants]
@@ -369,15 +374,20 @@ let subst_row row_env ({ dims; constr; row; sh_id } as default) =
   | Row_var v -> (
       match Map.find row_env v with
       | None -> default
-      | Some { dims = more_dims; constr = Unconstrained; row; sh_id = _ } ->
-          { dims = more_dims @ dims; constr; row; sh_id }
-      | Some { dims = more_dims; constr = Total_elems m; row; sh_id = _ } ->
+      | Some { dims = more_dims; constr = Unconstrained; row; sh_id = more_sh_id } ->
+          { dims = more_dims @ dims; constr; row; sh_id = Set.union more_sh_id sh_id }
+      | Some { dims = more_dims; constr = Total_elems m; row; sh_id = more_sh_id } ->
           let more_constr =
             if List.for_all dims ~f:is_dim then
               Total_elems (m * List.fold dims ~init:1 ~f:(fun n d -> n * dim_to_int_exn d))
             else Unconstrained (* Wait for more shape inference. *)
           in
-          { dims = more_dims @ dims; constr = meet more_constr constr; row; sh_id })
+          {
+            dims = more_dims @ dims;
+            constr = meet more_constr constr;
+            row;
+            sh_id = Set.union more_sh_id sh_id;
+          })
 
 let apply_constraint r env =
   let r = subst_row env.row_env r in
@@ -405,12 +415,7 @@ let apply_constraint r env =
 
 let eliminate_broadcastable = function (Row_var _ | Fixed) as d -> d | Broadcastable -> get_row_var ()
 
-module Debug_runtime = Minidebug_runtime.Flushing (struct
-  let debug_ch = Stdio.stdout
-  let time_tagged = false
-end)
-
-let%debug_sexp rec unify_dims (row_eqs : (dims * dims) list) (env : environment) : environment =
+let rec unify_dims row_eqs env =
   match row_eqs with
   | [] -> env
   | (r1, r2) :: row_eqs when equal_dims r1 r2 -> apply_constraint r1 env |> unify_dims row_eqs
@@ -419,13 +424,20 @@ let%debug_sexp rec unify_dims (row_eqs : (dims * dims) list) (env : environment)
       (* Shortcut to avoid an uninformative polluting substitution. *)
       apply_constraint r1 env |> apply_constraint r2 |> unify_dims row_eqs
   | (({ dims = []; row = Row_var v; _ } as r1), r2) :: row_eqs
-  | (r2, ({ dims = []; row = Row_var v; _ } as r1)) :: row_eqs ->
-      if equal_row r1.row r2.row && (not @@ List.is_empty r2.dims) then
-        raise @@ Shape_error ("unify_dims: occurs check: infinite number of axes", [ Row_mismatch [ r1; r2 ] ]);
-      let r2 = { r2 with row = eliminate_broadcastable r2.row } in
-      let row_eqs = match Map.find env.row_env v with None -> row_eqs | Some r1 -> (r1, r2) :: row_eqs in
-      let row_env = Map.update env.row_env v ~f:(fun _ -> subst_row env.row_env r2) in
-      apply_constraint r1 { env with row_env } |> unify_dims row_eqs
+  | (r2, ({ dims = []; row = Row_var v; _ } as r1)) :: row_eqs -> (
+      let r2 = subst_row env.row_env r2 in
+      if equal_row r1.row r2.row && not (List.is_empty r2.dims) then
+        raise @@ Shape_error ("unify_dims: occurs check: infinite number of axes", [ Row_mismatch [ r1; r2 ] ])
+      else if equal_row r1.row r2.row then
+        apply_constraint r1 env |> apply_constraint r2 |> unify_dims row_eqs
+      else
+        match Map.find env.row_env v with
+        | None ->
+            let data = { r2 with row = eliminate_broadcastable r2.row } in
+            assert (not @@ equal_row r1.row data.row);
+            let row_env = Map.add_exn env.row_env ~key:v ~data in
+            apply_constraint r1 { env with row_env } |> unify_dims row_eqs
+        | Some r1' -> apply_constraint r1 env |> unify_dims ((r1', r2) :: row_eqs))
   | ({ dims = []; constr = constr1; row = Fixed; sh_id }, { dims = []; constr = constr2; row = _; sh_id = _ })
     :: row_eqs
   | ({ dims = []; constr = constr1; row = _; sh_id = _ }, { dims = []; constr = constr2; row = Fixed; sh_id })
@@ -434,9 +446,9 @@ let%debug_sexp rec unify_dims (row_eqs : (dims * dims) list) (env : environment)
       apply_constraint { dims = []; constr; row = Fixed; sh_id } env |> unify_dims row_eqs
   | (({ dims = []; row = Fixed; _ } as r1), r2) :: _ | (r2, ({ dims = []; row = Fixed; _ } as r1)) :: _ ->
       raise @@ Shape_error ("unify_dims: Fixed-mode axis number mismatch", [ Row_mismatch [ r1; r2 ] ])
-  | (({ dims = []; row = Broadcastable; _ } as r), _) :: row_eqs
-  | (_, ({ dims = []; row = Broadcastable; _ } as r)) :: row_eqs ->
-      apply_constraint r env |> unify_dims row_eqs
+  | (({ dims = []; row = Broadcastable; _ } as r1), r2) :: row_eqs
+  | (r2, ({ dims = []; row = Broadcastable; _ } as r1)) :: row_eqs ->
+      apply_constraint r1 env |> apply_constraint r2 |> unify_dims row_eqs
   | ( ({ dims = _ :: _ as ds1; constr = constr1; row = r1; sh_id = sh_id1 } as row1),
       ({ dims = _ :: _ as ds2; constr = constr2; row = r2; sh_id = sh_id2 } as row2) )
     :: row_eqs ->
@@ -451,7 +463,7 @@ let%debug_sexp rec unify_dims (row_eqs : (dims * dims) list) (env : environment)
       in
       (try unify_dim dim_eqs env
        with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ row1; row2 ] :: trace))
-      |> apply_constraint { dims; constr; row; sh_id = sh_id1 }
+      |> apply_constraint { dims; constr; row; sh_id = Set.union sh_id1 sh_id2 }
       |> unify_dims
            (( { dims = drop_from_end ds1 suffix; constr = Unconstrained; row = r1; sh_id = sh_id1 },
               { dims = drop_from_end ds2 suffix; constr = Unconstrained; row = r2; sh_id = sh_id2 } )
@@ -492,9 +504,9 @@ let axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels =
   let i_row = upd_row (i_row, labels.bcast_input) in
   let o_row = upd_row (o_row, labels.bcast_output) in
   let to_row v = Option.value v ~default:Broadcastable in
-  let batch = { dims = to_dim b_dims; constr = Unconstrained; row = to_row b_row; sh_id = -1 } in
-  let input = { dims = to_dim i_dims; constr = Unconstrained; row = to_row i_row; sh_id = -1 } in
-  let output = { dims = to_dim o_dims; constr = Unconstrained; row = to_row o_row; sh_id = -1 } in
+  let batch = { dims = to_dim b_dims; constr = Unconstrained; row = to_row b_row; sh_id = Utils.no_ints } in
+  let input = { dims = to_dim i_dims; constr = Unconstrained; row = to_row i_row; sh_id = Utils.no_ints } in
+  let output = { dims = to_dim o_dims; constr = Unconstrained; row = to_row o_row; sh_id = Utils.no_ints } in
   (b_row, i_row, o_row, batch, input, output)
 
 let einsum_slot_spec_to_dims_bio ?b_row ?i_row ?o_row labels =
@@ -518,7 +530,9 @@ let unify_shapes env { shape = cur_sh; logic } =
                  [ Shape_mismatch [ cur_sh ] ] )
       in
       let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in
-      let b_row = { dims = []; constr = Total_elems batch_elems; row = get_row_var (); sh_id = cur_sh.id } in
+      let b_row =
+        { dims = []; constr = Total_elems batch_elems; row = get_row_var (); sh_id = Utils.one_int cur_sh.id }
+      in
       try unify_dims [ (b_row, cur_sh.batch) ] env
       with Shape_error (s, trace) -> raise @@ Shape_error (s, Shape_mismatch [ cur_sh ] :: trace))
   | Terminal (File_mapped (filename, prec)) -> (
@@ -534,7 +548,9 @@ let unify_shapes env { shape = cur_sh; logic } =
                  [ Shape_mismatch [ cur_sh ] ] )
       in
       let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in
-      let b_row = { dims = []; constr = Total_elems batch_elems; row = get_row_var (); sh_id = cur_sh.id } in
+      let b_row =
+        { dims = []; constr = Total_elems batch_elems; row = get_row_var (); sh_id = Utils.one_int cur_sh.id }
+      in
       try unify_dims [ (cur_sh.batch, b_row) ] env
       with Shape_error (s, trace) -> raise @@ Shape_error (s, Shape_mismatch [ cur_sh ] :: trace))
   | Transpose (Transpose, sh) -> (
@@ -577,7 +593,7 @@ let unify_shapes env { shape = cur_sh; logic } =
           dims = cur_sh.batch.dims @ [ slice_var ];
           constr = Unconstrained;
           row = cur_sh.batch.row;
-          sh_id = cur_sh.id;
+          sh_id = Utils.one_int cur_sh.id;
         }
       in
       try
@@ -782,17 +798,24 @@ let make ?(fix_b = false) ?(fix_i = false) ?(fix_o = false) ?batch_dims ?input_d
     ?input_axes ?output_axes ?(deduced = Not_constrained) ~id () =
   let make_row fix = if fix then Fixed else Broadcastable in
   let make_dims fix ds =
-    { dims = List.map ~f:(fun d -> get_dim ~d ()) ds; constr = Unconstrained; row = make_row fix; sh_id = id }
+    {
+      dims = List.map ~f:(fun d -> get_dim ~d ()) ds;
+      constr = Unconstrained;
+      row = make_row fix;
+      sh_id = Utils.one_int id;
+    }
   in
   let make_axes fix ds =
     {
       dims = List.map ~f:(fun (label, d) -> get_dim ~d ~label ()) ds;
       constr = Unconstrained;
       row = make_row fix;
-      sh_id = id;
+      sh_id = Utils.one_int id;
     }
   in
-  let make_unknown () = { dims = []; constr = Unconstrained; row = get_row_var (); sh_id = id } in
+  let make_unknown () =
+    { dims = []; constr = Unconstrained; row = get_row_var (); sh_id = Utils.one_int id }
+  in
   let batch =
     match (batch_dims, batch_axes) with
     | Some batch_dims, None -> make_dims fix_b batch_dims
@@ -860,8 +883,8 @@ let stop_broadcast sh =
           state :=
             unify_dims
               [
-                ( { dims = []; constr = Unconstrained; row; sh_id = sh.id },
-                  { dims = []; constr = Unconstrained; row = Fixed; sh_id = sh.id } );
+                ( { dims = []; constr = Unconstrained; row; sh_id = Utils.one_int sh.id },
+                  { dims = []; constr = Unconstrained; row = Fixed; sh_id = Utils.one_int sh.id } );
               ]
               !state;
           Fixed

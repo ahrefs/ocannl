@@ -9,6 +9,9 @@ module Set_O = struct
     Set.of_sequence (Set.comparator_s s1) @@ Sequence.map ~f:Either.value @@ Set.symmetric_diff s1 s2
 end
 
+let no_ints = Set.empty (module Int)
+let one_int = Set.singleton (module Int)
+
 (** Retrieves [arg_name] argument from the command line or from an environment variable, returns
     [default] if none found. *)
 let get_global_arg ~verbose ~default ~arg_name:n =
