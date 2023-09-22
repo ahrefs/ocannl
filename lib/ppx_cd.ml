@@ -500,7 +500,7 @@ let rec translate ?desc_label ~proj_in_scope (expr : expression) : expr_type * p
         [%expr
           Option.value ~default:Arrayjit.Assignments.Noop
           @@ Option.map2 [%e setup_l.array_opt] [%e setup_r1.array_opt] ~f:(fun lhs rhs ->
-                 Arrayjit.Assignments.Accum_binop
+                 Arrayjit.Assignments.Accum_unop
                    {
                      zero_out = [%e zero_out];
                      accum = [%e accu_op];
