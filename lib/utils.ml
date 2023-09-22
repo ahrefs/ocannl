@@ -63,3 +63,13 @@ let unique_keep_first ~equal l =
     | hd :: tl -> if List.mem acc hd ~equal then loop acc tl else loop (hd :: acc) tl
   in
   loop [] l
+
+module Debug_flushing = Minidebug_runtime.Flushing (struct
+  let debug_ch = Stdio.stdout
+  let time_tagged = false
+end)
+
+module Debug_PrintBox = Minidebug_runtime.PrintBox (struct
+  let debug_ch = Stdio.stdout
+  let time_tagged = false
+end)
