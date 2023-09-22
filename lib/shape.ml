@@ -828,7 +828,7 @@ let make ?(fix_b = false) ?(fix_i = false) ?(fix_o = false) ?batch_dims ?input_d
     match (input_dims, input_axes) with
     | Some input_dims, None -> make_dims fix_i input_dims
     | None, Some input_axes -> make_axes fix_i input_axes
-    | None, None when not fix_b -> make_unknown ()
+    | None, None when not fix_i -> make_unknown ()
     | Some _, Some _ -> invalid_arg "Shape.make: do not provide both input_dims, input_axes"
     | None, None -> invalid_arg "Shape.make: do not provide fix_b:true for unknown input axes"
   in
