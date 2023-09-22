@@ -353,9 +353,9 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         (* FIXME(194): Convert according to array.typ ?= num_typ. *)
         RValue.lvalue @@ LValue.access_array (get_ptr array) offset
-    | Embed_index (Fixed_idx i) -> RValue.int ctx num_typ i
+    | Embed_index (Fixed_idx i) -> RValue.cast ctx (RValue.int ctx num_typ i) num_typ
     | Embed_index (Iterator s) -> (
-        try Map.find_exn env s
+        try RValue.cast ctx (Map.find_exn env s) num_typ
         with e ->
           Stdlib.Format.eprintf "exec_as_gccjit: missing index %a@ among environment keys:@ %a\n%!"
             Sexp.pp_hum
