@@ -39,6 +39,8 @@ let () =
   let step_sym, step_ref, bindings = IDX.get_static_symbol IDX.empty in
   let%op mlp x = "b3" 1 + ("w3" * !/("b2" hid_dim + ("w2" * !/("b1" hid_dim + ("w1" * x))))) in
   let%op learning_rate = 0.1 *. (!..steps - !@step_sym) /. !..steps in
+  (* FIXME: Shape.broadcast shouldn't be needed here! Aaargh... *)
+  Shape.broadcast learning_rate.shape;
   let%op moons_input = moons_flat @| step_sym in
   let%op moons_class = moons_classes @| step_sym in
   let losses = ref [] in
@@ -53,7 +55,7 @@ let () =
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 scalar_loss;
   Stdio.print_endline "\n******** learning_rate **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
-  Stdio.print_endline "\n********";
+  Stdio.printf "\n********\n%!";
   let update = Train.grad_update scalar_loss in
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
   let sgd_jitted = jit ctx bindings (Seq (update, sgd)) in
@@ -73,6 +75,9 @@ let () =
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   let%op point = [ 0; 0 ] in
   let mlp_result = mlp point in
+  Stdio.print_endline "\n******** mlp_result **********";
+  Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 mlp_result;
+  Stdio.printf "\n********\n%!";
   let result_jitted =
     jit ctx (* sgd_jitted.context *) IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
   in
