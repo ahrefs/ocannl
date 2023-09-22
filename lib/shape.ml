@@ -519,25 +519,41 @@ and unify_dim (dim_eqs : dim_eq list) (env : environment) : environment =
 let axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels =
   let b_dims, i_dims, o_dims = axis_map_to_dims_bio labels.labels in
   let vars = Hashtbl.create (module String) in
-  let to_dim = Array.(Fn.compose to_list @@ map ~f:(f vars)) in
-  let upd_row = function None, true -> Some (get_row_var ()) | old, _ -> old in
+  let to_dim kind = Array.(Fn.compose to_list @@ map ~f:(f kind vars)) in
+  let upd_row = function None, true -> Some (get_row_var ()) | old, true -> old | _, false -> None in
   let b_row = upd_row (b_row, labels.bcast_batch) in
   let i_row = upd_row (i_row, labels.bcast_input) in
   let o_row = upd_row (o_row, labels.bcast_output) in
   let to_row v = Option.value v ~default:Broadcastable in
-  let batch = { dims = to_dim b_dims; constr = Unconstrained; row = to_row b_row; sh_id = Utils.no_ints } in
-  let input = { dims = to_dim i_dims; constr = Unconstrained; row = to_row i_row; sh_id = Utils.no_ints } in
-  let output = { dims = to_dim o_dims; constr = Unconstrained; row = to_row o_row; sh_id = Utils.no_ints } in
+  let batch =
+    { dims = to_dim AxisKey.Batch b_dims; constr = Unconstrained; row = to_row b_row; sh_id = Utils.no_ints }
+  in
+  let input =
+    { dims = to_dim AxisKey.Input i_dims; constr = Unconstrained; row = to_row i_row; sh_id = Utils.no_ints }
+  in
+  let output =
+    { dims = to_dim AxisKey.Output o_dims; constr = Unconstrained; row = to_row o_row; sh_id = Utils.no_ints }
+  in
   (b_row, i_row, o_row, batch, input, output)
 
-let einsum_slot_spec_to_dims_bio ?b_row ?i_row ?o_row labels =
-  let f vars = function
+let einsum_slot_spec_to_dims_bio ~generative ?b_row ?i_row ?o_row labels =
+  let equal = AxisKey.equal_kind in
+  let f kind vars = function
     | Either.First label -> Var (Hashtbl.find_or_add vars label ~default:(fun () -> get_var ~label ()))
+    | Second 0 when Option.value ~default:false @@ List.Assoc.find generative ~equal kind -> get_dim ~d:1 ()
     | Second _ -> Var (get_var ())
   in
   axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels
 
 let unify_shapes env { shape = cur_sh; logic } =
+  let generative =
+    AxisKey.
+      [
+        (Batch, List.is_empty cur_sh.batch.dims);
+        (Input, List.is_empty cur_sh.input.dims);
+        (Output, List.is_empty cur_sh.output.dims);
+      ]
+  in
   match logic with
   | Terminal (Range_over_offsets | Standard_uniform | Constant_fill { strict = false; _ }) -> env
   | Terminal (Constant_fill { values; strict = true }) -> (
@@ -650,8 +666,10 @@ let unify_shapes env { shape = cur_sh; logic } =
                  ( "Invalid permutation spec (expected one argument): " ^ spec,
                    [ Shape_mismatch [ cur_sh; sh ] ] )
       in
-      let b_row, i_row, o_row, b_rhs, i_rhs, o_rhs = einsum_slot_spec_to_dims_bio ls_rhs in
-      let _, _, _, b_lhs, i_lhs, o_lhs = einsum_slot_spec_to_dims_bio ?b_row ?i_row ?o_row ls_lhs in
+      let b_row, i_row, o_row, b_rhs, i_rhs, o_rhs = einsum_slot_spec_to_dims_bio ~generative:[] ls_rhs in
+      let _, _, _, b_lhs, i_lhs, o_lhs =
+        einsum_slot_spec_to_dims_bio ~generative ?b_row ?i_row ?o_row ls_lhs
+      in
       try
         unify_dims
           [
@@ -674,11 +692,13 @@ let unify_shapes env { shape = cur_sh; logic } =
                  ( "Invalid permutation spec (expected one argument): " ^ spec,
                    [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )
       in
-      let b_row, i_row, o_row, b_rhs1, i_rhs1, o_rhs1 = einsum_slot_spec_to_dims_bio ls_rhs1 in
+      let b_row, i_row, o_row, b_rhs1, i_rhs1, o_rhs1 = einsum_slot_spec_to_dims_bio ~generative:[] ls_rhs1 in
       let b_row, i_row, o_row, b_rhs2, i_rhs2, o_rhs2 =
-        einsum_slot_spec_to_dims_bio ?b_row ?i_row ?o_row ls_rhs2
+        einsum_slot_spec_to_dims_bio ~generative:[] ?b_row ?i_row ?o_row ls_rhs2
       in
-      let _, _, _, b_lhs, i_lhs, o_lhs = einsum_slot_spec_to_dims_bio ?b_row ?i_row ?o_row ls_lhs in
+      let _, _, _, b_lhs, i_lhs, o_lhs =
+        einsum_slot_spec_to_dims_bio ~generative ?b_row ?i_row ?o_row ls_lhs
+      in
       try
         unify_dims
           [
@@ -889,7 +909,7 @@ let make ?(fix_b = false) ?(fix_i = false) ?(fix_o = false) ?batch_dims ?input_d
   result
 
 let shape_spec_to_dims_bio ?b_row ?i_row ?o_row labels =
-  let f vars = function
+  let f _kind vars = function
     | Either.First s when String.contains s '=' -> (
         let label, dim =
           match String.split s ~on:'=' with

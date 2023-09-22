@@ -49,16 +49,18 @@ let () =
   let%op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
   (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update computation. *)
   let weight_decay = 0.0001 in
-  (* let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in *)
-  let scalar_loss = margin_loss in
+  let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in
+  (* So that we can inspect them. *)
+  Train.set_fully_on_host scalar_loss.value;
+  Train.set_fully_on_host learning_rate.value;
+  let update = Train.grad_update scalar_loss in
+  let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
+  let sgd_jitted = jit ctx bindings (Seq (update, sgd)) in
   Stdio.print_endline "\n******** scalar_loss **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 scalar_loss;
   Stdio.print_endline "\n******** learning_rate **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
   Stdio.printf "\n********\n%!";
-  let update = Train.grad_update scalar_loss in
-  let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
-  let sgd_jitted = jit ctx bindings (Seq (update, sgd)) in
   for step = 1 to steps do
     step_ref := step;
     sgd_jitted.run ();
@@ -75,12 +77,14 @@ let () =
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   let%op point = [ 0; 0 ] in
   let mlp_result = mlp point in
-  Stdio.print_endline "\n******** mlp_result **********";
-  Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 mlp_result;
-  Stdio.printf "\n********\n%!";
+  Train.set_fully_on_host point.value;
+  Train.set_fully_on_host mlp_result.value;
   let result_jitted =
     jit ctx (* sgd_jitted.context *) IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
   in
+  Stdio.print_endline "\n******** mlp_result **********";
+  Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 mlp_result;
+  Stdio.printf "\n********\n%!";
   let callback (x, y) =
     Tensor.set_values point [| x; y |];
     result_jitted.run ();
