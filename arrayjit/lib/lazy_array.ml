@@ -6,7 +6,9 @@ type t = {
   prec : Ops.prec;
   dims : int array Lazy.t;
   id : int;
-  label : string;  (** An optional display information. *)
+  label : string list;
+      (** Display information. It is better if the last element of the list is the most narrow
+          or alphanumeric, e.g. an identifier. *)
   hosted : bool option ref;
   mutable virtual_ : (bool * int) option;
       (** If true, this array is never materialized, its computations are inlined on a per-scalar basis.
@@ -22,6 +24,7 @@ let is_true opt = Option.value ~default:false @@ Option.map ~f:fst opt
 let isnt_false opt = Option.value ~default:true @@ Option.map ~f:fst opt
 let isnt_true opt = not @@ Option.value ~default:false @@ Option.map ~f:fst opt
 let name { id; _ } = "n" ^ Int.to_string id
+let label a = String.concat ~sep:"#" a.label
 let compare a1 a2 = compare_int a1.id a2.id
 let sexp_of_t a = Sexp.Atom (name a)
 
@@ -59,7 +62,7 @@ let header arr =
       | (lazy (Some nd)) -> Int.to_string_hum @@ Nd.size_in_bytes nd
     else "<not-in-yet>"
   in
-  String.concat [ name arr; " "; arr.label; ": "; dims_to_string arr; "; mem in bytes: "; mem_size ]
+  String.concat [ name arr; " "; label arr; ": "; dims_to_string arr; "; mem in bytes: "; mem_size ]
 
 module Registry = Core.Weak.Make (struct
   type nonrec t = t

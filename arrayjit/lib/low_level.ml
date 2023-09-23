@@ -213,7 +213,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
           raise
           @@ Ndarray.User_error
                [%string
-                 "Compiling: array #%{a.id#Int} %{a.label} is already virtual, does not support recurrence"];
+                 "Compiling: array #%{a.id#Int} %{LA.label a} is already virtual, does not support recurrence"];
         if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 2);
         (* We allow the array to be device-only, but infer it to not be as the safer case. *)
         if Option.is_none a.device_only then a.device_only <- Some (false, 3);
@@ -324,7 +324,7 @@ let check_and_store_virtual traced static_indices top_llc =
       raise
       @@ Ndarray.User_error
            [%string
-             {|Compiling: array #%{a.id#Int} %{a.label} is already virtual, cannot compile:
+             {|Compiling: array #%{a.id#Int} %{LA.label a} is already virtual, cannot compile:
 %{Sexp.to_string_hum @@ sexp_of_t top_llc}|}];
     if Option.is_none a.virtual_ then a.virtual_ <- Some (false, i)
 
@@ -409,7 +409,7 @@ let inline_computation ~id traced static_indices call_args =
        raise
        @@ Ndarray.User_error
             [%string
-              {|Compiling: array #%{a.id#Int} %{a.label} is already virtual, cannot inline computation:
+              {|Compiling: array #%{a.id#Int} %{LA.label a} is already virtual, cannot inline computation:
 %{Sexp.to_string_hum @@ sexp_of_t body}|}]);
     if Option.is_none a.virtual_ then a.virtual_ <- Some (false, i);
     None

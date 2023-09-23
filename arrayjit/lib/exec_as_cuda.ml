@@ -199,7 +199,7 @@ let get_array ~traced_store:_ ctx_info (key : LA.t) =
     let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
     if !Low_level.with_debug then
       Stdio.printf "Exec_as_cuda: creating array #%d %s; mem=%s on host = %b; global = %b\n%!" key.id
-        key.label backend_info is_on_host (Option.is_some global);
+        (LA.label key) backend_info is_on_host (Option.is_some global);
     if not @@ String.is_substring key.backend_info ~substring:backend_info then
       key.backend_info <- key.backend_info ^ backend_info;
     let data = { hosted; local; mem; dims; size_in_bytes; size_in_elems; num_typ; is_double; global } in
@@ -370,7 +370,7 @@ let jit_func ~name ?(verbose = false) (old_context : context) idx_params (traced
     @@ List.filter_map arrays ~f:(fun la ->
            let tn = Map.find_exn info.ctx_arrays la in
            if !Low_level.with_debug then
-             Stdio.printf "Exec_as_cuda.jit: array used: #%d %s; %s\n%!" la.id la.label
+             Stdio.printf "Exec_as_cuda.jit: array used: #%d %s; %s\n%!" la.id (LA.label la)
                (Sexp.to_string_hum @@ sexp_of_mem_properties tn.mem);
            match tn.mem with
            | Local_only -> None

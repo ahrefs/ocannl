@@ -11,7 +11,7 @@ let () =
   let module Backend = (val Train.fresh_backend ()) in
   CDSL.with_debug := true;
   CDSL.keep_files_in_run_directory := true;
-  (* CDSL.debug_log_jitted := true; *)
+  CDSL.debug_log_jitted := true;
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
   CDSL.fixed_state_for_init := Some 4;
@@ -42,100 +42,106 @@ let () =
   Shape.broadcast learning_rate.shape;
   let%op moons_input = moons_flat @| step_sym in
   let%op moons_class = moons_classes @| step_sym in
-  let losses = ref [] in
+  (* let losses = ref [] in
   let log_losses = ref [] in
-  let learning_rates = ref [] in
+  let learning_rates = ref [] in *)
   let%op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
   (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update computation. *)
-  let weight_decay = 0.0001 in
+  (* let weight_decay = 0.0001 in *)
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in
   (* So that we can inspect them. *)
   Train.set_fully_on_host scalar_loss.value;
   Train.set_fully_on_host learning_rate.value;
-  let update = Train.grad_update scalar_loss in
-  let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
-  let sgd_jitted = Backend.jit ctx ~verbose:true bindings (Seq (update, sgd)) in
-  Train.all_host_to_device (module Backend) sgd_jitted.context scalar_loss;
-  Train.all_host_to_device (module Backend) sgd_jitted.context learning_rate;
+  (* let update = Train.grad_update scalar_loss in *)
+  (* let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in *)
+  (* let sgd_jitted = Backend.jit ctx ~verbose:true bindings (Seq (update, sgd)) in *)
+  let lr_jitted = Backend.jit ~name:"lr" ctx ~verbose:true bindings learning_rate.forward in
+  (* Train.all_host_to_device (module Backend) sgd_jitted.context scalar_loss; *)
+  (* Train.all_host_to_device (module Backend) sgd_jitted.context learning_rate; *)
+  Train.all_host_to_device (module Backend) lr_jitted.context learning_rate;
   Stdio.print_endline "\n******** scalar_loss **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 scalar_loss;
   Stdio.print_endline "\n******** learning_rate **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
   Stdio.printf "\n********\n%!";
-  (*step_ref := 1;
-    sgd_jitted.run ();
-    Backend.await device;
-    Train.all_device_to_host (module Backend) sgd_jitted.context scalar_loss;
-    Stdio.print_endline "\n******** DEBUG: scalar_loss **********";
-    Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 scalar_loss;
-    Stdio.print_endline "\n******** DEBUG: learning_rate **********";
-    Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
-    Stdio.printf "\nDEBUG: ********\n%!" *)
-  let open Tensor.O in
-  for step = 1 to steps do
-    step_ref := step;
-    sgd_jitted.run ();
-    Backend.await device;
-    assert (Backend.to_host sgd_jitted.context learning_rate.value);
-    assert (Backend.to_host sgd_jitted.context scalar_loss.value);
-    if step % (len / batch) = 1 || step = steps then
-      Stdio.printf "Step=%d, lr=%f, loss=%f\n%!" step learning_rate.@[0] scalar_loss.@[0];
-    learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
-    losses := scalar_loss.@[0] :: !losses;
-    log_losses := Float.log scalar_loss.@[0] :: !log_losses
-  done;
-  let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
-  let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
-  let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
-  let%op point = [ 0; 0 ] in
-  let mlp_result = mlp point in
-  Train.set_fully_on_host point.value;
-  Train.set_fully_on_host mlp_result.value;
-  let result_jitted =
-    Backend.jit ctx (* sgd_jitted.context *) IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
-  in
-  Stdio.print_endline "\n******** mlp_result **********";
-  Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 mlp_result;
-  Stdio.printf "\n********\n%!";
-  let callback (x, y) =
-    Tensor.set_values point [| x; y |];
-    assert (Backend.from_host result_jitted.context point.value);
-    result_jitted.run ();
-    Backend.await device;
-    assert (Backend.to_host result_jitted.context mlp_result.value);
-    Float.(mlp_result.@[0] >= 0.)
-  in
-  let plot_moons =
-    let open PrintBox_utils in
-    plot ~size:(120, 40) ~x_label:"ixes" ~y_label:"ygreks"
-      [
-        Scatterplot { points = points1; pixel = "#" };
-        Scatterplot { points = points2; pixel = "%" };
-        Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
-      ]
-  in
-  Stdio.printf "Half-moons scatterplot and decision boundary:\n%!";
-  PrintBox_text.output Stdio.stdout plot_moons;
-  Stdio.printf "Loss:\n%!";
-  let plot_loss =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"loss"
-      [ Line_plot { points = Array.of_list_rev !losses; pixel = "-" } ]
-  in
-  PrintBox_text.output Stdio.stdout plot_loss;
+  (*  *) step_ref := 1;
+  (* sgd_jitted.run (); *)
+  lr_jitted.run ();
+  Backend.await device;
+  (* Train.all_device_to_host (module Backend) sgd_jitted.context scalar_loss; *)
+  Train.all_device_to_host (module Backend) lr_jitted.context learning_rate;
+  (* Stdio.print_endline "\n******** DEBUG: scalar_loss **********"; *)
+  (* Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 scalar_loss; *)
+  Stdio.print_endline "\n******** DEBUG: learning_rate **********";
+  Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
+  Stdio.printf "\nDEBUG: ********\n%!"
+(*  *)
+(* let open Tensor.O in
+   for step = 1 to steps do
+     step_ref := step;
+     sgd_jitted.run ();
+     Backend.await device;
+     assert (Backend.to_host sgd_jitted.context learning_rate.value);
+     assert (Backend.to_host sgd_jitted.context scalar_loss.value);
+     if step % (len / batch) = 1 || step = steps then
+       Stdio.printf "Step=%d, lr=%f, loss=%f\n%!" step learning_rate.@[0] scalar_loss.@[0];
+     learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
+     losses := scalar_loss.@[0] :: !losses;
+     log_losses := Float.log scalar_loss.@[0] :: !log_losses
+   done;
+   let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
+   let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
+   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
+   let%op point = [ 0; 0 ] in
+   let mlp_result = mlp point in
+   Train.set_fully_on_host point.value;
+   Train.set_fully_on_host mlp_result.value;
+   let result_jitted =
+     Backend.jit ctx (* sgd_jitted.context *) IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
+   in
+   Stdio.print_endline "\n******** mlp_result **********";
+   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 mlp_result;
+   Stdio.printf "\n********\n%!";
+   let callback (x, y) =
+     Tensor.set_values point [| x; y |];
+     assert (Backend.from_host result_jitted.context point.value);
+     result_jitted.run ();
+     Backend.await device;
+     assert (Backend.to_host result_jitted.context mlp_result.value);
+     Float.(mlp_result.@[0] >= 0.)
+   in
+   let plot_moons =
+     let open PrintBox_utils in
+     plot ~size:(120, 40) ~x_label:"ixes" ~y_label:"ygreks"
+       [
+         Scatterplot { points = points1; pixel = "#" };
+         Scatterplot { points = points2; pixel = "%" };
+         Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
+       ]
+   in
+   Stdio.printf "Half-moons scatterplot and decision boundary:\n%!";
+   PrintBox_text.output Stdio.stdout plot_moons;
+   Stdio.printf "Loss:\n%!";
+   let plot_loss =
+     let open PrintBox_utils in
+     plot ~size:(120, 30) ~x_label:"step" ~y_label:"loss"
+       [ Line_plot { points = Array.of_list_rev !losses; pixel = "-" } ]
+   in
+   PrintBox_text.output Stdio.stdout plot_loss;
 
-  Stdio.printf "Log-loss, for better visibility:\n%!";
-  let plot_loss =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"log loss"
-      [ Line_plot { points = Array.of_list_rev !log_losses; pixel = "-" } ]
-  in
-  PrintBox_text.output Stdio.stdout plot_loss;
+   Stdio.printf "Log-loss, for better visibility:\n%!";
+   let plot_loss =
+     let open PrintBox_utils in
+     plot ~size:(120, 30) ~x_label:"step" ~y_label:"log loss"
+       [ Line_plot { points = Array.of_list_rev !log_losses; pixel = "-" } ]
+   in
+   PrintBox_text.output Stdio.stdout plot_loss;
 
-  Stdio.printf "\nLearning rate:\n%!";
-  let plot_lr =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"learning rate"
-      [ Line_plot { points = Array.of_list_rev !learning_rates; pixel = "-" } ]
-  in
-  PrintBox_text.output Stdio.stdout plot_lr
+   Stdio.printf "\nLearning rate:\n%!";
+   let plot_lr =
+     let open PrintBox_utils in
+     plot ~size:(120, 30) ~x_label:"step" ~y_label:"learning rate"
+       [ Line_plot { points = Array.of_list_rev !learning_rates; pixel = "-" } ]
+   in
+   PrintBox_text.output Stdio.stdout plot_lr
+*)

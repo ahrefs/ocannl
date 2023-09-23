@@ -17,7 +17,7 @@ let fresh_backend ?(verbose = true) () =
 
 let literal_heuristic (a : LA.t) =
   try
-    ignore (Float.of_string a.label : float);
+    ignore (Float.of_string (List.hd_exn a.label) : float);
     true
   with _ -> false
 
@@ -30,15 +30,11 @@ let params t =
   in
   loop (Set.empty (module Tensor)) { subtensor = t; embedded = true }
 
-let desc_label_suffix s =
-  let pos = Option.value ~default:(-1) (String.rindex s '#') + 1 in
-  String.sub s ~pos ~len:(String.length s - pos)
-
 let grad_update l =
   match l.Tensor.diff with
   | Some diff ->
       let%cd init_grad = l.grad =: 1 in
-      let label = desc_label_suffix l.value.label in
+      let label = Option.value ~default:"tensor" @@ List.last l.value.label in
       Assignments.(
         Block_comment
           ( label ^ " gradient update",
@@ -51,13 +47,15 @@ let grad_update l =
               ] ))
   | None -> raise @@ Tensor.Session_error ("Train.backprop: tensor is not differentiable", Some l)
 
+let label_suffix label = Option.value ~default:"unknown" @@ List.last label
+
 (** See: {!https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py}. *)
 let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
   if not @@ is_param p then raise @@ Tensor.Session_error ("Train.sgd_one: not a parameter", Some p);
-  let pg = NTDSL.term ~label:(p.value.label ^ " sgd delta") () in
-  let b = NTDSL.term ~label:(p.value.label ^ " sgd momentum") () in
+  let pg = NTDSL.term ~label:("sgd delta" :: p.value.label) () in
+  let b = NTDSL.term ~label:("sgd momentum" :: p.value.label) () in
   Assignments.Block_comment
-    ( desc_label_suffix p.value.label ^ " param sgd step",
+    ( label_suffix p.value.label ^ " param sgd step",
       [%cd
         pg =: p.grad + (!.weight_decay *. p);
         if Float.(momentum > 0.0) then (
@@ -71,7 +69,7 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov t =
     |> List.map ~f:(sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov)
     |> Assignments.sequential
   in
-  Assignments.Block_comment (desc_label_suffix t.value.label ^ " sgd update", code)
+  Assignments.Block_comment (label_suffix t.value.label ^ " sgd update", code)
 
 let for_loop ~f bindings =
   let rec loop = function
@@ -98,18 +96,19 @@ let set_fully_on_host (a : LA.t) =
   if LA.is_true a.virtual_ then
     raise
     @@ Ndarray.User_error
-         [%string "Train.set_fully_on_host: array #%{a.id#Int} %{a.label} is already virtual"];
+         [%string "Train.set_fully_on_host: array #%{a.id#Int} %{LA.label a} is already virtual"];
   if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 27);
   if LA.is_true a.device_only then
     raise
     @@ Ndarray.User_error
-         [%string "Train.set_fully_on_host: array #%{a.id#Int} %{a.label} is already device-only"];
+         [%string "Train.set_fully_on_host: array #%{a.id#Int} %{LA.label a} is already device-only"];
   a.device_only <- Some (false, 28)
 
 let set_virtual (a : LA.t) =
   if LA.is_false a.virtual_ then
     raise
-    @@ Ndarray.User_error [%string "Train.set_virtua: array #%{a.id#Int} %{a.label} is already non-virtual"];
+    @@ Ndarray.User_error
+         [%string "Train.set_virtua: array #%{a.id#Int} %{LA.label a} is already non-virtual"];
   if Option.is_none a.virtual_ then a.virtual_ <- Some (true, 29)
 
 let every_non_literal_fully_on_host =
@@ -121,7 +120,7 @@ let all_host_to_device ?(verbose = false) (type context)
       let b = Backend.from_host context a in
       if verbose && b then
         Stdio.printf "Train.all_device_to_host: copied array %s (%s) from host to device %d.\n%!" (LA.name a)
-          a.label
+          (LA.label a)
           (Backend.get_ctx_device context |> Backend.to_ordinal))
 
 let all_device_to_host ?(verbose = false) (type context)
@@ -130,5 +129,5 @@ let all_device_to_host ?(verbose = false) (type context)
       let b = Backend.to_host context a in
       if verbose && b then
         Stdio.printf "Train.all_device_to_host: copied array %s (%s) from device %d to host.\n%!" (LA.name a)
-          a.label
+          (LA.label a)
           (Backend.get_ctx_device context |> Backend.to_ordinal))

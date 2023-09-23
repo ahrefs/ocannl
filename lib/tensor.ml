@@ -35,7 +35,7 @@ let rec sexp_of_t t =
   Sexp.message "Tensor"
     [
       ("id", sexp_of_int t.id);
-      ("label", sexp_of_string t.value.label);
+      ("label", [%sexp_of: string list] t.value.label);
       ("children", [%sexp_of: subtensor list] t.children);
     ]
 
@@ -113,7 +113,7 @@ let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
-let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un)
+let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un)
     ?(init_op = default_init_op) ~op_asn ~grad_asn ?(grad_spec = If_needed) make_shape orig_ts =
   let ordered_ts = List.sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
   let fwd_embed = List.map orig_ts ~f:is_fwd_root in
@@ -122,7 +122,6 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
   let id = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
   let shape = make_shape ~id in
-  let label = op_label ^ if String.is_empty desc_label then "" else "#" ^ desc_label in
   let prec =
     List.map orig_ts ~f:(fun ti -> ti.value.prec)
     |> List.reduce ~f:Ops.promote_prec
@@ -167,7 +166,7 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
     in
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
-    let g = LA.create g_prec ~id:grad_id ~label:("grad " ^ label) ~dims default_init_op in
+    let g = LA.create g_prec ~id:grad_id ~label:("grad" :: label) ~dims default_init_op in
     let dcode ti = Option.value_map ti.diff ~default:Assignments.Noop in
     let zero_grads =
       let f = dcode ~f:(fun diff -> diff.zero_grads) in
@@ -193,20 +192,19 @@ let op ~op_label ?(desc_label = "") ?(compose_op = Shape.Pointwise_bin) ?(transp
     session_state.backprop_roots <- Map.add_exn session_state.backprop_roots ~key:id ~data:tensor;
     tensor
 
-let binop ~op_label ?desc_label ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 =
+let binop ~label ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~projections in
   let grad_asn ~v ~g ~projections = grad_asn ~v ~g ~t1 ~t2 ~projections in
-  op ~op_label ?desc_label ?compose_op ?transpose_op:None ~op_asn ~grad_asn ?grad_spec (Shape.make ())
-    [ t1; t2 ]
+  op ~label ?compose_op ?transpose_op:None ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1; t2 ]
 
-let unop ~op_label ?desc_label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
+let unop ~label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~projections in
   let grad_asn ~v ~g ~projections = grad_asn ~v ~g ~t1 ~projections in
-  op ~op_label ?desc_label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1 ]
+  op ~label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1 ]
 
 (** A terminal: a constant, a parameter, an input of the model. *)
-let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes
-    ?output_axes ?deduced ?init_op ?fetch_op () =
+let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
+    ?init_op ?fetch_op () =
   let op_asn ~v ~projections =
     let open Assignments in
     let dims = lazy (Lazy.force projections).Indexing.lhs_dims in
@@ -235,62 +233,58 @@ let term ~label ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?bat
   let make_shape =
     Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced ()
   in
-  op ~op_label:label ?desc_label ?compose_op:None ?transpose_op:None ?init_op ~op_asn ~grad_asn ~grad_spec
-    make_shape []
+  op ~label ?compose_op:None ?transpose_op:None ?init_op ~op_asn ~grad_asn ~grad_spec make_shape []
 
-let float_to_label v = Float.to_string_hum ~strip_zero:true v
+let float_to_label v = Float.to_string v
 
-let number ?desc_label ?axis_label ?(grad_spec = Prohibit_grad) c =
+let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
   (* Note: no axis label so that we do not conflict with user labels. *)
-  let label = float_to_label c in
+  let label = float_to_label c :: label in
   let init_op = Ops.Constant_fill { values = [| c |]; strict = true } in
-  let result = term ?desc_label ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~init_op in
+  let result = term ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~init_op in
   match axis_label with
   | None -> result ~output_dims:[ 1 ] ()
   | Some axis_label -> result ~output_axes:[ (axis_label, 1) ] ()
 
-let ndarray ?desc_label ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?output_dims ?batch_axes
-    ?input_axes ?output_axes ?label ?(strict = true) values =
+let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?output_dims ?batch_axes
+    ?input_axes ?output_axes ?(strict = true) values =
   let to_dim_list dims axes =
     Option.value ~default:[] @@ Option.first_some dims @@ Option.map axes ~f:(List.map ~f:snd)
   in
   let batch_ds = to_dim_list batch_dims batch_axes in
   let output_ds = to_dim_list output_dims output_axes in
   let input_ds = to_dim_list input_dims input_axes in
-  let label =
-    match label with
-    | Some label -> label
-    | None ->
-        Stdlib.Format.pp_set_geometry Stdlib.Format.str_formatter ~max_indent:!max_sublabel_length
-          ~margin:(!max_sublabel_length * 2);
-        let dims = Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list in
-        let ndarr = Ndarray.create_array Ops.double ~dims (Constant_fill { values; strict }) in
-        let ( ! ) = List.length in
-        Ndarray.pp_array_inline ~num_batch_axes:!batch_ds ~num_output_axes:!output_ds
-          ~num_input_axes:!input_ds Stdlib.Format.str_formatter ndarr;
-        Stdlib.Format.flush_str_formatter ()
+  let op_label =
+    Stdlib.Format.pp_set_geometry Stdlib.Format.str_formatter ~max_indent:!max_sublabel_length
+      ~margin:(!max_sublabel_length * 2);
+    let dims = Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list in
+    let ndarr = Ndarray.create_array Ops.double ~dims (Constant_fill { values; strict }) in
+    let ( ! ) = List.length in
+    Ndarray.pp_array_inline ~num_batch_axes:!batch_ds ~num_output_axes:!output_ds ~num_input_axes:!input_ds
+      Stdlib.Format.str_formatter ndarr;
+    Stdlib.Format.flush_str_formatter ()
   in
-  let label =
-    if String.contains label '\n' then
+  let op_label =
+    if String.contains op_label '\n' then
       "c" ^ Indexing.dims_to_string @@ Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list
-    else label
+    else op_label
   in
+  let label = op_label :: label in
   let batch_dims = Option.first_some batch_dims @@ Option.some_if (Option.is_none batch_axes) [] in
   let input_dims = Option.first_some input_dims @@ Option.some_if (Option.is_none input_axes) [] in
   let output_dims = Option.first_some output_dims @@ Option.some_if (Option.is_none output_axes) [] in
-  term ?desc_label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
-    ~deduced:Not_constrained ~label
+  term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
+    ~deduced:Not_constrained
     ~init_op:(Constant_fill { values; strict })
     ()
 
-let param ?desc_label ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?(strict = false) ?values
-    label =
+let param ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?(strict = false) ?values label =
   let init_op =
     match values with Some values -> Ops.Constant_fill { values; strict } | None -> Standard_uniform
   in
   let t =
-    term ?desc_label ~grad_spec:Require_grad ~batch_dims:[] ?input_dims ?output_dims ?input_axes ?output_axes
-      ?deduced ~label ~init_op ()
+    term ~label:[ label ] ~grad_spec:Require_grad ~batch_dims:[] ?input_dims ?output_dims ?input_axes
+      ?output_axes ?deduced ~init_op ()
   in
   let v = t.value in
   assert (LA.isnt_true v.virtual_);
@@ -319,7 +313,7 @@ let header t =
     if String.equal v_dims_s g_dims_s then "dims " ^ v_dims_s
     else "dims val " ^ v_dims_s ^ " grad " ^ g_dims_s
   in
-  "#" ^ Int.to_string t.id ^ " " ^ t.value.label ^ " " ^ dims_s ^ " ["
+  "#" ^ Int.to_string t.id ^ " " ^ LA.label t.value ^ " " ^ dims_s ^ " ["
   ^ String.concat ~sep:"," (List.map t.children ~f:(fun { subtensor = { id; _ }; _ } -> Int.to_string id))
   ^ "]"
 (*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box v.label)*)
@@ -381,13 +375,13 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
         else "<waiting>")
     in
     let txt =
-      if with_id then "#" ^ id ^ " " ^ t.value.label (* ^ " DEBUG: " ^ where_located t.value *)
-      else t.value.label
+      if with_id then "#" ^ id ^ " " ^ LA.label t.value (* ^ " DEBUG: " ^ where_located t.value *)
+      else LA.label t.value
     in
     let grad_txt diff =
+      let label = LA.label diff.grad in
       let label =
-        if String.is_substring (String.lowercase diff.grad.label) ~substring:"grad " then diff.grad.label
-        else diff.grad.label ^ " Gradient"
+        if String.is_substring (String.lowercase label) ~substring:"grad" then label else label ^ " Gradient"
       in
       if with_id then
         "#" ^ Int.to_string diff.grad.id ^ " " ^ label (* ^ " DEBUG: " ^ where_located diff.grad *)
@@ -440,15 +434,15 @@ let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_value =
 
 let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style) t =
   let sh = t.shape in
-  let label = t.value.label in
+  let label = LA.label t.value in
   let prefix =
     "[" ^ Int.to_string t.id ^ "]: " ^ label ^ "shape "
     ^ Shape.to_string_hum ~style:`Axis_number_and_size sh
     ^ " "
   in
   let grad_txt diff =
-    if String.is_substring (String.lowercase diff.grad.label) ~substring:"grad" then diff.grad.label
-    else diff.grad.label ^ " Gradient"
+    let label = LA.label diff.grad in
+    if String.is_substring (String.lowercase label) ~substring:"grad" then label else label ^ " Gradient"
   in
   let labels = Shape.to_labels t.shape in
   let indices =

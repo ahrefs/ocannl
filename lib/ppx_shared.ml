@@ -29,6 +29,7 @@ let pat2string pat =
   Ast_helper.Exp.constant @@ Pconst_string (loop pat, pat.ppat_loc, None)
 
 let opt_pat2string ~loc = function None -> [%expr None] | Some pat -> [%expr Some [%e pat2string pat]]
+let opt_pat2string_list ~loc = function None -> [%expr []] | Some pat -> [%expr [[%e pat2string pat]]]
 let opt_expr ~loc = function None -> [%expr None] | Some expr -> [%expr Some [%e expr]]
 
 let rec pat2expr pat =

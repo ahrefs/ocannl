@@ -72,7 +72,7 @@ let to_low_level (code : t) : Low_level.t =
     if not (Array.length idcs = Array.length (Lazy.force a.LA.dims)) then
       Stdlib.Format.printf "DEBUG: get a=%a: %s@ idcs=%a dims=%a\n%!" Sexp.pp_hum
         ([%sexp_of: LA.t] @@ a)
-        a.label Sexp.pp_hum
+        (LA.label a) Sexp.pp_hum
         ([%sexp_of: Indexing.axis_index array] @@ idcs)
         Sexp.pp_hum
         ([%sexp_of: int array] @@ Lazy.force a.dims);
@@ -83,7 +83,7 @@ let to_low_level (code : t) : Low_level.t =
     if not (Array.length idcs = Array.length (Lazy.force a.LA.dims)) then
       Stdlib.Format.printf "DEBUG: set a=%a: %s@ idcs=%a dims=%a\n%!" Sexp.pp_hum
         ([%sexp_of: LA.t] @@ a)
-        a.label Sexp.pp_hum
+        (LA.label a) Sexp.pp_hum
         ([%sexp_of: Indexing.axis_index array] @@ idcs)
         Sexp.pp_hum
         ([%sexp_of: int array] @@ Lazy.force a.dims);

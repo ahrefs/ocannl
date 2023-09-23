@@ -100,7 +100,7 @@ let get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ct
         let comment_on ptr = Option.value ~default:"not" @@ Option.map ptr ~f:RValue.to_string in
         Block.comment init_block
           [%string
-            "Array #%{key.id#Int} %{key.label}: %{backend_info} %{comment_on hosted_ptr} hosted, \
+            "Array #%{key.id#Int} %{LA.label key}: %{backend_info} %{comment_on hosted_ptr} hosted, \
              %{comment_on global_ptr} global, %{comment_on @@ Option.map ~f:RValue.lvalue local} local."];
         if tn.zero_initialized then
           List.find_map ~f:Fn.id
