@@ -246,7 +246,7 @@ let check_and_store_virtual traced static_indices top_llc =
     if Set.length syms <> num_syms then raise @@ Non_virtual 5
   in
   (* Traverse the float code too, for completeness / future use-cases. *)
-  let rec loop_proc ~(env_dom : unit Indexing.environment) llc =
+  let rec loop_proc ~env_dom llc =
     let loop = loop_proc ~env_dom in
     match llc with
     | Noop -> ()
@@ -255,7 +255,7 @@ let check_and_store_virtual traced static_indices top_llc =
         loop c2
     | For_loop { trace_it = false; _ } -> raise @@ Non_virtual 6
     | For_loop { index; body; from_ = _; to_ = _; trace_it = true } ->
-        loop_proc ~env_dom:(Map.add_exn ~key:index ~data:() env_dom) body
+        loop_proc ~env_dom:(Set.add env_dom index) body
     | Zero_out array -> if LA.equal array top_array then has_setter := true
     | Set (array, indices, llv) ->
         if LA.equal array top_array then (
@@ -265,7 +265,7 @@ let check_and_store_virtual traced static_indices top_llc =
           (* Check for escaping variables. *)
           Array.iter indices ~f:(function
             | Iterator s as idx when not (Set.mem static_indices s) ->
-                if not @@ Map.mem env_dom s then (
+                if not @@ Set.mem env_dom s then (
                   if !with_debug then
                     Stdlib.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
                       Sexp.pp_hum
@@ -287,7 +287,7 @@ let check_and_store_virtual traced static_indices top_llc =
           (* Check for escaping variables. *)
           Array.iter idcs ~f:(function
             | Iterator s when not (Set.mem static_indices s) ->
-                if not @@ Map.mem env_dom s then (
+                if not @@ Set.mem env_dom s then (
                   if !with_debug then
                     Stdlib.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
                       Sexp.pp_hum
@@ -301,7 +301,7 @@ let check_and_store_virtual traced static_indices top_llc =
     | Get_global _ -> ()
     | Embed_index (Fixed_idx _) -> ()
     | Embed_index (Iterator s) ->
-        if not @@ Map.mem env_dom s then (
+        if not @@ Set.mem env_dom s then (
           if !with_debug && not (Set.mem static_indices s) then
             Stdlib.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!" Sexp.pp_hum
               ([%sexp_of: Indexing.symbol] s)
@@ -315,7 +315,7 @@ let check_and_store_virtual traced static_indices top_llc =
   in
   try
     if LA.is_false traced.nd.virtual_ then raise @@ Non_virtual 11;
-    loop_proc ~env_dom:Indexing.empty_env top_llc;
+    loop_proc ~env_dom:static_indices top_llc;
     if not !has_setter then raise @@ Non_virtual 12;
     traced.computations <- (!at_idcs, top_llc) :: traced.computations
   with Non_virtual i ->
