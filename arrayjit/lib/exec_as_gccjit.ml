@@ -214,8 +214,8 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
       Block.eval !current_block @@ RValue.call ctx f [ RValue.string_literal ctx ("\nCOMMENT: " ^ c ^ "\n") ]
     else Block.comment !current_block c
   in
-  let rec debug_float ~is_double (value : Low_level.float_t) : string * 'a list =
-    let loop = debug_float ~is_double in
+  let rec debug_float ~env ~is_double (value : Low_level.float_t) : string * 'a list =
+    let loop = debug_float ~env ~is_double in
     match value with
     | Local_scope { id; _ } ->
         (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug logs. *)
@@ -260,9 +260,9 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
   let f_ptr = Type.get ctx Type.File_ptr in
   let fflush = Function.create ctx Imported (Type.get ctx Void) "fflush" [ Param.create ctx f_ptr "f" ] in
   let c_stdout = LValue.global ctx LValue.Imported f_ptr "stdout" in
-  let debug_log_assignment idcs array accum_op value v_code =
+  let debug_log_assignment ~env idcs array accum_op value v_code =
     if !Low_level.debug_log_jitted then (
-      let v_format, v_fillers = debug_float ~is_double:array.is_double v_code in
+      let v_format, v_fillers = debug_float ~env ~is_double:array.is_double v_code in
       let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
       Block.eval !current_block @@ RValue.call ctx printf
       @@ RValue.string_literal ctx
@@ -290,7 +290,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         let lhs = LValue.access_array (get_ptr array) offset in
-        debug_log_assignment idcs array op value c2;
+        debug_log_assignment ~env idcs array op value c2;
         Block.assign_op !current_block lhs (builtin_op op) value
     | Set (array, idcs, v_code) ->
         let array = get_array info array in
@@ -298,7 +298,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         let lhs = LValue.access_array (get_ptr array) offset in
-        debug_log_assignment idcs array Ops.Arg2 value v_code;
+        debug_log_assignment ~env idcs array Ops.Arg2 value v_code;
         Block.assign !current_block lhs value
     | Zero_out array ->
         if Hashtbl.mem info.arrays array then
