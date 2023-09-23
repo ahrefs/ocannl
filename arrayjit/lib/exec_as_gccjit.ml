@@ -67,6 +67,19 @@ let jit_array_offset ctx ~idcs ~dims =
       RValue.binary_op ctx Plus c_index idx
       @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
 
+let zero_out { ctx; init_block; _ } arr =
+  let open Gccjit in
+  let c_void_ptr = Type.(get ctx Type.Void_ptr) in
+  let c_index = Type.get ctx Type.Size_t in
+  let c_int = Type.get ctx Type.Int in
+  let cast_void rv = RValue.cast ctx rv c_void_ptr in
+  List.find_map ~f:Fn.id
+    [ Option.map arr.local ~f:(Fn.compose cast_void LValue.address); arr.global_ptr; arr.hosted_ptr ]
+  |> Option.iter ~f:(fun rv_ptr ->
+         Block.eval init_block
+         @@ RValue.call ctx (Function.builtin ctx "memset")
+              [ rv_ptr; RValue.zero ctx c_int; RValue.int ctx c_index arr.size_in_bytes ])
+
 let get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ctx_info) key : ndarray =
   let open Gccjit in
   Hashtbl.find_or_add arrays key ~default:(fun () ->
@@ -76,9 +89,6 @@ let get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ct
       let size_in_bytes = size_in_elems * Ops.prec_in_bytes key.prec in
       let is_on_host = Option.value_exn !(key.hosted) in
       assert (Bool.(Option.is_some (Lazy.force key.array) = is_on_host));
-      let c_void_ptr = Type.(get ctx Type.Void_ptr) in
-      let c_index = Type.get ctx Type.Size_t in
-      let c_int = Type.get ctx Type.Int in
       (* TODO: is the complexity of introducing this function and matching on Ndarray.t needed? *)
       let array c_typ is_double arr =
         let num_typ = Type.(get ctx c_typ) in
@@ -95,23 +105,19 @@ let get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ct
            in
            ctx_info.ctx_arrays <- Map.add_exn ~key ~data ctx_arrays);
         let global_ptr = Option.map (Map.find ctx_info.ctx_arrays key) ~f:Ndarray.(map { f = get_c_ptr }) in
-        let cast_void rv = RValue.cast ctx rv c_void_ptr in
         let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
         let comment_on ptr = Option.value ~default:"not" @@ Option.map ptr ~f:RValue.to_string in
         Block.comment init_block
           [%string
             "Array #%{key.id#Int} %{LA.label key}: %{backend_info} %{comment_on hosted_ptr} hosted, \
              %{comment_on global_ptr} global, %{comment_on @@ Option.map ~f:RValue.lvalue local} local."];
-        if tn.zero_initialized then
-          List.find_map ~f:Fn.id
-            [ Option.map local ~f:(Fn.compose cast_void LValue.address); global_ptr; hosted_ptr ]
-          |> Option.iter ~f:(fun rv_ptr ->
-                 Block.eval init_block
-                 @@ RValue.call ctx (Function.builtin ctx "memset")
-                      [ rv_ptr; RValue.zero ctx c_int; RValue.int ctx c_index size_in_bytes ]);
+        let result =
+          { nd = key; hosted_ptr; global_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
+        in
+        if tn.zero_initialized then zero_out ctx_info result;
         if not @@ String.is_substring key.backend_info ~substring:backend_info then
           key.backend_info <- key.backend_info ^ backend_info;
-        { nd = key; hosted_ptr; global_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
+        result
       in
       match (key.prec, Lazy.force key.array) with
       | _, Some (Byte_nd arr) -> array Type.Unsigned_char false (Some arr)
@@ -301,13 +307,11 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         debug_log_assignment ~env idcs array Ops.Arg2 value v_code;
         Block.assign !current_block lhs value
     | Zero_out array ->
-        if Hashtbl.mem info.arrays array then
-          failwith
-            ("exec_as_gccjit: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
-            @@ [%sexp_of: LA.t] array);
-        let tn = Low_level.(get_node info.traced_store array) in
-        assert tn.zero_initialized
-        (* The initialization will be emitted by get_array. *)
+        if Hashtbl.mem info.arrays array then zero_out info @@ Hashtbl.find_exn info.arrays array
+        else
+          let tn = Low_level.(get_node info.traced_store array) in
+          assert tn.zero_initialized
+          (* The initialization is emitted by get_array. *)
     | Set_local (id, value) ->
         let lhs, num_typ, is_double = Map.find_exn !locals id in
         let value = loop_float ~name ~env ~num_typ ~is_double value in
