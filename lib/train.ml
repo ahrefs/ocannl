@@ -114,3 +114,21 @@ let set_virtual (a : LA.t) =
 
 let every_non_literal_fully_on_host =
   Tensor.iter_embedded_arrays ~f:(fun a -> if not @@ literal_heuristic a then set_fully_on_host a)
+
+let all_host_to_device ?(verbose = false) (type context)
+    (module Backend : Backends.Backend with type context = context) (context : context) =
+  Tensor.iter_embedded_arrays ~f:(fun a ->
+      let b = Backend.from_host context a in
+      if verbose && b then
+        Stdio.printf "Train.all_device_to_host: copied array %s (%s) from host to device %d.\n%!" (LA.name a)
+          a.label
+          (Backend.get_ctx_device context |> Backend.to_ordinal))
+
+let all_device_to_host ?(verbose = false) (type context)
+    (module Backend : Backends.Backend with type context = context) (context : context) =
+  Tensor.iter_embedded_arrays ~f:(fun a ->
+      let b = Backend.to_host context a in
+      if verbose && b then
+        Stdio.printf "Train.all_device_to_host: copied array %s (%s) from device %d to host.\n%!" (LA.name a)
+          a.label
+          (Backend.get_ctx_device context |> Backend.to_ordinal))

@@ -7,14 +7,13 @@ module NTDSL = Operation.NTDSL
 module CDSL = Arrayjit.Low_level.CDSL
 
 let () =
-  let open Tensor.O in
   Random.init 0;
-  let open (val Train.fresh_backend ()) in
+  let module Backend = (val Train.fresh_backend ()) in
   CDSL.with_debug := true;
   CDSL.keep_files_in_run_directory := true;
   (* CDSL.debug_log_jitted := true; *)
-  let device = get_device ~ordinal:0 in
-  let ctx = init device in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   CDSL.fixed_state_for_init := Some 4;
   let hid_dim = 16 in
   let len = 200 in
@@ -55,19 +54,32 @@ let () =
   Train.set_fully_on_host learning_rate.value;
   let update = Train.grad_update scalar_loss in
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
-  let sgd_jitted = jit ctx bindings (Seq (update, sgd)) in
+  let sgd_jitted = Backend.jit ctx ~verbose:true bindings (Seq (update, sgd)) in
+  Train.all_host_to_device (module Backend) sgd_jitted.context scalar_loss;
+  Train.all_host_to_device (module Backend) sgd_jitted.context learning_rate;
   Stdio.print_endline "\n******** scalar_loss **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 scalar_loss;
   Stdio.print_endline "\n******** learning_rate **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
   Stdio.printf "\n********\n%!";
+  (*step_ref := 1;
+    sgd_jitted.run ();
+    Backend.await device;
+    Train.all_device_to_host (module Backend) sgd_jitted.context scalar_loss;
+    Stdio.print_endline "\n******** DEBUG: scalar_loss **********";
+    Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 scalar_loss;
+    Stdio.print_endline "\n******** DEBUG: learning_rate **********";
+    Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
+    Stdio.printf "\nDEBUG: ********\n%!" *)
+  let open Tensor.O in
   for step = 1 to steps do
     step_ref := step;
     sgd_jitted.run ();
-    await device;
+    Backend.await device;
+    assert (Backend.to_host sgd_jitted.context learning_rate.value);
+    assert (Backend.to_host sgd_jitted.context scalar_loss.value);
     if step % (len / batch) = 1 || step = steps then
       Stdio.printf "Step=%d, lr=%f, loss=%f\n%!" step learning_rate.@[0] scalar_loss.@[0];
-    (* Tensor.print_tree ~with_backend_info:true ~with_grad:true ~depth:9 scalar_loss *)
     learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
     losses := scalar_loss.@[0] :: !losses;
     log_losses := Float.log scalar_loss.@[0] :: !log_losses
@@ -80,15 +92,17 @@ let () =
   Train.set_fully_on_host point.value;
   Train.set_fully_on_host mlp_result.value;
   let result_jitted =
-    jit ctx (* sgd_jitted.context *) IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
+    Backend.jit ctx (* sgd_jitted.context *) IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
   in
   Stdio.print_endline "\n******** mlp_result **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 mlp_result;
   Stdio.printf "\n********\n%!";
   let callback (x, y) =
     Tensor.set_values point [| x; y |];
+    assert (Backend.from_host result_jitted.context point.value);
     result_jitted.run ();
-    await device;
+    Backend.await device;
+    assert (Backend.to_host result_jitted.context mlp_result.value);
     Float.(mlp_result.@[0] >= 0.)
   in
   let plot_moons =
