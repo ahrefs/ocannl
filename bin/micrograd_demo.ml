@@ -11,7 +11,7 @@ let () =
   let module Backend = (val Train.fresh_backend ()) in
   CDSL.with_debug := true;
   CDSL.keep_files_in_run_directory := true;
-  CDSL.debug_log_jitted := true;
+  (* CDSL.debug_log_jitted := true; *)
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
   CDSL.fixed_state_for_init := Some 4;
@@ -42,31 +42,28 @@ let () =
   Shape.broadcast learning_rate.shape;
   let%op moons_input = moons_flat @| step_sym in
   let%op moons_class = moons_classes @| step_sym in
-  (* let losses = ref [] in
+  let losses = ref [] in
   let log_losses = ref [] in
-  let learning_rates = ref [] in *)
+  let learning_rates = ref [] in
   let%op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
   (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update computation. *)
-  (* let weight_decay = 0.0001 in *)
+  let weight_decay = 0.0001 in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in
   (* So that we can inspect them. *)
   Train.set_fully_on_host scalar_loss.value;
   Train.set_fully_on_host learning_rate.value;
-  (* let update = Train.grad_update scalar_loss in *)
-  (* let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in *)
-  (* let sgd_jitted = Backend.jit ctx ~verbose:true bindings (Seq (update, sgd)) in *)
-  let lr_jitted = Backend.jit ~name:"lr" ctx ~verbose:true bindings learning_rate.forward in
-  (* Train.all_host_to_device (module Backend) sgd_jitted.context scalar_loss; *)
-  (* Train.all_host_to_device (module Backend) sgd_jitted.context learning_rate; *)
-  Train.all_host_to_device (module Backend) lr_jitted.context learning_rate;
+  let update = Train.grad_update scalar_loss in
+  let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
+  let sgd_jitted = Backend.jit ctx ~verbose:true bindings (Seq (update, sgd)) in
+  Train.all_host_to_device (module Backend) sgd_jitted.context scalar_loss;
+  Train.all_host_to_device (module Backend) sgd_jitted.context learning_rate;
   Stdio.print_endline "\n******** scalar_loss **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 scalar_loss;
   Stdio.print_endline "\n******** learning_rate **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
   Stdio.printf "\n********\n%!";
-  (*  *) step_ref := 1;
+  (*  * step_ref := 1;
   (* sgd_jitted.run (); *)
-  lr_jitted.run ();
   Backend.await device;
   (* Train.all_device_to_host (module Backend) sgd_jitted.context scalar_loss; *)
   Train.all_device_to_host (module Backend) lr_jitted.context learning_rate;
@@ -75,8 +72,8 @@ let () =
   Stdio.print_endline "\n******** DEBUG: learning_rate **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
   Stdio.printf "\nDEBUG: ********\n%!"
-(*  *)
-(* let open Tensor.O in
+  *  *)
+  let open Tensor.O in
    for step = 1 to steps do
      step_ref := step;
      sgd_jitted.run ();
@@ -144,4 +141,3 @@ let () =
        [ Line_plot { points = Array.of_list_rev !learning_rates; pixel = "-" } ]
    in
    PrintBox_text.output Stdio.stdout plot_lr
-*)

@@ -234,7 +234,7 @@ module DO = struct
   let ( !@ ) = embed_symbol
   let ( - ) = sub ~grad_spec:If_needed
   let ( ~- ) ?label t = ( *. ) ?label !.(-1.) t
-  let ( /. ) = pointmul ~grad_spec:If_needed
+  let ( /. ) = pointdiv ~grad_spec:If_needed
   let ( @| ) ?label t1 idx = slice ?label ~grad_spec:If_needed idx t1
 end
 
