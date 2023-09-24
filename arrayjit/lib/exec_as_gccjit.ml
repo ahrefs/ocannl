@@ -67,7 +67,7 @@ let jit_array_offset ctx ~idcs ~dims =
       RValue.binary_op ctx Plus c_index idx
       @@ RValue.binary_op ctx Mult c_index offset (RValue.int ctx c_index dim))
 
-let zero_out { ctx; init_block; _ } arr =
+let zero_out ctx block arr =
   let open Gccjit in
   let c_void_ptr = Type.(get ctx Type.Void_ptr) in
   let c_index = Type.get ctx Type.Size_t in
@@ -76,7 +76,7 @@ let zero_out { ctx; init_block; _ } arr =
   List.find_map ~f:Fn.id
     [ Option.map arr.local ~f:(Fn.compose cast_void LValue.address); arr.global_ptr; arr.hosted_ptr ]
   |> Option.iter ~f:(fun rv_ptr ->
-         Block.eval init_block
+         Block.eval block
          @@ RValue.call ctx (Function.builtin ctx "memset")
               [ rv_ptr; RValue.zero ctx c_int; RValue.int ctx c_index arr.size_in_bytes ])
 
@@ -114,7 +114,7 @@ let get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ct
         let result =
           { nd = key; hosted_ptr; global_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
         in
-        if tn.zero_initialized then zero_out ctx_info result;
+        if tn.zero_initialized then zero_out ctx init_block result;
         if not @@ String.is_substring key.backend_info ~substring:backend_info then
           key.backend_info <- key.backend_info ^ backend_info;
         result
@@ -307,7 +307,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         debug_log_assignment ~env idcs array Ops.Arg2 value v_code;
         Block.assign !current_block lhs value
     | Zero_out array ->
-        if Hashtbl.mem info.arrays array then zero_out info @@ Hashtbl.find_exn info.arrays array
+        if Hashtbl.mem info.arrays array then zero_out ctx !current_block @@ Hashtbl.find_exn info.arrays array
         else
           let tn = Low_level.(get_node info.traced_store array) in
           assert tn.zero_initialized
