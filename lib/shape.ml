@@ -433,11 +433,6 @@ let rec unify_dims row_eqs env =
   match row_eqs with
   | [] -> env
   | { r; subr } :: row_eqs when equal_dims r subr -> apply_constraint r env |> unify_dims row_eqs
-  | (( { r = { dims = []; row = Row_var _; _ }; subr = { dims = []; row = Broadcastable; _ } }
-     | { r = { dims = []; row = Broadcastable; _ }; subr = { dims = []; row = Row_var _; _ } } ) as eq)
-    :: row_eqs ->
-      (* Shortcut to avoid an uninformative polluting substitution. *)
-      env |> apply_constraint eq.subr |> apply_constraint eq.r |> unify_dims row_eqs
   | { r = { dims = []; row = Row_var v; _ } as rv; subr = rd as subr } :: row_eqs
   | { r = rd; subr = { dims = []; row = Row_var v; _ } as rv as subr } :: row_eqs -> (
       (* The tensor inherits broadcastability from its subtensors, but not from its use sites. *)
