@@ -40,7 +40,7 @@ let () =
   let%op mlp x = "b3" 1 + ("w3" * !/("b2" hid_dim + ("w2" * !/("b1" hid_dim + ("w1" * x))))) in
   let%op learning_rate = 0.1 *. (!..steps - !@step_sym) /. !..steps in
   (* FIXME: Shape.broadcast shouldn't be needed here! Aaargh... *)
-  Shape.broadcast learning_rate.shape;
+  (* Shape.broadcast learning_rate.shape; *)
   let%op moons_input = moons_flat @| step_sym in
   let%op moons_class = moons_classes @| step_sym in
   let losses = ref [] in
@@ -54,6 +54,7 @@ let () =
   Train.set_fully_on_host scalar_loss.value;
   Train.set_fully_on_host learning_rate.value;
   let update = Train.grad_update scalar_loss in
+  Tensor.print_tree ~with_id:true ~with_shape:true ~with_grad:false ~depth:9 learning_rate;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
   let sgd_jitted = Backend.jit ctx ~verbose:true bindings (Seq (update, sgd)) in
   Train.all_host_to_device (module Backend) sgd_jitted.context scalar_loss;

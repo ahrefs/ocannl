@@ -357,7 +357,7 @@ type array_print_style =
 (** We print out up to 5 axes when printing a tensor, as a grid (outer rectangle) of (inner)
     rectangles, possibly repeated (screens). *)
 
-let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_grad t =
+let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_value ~with_grad t =
   let rec to_dag { subtensor = t; embedded } : PrintBox_utils.dag =
     let id = Int.to_string t.id in
     let children = if single_node then [] else List.map ~f:to_dag t.children in
@@ -387,9 +387,16 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
         "#" ^ Int.to_string diff.grad.id ^ " " ^ label (* ^ " DEBUG: " ^ where_located diff.grad *)
       else label
     in
+    let add_shape nodes =
+      if with_shape then
+        let shape = `Box (PrintBox.asprintf "%a" Sexp.pp_hum ([%sexp_of: Shape.t] t.shape)) in
+        `Vlist (false, nodes @ [ shape ])
+      else `Vlist (false, nodes)
+    in
     match (not embedded, with_value, with_grad, t.diff) with
     | true, _, _, _ -> `Embed_subtree_ID (Int.to_string t.id)
-    | _, false, false, _ | _, false, true, None -> `Subtree_with_ID (id, `Tree (`Text txt, children))
+    | _, false, false, _ | _, false, true, None ->
+        `Subtree_with_ID (id, `Tree (add_shape [ `Text txt ], children))
     | _, true, false, _ | _, true, true, None ->
         let node =
           lazy_optional_payload t.value.array
@@ -397,7 +404,7 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
               `Box (Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices v_array))
             ~missing:(fun () -> txt ^ " " ^ where_located t.value)
         in
-        `Subtree_with_ID (id, `Tree (node, children))
+        `Subtree_with_ID (id, `Tree (add_shape [ node ], children))
     | _, false, true, Some diff ->
         let prefix = grad_txt diff in
         let node =
@@ -406,7 +413,7 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
               `Box (Nd.render_array ~brief:true ~prefix ?entries_per_axis ~labels ~indices g_array)
           | None -> `Text (prefix ^ " " ^ where_located diff.grad)
         in
-        `Subtree_with_ID (id, `Tree (node, children))
+        `Subtree_with_ID (id, `Tree (add_shape [ node ], children))
     | _, true, true, Some diff ->
         let node =
           let value =
@@ -425,12 +432,14 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_id ~with_value ~with_g
           in
           `Vlist (false, [ value; grad ])
         in
-        `Subtree_with_ID (id, `Tree (node, children))
+        `Subtree_with_ID (id, `Tree (add_shape [ node ], children))
   in
   to_dag { subtensor = t; embedded = true }
 
-let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_value = true) ~with_grad ~depth t =
-  to_dag ?single_node ?entries_per_axis ~with_id ~with_value ~with_grad t |> PrintBox_utils.reformat_dag depth
+let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_shape = false) ?(with_value = true)
+    ~with_grad ~depth t =
+  to_dag ?single_node ?entries_per_axis ~with_id ~with_shape ~with_value ~with_grad t
+  |> PrintBox_utils.reformat_dag depth
 
 let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style) t =
   let sh = t.shape in
@@ -535,12 +544,12 @@ let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
       assert (id = root.id);
       print ~with_grad ~with_code style root)
 
-let print_tree ?entries_per_axis ?(with_backend_info = false) ?(with_id = true) ?(with_value = true)
-    ~with_grad ~depth t =
+let print_tree ?entries_per_axis ?(with_backend_info = false) ?(with_id = true) ?(with_shape = false)
+    ?(with_value = true) ~with_grad ~depth t =
   (* FIXME: print backend info *)
   ignore with_backend_info;
   PrintBox_text.output Stdio.stdout @@ PrintBox_utils.dag_to_box @@ PrintBox_utils.boxify depth
-  @@ to_dag ?entries_per_axis ~with_id ~with_value ~with_grad t
+  @@ to_dag ?entries_per_axis ~with_id ~with_shape ~with_value ~with_grad t
 
 (** *** Accessors *** *)
 
