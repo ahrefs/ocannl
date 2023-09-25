@@ -662,32 +662,52 @@ let unify_shapes env { shape = cur_sh; logic } =
         ]
         env
   | Transpose (Batch_slice { static_range; static_symbol }, sh) -> (
-      let slice_var = Var (get_var ()) in
-      let range_eq =
-        Option.to_list static_range
-        |> List.map ~f:(fun range -> { d1 = get_dim ~d:range (); fix1 = false; d2 = slice_var; fix2 = false })
-      in
-      let expanded_batch =
-        {
-          dims = cur_sh.batch.dims @ [ slice_var ];
-          constr = Unconstrained;
-          row = cur_sh.batch.row;
-          sh_id = Utils.one_int cur_sh.id;
-        }
-      in
-      try
-        unify_dim range_eq env |> apply_constraint cur_sh.batch
-        |> unify_dims
-             [
-               { r = expanded_batch; subr = sh.batch };
-               { r = cur_sh.input; subr = sh.input };
-               { r = cur_sh.output; subr = sh.output };
-             ]
-      with Shape_error (s, trace) when !with_error_trace ->
-        raise
-        @@ Shape_error
-             ( [%string "Batch slice %{Arrayjit.Indexing.symbol_ident static_symbol} / %{s}"],
-               Shape_mismatch [ cur_sh; sh ] :: trace ))
+      if is_row_var sh.batch.row && is_row_var cur_sh.batch.row then (* Wait for more information *) env
+      else
+        let range_eq, batch_eq =
+          let slice_var = Var (get_var ()) in
+          if is_row_var sh.batch.row then
+            let expanded_batch =
+              {
+                dims = slice_var :: cur_sh.batch.dims;
+                constr = Unconstrained;
+                row = cur_sh.batch.row;
+                sh_id = Utils.one_int cur_sh.id;
+              }
+            in
+            ( Option.to_list static_range
+              |> List.map ~f:(fun range ->
+                     { d1 = get_dim ~d:range (); fix1 = false; d2 = slice_var; fix2 = false }),
+              { r = expanded_batch; subr = sh.batch } )
+          else
+            match sh.batch.dims with
+            | [] ->
+                raise
+                @@ Shape_error
+                     ("Batch slice: insufficent number of batch axes", [ Shape_mismatch [ cur_sh; sh ] ])
+            | d2 :: dims ->
+                let reduced_batch =
+                  { dims; constr = Unconstrained; row = sh.batch.row; sh_id = Utils.one_int sh.id }
+                in
+                ( Option.to_list static_range
+                  |> List.map ~f:(fun range ->
+                         {
+                           d1 = get_dim ~d:range ();
+                           fix1 = is_fixed sh.batch.row;
+                           d2;
+                           fix2 = is_fixed cur_sh.batch.row;
+                         }),
+                  { r = cur_sh.batch; subr = reduced_batch } )
+        in
+        try
+          unify_dim range_eq env |> apply_constraint cur_sh.batch
+          |> unify_dims
+               [ batch_eq; { r = cur_sh.input; subr = sh.input }; { r = cur_sh.output; subr = sh.output } ]
+        with Shape_error (s, trace) when !with_error_trace ->
+          raise
+          @@ Shape_error
+               ( [%string "Batch slice %{Arrayjit.Indexing.symbol_ident static_symbol} / %{s}"],
+                 Shape_mismatch [ cur_sh; sh ] :: trace ))
   | Transpose (Permute spec, sh) -> (
       let ls_rhs, ls_lhs =
         match einsum_of_spec spec with
