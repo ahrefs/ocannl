@@ -288,6 +288,8 @@ type shape_error = Shape_mismatch of t list | Row_mismatch of dims list | Dim_mi
 
 exception Shape_error of string * shape_error list [@@deriving sexp]
 
+let with_error_trace = ref true
+
 (** Given a fully-inferred shape, maps axes to their corresponding positions in an index using the
     [force_to_dims] semantics. *)
 let axis_keys_to_idcs (sh : t) : int axis_map =
@@ -481,7 +483,8 @@ let rec unify_dims row_eqs env =
         List.map2_exn ~f:(fun d1 d2 -> { d1; fix1 = is_fixed r1; d2; fix2 = is_fixed r2 }) ds1_suf ds2_suf
       in
       (try unify_dim dim_eqs env
-       with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ eq.r; eq.subr ] :: trace))
+       with Shape_error (s, trace) when !with_error_trace ->
+         raise @@ Shape_error ("dim tail / " ^ s, Row_mismatch [ eq.r; eq.subr ] :: trace))
       |> apply_constraint { dims; constr; row; sh_id = Set.union sh_id1 sh_id2 }
       |> unify_dims
            ({
@@ -571,7 +574,8 @@ let unify_shapes env { shape = cur_sh; logic } =
         { dims = []; constr = Total_elems batch_elems; row = get_row_var (); sh_id = Utils.one_int cur_sh.id }
       in
       try unify_dims [ { r = b_row; subr = cur_sh.batch } ] env
-      with Shape_error (s, trace) -> raise @@ Shape_error (s, Shape_mismatch [ cur_sh ] :: trace))
+      with Shape_error (s, trace) when !with_error_trace ->
+        raise @@ Shape_error ("Constant_fill / " ^ s, Shape_mismatch [ cur_sh ] :: trace))
   | Terminal (File_mapped (filename, prec)) -> (
       let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
       let len = Unix.lseek fd 0 Unix.SEEK_END / Arrayjit.Ops.prec_in_bytes prec in
@@ -589,7 +593,8 @@ let unify_shapes env { shape = cur_sh; logic } =
         { dims = []; constr = Total_elems batch_elems; row = get_row_var (); sh_id = Utils.one_int cur_sh.id }
       in
       try unify_dims [ { r = b_row; subr = cur_sh.batch } ] env
-      with Shape_error (s, trace) -> raise @@ Shape_error (s, Shape_mismatch [ cur_sh ] :: trace))
+      with Shape_error (s, trace) when !with_error_trace ->
+        raise @@ Shape_error ("File_mapped / " ^ s, Shape_mismatch [ cur_sh ] :: trace))
   | Transpose (Transpose, sh) -> (
       try
         unify_dims
@@ -599,7 +604,8 @@ let unify_shapes env { shape = cur_sh; logic } =
             { r = cur_sh.output; subr = sh.input };
           ]
           env
-      with Shape_error (s, trace) -> raise @@ Shape_error (s, Shape_mismatch [ cur_sh; sh ] :: trace))
+      with Shape_error (s, trace) when !with_error_trace ->
+        raise @@ Shape_error ("Transpose / " ^ s, Shape_mismatch [ cur_sh; sh ] :: trace))
   | Transpose (Pointwise_un, sh) -> (
       try
         unify_dims
@@ -609,7 +615,8 @@ let unify_shapes env { shape = cur_sh; logic } =
             { r = cur_sh.output; subr = sh.output };
           ]
           env
-      with Shape_error (s, trace) -> raise @@ Shape_error (s, Shape_mismatch [ cur_sh; sh ] :: trace))
+      with Shape_error (s, trace) when !with_error_trace ->
+        raise @@ Shape_error ("Pointwise unary / " ^ s, Shape_mismatch [ cur_sh; sh ] :: trace))
   | Broadcast (Compose, sh1, sh2) -> (
       try
         unify_dims
@@ -621,7 +628,8 @@ let unify_shapes env { shape = cur_sh; logic } =
             { r = sh1.input; subr = sh2.output };
           ]
           env
-      with Shape_error (s, trace) -> raise @@ Shape_error (s, Shape_mismatch [ cur_sh; sh1; sh2 ] :: trace))
+      with Shape_error (s, trace) when !with_error_trace ->
+        raise @@ Shape_error ("Compose / " ^ s, Shape_mismatch [ cur_sh; sh1; sh2 ] :: trace))
   | Broadcast (Pointwise_bin, sh1, sh2) ->
       unify_dims
         [
@@ -633,7 +641,7 @@ let unify_shapes env { shape = cur_sh; logic } =
           { r = cur_sh.output; subr = sh2.output };
         ]
         env
-  | Transpose (Batch_slice { static_range; static_symbol = _ }, sh) -> (
+  | Transpose (Batch_slice { static_range; static_symbol }, sh) -> (
       let slice_var = Var (get_var ()) in
       let range_eq =
         Option.to_list static_range
@@ -655,7 +663,11 @@ let unify_shapes env { shape = cur_sh; logic } =
                { r = cur_sh.input; subr = sh.input };
                { r = cur_sh.output; subr = sh.output };
              ]
-      with Shape_error (s, trace) -> raise @@ Shape_error (s, Shape_mismatch [ cur_sh; sh ] :: trace))
+      with Shape_error (s, trace) when !with_error_trace ->
+        raise
+        @@ Shape_error
+             ( [%string "Batch slice %{Arrayjit.Indexing.symbol_ident static_symbol} / %{s}"],
+               Shape_mismatch [ cur_sh; sh ] :: trace ))
   | Transpose (Permute spec, sh) -> (
       let ls_rhs, ls_lhs =
         match einsum_of_spec spec with
@@ -681,7 +693,8 @@ let unify_shapes env { shape = cur_sh; logic } =
             { r = o_rhs; subr = sh.output };
           ]
           env
-      with Shape_error (s, trace) -> raise @@ Shape_error (s, Shape_mismatch [ cur_sh; sh ] :: trace))
+      with Shape_error (s, trace) when !with_error_trace ->
+        raise @@ Shape_error ([%string "Permute %{spec} / %{s}"], Shape_mismatch [ cur_sh; sh ] :: trace))
   | Broadcast (Einsum spec, sh1, sh2) -> (
       let ls_rhs1, ls_rhs2, ls_lhs =
         match einsum_of_spec spec with
@@ -713,7 +726,9 @@ let unify_shapes env { shape = cur_sh; logic } =
             { r = o_rhs2; subr = sh2.output };
           ]
           env
-      with Shape_error (s, trace) -> raise @@ Shape_error (s, Shape_mismatch [ cur_sh; sh1; sh2 ] :: trace))
+      with Shape_error (s, trace) when !with_error_trace ->
+        raise @@ Shape_error ([%string "Einsum %{spec} / %{s}"], Shape_mismatch [ cur_sh; sh1; sh2 ] :: trace)
+      )
 
 let indices_bio sh (type v) (arr : v array) =
   let n_batch = List.length sh.batch.dims in
@@ -776,8 +791,8 @@ let rec force_row_to_dims =
     Note: [force_to_dims] is "destructive": it closes shapes that remain incomplete after inference. *)
 let force_to_dims (sh : t) : int array =
   try Array.concat_map ~f:force_row_to_dims [| sh.batch; sh.output; sh.input |]
-  with Shape_error (_, more) ->
-    raise @@ Shape_error ("Dimensions still unknown", Shape_mismatch [ sh ] :: more)
+  with Shape_error (s, more) when !with_error_trace ->
+    raise @@ Shape_error ("Dimensions still unknown / " ^ s, Shape_mismatch [ sh ] :: more)
 
 let rec row_to_labels env =
   let rec f = function
@@ -905,7 +920,8 @@ let make ?(fix_b = false) ?(fix_i = false) ?(fix_o = false) ?batch_dims ?input_d
   | Not_constrained -> ()
   | Input_equals_output -> (
       try state := unify_dims [ { r = input; subr = output } ] !state
-      with Shape_error (s, trace) -> raise @@ Shape_error (s, Shape_mismatch [ result ] :: trace)));
+      with Shape_error (s, trace) when !with_error_trace ->
+        raise @@ Shape_error ("Input_equals_output / " ^ s, Shape_mismatch [ result ] :: trace)));
   result
 
 let shape_spec_to_dims_bio ?b_row ?i_row ?o_row labels =
@@ -930,7 +946,8 @@ let of_spec ?(deduced = Not_constrained) ~id spec =
   | Not_constrained -> ()
   | Input_equals_output -> (
       try state := unify_dims [ { r = input; subr = output } ] !state
-      with Shape_error (s, trace) -> raise @@ Shape_error (s, Shape_mismatch [ result ] :: trace)));
+      with Shape_error (s, trace) when !with_error_trace ->
+        raise @@ Shape_error ("of spec / " ^ s, Shape_mismatch [ result ] :: trace)));
   result
 
 (** A [stop_broadcast] mutates the partially-inferred shape of a tensor in-place, substituting-in
@@ -950,7 +967,8 @@ let stop_broadcast sh =
               ]
               !state;
           Fixed
-        with Shape_error (s, trace) -> raise @@ Shape_error (s, Shape_mismatch [ sh ] :: trace))
+        with Shape_error (s, trace) when !with_error_trace ->
+          raise @@ Shape_error ("stop_broadcast / " ^ s, Shape_mismatch [ sh ] :: trace))
   in
   sh.batch <- { sh.batch with row = fix sh.batch.row };
   sh.input <- { sh.input with row = fix sh.input.row };
@@ -972,7 +990,8 @@ let broadcast sh =
               ]
               !state;
           Broadcastable
-        with Shape_error (s, trace) -> raise @@ Shape_error (s, Shape_mismatch [ sh ] :: trace))
+        with Shape_error (s, trace) when !with_error_trace ->
+          raise @@ Shape_error ("broadcast / " ^ s, Shape_mismatch [ sh ] :: trace))
   in
   sh.batch <- { sh.batch with row = fix sh.batch.row };
   sh.input <- { sh.input with row = fix sh.input.row };
