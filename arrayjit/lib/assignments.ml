@@ -196,7 +196,7 @@ let to_low_level (code : t) : Low_level.t =
 
 let compile_proc ~name ?(verbose = false) static_indices proc =
   if verbose then Stdio.printf "Assignments.compile_proc: generating the initial low-level code\n%!";
-  if !Low_level.with_debug && !Low_level.keep_files_in_run_directory then (
+  if Utils.settings.with_debug && Utils.settings.keep_files_in_run_directory then (
     let fname = name ^ ".hlc" in
     let f = Stdio.Out_channel.create fname in
     let ppf = Stdlib.Format.formatter_of_out_channel f in

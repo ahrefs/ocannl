@@ -89,7 +89,7 @@ Exec_as_cuda [~is_initial] and [~is_final]:
             let tn = Hashtbl.find_exn traced_store ptr in
             if tn.read_before_write then (
               let f src = Cu.memcpy_H_to_D ~length:size_in_elems ~dst ~src () in
-              if verbose && !Low_level.with_debug then
+              if verbose && Utils.settings.with_debug then
                 Stdio.printf "Exec_as_cuda.jit: memcpy_H_to_D for %s, length: %d\n%!" name size_in_elems;
               Ndarray.map { f } ndarray)
         | _ -> ()));
@@ -103,7 +103,7 @@ if is_final then (
             let tn = Hashtbl.find_exn traced_store ptr in
             if not tn.read_only then (
               let f dst = Cu.memcpy_D_to_H ~length:size_in_elems ~dst ~src () in
-              if verbose && !Low_level.with_debug then
+              if verbose && Utils.settings.with_debug then
                 Stdio.printf "Exec_as_cuda.jit: memcpy_D_to_H for %s\n%!" name;
               Ndarray.map { f } ndarray)
         | _ -> ()));

@@ -197,13 +197,13 @@ let get_array ~traced_store:_ ctx_info (key : LA.t) =
     let global =
       if is_local_only mem then None
       else (
-        if !Low_level.with_debug then Stdio.printf "Exec_as_cuda.get_array: mem_alloc %s\n%!" (LA.name key);
+        if Utils.settings.with_debug then Stdio.printf "Exec_as_cuda.get_array: mem_alloc %s\n%!" (LA.name key);
         set_ctx ctx_info.ctx;
         Some (LA.name key, Cudajit.mem_alloc ~byte_size:size_in_bytes))
     in
     let local = Option.some_if (is_local_only mem) @@ LA.name key ^ "_local" in
     let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
-    if !Low_level.with_debug then
+    if Utils.settings.with_debug then
       Stdio.printf "Exec_as_cuda: creating array #%d %s; mem=%s on host = %b; global = %b\n%!" key.id
         (LA.label key) backend_info is_on_host (Option.is_some global);
     if not @@ String.is_substring key.backend_info ~substring:backend_info then
@@ -246,7 +246,7 @@ let jit_code ~traced_store info ppf llc : unit =
         let num_closing_braces = pp_top_locals ppf v in
         (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
         fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr array) pp_array_offset (idcs, array.dims) loop_f v;
-        (if !Low_level.debug_log_jitted then
+        (if Utils.settings.debug_log_jitted then
            let v_code, v_idcs = loop_debug_f v in
            fprintf ppf
              "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"DEBUG LOG: %s[%%u] = \
@@ -266,7 +266,7 @@ let jit_code ~traced_store info ppf llc : unit =
         done;
         locals := old_locals
     | Comment message ->
-        if !Low_level.debug_log_jitted then
+        if Utils.settings.debug_log_jitted then
           fprintf ppf
             "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"COMMENT: %s\\n\"@]);@ @]}"
             (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
@@ -375,7 +375,7 @@ let jit_func ~name ?(verbose = false) (old_context : context) idx_params (traced
     List.unzip
     @@ List.filter_map arrays ~f:(fun la ->
            let tn = Map.find_exn info.ctx_arrays la in
-           if !Low_level.with_debug then
+           if Utils.settings.with_debug then
              Stdio.printf "Exec_as_cuda.jit: array used: #%d %s; %s\n%!" la.id (LA.label la)
                (Sexp.to_string_hum @@ sexp_of_mem_properties tn.mem);
            match tn.mem with
@@ -400,7 +400,7 @@ let jit_func ~name ?(verbose = false) (old_context : context) idx_params (traced
   let cu_src =
     [%string
       {|
-%{if !Low_level.debug_log_jitted then "__device__ int printf (const char * format, ... );" else ""}
+%{if Utils.settings.debug_log_jitted then "__device__ int printf (const char * format, ... );" else ""}
 extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ params}) {
   /* TODO: this initial toy prototype is single-threaded. */
   if (threadIdx.x != 0 || blockIdx.x != 0) { return; }
@@ -414,7 +414,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ par
 |}]
   in
   let f_name = name ^ "-cudajit-debug" in
-  if !Low_level.with_debug && !Low_level.keep_files_in_run_directory then (
+  if Utils.settings.with_debug && Utils.settings.keep_files_in_run_directory then (
     let oc = Out_channel.open_text @@ f_name ^ ".cu" in
     Stdio.Out_channel.output_string oc cu_src;
     Stdio.Out_channel.flush oc;
@@ -422,9 +422,9 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ par
   if verbose then Stdio.printf "Exec_as_cuda.jit: compiling to PTX\n%!";
   let module Cu = Cudajit in
   let ptx =
-    Cu.compile_to_ptx ~cu_src ~name ~options:[ "--use_fast_math" ] ~with_debug:!Low_level.with_debug
+    Cu.compile_to_ptx ~cu_src ~name ~options:[ "--use_fast_math" ] ~with_debug:Utils.settings.with_debug
   in
-  if !Low_level.with_debug && !Low_level.keep_files_in_run_directory then (
+  if Utils.settings.with_debug && Utils.settings.keep_files_in_run_directory then (
     let f_name = name ^ "-cudajit-debug" in
     let oc = Out_channel.open_text @@ f_name ^ ".ptx" in
     Stdio.Out_channel.output_string oc @@ Cu.string_from_ptx ptx;
@@ -443,7 +443,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ par
 type jitted = { context : context; run : unit -> unit; bindings : unit Indexing.bindings }
 
 let jit ~name ?(verbose = false) old_context bindings ((traced_store, llc) as compiled) =
-  if !Low_level.with_debug then Stdio.printf "Exec_as_cuda.jit: %s\n%!" (Low_level.extract_block_name [ llc ]);
+  if Utils.settings.with_debug then Stdio.printf "Exec_as_cuda.jit: %s\n%!" (Low_level.extract_block_name [ llc ]);
   let idx_params, idx_args = List.unzip @@ Indexing.assoc_of_bindings bindings in
   let func, args, run_module, info = jit_func ~name ~verbose old_context idx_params compiled in
   let context =
@@ -461,7 +461,7 @@ let jit ~name ?(verbose = false) old_context bindings ((traced_store, llc) as co
               if tn.zero_initialized then Cu.memset_d8 dev_ptr Unsigned.UChar.zero ~length:size_in_bytes
           | _ -> ());
     if verbose then Stdio.printf "Exec_as_cuda.jit: launching the kernel\n%!";
-    (* if !Low_level.debug_log_jitted then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
+    (* if Utils.settings.debug_log_jitted then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
     let idx_args =
       List.map2_exn idx_params idx_args ~f:(fun { static_symbol; static_range } i ->
           if !i < 0 then

@@ -3,10 +3,11 @@ open Ocannl
 module CDSL = Arrayjit.Low_level.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
+module Utils = Arrayjit.Utils
 
 let _suspended () =
-  CDSL.with_debug := true;
-  CDSL.keep_files_in_run_directory := true;
+  Utils.settings.with_debug <- true;
+  Utils.settings.keep_files_in_run_directory <- true;
   Random.init 0;
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   (* let%op c = c + c + 1 in
@@ -23,8 +24,8 @@ let _suspended () =
   Tensor.print ~with_code:false ~with_grad:true `Default @@ b
 
 let () =
-  CDSL.with_debug := true;
-  CDSL.keep_files_in_run_directory := true;
+  Utils.settings.with_debug <- true;
+  Utils.settings.keep_files_in_run_directory <- true;
   Random.init 0;
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = (a *. b) + (b **. 3) in

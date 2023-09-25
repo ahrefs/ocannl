@@ -64,6 +64,24 @@ let unique_keep_first ~equal l =
   in
   loop [] l
 
+type settings = {
+  mutable debug_log_jitted : bool;
+  mutable keep_files_in_run_directory : bool;
+  mutable with_debug : bool;
+  mutable fixed_state_for_init : int option;
+  mutable print_decimals_precision : int;  (** When rendering arrays etc., outputs this many decimal digits. *)
+}
+[@@deriving sexp]
+
+let settings =
+  {
+    debug_log_jitted = false;
+    keep_files_in_run_directory = false;
+    with_debug = false;
+    fixed_state_for_init = None;
+    print_decimals_precision = 2;
+  }
+
 module Debug_flushing = Minidebug_runtime.Flushing (struct
   let debug_ch = Stdio.stdout
   let time_tagged = false

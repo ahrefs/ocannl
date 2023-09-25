@@ -2,6 +2,8 @@
 
 open Base
 
+module Utils = Arrayjit.Utils
+
 (** *** Shape types and inference *** *)
 
 (** An index pointing to any of a shape's axes, including the kind of the axis ([Batch, Input, Output])

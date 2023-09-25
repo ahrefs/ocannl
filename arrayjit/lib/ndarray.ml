@@ -76,11 +76,10 @@ let init_bigarray_of_prec (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precisio
 let indices_to_offset ~dims ~idcs =
   Array.fold2_exn dims idcs ~init:0 ~f:(fun accu dim idx -> (accu * dim) + idx)
 
-let fixed_state_for_init = ref None
 
 let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~dims (init_op : Ops.init_op) :
     (ocaml, elt_t) bigarray =
-  Option.iter !fixed_state_for_init ~f:(fun seed -> Random.init seed);
+  Option.iter Utils.settings.fixed_state_for_init ~f:(fun seed -> Random.init seed);
   let constant_fill_f f values strict =
     let len = Array.length values in
     if strict then (
@@ -341,9 +340,6 @@ let int_dims_to_string ?(with_axis_numbers = false) dims =
     String.concat_array ~sep:" x " @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ Int.to_string s)
   else String.concat_array ~sep:"x" @@ Array.map dims ~f:Int.to_string
 
-(** When rendering arrays, outputs this many decimal digits. *)
-let print_decimals_precision = ref 2
-
 let concise_float ~prec v =
   Printf.sprintf "%.*e" prec v
   |> (* The C99 standard requires at least two digits for the exponent, but the leading zero
@@ -431,7 +427,7 @@ let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(label
             B.hpad 1 @@ B.line
             @@
             if is_ellipsis () then "..."
-            else concise_float ~prec:!print_decimals_precision (get_as_float arr indices)
+            else concise_float ~prec:Utils.settings.print_decimals_precision (get_as_float arr indices)
           with Invalid_argument _ ->
             raise
             @@ User_error
@@ -499,7 +495,7 @@ let pp_array_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?axes_s
       else if axis = num_batch_axes + num_output_axes then ""
       else ")"
     in
-    if axis = num_all_axes then fprintf fmt "%.*f" !print_decimals_precision (get_as_float arr ind)
+    if axis = num_all_axes then fprintf fmt "%.*f" Utils.settings.print_decimals_precision (get_as_float arr ind)
     else (
       fprintf fmt "@[<hov 2>%s@," open_delim;
       for i = 0 to dims.(axis) - 1 do

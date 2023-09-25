@@ -216,7 +216,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
     | Arg1 -> v1
   in
   let log_comment c =
-    if !Low_level.debug_log_jitted then
+    if Utils.settings.debug_log_jitted then
       let f = Function.builtin ctx "printf" in
       Block.eval !current_block @@ RValue.call ctx f [ RValue.string_literal ctx ("\nCOMMENT: " ^ c ^ "\n") ]
     else Block.comment !current_block c
@@ -268,7 +268,7 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
   let fflush = Function.create ctx Imported (Type.get ctx Void) "fflush" [ Param.create ctx f_ptr "f" ] in
   let c_stdout = LValue.global ctx LValue.Imported f_ptr "stdout" in
   let debug_log_assignment ~env idcs array accum_op value v_code =
-    if !Low_level.debug_log_jitted then (
+    if Utils.settings.debug_log_jitted then (
       let v_format, v_fillers = debug_float ~env ~is_double:array.is_double v_code in
       let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
       Block.eval !current_block @@ RValue.call ctx printf
@@ -422,10 +422,10 @@ let jit_func ~name (context : context) ctx bindings (traced_store, proc) =
   let after_proc = jit_code ~name ~env ctx_info main_block proc in
   Block.jump init_block main_block;
   Block.return_void after_proc;
-  (if !Low_level.with_debug then
+  (if Utils.settings.with_debug then
      let suf = "-gccjit-debug.c" in
      let f_name =
-       if !Low_level.keep_files_in_run_directory then name ^ suf
+       if Utils.settings.keep_files_in_run_directory then name ^ suf
        else Stdlib.Filename.temp_file (name ^ "-") suf
      in
      Context.dump_to_file ctx ~update_locs:true f_name);
@@ -440,7 +440,7 @@ let jit old_context ~name ?verbose:_ bindings compiled =
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
   Context.set_option ctx Context.Optimization_level !optimization_level;
   (*
-  if !Low_level.with_debug && !Low_level.keep_files_in_run_directory then (
+  if Utils.settings.with_debug && Utils.settings.keep_files_in_run_directory then (
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)

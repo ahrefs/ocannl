@@ -5,16 +5,17 @@ module IDX = Arrayjit.Indexing.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Arrayjit.Low_level.CDSL
+module Utils = Arrayjit.Utils
 
 let () =
   Random.init 0;
   let module Backend = (val Train.fresh_backend ()) in
-  CDSL.with_debug := true;
-  CDSL.keep_files_in_run_directory := true;
-  (* CDSL.debug_log_jitted := true; *)
+  Utils.settings.with_debug <- true;
+  Utils.settings.keep_files_in_run_directory <- true;
+  (* Utils.settings.debug_log_jitted <- true; *)
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  CDSL.fixed_state_for_init := Some 4;
+  Utils.settings.fixed_state_for_init <- Some 4;
   let hid_dim = 16 in
   let len = 200 in
   let batch = 10 in

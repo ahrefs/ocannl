@@ -68,9 +68,6 @@ let comment_to_name =
   Str.global_replace nonliteral "_"
 
 let extract_block_name llc = match flat_lines llc with Comment s :: _ -> comment_to_name s | _ -> ""
-let debug_log_jitted = ref false
-let keep_files_in_run_directory = ref false
-let with_debug = ref false
 let code_sexp_margin = ref 200
 
 let fprint_code ppf c =
@@ -266,7 +263,7 @@ let check_and_store_virtual traced static_indices top_llc =
           Array.iter indices ~f:(function
             | Iterator s as idx when not (Set.mem static_indices s) ->
                 if not @@ Set.mem env_dom s then (
-                  if !with_debug then
+                  if Utils.settings.with_debug then
                     Stdlib.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
                       Sexp.pp_hum
                       ([%sexp_of: Indexing.axis_index] idx)
@@ -288,7 +285,7 @@ let check_and_store_virtual traced static_indices top_llc =
           Array.iter idcs ~f:(function
             | Iterator s when not (Set.mem static_indices s) ->
                 if not @@ Set.mem env_dom s then (
-                  if !with_debug then
+                  if Utils.settings.with_debug then
                     Stdlib.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
                       Sexp.pp_hum
                       ([%sexp_of: Indexing.symbol] s)
@@ -302,7 +299,7 @@ let check_and_store_virtual traced static_indices top_llc =
     | Embed_index (Fixed_idx _) -> ()
     | Embed_index (Iterator s) ->
         if not @@ Set.mem env_dom s then (
-          if !with_debug && not (Set.mem static_indices s) then
+          if Utils.settings.with_debug && not (Set.mem static_indices s) then
             Stdlib.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!" Sexp.pp_hum
               ([%sexp_of: Indexing.symbol] s)
               Sexp.pp_hum
@@ -708,14 +705,14 @@ let optimize_proc ?(verbose = false) static_indices llc : optimized =
 
 let compile_proc ~name ?(verbose = false) static_indices llc : optimized =
   if verbose then Stdio.printf "Low_level.compile_proc: generating the initial low-level code\n%!";
-  if !with_debug && !keep_files_in_run_directory then (
+  if Utils.settings.with_debug && Utils.settings.keep_files_in_run_directory then (
     let fname = name ^ "-unoptimized.llc" in
     let f = Stdio.Out_channel.create fname in
     let ppf = Stdlib.Format.formatter_of_out_channel f in
     Stdlib.Format.pp_set_margin ppf !code_sexp_margin;
     Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t llc));
   let result = optimize_proc ~verbose static_indices llc in
-  if !with_debug && !keep_files_in_run_directory then (
+  if Utils.settings.with_debug && Utils.settings.keep_files_in_run_directory then (
     let fname = name ^ ".llc" in
     let f = Stdio.Out_channel.create fname in
     let ppf = Stdlib.Format.formatter_of_out_channel f in
@@ -753,22 +750,18 @@ let loop_over_dims dims ~body =
 module CDSL = struct
   let single = Ops.single
   let double = Ops.double
-  let debug_log_jitted = debug_log_jitted
-  let keep_files_in_run_directory = keep_files_in_run_directory
-  let with_debug = with_debug
   let virtualize_settings = virtualize_settings
   let code_sexp_margin = code_sexp_margin
-  let fixed_state_for_init = Ndarray.fixed_state_for_init
 
   let enable_all_debugs ?(debug_logs = false) ?(hosted_only = true) () =
-    with_debug := true;
-    keep_files_in_run_directory := true;
+    Utils.settings.with_debug <- true;
+    Utils.settings.keep_files_in_run_directory <- true;
     if hosted_only then virtualize_settings.enable_device_only <- false;
-    if debug_logs then debug_log_jitted := true
+    if debug_logs then Utils.settings.debug_log_jitted <- true
 
   let disable_all_debugs ?(restore_defaults = false) () =
-    debug_log_jitted := false;
-    with_debug := false;
-    keep_files_in_run_directory := false;
+    Utils.settings.debug_log_jitted <- false;
+    Utils.settings.with_debug <- false;
+    Utils.settings.keep_files_in_run_directory <- false;
     if restore_defaults then virtualize_settings.enable_device_only <- true
 end

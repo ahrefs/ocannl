@@ -6,7 +6,7 @@ module CDSL = Arrayjit.Low_level.CDSL
 
 
 let _suspended () =
-  (* Session.CDSL.with_debug := false; *)
+  (* Session.Utils.settings.with_debug <- false; *)
   (* let open Operation.TDSL in *)
   let open Tensor.O in
   (* CDSL.enable_all_debugs (); *)
@@ -15,8 +15,8 @@ let _suspended () =
   (*
   CDSL.virtualize_settings.enable_device_only <- true;
   *)
-  CDSL.with_debug := true;
-  CDSL.keep_files_in_run_directory := true;
+  Utils.settings.with_debug <- true;
+  Utils.settings.keep_files_in_run_directory <- true;
   (* SDSL.drop_all_sessions (); *)
   Random.init 0;
   let parallel_dims = 1 in
@@ -168,11 +168,11 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff
   SDSL.default_grad_prec := precision;
   let open Tensor.O in
   (* SDSL.drop_all_sessions (); *)
-  (* CDSL.with_debug := true; *)
-  (* CDSL.keep_files_in_run_directory := true; *)
+  (* Utils.settings.with_debug <- true; *)
+  (* Utils.settings.keep_files_in_run_directory <- true; *)
   (* Low_level.debug_log_jitted := true; *)
   Random.init (* random_seed *) 0;
-  CDSL.fixed_state_for_init := Some random_seed;
+  Utils.settings.fixed_state_for_init <- Some random_seed;
   (* let hid_2_3 = 8 in
      let hid_4_5 = 4 in *)
   let hid_dim = 16 in
@@ -290,8 +290,8 @@ let classify_moons ~with_reg ~random_seed ~on_device executor ~inlining_cutoff
         result = [%sexp_of: float * float] (!min_loss, !last_loss);
       }
   in
-  CDSL.with_debug := false;
-  CDSL.keep_files_in_run_directory := false;
+  Utils.settings.with_debug <- false;
+  Utils.settings.keep_files_in_run_directory <- false;
   let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in

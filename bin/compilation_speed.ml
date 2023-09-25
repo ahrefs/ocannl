@@ -10,9 +10,9 @@ let benchmark_overhead backend () =
   let n_data = 20 in
   Arrayjit.Backends.reinitialize backend;
   let open (val backend : Arrayjit.Backends.Backend) in
-  (* CDSL.with_debug := true; *)
-  (* CDSL.keep_files_in_run_directory := true; *)
-  (* CDSL.debug_log_jitted := true; *)
+  (* Utils.settings.with_debug <- true; *)
+  (* Utils.settings.keep_files_in_run_directory <- true; *)
+  (* Utils.settings.debug_log_jitted <- true; *)
   CDSL.disable_all_debugs ();
   Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ name ^ " ******";
   Random.init 0;
