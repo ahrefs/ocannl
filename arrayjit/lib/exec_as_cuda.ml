@@ -23,15 +23,21 @@ type ndarray = {
 
 module LA = Lazy_array
 
-type device = { dev : Cudajit.device; ordinal : int; primary_context : Cudajit.context }
+type device = {
+  dev : (Cudajit.device[@sexp.opaque]);
+  ordinal : int;
+  primary_context : (Cudajit.context[@sexp.opaque]);
+}
+[@@deriving sexp_of]
 
 type context = {
-  ctx : Cudajit.context;
+  ctx : (Cudajit.context[@sexp.opaque]);
   device : device;
-  run_module : Cudajit.module_ option;
+  run_module : (Cudajit.module_[@sexp.opaque]) option;
       (** Code jitted for this context, independent of the parent and child contexts. *)
   arrays : ndarray Map.M(LA).t;
 }
+[@@deriving sexp_of]
 
 type ctx_info = {
   ctx : Cudajit.context;  (** Context for jitting, independent of the parent and child contexts. *)

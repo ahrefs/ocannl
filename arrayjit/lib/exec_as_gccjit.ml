@@ -12,7 +12,8 @@ let root_ctx = ref None
 
 module LA = Lazy_array
 
-type context = { arrays : Ndarray.t Map.M(LA).t; result : Gccjit.result option }
+type context = { arrays : Ndarray.t Map.M(LA).t; result : (Gccjit.result option[@sexp.opaque]) }
+[@@deriving sexp_of]
 
 let unsafe_cleanup () =
   let open Gccjit in
@@ -307,11 +308,11 @@ let jit_code ~name ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ }
         debug_log_assignment ~env idcs array Ops.Arg2 value v_code;
         Block.assign !current_block lhs value
     | Zero_out array ->
-        if Hashtbl.mem info.arrays array then zero_out ctx !current_block @@ Hashtbl.find_exn info.arrays array
+        if Hashtbl.mem info.arrays array then
+          zero_out ctx !current_block @@ Hashtbl.find_exn info.arrays array
         else
           let tn = Low_level.(get_node info.traced_store array) in
-          assert tn.zero_initialized
-          (* The initialization is emitted by get_array. *)
+          assert tn.zero_initialized (* The initialization is emitted by get_array. *)
     | Set_local (id, value) ->
         let lhs, num_typ, is_double = Map.find_exn !locals id in
         let value = loop_float ~name ~env ~num_typ ~is_double value in

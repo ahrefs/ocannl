@@ -26,7 +26,7 @@ let isnt_true opt = not @@ Option.value ~default:false @@ Option.map ~f:fst opt
 let name { id; _ } = "n" ^ Int.to_string id
 let label a = String.concat ~sep:"#" a.label
 let compare a1 a2 = compare_int a1.id a2.id
-let sexp_of_t a = Sexp.Atom (name a)
+let sexp_of_t a = Sexp.Atom (name a ^ "#" ^ label a)
 
 include Comparator.Make (struct
   type nonrec t = t

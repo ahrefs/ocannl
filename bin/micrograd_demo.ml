@@ -19,7 +19,7 @@ let () =
   let len = 200 in
   let batch = 20 in
   let n_batches = 2 * len / batch in
-  let epochs = 5 in
+  let epochs = 20 in
   let steps = epochs * n_batches in
   let noise () = Random.float_range (-0.1) 0.1 in
   let moons_flat =
@@ -62,16 +62,15 @@ let () =
      Stdio.print_endline "\n******** learning_rate **********";
      Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
      Stdio.printf "\n********\n%!"; *)
-  (* * step_ref := 1;
-     (* sgd_jitted.run (); *)
+  (* * step_ref :=0;
+     sgd_jitted.run ();
      Backend.await device;
-     (* Train.all_device_to_host (module Backend) sgd_jitted.context scalar_loss; *)
-     Train.all_device_to_host (module Backend) lr_jitted.context learning_rate;
-     (* Stdio.print_endline "\n******** DEBUG: scalar_loss **********"; *)
-     (* Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 scalar_loss; *)
-     Stdio.print_endline "\n******** DEBUG: learning_rate **********";
+     Train.all_device_to_host (module Backend) sgd_jitted.context scalar_loss;
+     Stdio.print_endline "\n******** scalar_loss **********";
+     Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 scalar_loss;
+     Stdio.print_endline "\n******** learning_rate **********";
      Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
-     Stdio.printf "\nDEBUG: ********\n%!"
+     Stdio.printf "\n********\n%!"
      * *)
   let open Tensor.O in
   (* Alternative flat loop:
@@ -82,18 +81,21 @@ let () =
        Stdio.printf "Step=%d, lr=%f, loss=%f\n%!" step learning_rate.@[0] scalar_loss.@[0];
        ...
   *)
+  let epoch_loss = ref 0. in
   for epoch = 1 to epochs do
     Train.for_loop bindings ~f:(fun () ->
         sgd_jitted.run ();
         Backend.await device;
         assert (Backend.to_host sgd_jitted.context learning_rate.value);
         assert (Backend.to_host sgd_jitted.context scalar_loss.value);
-        (* if step % (len / batch) = 1 || step = steps then *)
-        Stdio.printf "Epoch %d, data step=%d, lr=%f, loss=%f\n%!" epoch !step_ref learning_rate.@[0]
-          scalar_loss.@[0];
+        (* Stdio.printf "Data step=%d, lr=%f, loss=%f\n%!" !step_ref learning_rate.@[0] scalar_loss.@[0]; *)
+        ignore step_ref;
         learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
         losses := scalar_loss.@[0] :: !losses;
-        log_losses := Float.log scalar_loss.@[0] :: !log_losses)
+        epoch_loss := !epoch_loss +. scalar_loss.@[0];
+        log_losses := Float.log scalar_loss.@[0] :: !log_losses);
+    Stdio.printf "Epoch %d, lr=%f, loss=%f\n%!" epoch learning_rate.@[0] !epoch_loss;
+    epoch_loss := 0.
   done;
   let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
@@ -110,7 +112,8 @@ let () =
   Stdio.printf "\n********\n%!";
   let callback (x, y) =
     Tensor.set_values point [| x; y |];
-    assert (Backend.from_host result_jitted.context point.value);
+    (* For the gccjit backend, point is only on host, not on device. For cuda, this will be needed. *)
+    ignore (Backend.from_host result_jitted.context point.value : bool);
     result_jitted.run ();
     Backend.await device;
     assert (Backend.to_host result_jitted.context mlp_result.value);

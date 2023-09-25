@@ -9,6 +9,7 @@ module type No_device_backend = sig
   val is_initialized : unit -> bool
   val init : unit -> context
   val finalize : context -> unit
+  val sexp_of_context : context -> Sexp.t
   val jit : context -> ?name:string -> ?verbose:bool -> unit Indexing.bindings -> Assignments.t -> jitted
   val unsafe_cleanup : unit -> unit
 
@@ -33,6 +34,7 @@ module type Backend = sig
 
   val init : device -> context
   val await : device -> unit
+  val sexp_of_device : device -> Sexp.t
   val num_devices : unit -> int
   val get_device : ordinal:int -> device
   val get_ctx_device : context -> device
@@ -43,13 +45,14 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   module Domain = Domain [@warning "-3"]
 
   type device = {
-    next_task : (unit -> unit) option ref;
+    next_task : ((unit -> unit) option ref[@sexp.opaque]);
     keep_spinning : bool ref;
     ordinal : int;
-    domain : unit Domain.t;
+    domain : (unit Domain.t[@sexp.opaque]);
   }
+  [@@deriving sexp_of]
 
-  type context = { device : device; ctx : Backend.context }
+  type context = { device : device; ctx : Backend.context } [@@deriving sexp_of]
   type jitted = { context : context; run : unit -> unit; bindings : unit Indexing.bindings }
 
   let name = "multicore " ^ Backend.name
@@ -141,6 +144,7 @@ module Gccjit_device : No_device_backend with type context = Exec_as_gccjit.cont
   let unsafe_cleanup = unsafe_cleanup
   let init = init
   let finalize = finalize
+  let sexp_of_context = sexp_of_context
 
   let jit context ?name ?verbose bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
@@ -172,6 +176,8 @@ module Cuda_backend : Backend with type context = Exec_as_cuda.context = struct
   let unsafe_cleanup = unsafe_cleanup
   let init = init
   let finalize = finalize
+  let sexp_of_context = sexp_of_context
+  let sexp_of_device = sexp_of_device
 
   let jit context ?name ?verbose bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
