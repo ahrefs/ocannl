@@ -4,10 +4,14 @@ module NTDSL = Operation.NTDSL
 open Arrayjit
 
 (** Reinitializes a backend selected via a global [backend] flag. *)
-let fresh_backend ?(verbose = true) () =
+let fresh_backend ?backend_name ?(verbose = true) () =
   let open Arrayjit.Backends in
   let backend =
-    match Utils.get_global_arg ~verbose ~arg_name:"backend" ~default:"gccjit" |> String.lowercase with
+    match
+      Option.value_or_thunk backend_name ~default:(fun () ->
+          Utils.get_global_arg ~verbose ~arg_name:"backend" ~default:"gccjit")
+      |> String.lowercase
+    with
     | "gccjit" -> (module Gccjit_backend : Backend)
     | "cuda" -> (module Cuda_backend : Backend)
     | backend -> invalid_arg [%string "Train.fresh_backend: unknown backend %{backend}"]

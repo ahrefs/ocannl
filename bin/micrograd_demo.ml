@@ -87,8 +87,7 @@ let () =
         Backend.await device;
         assert (Backend.to_host sgd_jitted.context learning_rate.value);
         assert (Backend.to_host sgd_jitted.context scalar_loss.value);
-        if epoch = 186 then
-          Stdio.printf "Data step=%d, lr=%f, loss=%f\n%!" !step_ref learning_rate.@[0] scalar_loss.@[0];
+        (* Stdio.printf "Data step=%d, lr=%f, loss=%f\n%!" !step_ref learning_rate.@[0] scalar_loss.@[0]; *)
         ignore step_ref;
         learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
         losses := scalar_loss.@[0] :: !losses;

@@ -5,6 +5,7 @@ module IDX = Arrayjit.Indexing.IDX
 module CDSL = Arrayjit.Low_level.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
+module Utils = Arrayjit.Utils
 
 let _suspended () =
   Random.init 0;
@@ -25,7 +26,9 @@ let _suspended () =
   let%op f5 = f 5 in
   let module Backend = (val Train.fresh_backend ()) in
   let jitted = Backend.(jit (init @@ get_device ~ordinal:0) IDX.empty @@ Train.grad_update f5) in
+  Train.all_host_to_device (module Backend) jitted.context f5;
   jitted.run ();
+  Train.all_device_to_host (module Backend) jitted.context f5;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   Stdio.printf "\n%!"
@@ -37,7 +40,7 @@ let _suspended () =
   let values = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   (* Test that the batch axis dimensions will be inferred. *)
   let x_flat =
-    Tensor.term ~grad_spec:Tensor.Require_grad ~label:"x_flat" ~input_dims:[] ~output_dims:[ 1 ]
+    Tensor.term ~grad_spec:Tensor.Require_grad ~label:[ "x_flat" ] ~input_dims:[] ~output_dims:[ 1 ]
       ~init_op:(Constant_fill { values; strict = true })
       ()
   in
