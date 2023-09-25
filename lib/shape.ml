@@ -1,7 +1,6 @@
 (** Tensor shape types, shape inference, projection inference. *)
 
 open Base
-
 module Utils = Arrayjit.Utils
 
 (** *** Shape types and inference *** *)
@@ -412,12 +411,19 @@ let apply_constraint r env =
             let known = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
             match vars with
             | [] ->
-                if n <> known then
-                  raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ])
+                if n <> known then (
+                  if Utils.settings.with_debug then
+                    Stdlib.Format.printf "apply_constraint: shape error env=@ %a\n%!" Sexp.pp_hum
+                      (sexp_of_environment env);
+                  raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ]))
                 else env
             | [ Var v ] ->
                 let rem = n / known in
-                if rem = 0 then raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ])
+                if rem = 0 then (
+                  if Utils.settings.with_debug then
+                    Stdlib.Format.printf "apply_constraint: shape error env=@ %a\n%!" Sexp.pp_hum
+                      (sexp_of_environment env);
+                  raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ]))
                 else { env with dim_env = Map.add_exn env.dim_env ~key:v ~data:(get_dim ~d:rem ()) }
             | _ -> assert false))
 
@@ -437,8 +443,11 @@ let rec unify_dims row_eqs env =
       (* The tensor inherits broadcastability from its subtensors, but not from its use sites. *)
       let rd_is_subtensor = phys_equal rd subr in
       let rd = subst_row env.row_env rd in
-      if equal_row rd.row rv.row && not (List.is_empty rd.dims) then
-        raise @@ Shape_error ("unify_dims: occurs check: infinite number of axes", [ Row_mismatch [ rv; rd ] ])
+      if equal_row rd.row rv.row && not (List.is_empty rd.dims) then (
+        if Utils.settings.with_debug then
+          Stdlib.Format.printf "unify_dims: occurs check: shape error env=@ %a\n%!" Sexp.pp_hum
+            (sexp_of_environment env);
+        raise @@ Shape_error ("unify_dims: occurs check: infinite number of axes", [ Row_mismatch [ rv; rd ] ]))
       else if equal_row rv.row rd.row then
         apply_constraint rv env |> apply_constraint rd |> unify_dims row_eqs
       else
@@ -465,6 +474,9 @@ let rec unify_dims row_eqs env =
       apply_constraint { dims = []; constr; row = Fixed; sh_id } env |> unify_dims row_eqs
   | ({ r = { dims = []; row = Fixed; _ }; subr = _ } as eq) :: _
   | ({ r = _; subr = { dims = []; row = Fixed; _ } } as eq) :: _ ->
+      if Utils.settings.with_debug then
+        Stdlib.Format.printf "unify_dims: Fixed-mode: shape error env=@ %a\n%!" Sexp.pp_hum
+          (sexp_of_environment env);
       raise @@ Shape_error ("unify_dims: Fixed-mode axis number mismatch", [ Row_mismatch [ eq.r; eq.subr ] ])
   | (( { r = { dims = []; row = Broadcastable; _ }; subr = _ }
      | { r = _; subr = { dims = []; row = Broadcastable; _ } } ) as eq)
@@ -500,6 +512,9 @@ and unify_dim (dim_eqs : dim_eq list) (env : environment) : environment =
   | [] -> env
   | { d1 = Dim { label = Some l1; _ } as d1; d2 = Dim { label = Some l2; _ } as d2; fix1 = _; fix2 = _ } :: _
     when not (String.equal l1 l2) ->
+      if Utils.settings.with_debug then
+        Stdlib.Format.printf "unify_dim: different labels: shape error env=@ %a\n%!" Sexp.pp_hum
+          (sexp_of_environment env);
       raise @@ Shape_error ("unify_dim: different labels", [ Dim_mismatch [ d1; d2 ] ])
   | {
       d1 = Dim { d = d1; label = _; proj_id = pid1 };
@@ -519,7 +534,10 @@ and unify_dim (dim_eqs : dim_eq list) (env : environment) : environment =
       in
       let dim_env = Map.update env.dim_env v ~f:(fun _ -> subst_dim env.dim_env d2) in
       unify_dim dim_eqs { env with dim_env }
-  | { d1; d2; fix1 = _; fix2 = _ } :: _ -> raise @@ Shape_error ("unify_dim", [ Dim_mismatch [ d1; d2 ] ])
+  | { d1; d2; fix1 = _; fix2 = _ } :: _ ->
+      if Utils.settings.with_debug then
+        Stdlib.Format.printf "unify_dim: shape error env=@ %a\n%!" Sexp.pp_hum (sexp_of_environment env);
+      raise @@ Shape_error ("unify_dim", [ Dim_mismatch [ d1; d2 ] ])
 
 let axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels =
   let b_dims, i_dims, o_dims = axis_map_to_dims_bio labels.labels in
@@ -794,6 +812,9 @@ let rec force_row_to_dims =
 let force_to_dims (sh : t) : int array =
   try Array.concat_map ~f:force_row_to_dims [| sh.batch; sh.output; sh.input |]
   with Shape_error (s, more) when !with_error_trace ->
+    if Utils.settings.with_debug then
+      Stdlib.Format.printf "force_to_dims: shape error global env=@ %a\n%!" Sexp.pp_hum
+        (sexp_of_environment !state);
     raise @@ Shape_error ("Dimensions still unknown / " ^ s, Shape_mismatch [ sh ] :: more)
 
 let rec row_to_labels env =
