@@ -115,26 +115,26 @@ let plot_canvas ?canvas ?size specs =
   let spanx = Float.(if spanx < epsilon_float then 1.0 else spanx) in
   let spany = maxy - miny in
   let spany = Float.(if spany < epsilon_float then 1.0 else spany) in
-  let to_int v =
-    try to_int v
-    with Invalid_argument _ ->
-      if Utils.settings.with_debug then Stdio.eprintf "\nPrintBox_tools: cannot plot number %f\n%!" v;
-      0
+  let scale_1d y =
+    try Some (to_int @@ (of_int Int.(dimy - 1) * (y - miny) / spany)) with Invalid_argument _ -> None
   in
-  let scale_1d y = to_int @@ (of_int Int.(dimy - 1) * (y - miny) / spany) in
   let scale_2d (x, y) =
-    ( to_int @@ (of_int Int.(dimx - 1) * (x - minx) / spanx),
-      to_int @@ (of_int Int.(dimy - 1) * (y - miny) / spany) )
+    try
+      Some
+        ( to_int @@ (of_int Int.(dimx - 1) * (x - minx) / spanx),
+          to_int @@ (of_int Int.(dimy - 1) * (y - miny) / spany) )
+    with Invalid_argument _ -> None
   in
   Array.iter specs ~f:(function
     | Scatterplot { points; pixel } ->
-        let points = Array.map points ~f:scale_2d in
+        let points = Array.filter_map points ~f:scale_2d in
         Array.iter points ~f:Int.(fun (i, j) -> canvas.(dimy - 1 - j).(i) <- pixel)
     | Line_plot { points; pixel } ->
         let points = Array.map points ~f:scale_1d in
         let rescale_x i = to_int @@ (of_int i * of_int dimx / of_int (Array.length points)) in
         (* TODO: implement interpolation if not enough points. *)
-        Array.iteri points ~f:Int.(fun i j -> canvas.(dimy - 1 - j).(rescale_x i) <- pixel)
+        Array.iteri points
+          ~f:Int.(fun i -> Option.iter ~f:(fun j -> canvas.(dimy - 1 - j).(rescale_x i) <- pixel))
     | Boundary_map { callback; pixel_true; pixel_false } ->
         Array.iteri canvas ~f:(fun dmj ->
             Array.iteri ~f:(fun i pix ->
