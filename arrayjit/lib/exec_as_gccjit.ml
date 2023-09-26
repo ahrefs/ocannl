@@ -470,21 +470,27 @@ let jit old_context ~name ?verbose:_ bindings compiled =
     fun () -> Indexing.apply runf
   in
   Context.release ctx;
-  context, run
+  (context, run)
 
 let from_host (context : context) la =
-  match (la.LA.array, Map.find context.arrays la) with
-  | (lazy (Some h_arr)), Some c_arr ->
-      Ndarray.map2 { f2 = Ndarray.A.blit } h_arr c_arr;
-      true
-  | _ -> false
+  match Map.find context.arrays la with
+  | None -> false
+  | Some c_arr -> (
+      match la.LA.array with
+      | (lazy (Some h_arr)) ->
+          Ndarray.map2 { f2 = Ndarray.A.blit } h_arr c_arr;
+          true
+      | (lazy None) -> false)
 
 let to_host (context : context) la =
-  match (la.LA.array, Map.find context.arrays la) with
-  | (lazy (Some h_arr)), Some c_arr ->
-      Ndarray.map2 { f2 = Ndarray.A.blit } c_arr h_arr;
-      true
-  | _ -> false
+  match Map.find context.arrays la with
+  | None -> false
+  | Some c_arr -> (
+      match la.LA.array with
+      | (lazy (Some h_arr)) ->
+          Ndarray.map2 { f2 = Ndarray.A.blit } c_arr h_arr;
+          true
+      | _ -> false)
 
 let merge_from_global ?(name_suffix = "") (context : context) ~dst ~accum ~src bindings =
   let body idcs =

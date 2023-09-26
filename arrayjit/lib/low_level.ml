@@ -719,8 +719,13 @@ let compile_proc ~name ?(verbose = false) static_indices llc : optimized =
     Stdlib.Format.pp_set_margin ppf !code_sexp_margin;
     Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t @@ snd result));
   Hashtbl.iter (fst result) ~f:(fun v ->
-      if Option.is_none v.nd.virtual_ then v.nd.virtual_ <- Some (true, 20) (* DEBUG: *)
+      if Option.is_none v.nd.virtual_ then v.nd.virtual_ <- Some (true, 20)
       else if Option.is_none v.nd.device_only then v.nd.device_only <- Some (true, 21);
+      if verbose && Utils.settings.with_debug then
+        Caml.Format.printf "Low_level.compile_proc: finalizing %a:@ virtual %b, device-only %b\n%!"
+          Sexp.pp_hum
+          ([%sexp_of: LA.t] v.nd)
+          (LA.is_true v.nd.virtual_) (LA.is_true v.nd.device_only);
       if LA.isnt_true v.nd.virtual_ && LA.isnt_true v.nd.device_only then (
         assert (Option.value ~default:true !(v.nd.hosted));
         v.nd.hosted := Some true)
