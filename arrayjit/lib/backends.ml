@@ -1,8 +1,10 @@
 open Base
 
+type 'context jitted = { context : 'context; run : unit -> unit; bindings : unit Indexing.bindings }
+
 module type No_device_backend = sig
   type context
-  type jitted = { context : context; run : unit -> unit; bindings : unit Indexing.bindings }
+  type nonrec jitted = context jitted
 
   val name : string
   val initialize : unit -> unit
@@ -24,7 +26,7 @@ module type No_device_backend = sig
   (** Merges the array from the source context into the destination context: [dst =: dst accum src].
       If the array is hosted, its state on host is undefined after this operation. (A backend may chose
       to use the host array as a buffer, if that is beneficial.) [name_suffix] is appended to
-      the jitted function's name. *)
+      the jitted function's name. Returns [None] if the array is not in the context. *)
 end
 
 module type Backend = sig
@@ -53,7 +55,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   [@@deriving sexp_of]
 
   type context = { device : device; ctx : Backend.context } [@@deriving sexp_of]
-  type jitted = { context : context; run : unit -> unit; bindings : unit Indexing.bindings }
+  type nonrec jitted = context jitted
 
   let name = "multicore " ^ Backend.name
   let init device = { device; ctx = Backend.init () }
@@ -129,12 +131,7 @@ end
 
 module Gccjit_device : No_device_backend with type context = Exec_as_gccjit.context = struct
   type context = Exec_as_gccjit.context
-
-  type jitted = Exec_as_gccjit.jitted = {
-    context : context;
-    run : unit -> unit;
-    bindings : unit Indexing.bindings;
-  }
+  type nonrec jitted = context jitted
 
   open Exec_as_gccjit
 
@@ -148,12 +145,19 @@ module Gccjit_device : No_device_backend with type context = Exec_as_gccjit.cont
 
   let jit context ?name ?verbose bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
-    jit context ~name ?verbose bindings
-    @@ Assignments.compile_proc ~name ?verbose (List.map ~f:fst @@ Indexing.assoc_of_bindings bindings) code
+    let context, run =
+      jit context ~name ?verbose bindings
+      @@ Assignments.compile_proc ~name ?verbose (List.map ~f:fst @@ Indexing.assoc_of_bindings bindings) code
+    in
+    { context; run; bindings }
 
   let from_host = from_host
   let to_host = to_host
-  let merge = merge
+
+  let merge ?name_suffix la ~dst ~accum ~(src : context) =
+    let bindings = Indexing.Empty in
+    merge ?name_suffix la ~dst ~accum ~src bindings
+    |> Option.map ~f:(fun (context, run) -> { context; run; bindings })
 end
 
 module Gccjit_backend = Multicore_backend (Gccjit_device)
@@ -161,12 +165,7 @@ module Gccjit_backend = Multicore_backend (Gccjit_device)
 module Cuda_backend : Backend with type context = Exec_as_cuda.context = struct
   type context = Exec_as_cuda.context
   type device = Exec_as_cuda.device
-
-  type jitted = Exec_as_cuda.jitted = {
-    context : context;
-    run : unit -> unit;
-    bindings : unit Indexing.bindings;
-  }
+  type nonrec jitted = context jitted
 
   open Exec_as_cuda
 
@@ -181,12 +180,20 @@ module Cuda_backend : Backend with type context = Exec_as_cuda.context = struct
 
   let jit context ?name ?verbose bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
-    jit context ~name ?verbose bindings
-    @@ Assignments.compile_proc ~name ?verbose (List.map ~f:fst @@ Indexing.assoc_of_bindings bindings) code
+    let context, run =
+      jit context ~name ?verbose bindings
+      @@ Assignments.compile_proc ~name ?verbose (List.map ~f:fst @@ Indexing.assoc_of_bindings bindings) code
+    in
+    { context; run; bindings }
 
   let from_host = from_host
   let to_host = to_host
-  let merge = merge
+
+  let merge ?name_suffix la ~dst ~accum ~src =
+    let bindings = Indexing.Empty in
+    merge ?name_suffix la ~dst ~accum ~src bindings
+    |> Option.map ~f:(fun (context, run) -> { context; run; bindings })
+
   let await = await
   let num_devices = num_devices
   let get_device = get_device

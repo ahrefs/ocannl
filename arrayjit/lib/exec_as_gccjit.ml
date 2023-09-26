@@ -431,8 +431,6 @@ let jit_func ~name (context : context) ctx bindings (traced_store, proc) =
      Context.dump_to_file ctx ~update_locs:true f_name);
   ctx_info
 
-type jitted = { context : context; run : unit -> unit; bindings : unit Indexing.bindings }
-
 let jit old_context ~name ?verbose:_ bindings compiled =
   (* TODO: add verbose logs *)
   let open Gccjit in
@@ -472,7 +470,7 @@ let jit old_context ~name ?verbose:_ bindings compiled =
     fun () -> Indexing.apply runf
   in
   Context.release ctx;
-  { context; bindings; run }
+  context, run
 
 let from_host (context : context) la =
   match (la.LA.array, Map.find context.arrays la) with
@@ -488,7 +486,7 @@ let to_host (context : context) la =
       true
   | _ -> false
 
-let merge_from_global ?(name_suffix = "") (context : context) ~dst ~accum ~src =
+let merge_from_global ?(name_suffix = "") (context : context) ~dst ~accum ~src bindings =
   let body idcs =
     Low_level.(
       Set
@@ -501,8 +499,8 @@ let merge_from_global ?(name_suffix = "") (context : context) ~dst ~accum ~src =
   in
   let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
   let name = [%string "merge_into_%{dst.Lazy_array.id#Int}%{name_suffix}"] in
-  jit context ~name ~verbose:false Indexing.Empty (Low_level.compile_proc ~name [] llc)
+  jit context ~name ~verbose:false bindings (Low_level.compile_proc ~name [] llc)
 
-let merge ?name_suffix la ~dst ~accum ~(src : context) =
+let merge ?name_suffix la ~dst ~accum ~(src : context) bindings =
   Option.map (Map.find src.arrays la) ~f:(fun src ->
-      merge_from_global ?name_suffix dst ~dst:la ~accum ~src:(Ndarray.get_voidptr src))
+      merge_from_global ?name_suffix dst ~dst:la ~accum ~src:(Ndarray.get_voidptr src) bindings)

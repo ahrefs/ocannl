@@ -120,13 +120,13 @@ let to_host (ctx : context) la =
           true
       | _ -> false)
 
-let merge ?(name_suffix = "") la ~dst ~accum ~src =
+let merge ?(name_suffix = "") la ~dst ~accum ~src (bindings : unit Indexing.bindings) =
   let ord ctx = ctx.device.ordinal in
   let name =
     [%string
       "merge_into_%{la.Lazy_array.id#Int}_from_dev_%{ord src#Int}_to_dev_%{ord dst#Int}_%{name_suffix}"]
   in
-  ignore (name, accum);
+  ignore (name, accum, bindings);
   failwith "NOT IMPLEMENTED YET"
 
 let pp_semi ppf () = Stdlib.Format.fprintf ppf ";@ "
@@ -197,7 +197,8 @@ let get_array ~traced_store:_ ctx_info (key : LA.t) =
     let global =
       if is_local_only mem then None
       else (
-        if Utils.settings.with_debug then Stdio.printf "Exec_as_cuda.get_array: mem_alloc %s\n%!" (LA.name key);
+        if Utils.settings.with_debug then
+          Stdio.printf "Exec_as_cuda.get_array: mem_alloc %s\n%!" (LA.name key);
         set_ctx ctx_info.ctx;
         Some (LA.name key, Cudajit.mem_alloc ~byte_size:size_in_bytes))
     in
@@ -440,10 +441,9 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ par
   if verbose then Stdio.printf "Exec_as_cuda.jit: compilation finished\n%!";
   (func, args, run_module, info)
 
-type jitted = { context : context; run : unit -> unit; bindings : unit Indexing.bindings }
-
 let jit ~name ?(verbose = false) old_context bindings ((traced_store, llc) as compiled) =
-  if Utils.settings.with_debug then Stdio.printf "Exec_as_cuda.jit: %s\n%!" (Low_level.extract_block_name [ llc ]);
+  if Utils.settings.with_debug then
+    Stdio.printf "Exec_as_cuda.jit: %s\n%!" (Low_level.extract_block_name [ llc ]);
   let idx_params, idx_args = List.unzip @@ Indexing.assoc_of_bindings bindings in
   let func, args, run_module, info = jit_func ~name ~verbose old_context idx_params compiled in
   let context =
@@ -481,4 +481,4 @@ let jit ~name ?(verbose = false) old_context bindings ((traced_store, llc) as co
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream @@ idx_args @ args;
     if verbose then Stdio.printf "Exec_as_cuda.jit: kernel launched\n%!"
   in
-  { context; run; bindings }
+  (context, run)
