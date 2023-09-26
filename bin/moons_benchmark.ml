@@ -134,8 +134,9 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let mlp_result = mlp point in
   Train.set_fully_on_host point.value;
   Train.set_fully_on_host mlp_result.value;
+  (* By using sgd_jitted.context here, we don't need to copy the parameters back to the host. *)
   let result_jitted =
-    Backend.jit ctx (* sgd_jitted.context *) IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
+    Backend.jit sgd_jitted.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
   in
   let callback (x, y) =
     Tensor.set_values point [| x; y |];

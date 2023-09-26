@@ -141,7 +141,7 @@ let%expect_test "Micrograd half-moons example" =
   Train.set_fully_on_host point.value;
   Train.set_fully_on_host mlp_result.value;
   let result_jitted =
-    Backend.jit ctx (* sgd_jitted.context *) IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
+    Backend.jit sgd_jitted.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
   in
   let callback (x, y) =
     Tensor.set_values point [| x; y |];
