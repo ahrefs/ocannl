@@ -41,7 +41,8 @@ let sub ?(label = []) =
 
 let mul compose_op =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 * v2 in
+  (* =:+ is needed for matmul and does not hurt for pointmul. *)
+  let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
   let%cd grad_asn ~v:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g * v2;
     g2 =+ v1 * g
