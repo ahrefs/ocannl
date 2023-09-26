@@ -6,8 +6,10 @@ module NTDSL = Operation.NTDSL
 module CDSL = Arrayjit.Low_level.CDSL
 
 let%expect_test "Micrograd README basic example" =
-  let module Backend = (val Train.fresh_backend ~verbose:false ()) in
   Random.init 0;
+  let module Backend = (val Train.fresh_backend ~verbose:false ()) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = (a *. b) + (b **. 3) in
   let%op c = c + c + 1 in
@@ -18,12 +20,11 @@ let%expect_test "Micrograd README basic example" =
   let%op f = e **. 2 in
   let%op g = f /. 2 in
   let%op g = g + (10. /. f) in
-  Tensor.set_fully_on_host g;
-  Tensor.set_fully_on_host a;
-  Tensor.set_fully_on_host b;
-  let ctx = Backend.(init @@ get_device ~ordinal:0) in
+  Train.set_fully_on_host g.value;
+  List.iter ~f:(Option.iter ~f:(fun diff -> Train.set_fully_on_host diff.Tensor.grad)) [ a.diff; b.diff ];
   let step = Backend.jit ctx IDX.empty @@ Train.grad_update g in
   step.run ();
+  Backend.await device;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ g;
   [%expect
     {|
@@ -75,12 +76,16 @@ let%expect_test "Micrograd README basic example" =
     └─────────────────────────────┘ |}]
 
 let%expect_test "Micrograd half-moons example" =
-  let module Backend = (val Train.fresh_backend ~verbose:false ()) in
-  let open Tensor.O in
   Random.init 0;
+  let module Backend = (val Train.fresh_backend ~verbose:false ()) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
+  let open Tensor.O in
   let len = 200 in
   let batch = 10 in
+  let n_batches = 2 * len / batch in
   let epochs = 50 in
+  let steps = epochs * 2 * len / batch in
   let noise () = Random.float_range (-0.1) 0.1 in
   let moons_flat =
     Array.concat_map (Array.create ~len ())
@@ -96,35 +101,55 @@ let%expect_test "Micrograd half-moons example" =
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let moons_classes = TDSL.init_const ~l:"moons_classes" ~b:[ epochs; batch ] ~o:[ 1 ] moons_classes in
   let%op mlp x = "b3" 1 + ("w3" * !/("b2" 16 + ("w2" * !/("b1" 16 + ("w1" * x))))) in
-  let steps = epochs * 2 * len / batch in
-  let session_step = NTDSL.O.(NTDSL.counter !..1) in
-  let%op minus_lr = -0.1 *. (!..steps - session_step) /. !..steps in
-  (* minus_learning_rate := Some minus_lr; *)
-  let%op moons_input = moons_flat @| session_step in
-  let%op moons_class = moons_classes @| session_step in
+  let step_sym, step_ref, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
+  let%op learning_rate = 0.1 *. (!..steps - !@step_sym) /. !..steps in
+  let%op moons_input = moons_flat @| step_sym in
+  let%op moons_class = moons_classes @| step_sym in
   let losses = ref [] in
   let log_losses = ref [] in
   let learning_rates = ref [] in
   let%op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
-  let%op ssq w = (w **. 2) ++ "...|...->... => 0" in
-  let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:TDSL.O.( + ) in
-  let%op total_loss = ((margin_loss ++ "...|... => 0") /. !..batch) + (0.0001 *. reg_loss) in
-  for _step = 1 to steps do
-    (* refresh_session (); *)
-    learning_rates := ~-.(minus_lr.@[0]) :: !learning_rates;
-    losses := total_loss.@[0] :: !losses;
-    log_losses := Float.log total_loss.@[0] :: !log_losses
+  (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update computation. *)
+  let weight_decay = 0.0001 in
+  let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in
+  Train.set_fully_on_host scalar_loss.value;
+  Train.set_fully_on_host learning_rate.value;
+  let update = Train.grad_update scalar_loss in
+  let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
+  let sgd_jitted = Backend.jit ctx ~verbose:true bindings (Seq (update, sgd)) in
+  Train.all_host_to_device (module Backend) sgd_jitted.context scalar_loss;
+  Train.all_host_to_device (module Backend) sgd_jitted.context learning_rate;
+  for _epoch = 1 to epochs do
+    Train.for_loop bindings ~f:(fun () ->
+        sgd_jitted.run ();
+        Backend.await device;
+        assert (Backend.to_host sgd_jitted.context learning_rate.value);
+        assert (Backend.to_host sgd_jitted.context scalar_loss.value);
+        (* Stdio.printf "Data step=%d, lr=%f, loss=%f\n%!" !step_ref learning_rate.@[0] scalar_loss.@[0]; *)
+        ignore step_ref;
+        learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
+        losses := scalar_loss.@[0] :: !losses;
+        (* epoch_loss := !epoch_loss +. scalar_loss.@[0]; *)
+        log_losses := Float.log scalar_loss.@[0] :: !log_losses)
+    (* Stdio.printf "Epoch %d, lr=%f, loss=%f\n%!" epoch learning_rate.@[0] !epoch_loss; *)
   done;
   let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
-  SDSL.close_session ();
   let%op point = [ 0; 0 ] in
   let mlp_result = mlp point in
-  SDSL.refresh_session ~with_backprop:false ();
+  Train.set_fully_on_host point.value;
+  Train.set_fully_on_host mlp_result.value;
+  let result_jitted =
+    Backend.jit ctx (* sgd_jitted.context *) IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
+  in
   let callback (x, y) =
-    SDSL.set_values point [| x; y |];
-    SDSL.refresh_session ~with_backprop:false ();
+    Tensor.set_values point [| x; y |];
+    (* For the gccjit backend, point is only on host, not on device. For cuda, this will be needed. *)
+    ignore (Backend.from_host result_jitted.context point.value : bool);
+    result_jitted.run ();
+    Backend.await device;
+    assert (Backend.to_host result_jitted.context mlp_result.value);
     Float.(mlp_result.@[0] >= 0.)
   in
   let plot_moons =
