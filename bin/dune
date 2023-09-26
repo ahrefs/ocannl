@@ -1,11 +1,4 @@
 (executable
- (public_name ocannl)
- (name main)
- (modules main)
- (libraries ocannl base stdio)
- (modes exe))
-
-(executable
  (name hello_world)
  (modules hello_world)
  (libraries ocannl base stdio)
@@ -14,6 +7,8 @@
  (modes exe))
 
 (executable
+ ; A placeholder main entry.
+ (public_name ocannl)
  (name moons_benchmark)
  (modules moons_benchmark)
  (libraries ocannl base stdio core)
@@ -25,14 +20,6 @@
  (name compilation_speed)
  (modules compilation_speed)
  (libraries ocannl base stdio core)
- (preprocess
-  (pps ppx_jane ppx_ocannl))
- (modes exe))
-
-(executable
- (name data_fetching)
- (modules data_fetching)
- (libraries ocannl base stdio)
  (preprocess
   (pps ppx_jane ppx_ocannl))
  (modes exe))

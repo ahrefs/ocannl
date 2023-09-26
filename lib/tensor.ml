@@ -445,7 +445,7 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
   let sh = t.shape in
   let label = LA.label t.value in
   let prefix =
-    "[" ^ Int.to_string t.id ^ "]: " ^ label ^ "shape "
+    "[" ^ Int.to_string t.id ^ "]: " ^ label ^ " shape "
     ^ Shape.to_string_hum ~style:`Axis_number_and_size sh
     ^ " "
   in
