@@ -39,17 +39,18 @@ let sub ?(label = []) =
   in
   Tensor.binop ~label:("-" :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn
 
-let mul compose_op =
+let mul compose_op ~op_asn =
   let module NTDSL = Initial_NTDSL in
-  (* =:+ is needed for matmul and does not hurt for pointmul. *)
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
   let%cd grad_asn ~v:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g * v2;
     g2 =+ v1 * g
   in
   Tensor.binop ~compose_op ~op_asn ~grad_asn
 
-let pointmul ?(label = []) = mul Pointwise_bin ~label:("*." :: label)
+let pointmul ?(label = []) =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 * v2 in
+  mul Pointwise_bin ~op_asn ~label:("*." :: label)
 
 (* N1: AxB, N2 BxC, v: AxC, A: output of N1, B: input/output of N1/N2, C: input of N2.
    Although the matrix algebra would require that we insert additional transposes in gradient multiplies:
@@ -58,7 +59,10 @@ let pointmul ?(label = []) = mul Pointwise_bin ~label:("*." :: label)
    in our setup there is no transposing to do, since the projections produce correct indices for their
    corresponding matrices. *)
 
-let matmul ?(label = []) = mul Compose ~label:("*" :: label)
+let matmul ?(label = []) =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
+  mul Compose ~op_asn ~label:("*" :: label)
 
 (** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of
     matrix multiplication, inner and outer products, etc.
@@ -258,13 +262,13 @@ module TDSL = struct
   let stop_gradient = stop_gradient
 
   let init_const ~l ?(b = []) ?(i = []) ?(o = []) values =
-    Tensor.term ~label:[l] ~grad_spec:Prohibit_grad ~batch_dims:b ~input_dims:i ~output_dims:o
+    Tensor.term ~label:[ l ] ~grad_spec:Prohibit_grad ~batch_dims:b ~input_dims:i ~output_dims:o
       ~init_op:(Constant_fill { values; strict = false })
       ()
 
   (** It's like `Tensor.param` but without shape inference. *)
   let init_param ~l ?(b = []) ?(i = []) ?(o = []) values =
-    Tensor.term ~label:[l] ~grad_spec:Require_grad ~batch_dims:b ~input_dims:i ~output_dims:o
+    Tensor.term ~label:[ l ] ~grad_spec:Require_grad ~batch_dims:b ~input_dims:i ~output_dims:o
       ~init_op:(Constant_fill { values; strict = false })
       ()
 end
