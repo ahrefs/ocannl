@@ -26,9 +26,7 @@ let _suspended () =
   let%op f5 = f 5 in
   let module Backend = (val Train.fresh_backend ()) in
   let jitted = Backend.(jit (init @@ get_device ~ordinal:0) IDX.empty @@ Train.grad_update f5) in
-  Train.all_host_to_device (module Backend) jitted.context f5;
-  jitted.run ();
-  Train.all_device_to_host (module Backend) jitted.context f5;
+  Train.sync_run (module Backend) jitted f5;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   Stdio.printf "\n%!"
@@ -55,12 +53,11 @@ let _suspended () =
   let jitted = Backend.jit ctx bindings @@ Train.grad_update fx in
   let ys = Array.create ~len:size 0. and dys = Array.create ~len:size 0. in
   let open Tensor.O in
-  let f () =
-    jitted.run ();
+  let looping () =
     ys.(!step_ref) <- fx.@[0];
     dys.(!step_ref) <- fx.@%[0]
   in
-  Train.for_loop ~f bindings;
+  Train.sync_run ~looping (module Backend) jitted fx;
   Tensor.print ~with_grad:true ~with_code:true ~with_low_level:true `Default fx;
   Stdio.print_endline "\n";
   Tensor.print_tree ~with_id:true ~with_value:true ~with_grad:true ~depth:9 fx;

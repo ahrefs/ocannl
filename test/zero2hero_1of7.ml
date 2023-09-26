@@ -14,7 +14,7 @@ let%expect_test "Graph drawing recompile" =
   let open Tensor.O in
   let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.set_fully_on_host x.value;
-  let f_jitted = Backend.jit ctx ~verbose:true IDX.empty f.forward in
+  let f_jitted = Backend.jit ctx ~verbose:true IDX.empty @@ Train.forward f in
   Tensor.print_tree ~with_grad:true ~depth:9 f;
   [%expect
     {|
@@ -207,15 +207,12 @@ let%expect_test "Simple gradients hosted" =
   let sgd = Train.sgd_update ~learning_rate l in
   let grad_jitted = Backend.jit ctx IDX.empty grad in
   let sgd_jitted = Backend.jit grad_jitted.context IDX.empty sgd in
-  (* Start with the initial state without running a forward pass. *)
-  Train.all_host_to_device (module Backend) sgd_jitted.context l;
+  (* Check out the initial state without running a forward pass. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect {| |}];
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
-  grad_jitted.run ();
-  Backend.await device;
-  Train.all_device_to_host (module Backend) sgd_jitted.context l;
+  Train.sync_run (module Backend) grad_jitted l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
@@ -300,15 +297,12 @@ let%expect_test "Simple gradients virtual" =
   let sgd = Train.sgd_update ~learning_rate l in
   let grad_jitted = Backend.jit ctx IDX.empty grad in
   let sgd_jitted = Backend.jit grad_jitted.context IDX.empty sgd in
-  (* Start with the initial state without running a forward pass. *)
-  Train.all_host_to_device (module Backend) sgd_jitted.context l;
+  (* Check out the initial state without running a forward pass. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect {| |}];
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
-  grad_jitted.run ();
-  Backend.await device;
-  Train.all_device_to_host (module Backend) sgd_jitted.context l;
+  Train.sync_run (module Backend) grad_jitted l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|

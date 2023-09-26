@@ -34,6 +34,10 @@ let params t =
   in
   loop (Set.empty (module Tensor)) { subtensor = t; embedded = true }
 
+let forward t =
+  let label = Option.value ~default:"tensor" @@ List.last t.Tensor.value.label in
+  Assignments.Block_comment (label ^ " fwd", t.forward)
+
 let grad_update l =
   match l.Tensor.diff with
   | Some diff ->
@@ -135,3 +139,20 @@ let all_device_to_host ?(verbose = false) (type context)
         Stdio.printf "Train.all_device_to_host: copied array %s (%s) from device %d to host.\n%!" (LA.name a)
           (LA.label a)
           (Backend.get_ctx_device context |> Backend.to_ordinal))
+
+(* Executes the jitted code and copies arrays embedded in the given tenosor from and to host,
+   synchronizes before copying to host. If [looping] is provided, loops over bindings and executes
+   the given function inside the loop after a run. *)
+let sync_run ?verbose ?looping (type context) (module Backend : Backends.Backend with type context = context)
+    (jitted : Backend.jitted) t =
+  all_host_to_device ?verbose (module Backend) jitted.context t;
+  (match looping with
+  | None -> jitted.run ()
+  | Some then_ ->
+      let f () =
+        jitted.run ();
+        then_ ()
+      in
+      for_loop ~f jitted.bindings);
+  Backend.await @@ Backend.get_ctx_device jitted.context;
+  all_device_to_host ?verbose (module Backend) jitted.context t
