@@ -116,9 +116,10 @@ type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equa
 let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un)
     ?(init_op = default_init_op) ~op_asn ~grad_asn ?(grad_spec = If_needed) make_shape orig_ts =
   let ordered_ts = List.sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
-  let fwd_embed = List.map orig_ts ~f:is_fwd_root in
-  List.iter2_exn orig_ts fwd_embed ~f:(fun ti e -> if e then remove_fwd_root ti);
-  let children = List.map2_exn orig_ts fwd_embed ~f:(fun ti embedded -> { subtensor = ti; embedded }) in
+  let orig_fwd_embed = List.map orig_ts ~f:is_fwd_root in
+  let ordered_fwd_embed = List.map ordered_ts ~f:is_fwd_root in
+  List.iter2_exn orig_ts orig_fwd_embed ~f:(fun ti e -> if e then remove_fwd_root ti);
+  let children = List.map2_exn orig_ts orig_fwd_embed ~f:(fun ti embedded -> { subtensor = ti; embedded }) in
   let id = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
   let shape = make_shape ~id in
@@ -145,7 +146,7 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
   let v = LA.create prec ~id ~label ~dims init_op in
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let fwds =
-    List.map2_exn ordered_ts fwd_embed ~f:(fun ti e -> if not e then Assignments.Noop else ti.forward)
+    List.map2_exn ordered_ts ordered_fwd_embed ~f:(fun ti e -> if not e then Assignments.Noop else ti.forward)
   in
   let forward = Assignments.sequential @@ fwds @ [ op_asn ~v ~projections ] in
   if
