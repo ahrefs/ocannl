@@ -722,7 +722,7 @@ let compile_proc ~name ?(verbose = false) static_indices llc : optimized =
       if Option.is_none v.nd.virtual_ then v.nd.virtual_ <- Some (true, 20)
       else if Option.is_none v.nd.device_only then v.nd.device_only <- Some (true, 21);
       if verbose && Utils.settings.with_debug then
-        Caml.Format.printf "Low_level.compile_proc: finalizing %a:@ virtual %b, device-only %b\n%!"
+        Caml.Format.printf "Low_level.compile_proc: finalizing %a: virtual %b, device-only %b\n%!"
           Sexp.pp_hum
           ([%sexp_of: LA.t] v.nd)
           (LA.is_true v.nd.virtual_) (LA.is_true v.nd.device_only);

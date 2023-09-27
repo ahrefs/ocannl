@@ -491,16 +491,16 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
   let num_input_axes = List.length sh.input.dims in
   let num_output_axes = List.length sh.output.dims in
   (* TODO: code sharing with [to_dag] *)
-  (if not @@ Lazy.is_val t.value.array then Stdlib.Format.printf "<not-in-yet>@ "
+  (if not @@ Lazy.is_val t.value.array then Stdlib.Format.printf "%s <not-in-yet>@ " prefix
    else
      match (style, t.value.array) with
      | `Inline, (lazy None) -> Stdlib.Format.printf "<virtual>@ "
      | `Inline, (lazy (Some arr)) ->
-         Nd.pp_array_inline Stdlib.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
-           ?axes_spec arr
+         Nd.pp_array_inline (Stdlib.Format.get_std_formatter ()) ~num_batch_axes ~num_input_axes
+           ~num_output_axes ?axes_spec arr
      | _, (lazy None) -> Stdlib.Format.printf "<virtual>@ "
      | _, (lazy (Some arr)) ->
-         Nd.pp_array Stdlib.Format.std_formatter ~prefix ~labels ~indices arr;
+         Nd.pp_array (Stdlib.Format.get_std_formatter ()) ~prefix ~labels ~indices arr;
          Stdlib.Format.print_newline ());
   if with_grad then
     Option.iter t.diff ~f:(fun diff ->
@@ -508,11 +508,11 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
         else
           match (style, diff.grad.array) with
           | `Inline, (lazy (Some arr)) ->
-              Nd.pp_array_inline Stdlib.Format.std_formatter ~num_batch_axes ~num_input_axes ~num_output_axes
-                ?axes_spec arr;
+              Nd.pp_array_inline (Stdlib.Format.get_std_formatter ()) ~num_batch_axes ~num_input_axes
+                ~num_output_axes ?axes_spec arr;
               Stdlib.Format.print_newline ()
           | _, (lazy (Some arr)) ->
-              Nd.pp_array Stdlib.Format.std_formatter
+              Nd.pp_array (Stdlib.Format.get_std_formatter ())
                 ~prefix:(prefix ^ " " ^ grad_txt diff)
                 ~labels ~indices arr;
               Stdlib.Format.print_newline ()
@@ -538,7 +538,7 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
         Stdlib.Format.printf "Current backprop low-level body:@ %a@ " Low_level.fprint_code
         @@ Assignments.to_low_level bwd_code
     | None -> ());
-  Stdio.printf "\n%!"
+  Stdlib.Format.printf "\n%!"
 
 let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
   List.iter (Map.to_alist ~key_order:`Increasing session_state.forward_roots) ~f:(fun (id, root) ->
