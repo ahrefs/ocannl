@@ -502,7 +502,7 @@ let rec unify_dims row_eqs env =
             }
            :: row_eqs)
 
-and unify_dim (dim_eqs : dim_eq list) (env : environment) : environment =
+and unify_dim dim_eqs env =
   match dim_eqs with
   | [] -> env
   | { d1 = Dim { label = Some l1; _ } as d1; d2 = Dim { label = Some l2; _ } as d2; fix1 = _; fix2 = _ } :: _
@@ -564,6 +564,20 @@ let einsum_slot_spec_to_dims_bio ~generative ?b_row ?i_row ?o_row labels =
   axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels
 
 let unify_shapes env { shape = cur_sh; logic } =
+  let row_eq_side row = { dims = []; constr = Unconstrained; row; sh_id = Utils.one_int cur_sh.id } in
+  let row_eq ~r ~subr =
+    Option.to_list @@ Option.map2 r subr ~f:(fun r subr -> { r = row_eq_side r; subr = row_eq_side subr })
+  in
+  let dims_label_assoc dims =
+    let f = function Var { label = Some l; _ } as d -> Some (l, d) | _ -> None in
+    List.filter_map dims.dims ~f
+  in
+  let dim_assoc_eqs assoc =
+    List.Assoc.sort_and_group assoc ~compare:String.compare
+    |> List.concat_map ~f:(function
+         | _, [] -> assert false
+         | _, d1 :: ds -> List.map ds ~f:(fun d2 -> { d1; fix1 = false; d2; fix2 = false }))
+  in
   let generative =
     AxisKey.
       [
@@ -713,21 +727,21 @@ let unify_shapes env { shape = cur_sh; logic } =
                  ( "Invalid permutation spec (expected one argument): " ^ spec,
                    [ Shape_mismatch [ cur_sh; sh ] ] )
       in
-      let b_row, i_row, o_row, b_rhs, i_rhs, o_rhs = einsum_slot_spec_to_dims_bio ~generative:[] ls_rhs in
-      let _, _, _, b_lhs, i_lhs, o_lhs =
-        einsum_slot_spec_to_dims_bio ~generative ?b_row ?i_row ?o_row ls_lhs
+      let b_row_rhs, i_row_rhs, o_row_rhs, b_rhs, i_rhs, o_rhs =
+        einsum_slot_spec_to_dims_bio ~generative:[] ls_rhs
       in
+      let b_row_lhs, i_row_lhs, o_row_lhs, b_lhs, i_lhs, o_lhs =
+        einsum_slot_spec_to_dims_bio ~generative ?b_row:b_row_rhs ?i_row:i_row_rhs ?o_row:o_row_rhs ls_lhs
+      in
+      let label_groups = List.concat_map ~f:dims_label_assoc [ b_lhs; i_lhs; o_lhs; b_rhs; i_rhs; o_rhs ] in
       try
         unify_dims
-          [
-            { r = cur_sh.batch; subr = b_lhs };
-            { r = b_rhs; subr = sh.batch };
-            { r = cur_sh.input; subr = i_lhs };
-            { r = i_rhs; subr = sh.input };
-            { r = cur_sh.output; subr = o_lhs };
-            { r = o_rhs; subr = sh.output };
-          ]
-          env
+          ({ r = cur_sh.batch; subr = b_lhs } :: { r = b_rhs; subr = sh.batch }
+           :: { r = cur_sh.input; subr = i_lhs } :: { r = i_rhs; subr = sh.input }
+           :: { r = cur_sh.output; subr = o_lhs } :: { r = o_rhs; subr = sh.output }
+           :: row_eq ~r:b_row_lhs ~subr:b_row_rhs
+          @ row_eq ~r:i_row_lhs ~subr:i_row_rhs @ row_eq ~r:o_row_lhs ~subr:o_row_rhs)
+        @@ unify_dim (dim_assoc_eqs label_groups) env
       with Shape_error (s, trace) when !with_error_trace ->
         raise @@ Shape_error ([%string "Permute %{spec} / %{s}"], Shape_mismatch [ cur_sh; sh ] :: trace))
   | Broadcast (Einsum spec, sh1, sh2) -> (
@@ -740,27 +754,31 @@ let unify_shapes env { shape = cur_sh; logic } =
                  ( "Invalid permutation spec (expected one argument): " ^ spec,
                    [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )
       in
-      let b_row, i_row, o_row, b_rhs1, i_rhs1, o_rhs1 = einsum_slot_spec_to_dims_bio ~generative:[] ls_rhs1 in
-      let b_row, i_row, o_row, b_rhs2, i_rhs2, o_rhs2 =
-        einsum_slot_spec_to_dims_bio ~generative:[] ?b_row ?i_row ?o_row ls_rhs2
+      let b_row_rhs1, i_row_rhs1, o_row_rhs1, b_rhs1, i_rhs1, o_rhs1 =
+        einsum_slot_spec_to_dims_bio ~generative:[] ls_rhs1
       in
-      let _, _, _, b_lhs, i_lhs, o_lhs =
-        einsum_slot_spec_to_dims_bio ~generative ?b_row ?i_row ?o_row ls_lhs
+      let b_row_rhs2, i_row_rhs2, o_row_rhs2, b_rhs2, i_rhs2, o_rhs2 =
+        einsum_slot_spec_to_dims_bio ~generative:[] ?b_row:b_row_rhs1 ?i_row:i_row_rhs1 ?o_row:o_row_rhs1
+          ls_rhs2
+      in
+      let b_row_lhs, i_row_lhs, o_row_lhs, b_lhs, i_lhs, o_lhs =
+        einsum_slot_spec_to_dims_bio ~generative ?b_row:b_row_rhs2 ?i_row:i_row_rhs2 ?o_row:o_row_rhs2 ls_lhs
+      in
+      let label_groups =
+        List.concat_map ~f:dims_label_assoc
+          [ b_lhs; i_lhs; o_lhs; b_rhs1; i_rhs1; o_rhs1; b_rhs2; i_rhs2; o_rhs2 ]
       in
       try
         unify_dims
-          [
-            { r = cur_sh.batch; subr = b_lhs };
-            { r = b_rhs1; subr = sh1.batch };
-            { r = b_rhs2; subr = sh2.batch };
-            { r = cur_sh.input; subr = i_lhs };
-            { r = i_rhs1; subr = sh1.input };
-            { r = i_rhs2; subr = sh2.input };
-            { r = cur_sh.output; subr = o_lhs };
-            { r = o_rhs1; subr = sh1.output };
-            { r = o_rhs2; subr = sh2.output };
-          ]
-          env
+          ({ r = cur_sh.batch; subr = b_lhs } :: { r = b_rhs1; subr = sh1.batch }
+           :: { r = b_rhs2; subr = sh2.batch } :: { r = cur_sh.input; subr = i_lhs }
+           :: { r = i_rhs1; subr = sh1.input } :: { r = i_rhs2; subr = sh2.input }
+           :: { r = cur_sh.output; subr = o_lhs } :: { r = o_rhs1; subr = sh1.output }
+           :: { r = o_rhs2; subr = sh2.output } :: row_eq ~r:b_row_lhs ~subr:b_row_rhs1
+          @ row_eq ~r:i_row_lhs ~subr:i_row_rhs1 @ row_eq ~r:o_row_lhs ~subr:o_row_rhs1
+          @ row_eq ~r:b_row_lhs ~subr:b_row_rhs2 @ row_eq ~r:i_row_lhs ~subr:i_row_rhs2
+          @ row_eq ~r:o_row_lhs ~subr:o_row_rhs2)
+        @@ unify_dim (dim_assoc_eqs label_groups) env
       with Shape_error (s, trace) when !with_error_trace ->
         raise @@ Shape_error ([%string "Einsum %{spec} / %{s}"], Shape_mismatch [ cur_sh; sh1; sh2 ] :: trace)
       )
