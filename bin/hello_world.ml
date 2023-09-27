@@ -18,7 +18,7 @@ let hello1 () =
   (* Hey is inferred to be a matrix. *)
   let hey = range_of_shape ~batch_dims:[ 7 ] ~input_dims:[ 9; 10; 11 ] ~output_dims:[ 13; 14 ] () in
   let%op hoo = ((1 + 1) * hey) - 10 in
-  Train.set_fully_on_host hoo.value;
+  (* For convenience, Train.forward will set hoo.value as fully on host.  *)
   let jitted = Backend.jit ctx ~verbose:true IDX.empty @@ Train.forward hoo in
   Train.sync_run ~verbose:true (module Backend) jitted hoo;
   (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
@@ -55,7 +55,6 @@ let hello3 () =
   let zero_to_twenty = TDSL.range 20 in
   let y = TDSL.O.(( + ) ~label:[ "y" ] (hey * zero_to_twenty) zero_to_twenty) in
   Train.set_fully_on_host hey.value;
-  Train.set_fully_on_host y.value;
   let jitted = Backend.jit ctx ~verbose:true IDX.empty @@ Train.forward y in
   if Backend.from_host jitted.context hey.value then Stdio.printf "Transferred <hey> to device.\n%!";
   if Backend.from_host jitted.context zero_to_twenty.value then
