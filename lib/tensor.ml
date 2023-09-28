@@ -115,11 +115,14 @@ type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equa
 
 let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un)
     ?(init_op = default_init_op) ~op_asn ~grad_asn ?(grad_spec = If_needed) make_shape orig_ts =
-  let ordered_ts = List.sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
-  let orig_fwd_embed = List.map orig_ts ~f:is_fwd_root in
-  let ordered_fwd_embed = List.map ordered_ts ~f:is_fwd_root in
-  List.iter2_exn orig_ts orig_fwd_embed ~f:(fun ti e -> if e then remove_fwd_root ti);
-  let children = List.map2_exn orig_ts orig_fwd_embed ~f:(fun ti embedded -> { subtensor = ti; embedded }) in
+  let ordered_ts = List.dedup_and_sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
+  let children =
+    List.folding_map orig_ts
+      ~init:(Set.empty (module Int))
+      ~f:(fun used ti ->
+        (Set.add used ti.id, { subtensor = ti; embedded = is_fwd_root ti && not (Set.mem used ti.id) }))
+  in
+  List.iter orig_ts ~f:(fun ti -> remove_fwd_root ti);
   let id = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
   let shape = make_shape ~id in
@@ -147,9 +150,7 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
   let projections = lazy_projections @@ List.hd_exn local_shape_updates in
   let v = LA.create prec ~id ~label ~dims init_op in
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
-  let fwds =
-    List.map2_exn ordered_ts ordered_fwd_embed ~f:(fun ti e -> if not e then Assignments.Noop else ti.forward)
-  in
+  let fwds = List.map ordered_ts ~f:(fun ti -> ti.forward) in
   let forward = Assignments.sequential @@ fwds @ [ op_asn ~v ~projections ] in
   if
     is_prohibit_grad grad_spec
@@ -159,9 +160,6 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     tensor)
   else
-    let bck_embed = List.map ordered_ts ~f:(fun ti -> Map.mem session_state.backprop_roots ti.id) in
-    List.iter2_exn ordered_ts bck_embed ~f:(fun ti e ->
-        if e then session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.id);
     let g_prec =
       let f ti = Option.map ti.diff ~f:(fun d -> d.grad.LA.prec) in
       Option.value ~default:!default_grad_prec
@@ -171,23 +169,22 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
     session_state.next_id <- session_state.next_id + 1;
     let g = LA.create g_prec ~id:grad_id ~label:("grad" :: label) ~dims default_init_op in
     let dcode ti = Option.value_map ti.diff ~default:Assignments.Noop in
+    let is_bck_root ti = Map.mem session_state.backprop_roots ti.id in
     let zero_grads =
-      let f = dcode ~f:(fun diff -> diff.zero_grads) in
-      let zeros =
-        List.map2_exn (List.map ~f ordered_ts) bck_embed ~f:(fun z e -> if not e then Assignments.Noop else z)
-      in
+      let zero_g = dcode ~f:(fun diff -> diff.zero_grads) in
+      let zeros = List.map ordered_ts ~f:(fun ti -> if is_bck_root ti then zero_g ti else Assignments.Noop) in
       Assignments.sequential @@ zeros @ [ fetch_zeros g shape ]
     in
     (* The code needs to be included in the reverse order to which it was computed! This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
     let backprop =
-      let f = dcode ~f:(fun diff -> diff.backprop) in
-      let bcks =
-        List.map2_exn (List.map ~f ordered_ts) bck_embed ~f:(fun z e -> if not e then Assignments.Noop else z)
-      in
+      let bprop = dcode ~f:(fun diff -> diff.backprop) in
+      let bcks = List.map ordered_ts ~f:(fun ti -> if is_bck_root ti then bprop ti else Assignments.Noop) in
       Assignments.sequential @@ (grad_asn ~v ~g ~projections :: List.rev bcks)
     in
+    List.iter ordered_ts ~f:(fun ti ->
+        session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.id);
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop } in
     let tensor = { forward; diff; id; value = v; shape; children } in
