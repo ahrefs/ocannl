@@ -279,12 +279,24 @@ type logic =
       for [File_mapped fn], opens the file [fn] to check its length. *)
 [@@deriving sexp]
 
-type update_step = { shape : t; logic : logic } [@@deriving sexp]
+type proj_environment = {
+  proj_classes : int Map.M(Int).t;
+  proj_env : Arrayjit.Indexing.axis_index Map.M(Dim_var).t;
+}
+[@@deriving sexp]
+
+let empty_proj_environment = { proj_classes = Map.empty (module Int); proj_env = Map.empty (module Dim_var) }
+
+type update_step = { shape : t; logic : logic; mutable env : proj_environment } [@@deriving sexp]
 (** Data required for a shape inference update step. A step should equilibrate information, passing it both
     top-down and bottom-up. The child should be identifiable within the parent via physical equality
     (allowing that a child fills both slots of a binary parent). *)
 
-type shape_error = Shape_mismatch of t list | Row_mismatch of dims list | Dim_mismatch of dim list
+type shape_error =
+  | Shape_mismatch of t list
+  | Row_mismatch of dims list
+  | Dim_mismatch of dim list
+  | Index_mismatch of Arrayjit.Indexing.axis_index list
 [@@deriving sexp]
 
 exception Shape_error of string * shape_error list [@@deriving sexp]
@@ -350,7 +362,7 @@ type dim_env = dim Map.M(Dim_var).t [@@deriving sexp]
 type row_env = dims Map.M(Int).t [@@deriving sexp]
 (** Note: The substituted variables can appear in the substitutions. *)
 
-type environment = { dim_env : dim_env; row_env : row_env; proj_env : int Map.M(Int).t } [@@deriving sexp]
+type environment = { dim_env : dim_env; row_env : row_env; proj_classes : int Map.M(Int).t } [@@deriving sexp]
 type dim_eq = { d1 : dim; fix1 : bool; d2 : dim; fix2 : bool } [@@deriving sexp, equal, hash, compare]
 type dim_eqs = dim_eq list [@@deriving sexp]
 
@@ -519,8 +531,8 @@ and unify_dim dim_eqs env =
     }
     :: dim_eqs
     when d1 = d2 ->
-      let proj_env = Utils.union_add ~equal:Int.equal env.proj_env pid1 pid2 in
-      unify_dim dim_eqs { env with proj_env }
+      let proj_classes = Utils.union_add ~equal:Int.equal env.proj_classes pid1 pid2 in
+      unify_dim dim_eqs { env with proj_classes }
   | { d1 = Dim { d = 1; _ }; d2 = Dim _; fix1 = false; fix2 = _ } :: dim_eqs -> unify_dim dim_eqs env
   | { d1 = Dim _; d2 = Dim { d = 1; _ }; fix1 = _; fix2 = false } :: dim_eqs -> unify_dim dim_eqs env
   | ({ d1 = Var v; d2; fix1; fix2 } | { d2 = Var v; d1 = d2; fix1 = fix2; fix2 = fix1 }) :: dim_eqs ->
@@ -556,14 +568,19 @@ let axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels =
 
 let einsum_slot_spec_to_dims_bio ~generative ?b_row ?i_row ?o_row labels =
   let equal = AxisKey.equal_kind in
+  let proj_env_update = ref @@ Map.empty (module Dim_var) in
   let f kind vars = function
     | Either.First label -> Var (Hashtbl.find_or_add vars label ~default:(fun () -> get_var ~label ()))
     | Second 0 when Option.value ~default:false @@ List.Assoc.find generative ~equal kind -> get_dim ~d:1 ()
-    | Second _ -> Var (get_var ())
+    | Second i ->
+        let var = get_var () in
+        proj_env_update := Map.add_exn !proj_env_update ~key:var ~data:(Arrayjit.Indexing.Fixed_idx i);
+        Var var
   in
-  axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels
+  let result = axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels in
+  (!proj_env_update, result)
 
-let unify_shapes env { shape = cur_sh; logic } =
+let unify_shapes env ({ shape = cur_sh; logic; env = _ } as update_step) =
   let row_eq_side row = { dims = []; constr = Unconstrained; row; sh_id = Utils.one_int cur_sh.id } in
   let row_eq ~r ~subr =
     Option.to_list @@ Option.map2 r subr ~f:(fun r subr -> { r = row_eq_side r; subr = row_eq_side subr })
@@ -727,13 +744,19 @@ let unify_shapes env { shape = cur_sh; logic } =
                  ( "Invalid permutation spec (expected one argument): " ^ spec,
                    [ Shape_mismatch [ cur_sh; sh ] ] )
       in
-      let b_row_rhs, i_row_rhs, o_row_rhs, b_rhs, i_rhs, o_rhs =
+      let proj_env_rhs, (b_row_rhs, i_row_rhs, o_row_rhs, b_rhs, i_rhs, o_rhs) =
         einsum_slot_spec_to_dims_bio ~generative:[] ls_rhs
       in
-      let b_row_lhs, i_row_lhs, o_row_lhs, b_lhs, i_lhs, o_lhs =
+      let proj_env_lhs, (b_row_lhs, i_row_lhs, o_row_lhs, b_lhs, i_lhs, o_lhs) =
         einsum_slot_spec_to_dims_bio ~generative ?b_row:b_row_rhs ?i_row:i_row_rhs ?o_row:o_row_rhs ls_lhs
       in
       let label_groups = List.concat_map ~f:dims_label_assoc [ b_lhs; i_lhs; o_lhs; b_rhs; i_rhs; o_rhs ] in
+      let proj_env =
+        let combine ~key:_ _ _ = assert false in
+        Map.merge_skewed ~combine proj_env_rhs proj_env_lhs
+      in
+      (* Forget the old proj_env as it is not relevant after a propagate_shapes call completes. *)
+      update_step.env <- { update_step.env with proj_env };
       try
         unify_dims
           ({ r = cur_sh.batch; subr = b_lhs } :: { r = b_rhs; subr = sh.batch }
@@ -754,20 +777,26 @@ let unify_shapes env { shape = cur_sh; logic } =
                  ( "Invalid permutation spec (expected one argument): " ^ spec,
                    [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )
       in
-      let b_row_rhs1, i_row_rhs1, o_row_rhs1, b_rhs1, i_rhs1, o_rhs1 =
+      let proj_env_rhs1, (b_row_rhs1, i_row_rhs1, o_row_rhs1, b_rhs1, i_rhs1, o_rhs1) =
         einsum_slot_spec_to_dims_bio ~generative:[] ls_rhs1
       in
-      let b_row_rhs2, i_row_rhs2, o_row_rhs2, b_rhs2, i_rhs2, o_rhs2 =
+      let proj_env_rhs2, (b_row_rhs2, i_row_rhs2, o_row_rhs2, b_rhs2, i_rhs2, o_rhs2) =
         einsum_slot_spec_to_dims_bio ~generative:[] ?b_row:b_row_rhs1 ?i_row:i_row_rhs1 ?o_row:o_row_rhs1
           ls_rhs2
       in
-      let b_row_lhs, i_row_lhs, o_row_lhs, b_lhs, i_lhs, o_lhs =
+      let proj_env_lhs, (b_row_lhs, i_row_lhs, o_row_lhs, b_lhs, i_lhs, o_lhs) =
         einsum_slot_spec_to_dims_bio ~generative ?b_row:b_row_rhs2 ?i_row:i_row_rhs2 ?o_row:o_row_rhs2 ls_lhs
       in
       let label_groups =
         List.concat_map ~f:dims_label_assoc
           [ b_lhs; i_lhs; o_lhs; b_rhs1; i_rhs1; o_rhs1; b_rhs2; i_rhs2; o_rhs2 ]
       in
+      let proj_env =
+        let combine ~key:_ _ _ = assert false in
+        Map.merge_skewed ~combine proj_env_rhs1 @@ Map.merge_skewed ~combine proj_env_rhs2 proj_env_lhs
+      in
+      (* Forget the old proj_env as it is not relevant after a propagate_shapes call completes. *)
+      update_step.env <- { update_step.env with proj_env };
       try
         unify_dims
           ({ r = cur_sh.batch; subr = b_lhs } :: { r = b_rhs1; subr = sh1.batch }
@@ -797,11 +826,14 @@ let state =
     {
       dim_env = Map.empty (module Dim_var);
       row_env = Map.empty (module Int);
-      proj_env = Map.empty (module Int);
+      proj_classes = Map.empty (module Int);
+      (* The state's proj_classes come from the most recent propagate_shapes and are not used across calls
+         to propagate_shapes. *)
     }
 
 let propagate_shapes update_step =
-  state := unify_shapes !state update_step;
+  state := unify_shapes { !state with proj_classes = update_step.env.proj_classes } update_step;
+  update_step.env <- { update_step.env with proj_classes = !state.proj_classes };
   let upd row =
     let expanded = subst_row !state.row_env row in
     { expanded with dims = List.map expanded.dims ~f:(subst_dim !state.dim_env) }
@@ -883,9 +915,27 @@ let derive_projections update_step =
     let (_ : int array list) = List.map ~f:force_to_dims rhs in
     propagate_shapes update_step;
     let all_dims = List.concat_map ~f:dims_of @@ (lhs :: rhs) in
-    let proj_repr proj_id = fst @@ Utils.union_find ~equal:Int.equal !state.proj_env ~key:proj_id ~rank:0 in
-    let get_proj = function
-      | Dim { d; proj_id; _ } -> (proj_repr proj_id, d)
+    let proj_repr proj_id =
+      fst @@ Utils.union_find ~equal:Int.equal update_step.env.proj_classes ~key:proj_id ~rank:0
+    in
+    (* Since shapes are already inferred, these variables unify directly with the proj_id of this operation. *)
+    let constrained_projs =
+      Map.to_alist update_step.env.proj_env
+      |> List.map ~f:(fun (v, idx) ->
+             match Map.find_exn !state.dim_env v with
+             | Dim { proj_id; _ } -> (proj_id, idx)
+             | _ -> assert false)
+      |> Map.of_alist_multi (module Int)
+      |> Map.map ~f:(Utils.unique_keep_first ~equal:equal_axis_index)
+      |> Map.map ~f:(function
+           | [] -> assert false
+           | [ idx ] -> idx
+           | idcs ->
+               raise @@ Shape_error ("Multiple constraints on the same projection", [ Index_mismatch idcs ]))
+    in
+    let get_product_proj = function
+      | Dim { proj_id; _ } when Map.mem constrained_projs proj_id -> None
+      | Dim { d; proj_id; _ } -> if iterated d then Some (proj_repr proj_id, d) else None
       | Var _ as v ->
           raise
           @@ Shape_error
@@ -893,16 +943,26 @@ let derive_projections update_step =
                  [ Shape_mismatch (lhs :: rhs); Dim_mismatch [ v ] ] )
     in
     (* Note: the ordering will affect performance of naive backends. *)
-    let all_projs =
-      Utils.unique_keep_first ~equal:(fun (p, _) (q, _) -> p = q) @@ List.map all_dims ~f:get_proj
+    let all_product_projs =
+      Utils.unique_keep_first ~equal:(fun (p, _) (q, _) -> p = q)
+      @@ List.filter_map all_dims ~f:get_product_proj
     in
-    let product_iterators = List.map all_projs ~f:(fun (p, d) -> (p, opt_symbol d)) in
-    let projections =
-      Map.of_alist_exn (module Int) @@ List.map product_iterators ~f:(fun (p, s) -> (p, opt_iterator s))
+    let product_iterators = List.map all_product_projs ~f:(fun (p, _) -> (p, get_symbol ())) in
+    let product_space = Array.of_list_map all_product_projs ~f:snd in
+    let get_slot_proj = function
+      | Dim { proj_id; _ } when Map.mem constrained_projs proj_id -> Map.find_exn constrained_projs proj_id
+      | Dim { d; proj_id; _ } ->
+          if iterated d then
+            Iterator (List.Assoc.find_exn product_iterators ~equal:Int.equal (proj_repr proj_id))
+          else Fixed_idx 0
+      | Var _ as v ->
+          raise
+          @@ Shape_error
+               ( "derive_projections: shape still not fully inferred",
+                 [ Shape_mismatch (lhs :: rhs); Dim_mismatch [ v ] ] )
     in
-    let product_space = Array.filter ~f:iterated @@ Array.of_list_map all_projs ~f:snd in
-    let product_iterators = Array.of_list @@ List.filter_map ~f:snd product_iterators in
-    let f sh = Array.of_list_map (dims_of sh) ~f:(fun d -> Map.find_exn projections @@ fst @@ get_proj d) in
+    let product_iterators = Array.of_list_map product_iterators ~f:snd in
+    let f sh = Array.of_list_map (dims_of sh) ~f:get_slot_proj in
     {
       product_space;
       lhs_dims;
