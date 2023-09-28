@@ -34,7 +34,29 @@ let params t =
   in
   loop (Set.empty (module Tensor)) { subtensor = t; embedded = true }
 
+let set_fully_on_host (a : LA.t) =
+  if LA.is_true a.virtual_ then
+    raise
+    @@ Ndarray.User_error
+         [%string "Train.set_fully_on_host: array #%{a.id#Int} %{LA.label a} is already virtual"];
+  if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 27);
+  if LA.is_true a.device_only then
+    raise
+    @@ Ndarray.User_error
+         [%string "Train.set_fully_on_host: array #%{a.id#Int} %{LA.label a} is already device-only"];
+  a.device_only <- Some (false, 28)
+
+(** Sets the tensor's value as "fully on host",
+    returns the tensor's forward code with a label-derived comment. *)
+let forward t =
+  set_fully_on_host t.Tensor.value;
+  let label = Option.value ~default:"tensor" @@ List.last t.Tensor.value.label in
+  Assignments.Block_comment (label ^ " fwd", t.forward)
+
+(** Sets the tensor's value as "fully on host", returns the tensor's forward, zeroing gradients, and
+    backprop code wrapped with label-derived comments. *)
 let grad_update l =
+  set_fully_on_host l.Tensor.value;
   match l.Tensor.diff with
   | Some diff ->
       let%cd init_grad = l.grad =: 1 in
@@ -96,18 +118,6 @@ let for_loop ~f bindings =
   in
   loop @@ Indexing.assoc_of_bindings bindings
 
-let set_fully_on_host (a : LA.t) =
-  if LA.is_true a.virtual_ then
-    raise
-    @@ Ndarray.User_error
-         [%string "Train.set_fully_on_host: array #%{a.id#Int} %{LA.label a} is already virtual"];
-  if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 27);
-  if LA.is_true a.device_only then
-    raise
-    @@ Ndarray.User_error
-         [%string "Train.set_fully_on_host: array #%{a.id#Int} %{LA.label a} is already device-only"];
-  a.device_only <- Some (false, 28)
-
 let set_virtual (a : LA.t) =
   if LA.is_false a.virtual_ then
     raise
@@ -135,13 +145,6 @@ let all_device_to_host ?(verbose = false) (type context)
         Stdio.printf "Train.all_device_to_host: copied array %s (%s) from device %d to host.\n%!" (LA.name a)
           (LA.label a)
           (Backend.get_ctx_device context |> Backend.to_ordinal))
-
-(** Sets the tensor's value as "fully on host",
-    returns the tensor's forward code with a label-derived comment. *)
-let forward t =
-  set_fully_on_host t.Tensor.value;
-  let label = Option.value ~default:"tensor" @@ List.last t.Tensor.value.label in
-  Assignments.Block_comment (label ^ " fwd", t.forward)
 
 (* Executes the jitted code and copies arrays embedded in the given tenosor from and to host,
    synchronizes before copying to host. If [looping] is provided, loops over bindings and executes

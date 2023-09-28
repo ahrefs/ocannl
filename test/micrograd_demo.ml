@@ -20,7 +20,6 @@ let%expect_test "Micrograd README basic example" =
   let%op f = e **. 2 in
   let%op g = f /. 2 in
   let%op g = g + (10. /. f) in
-  Train.set_fully_on_host g.value;
   List.iter ~f:(Option.iter ~f:(fun diff -> Train.set_fully_on_host diff.Tensor.grad)) [ a.diff; b.diff ];
   let step = Backend.jit ctx IDX.empty @@ Train.grad_update g in
   step.run ();
@@ -112,7 +111,6 @@ let%expect_test "Micrograd half-moons example" =
   (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update computation. *)
   let weight_decay = 0.0001 in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in
-  Train.set_fully_on_host scalar_loss.value;
   Train.set_fully_on_host learning_rate.value;
   let update = Train.grad_update scalar_loss in
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in

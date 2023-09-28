@@ -73,7 +73,6 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let%op moons_class = moons_classes @| step_sym in
   let%op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in
-  Train.set_fully_on_host scalar_loss.value;
   Train.set_fully_on_host learning_rate.value;
   let weight_decay = 0.0001 in
   let update = Train.grad_update scalar_loss in
