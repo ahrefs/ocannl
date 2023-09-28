@@ -18,8 +18,8 @@ let _suspended () =
   let%op c = c + 1 + c + ~-a in
   (* Uncomment just the first "fully on host" line to see which arrays can be virtual, and just
      the second line to see the intermediate computation values. *)
-  Train.every_non_literal_fully_on_host c;
-  (* List.iter ~f:(function Some diff -> Train.set_fully_on_host diff.grad | None -> ()) [ a.diff; b.diff ]; *)
+  Train.every_non_literal_on_host c;
+  (* List.iter ~f:(function Some diff -> Train.set_on_host diff.grad | None -> ()) [ a.diff; b.diff ]; *)
   let jitted = Backend.jit ctx ~verbose:true IDX.empty @@ Train.grad_update c in
   Train.sync_run ~verbose:true (module Backend) jitted c;
   Tensor.print_tree ~with_grad:true ~depth:9 c;
@@ -45,8 +45,8 @@ let  () =
   let%op f = e *. e in
   let%op g = f /. 2 in
   let%op g = g + (10. /. f) in
-  List.iter ~f:(function Some diff -> Train.set_fully_on_host diff.grad | None -> ()) [ a.diff; b.diff ];
-  (* Train.every_non_literal_fully_on_host g; *)
+  List.iter ~f:(function Some diff -> Train.set_on_host diff.grad | None -> ()) [ a.diff; b.diff ];
+  (* Train.every_non_literal_on_host g; *)
   let jitted = Backend.jit ctx ~verbose:true IDX.empty @@ Train.grad_update g in
   Train.sync_run (module Backend) jitted g;
   (* Tensor.print_tree ~with_grad:true ~depth:9 g; *)

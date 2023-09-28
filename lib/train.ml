@@ -34,29 +34,29 @@ let params t =
   in
   loop (Set.empty (module Tensor)) { subtensor = t; embedded = true }
 
-let set_fully_on_host (a : LA.t) =
+let set_on_host (a : LA.t) =
   if LA.is_true a.virtual_ then
     raise
     @@ Ndarray.User_error
-         [%string "Train.set_fully_on_host: array #%{a.id#Int} %{LA.label a} is already virtual"];
+         [%string "Train.set_on_host: array #%{a.id#Int} %{LA.label a} is already virtual"];
   if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 27);
   if LA.is_true a.device_only then
     raise
     @@ Ndarray.User_error
-         [%string "Train.set_fully_on_host: array #%{a.id#Int} %{LA.label a} is already device-only"];
+         [%string "Train.set_on_host: array #%{a.id#Int} %{LA.label a} is already device-only"];
   a.device_only <- Some (false, 28)
 
 (** Sets the tensor's value as "fully on host",
     returns the tensor's forward code with a label-derived comment. *)
 let forward t =
-  set_fully_on_host t.Tensor.value;
+  set_on_host t.Tensor.value;
   let label = Option.value ~default:"tensor" @@ List.last t.Tensor.value.label in
   Assignments.Block_comment (label ^ " fwd", t.forward)
 
 (** Sets the tensor's value as "fully on host", returns the tensor's forward, zeroing gradients, and
     backprop code wrapped with label-derived comments. *)
 let grad_update l =
-  set_fully_on_host l.Tensor.value;
+  set_on_host l.Tensor.value;
   match l.Tensor.diff with
   | Some diff ->
       let%cd init_grad = l.grad =: 1 in
@@ -125,8 +125,8 @@ let set_virtual (a : LA.t) =
          [%string "Train.set_virtua: array #%{a.id#Int} %{LA.label a} is already non-virtual"];
   if Option.is_none a.virtual_ then a.virtual_ <- Some (true, 29)
 
-let every_non_literal_fully_on_host =
-  Tensor.iter_embedded_arrays ~f:(fun a -> if not @@ literal_heuristic a then set_fully_on_host a)
+let every_non_literal_on_host =
+  Tensor.iter_embedded_arrays ~f:(fun a -> if not @@ literal_heuristic a then set_on_host a)
 
 let all_host_to_device ?(verbose = false) (type context)
     (module Backend : Backends.Backend with type context = context) (context : context) =

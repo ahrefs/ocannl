@@ -36,7 +36,7 @@ let hello2 () =
   (* Hey is inferred to be a matrix. *)
   let%op y = ("hey" * 'q' 2.0) + 'p' 1.0 in
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
-  Train.every_non_literal_fully_on_host y;
+  Train.every_non_literal_on_host y;
   let jitted = Backend.jit ctx ~verbose:true IDX.empty @@ Train.forward y in
   Train.sync_run ~verbose:true (module Backend) jitted y;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
@@ -54,7 +54,7 @@ let hello3 () =
   let hey = TDSL.O.(!~"hey") in
   let zero_to_twenty = TDSL.range 20 in
   let y = TDSL.O.(( + ) ~label:[ "y" ] (hey * zero_to_twenty) zero_to_twenty) in
-  Train.set_fully_on_host hey.value;
+  Train.set_on_host hey.value;
   let jitted = Backend.jit ctx ~verbose:true IDX.empty @@ Train.forward y in
   if Backend.from_host jitted.context hey.value then Stdio.printf "Transferred <hey> to device.\n%!";
   if Backend.from_host jitted.context zero_to_twenty.value then

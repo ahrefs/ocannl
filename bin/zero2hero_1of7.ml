@@ -82,7 +82,7 @@ let () =
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in
-  Train.every_non_literal_fully_on_host l;
+  Train.every_non_literal_on_host l;
   let open (val Train.fresh_backend ()) in
   let device = get_device ~ordinal:0 in
   let jitted = jit (init device) IDX.empty @@ Train.grad_update l in

@@ -13,7 +13,7 @@ let%expect_test "Graph drawing recompile" =
   let ctx = Backend.init device in
   let open Tensor.O in
   let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
-  Train.set_fully_on_host x.value;
+  Train.set_on_host x.value;
   let f_jitted = Backend.jit ctx ~verbose:true IDX.empty @@ Train.forward f in
   Tensor.print_tree ~with_grad:true ~depth:9 f;
   [%expect
@@ -104,7 +104,7 @@ let%expect_test "Graph drawing fetch" =
   CDSL.virtualize_settings.enable_device_only <- false;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%op f5 = f 5 in
-  Train.every_non_literal_fully_on_host f5;
+  Train.every_non_literal_on_host f5;
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   [%expect
     {|
@@ -128,7 +128,7 @@ let%expect_test "Graph drawing fetch" =
   in
   let step_sym, _step_ref, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
   let%op x = x_flat @| step_sym in
-  Train.set_fully_on_host x.value;
+  Train.set_on_host x.value;
   let%op fx = f x in
   let fx_jitted = Backend.jit ctx ~verbose:true bindings @@ Train.grad_update fx in
   let ys =
@@ -201,8 +201,8 @@ let%expect_test "Simple gradients hosted" =
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in
   let%op learning_rate = 0.1 in
-  Train.every_non_literal_fully_on_host l;
-  Train.every_non_literal_fully_on_host learning_rate;
+  Train.every_non_literal_on_host l;
+  Train.every_non_literal_on_host learning_rate;
   let grad = Train.grad_update l in
   let sgd = Train.sgd_update ~learning_rate l in
   let grad_jitted = Backend.jit ctx IDX.empty grad in
@@ -384,7 +384,7 @@ let%expect_test "2D neuron hosted" =
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
-  Train.every_non_literal_fully_on_host v;
+  Train.every_non_literal_on_host v;
   let jitted = Backend.jit ctx IDX.empty @@ Train.grad_update v in
   jitted.run ();
   Backend.await device;
