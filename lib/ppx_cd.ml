@@ -28,6 +28,7 @@ let is_unknown = function Unknown -> true | _ -> false
 type projections_slot = LHS | RHS1 | RHS2 | Nonslot | Undet [@@deriving equal, sexp]
 
 let assignment_op expr =
+  (* This should stay in sync with Arrayjit.Ops.assign_op_cd_syntax. *)
   let loc = expr.pexp_loc in
   match expr with
   | [%expr ( =: )] -> (false, [%expr Arrayjit.Ops.Arg2])
@@ -51,6 +52,7 @@ let assignment_op expr =
              " =:*, =:/, =:**, =:?/ (same with zeroing out the tensor before the start of the calculation)" )
 
 let binary_op expr =
+  (* This and is_binary_op should stay in sync with Arrayjit.Ops.binop_cd_syntax. *)
   let loc = expr.pexp_loc in
   match expr with
   | [%expr ( + )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Add])
@@ -79,6 +81,7 @@ let binary_op expr =
 let is_binary_op ident = List.mem [ "+"; "-"; "*"; "/"; "**"; "-?/"; "-/>"; "-@>" ] ident ~equal:String.equal
 
 let unary_op expr =
+  (* This and is_unary_op should stay in sync with Arrayjit.Ops.unop_cd_syntax. *)
   let loc = expr.pexp_loc in
   match expr with
   | [%expr ( ~= )] -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Identity])

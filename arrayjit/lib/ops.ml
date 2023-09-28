@@ -104,6 +104,15 @@ let map_prec ?default { f } = function
   | Double_prec Double -> f Double
   | _ -> .
 
+let c_typ_of_prec =
+  let open Gccjit in
+  function
+  | Byte_prec _ -> Type.Unsigned_char
+  | Half_prec _ -> (* FIXME: *) Type.Float
+  | Single_prec _ -> Type.Float
+  | Double_prec _ -> Type.Double
+  | Void_prec -> Type.Void
+
 (** {2 *** Operations ***} *)
 
 (** Initializes or resets a array by filling in the corresponding numbers, at the appropriate precision. *)
@@ -148,6 +157,16 @@ let binop_C_syntax ~is_double = function
   | Relu_gate -> ("(", " > 0.0 ?", " : 0.0)")
 (* "((int)(", "> 0.0) *", ")" *)
 
+let binop_cd_syntax = function
+  | Arg1 -> "-@>"
+  | Arg2 -> "-/>"
+  | Add -> "+"
+  | Sub -> "-"
+  | Mul -> "*"
+  | Div -> "/"
+  | ToPowOf -> "**"
+  | Relu_gate -> "-?/"
+
 let assign_op_C_syntax = function
   | Arg1 -> invalid_arg "Ops.assign_op_C_syntax: Arg1 is not a C assignment operator"
   | Arg2 -> "="
@@ -158,12 +177,37 @@ let assign_op_C_syntax = function
   | ToPowOf -> invalid_arg "Ops.assign_op_C_syntax: ToPowOf function is not a C assignment operator"
   | Relu_gate -> invalid_arg "Ops.assign_op_C_syntax: Relu_gate is not a C assignment operator"
 
+let assign_op_cd_syntax ~zero_out = function
+  | Arg1 -> invalid_arg "Ops.assign_op_cd_syntax: Arg1 is not a %cd assignment operator"
+  | Arg2 -> "=:"
+  | Add when zero_out -> "=:+"
+  | Sub when zero_out -> "=:-"
+  | Mul when zero_out -> "=:*"
+  | Div when zero_out -> "=:/"
+  | ToPowOf when zero_out -> "=:**"
+  | Relu_gate when zero_out -> "=:?/"
+  | Add -> "=+"
+  | Sub -> "=-"
+  | Mul -> "=*"
+  | Div -> "=/"
+  | ToPowOf -> "=**"
+  | Relu_gate -> "=?/"
+
+let unop_cd_syntax = function Identity -> "~=" | Relu -> "!/"
+
 (** {2 *** Global references ***} *)
 
 type voidptr = unit Ctypes.ptr
 
 let compare_voidptr = Ctypes.ptr_compare
 let equal_voidptr : voidptr -> voidptr -> bool = phys_equal
+
+let ptr_to_string ptr prec =
+  let open Gccjit in
+  let ctx = Context.create () in
+  let result = RValue.to_string @@ RValue.ptr ctx Type.(get ctx @@ c_typ_of_prec prec) ptr in
+  Context.release ctx;
+  result
 
 type global_identifier =
   | C_function of string  (** Calls a no-argument or indices-arguments C function. *)

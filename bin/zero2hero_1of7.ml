@@ -7,16 +7,20 @@ module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module Utils = Arrayjit.Utils
 
-let _suspended () =
+let  () =
   Random.init 0;
   let module Backend = (val Train.fresh_backend ()) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   let code = Train.grad_update v in
-  let jitted = Backend.(jit (init @@ get_device ~ordinal:0) IDX.empty code) in
-  jitted.run ();
+  let jitted = Backend.jit ctx IDX.empty code in
+  (* jitted.run (); *)
+  Train.sync_run (module Backend) jitted v;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_id:true ~with_grad:true ~depth:9 v;
-  Stdlib.Format.printf "\nHigh-level code:\n%a\n%!" Sexp.pp_hum @@ [%sexp_of: Arrayjit.Assignments.t] code
+  Stdlib.Format.printf "\nHigh-level code:\n  %!";
+  Stdlib.Format.printf "@[<v 2>%a@]\n%!" Arrayjit.Assignments.fprint_code code
 
 let _suspended () =
   Random.init 0;
@@ -73,7 +77,7 @@ let _suspended () =
   in
   PrintBox_text.output Stdio.stdout plot_box
 
-let () =
+let _suspended () =
   Random.init 0;
   Utils.settings.with_debug <- true;
   Utils.settings.keep_files_in_run_directory <- true;

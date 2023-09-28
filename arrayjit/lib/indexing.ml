@@ -74,6 +74,8 @@ type str_osym_map = (string, symbol option, Base.String.comparator_witness) Base
 let sexp_of_str_osym_map (map : str_osym_map) =
   Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: string * symbol option])
 
+type projections_debug = { spec : string; derived_for : Sexp.t } [@@deriving sexp]
+
 type projections = {
   product_space : int array;
       (** The product space dimensions that an operation should parallelize (map-reduce) over. *)
@@ -86,7 +88,7 @@ type projections = {
       an operation. *)
   project_rhs : axis_index array array;
       (** [project_rhs1.(i)] Produces an index into the [i+1]th argument of an operation. *)
-  debug_info : Sexp.t;
+  debug_info : (projections_debug[@sexp.ignore] [@compare.ignore] [@equal.ignore]);
 }
 [@@deriving compare, equal, sexp]
 (** All the information relevant for code generation. *)

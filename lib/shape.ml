@@ -279,6 +279,14 @@ type logic =
       for [File_mapped fn], opens the file [fn] to check its length. *)
 [@@deriving sexp]
 
+let logic_to_spec = function
+  | Broadcast (Pointwise_bin, _, _) | Transpose (Pointwise_un, _) -> "."
+  | Broadcast (Compose, _, _) -> "@"
+  | Broadcast (Einsum spec, _, _) | Transpose (Permute spec, _) -> spec
+  | Transpose (Transpose, _) -> "T"
+  | Transpose (Batch_slice _, _) -> "@|"
+  | Terminal _ -> "<terminal>"
+
 type proj_environment = {
   proj_classes : int Map.M(Int).t;
   proj_env : Arrayjit.Indexing.axis_index Map.M(Dim_var).t;
@@ -969,7 +977,7 @@ let derive_projections update_step =
       product_iterators;
       project_lhs = f lhs;
       project_rhs = Array.of_list_map ~f rhs;
-      debug_info = sexp_of_update_step update_step;
+      debug_info = { spec = logic_to_spec update_step.logic; derived_for = sexp_of_update_step update_step };
     }
   in
   match update_step.logic with

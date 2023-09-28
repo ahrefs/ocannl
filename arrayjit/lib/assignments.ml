@@ -205,7 +205,99 @@ let compile_proc ~name ?(verbose = false) static_indices proc =
   let llc = to_low_level proc in
   Low_level.compile_proc ~name ~verbose static_indices llc
 
+let flatten c =
+  let rec loop = function
+    | Noop -> []
+    | Seq (c1, c2) -> loop c1 @ loop c2
+    | Block_comment (s, c) -> Block_comment (s, Noop) :: loop c
+    | (Accum_binop _ | Accum_unop _ | Fetch _) as c -> [ c ]
+  in
+  loop c
+
+let to_string_hum c =
+  let b = Buffer.create 16 in
+  let out = Buffer.add_string b in
+  let sp () = out " " in
+  let ident la = out @@ LA.name la in
+  let out_fetch_op (op : fetch_op) =
+    match op with
+    | Constant f -> out @@ Float.to_string f
+    | Imported (Ops.C_function c) ->
+        out c;
+        out "()"
+    | Imported (Ops.External_unsafe { ptr; prec; dims = _ }) -> out @@ Ops.ptr_to_string ptr prec
+    | Slice { batch_idx; sliced } ->
+        ident sliced;
+        out " @| ";
+        out @@ Indexing.symbol_ident batch_idx.static_symbol
+    | Embed_symbol { static_symbol; static_range = _ } ->
+        out "!@";
+        out @@ Indexing.symbol_ident static_symbol
+  in
+  let rec loop = function
+    | Noop -> ()
+    | Seq (c1, c2) ->
+        loop c1;
+        out ";\n";
+        loop c2
+    | Block_comment (s, Noop) ->
+        out "# \"";
+        out s;
+        out "\""
+    | Block_comment (s, c) ->
+        out "# \"";
+        out s;
+        out "\";\n";
+        loop c
+    | Accum_binop { zero_out; accum; op; lhs; rhs1; rhs2; projections } ->
+        let proj_spec =
+          if Lazy.is_val projections then (Lazy.force projections).debug_info.spec else "<not-in-yet>"
+        in
+        ident lhs;
+        sp ();
+        out @@ Ops.assign_op_cd_syntax ~zero_out accum;
+        sp ();
+        ident rhs1;
+        sp ();
+        out @@ Ops.binop_cd_syntax op;
+        sp ();
+        ident rhs2;
+        if (not (String.equal proj_spec ".")) || List.mem ~equal:Ops.equal_binop Ops.[ Mul; Div ] op then (
+          out " ~logic:\"";
+          out proj_spec;
+          out "\"")
+    | Accum_unop { zero_out; accum; op; lhs; rhs; projections } ->
+        let proj_spec =
+          if Lazy.is_val projections then (Lazy.force projections).debug_info.spec else "<not-in-yet>"
+        in
+        ident lhs;
+        sp ();
+        out @@ Ops.assign_op_cd_syntax ~zero_out accum;
+        sp ();
+        out @@ Ops.unop_cd_syntax op;
+        if String.equal proj_spec "." then out ".";
+        sp ();
+        ident rhs;
+        if not (String.equal proj_spec ".") then (
+          out " ~logic:\"";
+          out proj_spec;
+          out "\"")
+    | Fetch { array; fetch_op; dims = _ } ->
+        ident array;
+        out " := ";
+        out_fetch_op fetch_op
+  in
+  loop c;
+  Buffer.contents b
+
+let code_margin = ref 80
+
 let fprint_code ppf c =
-  (* TODO: something nicely concise. *)
-  Stdlib.Format.pp_set_margin ppf !Low_level.code_sexp_margin;
-  Stdlib.Format.fprintf ppf "%s" @@ Sexp.to_string_hum @@ sexp_of_t c
+  let flat = flatten c |> List.map ~f:to_string_hum in
+  let open Stdlib.Format in
+  pp_set_margin ppf !code_margin;
+  pp_print_list
+    ~pp_sep:(fun f () ->
+      pp_print_string f ";";
+      pp_print_newline f ())
+    pp_print_string ppf flat
