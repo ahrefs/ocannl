@@ -78,8 +78,8 @@ let label_suffix label = Option.value ~default:"unknown" @@ List.last label
 (** See: {!https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py}. *)
 let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
   if not @@ is_param p then raise @@ Tensor.Session_error ("Train.sgd_one: not a parameter", Some p);
-  let pg = NTDSL.term ~label:("sgd delta" :: p.value.label) () in
-  let b = NTDSL.term ~label:("sgd momentum" :: p.value.label) () in
+  let pg = NTDSL.term ~label:("sgd_delta" :: p.value.label) () in
+  let b = NTDSL.term ~label:("sgd_momentum" :: p.value.label) () in
   Assignments.Block_comment
     ( label_suffix p.value.label ^ " param sgd step",
       [%cd
