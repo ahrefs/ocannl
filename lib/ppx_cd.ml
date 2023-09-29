@@ -142,6 +142,20 @@ let project_p_slot debug loc slot =
       @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: insufficient slot filler information at %s %s" debug
            "(incorporate one of: v, v1, v2, g, g1, g2, lhs, rhs, rhs1, rhs2)"
 
+let project_p_dims debug loc slot =
+  match slot with
+  | LHS -> [%expr p.lhs_dims]
+  | RHS1 -> [%expr p.rhs_dims.(0)]
+  | RHS2 -> [%expr p.rhs_dims.(1)]
+  | Nonslot ->
+      Ast_builder.Default.pexp_extension ~loc
+      @@ Location.error_extensionf ~loc
+           "ppx_ocannl %%cd: not a valid accumulation/assignment slot filler at %s" debug
+  | Undet ->
+      Ast_builder.Default.pexp_extension ~loc
+      @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: insufficient slot filler information at %s %s" debug
+           "(incorporate one of: v, v1, v2, g, g1, g2, lhs, rhs, rhs1, rhs2)"
+
 type array_setup = {
   slot : projections_slot;
   filler_typ : expr_type;
@@ -445,6 +459,9 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
       let setup_r2 = setup_array [%pat? nondiff___rhs2] @@ translate ~proj_in_scope rhs2 in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let projections =
+        let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
+        let rhs1_dims = project_p_dims "RHS1" lhs.pexp_loc setup_r1.slot in
+        let rhs2_dims = project_p_dims "RHS2" lhs.pexp_loc setup_r2.slot in
         let project_lhs = project_p_slot "LHS" lhs.pexp_loc setup_l.slot in
         let project_rhs1 = project_p_slot "RHS1" rhs1.pexp_loc setup_r1.slot in
         let project_rhs2 = project_p_slot "RHS2" rhs2.pexp_loc setup_r2.slot in
@@ -453,9 +470,15 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
             (let p = Lazy.force projections in
              Arrayjit.Indexing.
                {
-                 p with
+                 product_space = p.product_space;
+                 product_iterators = p.product_iterators;
+                 lhs_dims = [%e lhs_dims];
+                 rhs_dims = [| [%e rhs1_dims]; [%e rhs2_dims] |];
                  project_lhs = [%e project_lhs];
                  project_rhs = [| [%e project_rhs1]; [%e project_rhs2] |];
+                 unique_debug_id = Arrayjit.Indexing.unique_debug_id ();
+                 (* TODO: provide details. *)
+                 debug_info = p.debug_info;
                })]
       in
       let body =
@@ -487,13 +510,25 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
       let setup_r1 = setup_array [%pat? nondiff___rhs1] @@ translate ~proj_in_scope rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let projections =
+        let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
+        let rhs1_dims = project_p_dims "RHS1" lhs.pexp_loc setup_r1.slot in
         let project_lhs = project_p_slot "LHS" lhs.pexp_loc setup_l.slot in
         let project_rhs1 = project_p_slot "RHS1" rhs.pexp_loc setup_r1.slot in
         [%expr
           lazy
             (let p = Lazy.force projections in
              Arrayjit.Indexing.
-               { p with project_lhs = [%e project_lhs]; project_rhs = [| [%e project_rhs1] |] })]
+               {
+                 product_space = p.product_space;
+                 product_iterators = p.product_iterators;
+                 lhs_dims = [%e lhs_dims];
+                 rhs_dims = [| [%e rhs1_dims] |];
+                 project_lhs = [%e project_lhs];
+                 project_rhs = [| [%e project_rhs1] |];
+                 unique_debug_id = Arrayjit.Indexing.unique_debug_id ();
+                 (* TODO: provide details. *)
+                 debug_info = p.debug_info;
+               })]
       in
       let body =
         [%expr
@@ -518,13 +553,25 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
       let setup_r1 = setup_array [%pat? nondiff___rhs1] @@ translate ~proj_in_scope rhs in
       let zero_out = if zero_out then [%expr true] else [%expr false] in
       let projections =
+        let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
+        let rhs1_dims = project_p_dims "RHS1" lhs.pexp_loc setup_r1.slot in
         let project_lhs = project_p_slot "LHS" lhs.pexp_loc setup_l.slot in
         let project_rhs1 = project_p_slot "RHS1" rhs.pexp_loc setup_r1.slot in
         [%expr
           lazy
             (let p = Lazy.force projections in
              Arrayjit.Indexing.
-               { p with project_lhs = [%e project_lhs]; project_rhs = [| [%e project_rhs1] |] })]
+               {
+                 product_space = p.product_space;
+                 product_iterators = p.product_iterators;
+                 lhs_dims = [%e lhs_dims];
+                 rhs_dims = [| [%e rhs1_dims] |];
+                 project_lhs = [%e project_lhs];
+                 project_rhs = [| [%e project_rhs1] |];
+                 unique_debug_id = Arrayjit.Indexing.unique_debug_id ();
+                 (* TODO: provide details. *)
+                 debug_info = p.debug_info;
+               })]
       in
       let body =
         [%expr

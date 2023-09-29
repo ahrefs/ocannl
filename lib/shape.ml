@@ -911,16 +911,17 @@ let to_labels (sh : t) : string array =
 (** *** Projection inference *** *)
 
 open Arrayjit.Indexing
+module Debug_runtime = Utils.Debug_PrintBox ()
 
 (** Computes the indexing into subtensors given the shape information of a tensor. 
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
-let derive_projections update_step =
+let%debug_sexp derive_projections (update_step : update_step) : projections =
   let dims_of sh = sh.batch.dims @ sh.output.dims @ sh.input.dims in
   let lhs = update_step.shape in
   let project rhs =
     (* Close the shapes. *)
     let lhs_dims = force_to_dims lhs in
-    let (_ : int array list) = List.map ~f:force_to_dims rhs in
+    let rhs_dims = Array.of_list_map ~f:force_to_dims rhs in
     propagate_shapes update_step;
     let all_dims = List.concat_map ~f:dims_of @@ (lhs :: rhs) in
     let proj_repr proj_id =
@@ -970,14 +971,16 @@ let derive_projections update_step =
                  [ Shape_mismatch (lhs :: rhs); Dim_mismatch [ v ] ] )
     in
     let product_iterators = Array.of_list_map product_iterators ~f:snd in
-    let f sh = Array.of_list_map (dims_of sh) ~f:get_slot_proj in
+    let f (sh : t) : axis_index array = Array.of_list_map (dims_of sh) ~f:get_slot_proj in
     {
       product_space;
       lhs_dims;
+      rhs_dims;
       product_iterators;
       project_lhs = f lhs;
       project_rhs = Array.of_list_map ~f rhs;
       debug_info = { spec = logic_to_spec update_step.logic; derived_for = sexp_of_update_step update_step };
+      unique_debug_id = unique_debug_id ();
     }
   in
   match update_step.logic with
@@ -989,7 +992,19 @@ let backprop_ith_arg ~from_1 projections =
   let project_lhs = projections.project_rhs.(from_1 - 1) in
   let project_rhs = Array.copy projections.project_rhs in
   project_rhs.(from_1 - 1) <- projections.project_lhs;
-  { projections with project_lhs; project_rhs }
+  let lhs_dims = projections.rhs_dims.(from_1 - 1) in
+  let rhs_dims = Array.copy projections.rhs_dims in
+  rhs_dims.(from_1 - 1) <- projections.lhs_dims;
+  {
+    product_space = projections.product_space;
+    product_iterators = projections.product_iterators;
+    lhs_dims;
+    rhs_dims;
+    project_lhs;
+    project_rhs;
+    debug_info = projections.debug_info;
+    unique_debug_id = unique_debug_id ();
+  }
 
 (** *** Shape builders *** *)
 

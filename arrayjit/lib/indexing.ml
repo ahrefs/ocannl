@@ -76,10 +76,18 @@ let sexp_of_str_osym_map (map : str_osym_map) =
 
 type projections_debug = { spec : string; derived_for : Sexp.t } [@@deriving sexp]
 
+let unique_debug_id =
+  let projections_uid = ref 0 in
+  fun () ->
+    Int.incr projections_uid;
+    !projections_uid
+
 type projections = {
   product_space : int array;
       (** The product space dimensions that an operation should parallelize (map-reduce) over. *)
   lhs_dims : int array;  (** The dimensions of the LHS array. *)
+  rhs_dims : int array array;
+      (** The dimensions of the RHS arrays, needed for deriving projections from other projections. *)
   product_iterators : symbol array;
       (** The product space iterators (concatentation of the relevant batch, output, input axes)
       for iterating over the [product_space] axes, where same axes are at same array indices. *)
@@ -87,8 +95,9 @@ type projections = {
       (** A projection that takes an [product_space]-bound index and produces an index into the result of
       an operation. *)
   project_rhs : axis_index array array;
-      (** [project_rhs1.(i)] Produces an index into the [i+1]th argument of an operation. *)
+      (** [project_rhs.(i)] Produces an index into the [i+1]th argument of an operation. *)
   debug_info : (projections_debug[@sexp.ignore] [@compare.ignore] [@equal.ignore]);
+  unique_debug_id : int;
 }
 [@@deriving compare, equal, sexp]
 (** All the information relevant for code generation. *)
@@ -103,7 +112,16 @@ let identity_projections ~debug_info ~lhs_dims =
   let project_lhs = Array.map product_iterators ~f:opt_iterator in
   let product_space = Array.filter ~f:iterated lhs_dims in
   let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
-  { product_space; lhs_dims; product_iterators; project_lhs; project_rhs = [| project_lhs |]; debug_info }
+  {
+    product_space;
+    lhs_dims;
+    rhs_dims = [| lhs_dims |];
+    product_iterators;
+    project_lhs;
+    project_rhs = [| project_lhs |];
+    debug_info;
+    unique_debug_id = unique_debug_id ();
+  }
 
 let derive_index ~product_syms ~(projection : axis_index array) =
   let sym_to_i =

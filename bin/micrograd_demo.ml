@@ -14,16 +14,14 @@ let experiment seed () =
   (* Utils.settings.debug_log_jitted <- true; *)
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  Utils.settings.fixed_state_for_init <- Some 4;
-  let hid_dim2 = 16 in
-  let hid_dim1 = 32 in
+  let hid_dim = 16 in
   let len = 200 in
-  let batch_size = 5 in
+  let batch_size = 20 in
   let n_batches = 2 * len / batch_size in
-  let epochs = 2000 in
-  let weight_decay = 0.01 in
-  Utils.settings.fixed_state_for_init <- Some seed;
+  let epochs = 75 in
   let steps = epochs * n_batches in
+  (* let weight_decay = 0.0002 in *)
+  Utils.settings.fixed_state_for_init <- Some seed;
   let noise () = Random.float_range (-0.1) 0.1 in
   let moons_flat =
     Array.concat_map (Array.create ~len ())
@@ -42,7 +40,7 @@ let experiment seed () =
   in
   let batch_sym, batch_ref, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_sym, step_ref, bindings = IDX.get_static_symbol bindings in
-  let%op mlp x = "b3" 1 + ("w3" * ?/("b2" hid_dim2 + ("w2" * ?/("b1" hid_dim1 + ("w1" * x))))) in
+  let%op mlp x = "b3" 1 + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
   let%op learning_rate = 0.1 *. (!..steps - !@step_sym) /. !..steps in
   let%op moons_input = moons_flat @| batch_sym in
   let%op moons_class = moons_classes @| batch_sym in
@@ -51,7 +49,11 @@ let experiment seed () =
   let learning_rates = ref [] in
   let%op margin_loss = ?/(1 - (moons_class *. mlp moons_input)) in
   (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update computation. *)
-  let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
+  (* let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in *)
+  let weight_decay = 0.0002 in
+  let%op ssq w = (w **. 2) ++ "...|...->... => 0" in
+  let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:TDSL.O.( + ) in
+  let%op scalar_loss = ((margin_loss ++ "...|... => 0") /. !..batch_size) + (0.0001 *. reg_loss) in
   (* So that we can inspect them. *)
   Train.set_on_host learning_rate.value;
   let update = Train.grad_update scalar_loss in
@@ -144,7 +146,9 @@ let experiment seed () =
   in
   PrintBox_text.output Stdio.stdout plot_lr
 
-let () =
+let () = experiment 4 ()
+
+let _suspended () =
   for seed = 0 to 19 do
     Stdio.printf "\n*************** EXPERIMENT SEED %d ******************\n%!" seed;
     experiment seed ()
