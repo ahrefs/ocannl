@@ -194,17 +194,6 @@ let to_low_level (code : t) : Low_level.t =
 
   loop code
 
-let compile_proc ~name ?(verbose = false) static_indices proc =
-  if verbose then Stdio.printf "Assignments.compile_proc: generating the initial low-level code\n%!";
-  if Utils.settings.with_debug && Utils.settings.keep_files_in_run_directory then (
-    let fname = name ^ ".hlc" in
-    let f = Stdio.Out_channel.create fname in
-    let ppf = Stdlib.Format.formatter_of_out_channel f in
-    Stdlib.Format.pp_set_margin ppf !Low_level.code_sexp_margin;
-    Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t proc));
-  let llc = to_low_level proc in
-  Low_level.compile_proc ~name ~verbose static_indices llc
-
 let flatten c =
   let rec loop = function
     | Noop -> []
@@ -254,7 +243,8 @@ let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
     | Noop -> ()
     | Seq (c1, c2) ->
         loop c1;
-        out ";\n";
+        if not (List.mem ~equal:Char.equal [ '\n'; ';' ] @@ Buffer.nth b @@ (Buffer.length b - 1)) then
+          out ";\n";
         loop c2
     | Block_comment (s, Noop) ->
         out "# \"";
@@ -317,3 +307,17 @@ let fprint_code ppf c =
       pp_print_string f ";";
       pp_print_newline f ())
     pp_print_string ppf flat
+
+let compile_proc ?(ident_style = `Heuristic_ocannl) ~name ?(verbose = false) static_indices proc =
+  if verbose then Stdio.printf "Assignments.compile_proc: generating the initial low-level code\n%!";
+  if Utils.settings.with_debug && Utils.settings.keep_files_in_run_directory then (
+    let fname = name ^ ".hlc" in
+    let f = Stdio.Out_channel.create fname in
+    let ppf = Stdlib.Format.formatter_of_out_channel f in
+    Stdlib.Format.pp_set_margin ppf !Low_level.code_sexp_margin;
+    Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t proc);
+    let fname = name ^ ".cd" in
+    let f = Stdio.Out_channel.create fname in
+    Stdio.Out_channel.output_string f @@ to_string_hum ~ident_style proc);
+  let llc = to_low_level proc in
+  Low_level.compile_proc ~name ~verbose static_indices llc

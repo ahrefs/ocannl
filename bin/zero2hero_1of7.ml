@@ -7,7 +7,7 @@ module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module Utils = Arrayjit.Utils
 
-let  () =
+let _suspended () =
   Random.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   let device = Backend.get_device ~ordinal:0 in
@@ -30,13 +30,16 @@ let _suspended () =
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%op f5 = f 5 in
   let module Backend = (val Train.fresh_backend ()) in
-  let jitted = Backend.(jit (init @@ get_device ~ordinal:0) IDX.empty @@ Train.grad_update f5) in
+  Train.every_non_literal_on_host f5;
+  let jitted = Backend.(jit (init @@ get_device ~ordinal:0) IDX.empty @@ Train.forward f5) in
   Train.sync_run (module Backend) jitted f5;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   Stdio.printf "\n%!"
 
-let _suspended () =
+let () =
+  Utils.settings.with_debug <- true;
+  Utils.settings.keep_files_in_run_directory <- true;
   Random.init 0;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let size = 100 in
@@ -47,8 +50,11 @@ let _suspended () =
       ~init_op:(Constant_fill { values; strict = true })
       ()
   in
-  let step_sym, step_ref, bindings = IDX.get_static_symbol IDX.empty in
-  let%op x = x_flat @| step_sym in
+  let step_sym, step_ref, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
+  (* The [let x =] line is the same as this except [let%op x =] uses [~grad_spec:If_needed]. *)
+  (* let%op x = x_flat @| step_sym in *)
+  let x = Operation.slice ~label:[ "x" ] ~grad_spec:Require_grad step_sym x_flat in
+  Train.set_on_host (Option.value_exn x.diff).grad;
   let%op fx = f x in
   Stdio.print_endline "\n";
   Tensor.print_tree ~with_id:true ~with_value:false ~with_grad:false ~depth:9 fx;
@@ -59,11 +65,13 @@ let _suspended () =
   let ys = Array.create ~len:size 0. and dys = Array.create ~len:size 0. in
   let open Tensor.O in
   let looping () =
+    assert (Backend.to_host jitted.context fx.value);
+    assert (Backend.to_host jitted.context (Option.value_exn x.diff).grad);
     ys.(!step_ref) <- fx.@[0];
-    dys.(!step_ref) <- fx.@%[0]
+    dys.(!step_ref) <- x.@%[0]
   in
   Train.sync_run ~looping (module Backend) jitted fx;
-  Tensor.print ~with_grad:true ~with_code:true ~with_low_level:true `Default fx;
+  Tensor.print ~with_grad:true ~with_code:true `Default fx;
   Stdio.print_endline "\n";
   Tensor.print_tree ~with_id:true ~with_value:true ~with_grad:true ~depth:9 fx;
   Stdio.print_endline "\n";
