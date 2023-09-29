@@ -7,7 +7,7 @@ module NTDSL = Operation.NTDSL
 module CDSL = Arrayjit.Low_level.CDSL
 module Utils = Arrayjit.Utils
 
-let () =
+let experiment seed () =
   Random.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   Utils.settings.output_debug_files_in_run_directory <- true;
@@ -15,11 +15,14 @@ let () =
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
   Utils.settings.fixed_state_for_init <- Some 4;
-  let hid_dim = 16 in
+  let hid_dim2 = 16 in
+  let hid_dim1 = 32 in
   let len = 200 in
-  let batch = 5 in
-  let n_batches = 2 * len / batch in
-  let epochs = 200 in
+  let batch_size = 5 in
+  let n_batches = 2 * len / batch_size in
+  let epochs = 2000 in
+  let weight_decay = 0.01 in
+  Utils.settings.fixed_state_for_init <- Some seed;
   let steps = epochs * n_batches in
   let noise () = Random.float_range (-0.1) 0.1 in
   let moons_flat =
@@ -32,66 +35,55 @@ let () =
             let c = cos v and s = sin v in
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
-  let moons_flat = TDSL.init_const ~l:"moons_flat" ~b:[ n_batches; batch ] ~o:[ 2 ] moons_flat in
+  let moons_flat = TDSL.init_const ~l:"moons_flat" ~b:[ n_batches; batch_size ] ~o:[ 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes = TDSL.init_const ~l:"moons_classes" ~b:[ n_batches; batch ] ~o:[ 1 ] moons_classes in
-  let step_sym, step_ref, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
-  let%op mlp x = "b3" 1 + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
+  let moons_classes =
+    TDSL.init_const ~l:"moons_classes" ~b:[ n_batches; batch_size ] ~o:[ 1 ] moons_classes
+  in
+  let batch_sym, batch_ref, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
+  let step_sym, step_ref, bindings = IDX.get_static_symbol bindings in
+  let%op mlp x = "b3" 1 + ("w3" * ?/("b2" hid_dim2 + ("w2" * ?/("b1" hid_dim1 + ("w1" * x))))) in
   let%op learning_rate = 0.1 *. (!..steps - !@step_sym) /. !..steps in
-  let%op moons_input = moons_flat @| step_sym in
-  let%op moons_class = moons_classes @| step_sym in
+  let%op moons_input = moons_flat @| batch_sym in
+  let%op moons_class = moons_classes @| batch_sym in
   let losses = ref [] in
   let log_losses = ref [] in
   let learning_rates = ref [] in
   let%op margin_loss = ?/(1 - (moons_class *. mlp moons_input)) in
   (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update computation. *)
-  let weight_decay = 0.0001 in
-  let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in
+  let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
   (* So that we can inspect them. *)
   Train.set_on_host learning_rate.value;
   let update = Train.grad_update scalar_loss in
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
-  let sgd_jitted = Backend.jit ctx ~verbose:true bindings (Seq (update, sgd)) in
-  Train.all_host_to_device (module Backend) sgd_jitted.context scalar_loss;
-  Train.all_host_to_device (module Backend) sgd_jitted.context learning_rate;
+  let jitted = Backend.jit ctx ~verbose:true bindings (Seq (update, sgd)) in
+  Train.all_host_to_device (module Backend) jitted.context scalar_loss;
+  Train.all_host_to_device (module Backend) jitted.context learning_rate;
   (* Stdio.print_endline "\n******** scalar_loss **********";
      Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 scalar_loss;
      Stdio.print_endline "\n******** learning_rate **********";
      Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
      Stdio.printf "\n********\n%!"; *)
-  (* * step_ref :=0;
-     sgd_jitted.run ();
-     Backend.await device;
-     Train.all_device_to_host (module Backend) sgd_jitted.context scalar_loss;
-     Stdio.print_endline "\n******** scalar_loss **********";
-     Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 scalar_loss;
-     Stdio.print_endline "\n******** learning_rate **********";
-     Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
-     Stdio.printf "\n********\n%!"
-     * *)
   let open Tensor.O in
-  (* Alternative flat loop:
-     for step = 0 to steps - 1 do
-       step_ref := step % n_batches;
-       sgd_jitted.run ();
-       ...
-       Stdio.printf "Step=%d, lr=%f, loss=%f\n%!" step learning_rate.@[0] scalar_loss.@[0];
-       ...
-  *)
   let epoch_loss = ref 0. in
-  for epoch = 1 to epochs do
-    Train.for_loop bindings ~f:(fun () ->
-        sgd_jitted.run ();
-        Backend.await device;
-        assert (Backend.to_host sgd_jitted.context learning_rate.value);
-        assert (Backend.to_host sgd_jitted.context scalar_loss.value);
-        (* Stdio.printf "Data step=%d, lr=%f, loss=%f\n%!" !step_ref learning_rate.@[0] scalar_loss.@[0]; *)
-        ignore step_ref;
-        learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
-        losses := scalar_loss.@[0] :: !losses;
-        epoch_loss := !epoch_loss +. scalar_loss.@[0];
-        log_losses := Float.log scalar_loss.@[0] :: !log_losses);
-    Stdio.printf "Epoch %d, lr=%f, loss=%f\n%!" epoch learning_rate.@[0] !epoch_loss;
+  step_ref := 0;
+  for epoch = 0 to epochs - 1 do
+    for batch = 0 to n_batches - 1 do
+      batch_ref := batch;
+      jitted.run ();
+      Backend.await device;
+      assert (Backend.to_host jitted.context learning_rate.value);
+      assert (Backend.to_host jitted.context scalar_loss.value);
+      (* Stdio.printf "Data batch=%d, step=%d, lr=%f, batch loss=%f\n%!" !batch_ref !step_ref learning_rate.@[0]
+         scalar_loss.@[0]; *)
+      learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
+      losses := scalar_loss.@[0] :: !losses;
+      epoch_loss := !epoch_loss +. scalar_loss.@[0];
+      log_losses := Float.log scalar_loss.@[0] :: !log_losses;
+      Int.incr step_ref
+    done;
+    if epoch % 1000 = 0 || epoch = epochs - 1 then
+      Stdio.printf "Epoch %d, lr=%f, epoch loss=%f\n%!" epoch learning_rate.@[0] !epoch_loss;
     epoch_loss := 0.
   done;
   let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
@@ -101,9 +93,9 @@ let () =
   let mlp_result = mlp point in
   Train.set_on_host point.value;
   Train.set_on_host mlp_result.value;
-  (* By using sgd_jitted.context here, we don't need to copy the parameters back to the host. *)
+  (* By using jitted.context here, we don't need to copy the parameters back to the host. *)
   let result_jitted =
-    Backend.jit sgd_jitted.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
+    Backend.jit jitted.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
   in
   Stdio.print_endline "\n******** mlp_result **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 mlp_result;
@@ -151,3 +143,9 @@ let () =
       [ Line_plot { points = Array.of_list_rev !learning_rates; pixel = "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_lr
+
+let () =
+  for seed = 0 to 19 do
+    Stdio.printf "\n*************** EXPERIMENT SEED %d ******************\n%!" seed;
+    experiment seed ()
+  done
