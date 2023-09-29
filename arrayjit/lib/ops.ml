@@ -193,7 +193,7 @@ let assign_op_cd_syntax ~zero_out = function
   | ToPowOf -> "=**"
   | Relu_gate -> "=?/"
 
-let unop_cd_syntax = function Identity -> "~=" | Relu -> "!/"
+let unop_cd_syntax = function Identity -> "~=" | Relu -> "?/"
 
 (** {2 *** Global references ***} *)
 

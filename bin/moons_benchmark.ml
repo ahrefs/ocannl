@@ -56,22 +56,22 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
      let%op mlp x =
        "b6" 1
        + "w6"
-         * !/("b4" hid_4_5
+         * ?/("b4" hid_4_5
              + "w4"
-               * !/("b2" hid_2_3
-                   + ("w2" * !/("b1" 16 + ("w1" * x)))
+               * ?/("b2" hid_2_3
+                   + ("w2" * ?/("b1" 16 + ("w1" * x)))
                    + "b3" hid_2_3
-                   + ("w3" * !/(b2 + (w2 * !/(b1 + (w1 * x))))))
-             + ("b5" hid_4_5 + ("w5" * !/(b4 + (w4 * !/(b3 + (w3 * !/(b2 + (w2 * !/(b1 + (w1 * x)))))))))))
+                   + ("w3" * ?/(b2 + (w2 * ?/(b1 + (w1 * x))))))
+             + ("b5" hid_4_5 + ("w5" * ?/(b4 + (w4 * ?/(b3 + (w3 * ?/(b2 + (w2 * ?/(b1 + (w1 * x)))))))))))
      in
      * *)
-  let%op mlp x = "b3" 1 + ("w3" * !/("b2" hid_dim + ("w2" * !/("b1" hid_dim + ("w1" * x))))) in
+  let%op mlp x = "b3" 1 + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
   let step_sym, step_ref, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let steps = epochs * n_batches in
   let%op learning_rate = 0.1 *. (!..steps - !@step_sym) /. !..steps in
   let%op moons_input = moons_flat @| step_sym in
   let%op moons_class = moons_classes @| step_sym in
-  let%op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
+  let%op margin_loss = ?/(1 - (moons_class *. mlp moons_input)) in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in
   Train.set_on_host learning_rate.value;
   let weight_decay = 0.0001 in

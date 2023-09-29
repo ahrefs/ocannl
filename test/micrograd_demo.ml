@@ -14,8 +14,8 @@ let%expect_test "Micrograd README basic example" =
   let%op d = (a *. b) + (b **. 3) in
   let%op c = c + c + 1 in
   let%op c = c + 1 + c + ~-a in
-  let%op d = d + (d *. 2) + !/(b + a) in
-  let%op d = d + (3 *. d) + !/(b - a) in
+  let%op d = d + (d *. 2) + ?/(b + a) in
+  let%op d = d + (3 *. d) + ?/(b - a) in
   let%op e = c - d in
   let%op f = e **. 2 in
   let%op g = f /. 2 in
@@ -99,7 +99,7 @@ let%expect_test "Micrograd half-moons example" =
   let moons_flat = TDSL.init_const ~l:"moons_flat" ~b:[ epochs; batch ] ~o:[ 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let moons_classes = TDSL.init_const ~l:"moons_classes" ~b:[ epochs; batch ] ~o:[ 1 ] moons_classes in
-  let%op mlp x = "b3" 1 + ("w3" * !/("b2" 16 + ("w2" * !/("b1" 16 + ("w1" * x))))) in
+  let%op mlp x = "b3" 1 + ("w3" * ?/("b2" 16 + ("w2" * ?/("b1" 16 + ("w1" * x))))) in
   let step_sym, step_ref, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let%op learning_rate = 0.1 *. (!..steps - !@step_sym) /. !..steps in
   let%op moons_input = moons_flat @| step_sym in
@@ -107,7 +107,7 @@ let%expect_test "Micrograd half-moons example" =
   let losses = ref [] in
   let log_losses = ref [] in
   let learning_rates = ref [] in
-  let%op margin_loss = !/(1 - (moons_class *. mlp moons_input)) in
+  let%op margin_loss = ?/(1 - (moons_class *. mlp moons_input)) in
   (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update computation. *)
   let weight_decay = 0.0001 in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in

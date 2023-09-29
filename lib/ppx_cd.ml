@@ -85,14 +85,14 @@ let unary_op expr =
   let loc = expr.pexp_loc in
   match expr with
   | [%expr ( ~= )] -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Identity])
-  | [%expr ( !/ )] -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Relu])
+  | [%expr ( ?/ )] -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Relu])
   | _ ->
       ( [%expr Shape.Pointwise_un],
         Ast_builder.Default.pexp_extension ~loc
         @@ Location.error_extensionf ~loc
-             "ppx_ocannl %%cd: expected a unary operator, one of: = (Identity), !/ (Relu)" )
+             "ppx_ocannl %%cd: expected a unary operator, one of: = (Identity), ?/ (Relu)" )
 
-let is_unary_op ident = List.mem [ "~="; "!/" ] ident ~equal:String.equal
+let is_unary_op ident = List.mem [ "~="; "?/" ] ident ~equal:String.equal
 
 let rec array_of_code c =
   let loc = c.pexp_loc in
