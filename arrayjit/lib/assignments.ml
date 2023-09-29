@@ -204,42 +204,60 @@ let flatten c =
   loop c
 
 let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
-  let idents =
-    let rec loop (c : t) =
-      match c with
-      | Noop -> []
-      | Seq (c1, c2) -> loop c1 @ loop c2
-      | Block_comment (_, c) -> loop c
-      | Accum_binop { zero_out = _; accum = _; op = _; lhs; rhs1; rhs2; projections = _ } ->
-          List.concat_map ~f:(Fn.compose Option.to_list List.last) [ lhs.label; rhs1.label; rhs2.label ]
-      | Accum_unop { zero_out = _; accum = _; op = _; lhs; rhs; projections = _ } ->
-          List.concat_map ~f:(Fn.compose Option.to_list List.last) [ lhs.label; rhs.label ]
-      | Fetch { array; fetch_op = _; dims = _ } -> Option.to_list @@ List.last array.label
-    in
-    loop c
+  let is_alphanum_ = String.for_all ~f:(fun c -> Char.equal c '_' || Char.is_alphanum c) in
+  let ident_label la =
+    let components = List.filter la.LA.label ~f:(fun i -> is_alphanum_ i && not (String.equal i "grad")) in
+    if List.is_empty components then None else Some (String.concat ~sep:"_" components)
   in
-  let repeating_idents = List.find_all_dups ~compare:String.compare idents in
+  let nograd_idents = Hashtbl.create (module String) in
+  let nograd la =
+    if List.mem ~equal:String.equal la.LA.label "grad" then ()
+    else
+      Option.iter (ident_label la)
+        ~f:
+          (Hashtbl.update nograd_idents ~f:(fun old ->
+               Set.add (Option.value ~default:Utils.no_ints old) la.id))
+  in
+  let rec loop (c : t) =
+    match c with
+    | Noop -> ()
+    | Seq (c1, c2) ->
+        loop c1;
+        loop c2
+    | Block_comment (_, c) -> loop c
+    | Accum_binop { zero_out = _; accum = _; op = _; lhs; rhs1; rhs2; projections = _ } ->
+        List.iter ~f:nograd [ lhs; rhs1; rhs2 ]
+    | Accum_unop { zero_out = _; accum = _; op = _; lhs; rhs; projections = _ } ->
+        List.iter ~f:nograd [ lhs; rhs ]
+    | Fetch { array; fetch_op = _; dims = _ } -> nograd array
+  in
+  loop c;
+  let repeating_idents = Hashtbl.filter nograd_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1) in
   let b = Buffer.create 16 in
   let out = Buffer.add_string b in
   let sp () = out " " in
   let ident la =
     let n = LA.name la in
-    let label = LA.label la in
     match ident_style with
     | `Name_only -> out n
     | `Name_and_label ->
-        if String.is_empty label then out n else out n;
-        out "_";
-        out label
+        let label = LA.label la in
+        if String.is_empty label then out n
+        else (
+          out n;
+          out "_";
+          out label)
     | `Heuristic_ocannl ->
         let is_grad = List.mem ~equal:String.equal la.label "grad" in
-        let ident = List.last la.label in
+        let ident = ident_label la in
         (match ident with
-        | Some ident when String.for_all ~f:Char.is_alphanum ident ->
-            if List.mem ~equal:String.equal repeating_idents ident then out [%string "n%{la.id#Int}_%{ident}"]
+        | Some ident ->
+            if Hashtbl.mem repeating_idents ident then
+              if is_grad then out [%string "n%{la.id - 1#Int}_%{ident}"]
+              else out [%string "n%{la.id#Int}_%{ident}"]
             else out ident
-        | _ when is_grad -> out [%string "n%{la.id - 1#Int}"]
-        | _ -> out n);
+        | None when is_grad -> out [%string "n%{la.id - 1#Int}"]
+        | None -> out n);
         if is_grad then out ".grad"
   in
   let out_fetch_op (op : fetch_op) =
