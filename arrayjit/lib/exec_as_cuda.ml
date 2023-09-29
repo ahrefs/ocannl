@@ -415,7 +415,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ par
 |}]
   in
   let f_name = name ^ "-cudajit-debug" in
-  if Utils.settings.with_debug && Utils.settings.keep_files_in_run_directory then (
+  if Utils.settings.output_debug_files_in_run_directory then (
     let oc = Out_channel.open_text @@ f_name ^ ".cu" in
     Stdio.Out_channel.output_string oc cu_src;
     Stdio.Out_channel.flush oc;
@@ -425,7 +425,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ par
   let ptx =
     Cu.compile_to_ptx ~cu_src ~name ~options:[ "--use_fast_math" ] ~with_debug:Utils.settings.with_debug
   in
-  if Utils.settings.with_debug && Utils.settings.keep_files_in_run_directory then (
+  if Utils.settings.output_debug_files_in_run_directory then (
     let f_name = name ^ "-cudajit-debug" in
     let oc = Out_channel.open_text @@ f_name ^ ".ptx" in
     Stdio.Out_channel.output_string oc @@ Cu.string_from_ptx ptx;

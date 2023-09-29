@@ -25,8 +25,7 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   Tensor.default_grad_prec := precision;
   let open Tensor.O in
   (* SDSL.drop_all_sessions (); *)
-  (* Utils.settings.with_debug <- true; *)
-  (* Utils.settings.keep_files_in_run_directory <- true; *)
+  (* Utils.settings.output_debug_files_in_run_directory <- true; *)
   (* Low_level.debug_log_jitted := true; *)
   Random.init (* random_seed *) 0;
   Utils.settings.fixed_state_for_init <- Some random_seed;
@@ -125,7 +124,7 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
       }
   in
   Utils.settings.with_debug <- false;
-  Utils.settings.keep_files_in_run_directory <- false;
+  Utils.settings.output_debug_files_in_run_directory <- false;
   let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in

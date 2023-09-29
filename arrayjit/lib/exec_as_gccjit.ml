@@ -422,12 +422,8 @@ let jit_func ~name (context : context) ctx bindings (traced_store, proc) =
   let after_proc = jit_code ~name ~env ctx_info main_block proc in
   Block.jump init_block main_block;
   Block.return_void after_proc;
-  (if Utils.settings.with_debug then
-     let suf = "-gccjit-debug.c" in
-     let f_name =
-       if Utils.settings.keep_files_in_run_directory then name ^ suf
-       else Stdlib.Filename.temp_file (name ^ "-") suf
-     in
+  (if Utils.settings.output_debug_files_in_run_directory then
+     let f_name = name ^ "-gccjit-debug.c" in
      Context.dump_to_file ctx ~update_locs:true f_name);
   ctx_info
 
@@ -438,7 +434,7 @@ let jit old_context ~name ?verbose:_ bindings compiled =
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
   Context.set_option ctx Context.Optimization_level !optimization_level;
   (*
-  if Utils.settings.with_debug && Utils.settings.keep_files_in_run_directory then (
+  if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)

@@ -38,8 +38,7 @@ let _suspended () =
   Stdio.printf "\n%!"
 
 let () =
-  Utils.settings.with_debug <- true;
-  Utils.settings.keep_files_in_run_directory <- true;
+  Utils.settings.output_debug_files_in_run_directory <- true;
   Random.init 0;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let size = 100 in
@@ -89,7 +88,7 @@ let () =
 let _suspended () =
   Random.init 0;
   Utils.settings.with_debug <- true;
-  Utils.settings.keep_files_in_run_directory <- true;
+  Utils.settings.output_debug_files_in_run_directory <- true;
   Utils.settings.debug_log_jitted <- true;
   Random.init 0;
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in

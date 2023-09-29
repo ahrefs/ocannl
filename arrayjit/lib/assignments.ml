@@ -310,7 +310,7 @@ let fprint_code ppf c =
 
 let compile_proc ?(ident_style = `Heuristic_ocannl) ~name ?(verbose = false) static_indices proc =
   if verbose then Stdio.printf "Assignments.compile_proc: generating the initial low-level code\n%!";
-  if Utils.settings.with_debug && Utils.settings.keep_files_in_run_directory then (
+  if Utils.settings.output_debug_files_in_run_directory then (
     let fname = name ^ ".hlc" in
     let f = Stdio.Out_channel.create fname in
     let ppf = Stdlib.Format.formatter_of_out_channel f in

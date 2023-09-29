@@ -705,14 +705,14 @@ let optimize_proc ?(verbose = false) static_indices llc : optimized =
 
 let compile_proc ~name ?(verbose = false) static_indices llc : optimized =
   if verbose then Stdio.printf "Low_level.compile_proc: generating the initial low-level code\n%!";
-  if Utils.settings.with_debug && Utils.settings.keep_files_in_run_directory then (
+  if Utils.settings.output_debug_files_in_run_directory then (
     let fname = name ^ "-unoptimized.llc" in
     let f = Stdio.Out_channel.create fname in
     let ppf = Stdlib.Format.formatter_of_out_channel f in
     Stdlib.Format.pp_set_margin ppf !code_sexp_margin;
     Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t llc));
   let result = optimize_proc ~verbose static_indices llc in
-  if Utils.settings.with_debug && Utils.settings.keep_files_in_run_directory then (
+  if Utils.settings.output_debug_files_in_run_directory then (
     let fname = name ^ ".llc" in
     let f = Stdio.Out_channel.create fname in
     let ppf = Stdlib.Format.formatter_of_out_channel f in
@@ -760,13 +760,13 @@ module CDSL = struct
 
   let enable_all_debugs ?(debug_logs = false) ?(hosted_only = true) () =
     Utils.settings.with_debug <- true;
-    Utils.settings.keep_files_in_run_directory <- true;
+    Utils.settings.output_debug_files_in_run_directory <- true;
     if hosted_only then virtualize_settings.enable_device_only <- false;
     if debug_logs then Utils.settings.debug_log_jitted <- true
 
   let disable_all_debugs ?(restore_defaults = false) () =
     Utils.settings.debug_log_jitted <- false;
     Utils.settings.with_debug <- false;
-    Utils.settings.keep_files_in_run_directory <- false;
+    Utils.settings.output_debug_files_in_run_directory <- false;
     if restore_defaults then virtualize_settings.enable_device_only <- true
 end

@@ -10,8 +10,7 @@ let () =
   let module Backend = (val Train.fresh_backend ()) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  Utils.settings.with_debug <- true;
-  Utils.settings.keep_files_in_run_directory <- true;
+  Utils.settings.output_debug_files_in_run_directory <- true;
   let a = TDSL.range_of_shape ~label:[ "a" ] ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~label:[ "b" ] ~batch_dims:[ 3 ] ~input_dims:[ 5 ] ~output_dims:[ 4 ] () in
   let%op c = a *+ "...|i->1; ...|...->i => ...|i" b in

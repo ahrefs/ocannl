@@ -10,8 +10,7 @@ module Utils = Arrayjit.Utils
 let () =
   Random.init 0;
   let module Backend = (val Train.fresh_backend ()) in
-  Utils.settings.with_debug <- true;
-  Utils.settings.keep_files_in_run_directory <- true;
+  Utils.settings.output_debug_files_in_run_directory <- true;
   (* Utils.settings.debug_log_jitted <- true; *)
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
