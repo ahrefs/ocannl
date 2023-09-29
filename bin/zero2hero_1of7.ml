@@ -37,7 +37,7 @@ let _suspended () =
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   Stdio.printf "\n%!"
 
-let () =
+let _suspended () =
   Utils.settings.output_debug_files_in_run_directory <- true;
   Random.init 0;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
@@ -85,7 +85,7 @@ let () =
   in
   PrintBox_text.output Stdio.stdout plot_box
 
-let _suspended () =
+let () =
   Random.init 0;
   Utils.settings.with_debug <- true;
   Utils.settings.output_debug_files_in_run_directory <- true;
@@ -105,25 +105,40 @@ let _suspended () =
   Tensor.iter_embedded_arrays l ~f:(fun a ->
       if to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ LA.name a);
   Stdio.print_endline
-    "\n\
-     We did not update the params: all values and gradients will be at initial points,\n\
-    \    which are specified in the tensor in the brackets.";
-  Tensor.print_tree ~with_grad:true ~depth:9 l
-(*;
-  let jitted = jit jitted.context IDX.empty @@ Train.sgd_update l in
-  jitted.run ();
+    {|
+      We did not update the params: all values and gradients will be at initial points,
+      which are specified in the tensor in the brackets.|};
+  Tensor.print_tree ~with_grad:true ~depth:9 l;
+  let%op learning_rate = 0.1 in
+  let jitted = jit jitted.context IDX.empty @@ Train.sgd_update ~learning_rate l in
+  (* learning_rate is virtual so this will not print anything. *)
+  Tensor.iter_embedded_arrays learning_rate ~f:(fun a ->
+      if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ LA.name a);
   Stdio.print_endline
-    "\n\
-     Now we updated the params, but after the forward and backward passes:\n\
-    \    only params values will change, compared to the above.";
+    {|
+      Due to how the gccjit backend works, since the parameters were constant in the grad_update
+      computation, they did not exist on the device before. Now they do. This would not be needed
+      on the cuda backend.|};
+  List.iter [ a.value; b.value; c.value; f.value ] ~f:(fun a ->
+      if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ LA.name a);
+  jitted.run ();
+  await device;
+  Tensor.iter_embedded_arrays l ~f:(fun a ->
+      if to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ LA.name a);
+  Stdio.print_endline
+    {|
+      Now we updated the params, but after the forward and backward passes:
+      only params values will change, compared to the above.|};
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   (* We could reuse the jitted code if we did not use `jit_and_run`. *)
   let jitted = jit jitted.context IDX.empty @@ Train.grad_update l in
   jitted.run ();
+  await device;
+  Tensor.iter_embedded_arrays l ~f:(fun a ->
+      if to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ LA.name a);
   Stdio.print_endline
-    "\n\
-     Now again we did not update the params, they will remain as above, but both param\n\
-    \    gradients and the values and gradients of other nodes will change thanks to the forward and \
-     backward passes.";
+    {|
+      Now again we did not update the params, they will remain as above, but both param
+      gradients and the values and gradients of other nodes will change thanks to the forward and
+      backward passes.|};
   Tensor.print_tree ~with_grad:true ~depth:9 l
-*)
