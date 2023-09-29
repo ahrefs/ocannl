@@ -42,7 +42,7 @@ let assoc_of_bindings bs =
   let rec loop : 'a. 'a bindings -> (static_symbol, int ref) List.Assoc.t =
    fun (type a) (b : a bindings) -> match b with Empty -> [] | Bind (s, i, bs) -> (s, i) :: loop bs
   in
-  loop bs
+  List.rev @@ loop bs
 
 (** Helps manipulating the bindings. *)
 type 'a variadic = Result of (unit -> 'a) | Param of int ref * (int -> 'a) variadic
