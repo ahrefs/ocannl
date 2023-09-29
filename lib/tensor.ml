@@ -122,7 +122,6 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
       ~f:(fun used ti ->
         (Set.add used ti.id, { subtensor = ti; embedded = is_fwd_root ti && not (Set.mem used ti.id) }))
   in
-  List.iter orig_ts ~f:(fun ti -> remove_fwd_root ti);
   let id = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
   let shape = make_shape ~id in
@@ -150,13 +149,14 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
   let projections = lazy_projections @@ List.hd_exn local_shape_updates in
   let v = LA.create prec ~id ~label ~dims init_op in
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
-  let fwds = List.map ordered_ts ~f:(fun ti -> ti.forward) in
+  let fwds = List.map ordered_ts ~f:(fun ti -> if is_fwd_root ti then ti.forward else Assignments.Noop) in
   let forward = Assignments.sequential @@ fwds @ [ op_asn ~v ~projections ] in
   if
     is_prohibit_grad grad_spec
     || (Fn.non is_require_grad grad_spec && List.for_all orig_ts ~f:(fun ti -> Option.is_none ti.diff))
   then (
     let tensor = { forward; diff = None; id; value = v; shape; children } in
+    List.iter orig_ts ~f:(fun ti -> remove_fwd_root ti);
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     tensor)
   else
@@ -183,11 +183,12 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
       let bcks = List.map ordered_ts ~f:(fun ti -> if is_bck_root ti then bprop ti else Assignments.Noop) in
       Assignments.sequential @@ (grad_asn ~v ~g ~projections :: List.rev bcks)
     in
-    List.iter ordered_ts ~f:(fun ti ->
-        session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.id);
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop } in
     let tensor = { forward; diff; id; value = v; shape; children } in
+    List.iter ordered_ts ~f:(fun ti -> remove_fwd_root ti);
+    List.iter ordered_ts ~f:(fun ti ->
+        session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.id);
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     session_state.backprop_roots <- Map.add_exn session_state.backprop_roots ~key:id ~data:tensor;
     tensor
