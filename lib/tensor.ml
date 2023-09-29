@@ -520,11 +520,11 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
   if with_code then (
     (match t.forward with
     | Noop -> ()
-    | fwd_code -> Stdlib.Format.printf "Current forward body:@ %a@ " Assignments.fprint_code fwd_code);
+    | fwd_code -> Stdlib.Format.printf "Current forward body:@ %s@ " @@ Assignments.to_string_hum fwd_code);
     match t.diff with
     | Some { backprop = Noop; _ } -> ()
     | Some { backprop = bwd_code; _ } ->
-        Stdlib.Format.printf "Current backprop body:@ %a@ " Assignments.fprint_code bwd_code
+        Stdlib.Format.printf "Current backprop body:@ %s@ " @@ Assignments.to_string_hum bwd_code
     | None -> ());
   if with_low_level then (
     (match t.forward with

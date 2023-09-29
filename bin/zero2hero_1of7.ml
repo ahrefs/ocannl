@@ -21,7 +21,7 @@ let _suspended () =
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_id:true ~with_grad:true ~depth:9 v;
   Stdlib.Format.printf "\nHigh-level code:\n%!";
-  Stdlib.Format.printf "%a\n%!" Arrayjit.Assignments.fprint_code code
+  Stdlib.Format.printf "%s\n%!" @@ Arrayjit.Assignments.to_string_hum code
 
 let _suspended () =
   Random.init 0;

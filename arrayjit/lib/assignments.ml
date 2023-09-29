@@ -204,6 +204,21 @@ let flatten c =
   loop c
 
 let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
+  let idents =
+    let rec loop (c : t) =
+      match c with
+      | Noop -> []
+      | Seq (c1, c2) -> loop c1 @ loop c2
+      | Block_comment (_, c) -> loop c
+      | Accum_binop { zero_out = _; accum = _; op = _; lhs; rhs1; rhs2; projections = _ } ->
+          List.concat_map ~f:(Fn.compose Option.to_list List.last) [ lhs.label; rhs1.label; rhs2.label ]
+      | Accum_unop { zero_out = _; accum = _; op = _; lhs; rhs; projections = _ } ->
+          List.concat_map ~f:(Fn.compose Option.to_list List.last) [ lhs.label; rhs.label ]
+      | Fetch { array; fetch_op = _; dims = _ } -> Option.to_list @@ List.last array.label
+    in
+    loop c
+  in
+  let repeating_idents = List.find_all_dups ~compare:String.compare idents in
   let b = Buffer.create 16 in
   let out = Buffer.add_string b in
   let sp () = out " " in
@@ -219,9 +234,12 @@ let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
     | `Heuristic_ocannl ->
         let is_grad = List.mem ~equal:String.equal la.label "grad" in
         let ident = List.last la.label in
-        if Option.exists ~f:(String.for_all ~f:Char.is_alphanum) ident then out @@ Option.value_exn ident
-        else if is_grad then out ("n" ^ Int.to_string @@ (la.id - 1))
-        else out n;
+        (match ident with
+        | Some ident when String.for_all ~f:Char.is_alphanum ident ->
+            if List.mem ~equal:String.equal repeating_idents ident then out [%string "n%{la.id#Int}_%{ident}"]
+            else out ident
+        | _ when is_grad -> out [%string "n%{la.id - 1#Int}"]
+        | _ -> out n);
         if is_grad then out ".grad"
   in
   let out_fetch_op (op : fetch_op) =
@@ -297,16 +315,6 @@ let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
   Buffer.contents b
 
 let code_margin = ref 80
-
-let fprint_code ppf c =
-  let flat = flatten c |> List.map ~f:to_string_hum in
-  let open Stdlib.Format in
-  pp_set_margin ppf !code_margin;
-  pp_print_list
-    ~pp_sep:(fun f () ->
-      pp_print_string f ";";
-      pp_print_newline f ())
-    pp_print_string ppf flat
 
 let compile_proc ?(ident_style = `Heuristic_ocannl) ~name ?(verbose = false) static_indices proc =
   if verbose then Stdio.printf "Assignments.compile_proc: generating the initial low-level code\n%!";
