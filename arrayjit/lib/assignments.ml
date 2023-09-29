@@ -214,11 +214,27 @@ let flatten c =
   in
   loop c
 
-let to_string_hum c =
+let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
   let b = Buffer.create 16 in
   let out = Buffer.add_string b in
   let sp () = out " " in
-  let ident la = out @@ LA.name la in
+  let ident la =
+    let n = LA.name la in
+    let label = LA.label la in
+    match ident_style with
+    | `Name_only -> out n
+    | `Name_and_label ->
+        if String.is_empty label then out n else out n;
+        out "_";
+        out label
+    | `Heuristic_ocannl ->
+        let is_grad = List.mem ~equal:String.equal la.label "grad" in
+        let ident = List.last la.label in
+        if Option.exists ~f:(String.for_all ~f:Char.is_alphanum) ident then out @@ Option.value_exn ident
+        else if is_grad then out ("n" ^ Int.to_string @@ (la.id - 1))
+        else out n;
+        if is_grad then out ".grad"
+  in
   let out_fetch_op (op : fetch_op) =
     match op with
     | Constant f -> out @@ Float.to_string f
@@ -274,9 +290,9 @@ let to_string_hum c =
         sp ();
         out @@ Ops.assign_op_cd_syntax ~zero_out accum;
         sp ();
-        out @@ Ops.unop_cd_syntax op;
-        if String.equal proj_spec "." then out ".";
-        sp ();
+        if not @@ Ops.equal_unop op Ops.Identity then (
+          out @@ Ops.unop_cd_syntax op;
+          sp ());
         ident rhs;
         if not (String.equal proj_spec ".") then (
           out " ~logic:\"";
