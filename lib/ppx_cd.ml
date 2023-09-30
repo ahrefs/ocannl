@@ -448,9 +448,11 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
       let setups = List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r ] in
       with_forward_args setups body
   | [%expr
-      [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
+      [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; loc = accu_loc }; _ } as accu_op]
         [%e? lhs]
-        ([%e? { pexp_desc = Pexp_ident { txt = Lident binop_ident; _ }; _ } as bin_op] [%e? rhs1] [%e? rhs2])]
+        ([%e? { pexp_desc = Pexp_ident { txt = Lident binop_ident; loc = op_loc }; _ } as bin_op]
+           [%e? rhs1]
+           [%e? rhs2])]
     when is_assignment accu_ident && is_binary_op binop_ident && proj_in_scope ->
       let zero_out, accu_op = assignment_op accu_op in
       let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?ident_label ~proj_in_scope lhs in
@@ -476,9 +478,15 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
                  rhs_dims = [| [%e rhs1_dims]; [%e rhs2_dims] |];
                  project_lhs = [%e project_lhs];
                  project_rhs = [| [%e project_rhs1]; [%e project_rhs2] |];
-                 unique_debug_id = Arrayjit.Indexing.unique_debug_id ();
-                 (* TODO: provide details. *)
-                 debug_info = p.debug_info;
+                 debug_info =
+                   {
+                     p.debug_info with
+                     trace =
+                       ( "ppx_cd " ^ [%e string_expr ~loc:accu_loc accu_ident] ^ " "
+                         ^ [%e string_expr ~loc:op_loc binop_ident],
+                         Arrayjit.Indexing.unique_debug_id () )
+                       :: p.debug_info.trace;
+                   };
                })]
       in
       let body =
@@ -500,9 +508,9 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
       let setups = List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r1; setup_r2 ] in
       with_forward_args setups body
   | [%expr
-      [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
+      [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; loc = accu_loc }; _ } as accu_op]
         [%e? lhs]
-        ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ } as un_op] [%e? rhs])]
+        ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; loc = op_loc }; _ } as un_op] [%e? rhs])]
     when is_assignment accu_ident && is_unary_op unop_ident && proj_in_scope ->
       let zero_out, accu_op = assignment_op accu_op in
       let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?ident_label ~proj_in_scope lhs in
@@ -525,9 +533,15 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
                  rhs_dims = [| [%e rhs1_dims] |];
                  project_lhs = [%e project_lhs];
                  project_rhs = [| [%e project_rhs1] |];
-                 unique_debug_id = Arrayjit.Indexing.unique_debug_id ();
-                 (* TODO: provide details. *)
-                 debug_info = p.debug_info;
+                 debug_info =
+                   {
+                     p.debug_info with
+                     trace =
+                       ( "ppx_cd " ^ [%e string_expr ~loc:accu_loc accu_ident] ^ " "
+                         ^ [%e string_expr ~loc:op_loc unop_ident],
+                         Arrayjit.Indexing.unique_debug_id () )
+                       :: p.debug_info.trace;
+                   };
                })]
       in
       let body =
@@ -546,7 +560,10 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
       in
       let setups = List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r1 ] in
       with_forward_args setups body
-  | [%expr [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } as accu_op] [%e? lhs] [%e? rhs]]
+  | [%expr
+      [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; loc = op_loc }; _ } as accu_op]
+        [%e? lhs]
+        [%e? rhs]]
     when is_assignment op_ident && proj_in_scope ->
       let zero_out, accu_op = assignment_op accu_op in
       let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?ident_label ~proj_in_scope lhs in
@@ -568,9 +585,14 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
                  rhs_dims = [| [%e rhs1_dims] |];
                  project_lhs = [%e project_lhs];
                  project_rhs = [| [%e project_rhs1] |];
-                 unique_debug_id = Arrayjit.Indexing.unique_debug_id ();
-                 (* TODO: provide details. *)
-                 debug_info = p.debug_info;
+                 debug_info =
+                   {
+                     p.debug_info with
+                     trace =
+                       ( "ppx_cd " ^ [%e string_expr ~loc:op_loc op_ident],
+                         Arrayjit.Indexing.unique_debug_id () )
+                       :: p.debug_info.trace;
+                   };
                })]
       in
       let body =

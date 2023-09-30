@@ -3,6 +3,8 @@ open Ppxlib
 
 type li = longident
 
+let string_expr ~loc s = Ast_helper.Exp.constant @@ Pconst_string (s, loc, None)
+
 let pat2string pat =
   let rec lident = function Lident s | Ldot (_, s) -> s | Lapply (_, i) -> lident i in
   let rec loop pat =
@@ -26,10 +28,10 @@ let pat2string pat =
     | Ppat_type _ | Ppat_unpack _ | Ppat_exception _ | Ppat_extension _ ->
         ""
   in
-  Ast_helper.Exp.constant @@ Pconst_string (loop pat, pat.ppat_loc, None)
+  string_expr ~loc:pat.ppat_loc @@ loop pat
 
 let opt_pat2string ~loc = function None -> [%expr None] | Some pat -> [%expr Some [%e pat2string pat]]
-let opt_pat2string_list ~loc = function None -> [%expr []] | Some pat -> [%expr [[%e pat2string pat]]]
+let opt_pat2string_list ~loc = function None -> [%expr []] | Some pat -> [%expr [ [%e pat2string pat] ]]
 let opt_expr ~loc = function None -> [%expr None] | Some expr -> [%expr Some [%e expr]]
 
 let rec pat2expr pat =

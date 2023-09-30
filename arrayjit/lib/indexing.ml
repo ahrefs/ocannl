@@ -74,7 +74,8 @@ type str_osym_map = (string, symbol option, Base.String.comparator_witness) Base
 let sexp_of_str_osym_map (map : str_osym_map) =
   Sexp.List (Map.to_alist map |> List.map ~f:[%sexp_of: string * symbol option])
 
-type projections_debug = { spec : string; derived_for : Sexp.t } [@@deriving sexp]
+type projections_debug = { spec : string; derived_for : Sexp.t; trace : (string * int) list }
+[@@deriving sexp]
 
 let unique_debug_id =
   let projections_uid = ref 0 in
@@ -97,7 +98,6 @@ type projections = {
   project_rhs : axis_index array array;
       (** [project_rhs.(i)] Produces an index into the [i+1]th argument of an operation. *)
   debug_info : (projections_debug[@sexp.ignore] [@compare.ignore] [@equal.ignore]);
-  unique_debug_id : int;
 }
 [@@deriving compare, equal, sexp]
 (** All the information relevant for code generation. *)
@@ -119,8 +119,7 @@ let identity_projections ~debug_info ~lhs_dims =
     product_iterators;
     project_lhs;
     project_rhs = [| project_lhs |];
-    debug_info;
-    unique_debug_id = unique_debug_id ();
+    debug_info = { debug_info with trace = ("indentity_projections", unique_debug_id ()) :: debug_info.trace };
   }
 
 let derive_index ~product_syms ~(projection : axis_index array) =
