@@ -449,7 +449,7 @@ let apply_constraint r env =
 
 let eliminate_broadcastable = function (Row_var _ | Fixed) as d -> d | Broadcastable -> get_row_var ()
 
-let rec unify_dims row_eqs env =
+let rec unify_dims (row_eqs : row_eq list) (env : environment) : environment =
   match row_eqs with
   | [] -> env
   | { r; subr } :: row_eqs when equal_dims r subr -> apply_constraint r env |> unify_dims row_eqs
@@ -522,7 +522,7 @@ let rec unify_dims row_eqs env =
             }
            :: row_eqs)
 
-and unify_dim dim_eqs env =
+and unify_dim (dim_eqs : dim_eq list) (env : environment) : environment =
   match dim_eqs with
   | [] -> env
   | { d1 = Dim { label = Some l1; _ } as d1; d2 = Dim { label = Some l2; _ } as d2; fix1 = _; fix2 = _ } :: _
@@ -588,11 +588,20 @@ let einsum_slot_spec_to_dims_bio ~generative ?b_row ?i_row ?o_row labels =
   let result = axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels in
   (!proj_env_update, result)
 
-let unify_shapes env ({ shape = cur_sh; logic; env = _ } as update_step) =
+(* Because of the row-propagation-from-subtensors semantics, shape inference is not fully equational,
+   the order of solving equations matters. Solve the less-commital-equation first. *)
+let compare_eq eq1 eq2 =
+  if is_row_var eq1.subr.row then -1
+  else if is_row_var eq2.subr.row then 1
+  else Int.descending (List.length eq1.subr.dims) (List.length eq2.subr.dims)
+
+let unify_shapes (env : environment) ({ shape = cur_sh; logic; env = _ } as update_step : update_step) :
+    environment =
   let row_eq_side row = { dims = []; constr = Unconstrained; row; sh_id = Utils.one_int cur_sh.id } in
   let row_eq ~r ~subr =
     Option.to_list @@ Option.map2 r subr ~f:(fun r subr -> { r = row_eq_side r; subr = row_eq_side subr })
   in
+  let order_eqs eq1 eq2 = List.sort ~compare:compare_eq [ eq1; eq2 ] in
   let dims_label_assoc dims =
     let f = function Var { label = Some l; _ } as d -> Some (l, d) | _ -> None in
     List.filter_map dims.dims ~f
@@ -674,26 +683,17 @@ let unify_shapes env ({ shape = cur_sh; logic; env = _ } as update_step) =
   | Broadcast (Compose, sh1, sh2) -> (
       try
         unify_dims
-          [
-            { r = cur_sh.batch; subr = sh1.batch };
-            { r = cur_sh.batch; subr = sh2.batch };
-            { r = cur_sh.input; subr = sh2.input };
-            { r = cur_sh.output; subr = sh1.output };
-            { r = sh1.input; subr = sh2.output };
-          ]
+          ({ r = sh1.input; subr = sh2.output }
+           :: order_eqs { r = cur_sh.batch; subr = sh1.batch } { r = cur_sh.batch; subr = sh2.batch }
+          @ order_eqs { r = cur_sh.input; subr = sh2.input } { r = cur_sh.output; subr = sh1.output })
           env
       with Shape_error (s, trace) when !with_error_trace ->
         raise @@ Shape_error ("Compose / " ^ s, Shape_mismatch [ cur_sh; sh1; sh2 ] :: trace))
   | Broadcast (Pointwise_bin, sh1, sh2) ->
       unify_dims
-        [
-          { r = cur_sh.batch; subr = sh1.batch };
-          { r = cur_sh.batch; subr = sh2.batch };
-          { r = cur_sh.input; subr = sh1.input };
-          { r = cur_sh.input; subr = sh2.input };
-          { r = cur_sh.output; subr = sh1.output };
-          { r = cur_sh.output; subr = sh2.output };
-        ]
+        (order_eqs { r = cur_sh.batch; subr = sh1.batch } { r = cur_sh.batch; subr = sh2.batch }
+        @ order_eqs { r = cur_sh.input; subr = sh1.input } { r = cur_sh.input; subr = sh2.input }
+        @ order_eqs { r = cur_sh.output; subr = sh1.output } { r = cur_sh.output; subr = sh2.output })
         env
   | Transpose (Batch_slice { static_range; static_symbol }, sh) -> (
       if is_row_var sh.batch.row && is_row_var cur_sh.batch.row then (* Wait for more information *) env
@@ -805,17 +805,18 @@ let unify_shapes env ({ shape = cur_sh; logic; env = _ } as update_step) =
       in
       (* Forget the old proj_env as it is not relevant after a propagate_shapes call completes. *)
       update_step.env <- { update_step.env with proj_env };
-      try
-        unify_dims
-          ({ r = cur_sh.batch; subr = b_lhs } :: { r = b_rhs1; subr = sh1.batch }
-           :: { r = b_rhs2; subr = sh2.batch } :: { r = cur_sh.input; subr = i_lhs }
-           :: { r = i_rhs1; subr = sh1.input } :: { r = i_rhs2; subr = sh2.input }
-           :: { r = cur_sh.output; subr = o_lhs } :: { r = o_rhs1; subr = sh1.output }
-           :: { r = o_rhs2; subr = sh2.output } :: row_eq ~r:b_row_lhs ~subr:b_row_rhs1
-          @ row_eq ~r:i_row_lhs ~subr:i_row_rhs1 @ row_eq ~r:o_row_lhs ~subr:o_row_rhs1
-          @ row_eq ~r:b_row_lhs ~subr:b_row_rhs2 @ row_eq ~r:i_row_lhs ~subr:i_row_rhs2
-          @ row_eq ~r:o_row_lhs ~subr:o_row_rhs2)
-        @@ unify_dim (dim_assoc_eqs label_groups) env
+      let eqs =
+        { r = cur_sh.batch; subr = b_lhs } :: { r = b_rhs1; subr = sh1.batch }
+        :: { r = b_rhs2; subr = sh2.batch } :: { r = cur_sh.input; subr = i_lhs }
+        :: { r = i_rhs1; subr = sh1.input } :: { r = i_rhs2; subr = sh2.input }
+        :: { r = cur_sh.output; subr = o_lhs } :: { r = o_rhs1; subr = sh1.output }
+        :: { r = o_rhs2; subr = sh2.output } :: row_eq ~r:b_row_lhs ~subr:b_row_rhs1
+        @ row_eq ~r:i_row_lhs ~subr:i_row_rhs1 @ row_eq ~r:o_row_lhs ~subr:o_row_rhs1
+        @ row_eq ~r:b_row_lhs ~subr:b_row_rhs2 @ row_eq ~r:i_row_lhs ~subr:i_row_rhs2
+        @ row_eq ~r:o_row_lhs ~subr:o_row_rhs2
+      in
+      let eqs = List.sort eqs ~compare:compare_eq in
+      try unify_dims eqs @@ unify_dim (dim_assoc_eqs label_groups) env
       with Shape_error (s, trace) when !with_error_trace ->
         raise @@ Shape_error ([%string "Einsum %{spec} / %{s}"], Shape_mismatch [ cur_sh; sh1; sh2 ] :: trace)
       )
@@ -911,11 +912,10 @@ let to_labels (sh : t) : string array =
 (** *** Projection inference *** *)
 
 open Arrayjit.Indexing
-module Debug_runtime = Utils.Debug_PrintBox ()
 
 (** Computes the indexing into subtensors given the shape information of a tensor. 
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
-let%debug_sexp derive_projections (update_step : update_step) : projections =
+let derive_projections update_step =
   let dims_of sh = sh.batch.dims @ sh.output.dims @ sh.input.dims in
   let lhs = update_step.shape in
   let project rhs =
@@ -979,8 +979,12 @@ let%debug_sexp derive_projections (update_step : update_step) : projections =
       product_iterators;
       project_lhs = f lhs;
       project_rhs = Array.of_list_map ~f rhs;
-      debug_info = { spec = logic_to_spec update_step.logic; derived_for = sexp_of_update_step update_step };
-      unique_debug_id = unique_debug_id ();
+      debug_info =
+        {
+          spec = logic_to_spec update_step.logic;
+          derived_for = sexp_of_update_step update_step;
+          trace = [ ("derive_projections", unique_debug_id ()) ];
+        };
     }
   in
   match update_step.logic with
@@ -1002,8 +1006,12 @@ let backprop_ith_arg ~from_1 projections =
     rhs_dims;
     project_lhs;
     project_rhs;
-    debug_info = projections.debug_info;
-    unique_debug_id = unique_debug_id ();
+    debug_info =
+      {
+        projections.debug_info with
+        trace =
+          ("backprop_ith_arg " ^ Int.to_string from_1, unique_debug_id ()) :: projections.debug_info.trace;
+      };
   }
 
 (** *** Shape builders *** *)
