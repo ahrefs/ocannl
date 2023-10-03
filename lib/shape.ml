@@ -468,7 +468,13 @@ let rec unify_dims (row_eqs : row_eq list) (env : environment) : environment =
       else
         match Map.find env.row_env v with
         | None ->
-            let data = if rd_is_subtensor then rd else { rd with row = eliminate_broadcastable rd.row } in
+            let data : dims =
+              let row = if rd_is_subtensor then rd.row else eliminate_broadcastable rd.row in
+              (* Due to dim-1 broadcasting, we cannot trust that dim = 1 is intended. If there is no further
+                 type information, the fresh variables will settle to dim 1 in the next round of inference. *)
+              let dims = List.map rd.dims ~f:(function Dim { d = 1; _ } -> Var (get_var ()) | d -> d) in
+              { row; dims; constr = rd.constr; sh_id = Set.union rd.sh_id rv.sh_id }
+            in
             assert (not @@ equal_row rv.row data.row);
             let row_env = Map.add_exn env.row_env ~key:v ~data in
             apply_constraint rv { env with row_env } |> unify_dims row_eqs
