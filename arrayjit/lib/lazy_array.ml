@@ -54,16 +54,6 @@ let dims_to_string ?(with_axis_numbers = false) arr =
   in
   Ops.prec_string arr.prec ^ " prec " ^ dims_s
 
-let header arr =
-  let mem_size =
-    if Lazy.is_val arr.array then
-      match arr.array with
-      | (lazy None) -> "<not-hosted>"
-      | (lazy (Some nd)) -> Int.to_string_hum @@ Nd.size_in_bytes nd
-    else "<not-in-yet>"
-  in
-  String.concat [ name arr; " "; label arr; ": "; dims_to_string arr; "; mem in bytes: "; mem_size ]
-
 let ident_label arr =
   let is_alphanum_ = String.for_all ~f:(fun c -> Char.equal c '_' || Char.is_alphanum c) in
   let components = List.filter arr.label ~f:(fun i -> is_alphanum_ i && not (String.equal i "grad")) in
@@ -87,6 +77,20 @@ let styled_ident ~repeating_idents style arr =
           else [%string "%{ident}%{opt_grad}"]
       | None when is_grad -> [%string "n%{arr.id - 1#Int}%{opt_grad}"]
       | None -> n)
+
+let header arr =
+  let mem_size =
+    if Lazy.is_val arr.array then
+      match arr.array with
+      | (lazy None) -> "<not-hosted>"
+      | (lazy (Some nd)) -> Int.to_string_hum @@ Nd.size_in_bytes nd
+    else "<not-in-yet>"
+  in
+  let repeating_idents = Hashtbl.create ~size:1 (module String) in
+  [%string
+    {|%{name arr} %{label arr} as %{
+      styled_ident ~repeating_idents `Heuristic_ocannl arr
+    }: %{dims_to_string arr}; mem in bytes: %{mem_size}|}]
 
 module Registry = Core.Weak.Make (struct
   type nonrec t = t
