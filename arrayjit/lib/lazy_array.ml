@@ -14,8 +14,8 @@ type t = {
       (** If true, this array is never materialized, its computations are inlined on a per-scalar basis.
           A array that is hosted will not be virtual. *)
   mutable device_only : (bool * int) option;
-      (** If true, this node is only materialized on the devices it is computed on, it is not persisted
-          outside of a step update. It is marked as [not !(nd.hosted)]. *)
+      (** If true, this node is only materialized on the devices it is computed on.
+          It is marked as [not !(nd.hosted)]. *)
   mutable backend_info : string;
 }
 
@@ -63,6 +63,30 @@ let header arr =
     else "<not-in-yet>"
   in
   String.concat [ name arr; " "; label arr; ": "; dims_to_string arr; "; mem in bytes: "; mem_size ]
+
+let ident_label arr =
+  let is_alphanum_ = String.for_all ~f:(fun c -> Char.equal c '_' || Char.is_alphanum c) in
+  let components = List.filter arr.label ~f:(fun i -> is_alphanum_ i && not (String.equal i "grad")) in
+  if List.is_empty components then None else Some (String.concat ~sep:"_" components)
+
+let styled_ident ~repeating_idents style arr =
+  let n = name arr in
+  match style with
+  | `Name_only -> n
+  | `Name_and_label ->
+      let label = label arr in
+      if String.is_empty label then n else [%string "%{n}_%{label}"]
+  | `Heuristic_ocannl -> (
+      let is_grad = List.mem ~equal:String.equal arr.label "grad" in
+      let opt_grad = if is_grad then ".grad" else "" in
+      match ident_label arr with
+      | Some ident ->
+          if Hashtbl.mem repeating_idents ident then
+            if is_grad then [%string "n%{arr.id - 1#Int}_%{ident}%{opt_grad}"]
+            else [%string "n%{arr.id#Int}_%{ident}"]
+          else [%string "%{ident}%{opt_grad}"]
+      | None when is_grad -> [%string "n%{arr.id - 1#Int}%{opt_grad}"]
+      | None -> n)
 
 module Registry = Core.Weak.Make (struct
   type nonrec t = t

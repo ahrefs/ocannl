@@ -204,16 +204,11 @@ let flatten c =
   loop c
 
 let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
-  let is_alphanum_ = String.for_all ~f:(fun c -> Char.equal c '_' || Char.is_alphanum c) in
-  let ident_label la =
-    let components = List.filter la.LA.label ~f:(fun i -> is_alphanum_ i && not (String.equal i "grad")) in
-    if List.is_empty components then None else Some (String.concat ~sep:"_" components)
-  in
   let nograd_idents = Hashtbl.create (module String) in
   let nograd la =
     if List.mem ~equal:String.equal la.LA.label "grad" then ()
     else
-      Option.iter (ident_label la)
+      Option.iter (LA.ident_label la)
         ~f:
           (Hashtbl.update nograd_idents ~f:(fun old ->
                Set.add (Option.value ~default:Utils.no_ints old) la.id))
@@ -236,30 +231,7 @@ let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
   let b = Buffer.create 16 in
   let out = Buffer.add_string b in
   let sp () = out " " in
-  let ident la =
-    let n = LA.name la in
-    match ident_style with
-    | `Name_only -> out n
-    | `Name_and_label ->
-        let label = LA.label la in
-        if String.is_empty label then out n
-        else (
-          out n;
-          out "_";
-          out label)
-    | `Heuristic_ocannl ->
-        let is_grad = List.mem ~equal:String.equal la.label "grad" in
-        let ident = ident_label la in
-        (match ident with
-        | Some ident ->
-            if Hashtbl.mem repeating_idents ident then
-              if is_grad then out [%string "n%{la.id - 1#Int}_%{ident}"]
-              else out [%string "n%{la.id#Int}_%{ident}"]
-            else out ident
-        | None when is_grad -> out [%string "n%{la.id - 1#Int}"]
-        | None -> out n);
-        if is_grad then out ".grad"
-  in
+  let ident la = out @@ LA.styled_ident ~repeating_idents ident_style la in
   let out_fetch_op (op : fetch_op) =
     match op with
     | Constant f -> out @@ Float.to_string f
@@ -331,8 +303,6 @@ let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
   in
   loop c;
   Buffer.contents b
-
-let code_margin = ref 80
 
 let compile_proc ?(ident_style = `Heuristic_ocannl) ~name ?(verbose = false) static_indices proc =
   if verbose then Stdio.printf "Assignments.compile_proc: generating the initial low-level code\n%!";

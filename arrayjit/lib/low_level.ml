@@ -68,12 +68,6 @@ let comment_to_name =
   Str.global_replace nonliteral "_"
 
 let extract_block_name llc = match flat_lines llc with Comment s :: _ -> comment_to_name s | _ -> ""
-let code_sexp_margin = ref 200
-
-let fprint_code ppf c =
-  (* TODO: something nicely concise. *)
-  Stdlib.Format.pp_set_margin ppf !code_sexp_margin;
-  Stdlib.Format.fprintf ppf "%a" Sexp.pp_hum @@ sexp_of_t c
 
 (** *** Optimization *** *)
 
@@ -703,6 +697,100 @@ let optimize_proc ?(verbose = false) static_indices llc : optimized =
   in
   (traced_store, result)
 
+let code_sexp_margin = ref 200
+let code_hum_margin = ref 100
+
+let fprint_llc ppf c =
+  Stdlib.Format.pp_set_margin ppf !code_sexp_margin;
+  Stdlib.Format.fprintf ppf "%a" Sexp.pp_hum @@ sexp_of_t c
+
+let fprint_hum ?(ident_style = `Heuristic_ocannl) () ppf llc =
+  let open Stdlib.Format in
+  pp_set_margin ppf !code_hum_margin;
+  let pp_comma ppf () = fprintf ppf ",@ " in
+  let pp_symbol ppf sym = fprintf ppf "%s" @@ Indexing.symbol_ident sym in
+  let pp_index ppf idx =
+    match idx with Indexing.Iterator sym -> pp_symbol ppf sym | Fixed_idx i -> fprintf ppf "%d" i
+  in
+  let pp_indices ppf idcs = pp_print_list ~pp_sep:pp_comma pp_index ppf @@ Array.to_list idcs in
+  let nograd_idents = Hashtbl.create (module String) in
+  let nograd la =
+    if List.mem ~equal:String.equal la.LA.label "grad" then ()
+    else
+      Option.iter (LA.ident_label la)
+        ~f:
+          (Hashtbl.update nograd_idents ~f:(fun old ->
+               Set.add (Option.value ~default:Utils.no_ints old) la.id))
+  in
+  let rec loop (c : t) =
+    match c with
+    | Noop | Comment _ | Staged_compilation _ -> ()
+    | Seq (c1, c2) ->
+        loop c1;
+        loop c2
+    | For_loop { body; _ } -> loop body
+    | Zero_out la -> nograd la
+    | Set (lhs, _, rhs) ->
+        nograd lhs;
+        loop_float rhs
+    | Set_local ({ nd; _ }, f) ->
+        nograd nd;
+        loop_float f
+  and loop_float fc =
+    match fc with
+    | Local_scope { id = { nd; _ }; prec = _; body; orig_indices = _ } ->
+        nograd nd;
+        loop body
+    | Get_global (_, _) -> ()
+    | Get (la, _) -> nograd la
+    | Binop (_, f1, f2) ->
+        loop_float f1;
+        loop_float f2
+    | Unop (_, f) -> loop_float f
+    | Get_local { nd; _ } -> nograd nd
+    | Constant _ | Embed_index _ -> ()
+  in
+  loop llc;
+  let repeating_idents = Hashtbl.filter nograd_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1) in
+  let ident_label la = LA.styled_ident ~repeating_idents ident_style la in
+  let pp_ident ppf la = fprintf ppf "%s" @@ ident_label la in
+  let pp_local ppf { nd; scope_id } = fprintf ppf "v%d_%a" scope_id pp_ident nd in
+  let rec pp_ll ppf c : unit =
+    match c with
+    | Noop -> ()
+    | Seq (c1, c2) ->
+        fprintf ppf "@[<v 0>%a@]" (pp_print_list pp_ll)
+          (List.filter [ c1; c2 ] ~f:(function Noop -> false | _ -> true))
+    | For_loop { index = i; from_; to_; body; trace_it = _ } ->
+        fprintf ppf "@[<v 2>for %a = %d to %d {@ %a@]@ }" pp_symbol i from_ to_ pp_ll body
+    | Zero_out array -> fprintf ppf "zero_out %a;" pp_ident array
+    | Set (array, idcs, v) -> fprintf ppf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident array pp_indices idcs pp_float v
+    | Comment message -> fprintf ppf "/* %s */" message
+    | Staged_compilation _ -> fprintf ppf "STAGED_COMPILATION_CALLBACK()"
+    | Set_local (id, value) -> fprintf ppf "@[<2>%a :=@ %a;@]" pp_local id pp_float value
+  and pp_float ppf value =
+    match value with
+    | Local_scope { id; body; _ } -> fprintf ppf "@[<2>%a {@ %a@]@ }@," pp_local id pp_ll body
+    | Get_local id -> pp_local ppf id
+    | Get_global (Ops.C_function s, None) -> fprintf ppf "%s()" s
+    | Get_global (Ops.C_function s, Some idcs) -> fprintf ppf "%s(%a)" s pp_indices idcs
+    | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, None) ->
+        fprintf ppf "%s" @@ Ops.ptr_to_string ptr prec
+    | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
+        fprintf ppf "%s[%a]" (Ops.ptr_to_string ptr prec) pp_indices idcs
+    | Get (array, idcs) -> fprintf ppf "@[<2>%a[@,%a]@]" pp_ident array pp_indices idcs
+    | Constant c -> fprintf ppf "%f" c
+    | Embed_index idx -> pp_index ppf idx
+    | Binop (Arg1, v1, _v2) -> pp_float ppf v1
+    | Binop (Arg2, _v1, v2) -> pp_float ppf v2
+    | Binop (op, v1, v2) ->
+        let prefix, infix, postfix = Ops.binop_C_syntax ~is_double:true op in
+        fprintf ppf "@[<1>%s%a%s@ %a@]%s" prefix pp_float v1 infix pp_float v2 postfix
+    | Unop (Identity, v) -> pp_float ppf v
+    | Unop (Relu, v) -> fprintf ppf "@[<1>relu(%a@])" pp_float v
+  in
+  pp_ll ppf llc
+
 let compile_proc ~name ?(verbose = false) static_indices llc : optimized =
   if verbose then Stdio.printf "Low_level.compile_proc: generating the initial low-level code\n%!";
   if Utils.settings.output_debug_files_in_run_directory then (
@@ -710,20 +798,27 @@ let compile_proc ~name ?(verbose = false) static_indices llc : optimized =
     let f = Stdio.Out_channel.create fname in
     let ppf = Stdlib.Format.formatter_of_out_channel f in
     Stdlib.Format.pp_set_margin ppf !code_sexp_margin;
-    Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t llc));
+    Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t llc);
+    let fname = name ^ "-unoptimized.ll" in
+    let f = Stdio.Out_channel.create fname in
+    let ppf = Stdlib.Format.formatter_of_out_channel f in
+    Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ()) llc);
   let result = optimize_proc ~verbose static_indices llc in
   if Utils.settings.output_debug_files_in_run_directory then (
     let fname = name ^ ".llc" in
     let f = Stdio.Out_channel.create fname in
     let ppf = Stdlib.Format.formatter_of_out_channel f in
     Stdlib.Format.pp_set_margin ppf !code_sexp_margin;
-    Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t @@ snd result));
+    Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t @@ snd result);
+    let fname = name ^ ".ll" in
+    let f = Stdio.Out_channel.create fname in
+    let ppf = Stdlib.Format.formatter_of_out_channel f in
+    Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ()) (snd result));
   Hashtbl.iter (fst result) ~f:(fun v ->
       if Option.is_none v.nd.virtual_ then v.nd.virtual_ <- Some (true, 20)
       else if Option.is_none v.nd.device_only then v.nd.device_only <- Some (true, 21);
       if verbose && Utils.settings.with_debug then
-        Caml.Format.printf "Low_level.compile_proc: finalizing %a: virtual %b, device-only %b\n%!"
-          Sexp.pp_hum
+        Caml.Format.printf "Low_level.compile_proc: finalizing %a: virtual %b, device-only %b\n%!" Sexp.pp_hum
           ([%sexp_of: LA.t] v.nd)
           (LA.is_true v.nd.virtual_) (LA.is_true v.nd.device_only);
       if LA.isnt_true v.nd.virtual_ && LA.isnt_true v.nd.device_only then (
