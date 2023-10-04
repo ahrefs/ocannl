@@ -7,7 +7,7 @@ module NTDSL = Operation.NTDSL
 module CDSL = Arrayjit.Low_level.CDSL
 module Utils = Arrayjit.Utils
 
-let experiment seed () =
+let experiment seed ~use_builtin_weight_decay () =
   Random.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   Utils.settings.output_debug_files_in_run_directory <- true;
@@ -40,6 +40,8 @@ let experiment seed () =
   in
   let batch_sym, batch_ref, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_sym, step_ref, bindings = IDX.get_static_symbol bindings in
+  (* TODO: should also work without giving the dimension to "b3" -- in principle should infer it when
+     propagating shapes for margin_loss. Unfortunately top-down propagation is tricky with broadcasting. *)
   let%op mlp x = "b3" 1 + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
   let%op learning_rate = 0.1 *. (!..steps - !@step_sym) /. !..steps in
   let%op moons_input = moons_flat @| batch_sym in
@@ -49,11 +51,16 @@ let experiment seed () =
   let learning_rates = ref [] in
   let%op margin_loss = ?/(1 - (moons_class *. mlp moons_input)) in
   (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update computation. *)
-  (* let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in *)
-  let weight_decay = 0.0002 in
-  let%op ssq w = (w **. 2) ++ "...|...->... => 0" in
-  let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:TDSL.O.( + ) in
-  let%op scalar_loss = ((margin_loss ++ "...|... => 0") /. !..batch_size) + (0.0001 *. reg_loss) in
+  let scalar_loss, weight_decay =
+    if use_builtin_weight_decay then
+      let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
+      (scalar_loss, 0.0002)
+    else
+      let%op ssq w = (w **. 2) ++ "...|...->... => 0" in
+      let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:TDSL.O.( + ) in
+      let%op scalar_loss = ((margin_loss ++ "...|... => 0") /. !..batch_size) + (0.0001 *. reg_loss) in
+      (scalar_loss, 0.0)
+  in
   (* So that we can inspect them. *)
   Train.set_on_host learning_rate.value;
   let update = Train.grad_update scalar_loss in
@@ -69,6 +76,7 @@ let experiment seed () =
   let open Tensor.O in
   let epoch_loss = ref 0. in
   step_ref := 0;
+  (* LA.print_accessible_headers (); *)
   for epoch = 0 to epochs - 1 do
     for batch = 0 to n_batches - 1 do
       batch_ref := batch;
@@ -146,10 +154,10 @@ let experiment seed () =
   in
   PrintBox_text.output Stdio.stdout plot_lr
 
-let () = experiment 4 ()
+let () = experiment 4 ~use_builtin_weight_decay:true ()
 
 let _suspended () =
   for seed = 0 to 19 do
     Stdio.printf "\n*************** EXPERIMENT SEED %d ******************\n%!" seed;
-    experiment seed ()
+    experiment seed ~use_builtin_weight_decay:true ()
   done
