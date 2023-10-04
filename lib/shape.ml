@@ -466,9 +466,7 @@ let rec unify_dims (row_eqs : row_eq list) (env : environment) : environment =
       | None when equal_row rv.row rd.row && List.is_empty rd.dims ->
           apply_constraint rv env |> apply_constraint rd |> unify_dims row_eqs
       | None ->
-          (* We found our shape if the info comes from the subtensor and it is not the first round. *)
-          let is_first_round : bool = Set.is_empty @@ Set.inter rv.sh_id rd.sh_id in
-          let postpone : bool = is_first_round || not rd_is_subtensor in
+          let postpone : bool = Set.is_empty @@ Set.inter rv.sh_id rd.sh_id in
           if postpone && List.is_empty rd.dims then apply_constraint rd env |> unify_dims row_eqs
           else
             let data : dims =
