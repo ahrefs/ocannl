@@ -59,6 +59,20 @@ let ident_label arr =
   let components = List.filter arr.label ~f:(fun i -> is_alphanum_ i && not (String.equal i "grad")) in
   if List.is_empty components then None else Some (String.concat ~sep:"_" components)
 
+let debug_name ~id ~label =
+  let n = "n" ^ Int.to_string id in
+  let ident_label =
+    let is_alphanum_ = String.for_all ~f:(fun c -> Char.equal c '_' || Char.is_alphanum c) in
+    let components = List.filter label ~f:(fun i -> is_alphanum_ i && not (String.equal i "grad")) in
+    if List.is_empty components then None else Some (String.concat ~sep:"_" components)
+  in
+  let is_grad = List.mem ~equal:String.equal label "grad" in
+  let opt_grad = if is_grad then ".grad" else "" in
+  match ident_label with
+  | Some ident -> [%string "%{ident}%{opt_grad}"]
+  | None when is_grad -> [%string "n%{id - 1#Int}%{opt_grad}"]
+  | None -> n
+
 let styled_ident ~repeating_idents style arr =
   let n = name arr in
   match style with

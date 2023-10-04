@@ -120,6 +120,7 @@ type t = {
   mutable input : dims;
   mutable output : dims;
   id : int;  (** A node that has the same shape as this shape. *)
+  debug_name : string;
 }
 [@@deriving fields, sexp]
 (** The datatype from which the actual Tensor shapes are computed.
@@ -1023,7 +1024,7 @@ let backprop_ith_arg ~from_1 projections =
 (** *** Shape builders *** *)
 
 let make ?(fix_b = false) ?(fix_i = false) ?(fix_o = false) ?batch_dims ?input_dims ?output_dims ?batch_axes
-    ?input_axes ?output_axes ?(deduced = Not_constrained) ~id () =
+    ?input_axes ?output_axes ?(deduced = Not_constrained) ~debug_name ~id () =
   let make_row fix = if fix then Fixed else Broadcastable in
   let make_dims fix ds =
     {
@@ -1068,7 +1069,7 @@ let make ?(fix_b = false) ?(fix_i = false) ?(fix_o = false) ?batch_dims ?input_d
     | Some _, Some _ -> invalid_arg "Shape.make: do not provide both output_dims, output_axes"
     | None, None -> invalid_arg "Shape.make: do not provide fix_b:true for unknown output axes"
   in
-  let result = { input; output; batch; id } in
+  let result = { input; output; batch; id; debug_name } in
   (match deduced with
   | Not_constrained -> ()
   | Input_equals_output -> (
@@ -1092,9 +1093,9 @@ let shape_spec_to_dims_bio ?b_row ?i_row ?o_row labels =
   in
   axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels
 
-let of_spec ?(deduced = Not_constrained) ~id spec =
+let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
   let _, _, _, batch, input, output = shape_spec_to_dims_bio @@ axis_labels_of_spec spec in
-  let result = { input; output; batch; id } in
+  let result = { input; output; batch; id; debug_name } in
   (match deduced with
   | Not_constrained -> ()
   | Input_equals_output -> (

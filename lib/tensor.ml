@@ -124,7 +124,7 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
   in
   let id = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
-  let shape = make_shape ~id in
+  let shape = make_shape ~debug_name:(LA.debug_name ~id ~label) ~id in
   let prec =
     List.map orig_ts ~f:(fun ti -> ti.value.prec)
     |> List.reduce ~f:Ops.promote_prec
