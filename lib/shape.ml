@@ -559,11 +559,10 @@ let rec unify_dims (row_eqs : row_eq list) (env : environment) : environment =
      | { r = _; subr = { dims = []; row = Broadcastable; _ } } ) as eq)
     :: row_eqs ->
       apply_constraint eq.r env |> apply_constraint eq.subr |> unify_dims row_eqs
-  | {
-      r = { dims = _ :: _ as ds1; constr = constr1; row = r1; sh_id = sh_id1 };
-      subr = { dims = _ :: _ as ds2; constr = constr2; row = r2; sh_id = sh_id2 };
-    (* as eq *)
-    }
+  | ({
+       r = { dims = _ :: _ as ds1; constr = constr1; row = r1; sh_id = sh_id1 };
+       subr = { dims = _ :: _ as ds2; constr = constr2; row = r2; sh_id = sh_id2 };
+     } as eq)
     :: row_eqs ->
       let constr = meet constr1 constr2 in
       let len1 = List.length ds1 and len2 = List.length ds2 in
