@@ -89,7 +89,7 @@ let get_dim ~d ?label () =
 type row =
   | Row_var of int  (** The shape-kind can be inferred to have more axes. *)
   | Broadcastable  (** The shape does not have more axes of this kind, but is "polymorphic". *)
-  | Fixed  (** The shape fails in contexts expecting more axes of this kind -- it "stops broadcast". *)
+  | Fixed  (** A row variable of a subtensor shape will get determined from this row. *)
 [@@deriving equal, hash, compare, sexp, variants]
 
 type dims_constraint =
@@ -409,7 +409,7 @@ type update_step = { shape : t; logic : logic; mutable env : proj_environment } 
 let with_error_trace = ref true
 
 type environment = Env.t [@@deriving sexp]
-type dim_eq = { d1 : dim; fix1 : bool; d2 : dim; fix2 : bool } [@@deriving sexp, equal, hash, compare]
+type dim_eq = { d1 : dim; d2 : dim } [@@deriving sexp, equal, hash, compare]
 type dim_eqs = dim_eq list [@@deriving sexp]
 
 type row_eq = { r : dims; subr : dims } [@@deriving sexp, equal]
@@ -451,7 +451,7 @@ let apply_constraint r env =
                 else Env.update_dim v (get_dim ~d:rem ()) env
             | _ -> assert false))
 
-module Debug_runtime = Utils.Debug_flushing ()
+module Debug_runtime = Utils.Debug_PrintBox ()
 
 let eliminate_row = function Fixed -> Broadcastable | _ -> get_row_var ()
 
@@ -488,14 +488,10 @@ let rec unify_dims (row_eqs : row_eq list) (env : environment) : environment =
     :: row_eqs ->
       let constr = meet constr1 constr2 in
       apply_constraint { dims = []; constr; row = Fixed; id } env |> unify_dims row_eqs
-  | ({ r = { dims = []; row = Fixed; _ }; subr = _ } as eq) :: _
-  | ({ r = _; subr = { dims = []; row = Fixed; _ } } as eq) :: _ ->
-      if Utils.settings.with_debug then
-        Stdlib.Format.printf "unify_dims: Fixed-mode: shape error env=@ %a\n%!" Sexp.pp_hum
-          (Env.sexp_of_t env);
+  | ({ r = { dims = []; row = Fixed; _ }; subr = _ } as eq) :: _ ->
       raise @@ Shape_error ("unify_dims: Fixed-mode axis number mismatch", [ Row_mismatch [ eq.r; eq.subr ] ])
   | (( { r = { dims = []; row = Broadcastable; _ }; subr = _ }
-     | { r = _; subr = { dims = []; row = Broadcastable; _ } } ) as eq)
+     | { r = _; subr = { dims = []; row = Broadcastable | Fixed; _ } } ) as eq)
     :: row_eqs ->
       apply_constraint eq.r env |> apply_constraint eq.subr |> unify_dims row_eqs
   | ({
@@ -509,9 +505,7 @@ let rec unify_dims (row_eqs : row_eq list) (env : environment) : environment =
       let dims, row = if len2 > len1 then (ds2, r2) else (ds1, r1) in
       let ds1_suf = take_from_end ds1 suffix in
       let ds2_suf = take_from_end ds2 suffix in
-      let dim_eqs =
-        List.map2_exn ~f:(fun d1 d2 -> { d1; fix1 = is_fixed r1; d2; fix2 = is_fixed r2 }) ds1_suf ds2_suf
-      in
+      let dim_eqs = List.map2_exn ~f:(fun d1 d2 -> { d1; d2 }) ds1_suf ds2_suf in
       (try unify_dim dim_eqs env
        with Shape_error (s, trace) when !with_error_trace ->
          raise @@ Shape_error ("dim tail / " ^ s, Row_mismatch [ eq.r; eq.subr ] :: trace))
@@ -526,28 +520,23 @@ let rec unify_dims (row_eqs : row_eq list) (env : environment) : environment =
 and unify_dim (dim_eqs : dim_eq list) (env : environment) : environment =
   match dim_eqs with
   | [] -> env
-  | { d1 = Dim { label = Some l1; _ } as d1; d2 = Dim { label = Some l2; _ } as d2; fix1 = _; fix2 = _ } :: _
+  | { d1 = Dim { label = Some l1; _ } as d1; d2 = Dim { label = Some l2; _ } as d2 } :: _
     when not (String.equal l1 l2) ->
       if Utils.settings.with_debug then
         Stdlib.Format.printf "unify_dim: different labels: shape error env=@ %a\n%!" Sexp.pp_hum
           (Env.sexp_of_t env);
       raise @@ Shape_error ("unify_dim: different labels", [ Dim_mismatch [ d1; d2 ] ])
-  | {
-      d1 = Dim { d = d1; label = _; proj_id = pid1 };
-      d2 = Dim { d = d2; label = _; proj_id = pid2 };
-      fix1 = _;
-      fix2 = _;
-    }
+  | { d1 = Dim { d = d1; label = _; proj_id = pid1 }; d2 = Dim { d = d2; label = _; proj_id = pid2 } }
     :: dim_eqs
     when d1 = d2 ->
       Env.update_proj_classes pid1 pid2 env |> unify_dim dim_eqs
-  | { d1 = Dim { d = 1; _ }; d2 = Dim _; fix1 = false; fix2 = _ } :: dim_eqs -> unify_dim dim_eqs env
-  | { d1 = Dim _; d2 = Dim { d = 1; _ }; fix1 = _; fix2 = false } :: dim_eqs -> unify_dim dim_eqs env
-  | ({ d1 = Var v; d2; fix1; fix2 } | { d2 = Var v; d1 = d2; fix1 = fix2; fix2 = fix1 }) :: dim_eqs -> (
+  | { d1 = Dim { d = 1; _ }; d2 = _ } :: dim_eqs | { d1 = _; d2 = Dim { d = 1; _ } } :: dim_eqs ->
+      unify_dim dim_eqs env
+  | ({ d1 = Var v; d2 } | { d2 = Var v; d1 = d2 }) :: dim_eqs -> (
       match Map.find env.dim_env v with
       | None -> Env.update_dim v d2 env |> unify_dim dim_eqs
-      | Some d1 -> unify_dim ({ d1; d2; fix1; fix2 } :: dim_eqs) env)
-  | { d1; d2; fix1 = _; fix2 = _ } :: _ ->
+      | Some d1 -> unify_dim ({ d1; d2 } :: dim_eqs) env)
+  | { d1; d2 } :: _ ->
       if Utils.settings.with_debug then
         Stdlib.Format.printf "unify_dim: shape error env=@ %a\n%!" Sexp.pp_hum (Env.sexp_of_t env);
       raise @@ Shape_error ("unify_dim", [ Dim_mismatch [ d1; d2 ] ])
@@ -652,7 +641,7 @@ let unify_shapes (env : environment) ({ shape = cur_sh; logic; env = _ } as upda
     List.Assoc.sort_and_group assoc ~compare:String.compare
     |> List.concat_map ~f:(function
          | _, [] -> assert false
-         | _, d1 :: ds -> List.map ds ~f:(fun d2 -> { d1; fix1 = false; d2; fix2 = false }))
+         | _, d1 :: ds -> List.map ds ~f:(fun d2 -> { d1; d2 }))
   in
   let generative =
     AxisKey.
@@ -771,8 +760,7 @@ let unify_shapes (env : environment) ({ shape = cur_sh; logic; env = _ } as upda
               }
             in
             ( Option.to_list static_range
-              |> List.map ~f:(fun range ->
-                     { d1 = get_dim ~d:range (); fix1 = false; d2 = slice_var; fix2 = false }),
+              |> List.map ~f:(fun range -> { d1 = get_dim ~d:range (); d2 = slice_var }),
               { r = expanded_batch; subr = sh.batch } )
           else
             match sh.batch.dims with
@@ -789,14 +777,7 @@ let unify_shapes (env : environment) ({ shape = cur_sh; logic; env = _ } as upda
                     id = { sh_id = cur_sh.id; kind = Batch };
                   }
                 in
-                ( Option.to_list static_range
-                  |> List.map ~f:(fun range ->
-                         {
-                           d1 = get_dim ~d:range ();
-                           fix1 = is_fixed sh.batch.row;
-                           d2;
-                           fix2 = is_fixed cur_sh.batch.row;
-                         }),
+                ( Option.to_list static_range |> List.map ~f:(fun range -> { d1 = get_dim ~d:range (); d2 }),
                   { r = cur_sh.batch; subr = reduced_batch } )
         in
         try
@@ -981,10 +962,16 @@ let derive_projections update_step =
     (* Since shapes are already inferred, these variables unify directly with the proj_id of this operation. *)
     let constrained_projs =
       Map.to_alist update_step.env.proj_env
-      |> List.map ~f:(fun (v, idx) ->
-             match Map.find_exn !state.dim_env v with
-             | Dim { proj_id; _ } -> (proj_id, idx)
-             | _ -> assert false)
+      |> List.filter_map ~f:(fun (v, idx) ->
+             match Map.find !state.dim_env v with
+             | Some (Dim { proj_id; _ }) -> Some (proj_id, idx)
+             | other ->
+                 if Utils.settings.with_debug then
+                   Stdlib.Format.printf
+                     "derive_projections: unresolved variable %a for projection constraints=@ %a\n%!"
+                     Sexp.pp_hum (sexp_of_dim_var v) Sexp.pp_hum
+                     ([%sexp_of: dim option] other);
+                 None)
       |> Map.of_alist_multi (module Int)
       |> Map.map ~f:(Utils.unique_keep_first ~equal:equal_axis_index)
       |> Map.map ~f:(function
@@ -1153,53 +1140,6 @@ let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
       with Shape_error (s, trace) when !with_error_trace ->
         raise @@ Shape_error ("of spec / " ^ s, Shape_mismatch [ result ] :: trace)));
   result
-
-(** A [stop_broadcast] mutates the partially-inferred shape of a tensor in-place, substituting-in
-    a [Fixed] marker on the dimensions. This way we avoid introducing a new tensor. *)
-let stop_broadcast sh =
-  let fix kind = function
-    | Broadcastable | Fixed -> Fixed
-    | Row_var _ as row -> (
-        try
-          state :=
-            unify_dims
-              [
-                {
-                  r = { dims = []; constr = Unconstrained; row; id = { sh_id = sh.id; kind } };
-                  subr = { dims = []; constr = Unconstrained; row = Fixed; id = { sh_id = sh.id; kind } };
-                };
-              ]
-              !state;
-          Fixed
-        with Shape_error (s, trace) when !with_error_trace ->
-          raise @@ Shape_error ("stop_broadcast / " ^ s, Shape_mismatch [ sh ] :: trace))
-  in
-  sh.batch <- { sh.batch with row = fix Batch sh.batch.row };
-  sh.input <- { sh.input with row = fix Input sh.input.row };
-  sh.output <- { sh.output with row = fix Output sh.output.row }
-
-let broadcast sh =
-  let fix kind = function
-    | Broadcastable | Fixed -> Broadcastable
-    | Row_var _ as row -> (
-        try
-          state :=
-            unify_dims
-              [
-                {
-                  r = { dims = []; constr = Unconstrained; row; id = { sh_id = sh.id; kind } };
-                  subr =
-                    { dims = []; constr = Unconstrained; row = Broadcastable; id = { sh_id = sh.id; kind } };
-                };
-              ]
-              !state;
-          Broadcastable
-        with Shape_error (s, trace) when !with_error_trace ->
-          raise @@ Shape_error ("broadcast / " ^ s, Shape_mismatch [ sh ] :: trace))
-  in
-  sh.batch <- { sh.batch with row = fix Batch sh.batch.row };
-  sh.input <- { sh.input with row = fix Input sh.input.row };
-  sh.output <- { sh.output with row = fix Output sh.output.row }
 
 let to_string_hum ?(style = `Axis_size) sh =
   let n_outputs = List.length @@ sh.output.dims in
