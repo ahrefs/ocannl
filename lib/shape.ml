@@ -314,14 +314,7 @@ module Env : sig
   type dim_env = dim Map.M(Dim_var).t
   type row_env = dims Map.M(Int).t
   type proj_classes = int Map.M(Int).t [@@deriving sexp]
-  type interacting_rows = Set.M(Row_id).t Map.M(Row_id).t
-
-  type t = private {
-    dim_env : dim_env;
-    row_env : row_env;
-    proj_classes : proj_classes;
-    interacting_rows : interacting_rows;
-  }
+  type t = private { dim_env : dim_env; row_env : row_env; proj_classes : proj_classes }
 
   val t_of_sexp : Sexp.t -> t
   val sexp_of_t : t -> Sexp.t
@@ -334,20 +327,12 @@ module Env : sig
   val update_proj_classes : int -> int -> t -> t
   val empty_env : t
   val with_proj_classes : proj_classes -> t -> t
-  val add_interaction : key:row_id -> query:row_id -> t -> t
 end = struct
   type dim_env = dim Map.M(Dim_var).t [@@deriving sexp]
   type row_env = dims Map.M(Int).t [@@deriving sexp]
   type proj_classes = int Base.Map.M(Base.Int).t [@@deriving sexp]
-  type interacting_rows = Set.M(Row_id).t Map.M(Row_id).t [@@deriving sexp]
 
-  type t = {
-    dim_env : dim_env;
-    row_env : row_env;
-    proj_classes : proj_classes;
-    interacting_rows : interacting_rows;
-  }
-  [@@deriving sexp]
+  type t = { dim_env : dim_env; row_env : row_env; proj_classes : proj_classes } [@@deriving sexp]
   (** The substitutions should be idempotent: FV(Dom(env)) n FV(Im(env)) = 0. *)
 
   let subst_dim env = function
@@ -402,18 +387,9 @@ end = struct
       proj_classes = Map.empty (module Int);
       (* The state's proj_classes come from the most recent propagate_shapes and are not used across calls
          to propagate_shapes. *)
-      interacting_rows = Map.empty (module Row_id);
     }
 
   let with_proj_classes proj_classes env = { env with proj_classes }
-
-  let add_interaction ~key ~query env =
-    let interacting_rows =
-      Map.update env.interacting_rows key ~f:(function
-        | None -> Set.singleton (module Row_id) query
-        | Some old_ids -> Set.add old_ids query)
-    in
-    { env with interacting_rows }
 end
 
 type proj_environment = {
@@ -477,6 +453,8 @@ let apply_constraint r env =
 
 module Debug_runtime = Utils.Debug_flushing ()
 
+let eliminate_row = function Fixed -> Broadcastable | _ -> get_row_var ()
+
 let rec unify_dims (row_eqs : row_eq list) (env : environment) : environment =
   match row_eqs with
   | [] -> env
@@ -489,23 +467,12 @@ let rec unify_dims (row_eqs : row_eq list) (env : environment) : environment =
       | None when equal_row rv.row rd.row && List.is_empty rd.dims ->
           apply_constraint rv env |> apply_constraint rd |> unify_dims row_eqs
       | None ->
-          let rd_ids =
-            Option.value ~default:(Set.empty (module Row_id)) @@ Map.find env.interacting_rows rd.id
+          let data : dims =
+            let row = eliminate_row rd.row in
+            let dims = List.map rd.dims ~f:(function Dim { d = 1; _ } -> Var (get_var ()) | d -> d) in
+            { row; dims; constr = meet rv.constr rd.constr; id = rv.id }
           in
-          let postpone : bool = not @@ Set.mem rd_ids rv.id in
-          let env = Env.add_interaction ~key:rd.id ~query:rv.id env in
-          if postpone && List.is_empty rd.dims then apply_constraint rd env |> unify_dims row_eqs
-          else
-            let data : dims =
-              let row = if postpone then get_row_var () else rd.row in
-              let dims =
-                if postpone then
-                  List.map rd.dims ~f:(function Dim { d = 1; _ } -> Var (get_var ()) | d -> d)
-                else rd.dims
-              in
-              { row; dims; constr = meet rv.constr rd.constr; id = rv.id }
-            in
-            Env.update_row v data env |> apply_constraint data |> unify_dims row_eqs
+          Env.update_row v data env |> apply_constraint data |> unify_dims row_eqs
       | Some r' ->
           let row_eq : row_eq = if rd_is_subtensor then { r = r'; subr = rd } else { r = rd; subr = r' } in
           apply_constraint rv env |> unify_dims (row_eq :: row_eqs))
@@ -957,9 +924,11 @@ let force_row_to_dims row =
   let row = Env.subst_row !state row in
   let rec f = function
     | Dim { d; _ } -> d
-    | Var v as d -> (
+    | Var v -> (
         match Map.find !state.dim_env v with
-        | None -> raise @@ Shape_error ("Dimensions still unknown", [ Dim_mismatch [ d ] ])
+        | None ->
+            state := Env.update_dim v (get_dim ~d:1 ()) !state;
+            1
         | Some dim -> f dim)
   in
   match row with
@@ -971,11 +940,7 @@ let force_row_to_dims row =
 (** Uses the matrix convention of putting the input axes last.
     Note: [force_to_dims] is "destructive": it closes shapes that remain incomplete after inference. *)
 let force_to_dims (sh : t) : int array =
-  try Array.concat_map ~f:force_row_to_dims [| sh.batch; sh.output; sh.input |]
-  with Shape_error (s, more) when !with_error_trace ->
-    if Utils.settings.with_debug then
-      Stdlib.Format.printf "force_to_dims: shape error global env=@ %a\n%!" Sexp.pp_hum (Env.sexp_of_t !state);
-    raise @@ Shape_error ("Dimensions still unknown / " ^ s, Shape_mismatch [ sh ] :: more)
+  Array.concat_map ~f:force_row_to_dims [| sh.batch; sh.output; sh.input |]
 
 let rec row_to_labels env =
   let rec f = function
@@ -1028,14 +993,17 @@ let derive_projections update_step =
            | idcs ->
                raise @@ Shape_error ("Multiple constraints on the same projection", [ Index_mismatch idcs ]))
     in
-    let get_product_proj = function
+    let rec get_product_proj = function
       | Dim { proj_id; _ } when Map.mem constrained_projs proj_id -> None
       | Dim { d; proj_id; _ } -> if iterated d then Some (proj_repr proj_id, d) else None
-      | Var _ as v ->
-          raise
-          @@ Shape_error
-               ( "derive_projections: shape still not fully inferred",
-                 [ Shape_mismatch (lhs :: rhs); Dim_mismatch [ v ] ] )
+      | Var v as dim -> (
+          match Map.find !state.dim_env v with
+          | None ->
+              raise
+              @@ Shape_error
+                   ( "derive_projections: shape still not fully inferred",
+                     [ Shape_mismatch (lhs :: rhs); Dim_mismatch [ dim ] ] )
+          | Some dim -> get_product_proj dim)
     in
     (* Note: the ordering will affect performance of naive backends. *)
     let all_product_projs =
@@ -1044,17 +1012,20 @@ let derive_projections update_step =
     in
     let product_iterators = List.map all_product_projs ~f:(fun (p, _) -> (p, get_symbol ())) in
     let product_space = Array.of_list_map all_product_projs ~f:snd in
-    let get_slot_proj = function
+    let rec get_slot_proj = function
       | Dim { proj_id; _ } when Map.mem constrained_projs proj_id -> Map.find_exn constrained_projs proj_id
       | Dim { d; proj_id; _ } ->
           if iterated d then
             Iterator (List.Assoc.find_exn product_iterators ~equal:Int.equal (proj_repr proj_id))
           else Fixed_idx 0
-      | Var _ as v ->
-          raise
-          @@ Shape_error
-               ( "derive_projections: shape still not fully inferred",
-                 [ Shape_mismatch (lhs :: rhs); Dim_mismatch [ v ] ] )
+      | Var v as dim -> (
+          match Map.find !state.dim_env v with
+          | None ->
+              raise
+              @@ Shape_error
+                   ( "derive_projections: shape still not fully inferred",
+                     [ Shape_mismatch (lhs :: rhs); Dim_mismatch [ dim ] ] )
+          | Some dim -> get_slot_proj dim)
     in
     let product_iterators = Array.of_list_map product_iterators ~f:snd in
     let f (sh : t) : axis_index array = Array.of_list_map (dims_of sh) ~f:get_slot_proj in
