@@ -82,7 +82,7 @@ let lazy_to_dims shape =
   lazy
     Shape.(
       finish_inference ();
-      force_to_dims shape)
+      to_dims shape)
 
 let fetch_zeros array shape = Assignments.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
 let fetch_ones array shape = Assignments.Fetch { array; fetch_op = Constant 1.; dims = lazy_to_dims shape }

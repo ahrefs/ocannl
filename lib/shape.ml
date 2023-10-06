@@ -488,7 +488,18 @@ end = struct
         ~f:(fun ~key ~data env -> update_dim ~freshen_proj:true key data env)
         update.dim_env
     in
-    Map.fold ~init:state ~f:(fun ~key ~data env -> update_row ~freshen_proj:true key data env) update.row_env
+    let state =
+      Map.fold ~init:state
+        ~f:(fun ~key ~data env -> update_row ~freshen_proj:true key data env)
+        update.row_env
+    in
+    let broadcast =
+      {
+        dim_vars = Set.union update.broadcast.dim_vars state.broadcast.dim_vars;
+        row_vars = Set.union update.broadcast.row_vars state.broadcast.row_vars;
+      }
+    in
+    { dim_env = state.dim_env; row_env = state.row_env; proj_classes = state.proj_classes; broadcast }
 end
 
 type proj_environment = {
@@ -998,8 +1009,6 @@ let propagate_shapes update_step =
   (* Update dimension information coming from other propagation steps. *)
   upd_all !state;
   let env = unify_shapes (Env.with_proj_classes update_step.env.proj_classes Env.empty_env) update_step in
-  (* If neither of the subtensors requires a broader shape, the resulting shape shouldn't be broader. *)
-  let env = close_shape_broadcast update_step.shape env in
   (* Update both dimension and projections information (i.e. keep the update step's projections). *)
   upd_all env;
   update_step.env <- { update_step.env with proj_classes = env.proj_classes };
@@ -1007,12 +1016,14 @@ let propagate_shapes update_step =
   state := Env.merge_fresh_proj ~update:env ~state:!state
 
 let finish_inference () =
-  List.iter !second_stage_inference ~f:propagate_shapes;
-  (* FIXME: doing it twice does not help.
-     List.iter !second_stage_inference ~f:propagate_shapes; *)
+  let f update_step =
+    propagate_shapes update_step;
+    state := close_shape_broadcast update_step.shape !state
+  in
+  List.iter !second_stage_inference ~f;
   second_stage_inference := []
 
-let force_row_to_dims row =
+let row_to_dims row =
   let row = Env.subst_row !state row in
   let f = function
     | Dim { d; _ } -> d
@@ -1026,8 +1037,8 @@ let force_row_to_dims row =
 
 (** Uses the matrix convention of putting the input axes last.
     Note: [force_to_dims] is "destructive": it closes shapes that remain incomplete after inference. *)
-let force_to_dims (sh : t) : int array =
-  try Array.concat_map ~f:force_row_to_dims [| sh.batch; sh.output; sh.input |]
+let to_dims (sh : t) : int array =
+  try Array.concat_map ~f:row_to_dims [| sh.batch; sh.output; sh.input |]
   with Shape_error (s, trace) -> raise @@ Shape_error (s, Shape_mismatch [ sh ] :: trace)
 
 let rec row_to_labels env =
@@ -1058,8 +1069,8 @@ let derive_projections (update_step : update_step) : projections =
   let dims_of sh = sh.batch.dims @ sh.output.dims @ sh.input.dims in
   let lhs = update_step.shape in
   let project rhs =
-    let lhs_dims = force_to_dims lhs in
-    let rhs_dims = Array.of_list_map ~f:force_to_dims rhs in
+    let lhs_dims = to_dims lhs in
+    let rhs_dims = Array.of_list_map ~f:to_dims rhs in
     let all_dims = List.concat_map ~f:dims_of @@ (lhs :: rhs) in
     let proj_repr proj_id =
       fst @@ Utils.union_find ~equal:Int.equal update_step.env.proj_classes ~key:proj_id ~rank:0
