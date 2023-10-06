@@ -78,13 +78,6 @@ let session_error_printer = function
 
 let () = Stdlib.Printexc.register_printer session_error_printer
 let lazy_to_dims shape = lazy (Shape.force_to_dims shape)
-
-let lazy_projections shape_update =
-  lazy
-    Shape.(
-      propagate_shapes shape_update;
-      derive_projections shape_update)
-
 let fetch_zeros array shape = Assignments.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
 let fetch_ones array shape = Assignments.Fetch { array; fetch_op = Constant 1.; dims = lazy_to_dims shape }
 let default_init_op = Ops.Constant_fill { values = [| 0.0 |]; strict = false }
@@ -95,7 +88,7 @@ let raw_binop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs1_is_grad ~t2 ~rhs2_i
   let shape_logic = Shape.Broadcast (logic, t1.shape, t2.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic; env = empty_proj_environment } in
   Shape.propagate_shapes local_shape_update;
-  let projections = lazy_projections local_shape_update in
+  let projections = lazy (Shape.derive_projections local_shape_update) in
   let lhs = if lhs_is_grad then (Option.value_exn t.diff).grad else t.value in
   let rhs1 = if rhs1_is_grad then (Option.value_exn t1.diff).grad else t1.value in
   let rhs2 = if rhs2_is_grad then (Option.value_exn t2.diff).grad else t2.value in
@@ -106,7 +99,7 @@ let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
   let shape_logic = Shape.Transpose (logic, t1.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic; env = empty_proj_environment } in
   Shape.propagate_shapes local_shape_update;
-  let projections = lazy_projections local_shape_update in
+  let projections = lazy (Shape.derive_projections local_shape_update) in
   let lhs = if lhs_is_grad then (Option.value_exn t.diff).grad else t.value in
   let rhs = if rhs_is_grad then (Option.value_exn t1.diff).grad else t1.value in
   Assignments.Accum_unop { zero_out; accum; lhs; op; rhs; projections }
@@ -146,7 +139,7 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
         force_to_dims shape)
   in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
-  let projections = lazy_projections @@ List.hd_exn local_shape_updates in
+  let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
   let v = LA.create prec ~id ~label ~dims init_op in
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let fwds = List.map ordered_ts ~f:(fun ti -> if is_fwd_root ti then ti.forward else Assignments.Noop) in
