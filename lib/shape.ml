@@ -318,15 +318,16 @@ module Env : sig
 
   val t_of_sexp : Sexp.t -> t
   val sexp_of_t : t -> Sexp.t
-  val subst_dim : t -> dim -> dim
+  val subst_dim : ?freshen_proj:bool -> t -> dim -> dim
   val occurs_dim : dim_var -> dim -> bool
   val subst_row : t -> dims -> dims
   val occurs_row : int -> dims -> bool
-  val update_dim : dim_var -> dim -> t -> t
-  val update_row : int -> dims -> t -> t
+  val update_dim : ?freshen_proj:bool -> dim_var -> dim -> t -> t
+  val update_row : ?freshen_proj:bool -> int -> dims -> t -> t
   val update_proj_classes : int -> int -> t -> t
   val empty_env : t
   val with_proj_classes : proj_classes -> t -> t
+  val merge_fresh_proj : update:t -> state:t -> t
 end = struct
   type dim_env = dim Map.M(Dim_var).t [@@deriving sexp]
   type row_env = dims Map.M(Int).t [@@deriving sexp]
@@ -335,11 +336,28 @@ end = struct
   type t = { dim_env : dim_env; row_env : row_env; proj_classes : proj_classes } [@@deriving sexp]
   (** The substitutions should be idempotent: FV(Dom(env)) n FV(Im(env)) = 0. *)
 
-  let subst_dim env = function
+  let s_dim_one v ~value ~in_ = match in_ with Var v2 when equal_dim_var v v2 -> value | _ -> in_
+
+  let subst_dim ?(freshen_proj = false) env = function
+    | Dim { d; label; proj_id = _ } when freshen_proj -> get_dim ~d ?label ()
     | Dim _ as d -> d
     | Var v as default -> Option.value ~default @@ Map.find env.dim_env v
 
   let occurs_dim v = function Dim _ -> false | Var v' -> equal_dim_var v v'
+
+  let s_row_one v ~value:{ dims = more_dims; constr = more_constr; row; id = _ } ~in_ =
+    match in_ with
+    | { dims; constr; row = Row_var v2; id } when v = v2 ->
+        let more_constr =
+          match more_constr with
+          | Unconstrained -> Unconstrained
+          | Total_elems m ->
+              if List.for_all dims ~f:is_dim then
+                Total_elems (m * List.fold dims ~init:1 ~f:(fun n d -> n * dim_to_int_exn d))
+              else Unconstrained (* Wait for more shape inference. *)
+        in
+        { dims = more_dims @ dims; constr = meet more_constr constr; row; id }
+    | _ -> in_
 
   let subst_row env { dims; constr; row; id } =
     let result = { dims = List.map dims ~f:(subst_dim env); constr; row; id } in
@@ -360,21 +378,24 @@ end = struct
 
   let occurs_row v = function { row = Row_var v'; _ } -> v = v' | _ -> false
 
-  let update_dim v dim env =
-    let dim = subst_dim env dim in
+  let update_dim ?(freshen_proj = false) v dim env =
+    (* Prevent the projection equivalences from leaking across [propagate_shapes update_step] invocations.
+       Concluding that two axes have an equal size can span multiple update steps, and should not prevent
+       them from being distinct axes in a product space. *)
+    let dim = subst_dim ~freshen_proj env dim in
     if occurs_dim v dim then env
     else
       let env = { env with dim_env = Map.add_exn env.dim_env ~key:v ~data:dim } in
-      { env with dim_env = Map.map env.dim_env ~f:(subst_dim env) }
+      { env with dim_env = Map.map env.dim_env ~f:(fun in_ -> s_dim_one v ~value:dim ~in_) }
 
-  let update_row v row env =
-    let row = subst_row env { row with dims = List.map row.dims ~f:(subst_dim env) } in
+  let update_row ?(freshen_proj = false) v row env =
+    let row = subst_row env { row with dims = List.map row.dims ~f:(subst_dim ~freshen_proj env) } in
     if occurs_row v row then
       if List.is_empty row.dims then env
       else raise @@ Shape_error ("Infinite row via self-reference", [ Row_mismatch [ row ] ])
     else
       let env = { env with row_env = Map.add_exn env.row_env ~key:v ~data:row } in
-      let row_env = Map.map env.row_env ~f:(subst_row env) in
+      let row_env = Map.map env.row_env ~f:(fun in_ -> s_row_one v ~value:row ~in_) in
       { env with row_env }
 
   let update_proj_classes pid1 pid2 env =
@@ -390,6 +411,14 @@ end = struct
     }
 
   let with_proj_classes proj_classes env = { env with proj_classes }
+
+  let merge_fresh_proj ~update ~state =
+    let state =
+      Map.fold ~init:state
+        ~f:(fun ~key ~data env -> update_dim ~freshen_proj:true key data env)
+        update.dim_env
+    in
+    Map.fold ~init:state ~f:(fun ~key ~data env -> update_row ~freshen_proj:true key data env) update.row_env
 end
 
 type proj_environment = {
@@ -885,21 +914,28 @@ let indices_bio sh (type v) (arr : v array) =
 let state = ref Env.empty_env
 
 let propagate_shapes update_step =
-  state := unify_shapes (Env.with_proj_classes update_step.env.proj_classes !state) update_step;
-  update_step.env <- { update_step.env with proj_classes = !state.proj_classes };
-  let upd row = Env.subst_row !state row in
-  let upd sh =
-    sh.batch <- upd sh.batch;
-    sh.input <- upd sh.input;
-    sh.output <- upd sh.output
+  let upd env sh =
+    sh.batch <- Env.subst_row env sh.batch;
+    sh.input <- Env.subst_row env sh.input;
+    sh.output <- Env.subst_row env sh.output
   in
-  upd update_step.shape;
-  match update_step.logic with
-  | Terminal _ -> ()
-  | Transpose (_, sh1) -> upd sh1
-  | Broadcast (_, sh1, sh2) ->
-      upd sh1;
-      upd sh2
+  let upd_all env =
+    upd env update_step.shape;
+    match update_step.logic with
+    | Terminal _ -> ()
+    | Transpose (_, sh1) -> upd env sh1
+    | Broadcast (_, sh1, sh2) ->
+        upd env sh1;
+        upd env sh2
+  in
+  (* Update dimension information coming from other propagation steps. *)
+  upd_all !state;
+  let env = unify_shapes (Env.with_proj_classes update_step.env.proj_classes Env.empty_env) update_step in
+  (* Update both dimension and projections information (i.e. keep the update step's projections). *)
+  upd_all env;
+  update_step.env <- { update_step.env with proj_classes = env.proj_classes };
+  (* "Forget" the projections information of this propagation step to not contaminate other steps. *)
+  state := Env.merge_fresh_proj ~update:env ~state:!state
 
 let force_row_to_dims row =
   let row = Env.subst_row !state row in
@@ -947,7 +983,7 @@ open Arrayjit.Indexing
 
 (** Computes the indexing into subtensors given the shape information of a tensor. 
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
-let derive_projections update_step =
+let derive_projections (update_step : update_step) : projections =
   let dims_of sh = sh.batch.dims @ sh.output.dims @ sh.input.dims in
   let lhs = update_step.shape in
   let project rhs =
