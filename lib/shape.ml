@@ -953,6 +953,7 @@ let indices_bio sh (type v) (arr : v array) =
   (batch, input, output)
 
 let state = ref Env.empty_env
+let second_stage_inference = ref []
 
 let rec close_row_broadcast env row =
   let row = Env.subst_row env row in
@@ -978,6 +979,8 @@ let close_shape_broadcast sh env =
   List.fold ~init:env ~f:close_row_broadcast [ sh.batch; sh.output; sh.input ]
 
 let propagate_shapes update_step =
+  if not @@ List.mem ~equal:phys_equal !second_stage_inference update_step then
+    second_stage_inference := update_step :: !second_stage_inference;
   let upd env sh =
     sh.batch <- Env.subst_row env sh.batch;
     sh.input <- Env.subst_row env sh.input;
@@ -1002,6 +1005,12 @@ let propagate_shapes update_step =
   update_step.env <- { update_step.env with proj_classes = env.proj_classes };
   (* "Forget" the projections information of this propagation step to not contaminate other steps. *)
   state := Env.merge_fresh_proj ~update:env ~state:!state
+
+let finish_inference () =
+  List.iter !second_stage_inference ~f:propagate_shapes;
+  (* FIXME: doing it twice does not help.
+     List.iter !second_stage_inference ~f:propagate_shapes; *)
+  second_stage_inference := []
 
 let force_row_to_dims row =
   let row = Env.subst_row !state row in
@@ -1046,7 +1055,6 @@ open Arrayjit.Indexing
 (** Computes the indexing into subtensors given the shape information of a tensor. 
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
 let derive_projections (update_step : update_step) : projections =
-  propagate_shapes update_step;
   let dims_of sh = sh.batch.dims @ sh.output.dims @ sh.input.dims in
   let lhs = update_step.shape in
   let project rhs =
