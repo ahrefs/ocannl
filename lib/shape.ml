@@ -335,7 +335,7 @@ module Env : sig
   val update_row_broadcast : rv:dims -> rd:dims -> t -> t
   val update_proj_classes : int -> int -> t -> t
   val empty_env : t
-  val with_proj_classes : proj_classes -> t -> t
+  val with_proj_classes_and_broadcast : proj_classes -> broadcast -> t -> t
   val merge_fresh_proj : update:t -> state:t -> t
 end = struct
   type dim_env = dim Map.M(Dim_var).t [@@deriving sexp]
@@ -480,7 +480,7 @@ end = struct
       broadcast = { dim_vars = Set.empty (module Dim_var); row_vars = Set.empty (module Int) };
     }
 
-  let with_proj_classes proj_classes env = { env with proj_classes }
+  let with_proj_classes_and_broadcast proj_classes broadcast env = { env with proj_classes; broadcast }
 
   let merge_fresh_proj ~update ~state =
     let state =
@@ -1020,7 +1020,7 @@ let propagate_shapes (update_step : update_step) : unit =
   in
   (* Update dimension information coming from other propagation steps. *)
   upd_all !state;
-  let env = unify_shapes (Env.with_proj_classes update_step.env.proj_classes Env.empty_env) update_step in
+  let env = unify_shapes (Env.with_proj_classes_and_broadcast update_step.env.proj_classes !state.broadcast Env.empty_env) update_step in
   (* Update both dimension and projections information (i.e. keep the update step's projections). *)
   upd_all env;
   update_step.env <- { update_step.env with proj_classes = env.proj_classes };
