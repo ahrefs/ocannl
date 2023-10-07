@@ -124,7 +124,7 @@ type init_op =
       (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
   | Standard_uniform  (** Draws the values from U(0,1). *)
   | File_mapped of string * prec  (** Reads the data using [Unix.openfile] and [Unix.map_file]. *)
-[@@deriving sexp]
+[@@deriving equal, sexp]
 
 type binop = Add | Sub | Mul | Div | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp, compare, equal]
 type unop = Identity | Relu [@@deriving sexp, compare, equal]

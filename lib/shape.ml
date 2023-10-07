@@ -126,7 +126,7 @@ type t = {
   id : int;  (** A node that has the same shape as this shape. *)
   debug_name : string;
 }
-[@@deriving fields, sexp]
+[@@deriving equal, fields, sexp]
 (** The datatype from which the actual Tensor shapes are computed.
 
     Mutability is sufficient to perform inference, since there is no need for backtracking and
@@ -172,7 +172,7 @@ type transpose_type =
       (** [Permute (ls1^"=>"^ls2)] is a variant of the [einsum] syntax [Einsum (ls1^";"^ls1^"=>"^ls2)].
       Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
   | Batch_slice of Arrayjit.Indexing.static_symbol  (** Removes the leftmost batch axis. *)
-[@@deriving sexp]
+[@@deriving equal, sexp]
 
 (** Parses a labels specification.
 
@@ -282,7 +282,7 @@ type logic =
   | Terminal of Arrayjit.Ops.init_op
       (** Extracts any available shape information from the initialization from the initialization. E.g.
       for [File_mapped fn], opens the file [fn] to check its length. *)
-[@@deriving sexp]
+[@@deriving equal, sexp]
 
 let logic_to_spec = function
   | Broadcast (Pointwise_bin, _, _) | Transpose (Pointwise_un, _) -> "."
@@ -989,7 +989,19 @@ let rec close_row_broadcast env row =
 let close_shape_broadcast sh env =
   List.fold ~init:env ~f:close_row_broadcast [ sh.batch; sh.output; sh.input ]
 
-let propagate_shapes update_step =
+let deep_copy_update_step update_step =
+  let upd sh = { sh with id = sh.id } in
+  {
+    update_step with
+    shape = upd update_step.shape;
+    logic =
+      (match update_step.logic with
+      | Terminal l -> Terminal l
+      | Transpose (l, sh1) -> Transpose (l, upd sh1)
+      | Broadcast (l, sh1, sh2) -> Broadcast (l, upd sh1, upd sh2));
+  }
+
+let propagate_shapes (update_step : update_step) : unit =
   if not @@ List.mem ~equal:phys_equal !second_stage_inference update_step then
     second_stage_inference := update_step :: !second_stage_inference;
   let upd env sh =
