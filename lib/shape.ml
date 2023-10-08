@@ -820,17 +820,20 @@ let%debug_sexp unify_shapes (env : environment)
           env
       with Shape_error (s, trace) when !with_error_trace ->
         raise @@ Shape_error ("Compose / " ^ s, Shape_mismatch [ cur_sh; sh1; sh2 ] :: trace))
-  | Broadcast (Pointwise_bin, sh1, sh2) ->
-      unify_dims
-        [
-          { r = cur_sh.batch; subr = sh1.batch };
-          { r = cur_sh.batch; subr = sh2.batch };
-          { r = cur_sh.input; subr = sh1.input };
-          { r = cur_sh.input; subr = sh2.input };
-          { r = cur_sh.output; subr = sh1.output };
-          { r = cur_sh.output; subr = sh2.output };
-        ]
-        env
+  | Broadcast (Pointwise_bin, sh1, sh2) -> (
+      try
+        unify_dims
+          [
+            { r = cur_sh.batch; subr = sh1.batch };
+            { r = cur_sh.batch; subr = sh2.batch };
+            { r = cur_sh.input; subr = sh1.input };
+            { r = cur_sh.input; subr = sh2.input };
+            { r = cur_sh.output; subr = sh1.output };
+            { r = cur_sh.output; subr = sh2.output };
+          ]
+          env
+      with Shape_error (s, trace) when !with_error_trace ->
+        raise @@ Shape_error ("Pointwise binary / " ^ s, Shape_mismatch [ cur_sh; sh1; sh2 ] :: trace))
   | Transpose (Batch_slice { static_range; static_symbol }, sh) -> (
       if is_row_var sh.batch.row && is_row_var cur_sh.batch.row then (* Wait for more information *) env
       else
