@@ -540,16 +540,15 @@ type row_eqs = row_eq list [@@deriving sexp, equal]
 let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
 let take_from_end l n = List.rev @@ List.take (List.rev l) n
 
-(* module Debug_runtime = Utils.Debug_PrintBox () *)
+module Debug_runtime = Utils.Debug_PrintBox ()
 
 (* Unfortunately dealing with broadcasting is complicated. Overall rules:
-   * When substituting into a super-tensor replace broadcastable components of a subtensor, dim-1
+   * When substituting into a current shape replace broadcastable components of a subtensor, dim-1
      and row=Broadcastable, by broadcast variables.
-   ** Do not replace broadcastable components of a super-tensor when substituing into a subtensor --
+   ** Do not replace broadcastable components of a current shape when substituing into a subtensor --
       just a regular substitution.
-   * At some point replace broadcast variables back by dim-1 and row=Broadcastable --
-     [after a single update step? before next update step? after first stage? at the end?].
-   * Substitute the supertensor's variable even if the subtensor is also a variable. *)
+   * At the end, replace remaining broadcast variables back by dim-1 and row=Broadcastable.
+   * Substitute the current shape's variable even if the subtensor is also a variable. *)
 
 let rec unify_dims (row_eqs : row_eq list) (env : environment) : environment =
   match row_eqs with
@@ -741,8 +740,8 @@ let einsum_slot_spec_to_dims_bio ~generative ?b_row ?i_row ?o_row ~sh_id labels 
   let result = axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f ~sh_id labels in
   (!proj_env_update, result)
 
-let unify_shapes (env : environment)
-    ({ shape = cur_sh; logic; env = _ } as update_step : update_step) : environment =
+let unify_shapes (env : environment) ({ shape = cur_sh; logic; env = _ } as update_step : update_step) :
+    environment =
   let row_eq_side kind row = { dims = []; constr = Unconstrained; row; id = { sh_id = cur_sh.id; kind } } in
   let row_eq ~kind_r ~r ~kind_subr ~subr =
     Option.to_list
@@ -1038,25 +1037,28 @@ let deep_copy_update_step update_step =
       | Broadcast (l, sh1, sh2) -> Broadcast (l, upd sh1, upd sh2));
   }
 
-let propagate_shapes (update_step : update_step) : unit =
-  if not @@ List.mem ~equal:phys_equal !second_stage_inference update_step then
-    second_stage_inference := update_step :: !second_stage_inference;
-  let upd sh env =
-    let env = close_shape_broadcast sh env in
+let iter_shapes update_step ~f =
+  f update_step.shape;
+  match update_step.logic with
+  | Terminal _ -> ()
+  | Transpose (_, sh1) -> f sh1
+  | Broadcast (_, sh1, sh2) ->
+      f sh1;
+      f sh2
+
+let apply_env update_step env =
+  let f sh =
     sh.batch <- Env.subst_row env sh.batch;
     sh.input <- Env.subst_row env sh.input;
-    sh.output <- Env.subst_row env sh.output;
-    env
+    sh.output <- Env.subst_row env sh.output
   in
-  let upd_all env =
-    let env = upd update_step.shape env in
-    match update_step.logic with
-    | Terminal _ -> env
-    | Transpose (_, sh1) -> upd sh1 env
-    | Broadcast (_, sh1, sh2) -> upd sh1 env |> upd sh2
-  in
+  iter_shapes update_step ~f
+
+let%debug_sexp propagate_shapes (update_step : update_step) : unit =
+  if not @@ List.mem ~equal:phys_equal !second_stage_inference update_step then
+    second_stage_inference := update_step :: !second_stage_inference;
   (* Update dimension information coming from other propagation steps. *)
-  state := upd_all !state;
+  apply_env update_step !state;
   let _debug_initial : update_step = deep_copy_update_step update_step in
   let env =
     unify_shapes
@@ -1064,20 +1066,21 @@ let propagate_shapes (update_step : update_step) : unit =
       update_step
   in
   (* Update both dimension and projections information (i.e. keep the update step's projections). *)
-  let env = upd_all env in
+  apply_env update_step env;
   update_step.env <- { update_step.env with proj_classes = env.proj_classes };
   (* "Forget" the projections information of this propagation step to not contaminate other steps. *)
   let _debug_result : update_step = deep_copy_update_step update_step in
   let _debug_env_state : environment = !state in
-  (* Debug_runtime.no_debug_if
-     (equal _debug_initial.shape _debug_result.shape && equal_logic _debug_initial.logic _debug_result.logic); *)
+  Debug_runtime.no_debug_if
+    (equal _debug_initial.shape _debug_result.shape && equal_logic _debug_initial.logic _debug_result.logic);
   state := Env.merge_fresh_proj ~update:env ~state:!state
 
 let finish_inference () =
+  List.iter !second_stage_inference ~f:propagate_shapes;
   let f update_step =
-    (* state := close_shape_broadcast update_step.shape !state; *)
-    propagate_shapes update_step
-    (* state := close_shape_broadcast update_step.shape !state *)
+    let f sh = state := close_shape_broadcast sh !state in
+    iter_shapes update_step ~f;
+    apply_env update_step !state
   in
   List.iter !second_stage_inference ~f;
   second_stage_inference := []
