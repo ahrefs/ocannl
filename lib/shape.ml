@@ -332,7 +332,7 @@ module Env : sig
   val update_dim : ?freshen_proj:bool -> dim_var -> dim -> t -> t
   val update_row : ?freshen_proj:bool -> int -> dims -> t -> t
   val apply_constraint : dims -> t -> t
-  val update_row_broadcast : rv:dims -> rd:dims -> t -> t
+  val update_row_broadcast : rv:dims -> subr:dims -> t -> t
   val update_proj_classes : int -> int -> t -> t
   val empty_env : t
   val with_proj_classes_and_broadcast : proj_classes -> broadcast -> t -> t
@@ -445,19 +445,24 @@ end = struct
                   else update_dim v (get_dim ~d:rem ()) env
               | _ -> assert false))
 
-  let update_row_broadcast ~rv ~rd env =
-    let eliminate_row = function Fixed -> Broadcastable | _ -> get_row_var () in
+  let update_row_broadcast ~rv ~subr env =
+    let var = function Row_var v -> Some v | _ -> None in
+    let eliminate_row = function
+      | Fixed -> (None, Broadcastable)
+      | Broadcastable ->
+          let v = get_row_var () in
+          (var v, v)
+      | Row_var v when Set.mem env.broadcast.row_vars v ->
+          let v = get_row_var () in
+          (var v, v)
+      | row -> (None, row)
+    in
     match rv with
     | { dims = []; row = Row_var v; _ } ->
         let b_var, b_vars, data =
-          let b_var, row =
-            match (rd.row, eliminate_row rd.row) with
-            | Row_var _, row -> (None, row)
-            | _, (Row_var v as row) -> (Some v, row)
-            | _, row -> (None, row)
-          in
+          let b_var, row = eliminate_row subr.row in
           let b_vars, dims =
-            List.fold_map rd.dims
+            List.fold_map subr.dims
               ~init:(Set.empty (module Dim_var))
               ~f:(fun vars -> function
                 | Dim { d = 1; _ } ->
@@ -465,7 +470,7 @@ end = struct
                     (Set.add vars v, Var v)
                 | d -> (vars, d))
           in
-          (b_var, b_vars, { row; dims; constr = meet rv.constr rd.constr; id = rv.id })
+          (b_var, b_vars, { row; dims; constr = meet rv.constr subr.constr; id = rv.id })
         in
         let dim_vars = Set.union b_vars env.broadcast.dim_vars in
         let row_vars = Option.fold b_var ~init:env.broadcast.row_vars ~f:Set.add in
@@ -535,30 +540,39 @@ type row_eqs = row_eq list [@@deriving sexp, equal]
 let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
 let take_from_end l n = List.rev @@ List.take (List.rev l) n
 
-module Debug_runtime = Utils.Debug_PrintBox ()
+(* module Debug_runtime = Utils.Debug_PrintBox () *)
 
-let%debug_sexp rec unify_dims (row_eqs : row_eq list) (env : environment) : environment =
+(* Unfortunately dealing with broadcasting is complicated. Overall rules:
+   * When substituting into a super-tensor replace broadcastable components of a subtensor, dim-1
+     and row=Broadcastable, by broadcast variables.
+   ** Do not replace broadcastable components of a super-tensor when substituing into a subtensor --
+      just a regular substitution.
+   * At some point replace broadcast variables back by dim-1 and row=Broadcastable --
+     [after a single update step? before next update step? after first stage? at the end?].
+   * Substitute the supertensor's variable even if the subtensor is also a variable. *)
+
+let rec unify_dims (row_eqs : row_eq list) (env : environment) : environment =
   match row_eqs with
   | [] -> env
   | { r; subr } :: row_eqs when equal_dims r subr -> Env.apply_constraint r env |> unify_dims row_eqs
-  | { r = { dims = []; row = Row_var v; _ } as rv; subr = rd as subr } :: row_eqs
-  | { r = rd; subr = { dims = []; row = Row_var v; _ } as rv as subr } :: row_eqs -> (
-      let rd_is_subtensor : bool = phys_equal rd subr in
-      let rd : dims = Env.subst_row env rd in
+  | { r = { dims = []; row = Row_var _; _ } as r; subr = { dims = []; row = Row_var _; _ } as subr }
+    :: row_eqs
+    when equal_row r.row subr.row ->
+      Env.apply_constraint r env |> Env.apply_constraint subr |> unify_dims row_eqs
+  | { r = { dims = []; row = Row_var v; _ } as rv; subr } :: row_eqs -> (
+      let subr : dims = Env.subst_row env subr in
       match Map.find env.row_env v with
-      | None when equal_row rv.row rd.row && List.is_empty rd.dims ->
-          Env.apply_constraint rv env |> Env.apply_constraint rd |> unify_dims row_eqs
-      | None ->
-          (* Prefer substituting-out a broadcast variable, to prevent it from being closed. *)
-          if
-            (not (Set.mem env.broadcast.row_vars v))
-            && List.is_empty rd.dims
-            && match rd.row with Row_var v2 -> Set.mem env.broadcast.row_vars v2 | _ -> false
-          then Env.update_row_broadcast ~rv:rd ~rd:rv env |> unify_dims row_eqs
-          else Env.update_row_broadcast ~rv ~rd env |> unify_dims row_eqs
-      | Some r' ->
-          let row_eq : row_eq = if rd_is_subtensor then { r = r'; subr = rd } else { r = rd; subr = r' } in
-          Env.apply_constraint rv env |> unify_dims (row_eq :: row_eqs))
+      | None when equal_row rv.row subr.row && List.is_empty subr.dims ->
+          Env.apply_constraint rv env |> Env.apply_constraint subr |> unify_dims row_eqs
+      | None -> Env.update_row_broadcast ~rv ~subr env |> Env.apply_constraint rv |> unify_dims row_eqs
+      | Some r -> Env.apply_constraint rv env |> unify_dims ({ r; subr } :: row_eqs))
+  | { r; subr = { dims = []; row = Row_var v; _ } as rv } :: row_eqs -> (
+      let r : dims = Env.subst_row env r in
+      match Map.find env.row_env v with
+      | None when equal_row rv.row r.row && List.is_empty r.dims ->
+          Env.apply_constraint rv env |> Env.apply_constraint r |> unify_dims row_eqs
+      | None -> Env.update_row v r env |> Env.apply_constraint rv |> unify_dims row_eqs
+      | Some subr -> Env.apply_constraint rv env |> unify_dims ({ r; subr } :: row_eqs))
   | {
       r = { dims = []; constr = constr1; row = Fixed; id };
       subr = { dims = []; constr = constr2; row = Fixed | Broadcastable; id = _ };
@@ -613,15 +627,30 @@ and unify_dim (dim_eqs : dim_eq list) (env : environment) : environment =
     :: dim_eqs
     when d1 = d2 ->
       Env.update_proj_classes pid1 pid2 env |> unify_dim dim_eqs
+  | { d1 = Var v; d2 } :: dim_eqs -> (
+      match Map.find env.dim_env v with
+      | None ->
+          let b_var, subd =
+            match d2 with
+            | Dim { d = 1; label; _ } ->
+                let v = get_var ?label () in
+                (Some v, Var v)
+            | Var v2 when Set.mem env.broadcast.dim_vars v2 ->
+                let v = get_var () in
+                (Some v, Var v)
+            | _ -> (None, d2)
+          in
+          Env.with_proj_classes_and_broadcast env.proj_classes
+            { env.broadcast with dim_vars = Option.fold ~f:Set.add ~init:env.broadcast.dim_vars b_var }
+            env
+          |> Env.update_dim v subd |> unify_dim dim_eqs
+      | Some d1 -> unify_dim ({ d1; d2 } :: dim_eqs) env)
+  | { d2 = Var v; d1 } :: dim_eqs -> (
+      match Map.find env.dim_env v with
+      | None -> Env.update_dim v d1 env |> unify_dim dim_eqs
+      | Some d2 -> unify_dim ({ d1; d2 } :: dim_eqs) env)
   | { d1 = Dim { d = 1; _ }; d2 = _ } :: dim_eqs | { d1 = _; d2 = Dim { d = 1; _ } } :: dim_eqs ->
       unify_dim dim_eqs env
-  | ({ d1 = Var v as d1; d2 } | { d2 = Var v as d1; d1 = d2 }) :: dim_eqs -> (
-      match (Map.find env.dim_env v, d2) with
-      | None, Var v2 when (not (Set.mem env.broadcast.dim_vars v)) && Set.mem env.broadcast.dim_vars v2 ->
-          (* Prefer substituting-out a broadcast variable, to prevent it from being closed. *)
-          Env.update_dim v2 d1 env |> unify_dim dim_eqs
-      | None, _ -> Env.update_dim v d2 env |> unify_dim dim_eqs
-      | Some d1, _ -> unify_dim ({ d1; d2 } :: dim_eqs) env)
   | { d1; d2 } :: _ ->
       if Utils.settings.with_debug then
         Stdlib.Format.printf "unify_dim: shape error env=@ %a\n%!" Sexp.pp_hum (Env.sexp_of_t env);
@@ -712,7 +741,7 @@ let einsum_slot_spec_to_dims_bio ~generative ?b_row ?i_row ?o_row ~sh_id labels 
   let result = axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f ~sh_id labels in
   (!proj_env_update, result)
 
-let%debug_sexp unify_shapes (env : environment)
+let unify_shapes (env : environment)
     ({ shape = cur_sh; logic; env = _ } as update_step : update_step) : environment =
   let row_eq_side kind row = { dims = []; constr = Unconstrained; row; id = { sh_id = cur_sh.id; kind } } in
   let row_eq ~kind_r ~r ~kind_subr ~subr =
@@ -994,7 +1023,7 @@ let rec close_row_broadcast env row =
 
 (** Uses the matrix convention of putting the input axes last.
     Note: [force_to_dims] is "destructive": it closes shapes that remain incomplete after inference. *)
-let close_shape_broadcast sh env =
+let close_shape_broadcast (sh : t) (env : environment) : environment =
   List.fold ~init:env ~f:close_row_broadcast [ sh.batch; sh.output; sh.input ]
 
 let deep_copy_update_step update_step =
@@ -1012,33 +1041,43 @@ let deep_copy_update_step update_step =
 let propagate_shapes (update_step : update_step) : unit =
   if not @@ List.mem ~equal:phys_equal !second_stage_inference update_step then
     second_stage_inference := update_step :: !second_stage_inference;
-  let upd env sh =
+  let upd sh env =
+    let env = close_shape_broadcast sh env in
     sh.batch <- Env.subst_row env sh.batch;
     sh.input <- Env.subst_row env sh.input;
-    sh.output <- Env.subst_row env sh.output
+    sh.output <- Env.subst_row env sh.output;
+    env
   in
   let upd_all env =
-    upd env update_step.shape;
+    let env = upd update_step.shape env in
     match update_step.logic with
-    | Terminal _ -> ()
-    | Transpose (_, sh1) -> upd env sh1
-    | Broadcast (_, sh1, sh2) ->
-        upd env sh1;
-        upd env sh2
+    | Terminal _ -> env
+    | Transpose (_, sh1) -> upd sh1 env
+    | Broadcast (_, sh1, sh2) -> upd sh1 env |> upd sh2
   in
   (* Update dimension information coming from other propagation steps. *)
-  upd_all !state;
-  let env = unify_shapes (Env.with_proj_classes_and_broadcast update_step.env.proj_classes !state.broadcast Env.empty_env) update_step in
+  state := upd_all !state;
+  let _debug_initial : update_step = deep_copy_update_step update_step in
+  let env =
+    unify_shapes
+      (Env.with_proj_classes_and_broadcast update_step.env.proj_classes !state.broadcast Env.empty_env)
+      update_step
+  in
   (* Update both dimension and projections information (i.e. keep the update step's projections). *)
-  upd_all env;
+  let env = upd_all env in
   update_step.env <- { update_step.env with proj_classes = env.proj_classes };
   (* "Forget" the projections information of this propagation step to not contaminate other steps. *)
+  let _debug_result : update_step = deep_copy_update_step update_step in
+  let _debug_env_state : environment = !state in
+  (* Debug_runtime.no_debug_if
+     (equal _debug_initial.shape _debug_result.shape && equal_logic _debug_initial.logic _debug_result.logic); *)
   state := Env.merge_fresh_proj ~update:env ~state:!state
 
 let finish_inference () =
   let f update_step =
-    propagate_shapes update_step;
-    state := close_shape_broadcast update_step.shape !state
+    (* state := close_shape_broadcast update_step.shape !state; *)
+    propagate_shapes update_step
+    (* state := close_shape_broadcast update_step.shape !state *)
   in
   List.iter !second_stage_inference ~f;
   second_stage_inference := []
