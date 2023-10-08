@@ -371,12 +371,12 @@ end = struct
     | _ -> in_
 
   let subst_row env { dims; constr; row; id } =
-    let result = { dims = List.map dims ~f:(subst_dim env); constr; row; id } in
+    let dims = List.map dims ~f:(subst_dim env) in
     match row with
-    | Broadcastable | Fixed -> result
+    | Broadcastable | Fixed -> { dims; constr; row; id }
     | Row_var v -> (
         match Map.find env.row_env v with
-        | None -> result
+        | None -> { dims; constr; row; id }
         | Some { dims = more_dims; constr = Unconstrained; row; id = _ } ->
             { dims = more_dims @ dims; constr; row; id }
         | Some { dims = more_dims; constr = Total_elems m; row; id = _ } ->
@@ -396,8 +396,13 @@ end = struct
     let dim = subst_dim ~freshen_proj env dim in
     if occurs_dim v dim then env
     else
+      let upd_row r = { r with dims = List.map r.dims ~f:(fun in_ -> s_dim_one v ~value:dim ~in_) } in
       let env = { env with dim_env = Map.add_exn env.dim_env ~key:v ~data:dim } in
-      { env with dim_env = Map.map env.dim_env ~f:(fun in_ -> s_dim_one v ~value:dim ~in_) }
+      {
+        env with
+        dim_env = Map.map env.dim_env ~f:(fun in_ -> s_dim_one v ~value:dim ~in_);
+        row_env = Map.map env.row_env ~f:upd_row;
+      }
 
   let update_row ?(freshen_proj = false) v row env =
     let row = subst_row env { row with dims = List.map row.dims ~f:(subst_dim ~freshen_proj env) } in
