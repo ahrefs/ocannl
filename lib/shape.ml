@@ -360,6 +360,17 @@ end = struct
 
   let s_dim_one v ~value ~in_ = match in_ with Var v2 when equal_dim_var v v2 -> value | _ -> in_
 
+  let s_dim_one_in_entry v ~value { cur; subr; solved } =
+    let upd m x = m x ~f:(fun in_ -> s_dim_one v ~value ~in_) in
+    { cur = upd List.map cur; subr = upd List.map subr; solved = upd Option.map solved }
+
+  let s_dim_one_in_row v ~value in_ =
+    { in_ with dims = List.map in_.dims ~f:(fun in_ -> s_dim_one v ~value ~in_) }
+
+  let s_dim_one_in_row_entry v ~value { cur; subr; solved } =
+    let upd m x = m x ~f:(s_dim_one_in_row v ~value) in
+    { cur = upd List.map cur; subr = upd List.map subr; solved = upd Option.map solved }
+
   let subst_dim ?(freshen_proj = false) env = function
     | Dim { d; label; proj_id = _ } when freshen_proj -> get_dim ~d ?label ()
     | Dim _ as d -> d
@@ -427,7 +438,13 @@ end = struct
           Some dim
       | _, (_d, _) :: _ (* _d <= 1*) -> None
       | (d, _) :: _, _ ->
-          if List.exists ~f:(non1_or_d ~d) @@ cur_knowns @ subr_knowns then Some (get_dim ~d:1 ()) else None
+          if List.exists ~f:(non1_or_d ~d) @@ cur_knowns @ subr_knowns then (
+            if Utils.settings.with_debug then
+              Stdlib.Format.printf "WARNING: axis inferred to be dim-1 because of conflicting uses:@ %a\n%!"
+                Sexp.pp_hum
+                ([%sexp_of: dim list] @@ cur @ subr);
+            Some (get_dim ~d:1 ()))
+          else None
 
   let perhaps_eliminate_var ~is_complete v ~value:{ cur = v_cur; subr = v_subr; solved = v_solved } ~in_ =
     let subst ~v_side ~side =
@@ -451,6 +468,7 @@ end = struct
 
   let with_proj_classes proj_classes env = { env with proj_classes }
 
+  (* Note: [match_dim] will not resolve inequalities, requires another round of solving. *)
   let rec match_dim ((dim1, dim2) as eq) env =
     match eq with
     | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
@@ -460,16 +478,21 @@ end = struct
     | Var v, d2 | d2, Var v -> (
         match Map.find env.dim_env v with
         | None ->
+            let dim_env = Map.map env.dim_env ~f:(s_dim_one_in_entry v ~value:d2) in
             {
               env with
-              (* FIXME: row_env also needs updating. *)
-              dim_env = Map.add_exn env.dim_env ~key:v ~data:{ cur = []; subr = []; solved = Some d2 };
+              dim_env = Map.add_exn dim_env ~key:v ~data:{ cur = []; subr = []; solved = Some d2 };
+              row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry v ~value:d2);
               dim_rev_elim_order = v :: env.dim_rev_elim_order;
             }
         | Some { solved = Some d1; _ } -> match_dim (d1, d2) env
         | Some { cur; subr; solved = None } ->
-            (* FIXME: row_env also needs updating. *)
-            { env with dim_env = Map.update env.dim_env v ~f:(fun _ -> { cur; subr; solved = Some d2 }) })
+            let dim_env = Map.map env.dim_env ~f:(s_dim_one_in_entry v ~value:d2) in
+            {
+              env with
+              dim_env = Map.update dim_env v ~f:(fun _ -> { cur; subr; solved = Some d2 });
+              row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry v ~value:d2);
+            })
     | _ ->
         (* Note: at the match_dim stage, it's strict equality (no broadcasting). *)
         raise @@ Shape_error ("solved dimensions for axis: mismatch", [ Dim_mismatch [ dim1; dim2 ] ])
@@ -483,29 +506,30 @@ end = struct
     if List.exists ~f:(occurs_dim v) @@ cur @ subr then (* FIXME: recall when this arises *) assert false
       (* env *)
     else
-      let value = { cur; subr; solved = None } in
-      let elim = perhaps_eliminate_var ~is_complete v ~value in
-      match Map.find env.dim_env v with
-      | Some in_ ->
-          let eq, data = elim ~in_ in
-          let dim_env = Map.update env.dim_env v ~f:(fun _ -> data) in
-          (* If solved, v is eliminated from row_env by match_dim. *)
-          Option.fold eq ~init:{ env with dim_env } ~f:(Fn.flip match_dim)
-      | None ->
-          let eqs = ref [] (* No fold_map in Map. *) in
-          let dim_env =
-            Map.map env.dim_env ~f:(fun in_ ->
-                let eq, entry = elim ~in_ in
-                eqs := Option.to_list eq @ !eqs;
-                entry)
-          in
-          let env = List.fold !eqs ~init:env ~f:(Fn.flip match_dim) in
-          (* If solved, v is eliminated from row_env by match_dim. *)
-          {
-            env with
-            dim_env = Map.add_exn dim_env ~key:v ~data:value;
-            dim_rev_elim_order = v :: env.dim_rev_elim_order;
-          }
+      match solve_dim_if_known ~is_complete ~cur ~subr with
+      | Some value -> match_dim (Var v, value) env
+      | None -> (
+          let value = { cur; subr; solved = None } in
+          let elim = perhaps_eliminate_var ~is_complete v ~value in
+          match Map.find env.dim_env v with
+          | Some in_ ->
+              let eq, data = elim ~in_ in
+              let dim_env = Map.update env.dim_env v ~f:(fun _ -> data) in
+              Option.fold eq ~init:{ env with dim_env } ~f:(Fn.flip match_dim)
+          | None ->
+              let eqs = ref [] (* No fold_map in Map. *) in
+              let dim_env =
+                Map.map env.dim_env ~f:(fun in_ ->
+                    let eq, entry = elim ~in_ in
+                    eqs := Option.to_list eq @ !eqs;
+                    entry)
+              in
+              let env = List.fold !eqs ~init:env ~f:(Fn.flip match_dim) in
+              {
+                env with
+                dim_env = Map.add_exn dim_env ~key:v ~data:value;
+                dim_rev_elim_order = v :: env.dim_rev_elim_order;
+              })
 
   let update_row ?(freshen_proj = false) ~is_complete v ?cur ?subr env =
     let row = subst_row env { row with dims = List.map row.dims ~f:(subst_dim ~freshen_proj env) } in
