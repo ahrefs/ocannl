@@ -89,7 +89,6 @@ let get_dim ~d ?label () =
 type row =
   | Row_var of int  (** The shape-kind can be inferred to have more axes. *)
   | Broadcastable  (** The shape does not have more axes of this kind, but is "polymorphic". *)
-  | Fixed  (** A row variable of a subtensor shape will get determined from this row. *)
 [@@deriving equal, hash, compare, sexp, variants]
 
 type dims_constraint =
@@ -396,7 +395,7 @@ end = struct
   let subst_row env ({ dims; constr; row; id } as default) =
     let dims = List.map dims ~f:(subst_dim env) in
     match row with
-    | Broadcastable | Fixed -> default
+    | Broadcastable -> default
     | Row_var v -> (
         match Map.find env.row_env v with
         | None | Some { solved = None; _ } -> default
@@ -548,7 +547,7 @@ end = struct
     | Total_elems n -> (
         match r.row with
         | Row_var _ -> env (* Wait for more shape inference. *)
-        | Fixed | Broadcastable -> (
+        | Broadcastable -> (
             let dims = List.map r.dims ~f:(subst_dim env) in
             let vars, nonvars = List.partition_tf dims ~f:is_var in
             if List.length vars > 1 then env (* Wait for more shape inference. *)
@@ -657,22 +656,8 @@ let rec unify_dims (row_eqs : row_eq list) (env : environment) : environment =
           Env.apply_constraint rv env |> Env.apply_constraint r |> unify_dims row_eqs
       | None -> Env.update_row v r env |> Env.apply_constraint rv |> unify_dims row_eqs
       | Some subr -> Env.apply_constraint rv env |> unify_dims ({ r; subr } :: row_eqs))
-  | {
-      r = { dims = []; constr = constr1; row = Fixed; id };
-      subr = { dims = []; constr = constr2; row = Fixed | Broadcastable; id = _ };
-    }
-    :: row_eqs
-  | {
-      r = { dims = []; constr = constr1; row = Broadcastable; id = _ };
-      subr = { dims = []; constr = constr2; row = Fixed; id };
-    }
-    :: row_eqs ->
-      let constr = meet constr1 constr2 in
-      Env.apply_constraint { dims = []; constr; row = Fixed; id } env |> unify_dims row_eqs
-  | ({ r = { dims = []; row = Fixed; _ }; subr = _ } as eq) :: _ ->
-      raise @@ Shape_error ("unify_dims: Fixed-mode axis number mismatch", [ Row_mismatch [ eq.r; eq.subr ] ])
   | (( { r = { dims = []; row = Broadcastable; _ }; subr = _ }
-     | { r = _; subr = { dims = []; row = Broadcastable | Fixed; _ } } ) as eq)
+     | { r = _; subr = { dims = []; row = Broadcastable; _ } } ) as eq)
     :: row_eqs ->
       Env.apply_constraint eq.r env |> Env.apply_constraint eq.subr |> unify_dims row_eqs
   | ({
@@ -784,7 +769,7 @@ let axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~sh_id ~f labels =
   let b_row = upd_row (b_row, labels.bcast_batch) in
   let i_row = upd_row (i_row, labels.bcast_input) in
   let o_row = upd_row (o_row, labels.bcast_output) in
-  let to_row v = Option.value v ~default:Fixed in
+  let to_row v = Option.value v ~default:Broadcastable in
   let batch =
     {
       dims = to_dim AxisKey.Batch b_dims;
@@ -1180,7 +1165,7 @@ let row_to_dims row =
   match row with
   | { row = Row_var _; _ } ->
       raise @@ Shape_error ("Not enough shape information: unresolved row variable", [ Row_mismatch [ row ] ])
-  | { dims; constr = _; row = Broadcastable | Fixed; id = _ } -> Array.of_list_map dims ~f
+  | { dims; constr = _; row = Broadcastable; id = _ } -> Array.of_list_map dims ~f
 
 (** Uses the matrix convention of putting the input axes last.
     Note: [force_to_dims] is "destructive": it closes shapes that remain incomplete after inference. *)
@@ -1200,7 +1185,7 @@ let rec row_to_labels env =
       match Map.find env.row_env v with
       | None -> Array.of_list_map dims ~f
       | Some row2 -> row_to_labels env { dims = row2.dims @ dims; constr; row = row2.row; id })
-  | { dims; constr = _; row = Broadcastable | Fixed; id = _ } -> Array.of_list_map dims ~f
+  | { dims; constr = _; row = Broadcastable; id = _ } -> Array.of_list_map dims ~f
 
 (** Uses the matrix convention of putting the input axes last. *)
 let to_labels (sh : t) : string array =
@@ -1323,22 +1308,21 @@ let backprop_ith_arg ~from_1 projections =
 
 (** *** Shape builders *** *)
 
-let make ?(fix_b = false) ?(fix_i = false) ?(fix_o = false) ?batch_dims ?input_dims ?output_dims ?batch_axes
+let make ?batch_dims ?input_dims ?output_dims ?batch_axes
     ?input_axes ?output_axes ?(deduced = Not_constrained) ~debug_name ~id () =
-  let make_row fix = if fix then Fixed else Broadcastable in
-  let make_dims fix kind ds =
+  let make_dims kind ds =
     {
       dims = List.map ~f:(fun d -> get_dim ~d ()) ds;
       constr = Unconstrained;
-      row = make_row fix;
+      row = Broadcastable;
       id = { sh_id = id; kind };
     }
   in
-  let make_axes fix kind ds =
+  let make_axes kind ds =
     {
       dims = List.map ~f:(fun (label, d) -> get_dim ~d ~label ()) ds;
       constr = Unconstrained;
-      row = make_row fix;
+      row = Broadcastable;
       id = { sh_id = id; kind };
     }
   in
@@ -1347,27 +1331,24 @@ let make ?(fix_b = false) ?(fix_i = false) ?(fix_o = false) ?batch_dims ?input_d
   in
   let batch =
     match (batch_dims, batch_axes) with
-    | Some batch_dims, None -> make_dims fix_b Batch batch_dims
-    | None, Some batch_axes -> make_axes fix_b Batch batch_axes
-    | None, None when not fix_b -> make_unknown Batch
+    | Some batch_dims, None -> make_dims Batch batch_dims
+    | None, Some batch_axes -> make_axes Batch batch_axes
+    | None, None -> make_unknown Batch
     | Some _, Some _ -> invalid_arg "Shape.make: do not provide both batch_dims, batch_axes"
-    | None, None -> invalid_arg "Shape.make: do not provide fix_b:true for unknown batch axes"
   in
   let input =
     match (input_dims, input_axes) with
-    | Some input_dims, None -> make_dims fix_i Input input_dims
-    | None, Some input_axes -> make_axes fix_i Input input_axes
-    | None, None when not fix_i -> make_unknown Input
+    | Some input_dims, None -> make_dims Input input_dims
+    | None, Some input_axes -> make_axes Input input_axes
+    | None, None -> make_unknown Input
     | Some _, Some _ -> invalid_arg "Shape.make: do not provide both input_dims, input_axes"
-    | None, None -> invalid_arg "Shape.make: do not provide fix_b:true for unknown input axes"
   in
   let output =
     match (output_dims, output_axes) with
-    | Some output_dims, None -> make_dims fix_o Output output_dims
-    | None, Some output_axes -> make_axes fix_o Output output_axes
-    | None, None when not fix_o -> make_unknown Output
+    | Some output_dims, None -> make_dims Output output_dims
+    | None, Some output_axes -> make_axes Output output_axes
+    | None, None -> make_unknown Output
     | Some _, Some _ -> invalid_arg "Shape.make: do not provide both output_dims, output_axes"
-    | None, None -> invalid_arg "Shape.make: do not provide fix_b:true for unknown output axes"
   in
   let result = { input; output; batch; id; debug_name } in
   (match deduced with
