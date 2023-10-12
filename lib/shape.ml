@@ -326,7 +326,7 @@ module Env : sig
 
   val subst_dim : ?freshen_proj:bool -> t -> dim -> dim
   val occurs_dim : dim_var -> dim -> bool
-  val subst_row : t -> dims -> dims
+  val subst_row : ?freshen_proj:bool -> t -> dims -> dims
   val occurs_row : int -> dims -> bool
   val update_dim : ?freshen_proj:bool -> is_complete:bool -> dim_var -> ?cur:dim -> ?subr:dim -> t -> t
   val update_row : ?freshen_proj:bool -> is_complete:bool -> int -> ?cur:dims -> ?subr:dims -> t -> t
@@ -392,13 +392,17 @@ end = struct
         { dims = more_dims @ dims; constr = meet more_constr constr; row; id }
     | _ -> in_
 
-  let subst_row env ({ dims; constr; row; id } as default) =
-    let dims = List.map dims ~f:(subst_dim env) in
+  let s_row_one_in_entry v ~value { cur; subr; solved } =
+    let upd m x = m x ~f:(fun in_ -> s_row_one v ~value ~in_) in
+    { cur = upd List.map cur; subr = upd List.map subr; solved = upd Option.map solved }
+
+  let subst_row ?freshen_proj env { dims; constr; row; id } =
+    let dims = List.map dims ~f:(subst_dim ?freshen_proj env) in
     match row with
-    | Broadcastable -> default
+    | Broadcastable -> { dims; constr; row; id }
     | Row_var v -> (
         match Map.find env.row_env v with
-        | None | Some { solved = None; _ } -> default
+        | None | Some { solved = None; _ } -> { dims; constr; row; id }
         | Some { solved = Some { dims = more_dims; constr = Unconstrained; row; id = _ }; _ } ->
             { dims = more_dims @ dims; constr; row; id }
         | Some { solved = Some { dims = more_dims; constr = Total_elems m; row; id = _ }; _ } ->
@@ -411,6 +415,8 @@ end = struct
 
   let occurs_row v = function { row = Row_var v'; _ } -> v = v' | _ -> false
 
+  (* Note: [solve_dim_if_known] extracts a solution, it does not guarantee consistency checks for
+     yet-unsolved inequality components. *)
   let solve_dim_if_known ~is_complete ~cur ~subr =
     if is_complete && List.length subr = 1 then Some (List.hd_exn subr)
     else
@@ -431,6 +437,9 @@ end = struct
             raise
             @@ Shape_error
                  ("Axis expected to be dimension 1 actually is not dimension 1", [ Dim_mismatch subr ]);
+          Some dim
+      | (d, dim) :: _, [] when (* d > 1 && *) is_complete && List.is_empty subr ->
+          check_all_d_or_1 ~d;
           Some dim
       | _, (d, dim) :: _ when d > 1 || (is_complete && List.length subr = List.length subr_knowns) ->
           check_all_d_or_1 ~d;
@@ -467,8 +476,8 @@ end = struct
 
   let with_proj_classes proj_classes env = { env with proj_classes }
 
-  (* Note: [match_dim] will not resolve inequalities, requires another round of solving. *)
-  let rec match_dim ((dim1, dim2) as eq) env =
+  (* Note: [unify_dim] will not resolve inequalities, requires another round of solving. *)
+  let rec unify_dim ((dim1, dim2) as eq) env =
     match eq with
     | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
         raise @@ Shape_error ("solved dimensions for axis: different labels", [ Dim_mismatch [ dim1; dim2 ] ])
@@ -484,7 +493,7 @@ end = struct
               row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry v ~value:d2);
               dim_rev_elim_order = v :: env.dim_rev_elim_order;
             }
-        | Some { solved = Some d1; _ } -> match_dim (d1, d2) env
+        | Some { solved = Some d1; _ } -> unify_dim (d1, d2) env
         | Some { cur; subr; solved = None } ->
             let dim_env = Map.map env.dim_env ~f:(s_dim_one_in_entry v ~value:d2) in
             {
@@ -493,28 +502,29 @@ end = struct
               row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry v ~value:d2);
             })
     | _ ->
-        (* Note: at the match_dim stage, it's strict equality (no broadcasting). *)
+        (* Note: at the unify_dim stage, it's strict equality (no broadcasting). *)
         raise @@ Shape_error ("solved dimensions for axis: mismatch", [ Dim_mismatch [ dim1; dim2 ] ])
 
   let update_dim ?(freshen_proj = false) ~is_complete v ?cur ?subr env =
     (* Prevent the projection equivalences from leaking across [propagate_shapes update_step] invocations.
        Concluding that two axes have an equal size can span multiple update steps, and should not prevent
        them from being distinct axes in a product space. *)
-    let cur = List.map ~f:(subst_dim ~freshen_proj env) @@ Option.to_list cur in
-    let subr = List.map ~f:(subst_dim ~freshen_proj env) @@ Option.to_list subr in
-    if List.exists ~f:(occurs_dim v) @@ cur @ subr then (* FIXME: recall when this arises *) assert false
-      (* env *)
+    let no_v = List.filter ~f:(Fn.non @@ equal_dim (Var v)) in
+    let cur = no_v @@ List.map ~f:(subst_dim ~freshen_proj env) @@ Option.to_list cur in
+    let subr = no_v @@ List.map ~f:(subst_dim ~freshen_proj env) @@ Option.to_list subr in
+    if List.is_empty cur && List.is_empty subr then env
     else
       match solve_dim_if_known ~is_complete ~cur ~subr with
-      | Some value -> match_dim (Var v, value) env
+      | Some value -> unify_dim (Var v, value) env
       | None -> (
           let value = { cur; subr; solved = None } in
           let elim = perhaps_eliminate_var ~is_complete v ~value in
           match Map.find env.dim_env v with
           | Some in_ ->
+              (* Note: this is where the bulk of the work usually happens. *)
               let eq, data = elim ~in_ in
               let dim_env = Map.update env.dim_env v ~f:(fun _ -> data) in
-              Option.fold eq ~init:{ env with dim_env } ~f:(Fn.flip match_dim)
+              Option.fold eq ~init:{ env with dim_env } ~f:(Fn.flip unify_dim)
           | None ->
               let eqs = ref [] (* No fold_map in Map. *) in
               let dim_env =
@@ -523,22 +533,68 @@ end = struct
                     eqs := Option.to_list eq @ !eqs;
                     entry)
               in
-              let env = List.fold !eqs ~init:env ~f:(Fn.flip match_dim) in
+              let env = List.fold !eqs ~init:env ~f:(Fn.flip unify_dim) in
               {
                 env with
                 dim_env = Map.add_exn dim_env ~key:v ~data:value;
                 dim_rev_elim_order = v :: env.dim_rev_elim_order;
               })
 
-  let update_row ?(freshen_proj = false) ~is_complete v ?cur ?subr env =
-    let row = subst_row env { row with dims = List.map row.dims ~f:(subst_dim ~freshen_proj env) } in
-    if occurs_row v row then
-      if List.is_empty row.dims then env
-      else raise @@ Shape_error ("Infinite row via self-reference", [ Row_mismatch [ row ] ])
+  (* Note: [solve_row_if_known] extracts a solution, it does not guarantee consistency checks for
+     yet-unsolved inequality components. *)
+  let solve_row_if_known ~is_complete ~cur ~subr =
+    if is_complete && List.length subr = 1 then (None, Some (List.hd_exn subr))
     else
-      let env = { env with row_env = Map.add_exn env.row_env ~key:v ~data:row } in
-      let row_env = Map.map env.row_env ~f:(fun in_ -> s_row_one v ~value:row ~in_) in
-      { env with row_env }
+      let known = function
+        | { dims; row = Broadcastable; _ } as dim -> Some (List.length dims, dim)
+        | _ -> None
+      in
+      let unknown = function
+        | { dims; row = Row_var _; _ } as dim -> Some (List.length dims, dim)
+        | _ -> None
+      in
+      let compare (d1, _) (d2, _) = Int.ascending d1 d2 in
+      let cur_knowns = List.sort ~compare @@ List.filter_map cur ~f:known in
+      let subr_knowns = List.sort ~compare @@ List.filter_map subr ~f:known in
+      let subr_unknowns = List.sort ~compare @@ List.filter_map subr ~f:unknown in
+      match (cur_knowns, List.rev subr_knowns, List.rev subr_unknowns) with
+      | [], [], _ -> (None, None)
+      | (_, row) :: _, [], [] when is_complete -> (None, Some row)
+      | (d1, _) :: _, _, (d2, _) :: _ when d1 < d2 ->
+          raise
+          @@ Shape_error ("Expected number of axes is smaller than the actual", [ Row_mismatch (cur @ subr) ])
+      | (d1, _) :: _, (d2, _) :: _, _ when d1 < d2 ->
+          raise
+          @@ Shape_error ("Expected number of axes is smaller than the actual", [ Row_mismatch (cur @ subr) ])
+      | (d1, row1) :: _, _, (d2, row2) :: _ when d1 = d2 -> (Some (row2, row1), Some row1)
+      | (d1, row1) :: _, (d2, _) :: _, _ when d1 = d2 -> (None, Some row1)
+      | _, (_, row) :: _, [] when is_complete -> (None, Some row)
+      | _ -> (None, None)
+
+  let meet_all = List.fold ~init:Unconstrained ~f:(fun c r -> meet c r.constr)
+
+  let perhaps_eliminate_row_var ~is_complete v ~value:{ cur = v_cur; subr = v_subr; solved = v_solved } ~in_ =
+    (* For now, this is the same as [perhaps_eliminate_var], except it can return two equations:
+       one coming from [solve_row_if_known]. *)
+    let subst ~v_side ~side =
+      match (v_solved, List.partition_tf side ~f:(fun r -> equal_row r.row @@ Row_var v)) with
+      | _, ([], _) -> side
+      | None, (v :: _, side) -> (if is_complete then [] else [ v ]) @ v_side @ side
+      | Some dim, (_ :: _, side) -> dim :: side
+    in
+    match in_.solved with
+    | Some { row = Row_var v2; _ } when v2 = v && is_complete ->
+        ([], { cur = v_cur @ in_.cur; subr = v_subr @ in_.subr; solved = v_solved })
+    | in_sol ->
+        let cur = subst ~v_side:v_cur ~side:in_.cur in
+        let subr = subst ~v_side:v_subr ~side:in_.subr in
+        let eq, solved = solve_row_if_known ~is_complete ~cur ~subr in
+        (* [solved] cannot be [Some {row=Row_var v; _}] because v is already eliminated in subr. *)
+        ( Option.(to_list eq @ to_list @@ both in_sol solved),
+          { cur; subr; solved = Option.first_some solved in_sol } )
+
+  let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
+  let take_from_end l n = List.rev @@ List.take (List.rev l) n
 
   let apply_constraint r env =
     let r = subst_row env r in
@@ -568,8 +624,108 @@ end = struct
                       Stdlib.Format.printf "Env.apply_constraint: shape error env=@ %a\n%!" Sexp.pp_hum
                         (sexp_of_t env);
                     raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ]))
-                  else update_dim v (get_dim ~d:rem ()) env
+                  else unify_dim (Var v, get_dim ~d:rem ()) env
               | _ -> assert false))
+
+  let prefix_constraint ~drop row =
+    match row.constr with
+    | Unconstrained -> Unconstrained
+    | Total_elems n ->
+        let prefix = take_from_end row.dims drop in
+        if List.exists prefix ~f:(Fn.non is_dim) then (* wait for more inference *) Unconstrained
+        else
+          let discarded = List.fold prefix ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
+          let result = n / discarded in
+          if result <= 0 then raise @@ Shape_error ("Not enough elements", [ Row_mismatch [ row ] ])
+          else Total_elems result
+
+  (* Equate two rows, no broadcasting. Does not resolve inequalities, requires another round of solving. *)
+  let rec unify_row ((row1, row2) as eq) env =
+    let unify_prefix len =
+      let dims1 = take_from_end row1.dims len and dims2 = take_from_end row2.dims len in
+      List.fold ~init:env ~f:(Fn.flip unify_dim) @@ List.zip_exn dims1 dims2
+    in
+    match eq with
+    | { row = Row_var v; dims = r1_dims; id; constr = _ }, r2
+    | r2, { row = Row_var v; dims = r1_dims; id; constr = _ } -> (
+        let r1_len = List.length r1_dims and r2_len = List.length r2.dims in
+        if r1_len > r2_len then
+          if is_row_var r2.row then unify_row (row2, row1) env
+          else raise @@ Shape_error ("Number of axes mismatch", [ Row_mismatch [ row1; row2 ] ])
+        else
+          let env =
+            try unify_prefix r1_len
+            with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ row1; row2 ] :: trace)
+          in
+          let constr = meet row1.constr @@ prefix_constraint ~drop:r1_len row2 in
+          let value = { constr; row = r2.row; dims = drop_from_end r2.dims r1_len; id } in
+          match Map.find env.row_env v with
+          | None ->
+              let row_env = Map.map env.row_env ~f:(s_row_one_in_entry v ~value) in
+              {
+                env with
+                row_env = Map.add_exn row_env ~key:v ~data:{ cur = []; subr = []; solved = Some value };
+                row_rev_elim_order = v :: env.row_rev_elim_order;
+              }
+          | Some { solved = Some r1; _ } -> unify_row (r1, value) env
+          | Some { cur; subr; solved = None } ->
+              let row_env = Map.map env.row_env ~f:(s_row_one_in_entry v ~value) in
+              { env with row_env = Map.update row_env v ~f:(fun _ -> { cur; subr; solved = Some value }) })
+    | ( { row = Broadcastable; dims = dims1; constr = constr1; id = _ },
+        { row = Broadcastable; dims = dims2; constr = constr2; id = _ } ) ->
+        let env =
+          match List.zip dims1 dims2 with
+          | Unequal_lengths ->
+              raise @@ Shape_error ("Mismatching number of axes", [ Row_mismatch [ row1; row2 ] ])
+          | Ok eqs -> List.fold ~init:env ~f:(Fn.flip unify_dim) eqs
+        in
+        apply_constraint { row1 with constr = meet constr1 constr2 } env
+
+  let update_row ?(freshen_proj = false) ~is_complete v ?cur ?subr env =
+    (* This is the same as [update_dim] except dealing with more potential side equations. *)
+    let no_v =
+      List.filter ~f:(fun r ->
+          if equal_row (Row_var v) r.row then
+            if List.is_empty r.dims then false
+            else raise @@ Shape_error ("Infinite row via self-reference", [ Row_mismatch [ r ] ])
+          else true)
+    in
+    let cur = no_v @@ List.map ~f:(subst_row ~freshen_proj env) @@ Option.to_list cur in
+    let subr = no_v @@ List.map ~f:(subst_row ~freshen_proj env) @@ Option.to_list subr in
+    if List.is_empty cur && List.is_empty subr then env
+    else
+      let guessed_id = (List.hd_exn @@ cur @ subr).id in
+      match solve_row_if_known ~is_complete ~cur ~subr with
+      | extra_eq, Some value ->
+          let eqs =
+            ({ dims = []; row = Row_var v; constr = Unconstrained; id = guessed_id }, value)
+            :: Option.to_list extra_eq
+          in
+          List.fold ~init:env ~f:(Fn.flip unify_row) eqs
+      | extra_eq, None -> (
+          let value = { cur; subr; solved = None } in
+          let elim = perhaps_eliminate_row_var ~is_complete v ~value in
+          match Map.find env.row_env v with
+          | Some in_ ->
+              (* Note: this is where the bulk of the work usually happens. *)
+              let eq, data = elim ~in_ in
+              let eqs = eq @ Option.to_list extra_eq in
+              let row_env = Map.update env.row_env v ~f:(fun _ -> data) in
+              List.fold eqs ~init:{ env with row_env } ~f:(Fn.flip unify_row)
+          | None ->
+              let eqs = ref @@ Option.to_list extra_eq (* No fold_map in Map. *) in
+              let row_env =
+                Map.map env.row_env ~f:(fun in_ ->
+                    let eq, entry = elim ~in_ in
+                    eqs := eq @ !eqs;
+                    entry)
+              in
+              let env = List.fold !eqs ~init:env ~f:(Fn.flip unify_row) in
+              {
+                env with
+                row_env = Map.add_exn row_env ~key:v ~data:value;
+                row_rev_elim_order = v :: env.row_rev_elim_order;
+              })
 
   let empty_env =
     {
@@ -621,109 +777,7 @@ type row_eq = { r : dims; subr : dims } [@@deriving sexp, equal]
 
 type row_eqs = row_eq list [@@deriving sexp, equal]
 
-let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
-let take_from_end l n = List.rev @@ List.take (List.rev l) n
-
 module Debug_runtime = Utils.Debug_PrintBox ()
-
-(* Unfortunately dealing with broadcasting is complicated. Overall rules:
-   * When substituting into a current shape replace broadcastable components of a subtensor, dim-1
-     and row=Broadcastable, by broadcast variables.
-   ** Do not replace broadcastable components of a current shape when substituing into a subtensor --
-      just a regular substitution.
-   * At the end, replace remaining broadcast variables back by dim-1 and row=Broadcastable.
-   * Substitute the current shape's variable even if the subtensor is also a variable. *)
-
-let rec unify_dims (row_eqs : row_eq list) (env : environment) : environment =
-  match row_eqs with
-  | [] -> env
-  | { r; subr } :: row_eqs when equal_dims r subr -> Env.apply_constraint r env |> unify_dims row_eqs
-  | { r = { dims = []; row = Row_var _; _ } as r; subr = { dims = []; row = Row_var _; _ } as subr }
-    :: row_eqs
-    when equal_row r.row subr.row ->
-      Env.apply_constraint r env |> Env.apply_constraint subr |> unify_dims row_eqs
-  | { r = { dims = []; row = Row_var v; _ } as rv; subr } :: row_eqs -> (
-      let subr : dims = Env.subst_row env subr in
-      match Map.find env.row_env v with
-      | None when equal_row rv.row subr.row && List.is_empty subr.dims ->
-          Env.apply_constraint rv env |> Env.apply_constraint subr |> unify_dims row_eqs
-      | None -> Env.update_row_broadcast ~rv ~subr env |> Env.apply_constraint rv |> unify_dims row_eqs
-      | Some r -> Env.apply_constraint rv env |> unify_dims ({ r; subr } :: row_eqs))
-  | { r; subr = { dims = []; row = Row_var v; _ } as rv } :: row_eqs -> (
-      let r : dims = Env.subst_row env r in
-      match Map.find env.row_env v with
-      | None when equal_row rv.row r.row && List.is_empty r.dims ->
-          Env.apply_constraint rv env |> Env.apply_constraint r |> unify_dims row_eqs
-      | None -> Env.update_row v r env |> Env.apply_constraint rv |> unify_dims row_eqs
-      | Some subr -> Env.apply_constraint rv env |> unify_dims ({ r; subr } :: row_eqs))
-  | (( { r = { dims = []; row = Broadcastable; _ }; subr = _ }
-     | { r = _; subr = { dims = []; row = Broadcastable; _ } } ) as eq)
-    :: row_eqs ->
-      Env.apply_constraint eq.r env |> Env.apply_constraint eq.subr |> unify_dims row_eqs
-  | ({
-       r = { dims = _ :: _ as ds1; constr = constr1; row = r1; id = id1 };
-       subr = { dims = _ :: _ as ds2; constr = constr2; row = r2; id = id2 };
-     } as eq)
-    :: row_eqs ->
-      let constr = meet constr1 constr2 in
-      let len1 = List.length ds1 and len2 = List.length ds2 in
-      let suffix = min len1 len2 in
-      let dims, row = if len2 > len1 then (ds2, r2) else (ds1, r1) in
-      let ds1_suf = take_from_end ds1 suffix in
-      let ds2_suf = take_from_end ds2 suffix in
-      let dim_eqs = List.map2_exn ~f:(fun d1 d2 -> { d1; d2 }) ds1_suf ds2_suf in
-      (try unify_dim dim_eqs env
-       with Shape_error (s, trace) when !with_error_trace ->
-         raise @@ Shape_error ("dim tail / " ^ s, Row_mismatch [ eq.r; eq.subr ] :: trace))
-      |> Env.apply_constraint { dims; constr; row; id = id1 }
-      |> unify_dims
-           ({
-              r = { dims = drop_from_end ds1 suffix; constr = Unconstrained; row = r1; id = id1 };
-              subr = { dims = drop_from_end ds2 suffix; constr = Unconstrained; row = r2; id = id2 };
-            }
-           :: row_eqs)
-
-and unify_dim (dim_eqs : dim_eq list) (env : environment) : environment =
-  match dim_eqs with
-  | [] -> env
-  | { d1 = Dim { label = Some l1; _ } as d1; d2 = Dim { label = Some l2; _ } as d2 } :: _
-    when not (String.equal l1 l2) ->
-      if Utils.settings.with_debug then
-        Stdlib.Format.printf "unify_dim: different labels: shape error env=@ %a\n%!" Sexp.pp_hum
-          (Env.sexp_of_t env);
-      raise @@ Shape_error ("unify_dim: different labels", [ Dim_mismatch [ d1; d2 ] ])
-  | { d1 = Dim { d = d1; label = _; proj_id = pid1 }; d2 = Dim { d = d2; label = _; proj_id = pid2 } }
-    :: dim_eqs
-    when d1 = d2 ->
-      Env.update_proj_classes pid1 pid2 env |> unify_dim dim_eqs
-  | { d1 = Var v; d2 } :: dim_eqs -> (
-      match Map.find env.dim_env v with
-      | None ->
-          let b_var, subd =
-            match d2 with
-            | Dim { d = 1; label; _ } ->
-                let v = get_var ?label () in
-                (Some v, Var v)
-            | Var v2 when Set.mem env.broadcast.dim_vars v2 ->
-                let v = get_var () in
-                (Some v, Var v)
-            | _ -> (None, d2)
-          in
-          Env.with_proj_classes_and_broadcast env.proj_classes
-            { env.broadcast with dim_vars = Option.fold ~f:Set.add ~init:env.broadcast.dim_vars b_var }
-            env
-          |> Env.update_dim v subd |> unify_dim dim_eqs
-      | Some d1 -> unify_dim ({ d1; d2 } :: dim_eqs) env)
-  | { d2 = Var v; d1 } :: dim_eqs -> (
-      match Map.find env.dim_env v with
-      | None -> Env.update_dim v d1 env |> unify_dim dim_eqs
-      | Some d2 -> unify_dim ({ d1; d2 } :: dim_eqs) env)
-  | { d1 = Dim { d = 1; _ }; d2 = _ } :: dim_eqs | { d1 = _; d2 = Dim { d = 1; _ } } :: dim_eqs ->
-      unify_dim dim_eqs env
-  | { d1; d2 } :: _ ->
-      if Utils.settings.with_debug then
-        Stdlib.Format.printf "unify_dim: shape error env=@ %a\n%!" Sexp.pp_hum (Env.sexp_of_t env);
-      raise @@ Shape_error ("unify_dim", [ Dim_mismatch [ d1; d2 ] ])
 
 (** Converts an axes-keyed map into three arrays of values: batch axes, input axes, output axes.
     If the map is incomplete, the result might be invalid: gaps in the array are filled with an arbitrary
@@ -1308,8 +1362,8 @@ let backprop_ith_arg ~from_1 projections =
 
 (** *** Shape builders *** *)
 
-let make ?batch_dims ?input_dims ?output_dims ?batch_axes
-    ?input_axes ?output_axes ?(deduced = Not_constrained) ~debug_name ~id () =
+let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
+    ?(deduced = Not_constrained) ~debug_name ~id () =
   let make_dims kind ds =
     {
       dims = List.map ~f:(fun d -> get_dim ~d ()) ds;
