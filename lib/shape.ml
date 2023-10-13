@@ -72,7 +72,7 @@ end
 type dim_var = Dim_var.t [@@deriving equal, hash, compare, sexp]
 
 (** A single axis in a shape. *)
-type dim = Var of dim_var | Dim of { d : int; label : string option; proj_id : int }
+type dim = Var of dim_var | Dim of { d : int; label : string option }
 [@@deriving equal, hash, compare, sexp, variants]
 
 let uid = ref 0
@@ -83,7 +83,7 @@ let get_var ?label () : dim_var =
 
 let get_dim ~d ?label () =
   Int.incr uid;
-  Dim { d; proj_id = !uid; label }
+  Dim { d; label }
 
 (** A row specifies how axes of a single kind in a shape (the shape-kind) can adapt to other shapes. *)
 type row =
@@ -313,40 +313,33 @@ module Env : sig
   type 'a entry = { cur : 'a list; subr : 'a list; solved : 'a option } [@@deriving sexp]
   type dim_env = dim entry Map.M(Dim_var).t
   type row_env = dims entry Map.M(Int).t
-  type proj_classes = int Map.M(Int).t [@@deriving sexp]
 
   type t = private {
     dim_env : dim_env;
     row_env : row_env;
-    proj_classes : proj_classes;
     dim_rev_elim_order : dim_var list;
     row_rev_elim_order : int list;
   }
   [@@deriving sexp]
 
-  val subst_dim : ?freshen_proj:bool -> t -> dim -> dim
+  val subst_dim : t -> dim -> dim
   val occurs_dim : dim_var -> dim -> bool
-  val subst_row : ?freshen_proj:bool -> t -> dims -> dims
+  val subst_row : t -> dims -> dims
   val occurs_row : int -> dims -> bool
-  val update_dim : ?freshen_proj:bool -> is_complete:bool -> dim_var -> ?cur:dim -> ?subr:dim -> t -> t
-  val update_row : ?freshen_proj:bool -> is_complete:bool -> int -> ?cur:dims -> ?subr:dims -> t -> t
+  val update_dim : is_complete:bool -> dim_var -> ?cur:dim -> ?subr:dim -> t -> t
+  val update_row : is_complete:bool -> int -> ?cur:dims -> ?subr:dims -> t -> t
   val apply_constraint : dims -> t -> t
-  val update_proj_classes : int -> int -> t -> t
   val empty_env : t
-  val with_proj_classes : proj_classes -> t -> t
-  val merge_fresh_proj : is_complete:bool -> update:t -> state:t -> t
 end = struct
   type 'a entry = { cur : 'a list; subr : 'a list; solved : 'a option } [@@deriving sexp]
   (** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved]. *)
 
   type dim_env = dim entry Map.M(Dim_var).t [@@deriving sexp]
   type row_env = dims entry Map.M(Int).t [@@deriving sexp]
-  type proj_classes = int Map.M(Int).t [@@deriving sexp]
 
   type t = {
     dim_env : dim_env;
     row_env : row_env;
-    proj_classes : proj_classes;
     dim_rev_elim_order : dim_var list;
     row_rev_elim_order : int list;
   }
@@ -370,8 +363,7 @@ end = struct
     let upd m x = m x ~f:(s_dim_one_in_row v ~value) in
     { cur = upd List.map cur; subr = upd List.map subr; solved = upd Option.map solved }
 
-  let subst_dim ?(freshen_proj = false) env = function
-    | Dim { d; label; proj_id = _ } when freshen_proj -> get_dim ~d ?label ()
+  let subst_dim env = function
     | Dim _ as d -> d
     | Var v as default ->
         Option.value ~default @@ Option.join @@ Option.map ~f:(fun e -> e.solved) @@ Map.find env.dim_env v
@@ -396,8 +388,8 @@ end = struct
     let upd m x = m x ~f:(fun in_ -> s_row_one v ~value ~in_) in
     { cur = upd List.map cur; subr = upd List.map subr; solved = upd Option.map solved }
 
-  let subst_row ?freshen_proj env { dims; constr; row; id } =
-    let dims = List.map dims ~f:(subst_dim ?freshen_proj env) in
+  let subst_row env { dims; constr; row; id } =
+    let dims = List.map dims ~f:(subst_dim env) in
     match row with
     | Broadcastable -> { dims; constr; row; id }
     | Row_var v -> (
@@ -471,18 +463,12 @@ end = struct
         (* [solved] cannot be [Some (Var v)] because v is already eliminated in subr. *)
         (Option.both in_sol solved, { cur; subr; solved = Option.first_some solved in_sol })
 
-  let update_proj_classes pid1 pid2 env =
-    { env with proj_classes = Utils.union_add ~equal:Int.equal env.proj_classes pid1 pid2 }
-
-  let with_proj_classes proj_classes env = { env with proj_classes }
-
   (* Note: [unify_dim] will not resolve inequalities, requires another round of solving. *)
   let rec unify_dim ((dim1, dim2) as eq) env =
     match eq with
     | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
         raise @@ Shape_error ("solved dimensions for axis: different labels", [ Dim_mismatch [ dim1; dim2 ] ])
-    | Dim { d = d1; label = _; proj_id = pid1 }, Dim { d = d2; label = _; proj_id = pid2 } when d1 = d2 ->
-        update_proj_classes pid1 pid2 env
+    | Dim { d = d1; label = _ }, Dim { d = d2; label = _ } when d1 = d2 -> env
     | Var v, d2 | d2, Var v -> (
         match Map.find env.dim_env v with
         | None ->
@@ -505,13 +491,10 @@ end = struct
         (* Note: at the unify_dim stage, it's strict equality (no broadcasting). *)
         raise @@ Shape_error ("solved dimensions for axis: mismatch", [ Dim_mismatch [ dim1; dim2 ] ])
 
-  let update_dim ?(freshen_proj = false) ~is_complete v ?cur ?subr env =
-    (* Prevent the projection equivalences from leaking across [propagate_shapes update_step] invocations.
-       Concluding that two axes have an equal size can span multiple update steps, and should not prevent
-       them from being distinct axes in a product space. *)
+  let update_dim ~is_complete v ?cur ?subr env =
     let no_v = List.filter ~f:(Fn.non @@ equal_dim (Var v)) in
-    let cur = no_v @@ List.map ~f:(subst_dim ~freshen_proj env) @@ Option.to_list cur in
-    let subr = no_v @@ List.map ~f:(subst_dim ~freshen_proj env) @@ Option.to_list subr in
+    let cur = no_v @@ List.map ~f:(subst_dim env) @@ Option.to_list cur in
+    let subr = no_v @@ List.map ~f:(subst_dim env) @@ Option.to_list subr in
     if List.is_empty cur && List.is_empty subr then env
     else
       match solve_dim_if_known ~is_complete ~cur ~subr with
@@ -681,7 +664,7 @@ end = struct
         in
         apply_constraint { row1 with constr = meet constr1 constr2 } env
 
-  let update_row ?(freshen_proj = false) ~is_complete v ?cur ?subr env =
+  let update_row ~is_complete v ?cur ?subr env =
     (* This is the same as [update_dim] except dealing with more potential side equations. *)
     let no_v =
       List.filter ~f:(fun r ->
@@ -690,8 +673,8 @@ end = struct
             else raise @@ Shape_error ("Infinite row via self-reference", [ Row_mismatch [ r ] ])
           else true)
     in
-    let cur = no_v @@ List.map ~f:(subst_row ~freshen_proj env) @@ Option.to_list cur in
-    let subr = no_v @@ List.map ~f:(subst_row ~freshen_proj env) @@ Option.to_list subr in
+    let cur = no_v @@ List.map ~f:(subst_row env) @@ Option.to_list cur in
+    let subr = no_v @@ List.map ~f:(subst_row env) @@ Option.to_list subr in
     if List.is_empty cur && List.is_empty subr then env
     else
       let guessed_id = (List.hd_exn @@ cur @ subr).id in
@@ -731,29 +714,17 @@ end = struct
     {
       dim_env = Map.empty (module Dim_var);
       row_env = Map.empty (module Int);
-      proj_classes = Map.empty (module Int);
-      (* The state's proj_classes come from the most recent propagate_shapes and are not used across calls
-         to propagate_shapes. *)
       dim_rev_elim_order = [];
       row_rev_elim_order = [];
     }
-
-  let merge_fresh_proj ~is_complete ~update ~state =
-    let state =
-      Map.fold ~init:state
-        ~f:(fun ~key ~data env -> update_dim ~freshen_proj:true ~is_complete key data env)
-        update.dim_env
-    in
-    let state =
-      Map.fold ~init:state
-        ~f:(fun ~key ~data env -> update_row ~freshen_proj:true ~is_complete key data env)
-        update.row_env
-    in
-    state
 end
 
+type proj_classes = int Map.M(Int).t [@@deriving sexp]
+
+let update_proj_classes pid1 pid2 proj_classes = Utils.union_add ~equal:Int.equal proj_classes pid1 pid2
+
 type proj_environment = {
-  proj_classes : Env.proj_classes;
+  proj_classes : proj_classes;
   proj_env : Arrayjit.Indexing.axis_index Map.M(Dim_var).t;
 }
 [@@deriving sexp]
@@ -910,7 +881,7 @@ let unify_shapes (env : environment) ({ shape = cur_sh; logic; env = _ } as upda
           id = { sh_id = cur_sh.id; kind = Batch };
         }
       in
-      try unify_dims [ { r = b_row; subr = cur_sh.batch } ] env
+      try Env.unify_row [ { r = b_row; subr = cur_sh.batch } ] env
       with Shape_error (s, trace) when !with_error_trace ->
         raise @@ Shape_error ("Constant_fill / " ^ s, Shape_mismatch [ cur_sh ] :: trace))
   | Terminal (File_mapped (filename, prec)) -> (
