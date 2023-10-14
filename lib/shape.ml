@@ -703,12 +703,48 @@ end = struct
                     eqs := eq @ !eqs;
                     entry)
               in
-              let env = List.fold !eqs ~init:env ~f:(Fn.flip unify_row) in
+              let env = List.fold !eqs ~init:{ env with row_env } ~f:(Fn.flip unify_row) in
               {
                 env with
-                row_env = Map.add_exn row_env ~key:v ~data:value;
+                row_env = Map.add_exn env.row_env ~key:v ~data:value;
                 row_rev_elim_order = v :: env.row_rev_elim_order;
               })
+
+  let rec add_dim_ineq ~is_complete ~cur ~subr env =
+    match (cur, subr) with
+    | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
+        raise
+        @@ Shape_error ("dimension comparison for axis: different labels", [ Dim_mismatch [ cur; subr ] ])
+    | Dim { d = d1; label = _ }, Dim { d = d2; label = _ } when d1 = d2 -> env
+    | Dim { d = _; label = _ }, Dim { d = 1; label = _ } -> env
+    | Var v, _ -> update_dim ~is_complete v ~subr env
+    | _, Var v -> update_dim ~is_complete v ~cur env
+    | _ -> raise @@ Shape_error ("dimension comparison for axis: mismatch", [ Dim_mismatch [ cur; subr ] ])
+
+  let rec add_row_ineq ~is_complete ~cur ~subr env =
+    let unify_prefix len =
+      let dims1 = take_from_end cur.dims len and dims2 = take_from_end subr.dims len in
+      List.fold ~init:env ~f:(fun env (cur, subr) -> add_dim_ineq ~is_complete ~cur ~subr env)
+      @@ List.zip_exn dims1 dims2
+    in
+    let r1_len = List.length cur.dims and r2_len = List.length subr.dims in
+    let len = min r1_len r2_len in
+    let env =
+      try unify_prefix len
+      with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ cur; subr ] :: trace)
+    in
+    let reduced ({ row; dims; constr = _; id } as r) =
+      { row; dims = drop_from_end dims len; constr = prefix_constraint ~drop:len r; id }
+    in
+    match (cur, subr) with
+    | { row = Row_var v; _ }, _ when r1_len < r2_len ->
+        apply_constraint cur env |> update_row ~is_complete v ~subr:(reduced subr)
+    | { row = Broadcastable; _ }, _ when r1_len < r2_len ->
+        raise @@ Shape_error ("Too many axes", [ Row_mismatch [ cur; subr ] ])
+    | _, { row = Row_var v; _ } when r2_len <= r1_len ->
+        apply_constraint subr env |> update_row ~is_complete v ~cur:(reduced cur)
+    | _, { row = Broadcastable; _ } when r2_len <= r1_len -> apply_constraint cur env |> apply_constraint subr
+    | { row = Row_var _ | Broadcastable; _ }, { row = Row_var _ | Broadcastable; _ } -> assert false
 
   let empty_env =
     {
