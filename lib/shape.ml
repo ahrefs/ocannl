@@ -950,7 +950,7 @@ let get_inequalities ({ shape = cur_sh; logic; env = _ } : update_step) : proj_a
           id = { sh_id = cur_sh.id; kind = Batch };
         }
       in
-      (Map.empty (module Dim_var), [ Row_eq { r = b_row; subr = cur_sh.batch } ])
+      (Map.empty (module Dim_var), [ Row_eq { r1 = b_row; r2 = cur_sh.batch } ])
   | Transpose (Transpose, sh) ->
       ( Map.empty (module Dim_var),
         [
@@ -985,7 +985,9 @@ let get_inequalities ({ shape = cur_sh; logic; env = _ } : update_step) : proj_a
           Row_ineq { cur = cur_sh.output; subr = sh2.output };
         ] )
   | Transpose (Batch_slice { static_range; static_symbol = _ }, sh) -> (
-      if is_row_var sh.batch.row && is_row_var cur_sh.batch.row then (* Wait for more information *) []
+      if is_row_var sh.batch.row && is_row_var cur_sh.batch.row then
+        (* Wait for more information *)
+        (Map.empty (module Dim_var), [])
       else
         let slice_var = Var (get_var ()) in
         if is_row_var sh.batch.row then
@@ -1109,29 +1111,6 @@ let indices_bio sh (type v) (arr : v array) =
 let state = ref Env.empty_env
 let second_stage_inference = ref []
 
-let rec close_row_broadcast env row =
-  let row = Env.subst_row env row in
-  let rec f env = function
-    | Var v when Set.mem env.Env.broadcast.dim_vars v -> (
-        match Map.find env.dim_env v with
-        | None -> Env.update_dim v (get_dim ~d:1 ()) env
-        | Some dim -> f env dim)
-    | _ -> env
-  in
-  match row with
-  | { dims; constr; row = Row_var v; id } when Set.mem env.Env.broadcast.row_vars v -> (
-      match Map.find env.row_env v with
-      | None ->
-          let init = Env.update_row v { dims = []; constr; row = Broadcastable; id } env in
-          List.fold dims ~f ~init
-      | Some row -> close_row_broadcast env row)
-  | { dims; _ } -> List.fold dims ~f ~init:env
-
-(** Uses the matrix convention of putting the input axes last.
-    Note: [force_to_dims] is "destructive": it closes shapes that remain incomplete after inference. *)
-let close_shape_broadcast (sh : t) (env : environment) : environment =
-  List.fold ~init:env ~f:close_row_broadcast [ sh.batch; sh.output; sh.input ]
-
 let deep_copy_update_step update_step =
   let upd sh = { sh with id = sh.id } in
   {
@@ -1161,35 +1140,26 @@ let apply_env update_step env =
   in
   iter_shapes update_step ~f
 
-let%debug_sexp propagate_shapes (update_step : update_step) : unit =
+let%debug_sexp propagate_shapes ?(is_complete = false) (update_step : update_step) : unit =
   if not @@ List.mem ~equal:phys_equal !second_stage_inference update_step then
     second_stage_inference := update_step :: !second_stage_inference;
-  (* Update dimension information coming from other propagation steps. *)
+  (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice does). *)
   apply_env update_step !state;
   let _debug_initial : update_step = deep_copy_update_step update_step in
-  let env =
-    unify_shapes
-      (Env.with_proj_classes_and_broadcast update_step.env.proj_classes !state.broadcast Env.empty_env)
-      update_step
-  in
-  (* Update both dimension and projections information (i.e. keep the update step's projections). *)
-  apply_env update_step env;
-  update_step.env <- { update_step.env with proj_classes = env.proj_classes };
-  (* "Forget" the projections information of this propagation step to not contaminate other steps. *)
+  let proj_axis_env, ineqs = get_inequalities update_step in
+  let env = solve_inequalities ~is_complete ineqs !state in
+  (* A slight optimization: [finish_inference] will update the shapes at the end of inference. *)
+  if not is_complete || Utils.settings.with_debug then apply_env update_step env;
+  update_step.env <- { update_step.env with proj_axis_env };
   let _debug_result : update_step = deep_copy_update_step update_step in
-  let _debug_env_state : environment = !state in
   Debug_runtime.no_debug_if
     (equal _debug_initial.shape _debug_result.shape && equal_logic _debug_initial.logic _debug_result.logic);
-  state := Env.merge_fresh_proj ~update:env ~state:!state
+  state := env
 
 let finish_inference () =
-  List.iter !second_stage_inference ~f:propagate_shapes;
-  let f update_step =
-    let f sh = state := close_shape_broadcast sh !state in
-    iter_shapes update_step ~f;
-    apply_env update_step !state
-  in
-  List.iter !second_stage_inference ~f;
+  (* FIXME: do we need an extra round of inference? *)
+  List.iter !second_stage_inference ~f:(propagate_shapes ~is_complete:true);
+  List.iter !second_stage_inference ~f:(Fn.flip apply_env !state);
   second_stage_inference := []
 
 let row_to_dims row =
@@ -1215,13 +1185,16 @@ let rec row_to_labels env =
     | Dim { label = Some l; _ } -> l
     | Dim { label = None; _ } -> ""
     | Var v -> (
-        match Map.find env.Env.dim_env v with None -> Option.value v.label ~default:"" | Some dim -> f dim)
+        match Map.find env.Env.dim_env v with
+        | None | Some { solved = None; _ } -> Option.value v.label ~default:""
+        | Some { solved = Some dim; _ } -> f dim)
   in
   function
   | { dims; constr; row = Row_var v; id } -> (
       match Map.find env.row_env v with
-      | None -> Array.of_list_map dims ~f
-      | Some row2 -> row_to_labels env { dims = row2.dims @ dims; constr; row = row2.row; id })
+      | None | Some { solved = None; _ } -> Array.of_list_map dims ~f
+      | Some { solved = Some row2; _ } ->
+          row_to_labels env { dims = row2.dims @ dims; constr; row = row2.row; id })
   | { dims; constr = _; row = Broadcastable; id = _ } -> Array.of_list_map dims ~f
 
 (** Uses the matrix convention of putting the input axes last. *)
