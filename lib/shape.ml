@@ -72,7 +72,7 @@ end
 type dim_var = Dim_var.t [@@deriving equal, hash, compare, sexp]
 
 (** A single axis in a shape. *)
-type dim = Var of dim_var | Dim of { d : int; label : string option }
+type dim = Var of dim_var | Dim of { d : int; label : string option; proj_id : int option }
 [@@deriving equal, hash, compare, sexp, variants]
 
 let uid = ref 0
@@ -81,9 +81,7 @@ let get_var ?label () : dim_var =
   Int.incr uid;
   { id = !uid; label }
 
-let get_dim ~d ?label () =
-  Int.incr uid;
-  Dim { d; label }
+let get_dim ~d ?label () = Dim { d; label; proj_id = None }
 
 (** A row specifies how axes of a single kind in a shape (the shape-kind) can adapt to other shapes. *)
 type row =
@@ -472,7 +470,7 @@ end = struct
     match eq with
     | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
         raise @@ Shape_error ("solved dimensions for axis: different labels", [ Dim_mismatch [ dim1; dim2 ] ])
-    | Dim { d = d1; label = _ }, Dim { d = d2; label = _ } when d1 = d2 -> env
+    | Dim { d = d1; label = _; proj_id = _ }, Dim { d = d2; label = _; proj_id = _ } when d1 = d2 -> env
     | Var v, d2 | d2, Var v -> (
         match Map.find env.dim_env v with
         | None ->
@@ -714,18 +712,18 @@ end = struct
                 row_rev_elim_order = v :: env.row_rev_elim_order;
               })
 
-  let rec add_dim_ineq ~is_complete ~cur ~subr env =
+  let add_dim_ineq ~is_complete ~cur ~subr env =
     match (cur, subr) with
     | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
         raise
         @@ Shape_error ("dimension comparison for axis: different labels", [ Dim_mismatch [ cur; subr ] ])
-    | Dim { d = d1; label = _ }, Dim { d = d2; label = _ } when d1 = d2 -> env
-    | Dim { d = _; label = _ }, Dim { d = 1; label = _ } -> env
+    | Dim { d = d1; label = _; proj_id = _ }, Dim { d = d2; label = _; proj_id = _ } when d1 = d2 -> env
+    | Dim { d = _; label = _; proj_id = _ }, Dim { d = 1; label = _; proj_id = _ } -> env
     | Var v, _ -> update_dim ~is_complete v ~subr env
     | _, Var v -> update_dim ~is_complete v ~cur env
     | _ -> raise @@ Shape_error ("dimension comparison for axis: mismatch", [ Dim_mismatch [ cur; subr ] ])
 
-  let rec add_row_ineq ~is_complete ~cur ~subr env =
+  let add_row_ineq ~is_complete ~cur ~subr env =
     let unify_prefix len =
       let dims1 = take_from_end cur.dims len and dims2 = take_from_end subr.dims len in
       List.fold ~init:env ~f:(fun env (cur, subr) -> add_dim_ineq ~is_complete ~cur ~subr env)
@@ -759,17 +757,7 @@ end = struct
     }
 end
 
-type proj_classes = int Map.M(Int).t [@@deriving sexp]
-type proj_axis_env = Arrayjit.Indexing.axis_index Map.M(Dim_var).t [@@deriving sexp]
-
-let update_proj_classes pid1 pid2 proj_classes = Utils.union_add ~equal:Int.equal proj_classes pid1 pid2
-
-type proj_environment = { proj_classes : proj_classes; proj_axis_env : proj_axis_env } [@@deriving sexp]
-
-let empty_proj_environment =
-  { proj_classes = Map.empty (module Int); proj_axis_env = Map.empty (module Dim_var) }
-
-type update_step = { shape : t; logic : logic; mutable env : proj_environment } [@@deriving sexp]
+type update_step = { shape : t; logic : logic } [@@deriving sexp]
 (** Data required for a shape inference update step. Ideally, an update should be performed at least twice,
     the second time after all the other relevant updates have been performed for the first time.
     In OCANNL, this is achieved by performing updates both as the tensors are constructed, and via
@@ -882,7 +870,9 @@ let solve_inequalities ~is_complete ineqs env =
   in
   List.fold ineqs ~init:env ~f
 
-let get_inequalities ({ shape = cur_sh; logic; env = _ } : update_step) : proj_axis_env * inequality list =
+type proj_axis_env = Arrayjit.Indexing.axis_index Map.M(Dim_var).t [@@deriving sexp]
+
+let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env * inequality list =
   let row_eq_side kind row = { dims = []; constr = Unconstrained; row; id = { sh_id = cur_sh.id; kind } } in
   let row_eq ~kind_r1 ~r1 ~kind_r2 ~r2 =
     Option.to_list
@@ -1114,7 +1104,6 @@ let second_stage_inference = ref []
 let deep_copy_update_step update_step =
   let upd sh = { sh with id = sh.id } in
   {
-    update_step with
     shape = upd update_step.shape;
     logic =
       (match update_step.logic with
@@ -1146,11 +1135,10 @@ let%debug_sexp propagate_shapes ?(is_complete = false) (update_step : update_ste
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice does). *)
   apply_env update_step !state;
   let _debug_initial : update_step = deep_copy_update_step update_step in
-  let proj_axis_env, ineqs = get_inequalities update_step in
+  let _, ineqs = get_inequalities update_step in
   let env = solve_inequalities ~is_complete ineqs !state in
   (* A slight optimization: [finish_inference] will update the shapes at the end of inference. *)
-  if not is_complete || Utils.settings.with_debug then apply_env update_step env;
-  update_step.env <- { update_step.env with proj_axis_env };
+  if (not is_complete) || Utils.settings.with_debug then apply_env update_step env;
   let _debug_result : update_step = deep_copy_update_step update_step in
   Debug_runtime.no_debug_if
     (equal _debug_initial.shape _debug_result.shape && equal_logic _debug_initial.logic _debug_result.logic);
@@ -1205,9 +1193,110 @@ let to_labels (sh : t) : string array =
 
 open Arrayjit.Indexing
 
+type proj_classes = int Map.M(Int).t [@@deriving sexp]
+
+let update_proj_classes pid1 pid2 proj_classes = Utils.union_add ~equal:Int.equal proj_classes pid1 pid2
+
+type proj_environment = { proj_classes : proj_classes; proj_axis_env : proj_axis_env } [@@deriving sexp]
+type proj = Var of dim_var | Proj of int | Solved of axis_index
+
+let fresh_proj =
+  let uid = ref 0 in
+  fun () ->
+    Int.incr uid;
+    !uid
+
+let fresh_proj_ids update =
+  let fresh_dim = function
+    | Dim { d; label; proj_id = _ } -> Dim { d; label; proj_id = Some (fresh_proj ()) }
+    | Var _ as d -> d
+  in
+  let fresh_dims r = { r with dims = List.map r.dims ~f:fresh_dim } in
+  let fresh_shape sh =
+    sh.batch <- fresh_dims sh.batch;
+    sh.input <- fresh_dims sh.input;
+    sh.output <- fresh_dims sh.output
+  in
+  fresh_shape update.shape;
+  match update.logic with
+  | Terminal _ -> ()
+  | Transpose (_, sh) -> fresh_shape sh
+  | Broadcast (_, sh1, sh2) ->
+      fresh_shape sh1;
+      fresh_shape sh2
+
+let get_proj_equations inequalities proj_axis_env env =
+  let to_proj : dim -> proj = function
+    | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
+    | d -> (
+        match Env.subst_dim env d with
+        | Dim { proj_id = Some proj; _ } -> Proj proj
+        | Dim { proj_id = None; _ } -> Proj (fresh_proj ())
+        | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
+        | Var v -> Var v)
+  in
+  let expand_dims = function
+    | { dims; row = Row_var v; _ } when Map.mem env.row_env v -> (
+        match Map.find_exn env.row_env v with
+        | { solved = Some { dims = more_dims; _ }; _ } -> more_dims @ dims
+        | _ -> dims)
+    | { dims; _ } -> dims
+  in
+  let match_rows r1 r2 =
+    match List.zip (expand_dims r1) (expand_dims r2) with
+    | Unequal_lengths -> raise @@ Shape_error ("Mismatching number of axes", [ Row_mismatch [ r1; r2 ] ])
+    | Ok eqs -> List.map ~f:(fun (d1, d2) -> (to_proj d1, to_proj d2)) eqs
+  in
+  let f = function
+    | Dim_eq { d1; d2 } | Dim_ineq { cur = d1; subr = d2 } -> [ (to_proj d1, to_proj d2) ]
+    | Row_eq { r1; r2 } | Row_ineq { cur = r1; subr = r2 } -> match_rows r1 r2
+  in
+  List.concat_map inequalities ~f
+
+type proj_to_axis = Arrayjit.Indexing.axis_index Hashtbl.M(Int).t [@@deriving sexp]
+
+let solve_proj_equations eqs proj_classes : proj_to_axis =
+  let v_env = Hashtbl.create (module Dim_var) in
+  let projs = Hashtbl.create (module Int) in
+  let rec f p_env = function
+    | Proj p1, Proj p2 -> Utils.union_add ~equal:Int.equal p_env p1 p2
+    | Proj p, Solved s | Solved s, Proj p -> (
+        match Hashtbl.add projs ~key:p ~data:s with
+        | `Ok -> p_env
+        | `Duplicate ->
+            raise
+            @@ Shape_error
+                 ( "Multiple constraints on the same projection",
+                   [ Index_mismatch [ s; Hashtbl.find_exn projs p ] ] ))
+    | Solved s1, Solved s2 when equal_axis_index s1 s2 -> p_env
+    | Solved s1, Solved s2 ->
+        raise
+        @@ Shape_error ("Conflicting indices for the same axis/projection", [ Index_mismatch [ s1; s2 ] ])
+    | Var v, p | p, Var v -> (
+        match Hashtbl.find v_env v with
+        | None ->
+            Hashtbl.add_exn v_env ~key:v ~data:p;
+            p_env
+        | Some p2 -> f p_env (p, p2))
+  in
+  let proj_classes = List.fold eqs ~init:proj_classes ~f in
+  let proj_syms = Hashtbl.create (module Int) in
+  Map.iteri proj_classes ~f:(fun ~key ~data ->
+      let repr = Hashtbl.find_or_add proj_syms data ~default:get_symbol in
+      (* [Solved] index overrides inferred projections. *)
+      let _ : [ `Duplicate | `Ok ] = Hashtbl.add projs ~key:data ~data:(Iterator repr) in
+      let _ : [ `Duplicate | `Ok ] = Hashtbl.add projs ~key ~data:(Iterator repr) in
+      ());
+  projs
+
+let empty_proj_environment =
+  { proj_classes = Map.empty (module Int); proj_axis_env = Map.empty (module Dim_var) }
+
 (** Computes the indexing into subtensors given the shape information of a tensor. 
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
 let derive_projections (update_step : update_step) : projections =
+  fresh_proj_ids update_step;
+  let proj_axis_env, ineqs = get_inequalities update_step in
   let dims_of sh = sh.batch.dims @ sh.output.dims @ sh.input.dims in
   let lhs = update_step.shape in
   let project rhs =
