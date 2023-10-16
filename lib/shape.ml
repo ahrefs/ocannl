@@ -556,8 +556,6 @@ end = struct
       | _, (_, row) :: _, [] when is_complete -> (None, Some row)
       | _ -> (None, None)
 
-  let meet_all = List.fold ~init:Unconstrained ~f:(fun c r -> meet c r.constr)
-
   let perhaps_eliminate_row_var ~is_complete v ~value:{ cur = v_cur; subr = v_subr; solved = v_solved } ~in_ =
     (* For now, this is the same as [perhaps_eliminate_var], except it can return two equations:
        one coming from [solve_row_if_known]. *)
@@ -974,12 +972,18 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
           Row_ineq { cur = cur_sh.output; subr = sh1.output };
           Row_ineq { cur = cur_sh.output; subr = sh2.output };
         ] )
-  | Transpose (Batch_slice { static_range; static_symbol = _ }, sh) -> (
+  | Transpose (Batch_slice { static_range; static_symbol }, sh) -> (
       if is_row_var sh.batch.row && is_row_var cur_sh.batch.row then
         (* Wait for more information *)
         (Map.empty (module Dim_var), [])
       else
-        let slice_var = Var (get_var ()) in
+        let slice_v = get_var () in
+        let slice_var = Var slice_v in
+        (* Note: at one point this code worked without marking [slice_var] as a solved projection.
+            I don't know why this has not led to the axis being erroneusly expanded in the product space. *)
+        let proj_axis_env =
+          Map.singleton (module Dim_var) slice_v @@ Arrayjit.Indexing.Iterator static_symbol
+        in
         if is_row_var sh.batch.row then
           let expanded_batch =
             {
@@ -989,7 +993,7 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
               id = { sh_id = cur_sh.id; kind = Batch };
             }
           in
-          ( Map.empty (module Dim_var),
+          ( proj_axis_env,
             (Option.to_list static_range
             |> List.map ~f:(fun range -> Dim_eq { d1 = get_dim ~d:range (); d2 = slice_var }))
             @ [ Row_ineq { cur = expanded_batch; subr = sh.batch } ] )
@@ -1003,7 +1007,7 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
               let reduced_batch =
                 { dims; constr = Unconstrained; row = sh.batch.row; id = { sh_id = cur_sh.id; kind = Batch } }
               in
-              ( Map.empty (module Dim_var),
+              ( proj_axis_env,
                 (Option.to_list static_range
                 |> List.map ~f:(fun range -> Dim_eq { d1 = get_dim ~d:range (); d2 }))
                 @ [ Row_ineq { cur = cur_sh.batch; subr = reduced_batch } ] ))
@@ -1197,8 +1201,8 @@ type proj_classes = int Map.M(Int).t [@@deriving sexp]
 
 let update_proj_classes pid1 pid2 proj_classes = Utils.union_add ~equal:Int.equal proj_classes pid1 pid2
 
-type proj_environment = { proj_classes : proj_classes; proj_axis_env : proj_axis_env } [@@deriving sexp]
-type proj = Var of dim_var | Proj of int | Solved of axis_index
+type proj = Var of dim_var | Proj of { proj_id : int; d : int } | Solved of axis_index
+[@@deriving compare, equal, sexp]
 
 let fresh_proj =
   let uid = ref 0 in
@@ -1230,8 +1234,8 @@ let get_proj_equations inequalities proj_axis_env env =
     | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
     | d -> (
         match Env.subst_dim env d with
-        | Dim { proj_id = Some proj; _ } -> Proj proj
-        | Dim { proj_id = None; _ } -> Proj (fresh_proj ())
+        | Dim { proj_id = Some proj_id; d; _ } -> Proj { proj_id; d }
+        | Dim { proj_id = None; d; _ } -> Proj { proj_id = fresh_proj (); d }
         | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
         | Var v -> Var v)
   in
@@ -1253,116 +1257,104 @@ let get_proj_equations inequalities proj_axis_env env =
   in
   List.concat_map inequalities ~f
 
-type proj_to_axis = Arrayjit.Indexing.axis_index Hashtbl.M(Int).t [@@deriving sexp]
+type proj_to_index = Arrayjit.Indexing.axis_index Map.M(Int).t [@@deriving sexp]
+type proj_env = { proj_to_index : proj_to_index; proj_classes : proj_classes; product_dim : int Map.M(Int).t }
 
-let solve_proj_equations eqs proj_classes : proj_to_axis =
+let solve_proj_equations eqs : proj_env =
   let v_env = Hashtbl.create (module Dim_var) in
-  let projs = Hashtbl.create (module Int) in
-  let rec f p_env = function
-    | Proj p1, Proj p2 -> Utils.union_add ~equal:Int.equal p_env p1 p2
-    | Proj p, Solved s | Solved s, Proj p -> (
-        match Hashtbl.add projs ~key:p ~data:s with
-        | `Ok -> p_env
-        | `Duplicate ->
+  let p_solved = ref [] in
+  let p_dims = ref [] in
+  let proj_classes = ref @@ Map.empty (module Int) in
+  let rec f = function
+    | Proj { proj_id = p1; d = d1 }, Proj { proj_id = p2; d = d2 } ->
+        (* FIXME: add more debug trace info, here and below. *)
+        if d1 <> d2 then raise @@ Shape_error ("Conflicting dimensions for the same projection", []);
+        p_dims := (p1, d1) :: !p_dims;
+        proj_classes := Utils.union_add ~equal:Int.equal !proj_classes p1 p2
+    | Proj p, Solved idx | Solved idx, Proj p -> p_solved := (p.proj_id, idx) :: !p_solved
+    | Solved idx1, Solved idx2 when equal_axis_index idx1 idx2 -> ()
+    | Solved idx1, Solved idx2 ->
+        raise
+        @@ Shape_error ("Conflicting indices for the same axis/projection", [ Index_mismatch [ idx1; idx2 ] ])
+    | Var v, p | p, Var v -> (
+        match Hashtbl.find v_env v with None -> Hashtbl.add_exn v_env ~key:v ~data:p | Some p2 -> f (p, p2))
+  in
+  List.iter eqs ~f;
+  let projs = ref @@ Map.empty (module Int) in
+  List.iter !p_solved ~f:(fun (p, idx) ->
+      let repr, _ = Utils.union_find ~equal:Int.equal !proj_classes ~key:p ~rank:0 in
+      Utils.mref_add projs ~key:repr ~data:idx ~or_:(fun idx2 ->
+          if not @@ equal_axis_index idx idx2 then
             raise
             @@ Shape_error
                  ( "Multiple constraints on the same projection",
-                   [ Index_mismatch [ s; Hashtbl.find_exn projs p ] ] ))
-    | Solved s1, Solved s2 when equal_axis_index s1 s2 -> p_env
-    | Solved s1, Solved s2 ->
-        raise
-        @@ Shape_error ("Conflicting indices for the same axis/projection", [ Index_mismatch [ s1; s2 ] ])
-    | Var v, p | p, Var v -> (
-        match Hashtbl.find v_env v with
-        | None ->
-            Hashtbl.add_exn v_env ~key:v ~data:p;
-            p_env
-        | Some p2 -> f p_env (p, p2))
-  in
-  let proj_classes = List.fold eqs ~init:proj_classes ~f in
-  let proj_syms = Hashtbl.create (module Int) in
-  Map.iteri proj_classes ~f:(fun ~key ~data ->
-      let repr = Hashtbl.find_or_add proj_syms data ~default:get_symbol in
-      (* [Solved] index overrides inferred projections. *)
-      let _ : [ `Duplicate | `Ok ] = Hashtbl.add projs ~key:data ~data:(Iterator repr) in
-      let _ : [ `Duplicate | `Ok ] = Hashtbl.add projs ~key ~data:(Iterator repr) in
-      ());
-  projs
+                   [ Index_mismatch [ idx; Map.find_exn !projs p ] ] )));
+  let product_dim = ref @@ Map.empty (module Int) in
+  List.iter !p_dims ~f:(fun (p, d) ->
+      let repr, _ = Utils.union_find ~equal:Int.equal !proj_classes ~key:p ~rank:0 in
+      (* Product indices are generated last. *)
+      if iterated d && (not @@ Map.mem !projs repr) then
+        Utils.mref_add product_dim ~key:repr ~data:d ~or_:(fun d2 ->
+            if d <> d2 then raise @@ Shape_error ("Conflicting dimensions for the same projection", [])));
+  Map.iter !proj_classes ~f:(fun p ->
+      let repr, _ = Utils.union_find ~equal:Int.equal !proj_classes ~key:p ~rank:0 in
+      if Map.mem !product_dim repr then
+        Utils.mref_add_missing projs repr ~f:(fun () -> Iterator (get_symbol ())));
+  { proj_classes = !proj_classes; proj_to_index = !projs; product_dim = !product_dim }
 
-let empty_proj_environment =
-  { proj_classes = Map.empty (module Int); proj_axis_env = Map.empty (module Dim_var) }
+let get_slot_proj proj_env = function
+  | Dim { proj_id = Some p; _ } as d -> (
+      let repr, _ = Utils.union_find ~equal:Int.equal proj_env.proj_classes ~key:p ~rank:0 in
+      match Map.find proj_env.proj_to_index repr with
+      | Some i -> i
+      | None -> raise @@ Shape_error ("projection_of_solved_dims: unknown projection", [ Dim_mismatch [ d ] ])
+      )
+  | Dim { proj_id = None; _ } as d ->
+      raise @@ Shape_error ("projection_of_solved_dims: no projection", [ Dim_mismatch [ d ] ])
+  | Var _ as d ->
+      raise @@ Shape_error ("projection_of_solved_dims: still not fully inferred", [ Dim_mismatch [ d ] ])
 
 (** Computes the indexing into subtensors given the shape information of a tensor. 
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
 let derive_projections (update_step : update_step) : projections =
   fresh_proj_ids update_step;
   let proj_axis_env, ineqs = get_inequalities update_step in
+  (* We need to solve the equations/inequalities one last time because of fresh row variables
+     potentially generated by [get_inequalities]. Since the variables in the shapes must be substituted-out
+     at this point, using the global state instead of empty env below would not change anything,
+     but in principle we want to only find a local solution to not contaminate projections across operations. *)
+  let local_env = solve_inequalities ~is_complete:true ineqs Env.empty_env in
+  let proj_eqs = get_proj_equations ineqs proj_axis_env local_env in
+  let proj_env = solve_proj_equations proj_eqs in
+  let proj_repr p = fst @@ Utils.union_find ~equal:Int.equal proj_env.proj_classes ~key:p ~rank:0 in
   let dims_of sh = sh.batch.dims @ sh.output.dims @ sh.input.dims in
   let lhs = update_step.shape in
   let project rhs =
     let lhs_dims = to_dims lhs in
     let rhs_dims = Array.of_list_map ~f:to_dims rhs in
     let all_dims = List.concat_map ~f:dims_of @@ (lhs :: rhs) in
-    let proj_repr proj_id =
-      fst @@ Utils.union_find ~equal:Int.equal update_step.env.proj_classes ~key:proj_id ~rank:0
-    in
-    (* Since shapes are already inferred, these variables unify directly with the proj_id of this operation. *)
-    let constrained_projs =
-      Map.to_alist update_step.env.proj_env
-      |> List.filter_map ~f:(fun (v, idx) ->
-             match Map.find !state.dim_env v with
-             | Some (Dim { proj_id; _ }) -> Some (proj_id, idx)
-             | other ->
-                 if Utils.settings.with_debug then
-                   Stdlib.Format.printf
-                     "derive_projections: unresolved variable %a for projection constraints=@ %a\n%!"
-                     Sexp.pp_hum (sexp_of_dim_var v) Sexp.pp_hum
-                     ([%sexp_of: dim option] other);
-                 None)
-      |> Map.of_alist_multi (module Int)
-      |> Map.map ~f:(Utils.unique_keep_first ~equal:equal_axis_index)
-      |> Map.map ~f:(function
-           | [] -> assert false
-           | [ idx ] -> idx
-           | idcs ->
-               raise @@ Shape_error ("Multiple constraints on the same projection", [ Index_mismatch idcs ]))
-    in
-    let rec get_product_proj = function
-      | Dim { proj_id; _ } when Map.mem constrained_projs proj_id -> None
-      | Dim { d; proj_id; _ } -> if iterated d then Some (proj_repr proj_id, d) else None
-      | Var v as dim -> (
-          match Map.find !state.dim_env v with
-          | None ->
-              raise
-              @@ Shape_error
-                   ( "derive_projections: shape still not fully inferred",
-                     [ Shape_mismatch (lhs :: rhs); Dim_mismatch [ dim ] ] )
-          | Some dim -> get_product_proj dim)
+    let get_product_proj = function
+      | Dim { d; proj_id = Some p; _ } ->
+          let repr = proj_repr p in
+          if iterated d && Map.mem proj_env.product_dim repr then Some (repr, d) else None
+      | Dim { proj_id = None; _ } -> None
+      | Var _ as dim ->
+          raise
+          @@ Shape_error
+               ( "derive_projections: shape still not fully inferred",
+                 [ Shape_mismatch (lhs :: rhs); Dim_mismatch [ dim ] ] )
     in
     (* Note: the ordering will affect performance of naive backends. *)
     let all_product_projs =
       Utils.unique_keep_first ~equal:(fun (p, _) (q, _) -> p = q)
       @@ List.filter_map all_dims ~f:get_product_proj
     in
-    let product_iterators = List.map all_product_projs ~f:(fun (p, _) -> (p, get_symbol ())) in
     let product_space = Array.of_list_map all_product_projs ~f:snd in
-    let rec get_slot_proj = function
-      | Dim { proj_id; _ } when Map.mem constrained_projs proj_id -> Map.find_exn constrained_projs proj_id
-      | Dim { d; proj_id; _ } ->
-          if iterated d then
-            Iterator (List.Assoc.find_exn product_iterators ~equal:Int.equal (proj_repr proj_id))
-          else Fixed_idx 0
-      | Var v as dim -> (
-          match Map.find !state.dim_env v with
-          | None ->
-              raise
-              @@ Shape_error
-                   ( "derive_projections: shape still not fully inferred",
-                     [ Shape_mismatch (lhs :: rhs); Dim_mismatch [ dim ] ] )
-          | Some dim -> get_slot_proj dim)
+    let product_iterators =
+      Array.of_list_map all_product_projs ~f:(fun (p, _) ->
+          match Map.find_exn proj_env.proj_to_index p with Iterator s -> s | _ -> assert false)
     in
-    let product_iterators = Array.of_list_map product_iterators ~f:snd in
-    let f (sh : t) : axis_index array = Array.of_list_map (dims_of sh) ~f:get_slot_proj in
+    let f (sh : t) : axis_index array = Array.of_list_map (dims_of sh) ~f:(get_slot_proj proj_env) in
     {
       product_space;
       lhs_dims;
@@ -1453,7 +1445,7 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
   (match deduced with
   | Not_constrained -> ()
   | Input_equals_output -> (
-      try state := unify_dims [ { r = input; subr = output } ] !state
+      try state := Env.unify_row (input, output) !state
       with Shape_error (s, trace) when !with_error_trace ->
         raise @@ Shape_error ("Input_equals_output / " ^ s, Shape_mismatch [ result ] :: trace)));
   result
@@ -1479,7 +1471,7 @@ let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
   (match deduced with
   | Not_constrained -> ()
   | Input_equals_output -> (
-      try state := unify_dims [ { r = input; subr = output } ] !state
+      try state := Env.unify_row (input, output) !state
       with Shape_error (s, trace) when !with_error_trace ->
         raise @@ Shape_error ("of spec / " ^ s, Shape_mismatch [ result ] :: trace)));
   result

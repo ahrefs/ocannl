@@ -12,6 +12,12 @@ end
 let no_ints = Set.empty (module Int)
 let one_int = Set.singleton (module Int)
 
+let mref_add mref ~key ~data ~or_ =
+  match Map.add !mref ~key ~data with `Ok m -> mref := m | `Duplicate -> or_ (Map.find_exn !mref key)
+
+let mref_add_missing mref key ~f =
+  if Map.mem !mref key then () else mref := Map.add_exn !mref ~key ~data:(f ())
+
 (** Retrieves [arg_name] argument from the command line or from an environment variable, returns
     [default] if none found. *)
 let get_global_arg ~verbose ~default ~arg_name:n =
