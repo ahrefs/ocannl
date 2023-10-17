@@ -289,14 +289,23 @@ let logic_to_spec = function
   | Transpose (Batch_slice _, _) -> "@|"
   | Terminal _ -> "<terminal>"
 
-type shape_error =
+type error_trace = ..
+
+type error_trace +=
   | Shape_mismatch of t list
   | Row_mismatch of dims list
   | Dim_mismatch of dim list
   | Index_mismatch of Arrayjit.Indexing.axis_index list
-[@@deriving sexp]
 
-exception Shape_error of string * shape_error list [@@deriving sexp]
+let sexp_of_error_trace = function
+  | Shape_mismatch ts -> Sexp.List (Sexp.Atom "Shape_mismatch" :: List.map ts ~f:sexp_of_t)
+  | Row_mismatch rs -> Sexp.List (Sexp.Atom "Row_mismatch" :: List.map rs ~f:sexp_of_dims)
+  | Dim_mismatch ds -> Sexp.List (Sexp.Atom "Dim_mismatch" :: List.map ds ~f:sexp_of_dim)
+  | Index_mismatch idcs ->
+      Sexp.List (Sexp.Atom "Index_mismatch" :: List.map idcs ~f:Arrayjit.Indexing.sexp_of_axis_index)
+  | _ -> Sexp.Atom "<outdated version of sexp_of_error_trace>"
+
+exception Shape_error of string * error_trace list [@@deriving sexp_of]
 
 let dim_to_int_exn = function Dim { d; _ } -> d | Var _ -> invalid_arg "dim_to_int: dim still unknown"
 
@@ -1210,6 +1219,20 @@ type proj = Var of dim_var | Proj of { proj_id : int; d : int } | Solved of axis
 type proj_shape = { batch : proj list; input : proj list; output : proj list }
 [@@deriving compare, equal, sexp]
 
+type error_trace += Projection_mismatch of proj list | Proj_shape_mismatch of proj_shape list
+
+let sexp_of_error_trace = function
+  | Projection_mismatch ps -> Sexp.List (Sexp.Atom "Projection_mismatch" :: List.map ps ~f:sexp_of_proj)
+  | Proj_shape_mismatch ps -> Sexp.List (Sexp.Atom "Proj_shape_mismatch" :: List.map ps ~f:sexp_of_proj_shape)
+  | error_trace -> sexp_of_error_trace error_trace
+
+let () =
+  Sexplib0.Sexp_conv.Exn_converter.add [%extension_constructor Shape_error] (function
+    | Shape_error (arg0, arg1) ->
+        let res0 = sexp_of_string arg0 and res1 = sexp_of_list sexp_of_error_trace arg1 in
+        Sexplib0.Sexp.List [ Sexplib0.Sexp.Atom "lib/shape.ml.Shape_error"; res0; res1 ]
+    | _ -> assert false)
+
 type proj_update = { lhs : proj_shape; rhs : proj_shape list }
 
 let pair_dims_and_projs update proj_update =
@@ -1280,9 +1303,11 @@ let solve_proj_equations eqs : proj_env =
   let p_dims = ref [] in
   let proj_classes = ref @@ Map.empty (module Int) in
   let rec f = function
-    | Proj { proj_id = p1; d = d1 }, Proj { proj_id = p2; d = d2 } ->
-        (* FIXME: add more debug trace info, here and below. *)
-        if d1 <> d2 then raise @@ Shape_error ("Conflicting dimensions for the same projection", []);
+    | (Proj { proj_id = p1; d = d1 } as proj1), (Proj { proj_id = p2; d = d2 } as proj2) ->
+        if d1 <> d2 then
+          raise
+          @@ Shape_error
+               ("Conflicting dimensions for the same projection", [ Projection_mismatch [ proj1; proj2 ] ]);
         p_dims := (p1, d1) :: !p_dims;
         proj_classes := Utils.union_add ~equal:Int.equal !proj_classes p1 p2
     | Proj p, Solved idx | Solved idx, Proj p -> p_solved := (p.proj_id, idx) :: !p_solved
@@ -1309,7 +1334,11 @@ let solve_proj_equations eqs : proj_env =
       (* Product indices are generated last. *)
       if iterated d && (not @@ Map.mem !projs repr) then
         Utils.mref_add product_dim ~key:repr ~data:d ~or_:(fun d2 ->
-            if d <> d2 then raise @@ Shape_error ("Conflicting dimensions for the same projection", [])));
+            if d <> d2 then
+              raise
+              @@ Shape_error
+                   ( "Conflicting dimensions for the same projection",
+                     [ Projection_mismatch [ Proj { proj_id = p; d }; Proj { proj_id = p; d = d2 } ] ] )));
   Map.iter !proj_classes ~f:(fun p ->
       let repr, _ = Utils.union_find ~equal:Int.equal !proj_classes ~key:p ~rank:0 in
       if Map.mem !product_dim repr then
@@ -1318,13 +1347,15 @@ let solve_proj_equations eqs : proj_env =
 
 let get_proj_index proj_env = function
   | Solved idx -> idx
-  | Proj { proj_id; d } -> (
+  | Proj { proj_id; d } as p -> (
       if not @@ iterated d then Fixed_idx 0
       else
         let repr, _ = Utils.union_find ~equal:Int.equal proj_env.proj_classes ~key:proj_id ~rank:0 in
         match Map.find proj_env.proj_to_index repr with
         | Some i -> i
-        | None -> raise @@ Shape_error ("projection_of_solved_dims: unknown projection", []))
+        | None ->
+            raise
+            @@ Shape_error ("projection_of_solved_dims: unknown projection", [ Projection_mismatch [ p ] ]))
   | Var v ->
       raise @@ Shape_error ("projection_of_solved_dims: still not fully inferred", [ Dim_mismatch [ Var v ] ])
 
