@@ -1216,7 +1216,7 @@ let update_proj_classes pid1 pid2 proj_classes = Utils.union_add ~equal:Int.equa
 type proj = Var of dim_var | Proj of { proj_id : int; d : int } | Solved of axis_index
 [@@deriving compare, equal, sexp]
 
-type proj_shape = { batch : proj list; input : proj list; output : proj list }
+type proj_shape = { batch : proj list; input : proj list; output : proj list; sh_id : int }
 [@@deriving compare, equal, sexp]
 
 type error_trace += Projection_mismatch of proj list | Proj_shape_mismatch of proj_shape list
@@ -1258,7 +1258,12 @@ let fresh_proj_ids update =
   let fresh_dim = function Dim { d; label = _ } -> Proj { d; proj_id = fresh_proj () } | Var v -> Var v in
   let fresh_dims = List.map ~f:fresh_dim in
   let fresh_shape (sh : t) =
-    { batch = fresh_dims sh.batch.dims; input = fresh_dims sh.input.dims; output = fresh_dims sh.output.dims }
+    {
+      batch = fresh_dims sh.batch.dims;
+      input = fresh_dims sh.input.dims;
+      output = fresh_dims sh.output.dims;
+      sh_id = sh.id;
+    }
   in
   match update.logic with
   | Terminal _ -> { lhs = fresh_shape update.shape; rhs = [] }
@@ -1421,20 +1426,23 @@ let derive_projections (update_step : update_step) : projections =
     Array.of_list_map ~f:(get_proj_index proj_env)
     @@ List.concat [ proj_sh.batch; proj_sh.output; proj_sh.input ]
   in
-  {
-    product_space;
-    lhs_dims;
-    rhs_dims;
-    product_iterators;
-    project_lhs = indices_of_proj_sh update_proj.lhs;
-    project_rhs = Array.of_list_map ~f:indices_of_proj_sh update_proj.rhs;
-    debug_info =
-      {
-        spec = logic_to_spec update_step.logic;
-        derived_for = sexp_of_update_step update_step;
-        trace = [ ("derive_projections", unique_debug_id ()) ];
-      };
-  }
+  try
+    {
+      product_space;
+      lhs_dims;
+      rhs_dims;
+      product_iterators;
+      project_lhs = indices_of_proj_sh update_proj.lhs;
+      project_rhs = Array.of_list_map ~f:indices_of_proj_sh update_proj.rhs;
+      debug_info =
+        {
+          spec = logic_to_spec update_step.logic;
+          derived_for = sexp_of_update_step update_step;
+          trace = [ ("derive_projections", unique_debug_id ()) ];
+        };
+    }
+  with Shape_error (s, trace) ->
+    raise @@ Shape_error (s, Proj_shape_mismatch (update_proj.lhs :: update_proj.rhs) :: trace)
 
 let backprop_ith_arg ~from_1 projections =
   let project_lhs = projections.project_rhs.(from_1 - 1) in
