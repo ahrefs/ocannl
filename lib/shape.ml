@@ -1240,7 +1240,7 @@ let () =
         Sexplib0.Sexp.List [ Sexplib0.Sexp.Atom "lib/shape.ml.Shape_error"; res0; res1 ]
     | _ -> assert false)
 
-type proj_update = { lhs : proj_shape; rhs : proj_shape list }
+type proj_update = { lhs : proj_shape; rhs : proj_shape list } [@@deriving sexp]
 
 let pair_dims_and_projs update proj_update =
   let f r projs = List.zip_exn r.dims projs in
@@ -1307,7 +1307,14 @@ let get_proj_equations inequalities preserve_projs proj_axis_env env =
   List.concat_map inequalities ~f
 
 type proj_to_index = Arrayjit.Indexing.axis_index Map.M(Int).t [@@deriving sexp]
-type proj_env = { proj_to_index : proj_to_index; proj_classes : proj_classes; product_dim : int Map.M(Int).t }
+
+type proj_env = {
+  proj_to_index : proj_to_index;
+  proj_classes : proj_classes;
+  product_dim : int Map.M(Int).t;
+  non_product : Set.M(Int).t;
+}
+[@@deriving sexp]
 
 let solve_proj_equations eqs : proj_env =
   let v_env = Hashtbl.create (module Dim_var) in
@@ -1331,9 +1338,10 @@ let solve_proj_equations eqs : proj_env =
         match Hashtbl.find v_env v with None -> Hashtbl.add_exn v_env ~key:v ~data:p | Some p2 -> f (p, p2))
   in
   List.iter eqs ~f;
-  let projs = ref @@ Map.empty (module Int) in
+  let projs = ref @@ Map.empty (module Int) and non_product = ref @@ Set.empty (module Int) in
   List.iter !p_solved ~f:(fun (p, idx) ->
       let repr, _ = Utils.union_find ~equal:Int.equal !proj_classes ~key:p ~rank:0 in
+      non_product := Set.add !non_product repr;
       Utils.mref_add projs ~key:repr ~data:idx ~or_:(fun idx2 ->
           if not @@ equal_axis_index idx idx2 then
             raise
@@ -1343,7 +1351,6 @@ let solve_proj_equations eqs : proj_env =
   let product_dim = ref @@ Map.empty (module Int) in
   List.iter !p_dims ~f:(fun (p, d) ->
       let repr, _ = Utils.union_find ~equal:Int.equal !proj_classes ~key:p ~rank:0 in
-      (* Product indices are generated last. *)
       if iterated d && (not @@ Map.mem !projs repr) then
         Utils.mref_add product_dim ~key:repr ~data:d ~or_:(fun d2 ->
             if d <> d2 then
@@ -1351,11 +1358,15 @@ let solve_proj_equations eqs : proj_env =
               @@ Shape_error
                    ( "Conflicting dimensions for the same projection",
                      [ Projection_mismatch [ Proj { proj_id = p; d }; Proj { proj_id = p; d = d2 } ] ] )));
-  Map.iter !proj_classes ~f:(fun p ->
+  Map.iteri !product_dim ~f:(fun ~key:p ~data:_ ->
       let repr, _ = Utils.union_find ~equal:Int.equal !proj_classes ~key:p ~rank:0 in
-      if Map.mem !product_dim repr then
-        Utils.mref_add_missing projs repr ~f:(fun () -> Iterator (get_symbol ())));
-  { proj_classes = !proj_classes; proj_to_index = !projs; product_dim = !product_dim }
+      Utils.mref_add_missing projs repr ~f:(fun () -> Iterator (get_symbol ())));
+  {
+    proj_classes = !proj_classes;
+    proj_to_index = !projs;
+    product_dim = !product_dim;
+    non_product = !non_product;
+  }
 
 let get_proj_index proj_env = function
   | Solved idx -> idx
@@ -1403,9 +1414,10 @@ let derive_projections (update_step : update_step) : projections =
     | d when List.Assoc.mem preserve_projs ~equal:phys_equal d -> (
         match List.Assoc.find_exn preserve_projs ~equal:phys_equal d with
         | Proj { proj_id; d } ->
-            (* FIXME: *)
             let repr = proj_repr proj_id in
-            if Map.mem proj_env.proj_to_index repr then Some (proj_id, d) else None
+            if Map.mem proj_env.proj_to_index repr && (not @@ Set.mem proj_env.non_product repr) then
+              Some (repr, d)
+            else None
         | Solved _ -> None
         | Var v ->
             raise
