@@ -72,7 +72,7 @@ end
 type dim_var = Dim_var.t [@@deriving equal, hash, compare, sexp]
 
 (** A single axis in a shape. *)
-type dim = Var of dim_var | Dim of { d : int; label : string option }
+type dim = Var of dim_var | Dim of { d : int; label : string option; uid : int }
 [@@deriving equal, hash, compare, sexp, variants]
 
 let uid = ref 0
@@ -81,7 +81,9 @@ let get_var ?label () : dim_var =
   Int.incr uid;
   { id = !uid; label }
 
-let get_dim ~d ?label () = Dim { d; label }
+let get_dim ~d ?label () =
+  Int.incr uid;
+  Dim { d; label; uid = !uid }
 
 (** A row specifies how axes of a single kind in a shape (the shape-kind) can adapt to other shapes. *)
 type row =
@@ -316,6 +318,8 @@ let meet more_constr constr =
   | (Total_elems n1 as c), Total_elems n2 when n1 = n2 -> c
   | Total_elems _, Total_elems _ -> raise @@ Shape_error ("Incompatible Total_elems constraints", [])
 
+module Debug_runtime = Utils.Debug_PrintBox ()
+
 module Env : sig
   type 'a entry = { cur : 'a list; subr : 'a list; solved : 'a option } [@@deriving sexp]
   type dim_env = dim entry Map.M(Dim_var).t
@@ -479,7 +483,7 @@ end = struct
     match eq with
     | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
         raise @@ Shape_error ("solved dimensions for axis: different labels", [ Dim_mismatch [ dim1; dim2 ] ])
-    | Dim { d = d1; label = _ }, Dim { d = d2; label = _ } when d1 = d2 -> env
+    | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> env
     | Var v, d2 | d2, Var v -> (
         match Map.find env.dim_env v with
         | None ->
@@ -586,7 +590,7 @@ end = struct
           { cur; subr; solved = Option.first_some solved in_sol } )
 
   let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
-  let take_from_end l n = List.rev @@ List.take (List.rev l) n
+  let take_from_end (l : dim list) (n : int) : dim list = List.rev @@ List.take (List.rev l) n
 
   let apply_constraint r env =
     let r = subst_row env r in
@@ -724,8 +728,8 @@ end = struct
     | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
         raise
         @@ Shape_error ("dimension comparison for axis: different labels", [ Dim_mismatch [ cur; subr ] ])
-    | Dim { d = d1; label = _ }, Dim { d = d2; label = _ } when d1 = d2 -> env
-    | Dim { d = _; label = _ }, Dim { d = 1; label = _ } -> env
+    | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> env
+    | Dim { d = _; _ }, Dim { d = 1; _ } -> env
     | Var v, _ -> update_dim ~is_complete v ~subr env
     | _, Var v -> update_dim ~is_complete v ~cur env
     | _ -> raise @@ Shape_error ("dimension comparison for axis: mismatch", [ Dim_mismatch [ cur; subr ] ])
@@ -773,8 +777,6 @@ type update_step = { shape : t; logic : logic } [@@deriving sexp]
 let with_error_trace = ref true
 
 type environment = Env.t [@@deriving sexp]
-
-module Debug_runtime = Utils.Debug_PrintBox ()
 
 (** Converts an axes-keyed map into three arrays of values: batch axes, input axes, output axes.
     If the map is incomplete, the result might be invalid: gaps in the array are filled with an arbitrary
@@ -1255,7 +1257,7 @@ let fresh_proj =
     !uid
 
 let fresh_proj_ids update =
-  let fresh_dim = function Dim { d; label = _ } -> Proj { d; proj_id = fresh_proj () } | Var v -> Var v in
+  let fresh_dim = function Dim { d; _ } -> Proj { d; proj_id = fresh_proj () } | Var v -> Var v in
   let fresh_dims = List.map ~f:fresh_dim in
   let fresh_shape (sh : t) =
     {
@@ -1442,7 +1444,9 @@ let derive_projections (update_step : update_step) : projections =
         };
     }
   with Shape_error (s, trace) ->
-    raise @@ Shape_error (s, Proj_shape_mismatch (update_proj.lhs :: update_proj.rhs) :: trace)
+    raise
+    @@ Shape_error
+         (s, Shape_mismatch (lhs :: rhs) :: Proj_shape_mismatch (update_proj.lhs :: update_proj.rhs) :: trace)
 
 let backprop_ith_arg ~from_1 projections =
   let project_lhs = projections.project_rhs.(from_1 - 1) in
