@@ -72,7 +72,7 @@ end
 type dim_var = Dim_var.t [@@deriving equal, hash, compare, sexp]
 
 (** A single axis in a shape. *)
-type dim = Var of dim_var | Dim of { d : int; label : string option; uid : int }
+type dim = Var of dim_var | Dim of { d : int; label : string option; proj_id : int option }
 [@@deriving equal, hash, compare, sexp, variants]
 
 let uid = ref 0
@@ -81,9 +81,7 @@ let get_var ?label () : dim_var =
   Int.incr uid;
   { id = !uid; label }
 
-let get_dim ~d ?label () =
-  Int.incr uid;
-  Dim { d; label; uid = !uid }
+let get_dim ~d ?label () = Dim { d; label; proj_id = None }
 
 (** A row specifies how axes of a single kind in a shape (the shape-kind) can adapt to other shapes. *)
 type row =
@@ -1245,14 +1243,10 @@ let update_proj_classes pid1 pid2 proj_classes = Utils.union_add ~equal:Int.equa
 type proj = Var of dim_var | Proj of { proj_id : int; d : int } | Solved of axis_index
 [@@deriving compare, equal, sexp]
 
-type proj_shape = { batch : proj list; input : proj list; output : proj list; sh_id : int }
-[@@deriving compare, equal, sexp]
-
-type error_trace += Projection_mismatch of proj list | Proj_shape_mismatch of proj_shape list
+type error_trace += Projection_mismatch of proj list
 
 let sexp_of_error_trace = function
   | Projection_mismatch ps -> Sexp.List (Sexp.Atom "Projection_mismatch" :: List.map ps ~f:sexp_of_proj)
-  | Proj_shape_mismatch ps -> Sexp.List (Sexp.Atom "Proj_shape_mismatch" :: List.map ps ~f:sexp_of_proj_shape)
   | error_trace -> sexp_of_error_trace error_trace
 
 let () =
@@ -1262,21 +1256,6 @@ let () =
         Sexplib0.Sexp.List [ Sexplib0.Sexp.Atom "lib/shape.ml.Shape_error"; res0; res1 ]
     | _ -> assert false)
 
-type proj_update = { lhs : proj_shape; rhs : proj_shape list } [@@deriving sexp]
-
-let pair_dims_and_projs update proj_update =
-  let f r projs = List.zip_exn r.dims projs in
-  let pair_sh (sh : t) (projs : proj_shape) =
-    List.concat [ f sh.batch projs.batch; f sh.input projs.input; f sh.output projs.output ]
-  in
-  pair_sh update.shape proj_update.lhs
-  @
-  match (update.logic, proj_update.rhs) with
-  | Terminal _, [] -> []
-  | Transpose (_, sh), [ projs ] -> pair_sh sh projs
-  | Broadcast (_, sh1, sh2), [ projs1; projs2 ] -> pair_sh sh1 projs1 @ pair_sh sh2 projs2
-  | (Terminal _ | Transpose _ | Broadcast _), _ -> assert false
-
 let fresh_proj =
   let uid = ref 0 in
   fun () ->
@@ -1284,29 +1263,32 @@ let fresh_proj =
     !uid
 
 let fresh_proj_ids update =
-  let fresh_dim = function Dim { d; _ } -> Proj { d; proj_id = fresh_proj () } | Var v -> Var v in
-  let fresh_dims = List.map ~f:fresh_dim in
-  let fresh_shape (sh : t) =
-    {
-      batch = fresh_dims sh.batch.dims;
-      input = fresh_dims sh.input.dims;
-      output = fresh_dims sh.output.dims;
-      sh_id = sh.id;
-    }
+  let fresh_dim = function
+    | Dim { d; label; proj_id = _ } -> Dim { d; label; proj_id = Some (fresh_proj ()) }
+    | Var _ as d -> d
   in
+  let fresh_dims r = { r with dims = List.map r.dims ~f:fresh_dim } in
+  let fresh_shape (sh : t) =
+    sh.batch <- fresh_dims sh.batch;
+    sh.input <- fresh_dims sh.input;
+    sh.output <- fresh_dims sh.output
+  in
+  fresh_shape update.shape;
   match update.logic with
-  | Terminal _ -> { lhs = fresh_shape update.shape; rhs = [] }
-  | Transpose (_, sh) -> { lhs = fresh_shape update.shape; rhs = [ fresh_shape sh ] }
-  | Broadcast (_, sh1, sh2) -> { lhs = fresh_shape update.shape; rhs = [ fresh_shape sh1; fresh_shape sh2 ] }
+  | Terminal _ -> ()
+  | Transpose (_, sh) -> fresh_shape sh
+  | Broadcast (_, sh1, sh2) ->
+      fresh_shape sh1;
+      fresh_shape sh2
 
 let get_proj_equations inequalities preserve_projs proj_axis_env env =
   let to_proj : dim -> proj = function
     | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
-    | d when List.Assoc.mem preserve_projs ~equal:phys_equal d ->
-        List.Assoc.find_exn preserve_projs ~equal:phys_equal d
+    | Dim { proj_id = Some proj_id; d; label = _ } -> Proj { proj_id; d }
     | d -> (
         match Env.subst_dim env d with
-        | Dim { d; _ } -> Proj { proj_id = fresh_proj (); d }
+        | Dim { proj_id = Some proj_id; d; label = _ } -> Proj { proj_id; d }
+        | Dim { proj_id = None; d; _ } -> Proj { proj_id = fresh_proj (); d }
         | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
         | Var v -> Var v)
   in
@@ -1391,26 +1373,26 @@ let solve_proj_equations eqs : proj_env =
   }
 
 let get_proj_index proj_env = function
-  | Solved idx -> idx
-  | Proj { proj_id; d } as p -> (
-      if not @@ iterated d then Fixed_idx 0
-      else
-        let repr, _ = Utils.union_find ~equal:Int.equal proj_env.proj_classes ~key:proj_id ~rank:0 in
-        match Map.find proj_env.proj_to_index repr with
-        | Some i -> i
-        | None ->
-            raise
-            @@ Shape_error ("projection_of_solved_dims: unknown projection", [ Projection_mismatch [ p ] ]))
-  | Var v ->
-      raise @@ Shape_error ("projection_of_solved_dims: still not fully inferred", [ Dim_mismatch [ Var v ] ])
+  | Dim { d; _ } when not @@ iterated d -> Fixed_idx 0
+  | Dim { proj_id = None; _ } -> assert false
+  | Var _ as v ->
+      raise @@ Shape_error ("projection_of_solved_dims: still not fully inferred", [ Dim_mismatch [ v ] ])
+  | Dim { proj_id = Some proj_id; d; _ } -> (
+      let repr, _ = Utils.union_find ~equal:Int.equal proj_env.proj_classes ~key:proj_id ~rank:0 in
+      match Map.find proj_env.proj_to_index repr with
+      | Some i -> i
+      | None ->
+          raise
+          @@ Shape_error
+               ( "projection_of_solved_dims: unknown projection",
+                 [ Projection_mismatch [ Proj { proj_id; d } ] ] ))
 
 (** Computes the indexing into subtensors given the shape information of a tensor. 
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
 let derive_projections (update_step : update_step) : projections =
   (* FIXME: why is apply_env needed? Should be done already by finish_inference. *)
   (* apply_env update_step !state; *)
-  let update_proj = fresh_proj_ids update_step in
-  let preserve_projs = pair_dims_and_projs update_step update_proj in
+  fresh_proj_ids update_step;
   let proj_axis_env, ineqs = get_inequalities update_step in
   (* We need to solve the equations/inequalities one last time because of fresh row variables
      potentially generated by [get_inequalities]. Since the variables in the shapes must be substituted-out
@@ -1433,20 +1415,12 @@ let derive_projections (update_step : update_step) : projections =
   let proj_repr p = fst @@ Utils.union_find ~equal:Int.equal proj_env.proj_classes ~key:p ~rank:0 in
   let get_product_proj = function
     | Dim { d; _ } when not @@ iterated d -> None
-    | d when List.Assoc.mem preserve_projs ~equal:phys_equal d -> (
-        match List.Assoc.find_exn preserve_projs ~equal:phys_equal d with
-        | Proj { proj_id; d } ->
-            let repr = proj_repr proj_id in
-            if Map.mem proj_env.proj_to_index repr && (not @@ Set.mem proj_env.non_product repr) then
-              Some (repr, d)
-            else None
-        | Solved _ -> None
-        | Var v ->
-            raise
-            @@ Shape_error
-                 ( "derive_projections: shape still not fully inferred",
-                   [ Shape_mismatch (lhs :: rhs); Dim_mismatch [ Var v ] ] ))
-    | Dim _ -> None
+    | Dim { proj_id = Some proj_id; d; _ } ->
+        let repr = proj_repr proj_id in
+        if Map.mem proj_env.proj_to_index repr && (not @@ Set.mem proj_env.non_product repr) then
+          Some (repr, d)
+        else None
+    | Dim { proj_id = None; _ } -> None
     | Var _ as dim ->
         raise
         @@ Shape_error
@@ -1463,9 +1437,9 @@ let derive_projections (update_step : update_step) : projections =
     Array.of_list_map all_product_projs ~f:(fun (p, _) ->
         match Map.find_exn proj_env.proj_to_index (proj_repr p) with Iterator s -> s | _ -> assert false)
   in
-  let indices_of_proj_sh proj_sh =
+  let indices_of_sh (sh : t) =
     Array.of_list_map ~f:(get_proj_index proj_env)
-    @@ List.concat [ proj_sh.batch; proj_sh.output; proj_sh.input ]
+    @@ List.concat [ sh.batch.dims; sh.output.dims; sh.input.dims ]
   in
   try
     {
@@ -1473,8 +1447,8 @@ let derive_projections (update_step : update_step) : projections =
       lhs_dims;
       rhs_dims;
       product_iterators;
-      project_lhs = indices_of_proj_sh update_proj.lhs;
-      project_rhs = Array.of_list_map ~f:indices_of_proj_sh update_proj.rhs;
+      project_lhs = indices_of_sh lhs;
+      project_rhs = Array.of_list_map ~f:indices_of_sh rhs;
       debug_info =
         {
           spec = logic_to_spec update_step.logic;
@@ -1482,10 +1456,7 @@ let derive_projections (update_step : update_step) : projections =
           trace = [ ("derive_projections", unique_debug_id ()) ];
         };
     }
-  with Shape_error (s, trace) ->
-    raise
-    @@ Shape_error
-         (s, Shape_mismatch (lhs :: rhs) :: Proj_shape_mismatch (update_proj.lhs :: update_proj.rhs) :: trace)
+  with Shape_error (s, trace) -> raise @@ Shape_error (s, Shape_mismatch (lhs :: rhs) :: trace)
 
 let backprop_ith_arg ~from_1 projections =
   let project_lhs = projections.project_rhs.(from_1 - 1) in
