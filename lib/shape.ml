@@ -1008,7 +1008,11 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
           ( proj_axis_env,
             (Option.to_list static_range
             |> List.map ~f:(fun range -> Dim_eq { d1 = get_dim ~d:range (); d2 = slice_var }))
-            @ [ Row_eq { r1 = expanded_batch; r2 = sh.batch } ] )
+            @ [
+                Row_eq { r1 = expanded_batch; r2 = sh.batch };
+                Row_eq { r1 = cur_sh.input; r2 = sh.input };
+                Row_eq { r1 = cur_sh.output; r2 = sh.output };
+              ] )
         else if not @@ is_row_var sh.batch.row then
           if num_dims cur_sh < num_dims sh then
             let matching_batch =
@@ -1035,6 +1039,8 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
               @ [
                   Row_eq { r1 = matching_batch; r2 = cur_sh.batch };
                   Row_eq { r1 = expanded_batch; r2 = sh.batch };
+                  Row_eq { r1 = cur_sh.input; r2 = sh.input };
+                  Row_eq { r1 = cur_sh.output; r2 = sh.output };
                 ] )
           else
             raise
