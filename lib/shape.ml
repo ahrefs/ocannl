@@ -998,35 +998,57 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
         (* Expand a batch row instead of reducing one because even if the dimensions are known,
            the equations are also needed for projection inference. *)
         let num_dims sh = List.length sh.batch.dims in
-        let expanded_batch_dims =
-          if
-            (not @@ is_row_var cur_sh.batch.row)
-            || ((not @@ is_row_var sh.batch.row) && num_dims cur_sh >= num_dims sh - 1)
-          then slice_var :: cur_sh.batch.dims
-          else if not @@ is_row_var sh.batch.row then
-            slice_var
-            :: (List.init (num_dims sh - num_dims cur_sh - 1) ~f:(fun _ -> Var (get_var ()))
-               @ cur_sh.batch.dims)
+        if not @@ is_row_var cur_sh.batch.row then
+          let expanded_batch =
+            {
+              dims = slice_var :: cur_sh.batch.dims;
+              constr = Unconstrained;
+              row = cur_sh.batch.row;
+              id = { sh_id = cur_sh.id; kind = Batch };
+            }
+          in
+          ( proj_axis_env,
+            (Option.to_list static_range
+            |> List.map ~f:(fun range -> Dim_eq { d1 = get_dim ~d:range (); d2 = slice_var }))
+            @ [ Row_eq { r1 = expanded_batch; r2 = sh.batch } ] )
+        else if not @@ is_row_var sh.batch.row then
+          if num_dims cur_sh < num_dims sh then
+            let matching_batch =
+              {
+                dims =
+                  List.init (num_dims sh - num_dims cur_sh - 1) ~f:(fun _ -> Var (get_var ()))
+                  @ cur_sh.batch.dims;
+                constr = Unconstrained;
+                row = Broadcastable;
+                id = { sh_id = cur_sh.id; kind = Batch };
+              }
+            in
+            let expanded_batch =
+              {
+                dims = slice_var :: matching_batch.dims;
+                constr = Unconstrained;
+                row = Broadcastable;
+                id = { sh_id = cur_sh.id; kind = Batch };
+              }
+            in
+            ( proj_axis_env,
+              (Option.to_list static_range
+              |> List.map ~f:(fun range -> Dim_eq { d1 = get_dim ~d:range (); d2 = slice_var }))
+              @ [
+                  Row_eq { r1 = matching_batch; r2 = cur_sh.batch };
+                  Row_eq { r1 = expanded_batch; r2 = sh.batch };
+                ] )
           else
-            (* Unfortunately, we cannot proceed if both rows have row variables --
-               it would make it hard to connect the shapes once they are inferred with proj_axis_env. *)
             raise
             @@ Shape_error
-                 ( "Batch slice: inference with underspecified batch axes not supported yet",
-                   [ Shape_mismatch [ cur_sh; sh ] ] )
-        in
-        let expanded_batch =
-          {
-            dims = expanded_batch_dims;
-            constr = Unconstrained;
-            row = cur_sh.batch.row;
-            id = { sh_id = cur_sh.id; kind = Batch };
-          }
-        in
-        ( proj_axis_env,
-          (Option.to_list static_range
-          |> List.map ~f:(fun range -> Dim_eq { d1 = get_dim ~d:range (); d2 = slice_var }))
-          @ [ Row_ineq { cur = expanded_batch; subr = sh.batch } ] )
+                 ("Batch slice: the sliced tensor has too few batch axes", [ Shape_mismatch [ cur_sh; sh ] ])
+        else
+          (* Unfortunately, we cannot proceed if both rows have row variables --
+             it would make it hard to connect the shapes once they are inferred with proj_axis_env. *)
+          raise
+          @@ Shape_error
+               ( "Batch slice: inference with underspecified batch axes not supported yet",
+                 [ Shape_mismatch [ cur_sh; sh ] ] )
   | Transpose (Permute spec, sh) ->
       let ls_rhs, ls_lhs =
         match einsum_of_spec spec with
