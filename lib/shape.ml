@@ -688,8 +688,9 @@ end = struct
     let subr = no_v @@ List.map ~f:(subst_row env) @@ Option.to_list subr in
     if List.is_empty cur && List.is_empty subr then env
     else
-      let guessed_id = (List.hd_exn @@ cur @ subr).id in
-      match solve_row_if_known ~is_complete ~cur ~subr with
+      let guessed_id : row_id = (List.hd_exn @@ cur @ subr).id in
+      (* This call is never "complete" because it is just for a single equation. *)
+      match solve_row_if_known ~is_complete:false ~cur ~subr with
       | extra_eq, Some value ->
           let eqs =
             ({ dims = []; row = Row_var v; constr = Unconstrained; id = guessed_id }, value)
