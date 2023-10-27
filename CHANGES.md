@@ -10,6 +10,7 @@ Major rewrite.
   - Formula/tensor roots are split into forward roots and backprop roots.
 - No more `%nn_rs`, `%nn_dt` syntaxes and `Synthetic` fetch primitive.
 - Renamed `%nn_op` to `%op` and `%nn_cd` to `%cd`.
+- Migrated `gccjit` back into a separate repository.
 
 ## [0.2.1] -- 2023-07-19
 

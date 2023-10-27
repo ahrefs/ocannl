@@ -1,10 +1,10 @@
-(lang dune 3.6)
+(lang dune 3.11)
 
-(using ctypes 0.2)
+(using ctypes 0.3)
 
 (name ocannl)
 
-(version 0.2.2)
+(version 0.3.0)
 
 (generate_opam_files true)
 
@@ -31,6 +31,7 @@
   core
   ctypes
   ctypes-foreign
+  ocaml-gccjit
   printbox
   printbox-text
   npy

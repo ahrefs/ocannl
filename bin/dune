@@ -8,6 +8,7 @@
 
 (executable
  ; A placeholder main entry.
+ (package ocannl)
  (public_name ocannl)
  (name moons_benchmark)
  (modules moons_benchmark)
