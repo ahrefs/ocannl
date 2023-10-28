@@ -130,7 +130,7 @@ let to_low_level (code : t) : Low_level.t =
         let for_loops =
           try for_loop [] (Array.to_list projections.product_space)
           with e ->
-            Caml.Format.printf "DEBUG: projections=@ %a\n%!" Sexp.pp_hum
+            Stdlib.Format.printf "DEBUG: projections=@ %a\n%!" Sexp.pp_hum
               ([%sexp_of: projections] @@ projections);
             raise e
         in

@@ -31,7 +31,8 @@
   core
   ctypes
   ctypes-foreign
-  ocaml-gccjit
+  gccjit
+  cudajit
   printbox
   printbox-text
   npy

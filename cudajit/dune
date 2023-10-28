@@ -1,6 +1,0 @@
-(library
- (name cudajit)
- ;  (modules cudajit)
- (preprocess
-  (pps ppx_sexp_conv))
- (libraries cuda_ffi nvrtc_ffi sexplib0))

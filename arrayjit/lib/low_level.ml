@@ -390,7 +390,7 @@ let inline_computation ~id traced static_indices call_args =
   in
   try
     let body = List.rev_filter_map ~f:loop_proc traced.computations in
-    (* Caml.Format.printf "DEBUG: [3]=%a\n%!" Sexp.pp_hum ([%sexp_of: t list] @@ body); *)
+    (* Stdlib.Format.printf "DEBUG: [3]=%a\n%!" Sexp.pp_hum ([%sexp_of: t list] @@ body); *)
     (* DEBUG: *)
     if List.is_empty body then raise @@ Non_virtual 14 else Some (unflat_lines body)
   with Non_virtual i ->
@@ -518,7 +518,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
     | Constant _ -> llv
     | Get (a, indices) ->
         assert (LA.isnt_true a.virtual_);
-        (* Caml.Format.printf "DEBUG: [5]=%a\n%!" Sexp.pp_hum ([%sexp_of: float_t] @@ llv); *)
+        (* Stdlib.Format.printf "DEBUG: [5]=%a\n%!" Sexp.pp_hum ([%sexp_of: float_t] @@ llv); *)
         (* DEBUG: *)
         if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 17);
         assert (Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
@@ -528,7 +528,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
           Array.for_all orig_indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
         if LA.is_false id.nd.virtual_ then Get (id.nd, orig_indices)
         else
-          (* Caml.Format.printf "DEBUG: [6]=%a\n%!" Sexp.pp_hum ([%sexp_of: float_t] @@ llv); *)
+          (* Stdlib.Format.printf "DEBUG: [6]=%a\n%!" Sexp.pp_hum ([%sexp_of: float_t] @@ llv); *)
           (* DEBUG: *)
           let body = Option.value_exn @@ loop_proc ~balanced ~env_dom body in
           (* let body = Option.value ~default:Noop @@ loop_proc ~balanced ~env_dom body in *)
@@ -818,7 +818,7 @@ let compile_proc ~name ?(verbose = false) static_indices llc : optimized =
       if Option.is_none v.nd.virtual_ then v.nd.virtual_ <- Some (true, 20)
       else if Option.is_none v.nd.device_only then v.nd.device_only <- Some (true, 21);
       if verbose && Utils.settings.with_debug then
-        Caml.Format.printf "Low_level.compile_proc: finalizing %a: virtual %b, device-only %b\n%!" Sexp.pp_hum
+        Stdlib.Format.printf "Low_level.compile_proc: finalizing %a: virtual %b, device-only %b\n%!" Sexp.pp_hum
           ([%sexp_of: LA.t] v.nd)
           (LA.is_true v.nd.virtual_) (LA.is_true v.nd.device_only);
       if LA.isnt_true v.nd.virtual_ && LA.isnt_true v.nd.device_only then (

@@ -1187,8 +1187,8 @@ let%debug_sexp propagate_shapes ?(is_complete = false) (update_step : update_ste
   (* A slight optimization: [finish_inference] will update the shapes at the end of inference. *)
   if (not is_complete) || Utils.settings.with_debug then apply_env update_step env;
   let _debug_result : update_step = deep_copy_update_step update_step in
-  Debug_runtime.no_debug_if
-    (equal _debug_initial.shape _debug_result.shape && equal_logic _debug_initial.logic _debug_result.logic);
+  (* Debug_runtime.no_debug_if
+    (equal _debug_initial.shape _debug_result.shape && equal_logic _debug_initial.logic _debug_result.logic); *)
   state := env
 
 let finish_inference () =
@@ -1288,7 +1288,7 @@ let fresh_proj_ids update =
       fresh_shape sh1;
       fresh_shape sh2
 
-let get_proj_equations inequalities preserve_projs proj_axis_env env =
+let get_proj_equations inequalities proj_axis_env env =
   let to_proj : dim -> proj = function
     | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
     | Dim { proj_id = Some proj_id; d; label = _ } -> Proj { proj_id; d }
@@ -1406,7 +1406,7 @@ let derive_projections (update_step : update_step) : projections =
      at this point, using the global state instead of empty env below would not change anything,
      but in principle we want to only find a local solution to not contaminate projections across operations. *)
   let local_env = solve_inequalities ~is_complete:true ineqs Env.empty_env in
-  let proj_eqs = get_proj_equations ineqs preserve_projs proj_axis_env local_env in
+  let proj_eqs = get_proj_equations ineqs proj_axis_env local_env in
   let proj_env = solve_proj_equations proj_eqs in
   let dims_of (sh : t) = sh.batch.dims @ sh.output.dims @ sh.input.dims in
   let lhs = update_step.shape in

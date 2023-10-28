@@ -11,6 +11,7 @@ Major rewrite.
 - No more `%nn_rs`, `%nn_dt` syntaxes and `Synthetic` fetch primitive.
 - Renamed `%nn_op` to `%op` and `%nn_cd` to `%cd`.
 - Migrated `gccjit` back into a separate repository.
+- Migrated `cudajit` back into a separate repository.
 
 ## [0.2.1] -- 2023-07-19
 
