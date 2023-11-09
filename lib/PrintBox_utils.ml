@@ -110,7 +110,9 @@ let plot_canvas ?canvas ?size specs =
     if Array.is_empty all_x_points then of_int Int.(Array.length all_y_points - 1)
     else Array.reduce_exn all_x_points ~f:max
   in
-  let maxy = if Array.is_empty all_y_points then maxx else Array.reduce_exn all_y_points ~f:max in
+  let maxy =
+    if Array.is_empty all_y_points then maxx - minx else Array.reduce_exn all_y_points ~f:max
+  in
   let spanx = maxx - minx in
   let spanx = Float.(if spanx < epsilon_float then 1.0 else spanx) in
   let spany = maxy - miny in
