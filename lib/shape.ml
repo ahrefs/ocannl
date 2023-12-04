@@ -129,7 +129,7 @@ type t = {
     Mutability is sufficient to perform inference, since there is no need for backtracking and
     no explicit unification variables for now. [Unknown] stands for "not yet specified". *)
 
-let dims_of_kind = function AxisKey.Batch -> batch | AxisKey.Input -> input | AxisKey.Output -> output
+let row_of_kind = function AxisKey.Batch -> batch | AxisKey.Input -> input | AxisKey.Output -> output
 
 let map_over_kind ~f kind sh =
   match kind with
@@ -201,7 +201,7 @@ let axis_labels_of_spec spec : parsed_axis_labels =
         if String.equal s "_" then None
         else try Some (key, Either.Second (Int.of_string s)) with _ -> Some (key, First s)
       in
-      if List.exists ~f:(String.contains spec) on then
+      if List.exists ~f:(String.contains spec) on || String.for_all spec ~f:Char.is_digit then
         let labels = String.split_on_chars spec ~on |> List.filter ~f:(fun s -> not @@ String.is_empty s) in
         let labels_num = List.length labels in
         (labels_num, List.filter_mapi labels ~f:(parse_label labels_num) |> Map.of_alist_exn (module AxisKey))
@@ -755,7 +755,8 @@ end = struct
         raise @@ Shape_error ("Too many axes", [ Row_mismatch [ cur; subr ] ])
     | _, { bcast = Row_var v; _ } when r2_len <= r1_len ->
         apply_constraint subr env |> update_row ~is_complete v ~cur:(reduced cur)
-    | _, { bcast = Broadcastable; _ } when r2_len <= r1_len -> apply_constraint cur env |> apply_constraint subr
+    | _, { bcast = Broadcastable; _ } when r2_len <= r1_len ->
+        apply_constraint cur env |> apply_constraint subr
     | { bcast = Row_var _ | Broadcastable; _ }, { bcast = Row_var _ | Broadcastable; _ } -> assert false
 
   let empty_env =
@@ -881,7 +882,9 @@ let solve_inequalities ~is_complete ineqs env =
 type proj_axis_env = Arrayjit.Indexing.axis_index Map.M(Dim_var).t [@@deriving sexp]
 
 let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env * inequality list =
-  let row_eq_side kind bcast = { dims = []; constr = Unconstrained; bcast; id = { sh_id = cur_sh.id; kind } } in
+  let row_eq_side kind bcast =
+    { dims = []; constr = Unconstrained; bcast; id = { sh_id = cur_sh.id; kind } }
+  in
   let row_eq ~kind_r1 ~r1 ~kind_r2 ~r2 =
     Option.to_list
     @@ Option.map2 r1 r2 ~f:(fun r1 r2 -> Row_eq { r1 = row_eq_side kind_r1 r1; r2 = row_eq_side kind_r2 r2 })
@@ -1188,7 +1191,7 @@ let%debug_sexp propagate_shapes ?(is_complete = false) (update_step : update_ste
   if (not is_complete) || Utils.settings.with_debug then apply_env update_step env;
   let _debug_result : update_step = deep_copy_update_step update_step in
   (* Debug_runtime.no_debug_if
-    (equal _debug_initial.shape _debug_result.shape && equal_logic _debug_initial.logic _debug_result.logic); *)
+     (equal _debug_initial.shape _debug_result.shape && equal_logic _debug_initial.logic _debug_result.logic); *)
   state := env
 
 let finish_inference () =
@@ -1578,7 +1581,7 @@ let to_string_hum ?(style = `Axis_size) (sh : t) =
     | Var { id; label = None } -> "$" ^ Int.to_string id
   in
   let dims_to_string kind =
-    let dims = (dims_of_kind kind sh).dims in
+    let dims = (row_of_kind kind sh).dims in
     String.concat ~sep:","
     @@ List.mapi dims ~f:(fun i d ->
            let num =
