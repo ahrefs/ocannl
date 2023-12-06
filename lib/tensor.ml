@@ -493,7 +493,7 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
   in
   let needs_spec =
     Array.exists ~f:(Fn.non String.is_empty) labels
-    || Shape.(List.exists ~f:(equal_dim @@ get_dim ~d:1 ()) sh.input.dims)
+    || Shape.(List.exists ~f:Row.(equal_dim @@ get_dim ~d:1 ()) sh.input.dims)
   in
   let axes_spec = if needs_spec then Some (Shape.to_string_hum ~style:`Only_labels sh) else None in
   let num_batch_axes = List.length sh.batch.dims in
