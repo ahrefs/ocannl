@@ -210,8 +210,9 @@ let solve_dim_if_known ~is_complete ~cur ~subr =
     | _, (d, dim) :: _ when d > 1 || (is_complete && List.length subr = List.length subr_knowns) ->
         check_all_d_or_1 ~d;
         Some dim
-    | _, (_d, _) :: _ (* _d <= 1*) -> None
+    | [], (_d, _) :: _ (* when _d <= 1 *) -> None
     | (d, _) :: _, _ ->
+        (* Note: subr_knowns cannot be bigger than 1 here. *)
         if List.exists ~f:(non1_or_d ~d) @@ cur_knowns @ subr_knowns then (
           if Utils.settings.with_debug then
             Stdlib.Format.printf "WARNING: axis inferred to be dim-1 because of conflicting uses:@ %a\n%!"
@@ -220,9 +221,10 @@ let solve_dim_if_known ~is_complete ~cur ~subr =
           Some (get_dim ~d:1 ()))
         else None
 
-let perhaps_eliminate_var ~is_complete v ~value:{ cur = v_cur; subr = v_subr; solved = v_solved } ~in_ =
+let perhaps_eliminate_var ~is_complete v ~value:{ cur = v_cur; subr = v_subr; solved = v_solved } ~self ~in_ =
   let subst ~v_side ~side =
     match (v_solved, List.partition_tf side ~f:(equal_dim @@ Var v)) with
+    | _ when self -> v_side @ side
     | _, ([], _) -> side
     | None, (v :: _, side) -> (if is_complete then [] else [ v ]) @ v_side @ side
     | Some dim, (_ :: _, side) -> dim :: side
@@ -234,8 +236,14 @@ let perhaps_eliminate_var ~is_complete v ~value:{ cur = v_cur; subr = v_subr; so
       let cur = subst ~v_side:v_cur ~side:in_.cur in
       let subr = subst ~v_side:v_subr ~side:in_.subr in
       let solved = solve_dim_if_known ~is_complete ~cur ~subr in
-      (* [solved] cannot be [Some (Var v)] because v is already eliminated in subr. *)
-      (Option.both in_sol solved, { cur; subr; solved = Option.first_some solved in_sol })
+      (* [solved] might contain [v] if not is_complete! *)
+      let extra_eq =
+        match (v_solved, in_sol, solved) with
+        | (Some d1, Some d2, _ | Some d1, None, Some d2) when self -> Some (d1, d2)
+        | _, Some d1, Some d2 -> Some (d1, d2)
+        | _ -> None
+      in
+      (extra_eq, { cur; subr; solved = Option.first_some in_sol solved })
 
 (* Note: [unify_dim] will not resolve inequalities, requires another round of solving. *)
 let rec unify_dim ((dim1, dim2) as eq) env =
@@ -268,7 +276,9 @@ let update_dim ~is_complete v ?cur ?subr env =
   let subr = no_v @@ List.map ~f:(subst_dim env) @@ Option.to_list subr in
   if List.is_empty cur && List.is_empty subr then env
   else
-    match solve_dim_if_known ~is_complete ~cur ~subr with
+    (* Note: this is just a shortcut (hence ~is_complete:false), perhaps_eliminate_var will call
+       solve_dim_if_known again, with the set of bounds including the entry of v in env if any. *)
+    match solve_dim_if_known ~is_complete:false ~cur ~subr with
     | Some value -> unify_dim (Var v, value) env
     | None -> (
         let value = { cur; subr; solved = None } in
@@ -276,22 +286,19 @@ let update_dim ~is_complete v ?cur ?subr env =
         match Map.find env.dim_env v with
         | Some in_ ->
             (* Note: this is where the bulk of the work usually happens. *)
-            let eq, data = elim ~in_ in
+            let eq, data = elim ~self:true ~in_ in
             let dim_env = Map.update env.dim_env v ~f:(fun _ -> data) in
             Option.fold eq ~init:{ env with dim_env } ~f:(Fn.flip unify_dim)
         | None ->
             let eqs = ref [] (* No fold_map in Map. *) in
             let dim_env =
-              Map.map env.dim_env ~f:(fun in_ ->
-                  let eq, entry = elim ~in_ in
+              Map.mapi env.dim_env ~f:(fun ~key:v2 ~data:in_ ->
+                  let eq, entry = elim ~self:(equal_dim_var v v2) ~in_ in
                   eqs := Option.to_list eq @ !eqs;
                   entry)
             in
             let env = List.fold !eqs ~init:env ~f:(Fn.flip unify_dim) in
-            {
-              env with
-              dim_env = Map.add_exn dim_env ~key:v ~data:value;
-            })
+            { env with dim_env = Map.add_exn dim_env ~key:v ~data:value })
 
 (* Note: [solve_row_if_known] extracts a solution, it does not guarantee consistency checks for
    yet-unsolved inequality components. *)

@@ -213,7 +213,7 @@ type logic =
       (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of [s1],
       hence the name. *)
   | Terminal of Arrayjit.Ops.init_op
-      (** Extracts any available shape information from the initialization from the initialization. E.g.
+      (** Extracts any available shape information from the initialization. E.g.
       for [File_mapped fn], opens the file [fn] to check its length. *)
 [@@deriving equal, sexp]
 
