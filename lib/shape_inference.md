@@ -48,4 +48,72 @@ type dim_env = dim entry Map.M(Dim_var).t
 type row_env = row entry Map.M(Int).t
 
 type environment = { dim_env : dim_env; row_env : row_env }
+
+type inequality =
+  | Dim_eq of { d1 : dim; d2 : dim }
+  | Row_eq of { r1 : row; r2 : row }
+  | Dim_ineq of { cur : dim; subr : dim }
+  | Row_ineq of { cur : row; subr : row }
 ```
+
+We tie the direction of inequalities with capturing information in the structure of tensor expressions: where relevant, `cur` is a part of the shape of a super-tensor, and `subr` of a sub-tensor in a tensor expression. This reflects the nature of broadcasting: it is one-directional in that the shape of a subtensor can be "smaller-than-expected" thanks to broadcasting, but the shape of a super-tensor cannot be "smaller-than-expected". So, for ground (variable-free) dimensions, _n ≥ m_ means: _either n = m, or m = 1_; and for ground (variable-free) rows, _q ≥ r_ means: _q has at least as many axes as r, and for each dimension n of q at an axis where r has dimension m, we have n ≥ m_.
+
+The entry point to shape inference is the shape logic specification, that each operation instance needs to provide. There are shortcuts in the syntax extension `%cd` to make it painless.
+
+```ocaml
+type deduce_within_shape = Not_constrained | Input_equals_output
+
+type compose_type =
+  | Pointwise_bin  (** NumPy-style broadcast matching batch, input and output axes, e.g. as in [s1 + s2]. *)
+  | Compose
+      (** Compose the outputs of the second shape with the inputs of the first shape, i.e. the shape of
+      [fun x -> s1(s2(x))], or [s1 * s2] where [*] is the inner product (e.g. matrix multiply). *)
+  | Einsum of string
+      (** The [einsum] syntax: LABELS1;LABELS2=>LABELS3, where LABELSi are labels specifications.
+      Note that currently [Compose] is not redundant with [Einsum], because it enables more shape
+      inference: [Einsum] is limited to [Pointwise_bin]-like broadcasting, while [Compose] broadcasts
+      inputs of the "operator" against outputs of the "operand" (matching up an arbitrary number of axes).
+      The [axis_labels] use pseudo-labels local to the notation, to line up the axes.
+      For [Einsum (ls1^";"^ls2^"=>"^ls3)], the symmetric difference / disjunctive union of [ls1] and [ls2]'s
+      pseudo-labels should be equal to [ls3] pseudo-labels.
+
+      Currently, we support two variants of the [einsum] syntax: either all the axes are provided,
+      or all input, output axes are provided but none of the batch axes.
+      Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
+
+type transpose_type =
+  | Transpose  (** Swaps inputs and outputs of a shape, preserves batch axes. *)
+  | Pointwise_un  (** Preserves the shape. *)
+  | Permute of string
+      (** [Permute (ls1^"=>"^ls2)] is a variant of the [einsum] syntax [Einsum (ls1^";"^ls1^"=>"^ls2)].
+      Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
+  | Batch_slice of Arrayjit.Indexing.static_symbol  (** Removes the leftmost batch axis. *)
+
+type logic =
+  | Broadcast of compose_type * shape * shape
+      (** Matches the shapes for a binary operation, allowing for broadcasting e.g. an axis of dimension 1
+      does not conflict with a matching axis of a greater dimension.
+
+      For [Broadcast (Einsum (ls1, ls2, ls3), s1, s2)], the labels of [s1] and [s2] must match according
+      to the [ls1], [ls2] lineup, and the resulting shape inherits the labels according to the [ls3] lineup.
+  *)
+  | Transpose of transpose_type * shape
+      (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of [s1],
+      hence the name. *)
+  | Terminal of Arrayjit.Ops.init_op
+      (** Extracts any available shape information from the initialization. E.g.
+      for [File_mapped fn], opens the file [fn] to check its length. *)
+```
+
+## Solving the constraints
+
+The constraints are solved by: unification of the equation constraints, and Fourier-Motzkin-like simplification of the inequality constraints. Simplification of an inequality can generate more equations. Deriving of equations from inequalities is more aggresive in the `~is_complete:true` stage of constraint solving. In particular, when `~is_complete:true`, a variable with lower bounds is equated to its greatest lower bound.
+
+Let's explain the key functions.
+
+* `solve_dim_if_known` solves an inequality, schematically: if _cur ≥ v ≥ subr_, then _v = solve_dim_if_known(cur, subr)_, if any.
+* `perhaps_eliminate_var v ~value ~in_` substitutes out the entry `value` for a dim variable `v` inside another dim entry `in_` when `~is_complete:true`. If `~is_complete:false` and `v` is unsolved, `perhaps_eliminate_var` behaves as if substituting for `v`, but keeps `v` around inside `in_` so that `v` can be substituted-out again in case it gains new bounds. Moreover, `perhaps_eliminate_var` can derive a new equation if the updated inequalities  _cur ≥ v ≥ subr_ have a new solution.
+* `unify_dim` unifies two dimensions and updates the environment. If one of the dimensions is a variable, it gets solved: substituted out in all entries of the environment. If this variable was already solved, `unify_dim` recursively unifies its old and new values.
+* `update_dim` adds an upper or a lower bound (or both) to a variable.  It substitutes out solved variables from the bounds first. If the variable can already be solved...
+
+## Deriving the constraints
