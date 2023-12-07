@@ -77,7 +77,8 @@ type row_id = Row_id.t [@@deriving sexp, compare, equal, hash]
 type row_cmp = Row_id.comparator_witness
 
 let row_id ~sh_id ~kind = Row_id.{ sh_id; kind }
-let row_map_empty = Map.empty (module Row_id)
+
+(* let row_map_empty = Map.empty (module Row_id) *)
 
 type t = { dims : dim list; constr : dims_constraint; bcast : bcast; id : row_id }
 [@@deriving equal, hash, compare, sexp]
@@ -148,7 +149,7 @@ let subst_dim env = function
   | Var v as default ->
       Option.value ~default @@ Option.join @@ Option.map ~f:(fun e -> e.solved) @@ Map.find env.dim_env v
 
-let occurs_dim v = function Dim _ -> false | Var v' -> equal_dim_var v v'
+(* let occurs_dim v = function Dim _ -> false | Var v' -> equal_dim_var v v' *)
 
 let s_row_one v ~value:{ dims = more_dims; constr = more_constr; bcast; id = _ } ~in_ =
   match in_ with
@@ -185,7 +186,7 @@ let subst_row env { dims; constr; bcast; id } =
           in
           { dims = more_dims @ dims; constr = meet more_constr constr; bcast; id })
 
-let occurs_row v = function { bcast = Row_var v'; _ } -> v = v' | _ -> false
+(* let occurs_row v = function { bcast = Row_var v'; _ } -> v = v' | _ -> false *)
 
 (* Note: [solve_dim_if_known] extracts a solution, it does not guarantee consistency checks for
    yet-unsolved inequality components. *)

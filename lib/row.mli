@@ -10,10 +10,6 @@ type 'a dim_map = (dim_var, 'a, dim_cmp) Base.Map.t [@@deriving equal, sexp]
 val get_var : ?label:string -> unit -> dim_var
 val dim_map_empty : (dim_var, 'a, dim_cmp) Map.t
 
-type 'a dim_hashtbl = (dim_var, 'a) Base.Hashtbl.t [@@deriving sexp]
-
-val dim_hashtbl : unit -> 'a dim_hashtbl
-
 (** A single axis in a shape. *)
 type dim = Var of dim_var | Dim of { d : int; label : string option; proj_id : int option }
 [@@deriving equal, hash, compare, sexp, variants]
@@ -26,7 +22,6 @@ type row_id [@@deriving sexp, compare, equal, hash]
 type row_cmp
 
 val row_id : sh_id:int -> kind:kind -> row_id
-val row_map_empty : (row_id, 'a, row_cmp) Map.t
 
 (** A bcast specifies how axes of a single kind in a shape (i.e. the row) can adapt to other shapes. *)
 type bcast =
@@ -69,17 +64,10 @@ val sexp_of_error_trace : error_trace -> Sexp.t
 
 exception Shape_error of string * error_trace list [@@deriving sexp_of]
 
-val subst_dim : environment -> dim -> dim
-val occurs_dim : dim_var -> dim -> bool
 val subst_row : environment -> t -> t
-val occurs_row : int -> t -> bool
-val unify_dim : dim * dim -> environment -> environment
-val update_dim : is_complete:bool -> dim_var -> ?cur:dim -> ?subr:dim -> environment -> environment
+
 val unify_row : t * t -> environment -> environment
-val update_row : is_complete:bool -> int -> ?cur:t -> ?subr:t -> environment -> environment
-val apply_constraint : t -> environment -> environment
-val add_dim_ineq : is_complete:bool -> cur:dim -> subr:dim -> environment -> environment
-val add_row_ineq : is_complete:bool -> cur:t -> subr:t -> environment -> environment
+
 val empty_env : environment
 
 type inequality =
@@ -95,7 +83,6 @@ val row_to_labels : environment -> t -> string array
 type proj [@@deriving compare, equal, sexp]
 type proj_env [@@deriving sexp]
 
-val fresh_proj : unit -> int
 val fresh_row_proj : t -> t
 
 val get_proj_equations :
