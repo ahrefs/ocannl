@@ -1,6 +1,6 @@
 # Shape inference and projection inference
 
-To separate concerns, OCANNL is split into the `arrayjit` library, responsible for compilation of high-level n-D array operation sequences (`Assignments.t`) via the gccjit and cuda backends, and the main `ocannl` library, responsible for deriving the operations computing the forward propagation and backpropagation from tensor expressions. In particular, `arrayjit` contains `Indexing`, which represents complex indexing into arrays, and the main library `ocannl` has `Shape`, which does the most "heavy-lifting" in the translation from concise tensor expressions to sequences of assignments.
+To separate concerns, OCANNL is split into the `arrayjit` library, responsible for compilation of high-level n-D array operation sequences (`Assignments.t`) via the gccjit and cuda backends, and the main `ocannl` library, responsible for deriving the operations computing the forward propagation and backpropagation from tensor expressions. In particular, `arrayjit` contains `Indexing`, which represents complex indexing into arrays, and the main library `ocannl` has `Row` and `Shape` modules, which do the most "heavy-lifting" in the translation from concise tensor expressions to sequences of assignments.
 
 Shape inference broadly speaking consists in OCANNL of inferring the `Shape.t` record -- shape inference proper, and inferring the `Indexing.projections` record -- projections inference. `Shape.t` records are mutable, so that the partially inferred shapes can be observed by the user. Shape and projections inference is intended to be declarative -- independent of the order in which constraints are added, but it's unclear to me if it is fully declarative, and in one sense it is not declarative: it depends on when ocannl expressions are compiled to assignments. Shape inference has two phases: `is_complete:false` shape inference is performed as constraints are added; `is_complete:true` inference happens at once when the corresponding tensor expressions are jitted. We need the "completed" phase because we want to make stronger assumptions: choose appropriate constraint boundaries as the sizes of dimensions that haven't been fully solved yet. If shape variables still remain in the inferred shapes after the `is_complete:true` pass, they default to broadcastable/no-more-axes and dimension-1.
 
@@ -23,9 +23,9 @@ type dims_constraint =
   | Unconstrained
   | Total_elems of int  (** The shape-kind, inclusive of the further row spec, has this many elements. *)
 
-type row = { dims : dim list; constr : dims_constraint; bcast : bcast; id : row_id }
+type row = Row.t = { dims : dim list; constr : dims_constraint; bcast : bcast; id : row_id }
 
-type t = {
+type shape = Shape.t = {
   mutable batch : row;
   mutable input : row;
   mutable output : row;
@@ -34,5 +34,18 @@ type t = {
 }
 ```
 
+The actual implementation is split into the `Row` module, which handles multi-row inference, and the `Shape` module which deals with the specific axis kinds (batch, input, output), _einsum_ specifications, and the shape-relevant semantics of operations expressed via the `Shape.logic` variant type.
+
 Labels are a part of OCANNL, but it's a topic that needs more exploration and future work. Currently, OCANNL has labeled dimensions, but not labeled axes. This means that when two axes need to agree on the number of dimensions, they also need to agree on the labels. If the dimensions of both axes have labels, the labels need to be the same, and if one doesn't have a label initially, it's inferred to have the label from the other axis. Intuitively, the label is a specification of the semantics of an axis that is more fine-grained than, but of similar nature as, the number of dimensions. Currently, there is no global check to prevent the same label be used with different numbers of dimensions (on unrelated axes). Example: a label `"rgb"` attached to dimensions size 3 to denote that an axis represents three channels "red", "green" and "blue".
 
+The actual shape inference combines row polymorphism with (nominal) subtyping, as known in the type inference literature. The subtyping stems merely from the fact that a dimension-1 axis can be used in the context of any dimension due to per-axis broadcasting. Row polymorphism stems from broadcasting to more axes: for example, when unifying an unknown (shape) row with a known one, we cannot assume that the unknown row will have just the axes of the known one, because maybe the known row is meant to be broadcasted here to more axes. The combination of row polymorphism with nominal subtyping means that the constraints we are solving are inequalities, both inequalities between rows (the `Row.t` type, i.e. the `row` type above), and between axes/dimensions (the `Row.dim` type). We use roughly the Fourier-Motzkin approach, where one reduces inequalities into a form "pivoted" on a variable, schematically: _{rows / dims that are greater-or-equal than v} ≥ v ≥ {rows / dims that are smaller-or-equal than v}_.
+
+```ocaml
+type 'a entry = { cur : 'a list; subr : 'a list; solved : 'a option }
+(** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved]. *)
+
+type dim_env = dim entry Map.M(Dim_var).t
+type row_env = row entry Map.M(Int).t
+
+type environment = { dim_env : dim_env; row_env : row_env }
+```
