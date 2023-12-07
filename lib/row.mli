@@ -42,17 +42,7 @@ type t = { dims : dim list; constr : dims_constraint; bcast : bcast; id : row_id
 val dims_label_assoc : t -> (string * dim) list
 
 type 'a entry = { cur : 'a list; subr : 'a list; solved : 'a option } [@@deriving sexp]
-type dim_env = dim entry dim_map [@@deriving sexp]
-type row_env = t entry Map.M(Int).t [@@deriving sexp]
-
-type environment = private {
-  dim_env : dim_env;
-  row_env : row_env;
-  dim_rev_elim_order : dim_var list;
-  row_rev_elim_order : int list;
-}
-[@@deriving sexp]
-
+type environment [@@deriving sexp]
 type error_trace = ..
 
 type error_trace +=
@@ -65,9 +55,7 @@ val sexp_of_error_trace : error_trace -> Sexp.t
 exception Shape_error of string * error_trace list [@@deriving sexp_of]
 
 val subst_row : environment -> t -> t
-
 val unify_row : t * t -> environment -> environment
-
 val empty_env : environment
 
 type inequality =

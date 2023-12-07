@@ -38,12 +38,12 @@ type 'a dim_hashtbl = 'a Hashtbl.M(Dim_var).t [@@deriving sexp]
 let dim_hashtbl () = Hashtbl.create (module Dim_var)
 
 let dim_to_string style = function
-| Dim { label = None; _ } when phys_equal style `Only_labels -> "_"
-| Dim { label = Some l; _ } when phys_equal style `Only_labels -> l
-| Dim { d; label = None; _ } -> Int.to_string d
-| Dim { d; label = Some l; _ } -> [%string "%{l}=%{d#Int}"]
-| Var { id; label = Some l } -> [%string "$%{id#Int}:%{l}"]
-| Var { id; label = None } -> "$" ^ Int.to_string id
+  | Dim { label = None; _ } when phys_equal style `Only_labels -> "_"
+  | Dim { label = Some l; _ } when phys_equal style `Only_labels -> l
+  | Dim { d; label = None; _ } -> Int.to_string d
+  | Dim { d; label = Some l; _ } -> [%string "%{l}=%{d#Int}"]
+  | Var { id; label = Some l } -> [%string "$%{id#Int}:%{l}"]
+  | Var { id; label = None } -> "$" ^ Int.to_string id
 
 (** A bcast specifies how axes of a single kind in a shape (i.e. the row) can adapt to other shapes. *)
 type bcast =
@@ -93,13 +93,7 @@ type 'a entry = { cur : 'a list; subr : 'a list; solved : 'a option } [@@derivin
 type dim_env = dim entry Map.M(Dim_var).t [@@deriving sexp]
 type row_env = t entry Map.M(Int).t [@@deriving sexp]
 
-type environment = {
-  dim_env : dim_env;
-  row_env : row_env;
-  dim_rev_elim_order : dim_var list;
-  row_rev_elim_order : int list;
-}
-[@@deriving sexp]
+type environment = { dim_env : dim_env; row_env : row_env } [@@deriving sexp]
 (** Note that while we build up the partial sets of inequalities, the environment is not in solved form.
     It is only in resolved wrt. variables that are solved: [v -> e where Option.is_some e.solved]
     do not appear elsewhere in the environment. But once [finish_inference] is called, it becomes in
@@ -254,16 +248,13 @@ let rec unify_dim ((dim1, dim2) as eq) env =
       | None ->
           let dim_env = Map.map env.dim_env ~f:(s_dim_one_in_entry v ~value:d2) in
           {
-            env with
             dim_env = Map.add_exn dim_env ~key:v ~data:{ cur = []; subr = []; solved = Some d2 };
             row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry v ~value:d2);
-            dim_rev_elim_order = v :: env.dim_rev_elim_order;
           }
       | Some { solved = Some d1; _ } -> unify_dim (d1, d2) env
       | Some { cur; subr; solved = None } ->
           let dim_env = Map.map env.dim_env ~f:(s_dim_one_in_entry v ~value:d2) in
           {
-            env with
             dim_env = Map.update dim_env v ~f:(fun _ -> { cur; subr; solved = Some d2 });
             row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry v ~value:d2);
           })
@@ -300,7 +291,6 @@ let update_dim ~is_complete v ?cur ?subr env =
             {
               env with
               dim_env = Map.add_exn dim_env ~key:v ~data:value;
-              dim_rev_elim_order = v :: env.dim_rev_elim_order;
             })
 
 (* Note: [solve_row_if_known] extracts a solution, it does not guarantee consistency checks for
@@ -426,7 +416,6 @@ let rec unify_row ((row1, row2) as eq) env =
             {
               env with
               row_env = Map.add_exn row_env ~key:v ~data:{ cur = []; subr = []; solved = Some value };
-              row_rev_elim_order = v :: env.row_rev_elim_order;
             }
         | Some { solved = Some r1; _ } -> unify_row (r1, value) env
         | Some { cur; subr; solved = None } ->
@@ -483,11 +472,7 @@ let update_row ~is_complete v ?cur ?subr env =
                   entry)
             in
             let env = List.fold !eqs ~init:{ env with row_env } ~f:(Fn.flip unify_row) in
-            {
-              env with
-              row_env = Map.add_exn env.row_env ~key:v ~data:value;
-              row_rev_elim_order = v :: env.row_rev_elim_order;
-            })
+            { env with row_env = Map.add_exn env.row_env ~key:v ~data:value })
 
 let add_dim_ineq ~is_complete ~cur ~subr env =
   match (cur, subr) with
@@ -524,13 +509,7 @@ let add_row_ineq ~is_complete ~cur ~subr env =
   | _, { bcast = Broadcastable; _ } when r2_len <= r1_len -> apply_constraint cur env |> apply_constraint subr
   | { bcast = Row_var _ | Broadcastable; _ }, { bcast = Row_var _ | Broadcastable; _ } -> assert false
 
-let empty_env =
-  {
-    dim_env = Map.empty (module Dim_var);
-    row_env = Map.empty (module Int);
-    dim_rev_elim_order = [];
-    row_rev_elim_order = [];
-  }
+let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Int) }
 
 type inequality =
   | Dim_eq of { d1 : dim; d2 : dim }
