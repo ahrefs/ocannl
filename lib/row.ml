@@ -222,11 +222,12 @@ let solve_dim_if_known ~is_complete ~cur ~subr =
         else None
 
 let perhaps_eliminate_var ~is_complete v ~value:{ cur = v_cur; subr = v_subr; solved = v_solved } ~self ~in_ =
+  let dedup = List.dedup_and_sort ~compare:compare_dim in
   let subst ~v_side ~side =
     match (v_solved, List.partition_tf side ~f:(equal_dim @@ Var v)) with
-    | _ when self -> v_side @ side
+    | _ when self -> dedup @@ v_side @ side
     | _, ([], _) -> side
-    | None, (v :: _, side) -> (if is_complete then [] else [ v ]) @ v_side @ side
+    | None, (v :: _, side) -> (if is_complete then [] else [ v ]) @ dedup @@ v_side @ side
     | Some dim, (_ :: _, side) -> dim :: side
   in
   match in_.solved with
