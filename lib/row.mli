@@ -23,13 +23,15 @@ type row_cmp
 
 val row_id : sh_id:int -> kind:kind -> row_id
 
+type row_var
+
+val get_row_var : unit -> row_var
+
 (** A bcast specifies how axes of a single kind in a shape (i.e. the row) can adapt to other shapes. *)
 type bcast =
-  | Row_var of int  (** The row can be inferred to have more axes. *)
+  | Row_var of row_var  (** The row can be inferred to have more axes. *)
   | Broadcastable  (** The shape does not have more axes of this kind, but is "polymorphic". *)
 [@@deriving equal, hash, compare, sexp, variants]
-
-val get_row_var : unit -> bcast
 
 type dims_constraint =
   | Unconstrained
@@ -41,7 +43,6 @@ type t = { dims : dim list; constr : dims_constraint; bcast : bcast; id : row_id
 
 val dims_label_assoc : t -> (string * dim) list
 
-type 'a entry = { cur : 'a list; subr : 'a list; solved : 'a option } [@@deriving sexp]
 type environment [@@deriving sexp]
 type error_trace = ..
 
@@ -54,16 +55,16 @@ val sexp_of_error_trace : error_trace -> Sexp.t
 
 exception Shape_error of string * error_trace list [@@deriving sexp_of]
 
-val subst_row : environment -> t -> t
-val unify_row : t * t -> environment -> environment
-val empty_env : environment
-
 type inequality =
   | Dim_eq of { d1 : dim; d2 : dim }
   | Row_eq of { r1 : t; r2 : t }
   | Dim_ineq of { cur : dim; subr : dim }
   | Row_ineq of { cur : t; subr : t }
 [@@deriving compare, equal, sexp]
+
+val subst_row : environment -> t -> t
+val unify_row : t * t -> environment -> inequality list * environment
+val empty_env : environment
 
 val solve_inequalities : is_complete:bool -> inequality list -> environment -> environment
 val row_to_labels : environment -> t -> string array

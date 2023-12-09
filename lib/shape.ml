@@ -277,7 +277,11 @@ let axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~sh_id ~f labels =
   let b_dims, i_dims, o_dims = axis_map_to_dims_bio labels.labels in
   let vars = Hashtbl.create (module String) in
   let to_dim kind = Array.(Fn.compose to_list @@ map ~f:(f kind vars)) in
-  let upd_bcast = function None, true -> Some (Row.get_row_var ()) | old, true -> old | _, false -> None in
+  let upd_bcast = function
+    | None, true -> Some (Row.Row_var (Row.get_row_var ()))
+    | old, true -> old
+    | _, false -> None
+  in
   let b_row = upd_bcast (b_row, labels.bcast_batch) in
   let i_row = upd_bcast (i_row, labels.bcast_input) in
   let o_row = upd_bcast (o_row, labels.bcast_output) in
@@ -366,11 +370,11 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
         {
           dims = [];
           constr = Total_elems batch_elems;
-          bcast = get_row_var ();
-          id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch;
+          bcast = Row_var (get_row_var ());
+          id = row_id ~sh_id:cur_sh.id ~kind:`Batch;
         }
       in
-      (Row.dim_map_empty, [ Row_eq { r1 = b_row; r2 = cur_sh.batch } ])
+      (dim_map_empty, [ Row_eq { r1 = b_row; r2 = cur_sh.batch } ])
   | Terminal (File_mapped (filename, prec)) ->
       let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
       let len = Unix.lseek fd 0 Unix.SEEK_END / Arrayjit.Ops.prec_in_bytes prec in
@@ -388,8 +392,8 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
         {
           dims = [];
           constr = Total_elems batch_elems;
-          bcast = get_row_var ();
-          id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch;
+          bcast = Row_var (get_row_var ());
+          id = row_id ~sh_id:cur_sh.id ~kind:`Batch;
         }
       in
       (Row.dim_map_empty, [ Row_eq { r1 = b_row; r2 = cur_sh.batch } ])
@@ -795,7 +799,7 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
     }
   in
   let make_unknown kind =
-    { dims = []; constr = Unconstrained; bcast = get_row_var (); id = row_id ~sh_id:id ~kind }
+    { dims = []; constr = Unconstrained; bcast = Row_var (get_row_var ()); id = row_id ~sh_id:id ~kind }
   in
   let batch =
     match (batch_dims, batch_axes) with
@@ -822,7 +826,10 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
   (match deduced with
   | Not_constrained -> ()
   | Input_equals_output -> (
-      try state := Row.unify_row (input, output) !state
+      try
+        let more_ineqs, env = Row.unify_row (input, output) !state in
+        assert (List.is_empty more_ineqs);
+        state := env
       with Shape_error (s, trace) when !with_error_trace ->
         raise @@ Shape_error ("Input_equals_output / " ^ s, Shape_mismatch [ result ] :: trace)));
   result
@@ -848,7 +855,10 @@ let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
   (match deduced with
   | Not_constrained -> ()
   | Input_equals_output -> (
-      try state := Row.unify_row (input, output) !state
+      try
+        let more_ineqs, env = Row.unify_row (input, output) !state in
+        assert (List.is_empty more_ineqs);
+        state := env
       with Row.Shape_error (s, trace) when !with_error_trace ->
         raise @@ Row.Shape_error ("of spec / " ^ s, Shape_mismatch [ result ] :: trace)));
   result
