@@ -109,6 +109,11 @@ type logic =
 
 The constraints are solved by: unification of the equation constraints, and unification-like simplification of the inequality constraints. Simplification of an inequality can generate more equations and inequalities, so we need to be careful to keep it terminating.
 
-Let's explain the key functions.
+Let's explain the functions.
+
+* `s_dim_one_in_entry` / `s_row_one_in_entry`: substitutes the given dim / row variable in one dim / row env entry. Generates new inequalities if the variable was in one of the sides of a `Bounds` entry.
+* `subst_dim` / `subst_row`: substitutes out a variable in a dim / row value, if any.
+* `unify_dim`: solves a single equation between two values of type `dim`, and recursively all `dim` equations that this entails, but not inequalities nor row equations.
+* `unify_row`: solves a single equation between two values of type `row`, and recursively all `dim` and `row` equations that this entails, but not inequalities.
 
 ## Deriving the constraints
