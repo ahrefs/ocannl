@@ -16,7 +16,7 @@ The shape type incorporates information relevant to inference, in particular sha
 type dim = Var of dim_var | Dim of { d : int; label : string option; proj_id : int option }
 
 type bcast =
-  | Row_var of int  (** The row can be inferred to have more axes. *)
+  | Row_var of row_var  (** The row can be inferred to have more axes. *)
   | Broadcastable  (** The shape does not have more axes of this kind, but is "polymorphic". *)
 
 type dims_constraint =
@@ -34,7 +34,7 @@ type shape = Shape.t = {
 }
 ```
 
-The actual implementation is split into the `Row` module, which handles multi-row inference, and the `Shape` module which deals with the specific axis kinds (batch, input, output), _einsum_ specifications, and the shape-relevant semantics of operations expressed via the `Shape.logic` variant type.
+The actual implementation is split into the `Row` module, which handles multi-row inference, and the `Shape` module which deals with the specific axis kinds (batch, input, output), _einsum_ specifications, and the shape-relevant semantics of operations expressed via the `Shape.logic` variant type. Since broadcasting extends leading axes (preserves trailing axes), substituting a `row_var` means prepending to the `dims` of the row that has the row variable as its `bcast` field.
 
 Labels are a part of OCANNL, but it's a topic that needs more exploration and future work. Currently, OCANNL has labeled dimensions, but not labeled axes. This means that when two axes need to agree on the number of dimensions, they also need to agree on the labels. If the dimensions of both axes have labels, the labels need to be the same, and if one doesn't have a label initially, it's inferred to have the label from the other axis. Intuitively, the label is a specification of the semantics of an axis that is more fine-grained than, but of similar nature as, the number of dimensions. Currently, there is no global check to prevent the same label be used with different numbers of dimensions (on unrelated axes). Example: a label `"rgb"` attached to dimensions size 3 to denote that an axis represents three channels "red", "green" and "blue".
 
@@ -114,6 +114,9 @@ Let's explain the functions.
 * `s_dim_one_in_entry` / `s_row_one_in_entry`: substitutes the given dim / row variable in one dim / row env entry. Generates new inequalities if the variable was in one of the sides of a `Bounds` entry.
 * `subst_dim` / `subst_row`: substitutes out a variable in a dim / row value, if any.
 * `unify_dim`: solves a single equation between two values of type `dim`, and recursively all `dim` equations that this entails, but not inequalities nor row equations.
-* `unify_row`: solves a single equation between two values of type `row`, and recursively all `dim` and `row` equations that this entails, but not inequalities.
+* `unify_row`: solves a single equation between two rows, and recursively all `dim` and `row` equations that this entails, but not inequalities.
+* `apply_constraint`: if there's enough information in a row -- in particular it is not open i.e. there is no row variable -- solves the row constraint. Currently, there's just `Total_elems n`: if there's just one `dim` variable, it will become `n` divided by the product of other dimensions.
+* `solve_dim_ineq`: solves a single inequality between two values of type `dim`; returns derived equations and inequalities.
+* `solve_row_ineq`: solves a single inequality between two rows; returns derived equations and inequalities.
 
 ## Deriving the constraints

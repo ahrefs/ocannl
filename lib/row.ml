@@ -408,64 +408,114 @@ let rec unify_row ((row1, row2) as eq) env =
       let more_ineqs, env = apply_constraint { row1 with constr = meet constr1 constr2 } env in
       (more_ineqs @ ineqs, env)
 
-(*
-let update_row v ?cur ?subr env =
-  (* This is the same as [update_dim] except dealing with more potential side equations. *)
-  let no_v =
-    List.filter ~f:(fun r ->
-        if equal_bcast (Row_var v) r.bcast then
-          if List.is_empty r.dims then false
-          else raise @@ Shape_error ("Infinite row via self-reference", [ Row_mismatch [ r ] ])
-        else true)
-  in
-  let cur = no_v @@ List.map ~f:(subst_row env) @@ Option.to_list cur in
-  let subr = no_v @@ List.map ~f:(subst_row env) @@ Option.to_list subr in
-  if List.is_empty cur && List.is_empty subr then env
-  else
-    (* let guessed_id : row_id = (List.hd_exn @@ cur @ subr).id in *)
-    let value = { cur; subr; solved = None } in
-    let elim = perhaps_eliminate_row_var v ~v_cur:cur ~v_subr:subr in
-    match Map.find env.row_env v with
-    | Some in_ ->
-        (* Note: this is where the bulk of the work usually happens. *)
-        let eq, data = elim ~self:true ~in_ in
-        let eqs = eq @ Option.to_list extra_eq in
-        let row_env = Map.update env.row_env v ~f:(fun _ -> data) in
-        List.fold eqs ~init:{ env with row_env } ~f:(Fn.flip unify_row)
-    | None ->
-        let eqs = ref @@ Option.to_list extra_eq (* No fold_map in Map. *) in
-        let row_env =
-          Map.mapi env.row_env ~f:(fun ~key:v2 ~data:in_ ->
-              let eq, entry = elim ~self:(v = v2) ~in_ in
-              eqs := eq @ !eqs;
-              entry)
-        in
-        let env = List.fold !eqs ~init:{ env with row_env } ~f:(Fn.flip unify_row) in
-        {
-          env with
-          row_env = Map.add_exn env.row_env ~key:v ~data:value;
-          row_rev_elim_order = v :: env.row_rev_elim_order;
-        }
-
-let add_dim_ineq ~cur ~subr env =
+let solve_dim_ineq ~cur ~subr env =
+  let dedup = List.dedup_and_sort ~compare:compare_dim_var in
   match (cur, subr) with
   | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
       raise @@ Shape_error ("dimension comparison for axis: different labels", [ Dim_mismatch [ cur; subr ] ])
-  | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> env
-  | Dim { d = _; _ }, Dim { d = 1; _ } -> env
-  | Var v, _ -> update_dim v ~subr env
-  | _, Var v -> update_dim v ~cur env
-  | _ -> raise @@ Shape_error ("dimension comparison for axis: mismatch", [ Dim_mismatch [ cur; subr ] ])
+  | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> ([], env)
+  | Dim { d = _; _ }, Dim { d = 1; _ } -> ([], env)
+  | (Dim { d = 1; _ } as cur), _ -> ([ Dim_eq { d1 = subr; d2 = cur } ], env)
+  | Var v_cur, Var v_subr -> (
+      match (Map.find env.dim_env v_cur, Map.find env.dim_env v_subr) with
+      | None, None ->
+          ( [],
+            {
+              env with
+              dim_rev_elim_order = v_cur :: v_subr :: env.dim_rev_elim_order;
+              dim_env =
+                env.dim_env
+                |> Map.add_exn ~key:v_cur ~data:(Bounds { lub = None; cur = []; subr = [ v_subr ] })
+                |> Map.add_exn ~key:v_subr ~data:(Bounds { lub = None; cur = [ v_cur ]; subr = [] });
+            } )
+      | Some (Solved cur), Some (Solved subr) -> ([ Dim_ineq { cur; subr } ], env)
+      | Some (Solved cur), _ -> ([ Dim_ineq { cur; subr } ], env)
+      | _, Some (Solved subr) -> ([ Dim_ineq { cur; subr } ], env)
+      | Some (Bounds { cur = cur1; subr = subr1; lub = lub1 }), None ->
+          ( Option.to_list lub1 |> List.map ~f:(fun cur -> Dim_ineq { cur; subr }),
+            {
+              env with
+              dim_rev_elim_order = v_subr :: env.dim_rev_elim_order;
+              dim_env =
+                env.dim_env
+                |> Fn.flip Map.update v_cur ~f:(fun _ ->
+                       Bounds { lub = lub1; cur = cur1; subr = dedup @@ (v_subr :: subr1) })
+                |> Map.add_exn ~key:v_subr ~data:(Bounds { lub = None; cur = [ v_cur ]; subr = [] });
+            } )
+      | None, Some (Bounds { cur = cur2; subr = subr2; lub = lub2 }) ->
+          ( [],
+            {
+              env with
+              dim_rev_elim_order = v_cur :: env.dim_rev_elim_order;
+              dim_env =
+                env.dim_env
+                |> Map.add_exn ~key:v_cur ~data:(Bounds { lub = None; cur = []; subr = [ v_subr ] })
+                |> Fn.flip Map.update v_subr ~f:(fun _ ->
+                       Bounds { lub = lub2; cur = dedup @@ (v_cur :: cur2); subr = subr2 });
+            } )
+      | ( Some (Bounds { cur = cur1; subr = subr1; lub = lub1 }),
+          Some (Bounds { cur = cur2; subr = subr2; lub = lub2 }) ) ->
+          ( Option.to_list lub1 |> List.map ~f:(fun cur -> Dim_ineq { cur; subr }),
+            {
+              env with
+              dim_env =
+                env.dim_env
+                |> Fn.flip Map.update v_cur ~f:(fun _ ->
+                       Bounds { lub = lub1; cur = cur1; subr = dedup @@ (v_subr :: subr1) })
+                |> Fn.flip Map.update v_subr ~f:(fun _ ->
+                       Bounds { lub = lub2; cur = dedup @@ (v_cur :: cur2); subr = subr2 });
+            } ))
+  | _, Var v_subr -> (
+      match Map.find env.dim_env v_subr with
+      | None ->
+          ( [],
+            {
+              env with
+              dim_env =
+                Map.add_exn env.dim_env ~key:v_subr ~data:(Bounds { lub = Some cur; cur = []; subr = [] });
+            } )
+      | Some (Solved subr) -> ([ Dim_ineq { cur; subr } ], env)
+      | Some (Bounds { cur = _; subr = subr2; lub = Some lub2 }) ->
+          let lub_forcing =
+            match (cur, lub2) with
+            | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> []
+            | Dim _, Dim _ (* when d1 <> d2 *) ->
+                [ Dim_eq { d1 = subr; d2 = get_dim ~d:1 () } ]
+                (* raise
+                   @@ Shape_error
+                        ( "dimension comparison for axis: upper bound mismatch",
+                          [ Dim_mismatch [ lub2; cur; subr ] ] ) *)
+            | Var _, _ | _, Var _ -> assert false
+          in
+          (lub_forcing @ List.map subr2 ~f:(fun v_subr -> Dim_ineq { cur; subr = Var v_subr }), env)
+      | Some (Bounds { cur = _; subr = subr2; lub = None }) ->
+          (List.map subr2 ~f:(fun v_subr -> Dim_ineq { cur; subr = Var v_subr }), env))
+  | Var v_cur, _ -> (
+      match Map.find env.dim_env v_cur with
+      | None -> ([], env)
+      | Some (Solved cur) -> ([ Dim_ineq { cur; subr } ], env)
+      | Some (Bounds { cur = cur1; subr = _; lub = Some lub1 }) ->
+          ( Dim_ineq { cur = lub1; subr } :: List.map cur1 ~f:(fun v_cur -> Dim_ineq { subr; cur = Var v_cur }),
+            env )
+      | Some (Bounds { cur = cur1; subr = _; lub = None }) ->
+          (List.map cur1 ~f:(fun v_cur -> Dim_ineq { subr; cur = Var v_cur }), env))
+  | Dim _, Dim _ ->
+      raise @@ Shape_error ("dimension comparison for axis: mismatch", [ Dim_mismatch [ cur; subr ] ])
 
-let add_row_ineq ~cur ~subr env =
+let solve_row_ineq ~cur ~subr env =
+  let cur = subst_row env cur in
+  let subr = subst_row env subr in
   let prefix_ineqs len =
     let dims1 = take_from_end cur.dims len and dims2 = take_from_end subr.dims len in
-    List.fold ~init:env ~f:(fun env (cur, subr) -> add_dim_ineq ~cur ~subr env)
-    @@ List.zip_exn dims1 dims2
+    List.fold2_exn ~init:([], env)
+      ~f:(fun (ineqs, env) cur subr ->
+        let more_ineqs, env = solve_dim_ineq ~cur ~subr env in
+        (more_ineqs @ ineqs, env))
+      dims1 dims2
   in
   let r1_len = List.length cur.dims and r2_len = List.length subr.dims in
   let len = min r1_len r2_len in
-  let env =
+  let ineqs, env =
     try prefix_ineqs len
     with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ cur; subr ] :: trace)
   in
@@ -473,15 +523,118 @@ let add_row_ineq ~cur ~subr env =
     { bcast; dims = drop_from_end dims len; constr = prefix_constraint ~drop:len r; id }
   in
   match (cur, subr) with
-  | { bcast = Row_var v; _ }, _ when r1_len < r2_len ->
-      apply_constraint cur env |> update_row v ~subr:(reduced subr)
+  | { bcast = Row_var v_cur; _ }, { bcast = Row_var v_subr; _ } when r1_len = r2_len -> (
+      let more1, env = apply_constraint cur env in
+      let more2, env = apply_constraint subr env in
+      match (Map.find env.row_env v_cur, Map.find env.row_env v_subr) with
+      | None, None ->
+          ( more1 @ more2 @ ineqs,
+            {
+              env with
+              row_rev_elim_order = v_cur :: v_subr :: env.row_rev_elim_order;
+              row_env =
+                env.row_env
+                |> Map.add_exn ~key:v_cur ~data:(Bounds { cur = []; subr = [ v_subr ]; lub = None })
+                |> Map.add_exn ~key:v_subr ~data:(Bounds { cur = [ v_cur ]; subr = []; lub = None });
+            } )
+      | Some (Bounds { cur = cur1; subr = subr1; lub = lub1 }), None ->
+          ( more1 @ more2 @ ineqs,
+            {
+              env with
+              row_rev_elim_order = v_cur :: env.row_rev_elim_order;
+              row_env =
+                env.row_env
+                |> Fn.flip Map.update v_cur ~f:(fun _ ->
+                       Bounds { cur = cur1; subr = v_subr :: subr1; lub = lub1 })
+                |> Map.add_exn ~key:v_subr ~data:(Bounds { cur = [ v_cur ]; subr = []; lub = None });
+            } )
+      | None, Some (Bounds { cur = cur2; subr = subr2; lub = lub2 }) ->
+          ( more1 @ more2 @ ineqs,
+            {
+              env with
+              row_rev_elim_order = v_subr :: env.row_rev_elim_order;
+              row_env =
+                env.row_env
+                |> Fn.flip Map.update v_subr ~f:(fun _ ->
+                       Bounds { cur = v_cur :: cur2; subr = subr2; lub = lub2 })
+                |> Map.add_exn ~key:v_cur ~data:(Bounds { cur = []; subr = [ v_subr ]; lub = None });
+            } )
+      | ( Some (Bounds { cur = cur1; subr = subr1; lub = lub1 }),
+          Some (Bounds { cur = cur2; subr = subr2; lub = lub2 }) ) ->
+          ( more1 @ more2 @ ineqs,
+            {
+              env with
+              row_env =
+                env.row_env
+                |> Fn.flip Map.update v_cur ~f:(fun _ ->
+                       Bounds { cur = cur1; subr = v_subr :: subr1; lub = lub1 })
+                |> Fn.flip Map.update v_subr ~f:(fun _ ->
+                       Bounds { cur = v_cur :: cur2; subr = subr2; lub = lub2 });
+            } )
+      | Some (Solved _), _ | _, Some (Solved _) -> assert false)
+  | { bcast = Row_var _; dims; _ }, _ when r1_len < r2_len ->
+      let more_dims = Array.(to_list @@ init (r2_len - r1_len) ~f:(fun _ -> Var (get_var ()))) in
+      (* It's better to not compute reduced rows, because prefix_constraint can lose information. *)
+      let template =
+        { dims = more_dims @ dims; bcast = Row_var (get_row_var ()); constr = cur.constr; id = cur.id }
+      in
+      ( Row_eq { r1 = cur; r2 = template }
+        :: Row_ineq { cur = template; subr }
+        :: List.map2_exn more_dims (List.drop subr.dims r1_len) ~f:(fun cur subr -> Dim_ineq { cur; subr }),
+        env )
   | { bcast = Broadcastable; _ }, _ when r1_len < r2_len ->
       raise @@ Shape_error ("Too many axes", [ Row_mismatch [ cur; subr ] ])
-  | _, { bcast = Row_var v; _ } when r2_len <= r1_len ->
-      apply_constraint subr env |> update_row v ~cur:(reduced cur)
-  | _, { bcast = Broadcastable; _ } when r2_len <= r1_len -> apply_constraint cur env |> apply_constraint subr
+  | _, { bcast = Row_var v_subr; _ } when r2_len <= r1_len -> (
+      let more_ineqs, env = apply_constraint cur env in
+      let r_cur = reduced cur in
+      match Map.find env.row_env v_subr with
+      | None ->
+          ( more_ineqs @ ineqs,
+            {
+              env with
+              row_rev_elim_order = v_subr :: env.row_rev_elim_order;
+              row_env =
+                Map.add_exn env.row_env ~key:v_subr ~data:(Bounds { cur = []; subr = []; lub = Some r_cur });
+            } )
+      | Some (Bounds { cur = cur2; subr = subr2; lub = None }) ->
+          ( more_ineqs @ ineqs,
+            {
+              env with
+              row_env =
+                env.row_env
+                |> Fn.flip Map.update v_subr ~f:(fun _ ->
+                       Bounds { cur = cur2; subr = subr2; lub = Some r_cur });
+            } )
+      | Some (Bounds { cur = cur2; subr = subr2; lub = Some lub2 }) ->
+          let lub_len = min (List.length r_cur.dims) (List.length lub2.dims) in
+          let lub_id = if lub_len = List.length r_cur.dims then r_cur.id else lub2.id in
+          (* TODO: we lose connection here with the other bound if both have row variables. *)
+          let lub_bcast = if lub_len = List.length r_cur.dims then r_cur.bcast else lub2.bcast in
+          let lub_dims =
+            List.map2_exn (take_from_end r_cur.dims lub_len) (take_from_end lub2.dims lub_len)
+              ~f:(fun d1 d2 ->
+                match (d1, d2) with
+                | Dim { d = 1; _ }, _ -> d1
+                | _, Dim { d = 1; _ } -> d2
+                | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 <> d2 -> get_dim ~d:1 ()
+                | Var _, _ -> d1
+                | _, Var _ -> d2
+                | Dim _, Dim _ -> d1)
+          in
+          let lub = { dims = lub_dims; bcast = lub_bcast; constr = Unconstrained; id = lub_id } in
+          ( more_ineqs @ ineqs,
+            {
+              env with
+              row_env =
+                env.row_env
+                |> Fn.flip Map.update v_subr ~f:(fun _ -> Bounds { cur = cur2; subr = subr2; lub = Some lub });
+            } )
+      | Some (Solved _) -> assert false)
+  | _, { bcast = Broadcastable; _ } when r2_len <= r1_len ->
+      let more1, env = apply_constraint cur env in
+      let more2, env = apply_constraint subr env in
+      (more1 @ more2 @ ineqs, env)
   | { bcast = Row_var _ | Broadcastable; _ }, { bcast = Row_var _ | Broadcastable; _ } -> assert false
-*)
 
 let empty_env =
   {
@@ -490,9 +643,6 @@ let empty_env =
     dim_rev_elim_order = [];
     row_rev_elim_order = [];
   }
-
-let add_dim_ineq ~cur:_ ~subr:_ _env = failwith "NOT IMPLEMENTED YET"
-let add_row_ineq ~cur:_ ~subr:_ _env = failwith "NOT IMPLEMENTED YET"
 
 let solve_inequalities ~is_complete ineqs env =
   let rec solve ineqs env =
@@ -504,10 +654,10 @@ let solve_inequalities ~is_complete ineqs env =
           let more_ineqs, env = unify_row (r1, r2) env in
           (more_ineqs @ ineqs, env)
       | Dim_ineq { cur; subr } ->
-          let more_ineqs, env = add_dim_ineq ~cur ~subr env in
+          let more_ineqs, env = solve_dim_ineq ~cur ~subr env in
           (more_ineqs @ ineqs, env)
       | Row_ineq { cur; subr } ->
-          let more_ineqs, env = add_row_ineq ~cur ~subr env in
+          let more_ineqs, env = solve_row_ineq ~cur ~subr env in
           (more_ineqs @ ineqs, env)
     in
     let ineqs, env = List.fold ineqs ~init:([], env) ~f in
