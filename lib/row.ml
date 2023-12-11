@@ -679,6 +679,8 @@ let rec row_to_labels env =
       | Some (Solved row2) -> row_to_labels env { dims = row2.dims @ dims; constr; bcast = row2.bcast; id })
   | { dims; constr = _; bcast = Broadcastable; id = _ } -> Array.of_list_map dims ~f
 
+(** *** Projection inference *** *)
+
 let fresh_proj =
   let uid = ref 0 in
   fun () ->
@@ -692,11 +694,7 @@ let fresh_row_proj r =
   in
   { r with dims = List.map r.dims ~f:fresh_dim }
 
-(** *** Projection inference *** *)
-
 open Arrayjit.Indexing
-
-type proj_classes = int Map.M(Int).t [@@deriving sexp]
 
 (* let update_proj_classes pid1 pid2 proj_classes = Utils.union_add ~equal:Int.equal proj_classes pid1 pid2 *)
 
@@ -710,6 +708,7 @@ let sexp_of_error_trace = function
   | error_trace -> sexp_of_error_trace error_trace
 
 type proj_to_index = Arrayjit.Indexing.axis_index Map.M(Int).t [@@deriving sexp]
+type proj_classes = int Map.M(Int).t [@@deriving sexp]
 
 type proj_env = {
   proj_to_index : proj_to_index;
@@ -730,19 +729,31 @@ let get_proj_equations inequalities proj_axis_env env =
         | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
         | Var v -> Var v)
   in
-  let expand_dims = function
+  let rec expand_dims = function
     | { dims; bcast = Row_var v; _ } when Map.mem env.row_env v -> (
-        match Map.find_exn env.row_env v with Solved { dims = more_dims; _ } -> more_dims @ dims | _ -> dims)
+        match Map.find_exn env.row_env v with
+        | Solved r ->
+            let more_dims = expand_dims r in
+            more_dims @ dims
+        | _ -> dims)
     | { dims; _ } -> dims
   in
   let match_rows r1 r2 =
-    match List.zip (expand_dims r1) (expand_dims r2) with
-    | Unequal_lengths -> raise @@ Shape_error ("Mismatching number of axes", [ Row_mismatch [ r1; r2 ] ])
-    | Ok eqs -> List.map ~f:(fun (d1, d2) -> (to_proj d1, to_proj d2)) eqs
+    let dims1 = expand_dims r1 and dims2 = expand_dims r2 in
+    let len = min (List.length dims1) (List.length dims2) in
+    List.zip_exn (take_from_end dims1 len) (take_from_end dims2 len)
+    |> List.map ~f:(fun (d1, d2) -> (to_proj d1, to_proj d2))
   in
   let f = function
+    | Dim_ineq { cur = _; subr = Dim { d = 1; proj_id = Some proj_id; _ } } ->
+        [ (Proj { proj_id; d = 1 }, Solved (Fixed_idx 0)) ]
     | Dim_eq { d1; d2 } | Dim_ineq { cur = d1; subr = d2 } -> [ (to_proj d1, to_proj d2) ]
-    | Row_eq { r1; r2 } | Row_ineq { cur = r1; subr = r2 } -> match_rows r1 r2
+    | Row_eq { r1; r2 } -> match_rows r1 r2
+    | Row_ineq { cur = r1; subr = r2 } ->
+        match_rows r1 r2
+        |> List.map ~f:(function
+             | _, (Proj { proj_id = _; d = 1 } as proj) -> (proj, Solved (Fixed_idx 0))
+             | eq -> eq)
   in
   List.concat_map inequalities ~f
 

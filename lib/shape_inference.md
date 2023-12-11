@@ -119,5 +119,22 @@ Let's explain the shape inference functions.
 * `solve_dim_ineq`: solves a single inequality between two values of type `dim`; returns derived equations and inequalities. It maintains the between-variable bounds and the least-upper-bound (LUB). But there can only be one LUB (a dimension > 1) without forcing the bound variable itself to a solved form (with dimension = 1).
 * `solve_row_ineq`: solves a single inequality between two rows; returns derived equations and inequalities. It derives between-`dim` inequalities from the known parts of the compared rows. It maintains between-row-variable bounds (when known parts of the rows match) and the LUB. It forces the `cur` side to have at least the number of axes of the `subr` side (via a variables-only `template`). It updates the LUB by computing dimensions-wise LUBs.
 
+## Projections inference
+
+```ocaml
+type proj = Var of dim_var | Proj of { proj_id : int; d : int } | Solved of axis_index
+type proj_classes = int Map.M(Int).t
+
+type proj_env = {
+  proj_to_index : proj_to_index;
+  proj_classes : proj_classes;
+  product_dim : int Map.M(Int).t;
+  non_product : Set.M(Int).t;
+}
+```
+
+The projection inference functions.
+
+* `get_proj_equations inequalities proj_axis_env env` converts both equations and inequalitites to projection equations. For inequalities, it takes broadcasting into account, and equates a potentially-broadcasted dim-1 projection to `Fixed_idx 0`. `proj_axis_env` originates from the `Shape` module, holds projections from the slice operator and the einsum syntax.
 
 ## Deriving the constraints
