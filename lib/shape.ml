@@ -34,9 +34,9 @@ end
 type 'a axis_map = 'a Map.M(AxisKey).t [@@deriving compare, sexp]
 
 type parsed_axis_labels = {
-  bcast_batch : bool;
-  bcast_input : bool;
-  bcast_output : bool;
+  bcast_batch : string option;
+  bcast_input : string option;
+  bcast_output : string option;
   given_batch : int;
   given_input : int;
   given_output : int;
@@ -45,6 +45,8 @@ type parsed_axis_labels = {
 [@@deriving compare, sexp, fields]
 (** The labels are strings assigned to [AxisKey] axes. Moreover the [bcast_] fields represent whether
     additional leading axes are allowed (corresponding to the dot-ellipsis syntax for broadcasting).
+    The string can be used to identify a row variable, and defaults to ["batch"],  ["input"], ["output"]
+    respectively when parsing ["..."].
     The [given_] fields count the number of specified axes of the corresponding kind in [labels]. *)
 
 let bcast_of_kind = function `Batch -> bcast_batch | `Input -> bcast_input | `Output -> bcast_output
@@ -115,21 +117,32 @@ type transpose_type =
   * If [spec] doesn't contain ["|"], labels to the left of ["->"] are [Input] and to the right [Output].
   * Labels to the left of ["|"] are [Batch], and between ["|"] and ["->"] are [Input].
 
-    The label ["..."] is only allowed at the first axis of a kind (i.e. last from-end).
-    It is used to enable broadcasting for the axis kind in the einsum-related shape inference
-    (like the ellipsis ["..."] in [numpy.einsum]).
+    The labels ["..ident.."], ["..."] (where [ident] does not contain any of the special characters)
+    are only allowed at the first axis of a kind (i.e. last from-end).
+    They are used to enable broadcasting for the axis kind in the einsum-related shape inference
+    (like the ellipsis ["..."] in [numpy.einsum]), and are translated to row variables.
+    The ellipsis ["..."] is context dependent: in the batch row it is the same as ["..batch.."],
+    in the input row the same as ["..input.."], in the output row the same as ["..output.."].
+    When the same row variable is used in multiple rows, the corresponding broadcasted axes are matched
+    pointwise in the resulting operation.
 
     The label ["_"] is a place-holder: it is not output to the resulting map but aligns the axes
     of other labels. *)
 let axis_labels_of_spec spec : parsed_axis_labels =
-  let check_dot s =
-    if String.length s > 3 && (Option.is_some @@ String.substr_index ~pos:3 s ~pattern:"...") then
-      invalid_arg ("axis_labels_of_spec: dot only allowed at first axis of a kind: " ^ spec)
-    else if String.is_prefix s ~prefix:"..." then (true, String.drop_prefix s 3)
-    else (false, s)
+  let check_dot ~kind s =
+    (* TODO: complain if the row variable specification contains special characters, e.g. [' '; ',']. *)
+    if String.is_prefix s ~prefix:"..." then (Some kind, String.drop_prefix s 3)
+    else if String.is_prefix s ~prefix:".." then
+      let row_var_spec, s =
+        match String.substr_index ~pos:2 s ~pattern:".." with
+        | None -> invalid_arg "Shape.axis_labels_of_spec: unfinished row variable specification <..>"
+        | Some end_pos -> (String.sub s ~pos:2 ~len:(end_pos - 2), String.drop_prefix s (end_pos + 2))
+      in
+      (Some row_var_spec, String.drop_prefix s 3)
+    else (None, s)
   in
-  let parse spec in_axes =
-    let bcast, spec = check_dot @@ String.strip spec in
+  let parse ~kind spec in_axes =
+    let bcast, spec = check_dot ~kind @@ String.strip spec in
     ( bcast,
       let on = [ ' '; ','; '('; ')'; '\t'; '\r'; '\n' ] in
       let parse_label labels_num from_start s =
@@ -162,9 +175,9 @@ let axis_labels_of_spec spec : parsed_axis_labels =
           String.sub ~pos:(end_inp + 2) ~len:(String.length spec - end_inp - 2) spec )
     | None -> ("", spec)
   in
-  let bcast_batch, (given_batch, batch_labels) = parse batch_spec `Batch in
-  let bcast_input, (given_input, input_labels) = parse input_spec `Input in
-  let bcast_output, (given_output, output_labels) = parse output_spec `Output in
+  let bcast_batch, (given_batch, batch_labels) = parse ~kind:"batch" batch_spec `Batch in
+  let bcast_input, (given_input, input_labels) = parse ~kind:"input" input_spec `Input in
+  let bcast_output, (given_output, output_labels) = parse ~kind:"output" output_spec `Output in
   let labels =
     match Map.append ~lower_part:input_labels ~upper_part:output_labels with
     | `Ok m -> (
@@ -273,24 +286,20 @@ let axis_map_to_dims_index (type a) ?(default : a option) (idcs : a axis_map) : 
   let bch, inp, out = axis_map_to_dims_bio ?default idcs in
   Array.concat [ bch; out; inp ]
 
-let axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~sh_id ~f labels =
+let axes_spec_to_dims_bio ~sh_id ~row_var_env ~f labels =
   let b_dims, i_dims, o_dims = axis_map_to_dims_bio labels.labels in
   let vars = Hashtbl.create (module String) in
   let to_dim kind = Array.(Fn.compose to_list @@ map ~f:(f kind vars)) in
-  let upd_bcast = function
-    | None, true -> Some (Row.Row_var (Row.get_row_var ()))
-    | old, true -> old
-    | _, false -> None
+  let to_bcast v =
+    Option.value_map v ~default:Row.Broadcastable ~f:(fun vname ->
+        Hashtbl.find_or_add row_var_env vname ~default:(fun () -> Row.Row_var (Row.get_row_var ())))
   in
-  let b_row = upd_bcast (b_row, labels.bcast_batch) in
-  let i_row = upd_bcast (i_row, labels.bcast_input) in
-  let o_row = upd_bcast (o_row, labels.bcast_output) in
-  let to_bcast v = Option.value v ~default:Row.Broadcastable in
+  (* let dims, bcast =Option.value v ~default:(Row.Broadcastable, in *)
   let batch =
     {
       Row.dims = to_dim `Batch b_dims;
       constr = Unconstrained;
-      bcast = to_bcast b_row;
+      bcast = to_bcast labels.bcast_batch;
       id = Row.row_id ~sh_id ~kind:`Batch;
     }
   in
@@ -298,7 +307,7 @@ let axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~sh_id ~f labels =
     {
       Row.dims = to_dim `Input i_dims;
       constr = Unconstrained;
-      bcast = to_bcast i_row;
+      bcast = to_bcast labels.bcast_input;
       id = Row.row_id ~sh_id ~kind:`Input;
     }
   in
@@ -306,13 +315,13 @@ let axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~sh_id ~f labels =
     {
       Row.dims = to_dim `Output o_dims;
       constr = Unconstrained;
-      bcast = to_bcast o_row;
+      bcast = to_bcast labels.bcast_output;
       id = Row.row_id ~sh_id ~kind:`Output;
     }
   in
-  (b_row, i_row, o_row, batch, input, output)
+  (batch, input, output)
 
-let einsum_slot_spec_to_dims_bio ~generative ?b_row ?i_row ?o_row ~sh_id labels =
+let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env labels =
   let equal = Row.equal_kind in
   let proj_env_update = ref @@ Row.dim_map_empty in
   let f kind vars = function
@@ -325,20 +334,13 @@ let einsum_slot_spec_to_dims_bio ~generative ?b_row ?i_row ?o_row ~sh_id labels 
         proj_env_update := Map.add_exn !proj_env_update ~key:var ~data:(Arrayjit.Indexing.Fixed_idx i);
         Var var
   in
-  let result = axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f ~sh_id labels in
+  let result = axes_spec_to_dims_bio ~f ~row_var_env ~sh_id labels in
   (!proj_env_update, result)
 
 type proj_axis_env = Arrayjit.Indexing.axis_index Row.dim_map [@@deriving sexp]
 
 let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env * Row.inequality list =
   let open Row in
-  let row_eq_side kind bcast =
-    { dims = []; constr = Unconstrained; bcast; id = row_id ~sh_id:cur_sh.id ~kind }
-  in
-  let row_eq ~kind_r1 ~r1 ~kind_r2 ~r2 =
-    Option.to_list
-    @@ Option.map2 r1 r2 ~f:(fun r1 r2 -> Row_eq { r1 = row_eq_side kind_r1 r1; r2 = row_eq_side kind_r2 r2 })
-  in
   let dim_assoc_eqs assoc =
     List.Assoc.sort_and_group assoc ~compare:String.compare
     |> List.concat_map ~f:(function
@@ -512,12 +514,12 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
                  ( "Invalid permutation spec (expected one argument): " ^ spec,
                    [ Shape_mismatch [ cur_sh; sh ] ] )
       in
-      let proj_env_rhs, (b_row_rhs, i_row_rhs, o_row_rhs, b_rhs, i_rhs, o_rhs) =
-        einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh.id ls_rhs
+      let row_var_env = Hashtbl.create (module String) in
+      let proj_env_rhs, (b_rhs, i_rhs, o_rhs) =
+        einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh.id ~row_var_env ls_rhs
       in
-      let proj_env_lhs, (b_row_lhs, i_row_lhs, o_row_lhs, b_lhs, i_lhs, o_lhs) =
-        einsum_slot_spec_to_dims_bio ~generative ?b_row:b_row_rhs ?i_row:i_row_rhs ?o_row:o_row_rhs
-          ~sh_id:cur_sh.id ls_lhs
+      let proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
+        einsum_slot_spec_to_dims_bio ~generative ~sh_id:cur_sh.id ~row_var_env ls_lhs
       in
       let label_groups = List.concat_map ~f:dims_label_assoc [ b_lhs; i_lhs; o_lhs; b_rhs; i_rhs; o_rhs ] in
       let proj_env =
@@ -532,10 +534,7 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
         :: Row_ineq { cur = i_rhs; subr = sh.input }
         :: Row_ineq { cur = cur_sh.output; subr = o_lhs }
         :: Row_ineq { cur = o_rhs; subr = sh.output }
-        :: row_eq ~kind_r1:`Batch ~r1:b_row_lhs ~kind_r2:`Batch ~r2:b_row_rhs
-        @ row_eq ~kind_r1:`Input ~r1:i_row_lhs ~kind_r2:`Input ~r2:i_row_rhs
-        @ row_eq ~kind_r1:`Output ~r1:o_row_lhs ~kind_r2:`Output ~r2:o_row_rhs
-        @ dim_assoc_eqs label_groups )
+        :: dim_assoc_eqs label_groups )
   | Broadcast (Einsum spec, sh1, sh2) ->
       let ls_rhs1, ls_rhs2, ls_lhs =
         match einsum_of_spec spec with
@@ -546,16 +545,15 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
                  ( "Invalid permutation spec (expected one argument): " ^ spec,
                    [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )
       in
-      let proj_env_rhs1, (b_row_rhs1, i_row_rhs1, o_row_rhs1, b_rhs1, i_rhs1, o_rhs1) =
-        einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh1.id ls_rhs1
+      let row_var_env = Hashtbl.create (module String) in
+      let proj_env_rhs1, (b_rhs1, i_rhs1, o_rhs1) =
+        einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh1.id ~row_var_env ls_rhs1
       in
-      let proj_env_rhs2, (b_row_rhs2, i_row_rhs2, o_row_rhs2, b_rhs2, i_rhs2, o_rhs2) =
-        einsum_slot_spec_to_dims_bio ~generative:[] ?b_row:b_row_rhs1 ?i_row:i_row_rhs1 ?o_row:o_row_rhs1
-          ~sh_id:sh2.id ls_rhs2
+      let proj_env_rhs2, (b_rhs2, i_rhs2, o_rhs2) =
+        einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh2.id ~row_var_env ls_rhs2
       in
-      let proj_env_lhs, (b_row_lhs, i_row_lhs, o_row_lhs, b_lhs, i_lhs, o_lhs) =
-        einsum_slot_spec_to_dims_bio ~generative ?b_row:b_row_rhs2 ?i_row:i_row_rhs2 ?o_row:o_row_rhs2
-          ~sh_id:cur_sh.id ls_lhs
+      let proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
+        einsum_slot_spec_to_dims_bio ~generative ~sh_id:cur_sh.id ~row_var_env ls_lhs
       in
       let label_groups =
         List.concat_map ~f:dims_label_assoc
@@ -576,13 +574,7 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
         :: Row_ineq { cur = cur_sh.output; subr = o_lhs }
         :: Row_ineq { cur = o_rhs1; subr = sh1.output }
         :: Row_ineq { cur = o_rhs2; subr = sh2.output }
-        :: row_eq ~kind_r1:`Batch ~r1:b_row_lhs ~kind_r2:`Batch ~r2:b_row_rhs1
-        @ row_eq ~kind_r1:`Input ~r1:i_row_lhs ~kind_r2:`Input ~r2:i_row_rhs1
-        @ row_eq ~kind_r1:`Output ~r1:o_row_lhs ~kind_r2:`Output ~r2:o_row_rhs1
-        @ row_eq ~kind_r1:`Batch ~r1:b_row_lhs ~kind_r2:`Batch ~r2:b_row_rhs2
-        @ row_eq ~kind_r1:`Input ~r1:i_row_lhs ~kind_r2:`Input ~r2:i_row_rhs2
-        @ row_eq ~kind_r1:`Output ~r1:o_row_lhs ~kind_r2:`Output ~r2:o_row_rhs2
-        @ dim_assoc_eqs label_groups )
+        :: dim_assoc_eqs label_groups )
 
 let indices_bio sh (type v) (arr : v array) =
   let n_batch = List.length sh.batch.dims in
@@ -834,7 +826,7 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
         raise @@ Shape_error ("Input_equals_output / " ^ s, Shape_mismatch [ result ] :: trace)));
   result
 
-let shape_spec_to_dims_bio ?b_row ?i_row ?o_row labels =
+let shape_spec_to_dims_bio labels =
   let f _kind vars = function
     | Either.First s when String.contains s '=' -> (
         let label, dim =
@@ -847,10 +839,11 @@ let shape_spec_to_dims_bio ?b_row ?i_row ?o_row labels =
     | First label -> Var (Hashtbl.find_or_add vars label ~default:(fun () -> Row.get_var ~label ()))
     | Second d -> Row.get_dim ~d ()
   in
-  axes_spec_to_dims_bio ?b_row ?i_row ?o_row ~f labels
+  let row_var_env = Hashtbl.create (module String) in
+  axes_spec_to_dims_bio ~row_var_env ~f labels
 
 let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
-  let _, _, _, batch, input, output = shape_spec_to_dims_bio ~sh_id:id @@ axis_labels_of_spec spec in
+  let batch, input, output = shape_spec_to_dims_bio ~sh_id:id @@ axis_labels_of_spec spec in
   let result = { input; output; batch; id; debug_name } in
   (match deduced with
   | Not_constrained -> ()
