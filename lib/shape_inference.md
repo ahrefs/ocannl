@@ -109,14 +109,15 @@ type logic =
 
 The constraints are solved by: unification of the equation constraints, and unification-like simplification of the inequality constraints. Simplification of an inequality can generate more equations and inequalities, so we need to be careful to keep it terminating.
 
-Let's explain the functions.
+Let's explain the shape inference functions.
 
 * `s_dim_one_in_entry` / `s_row_one_in_entry`: substitutes the given dim / row variable in one dim / row env entry. Generates new inequalities if the variable was in one of the sides of a `Bounds` entry.
 * `subst_dim` / `subst_row`: substitutes out a variable in a dim / row value, if any.
 * `unify_dim`: solves a single equation between two values of type `dim`, and recursively all `dim` equations that this entails, but not inequalities nor row equations.
 * `unify_row`: solves a single equation between two rows, and recursively all `dim` and `row` equations that this entails, but not inequalities.
 * `apply_constraint`: if there's enough information in a row -- in particular it is not open i.e. there is no row variable -- solves the row constraint. Currently, there's just `Total_elems n`: if there's just one `dim` variable, it will become `n` divided by the product of other dimensions.
-* `solve_dim_ineq`: solves a single inequality between two values of type `dim`; returns derived equations and inequalities.
-* `solve_row_ineq`: solves a single inequality between two rows; returns derived equations and inequalities.
+* `solve_dim_ineq`: solves a single inequality between two values of type `dim`; returns derived equations and inequalities. It maintains the between-variable bounds and the least-upper-bound (LUB). But there can only be one LUB (a dimension > 1) without forcing the bound variable itself to a solved form (with dimension = 1).
+* `solve_row_ineq`: solves a single inequality between two rows; returns derived equations and inequalities. It derives between-`dim` inequalities from the known parts of the compared rows. It maintains between-row-variable bounds (when known parts of the rows match) and the LUB. It forces the `cur` side to have at least the number of axes of the `subr` side (via a variables-only `template`). It updates the LUB by computing dimensions-wise LUBs.
+
 
 ## Deriving the constraints
