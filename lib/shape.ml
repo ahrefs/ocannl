@@ -286,10 +286,9 @@ let axis_map_to_dims_index (type a) ?(default : a option) (idcs : a axis_map) : 
   let bch, inp, out = axis_map_to_dims_bio ?default idcs in
   Array.concat [ bch; out; inp ]
 
-let axes_spec_to_dims_bio ~sh_id ~row_var_env ~f labels =
+let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
   let b_dims, i_dims, o_dims = axis_map_to_dims_bio labels.labels in
-  let vars = Hashtbl.create (module String) in
-  let to_dim kind = Array.(Fn.compose to_list @@ map ~f:(f kind vars)) in
+  let to_dim kind = Array.(Fn.compose to_list @@ map ~f:(f kind)) in
   let to_bcast v =
     Option.value_map v ~default:Row.Broadcastable ~f:(fun vname ->
         Hashtbl.find_or_add row_var_env vname ~default:(fun () -> Row.Row_var (Row.get_row_var ())))
@@ -321,12 +320,12 @@ let axes_spec_to_dims_bio ~sh_id ~row_var_env ~f labels =
   in
   (batch, input, output)
 
-let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env labels =
+let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env ~dim_var_env labels =
   let equal = Row.equal_kind in
   let proj_env_update = ref @@ Row.dim_map_empty in
-  let f kind vars = function
+  let f kind = function
     | Either.First label ->
-        Row.Var (Hashtbl.find_or_add vars label ~default:(fun () -> Row.get_var ~label ()))
+        Row.Var (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~label ()))
     | Second 0 when Option.value ~default:false @@ List.Assoc.find generative ~equal kind ->
         Row.get_dim ~d:1 ()
     | Second i ->
@@ -334,19 +333,13 @@ let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env labels =
         proj_env_update := Map.add_exn !proj_env_update ~key:var ~data:(Arrayjit.Indexing.Fixed_idx i);
         Var var
   in
-  let result = axes_spec_to_dims_bio ~f ~row_var_env ~sh_id labels in
+  let result = axes_spec_to_dims_bio ~f ~row_var_env ~dim_var_env ~sh_id labels in
   (!proj_env_update, result)
 
 type proj_axis_env = Arrayjit.Indexing.axis_index Row.dim_map [@@deriving sexp]
 
 let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env * Row.inequality list =
   let open Row in
-  let dim_assoc_eqs assoc =
-    List.Assoc.sort_and_group assoc ~compare:String.compare
-    |> List.concat_map ~f:(function
-         | _, [] -> assert false
-         | _, d1 :: ds -> List.map ds ~f:(fun d2 -> Dim_eq { d1; d2 }))
-  in
   let generative =
     [
       (`Batch, List.is_empty cur_sh.batch.dims);
@@ -515,26 +508,28 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
                    [ Shape_mismatch [ cur_sh; sh ] ] )
       in
       let row_var_env = Hashtbl.create (module String) in
+      let dim_var_env = Hashtbl.create (module String) in
+
       let proj_env_rhs, (b_rhs, i_rhs, o_rhs) =
-        einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh.id ~row_var_env ls_rhs
+        einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh.id ~row_var_env ~dim_var_env ls_rhs
       in
       let proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
-        einsum_slot_spec_to_dims_bio ~generative ~sh_id:cur_sh.id ~row_var_env ls_lhs
+        einsum_slot_spec_to_dims_bio ~generative ~sh_id:cur_sh.id ~row_var_env ~dim_var_env ls_lhs
       in
-      let label_groups = List.concat_map ~f:dims_label_assoc [ b_lhs; i_lhs; o_lhs; b_rhs; i_rhs; o_rhs ] in
       let proj_env =
         let combine ~key:_ _ _ = assert false in
         Map.merge_skewed ~combine proj_env_rhs proj_env_lhs
       in
       (* Forget the old proj_env as it is not relevant after a propagate_shapes call completes. *)
       ( proj_env,
-        Row_ineq { cur = cur_sh.batch; subr = b_lhs }
-        :: Row_ineq { cur = b_rhs; subr = sh.batch }
-        :: Row_ineq { cur = cur_sh.input; subr = i_lhs }
-        :: Row_ineq { cur = i_rhs; subr = sh.input }
-        :: Row_ineq { cur = cur_sh.output; subr = o_lhs }
-        :: Row_ineq { cur = o_rhs; subr = sh.output }
-        :: dim_assoc_eqs label_groups )
+        [
+          Row_ineq { cur = cur_sh.batch; subr = b_lhs };
+          Row_ineq { cur = b_rhs; subr = sh.batch };
+          Row_ineq { cur = cur_sh.input; subr = i_lhs };
+          Row_ineq { cur = i_rhs; subr = sh.input };
+          Row_ineq { cur = cur_sh.output; subr = o_lhs };
+          Row_ineq { cur = o_rhs; subr = sh.output };
+        ] )
   | Broadcast (Einsum spec, sh1, sh2) ->
       let ls_rhs1, ls_rhs2, ls_lhs =
         match einsum_of_spec spec with
@@ -546,18 +541,15 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
                    [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )
       in
       let row_var_env = Hashtbl.create (module String) in
+      let dim_var_env = Hashtbl.create (module String) in
       let proj_env_rhs1, (b_rhs1, i_rhs1, o_rhs1) =
-        einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh1.id ~row_var_env ls_rhs1
+        einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh1.id ~row_var_env ~dim_var_env ls_rhs1
       in
       let proj_env_rhs2, (b_rhs2, i_rhs2, o_rhs2) =
-        einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh2.id ~row_var_env ls_rhs2
+        einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh2.id ~row_var_env ~dim_var_env ls_rhs2
       in
       let proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
-        einsum_slot_spec_to_dims_bio ~generative ~sh_id:cur_sh.id ~row_var_env ls_lhs
-      in
-      let label_groups =
-        List.concat_map ~f:dims_label_assoc
-          [ b_lhs; i_lhs; o_lhs; b_rhs1; i_rhs1; o_rhs1; b_rhs2; i_rhs2; o_rhs2 ]
+        einsum_slot_spec_to_dims_bio ~generative ~sh_id:cur_sh.id ~row_var_env ~dim_var_env ls_lhs
       in
       let proj_env =
         let combine ~key:_ _ _ = assert false in
@@ -565,16 +557,17 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
       in
       (* Forget the old proj_env as it is not relevant after a propagate_shapes call completes. *)
       ( proj_env,
-        Row_ineq { cur = cur_sh.batch; subr = b_lhs }
-        :: Row_ineq { cur = b_rhs1; subr = sh1.batch }
-        :: Row_ineq { cur = b_rhs2; subr = sh2.batch }
-        :: Row_ineq { cur = cur_sh.input; subr = i_lhs }
-        :: Row_ineq { cur = i_rhs1; subr = sh1.input }
-        :: Row_ineq { cur = i_rhs2; subr = sh2.input }
-        :: Row_ineq { cur = cur_sh.output; subr = o_lhs }
-        :: Row_ineq { cur = o_rhs1; subr = sh1.output }
-        :: Row_ineq { cur = o_rhs2; subr = sh2.output }
-        :: dim_assoc_eqs label_groups )
+        [
+          Row_ineq { cur = cur_sh.batch; subr = b_lhs };
+          Row_ineq { cur = b_rhs1; subr = sh1.batch };
+          Row_ineq { cur = b_rhs2; subr = sh2.batch };
+          Row_ineq { cur = cur_sh.input; subr = i_lhs };
+          Row_ineq { cur = i_rhs1; subr = sh1.input };
+          Row_ineq { cur = i_rhs2; subr = sh2.input };
+          Row_ineq { cur = cur_sh.output; subr = o_lhs };
+          Row_ineq { cur = o_rhs1; subr = sh1.output };
+          Row_ineq { cur = o_rhs2; subr = sh2.output };
+        ] )
 
 let indices_bio sh (type v) (arr : v array) =
   let n_batch = List.length sh.batch.dims in
@@ -827,7 +820,8 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
   result
 
 let shape_spec_to_dims_bio labels =
-  let f _kind vars = function
+  let dim_var_env = Hashtbl.create (module String) in
+  let f _kind = function
     | Either.First s when String.contains s '=' -> (
         let label, dim =
           match String.split s ~on:'=' with
@@ -836,11 +830,11 @@ let shape_spec_to_dims_bio labels =
         in
         try Row.get_dim ~d:(Int.of_string dim) ~label ()
         with _ -> invalid_arg "shape_spec_to_dims_bio: int expected after '='")
-    | First label -> Var (Hashtbl.find_or_add vars label ~default:(fun () -> Row.get_var ~label ()))
+    | First label -> Var (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~label ()))
     | Second d -> Row.get_dim ~d ()
   in
   let row_var_env = Hashtbl.create (module String) in
-  axes_spec_to_dims_bio ~row_var_env ~f labels
+  axes_spec_to_dims_bio ~row_var_env ~dim_var_env ~f labels
 
 let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
   let batch, input, output = shape_spec_to_dims_bio ~sh_id:id @@ axis_labels_of_spec spec in
