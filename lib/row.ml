@@ -103,13 +103,7 @@ type ('a, 'b) entry = Solved of 'b | Bounds of { cur : 'a list; subr : 'a list; 
 type dim_env = (dim_var, dim) entry Map.M(Dim_var).t [@@deriving sexp]
 type row_env = (row_var, t) entry Map.M(Row_var).t [@@deriving sexp]
 
-type environment = {
-  dim_env : dim_env;
-  row_env : row_env;
-  dim_rev_elim_order : dim_var list;
-  row_rev_elim_order : row_var list;
-}
-[@@deriving sexp]
+type environment = { dim_env : dim_env; row_env : row_env } [@@deriving sexp]
 (** Note that while we build up the partial sets of inequalities, the environment is not in solved form.
     It is only in resolved wrt. variables that are solved: [v -> e where Option.is_some e.solved]
     do not appear elsewhere in the environment. But once [finish_inference] is called, it becomes in
@@ -257,8 +251,6 @@ let rec unify_dim ((dim1, dim2) as eq) env =
             {
               dim_env = Map.add_exn dim_env ~key:v ~data:(Solved d2);
               row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry v ~value:d2);
-              dim_rev_elim_order = v :: env.dim_rev_elim_order;
-              row_rev_elim_order = env.row_rev_elim_order;
             }
         | Some (Solved d1) ->
             let more_ineqs, env = unify_dim (d1, d2) env in
@@ -270,7 +262,6 @@ let rec unify_dim ((dim1, dim2) as eq) env =
             List.iter subr ~f:(fun subr -> ineqs := Dim_ineq { subr = Var subr; cur = d2 } :: !ineqs);
             Option.iter lub ~f:(fun lub -> ineqs := Dim_ineq { cur = lub; subr = d2 } :: !ineqs);
             {
-              env with
               dim_env = Map.update dim_env v ~f:(fun _ -> Solved d2);
               row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry v ~value:d2);
             }
@@ -358,13 +349,7 @@ let rec unify_row ((row1, row2) as eq) env =
         match Map.find env.row_env v with
         | None ->
             let row_env = Map.map env.row_env ~f in
-            let env =
-              {
-                env with
-                row_env = Map.add_exn row_env ~key:v ~data:(Solved value);
-                row_rev_elim_order = v :: env.row_rev_elim_order;
-              }
-            in
+            let env = { env with row_env = Map.add_exn row_env ~key:v ~data:(Solved value) } in
             List.fold ~init:([], env) ~f:solve !ineqs
         | Some (Solved r1) -> unify_row (r1, value) env
         | Some (Bounds { cur; subr; lub }) ->
@@ -395,7 +380,6 @@ let solve_dim_ineq ~cur ~subr env =
           ( [],
             {
               env with
-              dim_rev_elim_order = v_cur :: v_subr :: env.dim_rev_elim_order;
               dim_env =
                 env.dim_env
                 |> Map.add_exn ~key:v_cur ~data:(Bounds { lub = None; cur = []; subr = [ v_subr ] })
@@ -408,7 +392,6 @@ let solve_dim_ineq ~cur ~subr env =
           ( Option.to_list lub1 |> List.map ~f:(fun cur -> Dim_ineq { cur; subr }),
             {
               env with
-              dim_rev_elim_order = v_subr :: env.dim_rev_elim_order;
               dim_env =
                 env.dim_env
                 |> Fn.flip Map.update v_cur ~f:(fun _ ->
@@ -419,7 +402,6 @@ let solve_dim_ineq ~cur ~subr env =
           ( [],
             {
               env with
-              dim_rev_elim_order = v_cur :: env.dim_rev_elim_order;
               dim_env =
                 env.dim_env
                 |> Map.add_exn ~key:v_cur ~data:(Bounds { lub = None; cur = []; subr = [ v_subr ] })
@@ -500,7 +482,6 @@ let solve_row_ineq ~cur ~subr env =
           ( ineqs,
             {
               env with
-              row_rev_elim_order = v_cur :: v_subr :: env.row_rev_elim_order;
               row_env =
                 env.row_env
                 |> Map.add_exn ~key:v_cur ~data:(Bounds { cur = []; subr = [ v_subr ]; lub = None })
@@ -510,7 +491,6 @@ let solve_row_ineq ~cur ~subr env =
           ( ineqs,
             {
               env with
-              row_rev_elim_order = v_cur :: env.row_rev_elim_order;
               row_env =
                 env.row_env
                 |> Fn.flip Map.update v_cur ~f:(fun _ ->
@@ -521,7 +501,6 @@ let solve_row_ineq ~cur ~subr env =
           ( ineqs,
             {
               env with
-              row_rev_elim_order = v_subr :: env.row_rev_elim_order;
               row_env =
                 env.row_env
                 |> Fn.flip Map.update v_subr ~f:(fun _ ->
@@ -554,7 +533,6 @@ let solve_row_ineq ~cur ~subr env =
           ( ineqs,
             {
               env with
-              row_rev_elim_order = v_subr :: env.row_rev_elim_order;
               row_env =
                 Map.add_exn env.row_env ~key:v_subr ~data:(Bounds { cur = []; subr = []; lub = Some r_cur });
             } )
@@ -595,13 +573,7 @@ let solve_row_ineq ~cur ~subr env =
   | _, { bcast = Broadcastable; _ } when r2_len <= r1_len -> (ineqs, env)
   | { bcast = Row_var _ | Broadcastable; _ }, { bcast = Row_var _ | Broadcastable; _ } -> assert false
 
-let empty_env =
-  {
-    dim_env = Map.empty (module Dim_var);
-    row_env = Map.empty (module Row_var);
-    dim_rev_elim_order = [];
-    row_rev_elim_order = [];
-  }
+let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
 
 let solve_inequalities ineqs env =
   let rec solve ineqs env =
