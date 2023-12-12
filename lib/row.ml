@@ -603,7 +603,7 @@ let empty_env =
     row_rev_elim_order = [];
   }
 
-let solve_inequalities ~is_complete ineqs env =
+let solve_inequalities ineqs env =
   let rec solve ineqs env =
     let f (ineqs, env) = function
       | Dim_eq { d1; d2 } ->
@@ -631,11 +631,23 @@ let solve_inequalities ~is_complete ineqs env =
     then (ineqs', env)
     else solve ineqs' env
   in
-  let ineqs', env = solve ineqs env in
-  if is_complete then
-    (* TODO: eliminate remaining variables. *)
-    if List.is_empty ineqs' then env else snd @@ solve ineqs' env
-  else env
+  solve ineqs env
+
+let close_row env r =
+  List.concat_map r.dims ~f:(function
+    | Var v as d1 -> (
+        match Map.find env.dim_env v with
+        | Some (Bounds { lub = Some lub; _ }) -> [ Dim_eq { d1; d2 = lub } ]
+        | _ -> [ Dim_eq { d1; d2 = get_dim ~d:1 () } ])
+    | _ -> [])
+  @
+  match r.bcast with
+  | Row_var v as bcast -> (
+      let r1 = { dims = []; bcast; id = r.id } and r2 = { dims = []; bcast = Broadcastable; id = r.id } in
+      match Map.find env.row_env v with
+      | Some (Bounds { lub = Some lub; _ }) -> [ Row_eq { r1; r2 = lub } ]
+      | _ -> [ Row_eq { r1; r2 } ])
+  | _ -> []
 
 let rec row_to_labels env =
   let rec f = function
