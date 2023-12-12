@@ -88,15 +88,12 @@ type compose_type =
       [fun x -> s1(s2(x))], or [s1 * s2] where [*] is the inner product (e.g. matrix multiply). *)
   | Einsum of string
       (** The [einsum] syntax: LABELS1;LABELS2=>LABELS3, where LABELSi are labels specifications.
-      Note that currently [Compose] is not redundant with [Einsum], because it enables more shape
-      inference: [Einsum] is limited to [Pointwise_bin]-like broadcasting, while [Compose] broadcasts
-      inputs of the "operator" against outputs of the "operand" (matching up an arbitrary number of axes).
+      Since OCANNL's extended einsum notation supports both axis variables and row variables, it makes
+      other compose types redundant.
       The [axis_labels] use pseudo-labels local to the notation, to line up the axes.
       For [Einsum (ls1^";"^ls2^"=>"^ls3)], the symmetric difference / disjunctive union of [ls1] and [ls2]'s
       pseudo-labels should be equal to [ls3] pseudo-labels.
 
-      Currently, we support two variants of the [einsum] syntax: either all the axes are provided,
-      or all input, output axes are provided but none of the batch axes.
       Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
 [@@deriving sexp, equal]
 
@@ -216,8 +213,7 @@ let einsum_of_spec spec =
     Axes are broadcast-expanded on a bottom-up update to fit the incoming shape. *)
 type logic =
   | Broadcast of compose_type * t * t
-      (** Matches the shapes for a binary operation, allowing for broadcasting e.g. an axis of dimension 1
-      does not conflict with a matching axis of a greater dimension.
+      (** Matches the shapes for a binary operation.
 
       For [Broadcast (Einsum (ls1, ls2, ls3), s1, s2)], the labels of [s1] and [s2] must match according
       to the [ls1], [ls2] lineup, and the resulting shape inherits the labels according to the [ls3] lineup.
@@ -497,7 +493,6 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
         let combine ~key:_ _ _ = assert false in
         Map.merge_skewed ~combine proj_env_rhs proj_env_lhs
       in
-      (* Forget the old proj_env as it is not relevant after a propagate_shapes call completes. *)
       ( proj_env,
         [
           Row_ineq { cur = cur_sh.batch; subr = b_lhs };
@@ -586,7 +581,7 @@ let apply_env update_step env =
   in
   iter_shapes update_step ~f
 
-let%debug_sexp propagate_shapes ?remaining_constraints (update_step : update_step) : unit =
+let(* %debug_sexp *) propagate_shapes ?remaining_constraints (update_step : update_step) : unit =
   if not @@ List.mem ~equal:phys_equal !second_stage_inference update_step then
     second_stage_inference := update_step :: !second_stage_inference;
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice does). *)

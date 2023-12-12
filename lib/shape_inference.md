@@ -10,7 +10,7 @@ The bulk of the projections inference happens alongside shape inference, with th
 
 A tensor shape in OCANNL is composed of three rows of axes: batch, input and output. These are ordered input-last (`batch @ output @ input`) in the underlying n-dimensional array implementation of tensors. A (fully inferred) tensor shape must have non-empty output axes; we do not use the convention where empty axes mean the tensor is a scalar -- scalars = 1-D output-only tensors. For printing and einsum-notation-like specifications, we use the syntax: `batch|input->output` (or `input->output`, or `output`), where `batch`, `input`, `output` are whitespace or comma or parenthesis separated axis entries; or the axis entries are the individual characters, if no separators are used (except if it's digits only).
 
-The shape type incorporates information relevant to inference, in particular shape variables: both for individual axes, and for extending a row with more axes. Currently, all rows are (independently) broadcastable: can be broadcasted to a larger number of axes, except when used with an einsum specification that forbids it.
+A row is a sequence of axes of a single kind: batch, input, or output. The shape type incorporates information relevant to inference, in particular shape variables: both for individual axes (`dim` variables), and for extending a row with more axes (`row` variables). Currently, all rows are (independently) broadcastable: can be broadcasted to a larger number of axes, except when used with an einsum specification that forbids it.
 
 ```ocaml
 type dim = Var of dim_var | Dim of { d : int; label : string option; proj_id : int option }
@@ -70,15 +70,12 @@ type compose_type =
       [fun x -> s1(s2(x))], or [s1 * s2] where [*] is the inner product (e.g. matrix multiply). *)
   | Einsum of string
       (** The [einsum] syntax: LABELS1;LABELS2=>LABELS3, where LABELSi are labels specifications.
-      Note that currently [Compose] is not redundant with [Einsum], because it enables more shape
-      inference: [Einsum] is limited to [Pointwise_bin]-like broadcasting, while [Compose] broadcasts
-      inputs of the "operator" against outputs of the "operand" (matching up an arbitrary number of axes).
+      Since OCANNL's extended einsum notation supports both axis variables and row variables, it makes
+      other compose types redundant.
       The [axis_labels] use pseudo-labels local to the notation, to line up the axes.
       For [Einsum (ls1^";"^ls2^"=>"^ls3)], the symmetric difference / disjunctive union of [ls1] and [ls2]'s
       pseudo-labels should be equal to [ls3] pseudo-labels.
 
-      Currently, we support two variants of the [einsum] syntax: either all the axes are provided,
-      or all input, output axes are provided but none of the batch axes.
       Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
 
 type transpose_type =
@@ -91,8 +88,7 @@ type transpose_type =
 
 type logic =
   | Broadcast of compose_type * shape * shape
-      (** Matches the shapes for a binary operation, allowing for broadcasting e.g. an axis of dimension 1
-      does not conflict with a matching axis of a greater dimension.
+      (** Matches the shapes for a binary operation.
 
       For [Broadcast (Einsum (ls1, ls2, ls3), s1, s2)], the labels of [s1] and [s2] must match according
       to the [ls1], [ls2] lineup, and the resulting shape inherits the labels according to the [ls3] lineup.
@@ -118,6 +114,7 @@ Let's explain the shape inference functions.
 * `apply_constraint`: if there's enough information in a row -- in particular it is not open i.e. there is no row variable -- solves the row constraint. Currently, there's just `Total_elems n`: if there's just one `dim` variable, it will become `n` divided by the product of other dimensions.
 * `solve_dim_ineq`: solves a single inequality between two values of type `dim`; returns derived equations and inequalities. It maintains the between-variable bounds and the least-upper-bound (LUB). But there can only be one LUB (a dimension > 1) without forcing the bound variable itself to a solved form (with dimension = 1).
 * `solve_row_ineq`: solves a single inequality between two rows; returns derived equations and inequalities. It derives between-`dim` inequalities from the known parts of the compared rows. It maintains between-row-variable bounds (when known parts of the rows match) and the LUB. It forces the `cur` side to have at least the number of axes of the `subr` side (via a variables-only `template`). It updates the LUB by computing dimensions-wise LUBs.
+* `solve_inequalities` solves equations, inequalities, and row constraints, until only row constraints remain. Row constraints can "pass" if there is not enough information, rather than reflecting their effect in the environment.
 
 ## Projections inference
 
@@ -141,3 +138,13 @@ The projection inference functions.
 * `get_proj_index` gets an `axis_index` for a `dim` based on the representative of its `proj_id`; and `Fixed_idx 0` for dim-1.
 
 ## Deriving the constraints
+
+Other important functions in the `Shape` module.
+
+* `einsum_slot_spec_to_dims_bio ~generative` parses an einsum spec for a single shape, returns the three rows and a mapping from axis (`dim`) variables to indices where the einsum specifies fixed indexing. When `generative` is true for the kind of a row, when an axis has a fixed projection to dimension 0, the axis is not a variable added to the fixed indexing mapping, but is instead dimension-1 (solved). The "generative" rows are the ones with no initial user-provided shape information. This is just a heuristic to avoid surprises where a tensor axis with only dimension 0 populated gets inferred a bigger dimension size -- it might be revisited in the future.
+* `get_inequalities` builds row inequalities by pairing the rows of the current shape (as `cur`) with the rows of sub-shapes (as `subr`). It also derives a batch row constraint for terminals initialized with `Constant_fill { values; strict = true }` and `File_mapped (filename, prec)` (where the file is scanned to get its length). For `Batch_slice` (the `@|` operation) it waits till the batch row variables (if any) are solved, and derives row equations (not inequalities) between the current shape and the sub-shape, with `cur_sh.batch.dims` expanded to account for the slicing / indexing. For einsum specs, it derives inequalities, roughly: _current shape ≥ lhs spec shape_, and _rhs spec shape ≥ sub-shape_.
+* `propagate_shapes` gets and then solves the inequalities, using a global state for the environment. It udpates the shapes in-place with the partial solution. It is invoked twice for each `update_step`: first during the bottom-up process of building tensors, and then in reverse order from `finish_inference`.
+* `finish_inference` is called right before some projections or array dimensions are required (typically, because of jitting). It performs a second round of `propagate_shapes`, and then once again attempts to solve any remaining constraints that `propagate_shapes` didn't solve. Then it "closes the shapes": substitutes out remaining shape variables by their LUBs if any, or dimension-1 / `Broadcastable` (no-more-axes). Then it resets the environment state, since the shapes are now guaranteed to not have variables.
+* `derive_projections` starts by freshening the `proj_id`s in the `update_step`. Then it generates and solves shape inequalities, and then generates and solves projection equations, and constructs the `projections` record.
+* `backprop_ith_arg ~from_1` swaps the LHS of `projections` with the `from_1` (e.g. first, second) RHS argument of `projections`. This leads to input-output behavior analogous to the inverse of the original operation wrt. the `from_1` argument.
+* `of_spec` constructs a shape record from an einsum slot spec. If `deduced = Input_equals_output`, it adds the corresponding equation to the global environment.
