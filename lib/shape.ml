@@ -293,11 +293,9 @@ let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
     Option.value_map v ~default:Row.Broadcastable ~f:(fun vname ->
         Hashtbl.find_or_add row_var_env vname ~default:(fun () -> Row.Row_var (Row.get_row_var ())))
   in
-  (* let dims, bcast =Option.value v ~default:(Row.Broadcastable, in *)
   let batch =
     {
       Row.dims = to_dim `Batch b_dims;
-      constr = Unconstrained;
       bcast = to_bcast labels.bcast_batch;
       id = Row.row_id ~sh_id ~kind:`Batch;
     }
@@ -305,7 +303,6 @@ let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
   let input =
     {
       Row.dims = to_dim `Input i_dims;
-      constr = Unconstrained;
       bcast = to_bcast labels.bcast_input;
       id = Row.row_id ~sh_id ~kind:`Input;
     }
@@ -313,7 +310,6 @@ let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
   let output =
     {
       Row.dims = to_dim `Output o_dims;
-      constr = Unconstrained;
       bcast = to_bcast labels.bcast_output;
       id = Row.row_id ~sh_id ~kind:`Output;
     }
@@ -361,15 +357,7 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
                  [ Shape_mismatch [ cur_sh ] ] )
       in
       let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in
-      let b_row =
-        {
-          dims = [];
-          constr = Total_elems batch_elems;
-          bcast = Row_var (get_row_var ());
-          id = row_id ~sh_id:cur_sh.id ~kind:`Batch;
-        }
-      in
-      (dim_map_empty, [ Row_eq { r1 = b_row; r2 = cur_sh.batch } ])
+      (dim_map_empty, [ Row_constr { r = cur_sh.batch; constr = Total_elems batch_elems } ])
   | Terminal (File_mapped (filename, prec)) ->
       let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
       let len = Unix.lseek fd 0 Unix.SEEK_END / Arrayjit.Ops.prec_in_bytes prec in
@@ -383,15 +371,7 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
                  [ Shape_mismatch [ cur_sh ] ] )
       in
       let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in
-      let b_row =
-        {
-          dims = [];
-          constr = Total_elems batch_elems;
-          bcast = Row_var (get_row_var ());
-          id = row_id ~sh_id:cur_sh.id ~kind:`Batch;
-        }
-      in
-      (Row.dim_map_empty, [ Row_eq { r1 = b_row; r2 = cur_sh.batch } ])
+      (Row.dim_map_empty, [ Row_constr { r = cur_sh.batch; constr = Total_elems batch_elems } ])
   | Transpose (Transpose, sh) ->
       ( Row.dim_map_empty,
         [
@@ -444,7 +424,6 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
           let expanded_batch =
             {
               dims = slice_var :: cur_sh.batch.dims;
-              constr = Unconstrained;
               bcast = cur_sh.batch.bcast;
               id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch;
             }
@@ -464,7 +443,6 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
                 dims =
                   List.init (num_dims sh - num_dims cur_sh - 1) ~f:(fun _ -> Var (get_var ()))
                   @ cur_sh.batch.dims;
-                constr = Unconstrained;
                 bcast = Broadcastable;
                 id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch;
               }
@@ -472,7 +450,6 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
             let expanded_batch =
               {
                 dims = slice_var :: matching_batch.dims;
-                constr = Unconstrained;
                 bcast = Broadcastable;
                 id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch;
               }
@@ -644,7 +621,7 @@ let row_to_dims row =
       (* FIXME: DEBUG: *)
       (* raise @@ Shape_error ("Not enough shape information: unresolved row variable", [ Row_mismatch [ row ] ]) *)
       Array.of_list_map dims ~f
-  | { dims; constr = _; bcast = Broadcastable; id = _ } -> Array.of_list_map dims ~f
+  | { dims; bcast = Broadcastable; id = _ } -> Array.of_list_map dims ~f
 
 (** Uses the matrix convention of putting the input axes last.
     Note: [force_to_dims] is "destructive": it closes shapes that remain incomplete after inference. *)
@@ -770,7 +747,6 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
   let make_dims kind ds =
     {
       dims = List.map ~f:(fun d -> get_dim ~d ()) ds;
-      constr = Unconstrained;
       bcast = Broadcastable;
       id = row_id ~sh_id:id ~kind;
     }
@@ -778,13 +754,12 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
   let make_axes kind ds =
     {
       dims = List.map ~f:(fun (label, d) -> get_dim ~d ~label ()) ds;
-      constr = Unconstrained;
       bcast = Broadcastable;
       id = row_id ~sh_id:id ~kind;
     }
   in
   let make_unknown kind =
-    { dims = []; constr = Unconstrained; bcast = Row_var (get_row_var ()); id = row_id ~sh_id:id ~kind }
+    { dims = []; bcast = Row_var (get_row_var ()); id = row_id ~sh_id:id ~kind }
   in
   let batch =
     match (batch_dims, batch_axes) with

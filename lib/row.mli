@@ -33,12 +33,7 @@ type bcast =
   | Broadcastable  (** The shape does not have more axes of this kind, but is "polymorphic". *)
 [@@deriving equal, hash, compare, sexp, variants]
 
-type dims_constraint =
-  | Unconstrained
-  | Total_elems of int  (** The shape-kind, inclusive of the further row spec, has this many elements. *)
-[@@deriving equal, hash, compare, sexp, variants]
-
-type t = { dims : dim list; constr : dims_constraint; bcast : bcast; id : row_id }
+type t = { dims : dim list; bcast : bcast; id : row_id }
 [@@deriving equal, hash, compare, sexp]
 
 val dims_label_assoc : t -> (string * dim) list
@@ -55,11 +50,17 @@ val sexp_of_error_trace : error_trace -> Sexp.t
 
 exception Shape_error of string * error_trace list [@@deriving sexp_of]
 
+type dims_constraint =
+  | Unconstrained
+  | Total_elems of int  (** The shape-kind, inclusive of the further row spec, has this many elements. *)
+[@@deriving equal, hash, compare, sexp, variants]
+
 type inequality =
   | Dim_eq of { d1 : dim; d2 : dim }
   | Row_eq of { r1 : t; r2 : t }
   | Dim_ineq of { cur : dim; subr : dim }
   | Row_ineq of { cur : t; subr : t }
+  | Row_constr of { r : t; constr : dims_constraint }
 [@@deriving compare, equal, sexp]
 
 val subst_row : environment -> t -> t
