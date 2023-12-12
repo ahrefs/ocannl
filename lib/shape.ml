@@ -22,9 +22,9 @@ module AxisKey = struct
     }
     [@@deriving equal, compare, sexp]
 
-    let to_string key =
+    (* let to_string key =
       (match key.in_axes with `Batch -> "bch" | `Input -> "inp" | `Output -> "out")
-      ^ Int.to_string key.from_end
+      ^ Int.to_string key.from_end *)
   end
 
   include T
@@ -49,8 +49,7 @@ type parsed_axis_labels = {
     respectively when parsing ["..."].
     The [given_] fields count the number of specified axes of the corresponding kind in [labels]. *)
 
-let bcast_of_kind = function `Batch -> bcast_batch | `Input -> bcast_input | `Output -> bcast_output
-let given_of_kind = function `Batch -> given_batch | `Input -> given_input | `Output -> given_output
+let axis_labels parsed = parsed.labels
 
 type t = {
   mutable batch : Row.t;
@@ -60,24 +59,8 @@ type t = {
   debug_name : string;
 }
 [@@deriving equal, fields, sexp]
-(** The datatype from which the actual Tensor shapes are computed.
-
-    Mutability is sufficient to perform inference, since there is no need for backtracking and
-    no explicit unification variables for now. [Unknown] stands for "not yet specified". *)
 
 let row_of_kind = function `Batch -> batch | `Input -> input | `Output -> output
-
-let map_over_kind ~f kind sh =
-  match kind with
-  | `Batch -> { sh with batch = f sh.batch }
-  | `Input -> { sh with input = f sh.input }
-  | `Output -> { sh with output = f sh.output }
-
-let update_kind ~f kind sh =
-  match kind with
-  | `Batch -> sh.batch <- f sh.batch
-  | `Input -> sh.input <- f sh.input
-  | `Output -> sh.output <- f sh.output
 
 type deduce_within_shape = Not_constrained | Input_equals_output [@@deriving compare, sexp, variants]
 
@@ -541,15 +524,6 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
           Row_ineq { cur = o_rhs2; subr = sh2.output };
         ] )
 
-let indices_bio sh (type v) (arr : v array) =
-  let n_batch = List.length sh.batch.dims in
-  let batch : v Array.t = Array.sub arr ~pos:0 ~len:n_batch in
-  let n_input = List.length sh.input.dims in
-  let input = Array.sub arr ~pos:n_batch ~len:n_input in
-  let n_output = List.length sh.output.dims in
-  let output = Array.sub arr ~pos:(n_batch + n_input) ~len:n_output in
-  (batch, input, output)
-
 let state = ref Row.empty_env
 let second_stage_inference = ref []
 
@@ -581,7 +555,7 @@ let apply_env update_step env =
   in
   iter_shapes update_step ~f
 
-let(* %debug_sexp *) propagate_shapes ?remaining_constraints (update_step : update_step) : unit =
+let (* %debug_sexp *) propagate_shapes ?remaining_constraints (update_step : update_step) : unit =
   if not @@ List.mem ~equal:phys_equal !second_stage_inference update_step then
     second_stage_inference := update_step :: !second_stage_inference;
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice does). *)

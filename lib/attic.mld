@@ -232,22 +232,14 @@ let rec scale ~num ~denom ?(force_conv = false) dim : dim =
       let num = to_num ratio and denom = to_denom ratio in
       if force_conv then scale ~num ~denom ~force_conv dim else Scaled { num; denom; dim }
 
-let rec unify_dim env dim_eqs =
-(* ... *)
-  | ({ d1 = Scaled { num; denom; dim = Var _ as v }; d2; _ } as eq) :: dim_eqs ->
-    unify_dim env @@ ({ eq with d1 = v; d2 = scale ~num:denom ~denom:num d2 } :: dim_eqs)
-| ({ d1; d2 = Scaled { num; denom; dim = Var _ as v }; _ } as eq) :: dim_eqs ->
-    unify_dim env @@ ({ eq with d1 = scale ~num:denom ~denom:num d1; d2 = v } :: dim_eqs)
-| ({ d1 = Scaled { num; denom; dim = Scaled _ as dim } as d1; _ } as eq) :: dim_eqs ->
-  let d1' = scale ~num ~denom dim in
-  if equal_dim d1 d1' then
-  else unify_dim env @@ ({ eq with d1 = d1' } :: dim_eqs)
-  | ({ d2 = Scaled { num; denom; dim = Scaled _ as dim }; _ } as eq) :: dim_eqs ->
-      unify_dim env @@ ({ eq with d2 = scale ~num ~denom dim } :: dim_eqs)
-(* ... *)
-  | ({ d1 = Scaled { num; denom; dim }; _ } as eq) :: dim_eqs ->
-      unify_dim env @@ ({ eq with d1 = scale ~force_conv:true ~num ~denom dim } :: dim_eqs)
-  | ({ d2 = Scaled { num; denom; dim }; _ } as eq) :: dim_eqs ->
-      unify_dim env @@ ({ eq with d2 = scale ~force_conv:true ~num ~denom dim } :: dim_eqs)
+
+let indices_bio sh (type v) (arr : v array) =
+  let n_batch = List.length sh.batch.dims in
+  let batch : v Array.t = Array.sub arr ~pos:0 ~len:n_batch in
+  let n_input = List.length sh.input.dims in
+  let input = Array.sub arr ~pos:n_batch ~len:n_input in
+  let n_output = List.length sh.output.dims in
+  let output = Array.sub arr ~pos:(n_batch + n_input) ~len:n_output in
+  (batch, input, output)
 
 ]}
