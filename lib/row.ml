@@ -350,11 +350,12 @@ let rec unify_row ((row1, row2) as eq) env =
 
 let solve_dim_ineq ~cur ~subr env =
   let dedup = List.dedup_and_sort ~compare:compare_dim_var in
+  let cur : dim = subst_dim env cur and subr : dim = subst_dim env subr in
   match (cur, subr) with
   | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
       raise @@ Shape_error ("dimension comparison for axis: different labels", [ Dim_mismatch [ cur; subr ] ])
   | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> ([], env)
-  | Dim { d = _; _ }, Dim { d = 1; _ } -> ([], env)
+  | _, Dim { d = 1; _ } -> ([], env)
   | (Dim { d = 1; _ } as cur), _ -> ([ Dim_eq { d1 = subr; d2 = cur } ], env)
   | Var v_cur, Var v_subr -> (
       match (Map.find env.dim_env v_cur, Map.find env.dim_env v_subr) with
@@ -367,9 +368,7 @@ let solve_dim_ineq ~cur ~subr env =
                 |> Map.add_exn ~key:v_cur ~data:(Bounds { lub = None; cur = []; subr = [ v_subr ] })
                 |> Map.add_exn ~key:v_subr ~data:(Bounds { lub = None; cur = [ v_cur ]; subr = [] });
             } )
-      | Some (Solved cur), Some (Solved subr) -> ([ Dim_ineq { cur; subr } ], env)
-      | Some (Solved cur), _ -> ([ Dim_ineq { cur; subr } ], env)
-      | _, Some (Solved subr) -> ([ Dim_ineq { cur; subr } ], env)
+      | Some (Solved _), _ | _, Some (Solved _) -> assert false
       | Some (Bounds { cur = cur1; subr = subr1; lub = lub1 }), None ->
           ( Option.to_list lub1 |> List.map ~f:(fun cur -> Dim_ineq { cur; subr }),
             {
@@ -411,7 +410,7 @@ let solve_dim_ineq ~cur ~subr env =
               dim_env =
                 Map.add_exn env.dim_env ~key:v_subr ~data:(Bounds { lub = Some cur; cur = []; subr = [] });
             } )
-      | Some (Solved subr) -> ([ Dim_ineq { cur; subr } ], env)
+      | Some (Solved _) -> assert false
       | Some (Bounds { cur = _; subr = subr2; lub = Some lub2 }) ->
           let lub_forcing =
             match (cur, lub2) with
@@ -427,15 +426,7 @@ let solve_dim_ineq ~cur ~subr env =
           (lub_forcing @ List.map subr2 ~f:(fun v_subr -> Dim_ineq { cur; subr = Var v_subr }), env)
       | Some (Bounds { cur = _; subr = subr2; lub = None }) ->
           (List.map subr2 ~f:(fun v_subr -> Dim_ineq { cur; subr = Var v_subr }), env))
-  | Var v_cur, _ -> (
-      match Map.find env.dim_env v_cur with
-      | None -> ([], env)
-      | Some (Solved cur) -> ([ Dim_ineq { cur; subr } ], env)
-      | Some (Bounds { cur = cur1; subr = _; lub = Some lub1 }) ->
-          ( Dim_ineq { cur = lub1; subr } :: List.map cur1 ~f:(fun v_cur -> Dim_ineq { subr; cur = Var v_cur }),
-            env )
-      | Some (Bounds { cur = cur1; subr = _; lub = None }) ->
-          (List.map cur1 ~f:(fun v_cur -> Dim_ineq { subr; cur = Var v_cur }), env))
+  | Var _, Dim _ (* when d2 > 1 *) -> ([ Dim_eq { d1 = cur; d2 = subr } ], env)
   | Dim _, Dim _ ->
       raise @@ Shape_error ("dimension comparison for axis: mismatch", [ Dim_mismatch [ cur; subr ] ])
 
