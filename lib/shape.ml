@@ -158,11 +158,9 @@ let axis_labels_of_spec spec : parsed_axis_labels =
   let bcast_batch, (given_batch, batch_labels) = parse ~kind:"batch" batch_spec `Batch in
   let bcast_input, (given_input, input_labels) = parse ~kind:"input" input_spec `Input in
   let bcast_output, (given_output, output_labels) = parse ~kind:"output" output_spec `Output in
+  let combine ~key:_ _v1 _v2 = assert false in
   let labels =
-    match Map.append ~lower_part:input_labels ~upper_part:output_labels with
-    | `Ok m -> (
-        match Map.append ~lower_part:batch_labels ~upper_part:m with `Ok r -> r | _ -> assert false)
-    | _ -> assert false
+     Map.merge_skewed ~combine input_labels @@ Map.merge_skewed ~combine output_labels batch_labels
   in
   { bcast_batch; bcast_input; bcast_output; given_batch; given_input; given_output; labels }
 
