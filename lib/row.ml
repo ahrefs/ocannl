@@ -212,7 +212,7 @@ let subst_row env ({ dims; bcast; id } as default) =
       | None | Some (Bounds _) -> default
       | Some (Solved { dims = more_dims; bcast; id = _ }) -> { dims = more_dims @ dims; bcast; id })
 
-(* let occurs_row v = function { bcast = Row_var v'; _ } -> v = v' | _ -> false *)
+(* module Debug_runtime = (val Minidebug_runtime.debug_html "debug.html") *)
 
 let rec unify_dim ((dim1, dim2) as eq) env =
   match eq with

@@ -21,10 +21,6 @@ module AxisKey = struct
           (** Axes are indexed from the end, to avoid reindexing when broadcasting; starting with [1]. *)
     }
     [@@deriving equal, compare, sexp]
-
-    (* let to_string key =
-      (match key.in_axes with `Batch -> "bch" | `Input -> "inp" | `Output -> "out")
-      ^ Int.to_string key.from_end *)
   end
 
   include T
@@ -160,7 +156,7 @@ let axis_labels_of_spec spec : parsed_axis_labels =
   let bcast_output, (given_output, output_labels) = parse ~kind:"output" output_spec `Output in
   let combine ~key:_ _v1 _v2 = assert false in
   let labels =
-     Map.merge_skewed ~combine input_labels @@ Map.merge_skewed ~combine output_labels batch_labels
+    Map.merge_skewed ~combine input_labels @@ Map.merge_skewed ~combine output_labels batch_labels
   in
   { bcast_batch; bcast_input; bcast_output; given_batch; given_input; given_output; labels }
 
@@ -215,7 +211,7 @@ let logic_to_spec = function
   | Transpose (Batch_slice _, _) -> "@|"
   | Terminal _ -> "<terminal>"
 
-module Debug_runtime = Utils.Debug_PrintBox ()
+(* module Debug_runtime = Row.Debug_runtime *)
 
 type update_step = { shape : t; logic : logic } [@@deriving sexp]
 (** Data required for a shape inference update step. Ideally, an update should be performed at least twice,
@@ -596,10 +592,8 @@ let row_to_dims row =
         raise @@ Shape_error ("Not enough shape information: unresolved variable", [ Dim_mismatch [ dim ] ])
   in
   match row with
-  | { bcast = Row_var _; dims; _ } ->
-      (* FIXME: DEBUG: *)
-      (* raise @@ Shape_error ("Not enough shape information: unresolved row variable", [ Row_mismatch [ row ] ]) *)
-      Array.of_list_map dims ~f
+  | { bcast = Row_var _; _ } ->
+      raise @@ Shape_error ("Not enough shape information: unresolved row variable", [ Row_mismatch [ row ] ])
   | { dims; bcast = Broadcastable; id = _ } -> Array.of_list_map dims ~f
 
 (** Uses the matrix convention of putting the input axes last.

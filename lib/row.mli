@@ -33,8 +33,7 @@ type bcast =
   | Broadcastable  (** The shape does not have more axes of this kind, but is "polymorphic". *)
 [@@deriving equal, hash, compare, sexp, variants]
 
-type t = { dims : dim list; bcast : bcast; id : row_id }
-[@@deriving equal, hash, compare, sexp]
+type t = { dims : dim list; bcast : bcast; id : row_id } [@@deriving equal, hash, compare, sexp]
 
 val dims_label_assoc : t -> (string * dim) list
 
@@ -66,7 +65,6 @@ type inequality =
 val subst_row : environment -> t -> t
 val unify_row : t * t -> environment -> inequality list * environment
 val empty_env : environment
-
 val solve_inequalities : inequality list -> environment -> inequality list * environment
 val close_row : environment -> t -> inequality list
 val row_to_labels : environment -> t -> string array
@@ -83,3 +81,5 @@ val solve_proj_equations : (proj * proj) list -> proj_env
 val get_proj_index : proj_env -> dim -> Arrayjit.Indexing.axis_index
 val get_product_proj : proj_env -> dim -> (int * int) option
 val proj_to_iterator : proj_env -> int -> Arrayjit.Indexing.symbol
+
+(* module Debug_runtime : Minidebug_runtime.Debug_runtime_cond *)
