@@ -175,24 +175,6 @@ let subst_dim env = function
   | Dim _ as d -> d
   | Var v as default -> ( match Map.find env.dim_env v with Some (Solved d) -> d | _ -> default)
 
-(* let more_constr =
-     match more_constr with
-     | Unconstrained -> Unconstrained
-     | Total_elems m ->
-         if List.for_all dims ~f:is_dim then
-           Total_elems (m * List.fold dims ~init:1 ~f:(fun n d -> n * dim_to_int_exn d))
-         else Unconstrained (* Wait for more shape inference. *)
-   in
-   let constr = meet more_constr constr in
-
-
-             let more_constr =
-            if List.for_all dims ~f:is_dim then
-              Total_elems (m * List.fold dims ~init:1 ~f:(fun n d -> n * dim_to_int_exn d))
-            else Unconstrained (* Wait for more shape inference. *)
-          in
-*)
-
 let s_row_one v ~value:{ dims = more_dims; bcast; id = _ } ~in_ =
   match in_ with
   | { dims; bcast = Row_var v2; id } when equal_row_var v v2 -> { dims = more_dims @ dims; bcast; id }
