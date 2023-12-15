@@ -91,6 +91,7 @@ let row_id ~sh_id ~kind = Row_id.{ sh_id; kind }
 (* let row_map_empty = Map.empty (module Row_id) *)
 
 type t = { dims : dim list; bcast : bcast; id : row_id } [@@deriving equal, hash, compare, sexp]
+type row = t [@@deriving equal, sexp]
 
 let dims_label_assoc dims =
   let f = function Var { label = Some l; _ } as d -> Some (l, d) | _ -> None in
@@ -219,6 +220,7 @@ let rec unify_dim ((dim1, dim2) as eq) env =
   | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
       raise @@ Shape_error ("solved dimensions for axis: different labels", [ Dim_mismatch [ dim1; dim2 ] ])
   | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> ([], env)
+  | Var v1, Var v2 when equal_dim_var v1 v2 -> ([], env)
   | Var v, d2 | d2, Var v ->
       let ineqs = ref [] in
       let f in_ =
@@ -311,6 +313,7 @@ let rec unify_row ((row1, row2) as eq) env =
     @@ List.zip_exn dims1 dims2
   in
   match eq with
+  | r1, r2 when equal_row r1 r2 -> ([], env)
   | { bcast = Row_var v; dims = r1_dims; id }, r2 | r2, { bcast = Row_var v; dims = r1_dims; id } -> (
       let r1_len = List.length r1_dims and r2_len = List.length r2.dims in
       if r1_len > r2_len then
@@ -352,6 +355,7 @@ let solve_dim_ineq ~cur ~subr env =
   let dedup = List.dedup_and_sort ~compare:compare_dim_var in
   let cur : dim = subst_dim env cur and subr : dim = subst_dim env subr in
   match (cur, subr) with
+  | cur, subr when equal_dim cur subr -> ([], env)
   | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
       raise @@ Shape_error ("dimension comparison for axis: different labels", [ Dim_mismatch [ cur; subr ] ])
   | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> ([], env)
@@ -449,6 +453,7 @@ let solve_row_ineq ~cur ~subr env =
   in
   let reduced { bcast; dims; id } = { bcast; dims = drop_from_end dims len; id } in
   match (cur, subr) with
+  | cur, subr when equal_row cur subr -> ([], env)
   | { bcast = Row_var v_cur; _ }, { bcast = Row_var v_subr; _ } when r1_len = r2_len -> (
       match (Map.find env.row_env v_cur, Map.find env.row_env v_subr) with
       | None, None ->
