@@ -87,13 +87,3 @@ let settings =
     fixed_state_for_init = None;
     print_decimals_precision = 2;
   }
-
-module Debug_flushing () = Minidebug_runtime.Flushing (struct
-  let debug_ch = Stdio.stdout
-  let time_tagged = false
-end)
-
-module Debug_PrintBox () = Minidebug_runtime.PrintBox (struct
-  let debug_ch = Stdio.stdout
-  let time_tagged = false
-end)
