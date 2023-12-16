@@ -2,7 +2,8 @@
 
 open Base
 module CDSL = Arrayjit.Low_level.CDSL
-open Arrayjit
+module Asgns = Arrayjit.Assignments
+module Idx = Arrayjit.Indexing
 
 module Initial_NTDSL = struct
   let term = Tensor.term ~grad_spec:Prohibit_grad
@@ -119,7 +120,7 @@ let rec pointpow ?(label : string list = []) ~grad_spec p t1 : Tensor.t =
   let p_t = NTDSL.number p in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections in
   let%cd grad_asn =
-    if Tensor.is_prohibit_grad grad_spec then fun ~v:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ -> Assignments.Noop
+    if Tensor.is_prohibit_grad grad_spec then fun ~v:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ -> Asgns.Noop
     else if Float.equal p 2.0 then fun ~v:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ p_t *. t1 * g
     else if Float.equal p 1.0 then fun ~v:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ g
     else fun ~v:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ p_t *. (t1 **. (p -. 1.)) * g
@@ -173,7 +174,7 @@ let range_of_shape ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?batch_dims
   let input_dims = Option.first_some input_dims @@ Option.some_if (Option.is_none input_axes) [] in
   let output_dims = Option.first_some output_dims @@ Option.some_if (Option.is_none output_axes) [] in
   Tensor.term
-    ~label:(("r" ^ Indexing.dims_to_string dims) :: label)
+    ~label:(("r" ^ Idx.dims_to_string dims) :: label)
     ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
     ~init_op:Range_over_offsets ()
 
@@ -194,19 +195,19 @@ let data ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?batch_dims ?input_di
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient ?(label = []) =
   let module NTDSL = Initial_NTDSL in
-  let grad_asn ~v:_ ~g:_ ~t1:_ ~projections:_ = Assignments.Noop in
+  let grad_asn ~v:_ ~g:_ ~t1:_ ~projections:_ = Asgns.Noop in
   let%cd op_asn ~v ~t1 ~projections = v =: v1 in
   Tensor.unop ~label:("stop_grad" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
     ~grad_spec:Prohibit_grad
 
-let slice ?(label = []) ~grad_spec (batch_idx : Indexing.static_symbol) t1 : Tensor.t =
+let slice ?(label = []) ~grad_spec (batch_idx : Idx.static_symbol) t1 : Tensor.t =
   let module NTDSL = Initial_NTDSL in
   let op_asn ~v ~t1 ~projections =
-    Assignments.Fetch
+    Asgns.Fetch
       {
         array = v;
         fetch_op = Slice { batch_idx; sliced = t1.Tensor.value };
-        dims = lazy (Lazy.force projections).Indexing.lhs_dims;
+        dims = lazy (Lazy.force projections).Idx.lhs_dims;
       }
   in
   let%cd grad_asn ~v:_ ~g ~t1 ~projections = g1 =+ g in
@@ -215,14 +216,14 @@ let slice ?(label = []) ~grad_spec (batch_idx : Indexing.static_symbol) t1 : Ten
 let embed_symbol ?(label = []) static_sym : Tensor.t =
   let module NTDSL = Initial_NTDSL in
   let op_asn ~v ~projections =
-    Assignments.Fetch
+    Asgns.Fetch
       {
         array = v;
         fetch_op = Embed_symbol static_sym;
-        dims = lazy (Lazy.force projections).Indexing.lhs_dims;
+        dims = lazy (Lazy.force projections).Idx.lhs_dims;
       }
   in
-  let grad_asn ~v:_ ~g:_ ~projections:_ = Assignments.Noop in
+  let grad_asn ~v:_ ~g:_ ~projections:_ = Asgns.Noop in
   Tensor.op ~label:("!@" :: label) ~op_asn ~grad_asn ~grad_spec:Prohibit_grad
     (Shape.make ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ())
     []
@@ -286,7 +287,7 @@ module NTDSL = struct
   let counter ?(label = []) =
     let module NTDSL = Initial_NTDSL in
     let%cd op_asn ~v ~t1 ~projections = v =+ t1 ~projections in
-    let grad_asn ~v:_ ~g:_ ~t1:_ ~projections:_ = Assignments.Noop in
+    let grad_asn ~v:_ ~g:_ ~t1:_ ~projections:_ = Asgns.Noop in
     Tensor.unop ~label:("counter" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
       ~grad_spec:Prohibit_grad
 end

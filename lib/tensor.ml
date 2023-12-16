@@ -3,20 +3,20 @@
 open Base
 module Nd = Arrayjit.Ndarray
 module LA = Arrayjit.Lazy_array
-open Arrayjit
+module Asgns = Arrayjit.Assignments
+module Idx = Arrayjit.Indexing
 
 type diff = {
   grad : LA.t;
-  zero_grads : Assignments.t;
-      (** Prepares for backpropagation. Always compile as: [Seq (zero_grads, backprop)]. *)
-  backprop : Assignments.t;
+  zero_grads : Asgns.t;  (** Prepares for backpropagation. Always compile as: [Seq (zero_grads, backprop)]. *)
+  backprop : Asgns.t;
       (** Backpropagates for the tensor and its descendants; which typically means adding
           partial gradients to the gradient tensor of the subtensors, then for sub-subtensors etc. *)
 }
 [@@deriving sexp_of]
 
 type t = {
-  forward : Assignments.t;
+  forward : Asgns.t;
   diff : diff option;
   id : int;  (** Same as [value.id]. *)
   value : LA.t;
@@ -66,8 +66,8 @@ let is_fwd_root t = Map.mem session_state.forward_roots t.id
 let remove_fwd_root t = session_state.forward_roots <- Map.remove session_state.forward_roots t.id
 let forward_roots () = session_state.forward_roots
 let backprop_roots () = session_state.backprop_roots
-let default_value_prec = ref Ops.single
-let default_grad_prec = ref Ops.single
+let default_value_prec = ref Arrayjit.Ops.single
+let default_grad_prec = ref Arrayjit.Ops.single
 
 exception Session_error of string * t option [@@deriving sexp]
 
@@ -84,9 +84,9 @@ let lazy_to_dims shape =
       finish_inference ();
       to_dims shape)
 
-let fetch_zeros array shape = Assignments.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
-let fetch_ones array shape = Assignments.Fetch { array; fetch_op = Constant 1.; dims = lazy_to_dims shape }
-let default_init_op = Ops.Constant_fill { values = [| 0.0 |]; strict = false }
+let fetch_zeros array shape = Asgns.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
+let fetch_ones array shape = Asgns.Fetch { array; fetch_op = Constant 1.; dims = lazy_to_dims shape }
+let default_init_op = Arrayjit.Ops.Constant_fill { values = [| 0.0 |]; strict = false }
 let max_sublabel_length = ref 25
 
 let raw_binop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs1_is_grad ~t2 ~rhs2_is_grad ~logic =
@@ -103,7 +103,7 @@ let raw_binop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs1_is_grad ~t2 ~rhs2_i
   let lhs = if lhs_is_grad then (Option.value_exn t.diff).grad else t.value in
   let rhs1 = if rhs1_is_grad then (Option.value_exn t1.diff).grad else t1.value in
   let rhs2 = if rhs2_is_grad then (Option.value_exn t2.diff).grad else t2.value in
-  Assignments.Accum_binop { zero_out; accum; lhs; op; rhs1; rhs2; projections }
+  Asgns.Accum_binop { zero_out; accum; lhs; op; rhs1; rhs2; projections }
 
 let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
   let shape = t.shape in
@@ -118,7 +118,7 @@ let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
   in
   let lhs = if lhs_is_grad then (Option.value_exn t.diff).grad else t.value in
   let rhs = if rhs_is_grad then (Option.value_exn t1.diff).grad else t1.value in
-  Assignments.Accum_unop { zero_out; accum; lhs; op; rhs; projections }
+  Asgns.Accum_unop { zero_out; accum; lhs; op; rhs; projections }
 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
@@ -136,7 +136,7 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
   let shape = make_shape ~debug_name:(LA.debug_name ~id ~label) ~id in
   let prec =
     List.map orig_ts ~f:(fun ti -> ti.value.prec)
-    |> List.reduce ~f:Ops.promote_prec
+    |> List.reduce ~f:Arrayjit.Ops.promote_prec
     |> Option.value ~default:!default_value_prec
   in
   let rec shape_logics = function
@@ -145,9 +145,7 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
     | [ t1; t2 ] -> [ Shape.Broadcast (compose_op, t1.shape, t2.shape) ]
     | t1 :: (t2 :: _ as ts) -> Shape.Broadcast (compose_op, t1.shape, t2.shape) :: shape_logics ts
   in
-  let local_shape_updates =
-    List.map ~f:(fun logic -> Shape.{ shape; logic }) @@ shape_logics orig_ts
-  in
+  let local_shape_updates = List.map ~f:(fun logic -> Shape.{ shape; logic }) @@ shape_logics orig_ts in
   let dims = lazy_to_dims shape in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
   let projections =
@@ -158,8 +156,8 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
   in
   let v = LA.create prec ~id ~label ~dims init_op in
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
-  let fwds = List.map ordered_ts ~f:(fun ti -> if is_fwd_root ti then ti.forward else Assignments.Noop) in
-  let forward = Assignments.sequential @@ fwds @ [ op_asn ~v ~projections ] in
+  let fwds = List.map ordered_ts ~f:(fun ti -> if is_fwd_root ti then ti.forward else Asgns.Noop) in
+  let forward = Asgns.sequential @@ fwds @ [ op_asn ~v ~projections ] in
   if
     is_prohibit_grad grad_spec
     || (Fn.non is_require_grad grad_spec && List.for_all orig_ts ~f:(fun ti -> Option.is_none ti.diff))
@@ -172,25 +170,26 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
     let g_prec =
       let f ti = Option.map ti.diff ~f:(fun d -> d.grad.LA.prec) in
       Option.value ~default:!default_grad_prec
-      @@ List.reduce ~f:Ops.promote_prec @@ List.filter_map orig_ts ~f
+      @@ List.reduce ~f:Arrayjit.Ops.promote_prec
+      @@ List.filter_map orig_ts ~f
     in
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
     let g = LA.create g_prec ~id:grad_id ~label:("grad" :: label) ~dims default_init_op in
-    let dcode ti = Option.value_map ti.diff ~default:Assignments.Noop in
+    let dcode ti = Option.value_map ti.diff ~default:Asgns.Noop in
     let is_bck_root ti = Map.mem session_state.backprop_roots ti.id in
     let zero_grads =
       let zero_g = dcode ~f:(fun diff -> diff.zero_grads) in
-      let zeros = List.map ordered_ts ~f:(fun ti -> if is_bck_root ti then zero_g ti else Assignments.Noop) in
-      Assignments.sequential @@ zeros @ [ fetch_zeros g shape ]
+      let zeros = List.map ordered_ts ~f:(fun ti -> if is_bck_root ti then zero_g ti else Asgns.Noop) in
+      Asgns.sequential @@ zeros @ [ fetch_zeros g shape ]
     in
     (* The code needs to be included in the reverse order to which it was computed! This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
     let backprop =
       let bprop = dcode ~f:(fun diff -> diff.backprop) in
-      let bcks = List.map ordered_ts ~f:(fun ti -> if is_bck_root ti then bprop ti else Assignments.Noop) in
-      Assignments.sequential @@ (grad_asn ~v ~g ~projections :: List.rev bcks)
+      let bcks = List.map ordered_ts ~f:(fun ti -> if is_bck_root ti then bprop ti else Asgns.Noop) in
+      Asgns.sequential @@ (grad_asn ~v ~g ~projections :: List.rev bcks)
     in
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop } in
@@ -216,14 +215,15 @@ let unop ~label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
 let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
     ?init_op ?fetch_op () =
   let op_asn ~v ~projections =
-    let open Assignments in
-    let dims = lazy (Lazy.force projections).Indexing.lhs_dims in
+    let open Asgns in
+    let dims = lazy (Lazy.force projections).Idx.lhs_dims in
     match (fetch_op, init_op) with
-    | None, Some (Ops.Constant_fill { values = [| _ |]; strict = _ }) when not (is_require_grad grad_spec) ->
+    | None, Some (Arrayjit.Ops.Constant_fill { values = [| _ |]; strict = _ })
+      when not (is_require_grad grad_spec) ->
         (* The scalar literal case. *)
         let fetch_op =
           match init_op with
-          | Some (Ops.Constant_fill { values = [| c |]; _ }) -> Constant c
+          | Some (Arrayjit.Ops.Constant_fill { values = [| c |]; _ }) -> Constant c
           | _ -> assert false
         in
         Fetch { array = v; fetch_op; dims }
@@ -239,7 +239,7 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
             v.device_only <- Some (false, 23));
         Fetch { array = v; fetch_op; dims }
   in
-  let grad_asn ~v:_ ~g:_ ~projections:_ = Assignments.Noop in
+  let grad_asn ~v:_ ~g:_ ~projections:_ = Asgns.Noop in
   let make_shape =
     Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced ()
   in
@@ -250,7 +250,7 @@ let float_to_label v = Float.to_string v
 let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
   (* Note: no axis label so that we do not conflict with user labels. *)
   let label = float_to_label c :: label in
-  let init_op = Ops.Constant_fill { values = [| c |]; strict = true } in
+  let init_op = Arrayjit.Ops.Constant_fill { values = [| c |]; strict = true } in
   let result = term ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~init_op in
   match axis_label with
   | None -> result ~output_dims:[ 1 ] ()
@@ -268,15 +268,15 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
     Stdlib.Format.pp_set_geometry Stdlib.Format.str_formatter ~max_indent:!max_sublabel_length
       ~margin:(!max_sublabel_length * 2);
     let dims = Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list in
-    let ndarr = Ndarray.create_array Ops.double ~dims (Constant_fill { values; strict }) in
+    let ndarr = Nd.create_array Arrayjit.Ops.double ~dims (Constant_fill { values; strict }) in
     let ( ! ) = List.length in
-    Ndarray.pp_array_inline ~num_batch_axes:!batch_ds ~num_output_axes:!output_ds ~num_input_axes:!input_ds
+    Nd.pp_array_inline ~num_batch_axes:!batch_ds ~num_output_axes:!output_ds ~num_input_axes:!input_ds
       Stdlib.Format.str_formatter ndarr;
     Stdlib.Format.flush_str_formatter ()
   in
   let op_label =
     if String.contains op_label '\n' then
-      "c" ^ Indexing.dims_to_string @@ Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list
+      "c" ^ Idx.dims_to_string @@ Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list
     else op_label
   in
   let label = op_label :: label in
@@ -290,7 +290,9 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
 
 let param ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?(strict = false) ?values label =
   let init_op =
-    match values with Some values -> Ops.Constant_fill { values; strict } | None -> Standard_uniform
+    match values with
+    | Some values -> Arrayjit.Ops.Constant_fill { values; strict }
+    | None -> Standard_uniform
   in
   let t =
     term ~label:[ label ] ~grad_spec:Require_grad ~batch_dims:[] ?input_dims ?output_dims ?input_axes
@@ -468,7 +470,7 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
     match style with
     | `Default -> Shape.default_display_indices sh
     | `N5_layout priorities ->
-        let f: (string, int) Either.t -> int = function
+        let f : (string, int) Either.t -> int = function
           | Either.Second i -> i
           | First _ -> invalid_arg "`N5_layout requires integer-only labels"
         in
@@ -529,23 +531,23 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
   if with_code then (
     (match t.forward with
     | Noop -> ()
-    | fwd_code -> Stdlib.Format.printf "Current forward body:@ %s@ " @@ Assignments.to_string_hum fwd_code);
+    | fwd_code -> Stdlib.Format.printf "Current forward body:@ %s@ " @@ Asgns.to_string_hum fwd_code);
     match t.diff with
     | Some { backprop = Noop; _ } -> ()
     | Some { backprop = bwd_code; _ } ->
-        Stdlib.Format.printf "Current backprop body:@ %s@ " @@ Assignments.to_string_hum bwd_code
+        Stdlib.Format.printf "Current backprop body:@ %s@ " @@ Asgns.to_string_hum bwd_code
     | None -> ());
   if with_low_level then (
     (match t.forward with
     | Noop -> ()
     | fwd_code ->
-        Stdlib.Format.printf "Current forward low-level body:@ %a@ " (Low_level.fprint_hum ())
-        @@ Assignments.to_low_level fwd_code);
+        Stdlib.Format.printf "Current forward low-level body:@ %a@ " (Arrayjit.Low_level.fprint_hum ())
+        @@ Asgns.to_low_level fwd_code);
     match t.diff with
     | Some { backprop = Noop; _ } -> ()
     | Some { backprop = bwd_code; _ } ->
-        Stdlib.Format.printf "Current backprop low-level body:@ %a@ " (Low_level.fprint_hum ())
-        @@ Assignments.to_low_level bwd_code
+        Stdlib.Format.printf "Current backprop low-level body:@ %a@ " (Arrayjit.Low_level.fprint_hum ())
+        @@ Asgns.to_low_level bwd_code
     | None -> ());
   Stdlib.Format.printf "\n%!"
 
@@ -591,7 +593,7 @@ let set_grad t = Nd.set_from_float @@ Option.value_exn @@ Lazy.force @@ (Option.
 let get_grad t = Nd.get_as_float @@ Option.value_exn @@ Lazy.force @@ (Option.value_exn t.diff).grad.array
 
 let set_values t values =
-  Ndarray.(reset (Constant_fill { values; strict = false }) @@ Option.value_exn @@ Lazy.force t.value.array)
+  Nd.(reset (Constant_fill { values; strict = false }) @@ Option.value_exn @@ Lazy.force t.value.array)
 
 module O = struct
   (** Get the value at the given indices. *)

@@ -124,18 +124,15 @@ type inequality =
   | Row_constr of { r : t; constr : dims_constraint }
 [@@deriving compare, equal, sexp, variants]
 
-type error_trace = ..
+module Idx = Arrayjit.Indexing
 
-type error_trace +=
-  | Row_mismatch of t list
-  | Dim_mismatch of dim list
-  | Index_mismatch of Arrayjit.Indexing.axis_index list
+type error_trace = ..
+type error_trace += Row_mismatch of t list | Dim_mismatch of dim list | Index_mismatch of Idx.axis_index list
 
 let sexp_of_error_trace = function
   | Row_mismatch rs -> Sexp.List (Sexp.Atom "Row_mismatch" :: List.map rs ~f:sexp_of_t)
   | Dim_mismatch ds -> Sexp.List (Sexp.Atom "Dim_mismatch" :: List.map ds ~f:sexp_of_dim)
-  | Index_mismatch idcs ->
-      Sexp.List (Sexp.Atom "Index_mismatch" :: List.map idcs ~f:Arrayjit.Indexing.sexp_of_axis_index)
+  | Index_mismatch idcs -> Sexp.List (Sexp.Atom "Index_mismatch" :: List.map idcs ~f:Idx.sexp_of_axis_index)
   | _ -> Sexp.Atom "<outdated version of sexp_of_error_trace>"
 
 exception Shape_error of string * error_trace list [@@deriving sexp_of]
@@ -630,11 +627,9 @@ let fresh_row_proj r =
   in
   { r with dims = List.map r.dims ~f:fresh_dim }
 
-open Arrayjit.Indexing
-
 (* let update_proj_classes pid1 pid2 proj_classes = Utils.union_add ~equal:Int.equal proj_classes pid1 pid2 *)
 
-type proj = Var of dim_var | Proj of { proj_id : int; d : int } | Solved of axis_index
+type proj = Var of dim_var | Proj of { proj_id : int; d : int } | Solved of Idx.axis_index
 [@@deriving compare, equal, sexp]
 
 type error_trace += Projection_mismatch of proj list
@@ -643,7 +638,7 @@ let sexp_of_error_trace = function
   | Projection_mismatch ps -> Sexp.List (Sexp.Atom "Projection_mismatch" :: List.map ps ~f:sexp_of_proj)
   | error_trace -> sexp_of_error_trace error_trace
 
-type proj_to_index = Arrayjit.Indexing.axis_index Map.M(Int).t [@@deriving sexp]
+type proj_to_index = Idx.axis_index Map.M(Int).t [@@deriving sexp]
 type proj_classes = int Map.M(Int).t [@@deriving sexp]
 
 type proj_env = {
@@ -722,7 +717,7 @@ let solve_proj_equations eqs : proj_env =
         p_dims := (p1, d1) :: !p_dims;
         proj_classes := Utils.union_add ~equal:Int.equal !proj_classes p1 p2
     | Proj_eq (Proj p, Solved idx) | Proj_eq (Solved idx, Proj p) -> p_solved := (p.proj_id, idx) :: !p_solved
-    | Proj_eq (Solved idx1, Solved idx2) when equal_axis_index idx1 idx2 -> ()
+    | Proj_eq (Solved idx1, Solved idx2) when Idx.equal_axis_index idx1 idx2 -> ()
     | Proj_eq (Solved idx1, Solved idx2) ->
         raise
         @@ Shape_error ("Conflicting indices for the same axis/projection", [ Index_mismatch [ idx1; idx2 ] ])
@@ -733,7 +728,7 @@ let solve_proj_equations eqs : proj_env =
     | Iterated (Solved _) -> ()
     | Iterated (Proj { proj_id; d }) -> p_dims := (proj_id, d) :: !p_dims
     | Iterated (Var v) -> (
-        let idx = Iterator (get_symbol ()) in
+        let idx = Idx.(Iterator (get_symbol ())) in
         match Hashtbl.find v_env v with
         | None -> Hashtbl.add_exn v_env ~key:v ~data:(Solved idx)
         | Some (Var v2) -> f (Iterated (Var v2))
@@ -746,13 +741,13 @@ let solve_proj_equations eqs : proj_env =
       let repr, _ = Utils.union_find ~equal:Int.equal !proj_classes ~key:p ~rank:0 in
       non_product := Set.add !non_product repr;
       Utils.mref_add projs ~key:repr ~data:idx ~or_:(fun idx2 ->
-          if not @@ equal_axis_index idx idx2 then
+          if not @@ Idx.equal_axis_index idx idx2 then
             raise
             @@ Shape_error ("Multiple constraints on the same projection", [ Index_mismatch [ idx; idx2 ] ])));
   let product_dim = ref @@ Map.empty (module Int) in
   List.iter !p_dims ~f:(fun (p, d) ->
       let repr, _ = Utils.union_find ~equal:Int.equal !proj_classes ~key:p ~rank:0 in
-      if iterated d && (not @@ Map.mem !projs repr) then
+      if Idx.iterated d && (not @@ Map.mem !projs repr) then
         Utils.mref_add product_dim ~key:repr ~data:d ~or_:(fun d2 ->
             if d <> d2 then
               raise
@@ -761,7 +756,7 @@ let solve_proj_equations eqs : proj_env =
                      [ Projection_mismatch [ Proj { proj_id = p; d }; Proj { proj_id = p; d = d2 } ] ] )));
   Map.iteri !product_dim ~f:(fun ~key:p ~data:_ ->
       let repr, _ = Utils.union_find ~equal:Int.equal !proj_classes ~key:p ~rank:0 in
-      Utils.mref_add_missing projs repr ~f:(fun () -> Iterator (get_symbol ())));
+      Utils.mref_add_missing projs repr ~f:(fun () -> Idx.(Iterator (get_symbol ()))));
   {
     proj_classes = !proj_classes;
     proj_to_index = !projs;
@@ -770,7 +765,7 @@ let solve_proj_equations eqs : proj_env =
   }
 
 let get_proj_index proj_env = function
-  | Dim { d; _ } when not @@ iterated d -> Fixed_idx 0
+  | Dim { d; _ } when not @@ Idx.iterated d -> Idx.Fixed_idx 0
   | Dim { proj_id = None; _ } -> assert false
   | Var _ as v ->
       raise @@ Shape_error ("projection_of_solved_dims: still not fully inferred", [ Dim_mismatch [ v ] ])
@@ -788,7 +783,7 @@ let proj_repr proj_env p = fst @@ Utils.union_find ~equal:Int.equal proj_env.pro
 
 let get_product_proj proj_env dim =
   match dim with
-  | Dim { d; _ } when not @@ iterated d -> None
+  | Dim { d; _ } when not @@ Idx.iterated d -> None
   | Dim { proj_id = Some proj_id; d; _ } ->
       let repr = proj_repr proj_env proj_id in
       if Map.mem proj_env.proj_to_index repr && (not @@ Set.mem proj_env.non_product repr) then Some (repr, d)

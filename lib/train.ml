@@ -1,7 +1,9 @@
 open Base
 module LA = Arrayjit.Lazy_array
 module NTDSL = Operation.NTDSL
-open Arrayjit
+module Asgns = Arrayjit.Assignments
+module Idx = Arrayjit.Indexing
+module type Backend_type = Arrayjit.Backends.Backend
 
 (** Reinitializes a backend selected via a global [backend] flag. *)
 let fresh_backend ?backend_name ?(verbose = true) () =
@@ -9,7 +11,7 @@ let fresh_backend ?backend_name ?(verbose = true) () =
   let backend =
     match
       Option.value_or_thunk backend_name ~default:(fun () ->
-          Utils.get_global_arg ~verbose ~arg_name:"backend" ~default:"gccjit")
+          Arrayjit.Utils.get_global_arg ~verbose ~arg_name:"backend" ~default:"gccjit")
       |> String.lowercase
     with
     | "gccjit" -> (module Gccjit_backend : Backend)
@@ -37,12 +39,12 @@ let params t =
 let set_on_host (a : LA.t) =
   if LA.is_true a.virtual_ then
     raise
-    @@ Ndarray.User_error
+    @@ Arrayjit.Ndarray.User_error
          [%string "Train.set_on_host: array #%{a.id#Int} %{LA.label a} is already virtual"];
   if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 27);
   if LA.is_true a.device_only then
     raise
-    @@ Ndarray.User_error
+    @@ Arrayjit.Ndarray.User_error
          [%string "Train.set_on_host: array #%{a.id#Int} %{LA.label a} is already device-only"];
   a.device_only <- Some (false, 28)
 
@@ -51,7 +53,7 @@ let set_on_host (a : LA.t) =
 let forward t =
   set_on_host t.Tensor.value;
   let label = Option.value ~default:"tensor" @@ List.last t.Tensor.value.label in
-  Assignments.Block_comment (label ^ " fwd", t.forward)
+  Asgns.Block_comment (label ^ " fwd", t.forward)
 
 (** Sets the tensor's value as "fully on host", returns the tensor's forward, zeroing gradients, and
     backprop code wrapped with label-derived comments. *)
@@ -61,7 +63,7 @@ let grad_update l =
   | Some diff ->
       let%cd init_grad = l.grad =: 1 in
       let label = Option.value ~default:"tensor" @@ List.last l.value.label in
-      Assignments.(
+      Asgns.(
         Block_comment
           ( label ^ " gradient update",
             sequential
@@ -80,7 +82,7 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
   if not @@ is_param p then raise @@ Tensor.Session_error ("Train.sgd_one: not a parameter", Some p);
   let pg = NTDSL.term ~label:("sgd_delta" :: p.value.label) () in
   let b = NTDSL.term ~label:("sgd_momentum" :: p.value.label) () in
-  Assignments.Block_comment
+  Asgns.Block_comment
     ( label_suffix p.value.label ^ " param sgd step",
       [%cd
         pg =: p.grad + (!.weight_decay *. p);
@@ -93,20 +95,20 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov t =
   let code =
     params t |> Set.to_list
     |> List.map ~f:(sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov)
-    |> Assignments.sequential
+    |> Asgns.sequential
   in
-  Assignments.Block_comment (label_suffix t.value.label ^ " sgd update", code)
+  Asgns.Block_comment (label_suffix t.value.label ^ " sgd update", code)
 
 let for_loop ~f bindings =
   let rec loop = function
     | [] -> f ()
-    | ({ Indexing.static_range; static_symbol }, idx) :: more -> (
+    | ({ Idx.static_range; static_symbol }, idx) :: more -> (
         match static_range with
         | None ->
             raise
             @@ Tensor.Session_error
                  ( [%string
-                     "Train.for_loop: missing range for static symbol %{Indexing.symbol_ident static_symbol}"],
+                     "Train.for_loop: missing range for static symbol %{Idx.symbol_ident static_symbol}"],
                    None )
         | Some range ->
             let old_idx = !idx in
@@ -116,12 +118,12 @@ let for_loop ~f bindings =
             done;
             idx := old_idx)
   in
-  loop @@ Indexing.assoc_of_bindings bindings
+  loop @@ Idx.assoc_of_bindings bindings
 
 let set_virtual (a : LA.t) =
   if LA.is_false a.virtual_ then
     raise
-    @@ Ndarray.User_error
+    @@ Arrayjit.Ndarray.User_error
          [%string "Train.set_virtua: array #%{a.id#Int} %{LA.label a} is already non-virtual"];
   if Option.is_none a.virtual_ then a.virtual_ <- Some (true, 29)
 
@@ -129,7 +131,7 @@ let every_non_literal_on_host =
   Tensor.iter_embedded_arrays ~f:(fun a -> if not @@ literal_heuristic a then set_on_host a)
 
 let all_host_to_device ?(verbose = false) (type context)
-    (module Backend : Backends.Backend with type context = context) (context : context) =
+    (module Backend : Backend_type with type context = context) (context : context) =
   Tensor.iter_embedded_arrays ~f:(fun a ->
       let b = Backend.from_host context a in
       if verbose && b then
@@ -138,7 +140,7 @@ let all_host_to_device ?(verbose = false) (type context)
           (Backend.get_ctx_device context |> Backend.to_ordinal))
 
 let all_device_to_host ?(verbose = false) (type context)
-    (module Backend : Backends.Backend with type context = context) (context : context) =
+    (module Backend : Backend_type with type context = context) (context : context) =
   Tensor.iter_embedded_arrays ~f:(fun a ->
       let b = Backend.to_host context a in
       if verbose && b then
@@ -149,7 +151,7 @@ let all_device_to_host ?(verbose = false) (type context)
 (* Executes the jitted code and copies arrays embedded in the given tenosor from and to host,
    synchronizes before copying to host. If [looping] is provided, loops over bindings and executes
    the given function inside the loop after a run. *)
-let sync_run ?verbose ?looping (type context) (module Backend : Backends.Backend with type context = context)
+let sync_run ?verbose ?looping (type context) (module Backend : Backend_type with type context = context)
     (jitted : Backend.jitted) t =
   all_host_to_device ?verbose (module Backend) jitted.context t;
   (match looping with

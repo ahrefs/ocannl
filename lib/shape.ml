@@ -2,6 +2,7 @@
 
 open Base
 module Utils = Arrayjit.Utils
+module Idx = Arrayjit.Indexing
 
 (** *** Shape types and inference *** *)
 
@@ -308,7 +309,6 @@ let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env ~dim_var_env la
 type proj_axis_env = Arrayjit.Indexing.axis_index Row.dim_map [@@deriving sexp]
 
 let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env * Row.inequality list =
-  let open Row in
   let generative =
     [
       (`Batch, List.is_empty cur_sh.batch.dims);
@@ -316,6 +316,7 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
       (`Output, List.is_empty cur_sh.output.dims);
     ]
   in
+  let open Row in
   match logic with
   | Terminal (Range_over_offsets | Standard_uniform | Constant_fill { strict = false; _ }) ->
       (Row.dim_map_empty, [])
@@ -684,19 +685,19 @@ let derive_projections (update_step : update_step) : projections =
         {
           spec = logic_to_spec update_step.logic;
           derived_for = sexp_of_update_step update_step;
-          trace = [ ("derive_projections", unique_debug_id ()) ];
+          trace = [ ("derive_projections", Idx.unique_debug_id ()) ];
         };
     }
   with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch (lhs :: rhs) :: trace)
 
 let backprop_ith_arg ~from_1 projections =
-  let project_lhs = projections.project_rhs.(from_1 - 1) in
+  let project_lhs = projections.Idx.project_rhs.(from_1 - 1) in
   let project_rhs = Array.copy projections.project_rhs in
   project_rhs.(from_1 - 1) <- projections.project_lhs;
   let lhs_dims = projections.rhs_dims.(from_1 - 1) in
   let rhs_dims = Array.copy projections.rhs_dims in
   rhs_dims.(from_1 - 1) <- projections.lhs_dims;
-  {
+  Idx.{
     product_space = projections.product_space;
     product_iterators = projections.product_iterators;
     lhs_dims;
