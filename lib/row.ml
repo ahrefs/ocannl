@@ -654,6 +654,13 @@ type proj_env = {
 }
 [@@deriving sexp]
 
+type proj_equation =
+  | Proj_eq of proj * proj  (** Two projections are the same, e.g. two axes share the same iterator. *)
+  | Iterated of proj
+      (** The projection needs to be an iterator even if an axis is not matched with another axis,
+          e.g. for broadcasted-to axes of a tensor assigned a constant. *)
+[@@deriving compare, equal, sexp]
+
 let get_proj_equations inequalities proj_axis_env env =
   let to_proj : dim -> proj = function
     | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
@@ -674,21 +681,27 @@ let get_proj_equations inequalities proj_axis_env env =
         | _ -> dims)
     | { dims; _ } -> dims
   in
-  let match_rows r1 r2 =
+  let match_rows with_broadcasting r1 r2 =
     let dims1 = expand_dims r1 and dims2 = expand_dims r2 in
-    let len = min (List.length dims1) (List.length dims2) in
-    List.zip_exn (take_from_end dims1 len) (take_from_end dims2 len)
-    |> List.map ~f:(fun (d1, d2) -> (to_proj d1, to_proj d2))
+    let len1 = List.length dims1 in
+    let len = min len1 (List.length dims2) in
+    let extras =
+      if with_broadcasting then List.map ~f:(fun d -> Iterated (to_proj d)) @@ List.take dims1 (len1 - len)
+      else []
+    in
+    extras
+    @ (List.zip_exn (take_from_end dims1 len) (take_from_end dims2 len)
+      |> List.map ~f:(fun (d1, d2) -> Proj_eq (to_proj d1, to_proj d2)))
   in
   let f = function
     | Dim_ineq { cur = _; subr = Dim { d = 1; proj_id = Some proj_id; _ } } ->
-        [ (Proj { proj_id; d = 1 }, Solved (Fixed_idx 0)) ]
-    | Dim_eq { d1; d2 } | Dim_ineq { cur = d1; subr = d2 } -> [ (to_proj d1, to_proj d2) ]
-    | Row_eq { r1; r2 } -> match_rows r1 r2
+        [ Proj_eq (Proj { proj_id; d = 1 }, Solved (Fixed_idx 0)) ]
+    | Dim_eq { d1; d2 } | Dim_ineq { cur = d1; subr = d2 } -> [ Proj_eq (to_proj d1, to_proj d2) ]
+    | Row_eq { r1; r2 } -> match_rows false r1 r2
     | Row_ineq { cur = r1; subr = r2 } ->
-        match_rows r1 r2
+        match_rows true r1 r2
         |> List.map ~f:(function
-             | _, (Proj { proj_id = _; d = 1 } as proj) -> (proj, Solved (Fixed_idx 0))
+             | Proj_eq (_, (Proj { proj_id = _; d = 1 } as proj)) -> Proj_eq (proj, Solved (Fixed_idx 0))
              | eq -> eq)
     | Row_constr _ -> []
   in
@@ -700,20 +713,32 @@ let solve_proj_equations eqs : proj_env =
   let p_dims = ref [] in
   let proj_classes = ref @@ Map.empty (module Int) in
   let rec f = function
-    | (Proj { proj_id = p1; d = d1 } as proj1), (Proj { proj_id = p2; d = d2 } as proj2) ->
+    | Proj_eq (p1, p2) when equal_proj p1 p2 -> ()
+    | Proj_eq ((Proj { proj_id = p1; d = d1 } as proj1), (Proj { proj_id = p2; d = d2 } as proj2)) ->
         if d1 <> d2 then
           raise
           @@ Shape_error
                ("Conflicting dimensions for the same projection", [ Projection_mismatch [ proj1; proj2 ] ]);
         p_dims := (p1, d1) :: !p_dims;
         proj_classes := Utils.union_add ~equal:Int.equal !proj_classes p1 p2
-    | Proj p, Solved idx | Solved idx, Proj p -> p_solved := (p.proj_id, idx) :: !p_solved
-    | Solved idx1, Solved idx2 when equal_axis_index idx1 idx2 -> ()
-    | Solved idx1, Solved idx2 ->
+    | Proj_eq (Proj p, Solved idx) | Proj_eq (Solved idx, Proj p) -> p_solved := (p.proj_id, idx) :: !p_solved
+    | Proj_eq (Solved idx1, Solved idx2) when equal_axis_index idx1 idx2 -> ()
+    | Proj_eq (Solved idx1, Solved idx2) ->
         raise
         @@ Shape_error ("Conflicting indices for the same axis/projection", [ Index_mismatch [ idx1; idx2 ] ])
-    | Var v, p | p, Var v -> (
-        match Hashtbl.find v_env v with None -> Hashtbl.add_exn v_env ~key:v ~data:p | Some p2 -> f (p, p2))
+    | Proj_eq (Var v, p) | Proj_eq (p, Var v) -> (
+        match Hashtbl.find v_env v with
+        | None -> Hashtbl.add_exn v_env ~key:v ~data:p
+        | Some p2 -> f (Proj_eq (p, p2)))
+    | Iterated (Solved _) -> ()
+    | Iterated (Proj { proj_id; d }) -> p_dims := (proj_id, d) :: !p_dims
+    | Iterated (Var v) -> (
+        let idx = Iterator (get_symbol ()) in
+        match Hashtbl.find v_env v with
+        | None -> Hashtbl.add_exn v_env ~key:v ~data:(Solved idx)
+        | Some (Var v2) -> f (Iterated (Var v2))
+        | Some (Solved _) -> ()
+        | Some (Proj { proj_id; d }) -> p_dims := (proj_id, d) :: !p_dims)
   in
   List.iter eqs ~f;
   let projs = ref @@ Map.empty (module Int) and non_product = ref @@ Set.empty (module Int) in
@@ -723,9 +748,7 @@ let solve_proj_equations eqs : proj_env =
       Utils.mref_add projs ~key:repr ~data:idx ~or_:(fun idx2 ->
           if not @@ equal_axis_index idx idx2 then
             raise
-            @@ Shape_error
-                 ( "Multiple constraints on the same projection",
-                   [ Index_mismatch [ idx; Map.find_exn !projs p ] ] )));
+            @@ Shape_error ("Multiple constraints on the same projection", [ Index_mismatch [ idx; idx2 ] ])));
   let product_dim = ref @@ Map.empty (module Int) in
   List.iter !p_dims ~f:(fun (p, d) ->
       let repr, _ = Utils.union_find ~equal:Int.equal !proj_classes ~key:p ~rank:0 in

@@ -74,10 +74,17 @@ type proj_env [@@deriving sexp]
 
 val fresh_row_proj : t -> t
 
-val get_proj_equations :
-  inequality list -> Arrayjit.Indexing.axis_index dim_map -> environment -> (proj * proj) list
+type proj_equation =
+  | Proj_eq of proj * proj  (** Two projections are the same, e.g. two axes share the same iterator. *)
+  | Iterated of proj
+      (** The projection needs to be an iterator even if an axis is not matched with another axis,
+          e.g. for broadcasted-to axes of a tensor assigned a constant. *)
+[@@deriving compare, equal, sexp]
 
-val solve_proj_equations : (proj * proj) list -> proj_env
+val get_proj_equations :
+  inequality list -> Arrayjit.Indexing.axis_index dim_map -> environment -> proj_equation list
+
+val solve_proj_equations : proj_equation list -> proj_env
 val get_proj_index : proj_env -> dim -> Arrayjit.Indexing.axis_index
 val get_product_proj : proj_env -> dim -> (int * int) option
 val proj_to_iterator : proj_env -> int -> Arrayjit.Indexing.symbol
