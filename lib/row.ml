@@ -708,7 +708,9 @@ let solve_proj_equations eqs : proj_env =
   let p_dims = ref [] in
   let proj_classes = ref @@ Map.empty (module Int) in
   let rec f = function
-    | Proj_eq (p1, p2) when equal_proj p1 p2 -> ()
+    | Proj_eq (Proj { proj_id = p1; d }, Proj { proj_id = p2; _ }) when p1 = p2 ->
+        p_dims := (p1, d) :: !p_dims
+    | Proj_eq (Var v1, Var v2) when equal_dim_var v1 v2 -> ()
     | Proj_eq ((Proj { proj_id = p1; d = d1 } as proj1), (Proj { proj_id = p2; d = d2 } as proj2)) ->
         if d1 <> d2 then
           raise
