@@ -251,8 +251,10 @@ let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
     | Noop -> ()
     | Seq (c1, c2) ->
         loop c1;
-        if not (List.mem ~equal:Char.equal [ '\n'; ';' ] @@ Buffer.nth b @@ (Buffer.length b - 1)) then
-          out ";\n";
+        if
+          Buffer.length b > 0
+          && not (List.mem ~equal:Char.equal [ '\n'; ';' ] @@ Buffer.nth b @@ (Buffer.length b - 1))
+        then out ";\n";
         loop c2
     | Block_comment (s, Noop) ->
         out "# \"";
