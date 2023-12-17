@@ -511,9 +511,13 @@ let solve_row_ineq ~cur ~subr env =
             } )
       | Some (Solved _), _ | _, Some (Solved _) -> assert false)
   | { bcast = Row_var _; dims; _ }, _ when r1_len < r2_len ->
-      let more_dims = Array.(to_list @@ init (r2_len - r1_len) ~f:(fun _ -> Var (get_var ()))) in
-      let template = { dims = more_dims @ dims; bcast = Row_var (get_row_var ()); id = cur.id } in
-      ([ Row_eq { r1 = cur; r2 = template }; Row_ineq { cur = template; subr } ], env)
+      let more_dims : dim list = Array.(to_list @@ init (r2_len - r1_len) ~f:(fun _ -> Var (get_var ()))) in
+      let template : t = { dims = more_dims @ dims; bcast = Row_var (get_row_var ()); id = cur.id } in
+      let subr_dims : dim list = take_from_end subr.dims (r2_len - r1_len) in
+      ( Row_eq { r1 = cur; r2 = template }
+        :: Row_ineq { cur = template; subr }
+        :: List.map2_exn more_dims subr_dims ~f:(fun cur subr -> Dim_ineq { cur; subr }),
+        env )
   | { bcast = Broadcastable; _ }, _ when r1_len < r2_len ->
       raise @@ Shape_error ("Too many axes", [ Row_mismatch [ cur; subr ] ])
   | _, { bcast = Row_var v_subr; _ } when r2_len <= r1_len -> (
