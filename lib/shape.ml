@@ -674,7 +674,7 @@ let derive_projections (update_step : update_step) : projections =
     @@ List.concat [ sh.batch.dims; sh.output.dims; sh.input.dims ]
   in
   try
-    {
+    Idx.{
       product_space;
       lhs_dims;
       rhs_dims;
