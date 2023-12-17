@@ -218,16 +218,17 @@ let rec subst_row (env : environment) ({ dims; bcast; id } as default : t) : t =
       | Some (Solved { dims = more_dims; bcast; id = _ }) ->
           subst_row env { dims = more_dims @ dims; bcast; id })
 
-let rec unify_dim ((dim1, dim2) as eq) env =
-  match eq with
-  | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
+let rec unify_dim (eq : dim * dim) (env : environment) : inequality list * environment =
+  match (subst_dim env @@ fst eq, subst_dim env @@ snd eq) with
+  | (Dim { label = Some l1; _ } as dim1), (Dim { label = Some l2; _ } as dim2) when not (String.equal l1 l2)
+    ->
       raise @@ Shape_error ("solved dimensions for axis: different labels", [ Dim_mismatch [ dim1; dim2 ] ])
   | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> ([], env)
   | Var v1, Var v2 when equal_dim_var v1 v2 -> ([], env)
-  | Var v, d2 | d2, Var v ->
+  | Var v, dim2 | dim2, Var v ->
       let ineqs = ref [] in
       let f in_ =
-        let more_ineqs, result = s_dim_one_in_entry v ~value:d2 in_ in
+        let more_ineqs, result = s_dim_one_in_entry v ~value:dim2 in_ in
         ineqs := more_ineqs @ !ineqs;
         result
       in
@@ -236,21 +237,18 @@ let rec unify_dim ((dim1, dim2) as eq) env =
         | None ->
             let dim_env = Map.map env.dim_env ~f in
             {
-              dim_env = Map.add_exn dim_env ~key:v ~data:(Solved d2);
-              row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry v ~value:d2);
+              dim_env = Map.add_exn dim_env ~key:v ~data:(Solved dim2);
+              row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry v ~value:dim2);
             }
-        | Some (Solved d1) ->
-            let more_ineqs, env = unify_dim (d1, d2) env in
-            ineqs := more_ineqs @ !ineqs;
-            env
+        | Some (Solved _) -> assert false
         | Some (Bounds { cur; subr; lub }) ->
             let dim_env = Map.map env.dim_env ~f in
-            List.iter cur ~f:(fun cur -> ineqs := Dim_ineq { cur = Var cur; subr = d2 } :: !ineqs);
-            List.iter subr ~f:(fun subr -> ineqs := Dim_ineq { subr = Var subr; cur = d2 } :: !ineqs);
-            Option.iter lub ~f:(fun lub -> ineqs := Dim_ineq { cur = lub; subr = d2 } :: !ineqs);
+            List.iter cur ~f:(fun cur -> ineqs := Dim_ineq { cur = Var cur; subr = dim2 } :: !ineqs);
+            List.iter subr ~f:(fun subr -> ineqs := Dim_ineq { subr = Var subr; cur = dim2 } :: !ineqs);
+            Option.iter lub ~f:(fun lub -> ineqs := Dim_ineq { cur = lub; subr = dim2 } :: !ineqs);
             {
-              dim_env = Map.update dim_env v ~f:(fun _ -> Solved d2);
-              row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry v ~value:d2);
+              dim_env = Map.update dim_env v ~f:(fun _ -> Solved dim2);
+              row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry v ~value:dim2);
             }
       in
       let dim_eqs, ineqs =
@@ -261,7 +259,7 @@ let rec unify_dim ((dim1, dim2) as eq) env =
         (more_ineqs @ ineqs, env)
       in
       List.fold ~init:(ineqs, env) dim_eqs ~f
-  | _ ->
+  | dim1, dim2 ->
       (* Note: at the unify_dim stage, it's strict equality (no broadcasting). *)
       raise @@ Shape_error ("solved dimensions for axis: mismatch", [ Dim_mismatch [ dim1; dim2 ] ])
 
@@ -300,7 +298,7 @@ let apply_constraint r constr env =
             | _ -> assert false))
 
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
-let rec unify_row ((row1, row2) as eq) env =
+let rec unify_row (eq : t * t) (env : environment) : inequality list * environment =
   let rec solve (ineqs, env) = function
     | Dim_eq { d1; d2 } ->
         let more_ineqs, env = unify_dim (d1, d2) env in
@@ -310,22 +308,32 @@ let rec unify_row ((row1, row2) as eq) env =
         (more_ineqs @ ineqs, env)
     | (Dim_ineq _ | Row_ineq _ | Row_constr _) as ineq -> (ineq :: ineqs, env)
   in
-  let unify_prefix len =
-    let dims1 = take_from_end row1.dims len and dims2 = take_from_end row2.dims len in
+  let unify_prefix dims1 dims2 len =
+    let dims1 = take_from_end dims1 len and dims2 = take_from_end dims2 len in
     List.fold ~init:([], env) ~f:(fun acc (d1, d2) -> solve acc (Dim_eq { d1; d2 }))
     @@ List.zip_exn dims1 dims2
   in
-  match eq with
+  match (subst_row env @@ fst eq, subst_row env @@ snd eq) with
   | r1, r2 when equal_row r1 r2 -> ([], env)
-  | { bcast = Row_var v; dims = r1_dims; id }, r2 | r2, { bcast = Row_var v; dims = r1_dims; id } -> (
+  | ( ({ bcast = Row_var v1; dims = r1_dims; id = _ } as r1),
+      ({ bcast = Row_var v2; dims = r2_dims; id = _ } as r2) )
+    when equal_row_var v1 v2 ->
+      let r1_len = List.length r1_dims and r2_len = List.length r2.dims in
+      if r1_len = r2_len then unify_prefix r1_dims r2_dims r1_len
+      else raise @@ Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch [ r1; r2 ] ])
+  | ({ bcast = Row_var v; dims = r1_dims; id } as r1), r2
+  | r2, ({ bcast = Row_var v; dims = r1_dims; id } as r1) -> (
       let r1_len = List.length r1_dims and r2_len = List.length r2.dims in
       if r1_len > r2_len then
-        if is_row_var r2.bcast then unify_row (row2, row1) env
-        else raise @@ Shape_error ("Number of axes mismatch", [ Row_mismatch [ row1; row2 ] ])
+        if is_row_var r2.bcast then unify_row (r2, r1) env
+        else raise @@ Shape_error ("Number of axes mismatch", [ Row_mismatch [ r1; r2 ] ])
       else
         let ineqs, env =
-          try unify_prefix r1_len
-          with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ row1; row2 ] :: trace)
+          try unify_prefix r1_dims r2.dims r1_len
+          with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ r1; r2 ] :: trace)
+        in
+        let occurs_check_error =
+          Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch [ r1; r2 ] ])
         in
         let value = { bcast = r2.bcast; dims = drop_from_end r2.dims r1_len; id } in
         let ineqs = ref ineqs in
@@ -339,7 +347,7 @@ let rec unify_row ((row1, row2) as eq) env =
             let row_env = Map.map env.row_env ~f in
             let env = { env with row_env = Map.add_exn row_env ~key:v ~data:(Solved value) } in
             List.fold ~init:([], env) ~f:solve !ineqs
-        | Some (Solved r1) -> unify_row (r1, value) env
+        | Some (Solved _) -> assert false
         | Some (Bounds { cur; subr; lub }) ->
             (* TODO: audit code to ensure we don't lose the constraints associated with the bounds variables. *)
             let row_of_var v = { dims = []; bcast = Row_var v; id = value.id } in
@@ -349,9 +357,10 @@ let rec unify_row ((row1, row2) as eq) env =
             Option.iter lub ~f:(fun lub -> ineqs := Row_ineq { cur = lub; subr = r2 } :: !ineqs);
             let env = { env with row_env = Map.update row_env v ~f:(fun _ -> Solved value) } in
             List.fold ~init:([], env) ~f:solve !ineqs)
-  | { bcast = Broadcastable; dims = dims1; id = _ }, { bcast = Broadcastable; dims = dims2; id = _ } -> (
+  | ( ({ bcast = Broadcastable; dims = dims1; id = _ } as r1),
+      ({ bcast = Broadcastable; dims = dims2; id = _ } as r2) ) -> (
       match List.zip dims1 dims2 with
-      | Unequal_lengths -> raise @@ Shape_error ("Mismatching number of axes", [ Row_mismatch [ row1; row2 ] ])
+      | Unequal_lengths -> raise @@ Shape_error ("Mismatching number of axes", [ Row_mismatch [ r1; r2 ] ])
       | Ok eqs -> List.fold ~init:([], env) ~f:(fun acc (d1, d2) -> solve acc (Dim_eq { d1; d2 })) eqs)
 
 let solve_dim_ineq ~cur ~subr env =
@@ -560,18 +569,23 @@ let solve_inequalities ineqs env =
   let rec solve ineqs env =
     let f (ineqs, env) = function
       | Dim_eq { d1; d2 } ->
+          (* Substituted inside unify_dim. *)
           let more_ineqs, env = unify_dim (d1, d2) env in
           (more_ineqs @ ineqs, env)
       | Row_eq { r1; r2 } ->
+          (* Substituted inside unify_row. *)
           let more_ineqs, env = unify_row (r1, r2) env in
           (more_ineqs @ ineqs, env)
       | Dim_ineq { cur; subr } ->
+          let cur : dim = subst_dim env cur and subr : dim = subst_dim env subr in
           let more_ineqs, env = solve_dim_ineq ~cur ~subr env in
           (more_ineqs @ ineqs, env)
       | Row_ineq { cur; subr } ->
+          let cur = subst_row env cur and subr = subst_row env subr in
           let more_ineqs, env = solve_row_ineq ~cur ~subr env in
           (more_ineqs @ ineqs, env)
       | Row_constr { r; constr } ->
+          let r = subst_row env r in
           let more_ineqs, env = apply_constraint r constr env in
           (more_ineqs @ ineqs, env)
     in
