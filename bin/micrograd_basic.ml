@@ -27,7 +27,7 @@ let _suspended () =
   Tensor.print ~with_code:false ~with_grad:true `Default @@ a;
   Tensor.print ~with_code:false ~with_grad:true `Default @@ b
 
-let  () =
+let () =
   let module Backend = (val Train.fresh_backend ()) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in

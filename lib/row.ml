@@ -137,6 +137,9 @@ let sexp_of_error_trace = function
 
 exception Shape_error of string * error_trace list [@@deriving sexp_of]
 
+module Debug_runtime = (val Minidebug_runtime.debug_html ~max_nesting_depth:20 "debug.html")
+(* module Debug_runtime = (val Minidebug_runtime.debug_flushing ()) *)
+
 let dim_to_int_exn = function Dim { d; _ } -> d | Var _ -> invalid_arg "dim_to_int: dim still unknown"
 let s_dim_one v ~value ~in_ = match in_ with Var v2 when equal_dim_var v v2 -> value | _ -> in_
 
@@ -357,11 +360,12 @@ let rec unify_row (eq : t * t) (env : environment) : inequality list * environme
         | Some (Bounds { cur; subr; lub }) ->
             (* TODO: audit code to ensure we don't lose the constraints associated with the bounds variables. *)
             let row_of_var v = { dims = []; bcast = Row_var v; id = value.id } in
-            let row_env = Map.map env.row_env ~f in
+            let row_env : row_env = Map.map env.row_env ~f in
             List.iter cur ~f:(fun cur -> ineqs := Row_ineq { cur = row_of_var cur; subr = r2 } :: !ineqs);
             List.iter subr ~f:(fun subr -> ineqs := Row_ineq { subr = row_of_var subr; cur = r2 } :: !ineqs);
             Option.iter lub ~f:(fun lub -> ineqs := Row_ineq { cur = lub; subr = r2 } :: !ineqs);
-            let env = { env with row_env = Map.update row_env v ~f:(fun _ -> Solved value) } in
+            let _debug_ineqs : inequality list = !ineqs in
+            let env : environment = { env with row_env = Map.update row_env v ~f:(fun _ -> Solved value) } in
             List.fold ~init:([], env) ~f:solve !ineqs)
   | ( ({ bcast = Broadcastable; dims = dims1; id = _ } as r1),
       ({ bcast = Broadcastable; dims = dims2; id = _ } as r2) ) -> (
@@ -369,9 +373,9 @@ let rec unify_row (eq : t * t) (env : environment) : inequality list * environme
       | Unequal_lengths -> raise @@ Shape_error ("Mismatching number of axes", [ Row_mismatch [ r1; r2 ] ])
       | Ok eqs -> List.fold ~init:([], env) ~f:(fun acc (d1, d2) -> solve acc (Dim_eq { d1; d2 })) eqs)
 
-let solve_dim_ineq ~cur ~subr env =
+let (* %debug_sexp *) solve_dim_ineq ~(cur : dim) ~(subr : dim) (env : environment) :
+    inequality list * environment =
   let dedup = List.dedup_and_sort ~compare:compare_dim_var in
-  let cur : dim = subst_dim env cur and subr : dim = subst_dim env subr in
   match (cur, subr) with
   | cur, subr when equal_dim cur subr -> ([], env)
   | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
@@ -452,7 +456,8 @@ let solve_dim_ineq ~cur ~subr env =
   | Dim _, Dim _ ->
       raise @@ Shape_error ("dimension comparison for axis: mismatch", [ Dim_mismatch [ cur; subr ] ])
 
-let solve_row_ineq ~cur ~subr env =
+let (* %debug_sexp *) solve_row_ineq ~(cur : t) ~(subr : t) (env : environment) :
+    inequality list * environment =
   let cur = subst_row env cur in
   let subr = subst_row env subr in
   let prefix_ineqs len =
@@ -575,7 +580,7 @@ let solve_row_ineq ~cur ~subr env =
 
 let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
 
-let solve_inequalities ineqs env =
+let solve_inequalities (ineqs : inequality list) (env : environment) : inequality list * environment =
   let rec solve ineqs env =
     let f (ineqs, env) = function
       | Dim_eq { d1; d2 } ->
@@ -610,7 +615,7 @@ let solve_inequalities ineqs env =
   in
   solve ineqs env
 
-let close_row env r =
+let close_row (env : environment) (r : t) : inequality list =
   List.concat_map r.dims ~f:(function
     | Var v as d1 -> (
         match Map.find env.dim_env v with
@@ -686,7 +691,8 @@ type proj_equation =
           e.g. for broadcasted-to axes of a tensor assigned a constant. *)
 [@@deriving compare, equal, sexp]
 
-let get_proj_equations inequalities proj_axis_env env =
+let (* %debug_sexp *) get_proj_equations (inequalities : inequality list) proj_axis_env (env : environment) :
+    proj_equation list =
   let to_proj : dim -> proj = function
     | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
     | Dim { proj_id = Some proj_id; d; label = _ } -> Proj { proj_id; d }
@@ -732,7 +738,7 @@ let get_proj_equations inequalities proj_axis_env env =
   in
   List.concat_map inequalities ~f
 
-let solve_proj_equations eqs : proj_env =
+let (* %debug_sexp *) solve_proj_equations (eqs : proj_equation list) : proj_env =
   let v_env = dim_hashtbl () in
   let p_solved = ref [] in
   let p_dims = ref [] in
