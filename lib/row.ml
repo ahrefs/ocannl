@@ -267,7 +267,6 @@ let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
 let take_from_end (l : dim list) (n : int) : dim list = List.rev @@ List.take (List.rev l) n
 
 let apply_constraint r constr env =
-  let r = subst_row env r in
   match constr with
   | Unconstrained -> ([], env)
   | Total_elems n -> (
