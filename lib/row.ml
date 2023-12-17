@@ -169,9 +169,13 @@ let s_dim_one_in_row_entry v ~value in_ =
   | Solved in_ -> Solved (s_dim_one_in_row v ~value in_)
   | Bounds { cur; subr; lub } -> Bounds { cur; subr; lub = Option.map lub ~f:(s_dim_one_in_row v ~value) }
 
-let subst_dim env = function
+let rec subst_dim env = function
   | Dim _ as d -> d
-  | Var v as default -> ( match Map.find env.dim_env v with Some (Solved d) -> d | _ -> default)
+  | Var v as default -> (
+      match Map.find env.dim_env v with
+      | Some (Solved (Var v2)) when equal_dim_var v v2 -> default
+      | Some (Solved d) -> subst_dim env d
+      | _ -> default)
 
 let s_row_one v ~value:{ dims = more_dims; bcast; id = _ } ~in_ =
   match in_ with
@@ -201,16 +205,18 @@ let s_row_one_in_entry v ~value in_ =
       ( ineqs0 @ ineqs1 @ ineqs2,
         Bounds { cur; subr; lub = Option.map lub ~f:(fun in_ -> s_row_one v ~value ~in_) } )
 
-let subst_row env ({ dims; bcast; id } as default) =
+let rec subst_row (env : environment) ({ dims; bcast; id } as default : t) : t =
   let dims = List.map dims ~f:(subst_dim env) in
   match bcast with
   | Broadcastable -> { dims; bcast; id }
   | Row_var v -> (
       match Map.find env.row_env v with
       | None | Some (Bounds _) -> default
-      | Some (Solved { dims = more_dims; bcast; id = _ }) -> { dims = more_dims @ dims; bcast; id })
-
-(* module Debug_runtime = (val Minidebug_runtime.debug_html "debug.html") *)
+      | Some (Solved { dims = []; bcast = Row_var v2; _ }) when equal_row_var v v2 -> default
+      | Some (Solved ({ bcast = Row_var v2; _ } as r2)) when equal_row_var v v2 ->
+          raise @@ Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch [ default; r2 ] ])
+      | Some (Solved { dims = more_dims; bcast; id = _ }) ->
+          subst_row env { dims = more_dims @ dims; bcast; id })
 
 let rec unify_dim ((dim1, dim2) as eq) env =
   match eq with
