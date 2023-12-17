@@ -335,17 +335,24 @@ let rec unify_row (eq : t * t) (env : environment) : inequality list * environme
         let occurs_check_error =
           Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch [ r1; r2 ] ])
         in
-        let value = { bcast = r2.bcast; dims = drop_from_end r2.dims r1_len; id } in
-        let ineqs = ref ineqs in
-        let f in_ =
-          let more_ineqs, result = s_row_one_in_entry v ~value:r2 in_ in
+        let value : row = { bcast = r2.bcast; dims = drop_from_end r2.dims r1_len; id } in
+        (* From now on, we have no use for un-reduced r2 since we deal with the row variable. *)
+        let r2 = value in
+        let ineqs : inequality list ref = ref ineqs in
+        let f (in_ : (row_var, row) entry) : (row_var, row) entry =
+          let more_ineqs, result = s_row_one_in_entry v ~value in_ in
           ineqs := more_ineqs @ !ineqs;
           result
         in
         match Map.find env.row_env v with
         | None ->
             let row_env = Map.map env.row_env ~f in
-            let env = { env with row_env = Map.add_exn row_env ~key:v ~data:(Solved value) } in
+            let env : environment =
+              match r2.bcast with
+              | Row_var v2 when equal_row_var v v2 ->
+                  if List.is_empty value.dims then env else raise occurs_check_error
+              | _ -> { env with row_env = Map.add_exn row_env ~key:v ~data:(Solved value) }
+            in
             List.fold ~init:([], env) ~f:solve !ineqs
         | Some (Solved _) -> assert false
         | Some (Bounds { cur; subr; lub }) ->
