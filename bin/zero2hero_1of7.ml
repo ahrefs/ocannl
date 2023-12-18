@@ -37,7 +37,7 @@ let _suspended () =
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   Stdio.printf "\n%!"
 
-let _suspended () =
+let  () =
   Utils.settings.output_debug_files_in_run_directory <- true;
   Random.init 0;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
@@ -85,7 +85,7 @@ let _suspended () =
   in
   PrintBox_text.output Stdio.stdout plot_box
 
-let () =
+let _suspended () =
   Random.init 0;
   Utils.settings.with_debug <- true;
   Utils.settings.output_debug_files_in_run_directory <- true;

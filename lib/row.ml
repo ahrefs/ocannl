@@ -269,18 +269,26 @@ let rec unify_dim (eq : dim * dim) (env : environment) : inequality list * envir
 let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
 let take_from_end (l : dim list) (n : int) : dim list = List.rev @@ List.take (List.rev l) n
 
-let apply_constraint r constr env =
+let (* %debug_sexp *) apply_constraint ~(finish : bool) (r : row) (constr : dims_constraint)
+    (env : environment) : inequality list * environment =
   match constr with
   | Unconstrained -> ([], env)
   | Total_elems n -> (
       match r.bcast with
+      | Row_var _ when finish && n = 1 ->
+          ([ Row_eq { r1 = r; r2 = { dims = []; bcast = Broadcastable; id = r.id } } ], env)
+      | Row_var _ when finish ->
+          let dim = get_dim ~d:n () in
+          ([ Row_eq { r1 = r; r2 = { dims = [ dim ]; bcast = Broadcastable; id = r.id } } ], env)
       | Row_var _ -> ([ Row_constr { r; constr } ], env (* Wait for more shape inference. *))
       | Broadcastable -> (
-          let dims = List.map r.dims ~f:(subst_dim env) in
-          let vars, nonvars = List.partition_tf dims ~f:is_var in
-          if List.length vars > 1 then ([ Row_constr { r; constr } ], env (* Wait for more shape inference. *))
+          let vars, nonvars = List.partition_tf r.dims ~f:is_var in
+          if List.length vars > 1 then
+            if finish then (* TODO: *)
+              ([], env)
+            else ([ Row_constr { r; constr } ], env (* Wait for more shape inference. *))
           else
-            let known = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
+            let known : int = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
             match vars with
             | [] ->
                 if n <> known then (
@@ -290,7 +298,7 @@ let apply_constraint r constr env =
                   raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ]))
                 else ([], env)
             | [ Var v ] ->
-                let rem = n / known in
+                let rem : int = n / known in
                 if rem = 0 then (
                   if Utils.settings.with_debug then
                     Stdlib.Format.printf "apply_constraint: shape error env=@ %a\n%!" Sexp.pp_hum
@@ -580,7 +588,8 @@ let (* %debug_sexp *) solve_row_ineq ~(cur : t) ~(subr : t) (env : environment) 
 
 let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
 
-let solve_inequalities (ineqs : inequality list) (env : environment) : inequality list * environment =
+let solve_inequalities ~(finish : bool) (ineqs : inequality list) (env : environment) :
+    inequality list * environment =
   let rec solve ineqs env =
     let f (ineqs, env) = function
       | Dim_eq { d1; d2 } ->
@@ -601,7 +610,7 @@ let solve_inequalities (ineqs : inequality list) (env : environment) : inequalit
           (more_ineqs @ ineqs, env)
       | Row_constr { r; constr } ->
           let r = subst_row env r in
-          let more_ineqs, env = apply_constraint r constr env in
+          let more_ineqs, env = apply_constraint ~finish r constr env in
           (more_ineqs @ ineqs, env)
     in
     let ineqs', env = List.fold ineqs ~init:([], env) ~f in
@@ -615,7 +624,7 @@ let solve_inequalities (ineqs : inequality list) (env : environment) : inequalit
   in
   solve ineqs env
 
-let close_row (env : environment) (r : t) : inequality list =
+let (* %debug_sexp *) close_row (env : environment) (r : t) : inequality list =
   List.concat_map r.dims ~f:(function
     | Var v as d1 -> (
         match Map.find env.dim_env v with
