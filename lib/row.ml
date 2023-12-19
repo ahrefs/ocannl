@@ -588,7 +588,7 @@ let (* %debug_sexp *) solve_row_ineq ~(cur : t) ~(subr : t) (env : environment) 
 
 let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
 
-let solve_inequalities ~(finish : bool) (ineqs : inequality list) (env : environment) :
+let (* %debug_sexp *) solve_inequalities ~(finish : bool) (ineqs : inequality list) (env : environment) :
     inequality list * environment =
   let rec solve ineqs env =
     let f (ineqs, env) = function
@@ -625,6 +625,7 @@ let solve_inequalities ~(finish : bool) (ineqs : inequality list) (env : environ
   solve ineqs env
 
 let (* %debug_sexp *) close_row (env : environment) (r : t) : inequality list =
+  let r = subst_row env r in
   List.concat_map r.dims ~f:(function
     | Var v as d1 -> (
         match Map.find env.dim_env v with
