@@ -477,19 +477,12 @@ let (* %debug_sexp *) solve_row_ineq ~(cur : t) ~(subr : t) (env : environment) 
     inequality list * environment =
   let cur = subst_row env cur in
   let subr = subst_row env subr in
-  let prefix_ineqs len =
-    let dims1 = take_from_end cur.dims len and dims2 = take_from_end subr.dims len in
-    List.fold2_exn ~init:([], env)
-      ~f:(fun (ineqs, env) cur subr ->
-        let more_ineqs, env = solve_dim_ineq ~cur ~subr env in
-        (more_ineqs @ ineqs, env))
-      dims1 dims2
-  in
   let r1_len = List.length cur.dims and r2_len = List.length subr.dims in
   let len = min r1_len r2_len in
-  let ineqs, env =
-    try prefix_ineqs len
-    with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ cur; subr ] :: trace)
+  let prefix_ineqs =
+    List.map2_exn
+      ~f:(fun cur subr -> Dim_ineq { cur; subr })
+      (take_from_end cur.dims len) (take_from_end subr.dims len)
   in
   let reduced { bcast; dims; id } = { bcast; dims = drop_from_end dims len; id } in
   match (cur, subr) with
@@ -497,7 +490,7 @@ let (* %debug_sexp *) solve_row_ineq ~(cur : t) ~(subr : t) (env : environment) 
   | { bcast = Row_var v_cur; _ }, { bcast = Row_var v_subr; _ } when r1_len = r2_len -> (
       match (Map.find env.row_env v_cur, Map.find env.row_env v_subr) with
       | None, None ->
-          ( ineqs,
+          ( prefix_ineqs,
             {
               env with
               row_env =
@@ -506,7 +499,7 @@ let (* %debug_sexp *) solve_row_ineq ~(cur : t) ~(subr : t) (env : environment) 
                 |> Map.add_exn ~key:v_subr ~data:(Bounds { cur = [ v_cur ]; subr = []; lub = None });
             } )
       | Some (Bounds { cur = cur1; subr = subr1; lub = lub1 }), None ->
-          ( ineqs,
+          ( prefix_ineqs,
             {
               env with
               row_env =
@@ -516,7 +509,7 @@ let (* %debug_sexp *) solve_row_ineq ~(cur : t) ~(subr : t) (env : environment) 
                 |> Map.add_exn ~key:v_subr ~data:(Bounds { cur = [ v_cur ]; subr = []; lub = None });
             } )
       | None, Some (Bounds { cur = cur2; subr = subr2; lub = lub2 }) ->
-          ( ineqs,
+          ( prefix_ineqs,
             {
               env with
               row_env =
@@ -527,7 +520,7 @@ let (* %debug_sexp *) solve_row_ineq ~(cur : t) ~(subr : t) (env : environment) 
             } )
       | ( Some (Bounds { cur = cur1; subr = subr1; lub = lub1 }),
           Some (Bounds { cur = cur2; subr = subr2; lub = lub2 }) ) ->
-          ( ineqs,
+          ( prefix_ineqs,
             {
               env with
               row_env =
@@ -544,7 +537,8 @@ let (* %debug_sexp *) solve_row_ineq ~(cur : t) ~(subr : t) (env : environment) 
       let subr_dims : dim list = take_from_end subr.dims (r2_len - r1_len) in
       ( Row_eq { r1 = cur; r2 = template }
         :: Row_ineq { cur = template; subr }
-        :: List.map2_exn more_dims subr_dims ~f:(fun cur subr -> Dim_ineq { cur; subr }),
+        :: List.map2_exn more_dims subr_dims ~f:(fun cur subr -> Dim_ineq { cur; subr })
+        @ prefix_ineqs,
         env )
   | { bcast = Broadcastable; _ }, _ when r1_len < r2_len ->
       raise @@ Shape_error ("Too many axes", [ Row_mismatch [ cur; subr ] ])
@@ -552,14 +546,14 @@ let (* %debug_sexp *) solve_row_ineq ~(cur : t) ~(subr : t) (env : environment) 
       let r_cur = reduced cur in
       match Map.find env.row_env v_subr with
       | None ->
-          ( ineqs,
+          ( prefix_ineqs,
             {
               env with
               row_env =
                 Map.add_exn env.row_env ~key:v_subr ~data:(Bounds { cur = []; subr = []; lub = Some r_cur });
             } )
       | Some (Bounds { cur = cur2; subr = subr2; lub = None }) ->
-          ( ineqs,
+          ( prefix_ineqs,
             {
               env with
               row_env =
@@ -584,7 +578,7 @@ let (* %debug_sexp *) solve_row_ineq ~(cur : t) ~(subr : t) (env : environment) 
                 | Dim _, Dim _ -> d1)
           in
           let lub = { dims = lub_dims; bcast = lub_bcast; id = lub_id } in
-          ( ineqs,
+          ( prefix_ineqs,
             {
               env with
               row_env =
@@ -592,7 +586,7 @@ let (* %debug_sexp *) solve_row_ineq ~(cur : t) ~(subr : t) (env : environment) 
                 |> Fn.flip Map.update v_subr ~f:(fun _ -> Bounds { cur = cur2; subr = subr2; lub = Some lub });
             } )
       | Some (Solved _) -> assert false)
-  | _, { bcast = Broadcastable; _ } when r2_len <= r1_len -> (ineqs, env)
+  | _, { bcast = Broadcastable; _ } when r2_len <= r1_len -> (prefix_ineqs, env)
   | { bcast = Row_var _ | Broadcastable; _ }, { bcast = Row_var _ | Broadcastable; _ } -> assert false
 
 let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
