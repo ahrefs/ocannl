@@ -274,38 +274,47 @@ let (* %debug_sexp *) apply_constraint ~(finish : bool) (r : row) (constr : dims
   match constr with
   | Unconstrained -> ([], env)
   | Total_elems n -> (
-      match r.bcast with
-      | Row_var _ when finish && n = 1 ->
-          ([ Row_eq { r1 = r; r2 = { dims = []; bcast = Broadcastable; id = r.id } } ], env)
-      | Row_var _ when finish ->
-          let dim = get_dim ~d:n () in
-          ([ Row_eq { r1 = r; r2 = { dims = [ dim ]; bcast = Broadcastable; id = r.id } } ], env)
-      | Row_var _ -> ([ Row_constr { r; constr } ], env (* Wait for more shape inference. *))
-      | Broadcastable -> (
-          let vars, nonvars = List.partition_tf r.dims ~f:is_var in
-          if List.length vars > 1 then
-            if finish then (* TODO: *)
-              ([], env)
-            else ([ Row_constr { r; constr } ], env (* Wait for more shape inference. *))
+      match r with
+      | { dims; bcast = Row_var _; _ } when finish -> (
+          let vars, nonvars = List.partition_tf dims ~f:is_var in
+          let known : int = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
+          let rem : int = n / known in
+          if rem = 0 then (
+            if Utils.settings.with_debug then
+              Stdlib.Format.printf "apply_constraint: shape error env=@ %a\n%!" Sexp.pp_hum
+                (sexp_of_environment env);
+            raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ]))
+          else if rem = 1 then ([], env)
           else
-            let known : int = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
             match vars with
             | [] ->
-                if n <> known then (
+                let dim = get_dim ~d:rem () in
+                ([ Row_eq { r1 = r; r2 = { dims = [ dim ]; bcast = Broadcastable; id = r.id } } ], env)
+            | Var v :: _ -> ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } ], env)
+            | Dim _ :: _ -> assert false)
+      | { bcast = Row_var _; _ } -> ([ Row_constr { r; constr } ], env (* Wait for more shape inference. *))
+      | { dims; bcast = Broadcastable; _ } -> (
+          let vars, nonvars = List.partition_tf dims ~f:is_var in
+          let known : int = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
+          let rem : int = n / known in
+          if rem = 0 then (
+            if Utils.settings.with_debug then
+              Stdlib.Format.printf "apply_constraint: shape error env=@ %a\n%!" Sexp.pp_hum
+                (sexp_of_environment env);
+            raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ]))
+          else
+            match vars with
+            | [] ->
+                if rem = 1 then ([], env)
+                else (
                   if Utils.settings.with_debug then
                     Stdlib.Format.printf "apply_constraint: shape error env=@ %a\n%!" Sexp.pp_hum
                       (sexp_of_environment env);
                   raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ]))
-                else ([], env)
-            | [ Var v ] ->
-                let rem : int = n / known in
-                if rem = 0 then (
-                  if Utils.settings.with_debug then
-                    Stdlib.Format.printf "apply_constraint: shape error env=@ %a\n%!" Sexp.pp_hum
-                      (sexp_of_environment env);
-                  raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ]))
-                else unify_dim (Var v, get_dim ~d:rem ()) env
-            | _ -> assert false))
+            | [ Var v ] -> ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } ], env)
+            | Var v :: _ when finish -> ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } ], env)
+            | Var _ :: _ -> ([ Row_constr { r; constr } ], env (* Wait for more shape inference. *))
+            | Dim _ :: _ -> assert false))
 
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
 let rec unify_row (eq : t * t) (env : environment) : inequality list * environment =
