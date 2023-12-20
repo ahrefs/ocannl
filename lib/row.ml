@@ -475,8 +475,6 @@ let (* %debug_sexp *) solve_dim_ineq ~(cur : dim) ~(subr : dim) (env : environme
 
 let (* %debug_sexp *) solve_row_ineq ~(cur : t) ~(subr : t) (env : environment) :
     inequality list * environment =
-  let cur = subst_row env cur in
-  let subr = subst_row env subr in
   let r1_len = List.length cur.dims and r2_len = List.length subr.dims in
   let len = min r1_len r2_len in
   let prefix_ineqs =
