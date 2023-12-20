@@ -402,6 +402,8 @@ let (* %debug_sexp *) solve_dim_ineq ~(cur : dim) ~(subr : dim) (env : environme
   | (Dim { d = 1; _ } as cur), _ -> ([ Dim_eq { d1 = subr; d2 = cur } ], env)
   | Var v_cur, Var v_subr -> (
       match (Map.find env.dim_env v_cur, Map.find env.dim_env v_subr) with
+      | Some (Bounds { subr = subr1; _ }), _ when List.mem ~equal:equal_dim_var subr1 v_subr -> ([], env)
+      | _, Some (Bounds { cur = cur2; _ }) when List.mem ~equal:equal_dim_var cur2 v_cur -> ([], env)
       | None, None ->
           ( [],
             {
@@ -487,6 +489,9 @@ let (* %debug_sexp *) solve_row_ineq ~(cur : t) ~(subr : t) (env : environment) 
   | cur, subr when equal_row cur subr -> ([], env)
   | { bcast = Row_var v_cur; _ }, { bcast = Row_var v_subr; _ } when r1_len = r2_len -> (
       match (Map.find env.row_env v_cur, Map.find env.row_env v_subr) with
+      | Some (Bounds { subr = subr1; _ }), _ when List.mem ~equal:equal_row_var subr1 v_subr ->
+          (prefix_ineqs, env)
+      | _, Some (Bounds { cur = cur2; _ }) when List.mem ~equal:equal_row_var cur2 v_cur -> (prefix_ineqs, env)
       | None, None ->
           ( prefix_ineqs,
             {
