@@ -456,21 +456,34 @@ let (* %debug_sexp *) solve_dim_ineq ~(cur : dim) ~(subr : dim) (env : environme
                 Map.add_exn env.dim_env ~key:v_subr ~data:(Bounds { lub = Some cur; cur = []; subr = [] });
             } )
       | Some (Solved _) -> assert false
-      | Some (Bounds { cur = _; subr = subr2; lub = Some lub2 }) ->
-          let lub_forcing =
+      | Some (Bounds { cur = cur2; subr = subr2; lub = Some lub2 }) ->
+          let lub, lub_forcing =
             match (cur, lub2) with
-            | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> []
+            | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> (cur, [])
             | Dim _, Dim _ (* when d1 <> d2 *) ->
-                [ Dim_eq { d1 = subr; d2 = get_dim ~d:1 () } ]
+                let lub = get_dim ~d:1 () in
+                (lub, [ Dim_eq { d1 = subr; d2 = lub } ])
                 (* raise
                    @@ Shape_error
                         ( "dimension comparison for axis: upper bound mismatch",
                           [ Dim_mismatch [ lub2; cur; subr ] ] ) *)
             | Var _, _ | _, Var _ -> assert false
           in
-          (lub_forcing @ List.map subr2 ~f:(fun v_subr -> Dim_ineq { cur; subr = Var v_subr }), env)
-      | Some (Bounds { cur = _; subr = subr2; lub = None }) ->
-          (List.map subr2 ~f:(fun v_subr -> Dim_ineq { cur; subr = Var v_subr }), env))
+          ( lub_forcing,
+            {
+              env with
+              dim_env =
+                Map.update env.dim_env v_subr ~f:(fun _ ->
+                    Bounds { lub = Some lub; cur = cur2; subr = subr2 });
+            } )
+      | Some (Bounds { cur = cur2; subr = subr2; lub = None }) ->
+          ( List.map subr2 ~f:(fun v_subr -> Dim_ineq { cur; subr = Var v_subr }),
+            {
+              env with
+              dim_env =
+                Map.update env.dim_env v_subr ~f:(fun _ ->
+                    Bounds { lub = Some cur; cur = cur2; subr = subr2 });
+            } ))
   | Var _, Dim _ (* when d2 > 1 *) -> ([ Dim_eq { d1 = cur; d2 = subr } ], env)
   | Dim _, Dim _ ->
       raise @@ Shape_error ("dimension comparison for axis: mismatch", [ Dim_mismatch [ cur; subr ] ])
