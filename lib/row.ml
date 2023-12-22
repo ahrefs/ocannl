@@ -208,8 +208,10 @@ let s_row_one_in_entry v ~value in_ =
       ( ineqs0 @ ineqs1 @ ineqs2,
         Bounds { cur; subr; lub = Option.map lub ~f:(fun in_ -> s_row_one v ~value ~in_) } )
 
-let rec subst_row (env : environment) ({ dims; bcast; id } as default : t) : t =
-  let dims = List.map dims ~f:(subst_dim env) in
+let rec subst_row (env : environment) ({ dims; bcast; id } : t) : t =
+  let s_dims = List.map ~f:(subst_dim env) in
+  let dims = s_dims dims in
+  let default = { dims; bcast; id } in
   match bcast with
   | Broadcastable -> { dims; bcast; id }
   | Row_var v -> (
@@ -219,7 +221,7 @@ let rec subst_row (env : environment) ({ dims; bcast; id } as default : t) : t =
       | Some (Solved ({ bcast = Row_var v2; _ } as r2)) when equal_row_var v v2 ->
           raise @@ Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch [ default; r2 ] ])
       | Some (Solved { dims = more_dims; bcast; id = _ }) ->
-          subst_row env { dims = more_dims @ dims; bcast; id })
+          subst_row env { dims = s_dims more_dims @ dims; bcast; id })
 
 let rec unify_dim (eq : dim * dim) (env : environment) : inequality list * environment =
   match (subst_dim env @@ fst eq, subst_dim env @@ snd eq) with
