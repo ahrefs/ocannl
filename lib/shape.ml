@@ -567,22 +567,27 @@ let (* %debug_sexp *) propagate_shapes ?remaining_constraints (update_step : upd
      (equal _debug_initial.shape _debug_result.shape && equal_logic _debug_initial.logic _debug_result.logic); *)
   state := env
 
-let(* %debug_sexp *) close_update_step env ~remaining_constraints:eqs (update_step : update_step) : unit =
+let(* %debug_sexp *) close_update_step ~use_lub env ~remaining_constraints:eqs (update_step : update_step) : unit =
   let f sh =
-    eqs := Row.close_row env sh.batch @ !eqs;
-    eqs := Row.close_row env sh.input @ !eqs;
-    eqs := Row.close_row env sh.output @ !eqs
+    eqs := Row.close_row ~use_lub env sh.batch @ !eqs;
+    eqs := Row.close_row ~use_lub env sh.input @ !eqs;
+    eqs := Row.close_row ~use_lub env sh.output @ !eqs
   in
   iter_shapes update_step ~f
 
-let (* %debug_sexp *) finish_inference (() : unit) : unit =
+let %debug_sexp finish_inference (() : unit) : unit =
   let remaining_constraints = ref [] in
   let _debug_second_stage_inference : update_step list = !second_stage_inference in
   List.iter !second_stage_inference ~f:(propagate_shapes ~remaining_constraints);
-  let unsolved, env = Row.solve_inequalities ~finish:true !remaining_constraints !state in
-  let remaining_constraints = ref unsolved in
-  List.iter !second_stage_inference ~f:(close_update_step env ~remaining_constraints);
-  let unsolved, env = Row.solve_inequalities ~finish:true !remaining_constraints env in
+  let unsolved = !remaining_constraints in
+  let remaining_constraints = ref [] in
+  List.iter !second_stage_inference ~f:(close_update_step ~use_lub:true !state ~remaining_constraints);
+  let more_unsolved, env = Row.solve_inequalities ~finish:false !remaining_constraints !state in
+  remaining_constraints := [];
+  let unsolved, env = Row.solve_inequalities ~finish:true (unsolved @ more_unsolved) env in
+  (* remaining_constraints := unsolved;
+  List.iter !second_stage_inference ~f:(close_update_step ~use_lub:false env ~remaining_constraints);
+  let unsolved, env = Row.solve_inequalities ~finish:true !remaining_constraints env in *)
   assert (List.is_empty unsolved);
   List.iter !second_stage_inference ~f:(Fn.flip apply_env env);
   second_stage_inference := [];
