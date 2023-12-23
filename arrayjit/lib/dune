@@ -8,7 +8,7 @@
   stdio
   str
   gccjit
-  cudajit
+  (select cuda_backend.ml from (cudajit -> cuda_backend.cudajit.ml) (-> cuda_backend.missing.ml))
   ppx_minidebug.runtime)
  (preprocess
   (pps ppx_jane ppx_minidebug))
@@ -20,8 +20,8 @@
   lazy_array
   low_level
   assignments
-  exec_as_cuda
-  exec_as_gccjit
+  gccjit_backend
+  cuda_backend
   backends)
  (modes byte native))
 

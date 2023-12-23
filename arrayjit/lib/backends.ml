@@ -129,11 +129,11 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let to_ordinal device = device.ordinal
 end
 
-module Gccjit_device : No_device_backend with type context = Exec_as_gccjit.context = struct
-  type context = Exec_as_gccjit.context
+module Gccjit_device : No_device_backend with type context = Gccjit_backend.context = struct
+  type context = Gccjit_backend.context
   type nonrec jitted = context jitted
 
-  open Exec_as_gccjit
+  open Gccjit_backend
 
   let name = "gccjit"
   let initialize = initialize
@@ -162,12 +162,12 @@ end
 
 module Gccjit_backend = Multicore_backend (Gccjit_device)
 
-module Cuda_backend : Backend with type context = Exec_as_cuda.context = struct
-  type context = Exec_as_cuda.context
-  type device = Exec_as_cuda.device
+module Cuda_backend : Backend with type context = Cuda_backend.context = struct
+  type context = Cuda_backend.context
+  type device = Cuda_backend.device
   type nonrec jitted = context jitted
 
-  open Exec_as_cuda
+  open Cuda_backend
 
   let name = "cuda"
   let initialize = initialize
