@@ -63,7 +63,12 @@ type update_step = { shape : t; logic : logic } [@@deriving sexp]
 
 val finish_inference : unit -> unit
 val to_dims : t -> int array
-val propagate_shapes : ?remaining_constraints:Row.inequality list ref -> update_step -> unit
+
+val propagate_shapes :
+  ?all_constraints:Row.inequality list ref ->
+  ?remaining_constraints:Row.inequality list ref ->
+  update_step ->
+  unit
 
 val derive_projections : update_step -> Arrayjit.Indexing.projections
 (** Computes the indexing into subtensors given the shape information of a tensor. 

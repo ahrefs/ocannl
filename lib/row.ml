@@ -649,27 +649,6 @@ let%debug_sexp solve_inequalities ~(finish : bool) (ineqs : inequality list) (en
   in
   solve ineqs env
 
-let%debug_sexp close_row ~use_lub (env : environment) (r : t) : inequality list =
-  let r : row = subst_row env r in
-  List.concat_map r.dims ~f:(function
-    | Var v as d1 -> (
-        match Map.find env.dim_env v with
-        | Some (Solved _) -> assert false
-        | Some (Bounds { lub = Some lub; _ }) when use_lub -> [ Dim_eq { d1; d2 = lub } ]
-        | _ when not use_lub -> [ Dim_eq { d1; d2 = get_dim ~d:1 () } ]
-        | _ -> [])
-    | _ -> [])
-  @
-  match r.bcast with
-  | Row_var v as bcast -> (
-      let r1 = { dims = []; bcast; id = r.id } and r2 = { dims = []; bcast = Broadcastable; id = r.id } in
-      match Map.find env.row_env v with
-      | Some (Solved _) -> assert false
-      | Some (Bounds { lub = Some lub; _ }) when use_lub -> [ Row_eq { r1; r2 = lub } ]
-      | _ when not use_lub -> [ Row_eq { r1; r2 } ]
-      | _ -> [])
-  | _ -> []
-
 let rec row_to_labels env =
   let rec f = function
     | Dim { label = Some l; _ } -> l

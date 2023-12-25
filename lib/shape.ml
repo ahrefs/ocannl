@@ -524,17 +524,6 @@ let get_inequalities ({ shape = cur_sh; logic } : update_step) : proj_axis_env *
 let state = ref Row.empty_env
 let second_stage_inference = ref []
 
-let deep_copy_update_step update_step =
-  let upd sh = { sh with id = sh.id } in
-  {
-    shape = upd update_step.shape;
-    logic =
-      (match update_step.logic with
-      | Terminal l -> Terminal l
-      | Transpose (l, sh1) -> Transpose (l, upd sh1)
-      | Broadcast (l, sh1, sh2) -> Broadcast (l, upd sh1, upd sh2));
-  }
-
 let iter_shapes update_step ~f =
   f update_step.shape;
   match update_step.logic with
@@ -552,42 +541,27 @@ let apply_env update_step env =
   in
   iter_shapes update_step ~f
 
-let (* %debug_sexp *) propagate_shapes ?remaining_constraints (update_step : update_step) : unit =
+let %debug_sexp propagate_shapes ?all_constraints ?remaining_constraints (update_step : update_step) :
+    unit =
   if not @@ List.mem ~equal:phys_equal !second_stage_inference update_step then
     second_stage_inference := update_step :: !second_stage_inference;
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice does). *)
   apply_env update_step !state;
-  (* let _debug_initial : update_step = deep_copy_update_step update_step in *)
   let _, ineqs = get_inequalities update_step in
+  (match all_constraints with None -> () | Some store -> store := ineqs @ !store);
   let ineqs', env = Row.solve_inequalities ~finish:false ineqs !state in
   (match remaining_constraints with None -> () | Some store -> store := ineqs' @ !store);
   apply_env update_step env;
-  let _debug_result : update_step = deep_copy_update_step update_step in
-  (* Debug_runtime.no_debug_if
-     (equal _debug_initial.shape _debug_result.shape && equal_logic _debug_initial.logic _debug_result.logic); *)
   state := env
 
-let(* %debug_sexp *) close_update_step ~use_lub env ~remaining_constraints:eqs (update_step : update_step) : unit =
-  let f sh =
-    eqs := Row.close_row ~use_lub env sh.batch @ !eqs;
-    eqs := Row.close_row ~use_lub env sh.input @ !eqs;
-    eqs := Row.close_row ~use_lub env sh.output @ !eqs
-  in
-  iter_shapes update_step ~f
-
-let %debug_sexp finish_inference (() : unit) : unit =
+let%debug_sexp finish_inference (() : unit) : unit =
+  let all_constraints = ref [] in
   let remaining_constraints = ref [] in
   let _debug_second_stage_inference : update_step list = !second_stage_inference in
-  List.iter !second_stage_inference ~f:(propagate_shapes ~remaining_constraints);
-  let unsolved = !remaining_constraints in
-  let remaining_constraints = ref [] in
-  List.iter !second_stage_inference ~f:(close_update_step ~use_lub:true !state ~remaining_constraints);
-  let more_unsolved, env = Row.solve_inequalities ~finish:false !remaining_constraints !state in
-  remaining_constraints := [];
-  let unsolved, env = Row.solve_inequalities ~finish:true (unsolved @ more_unsolved) env in
-  (* remaining_constraints := unsolved;
-  List.iter !second_stage_inference ~f:(close_update_step ~use_lub:false env ~remaining_constraints);
-  let unsolved, env = Row.solve_inequalities ~finish:true !remaining_constraints env in *)
+  List.iter !second_stage_inference ~f:(propagate_shapes ~all_constraints ~remaining_constraints);
+  let _debug_remaining_constraints : Row.inequality list = !remaining_constraints in
+  let unsolved, env = Row.solve_inequalities ~finish:true !all_constraints !state in
+  all_constraints := [];
   assert (List.is_empty unsolved);
   List.iter !second_stage_inference ~f:(Fn.flip apply_env env);
   second_stage_inference := [];
