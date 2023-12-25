@@ -142,7 +142,8 @@ exception Shape_error of string * error_trace list [@@deriving sexp_of]
           ~highlight_terms:(Re.str "(sh_id 2) (kind Input)") ~exclude_on_path:(Re.str "env") "debug.html") *)
 module Debug_runtime =
   (val Minidebug_runtime.debug_html ~max_nesting_depth:20 (* ~max_num_children:200 *)
-         ~highlight_terms:(Re.str "(Row_var 26)") ~exclude_on_path:(Re.str "env") "debug-5.html")
+         ~highlight_terms:Re.(alt [ str "(sh_id 59) (kind Output)"; str "(sh_id 2) (kind Output)" ])
+         ~exclude_on_path:(Re.str "env") "debug.html")
 (* module Debug_runtime = (val Minidebug_runtime.debug_flushing ()) *)
 
 let dim_to_int_exn = function Dim { d; _ } -> d | Var _ -> invalid_arg "dim_to_int: dim still unknown"
@@ -397,7 +398,8 @@ let%debug_sexp rec unify_row (eq : t * t) (env : environment) : inequality list 
       | Unequal_lengths -> raise @@ Shape_error ("Mismatching number of axes", [ Row_mismatch [ r1; r2 ] ])
       | Ok eqs -> List.fold ~init:([], env) ~f:(fun acc (d1, d2) -> solve acc (Dim_eq { d1; d2 })) eqs)
 
-let%debug_sexp solve_dim_ineq ~(cur : dim) ~(subr : dim) (env : environment) : inequality list * environment =
+let%debug_sexp solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env : environment) :
+    inequality list * environment =
   let dedup = List.dedup_and_sort ~compare:compare_dim_var in
   match (cur, subr) with
   | cur, subr when equal_dim cur subr -> ([], env)
@@ -465,7 +467,8 @@ let%debug_sexp solve_dim_ineq ~(cur : dim) ~(subr : dim) (env : environment) : i
       | Some (Bounds { cur = cur2; subr = subr2; lub = Some lub2 }) ->
           let lub, lub_forcing =
             match (cur, lub2) with
-            | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> (cur, [])
+            | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 ->
+                (cur, if finish then [ Dim_eq { d1 = subr; d2 = cur } ] else [])
             | Dim _, Dim _ (* when d1 <> d2 *) ->
                 let lub = get_dim ~d:1 () in
                 (lub, [ Dim_eq { d1 = subr; d2 = lub } ])
@@ -494,7 +497,8 @@ let%debug_sexp solve_dim_ineq ~(cur : dim) ~(subr : dim) (env : environment) : i
   | Dim _, Dim _ ->
       raise @@ Shape_error ("dimension comparison for axis: mismatch", [ Dim_mismatch [ cur; subr ] ])
 
-let%debug_sexp solve_row_ineq ~(cur : t) ~(subr : t) (env : environment) : inequality list * environment =
+let%debug_sexp solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : environment) :
+    inequality list * environment =
   let r1_len = List.length cur.dims and r2_len = List.length subr.dims in
   let len = min r1_len r2_len in
   let prefix_ineqs =
@@ -583,10 +587,12 @@ let%debug_sexp solve_row_ineq ~(cur : t) ~(subr : t) (env : environment) : inequ
                        Bounds { cur = cur2; subr = subr2; lub = Some r_cur });
             } )
       | Some (Bounds { cur = cur2; subr = subr2; lub = Some lub2 }) ->
-          let lub_len = min (List.length r_cur.dims) (List.length lub2.dims) in
-          let lub_id = if lub_len = List.length r_cur.dims then r_cur.id else lub2.id in
+          let len1 = List.length r_cur.dims and len2 = List.length lub2.dims in
+          let lub_len = min len1 len2 in
+          let lub_is_cur = len1 < len2 || (len1 = len2 && is_broadcastable cur.bcast) in
+          let lub_id = if lub_is_cur then r_cur.id else lub2.id in
           (* TODO: we lose connection here with the other bound if both have row variables. *)
-          let lub_bcast = if lub_len = List.length r_cur.dims then r_cur.bcast else lub2.bcast in
+          let lub_bcast = if lub_is_cur then r_cur.bcast else lub2.bcast in
           let lub_dims =
             List.map2_exn (take_from_end r_cur.dims lub_len) (take_from_end lub2.dims lub_len)
               ~f:(fun d1 d2 ->
@@ -599,7 +605,10 @@ let%debug_sexp solve_row_ineq ~(cur : t) ~(subr : t) (env : environment) : inequ
                 | Dim _, Dim _ -> d1)
           in
           let lub = { dims = lub_dims; bcast = lub_bcast; id = lub_id } in
-          ( prefix_ineqs,
+          let force_lub =
+            if finish && (not @@ is_row_var lub_bcast) then [ Row_eq { r1 = subr; r2 = lub } ] else []
+          in
+          ( prefix_ineqs @ force_lub,
             {
               env with
               row_env =
@@ -627,11 +636,11 @@ let%debug_sexp solve_inequalities ~(finish : bool) (ineqs : inequality list) (en
           (more_ineqs @ ineqs, env)
       | Dim_ineq { cur; subr } ->
           let cur = subst_dim env cur and subr = subst_dim env subr in
-          let more_ineqs, env = solve_dim_ineq ~cur ~subr env in
+          let more_ineqs, env = solve_dim_ineq ~finish ~cur ~subr env in
           (more_ineqs @ ineqs, env)
       | Row_ineq { cur; subr } ->
           let cur = subst_row env cur and subr = subst_row env subr in
-          let more_ineqs, env = solve_row_ineq ~cur ~subr env in
+          let more_ineqs, env = solve_row_ineq ~finish ~cur ~subr env in
           (more_ineqs @ ineqs, env)
       | Row_constr { r; constr } ->
           let r = subst_row env r in
