@@ -606,7 +606,9 @@ let%debug_sexp solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : env
           in
           let lub = { dims = lub_dims; bcast = lub_bcast; id = lub_id } in
           let force_lub =
-            if finish && (not @@ is_row_var lub_bcast) then [ Row_eq { r1 = subr; r2 = lub } ] else []
+            if finish && (not @@ is_row_var lub_bcast) then
+              [ Row_eq { r1 = { dims = []; bcast = Row_var v_subr; id = subr.id }; r2 = lub } ]
+            else []
           in
           ( prefix_ineqs @ force_lub,
             {
