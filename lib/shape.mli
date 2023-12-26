@@ -55,7 +55,11 @@ type logic =
         for [File_mapped fn], opens the file [fn] to check its length. *)
 [@@deriving equal, sexp]
 
-type update_step = { shape : t; logic : logic } [@@deriving sexp]
+type update_id [@@deriving equal, compare, hash, sexp]
+
+val get_update_id : unit -> update_id
+
+type update_step = { shape : t; logic : logic; id : update_id } [@@deriving sexp]
 (** Data required for a shape inference update step. Ideally, an update should be performed at least twice,
     the second time after all the other relevant updates have been performed for the first time.
     In OCANNL, this is achieved by performing updates both as the tensors are constructed, and via
@@ -63,12 +67,7 @@ type update_step = { shape : t; logic : logic } [@@deriving sexp]
 
 val finish_inference : unit -> unit
 val to_dims : t -> int array
-
-val propagate_shapes :
-  ?all_constraints:Row.inequality list ref ->
-  ?remaining_constraints:Row.inequality list ref ->
-  update_step ->
-  unit
+val propagate_shapes : ?remaining_constraints:Row.inequality list ref -> update_step -> unit
 
 val derive_projections : update_step -> Arrayjit.Indexing.projections
 (** Computes the indexing into subtensors given the shape information of a tensor. 

@@ -92,7 +92,7 @@ let max_sublabel_length = ref 25
 let raw_binop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs1_is_grad ~t2 ~rhs2_is_grad ~logic =
   let shape = t.shape in
   let shape_logic = Shape.Broadcast (logic, t1.shape, t2.shape) in
-  let local_shape_update = Shape.{ shape; logic = shape_logic } in
+  let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
   Shape.propagate_shapes local_shape_update;
   let projections =
     lazy
@@ -108,7 +108,7 @@ let raw_binop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs1_is_grad ~t2 ~rhs2_i
 let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
   let shape = t.shape in
   let shape_logic = Shape.Transpose (logic, t1.shape) in
-  let local_shape_update = Shape.{ shape; logic = shape_logic } in
+  let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
   Shape.propagate_shapes local_shape_update;
   let projections =
     lazy
@@ -145,7 +145,9 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
     | [ t1; t2 ] -> [ Shape.Broadcast (compose_op, t1.shape, t2.shape) ]
     | t1 :: (t2 :: _ as ts) -> Shape.Broadcast (compose_op, t1.shape, t2.shape) :: shape_logics ts
   in
-  let local_shape_updates = List.map ~f:(fun logic -> Shape.{ shape; logic }) @@ shape_logics orig_ts in
+  let local_shape_updates =
+    List.map ~f:(fun logic -> Shape.{ shape; logic; id = get_update_id () }) @@ shape_logics orig_ts
+  in
   let dims = lazy_to_dims shape in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
   let projections =
