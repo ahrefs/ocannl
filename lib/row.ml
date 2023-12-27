@@ -191,12 +191,13 @@ let s_row_one v ~value:{ dims = more_dims; bcast; id = _ } ~in_ =
   | { dims; bcast = Row_var v2; id } when equal_row_var v v2 -> { dims = more_dims @ dims; bcast; id }
   | _ -> in_
 
+let row_of_var v id = { dims = []; bcast = Row_var v; id }
+
 let s_row_one_in_entry v ~value in_ =
   match in_ with
   | Solved in_ -> ([], Solved (s_row_one v ~value ~in_))
   | Bounds { cur; subr; lub } ->
       (* TODO: audit code to ensure we don't lose the constraints associated with the bounds variables. *)
-      let row_of_var v = { dims = []; bcast = Row_var v; id = value.id } in
       let find_v side = List.partition_tf side ~f:(equal_row_var v) in
       let v_cur, cur = find_v cur in
       let v_subr, subr = find_v subr in
@@ -205,11 +206,11 @@ let s_row_one_in_entry v ~value in_ =
       in
       let ineqs1 =
         if List.is_empty v_subr then []
-        else List.map cur ~f:(fun cur -> Row_ineq { cur = row_of_var cur; subr = value })
+        else List.map cur ~f:(fun cur -> Row_ineq { cur = row_of_var cur value.id; subr = value })
       in
       let ineqs2 =
         if List.is_empty v_cur then []
-        else List.map subr ~f:(fun subr -> Row_ineq { subr = row_of_var subr; cur = value })
+        else List.map subr ~f:(fun subr -> Row_ineq { subr = row_of_var subr value.id; cur = value })
       in
       ( ineqs0 @ ineqs1 @ ineqs2,
         Bounds { cur; subr; lub = Option.map lub ~f:(fun in_ -> s_row_one v ~value ~in_) } )
@@ -384,10 +385,11 @@ let%debug_sexp rec unify_row (eq : t * t) (env : environment) : inequality list 
         | Some (Solved _) -> assert false
         | Some (Bounds { cur; subr; lub }) ->
             (* TODO: audit code to ensure we don't lose the constraints associated with the bounds variables. *)
-            let row_of_var v = { dims = []; bcast = Row_var v; id = value.id } in
             let row_env : row_env = Map.map env.row_env ~f in
-            List.iter cur ~f:(fun cur -> ineqs := Row_ineq { cur = row_of_var cur; subr = r2 } :: !ineqs);
-            List.iter subr ~f:(fun subr -> ineqs := Row_ineq { subr = row_of_var subr; cur = r2 } :: !ineqs);
+            List.iter cur ~f:(fun cur ->
+                ineqs := Row_ineq { cur = row_of_var cur value.id; subr = r2 } :: !ineqs);
+            List.iter subr ~f:(fun subr ->
+                ineqs := Row_ineq { subr = row_of_var subr value.id; cur = r2 } :: !ineqs);
             Option.iter lub ~f:(fun lub -> ineqs := Row_ineq { cur = lub; subr = r2 } :: !ineqs);
             let _debug_ineqs : inequality list = !ineqs in
             let env : environment = { env with row_env = Map.update row_env v ~f:(fun _ -> Solved value) } in
@@ -607,7 +609,7 @@ let%debug_sexp solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : env
           let lub = { dims = lub_dims; bcast = lub_bcast; id = lub_id } in
           let force_lub =
             if finish && (not @@ is_row_var lub_bcast) then
-              [ Row_eq { r1 = { dims = []; bcast = Row_var v_subr; id = subr.id }; r2 = lub } ]
+              [ Row_eq { r1 = row_of_var v_subr subr.id; r2 = lub } ]
             else []
           in
           ( prefix_ineqs @ force_lub,
