@@ -638,6 +638,7 @@ let fresh_proj_ids update =
 let%debug_sexp derive_projections (update_step : update_step) : Idx.projections =
   apply_env_update !state update_step;
   fresh_proj_ids update_step;
+  (* let _debug_update_step : update_step = update_step in *)
   let (proj_axis_env, ineqs) : proj_axis_env * Row.inequality list =
     get_inequalities ~reset_cache:true update_step
   in

@@ -501,6 +501,8 @@ let%debug_sexp solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env :
   | Dim _, Dim _ ->
       raise @@ Shape_error ("dimension comparison for axis: mismatch", [ Dim_mismatch [ cur; subr ] ])
 
+let global_template_cache = Hashtbl.Poly.create ()
+
 let%debug_sexp solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : environment) :
     inequality list * environment =
   let r1_len = List.length cur.dims and r2_len = List.length subr.dims in
@@ -568,9 +570,10 @@ let%debug_sexp solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : env
                        Bounds { cur = v_cur :: cur2; subr = subr2; lub = lub2 });
             } )
       | Some (Solved _), _ | _, Some (Solved _) -> assert false)
-  | { bcast = Row_var _; dims; _ }, _ when r1_len < r2_len ->
+  | { bcast = Row_var v_cur; dims; _ }, _ when r1_len < r2_len ->
       let more_dims : dim list = Array.(to_list @@ init (r2_len - r1_len) ~f:(fun _ -> Var (get_var ()))) in
-      let template : t = { dims = more_dims @ dims; bcast = Row_var (get_row_var ()); id = cur.id } in
+      let templ_v = Hashtbl.find_or_add global_template_cache (v_cur, r1_len) ~default:get_row_var in
+      let template : t = { dims = more_dims @ dims; bcast = Row_var templ_v; id = cur.id } in
       let subr_dims : dim list = take_from_end subr.dims (r2_len - r1_len) in
       ( Row_eq { r1 = cur; r2 = template }
         :: Row_ineq { cur = template; subr }
