@@ -23,7 +23,7 @@ type row_cmp
 
 val row_id : sh_id:int -> kind:kind -> row_id
 
-type row_var
+type row_var [@@deriving sexp, compare, equal, hash]
 
 val get_row_var : unit -> row_var
 

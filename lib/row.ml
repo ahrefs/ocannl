@@ -849,8 +849,12 @@ let (* %debug_sexp *) solve_proj_equations (eqs : proj_equation list) : proj_env
 let get_proj_index proj_env = function
   | Dim { d; _ } when not @@ Idx.iterated d -> Idx.Fixed_idx 0
   | Dim { proj_id = None; _ } -> assert false
-  | Var _ as v ->
-      raise @@ Shape_error ("projection_of_solved_dims: still not fully inferred", [ Dim_mismatch [ v ] ])
+  | Var v ->
+      if Utils.settings.with_debug then
+        Stdlib.Format.printf "projection_of_solved_dims: still not fully inferred for variable %a\n%!"
+          Sexp.pp_hum
+          ([%sexp_of: dim_var] v);
+      Idx.Fixed_idx 0
   | Dim { proj_id = Some proj_id; d; _ } -> (
       let repr, _ = Utils.union_find ~equal:Int.equal proj_env.proj_classes ~key:proj_id ~rank:0 in
       match Map.find proj_env.proj_to_index repr with
@@ -871,8 +875,12 @@ let get_product_proj proj_env dim =
       if Map.mem proj_env.proj_to_index repr && (not @@ Set.mem proj_env.non_product repr) then Some (repr, d)
       else None
   | Dim { proj_id = None; _ } -> None
-  | Var _ as dim ->
-      raise @@ Shape_error ("derive_projections: shape still not fully inferred", [ Dim_mismatch [ dim ] ])
+  | Var v ->
+      if Utils.settings.with_debug then
+        Stdlib.Format.printf "derive_projections: shape still not fully inferred for variable %a\n%!"
+          Sexp.pp_hum
+          ([%sexp_of: dim_var] v);
+      None
 
 let proj_to_iterator proj_env p =
   match Map.find_exn proj_env.proj_to_index (proj_repr proj_env p) with Iterator s -> s | _ -> assert false

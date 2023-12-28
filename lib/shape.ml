@@ -587,12 +587,18 @@ let row_to_dims row =
   let open Row in
   let f = function
     | Dim { d; _ } -> d
-    | Var _ as dim ->
-        raise @@ Shape_error ("Not enough shape information: unresolved variable", [ Dim_mismatch [ dim ] ])
+    | Var v ->
+        if Utils.settings.with_debug then
+          Stdlib.Format.printf "Not enough shape information: unresolved variable %a\n%!" Sexp.pp_hum
+            ([%sexp_of: dim_var] v);
+        1
   in
   match row with
-  | { bcast = Row_var _; _ } ->
-      raise @@ Shape_error ("Not enough shape information: unresolved row variable", [ Row_mismatch [ row ] ])
+  | { bcast = Row_var v; dims; _ } ->
+      if Utils.settings.with_debug then
+        Stdlib.Format.printf "Not enough shape information: unresolved row variable %a\n%!" Sexp.pp_hum
+          ([%sexp_of: row_var] v);
+      Array.of_list_map dims ~f
   | { dims; bcast = Broadcastable; id = _ } -> Array.of_list_map dims ~f
 
 (** Uses the matrix convention of putting the input axes last.
