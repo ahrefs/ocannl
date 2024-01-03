@@ -2,16 +2,25 @@
 
 Major rewrite.
 
+### Added
+
+- Optionally, inferring or checking tensor (batch) sizes from data (e.g. file) sizes.
+- Static indexing. A "slice" operator to select individual batches.
+- The `Train` module as an optimization "frontend".
+
 ### Changed
 
+- The Cuda backend is not considered supported for now, I plan to write it properly for v0.6. But it is (optionally) buildable to reduce code rot.
+- Dynamic indexing is not supported anymore (to reduce complexity). It might be reintroduced if needed.
 - Factored out the `arrayjit` library / package containing compilation (former Ndarray, Node, Code).
 - Renamed `Formula` -> `Tensor`
 - No more "form vs. non-form" formulas / tensors.
   - Formula/tensor roots are split into forward roots and backprop roots.
 - No more `%nn_rs`, `%nn_dt` syntaxes and `Synthetic` fetch primitive.
 - Renamed `%nn_op` to `%op` and `%nn_cd` to `%cd`.
-- Migrated `gccjit` back into a separate repository.
-- Migrated `cudajit` back into a separate repository.
+- Migrated `gccjit` into a separate repository.
+- Migrated `cudajit` into a separate repository.
+- Massive rewrite of shape inference in a declarative style.
 
 ## [0.2.1] -- 2023-07-19
 
