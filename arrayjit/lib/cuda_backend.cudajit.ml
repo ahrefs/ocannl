@@ -129,9 +129,10 @@ let merge ?(name_suffix = "") la ~dst ~accum ~src (bindings : unit Indexing.bind
   ignore (name, accum, bindings);
   failwith "NOT IMPLEMENTED YET"
 
-let pp_semi ppf () = Stdlib.Format.fprintf ppf ";@ "
+(* let pp_semi ppf () = Stdlib.Format.fprintf ppf ";@ " *)
 let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
-let pp_symbol ppf sym = Stdlib.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym
+
+(* let pp_symbol ppf sym = Stdlib.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym *)
 let pp_index ppf sym = Stdlib.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym
 
 let pp_index_axis ppf = function
@@ -177,8 +178,8 @@ let prec_to_c_type = function
   | Single_prec _ -> "float"
   | Double_prec _ -> "double"
 
-let compute_array_offset ~idcs ~dims =
-  Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx + (offset * dim))
+(* let compute_array_offset ~idcs ~dims =
+   Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx + (offset * dim)) *)
 
 let get_array ~traced_store:_ ctx_info (key : LA.t) =
   Hash_set.add ctx_info.used_tensors key;
@@ -441,9 +442,9 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ par
   if verbose then Stdio.printf "Exec_as_cuda.jit: compilation finished\n%!";
   (func, args, run_module, info)
 
-let jit ~name ?(verbose = false) old_context bindings ((traced_store, llc) as compiled) =
-  if Utils.settings.with_debug then
-    Stdio.printf "Exec_as_cuda.jit: %s\n%!" (Low_level.extract_block_name [ llc ]);
+let jit ?name ?(verbose = false) old_context bindings ((traced_store, llc) as compiled) =
+  let name = Option.value_or_thunk name ~default:(fun () -> Low_level.extract_block_name [ llc ]) in
+  if Utils.settings.with_debug then Stdio.printf "Exec_as_cuda.jit: %s\n%!" name;
   let idx_params, idx_args = List.unzip @@ Indexing.assoc_of_bindings bindings in
   let func, args, run_module, info = jit_func ~name ~verbose old_context idx_params compiled in
   let context =

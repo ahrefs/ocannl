@@ -8,9 +8,9 @@ val finalize : context -> unit
 val sexp_of_context : context -> Sexplib.Sexp.t
 
 val jit :
-  context ->
   ?name:string ->
   ?verbose:bool ->
+  context ->
   unit Indexing.bindings ->
   Low_level.traced_store * Low_level.t ->
   context * (unit -> unit)
