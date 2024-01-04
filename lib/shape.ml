@@ -565,21 +565,20 @@ let apply_env_t env sh =
 
 let apply_env_update env update_step = iter_shapes update_step ~f:(apply_env_t env)
 
-let%debug_sexp propagate_shapes ?remaining_constraints (update_step : update_step) : unit =
+let(* %debug_sexp *) propagate_shapes (update_step : update_step) : unit =
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice does). *)
   apply_env_update !state update_step;
   let _, ineqs = get_inequalities update_step in
   all_constraints := ineqs @ !all_constraints;
   let ineqs', env = Row.solve_inequalities ~finish:false ineqs !state in
-  (match remaining_constraints with None -> () | Some store -> store := ineqs' @ !store);
+  let _debug_remaining_constraints : Row.inequality list = ineqs' in
   apply_env_update env update_step;
   state := env
 
-let%debug_sexp finish_inference (() : unit) : unit =
-  let remaining_constraints = ref [] in
-  let _debug_remaining_constraints : Row.inequality list = !remaining_constraints in
+let(* %debug_sexp *) finish_inference (() : unit) : unit =
   let unsolved, env = Row.solve_inequalities ~finish:true !all_constraints !state in
   state := env;
+  all_constraints := [];
   assert (List.is_empty unsolved)
 (* state := Row.empty_env *)
 
@@ -641,7 +640,7 @@ let fresh_proj_ids update =
 
 (** Computes the indexing into subtensors given the shape information of a tensor. 
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
-let%debug_sexp derive_projections (update_step : update_step) : Idx.projections =
+let(* %debug_sexp *) derive_projections (update_step : update_step) : Idx.projections =
   apply_env_update !state update_step;
   fresh_proj_ids update_step;
   (* let _debug_update_step : update_step = update_step in *)
