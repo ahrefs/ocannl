@@ -434,7 +434,9 @@ let%debug_sexp solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env :
                        Bounds { lub = lub1; cur = cur1; subr = dedup @@ (v_subr :: subr1) })
                 |> Map.add_exn ~key:v_subr ~data:(Bounds { lub = None; cur = [ v_cur ]; subr = [] });
             } )
-      | _, Some (Bounds { cur = [ cur2 ]; subr = _; lub = None }) when finish && equal_dim_var v_cur cur2 ->
+      | ( Some (Bounds { cur = _; subr = [ subr1 ]; lub = None }),
+          Some (Bounds { cur = [ cur2 ]; subr = _; lub = None }) )
+        when finish && equal_dim_var v_subr subr1 && equal_dim_var v_cur cur2 ->
           ([ Dim_eq { d1 = subr; d2 = cur } ], env)
       | None, Some (Bounds { cur = cur2; subr = subr2; lub = lub2 }) ->
           ( [],
@@ -520,7 +522,8 @@ let%debug_sexp solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : env
       (prefix_ineqs, env)
   | { bcast = Row_var v_cur; _ }, { bcast = Row_var v_subr; _ } when r1_len = r2_len -> (
       match (Map.find env.row_env v_cur, Map.find env.row_env v_subr) with
-      | _, Some (Bounds { cur = [ cur2 ]; _ }) when finish && equal_row_var cur2 v_cur ->
+      | Some (Bounds { subr = [ subr1 ]; _ }), Some (Bounds { cur = [ cur2 ]; _ })
+        when finish && equal_row_var subr1 v_subr && equal_row_var cur2 v_cur ->
           (Row_eq { r1 = row_of_var v_subr subr.id; r2 = row_of_var v_cur cur.id } :: prefix_ineqs, env)
       | Some (Bounds { subr = subr1; _ }), _ when List.mem ~equal:equal_row_var subr1 v_subr ->
           (prefix_ineqs, env)
@@ -545,8 +548,6 @@ let%debug_sexp solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : env
                        Bounds { cur = cur1; subr = v_subr :: subr1; lub = lub1 })
                 |> Map.add_exn ~key:v_subr ~data:(Bounds { cur = [ v_cur ]; subr = []; lub = None });
             } )
-      | _, Some (Bounds { cur = [ cur2 ]; subr = _; lub = None }) when finish && equal_row_var v_cur cur2 ->
-          (Row_eq { r1 = subr; r2 = cur } :: prefix_ineqs, env)
       | None, Some (Bounds { cur = cur2; subr = subr2; lub = lub2 }) ->
           ( prefix_ineqs,
             {
