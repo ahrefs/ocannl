@@ -65,7 +65,6 @@ type update_step = { shape : t; logic : logic; id : update_id } [@@deriving sexp
     In OCANNL, this is achieved by performing updates both as the tensors are constructed, and via
     lazy callbacks as the corresponding [Arrayjit.Indexing] dimensions and projections are first accessed. *)
 
-val finish_inference : unit -> unit
 val to_dims : t -> int array
 val propagate_shapes : update_step -> unit
 

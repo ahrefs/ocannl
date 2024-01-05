@@ -606,6 +606,7 @@ let row_to_dims row =
 (** Uses the matrix convention of putting the input axes last.
     Note: [force_to_dims] is "destructive": it closes shapes that remain incomplete after inference. *)
 let to_dims (sh : t) : int array =
+  finish_inference ();
   apply_env_t !state sh;
   try Array.concat_map ~f:row_to_dims [| sh.batch; sh.output; sh.input |]
   with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch [ sh ] :: trace)
@@ -644,6 +645,7 @@ let fresh_proj_ids update =
 (** Computes the indexing into subtensors given the shape information of a tensor. 
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
 let (* %debug_sexp *) derive_projections (update_step : update_step) : Idx.projections =
+  finish_inference ();
   apply_env_update !state update_step;
   fresh_proj_ids update_step;
   (* let _debug_update_step : update_step = update_step in *)
