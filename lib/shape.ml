@@ -583,7 +583,8 @@ let (* %debug_sexp *) finish_inference (() : unit) : unit =
   let unsolved, env = Row.solve_inequalities ~finish:true !all_constraints !state in
   state := env;
   all_constraints := [];
-  assert (List.is_empty unsolved)
+  (* TODO: should we close them to dim-1 / Broadcastable? *)
+  assert (List.for_all ~f:(fun b -> Row.is_terminal_row b || Row.is_terminal_dim b) unsolved)
 
 let row_to_dims row =
   let open Row in

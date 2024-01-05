@@ -145,8 +145,18 @@ exception Shape_error of string * error_trace list [@@deriving sexp_of]
           ~highlight_terms:(Re.str "(sh_id 2) (kind Input)") ~exclude_on_path:(Re.str "env") "debug.html") *)
 module Debug_runtime =
   (val Minidebug_runtime.debug_html ~max_nesting_depth:20 (* ~max_num_children:200 *)
-         ~highlight_terms:Re.(alt [ str "(sh_id 59) (kind Output)"; str "(sh_id 2) (kind Output)" ])
-         ~exclude_on_path:(Re.str "env") "debug.html")
+         ~highlight_terms:
+           Re.(
+             alt
+               [
+                 str "(sh_id 8) (kind Output)";
+                 str "(sh_id 74) (kind Output)";
+                 str "n74";
+                 str "(id 224)";
+                 str "(sh_id 72) (kind Output)";
+                 str "(id 243)";
+               ])
+         ~highlighted_roots:true ~exclude_on_path:(Re.str "env") "debug.html")
 (* module Debug_runtime = (val Minidebug_runtime.debug_flushing ()) *)
 
 let dim_to_int_exn = function Dim { d; _ } -> d | Var _ -> invalid_arg "dim_to_int: dim still unknown"
@@ -644,21 +654,25 @@ let (* %debug_sexp *) solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (en
   | _, { bcast = Broadcastable; _ } when r2_len <= r1_len -> (prefix_ineqs, env)
   | { bcast = Row_var _ | Broadcastable; _ }, { bcast = Row_var _ | Broadcastable; _ } -> assert false
 
-let close_dim_terminal env dim =
+let (* %debug_sexp *) close_dim_terminal (env : environment) (dim : dim) : inequality list * environment =
   match dim with
   | Dim _ -> ([], env)
   | Var v -> (
       match Map.find env.dim_env v with
-      | None | Some (Solved _) | Some (Bounds { lub = None; _ }) -> ([], env)
+      | Some (Solved _) -> assert false
+      | None | Some (Bounds { lub = None; _ }) -> (* needs more inference *) ([Terminal_dim dim], env)
       | Some (Bounds { lub = Some lub; _ }) -> ([ Dim_eq { d1 = dim; d2 = lub } ], env))
 
-let close_row_terminal env ({ dims; bcast; id } : row) =
+let (* %debug_sexp *) close_row_terminal (env : environment) ({ dims; bcast; id } as _r : row) :
+    inequality list * environment =
   let prefix = List.map dims ~f:(fun d -> Terminal_dim d) in
   match bcast with
   | Broadcastable -> (prefix, env)
   | Row_var v -> (
+      let rem : row = row_of_var v id in
       match Map.find env.row_env v with
-      | None | Some (Solved _) | Some (Bounds { lub = None; _ }) -> (prefix, env)
+      | Some (Bounds { lub = None; _ }) | None -> (* needs more inference *) (Terminal_row rem :: prefix, env)
+      | Some (Solved _) -> assert false
       | Some (Bounds { lub = Some lub; _ }) -> (Row_eq { r1 = row_of_var v id; r2 = lub } :: prefix, env))
 
 let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
@@ -699,7 +713,7 @@ let (* %debug_sexp *) solve_inequalities ~(finish : bool) (ineqs : inequality li
     in
     let ineqs', env = List.fold ineqs ~init:([], env) ~f in
     let ineqs' = List.rev ineqs' in
-    let all_constr = List.for_all ~f:is_row_constr in
+    let all_constr = List.for_all ~f:(fun b -> is_row_constr b || is_terminal_row b || is_terminal_dim b) in
     if
       List.is_empty ineqs'
       || (all_constr ineqs' && all_constr ineqs && List.length ineqs' >= List.length ineqs)
