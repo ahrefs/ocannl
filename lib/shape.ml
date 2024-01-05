@@ -572,6 +572,7 @@ let apply_env_update env update_step = iter_shapes update_step ~f:(apply_env_t e
 let (* %debug_sexp *) propagate_shapes (update_step : update_step) : unit =
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice does). *)
   apply_env_update !state update_step;
+  let _debug_step: update_step = update_step in
   let _, ineqs = get_inequalities update_step in
   all_constraints := ineqs @ !all_constraints;
   let ineqs', env = Row.solve_inequalities ~finish:false ineqs !state in
@@ -580,8 +581,11 @@ let (* %debug_sexp *) propagate_shapes (update_step : update_step) : unit =
   state := env
 
 let (* %debug_sexp *) finish_inference (() : unit) : unit =
+  (* let _debug_debug : string = "Why no debug entry?" in *)
+  let _debug_constraints : Row.inequality list = !all_constraints in
   let unsolved, env = Row.solve_inequalities ~finish:true !all_constraints !state in
   state := env;
+  let _debug_env : Row.environment = env in
   all_constraints := [];
   (* TODO: should we close them to dim-1 / Broadcastable? *)
   assert (List.for_all ~f:(fun b -> Row.is_terminal_row b || Row.is_terminal_dim b) unsolved)
@@ -606,7 +610,7 @@ let row_to_dims row =
 
 (** Uses the matrix convention of putting the input axes last.
     Note: [force_to_dims] is "destructive": it closes shapes that remain incomplete after inference. *)
-let to_dims (sh : t) : int array =
+let (* %debug_sexp *) to_dims (sh : t) : int array =
   finish_inference ();
   apply_env_t !state sh;
   try Array.concat_map ~f:row_to_dims [| sh.batch; sh.output; sh.input |]
@@ -646,10 +650,12 @@ let fresh_proj_ids update =
 (** Computes the indexing into subtensors given the shape information of a tensor. 
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
 let (* %debug_sexp *) derive_projections (update_step : update_step) : Idx.projections =
-  finish_inference ();
+  (* let _debug_debug_0: string = "Calling finish_inference:" in *)
+  let _debug_debug_1: unit = finish_inference () in
+  (* let _debug_debug_2: string = "Called finish_inference." in *)
   apply_env_update !state update_step;
   fresh_proj_ids update_step;
-  (* let _debug_update_step : update_step = update_step in *)
+  let _debug_update_step : update_step = update_step in
   let (proj_axis_env, ineqs) : proj_axis_env * Row.inequality list =
     get_inequalities ~reset_cache:true update_step
   in
