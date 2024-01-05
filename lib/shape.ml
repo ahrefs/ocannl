@@ -659,6 +659,9 @@ let (* %debug_sexp *) derive_projections (update_step : update_step) : Idx.proje
      but in principle we want to only find a local solution to not contaminate projections across operations. *)
   let ineqs', local_env = Row.solve_inequalities ~finish:true ineqs Row.empty_env in
   assert (List.is_empty ineqs');
+  (* FIXME: this should be totally redundant, but the original constraint solving is leaky somehow! *)
+  apply_env_update local_env update_step;
+  let _debug_update_step_2 : update_step = update_step in
   let proj_eqs : Row.proj_equation list = Row.get_proj_equations ineqs proj_axis_env local_env in
   let proj_env : Row.proj_env = Row.solve_proj_equations proj_eqs in
   let dims_of (sh : t) = sh.batch.dims @ sh.output.dims @ sh.input.dims in
