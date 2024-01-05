@@ -123,6 +123,8 @@ type inequality =
   | Dim_ineq of { cur : dim; subr : dim }
   | Row_ineq of { cur : t; subr : t }
   | Row_constr of { r : t; constr : dims_constraint }
+  | Terminal_dim of dim
+  | Terminal_row of t
 [@@deriving compare, equal, sexp, variants]
 
 module Idx = Arrayjit.Indexing
@@ -231,7 +233,7 @@ let rec subst_row (env : environment) ({ dims; bcast; id } : t) : t =
       | Some (Solved { dims = more_dims; bcast; id = _ }) ->
           subst_row env { dims = s_dims more_dims @ dims; bcast; id })
 
-let%debug_sexp rec unify_dim (eq : dim * dim) (env : environment) : inequality list * environment =
+let rec (* %debug_sexp *) unify_dim (eq : dim * dim) (env : environment) : inequality list * environment =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
   match (dim1, dim2) with
   | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
@@ -327,7 +329,7 @@ let (* %debug_sexp *) apply_constraint ~(finish : bool) (r : row) (constr : dims
             | Dim _ :: _ -> assert false))
 
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
-let%debug_sexp rec unify_row (eq : t * t) (env : environment) : inequality list * environment =
+let rec (* %debug_sexp *) unify_row (eq : t * t) (env : environment) : inequality list * environment =
   let rec solve (ineqs, env) = function
     | Dim_eq { d1; d2 } ->
         let more_ineqs, env = unify_dim (d1, d2) env in
@@ -335,7 +337,8 @@ let%debug_sexp rec unify_row (eq : t * t) (env : environment) : inequality list 
     | Row_eq { r1; r2 } ->
         let more_ineqs, env = unify_row (r1, r2) env in
         (more_ineqs @ ineqs, env)
-    | (Dim_ineq _ | Row_ineq _ | Row_constr _) as ineq -> (ineq :: ineqs, env)
+    | (Dim_ineq _ | Row_ineq _ | Row_constr _ | Terminal_dim _ | Terminal_row _) as ineq ->
+        (ineq :: ineqs, env)
   in
   let unify_prefix dims1 dims2 len =
     let dims1 = take_from_end dims1 len and dims2 = take_from_end dims2 len in
@@ -401,7 +404,7 @@ let%debug_sexp rec unify_row (eq : t * t) (env : environment) : inequality list 
       | Unequal_lengths -> raise @@ Shape_error ("Mismatching number of axes", [ Row_mismatch [ r1; r2 ] ])
       | Ok eqs -> List.fold ~init:([], env) ~f:(fun acc (d1, d2) -> solve acc (Dim_eq { d1; d2 })) eqs)
 
-let%debug_sexp solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env : environment) :
+let (* %debug_sexp *) solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env : environment) :
     inequality list * environment =
   let nonredundant ?(more = []) v vs =
     Utils.sorted_diff ~compare:compare_dim_var (List.dedup_and_sort ~compare:compare_dim_var (v :: vs)) more
@@ -476,8 +479,7 @@ let%debug_sexp solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env :
       | Some (Bounds { cur = cur2; subr = subr2; lub = Some lub2 }) ->
           let lub, lub_forcing =
             match (cur, lub2) with
-            | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 ->
-                (cur, if finish then [ Dim_eq { d1 = subr; d2 = cur } ] else [])
+            | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> (cur, [])
             | Dim _, Dim _ (* when d1 <> d2 *) ->
                 let lub = get_dim ~d:1 () in
                 (lub, [ Dim_eq { d1 = subr; d2 = lub } ])
@@ -508,7 +510,7 @@ let%debug_sexp solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env :
 
 let global_template_cache = Hashtbl.Poly.create ()
 
-let%debug_sexp solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : environment) :
+let (* %debug_sexp *) solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : environment) :
     inequality list * environment =
   let nonredundant ?(more = []) v vs =
     Utils.sorted_diff ~compare:compare_row_var (List.dedup_and_sort ~compare:compare_row_var (v :: vs)) more
@@ -533,8 +535,7 @@ let%debug_sexp solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : env
           (Row_eq { r1 = row_of_var v_subr subr.id; r2 = row_of_var v_cur cur.id } :: prefix_ineqs, env)
       | Some (Bounds { subr = subr1; _ }), _ when List.mem ~equal:equal_row_var subr1 v_subr ->
           (prefix_ineqs, env)
-      | _, Some (Bounds { cur = cur2; _ }) when List.mem ~equal:equal_row_var cur2 v_cur ->
-          (prefix_ineqs, env)
+      | _, Some (Bounds { cur = cur2; _ }) when List.mem ~equal:equal_row_var cur2 v_cur -> (prefix_ineqs, env)
       | None, None ->
           ( prefix_ineqs,
             {
@@ -643,9 +644,26 @@ let%debug_sexp solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : env
   | _, { bcast = Broadcastable; _ } when r2_len <= r1_len -> (prefix_ineqs, env)
   | { bcast = Row_var _ | Broadcastable; _ }, { bcast = Row_var _ | Broadcastable; _ } -> assert false
 
+let close_dim_terminal env dim =
+  match dim with
+  | Dim _ -> ([], env)
+  | Var v -> (
+      match Map.find env.dim_env v with
+      | None | Some (Solved _) | Some (Bounds { lub = None; _ }) -> ([], env)
+      | Some (Bounds { lub = Some lub; _ }) -> ([ Dim_eq { d1 = dim; d2 = lub } ], env))
+
+let close_row_terminal env ({ dims; bcast; id } : row) =
+  let prefix = List.map dims ~f:(fun d -> Terminal_dim d) in
+  match bcast with
+  | Broadcastable -> (prefix, env)
+  | Row_var v -> (
+      match Map.find env.row_env v with
+      | None | Some (Solved _) | Some (Bounds { lub = None; _ }) -> (prefix, env)
+      | Some (Bounds { lub = Some lub; _ }) -> (Row_eq { r1 = row_of_var v id; r2 = lub } :: prefix, env))
+
 let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
 
-let%debug_sexp solve_inequalities ~(finish : bool) (ineqs : inequality list) (env : environment) :
+let (* %debug_sexp *) solve_inequalities ~(finish : bool) (ineqs : inequality list) (env : environment) :
     inequality list * environment =
   Debug_runtime.no_debug_if (List.is_empty ineqs);
   let rec solve (ineqs : inequality list) (env : environment) : inequality list * environment =
@@ -670,6 +688,14 @@ let%debug_sexp solve_inequalities ~(finish : bool) (ineqs : inequality list) (en
           let r = subst_row env r in
           let more_ineqs, env = apply_constraint ~finish r constr env in
           (more_ineqs @ ineqs, env)
+      | Terminal_dim d when finish ->
+          let more_ineqs, env = close_dim_terminal env @@ subst_dim env d in
+          (more_ineqs @ ineqs, env)
+      | Terminal_row r when finish ->
+          let more_ineqs, env = close_row_terminal env @@ subst_row env r in
+          (more_ineqs @ ineqs, env)
+      | Terminal_dim _ (* when not finish *) -> (ineqs, env)
+      | Terminal_row _ (* when not finish *) -> (ineqs, env)
     in
     let ineqs', env = List.fold ineqs ~init:([], env) ~f in
     let ineqs' = List.rev ineqs' in
@@ -785,7 +811,7 @@ let (* %debug_sexp *) get_proj_equations (inequalities : inequality list) proj_a
         |> List.map ~f:(function
              | Proj_eq (_, (Proj { proj_id = _; d = 1 } as proj)) -> Proj_eq (proj, Solved (Fixed_idx 0))
              | eq -> eq)
-    | Row_constr _ -> []
+    | Row_constr _ | Terminal_dim _ | Terminal_row _ -> []
   in
   List.concat_map inequalities ~f
 

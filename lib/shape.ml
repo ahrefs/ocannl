@@ -341,9 +341,12 @@ let get_inequalities ?(reset_cache = false) ({ shape = cur_sh; logic; id } : upd
     let _debug_cur_sh : t = cur_sh in
     let _debug_logic : logic = logic in
     let open Row in
+    let mark_terminal () =
+      [ Terminal_row cur_sh.batch; Terminal_row cur_sh.input; Terminal_row cur_sh.output ]
+    in
     match logic with
     | Terminal (Range_over_offsets | Standard_uniform | Constant_fill { strict = false; _ }) ->
-        (Row.dim_map_empty, [])
+        (Row.dim_map_empty, mark_terminal ())
     | Terminal (Constant_fill { values; strict = true }) ->
         let len = Array.length values in
         let io_dims =
@@ -355,7 +358,7 @@ let get_inequalities ?(reset_cache = false) ({ shape = cur_sh; logic; id } : upd
                    [ Shape_mismatch [ cur_sh ] ] )
         in
         let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in
-        (dim_map_empty, [ Row_constr { r = cur_sh.batch; constr = Total_elems batch_elems } ])
+        (dim_map_empty, Row_constr { r = cur_sh.batch; constr = Total_elems batch_elems } :: mark_terminal ())
     | Terminal (File_mapped (filename, prec)) ->
         let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
         let len = Unix.lseek fd 0 Unix.SEEK_END / Arrayjit.Ops.prec_in_bytes prec in
@@ -369,7 +372,8 @@ let get_inequalities ?(reset_cache = false) ({ shape = cur_sh; logic; id } : upd
                    [ Shape_mismatch [ cur_sh ] ] )
         in
         let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in
-        (Row.dim_map_empty, [ Row_constr { r = cur_sh.batch; constr = Total_elems batch_elems } ])
+        ( Row.dim_map_empty,
+          Row_constr { r = cur_sh.batch; constr = Total_elems batch_elems } :: mark_terminal () )
     | Transpose (Transpose, sh) ->
         ( Row.dim_map_empty,
           [
@@ -565,7 +569,7 @@ let apply_env_t env sh =
 
 let apply_env_update env update_step = iter_shapes update_step ~f:(apply_env_t env)
 
-let(* %debug_sexp *) propagate_shapes (update_step : update_step) : unit =
+let (* %debug_sexp *) propagate_shapes (update_step : update_step) : unit =
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice does). *)
   apply_env_update !state update_step;
   let _, ineqs = get_inequalities update_step in
@@ -575,12 +579,11 @@ let(* %debug_sexp *) propagate_shapes (update_step : update_step) : unit =
   apply_env_update env update_step;
   state := env
 
-let(* %debug_sexp *) finish_inference (() : unit) : unit =
+let (* %debug_sexp *) finish_inference (() : unit) : unit =
   let unsolved, env = Row.solve_inequalities ~finish:true !all_constraints !state in
   state := env;
   all_constraints := [];
   assert (List.is_empty unsolved)
-(* state := Row.empty_env *)
 
 let row_to_dims row =
   let open Row in
@@ -640,7 +643,7 @@ let fresh_proj_ids update =
 
 (** Computes the indexing into subtensors given the shape information of a tensor. 
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
-let(* %debug_sexp *) derive_projections (update_step : update_step) : Idx.projections =
+let (* %debug_sexp *) derive_projections (update_step : update_step) : Idx.projections =
   apply_env_update !state update_step;
   fresh_proj_ids update_step;
   (* let _debug_update_step : update_step = update_step in *)

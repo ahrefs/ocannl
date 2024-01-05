@@ -60,6 +60,8 @@ type inequality =
   | Dim_ineq of { cur : dim; subr : dim }
   | Row_ineq of { cur : t; subr : t }
   | Row_constr of { r : t; constr : dims_constraint }
+  | Terminal_dim of dim
+  | Terminal_row of t
 [@@deriving compare, equal, sexp]
 
 val subst_row : environment -> t -> t
