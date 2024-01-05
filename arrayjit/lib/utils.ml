@@ -70,6 +70,19 @@ let unique_keep_first ~equal l =
   in
   loop [] l
 
+let sorted_diff ~compare l1 l2 =
+  let rec loop acc l1 l2 =
+    match (l1, l2) with
+    | [], _ -> []
+    | l1, [] -> List.rev_append acc l1
+    | h1 :: t1, h2 :: t2 -> (
+        match compare h1 h2 with
+        | c when c < 0 -> loop (h1 :: acc) t1 l2
+        | 0 -> loop acc t1 l2
+        | _ -> loop acc l1 t2)
+  in
+  (loop [] l1 l2 [@nontail])
+
 type settings = {
   mutable debug_log_jitted : bool;
   mutable output_debug_files_in_run_directory : bool;

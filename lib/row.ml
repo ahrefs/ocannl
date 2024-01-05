@@ -97,7 +97,8 @@ let dims_label_assoc dims =
   let f = function Var { label = Some l; _ } as d -> Some (l, d) | _ -> None in
   List.filter_map dims.dims ~f
 
-(** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved]. *)
+(** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved].
+    [cur] and [subr] must be sorted using the [@@deriving compare] comparison. *)
 type ('a, 'b) entry = Solved of 'b | Bounds of { cur : 'a list; subr : 'a list; lub : 'b option }
 [@@deriving sexp]
 
@@ -402,7 +403,9 @@ let%debug_sexp rec unify_row (eq : t * t) (env : environment) : inequality list 
 
 let%debug_sexp solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env : environment) :
     inequality list * environment =
-  let dedup = List.dedup_and_sort ~compare:compare_dim_var in
+  let nonredundant ?(more = []) v vs =
+    Utils.sorted_diff ~compare:compare_dim_var (List.dedup_and_sort ~compare:compare_dim_var (v :: vs)) more
+  in
   match (cur, subr) with
   | cur, subr when equal_dim cur subr -> ([], env)
   | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
@@ -431,7 +434,7 @@ let%debug_sexp solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env :
               dim_env =
                 env.dim_env
                 |> Fn.flip Map.update v_cur ~f:(fun _ ->
-                       Bounds { lub = lub1; cur = cur1; subr = dedup @@ (v_subr :: subr1) })
+                       Bounds { lub = lub1; cur = cur1; subr = nonredundant v_subr subr1 })
                 |> Map.add_exn ~key:v_subr ~data:(Bounds { lub = None; cur = [ v_cur ]; subr = [] });
             } )
       | ( Some (Bounds { cur = _; subr = [ subr1 ]; lub = None }),
@@ -446,7 +449,7 @@ let%debug_sexp solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env :
                 env.dim_env
                 |> Map.add_exn ~key:v_cur ~data:(Bounds { lub = None; cur = []; subr = [ v_subr ] })
                 |> Fn.flip Map.update v_subr ~f:(fun _ ->
-                       Bounds { lub = lub2; cur = dedup @@ (v_cur :: cur2); subr = subr2 });
+                       Bounds { lub = lub2; cur = nonredundant v_cur cur2; subr = subr2 });
             } )
       | ( Some (Bounds { cur = cur1; subr = subr1; lub = lub1 }),
           Some (Bounds { cur = cur2; subr = subr2; lub = lub2 }) ) ->
@@ -456,9 +459,9 @@ let%debug_sexp solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env :
               dim_env =
                 env.dim_env
                 |> Fn.flip Map.update v_cur ~f:(fun _ ->
-                       Bounds { lub = lub1; cur = cur1; subr = dedup @@ (v_subr :: subr1) })
+                       Bounds { lub = lub1; cur = cur1; subr = nonredundant ~more:subr2 v_subr subr1 })
                 |> Fn.flip Map.update v_subr ~f:(fun _ ->
-                       Bounds { lub = lub2; cur = dedup @@ (v_cur :: cur2); subr = subr2 });
+                       Bounds { lub = lub2; cur = nonredundant ~more:cur1 v_cur cur2; subr = subr2 });
             } ))
   | _, Var v_subr -> (
       match Map.find env.dim_env v_subr with
@@ -507,6 +510,9 @@ let global_template_cache = Hashtbl.Poly.create ()
 
 let%debug_sexp solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : environment) :
     inequality list * environment =
+  let nonredundant ?(more = []) v vs =
+    Utils.sorted_diff ~compare:compare_row_var (List.dedup_and_sort ~compare:compare_row_var (v :: vs)) more
+  in
   let r1_len = List.length cur.dims and r2_len = List.length subr.dims in
   let len = min r1_len r2_len in
   let prefix_ineqs =
@@ -545,7 +551,7 @@ let%debug_sexp solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : env
               row_env =
                 env.row_env
                 |> Fn.flip Map.update v_cur ~f:(fun _ ->
-                       Bounds { cur = cur1; subr = v_subr :: subr1; lub = lub1 })
+                       Bounds { cur = cur1; subr = nonredundant v_subr subr1; lub = lub1 })
                 |> Map.add_exn ~key:v_subr ~data:(Bounds { cur = [ v_cur ]; subr = []; lub = None });
             } )
       | None, Some (Bounds { cur = cur2; subr = subr2; lub = lub2 }) ->
@@ -555,7 +561,7 @@ let%debug_sexp solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : env
               row_env =
                 env.row_env
                 |> Fn.flip Map.update v_subr ~f:(fun _ ->
-                       Bounds { cur = v_cur :: cur2; subr = subr2; lub = lub2 })
+                       Bounds { cur = nonredundant v_cur cur2; subr = subr2; lub = lub2 })
                 |> Map.add_exn ~key:v_cur ~data:(Bounds { cur = []; subr = [ v_subr ]; lub = None });
             } )
       | ( Some (Bounds { cur = cur1; subr = subr1; lub = lub1 }),
@@ -566,9 +572,9 @@ let%debug_sexp solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : env
               row_env =
                 env.row_env
                 |> Fn.flip Map.update v_cur ~f:(fun _ ->
-                       Bounds { cur = cur1; subr = v_subr :: subr1; lub = lub1 })
+                       Bounds { cur = cur1; subr = nonredundant v_subr subr1; lub = lub1 })
                 |> Fn.flip Map.update v_subr ~f:(fun _ ->
-                       Bounds { cur = v_cur :: cur2; subr = subr2; lub = lub2 });
+                       Bounds { cur = nonredundant v_cur cur2; subr = subr2; lub = lub2 });
             } )
       | Some (Solved _), _ | _, Some (Solved _) -> assert false)
   | { bcast = Row_var v_cur; dims; _ }, _ when r1_len < r2_len ->
