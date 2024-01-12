@@ -479,7 +479,7 @@ let (* %debug_sexp *) solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim)
   | _, Var v_subr -> (
       match Map.find env.dim_env v_subr with
       | None ->
-          ( [],
+          ( (if finish then [ Dim_eq { d1 = subr; d2 = cur } ] else []),
             {
               env with
               dim_env =
@@ -508,7 +508,8 @@ let (* %debug_sexp *) solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim)
                     Bounds { lub = Some lub; cur = cur2; subr = subr2 });
             } )
       | Some (Bounds { cur = cur2; subr = subr2; lub = None }) ->
-          ( List.map subr2 ~f:(fun v_subr -> Dim_ineq { cur; subr = Var v_subr }),
+          ( (if finish then [ Dim_eq { d1 = subr; d2 = cur } ]
+             else List.map subr2 ~f:(fun v_subr -> Dim_ineq { cur; subr = Var v_subr })),
             {
               env with
               dim_env =
@@ -603,16 +604,21 @@ let (* %debug_sexp *) solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (en
       raise @@ Shape_error ("Too many axes", [ Row_mismatch [ cur; subr ] ])
   | _, { bcast = Row_var v_subr; _ } when r2_len <= r1_len -> (
       let r_cur = reduced cur in
+      let force_lub lub =
+        if finish && (not @@ is_row_var lub.bcast) then
+          [ Row_eq { r1 = row_of_var v_subr subr.id; r2 = lub } ]
+        else []
+      in
       match Map.find env.row_env v_subr with
       | None ->
-          ( prefix_ineqs,
+          ( prefix_ineqs @ force_lub r_cur,
             {
               env with
               row_env =
                 Map.add_exn env.row_env ~key:v_subr ~data:(Bounds { cur = []; subr = []; lub = Some r_cur });
             } )
       | Some (Bounds { cur = cur2; subr = subr2; lub = None }) ->
-          ( prefix_ineqs,
+          ( prefix_ineqs @ force_lub r_cur,
             {
               env with
               row_env =
@@ -639,12 +645,7 @@ let (* %debug_sexp *) solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (en
                 | Dim _, Dim _ -> d1)
           in
           let lub = { dims = lub_dims; bcast = lub_bcast; id = lub_id } in
-          let force_lub =
-            if finish && (not @@ is_row_var lub_bcast) then
-              [ Row_eq { r1 = row_of_var v_subr subr.id; r2 = lub } ]
-            else []
-          in
-          ( prefix_ineqs @ force_lub,
+          ( prefix_ineqs @ force_lub lub,
             {
               env with
               row_env =
