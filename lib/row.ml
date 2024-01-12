@@ -489,7 +489,8 @@ let (* %debug_sexp *) solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim)
       | Some (Bounds { cur = cur2; subr = subr2; lub = Some lub2 }) ->
           let lub, lub_forcing =
             match (cur, lub2) with
-            | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> (cur, [])
+            | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 ->
+                (cur, if finish then [ Dim_eq { d1 = subr; d2 = lub2 } ] else [])
             | Dim _, Dim _ (* when d1 <> d2 *) ->
                 let lub = get_dim ~d:1 () in
                 (lub, [ Dim_eq { d1 = subr; d2 = lub } ])
