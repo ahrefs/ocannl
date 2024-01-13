@@ -15,7 +15,7 @@ val jit :
   Low_level.traced_store * Low_level.t ->
   context * (unit -> unit)
 
-val unsafe_cleanup : unit -> unit
+val unsafe_cleanup :  ?unsafe_shutdown:bool -> unit -> unit
 
 val from_host : context -> Lazy_array.t -> bool
 (** If the array is both hosted and in-context, copies from host to context and returns true. *)

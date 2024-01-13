@@ -84,9 +84,9 @@ let finalize ctx =
     Option.iter ctx.run_module ~f:Cudajit.module_unload;
     Map.iter ctx.arrays ~f:(fun array -> Option.iter array.global ~f:(fun (_, ptr) -> Cudajit.mem_free ptr)))
 
-let unsafe_cleanup () =
+let unsafe_cleanup ?unsafe_shutdown:_ () =
   let len = Core.Weak.length !devices in
-  (* TODO: maybe better to do device_primary_ctx_reset. *)
+  (* TODO: maybe better to do device_primary_ctx_reset if [unsafe_shutdown=false]. *)
   for i = 0 to len - 1 do
     Option.iter (Core.Weak.get !devices i) ~f:(fun device -> Cudajit.device_primary_ctx_release device.dev)
   done;

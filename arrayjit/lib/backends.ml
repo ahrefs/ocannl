@@ -13,7 +13,9 @@ module type No_device_backend = sig
   val finalize : context -> unit
   val sexp_of_context : context -> Sexp.t
   val jit : context -> ?name:string -> ?verbose:bool -> unit Indexing.bindings -> Assignments.t -> jitted
-  val unsafe_cleanup : unit -> unit
+  val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
+  (** Cleans up all work on a backend.
+      If [~unsafe_shutdown:true], releases resources, potentially making the backend unusable. *)
 
   val from_host : context -> Lazy_array.t -> bool
   (** If the array is both hosted and in-context, copies from host to context and returns true. *)
@@ -78,8 +80,6 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       await device;
       device.next_task := Some result.run
     in
-
-    (* let rec run : 'a. 'a = *)
     { context = { ctx = result.context; device }; run; bindings }
 
   let from_host { ctx; _ } = Backend.from_host ctx
@@ -114,15 +114,15 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let devices = Array.init (num_devices ()) ~f:(fun ordinal -> spinup_device ~ordinal)
 
-  let unsafe_cleanup () =
+  let unsafe_cleanup ?(unsafe_shutdown = false) () =
     assert (Domain.is_main_domain ());
     let cleanup ordinal device =
       device.keep_spinning := false;
       Domain.join device.domain;
-      devices.(ordinal) <- spinup_device ~ordinal
+      if not unsafe_shutdown then devices.(ordinal) <- spinup_device ~ordinal
     in
     Array.iteri devices ~f:cleanup;
-    Backend.unsafe_cleanup ()
+    Backend.unsafe_cleanup ~unsafe_shutdown ()
 
   let get_device ~ordinal = devices.(ordinal)
   let get_ctx_device { device; _ } = device
@@ -138,7 +138,7 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
   let name = "gccjit"
   let initialize = initialize
   let is_initialized = is_initialized
-  let unsafe_cleanup = unsafe_cleanup
+  let unsafe_cleanup ?unsafe_shutdown () = Gccjit_backend.unsafe_cleanup ?unsafe_shutdown ()
   let init = init
   let finalize = finalize
   let sexp_of_context = sexp_of_context
@@ -172,7 +172,7 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   let name = "cuda"
   let initialize = initialize
   let is_initialized = is_initialized
-  let unsafe_cleanup = unsafe_cleanup
+  let unsafe_cleanup ?unsafe_shutdown () = Cuda_backend.unsafe_cleanup ?unsafe_shutdown ()
   let init = init
   let finalize = finalize
   let sexp_of_context = sexp_of_context

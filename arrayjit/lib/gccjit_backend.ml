@@ -15,12 +15,14 @@ module LA = Lazy_array
 type context = { arrays : Ndarray.t Map.M(LA).t; result : (Gccjit.result option[@sexp.opaque]) }
 [@@deriving sexp_of]
 
-let unsafe_cleanup () =
+let unsafe_cleanup ?(unsafe_shutdown = false) () =
   let open Gccjit in
   Option.iter ~f:Context.release !root_ctx;
-  let ctx = Context.create () in
-  Context.set_option ctx Optimization_level !optimization_level;
-  root_ctx := Some ctx
+  if unsafe_shutdown then root_ctx := None
+  else
+    let ctx = Context.create () in
+    Context.set_option ctx Optimization_level !optimization_level;
+    root_ctx := Some ctx
 
 let is_initialized, initialize =
   let initialized = ref false in
