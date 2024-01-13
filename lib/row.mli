@@ -69,6 +69,7 @@ val unify_row : t * t -> environment -> inequality list * environment
 val empty_env : environment
 val solve_inequalities : finish:bool -> inequality list -> environment -> inequality list * environment
 val row_to_labels : environment -> t -> string array
+val finalize_row :  environment -> t -> inequality list
 
 type proj [@@deriving compare, equal, sexp]
 type proj_env [@@deriving sexp]

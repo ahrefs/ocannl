@@ -543,7 +543,8 @@ let get_inequalities { shape = cur_sh; logic; id = _ } =
         ] )
 
 let state = ref Row.empty_env
-let all_constraints = ref []
+let active_update_steps = ref []
+let active_constraints = ref []
 
 let iter_shapes update_step ~f =
   f update_step.shape;
@@ -553,6 +554,15 @@ let iter_shapes update_step ~f =
   | Broadcast (_, sh1, sh2) ->
       f sh1;
       f sh2
+
+let concat_over_rows update_step ~f =
+  let concat_sh sh = List.concat_map ~f [ sh.batch; sh.input; sh.output ] in
+  concat_sh update_step.shape
+  @
+  match update_step.logic with
+  | Terminal _ -> []
+  | Transpose (_, sh1) -> concat_sh sh1
+  | Broadcast (_, sh1, sh2) -> concat_sh sh1 @ concat_sh sh2
 
 let apply_env_t env sh =
   sh.batch <- Row.subst_row env sh.batch;
@@ -566,45 +576,48 @@ let (* %debug_sexp *) propagate_shapes (update_step : update_step) : unit =
   apply_env_update !state update_step;
   let _debug_step: update_step = update_step in
   let _, ineqs = get_inequalities update_step in
-  all_constraints := ineqs @ !all_constraints;
+  active_update_steps := update_step :: !active_update_steps;
+  active_constraints := ineqs @ !active_constraints;
   let ineqs', env = Row.solve_inequalities ~finish:false ineqs !state in
   let _debug_remaining_constraints : Row.inequality list = ineqs' in
   apply_env_update env update_step;
   state := env
 
-let (* %debug_sexp *) finish_inference (() : unit) : unit =
-  (* let _debug_debug : string = "Why no debug entry?" in *)
-  let _debug_constraints : Row.inequality list = !all_constraints in
-  let unsolved, env = Row.solve_inequalities ~finish:true !all_constraints !state in
-  state := env;
+let%debug_sexp finish_inference (() : unit) : unit =
+  let _debug_constraints : Row.inequality list = !active_constraints in
+  let unsolved, env = Row.solve_inequalities ~finish:true !active_constraints !state in
   let _debug_env : Row.environment = env in
-  all_constraints := [];
-  (* TODO: should we close them to dim-1 / Broadcastable? *)
-  assert (List.for_all ~f:(fun b -> Row.is_terminal_row b || Row.is_terminal_dim b) unsolved)
+  active_constraints := [];
+  let finalizing = List.concat_map ~f:(concat_over_rows ~f:(Row.finalize_row env)) !active_update_steps in
+  let unsolved, env = Row.solve_inequalities ~finish:true (finalizing @ unsolved) env in
+  List.iter ~f:(apply_env_update env) !active_update_steps;
+  active_update_steps := [];
+  state := env;
+  assert (List.is_empty unsolved)
 
 let row_to_dims row =
   let open Row in
   let f = function
     | Dim { d; _ } -> d
     | Var v ->
-        if Utils.settings.with_debug then
-          Stdlib.Format.printf "Not enough shape information: unresolved variable %a\n%!" Sexp.pp_hum
-            ([%sexp_of: dim_var] v);
-        1
+        raise
+        @@ Row.Shape_error
+             ( "Not enough shape information: unresolved variable "
+               ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
+               [ Row_mismatch [ row ] ] )
   in
   match row with
-  | { bcast = Row_var v; dims; _ } ->
-      if Utils.settings.with_debug then
-        Stdlib.Format.printf "Not enough shape information: unresolved row variable %a\n%!" Sexp.pp_hum
-          ([%sexp_of: row_var] v);
-      Array.of_list_map dims ~f
+  | { bcast = Row_var v; _ } ->
+      raise
+      @@ Row.Shape_error
+           ( "Not enough shape information: unresolved row variable "
+             ^ Sexp.to_string_hum ([%sexp_of: row_var] v),
+             [ Row_mismatch [ row ] ] )
   | { dims; bcast = Broadcastable; id = _ } -> Array.of_list_map dims ~f
 
-(** Uses the matrix convention of putting the input axes last.
-    Note: [force_to_dims] is "destructive": it closes shapes that remain incomplete after inference. *)
-let (* %debug_sexp *) to_dims (sh : t) : int array =
+(** Uses the matrix convention of putting the input axes last. *)
+let%debug_sexp to_dims (sh : t) : int array =
   finish_inference ();
-  apply_env_t !state sh;
   try Array.concat_map ~f:row_to_dims [| sh.batch; sh.output; sh.input |]
   with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch [ sh ] :: trace)
 
@@ -641,16 +654,11 @@ let fresh_proj_ids update =
 
 (** Computes the indexing into subtensors given the shape information of a tensor. 
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
-let (* %debug_sexp *) derive_projections (update_step : update_step) : Idx.projections =
-  (* let _debug_debug_0: string = "Calling finish_inference:" in *)
-  let _debug_debug_1: unit = finish_inference () in
-  (* let _debug_debug_2: string = "Called finish_inference." in *)
-  apply_env_update !state update_step;
+let%debug_sexp derive_projections (update_step : update_step) : Idx.projections =
+  finish_inference ();
   fresh_proj_ids update_step;
   let _debug_update_step : update_step = update_step in
-  let (proj_axis_env, ineqs) : proj_axis_env * Row.inequality list =
-    get_inequalities ~reset_cache:true update_step
-  in
+  let (proj_axis_env, ineqs) : proj_axis_env * Row.inequality list = get_inequalities update_step in
   (* We need to solve the equations/inequalities one last time because of fresh row variables
      potentially generated by [get_inequalities]. Since the variables in the shapes must be substituted-out
      at this point, using the global state instead of empty env below would not change anything,

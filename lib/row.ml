@@ -683,6 +683,16 @@ let (* %debug_sexp *) close_row_terminal (env : environment) ({ dims; bcast; id 
       | Some (Solved _) -> assert false
       | Some (Bounds { lub = Some lub; _ }) -> (Row_eq { r1 = row_of_var v id; r2 = lub } :: prefix, env))
 
+let%debug_sexp finalize_dim (env : environment) (dim : dim) : inequality list =
+  match subst_dim env dim with Dim _ -> [] | Var _ -> [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 () } ]
+
+let%debug_sexp finalize_row (env : environment) (r : row) : inequality list =
+  let { dims; bcast; id } = subst_row env r in
+  let prefix = List.concat_map dims ~f:(finalize_dim env) in
+  match bcast with
+  | Broadcastable -> prefix
+  | Row_var v -> Row_eq { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id } } :: prefix
+
 let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
 
 let (* %debug_sexp *) solve_inequalities ~(finish : bool) (ineqs : inequality list) (env : environment) :
@@ -905,11 +915,11 @@ let get_proj_index proj_env = function
   | Dim { d; _ } when not @@ Idx.iterated d -> Idx.Fixed_idx 0
   | Dim { proj_id = None; _ } -> assert false
   | Var v ->
-      if Utils.settings.with_debug then
-        Stdlib.Format.printf "projection_of_solved_dims: still not fully inferred for variable %a\n%!"
-          Sexp.pp_hum
-          ([%sexp_of: dim_var] v);
-      Idx.Fixed_idx 0
+      raise
+      @@ Shape_error
+           ( "projection_of_solved_dims: still not fully inferred for variable "
+             ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
+             [ Dim_mismatch [ dim ] ] )
   | Dim { proj_id = Some proj_id; d; _ } -> (
       let repr, _ = Utils.union_find ~equal:Int.equal proj_env.proj_classes ~key:proj_id ~rank:0 in
       match Map.find proj_env.proj_to_index repr with
@@ -931,11 +941,11 @@ let get_product_proj proj_env dim =
       else None
   | Dim { proj_id = None; _ } -> None
   | Var v ->
-      if Utils.settings.with_debug then
-        Stdlib.Format.printf "derive_projections: shape still not fully inferred for variable %a\n%!"
-          Sexp.pp_hum
-          ([%sexp_of: dim_var] v);
-      None
+      raise
+      @@ Shape_error
+           ( "projection_of_solved_dims: still not fully inferred for variable "
+             ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
+             [ Dim_mismatch [ dim ] ] )
 
 let proj_to_iterator proj_env p =
   match Map.find_exn proj_env.proj_to_index (proj_repr proj_env p) with Iterator s -> s | _ -> assert false
