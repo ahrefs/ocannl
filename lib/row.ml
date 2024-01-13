@@ -428,6 +428,10 @@ let (* %debug_sexp *) solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim)
   | (Dim { d = 1; _ } as cur), _ -> ([ Dim_eq { d1 = subr; d2 = cur } ], env)
   | Var v_cur, Var v_subr -> (
       match (Map.find env.dim_env v_cur, Map.find env.dim_env v_subr) with
+      | Some (Bounds { cur = cur1; _ }), _ when List.mem ~equal:equal_dim_var cur1 v_subr ->
+          ([ Dim_eq { d1 = cur; d2 = subr } ], env)
+      | _, Some (Bounds { subr = subr2; _ }) when List.mem ~equal:equal_dim_var subr2 v_cur ->
+          ([ Dim_eq { d1 = cur; d2 = subr } ], env)
       | Some (Bounds { subr = subr1; _ }), _ when List.mem ~equal:equal_dim_var subr1 v_subr -> ([], env)
       | _, Some (Bounds { cur = cur2; _ }) when List.mem ~equal:equal_dim_var cur2 v_cur -> ([], env)
       | None, None ->
@@ -540,6 +544,10 @@ let (* %debug_sexp *) solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (en
       (prefix_ineqs, env)
   | { bcast = Row_var v_cur; _ }, { bcast = Row_var v_subr; _ } when r1_len = r2_len -> (
       match (Map.find env.row_env v_cur, Map.find env.row_env v_subr) with
+      | Some (Bounds { cur = cur1; _ }), _ when List.mem ~equal:equal_row_var cur1 v_subr ->
+          (Row_eq { r1 = row_of_var v_subr subr.id; r2 = row_of_var v_cur cur.id } :: prefix_ineqs, env)
+      | _, Some (Bounds { subr = subr2; _ }) when List.mem ~equal:equal_row_var subr2 v_cur ->
+          (Row_eq { r1 = row_of_var v_subr subr.id; r2 = row_of_var v_cur cur.id } :: prefix_ineqs, env)
       | Some (Bounds { subr = [ subr1 ]; _ }), Some (Bounds { cur = [ cur2 ]; _ })
         when finish && equal_row_var subr1 v_subr && equal_row_var cur2 v_cur ->
           (Row_eq { r1 = row_of_var v_subr subr.id; r2 = row_of_var v_cur cur.id } :: prefix_ineqs, env)
@@ -660,7 +668,7 @@ let (* %debug_sexp *) close_dim_terminal (env : environment) (dim : dim) : inequ
   | Var v -> (
       match Map.find env.dim_env v with
       | Some (Solved _) -> assert false
-      | None | Some (Bounds { lub = None; _ }) -> (* needs more inference *) ([Terminal_dim dim], env)
+      | None | Some (Bounds { lub = None; _ }) -> (* needs more inference *) ([ Terminal_dim dim ], env)
       | Some (Bounds { lub = Some lub; _ }) -> ([ Dim_eq { d1 = dim; d2 = lub } ], env))
 
 let (* %debug_sexp *) close_row_terminal (env : environment) ({ dims; bcast; id } as _r : row) :
