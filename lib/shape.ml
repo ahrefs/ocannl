@@ -212,7 +212,7 @@ let logic_to_spec = function
   | Transpose (Batch_slice _, _) -> "@|"
   | Terminal _ -> "<terminal>"
 
-module Debug_runtime = Row.Debug_runtime
+(* module Debug_runtime = Row.Debug_runtime *)
 
 module Update_id = struct
   module T = struct
@@ -571,7 +571,7 @@ let apply_env_t env sh =
 
 let apply_env_update env update_step = iter_shapes update_step ~f:(apply_env_t env)
 
-let (* %debug_sexp *) propagate_shapes (update_step : update_step) : unit =
+let propagate_shapes (update_step : update_step) : unit =
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice does). *)
   apply_env_update !state update_step;
   let _debug_step: update_step = update_step in
@@ -583,7 +583,7 @@ let (* %debug_sexp *) propagate_shapes (update_step : update_step) : unit =
   apply_env_update env update_step;
   state := env
 
-let%debug_sexp finish_inference (() : unit) : unit =
+let finish_inference (() : unit) : unit =
   let _debug_constraints : Row.inequality list = !active_constraints in
   let unsolved, env = Row.solve_inequalities ~finish:true !active_constraints !state in
   let _debug_env : Row.environment = env in
@@ -616,7 +616,7 @@ let row_to_dims row =
   | { dims; bcast = Broadcastable; id = _ } -> Array.of_list_map dims ~f
 
 (** Uses the matrix convention of putting the input axes last. *)
-let%debug_sexp to_dims (sh : t) : int array =
+let to_dims (sh : t) : int array =
   finish_inference ();
   try Array.concat_map ~f:row_to_dims [| sh.batch; sh.output; sh.input |]
   with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch [ sh ] :: trace)
@@ -654,7 +654,7 @@ let fresh_proj_ids update =
 
 (** Computes the indexing into subtensors given the shape information of a tensor. 
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
-let%debug_sexp derive_projections (update_step : update_step) : Idx.projections =
+let derive_projections (update_step : update_step) : Idx.projections =
   finish_inference ();
   fresh_proj_ids update_step;
   let _debug_update_step : update_step = update_step in

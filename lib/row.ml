@@ -142,22 +142,7 @@ exception Shape_error of string * error_trace list [@@deriving sexp_of]
 
 (* module Debug_runtime =
    (val Minidebug_runtime.debug_html ~max_nesting_depth:20 (* ~max_num_children:200 *)
-          ~highlight_terms:(Re.str "(sh_id 2) (kind Input)") ~exclude_on_path:(Re.str "env") "debug.html") *)
-module Debug_runtime =
-  (val Minidebug_runtime.debug_html ~max_nesting_depth:20 (* ~max_num_children:200 *)
-         ~highlight_terms:
-           Re.(
-             alt
-               [
-                 str "(sh_id 8) (kind Output)";
-                 str "(sh_id 74) (kind Output)";
-                 str "n74";
-                 str "(id 224)";
-                 str "(sh_id 72) (kind Output)";
-                 str "(id 243)";
-               ])
-         ~highlighted_roots:true ~exclude_on_path:(Re.str "env") "debug.html")
-(* module Debug_runtime = (val Minidebug_runtime.debug_flushing ()) *)
+          ~highlight_terms:(Re.(alt [str "(sh_id 2) (kind Input)"]) ~exclude_on_path:(Re.str "env") "debug.html") *)
 
 let dim_to_int_exn = function Dim { d; _ } -> d | Var _ -> invalid_arg "dim_to_int: dim still unknown"
 let s_dim_one v ~value ~in_ = match in_ with Var v2 when equal_dim_var v v2 -> value | _ -> in_
@@ -243,7 +228,7 @@ let rec subst_row (env : environment) ({ dims; bcast; id } : t) : t =
       | Some (Solved { dims = more_dims; bcast; id = _ }) ->
           subst_row env { dims = s_dims more_dims @ dims; bcast; id })
 
-let rec (* %debug_sexp *) unify_dim (eq : dim * dim) (env : environment) : inequality list * environment =
+let rec unify_dim (eq : dim * dim) (env : environment) : inequality list * environment =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
   match (dim1, dim2) with
   | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
@@ -291,8 +276,8 @@ let rec (* %debug_sexp *) unify_dim (eq : dim * dim) (env : environment) : inequ
 let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
 let take_from_end (l : dim list) (n : int) : dim list = List.rev @@ List.take (List.rev l) n
 
-let (* %debug_sexp *) apply_constraint ~(finish : bool) (r : row) (constr : dims_constraint)
-    (env : environment) : inequality list * environment =
+let apply_constraint ~(finish : bool) (r : row) (constr : dims_constraint) (env : environment) :
+    inequality list * environment =
   match constr with
   | Unconstrained -> ([], env)
   | Total_elems n -> (
@@ -339,7 +324,7 @@ let (* %debug_sexp *) apply_constraint ~(finish : bool) (r : row) (constr : dims
             | Dim _ :: _ -> assert false))
 
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
-let rec (* %debug_sexp *) unify_row (eq : t * t) (env : environment) : inequality list * environment =
+let rec unify_row (eq : t * t) (env : environment) : inequality list * environment =
   let rec solve (ineqs, env) = function
     | Dim_eq { d1; d2 } ->
         let more_ineqs, env = unify_dim (d1, d2) env in
@@ -414,7 +399,7 @@ let rec (* %debug_sexp *) unify_row (eq : t * t) (env : environment) : inequalit
       | Unequal_lengths -> raise @@ Shape_error ("Mismatching number of axes", [ Row_mismatch [ r1; r2 ] ])
       | Ok eqs -> List.fold ~init:([], env) ~f:(fun acc (d1, d2) -> solve acc (Dim_eq { d1; d2 })) eqs)
 
-let (* %debug_sexp *) solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env : environment) :
+let solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env : environment) :
     inequality list * environment =
   let nonredundant ?(more = []) v vs =
     Utils.sorted_diff ~compare:compare_dim_var (List.dedup_and_sort ~compare:compare_dim_var (v :: vs)) more
@@ -524,8 +509,8 @@ let (* %debug_sexp *) solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim)
 
 let global_template_cache = Hashtbl.Poly.create ()
 
-let (* %debug_sexp *) solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : environment) :
-    inequality list * environment =
+let solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : environment) : inequality list * environment
+    =
   let nonredundant ?(more = []) v vs =
     Utils.sorted_diff ~compare:compare_row_var (List.dedup_and_sort ~compare:compare_row_var (v :: vs)) more
   in
@@ -662,7 +647,7 @@ let (* %debug_sexp *) solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (en
   | _, { bcast = Broadcastable; _ } when r2_len <= r1_len -> (prefix_ineqs, env)
   | { bcast = Row_var _ | Broadcastable; _ }, { bcast = Row_var _ | Broadcastable; _ } -> assert false
 
-let (* %debug_sexp *) close_dim_terminal (env : environment) (dim : dim) : inequality list * environment =
+let close_dim_terminal (env : environment) (dim : dim) : inequality list * environment =
   match dim with
   | Dim _ -> ([], env)
   | Var v -> (
@@ -671,8 +656,7 @@ let (* %debug_sexp *) close_dim_terminal (env : environment) (dim : dim) : inequ
       | None | Some (Bounds { lub = None; _ }) -> (* needs more inference *) ([ Terminal_dim dim ], env)
       | Some (Bounds { lub = Some lub; _ }) -> ([ Dim_eq { d1 = dim; d2 = lub } ], env))
 
-let (* %debug_sexp *) close_row_terminal (env : environment) ({ dims; bcast; id } as _r : row) :
-    inequality list * environment =
+let close_row_terminal (env : environment) ({ dims; bcast; id } as _r : row) : inequality list * environment =
   let prefix = List.map dims ~f:(fun d -> Terminal_dim d) in
   match bcast with
   | Broadcastable -> (prefix, env)
@@ -683,10 +667,10 @@ let (* %debug_sexp *) close_row_terminal (env : environment) ({ dims; bcast; id 
       | Some (Solved _) -> assert false
       | Some (Bounds { lub = Some lub; _ }) -> (Row_eq { r1 = row_of_var v id; r2 = lub } :: prefix, env))
 
-let%debug_sexp finalize_dim (env : environment) (dim : dim) : inequality list =
+let finalize_dim (env : environment) (dim : dim) : inequality list =
   match subst_dim env dim with Dim _ -> [] | Var _ -> [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 () } ]
 
-let%debug_sexp finalize_row (env : environment) (r : row) : inequality list =
+let finalize_row (env : environment) (r : row) : inequality list =
   let { dims; bcast; id } = subst_row env r in
   let prefix = List.concat_map dims ~f:(finalize_dim env) in
   match bcast with
@@ -695,9 +679,8 @@ let%debug_sexp finalize_row (env : environment) (r : row) : inequality list =
 
 let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
 
-let (* %debug_sexp *) solve_inequalities ~(finish : bool) (ineqs : inequality list) (env : environment) :
+let solve_inequalities ~(finish : bool) (ineqs : inequality list) (env : environment) :
     inequality list * environment =
-  Debug_runtime.no_debug_if (List.is_empty ineqs);
   let rec solve (ineqs : inequality list) (env : environment) : inequality list * environment =
     let f (ineqs, env) = function
       | Dim_eq { d1; d2 } ->
@@ -800,8 +783,8 @@ type proj_equation =
           e.g. for broadcasted-to axes of a tensor assigned a constant. *)
 [@@deriving compare, equal, sexp]
 
-let (* %debug_sexp *) get_proj_equations (inequalities : inequality list) proj_axis_env (env : environment) :
-    proj_equation list =
+let get_proj_equations (inequalities : inequality list) proj_axis_env (env : environment) : proj_equation list
+    =
   let to_proj : dim -> proj = function
     | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
     | Dim { proj_id = Some proj_id; d; label = _ } -> Proj { proj_id; d }
@@ -847,7 +830,7 @@ let (* %debug_sexp *) get_proj_equations (inequalities : inequality list) proj_a
   in
   List.concat_map inequalities ~f
 
-let (* %debug_sexp *) solve_proj_equations (eqs : proj_equation list) : proj_env =
+let solve_proj_equations (eqs : proj_equation list) : proj_env =
   let v_env = dim_hashtbl () in
   let p_solved = ref [] in
   let p_dims = ref [] in
@@ -914,7 +897,7 @@ let (* %debug_sexp *) solve_proj_equations (eqs : proj_equation list) : proj_env
 let get_proj_index proj_env = function
   | Dim { d; _ } when not @@ Idx.iterated d -> Idx.Fixed_idx 0
   | Dim { proj_id = None; _ } -> assert false
-  | Var v ->
+  | Var v as dim ->
       raise
       @@ Shape_error
            ( "projection_of_solved_dims: still not fully inferred for variable "
