@@ -325,108 +325,129 @@ let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env ~dim_var_env la
 
 type proj_axis_env = Arrayjit.Indexing.axis_index Row.dim_map [@@deriving sexp]
 
-(* FIXME: weak hashtbl *)
-let get_inequalities_cache = Hashtbl.create (module Update_id)
-
-let get_inequalities ?(reset_cache = false) ({ shape = cur_sh; logic; id } : update_step) :
-    proj_axis_env * Row.inequality list =
-  let default () =
-    let generative =
-      [
-        (`Batch, List.is_empty cur_sh.batch.dims);
-        (`Input, List.is_empty cur_sh.input.dims);
-        (`Output, List.is_empty cur_sh.output.dims);
-      ]
-    in
-    let _debug_cur_sh : t = cur_sh in
-    let _debug_logic : logic = logic in
-    let open Row in
-    let mark_terminal () =
-      [ Terminal_row cur_sh.batch; Terminal_row cur_sh.input; Terminal_row cur_sh.output ]
-    in
-    match logic with
-    | Terminal (Range_over_offsets | Standard_uniform | Constant_fill { strict = false; _ }) ->
-        (Row.dim_map_empty, mark_terminal ())
-    | Terminal (Constant_fill { values; strict = true }) ->
-        let len = Array.length values in
-        let io_dims =
-          try List.map ~f:dim_to_int_exn @@ cur_sh.output.dims @ cur_sh.input.dims
-          with Invalid_argument _ ->
-            raise
-            @@ Shape_error
-                 ( "unify_shapes Constant_fill strict: non-batch dimensions must be known",
-                   [ Shape_mismatch [ cur_sh ] ] )
+let get_inequalities { shape = cur_sh; logic; id = _ } =
+  let generative =
+    [
+      (`Batch, List.is_empty cur_sh.batch.dims);
+      (`Input, List.is_empty cur_sh.input.dims);
+      (`Output, List.is_empty cur_sh.output.dims);
+    ]
+  in
+  let _debug_cur_sh : t = cur_sh in
+  let _debug_logic : logic = logic in
+  let open Row in
+  let mark_terminal () =
+    [ Terminal_row cur_sh.batch; Terminal_row cur_sh.input; Terminal_row cur_sh.output ]
+  in
+  match logic with
+  | Terminal (Range_over_offsets | Standard_uniform | Constant_fill { strict = false; _ }) ->
+      (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Constant_fill { values; strict = true }) ->
+      let len = Array.length values in
+      let io_dims =
+        try List.map ~f:dim_to_int_exn @@ cur_sh.output.dims @ cur_sh.input.dims
+        with Invalid_argument _ ->
+          raise
+          @@ Shape_error
+               ( "unify_shapes Constant_fill strict: non-batch dimensions must be known",
+                 [ Shape_mismatch [ cur_sh ] ] )
+      in
+      let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in
+      (dim_map_empty, Row_constr { r = cur_sh.batch; constr = Total_elems batch_elems } :: mark_terminal ())
+  | Terminal (File_mapped (filename, prec)) ->
+      let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
+      let len = Unix.lseek fd 0 Unix.SEEK_END / Arrayjit.Ops.prec_in_bytes prec in
+      Unix.close fd;
+      let io_dims =
+        try List.map ~f:dim_to_int_exn @@ cur_sh.output.dims @ cur_sh.input.dims
+        with Invalid_argument _ ->
+          raise
+          @@ Shape_error
+               ( "unify_shapes Constant_fill strict: non-batch dimensions must be known",
+                 [ Shape_mismatch [ cur_sh ] ] )
+      in
+      let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in
+      ( Row.dim_map_empty,
+        Row_constr { r = cur_sh.batch; constr = Total_elems batch_elems } :: mark_terminal () )
+  | Transpose (Transpose, sh) ->
+      ( Row.dim_map_empty,
+        [
+          Row_ineq { cur = cur_sh.batch; subr = sh.batch };
+          Row_ineq { cur = cur_sh.input; subr = sh.output };
+          Row_ineq { cur = cur_sh.output; subr = sh.input };
+        ] )
+  | Transpose (Pointwise_un, sh) ->
+      ( Row.dim_map_empty,
+        [
+          Row_ineq { cur = cur_sh.batch; subr = sh.batch };
+          Row_ineq { cur = cur_sh.input; subr = sh.input };
+          Row_ineq { cur = cur_sh.output; subr = sh.output };
+        ] )
+  | Broadcast (Compose, sh1, sh2) ->
+      ( Row.dim_map_empty,
+        [
+          Row_ineq { cur = sh1.input; subr = sh2.output };
+          Row_ineq { cur = cur_sh.batch; subr = sh1.batch };
+          Row_ineq { cur = cur_sh.batch; subr = sh2.batch };
+          Row_ineq { cur = cur_sh.input; subr = sh2.input };
+          Row_ineq { cur = cur_sh.output; subr = sh1.output };
+        ] )
+  | Broadcast (Pointwise_bin, sh1, sh2) ->
+      ( Row.dim_map_empty,
+        [
+          Row_ineq { cur = cur_sh.batch; subr = sh1.batch };
+          Row_ineq { cur = cur_sh.batch; subr = sh2.batch };
+          Row_ineq { cur = cur_sh.input; subr = sh1.input };
+          Row_ineq { cur = cur_sh.input; subr = sh2.input };
+          Row_ineq { cur = cur_sh.output; subr = sh1.output };
+          Row_ineq { cur = cur_sh.output; subr = sh2.output };
+        ] )
+  | Transpose (Batch_slice { static_range; static_symbol }, sh) ->
+      if is_row_var sh.batch.bcast && is_row_var cur_sh.batch.bcast then
+        (* Wait for more information *)
+        (Row.dim_map_empty, [])
+      else
+        let slice_v = get_var () in
+        let slice_var = Var slice_v in
+        (* Note: at one point this code worked without marking [slice_var] as a solved projection.
+            I don't know why this has not led to the axis being erroneusly expanded in the product space. *)
+        let proj_axis_env =
+          Map.add_exn Row.dim_map_empty ~key:slice_v ~data:(Arrayjit.Indexing.Iterator static_symbol)
         in
-        let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in
-        (dim_map_empty, Row_constr { r = cur_sh.batch; constr = Total_elems batch_elems } :: mark_terminal ())
-    | Terminal (File_mapped (filename, prec)) ->
-        let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
-        let len = Unix.lseek fd 0 Unix.SEEK_END / Arrayjit.Ops.prec_in_bytes prec in
-        Unix.close fd;
-        let io_dims =
-          try List.map ~f:dim_to_int_exn @@ cur_sh.output.dims @ cur_sh.input.dims
-          with Invalid_argument _ ->
-            raise
-            @@ Shape_error
-                 ( "unify_shapes Constant_fill strict: non-batch dimensions must be known",
-                   [ Shape_mismatch [ cur_sh ] ] )
-        in
-        let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in
-        ( Row.dim_map_empty,
-          Row_constr { r = cur_sh.batch; constr = Total_elems batch_elems } :: mark_terminal () )
-    | Transpose (Transpose, sh) ->
-        ( Row.dim_map_empty,
-          [
-            Row_ineq { cur = cur_sh.batch; subr = sh.batch };
-            Row_ineq { cur = cur_sh.input; subr = sh.output };
-            Row_ineq { cur = cur_sh.output; subr = sh.input };
-          ] )
-    | Transpose (Pointwise_un, sh) ->
-        ( Row.dim_map_empty,
-          [
-            Row_ineq { cur = cur_sh.batch; subr = sh.batch };
-            Row_ineq { cur = cur_sh.input; subr = sh.input };
-            Row_ineq { cur = cur_sh.output; subr = sh.output };
-          ] )
-    | Broadcast (Compose, sh1, sh2) ->
-        ( Row.dim_map_empty,
-          [
-            Row_ineq { cur = sh1.input; subr = sh2.output };
-            Row_ineq { cur = cur_sh.batch; subr = sh1.batch };
-            Row_ineq { cur = cur_sh.batch; subr = sh2.batch };
-            Row_ineq { cur = cur_sh.input; subr = sh2.input };
-            Row_ineq { cur = cur_sh.output; subr = sh1.output };
-          ] )
-    | Broadcast (Pointwise_bin, sh1, sh2) ->
-        ( Row.dim_map_empty,
-          [
-            Row_ineq { cur = cur_sh.batch; subr = sh1.batch };
-            Row_ineq { cur = cur_sh.batch; subr = sh2.batch };
-            Row_ineq { cur = cur_sh.input; subr = sh1.input };
-            Row_ineq { cur = cur_sh.input; subr = sh2.input };
-            Row_ineq { cur = cur_sh.output; subr = sh1.output };
-            Row_ineq { cur = cur_sh.output; subr = sh2.output };
-          ] )
-    | Transpose (Batch_slice { static_range; static_symbol }, sh) ->
-        if is_row_var sh.batch.bcast && is_row_var cur_sh.batch.bcast then
-          (* Wait for more information *)
-          (Row.dim_map_empty, [])
-        else
-          let slice_v = get_var () in
-          let slice_var = Var slice_v in
-          (* Note: at one point this code worked without marking [slice_var] as a solved projection.
-              I don't know why this has not led to the axis being erroneusly expanded in the product space. *)
-          let proj_axis_env =
-            Map.add_exn Row.dim_map_empty ~key:slice_v ~data:(Arrayjit.Indexing.Iterator static_symbol)
+        (* Expand a batch row instead of reducing one because even if the dimensions are known,
+           the equations are also needed for projection inference. *)
+        let num_dims sh = List.length sh.batch.dims in
+        if not @@ is_row_var cur_sh.batch.bcast then
+          let expanded_batch =
+            {
+              dims = slice_var :: cur_sh.batch.dims;
+              bcast = cur_sh.batch.bcast;
+              id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch;
+            }
           in
-          (* Expand a batch row instead of reducing one because even if the dimensions are known,
-             the equations are also needed for projection inference. *)
-          let num_dims sh = List.length sh.batch.dims in
-          if not @@ is_row_var cur_sh.batch.bcast then
+          ( proj_axis_env,
+            (Option.to_list static_range
+            |> List.map ~f:(fun range -> Dim_eq { d1 = get_dim ~d:range (); d2 = slice_var }))
+            @ [
+                Row_eq { r1 = expanded_batch; r2 = sh.batch };
+                Row_eq { r1 = cur_sh.input; r2 = sh.input };
+                Row_eq { r1 = cur_sh.output; r2 = sh.output };
+              ] )
+        else if not @@ is_row_var sh.batch.bcast then
+          if num_dims cur_sh < num_dims sh then
+            let matching_batch =
+              {
+                dims =
+                  List.init (num_dims sh - num_dims cur_sh - 1) ~f:(fun _ -> Var (get_var ()))
+                  @ cur_sh.batch.dims;
+                bcast = Broadcastable;
+                id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch;
+              }
+            in
             let expanded_batch =
               {
-                dims = slice_var :: cur_sh.batch.dims;
-                bcast = cur_sh.batch.bcast;
+                dims = slice_var :: matching_batch.dims;
+                bcast = Broadcastable;
                 id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch;
               }
             in
@@ -434,121 +455,92 @@ let get_inequalities ?(reset_cache = false) ({ shape = cur_sh; logic; id } : upd
               (Option.to_list static_range
               |> List.map ~f:(fun range -> Dim_eq { d1 = get_dim ~d:range (); d2 = slice_var }))
               @ [
+                  Row_eq { r1 = matching_batch; r2 = cur_sh.batch };
                   Row_eq { r1 = expanded_batch; r2 = sh.batch };
                   Row_eq { r1 = cur_sh.input; r2 = sh.input };
                   Row_eq { r1 = cur_sh.output; r2 = sh.output };
                 ] )
-          else if not @@ is_row_var sh.batch.bcast then
-            if num_dims cur_sh < num_dims sh then
-              let matching_batch =
-                {
-                  dims =
-                    List.init (num_dims sh - num_dims cur_sh - 1) ~f:(fun _ -> Var (get_var ()))
-                    @ cur_sh.batch.dims;
-                  bcast = Broadcastable;
-                  id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch;
-                }
-              in
-              let expanded_batch =
-                {
-                  dims = slice_var :: matching_batch.dims;
-                  bcast = Broadcastable;
-                  id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch;
-                }
-              in
-              ( proj_axis_env,
-                (Option.to_list static_range
-                |> List.map ~f:(fun range -> Dim_eq { d1 = get_dim ~d:range (); d2 = slice_var }))
-                @ [
-                    Row_eq { r1 = matching_batch; r2 = cur_sh.batch };
-                    Row_eq { r1 = expanded_batch; r2 = sh.batch };
-                    Row_eq { r1 = cur_sh.input; r2 = sh.input };
-                    Row_eq { r1 = cur_sh.output; r2 = sh.output };
-                  ] )
-            else
-              raise
-              @@ Shape_error
-                   ("Batch slice: the sliced tensor has too few batch axes", [ Shape_mismatch [ cur_sh; sh ] ])
           else
-            (* Unfortunately, we cannot proceed if both rows have row variables --
-               it would make it hard to connect the shapes once they are inferred with proj_axis_env. *)
             raise
             @@ Shape_error
-                 ( "Batch slice: inference with underspecified batch axes not supported yet",
+                 ("Batch slice: the sliced tensor has too few batch axes", [ Shape_mismatch [ cur_sh; sh ] ])
+        else
+          (* Unfortunately, we cannot proceed if both rows have row variables --
+             it would make it hard to connect the shapes once they are inferred with proj_axis_env. *)
+          raise
+          @@ Shape_error
+               ( "Batch slice: inference with underspecified batch axes not supported yet",
+                 [ Shape_mismatch [ cur_sh; sh ] ] )
+  | Transpose (Permute spec, sh) ->
+      let ls_rhs, ls_lhs =
+        match einsum_of_spec spec with
+        | ls_rhs, None, ls_lhs -> (ls_rhs, ls_lhs)
+        | _ ->
+            raise
+            @@ Shape_error
+                 ( "Invalid permutation spec (expected one argument): " ^ spec,
                    [ Shape_mismatch [ cur_sh; sh ] ] )
-    | Transpose (Permute spec, sh) ->
-        let ls_rhs, ls_lhs =
-          match einsum_of_spec spec with
-          | ls_rhs, None, ls_lhs -> (ls_rhs, ls_lhs)
-          | _ ->
-              raise
-              @@ Shape_error
-                   ( "Invalid permutation spec (expected one argument): " ^ spec,
-                     [ Shape_mismatch [ cur_sh; sh ] ] )
-        in
-        let row_var_env = Hashtbl.create (module String) in
-        let dim_var_env = Hashtbl.create (module String) in
+      in
+      let row_var_env = Hashtbl.create (module String) in
+      let dim_var_env = Hashtbl.create (module String) in
 
-        let proj_env_rhs, (b_rhs, i_rhs, o_rhs) =
-          einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh.id ~row_var_env ~dim_var_env ls_rhs
-        in
-        let proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
-          einsum_slot_spec_to_dims_bio ~generative ~sh_id:cur_sh.id ~row_var_env ~dim_var_env ls_lhs
-        in
-        let proj_env =
-          let combine ~key:_ _ _ = assert false in
-          Map.merge_skewed ~combine proj_env_rhs proj_env_lhs
-        in
-        ( proj_env,
-          [
-            Row_ineq { cur = cur_sh.batch; subr = b_lhs };
-            Row_ineq { cur = b_rhs; subr = sh.batch };
-            Row_ineq { cur = cur_sh.input; subr = i_lhs };
-            Row_ineq { cur = i_rhs; subr = sh.input };
-            Row_ineq { cur = cur_sh.output; subr = o_lhs };
-            Row_ineq { cur = o_rhs; subr = sh.output };
-          ] )
-    | Broadcast (Einsum spec, sh1, sh2) ->
-        let ls_rhs1, ls_rhs2, ls_lhs =
-          match einsum_of_spec spec with
-          | ls_rhs1, Some ls_rhs2, ls_lhs -> (ls_rhs1, ls_rhs2, ls_lhs)
-          | _, None, _ ->
-              raise
-              @@ Shape_error
-                   ( "Invalid permutation spec (expected one argument): " ^ spec,
-                     [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )
-        in
-        let row_var_env = Hashtbl.create (module String) in
-        let dim_var_env = Hashtbl.create (module String) in
-        let proj_env_rhs1, (b_rhs1, i_rhs1, o_rhs1) =
-          einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh1.id ~row_var_env ~dim_var_env ls_rhs1
-        in
-        let proj_env_rhs2, (b_rhs2, i_rhs2, o_rhs2) =
-          einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh2.id ~row_var_env ~dim_var_env ls_rhs2
-        in
-        let proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
-          einsum_slot_spec_to_dims_bio ~generative ~sh_id:cur_sh.id ~row_var_env ~dim_var_env ls_lhs
-        in
-        let proj_env =
-          let combine ~key:_ _ _ = assert false in
-          Map.merge_skewed ~combine proj_env_rhs1 @@ Map.merge_skewed ~combine proj_env_rhs2 proj_env_lhs
-        in
-        (* Forget the old proj_env as it is not relevant after a propagate_shapes call completes. *)
-        ( proj_env,
-          [
-            Row_ineq { cur = cur_sh.batch; subr = b_lhs };
-            Row_ineq { cur = b_rhs1; subr = sh1.batch };
-            Row_ineq { cur = b_rhs2; subr = sh2.batch };
-            Row_ineq { cur = cur_sh.input; subr = i_lhs };
-            Row_ineq { cur = i_rhs1; subr = sh1.input };
-            Row_ineq { cur = i_rhs2; subr = sh2.input };
-            Row_ineq { cur = cur_sh.output; subr = o_lhs };
-            Row_ineq { cur = o_rhs1; subr = sh1.output };
-            Row_ineq { cur = o_rhs2; subr = sh2.output };
-          ] )
-  in
-  if reset_cache then Hashtbl.update_and_return get_inequalities_cache id ~f:(fun _ -> default ())
-  else Hashtbl.find_or_add get_inequalities_cache id ~default
+      let proj_env_rhs, (b_rhs, i_rhs, o_rhs) =
+        einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh.id ~row_var_env ~dim_var_env ls_rhs
+      in
+      let proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
+        einsum_slot_spec_to_dims_bio ~generative ~sh_id:cur_sh.id ~row_var_env ~dim_var_env ls_lhs
+      in
+      let proj_env =
+        let combine ~key:_ _ _ = assert false in
+        Map.merge_skewed ~combine proj_env_rhs proj_env_lhs
+      in
+      ( proj_env,
+        [
+          Row_ineq { cur = cur_sh.batch; subr = b_lhs };
+          Row_ineq { cur = b_rhs; subr = sh.batch };
+          Row_ineq { cur = cur_sh.input; subr = i_lhs };
+          Row_ineq { cur = i_rhs; subr = sh.input };
+          Row_ineq { cur = cur_sh.output; subr = o_lhs };
+          Row_ineq { cur = o_rhs; subr = sh.output };
+        ] )
+  | Broadcast (Einsum spec, sh1, sh2) ->
+      let ls_rhs1, ls_rhs2, ls_lhs =
+        match einsum_of_spec spec with
+        | ls_rhs1, Some ls_rhs2, ls_lhs -> (ls_rhs1, ls_rhs2, ls_lhs)
+        | _, None, _ ->
+            raise
+            @@ Shape_error
+                 ( "Invalid permutation spec (expected one argument): " ^ spec,
+                   [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )
+      in
+      let row_var_env = Hashtbl.create (module String) in
+      let dim_var_env = Hashtbl.create (module String) in
+      let proj_env_rhs1, (b_rhs1, i_rhs1, o_rhs1) =
+        einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh1.id ~row_var_env ~dim_var_env ls_rhs1
+      in
+      let proj_env_rhs2, (b_rhs2, i_rhs2, o_rhs2) =
+        einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh2.id ~row_var_env ~dim_var_env ls_rhs2
+      in
+      let proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
+        einsum_slot_spec_to_dims_bio ~generative ~sh_id:cur_sh.id ~row_var_env ~dim_var_env ls_lhs
+      in
+      let proj_env =
+        let combine ~key:_ _ _ = assert false in
+        Map.merge_skewed ~combine proj_env_rhs1 @@ Map.merge_skewed ~combine proj_env_rhs2 proj_env_lhs
+      in
+      (* Forget the old proj_env as it is not relevant after a propagate_shapes call completes. *)
+      ( proj_env,
+        [
+          Row_ineq { cur = cur_sh.batch; subr = b_lhs };
+          Row_ineq { cur = b_rhs1; subr = sh1.batch };
+          Row_ineq { cur = b_rhs2; subr = sh2.batch };
+          Row_ineq { cur = cur_sh.input; subr = i_lhs };
+          Row_ineq { cur = i_rhs1; subr = sh1.input };
+          Row_ineq { cur = i_rhs2; subr = sh2.input };
+          Row_ineq { cur = cur_sh.output; subr = o_lhs };
+          Row_ineq { cur = o_rhs1; subr = sh1.output };
+          Row_ineq { cur = o_rhs2; subr = sh2.output };
+        ] )
 
 let state = ref Row.empty_env
 let all_constraints = ref []
