@@ -44,6 +44,7 @@ module type Backend = sig
   val get_device : ordinal:int -> device
   val get_ctx_device : context -> device
   val to_ordinal : device -> int
+  val get_all_devices : unit -> device array
 end
 
 module Multicore_backend (Backend : No_device_backend) : Backend = struct
@@ -114,6 +115,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     { next_task; keep_spinning; ordinal; domain = Domain.spawn worker }
 
   let devices = Array.init (num_devices ()) ~f:(fun ordinal -> spinup_device ~ordinal)
+  let get_all_devices () = devices
 
   let unsafe_cleanup ?(unsafe_shutdown = false) () =
     assert (Domain.is_main_domain ());
@@ -200,6 +202,7 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   let get_device = get_device
   let get_ctx_device = get_ctx_device
   let to_ordinal = to_ordinal
+  let get_all_devices () = Array.init (num_devices ()) ~f:(fun ordinal -> get_device ~ordinal)
 end
 
 let reinitialize (module Backend : Backend) =
