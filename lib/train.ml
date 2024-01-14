@@ -100,15 +100,12 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov t =
   in
   Asgns.Block_comment (label_suffix t.value.label ^ " sgd update", code)
 
+(** All and only bindings with associated ranges are iterated, with the binding's initial value lost.
+    Bindings without ranges remain at their initial values. *)
 let sequential_loop ~f jitted_bindings =
   let rec loop = function
     | [] -> f ()
-    | ({ Idx.static_range = None; static_symbol }, _) :: _ ->
-        raise
-        @@ Tensor.Session_error
-             ( [%string
-                 "Train.sequential_loop: missing range for static symbol %{Idx.symbol_ident static_symbol}"],
-               None )
+    | ({ Idx.static_range = None; static_symbol = _ }, _) :: more -> loop more
     | ({ Idx.static_range = Some range; static_symbol = _ }, idx) :: more ->
         let old_idx = !idx in
         for i = 0 to range - 1 do
@@ -147,9 +144,11 @@ let all_device_to_host ?(verbose = false) (type context)
           (LA.label a)
           (Backend.get_ctx_device context |> Backend.to_ordinal))
 
-(* Executes the jitted code and copies arrays embedded in the given tenosor from and to host,
-   synchronizes before copying to host. If [looping] is provided, loops over bindings and executes
-   the given function inside the loop after a run. *)
+(** Executes the jitted code and copies arrays embedded in the given tenosor from and to host,
+    synchronizes before copying to host. If [looping] is provided, loops over bindings and executes
+    the given function inside the loop after a run. All and only bindings with associated ranges
+    are iterated, with the binding's initial value lost. Bindings without ranges remain at their
+    initial values. *)
 let sync_run ?verbose ?looping (type context) (module Backend : Backend_type with type context = context)
     (jitted : Backend.jitted) t =
   all_host_to_device ?verbose (module Backend) jitted.context t;
