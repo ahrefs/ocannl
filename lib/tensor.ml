@@ -21,7 +21,7 @@ type t = {
   id : int;  (** Same as [value.id]. *)
   value : LA.t;
   shape : Shape.t;
-      (** The eventual shape of [.!(t.node).value] and [.!(t.node).grad], incorporating the current state of
+      (** The eventual shape of [t.value] and [t.diff.grad], incorporating the current state of
           shape inference. *)
   children : subtensor list;
 }
