@@ -9,12 +9,10 @@ module Utils = Arrayjit.Utils
 
 let experiment seed ~use_builtin_weight_decay () =
   Random.init 0;
-  let module Backend = (val Train.fresh_backend ()) in
   Utils.settings.with_debug <- true;
   Utils.settings.output_debug_files_in_run_directory <- true;
   (* Utils.settings.debug_log_jitted <- true; *)
-  let device = Backend.get_device ~ordinal:0 in
-  let ctx = Backend.init device in
+
   let hid_dim = 16 in
   let len = 300 in
   let batch_size = 20 in
@@ -64,6 +62,10 @@ let experiment seed ~use_builtin_weight_decay () =
   Train.set_on_host learning_rate.value;
   let update = Train.grad_update scalar_loss in
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
+
+  let module Backend = (val Train.fresh_backend ()) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   let jitted = Backend.jit ctx ~verbose:true bindings (Seq (update, sgd)) in
   Train.all_host_to_device (module Backend) jitted.context scalar_loss;
   Train.all_host_to_device (module Backend) jitted.context learning_rate;

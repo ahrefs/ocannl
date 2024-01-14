@@ -124,7 +124,7 @@ let set_virtual (a : LA.t) =
   if LA.is_false a.virtual_ then
     raise
     @@ Arrayjit.Ndarray.User_error
-         [%string "Train.set_virtua: array #%{a.id#Int} %{LA.label a} is already non-virtual"];
+         [%string "Train.set_virtual: array #%{a.id#Int} %{LA.label a} is already non-virtual"];
   if Option.is_none a.virtual_ then a.virtual_ <- Some (true, 29)
 
 let every_non_literal_on_host =

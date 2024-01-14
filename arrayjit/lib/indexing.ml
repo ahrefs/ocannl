@@ -26,7 +26,7 @@ let empty_env : 'a environment = Map.empty (module Symbol)
 
 type static_symbol = {
   static_symbol : symbol;
-  mutable static_range : int option; [@compare.ignore] [@equal.ignore]
+  mutable static_range : int option; [@compare.ignore] [@equal.ignore] [@hash.ignore]
 }
 [@@deriving compare, equal, sexp, hash]
 

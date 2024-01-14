@@ -205,7 +205,7 @@ let benchmarks =
       List.concat_map [ 1; (* 2; 4; 8; 10; *) 16 (* ; 20 *) ] ~f:(fun num_devices ->
           List.concat_map [ (* 1; 8; *) 32; 64; 128 (* ; 256; 512; 1024 *) ] ~f:(fun batch ->
               List.concat_map [ 0; 1; 2 (* ; 3; 4 *) ] ~f:(fun random_seed ->
-                  List.concat_map [ "gccjit"; "cuda" ] ~f:(fun backend_name ->
+                  List.concat_map [ "gccjit"(* *; "cuda" *) ] ~f:(fun backend_name ->
                       [
                         classify_moons ~random_seed ~on_device:true ~inlining_cutoff ~num_devices ~batch
                           ~backend_name CDSL.single;
