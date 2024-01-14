@@ -3,6 +3,7 @@ module LA = Arrayjit.Lazy_array
 module NTDSL = Operation.NTDSL
 module Asgns = Arrayjit.Assignments
 module Idx = Arrayjit.Indexing
+
 module type Backend_type = Arrayjit.Backends.Backend
 
 (** Reinitializes a backend selected via a global [backend] flag. *)
@@ -99,26 +100,24 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov t =
   in
   Asgns.Block_comment (label_suffix t.value.label ^ " sgd update", code)
 
-let for_loop ~f bindings =
+let sequential_loop ~f jitted_bindings =
   let rec loop = function
     | [] -> f ()
-    | ({ Idx.static_range; static_symbol }, idx) :: more -> (
-        match static_range with
-        | None ->
-            raise
-            @@ Tensor.Session_error
-                 ( [%string
-                     "Train.for_loop: missing range for static symbol %{Idx.symbol_ident static_symbol}"],
-                   None )
-        | Some range ->
-            let old_idx = !idx in
-            for i = 0 to range - 1 do
-              idx := i;
-              loop more
-            done;
-            idx := old_idx)
+    | ({ Idx.static_range = None; static_symbol }, _) :: _ ->
+        raise
+        @@ Tensor.Session_error
+             ( [%string
+                 "Train.sequential_loop: missing range for static symbol %{Idx.symbol_ident static_symbol}"],
+               None )
+    | ({ Idx.static_range = Some range; static_symbol = _ }, idx) :: more ->
+        let old_idx = !idx in
+        for i = 0 to range - 1 do
+          idx := i;
+          loop more
+        done;
+        idx := old_idx
   in
-  loop @@ Idx.assoc_of_bindings bindings
+  loop jitted_bindings
 
 let set_virtual (a : LA.t) =
   if LA.is_false a.virtual_ then
@@ -161,6 +160,6 @@ let sync_run ?verbose ?looping (type context) (module Backend : Backend_type wit
         jitted.run ();
         then_ ()
       in
-      for_loop ~f jitted.bindings);
+      sequential_loop ~f jitted.bindings);
   Backend.await @@ Backend.get_ctx_device jitted.context;
   all_device_to_host ?verbose (module Backend) jitted.context t

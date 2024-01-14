@@ -1,10 +1,16 @@
+open Base
+
 type context
 
 let initialize () = ()
 let is_initialized () = true
 let finalize _context = ()
 let sexp_of_context _context = failwith "CUDA missing: install cudajit"
-let jit ?name:_ ?verbose:_ context _bindings _asgns = (context, fun () -> ())
+
+let jit ?name:_ ?verbose:_ context bindings _asgns =
+  let jitted_bindings = List.map ~f:(fun s -> (s, ref 0)) @@ Indexing.bound_symbols bindings in
+  (context, jitted_bindings, fun () -> ())
+
 let unsafe_cleanup ?unsafe_shutdown:_ () = ()
 let from_host _context _arr = false
 let to_host _context _arr = false

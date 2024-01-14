@@ -13,7 +13,7 @@ val jit :
   context ->
   unit Indexing.bindings ->
   Low_level.traced_store * Low_level.t ->
-  context * (unit -> unit)
+  context * Indexing.jitted_bindings * (unit -> unit)
 
 val unsafe_cleanup :  ?unsafe_shutdown:bool -> unit -> unit
 

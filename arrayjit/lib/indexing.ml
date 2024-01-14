@@ -30,30 +30,45 @@ type static_symbol = {
 }
 [@@deriving compare, equal, sexp, hash]
 
-type 'a bindings = Empty | Bind of static_symbol * int ref * (int -> 'a) bindings
+type 'a bindings = Empty | Bind of static_symbol * (int -> 'a) bindings
 
 let rec sexp_of_bindings : 'a. 'a bindings -> Sexp.t =
  fun (type a) (b : a bindings) ->
   match b with
   | Empty -> Sexp.Atom "bindings"
-  | Bind (s, i, bs) -> Sexp.List [ sexp_of_static_symbol s; sexp_of_int !i; sexp_of_bindings bs ]
+  | Bind (s, bs) -> Sexp.List [ sexp_of_static_symbol s; sexp_of_bindings bs ]
 
-let assoc_of_bindings bs =
-  let rec loop : 'a. 'a bindings -> (static_symbol, int ref) List.Assoc.t =
-   fun (type a) (b : a bindings) -> match b with Empty -> [] | Bind (s, i, bs) -> (s, i) :: loop bs
+let bound_symbols bs =
+  let rec loop : 'a. 'a bindings -> static_symbol list =
+   fun (type a) (b : a bindings) -> match b with Empty -> [] | Bind (s, bs) -> s :: loop bs
   in
+  (* Reverse order to match [jitted_bindings]. *)
   List.rev @@ loop bs
 
-(** Helps manipulating the bindings. *)
+(** Helps jitting the bindings. *)
 type 'a variadic = Result of (unit -> 'a) | Param of int ref * (int -> 'a) variadic
+
+type jitted_bindings = (static_symbol, int ref) List.Assoc.t
 
 let rec apply : 'a. 'a variadic -> 'a =
  fun (type b) (f : b variadic) -> match f with Result rf -> rf () | Param (i, more) -> apply more !i
 
+let jitted_bindings bs vs =
+  let rec loop : 'a. 'a bindings * 'a variadic -> jitted_bindings =
+   fun (type b) (f : b bindings * b variadic) ->
+    match f with
+    | Empty, Result _ -> []
+    | Bind (s, bs), Param (i, vs) -> (s, i) :: loop (bs, vs)
+    | _ -> assert false
+  in
+  (* Reverse order because [apply] above also reverses the order! *)
+  List.rev @@ loop (bs, vs)
+
+let find_exn (bs : jitted_bindings) = List.Assoc.find_exn ~equal:equal_static_symbol bs
+
 let get_static_symbol ?static_range bindings =
   let s = { static_symbol = get_symbol (); static_range } in
-  let r = ref 0 in
-  (s, r, Bind (s, r, bindings))
+  (s, Bind (s, bindings))
 
 (** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
     Outputs ["-"] for empty dimensions. *)
@@ -136,4 +151,5 @@ let derive_index ~product_syms ~(projection : axis_index array) =
 module IDX = struct
   let empty = Empty
   let get_static_symbol = get_static_symbol
+  let find_exn = find_exn
 end

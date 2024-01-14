@@ -405,15 +405,15 @@ let jit_func ~name (context : context) ctx bindings (traced_store, proc) =
   let open Gccjit in
   let c_index = Type.get ctx Type.Int in
   let fkind = Function.Exported in
-  let bindings = Indexing.assoc_of_bindings bindings in
+  let symbols = Indexing.bound_symbols bindings in
   let static_indices =
-    List.map bindings ~f:(fun ({ static_symbol; _ }, _) ->
+    List.map symbols ~f:(fun { static_symbol; _ } ->
         Param.create ctx c_index @@ Indexing.symbol_ident static_symbol)
   in
   let func = Function.create ctx fkind (Type.get ctx Void) name static_indices in
   let env =
     Map.of_alist_exn (module Indexing.Symbol)
-    @@ List.mapi bindings ~f:(fun pos ({ Indexing.static_symbol; _ }, _) ->
+    @@ List.mapi symbols ~f:(fun pos { Indexing.static_symbol; _ } ->
            (static_symbol, RValue.param @@ Function.param func pos))
   in
   let init_block = Block.create ~name:("init_" ^ name) func in
@@ -443,32 +443,18 @@ let jit old_context ~name ?verbose:_ bindings compiled =
   let ctx_info = jit_func ~name old_context ctx bindings compiled in
   let result = Context.compile ctx in
   let context = { arrays = ctx_info.ctx_arrays; result = Some result } in
-  let run : unit -> unit =
+  let run_variadic =
     let rec link : 'a. 'a Indexing.bindings -> 'a Ctypes.fn -> 'a Indexing.variadic =
      fun (type b) (bs : b Indexing.bindings) (cs : b Ctypes.fn) ->
       match bs with
       | Empty -> Indexing.Result (Result.code result name Ctypes.(void @-> cs))
-      | Bind ({ static_range; static_symbol }, i, more) ->
-          if !i < 0 then
-            raise
-            @@ Ndarray.User_error
-                 [%string
-                   "Exec_as_gccjit: static index %{Indexing.symbol_ident static_symbol} is negative: \
-                    %{!i#Int}"];
-          Option.iter static_range ~f:(fun upto ->
-              if !i >= upto then
-                raise
-                @@ Ndarray.User_error
-                     [%string
-                       "Exec_as_gccjit: static index %{Indexing.symbol_ident static_symbol} is too big: \
-                        %{upto#Int}"]);
-          Param (i, link more Ctypes.(int @-> cs))
+      | Bind (_, more) ->
+        Param (ref 0, link more Ctypes.(int @-> cs))
     in
-    let runf = link bindings Ctypes.(returning void) in
-    fun () -> Indexing.apply runf
+    link bindings Ctypes.(returning void)
   in
   Context.release ctx;
-  (context, run)
+  (context, Indexing.jitted_bindings bindings run_variadic, fun () -> Indexing.apply run_variadic)
 
 let from_host (context : context) la =
   match Map.find context.arrays la with

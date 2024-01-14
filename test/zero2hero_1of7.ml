@@ -126,7 +126,7 @@ let%expect_test "Graph drawing fetch" =
       ~init_op:(Constant_fill { values = xs; strict = true })
       ()
   in
-  let step_sym, _step_ref, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
+  let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
   let%op x = x_flat @| step_sym in
   Train.set_on_host x.value;
   let%op fx = f x in

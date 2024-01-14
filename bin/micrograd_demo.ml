@@ -37,8 +37,8 @@ let experiment seed ~use_builtin_weight_decay () =
   let moons_classes =
     TDSL.init_const ~l:"moons_classes" ~b:[ n_batches; batch_size ] ~o:[ 1 ] moons_classes
   in
-  let batch_sym, batch_ref, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
-  let step_sym, step_ref, bindings = IDX.get_static_symbol bindings in
+  let batch_sym, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
+  let step_sym, bindings = IDX.get_static_symbol bindings in
   let%op mlp x = "b3" + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
   let%op learning_rate = 0.1 *. (!..steps - !@step_sym) /. !..steps in
   let%op moons_input = moons_flat @| batch_sym in
@@ -76,6 +76,8 @@ let experiment seed ~use_builtin_weight_decay () =
      Stdio.printf "\n********\n%!"; *)
   let open Tensor.O in
   let epoch_loss = ref 0. in
+  let step_ref = IDX.find_exn jitted.bindings step_sym in
+  let batch_ref = IDX.find_exn jitted.bindings batch_sym in
   step_ref := 0;
   (* LA.print_accessible_headers (); *)
   for epoch = 0 to epochs - 1 do

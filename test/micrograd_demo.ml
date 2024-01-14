@@ -100,7 +100,7 @@ let%expect_test "Micrograd half-moons example" =
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let moons_classes = TDSL.init_const ~l:"moons_classes" ~b:[ epochs; batch ] ~o:[ 1 ] moons_classes in
   let%op mlp x = "b3" 1 + ("w3" * ?/("b2" 16 + ("w2" * ?/("b1" 16 + ("w1" * x))))) in
-  let step_sym, step_ref, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
+  let step_sym, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let%op learning_rate = 0.1 *. (!..steps - !@step_sym) /. !..steps in
   let%op moons_input = moons_flat @| step_sym in
   let%op moons_class = moons_classes @| step_sym in
@@ -118,13 +118,13 @@ let%expect_test "Micrograd half-moons example" =
   Train.all_host_to_device (module Backend) sgd_jitted.context scalar_loss;
   Train.all_host_to_device (module Backend) sgd_jitted.context learning_rate;
   for _epoch = 1 to epochs do
-    Train.for_loop bindings ~f:(fun () ->
+    Train.sequential_loop sgd_jitted.bindings ~f:(fun () ->
         sgd_jitted.run ();
         Backend.await device;
         assert (Backend.to_host sgd_jitted.context learning_rate.value);
         assert (Backend.to_host sgd_jitted.context scalar_loss.value);
-        (* Stdio.printf "Data step=%d, lr=%f, loss=%f\n%!" !step_ref learning_rate.@[0] scalar_loss.@[0]; *)
-        ignore step_ref;
+        (* let step_ref = IDX.find_exn sgd_jitted.bindings step_sym in
+           Stdio.printf "Data step=%d, lr=%f, loss=%f\n%!" !step_ref learning_rate.@[0] scalar_loss.@[0]; *)
         learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
         losses := scalar_loss.@[0] :: !losses;
         (* epoch_loss := !epoch_loss +. scalar_loss.@[0]; *)

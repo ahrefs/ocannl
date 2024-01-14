@@ -49,7 +49,7 @@ let  () =
       ~init_op:(Constant_fill { values; strict = true })
       ()
   in
-  let step_sym, step_ref, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
+  let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
   (* The [let x =] line is the same as this except [let%op x =] uses [~grad_spec:If_needed]. *)
   (* let%op x = x_flat @| step_sym in *)
   let x = Operation.slice ~label:[ "x" ] ~grad_spec:Require_grad step_sym x_flat in
@@ -61,6 +61,7 @@ let  () =
   let module Backend = (val Train.fresh_backend ()) in
   let ctx = Backend.init @@ Backend.get_device ~ordinal:0 in
   let jitted = Backend.jit ctx bindings @@ Train.grad_update fx in
+  let step_ref = IDX.find_exn jitted.bindings step_sym in
   let ys = Array.create ~len:size 0. and dys = Array.create ~len:size 0. in
   let open Tensor.O in
   let looping () =

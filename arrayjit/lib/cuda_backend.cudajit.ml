@@ -445,11 +445,12 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ par
 let jit ?name ?(verbose = false) old_context bindings ((traced_store, llc) as compiled) =
   let name = Option.value_or_thunk name ~default:(fun () -> Low_level.extract_block_name [ llc ]) in
   if Utils.settings.with_debug then Stdio.printf "Exec_as_cuda.jit: %s\n%!" name;
-  let idx_params, idx_args = List.unzip @@ Indexing.assoc_of_bindings bindings in
+  let idx_params = Indexing.bound_symbols bindings in
   let func, args, run_module, info = jit_func ~name ~verbose old_context idx_params compiled in
   let context =
     { ctx = info.ctx; device = old_context.device; run_module = Some run_module; arrays = info.ctx_arrays }
   in
+  let idx_args = List.map idx_params ~f:(fun s -> s, ref 0) in
   let run () =
     if verbose then Stdio.printf "Exec_as_cuda.jit: zeroing-out global memory\n%!";
     set_ctx context.ctx;
@@ -464,7 +465,7 @@ let jit ?name ?(verbose = false) old_context bindings ((traced_store, llc) as co
     if verbose then Stdio.printf "Exec_as_cuda.jit: launching the kernel\n%!";
     (* if Utils.settings.debug_log_jitted then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
     let idx_args =
-      List.map2_exn idx_params idx_args ~f:(fun { static_symbol; static_range } i ->
+      List.map idx_args ~f:(fun ({ static_symbol; static_range }, i) ->
           if !i < 0 then
             raise
             @@ Ndarray.User_error
@@ -482,4 +483,4 @@ let jit ?name ?(verbose = false) old_context bindings ((traced_store, llc) as co
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream @@ idx_args @ args;
     if verbose then Stdio.printf "Exec_as_cuda.jit: kernel launched\n%!"
   in
-  (context, run)
+  (context, idx_args, run)

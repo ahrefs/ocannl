@@ -65,7 +65,7 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
      in
      * *)
   let%op mlp x = "b3" 1 + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
-  let step_sym, step_ref, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
+  let step_sym, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let steps = epochs * n_batches in
   let%op learning_rate = 0.1 *. (!..steps - !@step_sym) /. !..steps in
   let%op moons_input = moons_flat @| step_sym in
@@ -90,13 +90,14 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let start_time = Time_now.nanoseconds_since_unix_epoch () in
   for epoch = 1 to epochs do
     let epoch_loss = ref 0. in
-    Train.for_loop bindings ~f:(fun () ->
+    Train.sequential_loop sgd_jitted.bindings ~f:(fun () ->
         sgd_jitted.run ();
         Backend.await device;
         assert (Backend.to_host sgd_jitted.context learning_rate.value);
         assert (Backend.to_host sgd_jitted.context scalar_loss.value);
         batch_losses := scalar_loss.@[0] :: !batch_losses;
         batch_log_losses := Float.log scalar_loss.@[0] :: !batch_log_losses;
+        let step_ref = IDX.find_exn sgd_jitted.bindings step_sym in
         Stdio.printf "Epoch=%d, batch=%d, lr=%f, batch loss=%f\n%!" epoch !step_ref learning_rate.@[0]
           scalar_loss.@[0]);
     (* Tensor.print_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss; *)
@@ -205,7 +206,7 @@ let benchmarks =
       List.concat_map [ 1; (* 2; 4; 8; 10; *) 16 (* ; 20 *) ] ~f:(fun num_devices ->
           List.concat_map [ (* 1; 8; *) 32; 64; 128 (* ; 256; 512; 1024 *) ] ~f:(fun batch ->
               List.concat_map [ 0; 1; 2 (* ; 3; 4 *) ] ~f:(fun random_seed ->
-                  List.concat_map [ "gccjit"(* *; "cuda" *) ] ~f:(fun backend_name ->
+                  List.concat_map [ "gccjit" (* *; "cuda" *) ] ~f:(fun backend_name ->
                       [
                         classify_moons ~random_seed ~on_device:true ~inlining_cutoff ~num_devices ~batch
                           ~backend_name CDSL.single;
@@ -220,8 +221,8 @@ let nth_best nth bench =
 *)
 
 let fixed_seed_search random_seed =
-  classify_moons ~random_seed ~on_device:true ~inlining_cutoff:3 ~num_devices:1 ~batch:20
-       ~backend_name:"cuda" CDSL.single ()
+  classify_moons ~random_seed ~on_device:true ~inlining_cutoff:3 ~num_devices:1 ~batch:20 ~backend_name:"cuda"
+    CDSL.single ()
 
 let _suspended () =
   List.init 20 ~f:fixed_seed_search |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
@@ -232,7 +233,6 @@ let () =
 *)
 
 let benchmark () =
-  List.map benchmarks ~f:(fun bench -> bench ())
-  |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
+  List.map benchmarks ~f:(fun bench -> bench ()) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
 let () = benchmark ()

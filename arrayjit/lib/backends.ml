@@ -1,6 +1,6 @@
 open Base
 
-type 'context jitted = { context : 'context; run : unit -> unit; bindings : unit Indexing.bindings }
+type 'context jitted = { context : 'context; run : unit -> unit; bindings : Indexing.jitted_bindings }
 
 module type No_device_backend = sig
   type context
@@ -13,6 +13,7 @@ module type No_device_backend = sig
   val finalize : context -> unit
   val sexp_of_context : context -> Sexp.t
   val jit : context -> ?name:string -> ?verbose:bool -> unit Indexing.bindings -> Assignments.t -> jitted
+
   val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
   (** Cleans up all work on a backend.
       If [~unsafe_shutdown:true], releases resources, potentially making the backend unusable. *)
@@ -80,7 +81,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       await device;
       device.next_task := Some result.run
     in
-    { context = { ctx = result.context; device }; run; bindings }
+    { context = { ctx = result.context; device }; run; bindings = result.bindings }
 
   let from_host { ctx; _ } = Backend.from_host ctx
   let to_host { ctx; _ } = Backend.to_host ctx
@@ -95,7 +96,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
           await device;
           device.next_task := Some result.run
         in
-        { context = { ctx = result.context; device }; run; bindings = Indexing.Empty })
+        { context = { ctx = result.context; device }; run; bindings = result.bindings })
 
   let num_devices () = Domain.recommended_domain_count () - 1
 
@@ -145,9 +146,9 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
 
   let jit context ?name ?verbose bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
-    let context, run =
+    let context, bindings, run =
       jit context ~name ?verbose bindings
-      @@ Assignments.compile_proc ~name ?verbose (List.map ~f:fst @@ Indexing.assoc_of_bindings bindings) code
+      @@ Assignments.compile_proc ~name ?verbose (Indexing.bound_symbols bindings) code
     in
     { context; run; bindings }
 
@@ -157,7 +158,7 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
   let merge ?name_suffix la ~dst ~accum ~(src : context) =
     let bindings = Indexing.Empty in
     merge ?name_suffix la ~dst ~accum ~src bindings
-    |> Option.map ~f:(fun (context, run) -> { context; run; bindings })
+    |> Option.map ~f:(fun (context, bindings, run) -> { context; run; bindings })
 end
 
 module Gccjit_backend = Multicore_backend (Gccjit_device)
@@ -180,9 +181,9 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
 
   let jit context ?name ?verbose bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
-    let context, run =
+    let context, bindings, run =
       jit context ~name ?verbose bindings
-      @@ Assignments.compile_proc ~name ?verbose (List.map ~f:fst @@ Indexing.assoc_of_bindings bindings) code
+      @@ Assignments.compile_proc ~name ?verbose (Indexing.bound_symbols bindings) code
     in
     { context; run; bindings }
 
@@ -192,7 +193,7 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   let merge ?name_suffix la ~dst ~accum ~src =
     let bindings = Indexing.Empty in
     merge ?name_suffix la ~dst ~accum ~src bindings
-    |> Option.map ~f:(fun (context, run) -> { context; run; bindings })
+    |> Option.map ~f:(fun (context, run) -> { context; run; bindings = [] })
 
   let await = await
   let num_devices = num_devices
