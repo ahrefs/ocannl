@@ -118,8 +118,9 @@ let sequential_loop ~f jitted_bindings =
 
 (** Distribute iterated indices to workers in a round-robin fashion. All and only bindings with
     associated ranges are iterated, with the binding's initial value lost.
-    Bindings without ranges remain at their initial values. *)
-let round_robin fs jitted_bindings bindings =
+    Bindings without ranges remain at their initial values. [sync] is called after each round of calling
+    all workers, and at the end if needed, with the number of workers called during the round. *)
+let round_robin fs jitted_bindings bindings ~sync =
   let open Arrayjit.Backends in
   let num_devices = Array.length fs in
   assert (Array.length jitted_bindings = num_devices);
@@ -127,7 +128,8 @@ let round_robin fs jitted_bindings bindings =
   let rec loop = function
     | [] ->
         fs.(!pos % num_devices) ();
-        Int.incr pos
+        Int.incr pos;
+        if !pos % num_devices = 0 then sync num_devices
     | { Idx.static_range = None; static_symbol = _ } :: more -> loop more
     | ({ Idx.static_range = Some range; static_symbol = _ } as s)
       :: { Idx.static_range = None; static_symbol = _ }
@@ -139,7 +141,8 @@ let round_robin fs jitted_bindings bindings =
           loop more
         done
   in
-  loop bindings
+  loop bindings;
+  if !pos % num_devices <> 0 then sync (!pos % num_devices)
 
 let set_virtual (a : LA.t) =
   if LA.is_false a.virtual_ then
@@ -187,3 +190,39 @@ let sync_run ?verbose ?looping (type context) (module Backend : Backend_type wit
       sequential_loop ~f jitted.bindings);
   Backend.await @@ Backend.get_ctx_device jitted.context;
   all_device_to_host ?verbose (module Backend) jitted.context t
+
+(** Executes the jitted code, potentially in parallel on the devices of the contexts. Brings
+    [copied_from_host] to devices,
+    synchronizes before copying to host. Loops over bindings and executes
+    the given function inside the loop after a run. All and only bindings with associated ranges
+    are iterated, with the binding's initial value lost. Bindings without ranges remain at their
+    initial values. *)
+let parallel_run ?verbose (type context) (module Backend : Backend_type with type context = context)
+    (jitteds : Backend.jitted array) ~copied_from_host ~updated ~accum =
+  all_host_to_device ?verbose (module Backend) jitted.context t;
+  (match looping with
+  | None -> jitted.run ()
+  | Some then_ ->
+      let f () =
+        jitted.run ();
+        then_ ()
+      in
+      sequential_loop ~f jitted.bindings);
+  Backend.await @@ Backend.get_ctx_device jitted.context;
+  all_device_to_host ?verbose (module Backend) jitted.context t
+
+(** Executes the jitted code, potentially in parallel on the devices of the contexts. Brings values
+    embedded in the given tenosor from host to devices,
+    synchronizes before copying to host. If [looping] is provided, loops over bindings and executes
+    the given function inside the loop after a run. All and only bindings with associated ranges
+    are iterated, with the binding's initial value lost. Bindings without ranges remain at their
+    initial values. *)
+let parallel_update ?verbose ?looping (type context)
+    (module Backend : Backend_type with type context = context) (jitteds : Backend.jitted array) t =
+  let all_params = Set.to_list @@ params t in
+  parallel_run ?verbose ?looping
+    (module Backend)
+    jitteds
+    (List.map all_params ~f:(fun t -> t.value))
+    (List.filter_map all_params ~f:(fun t -> Option.map t.diff ~f:(fun d -> d.grad)))
+    ~accum:Arrayjit.Ops.Add
