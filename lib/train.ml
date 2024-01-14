@@ -116,6 +116,31 @@ let sequential_loop ~f jitted_bindings =
   in
   loop jitted_bindings
 
+(** Distribute iterated indices to workers in a round-robin fashion. All and only bindings with
+    associated ranges are iterated, with the binding's initial value lost.
+    Bindings without ranges remain at their initial values. *)
+let round_robin fs jitted_bindings bindings =
+  let open Arrayjit.Backends in
+  let num_devices = Array.length fs in
+  assert (Array.length jitted_bindings = num_devices);
+  let pos = ref 0 in
+  let rec loop = function
+    | [] ->
+        fs.(!pos % num_devices) ();
+        Int.incr pos
+    | { Idx.static_range = None; static_symbol = _ } :: more -> loop more
+    | ({ Idx.static_range = Some range; static_symbol = _ } as s)
+      :: { Idx.static_range = None; static_symbol = _ }
+      :: more
+    | ({ Idx.static_range = Some range; static_symbol = _ } as s) :: more ->
+        for i = 0 to range - 1 do
+          if List.is_empty more then Idx.find_exn jitted_bindings.(!pos % num_devices) s := i
+          else Array.iter jitted_bindings ~f:(fun jb -> Idx.find_exn jb s := i);
+          loop more
+        done
+  in
+  loop bindings
+
 let set_virtual (a : LA.t) =
   if LA.is_false a.virtual_ then
     raise
