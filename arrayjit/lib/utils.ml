@@ -83,6 +83,23 @@ let sorted_diff ~compare l1 l2 =
   in
   (loop [] l1 l2 [@nontail])
 
+(** [parallel_merge merge num_devices] progressively invokes the pairwise [merge] callback, converging
+    on the 0th position, with [from] ranging from [0] to [num_devices - 1], and [to_ < from]. *)
+let parallel_merge merge num_devices =
+  let rec loop from to_ =
+    if to_ > from then
+      let is_even = (to_ - from + 1) % 2 = 0 in
+      if is_even then (
+        let half = (to_ - from + 1) / 2 in
+        for i = from to from + half - 1 do
+          merge ~from:i ~to_:(i + half)
+        done;
+        loop 0 (from + half - 1))
+      else loop (from + 1) to_
+    else if from > 0 then loop 0 from
+  in
+  loop 0 (num_devices - 1)
+
 type settings = {
   mutable debug_log_jitted : bool;
   mutable output_debug_files_in_run_directory : bool;

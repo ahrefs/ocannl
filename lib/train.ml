@@ -116,12 +116,11 @@ let sequential_loop ~f jitted_bindings =
   in
   loop jitted_bindings
 
-(** Distribute iterated indices to workers in a round-robin fashion. All and only bindings with
+(** Distributes iterated indices to workers in a round-robin fashion. All and only bindings with
     associated ranges are iterated, with the binding's initial value lost.
     Bindings without ranges remain at their initial values. [sync] is called after each round of calling
     all workers, and at the end if needed, with the number of workers called during the round. *)
 let round_robin fs jitted_bindings bindings ~sync =
-  let open Arrayjit.Backends in
   let num_devices = Array.length fs in
   assert (Array.length jitted_bindings = num_devices);
   let pos = ref 0 in
@@ -191,38 +190,44 @@ let sync_run ?verbose ?looping (type context) (module Backend : Backend_type wit
   Backend.await @@ Backend.get_ctx_device jitted.context;
   all_device_to_host ?verbose (module Backend) jitted.context t
 
-(** Executes the jitted code, potentially in parallel on the devices of the contexts. Brings
-    [copied_from_host] to devices,
-    synchronizes before copying to host. Loops over bindings and executes
-    the given function inside the loop after a run. All and only bindings with associated ranges
-    are iterated, with the binding's initial value lost. Bindings without ranges remain at their
-    initial values. *)
-let parallel_run ?verbose (type context) (module Backend : Backend_type with type context = context)
-    (jitteds : Backend.jitted array) ~copied_from_host ~updated ~accum =
-  all_host_to_device ?verbose (module Backend) jitted.context t;
-  (match looping with
-  | None -> jitted.run ()
-  | Some then_ ->
-      let f () =
-        jitted.run ();
-        then_ ()
-      in
-      sequential_loop ~f jitted.bindings);
-  Backend.await @@ Backend.get_ctx_device jitted.context;
-  all_device_to_host ?verbose (module Backend) jitted.context t
-
 (** Executes the jitted code, potentially in parallel on the devices of the contexts. Brings values
     embedded in the given tenosor from host to devices,
     synchronizes before copying to host. If [looping] is provided, loops over bindings and executes
     the given function inside the loop after a run. All and only bindings with associated ranges
     are iterated, with the binding's initial value lost. Bindings without ranges remain at their
     initial values. *)
-let parallel_update ?verbose ?looping (type context)
-    (module Backend : Backend_type with type context = context) (jitteds : Backend.jitted array) t =
+let parallel_update (type context) (module Backend : Backend_type with type context = context)
+    ~(grad_updates : Backend.jitted array) ~(sgd_update : Backend.jitted) t =
+  assert (not @@ Array.is_empty grad_updates);
+  let num_devices = Array.length grad_updates in
   let all_params = Set.to_list @@ params t in
-  parallel_run ?verbose ?looping
-    (module Backend)
-    jitteds
-    (List.map all_params ~f:(fun t -> t.value))
-    (List.filter_map all_params ~f:(fun t -> Option.map t.diff ~f:(fun d -> d.grad)))
-    ~accum:Arrayjit.Ops.Add
+  let param_vals = List.map all_params ~f:(fun t -> t.value) in
+  let param_grads = List.filter_map all_params ~f:(fun t -> Option.map t.diff ~f:(fun d -> d.grad)) in
+  let ctxs = Array.map grad_updates ~f:(fun upd -> upd.context) in
+  let merges =
+    Array.init (num_devices - 2) ~f:(fun to_ ->
+        Array.init (num_devices - to_ (* - 1 ? *)) ~f:(fun delta ->
+            let from = to_ + delta + 1 in
+            List.filter_map param_grads ~f:(fun p ->
+                Backend.merge ~name_suffix:"grad_merge" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Add
+                  ~src:ctxs.(from))))
+  in
+  let merge ~from ~to_ = List.iter merges.(to_).(from - to_ - 1) ~f:(fun jitted -> jitted.run ()) in
+  let copies =
+    Array.init (num_devices - 2) ~f:(fun from_m_1 ->
+        let from = from_m_1 + 1 in
+        List.filter_map param_vals ~f:(fun p ->
+            Backend.merge ~name_suffix:"param_copy" p ~dst:ctxs.(0) ~accum:Arrayjit.Ops.Arg2 ~src:ctxs.(from)))
+  in
+  (* let copy ~from ~to_ = List.iter copies.(to_).(from - to_ - 1) ~f:(fun jitted -> jitted.run ()) in *)
+  let sync devices_to_sync =
+    Arrayjit.Utils.parallel_merge merge devices_to_sync;
+    sgd_update.run ();
+    for from = 1 to devices_to_sync - 1 do
+      List.iter copies.(from - 1) ~f:(fun jitted -> jitted.run ())
+    done
+  in
+  let bindings = List.map ~f:fst grad_updates.(0).bindings in
+  let jitted_bindings = Array.map grad_updates ~f:(fun upd -> upd.bindings) in
+  let fs = Array.map grad_updates ~f:(fun upd -> upd.run) in
+  round_robin fs jitted_bindings bindings ~sync
