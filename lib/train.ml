@@ -190,16 +190,22 @@ let sync_run ?verbose ?looping (type context) (module Backend : Backend_type wit
   Backend.await @@ Backend.get_ctx_device jitted.context;
   all_device_to_host ?verbose (module Backend) jitted.context t
 
-(** Executes the jitted code, potentially in parallel on the devices of the contexts. Brings values
-    embedded in the given tenosor from host to devices,
-    synchronizes before copying to host. If [looping] is provided, loops over bindings and executes
-    the given function inside the loop after a run. All and only bindings with associated ranges
-    are iterated, with the binding's initial value lost. Bindings without ranges remain at their
-    initial values. *)
+(** Performes one optimization step, potentially in parallel (if [grad_updates] are compiled for different
+    devices). All jitted code must have the same bindings. Iterates over bindings with ranges, calling
+    one of [grad_updates] in a round-robin fashion, and performs the following synchronization each time
+    all [grad_updates] have been called: merges all gradients into the device of [grad_updates.(0)],
+    calls [sgd_update], and copies all parameters from the [grad_updates.(0)] device to the other devices.
+
+    All and only bindings with associated ranges are iterated, with the binding's initial value lost.
+    Bindings without ranges remain at their initial values. *)
 let parallel_update (type context) (module Backend : Backend_type with type context = context)
     ~(grad_updates : Backend.jitted array) ~(sgd_update : Backend.jitted) t =
   assert (not @@ Array.is_empty grad_updates);
   let num_devices = Array.length grad_updates in
+  let bindings = List.map ~f:fst sgd_update.bindings in
+  assert (
+    Array.for_all grad_updates ~f:(fun upd ->
+        [%equal: Idx.static_symbol list] bindings @@ List.map ~f:fst upd.bindings));
   let all_params = Set.to_list @@ params t in
   let param_vals = List.map all_params ~f:(fun t -> t.value) in
   let param_grads = List.filter_map all_params ~f:(fun t -> Option.map t.diff ~f:(fun d -> d.grad)) in
@@ -227,7 +233,6 @@ let parallel_update (type context) (module Backend : Backend_type with type cont
       List.iter copies.(from - 1) ~f:(fun jitted -> jitted.run ())
     done
   in
-  let bindings = List.map ~f:fst grad_updates.(0).bindings in
   let jitted_bindings = Array.map grad_updates ~f:(fun upd -> upd.bindings) in
   let fs = Array.map grad_updates ~f:(fun upd -> upd.run) in
   round_robin fs jitted_bindings bindings ~sync
