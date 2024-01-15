@@ -199,7 +199,7 @@ let sync_run ?verbose ?looping (type context) (module Backend : Backend_type wit
     All and only bindings with associated ranges are iterated, with the binding's initial value lost.
     Bindings without ranges remain at their initial values. *)
 let parallel_update (type context) (module Backend : Backend_type with type context = context)
-    ~(grad_updates : Backend.jitted array) ~(sgd_update : Backend.jitted) t =
+    ~(grad_updates : Backend.jitted array) ~(sgd_update : Backend.jitted) ~post_sync t =
   assert (not @@ Array.is_empty grad_updates);
   let num_devices = Array.length grad_updates in
   let bindings = List.map ~f:fst sgd_update.bindings in
@@ -211,7 +211,7 @@ let parallel_update (type context) (module Backend : Backend_type with type cont
   let param_grads = List.filter_map all_params ~f:(fun t -> Option.map t.diff ~f:(fun d -> d.grad)) in
   let ctxs = Array.map grad_updates ~f:(fun upd -> upd.context) in
   let merges =
-    Array.init (num_devices - 2) ~f:(fun to_ ->
+    Array.init (num_devices - 1) ~f:(fun to_ ->
         Array.init (num_devices - to_ (* - 1 ? *)) ~f:(fun delta ->
             let from = to_ + delta + 1 in
             List.filter_map param_grads ~f:(fun p ->
@@ -220,7 +220,7 @@ let parallel_update (type context) (module Backend : Backend_type with type cont
   in
   let merge ~from ~to_ = List.iter merges.(to_).(from - to_ - 1) ~f:(fun jitted -> jitted.run ()) in
   let copies =
-    Array.init (num_devices - 2) ~f:(fun from_m_1 ->
+    Array.init (num_devices - 1) ~f:(fun from_m_1 ->
         let from = from_m_1 + 1 in
         List.filter_map param_vals ~f:(fun p ->
             Backend.merge ~name_suffix:"param_copy" p ~dst:ctxs.(0) ~accum:Arrayjit.Ops.Arg2 ~src:ctxs.(from)))
@@ -231,7 +231,8 @@ let parallel_update (type context) (module Backend : Backend_type with type cont
     sgd_update.run ();
     for from = 1 to devices_to_sync - 1 do
       List.iter copies.(from - 1) ~f:(fun jitted -> jitted.run ())
-    done
+    done;
+    post_sync ()
   in
   let jitted_bindings = Array.map grad_updates ~f:(fun upd -> upd.bindings) in
   let fs = Array.map grad_updates ~f:(fun upd -> upd.run) in

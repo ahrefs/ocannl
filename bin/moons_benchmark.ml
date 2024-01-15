@@ -9,9 +9,12 @@ module CDSL = Arrayjit.Low_level.CDSL
 module Utils = Arrayjit.Utils
 
 let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch ~backend_name precision () =
+  let verbose = true in
   let module Backend = (val Train.fresh_backend ~backend_name () : Arrayjit.Backends.Backend) in
-  let device = Backend.get_device ~ordinal:0 in
-  let ctx = Backend.init device in
+  let num_devices = min num_devices @@ Backend.num_devices () in
+  let devices = Array.init num_devices ~f:(fun ordinal -> Backend.get_device ~ordinal) in
+  let contexts = Array.map devices ~f:Backend.init in
+  let ctx0 = contexts.(0) in
   (* ignore random_seed; *)
   let bench_title =
     [%string
@@ -73,12 +76,15 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let%op margin_loss = ?/(1 - (moons_class *. mlp moons_input)) in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in
   Train.set_on_host learning_rate.value;
+  Train.set_on_host scalar_loss.value;
   let weight_decay = 0.0001 in
   let update = Train.grad_update scalar_loss in
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
-  let sgd_jitted = Backend.jit ctx ~verbose:true bindings (Seq (update, sgd)) in
-  Train.all_host_to_device (module Backend) sgd_jitted.context scalar_loss;
-  Train.all_host_to_device (module Backend) sgd_jitted.context learning_rate;
+
+  let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit ctx ~verbose bindings update) in
+  let sgd_update = Backend.jit ctx0 ~verbose bindings sgd in
+  Train.all_host_to_device (module Backend) sgd_update.context scalar_loss;
+  Train.all_host_to_device (module Backend) sgd_update.context learning_rate;
   let batch_losses = ref [] in
   let epoch_losses = ref [] in
   let batch_log_losses = ref [] in
@@ -90,14 +96,16 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let start_time = Time_now.nanoseconds_since_unix_epoch () in
   for epoch = 1 to epochs do
     let epoch_loss = ref 0. in
-    Train.sequential_loop sgd_jitted.bindings ~f:(fun () ->
-        sgd_jitted.run ();
-        Backend.await device;
-        assert (Backend.to_host sgd_jitted.context learning_rate.value);
-        assert (Backend.to_host sgd_jitted.context scalar_loss.value);
+    Train.parallel_update
+      (module Backend)
+      ~grad_updates ~sgd_update scalar_loss
+      ~post_sync:(fun () ->
+        assert (Backend.to_host sgd_update.context learning_rate.value);
+        (* assert (Backend.to_host sgd_update.context scalar_loss.value); *)
+        assert (Backend.to_host grad_updates.(0).context scalar_loss.value);
         batch_losses := scalar_loss.@[0] :: !batch_losses;
         batch_log_losses := Float.log scalar_loss.@[0] :: !batch_log_losses;
-        let step_ref = IDX.find_exn sgd_jitted.bindings step_sym in
+        let step_ref = IDX.find_exn sgd_update.bindings step_sym in
         Stdio.printf "Epoch=%d, batch=%d, lr=%f, batch loss=%f\n%!" epoch !step_ref learning_rate.@[0]
           scalar_loss.@[0]);
     (* Tensor.print_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss; *)
@@ -135,14 +143,14 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   Train.set_on_host mlp_result.value;
   (* By using sgd_jitted.context here, we don't need to copy the parameters back to the host. *)
   let result_jitted =
-    Backend.jit sgd_jitted.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
+    Backend.jit sgd_update.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
   in
   let callback (x, y) =
     Tensor.set_values point [| x; y |];
     (* For the gccjit backend, point is only on host, not on device. For cuda, this will be needed. *)
     ignore (Backend.from_host result_jitted.context point.value : bool);
     result_jitted.run ();
-    Backend.await device;
+    Backend.await devices.(0);
     assert (Backend.to_host result_jitted.context mlp_result.value);
     Float.(mlp_result.@[0] >= 0.)
   in
