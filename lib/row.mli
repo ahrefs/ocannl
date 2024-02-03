@@ -90,5 +90,3 @@ val solve_proj_equations : proj_equation list -> proj_env
 val get_proj_index : proj_env -> dim -> Arrayjit.Indexing.axis_index
 val get_product_proj : proj_env -> dim -> (int * int) option
 val proj_to_iterator : proj_env -> int -> Arrayjit.Indexing.symbol
-
-(* module Debug_runtime : Minidebug_runtime.Debug_runtime_cond *)

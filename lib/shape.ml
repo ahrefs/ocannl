@@ -212,7 +212,7 @@ let logic_to_spec = function
   | Transpose (Batch_slice _, _) -> "@|"
   | Terminal _ -> "<terminal>"
 
-(* module Debug_runtime = Row.Debug_runtime *)
+module Debug_runtime = Arrayjit.Utils.Debug_runtime
 
 module Update_id = struct
   module T = struct

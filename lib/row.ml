@@ -140,10 +140,6 @@ let sexp_of_error_trace = function
 
 exception Shape_error of string * error_trace list [@@deriving sexp_of]
 
-(* module Debug_runtime =
-   (val Minidebug_runtime.debug_html ~max_nesting_depth:20 (* ~max_num_children:200 *)
-          ~highlight_terms:(Re.(alt [str "(sh_id 2) (kind Input)"]) ~exclude_on_path:(Re.str "env") "debug.html") *)
-
 let dim_to_int_exn = function Dim { d; _ } -> d | Var _ -> invalid_arg "dim_to_int: dim still unknown"
 let s_dim_one v ~value ~in_ = match in_ with Var v2 when equal_dim_var v v2 -> value | _ -> in_
 

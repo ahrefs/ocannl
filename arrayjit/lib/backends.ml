@@ -1,6 +1,7 @@
 open Base
 
 type 'context jitted = { context : 'context; run : unit -> unit; bindings : Indexing.jitted_bindings }
+[@@deriving sexp_of]
 
 module type No_device_backend = sig
   type context
@@ -12,6 +13,7 @@ module type No_device_backend = sig
   val init : unit -> context
   val finalize : context -> unit
   val sexp_of_context : context -> Sexp.t
+  val sexp_of_jitted : jitted -> Sexp.t
   val jit : context -> ?name:string -> ?verbose:bool -> unit Indexing.bindings -> Assignments.t -> jitted
 
   val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
@@ -59,7 +61,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   [@@deriving sexp_of]
 
   type context = { device : device; ctx : Backend.context } [@@deriving sexp_of]
-  type nonrec jitted = context jitted
+  type nonrec jitted = context jitted [@@deriving sexp_of]
 
   let name = "multicore " ^ Backend.name
   let init device = { device; ctx = Backend.init () }
@@ -133,8 +135,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 end
 
 module Gccjit_device : No_device_backend with type context = Gccjit_backend.context = struct
-  type context = Gccjit_backend.context
-  type nonrec jitted = context jitted
+  type context = Gccjit_backend.context [@@deriving sexp_of]
+  type nonrec jitted = context jitted [@@deriving sexp_of]
 
   open Gccjit_backend
 
@@ -166,9 +168,9 @@ end
 module Gccjit_backend = Multicore_backend (Gccjit_device)
 
 module Cuda_backend : Backend with type context = Cuda_backend.context = struct
-  type context = Cuda_backend.context
+  type context = Cuda_backend.context [@@deriving sexp_of]
   type device = Cuda_backend.device
-  type nonrec jitted = context jitted
+  type nonrec jitted = context jitted [@@deriving sexp_of]
 
   open Cuda_backend
 

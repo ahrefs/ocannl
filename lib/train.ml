@@ -6,6 +6,8 @@ module Idx = Arrayjit.Indexing
 
 module type Backend_type = Arrayjit.Backends.Backend
 
+module Debug_runtime = Arrayjit.Utils.Debug_runtime
+
 (** Reinitializes a backend selected via a global [backend] flag. *)
 let fresh_backend ?backend_name ?(verbose = true) () =
   let open Arrayjit.Backends in
