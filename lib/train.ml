@@ -218,12 +218,7 @@ let parallel_update (type context) (module Backend : Backend_type with type cont
                 Backend.merge ~name_suffix:"grad_merge" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Add
                   ~src:ctxs.(from))))
   in
-  let merge ~from ~to_ = List.iter merges.(to_).(from - to_ - 1) ~f:(fun jitted -> jitted.run ()) in
-  let copies =
-    Array.init (num_devices - 1) ~f:(fun from_m_1 ->
-        let from = from_m_1 + 1 in
-        List.filter_map param_vals ~f:(fun p ->
-            Backend.merge ~name_suffix:"param_copy" p ~dst:ctxs.(0) ~accum:Arrayjit.Ops.Arg2 ~src:ctxs.(from)))
+  let merge ~from ~to_ = List.iter merges.(to_).(to_ - from - 1) ~f:(fun jitted -> jitted.run ()) in
   in
   (* let copy ~from ~to_ = List.iter copies.(to_).(from - to_ - 1) ~f:(fun jitted -> jitted.run ()) in *)
   let sync devices_to_sync =
