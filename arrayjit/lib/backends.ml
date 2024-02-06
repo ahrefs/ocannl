@@ -1,5 +1,7 @@
 open Base
 
+module Debug_runtime = Utils.Debug_runtime
+
 type 'context jitted = { context : 'context; run : unit -> unit; bindings : Indexing.jitted_bindings }
 [@@deriving sexp_of]
 
@@ -89,9 +91,9 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let from_host { ctx; _ } = Backend.from_host ctx
   let to_host { ctx; _ } = Backend.to_host ctx
 
-  let merge ?name_suffix la ~dst ~accum ~src =
-    let src_suffix = "_from_device_" ^ Int.to_string src.device.ordinal in
-    let name_suffix = Option.value name_suffix ~default:"" ^ src_suffix in
+  let%track_sexp merge ?name_suffix la ~dst ~accum ~src =
+    let src_suffix: string = "_from_device_" ^ Int.to_string src.device.ordinal in
+    let name_suffix: string = Option.value name_suffix ~default:"" ^ src_suffix in
     Option.map (Backend.merge ~name_suffix la ~dst:dst.ctx ~accum ~src:src.ctx) ~f:(fun result ->
         let device = dst.device in
         let run () =
@@ -103,7 +105,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let num_devices () = Domain.recommended_domain_count () - 1
 
-  let spinup_device ~ordinal =
+  let%track_sexp spinup_device ~ordinal =
     let next_task = ref None in
     let keep_spinning = ref true in
     let worker () =
@@ -119,7 +121,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let devices = Array.init (num_devices ()) ~f:(fun ordinal -> spinup_device ~ordinal)
   let get_all_devices () = devices
 
-  let unsafe_cleanup ?(unsafe_shutdown = false) () =
+  let%track_sexp unsafe_cleanup ?(unsafe_shutdown = false) () =
     assert (Domain.is_main_domain ());
     let cleanup ordinal device =
       device.keep_spinning := false;

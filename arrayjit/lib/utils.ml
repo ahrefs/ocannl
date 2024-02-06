@@ -88,22 +88,21 @@ let sorted_diff ~compare l1 l2 =
   (loop [] l1 l2 [@nontail])
 
 module Debug_runtime =
-  (val Minidebug_runtime.debug_file
-   (* ~split_files_after:(1 lsl 16) *)
+  (val Minidebug_runtime.debug_file (* ~split_files_after:(1 lsl 16) *)
          ~for_append:false
-          ~hyperlink:"./"
-          (* ~hyperlink:"vscode://file//wsl.localhost/ubuntu23/home/lukstafi/ocannl/" *)
-         ~values_first_mode:true 
+         ~hyperlink:"./" (* ~hyperlink:"vscode://file//wsl.localhost/ubuntu23/home/lukstafi/ocannl/" *)
+         ~values_first_mode:true
          ~backend:(`Markdown PrintBox_md.Config.(foldable_trees default))
          (* ~backend:(`Html PrintBox_html.Config.(tree_summary true default))  *)
          (* ~prune_upto:5 *)
-         ~highlight_terms:Re.(alt [ str "(sh_id 46)" ])
-         ~exclude_on_path:(Re.str "env") "debug")
+         (* ~highlight_terms:Re.(alt [ str "(sh_id 46)" ]) *)
+         (* ~exclude_on_path:(Re.str "env") *)
+         "debug")
 
 (** [parallel_merge merge num_devices] progressively invokes the pairwise [merge] callback, converging
     on the 0th position, with [from] ranging from [0] to [num_devices - 1], and [to_ < from]. *)
-let parallel_merge merge num_devices =
-  let rec loop from to_ =
+let%debug_sexp parallel_merge merge (num_devices : int) =
+  let rec loop (from : int) (to_ : int) : unit =
     if to_ > from then
       let is_even = (to_ - from + 1) % 2 = 0 in
       if is_even then (

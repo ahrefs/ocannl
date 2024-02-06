@@ -123,8 +123,8 @@ let sequential_loop ~f jitted_bindings =
     associated ranges are iterated, with the binding's initial value lost.
     Bindings without ranges remain at their initial values. [sync] is called after each round of calling
     all workers, and at the end if needed, with the number of workers called during the round. *)
-let round_robin fs parallel_jitbs jitbs ~sync : unit =
-  let num_devices = Array.length fs in
+let%track_sexp round_robin fs parallel_jitbs jitbs ~sync : unit =
+  let num_devices : int = Array.length fs in
   assert (Array.length parallel_jitbs = num_devices);
   let pos = ref 0 in
   let rec loop = function
@@ -194,7 +194,7 @@ let sync_run ?verbose ?looping (type context) (module Backend : Backend_type wit
   Backend.await @@ Backend.get_ctx_device jitted.context;
   all_device_to_host ?verbose (module Backend) jitted.context t
 
-(** Performes one optimization step, potentially in parallel (if [grad_updates] are compiled for different
+(** Performs one optimization step, potentially in parallel (if [grad_updates] are compiled for different
     devices). All jitted code must have the same bindings. Iterates over bindings with ranges, calling
     one of [grad_updates] in a round-robin fashion, and performs the following synchronization each time
     all [grad_updates] have been called: merges all gradients into the device of [grad_updates.(0)],
@@ -202,18 +202,19 @@ let sync_run ?verbose ?looping (type context) (module Backend : Backend_type wit
 
     All and only bindings with associated ranges are iterated, with the binding's initial value lost.
     Bindings without ranges remain at their initial values. *)
-let parallel_update (type context) (module Backend : Backend_type with type context = context)
-    ~(grad_updates : Backend.jitted array) ~(sgd_update : Backend.jitted) ~post_sync t =
+let%track_sexp parallel_update (type context) (module Backend : Backend_type with type context = context)
+    ~(grad_updates : Backend.jitted array) ~(sgd_update : Backend.jitted) ~post_sync (t : Tensor.t) : unit =
   assert (not @@ Array.is_empty grad_updates);
-  let num_devices = Array.length grad_updates in
-  let bindings = List.map ~f:fst sgd_update.bindings in
-  assert (
-    Array.for_all grad_updates ~f:(fun upd ->
-        [%equal: Idx.static_symbol list] bindings @@ List.map ~f:fst upd.bindings));
-  let all_params = Set.to_list @@ params t in
-  let param_vals = List.map all_params ~f:(fun t -> t.value) in
-  let param_grads = List.filter_map all_params ~f:(fun t -> Option.map t.diff ~f:(fun d -> d.grad)) in
-  let ctxs = Array.map grad_updates ~f:(fun upd -> upd.context) in
+  let num_devices : int = Array.length grad_updates in
+  let bindings : Idx.static_symbol list = List.map ~f:fst sgd_update.bindings in
+  [%debug_notrace
+    assert (
+      Array.for_all grad_updates ~f:(fun upd ->
+          [%equal: Idx.static_symbol list] bindings @@ List.map ~f:fst upd.bindings))];
+  let all_params: Tensor.t list = Set.to_list @@ params t in
+  let param_vals = [%debug_notrace List.map all_params ~f:(fun t -> t.value)] in
+  let param_grads = [%debug_notrace List.filter_map all_params ~f:(fun t -> Option.map t.diff ~f:(fun d -> d.grad))] in
+  let ctxs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.context)] in
   let merges : Backend.jitted list array array =
     if num_devices < 2 then [| [||] |]
     else
@@ -237,7 +238,7 @@ let parallel_update (type context) (module Backend : Backend_type with type cont
                 ~src:ctxs.(from)))
   in
   (* let copy ~from ~to_ = List.iter copies.(to_).(from - to_ - 1) ~f:(fun jitted -> jitted.run ()) in *)
-  let sync devices_to_sync =
+  let sync (devices_to_sync : int) : unit =
     Arrayjit.Utils.parallel_merge merge devices_to_sync;
     sgd_update.run ();
     for from = 1 to devices_to_sync - 1 do
@@ -245,6 +246,6 @@ let parallel_update (type context) (module Backend : Backend_type with type cont
     done;
     post_sync ()
   in
-  let jitted_bindings = Array.map grad_updates ~f:(fun upd -> upd.bindings) in
-  let fs = Array.map grad_updates ~f:(fun upd -> upd.run) in
+  let jitted_bindings = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.bindings)] in
+  let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.run)] in
   round_robin fs jitted_bindings sgd_update.bindings ~sync
