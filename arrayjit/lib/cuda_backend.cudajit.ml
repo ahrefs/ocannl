@@ -31,6 +31,7 @@ type device = {
 [@@deriving sexp_of]
 
 type context = {
+  label : string;
   ctx : (Cudajit.context[@sexp.opaque]);
   device : device;
   run_module : (Cudajit.module_[@sexp.opaque]) option;
@@ -45,7 +46,14 @@ type ctx_info = {
   used_tensors : Hash_set.M(LA).t;
 }
 
-let init device = { ctx = device.primary_context; device; arrays = Map.empty (module LA); run_module = None }
+let init device =
+  {
+    label = "cuda " ^ Int.to_string device.ordinal;
+    ctx = device.primary_context;
+    device;
+    arrays = Map.empty (module LA);
+    run_module = None;
+  }
 
 let is_initialized, initialize =
   let initialized = ref false in
@@ -447,9 +455,7 @@ let jit ?name ?(verbose = false) old_context bindings ((traced_store, llc) as co
   if Utils.settings.with_debug then Stdio.printf "Exec_as_cuda.jit: %s\n%!" name;
   let idx_params = Indexing.bound_symbols bindings in
   let func, args, run_module, info = jit_func ~name ~verbose old_context idx_params compiled in
-  let context =
-    { ctx = info.ctx; device = old_context.device; run_module = Some run_module; arrays = info.ctx_arrays }
-  in
+  let context = { old_context with ctx = info.ctx; run_module = Some run_module; arrays = info.ctx_arrays } in
   let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let run () =
     if verbose then Stdio.printf "Exec_as_cuda.jit: zeroing-out global memory\n%!";

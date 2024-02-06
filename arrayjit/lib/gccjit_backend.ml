@@ -12,7 +12,11 @@ let root_ctx = ref None
 
 module LA = Lazy_array
 
-type context = { arrays : Ndarray.t Map.M(LA).t; result : (Gccjit.result option[@sexp.opaque]) }
+type context = {
+  label : string;
+  arrays : Ndarray.t Map.M(LA).t;
+  result : (Gccjit.result option[@sexp.opaque]);
+}
 [@@deriving sexp_of]
 
 let unsafe_cleanup ?(unsafe_shutdown = false) () =
@@ -35,8 +39,8 @@ let finalize ctx =
   let open Gccjit in
   Option.iter ctx.result ~f:Result.release
 
-let init () =
-  let result = { result = None; arrays = Map.empty (module LA) } in
+let init ~label =
+  let result = { label; result = None; arrays = Map.empty (module LA) } in
   Core.Gc.Expert.add_finalizer_exn result finalize;
   result
 
@@ -443,7 +447,7 @@ let jit old_context ~name ?verbose:_ bindings compiled =
   *)
   let ctx_info = jit_func ~name old_context ctx bindings compiled in
   let result = Context.compile ctx in
-  let context = { arrays = ctx_info.ctx_arrays; result = Some result } in
+  let context = { label = old_context.label; arrays = ctx_info.ctx_arrays; result = Some result } in
   let run_variadic =
     let rec link : 'a. 'a Indexing.bindings -> 'a Ctypes.fn -> 'a Indexing.variadic =
      fun (type b) (bs : b Indexing.bindings) (cs : b Ctypes.fn) ->

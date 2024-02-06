@@ -2,7 +2,8 @@ open Base
 module Debug_runtime = Utils.Debug_runtime
 module LA = Lazy_array
 
-type context = { arrays : Sexp.t ref Map.M(LA).t; mutable state : string } [@@deriving sexp_of]
+type context = { label : string; arrays : Sexp.t ref Map.M(LA).t; mutable state : string }
+[@@deriving sexp_of]
 
 let backend_state = ref ""
 
@@ -18,8 +19,8 @@ let is_initialized, initialize =
 
 let finalize ctx = ctx.state <- "Finalized"
 
-let init () =
-  let result = { arrays = Map.empty (module LA); state = "Initialized" } in
+let init ~label =
+  let result = { label; arrays = Map.empty (module LA); state = "Initialized" } in
   Core.Gc.Expert.add_finalizer_exn result finalize;
   result
 
@@ -62,14 +63,15 @@ let jit old_context ~name ?verbose:_ bindings (_traced_store, compiled) =
     Map.fold sets ~init:old_context.arrays ~f:(fun ~key ~data:_ arrays ->
         Map.update arrays key ~f:(function Some v -> v | None -> ref (Sexp.List [])))
   in
-  let context = { arrays; state = old_context.state } in
+  let context = { old_context with arrays } in
   let symbols = Indexing.bound_symbols bindings in
   let jitted_bindings = List.map symbols ~f:(fun s -> (s, ref 0)) in
   let%track_sexp run () =
     Map.iteri sets ~f:(fun ~key ~data ->
         let args = Set.to_list data |> List.map ~f:(fun la -> la.backend_info) in
         key.backend_info <- Sexp.(List (Atom name :: args));
-        Debug_runtime.log_value_sexp ~descr:[%string {|%{name}: %{String.concat ~sep:"." key.label} :=|}]
+        Debug_runtime.log_value_sexp
+          ~descr:[%string {|%{name} @ %{context.label}: %{String.concat ~sep:"." key.label} :=|}]
           ~entry_id:__entry_id ~is_result:false key.backend_info)
   in
   (context, jitted_bindings, run)
@@ -79,7 +81,8 @@ let%track_sexp from_host context la =
   | None -> false
   | Some logs ->
       (logs := Sexp.(List [ Atom "from_host"; la.backend_info ]));
-      Debug_runtime.log_value_sexp ~descr:[%string {|from_host: %{String.concat ~sep:"." la.label} :=|}]
+      Debug_runtime.log_value_sexp
+        ~descr:[%string {|from_host %{String.concat ~sep:"." la.label}: %{context.label} :=|}]
         ~entry_id:__entry_id ~is_result:false !logs;
       true
 
@@ -88,7 +91,8 @@ let%track_sexp to_host (context : context) la =
   | None -> false
   | Some logs ->
       la.backend_info <- Sexp.(List [ Atom "to_host"; !logs ]);
-      Debug_runtime.log_value_sexp ~descr:[%string {|to_host: %{String.concat ~sep:"." la.label} :=|}]
+      Debug_runtime.log_value_sexp
+        ~descr:[%string {|to_host %{String.concat ~sep:"." la.label} := %{context.label}|}]
         ~entry_id:__entry_id ~is_result:false la.backend_info;
       true
 
@@ -109,7 +113,8 @@ let%track_sexp merge ?name_suffix la ~dst ~accum:_ ~src bindings =
         let name = "merge_from_" ^ Option.value name_suffix ~default:"" in
         let elem = Sexp.(List [ Atom name; !src_info ]) in
         dst_info := Utils.sexp_append !dst_info ~elem;
-        Debug_runtime.log_value_sexp ~descr:[%string {|merge: %{String.concat ~sep:"." la.label} :=|}]
-        ~entry_id:__entry_id ~is_result:false !dst_info;
+        Debug_runtime.log_value_sexp
+          ~descr:[%string {|merge %{String.concat ~sep:"." la.label}: %{dst.label} := %{src.label}|}]
+          ~entry_id:__entry_id ~is_result:false !dst_info
       in
       Some (dst, jitted_bindings, run)

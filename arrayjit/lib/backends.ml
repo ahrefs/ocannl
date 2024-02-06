@@ -1,5 +1,4 @@
 open Base
-
 module Debug_runtime = Utils.Debug_runtime
 
 type 'context jitted = { context : 'context; run : unit -> unit; bindings : Indexing.jitted_bindings }
@@ -12,7 +11,10 @@ module type No_device_backend = sig
   val name : string
   val initialize : unit -> unit
   val is_initialized : unit -> bool
-  val init : unit -> context
+
+  val init : label:string -> context
+  (** [label] is usually the backend name concatenated with the device number. *)
+
   val finalize : context -> unit
   val sexp_of_context : context -> Sexp.t
   val sexp_of_jitted : jitted -> Sexp.t
@@ -66,7 +68,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   type nonrec jitted = context jitted [@@deriving sexp_of]
 
   let name = "multicore " ^ Backend.name
-  let init device = { device; ctx = Backend.init () }
+  let init device = { device; ctx = Backend.init ~label:(name ^ " " ^ Int.to_string device.ordinal) }
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
 
@@ -92,8 +94,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let to_host { ctx; _ } = Backend.to_host ctx
 
   let%track_sexp merge ?name_suffix la ~dst ~accum ~src =
-    let src_suffix: string = "_from_device_" ^ Int.to_string src.device.ordinal in
-    let name_suffix: string = Option.value name_suffix ~default:"" ^ src_suffix in
+    let src_suffix : string = "_from_device_" ^ Int.to_string src.device.ordinal in
+    let name_suffix : string = Option.value name_suffix ~default:"" ^ src_suffix in
     Option.map (Backend.merge ~name_suffix la ~dst:dst.ctx ~accum ~src:src.ctx) ~f:(fun result ->
         let device = dst.device in
         let run () =
