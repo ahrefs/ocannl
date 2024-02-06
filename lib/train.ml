@@ -214,15 +214,27 @@ let parallel_update (type context) (module Backend : Backend_type with type cont
   let param_vals = List.map all_params ~f:(fun t -> t.value) in
   let param_grads = List.filter_map all_params ~f:(fun t -> Option.map t.diff ~f:(fun d -> d.grad)) in
   let ctxs = Array.map grad_updates ~f:(fun upd -> upd.context) in
-  let merges =
-    Array.init (num_devices - 1) ~f:(fun to_ ->
-        Array.init (num_devices - to_ (* - 1 ? *)) ~f:(fun delta ->
-            let from = to_ + delta + 1 in
-            List.filter_map param_grads ~f:(fun p ->
-                Backend.merge ~name_suffix:"grad_merge" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Add
-                  ~src:ctxs.(from))))
+  let merges : Backend.jitted list array array =
+    if num_devices < 2 then [| [||] |]
+    else
+      Array.init (num_devices - 1) ~f:(fun (to_ : int) ->
+          Array.init
+            (num_devices - to_ - 1)
+            ~f:(fun (delta : int) ->
+              let from : int = to_ + delta + 1 in
+              List.filter_map param_grads ~f:(fun p ->
+                  Backend.merge ~name_suffix:"grad_merge" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Add
+                    ~src:ctxs.(from))))
   in
   let merge ~from ~to_ = List.iter merges.(to_).(to_ - from - 1) ~f:(fun jitted -> jitted.run ()) in
+  let copies : Backend.jitted list array =
+    if num_devices < 2 then [||]
+    else
+      Array.init (num_devices - 1) ~f:(fun from_m_1 ->
+          let from : int = from_m_1 + 1 in
+          List.filter_map param_vals ~f:(fun p ->
+              Backend.merge ~name_suffix:"param_copy" p ~dst:ctxs.(0) ~accum:Arrayjit.Ops.Arg2
+                ~src:ctxs.(from)))
   in
   (* let copy ~from ~to_ = List.iter copies.(to_).(from - to_ - 1) ~f:(fun jitted -> jitted.run ()) in *)
   let sync devices_to_sync =
