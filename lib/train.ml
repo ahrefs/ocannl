@@ -19,6 +19,7 @@ let fresh_backend ?backend_name ?(verbose = true) () =
     with
     | "gccjit" -> (module Gccjit_backend : Backend)
     | "cuda" -> (module Cuda_backend : Backend)
+    | "dummy" -> (module Dummy_backend : Backend)
     | backend -> invalid_arg [%string "Train.fresh_backend: unknown backend %{backend}"]
   in
   reinitialize backend;

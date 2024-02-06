@@ -167,6 +167,39 @@ end
 
 module Gccjit_backend = Multicore_backend (Gccjit_device)
 
+module Dummy_device : No_device_backend with type context = Dummy_backend.context = struct
+  type context = Dummy_backend.context [@@deriving sexp_of]
+  type nonrec jitted = context jitted [@@deriving sexp_of]
+
+  open Dummy_backend
+
+  let name = "dummy"
+  let initialize = initialize
+  let is_initialized = is_initialized
+  let unsafe_cleanup ?unsafe_shutdown () = Dummy_backend.unsafe_cleanup ?unsafe_shutdown ()
+  let init = init
+  let finalize = finalize
+  let sexp_of_context = sexp_of_context
+
+  let jit context ?name ?verbose bindings code =
+    let name = Option.value name ~default:(Assignments.get_name code) in
+    let context, bindings, run =
+      jit context ~name ?verbose bindings
+      @@ Assignments.compile_proc ~name ?verbose (Indexing.bound_symbols bindings) code
+    in
+    { context; run; bindings }
+
+  let from_host = from_host
+  let to_host = to_host
+
+  let merge ?name_suffix la ~dst ~accum ~(src : context) =
+    let bindings = Indexing.Empty in
+    merge ?name_suffix la ~dst ~accum ~src bindings
+    |> Option.map ~f:(fun (context, bindings, run) -> { context; run; bindings })
+end
+
+module Dummy_backend = Multicore_backend (Dummy_device)
+
 module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   type context = Cuda_backend.context [@@deriving sexp_of]
   type device = Cuda_backend.device
