@@ -57,6 +57,16 @@ let updates (llc : Low_level.t) =
   loop llc
 
 let jit old_context ~name ?verbose:_ bindings (_traced_store, compiled) =
+  let module Debug_runtime =
+    (val Minidebug_runtime.debug_file (* ~split_files_after:(1 lsl 16) *)
+           ~for_append:false
+           ~hyperlink:"./" (* ~hyperlink:"vscode://file//wsl.localhost/ubuntu23/home/lukstafi/ocannl/" *)
+           ~values_first_mode:true
+           ~backend:(`Markdown PrintBox_md.Config.(foldable_trees default))
+         (* ~backend:(`Html PrintBox_html.Config.(tree_summary true default))  *)
+         @@ "debug-"
+         ^ old_context.label)
+  in
   if String.is_empty !backend_state then initialize ();
   let _gets, sets = updates compiled in
   let arrays =
@@ -107,6 +117,16 @@ let%track_sexp merge ?name_suffix la ~dst ~accum:_ ~src bindings =
   match (Map.find src.arrays la, Map.find dst.arrays la) with
   | None, _ | _, None -> None
   | Some src_info, Some dst_info ->
+      let module Debug_runtime =
+        (val Minidebug_runtime.debug_file (* ~split_files_after:(1 lsl 16) *)
+               ~for_append:false
+               ~hyperlink:"./" (* ~hyperlink:"vscode://file//wsl.localhost/ubuntu23/home/lukstafi/ocannl/" *)
+               ~values_first_mode:true
+               ~backend:(`Markdown PrintBox_md.Config.(foldable_trees default))
+             (* ~backend:(`Html PrintBox_html.Config.(tree_summary true default))  *)
+             @@ "debug-"
+             ^ dst.label)
+      in
       let symbols = Indexing.bound_symbols bindings in
       let jitted_bindings = List.map symbols ~f:(fun s -> (s, ref 0)) in
       let run () =
