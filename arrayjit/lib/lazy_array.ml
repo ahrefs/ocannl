@@ -16,7 +16,7 @@ type t = {
   mutable device_only : (bool * int) option;
       (** If true, this node is only materialized on the devices it is computed on.
           It is marked as [not !(nd.hosted)]. *)
-  mutable backend_info : string;
+  mutable backend_info : Sexp.t;
 }
 
 let is_false opt = not @@ Option.value ~default:true @@ Option.map ~f:fst opt
@@ -122,7 +122,7 @@ let create prec ~id ~label ~dims init_op =
       (if Option.value_exn !hosted then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None)
   in
   let arr =
-    { array; prec; id; label; hosted; virtual_ = None; device_only = None; backend_info = ""; dims }
+    { array; prec; id; label; hosted; virtual_ = None; device_only = None; backend_info = Sexp.List []; dims }
   in
   Registry.add registry arr;
   arr

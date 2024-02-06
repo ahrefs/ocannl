@@ -108,18 +108,19 @@ let get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ct
            in
            ctx_info.ctx_arrays <- Map.add_exn ~key ~data ctx_arrays);
         let global_ptr = Option.map (Map.find ctx_info.ctx_arrays key) ~f:Ndarray.(map { f = get_c_ptr }) in
-        let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
+        let backend_info = sexp_of_mem_properties mem in
         let comment_on ptr = Option.value ~default:"not" @@ Option.map ptr ~f:RValue.to_string in
         Block.comment init_block
           [%string
-            "Array #%{key.id#Int} %{LA.label key}: %{backend_info} %{comment_on hosted_ptr} hosted, \
-             %{comment_on global_ptr} global, %{comment_on @@ Option.map ~f:RValue.lvalue local} local."];
+            "Array #%{key.id#Int} %{LA.label key}: %{Sexp.to_string_hum @@ backend_info} %{comment_on \
+             hosted_ptr} hosted, %{comment_on global_ptr} global, %{comment_on @@ Option.map \
+             ~f:RValue.lvalue local} local."];
         let result =
           { nd = key; hosted_ptr; global_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
         in
         if tn.zero_initialized then zero_out ctx init_block result;
-        if not @@ String.is_substring key.backend_info ~substring:backend_info then
-          key.backend_info <- key.backend_info ^ backend_info;
+        if not @@ Utils.sexp_mem ~elem:backend_info key.backend_info then
+          key.backend_info <- Utils.sexp_append ~elem:backend_info key.backend_info;
         result
       in
       match (key.prec, Lazy.force key.array) with
@@ -448,8 +449,7 @@ let jit old_context ~name ?verbose:_ bindings compiled =
      fun (type b) (bs : b Indexing.bindings) (cs : b Ctypes.fn) ->
       match bs with
       | Empty -> Indexing.Result (Result.code result name Ctypes.(void @-> cs))
-      | Bind (_, more) ->
-        Param (ref 0, link more Ctypes.(int @-> cs))
+      | Bind (_, more) -> Param (ref 0, link more Ctypes.(int @-> cs))
     in
     link bindings Ctypes.(returning void)
   in

@@ -204,12 +204,12 @@ let get_array ~traced_store:_ ctx_info (key : LA.t) =
         Some (LA.name key, Cudajit.mem_alloc ~byte_size:size_in_bytes))
     in
     let local = Option.some_if (is_local_only mem) @@ LA.name key ^ "_local" in
-    let backend_info = (Sexp.to_string_hum @@ sexp_of_mem_properties mem) ^ ";" in
+    let backend_info = sexp_of_mem_properties mem in
     if Utils.settings.with_debug then
       Stdio.printf "Exec_as_cuda: creating array #%d %s; mem=%s on host = %b; global = %b\n%!" key.id
-        (LA.label key) backend_info is_on_host (Option.is_some global);
-    if not @@ String.is_substring key.backend_info ~substring:backend_info then
-      key.backend_info <- key.backend_info ^ backend_info;
+        (LA.label key) (Sexp.to_string_hum backend_info) is_on_host (Option.is_some global);
+    if not @@ Utils.sexp_mem ~elem:backend_info key.backend_info then
+      key.backend_info <- Utils.sexp_append ~elem:backend_info key.backend_info;
     let data = { hosted; local; mem; dims; size_in_bytes; size_in_elems; num_typ; is_double; global } in
     ctx_info.ctx_arrays <- Map.add_exn ctx_info.ctx_arrays ~key ~data;
     data
@@ -450,7 +450,7 @@ let jit ?name ?(verbose = false) old_context bindings ((traced_store, llc) as co
   let context =
     { ctx = info.ctx; device = old_context.device; run_module = Some run_module; arrays = info.ctx_arrays }
   in
-  let idx_args = List.map idx_params ~f:(fun s -> s, ref 0) in
+  let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let run () =
     if verbose then Stdio.printf "Exec_as_cuda.jit: zeroing-out global memory\n%!";
     set_ctx context.ctx;
