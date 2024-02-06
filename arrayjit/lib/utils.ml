@@ -12,6 +12,10 @@ end
 let no_ints = Set.empty (module Int)
 let one_int = Set.singleton (module Int)
 
+let map_merge m1 m2 ~f =
+  Map.merge m1 m2 ~f:(fun ~key:_ m ->
+      match m with `Right v | `Left v -> Some v | `Both (v1, v2) -> Some (f v1 v2))
+
 let mref_add mref ~key ~data ~or_ =
   match Map.add !mref ~key ~data with `Ok m -> mref := m | `Duplicate -> or_ (Map.find_exn !mref key)
 
@@ -130,3 +134,15 @@ let settings =
     fixed_state_for_init = None;
     print_decimals_precision = 2;
   }
+
+let sexp_append ~elem = function
+  | Sexp.List l -> Sexp.List (elem :: l)
+  | Sexp.Atom _ as e2 -> Sexp.List [ elem; e2 ]
+
+let sexp_mem ~elem = function
+  | Sexp.Atom _ as e2 -> Sexp.equal elem e2
+  | Sexp.List l -> Sexp.(List.mem ~equal l elem)
+
+let rec sexp_deep_mem ~elem = function
+  | Sexp.Atom _ as e2 -> Sexp.equal elem e2
+  | Sexp.List l -> Sexp.(List.mem ~equal l elem) || List.exists ~f:(sexp_deep_mem ~elem) l
