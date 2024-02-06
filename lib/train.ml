@@ -122,27 +122,28 @@ let sequential_loop ~f jitted_bindings =
     associated ranges are iterated, with the binding's initial value lost.
     Bindings without ranges remain at their initial values. [sync] is called after each round of calling
     all workers, and at the end if needed, with the number of workers called during the round. *)
-let round_robin fs jitted_bindings bindings ~sync =
+let round_robin fs parallel_jitbs jitbs ~sync : unit =
   let num_devices = Array.length fs in
-  assert (Array.length jitted_bindings = num_devices);
+  assert (Array.length parallel_jitbs = num_devices);
   let pos = ref 0 in
   let rec loop = function
     | [] ->
         fs.(!pos % num_devices) ();
         Int.incr pos;
         if !pos % num_devices = 0 then sync num_devices
-    | { Idx.static_range = None; static_symbol = _ } :: more -> loop more
-    | ({ Idx.static_range = Some range; static_symbol = _ } as s)
-      :: { Idx.static_range = None; static_symbol = _ }
+    | ({ Idx.static_range = None; static_symbol = _ }, _) :: more -> loop more
+    | (({ Idx.static_range = Some range; static_symbol = _ } as s), idx)
+      :: ({ Idx.static_range = None; static_symbol = _ }, _)
       :: more
-    | ({ Idx.static_range = Some range; static_symbol = _ } as s) :: more ->
+    | (({ Idx.static_range = Some range; static_symbol = _ } as s), idx) :: more ->
         for i = 0 to range - 1 do
-          if List.is_empty more then Idx.find_exn jitted_bindings.(!pos % num_devices) s := i
-          else Array.iter jitted_bindings ~f:(fun jb -> Idx.find_exn jb s := i);
+          idx := i;
+          if List.is_empty more then Idx.find_exn parallel_jitbs.(!pos % num_devices) s := i
+          else Array.iter parallel_jitbs ~f:(fun jb -> Idx.find_exn jb s := i);
           loop more
         done
   in
-  loop bindings;
+  loop jitbs;
   if !pos % num_devices <> 0 then sync (!pos % num_devices)
 
 let set_virtual (a : LA.t) =
@@ -233,4 +234,4 @@ let parallel_update (type context) (module Backend : Backend_type with type cont
   in
   let jitted_bindings = Array.map grad_updates ~f:(fun upd -> upd.bindings) in
   let fs = Array.map grad_updates ~f:(fun upd -> upd.run) in
-  round_robin fs jitted_bindings bindings ~sync
+  round_robin fs jitted_bindings sgd_update.bindings ~sync
