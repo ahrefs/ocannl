@@ -457,7 +457,8 @@ let jit ?name ?(verbose = false) old_context bindings ((traced_store, llc) as co
   let func, args, run_module, info = jit_func ~name ~verbose old_context idx_params compiled in
   let context = { old_context with ctx = info.ctx; run_module = Some run_module; arrays = info.ctx_arrays } in
   let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
-  let run () =
+  let%track_rt_sexp run () =
+    (* FIXME: convert logs to using Debug_runtime. *)
     if verbose then Stdio.printf "Exec_as_cuda.jit: zeroing-out global memory\n%!";
     set_ctx context.ctx;
     let module Cu = Cudajit in

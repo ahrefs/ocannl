@@ -435,7 +435,6 @@ let jit_func ~name (context : context) ctx bindings (traced_store, proc) =
   ctx_info
 
 let jit old_context ~name ?verbose:_ bindings compiled =
-  (* TODO: add verbose logs *)
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
@@ -448,6 +447,7 @@ let jit old_context ~name ?verbose:_ bindings compiled =
   let ctx_info = jit_func ~name old_context ctx bindings compiled in
   let result = Context.compile ctx in
   let context = { label = old_context.label; arrays = ctx_info.ctx_arrays; result = Some result } in
+  (* TODO: add logs to the runtime. *)
   let run_variadic =
     let rec link : 'a. 'a Indexing.bindings -> 'a Ctypes.fn -> 'a Indexing.variadic =
      fun (type b) (bs : b Indexing.bindings) (cs : b Ctypes.fn) ->
@@ -457,8 +457,9 @@ let jit old_context ~name ?verbose:_ bindings compiled =
     in
     link bindings Ctypes.(returning void)
   in
+  let%track_rt_sexp run () = Indexing.apply run_variadic in
   Context.release ctx;
-  (context, Indexing.jitted_bindings bindings run_variadic, fun () -> Indexing.apply run_variadic)
+  (context, Indexing.jitted_bindings bindings run_variadic, run)
 
 let from_host (context : context) la =
   match Map.find context.arrays la with

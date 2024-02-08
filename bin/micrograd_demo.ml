@@ -83,7 +83,7 @@ let experiment seed ~use_builtin_weight_decay () =
   for epoch = 0 to epochs - 1 do
     for batch = 0 to n_batches - 1 do
       batch_ref := batch;
-      jitted.run ();
+      jitted.run Train.debug_rt ();
       Backend.await device;
       assert (Backend.to_host jitted.context learning_rate.value);
       assert (Backend.to_host jitted.context scalar_loss.value);
@@ -117,7 +117,7 @@ let experiment seed ~use_builtin_weight_decay () =
     Tensor.set_values point [| x; y |];
     (* For the gccjit backend, point is only on host, not on device. For cuda, this will be needed. *)
     ignore (Backend.from_host result_jitted.context point.value : bool);
-    result_jitted.run ();
+    result_jitted.run Train.debug_rt ();
     Backend.await device;
     assert (Backend.to_host result_jitted.context mlp_result.value);
     Float.(mlp_result.@[0] >= 0.)

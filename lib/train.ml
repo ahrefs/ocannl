@@ -7,6 +7,7 @@ module Idx = Arrayjit.Indexing
 module type Backend_type = Arrayjit.Backends.Backend
 
 module Debug_runtime = Arrayjit.Utils.Debug_runtime
+let debug_rt = (module Debug_runtime : Minidebug_runtime.Debug_runtime)
 
 (** Reinitializes a backend selected via a global [backend] flag. *)
 let fresh_backend ?backend_name ?(verbose = true) () =
@@ -184,10 +185,10 @@ let sync_run ?verbose ?looping (type context) (module Backend : Backend_type wit
     (jitted : Backend.jitted) t =
   all_host_to_device ?verbose (module Backend) jitted.context t;
   (match looping with
-  | None -> jitted.run ()
+  | None -> jitted.run debug_rt ()
   | Some then_ ->
       let f () =
-        jitted.run ();
+        jitted.run debug_rt ();
         then_ ()
       in
       sequential_loop ~f jitted.bindings);
@@ -211,9 +212,11 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     assert (
       Array.for_all grad_updates ~f:(fun upd ->
           [%equal: Idx.static_symbol list] bindings @@ List.map ~f:fst upd.bindings))];
-  let all_params: Tensor.t list = Set.to_list @@ params t in
+  let all_params : Tensor.t list = Set.to_list @@ params t in
   let param_vals = [%debug_notrace List.map all_params ~f:(fun t -> t.value)] in
-  let param_grads = [%debug_notrace List.filter_map all_params ~f:(fun t -> Option.map t.diff ~f:(fun d -> d.grad))] in
+  let param_grads =
+    [%debug_notrace List.filter_map all_params ~f:(fun t -> Option.map t.diff ~f:(fun d -> d.grad))]
+  in
   let ctxs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.context)] in
   let merges : Backend.jitted list array array =
     if num_devices < 2 then [| [||] |]
@@ -227,7 +230,10 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
                   Backend.merge ~name_suffix:"grad_merge" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Add
                     ~src:ctxs.(from))))
   in
-  let merge ~from ~to_ = List.iter merges.(to_).(to_ - from - 1) ~f:(fun jitted -> jitted.run ()) in
+  let merge ~from ~to_ =
+    (* FIXME: is this parallel? *)
+    List.iter merges.(to_).(to_ - from - 1) ~f:(fun jitted -> jitted.run debug_rt ())
+  in
   let copies : Backend.jitted list array =
     if num_devices < 2 then [||]
     else
@@ -240,12 +246,13 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   (* let copy ~from ~to_ = List.iter copies.(to_).(from - to_ - 1) ~f:(fun jitted -> jitted.run ()) in *)
   let sync (devices_to_sync : int) : unit =
     Arrayjit.Utils.parallel_merge merge devices_to_sync;
-    sgd_update.run ();
+    sgd_update.run debug_rt ();
     for from = 1 to devices_to_sync - 1 do
-      List.iter copies.(from - 1) ~f:(fun jitted -> jitted.run ())
+      List.iter copies.(from - 1) ~f:(fun jitted -> jitted.run debug_rt ())
     done;
     post_sync ()
   in
   let jitted_bindings = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.bindings)] in
-  let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.run)] in
+  (* FIXME: is this parallel? *)
+  let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.run debug_rt)] in
   round_robin fs jitted_bindings sgd_update.bindings ~sync

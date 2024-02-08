@@ -1,7 +1,11 @@
 open Base
 module Debug_runtime = Utils.Debug_runtime
 
-type 'context jitted = { context : 'context; run : unit -> unit; bindings : Indexing.jitted_bindings }
+type 'context jitted = {
+  context : 'context;
+  run : (module Minidebug_runtime.Debug_runtime) -> unit -> unit;
+  bindings : Indexing.jitted_bindings;
+}
 [@@deriving sexp_of]
 
 module type No_device_backend = sig
@@ -57,7 +61,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   module Domain = Domain [@warning "-3"]
 
   type device = {
-    next_task : ((unit -> unit) option ref[@sexp.opaque]);
+    next_task : (((module Minidebug_runtime.Debug_runtime) -> unit -> unit) option ref[@sexp.opaque]);
     keep_spinning : bool ref;
     ordinal : int;
     domain : (unit Domain.t[@sexp.opaque]);
@@ -83,7 +87,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let jit { ctx; device } ?name ?verbose bindings code : jitted =
     let result = Backend.jit ctx ?name ?verbose bindings code in
-    let run () =
+    let%track_rt_sexp run () =
       assert (Domain.is_main_domain ());
       await device;
       device.next_task := Some result.run
@@ -98,7 +102,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     let name_suffix : string = Option.value name_suffix ~default:"" ^ src_suffix in
     Option.map (Backend.merge ~name_suffix la ~dst:dst.ctx ~accum ~src:src.ctx) ~f:(fun result ->
         let device = dst.device in
-        let run () =
+        let%track_rt_sexp run () =
           assert (Domain.is_main_domain ());
           await device;
           device.next_task := Some result.run
@@ -107,13 +111,31 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let num_devices () = Domain.recommended_domain_count () - 1
 
-  let%track_sexp spinup_device ~ordinal =
+  (*
+     let get_debug name =
+       Minidebug_runtime.debug_file (* ~split_files_after:(1 lsl 16) *)
+        ~global_prefix:name
+         ~for_append:false
+         ~hyperlink:"./" (* ~hyperlink:"vscode://file//wsl.localhost/ubuntu23/home/lukstafi/ocannl/" *)
+         ~values_first_mode:true
+         ~backend:(`Markdown PrintBox_md.Config.(foldable_trees default))
+       (* ~backend:(`Html PrintBox_html.Config.(tree_summary true default))  *)
+       @@ "debug-"
+       ^ name *)
+
+  let get_debug name =
+    let debug_ch = Stdlib.open_out ("debug-" ^ name ^ ".log") in
+    Minidebug_runtime.debug_flushing ~debug_ch ~time_tagged:false ~global_prefix:name ()
+
+  let%track_sexp spinup_device ~(ordinal : int) =
     let next_task = ref None in
     let keep_spinning = ref true in
-    let worker () =
+    let runtime = get_debug ("dev-" ^ Int.to_string ordinal) in
+    let module Debug_runtime = (val runtime) in
+    let%track_sexp worker () =
       while !keep_spinning do
         Option.iter !next_task ~f:(fun f ->
-            f ();
+            f runtime ();
             next_task := None);
         Domain.cpu_relax ()
       done

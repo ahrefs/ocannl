@@ -62,7 +62,7 @@ let hello3 () =
   Tensor.print ~with_code:true ~with_grad:false `Default zero_to_twenty;
   Tensor.print_tree ~with_grad:false ~depth:9 zero_to_twenty;
   Stdlib.Format.print_newline ();
-  jitted.run ();
+  jitted.run Train.debug_rt ();
   Backend.await device;
   if Backend.to_host jitted.context y.value then Stdio.printf "Transferred <hey> to to host.\n%!";
   Tensor.print ~with_code:true ~with_grad:false `Default y;

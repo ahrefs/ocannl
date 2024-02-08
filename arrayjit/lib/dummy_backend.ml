@@ -1,5 +1,4 @@
 open Base
-module Debug_runtime = Utils.Debug_runtime
 module LA = Lazy_array
 
 type context = { label : string; arrays : Sexp.t ref Map.M(LA).t; mutable state : string }
@@ -57,16 +56,6 @@ let updates (llc : Low_level.t) =
   loop llc
 
 let jit old_context ~name ?verbose:_ bindings (_traced_store, compiled) =
-  let module Debug_runtime =
-    (val Minidebug_runtime.debug_file (* ~split_files_after:(1 lsl 16) *)
-           ~for_append:false
-           ~hyperlink:"./" (* ~hyperlink:"vscode://file//wsl.localhost/ubuntu23/home/lukstafi/ocannl/" *)
-           ~values_first_mode:true
-           ~backend:(`Markdown PrintBox_md.Config.(foldable_trees default))
-         (* ~backend:(`Html PrintBox_html.Config.(tree_summary true default))  *)
-         @@ "debug-"
-         ^ old_context.label)
-  in
   if String.is_empty !backend_state then initialize ();
   let _gets, sets = updates compiled in
   let arrays =
@@ -76,7 +65,7 @@ let jit old_context ~name ?verbose:_ bindings (_traced_store, compiled) =
   let context = { old_context with arrays } in
   let symbols = Indexing.bound_symbols bindings in
   let jitted_bindings = List.map symbols ~f:(fun s -> (s, ref 0)) in
-  let%track_sexp run () =
+  let%track_rt_sexp run () =
     Map.iteri sets ~f:(fun ~key ~data ->
         let args = Set.to_list data |> List.map ~f:(fun la -> la.backend_info) in
         key.backend_info <- Sexp.(List (Atom name :: args));
@@ -85,6 +74,31 @@ let jit old_context ~name ?verbose:_ bindings (_traced_store, compiled) =
           ~entry_id:__entry_id ~is_result:false key.backend_info)
   in
   (context, jitted_bindings, run)
+
+(*
+   let merge_from ?(name_suffix = "") (context : context) ~dst ~accum ~src bindings =
+     let body idcs = Low_level.(Set (dst, idcs, Binop (accum, Get (dst, idcs), Get (src, idcs)))) in
+     let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
+     let name = [%string "merge_into_%{dst.Lazy_array.id#Int}%{name_suffix}"] in
+     jit context ~name ~verbose:false bindings (Low_level.compile_proc ~name [] llc) *)
+
+let merge ?name_suffix la ~dst ~accum:_ ~src bindings =
+  match (Map.find src.arrays la, Map.find dst.arrays la) with
+  | None, _ | _, None -> None
+  | Some src_info, Some dst_info ->
+      let symbols = Indexing.bound_symbols bindings in
+      let jitted_bindings = List.map symbols ~f:(fun s -> (s, ref 0)) in
+      let%track_rt_sexp run (() : unit) : unit =
+        let name = "merge_from_" ^ Option.value name_suffix ~default:"" in
+        let elem = Sexp.(List [ Atom name; !src_info ]) in
+        dst_info := Utils.sexp_append !dst_info ~elem;
+        Debug_runtime.log_value_sexp
+          ~descr:[%string {|merge %{String.concat ~sep:"." la.label}: %{dst.label} := %{src.label}|}]
+          ~entry_id:__entry_id ~is_result:false !dst_info
+      in
+      Some (dst, jitted_bindings, run)
+
+module Debug_runtime = Utils.Debug_runtime
 
 let%track_sexp from_host context la =
   match Map.find context.arrays la with
@@ -105,36 +119,3 @@ let%track_sexp to_host (context : context) la =
         ~descr:[%string {|to_host %{String.concat ~sep:"." la.label} := %{context.label}|}]
         ~entry_id:__entry_id ~is_result:false la.backend_info;
       true
-
-(*
-   let merge_from ?(name_suffix = "") (context : context) ~dst ~accum ~src bindings =
-     let body idcs = Low_level.(Set (dst, idcs, Binop (accum, Get (dst, idcs), Get (src, idcs)))) in
-     let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
-     let name = [%string "merge_into_%{dst.Lazy_array.id#Int}%{name_suffix}"] in
-     jit context ~name ~verbose:false bindings (Low_level.compile_proc ~name [] llc) *)
-
-let%track_sexp merge ?name_suffix la ~dst ~accum:_ ~src bindings =
-  match (Map.find src.arrays la, Map.find dst.arrays la) with
-  | None, _ | _, None -> None
-  | Some src_info, Some dst_info ->
-      let module Debug_runtime =
-        (val Minidebug_runtime.debug_file (* ~split_files_after:(1 lsl 16) *)
-               ~for_append:false
-               ~hyperlink:"./" (* ~hyperlink:"vscode://file//wsl.localhost/ubuntu23/home/lukstafi/ocannl/" *)
-               ~values_first_mode:true
-               ~backend:(`Markdown PrintBox_md.Config.(foldable_trees default))
-             (* ~backend:(`Html PrintBox_html.Config.(tree_summary true default))  *)
-             @@ "debug-"
-             ^ dst.label)
-      in
-      let symbols = Indexing.bound_symbols bindings in
-      let jitted_bindings = List.map symbols ~f:(fun s -> (s, ref 0)) in
-      let run () =
-        let name = "merge_from_" ^ Option.value name_suffix ~default:"" in
-        let elem = Sexp.(List [ Atom name; !src_info ]) in
-        dst_info := Utils.sexp_append !dst_info ~elem;
-        Debug_runtime.log_value_sexp
-          ~descr:[%string {|merge %{String.concat ~sep:"." la.label}: %{dst.label} := %{src.label}|}]
-          ~entry_id:__entry_id ~is_result:false !dst_info
-      in
-      Some (dst, jitted_bindings, run)
