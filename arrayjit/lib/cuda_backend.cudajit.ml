@@ -189,7 +189,9 @@ let prec_to_c_type = function
 (* let compute_array_offset ~idcs ~dims =
    Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx + (offset * dim)) *)
 
-let get_array ~traced_store:_ ctx_info (key : LA.t) =
+module Debug_runtime = Utils.Debug_runtime
+
+let%debug_sexp get_array ~traced_store:_ ctx_info key =
   Hash_set.add ctx_info.used_tensors key;
   let default () =
     (* let tn = Low_level.get_node traced_store v in *)
@@ -206,16 +208,23 @@ let get_array ~traced_store:_ ctx_info (key : LA.t) =
     let global =
       if is_local_only mem then None
       else (
-        if Utils.settings.with_debug then
-          Stdio.printf "Exec_as_cuda.get_array: mem_alloc %s\n%!" (LA.name key);
+        if Utils.settings.with_debug then [%log "mem_alloc", (LA.name key : string)];
         set_ctx ctx_info.ctx;
         Some (LA.name key, Cudajit.mem_alloc ~byte_size:size_in_bytes))
     in
     let local = Option.some_if (is_local_only mem) @@ LA.name key ^ "_local" in
     let backend_info = sexp_of_mem_properties mem in
     if Utils.settings.with_debug then
-      Stdio.printf "Exec_as_cuda: creating array #%d %s; mem=%s on host = %b; global = %b\n%!" key.id
-        (LA.label key) (Sexp.to_string_hum backend_info) is_on_host (Option.is_some global);
+      [%log
+        "creating",
+          (key.id : int),
+          (LA.label key : string),
+          "mem",
+          (backend_info : Sexp.t),
+          "on-host",
+          (is_on_host : bool),
+          "is-global",
+          (Option.is_some global : bool)];
     if not @@ Utils.sexp_mem ~elem:backend_info key.backend_info then
       key.backend_info <- Utils.sexp_append ~elem:backend_info key.backend_info;
     let data = { hosted; local; mem; dims; size_in_bytes; size_in_elems; num_typ; is_double; global } in
@@ -369,8 +378,6 @@ let jit_code ~traced_store info ppf llc : unit =
   in
   pp_ll ppf llc
 
-module Debug_runtime = Utils.Debug_runtime
-
 let%debug_sexp jit_func ~name (old_context : context) idx_params (traced_store, llc) =
   set_ctx old_context.ctx;
   [%log "generating the .cu source"];
@@ -451,9 +458,8 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ par
   [%log "compilation finished"];
   (func, args, run_module, info)
 
-let jit ?name old_context bindings ((traced_store, llc) as compiled) =
-  let name = Option.value_or_thunk name ~default:(fun () -> Low_level.extract_block_name [ llc ]) in
-  if Utils.settings.with_debug then Stdio.printf "Exec_as_cuda.jit: %s\n%!" name;
+let%debug_sexp jit ?name old_context bindings ((traced_store, llc) as compiled) =
+  let name : string = Option.value_or_thunk name ~default:(fun () -> Low_level.extract_block_name [ llc ]) in
   let idx_params = Indexing.bound_symbols bindings in
   let func, args, run_module, info = jit_func ~name old_context idx_params compiled in
   let context = { old_context with ctx = info.ctx; run_module = Some run_module; arrays = info.ctx_arrays } in

@@ -210,7 +210,9 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         if Option.is_none a.device_only then a.device_only <- Some (false, 3);
         traced.read_before_write <- true))
 
-let check_and_store_virtual traced static_indices top_llc =
+module Debug_runtime = Utils.Debug_runtime
+
+let%debug_sexp check_and_store_virtual traced static_indices top_llc =
   let exception Non_virtual of int in
   let static_indices =
     Set.of_list (module Indexing.Symbol) @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
@@ -258,11 +260,10 @@ let check_and_store_virtual traced static_indices top_llc =
             | Iterator s as idx when not (Set.mem static_indices s) ->
                 if not @@ Set.mem env_dom s then (
                   if Utils.settings.with_debug then
-                    Stdlib.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
-                      Sexp.pp_hum
-                      ([%sexp_of: Indexing.axis_index] idx)
-                      Sexp.pp_hum
-                      ([%sexp_of: t] top_llc);
+                    [%log
+                      "Inlining candidate has an escaping variable",
+                        (idx : Indexing.axis_index),
+                        (top_llc : t)];
                   raise @@ Non_virtual 7)
             | _ -> ());
         loop_float ~env_dom llv
@@ -280,11 +281,7 @@ let check_and_store_virtual traced static_indices top_llc =
             | Iterator s when not (Set.mem static_indices s) ->
                 if not @@ Set.mem env_dom s then (
                   if Utils.settings.with_debug then
-                    Stdlib.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!"
-                      Sexp.pp_hum
-                      ([%sexp_of: Indexing.symbol] s)
-                      Sexp.pp_hum
-                      ([%sexp_of: t] top_llc);
+                    [%log "Inlining candidate has an escaping variable", (s : Indexing.symbol), (top_llc : t)];
                   raise @@ Non_virtual 9)
             | _ -> ())
     | Local_scope { body; _ } -> loop_proc ~env_dom body
@@ -294,10 +291,7 @@ let check_and_store_virtual traced static_indices top_llc =
     | Embed_index (Iterator s) ->
         if not @@ Set.mem env_dom s then (
           if Utils.settings.with_debug && not (Set.mem static_indices s) then
-            Stdlib.Format.printf "INFO: Inlining candidate has an escaping variable %a:@ %a\n%!" Sexp.pp_hum
-              ([%sexp_of: Indexing.symbol] s)
-              Sexp.pp_hum
-              ([%sexp_of: t] top_llc);
+            [%log "Inlining candidate has an escaping variable", (s : Indexing.symbol), (top_llc : t)];
           raise @@ Non_virtual 10)
     | Binop (_, llv1, llv2) ->
         loop_float ~env_dom llv1;
@@ -390,7 +384,6 @@ let inline_computation ~id traced static_indices call_args =
   in
   try
     let body = List.rev_filter_map ~f:loop_proc traced.computations in
-    (* Stdlib.Format.printf "DEBUG: [3]=%a\n%!" Sexp.pp_hum ([%sexp_of: t list] @@ body); *)
     (* DEBUG: *)
     if List.is_empty body then raise @@ Non_virtual 14 else Some (unflat_lines body)
   with Non_virtual i ->
@@ -518,7 +511,6 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
     | Constant _ -> llv
     | Get (a, indices) ->
         assert (LA.isnt_true a.virtual_);
-        (* Stdlib.Format.printf "DEBUG: [5]=%a\n%!" Sexp.pp_hum ([%sexp_of: float_t] @@ llv); *)
         (* DEBUG: *)
         if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 17);
         assert (Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
@@ -528,7 +520,6 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
           Array.for_all orig_indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
         if LA.is_false id.nd.virtual_ then Get (id.nd, orig_indices)
         else
-          (* Stdlib.Format.printf "DEBUG: [6]=%a\n%!" Sexp.pp_hum ([%sexp_of: float_t] @@ llv); *)
           (* DEBUG: *)
           let body = Option.value_exn @@ loop_proc ~balanced ~env_dom body in
           (* let body = Option.value ~default:Noop @@ loop_proc ~balanced ~env_dom body in *)
@@ -682,8 +673,6 @@ let simplify_llc llc =
 
 type traced_store = (LA.t, traced_array) Base.Hashtbl.t
 type optimized = traced_store * t
-
-module Debug_runtime = Utils.Debug_runtime
 
 let%debug_sexp optimize_proc static_indices llc =
   let traced_store = Hashtbl.create (module Lazy_array) in

@@ -132,3 +132,9 @@ let print_accessible_headers () =
   Core.Gc.full_major ();
   Registry.iter (fun arr -> Stdio.print_endline @@ header arr) registry;
   Stdio.printf "Lazy_array: Finished printing headers.%!\n"
+
+module Debug_runtime = Utils.Debug_runtime
+
+let%debug_sexp log_accessible_headers () =
+  Core.Gc.full_major ();
+  Registry.iter (fun arr -> [%log (header arr : string)]) registry

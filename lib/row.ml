@@ -272,8 +272,9 @@ let rec unify_dim (eq : dim * dim) (env : environment) : inequality list * envir
 let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
 let take_from_end (l : dim list) (n : int) : dim list = List.rev @@ List.take (List.rev l) n
 
-let apply_constraint ~(finish : bool) (r : row) (constr : dims_constraint) (env : environment) :
-    inequality list * environment =
+module Debug_runtime = Utils.Debug_runtime
+
+let%debug_sexp apply_constraint ~finish r constr env =
   match constr with
   | Unconstrained -> ([], env)
   | Total_elems n -> (
@@ -283,9 +284,7 @@ let apply_constraint ~(finish : bool) (r : row) (constr : dims_constraint) (env 
           let known : int = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
           let rem : int = n / known in
           if rem = 0 then (
-            if Utils.settings.with_debug then
-              Stdlib.Format.printf "apply_constraint: shape error env=@ %a\n%!" Sexp.pp_hum
-                (sexp_of_environment env);
+            if Utils.settings.with_debug then [%log "shape-error", (env : environment)];
             raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ]))
           else if rem = 1 then ([], env)
           else
@@ -301,18 +300,14 @@ let apply_constraint ~(finish : bool) (r : row) (constr : dims_constraint) (env 
           let known : int = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
           let rem : int = n / known in
           if rem = 0 then (
-            if Utils.settings.with_debug then
-              Stdlib.Format.printf "apply_constraint: shape error env=@ %a\n%!" Sexp.pp_hum
-                (sexp_of_environment env);
+            if Utils.settings.with_debug then [%log "shape-error", (env : environment)];
             raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ]))
           else
             match vars with
             | [] ->
                 if rem = 1 then ([], env)
                 else (
-                  if Utils.settings.with_debug then
-                    Stdlib.Format.printf "apply_constraint: shape error env=@ %a\n%!" Sexp.pp_hum
-                      (sexp_of_environment env);
+                  if Utils.settings.with_debug then [%log "shape-error", (env : environment)];
                   raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ]))
             | [ Var v ] -> ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } ], env)
             | Var v :: _ when finish -> ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } ], env)
