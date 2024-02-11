@@ -369,9 +369,11 @@ let jit_code ~traced_store info ppf llc : unit =
   in
   pp_ll ppf llc
 
-let jit_func ~name ?(verbose = false) (old_context : context) idx_params (traced_store, llc) =
+module Debug_runtime = Utils.Debug_runtime
+
+let%debug_sexp jit_func ~name (old_context : context) idx_params (traced_store, llc) =
   set_ctx old_context.ctx;
-  if verbose then Stdio.printf "Exec_as_cuda.jit: generating the .cu source\n%!";
+  [%log "generating the .cu source"];
   let info =
     { ctx = old_context.ctx; ctx_arrays = old_context.arrays; used_tensors = Hash_set.create (module LA) }
   in
@@ -386,8 +388,7 @@ let jit_func ~name ?(verbose = false) (old_context : context) idx_params (traced
     @@ List.filter_map arrays ~f:(fun la ->
            let tn = Map.find_exn info.ctx_arrays la in
            if Utils.settings.with_debug then
-             Stdio.printf "Exec_as_cuda.jit: array used: #%d %s; %s\n%!" la.id (LA.label la)
-               (Sexp.to_string_hum @@ sexp_of_mem_properties tn.mem);
+             [%log "array-used:", (la : LA.t), (LA.label la : string), (tn.mem : mem_properties)];
            match tn.mem with
            | Local_only -> None
            | Global -> Option.map tn.global ~f:(fun (n, ptr) -> (tn.num_typ ^ " *" ^ n, ptr)))
@@ -429,7 +430,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ par
     Stdio.Out_channel.output_string oc cu_src;
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);
-  if verbose then Stdio.printf "Exec_as_cuda.jit: compiling to PTX\n%!";
+  [%log "compiling to PTX"];
   let module Cu = Cudajit in
   let ptx =
     Cu.compile_to_ptx ~cu_src ~name ~options:[ "--use_fast_math" ] ~with_debug:Utils.settings.with_debug
@@ -447,19 +448,18 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ par
   let run_module = Cu.module_load_data_ex ptx [] in
   let func = Cu.module_get_function run_module ~name in
   let args = List.map args ~f:(fun p -> Cu.Tensor p) in
-  if verbose then Stdio.printf "Exec_as_cuda.jit: compilation finished\n%!";
+  [%log "compilation finished"];
   (func, args, run_module, info)
 
-let jit ?name ?(verbose = false) old_context bindings ((traced_store, llc) as compiled) =
+let jit ?name old_context bindings ((traced_store, llc) as compiled) =
   let name = Option.value_or_thunk name ~default:(fun () -> Low_level.extract_block_name [ llc ]) in
   if Utils.settings.with_debug then Stdio.printf "Exec_as_cuda.jit: %s\n%!" name;
   let idx_params = Indexing.bound_symbols bindings in
-  let func, args, run_module, info = jit_func ~name ~verbose old_context idx_params compiled in
+  let func, args, run_module, info = jit_func ~name old_context idx_params compiled in
   let context = { old_context with ctx = info.ctx; run_module = Some run_module; arrays = info.ctx_arrays } in
   let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let%track_rt_sexp run () =
-    (* FIXME: convert logs to using Debug_runtime. *)
-    if verbose then Stdio.printf "Exec_as_cuda.jit: zeroing-out global memory\n%!";
+    [%log "zeroing-out global memory"];
     set_ctx context.ctx;
     let module Cu = Cudajit in
     Map.iteri context.arrays ~f:(fun ~key:ptr ~data ->
@@ -469,7 +469,7 @@ let jit ?name ?(verbose = false) old_context bindings ((traced_store, llc) as co
               let tn = Hashtbl.find_exn traced_store ptr in
               if tn.zero_initialized then Cu.memset_d8 dev_ptr Unsigned.UChar.zero ~length:size_in_bytes
           | _ -> ());
-    if verbose then Stdio.printf "Exec_as_cuda.jit: launching the kernel\n%!";
+    [%log "launching the kernel"];
     (* if Utils.settings.debug_log_jitted then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
     let idx_args =
       List.map idx_args ~f:(fun ({ static_symbol; static_range }, i) ->
@@ -488,6 +488,6 @@ let jit ?name ?(verbose = false) old_context bindings ((traced_store, llc) as co
           Cu.Int !i)
     in
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream @@ idx_args @ args;
-    if verbose then Stdio.printf "Exec_as_cuda.jit: kernel launched\n%!"
+    [%log "kernel launched"]
   in
   (context, idx_args, run)

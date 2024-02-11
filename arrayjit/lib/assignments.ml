@@ -66,27 +66,33 @@ let remove_updates array c =
 
 let sequential = List.fold_right ~init:Noop ~f:(fun st sts -> Seq (st, sts))
 
-let to_low_level (code : t) : Low_level.t =
+module Debug_runtime = Utils.Debug_runtime
+
+let%debug_sexp to_low_level (code : t) : Low_level.t =
   let open Indexing in
   let get a idcs =
     if not (Array.length idcs = Array.length (Lazy.force a.LA.dims)) then
-      Stdlib.Format.printf "DEBUG: get a=%a: %s@ idcs=%a dims=%a\n%!" Sexp.pp_hum
-        ([%sexp_of: LA.t] @@ a)
-        (LA.label a) Sexp.pp_hum
-        ([%sexp_of: Indexing.axis_index array] @@ idcs)
-        Sexp.pp_hum
-        ([%sexp_of: int array] @@ Lazy.force a.dims);
+      [%log
+        "get",
+          "a=",
+          (a : LA.t),
+          ":",
+          (LA.label a : string),
+          (idcs : Indexing.axis_index array),
+          (Lazy.force a.dims : int array)];
     assert (Array.length idcs = Array.length (Lazy.force a.LA.dims));
     Low_level.Get (a, idcs)
   in
   let set a idcs v =
     if not (Array.length idcs = Array.length (Lazy.force a.LA.dims)) then
-      Stdlib.Format.printf "DEBUG: set a=%a: %s@ idcs=%a dims=%a\n%!" Sexp.pp_hum
-        ([%sexp_of: LA.t] @@ a)
-        (LA.label a) Sexp.pp_hum
-        ([%sexp_of: Indexing.axis_index array] @@ idcs)
-        Sexp.pp_hum
-        ([%sexp_of: int array] @@ Lazy.force a.dims);
+      [%log
+        "set",
+          "a=",
+          (a : LA.t),
+          ":",
+          (LA.label a : string),
+          (idcs : Indexing.axis_index array),
+          (Lazy.force a.dims : int array)];
     assert (Array.length idcs = Array.length (Lazy.force a.LA.dims));
     Low_level.Set (a, idcs, v)
   in
@@ -130,8 +136,7 @@ let to_low_level (code : t) : Low_level.t =
         let for_loops =
           try for_loop [] (Array.to_list projections.product_space)
           with e ->
-            Stdlib.Format.printf "DEBUG: projections=@ %a\n%!" Sexp.pp_hum
-              ([%sexp_of: projections] @@ projections);
+            [%log "projections=", (projections : projections)];
             raise e
         in
         if zero_out then
@@ -306,8 +311,7 @@ let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
   loop c;
   Buffer.contents b
 
-let compile_proc ?(ident_style = `Heuristic_ocannl) ~name ?(verbose = false) static_indices proc =
-  if verbose then Stdio.printf "Assignments.compile_proc: generating the initial low-level code\n%!";
+let compile_proc ?(ident_style = `Heuristic_ocannl) ~name static_indices proc =
   if Utils.settings.output_debug_files_in_run_directory then (
     let fname = name ^ ".hlc" in
     let f = Stdio.Out_channel.create fname in
@@ -318,4 +322,4 @@ let compile_proc ?(ident_style = `Heuristic_ocannl) ~name ?(verbose = false) sta
     let f = Stdio.Out_channel.create fname in
     Stdio.Out_channel.output_string f @@ to_string_hum ~ident_style proc);
   let llc = to_low_level proc in
-  Low_level.compile_proc ~name ~verbose static_indices llc
+  Low_level.compile_proc ~name static_indices llc

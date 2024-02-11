@@ -7,15 +7,16 @@ module Idx = Arrayjit.Indexing
 module type Backend_type = Arrayjit.Backends.Backend
 
 module Debug_runtime = Arrayjit.Utils.Debug_runtime
+
 let debug_rt = (module Debug_runtime : Minidebug_runtime.Debug_runtime)
 
 (** Reinitializes a backend selected via a global [backend] flag. *)
-let fresh_backend ?backend_name ?(verbose = true) () =
+let fresh_backend ?backend_name () =
   let open Arrayjit.Backends in
   let backend =
     match
       Option.value_or_thunk backend_name ~default:(fun () ->
-          Arrayjit.Utils.get_global_arg ~verbose ~arg_name:"backend" ~default:"gccjit")
+          Arrayjit.Utils.get_global_arg ~arg_name:"backend" ~default:"gccjit")
       |> String.lowercase
     with
     | "gccjit" -> (module Gccjit_backend : Backend)
@@ -158,32 +159,39 @@ let set_virtual (a : LA.t) =
 let every_non_literal_on_host =
   Tensor.iter_embedded_arrays ~f:(fun a -> if not @@ literal_heuristic a then set_on_host a)
 
-let all_host_to_device ?(verbose = false) (type context)
-    (module Backend : Backend_type with type context = context) (context : context) =
+let%debug_sexp all_host_to_device (type context) (module Backend : Backend_type with type context = context)
+    context =
   Tensor.iter_embedded_arrays ~f:(fun a ->
       let b = Backend.from_host context a in
-      if verbose && b then
-        Stdio.printf "Train.all_device_to_host: copied array %s (%s) from host to device %d.\n%!" (LA.name a)
-          (LA.label a)
-          (Backend.get_ctx_device context |> Backend.to_ordinal))
+      if b then
+        [%log
+          "copied",
+            (LA.label a : string),
+            (LA.name a : string),
+            "from host to device",
+            (Backend.get_ctx_device context |> Backend.to_ordinal : int)])
 
-let all_device_to_host ?(verbose = false) (type context)
-    (module Backend : Backend_type with type context = context) (context : context) =
+let%debug_sexp all_device_to_host (type context) (module Backend : Backend_type with type context = context)
+    context =
   Tensor.iter_embedded_arrays ~f:(fun a ->
       let b = Backend.to_host context a in
-      if verbose && b then
-        Stdio.printf "Train.all_device_to_host: copied array %s (%s) from device %d to host.\n%!" (LA.name a)
-          (LA.label a)
-          (Backend.get_ctx_device context |> Backend.to_ordinal))
+      if b then
+        [%log
+          "copied",
+            (LA.label a : string),
+            (LA.name a : string),
+            "from device",
+            (Backend.get_ctx_device context |> Backend.to_ordinal : int),
+            "to host"])
 
 (** Executes the jitted code and copies arrays embedded in the given tenosor from and to host,
     synchronizes before copying to host. If [looping] is provided, loops over bindings and executes
     the given function inside the loop after a run. All and only bindings with associated ranges
     are iterated, with the binding's initial value lost. Bindings without ranges remain at their
     initial values. *)
-let sync_run ?verbose ?looping (type context) (module Backend : Backend_type with type context = context)
+let sync_run ?looping (type context) (module Backend : Backend_type with type context = context)
     (jitted : Backend.jitted) t =
-  all_host_to_device ?verbose (module Backend) jitted.context t;
+  all_host_to_device (module Backend) jitted.context t;
   (match looping with
   | None -> jitted.run debug_rt ()
   | Some then_ ->
@@ -193,7 +201,7 @@ let sync_run ?verbose ?looping (type context) (module Backend : Backend_type wit
       in
       sequential_loop ~f jitted.bindings);
   Backend.await @@ Backend.get_ctx_device jitted.context;
-  all_device_to_host ?verbose (module Backend) jitted.context t
+  all_device_to_host (module Backend) jitted.context t
 
 (** Performs one optimization step, potentially in parallel (if [grad_updates] are compiled for different
     devices). All jitted code must have the same bindings. Iterates over bindings with ranges, calling

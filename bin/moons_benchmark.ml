@@ -13,7 +13,6 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   [%track_sexp
     let _debug : string = "started" in
     (fun (started : unit) -> started) ()];
-  let verbose = true in
   let module Backend = (val Train.fresh_backend ~backend_name () : Arrayjit.Backends.Backend) in
   let num_devices = min num_devices @@ Backend.num_devices () in
   let devices = Array.init num_devices ~f:(fun ordinal -> Backend.get_device ~ordinal) in
@@ -87,9 +86,9 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     let update : Operation.Asgns.t = Train.grad_update scalar_loss in
     let sgd : Operation.Asgns.t = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
     let grad_updates : Backend.jitted array =
-      Array.map contexts ~f:(fun ctx -> Backend.jit ctx ~verbose bindings update)
+      Array.map contexts ~f:(fun ctx -> Backend.jit ctx bindings update)
     in
-    let sgd_update : Backend.jitted = Backend.jit ctx0 ~verbose bindings sgd in
+    let sgd_update : Backend.jitted = Backend.jit ctx0 bindings sgd in
     Train.all_host_to_device (module Backend) sgd_update.context scalar_loss;
     Train.all_host_to_device (module Backend) sgd_update.context learning_rate;
     let batch_losses = ref [] in

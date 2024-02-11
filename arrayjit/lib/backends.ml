@@ -22,7 +22,7 @@ module type No_device_backend = sig
   val finalize : context -> unit
   val sexp_of_context : context -> Sexp.t
   val sexp_of_jitted : jitted -> Sexp.t
-  val jit : context -> ?name:string -> ?verbose:bool -> unit Indexing.bindings -> Assignments.t -> jitted
+  val jit : context -> ?name:string -> unit Indexing.bindings -> Assignments.t -> jitted
 
   val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
   (** Cleans up all work on a backend.
@@ -85,8 +85,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     await device;
     Backend.finalize ctx
 
-  let jit { ctx; device } ?name ?verbose bindings code : jitted =
-    let result = Backend.jit ctx ?name ?verbose bindings code in
+  let jit { ctx; device } ?name bindings code : jitted =
+    let result = Backend.jit ctx ?name bindings code in
     let%track_rt_sexp run () =
       assert (Domain.is_main_domain ());
       await device;
@@ -174,11 +174,11 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
   let finalize = finalize
   let sexp_of_context = sexp_of_context
 
-  let jit context ?name ?verbose bindings code =
+  let jit context ?name bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
     let context, bindings, run =
-      jit context ~name ?verbose bindings
-      @@ Assignments.compile_proc ~name ?verbose (Indexing.bound_symbols bindings) code
+      jit context ~name bindings
+      @@ Assignments.compile_proc ~name (Indexing.bound_symbols bindings) code
     in
     { context; run; bindings }
 
@@ -207,11 +207,11 @@ module Dummy_device : No_device_backend with type context = Dummy_backend.contex
   let finalize = finalize
   let sexp_of_context = sexp_of_context
 
-  let jit context ?name ?verbose bindings code =
+  let jit context ?name bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
     let context, bindings, run =
-      jit context ~name ?verbose bindings
-      @@ Assignments.compile_proc ~name ?verbose (Indexing.bound_symbols bindings) code
+      jit context ~name bindings
+      @@ Assignments.compile_proc ~name (Indexing.bound_symbols bindings) code
     in
     { context; run; bindings }
 
@@ -242,11 +242,11 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   let sexp_of_context = sexp_of_context
   let sexp_of_device = sexp_of_device
 
-  let jit context ?name ?verbose bindings code =
+  let jit context ?name bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
     let context, bindings, run =
-      jit context ~name ?verbose bindings
-      @@ Assignments.compile_proc ~name ?verbose (Indexing.bound_symbols bindings) code
+      jit context ~name bindings
+      @@ Assignments.compile_proc ~name (Indexing.bound_symbols bindings) code
     in
     { context; run; bindings }
 

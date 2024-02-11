@@ -9,7 +9,6 @@ val sexp_of_context : context -> Sexplib.Sexp.t
 
 val jit :
   ?name:string ->
-  ?verbose:bool ->
   context ->
   unit Indexing.bindings ->
   Low_level.traced_store * Low_level.t ->

@@ -14,7 +14,7 @@ let%expect_test "Graph drawing recompile" =
   let open Tensor.O in
   let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.set_on_host x.value;
-  let f_jitted = Backend.jit ctx ~verbose:true IDX.empty @@ Train.forward f in
+  let f_jitted = Backend.jit ctx IDX.empty @@ Train.forward f in
   Tensor.print_tree ~with_grad:true ~depth:9 f;
   [%expect
     {|
@@ -130,7 +130,7 @@ let%expect_test "Graph drawing fetch" =
   let%op x = x_flat @| step_sym in
   Train.set_on_host x.value;
   let%op fx = f x in
-  let fx_jitted = Backend.jit ctx ~verbose:true bindings @@ Train.grad_update fx in
+  let fx_jitted = Backend.jit ctx bindings @@ Train.grad_update fx in
   let ys =
     Array.map xs ~f:(fun _ ->
         fx_jitted.run Train.debug_rt ();

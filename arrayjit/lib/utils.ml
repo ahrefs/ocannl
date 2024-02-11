@@ -22,10 +22,22 @@ let mref_add mref ~key ~data ~or_ =
 let mref_add_missing mref key ~f =
   if Map.mem !mref key then () else mref := Map.add_exn !mref ~key ~data:(f ())
 
+module Debug_runtime =
+  (val Minidebug_runtime.debug_file (* ~split_files_after:(1 lsl 16) *)
+         ~for_append:false
+         ~hyperlink:"./" (* ~hyperlink:"vscode://file//wsl.localhost/ubuntu23/home/lukstafi/ocannl/" *)
+         ~values_first_mode:true
+         ~backend:(`Markdown PrintBox_md.Config.(foldable_trees default))
+         (* ~backend:(`Html PrintBox_html.Config.(tree_summary true default))  *)
+         (* ~prune_upto:5 *)
+         (* ~highlight_terms:Re.(alt [ str "(sh_id 46)" ]) *)
+         (* ~exclude_on_path:(Re.str "env") *)
+         "debug")
+
 (** Retrieves [arg_name] argument from the command line or from an environment variable, returns
     [default] if none found. *)
-let get_global_arg ~verbose ~default ~arg_name:n =
-  if verbose then Stdio.printf "Retrieving commandline or environment variable <ocannl_%s>... %!" n;
+let%debug_sexp get_global_arg ~default ~arg_name:n =
+  [%log "Retrieving commandline or environment variable", ("ocannl_" ^ n : string)];
   let variants = [ n; String.uppercase n ] in
   let env_variants =
     List.concat_map variants ~f:(fun n -> [ "ocannl_" ^ n; "OCANNL_" ^ n; "ocannl-" ^ n; "OCANNL-" ^ n ])
@@ -39,7 +51,7 @@ let get_global_arg ~verbose ~default ~arg_name:n =
   with
   | Some (prefix, arg) ->
       let result = String.suffix arg (String.length prefix) in
-      if verbose then Stdio.printf "found <%s> as commandline <%s>.\n%!" result arg;
+      [%log "found", (result : string), "commandline", (arg : string)];
       result
   | None -> (
       match
@@ -47,10 +59,10 @@ let get_global_arg ~verbose ~default ~arg_name:n =
             Option.map (Core.Sys.getenv env_n) ~f:(fun v -> (env_n, v)))
       with
       | Some (env_n, v) ->
-          if verbose then Stdio.printf "found <%s> as environment variable <%s>.\n%!" v env_n;
+          [%log "found", (v : string), "environment", (env_n : string)];
           v
       | None ->
-          if verbose then Stdio.printf "not found, using default <%s>.\n%!" default;
+          [%log "not found, using default", (default : string)];
           default)
 
 let rec union_find ~equal map ~key ~rank =
@@ -86,18 +98,6 @@ let sorted_diff ~compare l1 l2 =
         | _ -> loop acc l1 t2)
   in
   (loop [] l1 l2 [@nontail])
-
-module Debug_runtime =
-  (val Minidebug_runtime.debug_file (* ~split_files_after:(1 lsl 16) *)
-         ~for_append:false
-         ~hyperlink:"./" (* ~hyperlink:"vscode://file//wsl.localhost/ubuntu23/home/lukstafi/ocannl/" *)
-         ~values_first_mode:true
-         ~backend:(`Markdown PrintBox_md.Config.(foldable_trees default))
-         (* ~backend:(`Html PrintBox_html.Config.(tree_summary true default))  *)
-         (* ~prune_upto:5 *)
-         (* ~highlight_terms:Re.(alt [ str "(sh_id 46)" ]) *)
-         (* ~exclude_on_path:(Re.str "env") *)
-         "debug")
 
 (** [parallel_merge merge num_devices] progressively invokes the pairwise [merge] callback, converging
     on the 0th position, with [from] ranging from [0] to [num_devices - 1], and [to_ < from]. *)

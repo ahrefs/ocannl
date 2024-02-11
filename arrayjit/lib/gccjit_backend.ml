@@ -434,7 +434,7 @@ let jit_func ~name (context : context) ctx bindings (traced_store, proc) =
      Context.dump_to_file ctx ~update_locs:true f_name);
   ctx_info
 
-let jit old_context ~name ?verbose:_ bindings compiled =
+let jit old_context ~name bindings compiled =
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
@@ -494,7 +494,7 @@ let merge_from_global ?(name_suffix = "") (context : context) ~dst ~accum ~src b
   in
   let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
   let name = [%string "merge_into_%{dst.Lazy_array.id#Int}%{name_suffix}"] in
-  jit context ~name ~verbose:false bindings (Low_level.compile_proc ~name [] llc)
+  jit context ~name bindings (Low_level.compile_proc ~name [] llc)
 
 let merge ?name_suffix la ~dst ~accum ~(src : context) bindings =
   Option.map (Map.find src.arrays la) ~f:(fun src ->

@@ -66,7 +66,7 @@ let experiment seed ~use_builtin_weight_decay () =
   let module Backend = (val Train.fresh_backend ()) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  let jitted = Backend.jit ctx ~verbose:true bindings (Seq (update, sgd)) in
+  let jitted = Backend.jit ctx bindings (Seq (update, sgd)) in
   Train.all_host_to_device (module Backend) jitted.context scalar_loss;
   Train.all_host_to_device (module Backend) jitted.context learning_rate;
   (* Stdio.print_endline "\n******** scalar_loss **********";

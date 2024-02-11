@@ -7,7 +7,7 @@ module CDSL = Arrayjit.Low_level.CDSL
 
 let%expect_test "Micrograd README basic example" =
   Random.init 0;
-  let module Backend = (val Train.fresh_backend ~verbose:false ()) in
+  let module Backend = (val Train.fresh_backend ()) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
@@ -76,7 +76,7 @@ let%expect_test "Micrograd README basic example" =
 
 let%expect_test "Micrograd half-moons example" =
   Random.init 0;
-  let module Backend = (val Train.fresh_backend ~verbose:false ()) in
+  let module Backend = (val Train.fresh_backend ()) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
   let open Tensor.O in
@@ -114,7 +114,7 @@ let%expect_test "Micrograd half-moons example" =
   Train.set_on_host learning_rate.value;
   let update = Train.grad_update scalar_loss in
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
-  let sgd_jitted = Backend.jit ctx ~verbose:true bindings (Seq (update, sgd)) in
+  let sgd_jitted = Backend.jit ctx bindings (Seq (update, sgd)) in
   Train.all_host_to_device (module Backend) sgd_jitted.context scalar_loss;
   Train.all_host_to_device (module Backend) sgd_jitted.context learning_rate;
   for _epoch = 1 to epochs do

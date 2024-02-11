@@ -55,7 +55,7 @@ let updates (llc : Low_level.t) =
   in
   loop llc
 
-let jit old_context ~name ?verbose:_ bindings (_traced_store, compiled) =
+let jit old_context ~name bindings (_traced_store, compiled) =
   if String.is_empty !backend_state then initialize ();
   let _gets, sets = updates compiled in
   let arrays =
@@ -80,7 +80,7 @@ let jit old_context ~name ?verbose:_ bindings (_traced_store, compiled) =
      let body idcs = Low_level.(Set (dst, idcs, Binop (accum, Get (dst, idcs), Get (src, idcs)))) in
      let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
      let name = [%string "merge_into_%{dst.Lazy_array.id#Int}%{name_suffix}"] in
-     jit context ~name ~verbose:false bindings (Low_level.compile_proc ~name [] llc) *)
+     jit context ~name bindings (Low_level.compile_proc ~name [] llc) *)
 
 let merge ?name_suffix la ~dst ~accum:_ ~src bindings =
   match (Map.find src.arrays la, Map.find dst.arrays la) with

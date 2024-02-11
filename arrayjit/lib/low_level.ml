@@ -683,13 +683,15 @@ let simplify_llc llc =
 type traced_store = (LA.t, traced_array) Base.Hashtbl.t
 type optimized = traced_store * t
 
-let optimize_proc ?(verbose = false) static_indices llc : optimized =
-  let traced_store : traced_store = Hashtbl.create (module Lazy_array) in
+module Debug_runtime = Utils.Debug_runtime
+
+let%debug_sexp optimize_proc static_indices llc =
+  let traced_store = Hashtbl.create (module Lazy_array) in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
   let reverse_node_map = Hashtbl.create (module Indexing.Symbol) in
-  if verbose then Stdio.printf "Low_level.optimize_proc: tracing\n%!";
+  [%log "tracing"];
   visit_llc traced_store reverse_node_map ~max_visits:virtualize_settings.max_visits llc;
-  if verbose then Stdio.printf "Low_level.optimize_proc: optimizing\n%!";
+  [%log "optimizing"];
   let result =
     simplify_llc
     @@ cleanup_virtual_llc reverse_node_map ~static_indices
@@ -791,8 +793,8 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) () ppf llc =
   in
   pp_ll ppf llc
 
-let compile_proc ~name ?(verbose = false) static_indices llc : optimized =
-  if verbose then Stdio.printf "Low_level.compile_proc: generating the initial low-level code\n%!";
+let%debug_sexp compile_proc ~name static_indices llc =
+  [%log "generating the initial low-level code"];
   if Utils.settings.output_debug_files_in_run_directory then (
     let fname = name ^ "-unoptimized.llc" in
     let f = Stdio.Out_channel.create fname in
@@ -803,7 +805,7 @@ let compile_proc ~name ?(verbose = false) static_indices llc : optimized =
     let f = Stdio.Out_channel.create fname in
     let ppf = Stdlib.Format.formatter_of_out_channel f in
     Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ()) llc);
-  let result = optimize_proc ~verbose static_indices llc in
+  let result = optimize_proc static_indices llc in
   if Utils.settings.output_debug_files_in_run_directory then (
     let fname = name ^ ".llc" in
     let f = Stdio.Out_channel.create fname in
@@ -817,17 +819,20 @@ let compile_proc ~name ?(verbose = false) static_indices llc : optimized =
   Hashtbl.iter (fst result) ~f:(fun v ->
       if Option.is_none v.nd.virtual_ then v.nd.virtual_ <- Some (true, 20)
       else if Option.is_none v.nd.device_only then v.nd.device_only <- Some (true, 21);
-      if verbose && Utils.settings.with_debug then
-        Stdlib.Format.printf "Low_level.compile_proc: finalizing %a: virtual %b, device-only %b\n%!" Sexp.pp_hum
-          ([%sexp_of: LA.t] v.nd)
-          (LA.is_true v.nd.virtual_) (LA.is_true v.nd.device_only);
+      if Utils.settings.with_debug then
+        [%log
+          "finalizing",
+            (v.nd : LA.t),
+            "virtual",
+            (LA.is_true v.nd.virtual_ : bool),
+            "device-only",
+            (LA.is_true v.nd.device_only : bool)];
       if LA.isnt_true v.nd.virtual_ && LA.isnt_true v.nd.device_only then (
         assert (Option.value ~default:true !(v.nd.hosted));
         v.nd.hosted := Some true)
       else (
         assert (not @@ Option.value ~default:false !(v.nd.hosted));
         v.nd.hosted := Some false));
-  if verbose then Stdio.printf "Low_level.compile_proc: finished\n%!";
   result
 
 let loop_over_dims dims ~body =
