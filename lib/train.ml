@@ -166,8 +166,8 @@ let%debug_sexp all_host_to_device (type context) (module Backend : Backend_type 
       if b then
         [%log
           "copied",
-            (LA.label a : string),
-            (LA.name a : string),
+            LA.label a,
+            LA.name a,
             "from host to device",
             (Backend.get_ctx_device context |> Backend.to_ordinal : int)])
 
@@ -178,8 +178,8 @@ let%debug_sexp all_device_to_host (type context) (module Backend : Backend_type 
       if b then
         [%log
           "copied",
-            (LA.label a : string),
-            (LA.name a : string),
+            LA.label a,
+            LA.name a,
             "from device",
             (Backend.get_ctx_device context |> Backend.to_ordinal : int),
             "to host"])

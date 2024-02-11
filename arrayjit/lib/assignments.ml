@@ -77,7 +77,7 @@ let%debug_sexp to_low_level (code : t) : Low_level.t =
           "a=",
           (a : LA.t),
           ":",
-          (LA.label a : string),
+          LA.label a,
           (idcs : Indexing.axis_index array),
           (Lazy.force a.dims : int array)];
     assert (Array.length idcs = Array.length (Lazy.force a.LA.dims));
@@ -90,7 +90,7 @@ let%debug_sexp to_low_level (code : t) : Low_level.t =
           "a=",
           (a : LA.t),
           ":",
-          (LA.label a : string),
+          LA.label a,
           (idcs : Indexing.axis_index array),
           (Lazy.force a.dims : int array)];
     assert (Array.length idcs = Array.length (Lazy.force a.LA.dims));

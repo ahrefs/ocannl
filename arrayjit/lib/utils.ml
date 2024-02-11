@@ -37,7 +37,7 @@ module Debug_runtime =
 (** Retrieves [arg_name] argument from the command line or from an environment variable, returns
     [default] if none found. *)
 let%debug_sexp get_global_arg ~default ~arg_name:n =
-  [%log "Retrieving commandline or environment variable", ("ocannl_" ^ n : string)];
+  [%log "Retrieving commandline or environment variable", "ocannl_" ^ n];
   let variants = [ n; String.uppercase n ] in
   let env_variants =
     List.concat_map variants ~f:(fun n -> [ "ocannl_" ^ n; "OCANNL_" ^ n; "ocannl-" ^ n; "OCANNL-" ^ n ])
@@ -51,7 +51,7 @@ let%debug_sexp get_global_arg ~default ~arg_name:n =
   with
   | Some (prefix, arg) ->
       let result = String.suffix arg (String.length prefix) in
-      [%log "found", (result : string), "commandline", (arg : string)];
+      [%log "found", result, "commandline", arg];
       result
   | None -> (
       match
@@ -59,10 +59,10 @@ let%debug_sexp get_global_arg ~default ~arg_name:n =
             Option.map (Core.Sys.getenv env_n) ~f:(fun v -> (env_n, v)))
       with
       | Some (env_n, v) ->
-          [%log "found", (v : string), "environment", (env_n : string)];
+          [%log "found", v, "environment", env_n];
           v
       | None ->
-          [%log "not found, using default", (default : string)];
+          [%log "not found, using default", default];
           default)
 
 let rec union_find ~equal map ~key ~rank =

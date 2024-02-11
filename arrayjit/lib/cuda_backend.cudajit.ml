@@ -208,7 +208,7 @@ let%debug_sexp get_array ~traced_store:_ ctx_info key =
     let global =
       if is_local_only mem then None
       else (
-        if Utils.settings.with_debug then [%log "mem_alloc", (LA.name key : string)];
+        if Utils.settings.with_debug then [%log "mem_alloc", LA.name key];
         set_ctx ctx_info.ctx;
         Some (LA.name key, Cudajit.mem_alloc ~byte_size:size_in_bytes))
     in
@@ -218,7 +218,7 @@ let%debug_sexp get_array ~traced_store:_ ctx_info key =
       [%log
         "creating",
           (key.id : int),
-          (LA.label key : string),
+          LA.label key,
           "mem",
           (backend_info : Sexp.t),
           "on-host",
@@ -395,7 +395,7 @@ let%debug_sexp jit_func ~name (old_context : context) idx_params (traced_store, 
     @@ List.filter_map arrays ~f:(fun la ->
            let tn = Map.find_exn info.ctx_arrays la in
            if Utils.settings.with_debug then
-             [%log "array-used:", (la : LA.t), (LA.label la : string), (tn.mem : mem_properties)];
+             [%log "array-used:", (la : LA.t), LA.label la, (tn.mem : mem_properties)];
            match tn.mem with
            | Local_only -> None
            | Global -> Option.map tn.global ~f:(fun (n, ptr) -> (tn.num_typ ^ " *" ^ n, ptr)))
