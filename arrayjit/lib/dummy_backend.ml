@@ -65,13 +65,11 @@ let jit old_context ~name bindings (_traced_store, compiled) =
   let context = { old_context with arrays } in
   let symbols = Indexing.bound_symbols bindings in
   let jitted_bindings = List.map symbols ~f:(fun s -> (s, ref 0)) in
-  let%track_rt_sexp run () =
+  let%debug_rt_sexp run () =
     Map.iteri sets ~f:(fun ~key ~data ->
         let args = Set.to_list data |> List.map ~f:(fun la -> la.backend_info) in
         key.backend_info <- Sexp.(List (Atom name :: args));
-        Debug_runtime.log_value_sexp
-          ~descr:[%string {|%{name} @ %{context.label}: %{String.concat ~sep:"." key.label} :=|}]
-          ~entry_id:__entry_id ~is_result:false key.backend_info)
+        [%log name, context.label, String.concat ~sep:"." key.label, ":=", (key.backend_info : Sexp.t)])
   in
   (context, jitted_bindings, run)
 
@@ -88,13 +86,12 @@ let merge ?name_suffix la ~dst ~accum:_ ~src bindings =
   | Some src_info, Some dst_info ->
       let symbols = Indexing.bound_symbols bindings in
       let jitted_bindings = List.map symbols ~f:(fun s -> (s, ref 0)) in
-      let%track_rt_sexp run (() : unit) : unit =
+      let%debug_rt_sexp run (() : unit) : unit =
         let name = "merge_from_" ^ Option.value name_suffix ~default:"" in
         let elem = Sexp.(List [ Atom name; !src_info ]) in
-        dst_info := Utils.sexp_append !dst_info ~elem;
-        Debug_runtime.log_value_sexp
-          ~descr:[%string {|merge %{String.concat ~sep:"." la.label}: %{dst.label} := %{src.label}|}]
-          ~entry_id:__entry_id ~is_result:false !dst_info
+        [%log
+          "merge", String.concat ~sep:"." la.label, ":", dst.label, ":=", src.label, "=", (!src_info : Sexp.t)];
+        dst_info := Utils.sexp_append !dst_info ~elem
       in
       Some (dst, jitted_bindings, run)
 
@@ -104,18 +101,14 @@ let%track_sexp from_host context la =
   match Map.find context.arrays la with
   | None -> false
   | Some logs ->
+      [%log "from_host", String.concat ~sep:"." la.label, ":", context.label, ":=", (!logs : Sexp.t)];
       (logs := Sexp.(List [ Atom "from_host"; la.backend_info ]));
-      Debug_runtime.log_value_sexp
-        ~descr:[%string {|from_host %{String.concat ~sep:"." la.label}: %{context.label} :=|}]
-        ~entry_id:__entry_id ~is_result:false !logs;
       true
 
 let%track_sexp to_host (context : context) la =
   match Map.find context.arrays la with
   | None -> false
   | Some logs ->
+      [%log "to_host", String.concat ~sep:"." la.label, "=", context.label, (!logs : Sexp.t)];
       la.backend_info <- Sexp.(List [ Atom "to_host"; !logs ]);
-      Debug_runtime.log_value_sexp
-        ~descr:[%string {|to_host %{String.concat ~sep:"." la.label} := %{context.label}|}]
-        ~entry_id:__entry_id ~is_result:false la.backend_info;
       true

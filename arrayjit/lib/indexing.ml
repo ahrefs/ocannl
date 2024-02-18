@@ -47,7 +47,7 @@ let bound_symbols bs =
 
 (** Helps jitting the bindings. *)
 type 'a variadic = Result of (unit -> 'a) | Param of int ref * (int -> 'a) variadic
-
+ 
 type jitted_bindings = (static_symbol, int ref) List.Assoc.t [@@deriving sexp_of]
 
 let rec apply : 'a. 'a variadic -> 'a =

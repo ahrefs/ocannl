@@ -24,15 +24,16 @@ let mref_add_missing mref key ~f =
 
 module Debug_runtime =
   (val Minidebug_runtime.debug_file (* ~split_files_after:(1 lsl 16) *)
-         ~for_append:false
-         ~hyperlink:"./" (* ~hyperlink:"vscode://file//wsl.localhost/ubuntu23/home/lukstafi/ocannl/" *)
-         ~values_first_mode:true
-         ~backend:(`Markdown PrintBox_md.Config.(foldable_trees default))
+         ~time_tagged:true ~for_append:false (* ~hyperlink:"./" *)
+         ~hyperlink:"vscode://file//wsl.localhost/ubuntu23/home/lukstafi/ocannl/" ~values_first_mode:true
+         ~backend:(`Html Minidebug_runtime.default_html_config)
          (* ~backend:(`Html PrintBox_html.Config.(tree_summary true default))  *)
          (* ~prune_upto:5 *)
          (* ~highlight_terms:Re.(alt [ str "(sh_id 46)" ]) *)
          (* ~exclude_on_path:(Re.str "env") *)
          "debug")
+(* (val let debug_ch = Stdlib.open_out "debug.log" in
+     Minidebug_runtime.debug_flushing ~debug_ch ~time_tagged:false ~print_entry_ids:true ()) *)
 
 (** Retrieves [arg_name] argument from the command line or from an environment variable, returns
     [default] if none found. *)

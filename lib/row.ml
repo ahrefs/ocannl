@@ -274,17 +274,16 @@ let take_from_end (l : dim list) (n : int) : dim list = List.rev @@ List.take (L
 
 module Debug_runtime = Utils.Debug_runtime
 
-let%debug_sexp apply_constraint ~finish r constr env =
+let apply_constraint ~finish r constr env =
   match constr with
   | Unconstrained -> ([], env)
   | Total_elems n -> (
       match r with
       | { dims; bcast = Row_var _; _ } when finish -> (
           let vars, nonvars = List.partition_tf dims ~f:is_var in
-          let known : int = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
-          let rem : int = n / known in
+          let known = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
+          let rem = n / known in
           if rem = 0 then (
-            if Utils.settings.with_debug then [%log "shape-error", (env : environment)];
             raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ]))
           else if rem = 1 then ([], env)
           else
@@ -297,17 +296,15 @@ let%debug_sexp apply_constraint ~finish r constr env =
       | { bcast = Row_var _; _ } -> ([ Row_constr { r; constr } ], env (* Wait for more shape inference. *))
       | { dims; bcast = Broadcastable; _ } -> (
           let vars, nonvars = List.partition_tf dims ~f:is_var in
-          let known : int = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
-          let rem : int = n / known in
+          let known = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
+          let rem = n / known in
           if rem = 0 then (
-            if Utils.settings.with_debug then [%log "shape-error", (env : environment)];
             raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ]))
           else
             match vars with
             | [] ->
                 if rem = 1 then ([], env)
                 else (
-                  if Utils.settings.with_debug then [%log "shape-error", (env : environment)];
                   raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ]))
             | [ Var v ] -> ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } ], env)
             | Var v :: _ when finish -> ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } ], env)

@@ -83,12 +83,12 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     Train.set_on_host learning_rate.value;
     Train.set_on_host scalar_loss.value;
     let weight_decay : float = 0.0001 in
-    let update : Operation.Asgns.t = Train.grad_update scalar_loss in
-    let sgd : Operation.Asgns.t = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
-    let grad_updates : Backend.jitted array =
+    let update = Train.grad_update scalar_loss in
+    let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
+    let grad_updates =
       Array.map contexts ~f:(fun ctx -> Backend.jit ctx bindings update)
     in
-    let sgd_update : Backend.jitted = Backend.jit ctx0 bindings sgd in
+    let sgd_update = Backend.jit ctx0 bindings sgd in
     Train.all_host_to_device (module Backend) sgd_update.context scalar_loss;
     Train.all_host_to_device (module Backend) sgd_update.context learning_rate;
     let batch_losses = ref [] in

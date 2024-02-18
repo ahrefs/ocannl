@@ -68,7 +68,7 @@ let sequential = List.fold_right ~init:Noop ~f:(fun st sts -> Seq (st, sts))
 
 module Debug_runtime = Utils.Debug_runtime
 
-let%debug_sexp to_low_level (code : t) : Low_level.t =
+let%debug_sexp to_low_level code =
   let open Indexing in
   let get a idcs =
     if not (Array.length idcs = Array.length (Lazy.force a.LA.dims)) then

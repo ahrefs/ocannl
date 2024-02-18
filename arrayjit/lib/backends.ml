@@ -57,6 +57,9 @@ module type Backend = sig
   val get_all_devices : unit -> device array
 end
 
+let forget_printbox (module Runtime : Minidebug_runtime.PrintBox_runtime) =
+  (module Runtime : Minidebug_runtime.Debug_runtime)
+
 module Multicore_backend (Backend : No_device_backend) : Backend = struct
   module Domain = Domain [@warning "-3"]
 
@@ -111,28 +114,23 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let num_devices () = Domain.recommended_domain_count () - 1
 
+  let get_debug name =
+    Minidebug_runtime.debug_file (* ~split_files_after:(1 lsl 16) *)
+      ~time_tagged:true ~global_prefix:name ~for_append:false (* ~hyperlink:"./" *)
+      ~hyperlink:"vscode://file//wsl.localhost/ubuntu23/home/lukstafi/ocannl/"
+      ~values_first_mode:true (* ~backend:(`Markdown PrintBox_md.Config.(foldable_trees default)) *)
+      ~backend:(`Html Minidebug_runtime.default_html_config)
+    @@ "debug-" ^ name
   (*
      let get_debug name =
-       Minidebug_runtime.debug_file (* ~split_files_after:(1 lsl 16) *)
-        ~global_prefix:name
-         ~for_append:false
-         ~hyperlink:"./" (* ~hyperlink:"vscode://file//wsl.localhost/ubuntu23/home/lukstafi/ocannl/" *)
-         ~values_first_mode:true
-         ~backend:(`Markdown PrintBox_md.Config.(foldable_trees default))
-       (* ~backend:(`Html PrintBox_html.Config.(tree_summary true default))  *)
-       @@ "debug-"
-       ^ name *)
-
-  let get_debug name =
-    let debug_ch = Stdlib.open_out ("debug-" ^ name ^ ".log") in
-    Minidebug_runtime.debug_flushing ~debug_ch ~time_tagged:false ~global_prefix:name ()
+       let debug_ch = Stdlib.open_out ("debug-" ^ name ^ ".log") in
+       Minidebug_runtime.debug_flushing ~debug_ch ~time_tagged:false ~print_entry_ids:true ~global_prefix:name () *)
 
   let%track_sexp spinup_device ~(ordinal : int) =
     let next_task = ref None in
     let keep_spinning = ref true in
-    let runtime = get_debug ("dev-" ^ Int.to_string ordinal) in
-    let module Debug_runtime = (val runtime) in
-    let%track_sexp worker () =
+    let runtime = forget_printbox @@ get_debug ("dev-" ^ Int.to_string ordinal) in
+    let worker () =
       while !keep_spinning do
         Option.iter !next_task ~f:(fun f ->
             f runtime ();
@@ -177,8 +175,7 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
   let jit context ?name bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
     let context, bindings, run =
-      jit context ~name bindings
-      @@ Assignments.compile_proc ~name (Indexing.bound_symbols bindings) code
+      jit context ~name bindings @@ Assignments.compile_proc ~name (Indexing.bound_symbols bindings) code
     in
     { context; run; bindings }
 
@@ -210,8 +207,7 @@ module Dummy_device : No_device_backend with type context = Dummy_backend.contex
   let jit context ?name bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
     let context, bindings, run =
-      jit context ~name bindings
-      @@ Assignments.compile_proc ~name (Indexing.bound_symbols bindings) code
+      jit context ~name bindings @@ Assignments.compile_proc ~name (Indexing.bound_symbols bindings) code
     in
     { context; run; bindings }
 
@@ -245,8 +241,7 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   let jit context ?name bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
     let context, bindings, run =
-      jit context ~name bindings
-      @@ Assignments.compile_proc ~name (Indexing.bound_symbols bindings) code
+      jit context ~name bindings @@ Assignments.compile_proc ~name (Indexing.bound_symbols bindings) code
     in
     { context; run; bindings }
 
