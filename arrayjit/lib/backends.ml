@@ -117,7 +117,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let get_debug name =
     Minidebug_runtime.debug_file (* ~split_files_after:(1 lsl 16) *)
       ~time_tagged:true ~global_prefix:name ~for_append:false (* ~hyperlink:"./" *)
-      ~hyperlink:"vscode://file//wsl.localhost/ubuntu23/home/lukstafi/ocannl/"
+      ~hyperlink:"vscode://file//wsl.localhost/Ubuntu/home/lukstafi/ocannl/"
       ~values_first_mode:true (* ~backend:(`Markdown PrintBox_md.Config.(foldable_trees default)) *)
       ~backend:(`Html Minidebug_runtime.default_html_config)
     @@ "debug-" ^ name
@@ -126,10 +126,11 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
        let debug_ch = Stdlib.open_out ("debug-" ^ name ^ ".log") in
        Minidebug_runtime.debug_flushing ~debug_ch ~time_tagged:false ~print_entry_ids:true ~global_prefix:name () *)
 
-  let%track_sexp spinup_device ~(ordinal : int) =
+  let%debug_sexp spinup_device ~(ordinal : int) =
     let next_task = ref None in
     let keep_spinning = ref true in
     let runtime = forget_printbox @@ get_debug ("dev-" ^ Int.to_string ordinal) in
+    [%log "spinup-dev", (ordinal:int)];
     let worker () =
       while !keep_spinning do
         Option.iter !next_task ~f:(fun f ->

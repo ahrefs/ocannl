@@ -25,8 +25,9 @@ let mref_add_missing mref key ~f =
 module Debug_runtime =
   (val Minidebug_runtime.debug_file (* ~split_files_after:(1 lsl 16) *)
          ~time_tagged:true ~for_append:false (* ~hyperlink:"./" *)
-         ~hyperlink:"vscode://file//wsl.localhost/ubuntu23/home/lukstafi/ocannl/" ~values_first_mode:true
+         ~hyperlink:"vscode://file//wsl.localhost/Ubuntu/home/lukstafi/ocannl/" ~values_first_mode:true
          ~backend:(`Html Minidebug_runtime.default_html_config)
+         ~snapshot_every_sec:4.
          (* ~backend:(`Html PrintBox_html.Config.(tree_summary true default))  *)
          (* ~prune_upto:5 *)
          (* ~highlight_terms:Re.(alt [ str "(sh_id 46)" ]) *)
