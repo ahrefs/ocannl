@@ -85,9 +85,7 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     let weight_decay : float = 0.0001 in
     let update = Train.grad_update scalar_loss in
     let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
-    let grad_updates =
-      Array.map contexts ~f:(fun ctx -> Backend.jit ctx bindings update)
-    in
+    let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit ctx bindings update) in
     let sgd_update = Backend.jit ctx0 bindings sgd in
     Train.all_host_to_device (module Backend) sgd_update.context scalar_loss;
     Train.all_host_to_device (module Backend) sgd_update.context learning_rate;
@@ -151,7 +149,7 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     let result_jitted =
       Backend.jit sgd_update.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
     in
-    let callback (x, y) =
+    let callback ((x : float), (y : float)) : bool =
       Tensor.set_values point [| x; y |];
       (* For the gccjit backend, point is only on host, not on device. For cuda, this will be needed. *)
       ignore (Backend.from_host result_jitted.context point.value : bool);

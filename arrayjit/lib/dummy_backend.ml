@@ -67,7 +67,7 @@ let jit old_context ~name bindings (_traced_store, compiled) =
   let jitted_bindings = List.map symbols ~f:(fun s -> (s, ref 0)) in
   let%debug_rt_sexp run () =
     Map.iteri sets ~f:(fun ~key ~data ->
-        let args = Set.to_list data |> List.map ~f:(fun la -> la.backend_info) in
+        let args = Set.to_list data |> List.map ~f:(fun la -> Sexp.Atom (String.concat ~sep:"." la.label)) in
         key.backend_info <- Sexp.(List (Atom name :: args));
         [%log name, context.label, String.concat ~sep:"." key.label, ":=", (key.backend_info : Sexp.t)])
   in

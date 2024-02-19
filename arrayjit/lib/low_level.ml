@@ -212,7 +212,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
 
 module Debug_runtime = Utils.Debug_runtime
 
-let%debug_sexp check_and_store_virtual traced static_indices top_llc =
+let check_and_store_virtual traced static_indices top_llc =
   let exception Non_virtual of int in
   let static_indices =
     Set.of_list (module Indexing.Symbol) @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
