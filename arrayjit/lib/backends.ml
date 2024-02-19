@@ -20,6 +20,8 @@ module type No_device_backend = sig
   (** [label] is usually the backend name concatenated with the device number. *)
 
   val finalize : context -> unit
+  (** Finalizes (just) the context. *)
+
   val sexp_of_context : context -> Sexp.t
   val sexp_of_jitted : jitted -> Sexp.t
   val jit : context -> ?name:string -> unit Indexing.bindings -> Assignments.t -> jitted
@@ -66,6 +68,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   type device = {
     next_task : (((module Minidebug_runtime.Debug_runtime) -> unit -> unit) option ref[@sexp.opaque]);
     keep_spinning : bool ref;
+    wait_for_device : (Utils.waiter[@sexp.opaque]);
+    wait_for_work : (Utils.waiter[@sexp.opaque]);
     ordinal : int;
     domain : (unit Domain.t[@sexp.opaque]);
   }
@@ -80,8 +84,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let is_initialized = Backend.is_initialized
 
   let await device =
-    while Option.is_some !(device.next_task) do
-      Domain.cpu_relax ()
+    while !(device.keep_spinning) && Option.is_some !(device.next_task) do
+      device.wait_for_device.await ()
     done
 
   let finalize { device; ctx } =
@@ -93,7 +97,9 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     let%track_rt_sexp run () =
       assert (Domain.is_main_domain ());
       await device;
-      device.next_task := Some result.run
+      if not !(device.keep_spinning) then invalid_arg "Multicore_backend.jit: device not available";
+      device.next_task := Some result.run;
+      device.wait_for_work.release ()
     in
     { context = { ctx = result.context; device }; run; bindings = result.bindings }
 
@@ -108,7 +114,9 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         let%track_rt_sexp run () =
           assert (Domain.is_main_domain ());
           await device;
-          device.next_task := Some result.run
+          if not !(device.keep_spinning) then invalid_arg "Multicore_backend.merge: device not available";
+          device.next_task := Some result.run;
+          device.wait_for_work.release ()
         in
         { context = { ctx = result.context; device }; run; bindings = result.bindings })
 
@@ -129,17 +137,21 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let%debug_sexp spinup_device ~(ordinal : int) =
     let next_task = ref None in
     let keep_spinning = ref true in
+    let wait_for_device = Utils.waiter () in
+    let wait_for_work = Utils.waiter () in
     let runtime = forget_printbox @@ get_debug ("dev-" ^ Int.to_string ordinal) in
-    [%log "spinup-dev", (ordinal:int)];
+    [%log "spinup-dev", (ordinal : int)];
     let worker () =
       while !keep_spinning do
-        Option.iter !next_task ~f:(fun f ->
-            f runtime ();
-            next_task := None);
-        Domain.cpu_relax ()
+        while Option.is_none !next_task do
+          wait_for_work.await ()
+        done;
+        Option.value_exn !next_task runtime ();
+        next_task := None;
+        wait_for_device.release ()
       done
     in
-    { next_task; keep_spinning; ordinal; domain = Domain.spawn worker }
+    { next_task; keep_spinning; wait_for_device; wait_for_work; ordinal; domain = Domain.spawn worker }
 
   let devices = Array.init (num_devices ()) ~f:(fun ordinal -> spinup_device ~ordinal)
   let get_all_devices () = devices
@@ -147,8 +159,11 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let%track_sexp unsafe_cleanup ?(unsafe_shutdown = false) () =
     assert (Domain.is_main_domain ());
     let cleanup ordinal device =
+      await device;
       device.keep_spinning := false;
       Domain.join device.domain;
+      device.wait_for_device.finalize ();
+      device.wait_for_work.finalize ();
       if not unsafe_shutdown then devices.(ordinal) <- spinup_device ~ordinal
     in
     Array.iteri devices ~f:cleanup;

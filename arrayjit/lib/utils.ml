@@ -26,8 +26,7 @@ module Debug_runtime =
   (val Minidebug_runtime.debug_file (* ~split_files_after:(1 lsl 16) *)
          ~time_tagged:true ~for_append:false (* ~hyperlink:"./" *)
          ~hyperlink:"vscode://file//wsl.localhost/Ubuntu/home/lukstafi/ocannl/" ~values_first_mode:true
-         ~backend:(`Html Minidebug_runtime.default_html_config)
-         ~snapshot_every_sec:4.
+         ~backend:(`Html Minidebug_runtime.default_html_config) ~snapshot_every_sec:4.
          (* ~backend:(`Html PrintBox_html.Config.(tree_summary true default))  *)
          (* ~prune_upto:5 *)
          (* ~highlight_terms:Re.(alt [ str "(sh_id 46)" ]) *)
@@ -117,6 +116,25 @@ let%debug_sexp parallel_merge merge (num_devices : int) =
     else if from > 0 then loop 0 from
   in
   loop 0 (num_devices - 1)
+
+type waiter = { await : unit -> unit; release : unit -> unit; finalize : unit -> unit }
+
+let waiter () =
+  let pipe_inp, pipe_out = Unix.pipe ~cloexec:true () in
+  let await () =
+    let _ = Unix.select [ pipe_inp ] [] [] (-1.0) in
+    let n = Unix.read pipe_inp (Bytes.create 1) 0 1 in
+    assert (n = 1)
+  in
+  let release () =
+    let n = Unix.write pipe_out (Bytes.create 1) 0 1 in
+    assert (n = 1)
+  in
+  let finalize () =
+    Unix.close pipe_inp;
+    Unix.close pipe_out
+  in
+  { await; release; finalize }
 
 type settings = {
   mutable debug_log_jitted : bool;
