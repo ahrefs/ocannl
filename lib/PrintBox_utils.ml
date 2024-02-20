@@ -73,6 +73,7 @@ type plot_spec =
   | Scatterplot of { points : (float * float) array; pixel : string }
   | Line_plot of { points : float array; pixel : string }
   | Boundary_map of { callback : float * float -> bool; pixel_true : string; pixel_false : string }
+  | Line_plot_adaptive of { callback : float -> float; pixel : string }
 
 let plot_canvas ?canvas ?size specs =
   let open Float in
@@ -96,13 +97,15 @@ let plot_canvas ?canvas ?size specs =
     Array.concat_map specs ~f:(function
       | Scatterplot { points; _ } -> Array.map ~f:fst points
       | Line_plot _ -> [||]
-      | Boundary_map _ -> [||])
+      | Boundary_map _ -> [||]
+      | Line_plot_adaptive _ -> [||])
   in
   let all_y_points =
     Array.concat_map specs ~f:(function
       | Scatterplot { points; _ } -> Array.map ~f:snd points
       | Line_plot { points; _ } -> points
-      | Boundary_map _ -> [||])
+      | Boundary_map _ -> [||]
+      | Line_plot_adaptive _ -> [||])
   in
   let minx = if Array.is_empty all_x_points then 0. else Array.reduce_exn all_x_points ~f:min in
   let miny = if Array.is_empty all_y_points then 0. else Array.reduce_exn all_y_points ~f:min in
@@ -110,9 +113,7 @@ let plot_canvas ?canvas ?size specs =
     if Array.is_empty all_x_points then of_int Int.(Array.length all_y_points - 1)
     else Array.reduce_exn all_x_points ~f:max
   in
-  let maxy =
-    if Array.is_empty all_y_points then maxx - minx else Array.reduce_exn all_y_points ~f:max
-  in
+  let maxy = if Array.is_empty all_y_points then maxx - minx else Array.reduce_exn all_y_points ~f:max in
   let spanx = maxx - minx in
   let spanx = Float.(if spanx < epsilon_float then 1.0 else spanx) in
   let spany = maxy - miny in
@@ -143,7 +144,13 @@ let plot_canvas ?canvas ?size specs =
                 if String.is_empty @@ String.strip pix then
                   let x = (of_int i * spanx / of_int Int.(dimx - 1)) + minx in
                   let y = (of_int Int.(dimy - 1 - dmj) * spany / of_int Int.(dimy - 1)) + miny in
-                  canvas.(dmj).(i) <- (if callback (x, y) then pixel_true else pixel_false))));
+                  canvas.(dmj).(i) <- (if callback (x, y) then pixel_true else pixel_false)))
+    | Line_plot_adaptive { callback; pixel } ->
+        Array.iteri canvas.(0) ~f:(fun i pix ->
+                if String.is_empty @@ String.strip pix then
+                  let x = (of_int i * spanx / of_int Int.(dimx - 1)) + minx in
+                  let y = callback x in
+                  Option.iter (scale_1d y) ~f:(fun j -> canvas.(j).(i) <- pixel)));
   (minx, miny, maxx, maxy, canvas)
 
 let concise_float = Arrayjit.Ndarray.concise_float
