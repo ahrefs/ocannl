@@ -123,11 +123,14 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let num_devices () = Domain.recommended_domain_count () - 1
 
   let get_debug name =
-    Minidebug_runtime.debug_file (* ~split_files_after:(1 lsl 16) *)
-      ~time_tagged:true ~global_prefix:name ~for_append:false (* ~hyperlink:"./" *)
-      ~hyperlink:"vscode://file//wsl.localhost/Ubuntu/home/lukstafi/ocannl/"
-      ~values_first_mode:true (* ~backend:(`Markdown PrintBox_md.Config.(foldable_trees default)) *)
-      ~backend:(`Html Minidebug_runtime.default_html_config)
+    let snapshot_every_sec = Utils.get_global_arg ~default:"" ~arg_name:"snapshot_every_sec" in
+    let snapshot_every_sec =
+      if String.is_empty snapshot_every_sec then None else Float.of_string_opt snapshot_every_sec
+    in
+    let time_tagged = Bool.of_string @@ Utils.get_global_arg ~default:"true" ~arg_name:"time_tagged" in
+    Minidebug_runtime.debug_file ~time_tagged ~global_prefix:name ~for_append:false
+      ~hyperlink:(Utils.get_global_arg ~default:"./" ~arg_name:"hyperlink_prefix")
+      ~values_first_mode:true ~backend:(`Html Minidebug_runtime.default_html_config) ?snapshot_every_sec
     @@ "debug-" ^ name
   (*
      let get_debug name =

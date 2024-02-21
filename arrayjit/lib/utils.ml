@@ -22,23 +22,37 @@ let mref_add mref ~key ~data ~or_ =
 let mref_add_missing mref key ~f =
   if Map.mem !mref key then () else mref := Map.add_exn !mref ~key ~data:(f ())
 
-module Debug_runtime =
-  (val Minidebug_runtime.debug_file (* ~split_files_after:(1 lsl 16) *)
-         ~time_tagged:true ~for_append:false (* ~hyperlink:"./" *)
-         ~hyperlink:"vscode://file//wsl.localhost/Ubuntu/home/lukstafi/ocannl/" ~values_first_mode:true
-         ~backend:(`Html Minidebug_runtime.default_html_config) ~snapshot_every_sec:4.
-         (* ~backend:(`Html PrintBox_html.Config.(tree_summary true default))  *)
-         (* ~prune_upto:5 *)
-         (* ~highlight_terms:Re.(alt [ str "(sh_id 46)" ]) *)
-         (* ~exclude_on_path:(Re.str "env") *)
-         "debug")
-(* (val let debug_ch = Stdlib.open_out "debug.log" in
-     Minidebug_runtime.debug_flushing ~debug_ch ~time_tagged:false ~print_entry_ids:true ()) *)
+type settings = {
+  mutable debug_log_jitted : bool;
+  mutable output_debug_files_in_run_directory : bool;
+  mutable with_debug : bool;
+  mutable fixed_state_for_init : int option;
+  mutable print_decimals_precision : int;  (** When rendering arrays etc., outputs this many decimal digits. *)
+}
+[@@deriving sexp]
+
+let settings =
+  {
+    debug_log_jitted = false;
+    output_debug_files_in_run_directory = false;
+    with_debug = false;
+    fixed_state_for_init = None;
+    print_decimals_precision = 2;
+  }
+
+let accessed_global_args = Hash_set.create (module String)
+
+let config_file_args =
+  Stdio.In_channel.read_lines "ocannl_config"
+  |> List.map ~f:(String.split ~on:'=')
+  |> List.concat_map ~f:(function [] -> [] | key :: vals -> List.map vals ~f:(fun v -> (key, v)))
+  |> Hashtbl.of_alist_exn (module String)
 
 (** Retrieves [arg_name] argument from the command line or from an environment variable, returns
     [default] if none found. *)
-let%debug_sexp get_global_arg ~default ~arg_name:n =
-  [%log "Retrieving commandline or environment variable", "ocannl_" ^ n];
+let get_global_arg ~default ~arg_name:n =
+  if settings.with_debug then Stdio.printf "Retrieving commandline or environment variable %s\n%!" n;
+  Hash_set.add accessed_global_args n;
   let variants = [ n; String.uppercase n ] in
   let env_variants =
     List.concat_map variants ~f:(fun n -> [ "ocannl_" ^ n; "OCANNL_" ^ n; "ocannl-" ^ n; "OCANNL-" ^ n ])
@@ -52,7 +66,7 @@ let%debug_sexp get_global_arg ~default ~arg_name:n =
   with
   | Some (prefix, arg) ->
       let result = String.suffix arg (String.length prefix) in
-      [%log "found", result, "commandline", arg];
+      if settings.with_debug then Stdio.printf "Found %s, commandline %s\n%!" result arg;
       result
   | None -> (
       match
@@ -60,11 +74,31 @@ let%debug_sexp get_global_arg ~default ~arg_name:n =
             Option.map (Core.Sys.getenv env_n) ~f:(fun v -> (env_n, v)))
       with
       | Some (env_n, v) ->
-          [%log "found", v, "environment", env_n];
+          if settings.with_debug then Stdio.printf "Found %s, environment %s\n%!" v env_n;
           v
-      | None ->
-          [%log "not found, using default", default];
-          default)
+      | None -> (
+          match
+            List.find_map env_variants ~f:(fun env_n ->
+                Option.map (Hashtbl.find config_file_args env_n) ~f:(fun v -> (env_n, v)))
+          with
+          | Some (env_n, v) ->
+              if settings.with_debug then Stdio.printf "Found %s, config file %s\n%!" v env_n;
+              v
+          | None ->
+              if settings.with_debug then Stdio.printf "Not found, using default %s\n%!" default;
+              default))
+
+module Debug_runtime =
+  (val let snapshot_every_sec = get_global_arg ~default:"" ~arg_name:"snapshot_every_sec" in
+       let snapshot_every_sec =
+         if String.is_empty snapshot_every_sec then None else Float.of_string_opt snapshot_every_sec
+       in
+       let time_tagged = Bool.of_string @@ get_global_arg ~default:"true" ~arg_name:"time_tagged" in
+       Minidebug_runtime.debug_file ~time_tagged ~for_append:false
+         ~hyperlink:(get_global_arg ~default:"./" ~arg_name:"hyperlink_prefix")
+         ~values_first_mode:true ~backend:(`Html Minidebug_runtime.default_html_config) ?snapshot_every_sec
+         (* ~prune_upto:5 *)
+         "debug")
 
 let rec union_find ~equal map ~key ~rank =
   match Map.find map key with
@@ -135,24 +169,6 @@ let waiter () =
     Unix.close pipe_out
   in
   { await; release; finalize }
-
-type settings = {
-  mutable debug_log_jitted : bool;
-  mutable output_debug_files_in_run_directory : bool;
-  mutable with_debug : bool;
-  mutable fixed_state_for_init : int option;
-  mutable print_decimals_precision : int;  (** When rendering arrays etc., outputs this many decimal digits. *)
-}
-[@@deriving sexp]
-
-let settings =
-  {
-    debug_log_jitted = false;
-    output_debug_files_in_run_directory = false;
-    with_debug = false;
-    fixed_state_for_init = None;
-    print_decimals_precision = 2;
-  }
 
 let sexp_append ~elem = function
   | Sexp.List l -> Sexp.List (elem :: l)
