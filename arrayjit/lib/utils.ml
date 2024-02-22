@@ -180,3 +180,7 @@ let sexp_mem ~elem = function
 let rec sexp_deep_mem ~elem = function
   | Sexp.Atom _ as e2 -> Sexp.equal elem e2
   | Sexp.List l -> Sexp.(List.mem ~equal l elem) || List.exists ~f:(sexp_deep_mem ~elem) l
+
+let split_with_seps sep s =
+  let tokens = Re.split_full sep s in
+  List.map tokens ~f:(function `Text tok -> tok | `Delim sep -> Re.Group.get sep 0)

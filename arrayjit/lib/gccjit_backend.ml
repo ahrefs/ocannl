@@ -463,6 +463,8 @@ let jit_func ~name ~log_file_name (context : context) ctx bindings (traced_store
      Context.dump_to_file ctx ~update_locs:true f_name);
   ctx_info
 
+let header_sep = let open Re in compile (seq [str " "; opt any; str "="; str " "])
+
 let jit old_context ~name bindings compiled =
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
@@ -490,7 +492,17 @@ let jit old_context ~name bindings compiled =
     let module Debug_runtime = (val _debug_runtime) in
     Indexing.apply run_variadic;
     if Utils.settings.debug_log_jitted then
-      Stdio.In_channel.read_lines log_file_name |> List.iter ~f:(fun line -> [%log line])
+      Stdio.In_channel.read_lines log_file_name
+      |> List.iter ~f:(fun line ->
+             match Utils.split_with_seps header_sep line with
+             | [] | [ "" ] -> ()
+             | [ comment ] -> [%log comment]
+             | header1 :: assign1 :: header2 :: body ->
+                 let header = String.concat [ header1; assign1; header2 ] in
+                 let body = String.concat body in
+                 let message = Sexp.(List [ Atom header; Atom body ]) in
+                 [%log (message : Sexp.t)]
+             | _ -> [%log line])
   in
   Context.release ctx;
   (context, Indexing.jitted_bindings bindings run_variadic, run)
