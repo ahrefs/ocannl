@@ -37,9 +37,9 @@ let updates (llc : Low_level.t) =
     | Low_level.Seq (s1, s2) -> merge (loop s1) (loop s2)
     | Low_level.For_loop { index = _; from_ = _; to_ = _; body; trace_it = _ } -> loop body
     | Low_level.Zero_out a -> (non, Map.singleton (module LA) a non)
-    | Low_level.Set (a, _, v) | Low_level.Set_local ({ nd = a; scope_id = _ }, v) ->
-        let gets, env = accessors v in
-        (non, Utils.map_merge ~f:Set.union (Map.singleton (module LA) a gets) env)
+    | Low_level.Set { array; llv; _ } | Low_level.Set_local ({ nd = array; scope_id = _ }, llv) ->
+        let gets, env = accessors llv in
+        (non, Utils.map_merge ~f:Set.union (Map.singleton (module LA) array gets) env)
   and accessors v =
     match v with
     | Low_level.Local_scope { id = { nd = a; scope_id = _ }; prec = _; body; orig_indices = _ } ->

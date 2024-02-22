@@ -257,28 +257,35 @@ let jit_code ~traced_store info ppf llc : unit =
         let tn = Low_level.(get_node traced_store array) in
         assert tn.zero_initialized
         (* The initialization will be emitted by get_array. *)
-    | Set (array, idcs, v) ->
+    | Set { array; idcs; llv; debug } ->
         let array = get_array ~traced_store info array in
         let old_locals = !locals in
         let loop_f = pp_float ~num_typ:array.num_typ ~is_double:array.is_double in
         let loop_debug_f = debug_float ~num_typ:array.num_typ ~is_double:array.is_double in
-        let num_closing_braces = pp_top_locals ppf v in
+        let num_closing_braces = pp_top_locals ppf llv in
         (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
-        fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr array) pp_array_offset (idcs, array.dims) loop_f v;
+        fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr array) pp_array_offset (idcs, array.dims) loop_f
+          llv;
         (if Utils.settings.debug_log_jitted then
-           let v_code, v_idcs = loop_debug_f v in
+           let v_code, v_idcs = loop_debug_f llv in
+           let pp_args =
+             pp_print_list @@ fun ppf -> function
+             | `Accessor idx ->
+                 pp_comma ppf ();
+                 pp_array_offset ppf idx
+             | `Value v ->
+                 pp_comma ppf ();
+                 pp_print_string ppf v
+           in
+           let run_ptr_debug = get_run_ptr_debug array in
+           let run_ptr = get_run_ptr array in
+           let offset = (idcs, array.dims) in
+           (* FIXME: does this work or should \n be \\n? *)
+           let debug_line = "# " ^ String.substr_replace_all debug ~pattern:"\n" ~with_:"$" ^ "\n" in
            fprintf ppf
-             "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"DEBUG LOG: %s[%%u] = \
-              %%f = %s\\n\"@],@ %a,@ %s[%a]%a);@ @]}"
-             (get_run_ptr_debug array) v_code pp_array_offset (idcs, array.dims) (get_run_ptr array)
-             pp_array_offset (idcs, array.dims)
-             ( pp_print_list @@ fun ppf -> function
-               | `Accessor idx ->
-                   pp_comma ppf ();
-                   pp_array_offset ppf idx
-               | `Value v ->
-                   pp_comma ppf ();
-                   pp_print_string ppf v )
+             "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(\"%s\");@ \
+              printf(@[<h>\"%s[%%u] = %%f = %s\\n\"@],@ %a,@ %s[%a]%a);@ @]}"
+             debug_line run_ptr_debug v_code pp_array_offset offset run_ptr pp_array_offset offset pp_args
              v_idcs);
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]@ }@,"

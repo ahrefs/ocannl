@@ -278,11 +278,13 @@ let jit_code ~name ~log_file ~(env : Gccjit.rvalue Indexing.environment) ({ ctx;
         let f_ptr = Type.get ctx Type.File_ptr in
         Function.create ctx Imported (Type.get ctx Void) "fflush" [ Param.create ctx f_ptr "f" ])
   in
-  let debug_log_assignment ~env idcs array accum_op value v_code =
+  let debug_log_assignment ~env debug idcs array accum_op value v_code =
     match (log_file, fprintf, fflush) with
     | Some f, Some p, Some fl ->
         let v_format, v_fillers = debug_float ~env ~is_double:array.is_double v_code in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
+        let debug_line = "# " ^ String.substr_replace_all debug ~pattern:"\n" ~with_:"$" ^ "\n" in
+        Block.eval !current_block @@ RValue.call ctx p @@ [ f; RValue.string_literal ctx debug_line ];
         Block.eval !current_block @@ RValue.call ctx p
         @@ f
            :: RValue.string_literal ctx
@@ -302,8 +304,8 @@ let jit_code ~name ~log_file ~(env : Gccjit.rvalue Indexing.environment) ({ ctx;
         loop c1;
         loop c2
     | For_loop { index; from_; to_; body; trace_it = _ } -> jit_for_loop ~env index ~from_ ~to_ body
-    | Set (_, _, Binop (Arg2, Get (_, _), _)) -> assert false
-    | Set (array, idcs, Binop (op, Get (array2, idcs2), c2))
+    | Set { llv = Binop (Arg2, Get (_, _), _); _ } -> assert false
+    | Set { array; idcs; llv = Binop (op, Get (array2, idcs2), c2); debug }
       when LA.equal array array2 && [%equal: Indexing.axis_index array] idcs idcs2 && is_builtin_op op ->
         (* FIXME: maybe it's not worth it? *)
         let array = get_array info array in
@@ -311,15 +313,15 @@ let jit_code ~name ~log_file ~(env : Gccjit.rvalue Indexing.environment) ({ ctx;
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         let lhs = LValue.access_array (get_ptr array) offset in
-        debug_log_assignment ~env idcs array op value c2;
+        debug_log_assignment ~env debug idcs array op value c2;
         Block.assign_op !current_block lhs (builtin_op op) value
-    | Set (array, idcs, v_code) ->
+    | Set { array; idcs; llv; debug } ->
         let array = get_array info array in
-        let value = loop_float ~name ~env ~num_typ:array.num_typ ~is_double:array.is_double v_code in
+        let value = loop_float ~name ~env ~num_typ:array.num_typ ~is_double:array.is_double llv in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         let lhs = LValue.access_array (get_ptr array) offset in
-        debug_log_assignment ~env idcs array Ops.Arg2 value v_code;
+        debug_log_assignment ~env debug idcs array Ops.Arg2 value llv;
         Block.assign !current_block lhs value
     | Zero_out array ->
         if Hashtbl.mem info.arrays array then
@@ -327,9 +329,9 @@ let jit_code ~name ~log_file ~(env : Gccjit.rvalue Indexing.environment) ({ ctx;
         else
           let tn = Low_level.(get_node info.traced_store array) in
           assert tn.zero_initialized (* The initialization is emitted by get_array. *)
-    | Set_local (id, value) ->
+    | Set_local (id, llv) ->
         let lhs, num_typ, is_double = Map.find_exn !locals id in
-        let value = loop_float ~name ~env ~num_typ ~is_double value in
+        let value = loop_float ~name ~env ~num_typ ~is_double llv in
         Block.assign !current_block lhs value
     | Comment c -> log_comment c
     | Staged_compilation exp -> exp ()
@@ -463,7 +465,9 @@ let jit_func ~name ~log_file_name (context : context) ctx bindings (traced_store
      Context.dump_to_file ctx ~update_locs:true f_name);
   ctx_info
 
-let header_sep = let open Re in compile (seq [str " "; opt any; str "="; str " "])
+let header_sep =
+  let open Re in
+  compile (seq [ str " "; opt any; str "="; str " " ])
 
 let jit old_context ~name bindings compiled =
   let open Gccjit in
@@ -492,17 +496,31 @@ let jit old_context ~name bindings compiled =
     let module Debug_runtime = (val _debug_runtime) in
     Indexing.apply run_variadic;
     if Utils.settings.debug_log_jitted then
-      Stdio.In_channel.read_lines log_file_name
-      |> List.iter ~f:(fun line ->
-             match Utils.split_with_seps header_sep line with
-             | [] | [ "" ] -> ()
-             | [ comment ] -> [%log comment]
+      [%log "gccjit-run", name];
+      let rec loop = function
+        | [] -> ()
+        | line :: more when String.is_empty line -> loop more
+        | comment :: more when String.is_prefix comment ~prefix:"COMMENT: " ->
+            [%log String.chop_prefix_exn ~prefix:"COMMENT: " comment];
+            loop more
+        | source :: trace :: more when String.is_prefix source ~prefix:"# " ->
+            (let source =
+               String.concat ~sep:"\n" @@ String.split ~on:'$' @@ String.chop_prefix_exn ~prefix:"# " source
+             in
+             match Utils.split_with_seps header_sep trace with
+             | [] | [ "" ] -> [%log source]
              | header1 :: assign1 :: header2 :: body ->
                  let header = String.concat [ header1; assign1; header2 ] in
                  let body = String.concat body in
-                 let message = Sexp.(List [ Atom header; Atom body ]) in
+                 let message = Sexp.(List [ Atom header; Atom source; Atom body ]) in
                  [%log (message : Sexp.t)]
-             | _ -> [%log line])
+             | _ -> [%log source, trace]);
+            loop more
+        | line :: more ->
+            [%log line];
+            loop more
+      in
+      loop (Stdio.In_channel.read_lines log_file_name)
   in
   Context.release ctx;
   (context, Indexing.jitted_bindings bindings run_variadic, run)
@@ -531,12 +549,16 @@ let merge_from_global ?(name_suffix = "") (context : context) ~dst ~accum ~src b
   let body idcs =
     Low_level.(
       Set
-        ( dst,
-          idcs,
-          Binop
-            ( accum,
-              Get (dst, idcs),
-              Get_global (External_unsafe { ptr = src; prec = dst.LA.prec; dims = dst.dims }, Some idcs) ) ))
+        {
+          array = dst;
+          idcs;
+          llv =
+            Binop
+              ( accum,
+                Get (dst, idcs),
+                Get_global (External_unsafe { ptr = src; prec = dst.LA.prec; dims = dst.dims }, Some idcs) );
+          debug = "";
+        })
   in
   let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
   let name = [%string "merge_into_%{dst.Lazy_array.id#Int}%{name_suffix}"] in

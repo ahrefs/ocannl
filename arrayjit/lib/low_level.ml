@@ -33,7 +33,7 @@ type t =
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
   | Zero_out of LA.t
-  | Set of LA.t * Indexing.axis_index array * float_t
+  | Set of { array : LA.t; idcs : Indexing.axis_index array; llv : float_t; mutable debug : string }
   | Set_local of scope_id * float_t
 [@@deriving sexp_of, equal]
 
@@ -160,7 +160,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         if Hash_set.is_empty traced.assignments && Hashtbl.is_empty traced.accesses then
           traced.zero_initialized <- true;
         traced.zeroed_out <- true
-    | Set (array, idcs, llv) ->
+    | Set { array; idcs; llv; debug = _ } ->
         loop_float env llv;
         let traced : traced_array = get_node traced_store array in
         Hash_set.add traced.assignments (lookup env idcs);
@@ -250,13 +250,13 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
     | For_loop { index; body; from_ = _; to_ = _; trace_it = true } ->
         loop_proc ~env_dom:(Set.add env_dom index) body
     | Zero_out array -> if LA.equal array top_array then has_setter := true
-    | Set (array, indices, llv) ->
+    | Set { array; idcs; llv; debug = _ } ->
         if LA.equal array top_array then (
-          check_idcs indices;
+          check_idcs idcs;
           has_setter := true)
         else
           (* Check for escaping variables. *)
-          Array.iter indices ~f:(function
+          Array.iter idcs ~f:(function
             | Iterator s as idx when not (Set.mem static_indices s) ->
                 if not @@ Set.mem env_dom s then (
                   if Utils.settings.with_debug then
@@ -351,8 +351,8 @@ let inline_computation ~id traced static_indices call_args =
           Option.map ~f:(fun body : t -> For_loop { index = fresh; from_; to_; body; trace_it })
           @@ loop env body
       | Zero_out array when LA.equal array traced.nd -> Some (Set_local (id, Constant 0.0))
-      | Set (array, indices, llv) when LA.equal array traced.nd ->
-          assert ([%equal: Indexing.axis_index array option] (Some indices) def_args);
+      | Set { array; idcs; llv; debug = _ } when LA.equal array traced.nd ->
+          assert ([%equal: Indexing.axis_index array option] (Some idcs) def_args);
           Some (Set_local (id, loop_float env llv))
       | Zero_out _ -> None
       | Set _ -> None
@@ -428,10 +428,10 @@ let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
         if (not @@ Set.mem process_for array) && LA.isnt_false traced.nd.virtual_ then
           check_and_store_virtual traced static_indices llc;
         llc
-    | Set (array, indices, llv) ->
+    | Set { array; idcs; llv; debug = _ } ->
         let traced : traced_array = get_node traced_store array in
         let next = if LA.is_false traced.nd.virtual_ then process_for else Set.add process_for array in
-        let result = Set (array, indices, loop_float ~process_for:next llv) in
+        let result = Set { array; idcs; llv = loop_float ~process_for:next llv; debug = "" } in
         if (not @@ Set.mem process_for array) && LA.isnt_false traced.nd.virtual_ then
           check_and_store_virtual traced static_indices result;
         result
@@ -491,14 +491,14 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
           array.virtual_ <- Some (true, 151);
           None)
         else Some llc
-    | Set (array, indices, llv) ->
+    | Set { array; idcs; llv; debug = _ } ->
         if LA.isnt_false array.virtual_ then (
           (* FIXME: *)
           array.virtual_ <- Some (true, 152);
           None)
         else (
-          assert (Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
-          Some (Set (array, indices, loop_float ~balanced ~env_dom llv)))
+          assert (Array.for_all idcs ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
+          Some (Set { array; idcs; llv = loop_float ~balanced ~env_dom llv; debug = "" }))
     | Set_local (id, llv) ->
         assert (LA.isnt_false id.nd.virtual_);
         id.nd.virtual_ <- Some (true, 16);
@@ -568,7 +568,7 @@ and substitute_proc ~var ~value llc =
       Seq (c1, c2)
   | For_loop for_config -> For_loop { for_config with body = loop_proc for_config.body }
   | Zero_out _ -> llc
-  | Set (array, indices, llv) -> Set (array, indices, loop_float llv)
+  | Set { array; idcs; llv; debug = _ } -> Set { array; idcs; llv = loop_float llv; debug = "" }
   | Set_local (id, llv) -> Set_local (id, loop_float llv)
   | Comment _ -> llc
   | Staged_compilation _ -> llc
@@ -585,7 +585,7 @@ let simplify_llc llc =
         Seq (c1, c2)
     | For_loop for_config -> For_loop { for_config with body = loop for_config.body }
     | Zero_out _ -> llc
-    | Set (array, indices, llv) -> Set (array, indices, loop_float llv)
+    | Set { array; idcs; llv; debug = _ } -> Set { array; idcs; llv = loop_float llv; debug = "" }
     | Set_local (id, llv) -> Set_local (id, loop_float llv)
     | Comment _ -> llc
     | Staged_compilation _ -> llc
@@ -721,12 +721,12 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) () ppf llc =
         loop c2
     | For_loop { body; _ } -> loop body
     | Zero_out la -> nograd la
-    | Set (lhs, _, rhs) ->
-        nograd lhs;
-        loop_float rhs
-    | Set_local ({ nd; _ }, f) ->
+    | Set { array; llv; _ } ->
+        nograd array;
+        loop_float llv
+    | Set_local ({ nd; _ }, llv) ->
         nograd nd;
-        loop_float f
+        loop_float llv
   and loop_float fc =
     match fc with
     | Local_scope { id = { nd; _ }; prec = _; body; orig_indices = _ } ->
@@ -755,10 +755,13 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) () ppf llc =
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
         fprintf ppf "@[<v 2>for %a = %d to %d {@ %a@]@ }" pp_symbol i from_ to_ pp_ll body
     | Zero_out array -> fprintf ppf "zero_out %a;" pp_ident array
-    | Set (array, idcs, v) -> fprintf ppf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident array pp_indices idcs pp_float v
+    | Set p ->
+        p.debug <- asprintf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.array pp_indices p.idcs pp_float p.llv;
+        fprintf ppf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.array pp_indices p.idcs pp_float p.llv
     | Comment message -> fprintf ppf "/* %s */" message
     | Staged_compilation _ -> fprintf ppf "STAGED_COMPILATION_CALLBACK()"
-    | Set_local (id, value) -> fprintf ppf "@[<2>%a :=@ %a;@]" pp_local id pp_float value
+    | Set_local (id, llv) ->
+        fprintf ppf "@[<2>%a :=@ %a;@]" pp_local id pp_float llv
   and pp_float ppf value =
     match value with
     | Local_scope { id; body; _ } -> fprintf ppf "@[<2>%a {@ %a@]@ }@," pp_local id pp_ll body
@@ -782,7 +785,7 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) () ppf llc =
   in
   pp_ll ppf llc
 
-let%debug_sexp compile_proc ~name static_indices llc =
+let%diagn_sexp compile_proc ~name static_indices llc =
   [%log "generating the initial low-level code"];
   if Utils.settings.output_debug_files_in_run_directory then (
     let fname = name ^ "-unoptimized.llc" in

@@ -83,18 +83,18 @@ let%debug_sexp to_low_level code =
     assert (Array.length idcs = Array.length (Lazy.force a.LA.dims));
     Low_level.Get (a, idcs)
   in
-  let set a idcs v =
-    if not (Array.length idcs = Array.length (Lazy.force a.LA.dims)) then
+  let set array idcs llv =
+    if not (Array.length idcs = Array.length (Lazy.force array.LA.dims)) then
       [%log
         "set",
           "a=",
-          (a : LA.t),
+          (array : LA.t),
           ":",
-          LA.label a,
+          LA.label array,
           (idcs : Indexing.axis_index array),
-          (Lazy.force a.dims : int array)];
-    assert (Array.length idcs = Array.length (Lazy.force a.LA.dims));
-    Low_level.Set (a, idcs, v)
+          (Lazy.force array.dims : int array)];
+    assert (Array.length idcs = Array.length (Lazy.force array.LA.dims));
+    Low_level.Set { array; idcs; llv; debug = "" }
   in
   let rec loop code =
     match code with
