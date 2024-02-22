@@ -35,3 +35,4 @@ ocannl_config
 
 # Debug output
 debug*.html
+debug*.log

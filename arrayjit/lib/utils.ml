@@ -97,7 +97,6 @@ module Debug_runtime =
        Minidebug_runtime.debug_file ~time_tagged ~for_append:false
          ~hyperlink:(get_global_arg ~default:"./" ~arg_name:"hyperlink_prefix")
          ~values_first_mode:true ~backend:(`Html Minidebug_runtime.default_html_config) ?snapshot_every_sec
-         (* ~prune_upto:5 *)
          "debug")
 
 let rec union_find ~equal map ~key ~rank =
