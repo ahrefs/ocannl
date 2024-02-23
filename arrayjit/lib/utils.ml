@@ -94,15 +94,18 @@ let get_debug name =
     if String.is_empty snapshot_every_sec then None else Float.of_string_opt snapshot_every_sec
   in
   let time_tagged = Bool.of_string @@ get_global_arg ~default:"true" ~arg_name:"time_tagged" in
-  let backend =
+  let flushing, backend =
     match String.lowercase @@ String.strip @@ get_global_arg ~default:"html" ~arg_name:"debug_backend" with
-    | "text" -> `Text
-    | "html" -> `Html Minidebug_runtime.default_html_config
-    | "markdown" -> `Markdown Minidebug_runtime.default_md_config
-    | s -> invalid_arg @@ "ocannl_debug_backend setting should be text, html or markdown; found: " ^ s
+    | "text" -> (false, `Text)
+    | "html" -> (false, `Html Minidebug_runtime.default_html_config)
+    | "markdown" -> (false, `Markdown Minidebug_runtime.default_md_config)
+    | "flushing" -> (true, `Text)
+    | s ->
+        invalid_arg @@ "ocannl_debug_backend setting should be text, html, markdown or flushing; found: " ^ s
   in
   let hyperlink = get_global_arg ~default:"./" ~arg_name:"hyperlink_prefix" in
-  let fname = if String.is_empty name then "debug" else "debug-" ^ name in
+  let print_entry_ids = Bool.of_string @@ get_global_arg ~default:"false" ~arg_name:"logs_print_entry_ids" in
+  let filename = if String.is_empty name then "debug" else "debug-" ^ name in
   let log_level =
     match
       String.lowercase @@ String.strip @@ get_global_arg ~default:"nonempty_entries" ~arg_name:"log_level"
@@ -116,8 +119,13 @@ let get_debug name =
         @@ "ocannl_log_level setting should be one of: nothing, explicit_logs, nonempty_entries, everything; \
             found: " ^ s
   in
-  Minidebug_runtime.debug_file ~time_tagged ~global_prefix:name ~for_append:false ~hyperlink
-    ~values_first_mode:true ~backend ~log_level ?snapshot_every_sec fname
+  if flushing then
+    Minidebug_runtime.debug_flushing ~filename ~time_tagged ~print_entry_ids ~global_prefix:name
+      ~for_append:false (* ~log_level *) ()
+  else
+    Minidebug_runtime.forget_printbox @@
+    Minidebug_runtime.debug_file ~time_tagged ~print_entry_ids ~global_prefix:name ~for_append:false
+      ~hyperlink ~values_first_mode:true ~backend ~log_level ?snapshot_every_sec filename
 
 module Debug_runtime = (val get_debug "")
 

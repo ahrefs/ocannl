@@ -127,7 +127,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     let keep_spinning = ref true in
     let wait_for_device = Utils.waiter () in
     let wait_for_work = Utils.waiter () in
-    let runtime = forget_printbox @@ Utils.get_debug ("dev-" ^ Int.to_string ordinal) in
+    let runtime = Utils.get_debug ("dev-" ^ Int.to_string ordinal) in
     [%log "spinup-dev", (ordinal : int)];
     let worker () =
       while !keep_spinning do
