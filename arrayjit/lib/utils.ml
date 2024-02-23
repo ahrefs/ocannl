@@ -123,11 +123,13 @@ let get_debug name =
     Minidebug_runtime.debug_flushing ~filename ~time_tagged ~print_entry_ids ~global_prefix:name
       ~for_append:false (* ~log_level *) ()
   else
-    Minidebug_runtime.forget_printbox @@
-    Minidebug_runtime.debug_file ~time_tagged ~print_entry_ids ~global_prefix:name ~for_append:false
-      ~hyperlink ~values_first_mode:true ~backend ~log_level ?snapshot_every_sec filename
+    Minidebug_runtime.forget_printbox
+    @@ Minidebug_runtime.debug_file ~time_tagged ~print_entry_ids ~global_prefix:name ~for_append:false
+         ~hyperlink ~values_first_mode:true ~backend ~log_level ?snapshot_every_sec filename
 
 module Debug_runtime = (val get_debug "")
+
+(* [%%global_debug_interrupts { max_nesting_depth = 100; max_num_children = 1000 }] *)
 
 let rec union_find ~equal map ~key ~rank =
   match Map.find map key with
@@ -170,11 +172,13 @@ let%track_sexp parallel_merge merge (num_devices : int) =
     let is_even = (upper + 1) % 2 = 0 in
     let lower = if is_even then 0 else 1 in
     let half : int = (upper - (lower - 1)) / 2 in
-    for i = lower to half + lower - 1 do
-      (* Maximal [from] is [2 * half + lower - 1 = upper]. *)
-      merge ~from:(half + i) ~to_:i
-    done;
-    loop (half + lower - 1)
+    if half > 0 then (
+      let midpoint : int = half + lower - 1 in
+      for i = lower to midpoint do
+        (* Maximal [from] is [2 * half + lower - 1 = upper]. *)
+        merge ~from:(half + i) ~to_:i
+      done;
+      loop midpoint)
   in
   loop (num_devices - 1)
 
