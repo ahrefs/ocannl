@@ -156,21 +156,19 @@ let sorted_diff ~compare l1 l2 =
   (loop [] l1 l2 [@nontail])
 
 (** [parallel_merge merge num_devices] progressively invokes the pairwise [merge] callback, converging
-    on the 0th position, with [from] ranging from [0] to [num_devices - 1], and [to_ < from]. *)
-let%debug_sexp parallel_merge merge (num_devices : int) =
-  let rec loop (from : int) (to_ : int) : unit =
-    if to_ > from then
-      let is_even = (to_ - from + 1) % 2 = 0 in
-      if is_even then (
-        let half = (to_ - from + 1) / 2 in
-        for i = from to from + half - 1 do
-          merge ~from:i ~to_:(i + half)
-        done;
-        loop 0 (from + half - 1))
-      else loop (from + 1) to_
-    else if from > 0 then loop 0 from
+    on the 0th position, with [from] ranging from [1] to [num_devices - 1], and [to_ < from]. *)
+let%track_sexp parallel_merge merge (num_devices : int) =
+  let rec loop (upper : int) : unit =
+    let is_even = (upper + 1) % 2 = 0 in
+    let lower = if is_even then 0 else 1 in
+    let half : int = (upper - (lower - 1)) / 2 in
+    for i = lower to half + lower - 1 do
+      (* Maximal [from] is [2 * half + lower - 1 = upper]. *)
+      merge ~from:(half + i) ~to_:i
+    done;
+    loop (half + lower - 1)
   in
-  loop 0 (num_devices - 1)
+  loop (num_devices - 1)
 
 type waiter = { await : unit -> unit; release : unit -> unit; finalize : unit -> unit }
 

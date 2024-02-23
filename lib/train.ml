@@ -226,21 +226,23 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     [%debug_notrace List.filter_map all_params ~f:(fun t -> Option.map t.diff ~f:(fun d -> d.grad))]
   in
   let ctxs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.context)] in
+  (* Note: [from] indices are bigger than [to_] indices. We end up at 0. *)
   let merges : Backend.jitted list array array =
     if num_devices < 2 then [| [||] |]
     else
       Array.init (num_devices - 1) ~f:(fun (to_ : int) ->
           Array.init
             (num_devices - to_ - 1)
-            ~f:(fun (delta : int) ->
-              let from : int = to_ + delta + 1 in
+            ~f:(fun (delta_m_1 : int) ->
+              let from : int = to_ + delta_m_1 + 1 in
               List.filter_map param_grads ~f:(fun p ->
                   Backend.merge ~name_suffix:"grad_merge" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Add
                     ~src:ctxs.(from))))
   in
-  let merge ~from ~to_ =
+  let merge ~(from: int) ~(to_: int): unit =
     (* FIXME: is this parallel? *)
-    List.iter merges.(to_).(to_ - from - 1) ~f:(fun jitted -> jitted.run debug_rt ())
+    let delta_m_1: int = from - to_ -  1 in
+    List.iter merges.(to_).(delta_m_1) ~f:(fun jitted -> jitted.run debug_rt ())
   in
   let copies : Backend.jitted list array =
     if num_devices < 2 then [||]
