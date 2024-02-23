@@ -95,20 +95,31 @@ let get_debug name =
   in
   let time_tagged = Bool.of_string @@ get_global_arg ~default:"true" ~arg_name:"time_tagged" in
   let backend =
-    match
-      String.lowercase @@ String.strip @@ get_global_arg ~default:"html" ~arg_name:"debug_backend"
-    with
+    match String.lowercase @@ String.strip @@ get_global_arg ~default:"html" ~arg_name:"debug_backend" with
     | "text" -> `Text
     | "html" -> `Html Minidebug_runtime.default_html_config
     | "markdown" -> `Markdown Minidebug_runtime.default_md_config
     | s -> invalid_arg @@ "ocannl_debug_backend setting should be text, html or markdown; found: " ^ s
   in
   let hyperlink = get_global_arg ~default:"./" ~arg_name:"hyperlink_prefix" in
+  let fname = if String.is_empty name then "debug" else "debug-" ^ name in
+  let log_level =
+    match
+      String.lowercase @@ String.strip @@ get_global_arg ~default:"nonempty_entries" ~arg_name:"log_level"
+    with
+    | "nothing" -> Minidebug_runtime.Nothing
+    | "explicit_logs" -> Prefixed [||]
+    | "nonempty_entries" -> Nonempty_entries
+    | "everything" -> Everything
+    | s ->
+        invalid_arg
+        @@ "ocannl_log_level setting should be one of: nothing, explicit_logs, nonempty_entries, everything; \
+            found: " ^ s
+  in
   Minidebug_runtime.debug_file ~time_tagged ~global_prefix:name ~for_append:false ~hyperlink
-    ~values_first_mode:true ~backend ?snapshot_every_sec
-  @@ "debug-" ^ name
+    ~values_first_mode:true ~backend ~log_level ?snapshot_every_sec fname
 
-module Debug_runtime = (val get_debug "main")
+module Debug_runtime = (val get_debug "")
 
 let rec union_find ~equal map ~key ~rank =
   match Map.find map key with
