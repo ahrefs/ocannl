@@ -88,16 +88,27 @@ let get_global_arg ~default ~arg_name:n =
               if settings.with_debug then Stdio.printf "Not found, using default %s\n%!" default;
               default))
 
-module Debug_runtime =
-  (val let snapshot_every_sec = get_global_arg ~default:"" ~arg_name:"snapshot_every_sec" in
-       let snapshot_every_sec =
-         if String.is_empty snapshot_every_sec then None else Float.of_string_opt snapshot_every_sec
-       in
-       let time_tagged = Bool.of_string @@ get_global_arg ~default:"true" ~arg_name:"time_tagged" in
-       Minidebug_runtime.debug_file ~time_tagged ~for_append:false
-         ~hyperlink:(get_global_arg ~default:"./" ~arg_name:"hyperlink_prefix")
-         ~values_first_mode:true ~backend:(`Html Minidebug_runtime.default_html_config) ?snapshot_every_sec
-         "debug")
+let get_debug name =
+  let snapshot_every_sec = get_global_arg ~default:"" ~arg_name:"snapshot_every_sec" in
+  let snapshot_every_sec =
+    if String.is_empty snapshot_every_sec then None else Float.of_string_opt snapshot_every_sec
+  in
+  let time_tagged = Bool.of_string @@ get_global_arg ~default:"true" ~arg_name:"time_tagged" in
+  let backend =
+    match
+      String.lowercase @@ String.strip @@ get_global_arg ~default:"html" ~arg_name:"debug_backend"
+    with
+    | "text" -> `Text
+    | "html" -> `Html Minidebug_runtime.default_html_config
+    | "markdown" -> `Markdown Minidebug_runtime.default_md_config
+    | s -> invalid_arg @@ "ocannl_debug_backend setting should be text, html or markdown; found: " ^ s
+  in
+  let hyperlink = get_global_arg ~default:"./" ~arg_name:"hyperlink_prefix" in
+  Minidebug_runtime.debug_file ~time_tagged ~global_prefix:name ~for_append:false ~hyperlink
+    ~values_first_mode:true ~backend ?snapshot_every_sec
+  @@ "debug-" ^ name
+
+module Debug_runtime = (val get_debug "main")
 
 let rec union_find ~equal map ~key ~rank =
   match Map.find map key with

@@ -122,27 +122,12 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let num_devices () = Domain.recommended_domain_count () - 1
 
-  let get_debug name =
-    let snapshot_every_sec = Utils.get_global_arg ~default:"" ~arg_name:"snapshot_every_sec" in
-    let snapshot_every_sec =
-      if String.is_empty snapshot_every_sec then None else Float.of_string_opt snapshot_every_sec
-    in
-    let time_tagged = Bool.of_string @@ Utils.get_global_arg ~default:"true" ~arg_name:"time_tagged" in
-    Minidebug_runtime.debug_file ~time_tagged ~global_prefix:name ~for_append:false
-      ~hyperlink:(Utils.get_global_arg ~default:"./" ~arg_name:"hyperlink_prefix")
-      ~values_first_mode:true ~backend:(`Html Minidebug_runtime.default_html_config) ?snapshot_every_sec
-    @@ "debug-" ^ name
-  (*
-     let get_debug name =
-       let debug_ch = Stdlib.open_out ("debug-" ^ name ^ ".log") in
-       Minidebug_runtime.debug_flushing ~debug_ch ~time_tagged:false ~print_entry_ids:true ~global_prefix:name () *)
-
   let%debug_sexp spinup_device ~(ordinal : int) =
     let next_task = ref None in
     let keep_spinning = ref true in
     let wait_for_device = Utils.waiter () in
     let wait_for_work = Utils.waiter () in
-    let runtime = forget_printbox @@ get_debug ("dev-" ^ Int.to_string ordinal) in
+    let runtime = forget_printbox @@ Utils.get_debug ("dev-" ^ Int.to_string ordinal) in
     [%log "spinup-dev", (ordinal : int)];
     let worker () =
       while !keep_spinning do

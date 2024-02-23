@@ -32,7 +32,10 @@ _opam/
 
 # Local configuration
 ocannl_config
+# Convenience for storing particular configurations, not used by OCANNL
+ocannl_config-*
 
 # Debug output
 debug*.html
 debug*.log
+debug*.md
