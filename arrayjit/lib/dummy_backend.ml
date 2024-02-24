@@ -1,7 +1,7 @@
 open Base
-module LA = Lazy_array
+module Tn = Tnode
 
-type context = { label : string; arrays : Sexp.t ref Map.M(LA).t; mutable state : string }
+type context = { label : string; arrays : Sexp.t ref Map.M(Tn).t; mutable state : string }
 [@@deriving sexp_of]
 
 let backend_state = ref ""
@@ -19,7 +19,7 @@ let is_initialized, initialize =
 let finalize ctx = ctx.state <- "Finalized"
 
 let init ~label =
-  let result = { label; arrays = Map.empty (module LA); state = "Initialized" } in
+  let result = { label; arrays = Map.empty (module Tn); state = "Initialized" } in
   Core.Gc.Expert.add_finalizer_exn result finalize;
   result
 
@@ -27,8 +27,8 @@ let prec_is_double = function Ops.Double_prec _ -> true | _ -> false
 let is_builtin_op = function Ops.Add | Sub | Mul | Div -> true | ToPowOf | Relu_gate | Arg2 | Arg1 -> false
 
 let updates (llc : Low_level.t) =
-  let emp = Map.empty (module LA) in
-  let non = Set.empty (module LA) in
+  let emp = Map.empty (module Tn) in
+  let non = Set.empty (module Tn) in
   let merge (gets1, env1) (gets2, env2) = (Set.union gets1 gets2, Utils.map_merge ~f:Set.union env1 env2) in
   let rec loop = function
     | Low_level.Noop -> (non, emp)
@@ -36,18 +36,18 @@ let updates (llc : Low_level.t) =
     | Low_level.Staged_compilation _ -> (non, emp)
     | Low_level.Seq (s1, s2) -> merge (loop s1) (loop s2)
     | Low_level.For_loop { index = _; from_ = _; to_ = _; body; trace_it = _ } -> loop body
-    | Low_level.Zero_out a -> (non, Map.singleton (module LA) a non)
+    | Low_level.Zero_out a -> (non, Map.singleton (module Tn) a non)
     | Low_level.Set { array; llv; _ } | Low_level.Set_local ({ nd = array; scope_id = _ }, llv) ->
         let gets, env = accessors llv in
-        (non, Utils.map_merge ~f:Set.union (Map.singleton (module LA) array gets) env)
+        (non, Utils.map_merge ~f:Set.union (Map.singleton (module Tn) array gets) env)
   and accessors v =
     match v with
     | Low_level.Local_scope { id = { nd = a; scope_id = _ }; prec = _; body; orig_indices = _ } ->
         let gets, env = loop body in
-        (Set.singleton (module LA) a, Utils.map_merge ~f:Set.union (Map.singleton (module LA) a gets) env)
-    | Low_level.Get_local { nd = a; scope_id = _ } -> (Set.singleton (module LA) a, emp)
+        (Set.singleton (module Tn) a, Utils.map_merge ~f:Set.union (Map.singleton (module Tn) a gets) env)
+    | Low_level.Get_local { nd = a; scope_id = _ } -> (Set.singleton (module Tn) a, emp)
     | Low_level.Get_global (_, _) -> (non, emp)
-    | Low_level.Get (a, _) -> (Set.singleton (module LA) a, emp)
+    | Low_level.Get (a, _) -> (Set.singleton (module Tn) a, emp)
     | Low_level.Binop (_, v1, v2) -> merge (accessors v1) (accessors v2)
     | Low_level.Unop (_, v) -> accessors v
     | Low_level.Constant _ -> (non, emp)
@@ -77,7 +77,7 @@ let jit old_context ~name bindings (_traced_store, compiled) =
    let merge_from ?(name_suffix = "") (context : context) ~dst ~accum ~src bindings =
      let body idcs = Low_level.(Set (dst, idcs, Binop (accum, Get (dst, idcs), Get (src, idcs)))) in
      let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
-     let name = [%string "merge_into_%{dst.Lazy_array.id#Int}%{name_suffix}"] in
+     let name = [%string "merge_into_%{dst.Tnode.id#Int}%{name_suffix}"] in
      jit context ~name bindings (Low_level.compile_proc ~name [] llc) *)
 
 let merge ?name_suffix la ~dst ~accum:_ ~src bindings =

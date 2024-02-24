@@ -10,11 +10,11 @@ type mem_properties =
 
 let root_ctx = ref None
 
-module LA = Lazy_array
+module Tn = Tnode
 
 type context = {
   label : string;
-  arrays : Ndarray.t Map.M(LA).t;
+  arrays : Ndarray.t Map.M(Tn).t;
   result : (Gccjit.result option[@sexp.opaque]);
 }
 [@@deriving sexp_of]
@@ -40,12 +40,12 @@ let finalize ctx =
   Option.iter ctx.result ~f:Result.release
 
 let init ~label =
-  let result = { label; result = None; arrays = Map.empty (module LA) } in
+  let result = { label; result = None; arrays = Map.empty (module Tn) } in
   Core.Gc.Expert.add_finalizer_exn result finalize;
   result
 
 type ndarray = {
-  nd : LA.t;  (** The original array. *)
+  nd : Tn.t;  (** The original array. *)
   hosted_ptr : (Gccjit.rvalue[@sexp.opaque]) option;
       (** Pointer to the first value of the associated hosted [Ndarray]. *)
   global_ptr : (Gccjit.rvalue[@sexp.opaque]) option;
@@ -66,8 +66,8 @@ type ctx_info = {
   func : (Gccjit.function_[@sexp.opaque]);
   traced_store : (Low_level.traced_store[@sexp.opaque]);
   init_block : (Gccjit.block[@sexp.opaque]);
-  mutable ctx_arrays : Ndarray.t Map.M(LA).t;
-  arrays : (LA.t, ndarray) Hashtbl.t;
+  mutable ctx_arrays : Ndarray.t Map.M(Tn).t;
+  arrays : (Tn.t, ndarray) Hashtbl.t;
 }
 [@@deriving sexp_of]
 
@@ -101,7 +101,7 @@ let%track_sexp get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_bl
       let dims = Lazy.force key.dims in
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
       let size_in_bytes = size_in_elems * Ops.prec_in_bytes key.prec in
-      let is_on_host = LA.is_true !(key.hosted) in
+      let is_on_host = Tn.is_true !(key.hosted) in
       assert (Bool.(Option.is_some (Lazy.force key.array) = is_on_host));
       (* TODO: is the complexity of introducing this function and matching on Ndarray.t needed? *)
       let array c_typ is_double arr =
@@ -112,10 +112,10 @@ let%track_sexp get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_bl
         let hosted_ptr = Option.map arr ~f:get_c_ptr in
         let mem = if not is_on_host then Local_only else if tn.read_only then Constant else Global in
         let arr_typ = Type.array ctx num_typ size_in_elems in
-        let local = if is_local_only mem then Some (Function.local func arr_typ @@ LA.name key) else None in
+        let local = if is_local_only mem then Some (Function.local func arr_typ @@ Tn.name key) else None in
         (if is_global mem && (not @@ Map.mem ctx_arrays key) then
            let data =
-             Ndarray.create_array key.LA.prec ~dims @@ Constant_fill { values = [| 0. |]; strict = false }
+             Ndarray.create_array key.Tn.prec ~dims @@ Constant_fill { values = [| 0. |]; strict = false }
            in
            ctx_info.ctx_arrays <- Map.add_exn ~key ~data ctx_arrays);
         let global_ptr = Option.map (Map.find ctx_info.ctx_arrays key) ~f:Ndarray.(map { f = get_c_ptr }) in
@@ -123,7 +123,7 @@ let%track_sexp get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_bl
         let comment_on ptr = Option.value ~default:"not" @@ Option.map ptr ~f:RValue.to_string in
         Block.comment init_block
           [%string
-            "Array #%{key.id#Int} %{LA.label key}: %{Sexp.to_string_hum @@ backend_info} %{comment_on \
+            "Array #%{key.id#Int} %{Tn.label key}: %{Sexp.to_string_hum @@ backend_info} %{comment_on \
              hosted_ptr} hosted, %{comment_on global_ptr} global, %{comment_on @@ Option.map \
              ~f:RValue.lvalue local} local."];
         let result =
@@ -171,9 +171,9 @@ let get_ptr array =
 
 let get_ptr_debug array =
   match (array.local, array.global_ptr, array.hosted_ptr) with
-  | Some _, _, _ -> "local_" ^ LA.name array.nd
-  | None, Some _, _ -> "global_" ^ LA.name array.nd
-  | None, None, Some _ -> "hosted_" ^ LA.name array.nd
+  | Some _, _, _ -> "local_" ^ Tn.name array.nd
+  | None, Some _, _ -> "global_" ^ Tn.name array.nd
+  | None, None, Some _ -> "hosted_" ^ Tn.name array.nd
   | None, None, None -> assert false
 
 let%track_sexp jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block body =
@@ -312,7 +312,7 @@ let%track_sexp jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_
     | For_loop { index; from_; to_; body; trace_it = _ } -> jit_for_loop ~env index ~from_ ~to_ body
     | Set { llv = Binop (Arg2, Get (_, _), _); _ } -> assert false
     | Set { array; idcs; llv = Binop (op, Get (array2, idcs2), c2); debug }
-      when LA.equal array array2 && [%equal: Indexing.axis_index array] idcs idcs2 && is_builtin_op op ->
+      when Tn.equal array array2 && [%equal: Indexing.axis_index array] idcs idcs2 && is_builtin_op op ->
         (* FIXME: maybe it's not worth it? *)
         let array = get_array info array in
         let value = loop_float ~name ~env ~num_typ:array.num_typ ~is_double:array.is_double c2 in
@@ -453,7 +453,7 @@ let%track_sexp jit_func ~name ~log_file_name (context : context) ctx bindings (t
   let log_file = if Utils.settings.debug_log_jitted then Some (log_file ()) else None in
   let main_block = Block.create ~name func in
   let ctx_info =
-    { ctx; func; traced_store; init_block; ctx_arrays = context.arrays; arrays = Hashtbl.create (module LA) }
+    { ctx; func; traced_store; init_block; ctx_arrays = context.arrays; arrays = Hashtbl.create (module Tn) }
   in
   let after_proc = jit_code ~name ~log_file ~env ctx_info main_block proc in
   (match log_file with
@@ -535,7 +535,7 @@ let from_host (context : context) la =
   match Map.find context.arrays la with
   | None -> false
   | Some c_arr -> (
-      match la.LA.array with
+      match la.Tn.array with
       | (lazy (Some h_arr)) ->
           Ndarray.map2 { f2 = Ndarray.A.blit } h_arr c_arr;
           true
@@ -545,7 +545,7 @@ let to_host (context : context) la =
   match Map.find context.arrays la with
   | None -> false
   | Some c_arr -> (
-      match la.LA.array with
+      match la.Tn.array with
       | (lazy (Some h_arr)) ->
           Ndarray.map2 { f2 = Ndarray.A.blit } c_arr h_arr;
           true
@@ -562,12 +562,12 @@ let merge_from_global ?(name_suffix = "") (context : context) ~dst ~accum ~src b
             Binop
               ( accum,
                 Get (dst, idcs),
-                Get_global (External_unsafe { ptr = src; prec = dst.LA.prec; dims = dst.dims }, Some idcs) );
+                Get_global (External_unsafe { ptr = src; prec = dst.Tn.prec; dims = dst.dims }, Some idcs) );
           debug = "";
         })
   in
   let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
-  let name = [%string "merge_into_%{dst.Lazy_array.id#Int}%{name_suffix}"] in
+  let name = [%string "merge_into_%{dst.Tnode.id#Int}%{name_suffix}"] in
   jit context ~name bindings (Low_level.compile_proc ~name [] llc)
 
 let merge ?name_suffix la ~dst ~accum ~(src : context) bindings =

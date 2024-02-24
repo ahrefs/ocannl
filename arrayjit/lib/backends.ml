@@ -30,14 +30,14 @@ module type No_device_backend = sig
   (** Cleans up all work on a backend.
       If [~unsafe_shutdown:true], releases resources, potentially making the backend unusable. *)
 
-  val from_host : context -> Lazy_array.t -> bool
+  val from_host : context -> Tnode.t -> bool
   (** If the array is both hosted and in-context, copies from host to context and returns true. *)
 
-  val to_host : context -> Lazy_array.t -> bool
+  val to_host : context -> Tnode.t -> bool
   (** If the array is both hosted and in-context, copies from context to host and returns true. *)
 
   val merge :
-    ?name_suffix:string -> Lazy_array.t -> dst:context -> accum:Ops.binop -> src:context -> jitted option
+    ?name_suffix:string -> Tnode.t -> dst:context -> accum:Ops.binop -> src:context -> jitted option
   (** Merges the array from the source context into the destination context: [dst =: dst accum src].
       If the array is hosted, its state on host is undefined after this operation. (A backend may choose
       to use the host array as a buffer, if that is beneficial.) [name_suffix] is appended to

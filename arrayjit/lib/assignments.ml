@@ -1,13 +1,13 @@
 open Base
 (** The code for operating on n-dimensional arrays. *)
 
-module LA = Lazy_array
+module Tn = Tnode
 
 (** Resets a array by performing the specified computation or data fetching. *)
 type fetch_op =
   | Constant of float
   | Imported of Ops.global_identifier
-  | Slice of { batch_idx : Indexing.static_symbol; sliced : LA.t }
+  | Slice of { batch_idx : Indexing.static_symbol; sliced : Tn.t }
   | Embed_symbol of Indexing.static_symbol
 [@@deriving sexp_of]
 
@@ -19,20 +19,20 @@ and t =
       zero_out : bool;
       accum : Ops.binop;
       op : Ops.binop;
-      lhs : LA.t;
-      rhs1 : LA.t;
-      rhs2 : LA.t;
+      lhs : Tn.t;
+      rhs1 : Tn.t;
+      rhs2 : Tn.t;
       projections : Indexing.projections Lazy.t;
     }
   | Accum_unop of {
       zero_out : bool;
       accum : Ops.binop;
       op : Ops.unop;
-      lhs : LA.t;
-      rhs : LA.t;
+      lhs : Tn.t;
+      rhs : Tn.t;
       projections : Indexing.projections Lazy.t;
     }
-  | Fetch of { array : LA.t; fetch_op : fetch_op; dims : int array Lazy.t }
+  | Fetch of { array : Tn.t; fetch_op : fetch_op; dims : int array Lazy.t }
 [@@deriving sexp_of]
 
 let is_noop = function Noop -> true | _ -> false
@@ -57,9 +57,9 @@ let remove_updates array c =
     | ( Seq ((Accum_binop { lhs; _ } | Accum_unop { lhs; _ }), t)
       | Seq (t, (Accum_binop { lhs; _ } | Accum_unop { lhs; _ })) ) as c
       when check ->
-        if LA.equal array lhs then rm true t else rm false c
+        if Tn.equal array lhs then rm true t else rm false c
     | Seq (t1, t2) -> Seq (rm true t1, rm true t2)
-    | (Accum_binop { lhs; _ } | Accum_unop { lhs; _ }) when LA.equal array lhs -> Noop
+    | (Accum_binop { lhs; _ } | Accum_unop { lhs; _ }) when Tn.equal array lhs -> Noop
     | c -> c
   in
   rm true c
@@ -71,29 +71,29 @@ module Debug_runtime = Utils.Debug_runtime
 let%debug_sexp to_low_level code =
   let open Indexing in
   let get a idcs =
-    if not (Array.length idcs = Array.length (Lazy.force a.LA.dims)) then
+    if not (Array.length idcs = Array.length (Lazy.force a.Tn.dims)) then
       [%log
         "get",
           "a=",
-          (a : LA.t),
+          (a : Tn.t),
           ":",
-          LA.label a,
+          Tn.label a,
           (idcs : Indexing.axis_index array),
           (Lazy.force a.dims : int array)];
-    assert (Array.length idcs = Array.length (Lazy.force a.LA.dims));
+    assert (Array.length idcs = Array.length (Lazy.force a.Tn.dims));
     Low_level.Get (a, idcs)
   in
   let set array idcs llv =
-    if not (Array.length idcs = Array.length (Lazy.force array.LA.dims)) then
+    if not (Array.length idcs = Array.length (Lazy.force array.Tn.dims)) then
       [%log
         "set",
           "a=",
-          (array : LA.t),
+          (array : Tn.t),
           ":",
-          LA.label array,
+          Tn.label array,
           (idcs : Indexing.axis_index array),
           (Lazy.force array.dims : int array)];
-    assert (Array.length idcs = Array.length (Lazy.force array.LA.dims));
+    assert (Array.length idcs = Array.length (Lazy.force array.Tn.dims));
     Low_level.Set { array; idcs; llv; debug = "" }
   in
   let rec loop code =
@@ -211,9 +211,9 @@ let flatten c =
 let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
   let nograd_idents = Hashtbl.create (module String) in
   let nograd la =
-    if List.mem ~equal:String.equal la.LA.label "grad" then ()
+    if List.mem ~equal:String.equal la.Tn.label "grad" then ()
     else
-      Option.iter (LA.ident_label la)
+      Option.iter (Tn.ident_label la)
         ~f:
           (Hashtbl.update nograd_idents ~f:(fun old ->
                Set.add (Option.value ~default:Utils.no_ints old) la.id))
@@ -236,7 +236,7 @@ let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
   let b = Buffer.create 16 in
   let out = Buffer.add_string b in
   let sp () = out " " in
-  let ident la = out @@ LA.styled_ident ~repeating_idents ident_style la in
+  let ident la = out @@ Tn.styled_ident ~repeating_idents ident_style la in
   let out_fetch_op (op : fetch_op) =
     match op with
     | Constant f -> out @@ Float.to_string f

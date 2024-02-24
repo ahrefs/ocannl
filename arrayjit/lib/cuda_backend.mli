@@ -16,15 +16,15 @@ val jit :
 
 val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
 
-val from_host : context -> Lazy_array.t -> bool
+val from_host : context -> Tnode.t -> bool
 (** If the array is both hosted and in-context, copies from host to context and returns true. *)
 
-val to_host : context -> Lazy_array.t -> bool
+val to_host : context -> Tnode.t -> bool
 (** If the array is both hosted and in-context, copies from context to host and returns true. *)
 
 val merge :
   ?name_suffix:string ->
-  Lazy_array.t ->
+  Tnode.t ->
   dst:context ->
   accum:Ops.binop ->
   src:context ->

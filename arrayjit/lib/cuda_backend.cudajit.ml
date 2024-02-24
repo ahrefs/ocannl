@@ -21,7 +21,7 @@ type ndarray = {
 }
 [@@deriving sexp_of]
 
-module LA = Lazy_array
+module Tn = Tnode
 
 type device = {
   dev : (Cudajit.device[@sexp.opaque]);
@@ -36,14 +36,14 @@ type context = {
   device : device;
   run_module : (Cudajit.module_[@sexp.opaque]) option;
       (** Code jitted for this context, independent of the parent and child contexts. *)
-  arrays : ndarray Map.M(LA).t;
+  arrays : ndarray Map.M(Tn).t;
 }
 [@@deriving sexp_of]
 
 type ctx_info = {
   ctx : Cudajit.context;  (** Context for jitting, independent of the parent and child contexts. *)
-  mutable ctx_arrays : ndarray Map.M(LA).t;
-  used_tensors : Hash_set.M(LA).t;
+  mutable ctx_arrays : ndarray Map.M(Tn).t;
+  used_tensors : Hash_set.M(Tn).t;
 }
 
 let init device =
@@ -51,7 +51,7 @@ let init device =
     label = "cuda " ^ Int.to_string device.ordinal;
     ctx = device.primary_context;
     device;
-    arrays = Map.empty (module LA);
+    arrays = Map.empty (module Tn);
     run_module = None;
   }
 
@@ -132,7 +132,7 @@ let merge ?(name_suffix = "") la ~dst ~accum ~src (bindings : unit Indexing.bind
   let ord ctx = ctx.device.ordinal in
   let name =
     [%string
-      "merge_into_%{la.Lazy_array.id#Int}_from_dev_%{ord src#Int}_to_dev_%{ord dst#Int}_%{name_suffix}"]
+      "merge_into_%{la.Tnode.id#Int}_from_dev_%{ord src#Int}_to_dev_%{ord dst#Int}_%{name_suffix}"]
   in
   ignore (name, accum, bindings);
   failwith "NOT IMPLEMENTED YET"
@@ -208,17 +208,17 @@ let%debug_sexp get_array ~traced_store:_ ctx_info key =
     let global =
       if is_local_only mem then None
       else (
-        if Utils.settings.with_debug then [%log "mem_alloc", LA.name key];
+        if Utils.settings.with_debug then [%log "mem_alloc", Tn.name key];
         set_ctx ctx_info.ctx;
-        Some (LA.name key, Cudajit.mem_alloc ~byte_size:size_in_bytes))
+        Some (Tn.name key, Cudajit.mem_alloc ~byte_size:size_in_bytes))
     in
-    let local = Option.some_if (is_local_only mem) @@ LA.name key ^ "_local" in
+    let local = Option.some_if (is_local_only mem) @@ Tn.name key ^ "_local" in
     let backend_info = sexp_of_mem_properties mem in
     if Utils.settings.with_debug then
       [%log
         "creating",
           (key.id : int),
-          LA.label key,
+          Tn.label key,
           "mem",
           (backend_info : Sexp.t),
           "on-host",
@@ -253,7 +253,7 @@ let jit_code ~traced_store info ppf llc : unit =
         if Map.mem info.ctx_arrays array then
           failwith
             ("exec_as_cuda: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
-            @@ [%sexp_of: LA.t] array);
+            @@ [%sexp_of: Tn.t] array);
         let tn = Low_level.(get_node traced_store array) in
         assert tn.zero_initialized
         (* The initialization will be emitted by get_array. *)
@@ -389,7 +389,7 @@ let%debug_sexp jit_func ~name (old_context : context) idx_params (traced_store, 
   set_ctx old_context.ctx;
   [%log "generating the .cu source"];
   let info =
-    { ctx = old_context.ctx; ctx_arrays = old_context.arrays; used_tensors = Hash_set.create (module LA) }
+    { ctx = old_context.ctx; ctx_arrays = old_context.arrays; used_tensors = Hash_set.create (module Tn) }
   in
   let b = Buffer.create 4096 in
   let ppf = Stdlib.Format.formatter_of_buffer b in
@@ -402,7 +402,7 @@ let%debug_sexp jit_func ~name (old_context : context) idx_params (traced_store, 
     @@ List.filter_map arrays ~f:(fun la ->
            let tn = Map.find_exn info.ctx_arrays la in
            if Utils.settings.with_debug then
-             [%log "array-used:", (la : LA.t), LA.label la, (tn.mem : mem_properties)];
+             [%log "array-used:", (la : Tn.t), Tn.label la, (tn.mem : mem_properties)];
            match tn.mem with
            | Local_only -> None
            | Global -> Option.map tn.global ~f:(fun (n, ptr) -> (tn.num_typ ^ " *" ^ n, ptr)))

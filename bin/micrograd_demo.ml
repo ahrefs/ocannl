@@ -1,6 +1,6 @@
 open Base
 open Ocannl
-module LA = Arrayjit.Lazy_array
+module Tn = Arrayjit.Tnode
 module IDX = Arrayjit.Indexing.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
@@ -79,7 +79,7 @@ let experiment seed ~use_builtin_weight_decay () =
   let step_ref = IDX.find_exn jitted.bindings step_sym in
   let batch_ref = IDX.find_exn jitted.bindings batch_sym in
   step_ref := 0;
-  (* LA.print_accessible_headers (); *)
+  (* Tn.print_accessible_headers (); *)
   for epoch = 0 to epochs - 1 do
     for batch = 0 to n_batches - 1 do
       batch_ref := batch;

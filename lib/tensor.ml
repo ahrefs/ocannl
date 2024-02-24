@@ -2,12 +2,12 @@
 
 open Base
 module Nd = Arrayjit.Ndarray
-module LA = Arrayjit.Lazy_array
+module Tn = Arrayjit.Tnode
 module Asgns = Arrayjit.Assignments
 module Idx = Arrayjit.Indexing
 
 type diff = {
-  grad : LA.t;
+  grad : Tn.t;
   zero_grads : Asgns.t;  (** Prepares for backpropagation. Always compile as: [Seq (zero_grads, backprop)]. *)
   backprop : Asgns.t;
       (** Backpropagates for the tensor and its descendants; which typically means adding
@@ -19,7 +19,7 @@ type t = {
   forward : Asgns.t;
   diff : diff option;
   id : int;  (** Same as [value.id]. *)
-  value : LA.t;
+  value : Tn.t;
   shape : Shape.t;
       (** The eventual shape of [t.value] and [t.diff.grad], incorporating the current state of
           shape inference. *)
@@ -117,7 +117,7 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
   in
   let id = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
-  let shape = make_shape ~debug_name:(LA.debug_name ~id ~label) ~id in
+  let shape = make_shape ~debug_name:(Tn.debug_name ~id ~label) ~id in
   let prec =
     List.map orig_ts ~f:(fun ti -> ti.value.prec)
     |> List.reduce ~f:Arrayjit.Ops.promote_prec
@@ -135,7 +135,7 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
   let dims = lazy_to_dims shape in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
   let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
-  let v = LA.create prec ~id ~label ~dims init_op in
+  let v = Tn.create prec ~id ~label ~dims init_op in
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let fwds = List.map ordered_ts ~f:(fun ti -> if is_fwd_root ti then ti.forward else Asgns.Noop) in
   let forward = Asgns.sequential @@ fwds @ [ op_asn ~v ~projections ] in
@@ -149,14 +149,14 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
     tensor)
   else
     let g_prec =
-      let f ti = Option.map ti.diff ~f:(fun d -> d.grad.LA.prec) in
+      let f ti = Option.map ti.diff ~f:(fun d -> d.grad.Tn.prec) in
       Option.value ~default:!default_grad_prec
       @@ List.reduce ~f:Arrayjit.Ops.promote_prec
       @@ List.filter_map orig_ts ~f
     in
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
-    let g = LA.create g_prec ~id:grad_id ~label:("grad" :: label) ~dims default_init_op in
+    let g = Tn.create g_prec ~id:grad_id ~label:("grad" :: label) ~dims default_init_op in
     let dcode ti = Option.value_map ti.diff ~default:Asgns.Noop in
     let is_bck_root ti = Map.mem session_state.backprop_roots ti.id in
     let zero_grads =
@@ -214,9 +214,9 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
         (match fetch_op with
         | Constant _ | Slice _ | Embed_symbol _ -> ()
         | Imported _ ->
-            assert (LA.isnt_true v.virtual_);
+            assert (Tn.isnt_true v.virtual_);
             v.virtual_ <- Some (false, 22);
-            assert (LA.isnt_true v.device_only);
+            assert (Tn.isnt_true v.device_only);
             v.device_only <- Some (false, 23));
         Fetch { array = v; fetch_op; dims }
   in
@@ -280,14 +280,14 @@ let param ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?(strict = 
       ?output_axes ?deduced ~init_op ()
   in
   let v = t.value in
-  assert (LA.isnt_true v.virtual_);
+  assert (Tn.isnt_true v.virtual_);
   v.virtual_ <- Some (false, 24);
-  assert (LA.isnt_true v.device_only);
+  assert (Tn.isnt_true v.device_only);
   v.device_only <- Some (false, 25);
   (* In principle, gradients can be device-only (in the global memory of the device). Gradients of param
      cannot be inlined because backpropagation and param update are usually separate computations. *)
   let g = (Option.value_exn t.diff).grad in
-  assert (LA.isnt_true g.virtual_);
+  assert (Tn.isnt_true g.virtual_);
   g.virtual_ <- Some (false, 26);
   t
 
@@ -300,13 +300,13 @@ let rec iter_embedded_arrays ~f t =
 
 (** Converts ID, label and the dimensions of a node to a string. *)
 let header t =
-  let v_dims_s = LA.dims_to_string t.value in
-  let g_dims_s = match t.diff with None -> "<no-grad>" | Some diff -> LA.dims_to_string diff.grad in
+  let v_dims_s = Tn.dims_to_string t.value in
+  let g_dims_s = match t.diff with None -> "<no-grad>" | Some diff -> Tn.dims_to_string diff.grad in
   let dims_s =
     if String.equal v_dims_s g_dims_s then "dims " ^ v_dims_s
     else "dims val " ^ v_dims_s ^ " grad " ^ g_dims_s
   in
-  "#" ^ Int.to_string t.id ^ " " ^ LA.label t.value ^ " " ^ dims_s ^ " ["
+  "#" ^ Int.to_string t.id ^ " " ^ Tn.label t.value ^ " " ^ dims_s ^ " ["
   ^ String.concat ~sep:"," (List.map t.children ~f:(fun { subtensor = { id; _ }; _ } -> Int.to_string id))
   ^ "]"
 (*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box v.label)*)
@@ -357,7 +357,7 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_v
     let indices = Shape.default_display_indices t.shape in
     let labels = Shape.to_labels t.shape in
     let where_located a =
-      LA.(
+      Tn.(
         (* if Option.is_some @@ Lazy.force a.array then "<hosted>" else *)
         if is_true a.virtual_ then [%string "<virtual %{Option.value_exn a.virtual_ |> snd#Int}>"]
         else if is_true a.device_only then
@@ -368,11 +368,11 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_v
         else "<waiting>")
     in
     let txt =
-      if with_id then "#" ^ id ^ " " ^ LA.label t.value (* ^ " DEBUG: " ^ where_located t.value *)
-      else LA.label t.value
+      if with_id then "#" ^ id ^ " " ^ Tn.label t.value (* ^ " DEBUG: " ^ where_located t.value *)
+      else Tn.label t.value
     in
     let grad_txt diff =
-      let label = LA.label diff.grad in
+      let label = Tn.label diff.grad in
       let label =
         if String.is_substring (String.lowercase label) ~substring:"grad" then label else label ^ " Gradient"
       in
@@ -436,14 +436,14 @@ let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_shape =
 
 let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style) t =
   let sh = t.shape in
-  let label = LA.label t.value in
+  let label = Tn.label t.value in
   let prefix =
     "[" ^ Int.to_string t.id ^ "]: " ^ label ^ " shape "
     ^ Shape.to_string_hum ~style:`Axis_number_and_size sh
     ^ " "
   in
   let grad_txt diff =
-    let label = LA.label diff.grad in
+    let label = Tn.label diff.grad in
     if String.is_substring (String.lowercase label) ~substring:"grad" then label else label ^ " Gradient"
   in
   let labels = Shape.to_labels t.shape in

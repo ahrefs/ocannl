@@ -176,7 +176,7 @@ Exec_as_cuda constants:
                  (* Defer till after compilation, to access the compiled-into module. *)
                  Cudajit.module_get_global
                    (Option.value_exn session_state.last_module)
-                   ~name:(LA.name v)
+                   ~name:(Tn.name v)
                in
                assert (Unsigned.Size_t.to_int size = size_in_bytes);
                ptr)

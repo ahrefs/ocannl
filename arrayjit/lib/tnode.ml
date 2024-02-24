@@ -43,7 +43,7 @@ let hash_t = hash
 let get_exn a =
   match a.array with
   | (lazy (Some nd)) -> nd
-  | _ -> invalid_arg @@ "Lazy_array.get_exn: array " ^ name a ^ " is not hosted"
+  | _ -> invalid_arg @@ "Tnode.get_exn: array " ^ name a ^ " is not hosted"
 
 let has a = match a.array with (lazy (Some _)) -> true | _ -> false
 
@@ -128,10 +128,10 @@ let create prec ~id ~label ~dims init_op =
   arr
 
 let print_accessible_headers () =
-  Stdio.printf "Lazy_array: collecting accessible arrays...%!\n";
+  Stdio.printf "Tnode: collecting accessible arrays...%!\n";
   Core.Gc.full_major ();
   Registry.iter (fun arr -> Stdio.print_endline @@ header arr) registry;
-  Stdio.printf "Lazy_array: Finished printing headers.%!\n"
+  Stdio.printf "Tnode: Finished printing headers.%!\n"
 
 module Debug_runtime = Utils.Debug_runtime
 

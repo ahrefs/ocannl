@@ -1,6 +1,6 @@
 open Base
 open Ocannl
-module LA = Arrayjit.Lazy_array
+module Tn = Arrayjit.Tnode
 module IDX = Arrayjit.Indexing.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL

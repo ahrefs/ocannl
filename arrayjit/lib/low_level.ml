@@ -2,10 +2,10 @@ open Base
 (** The code for operating on n-dimensional arrays. *)
 
 module Nd = Ndarray
-module LA = Lazy_array
+module Tn = Tnode
 
 module Scope_id = struct
-  type t = { nd : LA.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
+  type t = { nd : Tn.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
 
   include Comparator.Make (struct
     type nonrec t = t
@@ -15,7 +15,7 @@ module Scope_id = struct
   end)
 end
 
-type scope_id = Scope_id.t = { nd : LA.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
+type scope_id = Scope_id.t = { nd : Tn.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
 
 (** *** Low-level representation. *)
 
@@ -32,8 +32,8 @@ type t =
   | Staged_compilation of ((unit -> unit)[@equal.ignore] [@compare.ignore])
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
-  | Zero_out of LA.t
-  | Set of { array : LA.t; idcs : Indexing.axis_index array; llv : float_t; mutable debug : string }
+  | Zero_out of Tn.t
+  | Set of { array : Tn.t; idcs : Indexing.axis_index array; llv : float_t; mutable debug : string }
   | Set_local of scope_id * float_t
 [@@deriving sexp_of, equal]
 
@@ -46,7 +46,7 @@ and float_t =
     }
   | Get_local of scope_id
   | Get_global of Ops.global_identifier * Indexing.axis_index array option
-  | Get of LA.t * Indexing.axis_index array
+  | Get of Tn.t * Indexing.axis_index array
   | Binop of Ops.binop * float_t * float_t
   | Unop of Ops.unop * float_t
   | Constant of float
@@ -85,7 +85,7 @@ type visits =
 [@@deriving sexp, equal, variants]
 
 type traced_array = {
-  nd : LA.t;
+  nd : Tn.t;
   mutable computations : (Indexing.axis_index array option * t) list;
       (** The computations (of the data node) are retrieved for optimization just as they are populated,
           so that the inlined code corresponds precisely to the changes to the arrays that would happen
@@ -169,7 +169,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
           | Iterator s ->
               let old_array = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> array) in
               (* TODO(#134): this prevents multiple virtual arrays from sharing for loops. *)
-              assert (LA.equal old_array array))
+              assert (Tn.equal old_array array))
     | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
     | Staged_compilation _ -> ()
@@ -200,11 +200,11 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         a.virtual_ <- Some (false, 1);
       if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then traced.read_only <- true;
       if Hashtbl.exists traced.accesses ~f:is_recurrent then (
-        if LA.is_true a.virtual_ then
+        if Tn.is_true a.virtual_ then
           raise
           @@ Ndarray.User_error
                [%string
-                 "Compiling: array #%{a.id#Int} %{LA.label a} is already virtual, does not support recurrence"];
+                 "Compiling: array #%{a.id#Int} %{Tn.label a} is already virtual, does not support recurrence"];
         if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 2);
         (* We allow the array to be device-only, but infer it to not be as the safer case. *)
         if Option.is_none a.device_only then a.device_only <- Some (false, 3);
@@ -249,9 +249,9 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
     | For_loop { trace_it = false; _ } -> raise @@ Non_virtual 6
     | For_loop { index; body; from_ = _; to_ = _; trace_it = true } ->
         loop_proc ~env_dom:(Set.add env_dom index) body
-    | Zero_out array -> if LA.equal array top_array then has_setter := true
+    | Zero_out array -> if Tn.equal array top_array then has_setter := true
     | Set { array; idcs; llv; debug = _ } ->
-        if LA.equal array top_array then (
+        if Tn.equal array top_array then (
           check_idcs idcs;
           has_setter := true)
         else
@@ -274,7 +274,7 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
     match llv with
     | Constant _ -> ()
     | Get (array, idcs) ->
-        if LA.equal array top_array then check_idcs idcs
+        if Tn.equal array top_array then check_idcs idcs
         else
           (* Check for escaping variables. *)
           Array.iter idcs ~f:(function
@@ -299,17 +299,17 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
     | Unop (_, llv) -> loop_float ~env_dom llv
   in
   try
-    if LA.is_false traced.nd.virtual_ then raise @@ Non_virtual 11;
+    if Tn.is_false traced.nd.virtual_ then raise @@ Non_virtual 11;
     loop_proc ~env_dom:static_indices top_llc;
     if not !has_setter then raise @@ Non_virtual 12;
     traced.computations <- (!at_idcs, top_llc) :: traced.computations
   with Non_virtual i ->
     let a = traced.nd in
-    if LA.is_true a.virtual_ then
+    if Tn.is_true a.virtual_ then
       raise
       @@ Ndarray.User_error
            [%string
-             {|Compiling: array #%{a.id#Int} %{LA.label a} is already virtual, cannot compile:
+             {|Compiling: array #%{a.id#Int} %{Tn.label a} is already virtual, cannot compile:
 %{Sexp.to_string_hum @@ sexp_of_t top_llc}|}];
     if Option.is_none a.virtual_ then a.virtual_ <- Some (false, i)
 
@@ -350,8 +350,8 @@ let inline_computation ~id traced static_indices call_args =
           let env = Map.add_exn ~key:index ~data:(Indexing.Iterator fresh) env in
           Option.map ~f:(fun body : t -> For_loop { index = fresh; from_; to_; body; trace_it })
           @@ loop env body
-      | Zero_out array when LA.equal array traced.nd -> Some (Set_local (id, Constant 0.0))
-      | Set { array; idcs; llv; debug = _ } when LA.equal array traced.nd ->
+      | Zero_out array when Tn.equal array traced.nd -> Some (Set_local (id, Constant 0.0))
+      | Set { array; idcs; llv; debug = _ } when Tn.equal array traced.nd ->
           assert ([%equal: Indexing.axis_index array option] (Some idcs) def_args);
           Some (Set_local (id, loop_float env llv))
       | Zero_out _ -> None
@@ -362,7 +362,7 @@ let inline_computation ~id traced static_indices call_args =
     and loop_float env llv : float_t =
       match llv with
       | Constant _ -> llv
-      | Get (array, indices) when LA.equal array traced.nd ->
+      | Get (array, indices) when Tn.equal array traced.nd ->
           assert ([%equal: Indexing.axis_index array option] (Some indices) def_args);
           Get_local id
       | Get (array, indices) -> Get (array, Array.map ~f:(subst env) indices)
@@ -388,12 +388,12 @@ let inline_computation ~id traced static_indices call_args =
     if List.is_empty body then raise @@ Non_virtual 14 else Some (unflat_lines body)
   with Non_virtual i ->
     let a = traced.nd in
-    (if LA.is_true a.virtual_ then
+    (if Tn.is_true a.virtual_ then
        let body = unflat_lines @@ List.rev_map ~f:snd traced.computations in
        raise
        @@ Ndarray.User_error
             [%string
-              {|Compiling: array #%{a.id#Int} %{LA.label a} is already virtual, cannot inline computation:
+              {|Compiling: array #%{a.id#Int} %{Tn.label a} is already virtual, cannot inline computation:
 %{Sexp.to_string_hum @@ sexp_of_t body}|}]);
     if Option.is_none a.virtual_ then a.virtual_ <- Some (false, i);
     None
@@ -420,19 +420,19 @@ let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
         | Some array when not @@ Set.mem process_for array ->
             let node : traced_array = get_node traced_store array in
             let result = loop_proc ~process_for:(Set.add process_for array) llc in
-            if LA.isnt_false node.nd.virtual_ then check_and_store_virtual node static_indices result;
+            if Tn.isnt_false node.nd.virtual_ then check_and_store_virtual node static_indices result;
             result
         | _ -> For_loop { for_config with body = loop body })
     | Zero_out array ->
         let traced : traced_array = get_node traced_store array in
-        if (not @@ Set.mem process_for array) && LA.isnt_false traced.nd.virtual_ then
+        if (not @@ Set.mem process_for array) && Tn.isnt_false traced.nd.virtual_ then
           check_and_store_virtual traced static_indices llc;
         llc
     | Set { array; idcs; llv; debug = _ } ->
         let traced : traced_array = get_node traced_store array in
-        let next = if LA.is_false traced.nd.virtual_ then process_for else Set.add process_for array in
+        let next = if Tn.is_false traced.nd.virtual_ then process_for else Set.add process_for array in
         let result = Set { array; idcs; llv = loop_float ~process_for:next llv; debug = "" } in
-        if (not @@ Set.mem process_for array) && LA.isnt_false traced.nd.virtual_ then
+        if (not @@ Set.mem process_for array) && Tn.isnt_false traced.nd.virtual_ then
           check_and_store_virtual traced static_indices result;
         result
     | Set_local (id, llv) -> Set_local (id, loop_float ~process_for llv)
@@ -446,7 +446,7 @@ let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
         llv
     | Get (array, indices) ->
         let traced = get_node traced_store array in
-        if LA.is_false traced.nd.virtual_ then llv
+        if Tn.is_false traced.nd.virtual_ then llv
         else
           let id = get_scope array in
           Option.value ~default:llv
@@ -460,7 +460,7 @@ let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
     | Binop (op, llv1, llv2) -> Binop (op, loop_float ~process_for llv1, loop_float ~process_for llv2)
     | Unop (op, llv) -> Unop (op, loop_float ~process_for llv)
   in
-  loop_proc ~process_for:(Set.empty (module Lazy_array)) llc
+  loop_proc ~process_for:(Set.empty (module Tnode)) llc
 
 let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
   (* The current position is within scope of the definitions of the process_for virtual arrays. *)
@@ -475,7 +475,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
         let env_dom = Set.add env_dom index in
         match Hashtbl.find reverse_node_map index with
         | Some a ->
-            if LA.isnt_false a.LA.virtual_ then (
+            if Tn.isnt_false a.Tn.virtual_ then (
               (* FIXME: *)
               a.virtual_ <- Some (true, 15);
               None)
@@ -486,13 +486,13 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
             Option.map ~f:(fun body : t -> For_loop { for_config with body })
             @@ loop_proc ~balanced ~env_dom body)
     | Zero_out array ->
-        if LA.isnt_false array.virtual_ then (
+        if Tn.isnt_false array.virtual_ then (
           (* FIXME: *)
           array.virtual_ <- Some (true, 151);
           None)
         else Some llc
     | Set { array; idcs; llv; debug = _ } ->
-        if LA.isnt_false array.virtual_ then (
+        if Tn.isnt_false array.virtual_ then (
           (* FIXME: *)
           array.virtual_ <- Some (true, 152);
           None)
@@ -500,7 +500,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
           assert (Array.for_all idcs ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
           Some (Set { array; idcs; llv = loop_float ~balanced ~env_dom llv; debug = "" }))
     | Set_local (id, llv) ->
-        assert (LA.isnt_false id.nd.virtual_);
+        assert (Tn.isnt_false id.nd.virtual_);
         id.nd.virtual_ <- Some (true, 16);
         Some (Set_local (id, loop_float ~balanced ~env_dom llv))
     | Comment _ -> Some llc
@@ -510,7 +510,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
     match llv with
     | Constant _ -> llv
     | Get (a, indices) ->
-        assert (LA.isnt_true a.virtual_);
+        assert (Tn.isnt_true a.virtual_);
         (* DEBUG: *)
         if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 17);
         assert (Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
@@ -518,7 +518,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
     | Local_scope { id; prec; body; orig_indices } ->
         assert (
           Array.for_all orig_indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
-        if LA.is_false id.nd.virtual_ then Get (id.nd, orig_indices)
+        if Tn.is_false id.nd.virtual_ then Get (id.nd, orig_indices)
         else
           (* DEBUG: *)
           let body = Option.value_exn @@ loop_proc ~balanced ~env_dom body in
@@ -526,7 +526,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
           id.nd.virtual_ <- Some (true, 18);
           Local_scope { id; prec; orig_indices; body }
     | Get_local id ->
-        assert (LA.isnt_false id.nd.virtual_);
+        assert (Tn.isnt_false id.nd.virtual_);
         id.nd.virtual_ <- Some (true, 19);
         llv
     | Get_global _ -> llv
@@ -671,11 +671,11 @@ let simplify_llc llc =
   in
   loop_proc llc
 
-type traced_store = (LA.t, traced_array) Base.Hashtbl.t
+type traced_store = (Tn.t, traced_array) Base.Hashtbl.t
 type optimized = traced_store * t
 
 let%debug_sexp optimize_proc static_indices llc =
-  let traced_store = Hashtbl.create (module Lazy_array) in
+  let traced_store = Hashtbl.create (module Tnode) in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
   let reverse_node_map = Hashtbl.create (module Indexing.Symbol) in
   [%log "tracing"];
@@ -706,9 +706,9 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) () ppf llc =
   let pp_indices ppf idcs = pp_print_list ~pp_sep:pp_comma pp_index ppf @@ Array.to_list idcs in
   let nograd_idents = Hashtbl.create (module String) in
   let nograd la =
-    if List.mem ~equal:String.equal la.LA.label "grad" then ()
+    if List.mem ~equal:String.equal la.Tn.label "grad" then ()
     else
-      Option.iter (LA.ident_label la)
+      Option.iter (Tn.ident_label la)
         ~f:
           (Hashtbl.update nograd_idents ~f:(fun old ->
                Set.add (Option.value ~default:Utils.no_ints old) la.id))
@@ -743,7 +743,7 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) () ppf llc =
   in
   loop llc;
   let repeating_idents = Hashtbl.filter nograd_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1) in
-  let ident_label la = LA.styled_ident ~repeating_idents ident_style la in
+  let ident_label la = Tn.styled_ident ~repeating_idents ident_style la in
   let pp_ident ppf la = fprintf ppf "%s" @@ ident_label la in
   let pp_local ppf { nd; scope_id } = fprintf ppf "v%d_%a" scope_id pp_ident nd in
   let rec pp_ll ppf c : unit =
@@ -813,16 +813,16 @@ let%diagn_sexp compile_proc ~name static_indices llc =
       if Utils.settings.with_debug then
         [%log
           "finalizing",
-            (v.nd : LA.t),
+            (v.nd : Tn.t),
             "virtual",
-            (LA.is_true v.nd.virtual_ : bool),
+            (Tn.is_true v.nd.virtual_ : bool),
             "device-only",
-            (LA.is_true v.nd.device_only : bool)];
-      if LA.isnt_true v.nd.virtual_ && LA.isnt_true v.nd.device_only then (
-        assert (LA.isnt_false !(v.nd.hosted));
+            (Tn.is_true v.nd.device_only : bool)];
+      if Tn.isnt_true v.nd.virtual_ && Tn.isnt_true v.nd.device_only then (
+        assert (Tn.isnt_false !(v.nd.hosted));
         v.nd.hosted := Some (true, 1))
       else (
-        assert (LA.isnt_true !(v.nd.hosted));
+        assert (Tn.isnt_true !(v.nd.hosted));
         v.nd.hosted := Some (false, 2)));
   result
 

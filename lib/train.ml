@@ -1,5 +1,5 @@
 open Base
-module LA = Arrayjit.Lazy_array
+module Tn = Arrayjit.Tnode
 module NTDSL = Operation.NTDSL
 module Asgns = Arrayjit.Assignments
 module Idx = Arrayjit.Indexing
@@ -27,7 +27,7 @@ let fresh_backend ?backend_name () =
   reinitialize backend;
   backend
 
-let literal_heuristic (a : LA.t) =
+let literal_heuristic (a : Tn.t) =
   try
     ignore (Float.of_string (List.hd_exn a.label) : float);
     true
@@ -42,30 +42,30 @@ let get_params t =
   in
   loop (Set.empty (module Tensor)) { subtensor = t; embedded = true }
 
-let set_on_host (a : LA.t) =
-  if LA.is_true a.virtual_ then
+let set_on_host (a : Tn.t) =
+  if Tn.is_true a.virtual_ then
     raise
     @@ Arrayjit.Ndarray.User_error
-         [%string "Train.set_on_host: array #%{a.id#Int} %{LA.label a} is already virtual"];
+         [%string "Train.set_on_host: array #%{a.id#Int} %{Tn.label a} is already virtual"];
   if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 27);
-  if LA.is_true a.device_only then
+  if Tn.is_true a.device_only then
     raise
     @@ Arrayjit.Ndarray.User_error
-         [%string "Train.set_on_host: array #%{a.id#Int} %{LA.label a} is already device-only"];
+         [%string "Train.set_on_host: array #%{a.id#Int} %{Tn.label a} is already device-only"];
   a.device_only <- Some (false, 28)
 
-let set_non_local_prefer_device_only (a : LA.t) =
-  if LA.is_true a.virtual_ then
+let set_non_local_prefer_device_only (a : Tn.t) =
+  if Tn.is_true a.virtual_ then
     raise
     @@ Arrayjit.Ndarray.User_error
-         [%string "Train.set_non_local: array #%{a.id#Int} %{LA.label a} is already virtual"];
+         [%string "Train.set_non_local: array #%{a.id#Int} %{Tn.label a} is already virtual"];
   if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 29);
-  if LA.isnt_true a.device_only && LA.isnt_true !(a.hosted) then
-    if LA.is_false a.device_only && LA.is_false !(a.hosted) then
+  if Tn.isnt_true a.device_only && Tn.isnt_true !(a.hosted) then
+    if Tn.is_false a.device_only && Tn.is_false !(a.hosted) then
       raise
       @@ Arrayjit.Ndarray.User_error
-           [%string "Train.set_non_local: array #%{a.id#Int} %{LA.label a} is already local"]
-    else if Option.is_none a.device_only && LA.isnt_true !(a.hosted) then (
+           [%string "Train.set_non_local: array #%{a.id#Int} %{Tn.label a} is already local"]
+    else if Option.is_none a.device_only && Tn.isnt_true !(a.hosted) then (
       a.device_only <- Some (true, 30);
       if Option.is_none !(a.hosted) then a.hosted := Some (false, 3))
 
@@ -175,11 +175,11 @@ let%track_sexp round_robin fs parallel_jitbs jitbs ~sync : unit =
   loop jitbs;
   if !pos % num_devices <> 0 then sync (!pos % num_devices)
 
-let set_virtual (a : LA.t) =
-  if LA.is_false a.virtual_ then
+let set_virtual (a : Tn.t) =
+  if Tn.is_false a.virtual_ then
     raise
     @@ Arrayjit.Ndarray.User_error
-         [%string "Train.set_virtual: array #%{a.id#Int} %{LA.label a} is already non-virtual"];
+         [%string "Train.set_virtual: array #%{a.id#Int} %{Tn.label a} is already non-virtual"];
   if Option.is_none a.virtual_ then a.virtual_ <- Some (true, 29)
 
 let every_non_literal_on_host =
@@ -192,8 +192,8 @@ let%debug_sexp all_host_to_device (type context) (module Backend : Backend_type 
       if b then
         [%log
           "copied",
-            LA.label a,
-            LA.name a,
+            Tn.label a,
+            Tn.name a,
             "from host to device",
             (Backend.get_ctx_device context |> Backend.to_ordinal : int)])
 
@@ -204,8 +204,8 @@ let%debug_sexp all_device_to_host (type context) (module Backend : Backend_type 
       if b then
         [%log
           "copied",
-            LA.label a,
-            LA.name a,
+            Tn.label a,
+            Tn.name a,
             "from device",
             (Backend.get_ctx_device context |> Backend.to_ordinal : int),
             "to host"])

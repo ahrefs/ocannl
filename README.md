@@ -85,3 +85,14 @@ There is no dependency on `ocaml-cudajit`, so you have to install it first to en
 * [Tinygrad](https://github.com/tinygrad)
 * [JAX autodidax](https://jax.readthedocs.io/en/latest/autodidax.html)
 * [Fast GPT: GPT-2 inference in Fortran](https://github.com/certik/fastGPT/), [picoGPT: code-golf GPT-2 inference in NumPy](https://github.com/jaymody/picoGPT)
+
+## Memory model
+
+A tensor consists of a value tensor node, a forward computation logic for the value (can be no-op if it's a data tensor), and, if the tensor is differentiable, a gradient tensor node and a backprop computation logic.
+
+Memory materialization levels for tensor nodes: virtual, local, device-only, hosted.
+
+* Virtual: the computations are inlined, and cached only on a per-scalar basis.
+* Local: the computations happen during, and are guaranteed to be cached a for the duration of, a single function call.
+* Device-only: the tensor node is stored on devices that computed it, persists across function calls to the device if the functions share a relevant ancestor context.
+* Hosted: the tensor node is stored in a way visible to the CPU, can be visualized and stored to disk.

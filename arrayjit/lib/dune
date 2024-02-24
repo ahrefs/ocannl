@@ -17,7 +17,7 @@
   ops
   ndarray
   indexing
-  lazy_array
+  tnode
   low_level
   assignments
   dummy_backend

@@ -1,6 +1,6 @@
 open Base
 open Ocannl
-module LA = Arrayjit.Lazy_array
+module Tn = Arrayjit.Tnode
 module IDX = Arrayjit.Indexing.IDX
 module CDSL = Arrayjit.Low_level.CDSL
 module TDSL = Operation.TDSL
@@ -102,11 +102,11 @@ let _suspended () =
   let update = Train.grad_update l in
   let jitted = jit (init device) IDX.empty @@ update.fwd_bprop in
   Tensor.iter_embedded_arrays l ~f:(fun a ->
-      if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ LA.name a);
+      if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
   jitted.run Train.debug_rt ();
   await device;
   Tensor.iter_embedded_arrays l ~f:(fun a ->
-      if to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ LA.name a);
+      if to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ Tn.name a);
   Stdio.print_endline
     {|
       We did not update the params: all values and gradients will be at initial points,
@@ -116,18 +116,18 @@ let _suspended () =
   let jitted = jit jitted.context IDX.empty @@ Train.sgd_update ~learning_rate update in
   (* learning_rate is virtual so this will not print anything. *)
   Tensor.iter_embedded_arrays learning_rate ~f:(fun a ->
-      if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ LA.name a);
+      if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
   Stdio.print_endline
     {|
       Due to how the gccjit backend works, since the parameters were constant in the grad_update
       computation, they did not exist on the device before. Now they do. This would not be needed
       on the cuda backend.|};
   List.iter [ a.value; b.value; c.value; f.value ] ~f:(fun a ->
-      if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ LA.name a);
+      if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
   jitted.run Train.debug_rt ();
   await device;
   Tensor.iter_embedded_arrays l ~f:(fun a ->
-      if to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ LA.name a);
+      if to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ Tn.name a);
   Stdio.print_endline
     {|
       Now we updated the params, but after the forward and backward passes:
@@ -139,7 +139,7 @@ let _suspended () =
   jitted.run Train.debug_rt ();
   await device;
   Tensor.iter_embedded_arrays l ~f:(fun a ->
-      if to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ LA.name a);
+      if to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ Tn.name a);
   Stdio.print_endline
     {|
       Now again we did not update the params, they will remain as above, but both param
