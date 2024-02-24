@@ -85,11 +85,14 @@ type updaten = {
   fwd_bprop : Asgns.t;
 }
 
-(** Sets the tensor's value as "fully on host", returns the tensor's forward, zeroing gradients, and
-    backprop code wrapped with label-derived comments, sets the parameters and their gradients
-    as "non-local" (on-device), returns the update and the parameters. *)
-let grad_update l =
+(** Returns the tensor's forward, zeroing gradients, and backprop code wrapped with label-derived comments.
+    Sets the tensor's value as "fully on host". If [setup_for_parallel] is true (false by default),
+    sets the parameters and their gradients as "non-local" (on-device). *)
+let grad_update ?(setup_for_parallel = false) l =
+  set_on_host l.Tensor.value;
   let params = get_params l in
+  if setup_for_parallel then
+    Set.iter params ~f:(fun p -> set_non_local_prefer_device_only (Option.value_exn p.diff).grad);
   let label = label_suffix l.value.label in
   let fwd_bprop =
     match l.Tensor.diff with
@@ -239,8 +242,6 @@ let sync_run ?looping (type context) (module Backend : Backend_type with type co
     Bindings without ranges remain at their initial values. *)
 let%track_sexp parallel_update (type context) (module Backend : Backend_type with type context = context)
     ~(grad_updates : Backend.jitted array) ~(sgd_update : Backend.jitted) ~post_sync updaten : unit =
-  set_on_host updaten.tensor.Tensor.value;
-  Set.iter updaten.params ~f:(fun p -> set_non_local_prefer_device_only (Option.value_exn p.diff).grad);
   assert (not @@ Array.is_empty grad_updates);
   let num_devices : int = Array.length grad_updates in
   let bindings : Idx.static_symbol list = List.map ~f:fst sgd_update.bindings in
@@ -250,9 +251,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
           [%equal: Idx.static_symbol list] bindings @@ List.map ~f:fst upd.bindings))];
   let all_params : Tensor.t list = Set.to_list updaten.params in
   let param_vals = [%debug_notrace List.map all_params ~f:(fun t -> t.value)] in
-  let param_grads =
-    [%debug_notrace List.filter_map all_params ~f:(fun t -> Option.map t.diff ~f:(fun d -> d.grad))]
-  in
+  let param_grads = [%debug_notrace List.map all_params ~f:(fun t -> (Option.value_exn t.diff).grad)] in
   let ctxs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.context)] in
   (* Note: [from] indices are bigger than [to_] indices. We end up at 0. *)
   let merges : Backend.jitted list array array =
@@ -263,9 +262,12 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
             (num_devices - to_ - 1)
             ~f:(fun (delta_m_1 : int) ->
               let from : int = to_ + delta_m_1 + 1 in
-              List.filter_map param_grads ~f:(fun p ->
-                  Backend.merge ~name_suffix:"grad_merge" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Add
-                    ~src:ctxs.(from))))
+              List.map param_grads ~f:(fun p ->
+                  Option.value_or_thunk ~default:(fun () ->
+                      invalid_arg @@ "Train.parallel_update: gradient not available on a device: "
+                      ^ Tn.label p)
+                  @@ Backend.merge ~name_suffix:"grad_merge" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Add
+                       ~src:ctxs.(from))))
   in
   let merge ~(from : int) ~(to_ : int) : unit =
     (* FIXME: is this parallel? *)
@@ -277,9 +279,11 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     else
       Array.init (num_devices - 1) ~f:(fun from_m_1 ->
           let from : int = from_m_1 + 1 in
-          List.filter_map param_vals ~f:(fun p ->
-              Backend.merge ~name_suffix:"param_copy" p ~dst:ctxs.(0) ~accum:Arrayjit.Ops.Arg2
-                ~src:ctxs.(from)))
+          List.map param_vals ~f:(fun p ->
+              Option.value_or_thunk ~default:(fun () ->
+                  invalid_arg @@ "Train.parallel_update: parameter not available on a device: " ^ Tn.label p)
+              @@ Backend.merge ~name_suffix:"param_copy" p ~dst:ctxs.(0) ~accum:Arrayjit.Ops.Arg2
+                   ~src:ctxs.(from)))
   in
   (* let copy ~from ~to_ = List.iter copies.(to_).(from - to_ - 1) ~f:(fun jitted -> jitted.run ()) in *)
   let sync (devices_to_sync : int) : unit =

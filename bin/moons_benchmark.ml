@@ -83,7 +83,7 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     Train.set_on_host learning_rate.value;
     Train.set_on_host scalar_loss.value;
     let weight_decay : float = 0.0001 in
-    let update = Train.grad_update scalar_loss in
+    let update = Train.grad_update ~setup_for_parallel:true scalar_loss in
     let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
     let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit ctx bindings update.fwd_bprop) in
     let sgd_update = Backend.jit ctx0 bindings sgd in
