@@ -130,7 +130,8 @@ let%expect_test "Graph drawing fetch" =
   let%op x = x_flat @| step_sym in
   Train.set_on_host x.value;
   let%op fx = f x in
-  let fx_jitted = Backend.jit ctx bindings @@ Train.grad_update fx in
+  let update = Train.grad_update fx in
+  let fx_jitted = Backend.jit ctx bindings update.fwd_bprop in
   let ys =
     Array.map xs ~f:(fun _ ->
         fx_jitted.run Train.debug_rt ();
@@ -204,8 +205,8 @@ let%expect_test "Simple gradients hosted" =
   Train.every_non_literal_on_host l;
   Train.every_non_literal_on_host learning_rate;
   let grad = Train.grad_update l in
-  let sgd = Train.sgd_update ~learning_rate l in
-  let grad_jitted = Backend.jit ctx IDX.empty grad in
+  let sgd = Train.sgd_update ~learning_rate grad in
+  let grad_jitted = Backend.jit ctx IDX.empty grad.fwd_bprop in
   let sgd_jitted = Backend.jit grad_jitted.context IDX.empty sgd in
   (* Check out the initial state without running a forward pass. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
@@ -294,8 +295,8 @@ let%expect_test "Simple gradients virtual" =
   let%op l = d *. "f" [ -2 ] in
   let%op learning_rate = 0.1 in
   let grad = Train.grad_update l in
-  let sgd = Train.sgd_update ~learning_rate l in
-  let grad_jitted = Backend.jit ctx IDX.empty grad in
+  let sgd = Train.sgd_update ~learning_rate grad in
+  let grad_jitted = Backend.jit ctx IDX.empty grad.fwd_bprop in
   let sgd_jitted = Backend.jit grad_jitted.context IDX.empty sgd in
   (* Check out the initial state without running a forward pass. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
@@ -385,7 +386,8 @@ let%expect_test "2D neuron hosted" =
   let ctx = Backend.init device in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
-  let jitted = Backend.jit ctx IDX.empty @@ Train.grad_update v in
+  let update = Train.grad_update v in
+  let jitted = Backend.jit ctx IDX.empty update.fwd_bprop in
   jitted.run Train.debug_rt ();
   Backend.await device;
   Train.all_device_to_host (module Backend) jitted.context v;
@@ -411,7 +413,8 @@ let%expect_test "2D neuron virtual" =
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
-  let jitted = Backend.jit ctx IDX.empty @@ Train.grad_update v in
+  let update = Train.grad_update v in
+  let jitted = Backend.jit ctx IDX.empty update.fwd_bprop in
   jitted.run Train.debug_rt ();
   Backend.await device;
   Train.all_device_to_host (module Backend) jitted.context v;

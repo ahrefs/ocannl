@@ -61,12 +61,12 @@ let experiment seed ~use_builtin_weight_decay () =
   (* So that we can inspect them. *)
   Train.set_on_host learning_rate.value;
   let update = Train.grad_update scalar_loss in
-  let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
+  let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
 
   let module Backend = (val Train.fresh_backend ()) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  let jitted = Backend.jit ctx bindings (Seq (update, sgd)) in
+  let jitted = Backend.jit ctx bindings (Seq (update.fwd_bprop, sgd)) in
   Train.all_host_to_device (module Backend) jitted.context scalar_loss;
   Train.all_host_to_device (module Backend) jitted.context learning_rate;
   (* Stdio.print_endline "\n******** scalar_loss **********";

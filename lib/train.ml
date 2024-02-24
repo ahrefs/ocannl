@@ -36,7 +36,7 @@ let literal_heuristic (a : LA.t) =
 let is_param t =
   match t with { Tensor.children = []; diff = Some _; _ } -> not @@ literal_heuristic t.value | _ -> false
 
-let params t =
+let get_params t =
   let rec loop accu { Tensor.subtensor = t; _ } =
     List.fold t.children ~init:(if is_param t then Set.add accu t else accu) ~f:loop
   in
@@ -61,27 +61,38 @@ let forward t =
   let label = Option.value ~default:"tensor" @@ List.last t.Tensor.value.label in
   Asgns.Block_comment (label ^ " fwd", t.forward)
 
-(** Sets the tensor's value as "fully on host", returns the tensor's forward, zeroing gradients, and
-    backprop code wrapped with label-derived comments. *)
-let grad_update l =
-  set_on_host l.Tensor.value;
-  match l.Tensor.diff with
-  | Some diff ->
-      let%cd init_grad = l.grad =: 1 in
-      let label = Option.value ~default:"tensor" @@ List.last l.value.label in
-      Asgns.(
-        Block_comment
-          ( label ^ " gradient update",
-            sequential
-              [
-                Block_comment (label ^ " fwd", l.forward);
-                Block_comment (label ^ " zero grads", diff.zero_grads);
-                init_grad;
-                Block_comment (label ^ " bprop", diff.backprop);
-              ] ))
-  | None -> raise @@ Tensor.Session_error ("Train.backprop: tensor is not differentiable", Some l)
-
 let label_suffix label = Option.value ~default:"unknown" @@ List.last label
+
+type updaten = {
+  tensor : Tensor.t;
+  label : string;
+  params : (Tensor.t, Tensor.comparator_witness) Base.Set.t;
+  fwd_bprop : Asgns.t;
+}
+
+(** Sets the tensor's value as "fully on host", returns the tensor's forward, zeroing gradients, and
+    backprop code wrapped with label-derived comments, sets the parameters and their gradients
+    as "non-local" (on-device), returns the update and the parameters. *)
+let grad_update l =
+  let params = get_params l in
+  let label = label_suffix l.value.label in
+  let fwd_bprop =
+    match l.Tensor.diff with
+    | Some diff ->
+        let%cd init_grad = l.grad =: 1 in
+        Asgns.(
+          Block_comment
+            ( label ^ " gradient update",
+              sequential
+                [
+                  Block_comment (label ^ " fwd", l.forward);
+                  Block_comment (label ^ " zero grads", diff.zero_grads);
+                  init_grad;
+                  Block_comment (label ^ " bprop", diff.backprop);
+                ] ))
+    | None -> raise @@ Tensor.Session_error ("Train.backprop: tensor is not differentiable", Some l)
+  in
+  { tensor = l; label; params; fwd_bprop }
 
 (** See: {!https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py}. *)
 let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
@@ -97,13 +108,13 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
           if nesterov then pg =+ !.momentum *. b else pg =: b);
         p =- learning_rate *. pg] )
 
-let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov t =
+let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov l =
   let code =
-    params t |> Set.to_list
+    l.params |> Set.to_list
     |> List.map ~f:(sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov)
     |> Asgns.sequential
   in
-  Asgns.Block_comment (label_suffix t.value.label ^ " sgd update", code)
+  Asgns.Block_comment (l.label ^ " sgd update", code)
 
 (** All and only bindings with associated ranges are iterated, with the binding's initial value lost.
     Bindings without ranges remain at their initial values. *)
@@ -212,7 +223,8 @@ let sync_run ?looping (type context) (module Backend : Backend_type with type co
     All and only bindings with associated ranges are iterated, with the binding's initial value lost.
     Bindings without ranges remain at their initial values. *)
 let%track_sexp parallel_update (type context) (module Backend : Backend_type with type context = context)
-    ~(grad_updates : Backend.jitted array) ~(sgd_update : Backend.jitted) ~post_sync (t : Tensor.t) : unit =
+    ~(grad_updates : Backend.jitted array) ~(sgd_update : Backend.jitted) ~post_sync updaten : unit =
+  set_on_host updaten.tensor.Tensor.value;
   assert (not @@ Array.is_empty grad_updates);
   let num_devices : int = Array.length grad_updates in
   let bindings : Idx.static_symbol list = List.map ~f:fst sgd_update.bindings in
@@ -220,7 +232,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     assert (
       Array.for_all grad_updates ~f:(fun upd ->
           [%equal: Idx.static_symbol list] bindings @@ List.map ~f:fst upd.bindings))];
-  let all_params : Tensor.t list = Set.to_list @@ params t in
+  let all_params : Tensor.t list = Set.to_list updaten.params in
   let param_vals = [%debug_notrace List.map all_params ~f:(fun t -> t.value)] in
   let param_grads =
     [%debug_notrace List.filter_map all_params ~f:(fun t -> Option.map t.diff ~f:(fun d -> d.grad))]
@@ -239,9 +251,9 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
                   Backend.merge ~name_suffix:"grad_merge" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Add
                     ~src:ctxs.(from))))
   in
-  let merge ~(from: int) ~(to_: int): unit =
+  let merge ~(from : int) ~(to_ : int) : unit =
     (* FIXME: is this parallel? *)
-    let delta_m_1: int = from - to_ -  1 in
+    let delta_m_1 : int = from - to_ - 1 in
     List.iter merges.(to_).(delta_m_1) ~f:(fun jitted -> jitted.run debug_rt ())
   in
   let copies : Backend.jitted list array =

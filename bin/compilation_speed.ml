@@ -27,7 +27,7 @@ let benchmark_overhead backend () =
   (* Initialize the context with a mock update of x to ensure that it is not optimized as a constant. *)
   let%cd mock_update_x = x =: 42 in
   let init_jitted_x = jit ~name:"init_assign_x" ctx IDX.empty mock_update_x in
-  let jitted_f = jit init_jitted_x.context IDX.empty update_f in
+  let jitted_f = jit init_jitted_x.context IDX.empty update_f.fwd_bprop in
   Tensor.print_tree ~with_grad:true ~with_backend_info:true ~depth:9 f;
   Tensor.iter_embedded_arrays f ~f:(fun a ->
       if from_host jitted_f.context a then Stdio.printf "Sent array %s.\n%!" @@ LA.name a);

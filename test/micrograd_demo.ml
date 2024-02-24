@@ -21,7 +21,8 @@ let%expect_test "Micrograd README basic example" =
   let%op g = f /. 2 in
   let%op g = g + (10. /. f) in
   List.iter ~f:(Option.iter ~f:(fun diff -> Train.set_on_host diff.Tensor.grad)) [ a.diff; b.diff ];
-  let step = Backend.jit ctx IDX.empty @@ Train.grad_update g in
+  let update = Train.grad_update g in
+  let step = Backend.jit ctx IDX.empty update.fwd_bprop in
   step.run Train.debug_rt ();
   Backend.await device;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ g;
@@ -113,8 +114,8 @@ let%expect_test "Micrograd half-moons example" =
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in
   Train.set_on_host learning_rate.value;
   let update = Train.grad_update scalar_loss in
-  let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
-  let sgd_jitted = Backend.jit ctx bindings (Seq (update, sgd)) in
+  let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
+  let sgd_jitted = Backend.jit ctx bindings (Seq (update.fwd_bprop, sgd)) in
   Train.all_host_to_device (module Backend) sgd_jitted.context scalar_loss;
   Train.all_host_to_device (module Backend) sgd_jitted.context learning_rate;
   for _epoch = 1 to epochs do

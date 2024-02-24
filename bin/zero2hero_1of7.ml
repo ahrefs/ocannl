@@ -15,13 +15,13 @@ let _suspended () =
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
   let code = Train.grad_update v in
-  let jitted = Backend.jit ctx IDX.empty code in
+  let jitted = Backend.jit ctx IDX.empty code.fwd_bprop in
   (* jitted.run (); *)
   Train.sync_run (module Backend) jitted v;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_id:true ~with_grad:true ~depth:9 v;
   Stdlib.Format.printf "\nHigh-level code:\n%!";
-  Stdlib.Format.printf "%s\n%!" @@ Arrayjit.Assignments.to_string_hum code
+  Stdlib.Format.printf "%s\n%!" @@ Arrayjit.Assignments.to_string_hum code.fwd_bprop
 
 let _suspended () =
   Random.init 0;
@@ -37,7 +37,7 @@ let _suspended () =
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   Stdio.printf "\n%!"
 
-let  () =
+let () =
   Utils.settings.output_debug_files_in_run_directory <- true;
   Random.init 0;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
@@ -60,7 +60,8 @@ let  () =
   Stdio.print_endline "\n";
   let module Backend = (val Train.fresh_backend ()) in
   let ctx = Backend.init @@ Backend.get_device ~ordinal:0 in
-  let jitted = Backend.jit ctx bindings @@ Train.grad_update fx in
+  let update = Train.grad_update fx in
+  let jitted = Backend.jit ctx bindings update.fwd_bprop in
   let step_ref = IDX.find_exn jitted.bindings step_sym in
   let ys = Array.create ~len:size 0. and dys = Array.create ~len:size 0. in
   let open Tensor.O in
@@ -98,7 +99,8 @@ let _suspended () =
   Train.every_non_literal_on_host l;
   let open (val Train.fresh_backend ()) in
   let device = get_device ~ordinal:0 in
-  let jitted = jit (init device) IDX.empty @@ Train.grad_update l in
+  let update = Train.grad_update l in
+  let jitted = jit (init device) IDX.empty @@ update.fwd_bprop in
   Tensor.iter_embedded_arrays l ~f:(fun a ->
       if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ LA.name a);
   jitted.run Train.debug_rt ();
@@ -111,7 +113,7 @@ let _suspended () =
       which are specified in the tensor in the brackets.|};
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   let%op learning_rate = 0.1 in
-  let jitted = jit jitted.context IDX.empty @@ Train.sgd_update ~learning_rate l in
+  let jitted = jit jitted.context IDX.empty @@ Train.sgd_update ~learning_rate update in
   (* learning_rate is virtual so this will not print anything. *)
   Tensor.iter_embedded_arrays learning_rate ~f:(fun a ->
       if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ LA.name a);
@@ -132,7 +134,8 @@ let _suspended () =
       only params values will change, compared to the above.|};
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   (* We could reuse the jitted code if we did not use `jit_and_run`. *)
-  let jitted = jit jitted.context IDX.empty @@ Train.grad_update l in
+  let update = Train.grad_update l in
+  let jitted = jit jitted.context IDX.empty update.fwd_bprop in
   jitted.run Train.debug_rt ();
   await device;
   Tensor.iter_embedded_arrays l ~f:(fun a ->

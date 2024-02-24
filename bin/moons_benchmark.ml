@@ -84,8 +84,8 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     Train.set_on_host scalar_loss.value;
     let weight_decay : float = 0.0001 in
     let update = Train.grad_update scalar_loss in
-    let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
-    let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit ctx bindings update) in
+    let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
+    let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit ctx bindings update.fwd_bprop) in
     let sgd_update = Backend.jit ctx0 bindings sgd in
     Train.all_host_to_device (module Backend) sgd_update.context scalar_loss;
     Train.all_host_to_device (module Backend) sgd_update.context learning_rate;
@@ -102,7 +102,7 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
       let epoch_loss = ref 0. in
       Train.parallel_update
         (module Backend)
-        ~grad_updates ~sgd_update scalar_loss
+        ~grad_updates ~sgd_update update
         ~post_sync:(fun () ->
           let step_ref = IDX.find_exn sgd_update.bindings step_sym in
           assert (Backend.to_host sgd_update.context learning_rate.value);
