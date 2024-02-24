@@ -54,6 +54,21 @@ let set_on_host (a : LA.t) =
          [%string "Train.set_on_host: array #%{a.id#Int} %{LA.label a} is already device-only"];
   a.device_only <- Some (false, 28)
 
+let set_non_local_prefer_device_only (a : LA.t) =
+  if LA.is_true a.virtual_ then
+    raise
+    @@ Arrayjit.Ndarray.User_error
+         [%string "Train.set_non_local: array #%{a.id#Int} %{LA.label a} is already virtual"];
+  if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 29);
+  if LA.isnt_true a.device_only && LA.isnt_true !(a.hosted) then
+    if LA.is_false a.device_only && LA.is_false !(a.hosted) then
+      raise
+      @@ Arrayjit.Ndarray.User_error
+           [%string "Train.set_non_local: array #%{a.id#Int} %{LA.label a} is already local"]
+    else if Option.is_none a.device_only && LA.isnt_true !(a.hosted) then (
+      a.device_only <- Some (true, 30);
+      if Option.is_none !(a.hosted) then a.hosted := Some (false, 3))
+
 (** Sets the tensor's value as "fully on host",
     returns the tensor's forward code with a label-derived comment. *)
 let forward t =
@@ -225,6 +240,7 @@ let sync_run ?looping (type context) (module Backend : Backend_type with type co
 let%track_sexp parallel_update (type context) (module Backend : Backend_type with type context = context)
     ~(grad_updates : Backend.jitted array) ~(sgd_update : Backend.jitted) ~post_sync updaten : unit =
   set_on_host updaten.tensor.Tensor.value;
+  Set.iter updaten.params ~f:(fun p -> set_non_local_prefer_device_only (Option.value_exn p.diff).grad);
   assert (not @@ Array.is_empty grad_updates);
   let num_devices : int = Array.length grad_updates in
   let bindings : Idx.static_symbol list = List.map ~f:fst sgd_update.bindings in
