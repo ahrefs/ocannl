@@ -2,9 +2,9 @@ open Base
 module Nd = Ndarray
 
 type t = {
-  array : Nd.t option Lazy.t;
+  array : (Nd.t option Lazy.t[@sexp.opaque]);
   prec : Ops.prec;
-  dims : int array Lazy.t;
+  dims : (int array Lazy.t[@sexp.opaque]);
   id : int;
   label : string list;
       (** Display information. It is better if the last element of the list is the most narrow
@@ -18,6 +18,7 @@ type t = {
           It is marked as [not !(nd.hosted)]. *)
   mutable backend_info : Sexp.t;
 }
+[@@deriving sexp_of]
 
 let is_false opt = not @@ Option.value ~default:true @@ Option.map ~f:fst opt
 let is_true opt = Option.value ~default:false @@ Option.map ~f:fst opt
@@ -26,7 +27,6 @@ let isnt_true opt = not @@ Option.value ~default:false @@ Option.map ~f:fst opt
 let name { id; _ } = "n" ^ Int.to_string id
 let label a = String.concat ~sep:"_" a.label
 let compare a1 a2 = compare_int a1.id a2.id
-let sexp_of_t a = Sexp.Atom (name a ^ "_" ^ label a)
 
 include Comparator.Make (struct
   type nonrec t = t
@@ -119,7 +119,8 @@ let create prec ~id ~label ~dims init_op =
   let hosted = ref None in
   let array =
     lazy
-      (if fst @@ Option.value_exn !hosted then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None)
+      (if fst @@ Option.value_exn !hosted then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op)
+       else None)
   in
   let arr =
     { array; prec; id; label; hosted; virtual_ = None; device_only = None; backend_info = Sexp.List []; dims }
