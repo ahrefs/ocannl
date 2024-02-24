@@ -46,26 +46,30 @@ let init ~label =
 
 type ndarray = {
   nd : LA.t;  (** The original array. *)
-  hosted_ptr : Gccjit.rvalue option;  (** Pointer to the first value of the associated hosted [Ndarray]. *)
-  global_ptr : Gccjit.rvalue option;  (** Pointer to the first value of the associated [context.arrays]. *)
-  local : Gccjit.lvalue option;  (** A local array, if any. *)
+  hosted_ptr : (Gccjit.rvalue[@sexp.opaque]) option;
+      (** Pointer to the first value of the associated hosted [Ndarray]. *)
+  global_ptr : (Gccjit.rvalue[@sexp.opaque]) option;
+      (** Pointer to the first value of the associated [context.arrays]. *)
+  local : (Gccjit.lvalue[@sexp.opaque]) option;  (** A local array, if any. *)
   mem : mem_properties;
   dims : int array;
   size_in_bytes : int;
-  num_typ : Gccjit.type_;
+  num_typ : (Gccjit.type_[@sexp.opaque]);
       (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]),
           [double] (precision [Double]). *)
   is_double : bool;
 }
+[@@deriving sexp_of]
 
 type ctx_info = {
-  ctx : Gccjit.context;
-  func : Gccjit.function_;
-  traced_store : Low_level.traced_store;
-  init_block : Gccjit.block;
+  ctx : (Gccjit.context[@sexp.opaque]);
+  func : (Gccjit.function_[@sexp.opaque]);
+  traced_store : (Low_level.traced_store[@sexp.opaque]);
+  init_block : (Gccjit.block[@sexp.opaque]);
   mutable ctx_arrays : Ndarray.t Map.M(LA).t;
   arrays : (LA.t, ndarray) Hashtbl.t;
 }
+[@@deriving sexp_of]
 
 let jit_array_offset ctx ~idcs ~dims =
   let open Gccjit in
@@ -87,7 +91,10 @@ let zero_out ctx block arr =
          @@ RValue.call ctx (Function.builtin ctx "memset")
               [ rv_ptr; RValue.zero ctx c_int; RValue.int ctx c_index arr.size_in_bytes ])
 
-let get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ctx_info) key : ndarray =
+module Debug_runtime = Utils.Debug_runtime
+
+let%track_sexp get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ctx_info) key :
+    ndarray =
   let open Gccjit in
   Hashtbl.find_or_add arrays key ~default:(fun () ->
       let tn = Low_level.(get_node traced_store key) in
@@ -169,8 +176,7 @@ let get_ptr_debug array =
   | None, None, Some _ -> "hosted_" ^ LA.name array.nd
   | None, None, None -> assert false
 
-let jit_code ~name ~log_file ~(env : Gccjit.rvalue Indexing.environment) ({ ctx; func; _ } as info)
-    initial_block body =
+let%track_sexp jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block body =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
@@ -231,10 +237,10 @@ let jit_code ~name ~log_file ~(env : Gccjit.rvalue Indexing.environment) ({ ctx;
         @@ RValue.call ctx p [ f; RValue.string_literal ctx ("\nCOMMENT: " ^ c ^ "\n") ]
     | _ -> Block.comment !current_block c
   in
-  let rec debug_float ~env ~is_double (value : Low_level.float_t) : string * 'a list =
+  let rec debug_float ~env ~is_double value =
     let loop = debug_float ~env ~is_double in
     match value with
-    | Local_scope { id; _ } ->
+    | Low_level.Local_scope { id; _ } ->
         (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug logs. *)
         loop @@ Get_local id
     | Get_local id ->
@@ -296,7 +302,7 @@ let jit_code ~name ~log_file ~(env : Gccjit.rvalue Indexing.environment) ({ ctx;
         Block.eval !current_block @@ RValue.call ctx fl [ f ]
     | _ -> ()
   in
-  let rec loop_proc ~(env : rvalue Indexing.environment) ~name (body : Low_level.t) : unit =
+  let rec loop_proc ~env ~name (body : Low_level.t) : unit =
     let loop = loop_proc ~env ~name in
     match body with
     | Noop -> ()
@@ -335,7 +341,7 @@ let jit_code ~name ~log_file ~(env : Gccjit.rvalue Indexing.environment) ({ ctx;
         Block.assign !current_block lhs value
     | Comment c -> log_comment c
     | Staged_compilation exp -> exp ()
-  and loop_float ~name ~env ~num_typ ~is_double v_code : rvalue =
+  and loop_float ~name ~env ~num_typ ~is_double v_code =
     let loop = loop_float ~name ~env ~num_typ ~is_double in
     match v_code with
     | Local_scope { id = { scope_id = i; _ } as id; prec; body; orig_indices = _ } ->
@@ -393,7 +399,7 @@ let jit_code ~name ~log_file ~(env : Gccjit.rvalue Indexing.environment) ({ ctx;
         let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) @@ loop c in
         RValue.binary_op ctx Mult num_typ cmp @@ loop c
     | Constant v -> RValue.double ctx num_typ v
-  and jit_for_loop ~env key ~from_ ~to_ body : unit =
+  and jit_for_loop ~env key ~from_ ~to_ body =
     let open Gccjit in
     let i = Indexing.symbol_ident key in
     let index = Function.local func c_index i in
@@ -415,7 +421,8 @@ let jit_code ~name ~log_file ~(env : Gccjit.rvalue Indexing.environment) ({ ctx;
   loop_proc ~name ~env body;
   !current_block
 
-let jit_func ~name ~log_file_name (context : context) ctx bindings (traced_store, proc) =
+let%track_sexp jit_func ~name ~log_file_name (context : context) ctx bindings (traced_store, proc) : ctx_info
+    =
   let open Gccjit in
   let c_index = Type.get ctx Type.Int in
   let fkind = Function.Exported in
@@ -496,7 +503,6 @@ let jit old_context ~name bindings compiled =
     let module Debug_runtime = (val _debug_runtime) in
     Indexing.apply run_variadic;
     if Utils.settings.debug_log_jitted then
-      [%log "gccjit-run", name];
       let rec loop = function
         | [] -> ()
         | line :: more when String.is_empty line -> loop more
