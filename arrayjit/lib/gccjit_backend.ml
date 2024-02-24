@@ -101,7 +101,7 @@ let%track_sexp get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_bl
       let dims = Lazy.force key.dims in
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
       let size_in_bytes = size_in_elems * Ops.prec_in_bytes key.prec in
-      let is_on_host = Option.value_exn !(key.hosted) in
+      let is_on_host = LA.is_true !(key.hosted) in
       assert (Bool.(Option.is_some (Lazy.force key.array) = is_on_host));
       (* TODO: is the complexity of introducing this function and matching on Ndarray.t needed? *)
       let array c_typ is_double arr =

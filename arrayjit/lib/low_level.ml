@@ -760,8 +760,7 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) () ppf llc =
         fprintf ppf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.array pp_indices p.idcs pp_float p.llv
     | Comment message -> fprintf ppf "/* %s */" message
     | Staged_compilation _ -> fprintf ppf "STAGED_COMPILATION_CALLBACK()"
-    | Set_local (id, llv) ->
-        fprintf ppf "@[<2>%a :=@ %a;@]" pp_local id pp_float llv
+    | Set_local (id, llv) -> fprintf ppf "@[<2>%a :=@ %a;@]" pp_local id pp_float llv
   and pp_float ppf value =
     match value with
     | Local_scope { id; body; _ } -> fprintf ppf "@[<2>%a {@ %a@]@ }@," pp_local id pp_ll body
@@ -820,11 +819,11 @@ let%diagn_sexp compile_proc ~name static_indices llc =
             "device-only",
             (LA.is_true v.nd.device_only : bool)];
       if LA.isnt_true v.nd.virtual_ && LA.isnt_true v.nd.device_only then (
-        assert (Option.value ~default:true !(v.nd.hosted));
-        v.nd.hosted := Some true)
+        assert (LA.isnt_false !(v.nd.hosted));
+        v.nd.hosted := Some (true, 1))
       else (
-        assert (not @@ Option.value ~default:false !(v.nd.hosted));
-        v.nd.hosted := Some false));
+        assert (LA.isnt_true !(v.nd.hosted));
+        v.nd.hosted := Some (false, 2)));
   result
 
 let loop_over_dims dims ~body =

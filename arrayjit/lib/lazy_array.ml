@@ -9,7 +9,7 @@ type t = {
   label : string list;
       (** Display information. It is better if the last element of the list is the most narrow
           or alphanumeric, e.g. an identifier. *)
-  hosted : bool option ref;
+  hosted : (bool * int) option ref;
   mutable virtual_ : (bool * int) option;
       (** If true, this array is never materialized, its computations are inlined on a per-scalar basis.
           A array that is hosted will not be virtual. *)
@@ -119,7 +119,7 @@ let create prec ~id ~label ~dims init_op =
   let hosted = ref None in
   let array =
     lazy
-      (if Option.value_exn !hosted then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None)
+      (if fst @@ Option.value_exn !hosted then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None)
   in
   let arr =
     { array; prec; id; label; hosted; virtual_ = None; device_only = None; backend_info = Sexp.List []; dims }
