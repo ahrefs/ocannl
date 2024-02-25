@@ -198,7 +198,10 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
       let tn = traced.nd in
       if Option.is_none tn.memory_mode && Hashtbl.exists traced.accesses ~f:is_too_many then
         Tn.update_memory_mode tn Never_virtual 1;
-      if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then traced.read_only <- true;
+      if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then (
+        traced.read_only <- true;
+        (* The tensor node is read-only for this computation, but maybe computed by another one. *)
+        Tn.update_memory_mode tn Materialized 35);
       if Hashtbl.exists traced.accesses ~f:is_recurrent then (
         if Tn.known_not_materialized tn then
           raise
