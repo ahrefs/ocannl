@@ -106,8 +106,11 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let to_host { ctx; _ } = Backend.to_host ctx
 
   let%track_sexp merge ?name_suffix la ~dst ~accum ~src =
-    let src_suffix : string = "_from_device_" ^ Int.to_string src.device.ordinal in
-    let name_suffix : string = Option.value name_suffix ~default:"" ^ src_suffix in
+    let name_suffix : string = Option.value name_suffix ~default:"" in
+    let ord ctx = ctx.device.ordinal in
+    let name_suffix : string =
+      [%string "_on_dev_%{ord dst#Int}_from_dev_%{ord src#Int}_%{name_suffix}"]
+    in
     Option.map (Backend.merge ~name_suffix la ~dst:dst.ctx ~accum ~src:src.ctx) ~f:(fun result ->
         let device = dst.device in
         let%track_rt_sexp run () =

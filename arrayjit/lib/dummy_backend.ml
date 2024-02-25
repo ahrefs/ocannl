@@ -73,13 +73,6 @@ let jit old_context ~name bindings (_traced_store, compiled) =
   in
   (context, jitted_bindings, run)
 
-(*
-   let merge_from ?(name_suffix = "") (context : context) ~dst ~accum ~src bindings =
-     let body idcs = Low_level.(Set (dst, idcs, Binop (accum, Get (dst, idcs), Get (src, idcs)))) in
-     let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
-     let name = [%string "merge_into_%{dst.Tnode.id#Int}%{name_suffix}"] in
-     jit context ~name bindings (Low_level.compile_proc ~name [] llc) *)
-
 let merge ?name_suffix la ~dst ~accum:_ ~src bindings =
   match (Map.find src.arrays la, Map.find dst.arrays la) with
   | None, _ | _, None -> None

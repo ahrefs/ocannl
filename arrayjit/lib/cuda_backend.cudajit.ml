@@ -132,7 +132,7 @@ let merge ?(name_suffix = "") la ~dst ~accum ~src (bindings : unit Indexing.bind
   let ord ctx = ctx.device.ordinal in
   let name =
     [%string
-      "merge_into_%{la.Tnode.id#Int}_from_dev_%{ord src#Int}_to_dev_%{ord dst#Int}_%{name_suffix}"]
+      "merge_into_%{Tn.name la}_on_dev_%{ord dst#Int}_from_dev_%{ord src#Int}_%{name_suffix}"]
   in
   ignore (name, accum, bindings);
   failwith "NOT IMPLEMENTED YET"
