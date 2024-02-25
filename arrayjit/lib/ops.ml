@@ -206,7 +206,7 @@ let equal_voidptr : voidptr -> voidptr -> bool = phys_equal
 let ptr_to_string ptr prec =
   let open Gccjit in
   let ctx = Context.create () in
-  let result = RValue.to_string @@ RValue.ptr ctx Type.(get ctx @@ c_typ_of_prec prec) ptr in
+  let result = RValue.to_string @@ RValue.ptr ctx Type.(pointer @@ get ctx @@ c_typ_of_prec prec) ptr in
   Context.release ctx;
   result
 
