@@ -199,6 +199,7 @@ let unop_cd_syntax = function Identity -> "~=" | Relu -> "?/"
 
 type voidptr = unit Ctypes.ptr
 
+let sexp_of_voidptr p = Sexp.Atom Ctypes.(string_of (ptr void) p)
 let compare_voidptr = Ctypes.ptr_compare
 let equal_voidptr : voidptr -> voidptr -> bool = phys_equal
 
@@ -212,8 +213,8 @@ let ptr_to_string ptr prec =
 type global_identifier =
   | C_function of string  (** Calls a no-argument or indices-arguments C function. *)
   | External_unsafe of {
-      ptr : (voidptr[@sexp.opaque]);
+      ptr : voidptr;
       prec : (prec[@equal.ignore] [@compare.ignore]);
       dims : int array Lazy.t;
     }
-[@@deriving sexp, equal, compare]
+[@@deriving sexp_of, equal, compare]

@@ -18,11 +18,15 @@ type half_nd = (float, Ops.float16_elt) bigarray
 type single_nd = (float, Ops.float32_elt) bigarray
 type double_nd = (float, Ops.float64_elt) bigarray
 
-type t =
-  | Byte_nd of (byte_nd[@sexp.opaque])
-  | Half_nd of (half_nd[@sexp.opaque])
-  | Single_nd of (single_nd[@sexp.opaque])
-  | Double_nd of (double_nd[@sexp.opaque])
+let sexp_of_address_of arr =
+  Sexp.Atom ("@" ^ Nativeint.Hex.to_string @@ Ctypes_bigarray.unsafe_address arr)
+
+let sexp_of_byte_nd (arr : byte_nd) = sexp_of_address_of arr
+let sexp_of_half_nd (arr : half_nd) = sexp_of_address_of arr
+let sexp_of_single_nd (arr : single_nd) = sexp_of_address_of arr
+let sexp_of_double_nd (arr : double_nd) = sexp_of_address_of arr
+
+type t = Byte_nd of byte_nd | Half_nd of half_nd | Single_nd of single_nd | Double_nd of double_nd
 [@@deriving sexp_of]
 
 let as_array (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) (arr : (ocaml, elt_t) bigarray) =
@@ -75,7 +79,6 @@ let init_bigarray_of_prec (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precisio
 
 let indices_to_offset ~dims ~idcs =
   Array.fold2_exn dims idcs ~init:0 ~f:(fun accu dim idx -> (accu * dim) + idx)
-
 
 let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~dims (init_op : Ops.init_op) :
     (ocaml, elt_t) bigarray =
@@ -495,7 +498,8 @@ let pp_array_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?axes_s
       else if axis = num_batch_axes + num_output_axes then ""
       else ")"
     in
-    if axis = num_all_axes then fprintf fmt "%.*f" Utils.settings.print_decimals_precision (get_as_float arr ind)
+    if axis = num_all_axes then
+      fprintf fmt "%.*f" Utils.settings.print_decimals_precision (get_as_float arr ind)
     else (
       fprintf fmt "@[<hov 2>%s@," open_delim;
       for i = 0 to dims.(axis) - 1 do

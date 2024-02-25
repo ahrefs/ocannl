@@ -653,7 +653,7 @@ let simplify_llc llc =
   in
   loop_proc llc
 
-type traced_store = (Tn.t, traced_array) Base.Hashtbl.t
+type traced_store = (Tn.t, traced_array) Base.Hashtbl.t [@@deriving sexp_of]
 type optimized = traced_store * t
 
 let%debug_sexp optimize_proc static_indices llc =
