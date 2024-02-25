@@ -36,8 +36,7 @@ module type No_device_backend = sig
   val to_host : context -> Tnode.t -> bool
   (** If the array is both hosted and in-context, copies from context to host and returns true. *)
 
-  val merge :
-    ?name_suffix:string -> Tnode.t -> dst:context -> accum:Ops.binop -> src:context -> jitted option
+  val merge : ?name_suffix:string -> Tnode.t -> dst:context -> accum:Ops.binop -> src:context -> jitted option
   (** Merges the array from the source context into the destination context: [dst =: dst accum src].
       If the array is hosted, its state on host is undefined after this operation. (A backend may choose
       to use the host array as a buffer, if that is beneficial.) [name_suffix] is appended to
@@ -128,8 +127,9 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     let wait_for_device = Utils.waiter () in
     let wait_for_work = Utils.waiter () in
     let runtime = Utils.get_debug ("dev-" ^ Int.to_string ordinal) in
-    [%log "spinup-dev", (ordinal : int)];
     let worker () =
+      let module Debug_runtime = (val runtime) in
+      [%log "spinup-dev", (ordinal : int)];
       while !keep_spinning do
         while Option.is_none !next_task do
           wait_for_work.await ()
