@@ -789,10 +789,6 @@ let%debug_sexp compile_proc ~name static_indices llc =
     let f = Stdio.Out_channel.create fname in
     let ppf = Stdlib.Format.formatter_of_out_channel f in
     Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ()) (snd result));
-  Hashtbl.iter (fst result) ~f:(fun v ->
-      if not @@ Tn.known_non_virtual v.nd then Tn.update_memory_mode v.nd Virtual 20
-      else if match v.nd.memory_mode with Some (Hosted, _) -> false | _ -> true then
-        Tn.update_memory_mode v.nd Device_only 21);
   result
 
 let loop_over_dims dims ~body =

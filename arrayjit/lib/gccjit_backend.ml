@@ -97,11 +97,12 @@ let%track_sexp get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_bl
     (key : Tn.t) : ndarray =
   let open Gccjit in
   Hashtbl.find_or_add arrays key ~default:(fun () ->
-      let tn = Low_level.(get_node traced_store key) in
+      let ta = Low_level.(get_node traced_store key) in
       let dims = Lazy.force key.dims in
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
       let size_in_bytes = size_in_elems * Ops.prec_in_bytes key.prec in
-      let is_on_host = Tn.is_hosted_exn key in
+      let is_on_host = Tn.is_hosted_force key 33 in
+      let is_materialized = Tn.is_materialized_force key 34 in
       assert (Bool.(Option.is_some (Lazy.force key.array) = is_on_host));
       (* TODO: is the complexity of introducing this function and matching on Ndarray.t needed? *)
       let array c_typ is_double arr =
@@ -110,7 +111,9 @@ let%track_sexp get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_bl
           RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray ba
         in
         let hosted_ptr = Option.map arr ~f:get_c_ptr in
-        let mem = if not is_on_host then Local_only else if tn.read_only then Constant else Global in
+        let mem =
+          if not is_materialized then Local_only else if is_on_host && ta.read_only then Constant else Global
+        in
         let arr_typ = Type.array ctx num_typ size_in_elems in
         let local = if is_local_only mem then Some (Function.local func arr_typ @@ Tn.name key) else None in
         (if is_global mem && (not @@ Map.mem ctx_arrays key) then
@@ -129,7 +132,7 @@ let%track_sexp get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_bl
         let result =
           { nd = key; hosted_ptr; global_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
         in
-        if tn.zero_initialized then zero_out ctx init_block result;
+        if ta.zero_initialized then zero_out ctx init_block result;
         if not @@ Utils.sexp_mem ~elem:backend_info key.backend_info then
           key.backend_info <- Utils.sexp_append ~elem:backend_info key.backend_info;
         result

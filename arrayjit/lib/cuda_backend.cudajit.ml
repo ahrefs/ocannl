@@ -200,11 +200,12 @@ let%debug_sexp get_array ~traced_store:_ ctx_info key =
     let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
     let hosted = Lazy.force key.array in
     let size_in_bytes = size_in_elems * Ops.prec_in_bytes key.prec in
-    let is_on_host = Tn.is_hosted_exn key in
+    let is_on_host = Tn.is_hosted_force key 31 in
+    let is_materialized = Tn.is_hosted_force key 32 in
     assert (Bool.(Option.is_some hosted = is_on_host));
     let is_double = Ops.is_double_prec key.prec in
     let num_typ = prec_to_c_type key.prec in
-    let mem = if not is_on_host then Local_only else Global in
+    let mem = if not is_materialized then Local_only else Global in
     let global =
       if is_local_only mem then None
       else (

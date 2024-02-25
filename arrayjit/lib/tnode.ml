@@ -37,13 +37,29 @@ let name { id; _ } = "n" ^ Int.to_string id
 let label a = String.concat ~sep:"_" a.label
 let compare a1 a2 = compare_int a1.id a2.id
 
-let is_hosted_exn tn =
+let default_to_most_local tn provenance =
   match tn.memory_mode with
-  | None -> invalid_arg @@ "Tnode.is_hosted_exn: memory_mode for " ^ label tn ^ " not inferred yet"
+  | None -> tn.memory_mode <- Some (Virtual, provenance)
+  | Some (Never_virtual, _) -> tn.memory_mode <- Some (Local, provenance)
+  | Some (Device_only, _) -> tn.memory_mode <- Some (Local, provenance)
+  | Some (Materialized, _) -> tn.memory_mode <- Some (On_device, provenance)
+  | Some ((Virtual | Local | On_device | Hosted), _) -> ()
+
+let is_hosted_force tn provenance =
+  default_to_most_local tn provenance;
+  match tn.memory_mode with
+  | None -> assert false
   | Some ((Virtual | Local | Device_only | On_device), _) -> false
   | Some (Hosted, _) -> true
-  | Some ((Never_virtual | Materialized), _) ->
-      invalid_arg @@ "Tnode.is_hosted_exn: memory_mode for " ^ label tn ^ " not fully inferred"
+  | Some ((Never_virtual | Materialized), _) -> assert false
+
+let is_materialized_force tn provenance =
+  default_to_most_local tn provenance;
+  match tn.memory_mode with
+  | None -> assert false
+  | Some ((Virtual | Local), _) -> false
+  | Some ((On_device | Hosted | Materialized), _) -> true
+  | Some ((Never_virtual | Device_only), _) -> assert false
 
 let known_not_materialized tn = match tn.memory_mode with Some ((Virtual | Local), _) -> true | _ -> false
 let known_non_virtual tn = match tn.memory_mode with None | Some (Virtual, _) -> false | _ -> true
@@ -166,7 +182,8 @@ let registry = Registry.create 16
 
 let create prec ~id ~label ~dims init_op =
   let rec array =
-    lazy (if is_hosted_exn tn then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None)
+    lazy
+      (if is_hosted_force tn 30 then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None)
   and tn = { array; prec; id; label; memory_mode = None; backend_info = Sexp.List []; dims } in
   Registry.add registry tn;
   tn
