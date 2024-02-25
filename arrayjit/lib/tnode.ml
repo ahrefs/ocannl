@@ -1,6 +1,25 @@
 open Base
 module Nd = Ndarray
 
+type memory_mode =
+  | Virtual  (** The tensor node's computations are inlined on a per-scalar basis. *)
+  | Never_virtual  (** One of: [Local], [On_device], [Hosted]. *)
+  | Local
+      (** The full tensor node is cached for the duration of a computation but not persisted across
+          calls to jitted functions. It is not available for merging across devices. *)
+  | Device_only  (** One of: [Local], [On_device]. *)
+  | On_device
+      (** The tensor node is stored on the devices that compute with it and persisted across function
+          calls. It is available for merging across devices (for devices that support merging / P2P),
+          but not (directly) for visualization or storing to disk. *)
+  | Materialized  (** One of: [On_device], [Hosted]. *)
+  | Hosted
+      (** The tensor node is stored in a globally addressable memory, in addition to on devices
+          where it is computed with (or as part of one of them, if "hosting on device").
+          It is available for all operations, and visible to OCaml programs as an {!Ndarray}
+          (the optional [array] of {!t}). *)
+[@@deriving sexp, compare, equal]
+
 type t = {
   array : (Nd.t option Lazy.t[@sexp.opaque]);
   prec : Ops.prec;
@@ -9,24 +28,54 @@ type t = {
   label : string list;
       (** Display information. It is better if the last element of the list is the most narrow
           or alphanumeric, e.g. an identifier. *)
-  hosted : (bool * int) option ref;
-  mutable virtual_ : (bool * int) option;
-      (** If true, this array is never materialized, its computations are inlined on a per-scalar basis.
-          A array that is hosted will not be virtual. *)
-  mutable device_only : (bool * int) option;
-      (** If true, this node is only materialized on the devices it is computed on.
-          It is marked as [not !(nd.hosted)]. *)
+  mutable memory_mode : (memory_mode * int) option;
   mutable backend_info : Sexp.t;
 }
 [@@deriving sexp_of]
 
-let is_false opt = not @@ Option.value ~default:true @@ Option.map ~f:fst opt
-let is_true opt = Option.value ~default:false @@ Option.map ~f:fst opt
-let isnt_false opt = Option.value ~default:true @@ Option.map ~f:fst opt
-let isnt_true opt = not @@ Option.value ~default:false @@ Option.map ~f:fst opt
 let name { id; _ } = "n" ^ Int.to_string id
 let label a = String.concat ~sep:"_" a.label
 let compare a1 a2 = compare_int a1.id a2.id
+
+let is_hosted_exn tn =
+  match tn.memory_mode with
+  | None -> invalid_arg @@ "Tnode.is_hosted_exn: memory_mode for " ^ label tn ^ " not inferred yet"
+  | Some ((Virtual | Local | Device_only | On_device), _) -> false
+  | Some (Hosted, _) -> true
+  | Some ((Never_virtual | Materialized), _) ->
+      invalid_arg @@ "Tnode.is_hosted_exn: memory_mode for " ^ label tn ^ " not fully inferred"
+
+let known_not_materialized tn = match tn.memory_mode with Some ((Virtual | Local), _) -> true | _ -> false
+let known_non_virtual tn = match tn.memory_mode with None | Some (Virtual, _) -> false | _ -> true
+
+let update_memory_mode tn mode provenance =
+  match (tn.memory_mode, mode) with
+  | None, _ -> tn.memory_mode <- Some (mode, provenance)
+  | Some (m1, _), m2 when equal_memory_mode m1 m2 -> ()
+  | Some (Never_virtual, prov2), Virtual ->
+      raise
+      @@ Ndarray.User_error
+           [%string
+             "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} for %{name tn}: cannot be \
+              virtual"]
+  | Some (Never_virtual, _), mode -> tn.memory_mode <- Some (mode, provenance)
+  | Some (Virtual, prov2), Never_virtual ->
+      raise
+      @@ Ndarray.User_error
+           [%string
+             "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} for %{name tn} is already \
+              virtual"]
+  | Some (_, _), Never_virtual -> ()
+  | Some (Device_only, _), (Local | On_device) -> tn.memory_mode <- Some (mode, provenance)
+  | Some (Materialized, _), (On_device | Hosted) -> tn.memory_mode <- Some (mode, provenance)
+  | Some ((Local | On_device), _), Device_only -> ()
+  | Some ((On_device | Hosted), _), Materialized -> ()
+  | Some (Device_only, _), Materialized | Some (Materialized, _), Device_only ->
+      tn.memory_mode <- Some (On_device, provenance)
+  | Some (_, prov2), _ ->
+      invalid_arg
+        [%string
+          "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} inconsistent for %{name tn}"]
 
 include Comparator.Make (struct
   type nonrec t = t
@@ -116,17 +165,11 @@ end)
 let registry = Registry.create 16
 
 let create prec ~id ~label ~dims init_op =
-  let hosted = ref None in
-  let array =
-    lazy
-      (if fst @@ Option.value_exn !hosted then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op)
-       else None)
-  in
-  let arr =
-    { array; prec; id; label; hosted; virtual_ = None; device_only = None; backend_info = Sexp.List []; dims }
-  in
-  Registry.add registry arr;
-  arr
+  let rec array =
+    lazy (if is_hosted_exn tn then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None)
+  and tn = { array; prec; id; label; memory_mode = None; backend_info = Sexp.List []; dims } in
+  Registry.add registry tn;
+  tn
 
 let print_accessible_headers () =
   Stdio.printf "Tnode: collecting accessible arrays...%!\n";

@@ -42,32 +42,8 @@ let get_params t =
   in
   loop (Set.empty (module Tensor)) { subtensor = t; embedded = true }
 
-let set_on_host (a : Tn.t) =
-  if Tn.is_true a.virtual_ then
-    raise
-    @@ Arrayjit.Ndarray.User_error
-         [%string "Train.set_on_host: array #%{a.id#Int} %{Tn.label a} is already virtual"];
-  if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 27);
-  if Tn.is_true a.device_only then
-    raise
-    @@ Arrayjit.Ndarray.User_error
-         [%string "Train.set_on_host: array #%{a.id#Int} %{Tn.label a} is already device-only"];
-  a.device_only <- Some (false, 28)
-
-let set_non_local_prefer_device_only (a : Tn.t) =
-  if Tn.is_true a.virtual_ then
-    raise
-    @@ Arrayjit.Ndarray.User_error
-         [%string "Train.set_non_local: array #%{a.id#Int} %{Tn.label a} is already virtual"];
-  if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 29);
-  if Tn.isnt_true a.device_only && Tn.isnt_true !(a.hosted) then
-    if Tn.is_false a.device_only && Tn.is_false !(a.hosted) then
-      raise
-      @@ Arrayjit.Ndarray.User_error
-           [%string "Train.set_non_local: array #%{a.id#Int} %{Tn.label a} is already local"]
-    else if Option.is_none a.device_only && Tn.isnt_true !(a.hosted) then (
-      a.device_only <- Some (true, 30);
-      if Option.is_none !(a.hosted) then a.hosted := Some (false, 3))
+let set_on_host (a : Tn.t) = Tn.update_memory_mode a Hosted 27
+let set_materialized (a : Tn.t) = Tn.update_memory_mode a Materialized 28
 
 (** Sets the tensor's value as "fully on host",
     returns the tensor's forward code with a label-derived comment. *)
@@ -91,8 +67,7 @@ type updaten = {
 let grad_update ?(setup_for_parallel = false) l =
   set_on_host l.Tensor.value;
   let params = get_params l in
-  if setup_for_parallel then
-    Set.iter params ~f:(fun p -> set_non_local_prefer_device_only (Option.value_exn p.diff).grad);
+  if setup_for_parallel then Set.iter params ~f:(fun p -> set_materialized (Option.value_exn p.diff).grad);
   let label = label_suffix l.value.label in
   let fwd_bprop =
     match l.Tensor.diff with
@@ -178,12 +153,7 @@ let%track_sexp round_robin fs parallel_jitbs jitbs ~sync : unit =
   loop jitbs;
   if !pos % num_devices <> 0 then sync (!pos % num_devices)
 
-let set_virtual (a : Tn.t) =
-  if Tn.is_false a.virtual_ then
-    raise
-    @@ Arrayjit.Ndarray.User_error
-         [%string "Train.set_virtual: array #%{a.id#Int} %{Tn.label a} is already non-virtual"];
-  if Option.is_none a.virtual_ then a.virtual_ <- Some (true, 29)
+let set_virtual (a : Tn.t) = Tn.update_memory_mode a Virtual 29
 
 let every_non_literal_on_host =
   Tensor.iter_embedded_arrays ~f:(fun a -> if not @@ literal_heuristic a then set_on_host a)

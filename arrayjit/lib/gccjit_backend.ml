@@ -93,15 +93,15 @@ let zero_out ctx block arr =
 
 module Debug_runtime = Utils.Debug_runtime
 
-let%track_sexp get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ctx_info) key :
-    ndarray =
+let%track_sexp get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ctx_info)
+    (key : Tn.t) : ndarray =
   let open Gccjit in
   Hashtbl.find_or_add arrays key ~default:(fun () ->
       let tn = Low_level.(get_node traced_store key) in
       let dims = Lazy.force key.dims in
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
       let size_in_bytes = size_in_elems * Ops.prec_in_bytes key.prec in
-      let is_on_host = Tn.is_true !(key.hosted) in
+      let is_on_host = Tn.is_hosted_exn key in
       assert (Bool.(Option.is_some (Lazy.force key.array) = is_on_host));
       (* TODO: is the complexity of introducing this function and matching on Ndarray.t needed? *)
       let array c_typ is_double arr =

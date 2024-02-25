@@ -195,19 +195,19 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
   in
   loop_proc Indexing.empty_env llc;
   Hashtbl.iter traced_store ~f:(fun traced ->
-      let a = traced.nd in
-      if Option.is_none a.virtual_ && Hashtbl.exists traced.accesses ~f:is_too_many then
-        a.virtual_ <- Some (false, 1);
+      let tn = traced.nd in
+      if Option.is_none tn.memory_mode && Hashtbl.exists traced.accesses ~f:is_too_many then
+        Tn.update_memory_mode tn Never_virtual 1;
       if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then traced.read_only <- true;
       if Hashtbl.exists traced.accesses ~f:is_recurrent then (
-        if Tn.is_true a.virtual_ then
+        if Tn.known_not_materialized tn then
           raise
           @@ Ndarray.User_error
                [%string
-                 "Compiling: array #%{a.id#Int} %{Tn.label a} is already virtual, does not support recurrence"];
-        if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 2);
-        (* We allow the array to be device-only, but infer it to not be as the safer case. *)
-        if Option.is_none a.device_only then a.device_only <- Some (false, 3);
+                 "Compiling: array #%{tn.id#Int} %{Tn.label tn} is already virtual or local, does not \
+                  support recurrence"];
+        (* We allow the array to be on-device, but infer it to be hosted as the safer case. *)
+        if Option.is_none tn.memory_mode then tn.memory_mode <- Some (Hosted, 2);
         traced.read_before_write <- true))
 
 module Debug_runtime = Utils.Debug_runtime
@@ -299,19 +299,11 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
     | Unop (_, llv) -> loop_float ~env_dom llv
   in
   try
-    if Tn.is_false traced.nd.virtual_ then raise @@ Non_virtual 11;
+    if Tn.known_non_virtual traced.nd then raise @@ Non_virtual 11;
     loop_proc ~env_dom:static_indices top_llc;
     if not !has_setter then raise @@ Non_virtual 12;
     traced.computations <- (!at_idcs, top_llc) :: traced.computations
-  with Non_virtual i ->
-    let a = traced.nd in
-    if Tn.is_true a.virtual_ then
-      raise
-      @@ Ndarray.User_error
-           [%string
-             {|Compiling: array #%{a.id#Int} %{Tn.label a} is already virtual, cannot compile:
-%{Sexp.to_string_hum @@ sexp_of_t top_llc}|}];
-    if Option.is_none a.virtual_ then a.virtual_ <- Some (false, i)
+  with Non_virtual i -> Tn.update_memory_mode traced.nd Never_virtual i
 
 let inline_computation ~id traced static_indices call_args =
   let exception Non_virtual of int in
@@ -384,18 +376,9 @@ let inline_computation ~id traced static_indices call_args =
   in
   try
     let body = List.rev_filter_map ~f:loop_proc traced.computations in
-    (* DEBUG: *)
     if List.is_empty body then raise @@ Non_virtual 14 else Some (unflat_lines body)
   with Non_virtual i ->
-    let a = traced.nd in
-    (if Tn.is_true a.virtual_ then
-       let body = unflat_lines @@ List.rev_map ~f:snd traced.computations in
-       raise
-       @@ Ndarray.User_error
-            [%string
-              {|Compiling: array #%{a.id#Int} %{Tn.label a} is already virtual, cannot inline computation:
-%{Sexp.to_string_hum @@ sexp_of_t body}|}]);
-    if Option.is_none a.virtual_ then a.virtual_ <- Some (false, i);
+    Tn.update_memory_mode traced.nd Never_virtual i;
     None
 
 let optimize_integer_pow = ref true
@@ -420,19 +403,19 @@ let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
         | Some array when not @@ Set.mem process_for array ->
             let node : traced_array = get_node traced_store array in
             let result = loop_proc ~process_for:(Set.add process_for array) llc in
-            if Tn.isnt_false node.nd.virtual_ then check_and_store_virtual node static_indices result;
+            if not @@ Tn.known_non_virtual node.nd then check_and_store_virtual node static_indices result;
             result
         | _ -> For_loop { for_config with body = loop body })
     | Zero_out array ->
         let traced : traced_array = get_node traced_store array in
-        if (not @@ Set.mem process_for array) && Tn.isnt_false traced.nd.virtual_ then
+        if (not @@ Set.mem process_for array) && (not @@ Tn.known_non_virtual traced.nd) then
           check_and_store_virtual traced static_indices llc;
         llc
     | Set { array; idcs; llv; debug = _ } ->
         let traced : traced_array = get_node traced_store array in
-        let next = if Tn.is_false traced.nd.virtual_ then process_for else Set.add process_for array in
+        let next = if Tn.known_non_virtual traced.nd then process_for else Set.add process_for array in
         let result = Set { array; idcs; llv = loop_float ~process_for:next llv; debug = "" } in
-        if (not @@ Set.mem process_for array) && Tn.isnt_false traced.nd.virtual_ then
+        if (not @@ Set.mem process_for array) && (not @@ Tn.known_non_virtual traced.nd) then
           check_and_store_virtual traced static_indices result;
         result
     | Set_local (id, llv) -> Set_local (id, loop_float ~process_for llv)
@@ -446,7 +429,7 @@ let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
         llv
     | Get (array, indices) ->
         let traced = get_node traced_store array in
-        if Tn.is_false traced.nd.virtual_ then llv
+        if Tn.known_non_virtual traced.nd then llv
         else
           let id = get_scope array in
           Option.value ~default:llv
@@ -475,9 +458,9 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
         let env_dom = Set.add env_dom index in
         match Hashtbl.find reverse_node_map index with
         | Some a ->
-            if Tn.isnt_false a.Tn.virtual_ then (
+            if not @@ Tn.known_non_virtual a then (
               (* FIXME: *)
-              a.virtual_ <- Some (true, 15);
+              Tn.update_memory_mode a Virtual 15;
               None)
             else
               Option.map ~f:(fun body : t -> For_loop { for_config with body })
@@ -486,22 +469,22 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
             Option.map ~f:(fun body : t -> For_loop { for_config with body })
             @@ loop_proc ~balanced ~env_dom body)
     | Zero_out array ->
-        if Tn.isnt_false array.virtual_ then (
+        if not @@ Tn.known_non_virtual array then (
           (* FIXME: *)
-          array.virtual_ <- Some (true, 151);
+          Tn.update_memory_mode array Virtual 151;
           None)
         else Some llc
     | Set { array; idcs; llv; debug = _ } ->
-        if Tn.isnt_false array.virtual_ then (
+        if not @@ Tn.known_non_virtual array then (
           (* FIXME: *)
-          array.virtual_ <- Some (true, 152);
+          Tn.update_memory_mode array Virtual 152;
           None)
         else (
           assert (Array.for_all idcs ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
           Some (Set { array; idcs; llv = loop_float ~balanced ~env_dom llv; debug = "" }))
     | Set_local (id, llv) ->
-        assert (Tn.isnt_false id.nd.virtual_);
-        id.nd.virtual_ <- Some (true, 16);
+        assert (not @@ Tn.known_non_virtual id.nd);
+        Tn.update_memory_mode id.nd Virtual 16;
         Some (Set_local (id, loop_float ~balanced ~env_dom llv))
     | Comment _ -> Some llc
     | Staged_compilation _ -> Some llc
@@ -510,24 +493,23 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
     match llv with
     | Constant _ -> llv
     | Get (a, indices) ->
-        assert (Tn.isnt_true a.virtual_);
         (* DEBUG: *)
-        if Option.is_none a.virtual_ then a.virtual_ <- Some (false, 17);
+        Tn.update_memory_mode a Never_virtual 17;
         assert (Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
         llv
     | Local_scope { id; prec; body; orig_indices } ->
         assert (
           Array.for_all orig_indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
-        if Tn.is_false id.nd.virtual_ then Get (id.nd, orig_indices)
+        if Tn.known_non_virtual id.nd then Get (id.nd, orig_indices)
         else
           (* DEBUG: *)
           let body = Option.value_exn @@ loop_proc ~balanced ~env_dom body in
           (* let body = Option.value ~default:Noop @@ loop_proc ~balanced ~env_dom body in *)
-          id.nd.virtual_ <- Some (true, 18);
+          Tn.update_memory_mode id.nd Virtual 18;
           Local_scope { id; prec; orig_indices; body }
     | Get_local id ->
-        assert (Tn.isnt_false id.nd.virtual_);
-        id.nd.virtual_ <- Some (true, 19);
+        assert (not @@ Tn.known_non_virtual id.nd);
+        Tn.update_memory_mode id.nd Virtual 16;
         llv
     | Get_global _ -> llv
     | Embed_index (Fixed_idx _) -> llv
@@ -784,7 +766,7 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) () ppf llc =
   in
   pp_ll ppf llc
 
-let%diagn_sexp compile_proc ~name static_indices llc =
+let%debug_sexp compile_proc ~name static_indices llc =
   [%log "generating the initial low-level code"];
   if Utils.settings.output_debug_files_in_run_directory then (
     let fname = name ^ "-unoptimized.llc" in
@@ -808,22 +790,9 @@ let%diagn_sexp compile_proc ~name static_indices llc =
     let ppf = Stdlib.Format.formatter_of_out_channel f in
     Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ()) (snd result));
   Hashtbl.iter (fst result) ~f:(fun v ->
-      if Option.is_none v.nd.virtual_ then v.nd.virtual_ <- Some (true, 20)
-      else if Option.is_none v.nd.device_only then v.nd.device_only <- Some (true, 21);
-      if Utils.settings.with_debug then
-        [%log
-          "finalizing",
-            (v.nd : Tn.t),
-            "virtual",
-            (Tn.is_true v.nd.virtual_ : bool),
-            "device-only",
-            (Tn.is_true v.nd.device_only : bool)];
-      if Tn.isnt_true v.nd.virtual_ && Tn.isnt_true v.nd.device_only then (
-        assert (Tn.isnt_false !(v.nd.hosted));
-        v.nd.hosted := Some (true, 1))
-      else (
-        assert (Tn.isnt_true !(v.nd.hosted));
-        v.nd.hosted := Some (false, 2)));
+      if not @@ Tn.known_non_virtual v.nd then Tn.update_memory_mode v.nd Virtual 20
+      else if match v.nd.memory_mode with Some (Hosted, _) -> false | _ -> true then
+        Tn.update_memory_mode v.nd Device_only 21);
   result
 
 let loop_over_dims dims ~body =

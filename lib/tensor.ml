@@ -214,10 +214,9 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
         (match fetch_op with
         | Constant _ | Slice _ | Embed_symbol _ -> ()
         | Imported _ ->
-            assert (Tn.isnt_true v.virtual_);
-            v.virtual_ <- Some (false, 22);
-            assert (Tn.isnt_true v.device_only);
-            v.device_only <- Some (false, 23));
+            (* Note: [Imported] can be used for merging across devices. But, some use cases of [Imported]
+               will require a hosted tensor node. *)
+            Tn.update_memory_mode v Materialized 22);
         Fetch { array = v; fetch_op; dims }
   in
   let grad_asn ~v:_ ~g:_ ~projections:_ = Asgns.Noop in
@@ -280,15 +279,12 @@ let param ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?(strict = 
       ?output_axes ?deduced ~init_op ()
   in
   let v = t.value in
-  assert (Tn.isnt_true v.virtual_);
-  v.virtual_ <- Some (false, 24);
-  assert (Tn.isnt_true v.device_only);
-  v.device_only <- Some (false, 25);
-  (* In principle, gradients can be device-only (in the global memory of the device). Gradients of param
-     cannot be inlined because backpropagation and param update are usually separate computations. *)
+  Tn.update_memory_mode v Hosted 24;
+  (* In principle, gradients can even be local, if a single jitted block does forward, backprop,
+     and update computations. Use-cases needing [Materialized] gradients need to request that
+     before any jitting. *)
   let g = (Option.value_exn t.diff).grad in
-  assert (Tn.isnt_true g.virtual_);
-  g.virtual_ <- Some (false, 26);
+  Tn.update_memory_mode g Never_virtual 26;
   t
 
 let rec iter_embedded_arrays ~f t =
@@ -357,15 +353,9 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_v
     let indices = Shape.default_display_indices t.shape in
     let labels = Shape.to_labels t.shape in
     let where_located a =
-      Tn.(
-        (* if Option.is_some @@ Lazy.force a.array then "<hosted>" else *)
-        if is_true a.virtual_ then [%string "<virtual %{Option.value_exn a.virtual_ |> snd#Int}>"]
-        else if is_true a.device_only then
-          [%string "<device-only %{Option.value_exn a.device_only |> snd#Int}>"]
-        else if is_false a.virtual_ then [%string "<non-virtual %{Option.value_exn a.virtual_ |> snd#Int}>"]
-        else if is_false a.device_only then
-          [%string "<non-device-only %{Option.value_exn a.device_only |> snd#Int}>"]
-        else "<waiting>")
+      match a.Tn.memory_mode with
+      | None -> "<waiting>"
+      | Some (m, prov) -> [%string "<%{Sexp.to_string_hum @@ Tn.sexp_of_memory_mode m} %{prov#Int}>"]
     in
     let txt =
       if with_id then "#" ^ id ^ " " ^ Tn.label t.value (* ^ " DEBUG: " ^ where_located t.value *)
