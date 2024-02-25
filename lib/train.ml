@@ -247,20 +247,17 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   let copies : Backend.jitted list array =
     if num_devices < 2 then [||]
     else
-      Array.init (num_devices - 1) ~f:(fun from_m_1 ->
-          let from : int = from_m_1 + 1 in
-          List.map param_vals ~f:(fun p ->
-              Option.value_or_thunk ~default:(fun () ->
-                  invalid_arg @@ "Train.parallel_update: parameter not available on a device: " ^ Tn.label p)
-              @@ Backend.merge ~name_suffix:"param_copy" p ~dst:ctxs.(0) ~accum:Arrayjit.Ops.Arg2
-                   ~src:ctxs.(from)))
+      Array.init (num_devices - 1) ~f:(fun to_m_1 ->
+          let to_ : int = to_m_1 + 1 in
+          (* Backends other may choose to not store parameters on devices other than the 0th. *)
+          List.filter_map param_vals ~f:(fun p ->
+              Backend.merge ~name_suffix:"param_copy" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Arg2 ~src:ctxs.(0)))
   in
-  (* let copy ~from ~to_ = List.iter copies.(to_).(from - to_ - 1) ~f:(fun jitted -> jitted.run ()) in *)
   let sync (devices_to_sync : int) : unit =
     Arrayjit.Utils.parallel_merge merge devices_to_sync;
     sgd_update.run debug_rt ();
-    for from = 1 to devices_to_sync - 1 do
-      List.iter copies.(from - 1) ~f:(fun jitted -> jitted.run debug_rt ())
+    for to_ = 1 to devices_to_sync - 1 do
+      List.iter copies.(to_ - 1) ~f:(fun jitted -> jitted.run debug_rt ())
     done;
     post_sync ()
   in
