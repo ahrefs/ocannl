@@ -63,6 +63,7 @@ let is_materialized_force tn provenance =
 
 let known_not_materialized tn = match tn.memory_mode with Some ((Virtual | Local), _) -> true | _ -> false
 let known_non_virtual tn = match tn.memory_mode with None | Some (Virtual, _) -> false | _ -> true
+let mode_is_unspecified tn = match tn.memory_mode with None | Some (Never_virtual, _) -> true | _ -> false
 
 let update_memory_mode tn mode provenance =
   match (tn.memory_mode, mode) with
@@ -182,8 +183,7 @@ let registry = Registry.create 16
 
 let create prec ~id ~label ~dims init_op =
   let rec array =
-    lazy
-      (if is_hosted_force tn 30 then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None)
+    lazy (if is_hosted_force tn 30 then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None)
   and tn = { array; prec; id; label; memory_mode = None; backend_info = Sexp.List []; dims } in
   Registry.add registry tn;
   tn

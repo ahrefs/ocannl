@@ -198,20 +198,17 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
       let tn = traced.nd in
       if Option.is_none tn.memory_mode && Hashtbl.exists traced.accesses ~f:is_too_many then
         Tn.update_memory_mode tn Never_virtual 1;
+      (* The tensor node is read-only/recurrent for this computation, but maybe computed by another one.
+         However, if the memory mode is unspecified, we assume this will be the first computation
+         involving the tensor node. *)
       if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then (
         traced.read_only <- true;
-        (* The tensor node is read-only for this computation, but maybe computed by another one. *)
-        Tn.update_memory_mode tn Materialized 35);
+        if Tn.mode_is_unspecified tn then Tn.update_memory_mode tn Hosted 37
+        else Tn.update_memory_mode tn Materialized 35);
       if Hashtbl.exists traced.accesses ~f:is_recurrent then (
-        if Tn.known_not_materialized tn then
-          raise
-          @@ Ndarray.User_error
-               [%string
-                 "Compiling: array #%{tn.id#Int} %{Tn.label tn} is already virtual or local, does not \
-                  support recurrence"];
-        (* We allow the array to be on-device, but infer it to be hosted as the safer case. *)
-        if Option.is_none tn.memory_mode then tn.memory_mode <- Some (Hosted, 2);
-        traced.read_before_write <- true))
+        traced.read_before_write <- true;
+        if Tn.mode_is_unspecified tn then Tn.update_memory_mode tn Hosted 38
+        else Tn.update_memory_mode tn Materialized 36))
 
 module Debug_runtime = Utils.Debug_runtime
 
