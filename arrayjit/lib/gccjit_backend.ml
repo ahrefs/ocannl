@@ -180,6 +180,7 @@ let get_ptr_debug array =
   | None, None, None -> assert false
 
 let%track_sexp jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block body =
+  [%log "jit_code", name, "body=", (body : Low_level.t)];
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
@@ -479,7 +480,8 @@ let header_sep =
   let open Re in
   compile (seq [ str " "; opt any; str "="; str " " ])
 
-let jit old_context ~name bindings compiled =
+let%track_sexp jit (old_context : context) ~(name : string) bindings
+    (compiled : Low_level.traced_store * Low_level.t) : context * _ * _ =
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
@@ -493,7 +495,7 @@ let jit old_context ~name bindings compiled =
   let ctx_info = jit_func ~name ~log_file_name old_context ctx bindings compiled in
   let result = Context.compile ctx in
   let context = { label = old_context.label; arrays = ctx_info.ctx_arrays; result = Some result } in
-  let run_variadic =
+  let%diagn_sexp run_variadic =
     let rec link : 'a. 'a Indexing.bindings -> 'a Ctypes.fn -> 'a Indexing.variadic =
      fun (type b) (bs : b Indexing.bindings) (cs : b Ctypes.fn) ->
       match bs with
@@ -554,7 +556,7 @@ let to_host (context : context) la =
           true
       | _ -> false)
 
-let merge_from_global ?(name_suffix = "") (context : context) ~dst ~accum ~src bindings =
+let%track_sexp merge_from_global ?(name_suffix = "") (context : context) ~dst ~accum ~src bindings =
   let body idcs =
     Low_level.(
       Set
@@ -570,9 +572,9 @@ let merge_from_global ?(name_suffix = "") (context : context) ~dst ~accum ~src b
         })
   in
   let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
-  let name = [%string "merge_into_%{dst.Tnode.id#Int}%{name_suffix}"] in
+  let name = [%string "merge_into_%{Tn.name dst}_%{name_suffix}"] in
   jit context ~name bindings (Low_level.compile_proc ~name [] llc)
 
-let merge ?name_suffix la ~dst ~accum ~(src : context) bindings =
-  Option.map (Map.find src.arrays la) ~f:(fun src ->
+let%track_sexp merge ?name_suffix la ~dst ~accum ~(src : context) bindings =
+  Option.map (Map.find src.arrays la) ~f:(fun (src : Ndarray.t) ->
       merge_from_global ?name_suffix dst ~dst:la ~accum ~src:(Ndarray.get_voidptr src) bindings)

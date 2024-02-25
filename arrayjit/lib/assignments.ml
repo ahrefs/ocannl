@@ -311,7 +311,8 @@ let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
   loop c;
   Buffer.contents b
 
-let compile_proc ?(ident_style = `Heuristic_ocannl) ~name static_indices proc =
+let%debug_sexp compile_proc ?(ident_style = `Heuristic_ocannl) ~name static_indices (proc : t) :
+    (Tn.t, Low_level.traced_array) Base.Hashtbl.t * Low_level.t =
   if Utils.settings.output_debug_files_in_run_directory then (
     let fname = name ^ ".hlc" in
     let f = Stdio.Out_channel.create fname in

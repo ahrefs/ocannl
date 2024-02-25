@@ -766,8 +766,9 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) () ppf llc =
   in
   pp_ll ppf llc
 
-let%debug_sexp compile_proc ~name static_indices llc =
-  [%log "generating the initial low-level code"];
+let%debug_sexp compile_proc ~(name : string) (static_indices : Indexing.static_symbol list) (llc : t) :
+    (Tn.t, traced_array) Base.Hashtbl.t * t =
+  [%log "generating the initial low-level code", (llc : t)];
   if Utils.settings.output_debug_files_in_run_directory then (
     let fname = name ^ "-unoptimized.llc" in
     let f = Stdio.Out_channel.create fname in

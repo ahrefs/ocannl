@@ -129,6 +129,8 @@ let get_debug name =
 
 module Debug_runtime = (val get_debug "")
 
+(* [%%global_debug_log_level Nothing] *)
+
 (* [%%global_debug_interrupts { max_nesting_depth = 100; max_num_children = 1000 }] *)
 
 let rec union_find ~equal map ~key ~rank =

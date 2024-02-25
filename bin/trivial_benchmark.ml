@@ -35,6 +35,7 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let n_batches = 2 * len / batch in
   (* let epochs = 100 in *)
   let epochs = 1 in
+  (* let epochs = 10 in *)
   let noise () = Random.float_range (-0.2) 0.2 in
   let trivial_flat =
     Array.concat_map (Array.create ~len ()) ~f:Float.(fun () -> [| 0.2 + noise (); 0.8 + noise () |])
