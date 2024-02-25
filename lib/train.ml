@@ -3,6 +3,7 @@ module Tn = Arrayjit.Tnode
 module NTDSL = Operation.NTDSL
 module Asgns = Arrayjit.Assignments
 module Idx = Arrayjit.Indexing
+module Utils = Arrayjit.Utils
 
 module type Backend_type = Arrayjit.Backends.Backend
 
@@ -202,6 +203,8 @@ let sync_run ?looping (type context) (module Backend : Backend_type with type co
   Backend.await @@ Backend.get_ctx_device jitted.context;
   all_device_to_host (module Backend) jitted.context t
 
+module Lazy = Utils.Lazy
+
 (** Performs one optimization step, potentially in parallel (if [grad_updates] are compiled for different
     devices). All jitted code must have the same bindings. Iterates over bindings with ranges, calling
     one of [grad_updates] in a round-robin fashion, and performs the following synchronization each time
@@ -223,33 +226,29 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   let param_vals = [%debug_notrace List.map all_params ~f:(fun t -> t.value)] in
   let param_grads = [%debug_notrace List.map all_params ~f:(fun t -> (Option.value_exn t.diff).grad)] in
   let ctxs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.context)] in
-  (* Note: [from] indices are bigger than [to_] indices. We end up at 0. *)
-  let merges : Backend.jitted list array array =
+  (* By being lazy, we don't need to worry about how devices are paired up. *)
+  let merges : Backend.jitted list Lazy.t array array =
     if num_devices < 2 then [| [||] |]
     else
-      Array.init (num_devices - 1) ~f:(fun (to_ : int) ->
-          Array.init
-            (num_devices - to_ - 1)
-            ~f:(fun (delta_m_1 : int) ->
-              let from : int = to_ + delta_m_1 + 1 in
-              List.map param_grads ~f:(fun p ->
-                  Option.value_or_thunk ~default:(fun () ->
-                      invalid_arg @@ "Train.parallel_update: gradient not available on a device: "
-                      ^ Tn.label p)
-                  @@ Backend.merge ~name_suffix:"grad_merge" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Add
-                       ~src:ctxs.(from))))
+      Array.init num_devices ~f:(fun (to_ : int) ->
+          Array.init num_devices ~f:(fun (from : int) ->
+              lazy
+                (List.map param_grads ~f:(fun p ->
+                     Option.value_or_thunk ~default:(fun () ->
+                         invalid_arg @@ "Train.parallel_update: gradient not available on a device: "
+                         ^ Tn.label p)
+                     @@ Backend.merge ~name_suffix:"grad_merge" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Add
+                          ~src:ctxs.(from)))))
   in
   let merge ~(from : int) ~(to_ : int) : unit =
-    (* FIXME: is this parallel? *)
-    let delta_m_1 : int = from - to_ - 1 in
-    List.iter merges.(to_).(delta_m_1) ~f:(fun jitted -> jitted.run debug_rt ())
+    List.iter ~f:(fun jitted -> jitted.Arrayjit.Backends.run debug_rt ()) @@ Lazy.force merges.(to_).(from)
   in
   let copies : Backend.jitted list array =
     if num_devices < 2 then [||]
     else
       Array.init (num_devices - 1) ~f:(fun to_m_1 ->
           let to_ : int = to_m_1 + 1 in
-          (* Backends other may choose to not store parameters on devices other than the 0th. *)
+          (* Backends may choose to not store parameters on devices other than the 0th. *)
           List.filter_map param_vals ~f:(fun p ->
               Backend.merge ~name_suffix:"param_copy" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Arg2 ~src:ctxs.(0)))
   in

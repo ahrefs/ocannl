@@ -218,3 +218,10 @@ let rec sexp_deep_mem ~elem = function
 let split_with_seps sep s =
   let tokens = Re.split_full sep s in
   List.map tokens ~f:(function `Text tok -> tok | `Delim sep -> Re.Group.get sep 0)
+
+module Lazy = struct
+  include Lazy
+
+  let sexp_of_t = Minidebug_runtime.sexp_of_lazy_t
+  let sexp_of_lazy_t = Minidebug_runtime.sexp_of_lazy_t
+end
