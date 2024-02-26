@@ -17,7 +17,6 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let num_devices = min num_devices @@ Backend.num_devices () in
   let devices = Array.init num_devices ~f:(fun ordinal -> Backend.get_device ~ordinal) in
   let contexts = Array.map devices ~f:Backend.init in
-  let ctx0 = contexts.(0) in
   (* ignore random_seed; *)
   let bench_title =
     [%string
@@ -57,6 +56,7 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let moons_flat = TDSL.init_const ~l:"moons_flat" ~b:[ n_batches; batch ] ~o:[ 2 ] moons_flat in
   let moons_classes = TDSL.init_const ~l:"moons_classes" ~b:[ n_batches; batch ] ~o:[ 1 ] moons_classes in
+
   (* *
      let%op mlp x =
        "b6" 1
@@ -80,15 +80,6 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in
 
   [%track_sexp
-    Train.set_on_host learning_rate.value;
-    Train.set_on_host scalar_loss.value;
-    let weight_decay : float = 0.0001 in
-    let update = Train.grad_update ~setup_for_parallel:true scalar_loss in
-    let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
-    let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit ctx bindings update.fwd_bprop) in
-    let sgd_update = Backend.jit ctx0 bindings sgd in
-    Train.all_host_to_device (module Backend) sgd_update.context scalar_loss;
-    Train.all_host_to_device (module Backend) sgd_update.context learning_rate;
     let batch_losses = ref [] in
     let epoch_losses = ref [] in
     let batch_log_losses = ref [] in
@@ -98,8 +89,18 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     let max_loss = ref 0.0 in
     let last_loss = ref Float.infinity in
     let start_time = Time_now.nanoseconds_since_unix_epoch () in
-    for epoch = 1 to epochs do
-      let epoch_loss = ref 0. in
+
+    Train.set_on_host learning_rate.value;
+    Train.set_on_host scalar_loss.value;
+    let weight_decay : float = 0.0001 in
+    let update = Train.grad_update ~setup_for_parallel:true scalar_loss in
+    let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
+    let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit ctx bindings update.fwd_bprop) in
+    let sgd_update = Backend.jit contexts.(0) bindings sgd in
+    Train.all_host_to_device (module Backend) sgd_update.context scalar_loss;
+    Train.all_host_to_device (module Backend) sgd_update.context learning_rate;
+    let epoch_loss = ref 0. in
+    let update =
       Train.parallel_update
         (module Backend)
         ~grad_updates ~sgd_update update
@@ -108,18 +109,23 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
           assert (Backend.to_host sgd_update.context learning_rate.value);
           (* scalar_loss is not in the sgd_update context. *)
           assert (Backend.to_host grad_updates.(0).context scalar_loss.value);
-          batch_losses := scalar_loss.@[0] :: !batch_losses;
-          batch_log_losses := Float.log scalar_loss.@[0] :: !batch_log_losses;
-          Stdio.printf "Epoch=%d, batch=%d, lr=%f, batch loss=%f\n%!" epoch !step_ref learning_rate.@[0]
-            scalar_loss.@[0]);
-      (* Tensor.print_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss; *)
+          let loss = scalar_loss.@[0] in
+          epoch_loss := !epoch_loss +. loss;
+          batch_losses := loss :: !batch_losses;
+          epoch_loss := !epoch_loss +. scalar_loss.@[0];
+          Stdio.printf "Batch=%d, lr=%f, batch loss=%f, epoch loss=%f\n%!" !step_ref learning_rate.@[0] loss
+            !epoch_loss)
+    in
+    for epoch = 1 to epochs do
+      update ();
       learning_rates := learning_rate.@[0] :: !learning_rates;
-      last_loss := !epoch_loss;
-      epoch_losses := !last_loss :: !epoch_losses;
-      min_loss := Float.min !min_loss !last_loss;
-      max_loss := Float.max !max_loss !last_loss;
-      epoch_log_losses := Float.log !last_loss :: !epoch_log_losses
+      epoch_losses := !epoch_loss :: !epoch_losses;
+      min_loss := Float.min !min_loss !epoch_loss;
+      max_loss := Float.max !max_loss !epoch_loss;
+      epoch_log_losses := Float.log !epoch_loss :: !epoch_log_losses;
+      Stdio.printf "Epoch=%d, lr=%f, epoch loss=%f\n%!" epoch learning_rate.@[0] !epoch_loss
     done;
+
     let final_time = Time_now.nanoseconds_since_unix_epoch () in
     (* TODO: include init time in benchmarks? *)
     ignore init_time;

@@ -214,7 +214,7 @@ module Lazy = Utils.Lazy
     All and only bindings with associated ranges are iterated, with the binding's initial value lost.
     Bindings without ranges remain at their initial values. *)
 let%track_sexp parallel_update (type context) (module Backend : Backend_type with type context = context)
-    ~(grad_updates : Backend.jitted array) ~(sgd_update : Backend.jitted) ~post_sync updaten : unit =
+    ~(grad_updates : Backend.jitted array) ~(sgd_update : Backend.jitted) ~post_sync updaten : unit -> unit =
   assert (not @@ Array.is_empty grad_updates);
   let num_devices : int = Array.length grad_updates in
   let bindings : Idx.static_symbol list = List.map ~f:fst sgd_update.bindings in
@@ -263,4 +263,4 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   let jitted_bindings = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.bindings)] in
   (* FIXME: is this parallel? *)
   let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.run debug_rt)] in
-  round_robin fs jitted_bindings sgd_update.bindings ~sync
+  fun () -> round_robin fs jitted_bindings sgd_update.bindings ~sync

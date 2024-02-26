@@ -72,10 +72,9 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     let learning_rates = ref [] in
     let min_loss = ref Float.infinity in
     let max_loss = ref 0.0 in
-    let last_loss = ref Float.infinity in
     let start_time = Time_now.nanoseconds_since_unix_epoch () in
-    for epoch = 1 to epochs do
-      let epoch_loss = ref 0. in
+    let epoch_loss = ref 0. in
+    let update =
       Train.parallel_update
         (module Backend)
         ~grad_updates ~sgd_update update
@@ -84,17 +83,23 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
           assert (Backend.to_host sgd_update.context learning_rate.value);
           (* scalar_loss is not in the sgd_update context. *)
           assert (Backend.to_host grad_updates.(0).context scalar_loss.value);
-          batch_losses := scalar_loss.@[0] :: !batch_losses;
+          let loss = scalar_loss.@[0] in
+          epoch_loss := !epoch_loss +. loss;
+          batch_losses := loss :: !batch_losses;
           batch_log_losses := Float.log scalar_loss.@[0] :: !batch_log_losses;
-          Stdio.printf "Epoch=%d, batch=%d, lr=%f, batch loss=%f\n%!" epoch !step_ref learning_rate.@[0]
-            scalar_loss.@[0]);
+          Stdio.printf "Batch=%d, lr=%f, batch loss=%f, epoch loss=%f\n%!" !step_ref learning_rate.@[0] loss
+            !epoch_loss)
+    in
+    for epoch = 1 to epochs do
+      epoch_loss := 0.;
+      update ();
       (* Tensor.print_tree ~with_backend_info:true ~with_grad:true ~depth:9 total_loss; *)
       learning_rates := learning_rate.@[0] :: !learning_rates;
-      last_loss := !epoch_loss;
-      epoch_losses := !last_loss :: !epoch_losses;
-      min_loss := Float.min !min_loss !last_loss;
-      max_loss := Float.max !max_loss !last_loss;
-      epoch_log_losses := Float.log !last_loss :: !epoch_log_losses
+      epoch_losses := !epoch_loss :: !epoch_losses;
+      min_loss := Float.min !min_loss !epoch_loss;
+      max_loss := Float.max !max_loss !epoch_loss;
+      epoch_log_losses := Float.log !epoch_loss :: !epoch_log_losses;
+      Stdio.printf "Epoch=%d, lr=%f, epoch loss=%f\n%!" epoch learning_rate.@[0] !epoch_loss
     done;
     let final_time = Time_now.nanoseconds_since_unix_epoch () in
     (* TODO: include init time in benchmarks? *)
@@ -109,7 +114,7 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
           (* FIXME: implement total mem assessment. *)
           mem_in_bytes = 0;
           result_label = "min epoch loss, last epoch loss";
-          result = [%sexp_of: float * float] (!min_loss, !last_loss);
+          result = [%sexp_of: float * float] (!min_loss, !epoch_loss);
         }
     in
     Utils.settings.with_debug <- false;
