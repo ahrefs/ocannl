@@ -359,9 +359,7 @@ let concise_float ~prec v =
     * -2: a sequence of segments in a line of text (i.e. column numbers of an outer rectangle),
     * -3: a vertical segment in an inner rectangle (i.e. row numbers of the inner rectangle),
     * -4: a vertical sequence of segments (i.e. column numbers of an outer rectangle),
-    * -5: a sequence of screens of text (i.e. stack numbers of outer rectangles).
-    Printing out of axis [-5] is interrupted when a callback called in between each outer rectangle
-    returns true. *)
+    * -5: a sequence of screens of text (i.e. stack numbers of outer rectangles). *)
 let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labels = [||]) ~indices arr =
   let module B = PrintBox in
   let dims = dims arr in
