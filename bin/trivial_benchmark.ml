@@ -50,9 +50,9 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let step_sym, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let steps = epochs * n_batches in
   let%op learning_rate = 0.1 *. (!..steps - !@step_sym) /. !..steps in
-  let%op moons_input = trivial_flat @| step_sym in
-  let%op moons_class = trivial_classes @| step_sym in
-  let%op margin_loss = ?/(1 - (moons_class *. mlp moons_input)) in
+  let%op trivial_input = trivial_flat @| step_sym in
+  let%op trivial_class = trivial_classes @| step_sym in
+  let%op margin_loss = ?/(1 - (trivial_class *. mlp trivial_input)) in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in
 
   [%track_sexp
@@ -127,7 +127,7 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     Train.set_on_host mlp_result.value;
     (* By using sgd_jitted.context here, we don't need to copy the parameters back to the host. *)
     let result_jitted =
-      Backend.jit sgd_update.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
+      Backend.jit sgd_update.context IDX.empty @@ Block_comment ("trivial infer", mlp_result.forward)
     in
     let callback (x : float) : float =
       Tensor.set_values point [| x |];
@@ -138,13 +138,13 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
       assert (Backend.to_host result_jitted.context mlp_result.value);
       mlp_result.@[0]
     in
-    let plot_moons =
+    let plot_trivial =
       let open PrintBox_utils in
       plot ~size:(20, 20) ~x_label:"ixes" ~y_label:"ygreks"
         [ Scatterplot { points = scatterpoints; pixel = "#" }; Line_plot_adaptive { pixel = "*"; callback } ]
     in
-    Stdio.printf "Half-moons scatterplot and decision boundary:\n%!";
-    PrintBox_text.output Stdio.stdout plot_moons;
+    Stdio.printf "Regression scatterplot and decision boundary:\n%!";
+    PrintBox_text.output Stdio.stdout plot_trivial;
     Stdio.printf "\nLoss, per-batch <.>:\n%!";
     let plot_loss =
       let open PrintBox_utils in
