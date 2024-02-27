@@ -179,8 +179,7 @@ let get_ptr_debug array =
   | None, None, Some _ -> "hosted_" ^ Tn.name array.nd
   | None, None, None -> assert false
 
-let%track_sexp jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block body =
-  [%log "jit_code", name, "body=", (body : Low_level.t)];
+let%track_sexp jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block (body : Low_level.t) =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
@@ -506,6 +505,7 @@ let%track_sexp jit (old_context : context) ~(name : string) bindings
   in
   let%diagn_rt_sexp run () =
     let module Debug_runtime = (val _debug_runtime) in
+    [%log_result "gccjit-run", old_context.label, name];
     Indexing.apply run_variadic;
     if Utils.settings.debug_log_jitted then
       let rec loop = function

@@ -124,7 +124,7 @@ let get_debug name =
       ~for_append:false (* ~log_level *) ()
   else
     Minidebug_runtime.forget_printbox
-    @@ Minidebug_runtime.debug_file ~time_tagged ~print_entry_ids ~global_prefix:name ~for_append:false
+    @@ Minidebug_runtime.debug_file ~time_tagged ~print_entry_ids ~global_prefix:name ~for_append:false ~max_inline_sexp_length:120
          ~hyperlink ~values_first_mode:true ~backend ~log_level ?snapshot_every_sec filename
 
 module Debug_runtime = (val get_debug "")
