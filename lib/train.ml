@@ -258,7 +258,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     for to_ = 1 to devices_to_sync - 1 do
       List.iter copies.(to_ - 1) ~f:(fun jitted -> jitted.run debug_rt ())
     done;
-    post_sync ()
+    post_sync ~num_synced_devices:devices_to_sync
   in
   let jitted_bindings = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.bindings)] in
   (* FIXME: is this parallel? *)

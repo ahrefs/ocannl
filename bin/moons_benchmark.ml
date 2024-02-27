@@ -220,7 +220,7 @@ let () =
     (fun (entry : unit) -> entry) ()];
   ignore
   @@ classify_moons ~random_seed:3 ~on_device:true ~inlining_cutoff:3 ~num_devices:16 ~batch:64
-       ~backend_name:"dummy" CDSL.single ()
+       ~backend_name:"gccjit" CDSL.single ()
 
 let benchmarks =
   List.concat_map [ (* 0; 3; 5 *) 3 ] ~f:(fun inlining_cutoff ->
