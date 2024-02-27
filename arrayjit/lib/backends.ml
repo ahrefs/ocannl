@@ -83,6 +83,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let is_initialized = Backend.is_initialized
 
   let await device =
+    assert (Domain.is_main_domain ());
     while !(device.keep_spinning) && Option.is_some !(device.next_task) do
       device.wait_for_device.await ()
     done
@@ -94,7 +95,6 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let jit { ctx; device } ?name bindings code : jitted =
     let result = Backend.jit ctx ?name bindings code in
     let%track_rt_sexp run () =
-      assert (Domain.is_main_domain ());
       await device;
       if not !(device.keep_spinning) then invalid_arg "Multicore_backend.jit: device not available";
       device.next_task := Some result.run;
@@ -102,19 +102,21 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     in
     { context = { ctx = result.context; device }; run; bindings = result.bindings }
 
-  let from_host { ctx; _ } = Backend.from_host ctx
-  let to_host { ctx; _ } = Backend.to_host ctx
+  let from_host { device; ctx } =
+    await device;
+    Backend.from_host ctx
+
+  let to_host { device; ctx } =
+    await device;
+    Backend.to_host ctx
 
   let%track_sexp merge ?name_suffix la ~dst ~accum ~src =
     let name_suffix : string = Option.value name_suffix ~default:"" in
     let ord ctx = ctx.device.ordinal in
-    let name_suffix : string =
-      [%string "_on_dev_%{ord dst#Int}_from_dev_%{ord src#Int}_%{name_suffix}"]
-    in
+    let name_suffix : string = [%string "_on_dev_%{ord dst#Int}_from_dev_%{ord src#Int}_%{name_suffix}"] in
     Option.map (Backend.merge ~name_suffix la ~dst:dst.ctx ~accum ~src:src.ctx) ~f:(fun result ->
         let device = dst.device in
         let%track_rt_sexp run () =
-          assert (Domain.is_main_domain ());
           await device;
           if not !(device.keep_spinning) then invalid_arg "Multicore_backend.merge: device not available";
           device.next_task := Some result.run;
