@@ -208,8 +208,12 @@ module Lazy = Utils.Lazy
 (** Performs one optimization step, potentially in parallel (if [grad_updates] are compiled for different
     devices). All jitted code must have the same bindings. Iterates over bindings with ranges, calling
     one of [grad_updates] in a round-robin fashion, and performs the following synchronization each time
-    all [grad_updates] have been called: merges all gradients into the device of [grad_updates.(0)],
-    calls [sgd_update], and copies all parameters from the [grad_updates.(0)] device to the other devices.
+    all [grad_updates] have been called:
+
+    1. merges all gradients into the device of [grad_updates.(0)],
+    2. calls [sgd_update],
+    3. copies all parameters from the [grad_updates.(0)] device to the other devices, if needed,
+    4. calls [post_sync] with the number of devices synced since the previous sync.
 
     All and only bindings with associated ranges are iterated, with the binding's initial value lost.
     Bindings without ranges remain at their initial values. *)
