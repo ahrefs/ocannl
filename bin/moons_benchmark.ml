@@ -39,10 +39,10 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
      let hid_4_5 = 4 in *)
   let hid_dim = 16 in
   (* let hid_dim = 4 in *)
-  let len = 320 in
+  let len = 64 * 32 in
   let n_batches = 2 * len / batch in
-  (* let epochs = 100 in *)
-  let epochs = 1 in
+  let epochs = 100 in
+  (* let epochs = 1 in *)
   let noise () = Random.float_range (-0.1) 0.1 in
   let moons_flat =
     Array.concat_map (Array.create ~len ())

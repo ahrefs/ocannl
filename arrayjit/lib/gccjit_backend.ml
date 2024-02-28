@@ -538,23 +538,29 @@ let%track_sexp jit (old_context : context) ~(name : string) bindings
   Context.release ctx;
   (context, Indexing.jitted_bindings bindings run_variadic, run)
 
-let from_host (context : context) la =
+let%track_sexp from_host (context : context) (la : Tn.t) : bool =
   match Map.find context.arrays la with
   | None -> false
   | Some c_arr -> (
       match la.Tn.array with
       | (lazy (Some h_arr)) ->
           Ndarray.map2 { f2 = Ndarray.A.blit } h_arr c_arr;
+          [%log_printbox
+            let indices = Array.init (Array.length @@ Lazy.force la.dims) ~f:(fun i -> i - 5) in
+            Ndarray.render_array ~indices c_arr];
           true
       | (lazy None) -> false)
 
-let to_host (context : context) la =
+let%track_sexp to_host (context : context) (la : Tn.t) : bool =
   match Map.find context.arrays la with
   | None -> false
   | Some c_arr -> (
       match la.Tn.array with
       | (lazy (Some h_arr)) ->
           Ndarray.map2 { f2 = Ndarray.A.blit } c_arr h_arr;
+          [%log_printbox
+            let indices = Array.init (Array.length @@ Lazy.force la.dims) ~f:(fun i -> i - 5) in
+            Ndarray.render_array ~indices h_arr];
           true
       | _ -> false)
 

@@ -36,7 +36,7 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let len = 64 in
   let n_batches = 2 * len / batch in
   (* let epochs = 100 in *)
-  let epochs = 1 in
+  let epochs = 2 in
   (* let epochs = 10 in *)
   let noise () = Random.float_range (-0.2) 0.2 in
   let trivial_flat =
@@ -61,6 +61,8 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     Train.set_on_host learning_rate.value;
     Train.set_on_host scalar_loss.value;
     let weight_decay : float = 0.0001 in
+    let _n_batches : int = n_batches in
+    let _len : int = len in
     let update = Train.grad_update ~setup_for_parallel:true scalar_loss in
     let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
     let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit ctx bindings update.fwd_bprop) in
