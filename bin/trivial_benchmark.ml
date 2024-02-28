@@ -29,6 +29,7 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   Tensor.default_value_prec := precision;
   Tensor.default_grad_prec := precision;
   let open Tensor.O in
+  let debug_batches = true in
   Utils.settings.output_debug_files_in_run_directory <- true;
   Utils.settings.debug_log_jitted <- true;
   Random.init (* random_seed *) 0;
@@ -49,11 +50,12 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     TDSL.init_const ~l:"trivial_classes" ~b:[ n_batches; batch ] ~o:[ 1 ] trivial_classes
   in
   let%op mlp x = "b" 1 + ("w" * x) in
-  let step_sym, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
+  let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
+  let step_n, bindings = IDX.get_static_symbol bindings in
   let steps = epochs * n_batches in
-  let%op learning_rate = 0.1 *. (!..steps - !@step_sym) /. !..steps in
-  let%op trivial_input = trivial_flat @| step_sym in
-  let%op trivial_class = trivial_classes @| step_sym in
+  let%op learning_rate = 10. *. (!..steps - !@step_n) /. !..steps in
+  let%op trivial_input = trivial_flat @| batch_n in
+  let%op trivial_class = trivial_classes @| batch_n in
   let%op margin_loss = ?/(1 - (trivial_class *. mlp trivial_input)) in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in
 
@@ -78,12 +80,14 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     let max_loss = ref 0.0 in
     let start_time = Time_now.nanoseconds_since_unix_epoch () in
     let epoch_loss = ref 0. in
+    let batch_ref = IDX.find_exn sgd_update.bindings batch_n in
+    let step_ref = IDX.find_exn sgd_update.bindings step_n in
     let update =
       Train.parallel_update
         (module Backend)
         ~grad_updates ~sgd_update update
-        ~post_sync:(fun () ->
-          let step_ref = IDX.find_exn sgd_update.bindings step_sym in
+        ~post_sync:(fun ~num_synced_devices ->
+          step_ref := !step_ref + num_synced_devices;
           assert (Backend.to_host sgd_update.context learning_rate.value);
           (* scalar_loss is not in the sgd_update context. *)
           assert (Backend.to_host grad_updates.(0).context scalar_loss.value);
@@ -91,8 +95,9 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
           epoch_loss := !epoch_loss +. loss;
           batch_losses := loss :: !batch_losses;
           batch_log_losses := Float.log scalar_loss.@[0] :: !batch_log_losses;
-          Stdio.printf "Batch=%d, lr=%f, batch loss=%f, epoch loss=%f\n%!" !step_ref learning_rate.@[0] loss
-            !epoch_loss)
+          if debug_batches then
+            Stdio.printf "Batch=%d, step=%d, lr=%f, batch loss=%f, epoch loss=%f\n%!" !batch_ref !step_ref
+              learning_rate.@[0] loss !epoch_loss)
     in
     for epoch = 1 to epochs do
       epoch_loss := 0.;
