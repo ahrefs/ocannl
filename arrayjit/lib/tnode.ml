@@ -196,6 +196,9 @@ let print_accessible_headers () =
 
 module Debug_runtime = Utils.Debug_runtime
 
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+
 let%debug_sexp log_accessible_headers () =
   Core.Gc.full_major ();
-  Registry.iter (fun arr -> [%log header arr]) registry
+  Registry.iter (fun arr -> [%log header arr]) registry;
+  ()

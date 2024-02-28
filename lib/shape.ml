@@ -214,6 +214,8 @@ let logic_to_spec = function
 
 module Debug_runtime = Arrayjit.Utils.Debug_runtime
 
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+
 module Update_id = struct
   module T = struct
     type t = Update_id of int [@@deriving equal, compare, hash, sexp]
@@ -574,7 +576,6 @@ let apply_env_update env update_step = iter_shapes update_step ~f:(apply_env_t e
 let propagate_shapes (update_step : update_step) : unit =
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice does). *)
   apply_env_update !state update_step;
-  let _debug_step: update_step = update_step in
   let _, ineqs = get_inequalities update_step in
   active_update_steps := update_step :: !active_update_steps;
   active_constraints := ineqs @ !active_constraints;

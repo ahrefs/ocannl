@@ -274,6 +274,8 @@ let take_from_end (l : dim list) (n : int) : dim list = List.rev @@ List.take (L
 
 module Debug_runtime = Utils.Debug_runtime
 
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+
 let apply_constraint ~finish r constr env =
   match constr with
   | Unconstrained -> ([], env)
@@ -283,8 +285,7 @@ let apply_constraint ~finish r constr env =
           let vars, nonvars = List.partition_tf dims ~f:is_var in
           let known = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
           let rem = n / known in
-          if rem = 0 then (
-            raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ]))
+          if rem = 0 then raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ])
           else if rem = 1 then ([], env)
           else
             match vars with
@@ -298,14 +299,12 @@ let apply_constraint ~finish r constr env =
           let vars, nonvars = List.partition_tf dims ~f:is_var in
           let known = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
           let rem = n / known in
-          if rem = 0 then (
-            raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ]))
+          if rem = 0 then raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ])
           else
             match vars with
             | [] ->
                 if rem = 1 then ([], env)
-                else (
-                  raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ]))
+                else raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ])
             | [ Var v ] -> ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } ], env)
             | Var v :: _ when finish -> ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } ], env)
             | Var _ :: _ -> ([ Row_constr { r; constr } ], env (* Wait for more shape inference. *))

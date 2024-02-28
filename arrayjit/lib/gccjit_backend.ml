@@ -93,6 +93,8 @@ let zero_out ctx block arr =
 
 module Debug_runtime = Utils.Debug_runtime
 
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+
 let%track_sexp get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ctx_info)
     (key : Tn.t) : ndarray =
   let open Gccjit in

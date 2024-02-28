@@ -212,6 +212,8 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
 
 module Debug_runtime = Utils.Debug_runtime
 
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+
 let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
   let exception Non_virtual of int in
   let static_indices =
@@ -258,13 +260,13 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
           (* Check for escaping variables. *)
           Array.iter idcs ~f:(function
             | Iterator s as idx when not (Set.mem static_indices s) ->
-                if not @@ Set.mem env_dom s then (
+                if not @@ Set.mem env_dom s then
                   if Utils.settings.with_debug then
                     [%log
-                      "Inlining candidate has an escaping variable",
+                      "INFO: Inlining candidate has an escaping variable",
                         (idx : Indexing.axis_index),
                         (top_llc : t)];
-                  raise @@ Non_virtual 7)
+                raise @@ Non_virtual 7
             | _ -> ());
         loop_float ~env_dom llv
     | Set_local (_, llv) -> loop_float ~env_dom llv

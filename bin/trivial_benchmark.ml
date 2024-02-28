@@ -9,6 +9,8 @@ module CDSL = Arrayjit.Low_level.CDSL
 module Utils = Arrayjit.Utils
 module Debug_runtime = Utils.Debug_runtime
 
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+
 let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch ~backend_name precision () =
   let module Backend = (val Train.fresh_backend ~backend_name () : Arrayjit.Backends.Backend) in
   let num_devices = min num_devices @@ Backend.num_devices () in

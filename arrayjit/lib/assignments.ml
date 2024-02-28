@@ -68,6 +68,8 @@ let sequential = List.fold_right ~init:Noop ~f:(fun st sts -> Seq (st, sts))
 
 module Debug_runtime = Utils.Debug_runtime
 
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+
 let%debug_sexp to_low_level code =
   let open Indexing in
   let get a idcs =

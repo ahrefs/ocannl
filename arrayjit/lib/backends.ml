@@ -1,6 +1,8 @@
 open Base
 module Debug_runtime = Utils.Debug_runtime
 
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+
 type 'context jitted = {
   context : 'context;
   run : (module Minidebug_runtime.Debug_runtime) -> unit -> unit;

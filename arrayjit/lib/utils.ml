@@ -111,25 +111,29 @@ let get_debug name =
       String.lowercase @@ String.strip @@ get_global_arg ~default:"nonempty_entries" ~arg_name:"log_level"
     with
     | "nothing" -> Minidebug_runtime.Nothing
+    | "prefixed_error" -> Prefixed [| "ERROR" |]
+    | "prefixed_warn_error" -> Prefixed [| "WARN"; "ERROR" |]
+    | "prefixed_info_warn_error" -> Prefixed [| "INFO"; "WARN"; "ERROR" |]
     | "explicit_logs" -> Prefixed [||]
     | "nonempty_entries" -> Nonempty_entries
     | "everything" -> Everything
     | s ->
         invalid_arg
-        @@ "ocannl_log_level setting should be one of: nothing, explicit_logs, nonempty_entries, everything; \
-            found: " ^ s
+        @@ "ocannl_log_level setting should be one of: nothing, prefixed_error, prefixed_warn_error, \
+            prefixed_info_warn_error, explicit_logs, nonempty_entries, everything; found: " ^ s
   in
   if flushing then
     Minidebug_runtime.debug_flushing ~filename ~time_tagged ~print_entry_ids ~global_prefix:name
       ~for_append:false (* ~log_level *) ()
   else
     Minidebug_runtime.forget_printbox
-    @@ Minidebug_runtime.debug_file ~time_tagged ~print_entry_ids ~global_prefix:name ~for_append:false ~max_inline_sexp_length:120
-         ~hyperlink ~values_first_mode:true ~backend ~log_level ?snapshot_every_sec filename
+    @@ Minidebug_runtime.debug_file ~time_tagged ~print_entry_ids ~global_prefix:name ~for_append:false
+         ~max_inline_sexp_length:120 ~hyperlink ~values_first_mode:true ~backend ~log_level
+         ?snapshot_every_sec filename
 
 module Debug_runtime = (val get_debug "")
 
-(* [%%global_debug_log_level Nothing] *)
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 (* [%%global_debug_interrupts { max_nesting_depth = 100; max_num_children = 1000 }] *)
 
