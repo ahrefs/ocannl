@@ -46,12 +46,13 @@ let bound_symbols bs =
   List.rev @@ loop bs
 
 (** Helps jitting the bindings. *)
-type 'a variadic = Result of (unit -> 'a) | Param of int ref * (int -> 'a) variadic
- 
+type 'a variadic = Result of 'a | Param of int ref * (int -> 'a) variadic
+
+type unit_bindings = (unit -> unit) bindings
 type jitted_bindings = (static_symbol, int ref) List.Assoc.t [@@deriving sexp_of]
 
 let rec apply : 'a. 'a variadic -> 'a =
- fun (type b) (f : b variadic) -> match f with Result rf -> rf () | Param (i, more) -> apply more !i
+ fun (type b) (f : b variadic) -> match f with Result rf -> rf | Param (i, more) -> apply more !i
 
 let jitted_bindings bs vs =
   let rec loop : 'a. 'a bindings * 'a variadic -> jitted_bindings =

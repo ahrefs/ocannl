@@ -497,46 +497,50 @@ let%track_sexp jit (old_context : context) ~(name : string) bindings
   let result = Context.compile ctx in
   let context = { label = old_context.label; arrays = ctx_info.ctx_arrays; result = Some result } in
   let%diagn_sexp run_variadic =
-    let rec link : 'a. 'a Indexing.bindings -> 'a Ctypes.fn -> 'a Indexing.variadic =
-     fun (type b) (bs : b Indexing.bindings) (cs : b Ctypes.fn) ->
+    let rec link : 'a 'b. ('a -> 'b) Indexing.bindings -> ('a -> 'b) Ctypes.fn -> ('a -> 'b) Indexing.variadic
+        =
+     fun (type a b) (bs : (a -> b) Indexing.bindings) (cs : (a -> b) Ctypes.fn) ->
       match bs with
-      | Empty -> Indexing.Result (Result.code result name Ctypes.(void @-> cs))
+      | Empty -> Indexing.Result (Result.code result name cs)
       | Bind (_, more) -> Param (ref 0, link more Ctypes.(int @-> cs))
     in
-    link bindings Ctypes.(returning void)
+    link bindings Ctypes.(void @-> returning void)
   in
-  let%diagn_rt_sexp run () =
+  let%diagn_rt_sexp schedule () =
     let module Debug_runtime = (val _debug_runtime) in
-    [%log_result "gccjit-run", old_context.label, name];
-    Indexing.apply run_variadic;
-    if Utils.settings.debug_log_jitted then
-      let rec loop = function
-        | [] -> ()
-        | line :: more when String.is_empty line -> loop more
-        | comment :: more when String.is_prefix comment ~prefix:"COMMENT: " ->
-            [%log String.chop_prefix_exn ~prefix:"COMMENT: " comment];
-            loop more
-        | source :: trace :: more when String.is_prefix source ~prefix:"# " ->
-            (let source =
-               String.concat ~sep:"\n" @@ String.split ~on:'$' @@ String.chop_prefix_exn ~prefix:"# " source
-             in
-             match Utils.split_with_seps header_sep trace with
-             | [] | [ "" ] -> [%log source]
-             | header1 :: assign1 :: header2 :: body ->
-                 let header = String.concat [ header1; assign1; header2 ] in
-                 let body = String.concat body in
-                 let message = Sexp.(List [ Atom header; Atom source; Atom body ]) in
-                 [%log (message : Sexp.t)]
-             | _ -> [%log source, trace]);
-            loop more
-        | line :: more ->
-            [%log line];
-            loop more
-      in
-      loop (Stdio.In_channel.read_lines log_file_name)
+    let callback = Indexing.apply run_variadic in
+    let work () =
+      callback ();
+      if Utils.settings.debug_log_jitted then
+        let rec loop = function
+          | [] -> ()
+          | line :: more when String.is_empty line -> loop more
+          | comment :: more when String.is_prefix comment ~prefix:"COMMENT: " ->
+              [%log String.chop_prefix_exn ~prefix:"COMMENT: " comment];
+              loop more
+          | source :: trace :: more when String.is_prefix source ~prefix:"# " ->
+              (let source =
+                 String.concat ~sep:"\n" @@ String.split ~on:'$' @@ String.chop_prefix_exn ~prefix:"# " source
+               in
+               match Utils.split_with_seps header_sep trace with
+               | [] | [ "" ] -> [%log source]
+               | header1 :: assign1 :: header2 :: body ->
+                   let header = String.concat [ header1; assign1; header2 ] in
+                   let body = String.concat body in
+                   let message = Sexp.(List [ Atom header; Atom source; Atom body ]) in
+                   [%log (message : Sexp.t)]
+               | _ -> [%log source, trace]);
+              loop more
+          | line :: more ->
+              [%log line];
+              loop more
+        in
+        loop (Stdio.In_channel.read_lines log_file_name)
+    in
+    Tn.Work work
   in
   Context.release ctx;
-  (context, Indexing.jitted_bindings bindings run_variadic, run)
+  (context, Indexing.jitted_bindings bindings run_variadic, schedule)
 
 let%track_sexp from_host (context : context) (la : Tn.t) : bool =
   match Map.find context.arrays la with

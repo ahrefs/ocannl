@@ -13,6 +13,8 @@ module Debug_runtime = Arrayjit.Utils.Debug_runtime
 
 let debug_rt = (module Debug_runtime : Minidebug_runtime.Debug_runtime)
 
+let run jitted = Tn.run @@ jitted.Arrayjit.Backends.schedule debug_rt ()
+
 (** Reinitializes a backend selected via a global [backend] flag. *)
 let fresh_backend ?backend_name () =
   let open Arrayjit.Backends in
@@ -193,12 +195,13 @@ let%debug_sexp all_device_to_host (type context) (module Backend : Backend_type 
     initial values. *)
 let sync_run ?looping (type context) (module Backend : Backend_type with type context = context)
     (jitted : Backend.jitted) t =
+  let work = jitted.schedule debug_rt () in
   all_host_to_device (module Backend) jitted.context t;
   (match looping with
-  | None -> jitted.run debug_rt ()
+  | None -> Tn.run work
   | Some then_ ->
       let f () =
-        jitted.run debug_rt ();
+        Tn.run work;
         then_ ()
       in
       sequential_loop ~f jitted.bindings);
@@ -233,40 +236,42 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   let param_grads = [%debug_notrace List.map all_params ~f:(fun t -> (Option.value_exn t.diff).grad)] in
   let ctxs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.context)] in
   (* By being lazy, we don't need to worry about how devices are paired up. *)
-  let merges : Backend.jitted list Lazy.t array array =
+  (* FIXME: if the work cannot await, we won't be able to schedule statically. *)
+  let merges =
     if num_devices < 2 then [| [||] |]
     else
       Array.init num_devices ~f:(fun (to_ : int) ->
           Array.init num_devices ~f:(fun (from : int) ->
               lazy
                 (List.map param_grads ~f:(fun p ->
-                     Option.value_or_thunk ~default:(fun () ->
-                         invalid_arg @@ "Train.parallel_update: gradient not available on a device: "
-                         ^ Tn.label p)
-                     @@ Backend.merge ~name_suffix:"grad_merge" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Add
-                          ~src:ctxs.(from)))))
+                     let jitted =
+                       Backend.merge ~name_suffix:"grad_merge" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Add
+                         ~src:ctxs.(from)
+                       |> Option.value_or_thunk ~default:(fun () ->
+                              invalid_arg @@ "Train.parallel_update: gradient not available on a device: "
+                              ^ Tn.label p)
+                     in
+                     jitted.Arrayjit.Backends.schedule debug_rt ()))))
   in
-  let merge ~(from : int) ~(to_ : int) : unit =
-    List.iter ~f:(fun jitted -> jitted.Arrayjit.Backends.run debug_rt ()) @@ Lazy.force merges.(to_).(from)
-  in
-  let copies : Backend.jitted list array =
+  let merge ~(from : int) ~(to_ : int) : unit = List.iter ~f:Tn.run @@ Lazy.force merges.(to_).(from) in
+  let copies =
     if num_devices < 2 then [||]
     else
       Array.init (num_devices - 1) ~f:(fun to_m_1 ->
           let to_ : int = to_m_1 + 1 in
           (* Backends may choose to not store parameters on devices other than the 0th. *)
           List.filter_map param_vals ~f:(fun p ->
-              Backend.merge ~name_suffix:"param_copy" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Arg2 ~src:ctxs.(0)))
+              Backend.merge ~name_suffix:"param_copy" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Arg2 ~src:ctxs.(0)
+              |> Option.map ~f:(fun jitted -> jitted.schedule debug_rt ())))
   in
   let sync (devices_to_sync : int) : unit =
     Arrayjit.Utils.parallel_merge merge devices_to_sync;
-    sgd_update.run debug_rt ();
+    Tn.run @@ sgd_update.schedule debug_rt ();
     for to_ = 1 to devices_to_sync - 1 do
-      List.iter copies.(to_ - 1) ~f:(fun jitted -> jitted.run debug_rt ())
+      List.iter copies.(to_ - 1) ~f:Tn.run
     done;
     post_sync ~num_synced_devices:devices_to_sync
   in
   let jitted_bindings = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.bindings)] in
-  (* FIXME: is this parallel? *)
-  let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.run debug_rt)] in
+  let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd () -> Tn.run @@ upd.schedule debug_rt ())] in
   fun () -> round_robin fs jitted_bindings sgd_update.bindings ~sync

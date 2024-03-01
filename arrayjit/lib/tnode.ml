@@ -1,6 +1,10 @@
 open Base
 module Nd = Ndarray
 
+type work = Work of (unit -> unit) [@@unboxed] [@@deriving sexp_of]
+
+let[@inline] run (Work work) = work ()
+
 type memory_mode =
   | Virtual  (** The tensor node's computations are inlined on a per-scalar basis. *)
   | Never_virtual  (** One of: [Local], [On_device], [Hosted]. *)

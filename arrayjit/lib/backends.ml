@@ -5,7 +5,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 type 'context jitted = {
   context : 'context;
-  run : (module Minidebug_runtime.Debug_runtime) -> unit -> unit;
+  schedule : (module Minidebug_runtime.Debug_runtime) -> unit -> Tnode.work;
   bindings : Indexing.jitted_bindings;
 }
 [@@deriving sexp_of]
@@ -26,7 +26,7 @@ module type No_device_backend = sig
 
   val sexp_of_context : context -> Sexp.t
   val sexp_of_jitted : jitted -> Sexp.t
-  val jit : context -> ?name:string -> unit Indexing.bindings -> Assignments.t -> jitted
+  val jit : context -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> jitted
 
   val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
   (** Cleans up all work on a backend.
@@ -67,7 +67,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   module Domain = Domain [@warning "-3"]
 
   type device = {
-    next_task : (((module Minidebug_runtime.Debug_runtime) -> unit -> unit) option ref[@sexp.opaque]);
+    next_task : (Tnode.work option ref[@sexp.opaque]);
+    debug_runtime : ((module Minidebug_runtime.Debug_runtime)[@sexp.opaque]);
     keep_spinning : bool ref;
     wait_for_device : (Utils.waiter[@sexp.opaque]);
     wait_for_work : (Utils.waiter[@sexp.opaque]);
@@ -95,14 +96,18 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     Backend.finalize ctx
 
   let jit { ctx; device } ?name bindings code : jitted =
-    let result = Backend.jit ctx ?name bindings code in
-    let%track_rt_sexp run () =
-      await device;
-      if not !(device.keep_spinning) then invalid_arg "Multicore_backend.jit: device not available";
-      device.next_task := Some result.run;
-      device.wait_for_work.release ()
+    let task = Backend.jit ctx ?name bindings code in
+    let%track_rt_sexp schedule () =
+      let task = task.schedule _debug_runtime () in
+      let work () =
+        await device;
+        if not !(device.keep_spinning) then invalid_arg "Multicore_backend.jit: device not available";
+        device.next_task := Some task;
+        device.wait_for_work.release ()
+      in
+      Tnode.Work work
     in
-    { context = { ctx = result.context; device }; run; bindings = result.bindings }
+    { context = { ctx = task.context; device }; schedule; bindings = task.bindings }
 
   let from_host { device; ctx } =
     await device;
@@ -116,15 +121,19 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     let name_suffix : string = Option.value name_suffix ~default:"" in
     let ord ctx = ctx.device.ordinal in
     let name_suffix : string = [%string "_on_dev_%{ord dst#Int}_from_dev_%{ord src#Int}_%{name_suffix}"] in
-    Option.map (Backend.merge ~name_suffix la ~dst:dst.ctx ~accum ~src:src.ctx) ~f:(fun result ->
+    Option.map (Backend.merge ~name_suffix la ~dst:dst.ctx ~accum ~src:src.ctx) ~f:(fun task ->
         let device = dst.device in
-        let%track_rt_sexp run () =
-          await device;
-          if not !(device.keep_spinning) then invalid_arg "Multicore_backend.merge: device not available";
-          device.next_task := Some result.run;
-          device.wait_for_work.release ()
+        let%track_rt_sexp schedule () =
+          let task = task.schedule _debug_runtime () in
+          let work () =
+            await device;
+            if not !(device.keep_spinning) then invalid_arg "Multicore_backend.merge: device not available";
+            device.next_task := Some task;
+            device.wait_for_work.release ()
+          in
+          Tnode.Work work
         in
-        { context = { ctx = result.context; device }; run; bindings = result.bindings })
+        { context = { ctx = task.context; device }; schedule; bindings = task.bindings })
 
   let num_devices () = Domain.recommended_domain_count () - 1
 
@@ -133,20 +142,28 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     let keep_spinning = ref true in
     let wait_for_device = Utils.waiter () in
     let wait_for_work = Utils.waiter () in
-    let runtime = Utils.get_debug ("dev-" ^ Int.to_string ordinal) in
+    let debug_runtime = Utils.get_debug ("dev-" ^ Int.to_string ordinal) in
     let worker () =
-      let module Debug_runtime = (val runtime) in
+      let module Debug_runtime = (val debug_runtime) in
       [%log "spinup-dev", (ordinal : int)];
       while !keep_spinning do
         while Option.is_none !next_task do
           wait_for_work.await ()
         done;
-        Option.value_exn !next_task runtime ();
+        Tnode.run @@ Option.value_exn !next_task;
         next_task := None;
         wait_for_device.release ()
       done
     in
-    { next_task; keep_spinning; wait_for_device; wait_for_work; ordinal; domain = Domain.spawn worker }
+    {
+      next_task;
+      debug_runtime;
+      keep_spinning;
+      wait_for_device;
+      wait_for_work;
+      ordinal;
+      domain = Domain.spawn worker;
+    }
 
   let devices = Array.init (num_devices ()) ~f:(fun ordinal -> spinup_device ~ordinal)
   let get_all_devices () = devices
@@ -185,10 +202,10 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
 
   let jit context ?name bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
-    let context, bindings, run =
+    let context, bindings, schedule =
       jit context ~name bindings @@ Assignments.compile_proc ~name (Indexing.bound_symbols bindings) code
     in
-    { context; run; bindings }
+    { context; schedule; bindings }
 
   let from_host = from_host
   let to_host = to_host
@@ -196,7 +213,7 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
   let merge ?name_suffix la ~dst ~accum ~(src : context) =
     let bindings = Indexing.Empty in
     merge ?name_suffix la ~dst ~accum ~src bindings
-    |> Option.map ~f:(fun (context, bindings, run) -> { context; run; bindings })
+    |> Option.map ~f:(fun (context, bindings, schedule) -> { context; schedule; bindings })
 end
 
 module Gccjit_backend = Multicore_backend (Gccjit_device)
@@ -217,10 +234,10 @@ module Dummy_device : No_device_backend with type context = Dummy_backend.contex
 
   let jit context ?name bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
-    let context, bindings, run =
+    let context, bindings, schedule =
       jit context ~name bindings @@ Assignments.compile_proc ~name (Indexing.bound_symbols bindings) code
     in
-    { context; run; bindings }
+    { context; schedule; bindings }
 
   let from_host = from_host
   let to_host = to_host
@@ -228,7 +245,7 @@ module Dummy_device : No_device_backend with type context = Dummy_backend.contex
   let merge ?name_suffix la ~dst ~accum ~(src : context) =
     let bindings = Indexing.Empty in
     merge ?name_suffix la ~dst ~accum ~src bindings
-    |> Option.map ~f:(fun (context, bindings, run) -> { context; run; bindings })
+    |> Option.map ~f:(fun (context, bindings, schedule) -> { context; schedule; bindings })
 end
 
 module Dummy_backend = Multicore_backend (Dummy_device)
@@ -251,10 +268,10 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
 
   let jit context ?name bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
-    let context, bindings, run =
+    let context, bindings, schedule =
       jit context ~name bindings @@ Assignments.compile_proc ~name (Indexing.bound_symbols bindings) code
     in
-    { context; run; bindings }
+    { context; schedule; bindings }
 
   let from_host = from_host
   let to_host = to_host
@@ -262,7 +279,7 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   let merge ?name_suffix la ~dst ~accum ~src =
     let bindings = Indexing.Empty in
     merge ?name_suffix la ~dst ~accum ~src bindings
-    |> Option.map ~f:(fun (context, run) -> { context; run; bindings = [] })
+    |> Option.map ~f:(fun (context, schedule) -> { context; schedule; bindings = [] })
 
   let await = await
   let num_devices = num_devices

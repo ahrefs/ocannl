@@ -103,7 +103,7 @@ let _suspended () =
   let jitted = jit (init device) IDX.empty @@ update.fwd_bprop in
   Tensor.iter_embedded_arrays l ~f:(fun a ->
       if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
-  jitted.run Train.debug_rt ();
+  Train.run jitted;
   await device;
   Tensor.iter_embedded_arrays l ~f:(fun a ->
       if to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ Tn.name a);
@@ -124,7 +124,7 @@ let _suspended () =
       on the cuda backend.|};
   List.iter [ a.value; b.value; c.value; f.value ] ~f:(fun a ->
       if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
-  jitted.run Train.debug_rt ();
+  Train.run jitted;
   await device;
   Tensor.iter_embedded_arrays l ~f:(fun a ->
       if to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ Tn.name a);
@@ -136,7 +136,7 @@ let _suspended () =
   (* We could reuse the jitted code if we did not use `jit_and_run`. *)
   let update = Train.grad_update l in
   let jitted = jit jitted.context IDX.empty update.fwd_bprop in
-  jitted.run Train.debug_rt ();
+  Train.run jitted;
   await device;
   Tensor.iter_embedded_arrays l ~f:(fun a ->
       if to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ Tn.name a);

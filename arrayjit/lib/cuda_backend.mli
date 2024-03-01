@@ -10,9 +10,9 @@ val sexp_of_context : context -> Sexplib.Sexp.t
 val jit :
   ?name:string ->
   context ->
-  unit Indexing.bindings ->
+  Indexing.unit_bindings ->
   Low_level.traced_store * Low_level.t ->
-  context * Indexing.jitted_bindings * ((module Minidebug_runtime.Debug_runtime) -> unit -> unit)
+  context * Indexing.jitted_bindings * ((module Minidebug_runtime.Debug_runtime) -> unit -> Tnode.work)
 
 val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
 
@@ -28,8 +28,8 @@ val merge :
   dst:context ->
   accum:Ops.binop ->
   src:context ->
-  unit Indexing.bindings ->
-  (context * ((module Minidebug_runtime.Debug_runtime) -> unit -> unit)) option
+  Indexing.unit_bindings ->
+  (context * ((module Minidebug_runtime.Debug_runtime) -> unit -> Tnode.work)) option
 (** Merges the array from the source context into the destination context: [dst =: dst accum src].
       If the array is hosted, its state on host is undefined after this operation. (A backend may chose
       to use the host array as a buffer, if that is beneficial.) [name_suffix] is appended to

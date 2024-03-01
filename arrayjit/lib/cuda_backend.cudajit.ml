@@ -128,11 +128,10 @@ let to_host (ctx : context) la =
           true
       | _ -> false)
 
-let merge ?(name_suffix = "") la ~dst ~accum ~src (bindings : unit Indexing.bindings) =
+let merge ?(name_suffix = "") la ~dst ~accum ~src (bindings : Indexing.unit_bindings) =
   let ord ctx = ctx.device.ordinal in
   let name =
-    [%string
-      "merge_into_%{Tn.name la}_on_dev_%{ord dst#Int}_from_dev_%{ord src#Int}_%{name_suffix}"]
+    [%string "merge_into_%{Tn.name la}_on_dev_%{ord dst#Int}_from_dev_%{ord src#Int}_%{name_suffix}"]
   in
   ignore (name, accum, bindings);
   failwith "NOT IMPLEMENTED YET"
@@ -472,19 +471,8 @@ let%debug_sexp jit ?name old_context bindings ((traced_store, llc) as compiled) 
   let func, args, run_module, info = jit_func ~name old_context idx_params compiled in
   let context = { old_context with ctx = info.ctx; run_module = Some run_module; arrays = info.ctx_arrays } in
   let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
-  let%track_rt_sexp run () =
-    [%log "zeroing-out global memory"];
-    set_ctx context.ctx;
+  let%track_rt_sexp schedule () =
     let module Cu = Cudajit in
-    Map.iteri context.arrays ~f:(fun ~key:ptr ~data ->
-        if Hash_set.mem info.used_tensors ptr then
-          match data with
-          | { global = Some (_, dev_ptr); size_in_bytes; _ } ->
-              let tn = Hashtbl.find_exn traced_store ptr in
-              if tn.zero_initialized then Cu.memset_d8 dev_ptr Unsigned.UChar.zero ~length:size_in_bytes
-          | _ -> ());
-    [%log "launching the kernel"];
-    (* if Utils.settings.debug_log_jitted then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
     let idx_args =
       List.map idx_args ~f:(fun ({ static_symbol; static_range }, i) ->
           if !i < 0 then
@@ -501,7 +489,21 @@ let%debug_sexp jit ?name old_context bindings ((traced_store, llc) as compiled) 
                         %{upto#Int}"]);
           Cu.Int !i)
     in
-    Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream @@ idx_args @ args;
-    [%log "kernel launched"]
+    let work () =
+      [%log "zeroing-out global memory"];
+      set_ctx context.ctx;
+      Map.iteri context.arrays ~f:(fun ~key:ptr ~data ->
+          if Hash_set.mem info.used_tensors ptr then
+            match data with
+            | { global = Some (_, dev_ptr); size_in_bytes; _ } ->
+                let tn = Hashtbl.find_exn traced_store ptr in
+                if tn.zero_initialized then Cu.memset_d8 dev_ptr Unsigned.UChar.zero ~length:size_in_bytes
+            | _ -> ());
+      [%log "launching the kernel"];
+      (* if Utils.settings.debug_log_jitted then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
+      Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream @@ idx_args @ args;
+      [%log "kernel launched"]
+    in
+    Tnode.Work work
   in
-  (context, idx_args, run)
+  (context, idx_args, schedule)

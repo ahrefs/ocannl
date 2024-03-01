@@ -65,13 +65,18 @@ let jit old_context ~name bindings (_traced_store, compiled) =
   let context = { old_context with arrays } in
   let symbols = Indexing.bound_symbols bindings in
   let jitted_bindings = List.map symbols ~f:(fun s -> (s, ref 0)) in
-  let%debug_rt_sexp run () =
-    Map.iteri sets ~f:(fun ~key ~data ->
-        let args = Set.to_list data |> List.map ~f:(fun la -> Sexp.Atom (String.concat ~sep:"." la.label)) in
-        key.backend_info <- Sexp.(List (Atom name :: args));
-        [%log name, context.label, String.concat ~sep:"." key.label, ":=", (key.backend_info : Sexp.t)])
+  let%debug_rt_sexp schedule () =
+    let work () =
+      Map.iteri sets ~f:(fun ~key ~data ->
+          let args =
+            Set.to_list data |> List.map ~f:(fun la -> Sexp.Atom (String.concat ~sep:"." la.label))
+          in
+          key.backend_info <- Sexp.(List (Atom name :: args));
+          [%log name, context.label, String.concat ~sep:"." key.label, ":=", (key.backend_info : Sexp.t)])
+    in
+    Tnode.Work work
   in
-  (context, jitted_bindings, run)
+  (context, jitted_bindings, schedule)
 
 let merge ?name_suffix la ~dst ~accum:_ ~src bindings =
   match (Map.find src.arrays la, Map.find dst.arrays la) with
@@ -79,14 +84,24 @@ let merge ?name_suffix la ~dst ~accum:_ ~src bindings =
   | Some src_info, Some dst_info ->
       let symbols = Indexing.bound_symbols bindings in
       let jitted_bindings = List.map symbols ~f:(fun s -> (s, ref 0)) in
-      let%debug_rt_sexp run (() : unit) : unit =
-        let name = "merge_from_" ^ Option.value name_suffix ~default:"" in
-        let elem = Sexp.(List [ Atom name; !src_info ]) in
-        [%log
-          "merge", String.concat ~sep:"." la.label, ":", dst.label, ":=", src.label, "=", (!src_info : Sexp.t)];
-        dst_info := Utils.sexp_append !dst_info ~elem
+      let%debug_rt_sexp schedule (() : unit) : Tn.work =
+        let work () =
+          let name = "merge_from_" ^ Option.value name_suffix ~default:"" in
+          let elem = Sexp.(List [ Atom name; !src_info ]) in
+          [%log
+            "merge",
+              String.concat ~sep:"." la.label,
+              ":",
+              dst.label,
+              ":=",
+              src.label,
+              "=",
+              (!src_info : Sexp.t)];
+          dst_info := Utils.sexp_append !dst_info ~elem
+        in
+        Tnode.Work work
       in
-      Some (dst, jitted_bindings, run)
+      Some (dst, jitted_bindings, schedule)
 
 module Debug_runtime = Utils.Debug_runtime
 

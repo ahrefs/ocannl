@@ -38,9 +38,9 @@ let benchmark_overhead backend () =
     Array.map xs ~f:(fun v ->
         let%cd update_x = x =: !.v in
         let jitted_x = jit ~name:"assign_x" jitted_f.context IDX.empty update_x in
-        jitted_x.run Train.debug_rt ();
+        Train.run jitted_x;
         await device;
-        jitted_f.run Train.debug_rt ();
+        Train.run jitted_f;
         await device;
         ignore (to_host jitted_f.context f.value : bool);
         f.@[0])

@@ -43,8 +43,8 @@ let%expect_test "Graph drawing recompile" =
     Array.map xs ~f:(fun v ->
         (* This is inefficient because it compiles the argument update inside the loop. *)
         let x_jitted = Backend.jit f_jitted.context IDX.empty ~name:"assign_x" [%cd x =: !.v] in
-        x_jitted.run Train.debug_rt ();
-        f_jitted.run Train.debug_rt ();
+        Train.run x_jitted;
+        Train.run f_jitted;
         Backend.await device;
         f.@[0])
   in
@@ -134,7 +134,7 @@ let%expect_test "Graph drawing fetch" =
   let fx_jitted = Backend.jit ctx bindings update.fwd_bprop in
   let ys =
     Array.map xs ~f:(fun _ ->
-        fx_jitted.run Train.debug_rt ();
+        Train.run fx_jitted;
         Backend.await device;
 
         fx.@[0])
@@ -237,7 +237,7 @@ let%expect_test "Simple gradients hosted" =
      will change, compared to the above.
      Since virtual tensors are computed by-need, they will always be recomputed using the latest
      parameter state. *)
-  sgd_jitted.run Train.debug_rt ();
+  Train.run sgd_jitted;
   Backend.await device;
   Train.all_device_to_host (module Backend) sgd_jitted.context l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
@@ -262,7 +262,7 @@ let%expect_test "Simple gradients hosted" =
 
   (* Now the params will remain as above, but both param gradients and the values and gradients
      of other nodes will change thanks to the forward and backward passes. *)
-  grad_jitted.run Train.debug_rt ();
+  Train.run grad_jitted;
   Backend.await device;
   Train.all_device_to_host (module Backend) sgd_jitted.context l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
@@ -327,7 +327,7 @@ let%expect_test "Simple gradients virtual" =
      will change, compared to the above.
      Since virtual tensors are computed by-need, they will always be recomputed using the latest
      parameter state. *)
-  sgd_jitted.run Train.debug_rt ();
+  Train.run sgd_jitted;
   Backend.await device;
   Train.all_device_to_host (module Backend) sgd_jitted.context l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
@@ -352,7 +352,7 @@ let%expect_test "Simple gradients virtual" =
     <void>   │<void>    │         │ |}];
   (* Now the params will remain as above, but both param gradients and the values and gradients
      of other nodes will change thanks to the forward and backward passes. *)
-  grad_jitted.run Train.debug_rt ();
+  Train.run grad_jitted;
   Backend.await device;
   Train.all_device_to_host (module Backend) sgd_jitted.context l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
@@ -388,7 +388,7 @@ let%expect_test "2D neuron hosted" =
   Train.every_non_literal_on_host v;
   let update = Train.grad_update v in
   let jitted = Backend.jit ctx IDX.empty update.fwd_bprop in
-  jitted.run Train.debug_rt ();
+  Train.run jitted;
   Backend.await device;
   Train.all_device_to_host (module Backend) jitted.context v;
   Tensor.print_tree ~with_grad:true ~depth:9 v;
@@ -415,7 +415,7 @@ let%expect_test "2D neuron virtual" =
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   let update = Train.grad_update v in
   let jitted = Backend.jit ctx IDX.empty update.fwd_bprop in
-  jitted.run Train.debug_rt ();
+  Train.run jitted;
   Backend.await device;
   Train.all_device_to_host (module Backend) jitted.context v;
   Tensor.print_tree ~with_grad:true ~depth:9 v;

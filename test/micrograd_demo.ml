@@ -23,7 +23,7 @@ let%expect_test "Micrograd README basic example" =
   List.iter ~f:(Option.iter ~f:(fun diff -> Train.set_on_host diff.Tensor.grad)) [ a.diff; b.diff ];
   let update = Train.grad_update g in
   let step = Backend.jit ctx IDX.empty update.fwd_bprop in
-  step.run Train.debug_rt ();
+  Train.run step;
   Backend.await device;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ g;
   [%expect
@@ -120,7 +120,7 @@ let%expect_test "Micrograd half-moons example" =
   Train.all_host_to_device (module Backend) sgd_jitted.context learning_rate;
   for _epoch = 1 to epochs do
     Train.sequential_loop sgd_jitted.bindings ~f:(fun () ->
-        sgd_jitted.run Train.debug_rt ();
+        Train.run sgd_jitted;
         Backend.await device;
         assert (Backend.to_host sgd_jitted.context learning_rate.value);
         assert (Backend.to_host sgd_jitted.context scalar_loss.value);
@@ -146,7 +146,7 @@ let%expect_test "Micrograd half-moons example" =
     Tensor.set_values point [| x; y |];
     (* For the gccjit backend, point is only on host, not on device. For cuda, this will be needed. *)
     ignore (Backend.from_host result_jitted.context point.value : bool);
-    result_jitted.run Train.debug_rt ();
+    Train.run result_jitted;
     Backend.await device;
     assert (Backend.to_host result_jitted.context mlp_result.value);
     Float.(mlp_result.@[0] >= 0.)

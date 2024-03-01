@@ -142,7 +142,7 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
       Tensor.set_values point [| x |];
       (* For the gccjit backend, point is only on host, not on device. For cuda, this will be needed. *)
       ignore (Backend.from_host result_jitted.context point.value : bool);
-      result_jitted.run Train.debug_rt ();
+      Train.run result_jitted;
       Backend.await devices.(0);
       assert (Backend.to_host result_jitted.context mlp_result.value);
       mlp_result.@[0]
