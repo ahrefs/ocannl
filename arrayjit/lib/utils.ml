@@ -24,6 +24,7 @@ let mref_add_missing mref key ~f =
 
 type settings = {
   mutable debug_log_jitted : bool;
+  mutable debug_memory_locations : bool;
   mutable output_debug_files_in_run_directory : bool;
   mutable with_debug : bool;
   mutable fixed_state_for_init : int option;
@@ -34,6 +35,7 @@ type settings = {
 let settings =
   {
     debug_log_jitted = false;
+    debug_memory_locations = false;
     output_debug_files_in_run_directory = false;
     with_debug = false;
     fixed_state_for_init = None;

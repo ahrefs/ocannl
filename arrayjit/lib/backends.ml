@@ -99,7 +99,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let jit { ctx; device } ?name bindings code : jitted =
     let task = Backend.jit ctx ?name bindings code in
     let%diagn_rt_sexp schedule () =
-      [%log "Scheduling", task.name];
+      [%log_result "Scheduling", task.name];
       let task = task.schedule device.debug_runtime () in
       let work () =
         await device;
@@ -126,7 +126,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     Option.map (Backend.merge ~name_suffix la ~dst:dst.ctx ~accum ~src:src.ctx) ~f:(fun task ->
         let device = dst.device in
         let%track_rt_sexp schedule () =
-          [%log "Scheduling-merge", task.name];
+          [%log_result "Scheduling-merge", task.name];
           let task = task.schedule device.debug_runtime () in
           let work () =
             await device;

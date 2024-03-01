@@ -32,6 +32,7 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let debug_batches = true in
   Utils.settings.output_debug_files_in_run_directory <- true;
   Utils.settings.debug_log_jitted <- true;
+  Utils.settings.debug_memory_locations <- true;
   Random.init (* random_seed *) 0;
   (* Utils.settings.fixed_state_for_init <- Some random_seed; *)
   let len = 64 in

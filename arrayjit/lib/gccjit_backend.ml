@@ -175,10 +175,11 @@ let get_ptr array =
   | None -> Option.value_exn @@ Option.first_some array.global_ptr array.hosted_ptr
 
 let get_ptr_debug array =
+  let memloc arr = if Utils.settings.debug_memory_locations then "@" ^ Gccjit.RValue.to_string arr else "" in
   match (array.local, array.global_ptr, array.hosted_ptr) with
   | Some _, _, _ -> "local_" ^ Tn.name array.nd
-  | None, Some _, _ -> "global_" ^ Tn.name array.nd
-  | None, None, Some _ -> "hosted_" ^ Tn.name array.nd
+  | None, Some arr, _ -> "global_" ^ Tn.name array.nd ^ memloc arr
+  | None, None, Some arr -> "hosted_" ^ Tn.name array.nd ^ memloc arr
   | None, None, None -> assert false
 
 let%track_sexp jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block (body : Low_level.t) =
