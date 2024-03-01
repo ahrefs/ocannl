@@ -16,7 +16,6 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let num_devices = min num_devices @@ Backend.num_devices () in
   let devices = Array.init num_devices ~f:(fun ordinal -> Backend.get_device ~ordinal) in
   let contexts = Array.map devices ~f:Backend.init in
-  let ctx0 = contexts.(0) in
   (* ignore random_seed; *)
   let bench_title =
     [%string
@@ -69,7 +68,7 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     let update = Train.grad_update ~setup_for_parallel:true scalar_loss in
     let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
     let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit ctx bindings update.fwd_bprop) in
-    let sgd_update = Backend.jit ctx0 bindings sgd in
+    let sgd_update = Backend.jit grad_updates.(0).context bindings sgd in
     Train.all_host_to_device (module Backend) sgd_update.context scalar_loss;
     Train.all_host_to_device (module Backend) sgd_update.context learning_rate;
     let batch_losses = ref [] in
