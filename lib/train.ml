@@ -12,7 +12,6 @@ module Debug_runtime = Arrayjit.Utils.Debug_runtime
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 let debug_rt = (module Debug_runtime : Minidebug_runtime.Debug_runtime)
-
 let run jitted = Tn.run @@ jitted.Arrayjit.Backends.schedule debug_rt ()
 
 (** Reinitializes a backend selected via a global [backend] flag. *)
@@ -253,6 +252,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
                      jitted.Arrayjit.Backends.schedule debug_rt ()))))
   in
   let merge ~(from : int) ~(to_ : int) : unit = List.iter ~f:Tn.run @@ Lazy.force merges.(to_).(from) in
+  let needed_on_host = ref @@ Set.empty (module Tn) in
   let copies =
     if num_devices < 2 then [||]
     else
@@ -261,11 +261,18 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
           (* Backends may choose to not store parameters on devices other than the 0th. *)
           List.filter_map param_vals ~f:(fun p ->
               Backend.merge ~name_suffix:"param_copy" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Arg2 ~src:ctxs.(0)
-              |> Option.map ~f:(fun jitted -> jitted.schedule debug_rt ())))
+              |> function
+              | Some jitted -> Some (jitted.Arrayjit.Backends.schedule debug_rt ())
+              | None ->
+                  needed_on_host := Set.add !needed_on_host p;
+                  None))
   in
   let sync (devices_to_sync : int) : unit =
     Arrayjit.Utils.parallel_merge merge devices_to_sync;
     Tn.run @@ sgd_update.schedule debug_rt ();
+    Set.iter !needed_on_host ~f:(fun p ->
+        if not @@ Backend.to_host sgd_update.context p then
+          invalid_arg @@ "Train.parallel_update: parameter missing on one of the devices: " ^ Tn.name p);
     for to_ = 1 to devices_to_sync - 1 do
       List.iter copies.(to_ - 1) ~f:Tn.run
     done;
