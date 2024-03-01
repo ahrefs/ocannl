@@ -7,6 +7,7 @@ type 'context jitted = {
   context : 'context;
   schedule : (module Minidebug_runtime.Debug_runtime) -> unit -> Tnode.work;
   bindings : Indexing.jitted_bindings;
+  name : string;
 }
 [@@deriving sexp_of]
 
@@ -97,8 +98,9 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let jit { ctx; device } ?name bindings code : jitted =
     let task = Backend.jit ctx ?name bindings code in
-    let%track_rt_sexp schedule () =
-      let task = task.schedule _debug_runtime () in
+    let%diagn_rt_sexp schedule () =
+      [%log "Scheduling", task.name];
+      let task = task.schedule device.debug_runtime () in
       let work () =
         await device;
         if not !(device.keep_spinning) then invalid_arg "Multicore_backend.jit: device not available";
@@ -107,7 +109,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       in
       Tnode.Work work
     in
-    { context = { ctx = task.context; device }; schedule; bindings = task.bindings }
+    { task with context = { ctx = task.context; device }; schedule }
 
   let from_host { device; ctx } =
     await device;
@@ -124,7 +126,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     Option.map (Backend.merge ~name_suffix la ~dst:dst.ctx ~accum ~src:src.ctx) ~f:(fun task ->
         let device = dst.device in
         let%track_rt_sexp schedule () =
-          let task = task.schedule _debug_runtime () in
+          [%log "Scheduling-merge", task.name];
+          let task = task.schedule device.debug_runtime () in
           let work () =
             await device;
             if not !(device.keep_spinning) then invalid_arg "Multicore_backend.merge: device not available";
@@ -133,7 +136,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
           in
           Tnode.Work work
         in
-        { context = { ctx = task.context; device }; schedule; bindings = task.bindings })
+        { task with context = { ctx = task.context; device }; schedule })
 
   let num_devices () = Domain.recommended_domain_count () - 1
 
@@ -202,10 +205,10 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
 
   let jit context ?name bindings code =
     let name = Option.value name ~default:(Assignments.get_name code) in
-    let context, bindings, schedule =
+    let context, bindings, schedule, name =
       jit context ~name bindings @@ Assignments.compile_proc ~name (Indexing.bound_symbols bindings) code
     in
-    { context; schedule; bindings }
+    { context; schedule; bindings; name }
 
   let from_host = from_host
   let to_host = to_host
@@ -213,7 +216,7 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
   let merge ?name_suffix la ~dst ~accum ~(src : context) =
     let bindings = Indexing.Empty in
     merge ?name_suffix la ~dst ~accum ~src bindings
-    |> Option.map ~f:(fun (context, bindings, schedule) -> { context; schedule; bindings })
+    |> Option.map ~f:(fun (context, bindings, schedule, name) -> { context; schedule; bindings; name })
 end
 
 module Gccjit_backend = Multicore_backend (Gccjit_device)
@@ -239,7 +242,7 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
     let context, bindings, schedule =
       jit context ~name bindings @@ Assignments.compile_proc ~name (Indexing.bound_symbols bindings) code
     in
-    { context; schedule; bindings }
+    { context; schedule; bindings; name }
 
   let from_host = from_host
   let to_host = to_host
@@ -247,7 +250,7 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   let merge ?name_suffix la ~dst ~accum ~src =
     let bindings = Indexing.Empty in
     merge ?name_suffix la ~dst ~accum ~src bindings
-    |> Option.map ~f:(fun (context, schedule) -> { context; schedule; bindings = [] })
+    |> Option.map ~f:(fun (context, schedule, name) -> { context; schedule; bindings = []; name })
 
   let await = await
   let num_devices = num_devices

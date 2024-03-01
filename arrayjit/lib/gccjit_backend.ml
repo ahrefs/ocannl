@@ -482,7 +482,7 @@ let header_sep =
   compile (seq [ str " "; opt any; str "="; str " " ])
 
 let%track_sexp jit (old_context : context) ~(name : string) bindings
-    (compiled : Low_level.traced_store * Low_level.t) : context * _ * _ =
+    (compiled : Low_level.traced_store * Low_level.t) : context * _ * _ * string =
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
@@ -509,7 +509,8 @@ let%track_sexp jit (old_context : context) ~(name : string) bindings
   let%diagn_rt_sexp schedule () =
     let module Debug_runtime = (val _debug_runtime) in
     let callback = Indexing.apply run_variadic in
-    let work () =
+    let%diagn_sexp work () : unit =
+      [%log_result name];
       callback ();
       if Utils.settings.debug_log_jitted then
         let rec loop = function
@@ -540,7 +541,7 @@ let%track_sexp jit (old_context : context) ~(name : string) bindings
     Tn.Work work
   in
   Context.release ctx;
-  (context, Indexing.jitted_bindings bindings run_variadic, schedule)
+  (context, Indexing.jitted_bindings bindings run_variadic, schedule, name)
 
 let%track_sexp from_host (context : context) (la : Tn.t) : bool =
   match Map.find context.arrays la with

@@ -489,7 +489,7 @@ let%debug_sexp jit ?name old_context bindings ((traced_store, llc) as compiled) 
                         %{upto#Int}"]);
           Cu.Int !i)
     in
-    let work () =
+    let%diagn_sexp work () : unit =
       [%log "zeroing-out global memory"];
       set_ctx context.ctx;
       Map.iteri context.arrays ~f:(fun ~key:ptr ~data ->

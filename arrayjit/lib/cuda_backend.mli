@@ -29,7 +29,7 @@ val merge :
   accum:Ops.binop ->
   src:context ->
   Indexing.unit_bindings ->
-  (context * ((module Minidebug_runtime.Debug_runtime) -> unit -> Tnode.work)) option
+  (context * ((module Minidebug_runtime.Debug_runtime) -> unit -> Tnode.work) * string) option
 (** Merges the array from the source context into the destination context: [dst =: dst accum src].
       If the array is hosted, its state on host is undefined after this operation. (A backend may chose
       to use the host array as a buffer, if that is beneficial.) [name_suffix] is appended to
