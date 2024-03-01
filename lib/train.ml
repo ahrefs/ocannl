@@ -235,7 +235,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   let param_grads = [%debug_notrace List.map all_params ~f:(fun t -> (Option.value_exn t.diff).grad)] in
   let ctxs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.context)] in
   (* By being lazy, we don't need to worry about how devices are paired up. *)
-  (* FIXME: if the work cannot await, we won't be able to schedule statically. *)
+  (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
   let merges =
     if num_devices < 2 then [| [||] |]
     else
