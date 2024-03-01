@@ -20,7 +20,6 @@
   tnode
   low_level
   assignments
-  dummy_backend
   gccjit_backend
   cuda_backend
   backends)
