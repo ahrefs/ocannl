@@ -150,7 +150,10 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     let plot_trivial =
       let open PrintBox_utils in
       plot ~size:(20, 20) ~x_label:"ixes" ~y_label:"ygreks"
-        [ Scatterplot { points = scatterpoints; pixel = "#" }; Line_plot_adaptive { pixel = "*"; callback } ]
+        [
+          Scatterplot { points = scatterpoints; pixel = "#" };
+          Line_plot_adaptive { pixel = "*"; callback; cache = Map.empty (module Float) };
+        ]
     in
     Stdio.printf "Regression scatterplot and decision boundary:\n%!";
     PrintBox_text.output Stdio.stdout plot_trivial;
