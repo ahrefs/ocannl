@@ -102,6 +102,18 @@ let get_debug name =
     | "elapsed" -> Elapsed
     | s -> invalid_arg @@ "ocannl_time_tagged setting should be none, clock or elapsed; found: " ^ s
   in
+  let elapsed_times =
+    match String.lowercase @@ get_global_arg ~default:"not_reported" ~arg_name:"elapsed_times" with
+    | "not_reported" -> Minidebug_runtime.Not_reported
+    | "seconds" -> Seconds
+    | "milliseconds" -> Milliseconds
+    | "microseconds" -> Microseconds
+    | "nanoseconds" -> Nanoseconds
+    | s ->
+        invalid_arg
+        @@ "ocannl_elapsed_times setting should be not_reported, seconds or milliseconds, microseconds or \
+            nanoseconds; found: " ^ s
+  in
   let location_format =
     match String.lowercase @@ get_global_arg ~default:"beg_pos" ~arg_name:"location_format" with
     | "no_location" -> Minidebug_runtime.No_location
@@ -141,13 +153,13 @@ let get_debug name =
             prefixed_info_warn_error, explicit_logs, nonempty_entries, everything; found: " ^ s
   in
   if flushing then
-    Minidebug_runtime.debug_flushing ~filename ~time_tagged ~print_entry_ids ~global_prefix:name
-      ~for_append:false (* ~log_level *) ()
+    Minidebug_runtime.debug_flushing ~filename ~time_tagged ~elapsed_times ~print_entry_ids
+      ~global_prefix:name ~for_append:false (* ~log_level *) ()
   else
     Minidebug_runtime.forget_printbox
-    @@ Minidebug_runtime.debug_file ~time_tagged ~location_format ~print_entry_ids ~global_prefix:name
-         ~for_append:false ~max_inline_sexp_length:120 ~hyperlink ~values_first_mode:true ~backend ~log_level
-         ?snapshot_every_sec filename
+    @@ Minidebug_runtime.debug_file ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
+         ~global_prefix:name ~for_append:false ~max_inline_sexp_length:120 ~hyperlink ~values_first_mode:true
+         ~backend ~log_level ?snapshot_every_sec filename
 
 module Debug_runtime = (val get_debug "")
 
