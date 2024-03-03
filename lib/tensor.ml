@@ -87,7 +87,8 @@ let fetch_ones array shape = Asgns.Fetch { array; fetch_op = Constant 1.; dims =
 let default_init_op = Arrayjit.Ops.Constant_fill { values = [| 0.0 |]; strict = false }
 let max_sublabel_length = ref 25
 
-let raw_binop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs1_is_grad ~t2 ~rhs2_is_grad ~logic =
+let raw_binop ~zero_out ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t) ~(rhs1_is_grad : bool)
+    ~(t2 : t) ~rhs2_is_grad ~logic : Asgns.t =
   let shape = t.shape in
   let shape_logic = Shape.Broadcast (logic, t1.shape, t2.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
@@ -98,7 +99,8 @@ let raw_binop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs1_is_grad ~t2 ~rhs2_i
   let rhs2 = if rhs2_is_grad then (Option.value_exn t2.diff).grad else t2.value in
   Asgns.Accum_binop { zero_out; accum; lhs; op; rhs1; rhs2; projections }
 
-let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
+let raw_unop ~zero_out ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t) ~(rhs_is_grad : bool)
+    ~logic =
   let shape = t.shape in
   let shape_logic = Shape.Transpose (logic, t1.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
@@ -110,8 +112,9 @@ let raw_unop ~zero_out ~accum ~t ~lhs_is_grad ~op ~t1 ~rhs_is_grad ~logic =
 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
-let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un)
-    ?(init_op = default_init_op) ~op_asn ~grad_asn ?(grad_spec = If_needed) make_shape orig_ts =
+let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
+    ?(transpose_op = Shape.Pointwise_un) ?(init_op = default_init_op) ~op_asn ~grad_asn
+    ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t =
   let ordered_ts = List.dedup_and_sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
   let children =
     List.folding_map orig_ts
@@ -149,7 +152,6 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
     || (Fn.non is_require_grad grad_spec && List.for_all orig_ts ~f:(fun ti -> Option.is_none ti.diff))
   then (
     let tensor = { forward; diff = None; id; value = v; shape; children } in
-    List.iter orig_ts ~f:(fun ti -> remove_fwd_root ti);
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     tensor)
   else
@@ -182,9 +184,6 @@ let op ~label ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwi
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop } in
     let tensor = { forward; diff; id; value = v; shape; children } in
-    List.iter ordered_ts ~f:(fun ti -> remove_fwd_root ti);
-    List.iter ordered_ts ~f:(fun ti ->
-        session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.id);
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     session_state.backprop_roots <- Map.add_exn session_state.backprop_roots ~key:id ~data:tensor;
     tensor
