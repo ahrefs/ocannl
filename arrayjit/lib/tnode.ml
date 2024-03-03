@@ -1,4 +1,5 @@
 open Base
+module Lazy = Utils.Lazy
 module Nd = Ndarray
 
 type work = Work of (unit -> unit) [@@unboxed] [@@deriving sexp_of]

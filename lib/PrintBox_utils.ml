@@ -208,6 +208,7 @@ type table_row_spec =
       result_label : string;
       result : Sexp.t;
     }
+[@@deriving sexp_of]
 
 let nolines = String.substr_replace_all ~pattern:"\n" ~with_:";"
 

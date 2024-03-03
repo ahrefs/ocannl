@@ -1,6 +1,8 @@
 open Base
 (** Operation types shared by all backends; and precision types. *)
 
+module Lazy = Utils.Lazy
+
 (** {2 *** Precision ***} *)
 
 type uint8_elt = Bigarray.int8_unsigned_elt

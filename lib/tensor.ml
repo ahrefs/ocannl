@@ -5,9 +5,12 @@ module Nd = Arrayjit.Ndarray
 module Tn = Arrayjit.Tnode
 module Asgns = Arrayjit.Assignments
 module Idx = Arrayjit.Indexing
+module Debug_runtime = Arrayjit.Utils.Debug_runtime
+
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 type diff = {
-  grad : Tn.t;
+  grad : (Tn.t[@sexp.opaque]);
   zero_grads : Asgns.t;  (** Prepares for backpropagation. Always compile as: [Seq (zero_grads, backprop)]. *)
   backprop : Asgns.t;
       (** Backpropagates for the tensor and its descendants; which typically means adding
@@ -25,7 +28,6 @@ type t = {
           shape inference. *)
   children : subtensor list;
 }
-[@@deriving sexp_of]
 (** Information needed for compositional code generation. The code generation is suspended so that
     it can incorporate inferred shape information. *)
 
@@ -36,6 +38,8 @@ let rec sexp_of_t t =
     [
       ("id", sexp_of_int t.id);
       ("label", [%sexp_of: string list] t.value.label);
+      ("forward", [%sexp_of: Asgns.t] t.forward);
+      ("diff", [%sexp_of: diff option] t.diff);
       ("children", [%sexp_of: subtensor list] t.children);
     ]
 

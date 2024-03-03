@@ -1,6 +1,7 @@
 open Base
 (** The code for operating on n-dimensional arrays. *)
 
+module Lazy = Utils.Lazy
 module Tn = Tnode
 
 (** Resets a array by performing the specified computation or data fetching. *)
