@@ -17,7 +17,7 @@ and t =
   | Seq of t * t
   | Block_comment of string * t  (** Same as the given code, with a comment. *)
   | Accum_binop of {
-      zero_out : bool;
+      initialize_neutral : bool;
       accum : Ops.binop;
       op : Ops.binop;
       lhs : Tn.t;
@@ -26,7 +26,7 @@ and t =
       projections : Indexing.projections Lazy.t;
     }
   | Accum_unop of {
-      zero_out : bool;
+      initialize_neutral : bool;
       accum : Ops.binop;
       op : Ops.unop;
       lhs : Tn.t;
@@ -101,7 +101,7 @@ let%debug_sexp to_low_level code =
   in
   let rec loop code =
     match code with
-    | Accum_binop { zero_out; accum; op; lhs; rhs1; rhs2; projections } ->
+    | Accum_binop { initialize_neutral; accum; op; lhs; rhs1; rhs2; projections } ->
         let projections = Lazy.force projections in
         let lhs_idx =
           derive_index ~product_syms:projections.product_iterators ~projection:projections.project_lhs
@@ -142,11 +142,12 @@ let%debug_sexp to_low_level code =
             [%log "projections=", (projections : projections)];
             raise e
         in
-        if zero_out then
+        if initialize_neutral then
           let dims = lazy projections.lhs_dims in
-          Low_level.Seq (loop (Fetch { array = lhs; fetch_op = Constant 0.; dims }), for_loops)
+          let fetch_op = Constant (Ops.neutral_elem accum) in
+          Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops)
         else for_loops
-    | Accum_unop { zero_out; accum; op; lhs; rhs; projections } ->
+    | Accum_unop { initialize_neutral; accum; op; lhs; rhs; projections } ->
         let projections = Lazy.force projections in
         let lhs_idx =
           derive_index ~product_syms:projections.product_iterators ~projection:projections.project_lhs
@@ -176,9 +177,10 @@ let%debug_sexp to_low_level code =
                 }
         in
         let for_loops = for_loop [] (Array.to_list projections.product_space) in
-        if zero_out then
+        if initialize_neutral then
           let dims = lazy projections.lhs_dims in
-          Low_level.Seq (loop (Fetch { array = lhs; fetch_op = Constant 0.; dims }), for_loops)
+          let fetch_op = Constant (Ops.neutral_elem accum) in
+          Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops)
         else for_loops
     | Noop -> Low_level.Noop
     | Block_comment (s, c) -> Low_level.Seq (Comment s, loop c)
@@ -228,9 +230,9 @@ let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
         loop c1;
         loop c2
     | Block_comment (_, c) -> loop c
-    | Accum_binop { zero_out = _; accum = _; op = _; lhs; rhs1; rhs2; projections = _ } ->
+    | Accum_binop { initialize_neutral = _; accum = _; op = _; lhs; rhs1; rhs2; projections = _ } ->
         List.iter ~f:nograd [ lhs; rhs1; rhs2 ]
-    | Accum_unop { zero_out = _; accum = _; op = _; lhs; rhs; projections = _ } ->
+    | Accum_unop { initialize_neutral = _; accum = _; op = _; lhs; rhs; projections = _ } ->
         List.iter ~f:nograd [ lhs; rhs ]
     | Fetch { array; fetch_op = _; dims = _ } -> nograd array
   in
@@ -273,13 +275,13 @@ let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
         out s;
         out "\";\n";
         loop c
-    | Accum_binop { zero_out; accum; op; lhs; rhs1; rhs2; projections } ->
+    | Accum_binop { initialize_neutral; accum; op; lhs; rhs1; rhs2; projections } ->
         let proj_spec =
           if Lazy.is_val projections then (Lazy.force projections).debug_info.spec else "<not-in-yet>"
         in
         ident lhs;
         sp ();
-        out @@ Ops.assign_op_cd_syntax ~zero_out accum;
+        out @@ Ops.assign_op_cd_syntax ~initialize_neutral accum;
         sp ();
         ident rhs1;
         sp ();
@@ -290,13 +292,13 @@ let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
           out " ~logic:\"";
           out proj_spec;
           out "\"")
-    | Accum_unop { zero_out; accum; op; lhs; rhs; projections } ->
+    | Accum_unop { initialize_neutral; accum; op; lhs; rhs; projections } ->
         let proj_spec =
           if Lazy.is_val projections then (Lazy.force projections).debug_info.spec else "<not-in-yet>"
         in
         ident lhs;
         sp ();
-        out @@ Ops.assign_op_cd_syntax ~zero_out accum;
+        out @@ Ops.assign_op_cd_syntax ~initialize_neutral accum;
         sp ();
         if not @@ Ops.equal_unop op Ops.Identity then (
           out @@ Ops.unop_cd_syntax op;

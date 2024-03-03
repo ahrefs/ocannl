@@ -131,6 +131,16 @@ type init_op =
 type binop = Add | Sub | Mul | Div | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp, compare, equal]
 type unop = Identity | Relu [@@deriving sexp, compare, equal]
 
+(** Either the left-neutral or right-neutral element of the operation.
+    Unspecified if the operation does not have a neutral element. *)
+let neutral_elem = function
+  | Add | Sub -> 0.
+  | Mul | Div -> 1.
+  | ToPowOf -> 1.
+  | Relu_gate -> 1.
+  | Arg2 -> 0.
+  | Arg1 -> 0.
+
 let interpret_binop op v1 v2 =
   let open Float in
   match op with
@@ -179,15 +189,15 @@ let assign_op_C_syntax = function
   | ToPowOf -> invalid_arg "Ops.assign_op_C_syntax: ToPowOf function is not a C assignment operator"
   | Relu_gate -> invalid_arg "Ops.assign_op_C_syntax: Relu_gate is not a C assignment operator"
 
-let assign_op_cd_syntax ~zero_out = function
+let assign_op_cd_syntax ~initialize_neutral = function
   | Arg1 -> invalid_arg "Ops.assign_op_cd_syntax: Arg1 is not a %cd assignment operator"
   | Arg2 -> "=:"
-  | Add when zero_out -> "=:+"
-  | Sub when zero_out -> "=:-"
-  | Mul when zero_out -> "=:*"
-  | Div when zero_out -> "=:/"
-  | ToPowOf when zero_out -> "=:**"
-  | Relu_gate when zero_out -> "=:?/"
+  | Add when initialize_neutral -> "=:+"
+  | Sub when initialize_neutral -> "=:-"
+  | Mul when initialize_neutral -> "=:*"
+  | Div when initialize_neutral -> "=:/"
+  | ToPowOf when initialize_neutral -> "=:**"
+  | Relu_gate when initialize_neutral -> "=:?/"
   | Add -> "=+"
   | Sub -> "=-"
   | Mul -> "=*"

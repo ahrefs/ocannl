@@ -21,6 +21,7 @@ Major rewrite.
 - Migrated `gccjit` into a separate repository.
 - Migrated `cudajit` into a separate repository.
 - Massive rewrite of shape inference in a declarative style.
+- Generalize `zero_out` to `initialize_neutral` to prepare arbitrary accumulation operation.
 
 ## [0.2.1] -- 2023-07-19
 

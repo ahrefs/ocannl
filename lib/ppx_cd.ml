@@ -49,7 +49,8 @@ let assignment_op expr =
         Ast_builder.Default.pexp_extension ~loc
         @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: expected an assignment operator, one of: %s %s"
              "=+ (Add), =- (Sub), =* (Mul), =/ (Div), =** (ToPowOf), =?/ (Relu_gate), =: (Arg2), =:+, =:-,"
-             " =:*, =:/, =:**, =:?/ (same with zeroing out the tensor before the start of the calculation)" )
+             " =:*, =:/, =:**, =:?/ (same with initializing the tensor to the neutral value before the start \
+              of the calculation)" )
 
 let binary_op expr =
   (* This and is_binary_op should stay in sync with Arrayjit.Ops.binop_cd_syntax. *)
@@ -293,12 +294,12 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
       | Code -> (Array, slot1, array_of_code expr1)
       | Array | Grad_of_tensor _ -> result)
   | [%expr [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections]))] ->
-      let zero_out, accu_op = assignment_op accu_op in
+      let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?ident_label ~proj_in_scope:true lhs in
       let _, bin_op = binary_op bin_op in
       let setup_r1 = setup_array [%pat? nondiff___rhs1] @@ translate ~proj_in_scope:true rhs1 in
       let setup_r2 = setup_array [%pat? nondiff___rhs2] @@ translate ~proj_in_scope:true rhs2 in
-      let zero_out = if zero_out then [%expr true] else [%expr false] in
+      let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       (* TODO: might be better to treat missing [rhs1, rhs2] as zeros rather than eliding the code. *)
       let body =
         [%expr
@@ -307,7 +308,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
                ~f:(fun lhs rhs1 rhs2 ->
                  Arrayjit.Assignments.Accum_binop
                    {
-                     zero_out = [%e zero_out];
+                     initialize_neutral = [%e initialize_neutral];
                      accum = [%e accu_op];
                      lhs;
                      op = [%e bin_op];
@@ -321,11 +322,11 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
   | [%expr [%e? accu_op] [%e? lhs] (([%e? un_op] [%e? rhs]) ~projections:[%e? projections])]
   | [%expr [%e? accu_op] [%e? lhs] ([%e? un_op] ([%e? rhs] ~projections:[%e? projections]))] ->
       (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
-      let zero_out, accu_op = assignment_op accu_op in
+      let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?ident_label ~proj_in_scope:true lhs in
       let _, un_op = unary_op un_op in
       let setup_r = setup_array [%pat? nondiff___rhs] @@ translate ~proj_in_scope:true rhs in
-      let zero_out = if zero_out then [%expr true] else [%expr false] in
+      let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       (* TODO: might be better to treat missing [rhs] as zeros rather than eliding the code. *)
       let body =
         [%expr
@@ -333,7 +334,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
           @@ Option.map2 [%e setup_l.array_opt] [%e setup_r.array_opt] ~f:(fun lhs rhs ->
                  Arrayjit.Assignments.Accum_unop
                    {
-                     zero_out = [%e zero_out];
+                     initialize_neutral = [%e initialize_neutral];
                      accum = [%e accu_op];
                      lhs;
                      op = [%e un_op];
@@ -344,17 +345,17 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
       let setups = List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r ] in
       with_forward_args setups body
   | [%expr [%e? accu_op] [%e? lhs] ([%e? rhs] ~projections:[%e? projections])] ->
-      let zero_out, accu_op = assignment_op accu_op in
+      let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?ident_label ~proj_in_scope:true lhs in
       let setup_r = setup_array [%pat? nondiff___rhs] @@ translate ~proj_in_scope:true rhs in
-      let zero_out = if zero_out then [%expr true] else [%expr false] in
+      let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let body =
         [%expr
           Option.value ~default:Arrayjit.Assignments.Noop
           @@ Option.map2 [%e setup_l.array_opt] [%e setup_r.array_opt] ~f:(fun lhs rhs ->
                  Arrayjit.Assignments.Accum_unop
                    {
-                     zero_out = [%e zero_out];
+                     initialize_neutral = [%e initialize_neutral];
                      accum = [%e accu_op];
                      lhs;
                      op = Arrayjit.Ops.Identity;
@@ -377,12 +378,12 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
         else if String.equal spec "@" then [%expr Shape.Compose]
         else [%expr Shape.Einsum [%e logic]]
       in
-      let zero_out, accu_op = assignment_op accu_op in
+      let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?ident_label ~proj_in_scope lhs in
       let _, bin_op = binary_op bin_op in
       let setup_r1 = setup_array [%pat? nondiff___rhs1] @@ translate ~proj_in_scope rhs1 in
       let setup_r2 = setup_array [%pat? nondiff___rhs2] @@ translate ~proj_in_scope rhs2 in
-      let zero_out = if zero_out then [%expr true] else [%expr false] in
+      let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let args_for = function
         | { filler_typ = Grad_of_tensor _; tensor = Some t; _ } -> (t, [%expr true])
         | { filler_typ = _; tensor = Some t; _ } -> (t, [%expr false])
@@ -398,7 +399,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
       let t2_expr, rhs2_is_grad = args_for setup_r2 in
       let body =
         [%expr
-          Tensor.raw_binop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~t:[%e t_expr]
+          Tensor.raw_binop ~initialize_neutral:[%e initialize_neutral] ~accum:[%e accu_op] ~t:[%e t_expr]
             ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e bin_op] ~t1:[%e t1_expr] ~rhs1_is_grad:[%e rhs1_is_grad]
             ~t2:[%e t2_expr] ~rhs2_is_grad:[%e rhs2_is_grad] ~logic:[%e logic]]
       in
@@ -422,11 +423,11 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
         else if String.equal spec "T" then [%expr Shape.Transpose]
         else [%expr Shape.Permute [%e logic]]
       in
-      let zero_out, accu_op = assignment_op accu_op in
+      let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?ident_label ~proj_in_scope lhs in
       let _, un_op = unary_op un_op in
       let setup_r = setup_array [%pat? nondiff___rhs] @@ translate ~proj_in_scope rhs in
-      let zero_out = if zero_out then [%expr true] else [%expr false] in
+      let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let args_for = function
         | { filler_typ = Grad_of_tensor _; tensor = Some t; _ } -> (t, [%expr true])
         | { filler_typ = _; tensor = Some t; _ } -> (t, [%expr false])
@@ -441,7 +442,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
       let t1_expr, rhs_is_grad = args_for setup_r in
       let body =
         [%expr
-          Tensor.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~t:[%e t_expr]
+          Tensor.raw_unop ~initialize_neutral:[%e initialize_neutral] ~accum:[%e accu_op] ~t:[%e t_expr]
             ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e un_op] ~t1:[%e t1_expr] ~rhs_is_grad:[%e rhs_is_grad]
             ~logic:[%e logic]]
       in
@@ -454,12 +455,12 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
            [%e? rhs1]
            [%e? rhs2])]
     when is_assignment accu_ident && is_binary_op binop_ident && proj_in_scope ->
-      let zero_out, accu_op = assignment_op accu_op in
+      let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?ident_label ~proj_in_scope lhs in
       let _, bin_op = binary_op bin_op in
       let setup_r1 = setup_array [%pat? nondiff___rhs1] @@ translate ~proj_in_scope rhs1 in
       let setup_r2 = setup_array [%pat? nondiff___rhs2] @@ translate ~proj_in_scope rhs2 in
-      let zero_out = if zero_out then [%expr true] else [%expr false] in
+      let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let projections =
         let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
         let rhs1_dims = project_p_dims "RHS1" lhs.pexp_loc setup_r1.slot in
@@ -496,7 +497,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
                ~f:(fun lhs rhs1 rhs2 ->
                  Arrayjit.Assignments.Accum_binop
                    {
-                     zero_out = [%e zero_out];
+                     initialize_neutral = [%e initialize_neutral];
                      accum = [%e accu_op];
                      lhs;
                      op = [%e bin_op];
@@ -512,11 +513,11 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
         [%e? lhs]
         ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; loc = op_loc }; _ } as un_op] [%e? rhs])]
     when is_assignment accu_ident && is_unary_op unop_ident && proj_in_scope ->
-      let zero_out, accu_op = assignment_op accu_op in
+      let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?ident_label ~proj_in_scope lhs in
       let _, un_op = unary_op un_op in
       let setup_r1 = setup_array [%pat? nondiff___rhs1] @@ translate ~proj_in_scope rhs in
-      let zero_out = if zero_out then [%expr true] else [%expr false] in
+      let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let projections =
         let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
         let rhs1_dims = project_p_dims "RHS1" lhs.pexp_loc setup_r1.slot in
@@ -550,7 +551,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
           @@ Option.map2 [%e setup_l.array_opt] [%e setup_r1.array_opt] ~f:(fun lhs rhs ->
                  Arrayjit.Assignments.Accum_unop
                    {
-                     zero_out = [%e zero_out];
+                     initialize_neutral = [%e initialize_neutral];
                      accum = [%e accu_op];
                      lhs;
                      op = [%e un_op];
@@ -565,10 +566,10 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
         [%e? lhs]
         [%e? rhs]]
     when is_assignment op_ident && proj_in_scope ->
-      let zero_out, accu_op = assignment_op accu_op in
+      let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?ident_label ~proj_in_scope lhs in
       let setup_r1 = setup_array [%pat? nondiff___rhs1] @@ translate ~proj_in_scope rhs in
-      let zero_out = if zero_out then [%expr true] else [%expr false] in
+      let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let projections =
         let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
         let rhs1_dims = project_p_dims "RHS1" lhs.pexp_loc setup_r1.slot in
@@ -601,7 +602,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
           @@ Option.map2 [%e setup_l.array_opt] [%e setup_r1.array_opt] ~f:(fun lhs rhs ->
                  Arrayjit.Assignments.Accum_unop
                    {
-                     zero_out = [%e zero_out];
+                     initialize_neutral = [%e initialize_neutral];
                      accum = [%e accu_op];
                      lhs;
                      op = Arrayjit.Ops.Identity;
@@ -616,12 +617,12 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
         [%e? lhs]
         ([%e? { pexp_desc = Pexp_ident { txt = Lident binop_ident; _ }; _ } as bin_op] [%e? rhs1] [%e? rhs2])]
     when is_assignment accu_ident && is_binary_op binop_ident ->
-      let zero_out, accu_op = assignment_op accu_op in
+      let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?ident_label ~proj_in_scope lhs in
       let logic, bin_op = binary_op bin_op in
       let setup_r1 = setup_array [%pat? nondiff___rhs1] @@ translate ~proj_in_scope rhs1 in
       let setup_r2 = setup_array [%pat? nondiff___rhs2] @@ translate ~proj_in_scope rhs2 in
-      let zero_out = if zero_out then [%expr true] else [%expr false] in
+      let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let args_for = function
         | { filler_typ = Grad_of_tensor _; tensor = Some t; _ } -> (t, [%expr true])
         | { filler_typ = _; tensor = Some t; _ } -> (t, [%expr false])
@@ -637,7 +638,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
       let t2_expr, rhs2_is_grad = args_for setup_r2 in
       let body =
         [%expr
-          Tensor.raw_binop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~t:[%e t_expr]
+          Tensor.raw_binop ~initialize_neutral:[%e initialize_neutral] ~accum:[%e accu_op] ~t:[%e t_expr]
             ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e bin_op] ~t1:[%e t1_expr] ~rhs1_is_grad:[%e rhs1_is_grad]
             ~t2:[%e t2_expr] ~rhs2_is_grad:[%e rhs2_is_grad] ~logic:[%e logic]]
       in
@@ -648,11 +649,11 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
         [%e? lhs]
         ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ } as un_op] [%e? rhs])]
     when is_assignment accu_ident && is_unary_op unop_ident ->
-      let zero_out, accu_op = assignment_op accu_op in
+      let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?ident_label ~proj_in_scope lhs in
       let logic, un_op = unary_op un_op in
       let setup_r = setup_array [%pat? nondiff___rhs] @@ translate ~proj_in_scope rhs in
-      let zero_out = if zero_out then [%expr true] else [%expr false] in
+      let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let args_for = function
         | { filler_typ = Grad_of_tensor _; tensor = Some t; _ } -> (t, [%expr true])
         | { filler_typ = _; tensor = Some t; _ } -> (t, [%expr false])
@@ -667,7 +668,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
       let t1_expr, rhs_is_grad = args_for setup_r in
       let body =
         [%expr
-          Tensor.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~t:[%e t_expr]
+          Tensor.raw_unop ~initialize_neutral:[%e initialize_neutral] ~accum:[%e accu_op] ~t:[%e t_expr]
             ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e un_op] ~t1:[%e t1_expr] ~rhs_is_grad:[%e rhs_is_grad]
             ~logic:[%e logic]]
       in
@@ -675,10 +676,10 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
       with_forward_args setups body
   | [%expr [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } as accu_op] [%e? lhs] [%e? rhs]]
     when is_assignment op_ident ->
-      let zero_out, accu_op = assignment_op accu_op in
+      let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l = setup_array [%pat? nondiff___lhs] @@ translate ?ident_label ~proj_in_scope lhs in
       let setup_r = setup_array [%pat? nondiff___rhs] @@ translate ~proj_in_scope rhs in
-      let zero_out = if zero_out then [%expr true] else [%expr false] in
+      let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let args_for = function
         | { filler_typ = Grad_of_tensor _; tensor = Some t; _ } -> (t, [%expr true])
         | { filler_typ = _; tensor = Some t; _ } -> (t, [%expr false])
@@ -693,7 +694,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
       let t1_expr, rhs_is_grad = args_for setup_r in
       let body =
         [%expr
-          Tensor.raw_unop ~zero_out:[%e zero_out] ~accum:[%e accu_op] ~t:[%e t_expr]
+          Tensor.raw_unop ~initialize_neutral:[%e initialize_neutral] ~accum:[%e accu_op] ~t:[%e t_expr]
             ~lhs_is_grad:[%e lhs_is_grad] ~op:Arrayjit.Ops.Identity ~t1:[%e t1_expr]
             ~rhs_is_grad:[%e rhs_is_grad] ~logic:Shape.Pointwise_un]
       in

@@ -87,7 +87,7 @@ let fetch_ones array shape = Asgns.Fetch { array; fetch_op = Constant 1.; dims =
 let default_init_op = Arrayjit.Ops.Constant_fill { values = [| 0.0 |]; strict = false }
 let max_sublabel_length = ref 25
 
-let raw_binop ~zero_out ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t) ~(rhs1_is_grad : bool)
+let raw_binop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t) ~(rhs1_is_grad : bool)
     ~(t2 : t) ~rhs2_is_grad ~logic : Asgns.t =
   let shape = t.shape in
   let shape_logic = Shape.Broadcast (logic, t1.shape, t2.shape) in
@@ -97,9 +97,9 @@ let raw_binop ~zero_out ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t) ~(rh
   let lhs = if lhs_is_grad then (Option.value_exn t.diff).grad else t.value in
   let rhs1 = if rhs1_is_grad then (Option.value_exn t1.diff).grad else t1.value in
   let rhs2 = if rhs2_is_grad then (Option.value_exn t2.diff).grad else t2.value in
-  Asgns.Accum_binop { zero_out; accum; lhs; op; rhs1; rhs2; projections }
+  Asgns.Accum_binop { initialize_neutral; accum; lhs; op; rhs1; rhs2; projections }
 
-let raw_unop ~zero_out ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t) ~(rhs_is_grad : bool)
+let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t) ~(rhs_is_grad : bool)
     ~logic =
   let shape = t.shape in
   let shape_logic = Shape.Transpose (logic, t1.shape) in
@@ -108,13 +108,13 @@ let raw_unop ~zero_out ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t) ~(rhs
   let projections = lazy (Shape.derive_projections local_shape_update) in
   let lhs = if lhs_is_grad then (Option.value_exn t.diff).grad else t.value in
   let rhs = if rhs_is_grad then (Option.value_exn t1.diff).grad else t1.value in
-  Asgns.Accum_unop { zero_out; accum; lhs; op; rhs; projections }
+  Asgns.Accum_unop { initialize_neutral; accum; lhs; op; rhs; projections }
 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
-let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
-    ?(transpose_op = Shape.Pointwise_un) ?(init_op = default_init_op) ~op_asn ~grad_asn
-    ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t =
+let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un)
+    ?(init_op = default_init_op) ~op_asn ~grad_asn ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t
+    =
   let ordered_ts = List.dedup_and_sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
   let children =
     List.folding_map orig_ts
