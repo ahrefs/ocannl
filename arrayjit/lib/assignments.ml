@@ -112,6 +112,7 @@ let%debug_sexp to_low_level code =
         let rhs2_idx =
           derive_index ~product_syms:projections.product_iterators ~projection:projections.project_rhs.(1)
         in
+        let is_assignment = initialize_neutral && Indexing.is_bijective projections in
         let basecase rev_iters =
           let product = Array.of_list_rev_map rev_iters ~f:(fun s -> Indexing.Iterator s) in
           let rhs1_idcs = rhs1_idx ~product in
@@ -121,7 +122,9 @@ let%debug_sexp to_low_level code =
           let lhs_ll = get lhs lhs_idcs in
           let rhs1_ll = get rhs1 rhs1_idcs in
           let rhs2_ll = get rhs2 rhs2_idcs in
-          set lhs lhs_idcs @@ binop ~op:accum ~rhs1:lhs_ll ~rhs2:(binop ~op ~rhs1:rhs1_ll ~rhs2:rhs2_ll)
+          let rhs2 = binop ~op ~rhs1:rhs1_ll ~rhs2:rhs2_ll in
+          if is_assignment then set lhs lhs_idcs rhs2
+          else set lhs lhs_idcs @@ binop ~op:accum ~rhs1:lhs_ll ~rhs2
         in
         let rec for_loop rev_iters = function
           | [] -> basecase rev_iters
@@ -142,7 +145,7 @@ let%debug_sexp to_low_level code =
             [%log "projections=", (projections : projections)];
             raise e
         in
-        if initialize_neutral then
+        if initialize_neutral && not is_assignment then
           let dims = lazy projections.lhs_dims in
           let fetch_op = Constant (Ops.neutral_elem accum) in
           Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops)
@@ -155,13 +158,16 @@ let%debug_sexp to_low_level code =
         let rhs_idx =
           derive_index ~product_syms:projections.product_iterators ~projection:projections.project_rhs.(0)
         in
+        let is_assignment = initialize_neutral && Indexing.is_bijective projections in
         let basecase rev_iters =
           let product = Array.of_list_rev_map rev_iters ~f:(fun s -> Indexing.Iterator s) in
           let lhs_idcs = lhs_idx ~product in
           let open Low_level in
           let lhs_ll = get lhs lhs_idcs in
           let rhs_ll = get rhs @@ rhs_idx ~product in
-          set lhs lhs_idcs @@ binop ~op:accum ~rhs1:lhs_ll ~rhs2:(unop ~op ~rhs:rhs_ll)
+          let rhs2 = unop ~op ~rhs:rhs_ll in
+          if is_assignment then set lhs lhs_idcs rhs2
+          else set lhs lhs_idcs @@ binop ~op:accum ~rhs1:lhs_ll ~rhs2
         in
         let rec for_loop rev_iters = function
           | [] -> basecase rev_iters
@@ -177,7 +183,7 @@ let%debug_sexp to_low_level code =
                 }
         in
         let for_loops = for_loop [] (Array.to_list projections.product_space) in
-        if initialize_neutral then
+        if initialize_neutral && not is_assignment then
           let dims = lazy projections.lhs_dims in
           let fetch_op = Constant (Ops.neutral_elem accum) in
           Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops)

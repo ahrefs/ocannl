@@ -122,6 +122,13 @@ let iterated dim = dim > 1
 let opt_symbol d = if iterated d then Some (get_symbol ()) else None
 let opt_iterator = function None -> Fixed_idx 0 | Some sym -> Iterator sym
 
+let is_bijective proj =
+  let lhs_symbols =
+    Set.of_array (module Symbol)
+    @@ Array.filter_map proj.project_lhs ~f:(function Iterator s -> Some s | Fixed_idx _ -> None)
+  in
+  Set.equal lhs_symbols (Set.of_array (module Symbol) proj.product_iterators)
+
 (** Projections for a pointwise unary operator. *)
 let identity_projections ~debug_info ~lhs_dims =
   let product_iterators = Array.map lhs_dims ~f:opt_symbol in
