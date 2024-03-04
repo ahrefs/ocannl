@@ -37,8 +37,8 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let len = 64 in
   let n_batches = 2 * len / batch in
   (* let epochs = 100 in *)
-  let epochs = 2 in
-  (* let epochs = 10 in *)
+  (* let epochs = 2 in *)
+  let epochs = 4 in
   let noise () = Random.float_range (-0.2) 0.2 in
   let trivial_flat =
     Array.concat_map (Array.create ~len ()) ~f:Float.(fun () -> [| 0.2 + noise (); 0.8 + noise () |])
@@ -59,7 +59,7 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let%op margin_loss = ?/(1 - (trivial_class *. mlp trivial_input)) in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in
 
-  [%track_sexp
+  let%track_sexp result : PrintBox_utils.table_row_spec =
     Train.set_on_host learning_rate.value;
     Train.set_on_host scalar_loss.value;
     let weight_decay : float = 0.0001 in
@@ -130,6 +130,10 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     Utils.settings.output_debug_files_in_run_directory <- false;
     let scatterpoints = Tensor.value_1d_points ~xdim:0 trivial_flat in
     let scatterpoints = Array.zip_exn scatterpoints (Tensor.value_1d_points ~xdim:0 trivial_classes) in
+    [%log_printbox
+      let a = Option.value_exn @@ Lazy.force @@ trivial_classes.value.array in
+      let indices = Array.init (Array.length @@ Arrayjit.Ndarray.dims a) ~f:(fun i -> i - 5) in
+      Arrayjit.Ndarray.render_array ~indices a];
     let%op point = [ 0 ] in
     let mlp_result = mlp point in
     Train.set_on_host point.value;
@@ -194,7 +198,9 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     in
     PrintBox_text.output Stdio.stdout plot_lr;
     Stdio.printf "\n\n%!";
-    result]
+    result
+  in
+  result
 
 let () =
   [%track_sexp
