@@ -465,13 +465,14 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ par
   [%log "compilation finished"];
   (func, args, run_module, info)
 
-let%debug_sexp jit ?name old_context bindings ((traced_store, llc) as compiled) =
+let jit ?name old_context bindings ((traced_store, llc) as compiled) =
   let name : string = Option.value_or_thunk name ~default:(fun () -> Low_level.extract_block_name [ llc ]) in
   let idx_params = Indexing.bound_symbols bindings in
   let func, args, run_module, info = jit_func ~name old_context idx_params compiled in
   let context = { old_context with ctx = info.ctx; run_module = Some run_module; arrays = info.ctx_arrays } in
   let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
-  let%track_rt_sexp schedule () =
+  let%diagn_sexp schedule () =
+    [%log_result "Scheduling", name];
     let module Cu = Cudajit in
     let idx_args =
       List.map idx_args ~f:(fun ({ static_symbol; static_range }, i) ->
@@ -489,7 +490,7 @@ let%debug_sexp jit ?name old_context bindings ((traced_store, llc) as compiled) 
                         %{upto#Int}"]);
           Cu.Int !i)
     in
-    let%diagn_sexp work () : unit =
+    let%diagn_rt_sexp work () : unit =
       [%log "zeroing-out global memory"];
       set_ctx context.ctx;
       Map.iteri context.arrays ~f:(fun ~key:ptr ~data ->

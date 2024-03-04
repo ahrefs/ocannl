@@ -182,7 +182,7 @@ let get_ptr_debug array =
   | None, None, Some arr -> "hosted_" ^ Tn.name array.nd ^ memloc arr
   | None, None, None -> assert false
 
-let%track_sexp jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block (body : Low_level.t) =
+let jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block (body : Low_level.t) =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
@@ -482,8 +482,8 @@ let header_sep =
   let open Re in
   compile (seq [ str " "; opt any; str "="; str " " ])
 
-let%track_sexp jit (old_context : context) ~(name : string) bindings
-    (compiled : Low_level.traced_store * Low_level.t) : context * _ * _ * string =
+let jit (old_context : context) ~(name : string) bindings (compiled : Low_level.traced_store * Low_level.t) :
+    context * _ * _ * string =
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
@@ -497,7 +497,7 @@ let%track_sexp jit (old_context : context) ~(name : string) bindings
   let ctx_info = jit_func ~name ~log_file_name old_context ctx bindings compiled in
   let result = Context.compile ctx in
   let context = { label = old_context.label; arrays = ctx_info.ctx_arrays; result = Some result } in
-  let%diagn_sexp run_variadic =
+  let run_variadic =
     let rec link : 'a 'b. ('a -> 'b) Indexing.bindings -> ('a -> 'b) Ctypes.fn -> ('a -> 'b) Indexing.variadic
         =
      fun (type a b) (bs : (a -> b) Indexing.bindings) (cs : (a -> b) Ctypes.fn) ->
@@ -507,10 +507,9 @@ let%track_sexp jit (old_context : context) ~(name : string) bindings
     in
     link bindings Ctypes.(void @-> returning void)
   in
-  let%diagn_rt_sexp schedule () =
-    let module Debug_runtime = (val _debug_runtime) in
+  let schedule () =
     let callback = Indexing.apply run_variadic in
-    let%diagn_sexp work () : unit =
+    let%diagn_rt_sexp work () : unit =
       [%log_result name];
       callback ();
       if Utils.settings.debug_log_jitted then

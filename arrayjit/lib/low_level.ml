@@ -3,6 +3,9 @@ open Base
 
 module Nd = Ndarray
 module Tn = Tnode
+module Debug_runtime = Utils.Debug_runtime
+
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 module Scope_id = struct
   type t = { nd : Tn.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
@@ -209,10 +212,6 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         traced.read_before_write <- true;
         if Tn.mode_is_unspecified tn then Tn.update_memory_mode tn Hosted 38
         else Tn.update_memory_mode tn Materialized 36))
-
-module Debug_runtime = Utils.Debug_runtime
-
-[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
   let exception Non_virtual of int in

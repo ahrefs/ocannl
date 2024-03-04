@@ -2,9 +2,9 @@ open Base
 module Lazy = Utils.Lazy
 module Nd = Ndarray
 
-type work = Work of (unit -> unit) [@@unboxed] [@@deriving sexp_of]
+type work = Work of ((module Minidebug_runtime.Debug_runtime) -> unit -> unit) [@@unboxed] [@@deriving sexp_of]
 
-let[@inline] run (Work work) = work ()
+let[@inline] run debug_runtime (Work work) = work debug_runtime ()
 
 type memory_mode =
   | Virtual  (** The tensor node's computations are inlined on a per-scalar basis. *)

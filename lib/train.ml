@@ -12,7 +12,7 @@ module Debug_runtime = Arrayjit.Utils.Debug_runtime
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 let debug_rt = (module Debug_runtime : Minidebug_runtime.Debug_runtime)
-let run jitted = Tn.run @@ jitted.Arrayjit.Backends.schedule debug_rt ()
+let run jitted = Tn.run debug_rt @@ jitted.Arrayjit.Backends.schedule ()
 
 (** Reinitializes a backend selected via a global [backend] flag. *)
 let fresh_backend ?backend_name () =
@@ -193,13 +193,13 @@ let%debug_sexp all_device_to_host (type context) (module Backend : Backend_type 
     initial values. *)
 let sync_run ?looping (type context) (module Backend : Backend_type with type context = context)
     (jitted : Backend.jitted) t =
-  let work = jitted.schedule debug_rt () in
+  let work = jitted.schedule () in
   all_host_to_device (module Backend) jitted.context t;
   (match looping with
-  | None -> Tn.run work
+  | None -> Tn.run debug_rt work
   | Some then_ ->
       let f () =
-        Tn.run work;
+        Tn.run debug_rt work;
         then_ ()
       in
       sequential_loop ~f jitted.bindings);
@@ -249,9 +249,11 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
                               invalid_arg @@ "Train.parallel_update: gradient not available on a device: "
                               ^ Tn.label p)
                      in
-                     jitted.Arrayjit.Backends.schedule debug_rt ()))))
+                     jitted.Arrayjit.Backends.schedule ()))))
   in
-  let merge ~(from : int) ~(to_ : int) : unit = List.iter ~f:Tn.run @@ Lazy.force merges.(to_).(from) in
+  let merge ~(from : int) ~(to_ : int) : unit =
+    List.iter ~f:(Tn.run debug_rt) @@ Lazy.force merges.(to_).(from)
+  in
   let needed_on_host = ref @@ Set.empty (module Tn) in
   let copies =
     if num_devices < 2 then [||]
@@ -262,22 +264,22 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
           List.filter_map param_vals ~f:(fun p ->
               Backend.merge ~name_suffix:"param_copy" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Arg2 ~src:ctxs.(0)
               |> function
-              | Some jitted -> Some (jitted.Arrayjit.Backends.schedule debug_rt ())
+              | Some jitted -> Some (jitted.Arrayjit.Backends.schedule ())
               | None ->
                   needed_on_host := Set.add !needed_on_host p;
                   None))
   in
   let sync (devices_to_sync : int) : unit =
     Arrayjit.Utils.parallel_merge merge devices_to_sync;
-    Tn.run @@ sgd_update.schedule debug_rt ();
+    Tn.run debug_rt @@ sgd_update.schedule ();
     Set.iter !needed_on_host ~f:(fun p ->
         if not @@ Backend.to_host sgd_update.context p then
           invalid_arg @@ "Train.parallel_update: parameter missing on one of the devices: " ^ Tn.name p);
     for to_ = 1 to devices_to_sync - 1 do
-      List.iter copies.(to_ - 1) ~f:Tn.run
+      List.iter copies.(to_ - 1) ~f:(Tn.run debug_rt)
     done;
     post_sync ~num_synced_devices:devices_to_sync
   in
   let jitted_bindings = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.bindings)] in
-  let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd () -> Tn.run @@ upd.schedule debug_rt ())] in
+  let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd () -> Tn.run debug_rt @@ upd.schedule ())] in
   fun () -> round_robin fs jitted_bindings sgd_update.bindings ~sync

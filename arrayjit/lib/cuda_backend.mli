@@ -12,7 +12,7 @@ val jit :
   context ->
   Indexing.unit_bindings ->
   Low_level.traced_store * Low_level.t ->
-  context * Indexing.jitted_bindings * ((module Minidebug_runtime.Debug_runtime) -> unit -> Tnode.work)
+  context * Indexing.jitted_bindings * (unit -> Tnode.work)
 
 val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
 
@@ -29,7 +29,7 @@ val merge :
   accum:Ops.binop ->
   src:context ->
   Indexing.unit_bindings ->
-  (context * ((module Minidebug_runtime.Debug_runtime) -> unit -> Tnode.work) * string) option
+  (context * (unit -> Tnode.work) * string) option
 (** Merges the array from the source context into the destination context: [dst =: dst accum src].
       If the array is hosted, its state on host is undefined after this operation. (A backend may chose
       to use the host array as a buffer, if that is beneficial.) [name_suffix] is appended to

@@ -5,7 +5,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 type 'context jitted = {
   context : 'context;
-  schedule : (module Minidebug_runtime.Debug_runtime) -> unit -> Tnode.work;
+  schedule : unit -> Tnode.work;
   bindings : Indexing.jitted_bindings;
   name : string;
 }
@@ -69,7 +69,6 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   type device = {
     next_task : (Tnode.work option ref[@sexp.opaque]);
-    debug_runtime : ((module Minidebug_runtime.Debug_runtime)[@sexp.opaque]);
     keep_spinning : bool ref;
     wait_for_device : (Utils.waiter[@sexp.opaque]);
     wait_for_work : (Utils.waiter[@sexp.opaque]);
@@ -98,10 +97,10 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let jit { ctx; device } ?name bindings code : jitted =
     let task = Backend.jit ctx ?name bindings code in
-    let%diagn_rt_sexp schedule () =
+    let%diagn_sexp schedule () =
       [%log_result "Scheduling", task.name];
-      let task = task.schedule device.debug_runtime () in
-      let work () =
+      let task = task.schedule () in
+      let%diagn_rt_sexp work () =
         await device;
         if not !(device.keep_spinning) then invalid_arg "Multicore_backend.jit: device not available";
         device.next_task := Some task;
@@ -119,16 +118,16 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     await device;
     Backend.to_host ctx
 
-  let%track_sexp merge ?name_suffix la ~dst ~accum ~src =
+  let merge ?name_suffix la ~dst ~accum ~src =
     let name_suffix : string = Option.value name_suffix ~default:"" in
     let ord ctx = ctx.device.ordinal in
     let name_suffix : string = [%string "_on_dev_%{ord dst#Int}_from_dev_%{ord src#Int}_%{name_suffix}"] in
     Option.map (Backend.merge ~name_suffix la ~dst:dst.ctx ~accum ~src:src.ctx) ~f:(fun task ->
         let device = dst.device in
-        let%track_rt_sexp schedule () =
+        let%diagn_sexp schedule () =
           [%log_result "Scheduling-merge", task.name];
-          let task = task.schedule device.debug_runtime () in
-          let work () =
+          let task = task.schedule () in
+          let%diagn_rt_sexp work () =
             await device;
             if not !(device.keep_spinning) then invalid_arg "Multicore_backend.merge: device not available";
             device.next_task := Some task;
@@ -140,33 +139,23 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let num_devices () = Domain.recommended_domain_count () - 1
 
-  let%debug_sexp spinup_device ~(ordinal : int) =
+  let%debug_sexp spinup_device ~(ordinal : int) : device =
     let next_task = ref None in
     let keep_spinning = ref true in
     let wait_for_device = Utils.waiter () in
     let wait_for_work = Utils.waiter () in
     let debug_runtime = Utils.get_debug ("dev-" ^ Int.to_string ordinal) in
     let worker () =
-      let module Debug_runtime = (val debug_runtime) in
-      [%log "spinup-dev", (ordinal : int)];
       while !keep_spinning do
         while Option.is_none !next_task do
           wait_for_work.await ()
         done;
-        Tnode.run @@ Option.value_exn !next_task;
+        Tnode.run debug_runtime @@ Option.value_exn !next_task;
         next_task := None;
         wait_for_device.release ()
       done
     in
-    {
-      next_task;
-      debug_runtime;
-      keep_spinning;
-      wait_for_device;
-      wait_for_work;
-      ordinal;
-      domain = Domain.spawn worker;
-    }
+    { next_task; keep_spinning; wait_for_device; wait_for_work; ordinal; domain = Domain.spawn worker }
 
   let devices = Array.init (num_devices ()) ~f:(fun ordinal -> spinup_device ~ordinal)
   let get_all_devices () = devices
