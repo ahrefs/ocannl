@@ -135,6 +135,9 @@ let get_debug name =
   in
   let hyperlink = get_global_arg ~default:"./" ~arg_name:"hyperlink_prefix" in
   let print_entry_ids = Bool.of_string @@ get_global_arg ~default:"false" ~arg_name:"logs_print_entry_ids" in
+  let verbose_entry_ids =
+    Bool.of_string @@ get_global_arg ~default:"false" ~arg_name:"logs_verbose_entry_ids"
+  in
   let filename = if String.is_empty name then "debug" else "debug-" ^ name in
   let log_level =
     match
@@ -153,11 +156,11 @@ let get_debug name =
             prefixed_info_warn_error, explicit_logs, nonempty_entries, everything; found: " ^ s
   in
   if flushing then
-    Minidebug_runtime.debug_flushing ~filename ~time_tagged ~elapsed_times ~print_entry_ids
+    Minidebug_runtime.debug_flushing ~filename ~time_tagged ~elapsed_times ~print_entry_ids ~verbose_entry_ids
       ~global_prefix:name ~for_append:false (* ~log_level *) ()
   else
     Minidebug_runtime.forget_printbox
-    @@ Minidebug_runtime.debug_file ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
+    @@ Minidebug_runtime.debug_file ~time_tagged ~elapsed_times ~location_format ~print_entry_ids ~verbose_entry_ids
          ~global_prefix:name ~for_append:false ~max_inline_sexp_length:120 ~hyperlink ~values_first_mode:true
          ~backend ~log_level ?snapshot_every_sec filename
 
