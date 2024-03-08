@@ -127,8 +127,8 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
           result = [%sexp_of: float * float] (!min_loss, !epoch_loss);
         }
     in
-    Utils.settings.with_debug <- false;
-    Utils.settings.output_debug_files_in_run_directory <- false;
+    (* Utils.settings.with_debug <- false;
+    Utils.settings.output_debug_files_in_run_directory <- false; *)
     let scatterpoints = Tensor.value_1d_points ~xdim:0 trivial_flat in
     let scatterpoints : (float * float) array =
       Array.zip_exn scatterpoints (Tensor.value_1d_points ~xdim:0 trivial_classes)
@@ -137,9 +137,7 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
       let a = Option.value_exn @@ Lazy.force @@ trivial_classes.value.array in
       let indices = Array.init (Array.length @@ Arrayjit.Ndarray.dims a) ~f:(fun i -> i - 5) in
       Arrayjit.Ndarray.render_array ~indices a];
-    let%op point = [ 0 ] in
-    let mlp_result = mlp point in
-    Train.set_on_host point.value;
+    let%op mlp_result = mlp "point" in
     Train.set_on_host mlp_result.value;
     (* By using sgd_jitted.context here, we don't need to copy the parameters back to the host. *)
     let result_jitted =
@@ -156,7 +154,7 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     in
     let plot_trivial =
       let open PrintBox_utils in
-      plot ~size:(50, 100) ~x_label:"ixes" ~y_label:"ygreks"
+      plot ~size:(50, 50) ~x_label:"ixes" ~y_label:"ygreks"
         [
           Line_plot_adaptive { pixel = "*"; callback; cache = Map.empty (module Float) };
           Scatterplot { points = scatterpoints; pixel = "#" };
