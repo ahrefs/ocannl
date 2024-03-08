@@ -90,7 +90,7 @@ type visits =
 type traced_array = {
   nd : Tn.t;
   mutable computations : (Indexing.axis_index array option * t) list;
-      (** The computations (of the data node) are retrieved for optimization just as they are populated,
+      (** The computations (of the tensor node) are retrieved for optimization just as they are populated,
           so that the inlined code corresponds precisely to the changes to the arrays that would happen
           up till that point. Within the code blocks paired with an index tuple, all assignments and accesses
           must happen via the index tuple; if this is not the case for some assignment, the node cannot
@@ -102,6 +102,10 @@ type traced_array = {
   mutable zeroed_out : bool;
   mutable read_before_write : bool;  (** The node is read before it is written (i.e. it is recurrent). *)
   mutable read_only : bool;
+  mutable is_scalar_constexpr : bool;
+      (** True only if the tensor node has all axes of dimension 1, is either zeroed-out or assigned
+          before accessed, is assigned at most once, and from an expression involving only constants
+          or tensor nodes that were at the time is_scalar_constexpr. *)
 }
 [@@deriving sexp_of]
 
@@ -116,6 +120,7 @@ let get_node store nd =
         zeroed_out = false;
         read_before_write = false;
         read_only = false;
+        is_scalar_constexpr = false;
       })
 
 let partition_tf_with_comment cs ~f =
@@ -137,6 +142,24 @@ let partition_tf_with_comment cs ~f =
 let visit ~is_assigned old =
   if not is_assigned then Recurrent
   else match old with None -> Visits 1 | Some (Visits i) -> Visits (i + 1) | Some Recurrent -> Recurrent
+
+let is_constexpr_comp traced_store llv =
+  let rec loop llv =
+    match llv with
+    | Local_scope _ -> false
+    | Get_local _ -> false
+    | Get_global (_, _) -> false
+    | Get (tn, _idcs) ->
+        let traced = get_node traced_store tn in
+        traced.is_scalar_constexpr
+    | Binop (_, v1, v2) -> loop v1 && loop v2
+    | Unop (_, v) -> loop v
+    | Constant _ -> true
+    | Embed_index _ -> false
+  in
+  loop llv
+
+let is_scalar_dims array = Array.for_all ~f:(( = ) 1) @@ Lazy.force array.Tn.dims
 
 let visit_llc traced_store reverse_node_map ~max_visits llc =
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
@@ -160,12 +183,17 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         done
     | Zero_out array ->
         let traced : traced_array = get_node traced_store array in
-        if Hash_set.is_empty traced.assignments && Hashtbl.is_empty traced.accesses then
+        if Hash_set.is_empty traced.assignments && Hashtbl.is_empty traced.accesses then (
           traced.zero_initialized <- true;
+          if is_scalar_dims array then traced.is_scalar_constexpr <- true);
         traced.zeroed_out <- true
     | Set { array; idcs; llv; debug = _ } ->
         loop_float env llv;
         let traced : traced_array = get_node traced_store array in
+        if Hash_set.is_empty traced.assignments && Hashtbl.is_empty traced.accesses && is_scalar_dims array
+        then traced.is_scalar_constexpr <- is_constexpr_comp traced_store llv
+          (* Note: this prevents detection if the same constant is assigned inside a loop. *)
+        else if not @@ Hash_set.is_empty traced.assignments then traced.is_scalar_constexpr <- false;
         Hash_set.add traced.assignments (lookup env idcs);
         Array.iter idcs ~f:(function
           | Fixed_idx _ -> ()
@@ -199,11 +227,12 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
   loop_proc Indexing.empty_env llc;
   Hashtbl.iter traced_store ~f:(fun traced ->
       let tn = traced.nd in
+      if Option.is_none tn.memory_mode && traced.is_scalar_constexpr then Tn.update_memory_mode tn Virtual 40;
       if Option.is_none tn.memory_mode && Hashtbl.exists traced.accesses ~f:is_too_many then
-        Tn.update_memory_mode tn Never_virtual 1;
-      (* The tensor node is read-only/recurrent for this computation, but maybe computed by another one.
-         However, if the memory mode is unspecified, we assume this will be the first computation
-         involving the tensor node. *)
+        if Hashtbl.exists traced.accesses ~f:is_recurrent then Tn.update_memory_mode tn Never_virtual 1
+          (* The tensor node is read-only/recurrent for this computation, but maybe computed by another one.
+             However, if the memory mode is unspecified, we assume this will be the first computation
+             involving the tensor node. *);
       if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then (
         traced.read_only <- true;
         if Tn.mode_is_unspecified tn then Tn.update_memory_mode tn Hosted 37
