@@ -37,8 +37,8 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let len = 64 in
   let n_batches = 2 * len / batch in
   (* let epochs = 100 in *)
-  (* let epochs = 2 in *)
   let epochs = 4 in
+  (* let epochs = 32 in *)
   let noise () = Random.float_range (-0.2) 0.2 in
   let trivial_flat =
     Array.concat_map (Array.create ~len ()) ~f:Float.(fun () -> [| 0.2 + noise (); 0.8 + noise () |])
@@ -54,6 +54,7 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let step_n, bindings = IDX.get_static_symbol bindings in
   let steps = epochs * n_batches in
   let%op learning_rate = 10. *. (!..steps - !@step_n) /. !..steps in
+  (* let%op learning_rate = 0.1 *. (!..steps - !@step_n) /. !..steps in *)
   let%op trivial_input = trivial_flat @| batch_n in
   let%op trivial_class = trivial_classes @| batch_n in
   let%op margin_loss = ?/(1 - (trivial_class *. mlp trivial_input)) in
@@ -129,7 +130,9 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     Utils.settings.with_debug <- false;
     Utils.settings.output_debug_files_in_run_directory <- false;
     let scatterpoints = Tensor.value_1d_points ~xdim:0 trivial_flat in
-    let scatterpoints = Array.zip_exn scatterpoints (Tensor.value_1d_points ~xdim:0 trivial_classes) in
+    let scatterpoints : (float * float) array =
+      Array.zip_exn scatterpoints (Tensor.value_1d_points ~xdim:0 trivial_classes)
+    in
     [%log_printbox
       let a = Option.value_exn @@ Lazy.force @@ trivial_classes.value.array in
       let indices = Array.init (Array.length @@ Arrayjit.Ndarray.dims a) ~f:(fun i -> i - 5) in
@@ -153,10 +156,10 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     in
     let plot_trivial =
       let open PrintBox_utils in
-      plot ~size:(20, 20) ~x_label:"ixes" ~y_label:"ygreks"
+      plot ~size:(50, 100) ~x_label:"ixes" ~y_label:"ygreks"
         [
-          Scatterplot { points = scatterpoints; pixel = "#" };
           Line_plot_adaptive { pixel = "*"; callback; cache = Map.empty (module Float) };
+          Scatterplot { points = scatterpoints; pixel = "#" };
         ]
     in
     Stdio.printf "Regression scatterplot and decision boundary:\n%!";

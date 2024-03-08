@@ -1,5 +1,6 @@
 open Base
 module Utils = Arrayjit.Utils
+module Debug_runtime = Utils.Debug_runtime
 
 type box = PrintBox.t
 
@@ -74,12 +75,13 @@ type plot_spec =
   | Line_plot of { points : float array; pixel : string }
   | Boundary_map of { callback : float * float -> bool; pixel_true : string; pixel_false : string }
   | Line_plot_adaptive of { callback : float -> float; mutable cache : float Map.M(Float).t; pixel : string }
+[@@deriving sexp_of]
 
-let plot_canvas ?canvas ?size specs =
+let plot_canvas ?canvas ?(size: (int * int) option) (specs: plot_spec list): float * float * float * float * string array array =
   let open Float in
   (* Unfortunately "x" and "y" of a "matrix" are opposite to how we want them displayed --
      the first dimension (i.e. "x") as the horizontal axis. *)
-  let dimx, dimy, canvas =
+  let (dimx, dimy, canvas) : int * int * _ =
     match (canvas, size) with
     | None, None -> invalid_arg "PrintBox_utils.plot: provide ~canvas or ~size"
     | None, Some (dimx, dimy) -> (dimx, dimy, Array.make_matrix ~dimx:dimy ~dimy:dimx " ")
