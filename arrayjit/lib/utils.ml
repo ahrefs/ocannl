@@ -155,14 +155,22 @@ let get_debug name =
         @@ "ocannl_log_level setting should be one of: nothing, prefixed_error, prefixed_warn_error, \
             prefixed_info_warn_error, explicit_logs, nonempty_entries, everything; found: " ^ s
   in
+  let toc_entry_minimal_depth =
+    Int.of_string @@ get_global_arg ~default:"4" ~arg_name:"toc_entry_minimal_depth"
+  in
+  let toc_entry_minimal_size =
+    Int.of_string @@ get_global_arg ~default:"4" ~arg_name:"toc_entry_minimal_size"
+  in
   if flushing then
     Minidebug_runtime.debug_flushing ~filename ~time_tagged ~elapsed_times ~print_entry_ids ~verbose_entry_ids
       ~global_prefix:name ~for_append:false (* ~log_level *) ()
   else
     Minidebug_runtime.forget_printbox
-    @@ Minidebug_runtime.debug_file ~time_tagged ~elapsed_times ~location_format ~print_entry_ids ~verbose_entry_ids
-         ~global_prefix:name ~for_append:false ~max_inline_sexp_length:120 ~hyperlink ~values_first_mode:true
-         ~backend ~log_level ?snapshot_every_sec filename
+    @@ Minidebug_runtime.debug_file ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
+         ~verbose_entry_ids ~global_prefix:name ~with_table_of_contents:true ~toc_entry_minimal_depth
+         ~toc_entry_minimal_size ~for_append:false ~max_inline_sexp_length:120 ~hyperlink
+         ~toc_specific_hyperlink:""
+         ~values_first_mode:true ~backend ~log_level ?snapshot_every_sec filename
 
 module Debug_runtime = (val get_debug "")
 
