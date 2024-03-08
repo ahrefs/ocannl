@@ -77,7 +77,8 @@ type plot_spec =
   | Line_plot_adaptive of { callback : float -> float; mutable cache : float Map.M(Float).t; pixel : string }
 [@@deriving sexp_of]
 
-let plot_canvas ?canvas ?(size: (int * int) option) (specs: plot_spec list): float * float * float * float * string array array =
+let plot_canvas ?canvas ?(size : (int * int) option) (specs : plot_spec list) :
+    float * float * float * float * _ =
   let open Float in
   (* Unfortunately "x" and "y" of a "matrix" are opposite to how we want them displayed --
      the first dimension (i.e. "x") as the horizontal axis. *)
@@ -171,7 +172,7 @@ let plot_canvas ?canvas ?(size: (int * int) option) (specs: plot_spec list): flo
                     plot.cache <- Map.add_exn cache ~key:x ~data:y;
                     y
               in
-              Option.iter (scale_1d y) ~f:(fun j -> canvas.(j).(i) <- pixel)));
+              Option.iter (scale_1d y) ~f:Int.(fun j -> canvas.(dimy - 1 - j).(i) <- pixel)));
   (minx, miny, maxx, maxy, canvas)
 
 let concise_float = Arrayjit.Ndarray.concise_float
