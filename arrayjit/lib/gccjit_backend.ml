@@ -95,8 +95,8 @@ module Debug_runtime = Utils.Debug_runtime
 
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-let%track_sexp get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ctx_info)
-    (key : Tn.t) : ndarray =
+let get_array ~debug_log_zero_out
+    ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ctx_info) (key : Tn.t) : ndarray =
   let open Gccjit in
   Hashtbl.find_or_add arrays key ~default:(fun () ->
       let ta = Low_level.(get_node traced_store key) in
@@ -134,7 +134,9 @@ let%track_sexp get_array ({ ctx; func; arrays; ctx_arrays; traced_store; init_bl
         let result =
           { nd = key; hosted_ptr; global_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
         in
-        if ta.zero_initialized then zero_out ctx init_block result;
+        if ta.zero_initialized then (
+          debug_log_zero_out init_block result;
+          zero_out ctx init_block result);
         if not @@ Utils.sexp_mem ~elem:backend_info key.backend_info then
           key.backend_info <- Utils.sexp_append ~elem:backend_info key.backend_info;
         result
@@ -243,6 +245,23 @@ let jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block (body
         @@ RValue.call ctx p [ f; RValue.string_literal ctx ("\nCOMMENT: " ^ c ^ "\n") ]
     | _ -> Block.comment !current_block c
   in
+  let fflush =
+    Option.map log_file ~f:(fun _ ->
+        let f_ptr = Type.get ctx Type.File_ptr in
+        Function.create ctx Imported (Type.get ctx Void) "fflush" [ Param.create ctx f_ptr "f" ])
+  in
+  let debug_log_zero_out block array =
+    match (log_file, fprintf, fflush) with
+    | Some f, Some p, Some fl ->
+        Block.eval block @@ RValue.call ctx p
+        @@ f
+           :: RValue.string_literal ctx
+                [%string {|memset_zero(%{get_ptr_debug array}) where before first element = %g
+|}]
+           :: [ to_d @@ RValue.lvalue @@ LValue.access_array (get_ptr array) @@ RValue.zero ctx c_index ];
+        Block.eval block @@ RValue.call ctx fl [ f ]
+    | _ -> ()
+  in
   let rec debug_float ~env ~is_double value =
     let loop = debug_float ~env ~is_double in
     match value with
@@ -264,7 +283,7 @@ let jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block (body
         ("external " ^ RValue.to_string ptr ^ "[%d]{=%g}", [ offset; v ])
     | Get_global _ -> failwith "NOT IMPLEMENTED YET"
     | Get (ptr, idcs) ->
-        let array = get_array info ptr in
+        let array = get_array ~debug_log_zero_out info ptr in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         (* FIXME(194): Convert according to array.typ ?= num_typ. *)
@@ -284,11 +303,6 @@ let jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block (body
     | Unop (Relu, v) ->
         let v, fillers = loop v in
         (String.concat [ "("; v; " > 0.0 ? "; v; " : 0.0)" ], fillers @ fillers)
-  in
-  let fflush =
-    Option.map log_file ~f:(fun _ ->
-        let f_ptr = Type.get ctx Type.File_ptr in
-        Function.create ctx Imported (Type.get ctx Void) "fflush" [ Param.create ctx f_ptr "f" ])
   in
   let debug_log_assignment ~env debug idcs array accum_op value v_code =
     match (log_file, fprintf, fflush) with
@@ -320,7 +334,7 @@ let jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block (body
     | Set { array; idcs; llv = Binop (op, Get (array2, idcs2), c2); debug }
       when Tn.equal array array2 && [%equal: Indexing.axis_index array] idcs idcs2 && is_builtin_op op ->
         (* FIXME: maybe it's not worth it? *)
-        let array = get_array info array in
+        let array = get_array ~debug_log_zero_out info array in
         let value = loop_float ~name ~env ~num_typ:array.num_typ ~is_double:array.is_double c2 in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
@@ -328,7 +342,7 @@ let jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block (body
         debug_log_assignment ~env debug idcs array op value c2;
         Block.assign_op !current_block lhs (builtin_op op) value
     | Set { array; idcs; llv; debug } ->
-        let array = get_array info array in
+        let array = get_array ~debug_log_zero_out info array in
         let value = loop_float ~name ~env ~num_typ:array.num_typ ~is_double:array.is_double llv in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
@@ -336,8 +350,10 @@ let jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block (body
         debug_log_assignment ~env debug idcs array Ops.Arg2 value llv;
         Block.assign !current_block lhs value
     | Zero_out array ->
-        if Hashtbl.mem info.arrays array then
-          zero_out ctx !current_block @@ Hashtbl.find_exn info.arrays array
+        if Hashtbl.mem info.arrays array then (
+          let array = Hashtbl.find_exn info.arrays array in
+          debug_log_zero_out !current_block array;
+          zero_out ctx !current_block array)
         else
           let tn = Low_level.(get_node info.traced_store array) in
           assert tn.zero_initialized (* The initialization is emitted by get_array. *)
@@ -381,7 +397,7 @@ let jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block (body
         RValue.lvalue @@ LValue.access_array ptr offset
     | Get_global _ -> failwith "NOT IMPLEMENTED YET"
     | Get (array, idcs) ->
-        let array = get_array info array in
+        let array = get_array ~debug_log_zero_out info array in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         (* FIXME(194): Convert according to array.typ ?= num_typ. *)
