@@ -331,14 +331,14 @@ let jit_code ~name ~log_functions ~env ({ ctx; func; _ } as info) initial_block 
     | _ -> ()
   in
   let debug_log_index = debug_log_index ctx log_functions in
-  let rec loop_proc ~env ~name (body : Low_level.t) : unit =
-    let loop = loop_proc ~env ~name in
+  let rec loop_proc ~toplevel ~env ~name (body : Low_level.t) : unit =
+    let loop = loop_proc ~toplevel ~env ~name in
     match body with
     | Noop -> ()
     | Low_level.Seq (c1, c2) ->
         loop c1;
         loop c2
-    | For_loop { index; from_; to_; body; trace_it = _ } -> jit_for_loop ~env index ~from_ ~to_ body
+    | For_loop { index; from_; to_; body; trace_it = _ } -> jit_for_loop ~toplevel ~env index ~from_ ~to_ body
     | Set { llv = Binop (Arg2, Get (_, _), _); _ } -> assert false
     | Set { array; idcs; llv = Binop (op, Get (array2, idcs2), c2); debug }
       when Tn.equal array array2 && [%equal: Indexing.axis_index array] idcs idcs2 && is_builtin_op op ->
@@ -385,7 +385,7 @@ let jit_code ~name ~log_functions ~env ({ ctx; func; _ } as info) initial_block 
         Block.assign !current_block lvalue @@ RValue.zero ctx typ;
         let old_locals = !locals in
         locals := Map.update !locals id ~f:(fun _ -> (lvalue, typ, prec_is_double prec));
-        loop_proc ~env ~name:(name ^ "_at_" ^ v_name) body;
+        loop_proc ~toplevel:false ~env ~name:(name ^ "_at_" ^ v_name) body;
         debug_locals := Map.update !debug_locals id ~f:(fun _ -> (lvalue, typ, prec_is_double prec));
         locals := old_locals;
         RValue.lvalue lvalue
@@ -430,7 +430,7 @@ let jit_code ~name ~log_functions ~env ({ ctx; func; _ } as info) initial_block 
         let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) @@ loop c in
         RValue.binary_op ctx Mult num_typ cmp @@ loop c
     | Constant v -> RValue.double ctx num_typ v
-  and jit_for_loop ~env key ~from_ ~to_ body =
+  and jit_for_loop ~toplevel ~env key ~from_ ~to_ body =
     let open Gccjit in
     let i = Indexing.symbol_ident key in
     let index = Function.local func c_index i in
@@ -443,14 +443,15 @@ let jit_code ~name ~log_functions ~env ({ ctx; func; _ } as info) initial_block 
     let guard = RValue.comparison ctx Gt (RValue.lvalue index) (RValue.int ctx c_index to_) in
     Block.cond_jump b_loop_cond guard b_after_loop (* on true *) b_loop_body (* on false *);
     current_block := b_loop_body;
-    debug_log_index !current_block i (RValue.lvalue index);
-    loop_proc ~env ~name body;
+    (* Currently we don't log local computations. *)
+    if toplevel then debug_log_index !current_block i (RValue.lvalue index);
+    loop_proc ~toplevel ~env ~name body;
     Block.assign_op !current_block index Plus (RValue.one ctx c_index);
     Block.jump !current_block b_loop_cond;
     current_block := b_after_loop
   in
 
-  loop_proc ~name ~env body;
+  loop_proc ~toplevel:true ~name ~env body;
   !current_block
 
 let%track_sexp jit_func ~name ~log_file_name (context : context) ctx bindings (traced_store, proc) : ctx_info
