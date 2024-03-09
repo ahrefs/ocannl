@@ -324,6 +324,8 @@ let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
 
 let%debug_sexp compile_proc ?(ident_style = `Heuristic_ocannl) ~name static_indices (proc : t) :
     (Tn.t, Low_level.traced_array) Base.Hashtbl.t * Low_level.t =
+  let llc = to_low_level proc in
+  (* Generate the low-level code before outputting the assignments, to force projections. *)
   if Utils.settings.output_debug_files_in_run_directory then (
     let fname = name ^ ".hlc" in
     let f = Stdio.Out_channel.create fname in
@@ -333,5 +335,4 @@ let%debug_sexp compile_proc ?(ident_style = `Heuristic_ocannl) ~name static_indi
     let fname = name ^ ".cd" in
     let f = Stdio.Out_channel.create fname in
     Stdio.Out_channel.output_string f @@ to_string_hum ~ident_style proc);
-  let llc = to_low_level proc in
   Low_level.compile_proc ~name static_indices llc
