@@ -7,19 +7,19 @@ module NTDSL = Operation.NTDSL
 module CDSL = Arrayjit.Low_level.CDSL
 module Utils = Arrayjit.Utils
 
-let experiment seed ~use_builtin_weight_decay () =
+let num_devices = 2
+
+let experiment ~seed ~use_builtin_weight_decay () =
   Random.init 0;
   Utils.settings.with_debug <- true;
   (* Utils.settings.output_debug_files_in_run_directory <- true; *)
   (* Utils.settings.debug_log_jitted <- true; *)
-
   let hid_dim = 16 in
   let len = 300 in
-  let batch_size = 20 in
+  let batch_size = 20 / num_devices in
   let n_batches = 2 * len / batch_size in
-  let epochs = 75 in
+  let epochs = 10 in
   let steps = epochs * n_batches in
-  (* let weight_decay = 0.0002 in *)
   Utils.settings.fixed_state_for_init <- Some seed;
   let noise () = Random.float_range (-0.1) 0.1 in
   let moons_flat =
@@ -60,44 +60,43 @@ let experiment seed ~use_builtin_weight_decay () =
   in
   (* So that we can inspect them. *)
   Train.set_on_host learning_rate.value;
-  let update = Train.grad_update scalar_loss in
+  let update = Train.grad_update ~setup_for_parallel:true scalar_loss in
   let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
 
   let module Backend = (val Train.fresh_backend ()) in
-  let device = Backend.get_device ~ordinal:0 in
-  let ctx = Backend.init device in
-  let jitted = Backend.jit ctx bindings (Seq (update.fwd_bprop, sgd)) in
-  Train.all_host_to_device (module Backend) jitted.context scalar_loss;
-  Train.all_host_to_device (module Backend) jitted.context learning_rate;
-  (* Stdio.print_endline "\n******** scalar_loss **********";
-     Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 scalar_loss;
-     Stdio.print_endline "\n******** learning_rate **********";
-     Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
-     Stdio.printf "\n********\n%!"; *)
+  let num_devices = min num_devices @@ Backend.num_devices () in
+  let devices = Array.init num_devices ~f:(fun ordinal -> Backend.get_device ~ordinal) in
+  let contexts = Array.map devices ~f:Backend.init in
+  let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit ctx bindings update.fwd_bprop) in
+  let sgd_update = Backend.jit grad_updates.(0).context bindings sgd in
+  Train.all_host_to_device (module Backend) sgd_update.context scalar_loss;
+  Train.all_host_to_device (module Backend) sgd_update.context learning_rate;
   let open Tensor.O in
   let epoch_loss = ref 0. in
-  let step_ref = IDX.find_exn jitted.bindings step_n in
-  let batch_ref = IDX.find_exn jitted.bindings batch_n in
-  step_ref := 0;
+  let step_ref = IDX.find_exn sgd_update.bindings step_n in
+  (* let batch_ref = IDX.find_exn sgd_update.bindings batch_n in *)
+  let update =
+    Train.parallel_update
+      (module Backend)
+      ~grad_updates ~sgd_update update
+      ~post_sync:(fun ~num_synced_devices ->
+        step_ref := !step_ref + num_synced_devices;
+        assert (Backend.to_host sgd_update.context learning_rate.value);
+        (* scalar_loss is not in the sgd_update context. *)
+        assert (Backend.to_host grad_updates.(0).context scalar_loss.value);
+        let loss = scalar_loss.@[0] in
+        epoch_loss := !epoch_loss +. loss;
+        losses := loss :: !losses;
+        epoch_loss := !epoch_loss +. scalar_loss.@[0]
+        (* Stdio.printf "Batch=%d, step=%d, lr=%f, batch loss=%f, epoch loss=%f\n%!" !batch_ref !step_ref
+           learning_rate.@[0] loss !epoch_loss *))
+  in
   (* Tn.print_accessible_headers (); *)
   for epoch = 0 to epochs - 1 do
-    for batch = 0 to n_batches - 1 do
-      batch_ref := batch;
-      Train.run jitted;
-      Backend.await device;
-      assert (Backend.to_host jitted.context learning_rate.value);
-      assert (Backend.to_host jitted.context scalar_loss.value);
-      (* Stdio.printf "Data batch=%d, step=%d, lr=%f, batch loss=%f\n%!" !batch_ref !step_ref learning_rate.@[0]
-         scalar_loss.@[0]; *)
-      learning_rates := learning_rate.@[0] :: !learning_rates;
-      losses := scalar_loss.@[0] :: !losses;
-      epoch_loss := !epoch_loss +. scalar_loss.@[0];
-      log_losses := Float.log scalar_loss.@[0] :: !log_losses;
-      Int.incr step_ref
-    done;
-    if epoch % 1000 = 0 || epoch = epochs - 1 then
-      Stdio.printf "Epoch %d, lr=%f, epoch loss=%f\n%!" epoch learning_rate.@[0] !epoch_loss;
-    epoch_loss := 0.
+    epoch_loss := 0.;
+    update ();
+    learning_rates := learning_rate.@[0] :: !learning_rates;
+    Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" epoch !step_ref learning_rate.@[0] !epoch_loss
   done;
   let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
@@ -106,7 +105,7 @@ let experiment seed ~use_builtin_weight_decay () =
   Train.set_on_host mlp_result.value;
   (* By using jitted.context here, we don't need to copy the parameters back to the host. *)
   let result_jitted =
-    Backend.jit jitted.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
+    Backend.jit sgd_update.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
   in
   Stdio.print_endline "\n******** mlp_result **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 mlp_result;
@@ -116,7 +115,7 @@ let experiment seed ~use_builtin_weight_decay () =
     (* For the gccjit backend, point is only on host, not on device. For cuda, this will be needed. *)
     ignore (Backend.from_host result_jitted.context point.value : bool);
     Train.run result_jitted;
-    Backend.await device;
+    Backend.await devices.(0);
     assert (Backend.to_host result_jitted.context mlp_result.value);
     Float.(mlp_result.@[0] >= 0.)
   in
@@ -155,10 +154,10 @@ let experiment seed ~use_builtin_weight_decay () =
   in
   PrintBox_text.output Stdio.stdout plot_lr
 
-let () = experiment 4 ~use_builtin_weight_decay:true ()
+let () = experiment ~seed:4 ~use_builtin_weight_decay:true ()
 
 let _suspended () =
   for seed = 0 to 19 do
     Stdio.printf "\n*************** EXPERIMENT SEED %d ******************\n%!" seed;
-    experiment seed ~use_builtin_weight_decay:true ()
+    experiment ~seed ~use_builtin_weight_decay:true ()
   done

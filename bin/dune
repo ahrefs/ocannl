@@ -64,3 +64,11 @@
  (preprocess
   (pps ppx_jane ppx_ocannl))
  (modes exe))
+
+(executable
+ (name moons_demo_parallel)
+ (modules moons_demo_parallel)
+ (libraries ocannl base stdio)
+ (preprocess
+  (pps ppx_jane ppx_ocannl))
+ (modes exe))

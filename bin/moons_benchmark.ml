@@ -32,18 +32,21 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   Tensor.default_grad_prec := precision;
   let open Tensor.O in
   let debug_batches = true in
-  (* Utils.settings.output_debug_files_in_run_directory <- true; *)
-  (* Utils.settings.debug_log_jitted <- true; *)
+  Utils.settings.output_debug_files_in_run_directory <- true;
+  Utils.settings.debug_log_jitted <- true;
   Random.init (* random_seed *) 0;
   (* Utils.settings.fixed_state_for_init <- Some random_seed; *)
   (* let hid_2_3 = 8 in
      let hid_4_5 = 4 in *)
-  let hid_dim = 16 in
-  (* let hid_dim = 4 in *)
-  let len = 64 * 32 in
+  (* let hid_dim = 16 in *)
+  let hid_dim = 4 in
+  (* let len = 64 * 32 in *)
+  let len = 64 * 8 in
   let n_batches = 2 * len / batch in
-  let epochs = 100 in
-  (* let epochs = 1 in *)
+  (* let epochs = 100 in *)
+  (* let epochs = 10 in *)
+  (* let epochs = 1000 in *)
+  let epochs = 1 in
   let noise () = Random.float_range (-0.1) 0.1 in
   let moons_flat =
     Array.concat_map (Array.create ~len ())
@@ -77,7 +80,7 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_n, bindings = IDX.get_static_symbol bindings in
   let steps = epochs * n_batches in
-  let%op learning_rate = 0.1 *. (!..steps - !@step_n) /. !..steps in
+  let%op learning_rate = 0.003 *. (!..steps - !@step_n) /. !..steps in
   let%op moons_input = moons_flat @| batch_n in
   let%op moons_class = moons_classes @| batch_n in
   let%op margin_loss = ?/(1 - (moons_class *. mlp moons_input)) in
@@ -131,9 +134,8 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
       min_loss := Float.min !min_loss !epoch_loss;
       max_loss := Float.max !max_loss !epoch_loss;
       epoch_log_losses := Float.log !epoch_loss :: !epoch_log_losses;
-      if debug_batches then
-        Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" epoch !step_ref learning_rate.@[0]
-          !epoch_loss
+      Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" epoch !step_ref learning_rate.@[0]
+        !epoch_loss
     done;
 
     let final_time = Time_now.nanoseconds_since_unix_epoch () in
@@ -152,8 +154,8 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
           result = [%sexp_of: float * float] (!min_loss, !last_loss);
         }
     in
-    Utils.settings.with_debug <- false;
-    Utils.settings.output_debug_files_in_run_directory <- false;
+    (* Utils.settings.with_debug <- false; *)
+    (* Utils.settings.output_debug_files_in_run_directory <- false; *)
     let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
     let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
     let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
@@ -227,7 +229,7 @@ let () =
     let _debug : string = "entry" in
     (fun (entry : unit) -> entry) ()];
   ignore
-  @@ classify_moons ~random_seed:3 ~on_device:true ~inlining_cutoff:3 ~num_devices:16 ~batch:64
+  @@ classify_moons ~random_seed:3 ~on_device:true ~inlining_cutoff:3 ~num_devices:8 ~batch:16
        ~backend_name:"gccjit" CDSL.single ()
 
 let benchmarks =
