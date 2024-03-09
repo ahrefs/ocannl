@@ -95,8 +95,8 @@ module Debug_runtime = Utils.Debug_runtime
 
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-let get_array ~debug_log_zero_out
-    ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ctx_info) (key : Tn.t) : ndarray =
+let get_array ~debug_log_zero_out ({ ctx; func; arrays; ctx_arrays; traced_store; init_block } as ctx_info)
+    (key : Tn.t) : ndarray =
   let open Gccjit in
   Hashtbl.find_or_add arrays key ~default:(fun () ->
       let ta = Low_level.(get_node traced_store key) in
@@ -184,7 +184,18 @@ let get_ptr_debug array =
   | None, None, Some arr -> "hosted_" ^ Tn.name array.nd ^ memloc arr
   | None, None, None -> assert false
 
-let jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block (body : Low_level.t) =
+let debug_log_index ctx log_functions =
+  let open Gccjit in
+  match log_functions with
+  | Some (lf, pf, ff) ->
+      fun block i index ->
+        Block.eval block @@ RValue.call ctx pf
+        @@ (lf :: RValue.string_literal ctx [%string {|index %{i} = %d
+|}] :: [ index ]);
+        Block.eval block @@ RValue.call ctx ff [ lf ]
+  | _ -> fun _block _i _index -> ()
+
+let jit_code ~name ~log_functions ~env ({ ctx; func; _ } as info) initial_block (body : Low_level.t) =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
@@ -237,29 +248,26 @@ let jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block (body
     | Arg2 -> v2
     | Arg1 -> v1
   in
-  let fprintf = Option.map log_file ~f:(fun _ -> Function.builtin ctx "fprintf") in
   let log_comment c =
-    match (log_file, fprintf) with
-    | Some f, Some p ->
+    match log_functions with
+    | Some (lf, pf, ff) ->
         Block.eval !current_block
-        @@ RValue.call ctx p [ f; RValue.string_literal ctx ("\nCOMMENT: " ^ c ^ "\n") ]
+        @@ RValue.call ctx pf [ lf; RValue.string_literal ctx ("\nCOMMENT: " ^ c ^ "\n") ];
+        Block.eval !current_block @@ RValue.call ctx ff [ lf ]
     | _ -> Block.comment !current_block c
   in
-  let fflush =
-    Option.map log_file ~f:(fun _ ->
-        let f_ptr = Type.get ctx Type.File_ptr in
-        Function.create ctx Imported (Type.get ctx Void) "fflush" [ Param.create ctx f_ptr "f" ])
-  in
   let debug_log_zero_out block array =
-    match (log_file, fprintf, fflush) with
-    | Some f, Some p, Some fl ->
-        Block.eval block @@ RValue.call ctx p
-        @@ f
+    match log_functions with
+    | Some (lf, pf, ff) ->
+        let c_double = Type.get ctx Type.Double in
+        let to_d v = RValue.cast ctx v c_double in
+        Block.eval block @@ RValue.call ctx pf
+        @@ lf
            :: RValue.string_literal ctx
                 [%string {|memset_zero(%{get_ptr_debug array}) where before first element = %g
 |}]
            :: [ to_d @@ RValue.lvalue @@ LValue.access_array (get_ptr array) @@ RValue.zero ctx c_index ];
-        Block.eval block @@ RValue.call ctx fl [ f ]
+        Block.eval block @@ RValue.call ctx ff [ lf ]
     | _ -> ()
   in
   let rec debug_float ~env ~is_double value =
@@ -305,23 +313,24 @@ let jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block (body
         (String.concat [ "("; v; " > 0.0 ? "; v; " : 0.0)" ], fillers @ fillers)
   in
   let debug_log_assignment ~env debug idcs array accum_op value v_code =
-    match (log_file, fprintf, fflush) with
-    | Some f, Some p, Some fl ->
+    match log_functions with
+    | Some (lf, pf, ff) ->
         let v_format, v_fillers = debug_float ~env ~is_double:array.is_double v_code in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         let debug_line = "# " ^ String.substr_replace_all debug ~pattern:"\n" ~with_:"$" ^ "\n" in
-        Block.eval !current_block @@ RValue.call ctx p @@ [ f; RValue.string_literal ctx debug_line ];
-        Block.eval !current_block @@ RValue.call ctx p
-        @@ f
+        Block.eval !current_block @@ RValue.call ctx pf @@ [ lf; RValue.string_literal ctx debug_line ];
+        Block.eval !current_block @@ RValue.call ctx pf
+        @@ lf
            :: RValue.string_literal ctx
                 [%string
                   {|%{get_ptr_debug array}[%d]{=%g} %{Ops.assign_op_C_syntax accum_op} %g = %{v_format}
 |}]
            :: (to_d @@ RValue.lvalue @@ LValue.access_array (get_ptr array) offset)
            :: offset :: to_d value :: v_fillers;
-        Block.eval !current_block @@ RValue.call ctx fl [ f ]
+        Block.eval !current_block @@ RValue.call ctx ff [ lf ]
     | _ -> ()
   in
+  let debug_log_index = debug_log_index ctx log_functions in
   let rec loop_proc ~env ~name (body : Low_level.t) : unit =
     let loop = loop_proc ~env ~name in
     match body with
@@ -434,6 +443,7 @@ let jit_code ~name ~log_file ~env ({ ctx; func; _ } as info) initial_block (body
     let guard = RValue.comparison ctx Gt (RValue.lvalue index) (RValue.int ctx c_index to_) in
     Block.cond_jump b_loop_cond guard b_after_loop (* on true *) b_loop_body (* on false *);
     current_block := b_loop_body;
+    debug_log_index !current_block i (RValue.lvalue index);
     loop_proc ~env ~name body;
     Block.assign_op !current_block index Plus (RValue.one ctx c_index);
     Block.jump !current_block b_loop_cond;
@@ -460,7 +470,7 @@ let%track_sexp jit_func ~name ~log_file_name (context : context) ctx bindings (t
            (static_symbol, RValue.param @@ Function.param func pos))
   in
   let init_block = Block.create ~name:("init_" ^ name) func in
-  let log_file () =
+  let log_functions () =
     let file_ptr = Type.(get ctx File_ptr) in
     let c_str = Type.(get ctx Const_char_ptr) in
     let log_file = Function.local func file_ptr "log_file" in
@@ -470,22 +480,30 @@ let%track_sexp jit_func ~name ~log_file_name (context : context) ctx bindings (t
     in
     Block.assign init_block log_file
     @@ RValue.call ctx fopen [ RValue.string_literal ctx log_file_name; RValue.string_literal ctx "w" ];
-    RValue.lvalue log_file
+    let log_file = RValue.lvalue log_file in
+    let fprintf = Function.builtin ctx "fprintf" in
+    let fflush =
+      let f_ptr = Type.get ctx Type.File_ptr in
+      Function.create ctx Imported (Type.get ctx Void) "fflush" [ Param.create ctx f_ptr "f" ]
+    in
+    (log_file, fprintf, fflush)
   in
-  let log_file = if Utils.settings.debug_log_jitted then Some (log_file ()) else None in
+  let log_functions = if Utils.settings.debug_log_jitted then Some (log_functions ()) else None in
+  let debug_log_index = debug_log_index ctx log_functions in
+  Map.iteri env ~f:(fun ~key:sym ~data:idx -> debug_log_index init_block (Indexing.symbol_ident sym) idx);
   let main_block = Block.create ~name func in
   let ctx_info =
     { ctx; func; traced_store; init_block; ctx_arrays = context.arrays; arrays = Hashtbl.create (module Tn) }
   in
-  let after_proc = jit_code ~name ~log_file ~env ctx_info main_block proc in
-  (match log_file with
-  | Some f ->
+  let after_proc = jit_code ~name ~log_functions ~env ctx_info main_block proc in
+  (match log_functions with
+  | Some (lf, _, _) ->
       (* FIXME: should be Imported? *)
       let file_ptr = Type.(get ctx File_ptr) in
       let fclose =
         Function.create ctx Imported Type.(get ctx Type.Void_ptr) "fclose" [ Param.create ctx file_ptr "f" ]
       in
-      Block.eval after_proc @@ RValue.call ctx fclose [ f ]
+      Block.eval after_proc @@ RValue.call ctx fclose [ lf ]
   | None -> ());
   Block.jump init_block main_block;
   Block.return_void after_proc;
