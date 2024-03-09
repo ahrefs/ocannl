@@ -544,12 +544,12 @@ let jit (old_context : context) ~(name : string) bindings (compiled : Low_level.
                | header1 :: assign1 :: header2 :: body ->
                    let header = String.concat [ header1; assign1; header2 ] in
                    let body = String.concat body in
-                   let message = Sexp.(List [ Atom header; Atom source; Atom body ]) in
-                   [%log (message : Sexp.t)]
+                   let _message = Sexp.(List [ Atom header; Atom source; Atom body ]) in
+                   [%log (_message : Sexp.t)]
                | _ -> [%log source, trace]);
               loop more
-          | line :: more ->
-              [%log line];
+          | _line :: more ->
+              [%log _line];
               loop more
         in
         loop (Stdio.In_channel.read_lines log_file_name)
