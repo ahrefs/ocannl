@@ -104,7 +104,8 @@ let get_array ~debug_log_zero_out ({ ctx; func; arrays; ctx_arrays; traced_store
       let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
       let size_in_bytes = size_in_elems * Ops.prec_in_bytes key.prec in
       let is_on_host = Tn.is_hosted_force key 33 in
-      let is_materialized = Tn.is_materialized_force key 34 in
+      let is_materialized = Tn.is_materialized_force key 331 in
+      let is_constant = Tn.is_hosted_force ~specifically:Constant key 332 in
       assert (Bool.(Option.is_some (Lazy.force key.array) = is_on_host));
       (* TODO: is the complexity of introducing this function and matching on Ndarray.t needed? *)
       let array c_typ is_double arr =
@@ -114,7 +115,7 @@ let get_array ~debug_log_zero_out ({ ctx; func; arrays; ctx_arrays; traced_store
         in
         let hosted_ptr = Option.map arr ~f:get_c_ptr in
         let mem =
-          if not is_materialized then Local_only else if is_on_host && ta.read_only then Constant else Global
+          if not is_materialized then Local_only else if is_constant && ta.read_only then Constant else Global
         in
         let arr_typ = Type.array ctx num_typ size_in_elems in
         let local = if is_local_only mem then Some (Function.local func arr_typ @@ Tn.name key) else None in

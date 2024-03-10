@@ -237,10 +237,14 @@ let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
   (* Note: no axis label so that we do not conflict with user labels. *)
   let label = float_to_label c :: label in
   let init_op = Arrayjit.Ops.Constant_fill { values = [| c |]; strict = true } in
-  let result = term ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~init_op in
-  match axis_label with
-  | None -> result ~output_dims:[ 1 ] ()
-  | Some axis_label -> result ~output_axes:[ (axis_label, 1) ] ()
+  let t = term ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~init_op in
+  let t =
+    match axis_label with
+    | None -> t ~output_dims:[ 1 ] ()
+    | Some axis_label -> t ~output_axes:[ (axis_label, 1) ] ()
+  in
+  Tn.update_memory_mode t.value Effectively_constant 24;
+  t
 
 let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?output_dims ?batch_axes
     ?input_axes ?output_axes ?(strict = true) values =
@@ -269,10 +273,14 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
   let batch_dims = Option.first_some batch_dims @@ Option.some_if (Option.is_none batch_axes) [] in
   let input_dims = Option.first_some input_dims @@ Option.some_if (Option.is_none input_axes) [] in
   let output_dims = Option.first_some output_dims @@ Option.some_if (Option.is_none output_axes) [] in
-  term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
-    ~deduced:Not_constrained
-    ~init_op:(Constant_fill { values; strict })
-    ()
+  let t =
+    term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
+      ~deduced:Not_constrained
+      ~init_op:(Constant_fill { values; strict })
+      ()
+  in
+  Tn.update_memory_mode t.value Effectively_constant 24;
+  t
 
 let param ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?(strict = false) ?values label =
   let init_op =
@@ -285,7 +293,8 @@ let param ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?(strict = 
       ?output_axes ?deduced ~init_op ()
   in
   let v = t.value in
-  Tn.update_memory_mode v Hosted 24;
+  (* It is convenient to use the param syntax for volatiles (mutable inputs). *)
+  Tn.update_memory_mode v (Hosted Nonconstant) 24;
   (* In principle, gradients can even be local, if a single jitted block does forward, backprop,
      and update computations. Use-cases needing [Materialized] gradients need to request that
      before any jitting. *)

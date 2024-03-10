@@ -18,7 +18,7 @@ let _suspended () =
   (* Uncomment just the first "fully on host" line to see which arrays can be virtual, and just
      the second line to see the intermediate computation values. *)
   Train.every_non_literal_on_host c;
-  (* List.iter ~f:(function Some diff -> Train.set_on_host diff.grad | None -> ()) [ a.diff; b.diff ]; *)
+  (* List.iter ~f:(function Some diff -> Train.set_hosted diff.grad | None -> ()) [ a.diff; b.diff ]; *)
   let update = Train.grad_update c in
   let jitted = Backend.jit ctx IDX.empty update.fwd_bprop in
   Train.sync_run (module Backend) jitted c;
@@ -44,7 +44,7 @@ let () =
   let%op f = e *. e in
   let%op g = f /. 2 in
   let%op g = g + (10. /. f) in
-  List.iter ~f:(function Some diff -> Train.set_on_host diff.grad | None -> ()) [ a.diff; b.diff ];
+  List.iter ~f:(function Some diff -> Train.set_hosted diff.grad | None -> ()) [ a.diff; b.diff ];
   (* Train.every_non_literal_on_host g; *)
   let update = Train.grad_update g in
   let jitted = Backend.jit ctx IDX.empty update.fwd_bprop in

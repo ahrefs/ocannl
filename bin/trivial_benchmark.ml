@@ -61,8 +61,8 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch in
 
   let%track_sexp result : PrintBox_utils.table_row_spec =
-    Train.set_on_host learning_rate.value;
-    Train.set_on_host scalar_loss.value;
+    Train.set_hosted learning_rate.value;
+    Train.set_hosted scalar_loss.value;
     let weight_decay : float = 0.0001 in
     let _n_batches : int = n_batches in
     let _len : int = len in
@@ -138,7 +138,7 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
       let indices = Array.init (Array.length @@ Arrayjit.Ndarray.dims a) ~f:(fun i -> i - 5) in
       Arrayjit.Ndarray.render_array ~indices a];
     let%op mlp_result = mlp "point" in
-    Train.set_on_host mlp_result.value;
+    Train.set_on_host Volatile mlp_result.value;
     (* By using sgd_jitted.context here, we don't need to copy the parameters back to the host. *)
     let result_jitted =
       Backend.jit sgd_update.context IDX.empty @@ Block_comment ("trivial infer", mlp_result.forward)

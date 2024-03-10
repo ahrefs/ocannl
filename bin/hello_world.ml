@@ -53,7 +53,7 @@ let hello3 () =
   let hey = TDSL.O.(!~"hey") in
   let zero_to_twenty = TDSL.range 20 in
   let y = TDSL.O.(( + ) ~label:[ "y" ] (hey * zero_to_twenty) zero_to_twenty) in
-  Train.set_on_host hey.value;
+  Train.set_hosted hey.value;
   let jitted = Backend.jit ctx IDX.empty @@ Train.forward y in
   if Backend.from_host jitted.context hey.value then Stdio.printf "Transferred <hey> to device.\n%!";
   if Backend.from_host jitted.context zero_to_twenty.value then

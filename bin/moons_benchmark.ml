@@ -97,8 +97,8 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     let last_loss = ref Float.infinity in
     let start_time = Time_now.nanoseconds_since_unix_epoch () in
 
-    Train.set_on_host learning_rate.value;
-    Train.set_on_host scalar_loss.value;
+    Train.set_hosted learning_rate.value;
+    Train.set_hosted scalar_loss.value;
     let weight_decay : float = 0.0001 in
     let update = Train.grad_update ~setup_for_parallel:true scalar_loss in
     let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
@@ -160,7 +160,7 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
     let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
     let%op mlp_result = mlp "point" in
-    Train.set_on_host mlp_result.value;
+    Train.set_on_host Volatile mlp_result.value;
     (* By using sgd_jitted.context here, we don't need to copy the parameters back to the host. *)
     let result_jitted =
       Backend.jit sgd_update.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)

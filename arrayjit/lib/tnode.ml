@@ -2,11 +2,20 @@ open Base
 module Lazy = Utils.Lazy
 module Nd = Ndarray
 
-type work = Work of ((module Minidebug_runtime.Debug_runtime) -> unit -> unit) [@@unboxed] [@@deriving sexp_of]
+type work = Work of ((module Minidebug_runtime.Debug_runtime) -> unit -> unit)
+[@@unboxed] [@@deriving sexp_of]
 
 let[@inline] run debug_runtime (Work work) = work debug_runtime ()
 
+type memory_type =
+  | Constant  (** The tensor node does not change after initialization. *)
+  | Nonconstant  (** One of: [Changed_on_devices], [Volatile]. *)
+  | Changed_on_devices  (** The tensor node will only change on host via a [to_host] call. *)
+  | Volatile  (** The tensor node will only change on any device via a [from_host] or [merge] call. *)
+[@@deriving sexp, compare, equal]
+
 type memory_mode =
+  | Effectively_constant  (** Either [Hosted Constant], or a subset of [Virtual]. *)
   | Virtual  (** The tensor node's computations are inlined on a per-scalar basis. *)
   | Never_virtual  (** One of: [Local], [On_device], [Hosted]. *)
   | Local
@@ -18,9 +27,10 @@ type memory_mode =
           calls. It is available for merging across devices (for devices that support merging / P2P),
           but not (directly) for visualization or storing to disk. *)
   | Materialized  (** One of: [On_device], [Hosted]. *)
-  | Hosted
+  | Hosted of memory_type
       (** The tensor node is stored in a globally addressable memory, in addition to on devices
-          where it is computed with (or as part of one of them, if "hosting on device").
+          where it is computed with (or as part of one of them, if "hosting on device",
+          or only on the host and not on devices, for some backends).
           It is available for all operations, and visible to OCaml programs as an {!Ndarray}
           (the optional [array] of {!t}). *)
 [@@deriving sexp, compare, equal]
@@ -44,31 +54,45 @@ let compare a1 a2 = compare_int a1.id a2.id
 
 let default_to_most_local tn provenance =
   match tn.memory_mode with
-  | None -> tn.memory_mode <- Some (Virtual, provenance)
+  | None | Some (Effectively_constant, _) -> tn.memory_mode <- Some (Virtual, provenance)
   | Some (Never_virtual, _) -> tn.memory_mode <- Some (Local, provenance)
   | Some (Device_only, _) -> tn.memory_mode <- Some (Local, provenance)
   | Some (Materialized, _) -> tn.memory_mode <- Some (On_device, provenance)
-  | Some ((Virtual | Local | On_device | Hosted), _) -> ()
+  | Some ((Virtual | Local | On_device | Hosted _), _) -> ()
 
-let is_hosted_force tn provenance =
+let is_hosted_force ?specifically tn provenance =
   default_to_most_local tn provenance;
-  match tn.memory_mode with
-  | None -> assert false
-  | Some ((Virtual | Local | Device_only | On_device), _) -> false
-  | Some (Hosted, _) -> true
-  | Some ((Never_virtual | Materialized), _) -> assert false
+  match (tn.memory_mode, specifically) with
+  | None, _ -> assert false
+  | Some ((Virtual | Local | Device_only | On_device), _), _ -> false
+  | Some (Hosted _, _), None -> true
+  | Some (Hosted memtyp, _), Some query -> equal_memory_type memtyp query
+  | Some ((Never_virtual | Materialized | Effectively_constant), _), _ -> assert false
 
 let is_materialized_force tn provenance =
   default_to_most_local tn provenance;
   match tn.memory_mode with
   | None -> assert false
   | Some ((Virtual | Local), _) -> false
-  | Some ((On_device | Hosted | Materialized), _) -> true
-  | Some ((Never_virtual | Device_only), _) -> assert false
+  | Some ((On_device | Hosted _ | Materialized), _) -> true
+  | Some ((Never_virtual | Device_only | Effectively_constant), _) -> assert false
 
 let known_not_materialized tn = match tn.memory_mode with Some ((Virtual | Local), _) -> true | _ -> false
+
+let known_constant tn =
+  match tn.memory_mode with Some ((Effectively_constant | Hosted Constant), _) -> true | _ -> false
+
 let known_non_virtual tn = match tn.memory_mode with None | Some (Virtual, _) -> false | _ -> true
-let mode_is_unspecified tn = match tn.memory_mode with None | Some (Never_virtual, _) -> true | _ -> false
+
+let known_not_param tn =
+  match tn.memory_mode with
+  | Some ((Virtual | Local | Effectively_constant | Device_only | On_device | Hosted (Constant | Volatile)), _)
+    ->
+      true
+  | _ -> false
+
+let mode_is_unspecified tn =
+  match tn.memory_mode with None | Some ((Never_virtual | Effectively_constant), _) -> true | _ -> false
 
 let update_memory_mode tn mode provenance =
   match (tn.memory_mode, mode) with
@@ -80,6 +104,13 @@ let update_memory_mode tn mode provenance =
            [%string
              "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} for %{name tn}: cannot be \
               virtual"]
+  | Some ((Virtual | Hosted Constant), _), Effectively_constant -> ()
+  | Some ((Never_virtual | Materialized), _), Effectively_constant
+  | Some (Effectively_constant, _), (Never_virtual | Materialized | Hosted Constant) ->
+      tn.memory_mode <- Some (Hosted Constant, provenance)
+  | Some (Hosted Nonconstant, _), Hosted (Changed_on_devices | Volatile) ->
+      tn.memory_mode <- Some (mode, provenance)
+  | Some (Hosted (Changed_on_devices | Volatile), _), Hosted Nonconstant -> ()
   | Some (Never_virtual, _), mode -> tn.memory_mode <- Some (mode, provenance)
   | Some (Virtual, prov2), Never_virtual ->
       raise
@@ -89,9 +120,9 @@ let update_memory_mode tn mode provenance =
               virtual"]
   | Some (_, _), Never_virtual -> ()
   | Some (Device_only, _), (Local | On_device) -> tn.memory_mode <- Some (mode, provenance)
-  | Some (Materialized, _), (On_device | Hosted) -> tn.memory_mode <- Some (mode, provenance)
+  | Some (Materialized, _), (On_device | Hosted _) -> tn.memory_mode <- Some (mode, provenance)
   | Some ((Local | On_device), _), Device_only -> ()
-  | Some ((On_device | Hosted), _), Materialized -> ()
+  | Some ((On_device | Hosted _), _), Materialized -> ()
   | Some (Device_only, _), Materialized | Some (Materialized, _), Device_only ->
       tn.memory_mode <- Some (On_device, provenance)
   | Some (_, prov2), _ ->

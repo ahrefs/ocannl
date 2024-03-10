@@ -30,14 +30,8 @@ let fresh_backend ?backend_name () =
   reinitialize backend;
   backend
 
-let literal_heuristic (a : Tn.t) =
-  try
-    ignore (Float.of_string (List.hd_exn a.label) : float);
-    true
-  with _ -> false
-
 let is_param t =
-  match t with { Tensor.children = []; diff = Some _; _ } -> not @@ literal_heuristic t.value | _ -> false
+  match t with { Tensor.children = []; diff = Some _; _ } -> not @@ Tn.known_not_param t.value | _ -> false
 
 let get_params t =
   let rec loop accu { Tensor.subtensor = t; _ } =
@@ -45,13 +39,14 @@ let get_params t =
   in
   loop (Set.empty (module Tensor)) { subtensor = t; embedded = true }
 
-let set_on_host (a : Tn.t) = Tn.update_memory_mode a Hosted 27
+let set_on_host memtype (a : Tn.t) = Tn.update_memory_mode a (Hosted memtype) 27
 let set_materialized (a : Tn.t) = Tn.update_memory_mode a Materialized 28
+let set_hosted (a : Tn.t) = Tn.update_memory_mode a (Hosted Changed_on_devices) 41
 
 (** Sets the tensor's value as "fully on host",
     returns the tensor's forward code with a label-derived comment. *)
 let forward t =
-  set_on_host t.Tensor.value;
+  set_on_host Changed_on_devices t.Tensor.value;
   let label = Option.value ~default:"tensor" @@ List.last t.Tensor.value.label in
   Asgns.Block_comment (label ^ " fwd", t.forward)
 
@@ -68,7 +63,7 @@ type updaten = {
     Sets the tensor's value as "fully on host". If [setup_for_parallel] is true (false by default),
     sets the parameters and their gradients as "non-local" (on-device). *)
 let grad_update ?(setup_for_parallel = false) l =
-  set_on_host l.Tensor.value;
+  set_on_host Changed_on_devices l.Tensor.value;
   let params = get_params l in
   if setup_for_parallel then Set.iter params ~f:(fun p -> set_materialized (Option.value_exn p.diff).grad);
   let label = label_suffix l.value.label in
@@ -159,7 +154,8 @@ let%track_sexp round_robin fs parallel_jitbs jitbs ~sync : unit =
 let set_virtual (a : Tn.t) = Tn.update_memory_mode a Virtual 29
 
 let every_non_literal_on_host =
-  Tensor.iter_embedded_arrays ~f:(fun a -> if not @@ literal_heuristic a then set_on_host a)
+  Tensor.iter_embedded_arrays ~f:(fun a ->
+      if Tn.mode_is_unspecified a && not (Tn.known_constant a) then set_hosted a)
 
 let%debug_sexp all_host_to_device (type context) (module Backend : Backend_type with type context = context)
     context =

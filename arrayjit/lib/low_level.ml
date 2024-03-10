@@ -235,11 +235,11 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
              involving the tensor node. *);
       if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then (
         traced.read_only <- true;
-        if Tn.mode_is_unspecified tn then Tn.update_memory_mode tn Hosted 37
+        if Tn.mode_is_unspecified tn then Tn.update_memory_mode tn (Hosted Constant) 37
         else Tn.update_memory_mode tn Materialized 35);
       if Hashtbl.exists traced.accesses ~f:is_recurrent then (
         traced.read_before_write <- true;
-        if Tn.mode_is_unspecified tn then Tn.update_memory_mode tn Hosted 38
+        if Tn.mode_is_unspecified tn then Tn.update_memory_mode tn (Hosted Changed_on_devices) 38
         else Tn.update_memory_mode tn Materialized 36))
 
 let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
