@@ -549,10 +549,15 @@ let jit (old_context : context) ~(name : string) bindings (compiled : Low_level.
       callback ();
       if Utils.settings.debug_log_jitted then
         let rec loop = function
-          | [] -> ()
+          | [] -> []
           | line :: more when String.is_empty line -> loop more
+          | "COMMENT: end" :: more -> more
           | comment :: more when String.is_prefix comment ~prefix:"COMMENT: " ->
-              [%log String.chop_prefix_exn ~prefix:"COMMENT: " comment];
+              let more =
+                [%log_entry
+                  String.chop_prefix_exn ~prefix:"COMMENT: " comment;
+                  loop more]
+              in
               loop more
           | source :: trace :: more when String.is_prefix source ~prefix:"# " ->
               (let source =
@@ -571,7 +576,7 @@ let jit (old_context : context) ~(name : string) bindings (compiled : Low_level.
               [%log _line];
               loop more
         in
-        loop (Stdio.In_channel.read_lines log_file_name)
+        assert (List.is_empty @@ loop (Stdio.In_channel.read_lines log_file_name))
     in
     Tn.Work work
   in

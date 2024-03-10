@@ -65,7 +65,7 @@ let remove_updates array c =
   in
   rm true c
 
-let sequential = List.fold_right ~init:Noop ~f:(fun st sts -> Seq (st, sts))
+let sequential l = Option.value ~default:Noop @@ List.reduce l ~f:(fun st sts -> Seq (st, sts))
 
 module Debug_runtime = Utils.Debug_runtime
 
@@ -189,7 +189,7 @@ let%debug_sexp to_low_level code =
           Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops)
         else for_loops
     | Noop -> Low_level.Noop
-    | Block_comment (s, c) -> Low_level.Seq (Comment s, loop c)
+    | Block_comment (s, c) -> Low_level.unflat_lines [Comment s; loop c; Comment "end"]
     | Seq (c1, c2) ->
         let c1 = loop c1 in
         let c2 = loop c2 in
