@@ -146,8 +146,9 @@ let visit ~is_assigned old =
 let is_constexpr_comp traced_store llv =
   let rec loop llv =
     match llv with
-    | Local_scope _ -> false
-    | Get_local _ -> false
+    | Get_local { nd; _ } | Local_scope { id = { nd; _ }; _ } ->
+        let traced = get_node traced_store nd in
+        traced.is_scalar_constexpr
     | Get_global (_, _) -> false
     | Get (tn, _idcs) ->
         let traced = get_node traced_store tn in
