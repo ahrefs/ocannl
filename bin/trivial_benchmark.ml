@@ -35,7 +35,8 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   Random.init (* random_seed *) 0;
   (* Utils.settings.fixed_state_for_init <- Some random_seed; *)
   let len = 64 in
-  let n_batches = 2 * len / batch in
+  let minibatch = batch / num_devices in
+  let n_batches = 2 * len / minibatch in
   (* let epochs = 100 in *)
   let epochs = 4 in
   (* let epochs = 32 in *)
@@ -45,9 +46,9 @@ let classify_point ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   in
   let trivial_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
-  let trivial_flat = TDSL.init_const ~l:"trivial_flat" ~b:[ n_batches; batch ] ~o:[ 1 ] trivial_flat in
+  let trivial_flat = TDSL.init_const ~l:"trivial_flat" ~b:[ n_batches; minibatch ] ~o:[ 1 ] trivial_flat in
   let trivial_classes =
-    TDSL.init_const ~l:"trivial_classes" ~b:[ n_batches; batch ] ~o:[ 1 ] trivial_classes
+    TDSL.init_const ~l:"trivial_classes" ~b:[ n_batches; minibatch ] ~o:[ 1 ] trivial_classes
   in
   let%op mlp x = "b" 1 + ("w" * x) in
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in

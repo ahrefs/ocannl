@@ -281,7 +281,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
                   needed_on_host := Set.add !needed_on_host p;
                   None))
   in
-  let sync (devices_to_sync : int) : unit =
+  let%track_sexp sync (devices_to_sync : int) : unit =
     Arrayjit.Utils.parallel_merge merge devices_to_sync;
     Tn.run debug_rt @@ sgd_update.schedule ();
     Set.iter !needed_on_host ~f:(fun p ->

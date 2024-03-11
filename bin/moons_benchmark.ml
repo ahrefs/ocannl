@@ -42,7 +42,8 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   let hid_dim = 4 in
   (* let len = 64 * 32 in *)
   let len = 64 * 8 in
-  let n_batches = 2 * len / batch in
+  let minibatch = batch / num_devices in
+  let n_batches = 2 * len / minibatch in
   (* let epochs = 100 in *)
   (* let epochs = 10 in *)
   (* let epochs = 1000 in *)
@@ -60,8 +61,8 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
   in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
-  let moons_flat = TDSL.init_const ~l:"moons_flat" ~b:[ n_batches; batch ] ~o:[ 2 ] moons_flat in
-  let moons_classes = TDSL.init_const ~l:"moons_classes" ~b:[ n_batches; batch ] ~o:[ 1 ] moons_classes in
+  let moons_flat = TDSL.init_const ~l:"moons_flat" ~b:[ n_batches; minibatch ] ~o:[ 2 ] moons_flat in
+  let moons_classes = TDSL.init_const ~l:"moons_classes" ~b:[ n_batches; minibatch ] ~o:[ 1 ] moons_classes in
 
   (* *
      let%op mlp x =
