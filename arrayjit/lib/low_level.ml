@@ -228,7 +228,8 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
   loop_proc Indexing.empty_env llc;
   Hashtbl.iter traced_store ~f:(fun traced ->
       let tn = traced.nd in
-      if Option.is_none tn.memory_mode && traced.is_scalar_constexpr then Tn.update_memory_mode tn Virtual 40;
+      if (not (Tn.known_non_virtual tn)) && traced.is_scalar_constexpr then
+        Tn.update_memory_mode tn Virtual 40;
       if Option.is_none tn.memory_mode && Hashtbl.exists traced.accesses ~f:is_too_many then
         if Hashtbl.exists traced.accesses ~f:is_recurrent then Tn.update_memory_mode tn Never_virtual 1
           (* The tensor node is read-only/recurrent for this computation, but maybe computed by another one.
