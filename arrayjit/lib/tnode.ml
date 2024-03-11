@@ -82,7 +82,8 @@ let known_not_materialized tn = match tn.memory_mode with Some ((Virtual | Local
 let known_constant tn =
   match tn.memory_mode with Some ((Effectively_constant | Hosted Constant), _) -> true | _ -> false
 
-let known_non_virtual tn = match tn.memory_mode with None | Some (Virtual, _) -> false | _ -> true
+let known_non_virtual tn =
+  match tn.memory_mode with None | Some ((Virtual | Effectively_constant), _) -> false | _ -> true
 
 let known_not_param tn =
   match tn.memory_mode with
