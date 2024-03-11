@@ -53,7 +53,7 @@ let forward t =
 let label_suffix label = Option.value ~default:"unknown" @@ List.last label
 
 type updaten = {
-  tensor : Tensor.t;
+  loss : Tensor.t;
   label : string;
   params : (Tensor.t, Tensor.comparator_witness) Base.Set.t;
   fwd_bprop : Asgns.t;
@@ -62,28 +62,28 @@ type updaten = {
 (** Returns the tensor's forward, zeroing gradients, and backprop code wrapped with label-derived comments.
     Sets the tensor's value as "fully on host". If [setup_for_parallel] is true (false by default),
     sets the parameters and their gradients as "non-local" (on-device). *)
-let grad_update ?(setup_for_parallel = false) l =
-  set_on_host Changed_on_devices l.Tensor.value;
-  let params = get_params l in
+let grad_update ?(setup_for_parallel = false) loss =
+  set_on_host Changed_on_devices loss.Tensor.value;
+  let params = get_params loss in
   if setup_for_parallel then Set.iter params ~f:(fun p -> set_materialized (Option.value_exn p.diff).grad);
-  let label = label_suffix l.value.label in
+  let label = label_suffix loss.value.label in
   let fwd_bprop =
-    match l.Tensor.diff with
+    match loss.Tensor.diff with
     | Some diff ->
-        let%cd init_grad = l.grad =: 1 in
+        let%cd init_grad = loss.grad =: 1 in
         Asgns.(
           Block_comment
             ( label ^ " gradient update",
               sequential
                 [
-                  Block_comment (label ^ " fwd", l.forward);
+                  Block_comment (label ^ " fwd", loss.forward);
                   Block_comment (label ^ " zero grads", diff.zero_grads);
                   init_grad;
                   Block_comment (label ^ " bprop", diff.backprop);
                 ] ))
-    | None -> raise @@ Tensor.Session_error ("Train.backprop: tensor is not differentiable", Some l)
+    | None -> raise @@ Tensor.Session_error ("Train.backprop: tensor is not differentiable", Some loss)
   in
-  { tensor = l; label; params; fwd_bprop }
+  { loss; label; params; fwd_bprop }
 
 (** See: {!https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py}. *)
 let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
@@ -247,7 +247,23 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
                      in
                      jitted.Arrayjit.Backends.schedule ()))))
   in
+  let loss_merges =
+    if num_devices < 2 then [| [||] |]
+    else
+      Array.init num_devices ~f:(fun (to_ : int) ->
+          Array.init num_devices ~f:(fun (from : int) ->
+              lazy
+                (let jitted =
+                   Backend.merge ~name_suffix:"loss_merge" updaten.loss.value ~dst:ctxs.(to_)
+                     ~accum:Arrayjit.Ops.Add ~src:ctxs.(from)
+                   |> Option.value_or_thunk ~default:(fun () ->
+                          invalid_arg @@ "Train.parallel_update: loss not available on a device: "
+                          ^ Tn.label updaten.loss.value)
+                 in
+                 jitted.Arrayjit.Backends.schedule ())))
+  in
   let merge ~(from : int) ~(to_ : int) : unit =
+    Tn.run debug_rt @@ Lazy.force loss_merges.(to_).(from);
     List.iter ~f:(Tn.run debug_rt) @@ Lazy.force merges.(to_).(from)
   in
   let needed_on_host = ref @@ Set.empty (module Tn) in
