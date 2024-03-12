@@ -7,22 +7,26 @@ module NTDSL = Operation.NTDSL
 module CDSL = Arrayjit.Low_level.CDSL
 module Utils = Arrayjit.Utils
 
-let num_devices = 5
+let num_devices = 10
 
 let experiment ~seed ~use_builtin_weight_decay () =
   Random.init 0;
   Utils.settings.with_debug <- true;
   Utils.settings.output_debug_files_in_run_directory <- true;
   (* Utils.settings.debug_log_jitted <- true; *)
-  (* let hid_dim = 16 in *)
+  let hid_dim = 16 in
   (* let hid_dim = 4 in *)
   (* let len = 300 in *)
-  let len = 30 in
-  let batch_size = 20 in
+  let len = 600 in
+  (* let len = 30 in *)
+  let init_lr = 0.1 in
+  (* let batch_size = 20 in *)
+  let batch_size = 120 in
   let minibatch_size = batch_size / num_devices in
   let n_batches = 2 * len / minibatch_size in
-  let epochs = 30 in
-  (* let epochs = 10 in *)
+  (* let epochs = 30 in *)
+  let epochs = 100 in
+  (* let epochs = 2 in *)
   let steps = epochs * n_batches in
   Utils.settings.fixed_state_for_init <- Some seed;
   let noise () = Random.float_range (-0.1) 0.1 in
@@ -43,9 +47,9 @@ let experiment ~seed ~use_builtin_weight_decay () =
   in
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_n, bindings = IDX.get_static_symbol bindings in
-  (* let%op mlp x = "b3" + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in *)
-  let%op mlp x = "b" + ("w" * x) in
-  let%op learning_rate = 0.1 *. (!..steps - !@step_n) /. !..steps in
+  let%op mlp x = "b3" + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
+  (* let%op mlp x = "b" + ("w" * x) in *)
+  let%op learning_rate = !.init_lr *. (!..steps - !@step_n) /. !..steps in
   let%op moons_input = moons_flat @| batch_n in
   let%op moons_class = moons_classes @| batch_n in
   let losses = ref [] in
@@ -59,8 +63,8 @@ let experiment ~seed ~use_builtin_weight_decay () =
       (scalar_loss, 0.0002)
     else
       let%op ssq w = (w **. 2) ++ "...|...->... => 0" in
-      (* let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:TDSL.O.( + ) in *)
-      let reg_loss = List.map ~f:ssq [ w; b ] |> List.reduce_exn ~f:TDSL.O.( + ) in
+      let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:TDSL.O.( + ) in
+      (* let reg_loss = List.map ~f:ssq [ w; b ] |> List.reduce_exn ~f:TDSL.O.( + ) in *)
       let%op scalar_loss = ((margin_loss ++ "...|... => 0") /. !..batch_size) + (0.0001 *. reg_loss) in
       (scalar_loss, 0.0)
   in
@@ -159,7 +163,7 @@ let experiment ~seed ~use_builtin_weight_decay () =
   in
   PrintBox_text.output Stdio.stdout plot_lr
 
-let () = experiment ~seed:4 ~use_builtin_weight_decay:true ()
+let () = experiment ~seed:0 ~use_builtin_weight_decay:true ()
 
 let _suspended () =
   for seed = 0 to 19 do

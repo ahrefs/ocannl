@@ -3,6 +3,9 @@ module Debug_runtime = Utils.Debug_runtime
 
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
+type 'code prejitted = { code : 'code; bindings : (Indexing.unit_bindings[@sexp.opaque]); name : string }
+[@@deriving sexp_of]
+
 type 'context jitted = {
   context : 'context;
   schedule : unit -> Tnode.work;
@@ -12,6 +15,8 @@ type 'context jitted = {
 [@@deriving sexp_of]
 
 module type No_device_backend = sig
+  type code
+  type nonrec prejitted = code prejitted
   type context
   type nonrec jitted = context jitted
 
@@ -25,9 +30,12 @@ module type No_device_backend = sig
   val finalize : context -> unit
   (** Finalizes (just) the context. *)
 
+  val sexp_of_code : code -> Sexp.t
+  val sexp_of_prejitted : prejitted -> Sexp.t
   val sexp_of_context : context -> Sexp.t
   val sexp_of_jitted : jitted -> Sexp.t
-  val jit : context -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> jitted
+  val prejit : shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> prejitted
+  val jit : context -> prejitted -> jitted
 
   val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
   (** Cleans up all work on a backend.
@@ -39,7 +47,7 @@ module type No_device_backend = sig
   val to_host : context -> Tnode.t -> bool
   (** If the array is both hosted and in-context, copies from context to host and returns true. *)
 
-  val merge : ?name_suffix:string -> Tnode.t -> dst:context -> accum:Ops.binop -> src:context -> jitted option
+  val merge : ?name_suffix:string -> Tnode.t -> accum:Ops.binop -> src:context -> prejitted option
   (** Merges the array from the source context into the destination context: [dst =: dst accum src].
       If the array is hosted, its state on host is undefined after this operation. (A backend may choose
       to use the host array as a buffer, if that is beneficial.) [name_suffix] is appended to
@@ -77,6 +85,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   }
   [@@deriving sexp_of]
 
+  type code = Backend.code [@@deriving sexp_of]
+  type nonrec prejitted = Backend.prejitted [@@deriving sexp_of]
   type context = { device : device; ctx : Backend.context } [@@deriving sexp_of]
   type nonrec jitted = context jitted [@@deriving sexp_of]
 
@@ -95,8 +105,10 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     await device;
     Backend.finalize ctx
 
-  let jit { ctx; device } ?name bindings code : jitted =
-    let task = Backend.jit ctx ?name bindings code in
+  let prejit = Backend.prejit
+
+  let jit { ctx; device } prejitted : jitted =
+    let task = Backend.jit ctx prejitted in
     let%diagn_sexp schedule () =
       [%log_result "Scheduling", task.name];
       let task = task.schedule () in
@@ -118,24 +130,11 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     await device;
     Backend.to_host ctx
 
-  let merge ?name_suffix la ~dst ~accum ~src =
+  let merge ?name_suffix la ~accum ~src =
     let name_suffix : string = Option.value name_suffix ~default:"" in
     let ord ctx = ctx.device.ordinal in
-    let name_suffix : string = [%string "_on_dev_%{ord dst#Int}_from_dev_%{ord src#Int}_%{name_suffix}"] in
-    Option.map (Backend.merge ~name_suffix la ~dst:dst.ctx ~accum ~src:src.ctx) ~f:(fun task ->
-        let device = dst.device in
-        let%diagn_sexp schedule () =
-          [%log_result "Scheduling-merge", task.name];
-          let task = task.schedule () in
-          let%diagn_rt_sexp work () =
-            await device;
-            if not !(device.keep_spinning) then invalid_arg "Multicore_backend.merge: device not available";
-            device.next_task := Some task;
-            device.wait_for_work.release ()
-          in
-          Tnode.Work work
-        in
-        { task with context = { ctx = task.context; device }; schedule })
+    let name_suffix : string = [%string "_from_dev_%{ord src#Int}_%{name_suffix}"] in
+    Backend.merge ~name_suffix la ~accum ~src:src.ctx
 
   let num_devices () = Domain.recommended_domain_count () - 1
 
@@ -179,6 +178,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 end
 
 module Gccjit_device : No_device_backend with type context = Gccjit_backend.context = struct
+  type code = Gccjit_backend.code [@@deriving sexp_of]
+  type nonrec prejitted = code prejitted [@@deriving sexp_of]
   type context = Gccjit_backend.context [@@deriving sexp_of]
   type nonrec jitted = context jitted [@@deriving sexp_of]
 
@@ -192,25 +193,38 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
   let finalize = finalize
   let sexp_of_context = sexp_of_context
 
-  let jit context ?name bindings code =
-    let name = Option.value name ~default:(Assignments.get_name code) in
-    let context, bindings, schedule, name =
-      jit context ~name bindings @@ Assignments.compile_proc ~name (Indexing.bound_symbols bindings) code
+  let prejit ~shared ?name bindings asgns : prejitted =
+    let name = Option.value name ~default:(Assignments.get_name asgns) in
+    let compiled = Assignments.compile_proc ~name (Indexing.bound_symbols bindings) asgns in
+    let code =
+      if shared then
+        let info, result = prejit ~name ~prejitting:true bindings compiled in
+        Jitted (info, result)
+      else Postponed compiled
     in
-    { context; schedule; bindings; name }
+    { code; bindings; name }
+
+  let jit context (prejitted : prejitted) =
+    let context, bindings, schedule, name =
+      jit context ~name:prejitted.name prejitted.bindings prejitted.code
+    in
+    { context; schedule : unit -> Tnode.work; bindings; name }
 
   let from_host = from_host
   let to_host = to_host
 
-  let merge ?name_suffix la ~dst ~accum ~(src : context) =
+  let merge ?name_suffix la ~accum ~(src : context) =
     let bindings = Indexing.Empty in
-    merge ?name_suffix la ~dst ~accum ~src bindings
-    |> Option.map ~f:(fun (context, bindings, schedule, name) -> { context; schedule; bindings; name })
+    merge ?name_suffix la ~accum ~src bindings
+    |> Option.map ~f:(fun (info, gcc_result) -> { code = Jitted (info, gcc_result); bindings; name })
 end
 
 module Gccjit_backend = Multicore_backend (Gccjit_device)
 
 module Cuda_backend : Backend with type context = Cuda_backend.context = struct
+  (* TODO: currently we do not implement prejitting. *)
+  type code = Low_level.traced_store * Low_level.t [@@deriving sexp_of]
+  type nonrec prejitted = code prejitted [@@deriving sexp_of]
   type context = Cuda_backend.context [@@deriving sexp_of]
   type device = Cuda_backend.device
   type nonrec jitted = context jitted [@@deriving sexp_of]
@@ -226,20 +240,22 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   let sexp_of_context = sexp_of_context
   let sexp_of_device = sexp_of_device
 
-  let jit context ?name bindings code =
-    let name = Option.value name ~default:(Assignments.get_name code) in
-    let context, bindings, schedule =
-      jit context ~name bindings @@ Assignments.compile_proc ~name (Indexing.bound_symbols bindings) code
-    in
+  let prejit ~shared:_ ?name bindings asgns : prejitted =
+    let name = Option.value name ~default:(Assignments.get_name asgns) in
+    let code = Assignments.compile_proc ~name (Indexing.bound_symbols bindings) asgns in
+    { code; bindings; name }
+
+  let jit context (prejitted : prejitted) =
+    let context, bindings, schedule = jit context ~name:prejitted.name prejitted.bindings prejitted.code in
     { context; schedule; bindings; name }
 
   let from_host = from_host
   let to_host = to_host
 
-  let merge ?name_suffix la ~dst ~accum ~src =
+  let merge ?name_suffix la ~accum ~(src : context) =
     let bindings = Indexing.Empty in
-    merge ?name_suffix la ~dst ~accum ~src bindings
-    |> Option.map ~f:(fun (context, schedule, name) -> { context; schedule; bindings = []; name })
+    ignore (bindings, name_suffix, la, accum, src);
+    failwith "NOT IMPLEMENTED YET"
 
   let await = await
   let num_devices = num_devices

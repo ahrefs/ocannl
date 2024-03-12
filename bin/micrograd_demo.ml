@@ -66,7 +66,8 @@ let experiment seed ~use_builtin_weight_decay () =
   let module Backend = (val Train.fresh_backend ()) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  let jitted = Backend.jit ctx bindings (Seq (update.fwd_bprop, sgd)) in
+  let jit ?name:n ctx bindings asgns = Backend.(jit ctx @@ prejit ~shared:false ?name:n bindings asgns) in
+  let jitted = jit ctx bindings (Seq (update.fwd_bprop, sgd)) in
   Train.all_host_to_device (module Backend) jitted.context scalar_loss;
   Train.all_host_to_device (module Backend) jitted.context learning_rate;
   (* Stdio.print_endline "\n******** scalar_loss **********";
@@ -106,7 +107,7 @@ let experiment seed ~use_builtin_weight_decay () =
   Train.set_on_host Volatile mlp_result.value;
   (* By using jitted.context here, we don't need to copy the parameters back to the host. *)
   let result_jitted =
-    Backend.jit jitted.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
+    jit jitted.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
   in
   Stdio.print_endline "\n******** mlp_result **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 mlp_result;

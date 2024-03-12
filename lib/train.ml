@@ -229,6 +229,11 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   let param_vals = [%debug_notrace List.map all_params ~f:(fun t -> t.value)] in
   let param_grads = [%debug_notrace List.map all_params ~f:(fun t -> (Option.value_exn t.diff).grad)] in
   let ctxs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.context)] in
+  let jit_merge ~name_suffix ~to_ ~from ~error tn ~accum =
+    let prejitted = Backend.merge ~name_suffix tn ~accum ~src:ctxs.(from) in
+    let prejitted = Option.value_or_thunk prejitted ~default:(fun () -> invalid_arg @@ error ^ Tn.label tn) in
+    Backend.jit ctxs.(to_) prejitted
+  in
   (* By being lazy, we don't need to worry about how devices are paired up. *)
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
   let merges =
@@ -239,11 +244,9 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
               lazy
                 (List.map param_grads ~f:(fun p ->
                      let jitted =
-                       Backend.merge ~name_suffix:"grad_merge" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Add
-                         ~src:ctxs.(from)
-                       |> Option.value_or_thunk ~default:(fun () ->
-                              invalid_arg @@ "Train.parallel_update: gradient not available on a device: "
-                              ^ Tn.label p)
+                       jit_merge ~name_suffix:"grad_merge" ~to_ ~from
+                         ~error:"Train.parallel_update: gradient not available on a device: " p
+                         ~accum:Arrayjit.Ops.Add
                      in
                      jitted.Arrayjit.Backends.schedule ()))))
   in
@@ -254,11 +257,9 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
           Array.init num_devices ~f:(fun (from : int) ->
               lazy
                 (let jitted =
-                   Backend.merge ~name_suffix:"loss_merge" updaten.loss.value ~dst:ctxs.(to_)
-                     ~accum:Arrayjit.Ops.Add ~src:ctxs.(from)
-                   |> Option.value_or_thunk ~default:(fun () ->
-                          invalid_arg @@ "Train.parallel_update: loss not available on a device: "
-                          ^ Tn.label updaten.loss.value)
+                   jit_merge ~name_suffix:"loss_merge" ~to_ ~from
+                     ~error:"Train.parallel_update: loss not available on a device: " updaten.loss.value
+                     ~accum:Arrayjit.Ops.Add
                  in
                  jitted.Arrayjit.Backends.schedule ())))
   in
@@ -274,9 +275,13 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
           let to_ : int = to_m_1 + 1 in
           (* Backends may choose to not store parameters on devices other than the 0th. *)
           List.filter_map param_vals ~f:(fun p ->
-              Backend.merge ~name_suffix:"param_copy" p ~dst:ctxs.(to_) ~accum:Arrayjit.Ops.Arg2 ~src:ctxs.(0)
-              |> function
-              | Some jitted -> Some (jitted.Arrayjit.Backends.schedule ())
+              let prejitted =
+                Backend.merge ~name_suffix:"param_copy" p ~accum:Arrayjit.Ops.Arg2 ~src:ctxs.(0)
+              in
+              match prejitted with
+              | Some prejitted ->
+                  let jitted = Backend.jit ctxs.(to_) prejitted in
+                  Some (jitted.Arrayjit.Backends.schedule ())
               | None ->
                   needed_on_host := Set.add !needed_on_host p;
                   None))

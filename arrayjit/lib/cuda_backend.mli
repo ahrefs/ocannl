@@ -1,3 +1,4 @@
+(* TODO: currently we do not implement prejitting. *)
 type context
 
 val initialize : unit -> unit

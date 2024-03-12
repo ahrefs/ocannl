@@ -22,7 +22,8 @@ let%expect_test "Micrograd README basic example" =
   let%op g = g + (10. /. f) in
   List.iter ~f:(Option.iter ~f:(fun diff -> Train.set_hosted diff.Tensor.grad)) [ a.diff; b.diff ];
   let update = Train.grad_update g in
-  let step = Backend.jit ctx IDX.empty update.fwd_bprop in
+  let jit ?name:n ctx bindings asgns = Backend.(jit ctx @@ prejit ~shared:false ?name:n bindings asgns) in
+  let step = jit ctx IDX.empty update.fwd_bprop in
   Train.run step;
   Backend.await device;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ g;
@@ -115,7 +116,8 @@ let%expect_test "Micrograd half-moons example" =
   Train.set_hosted learning_rate.value;
   let update = Train.grad_update scalar_loss in
   let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
-  let sgd_jitted = Backend.jit ctx bindings (Seq (update.fwd_bprop, sgd)) in
+  let jit ?name:n ctx bindings asgns = Backend.(jit ctx @@ prejit ~shared:false ?name:n bindings asgns) in
+  let sgd_jitted = jit ctx bindings (Seq (update.fwd_bprop, sgd)) in
   Train.all_host_to_device (module Backend) sgd_jitted.context scalar_loss;
   Train.all_host_to_device (module Backend) sgd_jitted.context learning_rate;
   for _epoch = 1 to epochs do
@@ -138,7 +140,7 @@ let%expect_test "Micrograd half-moons example" =
   let%op mlp_result = mlp "point" in
   Train.set_on_host Volatile mlp_result.value;
   let result_jitted =
-    Backend.jit sgd_jitted.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
+    jit sgd_jitted.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
   in
   let callback (x, y) =
     Tensor.set_values point [| x; y |];
