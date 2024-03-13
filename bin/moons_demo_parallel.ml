@@ -77,8 +77,9 @@ let experiment ~seed ~use_builtin_weight_decay () =
   let num_devices = min num_devices @@ Backend.num_devices () in
   let devices = Array.init num_devices ~f:(fun ordinal -> Backend.get_device ~ordinal) in
   let contexts = Array.map devices ~f:Backend.init in
-  let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit ctx bindings update.fwd_bprop) in
-  let sgd_update = Backend.jit grad_updates.(0).context bindings sgd in
+  let grad_update = Backend.prejit ~shared:true bindings update.fwd_bprop in
+  let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit ctx grad_update) in
+  let sgd_update = Backend.jit_code grad_updates.(0).context bindings sgd in
   Train.all_host_to_device (module Backend) sgd_update.context scalar_loss;
   Train.all_host_to_device (module Backend) sgd_update.context learning_rate;
   let open Tensor.O in
@@ -114,7 +115,7 @@ let experiment ~seed ~use_builtin_weight_decay () =
   Train.set_on_host Volatile mlp_result.value;
   (* By using jitted.context here, we don't need to copy the parameters back to the host. *)
   let result_jitted =
-    Backend.jit sgd_update.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
+    Backend.jit_code sgd_update.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
   in
   Stdio.print_endline "\n******** mlp_result **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 mlp_result;

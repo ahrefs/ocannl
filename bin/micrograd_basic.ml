@@ -20,8 +20,7 @@ let _suspended () =
   Train.every_non_literal_on_host c;
   (* List.iter ~f:(function Some diff -> Train.set_hosted diff.grad | None -> ()) [ a.diff; b.diff ]; *)
   let update = Train.grad_update c in
-  let jit ?name:n ctx bindings asgns = Backend.(jit ctx @@ prejit ~shared:false ?name:n bindings asgns) in
-  let jitted = jit ctx IDX.empty update.fwd_bprop in
+  let jitted = Backend.jit_code ctx IDX.empty update.fwd_bprop in
   Train.sync_run (module Backend) jitted c;
   Tensor.print_tree ~with_grad:true ~depth:9 c;
   Stdio.print_endline "\n";
@@ -48,8 +47,7 @@ let () =
   List.iter ~f:(function Some diff -> Train.set_hosted diff.grad | None -> ()) [ a.diff; b.diff ];
   (* Train.every_non_literal_on_host g; *)
   let update = Train.grad_update g in
-  let jit ?name:n ctx bindings asgns = Backend.(jit ctx @@ prejit ~shared:false ?name:n bindings asgns) in
-  let jitted = jit ctx IDX.empty update.fwd_bprop in
+  let jitted = Backend.jit_code ctx IDX.empty update.fwd_bprop in
   Train.sync_run (module Backend) jitted g;
   (* Tensor.print_tree ~with_grad:true ~depth:9 g; *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ g;

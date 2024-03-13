@@ -26,18 +26,19 @@ let benchmark_overhead backend () =
   let update_f = Train.grad_update f in
   (* Initialize the context with a mock update of x to ensure that it is not optimized as a constant. *)
   let%cd mock_update_x = x =: 42 in
-  let init_jitted_x = jit ~name:"init_assign_x" ctx IDX.empty mock_update_x in
-  let jitted_f = jit init_jitted_x.context IDX.empty update_f.fwd_bprop in
+  let init_jitted_x = jit_code ~name:"init_assign_x" ctx IDX.empty mock_update_x in
+  let jitted_f = jit_code init_jitted_x.context IDX.empty update_f.fwd_bprop in
   Tensor.print_tree ~with_grad:true ~with_backend_info:true ~depth:9 f;
   Tensor.iter_embedded_arrays f ~f:(fun a ->
       if from_host jitted_f.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
 
   let xs = Array.init n_data ~f:Float.(fun i -> of_int i - (of_int n_data /. 2.)) in
   let open Tensor.O in
+  (* Note: this compiles entirely fresh code for each step of the loop. *)
   let ys =
     Array.map xs ~f:(fun v ->
         let%cd update_x = x =: !.v in
-        let jitted_x = jit ~name:"assign_x" jitted_f.context IDX.empty update_x in
+        let jitted_x = jit_code ~name:"assign_x" jitted_f.context IDX.empty update_x in
         Train.run jitted_x;
         await device;
         Train.run jitted_f;

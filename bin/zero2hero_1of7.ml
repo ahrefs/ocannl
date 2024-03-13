@@ -15,8 +15,7 @@ let _suspended () =
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
   let code = Train.grad_update v in
-  let jit ?name:n ctx bindings asgns = Backend.(jit ctx @@ prejit ~shared:false ?name:n bindings asgns) in
-  let jitted = jit ctx IDX.empty code.fwd_bprop in
+  let jitted = Backend.jit_code ctx IDX.empty code.fwd_bprop in
   (* jitted.run (); *)
   Train.sync_run (module Backend) jitted v;
   Stdio.printf "\n%!";
@@ -32,9 +31,7 @@ let _suspended () =
   let%op f5 = f 5 in
   let module Backend = (val Train.fresh_backend ()) in
   Train.every_non_literal_on_host f5;
-  let jitted =
-    Backend.(jit (init @@ get_device ~ordinal:0) @@ prejit ~shared:false IDX.empty @@ Train.forward f5)
-  in
+  let jitted = Backend.(jit_code (init @@ get_device ~ordinal:0) IDX.empty @@ Train.forward f5) in
   Train.sync_run (module Backend) jitted f5;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
@@ -64,8 +61,7 @@ let () =
   let module Backend = (val Train.fresh_backend ()) in
   let ctx = Backend.init @@ Backend.get_device ~ordinal:0 in
   let update = Train.grad_update fx in
-  let jit ?name:n ctx bindings asgns = Backend.(jit ctx @@ prejit ~shared:false ?name:n bindings asgns) in
-  let jitted = jit ctx bindings update.fwd_bprop in
+  let jitted = Backend.jit_code ctx bindings update.fwd_bprop in
   let step_ref = IDX.find_exn jitted.bindings step_sym in
   let ys = Array.create ~len:size 0. and dys = Array.create ~len:size 0. in
   let open Tensor.O in
@@ -104,7 +100,7 @@ let _suspended () =
   let open (val Train.fresh_backend ()) in
   let device = get_device ~ordinal:0 in
   let update = Train.grad_update l in
-  let jitted = jit (init device) @@ prejit ~shared:false IDX.empty @@ update.fwd_bprop in
+  let jitted = jit_code (init device) IDX.empty @@ update.fwd_bprop in
   Tensor.iter_embedded_arrays l ~f:(fun a ->
       if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
   Train.run jitted;
@@ -117,9 +113,7 @@ let _suspended () =
       which are specified in the tensor in the brackets.|};
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   let%op learning_rate = 0.1 in
-  let jitted =
-    jit jitted.context @@ prejit ~shared:false IDX.empty @@ Train.sgd_update ~learning_rate update
-  in
+  let jitted = jit_code jitted.context IDX.empty @@ Train.sgd_update ~learning_rate update in
   (* learning_rate is virtual so this will not print anything. *)
   Tensor.iter_embedded_arrays learning_rate ~f:(fun a ->
       if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
@@ -141,7 +135,7 @@ let _suspended () =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   (* We could reuse the jitted code if we did not use `jit_and_run`. *)
   let update = Train.grad_update l in
-  let jitted = jit jitted.context @@ prejit ~shared:false IDX.empty update.fwd_bprop in
+  let jitted = jit_code jitted.context IDX.empty update.fwd_bprop in
   Train.run jitted;
   await device;
   Tensor.iter_embedded_arrays l ~f:(fun a ->

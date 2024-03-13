@@ -36,6 +36,7 @@ module type No_device_backend = sig
   val sexp_of_jitted : jitted -> Sexp.t
   val prejit : shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> prejitted
   val jit : context -> prejitted -> jitted
+  val jit_code : context -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> jitted
 
   val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
   (** Cleans up all work on a backend.
@@ -121,6 +122,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       Tnode.Work work
     in
     { task with context = { ctx = task.context; device }; schedule }
+
+  let jit_code context ?name bindings asgns = jit context @@ prejit ~shared:false ?name bindings asgns
 
   let from_host { device; ctx } =
     await device;
@@ -210,6 +213,7 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
     in
     { context; schedule : unit -> Tnode.work; bindings; name }
 
+  let jit_code context ?name bindings asgns = jit context @@ prejit ~shared:false ?name bindings asgns
   let from_host = from_host
   let to_host = to_host
 
@@ -249,6 +253,7 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
     let context, bindings, schedule = jit context ~name:prejitted.name prejitted.bindings prejitted.code in
     { context; schedule; bindings; name }
 
+  let jit_code context ?name bindings asgns = jit context @@ prejit ~shared:false ?name bindings asgns
   let from_host = from_host
   let to_host = to_host
 

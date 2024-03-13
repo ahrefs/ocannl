@@ -103,8 +103,9 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     let weight_decay : float = 0.0001 in
     let update = Train.grad_update ~setup_for_parallel:true scalar_loss in
     let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
-    let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit ctx bindings update.fwd_bprop) in
-    let sgd_update = Backend.jit grad_updates.(0).context bindings sgd in
+    let grad_update = Backend.prejit ~shared:true bindings update.fwd_bprop in
+    let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit ctx grad_update) in
+    let sgd_update = Backend.jit_code grad_updates.(0).context bindings sgd in
     Train.all_host_to_device (module Backend) sgd_update.context scalar_loss;
     Train.all_host_to_device (module Backend) sgd_update.context learning_rate;
     let epoch_loss = ref 0. in
@@ -164,7 +165,7 @@ let classify_moons ~random_seed ~on_device ~inlining_cutoff ~num_devices ~batch 
     Train.set_on_host Volatile mlp_result.value;
     (* By using sgd_jitted.context here, we don't need to copy the parameters back to the host. *)
     let result_jitted =
-      Backend.jit sgd_update.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
+      Backend.jit_code sgd_update.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
     in
     let callback ((x : float), (y : float)) : bool =
       Tensor.set_values point [| x; y |];

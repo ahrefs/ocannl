@@ -14,8 +14,7 @@ let%expect_test "Graph drawing recompile" =
   let open Tensor.O in
   let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.set_hosted x.value;
-  let jit ?name:n ctx bindings asgns = Backend.(jit ctx @@ prejit ~shared:false ?name:n bindings asgns) in
-  let f_jitted = jit ctx IDX.empty @@ Train.forward f in
+  let f_jitted = Backend.jit_code ctx IDX.empty @@ Train.forward f in
   Tensor.print_tree ~with_grad:true ~depth:9 f;
   [%expect
     {|
@@ -43,7 +42,7 @@ let%expect_test "Graph drawing recompile" =
   let ys =
     Array.map xs ~f:(fun v ->
         (* This is inefficient because it compiles the argument update inside the loop. *)
-        let x_jitted = jit f_jitted.context IDX.empty ~name:"assign_x" [%cd x =: !.v] in
+        let x_jitted = Backend.jit_code f_jitted.context IDX.empty ~name:"assign_x" [%cd x =: !.v] in
         Train.run x_jitted;
         Train.run f_jitted;
         Backend.await device;
@@ -132,8 +131,7 @@ let%expect_test "Graph drawing fetch" =
   Train.set_hosted x.value;
   let%op fx = f x in
   let update = Train.grad_update fx in
-  let jit ?name:n ctx bindings asgns = Backend.(jit ctx @@ prejit ~shared:false ?name:n bindings asgns) in
-  let fx_jitted = jit ctx bindings update.fwd_bprop in
+  let fx_jitted = Backend.jit_code ctx bindings update.fwd_bprop in
   let ys =
     Array.map xs ~f:(fun _ ->
         Train.run fx_jitted;
@@ -208,9 +206,8 @@ let%expect_test "Simple gradients hosted" =
   Train.every_non_literal_on_host learning_rate;
   let grad = Train.grad_update l in
   let sgd = Train.sgd_update ~learning_rate grad in
-  let jit ?name:n ctx bindings asgns = Backend.(jit ctx @@ prejit ~shared:false ?name:n bindings asgns) in
-  let grad_jitted = jit ctx IDX.empty grad.fwd_bprop in
-  let sgd_jitted = jit grad_jitted.context IDX.empty sgd in
+  let grad_jitted = Backend.jit_code ctx IDX.empty grad.fwd_bprop in
+  let sgd_jitted = Backend.jit_code grad_jitted.context IDX.empty sgd in
   (* Check out the initial state without running a forward pass. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect {| |}];
@@ -299,9 +296,8 @@ let%expect_test "Simple gradients virtual" =
   let%op learning_rate = 0.1 in
   let grad = Train.grad_update l in
   let sgd = Train.sgd_update ~learning_rate grad in
-  let jit ?name:n ctx bindings asgns = Backend.(jit ctx @@ prejit ~shared:false ?name:n bindings asgns) in
-  let grad_jitted = jit ctx IDX.empty grad.fwd_bprop in
-  let sgd_jitted = jit grad_jitted.context IDX.empty sgd in
+  let grad_jitted = Backend.jit_code ctx IDX.empty grad.fwd_bprop in
+  let sgd_jitted = Backend.jit_code grad_jitted.context IDX.empty sgd in
   (* Check out the initial state without running a forward pass. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect {| |}];
@@ -391,8 +387,7 @@ let%expect_test "2D neuron hosted" =
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
   let update = Train.grad_update v in
-  let jit ?name:n ctx bindings asgns = Backend.(jit ctx @@ prejit ~shared:false ?name:n bindings asgns) in
-  let jitted = jit ctx IDX.empty update.fwd_bprop in
+  let jitted = Backend.jit_code ctx IDX.empty update.fwd_bprop in
   Train.run jitted;
   Backend.await device;
   Train.all_device_to_host (module Backend) jitted.context v;
@@ -419,8 +414,7 @@ let%expect_test "2D neuron virtual" =
   let ctx = Backend.init device in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   let update = Train.grad_update v in
-  let jit ?name:n ctx bindings asgns = Backend.(jit ctx @@ prejit ~shared:false ?name:n bindings asgns) in
-  let jitted = jit ctx IDX.empty update.fwd_bprop in
+  let jitted = Backend.jit_code ctx IDX.empty update.fwd_bprop in
   Train.run jitted;
   Backend.await device;
   Train.all_device_to_host (module Backend) jitted.context v;
