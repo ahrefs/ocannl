@@ -3,9 +3,6 @@ module Debug_runtime = Utils.Debug_runtime
 
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-type 'code prejitted = { code : 'code; bindings : (Indexing.unit_bindings[@sexp.opaque]); name : string }
-[@@deriving sexp_of]
-
 type 'context jitted = {
   context : 'context;
   schedule : unit -> Tnode.work;
@@ -16,7 +13,6 @@ type 'context jitted = {
 
 module type No_device_backend = sig
   type code
-  type nonrec prejitted = code prejitted
   type context
   type nonrec jitted = context jitted
 
@@ -31,11 +27,10 @@ module type No_device_backend = sig
   (** Finalizes (just) the context. *)
 
   val sexp_of_code : code -> Sexp.t
-  val sexp_of_prejitted : prejitted -> Sexp.t
   val sexp_of_context : context -> Sexp.t
   val sexp_of_jitted : jitted -> Sexp.t
-  val prejit : shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> prejitted
-  val jit : context -> prejitted -> jitted
+  val prejit : shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> code
+  val jit : context -> code -> jitted
   val jit_code : context -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> jitted
 
   val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
@@ -48,7 +43,7 @@ module type No_device_backend = sig
   val to_host : context -> Tnode.t -> bool
   (** If the array is both hosted and in-context, copies from context to host and returns true. *)
 
-  val merge : ?name_suffix:string -> Tnode.t -> accum:Ops.binop -> src:context -> prejitted option
+  val merge : ?name_suffix:string -> Tnode.t -> accum:Ops.binop -> src:context -> code option
   (** Merges the array from the source context into the destination context: [dst =: dst accum src].
       If the array is hosted, its state on host is undefined after this operation. (A backend may choose
       to use the host array as a buffer, if that is beneficial.) [name_suffix] is appended to
@@ -87,7 +82,6 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   [@@deriving sexp_of]
 
   type code = Backend.code [@@deriving sexp_of]
-  type nonrec prejitted = Backend.prejitted [@@deriving sexp_of]
   type context = { device : device; ctx : Backend.context } [@@deriving sexp_of]
   type nonrec jitted = context jitted [@@deriving sexp_of]
 
@@ -180,9 +174,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let to_ordinal device = device.ordinal
 end
 
-module Gccjit_device : No_device_backend with type context = Gccjit_backend.context = struct
+module Gccjit_device (* : No_device_backend with type context = Gccjit_backend.context *) = struct
   type code = Gccjit_backend.code [@@deriving sexp_of]
-  type nonrec prejitted = code prejitted [@@deriving sexp_of]
   type context = Gccjit_backend.context [@@deriving sexp_of]
   type nonrec jitted = context jitted [@@deriving sexp_of]
 
@@ -196,21 +189,14 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
   let finalize = finalize
   let sexp_of_context = sexp_of_context
 
-  let prejit ~shared ?name bindings asgns : prejitted =
+  let prejit ~shared ?name bindings asgns =
     let name = Option.value name ~default:(Assignments.get_name asgns) in
     let compiled = Assignments.compile_proc ~name (Indexing.bound_symbols bindings) asgns in
-    let code =
-      if shared then
-        let info, result = prejit ~name ~prejitting:true bindings compiled in
-        Jitted (info, result)
-      else Postponed compiled
-    in
-    { code; bindings; name }
+    if shared then Jitted (prejit ~name ~prejitting:true bindings compiled)
+    else Postponed { compiled; bindings; name }
 
-  let jit context (prejitted : prejitted) =
-    let context, bindings, schedule, name =
-      jit context ~name:prejitted.name prejitted.bindings prejitted.code
-    in
+  let jit context code =
+    let context, bindings, schedule, name = jit context code in
     { context; schedule : unit -> Tnode.work; bindings; name }
 
   let jit_code context ?name bindings asgns = jit context @@ prejit ~shared:false ?name bindings asgns
@@ -219,16 +205,22 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
 
   let merge ?name_suffix la ~accum ~(src : context) =
     let bindings = Indexing.Empty in
-    merge ?name_suffix la ~accum ~src bindings
-    |> Option.map ~f:(fun (info, gcc_result) -> { code = Jitted (info, gcc_result); bindings; name })
+    merge ?name_suffix la ~accum ~src bindings |> Option.map ~f:(fun prejitted -> Jitted prejitted)
 end
 
 module Gccjit_backend = Multicore_backend (Gccjit_device)
 
 module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   (* TODO: currently we do not implement prejitting. *)
-  type code = Low_level.traced_store * Low_level.t [@@deriving sexp_of]
-  type nonrec prejitted = code prejitted [@@deriving sexp_of]
+  type compiled = Low_level.traced_store * Low_level.t [@@deriving sexp_of]
+
+  type nonrec code = {
+    compiled : Low_level.traced_store * Low_level.t;
+    bindings : Indexing.unit_bindings;
+    name : string;
+  }
+  [@@deriving sexp_of]
+
   type context = Cuda_backend.context [@@deriving sexp_of]
   type device = Cuda_backend.device
   type nonrec jitted = context jitted [@@deriving sexp_of]
@@ -244,13 +236,13 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   let sexp_of_context = sexp_of_context
   let sexp_of_device = sexp_of_device
 
-  let prejit ~shared:_ ?name bindings asgns : prejitted =
+  let prejit ~shared:_ ?name bindings asgns =
     let name = Option.value name ~default:(Assignments.get_name asgns) in
-    let code = Assignments.compile_proc ~name (Indexing.bound_symbols bindings) asgns in
-    { code; bindings; name }
+    let compiled = Assignments.compile_proc ~name (Indexing.bound_symbols bindings) asgns in
+    { compiled; bindings; name }
 
-  let jit context (prejitted : prejitted) =
-    let context, bindings, schedule = jit context ~name:prejitted.name prejitted.bindings prejitted.code in
+  let jit context code =
+    let context, bindings, schedule = jit context ~name:code.name code.bindings code.compiled in
     { context; schedule; bindings; name }
 
   let jit_code context ?name bindings asgns = jit context @@ prejit ~shared:false ?name bindings asgns

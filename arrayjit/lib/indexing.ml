@@ -30,13 +30,7 @@ type static_symbol = {
 }
 [@@deriving compare, equal, sexp, hash]
 
-type 'a bindings = Empty | Bind of static_symbol * (int -> 'a) bindings
-
-let rec sexp_of_bindings : 'a. 'a bindings -> Sexp.t =
- fun (type a) (b : a bindings) ->
-  match b with
-  | Empty -> Sexp.Atom "bindings"
-  | Bind (s, bs) -> Sexp.List [ sexp_of_static_symbol s; sexp_of_bindings bs ]
+type 'a bindings = Empty | Bind of static_symbol * (int -> 'a) bindings [@@deriving sexp_of]
 
 let bound_symbols bs =
   let rec loop : 'a. 'a bindings -> static_symbol list =
@@ -48,7 +42,7 @@ let bound_symbols bs =
 (** Helps jitting the bindings. *)
 type 'a variadic = Result of 'a | Param of int ref * (int -> 'a) variadic
 
-type unit_bindings = (unit -> unit) bindings
+type unit_bindings = (unit -> unit) bindings [@@deriving sexp_of]
 type jitted_bindings = (static_symbol, int ref) List.Assoc.t [@@deriving sexp_of]
 
 let rec apply : 'a. 'a variadic -> 'a =

@@ -74,11 +74,21 @@ type info = {
 }
 [@@deriving sexp_of]
 
-type ctx_info = { info : info; mutable ctx_arrays : Ndarray.t Map.M(Tn).t } [@@deriving sexp_of]
+type prejitted = {
+  info : info;
+  bindings : Indexing.unit_bindings;
+  name : string;
+  result : (Gccjit.result[@sexp.opaque]);
+}
+[@@deriving sexp_of]
 
 type code =
-  | Postponed of (Low_level.traced_store * Low_level.t)
-  | Jitted of info * (Gccjit.result[@sexp.opaque])
+  | Postponed of {
+      compiled : Low_level.traced_store * Low_level.t;
+      bindings : Indexing.unit_bindings;
+      name : string;
+    }
+  | Jitted of prejitted
 [@@deriving sexp_of]
 
 type global_array = Ctx_array of Ndarray.t | Param_ptr of Gccjit.rvalue
@@ -309,7 +319,8 @@ let jit_code ~name ~log_functions ~prejitting ~env ({ ctx; func; _ } as info) gl
         (* FIXME(194): Convert according to typ ?= num_typ. *)
         let v = to_d @@ RValue.lvalue @@ LValue.access_array ptr offset in
         ("external " ^ RValue.to_string ptr ^ "[%d]{=%g}", [ offset; v ])
-    | Get_global _ -> failwith "NOT IMPLEMENTED YET"
+    | Get_global (External_unsafe _, None) -> assert false
+    | Get_global (C_function _, Some _) -> failwith "gccjit_backend: FFI with parameters NOT IMPLEMENTED YET"
     | Get (ptr, idcs) ->
         let array = get_array ptr in
         let idcs = lookup env idcs in
@@ -424,7 +435,8 @@ let jit_code ~name ~log_functions ~prejitting ~env ({ ctx; func; _ } as info) gl
         let ptr = RValue.ptr ctx (Type.pointer typ) ptr in
         (* FIXME(194): Convert according to typ ?= num_typ. *)
         RValue.lvalue @@ LValue.access_array ptr offset
-    | Get_global _ -> failwith "NOT IMPLEMENTED YET"
+    | Get_global (External_unsafe _, None) -> assert false
+    | Get_global (C_function _, Some _) -> failwith "gccjit_backend: FFI with parameters NOT IMPLEMENTED YET"
     | Get (array, idcs) ->
         let array = get_array array in
         let idcs = lookup env idcs in
@@ -489,7 +501,7 @@ let%track_sexp jit_func ~name ~prejitting ctx bindings (traced_store, proc) =
     @@ List.mapi symbols ~f:(fun pos { Indexing.static_symbol; _ } ->
            (static_symbol, RValue.param @@ Function.param func pos))
   in
-  let global_arrays = failwith "NOT IMPLEMENTED YET" in
+  let global_arrays = Hashtbl.create (module Tn) in
   let init_block = Block.create ~name:("init_" ^ name) func in
   let log_functions () =
     let file_ptr = Type.(get ctx File_ptr) in
@@ -530,7 +542,7 @@ let%track_sexp jit_func ~name ~prejitting ctx bindings (traced_store, proc) =
   (if Utils.settings.output_debug_files_in_run_directory then
      let f_name = name ^ "-gccjit-debug.c" in
      Context.dump_to_file ctx ~update_locs:true f_name);
-  ctx_info
+  (ctx_info, global_arrays)
 
 let header_sep =
   let open Re in
@@ -546,24 +558,27 @@ let prejit ~(name : string) ~prejitting bindings (compiled : Low_level.traced_st
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)
-  let info = jit_func ~name ~prejitting ctx bindings compiled in
+  let info, _global_arrays = jit_func ~name ~prejitting ctx bindings compiled in
   let result = Context.compile ctx in
   Context.release ctx;
-  (info, result)
+  { info; result; bindings; name }
 
-let jit_prejitted (old_context : context) ~(name : string) bindings arrays result =
+let make_context_arrays _prejitted = failwith "FIXME"
+
+let jit_prejitted (old_context : context) code =
   let label = old_context.label in
-  let context = { label; arrays; result = Some result } in
-  let log_file_name = [%string "debug-%{label}-%{name}.log"] in
+  let name = code.name in
+  let context = { label; arrays = make_context_arrays code; result = Some code.result } in
+  let log_file_name = [%string "debug-%{label}-%{code.name}.log"] in
   let run_variadic =
     let rec link : 'a 'b. ('a -> 'b) Indexing.bindings -> ('a -> 'b) Ctypes.fn -> ('a -> 'b) Indexing.variadic
         =
      fun (type a b) (bs : (a -> b) Indexing.bindings) (cs : (a -> b) Ctypes.fn) ->
       match bs with
-      | Empty -> Indexing.Result (Gccjit.Result.code result name cs)
+      | Empty -> Indexing.Result (Gccjit.Result.code code.result name cs)
       | Bind (_, more) -> Param (ref 0, link more Ctypes.(int @-> cs))
     in
-    link bindings Ctypes.(void @-> returning void)
+    link code.bindings Ctypes.(void @-> returning void)
   in
   let schedule () =
     let callback = Indexing.apply run_variadic in
@@ -603,19 +618,14 @@ let jit_prejitted (old_context : context) ~(name : string) bindings arrays resul
     in
     Tn.Work work
   in
-  (context, Indexing.jitted_bindings bindings run_variadic, schedule, name)
+  (context, Indexing.jitted_bindings code.bindings run_variadic, schedule, name)
 
-let get_global_arrays _info = failwith "NOT IMPLEMENTED YET"
-
-let jit old_context ~name bindings code =
+let jit old_context code =
   match code with
-  | Postponed compiled ->
-      let info, gcc_result = prejit ~name ~prejitting:false bindings compiled in
-      let global_arrays = get_global_arrays info in
-      jit_prejitted old_context ~name bindings global_arrays gcc_result
-  | Jitted (info, gcc_result) ->
-      let global_arrays = get_global_arrays info in
-      jit_prejitted old_context ~name bindings global_arrays gcc_result
+  | Postponed {compiled; bindings; name} ->
+      let code = prejit ~name ~prejitting:false bindings compiled in
+      jit_prejitted old_context code
+  | Jitted code -> jit_prejitted old_context code
 
 let%track_sexp from_host (context : context) (la : Tn.t) : bool =
   match Map.find context.arrays la with
