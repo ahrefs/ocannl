@@ -1,4 +1,5 @@
 open Base
+module Lazy = Utils.Lazy
 (** The code for operating on n-dimensional arrays. *)
 
 module Nd = Ndarray
