@@ -8,8 +8,8 @@ let optimization_level = ref 3
 
 type mem_properties =
   | Local_only  (** The array is only needed for a local computation, is allocated on the stack. *)
-  | Global  (** The array has a copy allocated per-cpu-device, in addition to existing on the host. *)
-  | Constant  (** The array is read directly from the host. *)
+  | From_context  (** The array has a copy allocated per-cpu-device, may or may not exist on the host. *)
+  | Constant_from_host  (** The array is read directly from the host. *)
 [@@deriving sexp, equal, compare, variants]
 
 let root_ctx = ref None
@@ -50,12 +50,12 @@ let init ~label =
 
 type ndarray = {
   nd : Tn.t;  (** The original array. *)
-  hosted_ptr : (Gccjit.rvalue[@sexp.opaque]) option;
-      (** Pointer to the first value of the associated hosted [Ndarray]. *)
-  global_ptr : (Gccjit.rvalue[@sexp.opaque]) option;
-      (** Pointer to the first value of the associated [context.arrays], either an actual pointer value
-          or a function parameter. *)
-  local : (Gccjit.lvalue[@sexp.opaque]) option;  (** A local array, if any. *)
+  mutable ptr : (Gccjit.rvalue[@sexp.opaque]) Lazy.t;
+      (** Pointer to the first value of the associated array.
+      - if [mem = Constant_from_host], the pointer to the first element of the hosted [Ndarray],
+      - if [mem = From_context], either a pointer to [Ndarray] from [context.arrays] when [~shared:false],
+        or the function parameter when [~shared:true],
+      - if [mem = Local_only], the address of the on-the-stack array. *)
   mem : mem_properties;
   dims : int array;
   size_in_bytes : int;
@@ -92,8 +92,6 @@ type code =
   | Jitted of prejitted
 [@@deriving sexp_of]
 
-type global_array = Ctx_array of Ndarray.t | Param_ptr of Gccjit.rvalue
-
 type gccjit_param = Gccjit.param
 type gccjit_lvalue = Gccjit.lvalue
 type gccjit_rvalue = Gccjit.rvalue
@@ -101,6 +99,9 @@ type gccjit_rvalue = Gccjit.rvalue
 let sexp_of_gccjit_param p = Sexp.Atom (Gccjit.Param.to_string p)
 let sexp_of_gccjit_lvalue v = Sexp.Atom (Gccjit.LValue.to_string v)
 let sexp_of_gccjit_rvalue v = Sexp.Atom (Gccjit.RValue.to_string v)
+
+type ctx_nodes = Ctx_arrays of Ndarray.t Map.M(Tn).t ref | Param_ptrs of gccjit_param list ref
+[@@deriving sexp_of]
 
 let jit_array_offset ctx ~idcs ~dims =
   let open Gccjit in
@@ -111,83 +112,91 @@ let jit_array_offset ctx ~idcs ~dims =
 
 let zero_out ctx block arr =
   let open Gccjit in
-  let c_void_ptr = Type.(get ctx Type.Void_ptr) in
   let c_index = Type.get ctx Type.Size_t in
   let c_int = Type.get ctx Type.Int in
-  let cast_void rv = RValue.cast ctx rv c_void_ptr in
-  List.find_map ~f:Fn.id
-    [ Option.map arr.local ~f:(Fn.compose cast_void LValue.address); arr.global_ptr; arr.hosted_ptr ]
-  |> Option.iter ~f:(fun rv_ptr ->
-         Block.eval block
-         @@ RValue.call ctx (Function.builtin ctx "memset")
-              [ rv_ptr; RValue.zero ctx c_int; RValue.int ctx c_index arr.size_in_bytes ])
+  Block.eval block
+  @@ RValue.call ctx (Function.builtin ctx "memset")
+       [ Lazy.force arr.ptr; RValue.zero ctx c_int; RValue.int ctx c_index arr.size_in_bytes ]
 
-let get_array ~debug_log_zero_out { ctx; func; arrays; traced_store; init_block } ~prejitting ctx_arrays
-    (key : Tn.t) : ndarray =
+let prepare_array ~debug_log_zero_out ctx arrays traced_store nodes initializations (key : Tn.t) =
   let open Gccjit in
-  Hashtbl.find_or_add arrays key ~default:(fun () ->
-      let ta = Low_level.(get_node traced_store key) in
-      let dims = Lazy.force key.dims in
-      let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
-      let size_in_bytes = size_in_elems * Ops.prec_in_bytes key.prec in
-      let is_on_host = Tn.is_hosted_force key 33 in
-      let is_materialized = Tn.is_materialized_force key 331 in
-      let is_constant = Tn.is_hosted_force ~specifically:Constant key 332 in
-      assert (Bool.(Option.is_some (Lazy.force key.array) = is_on_host));
-      (* TODO: is the complexity of introducing this function and matching on Ndarray.t needed? *)
-      let array c_typ is_double arr =
+  Hashtbl.update arrays key ~f:(function
+    | Some old -> old
+    | None ->
+        let ta = Low_level.(get_node traced_store key) in
+        let dims = Lazy.force key.dims in
+        let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
+        let size_in_bytes = size_in_elems * Ops.prec_in_bytes key.prec in
+        let is_on_host = Tn.is_hosted_force key 33 in
+        let is_materialized = Tn.is_materialized_force key 331 in
+        let is_constant = Tn.is_hosted_force ~specifically:Constant key 332 in
+        assert (Bool.(Option.is_some (Lazy.force key.array) = is_on_host));
+        let c_typ, is_double =
+          match key.prec with
+          | Byte_prec _ -> (Type.Unsigned_char, false)
+          | Half_prec _ -> (* FIXME: *) (Type.Float, false)
+          | Single_prec _ -> (Type.Float, false)
+          | Double_prec _ -> (Type.Double, true)
+          | Void_prec -> assert false
+        in
         let num_typ = Type.(get ctx c_typ) in
         let get_c_ptr ba =
           RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray ba
         in
-        let hosted_ptr = Option.map arr ~f:get_c_ptr in
         let mem =
-          if not is_materialized then Local_only else if is_constant && ta.read_only then Constant else Global
+          if not is_materialized then Local_only
+          else if is_constant && ta.read_only then Constant_from_host
+          else From_context
         in
         let arr_typ = Type.array ctx num_typ size_in_elems in
         let name = Tn.name key in
-        let local = if is_local_only mem then Some (Function.local func arr_typ name) else None in
-        (if is_global mem && not (Hashtbl.mem ctx_arrays key) then
-           let data =
-             if prejitting then Param_ptr (RValue.param @@ Param.create ctx arr_typ name)
-             else
-               Ctx_array
-                 (Ndarray.create_array key.Tn.prec ~dims
-                 @@ Constant_fill { values = [| 0. |]; strict = false })
-           in
-           Hashtbl.add_exn ctx_arrays ~key ~data);
-        let global_ptr =
-          Option.map (Hashtbl.find ctx_arrays key) ~f:(function
-            | Ctx_array arr -> Ndarray.(map { f = get_c_ptr } arr)
-            | Param_ptr ptr -> ptr)
+        let ptr =
+          match (mem, nodes) with
+          | From_context, Ctx_arrays ctx_arrays ->
+              let data =
+                Ndarray.create_array key.Tn.prec ~dims @@ Constant_fill { values = [| 0. |]; strict = false }
+              in
+              ctx_arrays := Map.add_exn !ctx_arrays ~key ~data;
+              Lazy.from_val @@ Ndarray.(map { f = get_c_ptr } @@ Map.find_exn !ctx_arrays key)
+          | From_context, Param_ptrs ptrs ->
+              let p = Param.create ctx arr_typ name in
+              ptrs := p :: !ptrs;
+              (* FIXME: don't we have to use Function.param here? I.e.:
+                 let num = List.length !ptrs in
+                 let v = ref None in
+                 let initialize _init_block func = v := Some (Function.param func num) in
+                 lazy (RValue.param @@ Option.value_exn !v) *)
+              lazy (RValue.param p)
+          | Constant_from_host, _ -> (
+              let addr arr = Lazy.from_val @@ get_c_ptr arr in
+              match Lazy.force key.array with
+              | Some (Byte_nd arr) -> addr arr
+              | Some (Half_nd arr) -> addr arr
+              | Some (Single_nd arr) -> addr arr
+              | Some (Double_nd arr) -> addr arr
+              | None -> assert false)
+          | Local_only, _ ->
+              let v = ref None in
+              let initialize _init_block func = v := Some (Function.local func arr_typ name) in
+              initializations := initialize :: !initializations;
+              (* FIXME: address vs lvalue, which one is correct here? *)
+              lazy ((* LValue.address *) RValue.lvalue @@ Option.value_exn !v)
         in
+        let result = { nd = key; ptr; mem; dims; size_in_bytes; num_typ; is_double } in
         let backend_info = sexp_of_mem_properties mem in
-        let comment_on ptr = Option.value ~default:"not" @@ Option.map ptr ~f:RValue.to_string in
-        Block.comment init_block
-          [%string
-            "Array #%{key.id#Int} %{Tn.label key}: %{Sexp.to_string_hum @@ backend_info} %{comment_on \
-             hosted_ptr} hosted, %{comment_on global_ptr} global, %{comment_on @@ Option.map \
-             ~f:RValue.lvalue local} local."];
-        let result =
-          { nd = key; hosted_ptr; global_ptr; local; mem; dims; size_in_bytes; num_typ; is_double }
+        let initialize init_block _func =
+          Block.comment init_block
+            [%string
+              "Array #%{key.id#Int} %{Tn.label key}: %{Sexp.to_string_hum @@ backend_info}; ptr: \
+               %{Sexp.to_string_hum @@ sexp_of_gccjit_rvalue @@ Lazy.force ptr}."];
+          if ta.zero_initialized then (
+            debug_log_zero_out init_block result;
+            zero_out ctx init_block result)
         in
-        if ta.zero_initialized then (
-          debug_log_zero_out init_block result;
-          zero_out ctx init_block result);
+        initializations := initialize :: !initializations;
         if not @@ Utils.sexp_mem ~elem:backend_info key.backend_info then
           key.backend_info <- Utils.sexp_append ~elem:backend_info key.backend_info;
-        result
-      in
-      match (key.prec, Lazy.force key.array) with
-      | _, Some (Byte_nd arr) -> array Type.Unsigned_char false (Some arr)
-      | _, Some (Half_nd arr) -> (* FIXME: *) array Type.Float false (Some arr)
-      | _, Some (Single_nd arr) -> array Type.Float false (Some arr)
-      | _, Some (Double_nd arr) -> array Type.Double true (Some arr)
-      | Byte_prec _, None -> array Type.Unsigned_char false None
-      | Half_prec _, None -> (* FIXME: *) array Type.Float false None
-      | Single_prec _, None -> array Type.Float false None
-      | Double_prec _, None -> array Type.Double true None
-      | Void_prec, None -> assert false)
+        result)
 
 let prec_to_kind prec =
   let open Gccjit in
@@ -208,18 +217,29 @@ let builtin_op = function
   | Div -> Gccjit.Divide
   | ToPowOf | Relu_gate | Arg2 | Arg1 -> invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
 
-let get_ptr array =
-  match array.local with
-  | Some lv -> Gccjit.RValue.lvalue lv
-  | None -> Option.value_exn @@ Option.first_some array.global_ptr array.hosted_ptr
+let arr_debug_name array =
+  let memloc =
+    if Utils.settings.debug_memory_locations && Lazy.is_val array.ptr then
+      "@" ^ Gccjit.RValue.to_string (Lazy.force array.ptr)
+    else ""
+  in
+  Tn.name array.nd ^ memloc
 
-let get_ptr_debug array =
-  let memloc arr = if Utils.settings.debug_memory_locations then "@" ^ Gccjit.RValue.to_string arr else "" in
-  match (array.local, array.global_ptr, array.hosted_ptr) with
-  | Some _, _, _ -> "local_" ^ Tn.name array.nd
-  | None, Some arr, _ -> "global_" ^ Tn.name array.nd ^ memloc arr
-  | None, None, Some arr -> "hosted_" ^ Tn.name array.nd ^ memloc arr
-  | None, None, None -> assert false
+let debug_log_zero_out ctx log_functions block array =
+  let open Gccjit in
+  let c_index = Type.get ctx Type.Int in
+  match Lazy.force log_functions with
+  | Some (lf, pf, ff) ->
+      let c_double = Type.get ctx Type.Double in
+      let to_d v = RValue.cast ctx v c_double in
+      Block.eval block @@ RValue.call ctx pf
+      @@ lf
+         :: RValue.string_literal ctx
+              [%string {|memset_zero(%{arr_debug_name array}) where before first element = %g
+|}]
+         :: [ to_d @@ RValue.lvalue @@ LValue.access_array (Lazy.force array.ptr) @@ RValue.zero ctx c_index ];
+      Block.eval block @@ RValue.call ctx ff [ lf ]
+  | _ -> ()
 
 let debug_log_index ctx log_functions =
   let open Gccjit in
@@ -232,8 +252,7 @@ let debug_log_index ctx log_functions =
         Block.eval block @@ RValue.call ctx ff [ lf ]
   | _ -> fun _block _i _index -> ()
 
-let jit_code ~name ~log_functions ~prejitting ~env ({ ctx; func; _ } as info) global_arrays initial_block
-    (body : Low_level.t) =
+let jit_code ~name ~log_functions ~env ({ ctx; arrays; _ } as info) func initial_block (body : Low_level.t) =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
@@ -294,21 +313,7 @@ let jit_code ~name ~log_functions ~prejitting ~env ({ ctx; func; _ } as info) gl
         Block.eval !current_block @@ RValue.call ctx ff [ lf ]
     | _ -> Block.comment !current_block c
   in
-  let debug_log_zero_out block array =
-    match log_functions with
-    | Some (lf, pf, ff) ->
-        let c_double = Type.get ctx Type.Double in
-        let to_d v = RValue.cast ctx v c_double in
-        Block.eval block @@ RValue.call ctx pf
-        @@ lf
-           :: RValue.string_literal ctx
-                [%string {|memset_zero(%{get_ptr_debug array}) where before first element = %g
-|}]
-           :: [ to_d @@ RValue.lvalue @@ LValue.access_array (get_ptr array) @@ RValue.zero ctx c_index ];
-        Block.eval block @@ RValue.call ctx ff [ lf ]
-    | _ -> ()
-  in
-  let get_array = get_array ~debug_log_zero_out info ~prejitting global_arrays in
+  let get_array = Hashtbl.find_exn arrays in
   let rec debug_float ~env ~is_double value =
     let loop = debug_float ~env ~is_double in
     match value with
@@ -335,8 +340,8 @@ let jit_code ~name ~log_functions ~prejitting ~env ({ ctx; func; _ } as info) gl
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         (* FIXME(194): Convert according to array.typ ?= num_typ. *)
-        let v = to_d @@ RValue.lvalue @@ LValue.access_array (get_ptr array) offset in
-        (get_ptr_debug array ^ "[%d]{=%g}", [ offset; v ])
+        let v = to_d @@ RValue.lvalue @@ LValue.access_array (Lazy.force array.ptr) offset in
+        (arr_debug_name array ^ "[%d]{=%g}", [ offset; v ])
     | Constant c -> (Float.to_string c, [])
     | Embed_index (Fixed_idx i) -> (Int.to_string i, [])
     | Embed_index (Iterator s) -> (Indexing.symbol_ident s ^ "{=%d}", [ Map.find_exn env s ])
@@ -363,9 +368,9 @@ let jit_code ~name ~log_functions ~prejitting ~env ({ ctx; func; _ } as info) gl
         @@ lf
            :: RValue.string_literal ctx
                 [%string
-                  {|%{get_ptr_debug array}[%d]{=%g} %{Ops.assign_op_C_syntax accum_op} %g = %{v_format}
+                  {|%{arr_debug_name array}[%d]{=%g} %{Ops.assign_op_C_syntax accum_op} %g = %{v_format}
 |}]
-           :: (to_d @@ RValue.lvalue @@ LValue.access_array (get_ptr array) offset)
+           :: (to_d @@ RValue.lvalue @@ LValue.access_array (Lazy.force array.ptr) offset)
            :: offset :: to_d value :: v_fillers;
         Block.eval !current_block @@ RValue.call ctx ff [ lf ]
     | _ -> ()
@@ -387,7 +392,7 @@ let jit_code ~name ~log_functions ~prejitting ~env ({ ctx; func; _ } as info) gl
         let value = loop_float ~name ~env ~num_typ:array.num_typ ~is_double:array.is_double c2 in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
-        let lhs = LValue.access_array (get_ptr array) offset in
+        let lhs = LValue.access_array (Lazy.force array.ptr) offset in
         debug_log_assignment ~env debug idcs array op value c2;
         Block.assign_op !current_block lhs (builtin_op op) value
     | Set { array; idcs; llv; debug } ->
@@ -395,13 +400,13 @@ let jit_code ~name ~log_functions ~prejitting ~env ({ ctx; func; _ } as info) gl
         let value = loop_float ~name ~env ~num_typ:array.num_typ ~is_double:array.is_double llv in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
-        let lhs = LValue.access_array (get_ptr array) offset in
+        let lhs = LValue.access_array (Lazy.force array.ptr) offset in
         debug_log_assignment ~env debug idcs array Ops.Arg2 value llv;
         Block.assign !current_block lhs value
     | Zero_out array ->
         if Hashtbl.mem info.arrays array then (
           let array = Hashtbl.find_exn info.arrays array in
-          debug_log_zero_out !current_block array;
+          debug_log_zero_out ctx (lazy log_functions) !current_block array;
           zero_out ctx !current_block array)
         else
           let tn = Low_level.(get_node info.traced_store array) in
@@ -451,7 +456,7 @@ let jit_code ~name ~log_functions ~prejitting ~env ({ ctx; func; _ } as info) gl
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
         (* FIXME(194): Convert according to array.typ ?= num_typ. *)
-        RValue.lvalue @@ LValue.access_array (get_ptr array) offset
+        RValue.lvalue @@ LValue.access_array (Lazy.force array.ptr) offset
     | Embed_index (Fixed_idx i) -> RValue.cast ctx (RValue.int ctx num_typ i) num_typ
     | Embed_index (Iterator s) -> (
         try RValue.cast ctx (Map.find_exn env s) num_typ
@@ -495,6 +500,11 @@ let jit_code ~name ~log_functions ~prejitting ~env ({ ctx; func; _ } as info) gl
   loop_proc ~toplevel:true ~name ~env body;
   !current_block
 
+let prepare_arrays ctx ~log_functions arrays traced_store nodes initializations =
+  let debug_log_zero_out = debug_log_zero_out ctx log_functions in
+  let _prepare_array = prepare_array ctx ~debug_log_zero_out arrays traced_store nodes initializations in
+  ignore @@ failwith "NOT IMPLEMENTED YET"
+
 let%track_sexp jit_func ~name ~prejitting ctx bindings (traced_store, proc) =
   let open Gccjit in
   let c_index = Type.get ctx Type.Int in
@@ -504,15 +514,22 @@ let%track_sexp jit_func ~name ~prejitting ctx bindings (traced_store, proc) =
     List.map symbols ~f:(fun { static_symbol; _ } ->
         Param.create ctx c_index @@ Indexing.symbol_ident static_symbol)
   in
-  let func = Function.create ctx fkind (Type.get ctx Void) name static_indices in
+  let ctx_arrays = ref @@ Map.empty (module Tn) in
+  let nodes = if prejitting then Param_ptrs (ref static_indices) else Ctx_arrays ctx_arrays in
+  let initializations = ref [] in
+  let arrays = Hashtbl.create (module Tn) in
+  let log_functions_ref = ref None in
+  let log_functions = lazy !log_functions_ref in
+  prepare_arrays ~log_functions ctx arrays traced_store nodes initializations;
+  let params = match nodes with Param_ptrs ps -> !ps | Ctx_arrays _ -> static_indices in
+  let func = Function.create ctx fkind (Type.get ctx Void) name params in
   let env =
     Map.of_alist_exn (module Indexing.Symbol)
     @@ List.mapi symbols ~f:(fun pos { Indexing.static_symbol; _ } ->
            (static_symbol, RValue.param @@ Function.param func pos))
   in
-  let global_arrays = Hashtbl.create (module Tn) in
   let init_block = Block.create ~name:("init_" ^ name) func in
-  let log_functions () =
+  if Utils.settings.debug_log_jitted then (
     let file_ptr = Type.(get ctx File_ptr) in
     let c_str = Type.(get ctx Const_char_ptr) in
     let log_file_name = Param.create ctx c_str "log_file_name" in
@@ -529,14 +546,13 @@ let%track_sexp jit_func ~name ~prejitting ctx bindings (traced_store, proc) =
       let f_ptr = Type.get ctx Type.File_ptr in
       Function.create ctx Imported (Type.get ctx Void) "fflush" [ Param.create ctx f_ptr "f" ]
     in
-    (log_file, fprintf, fflush)
-  in
-  let log_functions = if Utils.settings.debug_log_jitted then Some (log_functions ()) else None in
+    log_functions_ref := Some (log_file, fprintf, fflush));
+  let log_functions = Lazy.force log_functions in
   let debug_log_index = debug_log_index ctx log_functions in
   Map.iteri env ~f:(fun ~key:sym ~data:idx -> debug_log_index init_block (Indexing.symbol_ident sym) idx);
   let main_block = Block.create ~name func in
-  let ctx_info = { ctx; func; traced_store; init_block; arrays = Hashtbl.create (module Tn) } in
-  let after_proc = jit_code ~name ~log_functions ~prejitting ~env ctx_info global_arrays main_block proc in
+  let ctx_info = { ctx; traced_store; init_block; func; arrays } in
+  let after_proc = jit_code ~name ~log_functions ~env ctx_info func main_block proc in
   (match log_functions with
   | Some (lf, _, _) ->
       (* FIXME: should be Imported? *)
@@ -551,7 +567,7 @@ let%track_sexp jit_func ~name ~prejitting ctx bindings (traced_store, proc) =
   (if Utils.settings.output_debug_files_in_run_directory then
      let f_name = name ^ "-gccjit-debug.c" in
      Context.dump_to_file ctx ~update_locs:true f_name);
-  (ctx_info, global_arrays)
+  ctx_info
 
 let header_sep =
   let open Re in
@@ -567,7 +583,7 @@ let prejit ~(name : string) ~prejitting bindings (compiled : Low_level.traced_st
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)
-  let info, _global_arrays = jit_func ~name ~prejitting ctx bindings compiled in
+  let info = jit_func ~name ~prejitting ctx bindings compiled in
   let result = Context.compile ctx in
   Context.release ctx;
   { info; result; bindings; name }
@@ -631,7 +647,7 @@ let jit_prejitted (old_context : context) code =
 
 let jit old_context code =
   match code with
-  | Postponed {compiled; bindings; name} ->
+  | Postponed { compiled; bindings; name } ->
       let code = prejit ~name ~prejitting:false bindings compiled in
       jit_prejitted old_context code
   | Jitted code -> jit_prejitted old_context code
