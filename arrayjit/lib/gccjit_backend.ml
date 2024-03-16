@@ -94,6 +94,14 @@ type code =
 
 type global_array = Ctx_array of Ndarray.t | Param_ptr of Gccjit.rvalue
 
+type gccjit_param = Gccjit.param
+type gccjit_lvalue = Gccjit.lvalue
+type gccjit_rvalue = Gccjit.rvalue
+
+let sexp_of_gccjit_param p = Sexp.Atom (Gccjit.Param.to_string p)
+let sexp_of_gccjit_lvalue v = Sexp.Atom (Gccjit.LValue.to_string v)
+let sexp_of_gccjit_rvalue v = Sexp.Atom (Gccjit.RValue.to_string v)
+
 let jit_array_offset ctx ~idcs ~dims =
   let open Gccjit in
   let c_index = Type.get ctx Type.Int in
