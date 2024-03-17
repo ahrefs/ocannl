@@ -192,7 +192,7 @@ module Gccjit_device (* : No_device_backend with type context = Gccjit_backend.c
   let prejit ~shared ?name bindings asgns =
     let name = Option.value name ~default:(Assignments.get_name asgns) in
     let compiled = Assignments.compile_proc ~name (Indexing.bound_symbols bindings) asgns in
-    if shared then Jitted (prejit ~name ~prejitting:true bindings compiled)
+    if shared then Jitted (prejit ~name ~opt_ctx_arrays:None bindings compiled)
     else Postponed { compiled; bindings; name }
 
   let jit context code =
