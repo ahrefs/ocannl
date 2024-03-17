@@ -40,21 +40,35 @@ let bound_symbols bs =
   List.rev @@ loop bs
 
 (** Helps jitting the bindings. *)
-type 'a variadic = Result of 'a | Param of int ref * (int -> 'a) variadic
+type ('r, 'idcs, 'p1, 'p2) variadic =
+  | Result of 'r
+  | Param_idx of int ref * (int -> 'r, int -> 'idcs, 'p1, 'p2) variadic
+  | Param_1 of 'p1 option ref * ('p1 -> 'r, 'idcs, 'p1, 'p2) variadic
+  | Param_2 of 'p2 option ref * ('p2 -> 'r, 'idcs, 'p1, 'p2) variadic
 
 type unit_bindings = (unit -> unit) bindings [@@deriving sexp_of]
 type jitted_bindings = (static_symbol, int ref) List.Assoc.t [@@deriving sexp_of]
 
-let rec apply : 'a. 'a variadic -> 'a =
- fun (type b) (f : b variadic) -> match f with Result rf -> rf | Param (i, more) -> apply more !i
+let rec apply : 'r 'idcs 'p1 'p2. ('r, 'idcs, 'p1, 'p2) variadic -> 'r =
+ fun (type r idcs p1 p2) (f : (r, idcs, p1, p2) variadic) ->
+  match f with
+  | Result rf -> rf
+  | Param_idx (i, more) -> apply more !i
+  | Param_1 ({ contents = Some p1 }, more) -> apply more p1
+  | Param_2 ({ contents = Some p2 }, more) -> apply more p2
+  | Param_1 ({ contents = None }, _) -> invalid_arg "Indexing.apply: Param_1 missing value"
+  | Param_2 ({ contents = None }, _) -> invalid_arg "Indexing.apply: Param_2 missing value"
 
 let jitted_bindings bs vs =
-  let rec loop : 'a. 'a bindings * 'a variadic -> jitted_bindings =
-   fun (type b) (f : b bindings * b variadic) ->
+  let rec loop : 'r 'idcs. 'idcs bindings * ('r, 'idcs, 'p1, 'p2) variadic -> jitted_bindings =
+   fun (type r idcs) (f : idcs bindings * (r, idcs, 'p1, 'p2) variadic) ->
     match f with
     | Empty, Result _ -> []
-    | Bind (s, bs), Param (i, vs) -> (s, i) :: loop (bs, vs)
-    | _ -> assert false
+    | Bind (s, bs), Param_idx (i, vs) -> (s, i) :: loop (bs, vs)
+    | bs, Param_1 (_, vs) -> loop (bs, vs)
+    | bs, Param_2 (_, vs) -> loop (bs, vs)
+    | Empty, _ -> assert false
+    | Bind _, Result _ -> assert false
   in
   (* Reverse order because [apply] above also reverses the order! *)
   List.rev @@ loop (bs, vs)

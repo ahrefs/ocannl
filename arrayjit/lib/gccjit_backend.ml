@@ -75,12 +75,16 @@ type info = {
 }
 [@@deriving sexp_of]
 
+type param_source = Log_file_name | Param_ptr of Tn.t | Static_idx of Indexing.static_symbol
+[@@deriving sexp_of]
+
 type prejitted = {
   info : info;
   bindings : Indexing.unit_bindings;
   name : string;
   result : (Gccjit.result[@sexp.opaque]);
   opt_ctx_arrays : Ndarray.t Map.M(Tn).t option;
+  params : param_source list;
 }
 [@@deriving sexp_of]
 
@@ -101,7 +105,9 @@ let sexp_of_gccjit_param p = Sexp.Atom (Gccjit.Param.to_string p)
 let sexp_of_gccjit_lvalue v = Sexp.Atom (Gccjit.LValue.to_string v)
 let sexp_of_gccjit_rvalue v = Sexp.Atom (Gccjit.RValue.to_string v)
 
-type ctx_nodes = Ctx_arrays of Ndarray.t Map.M(Tn).t ref | Param_ptrs of gccjit_param list ref
+type ctx_nodes =
+  | Ctx_arrays of Ndarray.t Map.M(Tn).t ref
+  | Param_ptrs of (gccjit_param * param_source) list ref
 [@@deriving sexp_of]
 
 let jit_array_offset ctx ~idcs ~dims =
@@ -118,6 +124,9 @@ let zero_out ctx block arr =
   Block.eval block
   @@ RValue.call ctx (Function.builtin ctx "memset")
        [ Lazy.force arr.ptr; RValue.zero ctx c_int; RValue.int ctx c_index arr.size_in_bytes ]
+
+let get_c_ptr ctx num_typ ba =
+  Gccjit.(RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray ba)
 
 let prepare_array ~debug_log_zero_out ctx arrays traced_store nodes initializations (key : Tn.t) =
   let open Gccjit in
@@ -141,9 +150,6 @@ let prepare_array ~debug_log_zero_out ctx arrays traced_store nodes initializati
           | Void_prec -> assert false
         in
         let num_typ = Type.(get ctx c_typ) in
-        let get_c_ptr ba =
-          RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray ba
-        in
         let mem =
           if not is_materialized then Local_only
           else if is_constant && ta.read_only then Constant_from_host
@@ -160,15 +166,18 @@ let prepare_array ~debug_log_zero_out ctx arrays traced_store nodes initializati
                     @@ Constant_fill { values = [| 0. |]; strict = false }
                   in
                   ctx_arrays := Map.add_exn !ctx_arrays ~key ~data;
-                  Lazy.from_val @@ Ndarray.(map { f = get_c_ptr } data)
-              | Some data -> Lazy.from_val @@ Ndarray.(map { f = get_c_ptr } data))
+                  let f arr = get_c_ptr ctx num_typ arr in
+                  Lazy.from_val @@ Ndarray.(map { f } data)
+              | Some data ->
+                  let f arr = get_c_ptr ctx num_typ arr in
+                  Lazy.from_val @@ Ndarray.(map { f } data))
           | From_context, Param_ptrs ptrs ->
               let ptr_typ = Type.pointer num_typ in
               let p = Param.create ctx ptr_typ name in
-              ptrs := p :: !ptrs;
+              ptrs := (p, Param_ptr key) :: !ptrs;
               Lazy.from_val (RValue.param p)
           | Constant_from_host, _ -> (
-              let addr arr = Lazy.from_val @@ get_c_ptr arr in
+              let addr arr = Lazy.from_val @@ get_c_ptr ctx num_typ arr in
               match Lazy.force key.array with
               | Some (Byte_nd arr) -> addr arr
               | Some (Half_nd arr) -> addr arr
@@ -529,32 +538,40 @@ let prepare_arrays ctx ~log_functions arrays traced_store nodes initializations 
   in
   loop llc
 
-let%track_sexp jit_func ~name ~opt_ctx_arrays ctx bindings (traced_store, proc) =
+let%track_sexp jit_func ~name ~opt_ctx_arrays ctx bindings (traced_store, proc) :
+    info * Ndarray.t Base.Map.M(Tn).t * (gccjit_param * param_source) list =
   let open Gccjit in
   let c_index = Type.get ctx Type.Int in
   let fkind = Function.Exported in
   let c_str = Type.(get ctx Const_char_ptr) in
   let log_file_name =
-    if Utils.settings.debug_log_jitted then Some (Param.create ctx c_str "log_file_name") else None
+    if Utils.settings.debug_log_jitted then Some (Param.create ctx c_str "log_file_name", Log_file_name)
+    else None
   in
   let symbols = Indexing.bound_symbols bindings in
   let static_indices =
-    List.map symbols ~f:(fun { static_symbol; _ } ->
-        Param.create ctx c_index @@ Indexing.symbol_ident static_symbol)
+    List.map symbols ~f:(fun ({ static_symbol; _ } as s) ->
+        (Param.create ctx c_index @@ Indexing.symbol_ident static_symbol, Static_idx s))
   in
-  let ctx_arrays = ref @@ Option.value opt_ctx_arrays ~default:(Map.empty (module Tn)) in
-  let params = ref (Option.to_list log_file_name @ static_indices) in
-  let nodes = if Option.is_none opt_ctx_arrays then Param_ptrs params else Ctx_arrays ctx_arrays in
+  let ctx_arrays : Ndarray.t Map.M(Tn).t ref =
+    ref @@ Option.value opt_ctx_arrays ~default:(Map.empty (module Tn))
+  in
+  let params : (gccjit_param * param_source) list ref = ref (Option.to_list log_file_name @ static_indices) in
+  let nodes : ctx_nodes =
+    if Option.is_none opt_ctx_arrays then Param_ptrs params else Ctx_arrays ctx_arrays
+  in
   let initializations = ref [] in
   let arrays = Hashtbl.create (module Tn) in
   let log_functions_ref = ref None in
   let log_functions = lazy !log_functions_ref in
   prepare_arrays ~log_functions ctx arrays traced_store nodes initializations proc;
-  let params = match nodes with Param_ptrs ps -> !ps | Ctx_arrays _ -> static_indices in
-  let func = Function.create ctx fkind (Type.get ctx Void) name params in
+  let params : (gccjit_param * param_source) list =
+    match nodes with Param_ptrs ps -> !ps | Ctx_arrays _ -> !params
+  in
+  let func = Function.create ctx fkind (Type.get ctx Void) name @@ List.map ~f:fst params in
   let env =
     Map.of_alist_exn (module Indexing.Symbol)
-    @@ List.map2_exn symbols static_indices ~f:(fun { Indexing.static_symbol; _ } p_ind ->
+    @@ List.map2_exn symbols static_indices ~f:(fun { Indexing.static_symbol; _ } (p_ind, _) ->
            (static_symbol, RValue.param p_ind))
   in
   let init_block = Block.create ~name:("init_" ^ name) func in
@@ -566,7 +583,7 @@ let%track_sexp jit_func ~name ~opt_ctx_arrays ctx bindings (traced_store, proc) 
           [ Param.create ctx c_str "filename"; Param.create ctx c_str "mode" ]
       in
       Block.assign init_block log_file
-      @@ RValue.call ctx fopen [ RValue.param log_file_name; RValue.string_literal ctx "w" ];
+      @@ RValue.call ctx fopen [ RValue.param @@ fst log_file_name; RValue.string_literal ctx "w" ];
       let log_file = RValue.lvalue log_file in
       let fprintf = Function.builtin ctx "fprintf" in
       let fflush =
@@ -577,8 +594,9 @@ let%track_sexp jit_func ~name ~opt_ctx_arrays ctx bindings (traced_store, proc) 
   let log_functions = Lazy.force log_functions in
   let debug_log_index = debug_log_index ctx log_functions in
   Map.iteri env ~f:(fun ~key:sym ~data:idx -> debug_log_index init_block (Indexing.symbol_ident sym) idx);
+  List.iter !initializations ~f:(fun init -> init init_block func);
   let main_block = Block.create ~name func in
-  let ctx_info = { ctx; traced_store; init_block; func; arrays } in
+  let ctx_info : info = { ctx; traced_store; init_block; func; arrays } in
   let after_proc = jit_code ~name ~log_functions ~env ctx_info func main_block proc in
   (match log_functions with
   | Some (lf, _, _) ->
@@ -594,13 +612,14 @@ let%track_sexp jit_func ~name ~opt_ctx_arrays ctx bindings (traced_store, proc) 
   (if Utils.settings.output_debug_files_in_run_directory then
      let f_name = name ^ "-gccjit-debug.c" in
      Context.dump_to_file ctx ~update_locs:true f_name);
-  ctx_info, !ctx_arrays
+  (ctx_info, !ctx_arrays, params)
 
 let header_sep =
   let open Re in
   compile (seq [ str " "; opt any; str "="; str " " ])
 
-let prejit ~(name : string) ~opt_ctx_arrays bindings (compiled : Low_level.traced_store * Low_level.t) =
+let%track_sexp prejit ~(name : string) ~opt_ctx_arrays bindings
+    (compiled : Low_level.traced_store * Low_level.t) =
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
@@ -610,27 +629,56 @@ let prejit ~(name : string) ~opt_ctx_arrays bindings (compiled : Low_level.trace
     Context.set_option ctx Context.Keep_intermediates true;
     Context.set_option ctx Context.Dump_everything true);
   *)
-  let info, ctx_arrays = jit_func ~name ~opt_ctx_arrays ctx bindings compiled in
+  let info, ctx_arrays, params = jit_func ~name ~opt_ctx_arrays ctx bindings compiled in
   let opt_ctx_arrays = if Map.is_empty ctx_arrays then None else Some ctx_arrays in
   let result = Context.compile ctx in
   Context.release ctx;
-  { info; result; bindings; name; opt_ctx_arrays }
+  { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params }
 
-let jit_prejitted (old_context : context) code =
-  let label = old_context.label in
-  let name = code.name in
-  let arrays = match code with { opt_ctx_arrays = Some arrays; _ } -> arrays | _ -> old_context.arrays in
+let%track_sexp jit_prejitted (old_context : context) (code : prejitted) : context * _ * _ * string =
+  let label : string = old_context.label in
+  let name : string = code.name in
+  let arrays : Ndarray.t Base.Map.M(Tn).t =
+    match code with
+    | { opt_ctx_arrays = Some arrays; _ } -> arrays
+    | { params; _ } ->
+        List.fold params ~init:old_context.arrays ~f:(fun ctx_arrays -> function
+          | Param_ptr tn ->
+              let f = function
+                | Some arr -> arr
+                | None ->
+                    Ndarray.create_array tn.Tn.prec ~dims:(Lazy.force tn.dims)
+                    @@ Constant_fill { values = [| 0. |]; strict = false }
+              in
+              Map.update ctx_arrays tn ~f
+          | _ -> ctx_arrays)
+  in
   let context = { label; arrays; result = Some code.result } in
   let log_file_name = [%string "debug-%{label}-%{code.name}.log"] in
   let run_variadic =
-    let rec link : 'a 'b. ('a -> 'b) Indexing.bindings -> ('a -> 'b) Ctypes.fn -> ('a -> 'b) Indexing.variadic
-        =
-     fun (type a b) (bs : (a -> b) Indexing.bindings) (cs : (a -> b) Ctypes.fn) ->
-      match bs with
-      | Empty -> Indexing.Result (Gccjit.Result.code code.result name cs)
-      | Bind (_, more) -> Param (ref 0, link more Ctypes.(int @-> cs))
-    in
-    link code.bindings Ctypes.(void @-> returning void)
+    [%log_level
+      Nothing;
+      let rec link :
+            'a 'b 'idcs.
+            'idcs Indexing.bindings ->
+            param_source list ->
+            ('a -> 'b) Ctypes.fn ->
+            ('a -> 'b, 'idcs, 'p1, 'p2) Indexing.variadic =
+       fun (type a b idcs) (binds : idcs Indexing.bindings) params (cs : (a -> b) Ctypes.fn) ->
+        match (binds, params) with
+        | Empty, [] -> Indexing.Result (Gccjit.Result.code code.result name cs)
+        | Bind _, [] -> invalid_arg "Gccjit_backend.jit_prejitted: too few static index params"
+        | Bind (_, bs), Static_idx _ :: ps -> Param_idx (ref 0, link bs ps Ctypes.(int @-> cs))
+        | Empty, Static_idx _ :: _ -> invalid_arg "Gccjit_backend.jit_prejitted: too many static index params"
+        | bs, Log_file_name :: ps -> Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
+        | bs, Param_ptr tn :: ps ->
+            let nd = match Map.find arrays tn with Some nd -> nd | None -> assert false in
+            (* let f ba = Ctypes.bigarray_start Ctypes_static.Genarray ba in
+               let c_ptr = Ndarray.(map { f } nd) in *)
+            let c_ptr = Ndarray.get_voidptr nd in
+            Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
+      in
+      link code.bindings code.params Ctypes.(void @-> returning void)]
   in
   let schedule () =
     let callback = Indexing.apply run_variadic in
