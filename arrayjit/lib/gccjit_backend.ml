@@ -594,7 +594,8 @@ let%track_sexp jit_func ~name ~opt_ctx_arrays ctx bindings (traced_store, proc) 
   let log_functions = Lazy.force log_functions in
   let debug_log_index = debug_log_index ctx log_functions in
   Map.iteri env ~f:(fun ~key:sym ~data:idx -> debug_log_index init_block (Indexing.symbol_ident sym) idx);
-  List.iter !initializations ~f:(fun init -> init init_block func);
+  (* Do initializations in the order they were scheduled. *)
+  List.iter (List.rev !initializations) ~f:(fun init -> init init_block func);
   let main_block = Block.create ~name func in
   let ctx_info : info = { ctx; traced_store; init_block; func; arrays } in
   let after_proc = jit_code ~name ~log_functions ~env ctx_info func main_block proc in
