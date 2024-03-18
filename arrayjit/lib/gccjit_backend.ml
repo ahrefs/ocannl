@@ -678,7 +678,9 @@ let%track_sexp jit_prejitted (old_context : context) (code : prejitted) : contex
             let c_ptr = Ndarray.get_voidptr nd in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
       in
-      link code.bindings code.params Ctypes.(void @-> returning void)]
+      (* Folding by [link] above reverses the input order. Important: [code.bindings] are traversed
+         in the wrong order but that's OK because [link] only uses them to check the number of indices. *)
+      link code.bindings (List.rev code.params) Ctypes.(void @-> returning void)]
   in
   let schedule () =
     let callback = Indexing.apply run_variadic in

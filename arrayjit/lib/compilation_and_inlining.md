@@ -115,4 +115,8 @@ type traced_array = {
 }
 ```
 
+- The `visit_llc` function interprets (symbolically executes) the given computation, and fills in `traced_store`: the map of `traced_array`s.
+- 
+
+
 ## Rewriting
