@@ -150,6 +150,7 @@ let prepare_array ~debug_log_zero_out ctx arrays traced_store nodes initializati
           | Void_prec -> assert false
         in
         let num_typ = Type.(get ctx c_typ) in
+        let ptr_typ = Type.pointer num_typ in
         let mem =
           if not is_materialized then Local_only
           else if is_constant && ta.read_only then Constant_from_host
@@ -172,7 +173,6 @@ let prepare_array ~debug_log_zero_out ctx arrays traced_store nodes initializati
                   let f arr = get_c_ptr ctx num_typ arr in
                   Lazy.from_val @@ Ndarray.(map { f } data))
           | From_context, Param_ptrs ptrs ->
-              let ptr_typ = Type.pointer num_typ in
               let p = Param.create ctx ptr_typ name in
               ptrs := (p, Param_ptr key) :: !ptrs;
               Lazy.from_val (RValue.param p)
@@ -189,8 +189,8 @@ let prepare_array ~debug_log_zero_out ctx arrays traced_store nodes initializati
               let v = ref None in
               let initialize _init_block func = v := Some (Function.local func arr_typ name) in
               initializations := initialize :: !initializations;
-              (* FIXME: address vs lvalue, which one is correct here? *)
-              lazy ((* LValue.address *) RValue.lvalue @@ Option.value_exn !v)
+              (* The array is the pointer but the address of the array is the same pointer. *)
+              lazy (RValue.cast ctx (LValue.address @@ Option.value_exn !v) ptr_typ)
         in
         let result = { nd = key; ptr; mem; dims; size_in_bytes; num_typ; is_double } in
         let backend_info = sexp_of_mem_properties mem in
