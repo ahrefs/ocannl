@@ -264,6 +264,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
                  jitted.Arrayjit.Backends.schedule ())))
   in
   let merge ~(from : int) ~(to_ : int) : unit =
+    (if Utils.settings.ensure_determinism then Backend.(await @@ get_ctx_device ctxs.(from)));
     Tn.run debug_rt @@ Lazy.force loss_merges.(to_).(from);
     List.iter ~f:(Tn.run debug_rt) @@ Lazy.force merges.(to_).(from)
   in
@@ -288,20 +289,16 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   in
   let%track_sexp sync (devices_to_sync : int) : unit =
     Arrayjit.Utils.parallel_merge merge devices_to_sync;
-    (* We will need to update params on all devices! Not only the ones that computed gradients. *)
     Tn.run debug_rt @@ sgd_update.schedule ();
     (* We need to wait, because copying happens on other devices. *)
-    if Utils.settings.ensure_determinism then Backend.(await @@ get_ctx_device sgd_update.context);
+    (if Utils.settings.ensure_determinism then Backend.(await @@ get_ctx_device sgd_update.context));
     Set.iter !needed_on_host ~f:(fun p ->
         if not @@ Backend.to_host sgd_update.context p then
           invalid_arg @@ "Train.parallel_update: parameter missing on one of the devices: " ^ Tn.name p);
+    (* We will need to update params on all devices! Not only the ones that computed gradients. *)
     for to_ = 1 to num_devices - 1 do
       List.iter copies.(to_ - 1) ~f:(Tn.run debug_rt)
     done;
-    if Utils.settings.ensure_determinism then
-      for to_ = 1 to num_devices - 1 do
-        Backend.(await @@ get_device ~ordinal:to_);
-      done;
     post_sync ~num_synced_devices:devices_to_sync
   in
   let jitted_bindings = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.bindings)] in
