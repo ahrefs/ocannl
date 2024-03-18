@@ -7,7 +7,9 @@ module NTDSL = Operation.NTDSL
 module CDSL = Arrayjit.Low_level.CDSL
 module Utils = Arrayjit.Utils
 
-let num_devices = 10
+let num_devices = 20
+(* let num_devices = 10 *)
+(* let num_devices = 1 *)
 
 let experiment ~seed ~use_builtin_weight_decay () =
   Random.init 0;
@@ -16,15 +18,13 @@ let experiment ~seed ~use_builtin_weight_decay () =
   (* Utils.settings.debug_log_jitted <- true; *)
   let hid_dim = 16 in
   (* let hid_dim = 4 in *)
-  (* let len = 300 in *)
   let len = 600 in
   (* let len = 30 in *)
   let init_lr = 0.1 in
-  (* let batch_size = 20 in *)
   let batch_size = 120 in
+  (* let batch_size = 20 in *)
   let minibatch_size = batch_size / num_devices in
   let n_batches = 2 * len / minibatch_size in
-  (* let epochs = 30 in *)
   let epochs = 100 in
   (* let epochs = 2 in *)
   let steps = epochs * n_batches in
