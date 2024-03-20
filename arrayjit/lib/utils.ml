@@ -158,10 +158,31 @@ let get_debug name =
             prefixed_info_warn_error, explicit_logs, nonempty_entries, everything; found: " ^ s
   in
   let toc_entry_minimal_depth =
-    Int.of_string @@ get_global_arg ~default:"4" ~arg_name:"toc_entry_minimal_depth"
+    let arg = get_global_arg ~default:"" ~arg_name:"toc_entry_minimal_depth" in
+    if String.is_empty arg then [] else [ Minidebug_runtime.Minimal_depth (Int.of_string arg) ]
   in
   let toc_entry_minimal_size =
-    Int.of_string @@ get_global_arg ~default:"4" ~arg_name:"toc_entry_minimal_size"
+    let arg = get_global_arg ~default:"" ~arg_name:"toc_entry_minimal_size" in
+    if String.is_empty arg then [] else [ Minidebug_runtime.Minimal_size (Int.of_string arg) ]
+  in
+  let toc_entry_minimal_span =
+    let arg = get_global_arg ~default:"" ~arg_name:"toc_entry_minimal_span" in
+    if String.is_empty arg then []
+    else
+      let arg, period = (String.prefix arg (String.length arg - 2), String.suffix arg 2) in
+      let period =
+        match period with
+        | "ns" -> Mtime.Span.ns
+        | "us" -> Mtime.Span.us
+        | "ms" -> Mtime.Span.ms
+        | _ ->
+            invalid_arg @@ "ocannl_toc_entry_minimal_span setting should end with one of: ns, us, ms; found: "
+            ^ period
+      in
+      [ Minidebug_runtime.Minimal_span Mtime.Span.(Int.of_string arg * period) ]
+  in
+  let toc_entry =
+    Minidebug_runtime.And (toc_entry_minimal_depth @ toc_entry_minimal_size @ toc_entry_minimal_span)
   in
   if flushing then
     Minidebug_runtime.debug_flushing ~filename ~time_tagged ~elapsed_times ~print_entry_ids ~verbose_entry_ids
@@ -169,9 +190,8 @@ let get_debug name =
   else
     Minidebug_runtime.forget_printbox
     @@ Minidebug_runtime.debug_file ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
-         ~verbose_entry_ids ~global_prefix:name ~with_table_of_contents:true ~toc_entry_minimal_depth
-         ~toc_entry_minimal_size ~for_append:false ~max_inline_sexp_length:120 ~hyperlink
-         ~toc_specific_hyperlink:""
+         ~verbose_entry_ids ~global_prefix:name ~toc_flame_graph:true ~flame_graph_separation:50 ~toc_entry
+         ~for_append:false ~max_inline_sexp_length:120 ~hyperlink ~toc_specific_hyperlink:""
          ~values_first_mode:true ~backend ~log_level ?snapshot_every_sec filename
 
 module Debug_runtime = (val get_debug "")

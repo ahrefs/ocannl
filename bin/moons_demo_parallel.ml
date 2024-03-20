@@ -25,7 +25,7 @@ let experiment ~seed ~use_builtin_weight_decay () =
   let batch_size = 20 in
   let minibatch_size = batch_size / num_devices in
   let n_batches = 2 * len / minibatch_size in
-  let epochs = 100 in
+  let epochs = 20 in
   (* let epochs = 5 in *)
   let steps = epochs * n_batches in
   Utils.settings.fixed_state_for_init <- Some seed;
