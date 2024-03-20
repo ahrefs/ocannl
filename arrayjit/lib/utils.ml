@@ -23,7 +23,6 @@ let mref_add_missing mref key ~f =
   if Map.mem !mref key then () else mref := Map.add_exn !mref ~key ~data:(f ())
 
 type settings = {
-  mutable ensure_determinism : bool;
   mutable debug_log_jitted : bool;
   mutable debug_memory_locations : bool;
   mutable output_debug_files_in_run_directory : bool;
@@ -35,7 +34,6 @@ type settings = {
 
 let settings =
   {
-    ensure_determinism = true;
     debug_log_jitted = false;
     debug_memory_locations = false;
     output_debug_files_in_run_directory = false;
