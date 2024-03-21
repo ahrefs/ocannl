@@ -743,7 +743,8 @@ let%track_sexp jit_prejitted (old_context : context) (code : prejitted) : contex
               [%log _line];
               loop more
         in
-        assert (List.is_empty @@ loop (Stdio.In_channel.read_lines log_file_name))
+        assert (List.is_empty @@ loop (Stdio.In_channel.read_lines log_file_name));
+        Stdlib.Sys.remove log_file_name
     in
     Tn.Work work
   in
