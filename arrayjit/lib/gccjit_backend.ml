@@ -652,7 +652,9 @@ let%track_sexp prejit_batch ~(names : string array) ~opt_ctx_arrays bindings
         jit_func ~name ~opt_ctx_arrays ctx bindings compiled)
   in
   (if Utils.settings.output_debug_files_in_run_directory then
-     let f_name = String.common_prefix (Array.to_list names) ^ "-gccjit-debug.c" in
+     let f_name =
+       String.(strip ~drop:(equal_char '_') @@ common_prefix (Array.to_list names)) ^ "-gccjit-debug.c"
+     in
      Context.dump_to_file ctx ~update_locs:true f_name);
   let result = Context.compile ctx in
   Context.release ctx;
@@ -798,13 +800,15 @@ let%track_sexp merge_from_global ~name ~dst ~accum ~src =
   let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
   Low_level.compile_proc ~name [] llc
 
-let%track_sexp merge ?(name_suffix = "") la ~accum ~(src : context) bindings =
+let%track_sexp merge ?name_prefix la ~accum ~(src : context) bindings =
+  let name_prefix : string = Option.value ~default:"" @@ Option.map name_prefix ~f:(fun s -> s ^ "_") in
   Option.map (Map.find src.arrays la) ~f:(fun (src : Ndarray.t) ->
-      let name = [%string "merge_into_%{Tn.name la}_%{name_suffix}"] in
+      let name = [%string "%{name_prefix}into_%{Tn.name la}"] in
       prejit ~opt_ctx_arrays:None ~name bindings
       @@ merge_from_global ~name ~dst:la ~accum ~src:(Ndarray.get_voidptr src))
 
-let%track_sexp merge_batch ~name_suffixes ~occupancy tns ~accum ~(srcs : context array) bindings =
+let%track_sexp merge_batch ?(name_prefixes : string array option) ~occupancy tns ~accum
+    ~(srcs : context array) bindings =
   let complete =
     Array.concat_map (Array.of_list tns) ~f:(fun tn ->
         Array.mapi srcs ~f:(fun i src ->
@@ -814,18 +818,21 @@ let%track_sexp merge_batch ~name_suffixes ~occupancy tns ~accum ~(srcs : context
                 failwith @@ "Gccjit_backend.merge_batch: missing tnode " ^ Tn.name tn ^ " in context "
                 ^ src.label
             | _, Some src ->
-                let name = [%string "merge_into_%{Tn.name tn}_%{name_suffixes.(i)}"] in
+                let prefix = match name_prefixes with Some ns -> ns.(i) ^ "_" | None -> "" in
+                let name = [%string "%{prefix}into_%{Tn.name tn}"] in
                 Some ((tn, i), (name, merge_from_global ~name ~dst:tn ~accum ~src:(Ndarray.get_voidptr src)))))
   in
   let ids, compileds = Array.unzip @@ Array.filter_opt complete in
-  let names, compileds = Array.unzip compileds in
-  let result = prejit_batch ~opt_ctx_arrays:None ~names bindings compileds in
   let len = Array.length srcs in
   let together =
     Hashtbl.of_alist_exn (module Tn) @@ List.map tns ~f:(fun tn -> (tn, Array.create ~len None))
   in
-  Array.iter2_exn ids result ~f:(fun (tn, i) res ->
-      let r = Hashtbl.find_exn together tn in
-      assert (Option.is_none r.(i));
-      r.(i) <- Some res);
-  together
+  if Array.is_empty compileds then together
+  else
+    let names, compileds = Array.unzip compileds in
+    let result = prejit_batch ~opt_ctx_arrays:None ~names bindings compileds in
+    Array.iter2_exn ids result ~f:(fun (tn, i) res ->
+        let r = Hashtbl.find_exn together tn in
+        assert (Option.is_none r.(i));
+        r.(i) <- Some res);
+    together

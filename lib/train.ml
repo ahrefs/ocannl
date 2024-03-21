@@ -256,10 +256,9 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   let occupancy _tn ~src_n ~src:_ =
     if Array.exists ~f:Fn.id occupancies.(src_n) then Utils.Required else Utils.Skip
   in
-  (* FIXME: upstream suffixes -> prefixes *)
-  let name_suffixes = Array.init num_devices ~f:(fun i -> "grad_merge_from_dev_" ^ Int.to_string i) in
+  let name_prefixes = Array.create ~len:num_devices "grad_merge" in
   let grad_merges =
-    Backend.merge_batch ~name_suffixes ~occupancy param_grads ~accum:Arrayjit.Ops.Add ~srcs:ctxs
+    Backend.merge_batch ~name_prefixes ~occupancy param_grads ~accum:Arrayjit.Ops.Add ~srcs:ctxs
   in
   let grad_merges =
     Hashtbl.data grad_merges
@@ -273,9 +272,9 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
             List.map grad_merges.(from) ~f:(fun c -> (Backend.jit ctxs.(to_) c).schedule ())))
   in
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
-  let name_suffixes = Array.init num_devices ~f:(fun i -> "loss_merge_from_dev_" ^ Int.to_string i) in
+  let name_prefixes = Array.create ~len:num_devices "loss_merge" in
   let loss_merges =
-    Backend.merge_batch ~name_suffixes ~occupancy [ updaten.loss.value ] ~accum:Arrayjit.Ops.Add ~srcs:ctxs
+    Backend.merge_batch ~name_prefixes ~occupancy [ updaten.loss.value ] ~accum:Arrayjit.Ops.Add ~srcs:ctxs
   in
   let loss_merges =
     Hashtbl.data loss_merges
@@ -305,7 +304,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
           (* Backends may choose to not store parameters on devices other than the 0th. *)
           List.filter_map param_vals ~f:(fun p ->
               let prejitted =
-                Backend.merge ~name_suffix:"param_copy" p ~accum:Arrayjit.Ops.Arg2 ~src:ctxs.(0)
+                Backend.merge ~name_prefix:"param_copy" p ~accum:Arrayjit.Ops.Arg2 ~src:ctxs.(0)
               in
               match prejitted with
               | Some prejitted ->

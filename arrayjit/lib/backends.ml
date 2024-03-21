@@ -49,14 +49,14 @@ module type No_device_backend = sig
   val to_host : context -> Tnode.t -> bool
   (** If the array is both hosted and in-context, copies from context to host and returns true. *)
 
-  val merge : ?name_suffix:string -> Tnode.t -> accum:Ops.binop -> src:context -> code option
+  val merge : ?name_prefix:string -> Tnode.t -> accum:Ops.binop -> src:context -> code option
   (** Merges the array from the source context into the destination context: [dst =: dst accum src].
       If the array is hosted, its state on host is undefined after this operation. (A backend may choose
-      to use the host array as a buffer, if that is beneficial.) [name_suffix] is appended to
+      to use the host array as a buffer, if that is beneficial.) [name_prefix] is prepended to
       the jitted function's name. Returns [None] if the array is not in the context. *)
 
   val merge_batch :
-    ?name_suffixes:string array ->
+    ?name_prefixes:string array ->
     occupancy:(Tnode.t -> src_n:int -> src:context -> Utils.requirement) ->
     Tnode.t list ->
     accum:Ops.binop ->
@@ -143,22 +143,23 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     await device;
     Backend.to_host ctx
 
-  let merge ?name_suffix tn ~accum ~src =
-    let name_suffix : string = Option.value name_suffix ~default:"" in
+  let merge ?name_prefix tn ~accum ~src =
+    let name_prefix : string = Option.value ~default:"" @@ Option.map name_prefix ~f:(fun s -> s ^ "_") in
     let ord ctx = ctx.device.ordinal in
-    let name_suffix : string = [%string "_from_dev_%{ord src#Int}_%{name_suffix}"] in
-    Backend.merge ~name_suffix tn ~accum ~src:src.ctx
+    let name_prefix : string = [%string "%{name_prefix}from_dev_%{ord src#Int}"] in
+    Backend.merge ~name_prefix tn ~accum ~src:src.ctx
 
-  let merge_batch ?name_suffixes ~occupancy tns ~accum ~srcs =
-    let len = Array.length srcs in
-    let name_suffixes = Option.value_or_thunk name_suffixes ~default:(fun () -> Array.create ~len "") in
+  let merge_batch ?name_prefixes ~occupancy tns ~accum ~srcs =
     let ord ctx = ctx.device.ordinal in
-    let name_suffixes =
-      Array.map2_exn name_suffixes srcs ~f:(fun suf src -> [%string "_from_dev_%{ord src#Int}_%{suf}"])
+    let name_prefixes =
+      let f prefix src = [%string "%{prefix}from_dev_%{ord src#Int}"] in
+      match name_prefixes with
+      | None -> Array.map srcs ~f:(f "")
+      | Some prefixes -> Array.map2_exn prefixes srcs ~f:(fun p -> f @@ p ^ "_")
     in
     let devices, srcs = Array.unzip (Array.map srcs ~f:(fun s -> (s.device, s.ctx))) in
     let occupancy tn ~src_n ~src = occupancy tn ~src_n ~src:{ device = devices.(src_n); ctx = src } in
-    Backend.merge_batch ~name_suffixes ~occupancy tns ~accum ~srcs
+    Backend.merge_batch ~name_prefixes ~occupancy tns ~accum ~srcs
 
   let num_devices () = Domain.recommended_domain_count () - 1
 
@@ -244,15 +245,13 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
   let from_host = from_host
   let to_host = to_host
 
-  let merge ?name_suffix tn ~accum ~(src : context) =
+  let merge ?name_prefix tn ~accum ~(src : context) =
     let bindings = Indexing.Empty in
-    merge ?name_suffix tn ~accum ~src bindings |> Option.map ~f:(fun prejitted -> Jitted prejitted)
+    merge ?name_prefix tn ~accum ~src bindings |> Option.map ~f:(fun prejitted -> Jitted prejitted)
 
-  let merge_batch ?name_suffixes ~occupancy tns ~accum ~(srcs : context array) =
+  let merge_batch ?name_prefixes ~occupancy tns ~accum ~(srcs : context array) =
     let bindings = Indexing.Empty in
-    let len = Array.length srcs in
-    let name_suffixes = Option.value_or_thunk name_suffixes ~default:(fun () -> Array.create ~len "") in
-    merge_batch ~name_suffixes ~occupancy tns ~accum ~srcs bindings
+    merge_batch ?name_prefixes ~occupancy tns ~accum ~srcs bindings
     |> Hashtbl.map ~f:(fun cds -> Array.map cds ~f:(Option.map ~f:(fun prejitted -> Jitted prejitted)))
 end
 
@@ -299,12 +298,12 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   let from_host = from_host
   let to_host = to_host
 
-  let merge ?name_suffix tn ~accum ~(src : context) =
+  let merge ?name_prefix tn ~accum ~(src : context) =
     let bindings = Indexing.Empty in
-    ignore (bindings, name_suffix, tn, accum, src);
+    ignore (bindings, name_prefix, tn, accum, src);
     failwith "NOT IMPLEMENTED YET"
 
-  let merge_batch ?name_suffixes:_ ~occupancy:_ _tns ~accum:_ ~srcs:_ = failwith "NOT IMPLEMENTED YET"
+  let merge_batch ?name_prefixes:_ ~occupancy:_ _tns ~accum:_ ~srcs:_ = failwith "NOT IMPLEMENTED YET"
   let await = await
   let num_devices = num_devices
   let get_device = get_device
