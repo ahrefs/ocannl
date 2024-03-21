@@ -30,6 +30,12 @@ module type No_device_backend = sig
   val sexp_of_context : context -> Sexp.t
   val sexp_of_jitted : jitted -> Sexp.t
   val prejit : shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> code
+
+  val prejit_batch :
+    shared:bool -> ?names:string array -> Indexing.unit_bindings -> Assignments.t array -> code array
+  (** Unlike the [~shared] parameter, [prejit_batch] vs. [prejit] is purely about improving the compile
+      time (does not affect execution). *)
+
   val jit : context -> code -> jitted
   val jit_code : context -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> jitted
 
@@ -48,6 +54,15 @@ module type No_device_backend = sig
       If the array is hosted, its state on host is undefined after this operation. (A backend may choose
       to use the host array as a buffer, if that is beneficial.) [name_suffix] is appended to
       the jitted function's name. Returns [None] if the array is not in the context. *)
+
+  val merge_batch :
+    ?name_suffixes:string array ->
+    occupancy:(Tnode.t -> src_n:int -> src:context -> bool) ->
+    Tnode.t list ->
+    accum:Ops.binop ->
+    srcs:context array ->
+    (Tnode.t, code option array) Hashtbl.t
+  (** [merge_batch] vs. [merge] is purely about improving the compile time (does not affect execution). *)
 end
 
 module type Backend = sig
@@ -101,6 +116,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     Backend.finalize ctx
 
   let prejit = Backend.prejit
+  let prejit_batch = Backend.prejit_batch
 
   let jit { ctx; device } prejitted : jitted =
     let task = Backend.jit ctx prejitted in
@@ -127,11 +143,22 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     await device;
     Backend.to_host ctx
 
-  let merge ?name_suffix la ~accum ~src =
+  let merge ?name_suffix tn ~accum ~src =
     let name_suffix : string = Option.value name_suffix ~default:"" in
     let ord ctx = ctx.device.ordinal in
     let name_suffix : string = [%string "_from_dev_%{ord src#Int}_%{name_suffix}"] in
-    Backend.merge ~name_suffix la ~accum ~src:src.ctx
+    Backend.merge ~name_suffix tn ~accum ~src:src.ctx
+
+  let merge_batch ?name_suffixes ~occupancy tns ~accum ~srcs =
+    let len = Array.length srcs in
+    let name_suffixes = Option.value_or_thunk name_suffixes ~default:(fun () -> Array.create ~len "") in
+    let ord ctx = ctx.device.ordinal in
+    let name_suffixes =
+      Array.map2_exn name_suffixes srcs ~f:(fun suf src -> [%string "_from_dev_%{ord src#Int}_%{suf}"])
+    in
+    let devices, srcs = Array.unzip (Array.map srcs ~f:(fun s -> (s.device, s.ctx))) in
+    let occupancy tn ~src_n ~src = occupancy tn ~src_n ~src:{ device = devices.(src_n); ctx = src } in
+    Backend.merge_batch ~name_suffixes ~occupancy tns ~accum ~srcs
 
   let num_devices () = Domain.recommended_domain_count () - 1
 
@@ -174,7 +201,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let to_ordinal device = device.ordinal
 end
 
-module Gccjit_device (* : No_device_backend with type context = Gccjit_backend.context *) = struct
+module Gccjit_device : No_device_backend with type context = Gccjit_backend.context = struct
   type code = Gccjit_backend.code [@@deriving sexp_of]
   type context = Gccjit_backend.context [@@deriving sexp_of]
   type nonrec jitted = context jitted [@@deriving sexp_of]
@@ -195,6 +222,20 @@ module Gccjit_device (* : No_device_backend with type context = Gccjit_backend.c
     if shared then Jitted (prejit ~name ~opt_ctx_arrays:None bindings compiled)
     else Postponed { compiled; bindings; name }
 
+  let prejit_batch ~shared ?names bindings asgns_l =
+    let names =
+      Option.value_or_thunk names ~default:(fun () ->
+          Array.map asgns_l ~f:(fun asgns -> Assignments.get_name asgns))
+    in
+    let bound = Indexing.bound_symbols bindings in
+    let compileds =
+      Array.map2_exn names asgns_l ~f:(fun name asgns -> Assignments.compile_proc ~name bound asgns)
+    in
+    if shared then
+      let prejits = prejit_batch ~names ~opt_ctx_arrays:None bindings compileds in
+      Array.map prejits ~f:(fun jitted -> Jitted jitted)
+    else Array.map2_exn names compileds ~f:(fun name compiled -> Postponed { compiled; bindings; name })
+
   let jit context code =
     let context, bindings, schedule, name = jit context code in
     { context; schedule : unit -> Tnode.work; bindings; name }
@@ -203,9 +244,16 @@ module Gccjit_device (* : No_device_backend with type context = Gccjit_backend.c
   let from_host = from_host
   let to_host = to_host
 
-  let merge ?name_suffix la ~accum ~(src : context) =
+  let merge ?name_suffix tn ~accum ~(src : context) =
     let bindings = Indexing.Empty in
-    merge ?name_suffix la ~accum ~src bindings |> Option.map ~f:(fun prejitted -> Jitted prejitted)
+    merge ?name_suffix tn ~accum ~src bindings |> Option.map ~f:(fun prejitted -> Jitted prejitted)
+
+  let merge_batch ?name_suffixes ~occupancy tns ~accum ~(srcs : context array) =
+    let bindings = Indexing.Empty in
+    let len = Array.length srcs in
+    let name_suffixes = Option.value_or_thunk name_suffixes ~default:(fun () -> Array.create ~len "") in
+    merge_batch ~name_suffixes ~occupancy tns ~accum ~srcs bindings
+    |> Hashtbl.map ~f:(fun cds -> Array.map cds ~f:(Option.map ~f:(fun prejitted -> Jitted prejitted)))
 end
 
 module Gccjit_backend = Multicore_backend (Gccjit_device)
@@ -241,6 +289,8 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
     let compiled = Assignments.compile_proc ~name (Indexing.bound_symbols bindings) asgns in
     { compiled; bindings; name }
 
+  let prejit_batch ~shared:_ ?names:_ _bindings _asgns_batch = failwith "NOT IMPLEMENTED YET"
+
   let jit context code =
     let context, bindings, schedule = jit context ~name:code.name code.bindings code.compiled in
     { context; schedule; bindings; name }
@@ -249,11 +299,12 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   let from_host = from_host
   let to_host = to_host
 
-  let merge ?name_suffix la ~accum ~(src : context) =
+  let merge ?name_suffix tn ~accum ~(src : context) =
     let bindings = Indexing.Empty in
-    ignore (bindings, name_suffix, la, accum, src);
+    ignore (bindings, name_suffix, tn, accum, src);
     failwith "NOT IMPLEMENTED YET"
 
+  let merge_batch ?name_suffixes:_ ~occupancy:_ _tns ~accum:_ ~srcs:_ = failwith "NOT IMPLEMENTED YET"
   let await = await
   let num_devices = num_devices
   let get_device = get_device

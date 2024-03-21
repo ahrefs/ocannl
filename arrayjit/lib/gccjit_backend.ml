@@ -610,9 +610,6 @@ let%track_sexp jit_func ~name ~opt_ctx_arrays ctx bindings (traced_store, proc) 
   | None -> ());
   Block.jump init_block main_block;
   Block.return_void after_proc;
-  (if Utils.settings.output_debug_files_in_run_directory then
-     let f_name = name ^ "-gccjit-debug.c" in
-     Context.dump_to_file ctx ~update_locs:true f_name);
   (ctx_info, !ctx_arrays, params)
 
 let header_sep =
@@ -626,15 +623,42 @@ let%track_sexp prejit ~(name : string) ~opt_ctx_arrays bindings
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
   Context.set_option ctx Context.Optimization_level !optimization_level;
   (*
-  if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
-    Context.set_option ctx Context.Keep_intermediates true;
-    Context.set_option ctx Context.Dump_everything true);
-  *)
+if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
+  Context.set_option ctx Context.Keep_intermediates true;
+  Context.set_option ctx Context.Dump_everything true);
+*)
   let info, ctx_arrays, params = jit_func ~name ~opt_ctx_arrays ctx bindings compiled in
+  (if Utils.settings.output_debug_files_in_run_directory then
+     let f_name = name ^ "-gccjit-debug.c" in
+     Context.dump_to_file ctx ~update_locs:true f_name);
   let opt_ctx_arrays = if Map.is_empty ctx_arrays then None else Some ctx_arrays in
   let result = Context.compile ctx in
   Context.release ctx;
   { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params }
+
+let%track_sexp prejit_batch ~(names : string array) ~opt_ctx_arrays bindings
+    (compileds : (Low_level.traced_store * Low_level.t) array) =
+  let open Gccjit in
+  if Option.is_none !root_ctx then initialize ();
+  let ctx = Context.create_child @@ Option.value_exn !root_ctx in
+  Context.set_option ctx Context.Optimization_level !optimization_level;
+  (*
+  if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
+    Context.set_option ctx Context.Keep_intermediates true;
+    Context.set_option ctx Context.Dump_everything true);
+  *)
+  let funcs =
+    Array.map2_exn names compileds ~f:(fun name compiled ->
+        jit_func ~name ~opt_ctx_arrays ctx bindings compiled)
+  in
+  (if Utils.settings.output_debug_files_in_run_directory then
+     let f_name = String.common_prefix (Array.to_list names) ^ "-gccjit-debug.c" in
+     Context.dump_to_file ctx ~update_locs:true f_name);
+  let result = Context.compile ctx in
+  Context.release ctx;
+  Array.map2_exn names funcs ~f:(fun name (info, ctx_arrays, params) ->
+      let opt_ctx_arrays = if Map.is_empty ctx_arrays then None else Some ctx_arrays in
+      { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params })
 
 let%track_sexp jit_prejitted (old_context : context) (code : prejitted) : context * _ * _ * string =
   let label : string = old_context.label in
@@ -756,7 +780,7 @@ let%track_sexp to_host (context : context) (la : Tn.t) : bool =
           true
       | _ -> false)
 
-let%track_sexp merge_from_global ?(name_suffix = "") ~dst ~accum ~src bindings =
+let%track_sexp merge_from_global ~name ~dst ~accum ~src =
   let body idcs =
     Low_level.(
       Set
@@ -772,10 +796,33 @@ let%track_sexp merge_from_global ?(name_suffix = "") ~dst ~accum ~src bindings =
         })
   in
   let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
-  let name = [%string "merge_into_%{Tn.name dst}_%{name_suffix}"] in
-  let compiled = Low_level.compile_proc ~name [] llc in
-  prejit ~opt_ctx_arrays:None ~name bindings compiled
+  Low_level.compile_proc ~name [] llc
 
-let%track_sexp merge ?name_suffix la ~accum ~(src : context) bindings =
+let%track_sexp merge ?(name_suffix = "") la ~accum ~(src : context) bindings =
   Option.map (Map.find src.arrays la) ~f:(fun (src : Ndarray.t) ->
-      merge_from_global ?name_suffix ~dst:la ~accum ~src:(Ndarray.get_voidptr src) bindings)
+      let name = [%string "merge_into_%{Tn.name la}_%{name_suffix}"] in
+      prejit ~opt_ctx_arrays:None ~name bindings
+      @@ merge_from_global ~name ~dst:la ~accum ~src:(Ndarray.get_voidptr src))
+
+let%track_sexp merge_batch ~name_suffixes ~occupancy tns ~accum ~(srcs : context array) bindings =
+  let complete =
+    Array.concat_map (Array.of_list tns) ~f:(fun tn ->
+        Array.mapi srcs ~f:(fun i src ->
+            if not @@ occupancy tn ~src_n:i ~src then None
+            else
+              Option.map (Map.find src.arrays tn) ~f:(fun (src : Ndarray.t) ->
+                  let name = [%string "merge_into_%{Tn.name tn}_%{name_suffixes.(i)}"] in
+                  ((tn, i), (name, merge_from_global ~name ~dst:tn ~accum ~src:(Ndarray.get_voidptr src))))))
+  in
+  let ids, compileds = Array.unzip @@ Array.filter_opt complete in
+  let names, compileds = Array.unzip compileds in
+  let result = prejit_batch ~opt_ctx_arrays:None ~names bindings compileds in
+  let len = Array.length srcs in
+  let together =
+    Hashtbl.of_alist_exn (module Tn) @@ List.map tns ~f:(fun tn -> (tn, Array.create ~len None))
+  in
+  Array.iter2_exn ids result ~f:(fun (tn, i) res ->
+      let r = Hashtbl.find_exn together tn in
+      assert (Option.is_none r.(i));
+      r.(i) <- Some res);
+  together
