@@ -808,11 +808,14 @@ let%track_sexp merge_batch ~name_suffixes ~occupancy tns ~accum ~(srcs : context
   let complete =
     Array.concat_map (Array.of_list tns) ~f:(fun tn ->
         Array.mapi srcs ~f:(fun i src ->
-            if not @@ occupancy tn ~src_n:i ~src then None
-            else
-              Option.map (Map.find src.arrays tn) ~f:(fun (src : Ndarray.t) ->
-                  let name = [%string "merge_into_%{Tn.name tn}_%{name_suffixes.(i)}"] in
-                  ((tn, i), (name, merge_from_global ~name ~dst:tn ~accum ~src:(Ndarray.get_voidptr src))))))
+            match (occupancy tn ~src_n:i ~src, Map.find src.arrays tn) with
+            | Utils.Skip, _ | Optional, None -> None
+            | Required, None ->
+                failwith @@ "Gccjit_backend.merge_batch: missing tnode " ^ Tn.name tn ^ " in context "
+                ^ src.label
+            | _, Some src ->
+                let name = [%string "merge_into_%{Tn.name tn}_%{name_suffixes.(i)}"] in
+                Some ((tn, i), (name, merge_from_global ~name ~dst:tn ~accum ~src:(Ndarray.get_voidptr src)))))
   in
   let ids, compileds = Array.unzip @@ Array.filter_opt complete in
   let names, compileds = Array.unzip compileds in

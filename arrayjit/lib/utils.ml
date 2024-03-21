@@ -290,3 +290,5 @@ module Lazy = struct
   let sexp_of_t = Minidebug_runtime.sexp_of_lazy_t
   let sexp_of_lazy_t = Minidebug_runtime.sexp_of_lazy_t
 end
+
+type requirement = Skip | Required | Optional [@@deriving compare, sexp]

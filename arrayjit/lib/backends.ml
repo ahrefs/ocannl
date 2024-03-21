@@ -57,7 +57,7 @@ module type No_device_backend = sig
 
   val merge_batch :
     ?name_suffixes:string array ->
-    occupancy:(Tnode.t -> src_n:int -> src:context -> bool) ->
+    occupancy:(Tnode.t -> src_n:int -> src:context -> Utils.requirement) ->
     Tnode.t list ->
     accum:Ops.binop ->
     srcs:context array ->
