@@ -26,7 +26,7 @@ let experiment ~seed ~use_builtin_weight_decay () =
   let minibatch_size = batch_size / num_devices in
   let n_batches = 2 * len / minibatch_size in
   let epochs = 20 in
-  (* let epochs = 5 in *)
+  (* let epochs = 1 in *)
   let steps = epochs * n_batches in
   Utils.settings.fixed_state_for_init <- Some seed;
   let noise () = Random.float_range (-0.1) 0.1 in

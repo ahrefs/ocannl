@@ -151,6 +151,25 @@ let%track_sexp round_robin fs parallel_jitbs jitbs ~sync : unit =
   loop jitbs;
   if !pos % num_devices <> 0 then sync (!pos % num_devices)
 
+let%track_sexp round_robin_dry_run ~num_devices jitbs ~dry_sync : unit =
+  let pos = ref 0 in
+  let rec loop = function
+    | [] ->
+        Int.incr pos;
+        if !pos % num_devices = 0 then dry_sync num_devices
+    | ({ Idx.static_range = None; static_symbol = _ }, _) :: more -> loop more
+    | ({ Idx.static_range = Some range; static_symbol = _ }, idx)
+      :: ({ Idx.static_range = None; static_symbol = _ }, _)
+      :: more
+    | ({ Idx.static_range = Some range; static_symbol = _ }, idx) :: more ->
+        for i = 0 to range - 1 do
+          idx := i;
+          loop more
+        done
+  in
+  loop jitbs;
+  if !pos % num_devices <> 0 then dry_sync (!pos % num_devices)
+
 let set_virtual (a : Tn.t) = Tn.update_memory_mode a Virtual 29
 
 let every_non_literal_on_host =
@@ -221,6 +240,11 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   assert (not @@ Array.is_empty grad_updates);
   let num_devices : int = Array.length grad_updates in
   let bindings : Idx.static_symbol list = List.map ~f:fst sgd_update.bindings in
+  let occupancies = Array.init num_devices ~f:(fun _ -> Array.create ~len:num_devices false) in
+  (* to_, from positions correspond to the contexts (and devices) of grad_updates at the position. *)
+  let dry_merge ~from ~to_ = occupancies.(from).(to_) <- true in
+  let dry_sync devices_to_sync = Arrayjit.Utils.parallel_merge dry_merge devices_to_sync in
+  round_robin_dry_run ~num_devices sgd_update.bindings ~dry_sync;
   [%debug_notrace
     assert (
       Array.for_all grad_updates ~f:(fun upd ->
@@ -229,44 +253,48 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   let param_vals = [%debug_notrace List.map all_params ~f:(fun t -> t.value)] in
   let param_grads = [%debug_notrace List.map all_params ~f:(fun t -> (Option.value_exn t.diff).grad)] in
   let ctxs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.context)] in
-  let jit_merge ~name_suffix ~to_ ~from ~error tn ~accum =
-    let prejitted = Backend.merge ~name_suffix tn ~accum ~src:ctxs.(from) in
-    let prejitted = Option.value_or_thunk prejitted ~default:(fun () -> invalid_arg @@ error ^ Tn.label tn) in
-    Backend.jit ctxs.(to_) prejitted
+  let occupancy _tn ~src_n ~src:_ =
+    if Array.exists ~f:Fn.id occupancies.(src_n) then Utils.Required else Utils.Skip
   in
-  (* By being lazy, we don't need to worry about how devices are paired up. *)
+  (* FIXME: upstream suffixes -> prefixes *)
+  let name_suffixes = Array.init num_devices ~f:(fun i -> "grad_merge_from_dev_" ^ Int.to_string i) in
+  let grad_merges =
+    Backend.merge_batch ~name_suffixes ~occupancy param_grads ~accum:Arrayjit.Ops.Add ~srcs:ctxs
+  in
+  let grad_merges =
+    Hashtbl.data grad_merges
+    |> List.map ~f:(Array.map ~f:Option.to_list)
+    |> List.reduce_exn ~f:(Array.map2_exn ~f:( @ ))
+  in
+  let grad_merges =
+    Array.init num_devices ~f:(fun (to_ : int) ->
+        Array.init num_devices ~f:(fun (from : int) ->
+            (* It is safe to cache scheduling, because merging does not use static indices. *)
+            List.map grad_merges.(from) ~f:(fun c -> (Backend.jit ctxs.(to_) c).schedule ())))
+  in
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
-  let merges =
-    if num_devices < 2 then [| [||] |]
-    else
-      Array.init num_devices ~f:(fun (to_ : int) ->
-          Array.init num_devices ~f:(fun (from : int) ->
-              lazy
-                (List.map param_grads ~f:(fun p ->
-                     let jitted =
-                       jit_merge ~name_suffix:"grad_merge" ~to_ ~from
-                         ~error:"Train.parallel_update: gradient not available on a device: " p
-                         ~accum:Arrayjit.Ops.Add
-                     in
-                     jitted.Arrayjit.Backends.schedule ()))))
+  let name_suffixes = Array.init num_devices ~f:(fun i -> "loss_merge_from_dev_" ^ Int.to_string i) in
+  let loss_merges =
+    Backend.merge_batch ~name_suffixes ~occupancy [ updaten.loss.value ] ~accum:Arrayjit.Ops.Add ~srcs:ctxs
   in
   let loss_merges =
-    if num_devices < 2 then [| [||] |]
-    else
-      Array.init num_devices ~f:(fun (to_ : int) ->
-          Array.init num_devices ~f:(fun (from : int) ->
-              lazy
-                (let jitted =
-                   jit_merge ~name_suffix:"loss_merge" ~to_ ~from
-                     ~error:"Train.parallel_update: loss not available on a device: " updaten.loss.value
-                     ~accum:Arrayjit.Ops.Add
-                 in
-                 jitted.Arrayjit.Backends.schedule ())))
+    Hashtbl.data loss_merges
+    |> List.map ~f:(Array.map ~f:Option.to_list)
+    |> List.reduce_exn ~f:(Array.map2_exn ~f:( @ ))
+  in
+  let loss_merges =
+    Array.init num_devices ~f:(fun (to_ : int) ->
+        Array.init num_devices ~f:(fun (from : int) ->
+            (* It is safe to cache scheduling, because merging does not use static indices. *)
+            match loss_merges.(from) with
+            | [] -> None
+            | [ c ] -> Some ((Backend.jit ctxs.(to_) c).schedule ())
+            | _ -> assert false))
   in
   let merge ~(from : int) ~(to_ : int) : unit =
     Backend.(await @@ get_ctx_device ctxs.(from));
-    Tn.run debug_rt @@ Lazy.force loss_merges.(to_).(from);
-    List.iter ~f:(Tn.run debug_rt) @@ Lazy.force merges.(to_).(from)
+    Option.iter ~f:(Tn.run debug_rt) loss_merges.(to_).(from);
+    List.iter ~f:(Tn.run debug_rt) grad_merges.(to_).(from)
   in
   let needed_on_host = ref @@ Set.empty (module Tn) in
   let copies =
