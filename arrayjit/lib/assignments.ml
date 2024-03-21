@@ -327,11 +327,6 @@ let%debug_sexp compile_proc ?(ident_style = `Heuristic_ocannl) ~name static_indi
   let llc = to_low_level proc in
   (* Generate the low-level code before outputting the assignments, to force projections. *)
   if Utils.settings.output_debug_files_in_run_directory then (
-    let fname = name ^ ".hlc" in
-    let f = Stdio.Out_channel.create fname in
-    let ppf = Stdlib.Format.formatter_of_out_channel f in
-    Stdlib.Format.pp_set_margin ppf !Low_level.code_sexp_margin;
-    Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t proc);
     let fname = name ^ ".cd" in
     let f = Stdio.Out_channel.create fname in
     Stdio.Out_channel.output_string f @@ to_string_hum ~ident_style proc);

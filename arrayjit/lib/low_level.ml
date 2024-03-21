@@ -703,12 +703,7 @@ let%debug_sexp optimize_proc static_indices llc =
   in
   (traced_store, result)
 
-let code_sexp_margin = ref 200
 let code_hum_margin = ref 100
-
-let fprint_llc ppf c =
-  Stdlib.Format.pp_set_margin ppf !code_sexp_margin;
-  Stdlib.Format.fprintf ppf "%a" Sexp.pp_hum @@ sexp_of_t c
 
 let fprint_hum ?(ident_style = `Heuristic_ocannl) () ppf llc =
   let open Stdlib.Format in
@@ -802,22 +797,12 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) () ppf llc =
 let%debug_sexp compile_proc ~(name : string) (static_indices : Indexing.static_symbol list) (llc : t) :
     (Tn.t, traced_array) Base.Hashtbl.t * t =
   if Utils.settings.output_debug_files_in_run_directory then (
-    let fname = name ^ "-unoptimized.llc" in
-    let f = Stdio.Out_channel.create fname in
-    let ppf = Stdlib.Format.formatter_of_out_channel f in
-    Stdlib.Format.pp_set_margin ppf !code_sexp_margin;
-    Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t llc);
     let fname = name ^ "-unoptimized.ll" in
     let f = Stdio.Out_channel.create fname in
     let ppf = Stdlib.Format.formatter_of_out_channel f in
     Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ()) llc);
   let result = optimize_proc static_indices llc in
   if Utils.settings.output_debug_files_in_run_directory then (
-    let fname = name ^ ".llc" in
-    let f = Stdio.Out_channel.create fname in
-    let ppf = Stdlib.Format.formatter_of_out_channel f in
-    Stdlib.Format.pp_set_margin ppf !code_sexp_margin;
-    Stdlib.Format.fprintf ppf "%a%!" Sexp.pp_hum (sexp_of_t @@ snd result);
     let fname = name ^ ".ll" in
     let f = Stdio.Out_channel.create fname in
     let ppf = Stdlib.Format.formatter_of_out_channel f in
@@ -845,7 +830,6 @@ module CDSL = struct
   let single = Ops.single
   let double = Ops.double
   let virtualize_settings = virtualize_settings
-  let code_sexp_margin = code_sexp_margin
 
   let enable_all_debugs ?(debug_logs = false) ?(hosted_only = true) () =
     Utils.settings.with_debug <- true;
