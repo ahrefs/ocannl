@@ -223,6 +223,11 @@ let sync_run ?looping (type context) (module Backend : Backend_type with type co
 
 module Lazy = Utils.Lazy
 
+let collapse_merges merges =
+  Hashtbl.data merges
+  |> List.map ~f:(Array.map ~f:Option.to_list)
+  |> List.reduce_exn ~f:(Array.map2_exn ~f:( @ ))
+
 (** Performs one optimization step, potentially in parallel (if [grad_updates] are compiled for different
     devices). All jitted code must have the same bindings. Iterates over bindings with ranges, calling
     one of [grad_updates] in a round-robin fashion, and performs the following synchronization each time
@@ -258,12 +263,8 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   in
   let name_prefixes = Array.create ~len:num_devices "grad_merge" in
   let grad_merges =
-    Backend.merge_batch ~name_prefixes ~occupancy param_grads ~accum:Arrayjit.Ops.Add ~srcs:ctxs
-  in
-  let grad_merges =
-    Hashtbl.data grad_merges
-    |> List.map ~f:(Array.map ~f:Option.to_list)
-    |> List.reduce_exn ~f:(Array.map2_exn ~f:( @ ))
+    collapse_merges
+    @@ Backend.merge_batch ~name_prefixes ~occupancy param_grads ~accum:Arrayjit.Ops.Add ~srcs:ctxs
   in
   let grad_merges =
     Array.init num_devices ~f:(fun (to_ : int) ->
@@ -274,12 +275,8 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
   let name_prefixes = Array.create ~len:num_devices "loss_merge" in
   let loss_merges =
-    Backend.merge_batch ~name_prefixes ~occupancy [ updaten.loss.value ] ~accum:Arrayjit.Ops.Add ~srcs:ctxs
-  in
-  let loss_merges =
-    Hashtbl.data loss_merges
-    |> List.map ~f:(Array.map ~f:Option.to_list)
-    |> List.reduce_exn ~f:(Array.map2_exn ~f:( @ ))
+    collapse_merges
+    @@ Backend.merge_batch ~name_prefixes ~occupancy [ updaten.loss.value ] ~accum:Arrayjit.Ops.Add ~srcs:ctxs
   in
   let loss_merges =
     Array.init num_devices ~f:(fun (to_ : int) ->
@@ -296,23 +293,21 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     List.iter ~f:(Tn.run debug_rt) grad_merges.(to_).(from)
   in
   let needed_on_host = ref @@ Set.empty (module Tn) in
+  (* Backends may choose to not store parameters on devices other than the 0th. *)
+  let occupancy p ~src_n:_ ~src:_ =
+    Utils.Optional { callback_if_missing = (fun () -> needed_on_host := Set.add !needed_on_host p) }
+  in
   let copies =
-    if num_devices < 2 then [||]
-    else
-      Array.init (num_devices - 1) ~f:(fun to_m_1 ->
-          let to_ : int = to_m_1 + 1 in
-          (* Backends may choose to not store parameters on devices other than the 0th. *)
-          List.filter_map param_vals ~f:(fun p ->
-              let prejitted =
-                Backend.merge ~name_prefix:"param_copy" p ~accum:Arrayjit.Ops.Arg2 ~src:ctxs.(0)
-              in
-              match prejitted with
-              | Some prejitted ->
-                  let jitted = Backend.jit ctxs.(to_) prejitted in
-                  Some (jitted.Arrayjit.Backends.schedule ())
-              | None ->
-                  needed_on_host := Set.add !needed_on_host p;
-                  None))
+    collapse_merges @@ Backend.merge_batch ~name_prefixes:[| "param_copy" |] ~occupancy param_vals ~accum:Arrayjit.Ops.Arg2
+      ~srcs:[| sgd_update.context |]
+  in
+  let copies =
+    assert (Array.length copies = 1);
+    copies.(0)
+  in
+  let copies =
+    Array.init (num_devices - 1) ~f:(fun (to_m_1 : int) ->
+        List.map copies ~f:(fun c -> (Backend.jit ctxs.(to_m_1 + 1) c).schedule ()))
   in
   let%track_sexp sync (devices_to_sync : int) : unit =
     Arrayjit.Utils.parallel_merge merge devices_to_sync;

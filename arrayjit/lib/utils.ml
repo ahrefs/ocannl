@@ -291,4 +291,5 @@ module Lazy = struct
   let sexp_of_lazy_t = Minidebug_runtime.sexp_of_lazy_t
 end
 
-type requirement = Skip | Required | Optional [@@deriving compare, sexp]
+type requirement = Skip | Required | Optional of { callback_if_missing : unit -> unit [@sexp.opaque][@compare.ignore] }
+[@@deriving compare, sexp]

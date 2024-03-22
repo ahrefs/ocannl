@@ -714,7 +714,7 @@ let%track_sexp jit_prejitted (old_context : context) (code : prejitted) : contex
     let%diagn_rt_sexp work () : unit =
       [%log_result name];
       callback ();
-      if Utils.settings.debug_log_jitted then
+      if Utils.settings.debug_log_jitted then (
         let rec loop = function
           | [] -> []
           | line :: more when String.is_empty line -> loop more
@@ -744,7 +744,7 @@ let%track_sexp jit_prejitted (old_context : context) (code : prejitted) : contex
               loop more
         in
         assert (List.is_empty @@ loop (Stdio.In_channel.read_lines log_file_name));
-        Stdlib.Sys.remove log_file_name
+        Stdlib.Sys.remove log_file_name)
     in
     Tn.Work work
   in
@@ -814,7 +814,10 @@ let%track_sexp merge_batch ?(name_prefixes : string array option) ~occupancy tns
     Array.concat_map (Array.of_list tns) ~f:(fun tn ->
         Array.mapi srcs ~f:(fun i src ->
             match (occupancy tn ~src_n:i ~src, Map.find src.arrays tn) with
-            | Utils.Skip, _ | Optional, None -> None
+            | Utils.Skip, _ -> None
+            | Optional { callback_if_missing }, None ->
+                callback_if_missing ();
+                None
             | Required, None ->
                 failwith @@ "Gccjit_backend.merge_batch: missing tnode " ^ Tn.name tn ^ " in context "
                 ^ src.label
