@@ -1,4 +1,5 @@
 open Base
+
 module Lazy = Utils.Lazy
 (** The code for operating on n-dimensional arrays. *)
 
@@ -290,12 +291,12 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
         else
           (* Check for escaping variables. *)
           Array.iter idcs ~f:(function
-            | Iterator s as idx when not (Set.mem static_indices s) ->
+            | Iterator s as _idx when not (Set.mem static_indices s) ->
                 if not @@ Set.mem env_dom s then
                   if Utils.settings.with_debug then
                     [%log
                       "INFO: Inlining candidate has an escaping variable",
-                        (idx : Indexing.axis_index),
+                        (_idx : Indexing.axis_index),
                         (top_llc : t)];
                 raise @@ Non_virtual 7
             | _ -> ());
@@ -704,16 +705,32 @@ let%debug_sexp optimize_proc static_indices llc =
   (traced_store, result)
 
 let code_hum_margin = ref 100
+let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
+let pp_symbol ppf sym = Stdlib.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym
 
-let fprint_hum ?(ident_style = `Heuristic_ocannl) () ppf llc =
+let pp_static_symbol ppf { Indexing.static_symbol; static_range } =
+  match static_range with
+  | None -> pp_symbol ppf static_symbol
+  | Some range -> Stdlib.Format.fprintf ppf "%a : [0..%d]" pp_symbol static_symbol (range - 1)
+
+let pp_index ppf idx =
+  match idx with
+  | Indexing.Iterator sym -> pp_symbol ppf sym
+  | Fixed_idx i -> Stdlib.Format.fprintf ppf "%d" i
+
+let pp_indices ppf idcs = Stdlib.Format.pp_print_list ~pp_sep:pp_comma pp_index ppf @@ Array.to_list idcs
+
+let fprint_function_header ?name ?static_indices () ppf =
+  let open Stdlib.Format in
+  match (name, static_indices) with
+  | Some name, Some static_indices ->
+      fprintf ppf "%s @[(%a)@]:@ " name (pp_print_list ~pp_sep:pp_comma pp_static_symbol) static_indices
+  | Some name, None -> fprintf ppf "%s:@ " name
+  | _ -> ()
+
+let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf llc =
   let open Stdlib.Format in
   pp_set_margin ppf !code_hum_margin;
-  let pp_comma ppf () = fprintf ppf ",@ " in
-  let pp_symbol ppf sym = fprintf ppf "%s" @@ Indexing.symbol_ident sym in
-  let pp_index ppf idx =
-    match idx with Indexing.Iterator sym -> pp_symbol ppf sym | Fixed_idx i -> fprintf ppf "%d" i
-  in
-  let pp_indices ppf idcs = pp_print_list ~pp_sep:pp_comma pp_index ppf @@ Array.to_list idcs in
   let nograd_idents = Hashtbl.create (module String) in
   let nograd la =
     if List.mem ~equal:String.equal la.Tn.label "grad" then ()
@@ -763,7 +780,7 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) () ppf llc =
         fprintf ppf "@[<v 0>%a@]" (pp_print_list pp_ll)
           (List.filter [ c1; c2 ] ~f:(function Noop -> false | _ -> true))
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-        fprintf ppf "@[<v 2>for %a = %d to %d {@ %a@]@ }" pp_symbol i from_ to_ pp_ll body
+        fprintf ppf "@[<v 2>for %a = %d to %d {@ %a@]@,}" pp_symbol i from_ to_ pp_ll body
     | Zero_out array -> fprintf ppf "zero_out %a;" pp_ident array
     | Set p ->
         p.debug <- asprintf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.array pp_indices p.idcs pp_float p.llv;
@@ -792,21 +809,18 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) () ppf llc =
     | Unop (Identity, v) -> pp_float ppf v
     | Unop (Relu, v) -> fprintf ppf "@[<1>relu(%a@])" pp_float v
   in
-  pp_ll ppf llc
+  fprintf ppf "@,@[<v 2>";
+  fprint_function_header ?name ?static_indices () ppf;
+  pp_ll ppf llc;
+  fprintf ppf "@]"
 
-let%debug_sexp compile_proc ~(name : string) (static_indices : Indexing.static_symbol list) (llc : t) :
-    (Tn.t, traced_array) Base.Hashtbl.t * t =
-  if Utils.settings.output_debug_files_in_run_directory then (
-    let fname = name ^ "-unoptimized.ll" in
-    let f = Stdio.Out_channel.create fname in
-    let ppf = Stdlib.Format.formatter_of_out_channel f in
-    Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ()) llc);
+let%debug_sexp compile_proc ~unoptim_ll_source ~ll_source ~(name : string)
+    (static_indices : Indexing.static_symbol list) (llc : t) : (Tn.t, traced_array) Base.Hashtbl.t * t =
+  Option.iter unoptim_ll_source ~f:(fun ppf ->
+      Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ~name ~static_indices ()) llc);
   let result = optimize_proc static_indices llc in
-  if Utils.settings.output_debug_files_in_run_directory then (
-    let fname = name ^ ".ll" in
-    let f = Stdio.Out_channel.create fname in
-    let ppf = Stdlib.Format.formatter_of_out_channel f in
-    Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ()) (snd result));
+  Option.iter ll_source ~f:(fun ppf ->
+      Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ~name ~static_indices ()) (snd result));
   result
 
 let loop_over_dims dims ~body =

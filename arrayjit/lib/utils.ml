@@ -293,3 +293,10 @@ end
 
 type requirement = Skip | Required | Optional of { callback_if_missing : unit -> unit [@sexp.opaque][@compare.ignore] }
 [@@deriving compare, sexp]
+
+let get_debug_formatter ~fname =
+  if settings.output_debug_files_in_run_directory then
+    let f = Stdio.Out_channel.create fname in
+    let ppf = Stdlib.Format.formatter_of_out_channel f in
+    Some ppf
+  else None

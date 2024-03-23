@@ -219,7 +219,13 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
 
   let prejit ~shared ?name bindings asgns =
     let name = Option.value name ~default:(Assignments.get_name asgns) in
-    let compiled = Assignments.compile_proc ~name (Indexing.bound_symbols bindings) asgns in
+    let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ "-unoptimized.ll") in
+    let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
+    let cd_source = Utils.get_debug_formatter ~fname:(name ^ ".cd") in
+    let compiled =
+      Assignments.compile_proc ~unoptim_ll_source ~ll_source ~cd_source ~name
+        (Indexing.bound_symbols bindings) asgns
+    in
     if shared then Jitted (prejit ~name ~opt_ctx_arrays:None bindings compiled)
     else Postponed { compiled; bindings; name }
 
@@ -228,9 +234,14 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
       Option.value_or_thunk names ~default:(fun () ->
           Array.map asgns_l ~f:(fun asgns -> Assignments.get_name asgns))
     in
+    let prefix_name = String.(strip ~drop:(equal_char '_') @@ common_prefix @@ Array.to_list names) in
+    let unoptim_ll_source = Utils.get_debug_formatter ~fname:(prefix_name ^ "-unoptimized.ll") in
+    let ll_source = Utils.get_debug_formatter ~fname:(prefix_name ^ ".ll") in
+    let cd_source = Utils.get_debug_formatter ~fname:(prefix_name ^ ".cd") in
     let bound = Indexing.bound_symbols bindings in
     let compileds =
-      Array.map2_exn names asgns_l ~f:(fun name asgns -> Assignments.compile_proc ~name bound asgns)
+      Array.map2_exn names asgns_l ~f:(fun name asgns ->
+          Assignments.compile_proc ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns)
     in
     if shared then
       let prejits = prejit_batch ~names ~opt_ctx_arrays:None bindings compileds in
@@ -285,7 +296,13 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
 
   let prejit ~shared:_ ?name bindings asgns =
     let name = Option.value name ~default:(Assignments.get_name asgns) in
-    let compiled = Assignments.compile_proc ~name (Indexing.bound_symbols bindings) asgns in
+    let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ "-unoptimized.ll") in
+    let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
+    let cd_source = Utils.get_debug_formatter ~fname:(name ^ ".cd") in
+    let compiled =
+      Assignments.compile_proc ~unoptim_ll_source ~ll_source ~cd_source ~name
+        (Indexing.bound_symbols bindings) asgns
+    in
     { compiled; bindings; name }
 
   let prejit_batch ~shared:_ ?names:_ _bindings _asgns_batch = failwith "NOT IMPLEMENTED YET"

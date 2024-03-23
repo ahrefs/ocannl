@@ -189,7 +189,7 @@ let%debug_sexp to_low_level code =
           Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops)
         else for_loops
     | Noop -> Low_level.Noop
-    | Block_comment (s, c) -> Low_level.unflat_lines [Comment s; loop c; Comment "end"]
+    | Block_comment (s, c) -> Low_level.unflat_lines [ Comment s; loop c; Comment "end" ]
     | Seq (c1, c2) ->
         let c1 = loop c1 in
         let c2 = loop c2 in
@@ -219,7 +219,7 @@ let flatten c =
   in
   loop c
 
-let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
+let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf c =
   let nograd_idents = Hashtbl.create (module String) in
   let nograd la =
     if List.mem ~equal:String.equal la.Tn.label "grad" then ()
@@ -244,90 +244,56 @@ let to_string_hum ?(ident_style = `Heuristic_ocannl) c =
   in
   loop c;
   let repeating_idents = Hashtbl.filter nograd_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1) in
-  let b = Buffer.create 16 in
-  let out = Buffer.add_string b in
-  let sp () = out " " in
-  let ident la = out @@ Tn.styled_ident ~repeating_idents ident_style la in
-  let out_fetch_op (op : fetch_op) =
+  let ident la = Tn.styled_ident ~repeating_idents ident_style la in
+  let open Stdlib.Format in
+  let out_fetch_op ppf (op : fetch_op) =
     match op with
-    | Constant f -> out @@ Float.to_string f
-    | Imported (Ops.C_function c) ->
-        out c;
-        out "()"
-    | Imported (Ops.External_unsafe { ptr; prec; dims = _ }) -> out @@ Ops.ptr_to_string ptr prec
+    | Constant f -> fprintf ppf "%g" f
+    | Imported (Ops.C_function c) -> fprintf ppf "%s()" c
+    | Imported (Ops.External_unsafe { ptr; prec; dims = _ }) -> fprintf ppf "%s" @@ Ops.ptr_to_string ptr prec
     | Slice { batch_idx; sliced } ->
-        ident sliced;
-        out " @| ";
-        out @@ Indexing.symbol_ident batch_idx.static_symbol
+        fprintf ppf "%s @@| %s" (ident sliced) (Indexing.symbol_ident batch_idx.static_symbol)
     | Embed_symbol { static_symbol; static_range = _ } ->
-        out "!@";
-        out @@ Indexing.symbol_ident static_symbol
+        fprintf ppf "!@@%s" @@ Indexing.symbol_ident static_symbol
   in
   let rec loop = function
     | Noop -> ()
     | Seq (c1, c2) ->
         loop c1;
-        if
-          Buffer.length b > 0
-          && not (List.mem ~equal:Char.equal [ '\n'; ';' ] @@ Buffer.nth b @@ (Buffer.length b - 1))
-        then out ";\n";
         loop c2
-    | Block_comment (s, Noop) ->
-        out "# \"";
-        out s;
-        out "\""
+    | Block_comment (s, Noop) -> fprintf ppf "# \"%s\";@ " s
     | Block_comment (s, c) ->
-        out "# \"";
-        out s;
-        out "\";\n";
+        fprintf ppf "# \"%s\";@ " s;
         loop c
     | Accum_binop { initialize_neutral; accum; op; lhs; rhs1; rhs2; projections } ->
         let proj_spec =
           if Lazy.is_val projections then (Lazy.force projections).debug_info.spec else "<not-in-yet>"
         in
-        ident lhs;
-        sp ();
-        out @@ Ops.assign_op_cd_syntax ~initialize_neutral accum;
-        sp ();
-        ident rhs1;
-        sp ();
-        out @@ Ops.binop_cd_syntax op;
-        sp ();
-        ident rhs2;
-        if (not (String.equal proj_spec ".")) || List.mem ~equal:Ops.equal_binop Ops.[ Mul; Div ] op then (
-          out " ~logic:\"";
-          out proj_spec;
-          out "\"")
+        fprintf ppf "%s %s %s %s %s%s;@ " (ident lhs)
+          (Ops.assign_op_cd_syntax ~initialize_neutral accum)
+          (ident rhs1) (Ops.binop_cd_syntax op) (ident rhs2)
+          (if (not (String.equal proj_spec ".")) || List.mem ~equal:Ops.equal_binop Ops.[ Mul; Div ] op then
+             " ~logic:\"" ^ proj_spec ^ "\""
+           else "")
     | Accum_unop { initialize_neutral; accum; op; lhs; rhs; projections } ->
         let proj_spec =
           if Lazy.is_val projections then (Lazy.force projections).debug_info.spec else "<not-in-yet>"
         in
-        ident lhs;
-        sp ();
-        out @@ Ops.assign_op_cd_syntax ~initialize_neutral accum;
-        sp ();
-        if not @@ Ops.equal_unop op Ops.Identity then (
-          out @@ Ops.unop_cd_syntax op;
-          sp ());
-        ident rhs;
-        if not (String.equal proj_spec ".") then (
-          out " ~logic:\"";
-          out proj_spec;
-          out "\"")
-    | Fetch { array; fetch_op; dims = _ } ->
-        ident array;
-        out " := ";
-        out_fetch_op fetch_op
+        fprintf ppf "%s %s %s%s%s;@ " (ident lhs)
+          (Ops.assign_op_cd_syntax ~initialize_neutral accum)
+          (if not @@ Ops.equal_unop op Ops.Identity then Ops.unop_cd_syntax op ^ " " else "")
+          (ident rhs)
+          (if not (String.equal proj_spec ".") then " ~logic:\"" ^ proj_spec ^ "\"" else "")
+    | Fetch { array; fetch_op; dims = _ } -> fprintf ppf "%s := %a;@ " (ident array) out_fetch_op fetch_op
   in
+  fprintf ppf "@,@[<v 2>";
+  Low_level.fprint_function_header ?name ?static_indices () ppf;
   loop c;
-  Buffer.contents b
+  fprintf ppf "@]"
 
-let%debug_sexp compile_proc ?(ident_style = `Heuristic_ocannl) ~name static_indices (proc : t) :
-    (Tn.t, Low_level.traced_array) Base.Hashtbl.t * Low_level.t =
+let%debug_sexp compile_proc ?(ident_style = `Heuristic_ocannl) ~unoptim_ll_source ~ll_source ~cd_source ~name
+    static_indices (proc : t) : (Tn.t, Low_level.traced_array) Base.Hashtbl.t * Low_level.t =
   let llc = to_low_level proc in
   (* Generate the low-level code before outputting the assignments, to force projections. *)
-  if Utils.settings.output_debug_files_in_run_directory then (
-    let fname = name ^ ".cd" in
-    let f = Stdio.Out_channel.create fname in
-    Stdio.Out_channel.output_string f @@ to_string_hum ~ident_style proc);
-  Low_level.compile_proc ~name static_indices llc
+  (match cd_source with None -> () | Some ppf -> fprint_hum ~name ~static_indices ~ident_style () ppf proc);
+  Low_level.compile_proc ~unoptim_ll_source ~ll_source ~name static_indices llc

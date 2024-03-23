@@ -783,7 +783,7 @@ let%track_sexp to_host (context : context) (la : Tn.t) : bool =
           true
       | _ -> false)
 
-let%track_sexp merge_from_global ~name ~dst ~accum ~src =
+let%track_sexp merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst ~accum ~src =
   let body idcs =
     Low_level.(
       Set
@@ -799,17 +799,30 @@ let%track_sexp merge_from_global ~name ~dst ~accum ~src =
         })
   in
   let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
-  Low_level.compile_proc ~name [] llc
+  Low_level.compile_proc ~unoptim_ll_source ~ll_source ~name [] llc
 
 let%track_sexp merge ?name_prefix la ~accum ~(src : context) bindings =
+  (* FIXME: reconstruct name if missing *)
+  let name = Option.value name_prefix ~default:"" in
+  let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ "-unoptimized.ll") in
+  let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
   let name_prefix : string = Option.value ~default:"" @@ Option.map name_prefix ~f:(fun s -> s ^ "_") in
   Option.map (Map.find src.arrays la) ~f:(fun (src : Ndarray.t) ->
       let name = [%string "%{name_prefix}into_%{Tn.name la}"] in
       prejit ~opt_ctx_arrays:None ~name bindings
-      @@ merge_from_global ~name ~dst:la ~accum ~src:(Ndarray.get_voidptr src))
+      @@ merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst:la ~accum ~src:(Ndarray.get_voidptr src))
 
 let%track_sexp merge_batch ?(name_prefixes : string array option) ~occupancy tns ~accum
     ~(srcs : context array) bindings =
+  (* FIXME: reconstruct name if missing *)
+  let name =
+    String.(
+      strip ~drop:(equal_char '_')
+      @@ common_prefix @@ Array.to_list
+      @@ Option.value name_prefixes ~default:[||])
+  in
+  let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ "-unoptimized.ll") in
+  let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
   let complete =
     Array.concat_map (Array.of_list tns) ~f:(fun tn ->
         Array.mapi srcs ~f:(fun i src ->
@@ -824,7 +837,11 @@ let%track_sexp merge_batch ?(name_prefixes : string array option) ~occupancy tns
             | _, Some src ->
                 let prefix = match name_prefixes with Some ns -> ns.(i) ^ "_" | None -> "" in
                 let name = [%string "%{prefix}into_%{Tn.name tn}"] in
-                Some ((tn, i), (name, merge_from_global ~name ~dst:tn ~accum ~src:(Ndarray.get_voidptr src)))))
+                Some
+                  ( (tn, i),
+                    ( name,
+                      merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst:tn ~accum
+                        ~src:(Ndarray.get_voidptr src) ) )))
   in
   let ids, compileds = Array.unzip @@ Array.filter_opt complete in
   let len = Array.length srcs in
