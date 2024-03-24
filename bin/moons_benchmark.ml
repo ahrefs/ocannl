@@ -35,8 +35,8 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   (* let hid_dim = 4 in *)
   let len = batch_size * 20 in
   (* let epochs = 100 in *)
-  let epochs = 10 in
-  (* let epochs = 1000 in *)
+  (* let epochs = 10 in *)
+  let epochs = 5 in
   let init_lr = 0.1 in
   let noise () = Random.float_range (-0.1) 0.1 in
   let moons_flat =
@@ -157,9 +157,9 @@ let _suspended () =
 
 let benchmarks =
   List.concat_map [ 0; 1; 3 ] ~f:(fun inlining_cutoff ->
-      List.concat_map [ 1; 2; 4; 5; 8; 10; 16 (* ; 20 *) ] ~f:(fun num_devices ->
-          List.concat_map [ 120; 160; 320 (* ; 640; 1280 *) ] ~f:(fun batch_size ->
-              List.concat_map [ 0; 1; 2 (* ; 3; 4 *) ] ~f:(fun seed ->
+      List.concat_map [ 1; 2; 5; 8; 10; 16 (* ; 20 *) ] ~f:(fun num_devices ->
+          List.concat_map [ 120; 160 (* ; 320; 640; 1280 *) ] ~f:(fun batch_size ->
+              List.concat_map [ 0; 1 (* ; 2; 3; 4 *) ] ~f:(fun seed ->
                   List.concat_map [ "gccjit" (* *; "cuda" *) ] ~f:(fun backend_name ->
                       [
                         classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_devices ~batch_size
