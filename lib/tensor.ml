@@ -581,6 +581,8 @@ let get_grad t = Nd.get_as_float @@ Option.value_exn @@ Lazy.force @@ (Option.va
 let set_values t values =
   Nd.(reset (Constant_fill { values; strict = false }) @@ Option.value_exn @@ Lazy.force t.value.array)
 
+let get_values t = Nd.(retrieve_flat_values @@ Option.value_exn @@ Lazy.force t.value.array)
+
 module O = struct
   (** Get the value at the given indices. *)
   let ( .@{} ) = get_value

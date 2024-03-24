@@ -333,6 +333,28 @@ let retrieve_1d_points ?from_axis ~xdim arr =
     iter 0;
     Array.of_list_rev !result
 
+let retrieve_flat_values arr =
+  let dims = dims arr in
+  if Array.is_empty dims then [||]
+  else
+    let n_axes = Array.length dims in
+    let result = ref [] in
+    let idx = Array.create ~len:n_axes 0 in
+    let rec iter axis =
+      if axis = n_axes then
+        let x =
+          get_as_float arr idx
+        in
+        result := x :: !result
+      else
+        for p = 0 to dims.(axis) - 1 do
+          idx.(axis) <- p;
+          iter (axis + 1)
+        done
+    in
+    iter 0;
+    Array.of_list_rev !result
+
 (** {2 *** Printing ***} *)
 
 (** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.

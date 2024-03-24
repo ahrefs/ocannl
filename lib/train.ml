@@ -298,8 +298,9 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     Utils.Optional { callback_if_missing = (fun () -> needed_on_host := Set.add !needed_on_host p) }
   in
   let copies =
-    collapse_merges @@ Backend.merge_batch ~name_prefixes:[| "param_copy" |] ~occupancy param_vals ~accum:Arrayjit.Ops.Arg2
-      ~srcs:[| sgd_update.context |]
+    collapse_merges
+    @@ Backend.merge_batch ~name_prefixes:[| "param_copy" |] ~occupancy param_vals ~accum:Arrayjit.Ops.Arg2
+         ~srcs:[| sgd_update.context |]
   in
   let copies =
     assert (Array.length copies = 1);
@@ -326,3 +327,88 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   let jitted_bindings = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.bindings)] in
   let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd () -> Tn.run debug_rt @@ upd.schedule ())] in
   fun () -> round_robin fs jitted_bindings sgd_update.bindings ~sync
+
+let example_train_loop ~name ~seed ~batch_size ~init_lr ?lr_schedule ~num_devices ~data_len ~epochs ~inputs
+    ~outputs ~model ~loss_fn ~weight_decay ?per_batch_callback ?per_epoch_callback backend () =
+  let module IDX = Idx.IDX in
+  let module TDSL = Operation.TDSL in
+  let module NTDSL = Operation.NTDSL in
+  Random.init seed;
+  let minibatch_size = batch_size / num_devices in
+  let n_batches = data_len / minibatch_size in
+  let inputs = inputs ~b:[ n_batches; minibatch_size ] in
+  let outputs = outputs ~b:[ n_batches; minibatch_size ] in
+  let steps = epochs * n_batches in
+  Utils.settings.fixed_state_for_init <- Some seed;
+  let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
+  let step_n, bindings = IDX.get_static_symbol bindings in
+  let%op learning_rate =
+    match lr_schedule with
+    | None -> !.init_lr *. ((2 *. !..steps) - !@step_n) /. !..steps
+    | Some schedule -> schedule ~batch_n ~step_n
+  in
+  let%op input = inputs @| batch_n in
+  let%op expectation = outputs @| batch_n in
+  let batch_losses = ref [] in
+  let epoch_losses = ref [] in
+  let learning_rates = ref [] in
+  let%op loss_tensor = loss_fn ~output:(model input) ~expectation in
+  let%op scalar_loss = (loss_tensor ++ "...|... => 0") /. !..batch_size in
+  (* So that we can inspect them. *)
+  set_hosted learning_rate.value;
+  let update = grad_update ~setup_for_parallel:true scalar_loss in
+  let sgd = sgd_update ~learning_rate ~weight_decay update in
+  let module Backend = (val backend : Arrayjit.Backends.Backend) in
+  let num_devices = min num_devices @@ Backend.num_devices () in
+  let devices = Array.init num_devices ~f:(fun ordinal -> Backend.get_device ~ordinal) in
+  let contexts = Array.map devices ~f:Backend.init in
+  let grad_update = Backend.prejit ~shared:true bindings update.fwd_bprop in
+  let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit ctx grad_update) in
+  let sgd_update = Backend.jit_code grad_updates.(0).context bindings sgd in
+  all_host_to_device (module Backend) sgd_update.context scalar_loss;
+  all_host_to_device (module Backend) sgd_update.context learning_rate;
+  let open Tensor.O in
+  let epoch_loss = ref 0. in
+  let step_ref = IDX.find_exn sgd_update.bindings step_n in
+  let batch_ref = IDX.find_exn sgd_update.bindings batch_n in
+  let update =
+    parallel_update
+      (module Backend)
+      ~grad_updates ~sgd_update update
+      ~post_sync:(fun ~num_synced_devices ->
+        step_ref := !step_ref + num_synced_devices;
+        assert (Backend.to_host sgd_update.context learning_rate.value);
+        (* scalar_loss is not in the sgd_update context. *)
+        assert (Backend.to_host grad_updates.(0).context scalar_loss.value);
+        let batch_loss = scalar_loss.@[0] in
+        epoch_loss := !epoch_loss +. batch_loss;
+        batch_losses := batch_loss :: !batch_losses;
+        Option.iter per_batch_callback ~f:(fun f ->
+            f ~at_batch:!batch_ref ~at_step:!step_ref ~learning_rate:learning_rate.@[0] ~batch_loss
+              ~epoch_loss:!epoch_loss))
+  in
+  for epoch = 0 to epochs - 1 do
+    epoch_loss := 0.;
+    update ();
+    learning_rates := learning_rate.@[0] :: !learning_rates;
+    epoch_losses := !epoch_loss :: !epoch_losses;
+    Option.iter per_epoch_callback ~f:(fun f ->
+        f ~at_step:!step_ref ~at_epoch:epoch ~learning_rate:learning_rate.@[0] ~epoch_loss:!epoch_loss)
+  done;
+  let%op model_result = model "point" in
+  set_on_host Volatile model_result.Tensor.value;
+  (* By using sgd_update.context here, maybe we don't need to copy the parameters back to the host. *)
+  let result_jitted =
+    Backend.jit_code sgd_update.context IDX.empty @@ Block_comment (name ^ "_infer", model_result.forward)
+  in
+  let infer_callback values =
+    Tensor.set_values point values;
+    (* For the gccjit backend, point is only on host, not on device. For cuda, this will be needed. *)
+    ignore (Backend.from_host result_jitted.context point.value : bool);
+    run result_jitted;
+    Backend.await devices.(0);
+    assert (Backend.to_host result_jitted.context model_result.value);
+    Tensor.get_values model_result
+  in
+  (* Note: infer_callback is significantly less efficient than using the model via arrayjit. *)
+  (inputs, outputs, model_result, infer_callback, !batch_losses, !epoch_losses, !learning_rates)
