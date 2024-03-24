@@ -162,24 +162,39 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     Backend.merge_batch ~name_prefixes ~occupancy tns ~accum ~srcs
 
   let num_devices () = Domain.recommended_domain_count () - 1
+  let global_run_no = ref 0
 
   let%debug_sexp spinup_device ~(ordinal : int) : device =
+    Int.incr global_run_no;
     let next_task = ref None in
     let keep_spinning = ref true in
     let wait_for_device = Utils.waiter () in
     let wait_for_work = Utils.waiter () in
-    let debug_runtime = Utils.get_debug ("dev-" ^ Int.to_string ordinal) in
+    let run_no = !global_run_no in
+    let debug_runtime = Utils.get_debug ("dev-" ^ Int.to_string ordinal ^ "-run-" ^ Int.to_string run_no) in
+    (* For detailed debugging of a worker operation, set OCANNL_SNAPSHOT_EVERY_SEC and uncomment: *)
+    (* let%track_rt_sexp worker (() : unit) : unit = *)
     let worker () =
       while !keep_spinning do
-        while Option.is_none !next_task do
+        while !keep_spinning && Option.is_none !next_task do
           wait_for_work.await ()
         done;
-        Tnode.run debug_runtime @@ Option.value_exn !next_task;
-        next_task := None;
-        wait_for_device.release ()
+        if !keep_spinning then (
+          Tnode.run debug_runtime @@ Option.value_exn !next_task;
+          next_task := None;
+          wait_for_device.release ())
       done
     in
-    { next_task; keep_spinning; wait_for_device; wait_for_work; ordinal; domain = Domain.spawn worker }
+    {
+      next_task;
+      keep_spinning;
+      wait_for_device;
+      wait_for_work;
+      ordinal;
+      (* For detailed debugging of a worker operation, uncomment: *)
+      (* domain = Domain.spawn (worker debug_runtime); *)
+      domain = Domain.spawn worker;
+    }
 
   let devices = Array.init (num_devices ()) ~f:(fun ordinal -> spinup_device ~ordinal)
   let get_all_devices () = devices
@@ -189,6 +204,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     let cleanup ordinal device =
       await device;
       device.keep_spinning := false;
+      (* Important to release after setting to not keep spinning. *)
+      device.wait_for_work.release ();
       Domain.join device.domain;
       device.wait_for_device.finalize ();
       device.wait_for_work.finalize ();
