@@ -573,7 +573,7 @@ let apply_env_t env sh =
 
 let apply_env_update env update_step = iter_shapes update_step ~f:(apply_env_t env)
 
-let propagate_shapes (update_step : update_step) : unit =
+let%track_sexp propagate_shapes (update_step : update_step) : unit =
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice does). *)
   apply_env_update !state update_step;
   let _, ineqs = get_inequalities update_step in
@@ -584,7 +584,7 @@ let propagate_shapes (update_step : update_step) : unit =
   apply_env_update env update_step;
   state := env
 
-let finish_inference (() : unit) : unit =
+let%track_sexp finish_inference (() : unit) : unit =
   let _debug_constraints : Row.inequality list = !active_constraints in
   let unsolved, env = Row.solve_inequalities ~finish:true !active_constraints !state in
   let _debug_env : Row.environment = env in
@@ -656,7 +656,7 @@ let fresh_proj_ids update =
 
 (** Computes the indexing into subtensors given the shape information of a tensor. 
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
-let derive_projections (update_step : update_step) : Idx.projections =
+let%track_sexp derive_projections (update_step : update_step) : Idx.projections =
   finish_inference ();
   fresh_proj_ids update_step;
   let _debug_update_step : update_step = update_step in

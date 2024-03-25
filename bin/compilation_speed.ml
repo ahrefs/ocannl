@@ -71,7 +71,7 @@ let benchmark_overhead backend () =
 let benchmarks =
   [
     benchmark_overhead (module Arrayjit.Backends.Gccjit_backend);
-    benchmark_overhead (module Arrayjit.Backends.Cuda_backend);
+    (* benchmark_overhead (module Arrayjit.Backends.Cuda_backend); *)
   ]
 
 let () =

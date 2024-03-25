@@ -5,6 +5,7 @@ module CDSL = Arrayjit.Low_level.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module Utils = Arrayjit.Utils
+module Debug_runtime = Utils.Debug_runtime
 
 let _suspended () =
   let module Backend = (val Train.fresh_backend ()) in
@@ -28,11 +29,11 @@ let _suspended () =
   Tensor.print ~with_code:false ~with_grad:true `Default @@ a;
   Tensor.print ~with_code:false ~with_grad:true `Default @@ b
 
-let () =
+let%diagn_sexp () : unit =
   let module Backend = (val Train.fresh_backend ()) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  Utils.settings.output_debug_files_in_run_directory <- true;
+  (* Utils.settings.output_debug_files_in_run_directory <- true; *)
   Random.init 0;
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = (a *. b) + (b **. 3) in

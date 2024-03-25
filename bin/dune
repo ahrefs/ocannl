@@ -46,7 +46,7 @@
  (modules micrograd_basic)
  (libraries ocannl base stdio)
  (preprocess
-  (pps ppx_jane ppx_ocannl))
+  (pps ppx_jane ppx_ocannl ppx_minidebug))
  (modes exe))
 
 (executable
