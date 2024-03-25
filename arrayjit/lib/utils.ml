@@ -90,6 +90,19 @@ let get_global_arg ~default ~arg_name:n =
               if settings.with_debug then Stdio.printf "Not found, using default %s\n%!" default;
               default))
 
+let () =
+  settings.debug_log_jitted <- Bool.of_string @@ get_global_arg ~arg_name:"debug_log_jitted" ~default:"false";
+  settings.debug_memory_locations <-
+    Bool.of_string @@ get_global_arg ~arg_name:"debug_memory_locations" ~default:"false";
+  settings.output_debug_files_in_run_directory <-
+    Bool.of_string @@ get_global_arg ~arg_name:"output_debug_files_in_run_directory" ~default:"false";
+  settings.with_debug <- Bool.of_string @@ get_global_arg ~arg_name:"with_debug" ~default:"false";
+  settings.fixed_state_for_init <-
+    (let seed = get_global_arg ~arg_name:"fixed_state_for_init" ~default:"" in
+     if String.is_empty seed then None else Some (Int.of_string seed));
+  settings.print_decimals_precision <-
+    Int.of_string @@ get_global_arg ~arg_name:"print_decimals_precision" ~default:"2"
+
 let get_debug name =
   let snapshot_every_sec = get_global_arg ~default:"" ~arg_name:"snapshot_every_sec" in
   let snapshot_every_sec =
@@ -291,7 +304,10 @@ module Lazy = struct
   let sexp_of_lazy_t = Minidebug_runtime.sexp_of_lazy_t
 end
 
-type requirement = Skip | Required | Optional of { callback_if_missing : unit -> unit [@sexp.opaque][@compare.ignore] }
+type requirement =
+  | Skip
+  | Required
+  | Optional of { callback_if_missing : unit -> unit [@sexp.opaque] [@compare.ignore] }
 [@@deriving compare, sexp]
 
 let get_debug_formatter ~fname =

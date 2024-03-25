@@ -82,7 +82,15 @@ type virtualize_settings = {
   mutable max_tracing_dim : int;
 }
 
-let virtualize_settings = { enable_device_only = true; max_visits = 3; max_tracing_dim = 5 }
+let virtualize_settings =
+  let max_visits = Int.of_string @@ Utils.get_global_arg ~arg_name:"virtualize_max_visits" ~default:"1" in
+  let max_tracing_dim =
+    Int.of_string @@ Utils.get_global_arg ~arg_name:"virtualize_max_tracing_dim" ~default:"5"
+  in
+  let enable_device_only =
+    Bool.of_string @@ Utils.get_global_arg ~arg_name:"enable_device_only" ~default:"true"
+  in
+  { enable_device_only; max_visits; max_tracing_dim }
 
 type visits =
   | Visits of int
