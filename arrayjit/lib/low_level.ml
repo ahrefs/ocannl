@@ -80,6 +80,7 @@ type virtualize_settings = {
   mutable enable_device_only : bool;
   mutable max_visits : int;
   mutable max_tracing_dim : int;
+  mutable inline_scalar_constexprs : bool;
 }
 
 let virtualize_settings =
@@ -90,7 +91,10 @@ let virtualize_settings =
   let enable_device_only =
     Bool.of_string @@ Utils.get_global_arg ~arg_name:"enable_device_only" ~default:"true"
   in
-  { enable_device_only; max_visits; max_tracing_dim }
+  let inline_scalar_constexprs =
+    Bool.of_string @@ Utils.get_global_arg ~arg_name:"inline_scalar_constexprs" ~default:"true"
+  in
+  { enable_device_only; max_visits; max_tracing_dim; inline_scalar_constexprs }
 
 type visits =
   | Visits of int
@@ -238,13 +242,15 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
   loop_proc Indexing.empty_env llc;
   Hashtbl.iter traced_store ~f:(fun traced ->
       let tn = traced.nd in
-      if (not (Tn.known_non_virtual tn)) && traced.is_scalar_constexpr then
-        Tn.update_memory_mode tn Virtual 40;
+      if
+        virtualize_settings.inline_scalar_constexprs && traced.is_scalar_constexpr
+        && not (Tn.known_non_virtual tn)
+      then Tn.update_memory_mode tn Virtual 40;
       if Option.is_none tn.memory_mode && Hashtbl.exists traced.accesses ~f:is_too_many then
-        if Hashtbl.exists traced.accesses ~f:is_recurrent then Tn.update_memory_mode tn Never_virtual 1
-          (* The tensor node is read-only/recurrent for this computation, but maybe computed by another one.
-             However, if the memory mode is unspecified, we assume this will be the first computation
-             involving the tensor node. *);
+        Tn.update_memory_mode tn Never_virtual 1
+        (* The tensor node is read-only/recurrent for this computation, but maybe computed by another one.
+           However, if the memory mode is unspecified, we assume this will be the first computation
+           involving the tensor node. *);
       if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then (
         traced.read_only <- true;
         if Tn.mode_is_unspecified tn then Tn.update_memory_mode tn (Hosted Constant) 37
