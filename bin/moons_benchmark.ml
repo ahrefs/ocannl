@@ -156,7 +156,7 @@ let _suspended () =
        ~backend_name:"gccjit" CDSL.single ()
 
 let benchmarks =
-  List.concat_map [ 0; 1; 3 ] ~f:(fun inlining_cutoff ->
+  List.concat_map [ 0; 1; 2; 3 ] ~f:(fun inlining_cutoff ->
       List.concat_map [ 1; 2; 5; 8; 10; 16 (* ; 20 *) ] ~f:(fun num_devices ->
           List.concat_map [ 120; 160 (* ; 320; 640; 1280 *) ] ~f:(fun batch_size ->
               List.concat_map [ 0; 1 (* ; 2; 3; 4 *) ] ~f:(fun seed ->
