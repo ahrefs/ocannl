@@ -221,13 +221,11 @@ let flatten c =
 
 let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf c =
   let nograd_idents = Hashtbl.create (module String) in
-  let nograd la =
-    if List.mem ~equal:String.equal la.Tn.label "grad" then ()
-    else
-      Option.iter (Tn.ident_label la)
-        ~f:
-          (Hashtbl.update nograd_idents ~f:(fun old ->
-               Set.add (Option.value ~default:Utils.no_ints old) la.id))
+  let grad_idents = Hashtbl.create (module String) in
+  let visit la =
+    let idents = if List.mem ~equal:String.equal la.Tn.label "grad" then grad_idents else nograd_idents in
+    Option.iter (Tn.ident_label la)
+      ~f:(Hashtbl.update idents ~f:(fun old -> Set.add (Option.value ~default:Utils.no_ints old) la.id))
   in
   let rec loop (c : t) =
     match c with
@@ -237,14 +235,17 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf c
         loop c2
     | Block_comment (_, c) -> loop c
     | Accum_binop { initialize_neutral = _; accum = _; op = _; lhs; rhs1; rhs2; projections = _ } ->
-        List.iter ~f:nograd [ lhs; rhs1; rhs2 ]
+        List.iter ~f:visit [ lhs; rhs1; rhs2 ]
     | Accum_unop { initialize_neutral = _; accum = _; op = _; lhs; rhs; projections = _ } ->
-        List.iter ~f:nograd [ lhs; rhs ]
-    | Fetch { array; fetch_op = _; dims = _ } -> nograd array
+        List.iter ~f:visit [ lhs; rhs ]
+    | Fetch { array; fetch_op = _; dims = _ } -> visit array
   in
   loop c;
-  let repeating_idents = Hashtbl.filter nograd_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1) in
-  let ident la = Tn.styled_ident ~repeating_idents ident_style la in
+  let repeating_nograd_idents =
+    Hashtbl.filter nograd_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1)
+  in
+  let repeating_grad_idents = Hashtbl.filter grad_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1) in
+  let ident la = Tn.styled_ident ~repeating_nograd_idents ~repeating_grad_idents ident_style la in
   let open Stdlib.Format in
   let out_fetch_op ppf (op : fetch_op) =
     match op with

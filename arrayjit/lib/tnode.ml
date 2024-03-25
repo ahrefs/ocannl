@@ -177,7 +177,7 @@ let debug_name ~id ~label =
   | None when is_grad -> [%string "n%{id - 1#Int}%{opt_grad}"]
   | None -> n
 
-let styled_ident ~repeating_idents style arr =
+let styled_ident ~repeating_nograd_idents ~repeating_grad_idents style arr =
   let n = name arr in
   match style with
   | `Name_only -> n
@@ -189,7 +189,7 @@ let styled_ident ~repeating_idents style arr =
       let opt_grad = if is_grad then ".grad" else "" in
       match ident_label arr with
       | Some ident ->
-          if Hashtbl.mem repeating_idents ident then
+          if Hashtbl.mem (if is_grad then repeating_grad_idents else repeating_nograd_idents) ident then
             if is_grad then [%string "n%{arr.id - 1#Int}_%{ident}%{opt_grad}"]
             else [%string "n%{arr.id#Int}_%{ident}"]
           else [%string "%{ident}%{opt_grad}"]
@@ -204,10 +204,11 @@ let header arr =
       | (lazy (Some nd)) -> Int.to_string_hum @@ Nd.size_in_bytes nd
     else "<not-in-yet>"
   in
-  let repeating_idents = Hashtbl.create ~size:1 (module String) in
+  let repeating_nograd_idents = Hashtbl.create ~size:1 (module String) in
+  let repeating_grad_idents = Hashtbl.create ~size:1 (module String) in
   [%string
     {|%{name arr} %{label arr} as %{
-      styled_ident ~repeating_idents `Heuristic_ocannl arr
+      styled_ident ~repeating_nograd_idents ~repeating_grad_idents `Heuristic_ocannl arr
     }: %{dims_to_string arr}; mem in bytes: %{mem_size}|}]
 
 module Registry = Core.Weak.Make (struct
@@ -238,5 +239,5 @@ module Debug_runtime = Utils.Debug_runtime
 
 let%debug_sexp log_accessible_headers () =
   Core.Gc.full_major ();
-  Registry.iter (fun arr -> [%log header arr]) registry;
+  Registry.iter (fun _arr -> [%log header _arr]) registry;
   ()

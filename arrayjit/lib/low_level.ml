@@ -746,13 +746,11 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf l
   let open Stdlib.Format in
   pp_set_margin ppf !code_hum_margin;
   let nograd_idents = Hashtbl.create (module String) in
-  let nograd la =
-    if List.mem ~equal:String.equal la.Tn.label "grad" then ()
-    else
-      Option.iter (Tn.ident_label la)
-        ~f:
-          (Hashtbl.update nograd_idents ~f:(fun old ->
-               Set.add (Option.value ~default:Utils.no_ints old) la.id))
+  let grad_idents = Hashtbl.create (module String) in
+  let visit la =
+    let idents = if List.mem ~equal:String.equal la.Tn.label "grad" then grad_idents else nograd_idents in
+    Option.iter (Tn.ident_label la)
+      ~f:(Hashtbl.update idents ~f:(fun old -> Set.add (Option.value ~default:Utils.no_ints old) la.id))
   in
   let rec loop (c : t) =
     match c with
@@ -761,30 +759,33 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf l
         loop c1;
         loop c2
     | For_loop { body; _ } -> loop body
-    | Zero_out la -> nograd la
+    | Zero_out la -> visit la
     | Set { array; llv; _ } ->
-        nograd array;
+        visit array;
         loop_float llv
     | Set_local ({ nd; _ }, llv) ->
-        nograd nd;
+        visit nd;
         loop_float llv
   and loop_float fc =
     match fc with
     | Local_scope { id = { nd; _ }; prec = _; body; orig_indices = _ } ->
-        nograd nd;
+        visit nd;
         loop body
     | Get_global (_, _) -> ()
-    | Get (la, _) -> nograd la
+    | Get (la, _) -> visit la
     | Binop (_, f1, f2) ->
         loop_float f1;
         loop_float f2
     | Unop (_, f) -> loop_float f
-    | Get_local { nd; _ } -> nograd nd
+    | Get_local { nd; _ } -> visit nd
     | Constant _ | Embed_index _ -> ()
   in
   loop llc;
-  let repeating_idents = Hashtbl.filter nograd_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1) in
-  let ident_label la = Tn.styled_ident ~repeating_idents ident_style la in
+  let repeating_nograd_idents =
+    Hashtbl.filter nograd_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1)
+  in
+  let repeating_grad_idents = Hashtbl.filter grad_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1) in
+  let ident_label la = Tn.styled_ident ~repeating_nograd_idents ~repeating_grad_idents ident_style la in
   let pp_ident ppf la = fprintf ppf "%s" @@ ident_label la in
   let pp_local ppf { nd; scope_id } = fprintf ppf "v%d_%a" scope_id pp_ident nd in
   let rec pp_ll ppf c : unit =
