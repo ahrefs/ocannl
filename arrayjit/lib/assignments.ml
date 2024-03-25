@@ -291,9 +291,22 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf c
   loop c;
   fprintf ppf "@]"
 
-let%debug_sexp compile_proc ?(ident_style = `Heuristic_ocannl) ~unoptim_ll_source ~ll_source ~cd_source ~name
-    static_indices (proc : t) : (Tn.t, Low_level.traced_array) Base.Hashtbl.t * Low_level.t =
+let%debug_sexp compile_proc ~unoptim_ll_source ~ll_source ~cd_source ~name static_indices (proc : t) :
+    (Tn.t, Low_level.traced_array) Base.Hashtbl.t * Low_level.t =
   let llc = to_low_level proc in
   (* Generate the low-level code before outputting the assignments, to force projections. *)
-  (match cd_source with None -> () | Some ppf -> fprint_hum ~name ~static_indices ~ident_style () ppf proc);
+  (match cd_source with
+  | None -> ()
+  | Some ppf ->
+      let ident_style =
+        match Utils.get_global_arg ~arg_name:"cd_ident_style" ~default:"heuristic" with
+        | "heuristic" -> `Heuristic_ocannl
+        | "name_and_label" -> `Name_and_label
+        | "name_only" -> `Name_only
+        | _ ->
+            invalid_arg
+              "Assignments.compile_proc: wrong ocannl_cd_ident_style, must be one of: heuristic, \
+               name_and_label, name_only"
+      in
+      fprint_hum ~name ~static_indices ~ident_style () ppf proc);
   Low_level.compile_proc ~unoptim_ll_source ~ll_source ~name static_indices llc

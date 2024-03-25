@@ -830,11 +830,23 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf l
 
 let%debug_sexp compile_proc ~unoptim_ll_source ~ll_source ~(name : string)
     (static_indices : Indexing.static_symbol list) (llc : t) : (Tn.t, traced_array) Base.Hashtbl.t * t =
+  let style () =
+    match Utils.get_global_arg ~arg_name:"ll_ident_style" ~default:"heuristic" with
+    | "heuristic" -> `Heuristic_ocannl
+    | "name_and_label" -> `Name_and_label
+    | "name_only" -> `Name_only
+    | _ ->
+        invalid_arg
+          "Low_level.compile_proc: wrong ocannl_ll_ident_style, must be one of: heuristic, name_and_label, \
+           name_only"
+  in
   Option.iter unoptim_ll_source ~f:(fun ppf ->
-      Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ~name ~static_indices ()) llc);
+      Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ~ident_style:(style ()) ~name ~static_indices ()) llc);
   let result = optimize_proc static_indices llc in
   Option.iter ll_source ~f:(fun ppf ->
-      Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ~name ~static_indices ()) (snd result));
+      Stdlib.Format.fprintf ppf "%a%!"
+        (fprint_hum ~ident_style:(style ()) ~name ~static_indices ())
+        (snd result));
   result
 
 let loop_over_dims dims ~body =
