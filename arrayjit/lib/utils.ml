@@ -53,7 +53,8 @@ let config_file_args =
 (** Retrieves [arg_name] argument from the command line or from an environment variable, returns
     [default] if none found. *)
 let get_global_arg ~default ~arg_name:n =
-  if settings.with_debug then Stdio.printf "Retrieving commandline or environment variable %s\n%!" n;
+  let with_debug = settings.with_debug && not (Hash_set.mem accessed_global_args n) in
+  if with_debug then Stdio.printf "Retrieving commandline or environment variable ocannl_%s\n%!" n;
   Hash_set.add accessed_global_args n;
   let variants = [ n; String.uppercase n ] in
   let env_variants =
@@ -68,7 +69,7 @@ let get_global_arg ~default ~arg_name:n =
   with
   | Some (prefix, arg) ->
       let result = String.suffix arg (String.length prefix) in
-      if settings.with_debug then Stdio.printf "Found %s, commandline %s\n%!" result arg;
+      if with_debug then Stdio.printf "Found %s, commandline %s\n%!" result arg;
       result
   | None -> (
       match
@@ -76,7 +77,7 @@ let get_global_arg ~default ~arg_name:n =
             Option.map (Core.Sys.getenv env_n) ~f:(fun v -> (env_n, v)))
       with
       | Some (env_n, v) ->
-          if settings.with_debug then Stdio.printf "Found %s, environment %s\n%!" v env_n;
+          if with_debug then Stdio.printf "Found %s, environment %s\n%!" v env_n;
           v
       | None -> (
           match
@@ -84,19 +85,19 @@ let get_global_arg ~default ~arg_name:n =
                 Option.map (Hashtbl.find config_file_args env_n) ~f:(fun v -> (env_n, v)))
           with
           | Some (env_n, v) ->
-              if settings.with_debug then Stdio.printf "Found %s, config file %s\n%!" v env_n;
+              if with_debug then Stdio.printf "Found %s, config file %s\n%!" v env_n;
               v
           | None ->
-              if settings.with_debug then Stdio.printf "Not found, using default %s\n%!" default;
+              if with_debug then Stdio.printf "Not found, using default %s\n%!" default;
               default))
 
 let () =
+  settings.with_debug <- Bool.of_string @@ get_global_arg ~arg_name:"with_debug" ~default:"false";
   settings.debug_log_jitted <- Bool.of_string @@ get_global_arg ~arg_name:"debug_log_jitted" ~default:"false";
   settings.debug_memory_locations <-
     Bool.of_string @@ get_global_arg ~arg_name:"debug_memory_locations" ~default:"false";
   settings.output_debug_files_in_run_directory <-
     Bool.of_string @@ get_global_arg ~arg_name:"output_debug_files_in_run_directory" ~default:"false";
-  settings.with_debug <- Bool.of_string @@ get_global_arg ~arg_name:"with_debug" ~default:"false";
   settings.fixed_state_for_init <-
     (let seed = get_global_arg ~arg_name:"fixed_state_for_init" ~default:"" in
      if String.is_empty seed then None else Some (Int.of_string seed));
