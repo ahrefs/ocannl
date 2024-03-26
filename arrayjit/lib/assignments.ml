@@ -54,7 +54,28 @@ let get_name_exn asgns =
   let result = loop asgns in
   if String.is_empty result then invalid_arg "Assignments.get_name: no comments in code" else result
 
-module Nd = Ndarray
+let recurrent_nodes asgns =
+  let open Utils.Set_O in
+  let empty = Set.empty (module Tn) in
+  let single = Set.singleton (module Tn) in
+  let rec loop = function
+    | Noop -> empty
+    | Seq (t1, t2) -> loop t1 + (loop t2 - assigned t1)
+    | Block_comment (_, t) -> loop t
+    | Accum_binop { initialize_neutral; lhs; rhs1; rhs2; _ } ->
+        (if initialize_neutral then empty else single lhs) + single rhs1 + single rhs2
+    | Accum_unop { initialize_neutral; lhs; rhs; _ } ->
+        (if initialize_neutral then empty else single lhs) + single rhs
+    | Fetch _ -> empty
+  and assigned = function
+    | Noop -> Set.empty (module Tn)
+    | Seq (t1, t2) -> assigned t1 + assigned t2
+    | Block_comment (_, t) -> assigned t
+    | Accum_binop { initialize_neutral; lhs; _ } -> if initialize_neutral then single lhs else empty
+    | Accum_unop { initialize_neutral; lhs; _ } -> if initialize_neutral then single lhs else empty
+    | Fetch { array; _ } -> single array
+  in
+  loop asgns
 
 let remove_updates array c =
   let rec rm check = function
