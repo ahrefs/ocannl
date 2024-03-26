@@ -38,18 +38,21 @@ and t =
 
 let is_noop = function Noop -> true | _ -> false
 
-let rec get_name =
+let get_name_exn asgns =
   let punct_or_sp = Str.regexp "[-@*/:.;, ]" in
   let punct_and_sp = Str.regexp {|[-@*/:.;,]\( |$\)|} in
-  function
-  | Block_comment (s, _) -> Str.global_replace punct_and_sp "" s |> Str.global_replace punct_or_sp "_"
-  | Seq (t1, t2) ->
-      let n1 = get_name t1 and n2 = get_name t2 in
-      let prefix = String.common_prefix2_length n1 n2 in
-      let suffix = String.common_suffix2_length n1 n2 in
-      if String.is_empty n1 || String.is_empty n2 then n1 ^ n2
-      else String.drop_suffix n1 suffix ^ "_then_" ^ String.drop_prefix n2 prefix
-  | _ -> ""
+  let rec loop = function
+    | Block_comment (s, _) -> Str.global_replace punct_and_sp "" s |> Str.global_replace punct_or_sp "_"
+    | Seq (t1, t2) ->
+        let n1 = loop t1 and n2 = loop t2 in
+        let prefix = String.common_prefix2_length n1 n2 in
+        let suffix = String.common_suffix2_length n1 n2 in
+        if String.is_empty n1 || String.is_empty n2 then n1 ^ n2
+        else String.drop_suffix n1 suffix ^ "_then_" ^ String.drop_prefix n2 prefix
+    | _ -> ""
+  in
+  let result = loop asgns in
+  if String.is_empty result then invalid_arg "Assignments.get_name: no comments in code" else result
 
 module Nd = Ndarray
 

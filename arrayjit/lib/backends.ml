@@ -235,7 +235,7 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
   let sexp_of_context = sexp_of_context
 
   let prejit ~shared ?name bindings asgns =
-    let name = Option.value name ~default:(Assignments.get_name asgns) in
+    let name = Option.value_or_thunk name ~default:(fun () -> Assignments.get_name_exn asgns) in
     let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ "-unoptimized.ll") in
     let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
     let cd_source = Utils.get_debug_formatter ~fname:(name ^ ".cd") in
@@ -249,7 +249,7 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
   let prejit_batch ~shared ?names bindings asgns_l =
     let names =
       Option.value_or_thunk names ~default:(fun () ->
-          Array.map asgns_l ~f:(fun asgns -> Assignments.get_name asgns))
+          Array.map asgns_l ~f:(fun asgns -> Assignments.get_name_exn asgns))
     in
     let prefix_name = String.(strip ~drop:(equal_char '_') @@ common_prefix @@ Array.to_list names) in
     let unoptim_ll_source = Utils.get_debug_formatter ~fname:(prefix_name ^ "-unoptimized.ll") in
@@ -312,7 +312,7 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   let sexp_of_device = sexp_of_device
 
   let prejit ~shared:_ ?name bindings asgns =
-    let name = Option.value name ~default:(Assignments.get_name asgns) in
+    let name = Option.value_or_thunk name ~default:(fun () -> Assignments.get_name_exn asgns) in
     let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ "-unoptimized.ll") in
     let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
     let cd_source = Utils.get_debug_formatter ~fname:(name ^ ".cd") in
