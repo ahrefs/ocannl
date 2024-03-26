@@ -64,11 +64,11 @@ let read_cmdline_or_env_var n =
         List.find_map env_variants ~f:(fun env_n ->
             Option.map (Core.Sys.getenv env_n) ~f:(fun v -> (env_n, v)))
       with
+      | None | Some (_, "") -> None
       | Some (p, arg) ->
           let result = String.(lowercase @@ drop_prefix arg (length p)) in
           if with_debug then Stdio.printf "Found %s, environment %s\n%!" result p;
-          Some result
-      | None -> None)
+          Some result)
 
 let config_file_args =
   match read_cmdline_or_env_var "no_config_file" with
