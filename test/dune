@@ -1,6 +1,6 @@
 (library
  (name tutorials)
- (inline_tests)
+ (inline_tests (deps ocannl_config))
  (libraries base dynlink ocannl)
  (modules
   data_fetching

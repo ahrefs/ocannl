@@ -44,52 +44,80 @@ let settings =
 
 let accessed_global_args = Hash_set.create (module String)
 
-let config_file_args =
-  Stdio.In_channel.read_lines "ocannl_config"
-  |> List.map ~f:(String.split ~on:'=')
-  |> List.concat_map ~f:(function [] -> [] | key :: vals -> List.map vals ~f:(fun v -> (key, v)))
-  |> Hashtbl.of_alist_exn (module String)
-
-(** Retrieves [arg_name] argument from the command line or from an environment variable, returns
-    [default] if none found. *)
-let get_global_arg ~default ~arg_name:n =
+let read_cmdline_or_env_var n =
   let with_debug = settings.with_debug && not (Hash_set.mem accessed_global_args n) in
-  if with_debug then Stdio.printf "Retrieving commandline or environment variable ocannl_%s\n%!" n;
-  Hash_set.add accessed_global_args n;
-  let variants = [ n; String.uppercase n ] in
-  let env_variants =
-    List.concat_map variants ~f:(fun n -> [ "ocannl_" ^ n; "OCANNL_" ^ n; "ocannl-" ^ n; "OCANNL-" ^ n ])
-  in
+  let env_variants = [ "ocannl_" ^ n; "ocannl-" ^ n ] in
+  let env_variants = List.concat_map env_variants ~f:(fun n -> [ n; String.uppercase n ]) in
   let cmd_variants = List.concat_map env_variants ~f:(fun n -> [ n; "-" ^ n; "--" ^ n ]) in
-  let cmd_variants = List.concat_map cmd_variants ~f:(fun n -> [ n ^ "_"; n ^ "-"; n ^ "=" ]) in
+  let cmd_variants = List.concat_map cmd_variants ~f:(fun n -> [ n; n ^ "_"; n ^ "-"; n ^ "=" ]) in
   match
     Array.find_map (Core.Sys.get_argv ()) ~f:(fun arg ->
         List.find_map cmd_variants ~f:(fun prefix ->
             Option.some_if (String.is_prefix ~prefix arg) (prefix, arg)))
   with
-  | Some (prefix, arg) ->
-      let result = String.suffix arg (String.length prefix) in
+  | Some (p, arg) ->
+      let result = String.(lowercase @@ drop_prefix arg (length p)) in
       if with_debug then Stdio.printf "Found %s, commandline %s\n%!" result arg;
-      result
+      Some result
   | None -> (
       match
         List.find_map env_variants ~f:(fun env_n ->
             Option.map (Core.Sys.getenv env_n) ~f:(fun v -> (env_n, v)))
       with
-      | Some (env_n, v) ->
-          if with_debug then Stdio.printf "Found %s, environment %s\n%!" v env_n;
+      | Some (p, arg) ->
+          let result = String.(lowercase @@ drop_prefix arg (length p)) in
+          if with_debug then Stdio.printf "Found %s, environment %s\n%!" result p;
+          Some result
+      | None -> None)
+
+let config_file_args =
+  match read_cmdline_or_env_var "no_config_file" with
+  | None | Some "false" ->
+      let read = Stdio.In_channel.read_lines in
+      let fname, config_lines =
+        let rev_dirs = List.rev @@ Filename_base.parts @@ Stdlib.Sys.getcwd () in
+        let rec find_up = function
+          | [] -> failwith "OCANNL could not find the ocannl_config file along current path"
+          | _ :: tl as rev_dirs -> (
+              let fname = Filename_base.of_parts (List.rev @@ ("ocannl_config" :: rev_dirs)) in
+              try (fname, read fname) with Sys_error _ -> find_up tl)
+        in
+        find_up rev_dirs
+      in
+      Stdio.printf "\nWelcome to OCANNL! Reading configuration defaults from %s.\n%!" fname;
+      config_lines
+      |> List.map ~f:(String.split ~on:'=')
+      |> List.filter_map ~f:(function
+           | [] -> None
+           | key :: [ v ] ->
+               let key =
+                 String.(lowercase @@ strip ~drop:(fun c -> equal_char '-' c || equal_char ' ' c) key)
+               in
+               let key = if String.is_prefix key ~prefix:"ocannl" then String.drop_prefix key 6 else key in
+               Some (String.strip ~drop:(equal_char '_') key, v)
+           | _ ->
+               failwith @@ "OCANNL: invalid syntax in the config file " ^ fname
+               ^ ", should have a single '=' on each non-empty line")
+      |> Hashtbl.of_alist_exn (module String)
+  | Some _ ->
+      Stdio.printf "\nWelcome to OCANNL! Configuration defaults file is disabled.\n%!";
+      Hashtbl.create (module String)
+
+(** Retrieves [arg_name] argument from the command line or from an environment variable, returns
+    [default] if none found. *)
+let get_global_arg ~default ~arg_name:n =
+  let with_debug = settings.with_debug && not (Hash_set.mem accessed_global_args n) in
+  if with_debug then
+    Stdio.printf "Retrieving commandline, environment, or config file variable ocannl_%s\n%!" n;
+  Hash_set.add accessed_global_args n;
+  Option.value_or_thunk (read_cmdline_or_env_var n) ~default:(fun () ->
+      match Hashtbl.find config_file_args n with
+      | Some v ->
+          if with_debug then Stdio.printf "Found %s, in the config file\n%!" v;
           v
-      | None -> (
-          match
-            List.find_map env_variants ~f:(fun env_n ->
-                Option.map (Hashtbl.find config_file_args env_n) ~f:(fun v -> (env_n, v)))
-          with
-          | Some (env_n, v) ->
-              if with_debug then Stdio.printf "Found %s, config file %s\n%!" v env_n;
-              v
-          | None ->
-              if with_debug then Stdio.printf "Not found, using default %s\n%!" default;
-              default))
+      | None ->
+          if with_debug then Stdio.printf "Not found, using default %s\n%!" default;
+          default)
 
 let () =
   settings.with_debug <- Bool.of_string @@ get_global_arg ~arg_name:"with_debug" ~default:"false";
