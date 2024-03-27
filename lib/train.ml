@@ -43,15 +43,18 @@ let set_on_host memtype (a : Tn.t) = Tn.update_memory_mode a (Hosted memtype) 27
 let set_materialized (a : Tn.t) = Tn.update_memory_mode a Materialized 28
 let set_hosted (a : Tn.t) = Tn.update_memory_mode a (Hosted Changed_on_devices) 41
 
+let label_suffix label =
+  Option.value ~default:"unknown"
+  @@ List.find ~f:(String.for_all ~f:(fun c -> Char.is_alphanum c || equal_char '_' c))
+  @@ List.rev label
+
 (** Sets the tensor's value as "fully on host",
     returns the tensor's forward code with a label-derived comment. *)
 let forward t =
   if Tn.known_constant t.Tensor.value then set_on_host Constant t.value
   else set_on_host Changed_on_devices t.value;
-  let label = Option.value ~default:"tensor" @@ List.last t.Tensor.value.label in
+  let label = label_suffix t.Tensor.value.label in
   Asgns.Block_comment (label ^ " fwd", t.forward)
-
-let label_suffix label = Option.value ~default:"unknown" @@ List.last label
 
 type updaten = {
   loss : Tensor.t;
