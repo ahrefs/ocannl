@@ -1,101 +1,113 @@
 open Base
 open Ocannl
+module Tn = Arrayjit.Tnode
+module IDX = Arrayjit.Indexing.IDX
 module CDSL = Arrayjit.Low_level.CDSL
 module TDSL = Operation.TDSL
-
-
-
 
 let%expect_test "Hello World" =
   Stdio.printf "Hello World!\n";
   [%expect {| Hello World! |}]
 
 let%expect_test "Pointwise multiplication dims 1" =
-
-  (* drop_all_sessions (); *)
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   Random.init 0;
   (* "Hey" is inferred to be a scalar. *)
   let%op y = 2 *. "hey" in
-  (* refresh_session (); *)
+  let y_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward y in
+  Train.sync_run backend y_fwd y;
+
   Tensor.print ~with_code:false ~with_grad:false `Default @@ y;
   [%expect
     {|
-    ┌──────────────────────┐
-    │[3]: y <*.> shape 0:1 │
-    │┌┬─────────┐          │
-    │││axis 0   │          │
-    │├┼─────────┼───────── │
-    │││ 2.67e-1 │          │
-    │└┴─────────┘          │
-    └──────────────────────┘ |}]
+    ┌────────────────────┐
+    │[3]: *._y shape 0:1 │
+    │┌┬─────────┐        │
+    │││axis 0   │        │
+    │├┼─────────┼─────── │
+    │││ 2.67e-1 │        │
+    │└┴─────────┘        │
+    └────────────────────┘ |}]
 
 let%expect_test "Matrix multiplication dims 1x1" =
-
-  (* drop_all_sessions (); *)
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   Random.init 0;
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
   let%op y = ("hey" * 'q' 2.0) + 'p' 1.0 in
+  let y_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward y in
+  Train.sync_run backend y_fwd y;
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
-    ┌──────────────────────────────┐
-    │[1]: <hey> shape q=1:1->p=0:1 │
-    │┌────────┬─────────┐          │
-    ││        │axis q=1 │          │
-    │├────────┼─────────┼───────── │
-    ││axis p=0│ 1.34e-1 │          │
-    │└────────┴─────────┘          │
-    └──────────────────────────────┘ |}];
+    ┌────────────────────────┐
+    │[5]: hey shape 1:1->0:1 │
+    │┌──────┬─────────┐      │
+    ││      │axis 1   │      │
+    │├──────┼─────────┼───── │
+    ││axis 0│ 1.34e-1 │      │
+    │└──────┴─────────┘      │
+    └────────────────────────┘ |}];
   Tensor.print ~with_code:false ~with_grad:false `Default @@ y;
   [%expect
     {|
-    ┌───────────────────────┐
-    │[5]: y <+> shape p=0:1 │
-    │┌┬─────────┐           │
-    │││axis p=0 │           │
-    │├┼─────────┼────────── │
-    │││ 1.27e+0 │           │
-    │└┴─────────┘           │
-    └───────────────────────┘ |}]
+    ┌────────────────────┐
+    │[11]: +_y shape 0:1 │
+    │┌┬─────────┐        │
+    │││axis 0   │        │
+    │├┼─────────┼─────── │
+    │││ 1.27e+0 │        │
+    │└┴─────────┘        │
+    └────────────────────┘ |}]
 
 let%expect_test "Print constant tensor" =
-  (* Session.drop_all_sessions (); *)
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   Random.init 0;
 
   let%op hey = [ (1, 2, 3); (4, 5, 6) ] in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Inline @@ hey;
+  let hey_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward hey in
+  Train.sync_run backend hey_fwd hey;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ hey;
   [%expect {| [1.00, 2.00, 3.00; 4.00, 5.00, 6.00] |}];
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
-    ┌───────────────────────────────────────────────────────────────┐
-    │[1]: hey <[1.00, 2.00, 3.00; 4.00, 5.00, 6.00]> shape 1:3->0:2 │
-    │┌──────┬───────────────────────────┐                           │
-    ││      │axis 1                     │                           │
-    │├──────┼───────────────────────────┼────────────────────────── │
-    ││axis 0│ 1.00e+0  2.00e+0  3.00e+0 │                           │
-    ││      │ 4.00e+0  5.00e+0  6.00e+0 │                           │
-    │└──────┴───────────────────────────┘                           │
-    └───────────────────────────────────────────────────────────────┘ |}];
+    ┌──────────────────────────────────────────────────────────────┐
+    │[13]: [1.00, 2.00, 3.00; 4.00, 5.00, 6.00]_hey shape 1:3->0:2 │
+    │┌──────┬───────────────────────────┐                          │
+    ││      │axis 1                     │                          │
+    │├──────┼───────────────────────────┼───────────────────────── │
+    ││axis 0│ 1.00e+0  2.00e+0  3.00e+0 │                          │
+    ││      │ 4.00e+0  5.00e+0  6.00e+0 │                          │
+    │└──────┴───────────────────────────┘                          │
+    └──────────────────────────────────────────────────────────────┘ |}];
   let%op hoo = [| [ 1; 2; 3 ]; [ 4; 5; 6 ] |] in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Inline @@ hoo;
+  let hoo_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward hoo in
+  Train.sync_run backend hoo_fwd hoo;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ hoo;
   [%expect {| [|[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]|] |}];
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hoo;
   [%expect
     {|
-    ┌────────────────────────────────────────────────────────────────────┐
-    │[2]: hoo <[|[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]|]> shape 0:2|1:3 │
-    │┌──────┬───────────────────────────┐                                │
-    ││      │axis 1                     │                                │
-    │├──────┼───────────────────────────┼─────────────────────────────── │
-    ││axis 0│ 1.00e+0  2.00e+0  3.00e+0 │                                │
-    ││      │ 4.00e+0  5.00e+0  6.00e+0 │                                │
-    │└──────┴───────────────────────────┘                                │
-    └────────────────────────────────────────────────────────────────────┘ |}];
+    ┌───────────────────────────────────────────────────────────────────┐
+    │[14]: [|[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]|]_hoo shape 0:2|1:3 │
+    │┌──────┬───────────────────────────┐                               │
+    ││      │axis 1                     │                               │
+    │├──────┼───────────────────────────┼────────────────────────────── │
+    ││axis 0│ 1.00e+0  2.00e+0  3.00e+0 │                               │
+    ││      │ 4.00e+0  5.00e+0  6.00e+0 │                               │
+    │└──────┴───────────────────────────┘                               │
+    └───────────────────────────────────────────────────────────────────┘ |}];
   let%op hey2 =
     [
       ((1, 2, 3), (4, 5, 6));
@@ -104,8 +116,9 @@ let%expect_test "Print constant tensor" =
       ((19, 20, 21), (22, 23, 24));
     ]
   in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Inline @@ hey2;
+  let hey2_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward hey2 in
+  Train.sync_run backend hey2_fwd hey2;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ hey2;
   [%expect
     {|
     [(1.00, 2.00, 3.00), (4.00, 5.00, 6.00);
@@ -116,7 +129,7 @@ let%expect_test "Print constant tensor" =
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────┐
-    │[3]: hey2 <c4x2x3> shape 1:2,2:3->0:4                           │
+    │[15]: c4x2x3_hey2 shape 1:2,2:3->0:4                            │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
     ││      │0 @ 1                      │1 @ 1                      ││
     ││      │axis 2                     │axis 2                     ││
@@ -135,19 +148,20 @@ let%expect_test "Print constant tensor" =
       [ [ 19; 20; 21 ]; [ 22; 23; 24 ] ];
     |]
   in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Inline @@ hoo2;
+  let hoo2_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward hoo2 in
+  Train.sync_run backend hoo2_fwd hoo2;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ hoo2;
   [%expect
     {|
     [|[[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]];
       [[7.00; 8.00; 9.00]; [10.00; 11.00; 12.00]];
       [[13.00; 14.00; 15.00]; [16.00; 17.00; 18.00]];
       [[19.00; 20.00; 21.00]; [22.00; 23.00; 24.00]]|] |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hoo2;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hoo2;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │[4]: hoo2 <c4x2x3> shape 0:4|1:2,2:3                                                                                    │
+    │[16]: c4x2x3_hoo2 shape 0:4|1:2,2:3                                                                                     │
     │┌──────┬───────────────────────────┬───────────────────────────┬───────────────────────────┬───────────────────────────┐│
     ││      │0 @ 0                      │1 @ 0                      │2 @ 0                      │3 @ 0                      ││
     ││      │axis 2                     │axis 2                     │axis 2                     │axis 2                     ││
@@ -164,19 +178,20 @@ let%expect_test "Print constant tensor" =
       [| [ 19; 20; 21 ]; [ 22; 23; 24 ] |];
     |]
   in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Inline @@ heyhoo;
+  let heyhoo_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward heyhoo in
+  Train.sync_run backend heyhoo_fwd heyhoo;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ heyhoo;
   [%expect
     {|
     [|[|[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]|];
       [|[7.00; 8.00; 9.00]; [10.00; 11.00; 12.00]|];
       [|[13.00; 14.00; 15.00]; [16.00; 17.00; 18.00]|];
       [|[19.00; 20.00; 21.00]; [22.00; 23.00; 24.00]|]|] |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ heyhoo;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ heyhoo;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │[5]: heyhoo <c4x2x3> shape 0:4,1:2|2:3                                                                                  │
+    │[17]: c4x2x3_heyhoo shape 0:4,1:2|2:3                                                                                   │
     │┌──────┬───────────────────────────┬───────────────────────────┬───────────────────────────┬───────────────────────────┐│
     ││      │0 @ 0                      │1 @ 0                      │2 @ 0                      │3 @ 0                      ││
     ││      │axis 2                     │axis 2                     │axis 2                     │axis 2                     ││
@@ -193,8 +208,9 @@ let%expect_test "Print constant tensor" =
       [| [ [ 19; 49 ]; [ 20; 50 ]; [ 21; 51 ] ]; [ [ 22; 52 ]; [ 23; 53 ]; [ 24; 54 ] ] |];
     |]
   in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Inline @@ heyhoo2;
+  let heyhoo2_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward heyhoo2 in
+  Train.sync_run backend heyhoo2_fwd heyhoo2;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ heyhoo2;
   [%expect
     {|
     [|
@@ -206,11 +222,11 @@ let%expect_test "Print constant tensor" =
         [[16.00; 46.00]; [17.00; 47.00]; [18.00; 48.00]]|];
       [|[[19.00; 49.00]; [20.00; 50.00]; [21.00; 51.00]];
         [[22.00; 52.00]; [23.00; 53.00]; [24.00; 54.00]]|]|] |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ heyhoo2;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ heyhoo2;
   [%expect
     {|
     ┌──────────────────────────────────────────────┐
-    │[6]: heyhoo2 <c4x2x3x2> shape 0:4,1:2|2:3,3:2 │
+    │[18]: c4x2x3x2_heyhoo2 shape 0:4,1:2|2:3,3:2  │
     │┌──────┬──────────────────┬──────────────────┐│
     ││      │0 @ 1             │1 @ 1             ││
     ││      │axis 3            │axis 3            ││
@@ -244,8 +260,9 @@ let%expect_test "Print constant tensor" =
       |];
     |]
   in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Inline @@ heyhoo3;
+  let heyhoo3_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward heyhoo3 in
+  Train.sync_run backend heyhoo3_fwd heyhoo3;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ heyhoo3;
   [%expect
     {|
     [|
@@ -259,11 +276,70 @@ let%expect_test "Print constant tensor" =
           [[16.00; 46.00]; [17.00; 47.00]; [18.00; 48.00]]];
         [[[19.00; 49.00]; [20.00; 50.00]; [21.00; 51.00]];
           [[22.00; 52.00]; [23.00; 53.00]; [24.00; 54.00]]]|]|] |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ heyhoo3;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ heyhoo3;
+  [%expect
+    {|
+    ┌───────────────────────────────────────────────────┐
+    │[19]: c2x2x2x3x2_heyhoo3 shape 0:2,1:2|2:2,3:3,4:2 │
+    │┌──────┬──────────────────┬──────────────────┐     │
+    ││0 @ 0 │0 @ 2             │1 @ 2             │     │
+    ││      │axis 4            │axis 4            │     │
+    │├──────┼──────────────────┼──────────────────┼──── │
+    ││0 @ 1 │ 1.00e+0  3.10e+1 │ 4.00e+0  3.40e+1 │     │
+    ││axis 3│ 2.00e+0  3.20e+1 │ 5.00e+0  3.50e+1 │     │
+    ││      │ 3.00e+0  3.30e+1 │ 6.00e+0  3.60e+1 │     │
+    │├──────┼──────────────────┼──────────────────┼──── │
+    ││1 @ 1 │ 7.00e+0  3.70e+1 │ 1.00e+1  4.00e+1 │     │
+    ││axis 3│ 8.00e+0  3.80e+1 │ 1.10e+1  4.10e+1 │     │
+    ││      │ 9.00e+0  3.90e+1 │ 1.20e+1  4.20e+1 │     │
+    │└──────┴──────────────────┴──────────────────┘     │
+    ├───────────────────────────────────────────────────┤
+    │┌──────┬──────────────────┬──────────────────┐     │
+    ││1 @ 0 │0 @ 2             │1 @ 2             │     │
+    ││      │axis 4            │axis 4            │     │
+    │├──────┼──────────────────┼──────────────────┼──── │
+    ││0 @ 1 │ 1.30e+1  4.30e+1 │ 1.60e+1  4.60e+1 │     │
+    ││axis 3│ 1.40e+1  4.40e+1 │ 1.70e+1  4.70e+1 │     │
+    ││      │ 1.50e+1  4.50e+1 │ 1.80e+1  4.80e+1 │     │
+    │├──────┼──────────────────┼──────────────────┼──── │
+    ││1 @ 1 │ 1.90e+1  4.90e+1 │ 2.20e+1  5.20e+1 │     │
+    ││axis 3│ 2.00e+1  5.00e+1 │ 2.30e+1  5.30e+1 │     │
+    ││      │ 2.10e+1  5.10e+1 │ 2.40e+1  5.40e+1 │     │
+    │└──────┴──────────────────┴──────────────────┘     │
+    └───────────────────────────────────────────────────┘ |}];
+  let%op heyhoo4 =
+    [|
+      [
+        [ [ (1, 31); (2, 32); (3, 33) ]; [ (4, 34); (5, 35); (6, 36) ] ];
+        [ [ (7, 37); (8, 38); (9, 39) ]; [ (10, 40); (11, 41); (12, 42) ] ];
+      ];
+      [
+        [ [ (13, 43); (14, 44); (15, 45) ]; [ (16, 46); (17, 47); (18, 48) ] ];
+        [ [ (19, 49); (20, 50); (21, 51) ]; [ (22, 52); (23, 53); (24, 54) ] ];
+      ];
+    |]
+  in
+  let heyhoo4_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward heyhoo4 in
+  Train.sync_run backend heyhoo4_fwd heyhoo4;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ heyhoo4;
+  [%expect
+    {|
+    [|
+      [
+        [[1.00, 31.00; 2.00, 32.00; 3.00, 33.00];
+          [4.00, 34.00; 5.00, 35.00; 6.00, 36.00]];
+        [[7.00, 37.00; 8.00, 38.00; 9.00, 39.00];
+          [10.00, 40.00; 11.00, 41.00; 12.00, 42.00]]];
+      [
+        [[13.00, 43.00; 14.00, 44.00; 15.00, 45.00];
+          [16.00, 46.00; 17.00, 47.00; 18.00, 48.00]];
+        [[19.00, 49.00; 20.00, 50.00; 21.00, 51.00];
+          [22.00, 52.00; 23.00, 53.00; 24.00, 54.00]]]|] |}];
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ heyhoo4;
   [%expect
     {|
     ┌────────────────────────────────────────────────────┐
-    │[7]: heyhoo3 <c2x2x2x3x2> shape 0:2,1:2|2:2,3:3,4:2 │
+    │[20]: c2x2x2x3x2_heyhoo4 shape 0:2|4:2->1:2,2:2,3:3 │
     │┌──────┬──────────────────┬──────────────────┐      │
     ││0 @ 0 │0 @ 2             │1 @ 2             │      │
     ││      │axis 4            │axis 4            │      │
@@ -289,79 +365,23 @@ let%expect_test "Print constant tensor" =
     ││axis 3│ 2.00e+1  5.00e+1 │ 2.30e+1  5.30e+1 │      │
     ││      │ 2.10e+1  5.10e+1 │ 2.40e+1  5.40e+1 │      │
     │└──────┴──────────────────┴──────────────────┘      │
-    └────────────────────────────────────────────────────┘ |}];
-  let%op heyhoo4 =
-    [|
-      [
-        [ [ (1, 31); (2, 32); (3, 33) ]; [ (4, 34); (5, 35); (6, 36) ] ];
-        [ [ (7, 37); (8, 38); (9, 39) ]; [ (10, 40); (11, 41); (12, 42) ] ];
-      ];
-      [
-        [ [ (13, 43); (14, 44); (15, 45) ]; [ (16, 46); (17, 47); (18, 48) ] ];
-        [ [ (19, 49); (20, 50); (21, 51) ]; [ (22, 52); (23, 53); (24, 54) ] ];
-      ];
-    |]
-  in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Inline @@ heyhoo4;
-  [%expect
-    {|
-    [|
-      [
-        [[1.00, 31.00; 2.00, 32.00; 3.00, 33.00];
-          [4.00, 34.00; 5.00, 35.00; 6.00, 36.00]];
-        [[7.00, 37.00; 8.00, 38.00; 9.00, 39.00];
-          [10.00, 40.00; 11.00, 41.00; 12.00, 42.00]]];
-      [
-        [[13.00, 43.00; 14.00, 44.00; 15.00, 45.00];
-          [16.00, 46.00; 17.00, 47.00; 18.00, 48.00]];
-        [[19.00, 49.00; 20.00, 50.00; 21.00, 51.00];
-          [22.00, 52.00; 23.00, 53.00; 24.00, 54.00]]]|] |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ heyhoo4;
-  [%expect
-    {|
-    ┌─────────────────────────────────────────────────────┐
-    │[8]: heyhoo4 <c2x2x2x3x2> shape 0:2|4:2->1:2,2:2,3:3 │
-    │┌──────┬──────────────────┬──────────────────┐       │
-    ││0 @ 0 │0 @ 2             │1 @ 2             │       │
-    ││      │axis 4            │axis 4            │       │
-    │├──────┼──────────────────┼──────────────────┼────── │
-    ││0 @ 1 │ 1.00e+0  3.10e+1 │ 4.00e+0  3.40e+1 │       │
-    ││axis 3│ 2.00e+0  3.20e+1 │ 5.00e+0  3.50e+1 │       │
-    ││      │ 3.00e+0  3.30e+1 │ 6.00e+0  3.60e+1 │       │
-    │├──────┼──────────────────┼──────────────────┼────── │
-    ││1 @ 1 │ 7.00e+0  3.70e+1 │ 1.00e+1  4.00e+1 │       │
-    ││axis 3│ 8.00e+0  3.80e+1 │ 1.10e+1  4.10e+1 │       │
-    ││      │ 9.00e+0  3.90e+1 │ 1.20e+1  4.20e+1 │       │
-    │└──────┴──────────────────┴──────────────────┘       │
-    ├─────────────────────────────────────────────────────┤
-    │┌──────┬──────────────────┬──────────────────┐       │
-    ││1 @ 0 │0 @ 2             │1 @ 2             │       │
-    ││      │axis 4            │axis 4            │       │
-    │├──────┼──────────────────┼──────────────────┼────── │
-    ││0 @ 1 │ 1.30e+1  4.30e+1 │ 1.60e+1  4.60e+1 │       │
-    ││axis 3│ 1.40e+1  4.40e+1 │ 1.70e+1  4.70e+1 │       │
-    ││      │ 1.50e+1  4.50e+1 │ 1.80e+1  4.80e+1 │       │
-    │├──────┼──────────────────┼──────────────────┼────── │
-    ││1 @ 1 │ 1.90e+1  4.90e+1 │ 2.20e+1  5.20e+1 │       │
-    ││axis 3│ 2.00e+1  5.00e+1 │ 2.30e+1  5.30e+1 │       │
-    ││      │ 2.10e+1  5.10e+1 │ 2.40e+1  5.40e+1 │       │
-    │└──────┴──────────────────┴──────────────────┘       │
-    └─────────────────────────────────────────────────────┘ |}]
+    └────────────────────────────────────────────────────┘ |}]
 
 let%expect_test "Matrix multiplication dims 2x3" =
-
-  (* drop_all_sessions (); *)
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
-  let%op hey = "hey" in
-  let%op y = (hey * [ 2; 3 ]) + [ 4; 5; 6 ] in
-  (* refresh_session (); *)
+  let%op y = ("hey" * [ 2; 3 ]) + [ 4; 5; 6 ] in
+  let y_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward y in
+  Train.sync_run backend y_fwd y;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
     ┌───────────────────────────┐
-    │[1]: <hey> shape 1:2->0:3  │
+    │[21]: hey shape 1:2->0:3   │
     │┌──────┬──────────────────┐│
     ││      │axis 1            ││
     │├──────┼──────────────────┤│
@@ -374,7 +394,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
   [%expect
     {|
     ┌──────────────────────────────┐
-    │[5]: y <+> shape 0:3          │
+    │[27]: +_y shape 0:3           │
     │┌┬───────────────────────────┐│
     │││axis 0                     ││
     │├┼───────────────────────────┤│
@@ -383,14 +403,17 @@ let%expect_test "Matrix multiplication dims 2x3" =
     └──────────────────────────────┘ |}]
 
 let%expect_test "Big matrix" =
-
-  (* drop_all_sessions (); *)
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
   let hey = TDSL.O.(!~"hey") in
   let zero_to_twenty = TDSL.range 20 in
   let y = TDSL.O.((hey * zero_to_twenty) + zero_to_twenty) in
-  (* refresh_session (); *)
+  let y_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward y in
+  Train.sync_run backend y_fwd y;
   Tensor.print ~with_code:false ~with_grad:false `Inline zero_to_twenty;
   [%expect
     {|
@@ -400,7 +423,7 @@ let%expect_test "Big matrix" =
   [%expect
     {|
       ┌────────────────────────────────────────────┐
-      │[2]: <0...20> shape 0:21                    │
+      │[31]: 0...20 shape 0:21                     │
       │┌┬─────────────────────────────────────────┐│
       │││axis 0                                   ││
       │├┼─────────────────────────────────────────┤│
@@ -411,7 +434,7 @@ let%expect_test "Big matrix" =
   [%expect
     {|
       ┌──────────────────────────────────────────────────┐
-      │[1]: <hey> shape 1:21->0:21                       │
+      │[29]: hey shape 1:21->0:21                        │
       │┌──────┬─────────────────────────────────────────┐│
       ││      │axis 1                                   ││
       │├──────┼─────────────────────────────────────────┤│
@@ -426,7 +449,7 @@ let%expect_test "Big matrix" =
   [%expect
     {|
       ┌────────────────────────────────────────────┐
-      │[4]: <+> shape 0:21                         │
+      │[34]: + shape 0:21                          │
       │┌┬─────────────────────────────────────────┐│
       │││axis 0                                   ││
       │├┼─────────────────────────────────────────┤│
@@ -435,23 +458,20 @@ let%expect_test "Big matrix" =
       └────────────────────────────────────────────┘ |}]
 
 let%expect_test "Very big tensor" =
-
-  (* drop_all_sessions (); *)
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   Random.init 0;
-  let hey =
-    TDSL.range_of_shape
-      ~batch_dims:[ 6 ]
-      ~input_dims:[ 7; 8; 9 ]
-      ~output_dims:[ 10; 11 ]
-      ()
-  in
+  let hey = TDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8; 9 ] ~output_dims:[ 10; 11 ] () in
   let%op hoo = (hey * (1 + 1)) - 10 in
-  (* refresh_session (); *)
+  let hoo_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward hoo in
+  Train.sync_run backend hoo_fwd hoo;
   Tensor.print ~with_code:false ~with_grad:false `Default hey;
   [%expect
     {|
       ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-      │[1]: <r6x10x11x7x8x9> shape 0:6|3:7,4:8,5:9->1:10,2:11                                                                                                                                 │
+      │[36]: r6x10x11x7x8x9 shape 0:6|3:7,4:8,5:9->1:10,2:11                                                                                                                                  │
       │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬──────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
       ││0 @ 0 │0 @ 4                                    │1 @ 4                                    │~~~~~ │6 @ 4                                    │7 @ 4                                    ││
       ││      │axis 5                                   │axis 5                                   │axis 5│axis 5                                   │axis 5                                   ││
@@ -587,7 +607,7 @@ let%expect_test "Very big tensor" =
   [%expect
     {|
       ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-      │[9]: hoo <+> shape 0:6|1:10,2:11                                                                                                                                                       │
+      │[42]: -_hoo shape 0:6|1:10,2:11                                                                                                                                                        │
       │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬──────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
       ││      │0 @ 0                                    │1 @ 0                                    │~~~~~ │4 @ 0                                    │5 @ 0                                    ││
       ││      │axis 2                                   │axis 2                                   │axis 2│axis 2                                   │axis 2                                   ││
