@@ -439,7 +439,7 @@ let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_shape =
   to_dag ?single_node ?entries_per_axis ~with_id ~with_shape ~with_value ~with_grad t
   |> PrintBox_utils.reformat_dag depth
 
-let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style) t =
+let print ~with_grad ~with_code ?(force = false) ?(with_low_level = false) (style : array_print_style) t =
   let sh = t.shape in
   let label = Tn.label t.value in
   let prefix =
@@ -488,7 +488,7 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
   let num_input_axes = List.length sh.input.dims in
   let num_output_axes = List.length sh.output.dims in
   (* TODO: code sharing with [to_dag] *)
-  (if not @@ Lazy.is_val t.value.array then Stdlib.Format.printf "%s <not-in-yet>@ " prefix
+  (if not (force || Lazy.is_val t.value.array) then Stdlib.Format.printf "%s <not-in-yet>@ " prefix
    else
      match (style, t.value.array) with
      | `Inline, (lazy None) -> Stdlib.Format.printf "<virtual>@ "
@@ -501,7 +501,8 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
          Stdlib.Format.print_newline ());
   if with_grad then
     Option.iter t.diff ~f:(fun diff ->
-        if not @@ Lazy.is_val diff.grad.array then Stdlib.Format.printf "%s <not-in-yet>@ " (grad_txt diff)
+        if not (force || Lazy.is_val diff.grad.array) then
+          Stdlib.Format.printf "%s <not-in-yet>@ " (grad_txt diff)
         else
           match (style, diff.grad.array) with
           | `Inline, (lazy (Some arr)) ->
@@ -532,7 +533,8 @@ let print ~with_grad ~with_code ?(with_low_level = false) (style : array_print_s
     match t.diff with
     | Some { backprop = Noop; _ } -> ()
     | Some { backprop = bwd_code; _ } ->
-        Stdlib.Format.printf "@[<v 2>Current backprop low-level body:%a@]@," (Arrayjit.Low_level.fprint_hum ())
+        Stdlib.Format.printf "@[<v 2>Current backprop low-level body:%a@]@,"
+          (Arrayjit.Low_level.fprint_hum ())
         @@ Asgns.to_low_level bwd_code
     | None -> ());
   Stdlib.Format.printf "\n%!"
