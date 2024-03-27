@@ -815,9 +815,10 @@ let get_proj_equations (inequalities : inequality list) proj_axis_env (env : env
     | Row_eq { r1; r2 } -> match_rows false r1 r2
     | Row_ineq { cur = r1; subr = r2 } ->
         match_rows true r1 r2
-        |> List.map ~f:(function
-             | Proj_eq (_, (Proj { proj_id = _; d = 1 } as proj)) -> Proj_eq (proj, Solved (Fixed_idx 0))
-             | eq -> eq)
+        |> List.concat_map ~f:(function
+             | Proj_eq (proj1, (Proj { proj_id = _; d = 1 } as proj2)) ->
+                 [ Iterated proj1; Proj_eq (proj2, Solved (Fixed_idx 0)) ]
+             | eq -> [ eq ])
     | Row_constr _ | Terminal_dim _ | Terminal_row _ -> []
   in
   List.concat_map inequalities ~f
@@ -827,7 +828,7 @@ let solve_proj_equations (eqs : proj_equation list) : proj_env =
   let p_solved = ref [] in
   let p_dims = ref [] in
   let proj_classes = ref @@ Map.empty (module Int) in
-  let rec f = function
+  let rec loop = function
     | Proj_eq (Proj { proj_id = p1; d }, Proj { proj_id = p2; _ }) when p1 = p2 ->
         p_dims := (p1, d) :: !p_dims
     | Proj_eq (Var v1, Var v2) when equal_dim_var v1 v2 -> ()
@@ -846,18 +847,19 @@ let solve_proj_equations (eqs : proj_equation list) : proj_env =
     | Proj_eq (Var v, p) | Proj_eq (p, Var v) -> (
         match Hashtbl.find v_env v with
         | None -> Hashtbl.add_exn v_env ~key:v ~data:p
-        | Some p2 -> f (Proj_eq (p, p2)))
+        | Some p2 -> loop (Proj_eq (p, p2)))
     | Iterated (Solved _) -> ()
     | Iterated (Proj { proj_id; d }) -> p_dims := (proj_id, d) :: !p_dims
     | Iterated (Var v) -> (
-        let idx = Idx.(Iterator (get_symbol ())) in
         match Hashtbl.find v_env v with
-        | None -> Hashtbl.add_exn v_env ~key:v ~data:(Solved idx)
-        | Some (Var v2) -> f (Iterated (Var v2))
+        | None ->
+            let idx = Idx.(Iterator (get_symbol ())) in
+            Hashtbl.add_exn v_env ~key:v ~data:(Solved idx)
+        | Some (Var v2) -> loop (Iterated (Var v2))
         | Some (Solved _) -> ()
         | Some (Proj { proj_id; d }) -> p_dims := (proj_id, d) :: !p_dims)
   in
-  List.iter eqs ~f;
+  List.iter eqs ~f:loop;
   let projs = ref @@ Map.empty (module Int) and non_product = ref @@ Set.empty (module Int) in
   List.iter !p_solved ~f:(fun (p, idx) ->
       let repr, _ = Utils.union_find ~equal:Int.equal !proj_classes ~key:p ~rank:0 in
