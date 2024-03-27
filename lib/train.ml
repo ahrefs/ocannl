@@ -46,7 +46,8 @@ let set_hosted (a : Tn.t) = Tn.update_memory_mode a (Hosted Changed_on_devices) 
 (** Sets the tensor's value as "fully on host",
     returns the tensor's forward code with a label-derived comment. *)
 let forward t =
-  set_on_host Changed_on_devices t.Tensor.value;
+  if Tn.known_constant t.Tensor.value then set_on_host Constant t.value
+  else set_on_host Changed_on_devices t.value;
   let label = Option.value ~default:"tensor" @@ List.last t.Tensor.value.label in
   Asgns.Block_comment (label ^ " fwd", t.forward)
 
@@ -63,7 +64,8 @@ type updaten = {
     Sets the tensor's value as "fully on host". If [setup_for_parallel] is true (false by default),
     sets the parameters and their gradients as "non-local" (on-device). *)
 let grad_update ?(setup_for_parallel = false) loss =
-  set_on_host Changed_on_devices loss.Tensor.value;
+  if Tn.known_constant loss.Tensor.value then set_on_host Constant loss.value
+  else set_on_host Changed_on_devices loss.value;
   let params = get_params loss in
   if setup_for_parallel then Set.iter params ~f:(fun p -> set_materialized (Option.value_exn p.diff).grad);
   let label = label_suffix loss.value.label in
