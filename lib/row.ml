@@ -570,7 +570,12 @@ let solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : environment) :
       | Some (Solved _), _ | _, Some (Solved _) -> assert false)
   | { bcast = Row_var v_cur; dims; _ }, _ when r1_len < r2_len ->
       let more_dims : dim list = Array.(to_list @@ init (r2_len - r1_len) ~f:(fun _ -> Var (get_var ()))) in
-      let templ_v = Hashtbl.find_or_add global_template_cache (v_cur, r1_len) ~default:get_row_var in
+      (* The key of the template cache reflects that v_cur will end up substituted by
+         {dims=more_dims; bcast=Row_var templ_v}.
+         TODO: should we cache more_dims also? *)
+      let templ_v : row_var =
+        Hashtbl.find_or_add global_template_cache (v_cur, r2_len - r1_len) ~default:get_row_var
+      in
       let template : t = { dims = more_dims @ dims; bcast = Row_var templ_v; id = cur.id } in
       let subr_dims : dim list = take_from_end subr.dims (r2_len - r1_len) in
       ( Row_eq { r1 = cur; r2 = template }
