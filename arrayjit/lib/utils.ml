@@ -62,11 +62,13 @@ let read_cmdline_or_env_var n =
   | None -> (
       match
         List.find_map env_variants ~f:(fun env_n ->
-            Option.map (Core.Sys.getenv env_n) ~f:(fun v -> (env_n, v)))
+            Option.(
+              join
+              @@ map (Core.Sys.getenv env_n) ~f:(fun v -> if String.is_empty v then None else Some (env_n, v))))
       with
       | None | Some (_, "") -> None
       | Some (p, arg) ->
-          let result = String.(lowercase @@ drop_prefix arg (length p)) in
+          let result = String.lowercase arg in
           if with_debug then Stdio.printf "Found %s, environment %s\n%!" result p;
           Some result)
 
@@ -109,15 +111,18 @@ let get_global_arg ~default ~arg_name:n =
   let with_debug = settings.with_debug && not (Hash_set.mem accessed_global_args n) in
   if with_debug then
     Stdio.printf "Retrieving commandline, environment, or config file variable ocannl_%s\n%!" n;
+  let result =
+    Option.value_or_thunk (read_cmdline_or_env_var n) ~default:(fun () ->
+        match Hashtbl.find config_file_args n with
+        | Some v ->
+            if with_debug then Stdio.printf "Found %s, in the config file\n%!" v;
+            v
+        | None ->
+            if with_debug then Stdio.printf "Not found, using default %s\n%!" default;
+            default)
+  in
   Hash_set.add accessed_global_args n;
-  Option.value_or_thunk (read_cmdline_or_env_var n) ~default:(fun () ->
-      match Hashtbl.find config_file_args n with
-      | Some v ->
-          if with_debug then Stdio.printf "Found %s, in the config file\n%!" v;
-          v
-      | None ->
-          if with_debug then Stdio.printf "Not found, using default %s\n%!" default;
-          default)
+  result
 
 let () =
   settings.with_debug <- Bool.of_string @@ get_global_arg ~arg_name:"with_debug" ~default:"false";
