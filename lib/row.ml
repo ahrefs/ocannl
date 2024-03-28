@@ -577,7 +577,9 @@ let solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : environment) :
         Hashtbl.find_or_add global_template_cache (v_cur, r2_len - r1_len) ~default:get_row_var
       in
       let template : t = { dims = more_dims @ dims; bcast = Row_var templ_v; id = cur.id } in
-      let subr_dims : dim list = take_from_end subr.dims (r2_len - r1_len) in
+      (* FIXME: We shouldn't need to add any dimension inequalities, because they'll be captured by
+         the extra row inequalities! *)
+      let subr_dims : dim list = List.take subr.dims (r2_len - r1_len) in
       ( Row_eq { r1 = cur; r2 = template }
         :: Row_ineq { cur = template; subr }
         :: List.map2_exn more_dims subr_dims ~f:(fun cur subr -> Dim_ineq { cur; subr })
