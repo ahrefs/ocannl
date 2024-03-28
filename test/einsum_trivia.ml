@@ -1,24 +1,24 @@
 open Base
 open Ocannl
+module Tn = Arrayjit.Tnode
+module IDX = Arrayjit.Indexing.IDX
 module CDSL = Arrayjit.Low_level.CDSL
 module TDSL = Operation.TDSL
 
-
-
 let%expect_test "einsum1 permute axes" =
-
-  (* drop_all_sessions (); *)
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   Random.init 0;
-  let hey =
-    TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] ()
-  in
+  let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "b|i->o => o|b->i" in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
+  Train.forward_and_forget backend ctx ho;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────┐
-    │[1]: <r2x4x3> shape 0:2|2:3->1:4                                │
+    │[0]: r2x4x3 shape 0:2|2:3->1:4                                  │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
     ││      │0 @ 0                      │1 @ 0                      ││
     ││      │axis 2                     │axis 2                     ││
@@ -29,11 +29,11 @@ let%expect_test "einsum1 permute axes" =
     ││      │ 9.00e+0  1.00e+1  1.10e+1 │ 2.10e+1  2.20e+1  2.30e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ ho;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────────────────────────┐
-    │[2]: ho <=>> shape 0:4|2:2->1:3                                                     │
+    │[1]: =>_ho shape 0:4|2:2->1:3                                                       │
     │┌──────┬──────────────────┬──────────────────┬──────────────────┬──────────────────┐│
     ││      │0 @ 0             │1 @ 0             │2 @ 0             │3 @ 0             ││
     ││      │axis 2            │axis 2            │axis 2            │axis 2            ││
@@ -43,20 +43,14 @@ let%expect_test "einsum1 permute axes" =
     ││      │ 2.00e+0  1.40e+1 │ 5.00e+0  1.70e+1 │ 8.00e+0  2.00e+1 │ 1.10e+1  2.30e+1 ││
     │└──────┴──────────────────┴──────────────────┴──────────────────┴──────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  let hey2 =
-    TDSL.range_of_shape
-      ~batch_dims:[ 2; 3 ]
-      ~input_dims:[ 4; 5 ]
-      ~output_dims:[ 6; 7 ]
-      ()
-  in
+  let hey2 = TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] () in
   let%op ho2 = hey2 ++ "ab|cd->ef => cf|ae->db" in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hey2;
+  Train.forward_and_forget backend ctx ho2;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey2;
   [%expect
     {|
       ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-      │[3]: <r2x3x6x7x4x5> shape 0:2,1:3|4:4,5:5->2:6,3:7                                                                                                                                              │
+      │[2]: r2x3x6x7x4x5 shape 0:2,1:3|4:4,5:5->2:6,3:7                                                                                                                                                │
       │┌──────┬─────────────────────────────────────────────┬─────────────────────────────────────────────┬─────────────────────────────────────────────┬─────────────────────────────────────────────┐│
       ││0 @ 1 │0 @ 4                                        │1 @ 4                                        │2 @ 4                                        │3 @ 4                                        ││
       ││      │axis 5                                       │axis 5                                       │axis 5                                       │axis 5                                       ││
@@ -153,11 +147,11 @@ let%expect_test "einsum1 permute axes" =
       ││      │ 2.50e+3  2.50e+3  2.50e+3  2.50e+3  2.50e+3 │ 2.50e+3  2.51e+3  2.51e+3  2.51e+3  2.51e+3 │ 2.51e+3  2.51e+3  2.51e+3  2.51e+3  2.51e+3 │ 2.52e+3  2.52e+3  2.52e+3  2.52e+3  2.52e+3 ││
       │└──────┴─────────────────────────────────────────────┴─────────────────────────────────────────────┴─────────────────────────────────────────────┴─────────────────────────────────────────────┘│
       └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ ho2;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho2;
   [%expect
     {|
       ┌────────────────────────────────────────────────────────────────────────────────────────────┐
-      │[4]: ho2 <=>> shape 0:4,1:7|4:2,5:6->2:5,3:3                                                │
+      │[3]: =>_ho2 shape 0:4,1:7|4:2,5:6->2:5,3:3                                                  │
       │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
       ││0 @ 1 │0 @ 4                                    │1 @ 4                                    ││
       ││      │axis 5                                   │axis 5                                   ││
@@ -262,19 +256,19 @@ let%expect_test "einsum1 permute axes" =
       └────────────────────────────────────────────────────────────────────────────────────────────┘ |}]
 
 let%expect_test "einsum1 sum out axes" =
-
-  (* drop_all_sessions (); *)
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   Random.init 0;
-  let hey =
-    TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] ()
-  in
+  let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "b|i->o => b|i" in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
+  Train.forward_and_forget backend ctx ho;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────┐
-    │[1]: <r2x4x3> shape 0:2|2:3->1:4                                │
+    │[4]: r2x4x3 shape 0:2|2:3->1:4                                  │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
     ││      │0 @ 0                      │1 @ 0                      ││
     ││      │axis 2                     │axis 2                     ││
@@ -285,11 +279,11 @@ let%expect_test "einsum1 sum out axes" =
     ││      │ 9.00e+0  1.00e+1  1.10e+1 │ 2.10e+1  2.20e+1  2.30e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ ho;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho;
   [%expect
     {|
     ┌────────────────────────────────────┐
-    │[2]: ho <=>> shape 0:2|1:3          │
+    │[5]: =>_ho shape 0:2|1:3            │
     │┌──────┬───────────────────────────┐│
     ││      │axis 1                     ││
     │├──────┼───────────────────────────┤│
@@ -297,22 +291,16 @@ let%expect_test "einsum1 sum out axes" =
     ││      │ 6.60e+1  7.00e+1  7.40e+1 ││
     │└──────┴───────────────────────────┘│
     └────────────────────────────────────┘ |}];
-  let hey2 =
-    TDSL.range_of_shape
-      ~batch_dims:[ 2; 3 ]
-      ~input_dims:[ 4; 5 ]
-      ~output_dims:[ 6; 7 ]
-      ()
-  in
+  let hey2 = TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] () in
   let%op ho2 = hey2 ++ "ab|cd->ef => c|a->d" in
-  (* refresh_session (); *)
+  Train.forward_and_forget backend ctx ho2;
   (* Axis 5 of hey2, i.e. d in the einsum spec, has the lowest variation (progresses by 1),
      that's why axis 1 of ho2 appears nearly constant. *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ ho2;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho2;
   [%expect
     {|
       ┌────────────────────────────────────────────────────────────────────────────────────┐
-      │[4]: ho2 <=>> shape 0:4|2:2->1:5                                                    │
+      │[7]: =>_ho2 shape 0:4|2:2->1:5                                                      │
       │┌──────┬──────────────────┬──────────────────┬──────────────────┬──────────────────┐│
       ││      │0 @ 0             │1 @ 0             │2 @ 0             │3 @ 0             ││
       ││      │axis 2            │axis 2            │axis 2            │axis 2            ││
@@ -326,61 +314,59 @@ let%expect_test "einsum1 sum out axes" =
       └────────────────────────────────────────────────────────────────────────────────────┘ |}]
 
 let%expect_test "einsum outer product" =
-
-  (* drop_all_sessions (); *)
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   Random.init 0;
   let a = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] () in
   let%op c = (a + 1) *+ "i; j => i->j" b in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ a;
+  Train.forward_and_forget backend ctx c;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ a;
   [%expect
     {|
     ┌─────────────────────┐
-    │[1]: <r2> shape 0:2  │
+    │[8]: r2 shape 0:2    │
     │┌┬──────────────────┐│
     │││axis 0            ││
     │├┼──────────────────┤│
     │││ 0.00e+0  1.00e+0 ││
     │└┴──────────────────┘│
     └─────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ b;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ b;
   [%expect
     {|
     ┌──────────────────────────────┐
-    │[2]: <r3> shape 0:3           │
+    │[9]: r3 shape 0:3             │
     │┌┬───────────────────────────┐│
     │││axis 0                     ││
     │├┼───────────────────────────┤│
     │││ 0.00e+0  1.00e+0  2.00e+0 ││
     │└┴───────────────────────────┘│
     └──────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ c;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ c;
   [%expect
     {|
-    ┌────────────────────────────┐
-    │[5]: c <;=>> shape 1:2->0:3 │
-    │┌──────┬──────────────────┐ │
-    ││      │axis 1            │ │
-    │├──────┼──────────────────┼ │
-    ││axis 0│ 0.00e+0  0.00e+0 │ │
-    ││      │ 1.00e+0  2.00e+0 │ │
-    ││      │ 2.00e+0  4.00e+0 │ │
-    │└──────┴──────────────────┘ │
-    └────────────────────────────┘ |}];
-  let a =
-    TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] ()
-  in
-  let b =
-    TDSL.range_of_shape ~batch_dims:[ 5 ] ~input_dims:[ 6 ] ~output_dims:[ 7 ] ()
-  in
+    ┌───────────────────────────┐
+    │[12]: ;=>_c shape 1:2->0:3 │
+    │┌──────┬──────────────────┐│
+    ││      │axis 1            ││
+    │├──────┼──────────────────┤│
+    ││axis 0│ 0.00e+0  0.00e+0 ││
+    ││      │ 1.00e+0  2.00e+0 ││
+    ││      │ 2.00e+0  4.00e+0 ││
+    │└──────┴──────────────────┘│
+    └───────────────────────────┘ |}];
+  let a = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
+  let b = TDSL.range_of_shape ~batch_dims:[ 5 ] ~input_dims:[ 6 ] ~output_dims:[ 7 ] () in
   let%op c = a *+ "i|j->k; l|m->n => il|jm->kn" b in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ a;
+  Train.forward_and_forget backend ctx c;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ a;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────┐
-    │[6]: <r2x4x3> shape 0:2|2:3->1:4                                │
+    │[13]: r2x4x3 shape 0:2|2:3->1:4                                 │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
     ││      │0 @ 0                      │1 @ 0                      ││
     ││      │axis 2                     │axis 2                     ││
@@ -391,11 +377,11 @@ let%expect_test "einsum outer product" =
     ││      │ 9.00e+0  1.00e+1  1.10e+1 │ 2.10e+1  2.20e+1  2.30e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ b;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ b;
   [%expect
     {|
     ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │[7]: <r5x7x6> shape 0:5|2:6->1:7                                                                                                                                                                                          │
+    │[14]: r5x7x6 shape 0:5|2:6->1:7                                                                                                                                                                                           │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
     ││      │0 @ 0                                    │1 @ 0                                    │2 @ 0                                    │3 @ 0                                    │4 @ 0                                    ││
     ││      │axis 2                                   │axis 2                                   │axis 2                                   │axis 2                                   │axis 2                                   ││
@@ -407,11 +393,11 @@ let%expect_test "einsum outer product" =
     ││      │ 3.60e+1  3.70e+1  ...  4.00e+1  4.10e+1 │ 7.80e+1  7.90e+1  ...  8.20e+1  8.30e+1 │ 1.20e+2  1.21e+2  ...  1.24e+2  1.25e+2 │ 1.62e+2  1.63e+2  ...  1.66e+2  1.67e+2 │ 2.04e+2  2.05e+2  ...  2.08e+2  2.09e+2 ││
     │└──────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┘│
     └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ c;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ c;
   [%expect
     {|
     ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │[8]: c <;=>> shape 0:2,1:5|4:3,5:6->2:4,3:7                                                                                           │
+    │[15]: ;=>_c shape 0:2,1:5|4:3,5:6->2:4,3:7                                                                                            │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
     ││0 @ 1 │0 @ 4                                    │1 @ 4                                    │2 @ 4                                    ││
     ││      │axis 5                                   │axis 5                                   │axis 5                                   ││
@@ -559,26 +545,28 @@ let%expect_test "einsum outer product" =
     └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}]
 
 let%expect_test "einsum matrix/inner+outer products" =
-
-  (* drop_all_sessions (); *)
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   Random.init 0;
-  let a =
-    TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] ()
-  in
-  let b =
-    TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] ()
-  in
+  let a = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
+  let b = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] () in
   let%op a2 = a *+ "b|i->o; b|i->o => b|i->o" a in
   let%op c = b *+ "b|h->o; b|i->h => b|i->o" a in
   let%op d = a *+ "a|i->h; b|h->o => ab|i->o" b in
   let%op e = a *+ "b|i->h; b|h->o => i->o" b in
   let%op f = a *+ "a|i->h; b|h->o => i->o" b in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ a2;
+  Train.forward_and_forget backend ctx a2;
+  Train.forward_and_forget backend ctx c;
+  Train.forward_and_forget backend ctx d;
+  Train.forward_and_forget backend ctx e;
+  Train.forward_and_forget backend ctx f;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ a2;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────┐
-    │[3]: a2 <;=>> shape 0:2|2:3->1:4                                │
+    │[18]: ;=>_a2 shape 0:2|2:3->1:4                                 │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
     ││      │0 @ 0                      │1 @ 0                      ││
     ││      │axis 2                     │axis 2                     ││
@@ -589,11 +577,11 @@ let%expect_test "einsum matrix/inner+outer products" =
     ││      │ 8.10e+1  1.00e+2  1.21e+2 │ 4.41e+2  4.84e+2  5.29e+2 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ c;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ c;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────┐
-    │[4]: c <;=>> shape 0:2|2:3->1:5                                 │
+    │[19]: ;=>_c shape 0:2|2:3->1:5                                  │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
     ││      │0 @ 0                      │1 @ 0                      ││
     ││      │axis 2                     │axis 2                     ││
@@ -605,11 +593,11 @@ let%expect_test "einsum matrix/inner+outer products" =
     ││      │ 3.30e+2  4.00e+2  4.70e+2 │ 2.49e+3  2.64e+3  2.79e+3 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ d;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ d;
   [%expect
     {|
       ┌────────────────────────────────────────────────────────────────┐
-      │[5]: d <;=>> shape 0:2,1:2|3:3->2:5                             │
+      │[20]: ;=>_d shape 0:2,1:2|3:3->2:5                              │
       │┌──────┬───────────────────────────┬───────────────────────────┐│
       ││      │0 @ 1                      │1 @ 1                      ││
       ││      │axis 3                     │axis 3                     ││
@@ -627,11 +615,11 @@ let%expect_test "einsum matrix/inner+outer products" =
       ││      │ 1.17e+3  1.24e+3  1.31e+3 │ 2.49e+3  2.64e+3  2.79e+3 ││
       │└──────┴───────────────────────────┴───────────────────────────┘│
       └────────────────────────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ e;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ e;
   [%expect
     {|
       ┌────────────────────────────────────┐
-      │[6]: e <;=>> shape 1:3->0:5         │
+      │[21]: ;=>_e shape 1:3->0:5          │
       │┌──────┬───────────────────────────┐│
       ││      │axis 1                     ││
       │├──────┼───────────────────────────┤│
@@ -642,11 +630,11 @@ let%expect_test "einsum matrix/inner+outer products" =
       ││      │ 2.82e+3  3.04e+3  3.26e+3 ││
       │└──────┴───────────────────────────┘│
       └────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ f;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ f;
   [%expect
     {|
       ┌────────────────────────────────────┐
-      │[7]: f <;=>> shape 1:3->0:5         │
+      │[22]: ;=>_f shape 1:3->0:5          │
       │┌──────┬───────────────────────────┐│
       ││      │axis 1                     ││
       │├──────┼───────────────────────────┤│
@@ -659,19 +647,19 @@ let%expect_test "einsum matrix/inner+outer products" =
       └────────────────────────────────────┘ |}]
 
 let%expect_test "einsum1 broadcast or sum out prefix axes" =
-
-  (* drop_all_sessions (); *)
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   Random.init 0;
-  let hey =
-    TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] ()
-  in
+  let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|i->o => ...|o->i" in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
+  Train.forward_and_forget backend ctx ho;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────┐
-    │[1]: <r2x4x3> shape 0:2|2:3->1:4                                │
+    │[23]: r2x4x3 shape 0:2|2:3->1:4                                 │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
     ││      │0 @ 0                      │1 @ 0                      ││
     ││      │axis 2                     │axis 2                     ││
@@ -682,11 +670,11 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     ││      │ 9.00e+0  1.00e+1  1.10e+1 │ 2.10e+1  2.20e+1  2.30e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ ho;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho;
   [%expect
     {|
     ┌──────────────────────────────────────────────────────────────────────────────────┐
-    │[2]: ho <=>> shape 0:2|2:4->1:3                                                   │
+    │[24]: =>_ho shape 0:2|2:4->1:3                                                    │
     │┌──────┬────────────────────────────────────┬────────────────────────────────────┐│
     ││      │0 @ 0                               │1 @ 0                               ││
     ││      │axis 2                              │axis 2                              ││
@@ -697,12 +685,12 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└──────┴────────────────────────────────────┴────────────────────────────────────┘│
     └──────────────────────────────────────────────────────────────────────────────────┘ |}];
   let%op ho2 = hey ++ "b|...->o => o|...->b" in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ ho2;
+  Train.forward_and_forget backend ctx ho2;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho2;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │[3]: ho2 <=>> shape 0:4|2:3->1:2                                                                                        │
+    │[25]: =>_ho2 shape 0:4|2:3->1:2                                                                                         │
     │┌──────┬───────────────────────────┬───────────────────────────┬───────────────────────────┬───────────────────────────┐│
     ││      │0 @ 0                      │1 @ 0                      │2 @ 0                      │3 @ 0                      ││
     ││      │axis 2                     │axis 2                     │axis 2                     │axis 2                     ││
@@ -712,20 +700,14 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└──────┴───────────────────────────┴───────────────────────────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
 
-  let hey2 =
-    TDSL.range_of_shape
-      ~batch_dims:[ 2; 3 ]
-      ~input_dims:[ 4; 5 ]
-      ~output_dims:[ 6; 7 ]
-      ()
-  in
+  let hey2 = TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] () in
   let%op ho3 = hey2 ++ "...b|...i->...o => ...i|...o->...b" in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hey2;
+  Train.forward_and_forget backend ctx ho3;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey2;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │[4]: <r2x3x6x7x4x5> shape 0:2,1:3|4:4,5:5->2:6,3:7                                                                                                                                              │
+    │[26]: r2x3x6x7x4x5 shape 0:2,1:3|4:4,5:5->2:6,3:7                                                                                                                                               │
     │┌──────┬─────────────────────────────────────────────┬─────────────────────────────────────────────┬─────────────────────────────────────────────┬─────────────────────────────────────────────┐│
     ││0 @ 1 │0 @ 4                                        │1 @ 4                                        │2 @ 4                                        │3 @ 4                                        ││
     ││      │axis 5                                       │axis 5                                       │axis 5                                       │axis 5                                       ││
@@ -822,11 +804,11 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     ││      │ 2.50e+3  2.50e+3  2.50e+3  2.50e+3  2.50e+3 │ 2.50e+3  2.51e+3  2.51e+3  2.51e+3  2.51e+3 │ 2.51e+3  2.51e+3  2.51e+3  2.51e+3  2.51e+3 │ 2.52e+3  2.52e+3  2.52e+3  2.52e+3  2.52e+3 ││
     │└──────┴─────────────────────────────────────────────┴─────────────────────────────────────────────┴─────────────────────────────────────────────┴─────────────────────────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ ho3;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho3;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │[5]: ho3 <=>> shape 0:2,1:5|4:4,5:7->2:6,3:3                                                                                                                                    │
+    │[27]: =>_ho3 shape 0:2,1:5|4:4,5:7->2:6,3:3                                                                                                                                     │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
     ││0 @ 1 │0 @ 4                                    │1 @ 4                                    │2 @ 4                                    │3 @ 4                                    ││
     ││      │axis 5                                   │axis 5                                   │axis 5                                   │axis 5                                   ││
@@ -949,12 +931,12 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
 
   let%op ho4 = hey2 ++ "...b|...i->...o => i|o->b" in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ ho4;
+  Train.forward_and_forget backend ctx ho4;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho4;
   [%expect
     {|
     ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │[6]: ho4 <=>> shape 0:5|2:7->1:3                                                                                                                                                                                          │
+    │[28]: =>_ho4 shape 0:5|2:7->1:3                                                                                                                                                                                           │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
     ││      │0 @ 0                                    │1 @ 0                                    │2 @ 0                                    │3 @ 0                                    │4 @ 0                                    ││
     ││      │axis 2                                   │axis 2                                   │axis 2                                   │axis 2                                   │axis 2                                   ││
@@ -965,12 +947,12 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└──────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────┘│
     └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
   let%op ho5 = hey ++ "...|...->...o => o" in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
+  Train.forward_and_forget backend ctx ho5;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────┐
-    │[1]: <r2x4x3> shape 0:2|2:3->1:4                                │
+    │[23]: r2x4x3 shape 0:2|2:3->1:4                                 │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
     ││      │0 @ 0                      │1 @ 0                      ││
     ││      │axis 2                     │axis 2                     ││
@@ -981,11 +963,11 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     ││      │ 9.00e+0  1.00e+1  1.10e+1 │ 2.10e+1  2.20e+1  2.30e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ ho5;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho5;
   [%expect
     {|
     ┌───────────────────────────────────────┐
-    │[7]: ho5 <=>> shape 0:4                │
+    │[29]: =>_ho5 shape 0:4                 │
     │┌┬────────────────────────────────────┐│
     │││axis 0                              ││
     │├┼────────────────────────────────────┤│
@@ -994,12 +976,12 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     └───────────────────────────────────────┘ |}];
   let hey3 = TDSL.range_of_shape ~output_dims:[ 3; 4 ] () in
   let%op ho6 = hey3 ++ "...|...->...o => o" in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hey3;
+  Train.forward_and_forget backend ctx ho6;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey3;
   [%expect
     {|
     ┌─────────────────────────────────────────────┐
-    │[8]: <r3x4> shape 0:3,1:4                    │
+    │[30]: r3x4 shape 0:3,1:4                     │
     │┌──────┬────────────────────────────────────┐│
     ││      │axis 1                              ││
     │├──────┼────────────────────────────────────┤│
@@ -1008,11 +990,11 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     ││      │ 8.00e+0  9.00e+0  1.00e+1  1.10e+1 ││
     │└──────┴────────────────────────────────────┘│
     └─────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ ho6;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho6;
   [%expect
     {|
     ┌───────────────────────────────────────┐
-    │[9]: ho6 <=>> shape 0:4                │
+    │[31]: =>_ho6 shape 0:4                 │
     │┌┬────────────────────────────────────┐│
     │││axis 0                              ││
     │├┼────────────────────────────────────┤│
@@ -1022,12 +1004,12 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   (* Broadcast with a shift. *)
   let hey4 = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3; 4 ] () in
   let%op ho7 = hey4 ++ "i->...o => ...io" in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hey4;
+  Train.forward_and_forget backend ctx ho7;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey4;
   [%expect
     {|
     ┌─────────────────────────────────────────────────────────────────┐
-    │[10]: <r3x4x2> shape 2:2->0:3,1:4                                │
+    │[32]: r3x4x2 shape 2:2->0:3,1:4                                  │
     │┌──────┬──────────────────┬──────────────────┬──────────────────┐│
     ││      │0 @ 0             │1 @ 0             │2 @ 0             ││
     ││      │axis 2            │axis 2            │axis 2            ││
@@ -1038,11 +1020,11 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     ││      │ 6.00e+0  7.00e+0 │ 1.40e+1  1.50e+1 │ 2.20e+1  2.30e+1 ││
     │└──────┴──────────────────┴──────────────────┴──────────────────┘│
     └─────────────────────────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ ho7;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho7;
   [%expect
     {|
     ┌─────────────────────────────────────────────┐
-    │[11]: ho7 <=>> shape 0:3,1:2,2:4             │
+    │[33]: =>_ho7 shape 0:3,1:2,2:4               │
     │┌──────┬────────────────────────────────────┐│
     ││      │axis 2                              ││
     │├──────┼────────────────────────────────────┤│
@@ -1058,22 +1040,20 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     └─────────────────────────────────────────────┘ |}]
 
 let%expect_test "einsum broadcast or sum out prefix axes" =
-
-  (* drop_all_sessions (); *)
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   Random.init 0;
-  let a =
-    TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] ()
-  in
-  let b =
-    TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] ()
-  in
+  let a = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
+  let b = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] () in
   let%op c = a *+ "...|i->...; ...|...->i => ...|i" b in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ a;
+  Train.forward_and_forget backend ctx c;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ a;
   [%expect
     {|
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │[1]: <r3x2x4> shape 0:3|2:4->1:2                                                                                       │
+    │[34]: r3x2x4 shape 0:3|2:4->1:2                                                                                        │
     │┌──────┬────────────────────────────────────┬────────────────────────────────────┬────────────────────────────────────┐│
     ││      │0 @ 0                               │1 @ 0                               │2 @ 0                               ││
     ││      │axis 2                              │axis 2                              │axis 2                              ││
@@ -1082,11 +1062,11 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
     ││      │ 4.00e+0  5.00e+0  6.00e+0  7.00e+0 │ 1.20e+1  1.30e+1  1.40e+1  1.50e+1 │ 2.00e+1  2.10e+1  2.20e+1  2.30e+1 ││
     │└──────┴────────────────────────────────────┴────────────────────────────────────┴────────────────────────────────────┘│
     └───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ b;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ b;
   [%expect
     {|
     ┌──────────────────────────────────────┐
-    │[2]: <r3x4x1> shape 0:3|2:1->1:4      │
+    │[35]: r3x4x1 shape 0:3|2:1->1:4       │
     │┌──────┬─────────┬─────────┬─────────┐│
     ││      │0 @ 0    │1 @ 0    │2 @ 0    ││
     ││      │axis 2   │axis 2   │axis 2   ││
@@ -1097,11 +1077,11 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
     ││      │ 3.00e+0 │ 7.00e+0 │ 1.10e+1 ││
     │└──────┴─────────┴─────────┴─────────┘│
     └──────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ c;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ c;
   [%expect
     {|
     ┌─────────────────────────────────────────────┐
-    │[3]: c <;=>> shape 0:3|1:4                   │
+    │[36]: ;=>_c shape 0:3|1:4                    │
     │┌──────┬────────────────────────────────────┐│
     ││      │axis 1                              ││
     │├──────┼────────────────────────────────────┤│
@@ -1114,12 +1094,12 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
   let d = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
   let e = TDSL.range_of_shape ~input_dims:[ 4 ] ~output_dims:[ 3 ] () in
   let%op f = d *+ "i->...;j->... => ...ij" e in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ d;
+  Train.forward_and_forget backend ctx f;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ d;
   [%expect
     {|
     ┌───────────────────────────┐
-    │[4]: <r3x2> shape 1:2->0:3 │
+    │[37]: r3x2 shape 1:2->0:3  │
     │┌──────┬──────────────────┐│
     ││      │axis 1            ││
     │├──────┼──────────────────┤│
@@ -1128,11 +1108,11 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
     ││      │ 4.00e+0  5.00e+0 ││
     │└──────┴──────────────────┘│
     └───────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ e;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ e;
   [%expect
     {|
     ┌─────────────────────────────────────────────┐
-    │[5]: <r3x4> shape 1:4->0:3                   │
+    │[38]: r3x4 shape 1:4->0:3                    │
     │┌──────┬────────────────────────────────────┐│
     ││      │axis 1                              ││
     │├──────┼────────────────────────────────────┤│
@@ -1141,11 +1121,11 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
     ││      │ 8.00e+0  9.00e+0  1.00e+1  1.10e+1 ││
     │└──────┴────────────────────────────────────┘│
     └─────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ f;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ f;
   [%expect
     {|
     ┌─────────────────────────────────────────────┐
-    │[6]: f <;=>> shape 0:3,1:2,2:4               │
+    │[39]: ;=>_f shape 0:3,1:2,2:4                │
     │┌──────┬────────────────────────────────────┐│
     ││      │axis 2                              ││
     │├──────┼────────────────────────────────────┤│
@@ -1161,19 +1141,19 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
     └─────────────────────────────────────────────┘ |}]
 
 let%expect_test "einsum1 fixed dim axis" =
-
-  (* drop_all_sessions (); *)
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   Random.init 0;
-  let hey =
-    TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] ()
-  in
+  let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|1->... => ...|..." in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
+  Train.forward_and_forget backend ctx ho;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────┐
-    │[1]: <r2x4x3> shape 0:2|2:3->1:4                                │
+    │[40]: r2x4x3 shape 0:2|2:3->1:4                                 │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
     ││      │0 @ 0                      │1 @ 0                      ││
     ││      │axis 2                     │axis 2                     ││
@@ -1184,11 +1164,11 @@ let%expect_test "einsum1 fixed dim axis" =
     ││      │ 9.00e+0  1.00e+1  1.10e+1 │ 2.10e+1  2.20e+1  2.30e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ ho;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho;
   [%expect
     {|
     ┌─────────────────────────────────────────────┐
-    │[2]: ho <=>> shape 0:2|1:4                   │
+    │[41]: =>_ho shape 0:2|1:4                    │
     │┌──────┬────────────────────────────────────┐│
     ││      │axis 1                              ││
     │├──────┼────────────────────────────────────┤│
@@ -1197,12 +1177,12 @@ let%expect_test "einsum1 fixed dim axis" =
     │└──────┴────────────────────────────────────┘│
     └─────────────────────────────────────────────┘ |}];
   let%op ho2 = hey ++ "...|...->... => ...|...->0" in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
+  Train.forward_and_forget backend ctx ho2;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────┐
-    │[1]: <r2x4x3> shape 0:2|2:3->1:4                                │
+    │[40]: r2x4x3 shape 0:2|2:3->1:4                                 │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
     ││      │0 @ 0                      │1 @ 0                      ││
     ││      │axis 2                     │axis 2                     ││
@@ -1213,11 +1193,11 @@ let%expect_test "einsum1 fixed dim axis" =
     ││      │ 9.00e+0  1.00e+1  1.10e+1 │ 2.10e+1  2.20e+1  2.30e+1 ││
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ ho2;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho2;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────┐
-    │[3]: ho2 <=>> shape 0:2|2:3->1:1                                │
+    │[42]: =>_ho2 shape 0:2|2:3->1:1                                 │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
     ││      │0 @ 0                      │1 @ 0                      ││
     ││      │axis 2                     │axis 2                     ││
@@ -1227,12 +1207,12 @@ let%expect_test "einsum1 fixed dim axis" =
     └────────────────────────────────────────────────────────────────┘ |}];
   let hey2 = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
   let%op ho3 = hey2 ++ "...|...->... => 0" in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hey2;
+  Train.forward_and_forget backend ctx ho3;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey2;
   [%expect
     {|
     ┌───────────────────────────┐
-    │[4]: <r3x2> shape 1:2->0:3 │
+    │[43]: r3x2 shape 1:2->0:3  │
     │┌──────┬──────────────────┐│
     ││      │axis 1            ││
     │├──────┼──────────────────┤│
@@ -1241,40 +1221,49 @@ let%expect_test "einsum1 fixed dim axis" =
     ││      │ 4.00e+0  5.00e+0 ││
     │└──────┴──────────────────┘│
     └───────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ ho3;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho3;
   [%expect
     {|
-    ┌────────────────────────┐
-    │[5]: ho3 <=>> shape 0:1 │
-    │┌┬─────────┐            │
-    │││axis 0   │            │
-    │├┼─────────┼─────────── │
-    │││ 1.50e+1 │            │
-    │└┴─────────┘            │
-    └────────────────────────┘ |}];
+    ┌───────────────────────┐
+    │[44]: =>_ho3 shape 0:1 │
+    │┌┬─────────┐           │
+    │││axis 0   │           │
+    │├┼─────────┼────────── │
+    │││ 1.50e+1 │           │
+    │└┴─────────┘           │
+    └───────────────────────┘ |}];
   let%op ho4 = hey2 ++ "i->j => i0j" in
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ ho4;
+  Train.forward_and_forget backend ctx ho4;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho4;
   [%expect {|
-    [6]: ho4 <=>> shape 0:2,1:1,2:3
-    <void> |}]
+    ┌────────────────────────────────────┐
+    │[45]: =>_ho4 shape 0:2,1:1,2:3      │
+    │┌──────┬───────────────────────────┐│
+    ││      │axis 2                     ││
+    │├──────┼───────────────────────────┤│
+    ││0 @ 0 │ 0.00e+0  2.00e+0  4.00e+0 ││
+    ││axis 1│                           ││
+    │├──────┼───────────────────────────┤│
+    ││1 @ 0 │ 1.00e+0  3.00e+0  5.00e+0 ││
+    ││axis 1│                           ││
+    │└──────┴───────────────────────────┘│
+    └────────────────────────────────────┘ |}]
 
 let%expect_test "einsum with fixed dim axes" =
-
-  (* drop_all_sessions (); *)
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
   Random.init 0;
-  let a =
-    TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] ()
-  in
-  let b =
-    TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] ()
-  in
+  let a = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
+  let b = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] () in
   let%op c = a *+ "...|i->1; ...|...->i => ...|i" b in
-  (* refresh_session (); *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ a;
+  Train.forward_and_forget backend ctx c;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ a;
   [%expect
     {|
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │[1]: <r3x2x4> shape 0:3|2:4->1:2                                                                                       │
+    │[46]: r3x2x4 shape 0:3|2:4->1:2                                                                                        │
     │┌──────┬────────────────────────────────────┬────────────────────────────────────┬────────────────────────────────────┐│
     ││      │0 @ 0                               │1 @ 0                               │2 @ 0                               ││
     ││      │axis 2                              │axis 2                              │axis 2                              ││
@@ -1283,11 +1272,11 @@ let%expect_test "einsum with fixed dim axes" =
     ││      │ 4.00e+0  5.00e+0  6.00e+0  7.00e+0 │ 1.20e+1  1.30e+1  1.40e+1  1.50e+1 │ 2.00e+1  2.10e+1  2.20e+1  2.30e+1 ││
     │└──────┴────────────────────────────────────┴────────────────────────────────────┴────────────────────────────────────┘│
     └───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ b;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ b;
   [%expect
     {|
     ┌──────────────────────────────────────┐
-    │[2]: <r3x4x1> shape 0:3|2:1->1:4      │
+    │[47]: r3x4x1 shape 0:3|2:1->1:4       │
     │┌──────┬─────────┬─────────┬─────────┐│
     ││      │0 @ 0    │1 @ 0    │2 @ 0    ││
     ││      │axis 2   │axis 2   │axis 2   ││
@@ -1298,11 +1287,11 @@ let%expect_test "einsum with fixed dim axes" =
     ││      │ 3.00e+0 │ 7.00e+0 │ 1.10e+1 ││
     │└──────┴─────────┴─────────┴─────────┘│
     └──────────────────────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ c;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ c;
   [%expect
     {|
     ┌─────────────────────────────────────────────┐
-    │[3]: c <;=>> shape 0:3|1:4                   │
+    │[48]: ;=>_c shape 0:3|1:4                    │
     │┌──────┬────────────────────────────────────┐│
     ││      │axis 1                              ││
     │├──────┼────────────────────────────────────┤│

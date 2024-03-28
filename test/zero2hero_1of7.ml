@@ -344,7 +344,7 @@ let%expect_test "Simple gradients virtual" =
   (* Check out the initial state without forcing memory modes by compilation. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect {|
-                                                #123 *._l <(Hosted Changed_on_devices) 27>
+                                                #123 *._l <(Hosted Changed_on_devices) 41>
                                                 <not-in-yet>
                                                 #124 grad_*._l <waiting>
                                                 <not-in-yet>
