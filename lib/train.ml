@@ -418,3 +418,8 @@ let example_train_loop ~name ~seed ~batch_size ~init_lr ?lr_schedule ~num_device
   in
   (* Note: infer_callback is significantly less efficient than using the model via arrayjit. *)
   (inputs, outputs, model_result, infer_callback, !batch_losses, !epoch_losses, !learning_rates)
+
+let forward_and_forget (type context) (module Backend : Backend_type with type context = context) ctx
+    ?(bindings = Idx.IDX.empty) t =
+  let jitted = Backend.jit_code ctx bindings @@ forward t in
+  sync_run (module Backend) jitted t

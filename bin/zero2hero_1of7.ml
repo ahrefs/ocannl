@@ -31,8 +31,7 @@ let _suspended () =
   let%op f5 = f 5 in
   let module Backend = (val Train.fresh_backend ()) in
   Train.every_non_literal_on_host f5;
-  let jitted = Backend.(jit_code (init @@ get_device ~ordinal:0) IDX.empty @@ Train.forward f5) in
-  Train.sync_run (module Backend) jitted f5;
+  Train.forward_and_forget (module Backend) Backend.(init @@ get_device ~ordinal:0) f5;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   Stdio.printf "\n%!"

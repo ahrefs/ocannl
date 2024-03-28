@@ -16,8 +16,7 @@ let%expect_test "Graph drawing recompile" =
   let open Tensor.O in
   let%op f_nd = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.set_hosted x.value;
-  let f_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward f_nd in
-  Train.sync_run backend f_fwd f_nd;
+  Train.forward_and_forget backend ctx f_nd;
   Tensor.print_tree ~with_grad:true ~depth:9 f_nd;
   [%expect
     {|
@@ -133,8 +132,7 @@ let%expect_test "Graph drawing fetch" =
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%op f5 = f 5 in
   Train.every_non_literal_on_host f5;
-  let f_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward f5 in
-  Train.sync_run (module Backend) f_fwd f5;
+  Train.forward_and_forget (module Backend) ctx f5;
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   [%expect
     {|

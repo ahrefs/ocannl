@@ -17,8 +17,7 @@ let%expect_test "Pointwise multiplication dims 1" =
   Random.init 0;
   (* "Hey" is inferred to be a scalar. *)
   let%op y = 2 *. "hey" in
-  let y_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward y in
-  Train.sync_run backend y_fwd y;
+  Train.forward_and_forget backend ctx y;
 
   Tensor.print ~with_code:false ~with_grad:false `Default @@ y;
   [%expect
@@ -40,10 +39,8 @@ let%expect_test "Matrix multiplication dims 1x1" =
   Random.init 0;
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
   let%op y = ("hey" * 'q' 2.0) + 'p' 1.0 in
-  let y_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward y in
-  Train.sync_run backend y_fwd y;
+  Train.forward_and_forget backend ctx y;
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
-  (* refresh_session (); *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
@@ -75,8 +72,7 @@ let%expect_test "Print constant tensor" =
   Random.init 0;
 
   let%op hey = [ (1, 2, 3); (4, 5, 6) ] in
-  let hey_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward hey in
-  Train.sync_run backend hey_fwd hey;
+  Train.forward_and_forget backend ctx hey;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ hey;
   [%expect {| [1.00, 2.00, 3.00; 4.00, 5.00, 6.00] |}];
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
@@ -92,8 +88,7 @@ let%expect_test "Print constant tensor" =
     │└──────┴───────────────────────────┘                          │
     └──────────────────────────────────────────────────────────────┘ |}];
   let%op hoo = [| [ 1; 2; 3 ]; [ 4; 5; 6 ] |] in
-  let hoo_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward hoo in
-  Train.sync_run backend hoo_fwd hoo;
+  Train.forward_and_forget backend ctx hoo;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ hoo;
   [%expect {| [|[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]|] |}];
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hoo;
@@ -116,8 +111,7 @@ let%expect_test "Print constant tensor" =
       ((19, 20, 21), (22, 23, 24));
     ]
   in
-  let hey2_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward hey2 in
-  Train.sync_run backend hey2_fwd hey2;
+  Train.forward_and_forget backend ctx hey2;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ hey2;
   [%expect
     {|
@@ -148,8 +142,7 @@ let%expect_test "Print constant tensor" =
       [ [ 19; 20; 21 ]; [ 22; 23; 24 ] ];
     |]
   in
-  let hoo2_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward hoo2 in
-  Train.sync_run backend hoo2_fwd hoo2;
+  Train.forward_and_forget backend ctx hoo2;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ hoo2;
   [%expect
     {|
@@ -178,8 +171,7 @@ let%expect_test "Print constant tensor" =
       [| [ 19; 20; 21 ]; [ 22; 23; 24 ] |];
     |]
   in
-  let heyhoo_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward heyhoo in
-  Train.sync_run backend heyhoo_fwd heyhoo;
+  Train.forward_and_forget backend ctx heyhoo;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ heyhoo;
   [%expect
     {|
@@ -208,8 +200,7 @@ let%expect_test "Print constant tensor" =
       [| [ [ 19; 49 ]; [ 20; 50 ]; [ 21; 51 ] ]; [ [ 22; 52 ]; [ 23; 53 ]; [ 24; 54 ] ] |];
     |]
   in
-  let heyhoo2_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward heyhoo2 in
-  Train.sync_run backend heyhoo2_fwd heyhoo2;
+  Train.forward_and_forget backend ctx heyhoo2;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ heyhoo2;
   [%expect
     {|
@@ -260,8 +251,7 @@ let%expect_test "Print constant tensor" =
       |];
     |]
   in
-  let heyhoo3_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward heyhoo3 in
-  Train.sync_run backend heyhoo3_fwd heyhoo3;
+  Train.forward_and_forget backend ctx heyhoo3;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ heyhoo3;
   [%expect
     {|
@@ -319,8 +309,7 @@ let%expect_test "Print constant tensor" =
       ];
     |]
   in
-  let heyhoo4_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward heyhoo4 in
-  Train.sync_run backend heyhoo4_fwd heyhoo4;
+  Train.forward_and_forget backend ctx heyhoo4;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ heyhoo4;
   [%expect
     {|
@@ -375,8 +364,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
   Random.init 0;
   (* Hey is inferred to be a matrix. *)
   let%op y = ("hey" * [ 2; 3 ]) + [ 4; 5; 6 ] in
-  let y_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward y in
-  Train.sync_run backend y_fwd y;
+  Train.forward_and_forget backend ctx y;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
@@ -412,8 +400,7 @@ let%expect_test "Big matrix" =
   let hey = TDSL.O.(!~"hey") in
   let zero_to_twenty = TDSL.range 20 in
   let y = TDSL.O.((hey * zero_to_twenty) + zero_to_twenty) in
-  let y_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward y in
-  Train.sync_run backend y_fwd y;
+  Train.forward_and_forget backend ctx y;
   Tensor.print ~with_code:false ~with_grad:false `Inline zero_to_twenty;
   [%expect
     {|
@@ -465,8 +452,7 @@ let%expect_test "Very big tensor" =
   Random.init 0;
   let hey = TDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8; 9 ] ~output_dims:[ 10; 11 ] () in
   let%op hoo = (hey * (1 + 1)) - 10 in
-  let hoo_fwd = Backend.jit_code ctx IDX.empty @@ Train.forward hoo in
-  Train.sync_run backend hoo_fwd hoo;
+  Train.forward_and_forget backend ctx hoo;
   Tensor.print ~with_code:false ~with_grad:false `Default hey;
   [%expect
     {|

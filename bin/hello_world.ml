@@ -19,8 +19,7 @@ let hello1 () =
   let hey = range_of_shape ~batch_dims:[ 7 ] ~input_dims:[ 9; 10; 11 ] ~output_dims:[ 13; 14 ] () in
   let%op hoo = ((1 + 1) * hey) - 10 in
   (* For convenience, Train.forward will set hoo.value as fully on host.  *)
-  let jitted = Backend.jit_code ctx IDX.empty @@ Train.forward hoo in
-  Train.sync_run (module Backend) jitted hoo;
+  Train.forward_and_forget (module Backend) ctx hoo;
   (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
   Tensor.print_tree ~with_grad:false ~depth:99 hoo;
   Tensor.print ~with_code:false ~with_grad:false `Default hoo
@@ -37,8 +36,7 @@ let hello2 () =
   let%op y = ("hey" * 'q' 2.0) + 'p' 1.0 in
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   Train.every_non_literal_on_host y;
-  let jitted = Backend.jit_code ctx IDX.empty @@ Train.forward y in
-  Train.sync_run (module Backend) jitted y;
+  Train.forward_and_forget (module Backend) ctx y;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ y
 
