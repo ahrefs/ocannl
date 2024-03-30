@@ -391,6 +391,16 @@ let solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env : environmen
   let nonredundant ?(more = []) v vs =
     Utils.sorted_diff ~compare:compare_dim_var (List.dedup_and_sort ~compare:compare_dim_var (v :: vs)) more
   in
+  let rec cyclic ~v_subr ~curs =
+    (* TODO: it's somewhat inefficient *)
+    List.exists curs ~f:(fun v_cur ->
+        equal_dim_var v_subr v_cur
+        ||
+        match Map.find env.dim_env v_cur with
+        | None | Some (Solved (Dim _)) -> false
+        | Some (Solved (Var v)) -> equal_dim_var v_subr v
+        | Some (Bounds { cur = curs; _ }) -> cyclic ~v_subr ~curs)
+  in
   match (cur, subr) with
   | cur, subr when equal_dim cur subr -> ([], env)
   | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
@@ -429,6 +439,9 @@ let solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env : environmen
       | ( Some (Bounds { cur = _; subr = [ subr1 ]; lub = None }),
           Some (Bounds { cur = [ cur2 ]; subr = _; lub = None }) )
         when finish && equal_dim_var v_subr subr1 && equal_dim_var v_cur cur2 ->
+          (* A heuristic to reduce template variables coming from e.g. einsum notation expansion. *)
+          ([ Dim_eq { d1 = subr; d2 = cur } ], env)
+      | Some (Bounds { cur = curs; subr = _; lub = _ }), Some (Bounds _) when cyclic ~v_subr ~curs ->
           ([ Dim_eq { d1 = subr; d2 = cur } ], env)
       | None, Some (Bounds { cur = cur2; subr = subr2; lub = lub2 }) ->
           ( [],
@@ -577,14 +590,9 @@ let solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : environment) :
         Hashtbl.find_or_add global_template_cache (v_cur, r2_len - r1_len) ~default:get_row_var
       in
       let template : t = { dims = more_dims @ dims; bcast = Row_var templ_v; id = cur.id } in
-      (* FIXME: We shouldn't need to add any dimension inequalities, because they'll be captured by
-         the extra row inequalities! *)
-      let subr_dims : dim list = List.take subr.dims (r2_len - r1_len) in
-      ( Row_eq { r1 = cur; r2 = template }
-        :: Row_ineq { cur = template; subr }
-        :: List.map2_exn more_dims subr_dims ~f:(fun cur subr -> Dim_ineq { cur; subr })
-        @ prefix_ineqs,
-        env )
+      (* We don't need to add any dimension inequalities, because they'll be captured by
+         the extra row inequalities. *)
+      ([ Row_eq { r1 = cur; r2 = template }; Row_ineq { cur = template; subr } ], env)
   | { bcast = Broadcastable; _ }, _ when r1_len < r2_len ->
       raise @@ Shape_error ("Too many axes", [ Row_mismatch [ cur; subr ] ])
   | _, { bcast = Row_var v_subr; _ } when r2_len <= r1_len -> (
