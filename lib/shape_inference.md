@@ -114,8 +114,14 @@ Let's explain the shape inference functions.
 * `apply_constraint`: if there's enough information in a row -- in particular it is not open i.e. there is no row variable -- solves the row constraint. Currently, there's just `Total_elems n`: if there's just one `dim` variable, it will become `n` divided by the product of other dimensions.
 * `solve_dim_ineq`: solves a single inequality between two values of type `dim`; returns derived equations and inequalities. It maintains the between-variable bounds and the least-upper-bound (LUB). But there can only be one LUB (a dimension > 1) without forcing the bound variable itself to a solved form (with dimension = 1).
 * `solve_row_ineq`: solves a single inequality between two rows; returns derived equations and inequalities. It derives between-`dim` inequalities from the known parts of the compared rows. It maintains between-row-variable bounds (when known parts of the rows match) and the LUB. It forces the `cur` side to have at least the number of axes of the `subr` side (via a variables-only `template`). It updates the LUB by computing dimensions-wise LUBs.
-* `close_dim_terminal` and `close_row_terminal`: produce the equal-to-LUB constraint when available.
+* `close_dim_terminal` and `close_row_terminal`: produce the equal-to-LUB constraint when available, from `Terminal_dim` and `Terminal_row` constraints produced for shapes of leaf tensors in tensor expressions, but only when `~finish:true`.
 * `solve_inequalities`: solves equations, inequalities, and row constraints, until only row constraints remain. Row constraints can "pass" if there is not enough information, rather than reflecting their effect in the environment. Calls `close_dim_terminal` and `close_row_terminal` as appropriate (when `finish`).
+* `finalize_row`: substitutes the remaining row variables by `Broadcastable` and the remaining dim variables by dim 1. It's called by `finish_inference` only, after a run of `solve_inequalities ~finish:true`.
+
+The rationale behind only closing leaf (terminal) tensor shapes to their LUBs, while closing the remaining ones to dim-1:
+
+* the intermediate tensors will bet their shapes forced "from below" by their components;
+* the leaf tensors cannot have their shape forced as they can always be broadcasted -- the only way they acquire shape information is downstream of `close_row_terminal`.
 
 ## Projections inference
 
