@@ -41,7 +41,7 @@ let%expect_test "Graph drawing recompile" =
   let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.every_non_literal_on_host f;
   let f_upd = Train.grad_update f in
-  let f_bprop = Backend.jit_code ctx IDX.empty f_upd.fwd_bprop in
+  let f_bprop = Backend.jit ctx IDX.empty f_upd.fwd_bprop in
   Train.sync_run backend f_bprop f;
   Tensor.print_tree ~with_grad:true ~depth:9 f;
   [%expect {|
@@ -68,8 +68,8 @@ let%expect_test "Graph drawing recompile" =
   let ys =
     Array.map xs ~f:(fun v ->
         (* This is inefficient because it compiles the argument update inside the loop. *)
-        let x_jitted = Backend.jit_code f_bprop.context IDX.empty ~name:"assign_x" [%cd x =: !.v] in
-        Train.sync_run (module Backend) x_jitted x;
+        let assign_x = Backend.jit f_bprop.context IDX.empty ~name:"assign_x" [%cd x =: !.v] in
+        Train.sync_run (module Backend) assign_x x;
         Train.sync_run (module Backend) f_bprop f;
         Backend.await device;
         f.@[0])
@@ -161,13 +161,13 @@ let%expect_test "Graph drawing fetch" =
   Train.set_hosted x.value;
   Train.set_hosted (Option.value_exn x.diff).grad;
   let update = Train.grad_update fx in
-  let fx_jitted = Backend.jit_code ctx bindings update.fwd_bprop in
-  let step_ref = IDX.find_exn fx_jitted.bindings step_sym in
+  let fx_routine = Backend.jit ctx bindings update.fwd_bprop in
+  let step_ref = IDX.find_exn fx_routine.bindings step_sym in
   let ys, dys =
     Array.unzip
     @@ Array.mapi xs ~f:(fun i _ ->
            step_ref := i;
-           Train.sync_run backend fx_jitted fx;
+           Train.sync_run backend fx_routine fx;
            (fx.@[0], x.@%[0]))
   in
   (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
@@ -236,8 +236,8 @@ let%expect_test "Simple gradients hosted" =
   Train.every_non_literal_on_host learning_rate;
   let grad = Train.grad_update l in
   let sgd = Train.sgd_update ~learning_rate grad in
-  let grad_jitted = Backend.jit_code ctx IDX.empty grad.fwd_bprop in
-  let sgd_jitted = Backend.jit_code grad_jitted.context IDX.empty sgd in
+  let grad_routine = Backend.jit ctx IDX.empty grad.fwd_bprop in
+  let sgd_routine = Backend.jit grad_routine.context IDX.empty sgd in
   (* Check out the initial state without running a forward pass. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect {|
@@ -259,7 +259,7 @@ let%expect_test "Simple gradients hosted" =
      0.00e+0  │ 0.00e+0  │          │ |}];
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
-  Train.sync_run backend grad_jitted l;
+  Train.sync_run backend grad_routine l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
@@ -281,7 +281,7 @@ let%expect_test "Simple gradients hosted" =
      6.00e+0  │ -4.00e+0 │          │ |}];
   (* Now we update the params, but we are not doing the forward and backward passes: only params values
      will change, compared to the above. The update is in the opposite direction of the gradient. *)
-  Train.sync_run backend sgd_jitted l;
+  Train.sync_run backend sgd_routine l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
@@ -304,7 +304,7 @@ let%expect_test "Simple gradients hosted" =
 
   (* Now the params will remain as above, but both param gradients and the values and gradients
      of other nodes will change thanks to the forward and backward passes. *)
-  Train.sync_run backend grad_jitted l;
+  Train.sync_run backend grad_routine l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
@@ -360,7 +360,7 @@ let%expect_test "Simple gradients virtual" =
     <not-in-yet>                    │<not-in-yet>                    │                                │
     #112 grad_a <Materialized 28>   │#114 grad_b <Materialized 28>   │                                │
     <not-in-yet>                    │<not-in-yet>                    │                                │ |}];
-  let grad_jitted = Backend.jit_code ctx IDX.empty grad.fwd_bprop in
+  let grad_routine = Backend.jit ctx IDX.empty grad.fwd_bprop in
   (* Check out the state without running a forward pass or compiling the SGD update. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect {|
@@ -382,7 +382,7 @@ let%expect_test "Simple gradients virtual" =
     <void>                    │<void>                    │                          │ |}];
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
-  Train.sync_run backend grad_jitted l;
+  Train.sync_run backend grad_routine l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
@@ -403,12 +403,12 @@ let%expect_test "Simple gradients virtual" =
     #112 grad_a <On_device 33>│#114 grad_b <On_device 33>│                          │
     <void>                    │<void>                    │                          │ |}];
   (* Only now compile the SGD update. *)
-  let sgd_jitted = Backend.jit_code grad_jitted.context IDX.empty sgd in
+  let sgd_routine = Backend.jit grad_routine.context IDX.empty sgd in
   (* Now we update the params, but are not doing the forward and backward passes: only params values
      will change, compared to the above.
      Since virtual tensors are computed by-need, they will always be recomputed using the latest
      parameter state. *)
-  Train.sync_run backend sgd_jitted l;
+  Train.sync_run backend sgd_routine l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
@@ -430,7 +430,7 @@ let%expect_test "Simple gradients virtual" =
     <void>                    │<void>                    │                          │ |}];
   (* Now the params will remain as above, but both param gradients and the values and gradients
      of other nodes will change thanks to the forward and backward passes. *)
-  Train.sync_run backend grad_jitted l;
+  Train.sync_run backend grad_routine l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
@@ -464,8 +464,8 @@ let%expect_test "2D neuron hosted" =
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
   let update = Train.grad_update v in
-  let jitted = Backend.jit_code ctx IDX.empty update.fwd_bprop in
-  Train.sync_run backend jitted v;
+  let routine = Backend.jit ctx IDX.empty update.fwd_bprop in
+  Train.sync_run backend routine v;
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect
     {|
@@ -490,8 +490,8 @@ let%expect_test "2D neuron virtual" =
   let ctx = Backend.init device in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   let update = Train.grad_update v in
-  let jitted = Backend.jit_code ctx IDX.empty update.fwd_bprop in
-  Train.sync_run backend jitted v;
+  let routine = Backend.jit ctx IDX.empty update.fwd_bprop in
+  Train.sync_run backend routine v;
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect
     {|

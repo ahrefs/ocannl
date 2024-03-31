@@ -12,7 +12,7 @@ let benchmark_overhead backend () =
   let open (val backend : Arrayjit.Backends.Backend) in
   (* Utils.settings.with_debug <- true; *)
   (* Utils.settings.output_debug_files_in_run_directory <- true; *)
-  (* Utils.settings.debug_log_jitted <- true; *)
+  (* Utils.settings.debug_log_from_routines <- true; *)
   CDSL.disable_all_debugs ();
   Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ name ^ " ******";
   Random.init 0;
@@ -26,11 +26,11 @@ let benchmark_overhead backend () =
   let update_f = Train.grad_update f in
   (* Initialize the context with a mock update of x to ensure that it is not optimized as a constant. *)
   let%cd mock_update_x = x =: 42 in
-  let init_jitted_x = jit_code ~name:"init_assign_x" ctx IDX.empty mock_update_x in
-  let jitted_f = jit_code init_jitted_x.context IDX.empty update_f.fwd_bprop in
+  let init_assign_x = jit ~name:"init_assign_x" ctx IDX.empty mock_update_x in
+  let f_routine = jit init_assign_x.context IDX.empty update_f.fwd_bprop in
   Tensor.print_tree ~with_grad:true ~with_backend_info:true ~depth:9 f;
   Tensor.iter_embedded_arrays f ~f:(fun a ->
-      if from_host jitted_f.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
+      if from_host f_routine.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
 
   let xs = Array.init n_data ~f:Float.(fun i -> of_int i - (of_int n_data /. 2.)) in
   let open Tensor.O in
@@ -38,12 +38,12 @@ let benchmark_overhead backend () =
   let ys =
     Array.map xs ~f:(fun v ->
         let%cd update_x = x =: !.v in
-        let jitted_x = jit_code ~name:"assign_x" jitted_f.context IDX.empty update_x in
-        Train.run jitted_x;
+        let assign_x = jit ~name:"assign_x" f_routine.context IDX.empty update_x in
+        Train.run assign_x;
         await device;
-        Train.run jitted_f;
+        Train.run f_routine;
         await device;
-        ignore (to_host jitted_f.context f.value : bool);
+        ignore (to_host f_routine.context f.value : bool);
         f.@[0])
   in
   let plot_box =

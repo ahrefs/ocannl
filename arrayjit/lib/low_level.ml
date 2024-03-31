@@ -876,10 +876,10 @@ module CDSL = struct
     Utils.settings.with_debug <- true;
     Utils.settings.output_debug_files_in_run_directory <- true;
     if hosted_only then virtualize_settings.enable_device_only <- false;
-    if debug_logs then Utils.settings.debug_log_jitted <- true
+    if debug_logs then Utils.settings.debug_log_from_routines <- true
 
   let disable_all_debugs ?(restore_defaults = false) () =
-    Utils.settings.debug_log_jitted <- false;
+    Utils.settings.debug_log_from_routines <- false;
     Utils.settings.with_debug <- false;
     Utils.settings.output_debug_files_in_run_directory <- false;
     if restore_defaults then virtualize_settings.enable_device_only <- true

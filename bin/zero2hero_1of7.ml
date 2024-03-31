@@ -15,9 +15,8 @@ let _suspended () =
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
   let code = Train.grad_update v in
-  let jitted = Backend.jit_code ctx IDX.empty code.fwd_bprop in
-  (* jitted.run (); *)
-  Train.sync_run (module Backend) jitted v;
+  let routine = Backend.jit ctx IDX.empty code.fwd_bprop in
+  Train.sync_run (module Backend) routine v;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_id:true ~with_grad:true ~depth:9 v;
   Stdlib.Format.printf "\nHigh-level code:\n%!";
@@ -60,17 +59,17 @@ let () =
   let module Backend = (val Train.fresh_backend ()) in
   let ctx = Backend.init @@ Backend.get_device ~ordinal:0 in
   let update = Train.grad_update fx in
-  let jitted = Backend.jit_code ctx bindings update.fwd_bprop in
-  let step_ref = IDX.find_exn jitted.bindings step_sym in
+  let routine = Backend.jit ctx bindings update.fwd_bprop in
+  let step_ref = IDX.find_exn routine.bindings step_sym in
   let ys = Array.create ~len:size 0. and dys = Array.create ~len:size 0. in
   let open Tensor.O in
   let looping () =
-    assert (Backend.to_host jitted.context fx.value);
-    assert (Backend.to_host jitted.context (Option.value_exn x.diff).grad);
+    assert (Backend.to_host routine.context fx.value);
+    assert (Backend.to_host routine.context (Option.value_exn x.diff).grad);
     ys.(!step_ref) <- fx.@[0];
     dys.(!step_ref) <- x.@%[0]
   in
-  Train.sync_run ~looping (module Backend) jitted fx;
+  Train.sync_run ~looping (module Backend) routine fx;
   Tensor.print ~with_grad:true ~with_code:true `Default fx;
   Stdio.print_endline "\n";
   Tensor.print_tree ~with_id:true ~with_value:true ~with_grad:true ~depth:9 fx;
@@ -90,7 +89,7 @@ let _suspended () =
   Random.init 0;
   Utils.settings.with_debug <- true;
   Utils.settings.output_debug_files_in_run_directory <- true;
-  Utils.settings.debug_log_jitted <- true;
+  Utils.settings.debug_log_from_routines <- true;
   Random.init 0;
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in
@@ -99,34 +98,34 @@ let _suspended () =
   let open (val Train.fresh_backend ()) in
   let device = get_device ~ordinal:0 in
   let update = Train.grad_update l in
-  let jitted = jit_code (init device) IDX.empty @@ update.fwd_bprop in
+  let routine = jit (init device) IDX.empty @@ update.fwd_bprop in
   Tensor.iter_embedded_arrays l ~f:(fun a ->
-      if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
-  Train.run jitted;
+      if from_host routine.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
+  Train.run routine;
   await device;
   Tensor.iter_embedded_arrays l ~f:(fun a ->
-      if to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ Tn.name a);
+      if to_host routine.context a then Stdio.printf "Retrieved array %s.\n%!" @@ Tn.name a);
   Stdio.print_endline
     {|
       We did not update the params: all values and gradients will be at initial points,
       which are specified in the tensor in the brackets.|};
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   let%op learning_rate = 0.1 in
-  let jitted = jit_code jitted.context IDX.empty @@ Train.sgd_update ~learning_rate update in
+  let routine = jit routine.context IDX.empty @@ Train.sgd_update ~learning_rate update in
   (* learning_rate is virtual so this will not print anything. *)
   Tensor.iter_embedded_arrays learning_rate ~f:(fun a ->
-      if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
+      if from_host routine.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
   Stdio.print_endline
     {|
       Due to how the gccjit backend works, since the parameters were constant in the grad_update
       computation, they did not exist on the device before. Now they do. This would not be needed
       on the cuda backend.|};
   List.iter [ a.value; b.value; c.value; f.value ] ~f:(fun a ->
-      if from_host jitted.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
-  Train.run jitted;
+      if from_host routine.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
+  Train.run routine;
   await device;
   Tensor.iter_embedded_arrays l ~f:(fun a ->
-      if to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ Tn.name a);
+      if to_host routine.context a then Stdio.printf "Retrieved array %s.\n%!" @@ Tn.name a);
   Stdio.print_endline
     {|
       Now we updated the params, but after the forward and backward passes:
@@ -134,11 +133,11 @@ let _suspended () =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   (* We could reuse the jitted code if we did not use `jit_and_run`. *)
   let update = Train.grad_update l in
-  let jitted = jit_code jitted.context IDX.empty update.fwd_bprop in
-  Train.run jitted;
+  let routine = jit routine.context IDX.empty update.fwd_bprop in
+  Train.run routine;
   await device;
   Tensor.iter_embedded_arrays l ~f:(fun a ->
-      if to_host jitted.context a then Stdio.printf "Retrieved array %s.\n%!" @@ Tn.name a);
+      if to_host routine.context a then Stdio.printf "Retrieved array %s.\n%!" @@ Tn.name a);
   Stdio.print_endline
     {|
       Now again we did not update the params, they will remain as above, but both param

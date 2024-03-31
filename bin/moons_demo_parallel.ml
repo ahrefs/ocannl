@@ -15,7 +15,7 @@ let num_devices = 5
 let experiment ~seed () =
   Utils.settings.with_debug <- true;
   Utils.settings.output_debug_files_in_run_directory <- true;
-  (* Utils.settings.debug_log_jitted <- true; *)
+  (* Utils.settings.debug_log_from_routines <- true; *)
   let hid_dim = 16 in
   (* let hid_dim = 4 in *)
   let batch_size = 120 in

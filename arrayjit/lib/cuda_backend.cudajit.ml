@@ -266,7 +266,7 @@ let jit_code ~traced_store info ppf llc : unit =
         (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
         fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr array) pp_array_offset (idcs, array.dims) loop_f
           llv;
-        (if Utils.settings.debug_log_jitted then
+        (if Utils.settings.debug_log_from_routines then
            let v_code, v_idcs = loop_debug_f llv in
            let pp_args =
              pp_print_list @@ fun ppf -> function
@@ -292,7 +292,7 @@ let jit_code ~traced_store info ppf llc : unit =
         done;
         locals := old_locals
     | Comment message ->
-        if Utils.settings.debug_log_jitted then
+        if Utils.settings.debug_log_from_routines then
           fprintf ppf
             "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"COMMENT: %s\\n\"@]);@ @]}"
             (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
@@ -425,7 +425,7 @@ let%debug_sexp jit_func ~name (old_context : context) idx_params (traced_store, 
   let cu_src =
     [%string
       {|
-%{if Utils.settings.debug_log_jitted then "__device__ int printf (const char * format, ... );" else ""}
+%{if Utils.settings.debug_log_from_routines then "__device__ int printf (const char * format, ... );" else ""}
 extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ params}) {
   /* TODO: this initial toy prototype is single-threaded. */
   if (threadIdx.x != 0 || blockIdx.x != 0) { return; }
@@ -501,7 +501,7 @@ let jit ?name old_context bindings ((traced_store, llc) as compiled) =
                 if tn.zero_initialized then Cu.memset_d8 dev_ptr Unsigned.UChar.zero ~length:size_in_bytes
             | _ -> ());
       [%log "launching the kernel"];
-      (* if Utils.settings.debug_log_jitted then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
+      (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
       Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream @@ idx_args @ args;
       [%log "kernel launched"]
     in

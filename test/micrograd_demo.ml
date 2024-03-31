@@ -23,7 +23,7 @@ let%expect_test "Micrograd README basic example" =
   let%op g = g + (10. /. f) in
   List.iter ~f:(Option.iter ~f:(fun diff -> Train.set_hosted diff.Tensor.grad)) [ a.diff; b.diff ];
   let update = Train.grad_update g in
-  let step = Backend.jit_code ctx IDX.empty update.fwd_bprop in
+  let step = Backend.jit ctx IDX.empty update.fwd_bprop in
   Train.sync_run backend step g;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ g;
   [%expect
@@ -120,17 +120,17 @@ let%expect_test "Micrograd half-moons example" =
   Train.set_hosted learning_rate.value;
   let update = Train.grad_update scalar_loss in
   let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
-  let sgd_jitted = Backend.jit_code ctx bindings (Seq (update.fwd_bprop, sgd)) in
-  Train.all_host_to_device backend sgd_jitted.context scalar_loss;
-  Train.all_host_to_device backend sgd_jitted.context learning_rate;
-  let step_ref = IDX.find_exn sgd_jitted.bindings step_n in
+  let sgd_routine = Backend.jit ctx bindings (Seq (update.fwd_bprop, sgd)) in
+  Train.all_host_to_device backend sgd_routine.context scalar_loss;
+  Train.all_host_to_device backend sgd_routine.context learning_rate;
+  let step_ref = IDX.find_exn sgd_routine.bindings step_n in
   step_ref := 0;
   for _epoch = 1 to epochs do
-    Train.sequential_loop sgd_jitted.bindings ~f:(fun () ->
-        Train.run sgd_jitted;
+    Train.sequential_loop sgd_routine.bindings ~f:(fun () ->
+        Train.run sgd_routine;
         Backend.await device;
-        assert (Backend.to_host sgd_jitted.context learning_rate.value);
-        assert (Backend.to_host sgd_jitted.context scalar_loss.value);
+        assert (Backend.to_host sgd_routine.context learning_rate.value);
+        assert (Backend.to_host sgd_routine.context scalar_loss.value);
         (* let batch_ref = IDX.find_exn sgd_jitted.bindings batch_n in
            Stdio.printf "Epoch=%d, step=%d, batch=%d, lr=%f, loss=%f\n%!" epoch !step_ref !batch_ref
              learning_rate.@[0] scalar_loss.@[0]; *)
@@ -144,16 +144,16 @@ let%expect_test "Micrograd half-moons example" =
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   let%op mlp_result = mlp "point" in
   Train.set_on_host Volatile mlp_result.value;
-  let result_jitted =
-    Backend.jit_code sgd_jitted.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
+  let result_routine =
+    Backend.jit sgd_routine.context IDX.empty @@ Block_comment ("moons infer", mlp_result.forward)
   in
   let callback (x, y) =
     Tensor.set_values point [| x; y |];
     (* For the gccjit backend, point is only on host, not on device. For cuda, this will be needed. *)
-    ignore (Backend.from_host result_jitted.context point.value : bool);
-    Train.run result_jitted;
+    ignore (Backend.from_host result_routine.context point.value : bool);
+    Train.run result_routine;
     Backend.await device;
-    assert (Backend.to_host result_jitted.context mlp_result.value);
+    assert (Backend.to_host result_routine.context mlp_result.value);
     Float.(mlp_result.@[0] >= 0.)
   in
   let plot_moons =

@@ -3,7 +3,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-type 'context jitted = {
+type 'context routine = {
   context : 'context;
   schedule : unit -> Tnode.work;
   bindings : Indexing.jitted_bindings;
@@ -14,7 +14,7 @@ type 'context jitted = {
 module type No_device_backend = sig
   type code
   type context
-  type nonrec jitted = context jitted
+  type nonrec routine = context routine
 
   val name : string
   val initialize : unit -> unit
@@ -28,16 +28,16 @@ module type No_device_backend = sig
 
   val sexp_of_code : code -> Sexp.t
   val sexp_of_context : context -> Sexp.t
-  val sexp_of_jitted : jitted -> Sexp.t
-  val prejit : shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> code
+  val sexp_of_routine : routine -> Sexp.t
+  val maybe_jit : shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> code
 
-  val prejit_batch :
+  val maybe_jit_batch :
     shared:bool -> ?names:string array -> Indexing.unit_bindings -> Assignments.t array -> code array
-  (** Unlike the [~shared] parameter, [prejit_batch] vs. [prejit] is purely about improving the compile
+  (** Unlike the [~shared] parameter, [maybe_jit_batch] vs. [maybe_jit] is purely about improving the compile
       time (does not affect execution). *)
 
-  val jit : context -> code -> jitted
-  val jit_code : context -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> jitted
+  val jit_code : context -> code -> routine
+  val jit : context -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> routine
 
   val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
   (** Cleans up all work on a backend.
@@ -98,7 +98,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   type code = Backend.code [@@deriving sexp_of]
   type context = { device : device; ctx : Backend.context } [@@deriving sexp_of]
-  type nonrec jitted = context jitted [@@deriving sexp_of]
+  type nonrec routine = context routine [@@deriving sexp_of]
 
   let name = "multicore " ^ Backend.name
   let init device = { device; ctx = Backend.init ~label:(name ^ " " ^ Int.to_string device.ordinal) }
@@ -115,11 +115,11 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     await device;
     Backend.finalize ctx
 
-  let prejit = Backend.prejit
-  let prejit_batch = Backend.prejit_batch
+  let maybe_jit = Backend.maybe_jit
+  let maybe_jit_batch = Backend.maybe_jit_batch
 
-  let jit { ctx; device } prejitted : jitted =
-    let task = Backend.jit ctx prejitted in
+  let jit_code { ctx; device } code : routine =
+    let task = Backend.jit_code ctx code in
     let%diagn_sexp schedule () =
       [%log_result "Scheduling", task.name];
       let task = task.schedule () in
@@ -133,7 +133,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     in
     { task with context = { ctx = task.context; device }; schedule }
 
-  let jit_code context ?name bindings asgns = jit context @@ prejit ~shared:false ?name bindings asgns
+  let jit context ?name bindings asgns = jit_code context @@ maybe_jit ~shared:false ?name bindings asgns
 
   let from_host { device; ctx } =
     await device;
@@ -222,7 +222,7 @@ end
 module Gccjit_device : No_device_backend with type context = Gccjit_backend.context = struct
   type code = Gccjit_backend.code [@@deriving sexp_of]
   type context = Gccjit_backend.context [@@deriving sexp_of]
-  type nonrec jitted = context jitted [@@deriving sexp_of]
+  type nonrec routine = context routine [@@deriving sexp_of]
 
   open Gccjit_backend
 
@@ -234,7 +234,7 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
   let finalize = finalize
   let sexp_of_context = sexp_of_context
 
-  let prejit ~shared ?name bindings asgns =
+  let maybe_jit ~shared ?name bindings asgns =
     let name = Option.value_or_thunk name ~default:(fun () -> Assignments.get_name_exn asgns) in
     let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ "-unoptimized.ll") in
     let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
@@ -243,10 +243,10 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
       Assignments.compile_proc ~unoptim_ll_source ~ll_source ~cd_source ~name
         (Indexing.bound_symbols bindings) asgns
     in
-    if shared then Jitted (prejit ~name ~opt_ctx_arrays:None bindings compiled)
+    if shared then Jitted (maybe_jit ~name ~opt_ctx_arrays:None bindings compiled)
     else Postponed { compiled; bindings; name }
 
-  let prejit_batch ~shared ?names bindings asgns_l =
+  let maybe_jit_batch ~shared ?names bindings asgns_l =
     let names =
       Option.value_or_thunk names ~default:(fun () ->
           Array.map asgns_l ~f:(fun asgns -> Assignments.get_name_exn asgns))
@@ -261,32 +261,32 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
           Assignments.compile_proc ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns)
     in
     if shared then
-      let prejits = prejit_batch ~names ~opt_ctx_arrays:None bindings compileds in
-      Array.map prejits ~f:(fun jitted -> Jitted jitted)
+      let routines = maybe_jit_batch ~names ~opt_ctx_arrays:None bindings compileds in
+      Array.map routines ~f:(fun routine -> Jitted routine)
     else Array.map2_exn names compileds ~f:(fun name compiled -> Postponed { compiled; bindings; name })
 
-  let jit context code =
-    let context, bindings, schedule, name = jit context code in
+  let jit_code context code =
+    let context, bindings, schedule, name = jit_code context code in
     { context; schedule : unit -> Tnode.work; bindings; name }
 
-  let jit_code context ?name bindings asgns = jit context @@ prejit ~shared:false ?name bindings asgns
+  let jit context ?name bindings asgns = jit_code context @@ maybe_jit ~shared:false ?name bindings asgns
   let from_host = from_host
   let to_host = to_host
 
   let merge ?name_prefix tn ~accum ~(src : context) =
     let bindings = Indexing.Empty in
-    merge ?name_prefix tn ~accum ~src bindings |> Option.map ~f:(fun prejitted -> Jitted prejitted)
+    merge ?name_prefix tn ~accum ~src bindings |> Option.map ~f:(fun routine -> Jitted routine)
 
   let merge_batch ?name_prefixes ~occupancy tns ~accum ~(srcs : context array) =
     let bindings = Indexing.Empty in
     merge_batch ?name_prefixes ~occupancy tns ~accum ~srcs bindings
-    |> Hashtbl.map ~f:(fun cds -> Array.map cds ~f:(Option.map ~f:(fun prejitted -> Jitted prejitted)))
+    |> Hashtbl.map ~f:(fun cds -> Array.map cds ~f:(Option.map ~f:(fun routine -> Jitted routine)))
 end
 
 module Gccjit_backend = Multicore_backend (Gccjit_device)
 
 module Cuda_backend : Backend with type context = Cuda_backend.context = struct
-  (* TODO: currently we do not implement prejitting. *)
+  (* TODO: currently we do not implement maybe_jitting. *)
   type compiled = Low_level.traced_store * Low_level.t [@@deriving sexp_of]
 
   type nonrec code = {
@@ -298,7 +298,7 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
 
   type context = Cuda_backend.context [@@deriving sexp_of]
   type device = Cuda_backend.device
-  type nonrec jitted = context jitted [@@deriving sexp_of]
+  type nonrec routine = context routine [@@deriving sexp_of]
 
   open Cuda_backend
 
@@ -311,7 +311,7 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   let sexp_of_context = sexp_of_context
   let sexp_of_device = sexp_of_device
 
-  let prejit ~shared:_ ?name bindings asgns =
+  let maybe_jit ~shared:_ ?name bindings asgns =
     let name = Option.value_or_thunk name ~default:(fun () -> Assignments.get_name_exn asgns) in
     let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ "-unoptimized.ll") in
     let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
@@ -322,13 +322,13 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
     in
     { compiled; bindings; name }
 
-  let prejit_batch ~shared:_ ?names:_ _bindings _asgns_batch = failwith "NOT IMPLEMENTED YET"
+  let maybe_jit_batch ~shared:_ ?names:_ _bindings _asgns_batch = failwith "NOT IMPLEMENTED YET"
 
-  let jit context code =
+  let jit_code context code =
     let context, bindings, schedule = jit context ~name:code.name code.bindings code.compiled in
     { context; schedule; bindings; name }
 
-  let jit_code context ?name bindings asgns = jit context @@ prejit ~shared:false ?name bindings asgns
+  let jit context ?name bindings asgns = jit_code context @@ maybe_jit ~shared:false ?name bindings asgns
   let from_host = from_host
   let to_host = to_host
 

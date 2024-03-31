@@ -29,7 +29,7 @@ let hello2 () =
   let module Backend = (val Train.fresh_backend ()) in
   Utils.settings.with_debug <- true;
   (* Utils.settings.output_debug_files_in_run_directory <- true; *)
-  (* Utils.settings.debug_log_jitted <- true; *)
+  (* Utils.settings.debug_log_from_routines <- true; *)
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
   (* Hey is inferred to be a matrix. *)
@@ -44,7 +44,7 @@ let hello3 () =
   Random.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   Utils.settings.output_debug_files_in_run_directory <- true;
-  (* Utils.settings.debug_log_jitted <- true; *)
+  (* Utils.settings.debug_log_from_routines <- true; *)
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
   (* Hey is inferred to be a matrix. *)
@@ -52,17 +52,17 @@ let hello3 () =
   let zero_to_twenty = TDSL.range 20 in
   let y = TDSL.O.(( + ) ~label:[ "y" ] (hey * zero_to_twenty) zero_to_twenty) in
   Train.set_hosted hey.value;
-  let jitted = Backend.jit_code ctx IDX.empty @@ Train.forward y in
-  if Backend.from_host jitted.context hey.value then Stdio.printf "Transferred <hey> to device.\n%!";
-  if Backend.from_host jitted.context zero_to_twenty.value then
+  let routine = Backend.jit ctx IDX.empty @@ Train.forward y in
+  if Backend.from_host routine.context hey.value then Stdio.printf "Transferred <hey> to device.\n%!";
+  if Backend.from_host routine.context zero_to_twenty.value then
     Stdio.printf "Transferred <zero_to_twenty> to device.\n%!";
   Tensor.print ~with_code:true ~with_grad:false `Inline zero_to_twenty;
   Tensor.print ~with_code:true ~with_grad:false `Default zero_to_twenty;
   Tensor.print_tree ~with_grad:false ~depth:9 zero_to_twenty;
   Stdlib.Format.print_newline ();
-  Train.run jitted;
+  Train.run routine;
   Backend.await device;
-  if Backend.to_host jitted.context y.value then Stdio.printf "Transferred <hey> to to host.\n%!";
+  if Backend.to_host routine.context y.value then Stdio.printf "Transferred <hey> to to host.\n%!";
   Tensor.print ~with_code:true ~with_grad:false `Default y;
   Stdlib.Format.force_newline();
   Tensor.print_tree ~with_grad:false ~depth:9 y;

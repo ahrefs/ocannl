@@ -213,9 +213,9 @@ let%debug_sexp all_device_to_host (type context) (module Backend : Backend_type 
     are iterated, with the binding's initial value lost. Bindings without ranges remain at their
     initial values. *)
 let sync_run ?looping (type context) (module Backend : Backend_type with type context = context)
-    (jitted : Backend.jitted) t =
-  let work = jitted.schedule () in
-  all_host_to_device (module Backend) jitted.context t;
+    (routine : Backend.routine) t =
+  let work = routine.schedule () in
+  all_host_to_device (module Backend) routine.context t;
   (match looping with
   | None -> Tn.run debug_rt work
   | Some then_ ->
@@ -223,9 +223,9 @@ let sync_run ?looping (type context) (module Backend : Backend_type with type co
         Tn.run debug_rt work;
         then_ ()
       in
-      sequential_loop ~f jitted.bindings);
-  Backend.await @@ Backend.get_ctx_device jitted.context;
-  all_device_to_host (module Backend) jitted.context t
+      sequential_loop ~f routine.bindings);
+  Backend.await @@ Backend.get_ctx_device routine.context;
+  all_device_to_host (module Backend) routine.context t
 
 module Lazy = Utils.Lazy
 
@@ -247,7 +247,8 @@ let collapse_merges merges =
     All and only bindings with associated ranges are iterated, with the binding's initial value lost.
     Bindings without ranges remain at their initial values. *)
 let%track_sexp parallel_update (type context) (module Backend : Backend_type with type context = context)
-    ~(grad_updates : Backend.jitted array) ~(sgd_update : Backend.jitted) ~post_sync updaten : unit -> unit =
+    ~(grad_updates : Backend.routine array) ~(sgd_update : Backend.routine) ~post_sync updaten : unit -> unit
+    =
   assert (not @@ Array.is_empty grad_updates);
   let num_devices : int = Array.length grad_updates in
   let bindings : Idx.static_symbol list = List.map ~f:fst sgd_update.bindings in
@@ -276,7 +277,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     Array.init num_devices ~f:(fun (to_ : int) ->
         Array.init num_devices ~f:(fun (from : int) ->
             (* It is safe to cache scheduling, because merging does not use static indices. *)
-            List.map grad_merges.(from) ~f:(fun c -> (Backend.jit ctxs.(to_) c).schedule ())))
+            List.map grad_merges.(from) ~f:(fun c -> (Backend.jit_code ctxs.(to_) c).schedule ())))
   in
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
   let name_prefixes = Array.create ~len:num_devices "loss_merge" in
@@ -290,7 +291,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
             (* It is safe to cache scheduling, because merging does not use static indices. *)
             match loss_merges.(from) with
             | [] -> None
-            | [ c ] -> Some ((Backend.jit ctxs.(to_) c).schedule ())
+            | [ c ] -> Some ((Backend.jit_code ctxs.(to_) c).schedule ())
             | _ -> assert false))
   in
   let merge ~(from : int) ~(to_ : int) : unit =
@@ -314,7 +315,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   in
   let copies =
     Array.init (num_devices - 1) ~f:(fun (to_m_1 : int) ->
-        List.map copies ~f:(fun c -> (Backend.jit ctxs.(to_m_1 + 1) c).schedule ()))
+        List.map copies ~f:(fun c -> (Backend.jit_code ctxs.(to_m_1 + 1) c).schedule ()))
   in
   let%track_sexp sync (devices_to_sync : int) : unit =
     Arrayjit.Utils.parallel_merge merge devices_to_sync;
@@ -368,9 +369,9 @@ let example_train_loop ~name ~seed ~batch_size ~init_lr ?lr_schedule ~num_device
   let num_devices = min num_devices @@ Backend.num_devices () in
   let devices = Array.init num_devices ~f:(fun ordinal -> Backend.get_device ~ordinal) in
   let contexts = Array.map devices ~f:Backend.init in
-  let grad_update = Backend.prejit ~shared:true bindings update.fwd_bprop in
-  let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit ctx grad_update) in
-  let sgd_update = Backend.jit_code grad_updates.(0).context bindings sgd in
+  let grad_update = Backend.maybe_jit ~shared:true bindings update.fwd_bprop in
+  let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit_code ctx grad_update) in
+  let sgd_update = Backend.jit grad_updates.(0).context bindings sgd in
   all_host_to_device (module Backend) sgd_update.context scalar_loss;
   all_host_to_device (module Backend) sgd_update.context learning_rate;
   let open Tensor.O in
@@ -404,16 +405,16 @@ let example_train_loop ~name ~seed ~batch_size ~init_lr ?lr_schedule ~num_device
   let%op model_result = model "point" in
   set_on_host Volatile model_result.Tensor.value;
   (* By using sgd_update.context here, maybe we don't need to copy the parameters back to the host. *)
-  let result_jitted =
-    Backend.jit_code sgd_update.context IDX.empty @@ Block_comment (name ^ "_infer", model_result.forward)
+  let routine =
+    Backend.jit sgd_update.context IDX.empty @@ Block_comment (name ^ "_infer", model_result.forward)
   in
   let infer_callback values =
     Tensor.set_values point values;
     (* For the gccjit backend, point is only on host, not on device. For cuda, this will be needed. *)
-    ignore (Backend.from_host result_jitted.context point.value : bool);
-    run result_jitted;
+    ignore (Backend.from_host routine.context point.value : bool);
+    run routine;
     Backend.await devices.(0);
-    assert (Backend.to_host result_jitted.context model_result.value);
+    assert (Backend.to_host routine.context model_result.value);
     Tensor.get_values model_result
   in
   (* Note: infer_callback is significantly less efficient than using the model via arrayjit. *)
@@ -421,5 +422,5 @@ let example_train_loop ~name ~seed ~batch_size ~init_lr ?lr_schedule ~num_device
 
 let forward_and_forget (type context) (module Backend : Backend_type with type context = context) ctx
     ?(bindings = Idx.IDX.empty) t =
-  let jitted = Backend.jit_code ctx bindings @@ forward t in
-  sync_run (module Backend) jitted t
+  let routine = Backend.jit ctx bindings @@ forward t in
+  sync_run (module Backend) routine t

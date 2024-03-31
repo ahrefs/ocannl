@@ -1,4 +1,4 @@
-(* TODO: currently we do not implement prejitting. *)
+(* TODO: currently we do not implement maybe_jitting. *)
 type context
 
 val initialize : unit -> unit

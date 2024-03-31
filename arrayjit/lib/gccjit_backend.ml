@@ -78,7 +78,7 @@ type info = {
 type param_source = Log_file_name | Param_ptr of Tn.t | Static_idx of Indexing.static_symbol
 [@@deriving sexp_of]
 
-type prejitted = {
+type routine = {
   info : info;
   bindings : Indexing.unit_bindings;
   name : string;
@@ -94,7 +94,7 @@ type code =
       bindings : Indexing.unit_bindings;
       name : string;
     }
-  | Jitted of prejitted
+  | Jitted of routine
 [@@deriving sexp_of]
 
 type gccjit_param = Gccjit.param
@@ -545,7 +545,7 @@ let%track_sexp jit_func ~name ~opt_ctx_arrays ctx bindings (traced_store, proc) 
   let fkind = Function.Exported in
   let c_str = Type.(get ctx Const_char_ptr) in
   let log_file_name =
-    if Utils.settings.debug_log_jitted then Some (Param.create ctx c_str "log_file_name", Log_file_name)
+    if Utils.settings.debug_log_from_routines then Some (Param.create ctx c_str "log_file_name", Log_file_name)
     else None
   in
   let symbols = Indexing.bound_symbols bindings in
@@ -616,7 +616,7 @@ let header_sep =
   let open Re in
   compile (seq [ str " "; opt any; str "="; str " " ])
 
-let%track_sexp prejit ~(name : string) ~opt_ctx_arrays bindings
+let%track_sexp maybe_jit ~(name : string) ~opt_ctx_arrays bindings
     (compiled : Low_level.traced_store * Low_level.t) =
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
@@ -636,7 +636,7 @@ if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directo
   Context.release ctx;
   { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params }
 
-let%track_sexp prejit_batch ~(names : string array) ~opt_ctx_arrays bindings
+let%track_sexp maybe_jit_batch ~(names : string array) ~opt_ctx_arrays bindings
     (compileds : (Low_level.traced_store * Low_level.t) array) =
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
@@ -662,7 +662,7 @@ let%track_sexp prejit_batch ~(names : string array) ~opt_ctx_arrays bindings
       let opt_ctx_arrays = if Map.is_empty ctx_arrays then None else Some ctx_arrays in
       { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params })
 
-let%track_sexp jit_prejitted (old_context : context) (code : prejitted) : context * _ * _ * string =
+let%track_sexp jit_routine (old_context : context) (code : routine) : context * _ * _ * string =
   let label : string = old_context.label in
   let name : string = code.name in
   let arrays : Ndarray.t Base.Map.M(Tn).t =
@@ -694,9 +694,9 @@ let%track_sexp jit_prejitted (old_context : context) (code : prejitted) : contex
        fun (type a b idcs) (binds : idcs Indexing.bindings) params (cs : (a -> b) Ctypes.fn) ->
         match (binds, params) with
         | Empty, [] -> Indexing.Result (Gccjit.Result.code code.result name cs)
-        | Bind _, [] -> invalid_arg "Gccjit_backend.jit_prejitted: too few static index params"
+        | Bind _, [] -> invalid_arg "Gccjit_backend.jit_routine: too few static index params"
         | Bind (_, bs), Static_idx _ :: ps -> Param_idx (ref 0, link bs ps Ctypes.(int @-> cs))
-        | Empty, Static_idx _ :: _ -> invalid_arg "Gccjit_backend.jit_prejitted: too many static index params"
+        | Empty, Static_idx _ :: _ -> invalid_arg "Gccjit_backend.jit_routine: too many static index params"
         | bs, Log_file_name :: ps -> Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Param_ptr tn :: ps ->
             let nd = match Map.find arrays tn with Some nd -> nd | None -> assert false in
@@ -714,7 +714,7 @@ let%track_sexp jit_prejitted (old_context : context) (code : prejitted) : contex
     let%diagn_rt_sexp work () : unit =
       [%log_result name];
       callback ();
-      if Utils.settings.debug_log_jitted then (
+      if Utils.settings.debug_log_from_routines then (
         let rec loop = function
           | [] -> []
           | line :: more when String.is_empty line -> loop more
@@ -750,12 +750,12 @@ let%track_sexp jit_prejitted (old_context : context) (code : prejitted) : contex
   in
   (context, Indexing.jitted_bindings code.bindings run_variadic, schedule, name)
 
-let jit (old_context : context) code =
+let jit_code (old_context : context) code =
   match code with
   | Postponed { compiled; bindings; name } ->
-      let code = prejit ~name ~opt_ctx_arrays:(Some old_context.arrays) bindings compiled in
-      jit_prejitted old_context code
-  | Jitted code -> jit_prejitted old_context code
+      let code = maybe_jit ~name ~opt_ctx_arrays:(Some old_context.arrays) bindings compiled in
+      jit_routine old_context code
+  | Jitted code -> jit_routine old_context code
 
 let%track_sexp from_host (context : context) (la : Tn.t) : bool =
   match Map.find context.arrays la with
@@ -809,7 +809,7 @@ let%track_sexp merge ?name_prefix la ~accum ~(src : context) bindings =
   let name_prefix : string = Option.value ~default:"" @@ Option.map name_prefix ~f:(fun s -> s ^ "_") in
   Option.map (Map.find src.arrays la) ~f:(fun (src : Ndarray.t) ->
       let name = [%string "%{name_prefix}into_%{Tn.name la}"] in
-      prejit ~opt_ctx_arrays:None ~name bindings
+      maybe_jit ~opt_ctx_arrays:None ~name bindings
       @@ merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst:la ~accum ~src:(Ndarray.get_voidptr src))
 
 let%track_sexp merge_batch ?(name_prefixes : string array option) ~occupancy tns ~accum
@@ -851,7 +851,7 @@ let%track_sexp merge_batch ?(name_prefixes : string array option) ~occupancy tns
   if Array.is_empty compileds then together
   else
     let names, compileds = Array.unzip compileds in
-    let result = prejit_batch ~opt_ctx_arrays:None ~names bindings compileds in
+    let result = maybe_jit_batch ~opt_ctx_arrays:None ~names bindings compileds in
     Array.iter2_exn ids result ~f:(fun (tn, i) res ->
         let r = Hashtbl.find_exn together tn in
         assert (Option.is_none r.(i));

@@ -23,7 +23,7 @@ let mref_add_missing mref key ~f =
   if Map.mem !mref key then () else mref := Map.add_exn !mref ~key ~data:(f ())
 
 type settings = {
-  mutable debug_log_jitted : bool;
+  mutable debug_log_from_routines : bool;
   mutable debug_memory_locations : bool;
   mutable output_debug_files_in_run_directory : bool;
   mutable with_debug : bool;
@@ -34,7 +34,7 @@ type settings = {
 
 let settings =
   {
-    debug_log_jitted = false;
+    debug_log_from_routines = false;
     debug_memory_locations = false;
     output_debug_files_in_run_directory = false;
     with_debug = false;
@@ -126,7 +126,7 @@ let get_global_arg ~default ~arg_name:n =
 
 let () =
   settings.with_debug <- Bool.of_string @@ get_global_arg ~arg_name:"with_debug" ~default:"false";
-  settings.debug_log_jitted <- Bool.of_string @@ get_global_arg ~arg_name:"debug_log_jitted" ~default:"false";
+  settings.debug_log_from_routines <- Bool.of_string @@ get_global_arg ~arg_name:"debug_log_from_routines" ~default:"false";
   settings.debug_memory_locations <-
     Bool.of_string @@ get_global_arg ~arg_name:"debug_memory_locations" ~default:"false";
   settings.output_debug_files_in_run_directory <-
