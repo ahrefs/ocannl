@@ -1,16 +1,20 @@
-## [0.3.0]
+## [0.3.0] -- 2024-03-31
 
-Major rewrite.
+Major rewrite. Abandoning the design choices of 0.1 and 0.2.
 
 ### Added
 
 - Optionally, inferring or checking tensor (batch) sizes from data (e.g. file) sizes.
 - Static indexing. A "slice" operator to select individual batches.
+- Established the backends API with first-class modules.
 - The `Train` module as an optimization "frontend".
+- Parallel optimization across devices.
+- Global settings configurable via config files, environment variables, and commandline flags.
+- Integration of backend logging with `ppx_minidebug` (the `debug_log_from_routines` setting).
 
 ### Changed
 
-- The Cuda backend is not considered supported for now, I plan to write it properly for v0.6. But it is (optionally) buildable to reduce code rot.
+- The Cuda backend is not supported for now. It is (optionally) buildable to reduce code rot.
 - Dynamic indexing is not supported anymore (to reduce complexity). It might be reintroduced if needed.
 - Factored out the `arrayjit` library / package containing compilation (former Ndarray, Node, Code).
 - Renamed `Formula` -> `Tensor`
@@ -22,6 +26,7 @@ Major rewrite.
 - Migrated `cudajit` into a separate repository.
 - Massive rewrite of shape inference in a declarative style.
 - Generalize `zero_out` to `initialize_neutral` to prepare arbitrary accumulation operation.
+- Renamed `Node` -> `Lazy_array` -> `Tnode` (tensor node).
 
 ## [0.2.1] -- 2023-07-19
 
@@ -52,7 +57,6 @@ Major rewrite.
 - Refactors `Node` + `NodeUI` into `Ndarray` + `Node`.
 - Tensor printouts include whether a tensor contains `NaN` or `infinity`.
 - Simplifies the `Task_id` functionality: removes `If_task_id_is` and `Global Task_id`; emoves parallelism from `interpret_code`; removes `task_id_func` vs `unit_func` duplication.
-
 
 ### Fixed
 
@@ -87,7 +91,6 @@ Major rewrite.
 ### Fixed
 
 - Dynamic indexing fixes.
-
 
 ## [0.1.2] -- 2023-05-12
 

@@ -31,7 +31,7 @@
   core
   ctypes
   ctypes-foreign
-  gccjit
+  (gccjit (>= 0.3.2))
   cudajit
   printbox
   printbox-text
@@ -41,7 +41,7 @@
   ppxlib
   ppx_jane
   ppx_expect
-  ppx_minidebug)
+  (ppx_minidebug (>= 1.5)))
  (tags
   (deeplearning backprop jit gccjit CUDA)))
 
