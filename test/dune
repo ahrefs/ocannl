@@ -1,12 +1,9 @@
 (library
  (name tutorials)
- (inline_tests (deps ocannl_config))
+ (inline_tests
+  (deps ocannl_config))
  (libraries base dynlink ocannl)
- (modules
-  einsum_trivia
-  hello_world_op
-  micrograd_demo
-  zero2hero_1of7)
+ (modules einsum_trivia hello_world_op micrograd_demo zero2hero_1of7)
  (preprocess
   (pps ppx_jane ppx_expect ppx_inline_test ppx_ocannl))
  (modes native))

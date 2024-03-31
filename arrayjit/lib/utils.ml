@@ -126,7 +126,8 @@ let get_global_arg ~default ~arg_name:n =
 
 let () =
   settings.with_debug <- Bool.of_string @@ get_global_arg ~arg_name:"with_debug" ~default:"false";
-  settings.debug_log_from_routines <- Bool.of_string @@ get_global_arg ~arg_name:"debug_log_from_routines" ~default:"false";
+  settings.debug_log_from_routines <-
+    Bool.of_string @@ get_global_arg ~arg_name:"debug_log_from_routines" ~default:"false";
   settings.debug_memory_locations <-
     Bool.of_string @@ get_global_arg ~arg_name:"debug_memory_locations" ~default:"false";
   settings.output_debug_files_in_run_directory <-

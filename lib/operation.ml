@@ -217,11 +217,7 @@ let embed_symbol ?(label = []) static_sym : Tensor.t =
   let module NTDSL = Initial_NTDSL in
   let op_asn ~v ~projections =
     Asgns.Fetch
-      {
-        array = v;
-        fetch_op = Embed_symbol static_sym;
-        dims = lazy (Lazy.force projections).Idx.lhs_dims;
-      }
+      { array = v; fetch_op = Embed_symbol static_sym; dims = lazy (Lazy.force projections).Idx.lhs_dims }
   in
   let grad_asn ~v:_ ~g:_ ~projections:_ = Asgns.Noop in
   Tensor.op ~label:("!@" :: label) ~op_asn ~grad_asn ~grad_spec:Prohibit_grad

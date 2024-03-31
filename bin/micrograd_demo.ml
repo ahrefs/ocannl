@@ -10,9 +10,9 @@ module Utils = Arrayjit.Utils
 let experiment seed ~use_builtin_weight_decay () =
   Random.init 0;
   Utils.settings.with_debug <- true;
+
   (* Utils.settings.output_debug_files_in_run_directory <- true; *)
   (* Utils.settings.debug_log_from_routines <- true; *)
-
   let hid_dim = 16 in
   let len = 300 in
   let batch_size = 20 in

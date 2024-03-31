@@ -44,7 +44,8 @@ let%expect_test "Graph drawing recompile" =
   let f_bprop = Backend.jit ctx IDX.empty f_upd.fwd_bprop in
   Train.sync_run backend f_bprop f;
   Tensor.print_tree ~with_grad:true ~depth:9 f;
-  [%expect {|
+  [%expect
+    {|
                                              #32 +_f
                                               6.00e+1
                                              #33 grad_+_f
@@ -240,7 +241,8 @@ let%expect_test "Simple gradients hosted" =
   let sgd_routine = Backend.jit grad_routine.context IDX.empty sgd in
   (* Check out the initial state without running a forward pass. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
-  [%expect {|
+  [%expect
+    {|
                    #87 *._l
                     0.00e+0
                    #88 grad_*._l
@@ -337,13 +339,14 @@ let%expect_test "Simple gradients virtual" =
   let%op learning_rate = 0.1 in
   (* We pretend this is for parallel updates, to force materializing gradients,
      because our SGD update is compiled separately from our gradient update.
-     Alternatively we could mark all [Assignments.recurrent_nodes sgd] as materialized. 
+     Alternatively we could mark all [Assignments.recurrent_nodes sgd] as materialized.
      Or, the best non-parallel option is to compile grad_update and sgd_update together.*)
   let grad = Train.grad_update ~setup_for_parallel:true l in
   let sgd = Train.sgd_update ~learning_rate grad in
   (* Check out the initial state without forcing memory modes by compilation. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
-  [%expect {|
+  [%expect
+    {|
                                                 #123 *._l <(Hosted Changed_on_devices) 41>
                                                 <not-in-yet>
                                                 #124 grad_*._l <waiting>
@@ -363,7 +366,8 @@ let%expect_test "Simple gradients virtual" =
   let grad_routine = Backend.jit ctx IDX.empty grad.fwd_bprop in
   (* Check out the state without running a forward pass or compiling the SGD update. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
-  [%expect {|
+  [%expect
+    {|
                                             #123 *._l
                                              0.00e+0
                                             #124 grad_*._l <Virtual 40>

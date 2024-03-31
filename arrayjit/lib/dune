@@ -8,7 +8,11 @@
   stdio
   str
   gccjit
-  (select cuda_backend.ml from (cudajit -> cuda_backend.cudajit.ml) (-> cuda_backend.missing.ml))
+  (select
+   cuda_backend.ml
+   from
+   (cudajit -> cuda_backend.cudajit.ml)
+   (-> cuda_backend.missing.ml))
   ppx_minidebug.runtime)
  (preprocess
   (pps ppx_jane ppx_minidebug))

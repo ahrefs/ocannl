@@ -1235,7 +1235,8 @@ let%expect_test "einsum1 fixed dim axis" =
   let%op ho4 = hey2 ++ "i->j => i0j" in
   Train.forward_and_forget backend ctx ho4;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho4;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────┐
     │[45]: =>_ho4 shape 0:2,1:1,2:3      │
     │┌──────┬───────────────────────────┐│

@@ -64,9 +64,9 @@ let hello3 () =
   Backend.await device;
   if Backend.to_host routine.context y.value then Stdio.printf "Transferred <hey> to to host.\n%!";
   Tensor.print ~with_code:true ~with_grad:false `Default y;
-  Stdlib.Format.force_newline();
+  Stdlib.Format.force_newline ();
   Tensor.print_tree ~with_grad:false ~depth:9 y;
-  Stdlib.Format.force_newline()
+  Stdlib.Format.force_newline ()
 
 let () =
   ignore (hello1, hello2, hello3);

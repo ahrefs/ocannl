@@ -100,7 +100,10 @@ let experiment ~seed () =
     plot ~size:(120, 30) ~x_label:"step" ~y_label:"batch log loss"
       [
         Line_plot
-          { points = Array.of_list_rev_map batch_losses ~f:Float.(fun x -> max (log 0.00003) (log x)); pixel = "-" };
+          {
+            points = Array.of_list_rev_map batch_losses ~f:Float.(fun x -> max (log 0.00003) (log x));
+            pixel = "-";
+          };
       ]
   in
   PrintBox_text.output Stdio.stdout plot_loss;

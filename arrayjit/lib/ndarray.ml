@@ -18,9 +18,7 @@ type half_nd = (float, Ops.float16_elt) bigarray
 type single_nd = (float, Ops.float32_elt) bigarray
 type double_nd = (float, Ops.float64_elt) bigarray
 
-let sexp_of_address_of arr =
-  Sexp.Atom ("@" ^ Nativeint.Hex.to_string @@ Ctypes_bigarray.unsafe_address arr)
-
+let sexp_of_address_of arr = Sexp.Atom ("@" ^ Nativeint.Hex.to_string @@ Ctypes_bigarray.unsafe_address arr)
 let sexp_of_byte_nd (arr : byte_nd) = sexp_of_address_of arr
 let sexp_of_half_nd (arr : half_nd) = sexp_of_address_of arr
 let sexp_of_single_nd (arr : single_nd) = sexp_of_address_of arr
@@ -342,9 +340,7 @@ let retrieve_flat_values arr =
     let idx = Array.create ~len:n_axes 0 in
     let rec iter axis =
       if axis = n_axes then
-        let x =
-          get_as_float arr idx
-        in
+        let x = get_as_float arr idx in
         result := x :: !result
       else
         for p = 0 to dims.(axis) - 1 do

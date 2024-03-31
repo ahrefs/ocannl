@@ -19,8 +19,8 @@ let benchmark_overhead backend () =
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.set_hosted f.value;
-  (* Train.every_non_literal_on_host f; *)
 
+  (* Train.every_non_literal_on_host f; *)
   let device = get_device ~ordinal:0 in
   let ctx = init device in
   let update_f = Train.grad_update f in
