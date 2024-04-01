@@ -25,13 +25,15 @@
   "A from-scratch Deep Learning library with CUDA, operator fusion, staged compilation, backprop")
  (description "A longer description")
  (depends
-  ocaml
+  (ocaml
+   (>= 5.1.0))
   dune
   base
   core
   ctypes
   ctypes-foreign
-  (gccjit (>= 0.3.2))
+  (gccjit
+   (>= 0.3.2))
   cudajit
   printbox
   printbox-text
@@ -41,7 +43,8 @@
   ppxlib
   ppx_jane
   ppx_expect
-  (ppx_minidebug (>= 1.5)))
+  (ppx_minidebug
+   (>= 1.5)))
  (tags
   (deeplearning backprop jit gccjit CUDA)))
 
