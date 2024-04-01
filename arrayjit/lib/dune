@@ -1,5 +1,6 @@
 (library
  (name arrayjit)
+ (public_name arrayjit)
  (libraries
   base
   core
