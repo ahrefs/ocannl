@@ -7,7 +7,7 @@ description:
   "OCaml Compiles Algorithms for Neural Networks Learning is a compiled Deep Learning framework that puts emphasis on low-level backends (like TinyGrad), shape inference, concise notation (ab)using PPX."
 maintainer: ["Lukasz Stafiniak"]
 authors: ["Lukasz Stafiniak"]
-license: "LICENSE"
+license: "BSD-2-Clause"
 tags: ["deeplearning" "tensor" "backprop" "jit" "gccjit" "CUDA"]
 homepage: "https://github.com/lukstafi/ocannl"
 doc: "https://github.com/lukstafi/ocannl/blob/master/README.md"

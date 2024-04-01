@@ -15,7 +15,7 @@
 
 (maintainers "Lukasz Stafiniak")
 
-(license LICENSE)
+(license "BSD-2-Clause")
 
 (documentation https://github.com/lukstafi/ocannl/blob/master/README.md)
 
