@@ -1,3 +1,9 @@
+## [0.3.1] -- current
+
+### Added
+
+- Tensor parameters saving and restoring, Ndarray saving and restoring.
+
 ## [0.3.0] -- 2024-03-31
 
 Major rewrite. Abandoning the design choices of 0.1 and 0.2.

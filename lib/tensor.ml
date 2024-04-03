@@ -28,8 +28,7 @@ type t = {
           shape inference. *)
   children : subtensor list;
 }
-(** Information needed for compositional code generation. The code generation is suspended so that
-    it can incorporate inferred shape information. *)
+(** Information needed for compositional code generation. *)
 
 and subtensor = { subtensor : t; embedded : bool }
 

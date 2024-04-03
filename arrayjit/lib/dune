@@ -6,6 +6,7 @@
   core
   printbox
   printbox-text
+  npy
   stdio
   str
   gccjit

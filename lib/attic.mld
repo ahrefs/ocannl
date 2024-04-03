@@ -46,39 +46,6 @@
     └────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
 ]}
 
-{[
-let save_tensors ~name =
-  let out = Npy.Npz.open_out (name ^ ".npz") in
-  Hashtbl.iter Low_level.global_node_store ~f:(fun v ->
-      let save field arr = Npy.Npz.write out Node.(tensor_ptr_name { id = v.id; field }) arr in
-      let f arr = save Value arr in
-      Nd.map { f } v.node.value;
-      let f arr = save Grad arr in
-      Option.iter v.node.grad ~f:(Nd.map { f }))
-
-(** Restores the content of already-existing tensors from the file [name ^ ".npz"]. With [~partially:true],
-    does not complain about tensors missing in the file. *)
-let restore_tensors ?(partially = false) f_name =
-  let inp = Npy.Npz.open_in (f_name ^ ".npz") in
-  Hashtbl.iteri Low_level.global_node_store ~f:(fun ~key:id ~data:n ->
-      let restore field =
-        let ptr = Node.{ id; field } in
-        match Low_level.get_tensor ptr with
-        | None -> ()
-        | Some arr ->
-            let t_name = Node.(tensor_ptr_name { id = v.id; field }) in
-            let src = Npy.Npz.read inp t_name in
-            let f prec dst =
-              match Npy.to_bigarray Bigarray.c_layout (Nd.precision_to_bigarray_kind prec) src with
-              | None -> if not partially then failwith ("Session.restore_tensors: missing tensor " ^ t_name)
-              | Some src -> Nd.A.blit src dst
-            in
-            Nd.map_with_prec { f } arr
-      in
-      restore Value;
-      restore Node.Grad)
-]}
-
 Exec_as_cuda [~is_initial] and [~is_final]:
 {[
     if is_initial then (

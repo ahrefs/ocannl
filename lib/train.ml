@@ -1,5 +1,6 @@
 open Base
 module Tn = Arrayjit.Tnode
+module Nd = Arrayjit.Ndarray
 module NTDSL = Operation.NTDSL
 module Asgns = Arrayjit.Assignments
 module Idx = Arrayjit.Indexing
@@ -38,6 +39,42 @@ let get_params t =
     List.fold t.children ~init:(if is_param t then Set.add accu t else accu) ~f:loop
   in
   loop (Set.empty (module Tensor)) { subtensor = t; embedded = true }
+
+let save_params t =
+  let file_name =
+    Option.value_or_thunk ~default:(fun () -> invalid_arg "Train.save_params: root tensor is not named")
+    @@ Tn.ident_label t.Tensor.value
+  in
+  let with_name p =
+    let v = p.Tensor.value in
+    ( v,
+      Option.value_or_thunk ~default:(fun () ->
+          invalid_arg @@ "Train.save_params: parameter is not named: " ^ Tn.name v ^ " " ^ Tn.label v)
+      @@ Tn.ident_label v )
+  in
+  let with_names = get_params t |> Set.elements |> List.map ~f:with_name in
+  let out_file = Npy.Npz.open_out file_name in
+  List.iter with_names ~f:(fun (v, name) ->
+      let f arr = Npy.Npz.write out_file name arr in
+      Nd.map { f } @@ Option.value_exn @@ Lazy.force v.array)
+
+let restore_params t =
+  let file_name =
+    Option.value_or_thunk ~default:(fun () -> invalid_arg "Train.restore_params: root tensor is not named")
+    @@ Tn.ident_label t.Tensor.value
+  in
+  let with_name p =
+    let v = p.Tensor.value in
+    ( v,
+      Option.value_or_thunk ~default:(fun () ->
+          invalid_arg @@ "Train.restore_params: parameter is not named: " ^ Tn.name v ^ " " ^ Tn.label v)
+      @@ Tn.ident_label v )
+  in
+  let with_names = get_params t |> Set.elements |> List.map ~f:with_name in
+  let in_file = Npy.Npz.open_in file_name in
+  List.iter with_names ~f:(fun (v, name) ->
+      let f arr = Npy.Npz.restore in_file name arr in
+      Nd.map { f } @@ Option.value_exn @@ Lazy.force v.array)
 
 let set_on_host memtype (a : Tn.t) = Tn.update_memory_mode a (Hosted memtype) 27
 let set_materialized (a : Tn.t) = Tn.update_memory_mode a Materialized 28
