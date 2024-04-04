@@ -68,6 +68,28 @@ let hello3 () =
   Tensor.print_tree ~with_grad:false ~depth:9 y;
   Stdlib.Format.force_newline ()
 
+let hello4 () =
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
+  Random.init 0;
+  let ri = TDSL.range 3 in
+  let%op ti = ri ++ "i=>i0" in
+  let rj = TDSL.range 4 in
+  let%op tj = rj ++ "j=>j1" in
+  let rk = TDSL.range 5 in
+  let%op tk = rk ++ "k=>k2" in
+  let positions = TDSL.outer_sum "ijl;kl=>ijkl" (TDSL.outer_sum "il;jl=>ijl" ti tj) tk in
+  Train.set_hosted tk.value;
+  Train.forward_and_forget backend ctx positions;
+  Stdio.print_endline "positions:";
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ positions;
+  Stdio.print_endline "tk:";
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ tk;
+  Stdio.printf "\n%!"
+(* FIXME: this should be 6x3. *)
+
 let () =
   ignore (hello1, hello2, hello3);
-  hello3 ()
+  hello4 ()

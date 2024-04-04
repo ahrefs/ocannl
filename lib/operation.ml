@@ -79,6 +79,16 @@ let einsum ?(label = []) spec =
   in
   Tensor.binop ~label:(";=>" :: label) ~compose_op:(Einsum spec) ~op_asn ~grad_asn
 
+  (** Like [einsum], but adds instead than multiplying the resulting values. *)
+  let outer_sum ?(label = []) spec =
+    let module NTDSL = Initial_NTDSL in
+    let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 + v2 in
+    let%cd grad_asn ~v:_ ~g ~t1 ~t2 ~projections =
+      g1 =+ g;
+      g2 =+ g
+    in
+    Tensor.binop ~label:(";=>+" :: label) ~compose_op:(Einsum spec) ~op_asn ~grad_asn
+  
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract diagonals,
     compute traces etc.
 
@@ -252,6 +262,7 @@ module TDSL = struct
   module O = DO
 
   let einsum = einsum ~grad_spec:If_needed
+  let outer_sum = outer_sum ~grad_spec:If_needed
   let einsum1 = einsum1 ~grad_spec:If_needed
   let range = range ~grad_spec:If_needed
   let range_of_shape = range_of_shape ~grad_spec:If_needed
@@ -275,6 +286,7 @@ module NTDSL = struct
   module O = NDO
 
   let einsum = einsum ~grad_spec:Prohibit_grad
+  let outer_sum = outer_sum ~grad_spec:Prohibit_grad
   let einsum1 = einsum1 ~grad_spec:Prohibit_grad
   let term = Tensor.term ~grad_spec:Prohibit_grad
   let range = range ~grad_spec:Prohibit_grad
