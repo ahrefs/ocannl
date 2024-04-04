@@ -3,6 +3,15 @@
 ### Added
 
 - Tensor parameters saving and restoring, Ndarray saving and restoring.
+- An operation `outer_sum`: like `einsum` but simpler, addition everywhere.
+
+### Changed
+
+- Tweaks to make the project usable as a package (external library).
+
+### Fixed
+
+- TODO: Shape inference in presence of non-0 fixed indexing inside einsums was broken (because actually not implemented).
 
 ## [0.3.0] -- 2024-03-31
 
