@@ -8,7 +8,7 @@ The bulk of the projections inference happens alongside shape inference, with th
 
 ## Representing shapes and constraints
 
-A tensor shape in OCANNL is composed of three rows of axes: batch, input and output. These are ordered input-last (`batch @ output @ input`) in the underlying n-dimensional array implementation of tensors. A (fully inferred) tensor shape must have non-empty output axes; we do not use the convention where empty axes mean the tensor is a scalar -- scalars = 1-D output-only tensors. For printing and einsum-notation-like specifications, we use the syntax: `batch|input->output` (or `input->output`, or `output`), where `batch`, `input`, `output` are whitespace or comma or parenthesis separated axis entries; or the axis entries are the individual characters, if no separators are used (except if it's digits only).
+A tensor shape in OCANNL is composed of three rows of axes: batch, input and output. These are ordered input-last (`batch @ output @ input`) in the underlying n-dimensional array implementation of tensors. A (fully inferred) tensor shape must have non-empty output axes; we do not use the convention where empty axes mean the tensor is a scalar -- scalars = 1-D output-only tensors. For printing and einsum-notation-like specifications, we use the syntax: `batch|input->output` (or `input->output`, `batch|output`, `output`), where `batch`, `input`, `output` are whitespace or comma or parenthesis separated axis entries; or the axis entries are the individual characters, if no separators are used (except if it's digits only).
 
 A row is a sequence of axes of a single kind: batch, input, or output. The shape type incorporates information relevant to inference, in particular shape variables: both for individual axes (`dim` variables), and for extending a row with more axes (`row` variables). Currently, all rows are (independently) broadcastable: can be broadcasted to a larger number of axes, except when used with an einsum specification that forbids it.
 
@@ -19,11 +19,7 @@ type bcast =
   | Row_var of row_var  (** The row can be inferred to have more axes. *)
   | Broadcastable  (** The shape does not have more axes of this kind, but is "polymorphic". *)
 
-type dims_constraint =
-  | Unconstrained
-  | Total_elems of int  (** The shape-kind, inclusive of the further row spec, has this many elements. *)
-
-type row = Row.t = { dims : dim list; constr : dims_constraint; bcast : bcast; id : row_id }
+type row = Row.t = { dims : dim list; bcast : bcast; id : row_id }
 
 type shape = Shape.t = {
   mutable batch : row;
@@ -41,19 +37,28 @@ Labels are a part of OCANNL, but it's a topic that needs more exploration and fu
 The actual shape inference combines row polymorphism with (nominal) subtyping, as known in the type inference literature. The subtyping stems merely from the fact that a dimension-1 axis can be used in the context of any dimension due to per-axis broadcasting. Row polymorphism stems from broadcasting to more axes: for example, when unifying an unknown (shape) row with a known one, we cannot assume that the unknown row will have just the axes of the known one, because maybe the known row is meant to be broadcasted here to more axes. The combination of row polymorphism with nominal subtyping means that the constraints we are solving are inequalities, both inequalities between rows (the `Row.t` type, i.e. the `row` type above), and between axes/dimensions (the `Row.dim` type). We maintain the inequality ordering between variables in the environment to compute the transitive closure during simplification. We also maintain a least upper bound on the solution.
 
 ```ocaml
-type ('a, 'b) entry = Solved of 'b | Bounds of { cur : 'a list; subr : 'a list; lub : 'b option }
-(** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved]. *)
+type dim_entry =
+  | Solved_dim of dim
+  | Bounds_dim of { cur : dim_var list; subr : dim_var list; lub : dim option; constr : dim_constraint }
 
-type dim_env = (dim_var, dim) entry Map.M(Dim_var).t
-type row_env = (row_var, row) entry Map.M(Int).t
+type row_entry =
+  | Solved_row of t
+  | Bounds_row of { cur : row_var list; subr : row_var list; lub : t option; constr : row_constraint }
+
+type dim_env = dim_entry Map.M(Dim_var).t
+type row_env = row_entry Map.M(Row_var).t
 
 type environment = { dim_env : dim_env; row_env : row_env }
 
-type inequality =
+type constraint_ =
   | Dim_eq of { d1 : dim; d2 : dim }
-  | Row_eq of { r1 : row; r2 : row }
+  | Row_eq of { r1 : t; r2 : t }
   | Dim_ineq of { cur : dim; subr : dim }
-  | Row_ineq of { cur : row; subr : row }
+  | Row_ineq of { cur : t; subr : t }
+  | Dim_constr of { d : dim; constr : dim_constraint }
+  | Row_constr of { r : t; constr : row_constraint }
+  | Terminal_dim of dim
+  | Terminal_row of t
 ```
 
 We tie the direction of inequalities with capturing information in the structure of tensor expressions: where relevant, `cur` is a part of the shape of a super-tensor, and `subr` of a sub-tensor in a tensor expression. This reflects the nature of broadcasting: it is one-directional in that the shape of a subtensor can be "smaller-than-expected" thanks to broadcasting, but the shape of a super-tensor cannot be "smaller-than-expected". So, for ground (variable-free) dimensions, _n ≥ m_ means: _either n = m, or m = 1_; and for ground (variable-free) rows, _q ≥ r_ means: _q has at least as many axes as r, and for each dimension n of q at an axis where r has dimension m, we have n ≥ m_. The least upper bound `lub` of a variable is derived from the `cur` sides of inequalities with the variable on the `subr` side. We don't need to maintain a greatest lower bound, because we can incorporate the corresponding information immediately. For rows, we can substitute the row variable by a new row consisting of variables only, and add the corresponding `dim` inequalities with the variables on the `cur` side.
@@ -101,17 +106,33 @@ type logic =
       for [File_mapped fn], opens the file [fn] to check its length. *)
 ```
 
+### Non-tensor-like constraints
+
+The above mechanisms (excluding `dim_constraint` and `row_constraint`) are sufficient to express tensor applications such as inner and outer products, axis permutations. They cannot directly express: size constraints, fixed position indexing (except for the special case of position 0), axis concatenation and "reverse concatenation" / splitting, strides, convolutions. At present, we implement size constraints and fixed position indexing.
+
+```ocaml
+type dim_constraint = Unconstrained_dim | At_least_dim of int
+
+type row_constraint =
+  | Unconstrained
+  | Total_elems of { numerator : int; divided_by : dim_var list }
+      (** The row or remainder of a row, inclusive of the further row spec, has this many elements. *)
+```
+
+During the solution process, the constraints are incorporated, or propagated, into the environment `constr` entry fields, and into further `constraint_` constraints, as needed. This provides sufficient scaffolding to implement the other complex constraints as the need arises.
+
 ## Solving the constraints
 
-The constraints are solved by: unification of the equation constraints, and unification-like simplification of the inequality constraints. Simplification of an inequality can generate more equations and inequalities, so we need to be careful to keep it terminating.
+The constraints are solved by: unification of the equation constraints, unification-like simplification of the inequality constraints, propagation of the complex constraints. Simplification of an inequality, and constraint propagation, can generate more constraints, so we need to be careful to keep it terminating. The solution proceeds in three stages. Stage 1 (`~finished:false`) is online as tensors are composed, and conservatively performs unification and constraint propagation. Stages 2 and 3 are only performed once necessary: when projections or dimensions are requested. Stage 2 (`~finished:true`) also does unification and constraint propagation, but it performs variable elimination assuming all relevant information was incorporated. Stage 3 replaces all remaining variables with dimension-1 resp. no-further-axes values.
 
 Let's explain the shape inference functions.
 
-* `s_dim_one_in_entry` / `s_row_one_in_entry`: substitutes the given dim / row variable in one dim / row env entry. Generates new inequalities if the variable was in one of the sides of a `Bounds` entry.
+* `s_dim_one_in_entry` / `s_row_one_in_entry`: substitutes the given dim / row variable in one dim / row env entry. Generates new inequalities if the variable was in one of the sides of a `Bounds` entry. Updates the constraint `constr` if the variable appears in it.
 * `subst_dim` / `subst_row`: substitutes out a variable in a dim / row value, if any.
-* `unify_dim`: solves a single equation between two values of type `dim`, and recursively all `dim` equations that this entails, but not inequalities nor row equations.
-* `unify_row`: solves a single equation between two rows, and recursively all `dim` and `row` equations that this entails, but not inequalities.
-* `apply_constraint`: if there's enough information in a row -- in particular it is not open i.e. there is no row variable -- solves the row constraint. Currently, there's just `Total_elems n`: if there's just one `dim` variable, it will become `n` divided by the product of other dimensions.
+* `unify_dim`: solves a single equation between two values of type `dim`, and recursively all `dim` equations that this entails, but not other constraints.
+* `unify_row`: solves a single equation between two rows, and recursively all `dim` and `row` equations that this entails, but not other constraints.
+  * This is a depth-first component of an otherwise breadth-first overall constraint solution process, a "simplify early" optimization.
+* `solve_dim_constraint` resp. `solve_row_constraint`: if they cannot make any progress on the constraint, they return `None`. Otherwise, they return a list of derived constraints, and an updated `dim_constraint` resp. `row_constraint`.
 * `solve_dim_ineq`: solves a single inequality between two values of type `dim`; returns derived equations and inequalities. It maintains the between-variable bounds and the least-upper-bound (LUB). But there can only be one LUB (a dimension > 1) without forcing the bound variable itself to a solved form (with dimension = 1).
 * `solve_row_ineq`: solves a single inequality between two rows; returns derived equations and inequalities. It derives between-`dim` inequalities from the known parts of the compared rows. It maintains between-row-variable bounds (when known parts of the rows match) and the LUB. It forces the `cur` side to have at least the number of axes of the `subr` side (via a variables-only `template`). It updates the LUB by computing dimensions-wise LUBs.
 * `close_dim_terminal` and `close_row_terminal`: produce the equal-to-LUB constraint when available, from `Terminal_dim` and `Terminal_row` constraints produced for shapes of leaf tensors in tensor expressions, but only when `~finish:true`.
