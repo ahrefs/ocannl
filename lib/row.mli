@@ -5,10 +5,12 @@ open Base
 type kind = [ `Batch | `Input | `Output ] [@@deriving equal, compare, sexp, hash, variants]
 type dim_var [@@deriving equal, hash, compare, sexp]
 type dim_cmp
+type dim_var_set = (dim_var, dim_cmp) Base.Set.t [@@deriving equal, sexp]
 type 'a dim_map = (dim_var, 'a, dim_cmp) Base.Map.t [@@deriving equal, sexp]
 
 val get_var : ?label:string -> unit -> dim_var
-val dim_map_empty : (dim_var, 'a, dim_cmp) Map.t
+val dim_var_set_empty : dim_var_set
+val dim_map_empty : 'a dim_map
 
 (** A single axis in a shape. *)
 type dim = Var of dim_var | Dim of { d : int; label : string option; proj_id : int option }
@@ -49,27 +51,44 @@ val sexp_of_error_trace : error_trace -> Sexp.t
 
 exception Shape_error of string * error_trace list [@@deriving sexp_of]
 
-type dims_constraint =
-  | Unconstrained
-  | Total_elems of int  (** The shape-kind, inclusive of the further row spec, has this many elements. *)
+type dim_constraint = Unconstrained_dim | At_least_dim of int
 [@@deriving equal, hash, compare, sexp, variants]
 
-type inequality =
+type row_constraint =
+  | Unconstrained
+  | Total_elems of { numerator : int; divided_by : dim_var_set }
+      (** The row or remainder of a row, inclusive of the further row spec, has this many elements. *)
+[@@deriving equal, hash, compare, sexp, variants]
+
+(** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved].
+    [cur] and [subr] must be sorted using the [@@deriving compare] comparison. *)
+type dim_entry =
+  | Solved_dim of dim
+  | Bounds_dim of { cur : dim_var list; subr : dim_var list; lub : dim option; constr : dim_constraint }
+[@@deriving sexp]
+
+type row_entry =
+  | Solved_row of t
+  | Bounds_row of { cur : row_var list; subr : row_var list; lub : t option; constr : row_constraint }
+[@@deriving sexp]
+
+type constraint_ =
   | Dim_eq of { d1 : dim; d2 : dim }
   | Row_eq of { r1 : t; r2 : t }
   | Dim_ineq of { cur : dim; subr : dim }
   | Row_ineq of { cur : t; subr : t }
-  | Row_constr of { r : t; constr : dims_constraint }
+  | Dim_constr of { d : dim; constr : dim_constraint }
+  | Row_constr of { r : t; constr : row_constraint }
   | Terminal_dim of dim
   | Terminal_row of t
 [@@deriving compare, equal, sexp, variants]
 
 val subst_row : environment -> t -> t
-val unify_row : t * t -> environment -> inequality list * environment
+val unify_row : t * t -> environment -> constraint_ list * environment
 val empty_env : environment
-val solve_inequalities : finish:bool -> inequality list -> environment -> inequality list * environment
+val solve_inequalities : finish:bool -> constraint_ list -> environment -> constraint_ list * environment
 val row_to_labels : environment -> t -> string array
-val finalize_row : environment -> t -> inequality list
+val finalize_row : environment -> t -> constraint_ list
 
 type proj [@@deriving compare, equal, sexp]
 type proj_env [@@deriving sexp]
@@ -84,7 +103,7 @@ type proj_equation =
 [@@deriving compare, equal, sexp]
 
 val get_proj_equations :
-  inequality list -> Arrayjit.Indexing.axis_index dim_map -> environment -> proj_equation list
+  constraint_ list -> Arrayjit.Indexing.axis_index dim_map -> environment -> proj_equation list
 
 val solve_proj_equations : proj_equation list -> proj_env
 val get_proj_index : proj_env -> dim -> Arrayjit.Indexing.axis_index
