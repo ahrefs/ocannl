@@ -312,6 +312,7 @@ let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
 let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env ~dim_var_env labels =
   let equal = Row.equal_kind in
   let proj_env_update = ref @@ Row.dim_map_empty in
+  let extras = ref [] in
   let f kind = function
     | Either.First label ->
         Row.Var (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~label ()))
@@ -319,11 +320,13 @@ let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env ~dim_var_env la
         Row.get_dim ~d:1 ()
     | Second i ->
         let var = Row.get_var () in
+        let d = Row.Var var in
         proj_env_update := Map.add_exn !proj_env_update ~key:var ~data:(Arrayjit.Indexing.Fixed_idx i);
-        Var var
+        extras := Row.Dim_constr { d; constr = At_least_dim (i + 1) } :: !extras;
+        d
   in
   let result = axes_spec_to_dims_bio ~f ~row_var_env ~dim_var_env ~sh_id labels in
-  (!proj_env_update, result)
+  (!extras, !proj_env_update, result)
 
 type proj_axis_env = Arrayjit.Indexing.axis_index Row.dim_map [@@deriving sexp]
 
@@ -498,10 +501,10 @@ let%track_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : upd
       let row_var_env = Hashtbl.create (module String) in
       let dim_var_env = Hashtbl.create (module String) in
 
-      let proj_env_rhs, (b_rhs, i_rhs, o_rhs) =
+      let extras_rhs, proj_env_rhs, (b_rhs, i_rhs, o_rhs) =
         einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh.id ~row_var_env ~dim_var_env ls_rhs
       in
-      let proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
+      let extras_lhs, proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
         einsum_slot_spec_to_dims_bio ~generative ~sh_id:cur_sh.id ~row_var_env ~dim_var_env ls_lhs
       in
       let proj_env =
@@ -509,14 +512,15 @@ let%track_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : upd
         Map.merge_skewed ~combine proj_env_rhs proj_env_lhs
       in
       ( proj_env,
-        [
-          Row_ineq { cur = cur_sh.batch; subr = b_lhs };
-          Row_ineq { cur = b_rhs; subr = sh.batch };
-          Row_ineq { cur = cur_sh.input; subr = i_lhs };
-          Row_ineq { cur = i_rhs; subr = sh.input };
-          Row_ineq { cur = cur_sh.output; subr = o_lhs };
-          Row_ineq { cur = o_rhs; subr = sh.output };
-        ] )
+        extras_rhs @ extras_lhs
+        @ [
+            Row_ineq { cur = cur_sh.batch; subr = b_lhs };
+            Row_ineq { cur = b_rhs; subr = sh.batch };
+            Row_ineq { cur = cur_sh.input; subr = i_lhs };
+            Row_ineq { cur = i_rhs; subr = sh.input };
+            Row_ineq { cur = cur_sh.output; subr = o_lhs };
+            Row_ineq { cur = o_rhs; subr = sh.output };
+          ] )
   | Broadcast (Einsum spec, sh1, sh2) ->
       let ls_rhs1, ls_rhs2, ls_lhs =
         match einsum_of_spec spec with
@@ -529,13 +533,13 @@ let%track_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : upd
       in
       let row_var_env = Hashtbl.create (module String) in
       let dim_var_env = Hashtbl.create (module String) in
-      let proj_env_rhs1, (b_rhs1, i_rhs1, o_rhs1) =
+      let extras_rhs1, proj_env_rhs1, (b_rhs1, i_rhs1, o_rhs1) =
         einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh1.id ~row_var_env ~dim_var_env ls_rhs1
       in
-      let proj_env_rhs2, (b_rhs2, i_rhs2, o_rhs2) =
+      let extras_rhs2, proj_env_rhs2, (b_rhs2, i_rhs2, o_rhs2) =
         einsum_slot_spec_to_dims_bio ~generative:[] ~sh_id:sh2.id ~row_var_env ~dim_var_env ls_rhs2
       in
-      let proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
+      let extras_lhs, proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
         einsum_slot_spec_to_dims_bio ~generative ~sh_id:cur_sh.id ~row_var_env ~dim_var_env ls_lhs
       in
       let proj_env =
@@ -544,17 +548,18 @@ let%track_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : upd
       in
       (* Forget the old proj_env as it is not relevant after a propagate_shapes call completes. *)
       ( proj_env,
-        [
-          Row_ineq { cur = cur_sh.batch; subr = b_lhs };
-          Row_ineq { cur = b_rhs1; subr = sh1.batch };
-          Row_ineq { cur = b_rhs2; subr = sh2.batch };
-          Row_ineq { cur = cur_sh.input; subr = i_lhs };
-          Row_ineq { cur = i_rhs1; subr = sh1.input };
-          Row_ineq { cur = i_rhs2; subr = sh2.input };
-          Row_ineq { cur = cur_sh.output; subr = o_lhs };
-          Row_ineq { cur = o_rhs1; subr = sh1.output };
-          Row_ineq { cur = o_rhs2; subr = sh2.output };
-        ] )
+        extras_rhs1 @ extras_rhs2 @ extras_lhs
+        @ [
+            Row_ineq { cur = cur_sh.batch; subr = b_lhs };
+            Row_ineq { cur = b_rhs1; subr = sh1.batch };
+            Row_ineq { cur = b_rhs2; subr = sh2.batch };
+            Row_ineq { cur = cur_sh.input; subr = i_lhs };
+            Row_ineq { cur = i_rhs1; subr = sh1.input };
+            Row_ineq { cur = i_rhs2; subr = sh2.input };
+            Row_ineq { cur = cur_sh.output; subr = o_lhs };
+            Row_ineq { cur = o_rhs1; subr = sh1.output };
+            Row_ineq { cur = o_rhs2; subr = sh2.output };
+          ] )
 
 let state = ref Row.empty_env
 let active_update_steps = ref []
