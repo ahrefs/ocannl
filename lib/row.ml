@@ -141,6 +141,8 @@ type constraint_ =
   | Terminal_row of t
 [@@deriving compare, equal, sexp, variants]
 
+type stage = Stage1 | Stage2 | Stage3 [@@deriving sexp, equal, compare, variants]
+
 module Idx = Arrayjit.Indexing
 
 type error_trace = ..
@@ -158,14 +160,12 @@ let dim_to_int_exn = function Dim { d; _ } -> d | Var _ -> invalid_arg "dim_to_i
 let s_dim_one v ~value ~in_ = match in_ with Var v2 when equal_dim_var v v2 -> value | _ -> in_
 
 (* For future flexibility *)
-(* FIXME: *)
-let _dim_conjunction constr1 constr2 =
+let dim_conjunction constr1 constr2 =
   match (constr1, constr2) with
   | Unconstrained_dim, _ -> Some ([], constr2)
   | _, Unconstrained_dim -> Some ([], constr1)
   | At_least_dim d1, At_least_dim d2 -> Some ([], At_least_dim (Int.max d1 d2))
 
-(* FIXME: *)
 let _row_conjunction ?(id = phantom_row_id) constr1 constr2 =
   let elems_mismatch n1 n2 =
     raise @@ Shape_error ([%string "Total_elems constraint conflict: %{n1#Int} vs. %{n2#Int}"], [])
@@ -195,11 +195,11 @@ let _row_conjunction ?(id = phantom_row_id) constr1 constr2 =
 
 let apply_dim_constraint ~finish:_ _d _constr _env = (* FIXME: *) failwith "NOT IMPLEMENTED YET"
 
-let apply_row_constraint ~finish r constr env =
+let apply_row_constraint ~stage r constr env =
   match (r, constr) with
   | _, Unconstrained -> ([], env)
   | { dims; bcast = Row_var _; _ }, Total_elems { numerator; divided_by }
-    when Set.is_empty divided_by && finish -> (
+    when Set.is_empty divided_by && not (is_stage1 stage) -> (
       let vars, nonvars = List.partition_tf dims ~f:is_var in
       let known = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
       let rem = numerator / known in
@@ -224,7 +224,7 @@ let apply_row_constraint ~finish r constr env =
             if rem = 1 then ([], env)
             else raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ])
         | [ Var v ] -> ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } ], env)
-        | Var v :: _ when finish -> ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } ], env)
+        | Var v :: _ when not (is_stage1 stage) -> ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } ], env)
         | Var _ :: _ -> ([ Row_constr { r; constr } ], env (* Wait for more shape inference. *))
         | Dim _ :: _ -> assert false)
   | { bcast = Row_var _; _ }, _ | _, Total_elems { numerator = _; divided_by = (* not empty *) _ } ->
@@ -369,7 +369,7 @@ let%track_sexp rec unify_dim (eq : dim * dim) (env : environment) : constraint_ 
       in
       List.fold ~init:(ineqs, env) dim_eqs ~f
   | dim1, dim2 ->
-      (* Note: at the unify_dim stage, it's strict equality (no broadcasting). *)
+      (* Note: at the unify_dim phase, it's strict equality (no broadcasting). *)
       raise @@ Shape_error ("solved dimensions for axis: mismatch", [ Dim_mismatch [ dim1; dim2 ] ])
 
 let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
@@ -455,7 +455,7 @@ let%track_sexp rec unify_row (eq : t * t) (env : environment) : constraint_ list
       | Unequal_lengths -> raise @@ Shape_error ("Mismatching number of axes", [ Row_mismatch [ r1; r2 ] ])
       | Ok eqs -> List.fold ~init:([], env) ~f:(fun acc (d1, d2) -> solve acc (Dim_eq { d1; d2 })) eqs)
 
-let%track_sexp solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env : environment) :
+let%track_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env : environment) :
     constraint_ list * environment =
   let nonredundant ?(more = []) v vs =
     Utils.sorted_diff ~compare:compare_dim_var (List.dedup_and_sort ~compare:compare_dim_var (v :: vs)) more
@@ -512,7 +512,7 @@ let%track_sexp solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env :
             } )
       | ( Some (Bounds_dim { cur = _; subr = [ subr1 ]; lub = None; constr = constr1 }),
           Some (Bounds_dim { cur = [ cur2 ]; subr = _; lub = None; constr = constr2 }) )
-        when finish && equal_dim_var v_subr subr1 && equal_dim_var v_cur cur2 ->
+        when not (is_stage1 stage) && equal_dim_var v_subr subr1 && equal_dim_var v_cur cur2 ->
           (* FIXME: *)
           ignore (constr1, constr2);
           (* A heuristic to reduce template variables coming from e.g. einsum notation expansion. *)
@@ -611,7 +611,7 @@ let%track_sexp solve_dim_ineq ~(finish : bool) ~(cur : dim) ~(subr : dim) (env :
 
 let global_template_cache = Hashtbl.Poly.create ()
 
-let%track_sexp solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : environment) :
+let%track_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : environment) :
     constraint_ list * environment =
   let nonredundant ?(more = []) v vs =
     Utils.sorted_diff ~compare:compare_row_var (List.dedup_and_sort ~compare:compare_row_var (v :: vs)) more
@@ -636,7 +636,7 @@ let%track_sexp solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : env
       | _, Some (Bounds_row { subr = subr2; _ }) when List.mem ~equal:equal_row_var subr2 v_cur ->
           (Row_eq { r1 = row_of_var v_subr subr.id; r2 = row_of_var v_cur cur.id } :: prefix_ineqs, env)
       | Some (Bounds_row { subr = [ subr1 ]; _ }), Some (Bounds_row { cur = [ cur2 ]; _ })
-        when finish && equal_row_var subr1 v_subr && equal_row_var cur2 v_cur ->
+        when not (is_stage1 stage) && equal_row_var subr1 v_subr && equal_row_var cur2 v_cur ->
           (Row_eq { r1 = row_of_var v_subr subr.id; r2 = row_of_var v_cur cur.id } :: prefix_ineqs, env)
       | Some (Bounds_row { subr = subr1; _ }), _ when List.mem ~equal:equal_row_var subr1 v_subr ->
           (prefix_ineqs, env)
@@ -756,7 +756,7 @@ let%track_sexp solve_row_ineq ~(finish : bool) ~(cur : t) ~(subr : t) (env : env
           in
           let lub = { dims = lub_dims; bcast = lub_bcast; id = lub_id } in
           let force_lub =
-            if finish && (not @@ is_row_var lub_bcast) then
+            if not (is_stage1 stage) && (not @@ is_row_var lub_bcast) then
               [ Row_eq { r1 = row_of_var v_subr subr.id; r2 = lub } ]
             else []
           in
@@ -806,7 +806,7 @@ let finalize_row (env : environment) (r : row) : constraint_ list =
 
 let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
 
-let%track_sexp solve_inequalities ~(finish : bool) (ineqs : constraint_ list) (env : environment) :
+let%track_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (env : environment) :
     constraint_ list * environment =
   let rec solve (ineqs : constraint_ list) (env : environment) : constraint_ list * environment =
     let f (ineqs, env) = function
@@ -820,28 +820,28 @@ let%track_sexp solve_inequalities ~(finish : bool) (ineqs : constraint_ list) (e
           (more_ineqs @ ineqs, env)
       | Dim_ineq { cur; subr } ->
           let cur = subst_dim env cur and subr = subst_dim env subr in
-          let more_ineqs, env = solve_dim_ineq ~finish ~cur ~subr env in
+          let more_ineqs, env = solve_dim_ineq ~stage ~cur ~subr env in
           (more_ineqs @ ineqs, env)
       | Row_ineq { cur; subr } ->
           let cur = subst_row env cur and subr = subst_row env subr in
-          let more_ineqs, env = solve_row_ineq ~finish ~cur ~subr env in
+          let more_ineqs, env = solve_row_ineq ~stage ~cur ~subr env in
           (more_ineqs @ ineqs, env)
       | Dim_constr { d; constr } ->
           let d = subst_dim env d in
-          let more_ineqs, env = apply_dim_constraint ~finish d constr env in
+          let more_ineqs, env = apply_dim_constraint ~stage d constr env in
           (more_ineqs @ ineqs, env)
       | Row_constr { r; constr } ->
           let r = subst_row env r in
-          let more_ineqs, env = apply_row_constraint ~finish r constr env in
+          let more_ineqs, env = apply_row_constraint ~stage r constr env in
           (more_ineqs @ ineqs, env)
-      | Terminal_dim d when finish ->
+      | Terminal_dim d when not (is_stage1 stage) ->
           let more_ineqs, env = close_dim_terminal env @@ subst_dim env d in
           (more_ineqs @ ineqs, env)
-      | Terminal_row r when finish ->
+      | Terminal_row r when not (is_stage1 stage) ->
           let more_ineqs, env = close_row_terminal env @@ subst_row env r in
           (more_ineqs @ ineqs, env)
-      | Terminal_dim _ (* when not finish *) -> (ineqs, env)
-      | Terminal_row _ (* when not finish *) -> (ineqs, env)
+      | Terminal_dim _ (* when stage1 *) -> (ineqs, env)
+      | Terminal_row _ (* when stage1 *) -> (ineqs, env)
     in
     let ineqs', env = List.fold ineqs ~init:([], env) ~f in
     let ineqs' = List.rev ineqs' in

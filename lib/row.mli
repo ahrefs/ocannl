@@ -83,10 +83,12 @@ type constraint_ =
   | Terminal_row of t
 [@@deriving compare, equal, sexp, variants]
 
+type stage = Stage1 | Stage2 | Stage3 [@@deriving sexp, equal, compare, variants]
+
 val subst_row : environment -> t -> t
 val unify_row : t * t -> environment -> constraint_ list * environment
 val empty_env : environment
-val solve_inequalities : finish:bool -> constraint_ list -> environment -> constraint_ list * environment
+val solve_inequalities : stage:stage -> constraint_ list -> environment -> constraint_ list * environment
 val row_to_labels : environment -> t -> string array
 val finalize_row : environment -> t -> constraint_ list
 

@@ -123,7 +123,11 @@ During the solution process, the constraints are incorporated, or propagated, in
 
 ## Solving the constraints
 
-The constraints are solved by: unification of the equation constraints, unification-like simplification of the inequality constraints, propagation of the complex constraints. Simplification of an inequality, and constraint propagation, can generate more constraints, so we need to be careful to keep it terminating. The solution proceeds in three stages. Stage 1 (`~finished:false`) is online as tensors are composed, and conservatively performs unification and constraint propagation. Stages 2 and 3 are only performed once necessary: when projections or dimensions are requested. Stage 2 (`~finished:true`) also does unification and constraint propagation, but it performs variable elimination assuming all relevant information was incorporated. Stage 3 replaces all remaining variables with dimension-1 resp. no-further-axes values.
+The constraints are solved by: unification of the equation constraints, unification-like simplification of the inequality constraints, propagation of the complex constraints. Simplification of an inequality, and constraint propagation, can generate more constraints, so we need to be careful to keep it terminating. The solution proceeds in three stages.
+
+* Stage 1 is online as tensors are composed, and conservatively performs unification and constraint propagation. Stages 2 and 3 are only performed once necessary: when projections or dimensions are requested.
+* Stage 2 also does unification and constraint propagation, but it performs variable elimination assuming all relevant information was incorporated. In particular, it sets yet-unknown dimension and row variables to their least upper bounds (if any).
+* Stage 3 applies defeasible heuristics, in addition to what stage 2 does. It sets yet-unknown dimensions to their lower bounds from direct accesses. It sets all remaining variables to dimension-1 resp. no-further-axes values.
 
 Let's explain the shape inference functions.
 
@@ -135,9 +139,9 @@ Let's explain the shape inference functions.
 * `solve_dim_constraint` resp. `solve_row_constraint`: if they cannot make any progress on the constraint, they return `None`. Otherwise, they return a list of derived constraints, and an updated `dim_constraint` resp. `row_constraint`.
 * `solve_dim_ineq`: solves a single inequality between two values of type `dim`; returns derived equations and inequalities. It maintains the between-variable bounds and the least-upper-bound (LUB). But there can only be one LUB (a dimension > 1) without forcing the bound variable itself to a solved form (with dimension = 1).
 * `solve_row_ineq`: solves a single inequality between two rows; returns derived equations and inequalities. It derives between-`dim` inequalities from the known parts of the compared rows. It maintains between-row-variable bounds (when known parts of the rows match) and the LUB. It forces the `cur` side to have at least the number of axes of the `subr` side (via a variables-only `template`). It updates the LUB by computing dimensions-wise LUBs.
-* `close_dim_terminal` and `close_row_terminal`: produce the equal-to-LUB constraint when available, from `Terminal_dim` and `Terminal_row` constraints produced for shapes of leaf tensors in tensor expressions, but only when `~finish:true`.
-* `solve_inequalities`: solves equations, inequalities, and row constraints, until only row constraints remain. Row constraints can "pass" if there is not enough information, rather than reflecting their effect in the environment. Calls `close_dim_terminal` and `close_row_terminal` as appropriate (when `finish`).
-* `finalize_row`: substitutes the remaining row variables by `Broadcastable` and the remaining dim variables by dim 1. It's called by `finish_inference` only, after a run of `solve_inequalities ~finish:true`.
+* `close_dim_terminal` and `close_row_terminal`: produce the equal-to-LUB constraint when available, from `Terminal_dim` and `Terminal_row` constraints produced for shapes of leaf tensors in tensor expressions, but only when `~stage:true`.
+* `solve_inequalities`: solves equations, inequalities, and row constraints, until only row constraints remain. Row constraints can "pass" if there is not enough information, rather than reflecting their effect in the environment. Calls `close_dim_terminal` and `close_row_terminal` as appropriate (when `stage`).
+* `finalize_row`: substitutes the remaining row variables by `Broadcastable` and the remaining dim variables by dim 1. It's called by `finish_inference` only, after a run of `solve_inequalities ~stage:true`.
 
 The rationale behind only closing leaf (terminal) tensor shapes to their LUBs, while closing the remaining ones to dim-1:
 
