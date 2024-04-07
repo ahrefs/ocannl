@@ -166,7 +166,7 @@ let dim_conjunction constr1 constr2 =
   | _, Unconstrained_dim -> Some ([], constr1)
   | At_least_dim d1, At_least_dim d2 -> Some ([], At_least_dim (Int.max d1 d2))
 
-let _row_conjunction ?(id = phantom_row_id) constr1 constr2 =
+let row_conjunction ?(id = phantom_row_id) constr1 constr2 =
   let elems_mismatch n1 n2 =
     raise @@ Shape_error ([%string "Total_elems constraint conflict: %{n1#Int} vs. %{n2#Int}"], [])
   in
@@ -193,42 +193,89 @@ let _row_conjunction ?(id = phantom_row_id) constr1 constr2 =
       else if Sequence.for_all ~f:Either.is_second subsum then Some (extras ~keep_constr1:true, constr1)
       else None
 
-let apply_dim_constraint ~finish:_ _d _constr _env = (* FIXME: *) failwith "NOT IMPLEMENTED YET"
+let apply_dim_constraint ~stage dim constr env =
+  match (dim, constr, stage) with
+  | _, Unconstrained_dim, _ -> ([], env)
+  | Dim { d; _ }, At_least_dim d_min, _ ->
+      if d < d_min then
+        raise
+        @@ Shape_error
+             ("At_least_dim constraint failed, expected " ^ Int.to_string d_min, [ Dim_mismatch [ dim ] ])
+      else ([], env)
+  | Var _, At_least_dim d, Stage3 -> ([ Dim_eq { d1 = dim; d2 = get_dim ~d () } ], env)
+  | Var v, _, _ -> (
+      match Map.find env.dim_env v with
+      | None -> ([], env)
+      | Some (Solved_dim _) -> assert false
+      | Some (Bounds_dim bounds) -> (
+          match dim_conjunction constr bounds.constr with
+          | None -> ([], env)
+          | Some (extras, constr) ->
+              ( extras,
+                { env with dim_env = Map.set env.dim_env ~key:v ~data:(Bounds_dim { bounds with constr }) } ))
+      )
 
 let apply_row_constraint ~stage r constr env =
-  match (r, constr) with
-  | _, Unconstrained -> ([], env)
-  | { dims; bcast = Row_var _; _ }, Total_elems { numerator; divided_by }
-    when Set.is_empty divided_by && not (is_stage1 stage) -> (
-      let vars, nonvars = List.partition_tf dims ~f:is_var in
-      let known = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
-      let rem = numerator / known in
-      if rem = 0 then raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ])
-      else if rem = 1 then ([], env)
-      else
-        match vars with
-        | [] ->
-            let dim = get_dim ~d:rem () in
-            ([ Row_eq { r1 = r; r2 = { dims = [ dim ]; bcast = Broadcastable; id = r.id } } ], env)
-        | Var v :: _ -> ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } ], env)
-        | Dim _ :: _ -> assert false)
-  | { dims; bcast = Broadcastable; _ }, Total_elems { numerator; divided_by } when Set.is_empty divided_by
-    -> (
-      let vars, nonvars = List.partition_tf dims ~f:is_var in
-      let known = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
-      let rem = numerator / known in
-      if rem = 0 then raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ])
-      else
-        match vars with
-        | [] ->
-            if rem = 1 then ([], env)
-            else raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ])
-        | [ Var v ] -> ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } ], env)
-        | Var v :: _ when not (is_stage1 stage) -> ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } ], env)
-        | Var _ :: _ -> ([ Row_constr { r; constr } ], env (* Wait for more shape inference. *))
-        | Dim _ :: _ -> assert false)
-  | { bcast = Row_var _; _ }, _ | _, Total_elems { numerator = _; divided_by = (* not empty *) _ } ->
-      ([ Row_constr { r; constr } ], env (* Wait for more shape inference. *))
+  if is_unconstrained constr then ([], env)
+  else
+    let extras, constr, env, stored, updated =
+      match r with
+      | { bcast = Broadcastable; _ } -> ([], constr, env, false, false)
+      | { bcast = Row_var v; _ } -> (
+          match Map.find env.row_env v with
+          | None | Some (Solved_row _) -> ([], constr, env, false, false)
+          | Some (Bounds_row bounds) -> (
+              match row_conjunction ~id:r.id constr bounds.constr with
+              | None -> ([], constr, env, false, false)
+              | Some (extras, constr) ->
+                  if phys_equal constr bounds.constr then (extras, constr, env, true, false)
+                  else
+                    ( extras,
+                      constr,
+                      {
+                        env with
+                        row_env = Map.set env.row_env ~key:v ~data:(Bounds_row { bounds with constr });
+                      },
+                      true,
+                      true )))
+    in
+    match (r, constr) with
+    | _ when stored && not updated -> (extras, env)
+    | _, Unconstrained -> assert false
+    | { dims; bcast = Row_var _; _ }, Total_elems { numerator; divided_by }
+      when Set.is_empty divided_by && not (is_stage1 stage) -> (
+        let vars, nonvars = List.partition_tf dims ~f:is_var in
+        let known = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
+        let rem = numerator / known in
+        if rem = 0 then raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ])
+        else if rem = 1 then ([], env)
+        else
+          match vars with
+          | [] ->
+              let dim = get_dim ~d:rem () in
+              (Row_eq { r1 = r; r2 = { dims = [ dim ]; bcast = Broadcastable; id = r.id } } :: extras, env)
+          | Var v :: _ -> (Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } :: extras, env)
+          | Dim _ :: _ -> assert false)
+    | { dims; bcast = Broadcastable; _ }, Total_elems { numerator; divided_by } when Set.is_empty divided_by
+      -> (
+        let vars, nonvars = List.partition_tf dims ~f:is_var in
+        let known = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
+        let rem = numerator / known in
+        if rem = 0 then raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ])
+        else
+          match vars with
+          | [] ->
+              if rem = 1 then (extras, env)
+              else raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ])
+          | [ Var v ] -> (Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } :: extras, env)
+          | Var v :: _ when not (is_stage1 stage) ->
+              (Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } :: extras, env)
+          | Var _ :: _ when stored -> (extras, env)
+          | Var _ :: _ -> (Row_constr { r; constr } :: extras, env (* Wait for more shape inference. *))
+          | Dim _ :: _ -> assert false)
+    | { bcast = Row_var _; _ }, _ | _, Total_elems { numerator = _; divided_by = (* not empty *) _ } ->
+        if stored then (extras, env)
+        else (Row_constr { r; constr } :: extras, env (* Wait for more shape inference. *))
 
 let s_dim_one_in_entry v ~value (in_ : dim_entry) : _ * dim_entry =
   match in_ with
@@ -512,7 +559,7 @@ let%track_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env :
             } )
       | ( Some (Bounds_dim { cur = _; subr = [ subr1 ]; lub = None; constr = constr1 }),
           Some (Bounds_dim { cur = [ cur2 ]; subr = _; lub = None; constr = constr2 }) )
-        when not (is_stage1 stage) && equal_dim_var v_subr subr1 && equal_dim_var v_cur cur2 ->
+        when (not (is_stage1 stage)) && equal_dim_var v_subr subr1 && equal_dim_var v_cur cur2 ->
           (* FIXME: *)
           ignore (constr1, constr2);
           (* A heuristic to reduce template variables coming from e.g. einsum notation expansion. *)
@@ -636,7 +683,7 @@ let%track_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : env
       | _, Some (Bounds_row { subr = subr2; _ }) when List.mem ~equal:equal_row_var subr2 v_cur ->
           (Row_eq { r1 = row_of_var v_subr subr.id; r2 = row_of_var v_cur cur.id } :: prefix_ineqs, env)
       | Some (Bounds_row { subr = [ subr1 ]; _ }), Some (Bounds_row { cur = [ cur2 ]; _ })
-        when not (is_stage1 stage) && equal_row_var subr1 v_subr && equal_row_var cur2 v_cur ->
+        when (not (is_stage1 stage)) && equal_row_var subr1 v_subr && equal_row_var cur2 v_cur ->
           (Row_eq { r1 = row_of_var v_subr subr.id; r2 = row_of_var v_cur cur.id } :: prefix_ineqs, env)
       | Some (Bounds_row { subr = subr1; _ }), _ when List.mem ~equal:equal_row_var subr1 v_subr ->
           (prefix_ineqs, env)
@@ -756,7 +803,7 @@ let%track_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : env
           in
           let lub = { dims = lub_dims; bcast = lub_bcast; id = lub_id } in
           let force_lub =
-            if not (is_stage1 stage) && (not @@ is_row_var lub_bcast) then
+            if (not (is_stage1 stage)) && (not @@ is_row_var lub_bcast) then
               [ Row_eq { r1 = row_of_var v_subr subr.id; r2 = lub } ]
             else []
           in
