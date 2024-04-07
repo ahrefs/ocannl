@@ -829,7 +829,12 @@ let close_row_terminal (env : environment) ({ dims; bcast; id } as _r : row) : c
       | Some (Bounds_row { lub = Some lub; _ }) -> (Row_eq { r1 = row_of_var v id; r2 = lub } :: prefix, env))
 
 let finalize_dim (env : environment) (dim : dim) : constraint_ list =
-  match subst_dim env dim with Dim _ -> [] | Var _ -> [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 () } ]
+  match subst_dim env dim with
+  | Dim _ -> []
+  | Var v -> (
+      match Map.find env.dim_env v with
+      | Some (Bounds_dim { constr = At_least_dim d; _ }) -> [ Dim_eq { d1 = dim; d2 = get_dim ~d () } ]
+      | _ -> [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 () } ])
 
 let finalize_row (env : environment) (r : row) : constraint_ list =
   let { dims; bcast; id } = subst_row env r in

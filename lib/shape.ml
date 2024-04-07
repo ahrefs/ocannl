@@ -601,7 +601,6 @@ let%track_sexp finish_inference (() : unit) : unit =
   let unsolved, env = Row.solve_inequalities ~stage:Stage2 !active_constraints !state in
   let _debug_env : Row.environment = env in
   active_constraints := [];
-  (* FIXME: finalizing rows should be performed inside [solve_inequalities ~stage:Stage3]. *)
   let finalizing = List.concat_map ~f:(concat_over_rows ~f:(Row.finalize_row env)) !active_update_steps in
   let unsolved, env = Row.solve_inequalities ~stage:Stage3 (finalizing @ unsolved) env in
   List.iter ~f:(apply_env_update env) !active_update_steps;
