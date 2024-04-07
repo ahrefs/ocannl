@@ -559,18 +559,13 @@ let%track_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env :
                 |> Map.add_exn ~key:v_subr
                      ~data:(Bounds_dim { lub = None; cur = [ v_cur ]; subr = []; constr = Unconstrained_dim });
             } )
-      | ( Some (Bounds_dim { cur = _; subr = [ subr1 ]; lub = None; constr = constr1 }),
-          Some (Bounds_dim { cur = [ cur2 ]; subr = _; lub = None; constr = constr2 }) )
+      | ( Some (Bounds_dim { cur = _; subr = [ subr1 ]; lub = None; constr = _ }),
+          Some (Bounds_dim { cur = [ cur2 ]; subr = _; lub = None; constr = _ }) )
         when (not (is_stage1 stage)) && equal_dim_var v_subr subr1 && equal_dim_var v_cur cur2 ->
-          (* FIXME: *)
-          ignore (constr1, constr2);
           (* A heuristic to reduce template variables coming from e.g. einsum notation expansion. *)
           ([ Dim_eq { d1 = subr; d2 = cur } ], env)
-      | ( Some (Bounds_dim { cur = curs; subr = _; lub = _; constr = constr1 }),
-          Some (Bounds_dim { constr = constr2; _ }) )
+      | Some (Bounds_dim { cur = curs; subr = _; lub = _; constr = _ }), Some (Bounds_dim _)
         when cyclic ~v_subr ~curs ->
-          (* FIXME: *)
-          ignore (constr1, constr2);
           ([ Dim_eq { d1 = subr; d2 = cur } ], env)
       | None, Some (Bounds_dim { cur = cur2; subr = subr2; lub = lub2; constr = constr2 }) ->
           ( [],
@@ -587,29 +582,29 @@ let%track_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env :
             } )
       | ( Some (Bounds_dim { cur = cur1; subr = subr1; lub = lub1; constr = constr1 }),
           Some (Bounds_dim { cur = cur2; subr = subr2; lub = lub2; constr = constr2 }) ) ->
-          (* FIXME: *)
-          ignore (constr1, constr2);
           ( Option.to_list lub1 |> List.map ~f:(fun cur -> Dim_ineq { cur; subr }),
             {
               env with
               dim_env =
                 env.dim_env
-                |> Fn.flip Map.update v_cur ~f:(fun _ ->
-                       Bounds_dim
-                         {
-                           lub = lub1;
-                           cur = cur1;
-                           subr = nonredundant ~more:subr2 v_subr subr1;
-                           constr = constr1;
-                         })
-                |> Fn.flip Map.update v_subr ~f:(fun _ ->
-                       Bounds_dim
-                         {
-                           lub = lub2;
-                           cur = nonredundant ~more:cur1 v_cur cur2;
-                           subr = subr2;
-                           constr = constr2;
-                         });
+                |> Map.set ~key:v_cur
+                     ~data:
+                       (Bounds_dim
+                          {
+                            lub = lub1;
+                            cur = cur1;
+                            subr = nonredundant ~more:subr2 v_subr subr1;
+                            constr = constr1;
+                          })
+                |> Map.set ~key:v_subr
+                     ~data:
+                       (Bounds_dim
+                          {
+                            lub = lub2;
+                            cur = nonredundant ~more:cur1 v_cur cur2;
+                            subr = subr2;
+                            constr = constr2;
+                          });
             } ))
   | _, Var v_subr -> (
       match Map.find env.dim_env v_subr with
@@ -623,8 +618,6 @@ let%track_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env :
             } )
       | Some (Solved_dim _) -> assert false
       | Some (Bounds_dim { cur = cur2; subr = subr2; lub = Some lub2; constr = constr2 }) ->
-          (* FIXME: *)
-          ignore constr2;
           let lub, lub_forcing =
             match (cur, lub2) with
             | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> (cur, [])
@@ -641,18 +634,16 @@ let%track_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env :
             {
               env with
               dim_env =
-                Map.update env.dim_env v_subr ~f:(fun _ ->
-                    Bounds_dim { lub = Some lub; cur = cur2; subr = subr2; constr = constr2 });
+                Map.set env.dim_env ~key:v_subr
+                  ~data:(Bounds_dim { lub = Some lub; cur = cur2; subr = subr2; constr = constr2 });
             } )
       | Some (Bounds_dim { cur = cur2; subr = subr2; lub = None; constr = constr2 }) ->
-          (* FIXME: *)
-          ignore constr2;
           ( List.map subr2 ~f:(fun v_subr -> Dim_ineq { cur; subr = Var v_subr }),
             {
               env with
               dim_env =
-                Map.update env.dim_env v_subr ~f:(fun _ ->
-                    Bounds_dim { lub = Some cur; cur = cur2; subr = subr2; constr = constr2 });
+                Map.set env.dim_env ~key:v_subr
+                  ~data:(Bounds_dim { lub = Some cur; cur = cur2; subr = subr2; constr = constr2 });
             } ))
   | Var _, Dim _ (* when d2 > 1 *) -> ([ Dim_eq { d1 = cur; d2 = subr } ], env)
   | Dim _, Dim _ ->
@@ -703,48 +694,46 @@ let%track_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : env
                      ~data:(Bounds_row { cur = [ v_cur ]; subr = []; lub = None; constr = Unconstrained });
             } )
       | Some (Bounds_row { cur = cur1; subr = subr1; lub = lub1; constr = constr1 }), None ->
-          (* FIXME: *)
-          ignore constr1;
           ( prefix_ineqs,
             {
               env with
               row_env =
                 env.row_env
-                |> Fn.flip Map.update v_cur ~f:(fun _ ->
-                       Bounds_row
-                         { cur = cur1; subr = nonredundant v_subr subr1; lub = lub1; constr = constr1 })
+                |> Map.set ~key:v_cur
+                     ~data:
+                       (Bounds_row
+                          { cur = cur1; subr = nonredundant v_subr subr1; lub = lub1; constr = constr1 })
                 |> Map.add_exn ~key:v_subr
                      ~data:(Bounds_row { cur = [ v_cur ]; subr = []; lub = None; constr = Unconstrained });
             } )
       | None, Some (Bounds_row { cur = cur2; subr = subr2; lub = lub2; constr = constr2 }) ->
-          (* FIXME: *)
-          ignore constr2;
           ( prefix_ineqs,
             {
               env with
               row_env =
                 env.row_env
-                |> Fn.flip Map.update v_subr ~f:(fun _ ->
-                       Bounds_row
-                         { cur = nonredundant v_cur cur2; subr = subr2; lub = lub2; constr = constr2 })
+                |> Map.set ~key:v_subr
+                     ~data:
+                       (Bounds_row
+                          { cur = nonredundant v_cur cur2; subr = subr2; lub = lub2; constr = constr2 })
                 |> Map.add_exn ~key:v_cur
                      ~data:(Bounds_row { cur = []; subr = [ v_subr ]; lub = None; constr = Unconstrained });
             } )
       | ( Some (Bounds_row { cur = cur1; subr = subr1; lub = lub1; constr = constr1 }),
           Some (Bounds_row { cur = cur2; subr = subr2; lub = lub2; constr = constr2 }) ) ->
-          (* FIXME: *)
-          ignore (constr1, constr2);
           ( prefix_ineqs,
             {
               env with
               row_env =
                 env.row_env
-                |> Fn.flip Map.update v_cur ~f:(fun _ ->
-                       Bounds_row
-                         { cur = cur1; subr = nonredundant v_subr subr1; lub = lub1; constr = constr1 })
-                |> Fn.flip Map.update v_subr ~f:(fun _ ->
-                       Bounds_row
-                         { cur = nonredundant v_cur cur2; subr = subr2; lub = lub2; constr = constr2 });
+                |> Map.set ~key:v_cur
+                     ~data:
+                       (Bounds_row
+                          { cur = cur1; subr = nonredundant v_subr subr1; lub = lub1; constr = constr1 })
+                |> Map.set ~key:v_subr
+                     ~data:
+                       (Bounds_row
+                          { cur = nonredundant v_cur cur2; subr = subr2; lub = lub2; constr = constr2 });
             } )
       | Some (Solved_row _), _ | _, Some (Solved_row _) -> assert false)
   | { bcast = Row_var v_cur; dims; _ }, _ when r1_len < r2_len ->
@@ -773,19 +762,15 @@ let%track_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : env
                   ~data:(Bounds_row { cur = []; subr = []; lub = Some r_cur; constr = Unconstrained });
             } )
       | Some (Bounds_row { cur = cur2; subr = subr2; lub = None; constr = constr2 }) ->
-          (* FIXME: *)
-          ignore constr2;
           ( prefix_ineqs,
             {
               env with
               row_env =
                 env.row_env
-                |> Fn.flip Map.update v_subr ~f:(fun _ ->
-                       Bounds_row { cur = cur2; subr = subr2; lub = Some r_cur; constr = constr2 });
+                |> Map.set ~key:v_subr
+                     ~data:(Bounds_row { cur = cur2; subr = subr2; lub = Some r_cur; constr = constr2 });
             } )
       | Some (Bounds_row { cur = cur2; subr = subr2; lub = Some lub2; constr = constr2 }) ->
-          (* FIXME: *)
-          ignore constr2;
           let len1 = List.length r_cur.dims and len2 = List.length lub2.dims in
           let lub_len = min len1 len2 in
           let lub_is_cur = len1 < len2 || (len1 = len2 && is_broadcastable cur.bcast) in
@@ -814,8 +799,8 @@ let%track_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : env
               env with
               row_env =
                 env.row_env
-                |> Fn.flip Map.update v_subr ~f:(fun _ ->
-                       Bounds_row { cur = cur2; subr = subr2; lub = Some lub; constr = constr2 });
+                |> Map.set ~key:v_subr
+                     ~data:(Bounds_row { cur = cur2; subr = subr2; lub = Some lub; constr = constr2 });
             } )
       | Some (Solved_row _) -> assert false)
   | _, { bcast = Broadcastable; _ } when r2_len <= r1_len -> (prefix_ineqs, env)
