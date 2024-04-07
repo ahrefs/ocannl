@@ -86,7 +86,7 @@ type constraint_ =
 type stage = Stage1 | Stage2 | Stage3 [@@deriving sexp, equal, compare, variants]
 
 val subst_row : environment -> t -> t
-val unify_row : t * t -> environment -> constraint_ list * environment
+val unify_row : stage:stage -> t * t -> environment -> constraint_ list * environment
 val empty_env : environment
 val solve_inequalities : stage:stage -> constraint_ list -> environment -> constraint_ list * environment
 val row_to_labels : environment -> t -> string array

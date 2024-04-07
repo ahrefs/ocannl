@@ -129,7 +129,7 @@ type row_env = row_entry Map.M(Row_var).t [@@deriving sexp]
 
 type environment = { dim_env : dim_env; row_env : row_env } [@@deriving sexp]
 (** The environment is only in resolved wrt. variables that are solved: [v -> Solved ...] do not appear
-    elsewhere in the environment. *)
+    elsewhere in the environment. In particular, per-dim and per-row constraints might not have been applied. *)
 
 type constraint_ =
   | Dim_eq of { d1 : dim; d2 : dim }
@@ -302,21 +302,24 @@ let s_dim_one_in_entry v ~value (in_ : dim_entry) : _ * dim_entry =
 let s_dim_one_in_row v ~value in_ =
   { in_ with dims = List.map in_.dims ~f:(fun in_ -> s_dim_one v ~value ~in_) }
 
-let s_dim_one_in_row_constr _v ~value:_ constr =
-  (* FIXME: *)
-  constr
+let s_dim_one_in_row_constr v ~value constr =
+  match constr with
+  | Total_elems { numerator; divided_by } when Set.mem divided_by v -> (
+      let divided_by = Set.remove divided_by v in
+      match value with
+      | Var v' -> Total_elems { numerator; divided_by = Set.(add divided_by v') }
+      | Dim { d; _ } ->
+          let numerator = numerator / d in
+          if numerator <= 0 then raise @@ Shape_error ("Total_elems constraint failed: too many elements", [])
+          else Total_elems { numerator; divided_by })
+  | _ -> constr
 
 let s_dim_one_in_row_entry v ~value in_ =
   match in_ with
   | Solved_row in_ -> Solved_row (s_dim_one_in_row v ~value in_)
   | Bounds_row { cur; subr; lub; constr } ->
-      Bounds_row
-        {
-          cur;
-          subr;
-          lub = Option.map lub ~f:(s_dim_one_in_row v ~value);
-          constr = s_dim_one_in_row_constr v ~value constr;
-        }
+      let constr = s_dim_one_in_row_constr v ~value constr in
+      Bounds_row { cur; subr; lub = Option.map lub ~f:(s_dim_one_in_row v ~value); constr }
 
 let rec subst_dim env = function
   | Dim _ as d -> d
@@ -331,6 +334,7 @@ let s_row_one v ~value:{ dims = more_dims; bcast; id = _ } ~in_ =
   | { dims; bcast = Row_var v2; id } when equal_row_var v v2 -> { dims = more_dims @ dims; bcast; id }
   | _ -> in_
 
+let s_row_one_in_row_constr _v ~value:_ ~in_ = match in_ with Unconstrained | Total_elems _ -> in_
 let row_of_var v id = { dims = []; bcast = Row_var v; id }
 
 let s_row_one_in_entry v ~value in_ =
@@ -352,7 +356,7 @@ let s_row_one_in_entry v ~value in_ =
         if List.is_empty v_cur then []
         else List.map subr ~f:(fun subr -> Row_ineq { subr = row_of_var subr value.id; cur = value })
       in
-      (* FIXME: apply_row_constraint *)
+      let constr = s_row_one_in_row_constr v ~value ~in_:constr in
       ( ineqs0 @ ineqs1 @ ineqs2,
         Bounds_row { cur; subr; lub = Option.map lub ~f:(fun in_ -> s_row_one v ~value ~in_); constr } )
 
@@ -371,7 +375,7 @@ let rec subst_row (env : environment) ({ dims; bcast; id } : t) : t =
       | Some (Solved_row { dims = more_dims; bcast; id = _ }) ->
           subst_row env { dims = s_dims more_dims @ dims; bcast; id })
 
-let%track_sexp rec unify_dim (eq : dim * dim) (env : environment) : constraint_ list * environment =
+let%track_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) : constraint_ list * environment =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
   match (dim1, dim2) with
   | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
@@ -395,14 +399,14 @@ let%track_sexp rec unify_dim (eq : dim * dim) (env : environment) : constraint_ 
             }
         | Some (Solved_dim _) -> assert false
         | Some (Bounds_dim { cur; subr; lub; constr }) ->
-            (* FIXME: *)
-            ignore constr;
             let dim_env = Map.map env.dim_env ~f in
             List.iter cur ~f:(fun cur -> ineqs := Dim_ineq { cur = Var cur; subr = dim2 } :: !ineqs);
             List.iter subr ~f:(fun subr -> ineqs := Dim_ineq { subr = Var subr; cur = dim2 } :: !ineqs);
             Option.iter lub ~f:(fun lub -> ineqs := Dim_ineq { cur = lub; subr = dim2 } :: !ineqs);
+            let extras, env = apply_dim_constraint ~stage dim2 constr env in
+            ineqs := extras @ !ineqs;
             {
-              dim_env = Map.update dim_env v ~f:(fun _ -> Solved_dim dim2);
+              dim_env = Map.set dim_env ~key:v ~data:(Solved_dim dim2);
               row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry v ~value:dim2);
             }
       in
@@ -412,7 +416,7 @@ let%track_sexp rec unify_dim (eq : dim * dim) (env : environment) : constraint_ 
           | ineq -> Either.Second ineq)
       in
       let f (ineqs, env) ds =
-        let more_ineqs, env = unify_dim ds env in
+        let more_ineqs, env = unify_dim ~stage ds env in
         (more_ineqs @ ineqs, env)
       in
       List.fold ~init:(ineqs, env) dim_eqs ~f
@@ -424,13 +428,13 @@ let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
 let take_from_end (l : dim list) (n : int) : dim list = List.rev @@ List.take (List.rev l) n
 
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
-let%track_sexp rec unify_row (eq : t * t) (env : environment) : constraint_ list * environment =
+let%track_sexp rec unify_row ~stage (eq : t * t) (env : environment) : constraint_ list * environment =
   let rec solve (ineqs, env) = function
     | Dim_eq { d1; d2 } ->
-        let more_ineqs, env = unify_dim (d1, d2) env in
+        let more_ineqs, env = unify_dim ~stage (d1, d2) env in
         List.fold ~init:(ineqs, env) more_ineqs ~f:solve
     | Row_eq { r1; r2 } ->
-        let more_ineqs, env = unify_row (r1, r2) env in
+        let more_ineqs, env = unify_row ~stage (r1, r2) env in
         (more_ineqs @ ineqs, env)
     | (Dim_ineq _ | Row_ineq _ | Dim_constr _ | Row_constr _ | Terminal_dim _ | Terminal_row _) as ineq ->
         (ineq :: ineqs, env)
@@ -452,7 +456,7 @@ let%track_sexp rec unify_row (eq : t * t) (env : environment) : constraint_ list
   | r2, ({ bcast = Row_var v; dims = r1_dims; id } as r1) -> (
       let r1_len : int = List.length r1_dims and r2_len : int = List.length r2.dims in
       if r1_len > r2_len then
-        if is_row_var r2.bcast then unify_row (r2, r1) env
+        if is_row_var r2.bcast then unify_row ~stage (r2, r1) env
         else raise @@ Shape_error ("Number of axes mismatch", [ Row_mismatch [ r1; r2 ] ])
       else
         let ineqs, env =
@@ -483,8 +487,6 @@ let%track_sexp rec unify_row (eq : t * t) (env : environment) : constraint_ list
             List.fold ~init:([], env) ~f:solve !ineqs
         | Some (Solved_row _) -> assert false
         | Some (Bounds_row { cur; subr; lub; constr }) ->
-            (* FIXME: *)
-            ignore constr;
             (* TODO: audit code to ensure we don't lose the constraints associated with the bounds variables. *)
             let row_env : row_env = Map.map env.row_env ~f in
             List.iter cur ~f:(fun cur ->
@@ -492,10 +494,9 @@ let%track_sexp rec unify_row (eq : t * t) (env : environment) : constraint_ list
             List.iter subr ~f:(fun subr ->
                 ineqs := Row_ineq { subr = row_of_var subr value.id; cur = r2 } :: !ineqs);
             Option.iter lub ~f:(fun lub -> ineqs := Row_ineq { cur = lub; subr = r2 } :: !ineqs);
-            let _debug_ineqs : constraint_ list = !ineqs in
-            let env : environment =
-              { env with row_env = Map.update row_env v ~f:(fun _ -> Solved_row value) }
-            in
+            let extras, env = apply_row_constraint ~stage value constr env in
+            ineqs := extras @ !ineqs;
+            let env : environment = { env with row_env = Map.set row_env ~key:v ~data:(Solved_row value) } in
             List.fold ~init:([], env) ~f:solve !ineqs)
   | ( ({ bcast = Broadcastable; dims = dims1; id = _ } as r1),
       ({ bcast = Broadcastable; dims = dims2; id = _ } as r2) ) -> (
@@ -860,11 +861,11 @@ let%track_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (e
     let f (ineqs, env) = function
       | Dim_eq { d1; d2 } ->
           (* Substituted inside unify_dim. *)
-          let more_ineqs, env = unify_dim (d1, d2) env in
+          let more_ineqs, env = unify_dim ~stage (d1, d2) env in
           (more_ineqs @ ineqs, env)
       | Row_eq { r1; r2 } ->
           (* Substituted inside unify_row. *)
-          let more_ineqs, env = unify_row (r1, r2) env in
+          let more_ineqs, env = unify_row ~stage (r1, r2) env in
           (more_ineqs @ ineqs, env)
       | Dim_ineq { cur; subr } ->
           let cur = subst_dim env cur and subr = subst_dim env subr in
