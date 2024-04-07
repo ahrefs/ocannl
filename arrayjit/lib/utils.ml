@@ -242,6 +242,7 @@ let get_debug name =
 
 module Debug_runtime = (val get_debug "")
 
+[%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 (* [%%global_debug_interrupts { max_nesting_depth = 100; max_num_children = 1000 }] *)

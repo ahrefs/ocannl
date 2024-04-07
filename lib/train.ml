@@ -10,6 +10,7 @@ module type Backend_type = Arrayjit.Backends.Backend
 
 module Debug_runtime = Arrayjit.Utils.Debug_runtime
 
+[%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 let debug_rt = (module Debug_runtime : Minidebug_runtime.Debug_runtime)

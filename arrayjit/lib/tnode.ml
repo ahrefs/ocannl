@@ -1,6 +1,10 @@
 open Base
 module Lazy = Utils.Lazy
 module Nd = Ndarray
+module Debug_runtime = Utils.Debug_runtime
+
+[%%global_debug_log_level Nothing]
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 type work = Work of ((module Minidebug_runtime.Debug_runtime) -> unit -> unit)
 [@@unboxed] [@@deriving sexp_of]
@@ -232,10 +236,6 @@ let print_accessible_headers () =
   Core.Gc.full_major ();
   Registry.iter (fun arr -> Stdio.print_endline @@ header arr) registry;
   Stdio.printf "Tnode: Finished printing headers.%!\n"
-
-module Debug_runtime = Utils.Debug_runtime
-
-[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 let%debug_sexp log_accessible_headers () =
   Core.Gc.full_major ();

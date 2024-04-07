@@ -3,6 +3,10 @@ open Base
 
 module Lazy = Utils.Lazy
 module Tn = Tnode
+module Debug_runtime = Utils.Debug_runtime
+
+[%%global_debug_log_level Nothing]
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 (** Resets a array by performing the specified computation or data fetching. *)
 type fetch_op =
@@ -90,10 +94,6 @@ let remove_updates array c =
   rm true c
 
 let sequential l = Option.value ~default:Noop @@ List.reduce l ~f:(fun st sts -> Seq (st, sts))
-
-module Debug_runtime = Utils.Debug_runtime
-
-[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 let%debug_sexp to_low_level code =
   let open Indexing in

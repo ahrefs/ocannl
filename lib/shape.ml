@@ -3,6 +3,10 @@
 open Base
 module Utils = Arrayjit.Utils
 module Idx = Arrayjit.Indexing
+module Debug_runtime = Arrayjit.Utils.Debug_runtime
+
+[%%global_debug_log_level Nothing]
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 (** *** Shape types and inference *** *)
 
@@ -211,10 +215,6 @@ let logic_to_spec = function
   | Transpose (Transpose, _) -> "T"
   | Transpose (Batch_slice _, _) -> "@|"
   | Terminal _ -> "<terminal>"
-
-module Debug_runtime = Arrayjit.Utils.Debug_runtime
-
-[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 module Update_id = struct
   module T = struct

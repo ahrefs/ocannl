@@ -9,6 +9,7 @@ module CDSL = Arrayjit.Low_level.CDSL
 module Utils = Arrayjit.Utils
 module Debug_runtime = Utils.Debug_runtime
 
+[%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~backend_name precision () =
