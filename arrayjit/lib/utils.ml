@@ -238,7 +238,7 @@ let get_debug name =
     @@ Minidebug_runtime.debug_file ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
          ~verbose_entry_ids ~global_prefix:name ~toc_flame_graph:true ~flame_graph_separation:50 ~toc_entry
          ~for_append:false ~max_inline_sexp_length:120 ~hyperlink ~toc_specific_hyperlink:""
-         ~highlight_terms:Re.(alt [str "(id 28)"]) ~exclude_on_path:Re.(str "env")
+         ~highlight_terms:Re.(alt [str "(id 28)"; str "(id 12)"; str "(id 20)"; str "(id 14)"]) ~exclude_on_path:Re.(str "env")
          ~values_first_mode:true ~backend ~log_level ?snapshot_every_sec filename
 
 module Debug_runtime = (val get_debug "")
