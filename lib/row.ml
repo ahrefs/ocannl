@@ -828,25 +828,42 @@ let close_row_terminal (env : environment) ({ dims; bcast; id } as _r : row) : c
       | Some (Solved_row _) -> assert false
       | Some (Bounds_row { lub = Some lub; _ }) -> (Row_eq { r1 = row_of_var v id; r2 = lub } :: prefix, env))
 
-let finalize_dim (env : environment) (dim : dim) : constraint_ list =
+let finalize_dim ~(stage : stage) (env : environment) (dim : dim) : constraint_ list =
   match subst_dim env dim with
   | Dim _ -> []
   | Var v -> (
       match Map.find env.dim_env v with
-      | Some (Bounds_dim { constr = At_least_dim d; _ }) -> [ Dim_eq { d1 = dim; d2 = get_dim ~d () } ]
-      | _ -> [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 () } ])
+      | Some (Bounds_dim { constr = At_least_dim d; _ }) when not (is_stage1 stage) ->
+          [ Dim_eq { d1 = dim; d2 = get_dim ~d () } ]
+      | _ when is_stage3 stage -> [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 () } ]
+      | _ -> [])
 
-let finalize_row (env : environment) (r : row) : constraint_ list =
+let finalize_row ~(stage : stage) (env : environment) (r : row) : constraint_ list =
   let { dims; bcast; id } = subst_row env r in
-  let prefix = List.concat_map dims ~f:(finalize_dim env) in
+  let prefix = List.concat_map dims ~f:(finalize_dim ~stage env) in
   match bcast with
-  | Broadcastable -> prefix
-  | Row_var v -> Row_eq { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id } } :: prefix
+  | Row_var v when is_stage3 stage ->
+      Row_eq { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id } } :: prefix
+  | _ -> prefix
+
+let finalize_dim_entry ~(stage : stage) v entry : constraint_ list =
+  match entry with
+  | Solved_dim _ -> []
+  | Bounds_dim { lub; constr; _ } ->
+      let from_lub =
+        match (stage, lub) with (Stage2 | Stage3), Some d2 -> [ Dim_eq { d1 = Var v; d2 } ] | _ -> []
+      in
+      let from_constr =
+        match (stage, constr) with
+        | Stage3, At_least_dim d -> [ Dim_eq { d1 = Var v; d2 = get_dim ~d () } ]
+        | _ -> []
+      in
+      from_lub @ from_constr
 
 let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
 
-let%track_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (env : environment) :
-    constraint_ list * environment =
+let%track_sexp solve_inequalities ~(stage : stage) ~active_update_rows (ineqs : constraint_ list)
+    (env : environment) : constraint_ list * environment =
   let rec solve (ineqs : constraint_ list) (env : environment) : constraint_ list * environment =
     let f (ineqs, env) = function
       | Dim_eq { d1; d2 } ->
@@ -891,7 +908,13 @@ let%track_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (e
     then (ineqs', env)
     else solve ineqs' env
   in
-  solve ineqs env
+  let unsolved, env = solve ineqs env in
+  let finalizing_entries : constraint_ list =
+    Map.fold env.dim_env ~init:[] ~f:(fun ~key ~data accu -> finalize_dim_entry ~stage key data @ accu)
+  in
+  let unsolved, env = solve (finalizing_entries @ unsolved) env in
+  let finalizing_rows : constraint_ list = List.concat_map ~f:(finalize_row ~stage env) active_update_rows in
+  solve (finalizing_rows @ unsolved) env
 
 let rec row_to_labels env =
   let rec f = function
