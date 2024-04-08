@@ -157,6 +157,8 @@ let sexp_of_error_trace = function
 
 exception Shape_error of string * error_trace list [@@deriving sexp_of]
 
+type source = Direct | Equation | Cur | Subr [@@deriving equal, sexp]
+
 let dim_to_int_exn = function Dim { d; _ } -> d | Var _ -> invalid_arg "dim_to_int: dim still unknown"
 let s_dim_one v ~value ~in_ = match in_ with Var v2 when equal_dim_var v v2 -> value | _ -> in_
 
@@ -194,26 +196,25 @@ let row_conjunction ?(id = phantom_row_id) constr1 constr2 =
       else if Sequence.for_all ~f:Either.is_second subsum then Some (extras ~keep_constr1:true, constr1)
       else None
 
-let%track_sexp apply_dim_constraint ~source ~(stage : stage) (dim : dim) (constr : dim_constraint)
+let%track_sexp apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim) (constr : dim_constraint)
     (env : environment) : constraint_ list * dim_constraint =
-  (* Currently there's only the [At_least_dim] constraint, it doesn't apply from cur to subr. *)
-  if phys_equal source `Cur then ([], constr)
-  else
-    match (dim, constr, stage) with
-    | Dim { d; _ }, At_least_dim d_min, _ ->
-        if d < d_min then
-          raise
-          @@ Shape_error
-               ("At_least_dim constraint failed, expected " ^ Int.to_string d_min, [ Dim_mismatch [ dim ] ])
-        else ([], constr)
-    | Var _, At_least_dim d, Stage3 -> ([ Dim_eq { d1 = dim; d2 = get_dim ~d () } ], Unconstrained_dim)
-    | Var v, _, _ -> (
-        match Map.find env.dim_env v with
-        | None -> ([], constr)
-        | Some (Solved_dim _) -> assert false
-        | Some (Bounds_dim bounds) ->
-            Option.value ~default:([], constr) @@ dim_conjunction constr bounds.constr)
-    | _, Unconstrained_dim, _ -> ([], constr)
+  match (dim, constr, stage) with
+  | Dim { d; _ }, At_least_dim d_min, _ ->
+      if d < d_min then
+        raise
+        @@ Shape_error
+             ("At_least_dim constraint failed, expected " ^ Int.to_string d_min, [ Dim_mismatch [ dim ] ])
+      else ([], constr)
+  | Var _, At_least_dim d, Stage3 -> ([ Dim_eq { d1 = dim; d2 = get_dim ~d () } ], Unconstrained_dim)
+  | Var v, _, _ -> (
+      match Map.find env.dim_env v with
+      | None -> ([], constr)
+      | Some (Solved_dim _) -> assert false
+      | Some (Bounds_dim bounds) -> (
+          match (source, constr) with
+          | Cur, (Unconstrained_dim | At_least_dim 1) -> ([], constr)
+          | _ -> Option.value ~default:([], constr) @@ dim_conjunction constr bounds.constr))
+  | _, Unconstrained_dim, _ -> ([], constr)
 
 let apply_row_constraint ~stage r constr env =
   if is_unconstrained constr then ([], env)
@@ -402,7 +403,7 @@ let%track_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) : const
             List.iter cur ~f:(fun cur -> ineqs := Dim_ineq { cur = Var cur; subr = dim2 } :: !ineqs);
             List.iter subr ~f:(fun subr -> ineqs := Dim_ineq { subr = Var subr; cur = dim2 } :: !ineqs);
             Option.iter lub ~f:(fun lub -> ineqs := Dim_ineq { cur = lub; subr = dim2 } :: !ineqs);
-            let extras, constr = apply_dim_constraint ~source:`Equation ~stage dim2 constr env in
+            let extras, constr = apply_dim_constraint ~source:Equation ~stage dim2 constr env in
             let extras =
               if is_unconstrained_dim constr then extras else Dim_constr { d = dim2; constr } :: extras
             in
@@ -551,8 +552,8 @@ let%track_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env :
       | Some (Solved_dim _), _ | _, Some (Solved_dim _) -> assert false
       | Some (Bounds_dim { cur = cur1; subr = subr1; lub = lub1; constr = constr1 }), None ->
           let from_lub = Option.to_list lub1 |> List.map ~f:(fun cur -> Dim_ineq { cur; subr }) in
-          let from_constr1, constr1 = apply_dim_constraint ~source:`Subr ~stage subr constr1 env in
-          let from_constr2, constr2 = apply_dim_constraint ~source:`Cur ~stage cur Unconstrained_dim env in
+          let from_constr1, constr1 = apply_dim_constraint ~source:Subr ~stage subr constr1 env in
+          let from_constr2, constr2 = apply_dim_constraint ~source:Cur ~stage cur Unconstrained_dim env in
           ( from_constr1 @ from_constr2 @ from_lub,
             {
               env with
@@ -573,16 +574,15 @@ let%track_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env :
         when cyclic ~v_subr ~curs ->
           ([ Dim_eq { d1 = subr; d2 = cur } ], env)
       | None, Some (Bounds_dim { cur = cur2; subr = subr2; lub = lub2; constr = constr2 }) ->
-        let from_constr1, constr1 = apply_dim_constraint ~source:`Subr ~stage subr Unconstrained_dim env in
-        let from_constr2, constr2 = apply_dim_constraint ~source:`Cur ~stage cur constr2 env in
+          let from_constr1, constr1 = apply_dim_constraint ~source:Subr ~stage subr Unconstrained_dim env in
+          let from_constr2, constr2 = apply_dim_constraint ~source:Cur ~stage cur constr2 env in
           ( from_constr2 @ from_constr1,
             {
               env with
               dim_env =
                 env.dim_env
                 |> Map.add_exn ~key:v_cur
-                     ~data:
-                       (Bounds_dim { lub = None; cur = []; subr = [ v_subr ]; constr = constr1 })
+                     ~data:(Bounds_dim { lub = None; cur = []; subr = [ v_subr ]; constr = constr1 })
                 |> Map.set ~key:v_subr
                      ~data:
                        (Bounds_dim
@@ -591,8 +591,8 @@ let%track_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env :
       | ( Some (Bounds_dim { cur = cur1; subr = subr1; lub = lub1; constr = constr1 }),
           Some (Bounds_dim { cur = cur2; subr = subr2; lub = lub2; constr = constr2 }) ) ->
           let from_lub = Option.to_list lub1 |> List.map ~f:(fun cur -> Dim_ineq { cur; subr }) in
-          let from_constr1, constr1 = apply_dim_constraint ~source:`Subr ~stage subr constr1 env in
-          let from_constr2, constr2 = apply_dim_constraint ~source:`Cur ~stage cur constr2 env in
+          let from_constr1, constr1 = apply_dim_constraint ~source:Subr ~stage subr constr1 env in
+          let from_constr2, constr2 = apply_dim_constraint ~source:Cur ~stage cur constr2 env in
           ( from_constr1 @ from_constr2 @ from_lub,
             {
               env with
@@ -641,7 +641,7 @@ let%track_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env :
                           [ Dim_mismatch [ lub2; cur; subr ] ] ) *)
             | Var _, _ | _, Var _ -> assert false
           in
-          let from_constr, constr2 = apply_dim_constraint ~source:`Cur ~stage cur constr2 env in
+          let from_constr, constr2 = apply_dim_constraint ~source:Cur ~stage cur constr2 env in
           ( from_constr @ lub_forcing,
             {
               env with
@@ -650,7 +650,7 @@ let%track_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env :
                   ~data:(Bounds_dim { lub = Some lub; cur = cur2; subr = subr2; constr = constr2 });
             } )
       | Some (Bounds_dim { cur = cur2; subr = subr2; lub = None; constr = constr2 }) ->
-          let from_constr, constr2 = apply_dim_constraint ~source:`Cur ~stage cur constr2 env in
+          let from_constr, constr2 = apply_dim_constraint ~source:Cur ~stage cur constr2 env in
           ( from_constr @ List.map subr2 ~f:(fun v_subr -> Dim_ineq { cur; subr = Var v_subr }),
             {
               env with
@@ -898,7 +898,7 @@ let%track_sexp solve_inequalities ~(stage : stage) ~active_update_rows (ineqs : 
           (more_ineqs @ ineqs, env)
       | Dim_constr { d; constr } ->
           let d = subst_dim env d in
-          let extras, constr = apply_dim_constraint ~source:`Direct ~stage d constr env in
+          let extras, constr = apply_dim_constraint ~source:Direct ~stage d constr env in
           let env =
             match (constr, d) with
             | Unconstrained_dim, _ | _, Dim _ -> env
