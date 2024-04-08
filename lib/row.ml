@@ -535,8 +535,6 @@ let%track_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env :
           ([ Dim_eq { d1 = cur; d2 = subr } ], env)
       | _, Some (Bounds_dim { subr = subr2; _ }) when List.mem ~equal:equal_dim_var subr2 v_cur ->
           ([ Dim_eq { d1 = cur; d2 = subr } ], env)
-      | Some (Bounds_dim { subr = subr1; _ }), _ when List.mem ~equal:equal_dim_var subr1 v_subr -> ([], env)
-      | _, Some (Bounds_dim { cur = cur2; _ }) when List.mem ~equal:equal_dim_var cur2 v_cur -> ([], env)
       | None, None ->
           ( [],
             {
@@ -879,7 +877,8 @@ let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (mod
 let%track_sexp solve_inequalities ~(stage : stage) ~active_update_rows (ineqs : constraint_ list)
     (env : environment) : constraint_ list * environment =
   let rec solve (ineqs : constraint_ list) (env : environment) : constraint_ list * environment =
-    let f (ineqs, env) = function
+    let f (ineqs, env) (ineq : constraint_) =
+      match ineq with
       | Dim_eq { d1; d2 } ->
           (* Substituted inside unify_dim. *)
           let more_ineqs, env = unify_dim ~stage (d1, d2) env in
