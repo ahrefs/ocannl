@@ -125,9 +125,10 @@ During the solution process, the constraints are incorporated, or propagated, in
 
 The constraints are solved by: unification of the equation constraints, unification-like simplification of the inequality constraints, propagation of the complex constraints. Simplification of an inequality, and constraint propagation, can generate more constraints, so we need to be careful to keep it terminating. The solution proceeds in three stages.
 
-* Stage 1 is online as tensors are composed, and conservatively performs unification and constraint propagation. Stages 2 and 3 are only performed once necessary: when projections or dimensions are requested.
-* Stage 2 also does unification and constraint propagation, but it performs variable elimination assuming all relevant information was incorporated. In particular, it sets yet-unknown dimension and row variables to their least upper bounds (if any).
-* Stage 3 applies defeasible heuristics, in addition to what stage 2 does. It sets yet-unknown dimensions to their lower bounds from direct accesses. It sets all remaining variables to dimension-1 resp. no-further-axes values.
+* Stage 1 is online as tensors are composed, and conservatively performs unification and constraint propagation. Stages 2, 3, 4 are only performed once necessary: when projections or dimensions are requested.
+* Stage 2, when solving the constraints, substitutes dim variables in terminal shapes that do not have a LUB, by dimension-1.
+* Stage 3, when solving the constraints, sets yet-unknown dimension and row variables in terminal shapes to their least upper bounds (if any).
+* Stage 4 applies defeasible heuristics. It sets yet-unknown dimensions to their lower bounds from direct accesses. It sets all remaining variables to dimension-1 resp. no-further-axes values. Only then it solves the resulting constraints.
 
 Let's explain the shape inference functions.
 
@@ -145,7 +146,7 @@ Let's explain the shape inference functions.
 
 The rationale behind only closing leaf (terminal) tensor shapes to their LUBs, while closing the remaining ones to dim-1:
 
-* the intermediate tensors will bet their shapes forced "from below" by their components;
+* the composite tensors will get their shapes forced "from below" by their components;
 * the leaf tensors cannot have their shape forced as they can always be broadcasted -- the only way they acquire shape information is downstream of `close_row_terminal`.
 
 ## Projections inference

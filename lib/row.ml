@@ -142,7 +142,9 @@ type constraint_ =
   | Terminal_row of t
 [@@deriving compare, equal, sexp, variants]
 
-type stage = Stage1 | Stage2 | Stage3 [@@deriving sexp, equal, compare, variants]
+type stage = Stage1 | Stage2 | Stage3 | Stage4 [@@deriving sexp, equal, compare, variants]
+
+let is_stage3_or_4 s = is_stage3 s || is_stage4 s
 
 module Idx = Arrayjit.Indexing
 
@@ -557,9 +559,10 @@ let%track_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env :
               env with
               dim_env =
                 env.dim_env
-                |> Fn.flip Map.update v_cur ~f:(fun _ ->
-                       Bounds_dim
-                         { lub = lub1; cur = cur1; subr = nonredundant v_subr subr1; constr = constr1 })
+                |> Map.set ~key:v_cur
+                     ~data:
+                       (Bounds_dim
+                          { lub = lub1; cur = cur1; subr = nonredundant v_subr subr1; constr = constr1 })
                 |> Map.add_exn ~key:v_subr
                      ~data:(Bounds_dim { lub = None; cur = [ v_cur ]; subr = []; constr = constr2 });
             } )
@@ -800,6 +803,7 @@ let%track_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : env
                 | Dim _, Dim _ -> d1)
           in
           let lub = { dims = lub_dims; bcast = lub_bcast; id = lub_id } in
+          (* FIXME: why do we force when this could be a non-terminal shape row? *)
           let force_lub =
             if (not (is_stage1 stage)) && (not @@ is_row_var lub_bcast) then
               [ Row_eq { r1 = row_of_var v_subr subr.id; r2 = lub } ]
@@ -817,60 +821,54 @@ let%track_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : env
   | _, { bcast = Broadcastable; _ } when r2_len <= r1_len -> (prefix_ineqs, env)
   | { bcast = Row_var _ | Broadcastable; _ }, { bcast = Row_var _ | Broadcastable; _ } -> assert false
 
-let close_dim_terminal (env : environment) (dim : dim) : constraint_ list * environment =
-  match dim with
-  | Dim _ -> ([], env)
-  | Var v -> (
-      match Map.find env.dim_env v with
-      | Some (Solved_dim _) -> assert false
-      | None | Some (Bounds_dim { lub = None; _ }) -> (* needs more inference *) ([ Terminal_dim dim ], env)
-      | Some (Bounds_dim { lub = Some lub; _ }) -> ([ Dim_eq { d1 = dim; d2 = lub } ], env))
-
-let close_row_terminal (env : environment) ({ dims; bcast; id } as _r : row) : constraint_ list * environment
-    =
-  let prefix = List.map dims ~f:(fun d -> Terminal_dim d) in
-  match bcast with
-  | Broadcastable -> (prefix, env)
-  | Row_var v -> (
-      let rem : row = row_of_var v id in
-      match Map.find env.row_env v with
-      | Some (Bounds_row { lub = None; _ }) | None ->
-          (* needs more inference *) (Terminal_row rem :: prefix, env)
-      | Some (Solved_row _) -> assert false
-      | Some (Bounds_row { lub = Some lub; _ }) -> (Row_eq { r1 = row_of_var v id; r2 = lub } :: prefix, env))
-
 let finalize_dim ~(stage : stage) (env : environment) (dim : dim) : constraint_ list =
   match subst_dim env dim with
   | Dim _ -> []
   | Var v -> (
       match Map.find env.dim_env v with
-      | Some (Bounds_dim { constr = At_least_dim d; _ }) when not (is_stage1 stage) ->
-          (* TODO: double-check it's safe at the end of stage 2. *)
+      | Some (Bounds_dim { constr = At_least_dim d; _ }) when is_stage4 stage ->
           [ Dim_eq { d1 = dim; d2 = get_dim ~d () } ]
-      | _ when is_stage3 stage -> [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 () } ]
+      | _ when is_stage4 stage -> [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 () } ]
       | _ -> [])
 
 let finalize_row ~(stage : stage) (env : environment) (r : row) : constraint_ list =
   let { dims; bcast; id } = subst_row env r in
   let prefix = List.concat_map dims ~f:(finalize_dim ~stage env) in
   match bcast with
-  | Row_var v when is_stage3 stage ->
+  | Row_var v when is_stage4 stage ->
       Row_eq { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id } } :: prefix
   | _ -> prefix
 
 let finalize_dim_entry ~(stage : stage) v entry : constraint_ list =
-  match entry with
-  | Solved_dim _ -> []
-  | Bounds_dim { lub; constr; _ } ->
-      let from_lub =
-        match (stage, lub) with (Stage2 | Stage3), Some d2 -> [ Dim_eq { d1 = Var v; d2 } ] | _ -> []
-      in
-      let from_constr =
-        match (stage, constr) with
-        | Stage3, At_least_dim d -> [ Dim_eq { d1 = Var v; d2 = get_dim ~d () } ]
-        | _ -> []
-      in
-      from_lub @ from_constr
+  match (entry, stage) with
+  | Bounds_dim { constr = At_least_dim d; _ }, Stage4 -> [ Dim_eq { d1 = Var v; d2 = get_dim ~d () } ]
+  | _ -> []
+
+let close_dim_terminal ~(stage : stage) (env : environment) (dim : dim) : constraint_ list =
+  match dim with
+  | Dim _ -> []
+  | Var v -> (
+      match Map.find env.dim_env v with
+      | Some (Solved_dim _) -> assert false
+      | Some (Bounds_dim { lub = None; _ }) when is_stage2 stage -> finalize_dim ~stage:Stage4 env dim
+      | Some (Bounds_dim { lub = Some lub; _ }) when is_stage3_or_4 stage -> [ Dim_eq { d1 = dim; d2 = lub } ]
+      | None when is_stage4 stage -> finalize_dim ~stage env dim
+      | _ -> [])
+
+let close_row_terminal ~(stage : stage) (env : environment) ({ dims; bcast; id } as _r : row) :
+    constraint_ list =
+  let prefix = List.map dims ~f:(fun d -> Terminal_dim d) in
+  match bcast with
+  | Broadcastable -> prefix
+  | Row_var v -> (
+      let rem : row = row_of_var v id in
+      match Map.find env.row_env v with
+      | Some (Bounds_row { lub = None; _ }) when is_stage2 stage ->
+          finalize_row ~stage:Stage4 env rem @ prefix
+      | Some (Solved_row _) -> assert false
+      | Some (Bounds_row { lub = Some lub; _ }) when is_stage3_or_4 stage ->
+          Row_eq { r1 = row_of_var v id; r2 = lub } :: prefix
+      | _ -> prefix)
 
 let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
 
@@ -916,14 +914,12 @@ let%track_sexp solve_inequalities ~(stage : stage) ~active_update_rows (ineqs : 
           let r = subst_row env r in
           let more_ineqs, env = apply_row_constraint ~stage r constr env in
           (more_ineqs @ ineqs, env)
-      | Terminal_dim d when not (is_stage1 stage) ->
-          let more_ineqs, env = close_dim_terminal env @@ subst_dim env d in
+      | Terminal_dim d ->
+          let more_ineqs = close_dim_terminal ~stage env @@ subst_dim env d in
           (more_ineqs @ ineqs, env)
-      | Terminal_row r when not (is_stage1 stage) ->
-          let more_ineqs, env = close_row_terminal env @@ subst_row env r in
+      | Terminal_row r ->
+          let more_ineqs = close_row_terminal ~stage env @@ subst_row env r in
           (more_ineqs @ ineqs, env)
-      | Terminal_dim _ (* when stage1 *) -> (ineqs, env)
-      | Terminal_row _ (* when stage1 *) -> (ineqs, env)
     in
     let ineqs', env = List.fold ineqs ~init:([], env) ~f in
     let ineqs' = List.rev ineqs' in

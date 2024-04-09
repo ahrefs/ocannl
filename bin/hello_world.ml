@@ -75,11 +75,13 @@ let hello4 () =
   let ctx = Backend.init device in
   Random.init 0;
   let ri = TDSL.range 3 in
-  let%op ti = ri ++ "i=>i0" in
+  (* Note: using ti = ri ++ "i=>i0" would make ti have dim-1 in the last axis and then broadcast. *)
+  (* TODO: allow specifying dimensions explicitely? *)
+  let%op ti = ri ++ "i=>i1" in
   let rj = TDSL.range 4 in
-  let%op tj = rj ++ "j=>j1" in
+  let%op tj = rj ++ "j=>j2" in
   let rk = TDSL.range 5 in
-  let%op tk = rk ++ "k=>k2" in
+  let%op tk = rk ++ "k=>k3" in
   let positions = TDSL.outer_sum "ijl;kl=>ijkl" (TDSL.outer_sum "il;jl=>ijl" ti tj) tk in
   Train.set_hosted tk.value;
   Train.forward_and_forget backend ctx positions;
