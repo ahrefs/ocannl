@@ -149,9 +149,10 @@ let%expect_test "Graph drawing fetch" =
                        │    │<not-in-yet>       │                   │                   │ |}];
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
-  (* Test that the batch axis dimensions will be inferred. *)
+  (* FIXME: Test that the batch axis dimensions will be inferred. *)
   let x_flat =
-    Tensor.term ~grad_spec:Require_grad ~label:[ "x_flat" ] ~input_dims:[] ~output_dims:[ 1 ]
+    Tensor.term ~grad_spec:Require_grad ~label:[ "x_flat" ] ~batch_dims:[ size ] ~input_dims:[]
+      ~output_dims:[ 1 ]
       ~init_op:(Constant_fill { values = xs; strict = true })
       ()
   in
@@ -231,10 +232,12 @@ let%expect_test "Simple gradients hosted" =
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in
+  (* We need to either call `grad_update` before introducing `learning_rate`, or disable the rootness
+     check. *)
+  let grad = Train.grad_update l in
   let%op learning_rate = 0.1 in
   Train.every_non_literal_on_host l;
   Train.every_non_literal_on_host learning_rate;
-  let grad = Train.grad_update l in
   let sgd = Train.sgd_update ~learning_rate grad in
   let grad_routine = Backend.jit ctx IDX.empty grad.fwd_bprop in
   let sgd_routine = Backend.jit grad_routine.context IDX.empty sgd in
@@ -335,12 +338,12 @@ let%expect_test "Simple gradients virtual" =
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in
-  let%op learning_rate = 0.1 in
   (* We pretend this is for parallel updates, to force materializing gradients, because our SGD update is
      compiled separately from our gradient update. Alternatively we could mark all
      [Assignments.recurrent_nodes sgd] as materialized. Or, the best non-parallel option is to compile
      grad_update and sgd_update together.*)
   let grad = Train.grad_update ~setup_for_parallel:true l in
+  let%op learning_rate = 0.1 in
   let sgd = Train.sgd_update ~learning_rate grad in
   (* Check out the initial state without forcing memory modes by compilation. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;

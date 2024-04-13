@@ -77,7 +77,10 @@ let hello4 () =
   let ri = TDSL.range 3 in
   let%op ti = ri ++ "i=>i0" in
   (* Read from position 2 of ti, otherwise shape inference concludes it's dim-1 and broadcasted. *)
-  let%op _ = ti ++ "i2=>0" in
+  (* FIXME: should not need removing. Also, the shape inference stopped working. *)
+  (* let%op _ = ti ++ "i2=>0" in *)
+  let%op force_shape = ti ++ "i2=>0" in
+  Tensor.remove_fwd_root force_shape;
   let rj = TDSL.range 4 in
   let%op tj = rj ++ "j=>j1" in
   let rk = TDSL.range 5 in

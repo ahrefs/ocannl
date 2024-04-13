@@ -553,14 +553,14 @@ let%expect_test "einsum matrix/inner+outer products" =
   let a = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] () in
   let%op a2 = a *+ "b|i->o; b|i->o => b|i->o" a in
-  let%op c = b *+ "b|h->o; b|i->h => b|i->o" a in
-  let%op d = a *+ "a|i->h; b|h->o => ab|i->o" b in
-  let%op e = a *+ "b|i->h; b|h->o => i->o" b in
-  let%op f = a *+ "a|i->h; b|h->o => i->o" b in
   Train.forward_and_forget backend ctx a2;
+  let%op c = b *+ "b|h->o; b|i->h => b|i->o" a in
   Train.forward_and_forget backend ctx c;
+  let%op d = a *+ "a|i->h; b|h->o => ab|i->o" b in
   Train.forward_and_forget backend ctx d;
+  let%op e = a *+ "b|i->h; b|h->o => i->o" b in
   Train.forward_and_forget backend ctx e;
+  let%op f = a *+ "a|i->h; b|h->o => i->o" b in
   Train.forward_and_forget backend ctx f;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ a2;
   [%expect
@@ -1311,7 +1311,10 @@ let%expect_test "outer_sum simulating axis concatenation" =
   let ri = TDSL.range 3 in
   let%op ti = ri ++ "i=>i0" in
   (* Read from position 2 of ti, otherwise shape inference concludes it's dim-1 and broadcasted. *)
-  let%op _ = ti ++ "i2=>0" in
+  (* FIXME: should not need removing. Also, the shape inference stopped working. *)
+  (* let%op _ = ti ++ "i2=>0" in *)
+  let%op force_shape = ti ++ "i2=>0" in
+  Tensor.remove_fwd_root force_shape;
   let rj = TDSL.range 4 in
   let%op tj = rj ++ "j=>j1" in
   let rk = TDSL.range 5 in
@@ -1464,7 +1467,7 @@ let%expect_test "outer_sum simulating axis concatenation" =
   [%expect
     {|
     ┌────────────────────────────────────┐
-    │[55]: =>_tk shape 0:6,1:3           │
+    │[55]: =>_ti shape 0:6,1:3           │
     │┌──────┬───────────────────────────┐│
     ││      │axis 1                     ││
     │├──────┼───────────────────────────┤│

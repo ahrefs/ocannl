@@ -393,11 +393,6 @@ let example_train_loop ?(disable_rootness_check = false) ~name ~seed ~batch_size
   Utils.settings.fixed_state_for_init <- Some seed;
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_n, bindings = IDX.get_static_symbol bindings in
-  let%op learning_rate =
-    match lr_schedule with
-    | None -> !.init_lr *. ((2 *. !..steps) - !@step_n) /. !..steps
-    | Some schedule -> schedule ~batch_n ~step_n
-  in
   let%op input = inputs @| batch_n in
   let%op expectation = outputs @| batch_n in
   let batch_losses = ref [] in
@@ -405,9 +400,14 @@ let example_train_loop ?(disable_rootness_check = false) ~name ~seed ~batch_size
   let learning_rates = ref [] in
   let%op loss_tensor = loss_fn ~output:(model input) ~expectation in
   let%op scalar_loss = (loss_tensor ++ "...|... => 0") /. !..batch_size in
-  (* So that we can inspect them. *)
-  set_hosted learning_rate.value;
   let update = grad_update ~disable_rootness_check ~setup_for_parallel:true scalar_loss in
+  (* Define learning_rate after scalar_loss is compiled, to not trigger rootness sanitizer. *)
+  let%op learning_rate =
+    match lr_schedule with
+    | None -> !.init_lr *. ((2 *. !..steps) - !@step_n) /. !..steps
+    | Some schedule -> schedule ~batch_n ~step_n
+  in
+  set_hosted learning_rate.value;
   let sgd = sgd_update ~learning_rate ~weight_decay update in
   let module Backend = (val backend : Arrayjit.Backends.Backend) in
   let num_devices = min num_devices @@ Backend.num_devices () in
@@ -468,4 +468,5 @@ let example_train_loop ?(disable_rootness_check = false) ~name ~seed ~batch_size
 let forward_and_forget ?(disable_rootness_check = false) (type context)
     (module Backend : Backend_type with type context = context) ctx ?(bindings = Idx.IDX.empty) t =
   let routine = Backend.jit ctx bindings @@ forward ~disable_rootness_check t in
+  if not disable_rootness_check then Tensor.remove_bprop_root t;
   sync_run (module Backend) routine t

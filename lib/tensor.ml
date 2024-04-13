@@ -75,11 +75,15 @@ let backprop_roots () = session_state.backprop_roots
 let default_value_prec = ref Arrayjit.Ops.single
 let default_grad_prec = ref Arrayjit.Ops.single
 
+let debug_name ?label t =
+  let label = Option.value label ~default:t.value.label in
+  Tn.debug_name ~id:t.id ~label
+
 exception Session_error of string * t option [@@deriving sexp]
 
 let session_error_printer = function
   | Session_error (msg, None) -> Some msg
-  | Session_error (msg, Some m) -> Some ("For #" ^ Int.to_string_hum m.id ^ ": " ^ msg)
+  | Session_error (msg, Some m) -> Some [%string "For #%{m.id#Int} %{debug_name m}: %{msg}"]
   | _ -> None
 
 let () = Stdlib.Printexc.register_printer session_error_printer
@@ -307,20 +311,22 @@ let rec iter_embedded_arrays ~f t =
   Option.iter t.diff ~f:(fun diff -> f diff.grad);
   List.iter ~f:(fun ch -> if ch.embedded then iter_embedded_arrays ~f ch.subtensor) t.children
 
-let debug_name t ~label = Tn.debug_name ~id:t.id ~label
-
 let consume_forward_code t =
   if not @@ is_fwd_root t then
     raise
     @@ Session_error
          ( "Tensor.consume_forward_code: tensor is not a root for tnode: " ^ debug_name t ~label:t.value.label,
            Some t );
-  if Map.length session_state.forward_roots <> 1 then
+  let unsafe_roots =
+    Map.data session_state.forward_roots
+    |> List.filter ~f:(fun r -> not (List.is_empty r.children || r.id = t.id))
+  in
+  if not @@ List.is_empty unsafe_roots then
     raise
     @@ Session_error
          ( [%string
-             "Tensor.consume_forward_code for %{debug_name t ~label:t.value.label}: 1 forward code root \
-              required, found: %{Map.length session_state.forward_roots#Int}"],
+             {|Tensor.consume_forward_code for %{debug_name t ~label:t.value.label}:
+found potentially unsafe roots: %{String.concat ~sep:", " @@ List.map ~f:debug_name unsafe_roots}|}],
            Some t );
   remove_fwd_root t;
   t.forward
@@ -340,12 +346,16 @@ let consume_backprop_code t =
          ( "Tensor.consume_backprop_code: tensor is not a root for tnode: "
            ^ debug_name t ~label:diff.grad.label,
            Some t );
-  if Map.length session_state.backprop_roots <> 1 then
+  let unsafe_roots =
+    Map.data session_state.backprop_roots
+    |> List.filter ~f:(fun r -> not (List.is_empty r.children || r.id = t.id))
+  in
+  if not @@ List.is_empty unsafe_roots then
     raise
     @@ Session_error
          ( [%string
-             "Tensor.consume_backprop_code for %{debug_name t ~label:diff.grad.label}: 1 backprop code root \
-              required, found: %{Map.length session_state.backprop_roots#Int}"],
+             {|Tensor.consume_backprop_code for %{debug_name t ~label:diff.grad.label}:
+found potentially unsafe roots: %{String.concat ~sep:", " @@ List.map ~f:debug_name unsafe_roots}|}],
            Some t );
   remove_bprop_root t;
   (diff.zero_grads, diff.backprop)

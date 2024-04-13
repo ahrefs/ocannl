@@ -40,7 +40,6 @@ let experiment seed ~use_builtin_weight_decay () =
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_n, bindings = IDX.get_static_symbol bindings in
   let%op mlp x = "b3" + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
-  let%op learning_rate = 0.1 *. (!..steps - !@step_n) /. !..steps in
   let%op moons_input = moons_flat @| batch_n in
   let%op moons_class = moons_classes @| batch_n in
   let losses = ref [] in
@@ -59,8 +58,9 @@ let experiment seed ~use_builtin_weight_decay () =
       (scalar_loss, 0.0)
   in
   (* So that we can inspect them. *)
-  Train.set_hosted learning_rate.value;
   let update = Train.grad_update scalar_loss in
+  let%op learning_rate = 0.1 *. (!..steps - !@step_n) /. !..steps in
+  Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
 
   let module Backend = (val Train.fresh_backend ()) in

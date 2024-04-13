@@ -107,7 +107,6 @@ let%expect_test "Micrograd half-moons example" =
   in
   let%op mlp x = "b3" + ("w3" * ?/("b2" 16 + ("w2" * ?/("b1" 16 + ("w1" * x))))) in
   (* Don't decay the learning rate too quickly, it behaves better than in the original. *)
-  let%op learning_rate = 0.1 *. ((2 *. !..steps) - !@step_n) /. !..steps in
   let%op moons_input = moons_flat @| batch_n in
   let%op moons_class = moons_classes @| batch_n in
   let losses = ref [] in
@@ -117,8 +116,9 @@ let%expect_test "Micrograd half-moons example" =
   (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update computation. *)
   let weight_decay = 0.0001 in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
-  Train.set_hosted learning_rate.value;
   let update = Train.grad_update scalar_loss in
+  let%op learning_rate = 0.1 *. ((2 *. !..steps) - !@step_n) /. !..steps in
+  Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
   let sgd_routine = Backend.jit ctx bindings (Seq (update.fwd_bprop, sgd)) in
   Train.all_host_to_device backend sgd_routine.context scalar_loss;
