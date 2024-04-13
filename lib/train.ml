@@ -91,10 +91,11 @@ let label_suffix label =
 
 (** Sets the tensor's value as "fully on host",
     returns the tensor's forward code with a label-derived comment. *)
-let forward t =
+let forward ?(disable_rootness_check = false) t =
+  let fwd = if disable_rootness_check then t.Tensor.forward else Tensor.consume_forward_code t in
   set_hosted t.Tensor.value;
   let label = label_suffix t.Tensor.value.label in
-  Asgns.Block_comment (label ^ " fwd", t.forward)
+  Asgns.Block_comment (label ^ " fwd", fwd)
 
 type updaten = {
   loss : Tensor.t;
@@ -106,26 +107,32 @@ type updaten = {
 (** Returns the tensor's forward, zeroing gradients, and backprop code wrapped with label-derived comments.
     Sets the tensor's value as "fully on host". If [setup_for_parallel] is true (false by default),
     sets the parameters and their gradients as "non-local" (on-device). *)
-let grad_update ?(setup_for_parallel = false) loss =
+let grad_update ?(disable_rootness_check = false) ?(setup_for_parallel = false) loss =
   set_hosted loss.Tensor.value;
   let params = get_params loss in
   if setup_for_parallel then Set.iter params ~f:(fun p -> set_materialized (Option.value_exn p.diff).grad);
   let label = label_suffix loss.value.label in
+  let fwd = if disable_rootness_check then loss.Tensor.forward else Tensor.consume_forward_code loss in
   let fwd_bprop =
     match loss.Tensor.diff with
     | Some diff ->
+        let zero_grads, bprop =
+          if disable_rootness_check then (diff.zero_grads, diff.backprop)
+          else Tensor.consume_backprop_code loss
+        in
+        (* Note: the %cd syntax for [loss.grad] does not modify roots. *)
         let%cd init_grad = loss.grad =: 1 in
         Asgns.(
           Block_comment
             ( label ^ " gradient update",
               sequential
                 [
-                  Block_comment (label ^ " fwd", loss.forward);
-                  Block_comment (label ^ " zero grads", diff.zero_grads);
+                  Block_comment (label ^ " fwd", fwd);
+                  Block_comment (label ^ " zero grads", zero_grads);
                   init_grad;
-                  Block_comment (label ^ " bprop", diff.backprop);
+                  Block_comment (label ^ " bprop", bprop);
                 ] ))
-    | None -> raise @@ Tensor.Session_error ("Train.backprop: tensor is not differentiable", Some loss)
+    | None -> raise @@ Tensor.Session_error ("Train.grad_update: tensor is not differentiable", Some loss)
   in
   { loss; label; params; fwd_bprop }
 
@@ -373,8 +380,9 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd () -> Tn.run debug_rt @@ upd.schedule ())] in
   fun () -> round_robin fs jitted_bindings sgd_update.bindings ~sync
 
-let example_train_loop ~name ~seed ~batch_size ~init_lr ?lr_schedule ~num_devices ~data_len ~epochs ~inputs
-    ~outputs ~model ~loss_fn ~weight_decay ?per_batch_callback ?per_epoch_callback backend () =
+let example_train_loop ?(disable_rootness_check = false) ~name ~seed ~batch_size ~init_lr ?lr_schedule
+    ~num_devices ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn ~weight_decay ?per_batch_callback
+    ?per_epoch_callback backend () =
   let module IDX = Idx.IDX in
   let module TDSL = Operation.TDSL in
   let module NTDSL = Operation.NTDSL in
@@ -401,7 +409,7 @@ let example_train_loop ~name ~seed ~batch_size ~init_lr ?lr_schedule ~num_device
   let%op scalar_loss = (loss_tensor ++ "...|... => 0") /. !..batch_size in
   (* So that we can inspect them. *)
   set_hosted learning_rate.value;
-  let update = grad_update ~setup_for_parallel:true scalar_loss in
+  let update = grad_update ~disable_rootness_check ~setup_for_parallel:true scalar_loss in
   let sgd = sgd_update ~learning_rate ~weight_decay update in
   let module Backend = (val backend : Arrayjit.Backends.Backend) in
   let num_devices = min num_devices @@ Backend.num_devices () in
@@ -441,11 +449,12 @@ let example_train_loop ~name ~seed ~batch_size ~init_lr ?lr_schedule ~num_device
         f ~at_step:!step_ref ~at_epoch:epoch ~learning_rate:learning_rate.@[0] ~epoch_loss:!epoch_loss)
   done;
   let%op model_result = model "point" in
+  let infer_fwd =
+    if disable_rootness_check then model_result.Tensor.forward else Tensor.consume_forward_code model_result
+  in
   set_on_host Volatile model_result.Tensor.value;
   (* By using sgd_update.context here, maybe we don't need to copy the parameters back to the host. *)
-  let routine =
-    Backend.jit sgd_update.context IDX.empty @@ Block_comment (name ^ "_infer", model_result.forward)
-  in
+  let routine = Backend.jit sgd_update.context IDX.empty @@ Block_comment (name ^ "_infer", infer_fwd) in
   let infer_callback values =
     Tensor.set_values point values;
     (* For the gccjit backend, point is only on host, not on device. For cuda, this will be needed. *)
@@ -458,7 +467,7 @@ let example_train_loop ~name ~seed ~batch_size ~init_lr ?lr_schedule ~num_device
   (* Note: infer_callback is significantly less efficient than using the model via arrayjit. *)
   (inputs, outputs, model_result, infer_callback, !batch_losses, !epoch_losses, !learning_rates)
 
-let forward_and_forget (type context) (module Backend : Backend_type with type context = context) ctx
-    ?(bindings = Idx.IDX.empty) t =
-  let routine = Backend.jit ctx bindings @@ forward t in
+let forward_and_forget ?(disable_rootness_check = false) (type context)
+    (module Backend : Backend_type with type context = context) ctx ?(bindings = Idx.IDX.empty) t =
+  let routine = Backend.jit ctx bindings @@ forward ~disable_rootness_check t in
   sync_run (module Backend) routine t

@@ -68,6 +68,8 @@ let session_state =
 
 let is_fwd_root t = Map.mem session_state.forward_roots t.id
 let remove_fwd_root t = session_state.forward_roots <- Map.remove session_state.forward_roots t.id
+let is_bprop_root t = Map.mem session_state.backprop_roots t.id
+let remove_bprop_root t = session_state.backprop_roots <- Map.remove session_state.backprop_roots t.id
 let forward_roots () = session_state.forward_roots
 let backprop_roots () = session_state.backprop_roots
 let default_value_prec = ref Arrayjit.Ops.single
@@ -306,6 +308,49 @@ let rec iter_embedded_arrays ~f t =
   f t.value;
   Option.iter t.diff ~f:(fun diff -> f diff.grad);
   List.iter ~f:(fun ch -> if ch.embedded then iter_embedded_arrays ~f ch.subtensor) t.children
+
+let debug_name t ~label = Tn.debug_name ~id:t.id ~label
+
+let consume_forward_code t =
+  if not @@ is_fwd_root t then
+    raise
+    @@ Session_error
+         ( "Tensor.consume_forward_code: tensor is not a root for tnode: " ^ debug_name t ~label:t.value.label,
+           Some t );
+  if Map.length session_state.forward_roots <> 1 then
+    raise
+    @@ Session_error
+         ( [%string
+             "Tensor.consume_forward_code for %{debug_name t ~label:t.value.label}: 1 forward code root \
+              required, found: %{Map.length session_state.forward_roots#Int}"],
+           Some t );
+  remove_fwd_root t;
+  t.forward
+
+let consume_backprop_code t =
+  let diff =
+    Option.value_or_thunk t.diff ~default:(fun () ->
+        raise
+        @@ Session_error
+             ( "Tensor.consume_backprop_code: tensor is not differentiable for tnode: "
+               ^ debug_name t ~label:t.value.label,
+               Some t ))
+  in
+  if not @@ is_bprop_root t then
+    raise
+    @@ Session_error
+         ( "Tensor.consume_backprop_code: tensor is not a root for tnode: "
+           ^ debug_name t ~label:diff.grad.label,
+           Some t );
+  if Map.length session_state.backprop_roots <> 1 then
+    raise
+    @@ Session_error
+         ( [%string
+             "Tensor.consume_backprop_code for %{debug_name t ~label:diff.grad.label}: 1 backprop code root \
+              required, found: %{Map.length session_state.backprop_roots#Int}"],
+           Some t );
+  remove_bprop_root t;
+  (diff.zero_grads, diff.backprop)
 
 (** *** Printing. *** *)
 
