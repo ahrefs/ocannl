@@ -4,14 +4,18 @@
 
 - Tensor parameters saving and restoring, Ndarray saving and restoring.
 - An operation `outer_sum`: like `einsum` but simpler, addition everywhere.
+- TODO: `let%op _ =` does not affect root tracking (intended for adding shape constraints).
+- TODO: a new constraint `Reverse_eq`, currently for inferring slice shapes.
 
 ### Changed
 
 - Tweaks to make the project usable as a package (external library).
+- Sanitizing code inclusion via code roots management: `Tensor.consume_forward_code` and `consume_backprop_code`, (optionally but by default) used from `Train`.
 
 ### Fixed
 
-- TODO: Shape inference in presence of non-0 fixed indexing inside einsums was broken (because actually not implemented).
+- Shape inference in presence of non-0 fixed indexing inside einsums was broken (because actually not implemented).
+- TODO: Incompleteness of shape inference for slicing was leading to inferring shapes with no axes (constraint generation was intended to raise shape error instead). Now fixed by making slice shape inference complete.
 
 ## [0.3.0] -- 2024-03-31
 
