@@ -198,25 +198,30 @@ let row_conjunction ?(id = phantom_row_id) constr1 constr2 =
       else if Sequence.for_all ~f:Either.is_second subsum then Some (extras ~keep_constr1:true, constr1)
       else None
 
-let%track_sexp apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim) (constr : dim_constraint)
-    (env : environment) : constraint_ list * dim_constraint =
+let%track_sexp apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim)
+    (constr : dim_constraint) (env : environment) : constraint_ list * dim_constraint =
+  let extras, constr =
+    match (dim, constr) with
+    | Dim { d; _ }, At_least_dim d_min ->
+        if d < d_min then
+          raise
+          @@ Shape_error
+               ("At_least_dim constraint failed, expected " ^ Int.to_string d_min, [ Dim_mismatch [ dim ] ])
+        else ([], constr)
+    | Var v, _ -> (
+        match Map.find env.dim_env v with
+        | None -> ([], constr)
+        | Some (Solved_dim _) -> assert false
+        | Some (Bounds_dim bounds) -> (
+            match (source, constr) with
+            (* If source is [Cur], then [constr] (target) is [Subr]. *)
+            | Cur, (Unconstrained_dim | At_least_dim 1) -> ([], constr)
+            | _ -> Option.value ~default:([], constr) @@ dim_conjunction constr bounds.constr))
+    | _, Unconstrained_dim -> ([], constr)
+  in
   match (dim, constr, stage) with
-  | Dim { d; _ }, At_least_dim d_min, _ ->
-      if d < d_min then
-        raise
-        @@ Shape_error
-             ("At_least_dim constraint failed, expected " ^ Int.to_string d_min, [ Dim_mismatch [ dim ] ])
-      else ([], constr)
-  | Var _, At_least_dim d, Stage3 -> ([ Dim_eq { d1 = dim; d2 = get_dim ~d () } ], Unconstrained_dim)
-  | Var v, _, _ -> (
-      match Map.find env.dim_env v with
-      | None -> ([], constr)
-      | Some (Solved_dim _) -> assert false
-      | Some (Bounds_dim bounds) -> (
-          match (source, constr) with
-          | Cur, (Unconstrained_dim | At_least_dim 1) -> ([], constr)
-          | _ -> Option.value ~default:([], constr) @@ dim_conjunction constr bounds.constr))
-  | _, Unconstrained_dim, _ -> ([], constr)
+  | Var _, At_least_dim d, Stage3 -> (Dim_eq { d1 = dim; d2 = get_dim ~d () } :: extras, Unconstrained_dim)
+  | _ -> (extras, constr)
 
 let apply_row_constraint ~stage r constr env =
   if is_unconstrained constr then ([], env)
