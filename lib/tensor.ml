@@ -14,8 +14,8 @@ type diff = {
   grad : (Tn.t[@sexp.opaque]);
   zero_grads : Asgns.t;  (** Prepares for backpropagation. Always compile as: [Seq (zero_grads, backprop)]. *)
   backprop : Asgns.t;
-      (** Backpropagates for the tensor and its descendants; which typically means adding
-          partial gradients to the gradient tensor of the subtensors, then for sub-subtensors etc. *)
+      (** Backpropagates for the tensor and its descendants; which typically means adding partial gradients to
+          the gradient tensor of the subtensors, then for sub-subtensors etc. *)
 }
 [@@deriving sexp_of]
 
@@ -25,8 +25,8 @@ type t = {
   id : int;  (** Same as [value.id]. *)
   value : Tn.t;
   shape : Shape.t;
-      (** The eventual shape of [t.value] and [t.diff.grad], incorporating the current state of
-          shape inference. *)
+      (** The eventual shape of [t.value] and [t.diff.grad], incorporating the current state of shape
+          inference. *)
   children : subtensor list;
 }
 (** Information needed for compositional code generation. *)
@@ -59,8 +59,8 @@ type session_state = {
   mutable forward_roots : t Map.M(Int).t;
       (** A forward root is a tensor that is not (currently) used to compute another tensor. *)
   mutable backprop_roots : t Map.M(Int).t;
-      (** A backprop root is a tensor with a gradient that is not (currently) receiving gradients from
-          another tensor. I.e. it is not currently used to compute a tensor with a gradient. *)
+      (** A backprop root is a tensor with a gradient that is not (currently) receiving gradients from another
+          tensor. I.e. it is not currently used to compute a tensor with a gradient. *)
 }
 
 let session_state =
@@ -173,9 +173,8 @@ let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin) ?(transpose_op
       let zeros = List.map ordered_ts ~f:(fun ti -> if is_bck_root ti then zero_g ti else Asgns.Noop) in
       Asgns.sequential @@ zeros @ [ fetch_zeros g shape ]
     in
-    (* The code needs to be included in the reverse order to which it was computed! This guarantees
-       that all ancestors of a node are backpropagated before the node is backpropagated, even for
-       non-tree DAGs. *)
+    (* The code needs to be included in the reverse order to which it was computed! This guarantees that all
+       ancestors of a node are backpropagated before the node is backpropagated, even for non-tree DAGs. *)
     let backprop =
       let bprop = dcode ~f:(fun diff -> diff.backprop) in
       let bcks = List.map ordered_ts ~f:(fun ti -> if is_bck_root ti then bprop ti else Asgns.Noop) in
@@ -222,8 +221,8 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
         (match fetch_op with
         | Constant _ | Slice _ | Embed_symbol _ -> ()
         | Imported _ ->
-            (* Note: [Imported] can be used for merging across devices. But, some use cases of [Imported]
-               will require a hosted tensor node. *)
+            (* Note: [Imported] can be used for merging across devices. But, some use cases of [Imported] will
+               require a hosted tensor node. *)
             Tn.update_memory_mode v Materialized 22);
         Fetch { array = v; fetch_op; dims }
   in
@@ -297,9 +296,8 @@ let param ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?(strict = 
   let v = t.value in
   (* It is convenient to use the param syntax for volatiles (mutable inputs). *)
   Tn.update_memory_mode v (Hosted Nonconstant) 24;
-  (* In principle, gradients can even be local, if a single jitted block does forward, backprop,
-     and update computations. Use-cases needing [Materialized] gradients need to request that
-     before any jitting. *)
+  (* In principle, gradients can even be local, if a single jitted block does forward, backprop, and update
+     computations. Use-cases needing [Materialized] gradients need to request that before any jitting. *)
   let g = (Option.value_exn t.diff).grad in
   Tn.update_memory_mode g Never_virtual 26;
   t
@@ -376,35 +374,34 @@ let lazy_optional_payload ~present ~missing v =
 
 type array_print_style =
   [ `Default
-    (** The inner rectangles comprise both an input and an output axis, if available. Similarly,
-      the outer rectangle comprises a second-from-end input axis and a second-from-end output axis,
-      if available. At least one batch axis is output, when available.
-      The axes that couldn't be output are printed at position/dimension [0]. *)
+    (** The inner rectangles comprise both an input and an output axis, if available. Similarly, the outer
+        rectangle comprises a second-from-end input axis and a second-from-end output axis, if available. At
+        least one batch axis is output, when available. The axes that couldn't be output are printed at
+        position/dimension [0]. *)
   | `N5_layout of string
-    (** The string should provide exclusively non-negative integer pseudo-labels. The numbers [0]-[4] represent
-      the priorities of the axes to be printed out, where the priorities correspond to, from highest:
-      horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the outer
-      rectangle, repetition (see also [Node.pp_print]). The numbers [n >= 5] stand for the actual
-      positions [n - 5] within the corresponding axes. *)
+    (** The string should provide exclusively non-negative integer pseudo-labels. The numbers [0]-[4]
+        represent the priorities of the axes to be printed out, where the priorities correspond to, from
+        highest: horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the
+        outer rectangle, repetition (see also [Node.pp_print]). The numbers [n >= 5] stand for the actual
+        positions [n - 5] within the corresponding axes. *)
   | `Label_layout of (string * int) list
-    (** The association from axis labels to integers. The negative numbers [-5] to [-1] represent
-      the priorities of the axes to be printed out, where the priorities correspond to, from highest:
-      horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the outer
-      rectangle, repetition (as above). The numbers [n >= 0] stand for the actual positions
-      within the corresponding axes. Unspecified axes are printed at position [0]. *)
+    (** The association from axis labels to integers. The negative numbers [-5] to [-1] represent the
+        priorities of the axes to be printed out, where the priorities correspond to, from highest:
+        horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the outer
+        rectangle, repetition (as above). The numbers [n >= 0] stand for the actual positions within the
+        corresponding axes. Unspecified axes are printed at position [0]. *)
   | `Inline
     (** The tensors are printed linearly, in a bracketed manner, optionally prefixed with the labels
         specification. Note that the syntax causes ambiguity for 1-dimensional input axes (underscores are
-        used for axes without explicit labels); when there is a 1-dimensional input axis, we output
-        the labels specification even if there are no axis labels as a way to display the number of axes.
-        The axis nesting is right-to-left (rightmost is innermost).
-        The input axes are innermost and the batch axes outermost. The input axes use [,] as a separator
-        and [()] as axis delimiters, but the delimiter for the outermost (i.e. leftmost) axis is omitted.
-        The output axes use [;] as a separator and [[]] as axis delimiters (obligatory).
-        The batch axes use [;] as a separator and [[||]] as axis delimiters (obligatory). *)
-  ]
-(** We print out up to 5 axes when printing a tensor, as a grid (outer rectangle) of (inner)
-    rectangles, possibly repeated (screens). *)
+        used for axes without explicit labels); when there is a 1-dimensional input axis, we output the labels
+        specification even if there are no axis labels as a way to display the number of axes. The axis
+        nesting is right-to-left (rightmost is innermost). The input axes are innermost and the batch axes
+        outermost. The input axes use [,] as a separator and [()] as axis delimiters, but the delimiter for
+        the outermost (i.e. leftmost) axis is omitted. The output axes use [;] as a separator and [[]] as axis
+        delimiters (obligatory). The batch axes use [;] as a separator and [[||]] as axis delimiters
+        (obligatory). *) ]
+(** We print out up to 5 axes when printing a tensor, as a grid (outer rectangle) of (inner) rectangles,
+    possibly repeated (screens). *)
 
 let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_value ~with_grad t =
   let rec to_dag { subtensor = t; embedded } : PrintBox_utils.dag =

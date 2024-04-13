@@ -131,9 +131,8 @@ let%expect_test "Micrograd half-moons example" =
         Backend.await device;
         assert (Backend.to_host sgd_routine.context learning_rate.value);
         assert (Backend.to_host sgd_routine.context scalar_loss.value);
-        (* let batch_ref = IDX.find_exn sgd_jitted.bindings batch_n in
-           Stdio.printf "Epoch=%d, step=%d, batch=%d, lr=%f, loss=%f\n%!" epoch !step_ref !batch_ref
-             learning_rate.@[0] scalar_loss.@[0]; *)
+        (* let batch_ref = IDX.find_exn sgd_jitted.bindings batch_n in Stdio.printf "Epoch=%d, step=%d,
+           batch=%d, lr=%f, loss=%f\n%!" epoch !step_ref !batch_ref learning_rate.@[0] scalar_loss.@[0]; *)
         learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
         losses := scalar_loss.@[0] :: !losses;
         log_losses := Float.max (-10.) (Float.log scalar_loss.@[0]) :: !log_losses;

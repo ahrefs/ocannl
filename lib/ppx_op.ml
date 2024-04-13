@@ -113,8 +113,7 @@ let rec translate ?ident_label expr =
   | { pexp_desc = Pexp_array _; _ } | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
       (no_vbs, ndarray_op ?ident_label expr)
   | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
-      (* We need to hardcode these two patterns to prevent the numbers from being converted
-         to tensors. *)
+      (* We need to hardcode these two patterns to prevent the numbers from being converted to tensors. *)
       let vbs, e1 = translate expr1 in
       ( vbs,
         [%expr TDSL.O.( **. ) ~label:[%e opt_pat2string_list ~loc ident_label] [%e e1] (Float.of_int [%e i])]

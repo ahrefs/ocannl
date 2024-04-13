@@ -123,8 +123,7 @@ let with_forward_args setups body =
     | Some fwd ->
         [%expr
           (* FIXME: we do not want to force the computation unnecessarily, but we want the bindings? *)
-          (*if Arrayjit.Assignments.is_noop [%e body] then Arrayjit.Assignments.Noop
-            else*)
+          (*if Arrayjit.Assignments.is_noop [%e body] then Arrayjit.Assignments.Noop else*)
           [%e
             Ast_helper.Exp.let_ ~loc Nonrecursive bindings
               [%expr Arrayjit.Assignments.Seq ([%e fwd], [%e body])]]] )
@@ -245,8 +244,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
       (Tensor, Undet, expr)
   | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
       (* FIXME: `**.` should take a tensor and require that it's a literal. *)
-      (* We need to hardcode these two patterns to prevent the numbers from being converted
-         to tensors. *)
+      (* We need to hardcode these two patterns to prevent the numbers from being converted to tensors. *)
       let _typ1, slot1, e1 = translate ~proj_in_scope expr1 in
       ( Tensor,
         slot1,
@@ -786,9 +784,8 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
         Undet,
         Ast_builder.Default.pexp_extension ~loc
         @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: let-in: local let-bindings not implemented yet" )
-  (* let bindings = List.map bindings
-      ~f:(fun binding -> {binding with pvb_expr=translate binding.pvb_expr}) in
-     {expr with pexp_desc=Pexp_let (recflag, bindings, translate body)} *)
+  (* let bindings = List.map bindings ~f:(fun binding -> {binding with pvb_expr=translate binding.pvb_expr})
+     in {expr with pexp_desc=Pexp_let (recflag, bindings, translate body)} *)
   | { pexp_desc = Pexp_open (decl, body); _ } ->
       let typ, slot, body = translate ?ident_label ~proj_in_scope body in
       (typ, slot, { expr with pexp_desc = Pexp_open (decl, body) })

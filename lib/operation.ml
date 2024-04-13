@@ -53,23 +53,21 @@ let pointmul ?(label = []) =
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 * v2 in
   mul Pointwise_bin ~op_asn ~label:("*." :: label)
 
-(* N1: AxB, N2 BxC, v: AxC, A: output of N1, B: input/output of N1/N2, C: input of N2.
-   Although the matrix algebra would require that we insert additional transposes in gradient multiplies:
-   AxB = AxC * CxB = AxC * (BxC)^T -> N1g += Ng * N2v^T,
-   BxC = BxA * AxC = (AxB)^T * AxC -> N2g += N1v^T * Ng,
-   in our setup there is no transposing to do, since the projections produce correct indices for their
-   corresponding matrices. *)
+(* N1: AxB, N2 BxC, v: AxC, A: output of N1, B: input/output of N1/N2, C: input of N2. Although the matrix
+   algebra would require that we insert additional transposes in gradient multiplies: AxB = AxC * CxB = AxC *
+   (BxC)^T -> N1g += Ng * N2v^T, BxC = BxA * AxC = (AxB)^T * AxC -> N2g += N1v^T * Ng, in our setup there is
+   no transposing to do, since the projections produce correct indices for their corresponding matrices. *)
 
 let matmul ?(label = []) =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
   mul Compose ~op_asn ~label:("*" :: label)
 
-(** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of
-    matrix multiplication, inner and outer products, etc.
+(** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of matrix
+    multiplication, inner and outer products, etc.
 
-    Note that ["a,b->c"] from [numpy] is ["a;b=>c"] in OCANNL, since ["->"] is used to separate the input
-    and the output axes. *)
+    Note that ["a,b->c"] from [numpy] is ["a;b=>c"] in OCANNL, since ["->"] is used to separate the input and
+    the output axes. *)
 let einsum ?(label = []) spec =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
@@ -79,21 +77,21 @@ let einsum ?(label = []) spec =
   in
   Tensor.binop ~label:(";=>" :: label) ~compose_op:(Einsum spec) ~op_asn ~grad_asn
 
-  (** Like [einsum], but adds instead than multiplying the resulting values. *)
-  let outer_sum ?(label = []) spec =
-    let module NTDSL = Initial_NTDSL in
-    let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 + v2 in
-    let%cd grad_asn ~v:_ ~g ~t1 ~t2 ~projections =
-      g1 =+ g;
-      g2 =+ g
-    in
-    Tensor.binop ~label:(";=>+" :: label) ~compose_op:(Einsum spec) ~op_asn ~grad_asn
-  
+(** Like [einsum], but adds instead than multiplying the resulting values. *)
+let outer_sum ?(label = []) spec =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 + v2 in
+  let%cd grad_asn ~v:_ ~g ~t1 ~t2 ~projections =
+    g1 =+ g;
+    g2 =+ g
+  in
+  Tensor.binop ~label:(";=>+" :: label) ~compose_op:(Einsum spec) ~op_asn ~grad_asn
+
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract diagonals,
     compute traces etc.
 
-    Note that ["a->c"] from [numpy] is ["a=>c"] in OCANNL, since ["->"] is used to separate the input
-    and the output axes. *)
+    Note that ["a->c"] from [numpy] is ["a=>c"] in OCANNL, since ["->"] is used to separate the input and the
+    output axes. *)
 let einsum1 ?(label = []) spec =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~projections = v =:+ v1 in
@@ -188,7 +186,7 @@ let range_of_shape ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?batch_dims
     ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
     ~init_op:Range_over_offsets ()
 
-(** In {!Tensor.term} the omitted axes are {!Shape.Unknown} -- to be inferred, here they are known and empty.  *)
+(** In {!Tensor.term} the omitted axes are {!Shape.Unknown} -- to be inferred, here they are known and empty. *)
 let data ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?batch_dims ?input_dims ?output_dims ?batch_axes
     ?input_axes ?output_axes fetch_op =
   let batch_dims = Option.first_some batch_dims @@ Option.some_if (Option.is_none batch_axes) [] in

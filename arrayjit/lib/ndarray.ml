@@ -272,8 +272,8 @@ let fold_as_float ~init ~f arr =
   | Double_nd arr -> fold_bigarray ~init ~f arr
 
 let size_in_bytes v =
-  (* Cheating here because 1 number Bigarray is same size as empty Bigarray:
-     it's more informative to report the cases differently. *)
+  (* Cheating here because 1 number Bigarray is same size as empty Bigarray: it's more informative to report
+     the cases differently. *)
   let f arr = if Array.is_empty @@ A.dims arr then 0 else A.size_in_bytes arr in
   map { f } v
 
@@ -353,8 +353,8 @@ let retrieve_flat_values arr =
 
 (** {2 *** Printing ***} *)
 
-(** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
-    Outputs ["-"] for empty dimensions. *)
+(** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2. Outputs
+    ["-"] for empty dimensions. *)
 let int_dims_to_string ?(with_axis_numbers = false) dims =
   if Array.is_empty dims then "-"
   else if with_axis_numbers then
@@ -363,21 +363,20 @@ let int_dims_to_string ?(with_axis_numbers = false) dims =
 
 let concise_float ~prec v =
   Printf.sprintf "%.*e" prec v
-  |> (* The C99 standard requires at least two digits for the exponent, but the leading zero
-        is a waste of space. *)
+  |> (* The C99 standard requires at least two digits for the exponent, but the leading zero is a waste of
+        space. *)
   String.substr_replace_first ~pattern:"e+0" ~with_:"e+"
   |> String.substr_replace_first ~pattern:"e-0" ~with_:"e-"
 
-(** Prints 0-based [indices] entries out of [arr], where a number between [-5] and [-1] in an axis means
-    to print out the axis, and a non-negative number means to print out only the indexed dimension of the axis.
-    Prints up to [entries_per_axis] or [entries_per_axis+1] entries per axis, possibly with ellipsis
-    in the middle. [labels] provides the axis labels for all axes (use [""] or ["_"] for no label).
-    The last label corresponds to axis [-1] etc. The printed out axes are arranged as:
-    * -1: a horizontal segment in an inner rectangle (i.e. column numbers of the inner rectangle),
-    * -2: a sequence of segments in a line of text (i.e. column numbers of an outer rectangle),
-    * -3: a vertical segment in an inner rectangle (i.e. row numbers of the inner rectangle),
-    * -4: a vertical sequence of segments (i.e. column numbers of an outer rectangle),
-    * -5: a sequence of screens of text (i.e. stack numbers of outer rectangles). *)
+(** Prints 0-based [indices] entries out of [arr], where a number between [-5] and [-1] in an axis means to
+    print out the axis, and a non-negative number means to print out only the indexed dimension of the axis.
+    Prints up to [entries_per_axis] or [entries_per_axis+1] entries per axis, possibly with ellipsis in the
+    middle. [labels] provides the axis labels for all axes (use [""] or ["_"] for no label). The last label
+    corresponds to axis [-1] etc. The printed out axes are arranged as: * -1: a horizontal segment in an inner
+    rectangle (i.e. column numbers of the inner rectangle), * -2: a sequence of segments in a line of text
+    (i.e. column numbers of an outer rectangle), * -3: a vertical segment in an inner rectangle (i.e. row
+    numbers of the inner rectangle), * -4: a vertical sequence of segments (i.e. column numbers of an outer
+    rectangle), * -5: a sequence of screens of text (i.e. stack numbers of outer rectangles). *)
 let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labels = [||]) ~indices arr =
   let module B = PrintBox in
   let dims = dims arr in

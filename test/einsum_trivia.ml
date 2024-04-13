@@ -294,8 +294,8 @@ let%expect_test "einsum1 sum out axes" =
   let hey2 = TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] () in
   let%op ho2 = hey2 ++ "ab|cd->ef => c|a->d" in
   Train.forward_and_forget backend ctx ho2;
-  (* Axis 5 of hey2, i.e. d in the einsum spec, has the lowest variation (progresses by 1),
-     that's why axis 1 of ho2 appears nearly constant. *)
+  (* Axis 5 of hey2, i.e. d in the einsum spec, has the lowest variation (progresses by 1), that's why axis 1
+     of ho2 appears nearly constant. *)
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho2;
   [%expect
     {|
@@ -1320,7 +1320,8 @@ let%expect_test "outer_sum simulating axis concatenation" =
   Train.set_hosted tk.value;
   Train.forward_and_forget backend ctx positions;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ positions;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────┐
     │[57]: ;=>+ shape 0:4,1:5,2:6,3:3    │
     │┌──────┬───────────────────────────┐│
@@ -1460,7 +1461,8 @@ let%expect_test "outer_sum simulating axis concatenation" =
     │└──────┴───────────────────────────┘│
     └────────────────────────────────────┘ |}];
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ti;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────────────┐
     │[55]: =>_tk shape 0:6,1:3           │
     │┌──────┬───────────────────────────┐│
@@ -1473,8 +1475,9 @@ let%expect_test "outer_sum simulating axis concatenation" =
     ││      │ 0.00e+0  0.00e+0  5.00e+0 ││
     │└──────┴───────────────────────────┘│
     └────────────────────────────────────┘ |}];
-    Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ tk;
-    [%expect {|
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ tk;
+  [%expect
+    {|
       ┌────────────────────────────────────┐
       │[55]: =>_tk shape 0:6,1:3           │
       │┌──────┬───────────────────────────┐│

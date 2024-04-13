@@ -89,8 +89,8 @@ let label_suffix label =
   @@ List.find ~f:(String.for_all ~f:(fun c -> Char.is_alphanum c || equal_char '_' c))
   @@ List.rev label
 
-(** Sets the tensor's value as "fully on host",
-    returns the tensor's forward code with a label-derived comment. *)
+(** Sets the tensor's value as "fully on host", returns the tensor's forward code with a label-derived
+    comment. *)
 let forward ?(disable_rootness_check = false) t =
   let fwd = if disable_rootness_check then t.Tensor.forward else Tensor.consume_forward_code t in
   set_hosted t.Tensor.value;
@@ -105,8 +105,8 @@ type updaten = {
 }
 
 (** Returns the tensor's forward, zeroing gradients, and backprop code wrapped with label-derived comments.
-    Sets the tensor's value as "fully on host". If [setup_for_parallel] is true (false by default),
-    sets the parameters and their gradients as "non-local" (on-device). *)
+    Sets the tensor's value as "fully on host". If [setup_for_parallel] is true (false by default), sets the
+    parameters and their gradients as "non-local" (on-device). *)
 let grad_update ?(disable_rootness_check = false) ?(setup_for_parallel = false) loss =
   set_hosted loss.Tensor.value;
   let params = get_params loss in
@@ -158,8 +158,8 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov l =
   in
   Asgns.Block_comment (l.label ^ " sgd update", code)
 
-(** All and only bindings with associated ranges are iterated, with the binding's initial value lost.
-    Bindings without ranges remain at their initial values. *)
+(** All and only bindings with associated ranges are iterated, with the binding's initial value lost. Bindings
+    without ranges remain at their initial values. *)
 let sequential_loop ~f jitted_bindings =
   let rec loop = function
     | [] -> f ()
@@ -174,10 +174,10 @@ let sequential_loop ~f jitted_bindings =
   in
   loop jitted_bindings
 
-(** Distributes iterated indices to workers in a round-robin fashion. All and only bindings with
-    associated ranges are iterated, with the binding's initial value lost.
-    Bindings without ranges remain at their initial values. [sync] is called after each round of calling
-    all workers, and at the end if needed, with the number of workers called during the round. *)
+(** Distributes iterated indices to workers in a round-robin fashion. All and only bindings with associated
+    ranges are iterated, with the binding's initial value lost. Bindings without ranges remain at their
+    initial values. [sync] is called after each round of calling all workers, and at the end if needed, with
+    the number of workers called during the round. *)
 let%track_sexp round_robin fs parallel_jitbs jitbs ~sync : unit =
   let num_devices : int = Array.length fs in
   assert (Array.length parallel_jitbs = num_devices);
@@ -252,11 +252,10 @@ let%debug_sexp all_device_to_host (type context) (module Backend : Backend_type 
             (Backend.get_ctx_device context |> Backend.to_ordinal : int),
             "to host"])
 
-(** Executes the jitted code and copies arrays embedded in the given tenosor from and to host,
-    synchronizes before copying to host. If [looping] is provided, loops over bindings and executes
-    the given function inside the loop after a run. All and only bindings with associated ranges
-    are iterated, with the binding's initial value lost. Bindings without ranges remain at their
-    initial values. *)
+(** Executes the jitted code and copies arrays embedded in the given tenosor from and to host, synchronizes
+    before copying to host. If [looping] is provided, loops over bindings and executes the given function
+    inside the loop after a run. All and only bindings with associated ranges are iterated, with the binding's
+    initial value lost. Bindings without ranges remain at their initial values. *)
 let sync_run ?looping (type context) (module Backend : Backend_type with type context = context)
     (routine : Backend.routine) t =
   let work = routine.schedule () in
@@ -280,17 +279,16 @@ let collapse_merges merges =
   |> List.reduce_exn ~f:(Array.map2_exn ~f:( @ ))
 
 (** Performs one optimization step, potentially in parallel (if [grad_updates] are compiled for different
-    devices). All jitted code must have the same bindings. Iterates over bindings with ranges, calling
-    one of [grad_updates] in a round-robin fashion, and performs the following synchronization each time
-    all [grad_updates] have been called:
+    devices). All jitted code must have the same bindings. Iterates over bindings with ranges, calling one of
+    [grad_updates] in a round-robin fashion, and performs the following synchronization each time all
+    [grad_updates] have been called:
 
-    1. merges all gradients into the device of [grad_updates.(0)],
-    2. calls [sgd_update],
-    3. copies all parameters from the [grad_updates.(0)] device to the other devices, if needed,
-    4. calls [post_sync] with the number of devices synced since the previous sync.
+    1. merges all gradients into the device of [grad_updates.(0)], 2. calls [sgd_update], 3. copies all
+    parameters from the [grad_updates.(0)] device to the other devices, if needed, 4. calls [post_sync] with
+    the number of devices synced since the previous sync.
 
-    All and only bindings with associated ranges are iterated, with the binding's initial value lost.
-    Bindings without ranges remain at their initial values. *)
+    All and only bindings with associated ranges are iterated, with the binding's initial value lost. Bindings
+    without ranges remain at their initial values. *)
 let%track_sexp parallel_update (type context) (module Backend : Backend_type with type context = context)
     ~(grad_updates : Backend.routine array) ~(sgd_update : Backend.routine) ~post_sync updaten : unit -> unit
     =

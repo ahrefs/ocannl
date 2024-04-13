@@ -18,7 +18,7 @@ let hello1 () =
   (* Hey is inferred to be a matrix. *)
   let hey = range_of_shape ~batch_dims:[ 7 ] ~input_dims:[ 9; 10; 11 ] ~output_dims:[ 13; 14 ] () in
   let%op hoo = ((1 + 1) * hey) - 10 in
-  (* For convenience, Train.forward will set hoo.value as fully on host.  *)
+  (* For convenience, Train.forward will set hoo.value as fully on host. *)
   Train.forward_and_forget (module Backend) ctx hoo;
   (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
   Tensor.print_tree ~with_grad:false ~depth:99 hoo;

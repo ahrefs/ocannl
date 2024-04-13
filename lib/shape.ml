@@ -10,12 +10,12 @@ module Debug_runtime = Arrayjit.Utils.Debug_runtime
 
 (** *** Shape types and inference *** *)
 
-(** An index pointing to any of a shape's axes, including the kind of the axis ([Batch, Input, Output])
-    and the position (which is counted from the end to facilitate broadcasting).
+(** An index pointing to any of a shape's axes, including the kind of the axis ([Batch, Input, Output]) and
+    the position (which is counted from the end to facilitate broadcasting).
 
     Note the following inconsistency due to differing conventions in function notation and matrix notation:
-    for label specifications and einsum notation, we write "batch|inputs->outputs", but when we convert
-    a shape to an [Ndarray] index we do it in the order [[batch; outputs; inputs]]. *)
+    for label specifications and einsum notation, we write "batch|inputs->outputs", but when we convert a
+    shape to an [Ndarray] index we do it in the order [[batch; outputs; inputs]]. *)
 module AxisKey = struct
   module T = struct
     type kind = [ `Batch | `Input | `Output ] [@@deriving equal, compare, sexp, hash]
@@ -45,10 +45,10 @@ type parsed_axis_labels = {
 }
 [@@deriving compare, sexp, fields]
 (** The labels are strings assigned to [AxisKey] axes. Moreover the [bcast_] fields represent whether
-    additional leading axes are allowed (corresponding to the dot-ellipsis syntax for broadcasting).
-    The string can be used to identify a row variable, and defaults to ["batch"],  ["input"], ["output"]
-    respectively when parsing ["..."].
-    The [given_] fields count the number of specified axes of the corresponding kind in [labels]. *)
+    additional leading axes are allowed (corresponding to the dot-ellipsis syntax for broadcasting). The
+    string can be used to identify a row variable, and defaults to ["batch"], ["input"], ["output"]
+    respectively when parsing ["..."]. The [given_] fields count the number of specified axes of the
+    corresponding kind in [labels]. *)
 
 let axis_labels parsed = parsed.labels
 
@@ -69,46 +69,43 @@ type compose_type =
   | Pointwise_bin  (** NumPy-style broadcast matching batch, input and output axes, e.g. as in [s1 + s2]. *)
   | Compose
       (** Compose the outputs of the second shape with the inputs of the first shape, i.e. the shape of
-      [fun x -> s1(s2(x))], or [s1 * s2] where [*] is the inner product (e.g. matrix multiply). *)
+          [fun x -> s1(s2(x))], or [s1 * s2] where [*] is the inner product (e.g. matrix multiply). *)
   | Einsum of string
-      (** The [einsum] syntax: LABELS1;LABELS2=>LABELS3, where LABELSi are labels specifications.
-      Since OCANNL's extended einsum notation supports both axis variables and row variables, it makes
-      other compose types redundant.
-      The [axis_labels] use pseudo-labels local to the notation, to line up the axes.
-      For [Einsum (ls1^";"^ls2^"=>"^ls3)], the symmetric difference / disjunctive union of [ls1] and [ls2]'s
-      pseudo-labels should be equal to [ls3] pseudo-labels.
+      (** The [einsum] syntax: LABELS1;LABELS2=>LABELS3, where LABELSi are labels specifications. Since
+          OCANNL's extended einsum notation supports both axis variables and row variables, it makes other
+          compose types redundant. The [axis_labels] use pseudo-labels local to the notation, to line up the
+          axes. For [Einsum (ls1^";"^ls2^"=>"^ls3)], the symmetric difference / disjunctive union of [ls1] and
+          [ls2]'s pseudo-labels should be equal to [ls3] pseudo-labels.
 
-      Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
+          Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
 [@@deriving sexp, equal]
 
 type transpose_type =
   | Transpose  (** Swaps inputs and outputs of a shape, preserves batch axes. *)
   | Pointwise_un  (** Preserves the shape. *)
   | Permute of string
-      (** [Permute (ls1^"=>"^ls2)] is a variant of the [einsum] syntax [Einsum (ls1^";"^ls1^"=>"^ls2)].
-      Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
+      (** [Permute (ls1^"=>"^ls2)] is a variant of the [einsum] syntax [Einsum (ls1^";"^ls1^"=>"^ls2)]. Note:
+          The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
   | Batch_slice of Arrayjit.Indexing.static_symbol  (** Removes the leftmost batch axis. *)
 [@@deriving equal, sexp]
 
 (** Parses a labels specification.
 
-  * If [spec] contains any of: [' '; ','; '('; ')'], these characters are used as label separators.
-    Otherwise, every character is a label.
-  * If [spec] does not contain ["|"] nor ["->"], each label is of the kind [Output].
-  * If [spec] doesn't contain ["|"], labels to the left of ["->"] are [Input] and to the right [Output].
-  * Labels to the left of ["|"] are [Batch], and between ["|"] and ["->"] are [Input].
+    * If [spec] contains any of: [' '; ','; '('; ')'], these characters are used as label separators.
+    Otherwise, every character is a label. * If [spec] does not contain ["|"] nor ["->"], each label is of the
+    kind [Output]. * If [spec] doesn't contain ["|"], labels to the left of ["->"] are [Input] and to the
+    right [Output]. * Labels to the left of ["|"] are [Batch], and between ["|"] and ["->"] are [Input].
 
-    The labels ["..ident.."], ["..."] (where [ident] does not contain any of the special characters)
-    are only allowed at the first axis of a kind (i.e. last from-end).
-    They are used to enable broadcasting for the axis kind in the einsum-related shape inference
-    (like the ellipsis ["..."] in [numpy.einsum]), and are translated to row variables.
-    The ellipsis ["..."] is context dependent: in the batch row it is the same as ["..batch.."],
-    in the input row the same as ["..input.."], in the output row the same as ["..output.."].
+    The labels ["..ident.."], ["..."] (where [ident] does not contain any of the special characters) are only
+    allowed at the first axis of a kind (i.e. last from-end). They are used to enable broadcasting for the
+    axis kind in the einsum-related shape inference (like the ellipsis ["..."] in [numpy.einsum]), and are
+    translated to row variables. The ellipsis ["..."] is context dependent: in the batch row it is the same as
+    ["..batch.."], in the input row the same as ["..input.."], in the output row the same as ["..output.."].
     When the same row variable is used in multiple rows, the corresponding broadcasted axes are matched
     pointwise in the resulting operation.
 
-    The label ["_"] is a place-holder: it is not output to the resulting map but aligns the axes
-    of other labels. *)
+    The label ["_"] is a place-holder: it is not output to the resulting map but aligns the axes of other
+    labels. *)
 let axis_labels_of_spec spec : parsed_axis_labels =
   let check_dot ~kind s =
     (* TODO: complain if the row variable specification contains special characters, e.g. [' '; ',']. *)
@@ -191,21 +188,21 @@ let einsum_of_spec spec =
   if String.is_empty rhs2_spec then (rhs1_ls, None, lhs_ls)
   else (rhs1_ls, Some (axis_labels_of_spec rhs2_spec), lhs_ls)
 
-(** How to propagate shape updates and do the last update of [Tensor.t.shape] when finalizing the tensor.
-    Axes are broadcast-expanded on a bottom-up update to fit the incoming shape. *)
+(** How to propagate shape updates and do the last update of [Tensor.t.shape] when finalizing the tensor. Axes
+    are broadcast-expanded on a bottom-up update to fit the incoming shape. *)
 type logic =
   | Broadcast of compose_type * t * t
       (** Matches the shapes for a binary operation.
 
-      For [Broadcast (Einsum (ls1, ls2, ls3), s1, s2)], the labels of [s1] and [s2] must match according
-      to the [ls1], [ls2] lineup, and the resulting shape inherits the labels according to the [ls3] lineup.
-  *)
+          For [Broadcast (Einsum (ls1, ls2, ls3), s1, s2)], the labels of [s1] and [s2] must match according
+          to the [ls1], [ls2] lineup, and the resulting shape inherits the labels according to the [ls3]
+          lineup. *)
   | Transpose of transpose_type * t
-      (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of [s1],
-      hence the name. *)
+      (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of [s1], hence
+          the name. *)
   | Terminal of Arrayjit.Ops.init_op
-      (** Extracts any available shape information from the initialization. E.g.
-      for [File_mapped fn], opens the file [fn] to check its length. *)
+      (** Extracts any available shape information from the initialization. E.g. for [File_mapped fn], opens
+          the file [fn] to check its length. *)
 [@@deriving equal, sexp]
 
 let logic_to_spec = function
@@ -235,17 +232,17 @@ let get_update_id =
 
 type update_step = { shape : t; logic : logic; id : update_id } [@@deriving sexp]
 (** Data required for a shape inference update step. Ideally, an update should be performed at least twice,
-    the second time after all the other relevant updates have been performed for the first time.
-    In OCANNL, this is achieved by performing updates both as the tensors are constructed, and via
-    lazy callbacks as the corresponding [Arrayjit.Indexing] dimensions and projections are first accessed. *)
+    the second time after all the other relevant updates have been performed for the first time. In OCANNL,
+    this is achieved by performing updates both as the tensors are constructed, and via lazy callbacks as the
+    corresponding [Arrayjit.Indexing] dimensions and projections are first accessed. *)
 
 type Row.error_trace += Shape_mismatch of t list
 
 let with_error_trace = ref true
 
-(** Converts an axes-keyed map into three arrays of values: batch axes, input axes, output axes.
-    If the map is incomplete, the result might be invalid: gaps in the array are filled with an arbitrary
-    one of the provided values. *)
+(** Converts an axes-keyed map into three arrays of values: batch axes, input axes, output axes. If the map is
+    incomplete, the result might be invalid: gaps in the array are filled with an arbitrary one of the
+    provided values. *)
 let axis_map_to_dims_bio (type a) ?(default : a option) (idcs : a axis_map) =
   if Map.is_empty idcs then ([||], [||], [||])
   else
@@ -272,9 +269,9 @@ let axis_map_to_dims_bio (type a) ?(default : a option) (idcs : a axis_map) =
     List.iter out_axes ~f:(fun (i, v) -> out.(out_size - i) <- v);
     (bch, inp, out)
 
-(** Converts an axes-keyed map into an array of values using the [force_to_dims] semantics of axes.
-    If the map is incomplete and the [~default] is not given, the result might be invalid: gaps in
-    the array are filled with an arbitrary one of the provided values. *)
+(** Converts an axes-keyed map into an array of values using the [force_to_dims] semantics of axes. If the map
+    is incomplete and the [~default] is not given, the result might be invalid: gaps in the array are filled
+    with an arbitrary one of the provided values. *)
 let axis_map_to_dims_index (type a) ?(default : a option) (idcs : a axis_map) : a array =
   let bch, inp, out = axis_map_to_dims_bio ?default idcs in
   Array.concat [ bch; out; inp ]
@@ -426,13 +423,13 @@ let%track_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : upd
       else
         let slice_v = get_var () in
         let slice_var = Var slice_v in
-        (* Note: at one point this code worked without marking [slice_var] as a solved projection.
-            I don't know why this has not led to the axis being erroneusly expanded in the product space. *)
+        (* Note: at one point this code worked without marking [slice_var] as a solved projection. I don't
+           know why this has not led to the axis being erroneusly expanded in the product space. *)
         let proj_axis_env =
           Map.add_exn Row.dim_map_empty ~key:slice_v ~data:(Arrayjit.Indexing.Iterator static_symbol)
         in
-        (* Expand a batch row instead of reducing one because even if the dimensions are known,
-           the equations are also needed for projection inference. *)
+        (* Expand a batch row instead of reducing one because even if the dimensions are known, the equations
+           are also needed for projection inference. *)
         let num_dims sh = List.length sh.batch.dims in
         if not @@ is_row_var cur_sh.batch.bcast then
           let expanded_batch =
@@ -482,8 +479,8 @@ let%track_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : upd
             @@ Shape_error
                  ("Batch slice: the sliced tensor has too few batch axes", [ Shape_mismatch [ cur_sh; sh ] ])
         else
-          (* Unfortunately, we cannot proceed if both rows have row variables --
-             it would make it hard to connect the shapes once they are inferred with proj_axis_env. *)
+          (* Unfortunately, we cannot proceed if both rows have row variables -- it would make it hard to
+             connect the shapes once they are inferred with proj_axis_env. *)
           raise
           @@ Shape_error
                ( "Batch slice: inference with underspecified batch axes not supported yet",
@@ -673,21 +670,24 @@ let fresh_proj_ids update =
       fresh_shape sh1;
       fresh_shape sh2
 
-(** Computes the indexing into subtensors given the shape information of a tensor. 
-    [derive_projections] should only be invoked when the shapes are fully inferred already! *)
+(** Computes the indexing into subtensors given the shape information of a tensor. [derive_projections] should
+    only be invoked when the shapes are fully inferred already! *)
 let%track_sexp derive_projections (update_step : update_step) : Idx.projections =
   finish_inference ();
   fresh_proj_ids update_step;
   let _debug_update_step : update_step = update_step in
   let (proj_axis_env, ineqs) : proj_axis_env * Row.constraint_ list = get_inequalities update_step in
-  (* We need to solve the equations/inequalities one last time because of fresh row variables
-     potentially generated by [get_inequalities]. Since the variables in the shapes must be substituted-out
-     at this point, the global state is already an empty env, but in principle we want to only find
-     a local solution to not contaminate projections across operations. *)
+  (* We need to solve the equations/inequalities one last time because of fresh row variables potentially
+     generated by [get_inequalities]. Since the variables in the shapes must be substituted-out at this point,
+     the global state is already an empty env, but in principle we want to only find a local solution to not
+     contaminate projections across operations. *)
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage1 ~active_update_rows:[] ineqs Row.empty_env in
-  (* let unsolved, local_env = Row.solve_inequalities ~stage:Stage2 ~active_update_rows:[] unsolved local_env in *)
-  (* let unsolved, local_env = Row.solve_inequalities ~stage:Stage3 ~active_update_rows:[] unsolved local_env in *)
-  (* let unsolved, local_env = Row.solve_inequalities ~stage:Stage4 ~active_update_rows:[] (unsolved) local_env in *)
+  (* let unsolved, local_env = Row.solve_inequalities ~stage:Stage2 ~active_update_rows:[] unsolved local_env
+     in *)
+  (* let unsolved, local_env = Row.solve_inequalities ~stage:Stage3 ~active_update_rows:[] unsolved local_env
+     in *)
+  (* let unsolved, local_env = Row.solve_inequalities ~stage:Stage4 ~active_update_rows:[] (unsolved)
+     local_env in *)
   assert (List.is_empty unsolved);
   let proj_eqs : Row.proj_equation list = Row.get_proj_equations ineqs proj_axis_env local_env in
   let proj_env : Row.proj_env = Row.solve_proj_equations proj_eqs in

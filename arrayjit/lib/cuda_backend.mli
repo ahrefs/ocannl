@@ -31,10 +31,10 @@ val merge :
   src:context ->
   Indexing.unit_bindings ->
   (context * (unit -> Tnode.work) * string) option
-(** Merges the array from the source context into the destination context: [dst =: dst accum src].
-      If the array is hosted, its state on host is undefined after this operation. (A backend may chose
-      to use the host array as a buffer, if that is beneficial.) [name_suffix] is appended to
-      the jitted function's name. Returns [None] if the array is not in the context. *)
+(** Merges the array from the source context into the destination context: [dst =: dst accum src]. If the
+    array is hosted, its state on host is undefined after this operation. (A backend may chose to use the host
+    array as a buffer, if that is beneficial.) [name_suffix] is appended to the jitted function's name.
+    Returns [None] if the array is not in the context. *)
 
 type device
 

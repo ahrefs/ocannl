@@ -105,11 +105,11 @@ type visits =
 type traced_array = {
   nd : Tn.t;
   mutable computations : (Indexing.axis_index array option * t) list;
-      (** The computations (of the tensor node) are retrieved for optimization just as they are populated,
-          so that the inlined code corresponds precisely to the changes to the arrays that would happen
-          up till that point. Within the code blocks paired with an index tuple, all assignments and accesses
-          must happen via the index tuple; if this is not the case for some assignment, the node cannot
-          be virtual. Currently, we only allow for-loop symbols in assignment indices of virtual nodes. *)
+      (** The computations (of the tensor node) are retrieved for optimization just as they are populated, so
+          that the inlined code corresponds precisely to the changes to the arrays that would happen up till
+          that point. Within the code blocks paired with an index tuple, all assignments and accesses must
+          happen via the index tuple; if this is not the case for some assignment, the node cannot be virtual.
+          Currently, we only allow for-loop symbols in assignment indices of virtual nodes. *)
   assignments : int array Hash_set.t;
   accesses : (int array, visits) Hashtbl.t;
       (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
@@ -118,9 +118,9 @@ type traced_array = {
   mutable read_before_write : bool;  (** The node is read before it is written (i.e. it is recurrent). *)
   mutable read_only : bool;
   mutable is_scalar_constexpr : bool;
-      (** True only if the tensor node has all axes of dimension 1, is either zeroed-out or assigned
-          before accessed, is assigned at most once, and from an expression involving only constants
-          or tensor nodes that were at the time is_scalar_constexpr. *)
+      (** True only if the tensor node has all axes of dimension 1, is either zeroed-out or assigned before
+          accessed, is assigned at most once, and from an expression involving only constants or tensor nodes
+          that were at the time is_scalar_constexpr. *)
 }
 [@@deriving sexp_of]
 
@@ -250,8 +250,8 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
       if Option.is_none tn.memory_mode && Hashtbl.exists traced.accesses ~f:is_too_many then
         Tn.update_memory_mode tn Never_virtual 1
         (* The tensor node is read-only/recurrent for this computation, but maybe computed by another one.
-           However, if the memory mode is unspecified, we assume this will be the first computation
-           involving the tensor node. *);
+           However, if the memory mode is unspecified, we assume this will be the first computation involving
+           the tensor node. *);
       if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then (
         traced.read_only <- true;
         if Tn.mode_is_unspecified tn then Tn.update_memory_mode tn (Hosted Constant) 37

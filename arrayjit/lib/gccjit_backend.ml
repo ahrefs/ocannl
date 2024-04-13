@@ -53,16 +53,16 @@ type ndarray = {
   nd : Tn.t;  (** The original array. *)
   mutable ptr : (Gccjit.rvalue[@sexp.opaque]) Lazy.t;
       (** Pointer to the first value of the associated array.
-      - if [mem = Constant_from_host], the pointer to the first element of the hosted [Ndarray],
-      - if [mem = From_context], either a pointer to [Ndarray] from [context.arrays] when [~shared:false],
-        or the function parameter when [~shared:true],
-      - if [mem = Local_only], the address of the on-the-stack array. *)
+          - if [mem = Constant_from_host], the pointer to the first element of the hosted [Ndarray],
+          - if [mem = From_context], either a pointer to [Ndarray] from [context.arrays] when [~shared:false],
+            or the function parameter when [~shared:true],
+          - if [mem = Local_only], the address of the on-the-stack array. *)
   mem : mem_properties;
   dims : int array;
   size_in_bytes : int;
   num_typ : (Gccjit.type_[@sexp.opaque]);
-      (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]),
-          [double] (precision [Double]). *)
+      (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]), [double]
+          (precision [Double]). *)
   is_double : bool;
 }
 [@@deriving sexp_of]
@@ -285,8 +285,8 @@ let jit_code ~name ~log_functions ~env ({ ctx; arrays; _ } as info) func initial
   let c_double = Type.get ctx Type.Double in
   let cast_bool num_typ v = RValue.cast ctx (RValue.cast ctx v c_int) num_typ in
   let to_d v = RValue.cast ctx v c_double in
-  (* Source of unique identifiers. E.g. local scope ids can be non-unique due to inlining.
-     We also need unique ids for computation ordering lvalues. *)
+  (* Source of unique identifiers. E.g. local scope ids can be non-unique due to inlining. We also need unique
+     ids for computation ordering lvalues. *)
   let uid = ref 0 in
   let get_uid () =
     let id =
@@ -436,8 +436,8 @@ let jit_code ~name ~log_functions ~env ({ ctx; arrays; _ } as info) func initial
         (* Scope ids can be non-unique due to inlining. *)
         let v_name = Int.("v" ^ to_string i ^ "_" ^ get_uid ()) in
         let lvalue = Function.local func typ v_name in
-        (* Arrays are initialized to 0 by default. However, there is typically an explicit
-           initialization for virtual nodes. *)
+        (* Arrays are initialized to 0 by default. However, there is typically an explicit initialization for
+           virtual nodes. *)
         Block.assign !current_block lvalue @@ RValue.zero ctx typ;
         let old_locals = !locals in
         locals := Map.update !locals id ~f:(fun _ -> (lvalue, typ, prec_is_double prec));
@@ -623,11 +623,9 @@ let%track_sexp maybe_jit ~(name : string) ~opt_ctx_arrays bindings
   if Option.is_none !root_ctx then initialize ();
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
   Context.set_option ctx Context.Optimization_level !optimization_level;
-  (*
-if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
-  Context.set_option ctx Context.Keep_intermediates true;
-  Context.set_option ctx Context.Dump_everything true);
-*)
+  (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
+     Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx Context.Dump_everything
+     true); *)
   let info, ctx_arrays, params = jit_func ~name ~opt_ctx_arrays ctx bindings compiled in
   (if Utils.settings.output_debug_files_in_run_directory then
      let f_name = name ^ "-gccjit-debug.c" in
@@ -643,11 +641,9 @@ let%track_sexp maybe_jit_batch ~(names : string array) ~opt_ctx_arrays bindings
   if Option.is_none !root_ctx then initialize ();
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
   Context.set_option ctx Context.Optimization_level !optimization_level;
-  (*
-  if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
-    Context.set_option ctx Context.Keep_intermediates true;
-    Context.set_option ctx Context.Dump_everything true);
-  *)
+  (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
+     Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx Context.Dump_everything
+     true); *)
   let funcs =
     Array.map2_exn names compileds ~f:(fun name compiled ->
         jit_func ~name ~opt_ctx_arrays ctx bindings compiled)
@@ -701,13 +697,13 @@ let%track_sexp jit_routine (old_context : context) (code : routine) : context * 
         | bs, Log_file_name :: ps -> Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Param_ptr tn :: ps ->
             let nd = match Map.find arrays tn with Some nd -> nd | None -> assert false in
-            (* let f ba = Ctypes.bigarray_start Ctypes_static.Genarray ba in
-               let c_ptr = Ndarray.(map { f } nd) in *)
+            (* let f ba = Ctypes.bigarray_start Ctypes_static.Genarray ba in let c_ptr = Ndarray.(map { f }
+               nd) in *)
             let c_ptr = Ndarray.get_voidptr nd in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
       in
-      (* Folding by [link] above reverses the input order. Important: [code.bindings] are traversed
-         in the wrong order but that's OK because [link] only uses them to check the number of indices. *)
+      (* Folding by [link] above reverses the input order. Important: [code.bindings] are traversed in the
+         wrong order but that's OK because [link] only uses them to check the number of indices. *)
       link code.bindings (List.rev code.params) Ctypes.(void @-> returning void)]
   in
   let schedule () =

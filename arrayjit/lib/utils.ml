@@ -105,8 +105,8 @@ let config_file_args =
       Stdio.printf "\nWelcome to OCANNL! Configuration defaults file is disabled.\n%!";
       Hashtbl.create (module String)
 
-(** Retrieves [arg_name] argument from the command line or from an environment variable, returns
-    [default] if none found. *)
+(** Retrieves [arg_name] argument from the command line or from an environment variable, returns [default] if
+    none found. *)
 let get_global_arg ~default ~arg_name:n =
   let with_debug = settings.with_debug && not (Hash_set.mem accessed_global_args n) in
   if with_debug then
@@ -283,8 +283,8 @@ let sorted_diff ~compare l1 l2 =
   in
   (loop [] l1 l2 [@nontail])
 
-(** [parallel_merge merge num_devices] progressively invokes the pairwise [merge] callback, converging
-    on the 0th position, with [from] ranging from [1] to [num_devices - 1], and [to_ < from]. *)
+(** [parallel_merge merge num_devices] progressively invokes the pairwise [merge] callback, converging on the
+    0th position, with [from] ranging from [1] to [num_devices - 1], and [to_ < from]. *)
 let%track_sexp parallel_merge merge (num_devices : int) =
   let rec loop (upper : int) : unit =
     let is_even = (upper + 1) % 2 = 0 in

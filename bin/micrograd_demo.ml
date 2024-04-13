@@ -69,11 +69,9 @@ let experiment seed ~use_builtin_weight_decay () =
   let routine = Backend.jit ctx bindings (Seq (update.fwd_bprop, sgd)) in
   Train.all_host_to_device (module Backend) routine.context scalar_loss;
   Train.all_host_to_device (module Backend) routine.context learning_rate;
-  (* Stdio.print_endline "\n******** scalar_loss **********";
-     Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 scalar_loss;
-     Stdio.print_endline "\n******** learning_rate **********";
-     Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
-     Stdio.printf "\n********\n%!"; *)
+  (* Stdio.print_endline "\n******** scalar_loss **********"; Tensor.print_tree ~with_id:true ~with_grad:false
+     ~depth:9 scalar_loss; Stdio.print_endline "\n******** learning_rate **********"; Tensor.print_tree
+     ~with_id:true ~with_grad:false ~depth:9 learning_rate; Stdio.printf "\n********\n%!"; *)
   let open Tensor.O in
   let epoch_loss = ref 0. in
   let step_ref = IDX.find_exn routine.bindings step_n in
@@ -87,8 +85,8 @@ let experiment seed ~use_builtin_weight_decay () =
       Backend.await device;
       assert (Backend.to_host routine.context learning_rate.value);
       assert (Backend.to_host routine.context scalar_loss.value);
-      (* Stdio.printf "Data batch=%d, step=%d, lr=%f, batch loss=%f\n%!" !batch_ref !step_ref learning_rate.@[0]
-         scalar_loss.@[0]; *)
+      (* Stdio.printf "Data batch=%d, step=%d, lr=%f, batch loss=%f\n%!" !batch_ref !step_ref
+         learning_rate.@[0] scalar_loss.@[0]; *)
       learning_rates := learning_rate.@[0] :: !learning_rates;
       losses := scalar_loss.@[0] :: !losses;
       epoch_loss := !epoch_loss +. scalar_loss.@[0];

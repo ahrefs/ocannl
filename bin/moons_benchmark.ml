@@ -30,8 +30,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   Utils.settings.output_debug_files_in_run_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   Random.init (* seed *) 0;
-  (* let hid_2_3 = 8 in
-     let hid_4_5 = 4 in *)
+  (* let hid_2_3 = 8 in let hid_4_5 = 4 in *)
   let hid_dim = 16 in
   (* let hid_dim = 4 in *)
   let len = batch_size * 20 in
@@ -55,19 +54,9 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   let moons_classes ~b = TDSL.init_const ~l:"moons_classes" ~b ~o:[ 1 ] moons_classes in
 
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
-  (* *
-     let%op mlp x =
-       "b6" 1
-       + "w6"
-         * ?/("b4" hid_4_5
-             + "w4"
-               * ?/("b2" hid_2_3
-                   + ("w2" * ?/("b1" 16 + ("w1" * x)))
-                   + "b3" hid_2_3
-                   + ("w3" * ?/(b2 + (w2 * ?/(b1 + (w1 * x))))))
-             + ("b5" hid_4_5 + ("w5" * ?/(b4 + (w4 * ?/(b3 + (w3 * ?/(b2 + (w2 * ?/(b1 + (w1 * x)))))))))))
-     in
-     * *)
+  (* * let%op mlp x = "b6" 1 + "w6" * ?/("b4" hid_4_5 + "w4" * ?/("b2" hid_2_3 + ("w2" * ?/("b1" 16 + ("w1" *
+     x))) + "b3" hid_2_3 + ("w3" * ?/(b2 + (w2 * ?/(b1 + (w1 * x)))))) + ("b5" hid_4_5 + ("w5" * ?/(b4 + (w4 *
+     ?/(b3 + (w3 * ?/(b2 + (w2 * ?/(b1 + (w1 * x))))))))))) in * *)
   let%op mlp x = "b3" 1 + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
   let%op loss_fn ~output ~expectation = ?/(!..1 - (expectation *. output)) in
   let start_time = ref None in
@@ -167,13 +156,9 @@ let benchmarks =
                           ~backend_name CDSL.single;
                       ])))))
 
-(*
-let time_of = function PrintBox_utils.Benchmark { time_in_sec; _ } -> time_in_sec
-let nth_best nth bench =
-  let results = List.init 5 ~f:(fun seed -> bench ~seed ()) in
-  let sorted = List.sort results ~compare:(fun r1 r2 -> Float.compare (time_of r1) (time_of r2)) in
-  List.nth_exn sorted (nth - 1)
-*)
+(* let time_of = function PrintBox_utils.Benchmark { time_in_sec; _ } -> time_in_sec let nth_best nth bench =
+   let results = List.init 5 ~f:(fun seed -> bench ~seed ()) in let sorted = List.sort results ~compare:(fun
+   r1 r2 -> Float.compare (time_of r1) (time_of r2)) in List.nth_exn sorted (nth - 1) *)
 
 let fixed_seed_search seed =
   classify_moons ~seed ~on_device:true ~inlining_cutoff:3 ~num_devices:1 ~batch_size:20 ~backend_name:"cuda"
@@ -182,10 +167,8 @@ let fixed_seed_search seed =
 let _suspended () =
   List.init 20 ~f:fixed_seed_search |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
-(*
-let () =
-  List.map benchmarks ~f:(nth_best 2) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
-*)
+(* let () = List.map benchmarks ~f:(nth_best 2) |> PrintBox_utils.table |> PrintBox_text.output
+   Stdio.stdout *)
 
 let benchmark () =
   List.map benchmarks ~f:(fun bench -> bench ()) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout

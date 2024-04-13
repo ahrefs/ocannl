@@ -23,20 +23,19 @@ type memory_mode =
   | Virtual  (** The tensor node's computations are inlined on a per-scalar basis. *)
   | Never_virtual  (** One of: [Local], [On_device], [Hosted]. *)
   | Local
-      (** The full tensor node is cached for the duration of a computation but not persisted across
-          calls to jitted functions. It is not available for merging across devices. *)
+      (** The full tensor node is cached for the duration of a computation but not persisted across calls to
+          jitted functions. It is not available for merging across devices. *)
   | Device_only  (** One of: [Local], [On_device]. *)
   | On_device
-      (** The tensor node is stored on the devices that compute with it and persisted across function
-          calls. It is available for merging across devices (for devices that support merging / P2P),
-          but not (directly) for visualization or storing to disk. *)
+      (** The tensor node is stored on the devices that compute with it and persisted across function calls.
+          It is available for merging across devices (for devices that support merging / P2P), but not
+          (directly) for visualization or storing to disk. *)
   | Materialized  (** One of: [On_device], [Hosted]. *)
   | Hosted of memory_type
-      (** The tensor node is stored in a globally addressable memory, in addition to on devices
-          where it is computed with (or as part of one of them, if "hosting on device",
-          or only on the host and not on devices, for some backends).
-          It is available for all operations, and visible to OCaml programs as an {!Ndarray}
-          (the optional [array] of {!t}). *)
+      (** The tensor node is stored in a globally addressable memory, in addition to on devices where it is
+          computed with (or as part of one of them, if "hosting on device", or only on the host and not on
+          devices, for some backends). It is available for all operations, and visible to OCaml programs as an
+          {!Ndarray} (the optional [array] of {!t}). *)
 [@@deriving sexp, compare, equal]
 
 type t = {
@@ -45,8 +44,8 @@ type t = {
   dims : (int array Lazy.t[@sexp.opaque]);
   id : int;
   label : string list;
-      (** Display information. It is better if the last element of the list is the most narrow
-          or alphanumeric, e.g. an identifier. *)
+      (** Display information. It is better if the last element of the list is the most narrow or
+          alphanumeric, e.g. an identifier. *)
   mutable memory_mode : (memory_mode * int) option;
   mutable backend_info : Sexp.t;
 }

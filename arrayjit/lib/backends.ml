@@ -41,8 +41,8 @@ module type No_device_backend = sig
   val jit : context -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> routine
 
   val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
-  (** Cleans up all work on a backend.
-      If [~unsafe_shutdown:true], releases resources, potentially making the backend unusable. *)
+  (** Cleans up all work on a backend. If [~unsafe_shutdown:true], releases resources, potentially making the
+      backend unusable. *)
 
   val from_host : context -> Tnode.t -> bool
   (** If the array is both hosted and in-context, copies from host to context and returns true. *)
@@ -51,10 +51,10 @@ module type No_device_backend = sig
   (** If the array is both hosted and in-context, copies from context to host and returns true. *)
 
   val merge : ?name_prefix:string -> Tnode.t -> accum:Ops.binop -> src:context -> code option
-  (** Merges the array from the source context into the destination context: [dst =: dst accum src].
-      If the array is hosted, its state on host is undefined after this operation. (A backend may choose
-      to use the host array as a buffer, if that is beneficial.) [name_prefix] is prepended to
-      the jitted function's name. Returns [None] if the array is not in the context. *)
+  (** Merges the array from the source context into the destination context: [dst =: dst accum src]. If the
+      array is hosted, its state on host is undefined after this operation. (A backend may choose to use the
+      host array as a buffer, if that is beneficial.) [name_prefix] is prepended to the jitted function's
+      name. Returns [None] if the array is not in the context. *)
 
   val merge_batch :
     ?name_prefixes:string array ->

@@ -15,8 +15,8 @@ type ndarray = {
   size_in_bytes : int;
   size_in_elems : int;
   num_typ : string;
-      (** The type of the stored values:
-          [short] (precision [Half]), [float] (precision [Single]), [double] (precision [Double]). *)
+      (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]), [double]
+          (precision [Double]). *)
   is_double : bool;
 }
 [@@deriving sexp_of]
@@ -185,8 +185,8 @@ let prec_to_c_type = function
   | Single_prec _ -> "float"
   | Double_prec _ -> "double"
 
-(* let compute_array_offset ~idcs ~dims =
-   Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx + (offset * dim)) *)
+(* let compute_array_offset ~idcs ~dims = Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx +
+   (offset * dim)) *)
 
 module Debug_runtime = Utils.Debug_runtime
 
@@ -311,8 +311,8 @@ let jit_code ~traced_store info ppf llc : unit =
     match vcomp with
     | Local_scope { id = { scope_id = i; _ } as id; prec; body; orig_indices = _ } ->
         let typ = prec_to_c_type prec in
-        (* Arrays are initialized to 0 by default. However, there is typically an explicit
-           initialization for virtual nodes. *)
+        (* Arrays are initialized to 0 by default. However, there is typically an explicit initialization for
+           virtual nodes. *)
         fprintf ppf "@[<2>{@ %s v%d = 0;@ " typ i;
         locals := Map.update !locals id ~f:(fun _ -> (typ, Ops.is_double_prec prec));
         pp_ll ppf body;

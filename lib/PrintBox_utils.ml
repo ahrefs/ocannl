@@ -80,8 +80,8 @@ type plot_spec =
 let plot_canvas ?canvas ?(size : (int * int) option) (specs : plot_spec list) :
     float * float * float * float * _ =
   let open Float in
-  (* Unfortunately "x" and "y" of a "matrix" are opposite to how we want them displayed --
-     the first dimension (i.e. "x") as the horizontal axis. *)
+  (* Unfortunately "x" and "y" of a "matrix" are opposite to how we want them displayed -- the first dimension
+     (i.e. "x") as the horizontal axis. *)
   let (dimx, dimy, canvas) : int * int * _ =
     match (canvas, size) with
     | None, None -> invalid_arg "PrintBox_utils.plot: provide ~canvas or ~size"

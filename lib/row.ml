@@ -112,8 +112,8 @@ type row_constraint =
       (** The row or remainder of a row, inclusive of the further row spec, has this many elements. *)
 [@@deriving equal, hash, compare, sexp, variants]
 
-(** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved].
-    [cur] and [subr] must be sorted using the [@@deriving compare] comparison. *)
+(** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved]. [cur] and [subr] must
+    be sorted using the [@@deriving compare] comparison. *)
 type dim_entry =
   | Solved_dim of dim
   | Bounds_dim of { cur : dim_var list; subr : dim_var list; lub : dim option; constr : dim_constraint }
@@ -492,7 +492,8 @@ let%track_sexp rec unify_row ~stage (eq : t * t) (env : environment) : constrain
             List.fold ~init:([], env) ~f:solve !ineqs
         | Some (Solved_row _) -> assert false
         | Some (Bounds_row { cur; subr; lub; constr }) ->
-            (* TODO: audit code to ensure we don't lose the constraints associated with the bounds variables. *)
+            (* TODO: audit code to ensure we don't lose the constraints associated with the bounds
+               variables. *)
             let row_env : row_env = Map.map env.row_env ~f in
             List.iter cur ~f:(fun cur ->
                 ineqs := Row_ineq { cur = row_of_var cur value.id; subr = r2 } :: !ineqs);
@@ -636,10 +637,8 @@ let%track_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env :
             | Dim _, Dim _ (* when d1 <> d2 *) ->
                 let lub = get_dim ~d:1 () in
                 (lub, [ Dim_eq { d1 = subr; d2 = lub } ])
-                (* raise
-                   @@ Shape_error
-                        ( "dimension comparison for axis: upper bound mismatch",
-                          [ Dim_mismatch [ lub2; cur; subr ] ] ) *)
+                (* raise @@ Shape_error ( "dimension comparison for axis: upper bound mismatch", [
+                   Dim_mismatch [ lub2; cur; subr ] ] ) *)
             | Var _, _ | _, Var _ -> assert false
           in
           let from_constr, constr2 = apply_dim_constraint ~source:Cur ~stage cur constr2 env in
@@ -752,15 +751,14 @@ let%track_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : env
       | Some (Solved_row _), _ | _, Some (Solved_row _) -> assert false)
   | { bcast = Row_var v_cur; dims; _ }, _ when r1_len < r2_len ->
       let more_dims : dim list = Array.(to_list @@ init (r2_len - r1_len) ~f:(fun _ -> Var (get_var ()))) in
-      (* The key of the template cache reflects that v_cur will end up substituted by
-         {dims=more_dims; bcast=Row_var templ_v}.
-         TODO: should we cache more_dims also? *)
+      (* The key of the template cache reflects that v_cur will end up substituted by {dims=more_dims;
+         bcast=Row_var templ_v}. TODO: should we cache more_dims also? *)
       let templ_v : row_var =
         Hashtbl.find_or_add global_template_cache (v_cur, r2_len - r1_len) ~default:get_row_var
       in
       let template : t = { dims = more_dims @ dims; bcast = Row_var templ_v; id = cur.id } in
-      (* We don't need to add any dimension inequalities, because they'll be captured by
-         the extra row inequalities. *)
+      (* We don't need to add any dimension inequalities, because they'll be captured by the extra row
+         inequalities. *)
       ([ Row_eq { r1 = cur; r2 = template }; Row_ineq { cur = template; subr } ], env)
   | { bcast = Broadcastable; _ }, _ when r1_len < r2_len ->
       raise @@ Shape_error ("Too many axes", [ Row_mismatch [ cur; subr ] ])
@@ -994,8 +992,8 @@ type proj_env = {
 type proj_equation =
   | Proj_eq of proj * proj  (** Two projections are the same, e.g. two axes share the same iterator. *)
   | Iterated of proj
-      (** The projection needs to be an iterator even if an axis is not matched with another axis,
-          e.g. for broadcasted-to axes of a tensor assigned a constant. *)
+      (** The projection needs to be an iterator even if an axis is not matched with another axis, e.g. for
+          broadcasted-to axes of a tensor assigned a constant. *)
 [@@deriving compare, equal, sexp]
 
 let%track_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_env (env : environment) :

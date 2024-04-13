@@ -120,8 +120,8 @@ let c_typ_of_prec =
 (** Initializes or resets a array by filling in the corresponding numbers, at the appropriate precision. *)
 type init_op =
   | Constant_fill of { values : float array; strict : bool }
-      (** Fills in the numbers where the rightmost axis is contiguous. If [strict=true], loops over
-          the provided values. *)
+      (** Fills in the numbers where the rightmost axis is contiguous. If [strict=true], loops over the
+          provided values. *)
   | Range_over_offsets
       (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
   | Standard_uniform  (** Draws the values from U(0,1). *)
@@ -131,8 +131,8 @@ type init_op =
 type binop = Add | Sub | Mul | Div | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp, compare, equal]
 type unop = Identity | Relu [@@deriving sexp, compare, equal]
 
-(** Either the left-neutral or right-neutral element of the operation.
-    Unspecified if the operation does not have a neutral element. *)
+(** Either the left-neutral or right-neutral element of the operation. Unspecified if the operation does not
+    have a neutral element. *)
 let neutral_elem = function
   | Add | Sub -> 0.
   | Mul | Div -> 1.

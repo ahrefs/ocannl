@@ -60,8 +60,8 @@ type row_constraint =
       (** The row or remainder of a row, inclusive of the further row spec, has this many elements. *)
 [@@deriving equal, hash, compare, sexp, variants]
 
-(** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved].
-    [cur] and [subr] must be sorted using the [@@deriving compare] comparison. *)
+(** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved]. [cur] and [subr] must
+    be sorted using the [@@deriving compare] comparison. *)
 type dim_entry =
   | Solved_dim of dim
   | Bounds_dim of { cur : dim_var list; subr : dim_var list; lub : dim option; constr : dim_constraint }
@@ -106,8 +106,8 @@ val fresh_row_proj : t -> t
 type proj_equation =
   | Proj_eq of proj * proj  (** Two projections are the same, e.g. two axes share the same iterator. *)
   | Iterated of proj
-      (** The projection needs to be an iterator even if an axis is not matched with another axis,
-          e.g. for broadcasted-to axes of a tensor assigned a constant. *)
+      (** The projection needs to be an iterator even if an axis is not matched with another axis, e.g. for
+          broadcasted-to axes of a tensor assigned a constant. *)
 [@@deriving compare, equal, sexp]
 
 val get_proj_equations :
