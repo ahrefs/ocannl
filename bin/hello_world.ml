@@ -89,8 +89,9 @@ let hello4 () =
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ positions;
   Stdio.print_endline "tk:";
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ tk;
+  Stdio.print_endline "ti:";
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ti;
   Stdio.printf "\n%!"
-(* FIXME: this should be 6x3. *)
 
 let () =
   ignore (hello1, hello2, hello3);

@@ -49,8 +49,8 @@ let () =
   in
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
   (* The [let x =] line is the same as this except [let%op x =] uses [~grad_spec:If_needed]. *)
-  (* let%op x = x_flat @| step_sym in *)
-  let x = Operation.slice ~label:[ "x" ] ~grad_spec:Require_grad step_sym x_flat in
+  let%op x = x_flat @| step_sym in
+  (* let x = Operation.slice ~label:[ "x" ] ~grad_spec:Require_grad step_sym x_flat in *)
   Train.set_hosted (Option.value_exn x.diff).grad;
   let%op fx = f x in
   Stdio.print_endline "\n";
