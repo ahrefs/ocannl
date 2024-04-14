@@ -76,16 +76,15 @@ let hello4 () =
   Random.init 0;
   let ri = TDSL.range 3 in
   let%op ti = ri ++ "i=>i0" in
-  (* Read from position 2 of ti, otherwise shape inference concludes it's dim-1 and broadcasted. *)
-  (* FIXME: should not need removing. Also, the shape inference stopped working. *)
-  (* let%op _ = ti ++ "i2=>0" in *)
-  let%op force_shape = ti ++ "i2=>0" in
-  Tensor.remove_fwd_root force_shape;
   let rj = TDSL.range 4 in
   let%op tj = rj ++ "j=>j1" in
   let rk = TDSL.range 5 in
   let%op tk = rk ++ "k=>k2" in
   let positions = TDSL.outer_sum "ijl;kl=>ijkl" (TDSL.outer_sum "il;jl=>ijl" ti tj) tk in
+  (* Write position 2 of ti, otherwise shape inference concludes it's dim-1 and broadcasted. *)
+  (* TODO(#252): when `_` disables removing roots, this can go next to the definition of `ti`. *)
+  let%cd _ = ti =: 0 ++"i=>i2" in
+  Train.set_hosted ti.value;
   Train.set_hosted tk.value;
   Train.forward_and_forget backend ctx positions;
   Stdio.print_endline "positions:";
@@ -96,6 +95,18 @@ let hello4 () =
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ti;
   Stdio.printf "\n%!"
 
+let hello5 () =
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
+  Random.init 0;
+  let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
+  let%op ho = hey ++ "...|1->... => ...|..." in
+  Train.forward_and_forget backend ctx ho;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey;
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho
+
 let () =
-  ignore (hello1, hello2, hello3);
+  ignore (hello1, hello2, hello3, hello4, hello5);
   hello4 ()
