@@ -2,6 +2,8 @@
 
 OCANNL is sponsored by [Ahrefs](https://ocaml.org/success-stories/peta-byte-scale-web-crawler)! [Visit the Ahrefs website.](https://ahrefs.com/)
 
+Note: due to a pending PR, OCANNL currently requires installing the fork https://github.com/lukstafi/npy-ocaml locally.
+
 ## OCANNL -- OCaml Compiles Algorithms for Neural Networks Learning
 
 * A from-scratch, compiled Deep Learning framework.
