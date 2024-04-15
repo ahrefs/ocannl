@@ -417,25 +417,45 @@ let%track_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : upd
           Row_ineq { cur = cur_sh.output; subr = sh2.output };
         ] )
   | Transpose (Batch_slice { static_range; static_symbol }, sh) ->
-      if is_row_var sh.batch.bcast && is_row_var cur_sh.batch.bcast then
-        (* Wait for more information *)
-        (Row.dim_map_empty, [])
-      else
-        let slice_v = get_var () in
-        let slice_var = Var slice_v in
-        (* Note: at one point this code worked without marking [slice_var] as a solved projection. I don't
-           know why this has not led to the axis being erroneusly expanded in the product space. *)
-        let proj_axis_env =
-          Map.add_exn Row.dim_map_empty ~key:slice_v ~data:(Arrayjit.Indexing.Iterator static_symbol)
+      let slice_v = get_var () in
+      let slice_var = Var slice_v in
+      let proj_axis_env =
+        Map.add_exn Row.dim_map_empty ~key:slice_v ~data:(Arrayjit.Indexing.Iterator static_symbol)
+      in
+      (* Expand a batch row instead of reducing one because even if the dimensions are known, the equations
+         are also needed for projection inference. *)
+      let num_dims sh = List.length sh.batch.dims in
+      if not @@ is_row_var cur_sh.batch.bcast then
+        let expanded_batch =
+          {
+            dims = slice_var :: cur_sh.batch.dims;
+            bcast = cur_sh.batch.bcast;
+            id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch;
+          }
         in
-        (* Expand a batch row instead of reducing one because even if the dimensions are known, the equations
-           are also needed for projection inference. *)
-        let num_dims sh = List.length sh.batch.dims in
-        if not @@ is_row_var cur_sh.batch.bcast then
+        ( proj_axis_env,
+          (Option.to_list static_range
+          |> List.map ~f:(fun range -> Dim_eq { d1 = get_dim ~d:range (); d2 = slice_var }))
+          @ [
+              Row_eq { r1 = expanded_batch; r2 = sh.batch };
+              Row_eq { r1 = cur_sh.input; r2 = sh.input };
+              Row_eq { r1 = cur_sh.output; r2 = sh.output };
+            ] )
+      else if not @@ is_row_var sh.batch.bcast then
+        if num_dims cur_sh < num_dims sh then
+          let matching_batch =
+            {
+              dims =
+                List.init (num_dims sh - num_dims cur_sh - 1) ~f:(fun _ -> Var (get_var ()))
+                @ cur_sh.batch.dims;
+              bcast = Broadcastable;
+              id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch;
+            }
+          in
           let expanded_batch =
             {
-              dims = slice_var :: cur_sh.batch.dims;
-              bcast = cur_sh.batch.bcast;
+              dims = slice_var :: matching_batch.dims;
+              bcast = Broadcastable;
               id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch;
             }
           in
@@ -443,48 +463,32 @@ let%track_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : upd
             (Option.to_list static_range
             |> List.map ~f:(fun range -> Dim_eq { d1 = get_dim ~d:range (); d2 = slice_var }))
             @ [
+                Row_eq { r1 = matching_batch; r2 = cur_sh.batch };
                 Row_eq { r1 = expanded_batch; r2 = sh.batch };
                 Row_eq { r1 = cur_sh.input; r2 = sh.input };
                 Row_eq { r1 = cur_sh.output; r2 = sh.output };
               ] )
-        else if not @@ is_row_var sh.batch.bcast then
-          if num_dims cur_sh < num_dims sh then
-            let matching_batch =
-              {
-                dims =
-                  List.init (num_dims sh - num_dims cur_sh - 1) ~f:(fun _ -> Var (get_var ()))
-                  @ cur_sh.batch.dims;
-                bcast = Broadcastable;
-                id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch;
-              }
-            in
-            let expanded_batch =
-              {
-                dims = slice_var :: matching_batch.dims;
-                bcast = Broadcastable;
-                id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch;
-              }
-            in
-            ( proj_axis_env,
-              (Option.to_list static_range
-              |> List.map ~f:(fun range -> Dim_eq { d1 = get_dim ~d:range (); d2 = slice_var }))
-              @ [
-                  Row_eq { r1 = matching_batch; r2 = cur_sh.batch };
-                  Row_eq { r1 = expanded_batch; r2 = sh.batch };
-                  Row_eq { r1 = cur_sh.input; r2 = sh.input };
-                  Row_eq { r1 = cur_sh.output; r2 = sh.output };
-                ] )
-          else
-            raise
-            @@ Shape_error
-                 ("Batch slice: the sliced tensor has too few batch axes", [ Shape_mismatch [ cur_sh; sh ] ])
         else
-          (* Unfortunately, we cannot proceed if both rows have row variables -- it would make it hard to
-             connect the shapes once they are inferred with proj_axis_env. *)
           raise
           @@ Shape_error
-               ( "Batch slice: inference with underspecified batch axes not supported yet",
-                 [ Shape_mismatch [ cur_sh; sh ] ] )
+               ("Batch slice: the sliced tensor has too few batch axes", [ Shape_mismatch [ cur_sh; sh ] ])
+      else
+        let reverse_row_var = Row_var (get_row_var ()) in
+        let reverse_expanded_batch =
+          { dims = [ slice_var ]; bcast = reverse_row_var; id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch }
+        in
+        let reverse_batch =
+          { dims = []; bcast = reverse_row_var; id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch }
+        in
+        ( proj_axis_env,
+          (Option.to_list static_range
+          |> List.map ~f:(fun range -> Dim_eq { d1 = get_dim ~d:range (); d2 = slice_var }))
+          @ [
+              Reverse_eq { r1 = reverse_batch; r2 = cur_sh.batch };
+              Reverse_eq { r1 = reverse_expanded_batch; r2 = sh.batch };
+              Row_eq { r1 = cur_sh.input; r2 = sh.input };
+              Row_eq { r1 = cur_sh.output; r2 = sh.output };
+            ] )
   | Transpose (Permute spec, sh) ->
       let ls_rhs, ls_lhs =
         match einsum_of_spec spec with
@@ -798,7 +802,7 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
   | Not_constrained -> ()
   | Input_equals_output -> (
       try
-        let more_ineqs, env = Row.unify_row ~stage:Stage2 (input, output) !state in
+        let more_ineqs, env = Row.unify_row ~reverse:false ~stage:Stage2 (input, output) !state in
         assert (List.is_empty more_ineqs);
         state := env
       with Shape_error (s, trace) when !with_error_trace ->
@@ -829,7 +833,7 @@ let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
   | Not_constrained -> ()
   | Input_equals_output -> (
       try
-        let more_ineqs, env = Row.unify_row ~stage:Stage2 (input, output) !state in
+        let more_ineqs, env = Row.unify_row ~reverse:false ~stage:Stage2 (input, output) !state in
         assert (List.is_empty more_ineqs);
         state := env
       with Row.Shape_error (s, trace) when !with_error_trace ->

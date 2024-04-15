@@ -75,6 +75,8 @@ type row_entry =
 type constraint_ =
   | Dim_eq of { d1 : dim; d2 : dim }
   | Row_eq of { r1 : t; r2 : t }
+  | Reverse_eq of { r1 : t; r2 : t }
+      (** If [r1] does not have a row variable, same as [Row_eq {r1={r1 with dims=List.rev r1.dims}; r2}]. *)
   | Dim_ineq of { cur : dim; subr : dim }
   | Row_ineq of { cur : t; subr : t }
   | Dim_constr of { d : dim; constr : dim_constraint }
@@ -86,7 +88,7 @@ type constraint_ =
 type stage = Stage1 | Stage2 | Stage3 | Stage4 [@@deriving sexp, equal, compare, variants]
 
 val subst_row : environment -> t -> t
-val unify_row : stage:stage -> t * t -> environment -> constraint_ list * environment
+val unify_row : reverse:bool -> stage:stage -> t * t -> environment -> constraint_ list * environment
 val empty_env : environment
 
 val solve_inequalities :

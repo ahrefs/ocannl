@@ -134,6 +134,7 @@ type environment = { dim_env : dim_env; row_env : row_env } [@@deriving sexp]
 type constraint_ =
   | Dim_eq of { d1 : dim; d2 : dim }
   | Row_eq of { r1 : t; r2 : t }
+  | Reverse_eq of { r1 : t; r2 : t }
   | Dim_ineq of { cur : dim; subr : dim }
   | Row_ineq of { cur : t; subr : t }
   | Dim_constr of { d : dim; constr : dim_constraint }
@@ -198,8 +199,8 @@ let row_conjunction ?(id = phantom_row_id) constr1 constr2 =
       else if Sequence.for_all ~f:Either.is_second subsum then Some (extras ~keep_constr1:true, constr1)
       else None
 
-let%track_sexp apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim)
-    (constr : dim_constraint) (env : environment) : constraint_ list * dim_constraint =
+let%track_sexp apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim) (constr : dim_constraint)
+    (env : environment) : constraint_ list * dim_constraint =
   let extras, constr =
     match (dim, constr) with
     | Dim { d; _ }, At_least_dim d_min ->
@@ -438,13 +439,17 @@ let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
 let take_from_end (l : dim list) (n : int) : dim list = List.rev @@ List.take (List.rev l) n
 
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
-let%track_sexp rec unify_row ~stage (eq : t * t) (env : environment) : constraint_ list * environment =
+let%track_sexp rec unify_row ~reverse ~stage (eq : t * t) (env : environment) : constraint_ list * environment
+    =
   let rec solve (ineqs, env) = function
     | Dim_eq { d1; d2 } ->
         let more_ineqs, env = unify_dim ~stage (d1, d2) env in
         List.fold ~init:(ineqs, env) more_ineqs ~f:solve
     | Row_eq { r1; r2 } ->
-        let more_ineqs, env = unify_row ~stage (r1, r2) env in
+        let more_ineqs, env = unify_row ~reverse:false ~stage (r1, r2) env in
+        (more_ineqs @ ineqs, env)
+    | Reverse_eq { r1; r2 } ->
+        let more_ineqs, env = unify_row ~reverse:true ~stage (r1, r2) env in
         (more_ineqs @ ineqs, env)
     | (Dim_ineq _ | Row_ineq _ | Dim_constr _ | Row_constr _ | Terminal_dim _ | Terminal_row _) as ineq ->
         (ineq :: ineqs, env)
@@ -456,7 +461,10 @@ let%track_sexp rec unify_row ~stage (eq : t * t) (env : environment) : constrain
   in
   let r1 : t = subst_row env @@ fst eq and r2 : t = subst_row env @@ snd eq in
   match (r1, r2) with
-  | r1, r2 when equal_row r1 r2 -> ([], env)
+  | r1, r2 when (not reverse) && equal_row r1 r2 -> ([], env)
+  | { bcast = Row_var _; dims = _; id = _ }, { bcast = Row_var _; dims = _; id = _ } when reverse ->
+      (* For simplicity, we do not incrementally solve reverse equalities. *)
+      ([ Reverse_eq { r1; r2 } ], env)
   | { bcast = Row_var v1; dims = r1_dims; id = _ }, { bcast = Row_var v2; dims = r2_dims; id = _ }
     when equal_row_var v1 v2 ->
       let r1_len = List.length r1_dims and r2_len = List.length r2.dims in
@@ -466,17 +474,18 @@ let%track_sexp rec unify_row ~stage (eq : t * t) (env : environment) : constrain
   | r2, ({ bcast = Row_var v; dims = r1_dims; id } as r1) -> (
       let r1_len : int = List.length r1_dims and r2_len : int = List.length r2.dims in
       if r1_len > r2_len then
-        if is_row_var r2.bcast then unify_row ~stage (r2, r1) env
+        if is_row_var r2.bcast then unify_row ~reverse ~stage (r2, r1) env
         else raise @@ Shape_error ("Number of axes mismatch", [ Row_mismatch [ r1; r2 ] ])
       else
+        let r1_dims = if reverse then List.rev r1_dims else r1_dims in
         let ineqs, env =
           try unify_prefix r1_dims r2.dims r1_len
           with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ r1; r2 ] :: trace)
         in
-        let occurs_check_error =
-          Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch [ r1; r2 ] ])
-        in
-        let value : row = { bcast = r2.bcast; dims = drop_from_end r2.dims r1_len; id } in
+        let orig_rows = [ r1; r2 ] in
+        let dims = drop_from_end r2.dims r1_len in
+        let dims = if reverse then List.rev dims else dims in
+        let value : row = { bcast = r2.bcast; dims; id } in
         (* From now on, we have no use for un-reduced r2 since we deal with the row variable. *)
         let r2 = value in
         let ineqs : constraint_ list ref = ref ineqs in
@@ -491,7 +500,10 @@ let%track_sexp rec unify_row ~stage (eq : t * t) (env : environment) : constrain
             let env : environment =
               match r2.bcast with
               | Row_var v2 when equal_row_var v v2 ->
-                  if List.is_empty value.dims then env else raise occurs_check_error
+                  if List.is_empty value.dims then env
+                  else
+                    raise
+                    @@ Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch orig_rows ])
               | _ -> { env with row_env = Map.add_exn row_env ~key:v ~data:(Solved_row value) }
             in
             List.fold ~init:([], env) ~f:solve !ineqs
@@ -511,6 +523,7 @@ let%track_sexp rec unify_row ~stage (eq : t * t) (env : environment) : constrain
             List.fold ~init:([], env) ~f:solve !ineqs)
   | ( ({ bcast = Broadcastable; dims = dims1; id = _ } as r1),
       ({ bcast = Broadcastable; dims = dims2; id = _ } as r2) ) -> (
+      let dims1 = if reverse then List.rev dims1 else dims1 in
       match List.zip dims1 dims2 with
       | Unequal_lengths -> raise @@ Shape_error ("Mismatching number of axes", [ Row_mismatch [ r1; r2 ] ])
       | Ok eqs -> List.fold ~init:([], env) ~f:(fun acc (d1, d2) -> solve acc (Dim_eq { d1; d2 })) eqs)
@@ -886,7 +899,11 @@ let%track_sexp solve_inequalities ~(stage : stage) ~active_update_rows (ineqs : 
           (more_ineqs @ ineqs, env)
       | Row_eq { r1; r2 } ->
           (* Substituted inside unify_row. *)
-          let more_ineqs, env = unify_row ~stage (r1, r2) env in
+          let more_ineqs, env = unify_row ~reverse:false ~stage (r1, r2) env in
+          (more_ineqs @ ineqs, env)
+      | Reverse_eq { r1; r2 } ->
+          (* Substituted inside unify_row. *)
+          let more_ineqs, env = unify_row ~reverse:true ~stage (r1, r2) env in
           (more_ineqs @ ineqs, env)
       | Dim_ineq { cur; subr } ->
           let cur = subst_dim env cur and subr = subst_dim env subr in
@@ -926,7 +943,9 @@ let%track_sexp solve_inequalities ~(stage : stage) ~active_update_rows (ineqs : 
     in
     let ineqs', env = List.fold ineqs ~init:([], env) ~f in
     let ineqs' = List.rev ineqs' in
-    let all_constr = List.for_all ~f:(fun b -> is_row_constr b || is_terminal_row b || is_terminal_dim b) in
+    let all_constr =
+      List.for_all ~f:(fun b -> is_reverse_eq b || is_row_constr b || is_terminal_row b || is_terminal_dim b)
+    in
     if
       List.is_empty ineqs'
       || (all_constr ineqs' && all_constr ineqs && List.length ineqs' >= List.length ineqs)
@@ -1022,8 +1041,9 @@ let%track_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_en
         | _ -> dims)
     | { dims; _ } -> dims
   in
-  let match_rows with_broadcasting r1 r2 =
+  let match_rows ~reverse ~with_broadcasting r1 r2 =
     let dims1 = expand_dims r1 and dims2 = expand_dims r2 in
+    let dims1 = if reverse then List.rev dims1 else dims1 in
     let len1 = List.length dims1 in
     let len = min len1 (List.length dims2) in
     let extras =
@@ -1038,9 +1058,10 @@ let%track_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_en
     | Dim_ineq { cur = _; subr = Dim { d = 1; proj_id = Some proj_id; _ } } ->
         [ Proj_eq (Proj { proj_id; d = 1 }, Solved (Fixed_idx 0)) ]
     | Dim_eq { d1; d2 } | Dim_ineq { cur = d1; subr = d2 } -> [ Proj_eq (to_proj d1, to_proj d2) ]
-    | Row_eq { r1; r2 } -> match_rows false r1 r2
+    | Row_eq { r1; r2 } -> match_rows ~reverse:false ~with_broadcasting:false r1 r2
+    | Reverse_eq { r1; r2 } -> match_rows ~reverse:true ~with_broadcasting:false r1 r2
     | Row_ineq { cur = r1; subr = r2 } ->
-        match_rows true r1 r2
+        match_rows ~reverse:false ~with_broadcasting:true r1 r2
         |> List.concat_map ~f:(function
              | Proj_eq (proj1, (Proj { proj_id = _; d = 1 } as proj2)) ->
                  [ Iterated proj1; Proj_eq (proj2, Solved (Fixed_idx 0)) ]

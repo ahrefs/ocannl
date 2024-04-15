@@ -2,12 +2,12 @@
 
 ### Added
 
-- TODO: `let%cd _ =` (and `let%op _ =`?) do not affect root tracking (intended for adding shape constraints).
-- TODO: a new constraint `Reverse_eq`, currently for inferring slice shapes.
+- `let%cd _ =` (and `let%op _ =`?) do not affect root tracking (intended for adding shape constraints).
+- W new constraint `Reverse_eq`, currently for inferring slice shapes.
 
 ### Changed
 
-- TODO: slice shape inference is now complete, by using `Reverse_eq`.
+- Slice shape inference is now complete, by using `Reverse_eq`.
 
 ## [0.3.1] -- 2024-04-15
 

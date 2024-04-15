@@ -149,10 +149,9 @@ let%expect_test "Graph drawing fetch" =
                        │    │<not-in-yet>       │                   │                   │ |}];
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
-  (* FIXME: Test that the batch axis dimensions will be inferred. *)
+  (* Yay, the whole shape gets inferred! *)
   let x_flat =
-    Tensor.term ~grad_spec:Require_grad ~label:[ "x_flat" ] ~batch_dims:[ size ] ~input_dims:[]
-      ~output_dims:[ 1 ]
+    Tensor.term ~grad_spec:Require_grad ~label:[ "x_flat" ]
       ~init_op:(Constant_fill { values = xs; strict = true })
       ()
   in

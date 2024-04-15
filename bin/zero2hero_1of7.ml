@@ -35,7 +35,8 @@ let _suspended () =
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   Stdio.printf "\n%!"
 
-let () =
+let _suspended () =
+  (* FIXME: why is this toplevel example broken and the next one working? *)
   Utils.settings.output_debug_files_in_run_directory <- true;
   Random.init 0;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
@@ -80,6 +81,54 @@ let () =
       [
         Scatterplot { points = Array.zip_exn values ys; pixel = "#" };
         Scatterplot { points = Array.zip_exn values dys; pixel = "*" };
+        Line_plot { points = Array.create ~len:20 0.; pixel = "-" };
+      ]
+  in
+  PrintBox_text.output Stdio.stdout plot_box
+
+let () =
+  Random.init 0;
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.get_device ~ordinal:0 in
+  let ctx = Backend.init device in
+  let open Tensor.O in
+  CDSL.virtualize_settings.enable_device_only <- false;
+  let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
+  let%op f5 = f 5 in
+  Train.every_non_literal_on_host f5;
+  Train.forward_and_forget (module Backend) ctx f5;
+  Tensor.print_tree ~with_grad:false ~depth:9 f5;
+  let size = 100 in
+  let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
+  (* Yay, the whole shape gets inferred! *)
+  let x_flat =
+    Tensor.term ~grad_spec:Require_grad ~label:[ "x_flat" ]
+      ~init_op:(Constant_fill { values = xs; strict = true })
+      ()
+  in
+  let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
+  let%op x = x_flat @| step_sym in
+  let%op fx = f x in
+  Train.set_hosted x.value;
+  Train.set_hosted (Option.value_exn x.diff).grad;
+  let update = Train.grad_update fx in
+  let fx_routine = Backend.jit ctx bindings update.fwd_bprop in
+  let step_ref = IDX.find_exn fx_routine.bindings step_sym in
+  let ys, dys =
+    Array.unzip
+    @@ Array.mapi xs ~f:(fun i _ ->
+           step_ref := i;
+           Train.sync_run backend fx_routine fx;
+           (fx.@[0], x.@%[0]))
+  in
+  (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
+  let plot_box =
+    let open PrintBox_utils in
+    plot ~size:(75, 35) ~x_label:"x" ~y_label:"f(x)"
+      [
+        Scatterplot { points = Array.zip_exn xs ys; pixel = "#" };
+        Scatterplot { points = Array.zip_exn xs dys; pixel = "*" };
         Line_plot { points = Array.create ~len:20 0.; pixel = "-" };
       ]
   in

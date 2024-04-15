@@ -53,6 +53,7 @@ type environment = { dim_env : dim_env; row_env : row_env }
 type constraint_ =
   | Dim_eq of { d1 : dim; d2 : dim }
   | Row_eq of { r1 : t; r2 : t }
+  | Reverse_eq of { r1 : t; r2 : t }
   | Dim_ineq of { cur : dim; subr : dim }
   | Row_ineq of { cur : t; subr : t }
   | Dim_constr of { d : dim; constr : dim_constraint }
@@ -137,6 +138,7 @@ Let's explain the shape inference functions.
 * `unify_dim`: solves a single equation between two values of type `dim`, and recursively all `dim` equations that this entails, but not other constraints.
 * `unify_row`: solves a single equation between two rows, and recursively all `dim` and `row` equations that this entails, but not other constraints.
   * This is a depth-first component of an otherwise breadth-first overall constraint solution process, a "simplify early" optimization.
+  * It also solves equal-to-reverse `Reverse_eq` constraints. For simplicity, it postpones solving till at most one row variable remains in a `Reverse_eq`.
 * `apply_dim_constraint` resp. `apply_row_constraint`: if they cannot make any progress on the constraint, they return `None`. Otherwise, they return a list of derived constraints, and an updated `dim_constraint` resp. `row_constraint`.
 * `solve_dim_ineq`: solves a single inequality between two values of type `dim`; returns derived equations and inequalities. It maintains the between-variable bounds and the least-upper-bound (LUB). But there can only be one LUB (a dimension > 1) without forcing the bound variable itself to a solved form (with dimension = 1).
 * `solve_row_ineq`: solves a single inequality between two rows; returns derived equations and inequalities. It derives between-`dim` inequalities from the known parts of the compared rows. It maintains between-row-variable bounds (when known parts of the rows match) and the LUB. It forces the `cur` side to have at least the number of axes of the `subr` side (via a variables-only `template`). It updates the LUB by computing dimensions-wise LUBs.
