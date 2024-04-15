@@ -76,14 +76,13 @@ let hello4 () =
   Random.init 0;
   let ri = TDSL.range 3 in
   let%op ti = ri ++ "i=>i0" in
+  (* Write position 2 of ti, otherwise shape inference concludes it's dim-1 and broadcasted. *)
+  let%cd _ = ti =: 0 ++ "i=>i2" in
   let rj = TDSL.range 4 in
   let%op tj = rj ++ "j=>j1" in
   let rk = TDSL.range 5 in
   let%op tk = rk ++ "k=>k2" in
   let positions = TDSL.outer_sum "ijl;kl=>ijkl" (TDSL.outer_sum "il;jl=>ijl" ti tj) tk in
-  (* Write position 2 of ti, otherwise shape inference concludes it's dim-1 and broadcasted. *)
-  (* TODO(#252): when `_` disables removing roots, this can go next to the definition of `ti`. *)
-  let%cd _ = ti =: 0 ++"i=>i2" in
   Train.set_hosted ti.value;
   Train.set_hosted tk.value;
   Train.forward_and_forget backend ctx positions;

@@ -798,7 +798,11 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
 
 let translate ?ident_label (expr : expression) : expression =
   let _, _, v = translate ?ident_label ~proj_in_scope:false expr in
-  v
+  match ident_label with
+  | Some [%pat? _] ->
+      let loc = v.pexp_loc in
+      [%expr Tensor.with_unchanged_roots ~f:(fun () -> [%e v])]
+  | _ -> v
 
 type extension = Cd | Dt | Rs [@@deriving equal, variants]
 

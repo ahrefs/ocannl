@@ -257,14 +257,16 @@ let translate_str ({ pstr_desc; pstr_loc = loc; _ } as str) =
   | Pstr_value (recf, bindings) ->
       let f vb =
         let loc = vb.pvb_loc in
-        let vbs, v = translate ~ident_label:vb.pvb_pat vb.pvb_expr in
+        let ident_label = vb.pvb_pat in
+        let vbs, v = translate ~ident_label vb.pvb_expr in
+        let is_unused = match ident_label with [%pat? _] -> true | _ -> false in
         let v = let_opt ~loc vbs v in
         {
           vb with
           pvb_expr =
             [%expr
               let open! TDSL.O in
-              [%e v]];
+              [%e if is_unused then [%expr Tensor.with_unchanged_roots ~f:(fun () -> [%e v])] else v]];
         }
       in
       { str with pstr_desc = Pstr_value (recf, List.map bindings ~f) }

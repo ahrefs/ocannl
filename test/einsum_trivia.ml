@@ -1311,21 +1311,20 @@ let%expect_test "outer_sum simulating axis concatenation" =
   Random.init 0;
   let ri = TDSL.range 3 in
   let%op ti = ri ++ "i=>i0" in
+  (* Write position 2 of ti, otherwise shape inference concludes it's dim-1 and broadcasted. *)
+  let%cd _ = ti =: 0 ++ "i=>i2" in
   let rj = TDSL.range 4 in
   let%op tj = rj ++ "j=>j1" in
   let rk = TDSL.range 5 in
   let%op tk = rk ++ "k=>k2" in
   let positions = TDSL.outer_sum "ijl;kl=>ijkl" (TDSL.outer_sum "il;jl=>ijl" ti tj) tk in
-  (* Write position 2 of ti, otherwise shape inference concludes it's dim-1 and broadcasted. *)
-  (* TODO(#252): when `_` disables removing roots, this can go next to the definition of `ti`. *)
-  let%cd _ = ti =: 0 ++"i=>i2" in
   Train.set_hosted tk.value;
   Train.forward_and_forget backend ctx positions;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ positions;
   [%expect
     {|
     ┌────────────────────────────────────┐
-    │[56]: ;=>+ shape 0:4,1:5,2:6,3:3    │
+    │[58]: ;=>+ shape 0:4,1:5,2:6,3:3    │
     │┌──────┬───────────────────────────┐│
     ││0 @ 0 │axis 3                     ││
     │├──────┼───────────────────────────┤│
@@ -1480,7 +1479,7 @@ let%expect_test "outer_sum simulating axis concatenation" =
   [%expect
     {|
       ┌────────────────────────────────────┐
-      │[54]: =>_tk shape 0:6,1:3           │
+      │[56]: =>_tk shape 0:6,1:3           │
       │┌──────┬───────────────────────────┐│
       ││      │axis 1                     ││
       │├──────┼───────────────────────────┤│
