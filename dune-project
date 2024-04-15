@@ -19,6 +19,14 @@
 
 (documentation https://github.com/lukstafi/ocannl/blob/master/README.md)
 
+; While we wait to upstream Npy.Npz.restore, pin the fork.
+
+(pin
+ (url "git+https://github.com/lukstafi/npy-ocaml#master")
+ (package
+  (name npy)
+  (version 0.0.9)))
+
 (package
  (name arrayjit)
  (synopsis
