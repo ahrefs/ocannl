@@ -56,7 +56,7 @@ type dim_constraint = Unconstrained_dim | At_least_dim of int
 
 type row_constraint =
   | Unconstrained
-  | Total_elems of { numerator : int; divided_by : dim_var_set }
+  | Total_elems of { nominator : int; divided_by : dim_var_set }
       (** The row or remainder of a row, inclusive of the further row spec, has this many elements. *)
 [@@deriving equal, hash, compare, sexp, variants]
 

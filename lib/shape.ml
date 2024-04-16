@@ -360,7 +360,7 @@ let%track_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : upd
         Row_constr
           {
             r = cur_sh.batch;
-            constr = Total_elems { numerator = batch_elems; divided_by = dim_var_set_empty };
+            constr = Total_elems { nominator = batch_elems; divided_by = dim_var_set_empty };
           }
         :: mark_terminal () )
   | Terminal (File_mapped (filename, prec)) ->
@@ -380,7 +380,7 @@ let%track_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : upd
         Row_constr
           {
             r = cur_sh.batch;
-            constr = Total_elems { numerator = batch_elems; divided_by = dim_var_set_empty };
+            constr = Total_elems { nominator = batch_elems; divided_by = dim_var_set_empty };
           }
         :: mark_terminal () )
   | Transpose (Transpose, sh) ->

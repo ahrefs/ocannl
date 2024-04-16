@@ -108,7 +108,7 @@ type dim_constraint = Unconstrained_dim | At_least_dim of int
 
 type row_constraint =
   | Unconstrained
-  | Total_elems of { numerator : int; divided_by : Set.M(Dim_var).t }
+  | Total_elems of { nominator : int; divided_by : Set.M(Dim_var).t }
       (** The row or remainder of a row, inclusive of the further row spec, has this many elements. *)
 [@@deriving equal, hash, compare, sexp, variants]
 
@@ -179,20 +179,20 @@ let row_conjunction ?(id = phantom_row_id) constr1 constr2 =
   match (constr1, constr2) with
   | Unconstrained, _ -> Some ([], constr2)
   | _, Unconstrained -> Some ([], constr1)
-  | Total_elems { numerator = n1; divided_by = vars1 }, Total_elems { numerator = n2; divided_by = vars2 }
+  | Total_elems { nominator = n1; divided_by = vars1 }, Total_elems { nominator = n2; divided_by = vars2 }
     when [%equal: Set.M(Dim_var).t] vars1 vars2 ->
       if n1 <> n2 then elems_mismatch n1 n2 else Some ([], constr2)
-  | Total_elems { numerator = n1; divided_by = vars1 }, Total_elems { numerator = n2; divided_by = vars2 } ->
+  | Total_elems { nominator = n1; divided_by = vars1 }, Total_elems { nominator = n2; divided_by = vars2 } ->
       let shared = Set.inter vars1 vars2 |> Set.to_list in
       let extras ~keep_constr1 =
         (* If we keep constr1, then it has fewer divided_by, i.e. n1 > n2. *)
-        let numerator = if keep_constr1 then n1 / n2 else n2 / n1 in
-        if numerator <= 0 then elems_mismatch n1 n2
-        else if numerator = 1 then List.map shared ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
+        let nominator = if keep_constr1 then n1 / n2 else n2 / n1 in
+        if nominator <= 0 then elems_mismatch n1 n2
+        else if nominator = 1 then List.map shared ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
         else if List.is_empty shared then []
         else
           let r = { dims = List.map shared ~f:(fun v -> Var v); bcast = Broadcastable; id } in
-          [ Row_constr { r; constr = Total_elems { numerator; divided_by = Set.empty (module Dim_var) } } ]
+          [ Row_constr { r; constr = Total_elems { nominator; divided_by = Set.empty (module Dim_var) } } ]
       in
       let subsum = Set.symmetric_diff vars1 vars2 in
       if Sequence.for_all ~f:Either.is_first subsum then Some (extras ~keep_constr1:false, constr2)
@@ -251,11 +251,11 @@ let apply_row_constraint ~stage r constr env =
     match (r, constr) with
     | _ when stored && not updated -> (extras, env)
     | _, Unconstrained -> assert false
-    | { dims; bcast = Row_var _; _ }, Total_elems { numerator; divided_by }
+    | { dims; bcast = Row_var _; _ }, Total_elems { nominator; divided_by }
       when Set.is_empty divided_by && not (is_stage1 stage) -> (
         let vars, nonvars = List.partition_tf dims ~f:is_var in
         let known = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
-        let rem = numerator / known in
+        let rem = nominator / known in
         if rem = 0 then raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ])
         else if rem = 1 then ([], env)
         else
@@ -265,11 +265,11 @@ let apply_row_constraint ~stage r constr env =
               (Row_eq { r1 = r; r2 = { dims = [ dim ]; bcast = Broadcastable; id = r.id } } :: extras, env)
           | Var v :: _ -> (Dim_eq { d1 = Var v; d2 = get_dim ~d:rem () } :: extras, env)
           | Dim _ :: _ -> assert false)
-    | { dims; bcast = Broadcastable; _ }, Total_elems { numerator; divided_by } when Set.is_empty divided_by
+    | { dims; bcast = Broadcastable; _ }, Total_elems { nominator; divided_by } when Set.is_empty divided_by
       -> (
         let vars, nonvars = List.partition_tf dims ~f:is_var in
         let known = List.fold nonvars ~init:1 ~f:(fun n d -> n * dim_to_int_exn d) in
-        let rem = numerator / known in
+        let rem = nominator / known in
         if rem = 0 then raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ])
         else
           match vars with
@@ -282,7 +282,7 @@ let apply_row_constraint ~stage r constr env =
           | Var _ :: _ when stored -> (extras, env)
           | Var _ :: _ -> (Row_constr { r; constr } :: extras, env (* Wait for more shape inference. *))
           | Dim _ :: _ -> assert false)
-    | { bcast = Row_var _; _ }, _ | _, Total_elems { numerator = _; divided_by = (* not empty *) _ } ->
+    | { bcast = Row_var _; _ }, _ | _, Total_elems { nominator = _; divided_by = (* not empty *) _ } ->
         if stored then (extras, env)
         else (Row_constr { r; constr } :: extras, env (* Wait for more shape inference. *))
 
@@ -312,14 +312,14 @@ let s_dim_one_in_row v ~value in_ =
 
 let s_dim_one_in_row_constr v ~value constr =
   match constr with
-  | Total_elems { numerator; divided_by } when Set.mem divided_by v -> (
+  | Total_elems { nominator; divided_by } when Set.mem divided_by v -> (
       let divided_by = Set.remove divided_by v in
       match value with
-      | Var v' -> Total_elems { numerator; divided_by = Set.(add divided_by v') }
+      | Var v' -> Total_elems { nominator; divided_by = Set.(add divided_by v') }
       | Dim { d; _ } ->
-          let numerator = numerator / d in
-          if numerator <= 0 then raise @@ Shape_error ("Total_elems constraint failed: too many elements", [])
-          else Total_elems { numerator; divided_by })
+          let nominator = nominator / d in
+          if nominator <= 0 then raise @@ Shape_error ("Total_elems constraint failed: too many elements", [])
+          else Total_elems { nominator; divided_by })
   | _ -> constr
 
 let s_dim_one_in_row_entry v ~value in_ =
