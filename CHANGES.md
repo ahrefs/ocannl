@@ -1,4 +1,4 @@
-## [0.3.2] -- current
+## [0.3.2] -- 2024-04-16
 
 ### Added
 
@@ -8,6 +8,10 @@
 ### Changed
 
 - Slice shape inference is now complete, by using `Reverse_eq`.
+
+### Fixed
+
+- Moved `cudajit` to `depopts`.
 
 ## [0.3.1] -- 2024-04-15
 

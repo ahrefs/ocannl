@@ -43,7 +43,6 @@
   ctypes-foreign
   (gccjit
    (>= 0.3.2))
-  cudajit
   printbox
   printbox-text
   npy
@@ -54,6 +53,7 @@
   ppx_expect
   (ppx_minidebug
    (>= 1.5)))
+ (depopts cudajit)
  (tags
   (deeplearning array jit gccjit CUDA)))
 
