@@ -186,20 +186,6 @@ let range_of_shape ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?batch_dims
     ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
     ~init_op:Range_over_offsets ()
 
-(** In {!Tensor.term} the omitted axes are {!Shape.Unknown} -- to be inferred, here they are known and empty. *)
-let data ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?batch_dims ?input_dims ?output_dims ?batch_axes
-    ?input_axes ?output_axes fetch_op =
-  let batch_dims = Option.first_some batch_dims @@ Option.some_if (Option.is_none batch_axes) [] in
-  let input_dims = Option.first_some input_dims @@ Option.some_if (Option.is_none input_axes) [] in
-  let output_dims = Option.first_some output_dims @@ Option.some_if (Option.is_none output_axes) [] in
-  if
-    List.for_all
-      ~f:(Fn.compose List.is_empty @@ Option.value ~default:[])
-      [ batch_dims; input_dims; output_dims ]
-  then invalid_arg "Operation.data: data ops do not support shape inference, specify dims";
-  Tensor.term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
-    ~fetch_op ()
-
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient ?(label = []) =
   let module NTDSL = Initial_NTDSL in
@@ -264,12 +250,15 @@ module TDSL = struct
   let einsum1 = einsum1 ~grad_spec:If_needed
   let range = range ~grad_spec:If_needed
   let range_of_shape = range_of_shape ~grad_spec:If_needed
-  let data = data
   let stop_gradient = stop_gradient
 
-  let init_const ~l ?(b = []) ?(i = []) ?(o = []) values =
-    Tensor.term ~label:[ l ] ~grad_spec:Prohibit_grad ~batch_dims:b ~input_dims:i ~output_dims:o
-      ~init_op:(Constant_fill { values; strict = false })
+  (** The input [i] dimensions default to empty. The batch dimensions will be inferred if omitted. [strict]
+      controls whether [Constant_fill] will try to fit the given values in the tensor and contribute to shape
+      inference. If it is not provided explicitly, it will be [true] if [b] is omitted, and [false] otherwise. *)
+  let init_const ~l ?strict ?b ?(i = []) ~o values =
+    let strict = match (strict, b) with Some s, _ -> s | None, Some _ -> false | None, None -> true in
+    Tensor.term ~label:[ l ] ~grad_spec:Prohibit_grad ?batch_dims:b ~input_dims:i ~output_dims:o
+      ~init_op:(Constant_fill { values; strict })
       ()
 
   (** It's like `Tensor.param` but without shape inference. *)
