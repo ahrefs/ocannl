@@ -129,7 +129,10 @@ The constraints are solved by: unification of the equation constraints, unificat
 * Stage 1 is online as tensors are composed, and conservatively performs unification and constraint propagation. Stages 2, 3, 4 are only performed once necessary: when projections or dimensions are requested.
 * Stage 2, when solving the constraints, substitutes dim variables in terminal shapes that do not have a LUB, by dimension-1.
 * Stage 3, when solving the constraints, sets yet-unknown dimension and row variables in terminal shapes to their least upper bounds (if any).
-* Stage 4 applies defeasible heuristics. It sets yet-unknown dimensions to their lower bounds from direct accesses. It sets all remaining variables to dimension-1 resp. no-further-axes values. Only then it solves the resulting constraints.
+* Stage 4 applies defeasible heuristics.
+  * Stage 4A sets yet-unknown dimensions to their lower bounds from direct accesses.
+  * Stage 4B sets yet-unknown row variables with a `Total_elems` constraint (without any remaining `divided_by` variables), to one axis of the required dimension.
+  * Stage 4C sets all remaining variables to dimension-1 resp. no-further-axes values.
 
 Let's explain the shape inference functions.
 
@@ -143,8 +146,7 @@ Let's explain the shape inference functions.
 * `solve_dim_ineq`: solves a single inequality between two values of type `dim`; returns derived equations and inequalities. It maintains the between-variable bounds and the least-upper-bound (LUB). But there can only be one LUB (a dimension > 1) without forcing the bound variable itself to a solved form (with dimension = 1).
 * `solve_row_ineq`: solves a single inequality between two rows; returns derived equations and inequalities. It derives between-`dim` inequalities from the known parts of the compared rows. It maintains between-row-variable bounds (when known parts of the rows match) and the LUB. It forces the `cur` side to have at least the number of axes of the `subr` side (via a variables-only `template`). It updates the LUB by computing dimensions-wise LUBs.
 * `close_dim_terminal` and `close_row_terminal`: produce the equal-to-LUB constraint when available, from `Terminal_dim` and `Terminal_row` constraints produced for shapes of leaf tensors in tensor expressions, but only when `~stage:true`.
-* `solve_inequalities`: solves equations, inequalities, and row constraints, until only row constraints remain. Row constraints can "pass" if there is not enough information, rather than reflecting their effect in the environment. Calls `close_dim_terminal` and `close_row_terminal` as appropriate (when `stage`).
-* `finalize_row`: substitutes the remaining row variables by `Broadcastable` and the remaining dim variables by dim 1. It's called by `finish_inference` only, after a run of `solve_inequalities ~stage:true`.
+* `solve_inequalities`: solves equations, inequalities, and row constraints, until only row constraints remain. Row constraints can "pass" if there is not enough information, rather than reflecting their effect in the environment. Calls `close_dim_terminal` and `close_row_terminal` as appropriate.
 
 The rationale behind only closing leaf (terminal) tensor shapes to their LUBs, while closing the remaining ones to dim-1:
 

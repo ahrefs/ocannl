@@ -93,7 +93,6 @@ val empty_env : environment
 
 val solve_inequalities :
   stage:stage ->
-  active_update_rows:t list ->
   constraint_ list ->
   environment ->
   constraint_ list * environment
