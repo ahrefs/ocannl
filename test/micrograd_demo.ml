@@ -100,15 +100,20 @@ let%expect_test "Micrograd half-moons example" =
   in
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_n, bindings = IDX.get_static_symbol bindings in
-  let moons_flat = TDSL.init_const ~l:"moons_flat" ~b:[ n_batches; batch_size ] ~o:[ 2 ] moons_flat in
+  (* FIXME: should also work with explicit batch shape. *)
+  let moons_flat = TDSL.init_const ~l:"moons_flat" (* ~b:[ n_batches; batch_size ] *) ~o:[ 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
+  (* FIXME: should also work with explicit batch shape. *)
   let moons_classes =
-    TDSL.init_const ~l:"moons_classes" ~b:[ n_batches; batch_size ] ~o:[ 1 ] moons_classes
+    TDSL.init_const ~l:"moons_classes" (* ~b:[ n_batches; batch_size ] *) ~o:[ 1 ] moons_classes
   in
   let%op mlp x = "b3" + ("w3" * ?/("b2" 16 + ("w2" * ?/("b1" 16 + ("w1" * x))))) in
   (* Don't decay the learning rate too quickly, it behaves better than in the original. *)
   let%op moons_input = moons_flat @| batch_n in
+  (* Tell shape inference to make a minibatch axis. *)
+  let%cd _ = moons_input =: 0 ++ "i=>2|i" in
   let%op moons_class = moons_classes @| batch_n in
+  let%cd _ = moons_class =: 0 ++ "i=>2|i" in
   let losses = ref [] in
   let log_losses = ref [] in
   let learning_rates = ref [] in

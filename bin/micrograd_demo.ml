@@ -40,9 +40,9 @@ let experiment seed ~use_builtin_weight_decay () =
   let%op mlp x = "b3" + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
   let%op moons_input = moons_flat @| batch_n in
   (* Tell shape inference to make a minibatch axis. *)
-  let%cd _ = moons_input =: 0 ++ "i=>i|j" in
+  let%cd _ = moons_input =: 0 ++ "i=>2|i" in
   let%op moons_class = moons_classes @| batch_n in
-  let%cd _ = moons_class =: 0 ++ "i=>i|j" in
+  let%cd _ = moons_class =: 0 ++ "i=>2|i" in
   let losses = ref [] in
   let log_losses = ref [] in
   let learning_rates = ref [] in
