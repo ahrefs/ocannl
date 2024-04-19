@@ -548,26 +548,40 @@ let%track_sexp rec unify_row ~stage (eq : t * t) (env : environment) : constrain
         else raise @@ Shape_error ("Number of axes mismatch", [ Row_mismatch [ r1; r2 ] ])
       else
         let orig_rows = [ r1; r2 ] in
-        let ineqs, env =
-          try unify_suffix ([], env) dims1 r2.dims dims1_l
-          with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch orig_rows :: trace)
-        in
-        let dims = drop_from_end r2.dims dims1_l in
-        let beg_handled, (ineqs, env), bcast =
+        let beg_handled, (ineqs, env), value =
           match r2.bcast with
-          | Row_var { v = v2; beg_dims = beg_dims2 } when equal_row_var v v2 ->
-              if List.is_empty dims && l beg_dims2 = l beg_dims1 then
-                ( true,
-                  unify_suffix (ineqs, env) (List.rev beg_dims1) (List.rev beg_dims2) @@ l beg_dims2,
-                  Row_var { v; beg_dims = [] } )
-              else
-                raise @@ Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch orig_rows ])
           | Row_var { v = v2; beg_dims = beg_dims2 } ->
-              let result = unify_suffix (ineqs, env) (List.rev beg_dims1) (List.rev beg_dims2) beg_dims_l in
-              (beg_dims_l = l beg_dims1, result, Row_var { v = v2; beg_dims = List.drop beg_dims2 beg_dims_l })
-          | Broadcastable -> (List.is_empty beg_dims1, (ineqs, env), Broadcastable)
+              let result =
+                try unify_suffix ([], env) dims1 r2.dims dims1_l
+                with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch orig_rows :: trace)
+              in
+              let dims = drop_from_end r2.dims dims1_l in
+              if equal_row_var v v2 then
+                if List.is_empty dims && l beg_dims2 = l beg_dims1 then
+                  let bcast = Row_var { v; beg_dims = [] } in
+                  let value : row = { bcast; dims; id } in
+                  (true, unify_suffix result (List.rev beg_dims1) (List.rev beg_dims2) @@ l beg_dims2, value)
+                else
+                  raise
+                  @@ Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch orig_rows ])
+              else
+                let result = unify_suffix result (List.rev beg_dims1) (List.rev beg_dims2) beg_dims_l in
+                let bcast = Row_var { v = v2; beg_dims = List.drop beg_dims2 beg_dims_l } in
+                let value : row = { bcast; dims; id } in
+                (beg_dims_l = l beg_dims1, result, value)
+          | Broadcastable ->
+              if dims1_l + beg_dims1_l > dims2_l then
+                raise @@ Shape_error ("Number of axes mismatch", [ Row_mismatch [ r1; r2 ] ])
+              else
+                let dims = List.drop r2.dims beg_dims1_l |> Fn.flip drop_from_end dims1_l in
+                let result =
+                  List.zip_exn beg_dims1 (List.take r2.dims beg_dims1_l)
+                  @ List.zip_exn dims1 (take_from_end r2.dims dims1_l)
+                  |> List.fold ~init:([], env) ~f:(fun acc (d1, d2) -> solve acc (Dim_eq { d1; d2 }))
+                in
+                let value : row = { bcast = Broadcastable; dims; id } in
+                (true, result, value)
         in
-        let value : row = { bcast; dims; id } in
         (* From now on, we have no use for un-reduced r2 since we deal with the row variable. *)
         let r2 = value in
         let ineqs : constraint_ list ref = ref ineqs in
