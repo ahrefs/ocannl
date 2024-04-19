@@ -88,7 +88,7 @@ type stage = Stage1 | Stage2 | Stage3 | Stage4 [@@deriving sexp, equal, compare,
 val subst_row : environment -> t -> t
 val unify_row : stage:stage -> t * t -> environment -> constraint_ list * environment
 val empty_env : environment
-val close_row_terminal : stage:stage -> environment -> t -> constraint_ list
+val eliminate_variables : environment -> t -> constraint_ list
 val solve_inequalities : stage:stage -> constraint_ list -> environment -> constraint_ list * environment
 val row_to_labels : environment -> t -> string array
 

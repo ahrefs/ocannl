@@ -257,8 +257,7 @@ let%debug_sexp _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim l
         else Total_elems { nominator = nominator * d; divided_by = Utils.Set_O.(divided_by - vars) }
   | Unconstrained -> Unconstrained
 
-let%track_sexp apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env :
-    constraint_ list * _ =
+let%track_sexp apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : constraint_ list * _ =
   if is_unconstrained constr then ([], env)
   else
     let extras, constr, env, stored, updated =
@@ -327,9 +326,8 @@ let%track_sexp apply_row_constraint ~stage:_ (r : row) (constr : row_constraint)
             if nominator = 1 then (extras, env)
             else raise @@ Shape_error ("Total_elems constraint failed", [ Row_mismatch [ r ] ])
         | [ v ], [] | [], [ v ] -> (Dim_eq { d1 = Var v; d2 = get_dim ~d:nominator () } :: extras, env)
-        (* | v :: _, [] | [], v :: _ when not (is_stage1 stage) ->
-            (* FIXME: which stage should it be? *)
-            (Dim_eq { d1 = Var v; d2 = get_dim ~d:nominator () } :: extras, env) *)
+        (* | v :: _, [] | [], v :: _ when not (is_stage1 stage) -> (* FIXME: which stage should it be? *)
+           (Dim_eq { d1 = Var v; d2 = get_dim ~d:nominator () } :: extras, env) *)
         | _ :: _, _ when stored -> (extras, env)
         | _, _ -> (Row_constr { r; constr } :: extras, env (* Wait for more shape inference. *)))
     | { bcast = Row_var _; _ }, _ | _, Total_elems { nominator = _; divided_by = _ } ->
@@ -967,7 +965,7 @@ let close_dim_terminal ~(stage : stage) (env : environment) (dim : dim) : constr
           [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 () } ]
       | Some (Bounds_dim { lub = Some lub; _ }) when is_stage3_or_4 stage -> [ Dim_eq { d1 = dim; d2 = lub } ]
       | None when is_stage4 stage -> [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 () } ]
-      | _ -> [Terminal_dim dim])
+      | _ -> [ Terminal_dim dim ])
 
 let close_row_terminal ~(stage : stage) (env : environment) ({ dims; bcast; id } as _r : row) :
     constraint_ list =
@@ -993,6 +991,24 @@ let close_row_terminal ~(stage : stage) (env : environment) ({ dims; bcast; id }
       | _ when is_stage4 stage ->
           Row_eq { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id } } :: term_dims
       | _ -> Terminal_row (row_of_var v id) :: term_dims)
+
+let eliminate_variables (env : environment) ({ dims; bcast; id } as r : row) : constraint_ list =
+  let f = function Var _ as d1 -> Some (Dim_eq { d1; d2 = get_dim ~d:1 () }) | _ -> None in
+  let suffix = List.filter_map dims ~f in
+  match bcast with
+  | Broadcastable -> suffix
+  | Row_var { v; beg_dims } -> (
+      let elim_dims = List.filter_map beg_dims ~f @ suffix in
+      let elim_var = Row_eq { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id } } in
+      match Map.find env.row_env v with
+      | Some (Bounds_row { constr = Unconstrained; _ }) -> elim_var :: elim_dims
+      | Some (Bounds_row { constr = Total_elems { nominator = 1; divided_by; _ }; _ })
+        when Set.is_empty divided_by ->
+          elim_var :: elim_dims
+      | Some (Bounds_row { constr; _ }) ->
+          let ineqs, _env = apply_row_constraint ~stage:Stage4 r constr env in
+          ineqs @ elim_dims
+      | _ -> elim_var :: elim_dims)
 
 let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
 

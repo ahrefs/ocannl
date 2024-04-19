@@ -548,19 +548,19 @@ let apply_env_t env sh =
   sh.input <- Row.subst_row env sh.input;
   sh.output <- Row.subst_row env sh.output
 
-let apply_env_update ~close_terminal env update_step =
+let apply_env_update ~eliminate_variables env update_step =
   iter_shapes update_step ~f:(apply_env_t env);
-  if close_terminal then List.concat_map ~f:(Row.close_row_terminal ~stage:Stage4 env) @@ all_rows update_step else []
+  if eliminate_variables then List.concat_map ~f:(Row.eliminate_variables env) @@ all_rows update_step else []
 
 let%track_sexp propagate_shapes (update_step : update_step) : unit =
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice does). *)
-  ignore (apply_env_update ~close_terminal:false !state update_step);
+  ignore (apply_env_update ~eliminate_variables:false !state update_step);
   let _, ineqs = get_inequalities update_step in
   active_update_steps := update_step :: !active_update_steps;
   active_constraints := ineqs @ !active_constraints;
   let ineqs', env = Row.solve_inequalities ~stage:Row.Stage1 ineqs !state in
   let _debug_remaining_constraints : Row.constraint_ list = ineqs' in
-  ignore (apply_env_update ~close_terminal:false env update_step);
+  ignore (apply_env_update ~eliminate_variables:false env update_step);
   state := env
 
 let%track_sexp finish_inference (() : unit) : unit =
@@ -569,10 +569,10 @@ let%track_sexp finish_inference (() : unit) : unit =
   let unsolved, env = Row.solve_inequalities ~stage:Stage3 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage4 unsolved env in
   assert (List.is_empty unsolved);
-  let unsolved = List.concat_map ~f:(apply_env_update ~close_terminal:true env) !active_update_steps in
+  let unsolved = List.concat_map ~f:(apply_env_update ~eliminate_variables:true env) !active_update_steps in
   let unsolved, env = Row.solve_inequalities ~stage:Stage4 unsolved env in
   assert (List.is_empty unsolved);
-  ignore @@ List.map ~f:(apply_env_update ~close_terminal:false env) !active_update_steps;
+  ignore @@ List.map ~f:(apply_env_update ~eliminate_variables:false env) !active_update_steps;
   active_constraints := [];
   active_update_steps := [];
   (* There should not be any shape variables remaining in any inference-undergoing update steps. *)
