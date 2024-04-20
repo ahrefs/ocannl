@@ -7,7 +7,7 @@ module NTDSL = Operation.NTDSL
 module CDSL = Arrayjit.Low_level.CDSL
 module Utils = Arrayjit.Utils
 
-let experiment seed ~use_builtin_weight_decay () =
+let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   Random.init 0;
   Utils.settings.with_debug <- true;
 
@@ -32,17 +32,26 @@ let experiment seed ~use_builtin_weight_decay () =
             let c = cos v and s = sin v in
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
-  let moons_flat = TDSL.init_const ~l:"moons_flat" ~o:[ 2 ] moons_flat in
+  let b = if no_batch_shape_inference then Some [ n_batches; batch_size ] else None in
+  let moons_flat = TDSL.init_const ~l:"moons_flat" ?b ~o:[ 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes = TDSL.init_const ~l:"moons_classes" ~o:[ 1 ] moons_classes in
+  let moons_classes = TDSL.init_const ~l:"moons_classes" ?b ~o:[ 1 ] moons_classes in
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_n, bindings = IDX.get_static_symbol bindings in
   let%op mlp x = "b3" + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
   let%op moons_input = moons_flat @| batch_n in
   (* Tell shape inference to make a minibatch axis. *)
-  let%cd _ = moons_input =: 0 ++ "i=>2|i" in
+  let () =
+    if no_batch_shape_inference then
+      let%cd _ = moons_input =: 0 ++ "i=>2|i" in
+      ()
+  in
   let%op moons_class = moons_classes @| batch_n in
-  let%cd _ = moons_class =: 0 ++ "i=>2|i" in
+  let () =
+    if no_batch_shape_inference then
+      let%cd _ = moons_class =: 0 ++ "i=>2|i" in
+      ()
+  in
   let losses = ref [] in
   let log_losses = ref [] in
   let learning_rates = ref [] in
@@ -154,10 +163,10 @@ let experiment seed ~use_builtin_weight_decay () =
   in
   PrintBox_text.output Stdio.stdout plot_lr
 
-let () = experiment 4 ~use_builtin_weight_decay:true ()
+let () = experiment 4 ~no_batch_shape_inference:true ~use_builtin_weight_decay:true ()
 
 let _suspended () =
   for seed = 0 to 19 do
     Stdio.printf "\n*************** EXPERIMENT SEED %d ******************\n%!" seed;
-    experiment seed ~use_builtin_weight_decay:true ()
+    experiment seed ~no_batch_shape_inference:true ~use_builtin_weight_decay:true ()
   done

@@ -568,9 +568,9 @@ let%track_sexp finish_inference (() : unit) : unit =
   let unsolved, env = Row.solve_inequalities ~stage:Stage2 !active_constraints !state in
   let unsolved, env = Row.solve_inequalities ~stage:Stage3 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage4 unsolved env in
-  assert (List.is_empty unsolved);
-  let unsolved = List.concat_map ~f:(apply_env_update ~eliminate_variables:true env) !active_update_steps in
-  let unsolved, env = Row.solve_inequalities ~stage:Stage4 unsolved env in
+  let unsolved, env = Row.solve_inequalities ~stage:Stage5 unsolved env in
+  let eliminated = List.concat_map ~f:(apply_env_update ~eliminate_variables:true env) !active_update_steps in
+  let unsolved, env = Row.solve_inequalities ~stage:Stage6 (eliminated @ unsolved) env in
   assert (List.is_empty unsolved);
   ignore @@ List.map ~f:(apply_env_update ~eliminate_variables:false env) !active_update_steps;
   active_constraints := [];
