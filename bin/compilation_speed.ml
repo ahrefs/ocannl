@@ -33,7 +33,7 @@ let benchmark_overhead backend () =
       if from_host f_routine.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
 
   let xs = Array.init n_data ~f:Float.(fun i -> of_int i - (of_int n_data /. 2.)) in
-  let open Tensor.O in
+  let open Operation.At in
   (* Note: this compiles entirely fresh code for each step of the loop. *)
   let ys =
     Array.map xs ~f:(fun v ->

@@ -13,7 +13,7 @@ let%expect_test "Graph drawing recompile" =
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  let open Tensor.O in
+  let open Operation.At in
   let%op f_nd = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.set_hosted x.value;
   Train.forward_and_forget backend ctx f_nd;
@@ -128,7 +128,7 @@ let%expect_test "Graph drawing fetch" =
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  let open Tensor.O in
+  let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%op f5 = f 5 in

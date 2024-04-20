@@ -441,7 +441,7 @@ let example_train_loop ?(disable_rootness_check = false) ~name ~seed ~batch_size
   let sgd_update = Backend.jit grad_updates.(0).context bindings sgd in
   all_host_to_device (module Backend) sgd_update.context scalar_loss;
   all_host_to_device (module Backend) sgd_update.context learning_rate;
-  let open Tensor.O in
+  let open Operation.At in
   let epoch_loss = ref 0. in
   let step_ref = IDX.find_exn sgd_update.bindings step_n in
   let batch_ref = IDX.find_exn sgd_update.bindings batch_n in

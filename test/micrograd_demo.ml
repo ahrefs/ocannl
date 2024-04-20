@@ -81,7 +81,7 @@ let%expect_test "Micrograd half-moons example" =
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  let open Tensor.O in
+  let open Operation.At in
   let len = 200 in
   let batch_size = 10 in
   let n_batches = 2 * len / batch_size in

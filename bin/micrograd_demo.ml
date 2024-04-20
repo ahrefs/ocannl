@@ -82,7 +82,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   (* Stdio.print_endline "\n******** scalar_loss **********"; Tensor.print_tree ~with_id:true ~with_grad:false
      ~depth:9 scalar_loss; Stdio.print_endline "\n******** learning_rate **********"; Tensor.print_tree
      ~with_id:true ~with_grad:false ~depth:9 learning_rate; Stdio.printf "\n********\n%!"; *)
-  let open Tensor.O in
+  let open Operation.At in
   let epoch_loss = ref 0. in
   let step_ref = IDX.find_exn routine.bindings step_n in
   let batch_ref = IDX.find_exn routine.bindings batch_n in

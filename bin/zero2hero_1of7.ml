@@ -63,7 +63,7 @@ let _suspended () =
   let routine = Backend.jit ctx bindings update.fwd_bprop in
   let step_ref = IDX.find_exn routine.bindings step_sym in
   let ys = Array.create ~len:size 0. and dys = Array.create ~len:size 0. in
-  let open Tensor.O in
+  let open Operation.At in
   let looping () =
     assert (Backend.to_host routine.context fx.value);
     assert (Backend.to_host routine.context (Option.value_exn x.diff).grad);
@@ -92,7 +92,7 @@ let () =
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  let open Tensor.O in
+  let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%op f5 = f 5 in

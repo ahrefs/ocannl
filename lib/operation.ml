@@ -4,6 +4,28 @@ open Base
 module Asgns = Arrayjit.Assignments
 module Idx = Arrayjit.Indexing
 
+module At = struct
+  (** Get the value at the given indices. *)
+  let ( .@{} ) = Tensor.get_value
+
+  let ( .@%{} ) = Tensor.get_grad
+
+  (** Set the value at the given indices. *)
+  let ( .@{}<- ) = Tensor.set_value
+
+  let ( .@%{}<- ) = Tensor.set_grad
+
+  (** Get the value at the given index from a single-axis shape tensor. *)
+  let ( .@[] ) t indx = Tensor.get_value t [| indx |]
+
+  let ( .@%[] ) t indx = Tensor.get_grad t [| indx |]
+
+  (** Set the value at the given index for a single-axis shape tensor. *)
+  let ( .@[]<- ) t indx = Tensor.set_value t [| indx |]
+
+  let ( .@%[]<- ) t indx = Tensor.set_grad t [| indx |]
+end
+
 module Initial_NTDSL = struct
   let term = Tensor.term ~grad_spec:Prohibit_grad
   let number = Tensor.number ~grad_spec:Prohibit_grad
