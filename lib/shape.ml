@@ -1,4 +1,4 @@
-(** Tensor shape types, shape inference, projection inference. *)
+(** {1 Tensor shape types, shape inference, projection inference.} *)
 
 open Base
 module Utils = Arrayjit.Utils
@@ -8,7 +8,7 @@ module Debug_runtime = Arrayjit.Utils.Debug_runtime
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-(** *** Shape types and inference *** *)
+(** {2 Shape types and inference.} *)
 
 (** An index pointing to any of a shape's axes, including the kind of the axis ([Batch, Input, Output]) and
     the position (which is counted from the end to facilitate broadcasting).
@@ -718,7 +718,7 @@ let backprop_ith_arg ~from_1 projections =
         };
     }
 
-(** *** Shape builders *** *)
+(** {2 Shape builders.} *)
 
 let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
     ?(deduced = Not_constrained) ~debug_name ~id () =

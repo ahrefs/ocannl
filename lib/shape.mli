@@ -1,4 +1,4 @@
-(** Tensor shape types, shape inference, projection inference. *)
+(** {1 Tensor shape types, shape inference, projection inference.} *)
 
 open Base
 
@@ -85,6 +85,11 @@ val make :
   id:int ->
   unit ->
   t
+(** Creates a shape. [id] should be the id the associated tensor (if any). At most one of the pairs
+    [batch_dims], [batch_axes] etc. should be given: if none, the corresponding row will be inferred.
+    [batch_axes] etc. provide labels for the dimensions of the corresponding axes. Note that these are
+    dimensions labels and not axis labels: they need not be unique for a row, are inferred when provided, and
+    must match whenever the axis sizes must match. *)
 
 val of_spec : ?deduced:deduce_within_shape -> debug_name:string -> id:int -> string -> t
 val default_display_indices : t -> int array

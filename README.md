@@ -36,7 +36,7 @@ Note: due to a pending PR, OCANNL depends on a pin to https://github.com/lukstaf
   
 ## Upcoming milestones
 
-On the critical path for the next release:
+On the critical path for the next major release v0.4:
 
 * Mixed-precision computations: working and convenient.
 * Restore signs of life for the Cuda backend.
@@ -46,6 +46,8 @@ On the critical path for the next release:
 For more details, see [CHANGES](CHANGES.md).
 
 * **v0.3 shape inference, jitted routines**: a major rewrite of the whole project; declarative shape inference; replaced the session interface with a "jitted code routines" API.
+  * **v0.3.1**: TODO
+  * **v0.3.2**: TODO
 * **v0.2 inching toward GPU**. Abandoned design choices.
   * **v0.2.1 naive-cuda**: a Cuda backend where blocks and threads are exposed via dedicated axis types.
   * **v0.2.0 stack-as-device**: treating the C function stack as the "device memory".
@@ -77,3 +79,7 @@ OCANNL follows different design choices than [OWL](https://ocaml.xyz/). For exam
 ## Installation
 
 The dependency on `ocaml-cudajit` is optional, so you have to install it first to enable the Cuda backend.
+
+## Usage
+
+After you get some basic grasp of the aims and design of the project by reading files in [test/](test/) and [bin/](bin/), you can improve your understanding by reading [lib/shape.mli](lib/shape.mli), [lib/tensor.mli](lib/tensor.mli), [lib/operation.ml](lib/operation.ml) and [lib/train.ml](lib/train.ml).

@@ -1,17 +1,19 @@
-## [0.3.2] -- 2024-04-16
+## [0.3.2] -- 2024-04-20
 
 ### Added
 
 - `let%cd _ =` (and `let%op _ =`?) do not affect root tracking (intended for adding shape constraints).
-- W new constraint `Reverse_eq`, currently for inferring slice shapes.
+- More expressive shape constraints: allowing row variables to be sandwiched between leftmost axes `beg_dims` and rightmost axes `dims`.
 
 ### Changed
 
-- Slice shape inference is now complete, by using `Reverse_eq`.
+- Cleaned up "user-facing" API by moving `IDX` and `CDSL` to `Train`, and `Tensor.O` to more precise `Operation.At`.
+- Added interface `Tensor.mli` to reduce "the user learning surface".
 
 ### Fixed
 
 - Moved `cudajit` to `depopts`.
+- Slice shape inference is now complete, by using leftmost axes `beg_dims` in constraints.
 
 ## [0.3.1] -- 2024-04-15
 

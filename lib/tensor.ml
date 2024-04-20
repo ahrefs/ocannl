@@ -1,5 +1,3 @@
-(** Construction of runtime-compiled code supporting backpropagation. *)
-
 open Base
 module Nd = Arrayjit.Ndarray
 module Tn = Arrayjit.Tnode
@@ -7,29 +5,25 @@ module Asgns = Arrayjit.Assignments
 module Idx = Arrayjit.Indexing
 module Debug_runtime = Arrayjit.Utils.Debug_runtime
 
+type tn = Tn.t
+type asgns = Asgns.t
+type init_op = Arrayjit.Ops.init_op
+type fetch_op = Asgns.fetch_op
+type projections = Arrayjit.Indexing.projections
+
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-type diff = {
-  grad : (Tn.t[@sexp.opaque]);
-  zero_grads : Asgns.t;  (** Prepares for backpropagation. Always compile as: [Seq (zero_grads, backprop)]. *)
-  backprop : Asgns.t;
-      (** Backpropagates for the tensor and its descendants; which typically means adding partial gradients to
-          the gradient tensor of the subtensors, then for sub-subtensors etc. *)
-}
-[@@deriving sexp_of]
+type diff = { grad : (Tn.t[@sexp.opaque]); zero_grads : Asgns.t; backprop : Asgns.t } [@@deriving sexp_of]
 
 type t = {
   forward : Asgns.t;
   diff : diff option;
-  id : int;  (** Same as [value.id]. *)
+  id : int;
   value : Tn.t;
   shape : Shape.t;
-      (** The eventual shape of [t.value] and [t.diff.grad], incorporating the current state of shape
-          inference. *)
   children : subtensor list;
 }
-(** Information needed for compositional code generation. *)
 
 and subtensor = { subtensor : t; embedded : bool }
 
@@ -57,10 +51,7 @@ end)
 type session_state = {
   mutable next_id : int;
   mutable forward_roots : t Map.M(Int).t;
-      (** A forward root is a tensor that is not (currently) used to compute another tensor. *)
   mutable backprop_roots : t Map.M(Int).t;
-      (** A backprop root is a tensor with a gradient that is not (currently) receiving gradients from another
-          tensor. I.e. it is not currently used to compute a tensor with a gradient. *)
 }
 
 let session_state =
@@ -70,8 +61,6 @@ let is_fwd_root t = Map.mem session_state.forward_roots t.id
 let remove_fwd_root t = session_state.forward_roots <- Map.remove session_state.forward_roots t.id
 let is_bprop_root t = Map.mem session_state.backprop_roots t.id
 let remove_bprop_root t = session_state.backprop_roots <- Map.remove session_state.backprop_roots t.id
-let forward_roots () = session_state.forward_roots
-let backprop_roots () = session_state.backprop_roots
 
 let with_unchanged_roots ~f =
   let fwd_roots = session_state.forward_roots in
@@ -105,7 +94,6 @@ let session_error_printer = function
 let () = Stdlib.Printexc.register_printer session_error_printer
 let lazy_to_dims shape = lazy (Shape.to_dims shape)
 let fetch_zeros array shape = Asgns.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
-let fetch_ones array shape = Asgns.Fetch { array; fetch_op = Constant 1.; dims = lazy_to_dims shape }
 let default_init_op = Arrayjit.Ops.Constant_fill { values = [| 0.0 |]; strict = false }
 let max_sublabel_length = ref 25
 
@@ -219,7 +207,6 @@ let unop ~label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
   let grad_asn ~v ~g ~projections = grad_asn ~v ~g ~t1 ~projections in
   op ~label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1 ]
 
-(** A terminal: a constant, a parameter, an input of the model. *)
 let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
     ?init_op ?fetch_op () =
   let op_asn ~v ~projections =
@@ -376,9 +363,6 @@ found potentially unsafe roots: %{String.concat ~sep:", " @@ List.map ~f:debug_n
   remove_bprop_root t;
   (diff.zero_grads, diff.backprop)
 
-(** *** Printing. *** *)
-
-(** Converts ID, label and the dimensions of a node to a string. *)
 let header t =
   let v_dims_s = Tn.dims_to_string t.value in
   let g_dims_s = match t.diff with None -> "<no-grad>" | Some diff -> Tn.dims_to_string diff.grad in
@@ -398,36 +382,7 @@ let lazy_optional_payload ~present ~missing v =
     | None -> `Vlist (false, [ `Text (missing ()); `Text "<void>" ])
   else `Vlist (false, [ `Text (missing ()); `Text "<not-in-yet> " ])
 
-type array_print_style =
-  [ `Default
-    (** The inner rectangles comprise both an input and an output axis, if available. Similarly, the outer
-        rectangle comprises a second-from-end input axis and a second-from-end output axis, if available. At
-        least one batch axis is output, when available. The axes that couldn't be output are printed at
-        position/dimension [0]. *)
-  | `N5_layout of string
-    (** The string should provide exclusively non-negative integer pseudo-labels. The numbers [0]-[4]
-        represent the priorities of the axes to be printed out, where the priorities correspond to, from
-        highest: horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the
-        outer rectangle, repetition (see also [Node.pp_print]). The numbers [n >= 5] stand for the actual
-        positions [n - 5] within the corresponding axes. *)
-  | `Label_layout of (string * int) list
-    (** The association from axis labels to integers. The negative numbers [-5] to [-1] represent the
-        priorities of the axes to be printed out, where the priorities correspond to, from highest:
-        horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the outer
-        rectangle, repetition (as above). The numbers [n >= 0] stand for the actual positions within the
-        corresponding axes. Unspecified axes are printed at position [0]. *)
-  | `Inline
-    (** The tensors are printed linearly, in a bracketed manner, optionally prefixed with the labels
-        specification. Note that the syntax causes ambiguity for 1-dimensional input axes (underscores are
-        used for axes without explicit labels); when there is a 1-dimensional input axis, we output the labels
-        specification even if there are no axis labels as a way to display the number of axes. The axis
-        nesting is right-to-left (rightmost is innermost). The input axes are innermost and the batch axes
-        outermost. The input axes use [,] as a separator and [()] as axis delimiters, but the delimiter for
-        the outermost (i.e. leftmost) axis is omitted. The output axes use [;] as a separator and [[]] as axis
-        delimiters (obligatory). The batch axes use [;] as a separator and [[||]] as axis delimiters
-        (obligatory). *) ]
-(** We print out up to 5 axes when printing a tensor, as a grid (outer rectangle) of (inner) rectangles,
-    possibly repeated (screens). *)
+type array_print_style = [ `Default | `Inline | `Label_layout of (string * int) list | `N5_layout of string ]
 
 let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_value ~with_grad t =
   let rec to_dag { subtensor = t; embedded } : PrintBox_utils.dag =
@@ -618,8 +573,6 @@ let print_tree ?entries_per_axis ?(with_backend_info = false) ?(with_id = true) 
   ignore with_backend_info;
   PrintBox_text.output Stdio.stdout @@ PrintBox_utils.dag_to_box @@ PrintBox_utils.boxify depth
   @@ to_dag ?entries_per_axis ~with_id ~with_shape ~with_value ~with_grad t
-
-(** *** Accessors *** *)
 
 let value_1d_points ?from_axis ~xdim t =
   Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_1d_points ?from_axis ~xdim arr)
