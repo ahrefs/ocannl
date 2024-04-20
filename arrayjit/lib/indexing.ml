@@ -163,9 +163,3 @@ let derive_index ~product_syms ~(projection : axis_index array) =
       | it -> Second it)
   in
   fun ~product -> Array.map positions ~f:(function First p -> product.(p) | Second it -> it)
-
-module IDX = struct
-  let empty = Empty
-  let get_static_symbol = get_static_symbol
-  let find_exn = find_exn
-end

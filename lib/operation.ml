@@ -1,7 +1,6 @@
 (** Computational primitives for neural networks, integrating [Tensor] with [Assignments]. *)
 
 open Base
-module CDSL = Arrayjit.Low_level.CDSL
 module Asgns = Arrayjit.Assignments
 module Idx = Arrayjit.Indexing
 

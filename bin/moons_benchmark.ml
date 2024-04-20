@@ -2,10 +2,10 @@ open Base
 open Ocannl
 module Nd = Arrayjit.Ndarray
 module Ops = Arrayjit.Ops
-module IDX = Arrayjit.Indexing.IDX
+module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Arrayjit.Low_level.CDSL
+module CDSL = Train.CDSL
 module Utils = Arrayjit.Utils
 module Debug_runtime = Utils.Debug_runtime
 

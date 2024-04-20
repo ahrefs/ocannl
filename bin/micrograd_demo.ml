@@ -1,10 +1,10 @@
 open Base
 open Ocannl
 module Tn = Arrayjit.Tnode
-module IDX = Arrayjit.Indexing.IDX
+module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Arrayjit.Low_level.CDSL
+module CDSL = Train.CDSL
 module Utils = Arrayjit.Utils
 
 let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =

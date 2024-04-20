@@ -13,6 +13,30 @@ module Debug_runtime = Arrayjit.Utils.Debug_runtime
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
+module CDSL = struct
+  let single = Arrayjit.Ops.single
+  let double = Arrayjit.Ops.double
+  let virtualize_settings = Arrayjit.Low_level.virtualize_settings
+
+  let enable_all_debugs ?(debug_logs = false) ?(hosted_only = true) () =
+    Utils.settings.with_debug <- true;
+    Utils.settings.output_debug_files_in_run_directory <- true;
+    if hosted_only then virtualize_settings.enable_device_only <- false;
+    if debug_logs then Utils.settings.debug_log_from_routines <- true
+
+  let disable_all_debugs ?(restore_defaults = false) () =
+    Utils.settings.debug_log_from_routines <- false;
+    Utils.settings.with_debug <- false;
+    Utils.settings.output_debug_files_in_run_directory <- false;
+    if restore_defaults then virtualize_settings.enable_device_only <- true
+end
+
+module IDX = struct
+  let empty = Idx.Empty
+  let get_static_symbol = Idx.get_static_symbol
+  let find_exn = Idx.find_exn
+end
+
 let debug_rt = (module Debug_runtime : Minidebug_runtime.Debug_runtime)
 let run jitted = Tn.run debug_rt @@ jitted.Arrayjit.Backends.schedule ()
 
@@ -381,7 +405,6 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
 let example_train_loop ?(disable_rootness_check = false) ~name ~seed ~batch_size ~init_lr ?lr_schedule
     ~num_devices ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn ~weight_decay ?per_batch_callback
     ?per_epoch_callback backend () =
-  let module IDX = Idx.IDX in
   let module TDSL = Operation.TDSL in
   let module NTDSL = Operation.NTDSL in
   Random.init seed;
@@ -466,7 +489,7 @@ let example_train_loop ?(disable_rootness_check = false) ~name ~seed ~batch_size
   (inputs, outputs, model_result, infer_callback, !batch_losses, !epoch_losses, !learning_rates)
 
 let forward_and_forget ?(disable_rootness_check = false) (type context)
-    (module Backend : Backend_type with type context = context) ctx ?(bindings = Idx.IDX.empty) t =
+    (module Backend : Backend_type with type context = context) ctx ?(bindings = IDX.empty) t =
   let routine = Backend.jit ctx bindings @@ forward ~disable_rootness_check t in
   if not disable_rootness_check then Tensor.remove_bprop_root t;
   sync_run (module Backend) routine t

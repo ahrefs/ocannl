@@ -1,9 +1,9 @@
 open Base
 open Ocannl
-module IDX = Arrayjit.Indexing.IDX
+module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Arrayjit.Low_level.CDSL
+module CDSL = Train.CDSL
 
 let%expect_test "Micrograd README basic example" =
   Random.init 0;

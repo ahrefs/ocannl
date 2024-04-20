@@ -1,8 +1,8 @@
 open Base
 open Ocannl
 module Tn = Arrayjit.Tnode
-module IDX = Arrayjit.Indexing.IDX
-module CDSL = Arrayjit.Low_level.CDSL
+module IDX = Train.IDX
+module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 

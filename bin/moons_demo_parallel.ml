@@ -1,10 +1,10 @@
 open Base
 open Ocannl
 module Tn = Arrayjit.Tnode
-module IDX = Arrayjit.Indexing.IDX
+module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module CDSL = Arrayjit.Low_level.CDSL
+module CDSL = Train.CDSL
 module Utils = Arrayjit.Utils
 
 (* let num_devices = 20 *)
