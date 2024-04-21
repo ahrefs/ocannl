@@ -9,10 +9,12 @@
     - otherwise the single character version is used.
     - Currently, the only non-whitespace, non-alphanumeric characters that make sense / are allowed in a spec
       are: ['>', '|', '-', ',', '=', ';'].
-    - identifier: single alphanum character in single-char mode, a sequence of alphanum characters otherwise
-      (whitespace not allowed).
-    - separators: a sequence of commas and whitespaces containing at least one comma.
-    - axes_spec: separators? (identifier separators)* identifier separators?
+    - identifier: single alphanum character or '_' in single-char mode, a sequence of alphanum characters or
+      '_' otherwise (whitespace not allowed).
+    - separators: a sequence of commas and whitespaces.
+    - separators_with_comma: commas and whitespaces containing at least one comma.
+    - axes_spec_single_char: separators? identifier+ separators?
+    - axes_spec_multichar: separators? (identifier separators_with_comma)* identifier separators?
     - ellipsis_spec: '...' <|> '..' identifier '..'
     - row_spec: axes_spec <|> ellipsis_spec axes_spec <|> axes_spec ellipsis_spec axes_spec
     - labels_spec: row_spec <|> row_spec '|' row_spec <|> row_spec '->' row_spec <|> row_spec '|' row_spec

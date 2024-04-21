@@ -69,106 +69,82 @@ type t = {
 let row_of_kind = function `Batch -> batch | `Input -> input | `Output -> output
 
 type deduce_within_shape = Not_constrained | Input_equals_output [@@deriving compare, sexp, variants]
-
-type compose_type =
-  | Pointwise_bin  (** NumPy-style broadcast matching batch, input and output axes, e.g. as in [s1 + s2]. *)
-  | Compose
-      (** Compose the outputs of the second shape with the inputs of the first shape, i.e. the shape of
-          [fun x -> s1(s2(x))], or [s1 * s2] where [*] is the inner product (e.g. matrix multiply). *)
-  | Einsum of string
-      (** The [einsum] syntax: LABELS1;LABELS2=>LABELS3, where LABELSi are labels specifications. Since
-          OCANNL's extended einsum notation supports both axis variables and row variables, it makes other
-          compose types redundant. The [axis_labels] use pseudo-labels local to the notation, to line up the
-          axes. For [Einsum (ls1^";"^ls2^"=>"^ls3)], the symmetric difference / disjunctive union of [ls1] and
-          [ls2]'s pseudo-labels should be equal to [ls3] pseudo-labels.
-
-          Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
-[@@deriving sexp, equal]
+type compose_type = Pointwise_bin | Compose | Einsum of string [@@deriving sexp, equal]
 
 type transpose_type =
-  | Transpose  (** Swaps inputs and outputs of a shape, preserves batch axes. *)
-  | Pointwise_un  (** Preserves the shape. *)
+  | Transpose
+  | Pointwise_un
   | Permute of string
-      (** [Permute (ls1^"=>"^ls2)] is a variant of the [einsum] syntax [Einsum (ls1^";"^ls1^"=>"^ls2)]. Note:
-          The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
-  | Batch_slice of Arrayjit.Indexing.static_symbol  (** Removes the leftmost batch axis. *)
+  | Batch_slice of Arrayjit.Indexing.static_symbol
 [@@deriving equal, sexp]
 
-(** Parses a labels specification.
+let identifier_multichar = Angstrom.take_while1 Char.is_alphanum
+let opt_separators : _ Angstrom.t = Angstrom.take_while (fun c -> Char.is_whitespace c || Char.equal c ',')
 
-    If [spec] contains any of: [' '; ','; '('; ')'], these characters are used as label separators. Otherwise,
-    every character is a label. If [spec] does not contain ["|"] nor ["->"], each label is of the kind
-    [Output]. If [spec] doesn't contain ["|"], labels to the left of ["->"] are [Input] and to the right
-    [Output]. Labels to the left of ["|"] are [Batch], and between ["|"] and ["->"] are [Input].
+let separators_with_comma =
+  let open Angstrom in
+  let* sep = opt_separators in
+  if String.contains sep ',' then return () else fail "comma expected"
 
-    The labels ["..ident.."], ["..."] (where [ident] does not contain any of the special characters) are only
-    allowed once for a kind. They are used to enable (in-the-middle) broadcasting for the axis kind in the
-    einsum-related shape inference (like the ellipsis ["..."] in [numpy.einsum]), and are translated to row
-    variables. The ellipsis ["..."] is context dependent: in the batch row it is the same as ["..batch.."], in
-    the input row the same as ["..input.."], in the output row the same as ["..output.."]. When the same row
-    variable is used in multiple rows, the corresponding broadcasted axes are matched pointwise in the
-    resulting operation.
+let axes_spec ~multichar : _ Angstrom.t =
+  let open Angstrom in
+  let single_char (pos, acc) c =
+    Option.some_if (Char.is_alphanum c) (pos + 1, (pos, Char.to_string c) :: acc)
+  in
+  let result =
+    if multichar then
+      lift (fun l ->
+          let n = List.length l in
+          List.mapi l ~f:(fun i v -> (n - i, v)))
+      @@ sep_by1 separators_with_comma identifier_multichar
+    else
+      lift (fun (_, acc) ->
+          let n = List.length acc in
+          List.rev_map acc ~f:(fun (i, v) -> (n - i, v)))
+      @@ scan_state (0, []) single_char
+  in
+  opt_separators *> result <* opt_separators
 
-    The label ["_"] is a place-holder: it is not output to the resulting map but aligns the axes of other
-    labels. *)
-let axis_labels_of_spec spec : parsed_axis_labels =
-  let check_dot ~kind s =
-    (* TODO: complain if the row variable specification contains special characters, e.g. [' '; ',']. *)
-    if String.is_prefix s ~prefix:"..." then (Some kind, String.drop_prefix s 3)
-    else if String.is_prefix s ~prefix:".." then
-      let row_var_spec, s =
-        match String.substr_index ~pos:2 s ~pattern:".." with
-        | None -> invalid_arg "Shape.axis_labels_of_spec: unfinished row variable specification <..>"
-        | Some end_pos -> (String.sub s ~pos:2 ~len:(end_pos - 2), String.drop_prefix s (end_pos + 2))
-      in
-      (Some row_var_spec, String.drop_prefix s 3)
-    else (None, s)
-  in
-  let parse ~kind spec in_axes =
-    let bcast, spec = check_dot ~kind @@ String.strip spec in
-    ( bcast,
-      let on = [ ' '; ','; '('; ')'; '\t'; '\r'; '\n' ] in
-      let parse_label labels_num from_start s =
-        let key = AxisKey.{ in_axes; pos = labels_num - from_start; from_end = true } in
-        if String.equal s "_" then None
-        else try Some (key, Either.Second (Int.of_string s)) with _ -> Some (key, First s)
-      in
-      if List.exists ~f:(String.contains spec) on || String.for_all spec ~f:Char.is_digit then
-        let labels = String.split_on_chars spec ~on |> List.filter ~f:(fun s -> not @@ String.is_empty s) in
-        let labels_num = List.length labels in
-        ( labels_num,
-          0,
-          List.filter_mapi labels ~f:(parse_label labels_num) |> Map.of_alist_exn (module AxisKey) )
-      else
-        let labels_num = String.length spec in
-        ( labels_num,
-          0,
-          String.to_list spec |> List.map ~f:String.of_char
-          |> List.filter_mapi ~f:(parse_label labels_num)
-          |> Map.of_alist_exn (module AxisKey) ) )
-  in
-  let batch_spec, spec =
-    match String.substr_index spec ~pattern:"|" with
-    | Some end_bch ->
-        ( String.sub ~pos:0 ~len:end_bch spec,
-          String.sub ~pos:(end_bch + 1) ~len:(String.length spec - end_bch - 1) spec )
-    | None -> ("", spec)
-  in
-  let input_spec, output_spec =
-    match String.substr_index spec ~pattern:"->" with
-    | Some end_inp ->
-        ( String.sub ~pos:0 ~len:end_inp spec,
-          String.sub ~pos:(end_inp + 2) ~len:(String.length spec - end_inp - 2) spec )
-    | None -> ("", spec)
-  in
-  let bcast_batch, (given_batch, given_beg_batch, batch_labels) = parse ~kind:"batch" batch_spec `Batch in
-  let bcast_input, (given_input, given_beg_input, input_labels) = parse ~kind:"input" input_spec `Input in
-  let bcast_output, (given_output, given_beg_output, output_labels) =
-    parse ~kind:"output" output_spec `Output
-  in
+let axis_labels_of_spec_parser ~multichar : parsed_axis_labels Angstrom.t =
+  let open Angstrom in
   let combine ~key:_ _v1 _v2 = assert false in
+  let axes_spec = axes_spec ~multichar <?> "axes_spec" in
+  let ellipsis_spec = string "..." <|> (string ".." *> identifier_multichar <* string "..") in
+  let ellipsis_spec = ellipsis_spec <?> "ellipsis_spec" in
+  let for_row ~kind in_axes beg_axes row_var_spec end_axes =
+    let f from_end (pos, label) = (AxisKey.{ in_axes; pos; from_end }, label) in
+    let from_beg = Map.of_alist_exn (module AxisKey) @@ List.map beg_axes ~f:(f false) in
+    let from_end = Map.of_alist_exn (module AxisKey) @@ List.map end_axes ~f:(f true) in
+    ( Option.map row_var_spec ~f:(fun rv -> if String.equal rv "..." then kind else rv),
+      List.length end_axes,
+      List.length beg_axes,
+      Map.merge_skewed ~combine from_beg from_end )
+  in
+  let parse_row ~kind in_axes =
+    let row = lift3 (for_row ~kind in_axes) in
+    opt_separators
+    *> (row (return []) (lift Option.some ellipsis_spec) axes_spec
+       <|> row axes_spec (lift Option.some ellipsis_spec) axes_spec
+       <|> row (return []) (return None) axes_spec
+       <|> row (return []) (lift Option.some ellipsis_spec) (return []))
+    <* opt_separators
+  in
+  let default = Option.value ~default:(None, 0, 0, Map.empty (module AxisKey)) in
+  let shape = lift3 (fun batch input output -> (default batch, default input, output)) in
+  let p_b = lift Option.some @@ parse_row ~kind:"batch" `Batch <?> "batch_spec" in
+  let p_i = lift Option.some @@ parse_row ~kind:"input" `Input <?> "input_spec" in
+  let p_o = parse_row ~kind:"output" `Output <?> "output_spec" in
+  let+ ( (bcast_batch, given_batch, given_beg_batch, batch_labels),
+         (bcast_input, given_input, given_beg_input, input_labels),
+         (bcast_output, given_output, given_beg_output, output_labels) ) =
+    shape (return None) (p_i <* string "->") p_o
+    <|> shape (p_b <* char '|') (p_i <* string "->") p_o
+    <|> shape (p_b <* char '|') (return None) p_o
+    <|> shape (return None) (return None) p_o
+  in
   let labels =
     Map.merge_skewed ~combine input_labels @@ Map.merge_skewed ~combine output_labels batch_labels
+    |> Map.map ~f:(fun s -> try Either.Second (Int.of_string s) with _ -> First s)
   in
   {
     bcast_batch;
@@ -183,31 +159,28 @@ let axis_labels_of_spec spec : parsed_axis_labels =
     labels;
   }
 
+let axis_labels_of_spec spec =
+  let multichar = String.contains spec ',' in
+  match
+    Angstrom.(parse_string ~consume:Consume.All (axis_labels_of_spec_parser ~multichar <* end_of_input) spec)
+  with
+  | Ok result -> result
+  | Error msg ->
+      raise @@ Utils.User_error ("Shape.axis_labels_of_spec: while parsing: " ^ spec ^ " error: " ^ msg)
+
+let einsum_of_spec_parser ~multichar : _ Angstrom.t =
+  let open Angstrom in
+  let p = axis_labels_of_spec_parser ~multichar in
+  lift3 (fun a b c -> (a, Some b, c)) (p <?> "RHS1" <* char ';') (p <?> "RHS2") (string "=>" *> (p <?> "LHS"))
+  <|> lift2 (fun a c -> (a, None, c)) (p <?> "RHS") (string "=>" *> (p <?> "LHS"))
+
 let einsum_of_spec spec =
-  let rhs_spec, lhs_spec =
-    match String.substr_index spec ~pattern:"=>" with
-    | Some endp ->
-        ( String.sub ~pos:0 ~len:endp spec,
-          String.sub ~pos:(endp + 2) ~len:(String.length spec - endp - 2) spec )
-    | None -> ("", spec)
-  in
-  let lhs_spec = String.strip lhs_spec in
-  let rhs_spec = String.strip rhs_spec in
-  if String.is_empty lhs_spec then invalid_arg ("einsum_of_spec: missing the result spec in " ^ spec);
-  if String.is_empty rhs_spec then invalid_arg ("einsum_of_spec: missing the argument spec in " ^ spec);
-  let rhs1_spec, rhs2_spec =
-    match String.substr_index rhs_spec ~pattern:";" with
-    | Some endp ->
-        ( String.sub ~pos:0 ~len:endp rhs_spec,
-          String.sub ~pos:(endp + 1) ~len:(String.length rhs_spec - endp - 1) rhs_spec )
-    | None -> (rhs_spec, "")
-  in
-  let rhs1_spec = String.strip rhs1_spec in
-  let rhs2_spec = String.strip rhs2_spec in
-  let lhs_ls = axis_labels_of_spec lhs_spec in
-  let rhs1_ls = axis_labels_of_spec rhs1_spec in
-  if String.is_empty rhs2_spec then (rhs1_ls, None, lhs_ls)
-  else (rhs1_ls, Some (axis_labels_of_spec rhs2_spec), lhs_ls)
+  let multichar = String.contains spec ',' in
+  match
+    Angstrom.(parse_string ~consume:Consume.All (einsum_of_spec_parser ~multichar <* end_of_input) spec)
+  with
+  | Ok result -> result
+  | Error msg -> raise @@ Utils.User_error ("Shape.einsum_of_spec: while parsing: " ^ spec ^ " error: " ^ msg)
 
 (** How to propagate shape updates and do the last update of [Tensor.t.shape] when finalizing the tensor. Axes
     are broadcast-expanded on a bottom-up update to fit the incoming shape. *)
