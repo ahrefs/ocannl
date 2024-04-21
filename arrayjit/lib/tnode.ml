@@ -104,7 +104,7 @@ let update_memory_mode tn mode provenance =
   | Some (m1, _), m2 when equal_memory_mode m1 m2 -> ()
   | Some (Never_virtual, prov2), Virtual ->
       raise
-      @@ Ndarray.User_error
+      @@ Utils.User_error
            [%string
              "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} for %{name tn}: cannot be \
               virtual"]
@@ -119,7 +119,7 @@ let update_memory_mode tn mode provenance =
   | Some (Never_virtual, _), mode -> tn.memory_mode <- Some (mode, provenance)
   | Some (Virtual, prov2), Never_virtual ->
       raise
-      @@ Ndarray.User_error
+      @@ Utils.User_error
            [%string
              "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} for %{name tn} is already \
               virtual"]

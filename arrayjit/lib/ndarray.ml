@@ -3,8 +3,6 @@ open Base
 
 module A = Bigarray.Genarray
 
-exception User_error of string
-
 (** {2 *** Handling of precisions ***} *)
 
 type ('ocaml, 'elt_t) bigarray = ('ocaml, 'elt_t, Bigarray.c_layout) A.t
@@ -87,7 +85,7 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
       let size = Array.fold ~init:1 ~f:( * ) dims in
       if size <> len then
         raise
-        @@ User_error
+        @@ Utils.User_error
              [%string
                "Ndarray.create_bigarray: Constant_fill: invalid data size %{len#Int}, expected %{size#Int}"];
       init_bigarray_of_prec prec dims ~f:(fun idcs -> f values.(indices_to_offset ~dims ~idcs)))
@@ -116,7 +114,7 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
       (* See: https://github.com/janestreet/torch/blob/master/src/torch/dataset_helper.ml#L3 *)
       if not @@ Ops.equal_prec stored_prec (Ops.pack_prec prec) then
         raise
-        @@ User_error
+        @@ Utils.User_error
              [%string
                "Ndarray.create_bigarray: File_mapped: precision mismatch %{Ops.prec_string stored_prec} vs \
                 %{Ops.precision_to_string prec}"];
@@ -127,7 +125,7 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
       if len / Ops.prec_in_bytes stored_prec <> size then (
         Unix.close fd;
         raise
-        @@ User_error
+        @@ Utils.User_error
              [%string
                "Ndarray.create_bigarray: File_mapped: invalid file bytes %{len#Int}, expected %{size * \
                 Ops.prec_in_bytes stored_prec#Int}"]);
@@ -218,7 +216,7 @@ let reset_bigarray (init_op : Ops.init_op) (type o b) (prec : (o, b) Ops.precisi
       let size = Array.fold ~init:1 ~f:( * ) dims in
       if size <> len then
         raise
-        @@ User_error
+        @@ Utils.User_error
              [%string
                "Ndarray.reset_bigarray: Constant_fill: invalid data size %{len#Int}, expected %{size#Int}"];
       set_bigarray arr ~f:(fun idcs -> f values.(indices_to_offset ~dims ~idcs)))
@@ -407,7 +405,7 @@ let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(label
     let ind0, ind1, ind2, ind3, ind4 =
       match var_indices with
       | [| ind0; ind1; ind2; ind3; ind4 |] -> (ind0, ind1, ind2, ind3, ind4)
-      | _ -> raise @@ User_error "render: indices should contain at most 5 negative numbers"
+      | _ -> raise @@ Utils.User_error "render: indices should contain at most 5 negative numbers"
     in
     let labels = Array.map labels ~f:(fun l -> if String.is_empty l then "" else l ^ "=") in
     let entries_per_axis = (entries_per_axis / 2 * 2) + 1 in
@@ -448,7 +446,7 @@ let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(label
             else concise_float ~prec:Utils.settings.print_decimals_precision (get_as_float arr indices)
           with Invalid_argument _ ->
             raise
-            @@ User_error
+            @@ Utils.User_error
                  [%string
                    "Invalid indices: %{int_dims_to_string indices} into array: %{(int_dims_to_string dims)}"])
     in

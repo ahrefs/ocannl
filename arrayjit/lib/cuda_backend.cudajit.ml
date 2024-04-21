@@ -478,13 +478,13 @@ let jit ?name old_context bindings ((traced_store, llc) as compiled) =
       List.map idx_args ~f:(fun ({ static_symbol; static_range }, i) ->
           if !i < 0 then
             raise
-            @@ Ndarray.User_error
+            @@ Utils.User_error
                  [%string
                    "Exec_as_cuda: static index %{Indexing.symbol_ident static_symbol} is negative: %{!i#Int}"];
           Option.iter static_range ~f:(fun upto ->
               if !i >= upto then
                 raise
-                @@ Ndarray.User_error
+                @@ Utils.User_error
                      [%string
                        "Exec_as_cuda: static index %{Indexing.symbol_ident static_symbol} is too big: \
                         %{upto#Int}"]);

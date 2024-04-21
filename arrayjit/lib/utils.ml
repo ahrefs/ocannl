@@ -354,3 +354,5 @@ let get_debug_formatter ~fname =
     let ppf = Stdlib.Format.formatter_of_out_channel f in
     Some ppf
   else None
+
+exception User_error of string
