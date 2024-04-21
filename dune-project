@@ -73,6 +73,7 @@
   printbox
   printbox-text
   npy
+  angstrom
   stdio
   num
   ppxlib

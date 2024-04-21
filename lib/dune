@@ -1,6 +1,4 @@
 (library
- ; We need to export arrayjit before we can make this public.
- ; (public_name ocannl)
  (name ocannl)
  (public_name ocannl)
  (libraries
@@ -9,6 +7,7 @@
   printbox
   printbox-text
   npy
+  angstrom
   stdio
   num
   str
