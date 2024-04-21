@@ -22,8 +22,10 @@ module AxisKey = struct
 
     type t = {
       in_axes : kind;
-      from_end : int;
-          (** Axes are indexed from the end, to avoid reindexing when broadcasting; starting with [1]. *)
+      pos : int;  (** Indices start at [1], counted from the end if [from_end] is true. *)
+      from_end : bool;
+          (** Axes are indexed from the front (rarely) or from the end (typically), to avoid reindexing when
+              broadcasting. *)
     }
     [@@deriving equal, compare, sexp]
   end
@@ -41,14 +43,17 @@ type parsed_axis_labels = {
   given_batch : int;
   given_input : int;
   given_output : int;
+  given_beg_batch : int;
+  given_beg_input : int;
+  given_beg_output : int;
   labels : (string, int) Either.t axis_map;
 }
 [@@deriving compare, sexp, fields]
 (** The labels are strings assigned to [AxisKey] axes. Moreover the [bcast_] fields represent whether
-    additional leading axes are allowed (corresponding to the dot-ellipsis syntax for broadcasting). The
-    string can be used to identify a row variable, and defaults to ["batch"], ["input"], ["output"]
+    additional leading/middle axes are allowed (corresponding to the dot-ellipsis syntax for broadcasting).
+    The string can be used to identify a row variable, and defaults to ["batch"], ["input"], ["output"]
     respectively when parsing ["..."]. The [given_] fields count the number of specified axes of the
-    corresponding kind in [labels]. *)
+    corresponding kind in [labels] where [from_end=true], [given_beg_] where [from_end=false]. *)
 
 let axis_labels parsed = parsed.labels
 
@@ -91,18 +96,18 @@ type transpose_type =
 
 (** Parses a labels specification.
 
-    * If [spec] contains any of: [' '; ','; '('; ')'], these characters are used as label separators.
-    Otherwise, every character is a label. * If [spec] does not contain ["|"] nor ["->"], each label is of the
-    kind [Output]. * If [spec] doesn't contain ["|"], labels to the left of ["->"] are [Input] and to the
-    right [Output]. * Labels to the left of ["|"] are [Batch], and between ["|"] and ["->"] are [Input].
+    If [spec] contains any of: [' '; ','; '('; ')'], these characters are used as label separators. Otherwise,
+    every character is a label. If [spec] does not contain ["|"] nor ["->"], each label is of the kind
+    [Output]. If [spec] doesn't contain ["|"], labels to the left of ["->"] are [Input] and to the right
+    [Output]. Labels to the left of ["|"] are [Batch], and between ["|"] and ["->"] are [Input].
 
     The labels ["..ident.."], ["..."] (where [ident] does not contain any of the special characters) are only
-    allowed at the first axis of a kind (i.e. last from-end). They are used to enable broadcasting for the
-    axis kind in the einsum-related shape inference (like the ellipsis ["..."] in [numpy.einsum]), and are
-    translated to row variables. The ellipsis ["..."] is context dependent: in the batch row it is the same as
-    ["..batch.."], in the input row the same as ["..input.."], in the output row the same as ["..output.."].
-    When the same row variable is used in multiple rows, the corresponding broadcasted axes are matched
-    pointwise in the resulting operation.
+    allowed once for a kind. They are used to enable (in-the-middle) broadcasting for the axis kind in the
+    einsum-related shape inference (like the ellipsis ["..."] in [numpy.einsum]), and are translated to row
+    variables. The ellipsis ["..."] is context dependent: in the batch row it is the same as ["..batch.."], in
+    the input row the same as ["..input.."], in the output row the same as ["..output.."]. When the same row
+    variable is used in multiple rows, the corresponding broadcasted axes are matched pointwise in the
+    resulting operation.
 
     The label ["_"] is a place-holder: it is not output to the resulting map but aligns the axes of other
     labels. *)
@@ -124,17 +129,20 @@ let axis_labels_of_spec spec : parsed_axis_labels =
     ( bcast,
       let on = [ ' '; ','; '('; ')'; '\t'; '\r'; '\n' ] in
       let parse_label labels_num from_start s =
-        let key = AxisKey.{ in_axes; from_end = labels_num - from_start } in
+        let key = AxisKey.{ in_axes; pos = labels_num - from_start; from_end = true } in
         if String.equal s "_" then None
         else try Some (key, Either.Second (Int.of_string s)) with _ -> Some (key, First s)
       in
       if List.exists ~f:(String.contains spec) on || String.for_all spec ~f:Char.is_digit then
         let labels = String.split_on_chars spec ~on |> List.filter ~f:(fun s -> not @@ String.is_empty s) in
         let labels_num = List.length labels in
-        (labels_num, List.filter_mapi labels ~f:(parse_label labels_num) |> Map.of_alist_exn (module AxisKey))
+        ( labels_num,
+          0,
+          List.filter_mapi labels ~f:(parse_label labels_num) |> Map.of_alist_exn (module AxisKey) )
       else
         let labels_num = String.length spec in
         ( labels_num,
+          0,
           String.to_list spec |> List.map ~f:String.of_char
           |> List.filter_mapi ~f:(parse_label labels_num)
           |> Map.of_alist_exn (module AxisKey) ) )
@@ -153,14 +161,27 @@ let axis_labels_of_spec spec : parsed_axis_labels =
           String.sub ~pos:(end_inp + 2) ~len:(String.length spec - end_inp - 2) spec )
     | None -> ("", spec)
   in
-  let bcast_batch, (given_batch, batch_labels) = parse ~kind:"batch" batch_spec `Batch in
-  let bcast_input, (given_input, input_labels) = parse ~kind:"input" input_spec `Input in
-  let bcast_output, (given_output, output_labels) = parse ~kind:"output" output_spec `Output in
+  let bcast_batch, (given_batch, given_beg_batch, batch_labels) = parse ~kind:"batch" batch_spec `Batch in
+  let bcast_input, (given_input, given_beg_input, input_labels) = parse ~kind:"input" input_spec `Input in
+  let bcast_output, (given_output, given_beg_output, output_labels) =
+    parse ~kind:"output" output_spec `Output
+  in
   let combine ~key:_ _v1 _v2 = assert false in
   let labels =
     Map.merge_skewed ~combine input_labels @@ Map.merge_skewed ~combine output_labels batch_labels
   in
-  { bcast_batch; bcast_input; bcast_output; given_batch; given_input; given_output; labels }
+  {
+    bcast_batch;
+    bcast_input;
+    bcast_output;
+    given_batch;
+    given_input;
+    given_output;
+    given_beg_batch;
+    given_beg_input;
+    given_beg_output;
+    labels;
+  }
 
 let einsum_of_spec spec =
   let rhs_spec, lhs_spec =
@@ -255,15 +276,15 @@ let axis_map_to_dims_bio (type a) ?(default : a option) (idcs : a axis_map) =
       Map.partition_mapi other ~f:(fun ~key:{ in_axes; _ } ~data ->
           if Row.is_input in_axes then Either.First data else Either.Second data)
     in
-    let bch_axes = Map.to_alist bch_axes |> List.map ~f:(fun ({ from_end = i; _ }, v) -> (i, v)) in
+    let bch_axes = Map.to_alist bch_axes |> List.map ~f:(fun ({ pos = i; _ }, v) -> (i, v)) in
     let bch_size = List.fold bch_axes ~init:0 ~f:(fun accu (i, _) -> max i accu) in
     let bch = Array.create ~len:bch_size witness in
     List.iter bch_axes ~f:(fun (i, v) -> bch.(bch_size - i) <- v);
-    let inp_axes = Map.to_alist inp_axes |> List.map ~f:(fun ({ from_end = i; _ }, v) -> (i, v)) in
+    let inp_axes = Map.to_alist inp_axes |> List.map ~f:(fun ({ pos = i; _ }, v) -> (i, v)) in
     let inp_size = List.fold inp_axes ~init:0 ~f:(fun accu (i, _) -> max i accu) in
     let inp = Array.create ~len:inp_size witness in
     List.iter inp_axes ~f:(fun (i, v) -> inp.(inp_size - i) <- v);
-    let out_axes = Map.to_alist out_axes |> List.map ~f:(fun ({ from_end = i; _ }, v) -> (i, v)) in
+    let out_axes = Map.to_alist out_axes |> List.map ~f:(fun ({ pos = i; _ }, v) -> (i, v)) in
     let out_size = List.fold out_axes ~init:0 ~f:(fun accu (i, _) -> max i accu) in
     let out = Array.create ~len:out_size witness in
     List.iter out_axes ~f:(fun (i, v) -> out.(out_size - i) <- v);
@@ -827,13 +848,16 @@ let to_string_hum ?(style = `Axis_size) (sh : t) =
 let axis_keys_to_idcs (sh : t) : int axis_map =
   let b_dims =
     (* Enumerate axes backwards. *)
-    Array.of_list_rev_mapi sh.batch.dims ~f:(fun i _ -> AxisKey.{ in_axes = `Batch; from_end = i + 1 })
+    Array.of_list_rev_mapi sh.batch.dims ~f:(fun i _ ->
+        AxisKey.{ in_axes = `Batch; pos = i + 1; from_end = true })
   in
   let i_dims =
-    Array.of_list_rev_mapi sh.input.dims ~f:(fun i _ -> AxisKey.{ in_axes = `Input; from_end = i + 1 })
+    Array.of_list_rev_mapi sh.input.dims ~f:(fun i _ ->
+        AxisKey.{ in_axes = `Input; pos = i + 1; from_end = true })
   in
   let o_dims =
-    Array.of_list_rev_mapi sh.output.dims ~f:(fun i _ -> AxisKey.{ in_axes = `Output; from_end = i + 1 })
+    Array.of_list_rev_mapi sh.output.dims ~f:(fun i _ ->
+        AxisKey.{ in_axes = `Output; pos = i + 1; from_end = true })
   in
   let idcs = Array.concat [ i_dims; o_dims; b_dims ] in
   Array.rev_inplace idcs;
@@ -853,20 +877,20 @@ let default_display_indices sh =
     @@ List.filter ~f:(Map.mem axes)
     @@ AxisKey.
          [
-           { in_axes = `Input; from_end = 1 };
-           { in_axes = `Output; from_end = 1 };
-           { in_axes = `Input; from_end = 2 };
-           { in_axes = `Output; from_end = 2 };
-           (if num_input_axes > 1 then { in_axes = `Batch; from_end = 1 }
-            else { in_axes = `Output; from_end = 3 });
-           { in_axes = `Batch; from_end = 1 };
-           { in_axes = `Batch; from_end = 2 };
-           { in_axes = `Input; from_end = 3 };
-           { in_axes = `Output; from_end = 3 };
-           { in_axes = `Input; from_end = 4 };
-           { in_axes = `Output; from_end = 4 };
-           { in_axes = `Input; from_end = 5 };
-           { in_axes = `Output; from_end = 5 };
+           { in_axes = `Input; from_end = true; pos = 1 };
+           { in_axes = `Output; from_end = true; pos = 1 };
+           { in_axes = `Input; from_end = true; pos = 2 };
+           { in_axes = `Output; from_end = true; pos = 2 };
+           (if num_input_axes > 1 then { in_axes = `Batch; from_end = true; pos = 1 }
+            else { in_axes = `Output; from_end = true; pos = 3 });
+           { in_axes = `Batch; from_end = true; pos = 1 };
+           { in_axes = `Batch; from_end = true; pos = 2 };
+           { in_axes = `Input; from_end = true; pos = 3 };
+           { in_axes = `Output; from_end = true; pos = 3 };
+           { in_axes = `Input; from_end = true; pos = 4 };
+           { in_axes = `Output; from_end = true; pos = 4 };
+           { in_axes = `Input; from_end = true; pos = 5 };
+           { in_axes = `Output; from_end = true; pos = 5 };
          ]
   in
   let rec loop offset axes =

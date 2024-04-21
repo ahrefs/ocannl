@@ -1,5 +1,42 @@
 (** {1 Tensor shape types, shape inference, projection inference.} *)
 
+(** {2 Labels specifications and einsum notation.}
+
+    Definition and properties of the syntax of labels specifications and einsum notation:
+    - Whitespace-insensitive except that whitespace separates identifiers.
+    - Comes in two variants: single-character and multicharacter;
+    - if there is a comma [','] anywhere in the initial text, the multicharacter version is used,
+    - otherwise the single character version is used.
+    - Currently, the only non-whitespace, non-alphanumeric characters that make sense / are allowed in a spec
+      are: ['>', '|', '-', ',', '=', ';'].
+    - identifier: single alphanum character in single-char mode, a sequence of alphanum characters otherwise
+      (whitespace not allowed).
+    - separators: a sequence of commas and whitespaces containing at least one comma.
+    - axes_spec: separators? (identifier separators)* identifier separators?
+    - ellipsis_spec: '...' <|> '..' identifier '..'
+    - row_spec: axes_spec <|> ellipsis_spec axes_spec <|> axes_spec ellipsis_spec axes_spec
+    - labels_spec: row_spec <|> row_spec '|' row_spec <|> row_spec '->' row_spec <|> row_spec '|' row_spec
+      '->' row_spec.
+    - permute_spec: labels_spec '=>' labels_spec
+    - einsum_spec: labels_spec ';' labels_spec '=>' labels_spec
+
+    If labels_spec does not contain ["|"] nor ["->"], each label is of the kind [Output]. If the spec doesn't
+    contain ["|"], labels to the left of ["->"] are [Input] and to the right [Output]. Labels to the left of
+    ["|"] are [Batch], and between ["|"] and ["->"] are [Input].
+
+    The labels [".."ident".."], ["..."] (where [ident] does not contain any of the special characters) are
+    only allowed once for a kind. They are used to enable (in-the-middle) broadcasting for the axis kind in
+    the einsum-related shape inference (like the ellipsis ["..."] in [numpy.einsum]), and are translated to
+    row variables. The ellipsis ["..."] is context dependent: in the batch row it is the same as
+    ["..batch.."], in the input row the same as ["..input.."], in the output row the same as ["..output.."].
+    When the same row variable is used in multiple rows, the corresponding broadcasted axes are matched
+    pointwise in the resulting operation.
+
+    The label ["_"] is a place-holder: it is not output to the resulting map but aligns the axes of other
+    labels. *)
+
+(** {2 User-ish API.} *)
+
 open Base
 
 type t = {
@@ -19,11 +56,11 @@ type compose_type =
       (** Compose the outputs of the second shape with the inputs of the first shape, i.e. the shape of
           [fun x -> s1(s2(x))], or [s1 * s2] where [*] is the inner product (e.g. matrix multiply). *)
   | Einsum of string
-      (** The [einsum] syntax: LABELS1;LABELS2=>LABELS3, where LABELSi are labels specifications. Since
+      (** The binary "einsum" syntax: RHS1;RHS2=>LHS, where RHSi, LHS are labels specifications. Since
           OCANNL's extended einsum notation supports both axis variables and row variables, it makes other
           compose types redundant. The [axis_labels] use pseudo-labels local to the notation, to line up the
-          axes. For [Einsum (ls1^";"^ls2^"=>"^ls3)], the symmetric difference / disjunctive union of [ls1] and
-          [ls2]'s pseudo-labels should be equal to [ls3] pseudo-labels.
+          axes and row variables. The symmetric difference / disjunctive union of RHS1 and RHS2's
+          pseudo-labels should be equal to LHS pseudo-labels.
 
           Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
 [@@deriving sexp, equal]
@@ -31,11 +68,32 @@ type compose_type =
 type transpose_type =
   | Transpose  (** Swaps inputs and outputs of a shape, preserves batch axes. *)
   | Pointwise_un  (** Preserves the shape. *)
-  | Permute of string
-      (** [Permute (ls1^"=>"^ls2)] is a variant of the [einsum] syntax [Einsum (ls1^";"^ls1^"=>"^ls2)]. Note:
-          The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
+  | Permute of string  (** The unary "einsum" syntax: RHS1=>LHS. *)
   | Batch_slice of Arrayjit.Indexing.static_symbol  (** Removes the leftmost batch axis. *)
 [@@deriving equal, sexp]
+
+val make :
+  ?batch_dims:int list ->
+  ?input_dims:int list ->
+  ?output_dims:int list ->
+  ?batch_axes:(string * int) list ->
+  ?input_axes:(string * int) list ->
+  ?output_axes:(string * int) list ->
+  ?deduced:deduce_within_shape ->
+  debug_name:string ->
+  id:int ->
+  unit ->
+  t
+(** Creates a shape. [id] should be the id the associated tensor (if any). At most one of the pairs
+    [batch_dims], [batch_axes] etc. should be given: if none, the corresponding row will be inferred.
+    [batch_axes] etc. provide labels for the dimensions of the corresponding axes. Note that these are
+    dimensions labels and not axis labels: they need not be unique for a row, are inferred when provided, and
+    must match whenever the axis sizes must match. *)
+
+val to_string_hum :
+  ?style:[< `Axis_number_and_size | `Axis_size | `Only_labels > `Axis_size `Only_labels ] -> t -> string
+
+(** {2 Internal-ish API.} *)
 
 (** How to propagate shape updates and do the last update of [Tensor.t.shape] when finalizing the tensor. Axes
     are broadcast-expanded on a bottom-up update to fit the incoming shape. *)
@@ -72,31 +130,9 @@ val derive_projections : update_step -> Arrayjit.Indexing.projections
     only be invoked when the shapes are fully inferred already! *)
 
 val backprop_ith_arg : from_1:int -> Arrayjit.Indexing.projections -> Arrayjit.Indexing.projections
-
-val make :
-  ?batch_dims:int list ->
-  ?input_dims:int list ->
-  ?output_dims:int list ->
-  ?batch_axes:(string * int) list ->
-  ?input_axes:(string * int) list ->
-  ?output_axes:(string * int) list ->
-  ?deduced:deduce_within_shape ->
-  debug_name:string ->
-  id:int ->
-  unit ->
-  t
-(** Creates a shape. [id] should be the id the associated tensor (if any). At most one of the pairs
-    [batch_dims], [batch_axes] etc. should be given: if none, the corresponding row will be inferred.
-    [batch_axes] etc. provide labels for the dimensions of the corresponding axes. Note that these are
-    dimensions labels and not axis labels: they need not be unique for a row, are inferred when provided, and
-    must match whenever the axis sizes must match. *)
-
 val of_spec : ?deduced:deduce_within_shape -> debug_name:string -> id:int -> string -> t
 val default_display_indices : t -> int array
 val to_labels : t -> string array
-
-val to_string_hum :
-  ?style:[< `Axis_number_and_size | `Axis_size | `Only_labels > `Axis_size `Only_labels ] -> t -> string
 
 type 'a axis_map
 type parsed_axis_labels
