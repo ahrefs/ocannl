@@ -86,21 +86,22 @@ let separators_with_comma =
   let* sep = opt_separators in
   if String.contains sep ',' then return () else fail "comma expected"
 
-let axes_spec ~multichar : _ Angstrom.t =
+let axes_spec ~from_end ~multichar : _ Angstrom.t =
   let open Angstrom in
   let single_char (pos, acc) c =
     Option.some_if (Char.is_alphanum c) (pos + 1, (pos, Char.to_string c) :: acc)
   in
   let result =
+    let p n i = if from_end then n - i else i + 1 in
     if multichar then
       lift (fun l ->
           let n = List.length l in
-          List.mapi l ~f:(fun i v -> (n - i, v)))
+          List.mapi l ~f:(fun i v -> (p n i, v)))
       @@ sep_by1 separators_with_comma identifier_multichar
     else
       lift (fun (_, acc) ->
           let n = List.length acc in
-          List.rev_map acc ~f:(fun (i, v) -> (n - i, v)))
+          List.rev_map acc ~f:(fun (i, v) -> (p n i, v)))
       @@ scan_state (0, []) single_char
   in
   opt_separators *> result <* opt_separators
@@ -108,7 +109,9 @@ let axes_spec ~multichar : _ Angstrom.t =
 let axis_labels_of_spec_parser ~multichar : parsed_axis_labels Angstrom.t =
   let open Angstrom in
   let combine ~key:_ _v1 _v2 = assert false in
-  let axes_spec = axes_spec ~multichar <?> "axes_spec" in
+  let axes_spec ~from_end =
+    axes_spec ~from_end ~multichar <?> if from_end then "axes_spec" else "axes_spec_beg"
+  in
   let ellipsis_spec = string "..." <|> (string ".." *> identifier_multichar <* string "..") in
   let ellipsis_spec = ellipsis_spec <?> "ellipsis_spec" in
   let for_row ~kind in_axes beg_axes row_var_spec end_axes =
@@ -123,9 +126,9 @@ let axis_labels_of_spec_parser ~multichar : parsed_axis_labels Angstrom.t =
   let parse_row ~kind in_axes =
     let row = lift3 (for_row ~kind in_axes) in
     opt_separators
-    *> (row (return []) (lift Option.some ellipsis_spec) axes_spec
-       <|> row axes_spec (lift Option.some ellipsis_spec) axes_spec
-       <|> row (return []) (return None) axes_spec
+    *> (row (return []) (lift Option.some ellipsis_spec) (axes_spec ~from_end:true)
+       <|> row (axes_spec ~from_end:false) (lift Option.some ellipsis_spec) (axes_spec ~from_end:true)
+       <|> row (return []) (return None) (axes_spec ~from_end:true)
        <|> row (return []) (lift Option.some ellipsis_spec) (return []))
     <* opt_separators
   in
