@@ -238,10 +238,10 @@ type Row.error_trace += Shape_mismatch of t list
 let with_error_trace = ref true
 
 (** Converts an axes-keyed map into three arrays of values: batch axes, input axes, output axes. If the map is
-    incomplete, the result might be invalid: gaps in the array are filled with an arbitrary one of the
+    incomplete, the result will likely be invalid: gaps in the array are filled with an arbitrary one of the
     provided values. *)
 let axis_map_to_dims_bio (type a) ?(default : a option) (idcs : a axis_map) =
-  if Map.is_empty idcs then ([||], [||], [||])
+  if Map.is_empty idcs then (([||], [||], [||]), ([||], [||], [||]))
   else
     let witness = match default with Some witness -> witness | None -> snd @@ Map.min_elt_exn idcs in
     let bch_axes, other =
@@ -252,56 +252,48 @@ let axis_map_to_dims_bio (type a) ?(default : a option) (idcs : a axis_map) =
       Map.partition_mapi other ~f:(fun ~key:{ in_axes; _ } ~data ->
           if Row.is_input in_axes then Either.First data else Either.Second data)
     in
-    let bch_axes = Map.to_alist bch_axes |> List.map ~f:(fun ({ pos = i; _ }, v) -> (i, v)) in
-    let bch_size = List.fold bch_axes ~init:0 ~f:(fun accu (i, _) -> max i accu) in
-    let bch = Array.create ~len:bch_size witness in
-    List.iter bch_axes ~f:(fun (i, v) -> bch.(bch_size - i) <- v);
-    let inp_axes = Map.to_alist inp_axes |> List.map ~f:(fun ({ pos = i; _ }, v) -> (i, v)) in
-    let inp_size = List.fold inp_axes ~init:0 ~f:(fun accu (i, _) -> max i accu) in
-    let inp = Array.create ~len:inp_size witness in
-    List.iter inp_axes ~f:(fun (i, v) -> inp.(inp_size - i) <- v);
-    let out_axes = Map.to_alist out_axes |> List.map ~f:(fun ({ pos = i; _ }, v) -> (i, v)) in
-    let out_size = List.fold out_axes ~init:0 ~f:(fun accu (i, _) -> max i accu) in
-    let out = Array.create ~len:out_size witness in
-    List.iter out_axes ~f:(fun (i, v) -> out.(out_size - i) <- v);
-    (bch, inp, out)
+    let make_row axes =
+      let back_axes, front_axes =
+        Map.to_alist axes
+        |> List.partition_map ~f:(fun ({ AxisKey.from_end; pos = i; _ }, v) ->
+               if from_end then Either.First (i, v) else Second (i, v))
+      in
+      let back_size = List.fold back_axes ~init:0 ~f:(fun accu (i, _) -> max i accu) in
+      let front_size = List.fold front_axes ~init:0 ~f:(fun accu (i, _) -> max i accu) in
+      let back = Array.create ~len:back_size witness in
+      let front = Array.create ~len:front_size witness in
+      List.iter back_axes ~f:(fun (i, v) -> back.(back_size - i) <- v);
+      List.iter front_axes ~f:(fun (i, v) -> front.(i - 1) <- v);
+      (back, front)
+    in
+    let bch, beg_bch = make_row bch_axes in
+    let inp, beg_inp = make_row inp_axes in
+    let out, beg_out = make_row out_axes in
+    ((bch, inp, out), (beg_bch, beg_inp, beg_out))
 
 (** Converts an axes-keyed map into an array of values using the [force_to_dims] semantics of axes. If the map
     is incomplete and the [~default] is not given, the result might be invalid: gaps in the array are filled
     with an arbitrary one of the provided values. *)
 let axis_map_to_dims_index (type a) ?(default : a option) (idcs : a axis_map) : a array =
-  let bch, inp, out = axis_map_to_dims_bio ?default idcs in
-  Array.concat [ bch; out; inp ]
+  let (bch, inp, out), (beg_bch, beg_inp, beg_out) = axis_map_to_dims_bio ?default idcs in
+  Array.concat [ beg_bch; bch; beg_out; out; beg_inp; inp ]
 
 let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
-  let b_dims, i_dims, o_dims = axis_map_to_dims_bio labels.labels in
+  let (b_dims, i_dims, o_dims), (beg_b_dims, beg_i_dims, beg_o_dims) = axis_map_to_dims_bio labels.labels in
   let to_dim kind = Array.(Fn.compose to_list @@ map ~f:(f kind)) in
-  let to_bcast v =
-    Option.value_map v ~default:Row.Broadcastable ~f:(fun vname ->
+  let to_bcast kind v beg_dims =
+    let beg_dims = to_dim kind beg_dims in
+    Option.value_map v ~default:(Row.Broadcastable, beg_dims) ~f:(fun vname ->
         Hashtbl.find_or_add row_var_env vname ~default:(fun () ->
-            Row.Row_var { v = Row.get_row_var (); beg_dims = [] }))
+            (Row.Row_var { v = Row.get_row_var (); beg_dims }, [])))
   in
-  let batch =
-    {
-      Row.dims = to_dim `Batch b_dims;
-      bcast = to_bcast labels.bcast_batch;
-      id = Row.row_id ~sh_id ~kind:`Batch;
-    }
+  let to_row kind v dims beg_dims =
+    let bcast, beg_dims = to_bcast kind v beg_dims in
+    { Row.dims = beg_dims @ to_dim kind dims; bcast; id = Row.row_id ~sh_id ~kind }
   in
-  let input =
-    {
-      Row.dims = to_dim `Input i_dims;
-      bcast = to_bcast labels.bcast_input;
-      id = Row.row_id ~sh_id ~kind:`Input;
-    }
-  in
-  let output =
-    {
-      Row.dims = to_dim `Output o_dims;
-      bcast = to_bcast labels.bcast_output;
-      id = Row.row_id ~sh_id ~kind:`Output;
-    }
-  in
+  let batch = to_row `Batch labels.bcast_batch b_dims beg_b_dims in
+  let input = to_row `Input labels.bcast_input i_dims beg_i_dims in
+  let output = to_row `Output labels.bcast_output o_dims beg_o_dims in
   (batch, input, output)
 
 let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env ~dim_var_env labels =
