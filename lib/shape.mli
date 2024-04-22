@@ -131,7 +131,6 @@ val derive_projections : update_step -> Arrayjit.Indexing.projections
 (** Computes the indexing into subtensors given the shape information of a tensor. [derive_projections] should
     only be invoked when the shapes are fully inferred already! *)
 
-val backprop_ith_arg : from_1:int -> Arrayjit.Indexing.projections -> Arrayjit.Indexing.projections
 val of_spec : ?deduced:deduce_within_shape -> debug_name:string -> id:int -> string -> t
 val default_display_indices : t -> int array
 val to_labels : t -> string array
