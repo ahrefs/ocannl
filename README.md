@@ -2,8 +2,6 @@
 
 OCANNL is sponsored by [Ahrefs](https://ocaml.org/success-stories/peta-byte-scale-web-crawler)! [Visit the Ahrefs website.](https://ahrefs.com/)
 
-Note: due to a pending PR, OCANNL depends on a pin to https://github.com/lukstafi/npy-ocaml.
-
 ## OCANNL -- OCaml Compiles Algorithms for Neural Networks Learning
 
 * A from-scratch, compiled Deep Learning framework.
@@ -45,10 +43,11 @@ On the critical path for the next major release v0.4:
 
 For more details, see [CHANGES](CHANGES.md).
 
-* **v0.3 shape inference, jitted routines**: a major rewrite of the whole project; declarative shape inference; replaced the session interface with a "jitted code routines" API.
-  * **v0.3.1**: TODO
-  * **v0.3.2**: TODO
-* **v0.2 inching toward GPU**. Abandoned design choices.
+* **v0.3 shape inference, jitted routines**: a major rewrite of the whole project.
+  * **v0.3.2**: new shape inference feature: tracking leftmost axes -- complete inference for splicing, ellipsis-in-the-middle allowed in einsum notation.
+  * **v0.3.1**: sanitizing code inclusion (rootness checks).
+  * **v0.3.0**: declarative shape inference; replaced the session interface with a "jitted code routines" API. Cuda defunct.
+* **v0.2 inching toward GPU**:
   * **v0.2.1 naive-cuda**: a Cuda backend where blocks and threads are exposed via dedicated axis types.
   * **v0.2.0 stack-as-device**: treating the C function stack as the "device memory".
 * **v0.1 GCCJIT backend**:
@@ -56,7 +55,6 @@ For more details, see [CHANGES](CHANGES.md).
   * **v0.1.1**: inlining scalar constants, improved inlining for virtual nodes.
   * **v0.1.0**: a `Gccjit` backend, single and double precision floats, code compiled as a monolithic update step function.
 * **v0.0 untagged**: basic design around shape inference, high-level and low-level code representation. Now-abandoned Meta-OCaml and OCaml backends.
-
 
 ## Why not just use [OWL](https://ocaml.xyz/)?
 
