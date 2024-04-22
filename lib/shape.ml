@@ -284,8 +284,8 @@ let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
   let to_bcast kind v beg_dims =
     let beg_dims = to_dim kind beg_dims in
     Option.value_map v ~default:(Row.Broadcastable, beg_dims) ~f:(fun vname ->
-        Hashtbl.find_or_add row_var_env vname ~default:(fun () ->
-            (Row.Row_var { v = Row.get_row_var (); beg_dims }, [])))
+        let v = Hashtbl.find_or_add row_var_env vname ~default:(fun () -> Row.get_row_var ()) in
+        (Row.Row_var { v; beg_dims }, []))
   in
   let to_row kind v dims beg_dims =
     let bcast, beg_dims = to_bcast kind v beg_dims in
