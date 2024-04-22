@@ -333,5 +333,6 @@ let%debug_sexp compile_proc ~unoptim_ll_source ~ll_source ~cd_source ~name stati
               "Assignments.compile_proc: wrong ocannl_cd_ident_style, must be one of: heuristic, \
                name_and_label, name_only"
       in
-      fprint_hum ~name ~static_indices ~ident_style () ppf proc);
+      fprint_hum ~name ~static_indices ~ident_style () ppf proc;
+      Stdlib.Format.pp_print_flush ppf ());
   Low_level.compile_proc ~unoptim_ll_source ~ll_source ~name static_indices llc
