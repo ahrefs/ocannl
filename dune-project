@@ -56,7 +56,7 @@
    (>= 0.3.2))
   printbox
   printbox-text
-  camlzip
+  npy
   stdio
   num
   ppxlib
