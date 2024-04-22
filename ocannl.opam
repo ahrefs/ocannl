@@ -20,7 +20,7 @@ depends: [
   "arrayjit"
   "printbox"
   "printbox-text"
-  "npy"
+  "ocannl_npy"
   "angstrom"
   "stdio"
   "num"

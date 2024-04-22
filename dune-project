@@ -27,7 +27,7 @@
 ;   (version 0.0.9)))
 
 (package
- (name npy)
+ (name ocannl_npy)
  (synopsis "Numpy file format support for ocaml")
  (authors "Laurent Mazare")
  (maintainers "Laurent Mazare <lmazare@gmail.com>")
@@ -56,7 +56,7 @@
    (>= 0.3.2))
   printbox
   printbox-text
-  npy
+  ocannl_npy
   stdio
   num
   ppxlib
@@ -83,7 +83,7 @@
   arrayjit
   printbox
   printbox-text
-  npy
+  ocannl_npy
   angstrom
   stdio
   num
