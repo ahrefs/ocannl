@@ -1,0 +1,4 @@
+(library
+ (name npy)
+ (public_name npy)
+ (libraries bigarray camlzip))

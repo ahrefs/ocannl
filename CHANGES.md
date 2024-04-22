@@ -1,17 +1,18 @@
-## [0.3.2] -- 2024-04-20
+## [0.3.2] -- 2024-04-22
 
 ### Added
 
 - `let%cd _ =` (and `let%op _ =`?) do not affect root tracking (intended for adding shape constraints).
 - More expressive shape constraints: allowing row variables to be sandwiched between leftmost axes `beg_dims` and rightmost axes `dims`.
-- TODO: einsum notation support for leftmost axes.
+- Einsum notation support for leftmost axes.
 
 ### Changed
 
 - Cleaned up "user-facing" API by moving `IDX` and `CDSL` to `Train`, and `Tensor.O` to more precise `Operation.At`.
 - Added interface `Tensor.mli` to reduce "the user learning surface".
 - Improved documentation and layout of `Shape.mli`.
-- TODO: A more reasonable syntax for labels specifications and einsum notation. In particular, whitespace insensitive (except whitespace not allowed inside identifiers).
+- A more reasonable syntax for labels specifications and einsum notation. In particular, whitespace insensitive (except whitespace not allowed inside identifiers).
+- Vendored the `npy` package while we wait for a PR.
 
 ### Fixed
 

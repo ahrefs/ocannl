@@ -4,7 +4,7 @@
 
 (name ocannl)
 
-(version 0.3.1)
+(version 0.3.2)
 
 (generate_opam_files true)
 
@@ -19,13 +19,24 @@
 
 (documentation https://github.com/lukstafi/ocannl/blob/master/README.md)
 
-; While we wait to upstream Npy.Npz.restore, pin the fork.
+; While we wait to upstream Npy.Npz.restore, we vendor Npy. Alternative:
+; (pin
+;  (url "git+https://github.com/lukstafi/npy-ocaml#master")
+;  (package
+;   (name npy)
+;   (version 0.0.9)))
 
-(pin
- (url "git+https://github.com/lukstafi/npy-ocaml#master")
- (package
-  (name npy)
-  (version 0.0.9)))
+(package
+ (name npy)
+ (synopsis "Numpy file format support for ocaml")
+ (authors "Laurent Mazare")
+ (maintainers "Laurent Mazare <lmazare@gmail.com>")
+ (depends
+  (ocaml
+   (>= 4.06))
+  camlzip
+  (dune :build)
+  (conf-python-3 :with-test)))
 
 (package
  (name arrayjit)
@@ -45,7 +56,7 @@
    (>= 0.3.2))
   printbox
   printbox-text
-  npy
+  camlzip
   stdio
   num
   ppxlib
