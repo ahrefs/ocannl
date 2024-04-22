@@ -558,8 +558,9 @@ let%track_sexp finish_inference (() : unit) : unit =
   let unsolved, env = Row.solve_inequalities ~stage:Stage3 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage4 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage5 unsolved env in
+  let unsolved, env = Row.solve_inequalities ~stage:Stage6 unsolved env in
   let eliminated = List.concat_map ~f:(apply_env_update ~eliminate_variables:true env) !active_update_steps in
-  let unsolved, env = Row.solve_inequalities ~stage:Stage6 (eliminated @ unsolved) env in
+  let unsolved, env = Row.solve_inequalities ~stage:Stage7 (eliminated @ unsolved) env in
   assert (List.is_empty unsolved);
   ignore @@ List.map ~f:(apply_env_update ~eliminate_variables:false env) !active_update_steps;
   active_constraints := [];
@@ -636,9 +637,12 @@ let%track_sexp derive_projections (update_step : update_step) : Idx.projections 
      the global state is already an empty env, but in principle we want to only find a local solution to not
      contaminate projections across operations. *)
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage1 ineqs Row.empty_env in
-  (* let unsolved, local_env = Row.solve_inequalities ~stage:Stage2 unsolved local_env in *)
-  (* let unsolved, local_env = Row.solve_inequalities ~stage:Stage3 unsolved local_env in *)
-  (* let unsolved, local_env = Row.solve_inequalities ~stage:Stage4 unsolved local_env in *)
+  let unsolved, local_env = Row.solve_inequalities ~stage:Stage2 unsolved local_env in
+  let unsolved, local_env = Row.solve_inequalities ~stage:Stage3 unsolved local_env in
+  let unsolved, local_env = Row.solve_inequalities ~stage:Stage4 unsolved local_env in
+  let unsolved, local_env = Row.solve_inequalities ~stage:Stage5 unsolved local_env in
+  let unsolved, local_env = Row.solve_inequalities ~stage:Stage6 unsolved local_env in
+  let unsolved, local_env = Row.solve_inequalities ~stage:Stage7 unsolved local_env in
   assert (List.is_empty unsolved);
   let proj_eqs : Row.proj_equation list = Row.get_proj_equations ineqs proj_axis_env local_env in
   let proj_env : Row.proj_env = Row.solve_proj_equations proj_eqs in

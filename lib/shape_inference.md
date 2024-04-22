@@ -131,7 +131,8 @@ The constraints are solved by: unification of the equation constraints, unificat
 * Stage 3, when solving the constraints, sets yet-unknown dimension and row variables in terminal shapes to their least upper bounds (if any).
 * Stage 4 sets yet-unknown dimensions with >1 lower bounds from direct accesses, to their LUBs if they have any, otherwise to the lower bound.
 * Stage 5 addresses `Total_elems` constraints with yet-unknown row variables. If the constraint can be satisfied by assuming the row variable is no-further-axes, it sets the row variable to `Broadcastable`, otherwise it sets it to one axis of the required dimension.
-* Stage 6 sets all remaining variables to dimension-1 resp. no-further-axes values.
+* Stage 6 sets row variables in the remaining inequalities to no-further-axes values. This can unlock further between-axis inequalities because of row variables sandwiched between leftmost axes from their side of the inequality and rightmost axes from the other side of the inequality.
+* Stage 7 sets all dim resp. row variables remaining in updated shapes to dimension-1 resp. no-further-axes.
 
 Let's explain the shape inference functions.
 

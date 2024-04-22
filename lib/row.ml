@@ -139,13 +139,14 @@ type constraint_ =
   | Terminal_row of t
 [@@deriving compare, equal, sexp, variants]
 
-type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 [@@deriving sexp, equal, compare]
+type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7 [@@deriving sexp, equal, compare]
 
 let is_stage2_up = function Stage1 -> false | _ -> true
 let is_stage3_up = function Stage1 | Stage2 -> false | _ -> true
 let is_stage4_up = function Stage1 | Stage2 | Stage3 -> false | _ -> true
-let is_stage5_up = function Stage5 | Stage6 -> true | _ -> false
-let _is_stage6 = function Stage6 -> true | _ -> false
+let is_stage5_up = function Stage5 | Stage6 | Stage7 -> true | _ -> false
+let is_stage6_up = function Stage6 | Stage7 -> true | _ -> false
+let is_stage7 = function Stage7 -> true | _ -> false
 
 module Idx = Arrayjit.Indexing
 
@@ -826,6 +827,12 @@ let%track_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : env
         (take_from_end cur.dims dims_l) (take_from_end subr.dims dims_l)
   in
   match (cur, subr) with
+  | ({ dims = _; bcast = Row_var { v; _ }; id }, _ | _, { dims = _; bcast = Row_var { v; _ }; id })
+    when is_stage6_up stage ->
+      ( Row_ineq { cur; subr }
+        :: Row_eq { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id } }
+        :: ineqs,
+        env )
   | cur, subr when equal_row cur subr -> ([], env)
   | { bcast = Row_var { v = cur_v; _ }; _ }, { bcast = Row_var { v = subr_v; _ }; _ }
     when equal_row_var cur_v subr_v ->
@@ -979,6 +986,7 @@ let%track_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : env
                      ~data:(Bounds_row { cur = cur2; subr = subr2; lub = Some lub; constr = constr2 });
             } )
       | Some (Solved_row _) -> assert false)
+  | _ when cur_beg_dims_l > beg_dims_l && not (is_stage7 stage) -> (Row_ineq { cur; subr } :: ineqs, env)
   | _, { bcast = Broadcastable; _ } when subr_dims_l + subr_beg_dims_l <= cur_dims_l + cur_beg_dims_l ->
       (ineqs, env)
   | { bcast = Row_var _ | Broadcastable; _ }, { bcast = Row_var _ | Broadcastable; _ } ->
@@ -1154,7 +1162,7 @@ let%track_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (e
     else solve ineqs' env
   in
   match stage with
-  | Stage1 | Stage2 | Stage3 | Stage6 -> solve ineqs env
+  | Stage1 | Stage2 | Stage3 | Stage6 | Stage7 -> solve ineqs env
   | Stage4 ->
       let finalize_lower_bound v = function
         | Bounds_dim { lub; constr; _ } -> Option.to_list @@ eliminate_dim_entry v ~lub constr
@@ -1262,8 +1270,9 @@ let%track_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_en
         | _ -> dims)
     | { dims; _ } -> dims
   in
-  let match_rows ~with_broadcasting r1 r2 =
-    let dims1 = expand_dims r1 and dims2 = expand_dims r2 in
+  let match_rows ~(with_broadcasting : bool) (r1 : row) (r2 : row) : proj_equation list =
+    let dims1 : dim list = expand_dims r1 in
+    let dims2 : dim list = expand_dims r2 in
     let len1 = List.length dims1 in
     let len = min len1 (List.length dims2) in
     let extras =

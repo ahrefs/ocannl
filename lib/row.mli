@@ -83,7 +83,7 @@ type constraint_ =
   | Terminal_row of t
 [@@deriving compare, equal, sexp, variants]
 
-type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 [@@deriving sexp, equal, compare]
+type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7 [@@deriving sexp, equal, compare]
 
 val subst_row : environment -> t -> t
 val unify_row : stage:stage -> t * t -> environment -> constraint_ list * environment
