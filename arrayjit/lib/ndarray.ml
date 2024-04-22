@@ -370,11 +370,12 @@ let concise_float ~prec v =
     print out the axis, and a non-negative number means to print out only the indexed dimension of the axis.
     Prints up to [entries_per_axis] or [entries_per_axis+1] entries per axis, possibly with ellipsis in the
     middle. [labels] provides the axis labels for all axes (use [""] or ["_"] for no label). The last label
-    corresponds to axis [-1] etc. The printed out axes are arranged as: * -1: a horizontal segment in an inner
-    rectangle (i.e. column numbers of the inner rectangle), * -2: a sequence of segments in a line of text
-    (i.e. column numbers of an outer rectangle), * -3: a vertical segment in an inner rectangle (i.e. row
-    numbers of the inner rectangle), * -4: a vertical sequence of segments (i.e. column numbers of an outer
-    rectangle), * -5: a sequence of screens of text (i.e. stack numbers of outer rectangles). *)
+    corresponds to axis [-1] etc. The printed out axes are arranged as:
+    - [-1]: a horizontal segment in an inner rectangle (i.e. column numbers of the inner rectangle),
+    - [-2]: a sequence of segments in a line of text (i.e. column numbers of an outer rectangle),
+    - [-3]: a vertical segment in an inner rectangle (i.e. row numbers of the inner rectangle),
+    - [-4]: a vertical sequence of segments (i.e. column numbers of an outer rectangle),
+    - [-5]: a sequence of screens of text (i.e. stack numbers of outer rectangles). *)
 let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labels = [||]) ~indices arr =
   let module B = PrintBox in
   let dims = dims arr in
