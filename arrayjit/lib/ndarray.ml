@@ -1,5 +1,5 @@
 open Base
-(** N-dimensional arrays: a precision-handling wrapper for {!Bigarray.Genarray} and its utilities. *)
+(** N-dimensional arrays: a precision-handling wrapper for [Bigarray.Genarray] and its utilities. *)
 
 module A = Bigarray.Genarray
 

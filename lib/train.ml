@@ -160,7 +160,7 @@ let grad_update ?(disable_rootness_check = false) ?(setup_for_parallel = false) 
   in
   { loss; label; params; fwd_bprop }
 
-(** See: {!https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py}. *)
+(** See: https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py *)
 let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
   if not @@ is_param p then raise @@ Tensor.Session_error ("Train.sgd_one: not a parameter", Some p);
   let pg = NTDSL.term ~label:("sgd_delta" :: p.value.label) () in

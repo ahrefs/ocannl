@@ -87,7 +87,7 @@ val to_bigarray2 :
   -> packed_array2
   -> ('a, 'b, 'c) Bigarray.Array2.t option
 
-(** Same as {!to_bigarray} for [Bigarray.Array3.t} *)
+(** Same as {!to_bigarray} for [Bigarray.Array3.t] *)
 val to_bigarray3 :
      'c Bigarray.layout
   -> ('a, 'b) Bigarray.kind
