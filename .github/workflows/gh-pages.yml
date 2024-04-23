@@ -16,11 +16,12 @@ jobs:
         uses: actions/cache@v2
         with:
           path: ~/.opam
-          key: opam-ubuntu-latest-5.1.0
+          key: opam-ubuntu-latest-5.1.1
 
-      - uses: avsm/setup-ocaml@v1
+      # - uses: actions/checkout@v2
+      - uses: ocaml/setup-ocaml@v2
         with:
-          ocaml-version: '5.1.0'
+          ocaml-compiler: '5.1.1'
 
       - name: Pin
         run: opam pin -n .
