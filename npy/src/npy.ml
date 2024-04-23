@@ -9,9 +9,7 @@ type packed_kind = P : (_, _) Bigarray.kind -> packed_kind
 
 let dtype ~packed_kind =
   let endianness =
-    match packed_kind with
-    | P Bigarray.Char -> "|"
-    | P _ -> if Sys.big_endian then ">" else "<"
+    match packed_kind with P Bigarray.Char -> "|" | P _ -> if Sys.big_endian then ">" else "<"
   in
   let kind =
     match packed_kind with
@@ -28,14 +26,13 @@ let dtype ~packed_kind =
     | P Bigarray.Complex64 -> "c16" (* 2 64bits float. *)
     | P Bigarray.Int -> failwith "Int is not supported"
     | P Bigarray.Nativeint -> failwith "Nativeint is not supported."
+    | P _ (* Bigarray.Float16 *) -> "f2"
   in
   endianness ^ kind
 
 let map_file file_descr ~pos kind layout shared shape =
   let is_scalar = Array.length shape = 0 in
-  let array =
-    Unix.map_file file_descr ~pos kind layout shared (if is_scalar then [|1|] else shape)
-  in
+  let array = Unix.map_file file_descr ~pos kind layout shared (if is_scalar then [| 1 |] else shape) in
   if is_scalar then Bigarray.reshape array [||] else array
 
 let fortran_order (type a) ~(layout : a Bigarray.layout) =
@@ -43,34 +40,28 @@ let fortran_order (type a) ~(layout : a Bigarray.layout) =
 
 let shape ~dims =
   match dims with
-  | [|dim1|] -> Printf.sprintf "%d," dim1
+  | [| dim1 |] -> Printf.sprintf "%d," dim1
   | dims -> Array.to_list dims |> List.map string_of_int |> String.concat ", "
 
 let full_header ?header_len ~layout ~packed_kind ~dims () =
   let header =
-    Printf.sprintf
-      "{'descr': '%s', 'fortran_order': %s, 'shape': (%s), }"
-      (dtype ~packed_kind)
-      (fortran_order ~layout)
-      (shape ~dims)
+    Printf.sprintf "{'descr': '%s', 'fortran_order': %s, 'shape': (%s), }" (dtype ~packed_kind)
+      (fortran_order ~layout) (shape ~dims)
   in
   let padding_len =
     let total_len = String.length header + magic_string_len + 4 + 1 in
     match header_len with
     | None -> if total_len mod 16 = 0 then 0 else 16 - (total_len mod 16)
     | Some header_len ->
-      if header_len mod 16 <> 0 then failwith "header_len has to be divisible by 16";
-      if header_len < total_len then failwith "header_len is smaller than total_len";
-      header_len - total_len
+        if header_len mod 16 <> 0 then failwith "header_len has to be divisible by 16";
+        if header_len < total_len then failwith "header_len is smaller than total_len";
+        header_len - total_len
   in
   let total_header_len = String.length header + padding_len + 1 in
-  Printf.sprintf
-    "%s\001\000%c%c%s%s\n"
-    magic_string
+  Printf.sprintf "%s\001\000%c%c%s%s\n" magic_string
     (total_header_len mod 256 |> Char.chr)
     (total_header_len / 256 |> Char.chr)
-    header
-    (String.make padding_len ' ')
+    header (String.make padding_len ' ')
 
 let with_file filename flags mask ~f =
   let file_descr = Unix.openfile filename flags mask in
@@ -83,28 +74,20 @@ let with_file filename flags mask ~f =
     raise exn
 
 let write ?header_len bigarray filename =
-  with_file filename [O_CREAT; O_TRUNC; O_RDWR] 0o640 ~f:(fun file_descr ->
+  with_file filename [ O_CREAT; O_TRUNC; O_RDWR ] 0o640 ~f:(fun file_descr ->
       let full_header =
-        full_header
-          ()
-          ?header_len
-          ~layout:(Bigarray.Genarray.layout bigarray)
+        full_header () ?header_len ~layout:(Bigarray.Genarray.layout bigarray)
           ~packed_kind:(P (Bigarray.Genarray.kind bigarray))
           ~dims:(Bigarray.Genarray.dims bigarray)
       in
       let full_header_len = String.length full_header in
-      if Unix.write_substring file_descr full_header 0 full_header_len <> full_header_len
-      then raise Cannot_write;
+      if Unix.write_substring file_descr full_header 0 full_header_len <> full_header_len then
+        raise Cannot_write;
       let file_array =
-        map_file
-          ~pos:(Int64.of_int full_header_len)
-          file_descr
-          (Bigarray.Genarray.kind bigarray)
-          (Bigarray.Genarray.layout bigarray)
-          true
-          (Bigarray.Genarray.dims bigarray)
+        map_file ~pos:(Int64.of_int full_header_len) file_descr (Bigarray.Genarray.kind bigarray)
+          (Bigarray.Genarray.layout bigarray) true (Bigarray.Genarray.dims bigarray)
       in
-      Bigarray.Genarray.blit bigarray file_array )
+      Bigarray.Genarray.blit bigarray file_array)
 
 let write1 array1 filename = write (Bigarray.genarray_of_array1 array1) filename
 let write2 array2 filename = write (Bigarray.genarray_of_array2 array2) filename
@@ -113,19 +96,17 @@ let write3 array3 filename = write (Bigarray.genarray_of_array3 array3) filename
 module Batch_writer = struct
   let header_len = 128
 
-  type t =
-    { file_descr : Unix.file_descr
-    ; mutable bytes_written_so_far : int
-    ; mutable dims_and_packed_kind : (int array * packed_kind) option }
+  type t = {
+    file_descr : Unix.file_descr;
+    mutable bytes_written_so_far : int;
+    mutable dims_and_packed_kind : (int array * packed_kind) option;
+  }
 
   let append t bigarray =
     let file_array =
       map_file
         ~pos:(Int64.of_int t.bytes_written_so_far)
-        t.file_descr
-        (Bigarray.Genarray.kind bigarray)
-        (Bigarray.Genarray.layout bigarray)
-        true
+        t.file_descr (Bigarray.Genarray.kind bigarray) (Bigarray.Genarray.layout bigarray) true
         (Bigarray.Genarray.dims bigarray)
     in
     Bigarray.Genarray.blit bigarray file_array;
@@ -133,36 +114,32 @@ module Batch_writer = struct
     t.bytes_written_so_far <- t.bytes_written_so_far + size_in_bytes;
     match t.dims_and_packed_kind with
     | None ->
-      let dims = Bigarray.Genarray.dims bigarray in
-      let kind = Bigarray.Genarray.kind bigarray in
-      t.dims_and_packed_kind <- Some (dims, P kind)
+        let dims = Bigarray.Genarray.dims bigarray in
+        let kind = Bigarray.Genarray.kind bigarray in
+        t.dims_and_packed_kind <- Some (dims, P kind)
     | Some (dims, _kind) ->
-      let dims' = Bigarray.Genarray.dims bigarray in
-      let incorrect_dimensions =
-        match Array.to_list dims, Array.to_list dims' with
-        | [], _ | _, [] -> true
-        | _ :: d, _ :: d' -> d <> d'
-      in
-      if incorrect_dimensions
-      then
-        Printf.sprintf "Incorrect dimensions %s vs %s." (shape ~dims) (shape ~dims:dims')
-        |> failwith;
-      dims.(0) <- dims.(0) + dims'.(0)
+        let dims' = Bigarray.Genarray.dims bigarray in
+        let incorrect_dimensions =
+          match (Array.to_list dims, Array.to_list dims') with
+          | [], _ | _, [] -> true
+          | _ :: d, _ :: d' -> d <> d'
+        in
+        if incorrect_dimensions then
+          Printf.sprintf "Incorrect dimensions %s vs %s." (shape ~dims) (shape ~dims:dims') |> failwith;
+        dims.(0) <- dims.(0) + dims'.(0)
 
   let create filename =
-    let file_descr = Unix.openfile filename [O_CREAT; O_TRUNC; O_RDWR] 0o640 in
-    {file_descr; bytes_written_so_far = header_len; dims_and_packed_kind = None}
+    let file_descr = Unix.openfile filename [ O_CREAT; O_TRUNC; O_RDWR ] 0o640 in
+    { file_descr; bytes_written_so_far = header_len; dims_and_packed_kind = None }
 
   let close t =
     assert (Unix.lseek t.file_descr 0 SEEK_SET = 0);
     let header =
       match t.dims_and_packed_kind with
       | None -> failwith "Nothing to write"
-      | Some (dims, packed_kind) ->
-        full_header ~header_len ~layout:C_layout ~dims ~packed_kind ()
+      | Some (dims, packed_kind) -> full_header ~header_len ~layout:C_layout ~dims ~packed_kind ()
     in
-    if Unix.write_substring t.file_descr header 0 header_len <> header_len
-    then raise Cannot_write;
+    if Unix.write_substring t.file_descr header 0 header_len <> header_len then raise Cannot_write;
     Unix.close t.file_descr
 end
 
@@ -170,21 +147,14 @@ let really_read fd len =
   let buffer = Bytes.create len in
   let rec loop offset =
     let read = Unix.read fd buffer offset (len - offset) in
-    if read + offset < len
-    then loop (read + offset)
-    else if read = 0
-    then read_error "unexpected eof"
+    if read + offset < len then loop (read + offset) else if read = 0 then read_error "unexpected eof"
   in
   loop 0;
   Bytes.to_string buffer
 
 module Header = struct
   type packed_kind = P : (_, _) Bigarray.kind -> packed_kind
-
-  type t =
-    { kind : packed_kind
-    ; fortran_order : bool
-    ; shape : int array }
+  type t = { kind : packed_kind; fortran_order : bool; shape : int array }
 
   let split str ~on =
     let parens = ref 0 in
@@ -197,25 +167,20 @@ module Header = struct
       | _ -> ()
     done;
     List.fold_left
-      (fun (prev_p, acc) index ->
-        index, String.sub str (index + 1) (prev_p - index - 1) :: acc )
+      (fun (prev_p, acc) index -> (index, String.sub str (index + 1) (prev_p - index - 1) :: acc))
       (String.length str, [])
       !indexes
     |> fun (first_pos, acc) -> String.sub str 0 first_pos :: acc
 
   let trim str ~on =
     let rec loopr start len =
-      if len = 0
-      then start, len
-      else if List.mem str.[start + len - 1] on
-      then loopr start (len - 1)
-      else start, len
+      if len = 0 then (start, len)
+      else if List.mem str.[start + len - 1] on then loopr start (len - 1)
+      else (start, len)
     in
     let rec loopl start len =
-      if len = 0
-      then start, len
-      else if List.mem str.[start] on
-      then loopl (start + 1) (len - 1)
+      if len = 0 then (start, len)
+      else if List.mem str.[start] on then loopl (start + 1) (len - 1)
       else loopr start len
     in
     let start, len = loopl 0 (String.length str) in
@@ -223,28 +188,23 @@ module Header = struct
 
   let parse header =
     let header_fields =
-      trim header ~on:['{'; ' '; '}'; '\n']
-      |> split ~on:','
-      |> List.map String.trim
+      trim header ~on:[ '{'; ' '; '}'; '\n' ]
+      |> split ~on:',' |> List.map String.trim
       |> List.filter (fun s -> String.length s > 0)
       |> List.map (fun header_field ->
              match split header_field ~on:':' with
-             | [name; value] ->
-               trim name ~on:['\''; ' '], trim value ~on:['\''; ' '; '('; ')']
-             | _ -> read_error "unable to parse field %s" header_field )
+             | [ name; value ] -> (trim name ~on:[ '\''; ' ' ], trim value ~on:[ '\''; ' '; '('; ')' ])
+             | _ -> read_error "unable to parse field %s" header_field)
     in
     let find_field field =
-      try List.assoc field header_fields with Not_found ->
-        read_error "cannot find field %s" field
+      try List.assoc field header_fields with Not_found -> read_error "cannot find field %s" field
     in
     let kind =
       let kind = find_field "descr" in
       (match kind.[0] with
       | '|' | '=' -> ()
-      | '>' ->
-        if not Sys.big_endian then read_error "big endian data but arch is little endian"
-      | '<' ->
-        if Sys.big_endian then read_error "little endian data but arch is big endian"
+      | '>' -> if not Sys.big_endian then read_error "big endian data but arch is little endian"
+      | '<' -> if Sys.big_endian then read_error "little endian data but arch is big endian"
       | otherwise -> read_error "incorrect endianness %c" otherwise);
       match String.sub kind 1 (String.length kind - 1) with
       | "f4" -> P Float32
@@ -267,14 +227,11 @@ module Header = struct
       | otherwise -> read_error "incorrect fortran_order %s" otherwise
     in
     let shape =
-      find_field "shape"
-      |> split ~on:','
-      |> List.map String.trim
+      find_field "shape" |> split ~on:',' |> List.map String.trim
       |> List.filter (fun s -> String.length s > 0)
-      |> List.map int_of_string
-      |> Array.of_list
+      |> List.map int_of_string |> Array.of_list
     in
-    {kind; fortran_order; shape}
+    { kind; fortran_order; shape }
 end
 
 type packed_array = P : (_, _, _) Bigarray.Genarray.t -> packed_array
@@ -284,29 +241,25 @@ type packed_array3 = P3 : (_, _, _) Bigarray.Array3.t -> packed_array3
 
 let read_mmap filename ~shared =
   let access = if shared then Unix.O_RDWR else O_RDONLY in
-  let file_descr = Unix.openfile filename [access] 0 in
+  let file_descr = Unix.openfile filename [ access ] 0 in
   let pos, header =
     try
       let magic_string' = really_read file_descr magic_string_len in
       if magic_string <> magic_string' then read_error "magic string mismatch";
       let version = really_read file_descr 2 |> fun v -> v.[0] |> Char.code in
       let header_len_len =
-        match version with
-        | 1 -> 2
-        | 2 -> 4
-        | _ -> read_error "unsupported version %d" version
+        match version with 1 -> 2 | 2 -> 4 | _ -> read_error "unsupported version %d" version
       in
       let header, header_len =
-        really_read file_descr header_len_len
-        |> fun str ->
+        really_read file_descr header_len_len |> fun str ->
         let header_len = ref 0 in
         for i = String.length str - 1 downto 0 do
           header_len := (256 * !header_len) + Char.code str.[i]
         done;
-        really_read file_descr !header_len, !header_len
+        (really_read file_descr !header_len, !header_len)
       in
       let header = Header.parse header in
-      Int64.of_int (header_len + header_len_len + magic_string_len + 2), header
+      (Int64.of_int (header_len + header_len_len + magic_string_len + 2), header)
     with exn ->
       Unix.close file_descr;
       raise exn
@@ -334,9 +287,7 @@ let read_mmap3 filename ~shared =
 let read_copy filename =
   let (P array) = read_mmap filename ~shared:false in
   let result =
-    Bigarray.Genarray.create
-      (Bigarray.Genarray.kind array)
-      (Bigarray.Genarray.layout array)
+    Bigarray.Genarray.create (Bigarray.Genarray.kind array) (Bigarray.Genarray.layout array)
       (Bigarray.Genarray.dims array)
   in
   Bigarray.Genarray.blit array result;
@@ -363,10 +314,9 @@ module Eq = struct
 
   (** Type equalities for bigarray kinds *)
   module Kind = struct
-    let ( === ) : type a b c d.
-        (a, b) kind -> (c, d) kind -> ((a, b) kind, (c, d) kind) t option =
+    let ( === ) : type a b c d. (a, b) kind -> (c, d) kind -> ((a, b) kind, (c, d) kind) t option =
      fun x y ->
-      match x, y with
+      match (x, y) with
       | Float32, Float32 -> Some W
       | Float64, Float64 -> Some W
       | Int8_signed, Int8_signed -> Some W
@@ -387,7 +337,7 @@ module Eq = struct
   module Layout = struct
     let ( === ) : type a b. a layout -> b layout -> (a layout, b layout) t option =
      fun x y ->
-      match x, y with
+      match (x, y) with
       | Fortran_layout, Fortran_layout -> Some W
       | C_layout, C_layout -> Some W
       | _, _ -> None
@@ -396,41 +346,37 @@ end
 
 (** Conversion functions from packed arrays to bigarrays *)
 
-let to_bigarray
-    (type a b c) (layout : c Bigarray.layout) (kind : (a, b) Bigarray.kind) (P x) =
+let to_bigarray (type a b c) (layout : c Bigarray.layout) (kind : (a, b) Bigarray.kind) (P x) =
   match Eq.Layout.(Bigarray.Genarray.layout x === layout) with
   | None -> None
-  | Some Eq.W ->
-    (match Eq.Kind.(Bigarray.Genarray.kind x === kind) with
-    | None -> None
-    | Some Eq.W -> Some (x : (a, b, c) Bigarray.Genarray.t))
+  | Some Eq.W -> (
+      match Eq.Kind.(Bigarray.Genarray.kind x === kind) with
+      | None -> None
+      | Some Eq.W -> Some (x : (a, b, c) Bigarray.Genarray.t))
 
-let to_bigarray1
-    (type a b c) (layout : c Bigarray.layout) (kind : (a, b) Bigarray.kind) (P1 x) =
+let to_bigarray1 (type a b c) (layout : c Bigarray.layout) (kind : (a, b) Bigarray.kind) (P1 x) =
   match Eq.Layout.(Bigarray.Array1.layout x === layout) with
   | None -> None
-  | Some Eq.W ->
-    (match Eq.Kind.(Bigarray.Array1.kind x === kind) with
-    | None -> None
-    | Some Eq.W -> Some (x : (a, b, c) Bigarray.Array1.t))
+  | Some Eq.W -> (
+      match Eq.Kind.(Bigarray.Array1.kind x === kind) with
+      | None -> None
+      | Some Eq.W -> Some (x : (a, b, c) Bigarray.Array1.t))
 
-let to_bigarray2
-    (type a b c) (layout : c Bigarray.layout) (kind : (a, b) Bigarray.kind) (P2 x) =
+let to_bigarray2 (type a b c) (layout : c Bigarray.layout) (kind : (a, b) Bigarray.kind) (P2 x) =
   match Eq.Layout.(Bigarray.Array2.layout x === layout) with
   | None -> None
-  | Some Eq.W ->
-    (match Eq.Kind.(Bigarray.Array2.kind x === kind) with
-    | None -> None
-    | Some Eq.W -> Some (x : (a, b, c) Bigarray.Array2.t))
+  | Some Eq.W -> (
+      match Eq.Kind.(Bigarray.Array2.kind x === kind) with
+      | None -> None
+      | Some Eq.W -> Some (x : (a, b, c) Bigarray.Array2.t))
 
-let to_bigarray3
-    (type a b c) (layout : c Bigarray.layout) (kind : (a, b) Bigarray.kind) (P3 x) =
+let to_bigarray3 (type a b c) (layout : c Bigarray.layout) (kind : (a, b) Bigarray.kind) (P3 x) =
   match Eq.Layout.(Bigarray.Array3.layout x === layout) with
   | None -> None
-  | Some Eq.W ->
-    (match Eq.Kind.(Bigarray.Array3.kind x === kind) with
-    | None -> None
-    | Some Eq.W -> Some (x : (a, b, c) Bigarray.Array3.t))
+  | Some Eq.W -> (
+      match Eq.Kind.(Bigarray.Array3.kind x === kind) with
+      | None -> None
+      | Some Eq.W -> Some (x : (a, b, c) Bigarray.Array3.t))
 
 module Npz = struct
   let npy_suffix = ".npy"
@@ -447,21 +393,20 @@ module Npz = struct
     Zip.entries t
     |> List.map (fun entry ->
            let filename = entry.Zip.filename in
-           if String.length filename < String.length npy_suffix
-           then filename
-           else (
+           if String.length filename < String.length npy_suffix then filename
+           else
              let start_pos = String.length filename - String.length npy_suffix in
-             if String.sub filename start_pos (String.length npy_suffix) = npy_suffix
-             then String.sub filename 0 start_pos
-             else filename))
+             if String.sub filename start_pos (String.length npy_suffix) = npy_suffix then
+               String.sub filename 0 start_pos
+             else filename)
 
   let close_in = Zip.close_in
 
   let read ?suffix t array_name =
     let array_name = maybe_add_suffix array_name ~suffix in
     let entry =
-      try Zip.find_entry t array_name with Not_found ->
-        raise (Invalid_argument ("unable to find " ^ array_name))
+      try Zip.find_entry t array_name
+      with Not_found -> raise (Invalid_argument ("unable to find " ^ array_name))
     in
     let tmp_file = Filename.temp_file "ocaml-npz" ".tmp" in
     Zip.copy_entry_to_file t entry tmp_file;
@@ -472,24 +417,22 @@ module Npz = struct
   let restore ?suffix t array_name array =
     let array_name = maybe_add_suffix array_name ~suffix in
     let entry =
-      try Zip.find_entry t array_name with
-      | Not_found -> raise (Invalid_argument ("unable to find " ^ array_name))
+      try Zip.find_entry t array_name
+      with Not_found -> raise (Invalid_argument ("unable to find " ^ array_name))
     in
     let tmp_file = Filename.temp_file "ocaml-npz" ".tmp" in
-    let convert =
-      to_bigarray (Bigarray.Genarray.layout array) (Bigarray.Genarray.kind array)
-    in
+    let convert = to_bigarray (Bigarray.Genarray.layout array) (Bigarray.Genarray.kind array) in
     Zip.copy_entry_to_file t entry tmp_file;
     match convert @@ read_mmap tmp_file ~shared:false with
     | Some result ->
-      Bigarray.Genarray.blit result array;
-      Sys.remove tmp_file
+        Bigarray.Genarray.blit result array;
+        Sys.remove tmp_file
     | None ->
-      Sys.remove tmp_file;
-      raise (Invalid_argument ("datatype mismatch when restoring " ^ array_name))
+        Sys.remove tmp_file;
+        raise (Invalid_argument ("datatype mismatch when restoring " ^ array_name))
     | exception exn ->
-      Sys.remove tmp_file;
-      raise exn
+        Sys.remove tmp_file;
+        raise exn
 
   type out_file = Zip.out_file
 
