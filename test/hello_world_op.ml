@@ -4,6 +4,7 @@ module Tn = Arrayjit.Tnode
 module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
+module Rand = Arrayjit.Rand.Lib
 
 let%expect_test "Hello World" =
   Stdio.printf "Hello World!\n";
@@ -14,7 +15,7 @@ let%expect_test "Pointwise multiplication dims 1" =
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  Random.init 0;
+  Rand.init 0;
   (* "Hey" is inferred to be a scalar. *)
   let%op y = 2 *. "hey" in
   Train.forward_and_forget backend ctx y;
@@ -27,7 +28,7 @@ let%expect_test "Pointwise multiplication dims 1" =
     │┌┬─────────┐        │
     │││axis 0   │        │
     │├┼─────────┼─────── │
-    │││ 2.67e-1 │        │
+    │││ 7.38e-2 │        │
     │└┴─────────┘        │
     └────────────────────┘ |}]
 
@@ -36,7 +37,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  Random.init 0;
+  Rand.init 0;
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
   let%op y = ("hey" * 'q' 2.0) + 'p' 1.0 in
   Train.forward_and_forget backend ctx y;
@@ -49,7 +50,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
     │┌──────┬─────────┐      │
     ││      │axis 1   │      │
     │├──────┼─────────┼───── │
-    ││axis 0│ 1.34e-1 │      │
+    ││axis 0│ 3.69e-2 │      │
     │└──────┴─────────┘      │
     └────────────────────────┘ |}];
   Tensor.print ~with_code:false ~with_grad:false `Default @@ y;
@@ -60,7 +61,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
     │┌┬─────────┐        │
     │││axis 0   │        │
     │├┼─────────┼─────── │
-    │││ 1.27e+0 │        │
+    │││ 1.07e+0 │        │
     │└┴─────────┘        │
     └────────────────────┘ |}]
 
@@ -69,7 +70,7 @@ let%expect_test "Print constant tensor" =
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  Random.init 0;
+  Rand.init 0;
 
   let%op hey = [ (1, 2, 3); (4, 5, 6) ] in
   Train.forward_and_forget backend ctx hey;
@@ -361,7 +362,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  Random.init 0;
+  Rand.init 0;
   (* Hey is inferred to be a matrix. *)
   let%op y = ("hey" * [ 2; 3 ]) + [ 4; 5; 6 ] in
   Train.forward_and_forget backend ctx y;
@@ -373,9 +374,9 @@ let%expect_test "Matrix multiplication dims 2x3" =
     │┌──────┬──────────────────┐│
     ││      │axis 1            ││
     │├──────┼──────────────────┤│
-    ││axis 0│ 1.34e-1  8.68e-1 ││
-    ││      │ 4.49e-1  2.68e-1 ││
-    ││      │ 3.56e-2  5.87e-1 ││
+    ││axis 0│ 3.69e-2  4.69e-1 ││
+    ││      │ 8.17e-1  9.70e-1 ││
+    ││      │ 1.94e-1  5.50e-1 ││
     │└──────┴──────────────────┘│
     └───────────────────────────┘ |}];
   Tensor.print ~with_code:false ~with_grad:false `Default @@ y;
@@ -386,7 +387,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
     │┌┬───────────────────────────┐│
     │││axis 0                     ││
     │├┼───────────────────────────┤│
-    │││ 6.87e+0  6.70e+0  7.83e+0 ││
+    │││ 5.48e+0  9.54e+0  8.04e+0 ││
     │└┴───────────────────────────┘│
     └──────────────────────────────┘ |}]
 
@@ -395,7 +396,7 @@ let%expect_test "Big matrix" =
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  Random.init 0;
+  Rand.init 0;
   (* Hey is inferred to be a matrix. *)
   let hey = TDSL.O.(!~"hey") in
   let zero_to_twenty = TDSL.range 20 in
@@ -425,11 +426,11 @@ let%expect_test "Big matrix" =
       │┌──────┬─────────────────────────────────────────┐│
       ││      │axis 1                                   ││
       │├──────┼─────────────────────────────────────────┤│
-      ││axis 0│ 1.34e-1  8.68e-1  ...  5.46e-1  4.70e-1 ││
-      ││      │ 5.31e-1  4.31e-1  ...  9.64e-1  4.50e-2 ││
+      ││axis 0│ 3.69e-2  4.69e-1  ...  2.12e-1  1.92e-1 ││
+      ││      │ 9.69e-1  6.75e-1  ...  8.33e-2  9.15e-1 ││
       ││      │ ...      ...      ...  ...      ...     ││
-      ││      │ 3.78e-1  1.22e-1  ...  3.10e-1  4.93e-1 ││
-      ││      │ 8.50e-1  4.69e-1  ...  6.16e-2  8.49e-1 ││
+      ││      │ 9.86e-2  4.10e-1  ...  8.05e-1  1.01e-1 ││
+      ││      │ 5.29e-1  5.14e-1  ...  2.27e-2  4.98e-1 ││
       │└──────┴─────────────────────────────────────────┘│
       └──────────────────────────────────────────────────┘ |}];
   Tensor.print ~with_code:false ~with_grad:false `Default y;
@@ -440,7 +441,7 @@ let%expect_test "Big matrix" =
       │┌┬─────────────────────────────────────────┐│
       │││axis 0                                   ││
       │├┼─────────────────────────────────────────┤│
-      │││ 1.27e+2  1.00e+2  ...  1.04e+2  1.23e+2 ││
+      │││ 1.01e+2  1.06e+2  ...  1.16e+2  1.08e+2 ││
       │└┴─────────────────────────────────────────┘│
       └────────────────────────────────────────────┘ |}]
 
@@ -449,7 +450,7 @@ let%expect_test "Very big tensor" =
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  Random.init 0;
+  Rand.init 0;
   let hey = TDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8; 9 ] ~output_dims:[ 10; 11 ] () in
   let%op hoo = (hey * (1 + 1)) - 10 in
   Train.forward_and_forget backend ctx hoo;

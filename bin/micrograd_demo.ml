@@ -6,9 +6,10 @@ module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
 module Utils = Arrayjit.Utils
+module Rand = Arrayjit.Rand.Lib
 
 let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
-  Random.init 0;
+  Rand.init 0;
   Utils.settings.with_debug <- true;
 
   (* Utils.settings.output_debug_files_in_run_directory <- true; *)
@@ -21,13 +22,13 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   let steps = epochs * n_batches in
   (* let weight_decay = 0.0002 in *)
   Utils.settings.fixed_state_for_init <- Some seed;
-  let noise () = Random.float_range (-0.1) 0.1 in
+  let noise () = Rand.float_range (-0.1) 0.1 in
   let moons_flat =
     Array.concat_map (Array.create ~len ())
       ~f:
         Float.(
           fun () ->
-            let i = Random.int len in
+            let i = Rand.int len in
             let v = of_int i * pi / of_int len in
             let c = cos v and s = sin v in
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])

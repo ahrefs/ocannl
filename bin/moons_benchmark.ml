@@ -7,6 +7,7 @@ module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
 module Utils = Arrayjit.Utils
+module Rand = Arrayjit.Rand.Lib
 module Debug_runtime = Utils.Debug_runtime
 
 [%%global_debug_log_level Nothing]
@@ -29,7 +30,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   Tensor.default_grad_prec := precision;
   Utils.settings.output_debug_files_in_run_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
-  Random.init (* seed *) 0;
+  Rand.init (* seed *) 0;
   (* let hid_2_3 = 8 in let hid_4_5 = 4 in *)
   let hid_dim = 16 in
   (* let hid_dim = 4 in *)
@@ -38,13 +39,13 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   (* let epochs = 10 in *)
   let epochs = 5 in
   let init_lr = 0.1 in
-  let noise () = Random.float_range (-0.1) 0.1 in
+  let noise () = Rand.float_range (-0.1) 0.1 in
   let moons_flat =
     Array.concat_map (Array.create ~len ())
       ~f:
         Float.(
           fun () ->
-            let i = Random.int len in
+            let i = Rand.int len in
             let v = of_int i * pi / of_int len in
             let c = cos v and s = sin v in
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])

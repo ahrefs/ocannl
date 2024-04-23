@@ -6,9 +6,10 @@ module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module Utils = Arrayjit.Utils
+module Rand = Arrayjit.Rand.Lib
 
 let _suspended () =
-  Random.init 0;
+  Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
@@ -23,7 +24,7 @@ let _suspended () =
   Stdlib.Format.printf "%a\n%!" (Arrayjit.Assignments.fprint_hum ()) code.fwd_bprop
 
 let _suspended () =
-  Random.init 0;
+  Rand.init 0;
   CDSL.enable_all_debugs ();
   CDSL.virtualize_settings.enable_device_only <- false;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
@@ -38,7 +39,7 @@ let _suspended () =
 let _suspended () =
   (* FIXME: why is this toplevel example broken and the next one working? *)
   Utils.settings.output_debug_files_in_run_directory <- true;
-  Random.init 0;
+  Rand.init 0;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let size = 100 in
   let values = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
@@ -87,7 +88,7 @@ let _suspended () =
   PrintBox_text.output Stdio.stdout plot_box
 
 let () =
-  Random.init 0;
+  Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
@@ -135,11 +136,10 @@ let () =
   PrintBox_text.output Stdio.stdout plot_box
 
 let _suspended () =
-  Random.init 0;
+  Rand.init 0;
   Utils.settings.with_debug <- true;
   Utils.settings.output_debug_files_in_run_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
-  Random.init 0;
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in

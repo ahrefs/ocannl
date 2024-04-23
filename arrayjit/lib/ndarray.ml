@@ -78,7 +78,7 @@ let indices_to_offset ~dims ~idcs =
 
 let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~dims (init_op : Ops.init_op) :
     (ocaml, elt_t) bigarray =
-  Option.iter Utils.settings.fixed_state_for_init ~f:(fun seed -> Random.init seed);
+  Option.iter Utils.settings.fixed_state_for_init ~f:(fun seed -> Rand.Lib.init seed);
   let constant_fill_f f values strict =
     let len = Array.length values in
     if strict then (
@@ -96,20 +96,20 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
   | Ops.Half, Constant_fill { values; strict } -> constant_fill_float values strict
   | Ops.Half, Range_over_offsets ->
       init_bigarray_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Ops.Half, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
+  | Ops.Half, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Rand.Lib.float_range 0.0 1.0)
   | Ops.Single, Constant_fill { values; strict } -> constant_fill_float values strict
   | Ops.Single, Range_over_offsets ->
       init_bigarray_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Ops.Single, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
+  | Ops.Single, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Rand.Lib.float_range 0.0 1.0)
   | Ops.Double, Constant_fill { values; strict } -> constant_fill_float values strict
   | Ops.Double, Range_over_offsets ->
       init_bigarray_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Ops.Double, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.float_range 0.0 1.0)
+  | Ops.Double, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Rand.Lib.float_range 0.0 1.0)
   | Ops.Byte, Constant_fill { values; strict } ->
       constant_fill_f (Fn.compose Char.of_int_exn Int.of_float) values strict
   | Ops.Byte, Range_over_offsets ->
       init_bigarray_of_prec prec dims ~f:(fun idcs -> Char.of_int_exn @@ indices_to_offset ~dims ~idcs)
-  | Ops.Byte, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.char ())
+  | Ops.Byte, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Rand.Lib.char ())
   | _, File_mapped (filename, stored_prec) ->
       (* See: https://github.com/janestreet/torch/blob/master/src/torch/dataset_helper.ml#L3 *)
       if not @@ Ops.equal_prec stored_prec (Ops.pack_prec prec) then
@@ -228,19 +228,19 @@ let reset_bigarray (init_op : Ops.init_op) (type o b) (prec : (o, b) Ops.precisi
       constant_set_f (Fn.compose Char.of_int_exn Int.of_float) values strict
   | Byte, Range_over_offsets ->
       set_bigarray arr ~f:(fun idcs -> Char.of_int_exn @@ indices_to_offset ~dims ~idcs)
-  | Byte, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Random.char ())
+  | Byte, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Rand.Lib.char ())
   | Half, Constant_fill { values; strict } -> constant_set_float values strict
   | Half, Range_over_offsets ->
       set_bigarray arr ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Half, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Random.float_range 0.0 1.0)
+  | Half, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Rand.Lib.float_range 0.0 1.0)
   | Single, Constant_fill { values; strict } -> constant_set_float values strict
   | Single, Range_over_offsets ->
       set_bigarray arr ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Single, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Random.float_range 0.0 1.0)
+  | Single, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Rand.Lib.float_range 0.0 1.0)
   | Double, Constant_fill { values; strict } -> constant_set_float values strict
   | Double, Range_over_offsets ->
       set_bigarray arr ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Double, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Random.float_range 0.0 1.0)
+  | Double, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Rand.Lib.float_range 0.0 1.0)
   | _, File_mapped _ -> A.blit (create_bigarray prec ~dims init_op) arr
 
 let reset init_op arr =

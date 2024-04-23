@@ -4,9 +4,10 @@ module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module Utils = Arrayjit.Utils
+module Rand = Arrayjit.Rand.Lib
 
 let () =
-  Random.init 0;
+  Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in

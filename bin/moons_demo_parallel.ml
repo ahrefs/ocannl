@@ -6,6 +6,7 @@ module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
 module Utils = Arrayjit.Utils
+module Rand = Arrayjit.Rand.Lib
 
 (* let num_devices = 20 *)
 (* let num_devices = 10 *)
@@ -27,13 +28,13 @@ let experiment ~seed () =
   (* let epochs = 10 in *)
   let epochs = 20 in
   (* let epochs = 1 in *)
-  let noise () = Random.float_range (-0.1) 0.1 in
+  let noise () = Rand.float_range (-0.1) 0.1 in
   let moons_flat =
     Array.concat_map (Array.create ~len ())
       ~f:
         Float.(
           fun () ->
-            let i = Random.int len in
+            let i = Rand.int len in
             let v = of_int i * pi / of_int len in
             let c = cos v and s = sin v in
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])

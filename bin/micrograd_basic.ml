@@ -5,6 +5,7 @@ module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module Utils = Arrayjit.Utils
+module Rand = Arrayjit.Rand.Lib
 module Debug_runtime = Utils.Debug_runtime
 
 let _suspended () =
@@ -12,7 +13,7 @@ let _suspended () =
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
   Utils.settings.output_debug_files_in_run_directory <- true;
-  Random.init 0;
+  Rand.init 0;
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op c = c + c + 1 in
   let%op c = c + 1 + c + ~-a in
@@ -34,7 +35,7 @@ let%diagn_sexp () : unit =
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
   (* Utils.settings.output_debug_files_in_run_directory <- true; *)
-  Random.init 0;
+  Rand.init 0;
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = (a *. b) + (b **. 3) in
   let%op c = c + c + 1 in

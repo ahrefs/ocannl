@@ -6,9 +6,10 @@ module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module Utils = Arrayjit.Utils
+module Rand = Arrayjit.Rand.Lib
 
 let%expect_test "Graph drawing recompile" =
-  Random.init 0;
+  Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
@@ -123,7 +124,7 @@ let%expect_test "Graph drawing recompile" =
              │                                     x |}]
 
 let%expect_test "Graph drawing fetch" =
-  Random.init 0;
+  Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
@@ -223,7 +224,7 @@ let%expect_test "Graph drawing fetch" =
               │                                     x |}]
 
 let%expect_test "Simple gradients hosted" =
-  Random.init 0;
+  Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
@@ -329,7 +330,7 @@ let%expect_test "Simple gradients hosted" =
        6.24e+0  │ -3.36e+0 │          │ |}]
 
 let%expect_test "Simple gradients virtual" =
-  Random.init 0;
+  Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
@@ -460,7 +461,7 @@ let%expect_test "tanh plot" =
   ()
 
 let%expect_test "2D neuron hosted" =
-  Random.init 0;
+  Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
@@ -487,7 +488,7 @@ let%expect_test "2D neuron hosted" =
      2.00e+0  0.00e+0  │ -3.00e+0  1.00e+0 │ |}]
 
 let%expect_test "2D neuron virtual" =
-  Random.init 0;
+  Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in

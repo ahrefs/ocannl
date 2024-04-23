@@ -5,6 +5,7 @@ module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
+module Rand = Arrayjit.Rand.Lib
 
 let benchmark_overhead backend () =
   let n_data = 20 in
@@ -15,7 +16,7 @@ let benchmark_overhead backend () =
   (* Utils.settings.debug_log_from_routines <- true; *)
   CDSL.disable_all_debugs ();
   Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ name ^ " ******";
-  Random.init 0;
+  Rand.init 0;
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.set_hosted f.value;

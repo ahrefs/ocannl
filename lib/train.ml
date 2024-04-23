@@ -5,6 +5,7 @@ module NTDSL = Operation.NTDSL
 module Asgns = Arrayjit.Assignments
 module Idx = Arrayjit.Indexing
 module Utils = Arrayjit.Utils
+module Rand = Arrayjit.Rand.Lib
 
 module type Backend_type = Arrayjit.Backends.Backend
 
@@ -407,7 +408,7 @@ let example_train_loop ?(disable_rootness_check = false) ~name ~seed ~batch_size
     ?per_epoch_callback backend () =
   let module TDSL = Operation.TDSL in
   let module NTDSL = Operation.NTDSL in
-  Random.init seed;
+  Rand.init seed;
   let minibatch_size = batch_size / num_devices in
   let n_batches = data_len / minibatch_size in
   let inputs = inputs ~b:[ n_batches; minibatch_size ] in

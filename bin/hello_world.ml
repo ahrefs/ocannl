@@ -6,9 +6,10 @@ module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
 module Utils = Arrayjit.Utils
+module Rand = Arrayjit.Rand.Lib
 
 let hello1 () =
-  Random.init 0;
+  Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   Utils.settings.with_debug <- true;
   (* Utils.settings.output_debug_files_in_run_directory <- true; *)
@@ -25,7 +26,7 @@ let hello1 () =
   Tensor.print ~with_code:false ~with_grad:false `Default hoo
 
 let hello2 () =
-  Random.init 0;
+  Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   Utils.settings.with_debug <- true;
   (* Utils.settings.output_debug_files_in_run_directory <- true; *)
@@ -41,7 +42,7 @@ let hello2 () =
   Tensor.print ~with_code:false ~with_grad:false `Default @@ y
 
 let hello3 () =
-  Random.init 0;
+  Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   Utils.settings.output_debug_files_in_run_directory <- true;
   (* Utils.settings.debug_log_from_routines <- true; *)
@@ -73,7 +74,7 @@ let hello4 () =
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  Random.init 0;
+  Rand.init 0;
   let ri = TDSL.range 3 in
   let%op ti = ri ++ "i=>i0" in
   (* Write position 2 of ti, otherwise shape inference concludes it's dim-1 and broadcasted. *)
@@ -99,7 +100,7 @@ let hello5 () =
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
-  Random.init 0;
+  Rand.init 0;
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|1->... => ...|..." in
   Train.forward_and_forget backend ctx ho;
