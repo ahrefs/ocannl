@@ -91,7 +91,9 @@
   ppx_jane
   ppx_expect
   (ppx_minidebug
-   (>= 1.5)))
+   (>= 1.5))
+  (odoc :with-doc)
+  (md2mld :with-doc))
  (tags
   (deeplearning tensor backprop jit gccjit CUDA)))
 
