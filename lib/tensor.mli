@@ -70,7 +70,9 @@ val raw_unop :
   logic:Shape.transpose_type ->
   asgns
 
-type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving variants]
+type grad_spec = Require_grad | Prohibit_grad | If_needed
+
+val is_prohibit_grad : grad_spec -> bool
 
 val op :
   label:string list ->

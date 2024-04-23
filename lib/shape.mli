@@ -48,9 +48,9 @@ type t = {
   id : int;  (** A node that has the same shape as this shape. *)
   debug_name : string;
 }
-[@@deriving equal, fields, sexp]
+[@@deriving equal, sexp]
 
-type deduce_within_shape = Not_constrained | Input_equals_output [@@deriving compare, sexp, variants]
+type deduce_within_shape = Not_constrained | Input_equals_output [@@deriving compare, sexp]
 
 type compose_type =
   | Pointwise_bin  (** NumPy-style broadcast matching batch, input and output axes, e.g. as in [s1 + s2]. *)
