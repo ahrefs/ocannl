@@ -20,6 +20,7 @@
 (test
  (name test_ppx_op)
  (modules test_ppx_op)
+ (deps ocannl_config)
  (libraries ocannl)
  (preprocess
   (pps ppx_ocannl)))
@@ -27,4 +28,5 @@
 (test
  (name test_ppx_op_expected)
  (modules test_ppx_op_expected)
+ (deps ocannl_config)
  (libraries ocannl))
