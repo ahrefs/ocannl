@@ -1,0 +1,34 @@
+name: ci
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+jobs:
+  run:
+    name: Build
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          # The CI does not support OCaml version 5.1 yet (at the time of writing).
+          # - windows-latest
+          # Either the waiting queue for FreeBSD is very long, or it is not available.
+          # - freebsd-latest
+        ocaml-compiler:
+          - 5.1.x
+          - 5.2.x
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v2
+    - uses: ocaml/setup-ocaml@v2
+      with:
+        ocaml-compiler: ${{ matrix.ocaml-compiler }}
+        dune-cache: true
+        allow-prerelease-opam: true
+    - run: opam pin -n .
+    - run: opam depext -yt ocannl_npy arrayjit ocannl
+    - run: opam install . --deps-only --with-test --with-doc
+    - run: opam exec -- dune build
+    - run: opam exec -- dune runtest
