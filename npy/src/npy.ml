@@ -11,7 +11,7 @@ let dtype ~packed_kind =
   let endianness =
     match packed_kind with P Bigarray.Char -> "|" | P _ -> if Sys.big_endian then ">" else "<"
   in
-  let kind =
+  let[@warning "-11"] kind =
     match packed_kind with
     | P Bigarray.Int32 -> "i4"
     | P Bigarray.Int64 -> "i8"
