@@ -1,3 +1,15 @@
+## [0.3.3] -- 2024-04-23
+
+### Added
+
+- GitHub workflow for continuous integration and API docs.
+- Randomness plug-ins via global config `randomness_lib`: currently only `stdlib` and `for_tests`.
+
+### Fixed
+
+- A bit of code rot in the Cuda backend mock `cuda_backend.missing.ml`.
+- NPY: Compatibility with OCaml 5.2.0.
+
 ## [0.3.2] -- 2024-04-22
 
 ### Added

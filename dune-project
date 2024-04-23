@@ -4,7 +4,7 @@
 
 (name ocannl)
 
-(version 0.3.2)
+(version 0.3.3)
 
 (generate_opam_files true)
 
@@ -30,7 +30,7 @@
  (name ocannl_npy)
  (synopsis "Numpy file format support for ocaml")
  (authors "Laurent Mazare")
- (maintainers "Laurent Mazare <lmazare@gmail.com>")
+ (maintainers "Lukasz Stafiniak <lukstafi@gmail.com>")
  (depends
   (ocaml
    (>= 4.06))
