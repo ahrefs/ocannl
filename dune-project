@@ -52,8 +52,8 @@
   dune
   base
   core
-  ctypes
-  ctypes-foreign
+  (ctypes (>= 0.20))
+  (ctypes-foreign (>= 0.20))
   (gccjit
    (>= 0.3.2))
   printbox
