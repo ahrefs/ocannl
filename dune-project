@@ -86,7 +86,7 @@
   printbox
   printbox-text
   ocannl_npy
-  angstrom
+  (angstrom (>= 0.15))
   stdio
   num
   ppxlib
