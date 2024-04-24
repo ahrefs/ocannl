@@ -1,4 +1,4 @@
-## [0.3.3] -- 2024-04-23
+## [0.3.3] -- 2024-04-24
 
 ### Added
 
@@ -9,6 +9,7 @@
 
 - A bit of code rot in the Cuda backend mock `cuda_backend.missing.ml`.
 - NPY: Compatibility with OCaml 5.2.0.
+- Renamed the main package name from `ocannl` to `neural_nets_lib`, to prevent the opam linter from complaining about a confusing name.
 
 ## [0.3.2] -- 2024-04-22
 

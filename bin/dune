@@ -8,7 +8,7 @@
 
 (executable
  ; A placeholder main entry.
- (package ocannl)
+ (package neural_nets_lib)
  (public_name ocannl)
  (name moons_benchmark)
  (modules moons_benchmark)

@@ -36,14 +36,15 @@ OCANNL is sponsored by [Ahrefs](https://ocaml.org/success-stories/peta-byte-scal
 
 On the critical path for the next major release v0.4:
 
-* Mixed-precision computations: working and convenient.
 * Restore signs of life for the Cuda backend.
+* Mixed-precision computations: working and convenient.
 
 ### Releases
 
 For more details, see [CHANGES](CHANGES.md).
 
 * **v0.3 shape inference, jitted routines**: a major rewrite of the whole project.
+  * **v0.3.3**: continuous integration and opam release.
   * **v0.3.2**: new shape inference feature: tracking leftmost axes -- complete inference for splicing, ellipsis-in-the-middle allowed in einsum notation.
   * **v0.3.1**: sanitizing code inclusion (rootness checks).
   * **v0.3.0**: declarative shape inference; replaced the session interface with a "jitted code routines" API. Cuda defunct.
@@ -75,6 +76,8 @@ OCANNL follows different design choices than [OWL](https://ocaml.xyz/). For exam
 * OCANNL provides lower-level compilation backends than OWL, it is more self-contained in this sense.
 
 ## Installation
+
+Although the project is called `ocannl`, the main package is called `neural_nets_lib`, to avoid the (opam linter's) complaint that the name can be confused with other packages. This also clarifies that `ocannl` is composed of `arrayjit` and `neural_nets_lib`.
 
 The dependency on `ocaml-cudajit` is optional, so you have to install it first to enable the Cuda backend.
 

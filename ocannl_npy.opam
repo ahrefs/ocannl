@@ -9,9 +9,9 @@ homepage: "https://github.com/lukstafi/ocannl"
 doc: "https://github.com/lukstafi/ocannl/blob/master/README.md"
 bug-reports: "https://github.com/lukstafi/ocannl/issues"
 depends: [
-  "ocaml" {>= "4.06"}
+  "ocaml" {>= "5.1.0"}
   "camlzip"
-  "dune" {>= "3.11" & build}
+  "dune" {>= "3.11"}
   "conf-python-3" {with-test}
   "odoc" {with-doc}
 ]

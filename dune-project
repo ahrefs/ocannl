@@ -32,10 +32,12 @@
  (authors "Laurent Mazare")
  (maintainers "Lukasz Stafiniak <lukstafi@gmail.com>")
  (depends
+  ; The real dependency is >= 4.06, but because of multi-package project
+  ; need to keep it in sync with the other packages.
   (ocaml
-   (>= 4.06))
+   (>= 5.1.0))
   camlzip
-  (dune :build)
+  dune
   (conf-python-3 :with-test)))
 
 (package
@@ -69,7 +71,7 @@
   (deeplearning array jit gccjit CUDA)))
 
 (package
- (name ocannl)
+ (name neural_nets_lib)
  (synopsis
   "A from-scratch Deep Learning framework with an optimizing compiler, shape inference, concise syntax")
  (description
