@@ -27,7 +27,7 @@ jobs:
         run: opam pin -n .
 
       - name: Depext
-        run: opam depext -yt ocannl_npy arrayjit ocannl
+        run: opam depext -yt ocannl_npy arrayjit neural_nets_lib
 
       - name: Deps
         run: opam install -d . --deps-only

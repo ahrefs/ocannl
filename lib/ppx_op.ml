@@ -221,7 +221,7 @@ let rec translate ?ident_label expr =
 let expr_expander ~loc ~path:_ payload =
   match payload with
   | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
-      (* We are at the %ocannl annotation level: do not tranlsate the body. *)
+      (* We are at the %op annotation level: do not tranlsate the body. *)
       let vbss, bindings =
         List.unzip
         @@ List.map bindings ~f:(fun vb ->

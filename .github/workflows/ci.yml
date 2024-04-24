@@ -28,7 +28,7 @@ jobs:
         dune-cache: true
         allow-prerelease-opam: true
     - run: opam pin -n .
-    - run: opam depext -yt ocannl_npy arrayjit ocannl
+    - run: opam depext -yt ocannl_npy arrayjit neural_nets_lib
     - run: opam install . --deps-only --with-test --with-doc
     - run: opam exec -- dune build
     - run: opam exec -- dune runtest

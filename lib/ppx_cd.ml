@@ -809,7 +809,7 @@ type extension = Cd | Dt | Rs [@@deriving equal, variants]
 let expr_expander ~loc ~path:_ payload =
   match payload with
   | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
-      (* We are at the %ocannl annotation level: do not tranlsate the body. *)
+      (* We are at the %cd annotation level: do not tranlsate the body. *)
       let bindings =
         List.map bindings ~f:(fun vb ->
             let v = translate ~ident_label:vb.pvb_pat vb.pvb_expr in
