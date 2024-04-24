@@ -1,11 +1,14 @@
 (executable
  (name pp)
+ (public_name pp)
+ (package neural_nets_lib)
  (modules pp)
  (libraries ppx_ocannl ppxlib)
  (modes exe))
 
 (rule
  (targets test_ppx_op_actual.ml)
+ (package neural_nets_lib)
  (deps
   (:pp pp.exe)
   (:input test_ppx_op.ml))
@@ -14,11 +17,13 @@
 
 (rule
  (alias runtest)
+ (package neural_nets_lib)
  (action
   (diff test_ppx_op_expected.ml test_ppx_op_actual.ml)))
 
 (test
  (name test_ppx_op)
+ (package neural_nets_lib)
  (modules test_ppx_op)
  (deps ocannl_config)
  (libraries ocannl)
@@ -27,6 +32,7 @@
 
 (test
  (name test_ppx_op_expected)
+ (package neural_nets_lib)
  (modules test_ppx_op_expected)
  (deps ocannl_config)
  (libraries ocannl))

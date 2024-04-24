@@ -1,5 +1,6 @@
 (library
  (name tutorials)
+ (package neural_nets_lib)
  (inline_tests
   (deps ocannl_config))
  (libraries base dynlink ocannl)
