@@ -36,7 +36,7 @@ let bound_symbols bs =
   let rec loop : 'a. 'a bindings -> static_symbol list =
    fun (type a) (b : a bindings) -> match b with Empty -> [] | Bind (s, bs) -> s :: loop bs
   in
-  (* Reverse order to match [jitted_bindings]. *)
+  (* Reverse order to match [compiled_bindings]. *)
   List.rev @@ loop bs
 
 (** Helps jitting the bindings. *)
@@ -47,7 +47,7 @@ type ('r, 'idcs, 'p1, 'p2) variadic =
   | Param_2 of 'p2 option ref * ('p2 -> 'r, 'idcs, 'p1, 'p2) variadic
 
 type unit_bindings = (unit -> unit) bindings [@@deriving sexp_of]
-type jitted_bindings = (static_symbol, int ref) List.Assoc.t [@@deriving sexp_of]
+type compiled_bindings = (static_symbol, int ref) List.Assoc.t [@@deriving sexp_of]
 
 let rec apply : 'r 'idcs 'p1 'p2. ('r, 'idcs, 'p1, 'p2) variadic -> 'r =
  fun (type r idcs p1 p2) (f : (r, idcs, p1, p2) variadic) ->
@@ -59,8 +59,8 @@ let rec apply : 'r 'idcs 'p1 'p2. ('r, 'idcs, 'p1, 'p2) variadic -> 'r =
   | Param_1 ({ contents = None }, _) -> invalid_arg "Indexing.apply: Param_1 missing value"
   | Param_2 ({ contents = None }, _) -> invalid_arg "Indexing.apply: Param_2 missing value"
 
-let jitted_bindings bs vs =
-  let rec loop : 'r 'idcs. 'idcs bindings * ('r, 'idcs, 'p1, 'p2) variadic -> jitted_bindings =
+let compiled_bindings bs vs =
+  let rec loop : 'r 'idcs. 'idcs bindings * ('r, 'idcs, 'p1, 'p2) variadic -> compiled_bindings =
    fun (type r idcs) (f : idcs bindings * (r, idcs, 'p1, 'p2) variadic) ->
     match f with
     | Empty, Result _ -> []
@@ -73,7 +73,7 @@ let jitted_bindings bs vs =
   (* Reverse order because [apply] above also reverses the order! *)
   List.rev @@ loop (bs, vs)
 
-let find_exn (bs : jitted_bindings) = List.Assoc.find_exn ~equal:equal_static_symbol bs
+let find_exn (bs : compiled_bindings) = List.Assoc.find_exn ~equal:equal_static_symbol bs
 
 let get_static_symbol ?static_range bindings =
   let s = { static_symbol = get_symbol (); static_range } in

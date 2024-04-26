@@ -27,8 +27,8 @@ let benchmark_overhead backend () =
   let update_f = Train.grad_update f in
   (* Initialize the context with a mock update of x to ensure that it is not optimized as a constant. *)
   let%cd mock_update_x = x =: 42 in
-  let init_assign_x = jit ~name:"init_assign_x" ctx IDX.empty mock_update_x in
-  let f_routine = jit init_assign_x.context IDX.empty update_f.fwd_bprop in
+  let init_assign_x = link ctx @@ compile ~name:"init_assign_x" IDX.empty mock_update_x in
+  let f_routine = link init_assign_x.context @@ compile IDX.empty update_f.fwd_bprop in
   Tensor.print_tree ~with_grad:true ~with_backend_info:true ~depth:9 f;
   Tensor.iter_embedded_arrays f ~f:(fun a ->
       if from_host f_routine.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
@@ -39,7 +39,7 @@ let benchmark_overhead backend () =
   let ys =
     Array.map xs ~f:(fun v ->
         let%cd update_x = x =: !.v in
-        let assign_x = jit ~name:"assign_x" f_routine.context IDX.empty update_x in
+        let assign_x = link f_routine.context @@ compile ~name:"assign_x" IDX.empty update_x in
         Train.run assign_x;
         await device;
         Train.run f_routine;

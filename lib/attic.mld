@@ -91,7 +91,7 @@ if is_final then (
                            (idcs, tn.dims) l_name pp_array_offset (idcs, tn.dims))
                    in
                    let loops = Low_level.loop_over_dims tn.dims ~body in
-                   jit_code ~traced_store ppf loops;
+                   link ~traced_store ppf loops;
                    Stdlib.Format.pp_print_newline ppf ();
                    Buffer.contents b)
            | _ -> None)

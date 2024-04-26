@@ -185,7 +185,7 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov l =
 
 (** All and only bindings with associated ranges are iterated, with the binding's initial value lost. Bindings
     without ranges remain at their initial values. *)
-let sequential_loop ~f jitted_bindings =
+let sequential_loop ~f compiled_bindings =
   let rec loop = function
     | [] -> f ()
     | ({ Idx.static_range = None; static_symbol = _ }, _) :: more -> loop more
@@ -197,7 +197,7 @@ let sequential_loop ~f jitted_bindings =
         done;
         idx := old_idx
   in
-  loop jitted_bindings
+  loop compiled_bindings
 
 (** Distributes iterated indices to workers in a round-robin fashion. All and only bindings with associated
     ranges are iterated, with the binding's initial value lost. Bindings without ranges remain at their
@@ -345,7 +345,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     Array.init num_devices ~f:(fun (to_ : int) ->
         Array.init num_devices ~f:(fun (from : int) ->
             (* It is safe to cache scheduling, because merging does not use static indices. *)
-            List.map grad_merges.(from) ~f:(fun c -> (Backend.jit_code ctxs.(to_) c).schedule ())))
+            List.map grad_merges.(from) ~f:(fun c -> (Backend.link ctxs.(to_) c).schedule ())))
   in
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
   let name_prefixes = Array.create ~len:num_devices "loss_merge" in
@@ -359,7 +359,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
             (* It is safe to cache scheduling, because merging does not use static indices. *)
             match loss_merges.(from) with
             | [] -> None
-            | [ c ] -> Some ((Backend.jit_code ctxs.(to_) c).schedule ())
+            | [ c ] -> Some ((Backend.link ctxs.(to_) c).schedule ())
             | _ -> assert false))
   in
   let merge ~(from : int) ~(to_ : int) : unit =
@@ -383,7 +383,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   in
   let copies =
     Array.init (num_devices - 1) ~f:(fun (to_m_1 : int) ->
-        List.map copies ~f:(fun c -> (Backend.jit_code ctxs.(to_m_1 + 1) c).schedule ()))
+        List.map copies ~f:(fun c -> (Backend.link ctxs.(to_m_1 + 1) c).schedule ()))
   in
   let%track_sexp sync (devices_to_sync : int) : unit =
     Arrayjit.Utils.parallel_merge merge devices_to_sync;
@@ -399,13 +399,15 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     done;
     post_sync ~num_synced_devices:devices_to_sync
   in
-  let jitted_bindings = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.bindings)] in
+  let compiled_bindings = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.bindings)] in
   let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd () -> Tn.run debug_rt @@ upd.schedule ())] in
-  fun () -> round_robin fs jitted_bindings sgd_update.bindings ~sync
+  fun () -> round_robin fs compiled_bindings sgd_update.bindings ~sync
 
-let example_train_loop ?(disable_rootness_check = false) ~name ~seed ~batch_size ~init_lr ?lr_schedule
-    ~num_devices ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn ~weight_decay ?per_batch_callback
-    ?per_epoch_callback backend () =
+let debug_name t = Tn.(debug_name ~id:t.Tensor.value.id ~label:t.value.label)
+
+let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init_lr ?lr_schedule ~num_devices
+    ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn ~weight_decay ?per_batch_callback ?per_epoch_callback
+    backend () =
   let module TDSL = Operation.TDSL in
   let module NTDSL = Operation.NTDSL in
   Rand.init seed;
@@ -437,9 +439,9 @@ let example_train_loop ?(disable_rootness_check = false) ~name ~seed ~batch_size
   let num_devices = min num_devices @@ Backend.num_devices () in
   let devices = Array.init num_devices ~f:(fun ordinal -> Backend.get_device ~ordinal) in
   let contexts = Array.map devices ~f:Backend.init in
-  let grad_update = Backend.maybe_jit ~shared:true bindings update.fwd_bprop in
-  let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.jit_code ctx grad_update) in
-  let sgd_update = Backend.jit grad_updates.(0).context bindings sgd in
+  let grad_update = Backend.compile ~shared:true bindings update.fwd_bprop in
+  let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.link ctx grad_update) in
+  let sgd_update = Backend.(link grad_updates.(0).context @@ compile bindings sgd) in
   all_host_to_device (module Backend) sgd_update.context scalar_loss;
   all_host_to_device (module Backend) sgd_update.context learning_rate;
   let open Operation.At in
@@ -470,17 +472,20 @@ let example_train_loop ?(disable_rootness_check = false) ~name ~seed ~batch_size
     Option.iter per_epoch_callback ~f:(fun f ->
         f ~at_step:!step_ref ~at_epoch:epoch ~learning_rate:learning_rate.@[0] ~epoch_loss:!epoch_loss)
   done;
-  let%op model_result = model "point" in
+  let%op model_result = model "infer" in
   let infer_fwd =
     if disable_rootness_check then model_result.Tensor.forward else Tensor.consume_forward_code model_result
   in
   set_on_host Volatile model_result.Tensor.value;
   (* By using sgd_update.context here, maybe we don't need to copy the parameters back to the host. *)
-  let routine = Backend.jit sgd_update.context IDX.empty @@ Block_comment (name ^ "_infer", infer_fwd) in
+  let routine =
+    Backend.(
+      link sgd_update.context @@ compile IDX.empty @@ Block_comment (debug_name model_result, infer_fwd))
+  in
   let infer_callback values =
-    Tensor.set_values point values;
-    (* For the gccjit backend, point is only on host, not on device. For cuda, this will be needed. *)
-    ignore (Backend.from_host routine.context point.value : bool);
+    Tensor.set_values infer values;
+    (* For the gccjit backend, infer is only on host, not on device. For cuda, this will be needed. *)
+    ignore (Backend.from_host routine.context infer.value : bool);
     run routine;
     Backend.await devices.(0);
     assert (Backend.to_host routine.context model_result.value);
@@ -491,6 +496,6 @@ let example_train_loop ?(disable_rootness_check = false) ~name ~seed ~batch_size
 
 let forward_and_forget ?(disable_rootness_check = false) (type context)
     (module Backend : Backend_type with type context = context) ctx ?(bindings = IDX.empty) t =
-  let routine = Backend.jit ctx bindings @@ forward ~disable_rootness_check t in
+  let routine = Backend.(link ctx @@ compile bindings @@ forward ~disable_rootness_check t) in
   if not disable_rootness_check then Tensor.remove_bprop_root t;
   sync_run (module Backend) routine t

@@ -16,7 +16,7 @@ let _suspended () =
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
   let code = Train.grad_update v in
-  let routine = Backend.jit ctx IDX.empty code.fwd_bprop in
+  let routine = Backend.(link ctx @@ compile IDX.empty code.fwd_bprop) in
   Train.sync_run (module Backend) routine v;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_id:true ~with_grad:true ~depth:9 v;
@@ -61,7 +61,7 @@ let _suspended () =
   let module Backend = (val Train.fresh_backend ()) in
   let ctx = Backend.init @@ Backend.get_device ~ordinal:0 in
   let update = Train.grad_update fx in
-  let routine = Backend.jit ctx bindings update.fwd_bprop in
+  let routine = Backend.(link ctx @@ compile bindings update.fwd_bprop) in
   let step_ref = IDX.find_exn routine.bindings step_sym in
   let ys = Array.create ~len:size 0. and dys = Array.create ~len:size 0. in
   let open Operation.At in
@@ -114,7 +114,7 @@ let () =
   Train.set_hosted x.value;
   Train.set_hosted (Option.value_exn x.diff).grad;
   let update = Train.grad_update fx in
-  let fx_routine = Backend.jit ctx bindings update.fwd_bprop in
+  let fx_routine = Backend.(link ctx @@ compile bindings update.fwd_bprop) in
   let step_ref = IDX.find_exn fx_routine.bindings step_sym in
   let ys, dys =
     Array.unzip
@@ -147,7 +147,7 @@ let _suspended () =
   let open (val Train.fresh_backend ()) in
   let device = get_device ~ordinal:0 in
   let update = Train.grad_update l in
-  let routine = jit (init device) IDX.empty @@ update.fwd_bprop in
+  let routine = link (init device) @@ compile IDX.empty @@ update.fwd_bprop in
   Tensor.iter_embedded_arrays l ~f:(fun a ->
       if from_host routine.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
   Train.run routine;
@@ -160,7 +160,7 @@ let _suspended () =
       which are specified in the tensor in the brackets.|};
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   let%op learning_rate = 0.1 in
-  let routine = jit routine.context IDX.empty @@ Train.sgd_update ~learning_rate update in
+  let routine = link routine.context @@ compile IDX.empty @@ Train.sgd_update ~learning_rate update in
   (* learning_rate is virtual so this will not print anything. *)
   Tensor.iter_embedded_arrays learning_rate ~f:(fun a ->
       if from_host routine.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
@@ -182,7 +182,7 @@ let _suspended () =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   (* We could reuse the jitted code if we did not use `jit_and_run`. *)
   let update = Train.grad_update l in
-  let routine = jit routine.context IDX.empty update.fwd_bprop in
+  let routine = link routine.context @@ compile IDX.empty update.fwd_bprop in
   Train.run routine;
   await device;
   Tensor.iter_embedded_arrays l ~f:(fun a ->

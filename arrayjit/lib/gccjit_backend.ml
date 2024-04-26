@@ -95,7 +95,7 @@ type code =
       bindings : Indexing.unit_bindings;
       name : string;
     }
-  | Jitted of routine
+  | Compiled of routine
 [@@deriving sexp_of]
 
 type gccjit_param = Gccjit.param
@@ -263,7 +263,7 @@ let debug_log_index ctx log_functions =
         Block.eval block @@ RValue.call ctx ff [ lf ]
   | _ -> fun _block _i _index -> ()
 
-let jit_code ~name ~log_functions ~env ({ ctx; arrays; _ } as info) func initial_block (body : Low_level.t) =
+let compile_main ~name ~log_functions ~env ({ ctx; arrays; _ } as info) func initial_block (body : Low_level.t) =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
@@ -394,7 +394,7 @@ let jit_code ~name ~log_functions ~env ({ ctx; arrays; _ } as info) func initial
     | Low_level.Seq (c1, c2) ->
         loop c1;
         loop c2
-    | For_loop { index; from_; to_; body; trace_it = _ } -> jit_for_loop ~toplevel ~env index ~from_ ~to_ body
+    | For_loop { index; from_; to_; body; trace_it = _ } -> loop_for_loop ~toplevel ~env index ~from_ ~to_ body
     | Set { llv = Binop (Arg2, Get (_, _), _); _ } -> assert false
     | Set { array; idcs; llv = Binop (op, Get (array2, idcs2), c2); debug }
       when Tn.equal array array2 && [%equal: Indexing.axis_index array] idcs idcs2 && is_builtin_op op ->
@@ -487,7 +487,7 @@ let jit_code ~name ~log_functions ~env ({ ctx; arrays; _ } as info) func initial
         let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) @@ loop c in
         RValue.binary_op ctx Mult num_typ cmp @@ loop c
     | Constant v -> RValue.double ctx num_typ v
-  and jit_for_loop ~toplevel ~env key ~from_ ~to_ body =
+  and loop_for_loop ~toplevel ~env key ~from_ ~to_ body =
     let open Gccjit in
     let i = Indexing.symbol_ident key in
     let index = Function.local func c_index i in
@@ -539,7 +539,7 @@ let prepare_arrays ctx ~log_functions arrays traced_store nodes initializations 
   in
   loop llc
 
-let%track_sexp jit_func ~name ~opt_ctx_arrays ctx bindings (traced_store, proc) :
+let%track_sexp compile_func ~name ~opt_ctx_arrays ctx bindings (traced_store, proc) :
     info * Ndarray.t Base.Map.M(Tn).t * (gccjit_param * param_source) list =
   let open Gccjit in
   let c_index = Type.get ctx Type.Int in
@@ -599,7 +599,7 @@ let%track_sexp jit_func ~name ~opt_ctx_arrays ctx bindings (traced_store, proc) 
   List.iter (List.rev !initializations) ~f:(fun init -> init init_block func);
   let main_block = Block.create ~name func in
   let ctx_info : info = { ctx; traced_store; init_block; func; arrays } in
-  let after_proc = jit_code ~name ~log_functions ~env ctx_info func main_block proc in
+  let after_proc = compile_main ~name ~log_functions ~env ctx_info func main_block proc in
   (match log_functions with
   | Some (lf, _, _) ->
       (* FIXME: should be Imported? *)
@@ -617,7 +617,7 @@ let header_sep =
   let open Re in
   compile (seq [ str " "; opt any; str "="; str " " ])
 
-let%track_sexp maybe_jit ~(name : string) ~opt_ctx_arrays bindings
+let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings
     (compiled : Low_level.traced_store * Low_level.t) =
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
@@ -626,7 +626,7 @@ let%track_sexp maybe_jit ~(name : string) ~opt_ctx_arrays bindings
   (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
      Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx Context.Dump_everything
      true); *)
-  let info, ctx_arrays, params = jit_func ~name ~opt_ctx_arrays ctx bindings compiled in
+  let info, ctx_arrays, params = compile_func ~name ~opt_ctx_arrays ctx bindings compiled in
   (if Utils.settings.output_debug_files_in_run_directory then
      let f_name = name ^ "-gccjit-debug.c" in
      Context.dump_to_file ctx ~update_locs:true f_name);
@@ -635,7 +635,7 @@ let%track_sexp maybe_jit ~(name : string) ~opt_ctx_arrays bindings
   Context.release ctx;
   { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params }
 
-let%track_sexp maybe_jit_batch ~(names : string array) ~opt_ctx_arrays bindings
+let%track_sexp compile_batch ~(names : string array) ~opt_ctx_arrays bindings
     (compileds : (Low_level.traced_store * Low_level.t) array) =
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
@@ -646,7 +646,7 @@ let%track_sexp maybe_jit_batch ~(names : string array) ~opt_ctx_arrays bindings
      true); *)
   let funcs =
     Array.map2_exn names compileds ~f:(fun name compiled ->
-        jit_func ~name ~opt_ctx_arrays ctx bindings compiled)
+        compile_func ~name ~opt_ctx_arrays ctx bindings compiled)
   in
   (if Utils.settings.output_debug_files_in_run_directory then
      let f_name =
@@ -659,7 +659,7 @@ let%track_sexp maybe_jit_batch ~(names : string array) ~opt_ctx_arrays bindings
       let opt_ctx_arrays = if Map.is_empty ctx_arrays then None else Some ctx_arrays in
       { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params })
 
-let%track_sexp jit_routine (old_context : context) (code : routine) : context * _ * _ * string =
+let%track_sexp link_compiled (old_context : context) (code : routine) : context * _ * _ * string =
   let label : string = old_context.label in
   let name : string = code.name in
   let arrays : Ndarray.t Base.Map.M(Tn).t =
@@ -691,9 +691,9 @@ let%track_sexp jit_routine (old_context : context) (code : routine) : context * 
        fun (type a b idcs) (binds : idcs Indexing.bindings) params (cs : (a -> b) Ctypes.fn) ->
         match (binds, params) with
         | Empty, [] -> Indexing.Result (Gccjit.Result.code code.result name cs)
-        | Bind _, [] -> invalid_arg "Gccjit_backend.jit_routine: too few static index params"
+        | Bind _, [] -> invalid_arg "Gccjit_backend.link: too few static index params"
         | Bind (_, bs), Static_idx _ :: ps -> Param_idx (ref 0, link bs ps Ctypes.(int @-> cs))
-        | Empty, Static_idx _ :: _ -> invalid_arg "Gccjit_backend.jit_routine: too many static index params"
+        | Empty, Static_idx _ :: _ -> invalid_arg "Gccjit_backend.link: too many static index params"
         | bs, Log_file_name :: ps -> Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Param_ptr tn :: ps ->
             let nd = match Map.find arrays tn with Some nd -> nd | None -> assert false in
@@ -745,14 +745,14 @@ let%track_sexp jit_routine (old_context : context) (code : routine) : context * 
     in
     Tn.Work work
   in
-  (context, Indexing.jitted_bindings code.bindings run_variadic, schedule, name)
+  (context, Indexing.compiled_bindings code.bindings run_variadic, schedule, name)
 
-let jit_code (old_context : context) code =
+let link (old_context : context) code =
   match code with
   | Postponed { compiled; bindings; name } ->
-      let code = maybe_jit ~name ~opt_ctx_arrays:(Some old_context.arrays) bindings compiled in
-      jit_routine old_context code
-  | Jitted code -> jit_routine old_context code
+      let code = compile ~name ~opt_ctx_arrays:(Some old_context.arrays) bindings compiled in
+      link_compiled old_context code
+  | Compiled code -> link_compiled old_context code
 
 let%track_sexp from_host (context : context) (la : Tn.t) : bool =
   match Map.find context.arrays la with
@@ -806,7 +806,7 @@ let%track_sexp merge ?name_prefix la ~accum ~(src : context) bindings =
   let name_prefix : string = Option.value ~default:"" @@ Option.map name_prefix ~f:(fun s -> s ^ "_") in
   Option.map (Map.find src.arrays la) ~f:(fun (src : Ndarray.t) ->
       let name = [%string "%{name_prefix}into_%{Tn.name la}"] in
-      maybe_jit ~opt_ctx_arrays:None ~name bindings
+      compile ~opt_ctx_arrays:None ~name bindings
       @@ merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst:la ~accum ~src:(Ndarray.get_voidptr src))
 
 let%track_sexp merge_batch ?(name_prefixes : string array option) ~occupancy tns ~accum
@@ -848,7 +848,7 @@ let%track_sexp merge_batch ?(name_prefixes : string array option) ~occupancy tns
   if Array.is_empty compileds then together
   else
     let names, compileds = Array.unzip compileds in
-    let result = maybe_jit_batch ~opt_ctx_arrays:None ~names bindings compileds in
+    let result = compile_batch ~opt_ctx_arrays:None ~names bindings compileds in
     Array.iter2_exn ids result ~f:(fun (tn, i) res ->
         let r = Hashtbl.find_exn together tn in
         assert (Option.is_none r.(i));

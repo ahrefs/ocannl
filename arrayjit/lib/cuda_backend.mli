@@ -1,20 +1,15 @@
-(* TODO: currently we do not implement maybe_jitting. *)
-type context
+type context [@@deriving sexp_of]
+type code [@@deriving sexp_of]
 
 val initialize : unit -> unit
 val is_initialized : unit -> bool
-
-(* val init : unit -> context *)
 val finalize : context -> unit
 val sexp_of_context : context -> Sexplib.Sexp.t
 
-val jit :
-  ?name:string ->
-  context ->
-  Indexing.unit_bindings ->
-  Low_level.traced_store * Low_level.t ->
-  context * Indexing.jitted_bindings * (unit -> Tnode.work)
+val compile :
+  ?name:string -> Indexing.unit_bindings -> Low_level.traced_store * Low_level.t -> code
 
+val link : context -> code -> context * Indexing.compiled_bindings * (unit -> Tnode.work)
 val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
 
 val from_host : context -> Tnode.t -> bool

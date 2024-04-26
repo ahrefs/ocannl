@@ -42,7 +42,7 @@ let%expect_test "Graph drawing recompile" =
   let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.every_non_literal_on_host f;
   let f_upd = Train.grad_update f in
-  let f_bprop = Backend.jit ctx IDX.empty f_upd.fwd_bprop in
+  let f_bprop = Backend.(link ctx @@ compile IDX.empty f_upd.fwd_bprop) in
   Train.sync_run backend f_bprop f;
   Tensor.print_tree ~with_grad:true ~depth:9 f;
   [%expect
@@ -70,7 +70,7 @@ let%expect_test "Graph drawing recompile" =
   let ys =
     Array.map xs ~f:(fun v ->
         (* This is inefficient because it compiles the argument update inside the loop. *)
-        let assign_x = Backend.jit f_bprop.context IDX.empty ~name:"assign_x" [%cd x =: !.v] in
+        let assign_x = Backend.(link f_bprop.context @@ compile IDX.empty ~name:"assign_x" [%cd x =: !.v]) in
         Train.sync_run (module Backend) assign_x x;
         Train.sync_run (module Backend) f_bprop f;
         Backend.await device;
@@ -162,7 +162,7 @@ let%expect_test "Graph drawing fetch" =
   Train.set_hosted x.value;
   Train.set_hosted (Option.value_exn x.diff).grad;
   let update = Train.grad_update fx in
-  let fx_routine = Backend.jit ctx bindings update.fwd_bprop in
+  let fx_routine = Backend.(link ctx @@ compile bindings update.fwd_bprop) in
   let step_ref = IDX.find_exn fx_routine.bindings step_sym in
   let ys, dys =
     Array.unzip
@@ -239,8 +239,8 @@ let%expect_test "Simple gradients hosted" =
   Train.every_non_literal_on_host l;
   Train.every_non_literal_on_host learning_rate;
   let sgd = Train.sgd_update ~learning_rate grad in
-  let grad_routine = Backend.jit ctx IDX.empty grad.fwd_bprop in
-  let sgd_routine = Backend.jit grad_routine.context IDX.empty sgd in
+  let grad_routine = Backend.(link ctx @@ compile IDX.empty grad.fwd_bprop) in
+  let sgd_routine = Backend.(link grad_routine.context @@ compile IDX.empty sgd) in
   (* Check out the initial state without running a forward pass. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
@@ -365,7 +365,7 @@ let%expect_test "Simple gradients virtual" =
     <not-in-yet>                    │<not-in-yet>                    │                                │
     #112 grad_a <Materialized 28>   │#114 grad_b <Materialized 28>   │                                │
     <not-in-yet>                    │<not-in-yet>                    │                                │ |}];
-  let grad_routine = Backend.jit ctx IDX.empty grad.fwd_bprop in
+  let grad_routine = Backend.(link ctx @@ compile IDX.empty grad.fwd_bprop) in
   (* Check out the state without running a forward pass or compiling the SGD update. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
@@ -409,7 +409,7 @@ let%expect_test "Simple gradients virtual" =
     #112 grad_a <On_device 33>│#114 grad_b <On_device 33>│                          │
     <void>                    │<void>                    │                          │ |}];
   (* Only now compile the SGD update. *)
-  let sgd_routine = Backend.jit grad_routine.context IDX.empty sgd in
+  let sgd_routine = Backend.(link grad_routine.context @@ compile IDX.empty sgd) in
   (* Now we update the params, but are not doing the forward and backward passes: only params values will
      change, compared to the above. Since virtual tensors are computed by-need, they will always be recomputed
      using the latest parameter state. *)
@@ -469,7 +469,7 @@ let%expect_test "2D neuron hosted" =
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
   let update = Train.grad_update v in
-  let routine = Backend.jit ctx IDX.empty update.fwd_bprop in
+  let routine = Backend.(link ctx @@ compile IDX.empty update.fwd_bprop) in
   Train.sync_run backend routine v;
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect
@@ -495,7 +495,7 @@ let%expect_test "2D neuron virtual" =
   let ctx = Backend.init device in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   let update = Train.grad_update v in
-  let routine = Backend.jit ctx IDX.empty update.fwd_bprop in
+  let routine = Backend.(link ctx @@ compile IDX.empty update.fwd_bprop) in
   Train.sync_run backend routine v;
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect
