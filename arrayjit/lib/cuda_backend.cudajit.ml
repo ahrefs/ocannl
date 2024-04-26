@@ -6,9 +6,10 @@ type mem_properties =
   | Global  (** Could not perform optimizations: the array is computed directly in the global memory. *)
 [@@deriving sexp, equal, compare, variants]
 
-type ndarray = {
+type tn_info = {
   hosted : Ndarray.t option;
-  global : (string * (Cudajit.deviceptr[@sexp.opaque])) option;  (** A global device array, if any. *)
+  global : string option;
+      (** A global device array, if any. This becomes [Cudajit.deviceptr] in a context. *)
   local : string option;  (** A local name, if any. *)
   mem : mem_properties;
   dims : int array;
@@ -18,6 +19,7 @@ type ndarray = {
       (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]), [double]
           (precision [Double]). *)
   is_double : bool;
+  zero_initialized : bool;
 }
 [@@deriving sexp_of]
 
@@ -27,31 +29,34 @@ type device = {
   dev : (Cudajit.device[@sexp.opaque]);
   ordinal : int;
   primary_context : (Cudajit.context[@sexp.opaque]);
+  mutable postprocess_queue : (context * (unit -> unit)) list;
 }
 [@@deriving sexp_of]
 
-type context = {
+and context = {
   label : string;
   ctx : (Cudajit.context[@sexp.opaque]);
   device : device;
   run_module : (Cudajit.module_[@sexp.opaque]) option;
       (** Code jitted for this context, independent of the parent and child contexts. *)
-  arrays : ndarray Map.M(Tn).t;
+  all_arrays : tn_info Map.M(Tn).t;
+  global_arrays : (Cudajit.deviceptr[@sexp.opaque]) Map.M(Tn).t;
+      (** This map contains only the global arrays, where [all_arrays.(key).global] is [Some name]. *)
 }
 [@@deriving sexp_of]
 
-type ctx_info = {
-  ctx : Cudajit.context;  (** Context for jitting, independent of the parent and child contexts. *)
-  mutable ctx_arrays : ndarray Map.M(Tn).t;
-  used_tensors : Hash_set.M(Tn).t;
-}
+type info_arrays = { mutable info_arrays : tn_info Map.M(Tn).t; used_tensors : Hash_set.M(Tn).t }
+[@@deriving sexp_of]
+
+type compiled = Low_level.traced_store * Low_level.t [@@deriving sexp_of]
 
 let init device =
   {
     label = "cuda " ^ Int.to_string device.ordinal;
     ctx = device.primary_context;
     device;
-    arrays = Map.empty (module Tn);
+    all_arrays = Map.empty (module Tn);
+    global_arrays = Map.empty (module Tn);
     run_module = None;
   }
 
@@ -75,7 +80,7 @@ let get_device ~ordinal =
   Option.value_or_thunk (Core.Weak.get !devices ordinal) ~default:(fun () ->
       let dev = Cudajit.device_get ~ordinal in
       let primary_context = Cudajit.device_primary_ctx_retain dev in
-      let result = { dev; ordinal; primary_context } in
+      let result = { dev; ordinal; primary_context; postprocess_queue = [] } in
       Core.Weak.set !devices ordinal (Some result);
       result)
 
@@ -89,8 +94,14 @@ let set_ctx ctx =
 let finalize ctx =
   if Option.is_some @@ Core.Weak.get !devices ctx.device.ordinal then (
     set_ctx ctx.device.primary_context;
+    Exn.protect
+      ~f:(fun () ->
+        List.iter ctx.device.postprocess_queue ~f:(fun (f_ctx, f) -> if phys_equal f_ctx ctx then f ()))
+      ~finally:(fun () ->
+        ctx.device.postprocess_queue <-
+          List.filter ctx.device.postprocess_queue ~f:(fun (f_ctx, _) -> phys_equal f_ctx ctx));
     Option.iter ctx.run_module ~f:Cudajit.module_unload;
-    Map.iter ctx.arrays ~f:(fun array -> Option.iter array.global ~f:(fun (_, ptr) -> Cudajit.mem_free ptr)))
+    Map.iter ctx.global_arrays ~f:(fun ptr -> Cudajit.mem_free ptr))
 
 let unsafe_cleanup ?unsafe_shutdown:_ () =
   let len = Core.Weak.length !devices in
@@ -102,31 +113,28 @@ let unsafe_cleanup ?unsafe_shutdown:_ () =
 
 let await device =
   set_ctx device.primary_context;
-  Cudajit.ctx_synchronize ()
+  Cudajit.ctx_synchronize ();
+  Exn.protect
+    ~f:(fun () -> List.iter device.postprocess_queue ~f:(fun (_, f) -> f ()))
+    ~finally:(fun () -> device.postprocess_queue <- [])
 
 let from_host (ctx : context) la =
-  match Map.find ctx.arrays la with
-  | None -> false
-  | Some array -> (
-      match (array.hosted, array.global) with
-      | Some hosted, Some (_, dst) ->
-          set_ctx ctx.ctx;
-          let f src = Cudajit.memcpy_H_to_D ~dst ~src () in
-          Ndarray.map { f } hosted;
-          true
-      | _ -> false)
+  match (Map.find ctx.all_arrays la, Map.find ctx.global_arrays la) with
+  | Some { hosted = Some hosted; _ }, Some dst ->
+      set_ctx ctx.ctx;
+      let f src = Cudajit.memcpy_H_to_D ~dst ~src () in
+      Ndarray.map { f } hosted;
+      true
+  | _ -> false
 
 let to_host (ctx : context) la =
-  match Map.find ctx.arrays la with
-  | None -> false
-  | Some array -> (
-      match (array.hosted, array.global) with
-      | Some hosted, Some (_, src) ->
-          set_ctx ctx.ctx;
-          let f dst = Cudajit.memcpy_D_to_H ~dst ~src () in
-          Ndarray.map { f } hosted;
-          true
-      | _ -> false)
+  match (Map.find ctx.all_arrays la, Map.find ctx.global_arrays la) with
+  | Some { hosted = Some hosted; _ }, Some src ->
+      set_ctx ctx.ctx;
+      let f dst = Cudajit.memcpy_D_to_H ~dst ~src () in
+      Ndarray.map { f } hosted;
+      true
+  | _ -> false
 
 let merge ?(name_suffix = "") la ~dst ~accum ~src (bindings : Indexing.unit_bindings) =
   let ord ctx = ctx.device.ordinal in
@@ -167,15 +175,12 @@ let array_offset_to_string (idcs, dims) =
   Buffer.contents b
 
 let get_run_ptr array =
-  match (array.global, array.local) with
-  | _, Some lv -> lv
-  | Some (rv, _), _ -> rv
-  | None, None -> assert false
+  match (array.global, array.local) with _, Some lv -> lv | Some rv, _ -> rv | None, None -> assert false
 
 let get_run_ptr_debug array =
   match (array.global, array.local) with
   | _, Some lv -> "local_" ^ lv
-  | Some (rv, _), _ -> "global_" ^ rv
+  | Some rv, _ -> "global_" ^ rv
   | None, None -> assert false
 
 let prec_to_c_type = function
@@ -190,8 +195,8 @@ let prec_to_c_type = function
 
 module Debug_runtime = Utils.Debug_runtime
 
-let%debug_sexp get_array ~traced_store:_ ctx_info key =
-  Hash_set.add ctx_info.used_tensors key;
+let%debug_sexp get_array ~(traced_store : Low_level.traced_store) info key =
+  Hash_set.add info.used_tensors key;
   let default () =
     (* let tn = Low_level.get_node traced_store v in *)
     (* TODO: We will need tn to perform more refined optimizations. *)
@@ -205,13 +210,7 @@ let%debug_sexp get_array ~traced_store:_ ctx_info key =
     let is_double = Ops.is_double_prec key.prec in
     let num_typ = prec_to_c_type key.prec in
     let mem = if not is_materialized then Local_only else Global in
-    let global =
-      if is_local_only mem then None
-      else (
-        if Utils.settings.with_debug then [%log "mem_alloc", Tn.name key];
-        set_ctx ctx_info.ctx;
-        Some (Tn.name key, Cudajit.mem_alloc ~byte_size:size_in_bytes))
-    in
+    let global = if is_local_only mem then None else Some (Tn.name key) in
     let local = Option.some_if (is_local_only mem) @@ Tn.name key ^ "_local" in
     let backend_info = sexp_of_mem_properties mem in
     if Utils.settings.with_debug then
@@ -227,13 +226,16 @@ let%debug_sexp get_array ~traced_store:_ ctx_info key =
           (Option.is_some global : bool)];
     if not @@ Utils.sexp_mem ~elem:backend_info key.backend_info then
       key.backend_info <- Utils.sexp_append ~elem:backend_info key.backend_info;
-    let data = { hosted; local; mem; dims; size_in_bytes; size_in_elems; num_typ; is_double; global } in
-    ctx_info.ctx_arrays <- Map.add_exn ctx_info.ctx_arrays ~key ~data;
+    let zero_initialized = (Hashtbl.find_exn traced_store key).Low_level.zero_initialized in
+    let data =
+      { hosted; local; mem; dims; size_in_bytes; size_in_elems; num_typ; is_double; global; zero_initialized }
+    in
+    info.info_arrays <- Map.add_exn info.info_arrays ~key ~data;
     data
   in
-  Option.value_or_thunk (Map.find ctx_info.ctx_arrays key) ~default
+  Option.value_or_thunk (Map.find info.info_arrays key) ~default
 
-let jit_code ~traced_store info ppf llc : unit =
+let compile_main ~traced_store info ppf llc : unit =
   let open Stdlib.Format in
   let locals = ref @@ Map.empty (module Low_level.Scope_id) in
   let rec pp_ll ppf c : unit =
@@ -250,7 +252,7 @@ let jit_code ~traced_store info ppf llc : unit =
         fprintf ppf "@[<2>for (unsigned int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_
           pp_index i to_ pp_index i pp_ll body
     | Zero_out array ->
-        if Map.mem info.ctx_arrays array then
+        if Map.mem info.info_arrays array then
           failwith
             ("exec_as_cuda: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
             @@ [%sexp_of: Tn.t] array);
@@ -385,27 +387,31 @@ let jit_code ~traced_store info ppf llc : unit =
   in
   pp_ll ppf llc
 
-let%debug_sexp jit_func ~name (old_context : context) idx_params (traced_store, llc) =
-  set_ctx old_context.ctx;
+type code = {
+  ptx : (Cudajit.compile_to_ptx_result[@sexp.opaque]);
+  info : info_arrays;
+  bindings : Indexing.unit_bindings;
+  name : string;
+}
+[@@deriving sexp_of]
+
+let%debug_sexp compile_func ~name idx_params (traced_store, llc) =
   [%log "generating the .cu source"];
-  let info =
-    { ctx = old_context.ctx; ctx_arrays = old_context.arrays; used_tensors = Hash_set.create (module Tn) }
-  in
+  let info = { info_arrays = Map.empty (module Tn); used_tensors = Hash_set.create (module Tn) } in
   let b = Buffer.create 4096 in
   let ppf = Stdlib.Format.formatter_of_buffer b in
-  jit_code ~traced_store info ppf llc;
+  compile_main ~traced_store info ppf llc;
   Stdlib.Format.pp_print_newline ppf ();
   let cu_body = Buffer.contents b in
   let arrays = Hash_set.to_list info.used_tensors in
-  let params, args =
-    List.unzip
-    @@ List.filter_map arrays ~f:(fun la ->
-           let tn = Map.find_exn info.ctx_arrays la in
-           if Utils.settings.with_debug then
-             [%log "array-used:", (la : Tn.t), Tn.label la, (tn.mem : mem_properties)];
-           match tn.mem with
-           | Local_only -> None
-           | Global -> Option.map tn.global ~f:(fun (n, ptr) -> (tn.num_typ ^ " *" ^ n, ptr)))
+  let params =
+    List.filter_map arrays ~f:(fun la ->
+        let tn = Map.find_exn info.info_arrays la in
+        if Utils.settings.with_debug then
+          [%log "array-used:", (la : Tn.t), Tn.label la, (tn.mem : mem_properties)];
+        match tn.mem with
+        | Local_only -> None
+        | Global -> Option.map tn.global ~f:(fun n -> tn.num_typ ^ " *" ^ n))
   in
   let idx_params =
     List.map idx_params ~f:(fun { Indexing.static_symbol; _ } -> "int " ^ Indexing.symbol_ident static_symbol)
@@ -414,7 +420,7 @@ let%debug_sexp jit_func ~name (old_context : context) idx_params (traced_store, 
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
   let thread_decls =
     List.filter_map arrays ~f:(fun la ->
-        let tn = Map.find_exn info.ctx_arrays la in
+        let tn = Map.find_exn info.info_arrays la in
         match tn.mem with
         | Local_only ->
             Option.map tn.local ~f:(fun t_name ->
@@ -459,20 +465,45 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ par
     Stdio.Out_channel.output_string oc @@ Option.value_exn ptx.log;
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);
+  (ptx, info)
+
+let%diagn_sexp link_func (old_context : context) ~name info ptx =
+  let module Cu = Cudajit in
+  let ctx = old_context.ctx in
+  set_ctx ctx;
+  (* FIXME: this should not re-allocate arrays that already are in old_context. *)
+  let global_arrays =
+    Map.to_alist
+    @@ Map.filter_map info.info_arrays ~f:(fun tn_info ->
+           Option.map tn_info.global ~f:(fun name ->
+               if Utils.settings.with_debug then [%log "mem_alloc", name];
+               set_ctx ctx;
+               (tn_info, Cu.mem_alloc ~byte_size:tn_info.size_in_bytes)))
+  in
   let run_module = Cu.module_load_data_ex ptx [] in
   let func = Cu.module_get_function run_module ~name in
-  let args = List.map args ~f:(fun p -> Cu.Tensor p) in
   [%log "compilation finished"];
-  (func, args, run_module, info)
+  (func, global_arrays, run_module)
 
-let jit ?name old_context bindings ((traced_store, llc) as compiled) =
+let header_sep =
+  let open Re in
+  compile (seq [ str " "; opt any; str "="; str " " ])
+
+let compile ?name bindings ((_, llc) as compiled : compiled) =
   let name : string = Option.value_or_thunk name ~default:(fun () -> Low_level.extract_block_name [ llc ]) in
   let idx_params = Indexing.bound_symbols bindings in
-  let func, args, run_module, info = jit_func ~name old_context idx_params compiled in
-  let context = { old_context with ctx = info.ctx; run_module = Some run_module; arrays = info.ctx_arrays } in
+  let ptx, info = compile_func ~name idx_params compiled in
+  { ptx; info; bindings; name }
+
+let link old_context code =
+  let label : string = old_context.label in
+  let func, global_arrays, run_module = link_func old_context ~name:code.name code.info code.ptx in
+  let context = { old_context with run_module = Some run_module; all_arrays = code.info.info_arrays } in
+  let idx_params = Indexing.bound_symbols code.bindings in
   let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
+  let log_file_name = [%string "debug-%{label}-%{code.name}.log"] in
   let%diagn_sexp schedule () =
-    [%log_result "Scheduling", name];
+    [%log_result "Scheduling", code.name];
     let module Cu = Cudajit in
     let idx_args =
       List.map idx_args ~f:(fun ({ static_symbol; static_range }, i) ->
@@ -490,20 +521,53 @@ let jit ?name old_context bindings ((traced_store, llc) as compiled) =
                         %{upto#Int}"]);
           Cu.Int !i)
     in
+    (* FIXME: less error-prone to iterate over used_tensors, just as with params in compile_func. *)
+    let args =
+      List.filter_map global_arrays ~f:(fun (tn, (_, ptr)) ->
+          Option.some_if (Hash_set.mem code.info.used_tensors tn) (Cu.Tensor ptr))
+    in
     let%diagn_rt_sexp work () : unit =
       [%log "zeroing-out global memory"];
       set_ctx context.ctx;
-      Map.iteri context.arrays ~f:(fun ~key:ptr ~data ->
-          if Hash_set.mem info.used_tensors ptr then
-            match data with
-            | { global = Some (_, dev_ptr); size_in_bytes; _ } ->
-                let tn = Hashtbl.find_exn traced_store ptr in
-                if tn.zero_initialized then Cu.memset_d8 dev_ptr Unsigned.UChar.zero ~length:size_in_bytes
-            | _ -> ());
+      List.iter global_arrays ~f:(fun (tn, (tn_info, ptr)) ->
+          if Hash_set.mem code.info.used_tensors tn then
+            if tn_info.zero_initialized then
+              Cu.memset_d8 ptr Unsigned.UChar.zero ~length:tn_info.size_in_bytes);
       [%log "launching the kernel"];
       (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
       Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream @@ idx_args @ args;
-      [%log "kernel launched"]
+      [%log "kernel launched"];
+      if Utils.settings.debug_log_from_routines then (
+        let rec loop = function
+          | [] -> []
+          | line :: more when String.is_empty line -> loop more
+          | "COMMENT: end" :: more -> more
+          | comment :: more when String.is_prefix comment ~prefix:"COMMENT: " ->
+              let more =
+                [%log_entry
+                  String.chop_prefix_exn ~prefix:"COMMENT: " comment;
+                  loop more]
+              in
+              loop more
+          | source :: trace :: more when String.is_prefix source ~prefix:"# " ->
+              (let source =
+                 String.concat ~sep:"\n" @@ String.split ~on:'$' @@ String.chop_prefix_exn ~prefix:"# " source
+               in
+               match Utils.split_with_seps header_sep trace with
+               | [] | [ "" ] -> [%log source]
+               | header1 :: assign1 :: header2 :: body ->
+                   let header = String.concat [ header1; assign1; header2 ] in
+                   let body = String.concat body in
+                   let _message = Sexp.(List [ Atom header; Atom source; Atom body ]) in
+                   [%log (_message : Sexp.t)]
+               | _ -> [%log source, trace]);
+              loop more
+          | _line :: more ->
+              [%log _line];
+              loop more
+        in
+        assert (List.is_empty @@ loop (Stdio.In_channel.read_lines log_file_name));
+        Stdlib.Sys.remove log_file_name)
     in
     Tnode.Work work
   in
