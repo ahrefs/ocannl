@@ -1,3 +1,11 @@
+## [0.4.0] -- current
+
+### Changed
+
+- Terminology in the API: Renamed almost all uses of "jit" into uses of "compile" and / or "link".
+- Split the compile-to-ptx phase from the build-module and build-kernel-launcher phase.
+- TODO: migrated the Cuda backend to ppx_minidebug-based execution tracing.
+
 ## [0.3.3] -- 2024-04-24
 
 ### Added

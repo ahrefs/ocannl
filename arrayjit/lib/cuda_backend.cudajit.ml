@@ -405,13 +405,13 @@ let%debug_sexp compile_func ~name idx_params (traced_store, llc) =
   let cu_body = Buffer.contents b in
   let arrays = Hash_set.to_list info.used_tensors in
   let params =
-    List.filter_map arrays ~f:(fun la ->
-        let tn = Map.find_exn info.info_arrays la in
+    List.filter_map arrays ~f:(fun tn ->
+        let tn_info = Map.find_exn info.info_arrays tn in
         if Utils.settings.with_debug then
-          [%log "array-used:", (la : Tn.t), Tn.label la, (tn.mem : mem_properties)];
-        match tn.mem with
+          [%log "array-used:", (tn : Tn.t), Tn.label tn, (tn_info.mem : mem_properties)];
+        match tn_info.mem with
         | Local_only -> None
-        | Global -> Option.map tn.global ~f:(fun n -> tn.num_typ ^ " *" ^ n))
+        | Global -> Option.map tn_info.global ~f:(fun n -> tn_info.num_typ ^ " *" ^ n))
   in
   let idx_params =
     List.map idx_params ~f:(fun { Indexing.static_symbol; _ } -> "int " ^ Indexing.symbol_ident static_symbol)
@@ -471,14 +471,13 @@ let%diagn_sexp link_func (old_context : context) ~name info ptx =
   let module Cu = Cudajit in
   let ctx = old_context.ctx in
   set_ctx ctx;
-  (* FIXME: this should not re-allocate arrays that already are in old_context. *)
   let global_arrays =
-    Map.to_alist
-    @@ Map.filter_map info.info_arrays ~f:(fun tn_info ->
-           Option.map tn_info.global ~f:(fun name ->
-               if Utils.settings.with_debug then [%log "mem_alloc", name];
-               set_ctx ctx;
-               (tn_info, Cu.mem_alloc ~byte_size:tn_info.size_in_bytes)))
+    Map.fold ~init:old_context.global_arrays info.info_arrays ~f:(fun ~key ~data:tn_info globals ->
+        Option.value_map ~default:globals tn_info.global ~f:(fun name ->
+            if Utils.settings.with_debug then [%log "mem_alloc", name];
+            set_ctx ctx;
+            let ptr () = Cu.mem_alloc ~byte_size:tn_info.size_in_bytes in
+            Map.update globals key ~f:(fun old -> Option.value_or_thunk old ~default:ptr)))
   in
   let run_module = Cu.module_load_data_ex ptx [] in
   let func = Cu.module_get_function run_module ~name in
@@ -497,8 +496,9 @@ let compile ?name bindings ((_, llc) as compiled : compiled) =
 
 let link old_context code =
   let label : string = old_context.label in
+  let all_arrays = code.info.info_arrays in
   let func, global_arrays, run_module = link_func old_context ~name:code.name code.info code.ptx in
-  let context = { old_context with run_module = Some run_module; all_arrays = code.info.info_arrays } in
+  let context = { old_context with run_module = Some run_module; global_arrays; all_arrays } in
   let idx_params = Indexing.bound_symbols code.bindings in
   let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let log_file_name = [%string "debug-%{label}-%{code.name}.log"] in
@@ -521,16 +521,21 @@ let link old_context code =
                         %{upto#Int}"]);
           Cu.Int !i)
     in
-    (* FIXME: less error-prone to iterate over used_tensors, just as with params in compile_func. *)
     let args =
-      List.filter_map global_arrays ~f:(fun (tn, (_, ptr)) ->
-          Option.some_if (Hash_set.mem code.info.used_tensors tn) (Cu.Tensor ptr))
+      (* TODO: should we prohibit or warn about Local_only tensors that are in old_context.global_arrays? *)
+      let arrays = Hash_set.to_list code.info.used_tensors in
+      List.filter_map arrays ~f:(fun tn ->
+          let tn_info = Map.find_exn code.info.info_arrays tn in
+          match (tn_info.mem, tn_info.global, Map.find global_arrays tn) with
+          | Global, Some _, Some ptr -> Some (Cu.Tensor ptr)
+          | _ -> None)
     in
     let%diagn_rt_sexp work () : unit =
       [%log "zeroing-out global memory"];
       set_ctx context.ctx;
-      List.iter global_arrays ~f:(fun (tn, (tn_info, ptr)) ->
-          if Hash_set.mem code.info.used_tensors tn then
+      Map.iteri global_arrays ~f:(fun ~key ~data:ptr ->
+          if Hash_set.mem code.info.used_tensors key then
+            let tn_info = Map.find_exn all_arrays key in
             if tn_info.zero_initialized then
               Cu.memset_d8 ptr Unsigned.UChar.zero ~length:tn_info.size_in_bytes);
       [%log "launching the kernel"];
