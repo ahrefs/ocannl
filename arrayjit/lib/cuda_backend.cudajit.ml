@@ -29,7 +29,7 @@ type device = {
   dev : (Cudajit.device[@sexp.opaque]);
   ordinal : int;
   primary_context : (Cudajit.context[@sexp.opaque]);
-  mutable postprocess_queue : (context * (unit -> unit)) list;
+  mutable postprocess_queue : (context * (output:string list -> unit)) list;
 }
 [@@deriving sexp_of]
 
@@ -91,16 +91,33 @@ let set_ctx ctx =
   let cur_ctx = Cudajit.ctx_get_current () in
   if not @@ phys_equal ctx cur_ctx then Cudajit.ctx_set_current ctx
 
+let capture_stdout arg =
+  Stdlib.flush Stdlib.stdout;
+  let exitp, entrancep = Unix.pipe () and backup = Unix.dup Unix.stdout in
+  Unix.dup2 entrancep Unix.stdout;
+  let _ = arg () in
+  Stdlib.flush Stdlib.stdout;
+  Unix.close entrancep;
+  Unix.dup2 backup Unix.stdout;
+  let ls = ref [] and channel = Unix.in_channel_of_descr exitp in
+  try
+    while true do
+      let line = Stdlib.input_line channel in
+      ls := line :: !ls
+    done;
+    []
+  with _ -> List.rev !ls
+
 let finalize ctx =
   if Option.is_some @@ Core.Weak.get !devices ctx.device.ordinal then (
     set_ctx ctx.device.primary_context;
+    let output = capture_stdout @@ fun () -> Option.iter ctx.run_module ~f:Cudajit.module_unload in
     Exn.protect
       ~f:(fun () ->
-        List.iter ctx.device.postprocess_queue ~f:(fun (f_ctx, f) -> if phys_equal f_ctx ctx then f ()))
+        List.iter ctx.device.postprocess_queue ~f:(fun (f_ctx, f) -> if phys_equal f_ctx ctx then f ~output))
       ~finally:(fun () ->
         ctx.device.postprocess_queue <-
           List.filter ctx.device.postprocess_queue ~f:(fun (f_ctx, _) -> phys_equal f_ctx ctx));
-    Option.iter ctx.run_module ~f:Cudajit.module_unload;
     Map.iter ctx.global_arrays ~f:(fun ptr -> Cudajit.mem_free ptr))
 
 let unsafe_cleanup ?unsafe_shutdown:_ () =
@@ -113,9 +130,9 @@ let unsafe_cleanup ?unsafe_shutdown:_ () =
 
 let await device =
   set_ctx device.primary_context;
-  Cudajit.ctx_synchronize ();
+  let output = capture_stdout Cudajit.ctx_synchronize in
   Exn.protect
-    ~f:(fun () -> List.iter device.postprocess_queue ~f:(fun (_, f) -> f ()))
+    ~f:(fun () -> List.iter device.postprocess_queue ~f:(fun (_, f) -> f ~output))
     ~finally:(fun () -> device.postprocess_queue <- [])
 
 let from_host (ctx : context) la =
@@ -285,8 +302,8 @@ let compile_main ~traced_store info ppf llc : unit =
            (* FIXME: does this work or should \n be \\n? *)
            let debug_line = "# " ^ String.substr_replace_all debug ~pattern:"\n" ~with_:"$" ^ "\n" in
            fprintf ppf
-             "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(\"%s\");@ \
-              printf(@[<h>\"%s[%%u] = %%f = %s\\n\"@],@ %a,@ %s[%a]%a);@ @]}"
+             "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(\"%%d: %s\", log_id);@ \
+              printf(@[<h>\"%%d: %s[%%u] = %%f = %s\\n\"@], log_id,@ %a,@ %s[%a]%a);@ @]}"
              debug_line run_ptr_debug v_code pp_array_offset offset run_ptr pp_array_offset offset pp_args
              v_idcs);
         for _ = 1 to num_closing_braces do
@@ -296,7 +313,8 @@ let compile_main ~traced_store info ppf llc : unit =
     | Comment message ->
         if Utils.settings.debug_log_from_routines then
           fprintf ppf
-            "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"COMMENT: %s\\n\"@]);@ @]}"
+            "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"%%d: COMMENT: %s\\n\", \
+             log_id@]);@ @]}"
             (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
         else fprintf ppf "/* %s */@ " message
     | Staged_compilation callback -> callback ()
@@ -416,6 +434,7 @@ let%debug_sexp compile_func ~name idx_params (traced_store, llc) =
   let idx_params =
     List.map idx_params ~f:(fun { Indexing.static_symbol; _ } -> "int " ^ Indexing.symbol_ident static_symbol)
   in
+  let log_id = if Utils.settings.debug_log_from_routines then [ "int log_id" ] else [] in
   (* TODO: optimize zero-initializations? E.g.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
   let thread_decls =
@@ -432,7 +451,7 @@ let%debug_sexp compile_func ~name idx_params (traced_store, llc) =
     [%string
       {|
 %{if Utils.settings.debug_log_from_routines then "__device__ int printf (const char * format, ... );" else ""}
-extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ idx_params @ params}) {
+extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ log_id @ idx_params @ params}) {
   /* TODO: this initial toy prototype is single-threaded. */
   if (threadIdx.x != 0 || blockIdx.x != 0) { return; }
   
@@ -494,17 +513,25 @@ let compile ?name bindings ((_, llc) as compiled : compiled) =
   let ptx, info = compile_func ~name idx_params compiled in
   { ptx; info; bindings; name }
 
+let get_global_run_id =
+  let next_id = ref 0 in
+  fun () ->
+    Int.incr next_id;
+    if !next_id < 0 then next_id := 0;
+    !next_id
+
 let link old_context code =
-  let label : string = old_context.label in
   let all_arrays = code.info.info_arrays in
   let func, global_arrays, run_module = link_func old_context ~name:code.name code.info code.ptx in
   let context = { old_context with run_module = Some run_module; global_arrays; all_arrays } in
   let idx_params = Indexing.bound_symbols code.bindings in
   let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
-  let log_file_name = [%string "debug-%{label}-%{code.name}.log"] in
   let%diagn_sexp schedule () =
-    [%log_result "Scheduling", code.name];
+    let log_id = get_global_run_id () in
+    let log_id_prefix = Int.to_string log_id ^ ": " in
+    [%log_result "Scheduling", code.name, old_context.label, (log_id : int)];
     let module Cu = Cudajit in
+    let log_arg = if Utils.settings.debug_log_from_routines then [ Cu.Int log_id ] else [] in
     let idx_args =
       List.map idx_args ~f:(fun ({ static_symbol; static_range }, i) ->
           if !i < 0 then
@@ -540,9 +567,11 @@ let link old_context code =
               Cu.memset_d8 ptr Unsigned.UChar.zero ~length:tn_info.size_in_bytes);
       [%log "launching the kernel"];
       (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
-      Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream @@ idx_args @ args;
+      Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream
+      @@ log_arg @ idx_args @ args;
       [%log "kernel launched"];
-      if Utils.settings.debug_log_from_routines then (
+      if Utils.settings.debug_log_from_routines then
+        (* FIXME: move this to a shared location, like Assignments or Utils. *)
         let rec loop = function
           | [] -> []
           | line :: more when String.is_empty line -> loop more
@@ -571,8 +600,11 @@ let link old_context code =
               [%log _line];
               loop more
         in
-        assert (List.is_empty @@ loop (Stdio.In_channel.read_lines log_file_name));
-        Stdlib.Sys.remove log_file_name)
+        let postprocess_logs ~output =
+          let output = List.filter_map output ~f:(String.chop_prefix ~prefix:log_id_prefix) in
+          assert (List.is_empty @@ loop output)
+        in
+        context.device.postprocess_queue <- (context, postprocess_logs) :: context.device.postprocess_queue
     in
     Tnode.Work work
   in
