@@ -688,29 +688,6 @@ let%track_sexp derive_projections (update_step : update_step) : Idx.projections 
       }
   with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch (lhs :: rhs) :: trace)
 
-let backprop_ith_arg ~from_1 projections =
-  let project_lhs = projections.Idx.project_rhs.(from_1 - 1) in
-  let project_rhs = Array.copy projections.project_rhs in
-  project_rhs.(from_1 - 1) <- projections.project_lhs;
-  let lhs_dims = projections.rhs_dims.(from_1 - 1) in
-  let rhs_dims = Array.copy projections.rhs_dims in
-  rhs_dims.(from_1 - 1) <- projections.lhs_dims;
-  Idx.
-    {
-      product_space = projections.product_space;
-      product_iterators = projections.product_iterators;
-      lhs_dims;
-      rhs_dims;
-      project_lhs;
-      project_rhs;
-      debug_info =
-        {
-          projections.debug_info with
-          trace =
-            ("backprop_ith_arg " ^ Int.to_string from_1, unique_debug_id ()) :: projections.debug_info.trace;
-        };
-    }
-
 (** {2 Shape builders.} *)
 
 let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
