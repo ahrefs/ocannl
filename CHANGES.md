@@ -1,10 +1,16 @@
-## [0.4.0] -- current
+## [0.4.0] -- 2024-04-30
+
+### Added
+
+- TODO: API improvements for mixed precision computations.
+- TODO: A very naive first stab at Cuda parallelism.
 
 ### Changed
 
 - Terminology in the API: Renamed almost all uses of "jit" into uses of "compile" and / or "link".
 - Split the compile-to-ptx phase from the build-module and build-kernel-launcher phase.
-- TODO: migrated the Cuda backend to ppx_minidebug-based execution tracing.
+- Migrated the Cuda backend to ppx_minidebug-based execution tracing.
+- TODO: Fixes for mixed precision computations.
 
 ## [0.3.3] -- 2024-04-24
 
