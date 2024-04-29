@@ -263,7 +263,8 @@ let debug_log_index ctx log_functions =
         Block.eval block @@ RValue.call ctx ff [ lf ]
   | _ -> fun _block _i _index -> ()
 
-let compile_main ~name ~log_functions ~env ({ ctx; arrays; _ } as info) func initial_block (body : Low_level.t) =
+let compile_main ~name ~log_functions ~env ({ ctx; arrays; _ } as info) func initial_block
+    (body : Low_level.t) =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
@@ -394,7 +395,8 @@ let compile_main ~name ~log_functions ~env ({ ctx; arrays; _ } as info) func ini
     | Low_level.Seq (c1, c2) ->
         loop c1;
         loop c2
-    | For_loop { index; from_; to_; body; trace_it = _ } -> loop_for_loop ~toplevel ~env index ~from_ ~to_ body
+    | For_loop { index; from_; to_; body; trace_it = _ } ->
+        loop_for_loop ~toplevel ~env index ~from_ ~to_ body
     | Set { llv = Binop (Arg2, Get (_, _), _); _ } -> assert false
     | Set { array; idcs; llv = Binop (op, Get (array2, idcs2), c2); debug }
       when Tn.equal array array2 && [%equal: Indexing.axis_index array] idcs idcs2 && is_builtin_op op ->
@@ -712,35 +714,7 @@ let%track_sexp link_compiled (old_context : context) (code : routine) : context 
       [%log_result name];
       callback ();
       if Utils.settings.debug_log_from_routines then (
-        let rec loop = function
-          | [] -> []
-          | line :: more when String.is_empty line -> loop more
-          | "COMMENT: end" :: more -> more
-          | comment :: more when String.is_prefix comment ~prefix:"COMMENT: " ->
-              let more =
-                [%log_entry
-                  String.chop_prefix_exn ~prefix:"COMMENT: " comment;
-                  loop more]
-              in
-              loop more
-          | source :: trace :: more when String.is_prefix source ~prefix:"# " ->
-              (let source =
-                 String.concat ~sep:"\n" @@ String.split ~on:'$' @@ String.chop_prefix_exn ~prefix:"# " source
-               in
-               match Utils.split_with_seps header_sep trace with
-               | [] | [ "" ] -> [%log source]
-               | header1 :: assign1 :: header2 :: body ->
-                   let header = String.concat [ header1; assign1; header2 ] in
-                   let body = String.concat body in
-                   let _message = Sexp.(List [ Atom header; Atom source; Atom body ]) in
-                   [%log (_message : Sexp.t)]
-               | _ -> [%log source, trace]);
-              loop more
-          | _line :: more ->
-              [%log _line];
-              loop more
-        in
-        assert (List.is_empty @@ loop (Stdio.In_channel.read_lines log_file_name));
+        Utils.log_trace_tree _debug_runtime (Stdio.In_channel.read_lines log_file_name);
         Stdlib.Sys.remove log_file_name)
     in
     Tn.Work work

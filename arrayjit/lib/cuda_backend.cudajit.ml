@@ -299,8 +299,7 @@ let compile_main ~traced_store info ppf llc : unit =
            let run_ptr_debug = get_run_ptr_debug array in
            let run_ptr = get_run_ptr array in
            let offset = (idcs, array.dims) in
-           (* FIXME: does this work or should \n be \\n? *)
-           let debug_line = "# " ^ String.substr_replace_all debug ~pattern:"\n" ~with_:"$" ^ "\n" in
+           let debug_line = "# " ^ String.substr_replace_all debug ~pattern:"\n" ~with_:"$" ^ "\\n" in
            fprintf ppf
              "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(\"%%d: %s\", log_id);@ \
               printf(@[<h>\"%%d: %s[%%u] = %%f = %s\\n\"@], log_id,@ %a,@ %s[%a]%a);@ @]}"
@@ -413,7 +412,7 @@ type code = {
 }
 [@@deriving sexp_of]
 
-let%debug_sexp compile_func ~name idx_params (traced_store, llc) =
+let%track_sexp compile_func ~name idx_params (traced_store, llc) =
   [%log "generating the .cu source"];
   let info = { info_arrays = Map.empty (module Tn); used_tensors = Hash_set.create (module Tn) } in
   let b = Buffer.create 4096 in
@@ -471,9 +470,8 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ log_id @ idx_par
     Stdio.Out_channel.close oc);
   [%log "compiling to PTX"];
   let module Cu = Cudajit in
-  let ptx =
-    Cu.compile_to_ptx ~cu_src ~name ~options:[ "--use_fast_math" ] ~with_debug:Utils.settings.with_debug
-  in
+  let with_debug = Utils.settings.output_debug_files_in_run_directory || Utils.settings.with_debug in
+  let ptx = Cu.compile_to_ptx ~cu_src ~name ~options:[ "--use_fast_math" ] ~with_debug in
   if Utils.settings.output_debug_files_in_run_directory then (
     let f_name = name ^ "-cudajit-debug" in
     let oc = Out_channel.open_text @@ f_name ^ ".ptx" in
@@ -503,10 +501,6 @@ let%diagn_sexp link_func (old_context : context) ~name info ptx =
   [%log "compilation finished"];
   (func, global_arrays, run_module)
 
-let header_sep =
-  let open Re in
-  compile (seq [ str " "; opt any; str "="; str " " ])
-
 let compile ?name bindings ((_, llc) as compiled : compiled) =
   let name : string = Option.value_or_thunk name ~default:(fun () -> Low_level.extract_block_name [ llc ]) in
   let idx_params = Indexing.bound_symbols bindings in
@@ -529,7 +523,7 @@ let link old_context code =
   let%diagn_sexp schedule () =
     let log_id = get_global_run_id () in
     let log_id_prefix = Int.to_string log_id ^ ": " in
-    [%log_result "Scheduling", code.name, old_context.label, (log_id : int)];
+    [%log_result "Scheduling", code.name, context.label, (log_id : int)];
     let module Cu = Cudajit in
     let log_arg = if Utils.settings.debug_log_from_routines then [ Cu.Int log_id ] else [] in
     let idx_args =
@@ -571,38 +565,11 @@ let link old_context code =
       @@ log_arg @ idx_args @ args;
       [%log "kernel launched"];
       if Utils.settings.debug_log_from_routines then
-        (* FIXME: move this to a shared location, like Assignments or Utils. *)
-        let rec loop = function
-          | [] -> []
-          | line :: more when String.is_empty line -> loop more
-          | "COMMENT: end" :: more -> more
-          | comment :: more when String.is_prefix comment ~prefix:"COMMENT: " ->
-              let more =
-                [%log_entry
-                  String.chop_prefix_exn ~prefix:"COMMENT: " comment;
-                  loop more]
-              in
-              loop more
-          | source :: trace :: more when String.is_prefix source ~prefix:"# " ->
-              (let source =
-                 String.concat ~sep:"\n" @@ String.split ~on:'$' @@ String.chop_prefix_exn ~prefix:"# " source
-               in
-               match Utils.split_with_seps header_sep trace with
-               | [] | [ "" ] -> [%log source]
-               | header1 :: assign1 :: header2 :: body ->
-                   let header = String.concat [ header1; assign1; header2 ] in
-                   let body = String.concat body in
-                   let _message = Sexp.(List [ Atom header; Atom source; Atom body ]) in
-                   [%log (_message : Sexp.t)]
-               | _ -> [%log source, trace]);
-              loop more
-          | _line :: more ->
-              [%log _line];
-              loop more
-        in
         let postprocess_logs ~output =
           let output = List.filter_map output ~f:(String.chop_prefix ~prefix:log_id_prefix) in
-          assert (List.is_empty @@ loop output)
+          [%log_entry
+            context.label;
+            Utils.log_trace_tree _debug_runtime output]
         in
         context.device.postprocess_queue <- (context, postprocess_logs) :: context.device.postprocess_queue
     in

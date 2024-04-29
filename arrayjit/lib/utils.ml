@@ -356,3 +356,45 @@ let get_debug_formatter ~fname =
   else None
 
 exception User_error of string
+
+let header_sep =
+  let open Re in
+  compile (seq [ str " "; opt any; str "="; str " " ])
+
+let%diagn_rt_sexp log_trace_tree logs =
+  let rec loop = function
+    | [] -> []
+    | line :: more when String.is_empty line -> loop more
+    | "COMMENT: end" :: more -> more
+    | comment :: more when String.is_prefix comment ~prefix:"COMMENT: " ->
+        let more =
+          [%log_entry
+            String.chop_prefix_exn ~prefix:"COMMENT: " comment;
+            loop more]
+        in
+        loop more
+    | source :: trace :: more when String.is_prefix source ~prefix:"# " ->
+        (let source =
+           String.concat ~sep:"\n" @@ String.split ~on:'$' @@ String.chop_prefix_exn ~prefix:"# " source
+         in
+         match split_with_seps header_sep trace with
+         | [] | [ "" ] -> [%log source]
+         | header1 :: assign1 :: header2 :: body ->
+             let header = String.concat [ header1; assign1; header2 ] in
+             let body = String.concat body in
+             let _message = Sexp.(List [ Atom header; Atom source; Atom body ]) in
+             [%log (_message : Sexp.t)]
+         | _ -> [%log source, trace]);
+        loop more
+    | _line :: more ->
+        [%log _line];
+        loop more
+  in
+  let rec loop_logs logs =
+    let output = loop logs in
+    if not (List.is_empty output) then
+      [%log_entry
+        "TRAILING LOGS:";
+        loop_logs output]
+  in
+  loop_logs logs
