@@ -11,7 +11,7 @@ module Debug_runtime = Utils.Debug_runtime
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 module Scope_id = struct
-  type t = { nd : Tn.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
+  type t = { tn : Tn.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
 
   include Comparator.Make (struct
     type nonrec t = t
@@ -21,15 +21,15 @@ module Scope_id = struct
   end)
 end
 
-type scope_id = Scope_id.t = { nd : Tn.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
+type scope_id = Scope_id.t = { tn : Tn.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
 
 (** *** Low-level representation. *)
 
 let get_scope =
   let uid = ref 0 in
-  fun nd ->
+  fun tn ->
     Int.incr uid;
-    { nd; scope_id = !uid }
+    { tn; scope_id = !uid }
 
 (** Cases: [t] -- code, [float_t] -- single number at some precision. *)
 type t =
@@ -39,17 +39,12 @@ type t =
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
   | Zero_out of Tn.t
-  | Set of { array : Tn.t; idcs : Indexing.axis_index array; llv : float_t; mutable debug : string }
+  | Set of { tn : Tn.t; idcs : Indexing.axis_index array; llv : float_t; mutable debug : string }
   | Set_local of scope_id * float_t
 [@@deriving sexp_of, equal]
 
 and float_t =
-  | Local_scope of {
-      id : scope_id;
-      prec : (Ops.prec[@equal.ignore] [@compare.ignore]);
-      body : t;
-      orig_indices : Indexing.axis_index array;
-    }
+  | Local_scope of { id : scope_id; body : t; orig_indices : Indexing.axis_index array }
   | Get_local of scope_id
   | Get_global of Ops.global_identifier * Indexing.axis_index array option
   | Get of Tn.t * Indexing.axis_index array
@@ -103,7 +98,7 @@ type visits =
 [@@deriving sexp, equal, variants]
 
 type traced_array = {
-  nd : Tn.t;
+  tn : Tn.t;
   mutable computations : (Indexing.axis_index array option * t) list;
       (** The computations (of the tensor node) are retrieved for optimization just as they are populated, so
           that the inlined code corresponds precisely to the changes to the arrays that would happen up till
@@ -124,10 +119,10 @@ type traced_array = {
 }
 [@@deriving sexp_of]
 
-let get_node store nd =
-  Hashtbl.find_or_add store nd ~default:(fun () ->
+let get_node store tn =
+  Hashtbl.find_or_add store tn ~default:(fun () ->
       {
-        nd;
+        tn;
         computations = [];
         assignments = Hash_set.Poly.create ();
         accesses = Hashtbl.Poly.create ();
@@ -161,8 +156,8 @@ let visit ~is_assigned old =
 let is_constexpr_comp traced_store llv =
   let rec loop llv =
     match llv with
-    | Get_local { nd; _ } | Local_scope { id = { nd; _ }; _ } ->
-        let traced = get_node traced_store nd in
+    | Get_local { tn; _ } | Local_scope { id = { tn; _ }; _ } ->
+        let traced = get_node traced_store tn in
         traced.is_scalar_constexpr
     | Get_global (_, _) -> false
     | Get (tn, _idcs) ->
@@ -175,7 +170,7 @@ let is_constexpr_comp traced_store llv =
   in
   loop llv
 
-let is_scalar_dims array = Array.for_all ~f:(( = ) 1) @@ Lazy.force array.Tn.dims
+let is_scalar_dims tn = Array.for_all ~f:(( = ) 1) @@ Lazy.force tn.Tn.dims
 
 let visit_llc traced_store reverse_node_map ~max_visits llc =
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
@@ -197,26 +192,26 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
         for data = from_ to min to_ (from_ + virtualize_settings.max_tracing_dim) do
           loop_proc (Map.add_exn ~key:index ~data env) body
         done
-    | Zero_out array ->
-        let traced : traced_array = get_node traced_store array in
+    | Zero_out tn ->
+        let traced : traced_array = get_node traced_store tn in
         if Hash_set.is_empty traced.assignments && Hashtbl.is_empty traced.accesses then (
           traced.zero_initialized <- true;
-          if is_scalar_dims array then traced.is_scalar_constexpr <- true);
+          if is_scalar_dims tn then traced.is_scalar_constexpr <- true);
         traced.zeroed_out <- true
-    | Set { array; idcs; llv; debug = _ } ->
+    | Set { tn; idcs; llv; debug = _ } ->
         loop_float env llv;
-        let traced : traced_array = get_node traced_store array in
-        if Hash_set.is_empty traced.assignments && Hashtbl.is_empty traced.accesses && is_scalar_dims array
-        then traced.is_scalar_constexpr <- is_constexpr_comp traced_store llv
+        let traced : traced_array = get_node traced_store tn in
+        if Hash_set.is_empty traced.assignments && Hashtbl.is_empty traced.accesses && is_scalar_dims tn then
+          traced.is_scalar_constexpr <- is_constexpr_comp traced_store llv
           (* Note: this prevents detection if the same constant is assigned inside a loop. *)
         else if not @@ Hash_set.is_empty traced.assignments then traced.is_scalar_constexpr <- false;
         Hash_set.add traced.assignments (lookup env idcs);
         Array.iter idcs ~f:(function
           | Fixed_idx _ -> ()
           | Iterator s ->
-              let old_array = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> array) in
+              let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
               (* TODO(#134): this prevents multiple virtual arrays from sharing for loops. *)
-              assert (Tn.equal old_array array))
+              assert (Tn.equal old_tn tn))
     | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
     | Staged_compilation _ -> ()
@@ -225,10 +220,10 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
     match llv with
     | Constant _ -> ()
     | Get (ptr, indices) ->
-        let array : traced_array = get_node traced_store ptr in
+        let traced : traced_array = get_node traced_store ptr in
         let at_pos = lookup env indices in
-        Hashtbl.update array.accesses at_pos
-          ~f:(visit ~is_assigned:(array.zeroed_out || Hash_set.mem array.assignments at_pos))
+        Hashtbl.update traced.accesses at_pos
+          ~f:(visit ~is_assigned:(traced.zeroed_out || Hash_set.mem traced.assignments at_pos))
     | Local_scope { body; _ } -> loop_proc env body
     | Get_local _ -> ()
     | Get_global _ -> ()
@@ -242,7 +237,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
   in
   loop_proc Indexing.empty_env llc;
   Hashtbl.iter traced_store ~f:(fun traced ->
-      let tn = traced.nd in
+      let tn = traced.tn in
       if
         virtualize_settings.inline_scalar_constexprs && traced.is_scalar_constexpr
         && not (Tn.known_non_virtual tn)
@@ -268,7 +263,7 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
   in
   let at_idcs = ref None in
   let has_setter = ref false in
-  let top_array = traced.nd in
+  let top_tn = traced.tn in
   let check_idcs indices =
     (match !at_idcs with
     | None -> at_idcs := Some indices
@@ -298,9 +293,9 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
     | For_loop { trace_it = false; _ } -> raise @@ Non_virtual 6
     | For_loop { index; body; from_ = _; to_ = _; trace_it = true } ->
         loop_proc ~env_dom:(Set.add env_dom index) body
-    | Zero_out array -> if Tn.equal array top_array then has_setter := true
-    | Set { array; idcs; llv; debug = _ } ->
-        if Tn.equal array top_array then (
+    | Zero_out tn -> if Tn.equal tn top_tn then has_setter := true
+    | Set { tn; idcs; llv; debug = _ } ->
+        if Tn.equal tn top_tn then (
           check_idcs idcs;
           has_setter := true)
         else
@@ -322,8 +317,8 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
   and loop_float ~env_dom llv =
     match llv with
     | Constant _ -> ()
-    | Get (array, idcs) ->
-        if Tn.equal array top_array then check_idcs idcs
+    | Get (tn, idcs) ->
+        if Tn.equal tn top_tn then check_idcs idcs
         else
           (* Check for escaping variables. *)
           Array.iter idcs ~f:(function
@@ -348,11 +343,11 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
     | Unop (_, llv) -> loop_float ~env_dom llv
   in
   try
-    if Tn.known_non_virtual traced.nd then raise @@ Non_virtual 11;
+    if Tn.known_non_virtual traced.tn then raise @@ Non_virtual 11;
     loop_proc ~env_dom:static_indices top_llc;
     if not !has_setter then raise @@ Non_virtual 12;
     traced.computations <- (!at_idcs, top_llc) :: traced.computations
-  with Non_virtual i -> Tn.update_memory_mode traced.nd Never_virtual i
+  with Non_virtual i -> Tn.update_memory_mode traced.tn Never_virtual i
 
 let inline_computation ~id traced static_indices call_args =
   let exception Non_virtual of int in
@@ -391,8 +386,8 @@ let inline_computation ~id traced static_indices call_args =
           let env = Map.add_exn ~key:index ~data:(Indexing.Iterator fresh) env in
           Option.map ~f:(fun body : t -> For_loop { index = fresh; from_; to_; body; trace_it })
           @@ loop env body
-      | Zero_out array when Tn.equal array traced.nd -> Some (Set_local (id, Constant 0.0))
-      | Set { array; idcs; llv; debug = _ } when Tn.equal array traced.nd ->
+      | Zero_out tn when Tn.equal tn traced.tn -> Some (Set_local (id, Constant 0.0))
+      | Set { tn; idcs; llv; debug = _ } when Tn.equal tn traced.tn ->
           assert ([%equal: Indexing.axis_index array option] (Some idcs) def_args);
           Some (Set_local (id, loop_float env llv))
       | Zero_out _ -> None
@@ -403,15 +398,14 @@ let inline_computation ~id traced static_indices call_args =
     and loop_float env llv : float_t =
       match llv with
       | Constant _ -> llv
-      | Get (array, indices) when Tn.equal array traced.nd ->
+      | Get (tn, indices) when Tn.equal tn traced.tn ->
           assert ([%equal: Indexing.axis_index array option] (Some indices) def_args);
           Get_local id
-      | Get (array, indices) -> Get (array, Array.map ~f:(subst env) indices)
-      | Local_scope { id; prec; body; orig_indices } ->
+      | Get (tn, indices) -> Get (tn, Array.map ~f:(subst env) indices)
+      | Local_scope { id; body; orig_indices } ->
           Local_scope
             {
               id;
-              prec;
               body = Option.value_exn @@ loop env body;
               orig_indices = Array.map ~f:(subst env) orig_indices;
             }
@@ -427,7 +421,7 @@ let inline_computation ~id traced static_indices call_args =
     let body = List.rev_filter_map ~f:loop_proc traced.computations in
     if List.is_empty body then raise @@ Non_virtual 14 else Some (unflat_lines body)
   with Non_virtual i ->
-    Tn.update_memory_mode traced.nd Never_virtual i;
+    Tn.update_memory_mode traced.tn Never_virtual i;
     None
 
 let optimize_integer_pow = ref true
@@ -449,22 +443,22 @@ let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
         Seq (c1, c2)
     | For_loop ({ index; body; _ } as for_config) -> (
         match Hashtbl.find reverse_node_map index with
-        | Some array when not @@ Set.mem process_for array ->
-            let node : traced_array = get_node traced_store array in
-            let result = loop_proc ~process_for:(Set.add process_for array) llc in
-            if not @@ Tn.known_non_virtual node.nd then check_and_store_virtual node static_indices result;
+        | Some tn when not @@ Set.mem process_for tn ->
+            let node : traced_array = get_node traced_store tn in
+            let result = loop_proc ~process_for:(Set.add process_for tn) llc in
+            if not @@ Tn.known_non_virtual node.tn then check_and_store_virtual node static_indices result;
             result
         | _ -> For_loop { for_config with body = loop body })
-    | Zero_out array ->
-        let traced : traced_array = get_node traced_store array in
-        if (not @@ Set.mem process_for array) && (not @@ Tn.known_non_virtual traced.nd) then
+    | Zero_out tn ->
+        let traced : traced_array = get_node traced_store tn in
+        if (not @@ Set.mem process_for tn) && (not @@ Tn.known_non_virtual traced.tn) then
           check_and_store_virtual traced static_indices llc;
         llc
-    | Set { array; idcs; llv; debug = _ } ->
-        let traced : traced_array = get_node traced_store array in
-        let next = if Tn.known_non_virtual traced.nd then process_for else Set.add process_for array in
-        let result = Set { array; idcs; llv = loop_float ~process_for:next llv; debug = "" } in
-        if (not @@ Set.mem process_for array) && (not @@ Tn.known_non_virtual traced.nd) then
+    | Set { tn; idcs; llv; debug = _ } ->
+        let traced : traced_array = get_node traced_store tn in
+        let next = if Tn.known_non_virtual traced.tn then process_for else Set.add process_for tn in
+        let result = Set { tn; idcs; llv = loop_float ~process_for:next llv; debug = "" } in
+        if (not @@ Set.mem process_for tn) && (not @@ Tn.known_non_virtual traced.tn) then
           check_and_store_virtual traced static_indices result;
         result
     | Set_local (id, llv) -> Set_local (id, loop_float ~process_for llv)
@@ -473,19 +467,19 @@ let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
   and loop_float ~process_for (llv : float_t) : float_t =
     match llv with
     | Constant _ -> llv
-    | Get (array, _) when Set.mem process_for array ->
-        (* [Get_local] will replace this [Get] during [inline_computation] if [array] remains virtual. *)
+    | Get (tn, _) when Set.mem process_for tn ->
+        (* [Get_local] will replace this [Get] during [inline_computation] if [tn] remains virtual. *)
         llv
-    | Get (array, indices) ->
-        let traced = get_node traced_store array in
-        if Tn.known_non_virtual traced.nd then llv
+    | Get (tn, indices) ->
+        let traced = get_node traced_store tn in
+        if Tn.known_non_virtual traced.tn then llv
         else
-          let id = get_scope array in
+          let id = get_scope tn in
           Option.value ~default:llv
           @@ Option.map (inline_computation ~id traced static_indices indices) ~f:(fun body ->
-                 Local_scope { id; prec = traced.nd.prec; body; orig_indices = indices })
+                 Local_scope { id; body; orig_indices = indices })
     | Local_scope opts ->
-        Local_scope { opts with body = loop_proc ~process_for:(Set.add process_for opts.id.nd) opts.body }
+        Local_scope { opts with body = loop_proc ~process_for:(Set.add process_for opts.id.tn) opts.body }
     | Get_local _ -> llv
     | Get_global _ -> llv
     | Embed_index _ -> llv
@@ -517,23 +511,23 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
         | None ->
             Option.map ~f:(fun body : t -> For_loop { for_config with body })
             @@ loop_proc ~balanced ~env_dom body)
-    | Zero_out array ->
-        if not @@ Tn.known_non_virtual array then (
+    | Zero_out tn ->
+        if not @@ Tn.known_non_virtual tn then (
           (* FIXME: *)
-          Tn.update_memory_mode array Virtual 151;
+          Tn.update_memory_mode tn Virtual 151;
           None)
         else Some llc
-    | Set { array; idcs; llv; debug = _ } ->
-        if not @@ Tn.known_non_virtual array then (
+    | Set { tn; idcs; llv; debug = _ } ->
+        if not @@ Tn.known_non_virtual tn then (
           (* FIXME: *)
-          Tn.update_memory_mode array Virtual 152;
+          Tn.update_memory_mode tn Virtual 152;
           None)
         else (
           assert (Array.for_all idcs ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
-          Some (Set { array; idcs; llv = loop_float ~balanced ~env_dom llv; debug = "" }))
+          Some (Set { tn; idcs; llv = loop_float ~balanced ~env_dom llv; debug = "" }))
     | Set_local (id, llv) ->
-        assert (not @@ Tn.known_non_virtual id.nd);
-        Tn.update_memory_mode id.nd Virtual 16;
+        assert (not @@ Tn.known_non_virtual id.tn);
+        Tn.update_memory_mode id.tn Virtual 16;
         Some (Set_local (id, loop_float ~balanced ~env_dom llv))
     | Comment _ -> Some llc
     | Staged_compilation _ -> Some llc
@@ -546,19 +540,19 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
         Tn.update_memory_mode a Never_virtual 17;
         assert (Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
         llv
-    | Local_scope { id; prec; body; orig_indices } ->
+    | Local_scope { id; body; orig_indices } ->
         assert (
           Array.for_all orig_indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
-        if Tn.known_non_virtual id.nd then Get (id.nd, orig_indices)
+        if Tn.known_non_virtual id.tn then Get (id.tn, orig_indices)
         else
           (* DEBUG: *)
           let body = Option.value_exn @@ loop_proc ~balanced ~env_dom body in
           (* let body = Option.value ~default:Noop @@ loop_proc ~balanced ~env_dom body in *)
-          Tn.update_memory_mode id.nd Virtual 18;
-          Local_scope { id; prec; orig_indices; body }
+          Tn.update_memory_mode id.tn Virtual 18;
+          Local_scope { id; orig_indices; body }
     | Get_local id ->
-        assert (not @@ Tn.known_non_virtual id.nd);
-        Tn.update_memory_mode id.nd Virtual 16;
+        assert (not @@ Tn.known_non_virtual id.tn);
+        Tn.update_memory_mode id.tn Virtual 16;
         llv
     | Get_global _ -> llv
     | Embed_index (Fixed_idx _) -> llv
@@ -599,7 +593,7 @@ and substitute_proc ~var ~value llc =
       Seq (c1, c2)
   | For_loop for_config -> For_loop { for_config with body = loop_proc for_config.body }
   | Zero_out _ -> llc
-  | Set { array; idcs; llv; debug = _ } -> Set { array; idcs; llv = loop_float llv; debug = "" }
+  | Set { tn; idcs; llv; debug = _ } -> Set { tn; idcs; llv = loop_float llv; debug = "" }
   | Set_local (id, llv) -> Set_local (id, loop_float llv)
   | Comment _ -> llc
   | Staged_compilation _ -> llc
@@ -616,7 +610,7 @@ let simplify_llc llc =
         Seq (c1, c2)
     | For_loop for_config -> For_loop { for_config with body = loop for_config.body }
     | Zero_out _ -> llc
-    | Set { array; idcs; llv; debug = _ } -> Set { array; idcs; llv = loop_float llv; debug = "" }
+    | Set { tn; idcs; llv; debug = _ } -> Set { tn; idcs; llv = loop_float llv; debug = "" }
     | Set_local (id, llv) -> Set_local (id, loop_float llv)
     | Comment _ -> llc
     | Staged_compilation _ -> llc
@@ -761,16 +755,16 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf l
         loop c2
     | For_loop { body; _ } -> loop body
     | Zero_out la -> visit la
-    | Set { array; llv; _ } ->
-        visit array;
+    | Set { tn; llv; _ } ->
+        visit tn;
         loop_float llv
-    | Set_local ({ nd; _ }, llv) ->
-        visit nd;
+    | Set_local ({ tn; _ }, llv) ->
+        visit tn;
         loop_float llv
   and loop_float fc =
     match fc with
-    | Local_scope { id = { nd; _ }; prec = _; body; orig_indices = _ } ->
-        visit nd;
+    | Local_scope { id = { tn; _ }; body; orig_indices = _ } ->
+        visit tn;
         loop body
     | Get_global (_, _) -> ()
     | Get (la, _) -> visit la
@@ -778,7 +772,7 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf l
         loop_float f1;
         loop_float f2
     | Unop (_, f) -> loop_float f
-    | Get_local { nd; _ } -> visit nd
+    | Get_local { tn; _ } -> visit tn
     | Constant _ | Embed_index _ -> ()
   in
   loop llc;
@@ -788,7 +782,7 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf l
   let repeating_grad_idents = Hashtbl.filter grad_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1) in
   let ident_label la = Tn.styled_ident ~repeating_nograd_idents ~repeating_grad_idents ident_style la in
   let pp_ident ppf la = fprintf ppf "%s" @@ ident_label la in
-  let pp_local ppf { nd; scope_id } = fprintf ppf "v%d_%a" scope_id pp_ident nd in
+  let pp_local ppf { tn; scope_id } = fprintf ppf "v%d_%a" scope_id pp_ident tn in
   let rec pp_ll ppf c : unit =
     match c with
     | Noop -> ()
@@ -797,14 +791,15 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf l
           (List.filter [ c1; c2 ] ~f:(function Noop -> false | _ -> true))
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
         fprintf ppf "@[<v 2>for %a = %d to %d {@ %a@]@,}" pp_symbol i from_ to_ pp_ll body
-    | Zero_out array -> fprintf ppf "zero_out %a;" pp_ident array
+    | Zero_out tn -> fprintf ppf "zero_out %a;" pp_ident tn
     | Set p ->
-        p.debug <- asprintf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.array pp_indices p.idcs pp_float p.llv;
-        fprintf ppf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.array pp_indices p.idcs pp_float p.llv
+        p.debug <-
+          asprintf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.tn pp_indices p.idcs (pp_float p.tn.prec) p.llv;
+        fprintf ppf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.tn pp_indices p.idcs (pp_float p.tn.prec) p.llv
     | Comment message -> fprintf ppf "/* %s */" message
     | Staged_compilation _ -> fprintf ppf "STAGED_COMPILATION_CALLBACK()"
-    | Set_local (id, llv) -> fprintf ppf "@[<2>%a :=@ %a;@]" pp_local id pp_float llv
-  and pp_float ppf value =
+    | Set_local (id, llv) -> fprintf ppf "@[<2>%a :=@ %a;@]" pp_local id (pp_float id.tn.prec) llv
+  and pp_float prec ppf value =
     match value with
     | Local_scope { id; body; _ } -> fprintf ppf "@[<2>%a {@ %a@]@ }@," pp_local id pp_ll body
     | Get_local id -> pp_local ppf id
@@ -814,16 +809,16 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf l
         fprintf ppf "%s" @@ Ops.ptr_to_string ptr prec
     | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
         fprintf ppf "%s[%a]" (Ops.ptr_to_string ptr prec) pp_indices idcs
-    | Get (array, idcs) -> fprintf ppf "@[<2>%a[@,%a]@]" pp_ident array pp_indices idcs
+    | Get (tn, idcs) -> fprintf ppf "@[<2>%a[@,%a]@]" pp_ident tn pp_indices idcs
     | Constant c -> fprintf ppf "%f" c
     | Embed_index idx -> pp_index ppf idx
-    | Binop (Arg1, v1, _v2) -> pp_float ppf v1
-    | Binop (Arg2, _v1, v2) -> pp_float ppf v2
+    | Binop (Arg1, v1, _v2) -> pp_float prec ppf v1
+    | Binop (Arg2, _v1, v2) -> pp_float prec ppf v2
     | Binop (op, v1, v2) ->
-        let prefix, infix, postfix = Ops.binop_C_syntax ~is_double:true op in
-        fprintf ppf "@[<1>%s%a%s@ %a@]%s" prefix pp_float v1 infix pp_float v2 postfix
-    | Unop (Identity, v) -> pp_float ppf v
-    | Unop (Relu, v) -> fprintf ppf "@[<1>relu(%a@])" pp_float v
+        let prefix, infix, postfix = Ops.binop_C_syntax op in
+        fprintf ppf "@[<1>%s%a%s@ %a@]%s" prefix (pp_float prec) v1 infix (pp_float prec) v2 postfix
+    | Unop (Identity, v) -> (pp_float prec) ppf v
+    | Unop (Relu, v) -> fprintf ppf "@[<1>relu(%a@])" (pp_float prec) v
   in
   fprintf ppf "@,@[<v 2>";
   fprint_function_header ?name ?static_indices () ppf;

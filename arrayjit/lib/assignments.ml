@@ -97,31 +97,31 @@ let sequential l = Option.value ~default:Noop @@ List.reduce l ~f:(fun st sts ->
 
 let%debug_sexp to_low_level code =
   let open Indexing in
-  let get a idcs =
-    if not (Array.length idcs = Array.length (Lazy.force a.Tn.dims)) then
+  let get tn idcs =
+    if not (Array.length idcs = Array.length (Lazy.force tn.Tn.dims)) then
       [%log
         "get",
           "a=",
-          (a : Tn.t),
+          (tn : Tn.t),
           ":",
-          Tn.label a,
+          Tn.label tn,
           (idcs : Indexing.axis_index array),
-          (Lazy.force a.dims : int array)];
-    assert (Array.length idcs = Array.length (Lazy.force a.Tn.dims));
-    Low_level.Get (a, idcs)
+          (Lazy.force tn.dims : int array)];
+    assert (Array.length idcs = Array.length (Lazy.force tn.Tn.dims));
+    Low_level.Get (tn, idcs)
   in
-  let set array idcs llv =
-    if not (Array.length idcs = Array.length (Lazy.force array.Tn.dims)) then
+  let set tn idcs llv =
+    if not (Array.length idcs = Array.length (Lazy.force tn.Tn.dims)) then
       [%log
         "set",
           "a=",
-          (array : Tn.t),
+          (tn : Tn.t),
           ":",
-          Tn.label array,
+          Tn.label tn,
           (idcs : Indexing.axis_index array),
-          (Lazy.force array.dims : int array)];
-    assert (Array.length idcs = Array.length (Lazy.force array.Tn.dims));
-    Low_level.Set { array; idcs; llv; debug = "" }
+          (Lazy.force tn.dims : int array)];
+    assert (Array.length idcs = Array.length (Lazy.force tn.Tn.dims));
+    Low_level.Set { tn; idcs; llv; debug = "" }
   in
   let rec loop code =
     match code with
