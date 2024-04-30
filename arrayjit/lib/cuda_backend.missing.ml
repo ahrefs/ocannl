@@ -1,19 +1,19 @@
 open Base
 
 type context = Unimplemented [@@deriving sexp_of]
-type code = Unimplemented [@@deriving sexp_of]
+type code = Indexing.unit_bindings [@@deriving sexp_of]
 
 let initialize () = ()
 let is_initialized () = true
 let finalize _context = ()
 
-let compile ?name:_ context bindings _asgns =
-  let compiled_bindings = List.map ~f:(fun s -> (s, ref 0)) @@ Indexing.bound_symbols bindings in
+let compile ?name:_ bindings _optimized = bindings
+
+let link context code =
+  let compiled_bindings = List.map ~f:(fun s -> (s, ref 0)) @@ Indexing.bound_symbols code in
   let work () = Tnode.Work (fun _debug_runtime () -> ()) in
   (context, compiled_bindings, work)
 
-(* let link context  *)
-  
 let unsafe_cleanup ?unsafe_shutdown:_ () = ()
 let from_host _context _arr = false
 let to_host _context _arr = false
