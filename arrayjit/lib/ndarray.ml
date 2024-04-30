@@ -47,7 +47,6 @@ let precision_string = function
   | Double_nd _ -> "double"
 
 let default_kind = Ops.Single
-let is_double_prec_t = function Double_nd _ -> true | _ -> false
 
 let get_prec = function
   | Byte_nd _ -> Ops.byte

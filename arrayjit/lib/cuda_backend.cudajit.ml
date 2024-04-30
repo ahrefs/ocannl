@@ -18,7 +18,7 @@ type tn_info = {
   num_typ : string;
       (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]), [double]
           (precision [Double]). *)
-  is_double : bool;
+  prec : Ops.prec;
   zero_initialized : bool;
 }
 [@@deriving sexp_of]
@@ -200,13 +200,6 @@ let get_run_ptr_debug array =
   | Some rv, _ -> "global_" ^ rv
   | None, None -> assert false
 
-let prec_to_c_type = function
-  | Ops.Void_prec -> "void"
-  | Byte_prec _ -> "uint8"
-  | Half_prec _ -> (* FIXME: *) "uint16"
-  | Single_prec _ -> "float"
-  | Double_prec _ -> "double"
-
 (* let compute_array_offset ~idcs ~dims = Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx +
    (offset * dim)) *)
 
@@ -220,12 +213,12 @@ let%debug_sexp get_array ~(traced_store : Low_level.traced_store) info key =
     let dims = Lazy.force key.dims in
     let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
     let hosted = Lazy.force key.array in
-    let size_in_bytes = size_in_elems * Ops.prec_in_bytes key.prec in
+    let prec = key.prec in
+    let size_in_bytes = size_in_elems * Ops.prec_in_bytes prec in
     let is_on_host = Tn.is_hosted_force key 31 in
     let is_materialized = Tn.is_hosted_force key 32 in
     assert (Bool.(Option.is_some hosted = is_on_host));
-    let is_double = Ops.is_double_prec key.prec in
-    let num_typ = prec_to_c_type key.prec in
+    let num_typ = Ops.cuda_typ_of_prec prec in
     let mem = if not is_materialized then Local_only else Global in
     let global = if is_local_only mem then None else Some (Tn.name key) in
     let local = Option.some_if (is_local_only mem) @@ Tn.name key ^ "_local" in
@@ -237,6 +230,8 @@ let%debug_sexp get_array ~(traced_store : Low_level.traced_store) info key =
           Tn.label key,
           "mem",
           (backend_info : Sexp.t),
+          "prec",
+          (prec : Ops.prec),
           "on-host",
           (is_on_host : bool),
           "is-global",
@@ -245,7 +240,7 @@ let%debug_sexp get_array ~(traced_store : Low_level.traced_store) info key =
       key.backend_info <- Utils.sexp_append ~elem:backend_info key.backend_info;
     let zero_initialized = (Hashtbl.find_exn traced_store key).Low_level.zero_initialized in
     let data =
-      { hosted; local; mem; dims; size_in_bytes; size_in_elems; num_typ; is_double; global; zero_initialized }
+      { hosted; local; mem; dims; size_in_bytes; size_in_elems; num_typ; prec; global; zero_initialized }
     in
     info.info_arrays <- Map.add_exn info.info_arrays ~key ~data;
     data
@@ -254,7 +249,6 @@ let%debug_sexp get_array ~(traced_store : Low_level.traced_store) info key =
 
 let compile_main ~traced_store info ppf llc : unit =
   let open Stdlib.Format in
-  let locals = ref @@ Map.empty (module Low_level.Scope_id) in
   let rec pp_ll ppf c : unit =
     match c with
     | Low_level.Noop -> ()
@@ -276,15 +270,13 @@ let compile_main ~traced_store info ppf llc : unit =
         let tn = Low_level.(get_node traced_store array) in
         assert tn.zero_initialized
         (* The initialization will be emitted by get_array. *)
-    | Set { array; idcs; llv; debug } ->
-        let array = get_array ~traced_store info array in
-        let old_locals = !locals in
-        let loop_f = pp_float ~num_typ:array.num_typ ~is_double:array.is_double in
-        let loop_debug_f = debug_float ~num_typ:array.num_typ ~is_double:array.is_double in
+    | Set { tn; idcs; llv; debug } ->
+        let tn = get_array ~traced_store info tn in
+        let loop_f = pp_float ~num_typ:tn.num_typ tn.prec in
+        let loop_debug_f = debug_float ~num_typ:tn.num_typ tn.prec in
         let num_closing_braces = pp_top_locals ppf llv in
         (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
-        fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr array) pp_array_offset (idcs, array.dims) loop_f
-          llv;
+        fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr tn) pp_array_offset (idcs, tn.dims) loop_f llv;
         (if Utils.settings.debug_log_from_routines then
            let v_code, v_idcs = loop_debug_f llv in
            let pp_args =
@@ -296,9 +288,9 @@ let compile_main ~traced_store info ppf llc : unit =
                  pp_comma ppf ();
                  pp_print_string ppf v
            in
-           let run_ptr_debug = get_run_ptr_debug array in
-           let run_ptr = get_run_ptr array in
-           let offset = (idcs, array.dims) in
+           let run_ptr_debug = get_run_ptr_debug tn in
+           let run_ptr = get_run_ptr tn in
+           let offset = (idcs, tn.dims) in
            let debug_line = "# " ^ String.substr_replace_all debug ~pattern:"\n" ~with_:"$" ^ "\\n" in
            fprintf ppf
              "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(\"%%d: %s\", log_id);@ \
@@ -307,8 +299,7 @@ let compile_main ~traced_store info ppf llc : unit =
              v_idcs);
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]@ }@,"
-        done;
-        locals := old_locals
+        done
     | Comment message ->
         if Utils.settings.debug_log_from_routines then
           fprintf ppf
@@ -317,23 +308,20 @@ let compile_main ~traced_store info ppf llc : unit =
             (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
         else fprintf ppf "/* %s */@ " message
     | Staged_compilation callback -> callback ()
-    | Set_local (({ scope_id; _ } as id), value) ->
-        let num_typ, is_double = Map.find_exn !locals id in
-        let old_locals = !locals in
+    | Set_local (Low_level.{ scope_id; tn = { prec; _ } }, value) ->
+        let num_typ = Ops.cuda_typ_of_prec prec in
         let num_closing_braces = pp_top_locals ppf value in
-        fprintf ppf "@[<2>v%d =@ %a;@]" scope_id (pp_float ~num_typ ~is_double) value;
+        fprintf ppf "@[<2>v%d =@ %a;@]" scope_id (pp_float ~num_typ prec) value;
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]@ }@,"
-        done;
-        locals := old_locals
+        done
   and pp_top_locals ppf (vcomp : Low_level.float_t) : int =
     match vcomp with
-    | Local_scope { id = { scope_id = i; _ } as id; prec; body; orig_indices = _ } ->
-        let typ = prec_to_c_type prec in
+    | Local_scope { id = { scope_id = i; tn = { prec; _ } }; body; orig_indices = _ } ->
+        let num_typ = Ops.cuda_typ_of_prec prec in
         (* Arrays are initialized to 0 by default. However, there is typically an explicit initialization for
            virtual nodes. *)
-        fprintf ppf "@[<2>{@ %s v%d = 0;@ " typ i;
-        locals := Map.update !locals id ~f:(fun _ -> (typ, Ops.is_double_prec prec));
+        fprintf ppf "@[<2>{@ %s v%d = 0;@ " num_typ i;
         pp_ll ppf body;
         pp_print_space ppf ();
         1
@@ -342,15 +330,15 @@ let compile_main ~traced_store info ppf llc : unit =
     | Binop (Arg2, _v1, v2) -> pp_top_locals ppf v2
     | Binop (_, v1, v2) -> pp_top_locals ppf v1 + pp_top_locals ppf v2
     | Unop (_, v) -> pp_top_locals ppf v
-  and pp_float ~num_typ ~is_double ppf value =
-    let loop = pp_float ~num_typ ~is_double in
+  and pp_float ~num_typ prec ppf value =
+    let loop = pp_float ~num_typ prec in
     match value with
     | Local_scope { id; _ } ->
         (* Embedding of Local_scope is done by pp_top_locals. *)
         loop ppf @@ Get_local id
     | Get_local id ->
-        let typ, _local_is_double = Map.find_exn !locals id in
-        if not @@ String.equal num_typ typ then fprintf ppf "(%s)" num_typ;
+        let get_typ = Ops.cuda_typ_of_prec id.tn.prec in
+        if not @@ String.equal num_typ get_typ then fprintf ppf "(%s)" num_typ;
         fprintf ppf "v%d" id.scope_id
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (array, idcs) ->
@@ -363,22 +351,22 @@ let compile_main ~traced_store info ppf llc : unit =
     | Binop (Arg1, v1, _v2) -> loop ppf v1
     | Binop (Arg2, _v1, v2) -> loop ppf v2
     | Binop (op, v1, v2) ->
-        let prefix, infix, postfix = Ops.binop_C_syntax ~is_double op in
+        let prefix, infix, postfix = Ops.binop_C_syntax prec op in
         fprintf ppf "@[<1>%s%a%s@ %a@]%s" prefix loop v1 infix loop v2 postfix
     | Unop (Identity, v) -> loop ppf v
     | Unop (Relu, v) ->
         (* FIXME: don't recompute v *)
         fprintf ppf "@[<1>(%a > 0.0 ?@ %a : 0.0@])" loop v loop v
-  and debug_float ~num_typ ~is_double (value : Low_level.float_t) : string * 'a list =
-    let loop = debug_float ~num_typ ~is_double in
+  and debug_float ~num_typ prec (value : Low_level.float_t) : string * 'a list =
+    let loop = debug_float ~num_typ prec in
     match value with
     | Local_scope { id; _ } ->
         (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug logs. *)
         loop @@ Get_local id
     | Get_local id ->
-        let typ, _local_is_double = Map.find_exn !locals id in
+        let get_typ = Ops.cuda_typ_of_prec id.tn.prec in
         let v =
-          (if not @@ String.equal num_typ typ then "(" ^ num_typ ^ ")" else "")
+          (if not @@ String.equal num_typ get_typ then "(" ^ num_typ ^ ")" else "")
           ^ "v" ^ Int.to_string id.scope_id
         in
         (v ^ "{=%f}", [ `Value v ])
@@ -393,7 +381,7 @@ let compile_main ~traced_store info ppf llc : unit =
     | Binop (Arg1, v1, _v2) -> loop v1
     | Binop (Arg2, _v1, v2) -> loop v2
     | Binop (op, v1, v2) ->
-        let prefix, infix, postfix = Ops.binop_C_syntax ~is_double op in
+        let prefix, infix, postfix = Ops.binop_C_syntax prec op in
         let v1, idcs1 = loop v1 in
         let v2, idcs2 = loop v2 in
         (String.concat [ prefix; v1; infix; " "; v2; postfix ], idcs1 @ idcs2)

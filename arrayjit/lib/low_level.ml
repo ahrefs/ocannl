@@ -815,7 +815,7 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf l
     | Binop (Arg1, v1, _v2) -> pp_float prec ppf v1
     | Binop (Arg2, _v1, v2) -> pp_float prec ppf v2
     | Binop (op, v1, v2) ->
-        let prefix, infix, postfix = Ops.binop_C_syntax op in
+        let prefix, infix, postfix = Ops.binop_C_syntax prec op in
         fprintf ppf "@[<1>%s%a%s@ %a@]%s" prefix (pp_float prec) v1 infix (pp_float prec) v2 postfix
     | Unop (Identity, v) -> (pp_float prec) ppf v
     | Unop (Relu, v) -> fprintf ppf "@[<1>relu(%a@])" (pp_float prec) v

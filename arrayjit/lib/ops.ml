@@ -88,11 +88,6 @@ let promote_prec p1 p2 =
   | _, Byte_prec _ -> p2
   | Void_prec, Void_prec -> Void_prec
 
-let is_double (type ocaml elt_t) (prec : (ocaml, elt_t) precision) =
-  match prec with Double -> true | _ -> false
-
-let is_double_prec = function Double_prec _ -> true | _ -> false
-
 let pack_prec (type ocaml elt_t) (prec : (ocaml, elt_t) precision) =
   match prec with Byte -> byte | Half -> half | Single -> single | Double -> double
 
@@ -106,7 +101,7 @@ let map_prec ?default { f } = function
   | Double_prec Double -> f Double
   | _ -> .
 
-let c_typ_of_prec =
+let gcc_typ_of_prec =
   let open Gccjit in
   function
   | Byte_prec _ -> Type.Unsigned_char
@@ -114,6 +109,14 @@ let c_typ_of_prec =
   | Single_prec _ -> Type.Float
   | Double_prec _ -> Type.Double
   | Void_prec -> Type.Void
+
+let cuda_typ_of_prec = function
+  | Byte_prec _ -> "unsigned char"
+  (* TODO: or should it be uint8, or uint8_t? *)
+  | Half_prec _ -> (* FIXME: *) "float"
+  | Single_prec _ -> "float"
+  | Double_prec _ -> "double"
+  | Void_prec -> "void"
 
 (** {2 *** Operations ***} *)
 
@@ -157,16 +160,22 @@ let interpret_unop op v =
   let open Float in
   match op with Identity -> v | Relu when v >= 0. -> v | Relu -> 0.
 
-let binop_C_syntax ~is_double = function
-  | Arg1 -> invalid_arg "Ops.binop_C_syntax: Arg1 is not a C operator"
-  | Arg2 -> invalid_arg "Ops.binop_C_syntax: Arg2 is not a C operator"
-  | Add -> ("(", " +", ")")
-  | Sub -> ("(", " -", ")")
-  | Mul -> ("(", " *", ")")
-  | Div -> ("(", " /", ")")
-  | ToPowOf when is_double -> ("pow(", ",", ")")
-  | ToPowOf -> ("powf(", ",", ")")
-  | Relu_gate -> ("(", " > 0.0 ?", " : 0.0)")
+let binop_C_syntax prec v =
+  match (v, prec) with
+  | Arg1, _ -> invalid_arg "Ops.binop_C_syntax: Arg1 is not a C operator"
+  | Arg2, _ -> invalid_arg "Ops.binop_C_syntax: Arg2 is not a C operator"
+  | _, Void_prec -> invalid_arg "Ops.binop_C_syntax: Void precision"
+  | Add, _ -> ("(", " +", ")")
+  | Sub, _ -> ("(", " -", ")")
+  | Mul, _ -> ("(", " *", ")")
+  | Div, _ -> ("(", " /", ")")
+  | ToPowOf, Double_prec _ -> ("pow(", ",", ")")
+  | ToPowOf, Single_prec _ -> ("powf(", ",", ")")
+  | ToPowOf, Half_prec _ -> ("powf(", ",", ")")
+  | ToPowOf, Byte_prec _ ->
+      invalid_arg "Ops.binop_C_syntax: ToPowOf not supported for byte/integer precisions"
+  | Relu_gate, Byte_prec _ -> ("(", " > 0 ?", " : 0)")
+  | Relu_gate, _ -> ("(", " > 0.0 ?", " : 0.0)")
 (* "((int)(", "> 0.0) *", ")" *)
 
 let binop_cd_syntax = function
@@ -218,7 +227,7 @@ let equal_voidptr : voidptr -> voidptr -> bool = phys_equal
 let ptr_to_string ptr prec =
   let open Gccjit in
   let ctx = Context.create () in
-  let result = RValue.to_string @@ RValue.ptr ctx Type.(pointer @@ get ctx @@ c_typ_of_prec prec) ptr in
+  let result = RValue.to_string @@ RValue.ptr ctx Type.(pointer @@ get ctx @@ gcc_typ_of_prec prec) ptr in
   Context.release ctx;
   result
 

@@ -63,7 +63,7 @@ type ndarray = {
   num_typ : (Gccjit.type_[@sexp.opaque]);
       (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]), [double]
           (precision [Double]). *)
-  is_double : bool;
+  prec : Ops.prec;
 }
 [@@deriving sexp_of]
 
@@ -142,14 +142,8 @@ let prepare_array ~debug_log_zero_out ctx arrays traced_store nodes initializati
         let is_materialized = Tn.is_materialized_force key 331 in
         let is_constant = Tn.is_hosted_force ~specifically:Constant key 332 in
         assert (Bool.(Option.is_some (Lazy.force key.array) = is_on_host));
-        let c_typ, is_double =
-          match key.prec with
-          | Byte_prec _ -> (Type.Unsigned_char, false)
-          | Half_prec _ -> (* FIXME: *) (Type.Float, false)
-          | Single_prec _ -> (Type.Float, false)
-          | Double_prec _ -> (Type.Double, true)
-          | Void_prec -> assert false
-        in
+        let prec = key.prec in
+        let c_typ = Ops.gcc_typ_of_prec prec in
         let num_typ = Type.(get ctx c_typ) in
         let ptr_typ = Type.pointer num_typ in
         let mem =
@@ -193,7 +187,7 @@ let prepare_array ~debug_log_zero_out ctx arrays traced_store nodes initializati
               (* The array is the pointer but the address of the array is the same pointer. *)
               lazy (RValue.cast ctx (LValue.address @@ Option.value_exn !v) ptr_typ)
         in
-        let result = { nd = key; ptr; mem; dims; size_in_bytes; num_typ; is_double } in
+        let result = { nd = key; ptr; mem; dims; size_in_bytes; num_typ; prec } in
         let backend_info = sexp_of_mem_properties mem in
         let initialize init_block _func =
           Block.comment init_block
@@ -299,23 +293,25 @@ let compile_main ~name ~log_functions ~env ({ ctx; arrays; _ } as info) func ini
   let locals = ref @@ Map.empty (module Low_level.Scope_id) in
   let debug_locals = ref !locals in
   let current_block = ref initial_block in
-  let loop_binop op ~num_typ ~is_double ~v1 ~v2 =
-    match op with
-    | Ops.Add -> RValue.binary_op ctx Plus num_typ v1 v2
-    | Sub -> RValue.binary_op ctx Minus num_typ v1 v2
-    | Mul -> RValue.binary_op ctx Mult num_typ v1 v2
-    | Div -> RValue.binary_op ctx Divide num_typ v1 v2
-    | ToPowOf when is_double ->
+  let loop_binop op ~num_typ prec ~v1 ~v2 =
+    match (op, prec) with
+    | _, Ops.Void_prec -> raise @@ Utils.User_error "gccjit_backend: binary operation on Void_prec"
+    | Ops.Add, _ -> RValue.binary_op ctx Plus num_typ v1 v2
+    | Sub, _ -> RValue.binary_op ctx Minus num_typ v1 v2
+    | Mul, _ -> RValue.binary_op ctx Mult num_typ v1 v2
+    | Div, _ -> RValue.binary_op ctx Divide num_typ v1 v2
+    | ToPowOf, Double_prec _ ->
         RValue.cast ctx (RValue.call ctx (Function.builtin ctx "pow") [ to_d v1; to_d v2 ]) num_typ
-    | ToPowOf ->
+    | ToPowOf, (Single_prec _ | Half_prec _ (* FIXME: *)) ->
         let base = RValue.cast ctx v1 c_float in
         let expon = RValue.cast ctx v2 c_float in
         RValue.cast ctx (RValue.call ctx (Function.builtin ctx "powf") [ base; expon ]) num_typ
-    | Relu_gate ->
+    | ToPowOf, Byte_prec _ -> raise @@ Utils.User_error "gccjit_backend: Byte_prec does not support ToPowOf"
+    | Relu_gate, _ ->
         let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) v1 in
         RValue.binary_op ctx Mult num_typ cmp @@ v2
-    | Arg2 -> v2
-    | Arg1 -> v1
+    | Arg2, _ -> v2
+    | Arg1, _ -> v1
   in
   let log_comment c =
     match log_functions with
@@ -333,7 +329,7 @@ let compile_main ~name ~log_functions ~env ({ ctx; arrays; _ } as info) func ini
         (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug logs. *)
         loop @@ Get_local id
     | Get_local id ->
-        let lvalue, _typ, _local_is_double = Map.find_exn !debug_locals id in
+        let lvalue, _typ = Map.find_exn !debug_locals id in
         (* FIXME(194): Convert according to _typ ?= num_typ. *)
         (LValue.to_string lvalue ^ "{=%g}", [ to_d @@ RValue.lvalue lvalue ])
     | Get_global (C_function f_name, None) -> ("<calls " ^ f_name ^ ">", [])
@@ -360,7 +356,7 @@ let compile_main ~name ~log_functions ~env ({ ctx; arrays; _ } as info) func ini
     | Binop (Arg1, v1, _v2) -> loop v1
     | Binop (Arg2, _v1, v2) -> loop v2
     | Binop (op, v1, v2) ->
-        let prefix, infix, postfix = Ops.binop_C_syntax ~is_double op in
+        let prefix, infix, postfix = Ops.binop_C_syntax prec op in
         let v1, fillers1 = loop v1 in
         let v2, fillers2 = loop v2 in
         (String.concat [ prefix; v1; infix; " "; v2; postfix ], fillers1 @ fillers2)
@@ -425,15 +421,15 @@ let compile_main ~name ~log_functions ~env ({ ctx; arrays; _ } as info) func ini
           let tn = Low_level.(get_node info.traced_store array) in
           assert tn.zero_initialized (* The initialization is emitted by get_array. *)
     | Set_local (id, llv) ->
-        let lhs, num_typ, is_double = Map.find_exn !locals id in
-        let value = loop_float ~name ~env ~num_typ ~is_double llv in
+        let lhs, num_typ = Map.find_exn !locals id in
+        let value = loop_float ~name ~env ~num_typ id.tn.prec llv in
         Block.assign !current_block lhs value
     | Comment c -> log_comment c
     | Staged_compilation exp -> exp ()
   and loop_float ~name ~env ~num_typ ~is_double v_code =
     let loop = loop_float ~name ~env ~num_typ ~is_double in
     match v_code with
-    | Local_scope { id = { scope_id = i; _ } as id; prec; body; orig_indices = _ } ->
+    | Local_scope { id = { scope_id = i; tn = {prec; _} } as id; body; orig_indices = _ } ->
         let typ = Type.get ctx @@ prec_to_kind prec in
         (* Scope ids can be non-unique due to inlining. *)
         let v_name = Int.("v" ^ to_string i ^ "_" ^ get_uid ()) in
@@ -442,13 +438,14 @@ let compile_main ~name ~log_functions ~env ({ ctx; arrays; _ } as info) func ini
            virtual nodes. *)
         Block.assign !current_block lvalue @@ RValue.zero ctx typ;
         let old_locals = !locals in
-        locals := Map.update !locals id ~f:(fun _ -> (lvalue, typ, prec_is_double prec));
+        locals := Map.update !locals id ~f:(fun _ -> (lvalue, typ));
         loop_proc ~toplevel:false ~env ~name:(name ^ "_at_" ^ v_name) body;
-        debug_locals := Map.update !debug_locals id ~f:(fun _ -> (lvalue, typ, prec_is_double prec));
+        debug_locals := Map.update !debug_locals id ~f:(fun _ -> (lvalue, typ));
         locals := old_locals;
         RValue.lvalue lvalue
     | Get_local id ->
-        let lvalue, _typ, _local_is_double = Map.find_exn !locals id in
+        let lvalue, _typ = Map.find_exn !locals id in
+
         (* FIXME(194): Convert according to _typ ?= num_typ. *)
         RValue.lvalue lvalue
     | Get_global (C_function f_name, None) ->
@@ -482,7 +479,7 @@ let compile_main ~name ~log_functions ~env ({ ctx; arrays; _ } as info) func ini
           raise e)
     | Binop (Arg2, _, c2) -> loop c2
     | Binop (Arg1, c1, _) -> loop c1
-    | Binop (op, c1, c2) -> loop_binop op ~num_typ ~is_double ~v1:(loop c1) ~v2:(loop c2)
+    | Binop (op, c1, c2) -> loop_binop op ~num_typ prec ~v1:(loop c1) ~v2:(loop c2)
     | Unop (Identity, c) -> loop c
     | Unop (Relu, c) ->
         (* FIXME: don't recompute c *)
