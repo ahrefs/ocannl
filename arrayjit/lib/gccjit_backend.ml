@@ -256,8 +256,8 @@ let debug_log_index ctx log_functions =
         Block.eval block @@ RValue.call ctx ff [ lf ]
   | _ -> fun _block _i _index -> ()
 
-let compile_main ~name ~log_functions ~env ({ ctx; nodes; _ } as info) func initial_block
-    (body : Low_level.t) =
+let compile_main ~name ~log_functions ~env ({ ctx; nodes; _ } as info) func initial_block (body : Low_level.t)
+    =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
@@ -328,8 +328,7 @@ let compile_main ~name ~log_functions ~env ({ ctx; nodes; _ } as info) func init
         (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug logs. *)
         loop @@ Get_local id
     | Get_local id ->
-        let lvalue, _typ = Map.find_exn !debug_locals id in
-        (* FIXME(194): Convert according to _typ ?= num_typ. *)
+        let lvalue = Map.find_exn !debug_locals id in
         (LValue.to_string lvalue ^ "{=%g}", [ to_d @@ RValue.lvalue lvalue ])
     | Get_global (C_function f_name, None) -> ("<calls " ^ f_name ^ ">", [])
     | Get_global (External_unsafe { ptr; dims = (lazy dims); prec }, Some idcs) ->
@@ -337,18 +336,16 @@ let compile_main ~name ~log_functions ~env ({ ctx; nodes; _ } as info) func init
         let typ = Type.get ctx @@ prec_to_kind prec in
         let ptr = RValue.ptr ctx (Type.pointer typ) ptr in
         let offset = jit_array_offset ctx ~idcs ~dims in
-        (* FIXME(194): Convert according to typ ?= num_typ. *)
         let v = to_d @@ RValue.lvalue @@ LValue.access_array ptr offset in
         ("external " ^ RValue.to_string ptr ^ "[%d]{=%g}", [ offset; v ])
     | Get_global (External_unsafe _, None) -> assert false
     | Get_global (C_function _, Some _) -> failwith "gccjit_backend: FFI with parameters NOT IMPLEMENTED YET"
-    | Get (ptr, idcs) ->
-        let array = get_node ptr in
+    | Get (tn, idcs) ->
+        let node = get_node tn in
         let idcs = lookup env idcs in
-        let offset = jit_array_offset ctx ~idcs ~dims:array.dims in
-        (* FIXME(194): Convert according to array.typ ?= num_typ. *)
-        let v = to_d @@ RValue.lvalue @@ LValue.access_array (Lazy.force array.ptr) offset in
-        (node_debug_name array ^ "[%d]{=%g}", [ offset; v ])
+        let offset = jit_array_offset ctx ~idcs ~dims:node.dims in
+        let v = to_d @@ RValue.lvalue @@ LValue.access_array (Lazy.force node.ptr) offset in
+        (node_debug_name node ^ "[%d]{=%g}", [ offset; v ])
     | Constant c -> (Float.to_string c, [])
     | Embed_index (Fixed_idx i) -> (Int.to_string i, [])
     | Embed_index (Iterator s) -> (Indexing.symbol_ident s ^ "{=%d}", [ Map.find_exn env s ])
@@ -420,7 +417,9 @@ let compile_main ~name ~log_functions ~env ({ ctx; nodes; _ } as info) func init
           let tn = Low_level.(get_node info.traced_store array) in
           assert tn.zero_initialized (* The initialization is emitted by prepare_nodes. *)
     | Set_local (id, llv) ->
-        let lhs, num_typ = Map.find_exn !locals id in
+        let lhs = Map.find_exn !locals id in
+        let local_typ = Ops.gcc_typ_of_prec id.tn.prec in
+        let num_typ = Type.get ctx local_typ in
         let value = loop_float ~name ~env ~num_typ id.tn.prec llv in
         Block.assign !current_block lhs value
     | Comment c -> log_comment c
@@ -428,7 +427,7 @@ let compile_main ~name ~log_functions ~env ({ ctx; nodes; _ } as info) func init
   and loop_float ~name ~env ~num_typ prec v_code =
     let loop = loop_float ~name ~env ~num_typ prec in
     match v_code with
-    | Local_scope { id = { scope_id = i; tn = {prec; _} } as id; body; orig_indices = _ } ->
+    | Local_scope { id = { scope_id = i; tn = { prec; _ } } as id; body; orig_indices = _ } ->
         let typ = Type.get ctx @@ prec_to_kind prec in
         (* Scope ids can be non-unique due to inlining. *)
         let v_name = Int.("v" ^ to_string i ^ "_" ^ get_uid ()) in
@@ -437,35 +436,40 @@ let compile_main ~name ~log_functions ~env ({ ctx; nodes; _ } as info) func init
            virtual nodes. *)
         Block.assign !current_block lvalue @@ RValue.zero ctx typ;
         let old_locals = !locals in
-        locals := Map.update !locals id ~f:(fun _ -> (lvalue, typ));
+        locals := Map.update !locals id ~f:(fun _ -> lvalue);
         loop_proc ~toplevel:false ~env ~name:(name ^ "_at_" ^ v_name) body;
-        debug_locals := Map.update !debug_locals id ~f:(fun _ -> (lvalue, typ));
+        debug_locals := Map.update !debug_locals id ~f:(fun _ -> lvalue);
         locals := old_locals;
         RValue.lvalue lvalue
     | Get_local id ->
-        let lvalue, _typ = Map.find_exn !locals id in
-
-        (* FIXME(194): Convert according to _typ ?= num_typ. *)
-        RValue.lvalue lvalue
+        let lvalue = Map.find_exn !locals id in
+        let rvalue = RValue.lvalue lvalue in
+        let local_typ = Ops.gcc_typ_of_prec id.tn.prec in
+        let num_typ = Type.get ctx local_typ in
+        if not @@ Ops.equal_prec prec id.tn.prec then RValue.cast ctx rvalue num_typ else rvalue
     | Get_global (C_function f_name, None) ->
         (* TODO: this is too limiting. *)
         let f = Function.builtin ctx f_name in
         RValue.call ctx f []
-    | Get_global (External_unsafe { ptr; dims = (lazy dims); prec }, Some idcs) ->
+    | Get_global (External_unsafe { ptr; dims = (lazy dims); prec = local_prec }, Some idcs) ->
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims in
         let typ = Type.get ctx @@ prec_to_kind prec in
         let ptr = RValue.ptr ctx (Type.pointer typ) ptr in
-        (* FIXME(194): Convert according to typ ?= num_typ. *)
-        RValue.lvalue @@ LValue.access_array ptr offset
+        let rvalue = RValue.lvalue @@ LValue.access_array ptr offset in
+        let local_typ = Ops.gcc_typ_of_prec local_prec in
+        let num_typ = Type.get ctx local_typ in
+        if not @@ Ops.equal_prec prec local_prec then RValue.cast ctx rvalue num_typ else rvalue
     | Get_global (External_unsafe _, None) -> assert false
     | Get_global (C_function _, Some _) -> failwith "gccjit_backend: FFI with parameters NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         let node = get_node tn in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:node.dims in
-        (* FIXME(194): Convert according to array.typ ?= num_typ. *)
-        RValue.lvalue @@ LValue.access_array (Lazy.force node.ptr) offset
+        let rvalue = RValue.lvalue @@ LValue.access_array (Lazy.force node.ptr) offset in
+        let local_typ = Ops.gcc_typ_of_prec tn.prec in
+        let num_typ = Type.get ctx local_typ in
+        if not @@ Ops.equal_prec prec tn.prec then RValue.cast ctx rvalue num_typ else rvalue
     | Embed_index (Fixed_idx i) -> RValue.cast ctx (RValue.int ctx num_typ i) num_typ
     | Embed_index (Iterator s) -> (
         try RValue.cast ctx (Map.find_exn env s) num_typ

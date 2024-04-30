@@ -13,7 +13,8 @@ module Debug_runtime = Utils.Debug_runtime
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~backend_name precision () =
+let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~backend_name ~value_prec
+    ~grad_prec () =
   [%track_sexp
     let _debug : string = "started" in
     (fun (started : unit) -> started) ()];
@@ -21,13 +22,14 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   let bench_title =
     [%string
       "seed %{seed#Int}, inline %{inlining_cutoff#Int}, parallel %{num_devices#Int}, batch \
-       %{batch_size#Int}, backend %{backend_name}, prec %{Ops.prec_string precision}"]
+       %{batch_size#Int}, backend %{backend_name}, val prec %{Ops.prec_string value_prec}, grad prec \
+       %{Ops.prec_string grad_prec}"]
   in
   Stdio.printf "\n*** %s ***\n%!" bench_title;
   CDSL.virtualize_settings.enable_device_only <- on_device;
   CDSL.virtualize_settings.max_visits <- inlining_cutoff;
-  Tensor.default_value_prec := precision;
-  Tensor.default_grad_prec := precision;
+  Tensor.default_value_prec := value_prec;
+  Tensor.default_grad_prec := grad_prec;
   Utils.settings.output_debug_files_in_run_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   Rand.init (* seed *) 0;
@@ -71,9 +73,9 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
     Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" at_epoch at_step learning_rate epoch_loss
   in
   let inputs, outputs, model_result, infer_callback, batch_losses, epoch_losses, learning_rates =
-    Train.example_train_loop ~seed ~batch_size ~init_lr ~num_devices ~data_len:len ~epochs
-      ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn ~weight_decay ~per_batch_callback
-      ~per_epoch_callback backend ()
+    Train.example_train_loop ~seed ~batch_size ~init_lr ~num_devices ~data_len:len ~epochs ~inputs:moons_flat
+      ~outputs:moons_classes ~model:mlp ~loss_fn ~weight_decay ~per_batch_callback ~per_epoch_callback backend
+      ()
   in
   let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 inputs in
   let classes = Tensor.value_1d_points ~xdim:0 outputs in
@@ -141,10 +143,10 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   Stdio.printf "\n\n%!";
   result
 
-let _suspended () =
+let () =
   ignore
   @@ classify_moons ~seed:0 ~on_device:true ~inlining_cutoff:3 ~num_devices:8 ~batch_size:16
-       ~backend_name:"gccjit" CDSL.single ()
+       ~backend_name:"gccjit" ~value_prec:CDSL.single ~grad_prec:CDSL.double ()
 
 let benchmarks =
   List.concat_map [ 0; 1; 2; 3 ] ~f:(fun inlining_cutoff ->
@@ -154,7 +156,7 @@ let benchmarks =
                   List.concat_map [ "gccjit" (* *; "cuda" *) ] ~f:(fun backend_name ->
                       [
                         classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_devices ~batch_size
-                          ~backend_name CDSL.single;
+                          ~backend_name ~value_prec:CDSL.single ~grad_prec:CDSL.single;
                       ])))))
 
 (* let time_of = function PrintBox_utils.Benchmark { time_in_sec; _ } -> time_in_sec let nth_best nth bench =
@@ -163,7 +165,7 @@ let benchmarks =
 
 let fixed_seed_search seed =
   classify_moons ~seed ~on_device:true ~inlining_cutoff:3 ~num_devices:1 ~batch_size:20 ~backend_name:"cuda"
-    CDSL.single ()
+    ~value_prec:CDSL.single ~grad_prec:CDSL.single ()
 
 let _suspended () =
   List.init 20 ~f:fixed_seed_search |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
@@ -174,4 +176,4 @@ let _suspended () =
 let benchmark () =
   List.map benchmarks ~f:(fun bench -> bench ()) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
-let () = benchmark ()
+let _suspended () = benchmark ()
