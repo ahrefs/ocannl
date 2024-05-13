@@ -24,7 +24,7 @@ type memory_mode =
   | Never_virtual  (** One of: [Local], [On_device], [Hosted]. *)
   | Local
       (** The full tensor node is cached for the duration of a computation but not persisted across calls to
-          jitted functions. It is not available for merging across devices. *)
+          compiled functions. It is not available for merging across devices. *)
   | Device_only  (** One of: [Local], [On_device]. *)
   | On_device
       (** The tensor node is stored on the devices that compute with it and persisted across function calls.
