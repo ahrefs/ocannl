@@ -170,10 +170,10 @@
   A backend may optionally compile a routine in a relocatable way, to save on
   compilation times, and later link it to particular device contexts.
   Currently, OCANNL assumes that devices have queues of length 1: scheduling
-  a new task blocks till completion of the old task on the device. CPU
-  backends in OCANNL offer CPU cores as separate devices. OCANNL offers a
-  round-robin scheduler for multi-device data parallel training, with
-  \Plogarithmic\Q merging of gradients.
+  a new task blocks till the previous task is scheduled. CPU backends in
+  OCANNL offer CPU cores as separate devices. OCANNL offers a round-robin
+  scheduler for multi-device data parallel training, with \Plogarithmic\Q
+  merging of gradients.
 
   OCANNL is integrated with the package <hlink|ppx_minidebug|https://github.com/lukstafi/ppx_minidebug>,
   including tracing device execution.
@@ -202,7 +202,6 @@
     <associate|auto-1|<tuple|1|1>>
     <associate|auto-2|<tuple|2|2>>
     <associate|auto-3|<tuple|3|2>>
-    <associate|auto-4|<tuple|4|?>>
     <associate|footnote-1|<tuple|1|2>>
     <associate|footnr-1|<tuple|1|2>>
   </collection>
