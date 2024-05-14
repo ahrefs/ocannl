@@ -2,7 +2,9 @@
 
 ### Added
 
+- TODO: A new backend CC: C based on a configurable C compiler command, defaulting to `cc`.
 - TODO: API improvements for mixed precision computations.
+- TODO(#262): "term punning" for `%cd`.
 - TODO: A very naive first stab at Cuda parallelism.
 
 ### Changed
@@ -10,7 +12,9 @@
 - Terminology in the API: Renamed almost all uses of "jit" into uses of "compile" and / or "link".
 - Split the compile-to-ptx phase from the build-module and build-kernel-launcher phase.
 - Migrated the Cuda backend to ppx_minidebug-based execution tracing.
-- TODO: Fixes for mixed precision computations.
+- Fixes for mixed precision computations.
+- Further terminology refactoring: Renamed `Low_level.compile` to `Low_level.lower`;
+  - and `Low_level.compiled` to `Low_level.optimized`, making it a record.
 
 ## [0.3.3] -- 2024-04-24
 

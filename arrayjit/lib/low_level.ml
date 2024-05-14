@@ -697,7 +697,7 @@ let simplify_llc llc =
   loop_proc llc
 
 type traced_store = (Tn.t, traced_array) Base.Hashtbl.t [@@deriving sexp_of]
-type optimized = traced_store * t
+type optimized = { traced_store : traced_store; llc : t } [@@deriving sexp_of]
 
 let%debug_sexp optimize_proc static_indices llc =
   let traced_store = Hashtbl.create (module Tnode) in
@@ -706,12 +706,12 @@ let%debug_sexp optimize_proc static_indices llc =
   [%log "tracing"];
   visit_llc traced_store reverse_node_map ~max_visits:virtualize_settings.max_visits llc;
   [%log "optimizing"];
-  let result =
+  let llc =
     simplify_llc
     @@ cleanup_virtual_llc reverse_node_map ~static_indices
     @@ virtual_llc traced_store reverse_node_map static_indices llc
   in
-  (traced_store, result)
+  { traced_store; llc }
 
 let code_hum_margin = ref 100
 let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
@@ -825,8 +825,8 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf l
   pp_ll ppf llc;
   fprintf ppf "@]"
 
-let%debug_sexp compile_proc ~unoptim_ll_source ~ll_source ~(name : string)
-    (static_indices : Indexing.static_symbol list) (llc : t) : (Tn.t, traced_array) Base.Hashtbl.t * t =
+let%debug_sexp optimize_proc ~unoptim_ll_source ~ll_source ~(name : string)
+    (static_indices : Indexing.static_symbol list) (llc : t) : optimized =
   let style () =
     match Utils.get_global_arg ~arg_name:"ll_ident_style" ~default:"heuristic" with
     | "heuristic" -> `Heuristic_ocannl
@@ -834,7 +834,7 @@ let%debug_sexp compile_proc ~unoptim_ll_source ~ll_source ~(name : string)
     | "name_only" -> `Name_only
     | _ ->
         invalid_arg
-          "Low_level.compile_proc: wrong ocannl_ll_ident_style, must be one of: heuristic, name_and_label, \
+          "Low_level.optimize_proc: wrong ocannl_ll_ident_style, must be one of: heuristic, name_and_label, \
            name_only"
   in
   Option.iter unoptim_ll_source ~f:(fun ppf ->
@@ -843,7 +843,7 @@ let%debug_sexp compile_proc ~unoptim_ll_source ~ll_source ~(name : string)
   Option.iter ll_source ~f:(fun ppf ->
       Stdlib.Format.fprintf ppf "%a%!"
         (fprint_hum ~ident_style:(style ()) ~name ~static_indices ())
-        (snd result));
+        result.llc);
   result
 
 let loop_over_dims dims ~body =

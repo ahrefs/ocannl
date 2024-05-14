@@ -48,8 +48,6 @@ and context = {
 type info_arrays = { mutable info_arrays : tn_info Map.M(Tn).t; used_tensors : Hash_set.M(Tn).t }
 [@@deriving sexp_of]
 
-type compiled = Low_level.traced_store * Low_level.t [@@deriving sexp_of]
-
 let init device =
   {
     label = "cuda " ^ Int.to_string device.ordinal;
@@ -400,7 +398,7 @@ type code = {
 }
 [@@deriving sexp_of]
 
-let%track_sexp compile_func ~name idx_params (traced_store, llc) =
+let%track_sexp compile_func ~name idx_params Low_level.{ traced_store; llc } =
   [%log "generating the .cu source"];
   let info = { info_arrays = Map.empty (module Tn); used_tensors = Hash_set.create (module Tn) } in
   let b = Buffer.create 4096 in
@@ -489,7 +487,7 @@ let%diagn_sexp link_func (old_context : context) ~name info ptx =
   [%log "compilation finished"];
   (func, global_arrays, run_module)
 
-let compile ?name bindings ((_, llc) as compiled : compiled) =
+let compile ?name bindings ({ llc; _ } as compiled : Low_level.optimized) =
   let name : string = Option.value_or_thunk name ~default:(fun () -> Low_level.extract_block_name [ llc ]) in
   let idx_params = Indexing.bound_symbols bindings in
   let ptx, info = compile_func ~name idx_params compiled in

@@ -9,9 +9,9 @@ let finalize _context = ()
 let compile ?name:_ bindings _optimized = bindings
 
 let link (Unimplemented : context) code =
-  let compiled_bindings = List.map ~f:(fun s -> (s, ref 0)) @@ Indexing.bound_symbols code in
+  let lowered_bindings = List.map ~f:(fun s -> (s, ref 0)) @@ Indexing.bound_symbols code in
   let work () = Tnode.Work (fun _debug_runtime () -> ()) in
-  ((Unimplemented : context), compiled_bindings, work)
+  ((Unimplemented : context), lowered_bindings, work)
 
 let unsafe_cleanup ?unsafe_shutdown:_ () = ()
 let from_host _context _arr = false

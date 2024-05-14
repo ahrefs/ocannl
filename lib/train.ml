@@ -185,7 +185,7 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov l =
 
 (** All and only bindings with associated ranges are iterated, with the binding's initial value lost. Bindings
     without ranges remain at their initial values. *)
-let sequential_loop ~f compiled_bindings =
+let sequential_loop ~f lowered_bindings =
   let rec loop = function
     | [] -> f ()
     | ({ Idx.static_range = None; static_symbol = _ }, _) :: more -> loop more
@@ -197,7 +197,7 @@ let sequential_loop ~f compiled_bindings =
         done;
         idx := old_idx
   in
-  loop compiled_bindings
+  loop lowered_bindings
 
 (** Distributes iterated indices to workers in a round-robin fashion. All and only bindings with associated
     ranges are iterated, with the binding's initial value lost. Bindings without ranges remain at their
@@ -399,9 +399,9 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     done;
     post_sync ~num_synced_devices:devices_to_sync
   in
-  let compiled_bindings = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.bindings)] in
+  let lowered_bindings = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.bindings)] in
   let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd () -> Tn.run debug_rt @@ upd.schedule ())] in
-  fun () -> round_robin fs compiled_bindings sgd_update.bindings ~sync
+  fun () -> round_robin fs lowered_bindings sgd_update.bindings ~sync
 
 let debug_name t = Tn.(debug_name ~id:t.Tensor.value.id ~label:t.value.label)
 

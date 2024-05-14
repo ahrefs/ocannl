@@ -7,7 +7,7 @@ module Debug_runtime = Utils.Debug_runtime
 type 'context routine = {
   context : 'context;
   schedule : unit -> Tnode.work;
-  bindings : Indexing.compiled_bindings;
+  bindings : Indexing.lowered_bindings;
   name : string;
 }
 [@@deriving sexp_of]
@@ -218,6 +218,29 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let to_ordinal device = device.ordinal
 end
 
+let lower_assignments ?name bindings asgns =
+  let name = Option.value_or_thunk name ~default:(fun () -> Assignments.get_name_exn asgns) in
+  let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ "-unoptimized.ll") in
+  let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
+  let cd_source = Utils.get_debug_formatter ~fname:(name ^ ".cd") in
+  ( name,
+    Assignments.lower_proc ~unoptim_ll_source ~ll_source ~cd_source ~name (Indexing.bound_symbols bindings)
+      asgns )
+
+let lower_batch_assignments ?names bindings asgns_l =
+  let names =
+    Option.value_or_thunk names ~default:(fun () ->
+        Array.map asgns_l ~f:(fun asgns -> Assignments.get_name_exn asgns))
+  in
+  let prefix_name = String.(strip ~drop:(equal_char '_') @@ common_prefix @@ Array.to_list names) in
+  let unoptim_ll_source = Utils.get_debug_formatter ~fname:(prefix_name ^ "-unoptimized.ll") in
+  let ll_source = Utils.get_debug_formatter ~fname:(prefix_name ^ ".ll") in
+  let cd_source = Utils.get_debug_formatter ~fname:(prefix_name ^ ".cd") in
+  let bound = Indexing.bound_symbols bindings in
+  ( names,
+    Array.map2_exn names asgns_l ~f:(fun name asgns ->
+        Assignments.lower_proc ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns) )
+
 module Gccjit_device : No_device_backend with type context = Gccjit_backend.context = struct
   type code = Gccjit_backend.code [@@deriving sexp_of]
   type context = Gccjit_backend.context [@@deriving sexp_of]
@@ -233,36 +256,17 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
   let finalize = finalize
   let sexp_of_context = sexp_of_context
 
-  let compile ?(shared=false) ?name bindings asgns =
-    let name = Option.value_or_thunk name ~default:(fun () -> Assignments.get_name_exn asgns) in
-    let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ "-unoptimized.ll") in
-    let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
-    let cd_source = Utils.get_debug_formatter ~fname:(name ^ ".cd") in
-    let compiled =
-      Assignments.compile_proc ~unoptim_ll_source ~ll_source ~cd_source ~name
-        (Indexing.bound_symbols bindings) asgns
-    in
-    if shared then Compiled (compile ~name ~opt_ctx_arrays:None bindings compiled)
-    else Postponed { compiled; bindings; name }
+  let compile ?(shared = false) ?name bindings asgns =
+    let name, lowered = lower_assignments ?name bindings asgns in
+    if shared then Compiled (compile ~name ~opt_ctx_arrays:None bindings lowered)
+    else Postponed { lowered; bindings; name }
 
-  let compile_batch ?(shared=false) ?names bindings asgns_l =
-    let names =
-      Option.value_or_thunk names ~default:(fun () ->
-          Array.map asgns_l ~f:(fun asgns -> Assignments.get_name_exn asgns))
-    in
-    let prefix_name = String.(strip ~drop:(equal_char '_') @@ common_prefix @@ Array.to_list names) in
-    let unoptim_ll_source = Utils.get_debug_formatter ~fname:(prefix_name ^ "-unoptimized.ll") in
-    let ll_source = Utils.get_debug_formatter ~fname:(prefix_name ^ ".ll") in
-    let cd_source = Utils.get_debug_formatter ~fname:(prefix_name ^ ".cd") in
-    let bound = Indexing.bound_symbols bindings in
-    let compileds =
-      Array.map2_exn names asgns_l ~f:(fun name asgns ->
-          Assignments.compile_proc ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns)
-    in
+  let compile_batch ?(shared = false) ?names bindings asgns_l =
+    let names, lowereds = lower_batch_assignments ?names bindings asgns_l in
     if shared then
-      let routines = compile_batch ~names ~opt_ctx_arrays:None bindings compileds in
+      let routines = compile_batch ~names ~opt_ctx_arrays:None bindings lowereds in
       Array.map routines ~f:(fun routine -> Compiled routine)
-    else Array.map2_exn names compileds ~f:(fun name compiled -> Postponed { compiled; bindings; name })
+    else Array.map2_exn names lowereds ~f:(fun name lowered -> Postponed { lowered; bindings; name })
 
   let link context code =
     let context, bindings, schedule, name = link context code in
@@ -301,17 +305,11 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   let sexp_of_device = sexp_of_device
 
   let compile ?shared:_ ?name bindings asgns : code =
-    let name = Option.value_or_thunk name ~default:(fun () -> Assignments.get_name_exn asgns) in
-    let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ "-unoptimized.ll") in
-    let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
-    let cd_source = Utils.get_debug_formatter ~fname:(name ^ ".cd") in
-    let compiled =
-      Assignments.compile_proc ~unoptim_ll_source ~ll_source ~cd_source ~name
-        (Indexing.bound_symbols bindings) asgns
-    in
-    compile ~name bindings compiled
+    let name, lowered = lower_assignments ?name bindings asgns in
+    compile ~name bindings lowered
 
-  let compile_batch ?shared:_ ?names:_ _bindings _asgns_batch = failwith "NOT IMPLEMENTED YET"
+  let compile_batch ?shared:_ ?names:_ _bindings _asgns_batch =
+     failwith "NOT IMPLEMENTED YET"
 
   let link context code =
     let context, bindings, schedule = link context code in

@@ -90,11 +90,7 @@ type routine = {
 [@@deriving sexp_of]
 
 type code =
-  | Postponed of {
-      compiled : Low_level.traced_store * Low_level.t;
-      bindings : Indexing.unit_bindings;
-      name : string;
-    }
+  | Postponed of { lowered : Low_level.optimized; bindings : Indexing.unit_bindings; name : string }
   | Compiled of routine
 [@@deriving sexp_of]
 
@@ -541,7 +537,7 @@ let prepare_nodes ctx ~log_functions nodes traced_store ctx_nodes initialization
   in
   loop llc
 
-let%track_sexp compile_func ~name ~opt_ctx_arrays ctx bindings (traced_store, proc) :
+let%track_sexp compile_func ~name ~opt_ctx_arrays ctx bindings Low_level.{ traced_store; llc = proc } :
     info * Ndarray.t Base.Map.M(Tn).t * (gccjit_param * param_source) list =
   let open Gccjit in
   let c_index = Type.get ctx Type.Int in
@@ -619,8 +615,7 @@ let header_sep =
   let open Re in
   compile (seq [ str " "; opt any; str "="; str " " ])
 
-let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings
-    (compiled : Low_level.traced_store * Low_level.t) =
+let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low_level.optimized) =
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
@@ -638,7 +633,7 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings
   { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params }
 
 let%track_sexp compile_batch ~(names : string array) ~opt_ctx_arrays bindings
-    (compileds : (Low_level.traced_store * Low_level.t) array) =
+    (compileds : Low_level.optimized array) =
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
@@ -719,12 +714,12 @@ let%track_sexp link_compiled (old_context : context) (code : routine) : context 
     in
     Tn.Work work
   in
-  (context, Indexing.compiled_bindings code.bindings run_variadic, schedule, name)
+  (context, Indexing.lowered_bindings code.bindings run_variadic, schedule, name)
 
 let link (old_context : context) code =
   match code with
-  | Postponed { compiled; bindings; name } ->
-      let code = compile ~name ~opt_ctx_arrays:(Some old_context.arrays) bindings compiled in
+  | Postponed { lowered; bindings; name } ->
+      let code = compile ~name ~opt_ctx_arrays:(Some old_context.arrays) bindings lowered in
       link_compiled old_context code
   | Compiled code -> link_compiled old_context code
 
@@ -770,7 +765,7 @@ let%track_sexp merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst ~accum
         })
   in
   let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
-  Low_level.compile_proc ~unoptim_ll_source ~ll_source ~name [] llc
+  Low_level.optimize_proc ~unoptim_ll_source ~ll_source ~name [] llc
 
 let%track_sexp merge ?name_prefix la ~accum ~(src : context) bindings =
   (* FIXME: reconstruct name if missing *)

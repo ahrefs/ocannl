@@ -7,9 +7,9 @@ val finalize : context -> unit
 val sexp_of_context : context -> Sexplib.Sexp.t
 
 val compile :
-  ?name:string -> Indexing.unit_bindings -> Low_level.traced_store * Low_level.t -> code
+  ?name:string -> Indexing.unit_bindings -> Low_level.optimized -> code
 
-val link : context -> code -> context * Indexing.compiled_bindings * (unit -> Tnode.work)
+val link : context -> code -> context * Indexing.lowered_bindings * (unit -> Tnode.work)
 val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
 
 val from_host : context -> Tnode.t -> bool
