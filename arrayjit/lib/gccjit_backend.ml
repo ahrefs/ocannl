@@ -5,6 +5,7 @@ module Debug_runtime = Utils.Debug_runtime
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
+let name = "gccjit"
 let optimization_level = ref 3
 
 type mem_properties =
@@ -17,12 +18,12 @@ let root_ctx = ref None
 
 module Tn = Tnode
 
-type context = {
-  label : string;
-  arrays : Ndarray.t Map.M(Tn).t;
-  result : (Gccjit.result option[@sexp.opaque]);
-}
+type ctx_arrays = Ndarray.t Map.M(Tn).t [@@deriving sexp_of]
+
+type context = { label : string; arrays : ctx_arrays; result : (Gccjit.result option[@sexp.opaque]) }
 [@@deriving sexp_of]
+
+let ctx_arrays context = context.arrays
 
 let unsafe_cleanup ?(unsafe_shutdown = false) () =
   let open Gccjit in
@@ -79,7 +80,7 @@ type info = {
 type param_source = Log_file_name | Param_ptr of Tn.t | Static_idx of Indexing.static_symbol
 [@@deriving sexp_of]
 
-type routine = {
+type procedure = {
   info : info;
   bindings : Indexing.unit_bindings;
   name : string;
@@ -87,11 +88,6 @@ type routine = {
   opt_ctx_arrays : Ndarray.t Map.M(Tn).t option;
   params : param_source list;
 }
-[@@deriving sexp_of]
-
-type code =
-  | Postponed of { lowered : Low_level.optimized; bindings : Indexing.unit_bindings; name : string }
-  | Compiled of routine
 [@@deriving sexp_of]
 
 type gccjit_param = Gccjit.param
@@ -537,7 +533,7 @@ let prepare_nodes ctx ~log_functions nodes traced_store ctx_nodes initialization
   in
   loop llc
 
-let%track_sexp compile_func ~name ~opt_ctx_arrays ctx bindings Low_level.{ traced_store; llc = proc } :
+let%track_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings Low_level.{ traced_store; llc = proc } :
     info * Ndarray.t Base.Map.M(Tn).t * (gccjit_param * param_source) list =
   let open Gccjit in
   let c_index = Type.get ctx Type.Int in
@@ -623,7 +619,7 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low
   (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
      Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx Context.Dump_everything
      true); *)
-  let info, ctx_arrays, params = compile_func ~name ~opt_ctx_arrays ctx bindings compiled in
+  let info, ctx_arrays, params = compile_proc ~name ~opt_ctx_arrays ctx bindings compiled in
   (if Utils.settings.output_debug_files_in_run_directory then
      let f_name = name ^ "-gccjit-debug.c" in
      Context.dump_to_file ctx ~update_locs:true f_name);
@@ -643,7 +639,7 @@ let%track_sexp compile_batch ~(names : string array) ~opt_ctx_arrays bindings
      true); *)
   let funcs =
     Array.map2_exn names compileds ~f:(fun name compiled ->
-        compile_func ~name ~opt_ctx_arrays ctx bindings compiled)
+        compile_proc ~name ~opt_ctx_arrays ctx bindings compiled)
   in
   (if Utils.settings.output_debug_files_in_run_directory then
      let f_name =
@@ -656,7 +652,7 @@ let%track_sexp compile_batch ~(names : string array) ~opt_ctx_arrays bindings
       let opt_ctx_arrays = if Map.is_empty ctx_arrays then None else Some ctx_arrays in
       { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params })
 
-let%track_sexp link_compiled (old_context : context) (code : routine) : context * _ * _ * string =
+let%track_sexp link_compiled (old_context : context) (code : procedure) : context * _ * _ * string =
   let label : string = old_context.label in
   let name : string = code.name in
   let arrays : Ndarray.t Base.Map.M(Tn).t =
@@ -715,13 +711,6 @@ let%track_sexp link_compiled (old_context : context) (code : routine) : context 
     Tn.Work work
   in
   (context, Indexing.lowered_bindings code.bindings run_variadic, schedule, name)
-
-let link (old_context : context) code =
-  match code with
-  | Postponed { lowered; bindings; name } ->
-      let code = compile ~name ~opt_ctx_arrays:(Some old_context.arrays) bindings lowered in
-      link_compiled old_context code
-  | Compiled code -> link_compiled old_context code
 
 let%track_sexp from_host (context : context) (la : Tn.t) : bool =
   match Map.find context.arrays la with

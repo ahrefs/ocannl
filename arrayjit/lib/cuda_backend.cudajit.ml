@@ -398,7 +398,7 @@ type code = {
 }
 [@@deriving sexp_of]
 
-let%track_sexp compile_func ~name idx_params Low_level.{ traced_store; llc } =
+let%track_sexp compile_proc ~name idx_params Low_level.{ traced_store; llc } =
   [%log "generating the .cu source"];
   let info = { info_arrays = Map.empty (module Tn); used_tensors = Hash_set.create (module Tn) } in
   let b = Buffer.create 4096 in
@@ -470,7 +470,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ log_id @ idx_par
     Stdio.Out_channel.close oc);
   (ptx, info)
 
-let%diagn_sexp link_func (old_context : context) ~name info ptx =
+let%diagn_sexp link_proc (old_context : context) ~name info ptx =
   let module Cu = Cudajit in
   let ctx = old_context.ctx in
   set_ctx ctx;
@@ -490,7 +490,7 @@ let%diagn_sexp link_func (old_context : context) ~name info ptx =
 let compile ?name bindings ({ llc; _ } as compiled : Low_level.optimized) =
   let name : string = Option.value_or_thunk name ~default:(fun () -> Low_level.extract_block_name [ llc ]) in
   let idx_params = Indexing.bound_symbols bindings in
-  let ptx, info = compile_func ~name idx_params compiled in
+  let ptx, info = compile_proc ~name idx_params compiled in
   { ptx; info; bindings; name }
 
 let get_global_run_id =
@@ -502,7 +502,7 @@ let get_global_run_id =
 
 let link old_context code =
   let all_arrays = code.info.info_arrays in
-  let func, global_arrays, run_module = link_func old_context ~name:code.name code.info code.ptx in
+  let func, global_arrays, run_module = link_proc old_context ~name:code.name code.info code.ptx in
   let context = { old_context with run_module = Some run_module; global_arrays; all_arrays } in
   let idx_params = Indexing.bound_symbols code.bindings in
   let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in

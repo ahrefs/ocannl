@@ -191,7 +191,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       wait_for_work;
       ordinal;
       (* For detailed debugging of a worker operation, uncomment: *)
-      (* domain = Domain.spawn (worker debug_runtime); *)
+      (* domain = Domain.spawn (worker _debug_runtime); *)
       domain = Domain.spawn worker;
     }
 
@@ -241,24 +241,70 @@ let lower_batch_assignments ?names bindings asgns_l =
     Array.map2_exn names asgns_l ~f:(fun name asgns ->
         Assignments.lower_proc ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns) )
 
-module Gccjit_device : No_device_backend with type context = Gccjit_backend.context = struct
-  type code = Gccjit_backend.code [@@deriving sexp_of]
-  type context = Gccjit_backend.context [@@deriving sexp_of]
+module type Simple_backend = sig
+  type context [@@deriving sexp_of]
+  type procedure [@@deriving sexp_of]
+  type ctx_arrays [@@deriving sexp_of]
+
+  val ctx_arrays : context -> ctx_arrays
+
+  val compile :
+    name:string ->
+    opt_ctx_arrays:ctx_arrays option ->
+    (unit -> unit) Indexing.bindings ->
+    Low_level.optimized ->
+    procedure
+
+  val compile_batch :
+    names:string array ->
+    opt_ctx_arrays:ctx_arrays option ->
+    (unit -> unit) Indexing.bindings ->
+    Low_level.optimized array ->
+    procedure array
+
+  val link_compiled :
+    context -> procedure -> context * Indexing.lowered_bindings * (unit -> Tnode.work) * string
+
+  val merge :
+    ?name_prefix:string ->
+    Tnode.t ->
+    accum:Ops.binop ->
+    src:context ->
+    (unit -> unit) Indexing.bindings ->
+    procedure option
+
+  val merge_batch :
+    ?name_prefixes:string array ->
+    occupancy:(Tnode.t -> src_n:int -> src:context -> Utils.requirement) ->
+    Tnode.t list ->
+    accum:Ops.binop ->
+    srcs:context array ->
+    (unit -> unit) Indexing.bindings ->
+    (Tnode.t, procedure option array) Base.Hashtbl.t
+
+  val name : string
+  val initialize : unit -> unit
+  val is_initialized : unit -> bool
+  val init : label:string -> context
+  val finalize : context -> unit
+  val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
+  val from_host : context -> Tnode.t -> bool
+  val to_host : context -> Tnode.t -> bool
+end
+
+module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend = struct
+  type code =
+    | Postponed of { lowered : Low_level.optimized; bindings : Indexing.unit_bindings; name : string }
+    | Compiled of Backend.procedure
+  [@@deriving sexp_of]
+
+  include Backend
+
   type nonrec routine = context routine [@@deriving sexp_of]
-
-  open Gccjit_backend
-
-  let name = "gccjit"
-  let initialize = initialize
-  let is_initialized = is_initialized
-  let unsafe_cleanup ?unsafe_shutdown () = Gccjit_backend.unsafe_cleanup ?unsafe_shutdown ()
-  let init = init
-  let finalize = finalize
-  let sexp_of_context = sexp_of_context
 
   let compile ?(shared = false) ?name bindings asgns =
     let name, lowered = lower_assignments ?name bindings asgns in
-    if shared then Compiled (compile ~name ~opt_ctx_arrays:None bindings lowered)
+    if shared then Compiled (Backend.compile ~name ~opt_ctx_arrays:None bindings lowered)
     else Postponed { lowered; bindings; name }
 
   let compile_batch ?(shared = false) ?names bindings asgns_l =
@@ -268,12 +314,15 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
       Array.map routines ~f:(fun routine -> Compiled routine)
     else Array.map2_exn names lowereds ~f:(fun name lowered -> Postponed { lowered; bindings; name })
 
-  let link context code =
-    let context, bindings, schedule, name = link context code in
-    { context; schedule : unit -> Tnode.work; bindings; name }
-
-  let from_host = from_host
-  let to_host = to_host
+  let link (old_context : context) code =
+    let context, bindings, schedule, name =
+      match code with
+      | Postponed { lowered; bindings; name } ->
+          let code = Backend.compile ~name ~opt_ctx_arrays:(Some (ctx_arrays old_context)) bindings lowered in
+          link_compiled old_context code
+      | Compiled code -> link_compiled old_context code
+    in
+    { context; schedule; bindings; name }
 
   let merge ?name_prefix tn ~accum ~(src : context) =
     let bindings = Indexing.Empty in
@@ -284,6 +333,9 @@ module Gccjit_device : No_device_backend with type context = Gccjit_backend.cont
     merge_batch ?name_prefixes ~occupancy tns ~accum ~srcs bindings
     |> Hashtbl.map ~f:(fun cds -> Array.map cds ~f:(Option.map ~f:(fun routine -> Compiled routine)))
 end
+
+module Gccjit_device : No_device_backend = Simple_no_device_backend ((
+  Gccjit_backend : Simple_backend with type context = Gccjit_backend.context))
 
 module Gccjit_backend = Multicore_backend (Gccjit_device)
 
@@ -308,8 +360,7 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
     let name, lowered = lower_assignments ?name bindings asgns in
     compile ~name bindings lowered
 
-  let compile_batch ?shared:_ ?names:_ _bindings _asgns_batch =
-     failwith "NOT IMPLEMENTED YET"
+  let compile_batch ?shared:_ ?names:_ _bindings _asgns_batch = failwith "NOT IMPLEMENTED YET"
 
   let link context code =
     let context, bindings, schedule = link context code in
