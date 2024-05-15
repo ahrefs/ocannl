@@ -124,3 +124,84 @@ type mem_properties =
 
 Hopefully soon we will support arrays shared across a thread block, then the above will include `Shared`.
 
+You might notice that `Simple_backend` requires:
+
+```ocaml
+module type Simple_backend = sig
+  type context
+  type procedure
+  type ctx_arrays
+
+  val ctx_arrays : context -> ctx_arrays
+
+  val compile :
+    name:string ->
+    opt_ctx_arrays:ctx_arrays option ->
+    Indexing.unit_bindings ->
+    Low_level.optimized ->
+    procedure
+
+  ...
+
+  val link_compiled :
+    context -> procedure -> context * Indexing.lowered_bindings * (unit -> Tnode.work) * string
+
+  ...
+end
+```
+
+Contexts track (or store) the on-device arrays corresponding to tensor nodes. Context form a hierarchy: linking takes a parent context and outputs a child context. Related contexts that use a tensor node must use the same on-device array for the tensor node. If two unrelated contexts are on the same device, i.e. have a common ancestor, and use the same tensor node, the behavior is undefined. For CPU backends, the arrays might be stored as:
+
+```ocaml
+type ctx_arrays = Ndarray.t Map.M(Tn).t
+```
+
+For a CUDA backend, the arrays might be tracked as:
+
+```ocaml
+  global_arrays : Cudajit.deviceptr Map.M(Tn).t;
+```
+
+## Typical details of a backend implementation
+
+A backend needs to maintain information about tensor nodes, in a datatype conventionally called `tn_info`, that might look like this:
+
+```ocaml
+type tn_info = {
+  tn : Tn.t;  (** The original array. *)
+  ptr : ...(* Some way to refer to the array from the compiled code. *);
+  mem : mem_properties;
+  dims : int array;
+  size_in_bytes : int;
+  num_typ : ...;
+      (** The type of the stored values:
+          [short] or [half] (precision [Half]), [float] (precision [Single]), [double] (precision [Double]). *)
+  prec : Ops.prec;
+  zero_initialized : bool;
+  ...
+}
+```
+
+The `tn_info`s will be stored inside a compilation state datatype typically called `info` or `info_arrays`. During the compilation process, the new context is not available, and even the old context cannot be available if the backend supports shared compilation. A backend may for simplicity not suport shared compilation, i.e. ignore `~shared:true` and postpone compilation to the linking phase. Currently, the CUDA backend does the opposite, it ignores `~shared:false` and always generates relocatable kernels. This does not require any extra compilation flag, because the kernels refer to context (i.e. global) arrays via parameters. We face two cases:
+
+- Non-trivial `~shared:true`: `tn_info`s are by necessity generated from scratch (either during compilation inside a `get_array`, or at once via `prepare_arrays` as in the `gccjit` backend). If this is the only mode the backend supports, they don't need to be stored.
+- Non-trivial `~shared:false`: `tn_info`s must be propagated via the context, because to benefit from not sharing, `tn_info` must include context-specific information (typically a memory pointer to the on-device array).
+
+The `gccjit` backend needs to `prepare_arrays` upfront, because it needs to know the list of parameters of the compiled function before it starts the compilation. This forces the `gccjit` backend to postpone creating the array pointers (via lazy initializers), not because of the context array pointers, but because of the local array pointers (on the function stack) which require knowing the function.
+
+Conventionally, the compilation implementation is split into three functions / layers:
+
+- `compile_main` does the bulk of translating a `Low_level.t` into the backend-specific code.
+- `compile_proc` populates the parameters in the function header, fills-in the function's initialization section that sets up local arrays, clears these arrays (whether local or global) that need to be zero-initialized or reset to zero, appends the `compile_main` code.
+- `compile`, resp. `compile_batch`, compiles the function, resp. functions, into an executable object/file or assembly object/file.
+  - On same-machine CPU backends, these functions also dynamically load (if applicable) the code (since there's shared program memory for all cores) -- `compile_batch` includes the same resulting (dyn-loaded) object in the code output for all functions.
+  - On GPU-like backends, we cannot load the code at compile time. For example, the CUDA driver API function `cuModuleLoadDataEx` loads the module into _the current context_, which is device-specific, so it must be called from within `link`.
+    - Within `link`, the `cuda` backend first calls `Cudajit.ctx_set_current` (if needed) and only then `Cudajit.module_load_data_ex`.
+
+### Conditionally emitting the tracing debugger code
+
+Backends should support logging some of the computations when `Utils.settings.debug_log_from_routines` is set. Obviously, setting this debug information only makes sense for tiny models / computations, otherwise the log files will explode. For GPU backends, cleanly logging from more than one thread per device would add too much complexity, so we restrict logging to `blockIdx = 0, threadIdx = 0`.
+
+We output a log line only for comments and array assignments (corresponding to non-virtual node computations), but we log the computed expression structure: the indices, array values, and inline computation values. For simplicity and conciseness, we don't log the structure of inlined computations. Comments determine the nesting of the `ppx_minidebug` entries: when lowering a `Block_comment`, `Assignments.to_low_level` outputs a `Comment "end"` at the end of a block. Comments are prefixed with `COMMENT:`. For assignments, we also log the debug information stored in the `Set` construct -- it's the computed expression translated into the `%cd` syntax. For processing, the debug information is prefixed by `#` and has endlines replaced by `$`. These structural prefixes / infixes are parsed out by `Utils.log_trace_tree`.
+
+Since the CUDA backend needs to capture the standard output, it additionally prefixes each log line with a kernel run ID. When postprocessing the logs, each run extracts its own log lines. Simultaneous logging from multiple CUDA devices should still be clean -- without interleaving lines -- because the driver is supposed to dump the logs to standard output at device synchronization points.
