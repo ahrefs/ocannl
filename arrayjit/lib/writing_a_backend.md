@@ -176,13 +176,12 @@ type tn_info = {
   num_typ : ...;
       (** The type of the stored values:
           [short] or [half] (precision [Half]), [float] (precision [Single]), [double] (precision [Double]). *)
-  prec : Ops.prec;
   zero_initialized : bool;
   ...
 }
 ```
 
-The `tn_info`s will be stored inside a compilation state datatype typically called `info` or `info_arrays`. During the compilation process, the new context is not available, and even the old context cannot be available if the backend supports shared compilation. A backend may for simplicity not suport shared compilation, i.e. ignore `~shared:true` and postpone compilation to the linking phase. Currently, the CUDA backend does the opposite, it ignores `~shared:false` and always generates relocatable kernels. This does not require any extra compilation flag, because the kernels refer to context (i.e. global) arrays via parameters. We face two cases:
+`tn_info` values are typically called `node` for readability. The `tn_info`s are stored inside a compilation state datatype typically called `info` or `info_nodes`. During the compilation process, the new context is not available, and even the old context cannot be available if the backend supports shared compilation. A backend may for simplicity not suport shared compilation, i.e. ignore `~shared:true` and postpone compilation to the linking phase. Currently, the CUDA backend does the opposite, it ignores `~shared:false` and always generates relocatable kernels. This does not require any extra compilation flag, because the kernels refer to context (i.e. global) arrays via parameters. We face two cases:
 
 - Non-trivial `~shared:true`: `tn_info`s are by necessity generated from scratch (either during compilation inside a `get_array`, or at once via `prepare_arrays` as in the `gccjit` backend). If this is the only mode the backend supports, they don't need to be stored.
 - Non-trivial `~shared:false`: `tn_info`s must be propagated via the context, because to benefit from not sharing, `tn_info` must include context-specific information (typically a memory pointer to the on-device array).

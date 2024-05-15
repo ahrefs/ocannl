@@ -65,6 +65,7 @@ type tn_info = {
       (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]), [double]
           (precision [Double]). *)
   prec : Ops.prec;
+  zero_initialized : bool;
 }
 [@@deriving sexp_of]
 
@@ -121,20 +122,21 @@ let zero_out ctx block node =
 let get_c_ptr ctx num_typ ba =
   Gccjit.(RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray ba)
 
-let prepare_node ~debug_log_zero_out ctx nodes traced_store ctx_nodes initializations (key : Tn.t) =
+let prepare_node ~debug_log_zero_out ctx nodes traced_store ctx_nodes initializations (tn : Tn.t) =
   let open Gccjit in
-  Hashtbl.update nodes key ~f:(function
+  Hashtbl.update nodes tn ~f:(function
     | Some old -> old
     | None ->
-        let traced = Low_level.(get_node traced_store key) in
-        let dims = Lazy.force key.dims in
+        let traced = Low_level.(get_node traced_store tn) in
+        let dims = Lazy.force tn.dims in
         let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
-        let size_in_bytes = size_in_elems * Ops.prec_in_bytes key.prec in
-        let is_on_host = Tn.is_hosted_force key 33 in
-        let is_materialized = Tn.is_materialized_force key 331 in
-        let is_constant = Tn.is_hosted_force ~specifically:Constant key 332 in
-        assert (Bool.(Option.is_some (Lazy.force key.array) = is_on_host));
-        let prec = key.prec in
+        let size_in_bytes = size_in_elems * Ops.prec_in_bytes tn.prec in
+        let is_on_host = Tn.is_hosted_force tn 33 in
+        let is_materialized = Tn.is_materialized_force tn 331 in
+        let is_constant = Tn.is_hosted_force ~specifically:Constant tn 332 in
+        assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
+        let prec = tn.prec in
+        let zero_initialized = traced.zero_initialized in
         let c_typ = Ops.gcc_typ_of_prec prec in
         let num_typ = Type.(get ctx c_typ) in
         let ptr_typ = Type.pointer num_typ in
@@ -143,17 +145,17 @@ let prepare_node ~debug_log_zero_out ctx nodes traced_store ctx_nodes initializa
           else if is_constant && traced.read_only then Constant_from_host
           else From_context
         in
-        let name = Tn.name key in
+        let name = Tn.name tn in
         let ptr =
           match (mem, ctx_nodes) with
           | From_context, Ctx_arrays ctx_arrays -> (
-              match Map.find !ctx_arrays key with
+              match Map.find !ctx_arrays tn with
               | None ->
                   let data =
-                    Ndarray.create_array key.Tn.prec ~dims
+                    Ndarray.create_array tn.Tn.prec ~dims
                     @@ Constant_fill { values = [| 0. |]; strict = false }
                   in
-                  ctx_arrays := Map.add_exn !ctx_arrays ~key ~data;
+                  ctx_arrays := Map.add_exn !ctx_arrays ~key:tn ~data;
                   let f arr = get_c_ptr ctx num_typ arr in
                   Lazy.from_val @@ Ndarray.(map { f } data)
               | Some data ->
@@ -161,11 +163,11 @@ let prepare_node ~debug_log_zero_out ctx nodes traced_store ctx_nodes initializa
                   Lazy.from_val @@ Ndarray.(map { f } data))
           | From_context, Param_ptrs ptrs ->
               let p = Param.create ctx ptr_typ name in
-              ptrs := (p, Param_ptr key) :: !ptrs;
+              ptrs := (p, Param_ptr tn) :: !ptrs;
               Lazy.from_val (RValue.param p)
           | Constant_from_host, _ -> (
               let addr arr = Lazy.from_val @@ get_c_ptr ctx num_typ arr in
-              match Lazy.force key.array with
+              match Lazy.force tn.array with
               | Some (Byte_nd arr) -> addr arr
               | Some (Half_nd arr) -> addr arr
               | Some (Single_nd arr) -> addr arr
@@ -179,20 +181,20 @@ let prepare_node ~debug_log_zero_out ctx nodes traced_store ctx_nodes initializa
               (* The array is the pointer but the address of the array is the same pointer. *)
               lazy (RValue.cast ctx (LValue.address @@ Option.value_exn !v) ptr_typ)
         in
-        let result = { tn = key; ptr; mem; dims; size_in_bytes; num_typ; prec } in
+        let result = { tn = tn; ptr; mem; dims; size_in_bytes; num_typ; prec; zero_initialized } in
         let backend_info = sexp_of_mem_properties mem in
         let initialize init_block _func =
           Block.comment init_block
             [%string
-              "Array #%{key.id#Int} %{Tn.label key}: %{Sexp.to_string_hum @@ backend_info}; ptr: \
+              "Array #%{tn.id#Int} %{Tn.label tn}: %{Sexp.to_string_hum @@ backend_info}; ptr: \
                %{Sexp.to_string_hum @@ sexp_of_gccjit_rvalue @@ Lazy.force ptr}."];
-          if traced.zero_initialized then (
+          if zero_initialized then (
             debug_log_zero_out init_block result;
             zero_out ctx init_block result)
         in
         initializations := initialize :: !initializations;
-        if not @@ Utils.sexp_mem ~elem:backend_info key.backend_info then
-          key.backend_info <- Utils.sexp_append ~elem:backend_info key.backend_info;
+        if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
+          tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
         result)
 
 let prec_to_kind prec =
@@ -400,14 +402,11 @@ let compile_main ~name ~log_functions ~env ({ ctx; nodes; _ } as info) func init
         let lhs = LValue.access_array (Lazy.force node.ptr) offset in
         debug_log_assignment ~env debug idcs node Ops.Arg2 value llv;
         Block.assign !current_block lhs value
-    | Zero_out array ->
-        if Hashtbl.mem info.nodes array then (
-          let array = Hashtbl.find_exn info.nodes array in
-          debug_log_zero_out ctx (lazy log_functions) !current_block array;
-          zero_out ctx !current_block array)
-        else
-          let tn = Low_level.(get_node info.traced_store array) in
-          assert tn.zero_initialized (* The initialization is emitted by prepare_nodes. *)
+    | Zero_out tn ->
+        let node = get_node tn in
+        (* FIXME: could this be redundant if node.zero_initialized? *)
+        debug_log_zero_out ctx (lazy log_functions) !current_block node;
+        zero_out ctx !current_block node
     | Set_local (id, llv) ->
         let lhs = Map.find_exn !locals id in
         let local_typ = Ops.gcc_typ_of_prec id.tn.prec in

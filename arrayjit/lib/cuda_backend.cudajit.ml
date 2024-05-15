@@ -1,4 +1,5 @@
 open Base
+module Tn = Tnode
 
 type mem_properties =
   | Local_only
@@ -7,7 +8,7 @@ type mem_properties =
 [@@deriving sexp, equal, compare, variants]
 
 type tn_info = {
-  hosted : Ndarray.t option;
+  tn : Tn.t;
   global : string option;
       (** A global device array, if any. This becomes [Cudajit.deviceptr] in a context. *)
   local : string option;  (** A local name, if any. *)
@@ -18,12 +19,9 @@ type tn_info = {
   num_typ : string;
       (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]), [double]
           (precision [Double]). *)
-  prec : Ops.prec;
   zero_initialized : bool;
 }
 [@@deriving sexp_of]
-
-module Tn = Tnode
 
 type device = {
   dev : (Cudajit.device[@sexp.opaque]);
@@ -45,7 +43,7 @@ and context = {
 }
 [@@deriving sexp_of]
 
-type info_arrays = { mutable info_arrays : tn_info Map.M(Tn).t; used_tensors : Hash_set.M(Tn).t }
+type info_nodes = { mutable info_nodes : tn_info Map.M(Tn).t; used_tensors : Hash_set.M(Tn).t }
 [@@deriving sexp_of]
 
 let init device =
@@ -135,7 +133,7 @@ let await device =
 
 let from_host (ctx : context) la =
   match (Map.find ctx.all_arrays la, Map.find ctx.global_arrays la) with
-  | Some { hosted = Some hosted; _ }, Some dst ->
+  | Some { tn = { Tn.array = (lazy (Some hosted)); _ }; _ }, Some dst ->
       set_ctx ctx.ctx;
       let f src = Cudajit.memcpy_H_to_D ~dst ~src () in
       Ndarray.map { f } hosted;
@@ -144,7 +142,7 @@ let from_host (ctx : context) la =
 
 let to_host (ctx : context) la =
   match (Map.find ctx.all_arrays la, Map.find ctx.global_arrays la) with
-  | Some { hosted = Some hosted; _ }, Some src ->
+  | Some { tn = { Tn.array = (lazy (Some hosted)); _ }; _ }, Some src ->
       set_ctx ctx.ctx;
       let f dst = Cudajit.memcpy_D_to_H ~dst ~src () in
       Ndarray.map { f } hosted;
@@ -203,29 +201,28 @@ let get_run_ptr_debug array =
 
 module Debug_runtime = Utils.Debug_runtime
 
-let%debug_sexp get_array ~(traced_store : Low_level.traced_store) info key =
-  Hash_set.add info.used_tensors key;
+let%debug_sexp get_array ~(traced_store : Low_level.traced_store) info tn =
+  Hash_set.add info.used_tensors tn;
   let default () =
     (* let tn = Low_level.get_node traced_store v in *)
     (* TODO: We will need tn to perform more refined optimizations. *)
-    let dims = Lazy.force key.dims in
+    let dims = Lazy.force tn.dims in
     let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
-    let hosted = Lazy.force key.array in
-    let prec = key.prec in
+    let prec = tn.prec in
     let size_in_bytes = size_in_elems * Ops.prec_in_bytes prec in
-    let is_on_host = Tn.is_hosted_force key 31 in
-    let is_materialized = Tn.is_hosted_force key 32 in
-    assert (Bool.(Option.is_some hosted = is_on_host));
+    let is_on_host = Tn.is_hosted_force tn 31 in
+    let is_materialized = Tn.is_hosted_force tn 32 in
+    assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
     let num_typ = Ops.cuda_typ_of_prec prec in
     let mem = if not is_materialized then Local_only else Global in
-    let global = if is_local_only mem then None else Some (Tn.name key) in
-    let local = Option.some_if (is_local_only mem) @@ Tn.name key ^ "_local" in
+    let global = if is_local_only mem then None else Some (Tn.name tn) in
+    let local = Option.some_if (is_local_only mem) @@ Tn.name tn ^ "_local" in
     let backend_info = sexp_of_mem_properties mem in
     if Utils.settings.with_debug then
       [%log
         "creating",
-          (key.id : int),
-          Tn.label key,
+          (tn.id : int),
+          Tn.label tn,
           "mem",
           (backend_info : Sexp.t),
           "prec",
@@ -234,16 +231,16 @@ let%debug_sexp get_array ~(traced_store : Low_level.traced_store) info key =
           (is_on_host : bool),
           "is-global",
           (Option.is_some global : bool)];
-    if not @@ Utils.sexp_mem ~elem:backend_info key.backend_info then
-      key.backend_info <- Utils.sexp_append ~elem:backend_info key.backend_info;
-    let zero_initialized = (Hashtbl.find_exn traced_store key).Low_level.zero_initialized in
+    if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
+      tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
+    let zero_initialized = (Hashtbl.find_exn traced_store tn).Low_level.zero_initialized in
     let data =
-      { hosted; local; mem; dims; size_in_bytes; size_in_elems; num_typ; prec; global; zero_initialized }
+      { tn; local; mem; dims; size_in_bytes; size_in_elems; num_typ; global; zero_initialized }
     in
-    info.info_arrays <- Map.add_exn info.info_arrays ~key ~data;
+    info.info_nodes <- Map.add_exn info.info_nodes ~key:tn ~data;
     data
   in
-  Option.value_or_thunk (Map.find info.info_arrays key) ~default
+  Option.value_or_thunk (Map.find info.info_nodes tn) ~default
 
 let compile_main ~traced_store info ppf llc : unit =
   let open Stdlib.Format in
@@ -261,20 +258,20 @@ let compile_main ~traced_store info ppf llc : unit =
         fprintf ppf "@[<2>for (unsigned int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_
           pp_index i to_ pp_index i pp_ll body
     | Zero_out array ->
-        if Map.mem info.info_arrays array then
+        if Map.mem info.info_nodes array then
           failwith
             ("exec_as_cuda: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
             @@ [%sexp_of: Tn.t] array);
-        let tn = Low_level.(get_node traced_store array) in
-        assert tn.zero_initialized
+        let traced = Low_level.(get_node traced_store array) in
+        assert traced.zero_initialized
         (* The initialization will be emitted by get_array. *)
     | Set { tn; idcs; llv; debug } ->
-        let tn = get_array ~traced_store info tn in
-        let loop_f = pp_float ~num_typ:tn.num_typ tn.prec in
-        let loop_debug_f = debug_float ~num_typ:tn.num_typ tn.prec in
+        let node = get_array ~traced_store info tn in
+        let loop_f = pp_float ~num_typ:node.num_typ tn.prec in
+        let loop_debug_f = debug_float ~num_typ:node.num_typ tn.prec in
         let num_closing_braces = pp_top_locals ppf llv in
         (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
-        fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr tn) pp_array_offset (idcs, tn.dims) loop_f llv;
+        fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr node) pp_array_offset (idcs, node.dims) loop_f llv;
         (if Utils.settings.debug_log_from_routines then
            let v_code, v_idcs = loop_debug_f llv in
            let pp_args =
@@ -286,9 +283,9 @@ let compile_main ~traced_store info ppf llc : unit =
                  pp_comma ppf ();
                  pp_print_string ppf v
            in
-           let run_ptr_debug = get_run_ptr_debug tn in
-           let run_ptr = get_run_ptr tn in
-           let offset = (idcs, tn.dims) in
+           let run_ptr_debug = get_run_ptr_debug node in
+           let run_ptr = get_run_ptr node in
+           let offset = (idcs, node.dims) in
            let debug_line = "# " ^ String.substr_replace_all debug ~pattern:"\n" ~with_:"$" ^ "\\n" in
            fprintf ppf
              "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(\"%%d: %s\", log_id);@ \
@@ -392,7 +389,7 @@ let compile_main ~traced_store info ppf llc : unit =
 
 type code = {
   ptx : (Cudajit.compile_to_ptx_result[@sexp.opaque]);
-  info : info_arrays;
+  info : info_nodes;
   bindings : Indexing.unit_bindings;
   name : string;
 }
@@ -400,7 +397,7 @@ type code = {
 
 let%track_sexp compile_proc ~name idx_params Low_level.{ traced_store; llc } =
   [%log "generating the .cu source"];
-  let info = { info_arrays = Map.empty (module Tn); used_tensors = Hash_set.create (module Tn) } in
+  let info = { info_nodes = Map.empty (module Tn); used_tensors = Hash_set.create (module Tn) } in
   let b = Buffer.create 4096 in
   let ppf = Stdlib.Format.formatter_of_buffer b in
   compile_main ~traced_store info ppf llc;
@@ -409,12 +406,12 @@ let%track_sexp compile_proc ~name idx_params Low_level.{ traced_store; llc } =
   let arrays = Hash_set.to_list info.used_tensors in
   let params =
     List.filter_map arrays ~f:(fun tn ->
-        let tn_info = Map.find_exn info.info_arrays tn in
+        let node = Map.find_exn info.info_nodes tn in
         if Utils.settings.with_debug then
-          [%log "array-used:", (tn : Tn.t), Tn.label tn, (tn_info.mem : mem_properties)];
-        match tn_info.mem with
+          [%log "array-used:", (tn : Tn.t), Tn.label tn, (node.mem : mem_properties)];
+        match node.mem with
         | Local_only -> None
-        | Global -> Option.map tn_info.global ~f:(fun n -> tn_info.num_typ ^ " *" ^ n))
+        | Global -> Option.map node.global ~f:(fun n -> node.num_typ ^ " *" ^ n))
   in
   let idx_params =
     List.map idx_params ~f:(fun { Indexing.static_symbol; _ } -> "int " ^ Indexing.symbol_ident static_symbol)
@@ -424,7 +421,7 @@ let%track_sexp compile_proc ~name idx_params Low_level.{ traced_store; llc } =
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
   let thread_decls =
     List.filter_map arrays ~f:(fun la ->
-        let tn = Map.find_exn info.info_arrays la in
+        let tn = Map.find_exn info.info_nodes la in
         match tn.mem with
         | Local_only ->
             Option.map tn.local ~f:(fun t_name ->
@@ -475,11 +472,11 @@ let%diagn_sexp link_proc (old_context : context) ~name info ptx =
   let ctx = old_context.ctx in
   set_ctx ctx;
   let global_arrays =
-    Map.fold ~init:old_context.global_arrays info.info_arrays ~f:(fun ~key ~data:tn_info globals ->
-        Option.value_map ~default:globals tn_info.global ~f:(fun name ->
+    Map.fold ~init:old_context.global_arrays info.info_nodes ~f:(fun ~key ~data:node globals ->
+        Option.value_map ~default:globals node.global ~f:(fun name ->
             if Utils.settings.with_debug then [%log "mem_alloc", name];
             set_ctx ctx;
-            let ptr () = Cu.mem_alloc ~byte_size:tn_info.size_in_bytes in
+            let ptr () = Cu.mem_alloc ~byte_size:node.size_in_bytes in
             Map.update globals key ~f:(fun old -> Option.value_or_thunk old ~default:ptr)))
   in
   let run_module = Cu.module_load_data_ex ptx [] in
@@ -501,7 +498,7 @@ let get_global_run_id =
     !next_id
 
 let link old_context code =
-  let all_arrays = code.info.info_arrays in
+  let all_arrays = code.info.info_nodes in
   let func, global_arrays, run_module = link_proc old_context ~name:code.name code.info code.ptx in
   let context = { old_context with run_module = Some run_module; global_arrays; all_arrays } in
   let idx_params = Indexing.bound_symbols code.bindings in
@@ -532,8 +529,8 @@ let link old_context code =
       (* TODO: should we prohibit or warn about Local_only tensors that are in old_context.global_arrays? *)
       let arrays = Hash_set.to_list code.info.used_tensors in
       List.filter_map arrays ~f:(fun tn ->
-          let tn_info = Map.find_exn code.info.info_arrays tn in
-          match (tn_info.mem, tn_info.global, Map.find global_arrays tn) with
+          let node = Map.find_exn code.info.info_nodes tn in
+          match (node.mem, node.global, Map.find global_arrays tn) with
           | Global, Some _, Some ptr -> Some (Cu.Tensor ptr)
           | _ -> None)
     in
@@ -542,9 +539,9 @@ let link old_context code =
       set_ctx context.ctx;
       Map.iteri global_arrays ~f:(fun ~key ~data:ptr ->
           if Hash_set.mem code.info.used_tensors key then
-            let tn_info = Map.find_exn all_arrays key in
-            if tn_info.zero_initialized then
-              Cu.memset_d8 ptr Unsigned.UChar.zero ~length:tn_info.size_in_bytes);
+            let node = Map.find_exn all_arrays key in
+            if node.zero_initialized then
+              Cu.memset_d8 ptr Unsigned.UChar.zero ~length:node.size_in_bytes);
       [%log "launching the kernel"];
       (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
       Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream
