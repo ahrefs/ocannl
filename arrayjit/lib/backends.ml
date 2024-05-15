@@ -251,14 +251,14 @@ module type Simple_backend = sig
   val compile :
     name:string ->
     opt_ctx_arrays:ctx_arrays option ->
-    (unit -> unit) Indexing.bindings ->
+    Indexing.unit_bindings ->
     Low_level.optimized ->
     procedure
 
   val compile_batch :
     names:string array ->
     opt_ctx_arrays:ctx_arrays option ->
-    (unit -> unit) Indexing.bindings ->
+    Indexing.unit_bindings ->
     Low_level.optimized array ->
     procedure array
 
@@ -270,7 +270,7 @@ module type Simple_backend = sig
     Tnode.t ->
     accum:Ops.binop ->
     src:context ->
-    (unit -> unit) Indexing.bindings ->
+    Indexing.unit_bindings ->
     procedure option
 
   val merge_batch :
@@ -279,7 +279,7 @@ module type Simple_backend = sig
     Tnode.t list ->
     accum:Ops.binop ->
     srcs:context array ->
-    (unit -> unit) Indexing.bindings ->
+    Indexing.unit_bindings ->
     (Tnode.t, procedure option array) Base.Hashtbl.t
 
   val name : string
