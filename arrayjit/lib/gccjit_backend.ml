@@ -181,7 +181,7 @@ let prepare_node ~debug_log_zero_out ctx nodes traced_store ctx_nodes initializa
               (* The array is the pointer but the address of the array is the same pointer. *)
               lazy (RValue.cast ctx (LValue.address @@ Option.value_exn !v) ptr_typ)
         in
-        let result = { tn = tn; ptr; mem; dims; size_in_bytes; num_typ; prec; zero_initialized } in
+        let result = { tn; ptr; mem; dims; size_in_bytes; num_typ; prec; zero_initialized } in
         let backend_info = sexp_of_mem_properties mem in
         let initialize init_block _func =
           Block.comment init_block
@@ -250,8 +250,7 @@ let debug_log_index ctx log_functions =
         Block.eval block @@ RValue.call ctx ff [ lf ]
   | _ -> fun _block _i _index -> ()
 
-let compile_main ~name ~log_functions ~env ({ ctx; nodes; _ } as info) func initial_block (body : Low_level.t)
-    =
+let compile_main ~name ~log_functions ~env { ctx; nodes; _ } func initial_block (body : Low_level.t) =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
@@ -627,8 +626,8 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low
   Context.release ctx;
   { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params }
 
-let%track_sexp compile_batch ~(names : string array) ~opt_ctx_arrays bindings
-    (compileds : Low_level.optimized array) =
+let%track_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bindings
+    (lowereds : Low_level.optimized option array) =
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
@@ -637,19 +636,24 @@ let%track_sexp compile_batch ~(names : string array) ~opt_ctx_arrays bindings
      Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx Context.Dump_everything
      true); *)
   let funcs =
-    Array.map2_exn names compileds ~f:(fun name compiled ->
-        compile_proc ~name ~opt_ctx_arrays ctx bindings compiled)
+    Array.map2_exn names lowereds
+      ~f:(Option.map2 ~f:(fun name lowered -> compile_proc ~name ~opt_ctx_arrays ctx bindings lowered))
   in
   (if Utils.settings.output_debug_files_in_run_directory then
      let f_name =
-       String.(strip ~drop:(equal_char '_') @@ common_prefix (Array.to_list names)) ^ "-gccjit-debug.c"
+       String.(
+         strip ~drop:(equal_char '_')
+         @@ common_prefix (Array.to_list @@ Array.concat_map ~f:Option.to_array names))
+       ^ "-gccjit-debug.c"
      in
      Context.dump_to_file ctx ~update_locs:true f_name);
   let result = Context.compile ctx in
   Context.release ctx;
-  Array.map2_exn names funcs ~f:(fun name (info, ctx_arrays, params) ->
-      let opt_ctx_arrays = if Map.is_empty ctx_arrays then None else Some ctx_arrays in
-      { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params })
+  Array.map2_exn names funcs
+    ~f:
+      (Option.map2 ~f:(fun name (info, ctx_arrays, params) ->
+           let opt_ctx_arrays = if Map.is_empty ctx_arrays then None else Some ctx_arrays in
+           { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params }))
 
 let%track_sexp link_compiled (old_context : context) (code : procedure) : context * _ * _ * string =
   let label : string = old_context.label in
@@ -781,23 +785,23 @@ let%track_sexp merge_batch ?(name_prefixes : string array option) ~occupancy tns
     Array.concat_map (Array.of_list tns) ~f:(fun tn ->
         Array.mapi srcs ~f:(fun i src ->
             match (occupancy tn ~src_n:i ~src, Map.find src.arrays tn) with
-            | Utils.Skip, _ -> None
+            | Utils.Skip, _ -> ((tn, i), (None, None))
             | Optional { callback_if_missing }, None ->
                 callback_if_missing ();
-                None
+                ((tn, i), (None, None))
             | Required, None ->
                 failwith @@ "Gccjit_backend.merge_batch: missing tnode " ^ Tn.name tn ^ " in context "
                 ^ src.label
             | _, Some src ->
                 let prefix = match name_prefixes with Some ns -> ns.(i) ^ "_" | None -> "" in
                 let name = [%string "%{prefix}into_%{Tn.name tn}"] in
-                Some
-                  ( (tn, i),
-                    ( name,
-                      merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst:tn ~accum
-                        ~src:(Ndarray.get_voidptr src) ) )))
+                ( (tn, i),
+                  ( Some name,
+                    Some
+                      (merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst:tn ~accum
+                         ~src:(Ndarray.get_voidptr src)) ) )))
   in
-  let ids, compileds = Array.unzip @@ Array.filter_opt complete in
+  let ids, compileds = Array.unzip complete in
   let len = Array.length srcs in
   let together =
     Hashtbl.of_alist_exn (module Tn) @@ List.map tns ~f:(fun tn -> (tn, Array.create ~len None))
@@ -809,5 +813,5 @@ let%track_sexp merge_batch ?(name_prefixes : string array option) ~occupancy tns
     Array.iter2_exn ids result ~f:(fun (tn, i) res ->
         let r = Hashtbl.find_exn together tn in
         assert (Option.is_none r.(i));
-        r.(i) <- Some res);
+        r.(i) <- res);
     together

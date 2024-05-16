@@ -234,9 +234,7 @@ let%debug_sexp get_array ~(traced_store : Low_level.traced_store) info tn =
     if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
       tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
     let zero_initialized = (Hashtbl.find_exn traced_store tn).Low_level.zero_initialized in
-    let data =
-      { tn; local; mem; dims; size_in_bytes; size_in_elems; num_typ; global; zero_initialized }
-    in
+    let data = { tn; local; mem; dims; size_in_bytes; size_in_elems; num_typ; global; zero_initialized } in
     info.info_nodes <- Map.add_exn info.info_nodes ~key:tn ~data;
     data
   in
@@ -395,14 +393,16 @@ type code = {
 }
 [@@deriving sexp_of]
 
-let%track_sexp compile_proc ~name idx_params Low_level.{ traced_store; llc } =
-  [%log "generating the .cu source"];
-  let info = { info_nodes = Map.empty (module Tn); used_tensors = Hash_set.create (module Tn) } in
-  let b = Buffer.create 4096 in
-  let ppf = Stdlib.Format.formatter_of_buffer b in
-  compile_main ~traced_store info ppf llc;
-  Stdlib.Format.pp_print_newline ppf ();
-  let cu_body = Buffer.contents b in
+type code_batch = {
+  ptx : (Cudajit.compile_to_ptx_result[@sexp.opaque]);
+  info : info_nodes;
+  bindings : Indexing.unit_bindings;
+  names : string option array;
+}
+[@@deriving sexp_of]
+
+let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; llc } =
+  let open Stdlib.Format in
   let arrays = Hash_set.to_list info.used_tensors in
   let params =
     List.filter_map arrays ~f:(fun tn ->
@@ -417,6 +417,9 @@ let%track_sexp compile_proc ~name idx_params Low_level.{ traced_store; llc } =
     List.map idx_params ~f:(fun { Indexing.static_symbol; _ } -> "int " ^ Indexing.symbol_ident static_symbol)
   in
   let log_id = if Utils.settings.debug_log_from_routines then [ "int log_id" ] else [] in
+  fprintf ppf "extern \"C\" __global__ void %s(%a) {@." name (pp_print_list ~pp_sep:pp_comma pp_print_string)
+  @@ log_id @ idx_params @ params;
+  fprintf ppf "/* FIXME: single-threaded for now. */@.if (threadIdx.x != 0 || blockIdx.x != 0) { return; }@ ";
   (* TODO: optimize zero-initializations? E.g.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
   let thread_decls =
@@ -429,22 +432,13 @@ let%track_sexp compile_proc ~name idx_params Low_level.{ traced_store; llc } =
                 ^ if (Hashtbl.find_exn traced_store la).zero_initialized then "] = {0};" else "];")
         | _ -> None)
   in
-  let cu_src =
-    [%string
-      {|
-%{if Utils.settings.debug_log_from_routines then "__device__ int printf (const char * format, ... );" else ""}
-extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ log_id @ idx_params @ params}) {
-  /* TODO: this initial toy prototype is single-threaded. */
-  if (threadIdx.x != 0 || blockIdx.x != 0) { return; }
-  
-  /* Thread-local declarations. */
-  %{String.concat ~sep:"\n  " thread_decls}
+  fprintf ppf "/* Thread-local declarations. */@.";
+  pp_print_list ~pp_sep:pp_print_space pp_print_string ppf thread_decls;
+  fprintf ppf "/* Main logic. */@.";
+  compile_main ~traced_store info ppf llc;
+  fprintf ppf "@.}@."
 
-  /* Main logic. */
-  %{String.substr_replace_all cu_body ~pattern:"\n" ~with_:"\n  "}
-}
-|}]
-  in
+let%diagn_sexp cuda_to_ptx ~name cu_src =
   let f_name = name ^ "-cudajit-debug" in
   if Utils.settings.output_debug_files_in_run_directory then (
     let oc = Out_channel.open_text @@ f_name ^ ".cu" in
@@ -465,7 +459,7 @@ extern "C" __global__ void %{name}(%{String.concat ~sep:", " @@ log_id @ idx_par
     Stdio.Out_channel.output_string oc @@ Option.value_exn ptx.log;
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);
-  (ptx, info)
+  ptx
 
 let%diagn_sexp link_proc (old_context : context) ~name info ptx =
   let module Cu = Cudajit in
@@ -484,11 +478,32 @@ let%diagn_sexp link_proc (old_context : context) ~name info ptx =
   [%log "compilation finished"];
   (func, global_arrays, run_module)
 
-let compile ?name bindings ({ llc; _ } as compiled : Low_level.optimized) =
+let compile ?name bindings ({ Low_level.llc; _ } as lowered) =
   let name : string = Option.value_or_thunk name ~default:(fun () -> Low_level.extract_block_name [ llc ]) in
   let idx_params = Indexing.bound_symbols bindings in
-  let ptx, info = compile_proc ~name idx_params compiled in
+  let info = { info_nodes = Map.empty (module Tn); used_tensors = Hash_set.create (module Tn) } in
+  let b = Buffer.create 4096 in
+  let ppf = Stdlib.Format.formatter_of_buffer b in
+  if Utils.settings.debug_log_from_routines then
+    Stdlib.Format.fprintf ppf "@.__device__ int printf (const char * format, ... );@.";
+  compile_proc ~name info ppf idx_params lowered;
+  let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
   { ptx; info; bindings; name }
+
+let compile_batch ~names bindings lowereds =
+  let idx_params = Indexing.bound_symbols bindings in
+  let info = { info_nodes = Map.empty (module Tn); used_tensors = Hash_set.create (module Tn) } in
+  let b = Buffer.create 4096 in
+  let ppf = Stdlib.Format.formatter_of_buffer b in
+  ignore
+  @@ Array.map2_exn names lowereds
+       ~f:(Option.map2 ~f:(fun name lowered -> compile_proc ~name info ppf idx_params lowered));
+  let name : string =
+    String.(
+      strip ~drop:(equal_char '_') @@ common_prefix (Array.to_list names |> List.concat_map ~f:Option.to_list))
+  in
+  let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
+  { ptx; info; bindings; names }
 
 let get_global_run_id =
   let next_id = ref 0 in
@@ -497,7 +512,7 @@ let get_global_run_id =
     if !next_id < 0 then next_id := 0;
     !next_id
 
-let link old_context code =
+let link old_context (code : code) =
   let all_arrays = code.info.info_nodes in
   let func, global_arrays, run_module = link_proc old_context ~name:code.name code.info code.ptx in
   let context = { old_context with run_module = Some run_module; global_arrays; all_arrays } in
@@ -540,8 +555,7 @@ let link old_context code =
       Map.iteri global_arrays ~f:(fun ~key ~data:ptr ->
           if Hash_set.mem code.info.used_tensors key then
             let node = Map.find_exn all_arrays key in
-            if node.zero_initialized then
-              Cu.memset_d8 ptr Unsigned.UChar.zero ~length:node.size_in_bytes);
+            if node.zero_initialized then Cu.memset_d8 ptr Unsigned.UChar.zero ~length:node.size_in_bytes);
       [%log "launching the kernel"];
       (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
       Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream
@@ -559,3 +573,9 @@ let link old_context code =
     Tnode.Work work
   in
   (context, idx_args, schedule)
+
+let link_batch old_context (code_batch : code_batch) =
+  let idx_params = Indexing.bound_symbols code_batch.bindings in
+  let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
+  (* FIXME: *)
+  (old_context, idx_args, [||])

@@ -14,6 +14,7 @@ type 'context routine = {
 
 module type No_device_backend = sig
   type code [@@deriving sexp_of]
+  type code_batch [@@deriving sexp_of]
   type context [@@deriving sexp_of]
   type nonrec routine = context routine [@@deriving sexp_of]
 
@@ -33,12 +34,21 @@ module type No_device_backend = sig
       [link] is called, to benefit from more optimizations. *)
 
   val compile_batch :
-    ?shared:bool -> ?names:string array -> Indexing.unit_bindings -> Assignments.t array -> code array
+    ?shared:bool ->
+    ?names:string array ->
+    ?occupancy:(name:string -> src_n:int -> bool) ->
+    Indexing.unit_bindings ->
+    Assignments.t array ->
+    code_batch
   (** Unlike the [~shared] parameter, [compile_batch] vs. [compile] is mostly about improving the compile time
       and debugging convenience by generating fewer files -- ideally does not affect execution, but there can
-      be backend-specific differences. *)
+      be backend-specific differences. Only array entries for which [occupancy] returns true are included. *)
 
   val link : context -> code -> routine
+
+  val link_batch : context -> code_batch -> routine option array
+  (** Returns the routines for the procedures included in the code batch. All returned routines share the same
+      new context. *)
 
   val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
   (** Cleans up all work on a backend. If [~unsafe_shutdown:true], releases resources, potentially making the
@@ -63,7 +73,9 @@ module type No_device_backend = sig
     accum:Ops.binop ->
     srcs:context array ->
     (Tnode.t, code option array) Hashtbl.t
-  (** [merge_batch] vs. [merge] is purely about improving the compile time (does not affect execution). *)
+  (** [merge_batch] is to [merge] as [compile_batch] is to [compile] -- see above. Includes only the merges
+      for a node from the given list and [src] from [srcs] for which [occupancy] does not return [Skip], and
+      the node is present in [src]. *)
 end
 
 module type Backend = sig
@@ -98,6 +110,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   [@@deriving sexp_of]
 
   type code = Backend.code [@@deriving sexp_of]
+  type code_batch = Backend.code_batch [@@deriving sexp_of]
   type context = { device : device; ctx : Backend.context } [@@deriving sexp_of]
   type nonrec routine = context routine [@@deriving sexp_of]
 
@@ -119,7 +132,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let compile = Backend.compile
   let compile_batch = Backend.compile_batch
 
-  let link { ctx; device } code : routine =
+  let link { ctx; device } code =
     let task = Backend.link ctx code in
     let%diagn_sexp schedule () =
       [%log_result "Scheduling", task.name];
@@ -133,6 +146,23 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       Tnode.Work work
     in
     { task with context = { ctx = task.context; device }; schedule }
+
+  let link_batch { ctx; device } code_batch =
+    Array.map (Backend.link_batch ctx code_batch)
+      ~f:
+        (Option.map ~f:(fun task ->
+             let%diagn_sexp schedule () =
+               [%log_result "Scheduling", task.name];
+               let task = task.schedule () in
+               let%diagn_rt_sexp work () =
+                 await device;
+                 if not !(device.keep_spinning) then invalid_arg "Multicore_backend.jit: device not available";
+                 device.next_task := Some task;
+                 device.wait_for_work.release ()
+               in
+               Tnode.Work work
+             in
+             { task with context = { ctx = task.context; device }; schedule }))
 
   let from_host { device; ctx } =
     await device;
@@ -227,7 +257,7 @@ let lower_assignments ?name bindings asgns =
     Assignments.lower_proc ~unoptim_ll_source ~ll_source ~cd_source ~name (Indexing.bound_symbols bindings)
       asgns )
 
-let lower_batch_assignments ?names bindings asgns_l =
+let lower_batch_assignments ?names ?occupancy bindings asgns_l =
   let names =
     Option.value_or_thunk names ~default:(fun () ->
         Array.map asgns_l ~f:(fun asgns -> Assignments.get_name_exn asgns))
@@ -237,9 +267,14 @@ let lower_batch_assignments ?names bindings asgns_l =
   let ll_source = Utils.get_debug_formatter ~fname:(prefix_name ^ ".ll") in
   let cd_source = Utils.get_debug_formatter ~fname:(prefix_name ^ ".cd") in
   let bound = Indexing.bound_symbols bindings in
-  ( names,
-    Array.map2_exn names asgns_l ~f:(fun name asgns ->
-        Assignments.lower_proc ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns) )
+  let occupancy = Option.value occupancy ~default:(fun ~name:_ ~src_n:_ -> true) in
+  Array.unzip
+  @@ Array.mapi names ~f:(fun src_n name ->
+         let asgns = asgns_l.(src_n) in
+         if occupancy ~name ~src_n then
+           ( Some name,
+             Some (Assignments.lower_proc ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns) )
+         else (None, None))
 
 module type Simple_backend = sig
   type context [@@deriving sexp_of]
@@ -256,11 +291,11 @@ module type Simple_backend = sig
     procedure
 
   val compile_batch :
-    names:string array ->
+    names:string option array ->
     opt_ctx_arrays:ctx_arrays option ->
     Indexing.unit_bindings ->
-    Low_level.optimized array ->
-    procedure array
+    Low_level.optimized option array ->
+    procedure option array
 
   val link_compiled :
     context -> procedure -> context * Indexing.lowered_bindings * (unit -> Tnode.work) * string
@@ -298,40 +333,61 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
     | Compiled of Backend.procedure
   [@@deriving sexp_of]
 
+  type code_batch =
+    | Postponed of {
+        lowereds : Low_level.optimized option array;
+        bindings : Indexing.unit_bindings;
+        names : string option array;
+      }
+    | Compiled of Backend.procedure option array
+  [@@deriving sexp_of]
+
   include Backend
 
   type nonrec routine = context routine [@@deriving sexp_of]
 
-  let compile ?(shared = false) ?name bindings asgns =
+  let compile ?(shared = false) ?name bindings asgns : code =
     let name, lowered = lower_assignments ?name bindings asgns in
     if shared then Compiled (Backend.compile ~name ~opt_ctx_arrays:None bindings lowered)
     else Postponed { lowered; bindings; name }
 
-  let compile_batch ?(shared = false) ?names bindings asgns_l =
-    let names, lowereds = lower_batch_assignments ?names bindings asgns_l in
-    if shared then
-      let routines = compile_batch ~names ~opt_ctx_arrays:None bindings lowereds in
-      Array.map routines ~f:(fun routine -> Compiled routine)
-    else Array.map2_exn names lowereds ~f:(fun name lowered -> Postponed { lowered; bindings; name })
+  let compile_batch ?(shared = false) ?names ?occupancy bindings asgns_l : code_batch =
+    let names, lowereds = lower_batch_assignments ?names ?occupancy bindings asgns_l in
+    if shared then Compiled (compile_batch ~names ~opt_ctx_arrays:None bindings lowereds)
+    else Postponed { lowereds; bindings; names }
 
-  let link (old_context : context) code =
+  let link (old_context : context) (code : code) =
     let context, bindings, schedule, name =
       match code with
       | Postponed { lowered; bindings; name } ->
-          let code = Backend.compile ~name ~opt_ctx_arrays:(Some (ctx_arrays old_context)) bindings lowered in
-          link_compiled old_context code
+          let proc = Backend.compile ~name ~opt_ctx_arrays:(Some (ctx_arrays old_context)) bindings lowered in
+          link_compiled old_context proc
       | Compiled code -> link_compiled old_context code
     in
     { context; schedule; bindings; name }
 
-  let merge ?name_prefix tn ~accum ~(src : context) =
+  let link_batch (old_context : context) (code_batch : code_batch) : routine option array =
+    let procs =
+      match code_batch with
+      | Postponed { lowereds; bindings; names } ->
+          Backend.compile_batch ~names ~opt_ctx_arrays:(Some (ctx_arrays old_context)) bindings lowereds
+      | Compiled procs -> procs
+    in
+    Array.map procs
+      ~f:
+        (Option.map ~f:(fun proc ->
+             let context, bindings, schedule, name = link_compiled old_context proc in
+             { context; schedule; bindings; name }))
+
+  let merge ?name_prefix tn ~accum ~(src : context) : code option =
     let bindings = Indexing.Empty in
-    merge ?name_prefix tn ~accum ~src bindings |> Option.map ~f:(fun routine -> Compiled routine)
+    merge ?name_prefix tn ~accum ~src bindings |> Option.map ~f:(fun routine : code -> Compiled routine)
 
   let merge_batch ?name_prefixes ~occupancy tns ~accum ~(srcs : context array) =
     let bindings = Indexing.Empty in
     merge_batch ?name_prefixes ~occupancy tns ~accum ~srcs bindings
-    |> Hashtbl.map ~f:(fun cds -> Array.map cds ~f:(Option.map ~f:(fun routine -> Compiled routine)))
+    |> Hashtbl.map ~f:(fun procs ->
+           Array.map procs ~f:(Option.map ~f:(fun routine : code -> Compiled routine)))
 end
 
 module Gccjit_device : No_device_backend = Simple_no_device_backend ((
@@ -341,6 +397,7 @@ module Gccjit_backend = Multicore_backend (Gccjit_device)
 
 module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   type code = Cuda_backend.code [@@deriving sexp_of]
+  type code_batch = Cuda_backend.code_batch [@@deriving sexp_of]
   type context = Cuda_backend.context [@@deriving sexp_of]
   type device = Cuda_backend.device
   type nonrec routine = context routine [@@deriving sexp_of]
@@ -360,11 +417,17 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
     let name, lowered = lower_assignments ?name bindings asgns in
     compile ~name bindings lowered
 
-  let compile_batch ?shared:_ ?names:_ _bindings _asgns_batch = failwith "NOT IMPLEMENTED YET"
+  let compile_batch ?shared:_ ?names ?occupancy bindings asgns_l =
+    let names, lowereds = lower_batch_assignments ?names ?occupancy bindings asgns_l in
+    compile_batch ~names bindings lowereds
 
   let link context code =
     let context, bindings, schedule = link context code in
     { context; schedule; bindings; name }
+
+  let link_batch context code_batch : routine option array =
+    let context, bindings, schedules = link_batch context code_batch in
+    Array.map schedules ~f:(Option.map ~f:(fun schedule -> { context; schedule; bindings; name }))
 
   let from_host = from_host
   let to_host = to_host
