@@ -809,6 +809,10 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf l
         fprintf ppf "%s" @@ Ops.ptr_to_string ptr prec
     | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
         fprintf ppf "%s[%a]" (Ops.ptr_to_string ptr prec) pp_indices idcs
+    | Get_global (Ops.Merge_buffer_unsafe, None) ->
+        fprintf ppf "merge_buffer(at prec %s)" @@ Ops.prec_string prec
+    | Get_global (Ops.Merge_buffer_unsafe, Some idcs) ->
+        fprintf ppf "merge_buffer[%a](at prec %s)" pp_indices idcs @@ Ops.prec_string prec
     | Get (tn, idcs) -> fprintf ppf "@[<2>%a[@,%a]@]" pp_ident tn pp_indices idcs
     | Constant c -> fprintf ppf "%f" c
     | Embed_index idx -> pp_index ppf idx

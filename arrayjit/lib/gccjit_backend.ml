@@ -332,6 +332,8 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; _ } func initial_block 
         let v = to_d @@ RValue.lvalue @@ LValue.access_array ptr offset in
         ("external " ^ RValue.to_string ptr ^ "[%d]{=%g}", [ offset; v ])
     | Get_global (External_unsafe _, None) -> assert false
+    | Get_global (Merge_buffer_unsafe, _) ->
+        raise @@ Utils.User_error ("compiling " ^ name ^ ": gccjit backend does not support merge buffers")
     | Get_global (C_function _, Some _) -> failwith "gccjit_backend: FFI with parameters NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         let node = get_node tn in
@@ -451,6 +453,8 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; _ } func initial_block 
         let num_typ = Type.get ctx local_typ in
         if not @@ Ops.equal_prec prec local_prec then RValue.cast ctx rvalue num_typ else rvalue
     | Get_global (External_unsafe _, None) -> assert false
+    | Get_global (Merge_buffer_unsafe, _) ->
+        raise @@ Utils.User_error ("compiling " ^ name ^ ": gccjit backend does not support merge buffers")
     | Get_global (C_function _, Some _) -> failwith "gccjit_backend: FFI with parameters NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         let node = get_node tn in

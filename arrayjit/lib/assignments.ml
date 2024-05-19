@@ -275,6 +275,7 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf c
     match op with
     | Constant f -> fprintf ppf "%g" f
     | Imported (Ops.C_function c) -> fprintf ppf "%s()" c
+    | Imported Merge_buffer_unsafe -> fprintf ppf "merge_buffer"
     | Imported (Ops.External_unsafe { ptr; prec; dims = _ }) -> fprintf ppf "%s" @@ Ops.ptr_to_string ptr prec
     | Slice { batch_idx; sliced } ->
         fprintf ppf "%s @@| %s" (ident sliced) (Indexing.symbol_ident batch_idx.static_symbol)

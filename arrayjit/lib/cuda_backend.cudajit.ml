@@ -149,14 +149,6 @@ let to_host (ctx : context) la =
       true
   | _ -> false
 
-let merge ?(name_suffix = "") la ~dst ~accum ~src (bindings : Indexing.unit_bindings) =
-  let ord ctx = ctx.device.ordinal in
-  let name =
-    [%string "merge_into_%{Tn.name la}_on_dev_%{ord dst#Int}_from_dev_%{ord src#Int}_%{name_suffix}"]
-  in
-  ignore (name, accum, bindings);
-  failwith "NOT IMPLEMENTED YET"
-
 (* let pp_semi ppf () = Stdlib.Format.fprintf ppf ";@ " *)
 let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
 

@@ -24,7 +24,7 @@ module type No_device_backend = sig
 end
 ```
 
-Backends need to provide the `code` (for compilation result) and `context` types. `code` is some intermediate state between assignments and `context routine`. A backend may postpone doing anything specific until linking, e.g. `code = Low_level.optimized`, or linking may be a no-op, effectively `code = routine`, usually it will fall somewhere in between and depend on whether `~shared:true` is passed. For simple situations, `Backends` has a helper functor:
+Backends need to provide the `code` (for compilation result) and `context` types. `code` is some intermediate state between assignments and `context routine`. A backend may postpone doing anything specific until linking, e.g. `code = Low_level.optimized`, or linking may be a no-op, effectively `code = routine`, usually it will fall somewhere in between and depend on whether `~shared:true` is passed. For simple situations like CPU backends, `Backends` has a helper functor:
 
 ```ocaml
 module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend = struct
@@ -69,7 +69,7 @@ end
 
 Shared (relocatable) compilation, with `~shared:true`, improves compilation efficiency, because code can be compiled once for use on multiple devices (in multiple contexts). It also improves debugging convenience, by generating fewer debugging artifacts. A potential downside is slightly less efficient computations.
 
-Batched compilation has similar benefits, especially in producing fewer debugging artifacts. The compilation might also be slightly more efficient since the compiler needs to be invoked fewer times. While `~shared:true` compilation saves (more) total work by compiling _one routine for many devices_, batched compilation and linking saves work by compiling _many routines for one device_ at once.
+Batched compilation has similar benefits, especially in producing fewer debugging artifacts. The compilation might also be slightly more efficient since the compiler needs to be invoked fewer times. While `~shared:true` compilation saves (more) total work by compiling _one routine for many devices_, batched compilation and linking saves a bit of work by compiling _many routines for one device_ at once.
 
 ## Tensor nodes, arrays, memory properties
 
@@ -205,3 +205,82 @@ Backends should support logging some of the computations when `Utils.settings.de
 We output a log line only for comments and array assignments (corresponding to non-virtual node computations), but we log the computed expression structure: the indices, array values, and inline computation values. For simplicity and conciseness, we don't log the structure of inlined computations. Comments determine the nesting of the `ppx_minidebug` entries: when lowering a `Block_comment`, `Assignments.to_low_level` outputs a `Comment "end"` at the end of a block. Comments are prefixed with `COMMENT:`. For assignments, we also log the debug information stored in the `Set` construct -- it's the computed expression translated into the `%cd` syntax. For processing, the debug information is prefixed by `#` and has endlines replaced by `$`. These structural prefixes / infixes are parsed out by `Utils.log_trace_tree`.
 
 Since the CUDA backend needs to capture the standard output, it additionally prefixes each log line with a kernel run ID. When postprocessing the logs, each run extracts its own log lines. Simultaneous logging from multiple CUDA devices should still be clean -- without interleaving lines -- because the driver is supposed to dump the logs to standard output at device synchronization points.
+
+## Synchronization and data transfers
+
+Currently, OCANNL expects backends to implement a _length-1 queue_ scheduling mechanism. The scheduling does not express dependencies between tensors. Only the main domain is allowed to interact with devices, in a single-threaded way. (Other domains are used by CPU backends.) These are the possible states of a host-device interaction:
+
+- The device is waiting for work. If the host schedules work: scheduling puts the task in the device's queue, host notifies the device and continues, the device empties the queue and starts the work.
+- The device is doing work, the queue is empty. If the host schedules work: scheduling puts the task in the device's queue, the host continues, the device's queue becomes non-empty.
+- The device is doing work, the queue is not empty. If the host schedules work: scheduling blocks -- waits to be notified by the device. Once the device finishes the work it's been doing, it picks the task from the device's queue, the host continues, the device's queue remains (becomes again) non-empty.
+
+Since this is significantly simpler than what other frameworks do, it might evolve in the future, but let's see how far it gets us. (In particular, scheduling in `tinygrad` expresses tensor graph dependencies with arbitrary queueing.)
+
+_Synchronizing a device_ means blocking till the device's queue becomes empty and the device starts waiting for work. To facilitate scheduling, we can use an _acknowledge task_, a do-nothing task except it leaves a trace like other tasks when debugging is enabled. With length-1 queue scheduling, scheduling an acknowledge task twice in a row is equivalent to synchronizing the device (except for debugging traces).
+
+Running a routine, that is scheduling its task, captures the state if its static indexing bindings. Besides routines, calling `from_host_async`, `to_host_async`, `merge`, `merge_unsafe` from a backend schedules the corresponding tasks.
+
+### Data transfers
+
+OCANNL supports asynchronous data transfers by embedding them in the scheduling mechanism.
+
+```ocaml
+module type No_device_backend = sig
+  ...
+  val from_host : context -> Tnode.t -> bool
+  (** If the array is both hosted and in-context, copies from host to context and returns true. This function
+      is synchronous in the sense that when it returns, the host data is no longer needed. Beware that
+      depending on the backend, calling [from_host] might even synchronize all devices of the backend. *)
+
+  val to_host : context -> Tnode.t -> bool
+  (** If the array is both hosted and in-context, copies from context to host and returns true. This function
+      is synchronous: returns when fully complete. Beware that depending on the backend, calling [to_host]
+      might even synchronize all devices of the backend. *)
+
+  val from_host_async : context -> Tnode.t -> bool
+  (** If the array is both hosted and in-context, copies from host to context and returns true. NOTE: this
+      function returns immediately and it's the caller's responsibility to synchronize the device before the
+      host's data is overwritten. *)
+
+  val to_host_async : context -> Tnode.t -> bool
+  (** If the array is both hosted and in-context, copies from context to host and returns true. NOTE: this
+      function returns immediately and it's the caller's responsibility to synchronize the device before the
+      host's data is read. *)
+
+  val merge : Tnode.t -> accum:Ops.binop -> dst:context -> src:context -> bool
+  (** Merges the array from the source context into the destination context: [dst =: dst accum src]. If the
+      array is hosted, its state on host is undefined after this operation. (A backend may choose to use the
+      host array as a buffer, if that is beneficial.) The corresponding tuple of [tnode, accum, dst, src] must
+      be in the scope of an earlier {!compile_merges} call; otherwise, [merge] will fail, even if it would
+      otherwise return [false]. Returns [false] if the array is not in both the [dst] and [src] contexts.
+      Otherwise, it synchronizes the [src] device, {i then} it schedules the merge task on the [dst]
+      device, then it returns [true]. NOTE: [merge] is asynchronous, it's the caller's responsibility to not
+      overwrite source before the merge completes. *)
+
+  val merge_unsafe : Tnode.t -> accum:Ops.binop -> dst:context -> src:context -> bool
+  (** Merges the array from the source context into the destination context: see {!merge} for details.
+      Compared to {!merge}, [merge_unsafe] starts by scheduling an "acknowledge" task on the [src] device
+      (blocking until the latest task on [src] starts), {i then} it schedules the merge task on the [dst]
+      device. NOTE: [merge_unsafe] is likely to cause {i read before intended write} bugs. *)
+  ...
+  val supports_merge_buffers : bool
+  (** If [false], using [Ops.Merge_buffer_unsafe] in assignments will fail during {!compile} or {!link}, resp.
+      {!compile_batch} or {!link_batch}. If [true], each device maintains (at most) one merge buffer, that is
+      grown by calls to [compile_merges], to ensure that the merge buffer can fit the data arriving for
+      {!merge}, {!merge_unsafe} tasks. *)
+end
+
+module type Backend = sig
+  include No_device_backend
+
+  type device
+
+  val init : device -> context
+
+  val await : device -> unit
+  (** Synchronizes the device. *)
+  ...
+end
+```
+
+Like `to_host` and `from_host`, the calls to `from_host_async`, `to_host_async`, `merge ~accum:Ops.Arg2`, `merge_unsafe ~accum:Ops.Arg2` perform a memory copy, but wrapped in a task. `merge` and `merge_unsafe` for other `accum` operators perform an (in-place) pointwise operation on two arrays of the same tensor node. Backends where a device cannot directly access another device's memory (as far as the backend's implementer is concerned) use merge buffers for this purpose. E.g. a call [merge ~accum:Ops.Add t.value ~dst ~src] would copy `t.value` from `src` to `dst` and then perform `[%cd t =+ merge_buffer]` on `dst`.

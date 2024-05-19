@@ -225,6 +225,7 @@ let compare_voidptr = Ctypes.ptr_compare
 let equal_voidptr : voidptr -> voidptr -> bool = phys_equal
 
 let ptr_to_string ptr prec =
+  (* TODO: looks like overkill to use Gccjit for printing. *)
   let open Gccjit in
   let ctx = Context.create () in
   let result = RValue.to_string @@ RValue.ptr ctx Type.(pointer @@ get ctx @@ gcc_typ_of_prec prec) ptr in
@@ -238,4 +239,7 @@ type global_identifier =
       prec : (prec[@equal.ignore] [@compare.ignore]);
       dims : int array Lazy.t;
     }
+  | Merge_buffer_unsafe
+      (** Each device has at most one merge buffer, which is re-used, and re-allocated as needed, by merge
+          operations. Using the merge buffer outside of implementing merge tasks is inherently unsafe. *)
 [@@deriving sexp_of, equal, compare]
