@@ -53,17 +53,19 @@ where `Simple_backend` implements a `No_device_backend` functionality, but only 
 ```ocaml
 module type Backend = sig
   include No_device_backend
-
+  ...
   type device
-
   val init : device -> context
   val await : device -> unit
+  val acknowledge : device -> unit
+  val is_idle : device -> bool
+  val is_booked : device -> bool
   val get_device : ordinal:int -> device
   ...
 end
 ```
 
-`Backend.await` synchronizes the device -- waits for all work on the device to finish.
+`Backend.await` synchronizes the device -- waits for all work on the device to finish -- the device becomes `is_idle`. `Backend.acknowledge` waits for the device to not have a pending task -- to start its latest task, if any -- the device becomes not `is_booked`.
 
 ### Shared (relocatable) compilation, batch compilation
 
@@ -210,22 +212,20 @@ Since the CUDA backend needs to capture the standard output, it additionally pre
 
 Currently, OCANNL expects backends to implement a _length-1 queue_ scheduling mechanism. The scheduling does not express dependencies between tensors. Only the main domain is allowed to interact with devices, in a single-threaded way. (Other domains are used by CPU backends.) These are the possible states of a host-device interaction:
 
-- The device is waiting for work. If the host schedules work: scheduling puts the task in the device's queue, host notifies the device and continues, the device empties the queue and starts the work.
-- The device is doing work, the queue is empty. If the host schedules work: scheduling puts the task in the device's queue, the host continues, the device's queue becomes non-empty.
-- The device is doing work, the queue is not empty. If the host schedules work: scheduling blocks -- waits to be notified by the device. Once the device finishes the work it's been doing, it picks the task from the device's queue, the host continues, the device's queue remains (becomes again) non-empty.
+- The device is waiting for work, `Backend.is_idle device = true`. `Backend.await device` blocks till we get to this state. If the host schedules work: scheduling puts the task in the device's queue, the host continues without blocking, the device empties the queue and starts the work.
+- The device is doing work, the queue is empty, `Backend.is_booked device = false`. `Backend.acknowledge device` blocks till we get to this state (or the idle state). If the host schedules work: scheduling puts the task in the device's queue, the host continues without blocking, the device's queue becomes non-empty.
+- The device is doing work, the queue is not empty, `Backend.is_booked device = true`. If the host schedules work: scheduling blocks -- waits to be notified by the device. Once the device finishes the work it's been doing, it picks the previous task from the device's queue, the host puts its task in the queue and continues, the device's queue ends up again non-empty.
 
 Since this is significantly simpler than what other frameworks do, it might evolve in the future, but let's see how far it gets us. (In particular, scheduling in `tinygrad` expresses tensor graph dependencies with arbitrary queueing.)
 
-_Synchronizing a device_ means blocking till the device's queue becomes empty and the device starts waiting for work. To facilitate scheduling, we can use an _acknowledge task_, a do-nothing task except it leaves a trace like other tasks when debugging is enabled. With length-1 queue scheduling, scheduling an acknowledge task twice in a row is equivalent to synchronizing the device (except for debugging traces).
-
-Running a routine, that is scheduling its task, captures the state if its static indexing bindings. Besides routines, calling `from_host_async`, `to_host_async`, `merge`, `merge_unsafe` from a backend schedules the corresponding tasks.
+Running a routine, that is scheduling its task, captures the state of its static indexing bindings. Besides routines, calling `from_host_async`, `to_host_async`, `merge`, `merge_unsafe` from a backend schedules the corresponding tasks.
 
 ### Data transfers
 
 OCANNL supports asynchronous data transfers by embedding them in the scheduling mechanism.
 
 ```ocaml
-module type No_device_backend = sig
+module type Backend = sig
   ...
   val from_host : context -> Tnode.t -> bool
   (** If the array is both hosted and in-context, copies from host to context and returns true. This function
@@ -239,13 +239,13 @@ module type No_device_backend = sig
 
   val from_host_async : context -> Tnode.t -> bool
   (** If the array is both hosted and in-context, copies from host to context and returns true. NOTE: this
-      function returns immediately and it's the caller's responsibility to synchronize the device before the
-      host's data is overwritten. *)
+      function returns once it books (schedules) the copying task and it's the caller's responsibility to
+      synchronize the device before the host's data is overwritten. *)
 
   val to_host_async : context -> Tnode.t -> bool
   (** If the array is both hosted and in-context, copies from context to host and returns true. NOTE: this
-      function returns immediately and it's the caller's responsibility to synchronize the device before the
-      host's data is read. *)
+      function returns once it books (schedules) the copying task and it's the caller's responsibility to
+      synchronize the device before the host's data is read. *)
 
   val merge : Tnode.t -> accum:Ops.binop -> dst:context -> src:context -> bool
   (** Merges the array from the source context into the destination context: [dst =: dst accum src]. If the
@@ -253,33 +253,21 @@ module type No_device_backend = sig
       host array as a buffer, if that is beneficial.) The corresponding tuple of [tnode, accum, dst, src] must
       be in the scope of an earlier {!compile_merges} call; otherwise, [merge] will fail, even if it would
       otherwise return [false]. Returns [false] if the array is not in both the [dst] and [src] contexts.
-      Otherwise, it synchronizes the [src] device, {i then} it schedules the merge task on the [dst]
-      device, then it returns [true]. NOTE: [merge] is asynchronous, it's the caller's responsibility to not
-      overwrite source before the merge completes. *)
+      Otherwise, it synchronizes the [src] device: calls [Backend.await src.device], {i then} it schedules the
+      merge task on the [dst] device, then it returns [true]. NOTE: [merge] is asynchronous, it's the caller's
+      responsibility to not overwrite source before the merge completes. *)
 
   val merge_unsafe : Tnode.t -> accum:Ops.binop -> dst:context -> src:context -> bool
   (** Merges the array from the source context into the destination context: see {!merge} for details.
-      Compared to {!merge}, [merge_unsafe] starts by scheduling an "acknowledge" task on the [src] device
-      (blocking until the latest task on [src] starts), {i then} it schedules the merge task on the [dst]
-      device. NOTE: [merge_unsafe] is likely to cause {i read before intended write} bugs. *)
+      [merge_unsafe] starts with a [Backend.acknowledge src.device] call (blocking until the latest task on
+      [src] starts), {i then} it schedules the merge task on the [dst] device. NOTE: [merge_unsafe] is likely
+      to cause {i read before intended write} bugs. *)
   ...
   val supports_merge_buffers : bool
   (** If [false], using [Ops.Merge_buffer_unsafe] in assignments will fail during {!compile} or {!link}, resp.
       {!compile_batch} or {!link_batch}. If [true], each device maintains (at most) one merge buffer, that is
       grown by calls to [compile_merges], to ensure that the merge buffer can fit the data arriving for
       {!merge}, {!merge_unsafe} tasks. *)
-end
-
-module type Backend = sig
-  include No_device_backend
-
-  type device
-
-  val init : device -> context
-
-  val await : device -> unit
-  (** Synchronizes the device. *)
-  ...
 end
 ```
 
