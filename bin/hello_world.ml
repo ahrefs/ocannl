@@ -11,7 +11,7 @@ module Rand = Arrayjit.Rand.Lib
 let hello1 () =
   Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
-  Utils.settings.with_debug <- true;
+  Utils.settings.with_debug_level <- 2;
   (* Utils.settings.output_debug_files_in_run_directory <- true; *)
   let device = Backend.get_device ~ordinal:0 in
   let ctx = Backend.init device in
@@ -28,7 +28,7 @@ let hello1 () =
 let hello2 () =
   Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
-  Utils.settings.with_debug <- true;
+  Utils.settings.with_debug_level <- 2;
   (* Utils.settings.output_debug_files_in_run_directory <- true; *)
   (* Utils.settings.debug_log_from_routines <- true; *)
   let device = Backend.get_device ~ordinal:0 in

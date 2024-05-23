@@ -303,7 +303,7 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
           Array.iter idcs ~f:(function
             | Iterator s as _idx when not (Set.mem static_indices s) ->
                 if not @@ Set.mem env_dom s then
-                  if Utils.settings.with_debug then
+                  if Utils.settings.with_debug_level > 1 then
                     [%log
                       "INFO: Inlining candidate has an escaping variable",
                         (_idx : Indexing.axis_index),
@@ -324,7 +324,7 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
           Array.iter idcs ~f:(function
             | Iterator s when not (Set.mem static_indices s) ->
                 if not @@ Set.mem env_dom s then (
-                  if Utils.settings.with_debug then
+                  if Utils.settings.with_debug_level > 1 then
                     [%log "Inlining candidate has an escaping variable", (s : Indexing.symbol), (top_llc : t)];
                   raise @@ Non_virtual 9)
             | _ -> ())
@@ -334,7 +334,7 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
     | Embed_index (Fixed_idx _) -> ()
     | Embed_index (Iterator s) ->
         if not @@ Set.mem env_dom s then (
-          if Utils.settings.with_debug && not (Set.mem static_indices s) then
+          if Utils.settings.with_debug_level > 1 && not (Set.mem static_indices s) then
             [%log "Inlining candidate has an escaping variable", (s : Indexing.symbol), (top_llc : t)];
           raise @@ Non_virtual 10)
     | Binop (_, llv1, llv2) ->

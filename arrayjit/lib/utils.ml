@@ -26,7 +26,7 @@ type settings = {
   mutable debug_log_from_routines : bool;
   mutable debug_memory_locations : bool;
   mutable output_debug_files_in_run_directory : bool;
-  mutable with_debug : bool;
+  mutable with_debug_level : int;
   mutable fixed_state_for_init : int option;
   mutable print_decimals_precision : int;  (** When rendering arrays etc., outputs this many decimal digits. *)
 }
@@ -37,7 +37,7 @@ let settings =
     debug_log_from_routines = false;
     debug_memory_locations = false;
     output_debug_files_in_run_directory = false;
-    with_debug = false;
+    with_debug_level = 0;
     fixed_state_for_init = None;
     print_decimals_precision = 2;
   }
@@ -45,7 +45,7 @@ let settings =
 let accessed_global_args = Hash_set.create (module String)
 
 let read_cmdline_or_env_var n =
-  let with_debug = settings.with_debug && not (Hash_set.mem accessed_global_args n) in
+  let with_debug = settings.with_debug_level > 0 && not (Hash_set.mem accessed_global_args n) in
   let env_variants = [ "ocannl_" ^ n; "ocannl-" ^ n ] in
   let env_variants = List.concat_map env_variants ~f:(fun n -> [ n; String.uppercase n ]) in
   let cmd_variants = List.concat_map env_variants ~f:(fun n -> [ n; "-" ^ n; "--" ^ n ]) in
@@ -108,7 +108,7 @@ let config_file_args =
 (** Retrieves [arg_name] argument from the command line or from an environment variable, returns [default] if
     none found. *)
 let get_global_arg ~default ~arg_name:n =
-  let with_debug = settings.with_debug && not (Hash_set.mem accessed_global_args n) in
+  let with_debug = settings.with_debug_level > 0 && not (Hash_set.mem accessed_global_args n) in
   if with_debug then
     Stdio.printf "Retrieving commandline, environment, or config file variable ocannl_%s\n%!" n;
   let result =
@@ -125,7 +125,7 @@ let get_global_arg ~default ~arg_name:n =
   result
 
 let () =
-  settings.with_debug <- Bool.of_string @@ get_global_arg ~arg_name:"with_debug" ~default:"false";
+  settings.with_debug_level <- Int.of_string @@ get_global_arg ~arg_name:"with_debug_level" ~default:"0";
   settings.debug_log_from_routines <-
     Bool.of_string @@ get_global_arg ~arg_name:"debug_log_from_routines" ~default:"false";
   settings.debug_memory_locations <-

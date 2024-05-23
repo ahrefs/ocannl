@@ -14,7 +14,7 @@ let num_devices = 5
 (* let num_devices = 1 *)
 
 let experiment ~seed () =
-  Utils.settings.with_debug <- true;
+  Utils.settings.with_debug_level <- 1;
   Utils.settings.output_debug_files_in_run_directory <- true;
   (* Utils.settings.debug_log_from_routines <- true; *)
   let hid_dim = 16 in

@@ -137,7 +137,7 @@ let () =
 
 let _suspended () =
   Rand.init 0;
-  Utils.settings.with_debug <- true;
+  Utils.settings.with_debug_level <- 2;
   Utils.settings.output_debug_files_in_run_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in

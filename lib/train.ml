@@ -20,14 +20,14 @@ module CDSL = struct
   let virtualize_settings = Arrayjit.Low_level.virtualize_settings
 
   let enable_all_debugs ?(debug_logs = false) ?(hosted_only = true) () =
-    Utils.settings.with_debug <- true;
+    Utils.settings.with_debug_level <- max 1 @@ Utils.settings.with_debug_level;
     Utils.settings.output_debug_files_in_run_directory <- true;
     if hosted_only then virtualize_settings.enable_device_only <- false;
     if debug_logs then Utils.settings.debug_log_from_routines <- true
 
   let disable_all_debugs ?(restore_defaults = false) () =
     Utils.settings.debug_log_from_routines <- false;
-    Utils.settings.with_debug <- false;
+    Utils.settings.with_debug_level <- 0;
     Utils.settings.output_debug_files_in_run_directory <- false;
     if restore_defaults then virtualize_settings.enable_device_only <- true
 end
