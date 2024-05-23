@@ -54,16 +54,15 @@ let hello3 () =
   let y = TDSL.O.(( + ) ~label:[ "y" ] (hey * zero_to_twenty) zero_to_twenty) in
   Train.set_hosted hey.value;
   let routine = Backend.(link ctx @@ compile IDX.empty @@ Train.forward y) in
-  if Backend.from_host routine.context hey.value then Stdio.printf "Transferred <hey> to device.\n%!";
-  if Backend.from_host routine.context zero_to_twenty.value then
-    Stdio.printf "Transferred <zero_to_twenty> to device.\n%!";
+  Backend.from_host routine.context hey.value;
+  Backend.from_host routine.context zero_to_twenty.value;
   Tensor.print ~with_code:true ~with_grad:false `Inline zero_to_twenty;
   Tensor.print ~with_code:true ~with_grad:false `Default zero_to_twenty;
   Tensor.print_tree ~with_grad:false ~depth:9 zero_to_twenty;
   Stdlib.Format.print_newline ();
   Train.run routine;
   Backend.await device;
-  if Backend.to_host routine.context y.value then Stdio.printf "Transferred <hey> to to host.\n%!";
+  Backend.to_host routine.context y.value;
   Tensor.print ~with_code:true ~with_grad:false `Default y;
   Stdlib.Format.force_newline ();
   Tensor.print_tree ~with_grad:false ~depth:9 y;

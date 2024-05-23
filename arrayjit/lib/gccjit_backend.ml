@@ -719,103 +719,61 @@ let%track_sexp link_compiled (old_context : context) (code : procedure) : contex
   in
   (context, Indexing.lowered_bindings code.bindings run_variadic, schedule, name)
 
-let%track_sexp from_host (context : context) (la : Tn.t) : bool =
-  match Map.find context.arrays la with
-  | None -> false
-  | Some c_arr -> (
-      match la.Tn.array with
+let%track_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (context : context)
+    (tn : Tn.t) : unit =
+  Option.iter (Map.find context.arrays tn) ~f:(fun c_arr ->
+      match tn.Tn.array with
       | (lazy (Some h_arr)) ->
           Ndarray.map2 { f2 = Ndarray.A.blit } h_arr c_arr;
-          [%log_printbox
-            let indices = Array.init (Array.length @@ Lazy.force la.dims) ~f:(fun i -> i - 5) in
-            Ndarray.render_array ~indices c_arr];
-          true
-      | (lazy None) -> false)
+          if Utils.settings.with_debug_level > 0 then (
+            let module Debug_runtime =
+              (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
+            in
+            [%log "copied", Tn.label tn, Tn.name tn, "from host"];
+            if Utils.settings.with_debug_level > 1 then
+              [%log_printbox
+                let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
+                Ndarray.render_array ~indices c_arr])
+      | (lazy None) -> ())
 
-let%track_sexp to_host (context : context) (la : Tn.t) : bool =
-  match Map.find context.arrays la with
-  | None -> false
-  | Some c_arr -> (
-      match la.Tn.array with
+let%track_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (context : context) (tn : Tn.t)
+    : unit =
+  Option.iter (Map.find context.arrays tn) ~f:(fun c_arr ->
+      match tn.Tn.array with
       | (lazy (Some h_arr)) ->
           Ndarray.map2 { f2 = Ndarray.A.blit } c_arr h_arr;
-          [%log_printbox
-            let indices = Array.init (Array.length @@ Lazy.force la.dims) ~f:(fun i -> i - 5) in
-            Ndarray.render_array ~indices h_arr];
-          true
-      | _ -> false)
+          if Utils.settings.with_debug_level > 0 then (
+            let module Debug_runtime =
+              (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
+            in
+            [%log "copied", Tn.label tn, Tn.name tn, "to host"];
+            if Utils.settings.with_debug_level > 1 then
+              [%log_printbox
+                let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
+                Ndarray.render_array ~indices h_arr])
+      | (lazy None) -> ())
 
-let%track_sexp merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst ~accum ~src =
-  let body idcs =
-    Low_level.(
-      Set
-        {
-          tn = dst;
-          idcs;
-          llv =
-            Binop
-              ( accum,
-                Get (dst, idcs),
-                Get_global (External_unsafe { ptr = src; prec = dst.Tn.prec; dims = dst.dims }, Some idcs) );
-          debug = "";
-        })
-  in
-  let llc = Low_level.loop_over_dims (Lazy.force dst.dims) ~body in
-  Low_level.optimize_proc ~unoptim_ll_source ~ll_source ~name [] llc
+let%track_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn ~into_merge_buffer
+    ~dst ~src =
+  Option.iter (Map.find src.arrays tn) ~f:(fun s_arr ->
+      Option.iter (Map.find dst.arrays tn) ~f:(fun d_arr ->
+          if into_merge_buffer then failwith "NOT IMPLEMENTED YET"
+          else Ndarray.map2 { f2 = Ndarray.A.blit } s_arr d_arr;
+          if Utils.settings.with_debug_level > 0 then (
+            let module Debug_runtime =
+              (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
+            in
+            [%log
+              "copied",
+                Tn.label tn,
+                Tn.name tn,
+                "using merge buffer",
+                (into_merge_buffer : bool),
+                "from device",
+                (Backend.get_ctx_device src |> Backend.to_ordinal : int)];
+            if Utils.settings.with_debug_level > 1 then
+              [%log_printbox
+                let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
+                Ndarray.render_array ~indices d_arr])))
 
-let%track_sexp merge ?name_prefix la ~accum ~(src : context) bindings =
-  (* FIXME: reconstruct name if missing *)
-  let name = Option.value name_prefix ~default:"" in
-  let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ "-unoptimized.ll") in
-  let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
-  let name_prefix : string = Option.value ~default:"" @@ Option.map name_prefix ~f:(fun s -> s ^ "_") in
-  Option.map (Map.find src.arrays la) ~f:(fun (src : Ndarray.t) ->
-      let name = [%string "%{name_prefix}into_%{Tn.name la}"] in
-      compile ~opt_ctx_arrays:None ~name bindings
-      @@ merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst:la ~accum ~src:(Ndarray.get_voidptr src))
-
-let%track_sexp merge_batch ?(name_prefixes : string array option) ~occupancy tns ~accum
-    ~(srcs : context array) bindings =
-  (* FIXME: reconstruct name if missing *)
-  let name =
-    String.(
-      strip ~drop:(equal_char '_')
-      @@ common_prefix @@ Array.to_list
-      @@ Option.value name_prefixes ~default:[||])
-  in
-  let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ "-unoptimized.ll") in
-  let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
-  let complete =
-    Array.concat_map (Array.of_list tns) ~f:(fun tn ->
-        Array.mapi srcs ~f:(fun i src ->
-            match (occupancy tn ~src_n:i ~src, Map.find src.arrays tn) with
-            | Utils.Skip, _ -> ((tn, i), (None, None))
-            | Optional { callback_if_missing }, None ->
-                callback_if_missing ();
-                ((tn, i), (None, None))
-            | Required, None ->
-                failwith @@ "Gccjit_backend.merge_batch: missing tnode " ^ Tn.name tn ^ " in context "
-                ^ src.label
-            | _, Some src ->
-                let prefix = match name_prefixes with Some ns -> ns.(i) ^ "_" | None -> "" in
-                let name = [%string "%{prefix}into_%{Tn.name tn}"] in
-                ( (tn, i),
-                  ( Some name,
-                    Some
-                      (merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst:tn ~accum
-                         ~src:(Ndarray.get_voidptr src)) ) )))
-  in
-  let ids, compileds = Array.unzip complete in
-  let len = Array.length srcs in
-  let together =
-    Hashtbl.of_alist_exn (module Tn) @@ List.map tns ~f:(fun tn -> (tn, Array.create ~len None))
-  in
-  if Array.is_empty compileds then together
-  else
-    let names, compileds = Array.unzip compileds in
-    let result = compile_batch ~opt_ctx_arrays:None ~names bindings compileds in
-    Array.iter2_exn ids result ~f:(fun (tn, i) res ->
-        let r = Hashtbl.find_exn together tn in
-        assert (Option.is_none r.(i));
-        r.(i) <- res);
-    together
+let physical_merge_buffers = false

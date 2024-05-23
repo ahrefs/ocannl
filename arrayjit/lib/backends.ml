@@ -45,78 +45,50 @@ module type No_device_backend = sig
       be backend-specific differences. Only array entries for which [occupancy] returns true are included. *)
 
   val link : context -> code -> routine
-  (** Returns the routine for the code's procedure, in a new context derived from the given context. See also
-      [supports_merge_buffers]. *)
+  (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
 
   val link_batch : context -> code_batch -> routine option array
   (** Returns the routines for the procedures included in the code batch. All returned routines share the same
-      new context. See also [supports_merge_buffers]. *)
+      new context. *)
 
   val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
   (** Cleans up all work on a backend. If [~unsafe_shutdown:true], releases resources, potentially making the
       backend unusable. *)
 
-  val from_host_callback : context -> Tnode.t -> Tnode.work option
-  val to_host_callback : context -> Tnode.t -> Tnode.work option
-  val merge_callback : Tnode.t -> accum:Ops.binop -> dst:context -> src:context -> Tnode.work option
+  val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
+  (** If the array is both hosted and in-context, schedules a copy from host to context, otherwise does
+      nothing. NOTE: when run for a device, the call books the copying and it's the caller's responsibility to
+      synchronize the device before the host's data is overwritten. *)
 
-  val compile_merges :
-    ?name_prefixes:string array ->
-    occupancy:(Tnode.t -> dst_n:int -> dst:context -> src_n:int -> src:context -> Utils.requirement) ->
-    Tnode.t list ->
-    accum:Ops.binop ->
-    dsts:context array ->
-    srcs:context array ->
+  val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
+  (** If the array is both hosted and in-context, schedules a copy from context to host, otherwise does
+      nothing. NOTE: when run for a device, the call books the copying and it's the caller's responsibility to
+      synchronize the device before the host's data is read. *)
+
+  val device_to_device :
+    ?rt:(module Minidebug_runtime.Debug_runtime) ->
+    Tnode.t ->
+    into_merge_buffer:bool ->
+    dst:context ->
+    src:context ->
     unit
-  (** Compiles the code, if any, required by [merge], as if applying [compile_batch] to [srcs] for each of
-      [dsts]. Includes only the merges for for which [occupancy] does not return [Skip], and the node is
-      present in both the destination and the source. *)
+  (** If the array is present in the [src] context, and in the [dst] context in case
+      [~into_merge_buffer:false], schedules a copy of the tensor node from the device of [src] to the device
+      of [dst]; otherwise, if [~into_merge_buffer:true], unsets the merge buffer source on [dst]. If
+      [~into_merge_buffer:false], copies into the given node on [dst]; if [~into_merge_buffer:true], sets on
+      [dst] the merge buffer source to the given node and handles the transfer using it. NOTE: when run for a
+      device, the call books the copying and it's the caller's responsibility to synchronize the [src] device,
+      if needed, {i before} calling [device_to_device], and the [dst] device {i afterward}, according to
+      {!physical_merge_buffers}, before any computations on the [src] device overwrite the node. *)
 
-  val supports_merge_buffers : bool
-  (** If [false], using [Ops.Merge_buffer_unsafe] in assignments will fail during {!compile} or {!link}, resp.
-      {!compile_batch} or {!link_batch}. If [true], each device maintains (at most) one merge buffer, that is
-      grown by calls to [compile_merges], to ensure that the merge buffer can fit the data arriving for
-      {!merge}, {!merge_unsafe} tasks. *)
+  val physical_merge_buffers : bool
+  (** If [physical_merge_buffers = true], the [src] node data is not needed after the task scheduled by
+      [device_to_device] finishes. Otherwise, the [src] node data may be needed till after the tasks computing
+      with the merge buffer finish. *)
 end
 
 module type Backend = sig
   include No_device_backend
-
-  val from_host : context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, copies from host to context and returns true. This function
-      is synchronous in the sense that when it returns, the host data is no longer needed. Beware that
-      depending on the backend, calling [from_host] might even synchronize all devices of the backend. *)
-
-  val to_host : context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, copies from context to host and returns true. This function
-      is synchronous: returns when fully complete. Beware that depending on the backend, calling [to_host]
-      might even synchronize all devices of the backend. *)
-
-  val from_host_async : context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, copies from host to context and returns true. NOTE: this
-      function returns once it books (schedules) the copying task and it's the caller's responsibility to
-      synchronize the device before the host's data is overwritten. *)
-
-  val to_host_async : context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, copies from context to host and returns true. NOTE: this
-      function returns once it books (schedules) the copying task and it's the caller's responsibility to
-      synchronize the device before the host's data is read. *)
-
-  val merge : Tnode.t -> accum:Ops.binop -> dst:context -> src:context -> bool
-  (** Merges the array from the source context into the destination context: [dst =: dst accum src]. If the
-      array is hosted, its state on host is undefined after this operation. (A backend may choose to use the
-      host array as a buffer, if that is beneficial.) The corresponding tuple of [tnode, accum, dst, src] must
-      be in the scope of an earlier {!compile_merges} call; otherwise, [merge] will fail, even if it would
-      otherwise return [false]. Returns [false] if the array is not in both the [dst] and [src] contexts.
-      Otherwise, it synchronizes the [src] device: calls [Backend.await src.device], {i then} it schedules the
-      merge task on the [dst] device, then it returns [true]. NOTE: [merge] is asynchronous, it's the caller's
-      responsibility to not overwrite source before the merge completes. *)
-
-  val merge_unsafe : Tnode.t -> accum:Ops.binop -> dst:context -> src:context -> bool
-  (** Merges the array from the source context into the destination context: see {!merge} for details.
-      [merge_unsafe] starts with a [Backend.acknowledge src.device] call (blocking until the latest task on
-      [src] starts), {i then} it schedules the merge task on the [dst] device. NOTE: [merge_unsafe] is likely
-      to cause {i read before intended write} bugs. *)
 
   type device
 
@@ -170,7 +142,6 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let init device = { device; ctx = Backend.init ~label:(name ^ " " ^ Int.to_string device.ordinal) }
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
-  let supports_merge_buffers = Backend.supports_merge_buffers
   let is_idle device = !(device.is_idle)
   let is_booked device = Option.is_some !(device.next_task)
 
@@ -193,13 +164,14 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let compile = Backend.compile
   let compile_batch = Backend.compile_batch
 
+  let schedule_task device task =
+    acknowledge device;
+    if not !(device.keep_spinning) then invalid_arg "Multicore_backend: device not available";
+    device.next_task := Some task;
+    device.wait_for_work.release ()
+
   let make_work device task =
-    let%diagn_rt_sexp work () =
-      acknowledge device;
-      if not !(device.keep_spinning) then invalid_arg "Multicore_backend: device not available";
-      device.next_task := Some task;
-      device.wait_for_work.release ()
-    in
+    let%diagn_rt_sexp work () = schedule_task device task in
     Tnode.Work work
 
   let link { ctx; device } code =
@@ -220,71 +192,32 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
              in
              { task with context = { ctx = task.context; device }; schedule }))
 
-  let from_host { device; ctx } tn =
-    match Backend.from_host_callback ctx tn with
-    | None -> false
-    | Some task ->
-        await device;
-        Tnode.run (module Debug_runtime) task;
-        true
+  (* let from_host_callback { device; ctx } tn = Option.map (Backend.from_host_callback ctx tn) ~f:(fun task
+     -> make_work device task)
 
-  let to_host { device; ctx } tn =
-    match Backend.to_host_callback ctx tn with
-    | None -> false
-    | Some task ->
-        await device;
-        Tnode.run (module Debug_runtime) task;
-        true
+     let to_host_callback { device; ctx } tn = Option.map (Backend.to_host_callback ctx tn) ~f:(fun task ->
+     make_work device task) *)
 
-  let from_host_callback { device; ctx } tn =
-    Option.map (Backend.from_host_callback ctx tn) ~f:(fun task -> make_work device task)
+  let from_host ?rt context tn =
+    if Option.is_some rt then
+      raise @@ Utils.User_error "Multicore_backend.from_host: backend cannot be nested in another runtime";
+    let work rt () = Backend.from_host ~rt context.ctx tn in
+    schedule_task context.device (Tnode.Work work)
 
-  let to_host_callback { device; ctx } tn =
-    Option.map (Backend.to_host_callback ctx tn) ~f:(fun task -> make_work device task)
+  let to_host ?rt context tn =
+    if Option.is_some rt then
+      raise @@ Utils.User_error "Multicore_backend.to_host: backend cannot be nested in another runtime";
+    let work rt () = Backend.to_host ~rt context.ctx tn in
+    schedule_task context.device (Tnode.Work work)
 
-  let from_host_async context tn =
-    match from_host_callback context tn with
-    | None -> false
-    | Some task ->
-        Tnode.run (module Debug_runtime) task;
-        true
+  let device_to_device ?rt tn ~into_merge_buffer ~dst ~src =
+    if Option.is_some rt then
+      raise
+      @@ Utils.User_error "Multicore_backend.device_to_device: backend cannot be nested in another runtime";
+    let work rt () = Backend.device_to_device ~rt tn ~into_merge_buffer ~dst:dst.ctx ~src:src.ctx in
+    schedule_task dst.device (Tnode.Work work)
 
-  let to_host_async context tn =
-    match to_host_callback context tn with
-    | None -> false
-    | Some task ->
-        Tnode.run (module Debug_runtime) task;
-        true
-
-  let merge_callback tn ~accum ~dst ~src =
-    Option.map (Backend.merge_callback tn ~accum ~dst:dst.ctx ~src:src.ctx) ~f:(fun task ->
-        make_work dst.device task)
-
-  let merge tn ~accum ~dst ~src =
-    match merge_callback tn ~accum ~dst ~src with
-    | None -> false
-    | Some task ->
-        await src.device;
-        Tnode.run (module Debug_runtime) task;
-        true
-
-  let merge_unsafe tn ~accum ~dst ~src =
-    match merge_callback tn ~accum ~dst ~src with
-    | None -> false
-    | Some task ->
-        acknowledge src.device;
-        Tnode.run (module Debug_runtime) task;
-        true
-
-  let compile_merges ?name_prefixes ~occupancy tns ~accum ~dsts ~srcs =
-    let ctxs = Array.map ~f:(fun ctx -> ctx.ctx) in
-    let occupancy tn ~dst_n ~dst:_ ~src_n ~src:_ =
-      let dst = dsts.(dst_n) in
-      let src = srcs.(src_n) in
-      occupancy tn ~dst_n ~dst ~src_n ~src
-    in
-    Backend.compile_merges ?name_prefixes ~occupancy tns ~accum ~dsts:(ctxs dsts) ~srcs:(ctxs srcs)
-
+  let physical_merge_buffers = Backend.physical_merge_buffers
   let num_devices () = Domain.recommended_domain_count () - 1
   let global_run_no = ref 0
 
@@ -404,31 +337,24 @@ module type Simple_backend = sig
   val link_compiled :
     context -> procedure -> context * Indexing.lowered_bindings * (unit -> Tnode.work) * string
 
-  val merge :
-    ?name_prefix:string ->
+  val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
+  val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
+
+  val device_to_device :
+    ?rt:(module Minidebug_runtime.Debug_runtime) ->
     Tnode.t ->
-    accum:Ops.binop ->
+    into_merge_buffer:bool ->
+    dst:context ->
     src:context ->
-    Indexing.unit_bindings ->
-    procedure option
+    unit
 
-  val merge_batch :
-    ?name_prefixes:string array ->
-    occupancy:(Tnode.t -> src_n:int -> src:context -> Utils.requirement) ->
-    Tnode.t list ->
-    accum:Ops.binop ->
-    srcs:context array ->
-    Indexing.unit_bindings ->
-    (Tnode.t, procedure option array) Base.Hashtbl.t
-
+  val physical_merge_buffers : bool
   val name : string
   val initialize : unit -> unit
   val is_initialized : unit -> bool
   val init : label:string -> context
   val finalize : context -> unit
   val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
-  val from_host_callback : context -> Tnode.t -> Tnode.work option
-  val to_host_callback : context -> Tnode.t -> Tnode.work option
 end
 
 module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend = struct
@@ -482,16 +408,6 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
         (Option.map ~f:(fun proc ->
              let context, bindings, schedule, name = link_compiled old_context proc in
              { context; schedule; bindings; name }))
-
-  let merge ?name_prefix tn ~accum ~(src : context) : code option =
-    let bindings = Indexing.Empty in
-    merge ?name_prefix tn ~accum ~src bindings |> Option.map ~f:(fun routine : code -> Compiled routine)
-
-  let merge_batch ?name_prefixes ~occupancy tns ~accum ~(srcs : context array) =
-    let bindings = Indexing.Empty in
-    merge_batch ?name_prefixes ~occupancy tns ~accum ~srcs bindings
-    |> Hashtbl.map ~f:(fun procs ->
-           Array.map procs ~f:(Option.map ~f:(fun routine : code -> Compiled routine)))
 end
 
 module Gccjit_device : No_device_backend = Simple_no_device_backend ((
@@ -500,22 +416,11 @@ module Gccjit_device : No_device_backend = Simple_no_device_backend ((
 module Gccjit_backend = Multicore_backend (Gccjit_device)
 
 module Cuda_backend : Backend with type context = Cuda_backend.context = struct
-  type code = Cuda_backend.code [@@deriving sexp_of]
-  type code_batch = Cuda_backend.code_batch [@@deriving sexp_of]
-  type context = Cuda_backend.context [@@deriving sexp_of]
-  type device = Cuda_backend.device
+  include Cuda_backend
+
   type nonrec routine = context routine [@@deriving sexp_of]
 
-  open Cuda_backend
-
   let name = "cuda"
-  let initialize = initialize
-  let is_initialized = is_initialized
-  let unsafe_cleanup ?unsafe_shutdown () = unsafe_cleanup ?unsafe_shutdown ()
-  let init = init
-  let finalize = finalize
-  let sexp_of_context = sexp_of_context
-  let sexp_of_device = sexp_of_device
 
   let compile ?shared:_ ?name bindings asgns : code =
     let name, lowered = lower_assignments ?name bindings asgns in
@@ -533,20 +438,6 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
     let context, bindings, schedules = link_batch context code_batch in
     Array.map schedules ~f:(Option.map ~f:(fun schedule -> { context; schedule; bindings; name }))
 
-  let from_host = from_host
-  let to_host = to_host
-
-  let merge ?name_prefix tn ~accum ~(src : context) =
-    let bindings = Indexing.Empty in
-    ignore (bindings, name_prefix, tn, accum, src);
-    failwith "NOT IMPLEMENTED YET"
-
-  let merge_batch ?name_prefixes:_ ~occupancy:_ _tns ~accum:_ ~srcs:_ = failwith "NOT IMPLEMENTED YET"
-  let await = await
-  let num_devices = num_devices
-  let get_device = get_device
-  let get_ctx_device = get_ctx_device
-  let to_ordinal = to_ordinal
   let get_all_devices () = Array.init (num_devices ()) ~f:(fun ordinal -> get_device ~ordinal)
 end
 

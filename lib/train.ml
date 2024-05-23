@@ -254,28 +254,11 @@ let every_non_literal_on_host =
 
 let%debug_sexp all_host_to_device (type context) (module Backend : Backend_type with type context = context)
     context =
-  Tensor.iter_embedded_arrays ~f:(fun a ->
-      let b = Backend.from_host context a in
-      if b then
-        [%log
-          "copied",
-            Tn.label a,
-            Tn.name a,
-            "from host to device",
-            (Backend.get_ctx_device context |> Backend.to_ordinal : int)])
+  Tensor.iter_embedded_arrays ~f:(Backend.from_host context)
 
 let%debug_sexp all_device_to_host (type context) (module Backend : Backend_type with type context = context)
     context =
-  Tensor.iter_embedded_arrays ~f:(fun a ->
-      let b = Backend.to_host context a in
-      if b then
-        [%log
-          "copied",
-            Tn.label a,
-            Tn.name a,
-            "from device",
-            (Backend.get_ctx_device context |> Backend.to_ordinal : int),
-            "to host"])
+  Tensor.iter_embedded_arrays ~f:(Backend.to_host context)
 
 (** Executes the jitted code and copies arrays embedded in the given tenosor from and to host, synchronizes
     before copying to host. If [looping] is provided, loops over bindings and executes the given function
@@ -297,6 +280,100 @@ let sync_run ?looping (type context) (module Backend : Backend_type with type co
   all_device_to_host (module Backend) routine.context t
 
 module Lazy = Utils.Lazy
+
+(** {[
+      let merge ?name_prefix tn ~accum ~(src : context) : code option =
+        let bindings = Indexing.Empty in
+        merge ?name_prefix tn ~accum ~src bindings |> Option.map ~f:(fun routine : code -> Compiled routine)
+
+      let merge_batch ?name_prefixes ~occupancy tns ~accum ~(srcs : context array) =
+        let bindings = Indexing.Empty in
+        merge_batch ?name_prefixes ~occupancy tns ~accum ~srcs bindings
+        |> Hashtbl.map ~f:(fun procs ->
+               Array.map procs ~f:(Option.map ~f:(fun routine : code -> Compiled routine)))
+
+      let%track_sexp merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst ~accum ~src =
+        let global =
+          match src with
+          | None -> Arrayjit.Ops.Merge_buffer_unsafe
+          | Some src -> External_unsafe { ptr = src; prec = dst.Arrayjit.Tnode.prec; dims = dst.dims }
+        in
+        let open Arrayjit.Low_level in
+        let body idcs =
+          Set
+            {
+              tn = dst;
+              idcs;
+              llv = Binop (accum, Get (dst, idcs), Get_global (global, Some idcs));
+              debug = "";
+            }
+        in
+        let llc = loop_over_dims (Lazy.force dst.dims) ~body in
+        optimize_proc ~unoptim_ll_source ~ll_source ~name [] llc
+
+      let compile_merges ?name_prefixes:_ ~occupancy:_
+          (* Tnode.t -> dst_n:int -> dst:context -> src_n:int -> src:context -> Utils.requirement *) _tns
+          ~accum:_ ~dsts:_ ~srcs:_ =
+        failwith "NOT IMPLEMENTED YET"
+
+      let%track_sexp merge (type context) ?name_prefix la ~accum ~(src : context) bindings =
+        (* FIXME: reconstruct name if missing *)
+        let name = Option.value name_prefix ~default:"" in
+        let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ "-unoptimized.ll") in
+        let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
+        let name_prefix : string = Option.value ~default:"" @@ Option.map name_prefix ~f:(fun s -> s ^ "_") in
+        Option.map (Map.find src.arrays la) ~f:(fun (src : Ndarray.t) ->
+            let name = [%string "%{name_prefix}into_%{Tn.name la}"] in
+            compile ~opt_ctx_arrays:None ~name bindings
+            @@ merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst:la ~accum
+                 ~src:(Ndarray.get_voidptr src))
+
+      let%track_sexp merge_batch ?(name_prefixes : string array option) ~occupancy tns ~accum
+          ~(srcs : context array) bindings =
+        (* FIXME: reconstruct name if missing *)
+        let name =
+          String.(
+            strip ~drop:(equal_char '_')
+            @@ common_prefix @@ Array.to_list
+            @@ Option.value name_prefixes ~default:[||])
+        in
+        let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ "-unoptimized.ll") in
+        let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
+        let complete =
+          Array.concat_map (Array.of_list tns) ~f:(fun tn ->
+              Array.mapi srcs ~f:(fun i src ->
+                  match (occupancy tn ~src_n:i ~src, Map.find src.arrays tn) with
+                  | Utils.Skip, _ -> ((tn, i), (None, None))
+                  | Optional { callback_if_missing }, None ->
+                      callback_if_missing ();
+                      ((tn, i), (None, None))
+                  | Required, None ->
+                      failwith @@ "Gccjit_backend.merge_batch: missing tnode " ^ Tn.name tn ^ " in context "
+                      ^ src.label
+                  | _, Some src ->
+                      let prefix = match name_prefixes with Some ns -> ns.(i) ^ "_" | None -> "" in
+                      let name = [%string "%{prefix}into_%{Tn.name tn}"] in
+                      ( (tn, i),
+                        ( Some name,
+                          Some
+                            (merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst:tn ~accum
+                               ~src:(Ndarray.get_voidptr src)) ) )))
+        in
+        let ids, compileds = Array.unzip complete in
+        let len = Array.length srcs in
+        let together =
+          Hashtbl.of_alist_exn (module Tn) @@ List.map tns ~f:(fun tn -> (tn, Array.create ~len None))
+        in
+        if Array.is_empty compileds then together
+        else
+          let names, compileds = Array.unzip compileds in
+          let result = compile_batch ~opt_ctx_arrays:None ~names bindings compileds in
+          Array.iter2_exn ids result ~f:(fun (tn, i) res ->
+              let r = Hashtbl.find_exn together tn in
+              assert (Option.is_none r.(i));
+              r.(i) <- res);
+          together
+    ]} *)
 
 let collapse_merges merges =
   Hashtbl.data merges
@@ -337,9 +414,9 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     if Array.exists ~f:Fn.id occupancies.(src_n) then Utils.Required else Utils.Skip
   in
   let name_prefixes = Array.create ~len:num_devices "grad_merge" in
+  let merge_batch ~name_prefixes:_ ~occupancy:_ _tns ~accum:_ ~srcs:_ = failwith "NOT IMPLEMENTED YET" in
   let grad_merges =
-    collapse_merges
-    @@ Backend.merge_batch ~name_prefixes ~occupancy param_grads ~accum:Arrayjit.Ops.Add ~srcs:ctxs
+    collapse_merges @@ merge_batch ~name_prefixes ~occupancy param_grads ~accum:Arrayjit.Ops.Add ~srcs:ctxs
   in
   let grad_merges =
     Array.init num_devices ~f:(fun (to_ : int) ->
@@ -351,7 +428,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   let name_prefixes = Array.create ~len:num_devices "loss_merge" in
   let loss_merges =
     collapse_merges
-    @@ Backend.merge_batch ~name_prefixes ~occupancy [ updaten.loss.value ] ~accum:Arrayjit.Ops.Add ~srcs:ctxs
+    @@ merge_batch ~name_prefixes ~occupancy [ updaten.loss.value ] ~accum:Arrayjit.Ops.Add ~srcs:ctxs
   in
   let loss_merges =
     Array.init num_devices ~f:(fun (to_ : int) ->
@@ -374,7 +451,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   in
   let copies =
     collapse_merges
-    @@ Backend.merge_batch ~name_prefixes:[| "param_copy" |] ~occupancy param_vals ~accum:Arrayjit.Ops.Arg2
+    @@ merge_batch ~name_prefixes:[| "param_copy" |] ~occupancy param_vals ~accum:Arrayjit.Ops.Arg2
          ~srcs:[| sgd_update.context |]
   in
   let copies =
@@ -390,9 +467,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     Tn.run debug_rt @@ sgd_update.schedule ();
     (* We need to wait, because copying happens on other devices. *)
     Backend.(await @@ get_ctx_device sgd_update.context);
-    Set.iter !needed_on_host ~f:(fun p ->
-        if not @@ Backend.to_host sgd_update.context p then
-          invalid_arg @@ "Train.parallel_update: parameter missing on one of the devices: " ^ Tn.name p);
+    Set.iter !needed_on_host ~f:(fun p -> Backend.to_host sgd_update.context p);
     (* We will need to update params on all devices! Not only the ones that computed gradients. *)
     for to_ = 1 to num_devices - 1 do
       List.iter copies.(to_ - 1) ~f:(Tn.run debug_rt)
@@ -454,9 +529,9 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
       ~grad_updates ~sgd_update update
       ~post_sync:(fun ~num_synced_devices ->
         step_ref := !step_ref + num_synced_devices;
-        assert (Backend.to_host sgd_update.context learning_rate.value);
+        Backend.to_host sgd_update.context learning_rate.value;
         (* scalar_loss is not in the sgd_update context. *)
-        assert (Backend.to_host grad_updates.(0).context scalar_loss.value);
+        Backend.to_host grad_updates.(0).context scalar_loss.value;
         let batch_loss = scalar_loss.@[0] in
         epoch_loss := !epoch_loss +. batch_loss;
         batch_losses := batch_loss :: !batch_losses;
@@ -485,10 +560,10 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   let infer_callback values =
     Tensor.set_values infer values;
     (* For the gccjit backend, infer is only on host, not on device. For cuda, this will be needed. *)
-    ignore (Backend.from_host routine.context infer.value : bool);
+    Backend.from_host routine.context infer.value;
     run routine;
     Backend.await devices.(0);
-    assert (Backend.to_host routine.context model_result.value);
+    Backend.to_host routine.context model_result.value;
     Tensor.get_values model_result
   in
   (* Note: infer_callback is significantly less efficient than using the model via arrayjit. *)

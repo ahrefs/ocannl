@@ -152,7 +152,7 @@ module type Simple_backend = sig
 end
 ```
 
-Contexts track (or store) the on-device arrays corresponding to tensor nodes. Context form a hierarchy: linking takes a parent context and outputs a child context. Related contexts that use a tensor node must use the same on-device array for the tensor node. If two unrelated contexts are on the same device, i.e. have a common ancestor, and use the same tensor node, the behavior is undefined. For CPU backends, the arrays might be stored as:
+Contexts track (or store) the on-device arrays corresponding to tensor nodes. Contexts form a hierarchy: linking takes a parent context and outputs a child context. Related contexts that use a tensor node must use the same on-device array for the tensor node. If two unrelated contexts are on the same device, i.e. have a common ancestor, and use the same tensor node, the behavior is undefined. For CPU backends, the arrays might be stored as:
 
 ```ocaml
 type ctx_arrays = Ndarray.t Map.M(Tn).t
@@ -218,57 +218,47 @@ Currently, OCANNL expects backends to implement a _length-1 queue_ scheduling me
 
 Since this is significantly simpler than what other frameworks do, it might evolve in the future, but let's see how far it gets us. (In particular, scheduling in `tinygrad` expresses tensor graph dependencies with arbitrary queueing.)
 
-Running a routine, that is scheduling its task, captures the state of its static indexing bindings. Besides routines, calling `from_host_async`, `to_host_async`, `merge`, `merge_unsafe` from a backend schedules the corresponding tasks.
+Routines take two layers to execute: scheduling a routine captures the state of its static indexing bindings and returns its task, running the task for a device blocks until the task can be put on the device's queue. Besides routines, calling `from_host`, `to_host`, `device_to_device` from a backend blocks to put the corresponding tasks on the device's queue. Implementations of `No_device_backend` and `Simple_backend` (i.e. CPU backends) should run the tasks by executing them directly.
 
 ### Data transfers
 
 OCANNL supports asynchronous data transfers by embedding them in the scheduling mechanism.
 
 ```ocaml
-module type Backend = sig
+module type No_device_backend = sig
   ...
-  val from_host : context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, copies from host to context and returns true. This function
-      is synchronous in the sense that when it returns, the host data is no longer needed. Beware that
-      depending on the backend, calling [from_host] might even synchronize all devices of the backend. *)
-
-  val to_host : context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, copies from context to host and returns true. This function
-      is synchronous: returns when fully complete. Beware that depending on the backend, calling [to_host]
-      might even synchronize all devices of the backend. *)
-
-  val from_host_async : context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, copies from host to context and returns true. NOTE: this
-      function returns once it books (schedules) the copying task and it's the caller's responsibility to
+  val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
+  (** If the array is both hosted and in-context, schedules a copy from host to context, otherwise does
+      nothing. NOTE: when run for a device, the call books the copying and it's the caller's responsibility to
       synchronize the device before the host's data is overwritten. *)
 
-  val to_host_async : context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, copies from context to host and returns true. NOTE: this
-      function returns once it books (schedules) the copying task and it's the caller's responsibility to
+  val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
+  (** If the array is both hosted and in-context, schedules a copy from context to host, otherwise does
+      nothing. NOTE: when run for a device, the call books the copying and it's the caller's responsibility to
       synchronize the device before the host's data is read. *)
 
-  val merge : Tnode.t -> accum:Ops.binop -> dst:context -> src:context -> bool
-  (** Merges the array from the source context into the destination context: [dst =: dst accum src]. If the
-      array is hosted, its state on host is undefined after this operation. (A backend may choose to use the
-      host array as a buffer, if that is beneficial.) The corresponding tuple of [tnode, accum, dst, src] must
-      be in the scope of an earlier {!compile_merges} call; otherwise, [merge] will fail, even if it would
-      otherwise return [false]. Returns [false] if the array is not in both the [dst] and [src] contexts.
-      Otherwise, it synchronizes the [src] device: calls [Backend.await src.device], {i then} it schedules the
-      merge task on the [dst] device, then it returns [true]. NOTE: [merge] is asynchronous, it's the caller's
-      responsibility to not overwrite source before the merge completes. *)
+  val device_to_device :
+    ?rt:(module Minidebug_runtime.Debug_runtime) ->
+    Tnode.t ->
+    into_merge_buffer:bool ->
+    dst:context ->
+    src:context ->
+    unit
+  (** If the array is present in the [src] context, and in the [dst] context in case
+      [~into_merge_buffer:false], schedules a copy of the tensor node from the device of [src] to the device
+      of [dst]; otherwise, if [~into_merge_buffer:true], unsets the merge buffer source on [dst]. If
+      [~into_merge_buffer:false], copies into the given node on [dst]; if [~into_merge_buffer:true], sets on
+      [dst] the merge buffer source to the given node and handles the transfer using it. NOTE: when run for a
+      device, the call books the copying and it's the caller's responsibility to synchronize the [src] device,
+      if needed, {i before} calling [device_to_device], and the [dst] device {i afterward}, according to
+      {!physical_merge_buffers}, before any computations on the [src] device overwrite the node. *)
 
-  val merge_unsafe : Tnode.t -> accum:Ops.binop -> dst:context -> src:context -> bool
-  (** Merges the array from the source context into the destination context: see {!merge} for details.
-      [merge_unsafe] starts with a [Backend.acknowledge src.device] call (blocking until the latest task on
-      [src] starts), {i then} it schedules the merge task on the [dst] device. NOTE: [merge_unsafe] is likely
-      to cause {i read before intended write} bugs. *)
+  val physical_merge_buffers : bool
+  (** If [physical_merge_buffers = true], the [src] node data is not needed after the task scheduled by
+      [device_to_device] finishes. Otherwise, the [src] node data may be needed till after the tasks computing
+      with the merge buffer finish. *)
   ...
-  val supports_merge_buffers : bool
-  (** If [false], using [Ops.Merge_buffer_unsafe] in assignments will fail during {!compile} or {!link}, resp.
-      {!compile_batch} or {!link_batch}. If [true], each device maintains (at most) one merge buffer, that is
-      grown by calls to [compile_merges], to ensure that the merge buffer can fit the data arriving for
-      {!merge}, {!merge_unsafe} tasks. *)
 end
 ```
 
-Like `to_host` and `from_host`, the calls to `from_host_async`, `to_host_async`, `merge ~accum:Ops.Arg2`, `merge_unsafe ~accum:Ops.Arg2` perform a memory copy, but wrapped in a task. `merge` and `merge_unsafe` for other `accum` operators perform an (in-place) pointwise operation on two arrays of the same tensor node. Backends where a device cannot directly access another device's memory (as far as the backend's implementer is concerned) use merge buffers for this purpose. E.g. a call [merge ~accum:Ops.Add t.value ~dst ~src] would copy `t.value` from `src` to `dst` and then perform `[%cd t =+ merge_buffer]` on `dst`.
+OCANNL provides explicit _merge buffers_ for performing tensor node updates, where different versions of a tensor node from two devices feature in the same computation. The `%cd` syntax for using merge buffers is via applying `merge_buffer` pseudo-function. For example, the code for merging gradients might be: `[%cd p.grad =+ merge_buffer p.grad]`. Currently, OCANNL supports only one merge buffer per device. We keep track of the specific tensor node that occupies this buffer, so we detect potential mismatches when a code's task is run. Backends where a device cannot directly access another device's memory (as far as the backend's implementer is concerned) use physical arrays to back merge buffers. There's only one buffer array per device and it is resized (grown) if needed to fit a node's array. CPU backends can simply record the other device's array pointer in the merge buffer. In the future we might implement intermediate solutions based on memory streaming.

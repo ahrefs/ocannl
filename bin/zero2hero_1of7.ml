@@ -66,8 +66,8 @@ let _suspended () =
   let ys = Array.create ~len:size 0. and dys = Array.create ~len:size 0. in
   let open Operation.At in
   let looping () =
-    assert (Backend.to_host routine.context fx.value);
-    assert (Backend.to_host routine.context (Option.value_exn x.diff).grad);
+    Backend.to_host routine.context fx.value;
+    Backend.to_host routine.context (Option.value_exn x.diff).grad;
     ys.(!step_ref) <- fx.@[0];
     dys.(!step_ref) <- x.@%[0]
   in
@@ -148,12 +148,10 @@ let _suspended () =
   let device = get_device ~ordinal:0 in
   let update = Train.grad_update l in
   let routine = link (init device) @@ compile IDX.empty @@ update.fwd_bprop in
-  Tensor.iter_embedded_arrays l ~f:(fun a ->
-      if from_host routine.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
+  Tensor.iter_embedded_arrays l ~f:(fun a -> from_host routine.context a);
   Train.run routine;
   await device;
-  Tensor.iter_embedded_arrays l ~f:(fun a ->
-      if to_host routine.context a then Stdio.printf "Retrieved array %s.\n%!" @@ Tn.name a);
+  Tensor.iter_embedded_arrays l ~f:(fun a -> to_host routine.context a);
   Stdio.print_endline
     {|
       We did not update the params: all values and gradients will be at initial points,
@@ -162,19 +160,16 @@ let _suspended () =
   let%op learning_rate = 0.1 in
   let routine = link routine.context @@ compile IDX.empty @@ Train.sgd_update ~learning_rate update in
   (* learning_rate is virtual so this will not print anything. *)
-  Tensor.iter_embedded_arrays learning_rate ~f:(fun a ->
-      if from_host routine.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
+  Tensor.iter_embedded_arrays learning_rate ~f:(fun a -> from_host routine.context a);
   Stdio.print_endline
     {|
       Due to how the gccjit backend works, since the parameters were constant in the grad_update
       computation, they did not exist on the device before. Now they do. This would not be needed
       on the cuda backend.|};
-  List.iter [ a.value; b.value; c.value; f.value ] ~f:(fun a ->
-      if from_host routine.context a then Stdio.printf "Sent array %s.\n%!" @@ Tn.name a);
+  List.iter [ a.value; b.value; c.value; f.value ] ~f:(fun a -> from_host routine.context a);
   Train.run routine;
   await device;
-  Tensor.iter_embedded_arrays l ~f:(fun a ->
-      if to_host routine.context a then Stdio.printf "Retrieved array %s.\n%!" @@ Tn.name a);
+  Tensor.iter_embedded_arrays l ~f:(fun a -> to_host routine.context a);
   Stdio.print_endline
     {|
       Now we updated the params, but after the forward and backward passes:
@@ -185,8 +180,7 @@ let _suspended () =
   let routine = link routine.context @@ compile IDX.empty update.fwd_bprop in
   Train.run routine;
   await device;
-  Tensor.iter_embedded_arrays l ~f:(fun a ->
-      if to_host routine.context a then Stdio.printf "Retrieved array %s.\n%!" @@ Tn.name a);
+  Tensor.iter_embedded_arrays l ~f:(fun a -> to_host routine.context a);
   Stdio.print_endline
     {|
       Now again we did not update the params, they will remain as above, but both param

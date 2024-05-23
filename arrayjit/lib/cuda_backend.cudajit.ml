@@ -1,5 +1,10 @@
 open Base
 module Tn = Tnode
+module Lazy = Utils.Lazy
+module Debug_runtime = Utils.Debug_runtime
+
+[%%global_debug_log_level Nothing]
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 type mem_properties =
   | Local_only
@@ -131,23 +136,58 @@ let await device =
     ~f:(fun () -> List.iter device.postprocess_queue ~f:(fun (_, f) -> f ~output))
     ~finally:(fun () -> device.postprocess_queue <- [])
 
-let from_host (ctx : context) la =
-  match (Map.find ctx.all_arrays la, Map.find ctx.global_arrays la) with
+let acknowledge _device = failwith "NOT IMPLEMENTED YET"
+let is_idle _device = failwith "NOT IMPLEMENTED YET"
+let is_booked _device = failwith "NOT IMPLEMENTED YET"
+
+let%track_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context) tn =
+  match (Map.find ctx.all_arrays tn, Map.find ctx.global_arrays tn) with
   | Some { tn = { Tn.array = (lazy (Some hosted)); _ }; _ }, Some dst ->
       set_ctx ctx.ctx;
       let f src = Cudajit.memcpy_H_to_D ~dst ~src () in
       Ndarray.map { f } hosted;
-      true
-  | _ -> false
+      if Utils.settings.with_debug_level > 0 then
+        let module Debug_runtime = (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
+        in
+        [%log "copied", Tn.label tn, Tn.name tn, "from host"]
+  | _ -> ()
 
-let to_host (ctx : context) la =
-  match (Map.find ctx.all_arrays la, Map.find ctx.global_arrays la) with
+let%track_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context) tn =
+  match (Map.find ctx.all_arrays tn, Map.find ctx.global_arrays tn) with
   | Some { tn = { Tn.array = (lazy (Some hosted)); _ }; _ }, Some src ->
       set_ctx ctx.ctx;
       let f dst = Cudajit.memcpy_D_to_H ~dst ~src () in
       Ndarray.map { f } hosted;
-      true
-  | _ -> false
+      if Utils.settings.with_debug_level > 0 then (
+        let module Debug_runtime = (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
+        in
+        [%log "copied", Tn.label tn, Tn.name tn, "to host"];
+        if Utils.settings.with_debug_level > 1 then
+          [%log_printbox
+            let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
+            Ndarray.render_array ~indices h_arr])
+  | _ -> ()
+
+let%track_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn ~into_merge_buffer
+    ~dst ~src =
+  Option.iter (Map.find src.global_arrays tn) ~f:(fun s_arr ->
+      Option.iter (Map.find dst.global_arrays tn) ~f:(fun d_arr ->
+          if into_merge_buffer then failwith "NOT IMPLEMENTED YET"
+          else (
+            set_ctx dst.ctx;
+            Cudajit.memcpy_D_to_D ~dst:d_arr ~src:s_arr ());
+          if Utils.settings.with_debug_level > 0 then
+            let module Debug_runtime =
+              (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
+            in
+            [%log
+              "copied",
+                Tn.label tn,
+                Tn.name tn,
+                "using merge buffer",
+                (into_merge_buffer : bool),
+                "from device",
+                (get_ctx_device src |> to_ordinal : int)]))
 
 (* let pp_semi ppf () = Stdlib.Format.fprintf ppf ";@ " *)
 let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
@@ -191,8 +231,6 @@ let get_run_ptr_debug array =
 (* let compute_array_offset ~idcs ~dims = Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx +
    (offset * dim)) *)
 
-module Debug_runtime = Utils.Debug_runtime
-
 let%debug_sexp get_array ~(traced_store : Low_level.traced_store) info tn =
   Hash_set.add info.used_tensors tn;
   let default () =
@@ -210,7 +248,7 @@ let%debug_sexp get_array ~(traced_store : Low_level.traced_store) info tn =
     let global = if is_local_only mem then None else Some (Tn.name tn) in
     let local = Option.some_if (is_local_only mem) @@ Tn.name tn ^ "_local" in
     let backend_info = sexp_of_mem_properties mem in
-    if Utils.settings.with_debug then
+    if Utils.settings.with_debug_level > 0 then
       [%log
         "creating",
           (tn.id : int),
@@ -399,7 +437,7 @@ let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; 
   let params =
     List.filter_map arrays ~f:(fun tn ->
         let node = Map.find_exn info.info_nodes tn in
-        if Utils.settings.with_debug then
+        if Utils.settings.with_debug_level > 0 then
           [%log "array-used:", (tn : Tn.t), Tn.label tn, (node.mem : mem_properties)];
         match node.mem with
         | Local_only -> None
@@ -439,7 +477,9 @@ let%diagn_sexp cuda_to_ptx ~name cu_src =
     Stdio.Out_channel.close oc);
   [%log "compiling to PTX"];
   let module Cu = Cudajit in
-  let with_debug = Utils.settings.output_debug_files_in_run_directory || Utils.settings.with_debug in
+  let with_debug =
+    Utils.settings.output_debug_files_in_run_directory || Utils.settings.with_debug_level > 0
+  in
   let ptx = Cu.compile_to_ptx ~cu_src ~name ~options:[ "--use_fast_math" ] ~with_debug in
   if Utils.settings.output_debug_files_in_run_directory then (
     let f_name = name ^ "-cudajit-debug" in
@@ -459,8 +499,8 @@ let%diagn_sexp link_proc (old_context : context) ~name info ptx =
   set_ctx ctx;
   let global_arrays =
     Map.fold ~init:old_context.global_arrays info.info_nodes ~f:(fun ~key ~data:node globals ->
-        Option.value_map ~default:globals node.global ~f:(fun name ->
-            if Utils.settings.with_debug then [%log "mem_alloc", name];
+        Option.value_map ~default:globals node.global ~f:(fun _name ->
+            if Utils.settings.with_debug_level > 0 then [%log "mem_alloc", _name];
             set_ctx ctx;
             let ptr () = Cu.mem_alloc ~byte_size:node.size_in_bytes in
             Map.update globals key ~f:(fun old -> Option.value_or_thunk old ~default:ptr)))
@@ -571,3 +611,5 @@ let link_batch old_context (code_batch : code_batch) =
   let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   (* FIXME: *)
   (old_context, idx_args, [||])
+
+let physical_merge_buffers = true
