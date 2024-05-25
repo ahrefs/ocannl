@@ -1,5 +1,9 @@
 # ocannl
 
+NOTE TO POTENTIAL CONTRIBUTORS: reach out so I can adjust my work style -- start using branches for refactoring. Otherwise you face frustration as the code might be broken. Tagged versions of the code are guaranteed to work as well as the given stage of the project permitted.
+
+NEWS: the upcoming version 0.4.0 has significant design changes around the backend API and synchronization, with Cuda streams exposed as virtual devices. Version 0.4.1 will come soon after, with tests for (and small improvements to) mixed precision computation; it will require OCaml 5.2.
+
 OCANNL is sponsored by [Ahrefs](https://ocaml.org/success-stories/peta-byte-scale-web-crawler)! [Visit the Ahrefs website.](https://ahrefs.com/)
 
 ## OCANNL -- OCaml Compiles Algorithms for Neural Networks Learning
