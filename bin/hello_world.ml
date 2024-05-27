@@ -13,7 +13,7 @@ let hello1 () =
   let module Backend = (val Train.fresh_backend ()) in
   Utils.settings.with_debug_level <- 2;
   (* Utils.settings.output_debug_files_in_run_directory <- true; *)
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   let open Operation.TDSL in
   (* Hey is inferred to be a matrix. *)
@@ -31,7 +31,7 @@ let hello2 () =
   Utils.settings.with_debug_level <- 2;
   (* Utils.settings.output_debug_files_in_run_directory <- true; *)
   (* Utils.settings.debug_log_from_routines <- true; *)
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   (* Hey is inferred to be a matrix. *)
   let%op y = ("hey" * 'q' 2.0) + 'p' 1.0 in
@@ -46,7 +46,7 @@ let hello3 () =
   let module Backend = (val Train.fresh_backend ()) in
   Utils.settings.output_debug_files_in_run_directory <- true;
   (* Utils.settings.debug_log_from_routines <- true; *)
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   (* Hey is inferred to be a matrix. *)
   let hey = TDSL.O.(!~"hey") in
@@ -71,7 +71,7 @@ let hello3 () =
 let hello4 () =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
   let ri = TDSL.range 3 in
@@ -97,7 +97,7 @@ let hello4 () =
 let hello5 () =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in

@@ -12,6 +12,9 @@ type 'context routine = {
 }
 [@@deriving sexp_of]
 
+type config = [ `Physical_devices_only | `For_parallel_copying | `Most_parallel_devices ]
+[@@deriving equal, sexp, variants]
+
 module type No_device_backend = sig
   type code [@@deriving sexp_of]
   type code_batch [@@deriving sexp_of]
@@ -19,7 +22,7 @@ module type No_device_backend = sig
   type nonrec routine = context routine [@@deriving sexp_of]
 
   val name : string
-  val initialize : unit -> unit
+  val initialize : config -> unit
   val is_initialized : unit -> bool
 
   val init : label:string -> context
@@ -57,13 +60,13 @@ module type No_device_backend = sig
 
   val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
   (** If the array is both hosted and in-context, schedules a copy from host to context, otherwise does
-      nothing. NOTE: when run for a device, the call books the copying and it's the caller's responsibility to
-      synchronize the device before the host's data is overwritten. *)
+      nothing. NOTE: when run for a device, it's the caller's responsibility to synchronize the device before
+      the host's data is overwritten. *)
 
   val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
   (** If the array is both hosted and in-context, schedules a copy from context to host, otherwise does
-      nothing. NOTE: when run for a device, the call books the copying and it's the caller's responsibility to
-      synchronize the device before the host's data is read. *)
+      nothing. NOTE: when run for a device, it's the caller's responsibility to synchronize the device before
+      the host's data is read. *)
 
   val device_to_device :
     ?rt:(module Minidebug_runtime.Debug_runtime) ->
@@ -77,9 +80,9 @@ module type No_device_backend = sig
       of [dst]; otherwise, if [~into_merge_buffer:true], unsets the merge buffer source on [dst]. If
       [~into_merge_buffer:false], copies into the given node on [dst]; if [~into_merge_buffer:true], sets on
       [dst] the merge buffer source to the given node and handles the transfer using it. NOTE: when run for a
-      device, the call books the copying and it's the caller's responsibility to synchronize the [src] device,
-      if needed, {i before} calling [device_to_device], and the [dst] device {i afterward}, according to
-      {!physical_merge_buffers}, before any computations on the [src] device overwrite the node. *)
+      device, it's the caller's responsibility to synchronize the [src] device, if needed, {i before} calling
+      [device_to_device], and the [dst] device {i afterward}, according to {!physical_merge_buffers}, before
+      any computations on the [src] device overwrite the node. *)
 
   val physical_merge_buffers : bool
   (** If [physical_merge_buffers = true], the [src] node data is not needed after the task scheduled by
@@ -90,6 +93,7 @@ end
 module type Backend = sig
   include No_device_backend
 
+  type physical_device
   type device
 
   val init : device -> context
@@ -97,22 +101,23 @@ module type Backend = sig
   val await : device -> unit
   (** Blocks till the device becomes idle, i.e. synchronizes the device. *)
 
-  val acknowledge : device -> unit
-  (** Blocks till the device becomes not booked (its queue becomes empty). *)
-
   val is_idle : device -> bool
-  (** The device is currently waiting for work. See also {!is_booked}: if a device is idle, then it's not
-      booked; but a device might be both not idle and not booked. *)
-
-  val is_booked : device -> bool
-  (* The device queue is not empty: the next task is waiting to start execution. See also {!is_idle}. *)
+  (** Whether the device is currently waiting for work. *)
 
   val sexp_of_device : device -> Sexp.t
-  val num_devices : unit -> int
-  val get_device : ordinal:int -> device
+  val get_device : ordinal:int -> physical_device
+  val num_physical_devices : unit -> int
+
+  val suggested_num_virtual_devices : physical_device -> int
+  (** The optimal number of virtual devices for the given physical device to follow the
+      {!No_device_backend.config} strategy passed to {!No_device_backend.initialize}. *)
+
+  val new_virtual_device : physical_device -> device
   val get_ctx_device : context -> device
-  val to_ordinal : device -> int
-  val get_all_devices : unit -> device array
+  val get_physical_device : device -> physical_device
+  val to_ordinal : physical_device -> int
+  val to_subordinal : device -> int
+  val get_name : device -> string
 end
 
 let forget_printbox (module Runtime : Minidebug_runtime.PrintBox_runtime) =
@@ -121,17 +126,80 @@ let forget_printbox (module Runtime : Minidebug_runtime.PrintBox_runtime) =
 module Multicore_backend (Backend : No_device_backend) : Backend = struct
   module Domain = Domain [@warning "-3"]
 
+  type task_list = (Tnode.work[@sexp.opaque]) Utils.mutable_list [@@deriving sexp_of]
+
+  type device_state = {
+    mutable keep_spinning : bool;
+    mutable host_pos : task_list;
+    mutable dev_pos : task_list;
+    mutable host_waiting : bool;
+    mutable dev_waiting : bool;
+    dev_wait : (Utils.waiter[@sexp.opaque]);
+  }
+  [@@deriving sexp_of]
+
   type device = {
-    is_idle : bool ref;
-    next_task : (Tnode.work[@sexp.opaque]) option ref;
-    keep_spinning : bool ref;
-    wait_for_ackn : (Utils.waiter[@sexp.opaque]);
-    wait_for_work : (Utils.waiter[@sexp.opaque]);
-    wait_for_idle : (Utils.waiter[@sexp.opaque]);
+    state : device_state;
+    host_wait_for_idle : (Utils.waiter[@sexp.opaque]);
     ordinal : int;
     domain : (unit Domain.t[@sexp.opaque]);
   }
   [@@deriving sexp_of]
+
+  type physical_device = device [@@deriving sexp_of]
+
+  let schedule_task device task =
+    assert (Domain.is_main_domain ());
+    let d = device.state in
+    if not d.keep_spinning then invalid_arg "Multicore_backend: device not available";
+    let initialize = Utils.is_empty d.host_pos in
+    d.host_pos <- Utils.insert ~next:task d.host_pos;
+    if initialize then d.dev_pos <- d.host_pos;
+    if d.dev_waiting then d.dev_wait.release ()
+
+  let global_run_no = ref 0
+
+  let%debug_sexp spinup_device ~(ordinal : int) : device =
+    Int.incr global_run_no;
+    let state =
+      {
+        keep_spinning = true;
+        host_pos = Empty;
+        dev_pos = Empty;
+        host_waiting = false;
+        dev_waiting = false;
+        dev_wait = Utils.waiter ();
+      }
+    in
+    let host_wait_for_idle = Utils.waiter () in
+    let run_no = !global_run_no in
+    let debug_runtime = Utils.get_debug ("dev-" ^ Int.to_string ordinal ^ "-run-" ^ Int.to_string run_no) in
+    (* For detailed debugging of a worker operation, set OCANNL_SNAPSHOT_EVERY_SEC and uncomment: *)
+    (* let%track_rt_sexp worker (() : unit) : unit = *)
+    let worker () =
+      while state.keep_spinning do
+        match state.dev_pos with
+        | Empty ->
+            state.dev_waiting <- true;
+            if state.host_waiting then host_wait_for_idle.release ();
+            Exn.protect ~f:state.dev_wait.await ~finally:(fun () -> state.dev_waiting <- false)
+        | Cons { hd; tl } ->
+            Tnode.run debug_runtime hd;
+            state.dev_pos <- tl
+      done
+    in
+    { state; host_wait_for_idle; ordinal; domain = Domain.spawn worker }
+
+  let make_work device task =
+    let%diagn_rt_sexp work () = schedule_task device task in
+    Tnode.Work work
+
+  let await device =
+    assert (Domain.is_main_domain ());
+    while device.state.keep_spinning && not device.state.dev_waiting do
+      device.state.host_waiting <- true;
+      Exn.protect ~f:device.host_wait_for_idle.await ~finally:(fun () -> device.state.host_waiting <- false)
+    done
 
   type code = Backend.code [@@deriving sexp_of]
   type code_batch = Backend.code_batch [@@deriving sexp_of]
@@ -142,20 +210,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let init device = { device; ctx = Backend.init ~label:(name ^ " " ^ Int.to_string device.ordinal) }
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
-  let is_idle device = !(device.is_idle)
-  let is_booked device = Option.is_some !(device.next_task)
-
-  let await device =
-    assert (Domain.is_main_domain ());
-    while !(device.keep_spinning) && not !(device.is_idle) do
-      device.wait_for_idle.await ()
-    done
-
-  let acknowledge device =
-    assert (Domain.is_main_domain ());
-    while !(device.keep_spinning) && Option.is_some !(device.next_task) do
-      device.wait_for_ackn.await ()
-    done
+  let is_idle device = device.state.dev_waiting
 
   let finalize { device; ctx } =
     await device;
@@ -163,16 +218,6 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let compile = Backend.compile
   let compile_batch = Backend.compile_batch
-
-  let schedule_task device task =
-    acknowledge device;
-    if not !(device.keep_spinning) then invalid_arg "Multicore_backend: device not available";
-    device.next_task := Some task;
-    device.wait_for_work.release ()
-
-  let make_work device task =
-    let%diagn_rt_sexp work () = schedule_task device task in
-    Tnode.Work work
 
   let link { ctx; device } code =
     let task = Backend.link ctx code in
@@ -218,71 +263,32 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     schedule_task dst.device (Tnode.Work work)
 
   let physical_merge_buffers = Backend.physical_merge_buffers
-  let num_devices () = Domain.recommended_domain_count () - 1
-  let global_run_no = ref 0
-
-  let%debug_sexp spinup_device ~(ordinal : int) : device =
-    Int.incr global_run_no;
-    let next_task = ref None in
-    let is_idle = ref true in
-    let keep_spinning = ref true in
-    let wait_for_idle = Utils.waiter () in
-    let wait_for_ackn = Utils.waiter () in
-    let wait_for_work = Utils.waiter () in
-    let run_no = !global_run_no in
-    let debug_runtime = Utils.get_debug ("dev-" ^ Int.to_string ordinal ^ "-run-" ^ Int.to_string run_no) in
-    (* For detailed debugging of a worker operation, set OCANNL_SNAPSHOT_EVERY_SEC and uncomment: *)
-    (* let%track_rt_sexp worker (() : unit) : unit = *)
-    let worker () =
-      while !keep_spinning do
-        while !keep_spinning && Option.is_none !next_task do
-          wait_for_work.await ()
-        done;
-        if !keep_spinning then (
-          let task = Option.value_exn !next_task in
-          next_task := None;
-          wait_for_ackn.release ();
-          is_idle := false;
-          Tnode.run debug_runtime task;
-          is_idle := true;
-          wait_for_idle.release ())
-      done
-    in
-    {
-      next_task;
-      is_idle;
-      keep_spinning;
-      wait_for_idle;
-      wait_for_ackn;
-      wait_for_work;
-      ordinal;
-      (* For detailed debugging of a worker operation, uncomment: *)
-      (* domain = Domain.spawn (worker _debug_runtime); *)
-      domain = Domain.spawn worker;
-    }
-
-  let devices = Array.init (num_devices ()) ~f:(fun ordinal -> spinup_device ~ordinal)
-  let get_all_devices () = devices
+  let num_physical_devices () = Domain.recommended_domain_count () - 1
+  let suggested_num_virtual_devices _device = 1
+  let devices = Array.init (num_physical_devices ()) ~f:(fun ordinal -> spinup_device ~ordinal)
 
   let%track_sexp unsafe_cleanup ?(unsafe_shutdown = false) () =
     assert (Domain.is_main_domain ());
     let cleanup ordinal device =
       await device;
-      device.keep_spinning := false;
+      device.state.keep_spinning <- false;
       (* Important to release after setting to not keep spinning. *)
-      device.wait_for_work.release ();
+      device.state.dev_wait.release ();
       Domain.join device.domain;
-      device.wait_for_idle.finalize ();
-      device.wait_for_ackn.finalize ();
-      device.wait_for_work.finalize ();
+      device.host_wait_for_idle.finalize ();
+      device.state.dev_wait.finalize ();
       if not unsafe_shutdown then devices.(ordinal) <- spinup_device ~ordinal
     in
     Array.iteri devices ~f:cleanup;
     Backend.unsafe_cleanup ~unsafe_shutdown ()
 
   let get_device ~ordinal = devices.(ordinal)
+  let new_virtual_device device = device
+  let get_physical_device device = device
   let get_ctx_device { device; _ } = device
-  let to_ordinal device = device.ordinal
+  let get_name device = Int.to_string device.ordinal
+  let to_ordinal { ordinal; _ } = ordinal
+  let to_subordinal _ = 0
 end
 
 let lower_assignments ?name bindings asgns =
@@ -317,6 +323,7 @@ module type Simple_backend = sig
   type context [@@deriving sexp_of]
   type procedure [@@deriving sexp_of]
   type ctx_arrays [@@deriving sexp_of]
+  type nonrec config = config
 
   val ctx_arrays : context -> ctx_arrays
 
@@ -357,7 +364,8 @@ module type Simple_backend = sig
   val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
 end
 
-module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend = struct
+module Simple_no_device_backend (Backend : Simple_backend with type config := config) : No_device_backend =
+struct
   type code =
     | Postponed of { lowered : Low_level.optimized; bindings : Indexing.unit_bindings; name : string }
     | Compiled of Backend.procedure
@@ -373,6 +381,12 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
   [@@deriving sexp_of]
 
   include Backend
+
+  let global_config = ref `Physical_devices_only
+
+  let initialize config =
+    global_config := config;
+    initialize ()
 
   type nonrec routine = context routine [@@deriving sexp_of]
 
@@ -416,7 +430,7 @@ module Gccjit_device : No_device_backend = Simple_no_device_backend ((
 module Gccjit_backend = Multicore_backend (Gccjit_device)
 
 module Cuda_backend : Backend with type context = Cuda_backend.context = struct
-  include Cuda_backend
+  include (Cuda_backend : module type of Cuda_backend with type config := config)
 
   type nonrec routine = context routine [@@deriving sexp_of]
 
@@ -437,12 +451,10 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   let link_batch context code_batch : routine option array =
     let context, bindings, schedules = link_batch context code_batch in
     Array.map schedules ~f:(Option.map ~f:(fun schedule -> { context; schedule; bindings; name }))
-
-  let get_all_devices () = Array.init (num_devices ()) ~f:(fun ordinal -> get_device ~ordinal)
 end
 
-let reinitialize (module Backend : Backend) =
-  if not @@ Backend.is_initialized () then Backend.initialize ()
+let reinitialize (module Backend : Backend) config =
+  if not @@ Backend.is_initialized () then Backend.initialize config
   else (
     Core.Gc.full_major ();
     Backend.unsafe_cleanup ())

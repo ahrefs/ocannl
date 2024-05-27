@@ -8,10 +8,6 @@ module CDSL = Train.CDSL
 module Utils = Arrayjit.Utils
 module Rand = Arrayjit.Rand.Lib
 
-(* let num_devices = 20 *)
-(* let num_devices = 10 *)
-let num_devices = 5
-(* let num_devices = 1 *)
 
 let experiment ~seed () =
   Utils.settings.with_debug_level <- 1;
@@ -59,7 +55,7 @@ let experiment ~seed () =
     Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" at_epoch at_step learning_rate epoch_loss
   in
   let inputs, outputs, model_result, infer_callback, batch_losses, epoch_losses, learning_rates =
-    Train.example_train_loop ~seed ~batch_size ~init_lr ~num_devices ~data_len:len ~epochs
+    Train.example_train_loop ~seed ~batch_size ~init_lr ~data_len:len ~epochs
       ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn ~weight_decay ~per_batch_callback
       ~per_epoch_callback backend ()
   in

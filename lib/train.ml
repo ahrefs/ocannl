@@ -42,7 +42,7 @@ let debug_rt = (module Debug_runtime : Minidebug_runtime.Debug_runtime)
 let run jitted = Tn.run debug_rt @@ jitted.Arrayjit.Backends.schedule ()
 
 (** Reinitializes a backend selected via a global [backend] flag. *)
-let fresh_backend ?backend_name () =
+let fresh_backend ?backend_name ?(config = `Physical_devices_only) () =
   let open Arrayjit.Backends in
   let backend =
     match
@@ -54,7 +54,7 @@ let fresh_backend ?backend_name () =
     | "cuda" -> (module Cuda_backend : Backend)
     | backend -> invalid_arg [%string "Train.fresh_backend: unknown backend %{backend}"]
   in
-  reinitialize backend;
+  reinitialize backend config;
   backend
 
 let is_param t =
@@ -480,12 +480,29 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
 
 let debug_name t = Tn.(debug_name ~id:t.Tensor.value.id ~label:t.value.label)
 
-let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init_lr ?lr_schedule ~num_devices
-    ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn ~weight_decay ?per_batch_callback ?per_epoch_callback
-    backend () =
+let get_all_suggested_devices (type device) ?max_num_devices
+    (backend : (module Backend_type with type device = device)) : device array =
+  let max_num_devices = Option.value max_num_devices ~default:Int.max_value_30_bits in
+  let module Backend = (val backend : Backend_type with type device = device) in
+  let num_physical = min max_num_devices @@ Backend.num_physical_devices () in
+  let devices = Array.init num_physical ~f:(fun ordinal -> Backend.get_device ~ordinal) in
+  Array.folding_mapi devices ~init:0 ~f:(fun ordinal num_collected physical ->
+      let remaining_physical = num_physical - ordinal - 1 in
+      let max_current = Backend.suggested_num_virtual_devices physical in
+      let take_current = min max_current @@ (max_num_devices - remaining_physical) in
+      ( num_collected + take_current,
+        Array.init take_current ~f:(fun _subordinal -> Backend.new_virtual_device physical) ))
+  |> Array.concat_map ~f:Fn.id
+
+let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init_lr ?lr_schedule
+    ?max_num_devices ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn ~weight_decay ?per_batch_callback
+    ?per_epoch_callback (backend : (module Backend_type)) () =
   let module TDSL = Operation.TDSL in
   let module NTDSL = Operation.NTDSL in
   Rand.init seed;
+  let module Backend = (val backend : Backend_type) in
+  let devices = get_all_suggested_devices ?max_num_devices (module Backend) in
+  let num_devices = Array.length devices in
   let minibatch_size = batch_size / num_devices in
   let n_batches = data_len / minibatch_size in
   let inputs = inputs ~b:[ n_batches; minibatch_size ] in
@@ -510,9 +527,6 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   in
   set_hosted learning_rate.value;
   let sgd = sgd_update ~learning_rate ~weight_decay update in
-  let module Backend = (val backend : Arrayjit.Backends.Backend) in
-  let num_devices = min num_devices @@ Backend.num_devices () in
-  let devices = Array.init num_devices ~f:(fun ordinal -> Backend.get_device ~ordinal) in
   let contexts = Array.map devices ~f:Backend.init in
   let grad_update = Backend.compile ~shared:true bindings update.fwd_bprop in
   let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.link ctx grad_update) in

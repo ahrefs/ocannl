@@ -13,7 +13,7 @@ let%expect_test "Hello World" =
 let%expect_test "Pointwise multiplication dims 1" =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
   (* "Hey" is inferred to be a scalar. *)
@@ -35,7 +35,7 @@ let%expect_test "Pointwise multiplication dims 1" =
 let%expect_test "Matrix multiplication dims 1x1" =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
@@ -68,7 +68,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
 let%expect_test "Print constant tensor" =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
 
@@ -360,7 +360,7 @@ let%expect_test "Print constant tensor" =
 let%expect_test "Matrix multiplication dims 2x3" =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
   (* Hey is inferred to be a matrix. *)
@@ -394,7 +394,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
 let%expect_test "Big matrix" =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
   (* Hey is inferred to be a matrix. *)
@@ -448,7 +448,7 @@ let%expect_test "Big matrix" =
 let%expect_test "Very big tensor" =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
   let hey = TDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8; 9 ] ~output_dims:[ 10; 11 ] () in

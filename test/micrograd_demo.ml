@@ -10,7 +10,7 @@ let%expect_test "Micrograd README basic example" =
   Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = (a *. b) + (b **. 3) in
@@ -80,7 +80,7 @@ let%expect_test "Micrograd half-moons example" =
   Rand.init 3;
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   let open Operation.At in
   let len = 200 in

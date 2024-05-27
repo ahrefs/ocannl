@@ -23,10 +23,12 @@ type device = Unimplemented [@@deriving sexp_of]
 
 let init (Unimplemented : device) : context = Unimplemented
 let await _device = ()
-let acknowledge _device = ()
 let is_idle _device = true
-let is_booked _device = false
 let num_devices () = 0
 let get_device ~ordinal:_ = failwith "CUDA missing: install cudajit"
+let new_virtual_device device = device
+let get_physical_device device = device
 let get_ctx_device (Unimplemented : context) : device = Unimplemented
-let to_ordinal (Unimplemented : device) : int = failwith "CUDA missing: install cudajit"
+let get_name (Unimplemented : device) : string = failwith "CUDA missing: install cudajit"
+let to_ordinal _device = 0
+let to_subordinal _device = 0

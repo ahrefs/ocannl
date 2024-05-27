@@ -8,6 +8,10 @@ module Debug_runtime = Utils.Debug_runtime
 let name = "gccjit"
 let optimization_level = ref 3
 
+type config = [ `Physical_devices_only | `For_parallel_copying | `Most_parallel_devices ]
+[@@deriving equal, sexp, variants]
+(** Currently unused, backend behaves as if [config] is always [`Physical_devices_only]. *)
+
 type mem_properties =
   | Local_only  (** The array is only needed for a local computation, is allocated on the stack. *)
   | From_context  (** The array has a copy allocated per-cpu-device, may or may not exist on the host. *)
@@ -770,7 +774,7 @@ let%track_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) 
                 "using merge buffer",
                 (into_merge_buffer : bool),
                 "from device",
-                (Backend.get_ctx_device src |> Backend.to_ordinal : int)];
+                Backend.get_ctx_device src |> Backend.get_name];
             if Utils.settings.with_debug_level > 1 then
               [%log_printbox
                 let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in

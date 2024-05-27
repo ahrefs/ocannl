@@ -398,3 +398,11 @@ let%diagn_rt_sexp log_trace_tree logs =
         loop_logs output]
   in
   loop_logs logs
+
+type 'a mutable_list = Empty | Cons of { hd : 'a; mutable tl : 'a mutable_list } [@@deriving equal, sexp, variants]
+
+let insert ~next = function
+  | Empty -> Cons { hd = next; tl = Empty }
+  | Cons cons ->
+      cons.tl <- Cons { hd = next; tl = cons.tl };
+      cons.tl

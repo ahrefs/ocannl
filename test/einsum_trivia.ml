@@ -10,7 +10,7 @@ module Rand = Arrayjit.Rand.Lib
 let%expect_test "einsum1 permute axes" =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
@@ -260,7 +260,7 @@ let%expect_test "einsum1 permute axes" =
 let%expect_test "einsum1 sum out axes" =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
@@ -318,7 +318,7 @@ let%expect_test "einsum1 sum out axes" =
 let%expect_test "einsum outer product" =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
   let a = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
@@ -549,7 +549,7 @@ let%expect_test "einsum outer product" =
 let%expect_test "einsum matrix/inner+outer products" =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
   let a = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
@@ -651,7 +651,7 @@ let%expect_test "einsum matrix/inner+outer products" =
 let%expect_test "einsum1 broadcast or sum out prefix axes" =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
@@ -1044,7 +1044,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
 let%expect_test "einsum broadcast or sum out prefix axes" =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
   let a = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
@@ -1145,7 +1145,7 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
 let%expect_test "einsum1 fixed dim axis" =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
@@ -1255,7 +1255,7 @@ let%expect_test "einsum1 fixed dim axis" =
 let%expect_test "einsum with fixed dim axes" =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
   let a = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
@@ -1307,7 +1307,7 @@ let%expect_test "einsum with fixed dim axes" =
 let%expect_test "outer_sum simulating axis concatenation" =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
   let ri = TDSL.range 3 in
@@ -1495,7 +1495,7 @@ let%expect_test "outer_sum simulating axis concatenation" =
 let%expect_test "einsum with a leftmost input axis preserved as output axis" =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   let a = TDSL.range_of_shape ~label:[ "a" ] ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~label:[ "b" ] ~batch_dims:[ 3 ] ~input_dims:[ 2; 3 ] ~output_dims:[ 4 ] () in
@@ -1568,7 +1568,7 @@ let%expect_test "einsum with a leftmost input axis preserved as output axis" =
 let%expect_test "einsum permuting two leftmost input axes as output axes" =
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   let a = TDSL.range_of_shape ~label:[ "a" ] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~label:[ "b" ] ~input_dims:[ 2; 3; 4 ] ~output_dims:[ 2 ] () in

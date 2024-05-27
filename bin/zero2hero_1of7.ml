@@ -11,7 +11,7 @@ module Rand = Arrayjit.Rand.Lib
 let _suspended () =
   Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
@@ -31,7 +31,7 @@ let _suspended () =
   let%op f5 = f 5 in
   let module Backend = (val Train.fresh_backend ()) in
   Train.every_non_literal_on_host f5;
-  Train.forward_and_forget (module Backend) Backend.(init @@ get_device ~ordinal:0) f5;
+  Train.forward_and_forget (module Backend) Backend.(init @@ new_virtual_device @@ get_device ~ordinal:0) f5;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   Stdio.printf "\n%!"
@@ -59,7 +59,7 @@ let _suspended () =
   Tensor.print_tree ~with_id:true ~with_value:false ~with_grad:false ~depth:9 fx;
   Stdio.print_endline "\n";
   let module Backend = (val Train.fresh_backend ()) in
-  let ctx = Backend.init @@ Backend.get_device ~ordinal:0 in
+  let ctx = Backend.(init @@ new_virtual_device @@ get_device ~ordinal:0) in
   let update = Train.grad_update fx in
   let routine = Backend.(link ctx @@ compile bindings update.fwd_bprop) in
   let step_ref = IDX.find_exn routine.bindings step_sym in
@@ -91,7 +91,7 @@ let () =
   Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
@@ -145,7 +145,7 @@ let _suspended () =
   let%op l = d *. "f" [ -2 ] in
   Train.every_non_literal_on_host l;
   let open (val Train.fresh_backend ()) in
-  let device = get_device ~ordinal:0 in
+  let device = new_virtual_device @@ get_device ~ordinal:0 in
   let update = Train.grad_update l in
   let routine = link (init device) @@ compile IDX.empty @@ update.fwd_bprop in
   Tensor.iter_embedded_arrays l ~f:(fun a -> from_host routine.context a);

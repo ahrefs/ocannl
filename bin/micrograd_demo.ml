@@ -75,7 +75,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
 
   let module Backend = (val Train.fresh_backend ()) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   let routine = Backend.(link ctx @@ compile bindings (Seq (update.fwd_bprop, sgd))) in
   Train.all_host_to_device (module Backend) routine.context scalar_loss;

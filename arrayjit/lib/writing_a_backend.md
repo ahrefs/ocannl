@@ -48,24 +48,27 @@ end
 
 where `Simple_backend` implements a `No_device_backend` functionality, but only needs to deal with `Low_level.optimized` and its compilation result type `procedure`.
 
-`No_device_backend`s do not themselves deal with the device abstraction. There's the functor `Multicore_backend (Backend : No_device_backend) : Backend` that assigns a device to a domain, and manages the given `No_device_backend` on the domain-based devices. Scheduling a work captures the state of the bindings at that point. Scheduling should never ever block. Running a work on a `No_device_backend` _should block_ (till execution finishes), but it _should not block_ for a proper `Backend` -- it should just launch the work.
+`No_device_backend`s do not themselves deal with the device abstraction. There's the functor `Multicore_backend (Backend : No_device_backend) : Backend` that assigns a device to a domain, and manages the given `No_device_backend` on the domain-based devices. Scheduling a work captures the state of the bindings at that point. Scheduling should never ever block. Running a work on a `No_device_backend` _should block_ (till execution finishes), but it _should not block_ for a proper `Backend` -- it should just put the work on the device's queue.
 
 ```ocaml
 module type Backend = sig
   include No_device_backend
   ...
+  type physical_device
   type device
   val init : device -> context
   val await : device -> unit
-  val acknowledge : device -> unit
   val is_idle : device -> bool
-  val is_booked : device -> bool
-  val get_device : ordinal:int -> device
+  val get_device : ordinal:int -> physical_device
+  val get_physical_device : device -> physical_device
+  val new_virtual_device : physical_device -> device
   ...
 end
 ```
 
-`Backend.await` synchronizes the device -- waits for all work on the device to finish -- the device becomes `is_idle`. `Backend.acknowledge` waits for the device to not have a pending task -- to start its latest task, if any -- the device becomes not `is_booked`.
+`Backend.await` synchronizes the device -- waits for all work on the device to finish -- the device becomes `is_idle`.
+
+When devices natively implement a lightweight threads mechanism, as CUDA does via _streams_, the lightweight threads are exposed via `new_virtual_device` generating a fresh thread. Otherwise, `physical_device = device` and the functions `new_virtual_device` and `get_physical_device` are identities.
 
 ### Shared (relocatable) compilation, batch compilation
 
@@ -210,15 +213,11 @@ Since the CUDA backend needs to capture the standard output, it additionally pre
 
 ## Synchronization and data transfers
 
-Currently, OCANNL expects backends to implement a _length-1 queue_ scheduling mechanism. The scheduling does not express dependencies between tensors. Only the main domain is allowed to interact with devices, in a single-threaded way. (Other domains are used by CPU backends.) These are the possible states of a host-device interaction:
+Currently, OCANNL expects backends to implement a FIFO queue scheduling mechanism. The scheduling does not express dependencies between tensors. Only the main domain is allowed to interact with devices (queues with single producer -- host, single consumer -- virtual device).
 
-- The device is waiting for work, `Backend.is_idle device = true`. `Backend.await device` blocks till we get to this state. If the host schedules work: scheduling puts the task in the device's queue, the host continues without blocking, the device empties the queue and starts the work.
-- The device is doing work, the queue is empty, `Backend.is_booked device = false`. `Backend.acknowledge device` blocks till we get to this state (or the idle state). If the host schedules work: scheduling puts the task in the device's queue, the host continues without blocking, the device's queue becomes non-empty.
-- The device is doing work, the queue is not empty, `Backend.is_booked device = true`. If the host schedules work: scheduling blocks -- waits to be notified by the device. Once the device finishes the work it's been doing, it picks the previous task from the device's queue, the host puts its task in the queue and continues, the device's queue ends up again non-empty.
+Since this is significantly simpler than what other frameworks do, it might evolve in the future. (In particular, scheduling in `tinygrad` expresses tensor graph dependencies with arbitrary queueing.) A natural next step would be to add "acknowledge" events that indirectly keep track of (and signal) which tasks a device has already executed.
 
-Since this is significantly simpler than what other frameworks do, it might evolve in the future, but let's see how far it gets us. (In particular, scheduling in `tinygrad` expresses tensor graph dependencies with arbitrary queueing.)
-
-Routines take two layers to execute: scheduling a routine captures the state of its static indexing bindings and returns its task, running the task for a device blocks until the task can be put on the device's queue. Besides routines, calling `from_host`, `to_host`, `device_to_device` from a backend blocks to put the corresponding tasks on the device's queue. Implementations of `No_device_backend` and `Simple_backend` (i.e. CPU backends) should run the tasks by executing them directly.
+Scheduling a routine has two steps: the first step (invoking `schedule`) captures the state of the routine's static indexing bindings and returns its task, then, running the task for a device puts the task on the device's queue. Usually these steps are performed together. Besides routines, calling `from_host`, `to_host`, `device_to_device` from a backend puts the corresponding tasks on the device's queue. Implementations of `No_device_backend` and `Simple_backend` (i.e. CPU backends) should run the tasks by executing them directly.
 
 ### Data transfers
 
@@ -229,13 +228,13 @@ module type No_device_backend = sig
   ...
   val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
   (** If the array is both hosted and in-context, schedules a copy from host to context, otherwise does
-      nothing. NOTE: when run for a device, the call books the copying and it's the caller's responsibility to
-      synchronize the device before the host's data is overwritten. *)
+      nothing. NOTE: when run for a device, it's the caller's responsibility to synchronize the device
+      before the host's data is overwritten. *)
 
   val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
   (** If the array is both hosted and in-context, schedules a copy from context to host, otherwise does
-      nothing. NOTE: when run for a device, the call books the copying and it's the caller's responsibility to
-      synchronize the device before the host's data is read. *)
+      nothing. NOTE: when run for a device, it's the caller's responsibility to synchronize the device
+      before the host's data is read. *)
 
   val device_to_device :
     ?rt:(module Minidebug_runtime.Debug_runtime) ->
@@ -249,9 +248,9 @@ module type No_device_backend = sig
       of [dst]; otherwise, if [~into_merge_buffer:true], unsets the merge buffer source on [dst]. If
       [~into_merge_buffer:false], copies into the given node on [dst]; if [~into_merge_buffer:true], sets on
       [dst] the merge buffer source to the given node and handles the transfer using it. NOTE: when run for a
-      device, the call books the copying and it's the caller's responsibility to synchronize the [src] device,
-      if needed, {i before} calling [device_to_device], and the [dst] device {i afterward}, according to
-      {!physical_merge_buffers}, before any computations on the [src] device overwrite the node. *)
+      device, it's the caller's responsibility to synchronize the [src] device, if needed, {i before} calling
+      [device_to_device], and the [dst] device {i afterward}, according to {!physical_merge_buffers}, before
+      any computations on the [src] device overwrite the node. *)
 
   val physical_merge_buffers : bool
   (** If [physical_merge_buffers = true], the [src] node data is not needed after the task scheduled by

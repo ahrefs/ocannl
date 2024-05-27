@@ -9,7 +9,7 @@ module Rand = Arrayjit.Rand.Lib
 let () =
   Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
-  let device = Backend.get_device ~ordinal:0 in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Utils.settings.output_debug_files_in_run_directory <- true;
   let a = TDSL.range_of_shape ~label:[ "a" ] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in

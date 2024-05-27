@@ -28,13 +28,15 @@ type tn_info = {
 }
 [@@deriving sexp_of]
 
-type device = {
+type physical_device = {
   dev : (Cudajit.device[@sexp.opaque]);
   ordinal : int;
   primary_context : (Cudajit.context[@sexp.opaque]);
   mutable postprocess_queue : (context * (output:string list -> unit)) list;
 }
 [@@deriving sexp_of]
+
+and device = { physical : physical_device; stream : (Cudajit.stream[@sexp.opaque]); subordinal : int }
 
 and context = {
   label : string;
@@ -51,10 +53,18 @@ and context = {
 type info_nodes = { mutable info_nodes : tn_info Map.M(Tn).t; used_tensors : Hash_set.M(Tn).t }
 [@@deriving sexp_of]
 
+let get_name { physical = { ordinal; _ }; subordinal; _ } =
+  Int.to_string ordinal ^ "_" ^ Int.to_string subordinal
+
+type config = [ `Physical_devices_only | `For_parallel_copying | `Most_parallel_devices ]
+[@@deriving equal, sexp, variants]
+
+let global_config = ref `For_parallel_copying
+
 let init device =
   {
-    label = "cuda " ^ Int.to_string device.ordinal;
-    ctx = device.primary_context;
+    label = "cuda " ^ get_name device;
+    ctx = device.physical.primary_context;
     device;
     all_arrays = Map.empty (module Tn);
     global_arrays = Map.empty (module Tn);
@@ -64,15 +74,16 @@ let init device =
 let is_initialized, initialize =
   let initialized = ref false in
   ( (fun () -> !initialized),
-    fun () ->
+    fun config ->
       initialized := true;
+      global_config := config;
       Cudajit.init () )
 
-let num_devices = Cudajit.device_get_count
+let num_physical_devices = Cudajit.device_get_count
 let devices = ref @@ Core.Weak.create 0
 
 let get_device ~ordinal =
-  if num_devices () <= ordinal then
+  if num_physical_devices () <= ordinal then
     invalid_arg [%string "Exec_as_cuda.get_device %{ordinal#Int}: not enough devices"];
   if Core.Weak.length !devices <= ordinal then (
     let old = !devices in
@@ -85,8 +96,35 @@ let get_device ~ordinal =
       Core.Weak.set !devices ordinal (Some result);
       result)
 
+let new_virtual_device physical =
+  (* FIXME: *)
+  let subordinal = 0 in
+  let stream = Cudajit.no_stream in
+  { physical; stream; subordinal }
+
+let cuda_properties =
+  let cache =
+    lazy
+      (Array.init (num_physical_devices ()) ~f:(fun ordinal ->
+           let dev = get_device ~ordinal in
+           lazy (Cudajit.device_get_attributes dev.dev)))
+  in
+  fun physical ->
+    if not @@ is_initialized () then invalid_arg "cuda_properties: CUDA not initialized";
+    let cache = Lazy.force cache in
+    Lazy.force cache.(physical.ordinal)
+
+let suggested_num_virtual_devices device =
+  match !global_config with
+  | `Physical_devices_only -> 1
+  | `For_parallel_copying -> 1 + (cuda_properties device).async_engine_count
+  | `Most_parallel_devices -> (cuda_properties device).multiprocessor_count
+
 let get_ctx_device { device; _ } = device
+let get_physical_device { physical; _ } = physical
 let to_ordinal { ordinal; _ } = ordinal
+let to_subordinal { subordinal; _ } = subordinal
+let get_name device = Int.to_string (to_ordinal device.physical) ^ "_" ^ Int.to_string (to_subordinal device)
 
 let set_ctx ctx =
   let cur_ctx = Cudajit.ctx_get_current () in
@@ -110,15 +148,16 @@ let capture_stdout arg =
   with _ -> List.rev !ls
 
 let finalize ctx =
-  if Option.is_some @@ Core.Weak.get !devices ctx.device.ordinal then (
-    set_ctx ctx.device.primary_context;
+  if Option.is_some @@ Core.Weak.get !devices ctx.device.physical.ordinal then (
+    set_ctx ctx.device.physical.primary_context;
     let output = capture_stdout @@ fun () -> Option.iter ctx.run_module ~f:Cudajit.module_unload in
     Exn.protect
       ~f:(fun () ->
-        List.iter ctx.device.postprocess_queue ~f:(fun (f_ctx, f) -> if phys_equal f_ctx ctx then f ~output))
+        List.iter ctx.device.physical.postprocess_queue ~f:(fun (f_ctx, f) ->
+            if phys_equal f_ctx ctx then f ~output))
       ~finally:(fun () ->
-        ctx.device.postprocess_queue <-
-          List.filter ctx.device.postprocess_queue ~f:(fun (f_ctx, _) -> phys_equal f_ctx ctx));
+        ctx.device.physical.postprocess_queue <-
+          List.filter ctx.device.physical.postprocess_queue ~f:(fun (f_ctx, _) -> phys_equal f_ctx ctx));
     Map.iter ctx.global_arrays ~f:(fun ptr -> Cudajit.mem_free ptr))
 
 let unsafe_cleanup ?unsafe_shutdown:_ () =
@@ -130,15 +169,15 @@ let unsafe_cleanup ?unsafe_shutdown:_ () =
   Core.Weak.fill !devices 0 len None
 
 let await device =
+  (* FIXME: NOT IMPLEMENTED YET *)
+  let device = device.physical in
   set_ctx device.primary_context;
   let output = capture_stdout Cudajit.ctx_synchronize in
   Exn.protect
     ~f:(fun () -> List.iter device.postprocess_queue ~f:(fun (_, f) -> f ~output))
     ~finally:(fun () -> device.postprocess_queue <- [])
 
-let acknowledge _device = failwith "NOT IMPLEMENTED YET"
 let is_idle _device = failwith "NOT IMPLEMENTED YET"
-let is_booked _device = failwith "NOT IMPLEMENTED YET"
 
 let%track_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context) tn =
   match (Map.find ctx.all_arrays tn, Map.find ctx.global_arrays tn) with
@@ -187,7 +226,7 @@ let%track_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) 
                 "using merge buffer",
                 (into_merge_buffer : bool),
                 "from device",
-                (get_ctx_device src |> to_ordinal : int)]))
+                get_ctx_device src |> get_name]))
 
 (* let pp_semi ppf () = Stdlib.Format.fprintf ppf ";@ " *)
 let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
@@ -600,7 +639,8 @@ let link old_context (code : code) =
             context.label;
             Utils.log_trace_tree _debug_runtime output]
         in
-        context.device.postprocess_queue <- (context, postprocess_logs) :: context.device.postprocess_queue
+        context.device.physical.postprocess_queue <-
+          (context, postprocess_logs) :: context.device.physical.postprocess_queue
     in
     Tnode.Work work
   in

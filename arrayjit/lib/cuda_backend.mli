@@ -2,7 +2,10 @@ type context [@@deriving sexp_of]
 type code [@@deriving sexp_of]
 type code_batch [@@deriving sexp_of]
 
-val initialize : unit -> unit
+type config = [ `Physical_devices_only | `For_parallel_copying | `Most_parallel_devices ]
+[@@deriving equal, sexp, variants]
+
+val initialize : config -> unit
 val is_initialized : unit -> bool
 val finalize : context -> unit
 val sexp_of_context : context -> Sexplib.Sexp.t
@@ -35,15 +38,19 @@ val device_to_device :
 
 val physical_merge_buffers : bool
 
+type physical_device
 type device
 
 val init : device -> context
 val await : device -> unit
-val acknowledge : device -> unit
 val is_idle : device -> bool
-val is_booked : device -> bool
 val sexp_of_device : device -> Sexplib.Sexp.t
-val num_devices : unit -> int
-val get_device : ordinal:int -> device
+val num_physical_devices : unit -> int
+val suggested_num_virtual_devices : physical_device -> int
+val get_device : ordinal:int -> physical_device
+val get_physical_device : device -> physical_device
+val new_virtual_device : physical_device -> device
 val get_ctx_device : context -> device
-val to_ordinal : device -> int
+val get_name : device -> string
+val to_ordinal : physical_device -> int
+val to_subordinal : device -> int
