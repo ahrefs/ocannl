@@ -194,9 +194,11 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     let%diagn_rt_sexp work () = schedule_task device task in
     Tnode.Work work
 
+  let is_idle device = Utils.is_empty device.state.dev_pos && device.state.dev_waiting
+
   let await device =
     assert (Domain.is_main_domain ());
-    while device.state.keep_spinning && not device.state.dev_waiting do
+    while device.state.keep_spinning && not (is_idle device) do
       device.state.host_waiting <- true;
       Exn.protect ~f:device.host_wait_for_idle.await ~finally:(fun () -> device.state.host_waiting <- false)
     done
