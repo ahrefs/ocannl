@@ -106,6 +106,21 @@ let hello5 () =
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho
 
+let hello6 () =
+  Utils.settings.with_debug_level <- 2;
+  Utils.settings.output_debug_files_in_run_directory <- true;
+  Utils.settings.debug_log_from_routines <- true;
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
+  let ctx = Backend.init device in
+  Rand.init 0;
+  (* "Hey" is inferred to be a scalar. *)
+  let%op y = 2 *. "hey" in
+  Train.forward_and_forget backend ctx y;
+  (* Tensor.print ~with_code:false ~with_grad:false `Default @@ hey; *)
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ y
+
 let () =
-  ignore (hello1, hello2, hello3, hello4, hello5);
-  hello4 ()
+  ignore (hello1, hello2, hello3, hello4, hello5, hello6);
+  hello6 ()

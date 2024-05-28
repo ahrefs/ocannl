@@ -185,7 +185,7 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov l =
 
 (** All and only bindings with associated ranges are iterated, with the binding's initial value lost. Bindings
     without ranges remain at their initial values. *)
-let sequential_loop ~f lowered_bindings =
+let%track_sexp sequential_loop ~f lowered_bindings =
   let rec loop = function
     | [] -> f ()
     | ({ Idx.static_range = None; static_symbol = _ }, _) :: more -> loop more
@@ -264,10 +264,10 @@ let%debug_sexp all_device_to_host (type context) (module Backend : Backend_type 
     before copying to host. If [looping] is provided, loops over bindings and executes the given function
     inside the loop after a run. All and only bindings with associated ranges are iterated, with the binding's
     initial value lost. Bindings without ranges remain at their initial values. *)
-let sync_run ?looping (type context) (module Backend : Backend_type with type context = context)
+let%track_sexp sync_run ?looping (type context) (module Backend : Backend_type with type context = context)
     (routine : Backend.routine) t =
-  let work = routine.schedule () in
   all_host_to_device (module Backend) routine.context t;
+  let work = routine.schedule () in
   (match looping with
   | None -> Tn.run debug_rt work
   | Some then_ ->
@@ -276,8 +276,8 @@ let sync_run ?looping (type context) (module Backend : Backend_type with type co
         then_ ()
       in
       sequential_loop ~f routine.bindings);
-  Backend.await @@ Backend.get_ctx_device routine.context;
-  all_device_to_host (module Backend) routine.context t
+  all_device_to_host (module Backend) routine.context t;
+  Backend.await @@ Backend.get_ctx_device routine.context
 
 module Lazy = Utils.Lazy
 
@@ -583,7 +583,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   (* Note: infer_callback is significantly less efficient than using the model via arrayjit. *)
   (inputs, outputs, model_result, infer_callback, !batch_losses, !epoch_losses, !learning_rates)
 
-let forward_and_forget ?(disable_rootness_check = false) (type context)
+let%track_sexp forward_and_forget ?(disable_rootness_check = false) (type context)
     (module Backend : Backend_type with type context = context) ctx ?(bindings = IDX.empty) t =
   let routine = Backend.(link ctx @@ compile bindings @@ forward ~disable_rootness_check t) in
   if not disable_rootness_check then Tensor.remove_bprop_root t;

@@ -723,15 +723,15 @@ let%track_sexp link_compiled (old_context : context) (code : procedure) : contex
   in
   (context, Indexing.lowered_bindings code.bindings run_variadic, schedule, name)
 
-let%track_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (context : context)
-    (tn : Tn.t) : unit =
+let%diagn_sexp from_host ?rt (context : context) (tn : Tn.t) : unit =
   Option.iter (Map.find context.arrays tn) ~f:(fun c_arr ->
       match tn.Tn.array with
       | (lazy (Some h_arr)) ->
           Ndarray.map2 { f2 = Ndarray.A.blit } h_arr c_arr;
           if Utils.settings.with_debug_level > 0 then (
             let module Debug_runtime =
-              (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
+              (val Option.value_or_thunk rt ~default:(fun () ->
+                       (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
             in
             [%log "copied", Tn.label tn, Tn.name tn, "from host"];
             if Utils.settings.with_debug_level > 1 then
@@ -740,7 +740,7 @@ let%track_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option)
                 Ndarray.render_array ~indices c_arr])
       | (lazy None) -> ())
 
-let%track_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (context : context) (tn : Tn.t)
+let%diagn_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (context : context) (tn : Tn.t)
     : unit =
   Option.iter (Map.find context.arrays tn) ~f:(fun c_arr ->
       match tn.Tn.array with
@@ -757,7 +757,7 @@ let%track_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (
                 Ndarray.render_array ~indices h_arr])
       | (lazy None) -> ())
 
-let%track_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn ~into_merge_buffer
+let%diagn_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn ~into_merge_buffer
     ~dst ~src =
   Option.iter (Map.find src.arrays tn) ~f:(fun s_arr ->
       Option.iter (Map.find dst.arrays tn) ~f:(fun d_arr ->
@@ -772,9 +772,7 @@ let%track_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) 
                 Tn.label tn,
                 Tn.name tn,
                 "using merge buffer",
-                (into_merge_buffer : bool),
-                "from device",
-                Backend.get_ctx_device src |> Backend.get_name];
+                (into_merge_buffer : bool)];
             if Utils.settings.with_debug_level > 1 then
               [%log_printbox
                 let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in

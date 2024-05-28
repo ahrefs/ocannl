@@ -179,7 +179,7 @@ let await device =
 
 let is_idle _device = failwith "NOT IMPLEMENTED YET"
 
-let%track_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context) tn =
+let%diagn_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context) tn =
   match (Map.find ctx.all_arrays tn, Map.find ctx.global_arrays tn) with
   | Some { tn = { Tn.array = (lazy (Some hosted)); _ }; _ }, Some dst ->
       set_ctx ctx.ctx;
@@ -191,7 +191,7 @@ let%track_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option)
         [%log "copied", Tn.label tn, Tn.name tn, "from host"]
   | _ -> ()
 
-let%track_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context) tn =
+let%diagn_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context) tn =
   match (Map.find ctx.all_arrays tn, Map.find ctx.global_arrays tn) with
   | Some { tn = { Tn.array = (lazy (Some hosted)); _ }; _ }, Some src ->
       set_ctx ctx.ctx;
@@ -204,10 +204,10 @@ let%track_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (
         if Utils.settings.with_debug_level > 1 then
           [%log_printbox
             let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
-            Ndarray.render_array ~indices h_arr])
+            Ndarray.render_array ~indices hosted])
   | _ -> ()
 
-let%track_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn ~into_merge_buffer
+let%diagn_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn ~into_merge_buffer
     ~dst ~src =
   Option.iter (Map.find src.global_arrays tn) ~f:(fun s_arr ->
       Option.iter (Map.find dst.global_arrays tn) ~f:(fun d_arr ->

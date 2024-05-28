@@ -210,7 +210,6 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let init device = { device; ctx = Backend.init ~label:(name ^ " " ^ Int.to_string device.ordinal) }
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
-  let is_idle device = device.state.dev_waiting
 
   let finalize { device; ctx } =
     await device;
@@ -236,12 +235,6 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                make_work device @@ task.schedule ()
              in
              { task with context = { ctx = task.context; device }; schedule }))
-
-  (* let from_host_callback { device; ctx } tn = Option.map (Backend.from_host_callback ctx tn) ~f:(fun task
-     -> make_work device task)
-
-     let to_host_callback { device; ctx } tn = Option.map (Backend.to_host_callback ctx tn) ~f:(fun task ->
-     make_work device task) *)
 
   let from_host ?rt context tn =
     if Option.is_some rt then
