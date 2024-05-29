@@ -6,7 +6,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 type 'context routine = {
   context : 'context;
-  schedule : unit -> Tnode.work;
+  schedule : Tnode.task;
   bindings : Indexing.lowered_bindings;
   name : string;
 }
@@ -126,7 +126,7 @@ let forget_printbox (module Runtime : Minidebug_runtime.PrintBox_runtime) =
 module Multicore_backend (Backend : No_device_backend) : Backend = struct
   module Domain = Domain [@warning "-3"]
 
-  type task_list = (Tnode.work[@sexp.opaque]) Utils.mutable_list [@@deriving sexp_of]
+  type task_list = (Tnode.task[@sexp.opaque]) Utils.mutable_list [@@deriving sexp_of]
 
   type device_state = {
     mutable keep_spinning : bool;
@@ -223,21 +223,13 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let link { ctx; device } code =
     let task = Backend.link ctx code in
-    let%diagn_sexp schedule () =
-      [%log_result "Scheduling", task.name];
-      make_work device @@ task.schedule ()
-    in
-    { task with context = { ctx = task.context; device }; schedule }
+    { task with context = { ctx = task.context; device }; schedule = make_work device task.schedule }
 
   let link_batch { ctx; device } code_batch =
     Array.map (Backend.link_batch ctx code_batch)
       ~f:
         (Option.map ~f:(fun task ->
-             let%diagn_sexp schedule () =
-               [%log_result "Scheduling from batch", task.name];
-               make_work device @@ task.schedule ()
-             in
-             { task with context = { ctx = task.context; device }; schedule }))
+             { task with context = { ctx = task.context; device }; schedule = make_work device task.schedule }))
 
   let from_host ?rt context tn =
     if Option.is_some rt then
@@ -338,7 +330,7 @@ module type Simple_backend = sig
     procedure option array
 
   val link_compiled :
-    context -> procedure -> context * Indexing.lowered_bindings * (unit -> Tnode.work) * string
+    context -> procedure -> context * Indexing.lowered_bindings * Tnode.task * string
 
   val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
   val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit

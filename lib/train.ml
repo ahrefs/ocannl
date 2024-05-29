@@ -39,7 +39,7 @@ module IDX = struct
 end
 
 let debug_rt = (module Debug_runtime : Minidebug_runtime.Debug_runtime)
-let run jitted = Tn.run debug_rt @@ jitted.Arrayjit.Backends.schedule ()
+let run jitted = Tn.run debug_rt jitted.Arrayjit.Backends.schedule
 
 (** Reinitializes a backend selected via a global [backend] flag. *)
 let fresh_backend ?backend_name ?(config = `Physical_devices_only) () =
@@ -267,12 +267,11 @@ let%debug_sexp all_device_to_host (type context) (module Backend : Backend_type 
 let%track_sexp sync_run ?looping (type context) (module Backend : Backend_type with type context = context)
     (routine : Backend.routine) t =
   all_host_to_device (module Backend) routine.context t;
-  let work = routine.schedule () in
   (match looping with
-  | None -> Tn.run debug_rt work
+  | None -> Tn.run debug_rt routine.schedule
   | Some then_ ->
       let f () =
-        Tn.run debug_rt work;
+        Tn.run debug_rt routine.schedule;
         then_ ()
       in
       sequential_loop ~f routine.bindings);
@@ -421,8 +420,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   let grad_merges =
     Array.init num_devices ~f:(fun (to_ : int) ->
         Array.init num_devices ~f:(fun (from : int) ->
-            (* It is safe to cache scheduling, because merging does not use static indices. *)
-            List.map grad_merges.(from) ~f:(fun c -> (Backend.link ctxs.(to_) c).schedule ())))
+            List.map grad_merges.(from) ~f:(fun c -> (Backend.link ctxs.(to_) c).schedule)))
   in
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
   let name_prefixes = Array.create ~len:num_devices "loss_merge" in
@@ -433,10 +431,9 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   let loss_merges =
     Array.init num_devices ~f:(fun (to_ : int) ->
         Array.init num_devices ~f:(fun (from : int) ->
-            (* It is safe to cache scheduling, because merging does not use static indices. *)
             match loss_merges.(from) with
             | [] -> None
-            | [ c ] -> Some ((Backend.link ctxs.(to_) c).schedule ())
+            | [ c ] -> Some (Backend.link ctxs.(to_) c).schedule
             | _ -> assert false))
   in
   let merge ~(from : int) ~(to_ : int) : unit =
@@ -460,11 +457,11 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   in
   let copies =
     Array.init (num_devices - 1) ~f:(fun (to_m_1 : int) ->
-        List.map copies ~f:(fun c -> (Backend.link ctxs.(to_m_1 + 1) c).schedule ()))
+        List.map copies ~f:(fun c -> (Backend.link ctxs.(to_m_1 + 1) c).schedule))
   in
   let%track_sexp sync (devices_to_sync : int) : unit =
     Arrayjit.Utils.parallel_merge merge devices_to_sync;
-    Tn.run debug_rt @@ sgd_update.schedule ();
+    Tn.run debug_rt sgd_update.schedule;
     (* We need to wait, because copying happens on other devices. *)
     Set.iter !needed_on_host ~f:(fun p -> Backend.to_host sgd_update.context p);
     Backend.(await @@ get_ctx_device sgd_update.context);
@@ -475,7 +472,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     post_sync ~num_synced_devices:devices_to_sync
   in
   let lowered_bindings = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.bindings)] in
-  let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd () -> Tn.run debug_rt @@ upd.schedule ())] in
+  let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd () -> Tn.run debug_rt upd.schedule)] in
   fun () -> round_robin fs lowered_bindings sgd_update.bindings ~sync
 
 let debug_name t = Tn.(debug_name ~id:t.Tensor.value.id ~label:t.value.label)

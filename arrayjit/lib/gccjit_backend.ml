@@ -710,47 +710,37 @@ let%track_sexp link_compiled (old_context : context) (code : procedure) : contex
          wrong order but that's OK because [link] only uses them to check the number of indices. *)
       link code.bindings (List.rev code.params) Ctypes.(void @-> returning void)]
   in
-  let schedule () =
-    let callback = Indexing.apply run_variadic in
-    let%diagn_rt_sexp work () : unit =
-      [%log_result name];
-      callback ();
-      if Utils.settings.debug_log_from_routines then (
-        Utils.log_trace_tree _debug_runtime (Stdio.In_channel.read_lines log_file_name);
-        Stdlib.Sys.remove log_file_name)
-    in
-    Tn.Work work
+  let%diagn_rt_sexp work () : unit =
+    [%log_result name];
+    Indexing.apply run_variadic ();
+    if Utils.settings.debug_log_from_routines then (
+      Utils.log_trace_tree _debug_runtime (Stdio.In_channel.read_lines log_file_name);
+      Stdlib.Sys.remove log_file_name)
   in
-  (context, Indexing.lowered_bindings code.bindings run_variadic, schedule, name)
+  (context, Indexing.lowered_bindings code.bindings run_variadic, Tn.Work work, name)
 
-let from_host ?rt (context : context) (tn : Tn.t) : unit =
+let from_host ?rt:_ (context : context) (tn : Tn.t) : unit =
   Option.iter (Map.find context.arrays tn) ~f:(fun c_arr ->
       match tn.Tn.array with
       | (lazy (Some h_arr)) ->
-          Ndarray.map2 { f2 = Ndarray.A.blit } h_arr c_arr;
-          if Utils.settings.with_debug_level > 0 then
-            let module Debug_runtime =
-              (val Option.value_or_thunk rt ~default:(fun () ->
-                       (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
-            in
-            [%diagn_sexp
-              [%log_entry
-                "from_host " ^ Tn.unsafe_ident tn;
-                [%log "copied", Tn.label tn, Tn.name tn, "from host"];
-                if Utils.settings.with_debug_level > 1 then
-                  [%log_printbox
-                    let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
-                    Ndarray.render_array ~indices c_arr]]]
+          Ndarray.map2 { f2 = Ndarray.A.blit } h_arr c_arr
+          (* ; if Utils.settings.with_debug_level > 0 then let module Debug_runtime = (val
+             Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime :
+             Minidebug_runtime.Debug_runtime))) in [%diagn_sexp [%log_entry "from_host " ^ Tn.unsafe_ident tn;
+             [%log "copied", Tn.label tn, Tn.name tn, "from host"]; if Utils.settings.with_debug_level > 1
+             then [%log_printbox let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i
+             - 5) in Ndarray.render_array ~indices c_arr]]] *)
       | (lazy None) -> ())
 
-let to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (context : context) (tn : Tn.t) : unit =
+let to_host ?rt (context : context) (tn : Tn.t) : unit =
   Option.iter (Map.find context.arrays tn) ~f:(fun c_arr ->
       match tn.Tn.array with
       | (lazy (Some h_arr)) ->
           Ndarray.map2 { f2 = Ndarray.A.blit } c_arr h_arr;
           if Utils.settings.with_debug_level > 0 then
             let module Debug_runtime =
-              (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
+              (val Option.value_or_thunk rt ~default:(fun () ->
+                       (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
             in
             [%diagn_sexp
               [%log_entry

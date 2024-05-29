@@ -14,11 +14,8 @@ val compile : ?name:string -> Indexing.unit_bindings -> Low_level.optimized -> c
 val compile_batch :
   names:string option array -> Indexing.unit_bindings -> Low_level.optimized option array -> code_batch
 
-val link : context -> code -> context * Indexing.lowered_bindings * (unit -> Tnode.work)
-
-val link_batch :
-  context -> code_batch -> context * Indexing.lowered_bindings * (unit -> Tnode.work) option array
-
+val link : context -> code -> context * Indexing.lowered_bindings * Tnode.task
+val link_batch : context -> code_batch -> context * Indexing.lowered_bindings * Tnode.task option array
 val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
 
 val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit

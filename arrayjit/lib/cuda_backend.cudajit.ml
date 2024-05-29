@@ -589,10 +589,10 @@ let link old_context (code : code) =
   let context = { old_context with run_module = Some run_module; global_arrays; all_arrays } in
   let idx_params = Indexing.bound_symbols code.bindings in
   let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
-  let%diagn_sexp schedule () =
+  let%diagn_rt_sexp work () : unit =
     let log_id = get_global_run_id () in
     let log_id_prefix = Int.to_string log_id ^ ": " in
-    [%log_result "Scheduling", code.name, context.label, (log_id : int)];
+    [%log_result "Launching", code.name, context.label, (log_id : int)];
     let module Cu = Cudajit in
     let log_arg = if Utils.settings.debug_log_from_routines then [ Cu.Int log_id ] else [] in
     let idx_args =
@@ -620,31 +620,28 @@ let link old_context (code : code) =
           | Global, Some _, Some ptr -> Some (Cu.Tensor ptr)
           | _ -> None)
     in
-    let%diagn_rt_sexp work () : unit =
-      [%log "zeroing-out global memory"];
-      set_ctx context.ctx;
-      Map.iteri global_arrays ~f:(fun ~key ~data:ptr ->
-          if Hash_set.mem code.info.used_tensors key then
-            let node = Map.find_exn all_arrays key in
-            if node.zero_initialized then Cu.memset_d8 ptr Unsigned.UChar.zero ~length:node.size_in_bytes);
-      [%log "launching the kernel"];
-      (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
-      Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream
-      @@ log_arg @ idx_args @ args;
-      [%log "kernel launched"];
-      if Utils.settings.debug_log_from_routines then
-        let postprocess_logs ~output =
-          let output = List.filter_map output ~f:(String.chop_prefix ~prefix:log_id_prefix) in
-          [%log_entry
-            context.label;
-            Utils.log_trace_tree _debug_runtime output]
-        in
-        context.device.physical.postprocess_queue <-
-          (context, postprocess_logs) :: context.device.physical.postprocess_queue
-    in
-    Tnode.Work work
+    [%log "zeroing-out global memory"];
+    set_ctx context.ctx;
+    Map.iteri global_arrays ~f:(fun ~key ~data:ptr ->
+        if Hash_set.mem code.info.used_tensors key then
+          let node = Map.find_exn all_arrays key in
+          if node.zero_initialized then Cu.memset_d8 ptr Unsigned.UChar.zero ~length:node.size_in_bytes);
+    [%log "launching the kernel"];
+    (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
+    Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream
+    @@ log_arg @ idx_args @ args;
+    [%log "kernel launched"];
+    if Utils.settings.debug_log_from_routines then
+      let postprocess_logs ~output =
+        let output = List.filter_map output ~f:(String.chop_prefix ~prefix:log_id_prefix) in
+        [%log_entry
+          context.label;
+          Utils.log_trace_tree _debug_runtime output]
+      in
+      context.device.physical.postprocess_queue <-
+        (context, postprocess_logs) :: context.device.physical.postprocess_queue
   in
-  (context, idx_args, schedule)
+  (context, idx_args, Tnode.Work work)
 
 let link_batch old_context (code_batch : code_batch) =
   let idx_params = Indexing.bound_symbols code_batch.bindings in

@@ -7,11 +7,11 @@ Currently, OCANNL integrates new backends via code in [backends.ml](backends.ml)
 ```ocaml
 type lowered_bindings = (static_symbol, int ref) List.Assoc.t  (* in indexing.ml *)
 
-type work = Work of ((module Debug_runtime) -> unit -> unit)  (* in tnode.ml *)
+type task = Work of ((module Debug_runtime) -> unit -> unit)  (* in tnode.ml *)
 
 type 'context routine = {
   context : 'context;
-  schedule : unit -> work;
+  schedule : task;
   bindings : lowered_bindings;
   name : string;
 }
@@ -48,7 +48,7 @@ end
 
 where `Simple_backend` implements a `No_device_backend` functionality, but only needs to deal with `Low_level.optimized` and its compilation result type `procedure`.
 
-`No_device_backend`s do not themselves deal with the device abstraction. There's the functor `Multicore_backend (Backend : No_device_backend) : Backend` that assigns a device to a domain, and manages the given `No_device_backend` on the domain-based devices. Scheduling a work captures the state of the bindings at that point. Scheduling should never ever block. Running a work on a `No_device_backend` _should block_ (till execution finishes), but it _should not block_ for a proper `Backend` -- it should just put the work on the device's queue.
+`No_device_backend`s do not themselves deal with the device abstraction. There's the functor `Multicore_backend (Backend : No_device_backend) : Backend` that assigns a device to a domain, and manages the given `No_device_backend` on the domain-based devices. Running `schedule` on a `No_device_backend` _should block_ (till execution finishes), but it _should not block_ for a proper `Backend` -- it should just put the work on the device's queue.
 
 ```ocaml
 module type Backend = sig
@@ -149,7 +149,7 @@ module type Simple_backend = sig
   ...
 
   val link_compiled :
-    context -> procedure -> context * Indexing.lowered_bindings * (unit -> Tnode.work) * string
+    context -> procedure -> context * Indexing.lowered_bindings * Tnode.task * string
 
   ...
 end
@@ -217,7 +217,7 @@ Currently, OCANNL expects backends to implement a FIFO queue scheduling mechanis
 
 Since this is significantly simpler than what other frameworks do, it might evolve in the future. (In particular, scheduling in `tinygrad` expresses tensor graph dependencies with arbitrary queueing.) A natural next step would be to add "acknowledge" events that indirectly keep track of (and signal) which tasks a device has already executed.
 
-Scheduling a routine has two steps: the first step (invoking `schedule`) captures the state of the routine's static indexing bindings and returns its task, then, running the task for a device puts the task on the device's queue. Usually these steps are performed together. Besides routines, calling `from_host`, `to_host`, `device_to_device` from a backend puts the corresponding tasks on the device's queue. Implementations of `No_device_backend` and `Simple_backend` (i.e. CPU backends) should run the tasks by executing them directly.
+Besides routines, calling `from_host`, `to_host`, `device_to_device` from a backend puts the corresponding tasks on the device's queue. Implementations of `No_device_backend` and `Simple_backend` (i.e. CPU backends) should run the tasks by executing them directly.
 
 ### Data transfers
 

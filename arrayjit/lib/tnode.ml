@@ -6,7 +6,7 @@ module Debug_runtime = Utils.Debug_runtime
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-type work = Work of ((module Minidebug_runtime.Debug_runtime) -> unit -> unit)
+type task = Work of ((module Minidebug_runtime.Debug_runtime) -> unit -> unit)
 [@@unboxed] [@@deriving sexp_of]
 
 let[@inline] run debug_runtime (Work work) = work debug_runtime ()
