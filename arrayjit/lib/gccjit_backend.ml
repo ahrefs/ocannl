@@ -723,59 +723,70 @@ let%track_sexp link_compiled (old_context : context) (code : procedure) : contex
   in
   (context, Indexing.lowered_bindings code.bindings run_variadic, schedule, name)
 
-let%diagn_sexp from_host ?rt (context : context) (tn : Tn.t) : unit =
+let from_host ?rt (context : context) (tn : Tn.t) : unit =
   Option.iter (Map.find context.arrays tn) ~f:(fun c_arr ->
       match tn.Tn.array with
       | (lazy (Some h_arr)) ->
           Ndarray.map2 { f2 = Ndarray.A.blit } h_arr c_arr;
-          if Utils.settings.with_debug_level > 0 then (
+          if Utils.settings.with_debug_level > 0 then
             let module Debug_runtime =
               (val Option.value_or_thunk rt ~default:(fun () ->
                        (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
             in
-            [%log "copied", Tn.label tn, Tn.name tn, "from host"];
-            if Utils.settings.with_debug_level > 1 then
-              [%log_printbox
-                let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
-                Ndarray.render_array ~indices c_arr])
+            [%diagn_sexp
+              [%log_entry
+                "from_host " ^ Tn.unsafe_ident tn;
+                [%log "copied", Tn.label tn, Tn.name tn, "from host"];
+                if Utils.settings.with_debug_level > 1 then
+                  [%log_printbox
+                    let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
+                    Ndarray.render_array ~indices c_arr]]]
       | (lazy None) -> ())
 
-let%diagn_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (context : context) (tn : Tn.t)
-    : unit =
+let to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (context : context) (tn : Tn.t) : unit =
   Option.iter (Map.find context.arrays tn) ~f:(fun c_arr ->
       match tn.Tn.array with
       | (lazy (Some h_arr)) ->
           Ndarray.map2 { f2 = Ndarray.A.blit } c_arr h_arr;
-          if Utils.settings.with_debug_level > 0 then (
+          if Utils.settings.with_debug_level > 0 then
             let module Debug_runtime =
               (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
             in
-            [%log "copied", Tn.label tn, Tn.name tn, "to host"];
-            if Utils.settings.with_debug_level > 1 then
-              [%log_printbox
-                let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
-                Ndarray.render_array ~indices h_arr])
+            [%diagn_sexp
+              [%log_entry
+                "to_host " ^ Tn.unsafe_ident tn;
+                [%log "copied", Tn.label tn, Tn.name tn, "to host"];
+                if Utils.settings.with_debug_level > 1 then
+                  [%log_printbox
+                    let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
+                    Ndarray.render_array ~indices h_arr]]]
       | (lazy None) -> ())
 
-let%diagn_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn ~into_merge_buffer
-    ~dst ~src =
+let device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn ~into_merge_buffer ~dst ~src =
   Option.iter (Map.find src.arrays tn) ~f:(fun s_arr ->
       Option.iter (Map.find dst.arrays tn) ~f:(fun d_arr ->
           if into_merge_buffer then failwith "NOT IMPLEMENTED YET"
           else Ndarray.map2 { f2 = Ndarray.A.blit } s_arr d_arr;
-          if Utils.settings.with_debug_level > 0 then (
+          if Utils.settings.with_debug_level > 0 then
             let module Debug_runtime =
               (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
             in
-            [%log
-              "copied",
-                Tn.label tn,
-                Tn.name tn,
-                "using merge buffer",
-                (into_merge_buffer : bool)];
-            if Utils.settings.with_debug_level > 1 then
-              [%log_printbox
-                let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
-                Ndarray.render_array ~indices d_arr])))
+            [%diagn_sexp
+              [%log_entry
+                "device_to_device " ^ Tn.unsafe_ident tn;
+                [%log
+                  "copied",
+                    Tn.label tn,
+                    Tn.name tn,
+                    "using merge buffer",
+                    (into_merge_buffer : bool),
+                    "destination",
+                    dst.label,
+                    "source",
+                    src.label];
+                if Utils.settings.with_debug_level > 1 then
+                  [%log_printbox
+                    let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
+                    Ndarray.render_array ~indices d_arr]]]))
 
 let physical_merge_buffers = false

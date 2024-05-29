@@ -161,15 +161,15 @@ let dims_to_string ?(with_axis_numbers = false) arr =
   in
   Ops.prec_string arr.prec ^ " prec " ^ dims_s
 
-let ident_label arr =
-  let is_alphanum_ = String.for_all ~f:(fun c -> Char.equal c '_' || Char.is_alphanum c) in
-  let components = List.filter arr.label ~f:(fun i -> is_alphanum_ i && not (String.equal i "grad")) in
+let is_alphanum_ = String.for_all ~f:(fun c -> Char.equal c '_' || Char.is_alphanum c)
+
+let ident_label tn =
+  let components = List.filter tn.label ~f:(fun i -> is_alphanum_ i && not (String.equal i "grad")) in
   if List.is_empty components then None else Some (String.concat ~sep:"_" components)
 
 let debug_name ~id ~label =
   let n = "n" ^ Int.to_string id in
   let ident_label =
-    let is_alphanum_ = String.for_all ~f:(fun c -> Char.equal c '_' || Char.is_alphanum c) in
     let components = List.filter label ~f:(fun i -> is_alphanum_ i && not (String.equal i "grad")) in
     if List.is_empty components then None else Some (String.concat ~sep:"_" components)
   in
@@ -179,6 +179,10 @@ let debug_name ~id ~label =
   | Some ident -> [%string "%{ident}%{opt_grad}"]
   | None when is_grad -> [%string "n%{id - 1#Int}%{opt_grad}"]
   | None -> n
+
+let unsafe_ident tn =
+  let components = List.filter tn.label ~f:is_alphanum_ in
+  if List.is_empty components then name tn else String.concat ~sep:"_" components
 
 let styled_ident ~repeating_nograd_idents ~repeating_grad_idents style arr =
   let n = name arr in
