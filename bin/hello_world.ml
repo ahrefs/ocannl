@@ -61,8 +61,8 @@ let hello3 () =
   Tensor.print_tree ~with_grad:false ~depth:9 zero_to_twenty;
   Stdlib.Format.print_newline ();
   Train.run routine;
-  Backend.await device;
   Backend.to_host routine.context y.value;
+  Backend.await device;
   Tensor.print ~with_code:true ~with_grad:false `Default y;
   Stdlib.Format.force_newline ();
   Tensor.print_tree ~with_grad:false ~depth:9 y;

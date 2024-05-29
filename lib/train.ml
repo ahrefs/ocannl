@@ -466,8 +466,8 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     Arrayjit.Utils.parallel_merge merge devices_to_sync;
     Tn.run debug_rt @@ sgd_update.schedule ();
     (* We need to wait, because copying happens on other devices. *)
-    Backend.(await @@ get_ctx_device sgd_update.context);
     Set.iter !needed_on_host ~f:(fun p -> Backend.to_host sgd_update.context p);
+    Backend.(await @@ get_ctx_device sgd_update.context);
     (* We will need to update params on all devices! Not only the ones that computed gradients. *)
     for to_ = 1 to num_devices - 1 do
       List.iter copies.(to_ - 1) ~f:(Tn.run debug_rt)
@@ -546,6 +546,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
         Backend.to_host sgd_update.context learning_rate.value;
         (* scalar_loss is not in the sgd_update context. *)
         Backend.to_host grad_updates.(0).context scalar_loss.value;
+        Backend.(await @@ get_ctx_device grad_updates.(0).context);
         let batch_loss = scalar_loss.@[0] in
         epoch_loss := !epoch_loss +. batch_loss;
         batch_losses := batch_loss :: !batch_losses;
@@ -576,8 +577,8 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     (* For the gccjit backend, infer is only on host, not on device. For cuda, this will be needed. *)
     Backend.from_host routine.context infer.value;
     run routine;
-    Backend.await devices.(0);
     Backend.to_host routine.context model_result.value;
+    Backend.await devices.(0);
     Tensor.get_values model_result
   in
   (* Note: infer_callback is significantly less efficient than using the model via arrayjit. *)

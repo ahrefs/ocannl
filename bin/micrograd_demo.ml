@@ -93,9 +93,9 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
     for batch = 0 to n_batches - 1 do
       batch_ref := batch;
       Train.run routine;
-      Backend.await device;
       Backend.to_host routine.context learning_rate.value;
       Backend.to_host routine.context scalar_loss.value;
+      Backend.await device;
       (* Stdio.printf "Data batch=%d, step=%d, lr=%f, batch loss=%f\n%!" !batch_ref !step_ref
          learning_rate.@[0] scalar_loss.@[0]; *)
       learning_rates := learning_rate.@[0] :: !learning_rates;
@@ -125,8 +125,8 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
     (* For the gccjit backend, point is only on host, not on device. For cuda, this will be needed. *)
     Backend.from_host result_routine.context point.value;
     Train.run result_routine;
-    Backend.await device;
     Backend.to_host result_routine.context mlp_result.value;
+    Backend.await device;
     Float.(mlp_result.@[0] >= 0.)
   in
   let plot_moons =

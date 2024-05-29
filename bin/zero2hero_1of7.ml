@@ -59,7 +59,8 @@ let _suspended () =
   Tensor.print_tree ~with_id:true ~with_value:false ~with_grad:false ~depth:9 fx;
   Stdio.print_endline "\n";
   let module Backend = (val Train.fresh_backend ()) in
-  let ctx = Backend.(init @@ new_virtual_device @@ get_device ~ordinal:0) in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
+  let ctx = Backend.init device in
   let update = Train.grad_update fx in
   let routine = Backend.(link ctx @@ compile bindings update.fwd_bprop) in
   let step_ref = IDX.find_exn routine.bindings step_sym in
@@ -68,6 +69,7 @@ let _suspended () =
   let looping () =
     Backend.to_host routine.context fx.value;
     Backend.to_host routine.context (Option.value_exn x.diff).grad;
+    Backend.await device;
     ys.(!step_ref) <- fx.@[0];
     dys.(!step_ref) <- x.@%[0]
   in
@@ -88,6 +90,9 @@ let _suspended () =
   PrintBox_text.output Stdio.stdout plot_box
 
 let () =
+  Utils.settings.with_debug_level <- 2;
+  Utils.settings.output_debug_files_in_run_directory <- true;
+  Utils.settings.debug_log_from_routines <- true;
   Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
@@ -150,8 +155,8 @@ let _suspended () =
   let routine = link (init device) @@ compile IDX.empty @@ update.fwd_bprop in
   Tensor.iter_embedded_arrays l ~f:(fun a -> from_host routine.context a);
   Train.run routine;
-  await device;
   Tensor.iter_embedded_arrays l ~f:(fun a -> to_host routine.context a);
+  await device;
   Stdio.print_endline
     {|
       We did not update the params: all values and gradients will be at initial points,
@@ -168,8 +173,8 @@ let _suspended () =
       on the cuda backend.|};
   List.iter [ a.value; b.value; c.value; f.value ] ~f:(fun a -> from_host routine.context a);
   Train.run routine;
-  await device;
   Tensor.iter_embedded_arrays l ~f:(fun a -> to_host routine.context a);
+  await device;
   Stdio.print_endline
     {|
       Now we updated the params, but after the forward and backward passes:
@@ -179,8 +184,8 @@ let _suspended () =
   let update = Train.grad_update l in
   let routine = link routine.context @@ compile IDX.empty update.fwd_bprop in
   Train.run routine;
-  await device;
   Tensor.iter_embedded_arrays l ~f:(fun a -> to_host routine.context a);
+  await device;
   Stdio.print_endline
     {|
       Now again we did not update the params, they will remain as above, but both param

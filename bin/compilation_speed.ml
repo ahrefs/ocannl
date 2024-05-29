@@ -40,10 +40,10 @@ let benchmark_overhead backend () =
         let%cd update_x = x =: !.v in
         let assign_x = link f_routine.context @@ compile ~name:"assign_x" IDX.empty update_x in
         Train.run assign_x;
-        await device;
+        (* await device; *)
         Train.run f_routine;
-        await device;
         to_host f_routine.context f.value;
+        await device;
         f.@[0])
   in
   let plot_box =
