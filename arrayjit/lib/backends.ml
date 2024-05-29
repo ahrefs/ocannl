@@ -148,13 +148,23 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   type physical_device = device [@@deriving sexp_of]
 
+  let is_idle device = Utils.is_empty device.state.dev_pos && device.state.dev_waiting
+
+  let await device =
+    assert (Domain.is_main_domain ());
+    while device.state.keep_spinning && not (is_idle device) do
+      device.state.host_waiting <- true;
+      Exn.protect ~f:device.host_wait_for_idle.await ~finally:(fun () -> device.state.host_waiting <- false)
+    done
+
   let schedule_task device task =
     assert (Domain.is_main_domain ());
     let d = device.state in
     if not d.keep_spinning then invalid_arg "Multicore_backend: device not available";
-    let initialize = Utils.is_empty d.host_pos in
     d.host_pos <- Utils.insert ~next:task d.host_pos;
-    if initialize then d.dev_pos <- d.host_pos;
+    if Utils.is_empty d.dev_pos then (
+      if not d.dev_waiting then await device;
+      d.dev_pos <- d.host_pos);
     if d.dev_waiting then d.dev_wait.release ()
 
   let global_run_no = ref 0
@@ -193,15 +203,6 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let make_work device task =
     let%diagn_rt_sexp work () = schedule_task device task in
     Tnode.Work work
-
-  let is_idle device = Utils.is_empty device.state.dev_pos && device.state.dev_waiting
-
-  let await device =
-    assert (Domain.is_main_domain ());
-    while device.state.keep_spinning && not (is_idle device) do
-      device.state.host_waiting <- true;
-      Exn.protect ~f:device.host_wait_for_idle.await ~finally:(fun () -> device.state.host_waiting <- false)
-    done
 
   type code = Backend.code [@@deriving sexp_of]
   type code_batch = Backend.code_batch [@@deriving sexp_of]
