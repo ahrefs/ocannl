@@ -717,20 +717,35 @@ let%track_sexp link_compiled (old_context : context) (code : procedure) : contex
       Utils.log_trace_tree _debug_runtime (Stdio.In_channel.read_lines log_file_name);
       Stdlib.Sys.remove log_file_name)
   in
-  (context, Indexing.lowered_bindings code.bindings run_variadic, Tn.Work work, name)
+  ( context,
+    Indexing.lowered_bindings code.bindings run_variadic,
+    Tn.{ description = "executes " ^ code.name ^ " on " ^ context.label; work },
+    name )
 
-let from_host ?rt:_ (context : context) (tn : Tn.t) : unit =
+let from_host ?rt (context : context) (tn : Tn.t) : unit =
   Option.iter (Map.find context.arrays tn) ~f:(fun c_arr ->
       match tn.Tn.array with
       | (lazy (Some h_arr)) ->
-          Ndarray.map2 { f2 = Ndarray.A.blit } h_arr c_arr
-          (* ; if Utils.settings.with_debug_level > 0 then let module Debug_runtime = (val
-             Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime :
-             Minidebug_runtime.Debug_runtime))) in [%diagn_sexp [%log_entry "from_host " ^ Tn.unsafe_ident tn;
-             [%log "copied", Tn.label tn, Tn.name tn, "from host"]; if Utils.settings.with_debug_level > 1
-             then [%log_printbox let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i
-             - 5) in Ndarray.render_array ~indices c_arr]]] *)
-      | (lazy None) -> ())
+          Ndarray.map2 { f2 = Ndarray.A.blit } h_arr c_arr;
+          if Utils.settings.with_debug_level > 0 then
+            let module Debug_runtime =
+              (val Option.value_or_thunk rt ~default:(fun () ->
+                       (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
+            in
+            [%diagn_sexp
+              [%log_entry
+                "from_host " ^ Tn.get_debug_name tn;
+                [%log "copied", Tn.label tn, Tn.name tn, "from host"];
+                if Utils.settings.with_debug_level > 1 then
+                  [%log_printbox
+                    let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
+                    Ndarray.render_array ~indices c_arr]]]
+      | (lazy None) ->
+          [%diagn_sexp
+            [%log_entry
+              "from_host empty " ^ Tn.get_debug_name tn;
+              [%log "nothing to copy", Tn.label tn, Tn.name tn, "from host"]]];
+          ())
 
 let to_host ?rt (context : context) (tn : Tn.t) : unit =
   Option.iter (Map.find context.arrays tn) ~f:(fun c_arr ->
@@ -744,13 +759,18 @@ let to_host ?rt (context : context) (tn : Tn.t) : unit =
             in
             [%diagn_sexp
               [%log_entry
-                "to_host " ^ Tn.unsafe_ident tn;
+                "to_host " ^ Tn.get_debug_name tn;
                 [%log "copied", Tn.label tn, Tn.name tn, "to host"];
                 if Utils.settings.with_debug_level > 1 then
                   [%log_printbox
                     let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
                     Ndarray.render_array ~indices h_arr]]]
-      | (lazy None) -> ())
+      | (lazy None) ->
+          [%diagn_sexp
+            [%log_entry
+              "to_host empty " ^ Tn.get_debug_name tn;
+              [%log "nothing to copy", Tn.label tn, Tn.name tn, "to host"]]];
+          ())
 
 let device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn ~into_merge_buffer ~dst ~src =
   Option.iter (Map.find src.arrays tn) ~f:(fun s_arr ->
@@ -763,7 +783,7 @@ let device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn 
             in
             [%diagn_sexp
               [%log_entry
-                "device_to_device " ^ Tn.unsafe_ident tn;
+                "device_to_device " ^ Tn.get_debug_name tn;
                 [%log
                   "copied",
                     Tn.label tn,

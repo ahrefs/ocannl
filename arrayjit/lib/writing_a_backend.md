@@ -1,5 +1,19 @@
 # The Anatomy of an OCANNL Backend
 
+<!-- TOC -->
+
+- [The Anatomy of an OCANNL Backend](#the-anatomy-of-an-ocannl-backend)
+  - [Design around compiling and running code, backend interfaces](#design-around-compiling-and-running-code-backend-interfaces)
+    - [Shared relocatable compilation, batch compilation](#shared-relocatable-compilation-batch-compilation)
+  - [Tensor nodes, arrays, memory properties](#tensor-nodes-arrays-memory-properties)
+  - [Typical details of a backend implementation](#typical-details-of-a-backend-implementation)
+    - [Conditionally emitting the tracing debugger code](#conditionally-emitting-the-tracing-debugger-code)
+  - [Synchronization and data transfers](#synchronization-and-data-transfers)
+    - [Data transfers](#data-transfers)
+    - [Synchronization](#synchronization)
+
+<!-- /TOC -->
+
 ## Design around compiling and running code, backend interfaces
 
 Currently, OCANNL integrates new backends via code in [backends.ml](backends.ml). `Backends` introduces the context-specific `routine` type, and has a helper `lower_assignments` that wraps `Assignments.lower` and `Low_level.optimize_proc`. The interface to a `Backend` has `compile` functions, to allow some backends handle assignments directly, instead of using the optimized C-like representation `Low_level.t`.
@@ -261,3 +275,7 @@ end
 ```
 
 OCANNL provides explicit _merge buffers_ for performing tensor node updates, where different versions of a tensor node from two devices feature in the same computation. The `%cd` syntax for using merge buffers is via applying `merge_buffer` pseudo-function. For example, the code for merging gradients might be: `[%cd p.grad =+ merge_buffer p.grad]`. Currently, OCANNL supports only one merge buffer per device. We keep track of the specific tensor node that occupies this buffer, so we detect potential mismatches when a code's task is run. Backends where a device cannot directly access another device's memory (as far as the backend's implementer is concerned) use physical arrays to back merge buffers. There's only one buffer array per device and it is resized (grown) if needed to fit a node's array. CPU backends can simply record the other device's array pointer in the merge buffer. In the future we might implement intermediate solutions based on memory streaming.
+
+### Synchronization
+
+The `Utils` module provides a thread-safe `waiter` mechanism for suspending and resuming threads. Currently, `waiter`s only support sequential `await` events (as needed by the single-producer single-consumer queues). This can be easily generalized to allow concurrent `await` events. `await` could take an identifier of the waiting thread, and `release_if_waiting` could return an optional identifier of the thread that got resumed.

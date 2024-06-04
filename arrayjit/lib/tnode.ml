@@ -6,10 +6,15 @@ module Debug_runtime = Utils.Debug_runtime
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-type task = Work of ((module Minidebug_runtime.Debug_runtime) -> unit -> unit)
-[@@unboxed] [@@deriving sexp_of]
+type task = { description : string; work : (module Minidebug_runtime.Debug_runtime) -> unit -> unit }
+[@@deriving sexp_of]
 
-let[@inline] run debug_runtime (Work work) = work debug_runtime ()
+let run debug_runtime task =
+  let module Debug_runtime = (val debug_runtime : Minidebug_runtime.Debug_runtime) in
+  [%diagn_sexp
+    [%log_entry
+      task.description;
+      task.work debug_runtime ()]]
 
 type memory_type =
   | Constant  (** The tensor node does not change after initialization. *)
@@ -180,9 +185,9 @@ let debug_name ~id ~label =
   | None when is_grad -> [%string "n%{id - 1#Int}%{opt_grad}"]
   | None -> n
 
-let unsafe_ident tn =
-  let components = List.filter tn.label ~f:is_alphanum_ in
-  if List.is_empty components then name tn else String.concat ~sep:"_" components
+let get_debug_name tn =
+  let id = tn.id and label = tn.label in
+  debug_name ~id ~label
 
 let styled_ident ~repeating_nograd_idents ~repeating_grad_idents style arr =
   let n = name arr in

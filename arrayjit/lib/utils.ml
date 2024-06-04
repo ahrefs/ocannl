@@ -300,24 +300,70 @@ let%track_sexp parallel_merge merge (num_devices : int) =
   in
   loop (num_devices - 1)
 
-type waiter = { await : unit -> unit; release : unit -> unit; finalize : unit -> unit }
+type atomic_bool = bool Atomic.t
 
-let waiter () =
+let sexp_of_atomic_bool flag = sexp_of_bool @@ Atomic.get flag
+let ( !@ ) = Atomic.get
+
+type waiter = {
+  await : keep_waiting:(unit -> bool) -> unit -> bool;
+      (** Returns [true] if the waiter was not already waiting (in another thread) and waiting was needed
+          ([keep_waiting] always returned true). *)
+  release_if_waiting : unit -> bool;
+      (** Returns [true] if the waiter both was waiting and was not already released. *)
+  is_waiting : unit -> bool;
+  finalize : unit -> unit;
+}
+(** Note: this waiter is meant for sequential waiting. *)
+
+let waiter ~name:_ () =
+  let is_open = Atomic.make true in
+  (* TODO: since OCaml 5.2, use [make_contended] for at least [is_released] and maybe [is_waiting]. *)
+  let is_released = Atomic.make false in
+  let is_waiting = Atomic.make false in
   let pipe_inp, pipe_out = Unix.pipe ~cloexec:true () in
-  let await () =
-    let _ = Unix.select [ pipe_inp ] [] [] (-1.0) in
-    let n = Unix.read pipe_inp (Bytes.create 1) 0 1 in
-    assert (n = 1)
+  let await ~keep_waiting =
+    let rec wait () =
+      let need_waiting = keep_waiting () in
+      if
+        need_waiting
+        &&
+        let inp_pipes, _, _ = Unix.select [ pipe_inp ] [] [] 5.0 in
+        List.is_empty inp_pipes
+      then wait ()
+      else need_waiting
+    in
+    fun () ->
+      if Atomic.compare_and_set is_waiting false true then (
+        Atomic.set is_released false;
+        let result =
+          if wait () then (
+            let n = Unix.read pipe_inp (Bytes.create 1) 0 1 in
+            assert (n = 1);
+            true)
+          else false
+        in
+        assert (Atomic.compare_and_set is_waiting true false);
+        result)
+      else false
   in
-  let release () =
-    let n = Unix.write pipe_out (Bytes.create 1) 0 1 in
-    assert (n = 1)
+  let release_if_waiting () =
+    let result =
+      if !@is_waiting && Atomic.compare_and_set is_released false true then (
+        let n = Unix.write pipe_out (Bytes.create 1) 0 1 in
+        assert (n = 1);
+        true)
+      else false
+    in
+    result
   in
   let finalize () =
-    Unix.close pipe_inp;
-    Unix.close pipe_out
+    if Atomic.compare_and_set is_open true false then (
+      Unix.close pipe_inp;
+      Unix.close pipe_out)
   in
-  { await; release; finalize }
+  let is_waiting () = !@is_waiting in
+  { await; release_if_waiting; is_waiting; finalize }
 
 let sexp_append ~elem = function
   | Sexp.List l -> Sexp.List (elem :: l)
@@ -399,10 +445,13 @@ let%diagn_rt_sexp log_trace_tree logs =
   in
   loop_logs logs
 
-type 'a mutable_list = Empty | Cons of { hd : 'a; mutable tl : 'a mutable_list } [@@deriving equal, sexp, variants]
+type 'a mutable_list = Empty | Cons of { hd : 'a; mutable tl : 'a mutable_list }
+[@@deriving equal, sexp, variants]
 
 let insert ~next = function
   | Empty -> Cons { hd = next; tl = Empty }
   | Cons cons ->
       cons.tl <- Cons { hd = next; tl = cons.tl };
       cons.tl
+
+let tl_exn = function Empty -> raise @@ Not_found_s (Sexp.Atom "mutable_list.tl_exn") | Cons { tl; _ } -> tl

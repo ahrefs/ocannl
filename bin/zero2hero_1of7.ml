@@ -7,6 +7,10 @@ module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module Utils = Arrayjit.Utils
 module Rand = Arrayjit.Rand.Lib
+module Debug_runtime = Utils.Debug_runtime
+
+[%%global_debug_log_level Nothing]
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 let _suspended () =
   Rand.init 0;
@@ -36,7 +40,7 @@ let _suspended () =
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   Stdio.printf "\n%!"
 
-let _suspended () =
+let () =
   (* FIXME: why is this toplevel example broken and the next one working? *)
   Utils.settings.output_debug_files_in_run_directory <- true;
   Rand.init 0;
@@ -45,7 +49,8 @@ let _suspended () =
   let values = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   (* Test that the batch axis dimensions will be inferred. *)
   let x_flat =
-    Tensor.term ~grad_spec:Tensor.Require_grad ~label:[ "x_flat" ] ~input_dims:[] ~output_dims:[ 1 ]
+    Tensor.term ~grad_spec:Tensor.Require_grad ~label:[ "x_flat" ]
+     (* ~input_dims:[] ~output_dims:[ 1 ] *)
       ~init_op:(Constant_fill { values; strict = true })
       ()
   in
@@ -55,9 +60,6 @@ let _suspended () =
   (* let x = Operation.slice ~label:[ "x" ] ~grad_spec:Require_grad step_sym x_flat in *)
   Train.set_hosted (Option.value_exn x.diff).grad;
   let%op fx = f x in
-  Stdio.print_endline "\n";
-  Tensor.print_tree ~with_id:true ~with_value:false ~with_grad:false ~depth:9 fx;
-  Stdio.print_endline "\n";
   let module Backend = (val Train.fresh_backend ()) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
@@ -74,10 +76,6 @@ let _suspended () =
     dys.(!step_ref) <- x.@%[0]
   in
   Train.sync_run ~looping (module Backend) routine fx;
-  Tensor.print ~with_grad:true ~with_code:true `Default fx;
-  Stdio.print_endline "\n";
-  Tensor.print_tree ~with_id:true ~with_value:true ~with_grad:true ~depth:9 fx;
-  Stdio.print_endline "\n";
   let plot_box =
     let open PrintBox_utils in
     plot ~size:(75, 35) ~x_label:"x" ~y_label:"f(x)"
@@ -87,12 +85,13 @@ let _suspended () =
         Line_plot { points = Array.create ~len:20 0.; pixel = "-" };
       ]
   in
-  PrintBox_text.output Stdio.stdout plot_box
+  PrintBox_text.output Stdio.stdout plot_box;
+  Stdio.print_endline ""
 
-let () =
-  Utils.settings.with_debug_level <- 2;
+let _suspended () =
+  (* Utils.settings.with_debug_level <- 2; *)
   Utils.settings.output_debug_files_in_run_directory <- true;
-  Utils.settings.debug_log_from_routines <- true;
+  (* Utils.settings.debug_log_from_routines <- true; *)
   Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
@@ -121,24 +120,29 @@ let () =
   let update = Train.grad_update fx in
   let fx_routine = Backend.(link ctx @@ compile bindings update.fwd_bprop) in
   let step_ref = IDX.find_exn fx_routine.bindings step_sym in
-  let ys, dys =
-    Array.unzip
-    @@ Array.mapi xs ~f:(fun i _ ->
-           step_ref := i;
-           Train.sync_run backend fx_routine fx;
-           (fx.@[0], x.@%[0]))
+  let%track_sexp () =
+    let ys, dys =
+      Array.unzip
+      @@ Array.mapi xs ~f:(fun i _ ->
+             step_ref := i;
+             Train.sync_run backend fx_routine fx;
+             (fx.@[0], x.@%[0]))
+    in
+    (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
+    let plot_box =
+      let open PrintBox_utils in
+      plot ~size:(75, 35) ~x_label:"x" ~y_label:"f(x)"
+        [
+          Scatterplot { points = Array.zip_exn xs ys; pixel = "#" };
+          Scatterplot { points = Array.zip_exn xs dys; pixel = "*" };
+          Line_plot { points = Array.create ~len:20 0.; pixel = "-" };
+        ]
+    in
+    PrintBox_text.output Stdio.stdout plot_box
   in
-  (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
-  let plot_box =
-    let open PrintBox_utils in
-    plot ~size:(75, 35) ~x_label:"x" ~y_label:"f(x)"
-      [
-        Scatterplot { points = Array.zip_exn xs ys; pixel = "#" };
-        Scatterplot { points = Array.zip_exn xs dys; pixel = "*" };
-        Line_plot { points = Array.create ~len:20 0.; pixel = "-" };
-      ]
-  in
-  PrintBox_text.output Stdio.stdout plot_box
+  Backend.unsafe_cleanup ~unsafe_shutdown:true ();
+  Backend.unsafe_cleanup ~unsafe_shutdown:true ();
+  ()
 
 let _suspended () =
   Rand.init 0;

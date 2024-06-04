@@ -641,7 +641,7 @@ let link old_context (code : code) =
       context.device.physical.postprocess_queue <-
         (context, postprocess_logs) :: context.device.physical.postprocess_queue
   in
-  (context, idx_args, Tnode.Work work)
+  (context, idx_args, Tn.{ description = "launches " ^ code.name ^ " on " ^ context.label; work })
 
 let link_batch old_context (code_batch : code_batch) =
   let idx_params = Indexing.bound_symbols code_batch.bindings in

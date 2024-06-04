@@ -126,14 +126,14 @@ let forget_printbox (module Runtime : Minidebug_runtime.PrintBox_runtime) =
 module Multicore_backend (Backend : No_device_backend) : Backend = struct
   module Domain = Domain [@warning "-3"]
 
-  type task_list = (Tnode.task[@sexp.opaque]) Utils.mutable_list [@@deriving sexp_of]
+  type task_list = Tnode.task Utils.mutable_list [@@deriving sexp_of]
 
   type device_state = {
     mutable keep_spinning : bool;
+    mutable dev_spinning : bool;
     mutable host_pos : task_list;
     mutable dev_pos : task_list;
-    mutable host_waiting : bool;
-    mutable dev_waiting : bool;
+    mutable dev_previous_pos : task_list;
     dev_wait : (Utils.waiter[@sexp.opaque]);
   }
   [@@deriving sexp_of]
@@ -148,61 +148,85 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   type physical_device = device [@@deriving sexp_of]
 
-  let is_idle device = Utils.is_empty device.state.dev_pos && device.state.dev_waiting
+  let is_dev_queue_empty state = Utils.(is_empty @@ tl_exn state.dev_previous_pos)
+  let is_idle device = is_dev_queue_empty device.state && device.state.dev_wait.is_waiting ()
 
   let await device =
     assert (Domain.is_main_domain ());
-    while device.state.keep_spinning && not (is_idle device) do
-      device.state.host_waiting <- true;
-      Exn.protect ~f:device.host_wait_for_idle.await ~finally:(fun () -> device.state.host_waiting <- false)
+    let d = device.state in
+    let keep_waiting () =
+      if d.keep_spinning && d.dev_spinning && not (is_dev_queue_empty d) then (
+        ignore (d.dev_wait.release_if_waiting () : bool);
+        true)
+      else d.keep_spinning && d.dev_spinning && not (d.dev_wait.is_waiting ())
+    in
+    while not (is_dev_queue_empty d) do
+      ignore (device.host_wait_for_idle.await ~keep_waiting () : bool)
     done
 
-  let schedule_task device task =
+  let%track_sexp schedule_task device task =
     assert (Domain.is_main_domain ());
     let d = device.state in
     if not d.keep_spinning then invalid_arg "Multicore_backend: device not available";
     d.host_pos <- Utils.insert ~next:task d.host_pos;
-    if Utils.is_empty d.dev_pos then (
-      if not d.dev_waiting then await device;
-      d.dev_pos <- d.host_pos);
-    if d.dev_waiting then d.dev_wait.release ()
+    ignore (d.dev_wait.release_if_waiting () : bool)
 
   let global_run_no = ref 0
 
-  let%debug_sexp spinup_device ~(ordinal : int) : device =
+  let spinup_device ~(ordinal : int) : device =
     Int.incr global_run_no;
+    let init_pos =
+      Utils.Cons { hd = Tnode.{ description = "root of task queue"; work = (fun _rt () -> ()) }; tl = Empty }
+    in
     let state =
       {
         keep_spinning = true;
-        host_pos = Empty;
+        host_pos = init_pos;
         dev_pos = Empty;
-        host_waiting = false;
-        dev_waiting = false;
-        dev_wait = Utils.waiter ();
+        dev_previous_pos = init_pos;
+        dev_spinning = false;
+        dev_wait = Utils.waiter ~name:"dev" ();
       }
     in
-    let host_wait_for_idle = Utils.waiter () in
-    let run_no = !global_run_no in
-    let debug_runtime = Utils.get_debug ("dev-" ^ Int.to_string ordinal ^ "-run-" ^ Int.to_string run_no) in
-    (* For detailed debugging of a worker operation, set OCANNL_SNAPSHOT_EVERY_SEC and uncomment: *)
-    (* let%track_rt_sexp worker (() : unit) : unit = *)
-    let worker () =
-      while state.keep_spinning do
-        match state.dev_pos with
-        | Empty ->
-            state.dev_waiting <- true;
-            if state.host_waiting then host_wait_for_idle.release ();
-            Exn.protect ~f:state.dev_wait.await ~finally:(fun () -> state.dev_waiting <- false)
-        | Cons { hd; tl } ->
-            Tnode.run debug_runtime hd;
-            state.dev_pos <- tl
-      done
+    let host_wait_for_idle = Utils.waiter ~name:"host" () in
+    let keep_waiting () =
+      state.keep_spinning && state.dev_spinning && is_dev_queue_empty state
+      && not (host_wait_for_idle.is_waiting ())
     in
-    { state; host_wait_for_idle; ordinal; domain = Domain.spawn worker }
+    let wait_for_dev = state.dev_wait.await ~keep_waiting in
+    let run_no = !global_run_no in
+    let debug_runtime =
+      Utils.get_debug ("dev-multicore-" ^ Int.to_string ordinal ^ "-run-" ^ Int.to_string run_no)
+    in
+    let%diagn_rt_sexp worker (() : unit) : unit =
+      state.dev_spinning <- true;
+      try
+        while state.keep_spinning do
+          match state.dev_pos with
+          | Empty ->
+              let _host_released : bool = host_wait_for_idle.release_if_waiting () in
+              let _could_wait : bool = wait_for_dev () in
+              (* not _host_released && not _could_wait: we busy-loop until host processes its release. *)
+              (* [%log "WORK WHILE LOOP: EMPTY AFTER WAIT -- dev pos:", (state.dev_pos : task_list)]; *)
+              state.dev_pos <- Utils.tl_exn state.dev_previous_pos
+          | Cons { hd; tl } ->
+              Tnode.run _debug_runtime hd;
+              (* [%log "WORK WHILE LOOP: AFTER WORK"]; *)
+              state.dev_previous_pos <- state.dev_pos;
+              state.dev_pos <- tl
+        done;
+        state.dev_spinning <- false
+      with e ->
+        state.dev_spinning <- false;
+        ignore (host_wait_for_idle.release_if_waiting () : bool);
+        raise e
+    in
+    { state; host_wait_for_idle; ordinal; domain = Domain.spawn (worker debug_runtime) }
 
-  let make_work device task =
+  let%diagn_sexp make_work device task =
     let%diagn_rt_sexp work () = schedule_task device task in
-    Tnode.Work work
+    Tnode.
+      { description = "schedules {" ^ task.description ^ "} on device " ^ Int.to_string device.ordinal; work }
 
   type code = Backend.code [@@deriving sexp_of]
   type code_batch = Backend.code_batch [@@deriving sexp_of]
@@ -231,24 +255,46 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         (Option.map ~f:(fun task ->
              { task with context = { ctx = task.context; device }; schedule = make_work device task.schedule }))
 
-  let from_host ?rt context tn =
+  let%diagn_sexp from_host ?rt context tn =
     if Option.is_some rt then
       raise @@ Utils.User_error "Multicore_backend.from_host: backend cannot be nested in another runtime";
-    let work rt () = Backend.from_host ~rt context.ctx tn in
-    schedule_task context.device (Tnode.Work work)
+    [%debug_notrace
+      let work rt () = Backend.from_host ~rt context.ctx tn in
+      schedule_task context.device
+        Tnode.
+          {
+            description =
+              "from_host " ^ Tnode.get_debug_name tn ^ " on device " ^ Int.to_string context.device.ordinal;
+            work;
+          }]
 
-  let to_host ?rt context tn =
+  let%diagn_sexp to_host ?rt context tn =
     if Option.is_some rt then
       raise @@ Utils.User_error "Multicore_backend.to_host: backend cannot be nested in another runtime";
-    let work rt () = Backend.to_host ~rt context.ctx tn in
-    schedule_task context.device (Tnode.Work work)
+    [%debug_notrace
+      let work rt () = Backend.to_host ~rt context.ctx tn in
+      schedule_task context.device
+        Tnode.
+          {
+            description =
+              "to_host " ^ Tnode.get_debug_name tn ^ " on device " ^ Int.to_string context.device.ordinal;
+            work;
+          }]
 
-  let device_to_device ?rt tn ~into_merge_buffer ~dst ~src =
+  let%diagn_sexp device_to_device ?rt tn ~into_merge_buffer ~dst ~src =
     if Option.is_some rt then
       raise
       @@ Utils.User_error "Multicore_backend.device_to_device: backend cannot be nested in another runtime";
-    let work rt () = Backend.device_to_device ~rt tn ~into_merge_buffer ~dst:dst.ctx ~src:src.ctx in
-    schedule_task dst.device (Tnode.Work work)
+    [%debug_notrace
+      let work rt () = Backend.device_to_device ~rt tn ~into_merge_buffer ~dst:dst.ctx ~src:src.ctx in
+      schedule_task dst.device
+        Tnode.
+          {
+            description =
+              "device_to_device " ^ Tnode.get_debug_name tn ^ " dst " ^ Int.to_string dst.device.ordinal
+              ^ " src " ^ Int.to_string src.device.ordinal;
+            work;
+          }]
 
   let physical_merge_buffers = Backend.physical_merge_buffers
   let num_physical_devices () = Domain.recommended_domain_count () - 1
@@ -257,11 +303,13 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let%track_sexp unsafe_cleanup ?(unsafe_shutdown = false) () =
     assert (Domain.is_main_domain ());
-    let cleanup ordinal device =
+    let wait_for_finish device =
       await device;
       device.state.keep_spinning <- false;
-      (* Important to release after setting to not keep spinning. *)
-      device.state.dev_wait.release ();
+      ignore (device.state.dev_wait.release_if_waiting () : bool)
+    in
+    Array.iter devices ~f:wait_for_finish;
+    let cleanup ordinal device =
       Domain.join device.domain;
       device.host_wait_for_idle.finalize ();
       device.state.dev_wait.finalize ();
@@ -329,9 +377,7 @@ module type Simple_backend = sig
     Low_level.optimized option array ->
     procedure option array
 
-  val link_compiled :
-    context -> procedure -> context * Indexing.lowered_bindings * Tnode.task * string
-
+  val link_compiled : context -> procedure -> context * Indexing.lowered_bindings * Tnode.task * string
   val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
   val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
 
