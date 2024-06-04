@@ -130,7 +130,6 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   type device_state = {
     mutable keep_spinning : bool;
-    mutable dev_spinning : bool;
     mutable host_pos : task_list;
     mutable dev_pos : task_list;
     mutable dev_previous_pos : task_list;
@@ -155,10 +154,10 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     assert (Domain.is_main_domain ());
     let d = device.state in
     let keep_waiting () =
-      if d.keep_spinning && d.dev_spinning && not (is_dev_queue_empty d) then (
+      if d.keep_spinning && not (is_dev_queue_empty d) then (
         ignore (d.dev_wait.release_if_waiting () : bool);
         true)
-      else d.keep_spinning && d.dev_spinning && not (d.dev_wait.is_waiting ())
+      else d.keep_spinning && not (d.dev_wait.is_waiting ())
     in
     while not (is_dev_queue_empty d) do
       ignore (device.host_wait_for_idle.await ~keep_waiting () : bool)
@@ -184,13 +183,12 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         host_pos = init_pos;
         dev_pos = Empty;
         dev_previous_pos = init_pos;
-        dev_spinning = false;
         dev_wait = Utils.waiter ~name:"dev" ();
       }
     in
     let host_wait_for_idle = Utils.waiter ~name:"host" () in
     let keep_waiting () =
-      state.keep_spinning && state.dev_spinning && is_dev_queue_empty state
+      state.keep_spinning && is_dev_queue_empty state
       && not (host_wait_for_idle.is_waiting ())
     in
     let wait_for_dev = state.dev_wait.await ~keep_waiting in
@@ -199,7 +197,6 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       Utils.get_debug ("dev-multicore-" ^ Int.to_string ordinal ^ "-run-" ^ Int.to_string run_no)
     in
     let%diagn_rt_sexp worker (() : unit) : unit =
-      state.dev_spinning <- true;
       try
         while state.keep_spinning do
           match state.dev_pos with
@@ -215,9 +212,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
               state.dev_previous_pos <- state.dev_pos;
               state.dev_pos <- tl
         done;
-        state.dev_spinning <- false
       with e ->
-        state.dev_spinning <- false;
+        state.keep_spinning <- false;
         ignore (host_wait_for_idle.release_if_waiting () : bool);
         raise e
     in
