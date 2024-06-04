@@ -278,4 +278,10 @@ OCANNL provides explicit _merge buffers_ for performing tensor node updates, whe
 
 ### Synchronization
 
-The `Utils` module provides a thread-safe `waiter` mechanism for suspending and resuming threads. Currently, `waiter`s only support sequential `await` events (as needed by the single-producer single-consumer queues). This can be easily generalized to allow concurrent `await` events. `await` could take an identifier of the waiting thread, and `release_if_waiting` could return an optional identifier of the thread that got resumed.
+The `Utils` module provides a thread-safe (thanks to atomic flags) `waiter` mechanism for suspending and resuming threads. Currently, `waiter`s only support sequential `await` events (as needed by the single-producer single-consumer queues). This can be easily generalized to allow concurrent `await` events. `await` could take an identifier of the waiting thread, and `release_if_waiting` could return an optional identifier of the thread that got resumed.
+
+The `Backends.Multicore_backend` functor implements scheduling with lock-free single-producer single-consumer queues. Thread safety is ensured, because each device:
+
+- uses two (thread-safe) `waiter`s, one for each of the communicating threads (host and device), so that `await` resp. `release_if_waiting` only happen from their respective threads,
+- uses two position pointers into the work queue, each thread (host resp. device) only modifies its position pointer,
+- each `await` is delineated (with an up to 5 second periodic check) to ensure that the host doesn't wait for an inactive device, and that waiting ends in a well-defined state: host's waiting to synchronize a device ends when the device started waiting; plus some defensive checks that should never be actually needed.
