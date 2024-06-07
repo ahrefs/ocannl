@@ -50,7 +50,11 @@ and context = {
 }
 [@@deriving sexp_of]
 
-type info_nodes = { mutable info_nodes : tn_info Map.M(Tn).t; used_tensors : Hash_set.M(Tn).t }
+type info_nodes = {
+  nodes : tn_info Hashtbl.M(Tn).t;
+  used_tensors : Hash_set.M(Tn).t;
+  get_ident : Tn.t -> string;
+}
 [@@deriving sexp_of]
 
 let get_name { physical = { ordinal; _ }; subordinal; _ } =
@@ -272,7 +276,7 @@ let get_run_ptr_debug array =
 
 let%debug_sexp prepare_node traced_store info tn =
   Hash_set.add info.used_tensors tn;
-  Hashtbl.update info.info_nodes tn ~f:(function
+  Hashtbl.update info.nodes tn ~f:(function
     | Some old -> old
     | None ->
         (* let tn = Low_level.get_node traced_store v in *)
@@ -307,8 +311,10 @@ let%debug_sexp prepare_node traced_store info tn =
         let zero_initialized = (Hashtbl.find_exn traced_store tn).Low_level.zero_initialized in
         { tn; local; mem; dims; size_in_bytes; size_in_elems; num_typ; global; zero_initialized })
 
-let compile_main ~traced_store info ppf llc : unit =
+let compile_main traced_store info ppf llc : unit =
   let open Stdlib.Format in
+  let get_node = Hashtbl.find_exn info.nodes in
+  let written_nodes = Hash_set.create (module Tn) in
   let rec pp_ll ppf c : unit =
     match c with
     | Low_level.Noop -> ()
@@ -320,17 +326,18 @@ let compile_main ~traced_store info ppf llc : unit =
             | Zero_out ptr -> not Low_level.(get_node traced_store ptr).zero_initialized
             | _ -> true))
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-        fprintf ppf "@[<2>for (unsigned int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_
-          pp_index i to_ pp_index i pp_ll body
-    | Zero_out array ->
-        if Map.mem info.info_nodes array then
+        fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_ pp_index i to_
+          pp_index i pp_ll body
+    | Zero_out tn ->
+        if Hash_set.mem written_nodes tn then
           failwith
             ("exec_as_cuda: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
-            @@ [%sexp_of: Tn.t] array);
-        let traced = Low_level.(get_node traced_store array) in
+            @@ [%sexp_of: Tn.t] tn);
+        let traced = Low_level.(get_node traced_store tn) in
         assert traced.zero_initialized
-        (* The initialization will be emitted by get_array. *)
+        (* The initialization will be emitted by prepare_node. *)
     | Set { tn; idcs; llv; debug } ->
+        Hash_set.add written_nodes tn;
         let node = get_node tn in
         let loop_f = pp_float ~num_typ:node.num_typ tn.prec in
         let loop_debug_f = debug_float ~num_typ:node.num_typ tn.prec in
@@ -489,14 +496,15 @@ type code = {
 
 type code_batch = {
   ptx : (Cudajit.compile_to_ptx_result[@sexp.opaque]);
-  info : info_nodes;
+  infos : info_nodes option array;
   bindings : Indexing.unit_bindings;
   names : string option array;
 }
 [@@deriving sexp_of]
 
-let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; llc } =
+let%track_sexp compile_proc ~name ~get_ident ppf idx_params Low_level.{ traced_store; llc } =
   let open Stdlib.Format in
+  let info = { nodes = Hashtbl.create (module Tn); used_tensors = Hash_set.create (module Tn); get_ident } in
   prepare_nodes traced_store info llc;
   let arrays = Hash_set.to_list info.used_tensors in
   let params =
@@ -519,7 +527,7 @@ let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; 
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
   let thread_decls =
     List.filter_map arrays ~f:(fun la ->
-        let tn = Map.find_exn info.info_nodes la in
+        let tn = Hashtbl.find_exn info.nodes la in
         match tn.mem with
         | Local_only ->
             Option.map tn.local ~f:(fun t_name ->
@@ -530,8 +538,9 @@ let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; 
   fprintf ppf "/* Thread-local declarations. */@.";
   pp_print_list ~pp_sep:pp_print_space pp_print_string ppf thread_decls;
   fprintf ppf "/* Main logic. */@.";
-  compile_main ~traced_store info ppf llc;
-  fprintf ppf "@.}@."
+  compile_main traced_store info ppf llc;
+  fprintf ppf "@.}@.";
+  info
 
 let%diagn_sexp cuda_to_ptx ~name cu_src =
   let f_name = name ^ "-cudajit-debug" in
@@ -563,7 +572,7 @@ let%diagn_sexp link_proc (old_context : context) ~name info ptx =
   let ctx = old_context.ctx in
   set_ctx ctx;
   let global_arrays =
-    Map.fold ~init:old_context.global_arrays info.info_nodes ~f:(fun ~key ~data:node globals ->
+    Hashtbl.fold ~init:old_context.global_arrays info.nodes ~f:(fun ~key ~data:node globals ->
         Option.value_map ~default:globals node.global ~f:(fun _name ->
             if Utils.settings.with_debug_level > 0 then [%log "mem_alloc", _name];
             set_ctx ctx;
@@ -576,31 +585,35 @@ let%diagn_sexp link_proc (old_context : context) ~name info ptx =
   (func, global_arrays, run_module)
 
 let compile ?name bindings ({ Low_level.llc; _ } as lowered) =
+  let get_ident = Low_level.get_ident_within_code [| llc |] in
   let name : string = Option.value_or_thunk name ~default:(fun () -> Low_level.extract_block_name [ llc ]) in
   let idx_params = Indexing.bound_symbols bindings in
-  let info = { info_nodes = Map.empty (module Tn); used_tensors = Hash_set.create (module Tn) } in
   let b = Buffer.create 4096 in
   let ppf = Stdlib.Format.formatter_of_buffer b in
   if Utils.settings.debug_log_from_routines then
     Stdlib.Format.fprintf ppf "@.__device__ int printf (const char * format, ... );@.";
-  compile_proc ~name info ppf idx_params lowered;
+  let info = compile_proc ~name ~get_ident ppf idx_params lowered in
   let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
   { ptx; info; bindings; name }
 
 let compile_batch ~names bindings lowereds =
+  let get_ident =
+    Low_level.get_ident_within_code
+    @@ Array.filter_map lowereds ~f:(Option.map ~f:(fun { Low_level.llc; _ } -> llc))
+  in
   let idx_params = Indexing.bound_symbols bindings in
-  let info = { info_nodes = Map.empty (module Tn); used_tensors = Hash_set.create (module Tn) } in
   let b = Buffer.create 4096 in
   let ppf = Stdlib.Format.formatter_of_buffer b in
-  ignore
-  @@ Array.map2_exn names lowereds
-       ~f:(Option.map2 ~f:(fun name lowered -> compile_proc ~name info ppf idx_params lowered));
+  let infos =
+    Array.map2_exn names lowereds
+      ~f:(Option.map2 ~f:(fun name lowered -> compile_proc ~name ~get_ident ppf idx_params lowered))
+  in
   let name : string =
     String.(
       strip ~drop:(equal_char '_') @@ common_prefix (Array.to_list names |> List.concat_map ~f:Option.to_list))
   in
   let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
-  { ptx; info; bindings; names }
+  { ptx; infos; bindings; names }
 
 let get_global_run_id =
   let next_id = ref 0 in
@@ -610,7 +623,7 @@ let get_global_run_id =
     !next_id
 
 let link old_context (code : code) =
-  let all_arrays = code.info.info_nodes in
+  let all_arrays = Map.of_alist_exn (module Tn) @@ Hashtbl.to_alist code.info.nodes in
   let func, global_arrays, run_module = link_proc old_context ~name:code.name code.info code.ptx in
   let context = { old_context with run_module = Some run_module; global_arrays; all_arrays } in
   let idx_params = Indexing.bound_symbols code.bindings in
@@ -641,7 +654,7 @@ let link old_context (code : code) =
       (* TODO: should we prohibit or warn about Local_only tensors that are in old_context.global_arrays? *)
       let arrays = Hash_set.to_list code.info.used_tensors in
       List.filter_map arrays ~f:(fun tn ->
-          let node = Map.find_exn code.info.info_nodes tn in
+          let node = Hashtbl.find_exn code.info.nodes tn in
           match (node.mem, node.global, Map.find global_arrays tn) with
           | Global, Some _, Some ptr -> Some (Cu.Tensor ptr)
           | _ -> None)

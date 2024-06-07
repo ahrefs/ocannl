@@ -243,13 +243,13 @@ let flatten c =
   in
   loop c
 
-let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf c =
+let get_ident_within_code ?(ident_style = `Heuristic_ocannl) c =
   let nograd_idents = Hashtbl.create (module String) in
   let grad_idents = Hashtbl.create (module String) in
-  let visit la =
-    let idents = if List.mem ~equal:String.equal la.Tn.label "grad" then grad_idents else nograd_idents in
-    Option.iter (Tn.ident_label la)
-      ~f:(Hashtbl.update idents ~f:(fun old -> Set.add (Option.value ~default:Utils.no_ints old) la.id))
+  let visit tn =
+    let idents = if List.mem ~equal:String.equal tn.Tn.label "grad" then grad_idents else nograd_idents in
+    Option.iter (Tn.ident_label tn)
+      ~f:(Hashtbl.update idents ~f:(fun old -> Set.add (Option.value ~default:Utils.no_ints old) tn.id))
   in
   let rec loop (c : t) =
     match c with
@@ -269,7 +269,10 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf c
     Hashtbl.filter nograd_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1)
   in
   let repeating_grad_idents = Hashtbl.filter grad_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1) in
-  let ident la = Tn.styled_ident ~repeating_nograd_idents ~repeating_grad_idents ident_style la in
+  Tn.styled_ident ~repeating_nograd_idents ~repeating_grad_idents ident_style
+
+let fprint_hum ?ident_style ?name ?static_indices () ppf c =
+  let ident = get_ident_within_code ?ident_style c in
   let open Stdlib.Format in
   let out_fetch_op ppf (op : fetch_op) =
     match op with

@@ -737,15 +737,13 @@ let fprint_function_header ?name ?static_indices () ppf =
   | Some name, None -> fprintf ppf "%s:@ " name
   | _ -> ()
 
-let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf llc =
-  let open Stdlib.Format in
-  pp_set_margin ppf !code_hum_margin;
+let get_ident_within_code ?(ident_style = `Heuristic_ocannl) llcs =
   let nograd_idents = Hashtbl.create (module String) in
   let grad_idents = Hashtbl.create (module String) in
-  let visit la =
-    let idents = if List.mem ~equal:String.equal la.Tn.label "grad" then grad_idents else nograd_idents in
-    Option.iter (Tn.ident_label la)
-      ~f:(Hashtbl.update idents ~f:(fun old -> Set.add (Option.value ~default:Utils.no_ints old) la.id))
+  let visit tn =
+    let idents = if List.mem ~equal:String.equal tn.Tn.label "grad" then grad_idents else nograd_idents in
+    Option.iter (Tn.ident_label tn)
+      ~f:(Hashtbl.update idents ~f:(fun old -> Set.add (Option.value ~default:Utils.no_ints old) tn.id))
   in
   let rec loop (c : t) =
     match c with
@@ -775,12 +773,17 @@ let fprint_hum ?(ident_style = `Heuristic_ocannl) ?name ?static_indices () ppf l
     | Get_local { tn; _ } -> visit tn
     | Constant _ | Embed_index _ -> ()
   in
-  loop llc;
+  Array.iter ~f:loop llcs;
   let repeating_nograd_idents =
     Hashtbl.filter nograd_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1)
   in
   let repeating_grad_idents = Hashtbl.filter grad_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1) in
-  let ident_label la = Tn.styled_ident ~repeating_nograd_idents ~repeating_grad_idents ident_style la in
+  Tn.styled_ident ~repeating_nograd_idents ~repeating_grad_idents ident_style
+
+let fprint_hum ?ident_style ?name ?static_indices () ppf llc =
+  let ident_label = get_ident_within_code ?ident_style [| llc |] in
+  let open Stdlib.Format in
+  pp_set_margin ppf !code_hum_margin;
   let pp_ident ppf la = fprintf ppf "%s" @@ ident_label la in
   let pp_local ppf { tn; scope_id } = fprintf ppf "v%d_%a" scope_id pp_ident tn in
   let rec pp_ll ppf c : unit =
