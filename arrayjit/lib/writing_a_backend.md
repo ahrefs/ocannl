@@ -62,7 +62,7 @@ end
 
 where `Simple_backend` implements a `No_device_backend` functionality, but only needs to deal with `Low_level.optimized` and its compilation result type `procedure`.
 
-`No_device_backend`s do not themselves deal with the device abstraction. There's the functor `Multicore_backend (Backend : No_device_backend) : Backend` that assigns a device to a domain, and manages the given `No_device_backend` on the domain-based devices. Running `schedule` on a `No_device_backend` _should block_ (till execution finishes), but it _should not block_ for a proper `Backend` -- it should just put the work on the device's queue.
+`No_device_backend`s do not themselves deal with the device abstraction, they are intended for targetting CPU. There's the functor `Multicore_backend (Backend : No_device_backend) : Backend` that assigns a device to a domain, and manages the given `No_device_backend` on the domain-based devices. Running `schedule` on a `No_device_backend` _should block_ (till execution finishes), but it _should not block_ for a proper `Backend` -- it should just put the work on the device's queue.
 
 ```ocaml
 module type Backend = sig
@@ -143,7 +143,7 @@ type mem_properties =
 
 Hopefully soon we will support arrays shared across a thread block, then the above will include `Shared`.
 
-You might notice that `Simple_backend` requires:
+`Simple_backend` requires:
 
 ```ocaml
 module type Simple_backend = sig
@@ -200,12 +200,23 @@ type tn_info = {
 }
 ```
 
-`tn_info` values are typically called `node` for readability. The `tn_info`s are stored inside a compilation state datatype typically called `info` or `info_nodes`. During the compilation process, the new context is not available, and even the old context cannot be available if the backend supports shared compilation. A backend may for simplicity not suport shared compilation, i.e. ignore `~shared:true` and postpone compilation to the linking phase. Currently, the CUDA backend does the opposite, it ignores `~shared:false` and always generates relocatable kernels. This does not require any extra compilation flag, because the kernels refer to context (i.e. global) arrays via parameters. We face two cases:
+`tn_info` values are typically called `node` for readability. The `tn_info`s are stored inside a compilation state datatype typically called `info_nodes`. During the compilation process, the new context is not available, and even the old context cannot be available if the backend supports shared compilation. A backend may for simplicity not suport shared compilation, i.e. ignore `~shared:true` and postpone compilation to the linking phase. Currently, the CUDA backend does the opposite, it ignores `~shared:false` and always generates relocatable kernels. This does not require any extra compilation flag, because the kernels refer to context (i.e. global) arrays via parameters. We face two cases:
 
-- Non-trivial `~shared:true`: `tn_info`s are by necessity generated from scratch (either during compilation inside a `get_array`, or at once via `prepare_arrays` as in the `gccjit` backend). If this is the only mode the backend supports, they don't need to be stored.
+- Non-trivial `~shared:true`: `tn_info`s are by necessity generated from scratch. If this is the only mode the backend supports, they don't need to be stored.
 - Non-trivial `~shared:false`: `tn_info`s must be propagated via the context, because to benefit from not sharing, `tn_info` must include context-specific information (typically a memory pointer to the on-device array).
 
-The `gccjit` backend needs to `prepare_arrays` upfront, because it needs to know the list of parameters of the compiled function before it starts the compilation. This forces the `gccjit` backend to postpone creating the array pointers (via lazy initializers), not because of the context array pointers, but because of the local array pointers (on the function stack) which require knowing the function.
+We `prepare_nodes` upfront to not need to separately buffer initializations; and the `gccjit` backend needs to know the list of parameters of the compiled function before it starts the compilation. Needing to know the parameters forces the `gccjit` backend to use lazy initializers, since creating the local array pointers (on the function stack) requires knowing the function.
+
+`info_nodes` also often contains a set `used_tensors`. These are precisely the (non-virtual) tensor nodes used in the optimized code that is compiled. That's a subset of `nodes`, which can contain nodes from the parent context corresponding to tensors only needed by parent or ancestor context's computations. And it's a subset of `traced_store`, which can contain inlined (i.e. virtual) tensor nodes. We also keep `get_ident`, which returns a human-readable identifier that's un-ambiguous in the context of the compiled code (shared within `compile_batch`). `info_nodes` is generated for each procedure (it's not shared within `compile_batch`).
+
+```ocaml
+type info_nodes = {
+  traced_store : Low_level.traced_store;
+  nodes : (Tn.t, tn_info) Hashtbl.t;
+  used_tensors : Hash_set.M(Tn).t;
+  get_ident : Tn.t -> string;
+}
+```
 
 Conventionally, the compilation implementation is split into three functions / layers:
 
@@ -229,7 +240,7 @@ Since the CUDA backend needs to capture the standard output, it additionally pre
 
 Currently, OCANNL expects backends to implement a FIFO queue scheduling mechanism. The scheduling does not express dependencies between tensors. Only the main domain is allowed to interact with devices (queues with single producer -- host, single consumer -- virtual device).
 
-Since this is significantly simpler than what other frameworks do, it might evolve in the future. (In particular, scheduling in `tinygrad` expresses tensor graph dependencies with arbitrary queueing.) A natural next step would be to add "acknowledge" events that indirectly keep track of (and signal) which tasks a device has already executed.
+Since this is significantly simpler than what other frameworks do, it might evolve in the future. (In particular, scheduling in `tinygrad` expresses tensor graph dependencies.) A natural next step would be to add "acknowledge" events that indirectly keep track of (and signal) which tasks a device has already executed.
 
 Besides routines, calling `from_host`, `to_host`, `device_to_device` from a backend puts the corresponding tasks on the device's queue. Implementations of `No_device_backend` and `Simple_backend` (i.e. CPU backends) should run the tasks by executing them directly.
 

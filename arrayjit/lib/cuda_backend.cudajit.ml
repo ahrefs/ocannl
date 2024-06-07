@@ -270,44 +270,42 @@ let get_run_ptr_debug array =
 (* let compute_array_offset ~idcs ~dims = Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx +
    (offset * dim)) *)
 
-let%debug_sexp get_array ~(traced_store : Low_level.traced_store) info tn =
+let%debug_sexp prepare_node traced_store info tn =
   Hash_set.add info.used_tensors tn;
-  let default () =
-    (* let tn = Low_level.get_node traced_store v in *)
-    (* TODO: We will need tn to perform more refined optimizations. *)
-    let dims = Lazy.force tn.dims in
-    let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
-    let prec = tn.prec in
-    let size_in_bytes = size_in_elems * Ops.prec_in_bytes prec in
-    let is_on_host = Tn.is_hosted_force tn 31 in
-    let is_materialized = Tn.is_hosted_force tn 32 in
-    assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
-    let num_typ = Ops.cuda_typ_of_prec prec in
-    let mem = if not is_materialized then Local_only else Global in
-    let global = if is_local_only mem then None else Some (Tn.name tn) in
-    let local = Option.some_if (is_local_only mem) @@ Tn.name tn ^ "_local" in
-    let backend_info = sexp_of_mem_properties mem in
-    if Utils.settings.with_debug_level > 0 then
-      [%log
-        "creating",
-          (tn.id : int),
-          Tn.label tn,
-          "mem",
-          (backend_info : Sexp.t),
-          "prec",
-          (prec : Ops.prec),
-          "on-host",
-          (is_on_host : bool),
-          "is-global",
-          (Option.is_some global : bool)];
-    if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
-      tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
-    let zero_initialized = (Hashtbl.find_exn traced_store tn).Low_level.zero_initialized in
-    let data = { tn; local; mem; dims; size_in_bytes; size_in_elems; num_typ; global; zero_initialized } in
-    info.info_nodes <- Map.add_exn info.info_nodes ~key:tn ~data;
-    data
-  in
-  Option.value_or_thunk (Map.find info.info_nodes tn) ~default
+  Hashtbl.update info.info_nodes tn ~f:(function
+    | Some old -> old
+    | None ->
+        (* let tn = Low_level.get_node traced_store v in *)
+        (* TODO: We will need tn to perform more refined optimizations. *)
+        let dims = Lazy.force tn.dims in
+        let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
+        let prec = tn.prec in
+        let size_in_bytes = size_in_elems * Ops.prec_in_bytes prec in
+        let is_on_host = Tn.is_hosted_force tn 31 in
+        let is_materialized = Tn.is_hosted_force tn 32 in
+        assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
+        let num_typ = Ops.cuda_typ_of_prec prec in
+        let mem = if not is_materialized then Local_only else Global in
+        let global = if is_local_only mem then None else Some (Tn.name tn) in
+        let local = Option.some_if (is_local_only mem) @@ Tn.name tn ^ "_local" in
+        let backend_info = sexp_of_mem_properties mem in
+        if Utils.settings.with_debug_level > 0 then
+          [%log
+            "creating",
+              (tn.id : int),
+              Tn.label tn,
+              "mem",
+              (backend_info : Sexp.t),
+              "prec",
+              (prec : Ops.prec),
+              "on-host",
+              (is_on_host : bool),
+              "is-global",
+              (Option.is_some global : bool)];
+        if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
+          tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
+        let zero_initialized = (Hashtbl.find_exn traced_store tn).Low_level.zero_initialized in
+        { tn; local; mem; dims; size_in_bytes; size_in_elems; num_typ; global; zero_initialized })
 
 let compile_main ~traced_store info ppf llc : unit =
   let open Stdlib.Format in
@@ -333,7 +331,7 @@ let compile_main ~traced_store info ppf llc : unit =
         assert traced.zero_initialized
         (* The initialization will be emitted by get_array. *)
     | Set { tn; idcs; llv; debug } ->
-        let node = get_array ~traced_store info tn in
+        let node = get_node tn in
         let loop_f = pp_float ~num_typ:node.num_typ tn.prec in
         let loop_debug_f = debug_float ~num_typ:node.num_typ tn.prec in
         let num_closing_braces = pp_top_locals ppf llv in
@@ -403,9 +401,9 @@ let compile_main ~traced_store info ppf llc : unit =
         if not @@ String.equal num_typ get_typ then fprintf ppf "(%s)" num_typ;
         fprintf ppf "v%d" id.scope_id
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
-    | Get (array, idcs) ->
-        let array = get_array ~traced_store info array in
-        fprintf ppf "@[<2>%s[%a@]]" (get_run_ptr array) pp_array_offset (idcs, array.dims)
+    | Get (tn, idcs) ->
+        let node = get_node tn in
+        fprintf ppf "@[<2>%s[%a@]]" (get_run_ptr node) pp_array_offset (idcs, node.dims)
     | Constant c -> fprintf ppf "(%f)" c
     | Embed_index idx ->
         if not @@ List.exists ~f:(String.equal num_typ) [ "int"; "size_t" ] then fprintf ppf "(%s)" num_typ;
@@ -433,10 +431,10 @@ let compile_main ~traced_store info ppf llc : unit =
         in
         (v ^ "{=%f}", [ `Value v ])
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
-    | Get (ptr, idcs) ->
-        let array = get_array ~traced_store info ptr in
-        let v = sprintf "@[<2>%s[%s@]]" (get_run_ptr array) (array_offset_to_string (idcs, array.dims)) in
-        (get_run_ptr_debug array ^ "[%u]{=%f}", [ `Accessor (idcs, array.dims); `Value v ])
+    | Get (tn, idcs) ->
+        let node = get_node tn in
+        let v = sprintf "@[<2>%s[%s@]]" (get_run_ptr node) (array_offset_to_string (idcs, node.dims)) in
+        (get_run_ptr_debug node ^ "[%u]{=%f}", [ `Accessor (idcs, node.dims); `Value v ])
     | Constant c -> (Float.to_string c, [])
     | Embed_index (Fixed_idx i) -> (Int.to_string i, [])
     | Embed_index (Iterator s) -> (Indexing.symbol_ident s, [])
@@ -453,6 +451,33 @@ let compile_main ~traced_store info ppf llc : unit =
         (String.concat [ "("; v; " > 0.0 ? "; v; " : 0.0)" ], idcs @ idcs)
   in
   pp_ll ppf llc
+
+let prepare_nodes traced_store info (llc : Low_level.t) =
+  let prepare_node = prepare_node traced_store info in
+  let rec loop llc =
+    match llc with
+    | Low_level.Noop | Low_level.Comment _ | Low_level.Staged_compilation _ -> ()
+    | Low_level.Seq (c1, c2) ->
+        loop c1;
+        loop c2
+    | Low_level.For_loop { body; _ } -> loop body
+    | Low_level.Zero_out tn -> prepare_node tn
+    | Low_level.Set { tn; llv; _ } ->
+        prepare_node tn;
+        loop_float llv
+    | Low_level.Set_local (_, llv) -> loop_float llv
+  and loop_float llv =
+    match llv with
+    | Low_level.Local_scope { body; _ } -> loop body
+    | Low_level.Get_local _ | Low_level.Get_global (_, _) -> ()
+    | Low_level.Get (tn, _) -> prepare_node tn
+    | Low_level.Binop (_, v1, v2) ->
+        loop_float v1;
+        loop_float v2
+    | Low_level.Unop (_, v) -> loop_float v
+    | Low_level.Constant _ | Low_level.Embed_index _ -> ()
+  in
+  loop llc
 
 type code = {
   ptx : (Cudajit.compile_to_ptx_result[@sexp.opaque]);
@@ -472,10 +497,11 @@ type code_batch = {
 
 let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; llc } =
   let open Stdlib.Format in
+  prepare_nodes traced_store info llc;
   let arrays = Hash_set.to_list info.used_tensors in
   let params =
     List.filter_map arrays ~f:(fun tn ->
-        let node = Map.find_exn info.info_nodes tn in
+        let node = Hashtbl.find_exn info.nodes tn in
         if Utils.settings.with_debug_level > 0 then
           [%log "array-used:", (tn : Tn.t), Tn.label tn, (node.mem : mem_properties)];
         match node.mem with
