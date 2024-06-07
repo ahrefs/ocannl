@@ -9,6 +9,8 @@
   npy
   stdio
   str
+  ctypes
+  ctypes.foreign
   gccjit
   (select
    cuda_backend.ml
@@ -27,6 +29,7 @@
   tnode
   low_level
   assignments
+  ; c_backend
   gccjit_backend
   cuda_backend
   backends)
