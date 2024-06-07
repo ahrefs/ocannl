@@ -50,9 +50,9 @@ module type No_device_backend = sig
   val link : context -> code -> routine
   (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
 
-  val link_batch : context -> code_batch -> routine option array
-  (** Returns the routines for the procedures included in the code batch. All returned routines share the same
-      new context. *)
+  val link_batch : context -> code_batch -> context * routine option array
+  (** Returns the routines for the procedures included in the code batch. The returned context is downstream
+      of all the returned routines. *)
 
   val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
   (** Cleans up all work on a backend. If [~unsafe_shutdown:true], releases resources, potentially making the
@@ -188,8 +188,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     in
     let host_wait_for_idle = Utils.waiter ~name:"host" () in
     let keep_waiting () =
-      state.keep_spinning && is_dev_queue_empty state
-      && not (host_wait_for_idle.is_waiting ())
+      state.keep_spinning && is_dev_queue_empty state && not (host_wait_for_idle.is_waiting ())
     in
     let wait_for_dev = state.dev_wait.await ~keep_waiting in
     let run_no = !global_run_no in
@@ -211,7 +210,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
               (* [%log "WORK WHILE LOOP: AFTER WORK"]; *)
               state.dev_previous_pos <- state.dev_pos;
               state.dev_pos <- tl
-        done;
+        done
       with e ->
         state.keep_spinning <- false;
         ignore (host_wait_for_idle.release_if_waiting () : bool);
@@ -246,10 +245,16 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     { task with context = { ctx = task.context; device }; schedule = make_work device task.schedule }
 
   let link_batch { ctx; device } code_batch =
-    Array.map (Backend.link_batch ctx code_batch)
-      ~f:
-        (Option.map ~f:(fun task ->
-             { task with context = { ctx = task.context; device }; schedule = make_work device task.schedule }))
+    let ctx, routines = Backend.link_batch ctx code_batch in
+    ( { ctx; device },
+      Array.map routines
+        ~f:
+          (Option.map ~f:(fun task ->
+               {
+                 task with
+                 context = { ctx = task.context; device };
+                 schedule = make_work device task.schedule;
+               })) )
 
   let%diagn_sexp from_host ?rt context tn =
     if Option.is_some rt then
@@ -371,7 +376,7 @@ module type Simple_backend = sig
     opt_ctx_arrays:ctx_arrays option ->
     Indexing.unit_bindings ->
     Low_level.optimized option array ->
-    procedure option array
+    ctx_arrays option * procedure option array
 
   val link_compiled : context -> procedure -> context * Indexing.lowered_bindings * Tnode.task * string
   val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
@@ -396,6 +401,8 @@ end
 
 module Simple_no_device_backend (Backend : Simple_backend with type config := config) : No_device_backend =
 struct
+  include Backend
+
   type code =
     | Postponed of { lowered : Low_level.optimized; bindings : Indexing.unit_bindings; name : string }
     | Compiled of Backend.procedure
@@ -407,10 +414,8 @@ struct
         bindings : Indexing.unit_bindings;
         names : string option array;
       }
-    | Compiled of Backend.procedure option array
+    | Compiled of (ctx_arrays option * Backend.procedure option array)
   [@@deriving sexp_of]
-
-  include Backend
 
   let global_config = ref `Physical_devices_only
 
@@ -440,19 +445,25 @@ struct
     in
     { context; schedule; bindings; name }
 
-  let link_batch (old_context : context) (code_batch : code_batch) : routine option array =
-    let procs =
+  let link_batch (old_context : context) (code_batch : code_batch) =
+    let _opt_ctx_arrays, procs =
       match code_batch with
       | Postponed { lowereds; bindings; names } ->
           Backend.compile_batch ~names ~opt_ctx_arrays:(Some (ctx_arrays old_context)) bindings lowereds
       | Compiled procs -> procs
     in
-    Array.map procs
-      ~f:
-        (Option.map ~f:(fun proc ->
-             let context, bindings, schedule, name = link_compiled old_context proc in
-             { context; schedule; bindings; name }))
+    Array.fold_map procs ~init:old_context ~f:(fun context -> function
+      | Some proc ->
+          let context, bindings, schedule, name = link_compiled context proc in
+          (context, Some { context; schedule; bindings; name })
+      | None -> (context, None))
 end
+
+(* FIXME: *)
+(* module C_device : No_device_backend = Simple_no_device_backend (( C_backend : Simple_backend with type
+   context = C_backend.context))
+
+   module C_backend = Multicore_backend (C_device) *)
 
 module Gccjit_device : No_device_backend = Simple_no_device_backend ((
   Gccjit_backend : Simple_backend with type context = Gccjit_backend.context))
@@ -478,9 +489,9 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
     let context, bindings, schedule = link context code in
     { context; schedule; bindings; name }
 
-  let link_batch context code_batch : routine option array =
+  let link_batch context code_batch =
     let context, bindings, schedules = link_batch context code_batch in
-    Array.map schedules ~f:(Option.map ~f:(fun schedule -> { context; schedule; bindings; name }))
+    (context, Array.map schedules ~f:(Option.map ~f:(fun schedule -> { context; schedule; bindings; name })))
 end
 
 let reinitialize (module Backend : Backend) config =

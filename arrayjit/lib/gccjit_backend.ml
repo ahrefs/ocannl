@@ -560,12 +560,9 @@ let%track_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
     List.map symbols ~f:(fun ({ static_symbol; _ } as s) ->
         (Param.create ctx c_index @@ Indexing.symbol_ident static_symbol, Static_idx s))
   in
-  let ctx_arrays : Ndarray.t Map.M(Tn).t ref =
-    ref @@ Option.value opt_ctx_arrays ~default:(Map.empty (module Tn))
-  in
   let params : (gccjit_param * param_source) list ref = ref (Option.to_list log_file_name @ static_indices) in
   let ctx_nodes : ctx_nodes =
-    if Option.is_none opt_ctx_arrays then Param_ptrs params else Ctx_arrays ctx_arrays
+    match opt_ctx_arrays with None -> Param_ptrs params | Some ctx_arrays -> Ctx_arrays (ref ctx_arrays)
   in
   let initializations = ref [] in
   let nodes = Hashtbl.create (module Tn) in
@@ -617,7 +614,10 @@ let%track_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
   | None -> ());
   Block.jump init_block main_block;
   Block.return_void after_proc;
-  (ctx_info, !ctx_arrays, params)
+  let opt_ctx_arrays =
+    match ctx_nodes with Param_ptrs _ -> None | Ctx_arrays { contents } -> Some contents
+  in
+  (ctx_info, opt_ctx_arrays, params)
 
 let header_sep =
   let open Re in
@@ -632,11 +632,10 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low
   (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
      Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx Context.Dump_everything
      true); *)
-  let info, ctx_arrays, params = compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident compiled in
+  let info, opt_ctx_arrays, params = compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident compiled in
   (if Utils.settings.output_debug_files_in_run_directory then
      let f_name = name ^ "-gccjit-debug.c" in
      Context.dump_to_file ctx ~update_locs:true f_name);
-  let opt_ctx_arrays = if Map.is_empty ctx_arrays then None else Some ctx_arrays in
   let result = Context.compile ctx in
   Context.release ctx;
   { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params }
@@ -654,11 +653,15 @@ let%track_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
   (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
      Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx Context.Dump_everything
      true); *)
-     let funcs =
-      Array.map2_exn names lowereds
-        ~f:(Option.map2 ~f:(fun name lowered -> compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident lowered))
-    in
-
+    let opt_ctx_arrays, funcs =
+    Array.fold_mapi lowereds ~init:opt_ctx_arrays ~f:(fun i opt_ctx_arrays lowered ->
+        match (names.(i), lowered) with
+        | Some name, Some lowered ->
+            let info, opt_ctx_arrays, params =
+              compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident lowered
+            in
+            (opt_ctx_arrays, Some (info, opt_ctx_arrays, params))
+        | _ -> (opt_ctx_arrays, None))
   in
   (if Utils.settings.output_debug_files_in_run_directory then
      let f_name =
@@ -670,11 +673,11 @@ let%track_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
      Context.dump_to_file ctx ~update_locs:true f_name);
   let result = Context.compile ctx in
   Context.release ctx;
-  Array.map2_exn names funcs
-    ~f:
-      (Option.map2 ~f:(fun name (info, ctx_arrays, params) ->
-           let opt_ctx_arrays = if Map.is_empty ctx_arrays then None else Some ctx_arrays in
-           { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params }))
+  ( opt_ctx_arrays,
+    Array.map2_exn names funcs
+      ~f:
+        (Option.map2 ~f:(fun name (info, opt_ctx_arrays, params) ->
+             { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params })) )
 
 let%track_sexp link_compiled (old_context : context) (code : procedure) : context * _ * _ * string =
   let label : string = old_context.label in
