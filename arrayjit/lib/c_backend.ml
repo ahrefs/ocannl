@@ -76,8 +76,8 @@ type procedure = {
   bindings : Indexing.unit_bindings;
   name : string;
   result : (Dl.library[@sexp.opaque]);
+  params : (string * param_source) list;
   opt_ctx_arrays : Ndarray.t Map.M(Tn).t option;
-  (* params : param_source list; *)
 }
 [@@deriving sexp_of]
 
@@ -96,6 +96,7 @@ let get_c_ptr prec nd =
 let is_builtin_op = function Ops.Add | Sub | Mul | Div -> true | ToPowOf | Relu_gate | Arg2 | Arg1 -> false
 
 let node_debug_name node =
+  (* FIXME: node.ptr is not the mem address? *)
   let memloc = if Utils.settings.debug_memory_locations then "@" ^ node.ptr else "" in
   Tn.name node.tn ^ memloc
 
@@ -134,63 +135,64 @@ let array_offset_to_string (idcs, dims) =
 
 let%debug_sexp prepare_node ~(traced_store : Low_level.traced_store) info ctx_nodes tn =
   Hash_set.add info.used_tensors tn;
-  let default () =
-    (* let tn = Low_level.get_node traced_store v in *)
-    (* TODO: We will need tn to perform more refined optimizations. *)
-    let dims = Lazy.force tn.dims in
-    let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
-    let prec = tn.prec in
-    let size_in_bytes = size_in_elems * Ops.prec_in_bytes prec in
-    let is_on_host = Tn.is_hosted_force tn 33 in
-    let is_materialized = Tn.is_materialized_force tn 331 in
-    let is_constant = Tn.is_hosted_force ~specifically:Constant tn 332 in
-    assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
-    (* FIXME: difference plain C vs. CUDA? *)
-    (* let num_typ = Ops.cuda_typ_of_prec prec in *)
-    let traced = Low_level.(get_node traced_store tn) in
-    let mem =
-      if not is_materialized then Local_only
-      else if is_constant && traced.read_only then Constant_from_host
-      else From_context
-    in
-    let ident = info.get_ident tn in
-    let ptr =
-      match (mem, ctx_nodes) with
-      | From_context, Ctx_arrays ctx_arrays -> (
-          match Map.find !ctx_arrays tn with
-          | None ->
-              let data =
-                Ndarray.create_array tn.Tn.prec ~dims @@ Constant_fill { values = [| 0. |]; strict = false }
-              in
-              ctx_arrays := Map.add_exn !ctx_arrays ~key:tn ~data;
-              get_c_ptr prec data
-          | Some data -> get_c_ptr prec data)
-      | From_context, Param_ptrs ptrs ->
-          ptrs := (name, Param_ptr tn) :: !ptrs;
-          ident
-      | Constant_from_host, _ -> get_c_ptr prec @@ Option.value_exn @@ Lazy.force tn.array
-      | Local_only, _ -> ident
-    in
-    let backend_info = sexp_of_mem_properties mem in
-    if Utils.settings.with_debug_level > 0 then
-      [%log
-        "creating",
-          (tn.id : int),
-          Tn.label tn,
-          "mem",
-          (backend_info : Sexp.t),
-          "prec",
-          (prec : Ops.prec),
-          "on-host",
-          (is_on_host : bool),
-          "is-global",
-          (Option.is_some global : bool)];
-    if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
-      tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
-    let zero_initialized = (Hashtbl.find_exn traced_store tn).Low_level.zero_initialized in
-    { tn; ptr; mem; dims; size_in_bytes; size_in_elems; prec; zero_initialized }
-  in
-  Hashtbl.find_or_add info.nodes tn ~default
+  Hashtbl.update info.nodes tn ~f:(function
+    | Some old -> old
+    | None ->
+        (* let tn = Low_level.get_node traced_store v in *)
+        (* TODO: We will need tn to perform more refined optimizations. *)
+        let dims = Lazy.force tn.dims in
+        let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
+        let prec = tn.prec in
+        let size_in_bytes = size_in_elems * Ops.prec_in_bytes prec in
+        let is_on_host = Tn.is_hosted_force tn 33 in
+        let is_materialized = Tn.is_materialized_force tn 331 in
+        let is_constant = Tn.is_hosted_force ~specifically:Constant tn 332 in
+        assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
+        (* FIXME: difference plain C vs. CUDA? *)
+        (* let num_typ = Ops.cuda_typ_of_prec prec in *)
+        let traced = Low_level.(get_node traced_store tn) in
+        let mem =
+          if not is_materialized then Local_only
+          else if is_constant && traced.read_only then Constant_from_host
+          else From_context
+        in
+        let ident = info.get_ident tn in
+        let ptr =
+          match (mem, ctx_nodes) with
+          | From_context, Ctx_arrays ctx_arrays -> (
+              match Map.find !ctx_arrays tn with
+              | None ->
+                  let data =
+                    Ndarray.create_array tn.Tn.prec ~dims
+                    @@ Constant_fill { values = [| 0. |]; strict = false }
+                  in
+                  ctx_arrays := Map.add_exn !ctx_arrays ~key:tn ~data;
+                  get_c_ptr prec data
+              | Some data -> get_c_ptr prec data)
+          | From_context, Param_ptrs ptrs ->
+              ptrs := (name, Param_ptr tn) :: !ptrs;
+              ident
+          | Constant_from_host, _ -> get_c_ptr prec @@ Option.value_exn @@ Lazy.force tn.array
+          | Local_only, _ -> ident
+        in
+        let backend_info = sexp_of_mem_properties mem in
+        if Utils.settings.with_debug_level > 0 then
+          [%log
+            "creating",
+              (tn.id : int),
+              Tn.label tn,
+              "mem",
+              (backend_info : Sexp.t),
+              "prec",
+              (prec : Ops.prec),
+              "on-host",
+              (is_on_host : bool),
+              "is-global",
+              (Option.is_some global : bool)];
+        if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
+          tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
+        let zero_initialized = (Hashtbl.find_exn traced_store tn).Low_level.zero_initialized in
+        { tn; ptr; mem; dims; size_in_bytes; size_in_elems; prec; zero_initialized })
 
 let compile_main ~traced_store info ppf llc : unit =
   let open Stdlib.Format in
@@ -339,16 +341,17 @@ let compile_main ~traced_store info ppf llc : unit =
   in
   pp_ll ppf llc
 
-let%track_sexp compile_proc ~name ~get_ident ppf idx_params Low_level.{ traced_store; llc } =
+let%track_sexp compile_globals ~get_ident ppf ~ctx_arrays =
   let open Stdlib.Format in
-  let info =
-    {
-      nodes = Hashtbl.create (module Tn);
-      used_tensors = Hash_set.create (module Tn);
-      traced_store;
-      get_ident;
-    }
+  let global_decls =
+    Map.to_alist ctx_arrays
+    |> List.map ~f:(fun (tn, nd) -> "#define " ^ get_ident tn ^ " (" ^ get_c_ptr tn.prec nd ^ ")")
   in
+  (* fprintf ppf "/* Global declarations. */@."; *)
+  pp_print_list ~pp_sep:pp_force_newline pp_print_string ppf global_decls
+
+let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; llc } =
+  let open Stdlib.Format in
   let arrays = Hash_set.to_list info.used_tensors in
   let params =
     List.filter_map arrays ~f:(fun tn ->
@@ -357,16 +360,16 @@ let%track_sexp compile_proc ~name ~get_ident ppf idx_params Low_level.{ traced_s
           [%log "array-used:", (tn : Tn.t), Tn.label tn, (node.mem : mem_properties)];
         match node.mem with
         | Local_only -> None
-        | From_context -> Some (Ops.cuda_typ_of_prec node.prec ^ " *" ^ info.get_ident tn)
+        | From_context -> Some (Ops.cuda_typ_of_prec node.prec ^ " *" ^ info.get_ident tn, Param_ptr tn)
         | Constant_from_host -> None)
   in
   let idx_params =
-    List.map idx_params ~f:(fun { Indexing.static_symbol; _ } -> "int " ^ Indexing.symbol_ident static_symbol)
+    List.map idx_params ~f:(fun s -> ("int " ^ Indexing.symbol_ident s.Indexing.static_symbol, Static_idx s))
   in
-  let log_id = if Utils.settings.debug_log_from_routines then [ "int log_id" ] else [] in
-  fprintf ppf "extern \"C\" __global__ void %s(%a) {@." name (pp_print_list ~pp_sep:pp_comma pp_print_string)
-  @@ log_id @ idx_params @ params;
-  fprintf ppf "/* FIXME: single-threaded for now. */@.if (threadIdx.x != 0 || blockIdx.x != 0) { return; }@ ";
+  let log_id = if Utils.settings.debug_log_from_routines then [ ("int log_id", Log_file_name) ] else [] in
+  let params = log_id @ idx_params @ params in
+  fprintf ppf "extern \"C\" void %s(%a) {@." name (pp_print_list ~pp_sep:pp_comma pp_print_string)
+  @@ List.map ~f:fst params;
   let local_decls =
     List.filter_map arrays ~f:(fun tn ->
         let node = Hashtbl.find_exn info.nodes tn in
@@ -383,7 +386,34 @@ let%track_sexp compile_proc ~name ~get_ident ppf idx_params Low_level.{ traced_s
   fprintf ppf "/* Main logic. */@.";
   compile_main ~traced_store info ppf llc;
   fprintf ppf "@.}@.";
-  info, params
+  params
+
+let prepare_nodes info ctx_nodes Low_level.{ traced_store; llc } =
+  let prepare_node = prepare_node ~traced_store info ctx_nodes in
+  let rec loop llc =
+    match llc with
+    | Low_level.Noop | Low_level.Comment _ | Low_level.Staged_compilation _ -> ()
+    | Low_level.Seq (c1, c2) ->
+        loop c1;
+        loop c2
+    | Low_level.For_loop { body; _ } -> loop body
+    | Low_level.Zero_out tn -> prepare_node tn
+    | Low_level.Set { tn; llv; _ } ->
+        prepare_node tn;
+        loop_float llv
+    | Low_level.Set_local (_, llv) -> loop_float llv
+  and loop_float llv =
+    match llv with
+    | Low_level.Local_scope { body; _ } -> loop body
+    | Low_level.Get_local _ | Low_level.Get_global (_, _) -> ()
+    | Low_level.Get (tn, _) -> prepare_node tn
+    | Low_level.Binop (_, v1, v2) ->
+        loop_float v1;
+        loop_float v2
+    | Low_level.Unop (_, v) -> loop_float v
+    | Low_level.Constant _ | Low_level.Embed_index _ -> ()
+  in
+  loop llc
 
 let header_sep =
   let open Re in
@@ -391,47 +421,91 @@ let header_sep =
 
 let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low_level.optimized) =
   (* if Option.is_none !root_ctx then initialize (); *)
-  (* let opt_ctx_arrays = if Map.is_empty ctx_arrays then None else Some ctx_arrays in *)
   let get_ident = Low_level.get_ident_within_code [| compiled.llc |] in
+  (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
-  let f_name, (info, _params) = Utils.pp_file ~name (fun ppf -> compile_proc ~name ~get_ident ppf idx_params) compiled in
-  let log_fname = f_name ^ ".log" in
-  let libname = f_name ^ ".so" in
-  let cmdline = Printf.sprintf "cc %s -O%d -o %s --shared >> %s 2>&1" f_name !optimization_level libname log_fname in
-  let rc = Stdlib.Sys.command cmdline in
+  let info =
+    {
+      nodes = Hashtbl.create (module Tn);
+      used_tensors = Hash_set.create (module Tn);
+      get_ident;
+      traced_store = compiled.traced_store;
+    }
+  in
+  let ctx_nodes =
+    match opt_ctx_arrays with Some ctx_arrays -> Ctx_arrays (ref ctx_arrays) | None -> Param_ptrs (ref [])
+  in
+  prepare_nodes info ctx_nodes compiled;
+  let pp_file = Utils.pp_file ~base_name:name ~extension:".c" in
+  let params = compile_proc ~name info pp_file.ppf idx_params compiled in
+  let log_fname = pp_file.f_name ^ ".log" in
+  let libname = pp_file.f_name ^ ".so" in
+  let cmdline =
+    Printf.sprintf "cc %s -O%d -o %s --shared >> %s 2>&1" pp_file.f_name !optimization_level libname log_fname
+  in
+  let _rc = Stdlib.Sys.command cmdline in
   (* FIXME: don't busy wait *)
   while not @@ Stdlib.Sys.file_exists log_fname do
     ()
   done;
   let result = Dl.dlopen ~filename:libname ~flags:[] in
-  { info; result; bindings; name; opt_ctx_arrays (* ; params *) }
+  { info; result; params; bindings; name; opt_ctx_arrays (* ; params *) }
 
-let%track_sexp compile_batch ~names:_ ~opt_ctx_arrays bindings
-    (_lowereds : Low_level.optimized option array) =
+let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings (lowereds : Low_level.optimized option array) =
   (* if Option.is_none !root_ctx then initialize (); *)
-    (*
-   {[
-  let funcs =
-    Array.map2_exn names lowereds
-      ~f:(Option.map2 ~f:(fun name lowered -> compile_proc ~name ~opt_ctx_arrays ctx bindings lowered))
+  let get_ident =
+    Low_level.get_ident_within_code
+    @@ Array.filter_map lowereds ~f:(Option.map ~f:(fun Low_level.{ llc; _ } -> llc))
   in
-  (if Utils.settings.output_debug_files_in_run_directory then
-     let f_name =
-       String.(
-         strip ~drop:(equal_char '_')
-         @@ common_prefix (Array.to_list @@ Array.concat_map ~f:Option.to_array names))
-       ^ "-c-debug.c"
-     in
-     Context.dump_to_file ctx ~update_locs:true f_name);
-  let result = Context.compile ctx in
-  Context.release ctx;
-  Array.map2_exn names funcs
-    ~f:
-      (Option.map2 ~f:(fun name (info, ctx_arrays, params) ->
-           let opt_ctx_arrays = if Map.is_empty ctx_arrays then None else Some ctx_arrays in
-           { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params }))
-  ]} *)
-failwith "NOT IMPLEMENTED YET"
+  (* FIXME: do we really want all of them, or only the used ones? *)
+  let idx_params = Indexing.bound_symbols bindings in
+  let infos =
+    Array.map lowereds
+      ~f:
+        (Option.map ~f:(fun Low_level.{ traced_store; _ } ->
+             {
+               nodes = Hashtbl.create (module Tn);
+               used_tensors = Hash_set.create (module Tn);
+               get_ident;
+               traced_store;
+             }))
+  in
+  let global_ctx_arrays =
+    ref (match opt_ctx_arrays with Some ctx_arrays -> ctx_arrays | None -> Map.empty (module Tn))
+  in
+  let ctx_nodes =
+    Array.map lowereds ~f:(fun _ ->
+        match opt_ctx_arrays with Some _ -> Ctx_arrays global_ctx_arrays | None -> Param_ptrs (ref []))
+  in
+  Array.iteri ctx_nodes ~f:(fun i ctx_nodes ->
+      Option.iter infos.(i) ~f:(fun info ->
+          Option.iter lowereds.(i) ~f:(fun lowered -> prepare_nodes info ctx_nodes lowered)));
+  let base_name =
+    String.(
+      strip ~drop:(equal_char '_')
+      @@ common_prefix (Array.to_list @@ Array.concat_map ~f:Option.to_array names))
+  in
+  let pp_file = Utils.pp_file ~base_name ~extension:".c" in
+  let log_fname = pp_file.f_name ^ ".log" in
+  let libname = pp_file.f_name ^ ".so" in
+  let cmdline =
+    Printf.sprintf "cc %s -O%d -o %s --shared >> %s 2>&1" pp_file.f_name !optimization_level libname log_fname
+  in
+  let _rc = Stdlib.Sys.command cmdline in
+  (* FIXME: don't busy wait *)
+  while not @@ Stdlib.Sys.file_exists log_fname do
+    ()
+  done;
+  let result = Dl.dlopen ~filename:libname ~flags:[] in
+  let params =
+    Array.mapi lowereds ~f:(fun i lowered ->
+        Option.map2 names.(i) infos.(i) ~f:(fun name info ->
+            compile_proc ~name info pp_file.ppf idx_params @@ Option.value_exn lowered))
+  in
+  ( Option.map opt_ctx_arrays ~f:(fun _ -> !global_ctx_arrays),
+    Array.mapi params ~f:(fun i params ->
+        Option.map2 names.(i) infos.(i) ~f:(fun name info ->
+            { info; result; params = Option.value_exn params; bindings; name; opt_ctx_arrays })) )
 
 let%track_sexp link_compiled (old_context : context) (code : procedure) : context * _ * _ * string =
   let label : string = old_context.label in
@@ -441,7 +515,7 @@ let%track_sexp link_compiled (old_context : context) (code : procedure) : contex
     | { opt_ctx_arrays = Some arrays; _ } -> arrays
     | { params; _ } ->
         List.fold params ~init:old_context.arrays ~f:(fun ctx_arrays -> function
-          | Param_ptr tn ->
+          | _, Param_ptr tn ->
               let f = function
                 | Some arr -> arr
                 | None ->
@@ -451,7 +525,7 @@ let%track_sexp link_compiled (old_context : context) (code : procedure) : contex
               Map.update ctx_arrays tn ~f
           | _ -> ctx_arrays)
   in
-  let context = { label; arrays; result = Some code.result } in
+  let context = { label; arrays } in
   let log_file_name = [%string "debug-%{label}-%{code.name}.log"] in
   let run_variadic =
     [%log_level
@@ -464,7 +538,7 @@ let%track_sexp link_compiled (old_context : context) (code : procedure) : contex
             ('a -> 'b, 'idcs, 'p1, 'p2) Indexing.variadic =
        fun (type a b idcs) (binds : idcs Indexing.bindings) params (cs : (a -> b) Ctypes.fn) ->
         match (binds, params) with
-        | Empty, [] -> Indexing.Result (Result.code code.result name cs)
+        | Empty, [] -> Indexing.Result (Foreign.foreign ~from:code.result name cs)
         | Bind _, [] -> invalid_arg "C_backend.link: too few static index params"
         | Bind (_, bs), Static_idx _ :: ps -> Param_idx (ref 0, link bs ps Ctypes.(int @-> cs))
         | Empty, Static_idx _ :: _ -> invalid_arg "C_backend.link: too many static index params"
@@ -478,7 +552,8 @@ let%track_sexp link_compiled (old_context : context) (code : procedure) : contex
       in
       (* Folding by [link] above reverses the input order. Important: [code.bindings] are traversed in the
          wrong order but that's OK because [link] only uses them to check the number of indices. *)
-      link code.bindings (List.rev code.params) Ctypes.(void @-> returning void)]
+      let params = List.rev_map code.params ~f:(fun (_, p) -> p) in
+      link code.bindings params Ctypes.(void @-> returning void)]
   in
   let%diagn_rt_sexp work () : unit =
     [%log_result name];

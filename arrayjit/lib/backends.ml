@@ -459,11 +459,10 @@ struct
       | None -> (context, None))
 end
 
-(* FIXME: *)
-(* module C_device : No_device_backend = Simple_no_device_backend (( C_backend : Simple_backend with type
-   context = C_backend.context))
+module C_device : No_device_backend = Simple_no_device_backend ((
+  C_backend : Simple_backend with type context = C_backend.context))
 
-   module C_backend = Multicore_backend (C_device) *)
+module C_backend = Multicore_backend (C_device)
 
 module Gccjit_device : No_device_backend = Simple_no_device_backend ((
   Gccjit_backend : Simple_backend with type context = Gccjit_backend.context))

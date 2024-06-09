@@ -29,7 +29,7 @@
   tnode
   low_level
   assignments
-  ; c_backend
+  c_backend
   gccjit_backend
   cuda_backend
   backends)

@@ -456,28 +456,22 @@ let insert ~next = function
 
 let tl_exn = function Empty -> raise @@ Not_found_s (Sexp.Atom "mutable_list.tl_exn") | Cons { tl; _ } -> tl
 
-let pp_file ~name pp_v v =
+type pp_file = { f_name : string; ppf : Stdlib.Format.formatter; finalize : unit -> unit }
+
+let pp_file ~base_name ~extension =
   let column_width = 110 in
   let f_name =
-    if settings.output_debug_files_in_run_directory then name ^ ".ml"
-    else Stdlib.Filename.temp_file (name ^ "_") ".ml"
+    if settings.output_debug_files_in_run_directory then base_name ^ extension
+    else Stdlib.Filename.temp_file (base_name ^ "_") extension
   in
   (* (try Stdlib.Sys.remove f_name with _ -> ()); *)
   let oc = Out_channel.open_text f_name in
-  (* FIXME(#32): the following outputs truncated source code -- missing the last line: {[ *
-       let ppf = Stdlib.Format.formatter_of_out_channel oc in
-       Stdlib.Format.pp_set_geometry Caml.Format.str_formatter
-       ~max_indent:(column_width/2) ~margin:column_width;
-       let () = format_low_level ~as_toplevel:true ppf compiled in
-       let () = Stdio.Out_channel.close oc in
-       let () = Stdio.printf "FIXME(32): file content:\n%s\nEND file content\n%!"
-       (Stdio.In_channel.read_all fname) in
-   * ]} Defensive variant: *)
-  Stdlib.Format.pp_set_geometry Stdlib.Format.str_formatter ~max_indent:(column_width / 2)
-    ~margin:column_width;
-  let result = pp_v Stdlib.Format.str_formatter v in
-  let contents = Stdlib.Format.flush_str_formatter () in
-  Stdio.Out_channel.output_string oc contents;
-  Stdio.Out_channel.flush oc;
-  Stdio.Out_channel.close oc;
-  (f_name, result)
+  (* FIXME(#32): is the truncated source problem (missing the last line) solved? *)
+  let ppf = Stdlib.Format.formatter_of_out_channel oc in
+  Stdlib.Format.pp_set_geometry ppf ~max_indent:(column_width / 2) ~margin:column_width;
+  let finalize () =
+    Stdlib.Format.pp_print_newline ppf ();
+    Stdio.Out_channel.flush oc;
+    Stdio.Out_channel.close oc
+  in
+  { f_name; ppf; finalize }

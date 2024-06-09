@@ -200,6 +200,8 @@ type tn_info = {
 }
 ```
 
+These are sometimes just for convenience, as they can be easily recomputed, e.g. `num_typ` from `tn.prec`. `tn_info`s are used not just by setters and getters, but also when emitting code for various stages of procedure initialization: constants set outside of a function, function parameters, locals defined at the beginning of a function.
+
 `tn_info` values are typically called `node` for readability. The `tn_info`s are stored inside a compilation state datatype typically called `info_nodes`. During the compilation process, the new context is not available, and even the old context cannot be available if the backend supports shared compilation. A backend may for simplicity not suport shared compilation, i.e. ignore `~shared:true` and postpone compilation to the linking phase. Currently, the CUDA backend does the opposite, it ignores `~shared:false` and always generates relocatable kernels. This does not require any extra compilation flag, because the kernels refer to context (i.e. global) arrays via parameters. We face two cases:
 
 - Non-trivial `~shared:true`: `tn_info`s are by necessity generated from scratch. If this is the only mode the backend supports, they don't need to be stored.
@@ -207,7 +209,7 @@ type tn_info = {
 
 We `prepare_nodes` upfront to not need to separately buffer initializations; and the `gccjit` backend needs to know the list of parameters of the compiled function before it starts the compilation. Needing to know the parameters forces the `gccjit` backend to use lazy initializers, since creating the local array pointers (on the function stack) requires knowing the function.
 
-`info_nodes` also often contains a set `used_tensors`. These are precisely the (non-virtual) tensor nodes used in the optimized code that is compiled. That's a subset of `nodes`, which can contain nodes from the parent context corresponding to tensors only needed by parent or ancestor context's computations. And it's a subset of `traced_store`, which can contain inlined (i.e. virtual) tensor nodes. We also keep `get_ident`, which returns a human-readable identifier that's un-ambiguous in the context of the compiled code (shared within `compile_batch`). `info_nodes` is generated for each procedure (it's not shared within `compile_batch`).
+`info_nodes` also contains a set `used_tensors`. These are precisely the (non-virtual) tensor nodes used in the optimized code that is compiled. That's a subset of `nodes`, which can contain nodes from the parent context corresponding to tensors only needed by parent or ancestor context's computations. And it's a subset of `traced_store`, which can contain inlined (i.e. virtual) tensor nodes. We also keep `get_ident`, which returns a human-readable identifier that's un-ambiguous in the context of the compiled code (shared within `compile_batch`). `info_nodes` is generated for each procedure (it's not shared within `compile_batch`) -- this enables more flexibility in assigning `mem_properties`.
 
 ```ocaml
 type info_nodes = {

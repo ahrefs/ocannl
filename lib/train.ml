@@ -50,7 +50,7 @@ let fresh_backend ?backend_name ?(config = `Physical_devices_only) () =
           Arrayjit.Utils.get_global_arg ~arg_name:"backend" ~default:"gccjit")
       |> String.lowercase
     with
-    (* | "c" -> (module C_backend : Backend) *)
+    | "c" -> (module C_backend : Backend)
     | "gccjit" -> (module Gccjit_backend : Backend)
     | "cuda" -> (module Cuda_backend : Backend)
     | backend -> invalid_arg [%string "Train.fresh_backend: unknown backend %{backend}"]
