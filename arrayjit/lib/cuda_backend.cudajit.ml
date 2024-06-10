@@ -524,23 +524,23 @@ let%track_sexp compile_proc ~name ~get_ident ppf idx_params Low_level.{ traced_s
   fprintf ppf "extern \"C\" __global__ void %s(%a) {@," name (pp_print_list ~pp_sep:pp_comma pp_print_string)
   @@ log_id @ idx_params @ params;
   fprintf ppf "/* FIXME: single-threaded for now. */@,if (threadIdx.x != 0 || blockIdx.x != 0) { return; }@ ";
-  (* TODO: optimize zero-initializations? E.g.
+  (* TODO: The following link seems to claim it's better to expand into loops.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
-  let thread_decls =
-    List.filter_map arrays ~f:(fun la ->
-        let tn = Hashtbl.find_exn info.nodes la in
-        match tn.mem with
-        | Local_only ->
-            Option.map tn.local ~f:(fun t_name ->
-                tn.num_typ ^ " " ^ t_name ^ "[" ^ Int.to_string tn.size_in_elems
-                ^ if (Hashtbl.find_exn traced_store la).zero_initialized then "] = {0};" else "];")
-        | _ -> None)
-  in
-  fprintf ppf "/* Thread-local declarations. */@,";
-  pp_print_list ~pp_sep:pp_print_space pp_print_string ppf thread_decls;
+  fprintf ppf "/* Thread-local declarations and initialization. */@,";
+  List.iter arrays ~f:(fun tn ->
+      let node = Hashtbl.find_exn info.nodes tn in
+      match node.mem with
+      | Local_only ->
+          Option.iter node.local ~f:(fun t_name ->
+              fprintf ppf "%s %s[%d]%s;@," node.num_typ t_name node.size_in_elems
+                (if (Hashtbl.find_exn traced_store tn).zero_initialized then " = {0}" else ""))
+      | Global when node.zero_initialized ->
+          Option.iter node.global ~f:(fun t_name ->
+              Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " t_name node.size_in_bytes)
+      | _ -> ());
   fprintf ppf "/* Main logic. */@,";
   compile_main traced_store info ppf llc;
-  fprintf ppf "@,}@,";
+  fprintf ppf "@,}@.";
   info
 
 let%diagn_sexp cuda_to_ptx ~name cu_src =

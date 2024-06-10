@@ -374,7 +374,7 @@ let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; 
       match node.mem with
       | Local_only ->
           fprintf ppf "%s %s[%d]%s;@," (Ops.cuda_typ_of_prec node.prec) (info.get_ident tn) node.size_in_elems
-            (if (Hashtbl.find_exn traced_store tn).zero_initialized then " = {0};" else ";")
+            (if (Hashtbl.find_exn traced_store tn).zero_initialized then " = {0}" else "")
       | From_context when node.zero_initialized -> pp_zero_out ppf node
       | _ -> ());
   fprintf ppf "@,/* Main logic. */@,";
