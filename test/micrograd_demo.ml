@@ -315,7 +315,7 @@ let%expect_test "Micrograd half-moons example" =
   [%expect
     {|
     Learning rate:
-     -1.003e-1│                                                                                                                       -
+     -1.002e-1│                                                                                                                       -
               │                                                                                                                   -----
               │                                                                                                               -----
               │                                                                                                           -----

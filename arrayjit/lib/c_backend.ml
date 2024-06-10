@@ -87,7 +87,7 @@ type ctx_nodes = Ctx_arrays of Ndarray.t Map.M(Tn).t ref | Param_ptrs of (string
 (* https://github.com/yallop/ocaml-ctypes/blob/master/src/ctypes-foreign/dl.mli
    https://github.com/ahrefs/ocannl/blob/1eb5209772b759f00a0cb8a39e51c4ddae78aee6/lib/exec_as_OCaml.ml *)
 
-let pp_zero_out ppf node = Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d)" node.ptr node.size_in_bytes
+let pp_zero_out ppf node = Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " node.ptr node.size_in_bytes
 
 let get_c_ptr prec nd =
   let f arr = Ops.ptr_to_string (Ctypes.bigarray_start Ctypes_static.Genarray arr) prec in
@@ -201,21 +201,14 @@ let compile_main ~traced_store info ppf llc : unit =
     | Seq (c1, c2) ->
         (* Note: no separator. Filter out some entries known to not generate code to avoid whitespace. *)
         fprintf ppf "@[<v 0>%a@]" (pp_print_list pp_ll)
-          (List.filter [ c1; c2 ] ~f:(function
-            | Noop -> false
-            (* FIXME: don't erase every zero-out. *)
-            | Zero_out ptr -> not Low_level.(get_node traced_store ptr).zero_initialized
-            | _ -> true))
+          (List.filter [ c1; c2 ] ~f:(function Noop -> false | _ -> true))
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
         fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@;<1 -2>}@]@," pp_index i from_ pp_index i
           to_ pp_index i pp_ll body
-    | Zero_out array ->
-        if Hashtbl.mem info.nodes array then
-          failwith
-            ("exec_as_cuda: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
-            @@ [%sexp_of: Tn.t] array);
-        let traced = Low_level.(get_node traced_store array) in
-        assert traced.zero_initialized
+    | Zero_out tn ->
+        let node = Hashtbl.find_exn info.nodes tn in
+        let traced = Low_level.(get_node traced_store tn) in
+        if Hashtbl.mem info.nodes tn then pp_zero_out ppf node else assert traced.zero_initialized
         (* The initialization will be emitted by get_array. *)
     | Set { tn; idcs; llv; debug } ->
         let ident = info.get_ident tn in

@@ -47,7 +47,7 @@ let fresh_backend ?backend_name ?(config = `Physical_devices_only) () =
   let backend =
     match
       Option.value_or_thunk backend_name ~default:(fun () ->
-          Arrayjit.Utils.get_global_arg ~arg_name:"backend" ~default:"gccjit")
+          Arrayjit.Utils.get_global_arg ~arg_name:"backend" ~default:"c")
       |> String.lowercase
     with
     | "c" -> (module C_backend : Backend)
