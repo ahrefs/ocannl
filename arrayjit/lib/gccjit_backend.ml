@@ -380,7 +380,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; _ } func ini
     | _ -> ()
   in
   let debug_log_index = debug_log_index ctx log_functions in
-  let written_nodes = Hash_set.create (module Tn) in
+  let visited = Hash_set.create (module Tn) in
   let rec loop_proc ~toplevel ~env ~name (body : Low_level.t) : unit =
     let loop = loop_proc ~toplevel ~env ~name in
     match body with
@@ -394,7 +394,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; _ } func ini
     | Set { tn; idcs; llv = Binop (op, Get (tn2, idcs2), c2); debug }
       when Tn.equal tn tn2 && [%equal: Indexing.axis_index array] idcs idcs2 && is_builtin_op op ->
         (* FIXME: maybe it's not worth it? *)
-        Hash_set.add written_nodes tn;
+        Hash_set.add visited tn;
         let node = get_node tn in
         let value = loop_float ~name ~env ~num_typ:node.num_typ node.prec c2 in
         let idcs = lookup env idcs in
@@ -403,7 +403,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; _ } func ini
         debug_log_assignment ~env debug idcs node op value c2;
         Block.assign_op !current_block lhs (builtin_op op) value
     | Set { tn; idcs; llv; debug } ->
-        Hash_set.add written_nodes tn;
+        Hash_set.add visited tn;
         let node = get_node tn in
         let value = loop_float ~name ~env ~num_typ:node.num_typ node.prec llv in
         let idcs = lookup env idcs in
@@ -412,7 +412,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; _ } func ini
         debug_log_assignment ~env debug idcs node Ops.Arg2 value llv;
         Block.assign !current_block lhs value
     | Zero_out tn ->
-        if not @@ Hash_set.mem written_nodes tn then (
+        if not @@ Hash_set.mem visited tn then (
           let node = get_node tn in
           debug_log_zero_out ctx (lazy log_functions) get_ident !current_block node;
           zero_out ctx !current_block node)
@@ -465,6 +465,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; _ } func ini
         raise @@ Utils.User_error ("compiling " ^ name ^ ": gccjit backend does not support merge buffers")
     | Get_global (C_function _, Some _) -> failwith "gccjit_backend: FFI with parameters NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
+        Hash_set.add visited tn;
         let node = get_node tn in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:node.dims in

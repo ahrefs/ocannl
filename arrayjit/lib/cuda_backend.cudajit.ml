@@ -314,7 +314,7 @@ let%debug_sexp prepare_node traced_store info tn =
 let compile_main traced_store info ppf llc : unit =
   let open Stdlib.Format in
   let get_node = Hashtbl.find_exn info.nodes in
-  let written_nodes = Hash_set.create (module Tn) in
+  let visited = Hash_set.create (module Tn) in
   let rec pp_ll ppf c : unit =
     match c with
     | Low_level.Noop -> ()
@@ -329,15 +329,15 @@ let compile_main traced_store info ppf llc : unit =
         fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_ pp_index i to_
           pp_index i pp_ll body
     | Zero_out tn ->
-        if Hash_set.mem written_nodes tn then
-          failwith
-            ("exec_as_cuda: Non-initialization zeroing-out NOT IMPLEMENTED YET: " ^ Sexp.to_string_hum
-            @@ [%sexp_of: Tn.t] tn);
-        let traced = Low_level.(get_node traced_store tn) in
-        assert traced.zero_initialized
-        (* The initialization will be emitted by prepare_node. *)
+        if Hash_set.mem visited tn then
+          pp_ll ppf
+          @@ Low_level.loop_over_dims (Lazy.force tn.dims) ~body:(fun idcs ->
+                 Set { tn; idcs; llv = Constant 0.0; debug = "zero_out" })
+        else
+          let traced = Low_level.(get_node traced_store tn) in
+          assert traced.zero_initialized (* The initialization will be emitted by prepare_node. *)
     | Set { tn; idcs; llv; debug } ->
-        Hash_set.add written_nodes tn;
+        Hash_set.add visited tn;
         let node = get_node tn in
         let loop_f = pp_float ~num_typ:node.num_typ tn.prec in
         let loop_debug_f = debug_float ~num_typ:node.num_typ tn.prec in
@@ -409,6 +409,7 @@ let compile_main traced_store info ppf llc : unit =
         fprintf ppf "v%d" id.scope_id
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
+        Hash_set.add visited tn;
         let node = get_node tn in
         fprintf ppf "@[<2>%s[%a@]]" (get_run_ptr node) pp_array_offset (idcs, node.dims)
     | Constant c -> fprintf ppf "(%f)" c

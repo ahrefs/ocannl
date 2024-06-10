@@ -195,6 +195,7 @@ let%debug_sexp prepare_node ~(traced_store : Low_level.traced_store) info ctx_no
 let compile_main ~traced_store info ppf llc : unit =
   let open Stdlib.Format in
   let get_node = Hashtbl.find_exn info.nodes in
+  let visited = Hash_set.create (module Tn) in
   let rec pp_ll ppf c : unit =
     match c with
     | Low_level.Noop -> ()
@@ -208,9 +209,10 @@ let compile_main ~traced_store info ppf llc : unit =
     | Zero_out tn ->
         let node = Hashtbl.find_exn info.nodes tn in
         let traced = Low_level.(get_node traced_store tn) in
-        if Hashtbl.mem info.nodes tn then pp_zero_out ppf node else assert traced.zero_initialized
+        if Hash_set.mem visited tn then pp_zero_out ppf node else assert traced.zero_initialized
         (* The initialization will be emitted by get_array. *)
     | Set { tn; idcs; llv; debug } ->
+        Hash_set.add visited tn;
         let ident = info.get_ident tn in
         let node = get_node tn in
         let loop_f = pp_float tn.prec in
@@ -278,6 +280,7 @@ let compile_main ~traced_store info ppf llc : unit =
         fprintf ppf "v%d" id.scope_id
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
+        Hash_set.add visited tn;
         let ident = info.get_ident tn in
         let node = get_node tn in
         fprintf ppf "@[<2>%s[%a@]]" ident pp_array_offset (idcs, node.dims)
@@ -365,19 +368,15 @@ let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; 
   fprintf ppf "@[<v 2>@[<hv 4>void %s(@,@[<hov 0>%a@]@;<0 -4>)@] {@ " name
     (pp_print_list ~pp_sep:pp_comma pp_print_string)
   @@ List.map ~f:fst params;
-  let local_decls =
-    List.filter_map arrays ~f:(fun tn ->
-        let node = Hashtbl.find_exn info.nodes tn in
-        match node.mem with
-        | Local_only ->
-            Some
-              (Ops.cuda_typ_of_prec node.prec ^ " " ^ info.get_ident tn ^ "["
-             ^ Int.to_string node.size_in_elems ^ "]"
-              ^ if (Hashtbl.find_exn traced_store tn).zero_initialized then " = {0};" else ";")
-        | _ -> None)
-  in
-  fprintf ppf "/* Local declarations. */@,";
-  pp_print_list ~pp_sep:pp_print_space pp_print_string ppf local_decls;
+  fprintf ppf "/* Local declarations and initialization. */@,";
+  List.iter arrays ~f:(fun tn ->
+      let node = Hashtbl.find_exn info.nodes tn in
+      match node.mem with
+      | Local_only ->
+          fprintf ppf "%s %s[%d]%s;@," (Ops.cuda_typ_of_prec node.prec) (info.get_ident tn) node.size_in_elems
+            (if (Hashtbl.find_exn traced_store tn).zero_initialized then " = {0};" else ";")
+      | From_context when node.zero_initialized -> pp_zero_out ppf node
+      | _ -> ());
   fprintf ppf "@,/* Main logic. */@,";
   compile_main ~traced_store info ppf llc;
   fprintf ppf "@;<0 -2>}@]@.";
