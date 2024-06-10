@@ -208,8 +208,8 @@ let compile_main ~traced_store info ppf llc : unit =
             | Zero_out ptr -> not Low_level.(get_node traced_store ptr).zero_initialized
             | _ -> true))
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-        fprintf ppf "@[<2>for (unsigned int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_
-          pp_index i to_ pp_index i pp_ll body
+        fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@;<1 -2>}@]@," pp_index i from_ pp_index i
+          to_ pp_index i pp_ll body
     | Zero_out array ->
         if Hashtbl.mem info.nodes array then
           failwith
@@ -240,17 +240,15 @@ let compile_main ~traced_store info ppf llc : unit =
            let offset = (idcs, node.dims) in
            let debug_line = "# " ^ String.substr_replace_all debug ~pattern:"\n" ~with_:"$" ^ "\\n" in
            fprintf ppf
-             "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(\"%%d: %s\", log_id);@ \
-              printf(@[<h>\"%%d: %s[%%u] = %%f = %s\\n\"@], log_id,@ %a,@ %s[%a]%a);@ @]}"
+             "printf(\"%%d: %s\", log_id);@ @[<7>printf(@[<h>\"%%d: %s[%%u] = %%f = %s\\n\",@] log_id,@ %a,@ \
+              %s[%a]%a);@]@ "
              debug_line ident v_code pp_array_offset offset ident pp_array_offset offset pp_args v_idcs);
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]@ }@,"
         done
     | Comment message ->
         if Utils.settings.debug_log_from_routines then
-          fprintf ppf
-            "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"%%d: COMMENT: %s\\n\", \
-             log_id@]);@ @]}"
+          fprintf ppf "printf(@[<h>\"%%d: COMMENT: %s\\n\", log_id@]);@ "
             (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
         else fprintf ppf "/* %s */@ " message
     | Staged_compilation callback -> callback ()
@@ -341,14 +339,18 @@ let compile_main ~traced_store info ppf llc : unit =
   in
   pp_ll ppf llc
 
-let%track_sexp compile_globals ~get_ident ppf ~ctx_arrays =
+let%track_sexp compile_globals ~get_ident ppf info =
   let open Stdlib.Format in
-  let global_decls =
-    Map.to_alist ctx_arrays
-    |> List.map ~f:(fun (tn, nd) -> "#define " ^ get_ident tn ^ " (" ^ get_c_ptr tn.prec nd ^ ")")
-  in
-  (* fprintf ppf "/* Global declarations. */@."; *)
-  pp_print_list ~pp_sep:pp_force_newline pp_print_string ppf global_decls
+  fprintf ppf "@[<v 0>/* Global declarations. */@,";
+  Hash_set.to_list info.used_tensors
+  |> List.iter ~f:(fun tn ->
+         let node = Hashtbl.find_exn info.nodes tn in
+         match node.mem with
+         | Constant_from_host ->
+             let nd = Option.value_exn @@ Lazy.force tn.Tn.array in
+             fprintf ppf "#define %s (%s)@," (get_ident tn) @@ get_c_ptr tn.Tn.prec nd
+         | _ -> ());
+  fprintf ppf "@,@]"
 
 let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; llc } =
   let open Stdlib.Format in
@@ -368,7 +370,8 @@ let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; 
   in
   let log_id = if Utils.settings.debug_log_from_routines then [ ("int log_id", Log_file_name) ] else [] in
   let params = log_id @ idx_params @ params in
-  fprintf ppf "extern \"C\" void %s(%a) {@." name (pp_print_list ~pp_sep:pp_comma pp_print_string)
+  fprintf ppf "@[<v 2>@[<hv 4>void %s(@,@[<hov 0>%a@]@;<0 -4>)@] {@ " name
+    (pp_print_list ~pp_sep:pp_comma pp_print_string)
   @@ List.map ~f:fst params;
   let local_decls =
     List.filter_map arrays ~f:(fun tn ->
@@ -377,15 +380,15 @@ let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; 
         | Local_only ->
             Some
               (Ops.cuda_typ_of_prec node.prec ^ " " ^ info.get_ident tn ^ "["
-             ^ Int.to_string node.size_in_elems
-              ^ if (Hashtbl.find_exn traced_store tn).zero_initialized then "] = {0};" else "];")
+             ^ Int.to_string node.size_in_elems ^ "]"
+              ^ if (Hashtbl.find_exn traced_store tn).zero_initialized then " = {0};" else ";")
         | _ -> None)
   in
-  fprintf ppf "/* Local declarations. */@.";
+  fprintf ppf "/* Local declarations. */@,";
   pp_print_list ~pp_sep:pp_print_space pp_print_string ppf local_decls;
-  fprintf ppf "/* Main logic. */@.";
+  fprintf ppf "@,/* Main logic. */@,";
   compile_main ~traced_store info ppf llc;
-  fprintf ppf "@.}@.";
+  fprintf ppf "@;<0 -2>}@]@.";
   params
 
 let prepare_nodes info ctx_nodes Low_level.{ traced_store; llc } =

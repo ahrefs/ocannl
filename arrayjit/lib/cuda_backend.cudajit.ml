@@ -520,9 +520,9 @@ let%track_sexp compile_proc ~name ~get_ident ppf idx_params Low_level.{ traced_s
     List.map idx_params ~f:(fun { Indexing.static_symbol; _ } -> "int " ^ Indexing.symbol_ident static_symbol)
   in
   let log_id = if Utils.settings.debug_log_from_routines then [ "int log_id" ] else [] in
-  fprintf ppf "extern \"C\" __global__ void %s(%a) {@." name (pp_print_list ~pp_sep:pp_comma pp_print_string)
+  fprintf ppf "extern \"C\" __global__ void %s(%a) {@," name (pp_print_list ~pp_sep:pp_comma pp_print_string)
   @@ log_id @ idx_params @ params;
-  fprintf ppf "/* FIXME: single-threaded for now. */@.if (threadIdx.x != 0 || blockIdx.x != 0) { return; }@ ";
+  fprintf ppf "/* FIXME: single-threaded for now. */@,if (threadIdx.x != 0 || blockIdx.x != 0) { return; }@ ";
   (* TODO: optimize zero-initializations? E.g.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
   let thread_decls =
@@ -535,11 +535,11 @@ let%track_sexp compile_proc ~name ~get_ident ppf idx_params Low_level.{ traced_s
                 ^ if (Hashtbl.find_exn traced_store la).zero_initialized then "] = {0};" else "];")
         | _ -> None)
   in
-  fprintf ppf "/* Thread-local declarations. */@.";
+  fprintf ppf "/* Thread-local declarations. */@,";
   pp_print_list ~pp_sep:pp_print_space pp_print_string ppf thread_decls;
-  fprintf ppf "/* Main logic. */@.";
+  fprintf ppf "/* Main logic. */@,";
   compile_main traced_store info ppf llc;
-  fprintf ppf "@.}@.";
+  fprintf ppf "@,}@,";
   info
 
 let%diagn_sexp cuda_to_ptx ~name cu_src =
@@ -585,20 +585,20 @@ let%diagn_sexp link_proc (old_context : context) ~name info ptx =
   (func, global_arrays, run_module)
 
 let compile ?name bindings ({ Low_level.llc; _ } as lowered) =
-  let get_ident = Low_level.get_ident_within_code ~ident_style:(`Heuristic_ocannl `Under_grad) [| llc |] in
+  let get_ident = Low_level.get_ident_within_code ~no_dots:true [| llc |] in
   let name : string = Option.value_or_thunk name ~default:(fun () -> Low_level.extract_block_name [ llc ]) in
   let idx_params = Indexing.bound_symbols bindings in
   let b = Buffer.create 4096 in
   let ppf = Stdlib.Format.formatter_of_buffer b in
   if Utils.settings.debug_log_from_routines then
-    Stdlib.Format.fprintf ppf "@.__device__ int printf (const char * format, ... );@.";
+    Stdlib.Format.fprintf ppf "@,__device__ int printf (const char * format, ... );@,";
   let info = compile_proc ~name ~get_ident ppf idx_params lowered in
   let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
   { ptx; info; bindings; name }
 
 let compile_batch ~names bindings lowereds =
   let get_ident =
-    Low_level.get_ident_within_code ~ident_style:(`Heuristic_ocannl `Under_grad)
+    Low_level.get_ident_within_code ~no_dots:true
     @@ Array.filter_map lowereds ~f:(Option.map ~f:(fun { Low_level.llc; _ } -> llc))
   in
   let idx_params = Indexing.bound_symbols bindings in
