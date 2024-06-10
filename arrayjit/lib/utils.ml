@@ -461,7 +461,7 @@ type pp_file = { f_name : string; ppf : Stdlib.Format.formatter; finalize : unit
 let pp_file ~base_name ~extension =
   let column_width = 110 in
   let f_name =
-    if settings.output_debug_files_in_run_directory then base_name ^ extension
+    if settings.output_debug_files_in_run_directory then Filename_base.concat "./" base_name ^ extension
     else Stdlib.Filename.temp_file (base_name ^ "_") extension
   in
   (* (try Stdlib.Sys.remove f_name with _ -> ()); *)

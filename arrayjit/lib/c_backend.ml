@@ -148,8 +148,6 @@ let%debug_sexp prepare_node ~(traced_store : Low_level.traced_store) info ctx_no
         let is_materialized = Tn.is_materialized_force tn 331 in
         let is_constant = Tn.is_hosted_force ~specifically:Constant tn 332 in
         assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
-        (* FIXME: difference plain C vs. CUDA? *)
-        (* let num_typ = Ops.cuda_typ_of_prec prec in *)
         let traced = Low_level.(get_node traced_store tn) in
         let mem =
           if not is_materialized then Local_only
@@ -205,6 +203,7 @@ let compile_main ~traced_store info ppf llc : unit =
         fprintf ppf "@[<v 0>%a@]" (pp_print_list pp_ll)
           (List.filter [ c1; c2 ] ~f:(function
             | Noop -> false
+            (* FIXME: don't erase every zero-out. *)
             | Zero_out ptr -> not Low_level.(get_node traced_store ptr).zero_initialized
             | _ -> true))
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
@@ -439,9 +438,12 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low
   in
   prepare_nodes info ctx_nodes compiled;
   let pp_file = Utils.pp_file ~base_name:name ~extension:".c" in
+  let base_name = Filename_base.chop_extension pp_file.f_name in
+  compile_globals ~get_ident:info.get_ident pp_file.ppf info;
   let params = compile_proc ~name info pp_file.ppf idx_params compiled in
-  let log_fname = pp_file.f_name ^ ".log" in
-  let libname = pp_file.f_name ^ ".so" in
+  let log_fname = base_name ^ ".log" in
+  let libname = base_name ^ ".so" in
+  (try Stdlib.Sys.remove log_fname with _ -> ());
   let cmdline =
     Printf.sprintf "cc %s -O%d -o %s --shared >> %s 2>&1" pp_file.f_name !optimization_level libname log_fname
   in
@@ -450,7 +452,8 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low
   while not @@ Stdlib.Sys.file_exists log_fname do
     ()
   done;
-  let result = Dl.dlopen ~filename:libname ~flags:[] in
+  let result = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW; RTLD_DEEPBIND ] in
+  let opt_ctx_arrays = match ctx_nodes with Ctx_arrays ctx_arrays -> Some !ctx_arrays | _ -> None in
   { info; result; params; bindings; name; opt_ctx_arrays (* ; params *) }
 
 let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings (lowereds : Low_level.optimized option array) =
@@ -497,13 +500,15 @@ let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings (lowereds : Low_lev
   while not @@ Stdlib.Sys.file_exists log_fname do
     ()
   done;
-  let result = Dl.dlopen ~filename:libname ~flags:[] in
+  let result = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW; RTLD_DEEPBIND ] in
   let params =
     Array.mapi lowereds ~f:(fun i lowered ->
         Option.map2 names.(i) infos.(i) ~f:(fun name info ->
             compile_proc ~name info pp_file.ppf idx_params @@ Option.value_exn lowered))
   in
-  ( Option.map opt_ctx_arrays ~f:(fun _ -> !global_ctx_arrays),
+  (* Note: for simplicity, we share ctx_arrays across all contexts. *)
+  let opt_ctx_arrays = Option.map opt_ctx_arrays ~f:(fun _ -> !global_ctx_arrays) in
+  ( opt_ctx_arrays,
     Array.mapi params ~f:(fun i params ->
         Option.map2 names.(i) infos.(i) ~f:(fun name info ->
             { info; result; params = Option.value_exn params; bindings; name; opt_ctx_arrays })) )
