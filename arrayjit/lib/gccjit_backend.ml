@@ -624,7 +624,7 @@ let header_sep =
   compile (seq [ str " "; opt any; str "="; str " " ])
 
 let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low_level.optimized) =
-  let get_ident = Low_level.get_ident_within_code [| compiled.llc |] in
+  let get_ident = Low_level.get_ident_within_code ~no_dots:true [| compiled.llc |] in
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
@@ -643,7 +643,7 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low
 let%track_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bindings
     (lowereds : Low_level.optimized option array) =
   let get_ident =
-    Low_level.get_ident_within_code
+    Low_level.get_ident_within_code ~no_dots:true
     @@ Array.filter_map lowereds ~f:(Option.map ~f:(fun { Low_level.llc; _ } -> llc))
   in
   let open Gccjit in
@@ -653,7 +653,7 @@ let%track_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
   (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
      Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx Context.Dump_everything
      true); *)
-    let opt_ctx_arrays, funcs =
+  let opt_ctx_arrays, funcs =
     Array.fold_mapi lowereds ~init:opt_ctx_arrays ~f:(fun i opt_ctx_arrays lowered ->
         match (names.(i), lowered) with
         | Some name, Some lowered ->

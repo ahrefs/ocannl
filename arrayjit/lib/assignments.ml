@@ -243,7 +243,8 @@ let flatten c =
   in
   loop c
 
-let get_ident_within_code ?(ident_style = `Heuristic_ocannl) c =
+let get_ident_within_code ?no_dots c =
+  let ident_style = Tn.get_style ~arg_name:"cd_ident_style" ?no_dots () in
   let nograd_idents = Hashtbl.create (module String) in
   let grad_idents = Hashtbl.create (module String) in
   let visit tn =
@@ -271,8 +272,8 @@ let get_ident_within_code ?(ident_style = `Heuristic_ocannl) c =
   let repeating_grad_idents = Hashtbl.filter grad_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1) in
   Tn.styled_ident ~repeating_nograd_idents ~repeating_grad_idents ident_style
 
-let fprint_hum ?ident_style ?name ?static_indices () ppf c =
-  let ident = get_ident_within_code ?ident_style c in
+let fprint_hum ?name ?static_indices () ppf c =
+  let ident = get_ident_within_code c in
   let open Stdlib.Format in
   let out_fetch_op ppf (op : fetch_op) =
     match op with
@@ -327,16 +328,6 @@ let%debug_sexp lower_proc ~unoptim_ll_source ~ll_source ~cd_source ~name static_
   (match cd_source with
   | None -> ()
   | Some ppf ->
-      let ident_style =
-        match Utils.get_global_arg ~arg_name:"cd_ident_style" ~default:"heuristic" with
-        | "heuristic" -> `Heuristic_ocannl
-        | "name_and_label" -> `Name_and_label
-        | "name_only" -> `Name_only
-        | _ ->
-            invalid_arg
-              "Assignments.lower_proc: wrong ocannl_cd_ident_style, must be one of: heuristic, \
-               name_and_label, name_only"
-      in
-      fprint_hum ~name ~static_indices ~ident_style () ppf proc;
+      fprint_hum ~name ~static_indices () ppf proc;
       Stdlib.Format.pp_print_flush ppf ());
   Low_level.optimize_proc ~unoptim_ll_source ~ll_source ~name static_indices llc

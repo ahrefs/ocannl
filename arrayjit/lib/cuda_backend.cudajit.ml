@@ -585,7 +585,7 @@ let%diagn_sexp link_proc (old_context : context) ~name info ptx =
   (func, global_arrays, run_module)
 
 let compile ?name bindings ({ Low_level.llc; _ } as lowered) =
-  let get_ident = Low_level.get_ident_within_code [| llc |] in
+  let get_ident = Low_level.get_ident_within_code ~ident_style:(`Heuristic_ocannl `Under_grad) [| llc |] in
   let name : string = Option.value_or_thunk name ~default:(fun () -> Low_level.extract_block_name [ llc ]) in
   let idx_params = Indexing.bound_symbols bindings in
   let b = Buffer.create 4096 in
@@ -598,7 +598,7 @@ let compile ?name bindings ({ Low_level.llc; _ } as lowered) =
 
 let compile_batch ~names bindings lowereds =
   let get_ident =
-    Low_level.get_ident_within_code
+    Low_level.get_ident_within_code ~ident_style:(`Heuristic_ocannl `Under_grad)
     @@ Array.filter_map lowereds ~f:(Option.map ~f:(fun { Low_level.llc; _ } -> llc))
   in
   let idx_params = Indexing.bound_symbols bindings in

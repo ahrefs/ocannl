@@ -196,9 +196,14 @@ let styled_ident ~repeating_nograd_idents ~repeating_grad_idents style arr =
   | `Name_and_label ->
       let label = label arr in
       if String.is_empty label then n else [%string "%{n}_%{label}"]
-  | `Heuristic_ocannl -> (
+  | `Heuristic_ocannl grad_sep -> (
       let is_grad = List.mem ~equal:String.equal arr.label "grad" in
-      let opt_grad = if is_grad then ".grad" else "" in
+      let opt_grad =
+        match (grad_sep, is_grad) with
+        | `Dot_grad, true -> ".grad"
+        | `Under_grad, true -> "_grad"
+        | (`Dot_grad | `Under_grad), _ -> ""
+      in
       match ident_label arr with
       | Some ident ->
           if Hashtbl.mem (if is_grad then repeating_grad_idents else repeating_nograd_idents) ident then
@@ -207,6 +212,13 @@ let styled_ident ~repeating_nograd_idents ~repeating_grad_idents style arr =
           else [%string "%{ident}%{opt_grad}"]
       | None when is_grad -> [%string "n%{arr.id - 1#Int}%{opt_grad}"]
       | None -> n)
+
+let get_style ?(arg_name = "ll_ident_style") ?(no_dots = false) () =
+  match Utils.get_global_arg ~arg_name ~default:"heuristic" with
+  | "heuristic" -> `Heuristic_ocannl (if no_dots then `Under_grad else `Dot_grad)
+  | "name_and_label" -> `Name_and_label
+  | "name_only" -> `Name_only
+  | _ -> invalid_arg @@ "Wrong " ^ arg_name ^ ", must be one of: heuristic, name_and_label, name_only"
 
 let header arr =
   let mem_size =
@@ -220,7 +232,7 @@ let header arr =
   let repeating_grad_idents = Hashtbl.create ~size:1 (module String) in
   [%string
     {|%{name arr} %{label arr} as %{
-      styled_ident ~repeating_nograd_idents ~repeating_grad_idents `Heuristic_ocannl arr
+      styled_ident ~repeating_nograd_idents ~repeating_grad_idents (`Heuristic_ocannl `Dot_grad) arr
     }: %{dims_to_string arr}; mem in bytes: %{mem_size}|}]
 
 module Registry = Core.Weak.Make (struct

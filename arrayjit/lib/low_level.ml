@@ -737,7 +737,8 @@ let fprint_function_header ?name ?static_indices () ppf =
   | Some name, None -> fprintf ppf "%s:@ " name
   | _ -> ()
 
-let get_ident_within_code ?(ident_style = `Heuristic_ocannl) llcs =
+let get_ident_within_code ?no_dots llcs =
+  let ident_style = Tn.get_style ~arg_name:"ll_ident_style" ?no_dots () in
   let nograd_idents = Hashtbl.create (module String) in
   let grad_idents = Hashtbl.create (module String) in
   let visit tn =
@@ -780,8 +781,8 @@ let get_ident_within_code ?(ident_style = `Heuristic_ocannl) llcs =
   let repeating_grad_idents = Hashtbl.filter grad_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1) in
   Tn.styled_ident ~repeating_nograd_idents ~repeating_grad_idents ident_style
 
-let fprint_hum ?ident_style ?name ?static_indices () ppf llc =
-  let ident_label = get_ident_within_code ?ident_style [| llc |] in
+let fprint_hum ?name ?static_indices () ppf llc =
+  let ident_label = get_ident_within_code [| llc |] in
   let open Stdlib.Format in
   pp_set_margin ppf !code_hum_margin;
   let pp_ident ppf la = fprintf ppf "%s" @@ ident_label la in
@@ -834,23 +835,11 @@ let fprint_hum ?ident_style ?name ?static_indices () ppf llc =
 
 let%debug_sexp optimize_proc ~unoptim_ll_source ~ll_source ~(name : string)
     (static_indices : Indexing.static_symbol list) (llc : t) : optimized =
-  let style () =
-    match Utils.get_global_arg ~arg_name:"ll_ident_style" ~default:"heuristic" with
-    | "heuristic" -> `Heuristic_ocannl
-    | "name_and_label" -> `Name_and_label
-    | "name_only" -> `Name_only
-    | _ ->
-        invalid_arg
-          "Low_level.optimize_proc: wrong ocannl_ll_ident_style, must be one of: heuristic, name_and_label, \
-           name_only"
-  in
   Option.iter unoptim_ll_source ~f:(fun ppf ->
-      Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ~ident_style:(style ()) ~name ~static_indices ()) llc);
+      Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ~name ~static_indices ()) llc);
   let result = optimize_proc static_indices llc in
   Option.iter ll_source ~f:(fun ppf ->
-      Stdlib.Format.fprintf ppf "%a%!"
-        (fprint_hum ~ident_style:(style ()) ~name ~static_indices ())
-        result.llc);
+      Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ~name ~static_indices ()) result.llc);
   result
 
 let loop_over_dims dims ~body =

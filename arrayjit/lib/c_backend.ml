@@ -420,8 +420,7 @@ let header_sep =
   compile (seq [ str " "; opt any; str "="; str " " ])
 
 let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low_level.optimized) =
-  (* if Option.is_none !root_ctx then initialize (); *)
-  let get_ident = Low_level.get_ident_within_code [| compiled.llc |] in
+  let get_ident = Low_level.get_ident_within_code ~no_dots:true [| compiled.llc |] in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
   let info =
@@ -452,9 +451,8 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low
   { info; result; params; bindings; name; opt_ctx_arrays (* ; params *) }
 
 let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings (lowereds : Low_level.optimized option array) =
-  (* if Option.is_none !root_ctx then initialize (); *)
   let get_ident =
-    Low_level.get_ident_within_code
+    Low_level.get_ident_within_code ~no_dots:true
     @@ Array.filter_map lowereds ~f:(Option.map ~f:(fun Low_level.{ llc; _ } -> llc))
   in
   (* FIXME: do we really want all of them, or only the used ones? *)
