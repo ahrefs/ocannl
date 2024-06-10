@@ -433,6 +433,7 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low
   let base_name = Filename_base.chop_extension pp_file.f_name in
   compile_globals ~get_ident:info.get_ident pp_file.ppf info;
   let params = compile_proc ~name info pp_file.ppf idx_params compiled in
+  pp_file.finalize ();
   let log_fname = base_name ^ ".log" in
   let libname = base_name ^ ".so" in
   (try Stdlib.Sys.remove log_fname with _ -> ());
@@ -482,6 +483,12 @@ let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings (lowereds : Low_lev
       @@ common_prefix (Array.to_list @@ Array.concat_map ~f:Option.to_array names))
   in
   let pp_file = Utils.pp_file ~base_name ~extension:".c" in
+  let params =
+    Array.mapi lowereds ~f:(fun i lowered ->
+        Option.map2 names.(i) infos.(i) ~f:(fun name info ->
+            compile_proc ~name info pp_file.ppf idx_params @@ Option.value_exn lowered))
+  in
+  pp_file.finalize ();
   let log_fname = pp_file.f_name ^ ".log" in
   let libname = pp_file.f_name ^ ".so" in
   let cmdline =
@@ -493,11 +500,6 @@ let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings (lowereds : Low_lev
     ()
   done;
   let result = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW; RTLD_DEEPBIND ] in
-  let params =
-    Array.mapi lowereds ~f:(fun i lowered ->
-        Option.map2 names.(i) infos.(i) ~f:(fun name info ->
-            compile_proc ~name info pp_file.ppf idx_params @@ Option.value_exn lowered))
-  in
   (* Note: for simplicity, we share ctx_arrays across all contexts. *)
   let opt_ctx_arrays = Option.map opt_ctx_arrays ~f:(fun _ -> !global_ctx_arrays) in
   ( opt_ctx_arrays,
