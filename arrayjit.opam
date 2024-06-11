@@ -19,7 +19,6 @@ depends: [
   "core"
   "ctypes" {>= "0.20"}
   "ctypes-foreign" {>= "0.20"}
-  "gccjit" {>= "0.3.2"}
   "printbox"
   "printbox-text"
   "ocannl_npy"
@@ -31,7 +30,10 @@ depends: [
   "ppx_minidebug" {>= "1.5"}
   "odoc" {with-doc}
 ]
-depopts: ["cudajit"]
+depopts: [
+  "cudajit"
+  "gccjit" {>= "0.3.2"}
+]
 build: [
   ["dune" "subst"] {dev}
   [

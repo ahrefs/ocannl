@@ -465,7 +465,7 @@ module C_device : No_device_backend = Simple_no_device_backend ((
 module C_backend = Multicore_backend (C_device)
 
 module Gccjit_device : No_device_backend = Simple_no_device_backend ((
-  Gccjit_backend : Simple_backend with type context = Gccjit_backend.context))
+  Gcc_backend : Simple_backend with type context = Gcc_backend.context))
 
 module Gccjit_backend = Multicore_backend (Gccjit_device)
 

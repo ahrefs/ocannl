@@ -11,7 +11,11 @@
   str
   ctypes
   ctypes.foreign
-  gccjit
+  (select
+   gcc_backend.ml
+   from
+   (gccjit -> gcc_backend.gccjit.ml)
+   (-> gcc_backend.missing.ml))
   (select
    cuda_backend.ml
    from
@@ -30,7 +34,7 @@
   low_level
   assignments
   c_backend
-  gccjit_backend
+  gcc_backend
   cuda_backend
   backends)
  (modes byte native))

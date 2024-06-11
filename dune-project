@@ -52,10 +52,10 @@
   dune
   base
   core
-  (ctypes (>= 0.20))
-  (ctypes-foreign (>= 0.20))
-  (gccjit
-   (>= 0.3.2))
+  (ctypes
+   (>= 0.20))
+  (ctypes-foreign
+   (>= 0.20))
   printbox
   printbox-text
   ocannl_npy
@@ -66,7 +66,10 @@
   ppx_expect
   (ppx_minidebug
    (>= 1.5)))
- (depopts cudajit)
+ (depopts
+  cudajit
+  (gccjit
+   (>= 0.3.2)))
  (tags
   (deeplearning array jit gccjit CUDA)))
 
@@ -86,7 +89,8 @@
   printbox
   printbox-text
   ocannl_npy
-  (angstrom (>= 0.15))
+  (angstrom
+   (>= 0.15))
   stdio
   num
   ppxlib
