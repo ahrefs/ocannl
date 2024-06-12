@@ -123,8 +123,8 @@ let pp_array_offset ppf (idcs, dims) =
   for i = 0 to Array.length idcs - 1 do
     let dim = dims.(i) in
     if i = 0 then fprintf ppf "%a" pp_index_axis idcs.(i)
-    else if i = Array.length idcs - 1 then fprintf ppf " * %d +@ %a" dim pp_index_axis idcs.(i)
-    else fprintf ppf " * %d +@ %a@])" dim pp_index_axis idcs.(i)
+    else if i = Array.length idcs - 1 then fprintf ppf " * %d + %a" dim pp_index_axis idcs.(i)
+    else fprintf ppf " * %d +@ %a@;<0 -1>)@]" dim pp_index_axis idcs.(i)
   done
 
 let array_offset_to_string (idcs, dims) =
@@ -188,9 +188,7 @@ let%debug_sexp prepare_node ~(traced_store : Low_level.traced_store) info ctx_no
               "prec",
               (prec : Ops.prec),
               "on-host",
-              (is_on_host : bool),
-              "is-global",
-              (Option.is_some global : bool)];
+              (is_on_host : bool)];
         if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
           tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
         let zero_initialized = (Hashtbl.find_exn traced_store tn).Low_level.zero_initialized in
@@ -224,27 +222,29 @@ let compile_main ~traced_store info ppf llc : unit =
         let num_closing_braces = pp_top_locals ppf llv in
         (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
         fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " ident pp_array_offset (idcs, node.dims) loop_f llv;
-        (if Utils.settings.debug_log_from_routines then
-           let v_code, v_idcs = loop_debug_f llv in
-           let pp_args =
-             pp_print_list @@ fun ppf -> function
-             | `Accessor idx ->
-                 pp_comma ppf ();
-                 pp_array_offset ppf idx
-             | `Value v ->
-                 pp_comma ppf ();
-                 pp_print_string ppf v
-           in
-           let offset = (idcs, node.dims) in
-           let debug_line = "# " ^ String.substr_replace_all debug ~pattern:"\n" ~with_:"$" ^ "\\n" in
-           fprintf ppf "printf(\"%s\");@ @[<7>printf(@[<h>\"%s[%%u] = %%f = %s\\n\",@]@ %a,@ %s[%a]%a);@]@ "
-             debug_line ident v_code pp_array_offset offset ident pp_array_offset offset pp_args v_idcs);
+        if Utils.settings.debug_log_from_routines then (
+          let v_code, v_idcs = loop_debug_f llv in
+          let pp_args =
+            pp_print_list @@ fun ppf -> function
+            | `Accessor idx ->
+                pp_comma ppf ();
+                pp_array_offset ppf idx
+            | `Value v ->
+                pp_comma ppf ();
+                pp_print_string ppf v
+          in
+          let offset = (idcs, node.dims) in
+          fprintf ppf {|@[<7>fprintf(log_file, @[<h>"# %s\n"@]);@]@ |}
+          @@ String.substr_replace_all debug ~pattern:"\n" ~with_:"$";
+          fprintf ppf
+            {|@[<7>fprintf(log_file,@ @[<h>"%s[%%u] = %%f = %s\n",@]@ %a,@ %s[%a]%a);@]@ fflush(log_file);@ |}
+            ident v_code pp_array_offset offset ident pp_array_offset offset pp_args v_idcs);
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]@ }@,"
         done
     | Comment message ->
         if Utils.settings.debug_log_from_routines then
-          fprintf ppf "printf(@[<h>\"COMMENT: %s\\n\"@]);@ "
+          fprintf ppf {|fprintf(log_file, @[<h>"COMMENT: %s\n"@]);@ |}
             (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
         else fprintf ppf "/* %s */@ " message
     | Staged_compilation callback -> callback ()
@@ -285,7 +285,7 @@ let compile_main ~traced_store info ppf llc : unit =
         Hash_set.add visited tn;
         let ident = info.get_ident tn in
         let node = get_node tn in
-        fprintf ppf "@[<2>%s[%a@]]" ident pp_array_offset (idcs, node.dims)
+        fprintf ppf "@[<2>%s[%a@;<0 -2>]@]" ident pp_array_offset (idcs, node.dims)
     | Constant c -> fprintf ppf "(%f)" c
     | Embed_index idx ->
         if not @@ List.exists ~f:(String.equal num_typ) [ "int"; "size_t" ] then fprintf ppf "(%s)" num_typ;
@@ -298,7 +298,7 @@ let compile_main ~traced_store info ppf llc : unit =
     | Unop (Identity, v) -> loop ppf v
     | Unop (Relu, v) ->
         (* FIXME: don't recompute v *)
-        fprintf ppf "@[<1>(%a > 0.0 ?@ %a : 0.0@])" loop v loop v
+        fprintf ppf "@[<1>(%a > 0.0 ?@ %a : 0.0@;<0 -1>)@]" loop v loop v
   and debug_float prec (value : Low_level.float_t) : string * 'a list =
     let num_typ = Ops.cuda_typ_of_prec prec in
     let loop = debug_float prec in
@@ -317,7 +317,7 @@ let compile_main ~traced_store info ppf llc : unit =
     | Get (tn, idcs) ->
         let ident = info.get_ident tn in
         let node = get_node tn in
-        let v = sprintf "@[<2>%s[%s@]]" ident (array_offset_to_string (idcs, node.dims)) in
+        let v = sprintf "@[<2>%s[%s@;<0 -2>]@]" ident (array_offset_to_string (idcs, node.dims)) in
         (ident ^ "[%u]{=%f}", [ `Accessor (idcs, node.dims); `Value v ])
     | Constant c -> (Float.to_string c, [])
     | Embed_index (Fixed_idx i) -> (Int.to_string i, [])
@@ -338,7 +338,7 @@ let compile_main ~traced_store info ppf llc : unit =
 
 let%track_sexp compile_globals ~get_ident ppf info =
   let open Stdlib.Format in
-  fprintf ppf "@[<v 0>/* Global declarations. */@,";
+  fprintf ppf {|@[<v 0>#include "stdio.h"@,#include "stdlib.h"@,/* Global declarations. */@,|};
   Hash_set.to_list info.used_tensors
   |> List.iter ~f:(fun tn ->
          let node = Hashtbl.find_exn info.nodes tn in
@@ -365,21 +365,24 @@ let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; 
   let idx_params =
     List.map idx_params ~f:(fun s -> ("int " ^ Indexing.symbol_ident s.Indexing.static_symbol, Static_idx s))
   in
-  let log_file = if Utils.settings.debug_log_from_routines then [ ("const char*", Log_file_name) ] else [] in
+  let log_file =
+    if Utils.settings.debug_log_from_routines then [ ("const char* log_file_name", Log_file_name) ] else []
+  in
   let params = log_file @ idx_params @ params in
   fprintf ppf "@[<v 2>@[<hv 4>void %s(@,@[<hov 0>%a@]@;<0 -4>)@] {@ " name
     (pp_print_list ~pp_sep:pp_comma pp_print_string)
   @@ List.map ~f:fst params;
-  fprintf ppf "/* Local declarations and initialization. */@,";
+  if Utils.settings.debug_log_from_routines then fprintf ppf {|FILE* log_file = fopen(log_file_name, "w");@ |};
+  fprintf ppf "/* Local declarations and initialization. */@ ";
   List.iter arrays ~f:(fun tn ->
       let node = Hashtbl.find_exn info.nodes tn in
       match node.mem with
       | Local_only ->
-          fprintf ppf "%s %s[%d]%s;@," (Ops.cuda_typ_of_prec node.prec) (info.get_ident tn) node.size_in_elems
+          fprintf ppf "%s %s[%d]%s;@ " (Ops.cuda_typ_of_prec node.prec) (info.get_ident tn) node.size_in_elems
             (if (Hashtbl.find_exn traced_store tn).zero_initialized then " = {0}" else "")
       | From_context when node.zero_initialized -> pp_zero_out ppf node
       | _ -> ());
-  fprintf ppf "@,/* Main logic. */@,";
+  fprintf ppf "@,/* Main logic. */@ ";
   compile_main ~traced_store info ppf llc;
   fprintf ppf "@;<0 -2>}@]@.";
   params
