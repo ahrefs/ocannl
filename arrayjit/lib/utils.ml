@@ -324,25 +324,18 @@ let waiter ~name:_ () =
   let pipe_inp, pipe_out = Unix.pipe ~cloexec:true () in
   let await ~keep_waiting =
     let rec wait () =
-      let need_waiting = keep_waiting () in
-      if
-        need_waiting
-        &&
-        let inp_pipes, _, _ = Unix.select [ pipe_inp ] [] [] 5.0 in
-        List.is_empty inp_pipes
-      then wait ()
-      else need_waiting
+      if Atomic.compare_and_set is_released true false then (
+        let n = Unix.read pipe_inp (Bytes.create 1) 0 1 in
+        assert (n = 1);
+        true)
+      else if keep_waiting () then
+        let _, _, _ = Unix.select [ pipe_inp ] [] [] 5.0 in
+        wait ()
+      else false
     in
     fun () ->
       if Atomic.compare_and_set is_waiting false true then (
-        Atomic.set is_released false;
-        let result =
-          if wait () then (
-            let n = Unix.read pipe_inp (Bytes.create 1) 0 1 in
-            assert (n = 1);
-            true)
-          else false
-        in
+        let result = wait () in
         assert (Atomic.compare_and_set is_waiting true false);
         result)
       else false

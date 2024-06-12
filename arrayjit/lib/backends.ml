@@ -190,7 +190,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     let keep_waiting () =
       state.keep_spinning && is_dev_queue_empty state && not (host_wait_for_idle.is_waiting ())
     in
-    let wait_for_dev = state.dev_wait.await ~keep_waiting in
+    let wait_by_dev = state.dev_wait.await ~keep_waiting in
     let run_no = !global_run_no in
     let debug_runtime =
       Utils.get_debug ("dev-multicore-" ^ Int.to_string ordinal ^ "-run-" ^ Int.to_string run_no)
@@ -201,7 +201,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
           match state.dev_pos with
           | Empty ->
               let _host_released : bool = host_wait_for_idle.release_if_waiting () in
-              let _could_wait : bool = wait_for_dev () in
+              let _could_wait : bool = wait_by_dev () in
               (* not _host_released && not _could_wait: we busy-loop until host processes its release. *)
               (* [%log "WORK WHILE LOOP: EMPTY AFTER WAIT -- dev pos:", (state.dev_pos : task_list)]; *)
               state.dev_pos <- Utils.tl_exn state.dev_previous_pos
