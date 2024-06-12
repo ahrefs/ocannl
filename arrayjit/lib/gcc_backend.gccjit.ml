@@ -6,7 +6,9 @@ module Debug_runtime = Utils.Debug_runtime
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 let name = "gccjit"
-let optimization_level = ref 3
+
+let optimization_level () =
+  Int.of_string @@ Utils.get_global_arg ~default:"3" ~arg_name:"gccjit_backend_optimization_level"
 
 type config = [ `Physical_devices_only | `For_parallel_copying | `Most_parallel_devices ]
 [@@deriving equal, sexp, variants]
@@ -35,7 +37,7 @@ let unsafe_cleanup ?(unsafe_shutdown = false) () =
   if unsafe_shutdown then root_ctx := None
   else
     let ctx = Context.create () in
-    Context.set_option ctx Optimization_level !optimization_level;
+    Context.set_option ctx Optimization_level (optimization_level ());
     root_ctx := Some ctx
 
 let is_initialized, initialize =
@@ -638,7 +640,7 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
-  Context.set_option ctx Context.Optimization_level !optimization_level;
+  Context.set_option ctx Context.Optimization_level (optimization_level ());
   (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
      Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx Context.Dump_everything
      true); *)
@@ -659,7 +661,7 @@ let%track_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
-  Context.set_option ctx Context.Optimization_level !optimization_level;
+  Context.set_option ctx Context.Optimization_level (optimization_level ());
   (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
      Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx Context.Dump_everything
      true); *)

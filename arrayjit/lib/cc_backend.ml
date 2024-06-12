@@ -6,7 +6,11 @@ module Debug_runtime = Utils.Debug_runtime
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 let name = "cc"
-let optimization_level = ref 3
+
+let optimization_level () =
+  Int.of_string @@ Utils.get_global_arg ~default:"3" ~arg_name:"cc_backend_optimization_level"
+
+let compiler_command () = Utils.get_global_arg ~default:"cc" ~arg_name:"cc_backend_compiler_command"
 
 type config = [ `Physical_devices_only | `For_parallel_copying | `Most_parallel_devices ]
 [@@deriving equal, sexp, variants]
@@ -438,7 +442,8 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low
   let libname = base_name ^ ".so" in
   (try Stdlib.Sys.remove log_fname with _ -> ());
   let cmdline =
-    Printf.sprintf "cc %s -O%d -o %s --shared >> %s 2>&1" pp_file.f_name !optimization_level libname log_fname
+    Printf.sprintf "%s %s -O%d -o %s --shared >> %s 2>&1" (compiler_command ()) pp_file.f_name
+      (optimization_level ()) libname log_fname
   in
   let _rc = Stdlib.Sys.command cmdline in
   (* FIXME: don't busy wait *)
@@ -492,7 +497,8 @@ let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings (lowereds : Low_lev
   let log_fname = pp_file.f_name ^ ".log" in
   let libname = pp_file.f_name ^ ".so" in
   let cmdline =
-    Printf.sprintf "cc %s -O%d -o %s --shared >> %s 2>&1" pp_file.f_name !optimization_level libname log_fname
+    Printf.sprintf "%s %s -O%d -o %s --shared >> %s 2>&1" (compiler_command ()) pp_file.f_name
+      (optimization_level ()) libname log_fname
   in
   let _rc = Stdlib.Sys.command cmdline in
   (* FIXME: don't busy wait *)
