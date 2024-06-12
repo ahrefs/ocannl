@@ -460,9 +460,9 @@ struct
 end
 
 module C_device : No_device_backend = Simple_no_device_backend ((
-  C_backend : Simple_backend with type context = C_backend.context))
+  Cc_backend : Simple_backend with type context = Cc_backend.context))
 
-module C_backend = Multicore_backend (C_device)
+module Cc_backend = Multicore_backend (C_device)
 
 module Gccjit_device : No_device_backend = Simple_no_device_backend ((
   Gcc_backend : Simple_backend with type context = Gcc_backend.context))

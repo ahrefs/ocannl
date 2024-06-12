@@ -5,7 +5,7 @@ module Debug_runtime = Utils.Debug_runtime
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-let name = "c"
+let name = "cc"
 let optimization_level = ref 3
 
 type config = [ `Physical_devices_only | `For_parallel_copying | `Most_parallel_devices ]
@@ -539,9 +539,9 @@ let%track_sexp link_compiled (old_context : context) (code : procedure) : contex
        fun (type a b idcs) (binds : idcs Indexing.bindings) params (cs : (a -> b) Ctypes.fn) ->
         match (binds, params) with
         | Empty, [] -> Indexing.Result (Foreign.foreign ~from:code.result name cs)
-        | Bind _, [] -> invalid_arg "C_backend.link: too few static index params"
+        | Bind _, [] -> invalid_arg "Cc_backend.link: too few static index params"
         | Bind (_, bs), Static_idx _ :: ps -> Param_idx (ref 0, link bs ps Ctypes.(int @-> cs))
-        | Empty, Static_idx _ :: _ -> invalid_arg "C_backend.link: too many static index params"
+        | Empty, Static_idx _ :: _ -> invalid_arg "Cc_backend.link: too many static index params"
         | bs, Log_file_name :: ps -> Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Param_ptr tn :: ps ->
             let nd = match Map.find arrays tn with Some nd -> nd | None -> assert false in

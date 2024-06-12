@@ -1,20 +1,31 @@
-## [0.4.0] -- 2024-04-30
+## [0.4.1] -- current
 
 ### Added
 
-- TODO: A new backend CC: C based on a configurable C compiler command, defaulting to `cc`.
 - TODO: API improvements for mixed precision computations.
 - TODO(#262): "term punning" for `%cd`.
-- TODO: A very naive first stab at Cuda parallelism.
+- TODO: CUDA streaming multiprocessor parallelism via streams <-> virtual devices.
+
+## [0.4.0] -- 2024-06-30
+
+### Added
+
+- A new backend "cc": C based on a configurable C compiler command, defaulting to `cc`.
+- TODO: Merge buffers representational abstraction (one per virtual device):
+  - backends just need to support device-to-device transfers,
+  - merging gets implemented in "user space".
 
 ### Changed
 
 - Terminology in the API: Renamed almost all uses of "jit" into uses of "compile" and / or "link".
 - Split the compile-to-ptx phase from the build-module and build-kernel-launcher phase.
-- Migrated the Cuda backend to ppx_minidebug-based execution tracing.
+- Migrated the CUDA backend to ppx_minidebug-based execution tracing.
 - Fixes for mixed precision computations.
 - Further terminology refactoring: Renamed `Low_level.compile` to `Low_level.lower`;
   - and `Low_level.compiled` to `Low_level.optimized`, making it a record.
+- Further refactoring of the `Backends` API:
+  - split the `device` type into virtual `device` and `physical_device`,
+  - removed the direct support for `merge`, instead relying on merge buffers.
 
 ## [0.3.3] -- 2024-04-24
 
