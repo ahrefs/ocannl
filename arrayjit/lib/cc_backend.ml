@@ -237,16 +237,14 @@ let compile_main ~traced_store info ppf llc : unit =
            in
            let offset = (idcs, node.dims) in
            let debug_line = "# " ^ String.substr_replace_all debug ~pattern:"\n" ~with_:"$" ^ "\\n" in
-           fprintf ppf
-             "printf(\"%%d: %s\", log_id);@ @[<7>printf(@[<h>\"%%d: %s[%%u] = %%f = %s\\n\",@] log_id,@ %a,@ \
-              %s[%a]%a);@]@ "
+           fprintf ppf "printf(\"%s\");@ @[<7>printf(@[<h>\"%s[%%u] = %%f = %s\\n\",@]@ %a,@ %s[%a]%a);@]@ "
              debug_line ident v_code pp_array_offset offset ident pp_array_offset offset pp_args v_idcs);
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]@ }@,"
         done
     | Comment message ->
         if Utils.settings.debug_log_from_routines then
-          fprintf ppf "printf(@[<h>\"%%d: COMMENT: %s\\n\", log_id@]);@ "
+          fprintf ppf "printf(@[<h>\"COMMENT: %s\\n\"@]);@ "
             (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
         else fprintf ppf "/* %s */@ " message
     | Staged_compilation callback -> callback ()
@@ -367,8 +365,8 @@ let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; 
   let idx_params =
     List.map idx_params ~f:(fun s -> ("int " ^ Indexing.symbol_ident s.Indexing.static_symbol, Static_idx s))
   in
-  let log_id = if Utils.settings.debug_log_from_routines then [ ("int log_id", Log_file_name) ] else [] in
-  let params = log_id @ idx_params @ params in
+  let log_file = if Utils.settings.debug_log_from_routines then [ ("const char*", Log_file_name) ] else [] in
+  let params = log_file @ idx_params @ params in
   fprintf ppf "@[<v 2>@[<hv 4>void %s(@,@[<hov 0>%a@]@;<0 -4>)@] {@ " name
     (pp_print_list ~pp_sep:pp_comma pp_print_string)
   @@ List.map ~f:fst params;
