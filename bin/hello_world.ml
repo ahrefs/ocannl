@@ -95,6 +95,9 @@ let hello4 () =
   Stdio.printf "\n%!"
 
 let hello5 () =
+  Utils.settings.with_debug_level <- 2;
+  Utils.settings.output_debug_files_in_run_directory <- true;
+  Utils.settings.debug_log_from_routines <- true;
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
@@ -123,4 +126,4 @@ let hello6 () =
 
 let () =
   ignore (hello1, hello2, hello3, hello4, hello5, hello6);
-  hello6 ()
+  hello5 ()

@@ -101,15 +101,6 @@ let map_prec ?default { f } = function
   | Double_prec Double -> f Double
   | _ -> .
 
-let gcc_typ_of_prec =
-  let open Gccjit in
-  function
-  | Byte_prec _ -> Type.Unsigned_char
-  | Half_prec _ -> (* FIXME: *) Type.Float
-  | Single_prec _ -> Type.Float
-  | Double_prec _ -> Type.Double
-  | Void_prec -> Type.Void
-
 let cuda_typ_of_prec = function
   | Byte_prec _ -> "unsigned char"
   (* TODO: or should it be uint8, or uint8_t? *)
@@ -224,13 +215,9 @@ let sexp_of_voidptr p = Sexp.Atom Ctypes.(string_of (ptr void) p)
 let compare_voidptr = Ctypes.ptr_compare
 let equal_voidptr : voidptr -> voidptr -> bool = phys_equal
 
-let ptr_to_string ptr prec =
-  (* TODO: looks like overkill to use Gccjit for printing. *)
-  let open Gccjit in
-  let ctx = Context.create () in
-  let result = RValue.to_string @@ RValue.ptr ctx Type.(pointer @@ get ctx @@ gcc_typ_of_prec prec) ptr in
-  Context.release ctx;
-  result
+let ptr_to_string (type elem) (ptr : elem Ctypes.ptr) prec =
+  "(" ^ cuda_typ_of_prec prec ^ "*)"
+  ^ Nativeint.Hex.to_string (Ctypes.raw_address_of_ptr @@ Ctypes.to_voidp ptr)
 
 type global_identifier =
   | C_function of string  (** Calls a no-argument or indices-arguments C function. *)

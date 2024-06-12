@@ -109,6 +109,15 @@ type ctx_nodes =
   | Param_ptrs of (gccjit_param * param_source) list ref
 [@@deriving sexp_of]
 
+let gcc_typ_of_prec =
+  let open Gccjit in
+  function
+  | Ops.Byte_prec _ -> Type.Unsigned_char
+  | Half_prec _ -> (* FIXME: *) Type.Float
+  | Single_prec _ -> Type.Float
+  | Double_prec _ -> Type.Double
+  | Void_prec -> Type.Void
+
 let jit_array_offset ctx ~idcs ~dims =
   let open Gccjit in
   let c_index = Type.get ctx Type.Int in
@@ -142,7 +151,7 @@ let prepare_node ~debug_log_zero_out ~get_ident ctx nodes traced_store ctx_nodes
         assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
         let prec = tn.prec in
         let zero_initialized = traced.zero_initialized in
-        let c_typ = Ops.gcc_typ_of_prec prec in
+        let c_typ = gcc_typ_of_prec prec in
         let num_typ = Type.(get ctx c_typ) in
         let ptr_typ = Type.pointer num_typ in
         let mem =
@@ -418,7 +427,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; _ } func ini
           zero_out ctx !current_block node)
     | Set_local (id, llv) ->
         let lhs = Map.find_exn !locals id in
-        let local_typ = Ops.gcc_typ_of_prec id.tn.prec in
+        let local_typ = gcc_typ_of_prec id.tn.prec in
         let num_typ = Type.get ctx local_typ in
         let value = loop_float ~name ~env ~num_typ id.tn.prec llv in
         Block.assign !current_block lhs value
@@ -444,7 +453,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; _ } func ini
     | Get_local id ->
         let lvalue = Map.find_exn !locals id in
         let rvalue = RValue.lvalue lvalue in
-        let local_typ = Ops.gcc_typ_of_prec id.tn.prec in
+        let local_typ = gcc_typ_of_prec id.tn.prec in
         let num_typ = Type.get ctx local_typ in
         if not @@ Ops.equal_prec prec id.tn.prec then RValue.cast ctx rvalue num_typ else rvalue
     | Get_global (C_function f_name, None) ->
@@ -457,7 +466,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; _ } func ini
         let typ = Type.get ctx @@ prec_to_kind prec in
         let ptr = RValue.ptr ctx (Type.pointer typ) ptr in
         let rvalue = RValue.lvalue @@ LValue.access_array ptr offset in
-        let local_typ = Ops.gcc_typ_of_prec local_prec in
+        let local_typ = gcc_typ_of_prec local_prec in
         let num_typ = Type.get ctx local_typ in
         if not @@ Ops.equal_prec prec local_prec then RValue.cast ctx rvalue num_typ else rvalue
     | Get_global (External_unsafe _, None) -> assert false
@@ -470,7 +479,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; _ } func ini
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:node.dims in
         let rvalue = RValue.lvalue @@ LValue.access_array (Lazy.force node.ptr) offset in
-        let local_typ = Ops.gcc_typ_of_prec tn.prec in
+        let local_typ = gcc_typ_of_prec tn.prec in
         let num_typ = Type.get ctx local_typ in
         if not @@ Ops.equal_prec prec tn.prec then RValue.cast ctx rvalue num_typ else rvalue
     | Embed_index (Fixed_idx i) -> RValue.cast ctx (RValue.int ctx num_typ i) num_typ
