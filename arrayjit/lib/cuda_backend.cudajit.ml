@@ -407,6 +407,9 @@ let compile_main traced_store info ppf llc : unit =
         let get_typ = Ops.cuda_typ_of_prec id.tn.prec in
         if not @@ String.equal num_typ get_typ then fprintf ppf "(%s)" num_typ;
         fprintf ppf "v%d" id.scope_id
+    | Get_global (Merge_buffer { source_node_id }, Some idcs) ->
+        let tn = Option.value_exn @@ Tnode.find ~id:source_node_id in
+        fprintf ppf "@[<2>merge_buffer[%a@]]" pp_array_offset (idcs, Lazy.force tn.dims)
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         Hash_set.add visited tn;
@@ -438,6 +441,10 @@ let compile_main traced_store info ppf llc : unit =
           ^ "v" ^ Int.to_string id.scope_id
         in
         (v ^ "{=%f}", [ `Value v ])
+    | Get_global (Merge_buffer { source_node_id }, Some idcs) ->
+        let tn = Option.value_exn @@ Tnode.find ~id:source_node_id in
+        let v = sprintf "@[<2>merge_buffer[%s@]]" (array_offset_to_string (idcs, Lazy.force tn.dims)) in
+        ("merge " ^ Tn.get_debug_name tn ^ "[%u]{=%f}", [ `Accessor (idcs, Lazy.force tn.dims); `Value v ])
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         let node = get_node tn in
@@ -503,7 +510,7 @@ type code_batch = {
 }
 [@@deriving sexp_of]
 
-let%track_sexp compile_proc ~name ~get_ident ppf idx_params Low_level.{ traced_store; llc } =
+let%track_sexp compile_proc ~name ~get_ident ppf idx_params Low_level.{ traced_store; llc; merge_node } =
   let open Stdlib.Format in
   let info = { nodes = Hashtbl.create (module Tn); used_tensors = Hash_set.create (module Tn); get_ident } in
   prepare_nodes traced_store info llc;
@@ -520,9 +527,12 @@ let%track_sexp compile_proc ~name ~get_ident ppf idx_params Low_level.{ traced_s
   let idx_params =
     List.map idx_params ~f:(fun { Indexing.static_symbol; _ } -> "int " ^ Indexing.symbol_ident static_symbol)
   in
+  let merge_buffer_param =
+    Option.to_list merge_node |> List.map ~f:(fun tn -> Ops.cuda_typ_of_prec tn.prec ^ " *merge_buffer")
+  in
   let log_id = if Utils.settings.debug_log_from_routines then [ "int log_id" ] else [] in
   fprintf ppf "extern \"C\" __global__ void %s(%a) {@," name (pp_print_list ~pp_sep:pp_comma pp_print_string)
-  @@ log_id @ idx_params @ params;
+  @@ log_id @ merge_buffer_param @ idx_params @ params;
   fprintf ppf "/* FIXME: single-threaded for now. */@,if (threadIdx.x != 0 || blockIdx.x != 0) { return; }@ ";
   (* TODO: The following link seems to claim it's better to expand into loops.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
@@ -567,6 +577,19 @@ let%diagn_sexp cuda_to_ptx ~name cu_src =
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);
   ptx
+
+type buffer_ptr = Cudajit.deviceptr
+
+let sexp_of_buffer_ptr (Cudajit.Deviceptr ptr : buffer_ptr) = Sexp.Atom (Unsigned.UInt64.to_hexstring ptr)
+let merge_buffer_streaming = false
+
+let alloc_buffer ?old_buffer ~size_in_bytes () =
+  match old_buffer with
+  | Some (old_ptr, old_size) when size_in_bytes <= old_size -> old_ptr
+  | Some (old_ptr, _old_size) ->
+      Cudajit.mem_free old_ptr;
+      Cudajit.mem_alloc ~byte_size:size_in_bytes
+  | None -> Cudajit.mem_alloc ~byte_size:size_in_bytes
 
 let%diagn_sexp link_proc (old_context : context) ~name info ptx =
   let module Cu = Cudajit in

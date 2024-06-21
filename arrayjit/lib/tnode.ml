@@ -20,7 +20,9 @@ type memory_type =
   | Constant  (** The tensor node does not change after initialization. *)
   | Nonconstant  (** One of: [Changed_on_devices], [Volatile]. *)
   | Changed_on_devices  (** The tensor node will only change on host via a [to_host] call. *)
-  | Volatile  (** The tensor node will only change on any device via a [from_host] or [merge] call. *)
+  | Volatile
+      (** The tensor node will only change on any device via a [from_host] call possibly followed by
+          [device_to_device]. *)
 [@@deriving sexp, compare, equal]
 
 type memory_mode =
@@ -250,6 +252,20 @@ let create prec ~id ~label ~dims init_op =
   and tn = { array; prec; id; label; memory_mode = None; backend_info = Sexp.List []; dims } in
   Registry.add registry tn;
   tn
+
+let find =
+  let mock =
+    {
+      array = lazy None;
+      prec = Ops.single;
+      dims = lazy [||];
+      id = -1;
+      label = [];
+      memory_mode = None;
+      backend_info = Sexp.List [];
+    }
+  in
+  fun ~id -> Registry.find_opt registry { mock with id }
 
 let print_accessible_headers () =
   Stdio.printf "Tnode: collecting accessible arrays...%!\n";

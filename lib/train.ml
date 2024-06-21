@@ -295,7 +295,7 @@ module Lazy = Utils.Lazy
       let%track_sexp merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst ~accum ~src =
         let global =
           match src with
-          | None -> Arrayjit.Ops.Merge_buffer_unsafe
+          | None -> Arrayjit.Ops.Merge_buffer src.id
           | Some src -> External_unsafe { ptr = src; prec = dst.Arrayjit.Tnode.prec; dims = dst.dims }
         in
         let open Arrayjit.Low_level in

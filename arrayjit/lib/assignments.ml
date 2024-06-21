@@ -228,8 +228,9 @@ let%debug_sexp to_low_level code =
     | Fetch { array; fetch_op = Embed_symbol s; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ Embed_index (Iterator s.static_symbol))
-    | Fetch { array = _; fetch_op = Imported _; dims = _ } ->
-        failwith "to_low_level: Imported NOT IMPLEMENTED YET"
+    | Fetch { array; fetch_op = Imported global; dims } ->
+        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
+            set array idcs @@ Get_global (global, Some idcs))
   in
 
   loop code
@@ -279,7 +280,9 @@ let fprint_hum ?name ?static_indices () ppf c =
     match op with
     | Constant f -> fprintf ppf "%g" f
     | Imported (Ops.C_function c) -> fprintf ppf "%s()" c
-    | Imported Merge_buffer_unsafe -> fprintf ppf "merge_buffer"
+    | Imported (Merge_buffer {source_node_id}) ->
+      let tn = Option.value_exn @@ Tn.find ~id:source_node_id in
+        fprintf ppf "merge %s" (ident tn) 
     | Imported (Ops.External_unsafe { ptr; prec; dims = _ }) -> fprintf ppf "%s" @@ Ops.ptr_to_string ptr prec
     | Slice { batch_idx; sliced } ->
         fprintf ppf "%s @@| %s" (ident sliced) (Indexing.symbol_ident batch_idx.static_symbol)

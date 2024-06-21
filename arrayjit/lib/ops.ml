@@ -226,7 +226,8 @@ type global_identifier =
       prec : (prec[@equal.ignore] [@compare.ignore]);
       dims : int array Lazy.t;
     }
-  | Merge_buffer_unsafe
+  | Merge_buffer of { source_node_id : int }
       (** Each device has at most one merge buffer, which is re-used, and re-allocated as needed, by merge
-          operations. Using the merge buffer outside of implementing merge tasks is inherently unsafe. *)
+          operations. The merge buffer is associated with the source node of the device's most recent
+          [device_to_device ~into_merge_buffer:true] operation. *)
 [@@deriving sexp_of, equal, compare]

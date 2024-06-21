@@ -37,7 +37,10 @@ val physical_merge_buffers : bool
 
 type physical_device
 type device
+type buffer_ptr [@@deriving sexp_of]
 
+val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
+val merge_buffer_streaming : bool
 val init : device -> context
 val await : device -> unit
 val is_idle : device -> bool

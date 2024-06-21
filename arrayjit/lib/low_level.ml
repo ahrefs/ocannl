@@ -172,7 +172,7 @@ let is_constexpr_comp traced_store llv =
 
 let is_scalar_dims tn = Array.for_all ~f:(( = ) 1) @@ Lazy.force tn.Tn.dims
 
-let visit_llc traced_store reverse_node_map ~max_visits llc =
+let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
   let lookup env indices =
     Array.map indices ~f:(function
@@ -226,6 +226,7 @@ let visit_llc traced_store reverse_node_map ~max_visits llc =
           ~f:(visit ~is_assigned:(traced.zeroed_out || Hash_set.mem traced.assignments at_pos))
     | Local_scope { body; _ } -> loop_proc env body
     | Get_local _ -> ()
+    | Get_global (Ops.Merge_buffer { source_node_id }, _) -> merge_node_id := Some source_node_id
     | Get_global _ -> ()
     | Embed_index _ -> ()
     | Binop (Arg1, llv1, _llv2) -> loop llv1
@@ -697,21 +698,23 @@ let simplify_llc llc =
   loop_proc llc
 
 type traced_store = (Tn.t, traced_array) Base.Hashtbl.t [@@deriving sexp_of]
-type optimized = { traced_store : traced_store; llc : t } [@@deriving sexp_of]
+type optimized = { traced_store : traced_store; llc : t; merge_node : Tn.t option } [@@deriving sexp_of]
 
 let%debug_sexp optimize_proc static_indices llc =
   let traced_store = Hashtbl.create (module Tnode) in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
   let reverse_node_map = Hashtbl.create (module Indexing.Symbol) in
   [%log "tracing"];
-  visit_llc traced_store reverse_node_map ~max_visits:virtualize_settings.max_visits llc;
+  let merge_node_id = ref None in
+  visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits:virtualize_settings.max_visits llc;
   [%log "optimizing"];
   let llc =
     simplify_llc
     @@ cleanup_virtual_llc reverse_node_map ~static_indices
     @@ virtual_llc traced_store reverse_node_map static_indices llc
   in
-  { traced_store; llc }
+  let merge_node = Option.map !merge_node_id ~f:(fun id -> Option.value_exn @@ Tnode.find ~id) in
+  { traced_store; llc; merge_node }
 
 let code_hum_margin = ref 100
 let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
@@ -813,10 +816,12 @@ let fprint_hum ?name ?static_indices () ppf llc =
         fprintf ppf "%s" @@ Ops.ptr_to_string ptr prec
     | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
         fprintf ppf "%s[%a]" (Ops.ptr_to_string ptr prec) pp_indices idcs
-    | Get_global (Ops.Merge_buffer_unsafe, None) ->
-        fprintf ppf "merge_buffer(at prec %s)" @@ Ops.prec_string prec
-    | Get_global (Ops.Merge_buffer_unsafe, Some idcs) ->
-        fprintf ppf "merge_buffer[%a](at prec %s)" pp_indices idcs @@ Ops.prec_string prec
+    | Get_global (Ops.Merge_buffer { source_node_id }, None) ->
+        let tn = Option.value_exn @@ Tnode.find ~id:source_node_id in
+        fprintf ppf "merge %a" pp_ident tn
+    | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
+        let tn = Option.value_exn @@ Tnode.find ~id:source_node_id in
+        fprintf ppf "@[<2>%a[@,%a]@]" pp_ident tn pp_indices idcs
     | Get (tn, idcs) -> fprintf ppf "@[<2>%a[@,%a]@]" pp_ident tn pp_indices idcs
     | Constant c -> fprintf ppf "%f" c
     | Embed_index idx -> pp_index ppf idx

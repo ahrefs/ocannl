@@ -82,10 +82,11 @@ type info_nodes = {
   init_block : (Gccjit.block[@sexp.opaque]);
   nodes : (Tn.t, tn_info) Hashtbl.t;
   get_ident : Tn.t -> string;
+  merge_node : (Gccjit.rvalue[@sexp.opaque]) option;
 }
 [@@deriving sexp_of]
 
-type param_source = Log_file_name | Param_ptr of Tn.t | Static_idx of Indexing.static_symbol
+type param_source = Log_file_name | Merge_buffer | Param_ptr of Tn.t | Static_idx of Indexing.static_symbol
 [@@deriving sexp_of]
 
 type procedure = {
@@ -266,7 +267,7 @@ let debug_log_index ctx log_functions =
         Block.eval block @@ RValue.call ctx ff [ lf ]
   | _ -> fun _block _i _index -> ()
 
-let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; _ } func initial_block
+let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; _ } func initial_block
     (body : Low_level.t) =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
@@ -348,8 +349,14 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; _ } func ini
         let v = to_d @@ RValue.lvalue @@ LValue.access_array ptr offset in
         ("external " ^ RValue.to_string ptr ^ "[%d]{=%g}", [ offset; v ])
     | Get_global (External_unsafe _, None) -> assert false
-    | Get_global (Merge_buffer_unsafe, _) ->
-        raise @@ Utils.User_error ("compiling " ^ name ^ ": gccjit backend does not support merge buffers")
+    | Get_global (Merge_buffer _, None) -> assert false
+    | Get_global (Merge_buffer { source_node_id }, Some idcs) ->
+        let tn = Option.value_exn @@ Tn.find ~id:source_node_id in
+        let idcs = lookup env idcs in
+        let ptr = Option.value_exn merge_node in
+        let offset = jit_array_offset ctx ~idcs ~dims:(Lazy.force tn.dims) in
+        let v = to_d @@ RValue.lvalue @@ LValue.access_array ptr offset in
+        ("merge " ^ get_ident tn ^ "[%d]{=%g}", [ offset; v ])
     | Get_global (C_function _, Some _) -> failwith "gccjit_backend: FFI with parameters NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         let node = get_node tn in
@@ -471,9 +478,16 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; _ } func ini
         let local_typ = gcc_typ_of_prec local_prec in
         let num_typ = Type.get ctx local_typ in
         if not @@ Ops.equal_prec prec local_prec then RValue.cast ctx rvalue num_typ else rvalue
-    | Get_global (External_unsafe _, None) -> assert false
-    | Get_global (Merge_buffer_unsafe, _) ->
-        raise @@ Utils.User_error ("compiling " ^ name ^ ": gccjit backend does not support merge buffers")
+    | Get_global ((External_unsafe _ | Merge_buffer _), None) -> assert false
+    | Get_global (Merge_buffer { source_node_id }, Some idcs) ->
+        let tn = Option.value_exn @@ Tnode.find ~id:source_node_id in
+        let ptr = Option.value_exn merge_node in
+        let idcs = lookup env idcs in
+        let offset = jit_array_offset ctx ~idcs ~dims:(Lazy.force tn.dims) in
+        let rvalue = RValue.lvalue @@ LValue.access_array ptr offset in
+        let local_typ = gcc_typ_of_prec tn.prec in
+        let num_typ = Type.get ctx local_typ in
+        if not @@ Ops.equal_prec prec tn.prec then RValue.cast ctx rvalue num_typ else rvalue
     | Get_global (C_function _, Some _) -> failwith "gccjit_backend: FFI with parameters NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         Hash_set.add visited tn;
@@ -558,7 +572,7 @@ let prepare_nodes ctx ~log_functions ~get_ident nodes traced_store ctx_nodes ini
   loop llc
 
 let%track_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
-    Low_level.{ traced_store; llc = proc } =
+    Low_level.{ traced_store; llc = proc; merge_node } =
   let open Gccjit in
   let c_index = Type.get ctx Type.Int in
   let fkind = Function.Exported in
@@ -572,7 +586,17 @@ let%track_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
     List.map symbols ~f:(fun ({ static_symbol; _ } as s) ->
         (Param.create ctx c_index @@ Indexing.symbol_ident static_symbol, Static_idx s))
   in
-  let params : (gccjit_param * param_source) list ref = ref (Option.to_list log_file_name @ static_indices) in
+  let merge_param =
+    Option.to_list
+    @@ Option.map merge_node ~f:(fun tn ->
+           let c_typ = gcc_typ_of_prec tn.prec in
+           let num_typ = Type.(get ctx c_typ) in
+           let ptr_typ = Type.pointer num_typ in
+           (Param.create ctx ptr_typ "merge_buffer", Merge_buffer))
+  in
+  let params : (gccjit_param * param_source) list ref =
+    ref (Option.to_list log_file_name @ merge_param @ static_indices)
+  in
   let ctx_nodes : ctx_nodes =
     match opt_ctx_arrays with None -> Param_ptrs params | Some ctx_arrays -> Ctx_arrays (ref ctx_arrays)
   in
@@ -613,7 +637,8 @@ let%track_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
   (* Do initializations in the order they were scheduled. *)
   List.iter (List.rev !initializations) ~f:(fun init -> init init_block func);
   let main_block = Block.create ~name func in
-  let ctx_info : info_nodes = { ctx; traced_store; init_block; func; nodes; get_ident } in
+  (* let merge_node = Option.map merge_node ~f:(fun _tn -> Function.param) in *)
+  let ctx_info : info_nodes = { ctx; traced_store; init_block; func; nodes; get_ident; merge_node = None } in
   let after_proc = compile_main ~name ~log_functions ~env ctx_info func main_block proc in
   (match log_functions with
   | Some (lf, _, _) ->
@@ -691,7 +716,20 @@ let%track_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
         (Option.map2 ~f:(fun name (info, opt_ctx_arrays, params) ->
              { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params })) )
 
-let%track_sexp link_compiled (old_context : context) (code : procedure) : context * _ * _ * string =
+type buffer_ptr = unit Ctypes_static.ptr
+
+let sexp_of_buffer_ptr ptr = Sexp.Atom (Ops.ptr_to_string ptr Ops.Void_prec)
+let merge_buffer_streaming = true
+
+let alloc_buffer ?old_buffer ~size_in_bytes () =
+  (* FIXME: NOT IMPLEMENTED YET but should not be needed for the streaming case. *)
+  match old_buffer with
+  | Some (old_ptr, old_size) when size_in_bytes <= old_size -> old_ptr
+  | Some (_old_ptr, _old_size) -> assert false
+  | None -> assert false
+
+let%track_sexp link_compiled ~merge_buffer (old_context : context) (code : procedure) :
+    context * _ * _ * string =
   let label : string = old_context.label in
   let name : string = code.name in
   let arrays : Ndarray.t Base.Map.M(Tn).t =
@@ -732,6 +770,12 @@ let%track_sexp link_compiled (old_context : context) (code : procedure) : contex
             (* let f ba = Ctypes.bigarray_start Ctypes_static.Genarray ba in let c_ptr = Ndarray.(map { f }
                nd) in *)
             let c_ptr = Ndarray.get_voidptr nd in
+            Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
+        | bs, Merge_buffer :: ps ->
+            let c_ptr = Option.value_exn !merge_buffer in
+            (* let f ba = Ctypes.bigarray_start Ctypes_static.Genarray ba in let c_ptr = Ndarray.(map { f }
+               nd) in *)
+            (* let c_ptr = Ndarray.get_voidptr nd in *)
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
       in
       (* Folding by [link] above reverses the input order. Important: [code.bindings] are traversed in the

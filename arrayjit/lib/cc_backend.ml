@@ -69,7 +69,7 @@ type info_nodes = {
 }
 [@@deriving sexp_of]
 
-type param_source = Log_file_name | Param_ptr of Tn.t | Static_idx of Indexing.static_symbol
+type param_source = Log_file_name | Merge_buffer | Param_ptr of Tn.t | Static_idx of Indexing.static_symbol
 [@@deriving sexp_of]
 
 (* open Ctypes *)
@@ -280,7 +280,11 @@ let compile_main ~traced_store info ppf llc : unit =
         let get_typ = Ops.cuda_typ_of_prec id.tn.prec in
         if not @@ String.equal num_typ get_typ then fprintf ppf "(%s)" num_typ;
         fprintf ppf "v%d" id.scope_id
-    | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
+    | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
+        let tn = Option.value_exn @@ Tn.find ~id:source_node_id in
+        fprintf ppf "@[<2>((%s*)merge_buffer)[%a@;<0 -2>]@]" (Ops.cuda_typ_of_prec prec) pp_array_offset
+          (idcs, Lazy.force tn.dims)
+    | Get_global _ -> failwith "Cc_backend: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         Hash_set.add visited tn;
         let ident = info.get_ident tn in
@@ -349,7 +353,7 @@ let%track_sexp compile_globals ~get_ident ppf info =
          | _ -> ());
   fprintf ppf "@,@]"
 
-let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; llc } =
+let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; llc; merge_node = _ } =
   let open Stdlib.Format in
   let arrays = Hash_set.to_list info.used_tensors in
   let params =
@@ -387,7 +391,7 @@ let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; 
   fprintf ppf "@;<0 -2>}@]@.";
   params
 
-let prepare_nodes info ctx_nodes Low_level.{ traced_store; llc } =
+let prepare_nodes info ctx_nodes Low_level.{ traced_store; llc; merge_node = _ } =
   let prepare_node = prepare_node ~traced_store info ctx_nodes in
   let rec loop llc =
     match llc with
@@ -514,7 +518,20 @@ let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings (lowereds : Low_lev
         Option.map2 names.(i) infos.(i) ~f:(fun name info ->
             { info; result; params = Option.value_exn params; bindings; name; opt_ctx_arrays })) )
 
-let%track_sexp link_compiled (old_context : context) (code : procedure) : context * _ * _ * string =
+type buffer_ptr = unit Ctypes_static.ptr
+
+let sexp_of_buffer_ptr ptr = Sexp.Atom (Ops.ptr_to_string ptr Ops.Void_prec)
+let merge_buffer_streaming = true
+
+let alloc_buffer ?old_buffer ~size_in_bytes () =
+  (* FIXME: NOT IMPLEMENTED YET but should not be needed for the streaming case. *)
+  match old_buffer with
+  | Some (old_ptr, old_size) when size_in_bytes <= old_size -> old_ptr
+  | Some (_old_ptr, _old_size) -> assert false
+  | None -> assert false
+
+let%track_sexp link_compiled ~merge_buffer (old_context : context) (code : procedure) :
+    context * _ * _ * string =
   let label : string = old_context.label in
   let name : string = code.name in
   let arrays : Ndarray.t Base.Map.M(Tn).t =
@@ -550,6 +567,7 @@ let%track_sexp link_compiled (old_context : context) (code : procedure) : contex
         | Bind (_, bs), Static_idx _ :: ps -> Param_idx (ref 0, link bs ps Ctypes.(int @-> cs))
         | Empty, Static_idx _ :: _ -> invalid_arg "Cc_backend.link: too many static index params"
         | bs, Log_file_name :: ps -> Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
+        | bs, Merge_buffer :: ps -> Param_2 (merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
         | bs, Param_ptr tn :: ps ->
             let nd = match Map.find arrays tn with Some nd -> nd | None -> assert false in
             (* let f ba = Ctypes.bigarray_start Ctypes_static.Genarray ba in let c_ptr = Ndarray.(map { f }

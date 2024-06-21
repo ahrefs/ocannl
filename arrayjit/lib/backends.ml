@@ -18,6 +18,7 @@ type config = [ `Physical_devices_only | `For_parallel_copying | `Most_parallel_
 module type No_device_backend = sig
   type code [@@deriving sexp_of]
   type code_batch [@@deriving sexp_of]
+  type buffer_ptr [@@deriving sexp_of]
   type context [@@deriving sexp_of]
   type nonrec routine = context routine [@@deriving sexp_of]
 
@@ -30,6 +31,8 @@ module type No_device_backend = sig
 
   val finalize : context -> unit
   (** Finalizes (just) the context. *)
+
+  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
 
   val compile : ?shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> code
   (** If [~shared:true] (default [false]), the backend should prefer to do more compile work in a
@@ -47,10 +50,11 @@ module type No_device_backend = sig
       and debugging convenience by generating fewer files -- ideally does not affect execution, but there can
       be backend-specific differences. Only array entries for which [occupancy] returns true are included. *)
 
-  val link : context -> code -> routine
+  val link : merge_buffer:buffer_ptr option ref -> context -> code -> routine
   (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
 
-  val link_batch : context -> code_batch -> context * routine option array
+  val link_batch :
+    merge_buffer:buffer_ptr option ref -> context -> code_batch -> context * routine option array
   (** Returns the routines for the procedures included in the code batch. The returned context is downstream
       of all the returned routines. *)
 
@@ -84,14 +88,21 @@ module type No_device_backend = sig
       [device_to_device], and the [dst] device {i afterward}, according to {!physical_merge_buffers}, before
       any computations on the [src] device overwrite the node. *)
 
-  val physical_merge_buffers : bool
-  (** If [physical_merge_buffers = true], the [src] node data is not needed after the task scheduled by
-      [device_to_device] finishes. Otherwise, the [src] node data may be needed till after the tasks computing
-      with the merge buffer finish. *)
+  val merge_buffer_streaming : bool
+  (** If [merge_buffer_streaming = false], the [src] node data is not needed after the task scheduled by
+      [device_to_device] finishes. If [merge_buffer_streaming = true], the [src] node data may be needed till
+      after the tasks computing with the merge buffer finish. *)
 end
 
 module type Backend = sig
   include No_device_backend
+
+  val link : context -> code -> routine
+  (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
+
+  val link_batch : context -> code_batch -> context * routine option array
+  (** Returns the routines for the procedures included in the code batch. The returned context is downstream
+      of all the returned routines. *)
 
   type physical_device
   type device
@@ -123,7 +134,7 @@ end
 let forget_printbox (module Runtime : Minidebug_runtime.PrintBox_runtime) =
   (module Runtime : Minidebug_runtime.Debug_runtime)
 
-module Multicore_backend (Backend : No_device_backend) : Backend = struct
+module Multicore_backend (Backend : No_device_backend) (* *: Backend *) = struct
   module Domain = Domain [@warning "-3"]
 
   type task_list = Tnode.task Utils.mutable_list [@@deriving sexp_of]
@@ -137,16 +148,27 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   }
   [@@deriving sexp_of]
 
+  type buffer_ptr = Backend.buffer_ptr [@@deriving sexp_of]
+
+  let alloc_buffer = Backend.alloc_buffer
+
   type device = {
     state : device_state;
     host_wait_for_idle : (Utils.waiter[@sexp.opaque]);
+    merge_buffer_ptr : buffer_ptr option ref;
+    mutable merge_node : Tnode.t option;
     ordinal : int;
     domain : (unit Domain.t[@sexp.opaque]);
   }
   [@@deriving sexp_of]
 
   type physical_device = device [@@deriving sexp_of]
+  type code = { code : Backend.code; expected_merge_node : Tnode.t option } [@@deriving sexp_of]
 
+  type code_batch = { code_batch : Backend.code_batch; expected_merge_node : Tnode.t option }
+  [@@deriving sexp_of]
+
+  let merge_buffer_streaming = Backend.merge_buffer_streaming
   let is_dev_queue_empty state = Utils.(is_empty @@ tl_exn state.dev_previous_pos)
   let is_idle device = is_dev_queue_empty device.state && device.state.dev_wait.is_waiting ()
 
@@ -216,43 +238,69 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         ignore (host_wait_for_idle.release_if_waiting () : bool);
         raise e
     in
-    { state; host_wait_for_idle; ordinal; domain = Domain.spawn (worker debug_runtime) }
+    {
+      state;
+      host_wait_for_idle;
+      ordinal;
+      domain = Domain.spawn (worker debug_runtime);
+      merge_buffer_ptr = ref None;
+      merge_node = None;
+    }
 
   let%diagn_sexp make_work device task =
     let%diagn_rt_sexp work () = schedule_task device task in
     Tnode.
       { description = "schedules {" ^ task.description ^ "} on device " ^ Int.to_string device.ordinal; work }
 
-  type code = Backend.code [@@deriving sexp_of]
-  type code_batch = Backend.code_batch [@@deriving sexp_of]
-  type context = { device : device; ctx : Backend.context } [@@deriving sexp_of]
+  type context = { device : device; ctx : Backend.context; expected_merge_node : Tnode.t option }
+  [@@deriving sexp_of]
+
   type nonrec routine = context routine [@@deriving sexp_of]
 
   let name = "multicore " ^ Backend.name
-  let init device = { device; ctx = Backend.init ~label:(name ^ " " ^ Int.to_string device.ordinal) }
+
+  let init device =
+    {
+      device;
+      ctx = Backend.init ~label:(name ^ " " ^ Int.to_string device.ordinal);
+      expected_merge_node = None;
+    }
+
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
 
-  let finalize { device; ctx } =
+  let finalize { device; ctx; expected_merge_node = _ } =
     await device;
     Backend.finalize ctx
 
-  let compile = Backend.compile
-  let compile_batch = Backend.compile_batch
+  let compile ?shared ?name bindings asgns =
+    let code = Backend.compile ?shared ?name bindings asgns in
+    (* FIXME: NOT IMPLEMENTED YET *)
+    { code; expected_merge_node = None }
 
-  let link { ctx; device } code =
-    let task = Backend.link ctx code in
-    { task with context = { ctx = task.context; device }; schedule = make_work device task.schedule }
+  let compile_batch ?shared ?names ?occupancy bindings asgns_batch =
+    let code_batch = Backend.compile_batch ?shared ?names ?occupancy bindings asgns_batch in
+    (* FIXME: NOT IMPLEMENTED YET *)
+    { code_batch; expected_merge_node = None }
 
-  let link_batch { ctx; device } code_batch =
-    let ctx, routines = Backend.link_batch ctx code_batch in
-    ( { ctx; device },
+  let link { ctx; device; expected_merge_node = _ } (code : code) =
+    let task = Backend.link ~merge_buffer:device.merge_buffer_ptr ctx code.code in
+    {
+      task with
+      context = { ctx = task.context; device; expected_merge_node = code.expected_merge_node };
+      schedule = make_work device task.schedule;
+    }
+
+  let link_batch { ctx; device; expected_merge_node = _ } (code_batch : code_batch) =
+    let ctx, routines = Backend.link_batch ~merge_buffer:device.merge_buffer_ptr ctx code_batch.code_batch in
+    ( { ctx; device; expected_merge_node = code_batch.expected_merge_node },
       Array.map routines
         ~f:
           (Option.map ~f:(fun task ->
                {
                  task with
-                 context = { ctx = task.context; device };
+                 context =
+                   { ctx = task.context; device; expected_merge_node = code_batch.expected_merge_node };
                  schedule = make_work device task.schedule;
                })) )
 
@@ -297,7 +345,6 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
             work;
           }]
 
-  let physical_merge_buffers = Backend.physical_merge_buffers
   let num_physical_devices () = Domain.recommended_domain_count () - 1
   let suggested_num_virtual_devices _device = 1
   let devices = Array.init (num_physical_devices ()) ~f:(fun ordinal -> spinup_device ~ordinal)
@@ -360,8 +407,10 @@ module type Simple_backend = sig
   type context [@@deriving sexp_of]
   type procedure [@@deriving sexp_of]
   type ctx_arrays [@@deriving sexp_of]
-  type nonrec config = config
+  type nonrec config = config [@@deriving sexp_of]
+  type buffer_ptr [@@deriving sexp_of]
 
+  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
   val ctx_arrays : context -> ctx_arrays
 
   val compile :
@@ -378,7 +427,12 @@ module type Simple_backend = sig
     Low_level.optimized option array ->
     ctx_arrays option * procedure option array
 
-  val link_compiled : context -> procedure -> context * Indexing.lowered_bindings * Tnode.task * string
+  val link_compiled :
+    merge_buffer:buffer_ptr option ref ->
+    context ->
+    procedure ->
+    context * Indexing.lowered_bindings * Tnode.task * string
+
   val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
   val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
 
@@ -390,7 +444,7 @@ module type Simple_backend = sig
     src:context ->
     unit
 
-  val physical_merge_buffers : bool
+  val merge_buffer_streaming : bool
   val name : string
   val initialize : unit -> unit
   val is_initialized : unit -> bool
@@ -435,17 +489,17 @@ struct
     if shared then Compiled (compile_batch ~names ~opt_ctx_arrays:None bindings lowereds)
     else Postponed { lowereds; bindings; names }
 
-  let link (old_context : context) (code : code) =
+  let link ~merge_buffer (old_context : context) (code : code) =
     let context, bindings, schedule, name =
       match code with
       | Postponed { lowered; bindings; name } ->
           let proc = Backend.compile ~name ~opt_ctx_arrays:(Some (ctx_arrays old_context)) bindings lowered in
-          link_compiled old_context proc
-      | Compiled code -> link_compiled old_context code
+          link_compiled ~merge_buffer old_context proc
+      | Compiled code -> link_compiled ~merge_buffer old_context code
     in
     { context; schedule; bindings; name }
 
-  let link_batch (old_context : context) (code_batch : code_batch) =
+  let link_batch ~merge_buffer (old_context : context) (code_batch : code_batch) =
     let _opt_ctx_arrays, procs =
       match code_batch with
       | Postponed { lowereds; bindings; names } ->
@@ -454,7 +508,7 @@ struct
     in
     Array.fold_map procs ~init:old_context ~f:(fun context -> function
       | Some proc ->
-          let context, bindings, schedule, name = link_compiled context proc in
+          let context, bindings, schedule, name = link_compiled ~merge_buffer context proc in
           (context, Some { context; schedule; bindings; name })
       | None -> (context, None))
 end
