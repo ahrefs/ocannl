@@ -24,12 +24,30 @@ let root_ctx = ref None
 
 module Tn = Tnode
 
-type ctx_arrays = Ndarray.t Map.M(Tn).t [@@deriving sexp_of]
+type ctx_array = Ndarray.t [@@deriving sexp_of]
+type ctx_arrays = ctx_array Map.M(Tn).t [@@deriving sexp_of]
+
+type buffer_ptr = ctx_array [@@deriving sexp_of]
+(** Alternative approach: {[
+type buffer_ptr = unit Ctypes_static.ptr
+
+let sexp_of_buffer_ptr ptr = Sexp.Atom (Ops.ptr_to_string ptr Ops.Void_prec)
+let buffer_ptr ctx_array = Ndarray.get_voidptr ctx_array
+]} *)
+
+let buffer_ptr ctx_array = ctx_array
 
 type context = { label : string; arrays : ctx_arrays; result : (Gccjit.result option[@sexp.opaque]) }
 [@@deriving sexp_of]
 
 let ctx_arrays context = context.arrays
+
+let to_buffer ?rt:_ tn ~dst ~src =
+  let src = Map.find_exn src.arrays tn in
+  Ndarray.map2 { f2 = Ndarray.A.blit } src dst
+
+let host_to_buffer ?rt:_ src ~dst = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
+let buffer_to_host ?rt:_ dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 
 let unsafe_cleanup ?(unsafe_shutdown = false) () =
   let open Gccjit in
@@ -716,11 +734,6 @@ let%track_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
         (Option.map2 ~f:(fun name (info, opt_ctx_arrays, params) ->
              { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params })) )
 
-type buffer_ptr = unit Ctypes_static.ptr
-
-let sexp_of_buffer_ptr ptr = Sexp.Atom (Ops.ptr_to_string ptr Ops.Void_prec)
-let merge_buffer_streaming = true
-
 let alloc_buffer ?old_buffer ~size_in_bytes () =
   (* FIXME: NOT IMPLEMENTED YET but should not be needed for the streaming case. *)
   match old_buffer with
@@ -772,11 +785,7 @@ let%track_sexp link_compiled ~merge_buffer (old_context : context) (code : proce
             let c_ptr = Ndarray.get_voidptr nd in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
         | bs, Merge_buffer :: ps ->
-            let c_ptr = Option.value_exn !merge_buffer in
-            (* let f ba = Ctypes.bigarray_start Ctypes_static.Genarray ba in let c_ptr = Ndarray.(map { f }
-               nd) in *)
-            (* let c_ptr = Ndarray.get_voidptr nd in *)
-            Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
+            Param_2f (Ndarray.get_voidptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
       in
       (* Folding by [link] above reverses the input order. Important: [code.bindings] are traversed in the
          wrong order but that's OK because [link] only uses them to check the number of indices. *)
@@ -793,82 +802,3 @@ let%track_sexp link_compiled ~merge_buffer (old_context : context) (code : proce
     Indexing.lowered_bindings code.bindings run_variadic,
     Tn.{ description = "executes " ^ code.name ^ " on " ^ context.label; work },
     name )
-
-let from_host ?rt (context : context) (tn : Tn.t) : unit =
-  Option.iter (Map.find context.arrays tn) ~f:(fun c_arr ->
-      match tn.Tn.array with
-      | (lazy (Some h_arr)) ->
-          Ndarray.map2 { f2 = Ndarray.A.blit } h_arr c_arr;
-          if Utils.settings.with_debug_level > 0 then
-            let module Debug_runtime =
-              (val Option.value_or_thunk rt ~default:(fun () ->
-                       (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
-            in
-            [%diagn_sexp
-              [%log_entry
-                "from_host " ^ Tn.get_debug_name tn;
-                [%log "copied", Tn.label tn, Tn.name tn, "from host"];
-                if Utils.settings.with_debug_level > 1 then
-                  [%log_printbox
-                    let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
-                    Ndarray.render_array ~indices c_arr]]]
-      | (lazy None) ->
-          [%diagn_sexp
-            [%log_entry
-              "from_host empty " ^ Tn.get_debug_name tn;
-              [%log "nothing to copy", Tn.label tn, Tn.name tn, "from host"]]];
-          ())
-
-let to_host ?rt (context : context) (tn : Tn.t) : unit =
-  Option.iter (Map.find context.arrays tn) ~f:(fun c_arr ->
-      match tn.Tn.array with
-      | (lazy (Some h_arr)) ->
-          Ndarray.map2 { f2 = Ndarray.A.blit } c_arr h_arr;
-          if Utils.settings.with_debug_level > 0 then
-            let module Debug_runtime =
-              (val Option.value_or_thunk rt ~default:(fun () ->
-                       (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
-            in
-            [%diagn_sexp
-              [%log_entry
-                "to_host " ^ Tn.get_debug_name tn;
-                [%log "copied", Tn.label tn, Tn.name tn, "to host"];
-                if Utils.settings.with_debug_level > 1 then
-                  [%log_printbox
-                    let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
-                    Ndarray.render_array ~indices h_arr]]]
-      | (lazy None) ->
-          [%diagn_sexp
-            [%log_entry
-              "to_host empty " ^ Tn.get_debug_name tn;
-              [%log "nothing to copy", Tn.label tn, Tn.name tn, "to host"]]];
-          ())
-
-let device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn ~into_merge_buffer ~dst ~src =
-  Option.iter (Map.find src.arrays tn) ~f:(fun s_arr ->
-      Option.iter (Map.find dst.arrays tn) ~f:(fun d_arr ->
-          if into_merge_buffer then failwith "NOT IMPLEMENTED YET"
-          else Ndarray.map2 { f2 = Ndarray.A.blit } s_arr d_arr;
-          if Utils.settings.with_debug_level > 0 then
-            let module Debug_runtime =
-              (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
-            in
-            [%diagn_sexp
-              [%log_entry
-                "device_to_device " ^ Tn.get_debug_name tn;
-                [%log
-                  "copied",
-                    Tn.label tn,
-                    Tn.name tn,
-                    "using merge buffer",
-                    (into_merge_buffer : bool),
-                    "destination",
-                    dst.label,
-                    "source",
-                    src.label];
-                if Utils.settings.with_debug_level > 1 then
-                  [%log_printbox
-                    let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
-                    Ndarray.render_array ~indices d_arr]]]))
-
-let physical_merge_buffers = false

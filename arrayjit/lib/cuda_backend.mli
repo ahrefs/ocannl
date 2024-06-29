@@ -2,10 +2,7 @@ type context [@@deriving sexp_of]
 type code [@@deriving sexp_of]
 type code_batch [@@deriving sexp_of]
 
-type config = [ `Physical_devices_only | `For_parallel_copying | `Most_parallel_devices ]
-[@@deriving equal, sexp, variants]
-
-val initialize : config -> unit
+val initialize : Backend_types.config -> unit
 val is_initialized : unit -> bool
 val finalize : context -> unit
 val sexp_of_context : context -> Sexplib.Sexp.t
@@ -18,26 +15,32 @@ val link : context -> code -> context * Indexing.lowered_bindings * Tnode.task
 val link_batch : context -> code_batch -> context * Indexing.lowered_bindings * Tnode.task option array
 val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
 
-val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
+val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> bool
 (** If the array is both hosted and in-context, copies from host to context. *)
 
-val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
+val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> bool
 (** If the array is both hosted and in-context, copies from context to host. *)
 
 val device_to_device :
   ?rt:(module Minidebug_runtime.Debug_runtime) ->
   Tnode.t ->
-  into_merge_buffer:bool ->
+  into_merge_buffer:[< `No | `Streaming | `Copy ] ->
   dst:context ->
   src:context ->
-  unit
+  bool
 (** If the array is in both contexts, copies from [dst] to [src]. *)
 
-val physical_merge_buffers : bool
+type buffer_ptr [@@deriving sexp_of]
+
+val to_buffer :
+?rt:(module Minidebug_runtime.Debug_runtime) -> Tnode.t -> dst:buffer_ptr -> src:context -> unit
+
+val host_to_buffer : ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> dst:buffer_ptr -> unit
+val buffer_to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> src:buffer_ptr -> unit
+val get_buffer : Tnode.t -> context -> buffer_ptr option
 
 type physical_device
 type device
-type buffer_ptr [@@deriving sexp_of]
 
 val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
 val merge_buffer_streaming : bool

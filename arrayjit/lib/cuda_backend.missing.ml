@@ -52,3 +52,7 @@ let get_ctx_device Unimplemented_ctx = Unimplemented_dev
 let get_name Unimplemented_dev : string = failwith "CUDA missing: install cudajit"
 let to_ordinal _device = 0
 let to_subordinal _device = 0
+let to_buffer ?rt:_ _tn ~dst:_ ~src:_ = failwith "CUDA missing: install cudajit"
+let host_to_buffer ?rt:_ _tn ~dst:_ = failwith "CUDA missing: install cudajit"
+let buffer_to_host ?rt:_ _tn ~src:_ = failwith "CUDA missing: install cudajit"
+let get_buffer _tn _context = failwith "CUDA missing: install cudajit"

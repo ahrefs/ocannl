@@ -12,8 +12,6 @@ let optimization_level () =
 
 let compiler_command () = Utils.get_global_arg ~default:"cc" ~arg_name:"cc_backend_compiler_command"
 
-type config = [ `Physical_devices_only | `For_parallel_copying | `Most_parallel_devices ]
-[@@deriving equal, sexp, variants]
 (** Currently unused, backend behaves as if [config] is always [`Physical_devices_only]. *)
 
 type mem_properties =
@@ -24,10 +22,35 @@ type mem_properties =
 
 module Tn = Tnode
 
-type ctx_arrays = Ndarray.t Map.M(Tn).t [@@deriving sexp_of]
+type ctx_array = Ndarray.t [@@deriving sexp_of]
+type ctx_arrays = ctx_array Map.M(Tn).t [@@deriving sexp_of]
 type context = { label : string; arrays : ctx_arrays } [@@deriving sexp_of]
 
 let ctx_arrays context = context.arrays
+
+type buffer_ptr = ctx_array [@@deriving sexp_of]
+(** Alternative approach: {[
+type buffer_ptr = unit Ctypes_static.ptr
+
+let sexp_of_buffer_ptr ptr = Sexp.Atom (Ops.ptr_to_string ptr Ops.Void_prec)
+let buffer_ptr ctx_array = Ndarray.get_voidptr ctx_array
+]} *)
+
+let buffer_ptr ctx_array = ctx_array
+
+let alloc_buffer ?old_buffer ~size_in_bytes () =
+  (* FIXME: NOT IMPLEMENTED YET but should not be needed for the streaming case. *)
+  match old_buffer with
+  | Some (old_ptr, old_size) when size_in_bytes <= old_size -> old_ptr
+  | Some (_old_ptr, _old_size) -> assert false
+  | None -> assert false
+
+let to_buffer ?rt:_ tn ~dst ~src =
+  let src = Map.find_exn src.arrays tn in
+  Ndarray.map2 { f2 = Ndarray.A.blit } src dst
+
+let host_to_buffer ?rt:_ src ~dst = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
+let buffer_to_host ?rt:_ dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 let unsafe_cleanup ?(unsafe_shutdown = false) () = ignore unsafe_shutdown
 
 let is_initialized, initialize =
@@ -85,7 +108,7 @@ type procedure = {
 }
 [@@deriving sexp_of]
 
-type ctx_nodes = Ctx_arrays of Ndarray.t Map.M(Tn).t ref | Param_ptrs of (string * param_source) list ref
+type ctx_nodes = Ctx_arrays of ctx_arrays ref | Param_ptrs of (string * param_source) list ref
 [@@deriving sexp_of]
 
 (* https://github.com/yallop/ocaml-ctypes/blob/master/src/ctypes-foreign/dl.mli
@@ -518,18 +541,6 @@ let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings (lowereds : Low_lev
         Option.map2 names.(i) infos.(i) ~f:(fun name info ->
             { info; result; params = Option.value_exn params; bindings; name; opt_ctx_arrays })) )
 
-type buffer_ptr = unit Ctypes_static.ptr
-
-let sexp_of_buffer_ptr ptr = Sexp.Atom (Ops.ptr_to_string ptr Ops.Void_prec)
-let merge_buffer_streaming = true
-
-let alloc_buffer ?old_buffer ~size_in_bytes () =
-  (* FIXME: NOT IMPLEMENTED YET but should not be needed for the streaming case. *)
-  match old_buffer with
-  | Some (old_ptr, old_size) when size_in_bytes <= old_size -> old_ptr
-  | Some (_old_ptr, _old_size) -> assert false
-  | None -> assert false
-
 let%track_sexp link_compiled ~merge_buffer (old_context : context) (code : procedure) :
     context * _ * _ * string =
   let label : string = old_context.label in
@@ -567,7 +578,8 @@ let%track_sexp link_compiled ~merge_buffer (old_context : context) (code : proce
         | Bind (_, bs), Static_idx _ :: ps -> Param_idx (ref 0, link bs ps Ctypes.(int @-> cs))
         | Empty, Static_idx _ :: _ -> invalid_arg "Cc_backend.link: too many static index params"
         | bs, Log_file_name :: ps -> Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
-        | bs, Merge_buffer :: ps -> Param_2 (merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
+        | bs, Merge_buffer :: ps ->
+            Param_2f (Ndarray.get_voidptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
         | bs, Param_ptr tn :: ps ->
             let nd = match Map.find arrays tn with Some nd -> nd | None -> assert false in
             (* let f ba = Ctypes.bigarray_start Ctypes_static.Genarray ba in let c_ptr = Ndarray.(map { f }
@@ -591,82 +603,3 @@ let%track_sexp link_compiled ~merge_buffer (old_context : context) (code : proce
     Indexing.lowered_bindings code.bindings run_variadic,
     Tn.{ description = "executes " ^ code.name ^ " on " ^ context.label; work },
     name )
-
-let from_host ?rt (context : context) (tn : Tn.t) : unit =
-  Option.iter (Map.find context.arrays tn) ~f:(fun c_arr ->
-      match tn.Tn.array with
-      | (lazy (Some h_arr)) ->
-          Ndarray.map2 { f2 = Ndarray.A.blit } h_arr c_arr;
-          if Utils.settings.with_debug_level > 0 then
-            let module Debug_runtime =
-              (val Option.value_or_thunk rt ~default:(fun () ->
-                       (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
-            in
-            [%diagn_sexp
-              [%log_entry
-                "from_host " ^ Tn.get_debug_name tn;
-                [%log "copied", Tn.label tn, Tn.name tn, "from host"];
-                if Utils.settings.with_debug_level > 1 then
-                  [%log_printbox
-                    let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
-                    Ndarray.render_array ~indices c_arr]]]
-      | (lazy None) ->
-          [%diagn_sexp
-            [%log_entry
-              "from_host empty " ^ Tn.get_debug_name tn;
-              [%log "nothing to copy", Tn.label tn, Tn.name tn, "from host"]]];
-          ())
-
-let to_host ?rt (context : context) (tn : Tn.t) : unit =
-  Option.iter (Map.find context.arrays tn) ~f:(fun c_arr ->
-      match tn.Tn.array with
-      | (lazy (Some h_arr)) ->
-          Ndarray.map2 { f2 = Ndarray.A.blit } c_arr h_arr;
-          if Utils.settings.with_debug_level > 0 then
-            let module Debug_runtime =
-              (val Option.value_or_thunk rt ~default:(fun () ->
-                       (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
-            in
-            [%diagn_sexp
-              [%log_entry
-                "to_host " ^ Tn.get_debug_name tn;
-                [%log "copied", Tn.label tn, Tn.name tn, "to host"];
-                if Utils.settings.with_debug_level > 1 then
-                  [%log_printbox
-                    let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
-                    Ndarray.render_array ~indices h_arr]]]
-      | (lazy None) ->
-          [%diagn_sexp
-            [%log_entry
-              "to_host empty " ^ Tn.get_debug_name tn;
-              [%log "nothing to copy", Tn.label tn, Tn.name tn, "to host"]]];
-          ())
-
-let device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn ~into_merge_buffer ~dst ~src =
-  Option.iter (Map.find src.arrays tn) ~f:(fun s_arr ->
-      Option.iter (Map.find dst.arrays tn) ~f:(fun d_arr ->
-          if into_merge_buffer then failwith "NOT IMPLEMENTED YET"
-          else Ndarray.map2 { f2 = Ndarray.A.blit } s_arr d_arr;
-          if Utils.settings.with_debug_level > 0 then
-            let module Debug_runtime =
-              (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
-            in
-            [%diagn_sexp
-              [%log_entry
-                "device_to_device " ^ Tn.get_debug_name tn;
-                [%log
-                  "copied",
-                    Tn.label tn,
-                    Tn.name tn,
-                    "using merge buffer",
-                    (into_merge_buffer : bool),
-                    "destination",
-                    dst.label,
-                    "source",
-                    src.label];
-                if Utils.settings.with_debug_level > 1 then
-                  [%log_printbox
-                    let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
-                    Ndarray.render_array ~indices d_arr]]]))
-
-let physical_merge_buffers = false

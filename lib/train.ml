@@ -39,23 +39,24 @@ module IDX = struct
 end
 
 let debug_rt = (module Debug_runtime : Minidebug_runtime.Debug_runtime)
-let run jitted = Tn.run debug_rt jitted.Arrayjit.Backends.schedule
+let run jitted = Tn.run debug_rt jitted.Arrayjit.Backend_types.schedule
 
 (** Reinitializes a backend selected via a global [backend] flag. *)
-let fresh_backend ?backend_name ?(config = `Physical_devices_only) () =
-  let open Arrayjit.Backends in
+let fresh_backend ?backend_name ?(config = Arrayjit.Backend_types.Physical_devices_only) () =
+  let module B = Arrayjit.Backends in
+  let module BT = Arrayjit.Backend_types in
   let backend =
     match
       Option.value_or_thunk backend_name ~default:(fun () ->
           Arrayjit.Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
       |> String.lowercase
     with
-    | "cc" -> (module Cc_backend : Backend)
-    | "gccjit" -> (module Gccjit_backend : Backend)
-    | "cuda" -> (module Cuda_backend : Backend)
+    | "cc" -> (module B.Cc_backend : B.Backend)
+    | "gccjit" -> (module B.Gccjit_backend : B.Backend)
+    | "cuda" -> (module B.Cuda_backend : B.Backend)
     | backend -> invalid_arg [%string "Train.fresh_backend: unknown backend %{backend}"]
   in
-  reinitialize backend config;
+  B.reinitialize backend config;
   backend
 
 let is_param t =
@@ -255,11 +256,13 @@ let every_non_literal_on_host =
 
 let%debug_sexp all_host_to_device (type context) (module Backend : Backend_type with type context = context)
     context =
-  Tensor.iter_embedded_arrays ~f:(Backend.from_host context)
+  let f tn = ignore (Backend.from_host context tn : bool) in
+  Tensor.iter_embedded_arrays ~f
 
 let%debug_sexp all_device_to_host (type context) (module Backend : Backend_type with type context = context)
     context =
-  Tensor.iter_embedded_arrays ~f:(Backend.to_host context)
+  let f tn = ignore (Backend.to_host context tn : bool) in
+  Tensor.iter_embedded_arrays ~f
 
 (** Executes the jitted code and copies arrays embedded in the given tenosor from and to host, synchronizes
     before copying to host. If [looping] is provided, loops over bindings and executes the given function
@@ -464,7 +467,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     Arrayjit.Utils.parallel_merge merge devices_to_sync;
     Tn.run debug_rt sgd_update.schedule;
     (* We need to wait, because copying happens on other devices. *)
-    Set.iter !needed_on_host ~f:(fun p -> Backend.to_host sgd_update.context p);
+    Set.iter !needed_on_host ~f:(fun p -> assert (Backend.to_host sgd_update.context p));
     Backend.(await @@ get_ctx_device sgd_update.context);
     (* We will need to update params on all devices! Not only the ones that computed gradients. *)
     for to_ = 1 to num_devices - 1 do
@@ -541,9 +544,9 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
       ~grad_updates ~sgd_update update
       ~post_sync:(fun ~num_synced_devices ->
         step_ref := !step_ref + num_synced_devices;
-        Backend.to_host sgd_update.context learning_rate.value;
+        assert (Backend.to_host sgd_update.context learning_rate.value);
         (* scalar_loss is not in the sgd_update context. *)
-        Backend.to_host grad_updates.(0).context scalar_loss.value;
+        assert (Backend.to_host grad_updates.(0).context scalar_loss.value);
         Backend.(await @@ get_ctx_device grad_updates.(0).context);
         let batch_loss = scalar_loss.@[0] in
         epoch_loss := !epoch_loss +. batch_loss;
@@ -573,9 +576,9 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   let infer_callback values =
     Tensor.set_values infer values;
     (* For the gccjit backend, infer is only on host, not on device. For cuda, this will be needed. *)
-    Backend.from_host routine.context infer.value;
+    assert (Backend.from_host routine.context infer.value);
     run routine;
-    Backend.to_host routine.context model_result.value;
+    assert (Backend.to_host routine.context model_result.value);
     Backend.await devices.(0);
     Tensor.get_values model_result
   in

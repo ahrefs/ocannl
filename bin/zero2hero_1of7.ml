@@ -49,8 +49,8 @@ let () =
   let values = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   (* Test that the batch axis dimensions will be inferred. *)
   let x_flat =
-    Tensor.term ~grad_spec:Tensor.Require_grad ~label:[ "x_flat" ]
-     (* ~input_dims:[] ~output_dims:[ 1 ] *)
+    Tensor.term ~grad_spec:Tensor.Require_grad
+      ~label:[ "x_flat" ] (* ~input_dims:[] ~output_dims:[ 1 ] *)
       ~init_op:(Constant_fill { values; strict = true })
       ()
   in
@@ -69,8 +69,8 @@ let () =
   let ys = Array.create ~len:size 0. and dys = Array.create ~len:size 0. in
   let open Operation.At in
   let looping () =
-    Backend.to_host routine.context fx.value;
-    Backend.to_host routine.context (Option.value_exn x.diff).grad;
+    assert (Backend.to_host routine.context fx.value);
+    assert (Backend.to_host routine.context (Option.value_exn x.diff).grad);
     Backend.await device;
     ys.(!step_ref) <- fx.@[0];
     dys.(!step_ref) <- x.@%[0]
@@ -157,9 +157,9 @@ let _suspended () =
   let device = new_virtual_device @@ get_device ~ordinal:0 in
   let update = Train.grad_update l in
   let routine = link (init device) @@ compile IDX.empty @@ update.fwd_bprop in
-  Tensor.iter_embedded_arrays l ~f:(fun a -> from_host routine.context a);
+  Tensor.iter_embedded_arrays l ~f:(fun a -> ignore (from_host routine.context a : bool));
   Train.run routine;
-  Tensor.iter_embedded_arrays l ~f:(fun a -> to_host routine.context a);
+  Tensor.iter_embedded_arrays l ~f:(fun a -> ignore (to_host routine.context a : bool));
   await device;
   Stdio.print_endline
     {|
@@ -169,15 +169,15 @@ let _suspended () =
   let%op learning_rate = 0.1 in
   let routine = link routine.context @@ compile IDX.empty @@ Train.sgd_update ~learning_rate update in
   (* learning_rate is virtual so this will not print anything. *)
-  Tensor.iter_embedded_arrays learning_rate ~f:(fun a -> from_host routine.context a);
+  Tensor.iter_embedded_arrays learning_rate ~f:(fun a -> ignore (from_host routine.context a : bool));
   Stdio.print_endline
     {|
       Due to how the gccjit backend works, since the parameters were constant in the grad_update
       computation, they did not exist on the device before. Now they do. This would not be needed
       on the cuda backend.|};
-  List.iter [ a.value; b.value; c.value; f.value ] ~f:(fun a -> from_host routine.context a);
+  List.iter [ a.value; b.value; c.value; f.value ] ~f:(fun a -> assert (from_host routine.context a));
   Train.run routine;
-  Tensor.iter_embedded_arrays l ~f:(fun a -> to_host routine.context a);
+  Tensor.iter_embedded_arrays l ~f:(fun a -> ignore (to_host routine.context a : bool));
   await device;
   Stdio.print_endline
     {|
@@ -188,7 +188,7 @@ let _suspended () =
   let update = Train.grad_update l in
   let routine = link routine.context @@ compile IDX.empty update.fwd_bprop in
   Train.run routine;
-  Tensor.iter_embedded_arrays l ~f:(fun a -> to_host routine.context a);
+  Tensor.iter_embedded_arrays l ~f:(fun a -> ignore (to_host routine.context a : bool));
   await device;
   Stdio.print_endline
     {|

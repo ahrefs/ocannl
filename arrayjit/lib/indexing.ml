@@ -45,6 +45,9 @@ type ('r, 'idcs, 'p1, 'p2) variadic =
   | Param_idx of int ref * (int -> 'r, int -> 'idcs, 'p1, 'p2) variadic
   | Param_1 of 'p1 option ref * ('p1 -> 'r, 'idcs, 'p1, 'p2) variadic
   | Param_2 of 'p2 option ref * ('p2 -> 'r, 'idcs, 'p1, 'p2) variadic
+  | Param_2f :
+      ('p2f -> 'p2) * 'p2f option ref * ('p2 -> 'r, 'idcs, 'p1, 'p2) variadic
+      -> ('r, 'idcs, 'p1, 'p2) variadic
 
 type unit_bindings = (unit -> unit) bindings [@@deriving sexp_of]
 type lowered_bindings = (static_symbol, int ref) List.Assoc.t [@@deriving sexp_of]
@@ -56,8 +59,10 @@ let rec apply : 'r 'idcs 'p1 'p2. ('r, 'idcs, 'p1, 'p2) variadic -> 'r =
   | Param_idx (i, more) -> apply more !i
   | Param_1 ({ contents = Some p1 }, more) -> apply more p1
   | Param_2 ({ contents = Some p2 }, more) -> apply more p2
+  | Param_2f (pf, { contents = Some p2 }, more) -> apply more @@ pf p2
   | Param_1 ({ contents = None }, _) -> invalid_arg "Indexing.apply: Param_1 missing value"
   | Param_2 ({ contents = None }, _) -> invalid_arg "Indexing.apply: Param_2 missing value"
+  | Param_2f (_, { contents = None }, _) -> invalid_arg "Indexing.apply: Param_2 missing value"
 
 let lowered_bindings bs vs =
   let rec loop : 'r 'idcs. 'idcs bindings * ('r, 'idcs, 'p1, 'p2) variadic -> lowered_bindings =
@@ -67,6 +72,7 @@ let lowered_bindings bs vs =
     | Bind (s, bs), Param_idx (i, vs) -> (s, i) :: loop (bs, vs)
     | bs, Param_1 (_, vs) -> loop (bs, vs)
     | bs, Param_2 (_, vs) -> loop (bs, vs)
+    | bs, Param_2f (_, _, vs) -> loop (bs, vs)
     | Empty, _ -> assert false
     | Bind _, Result _ -> assert false
   in

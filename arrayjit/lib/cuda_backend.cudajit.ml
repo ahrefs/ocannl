@@ -60,10 +60,7 @@ type info_nodes = {
 let get_name { physical = { ordinal; _ }; subordinal; _ } =
   Int.to_string ordinal ^ "_" ^ Int.to_string subordinal
 
-type config = [ `Physical_devices_only | `For_parallel_copying | `Most_parallel_devices ]
-[@@deriving equal, sexp, variants]
-
-let global_config = ref `For_parallel_copying
+let global_config = ref Backend_types.For_parallel_copying
 
 let init device =
   {
@@ -120,9 +117,9 @@ let cuda_properties =
 
 let suggested_num_virtual_devices device =
   match !global_config with
-  | `Physical_devices_only -> 1
-  | `For_parallel_copying -> 1 + (cuda_properties device).async_engine_count
-  | `Most_parallel_devices -> (cuda_properties device).multiprocessor_count
+  | Physical_devices_only -> 1
+  | For_parallel_copying -> 1 + (cuda_properties device).async_engine_count
+  | Most_parallel_devices -> (cuda_properties device).multiprocessor_count
 
 let get_ctx_device { device; _ } = device
 let get_physical_device { physical; _ } = physical
@@ -187,18 +184,21 @@ let%diagn_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option)
   match (Map.find ctx.all_arrays tn, Map.find ctx.global_arrays tn) with
   | Some { tn = { Tn.array = (lazy (Some hosted)); _ }; _ }, Some dst ->
       set_ctx ctx.ctx;
+      (* FIXME: asynchronous *)
       let f src = Cudajit.memcpy_H_to_D ~dst ~src () in
       Ndarray.map { f } hosted;
-      if Utils.settings.with_debug_level > 0 then
-        let module Debug_runtime = (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
-        in
-        [%log "copied", Tn.label tn, Tn.name tn, "from host"]
-  | _ -> ()
+      (if Utils.settings.with_debug_level > 0 then
+         let module Debug_runtime = (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
+         in
+         [%log "copied", Tn.label tn, Tn.name tn, "from host"]);
+      true
+  | _ -> false
 
 let%diagn_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context) tn =
   match (Map.find ctx.all_arrays tn, Map.find ctx.global_arrays tn) with
   | Some { tn = { Tn.array = (lazy (Some hosted)); _ }; _ }, Some src ->
       set_ctx ctx.ctx;
+      (* FIXME: asynchronous *)
       let f dst = Cudajit.memcpy_D_to_H ~dst ~src () in
       Ndarray.map { f } hosted;
       if Utils.settings.with_debug_level > 0 then (
@@ -208,29 +208,35 @@ let%diagn_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (
         if Utils.settings.with_debug_level > 1 then
           [%log_printbox
             let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
-            Ndarray.render_array ~indices hosted])
-  | _ -> ()
+            Ndarray.render_array ~indices hosted]);
+      true
+  | _ -> false
 
 let%diagn_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn ~into_merge_buffer
     ~dst ~src =
-  Option.iter (Map.find src.global_arrays tn) ~f:(fun s_arr ->
-      Option.iter (Map.find dst.global_arrays tn) ~f:(fun d_arr ->
-          if into_merge_buffer then failwith "NOT IMPLEMENTED YET"
-          else (
-            set_ctx dst.ctx;
-            Cudajit.memcpy_D_to_D ~dst:d_arr ~src:s_arr ());
-          if Utils.settings.with_debug_level > 0 then
-            let module Debug_runtime =
-              (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
-            in
-            [%log
-              "copied",
-                Tn.label tn,
-                Tn.name tn,
-                "using merge buffer",
-                (into_merge_buffer : bool),
-                "from device",
-                get_ctx_device src |> get_name]))
+  Option.value ~default:false
+  @@ Option.map (Map.find src.global_arrays tn) ~f:(fun s_arr ->
+         Option.value ~default:false
+         @@ Option.map (Map.find dst.global_arrays tn) ~f:(fun d_arr ->
+                match into_merge_buffer with
+                | `No ->
+                    set_ctx dst.ctx;
+                    Cudajit.memcpy_D_to_D ~dst:d_arr ~src:s_arr ();
+                    (if Utils.settings.with_debug_level > 0 then
+                       let module Debug_runtime =
+                         (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
+                       in
+                       [%log
+                         "copied",
+                           Tn.label tn,
+                           Tn.name tn,
+                           "using merge buffer",
+                           (into_merge_buffer : bool),
+                           "from device",
+                           get_ctx_device src |> get_name]);
+                    true (* FIXME: *)
+                | `Streaming -> failwith "NOT IMPLEMENTED YET"
+                | `Copy -> failwith "NOT IMPLEMENTED YET"))
 
 (* let pp_semi ppf () = Stdlib.Format.fprintf ppf ";@ " *)
 let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
@@ -712,4 +718,7 @@ let link_batch old_context (code_batch : code_batch) =
   (* FIXME: *)
   (old_context, idx_args, [||])
 
-let physical_merge_buffers = true
+let to_buffer ?rt:_ _tn ~dst:_ ~src:_ = failwith "CUDA low-level: NOT IMPLEMENTED YET"
+let host_to_buffer ?rt:_ _tn ~dst:_ = failwith "CUDA low-level: NOT IMPLEMENTED YET"
+let buffer_to_host ?rt:_ _tn ~src:_ = failwith "CUDA low-level: NOT IMPLEMENTED YET"
+let get_buffer _tn _context = failwith "CUDA low-level: NOT IMPLEMENTED YET"

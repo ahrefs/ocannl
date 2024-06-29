@@ -54,14 +54,14 @@ let hello3 () =
   let y = TDSL.O.(( + ) ~label:[ "y" ] (hey * zero_to_twenty) zero_to_twenty) in
   Train.set_hosted hey.value;
   let routine = Backend.(link ctx @@ compile IDX.empty @@ Train.forward y) in
-  Backend.from_host routine.context hey.value;
-  Backend.from_host routine.context zero_to_twenty.value;
+  assert (Backend.from_host routine.context hey.value);
+  assert (Backend.from_host routine.context zero_to_twenty.value);
   Tensor.print ~with_code:true ~with_grad:false `Inline zero_to_twenty;
   Tensor.print ~with_code:true ~with_grad:false `Default zero_to_twenty;
   Tensor.print_tree ~with_grad:false ~depth:9 zero_to_twenty;
   Stdlib.Format.print_newline ();
   Train.run routine;
-  Backend.to_host routine.context y.value;
+  assert (Backend.to_host routine.context y.value);
   Backend.await device;
   Tensor.print ~with_code:true ~with_grad:false `Default y;
   Stdlib.Format.force_newline ();
