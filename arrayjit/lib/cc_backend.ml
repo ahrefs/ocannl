@@ -105,8 +105,11 @@ type procedure = {
   result : (Dl.library[@sexp.opaque]);
   params : (string * param_source) list;
   opt_ctx_arrays : Ndarray.t Map.M(Tn).t option;
+  expected_merge_node : Tn.t option;
 }
 [@@deriving sexp_of]
+
+let expected_merge_node proc = proc.expected_merge_node
 
 type ctx_nodes = Ctx_arrays of ctx_arrays ref | Param_ptrs of (string * param_source) list ref
 [@@deriving sexp_of]
@@ -445,8 +448,8 @@ let header_sep =
   let open Re in
   compile (seq [ str " "; opt any; str "="; str " " ])
 
-let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low_level.optimized) =
-  let get_ident = Low_level.get_ident_within_code ~no_dots:true [| compiled.llc |] in
+let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optimized) =
+  let get_ident = Low_level.get_ident_within_code ~no_dots:true [| lowered.llc |] in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
   let info =
@@ -454,17 +457,17 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low
       nodes = Hashtbl.create (module Tn);
       used_tensors = Hash_set.create (module Tn);
       get_ident;
-      traced_store = compiled.traced_store;
+      traced_store = lowered.traced_store;
     }
   in
   let ctx_nodes =
     match opt_ctx_arrays with Some ctx_arrays -> Ctx_arrays (ref ctx_arrays) | None -> Param_ptrs (ref [])
   in
-  prepare_nodes info ctx_nodes compiled;
+  prepare_nodes info ctx_nodes lowered;
   let pp_file = Utils.pp_file ~base_name:name ~extension:".c" in
   let base_name = Filename_base.chop_extension pp_file.f_name in
   compile_globals ~get_ident:info.get_ident pp_file.ppf info;
-  let params = compile_proc ~name info pp_file.ppf idx_params compiled in
+  let params = compile_proc ~name info pp_file.ppf idx_params lowered in
   pp_file.finalize ();
   let log_fname = base_name ^ ".log" in
   let libname = base_name ^ ".so" in
@@ -480,7 +483,7 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low
   done;
   let result = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW; RTLD_DEEPBIND ] in
   let opt_ctx_arrays = match ctx_nodes with Ctx_arrays ctx_arrays -> Some !ctx_arrays | _ -> None in
-  { info; result; params; bindings; name; opt_ctx_arrays (* ; params *) }
+  { info; result; params; bindings; name; opt_ctx_arrays; expected_merge_node = lowered.merge_node }
 
 let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings (lowereds : Low_level.optimized option array) =
   let get_ident =
@@ -539,7 +542,16 @@ let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings (lowereds : Low_lev
   ( opt_ctx_arrays,
     Array.mapi params ~f:(fun i params ->
         Option.map2 names.(i) infos.(i) ~f:(fun name info ->
-            { info; result; params = Option.value_exn params; bindings; name; opt_ctx_arrays })) )
+            {
+              info;
+              result;
+              params = Option.value_exn params;
+              bindings;
+              name;
+              opt_ctx_arrays;
+              expected_merge_node =
+                Option.(join @@ map lowereds.(i) ~f:(fun optim -> optim.Low_level.merge_node));
+            })) )
 
 let%track_sexp link_compiled ~merge_buffer (old_context : context) (code : procedure) :
     context * _ * _ * string =

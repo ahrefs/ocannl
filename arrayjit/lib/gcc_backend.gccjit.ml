@@ -114,8 +114,11 @@ type procedure = {
   result : (Gccjit.result[@sexp.opaque]);
   opt_ctx_arrays : Ndarray.t Map.M(Tn).t option;
   params : param_source list;
+  expected_merge_node : Tn.t option;
 }
 [@@deriving sexp_of]
+
+let expected_merge_node proc = proc.expected_merge_node
 
 type gccjit_param = Gccjit.param
 type gccjit_lvalue = Gccjit.lvalue
@@ -678,8 +681,8 @@ let header_sep =
   let open Re in
   compile (seq [ str " "; opt any; str "="; str " " ])
 
-let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low_level.optimized) =
-  let get_ident = Low_level.get_ident_within_code ~no_dots:true [| compiled.llc |] in
+let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optimized) =
+  let get_ident = Low_level.get_ident_within_code ~no_dots:true [| lowered.llc |] in
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
   let ctx = Context.create_child @@ Option.value_exn !root_ctx in
@@ -687,13 +690,21 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (compiled : Low
   (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
      Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx Context.Dump_everything
      true); *)
-  let info, opt_ctx_arrays, params = compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident compiled in
+  let info, opt_ctx_arrays, params = compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident lowered in
   (if Utils.settings.output_debug_files_in_run_directory then
      let f_name = name ^ "-gccjit-debug.c" in
      Context.dump_to_file ctx ~update_locs:true f_name);
   let result = Context.compile ctx in
   Context.release ctx;
-  { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params }
+  {
+    info;
+    result;
+    bindings;
+    name;
+    opt_ctx_arrays;
+    params = List.map ~f:snd params;
+    expected_merge_node = lowered.merge_node;
+  }
 
 let%track_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bindings
     (lowereds : Low_level.optimized option array) =
@@ -729,10 +740,17 @@ let%track_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
   let result = Context.compile ctx in
   Context.release ctx;
   ( opt_ctx_arrays,
-    Array.map2_exn names funcs
-      ~f:
-        (Option.map2 ~f:(fun name (info, opt_ctx_arrays, params) ->
-             { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params })) )
+    Array.mapi funcs ~f:(fun i ->
+        Option.map2 names.(i) ~f:(fun name (info, opt_ctx_arrays, params) ->
+            {
+              info;
+              result;
+              bindings;
+              name;
+              opt_ctx_arrays;
+              params = List.map ~f:snd params;
+              expected_merge_node = Option.(join @@ map lowereds.(i) ~f:(fun optim -> optim.merge_node));
+            })) )
 
 let alloc_buffer ?old_buffer ~size_in_bytes () =
   (* FIXME: NOT IMPLEMENTED YET but should not be needed for the streaming case. *)

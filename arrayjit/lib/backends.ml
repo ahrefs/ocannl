@@ -23,6 +23,8 @@ module type No_device_backend = sig
   (** Finalizes (just) the context. *)
 
   val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
+  val expected_merge_node : code -> Tnode.t option
+  val expected_merge_nodes : code_batch -> Tnode.t option array
 
   val compile : ?shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> code
   (** If [~shared:true] (default [false]), the backend should prefer to do more compile work in a
@@ -168,11 +170,11 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   [@@deriving sexp_of]
 
   type physical_device = device [@@deriving sexp_of]
-  type code = { code : Backend.code; expected_merge_node : Tnode.t option } [@@deriving sexp_of]
+  type code = Backend.code [@@deriving sexp_of]
+  type code_batch = Backend.code_batch [@@deriving sexp_of]
 
-  type code_batch = { code_batch : Backend.code_batch; expected_merge_node : Tnode.t option }
-  [@@deriving sexp_of]
-
+  let expected_merge_node (code : code) = Backend.expected_merge_node code
+  let expected_merge_nodes (codes : code_batch) = Backend.expected_merge_nodes codes
   let is_dev_queue_empty state = Utils.(is_empty @@ tl_exn state.dev_previous_pos)
   let is_idle device = is_dev_queue_empty device.state && device.state.dev_wait.is_waiting ()
 
@@ -278,36 +280,28 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     await device;
     Backend.finalize ctx
 
-  let compile ?shared ?name bindings asgns =
-    let code = Backend.compile ?shared ?name bindings asgns in
-    (* FIXME: NOT IMPLEMENTED YET *)
-    { code; expected_merge_node = None }
-
-  let compile_batch ?shared ?names ?occupancy bindings asgns_batch =
-    let code_batch = Backend.compile_batch ?shared ?names ?occupancy bindings asgns_batch in
-    (* FIXME: NOT IMPLEMENTED YET *)
-    { code_batch; expected_merge_node = None }
+  let compile = Backend.compile
+  let compile_batch = Backend.compile_batch
 
   let link { ctx; device; expected_merge_node = _ } (code : code) =
-    let task = Backend.link ~merge_buffer:device.merge_buffer_ptr ctx code.code in
+    let task = Backend.link ~merge_buffer:device.merge_buffer_ptr ctx code in
     {
       task with
-      context = { ctx = task.context; device; expected_merge_node = code.expected_merge_node };
+      context = { ctx = task.context; device; expected_merge_node = Backend.expected_merge_node code };
       schedule = make_work device task.schedule;
     }
 
-  let link_batch { ctx; device; expected_merge_node = _ } (code_batch : code_batch) =
-    let ctx, routines = Backend.link_batch ~merge_buffer:device.merge_buffer_ptr ctx code_batch.code_batch in
-    ( { ctx; device; expected_merge_node = code_batch.expected_merge_node },
-      Array.map routines
-        ~f:
-          (Option.map ~f:(fun task ->
-               {
-                 task with
-                 context =
-                   { ctx = task.context; device; expected_merge_node = code_batch.expected_merge_node };
-                 schedule = make_work device task.schedule;
-               })) )
+  let link_batch { ctx; device; expected_merge_node } (code_batch : code_batch) =
+    let ctx, routines = Backend.link_batch ~merge_buffer:device.merge_buffer_ptr ctx code_batch in
+    let merge_nodes = Backend.expected_merge_nodes code_batch in
+    ( { ctx; device; expected_merge_node },
+      Array.mapi routines ~f:(fun i ->
+          Option.map ~f:(fun task ->
+              {
+                task with
+                context = { ctx = task.context; device; expected_merge_node = merge_nodes.(i) };
+                schedule = make_work device task.schedule;
+              })) )
 
   let from_host ?rt (context : context) (tn : Tnode.t) =
     if Option.is_some rt then
@@ -490,6 +484,7 @@ module type Simple_backend = sig
   val buffer_ptr : ctx_array -> buffer_ptr
   val ctx_arrays : context -> ctx_arrays
   val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
+  val expected_merge_node : procedure -> Tnode.t option
 
   val compile :
     name:string ->
@@ -550,6 +545,16 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
 
   type nonrec routine = context routine [@@deriving sexp_of]
 
+  let expected_merge_node : code -> _ = function
+    | Postponed { lowered = Low_level.{ merge_node; _ }; _ } -> merge_node
+    | Compiled proc -> Backend.expected_merge_node proc
+
+  let expected_merge_nodes : code_batch -> _ = function
+    | Postponed { lowereds; _ } ->
+        Array.map lowereds ~f:(fun lowered -> Option.(join @@ map lowered ~f:(fun optim -> optim.merge_node)))
+    | Compiled (_, procs) ->
+        Array.map ~f:(fun proc -> Option.(join @@ map proc ~f:Backend.expected_merge_node)) procs
+
   let compile ?(shared = false) ?name bindings asgns : code =
     let name, lowered = lower_assignments ?name bindings asgns in
     if shared then Compiled (Backend.compile ~name ~opt_ctx_arrays:None bindings lowered)
@@ -602,24 +607,36 @@ module Gccjit_backend = Multicore_backend (Gccjit_device)
 module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   include Cuda_backend
 
+  type nonrec code = { code : code; expected_merge_node : Tnode.t option } [@@deriving sexp_of]
+
+  type nonrec code_batch = { code_batch : code_batch; expected_merge_nodes : Tnode.t option array }
+  [@@deriving sexp_of]
+
   type nonrec routine = context routine [@@deriving sexp_of]
 
+  let expected_merge_node code = code.expected_merge_node
+  let expected_merge_nodes code_batch = code_batch.expected_merge_nodes
   let name = "cuda"
 
   let compile ?shared:_ ?name bindings asgns : code =
     let name, lowered = lower_assignments ?name bindings asgns in
-    compile ~name bindings lowered
+    { code = compile ~name bindings lowered; expected_merge_node = lowered.Low_level.merge_node }
 
   let compile_batch ?shared:_ ?names ?occupancy bindings asgns_l =
     let names, lowereds = lower_batch_assignments ?names ?occupancy bindings asgns_l in
-    compile_batch ~names bindings lowereds
+    {
+      code_batch = compile_batch ~names bindings lowereds;
+      expected_merge_nodes =
+        Array.map lowereds ~f:(fun lowered ->
+            Option.(join @@ map lowered ~f:(fun optim -> optim.Low_level.merge_node)));
+    }
 
   let link context code =
-    let context, bindings, schedule = link context code in
+    let context, bindings, schedule = link context code.code in
     { context; schedule; bindings; name }
 
   let link_batch context code_batch =
-    let context, bindings, schedules = link_batch context code_batch in
+    let context, bindings, schedules = link_batch context code_batch.code_batch in
     (context, Array.map schedules ~f:(Option.map ~f:(fun schedule -> { context; schedule; bindings; name })))
 end
 
