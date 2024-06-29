@@ -85,29 +85,27 @@ module type Backend = sig
   val device_to_device :
     ?rt:(module Minidebug_runtime.Debug_runtime) ->
     Tnode.t ->
-    into_merge_buffer:[< `No | `Streaming | `Copy ] ->
+    into_merge_buffer:merge_buffer_use ->
     dst:context ->
     src:context ->
     bool
   (** If the node is absent from the [src] context and either it is present in the [dst] context or
-      [~into_merge_buffer] is different from [`No]: raises an error.
+      [~into_merge_buffer] is different from [No]: raises an error.
 
-      If [~into_merge_buffer:`No]: If the node is present in the [dst] context, schedules a copy of the tensor
+      If [~into_merge_buffer:No]: If the node is present in the [dst] context, schedules a copy of the tensor
       node from the device of [src] to the device of [dst] and returns true, otherwise returns false.
 
-      If [~into_merge_buffer] is different from [`No]: schedules the following task and returns true.
+      If [~into_merge_buffer] is different from [No]: schedules the following task and returns true.
 
       The merge-buffer task sets on [dst] the merge buffer source to the given node. If
-      [~into_merge_buffer:`Streaming], remembers the buffer pointer of the source node to use for streaming,
-      without blocking. If [~into_merge_buffer:`Copy], copies from [src] to the merge buffer of [dst]'s
-      device.
+      [~into_merge_buffer:Streaming], remembers the buffer pointer of the source node to use for streaming,
+      without blocking. If [~into_merge_buffer:Copy], copies from [src] to the merge buffer of [dst]'s device.
 
-      If the [dst] context resulted from a compilation with [`Streaming] or [`Copy] specific merge buffer
-      code, the [device_to_device] call should fail immediately if there's a mismatch with
-      [~into_merge_buffer].
+      If the [dst] context resulted from a compilation with [Streaming] or [Copy] specific merge buffer code,
+      the [device_to_device] call should fail immediately if there's a mismatch with [~into_merge_buffer].
 
       NOTE: it's the caller's responsibility to synchronize the [src] device, if needed, {i before} calling
-      [device_to_device], and if [~into_merge_buffer:`Streaming], the [dst] device {i afterward}, before any
+      [device_to_device], and if [~into_merge_buffer:Streaming], the [dst] device {i afterward}, before any
       computations on the [src] device overwrite the node. *)
 
   type physical_device
@@ -382,12 +380,21 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       raise
       @@ Utils.User_error "Multicore_backend.device_to_device: backend cannot be nested in another runtime";
     let dev = dst.device in
+    if
+      (not (equal_merge_buffer_use into_merge_buffer No))
+      && not (Option.equal Tnode.equal (Some tn) dst.expected_merge_node)
+    then
+      raise
+      @@ Utils.User_error
+           ("Multicore_backend.device_to_device: merge node mismatch, expected "
+           ^ Option.(value ~default:"none" @@ map ~f:Tnode.get_debug_name dst.expected_merge_node)
+           ^ ", actual " ^ Tnode.get_debug_name tn);
     let schedule dst =
       let work =
         match into_merge_buffer with
-        | `No -> fun rt () -> Backend.to_buffer ~rt tn ~dst ~src:src.ctx
-        | `Streaming -> fun _rt () -> dev.merge_buffer_ptr := Backend.get_buffer tn src.ctx
-        | `Copy ->
+        | No -> fun rt () -> Backend.to_buffer ~rt tn ~dst ~src:src.ctx
+        | Streaming -> fun _rt () -> dev.merge_buffer_ptr := Backend.get_buffer tn src.ctx
+        | Copy ->
             fun rt () ->
               let size_in_bytes = Ndarray.size_in_bytes @@ Option.value_exn @@ Lazy.force tn.array in
               let allocated_capacity = Option.value ~default:0 @@ Option.map dev.allocated_buffer ~f:snd in
@@ -604,7 +611,7 @@ module Gccjit_device : No_device_backend = Simple_no_device_backend ((
 
 module Gccjit_backend = Multicore_backend (Gccjit_device)
 
-module Cuda_backend : Backend with type context = Cuda_backend.context = struct
+module Cuda_backend : Backend = struct
   include Cuda_backend
 
   type nonrec code = { code : code; expected_merge_node : Tnode.t option } [@@deriving sexp_of]
@@ -612,11 +619,12 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
   type nonrec code_batch = { code_batch : code_batch; expected_merge_nodes : Tnode.t option array }
   [@@deriving sexp_of]
 
-  type nonrec routine = context routine [@@deriving sexp_of]
-
   let expected_merge_node code = code.expected_merge_node
   let expected_merge_nodes code_batch = code_batch.expected_merge_nodes
   let name = "cuda"
+
+  type nonrec context = { ctx : context; expected_merge_node : Tnode.t option } [@@deriving sexp_of]
+  type nonrec routine = context routine [@@deriving sexp_of]
 
   let compile ?shared:_ ?name bindings asgns : code =
     let name, lowered = lower_assignments ?name bindings asgns in
@@ -632,12 +640,40 @@ module Cuda_backend : Backend with type context = Cuda_backend.context = struct
     }
 
   let link context code =
-    let context, bindings, schedule = link context code.code in
-    { context; schedule; bindings; name }
+    let ctx, bindings, schedule = link context.ctx code.code in
+    { context = { ctx; expected_merge_node = code.expected_merge_node }; schedule; bindings; name }
 
   let link_batch context code_batch =
-    let context, bindings, schedules = link_batch context code_batch.code_batch in
-    (context, Array.map schedules ~f:(Option.map ~f:(fun schedule -> { context; schedule; bindings; name })))
+    let ctx, bindings, schedules = link_batch context.ctx code_batch.code_batch in
+    ( { ctx; expected_merge_node = context.expected_merge_node },
+      Array.mapi schedules ~f:(fun i ->
+          Option.map ~f:(fun schedule ->
+              {
+                context = { ctx; expected_merge_node = code_batch.expected_merge_nodes.(i) };
+                schedule;
+                bindings;
+                name;
+              })) )
+
+  let init device = { ctx = init device; expected_merge_node = None }
+  let get_ctx_device context = get_ctx_device context.ctx
+  let finalize context = finalize context.ctx
+  let to_buffer ?rt tn ~dst ~src = to_buffer ?rt tn ~dst ~src:src.ctx
+  let get_buffer tn context = get_buffer tn context.ctx
+  let from_host ?rt context tn = from_host ?rt context.ctx tn
+  let to_host ?rt context tn = to_host ?rt context.ctx tn
+
+  let device_to_device ?rt tn ~into_merge_buffer ~dst ~src =
+    if
+      (not (equal_merge_buffer_use into_merge_buffer No))
+      && not (Option.equal Tnode.equal (Some tn) dst.expected_merge_node)
+    then
+      raise
+      @@ Utils.User_error
+           ("Multicore_backend.device_to_device: merge node mismatch, expected "
+           ^ Option.(value ~default:"none" @@ map ~f:Tnode.get_debug_name dst.expected_merge_node)
+           ^ ", actual " ^ Tnode.get_debug_name tn);
+    device_to_device ?rt tn ~into_merge_buffer ~dst:dst.ctx ~src:src.ctx
 end
 
 let reinitialize (module Backend : Backend) config =

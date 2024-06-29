@@ -12,4 +12,3 @@ type config = Physical_devices_only | For_parallel_copying | Most_parallel_devic
 [@@deriving equal, sexp, variants]
 
 type merge_buffer_use = No | Streaming | Copy [@@deriving equal, sexp]
-

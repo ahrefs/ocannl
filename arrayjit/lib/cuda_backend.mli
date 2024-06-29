@@ -24,7 +24,7 @@ val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t
 val device_to_device :
   ?rt:(module Minidebug_runtime.Debug_runtime) ->
   Tnode.t ->
-  into_merge_buffer:[< `No | `Streaming | `Copy ] ->
+  into_merge_buffer:Backend_types.merge_buffer_use ->
   dst:context ->
   src:context ->
   bool

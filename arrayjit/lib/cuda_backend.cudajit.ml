@@ -219,7 +219,7 @@ let%diagn_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) 
          Option.value ~default:false
          @@ Option.map (Map.find dst.global_arrays tn) ~f:(fun d_arr ->
                 match into_merge_buffer with
-                | `No ->
+                | Backend_types.No ->
                     set_ctx dst.ctx;
                     Cudajit.memcpy_D_to_D ~dst:d_arr ~src:s_arr ();
                     (if Utils.settings.with_debug_level > 0 then
@@ -235,8 +235,8 @@ let%diagn_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) 
                            "from device",
                            get_ctx_device src |> get_name]);
                     true (* FIXME: *)
-                | `Streaming -> failwith "NOT IMPLEMENTED YET"
-                | `Copy -> failwith "NOT IMPLEMENTED YET"))
+                | Streaming -> failwith "NOT IMPLEMENTED YET"
+                | Copy -> failwith "NOT IMPLEMENTED YET"))
 
 (* let pp_semi ppf () = Stdlib.Format.fprintf ppf ";@ " *)
 let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
@@ -715,7 +715,7 @@ let link old_context (code : code) =
 let link_batch old_context (code_batch : code_batch) =
   let idx_params = Indexing.bound_symbols code_batch.bindings in
   let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
-  (* FIXME: *)
+  (* FIXME: NOT IMPLEMENTED YET *)
   (old_context, idx_args, [||])
 
 let to_buffer ?rt:_ _tn ~dst:_ ~src:_ = failwith "CUDA low-level: NOT IMPLEMENTED YET"
