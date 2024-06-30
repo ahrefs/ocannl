@@ -587,7 +587,6 @@ let%diagn_sexp cuda_to_ptx ~name cu_src =
 type buffer_ptr = Cudajit.deviceptr
 
 let sexp_of_buffer_ptr (Cudajit.Deviceptr ptr : buffer_ptr) = Sexp.Atom (Unsigned.UInt64.to_hexstring ptr)
-let merge_buffer_streaming = false
 
 let alloc_buffer ?old_buffer ~size_in_bytes () =
   match old_buffer with

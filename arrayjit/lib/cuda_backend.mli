@@ -33,7 +33,7 @@ val device_to_device :
 type buffer_ptr [@@deriving sexp_of]
 
 val to_buffer :
-?rt:(module Minidebug_runtime.Debug_runtime) -> Tnode.t -> dst:buffer_ptr -> src:context -> unit
+  ?rt:(module Minidebug_runtime.Debug_runtime) -> Tnode.t -> dst:buffer_ptr -> src:context -> unit
 
 val host_to_buffer : ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> dst:buffer_ptr -> unit
 val buffer_to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> src:buffer_ptr -> unit
@@ -43,7 +43,6 @@ type physical_device
 type device
 
 val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
-val merge_buffer_streaming : bool
 val init : device -> context
 val await : device -> unit
 val is_idle : device -> bool

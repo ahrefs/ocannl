@@ -1,13 +1,12 @@
 open Base
 
+type buffer_ptr = Unimplemented_buffer_ptr [@@deriving sexp_of]
 type context = Unimplemented_ctx [@@deriving sexp_of]
 type code = Indexing.unit_bindings [@@deriving sexp_of]
 type code_batch = Indexing.unit_bindings array [@@deriving sexp_of]
 
-type config = [ `Physical_devices_only | `For_parallel_copying | `Most_parallel_devices ]
-[@@deriving equal, sexp, variants]
-
-let initialize (_config : config) = ()
+let alloc_buffer ?old_buffer:_ ~size_in_bytes:_ () = Unimplemented_buffer_ptr
+let initialize (_config : Backend_types.config) = ()
 let is_initialized () = true
 let finalize _context = ()
 let compile ?name:_ bindings _optimized = bindings
@@ -32,10 +31,9 @@ let link_batch (Unimplemented_ctx : context) (code_batch : code_batch) =
   ((Unimplemented_ctx : context), lowered_bindings, task)
 
 let unsafe_cleanup ?unsafe_shutdown:_ () = ()
-let from_host ?rt:_ _context _arr = ()
-let to_host ?rt:_ _context _arr = ()
-let device_to_device ?rt:_ _arr ~into_merge_buffer:_ ~dst:_ ~src:_ = ()
-let physical_merge_buffers = false
+let from_host ?rt:_ _context _tn = false
+let to_host ?rt:_ _context _tn = false
+let device_to_device ?rt:_ _tn ~into_merge_buffer:_ ~dst:_ ~src:_ = false
 
 type device = Unimplemented_dev [@@deriving sexp_of]
 type physical_device = Unimplemented_phys_dev [@@deriving sexp_of]
