@@ -54,8 +54,10 @@ val raw_binop :
   op:Arrayjit.Ops.binop ->
   t1:t ->
   rhs1_is_grad:bool ->
+  rhs1_is_merge:bool ->
   t2:t ->
   rhs2_is_grad:bool ->
+  rhs2_is_merge:bool ->
   logic:Shape.compose_type ->
   asgns
 
@@ -67,6 +69,7 @@ val raw_unop :
   op:Arrayjit.Ops.unop ->
   t1:t ->
   rhs_is_grad:bool ->
+  rhs_is_merge:bool ->
   logic:Shape.transpose_type ->
   asgns
 

@@ -8,6 +8,8 @@ module Debug_runtime = Utils.Debug_runtime
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
+type buffer = Node of Tn.t | Merge_buffer of Tn.t [@@deriving sexp_of]
+
 (** Resets a array by performing the specified computation or data fetching. *)
 type fetch_op =
   | Constant of float
@@ -25,8 +27,8 @@ and t =
       accum : Ops.binop;
       op : Ops.binop;
       lhs : Tn.t;
-      rhs1 : Tn.t;
-      rhs2 : Tn.t;
+      rhs1 : buffer;
+      rhs2 : buffer;
       projections : Indexing.projections Lazy.t;
     }
   | Accum_unop of {
@@ -34,7 +36,7 @@ and t =
       accum : Ops.binop;
       op : Ops.unop;
       lhs : Tn.t;
-      rhs : Tn.t;
+      rhs : buffer;
       projections : Indexing.projections Lazy.t;
     }
   | Fetch of { array : Tn.t; fetch_op : fetch_op; dims : int array Lazy.t }
@@ -61,43 +63,32 @@ let get_name_exn asgns =
 let recurrent_nodes asgns =
   let open Utils.Set_O in
   let empty = Set.empty (module Tn) in
-  let single = Set.singleton (module Tn) in
+  let single = function Node tn -> Set.singleton (module Tn) tn | Merge_buffer _ -> Set.empty (module Tn) in
+  let maybe have lhs = if have then Set.singleton (module Tn) lhs else empty in
   let rec loop = function
     | Noop -> empty
     | Seq (t1, t2) -> loop t1 + (loop t2 - assigned t1)
     | Block_comment (_, t) -> loop t
     | Accum_binop { initialize_neutral; lhs; rhs1; rhs2; _ } ->
-        (if initialize_neutral then empty else single lhs) + single rhs1 + single rhs2
-    | Accum_unop { initialize_neutral; lhs; rhs; _ } ->
-        (if initialize_neutral then empty else single lhs) + single rhs
+        maybe (not initialize_neutral) lhs + single rhs1 + single rhs2
+    | Accum_unop { initialize_neutral; lhs; rhs; _ } -> maybe (not initialize_neutral) lhs + single rhs
     | Fetch _ -> empty
   and assigned = function
     | Noop -> Set.empty (module Tn)
     | Seq (t1, t2) -> assigned t1 + assigned t2
     | Block_comment (_, t) -> assigned t
-    | Accum_binop { initialize_neutral; lhs; _ } -> if initialize_neutral then single lhs else empty
-    | Accum_unop { initialize_neutral; lhs; _ } -> if initialize_neutral then single lhs else empty
-    | Fetch { array; _ } -> single array
+    | Accum_binop { initialize_neutral; lhs; _ } -> maybe initialize_neutral lhs
+    | Accum_unop { initialize_neutral; lhs; _ } -> maybe initialize_neutral lhs
+    | Fetch { array; _ } -> Set.singleton (module Tn) array
   in
   loop asgns
-
-let remove_updates array c =
-  let rec rm check = function
-    | ( Seq ((Accum_binop { lhs; _ } | Accum_unop { lhs; _ }), t)
-      | Seq (t, (Accum_binop { lhs; _ } | Accum_unop { lhs; _ })) ) as c
-      when check ->
-        if Tn.equal array lhs then rm true t else rm false c
-    | Seq (t1, t2) -> Seq (rm true t1, rm true t2)
-    | (Accum_binop { lhs; _ } | Accum_unop { lhs; _ }) when Tn.equal array lhs -> Noop
-    | c -> c
-  in
-  rm true c
 
 let sequential l = Option.value ~default:Noop @@ List.reduce l ~f:(fun st sts -> Seq (st, sts))
 
 let%debug_sexp to_low_level code =
   let open Indexing in
-  let get tn idcs =
+  let get buffer idcs =
+    let tn = match buffer with Node tn -> tn | Merge_buffer tn -> tn in
     if not (Array.length idcs = Array.length (Lazy.force tn.Tn.dims)) then
       [%log
         "get",
@@ -108,7 +99,9 @@ let%debug_sexp to_low_level code =
           (idcs : Indexing.axis_index array),
           (Lazy.force tn.dims : int array)];
     assert (Array.length idcs = Array.length (Lazy.force tn.Tn.dims));
-    Low_level.Get (tn, idcs)
+    match buffer with
+    | Node tn -> Low_level.Get (tn, idcs)
+    | Merge_buffer tn -> Low_level.Get_global (Ops.Merge_buffer { source_node_id = tn.Tn.id }, Some idcs)
   in
   let set tn idcs llv =
     if not (Array.length idcs = Array.length (Lazy.force tn.Tn.dims)) then
@@ -143,7 +136,7 @@ let%debug_sexp to_low_level code =
           let rhs2_idcs = rhs2_idx ~product in
           let lhs_idcs = lhs_idx ~product in
           let open Low_level in
-          let lhs_ll = get lhs lhs_idcs in
+          let lhs_ll = get (Node lhs) lhs_idcs in
           let rhs1_ll = get rhs1 rhs1_idcs in
           let rhs2_ll = get rhs2 rhs2_idcs in
           let rhs2 = binop ~op ~rhs1:rhs1_ll ~rhs2:rhs2_ll in
@@ -187,7 +180,7 @@ let%debug_sexp to_low_level code =
           let product = Array.of_list_rev_map rev_iters ~f:(fun s -> Indexing.Iterator s) in
           let lhs_idcs = lhs_idx ~product in
           let open Low_level in
-          let lhs_ll = get lhs lhs_idcs in
+          let lhs_ll = get (Node lhs) lhs_idcs in
           let rhs_ll = get rhs @@ rhs_idx ~product in
           let rhs2 = unop ~op ~rhs:rhs_ll in
           if is_assignment then set lhs lhs_idcs rhs2
@@ -224,7 +217,7 @@ let%debug_sexp to_low_level code =
     | Fetch { array; fetch_op = Slice { batch_idx = { static_symbol = idx; _ }; sliced }; dims } ->
         (* TODO: doublecheck this always gets optimized away. *)
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
-            set array idcs @@ get sliced @@ Array.append [| Iterator idx |] idcs)
+            set array idcs @@ get (Node sliced) @@ Array.append [| Iterator idx |] idcs)
     | Fetch { array; fetch_op = Embed_symbol s; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ Embed_index (Iterator s.static_symbol))
@@ -253,6 +246,7 @@ let get_ident_within_code ?no_dots c =
     Option.iter (Tn.ident_label tn)
       ~f:(Hashtbl.update idents ~f:(fun old -> Set.add (Option.value ~default:Utils.no_ints old) tn.id))
   in
+  let tn = function Node tn -> tn | Merge_buffer tn -> tn in
   let rec loop (c : t) =
     match c with
     | Noop -> ()
@@ -261,9 +255,9 @@ let get_ident_within_code ?no_dots c =
         loop c2
     | Block_comment (_, c) -> loop c
     | Accum_binop { initialize_neutral = _; accum = _; op = _; lhs; rhs1; rhs2; projections = _ } ->
-        List.iter ~f:visit [ lhs; rhs1; rhs2 ]
+        List.iter ~f:visit [ lhs; tn rhs1; tn rhs2 ]
     | Accum_unop { initialize_neutral = _; accum = _; op = _; lhs; rhs; projections = _ } ->
-        List.iter ~f:visit [ lhs; rhs ]
+        List.iter ~f:visit [ lhs; tn rhs ]
     | Fetch { array; fetch_op = _; dims = _ } -> visit array
   in
   loop c;
@@ -275,14 +269,15 @@ let get_ident_within_code ?no_dots c =
 
 let fprint_hum ?name ?static_indices () ppf c =
   let ident = get_ident_within_code c in
+  let buffer_ident = function Node tn -> ident tn | Merge_buffer tn -> "merge " ^ ident tn in
   let open Stdlib.Format in
   let out_fetch_op ppf (op : fetch_op) =
     match op with
     | Constant f -> fprintf ppf "%g" f
     | Imported (Ops.C_function c) -> fprintf ppf "%s()" c
-    | Imported (Merge_buffer {source_node_id}) ->
-      let tn = Option.value_exn @@ Tn.find ~id:source_node_id in
-        fprintf ppf "merge %s" (ident tn) 
+    | Imported (Merge_buffer { source_node_id }) ->
+        let tn = Option.value_exn @@ Tn.find ~id:source_node_id in
+        fprintf ppf "merge %s" (ident tn)
     | Imported (Ops.External_unsafe { ptr; prec; dims = _ }) -> fprintf ppf "%s" @@ Ops.ptr_to_string ptr prec
     | Slice { batch_idx; sliced } ->
         fprintf ppf "%s @@| %s" (ident sliced) (Indexing.symbol_ident batch_idx.static_symbol)
@@ -304,7 +299,7 @@ let fprint_hum ?name ?static_indices () ppf c =
         in
         fprintf ppf "%s %s %s %s %s%s;@ " (ident lhs)
           (Ops.assign_op_cd_syntax ~initialize_neutral accum)
-          (ident rhs1) (Ops.binop_cd_syntax op) (ident rhs2)
+          (buffer_ident rhs1) (Ops.binop_cd_syntax op) (buffer_ident rhs2)
           (if (not (String.equal proj_spec ".")) || List.mem ~equal:Ops.equal_binop Ops.[ Mul; Div ] op then
              " ~logic:\"" ^ proj_spec ^ "\""
            else "")
@@ -315,7 +310,7 @@ let fprint_hum ?name ?static_indices () ppf c =
         fprintf ppf "%s %s %s%s%s;@ " (ident lhs)
           (Ops.assign_op_cd_syntax ~initialize_neutral accum)
           (if not @@ Ops.equal_unop op Ops.Identity then Ops.unop_cd_syntax op ^ " " else "")
-          (ident rhs)
+          (buffer_ident rhs)
           (if not (String.equal proj_spec ".") then " ~logic:\"" ^ proj_spec ^ "\"" else "")
     | Fetch { array; fetch_op; dims = _ } -> fprintf ppf "%s := %a;@ " (ident array) out_fetch_op fetch_op
   in

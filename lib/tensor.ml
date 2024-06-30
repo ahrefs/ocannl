@@ -98,7 +98,7 @@ let default_init_op = Arrayjit.Ops.Constant_fill { values = [| 0.0 |]; strict = 
 let max_sublabel_length = ref 25
 
 let raw_binop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t) ~(rhs1_is_grad : bool)
-    ~(t2 : t) ~rhs2_is_grad ~logic : Asgns.t =
+    ~(rhs1_is_merge : bool) ~(t2 : t) ~rhs2_is_grad ~rhs2_is_merge ~logic : Asgns.t =
   let shape = t.shape in
   let shape_logic = Shape.Broadcast (logic, t1.shape, t2.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
@@ -106,11 +106,13 @@ let raw_binop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1
   let projections = lazy (Shape.derive_projections local_shape_update) in
   let lhs = if lhs_is_grad then (Option.value_exn t.diff).grad else t.value in
   let rhs1 = if rhs1_is_grad then (Option.value_exn t1.diff).grad else t1.value in
+  let rhs1 = if rhs1_is_merge then Asgns.Merge_buffer rhs1 else Node rhs1 in
   let rhs2 = if rhs2_is_grad then (Option.value_exn t2.diff).grad else t2.value in
+  let rhs2 = if rhs2_is_merge then Asgns.Merge_buffer rhs2 else Node rhs2 in
   Asgns.Accum_binop { initialize_neutral; accum; lhs; op; rhs1; rhs2; projections }
 
 let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t) ~(rhs_is_grad : bool)
-    ~logic =
+    ~(rhs_is_merge : bool) ~logic =
   let shape = t.shape in
   let shape_logic = Shape.Transpose (logic, t1.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
@@ -118,6 +120,7 @@ let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 
   let projections = lazy (Shape.derive_projections local_shape_update) in
   let lhs = if lhs_is_grad then (Option.value_exn t.diff).grad else t.value in
   let rhs = if rhs_is_grad then (Option.value_exn t1.diff).grad else t1.value in
+  let rhs = if rhs_is_merge then Asgns.Merge_buffer rhs else Node rhs in
   Asgns.Accum_unop { initialize_neutral; accum; lhs; op; rhs; projections }
 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
