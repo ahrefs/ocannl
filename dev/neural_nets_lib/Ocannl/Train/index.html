@@ -44,102 +44,10 @@
   <span><span>(<span class="keyword">module</span> <a href="../../../arrayjit/Arrayjit/Backends/module-type-Backend/index.html">Backend_type</a> <span class="keyword">with</span> <span class="keyword">type</span> <a href="../../../arrayjit/Arrayjit/Backends/module-type-Backend/index.html#type-context">context</a> = <span class="type-var">'context</span>)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span><span class="type-var">'context0</span> <a href="../../../arrayjit/Arrayjit/Backend_types/index.html#type-routine">Arrayjit.Backend_types.routine</a></span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <span class="xref-unresolved">Base</span>.unit</span></code></div><div class="spec-doc"><p>Executes the jitted code and copies arrays embedded in the given tenosor from and to host, synchronizes before copying to host. If <code>looping</code> is provided, loops over bindings and executes the given function inside the loop after a run. All and only bindings with associated ranges are iterated, with the binding's initial value lost. Bindings without ranges remain at their initial values.</p></div></div><div class="odoc-spec"><div class="spec module anchored" id="module-Lazy"><a href="#module-Lazy" class="anchor"></a><code><span><span class="keyword">module</span> Lazy</span><span> = <a href="../../../arrayjit/Arrayjit/Utils/Lazy/index.html">Utils.Lazy</a></span></code></div></div><pre class="language-ocaml"><code>let merge ?name_prefix tn ~accum ~(src : context) : code option =
-  let bindings = Indexing.Empty in
-  merge ?name_prefix tn ~accum ~src bindings |&gt; Option.map ~f:(fun routine : code -&gt; Compiled routine)
-
-let merge_batch ?name_prefixes ~occupancy tns ~accum ~(srcs : context array) =
-  let bindings = Indexing.Empty in
-  merge_batch ?name_prefixes ~occupancy tns ~accum ~srcs bindings
-  |&gt; Hashtbl.map ~f:(fun procs -&gt;
-         Array.map procs ~f:(Option.map ~f:(fun routine : code -&gt; Compiled routine)))
-
-let%track_sexp merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst ~accum ~src =
-  let global =
-    match src with
-    | None -&gt; Arrayjit.Ops.Merge_buffer src.id
-    | Some src -&gt; External_unsafe { ptr = src; prec = dst.Arrayjit.Tnode.prec; dims = dst.dims }
-  in
-  let open Arrayjit.Low_level in
-  let body idcs =
-    Set
-      {
-        tn = dst;
-        idcs;
-        llv = Binop (accum, Get (dst, idcs), Get_global (global, Some idcs));
-        debug = &quot;&quot;;
-      }
-  in
-  let llc = loop_over_dims (Lazy.force dst.dims) ~body in
-  optimize_proc ~unoptim_ll_source ~ll_source ~name [] llc
-
-let compile_merges ?name_prefixes:_ ~occupancy:_
-    (* Tnode.t -&gt; dst_n:int -&gt; dst:context -&gt; src_n:int -&gt; src:context -&gt; Utils.requirement *) _tns
-    ~accum:_ ~dsts:_ ~srcs:_ =
-  failwith &quot;NOT IMPLEMENTED YET&quot;
-
-let%track_sexp merge (type context) ?name_prefix la ~accum ~(src : context) bindings =
-  (* FIXME: reconstruct name if missing *)
-  let name = Option.value name_prefix ~default:&quot;&quot; in
-  let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ &quot;-unoptimized.ll&quot;) in
-  let ll_source = Utils.get_debug_formatter ~fname:(name ^ &quot;.ll&quot;) in
-  let name_prefix : string = Option.value ~default:&quot;&quot; @@ Option.map name_prefix ~f:(fun s -&gt; s ^ &quot;_&quot;) in
-  Option.map (Map.find src.arrays la) ~f:(fun (src : Ndarray.t) -&gt;
-      let name = [%string &quot;%{name_prefix}into_%{Tn.name la}&quot;] in
-      compile ~opt_ctx_arrays:None ~name bindings
-      @@ merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst:la ~accum
-           ~src:(Ndarray.get_voidptr src))
-
-let%track_sexp merge_batch ?(name_prefixes : string array option) ~occupancy tns ~accum
-    ~(srcs : context array) bindings =
-  (* FIXME: reconstruct name if missing *)
-  let name =
-    String.(
-      strip ~drop:(equal_char '_')
-      @@ common_prefix @@ Array.to_list
-      @@ Option.value name_prefixes ~default:[||])
-  in
-  let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ &quot;-unoptimized.ll&quot;) in
-  let ll_source = Utils.get_debug_formatter ~fname:(name ^ &quot;.ll&quot;) in
-  let complete =
-    Array.concat_map (Array.of_list tns) ~f:(fun tn -&gt;
-        Array.mapi srcs ~f:(fun i src -&gt;
-            match (occupancy tn ~src_n:i ~src, Map.find src.arrays tn) with
-            | Utils.Skip, _ -&gt; ((tn, i), (None, None))
-            | Optional { callback_if_missing }, None -&gt;
-                callback_if_missing ();
-                ((tn, i), (None, None))
-            | Required, None -&gt;
-                failwith @@ &quot;Gccjit_backend.merge_batch: missing tnode &quot; ^ Tn.name tn ^ &quot; in context &quot;
-                ^ src.label
-            | _, Some src -&gt;
-                let prefix = match name_prefixes with Some ns -&gt; ns.(i) ^ &quot;_&quot; | None -&gt; &quot;&quot; in
-                let name = [%string &quot;%{prefix}into_%{Tn.name tn}&quot;] in
-                ( (tn, i),
-                  ( Some name,
-                    Some
-                      (merge_from_global ~unoptim_ll_source ~ll_source ~name ~dst:tn ~accum
-                         ~src:(Ndarray.get_voidptr src)) ) )))
-  in
-  let ids, compileds = Array.unzip complete in
-  let len = Array.length srcs in
-  let together =
-    Hashtbl.of_alist_exn (module Tn) @@ List.map tns ~f:(fun tn -&gt; (tn, Array.create ~len None))
-  in
-  if Array.is_empty compileds then together
-  else
-    let names, compileds = Array.unzip compileds in
-    let result = compile_batch ~opt_ctx_arrays:None ~names bindings compileds in
-    Array.iter2_exn ids result ~f:(fun (tn, i) res -&gt;
-        let r = Hashtbl.find_exn together tn in
-        assert (Option.is_none r.(i));
-        r.(i) &lt;- res);
-    together</code></pre><div class="odoc-spec"><div class="spec value anchored" id="val-collapse_merges"><a href="#val-collapse_merges" class="anchor"></a><code><span><span class="keyword">val</span> collapse_merges : 
-  <span><span><span>(<span class="type-var">'a</span>, <span><span><span class="type-var">'b</span> <span class="xref-unresolved">Base</span>.Option.t</span> <span class="xref-unresolved">Base</span>.Array.t</span>)</span> <span class="xref-unresolved">Base</span>.Hashtbl.t</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span><span class="type-var">'c</span> <span class="xref-unresolved">Base__List</span>.t</span> <span class="xref-unresolved">Base</span>.Array.t</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-parallel_update"><a href="#val-parallel_update" class="anchor"></a><code><span><span class="keyword">val</span> parallel_update : 
+  <span class="xref-unresolved">Base</span>.unit</span></code></div><div class="spec-doc"><p>Executes the jitted code and copies arrays embedded in the given tenosor from and to host, synchronizes before copying to host. If <code>looping</code> is provided, loops over bindings and executes the given function inside the loop after a run. All and only bindings with associated ranges are iterated, with the binding's initial value lost. Bindings without ranges remain at their initial values.</p></div></div><div class="odoc-spec"><div class="spec module anchored" id="module-Lazy"><a href="#module-Lazy" class="anchor"></a><code><span><span class="keyword">module</span> Lazy</span><span> = <a href="../../../arrayjit/Arrayjit/Utils/Lazy/index.html">Utils.Lazy</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-parallel_update"><a href="#val-parallel_update" class="anchor"></a><code><span><span class="keyword">val</span> parallel_update : 
   <span><span>(<span class="keyword">module</span> <a href="../../../arrayjit/Arrayjit/Backends/module-type-Backend/index.html">Backend_type</a> <span class="keyword">with</span> <span class="keyword">type</span> <a href="../../../arrayjit/Arrayjit/Backends/module-type-Backend/index.html#type-context">context</a> = <span class="type-var">'context</span>)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">grad_updates</span>:<span><span><span class="type-var">'context0</span> <a href="../../../arrayjit/Arrayjit/Backend_types/index.html#type-routine">Arrayjit.Backend_types.routine</a></span> <span class="xref-unresolved">Base</span>.array</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="label">sgd_update</span>:<span><span class="type-var">'context1</span> <a href="../../../arrayjit/Arrayjit/Backend_types/index.html#type-routine">Arrayjit.Backend_types.routine</a></span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">sgd_update</span>:<span><span class="type-var">'context0</span> <a href="../../../arrayjit/Arrayjit/Backend_types/index.html#type-routine">Arrayjit.Backend_types.routine</a></span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">post_sync</span>:<span>(<span><span class="label">num_synced_devices</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span> <span class="xref-unresolved">Base</span>.unit)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="#type-updaten">updaten</a> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base</span>.unit <span class="arrow">&#45;&gt;</span></span>
