@@ -313,17 +313,24 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   let all_params = Set.to_array updaten.params in
   let ctxs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.context)] in
   let occupancy ~name:_ ~src_n = Array.exists ~f:Fn.id occupancies.(src_n) in
-  (* let names = Array.create ~len:num_devices "grad_merge" in *)
-  let grad_merges = Array.map all_params ~f:(fun p -> [%cd p.grad =+ p.grad.merge]) in
+  let grad_merges =
+    Array.map all_params ~f:(fun p ->
+        [%cd
+          ~~("merging gradient of" p);
+          p.grad =+ p.grad.merge])
+  in
   let grad_merges_to =
     Array.map ctxs ~f:(fun ctx ->
         snd @@ Backend.link_batch ctx @@ Backend.compile_batch ~shared:true ~occupancy Idx.Empty grad_merges)
   in
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
-  (* let names = Array.create ~len:num_devices "loss_merge" in *)
   let loss_merge =
     Backend.(
-      link sgd_update.context @@ compile Idx.Empty [%cd updaten.loss.value =+ updaten.loss.value.merge])
+      link sgd_update.context
+      @@ compile Idx.Empty
+           [%cd
+             ~~("merging" updaten.loss);
+             updaten.loss.value =+ updaten.loss.value.merge])
   in
   (* FIXME: need to iterate over params in the outer loop. *)
   let merge_grads ~(from : int) ~(to_ : int) : unit =

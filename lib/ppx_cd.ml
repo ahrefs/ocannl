@@ -806,6 +806,23 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
         @@ Location.error_extensionf ~loc
              "ppx_ocannl %%cd: for-downto: low-level code embeddings not supported yet" )
   | [%expr
+      ~~[%e? { pexp_desc = Pexp_apply (expr, exprs); pexp_loc; _ }];
+      [%e? expr2]] ->
+      let elements =
+        expr :: List.map ~f:snd exprs
+        |> List.map ~f:(function
+             | { pexp_desc = Pexp_constant (Pconst_string _); _ } as s -> s
+             | [%expr [%e? t].value] -> [%expr Arrayjit.Tnode.get_debug_name [%e t].value]
+             | [%expr [%e? t].grad] -> [%expr Arrayjit.Tnode.get_debug_name [%e t].value ^ ".grad"]
+             | t -> [%expr Arrayjit.Tnode.get_debug_name [%e t].value])
+      in
+      let typ, slot, body = translate ?ident_label ~proj_in_scope expr2 in
+      ( typ,
+        slot,
+        [%expr
+          Arrayjit.Assignments.Block_comment
+            (String.concat_array ~sep:" " [%e Ast_helper.Exp.array ~loc:pexp_loc elements], [%e body])] )
+  | [%expr
       [%e? expr1];
       [%e? expr2]] ->
       let _typ1, _slot1, expr1 = translate ~proj_in_scope expr1 in
