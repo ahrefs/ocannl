@@ -24,10 +24,11 @@ let ndarray_op ~ident_label ?axis_labels ?label expr =
 type expr_type =
   | Code
   | Array
+  | Value_of_tensor of expression
   | Grad_of_tensor of expression
   | Tensor
   | Unknown
-  | Merge_value
+  | Merge_value of expression
   | Merge_grad of expression
 
 let is_unknown = function Unknown -> true | _ -> false
@@ -211,8 +212,9 @@ let setup_array ~is_lhs filler_pat (filler_typ, slot, filler) =
         tensor = None;
       }
   | Array -> { binding = None; filler_typ; slot; array_opt = opt_buffer filler; tensor = None }
+  | Value_of_tensor t -> { binding = None; filler_typ; slot; array_opt = opt_buffer filler; tensor = Some t }
   | Grad_of_tensor t -> { binding = None; filler_typ; slot; array_opt = buffer filler; tensor = Some t }
-  | (Merge_value | Merge_grad _) when is_lhs ->
+  | (Merge_value _ | Merge_grad _) when is_lhs ->
       {
         binding = None;
         filler_typ;
@@ -222,8 +224,14 @@ let setup_array ~is_lhs filler_pat (filler_typ, slot, filler) =
           @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: merge buffers cannot be assigned to";
         tensor = None;
       }
-  | Merge_value ->
-      { binding = None; filler_typ; slot; array_opt = [%expr Some (Merge_buffer [%e filler])]; tensor = None }
+  | Merge_value t ->
+      {
+        binding = None;
+        filler_typ;
+        slot;
+        array_opt = [%expr Some (Merge_buffer [%e filler])];
+        tensor = Some t;
+      }
   | Merge_grad t ->
       {
         binding = None;
@@ -236,12 +244,13 @@ let setup_array ~is_lhs filler_pat (filler_typ, slot, filler) =
 let args_for ~loc = function
   | { filler_typ = Merge_grad _; tensor = Some t; _ } -> (t, [%expr true], [%expr true])
   | { filler_typ = Grad_of_tensor _; tensor = Some t; _ } -> (t, [%expr true], [%expr false])
-  | { filler_typ = Merge_value; tensor = Some t; _ } -> (t, [%expr false], [%expr true])
+  | { filler_typ = Merge_value _; tensor = Some t; _ } -> (t, [%expr false], [%expr true])
   | { filler_typ = _; tensor = Some t; _ } -> (t, [%expr false], [%expr false])
   | _ ->
       ( Ast_builder.Default.pexp_extension ~loc
         @@ Location.error_extensionf ~loc
-             "ppx_ocannl %%cd: cannot use `~logic` (infer shapes) for arrays, use tensors or `.grad` notation",
+             "ppx_ocannl %%cd: cannot use `~logic` (infer shapes) for arrays, use tensors or `.value` or \
+              `.grad` notation",
         [%expr false],
         [%expr false] )
 
@@ -326,12 +335,12 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
       match typ1 with
       | Unknown | Tensor ->
           (Grad_of_tensor expr1, slot1, [%expr Option.map [%e expr1].Tensor.diff ~f:(fun d -> d.Tensor.grad)])
-      | Merge_value ->
+      | Merge_value _ ->
           ( Merge_grad expr1,
             slot1,
             Ast_builder.Default.pexp_extension ~loc
             @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: write .grad.merge instead of .merge.grad" )
-      | Code | Array | Grad_of_tensor _ | Merge_grad _ ->
+      | Code | Array | Value_of_tensor _ | Grad_of_tensor _ | Merge_grad _ ->
           ( Array,
             slot1,
             Ast_builder.Default.pexp_extension ~loc
@@ -340,23 +349,22 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) : expr_type * 
       let ((typ1, slot1, expr1) as result) = translate ?ident_label ~proj_in_scope expr1 in
       (* TODO: maybe this is too permissive? E.g. [t1.grad.value] is accepted. *)
       match typ1 with
-      | Unknown | Tensor -> (Array, slot1, [%expr [%e expr1].Tensor.value])
+      | Unknown | Tensor -> (Value_of_tensor expr1, slot1, [%expr [%e expr1].Tensor.value])
       | Code -> (Array, slot1, array_of_code expr1)
-      | Array | Grad_of_tensor _ | Merge_value | Merge_grad _ -> result)
+      | Array | Value_of_tensor _ | Grad_of_tensor _ | Merge_value _ | Merge_grad _ -> result)
   | [%expr [%e? expr1].merge] -> (
       let typ1, slot1, expr1 = translate ?ident_label ~proj_in_scope expr1 in
-      (* TODO: maybe this is too permissive? E.g. [t1.grad.value] is accepted. *)
       match typ1 with
-      | Unknown | Tensor -> (Merge_value, slot1, [%expr [%e expr1].Tensor.value])
-      | Array -> (Merge_value, slot1, expr1)
-      | Grad_of_tensor t -> (Merge_grad t, slot1, expr1)
-      | Code ->
-          ( Merge_value,
+      | Unknown | Tensor -> (Merge_value expr1, slot1, [%expr [%e expr1].Tensor.value])
+      | Value_of_tensor t -> (Merge_value t, slot1, [%expr [%e expr1].Tensor.value])
+      | Array | Code ->
+          ( Array,
             slot1,
             Ast_builder.Default.pexp_extension ~loc
             @@ Location.error_extensionf ~loc
-                 "ppx_ocannl %%cd: only tensor nodes (tensor values or gradients) can have merge buffers" )
-      | Merge_value | Merge_grad _ ->
+                 "ppx_ocannl %%cd: only tensor nodes (e.g. `.value` or `.grad`) can be merged" )
+      | Grad_of_tensor t -> (Merge_grad t, slot1, expr1)
+      | Merge_value _ | Merge_grad _ ->
           ( typ1,
             slot1,
             Ast_builder.Default.pexp_extension ~loc
