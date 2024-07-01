@@ -379,7 +379,7 @@ let%track_sexp compile_globals ~get_ident ppf info =
          | _ -> ());
   fprintf ppf "@,@]"
 
-let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; llc; merge_node = _ } =
+let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; llc; merge_node } =
   let open Stdlib.Format in
   let arrays = Hash_set.to_list info.used_tensors in
   let params =
@@ -398,7 +398,11 @@ let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; 
   let log_file =
     if Utils.settings.debug_log_from_routines then [ ("const char* log_file_name", Log_file_name) ] else []
   in
-  let params = log_file @ idx_params @ params in
+  let merge_param =
+    Option.(to_list @@ map merge_node ~f:(fun tn ->
+        ("const " ^ Ops.cuda_typ_of_prec tn.prec ^ " *merge_buffer", Merge_buffer)))
+  in
+  let params = log_file @ merge_param @ idx_params @ params in
   fprintf ppf "@[<v 2>@[<hv 4>void %s(@,@[<hov 0>%a@]@;<0 -4>)@] {@ " name
     (pp_print_list ~pp_sep:pp_comma pp_print_string)
   @@ List.map ~f:fst params;
