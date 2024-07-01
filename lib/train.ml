@@ -337,11 +337,13 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     (* FIXME: do we need to sync already? *)
     Backend.(await @@ get_ctx_device ctxs.(from));
     Array.iteri all_params ~f:(fun i p ->
-        assert (Backend.device_to_device p.value ~into_merge_buffer:Copy ~dst:ctxs.(to_) ~src:ctxs.(from));
-        (Tn.run debug_rt (Option.value_exn grad_merges_to.(to_).(i)).schedule : unit))
+        let grad_merge = Option.value_exn grad_merges_to.(to_).(i) in
+        assert (
+          Backend.device_to_device p.value ~into_merge_buffer:Copy ~dst:grad_merge.context ~src:ctxs.(from));
+        (Tn.run debug_rt grad_merge.schedule : unit))
   in
   let merge_loss ~src =
-    assert (Backend.device_to_device updaten.loss.value ~into_merge_buffer:Copy ~dst:sgd_update.context ~src);
+    assert (Backend.device_to_device updaten.loss.value ~into_merge_buffer:Copy ~dst:loss_merge.context ~src);
     Tn.run debug_rt loss_merge.schedule
   in
   (* FIXME: missing backcopy. *)
