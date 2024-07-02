@@ -239,6 +239,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         done
       with e ->
         state.keep_spinning <- false;
+        [%log "Device", (ordinal : int), "exception", Exn.to_string e];
         ignore (host_wait_for_idle.release_if_waiting () : bool);
         raise e
     in

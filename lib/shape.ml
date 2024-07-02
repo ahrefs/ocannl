@@ -317,7 +317,7 @@ let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env ~dim_var_env la
 
 type proj_axis_env = Arrayjit.Indexing.axis_index Row.dim_map [@@deriving sexp]
 
-let%track_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : update_step) :
+let get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : update_step) :
     proj_axis_env * Row.constraint_ list =
   let generative =
     [
@@ -541,7 +541,7 @@ let apply_env_update ~eliminate_variables env update_step =
   iter_shapes update_step ~f:(apply_env_t env);
   if eliminate_variables then List.concat_map ~f:(Row.eliminate_variables env) @@ all_rows update_step else []
 
-let%track_sexp propagate_shapes (update_step : update_step) : unit =
+let propagate_shapes (update_step : update_step) : unit =
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice does). *)
   ignore (apply_env_update ~eliminate_variables:false !state update_step);
   let _, ineqs = get_inequalities update_step in
@@ -552,7 +552,7 @@ let%track_sexp propagate_shapes (update_step : update_step) : unit =
   ignore (apply_env_update ~eliminate_variables:false env update_step);
   state := env
 
-let%track_sexp finish_inference (() : unit) : unit =
+let finish_inference (() : unit) : unit =
   (* TODO: optimize to keep all needed information in unsolved, rather than starting with all constraints. *)
   let unsolved, env = Row.solve_inequalities ~stage:Stage2 !active_constraints !state in
   let unsolved, env = Row.solve_inequalities ~stage:Stage3 unsolved env in
@@ -627,7 +627,7 @@ let fresh_proj_ids update =
 
 (** Computes the indexing into subtensors given the shape information of a tensor. [derive_projections] should
     only be invoked when the shapes are fully inferred already! *)
-let%track_sexp derive_projections (update_step : update_step) : Idx.projections =
+let derive_projections (update_step : update_step) : Idx.projections =
   finish_inference ();
   fresh_proj_ids update_step;
   let _debug_update_step : update_step = update_step in

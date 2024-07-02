@@ -200,7 +200,7 @@ let row_conjunction ?(id = phantom_row_id) constr1 constr2 =
       else if Sequence.for_all ~f:Either.is_second subsum then Some (extras ~keep_constr1:true, constr1)
       else None
 
-let%track_sexp apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim) (constr : dim_constraint)
+let apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim) (constr : dim_constraint)
     (env : environment) : constraint_ list * dim_constraint =
   let extras, constr =
     match (dim, constr) with
@@ -266,7 +266,7 @@ let%debug_sexp _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim l
         else Total_elems { nominator = nominator * d; divided_by = Utils.Set_O.(divided_by - vars) }
   | Unconstrained -> Unconstrained
 
-let%track_sexp apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : constraint_ list * _ =
+let apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : constraint_ list * _ =
   if is_unconstrained constr then ([], env)
   else
     let reduce constr ~beg_dims ~dims =
@@ -472,7 +472,7 @@ let subst_row (env : environment) ({ dims; bcast; id } : t) : t =
                 id;
               }))
 
-let%track_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) : constraint_ list * environment =
+let rec unify_dim ~stage (eq : dim * dim) (env : environment) : constraint_ list * environment =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
   match (dim1, dim2) with
   | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
@@ -528,7 +528,7 @@ let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
 let take_from_end (l : dim list) (n : int) : dim list = List.rev @@ List.take (List.rev l) n
 
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
-let%track_sexp rec unify_row ~stage (eq : t * t) (env : environment) : constraint_ list * environment =
+let rec unify_row ~stage (eq : t * t) (env : environment) : constraint_ list * environment =
   let rec solve (ineqs, env) = function
     | Dim_eq { d1; d2 } ->
         let more_ineqs, env = unify_dim ~stage (d1, d2) env in
@@ -651,7 +651,7 @@ let%track_sexp rec unify_row ~stage (eq : t * t) (env : environment) : constrain
       | Unequal_lengths -> raise @@ Shape_error ("Mismatching number of axes", [ Row_mismatch [ r1; r2 ] ])
       | Ok eqs -> List.fold ~init:([], env) ~f:(fun acc (d1, d2) -> solve acc (Dim_eq { d1; d2 })) eqs)
 
-let%track_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env : environment) :
+let solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env : environment) :
     constraint_ list * environment =
   let nonredundant ?(more = []) v vs =
     Utils.sorted_diff ~compare:compare_dim_var (List.dedup_and_sort ~compare:compare_dim_var (v :: vs)) more
@@ -805,7 +805,7 @@ let%track_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env :
 
 let global_template_cache = Hashtbl.Poly.create ()
 
-let%track_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : environment) :
+let solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : environment) :
     constraint_ list * environment =
   let nonredundant ?(more = []) v vs =
     Utils.sorted_diff ~compare:compare_row_var (List.dedup_and_sort ~compare:compare_row_var (v :: vs)) more
@@ -1006,7 +1006,7 @@ let close_dim_terminal ~(stage : stage) (env : environment) (dim : dim) : constr
 
 let last_dim_is dims d2 = match List.last dims with Some (Dim { d; _ }) -> d = d2 | _ -> false
 
-let%track_sexp rec eliminate_row_constraint ~lub (r : row) (constr : row_constraint) env : constraint_ list =
+let rec eliminate_row_constraint ~lub (r : row) (constr : row_constraint) env : constraint_ list =
   match r with
   | { bcast = Broadcastable; _ } ->
       (* The environment is unchanged, as apply_row_constraint would update only the constr. *)
@@ -1104,7 +1104,7 @@ let eliminate_variables (env : environment) ({ dims; bcast; id } as _r : row) : 
 
 let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
 
-let%track_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (env : environment) :
+let solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (env : environment) :
     constraint_ list * environment =
   let rec solve (ineqs : constraint_ list) (env : environment) : constraint_ list * environment =
     let f (ineqs, env) (ineq : constraint_) =
@@ -1249,7 +1249,7 @@ type proj_equation =
           broadcasted-to axes of a tensor assigned a constant. *)
 [@@deriving compare, equal, sexp]
 
-let%track_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_env (env : environment) :
+let get_proj_equations (inequalities : constraint_ list) proj_axis_env (env : environment) :
     proj_equation list =
   let to_proj : dim -> proj = function
     | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
@@ -1298,7 +1298,7 @@ let%track_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_en
   in
   List.concat_map inequalities ~f
 
-let%track_sexp solve_proj_equations (eqs : proj_equation list) : proj_env =
+let solve_proj_equations (eqs : proj_equation list) : proj_env =
   let v_env = dim_hashtbl () in
   let p_solved = ref [] in
   let p_dims = ref [] in

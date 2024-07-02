@@ -10,20 +10,19 @@ module Rand = Arrayjit.Rand.Lib
 
 
 let experiment ~seed () =
-  Utils.settings.with_debug_level <- 1;
+  Utils.settings.with_debug_level <- 2;
   Utils.settings.output_debug_files_in_run_directory <- true;
-  (* Utils.settings.debug_log_from_routines <- true; *)
-  let hid_dim = 16 in
-  (* let hid_dim = 4 in *)
-  let batch_size = 120 in
+  Utils.settings.debug_log_from_routines <- true;
+  (* let hid_dim = 16 in *)
+  let hid_dim = 4 in
+  (* let batch_size = 120 in *)
   (* let batch_size = 60 in *)
-  (* let batch_size = 20 in *)
+  let batch_size = 20 in
   let len = batch_size * 20 in
-  (* let len = 30 in *)
   let init_lr = 0.1 in
   (* let epochs = 10 in *)
-  let epochs = 20 in
-  (* let epochs = 1 in *)
+  (* let epochs = 20 in *)
+  let epochs = 1 in
   let noise () = Rand.float_range (-0.1) 0.1 in
   let moons_flat =
     Array.concat_map (Array.create ~len ())
@@ -55,7 +54,7 @@ let experiment ~seed () =
     Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" at_epoch at_step learning_rate epoch_loss
   in
   let inputs, outputs, model_result, infer_callback, batch_losses, epoch_losses, learning_rates =
-    Train.example_train_loop ~seed ~batch_size ~init_lr ~data_len:len ~epochs
+    Train.example_train_loop ~seed ~batch_size ~max_num_devices:(batch_size / 2) ~init_lr ~data_len:len ~epochs
       ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn ~weight_decay ~per_batch_callback
       ~per_epoch_callback backend ()
   in
