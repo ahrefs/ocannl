@@ -315,13 +315,13 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                    [%diagn_sexp
                      [%log_entry
                        "from_host " ^ Tnode.get_debug_name tn;
-                       [%log "copied", Tnode.label tn, Tn.name tn, "from host"];
+                       [%log "copied", Tnode.label tn, Tnode.name tn, "from host"];
                        if Utils.settings.with_debug_level > 1 then
                          [%log_printbox
                            let indices =
                              Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
                            in
-                           Ndarray.render_array ~indices c_arr]]]
+                           Ndarray.render_array ~indices h_arr]]]
                in
                schedule_task context.device
                  Tnode.
@@ -335,7 +335,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                [%diagn_sexp
                  [%log_entry
                    "from_host empty " ^ Tnode.get_debug_name tn;
-                   [%log "nothing to copy", Tnode.label tn, Tn.name tn, "from host"]]];
+                   [%log "nothing to copy", Tnode.label tn, Tnode.name tn, "from host"]]];
                false)
 
   let to_host ?rt (context : context) (tn : Tnode.t) =
@@ -352,7 +352,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                    [%diagn_sexp
                      [%log_entry
                        "to_host " ^ Tnode.get_debug_name tn;
-                       [%log "copied", Tnode.label tn, Tn.name tn, "to host"];
+                       [%log "copied", Tnode.label tn, Tnode.name tn, "to host"];
                        if Utils.settings.with_debug_level > 1 then
                          [%log_printbox
                            let indices =
@@ -372,7 +372,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                [%diagn_sexp
                  [%log_entry
                    "to_host empty " ^ Tnode.get_debug_name tn;
-                   [%log "nothing to copy", Tn.label tn, Tnode.name tn, "to host"]]];
+                   [%log "nothing to copy", Tnode.label tn, Tnode.name tn, "to host"]]];
                false)
 
   let device_to_device ?rt tn ~into_merge_buffer ~dst ~src =
