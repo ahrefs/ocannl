@@ -160,7 +160,7 @@ let%expect_test "Graph drawing fetch" =
   let%op x = x_flat @| step_sym in
   let%op fx = f x in
   Train.set_hosted x.value;
-  Train.set_hosted (Option.value_exn x.diff).grad;
+  Train.set_hosted (Option.value_exn ~here:[%here] x.diff).grad;
   let update = Train.grad_update fx in
   let fx_routine = Backend.(link ctx @@ compile bindings update.fwd_bprop) in
   let step_ref = IDX.find_exn fx_routine.bindings step_sym in

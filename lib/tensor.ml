@@ -104,10 +104,10 @@ let raw_binop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1
   let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
   Shape.propagate_shapes local_shape_update;
   let projections = lazy (Shape.derive_projections local_shape_update) in
-  let lhs = if lhs_is_grad then (Option.value_exn t.diff).grad else t.value in
-  let rhs1 = if rhs1_is_grad then (Option.value_exn t1.diff).grad else t1.value in
+  let lhs = if lhs_is_grad then (Option.value_exn ~here:[%here] t.diff).grad else t.value in
+  let rhs1 = if rhs1_is_grad then (Option.value_exn ~here:[%here] t1.diff).grad else t1.value in
   let rhs1 = if rhs1_is_merge then Asgns.Merge_buffer rhs1 else Node rhs1 in
-  let rhs2 = if rhs2_is_grad then (Option.value_exn t2.diff).grad else t2.value in
+  let rhs2 = if rhs2_is_grad then (Option.value_exn ~here:[%here] t2.diff).grad else t2.value in
   let rhs2 = if rhs2_is_merge then Asgns.Merge_buffer rhs2 else Node rhs2 in
   Asgns.Accum_binop { initialize_neutral; accum; lhs; op; rhs1; rhs2; projections }
 
@@ -118,8 +118,8 @@ let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 
   let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
   Shape.propagate_shapes local_shape_update;
   let projections = lazy (Shape.derive_projections local_shape_update) in
-  let lhs = if lhs_is_grad then (Option.value_exn t.diff).grad else t.value in
-  let rhs = if rhs_is_grad then (Option.value_exn t1.diff).grad else t1.value in
+  let lhs = if lhs_is_grad then (Option.value_exn ~here:[%here] t.diff).grad else t.value in
+  let rhs = if rhs_is_grad then (Option.value_exn ~here:[%here] t1.diff).grad else t1.value in
   let rhs = if rhs_is_merge then Asgns.Merge_buffer rhs else Node rhs in
   Asgns.Accum_unop { initialize_neutral; accum; lhs; op; rhs; projections }
 
@@ -308,7 +308,7 @@ let param ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?(strict = 
   Tn.update_memory_mode v (Hosted Nonconstant) 24;
   (* In principle, gradients can even be local, if a single jitted block does forward, backprop, and update
      computations. Use-cases needing [Materialized] gradients need to request that before any jitting. *)
-  let g = (Option.value_exn t.diff).grad in
+  let g = (Option.value_exn ~here:[%here] t.diff).grad in
   Tn.update_memory_mode g Never_virtual 26;
   t
 
@@ -599,12 +599,23 @@ let grad_2d_points ?from_axis ~xdim ~ydim t =
       Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_2d_points ?from_axis ~xdim ~ydim arr)
       @@ Lazy.force diff.grad.array
 
-let set_value t = Nd.set_from_float @@ Option.value_exn @@ Lazy.force t.value.array
-let get_value t = Nd.get_as_float @@ Option.value_exn @@ Lazy.force t.value.array
-let set_grad t = Nd.set_from_float @@ Option.value_exn @@ Lazy.force @@ (Option.value_exn t.diff).grad.array
-let get_grad t = Nd.get_as_float @@ Option.value_exn @@ Lazy.force @@ (Option.value_exn t.diff).grad.array
+let set_value t = Nd.set_from_float @@ Option.value_exn ~here:[%here] @@ Lazy.force t.value.array
+let get_value t = Nd.get_as_float @@ Option.value_exn ~here:[%here] @@ Lazy.force t.value.array
+
+let set_grad t =
+  Nd.set_from_float
+  @@ Option.value_exn ~here:[%here]
+  @@ Lazy.force @@ (Option.value_exn ~here:[%here] t.diff).grad.array
+
+let get_grad t =
+  Nd.get_as_float
+  @@ Option.value_exn ~here:[%here]
+  @@ Lazy.force @@ (Option.value_exn ~here:[%here] t.diff).grad.array
 
 let set_values t values =
-  Nd.(reset (Constant_fill { values; strict = false }) @@ Option.value_exn @@ Lazy.force t.value.array)
+  Nd.(
+    reset (Constant_fill { values; strict = false })
+    @@ Option.value_exn ~here:[%here]
+    @@ Lazy.force t.value.array)
 
-let get_values t = Nd.(retrieve_flat_values @@ Option.value_exn @@ Lazy.force t.value.array)
+let get_values t = Nd.(retrieve_flat_values @@ Option.value_exn ~here:[%here] @@ Lazy.force t.value.array)

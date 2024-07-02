@@ -200,7 +200,7 @@ let%debug_sexp prepare_node ~(traced_store : Low_level.traced_store) info ctx_no
           | From_context, Param_ptrs ptrs ->
               ptrs := (name, Param_ptr tn) :: !ptrs;
               ident
-          | Constant_from_host, _ -> get_c_ptr prec @@ Option.value_exn @@ Lazy.force tn.array
+          | Constant_from_host, _ -> get_c_ptr prec @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
           | Local_only, _ -> ident
         in
         let backend_info = sexp_of_mem_properties mem in
@@ -265,8 +265,7 @@ let compile_main ~traced_store info ppf llc : unit =
           fprintf ppf
             {|@[<7>fprintf(log_file,@ @[<h>"%s[%%u] = %%f = %s\n",@]@ %a,@ new_set_v%a);@]@ fflush(log_file);@ |}
             ident v_code pp_array_offset offset pp_args v_idcs;
-          fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@;<1 -2>}@]@ " ident pp_array_offset
-            (idcs, node.dims))
+          fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@;<1 -2>}@]@ " ident pp_array_offset (idcs, node.dims))
         else
           (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
           fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " ident pp_array_offset (idcs, node.dims) loop_f llv;
@@ -312,7 +311,7 @@ let compile_main ~traced_store info ppf llc : unit =
         if not @@ String.equal num_typ get_typ then fprintf ppf "(%s)" num_typ;
         fprintf ppf "v%d" id.scope_id
     | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
-        let tn = Option.value_exn @@ Tn.find ~id:source_node_id in
+        let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
         fprintf ppf "@[<2>((%s*)merge_buffer)[%a@;<0 -2>]@]" (Ops.cuda_typ_of_prec prec) pp_array_offset
           (idcs, Lazy.force tn.dims)
     | Get_global _ -> failwith "Cc_backend: Get_global / FFI NOT IMPLEMENTED YET"
@@ -349,7 +348,7 @@ let compile_main ~traced_store info ppf llc : unit =
         in
         (v ^ "{=%f}", [ `Value v ])
     | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
-        let tn = Option.value_exn @@ Tn.find ~id:source_node_id in
+        let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
         let node = get_node tn in
         let v = sprintf "@[<2>merge_buffer[%s@;<0 -2>]@]" (array_offset_to_string (idcs, node.dims)) in
         ("merge_buffer[%u]{=%f}", [ `Accessor (idcs, node.dims); `Value v ])
@@ -387,10 +386,10 @@ let%track_sexp compile_globals ~get_ident ppf infos =
   let get_node tn = Array.find_map infos ~f:(fun info -> Hashtbl.find info.nodes tn) in
   Hash_set.to_list used
   |> List.iter ~f:(fun tn ->
-         let node = Option.value_exn @@ get_node tn in
+         let node = Option.value_exn ~here:[%here] @@ get_node tn in
          match node.mem with
          | Constant_from_host ->
-             let nd = Option.value_exn @@ Lazy.force tn.Tn.array in
+             let nd = Option.value_exn ~here:[%here] @@ Lazy.force tn.Tn.array in
              fprintf ppf "#define %s (%s)@," (get_ident tn) @@ get_c_ptr tn.Tn.prec nd
          | _ -> ());
   fprintf ppf "@,@]"
@@ -545,7 +544,7 @@ let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings (lowereds : Low_lev
   let params =
     Array.mapi lowereds ~f:(fun i lowered ->
         Option.map2 names.(i) infos.(i) ~f:(fun name info ->
-            compile_proc ~name info pp_file.ppf idx_params @@ Option.value_exn lowered))
+            compile_proc ~name info pp_file.ppf idx_params @@ Option.value_exn ~here:[%here] lowered))
   in
   pp_file.finalize ();
   let log_fname = pp_file.f_name ^ ".log" in
@@ -568,7 +567,7 @@ let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings (lowereds : Low_lev
             {
               info;
               result;
-              params = Option.value_exn params;
+              params = Option.value_exn ~here:[%here] params;
               bindings;
               name;
               opt_ctx_arrays;

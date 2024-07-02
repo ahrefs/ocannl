@@ -407,7 +407,7 @@ let inline_computation ~id traced static_indices call_args =
           Local_scope
             {
               id;
-              body = Option.value_exn @@ loop env body;
+              body = Option.value_exn ~here:[%here] @@ loop env body;
               orig_indices = Array.map ~f:(subst env) orig_indices;
             }
       | Get_local _ -> llv
@@ -546,9 +546,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
           Array.for_all orig_indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
         if Tn.known_non_virtual id.tn then Get (id.tn, orig_indices)
         else
-          (* DEBUG: *)
-          let body = Option.value_exn @@ loop_proc ~balanced ~env_dom body in
-          (* let body = Option.value ~default:Noop @@ loop_proc ~balanced ~env_dom body in *)
+          let body = Option.value_exn ~here:[%here] @@ loop_proc ~balanced ~env_dom body in
           Tn.update_memory_mode id.tn Virtual 18;
           Local_scope { id; orig_indices; body }
     | Get_local id ->
@@ -566,7 +564,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
   let static_indices =
     Set.of_list (module Indexing.Symbol) @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
   in
-  Option.value_exn @@ loop_proc ~balanced:false ~env_dom:static_indices llc
+  Option.value_exn ~here:[%here] @@ loop_proc ~balanced:false ~env_dom:static_indices llc
 
 let rec substitute_float ~var ~value llv =
   let loop_float = substitute_float ~var ~value in
@@ -713,7 +711,9 @@ let%debug_sexp optimize_proc static_indices llc =
     @@ cleanup_virtual_llc reverse_node_map ~static_indices
     @@ virtual_llc traced_store reverse_node_map static_indices llc
   in
-  let merge_node = Option.map !merge_node_id ~f:(fun id -> Option.value_exn @@ Tnode.find ~id) in
+  let merge_node =
+    Option.map !merge_node_id ~f:(fun id -> Option.value_exn ~here:[%here] @@ Tnode.find ~id)
+  in
   { traced_store; llc; merge_node }
 
 let code_hum_margin = ref 100
@@ -817,10 +817,10 @@ let fprint_hum ?name ?static_indices () ppf llc =
     | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
         fprintf ppf "%s[%a]" (Ops.ptr_to_string ptr prec) pp_indices idcs
     | Get_global (Ops.Merge_buffer { source_node_id }, None) ->
-        let tn = Option.value_exn @@ Tnode.find ~id:source_node_id in
+        let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
         fprintf ppf "merge %a" pp_ident tn
     | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
-        let tn = Option.value_exn @@ Tnode.find ~id:source_node_id in
+        let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
         fprintf ppf "@[<2>%a[@,%a]@]" pp_ident tn pp_indices idcs
     | Get (tn, idcs) -> fprintf ppf "@[<2>%a[@,%a]@]" pp_ident tn pp_indices idcs
     | Constant c -> fprintf ppf "%f" c

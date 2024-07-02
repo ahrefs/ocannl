@@ -276,7 +276,7 @@ let fprint_hum ?name ?static_indices () ppf c =
     | Constant f -> fprintf ppf "%g" f
     | Imported (Ops.C_function c) -> fprintf ppf "%s()" c
     | Imported (Merge_buffer { source_node_id }) ->
-        let tn = Option.value_exn @@ Tn.find ~id:source_node_id in
+        let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
         fprintf ppf "merge %s" (ident tn)
     | Imported (Ops.External_unsafe { ptr; prec; dims = _ }) -> fprintf ppf "%s" @@ Ops.ptr_to_string ptr prec
     | Slice { batch_idx; sliced } ->

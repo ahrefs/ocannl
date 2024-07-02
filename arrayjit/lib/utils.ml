@@ -41,7 +41,7 @@ let settings =
     fixed_state_for_init = None;
     print_decimals_precision = 2;
   }
-
+  
 let accessed_global_args = Hash_set.create (module String)
 
 let read_cmdline_or_env_var n =

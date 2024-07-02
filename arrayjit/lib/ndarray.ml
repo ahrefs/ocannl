@@ -532,6 +532,6 @@ let restore ~file_name t =
   let local = Npy.read_mmap file_name ~shared:false in
   let f prec arr =
     let local = Npy.to_bigarray Bigarray.c_layout (precision_to_bigarray_kind prec) local in
-    A.blit (Option.value_exn local) arr
+    A.blit (Option.value_exn ~here:[%here] local) arr
   in
   map_with_prec { f } t

@@ -58,7 +58,7 @@ let () =
   (* The [let x =] line is the same as this except [let%op x =] uses [~grad_spec:If_needed]. *)
   let%op x = x_flat @| step_sym in
   (* let x = Operation.slice ~label:[ "x" ] ~grad_spec:Require_grad step_sym x_flat in *)
-  Train.set_hosted (Option.value_exn x.diff).grad;
+  Train.set_hosted (Option.value_exn ~here:[%here] x.diff).grad;
   let%op fx = f x in
   let module Backend = (val Train.fresh_backend ()) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
@@ -70,7 +70,7 @@ let () =
   let open Operation.At in
   let looping () =
     assert (Backend.to_host routine.context fx.value);
-    assert (Backend.to_host routine.context (Option.value_exn x.diff).grad);
+    assert (Backend.to_host routine.context (Option.value_exn ~here:[%here] x.diff).grad);
     Backend.await device;
     ys.(!step_ref) <- fx.@[0];
     dys.(!step_ref) <- x.@%[0]
@@ -116,7 +116,7 @@ let _suspended () =
   let%op x = x_flat @| step_sym in
   let%op fx = f x in
   Train.set_hosted x.value;
-  Train.set_hosted (Option.value_exn x.diff).grad;
+  Train.set_hosted (Option.value_exn ~here:[%here] x.diff).grad;
   let update = Train.grad_update fx in
   let fx_routine = Backend.(link ctx @@ compile bindings update.fwd_bprop) in
   let step_ref = IDX.find_exn fx_routine.bindings step_sym in

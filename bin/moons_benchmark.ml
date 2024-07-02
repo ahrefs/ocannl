@@ -124,8 +124,12 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   PrintBox_text.output Stdio.stdout plot_lr;
   let final_time = Time_now.nanoseconds_since_unix_epoch () in
   (* TODO: include init time in benchmarks? *)
-  let init_time_in_sec = Int63.(to_float @@ (Option.value_exn !start_time - init_time)) /. 1000_000_000. in
-  let time_in_sec = Int63.(to_float @@ (final_time - Option.value_exn !start_time)) /. 1000_000_000. in
+  let init_time_in_sec =
+    Int63.(to_float @@ (Option.value_exn ~here:[%here] !start_time - init_time)) /. 1000_000_000.
+  in
+  let time_in_sec =
+    Int63.(to_float @@ (final_time - Option.value_exn ~here:[%here] !start_time)) /. 1000_000_000.
+  in
   Stdio.printf "\nTime in sec: %f\n%!" time_in_sec;
   let result =
     PrintBox_utils.Benchmark

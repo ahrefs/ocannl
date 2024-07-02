@@ -84,7 +84,7 @@ let save_params t =
   let out_file = Npy.Npz.open_out file_name in
   List.iter with_names ~f:(fun (v, name) ->
       let f arr = Npy.Npz.write out_file name arr in
-      Nd.map { f } @@ Option.value_exn @@ Lazy.force v.array)
+      Nd.map { f } @@ Option.value_exn ~here:[%here] @@ Lazy.force v.array)
 
 let restore_params t =
   let file_name =
@@ -102,7 +102,7 @@ let restore_params t =
   let in_file = Npy.Npz.open_in file_name in
   List.iter with_names ~f:(fun (v, name) ->
       let f arr = Npy.Npz.restore in_file name arr in
-      Nd.map { f } @@ Option.value_exn @@ Lazy.force v.array)
+      Nd.map { f } @@ Option.value_exn ~here:[%here] @@ Lazy.force v.array)
 
 let set_on_host memtype (a : Tn.t) = Tn.update_memory_mode a (Hosted memtype) 27
 let set_materialized (a : Tn.t) = Tn.update_memory_mode a Materialized 28
@@ -137,7 +137,8 @@ type updaten = {
 let grad_update ?(disable_rootness_check = false) ?(setup_for_parallel = false) loss =
   set_hosted loss.Tensor.value;
   let params = get_params loss in
-  if setup_for_parallel then Set.iter params ~f:(fun p -> set_materialized (Option.value_exn p.diff).grad);
+  if setup_for_parallel then
+    Set.iter params ~f:(fun p -> set_materialized (Option.value_exn ~here:[%here] p.diff).grad);
   let label = label_suffix loss.value.label in
   let fwd = if disable_rootness_check then loss.Tensor.forward else Tensor.consume_forward_code loss in
   let fwd_bprop =
@@ -337,9 +338,9 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     (* FIXME: do we need to sync already? *)
     Backend.(await @@ get_ctx_device ctxs.(from));
     Array.iteri all_params ~f:(fun i p ->
-        let grad_merge = Option.value_exn grad_merges_to.(to_).(i) in
+        let grad_merge = Option.value_exn ~here:[%here] grad_merges_to.(to_).(i) in
         assert (
-          Backend.device_to_device (Option.value_exn p.diff).grad ~into_merge_buffer:Copy
+          Backend.device_to_device (Option.value_exn ~here:[%here] p.diff).grad ~into_merge_buffer:Copy
             ~dst:grad_merge.context ~src:ctxs.(from));
         (Tn.run debug_rt grad_merge.schedule : unit))
   in

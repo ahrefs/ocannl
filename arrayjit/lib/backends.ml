@@ -397,13 +397,17 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         | Streaming -> fun _rt () -> dev.merge_buffer_ptr := Backend.get_buffer tn src.ctx
         | Copy ->
             fun rt () ->
-              let size_in_bytes = Ndarray.size_in_bytes @@ Option.value_exn @@ Lazy.force tn.array in
+              let size_in_bytes =
+                Ndarray.size_in_bytes @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
+              in
               let allocated_capacity = Option.value ~default:0 @@ Option.map dev.allocated_buffer ~f:snd in
               if allocated_capacity < size_in_bytes then
                 dev.allocated_buffer <-
                   Some (Backend.alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes (), size_in_bytes);
               dev.merge_buffer_ptr := Option.map ~f:fst dev.allocated_buffer;
-              Backend.to_buffer ~rt tn ~dst:(Option.value_exn !(dev.merge_buffer_ptr)) ~src:src.ctx
+              Backend.to_buffer ~rt tn
+                ~dst:(Option.value_exn ~here:[%here] !(dev.merge_buffer_ptr))
+                ~src:src.ctx
       in
       schedule_task dev
         Tnode.

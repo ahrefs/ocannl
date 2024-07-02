@@ -419,7 +419,7 @@ let compile_main traced_store info ppf llc : unit =
         if not @@ String.equal num_typ get_typ then fprintf ppf "(%s)" num_typ;
         fprintf ppf "v%d" id.scope_id
     | Get_global (Merge_buffer { source_node_id }, Some idcs) ->
-        let tn = Option.value_exn @@ Tnode.find ~id:source_node_id in
+        let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
         fprintf ppf "@[<2>merge_buffer[%a@]]" pp_array_offset (idcs, Lazy.force tn.dims)
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
@@ -453,7 +453,7 @@ let compile_main traced_store info ppf llc : unit =
         in
         (v ^ "{=%f}", [ `Value v ])
     | Get_global (Merge_buffer { source_node_id }, Some idcs) ->
-        let tn = Option.value_exn @@ Tnode.find ~id:source_node_id in
+        let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
         let v = sprintf "@[<2>merge_buffer[%s@]]" (array_offset_to_string (idcs, Lazy.force tn.dims)) in
         ("merge " ^ Tn.get_debug_name tn ^ "[%u]{=%f}", [ `Accessor (idcs, Lazy.force tn.dims); `Value v ])
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
@@ -584,7 +584,7 @@ let%diagn_sexp cuda_to_ptx ~name cu_src =
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc;
     let oc = Out_channel.open_text @@ f_name ^ ".cu_log" in
-    Stdio.Out_channel.output_string oc @@ Option.value_exn ptx.log;
+    Stdio.Out_channel.output_string oc @@ Option.value_exn ~here:[%here] ptx.log;
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);
   ptx

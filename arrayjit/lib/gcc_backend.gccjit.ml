@@ -217,7 +217,7 @@ let prepare_node ~debug_log_zero_out ~get_ident ctx nodes traced_store ctx_nodes
               let initialize _init_block func = v := Some (Function.local func arr_typ ident) in
               initializations := initialize :: !initializations;
               (* The array is the pointer but the address of the array is the same pointer. *)
-              lazy (RValue.cast ctx (LValue.address @@ Option.value_exn !v) ptr_typ)
+              lazy (RValue.cast ctx (LValue.address @@ Option.value_exn ~here:[%here] !v) ptr_typ)
         in
         let result = { tn; ptr; mem; dims; size_in_bytes; num_typ; prec; zero_initialized } in
         let backend_info = sexp_of_mem_properties mem in
@@ -372,9 +372,9 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
     | Get_global (External_unsafe _, None) -> assert false
     | Get_global (Merge_buffer _, None) -> assert false
     | Get_global (Merge_buffer { source_node_id }, Some idcs) ->
-        let tn = Option.value_exn @@ Tn.find ~id:source_node_id in
+        let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
         let idcs = lookup env idcs in
-        let ptr = Option.value_exn merge_node in
+        let ptr = Option.value_exn ~here:[%here] merge_node in
         let offset = jit_array_offset ctx ~idcs ~dims:(Lazy.force tn.dims) in
         let v = to_d @@ RValue.lvalue @@ LValue.access_array ptr offset in
         ("merge " ^ get_ident tn ^ "[%d]{=%g}", [ offset; v ])
@@ -501,8 +501,8 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         if not @@ Ops.equal_prec prec local_prec then RValue.cast ctx rvalue num_typ else rvalue
     | Get_global ((External_unsafe _ | Merge_buffer _), None) -> assert false
     | Get_global (Merge_buffer { source_node_id }, Some idcs) ->
-        let tn = Option.value_exn @@ Tnode.find ~id:source_node_id in
-        let ptr = Option.value_exn merge_node in
+        let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
+        let ptr = Option.value_exn ~here:[%here] merge_node in
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:(Lazy.force tn.dims) in
         let rvalue = RValue.lvalue @@ LValue.access_array ptr offset in
@@ -685,7 +685,7 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
   let get_ident = Low_level.get_ident_within_code ~no_dots:true [| lowered.llc |] in
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
-  let ctx = Context.create_child @@ Option.value_exn !root_ctx in
+  let ctx = Context.create_child @@ Option.value_exn ~here:[%here] !root_ctx in
   Context.set_option ctx Context.Optimization_level (optimization_level ());
   (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
      Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx Context.Dump_everything
@@ -714,7 +714,7 @@ let%track_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
   in
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();
-  let ctx = Context.create_child @@ Option.value_exn !root_ctx in
+  let ctx = Context.create_child @@ Option.value_exn ~here:[%here] !root_ctx in
   Context.set_option ctx Context.Optimization_level (optimization_level ());
   (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
      Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx Context.Dump_everything
