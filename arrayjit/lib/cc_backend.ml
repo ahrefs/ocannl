@@ -246,9 +246,9 @@ let compile_main ~traced_store info ppf llc : unit =
         let loop_f = pp_float tn.prec in
         let loop_debug_f = debug_float tn.prec in
         let num_closing_braces = pp_top_locals ppf llv in
-        (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
-        fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " ident pp_array_offset (idcs, node.dims) loop_f llv;
+        let num_typ = Ops.cuda_typ_of_prec tn.prec in
         if Utils.settings.debug_log_from_routines then (
+          fprintf ppf "@[<2>{@ @[<2>%s new_set_v =@ %a;@]@ " num_typ loop_f llv;
           let v_code, v_idcs = loop_debug_f llv in
           let pp_args =
             pp_print_list @@ fun ppf -> function
@@ -263,8 +263,13 @@ let compile_main ~traced_store info ppf llc : unit =
           fprintf ppf {|@[<7>fprintf(log_file, @[<h>"# %s\n"@]);@]@ |}
           @@ String.substr_replace_all debug ~pattern:"\n" ~with_:"$";
           fprintf ppf
-            {|@[<7>fprintf(log_file,@ @[<h>"%s[%%u] = %%f = %s\n",@]@ %a,@ %s[%a]%a);@]@ fflush(log_file);@ |}
-            ident v_code pp_array_offset offset ident pp_array_offset offset pp_args v_idcs);
+            {|@[<7>fprintf(log_file,@ @[<h>"%s[%%u] = %%f = %s\n",@]@ %a,@ new_set_v%a);@]@ fflush(log_file);@ |}
+            ident v_code pp_array_offset offset pp_args v_idcs;
+          fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@;<1 -2>}@]@ " ident pp_array_offset
+            (idcs, node.dims))
+        else
+          (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
+          fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " ident pp_array_offset (idcs, node.dims) loop_f llv;
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]@ }@,"
         done

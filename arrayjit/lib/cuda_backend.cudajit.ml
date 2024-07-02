@@ -348,28 +348,33 @@ let compile_main traced_store info ppf llc : unit =
         let loop_f = pp_float ~num_typ:node.num_typ tn.prec in
         let loop_debug_f = debug_float ~num_typ:node.num_typ tn.prec in
         let num_closing_braces = pp_top_locals ppf llv in
-        (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
-        fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr node) pp_array_offset (idcs, node.dims) loop_f llv;
-        (if Utils.settings.debug_log_from_routines then
-           let v_code, v_idcs = loop_debug_f llv in
-           let pp_args =
-             pp_print_list @@ fun ppf -> function
-             | `Accessor idx ->
-                 pp_comma ppf ();
-                 pp_array_offset ppf idx
-             | `Value v ->
-                 pp_comma ppf ();
-                 pp_print_string ppf v
-           in
-           let run_ptr_debug = get_run_ptr_debug node in
-           let run_ptr = get_run_ptr node in
-           let offset = (idcs, node.dims) in
-           let debug_line = "# " ^ String.substr_replace_all debug ~pattern:"\n" ~with_:"$" ^ "\\n" in
-           fprintf ppf
-             "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(\"%%d: %s\", log_id);@ \
-              printf(@[<h>\"%%d: %s[%%u] = %%f = %s\\n\"@], log_id,@ %a,@ %s[%a]%a);@ @]}"
-             debug_line run_ptr_debug v_code pp_array_offset offset run_ptr pp_array_offset offset pp_args
-             v_idcs);
+        let num_typ = Ops.cuda_typ_of_prec tn.prec in
+        if Utils.settings.debug_log_from_routines then (
+          fprintf ppf "@[<2>{@ @[<2>%s new_set_v =@ %a;@]@ " num_typ loop_f llv;
+          let v_code, v_idcs = loop_debug_f llv in
+          let pp_args =
+            pp_print_list @@ fun ppf -> function
+            | `Accessor idx ->
+                pp_comma ppf ();
+                pp_array_offset ppf idx
+            | `Value v ->
+                pp_comma ppf ();
+                pp_print_string ppf v
+          in
+          let run_ptr_debug = get_run_ptr_debug node in
+          let run_ptr = get_run_ptr node in
+          let offset = (idcs, node.dims) in
+          let debug_line = "# " ^ String.substr_replace_all debug ~pattern:"\n" ~with_:"$" ^ "\\n" in
+          fprintf ppf
+            "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(\"%%d: %s\", log_id);@ \
+             printf(@[<h>\"%%d: %s[%%u] = %%f = %s\\n\"@], log_id,@ %a,@ %s[%a]%a);@ @]}"
+            debug_line run_ptr_debug v_code pp_array_offset offset run_ptr pp_array_offset offset pp_args
+            v_idcs;
+          fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@ " (get_run_ptr node) pp_array_offset (idcs, node.dims))
+        else
+          (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
+          fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr node) pp_array_offset (idcs, node.dims) loop_f
+            llv;
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]@ }@,"
         done
