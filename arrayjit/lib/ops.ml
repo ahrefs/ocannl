@@ -71,7 +71,7 @@ let equal_prec p1 p2 =
 
 let prec_in_bytes = function
   | Void_prec -> 0
-  | Byte_prec _ -> 2
+  | Byte_prec _ -> 1
   | Half_prec _ -> 2
   | Single_prec _ -> 4
   | Double_prec _ -> 8
