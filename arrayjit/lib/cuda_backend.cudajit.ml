@@ -9,7 +9,8 @@ module Debug_runtime = Utils.Debug_runtime
 type mem_properties =
   | Local_only
       (** The array is only needed for a single computation and is allocated locally (or spilled). *)
-  | Global  (** Could not perform optimizations: the array is computed directly in the global memory. *)
+  | Global
+      (** Could not perform optimizations: the array is computed directly in the global memory. *)
 [@@deriving sexp, equal, compare, variants]
 
 type tn_info = {
@@ -22,8 +23,8 @@ type tn_info = {
   size_in_bytes : int;
   size_in_elems : int;
   num_typ : string;
-      (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]), [double]
-          (precision [Double]). *)
+      (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]),
+          [double] (precision [Double]). *)
   zero_initialized : bool;
 }
 [@@deriving sexp_of]
@@ -36,7 +37,11 @@ type physical_device = {
 }
 [@@deriving sexp_of]
 
-and device = { physical : physical_device; stream : (Cudajit.stream[@sexp.opaque]); subordinal : int }
+and device = {
+  physical : physical_device;
+  stream : (Cudajit.stream[@sexp.opaque]);
+  subordinal : int;
+}
 
 and context = {
   label : string;
@@ -125,7 +130,9 @@ let get_ctx_device { device; _ } = device
 let get_physical_device { physical; _ } = physical
 let to_ordinal { ordinal; _ } = ordinal
 let to_subordinal { subordinal; _ } = subordinal
-let get_name device = Int.to_string (to_ordinal device.physical) ^ "_" ^ Int.to_string (to_subordinal device)
+
+let get_name device =
+  Int.to_string (to_ordinal device.physical) ^ "_" ^ Int.to_string (to_subordinal device)
 
 let set_ctx ctx =
   let cur_ctx = Cudajit.ctx_get_current () in
@@ -158,14 +165,16 @@ let finalize ctx =
             if phys_equal f_ctx ctx then f ~output))
       ~finally:(fun () ->
         ctx.device.physical.postprocess_queue <-
-          List.filter ctx.device.physical.postprocess_queue ~f:(fun (f_ctx, _) -> phys_equal f_ctx ctx));
+          List.filter ctx.device.physical.postprocess_queue ~f:(fun (f_ctx, _) ->
+              phys_equal f_ctx ctx));
     Map.iter ctx.global_arrays ~f:(fun ptr -> Cudajit.mem_free ptr))
 
 let unsafe_cleanup ?unsafe_shutdown:_ () =
   let len = Core.Weak.length !devices in
   (* TODO: maybe better to do device_primary_ctx_reset if [unsafe_shutdown=false]. *)
   for i = 0 to len - 1 do
-    Option.iter (Core.Weak.get !devices i) ~f:(fun device -> Cudajit.device_primary_ctx_release device.dev)
+    Option.iter (Core.Weak.get !devices i) ~f:(fun device ->
+        Cudajit.device_primary_ctx_release device.dev)
   done;
   Core.Weak.fill !devices 0 len None
 
@@ -180,7 +189,8 @@ let await device =
 
 let is_idle _device = failwith "NOT IMPLEMENTED YET"
 
-let%diagn_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context) tn =
+let%diagn_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context) tn
+    =
   match (Map.find ctx.all_arrays tn, Map.find ctx.global_arrays tn) with
   | Some { tn = { Tn.array = (lazy (Some hosted)); _ }; _ }, Some dst ->
       set_ctx ctx.ctx;
@@ -188,7 +198,8 @@ let%diagn_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option)
       let f src = Cudajit.memcpy_H_to_D ~dst ~src () in
       Ndarray.map { f } hosted;
       (if Utils.settings.with_debug_level > 0 then
-         let module Debug_runtime = (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
+         let module Debug_runtime =
+           (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
          in
          [%log "copied", Tn.label tn, Tn.name tn, "from host"]);
       true
@@ -202,7 +213,8 @@ let%diagn_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (
       let f dst = Cudajit.memcpy_D_to_H ~dst ~src () in
       Ndarray.map { f } hosted;
       if Utils.settings.with_debug_level > 0 then (
-        let module Debug_runtime = (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
+        let module Debug_runtime =
+          (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
         in
         [%log "copied", Tn.label tn, Tn.name tn, "to host"];
         if Utils.settings.with_debug_level > 1 then
@@ -212,8 +224,8 @@ let%diagn_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (
       true
   | _ -> false
 
-let%diagn_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn ~into_merge_buffer
-    ~dst ~src =
+let%diagn_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn
+    ~into_merge_buffer ~dst ~src =
   Option.value ~default:false
   @@ Option.map (Map.find src.global_arrays tn) ~f:(fun s_arr ->
          Option.value ~default:false
@@ -269,7 +281,10 @@ let array_offset_to_string (idcs, dims) =
   Buffer.contents b
 
 let get_run_ptr array =
-  match (array.global, array.local) with _, Some lv -> lv | Some rv, _ -> rv | None, None -> assert false
+  match (array.global, array.local) with
+  | _, Some lv -> lv
+  | Some rv, _ -> rv
+  | None, None -> assert false
 
 let get_run_ptr_debug array =
   match (array.global, array.local) with
@@ -277,8 +292,8 @@ let get_run_ptr_debug array =
   | Some rv, _ -> "global_" ^ rv
   | None, None -> assert false
 
-(* let compute_array_offset ~idcs ~dims = Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx +
-   (offset * dim)) *)
+(* let compute_array_offset ~idcs ~dims = Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim
+   -> idx + (offset * dim)) *)
 
 let%debug_sexp prepare_node traced_store info tn =
   Hash_set.add info.used_tensors tn;
@@ -325,15 +340,16 @@ let compile_main traced_store info ppf llc : unit =
     match c with
     | Low_level.Noop -> ()
     | Seq (c1, c2) ->
-        (* Note: no separator. Filter out some entries known to not generate code to avoid whitespace. *)
+        (* Note: no separator. Filter out some entries known to not generate code to avoid
+           whitespace. *)
         fprintf ppf "@[<v 0>%a@]" (pp_print_list pp_ll)
           (List.filter [ c1; c2 ] ~f:(function
             | Noop -> false
             | Zero_out ptr -> not Low_level.(get_node traced_store ptr).zero_initialized
             | _ -> true))
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-        fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_ pp_index i to_
-          pp_index i pp_ll body
+        fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_
+          pp_index i to_ pp_index i pp_ll body
     | Zero_out tn ->
         if Hash_set.mem visited tn then
           pp_ll ppf
@@ -364,25 +380,28 @@ let compile_main traced_store info ppf llc : unit =
           let run_ptr_debug = get_run_ptr_debug node in
           let run_ptr = get_run_ptr node in
           let offset = (idcs, node.dims) in
-          let debug_line = "# " ^ String.substr_replace_all debug ~pattern:"\n" ~with_:"$" ^ "\\n" in
+          let debug_line =
+            "# " ^ String.substr_replace_all debug ~pattern:"\n" ~with_:"$" ^ "\\n"
+          in
           fprintf ppf
-            "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(\"%%d: %s\", log_id);@ \
-             printf(@[<h>\"%%d: %s[%%u] = %%f = %s\\n\"@], log_id,@ %a,@ %s[%a]%a);@ @]}"
-            debug_line run_ptr_debug v_code pp_array_offset offset run_ptr pp_array_offset offset pp_args
-            v_idcs;
-          fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@ " (get_run_ptr node) pp_array_offset (idcs, node.dims))
+            "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(\"%%d: %s\", \
+             log_id);@ printf(@[<h>\"%%d: %s[%%u] = %%f = %s\\n\"@], log_id,@ %a,@ %s[%a]%a);@ @]}"
+            debug_line run_ptr_debug v_code pp_array_offset offset run_ptr pp_array_offset offset
+            pp_args v_idcs;
+          fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@ " (get_run_ptr node) pp_array_offset
+            (idcs, node.dims))
         else
           (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
-          fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr node) pp_array_offset (idcs, node.dims) loop_f
-            llv;
+          fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr node) pp_array_offset
+            (idcs, node.dims) loop_f llv;
         for _ = 1 to num_closing_braces do
           fprintf ppf "@]@ }@,"
         done
     | Comment message ->
         if Utils.settings.debug_log_from_routines then
           fprintf ppf
-            "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"%%d: COMMENT: %s\\n\", \
-             log_id@]);@ @]}"
+            "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"%%d: COMMENT: \
+             %s\\n\", log_id@]);@ @]}"
             (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
         else fprintf ppf "/* %s */@ " message
     | Staged_compilation callback -> callback ()
@@ -397,8 +416,8 @@ let compile_main traced_store info ppf llc : unit =
     match vcomp with
     | Local_scope { id = { scope_id = i; tn = { prec; _ } }; body; orig_indices = _ } ->
         let num_typ = Ops.cuda_typ_of_prec prec in
-        (* Arrays are initialized to 0 by default. However, there is typically an explicit initialization for
-           virtual nodes. *)
+        (* Arrays are initialized to 0 by default. However, there is typically an explicit
+           initialization for virtual nodes. *)
         fprintf ppf "@[<2>{@ %s v%d = 0;@ " num_typ i;
         pp_ll ppf body;
         pp_print_space ppf ();
@@ -428,7 +447,8 @@ let compile_main traced_store info ppf llc : unit =
         fprintf ppf "@[<2>%s[%a@]]" (get_run_ptr node) pp_array_offset (idcs, node.dims)
     | Constant c -> fprintf ppf "(%f)" c
     | Embed_index idx ->
-        if not @@ List.exists ~f:(String.equal num_typ) [ "int"; "size_t" ] then fprintf ppf "(%s)" num_typ;
+        if not @@ List.exists ~f:(String.equal num_typ) [ "int"; "size_t" ] then
+          fprintf ppf "(%s)" num_typ;
         pp_index_axis ppf idx
     | Binop (Arg1, v1, _v2) -> loop ppf v1
     | Binop (Arg2, _v1, v2) -> loop ppf v2
@@ -443,7 +463,8 @@ let compile_main traced_store info ppf llc : unit =
     let loop = debug_float ~num_typ prec in
     match value with
     | Local_scope { id; _ } ->
-        (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug logs. *)
+        (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug
+           logs. *)
         loop @@ Get_local id
     | Get_local id ->
         let get_typ = Ops.cuda_typ_of_prec id.tn.prec in
@@ -454,12 +475,17 @@ let compile_main traced_store info ppf llc : unit =
         (v ^ "{=%f}", [ `Value v ])
     | Get_global (Merge_buffer { source_node_id }, Some idcs) ->
         let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
-        let v = sprintf "@[<2>merge_buffer[%s@]]" (array_offset_to_string (idcs, Lazy.force tn.dims)) in
-        ("merge " ^ Tn.get_debug_name tn ^ "[%u]{=%f}", [ `Accessor (idcs, Lazy.force tn.dims); `Value v ])
+        let v =
+          sprintf "@[<2>merge_buffer[%s@]]" (array_offset_to_string (idcs, Lazy.force tn.dims))
+        in
+        ( "merge " ^ Tn.get_debug_name tn ^ "[%u]{=%f}",
+          [ `Accessor (idcs, Lazy.force tn.dims); `Value v ] )
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         let node = get_node tn in
-        let v = sprintf "@[<2>%s[%s@]]" (get_run_ptr node) (array_offset_to_string (idcs, node.dims)) in
+        let v =
+          sprintf "@[<2>%s[%s@]]" (get_run_ptr node) (array_offset_to_string (idcs, node.dims))
+        in
         (get_run_ptr_debug node ^ "[%u]{=%f}", [ `Accessor (idcs, node.dims); `Value v ])
     | Constant c -> (Float.to_string c, [])
     | Embed_index (Fixed_idx i) -> (Int.to_string i, [])
@@ -521,9 +547,12 @@ type code_batch = {
 }
 [@@deriving sexp_of]
 
-let%track_sexp compile_proc ~name ~get_ident ppf idx_params Low_level.{ traced_store; llc; merge_node } =
+let%track_sexp compile_proc ~name ~get_ident ppf idx_params
+    Low_level.{ traced_store; llc; merge_node } =
   let open Stdlib.Format in
-  let info = { nodes = Hashtbl.create (module Tn); used_tensors = Hash_set.create (module Tn); get_ident } in
+  let info =
+    { nodes = Hashtbl.create (module Tn); used_tensors = Hash_set.create (module Tn); get_ident }
+  in
   prepare_nodes traced_store info llc;
   let arrays = Hash_set.to_list info.used_tensors in
   let params =
@@ -536,15 +565,19 @@ let%track_sexp compile_proc ~name ~get_ident ppf idx_params Low_level.{ traced_s
         | Global -> Option.map node.global ~f:(fun n -> node.num_typ ^ " *" ^ n))
   in
   let idx_params =
-    List.map idx_params ~f:(fun { Indexing.static_symbol; _ } -> "int " ^ Indexing.symbol_ident static_symbol)
+    List.map idx_params ~f:(fun { Indexing.static_symbol; _ } ->
+        "int " ^ Indexing.symbol_ident static_symbol)
   in
   let merge_buffer_param =
-    Option.to_list merge_node |> List.map ~f:(fun tn -> Ops.cuda_typ_of_prec tn.prec ^ " *merge_buffer")
+    Option.to_list merge_node
+    |> List.map ~f:(fun tn -> Ops.cuda_typ_of_prec tn.prec ^ " *merge_buffer")
   in
   let log_id = if Utils.settings.debug_log_from_routines then [ "int log_id" ] else [] in
-  fprintf ppf "extern \"C\" __global__ void %s(%a) {@," name (pp_print_list ~pp_sep:pp_comma pp_print_string)
+  fprintf ppf "extern \"C\" __global__ void %s(%a) {@," name
+    (pp_print_list ~pp_sep:pp_comma pp_print_string)
   @@ log_id @ merge_buffer_param @ idx_params @ params;
-  fprintf ppf "/* FIXME: single-threaded for now. */@,if (threadIdx.x != 0 || blockIdx.x != 0) { return; }@ ";
+  fprintf ppf
+    "/* FIXME: single-threaded for now. */@,if (threadIdx.x != 0 || blockIdx.x != 0) { return; }@ ";
   (* TODO: The following link seems to claim it's better to expand into loops.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
   fprintf ppf "/* Thread-local declarations and initialization. */@,";
@@ -591,7 +624,8 @@ let%diagn_sexp cuda_to_ptx ~name cu_src =
 
 type buffer_ptr = Cudajit.deviceptr
 
-let sexp_of_buffer_ptr (Cudajit.Deviceptr ptr : buffer_ptr) = Sexp.Atom (Unsigned.UInt64.to_hexstring ptr)
+let sexp_of_buffer_ptr (Cudajit.Deviceptr ptr : buffer_ptr) =
+  Sexp.Atom (Unsigned.UInt64.to_hexstring ptr)
 
 let alloc_buffer ?old_buffer ~size_in_bytes () =
   match old_buffer with
@@ -620,7 +654,9 @@ let%diagn_sexp link_proc (old_context : context) ~name info ptx =
 
 let compile ?name bindings ({ Low_level.llc; _ } as lowered) =
   let get_ident = Low_level.get_ident_within_code ~no_dots:true [| llc |] in
-  let name : string = Option.value_or_thunk name ~default:(fun () -> Low_level.extract_block_name [ llc ]) in
+  let name : string =
+    Option.value_or_thunk name ~default:(fun () -> Low_level.extract_block_name [ llc ])
+  in
   let idx_params = Indexing.bound_symbols bindings in
   let b = Buffer.create 4096 in
   let ppf = Stdlib.Format.formatter_of_buffer b in
@@ -644,7 +680,8 @@ let compile_batch ~names bindings lowereds =
   in
   let name : string =
     String.(
-      strip ~drop:(equal_char '_') @@ common_prefix (Array.to_list names |> List.concat_map ~f:Option.to_list))
+      strip ~drop:(equal_char '_')
+      @@ common_prefix (Array.to_list names |> List.concat_map ~f:Option.to_list))
   in
   let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
   { ptx; infos; bindings; names }
@@ -674,18 +711,20 @@ let link old_context (code : code) =
             raise
             @@ Utils.User_error
                  [%string
-                   "Exec_as_cuda: static index %{Indexing.symbol_ident static_symbol} is negative: %{!i#Int}"];
+                   "Exec_as_cuda: static index %{Indexing.symbol_ident static_symbol} is negative: \
+                    %{!i#Int}"];
           Option.iter static_range ~f:(fun upto ->
               if !i >= upto then
                 raise
                 @@ Utils.User_error
                      [%string
-                       "Exec_as_cuda: static index %{Indexing.symbol_ident static_symbol} is too big: \
-                        %{upto#Int}"]);
+                       "Exec_as_cuda: static index %{Indexing.symbol_ident static_symbol} is too \
+                        big: %{upto#Int}"]);
           Cu.Int !i)
     in
     let args =
-      (* TODO: should we prohibit or warn about Local_only tensors that are in old_context.global_arrays? *)
+      (* TODO: should we prohibit or warn about Local_only tensors that are in
+         old_context.global_arrays? *)
       let arrays = Hash_set.to_list code.info.used_tensors in
       List.filter_map arrays ~f:(fun tn ->
           let node = Hashtbl.find_exn code.info.nodes tn in
@@ -698,9 +737,11 @@ let link old_context (code : code) =
     Map.iteri global_arrays ~f:(fun ~key ~data:ptr ->
         if Hash_set.mem code.info.used_tensors key then
           let node = Map.find_exn all_arrays key in
-          if node.zero_initialized then Cu.memset_d8 ptr Unsigned.UChar.zero ~length:node.size_in_bytes);
+          if node.zero_initialized then
+            Cu.memset_d8 ptr Unsigned.UChar.zero ~length:node.size_in_bytes);
     [%log "launching the kernel"];
-    (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
+    (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE
+       4096; *)
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream
     @@ log_arg @ idx_args @ args;
     [%log "kernel launched"];

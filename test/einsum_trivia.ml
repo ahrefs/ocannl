@@ -45,7 +45,9 @@ let%expect_test "einsum1 permute axes" =
     ││      │ 2.00e+0  1.40e+1 │ 5.00e+0  1.70e+1 │ 8.00e+0  2.00e+1 │ 1.10e+1  2.30e+1 ││
     │└──────┴──────────────────┴──────────────────┴──────────────────┴──────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────┘ |}];
-  let hey2 = TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] () in
+  let hey2 =
+    TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] ()
+  in
   let%op ho2 = hey2 ++ "ab|cd->ef => cf|ae->db" in
   Train.forward_and_forget backend ctx ho2;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey2;
@@ -293,11 +295,13 @@ let%expect_test "einsum1 sum out axes" =
     ││      │ 6.60e+1  7.00e+1  7.40e+1 ││
     │└──────┴───────────────────────────┘│
     └────────────────────────────────────┘ |}];
-  let hey2 = TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] () in
+  let hey2 =
+    TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] ()
+  in
   let%op ho2 = hey2 ++ "ab|cd->ef => c|a->d" in
   Train.forward_and_forget backend ctx ho2;
-  (* Axis 5 of hey2, i.e. d in the einsum spec, has the lowest variation (progresses by 1), that's why axis 1
-     of ho2 appears nearly constant. *)
+  (* Axis 5 of hey2, i.e. d in the einsum spec, has the lowest variation (progresses by 1), that's
+     why axis 1 of ho2 appears nearly constant. *)
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho2;
   [%expect
     {|
@@ -702,7 +706,9 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     │└──────┴───────────────────────────┴───────────────────────────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
 
-  let hey2 = TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] () in
+  let hey2 =
+    TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] ()
+  in
   let%op ho3 = hey2 ++ "...b|...i->...o => ...i|...o->...b" in
   Train.forward_and_forget backend ctx ho3;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey2;
@@ -1497,8 +1503,12 @@ let%expect_test "einsum with a leftmost input axis preserved as output axis" =
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
-  let a = TDSL.range_of_shape ~label:[ "a" ] ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
-  let b = TDSL.range_of_shape ~label:[ "b" ] ~batch_dims:[ 3 ] ~input_dims:[ 2; 3 ] ~output_dims:[ 4 ] () in
+  let a =
+    TDSL.range_of_shape ~label:[ "a" ] ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] ()
+  in
+  let b =
+    TDSL.range_of_shape ~label:[ "b" ] ~batch_dims:[ 3 ] ~input_dims:[ 2; 3 ] ~output_dims:[ 4 ] ()
+  in
   let%op c = a *+ "...|i->1; ...|j...->i => ...|ij" b in
   Train.forward_and_forget backend ctx c;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ a;
@@ -1575,7 +1585,8 @@ let%expect_test "einsum permuting two leftmost input axes as output axes" =
   let%op c = a *+ "i->1; ij...->0 => ...->ji" b in
   Train.forward_and_forget backend ctx c;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ a;
-  [%expect {|
+  [%expect
+    {|
     ┌────────────────────────────┐
     │[62]: r2x2_a shape 1:2->0:2 │
     │┌──────┬──────────────────┐ │
@@ -1586,7 +1597,8 @@ let%expect_test "einsum permuting two leftmost input axes as output axes" =
     │└──────┴──────────────────┘ │
     └────────────────────────────┘ |}];
   Tensor.print ~with_code:false ~with_grad:false `Default @@ b;
-  [%expect {|
+  [%expect
+    {|
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[63]: r2x2x3x4_b shape 1:2,2:3,3:4->0:2                                                                                │
     │┌──────┬────────────────────────────────────┬────────────────────────────────────┬────────────────────────────────────┐│
@@ -1601,7 +1613,8 @@ let%expect_test "einsum permuting two leftmost input axes as output axes" =
     │└──────┴────────────────────────────────────┴────────────────────────────────────┴────────────────────────────────────┘│
     └───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}];
   Tensor.print ~with_code:false ~with_grad:false `Default @@ c;
-  [%expect {|
+  [%expect
+    {|
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[64]: ;=>_c shape 2:4->0:3,1:2                                                                                         │
     │┌──────┬────────────────────────────────────┬────────────────────────────────────┬────────────────────────────────────┐│

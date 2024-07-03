@@ -16,7 +16,9 @@ type half_nd = (float, Ops.float16_elt) bigarray
 type single_nd = (float, Ops.float32_elt) bigarray
 type double_nd = (float, Ops.float64_elt) bigarray
 
-let sexp_of_address_of arr = Sexp.Atom ("@" ^ Nativeint.Hex.to_string @@ Ctypes_bigarray.unsafe_address arr)
+let sexp_of_address_of arr =
+  Sexp.Atom ("@" ^ Nativeint.Hex.to_string @@ Ctypes_bigarray.unsafe_address arr)
+
 let sexp_of_byte_nd (arr : byte_nd) = sexp_of_address_of arr
 let sexp_of_half_nd (arr : half_nd) = sexp_of_address_of arr
 let sexp_of_single_nd (arr : single_nd) = sexp_of_address_of arr
@@ -25,7 +27,8 @@ let sexp_of_double_nd (arr : double_nd) = sexp_of_address_of arr
 type t = Byte_nd of byte_nd | Half_nd of half_nd | Single_nd of single_nd | Double_nd of double_nd
 [@@deriving sexp_of]
 
-let as_array (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) (arr : (ocaml, elt_t) bigarray) =
+let as_array (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision)
+    (arr : (ocaml, elt_t) bigarray) =
   match prec with
   | Byte -> Byte_nd arr
   | Half -> Half_nd arr
@@ -75,8 +78,8 @@ let init_bigarray_of_prec (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precisio
 let indices_to_offset ~dims ~idcs =
   Array.fold2_exn dims idcs ~init:0 ~f:(fun accu dim idx -> (accu * dim) + idx)
 
-let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~dims (init_op : Ops.init_op) :
-    (ocaml, elt_t) bigarray =
+let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~dims
+    (init_op : Ops.init_op) : (ocaml, elt_t) bigarray =
   Option.iter Utils.settings.fixed_state_for_init ~f:(fun seed -> Rand.Lib.init seed);
   let constant_fill_f f values strict =
     let len = Array.length values in
@@ -86,28 +89,35 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
         raise
         @@ Utils.User_error
              [%string
-               "Ndarray.create_bigarray: Constant_fill: invalid data size %{len#Int}, expected %{size#Int}"];
+               "Ndarray.create_bigarray: Constant_fill: invalid data size %{len#Int}, expected \
+                %{size#Int}"];
       init_bigarray_of_prec prec dims ~f:(fun idcs -> f values.(indices_to_offset ~dims ~idcs)))
-    else init_bigarray_of_prec prec dims ~f:(fun idcs -> f values.(indices_to_offset ~dims ~idcs % len))
+    else
+      init_bigarray_of_prec prec dims ~f:(fun idcs ->
+          f values.(indices_to_offset ~dims ~idcs % len))
   in
   let constant_fill_float values strict = constant_fill_f Fn.id values strict in
   match (prec, init_op) with
   | Ops.Half, Constant_fill { values; strict } -> constant_fill_float values strict
   | Ops.Half, Range_over_offsets ->
       init_bigarray_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Ops.Half, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Rand.Lib.float_range 0.0 1.0)
+  | Ops.Half, Standard_uniform ->
+      init_bigarray_of_prec prec dims ~f:(fun _ -> Rand.Lib.float_range 0.0 1.0)
   | Ops.Single, Constant_fill { values; strict } -> constant_fill_float values strict
   | Ops.Single, Range_over_offsets ->
       init_bigarray_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Ops.Single, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Rand.Lib.float_range 0.0 1.0)
+  | Ops.Single, Standard_uniform ->
+      init_bigarray_of_prec prec dims ~f:(fun _ -> Rand.Lib.float_range 0.0 1.0)
   | Ops.Double, Constant_fill { values; strict } -> constant_fill_float values strict
   | Ops.Double, Range_over_offsets ->
       init_bigarray_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Ops.Double, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Rand.Lib.float_range 0.0 1.0)
+  | Ops.Double, Standard_uniform ->
+      init_bigarray_of_prec prec dims ~f:(fun _ -> Rand.Lib.float_range 0.0 1.0)
   | Ops.Byte, Constant_fill { values; strict } ->
       constant_fill_f (Fn.compose Char.of_int_exn Int.of_float) values strict
   | Ops.Byte, Range_over_offsets ->
-      init_bigarray_of_prec prec dims ~f:(fun idcs -> Char.of_int_exn @@ indices_to_offset ~dims ~idcs)
+      init_bigarray_of_prec prec dims ~f:(fun idcs ->
+          Char.of_int_exn @@ indices_to_offset ~dims ~idcs)
   | Ops.Byte, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Rand.Lib.char ())
   | _, File_mapped (filename, stored_prec) ->
       (* See: https://github.com/janestreet/torch/blob/master/src/torch/dataset_helper.ml#L3 *)
@@ -115,8 +125,8 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
         raise
         @@ Utils.User_error
              [%string
-               "Ndarray.create_bigarray: File_mapped: precision mismatch %{Ops.prec_string stored_prec} vs \
-                %{Ops.precision_to_string prec}"];
+               "Ndarray.create_bigarray: File_mapped: precision mismatch %{Ops.prec_string \
+                stored_prec} vs %{Ops.precision_to_string prec}"];
       let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
       let len = Unix.lseek fd 0 Unix.SEEK_END in
       ignore (Unix.lseek fd 0 Unix.SEEK_SET : int);
@@ -126,10 +136,11 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
         raise
         @@ Utils.User_error
              [%string
-               "Ndarray.create_bigarray: File_mapped: invalid file bytes %{len#Int}, expected %{size * \
-                Ops.prec_in_bytes stored_prec#Int}"]);
+               "Ndarray.create_bigarray: File_mapped: invalid file bytes %{len#Int}, expected \
+                %{size * Ops.prec_in_bytes stored_prec#Int}"]);
       let ba =
-        Unix.map_file fd (precision_to_bigarray_kind prec) Bigarray.c_layout false dims ~pos:(Int64.of_int 0)
+        Unix.map_file fd (precision_to_bigarray_kind prec) Bigarray.c_layout false dims
+          ~pos:(Int64.of_int 0)
       in
       Unix.close fd;
       ba
@@ -138,7 +149,8 @@ let create_array prec ~dims init_op =
   let f prec = as_array prec @@ create_bigarray prec ~dims init_op in
   Ops.map_prec { f } prec
 
-let empty_array prec = create_array prec ~dims:[||] (Constant_fill { values = [| 0.0 |]; strict = false })
+let empty_array prec =
+  create_array prec ~dims:[||] (Constant_fill { values = [| 0.0 |]; strict = false })
 
 (** {2 *** Accessing ***} *)
 
@@ -207,7 +219,8 @@ let set_bigarray arr ~f =
   let len = Array.length dims in
   cloop (Array.create ~len 0) f 0
 
-let reset_bigarray (init_op : Ops.init_op) (type o b) (prec : (o, b) Ops.precision) (arr : (o, b) bigarray) =
+let reset_bigarray (init_op : Ops.init_op) (type o b) (prec : (o, b) Ops.precision)
+    (arr : (o, b) bigarray) =
   let dims = A.dims arr in
   let constant_set_f f values strict =
     let len = Array.length values in
@@ -217,7 +230,8 @@ let reset_bigarray (init_op : Ops.init_op) (type o b) (prec : (o, b) Ops.precisi
         raise
         @@ Utils.User_error
              [%string
-               "Ndarray.reset_bigarray: Constant_fill: invalid data size %{len#Int}, expected %{size#Int}"];
+               "Ndarray.reset_bigarray: Constant_fill: invalid data size %{len#Int}, expected \
+                %{size#Int}"];
       set_bigarray arr ~f:(fun idcs -> f values.(indices_to_offset ~dims ~idcs)))
     else set_bigarray arr ~f:(fun idcs -> f values.(indices_to_offset ~dims ~idcs % len))
   in
@@ -263,14 +277,15 @@ let fold_bigarray arr ~init ~f =
 
 let fold_as_float ~init ~f arr =
   match arr with
-  | Byte_nd arr -> fold_bigarray ~init ~f:(fun accu idx c -> f accu idx @@ Float.of_int @@ Char.to_int c) arr
+  | Byte_nd arr ->
+      fold_bigarray ~init ~f:(fun accu idx c -> f accu idx @@ Float.of_int @@ Char.to_int c) arr
   | Half_nd arr -> fold_bigarray ~init ~f arr
   | Single_nd arr -> fold_bigarray ~init ~f arr
   | Double_nd arr -> fold_bigarray ~init ~f arr
 
 let size_in_bytes v =
-  (* Cheating here because 1 number Bigarray is same size as empty Bigarray: it's more informative to report
-     the cases differently. *)
+  (* Cheating here because 1 number Bigarray is same size as empty Bigarray: it's more informative
+     to report the cases differently. *)
   let f arr = if Array.is_empty @@ A.dims arr then 0 else A.size_in_bytes arr in
   map { f } v
 
@@ -350,38 +365,45 @@ let retrieve_flat_values arr =
 
 (** {2 *** Printing ***} *)
 
-(** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2. Outputs
-    ["-"] for empty dimensions. *)
+(** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
+    Outputs ["-"] for empty dimensions. *)
 let int_dims_to_string ?(with_axis_numbers = false) dims =
   if Array.is_empty dims then "-"
   else if with_axis_numbers then
-    String.concat_array ~sep:" x " @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ Int.to_string s)
+    String.concat_array ~sep:" x "
+    @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ Int.to_string s)
   else String.concat_array ~sep:"x" @@ Array.map dims ~f:Int.to_string
 
 let concise_float ~prec v =
   Printf.sprintf "%.*e" prec v
-  |> (* The C99 standard requires at least two digits for the exponent, but the leading zero is a waste of
-        space. *)
+  |> (* The C99 standard requires at least two digits for the exponent, but the leading zero is a
+        waste of space. *)
   String.substr_replace_first ~pattern:"e+0" ~with_:"e+"
   |> String.substr_replace_first ~pattern:"e-0" ~with_:"e-"
 
-(** Prints 0-based [indices] entries out of [arr], where a number between [-5] and [-1] in an axis means to
-    print out the axis, and a non-negative number means to print out only the indexed dimension of the axis.
-    Prints up to [entries_per_axis] or [entries_per_axis+1] entries per axis, possibly with ellipsis in the
-    middle. [labels] provides the axis labels for all axes (use [""] or ["_"] for no label). The last label
-    corresponds to axis [-1] etc. The printed out axes are arranged as:
+(** Prints 0-based [indices] entries out of [arr], where a number between [-5] and [-1] in an axis
+    means to print out the axis, and a non-negative number means to print out only the indexed
+    dimension of the axis. Prints up to [entries_per_axis] or [entries_per_axis+1] entries per axis,
+    possibly with ellipsis in the middle. [labels] provides the axis labels for all axes (use [""]
+    or ["_"] for no label). The last label corresponds to axis [-1] etc. The printed out axes are
+    arranged as:
     - [-1]: a horizontal segment in an inner rectangle (i.e. column numbers of the inner rectangle),
     - [-2]: a sequence of segments in a line of text (i.e. column numbers of an outer rectangle),
     - [-3]: a vertical segment in an inner rectangle (i.e. row numbers of the inner rectangle),
     - [-4]: a vertical sequence of segments (i.e. column numbers of an outer rectangle),
     - [-5]: a sequence of screens of text (i.e. stack numbers of outer rectangles). *)
-let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labels = [||]) ~indices arr =
+let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(labels = [||]) ~indices
+    arr =
   let module B = PrintBox in
   let dims = dims arr in
   let has_nan = fold_as_float ~init:false ~f:(fun has_nan _ v -> has_nan || Float.is_nan v) arr in
-  let has_inf = fold_as_float ~init:false ~f:(fun has_inf _ v -> has_inf || Float.(v = infinity)) arr in
+  let has_inf =
+    fold_as_float ~init:false ~f:(fun has_inf _ v -> has_inf || Float.(v = infinity)) arr
+  in
   let has_neg_inf =
-    fold_as_float ~init:false ~f:(fun has_neg_inf _ v -> has_neg_inf || Float.(v = neg_infinity)) arr
+    fold_as_float ~init:false
+      ~f:(fun has_neg_inf _ v -> has_neg_inf || Float.(v = neg_infinity))
+      arr
   in
   let header =
     prefix
@@ -393,11 +415,16 @@ let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(label
   if Array.is_empty dims then B.vlist ~bars:false [ B.text header; B.line "<void>" ]
   else
     let indices = Array.copy indices in
-    let entries_per_axis = if entries_per_axis % 2 = 0 then entries_per_axis + 1 else entries_per_axis in
-    let var_indices = Array.filter_mapi indices ~f:(fun i d -> if d <= -1 then Some (5 + d, i) else None) in
+    let entries_per_axis =
+      if entries_per_axis % 2 = 0 then entries_per_axis + 1 else entries_per_axis
+    in
+    let var_indices =
+      Array.filter_mapi indices ~f:(fun i d -> if d <= -1 then Some (5 + d, i) else None)
+    in
     let extra_indices =
       [| (0, -1); (1, -1); (2, -1); (3, -1); (4, -1) |]
-      |> Array.filter ~f:(Fn.non @@ Array.mem var_indices ~equal:(fun (a, _) (b, _) -> Int.equal a b))
+      |> Array.filter
+           ~f:(Fn.non @@ Array.mem var_indices ~equal:(fun (a, _) (b, _) -> Int.equal a b))
     in
     let var_indices = Array.append extra_indices var_indices in
     Array.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b) var_indices;
@@ -443,19 +470,22 @@ let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(label
             B.hpad 1 @@ B.line
             @@
             if is_ellipsis () then "..."
-            else concise_float ~prec:Utils.settings.print_decimals_precision (get_as_float arr indices)
+            else
+              concise_float ~prec:Utils.settings.print_decimals_precision (get_as_float arr indices)
           with Invalid_argument _ ->
             raise
             @@ Utils.User_error
                  [%string
-                   "Invalid indices: %{int_dims_to_string indices} into array: %{(int_dims_to_string dims)}"])
+                   "Invalid indices: %{int_dims_to_string indices} into array: \
+                    %{(int_dims_to_string dims)}"])
     in
     let tag ?pos label ind =
       if ind = -1 then ""
       else
         match pos with
         | Some pos when elide_for pos ~ind -> "~~~~~"
-        | Some pos when pos >= 0 -> Int.to_string (expand pos ~ind) ^ " @ " ^ label ^ Int.to_string ind
+        | Some pos when pos >= 0 ->
+            Int.to_string (expand pos ~ind) ^ " @ " ^ label ^ Int.to_string ind
         | _ -> "axis " ^ label ^ Int.to_string ind
     in
     let nlines = if brief then size1 else size1 + 1 in
@@ -476,7 +506,8 @@ let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(label
              else
                let nline = if brief then line else line - 1 in
                let ncol = if brief then col else col - 1 in
-               if elide_for ncol ~ind:ind2 || elide_for nline ~ind:ind1 then B.hpad 1 @@ B.line "..."
+               if elide_for ncol ~ind:ind2 || elide_for nline ~ind:ind1 then
+                 B.hpad 1 @@ B.line "..."
                else inner_grid v nline ncol)
     in
     let screens =
@@ -497,7 +528,9 @@ let pp_array_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?axes_s
   (match axes_spec with None -> () | Some spec -> fprintf fmt "\"%s\" " spec);
   let rec loop axis =
     let sep =
-      if axis < num_batch_axes then ";" else if axis < num_batch_axes + num_output_axes then ";" else ","
+      if axis < num_batch_axes then ";"
+      else if axis < num_batch_axes + num_output_axes then ";"
+      else ","
     in
     let open_delim =
       if axis < num_batch_axes then "[|"

@@ -13,8 +13,10 @@ let ndarray_op ?ident_label ?axis_labels expr =
     | Some axis_labels -> [%expr TDSL.ndarray ~axis_labels:[%e axis_labels]]
   in
   [%expr
-    [%e op] ~label:[%e opt_pat2string_list ~loc ident_label] ~batch_dims:[%e edims batch_dims]
-      ~input_dims:[%e edims input_dims] ~output_dims:[%e edims output_dims] [%e values]]
+    [%e op]
+      ~label:[%e opt_pat2string_list ~loc ident_label]
+      ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
+      ~output_dims:[%e edims output_dims] [%e values]]
 
 let make_vb ?value ~loc ~str_loc ~ident string =
   let pat = Ast_helper.Pat.var ~loc { loc = str_loc; txt = ident } in
@@ -49,8 +51,8 @@ let make_vb_nd ~loc ~str_loc ?axis_labels ~ident ~init_nd string =
         | Some axis_labels -> [%expr TDSL.param ~axis_labels:[%e axis_labels]]
       in
       [%expr
-        [%e op] ~input_dims:[%e edims input_dims] ~output_dims:[%e edims output_dims] ~values:[%e values]
-          [%e string]]
+        [%e op] ~input_dims:[%e edims input_dims] ~output_dims:[%e edims output_dims]
+          ~values:[%e values] [%e string]]
   in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
@@ -65,16 +67,24 @@ let rec translate ?ident_label expr =
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
         [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
-      let axis = Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None)) in
+      let axis =
+        Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
+      in
       ( no_vbs,
-        [%expr TDSL.number ~label:[%e opt_pat2string_list ~loc ident_label] ~axis_label:[%e axis] [%e f]] )
+        [%expr
+          TDSL.number ~label:[%e opt_pat2string_list ~loc ident_label] ~axis_label:[%e axis] [%e f]]
+      )
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
         [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
-      let axis = Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None)) in
+      let axis =
+        Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
+      in
       ( no_vbs,
         [%expr
-          TDSL.number ~label:[%e opt_pat2string_list ~loc ident_label] ~axis_label:[%e axis]
+          TDSL.number
+            ~label:[%e opt_pat2string_list ~loc ident_label]
+            ~axis_label:[%e axis]
             (Float.of_int [%e i])] )
   | [%expr
       [%e? expr1]
@@ -83,8 +93,10 @@ let rec translate ?ident_label expr =
       let vbs1, e1 = translate expr1 in
       let vbs2, e2 = translate expr2 in
       ( reduce_vbss [ vbs1; vbs2 ],
-        [%expr TDSL.einsum ~label:[%e opt_pat2string_list ~loc ident_label] [%e spec] [%e e1] [%e e2]] )
-  | [%expr [%e? expr1] ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]]
+        [%expr
+          TDSL.einsum ~label:[%e opt_pat2string_list ~loc ident_label] [%e spec] [%e e1] [%e e2]] )
+  | [%expr
+      [%e? expr1] ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]]
     when String.contains spec_str '>' ->
       let vbs1, e1 = translate expr1 in
       (vbs1, [%expr TDSL.einsum1 ~label:[%e opt_pat2string_list ~loc ident_label] [%e spec] [%e e1]])
@@ -98,8 +110,8 @@ let rec translate ?ident_label expr =
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
         [%e?
-          ({ pexp_desc = Pexp_array _; _ } | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ })
-          as init_nd]] ->
+          ( { pexp_desc = Pexp_array _; _ }
+          | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ) as init_nd]] ->
       let pat, vb = make_vb_nd ~loc ~str_loc ~ident ~init_nd s in
       (Map.singleton (module String) ident vb, pat2expr pat)
   | [%expr
@@ -110,17 +122,24 @@ let rec translate ?ident_label expr =
   | { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } ->
       let pat, vb = make_vb ~loc ~str_loc ~ident expr in
       (Map.singleton (module String) ident vb, pat2expr pat)
-  | { pexp_desc = Pexp_array _; _ } | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
+  | { pexp_desc = Pexp_array _; _ }
+  | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
       (no_vbs, ndarray_op ?ident_label expr)
   | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
-      (* We need to hardcode these two patterns to prevent the numbers from being converted to tensors. *)
+      (* We need to hardcode these two patterns to prevent the numbers from being converted to
+         tensors. *)
       let vbs, e1 = translate expr1 in
       ( vbs,
-        [%expr TDSL.O.( **. ) ~label:[%e opt_pat2string_list ~loc ident_label] [%e e1] (Float.of_int [%e i])]
-      )
+        [%expr
+          TDSL.O.( **. )
+            ~label:[%e opt_pat2string_list ~loc ident_label]
+            [%e e1]
+            (Float.of_int [%e i])] )
   | [%expr [%e? expr1] **. [%e? expr2]] ->
       let vbs, e1 = translate expr1 in
-      (vbs, [%expr TDSL.O.( **. ) ~label:[%e opt_pat2string_list ~loc ident_label] [%e e1] [%e expr2]])
+      ( vbs,
+        [%expr TDSL.O.( **. ) ~label:[%e opt_pat2string_list ~loc ident_label] [%e e1] [%e expr2]]
+      )
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3]] ->
       let vbs1, e1 = translate ?ident_label expr1 in
       let vbs2, e2 = translate expr2 in
@@ -133,7 +152,8 @@ let rec translate ?ident_label expr =
   | [%expr fun ~config [%p? pat1] [%p? pat2] -> [%e? body]] ->
       (* TODO(#38): generalize config to any number of labeled arguments with any labels. *)
       let vbs, body = translate ?ident_label body in
-      (no_vbs, [%expr fun ~config -> [%e let_opt ~loc vbs [%expr fun [%p pat1] [%p pat2] -> [%e body]]]])
+      ( no_vbs,
+        [%expr fun ~config -> [%e let_opt ~loc vbs [%expr fun [%p pat1] [%p pat2] -> [%e body]]]] )
   | [%expr fun ~config [%p? pat] -> [%e? body]] ->
       (* TODO(#38): generalize config to any number of labeled arguments with any labels. *)
       let vbs, body = translate ?ident_label body in
@@ -266,7 +286,8 @@ let translate_str ({ pstr_desc; pstr_loc = loc; _ } as str) =
           pvb_expr =
             [%expr
               let open! TDSL.O in
-              [%e if is_unused then [%expr Tensor.with_unchanged_roots ~f:(fun () -> [%e v])] else v]];
+              [%e
+                if is_unused then [%expr Tensor.with_unchanged_roots ~f:(fun () -> [%e v])] else v]];
         }
       in
       { str with pstr_desc = Pstr_value (recf, List.map bindings ~f) }

@@ -28,8 +28,8 @@ module type No_device_backend = sig
 
   val compile : ?shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> code
   (** If [~shared:true] (default [false]), the backend should prefer to do more compile work in a
-      device-agnostic way. If [~shared:false], the backend can opt to postpone compiling altogether until
-      [link] is called, to benefit from more optimizations. *)
+      device-agnostic way. If [~shared:false], the backend can opt to postpone compiling altogether
+      until [link] is called, to benefit from more optimizations. *)
 
   val compile_batch :
     ?shared:bool ->
@@ -38,27 +38,32 @@ module type No_device_backend = sig
     Indexing.unit_bindings ->
     Assignments.t array ->
     code_batch
-  (** Unlike the [~shared] parameter, [compile_batch] vs. [compile] is mostly about improving the compile time
-      and debugging convenience by generating fewer files -- ideally does not affect execution, but there can
-      be backend-specific differences. Only array entries for which [occupancy] returns true are included. *)
+  (** Unlike the [~shared] parameter, [compile_batch] vs. [compile] is mostly about improving the
+      compile time and debugging convenience by generating fewer files -- ideally does not affect
+      execution, but there can be backend-specific differences. Only array entries for which
+      [occupancy] returns true are included. *)
 
   val link : merge_buffer:buffer_ptr option ref -> context -> code -> routine
   (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
 
   val link_batch :
     merge_buffer:buffer_ptr option ref -> context -> code_batch -> context * routine option array
-  (** Returns the routines for the procedures included in the code batch. The returned context is downstream
-      of all the returned routines. *)
+  (** Returns the routines for the procedures included in the code batch. The returned context is
+      downstream of all the returned routines. *)
 
   val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
-  (** Cleans up all work on a backend. If [~unsafe_shutdown:true], releases resources, potentially making the
-      backend unusable. *)
+  (** Cleans up all work on a backend. If [~unsafe_shutdown:true], releases resources, potentially
+      making the backend unusable. *)
 
   val to_buffer :
     ?rt:(module Minidebug_runtime.Debug_runtime) -> Tnode.t -> dst:buffer_ptr -> src:context -> unit
 
-  val host_to_buffer : ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> dst:buffer_ptr -> unit
-  val buffer_to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> src:buffer_ptr -> unit
+  val host_to_buffer :
+    ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> dst:buffer_ptr -> unit
+
+  val buffer_to_host :
+    ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> src:buffer_ptr -> unit
+
   val get_buffer : Tnode.t -> context -> buffer_ptr option
 end
 
@@ -69,18 +74,18 @@ module type Backend = sig
   (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
 
   val link_batch : context -> code_batch -> context * routine option array
-  (** Returns the routines for the procedures included in the code batch. The returned context is downstream
-      of all the returned routines. *)
+  (** Returns the routines for the procedures included in the code batch. The returned context is
+      downstream of all the returned routines. *)
 
   val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, schedules a copy from host to context and returns true,
-      otherwise returns false. NOTE: when run for a device, it's the caller's responsibility to synchronize
-      the device before the host's data is overwritten. *)
+  (** If the array is both hosted and in-context, schedules a copy from host to context and returns
+      true, otherwise returns false. NOTE: when run for a device, it's the caller's responsibility
+      to synchronize the device before the host's data is overwritten. *)
 
   val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, schedules a copy from context to host and returns true,
-      otherwise returns false. NOTE: when run for a device, it's the caller's responsibility to synchronize
-      the device before the host's data is read. *)
+  (** If the array is both hosted and in-context, schedules a copy from context to host and returns
+      true, otherwise returns false. NOTE: when run for a device, it's the caller's responsibility
+      to synchronize the device before the host's data is read. *)
 
   val device_to_device :
     ?rt:(module Minidebug_runtime.Debug_runtime) ->
@@ -92,21 +97,24 @@ module type Backend = sig
   (** If the node is absent from the [src] context and either it is present in the [dst] context or
       [~into_merge_buffer] is different from [No]: raises an error.
 
-      If [~into_merge_buffer:No]: If the node is present in the [dst] context, schedules a copy of the tensor
-      node from the device of [src] to the device of [dst] and returns true, otherwise returns false.
+      If [~into_merge_buffer:No]: If the node is present in the [dst] context, schedules a copy of
+      the tensor node from the device of [src] to the device of [dst] and returns true, otherwise
+      returns false.
 
       If [~into_merge_buffer] is different from [No]: schedules the following task and returns true.
 
       The merge-buffer task sets on [dst] the merge buffer source to the given node. If
-      [~into_merge_buffer:Streaming], remembers the buffer pointer of the source node to use for streaming,
-      without blocking. If [~into_merge_buffer:Copy], copies from [src] to the merge buffer of [dst]'s device.
+      [~into_merge_buffer:Streaming], remembers the buffer pointer of the source node to use for
+      streaming, without blocking. If [~into_merge_buffer:Copy], copies from [src] to the merge
+      buffer of [dst]'s device.
 
-      If the [dst] context resulted from a compilation with [Streaming] or [Copy] specific merge buffer code,
-      the [device_to_device] call should fail immediately if there's a mismatch with [~into_merge_buffer].
+      If the [dst] context resulted from a compilation with [Streaming] or [Copy] specific merge
+      buffer code, the [device_to_device] call should fail immediately if there's a mismatch with
+      [~into_merge_buffer].
 
-      NOTE: it's the caller's responsibility to synchronize the [src] device, if needed, {i before} calling
-      [device_to_device], and if [~into_merge_buffer:Streaming], the [dst] device {i afterward}, before any
-      computations on the [src] device overwrite the node. *)
+      NOTE: it's the caller's responsibility to synchronize the [src] device, if needed, {i before}
+      calling [device_to_device], and if [~into_merge_buffer:Streaming], the [dst] device
+      {i afterward}, before any computations on the [src] device overwrite the node. *)
 
   type physical_device
   type device
@@ -201,7 +209,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let spinup_device ~(ordinal : int) : device =
     Int.incr global_run_no;
     let init_pos =
-      Utils.Cons { hd = Tnode.{ description = "root of task queue"; work = (fun _rt () -> ()) }; tl = Empty }
+      Utils.Cons
+        { hd = Tnode.{ description = "root of task queue"; work = (fun _rt () -> ()) }; tl = Empty }
     in
     let state =
       {
@@ -256,7 +265,11 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let%diagn_sexp make_work device task =
     let%diagn_rt_sexp work () = schedule_task device task in
     Tnode.
-      { description = "schedules {" ^ task.description ^ "} on device " ^ Int.to_string device.ordinal; work }
+      {
+        description =
+          "schedules {" ^ task.description ^ "} on device " ^ Int.to_string device.ordinal;
+        work;
+      }
 
   type context = { device : device; ctx : Backend.context; expected_merge_node : Tnode.t option }
   [@@deriving sexp_of]
@@ -286,7 +299,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     let task = Backend.link ~merge_buffer:device.merge_buffer_ptr ctx code in
     {
       task with
-      context = { ctx = task.context; device; expected_merge_node = Backend.expected_merge_node code };
+      context =
+        { ctx = task.context; device; expected_merge_node = Backend.expected_merge_node code };
       schedule = make_work device task.schedule;
     }
 
@@ -304,7 +318,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let from_host ?rt (context : context) (tn : Tnode.t) =
     if Option.is_some rt then
-      raise @@ Utils.User_error "Multicore_backend.from_host: backend cannot be nested in another runtime";
+      raise
+      @@ Utils.User_error "Multicore_backend.from_host: backend cannot be nested in another runtime";
     Option.value ~default:false
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
@@ -328,7 +343,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                  Tnode.
                    {
                      description =
-                       "from_host " ^ Tnode.get_debug_name tn ^ " dst " ^ Int.to_string context.device.ordinal;
+                       "from_host " ^ Tnode.get_debug_name tn ^ " dst "
+                       ^ Int.to_string context.device.ordinal;
                      work;
                    };
                true
@@ -341,7 +357,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let to_host ?rt (context : context) (tn : Tnode.t) =
     if Option.is_some rt then
-      raise @@ Utils.User_error "Multicore_backend.to_host: backend cannot be nested in another runtime";
+      raise
+      @@ Utils.User_error "Multicore_backend.to_host: backend cannot be nested in another runtime";
     Option.value ~default:false
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
@@ -365,7 +382,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                  Tnode.
                    {
                      description =
-                       "from_host " ^ Tnode.get_debug_name tn ^ " dst " ^ Int.to_string context.device.ordinal;
+                       "from_host " ^ Tnode.get_debug_name tn ^ " dst "
+                       ^ Int.to_string context.device.ordinal;
                      work;
                    };
                true
@@ -379,7 +397,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let device_to_device ?rt tn ~into_merge_buffer ~dst ~src =
     if Option.is_some rt then
       raise
-      @@ Utils.User_error "Multicore_backend.device_to_device: backend cannot be nested in another runtime";
+      @@ Utils.User_error
+           "Multicore_backend.device_to_device: backend cannot be nested in another runtime";
     let dev = dst.device in
     if
       (not (equal_merge_buffer_use into_merge_buffer No))
@@ -402,10 +421,14 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                 @@ Option.value_exn ~here:[%here] ~message:(Tnode.get_debug_name tn)
                 @@ Lazy.force tn.array
               in
-              let allocated_capacity = Option.value ~default:0 @@ Option.map dev.allocated_buffer ~f:snd in
+              let allocated_capacity =
+                Option.value ~default:0 @@ Option.map dev.allocated_buffer ~f:snd
+              in
               if allocated_capacity < size_in_bytes then
                 dev.allocated_buffer <-
-                  Some (Backend.alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes (), size_in_bytes);
+                  Some
+                    ( Backend.alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes (),
+                      size_in_bytes );
               dev.merge_buffer_ptr := Option.map ~f:fst dev.allocated_buffer;
               Backend.to_buffer ~rt tn
                 ~dst:(Option.value_exn ~here:[%here] !(dev.merge_buffer_ptr))
@@ -415,8 +438,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         Tnode.
           {
             description =
-              "device_to_device " ^ Tnode.get_debug_name tn ^ " dst " ^ Int.to_string dev.ordinal ^ " src "
-              ^ Int.to_string src.device.ordinal;
+              "device_to_device " ^ Tnode.get_debug_name tn ^ " dst " ^ Int.to_string dev.ordinal
+              ^ " src " ^ Int.to_string src.device.ordinal;
             work;
           }
     in
@@ -466,8 +489,8 @@ let lower_assignments ?name bindings asgns =
   let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
   let cd_source = Utils.get_debug_formatter ~fname:(name ^ ".cd") in
   ( name,
-    Assignments.lower_proc ~unoptim_ll_source ~ll_source ~cd_source ~name (Indexing.bound_symbols bindings)
-      asgns )
+    Assignments.lower_proc ~unoptim_ll_source ~ll_source ~cd_source ~name
+      (Indexing.bound_symbols bindings) asgns )
 
 let lower_batch_assignments ?names ?occupancy bindings asgns_l =
   let names =
@@ -485,7 +508,9 @@ let lower_batch_assignments ?names ?occupancy bindings asgns_l =
          let asgns = asgns_l.(src_n) in
          if occupancy ~name ~src_n then
            ( Some name,
-             Some (Assignments.lower_proc ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns) )
+             Some
+               (Assignments.lower_proc ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns)
+           )
          else (None, None))
 
 module type Simple_backend = sig
@@ -530,15 +555,22 @@ module type Simple_backend = sig
   val to_buffer :
     ?rt:(module Minidebug_runtime.Debug_runtime) -> Tnode.t -> dst:buffer_ptr -> src:context -> unit
 
-  val host_to_buffer : ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> dst:buffer_ptr -> unit
-  val buffer_to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> src:buffer_ptr -> unit
+  val host_to_buffer :
+    ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> dst:buffer_ptr -> unit
+
+  val buffer_to_host :
+    ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> src:buffer_ptr -> unit
 end
 
 module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend = struct
   include Backend
 
   type code =
-    | Postponed of { lowered : Low_level.optimized; bindings : Indexing.unit_bindings; name : string }
+    | Postponed of {
+        lowered : Low_level.optimized;
+        bindings : Indexing.unit_bindings;
+        name : string;
+      }
     | Compiled of Backend.procedure
   [@@deriving sexp_of]
 
@@ -565,7 +597,8 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
 
   let expected_merge_nodes : code_batch -> _ = function
     | Postponed { lowereds; _ } ->
-        Array.map lowereds ~f:(fun lowered -> Option.(join @@ map lowered ~f:(fun optim -> optim.merge_node)))
+        Array.map lowereds ~f:(fun lowered ->
+            Option.(join @@ map lowered ~f:(fun optim -> optim.merge_node)))
     | Compiled (_, procs) ->
         Array.map ~f:(fun proc -> Option.(join @@ map proc ~f:Backend.expected_merge_node)) procs
 
@@ -583,7 +616,9 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
     let context, bindings, schedule, name =
       match code with
       | Postponed { lowered; bindings; name } ->
-          let proc = Backend.compile ~name ~opt_ctx_arrays:(Some (ctx_arrays old_context)) bindings lowered in
+          let proc =
+            Backend.compile ~name ~opt_ctx_arrays:(Some (ctx_arrays old_context)) bindings lowered
+          in
           link_compiled ~merge_buffer old_context proc
       | Compiled code -> link_compiled ~merge_buffer old_context code
     in
@@ -593,7 +628,9 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
     let _opt_ctx_arrays, procs =
       match code_batch with
       | Postponed { lowereds; bindings; names } ->
-          Backend.compile_batch ~names ~opt_ctx_arrays:(Some (ctx_arrays old_context)) bindings lowereds
+          Backend.compile_batch ~names
+            ~opt_ctx_arrays:(Some (ctx_arrays old_context))
+            bindings lowereds
       | Compiled procs -> procs
     in
     Array.fold_map procs ~init:old_context ~f:(fun context -> function
@@ -605,7 +642,9 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
   let to_buffer ?rt tn ~dst ~src = Backend.to_buffer ?rt tn ~dst ~src
   let host_to_buffer = Backend.host_to_buffer
   let buffer_to_host = Backend.buffer_to_host
-  let get_buffer tn context = Map.find (Backend.ctx_arrays context) tn |> Option.map ~f:Backend.buffer_ptr
+
+  let get_buffer tn context =
+    Map.find (Backend.ctx_arrays context) tn |> Option.map ~f:Backend.buffer_ptr
 end
 
 module C_device : No_device_backend = Simple_no_device_backend ((

@@ -30,8 +30,14 @@ let pat2string pat =
   in
   string_expr ~loc:pat.ppat_loc @@ loop pat
 
-let opt_pat2string ~loc = function None -> [%expr None] | Some pat -> [%expr Some [%e pat2string pat]]
-let opt_pat2string_list ~loc = function None -> [%expr []] | Some pat -> [%expr [ [%e pat2string pat] ]]
+let opt_pat2string ~loc = function
+  | None -> [%expr None]
+  | Some pat -> [%expr Some [%e pat2string pat]]
+
+let opt_pat2string_list ~loc = function
+  | None -> [%expr []]
+  | Some pat -> [%expr [ [%e pat2string pat] ]]
+
 let opt_expr ~loc = function None -> [%expr None] | Some expr -> [%expr Some [%e expr]]
 
 let rec pat2expr pat =
@@ -39,7 +45,8 @@ let rec pat2expr pat =
   let loc = pat.ppat_loc in
   match pat.ppat_desc with
   | Ppat_constraint (pat', typ) -> Ast.pexp_constraint ~loc (pat2expr pat') typ
-  | Ppat_alias (_, ident) | Ppat_var ident -> Ast.pexp_ident ~loc { ident with txt = Lident ident.txt }
+  | Ppat_alias (_, ident) | Ppat_var ident ->
+      Ast.pexp_ident ~loc { ident with txt = Lident ident.txt }
   | Ppat_variant (ident, e_opt) -> Ast.pexp_variant ~loc ident @@ Option.map e_opt ~f:pat2expr
   | Ppat_constant c -> Ast.pexp_constant ~loc c
   | Ppat_construct (c, None) -> Ast.pexp_construct ~loc c None

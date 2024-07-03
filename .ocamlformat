@@ -1,4 +1,4 @@
 profile = default
-margin = 110
+margin = 100
 parse-docstrings = true
 wrap-comments = true

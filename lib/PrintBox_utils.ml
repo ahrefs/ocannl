@@ -25,7 +25,9 @@ let rec boxify (depth : int) (b : dag) : dag =
   match b with
   | b when depth <= 0 -> b
   | `Tree (n, bs) when depth > 0 ->
-      `Vlist (false, [ `Align (`Center, `Bottom, n); `Hlist (true, List.map ~f:(boxify @@ (depth - 1)) bs) ])
+      `Vlist
+        ( false,
+          [ `Align (`Center, `Bottom, n); `Hlist (true, List.map ~f:(boxify @@ (depth - 1)) bs) ] )
   | `Hlist (bars, bs) -> `Hlist (bars, List.map ~f:(boxify @@ (depth - 1)) bs)
   | `Vlist (bars, bs) -> `Vlist (bars, List.map ~f:(boxify @@ (depth - 1)) bs)
   | `Pad b -> `Pad (boxify depth b)
@@ -45,7 +47,8 @@ let dag_to_box (b : dag) =
     | `Hlist (_, bs) -> Set.union_list s @@ List.map ~f:reused bs
     | `Vlist (_, bs) -> Set.union_list s @@ List.map ~f:reused bs
     | `Table bss ->
-        Set.union_list s @@ Array.to_list @@ Array.concat_map bss ~f:(fun bs -> Array.map ~f:reused bs)
+        Set.union_list s @@ Array.to_list
+        @@ Array.concat_map bss ~f:(fun bs -> Array.map ~f:reused bs)
   in
   let reused = reused b in
   let open PrintBox in
@@ -74,14 +77,18 @@ type plot_spec =
   | Scatterplot of { points : (float * float) array; pixel : string }
   | Line_plot of { points : float array; pixel : string }
   | Boundary_map of { callback : float * float -> bool; pixel_true : string; pixel_false : string }
-  | Line_plot_adaptive of { callback : float -> float; mutable cache : float Map.M(Float).t; pixel : string }
+  | Line_plot_adaptive of {
+      callback : float -> float;
+      mutable cache : float Map.M(Float).t;
+      pixel : string;
+    }
 [@@deriving sexp_of]
 
 let plot_canvas ?canvas ?(size : (int * int) option) (specs : plot_spec list) :
     float * float * float * float * _ =
   let open Float in
-  (* Unfortunately "x" and "y" of a "matrix" are opposite to how we want them displayed -- the first dimension
-     (i.e. "x") as the horizontal axis. *)
+  (* Unfortunately "x" and "y" of a "matrix" are opposite to how we want them displayed -- the first
+     dimension (i.e. "x") as the horizontal axis. *)
   let (dimx, dimy, canvas) : int * int * _ =
     match (canvas, size) with
     | None, None -> invalid_arg "PrintBox_utils.plot: provide ~canvas or ~size"
@@ -128,13 +135,16 @@ let plot_canvas ?canvas ?(size : (int * int) option) (specs : plot_spec list) :
     if Array.is_empty all_x_points then of_int Int.(Array.length all_y_points - 1)
     else Array.reduce_exn all_x_points ~f:max
   in
-  let maxy = if Array.is_empty all_y_points then maxx - minx else Array.reduce_exn all_y_points ~f:max in
+  let maxy =
+    if Array.is_empty all_y_points then maxx - minx else Array.reduce_exn all_y_points ~f:max
+  in
   let spanx = maxx - minx in
   let spanx = Float.(if spanx < epsilon_float then 1.0 else spanx) in
   let spany = maxy - miny in
   let spany = Float.(if spany < epsilon_float then 1.0 else spany) in
   let scale_1d y =
-    try Some (to_int @@ (of_int Int.(dimy - 1) * (y - miny) / spany)) with Invalid_argument _ -> None
+    try Some (to_int @@ (of_int Int.(dimy - 1) * (y - miny) / spany))
+    with Invalid_argument _ -> None
   in
   let scale_2d (x, y) =
     try
@@ -226,8 +236,12 @@ let table rows =
     let speedups = List.map times ~f:(fun x -> max_time /. x) in
     let mem_gains = List.map sizes ~f:Float.(fun x -> of_int max_size / of_int x) in
     let small_float = Fn.compose PrintBox.line (Printf.sprintf "%.3f") in
-    let results = List.map rows ~f:(fun (Benchmark { result; _ }) -> nolines @@ Sexp.to_string_hum result) in
-    let result_labels = List.map rows ~f:(fun (Benchmark { result_label; _ }) -> nolines result_label) in
+    let results =
+      List.map rows ~f:(fun (Benchmark { result; _ }) -> nolines @@ Sexp.to_string_hum result)
+    in
+    let result_labels =
+      List.map rows ~f:(fun (Benchmark { result_label; _ }) -> nolines result_label)
+    in
     (* TODO(#140): partition by unique result_label and output a vlist of records. *)
     PrintBox.(
       frame

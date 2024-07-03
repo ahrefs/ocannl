@@ -31,7 +31,8 @@ val get_row_var : unit -> row_var
 
 (** A bcast specifies how axes of a single kind in a shape (i.e. the row) can adapt to other shapes. *)
 type bcast =
-  | Row_var of { v : row_var; beg_dims : dim list }  (** The row can be inferred to have more axes. *)
+  | Row_var of { v : row_var; beg_dims : dim list }
+      (** The row can be inferred to have more axes. *)
   | Broadcastable  (** The shape does not have more axes of this kind, but is "polymorphic". *)
 [@@deriving equal, hash, compare, sexp, variants]
 
@@ -60,16 +61,26 @@ type row_constraint =
       (** The row or remainder of a row, inclusive of the further row spec, has this many elements. *)
 [@@deriving equal, hash, compare, sexp, variants]
 
-(** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved]. [cur] and [subr] must
-    be sorted using the [@@deriving compare] comparison. *)
+(** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved]. [cur] and
+    [subr] must be sorted using the [@@deriving compare] comparison. *)
 type dim_entry =
   | Solved_dim of dim
-  | Bounds_dim of { cur : dim_var list; subr : dim_var list; lub : dim option; constr : dim_constraint }
+  | Bounds_dim of {
+      cur : dim_var list;
+      subr : dim_var list;
+      lub : dim option;
+      constr : dim_constraint;
+    }
 [@@deriving sexp]
 
 type row_entry =
   | Solved_row of t
-  | Bounds_row of { cur : row_var list; subr : row_var list; lub : t option; constr : row_constraint }
+  | Bounds_row of {
+      cur : row_var list;
+      subr : row_var list;
+      lub : t option;
+      constr : row_constraint;
+    }
 [@@deriving sexp]
 
 type constraint_ =
@@ -83,13 +94,17 @@ type constraint_ =
   | Terminal_row of t
 [@@deriving compare, equal, sexp, variants]
 
-type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7 [@@deriving sexp, equal, compare]
+type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7
+[@@deriving sexp, equal, compare]
 
 val subst_row : environment -> t -> t
 val unify_row : stage:stage -> t * t -> environment -> constraint_ list * environment
 val empty_env : environment
 val eliminate_variables : environment -> t -> constraint_ list
-val solve_inequalities : stage:stage -> constraint_ list -> environment -> constraint_ list * environment
+
+val solve_inequalities :
+  stage:stage -> constraint_ list -> environment -> constraint_ list * environment
+
 val row_to_labels : environment -> t -> string array
 
 type proj [@@deriving compare, equal, sexp]
@@ -98,10 +113,11 @@ type proj_env [@@deriving sexp]
 val fresh_row_proj : t -> t
 
 type proj_equation =
-  | Proj_eq of proj * proj  (** Two projections are the same, e.g. two axes share the same iterator. *)
+  | Proj_eq of proj * proj
+      (** Two projections are the same, e.g. two axes share the same iterator. *)
   | Iterated of proj
-      (** The projection needs to be an iterator even if an axis is not matched with another axis, e.g. for
-          broadcasted-to axes of a tensor assigned a constant. *)
+      (** The projection needs to be an iterator even if an axis is not matched with another axis,
+          e.g. for broadcasted-to axes of a tensor assigned a constant. *)
 [@@deriving compare, equal, sexp]
 
 val get_proj_equations :

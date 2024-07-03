@@ -60,7 +60,9 @@ let fresh_backend ?backend_name ?(config = Arrayjit.Backend_types.Physical_devic
   backend
 
 let is_param t =
-  match t with { Tensor.children = []; diff = Some _; _ } -> not @@ Tn.known_not_param t.value | _ -> false
+  match t with
+  | { Tensor.children = []; diff = Some _; _ } -> not @@ Tn.known_not_param t.value
+  | _ -> false
 
 let get_params t =
   let rec loop accu { Tensor.subtensor = t; _ } =
@@ -70,14 +72,16 @@ let get_params t =
 
 let save_params t =
   let file_name =
-    Option.value_or_thunk ~default:(fun () -> invalid_arg "Train.save_params: root tensor is not named")
+    Option.value_or_thunk ~default:(fun () ->
+        invalid_arg "Train.save_params: root tensor is not named")
     @@ Tn.ident_label t.Tensor.value
   in
   let with_name p =
     let v = p.Tensor.value in
     ( v,
       Option.value_or_thunk ~default:(fun () ->
-          invalid_arg @@ "Train.save_params: parameter is not named: " ^ Tn.name v ^ " " ^ Tn.label v)
+          invalid_arg @@ "Train.save_params: parameter is not named: " ^ Tn.name v ^ " "
+          ^ Tn.label v)
       @@ Tn.ident_label v )
   in
   let with_names = get_params t |> Set.elements |> List.map ~f:with_name in
@@ -88,14 +92,16 @@ let save_params t =
 
 let restore_params t =
   let file_name =
-    Option.value_or_thunk ~default:(fun () -> invalid_arg "Train.restore_params: root tensor is not named")
+    Option.value_or_thunk ~default:(fun () ->
+        invalid_arg "Train.restore_params: root tensor is not named")
     @@ Tn.ident_label t.Tensor.value
   in
   let with_name p =
     let v = p.Tensor.value in
     ( v,
       Option.value_or_thunk ~default:(fun () ->
-          invalid_arg @@ "Train.restore_params: parameter is not named: " ^ Tn.name v ^ " " ^ Tn.label v)
+          invalid_arg @@ "Train.restore_params: parameter is not named: " ^ Tn.name v ^ " "
+          ^ Tn.label v)
       @@ Tn.ident_label v )
   in
   let with_names = get_params t |> Set.elements |> List.map ~f:with_name in
@@ -116,8 +122,8 @@ let label_suffix label =
   @@ List.find ~f:(String.for_all ~f:(fun c -> Char.is_alphanum c || equal_char '_' c))
   @@ List.rev label
 
-(** Sets the tensor's value as "fully on host", returns the tensor's forward code with a label-derived
-    comment. *)
+(** Sets the tensor's value as "fully on host", returns the tensor's forward code with a
+    label-derived comment. *)
 let forward ?(disable_rootness_check = false) t =
   let fwd = if disable_rootness_check then t.Tensor.forward else Tensor.consume_forward_code t in
   set_hosted t.Tensor.value;
@@ -131,16 +137,18 @@ type updaten = {
   fwd_bprop : Asgns.t;
 }
 
-(** Returns the tensor's forward, zeroing gradients, and backprop code wrapped with label-derived comments.
-    Sets the tensor's value as "fully on host". If [setup_for_parallel] is true (false by default), sets the
-    parameters and their gradients as "non-local" (on-device). *)
+(** Returns the tensor's forward, zeroing gradients, and backprop code wrapped with label-derived
+    comments. Sets the tensor's value as "fully on host". If [setup_for_parallel] is true (false by
+    default), sets the parameters and their gradients as "non-local" (on-device). *)
 let grad_update ?(disable_rootness_check = false) ?(setup_for_parallel = false) loss =
   set_hosted loss.Tensor.value;
   let params = get_params loss in
   if setup_for_parallel then
     Set.iter params ~f:(fun p -> set_materialized (Option.value_exn ~here:[%here] p.diff).grad);
   let label = label_suffix loss.value.label in
-  let fwd = if disable_rootness_check then loss.Tensor.forward else Tensor.consume_forward_code loss in
+  let fwd =
+    if disable_rootness_check then loss.Tensor.forward else Tensor.consume_forward_code loss
+  in
   let fwd_bprop =
     match loss.Tensor.diff with
     | Some diff ->
@@ -160,7 +168,8 @@ let grad_update ?(disable_rootness_check = false) ?(setup_for_parallel = false) 
                   init_grad;
                   Block_comment (label ^ " bprop", bprop);
                 ] ))
-    | None -> raise @@ Tensor.Session_error ("Train.grad_update: tensor is not differentiable", Some loss)
+    | None ->
+        raise @@ Tensor.Session_error ("Train.grad_update: tensor is not differentiable", Some loss)
   in
   { loss; label; params; fwd_bprop }
 
@@ -186,8 +195,8 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov l =
   in
   Asgns.Block_comment (l.label ^ " sgd update", code)
 
-(** All and only bindings with associated ranges are iterated, with the binding's initial value lost. Bindings
-    without ranges remain at their initial values. *)
+(** All and only bindings with associated ranges are iterated, with the binding's initial value
+    lost. Bindings without ranges remain at their initial values. *)
 let%track_sexp sequential_loop ~f lowered_bindings =
   let rec loop = function
     | [] -> f ()
@@ -202,10 +211,10 @@ let%track_sexp sequential_loop ~f lowered_bindings =
   in
   loop lowered_bindings
 
-(** Distributes iterated indices to workers in a round-robin fashion. All and only bindings with associated
-    ranges are iterated, with the binding's initial value lost. Bindings without ranges remain at their
-    initial values. [sync] is called after each round of calling all workers, and at the end if needed, with
-    the number of workers called during the round. *)
+(** Distributes iterated indices to workers in a round-robin fashion. All and only bindings with
+    associated ranges are iterated, with the binding's initial value lost. Bindings without ranges
+    remain at their initial values. [sync] is called after each round of calling all workers, and at
+    the end if needed, with the number of workers called during the round. *)
 let%track_sexp round_robin fs parallel_jitbs jitbs ~sync : unit =
   let num_devices : int = Array.length fs in
   assert (Array.length parallel_jitbs = num_devices);
@@ -255,22 +264,23 @@ let every_non_literal_on_host =
   Tensor.iter_embedded_arrays ~f:(fun a ->
       if Tn.mode_is_unspecified a && not (Tn.known_constant a) then set_hosted a)
 
-let%debug_sexp all_host_to_device (type context) (module Backend : Backend_type with type context = context)
-    context =
+let%debug_sexp all_host_to_device (type context)
+    (module Backend : Backend_type with type context = context) context =
   let f tn = ignore (Backend.from_host context tn : bool) in
   Tensor.iter_embedded_arrays ~f
 
-let%debug_sexp all_device_to_host (type context) (module Backend : Backend_type with type context = context)
-    context =
+let%debug_sexp all_device_to_host (type context)
+    (module Backend : Backend_type with type context = context) context =
   let f tn = ignore (Backend.to_host context tn : bool) in
   Tensor.iter_embedded_arrays ~f
 
-(** Executes the jitted code and copies arrays embedded in the given tenosor from and to host, synchronizes
-    before copying to host. If [looping] is provided, loops over bindings and executes the given function
-    inside the loop after a run. All and only bindings with associated ranges are iterated, with the binding's
-    initial value lost. Bindings without ranges remain at their initial values. *)
-let%track_sexp sync_run ?looping (type context) (module Backend : Backend_type with type context = context)
-    (routine : Backend.routine) t =
+(** Executes the jitted code and copies arrays embedded in the given tenosor from and to host,
+    synchronizes before copying to host. If [looping] is provided, loops over bindings and executes
+    the given function inside the loop after a run. All and only bindings with associated ranges are
+    iterated, with the binding's initial value lost. Bindings without ranges remain at their initial
+    values. *)
+let%track_sexp sync_run ?looping (type context)
+    (module Backend : Backend_type with type context = context) (routine : Backend.routine) t =
   all_host_to_device (module Backend) routine.context t;
   (match looping with
   | None -> Tn.run debug_rt routine.schedule
@@ -285,25 +295,27 @@ let%track_sexp sync_run ?looping (type context) (module Backend : Backend_type w
 
 module Lazy = Utils.Lazy
 
-(** Performs one optimization step, potentially in parallel (if [grad_updates] are compiled for different
-    devices). All jitted code must have the same bindings. Iterates over bindings with ranges, calling one of
-    [grad_updates] in a round-robin fashion, and performs the following synchronization each time all
-    [grad_updates] have been called:
+(** Performs one optimization step, potentially in parallel (if [grad_updates] are compiled for
+    different devices). All jitted code must have the same bindings. Iterates over bindings with
+    ranges, calling one of [grad_updates] in a round-robin fashion, and performs the following
+    synchronization each time all [grad_updates] have been called:
 
-    1. merges all gradients into the device of [grad_updates.(0)], 2. calls [sgd_update], 3. copies all
-    parameters from the [grad_updates.(0)] device to the other devices, if needed, 4. calls [post_sync] with
-    the number of devices synced since the previous sync.
+    1. merges all gradients into the device of [grad_updates.(0)], 2. calls [sgd_update], 3. copies
+    all parameters from the [grad_updates.(0)] device to the other devices, if needed, 4. calls
+    [post_sync] with the number of devices synced since the previous sync.
 
-    All and only bindings with associated ranges are iterated, with the binding's initial value lost. Bindings
-    without ranges remain at their initial values. *)
-let%track_sexp parallel_update (type context) (module Backend : Backend_type with type context = context)
-    ~(grad_updates : Backend.routine array) ~(sgd_update : Backend.routine) ~post_sync updaten : unit -> unit
-    =
+    All and only bindings with associated ranges are iterated, with the binding's initial value
+    lost. Bindings without ranges remain at their initial values. *)
+let%track_sexp parallel_update (type context)
+    (module Backend : Backend_type with type context = context)
+    ~(grad_updates : Backend.routine array) ~(sgd_update : Backend.routine) ~post_sync updaten :
+    unit -> unit =
   assert (not @@ Array.is_empty grad_updates);
   let num_devices : int = Array.length grad_updates in
   let bindings : Idx.static_symbol list = List.map ~f:fst sgd_update.bindings in
   let occupancies = Array.init num_devices ~f:(fun _ -> Array.create ~len:num_devices false) in
-  (* to_, from positions correspond to the contexts (and devices) of grad_updates at the position. *)
+  (* to_, from positions correspond to the contexts (and devices) of grad_updates at the
+     position. *)
   let dry_merge ~from ~to_ = occupancies.(from).(to_) <- true in
   let dry_sync devices_to_sync = Arrayjit.Utils.parallel_merge dry_merge devices_to_sync in
   round_robin_dry_run ~num_devices sgd_update.bindings ~dry_sync;
@@ -322,7 +334,8 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
   in
   let grad_merges_to =
     Array.map ctxs ~f:(fun ctx ->
-        snd @@ Backend.link_batch ctx @@ Backend.compile_batch ~shared:true ~occupancy Idx.Empty grad_merges)
+        snd @@ Backend.link_batch ctx
+        @@ Backend.compile_batch ~shared:true ~occupancy Idx.Empty grad_merges)
   in
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
   let loss_merge =
@@ -340,12 +353,14 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     Array.iteri all_params ~f:(fun i p ->
         let grad_merge = Option.value_exn ~here:[%here] grad_merges_to.(to_).(i) in
         assert (
-          Backend.device_to_device (Option.value_exn ~here:[%here] p.diff).grad ~into_merge_buffer:Copy
-            ~dst:grad_merge.context ~src:ctxs.(from));
+          Backend.device_to_device (Option.value_exn ~here:[%here] p.diff).grad
+            ~into_merge_buffer:Copy ~dst:grad_merge.context ~src:ctxs.(from));
         (Tn.run debug_rt grad_merge.schedule : unit))
   in
   let merge_loss ~src =
-    assert (Backend.device_to_device updaten.loss.value ~into_merge_buffer:Copy ~dst:loss_merge.context ~src);
+    assert (
+      Backend.device_to_device updaten.loss.value ~into_merge_buffer:Copy ~dst:loss_merge.context
+        ~src);
     Tn.run debug_rt loss_merge.schedule
   in
   (* FIXME: missing backcopy. *)
@@ -361,12 +376,15 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
     for to_ = 1 to num_devices - 1 do
       Array.iter all_params ~f:(fun p ->
           assert (
-            Backend.device_to_device p.value ~into_merge_buffer:No ~dst:ctxs.(to_) ~src:sgd_update.context))
+            Backend.device_to_device p.value ~into_merge_buffer:No ~dst:ctxs.(to_)
+              ~src:sgd_update.context))
     done;
     post_sync ~num_synced_devices:devices_to_sync
   in
   let lowered_bindings = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.bindings)] in
-  let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd () -> Tn.run debug_rt upd.schedule)] in
+  let fs =
+    [%debug_notrace Array.map grad_updates ~f:(fun upd () -> Tn.run debug_rt upd.schedule)]
+  in
   fun () -> round_robin fs lowered_bindings sgd_update.bindings ~sync
 
 let debug_name t = Tn.(debug_name ~id:t.Tensor.value.id ~label:t.value.label)
@@ -386,8 +404,8 @@ let get_all_suggested_devices (type device) ?max_num_devices
   |> Array.concat_map ~f:Fn.id
 
 let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init_lr ?lr_schedule
-    ?max_num_devices ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn ~weight_decay ?per_batch_callback
-    ?per_epoch_callback (backend : (module Backend_type)) () =
+    ?max_num_devices ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn ~weight_decay
+    ?per_batch_callback ?per_epoch_callback (backend : (module Backend_type)) () =
   let module TDSL = Operation.TDSL in
   let module NTDSL = Operation.NTDSL in
   Rand.init seed;
@@ -451,21 +469,26 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     learning_rates := learning_rate.@[0] :: !learning_rates;
     epoch_losses := !epoch_loss :: !epoch_losses;
     Option.iter per_epoch_callback ~f:(fun f ->
-        f ~at_step:!step_ref ~at_epoch:epoch ~learning_rate:learning_rate.@[0] ~epoch_loss:!epoch_loss)
+        f ~at_step:!step_ref ~at_epoch:epoch ~learning_rate:learning_rate.@[0]
+          ~epoch_loss:!epoch_loss)
   done;
   let%op model_result = model "infer" in
   let infer_fwd =
-    if disable_rootness_check then model_result.Tensor.forward else Tensor.consume_forward_code model_result
+    if disable_rootness_check then model_result.Tensor.forward
+    else Tensor.consume_forward_code model_result
   in
   set_on_host Volatile model_result.Tensor.value;
-  (* By using sgd_update.context here, maybe we don't need to copy the parameters back to the host. *)
+  (* By using sgd_update.context here, maybe we don't need to copy the parameters back to the
+     host. *)
   let routine =
     Backend.(
-      link sgd_update.context @@ compile IDX.empty @@ Block_comment (debug_name model_result, infer_fwd))
+      link sgd_update.context @@ compile IDX.empty
+      @@ Block_comment (debug_name model_result, infer_fwd))
   in
   let infer_callback values =
     Tensor.set_values infer values;
-    (* For the gccjit backend, infer is only on host, not on device. For cuda, this will be needed. *)
+    (* For the gccjit backend, infer is only on host, not on device. For cuda, this will be
+       needed. *)
     assert (Backend.from_host routine.context infer.value);
     run routine;
     assert (Backend.to_host routine.context model_result.value);

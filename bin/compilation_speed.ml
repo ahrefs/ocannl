@@ -25,7 +25,8 @@ let benchmark_overhead backend () =
   let device = new_virtual_device @@ get_device ~ordinal:0 in
   let ctx = init device in
   let update_f = Train.grad_update f in
-  (* Initialize the context with a mock update of x to ensure that it is not optimized as a constant. *)
+  (* Initialize the context with a mock update of x to ensure that it is not optimized as a
+     constant. *)
   let%cd mock_update_x = x =: 42 in
   let init_assign_x = link ctx @@ compile ~name:"init_assign_x" IDX.empty mock_update_x in
   let f_routine = link init_assign_x.context @@ compile IDX.empty update_f.fwd_bprop in
@@ -61,7 +62,9 @@ let benchmark_overhead backend () =
         (* FIXME: global mem consumption *)
         mem_in_bytes = 0;
         result_label = "x, f(x)";
-        result = [%sexp_of: (float * float) list] @@ [ (xs.(0), ys.(0)); (xs.(n_data / 2), ys.(n_data / 2)) ];
+        result =
+          [%sexp_of: (float * float) list]
+          @@ [ (xs.(0), ys.(0)); (xs.(n_data / 2), ys.(n_data / 2)) ];
       }
   in
   PrintBox_text.output Stdio.stdout plot_box;
@@ -76,4 +79,5 @@ let benchmarks =
   ]
 
 let () =
-  List.map benchmarks ~f:(fun bench -> bench ()) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
+  List.map benchmarks ~f:(fun bench -> bench ())
+  |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout

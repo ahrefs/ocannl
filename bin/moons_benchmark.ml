@@ -13,8 +13,8 @@ module Debug_runtime = Utils.Debug_runtime
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~backend_name ~value_prec
-    ~grad_prec () =
+let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~backend_name
+    ~value_prec ~grad_prec () =
   [%track_sexp
     let _debug : string = "started" in
     (fun (started : unit) -> started) ()];
@@ -22,8 +22,8 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   let bench_title =
     [%string
       "seed %{seed#Int}, inline %{inlining_cutoff#Int}, parallel %{num_devices#Int}, batch \
-       %{batch_size#Int}, backend %{backend_name}, val prec %{Ops.prec_string value_prec}, grad prec \
-       %{Ops.prec_string grad_prec}"]
+       %{batch_size#Int}, backend %{backend_name}, val prec %{Ops.prec_string value_prec}, grad \
+       prec %{Ops.prec_string grad_prec}"]
   in
   Stdio.printf "\n*** %s ***\n%!" bench_title;
   CDSL.virtualize_settings.enable_device_only <- on_device;
@@ -57,9 +57,9 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   let moons_classes ~b = TDSL.init_const ~l:"moons_classes" ~b ~o:[ 1 ] moons_classes in
 
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
-  (* * let%op mlp x = "b6" 1 + "w6" * ?/("b4" hid_4_5 + "w4" * ?/("b2" hid_2_3 + ("w2" * ?/("b1" 16 + ("w1" *
-     x))) + "b3" hid_2_3 + ("w3" * ?/(b2 + (w2 * ?/(b1 + (w1 * x)))))) + ("b5" hid_4_5 + ("w5" * ?/(b4 + (w4 *
-     ?/(b3 + (w3 * ?/(b2 + (w2 * ?/(b1 + (w1 * x))))))))))) in * *)
+  (* * let%op mlp x = "b6" 1 + "w6" * ?/("b4" hid_4_5 + "w4" * ?/("b2" hid_2_3 + ("w2" * ?/("b1" 16
+     + ("w1" * x))) + "b3" hid_2_3 + ("w3" * ?/(b2 + (w2 * ?/(b1 + (w1 * x)))))) + ("b5" hid_4_5 +
+     ("w5" * ?/(b4 + (w4 * ?/(b3 + (w3 * ?/(b2 + (w2 * ?/(b1 + (w1 * x))))))))))) in * *)
   let%op mlp x = "b3" 1 + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
   let%op loss_fn ~output ~expectation = ?/(!..1 - (expectation *. output)) in
   let start_time = ref None in
@@ -70,12 +70,13 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   in
   (* Tn.print_accessible_headers (); *)
   let per_epoch_callback ~at_step ~at_epoch ~learning_rate ~epoch_loss =
-    Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" at_epoch at_step learning_rate epoch_loss
+    Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" at_epoch at_step learning_rate
+      epoch_loss
   in
   let inputs, outputs, model_result, infer_callback, batch_losses, epoch_losses, learning_rates =
-    Train.example_train_loop ~seed ~batch_size ~init_lr ~max_num_devices:num_devices ~data_len:len ~epochs
-      ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn ~weight_decay ~per_batch_callback
-      ~per_epoch_callback backend ()
+    Train.example_train_loop ~seed ~batch_size ~init_lr ~max_num_devices:num_devices ~data_len:len
+      ~epochs ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn ~weight_decay
+      ~per_batch_callback ~per_epoch_callback backend ()
   in
   let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 inputs in
   let classes = Tensor.value_1d_points ~xdim:0 outputs in
@@ -102,7 +103,8 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
       [
         Line_plot
           {
-            points = Array.of_list_rev_map batch_losses ~f:Float.(fun x -> max (log 0.00003) (log x));
+            points =
+              Array.of_list_rev_map batch_losses ~f:Float.(fun x -> max (log 0.00003) (log x));
             pixel = "-";
           };
       ]
@@ -159,17 +161,18 @@ let benchmarks =
               List.concat_map [ 0; 1 (* ; 2; 3; 4 *) ] ~f:(fun seed ->
                   List.concat_map [ "gccjit" (* *; "cuda" *) ] ~f:(fun backend_name ->
                       [
-                        classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_devices ~batch_size
-                          ~backend_name ~value_prec:CDSL.single ~grad_prec:CDSL.single;
+                        classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_devices
+                          ~batch_size ~backend_name ~value_prec:CDSL.single ~grad_prec:CDSL.single;
                       ])))))
 
-(* let time_of = function PrintBox_utils.Benchmark { time_in_sec; _ } -> time_in_sec let nth_best nth bench =
-   let results = List.init 5 ~f:(fun seed -> bench ~seed ()) in let sorted = List.sort results ~compare:(fun
-   r1 r2 -> Float.compare (time_of r1) (time_of r2)) in List.nth_exn sorted (nth - 1) *)
+(* let time_of = function PrintBox_utils.Benchmark { time_in_sec; _ } -> time_in_sec let nth_best
+   nth bench = let results = List.init 5 ~f:(fun seed -> bench ~seed ()) in let sorted = List.sort
+   results ~compare:(fun r1 r2 -> Float.compare (time_of r1) (time_of r2)) in List.nth_exn sorted
+   (nth - 1) *)
 
 let fixed_seed_search seed =
-  classify_moons ~seed ~on_device:true ~inlining_cutoff:3 ~num_devices:1 ~batch_size:20 ~backend_name:"cuda"
-    ~value_prec:CDSL.single ~grad_prec:CDSL.single ()
+  classify_moons ~seed ~on_device:true ~inlining_cutoff:3 ~num_devices:1 ~batch_size:20
+    ~backend_name:"cuda" ~value_prec:CDSL.single ~grad_prec:CDSL.single ()
 
 let _suspended () =
   List.init 20 ~f:fixed_seed_search |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
@@ -178,6 +181,7 @@ let _suspended () =
    Stdio.stdout *)
 
 let benchmark () =
-  List.map benchmarks ~f:(fun bench -> bench ()) |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
+  List.map benchmarks ~f:(fun bench -> bench ())
+  |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
 let _suspended () = benchmark ()

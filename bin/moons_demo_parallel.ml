@@ -39,23 +39,25 @@ let experiment ~seed () =
   let%op mlp x = "b3" + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
   (* let%op mlp x = "b" + ("w" * x) in *)
   let%op loss_fn ~output ~expectation = ?/(!..1 - (expectation *. output)) in
-  (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update computation. *)
+  (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update
+     computation. *)
   let weight_decay = 0.0002 in
   (* So that we can inspect them. *)
   let backend = Train.fresh_backend () in
   let per_batch_callback ~at_batch ~at_step ~learning_rate ~batch_loss ~epoch_loss =
     if (at_batch + 1) % 20 = 0 then
-      Stdio.printf "Batch=%d, step=%d, lr=%f, batch loss=%f, epoch loss=%f\n%!" at_batch at_step learning_rate
-        batch_loss epoch_loss
+      Stdio.printf "Batch=%d, step=%d, lr=%f, batch loss=%f, epoch loss=%f\n%!" at_batch at_step
+        learning_rate batch_loss epoch_loss
   in
   (* Tn.print_accessible_headers (); *)
   let per_epoch_callback ~at_step ~at_epoch ~learning_rate ~epoch_loss =
-    Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" at_epoch at_step learning_rate epoch_loss
+    Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" at_epoch at_step learning_rate
+      epoch_loss
   in
   let inputs, outputs, model_result, infer_callback, batch_losses, epoch_losses, learning_rates =
-    Train.example_train_loop ~seed ~batch_size ~max_num_devices:(batch_size / 2) ~init_lr ~data_len:len
-      ~epochs ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn ~weight_decay ~per_batch_callback
-      ~per_epoch_callback backend ()
+    Train.example_train_loop ~seed ~batch_size ~max_num_devices:(batch_size / 2) ~init_lr
+      ~data_len:len ~epochs ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn
+      ~weight_decay ~per_batch_callback ~per_epoch_callback backend ()
   in
   let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 inputs in
   let classes = Tensor.value_1d_points ~xdim:0 outputs in
@@ -96,7 +98,8 @@ let experiment ~seed () =
       [
         Line_plot
           {
-            points = Array.of_list_rev_map batch_losses ~f:Float.(fun x -> max (log 0.00003) (log x));
+            points =
+              Array.of_list_rev_map batch_losses ~f:Float.(fun x -> max (log 0.00003) (log x));
             pixel = "-";
           };
       ]

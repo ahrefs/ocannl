@@ -10,10 +10,11 @@ type projections = Arrayjit.Indexing.projections
 
 type diff = {
   grad : tn;
-  zero_grads : asgns;  (** Prepares for backpropagation. Always compile as: [Seq (zero_grads, backprop)]. *)
+  zero_grads : asgns;
+      (** Prepares for backpropagation. Always compile as: [Seq (zero_grads, backprop)]. *)
   backprop : asgns;
-      (** Backpropagates for the tensor and its descendants; which typically means adding partial gradients to
-          the gradient tensor of the subtensors, then for sub-subtensors etc. *)
+      (** Backpropagates for the tensor and its descendants; which typically means adding partial
+          gradients to the gradient tensor of the subtensors, then for sub-subtensors etc. *)
 }
 
 type t = {
@@ -22,8 +23,8 @@ type t = {
   id : int;  (** Same as [value.id]. *)
   value : tn;
   shape : Shape.t;
-      (** The eventual shape of [t.value] and [t.diff.grad], incorporating the current state of shape
-          inference. *)
+      (** The eventual shape of [t.value] and [t.diff.grad], incorporating the current state of
+          shape inference. *)
   children : subtensor list;
 }
 [@@deriving sexp_of]
@@ -122,12 +123,12 @@ val term :
   ?fetch_op:(v:tn -> fetch_op) ->
   unit ->
   t
-(** A terminal: a constant, a parameter, an input of the model. The semantics of shape specification is the
-    same as in {!Shape.make}, and by default the shape will be inferred. *)
+(** A terminal: a constant, a parameter, an input of the model. The semantics of shape specification
+    is the same as in {!Shape.make}, and by default the shape will be inferred. *)
 
 val number : ?label:string list -> ?axis_label:string -> ?grad_spec:grad_spec -> float -> t
-(** A number: a tensor with a single axis of one dimension, initialized to the given value. [grad_spec] is by
-    default [Prohibit_grad]. *)
+(** A number: a tensor with a single axis of one dimension, initialized to the given value.
+    [grad_spec] is by default [Prohibit_grad]. *)
 
 val ndarray :
   ?label:string list ->
@@ -141,10 +142,10 @@ val ndarray :
   ?strict:bool ->
   float array ->
   t
-(** A tensor with an explicit shape, initialized to the given values. Omitted shape rows default to no axes.
-    [grad_spec] is by default [Prohibit_grad]. If [strict] is [true] (the default), the given values must fill
-    the tensor's [value] node precisely; otherwise, the values will be looped over to populate the [value]
-    node. *)
+(** A tensor with an explicit shape, initialized to the given values. Omitted shape rows default to
+    no axes. [grad_spec] is by default [Prohibit_grad]. If [strict] is [true] (the default), the
+    given values must fill the tensor's [value] node precisely; otherwise, the values will be looped
+    over to populate the [value] node. *)
 
 val param :
   ?input_dims:int list ->
@@ -163,14 +164,14 @@ val iter_embedded_arrays : f:(tn -> unit) -> t -> unit
 
 val consume_forward_code : t -> asgns
 (** A forward root is a tensor that is not (currently) used to compute another tensor.
-    [consume_forward_code t] ensures [t] is a forward root, removes it from forward roots, and checks that
-    there are no other forward roots for tensors with children. *)
+    [consume_forward_code t] ensures [t] is a forward root, removes it from forward roots, and
+    checks that there are no other forward roots for tensors with children. *)
 
 val consume_backprop_code : t -> asgns * asgns
-(** A backprop root is a tensor with a gradient that is not (currently) receiving gradients from another
-    tensor. I.e. it is not currently used to compute a tensor with a gradient. [consume_backprop_code t]
-    ensures [t] is a backprop root, removes it from backprop roots, and checks that there are no other
-    backprop roots for tensors with children. *)
+(** A backprop root is a tensor with a gradient that is not (currently) receiving gradients from
+    another tensor. I.e. it is not currently used to compute a tensor with a gradient.
+    [consume_backprop_code t] ensures [t] is a backprop root, removes it from backprop roots, and
+    checks that there are no other backprop roots for tensors with children. *)
 
 (** {2 Printing.} *)
 
@@ -179,34 +180,36 @@ val header : t -> string
 
 type array_print_style =
   [ `Default
-    (** The inner rectangles comprise both an input and an output axis, if available. Similarly, the outer
-        rectangle comprises a second-from-end input axis and a second-from-end output axis, if available. At
-        least one batch axis is output, when available. The axes that couldn't be output are printed at
-        position/dimension [0]. *)
+    (** The inner rectangles comprise both an input and an output axis, if available. Similarly, the
+        outer rectangle comprises a second-from-end input axis and a second-from-end output axis, if
+        available. At least one batch axis is output, when available. The axes that couldn't be
+        output are printed at position/dimension [0]. *)
   | `N5_layout of string
-    (** The string should provide exclusively non-negative integer pseudo-labels. The numbers [0]-[4]
-        represent the priorities of the axes to be printed out, where the priorities correspond to, from
-        highest: horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the
-        outer rectangle, repetition (see also [Node.pp_print]). The numbers [n >= 5] stand for the actual
-        positions [n - 5] within the corresponding axes. *)
+    (** The string should provide exclusively non-negative integer pseudo-labels. The numbers
+        [0]-[4] represent the priorities of the axes to be printed out, where the priorities
+        correspond to, from highest: horizontal, vertical direction of the inner rectangle,
+        horizontal, vertical direction of the outer rectangle, repetition (see also
+        [Node.pp_print]). The numbers [n >= 5] stand for the actual positions [n - 5] within the
+        corresponding axes. *)
   | `Label_layout of (string * int) list
-    (** The association from axis labels to integers. The negative numbers [-5] to [-1] represent the
-        priorities of the axes to be printed out, where the priorities correspond to, from highest:
-        horizontal, vertical direction of the inner rectangle, horizontal, vertical direction of the outer
-        rectangle, repetition (as above). The numbers [n >= 0] stand for the actual positions within the
-        corresponding axes. Unspecified axes are printed at position [0]. *)
+    (** The association from axis labels to integers. The negative numbers [-5] to [-1] represent
+        the priorities of the axes to be printed out, where the priorities correspond to, from
+        highest: horizontal, vertical direction of the inner rectangle, horizontal, vertical
+        direction of the outer rectangle, repetition (as above). The numbers [n >= 0] stand for the
+        actual positions within the corresponding axes. Unspecified axes are printed at position
+        [0]. *)
   | `Inline
     (** The tensors are printed linearly, in a bracketed manner, optionally prefixed with the labels
-        specification. Note that the syntax causes ambiguity for 1-dimensional input axes (underscores are
-        used for axes without explicit labels); when there is a 1-dimensional input axis, we output the labels
-        specification even if there are no axis labels as a way to display the number of axes. The axis
-        nesting is right-to-left (rightmost is innermost). The input axes are innermost and the batch axes
-        outermost. The input axes use [,] as a separator and [()] as axis delimiters, but the delimiter for
-        the outermost (i.e. leftmost) axis is omitted. The output axes use [;] as a separator and [[]] as axis
-        delimiters (obligatory). The batch axes use [;] as a separator and [[||]] as axis delimiters
-        (obligatory). *) ]
-(** We print out up to 5 axes when printing a tensor, as a grid (outer rectangle) of (inner) rectangles,
-    possibly repeated (screens). *)
+        specification. Note that the syntax causes ambiguity for 1-dimensional input axes
+        (underscores are used for axes without explicit labels); when there is a 1-dimensional input
+        axis, we output the labels specification even if there are no axis labels as a way to
+        display the number of axes. The axis nesting is right-to-left (rightmost is innermost). The
+        input axes are innermost and the batch axes outermost. The input axes use [,] as a separator
+        and [()] as axis delimiters, but the delimiter for the outermost (i.e. leftmost) axis is
+        omitted. The output axes use [;] as a separator and [[]] as axis delimiters (obligatory).
+        The batch axes use [;] as a separator and [[||]] as axis delimiters (obligatory). *) ]
+(** We print out up to 5 axes when printing a tensor, as a grid (outer rectangle) of (inner)
+    rectangles, possibly repeated (screens). *)
 
 val to_printbox :
   ?single_node:bool ->
@@ -220,7 +223,13 @@ val to_printbox :
   PrintBox.t
 
 val print :
-  with_grad:bool -> with_code:bool -> ?force:bool -> ?with_low_level:bool -> array_print_style -> t -> unit
+  with_grad:bool ->
+  with_code:bool ->
+  ?force:bool ->
+  ?with_low_level:bool ->
+  array_print_style ->
+  t ->
+  unit
 
 val print_forward_roots : with_grad:bool -> with_code:bool -> array_print_style -> unit
 

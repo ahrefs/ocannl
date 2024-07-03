@@ -33,7 +33,9 @@ let () =
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "b|i->o => o|b->i" in
   Train.forward_and_forget backend ctx ho;
-  let hey2 = TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] () in
+  let hey2 =
+    TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] ()
+  in
   let%op ho2 = hey2 ++ "ab|cd->ef => cf|ae->db" in
   Train.forward_and_forget backend ctx ho2;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho2

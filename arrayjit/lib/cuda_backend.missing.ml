@@ -16,7 +16,9 @@ let compile_batch ~names:_ (bindings : Indexing.unit_bindings) optimized : code_
 
 let link (Unimplemented_ctx : context) (code : code) =
   let lowered_bindings = List.map ~f:(fun s -> (s, ref 0)) @@ Indexing.bound_symbols code in
-  let task = Tnode.{ description = "CUDA missing: install cudajit"; work = (fun _debug_runtime () -> ()) } in
+  let task =
+    Tnode.{ description = "CUDA missing: install cudajit"; work = (fun _debug_runtime () -> ()) }
+  in
   ((Unimplemented_ctx : context), lowered_bindings, task)
 
 let link_batch (Unimplemented_ctx : context) (code_batch : code_batch) =
@@ -26,7 +28,9 @@ let link_batch (Unimplemented_ctx : context) (code_batch : code_batch) =
   in
   let task =
     Array.map code_batch ~f:(fun _ ->
-        Some Tnode.{ description = "CUDA missing: install cudajit"; work = (fun _debug_runtime () -> ()) })
+        Some
+          Tnode.
+            { description = "CUDA missing: install cudajit"; work = (fun _debug_runtime () -> ()) })
   in
   ((Unimplemented_ctx : context), lowered_bindings, task)
 

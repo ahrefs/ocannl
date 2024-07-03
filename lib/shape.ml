@@ -10,12 +10,13 @@ module Debug_runtime = Arrayjit.Utils.Debug_runtime
 
 (** {2 Shape types and inference.} *)
 
-(** An index pointing to any of a shape's axes, including the kind of the axis ([Batch, Input, Output]) and
-    the position (which is counted from the end to facilitate broadcasting).
+(** An index pointing to any of a shape's axes, including the kind of the axis
+    ([Batch, Input, Output]) and the position (which is counted from the end to facilitate
+    broadcasting).
 
-    Note the following inconsistency due to differing conventions in function notation and matrix notation:
-    for label specifications and einsum notation, we write "batch|inputs->outputs", but when we convert a
-    shape to an [Ndarray] index we do it in the order [[batch; outputs; inputs]]. *)
+    Note the following inconsistency due to differing conventions in function notation and matrix
+    notation: for label specifications and einsum notation, we write "batch|inputs->outputs", but
+    when we convert a shape to an [Ndarray] index we do it in the order [[batch; outputs; inputs]]. *)
 module AxisKey = struct
   module T = struct
     type kind = [ `Batch | `Input | `Output ] [@@deriving equal, compare, sexp, hash]
@@ -24,8 +25,8 @@ module AxisKey = struct
       in_axes : kind;
       pos : int;  (** Indices start at [1], counted from the end if [from_end] is true. *)
       from_end : bool;
-          (** Axes are indexed from the front (rarely) or from the end (typically), to avoid reindexing when
-              broadcasting. *)
+          (** Axes are indexed from the front (rarely) or from the end (typically), to avoid
+              reindexing when broadcasting. *)
     }
     [@@deriving equal, compare, sexp]
   end
@@ -49,11 +50,12 @@ type parsed_axis_labels = {
   labels : (string, int) Either.t axis_map;
 }
 [@@deriving compare, sexp, fields]
-(** The labels are strings assigned to [AxisKey] axes. Moreover the [bcast_] fields represent whether
-    additional leading/middle axes are allowed (corresponding to the dot-ellipsis syntax for broadcasting).
-    The string can be used to identify a row variable, and defaults to ["batch"], ["input"], ["output"]
-    respectively when parsing ["..."]. The [given_] fields count the number of specified axes of the
-    corresponding kind in [labels] where [from_end=true], [given_beg_] where [from_end=false]. *)
+(** The labels are strings assigned to [AxisKey] axes. Moreover the [bcast_] fields represent
+    whether additional leading/middle axes are allowed (corresponding to the dot-ellipsis syntax for
+    broadcasting). The string can be used to identify a row variable, and defaults to ["batch"],
+    ["input"], ["output"] respectively when parsing ["..."]. The [given_] fields count the number of
+    specified axes of the corresponding kind in [labels] where [from_end=true], [given_beg_] where
+    [from_end=false]. *)
 
 let axis_labels parsed = parsed.labels
 
@@ -68,7 +70,9 @@ type t = {
 
 let row_of_kind = function `Batch -> batch | `Input -> input | `Output -> output
 
-type deduce_within_shape = Not_constrained | Input_equals_output [@@deriving compare, sexp, variants]
+type deduce_within_shape = Not_constrained | Input_equals_output
+[@@deriving compare, sexp, variants]
+
 type compose_type = Pointwise_bin | Compose | Einsum of string [@@deriving sexp, equal]
 
 type transpose_type =
@@ -79,7 +83,9 @@ type transpose_type =
 [@@deriving equal, sexp]
 
 let identifier_multichar = Angstrom.take_while1 Char.is_alphanum
-let opt_separators : _ Angstrom.t = Angstrom.take_while (fun c -> Char.is_whitespace c || Char.equal c ',')
+
+let opt_separators : _ Angstrom.t =
+  Angstrom.take_while (fun c -> Char.is_whitespace c || Char.equal c ',')
 
 let separators_with_comma =
   let open Angstrom in
@@ -127,7 +133,8 @@ let axis_labels_of_spec_parser ~multichar : parsed_axis_labels Angstrom.t =
     let row = lift3 (for_row ~kind in_axes) in
     opt_separators
     *> (row (return []) (lift Option.some ellipsis_spec) (axes_spec ~from_end:true)
-       <|> row (axes_spec ~from_end:false) (lift Option.some ellipsis_spec) (axes_spec ~from_end:true)
+       <|> row (axes_spec ~from_end:false) (lift Option.some ellipsis_spec)
+             (axes_spec ~from_end:true)
        <|> row (return []) (return None) (axes_spec ~from_end:true)
        <|> row (return []) (lift Option.some ellipsis_spec) (return []))
     <* opt_separators
@@ -165,41 +172,49 @@ let axis_labels_of_spec_parser ~multichar : parsed_axis_labels Angstrom.t =
 let axis_labels_of_spec spec =
   let multichar = String.contains spec ',' in
   match
-    Angstrom.(parse_string ~consume:Consume.All (axis_labels_of_spec_parser ~multichar <* end_of_input) spec)
+    Angstrom.(
+      parse_string ~consume:Consume.All (axis_labels_of_spec_parser ~multichar <* end_of_input) spec)
   with
   | Ok result -> result
   | Error msg ->
-      raise @@ Utils.User_error ("Shape.axis_labels_of_spec: while parsing: " ^ spec ^ " error: " ^ msg)
+      raise
+      @@ Utils.User_error ("Shape.axis_labels_of_spec: while parsing: " ^ spec ^ " error: " ^ msg)
 
 let einsum_of_spec_parser ~multichar : _ Angstrom.t =
   let open Angstrom in
   let p = axis_labels_of_spec_parser ~multichar in
-  lift3 (fun a b c -> (a, Some b, c)) (p <?> "RHS1" <* char ';') (p <?> "RHS2") (string "=>" *> (p <?> "LHS"))
+  lift3
+    (fun a b c -> (a, Some b, c))
+    (p <?> "RHS1" <* char ';')
+    (p <?> "RHS2")
+    (string "=>" *> (p <?> "LHS"))
   <|> lift2 (fun a c -> (a, None, c)) (p <?> "RHS") (string "=>" *> (p <?> "LHS"))
 
 let einsum_of_spec spec =
   let multichar = String.contains spec ',' in
   match
-    Angstrom.(parse_string ~consume:Consume.All (einsum_of_spec_parser ~multichar <* end_of_input) spec)
+    Angstrom.(
+      parse_string ~consume:Consume.All (einsum_of_spec_parser ~multichar <* end_of_input) spec)
   with
   | Ok result -> result
-  | Error msg -> raise @@ Utils.User_error ("Shape.einsum_of_spec: while parsing: " ^ spec ^ " error: " ^ msg)
+  | Error msg ->
+      raise @@ Utils.User_error ("Shape.einsum_of_spec: while parsing: " ^ spec ^ " error: " ^ msg)
 
-(** How to propagate shape updates and do the last update of [Tensor.t.shape] when finalizing the tensor. Axes
-    are broadcast-expanded on a bottom-up update to fit the incoming shape. *)
+(** How to propagate shape updates and do the last update of [Tensor.t.shape] when finalizing the
+    tensor. Axes are broadcast-expanded on a bottom-up update to fit the incoming shape. *)
 type logic =
   | Broadcast of compose_type * t * t
       (** Matches the shapes for a binary operation.
 
-          For [Broadcast (Einsum (ls1, ls2, ls3), s1, s2)], the labels of [s1] and [s2] must match according
-          to the [ls1], [ls2] lineup, and the resulting shape inherits the labels according to the [ls3]
-          lineup. *)
+          For [Broadcast (Einsum (ls1, ls2, ls3), s1, s2)], the labels of [s1] and [s2] must match
+          according to the [ls1], [ls2] lineup, and the resulting shape inherits the labels
+          according to the [ls3] lineup. *)
   | Transpose of transpose_type * t
-      (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of [s1], hence
-          the name. *)
+      (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of
+          [s1], hence the name. *)
   | Terminal of Arrayjit.Ops.init_op
-      (** Extracts any available shape information from the initialization. E.g. for [File_mapped fn], opens
-          the file [fn] to check its length. *)
+      (** Extracts any available shape information from the initialization. E.g. for
+          [File_mapped fn], opens the file [fn] to check its length. *)
 [@@deriving equal, sexp]
 
 let logic_to_spec = function
@@ -228,22 +243,25 @@ let get_update_id =
     Update_id.Update_id !uid
 
 type update_step = { shape : t; logic : logic; id : update_id } [@@deriving sexp]
-(** Data required for a shape inference update step. Ideally, an update should be performed at least twice,
-    the second time after all the other relevant updates have been performed for the first time. In OCANNL,
-    this is achieved by performing updates both as the tensors are constructed, and via lazy callbacks as the
-    corresponding [Arrayjit.Indexing] dimensions and projections are first accessed. *)
+(** Data required for a shape inference update step. Ideally, an update should be performed at least
+    twice, the second time after all the other relevant updates have been performed for the first
+    time. In OCANNL, this is achieved by performing updates both as the tensors are constructed, and
+    via lazy callbacks as the corresponding [Arrayjit.Indexing] dimensions and projections are first
+    accessed. *)
 
 type Row.error_trace += Shape_mismatch of t list
 
 let with_error_trace = ref true
 
-(** Converts an axes-keyed map into three arrays of values: batch axes, input axes, output axes. If the map is
-    incomplete, the result will likely be invalid: gaps in the array are filled with an arbitrary one of the
-    provided values. *)
+(** Converts an axes-keyed map into three arrays of values: batch axes, input axes, output axes. If
+    the map is incomplete, the result will likely be invalid: gaps in the array are filled with an
+    arbitrary one of the provided values. *)
 let axis_map_to_dims_bio (type a) ?(default : a option) (idcs : a axis_map) =
   if Map.is_empty idcs then (([||], [||], [||]), ([||], [||], [||]))
   else
-    let witness = match default with Some witness -> witness | None -> snd @@ Map.min_elt_exn idcs in
+    let witness =
+      match default with Some witness -> witness | None -> snd @@ Map.min_elt_exn idcs
+    in
     let bch_axes, other =
       Map.partition_mapi idcs ~f:(fun ~key:{ in_axes; _ } ~data ->
           if Row.is_batch in_axes then Either.First data else Either.Second data)
@@ -271,15 +289,17 @@ let axis_map_to_dims_bio (type a) ?(default : a option) (idcs : a axis_map) =
     let out, beg_out = make_row out_axes in
     ((bch, inp, out), (beg_bch, beg_inp, beg_out))
 
-(** Converts an axes-keyed map into an array of values using the [force_to_dims] semantics of axes. If the map
-    is incomplete and the [~default] is not given, the result might be invalid: gaps in the array are filled
-    with an arbitrary one of the provided values. *)
+(** Converts an axes-keyed map into an array of values using the [force_to_dims] semantics of axes.
+    If the map is incomplete and the [~default] is not given, the result might be invalid: gaps in
+    the array are filled with an arbitrary one of the provided values. *)
 let axis_map_to_dims_index (type a) ?(default : a option) (idcs : a axis_map) : a array =
   let (bch, inp, out), (beg_bch, beg_inp, beg_out) = axis_map_to_dims_bio ?default idcs in
   Array.concat [ beg_bch; bch; beg_out; out; beg_inp; inp ]
 
 let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
-  let (b_dims, i_dims, o_dims), (beg_b_dims, beg_i_dims, beg_o_dims) = axis_map_to_dims_bio labels.labels in
+  let (b_dims, i_dims, o_dims), (beg_b_dims, beg_i_dims, beg_o_dims) =
+    axis_map_to_dims_bio labels.labels
+  in
   let to_dim kind = Array.(Fn.compose to_list @@ map ~f:(f kind)) in
   let to_bcast kind v beg_dims =
     let beg_dims = to_dim kind beg_dims in
@@ -308,7 +328,8 @@ let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env ~dim_var_env la
     | Second i ->
         let var = Row.get_var () in
         let d = Row.Var var in
-        proj_env_update := Map.add_exn !proj_env_update ~key:var ~data:(Arrayjit.Indexing.Fixed_idx i);
+        proj_env_update :=
+          Map.add_exn !proj_env_update ~key:var ~data:(Arrayjit.Indexing.Fixed_idx i);
         extras := Row.Dim_constr { d; constr = At_least_dim (i + 1) } :: !extras;
         d
   in
@@ -412,8 +433,8 @@ let get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : update_step) :
       let proj_axis_env =
         Map.add_exn Row.dim_map_empty ~key:slice_v ~data:(Arrayjit.Indexing.Iterator static_symbol)
       in
-      (* Expand a batch row instead of reducing one because even if the dimensions are known, the equations
-         are also needed for projection inference. *)
+      (* Expand a batch row instead of reducing one because even if the dimensions are known, the
+         equations are also needed for projection inference. *)
       let expanded_batch =
         match cur_sh.batch.bcast with
         | Broadcastable ->
@@ -493,7 +514,8 @@ let get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : update_step) :
       in
       let proj_env =
         let combine ~key:_ _ _ = assert false in
-        Map.merge_skewed ~combine proj_env_rhs1 @@ Map.merge_skewed ~combine proj_env_rhs2 proj_env_lhs
+        Map.merge_skewed ~combine proj_env_rhs1
+        @@ Map.merge_skewed ~combine proj_env_rhs2 proj_env_lhs
       in
       (* Forget the old proj_env as it is not relevant after a propagate_shapes call completes. *)
       ( proj_env,
@@ -539,10 +561,13 @@ let apply_env_t env sh =
 
 let apply_env_update ~eliminate_variables env update_step =
   iter_shapes update_step ~f:(apply_env_t env);
-  if eliminate_variables then List.concat_map ~f:(Row.eliminate_variables env) @@ all_rows update_step else []
+  if eliminate_variables then
+    List.concat_map ~f:(Row.eliminate_variables env) @@ all_rows update_step
+  else []
 
 let propagate_shapes (update_step : update_step) : unit =
-  (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice does). *)
+  (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice
+     does). *)
   ignore (apply_env_update ~eliminate_variables:false !state update_step);
   let _, ineqs = get_inequalities update_step in
   active_update_steps := update_step :: !active_update_steps;
@@ -553,13 +578,16 @@ let propagate_shapes (update_step : update_step) : unit =
   state := env
 
 let finish_inference (() : unit) : unit =
-  (* TODO: optimize to keep all needed information in unsolved, rather than starting with all constraints. *)
+  (* TODO: optimize to keep all needed information in unsolved, rather than starting with all
+     constraints. *)
   let unsolved, env = Row.solve_inequalities ~stage:Stage2 !active_constraints !state in
   let unsolved, env = Row.solve_inequalities ~stage:Stage3 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage4 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage5 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage6 unsolved env in
-  let eliminated = List.concat_map ~f:(apply_env_update ~eliminate_variables:true env) !active_update_steps in
+  let eliminated =
+    List.concat_map ~f:(apply_env_update ~eliminate_variables:true env) !active_update_steps
+  in
   let unsolved, env = Row.solve_inequalities ~stage:Stage7 (eliminated @ unsolved) env in
   assert (List.is_empty unsolved);
   ignore @@ List.map ~f:(apply_env_update ~eliminate_variables:false env) !active_update_steps;
@@ -625,17 +653,19 @@ let fresh_proj_ids update =
       fresh_shape sh1;
       fresh_shape sh2
 
-(** Computes the indexing into subtensors given the shape information of a tensor. [derive_projections] should
-    only be invoked when the shapes are fully inferred already! *)
+(** Computes the indexing into subtensors given the shape information of a tensor.
+    [derive_projections] should only be invoked when the shapes are fully inferred already! *)
 let derive_projections (update_step : update_step) : Idx.projections =
   finish_inference ();
   fresh_proj_ids update_step;
   let _debug_update_step : update_step = update_step in
-  let (proj_axis_env, ineqs) : proj_axis_env * Row.constraint_ list = get_inequalities update_step in
-  (* We need to solve the equations/inequalities one last time because of fresh row variables potentially
-     generated by [get_inequalities]. Since the variables in the shapes must be substituted-out at this point,
-     the global state is already an empty env, but in principle we want to only find a local solution to not
-     contaminate projections across operations. *)
+  let (proj_axis_env, ineqs) : proj_axis_env * Row.constraint_ list =
+    get_inequalities update_step
+  in
+  (* We need to solve the equations/inequalities one last time because of fresh row variables
+     potentially generated by [get_inequalities]. Since the variables in the shapes must be
+     substituted-out at this point, the global state is already an empty env, but in principle we
+     want to only find a local solution to not contaminate projections across operations. *)
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage1 ineqs Row.empty_env in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage2 unsolved local_env in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage3 unsolved local_env in
@@ -686,7 +716,8 @@ let derive_projections (update_step : update_step) : Idx.projections =
             trace = [ ("derive_projections", Idx.unique_debug_id ()) ];
           };
       }
-  with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch (lhs :: rhs) :: trace)
+  with Row.Shape_error (s, trace) ->
+    raise @@ Row.Shape_error (s, Shape_mismatch (lhs :: rhs) :: trace)
 
 (** {2 Shape builders.} *)
 
@@ -694,7 +725,11 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
     ?(deduced = Not_constrained) ~debug_name ~id () =
   let open Row in
   let make_dims kind ds =
-    { dims = List.map ~f:(fun d -> get_dim ~d ()) ds; bcast = Broadcastable; id = row_id ~sh_id:id ~kind }
+    {
+      dims = List.map ~f:(fun d -> get_dim ~d ()) ds;
+      bcast = Broadcastable;
+      id = row_id ~sh_id:id ~kind;
+    }
   in
   let make_axes kind ds =
     {
@@ -704,7 +739,11 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
     }
   in
   let make_unknown kind =
-    { dims = []; bcast = Row_var { v = get_row_var (); beg_dims = [] }; id = row_id ~sh_id:id ~kind }
+    {
+      dims = [];
+      bcast = Row_var { v = get_row_var (); beg_dims = [] };
+      id = row_id ~sh_id:id ~kind;
+    }
   in
   let batch =
     match (batch_dims, batch_axes) with
@@ -750,7 +789,8 @@ let shape_spec_to_dims_bio labels =
         in
         try Row.get_dim ~d:(Int.of_string dim) ~label ()
         with _ -> invalid_arg "shape_spec_to_dims_bio: int expected after '='")
-    | First label -> Var (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~label ()))
+    | First label ->
+        Var (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~label ()))
     | Second d -> Row.get_dim ~d ()
   in
   let row_var_env = Hashtbl.create (module String) in
@@ -778,7 +818,10 @@ let to_string_hum ?(style = `Axis_size) (sh : t) =
     String.concat ~sep:","
     @@ List.mapi dims ~f:(fun i d ->
            let num =
-             match kind with `Input -> n_batch + n_outputs + i | `Output -> n_batch + i | `Batch -> i
+             match kind with
+             | `Input -> n_batch + n_outputs + i
+             | `Output -> n_batch + i
+             | `Batch -> i
            in
            match style with
            | `Only_labels | `Axis_size -> Row.dim_to_string style d

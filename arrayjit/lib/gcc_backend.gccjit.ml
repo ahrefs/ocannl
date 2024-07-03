@@ -16,7 +16,8 @@ type config = [ `Physical_devices_only | `For_parallel_copying | `Most_parallel_
 
 type mem_properties =
   | Local_only  (** The array is only needed for a local computation, is allocated on the stack. *)
-  | From_context  (** The array has a copy allocated per-cpu-device, may or may not exist on the host. *)
+  | From_context
+      (** The array has a copy allocated per-cpu-device, may or may not exist on the host. *)
   | Constant_from_host  (** The array is read directly from the host. *)
 [@@deriving sexp, equal, compare, variants]
 
@@ -37,7 +38,11 @@ let buffer_ptr ctx_array = Ndarray.get_voidptr ctx_array
 
 let buffer_ptr ctx_array = ctx_array
 
-type context = { label : string; arrays : ctx_arrays; result : (Gccjit.result option[@sexp.opaque]) }
+type context = {
+  label : string;
+  arrays : ctx_arrays;
+  result : (Gccjit.result option[@sexp.opaque]);
+}
 [@@deriving sexp_of]
 
 let ctx_arrays context = context.arrays
@@ -79,15 +84,15 @@ type tn_info = {
   mutable ptr : (Gccjit.rvalue[@sexp.opaque]) Lazy.t;
       (** Pointer to the first value of the associated array.
           - if [mem = Constant_from_host], the pointer to the first element of the hosted [Ndarray],
-          - if [mem = From_context], either a pointer to [Ndarray] from [context.arrays] when [~shared:false],
-            or the function parameter when [~shared:true],
+          - if [mem = From_context], either a pointer to [Ndarray] from [context.arrays] when
+            [~shared:false], or the function parameter when [~shared:true],
           - if [mem = Local_only], the address of the on-the-stack array. *)
   mem : mem_properties;
   dims : int array;
   size_in_bytes : int;
   num_typ : (Gccjit.type_[@sexp.opaque]);
-      (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]), [double]
-          (precision [Double]). *)
+      (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]),
+          [double] (precision [Double]). *)
   prec : Ops.prec;
   zero_initialized : bool;
 }
@@ -104,7 +109,11 @@ type info_nodes = {
 }
 [@@deriving sexp_of]
 
-type param_source = Log_file_name | Merge_buffer | Param_ptr of Tn.t | Static_idx of Indexing.static_symbol
+type param_source =
+  | Log_file_name
+  | Merge_buffer
+  | Param_ptr of Tn.t
+  | Static_idx of Indexing.static_symbol
 [@@deriving sexp_of]
 
 type procedure = {
@@ -160,7 +169,8 @@ let zero_out ctx block node =
 let get_c_ptr ctx num_typ ba =
   Gccjit.(RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray ba)
 
-let prepare_node ~debug_log_zero_out ~get_ident ctx nodes traced_store ctx_nodes initializations (tn : Tn.t) =
+let prepare_node ~debug_log_zero_out ~get_ident ctx nodes traced_store ctx_nodes initializations
+    (tn : Tn.t) =
   let open Gccjit in
   Hashtbl.update nodes tn ~f:(function
     | Some old -> old
@@ -244,7 +254,9 @@ let prec_to_kind prec =
   | Single_prec _ -> Type.Float
   | Double_prec _ -> Type.Double
 
-let is_builtin_op = function Ops.Add | Sub | Mul | Div -> true | ToPowOf | Relu_gate | Arg2 | Arg1 -> false
+let is_builtin_op = function
+  | Ops.Add | Sub | Mul | Div -> true
+  | ToPowOf | Relu_gate | Arg2 | Arg1 -> false
 
 let builtin_op = function
   | Ops.Add -> Gccjit.Plus
@@ -271,9 +283,14 @@ let debug_log_zero_out ctx log_functions get_ident block node =
       Block.eval block @@ RValue.call ctx pf
       @@ lf
          :: RValue.string_literal ctx
-              [%string {|memset_zero(%{node_debug_name get_ident node}) where before first element = %g
+              [%string
+                {|memset_zero(%{node_debug_name get_ident node}) where before first element = %g
 |}]
-         :: [ to_d @@ RValue.lvalue @@ LValue.access_array (Lazy.force node.ptr) @@ RValue.zero ctx c_index ];
+         :: [
+              to_d @@ RValue.lvalue
+              @@ LValue.access_array (Lazy.force node.ptr)
+              @@ RValue.zero ctx c_index;
+            ];
       Block.eval block @@ RValue.call ctx ff [ lf ]
   | _ -> ()
 
@@ -288,8 +305,8 @@ let debug_log_index ctx log_functions =
         Block.eval block @@ RValue.call ctx ff [ lf ]
   | _ -> fun _block _i _index -> ()
 
-let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; _ } func initial_block
-    (body : Low_level.t) =
+let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; _ } func
+    initial_block (body : Low_level.t) =
   let open Gccjit in
   let c_int = Type.get ctx Type.Int in
   let c_index = c_int in
@@ -300,8 +317,8 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         | Indexing.Fixed_idx i -> RValue.int ctx c_index i
         | Iterator s -> Map.find_exn env s)
     with e ->
-      Stdlib.Format.eprintf "exec_as_gccjit: missing index from@ %a@ among environment keys:@ %a\n%!"
-        Sexp.pp_hum
+      Stdlib.Format.eprintf
+        "exec_as_gccjit: missing index from@ %a@ among environment keys:@ %a\n%!" Sexp.pp_hum
         ([%sexp_of: Indexing.axis_index array] indices)
         Sexp.pp_hum
         ([%sexp_of: Indexing.symbol list] @@ Map.keys env);
@@ -311,7 +328,8 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
   let c_double = Type.get ctx Type.Double in
   let cast_bool num_typ v = RValue.cast ctx (RValue.cast ctx v c_int) num_typ in
   let to_d v = RValue.cast ctx v c_double in
-  (* Source of unique identifiers for local scope ids, which can be non-unique globally due to inlining. *)
+  (* Source of unique identifiers for local scope ids, which can be non-unique globally due to
+     inlining. *)
   let uid = ref 0 in
   let get_uid () =
     let id =
@@ -336,7 +354,8 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         let base = RValue.cast ctx v1 c_float in
         let expon = RValue.cast ctx v2 c_float in
         RValue.cast ctx (RValue.call ctx (Function.builtin ctx "powf") [ base; expon ]) num_typ
-    | ToPowOf, Byte_prec _ -> raise @@ Utils.User_error "gccjit_backend: Byte_prec does not support ToPowOf"
+    | ToPowOf, Byte_prec _ ->
+        raise @@ Utils.User_error "gccjit_backend: Byte_prec does not support ToPowOf"
     | Relu_gate, _ ->
         let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) v1 in
         RValue.binary_op ctx Mult num_typ cmp @@ v2
@@ -356,7 +375,8 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
     let loop = debug_float ~env prec in
     match value with
     | Low_level.Local_scope { id; _ } ->
-        (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug logs. *)
+        (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug
+           logs. *)
         loop @@ Get_local id
     | Get_local id ->
         let lvalue = Map.find_exn !debug_locals id in
@@ -378,7 +398,8 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         let offset = jit_array_offset ctx ~idcs ~dims:(Lazy.force tn.dims) in
         let v = to_d @@ RValue.lvalue @@ LValue.access_array ptr offset in
         ("merge " ^ get_ident tn ^ "[%d]{=%g}", [ offset; v ])
-    | Get_global (C_function _, Some _) -> failwith "gccjit_backend: FFI with parameters NOT IMPLEMENTED YET"
+    | Get_global (C_function _, Some _) ->
+        failwith "gccjit_backend: FFI with parameters NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         let node = get_node tn in
         let idcs = lookup env idcs in
@@ -406,7 +427,8 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         let v_format, v_fillers = debug_float ~env node.prec v_code in
         let offset = jit_array_offset ctx ~idcs ~dims:node.dims in
         let debug_line = "# " ^ String.substr_replace_all debug ~pattern:"\n" ~with_:"$" ^ "\n" in
-        Block.eval !current_block @@ RValue.call ctx pf @@ [ lf; RValue.string_literal ctx debug_line ];
+        Block.eval !current_block @@ RValue.call ctx pf
+        @@ [ lf; RValue.string_literal ctx debug_line ];
         Block.eval !current_block @@ RValue.call ctx pf
         @@ lf
            :: RValue.string_literal ctx
@@ -471,8 +493,8 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         (* Scope ids can be non-unique due to inlining. *)
         let v_name = Int.("v" ^ to_string i ^ "_" ^ get_uid ()) in
         let lvalue = Function.local func typ v_name in
-        (* Arrays are initialized to 0 by default. However, there is typically an explicit initialization for
-           virtual nodes. *)
+        (* Arrays are initialized to 0 by default. However, there is typically an explicit
+           initialization for virtual nodes. *)
         Block.assign !current_block lvalue @@ RValue.zero ctx typ;
         let old_locals = !locals in
         locals := Map.update !locals id ~f:(fun _ -> lvalue);
@@ -509,7 +531,8 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         let local_typ = gcc_typ_of_prec tn.prec in
         let num_typ = Type.get ctx local_typ in
         if not @@ Ops.equal_prec prec tn.prec then RValue.cast ctx rvalue num_typ else rvalue
-    | Get_global (C_function _, Some _) -> failwith "gccjit_backend: FFI with parameters NOT IMPLEMENTED YET"
+    | Get_global (C_function _, Some _) ->
+        failwith "gccjit_backend: FFI with parameters NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         Hash_set.add visited tn;
         let node = get_node tn in
@@ -535,7 +558,9 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
     | Unop (Identity, c) -> loop c
     | Unop (Relu, c) ->
         (* FIXME: don't recompute c *)
-        let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) @@ loop c in
+        let cmp =
+          cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) @@ loop c
+        in
         RValue.binary_op ctx Mult num_typ cmp @@ loop c
     | Constant v -> RValue.double ctx num_typ v
   and loop_for_loop ~toplevel ~env key ~from_ ~to_ body =
@@ -599,7 +624,8 @@ let%track_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
   let fkind = Function.Exported in
   let c_str = Type.(get ctx Const_char_ptr) in
   let log_file_name =
-    if Utils.settings.debug_log_from_routines then Some (Param.create ctx c_str "log_file_name", Log_file_name)
+    if Utils.settings.debug_log_from_routines then
+      Some (Param.create ctx c_str "log_file_name", Log_file_name)
     else None
   in
   let symbols = Indexing.bound_symbols bindings in
@@ -619,7 +645,9 @@ let%track_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
     ref (Option.to_list log_file_name @ merge_param @ static_indices)
   in
   let ctx_nodes : ctx_nodes =
-    match opt_ctx_arrays with None -> Param_ptrs params | Some ctx_arrays -> Ctx_arrays (ref ctx_arrays)
+    match opt_ctx_arrays with
+    | None -> Param_ptrs params
+    | Some ctx_arrays -> Ctx_arrays (ref ctx_arrays)
   in
   let initializations = ref [] in
   let nodes = Hashtbl.create (module Tn) in
@@ -654,19 +682,25 @@ let%track_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
       log_functions_ref := Some (log_file, fprintf, fflush));
   let log_functions = Lazy.force log_functions in
   let debug_log_index = debug_log_index ctx log_functions in
-  Map.iteri env ~f:(fun ~key:sym ~data:idx -> debug_log_index init_block (Indexing.symbol_ident sym) idx);
+  Map.iteri env ~f:(fun ~key:sym ~data:idx ->
+      debug_log_index init_block (Indexing.symbol_ident sym) idx);
   (* Do initializations in the order they were scheduled. *)
   List.iter (List.rev !initializations) ~f:(fun init -> init init_block func);
   let main_block = Block.create ~name func in
   (* let merge_node = Option.map merge_node ~f:(fun _tn -> Function.param) in *)
-  let ctx_info : info_nodes = { ctx; traced_store; init_block; func; nodes; get_ident; merge_node = None } in
+  let ctx_info : info_nodes =
+    { ctx; traced_store; init_block; func; nodes; get_ident; merge_node = None }
+  in
   let after_proc = compile_main ~name ~log_functions ~env ctx_info func main_block proc in
   (match log_functions with
   | Some (lf, _, _) ->
       (* FIXME: should be Imported? *)
       let file_ptr = Type.(get ctx File_ptr) in
       let fclose =
-        Function.create ctx Imported Type.(get ctx Type.Void_ptr) "fclose" [ Param.create ctx file_ptr "f" ]
+        Function.create ctx Imported
+          Type.(get ctx Type.Void_ptr)
+          "fclose"
+          [ Param.create ctx file_ptr "f" ]
       in
       Block.eval after_proc @@ RValue.call ctx fclose [ lf ]
   | None -> ());
@@ -688,9 +722,11 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
   let ctx = Context.create_child @@ Option.value_exn ~here:[%here] !root_ctx in
   Context.set_option ctx Context.Optimization_level (optimization_level ());
   (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
-     Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx Context.Dump_everything
-     true); *)
-  let info, opt_ctx_arrays, params = compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident lowered in
+     Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx
+     Context.Dump_everything true); *)
+  let info, opt_ctx_arrays, params =
+    compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident lowered
+  in
   (if Utils.settings.output_debug_files_in_run_directory then
      let f_name = name ^ "-gccjit-debug.c" in
      Context.dump_to_file ctx ~update_locs:true f_name);
@@ -717,8 +753,8 @@ let%track_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
   let ctx = Context.create_child @@ Option.value_exn ~here:[%here] !root_ctx in
   Context.set_option ctx Context.Optimization_level (optimization_level ());
   (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
-     Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx Context.Dump_everything
-     true); *)
+     Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx
+     Context.Dump_everything true); *)
   let opt_ctx_arrays, funcs =
     Array.fold_mapi lowereds ~init:opt_ctx_arrays ~f:(fun i opt_ctx_arrays lowered ->
         match (names.(i), lowered) with
@@ -749,7 +785,8 @@ let%track_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
               name;
               opt_ctx_arrays;
               params = List.map ~f:snd params;
-              expected_merge_node = Option.(join @@ map lowereds.(i) ~f:(fun optim -> optim.merge_node));
+              expected_merge_node =
+                Option.(join @@ map lowereds.(i) ~f:(fun optim -> optim.merge_node));
             })) )
 
 let alloc_buffer ?old_buffer ~size_in_bytes () =
@@ -794,19 +831,22 @@ let%track_sexp link_compiled ~merge_buffer (old_context : context) (code : proce
         | Empty, [] -> Indexing.Result (Gccjit.Result.code code.result name cs)
         | Bind _, [] -> invalid_arg "Gccjit_backend.link: too few static index params"
         | Bind (_, bs), Static_idx _ :: ps -> Param_idx (ref 0, link bs ps Ctypes.(int @-> cs))
-        | Empty, Static_idx _ :: _ -> invalid_arg "Gccjit_backend.link: too many static index params"
-        | bs, Log_file_name :: ps -> Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
+        | Empty, Static_idx _ :: _ ->
+            invalid_arg "Gccjit_backend.link: too many static index params"
+        | bs, Log_file_name :: ps ->
+            Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Param_ptr tn :: ps ->
             let nd = match Map.find arrays tn with Some nd -> nd | None -> assert false in
-            (* let f ba = Ctypes.bigarray_start Ctypes_static.Genarray ba in let c_ptr = Ndarray.(map { f }
-               nd) in *)
+            (* let f ba = Ctypes.bigarray_start Ctypes_static.Genarray ba in let c_ptr =
+               Ndarray.(map { f } nd) in *)
             let c_ptr = Ndarray.get_voidptr nd in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
         | bs, Merge_buffer :: ps ->
             Param_2f (Ndarray.get_voidptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
       in
-      (* Folding by [link] above reverses the input order. Important: [code.bindings] are traversed in the
-         wrong order but that's OK because [link] only uses them to check the number of indices. *)
+      (* Folding by [link] above reverses the input order. Important: [code.bindings] are traversed
+         in the wrong order but that's OK because [link] only uses them to check the number of
+         indices. *)
       link code.bindings (List.rev code.params) Ctypes.(void @-> returning void)]
   in
   let%diagn_rt_sexp work () : unit =

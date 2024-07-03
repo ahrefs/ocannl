@@ -57,15 +57,20 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   let log_losses = ref [] in
   let learning_rates = ref [] in
   let%op margin_loss = ?/(1 - (moons_class *. mlp moons_input)) in
-  (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update computation. *)
+  (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update
+     computation. *)
   let scalar_loss, weight_decay =
     if use_builtin_weight_decay then
       let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
       (scalar_loss, 0.0002)
     else
       let%op ssq w = (w **. 2) ++ "...|...->... => 0" in
-      let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:TDSL.O.( + ) in
-      let%op scalar_loss = ((margin_loss ++ "...|... => 0") /. !..batch_size) + (0.0001 *. reg_loss) in
+      let reg_loss =
+        List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:TDSL.O.( + )
+      in
+      let%op scalar_loss =
+        ((margin_loss ++ "...|... => 0") /. !..batch_size) + (0.0001 *. reg_loss)
+      in
       (scalar_loss, 0.0)
   in
   (* So that we can inspect them. *)
@@ -80,9 +85,10 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   let routine = Backend.(link ctx @@ compile bindings (Seq (update.fwd_bprop, sgd))) in
   Train.all_host_to_device (module Backend) routine.context scalar_loss;
   Train.all_host_to_device (module Backend) routine.context learning_rate;
-  (* Stdio.print_endline "\n******** scalar_loss **********"; Tensor.print_tree ~with_id:true ~with_grad:false
-     ~depth:9 scalar_loss; Stdio.print_endline "\n******** learning_rate **********"; Tensor.print_tree
-     ~with_id:true ~with_grad:false ~depth:9 learning_rate; Stdio.printf "\n********\n%!"; *)
+  (* Stdio.print_endline "\n******** scalar_loss **********"; Tensor.print_tree ~with_id:true
+     ~with_grad:false ~depth:9 scalar_loss; Stdio.print_endline "\n******** learning_rate
+     **********"; Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
+     Stdio.printf "\n********\n%!"; *)
   let open Operation.At in
   let epoch_loss = ref 0. in
   let step_ref = IDX.find_exn routine.bindings step_n in
@@ -115,14 +121,16 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   Train.set_on_host Volatile mlp_result.value;
   (* By using jitted.context here, we don't need to copy the parameters back to the host. *)
   let result_routine =
-    Backend.(link routine.context @@ compile IDX.empty @@ Block_comment ("moons infer", mlp_result.forward))
+    Backend.(
+      link routine.context @@ compile IDX.empty @@ Block_comment ("moons infer", mlp_result.forward))
   in
   Stdio.print_endline "\n******** mlp_result **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 mlp_result;
   Stdio.printf "\n********\n%!";
   let callback (x, y) =
     Tensor.set_values point [| x; y |];
-    (* For the gccjit backend, point is only on host, not on device. For cuda, this will be needed. *)
+    (* For the gccjit backend, point is only on host, not on device. For cuda, this will be
+       needed. *)
     assert (Backend.from_host result_routine.context point.value);
     Train.run result_routine;
     assert (Backend.to_host result_routine.context mlp_result.value);

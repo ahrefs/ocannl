@@ -6,7 +6,10 @@ module Debug_runtime = Utils.Debug_runtime
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-type task = { description : string; work : (module Minidebug_runtime.Debug_runtime) -> unit -> unit }
+type task = {
+  description : string;
+  work : (module Minidebug_runtime.Debug_runtime) -> unit -> unit;
+}
 [@@deriving sexp_of]
 
 let run debug_runtime task =
@@ -30,19 +33,19 @@ type memory_mode =
   | Virtual  (** The tensor node's computations are inlined on a per-scalar basis. *)
   | Never_virtual  (** One of: [Local], [On_device], [Hosted]. *)
   | Local
-      (** The full tensor node is cached for the duration of a computation but not persisted across calls to
-          compiled functions. It is not available for merging across devices. *)
+      (** The full tensor node is cached for the duration of a computation but not persisted across
+          calls to compiled functions. It is not available for merging across devices. *)
   | Device_only  (** One of: [Local], [On_device]. *)
   | On_device
-      (** The tensor node is stored on the devices that compute with it and persisted across function calls.
-          It is available for merging across devices (for devices that support merging / P2P), but not
-          (directly) for visualization or storing to disk. *)
+      (** The tensor node is stored on the devices that compute with it and persisted across
+          function calls. It is available for merging across devices (for devices that support
+          merging / P2P), but not (directly) for visualization or storing to disk. *)
   | Materialized  (** One of: [On_device], [Hosted]. *)
   | Hosted of memory_type
-      (** The tensor node is stored in a globally addressable memory, in addition to on devices where it is
-          computed with (or as part of one of them, if "hosting on device", or only on the host and not on
-          devices, for some backends). It is available for all operations, and visible to OCaml programs as an
-          {!Ndarray} (the optional [array] of {!t}). *)
+      (** The tensor node is stored in a globally addressable memory, in addition to on devices
+          where it is computed with (or as part of one of them, if "hosting on device", or only on
+          the host and not on devices, for some backends). It is available for all operations, and
+          visible to OCaml programs as an {!Ndarray} (the optional [array] of {!t}). *)
 [@@deriving sexp, compare, equal]
 
 type t = {
@@ -87,23 +90,30 @@ let is_materialized_force tn provenance =
   | Some ((On_device | Hosted _ | Materialized), _) -> true
   | Some ((Never_virtual | Device_only | Effectively_constant), _) -> assert false
 
-let known_not_materialized tn = match tn.memory_mode with Some ((Virtual | Local), _) -> true | _ -> false
+let known_not_materialized tn =
+  match tn.memory_mode with Some ((Virtual | Local), _) -> true | _ -> false
 
 let known_constant tn =
-  match tn.memory_mode with Some ((Effectively_constant | Hosted Constant), _) -> true | _ -> false
+  match tn.memory_mode with
+  | Some ((Effectively_constant | Hosted Constant), _) -> true
+  | _ -> false
 
 let known_non_virtual tn =
   match tn.memory_mode with None | Some ((Virtual | Effectively_constant), _) -> false | _ -> true
 
 let known_not_param tn =
   match tn.memory_mode with
-  | Some ((Virtual | Local | Effectively_constant | Device_only | On_device | Hosted (Constant | Volatile)), _)
-    ->
+  | Some
+      ( ( Virtual | Local | Effectively_constant | Device_only | On_device
+        | Hosted (Constant | Volatile) ),
+        _ ) ->
       true
   | _ -> false
 
 let mode_is_unspecified tn =
-  match tn.memory_mode with None | Some ((Never_virtual | Effectively_constant), _) -> true | _ -> false
+  match tn.memory_mode with
+  | None | Some ((Never_virtual | Effectively_constant), _) -> true
+  | _ -> false
 
 let update_memory_mode tn mode provenance =
   match (tn.memory_mode, mode) with
@@ -113,8 +123,8 @@ let update_memory_mode tn mode provenance =
       raise
       @@ Utils.User_error
            [%string
-             "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} for %{name tn}: cannot be \
-              virtual"]
+             "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} for %{name tn}: \
+              cannot be virtual"]
   | Some ((Virtual | Hosted Constant), _), Effectively_constant -> ()
   | Some ((Never_virtual | Materialized), _), Effectively_constant
   | Some (Effectively_constant, _), (Never_virtual | Materialized | Hosted Constant) ->
@@ -128,8 +138,8 @@ let update_memory_mode tn mode provenance =
       raise
       @@ Utils.User_error
            [%string
-             "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} for %{name tn} is already \
-              virtual"]
+             "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} for %{name tn} is \
+              already virtual"]
   | Some (_, _), Never_virtual -> ()
   | Some (Device_only, _), (Local | On_device) -> tn.memory_mode <- Some (mode, provenance)
   | Some (Materialized, _), (On_device | Hosted _) -> tn.memory_mode <- Some (mode, provenance)
@@ -140,7 +150,8 @@ let update_memory_mode tn mode provenance =
   | Some (_, prov2), _ ->
       invalid_arg
         [%string
-          "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} inconsistent for %{name tn}"]
+          "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} inconsistent for \
+           %{name tn}"]
 
 include Comparator.Make (struct
   type nonrec t = t
@@ -171,13 +182,17 @@ let dims_to_string ?(with_axis_numbers = false) arr =
 let is_alphanum_ = String.for_all ~f:(fun c -> Char.equal c '_' || Char.is_alphanum c)
 
 let ident_label tn =
-  let components = List.filter tn.label ~f:(fun i -> is_alphanum_ i && not (String.equal i "grad")) in
+  let components =
+    List.filter tn.label ~f:(fun i -> is_alphanum_ i && not (String.equal i "grad"))
+  in
   if List.is_empty components then None else Some (String.concat ~sep:"_" components)
 
 let debug_name ~id ~label =
   let n = "n" ^ Int.to_string id in
   let ident_label =
-    let components = List.filter label ~f:(fun i -> is_alphanum_ i && not (String.equal i "grad")) in
+    let components =
+      List.filter label ~f:(fun i -> is_alphanum_ i && not (String.equal i "grad"))
+    in
     if List.is_empty components then None else Some (String.concat ~sep:"_" components)
   in
   let is_grad = List.mem ~equal:String.equal label "grad" in
@@ -208,7 +223,8 @@ let styled_ident ~repeating_nograd_idents ~repeating_grad_idents style arr =
       in
       match ident_label arr with
       | Some ident ->
-          if Hashtbl.mem (if is_grad then repeating_grad_idents else repeating_nograd_idents) ident then
+          if Hashtbl.mem (if is_grad then repeating_grad_idents else repeating_nograd_idents) ident
+          then
             if is_grad then [%string "n%{arr.id - 1#Int}_%{ident}%{opt_grad}"]
             else [%string "n%{arr.id#Int}_%{ident}"]
           else [%string "%{ident}%{opt_grad}"]
@@ -220,7 +236,8 @@ let get_style ?(arg_name = "ll_ident_style") ?(no_dots = false) () =
   | "heuristic" -> `Heuristic_ocannl (if no_dots then `Under_grad else `Dot_grad)
   | "name_and_label" -> `Name_and_label
   | "name_only" -> `Name_only
-  | _ -> invalid_arg @@ "Wrong " ^ arg_name ^ ", must be one of: heuristic, name_and_label, name_only"
+  | _ ->
+      invalid_arg @@ "Wrong " ^ arg_name ^ ", must be one of: heuristic, name_and_label, name_only"
 
 let header arr =
   let mem_size =
@@ -248,7 +265,9 @@ let registry = Registry.create 16
 
 let create prec ~id ~label ~dims init_op =
   let rec array =
-    lazy (if is_hosted_force tn 30 then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op) else None)
+    lazy
+      (if is_hosted_force tn 30 then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op)
+       else None)
   and tn = { array; prec; id; label; memory_mode = None; backend_info = Sexp.List []; dims } in
   Registry.add registry tn;
   tn

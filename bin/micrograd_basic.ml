@@ -19,10 +19,11 @@ let%diagn_sexp () =
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = c + c + 1 in
   (* let%op c = c + 1 + c + ~-a in *)
-  (* Uncomment just the first "fully on host" line to see which arrays can be virtual, and just the second
-     line to see the intermediate computation values. *)
+  (* Uncomment just the first "fully on host" line to see which arrays can be virtual, and just the
+     second line to see the intermediate computation values. *)
   Train.every_non_literal_on_host d;
-  (* List.iter ~f:(function Some diff -> Train.set_hosted diff.grad | None -> ()) [ a.diff; b.diff ]; *)
+  (* List.iter ~f:(function Some diff -> Train.set_hosted diff.grad | None -> ()) [ a.diff; b.diff
+     ]; *)
   let update = Train.grad_update d in
   let routine = Backend.(link ctx @@ compile IDX.empty update.fwd_bprop) in
   Train.sync_run (module Backend) routine d;

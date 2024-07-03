@@ -85,12 +85,13 @@ let get_static_symbol ?static_range bindings =
   let s = { static_symbol = get_symbol (); static_range } in
   (s, Bind (s, bindings))
 
-(** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2. Outputs
-    ["-"] for empty dimensions. *)
+(** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
+    Outputs ["-"] for empty dimensions. *)
 let dims_to_string ?(with_axis_numbers = false) dims =
   if Array.is_empty dims then "-"
   else if with_axis_numbers then
-    String.concat_array ~sep:" x " @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ Int.to_string s)
+    String.concat_array ~sep:" x "
+    @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ Int.to_string s)
   else String.concat_array ~sep:"x" @@ Array.map dims ~f:Int.to_string
 
 type axis_index =
@@ -120,11 +121,11 @@ type projections = {
   rhs_dims : int array array;
       (** The dimensions of the RHS arrays, needed for deriving projections from other projections. *)
   product_iterators : symbol array;
-      (** The product space iterators (concatentation of the relevant batch, output, input axes) for iterating
-          over the [product_space] axes, where same axes are at same array indices. *)
+      (** The product space iterators (concatentation of the relevant batch, output, input axes) for
+          iterating over the [product_space] axes, where same axes are at same array indices. *)
   project_lhs : axis_index array;
-      (** A projection that takes an [product_space]-bound index and produces an index into the result of an
-          operation. *)
+      (** A projection that takes an [product_space]-bound index and produces an index into the
+          result of an operation. *)
   project_rhs : axis_index array array;
       (** [project_rhs.(i)] Produces an index into the [i+1]th argument of an operation. *)
   debug_info : (projections_debug[@sexp.ignore] [@compare.ignore] [@equal.ignore]);
@@ -156,12 +157,15 @@ let identity_projections ~debug_info ~lhs_dims =
     product_iterators;
     project_lhs;
     project_rhs = [| project_lhs |];
-    debug_info = { debug_info with trace = ("indentity_projections", unique_debug_id ()) :: debug_info.trace };
+    debug_info =
+      { debug_info with trace = ("indentity_projections", unique_debug_id ()) :: debug_info.trace };
   }
 
 let derive_index ~product_syms ~(projection : axis_index array) =
   let sym_to_i =
-    Array.mapi product_syms ~f:(fun i s -> (s, i)) |> Array.to_list |> Map.of_alist_exn (module Symbol)
+    Array.mapi product_syms ~f:(fun i s -> (s, i))
+    |> Array.to_list
+    |> Map.of_alist_exn (module Symbol)
   in
   let positions =
     Array.map projection ~f:(function

@@ -102,7 +102,9 @@ let%expect_test "Micrograd half-moons example" =
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_n, bindings = IDX.get_static_symbol bindings in
   (* FIXME: should also work with explicit batch shape. *)
-  let moons_flat = TDSL.init_const ~l:"moons_flat" (* ~b:[ n_batches; batch_size ] *) ~o:[ 2 ] moons_flat in
+  let moons_flat =
+    TDSL.init_const ~l:"moons_flat" (* ~b:[ n_batches; batch_size ] *) ~o:[ 2 ] moons_flat
+  in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   (* FIXME: should also work with explicit batch shape. *)
   let moons_classes =
@@ -119,7 +121,8 @@ let%expect_test "Micrograd half-moons example" =
   let log_losses = ref [] in
   let learning_rates = ref [] in
   let%op margin_loss = ?/(1 - (moons_class *. mlp moons_input)) in
-  (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update computation. *)
+  (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update
+     computation. *)
   let weight_decay = 0.0001 in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
   let update = Train.grad_update scalar_loss in
@@ -137,8 +140,9 @@ let%expect_test "Micrograd half-moons example" =
         assert (Backend.to_host sgd_routine.context learning_rate.value);
         assert (Backend.to_host sgd_routine.context scalar_loss.value);
         Backend.await device;
-        (* let batch_ref = IDX.find_exn sgd_jitted.bindings batch_n in Stdio.printf "Epoch=%d, step=%d,
-           batch=%d, lr=%f, loss=%f\n%!" epoch !step_ref !batch_ref learning_rate.@[0] scalar_loss.@[0]; *)
+        (* let batch_ref = IDX.find_exn sgd_jitted.bindings batch_n in Stdio.printf "Epoch=%d,
+           step=%d, batch=%d, lr=%f, loss=%f\n%!" epoch !step_ref !batch_ref learning_rate.@[0]
+           scalar_loss.@[0]; *)
         learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
         losses := scalar_loss.@[0] :: !losses;
         log_losses := Float.max (-10.) (Float.log scalar_loss.@[0]) :: !log_losses;
@@ -151,11 +155,13 @@ let%expect_test "Micrograd half-moons example" =
   Train.set_on_host Volatile mlp_result.value;
   let result_routine =
     Backend.(
-      link sgd_routine.context @@ compile IDX.empty @@ Block_comment ("moons infer", mlp_result.forward))
+      link sgd_routine.context @@ compile IDX.empty
+      @@ Block_comment ("moons infer", mlp_result.forward))
   in
   let callback (x, y) =
     Tensor.set_values point [| x; y |];
-    (* For the gccjit backend, point is only on host, not on device. For cuda, this will be needed. *)
+    (* For the gccjit backend, point is only on host, not on device. For cuda, this will be
+       needed. *)
     assert (Backend.from_host result_routine.context point.value);
     Train.run result_routine;
     assert (Backend.to_host result_routine.context mlp_result.value);

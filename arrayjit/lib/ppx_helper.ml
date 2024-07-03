@@ -36,7 +36,8 @@ let ndarray_constant expr =
     if depth >= Array.length dims_spec then
       match expr with
       | { pexp_desc = Pexp_constant (Pconst_float _); _ } -> expr :: accu
-      | { pexp_desc = Pexp_constant (Pconst_integer _); _ } -> [%expr Float.of_int [%e expr]] :: accu
+      | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
+          [%expr Float.of_int [%e expr]] :: accu
       | { pexp_desc = Pexp_tuple _; pexp_loc = loc; _ } ->
           (pexp_extension ~loc
           @@ Location.error_extensionf ~loc
@@ -61,7 +62,8 @@ let ndarray_constant expr =
               List.fold_left exps ~init:accu ~f:(loop_values @@ (depth + 1))
           | dim_spec ->
               (pexp_extension ~loc
-              @@ Location.error_extensionf ~loc "Arrayjit: ndarray literal axis mismatch, got %s, expected %s"
+              @@ Location.error_extensionf ~loc
+                   "Arrayjit: ndarray literal axis mismatch, got %s, expected %s"
                    (dim_spec_to_string @@ `Input_dims (List.length exps))
                    (dim_spec_to_string dim_spec))
               :: accu)
@@ -71,7 +73,8 @@ let ndarray_constant expr =
               List.fold_left exps ~init:accu ~f:(loop_values @@ (depth + 1))
           | dim_spec ->
               (pexp_extension ~loc
-              @@ Location.error_extensionf ~loc "Arrayjit: ndarray literal axis mismatch, got %s, expected %s"
+              @@ Location.error_extensionf ~loc
+                   "Arrayjit: ndarray literal axis mismatch, got %s, expected %s"
                    (dim_spec_to_string @@ `Batch_dims (List.length exps))
                    (dim_spec_to_string dim_spec))
               :: accu)
@@ -82,7 +85,8 @@ let ndarray_constant expr =
               List.fold_left exps ~init:accu ~f:(loop_values @@ (depth + 1))
           | dim_spec ->
               (pexp_extension ~loc
-              @@ Location.error_extensionf ~loc "Arrayjit: ndarray literal axis mismatch, got %s, expected %s"
+              @@ Location.error_extensionf ~loc
+                   "Arrayjit: ndarray literal axis mismatch, got %s, expected %s"
                    (dim_spec_to_string @@ `Output_dims (List.length exps))
                    (dim_spec_to_string dim_spec))
               :: accu)
@@ -95,7 +99,8 @@ let ndarray_constant expr =
   let result = loop_values 0 [] expr in
   let values = { expr with pexp_desc = Pexp_array (List.rev result) } in
   let batch_dims, output_dims, input_dims =
-    Array.fold dims_spec ~init:([], [], []) ~f:(fun (batch_dims, output_dims, input_dims) -> function
+    Array.fold dims_spec ~init:([], [], []) ~f:(fun (batch_dims, output_dims, input_dims) ->
+      function
       | `Input_dims dim -> (batch_dims, output_dims, eint ~loc dim :: input_dims)
       | `Output_dims dim -> (batch_dims, eint ~loc dim :: output_dims, input_dims)
       | `Batch_dims dim -> (eint ~loc dim :: batch_dims, output_dims, input_dims))

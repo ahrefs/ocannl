@@ -451,7 +451,9 @@ let%expect_test "Very big tensor" =
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Rand.init 0;
-  let hey = TDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8; 9 ] ~output_dims:[ 10; 11 ] () in
+  let hey =
+    TDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8; 9 ] ~output_dims:[ 10; 11 ] ()
+  in
   let%op hoo = (hey * (1 + 1)) - 10 in
   Train.forward_and_forget backend ctx hoo;
   Tensor.print ~with_code:false ~with_grad:false `Default hey;

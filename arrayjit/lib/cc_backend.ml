@@ -16,7 +16,8 @@ let compiler_command () = Utils.get_global_arg ~default:"cc" ~arg_name:"cc_backe
 
 type mem_properties =
   | Local_only  (** The array is only needed for a local computation, is allocated on the stack. *)
-  | From_context  (** The array has a copy allocated per-cpu-device, may or may not exist on the host. *)
+  | From_context
+      (** The array has a copy allocated per-cpu-device, may or may not exist on the host. *)
   | Constant_from_host  (** The array is read directly from the host. *)
 [@@deriving sexp, equal, compare, variants]
 
@@ -72,8 +73,8 @@ type tn_info = {
   mutable ptr : string;
       (** Pointer to the first value of the associated array.
           - if [mem = Constant_from_host], the pointer to the first element of the hosted [Ndarray],
-          - if [mem = From_context], either a pointer to [Ndarray] from [context.arrays] when [~shared:false],
-            or the function parameter when [~shared:true],
+          - if [mem = From_context], either a pointer to [Ndarray] from [context.arrays] when
+            [~shared:false], or the function parameter when [~shared:true],
           - if [mem = Local_only], the address of the on-the-stack array. *)
   mem : mem_properties;
   dims : int array;
@@ -92,7 +93,11 @@ type info_nodes = {
 }
 [@@deriving sexp_of]
 
-type param_source = Log_file_name | Merge_buffer | Param_ptr of Tn.t | Static_idx of Indexing.static_symbol
+type param_source =
+  | Log_file_name
+  | Merge_buffer
+  | Param_ptr of Tn.t
+  | Static_idx of Indexing.static_symbol
 [@@deriving sexp_of]
 
 (* open Ctypes *)
@@ -117,13 +122,16 @@ type ctx_nodes = Ctx_arrays of ctx_arrays ref | Param_ptrs of (string * param_so
 (* https://github.com/yallop/ocaml-ctypes/blob/master/src/ctypes-foreign/dl.mli
    https://github.com/ahrefs/ocannl/blob/1eb5209772b759f00a0cb8a39e51c4ddae78aee6/lib/exec_as_OCaml.ml *)
 
-let pp_zero_out ppf node = Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " node.ptr node.size_in_bytes
+let pp_zero_out ppf node =
+  Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " node.ptr node.size_in_bytes
 
 let get_c_ptr prec nd =
   let f arr = Ops.ptr_to_string (Ctypes.bigarray_start Ctypes_static.Genarray arr) prec in
   Ndarray.(map { f } nd)
 
-let is_builtin_op = function Ops.Add | Sub | Mul | Div -> true | ToPowOf | Relu_gate | Arg2 | Arg1 -> false
+let is_builtin_op = function
+  | Ops.Add | Sub | Mul | Div -> true
+  | ToPowOf | Relu_gate | Arg2 | Arg1 -> false
 
 let node_debug_name node =
   (* FIXME: node.ptr is not the mem address? *)
@@ -160,8 +168,8 @@ let array_offset_to_string (idcs, dims) =
   Stdlib.Format.pp_print_flush ppf ();
   Buffer.contents b
 
-(* let compute_array_offset ~idcs ~dims = Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim -> idx +
-   (offset * dim)) *)
+(* let compute_array_offset ~idcs ~dims = Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim
+   -> idx + (offset * dim)) *)
 
 let%debug_sexp prepare_node ~(traced_store : Low_level.traced_store) info ctx_nodes tn =
   Hash_set.add info.used_tensors tn;
@@ -200,7 +208,8 @@ let%debug_sexp prepare_node ~(traced_store : Low_level.traced_store) info ctx_no
           | From_context, Param_ptrs ptrs ->
               ptrs := (name, Param_ptr tn) :: !ptrs;
               ident
-          | Constant_from_host, _ -> get_c_ptr prec @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
+          | Constant_from_host, _ ->
+              get_c_ptr prec @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
           | Local_only, _ -> ident
         in
         let backend_info = sexp_of_mem_properties mem in
@@ -228,12 +237,13 @@ let compile_main ~traced_store info ppf llc : unit =
     match c with
     | Low_level.Noop -> ()
     | Seq (c1, c2) ->
-        (* Note: no separator. Filter out some entries known to not generate code to avoid whitespace. *)
+        (* Note: no separator. Filter out some entries known to not generate code to avoid
+           whitespace. *)
         fprintf ppf "@[<v 0>%a@]" (pp_print_list pp_ll)
           (List.filter [ c1; c2 ] ~f:(function Noop -> false | _ -> true))
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-        fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@;<1 -2>}@]@," pp_index i from_ pp_index i
-          to_ pp_index i pp_ll body
+        fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@;<1 -2>}@]@," pp_index i from_
+          pp_index i to_ pp_index i pp_ll body
     | Zero_out tn ->
         let node = Hashtbl.find_exn info.nodes tn in
         let traced = Low_level.(get_node traced_store tn) in
@@ -265,7 +275,8 @@ let compile_main ~traced_store info ppf llc : unit =
           fprintf ppf
             {|@[<7>fprintf(log_file,@ @[<h>"%s[%%u] = %%f = %s\n",@]@ %a,@ new_set_v%a);@]@ fflush(log_file);@ |}
             ident v_code pp_array_offset offset pp_args v_idcs;
-          fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@;<1 -2>}@]@ " ident pp_array_offset (idcs, node.dims))
+          fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@;<1 -2>}@]@ " ident pp_array_offset
+            (idcs, node.dims))
         else
           (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
           fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " ident pp_array_offset (idcs, node.dims) loop_f llv;
@@ -288,8 +299,8 @@ let compile_main ~traced_store info ppf llc : unit =
     match vcomp with
     | Local_scope { id = { scope_id = i; tn = { prec; _ } }; body; orig_indices = _ } ->
         let num_typ = Ops.cuda_typ_of_prec prec in
-        (* Arrays are initialized to 0 by default. However, there is typically an explicit initialization for
-           virtual nodes. *)
+        (* Arrays are initialized to 0 by default. However, there is typically an explicit
+           initialization for virtual nodes. *)
         fprintf ppf "@[<2>{@ %s v%d = 0;@ " num_typ i;
         pp_ll ppf body;
         pp_print_space ppf ();
@@ -312,7 +323,8 @@ let compile_main ~traced_store info ppf llc : unit =
         fprintf ppf "v%d" id.scope_id
     | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
         let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
-        fprintf ppf "@[<2>((%s*)merge_buffer)[%a@;<0 -2>]@]" (Ops.cuda_typ_of_prec prec) pp_array_offset
+        fprintf ppf "@[<2>((%s*)merge_buffer)[%a@;<0 -2>]@]" (Ops.cuda_typ_of_prec prec)
+          pp_array_offset
           (idcs, Lazy.force tn.dims)
     | Get_global _ -> failwith "Cc_backend: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
@@ -322,7 +334,8 @@ let compile_main ~traced_store info ppf llc : unit =
         fprintf ppf "@[<2>%s[%a@;<0 -2>]@]" ident pp_array_offset (idcs, node.dims)
     | Constant c -> fprintf ppf "(%f)" c
     | Embed_index idx ->
-        if not @@ List.exists ~f:(String.equal num_typ) [ "int"; "size_t" ] then fprintf ppf "(%s)" num_typ;
+        if not @@ List.exists ~f:(String.equal num_typ) [ "int"; "size_t" ] then
+          fprintf ppf "(%s)" num_typ;
         pp_index_axis ppf idx
     | Binop (Arg1, v1, _v2) -> loop ppf v1
     | Binop (Arg2, _v1, v2) -> loop ppf v2
@@ -338,7 +351,8 @@ let compile_main ~traced_store info ppf llc : unit =
     let loop = debug_float prec in
     match value with
     | Local_scope { id; _ } ->
-        (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug logs. *)
+        (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug
+           logs. *)
         loop @@ Get_local id
     | Get_local id ->
         let get_typ = Ops.cuda_typ_of_prec id.tn.prec in
@@ -350,7 +364,9 @@ let compile_main ~traced_store info ppf llc : unit =
     | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
         let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
         let node = get_node tn in
-        let v = sprintf "@[<2>merge_buffer[%s@;<0 -2>]@]" (array_offset_to_string (idcs, node.dims)) in
+        let v =
+          sprintf "@[<2>merge_buffer[%s@;<0 -2>]@]" (array_offset_to_string (idcs, node.dims))
+        in
         ("merge_buffer[%u]{=%f}", [ `Accessor (idcs, node.dims); `Value v ])
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
@@ -404,14 +420,17 @@ let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; 
           [%log "array-used:", (tn : Tn.t), Tn.label tn, (node.mem : mem_properties)];
         match node.mem with
         | Local_only -> None
-        | From_context -> Some (Ops.cuda_typ_of_prec node.prec ^ " *" ^ info.get_ident tn, Param_ptr tn)
+        | From_context ->
+            Some (Ops.cuda_typ_of_prec node.prec ^ " *" ^ info.get_ident tn, Param_ptr tn)
         | Constant_from_host -> None)
   in
   let idx_params =
-    List.map idx_params ~f:(fun s -> ("int " ^ Indexing.symbol_ident s.Indexing.static_symbol, Static_idx s))
+    List.map idx_params ~f:(fun s ->
+        ("int " ^ Indexing.symbol_ident s.Indexing.static_symbol, Static_idx s))
   in
   let log_file =
-    if Utils.settings.debug_log_from_routines then [ ("const char* log_file_name", Log_file_name) ] else []
+    if Utils.settings.debug_log_from_routines then [ ("const char* log_file_name", Log_file_name) ]
+    else []
   in
   let merge_param =
     Option.(
@@ -423,13 +442,15 @@ let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; 
   fprintf ppf "@[<v 2>@[<hv 4>void %s(@,@[<hov 0>%a@]@;<0 -4>)@] {@ " name
     (pp_print_list ~pp_sep:pp_comma pp_print_string)
   @@ List.map ~f:fst params;
-  if Utils.settings.debug_log_from_routines then fprintf ppf {|FILE* log_file = fopen(log_file_name, "w");@ |};
+  if Utils.settings.debug_log_from_routines then
+    fprintf ppf {|FILE* log_file = fopen(log_file_name, "w");@ |};
   fprintf ppf "/* Local declarations and initialization. */@ ";
   List.iter arrays ~f:(fun tn ->
       let node = Hashtbl.find_exn info.nodes tn in
       match node.mem with
       | Local_only ->
-          fprintf ppf "%s %s[%d]%s;@ " (Ops.cuda_typ_of_prec node.prec) (info.get_ident tn) node.size_in_elems
+          fprintf ppf "%s %s[%d]%s;@ " (Ops.cuda_typ_of_prec node.prec) (info.get_ident tn)
+            node.size_in_elems
             (if (Hashtbl.find_exn traced_store tn).zero_initialized then " = {0}" else "")
       | From_context when node.zero_initialized -> pp_zero_out ppf node
       | _ -> ());
@@ -482,7 +503,9 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
     }
   in
   let ctx_nodes =
-    match opt_ctx_arrays with Some ctx_arrays -> Ctx_arrays (ref ctx_arrays) | None -> Param_ptrs (ref [])
+    match opt_ctx_arrays with
+    | Some ctx_arrays -> Ctx_arrays (ref ctx_arrays)
+    | None -> Param_ptrs (ref [])
   in
   prepare_nodes info ctx_nodes lowered;
   let pp_file = Utils.pp_file ~base_name:name ~extension:".c" in
@@ -503,10 +526,13 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
     ()
   done;
   let result = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW; RTLD_DEEPBIND ] in
-  let opt_ctx_arrays = match ctx_nodes with Ctx_arrays ctx_arrays -> Some !ctx_arrays | _ -> None in
+  let opt_ctx_arrays =
+    match ctx_nodes with Ctx_arrays ctx_arrays -> Some !ctx_arrays | _ -> None
+  in
   { info; result; params; bindings; name; opt_ctx_arrays; expected_merge_node = lowered.merge_node }
 
-let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings (lowereds : Low_level.optimized option array) =
+let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings
+    (lowereds : Low_level.optimized option array) =
   let get_ident =
     Low_level.get_ident_within_code ~no_dots:true
     @@ Array.filter_map lowereds ~f:(Option.map ~f:(fun Low_level.{ llc; _ } -> llc))
@@ -529,7 +555,9 @@ let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings (lowereds : Low_lev
   in
   let ctx_nodes =
     Array.map lowereds ~f:(fun _ ->
-        match opt_ctx_arrays with Some _ -> Ctx_arrays global_ctx_arrays | None -> Param_ptrs (ref []))
+        match opt_ctx_arrays with
+        | Some _ -> Ctx_arrays global_ctx_arrays
+        | None -> Param_ptrs (ref []))
   in
   Array.iteri ctx_nodes ~f:(fun i ctx_nodes ->
       Option.iter infos.(i) ~f:(fun info ->
@@ -611,18 +639,20 @@ let%track_sexp link_compiled ~merge_buffer (old_context : context) (code : proce
         | Bind _, [] -> invalid_arg "Cc_backend.link: too few static index params"
         | Bind (_, bs), Static_idx _ :: ps -> Param_idx (ref 0, link bs ps Ctypes.(int @-> cs))
         | Empty, Static_idx _ :: _ -> invalid_arg "Cc_backend.link: too many static index params"
-        | bs, Log_file_name :: ps -> Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
+        | bs, Log_file_name :: ps ->
+            Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Merge_buffer :: ps ->
             Param_2f (Ndarray.get_voidptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
         | bs, Param_ptr tn :: ps ->
             let nd = match Map.find arrays tn with Some nd -> nd | None -> assert false in
-            (* let f ba = Ctypes.bigarray_start Ctypes_static.Genarray ba in let c_ptr = Ndarray.(map { f }
-               nd) in *)
+            (* let f ba = Ctypes.bigarray_start Ctypes_static.Genarray ba in let c_ptr =
+               Ndarray.(map { f } nd) in *)
             let c_ptr = Ndarray.get_voidptr nd in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
       in
-      (* Folding by [link] above reverses the input order. Important: [code.bindings] are traversed in the
-         wrong order but that's OK because [link] only uses them to check the number of indices. *)
+      (* Folding by [link] above reverses the input order. Important: [code.bindings] are traversed
+         in the wrong order but that's OK because [link] only uses them to check the number of
+         indices. *)
       let params = List.rev_map code.params ~f:(fun (_, p) -> p) in
       link code.bindings params Ctypes.(void @-> returning void)]
   in

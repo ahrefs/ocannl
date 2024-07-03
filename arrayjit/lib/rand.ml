@@ -35,7 +35,7 @@ let random_lib =
   | "for_tests" -> (module Random_for_tests : Random)
   | _ ->
       invalid_arg
-      @@ "Rand.random_lib: invalid setting of the global argument randomness_lib, expected one of: stdlib, \
-          for_tests; found: " ^ random_config
+      @@ "Rand.random_lib: invalid setting of the global argument randomness_lib, expected one of: \
+          stdlib, for_tests; found: " ^ random_config
 
 module Lib = (val random_lib)

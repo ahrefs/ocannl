@@ -21,7 +21,8 @@ module Scope_id = struct
   end)
 end
 
-type scope_id = Scope_id.t = { tn : Tn.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
+type scope_id = Scope_id.t = { tn : Tn.t; scope_id : int }
+[@@deriving sexp_of, equal, hash, compare]
 
 (** *** Low-level representation. *)
 
@@ -54,9 +55,13 @@ and float_t =
   | Embed_index of Indexing.axis_index
 [@@deriving sexp_of, equal, compare]
 
-let binop ~op ~rhs1 ~rhs2 = match op with Ops.Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Binop (op, rhs1, rhs2)
+let binop ~op ~rhs1 ~rhs2 =
+  match op with Ops.Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Binop (op, rhs1, rhs2)
+
 let unop ~op ~rhs = match op with Ops.Identity -> rhs | _ -> Unop (op, rhs)
-let rec flat_lines ts = List.concat_map ts ~f:(function Seq (t1, t2) -> flat_lines [ t1; t2 ] | t -> [ t ])
+
+let rec flat_lines ts =
+  List.concat_map ts ~f:(function Seq (t1, t2) -> flat_lines [ t1; t2 ] | t -> [ t ])
 
 let rec unflat_lines = function
   | [] -> Noop
@@ -68,7 +73,8 @@ let comment_to_name =
   let nonliteral = Str.regexp {|[^a-zA-Z0-9_]|} in
   Str.global_replace nonliteral "_"
 
-let extract_block_name llc = match flat_lines llc with Comment s :: _ -> comment_to_name s | _ -> ""
+let extract_block_name llc =
+  match flat_lines llc with Comment s :: _ -> comment_to_name s | _ -> ""
 
 (** *** Optimization *** *)
 
@@ -80,7 +86,9 @@ type virtualize_settings = {
 }
 
 let virtualize_settings =
-  let max_visits = Int.of_string @@ Utils.get_global_arg ~arg_name:"virtualize_max_visits" ~default:"1" in
+  let max_visits =
+    Int.of_string @@ Utils.get_global_arg ~arg_name:"virtualize_max_visits" ~default:"1"
+  in
   let max_tracing_dim =
     Int.of_string @@ Utils.get_global_arg ~arg_name:"virtualize_max_tracing_dim" ~default:"5"
   in
@@ -94,28 +102,32 @@ let virtualize_settings =
 
 type visits =
   | Visits of int
-  | Recurrent  (** A [Recurrent] visit is when there is an access prior to any assignment in an update. *)
+  | Recurrent
+      (** A [Recurrent] visit is when there is an access prior to any assignment in an update. *)
 [@@deriving sexp, equal, variants]
 
 type traced_array = {
   tn : Tn.t;
   mutable computations : (Indexing.axis_index array option * t) list;
-      (** The computations (of the tensor node) are retrieved for optimization just as they are populated, so
-          that the inlined code corresponds precisely to the changes to the arrays that would happen up till
-          that point. Within the code blocks paired with an index tuple, all assignments and accesses must
-          happen via the index tuple; if this is not the case for some assignment, the node cannot be virtual.
-          Currently, we only allow for-loop symbols in assignment indices of virtual nodes. *)
+      (** The computations (of the tensor node) are retrieved for optimization just as they are
+          populated, so that the inlined code corresponds precisely to the changes to the arrays
+          that would happen up till that point. Within the code blocks paired with an index tuple,
+          all assignments and accesses must happen via the index tuple; if this is not the case for
+          some assignment, the node cannot be virtual. Currently, we only allow for-loop symbols in
+          assignment indices of virtual nodes. *)
   assignments : int array Hash_set.t;
   accesses : (int array, visits) Hashtbl.t;
-      (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
+      (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which
+          is safe. *)
   mutable zero_initialized : bool;
   mutable zeroed_out : bool;
-  mutable read_before_write : bool;  (** The node is read before it is written (i.e. it is recurrent). *)
+  mutable read_before_write : bool;
+      (** The node is read before it is written (i.e. it is recurrent). *)
   mutable read_only : bool;
   mutable is_scalar_constexpr : bool;
-      (** True only if the tensor node has all axes of dimension 1, is either zeroed-out or assigned before
-          accessed, is assigned at most once, and from an expression involving only constants or tensor nodes
-          that were at the time is_scalar_constexpr. *)
+      (** True only if the tensor node has all axes of dimension 1, is either zeroed-out or assigned
+          before accessed, is assigned at most once, and from an expression involving only constants
+          or tensor nodes that were at the time is_scalar_constexpr. *)
 }
 [@@deriving sexp_of]
 
@@ -151,7 +163,11 @@ let partition_tf_with_comment cs ~f =
 
 let visit ~is_assigned old =
   if not is_assigned then Recurrent
-  else match old with None -> Visits 1 | Some (Visits i) -> Visits (i + 1) | Some Recurrent -> Recurrent
+  else
+    match old with
+    | None -> Visits 1
+    | Some (Visits i) -> Visits (i + 1)
+    | Some Recurrent -> Recurrent
 
 let is_constexpr_comp traced_store llv =
   let rec loop llv =
@@ -201,8 +217,10 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
     | Set { tn; idcs; llv; debug = _ } ->
         loop_float env llv;
         let traced : traced_array = get_node traced_store tn in
-        if Hash_set.is_empty traced.assignments && Hashtbl.is_empty traced.accesses && is_scalar_dims tn then
-          traced.is_scalar_constexpr <- is_constexpr_comp traced_store llv
+        if
+          Hash_set.is_empty traced.assignments
+          && Hashtbl.is_empty traced.accesses && is_scalar_dims tn
+        then traced.is_scalar_constexpr <- is_constexpr_comp traced_store llv
           (* Note: this prevents detection if the same constant is assigned inside a loop. *)
         else if not @@ Hash_set.is_empty traced.assignments then traced.is_scalar_constexpr <- false;
         Hash_set.add traced.assignments (lookup env idcs);
@@ -245,9 +263,9 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
       then Tn.update_memory_mode tn Virtual 40;
       if Option.is_none tn.memory_mode && Hashtbl.exists traced.accesses ~f:is_too_many then
         Tn.update_memory_mode tn Never_virtual 1
-        (* The tensor node is read-only/recurrent for this computation, but maybe computed by another one.
-           However, if the memory mode is unspecified, we assume this will be the first computation involving
-           the tensor node. *);
+        (* The tensor node is read-only/recurrent for this computation, but maybe computed by
+           another one. However, if the memory mode is unspecified, we assume this will be the first
+           computation involving the tensor node. *);
       if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then (
         traced.read_only <- true;
         if Tn.mode_is_unspecified tn then Tn.update_memory_mode tn (Hosted Constant) 37
@@ -260,7 +278,8 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
 let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
   let exception Non_virtual of int in
   let static_indices =
-    Set.of_list (module Indexing.Symbol) @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
+    Set.of_list (module Indexing.Symbol)
+    @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
   in
   let at_idcs = ref None in
   let has_setter = ref false in
@@ -268,7 +287,8 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
   let check_idcs indices =
     (match !at_idcs with
     | None -> at_idcs := Some indices
-    | Some at -> if not @@ [%equal: Indexing.axis_index array] at indices then raise @@ Non_virtual 4);
+    | Some at ->
+        if not @@ [%equal: Indexing.axis_index array] at indices then raise @@ Non_virtual 4);
     (* TODO(#133): For non-recursive accesses, non-linearity is not supported yet. *)
     let syms =
       Set.of_array (module Indexing.Symbol)
@@ -276,7 +296,8 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
            ~f:
              Indexing.(
                function
-               | Fixed_idx _ -> None | Iterator s -> Option.some_if (not @@ Set.mem static_indices s) s)
+               | Fixed_idx _ -> None
+               | Iterator s -> Option.some_if (not @@ Set.mem static_indices s) s)
     in
     let num_syms =
       Array.count indices ~f:(function Iterator s -> not @@ Set.mem static_indices s | _ -> false)
@@ -326,7 +347,10 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
             | Iterator s when not (Set.mem static_indices s) ->
                 if not @@ Set.mem env_dom s then (
                   if Utils.settings.with_debug_level > 1 then
-                    [%log "Inlining candidate has an escaping variable", (s : Indexing.symbol), (top_llc : t)];
+                    [%log
+                      "Inlining candidate has an escaping variable",
+                        (s : Indexing.symbol),
+                        (top_llc : t)];
                   raise @@ Non_virtual 9)
             | _ -> ())
     | Local_scope { body; _ } -> loop_proc ~env_dom body
@@ -336,7 +360,8 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
     | Embed_index (Iterator s) ->
         if not @@ Set.mem env_dom s then (
           if Utils.settings.with_debug_level > 1 && not (Set.mem static_indices s) then
-            [%log "Inlining candidate has an escaping variable", (s : Indexing.symbol), (top_llc : t)];
+            [%log
+              "Inlining candidate has an escaping variable", (s : Indexing.symbol), (top_llc : t)];
           raise @@ Non_virtual 10)
     | Binop (_, llv1, llv2) ->
         loop_float ~env_dom llv1;
@@ -353,7 +378,8 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
 let inline_computation ~id traced static_indices call_args =
   let exception Non_virtual of int in
   let static_indices =
-    Set.of_list (module Indexing.Symbol) @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
+    Set.of_list (module Indexing.Symbol)
+    @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
   in
   let make_subst i lhs_ind =
     let rhs_ind = call_args.(i) in
@@ -372,7 +398,10 @@ let inline_computation ~id traced static_indices call_args =
           @@ Array.to_list
           @@ Array.filter_mapi def_args ~f:make_subst
     in
-    let subst env = function Indexing.Iterator s when Map.mem env s -> Map.find_exn env s | idx -> idx in
+    let subst env = function
+      | Indexing.Iterator s when Map.mem env s -> Map.find_exn env s
+      | idx -> idx
+    in
     let rec loop env llc : t option =
       match llc with
       | Noop -> None
@@ -447,7 +476,8 @@ let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
         | Some tn when not @@ Set.mem process_for tn ->
             let node : traced_array = get_node traced_store tn in
             let result = loop_proc ~process_for:(Set.add process_for tn) llc in
-            if not @@ Tn.known_non_virtual node.tn then check_and_store_virtual node static_indices result;
+            if not @@ Tn.known_non_virtual node.tn then
+              check_and_store_virtual node static_indices result;
             result
         | _ -> For_loop { for_config with body = loop body })
     | Zero_out tn ->
@@ -469,7 +499,8 @@ let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
     match llv with
     | Constant _ -> llv
     | Get (tn, _) when Set.mem process_for tn ->
-        (* [Get_local] will replace this [Get] during [inline_computation] if [tn] remains virtual. *)
+        (* [Get_local] will replace this [Get] during [inline_computation] if [tn] remains
+           virtual. *)
         llv
     | Get (tn, indices) ->
         let traced = get_node traced_store tn in
@@ -480,11 +511,13 @@ let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
           @@ Option.map (inline_computation ~id traced static_indices indices) ~f:(fun body ->
                  Local_scope { id; body; orig_indices = indices })
     | Local_scope opts ->
-        Local_scope { opts with body = loop_proc ~process_for:(Set.add process_for opts.id.tn) opts.body }
+        Local_scope
+          { opts with body = loop_proc ~process_for:(Set.add process_for opts.id.tn) opts.body }
     | Get_local _ -> llv
     | Get_global _ -> llv
     | Embed_index _ -> llv
-    | Binop (op, llv1, llv2) -> Binop (op, loop_float ~process_for llv1, loop_float ~process_for llv2)
+    | Binop (op, llv1, llv2) ->
+        Binop (op, loop_float ~process_for llv1, loop_float ~process_for llv2)
     | Unop (op, llv) -> Unop (op, loop_float ~process_for llv)
   in
   loop_proc ~process_for:(Set.empty (module Tnode)) llc
@@ -524,7 +557,8 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
           Tn.update_memory_mode tn Virtual 152;
           None)
         else (
-          assert (Array.for_all idcs ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
+          assert (
+            Array.for_all idcs ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
           Some (Set { tn; idcs; llv = loop_float ~balanced ~env_dom llv; debug = "" }))
     | Set_local (id, llv) ->
         assert (not @@ Tn.known_non_virtual id.tn);
@@ -539,11 +573,14 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
     | Get (a, indices) ->
         (* DEBUG: *)
         Tn.update_memory_mode a Never_virtual 17;
-        assert (Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
+        assert (
+          Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
         llv
     | Local_scope { id; body; orig_indices } ->
         assert (
-          Array.for_all orig_indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
+          Array.for_all orig_indices ~f:(function
+            | Indexing.Iterator s -> Set.mem env_dom s
+            | _ -> true));
         if Tn.known_non_virtual id.tn then Get (id.tn, orig_indices)
         else
           let body = Option.value_exn ~here:[%here] @@ loop_proc ~balanced ~env_dom body in
@@ -562,7 +599,8 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
     | Unop (op, llv) -> Unop (op, loop llv)
   in
   let static_indices =
-    Set.of_list (module Indexing.Symbol) @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
+    Set.of_list (module Indexing.Symbol)
+    @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
   in
   Option.value_exn ~here:[%here] @@ loop_proc ~balanced:false ~env_dom:static_indices llc
 
@@ -643,12 +681,15 @@ let simplify_llc llc =
     | Binop (Arg1, llv1, _) -> loop_float llv1
     | Binop (Arg2, _, llv2) -> loop_float llv2
     | Binop (op, Constant c1, Constant c2) -> Constant (Ops.interpret_binop op c1 c2)
-    | Binop (Add, llv, Constant 0.) | Binop (Sub, llv, Constant 0.) | Binop (Add, Constant 0., llv) ->
+    | Binop (Add, llv, Constant 0.) | Binop (Sub, llv, Constant 0.) | Binop (Add, Constant 0., llv)
+      ->
         loop_float llv
     | Binop (Sub, Constant 0., llv) -> loop_float @@ Binop (Mul, Constant (-1.), llv)
-    | Binop (Mul, llv, Constant 1.) | Binop (Div, llv, Constant 1.) | Binop (Mul, Constant 1., llv) ->
+    | Binop (Mul, llv, Constant 1.) | Binop (Div, llv, Constant 1.) | Binop (Mul, Constant 1., llv)
+      ->
         loop_float llv
-    | Binop (Mul, _, Constant 0.) | Binop (Div, Constant 0., _) | Binop (Mul, Constant 0., _) -> Constant 0.
+    | Binop (Mul, _, Constant 0.) | Binop (Div, Constant 0., _) | Binop (Mul, Constant 0., _) ->
+        Constant 0.
     | Binop (Add, (Binop (Add, Constant c2, llv) | Binop (Add, llv, Constant c2)), Constant c1)
     | Binop (Add, Constant c1, (Binop (Add, Constant c2, llv) | Binop (Add, llv, Constant c2))) ->
         loop_float @@ Binop (Add, Constant (c1 +. c2), llv)
@@ -658,8 +699,10 @@ let simplify_llc llc =
         loop_float @@ Binop (Sub, Constant (c1 -. c2), llv)
     | Binop (Add, llv1, Binop (Sub, llv2, llv3)) | Binop (Add, Binop (Sub, llv2, llv3), llv1) ->
         loop_float @@ Binop (Sub, Binop (Add, llv1, llv2), llv3)
-    | Binop (Sub, llv1, Binop (Sub, llv2, llv3)) -> loop_float @@ Binop (Sub, Binop (Add, llv1, llv3), llv2)
-    | Binop (Sub, Binop (Sub, llv1, llv2), llv3) -> loop_float @@ Binop (Sub, llv1, Binop (Add, llv2, llv3))
+    | Binop (Sub, llv1, Binop (Sub, llv2, llv3)) ->
+        loop_float @@ Binop (Sub, Binop (Add, llv1, llv3), llv2)
+    | Binop (Sub, Binop (Sub, llv1, llv2), llv3) ->
+        loop_float @@ Binop (Sub, llv1, Binop (Add, llv2, llv3))
     | Binop (Mul, (Binop (Mul, Constant c2, llv) | Binop (Mul, llv, Constant c2)), Constant c1)
     | Binop (Mul, Constant c1, (Binop (Mul, Constant c2, llv) | Binop (Mul, llv, Constant c2))) ->
         loop_float @@ Binop (Mul, Constant (c1 *. c2), llv)
@@ -670,8 +713,10 @@ let simplify_llc llc =
         loop_float @@ Binop (Div, Constant (c1 /. c2), llv)
     | Binop (Mul, llv1, Binop (Div, llv2, llv3)) | Binop (Mul, Binop (Div, llv2, llv3), llv1) ->
         loop_float @@ Binop (Div, Binop (Mul, llv1, llv2), llv3)
-    | Binop (Div, llv1, Binop (Div, llv2, llv3)) -> loop_float @@ Binop (Div, Binop (Mul, llv1, llv3), llv2)
-    | Binop (Div, Binop (Div, llv1, llv2), llv3) -> loop_float @@ Binop (Div, llv1, Binop (Mul, llv2, llv3))
+    | Binop (Div, llv1, Binop (Div, llv2, llv3)) ->
+        loop_float @@ Binop (Div, Binop (Mul, llv1, llv3), llv2)
+    | Binop (Div, Binop (Div, llv1, llv2), llv3) ->
+        loop_float @@ Binop (Div, llv1, Binop (Mul, llv2, llv3))
     | Binop (ToPowOf, llv1, llv2) -> (
         let v1 : float_t = loop_float llv1 in
         let v2 : float_t = loop_float llv2 in
@@ -679,7 +724,8 @@ let simplify_llc llc =
         if not !optimize_integer_pow then result
         else
           match v2 with
-          | Constant c when Float.is_integer c -> loop_float @@ unroll_pow ~base:v1 ~exp:(Float.to_int c)
+          | Constant c when Float.is_integer c ->
+              loop_float @@ unroll_pow ~base:v1 ~exp:(Float.to_int c)
           | _ -> result)
     | Binop (op, llv1, llv2) ->
         let v1 = loop_float llv1 in
@@ -696,7 +742,9 @@ let simplify_llc llc =
   loop_proc llc
 
 type traced_store = (Tn.t, traced_array) Base.Hashtbl.t [@@deriving sexp_of]
-type optimized = { traced_store : traced_store; llc : t; merge_node : Tn.t option } [@@deriving sexp_of]
+
+type optimized = { traced_store : traced_store; llc : t; merge_node : Tn.t option }
+[@@deriving sexp_of]
 
 let%debug_sexp optimize_proc static_indices llc =
   let traced_store = Hashtbl.create (module Tnode) in
@@ -704,7 +752,8 @@ let%debug_sexp optimize_proc static_indices llc =
   let reverse_node_map = Hashtbl.create (module Indexing.Symbol) in
   [%log "tracing"];
   let merge_node_id = ref None in
-  visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits:virtualize_settings.max_visits llc;
+  visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits:virtualize_settings.max_visits
+    llc;
   [%log "optimizing"];
   let llc =
     simplify_llc
@@ -730,13 +779,16 @@ let pp_index ppf idx =
   | Indexing.Iterator sym -> pp_symbol ppf sym
   | Fixed_idx i -> Stdlib.Format.fprintf ppf "%d" i
 
-let pp_indices ppf idcs = Stdlib.Format.pp_print_list ~pp_sep:pp_comma pp_index ppf @@ Array.to_list idcs
+let pp_indices ppf idcs =
+  Stdlib.Format.pp_print_list ~pp_sep:pp_comma pp_index ppf @@ Array.to_list idcs
 
 let fprint_function_header ?name ?static_indices () ppf =
   let open Stdlib.Format in
   match (name, static_indices) with
   | Some name, Some static_indices ->
-      fprintf ppf "%s @[(%a)@]:@ " name (pp_print_list ~pp_sep:pp_comma pp_static_symbol) static_indices
+      fprintf ppf "%s @[(%a)@]:@ " name
+        (pp_print_list ~pp_sep:pp_comma pp_static_symbol)
+        static_indices
   | Some name, None -> fprintf ppf "%s:@ " name
   | _ -> ()
 
@@ -745,9 +797,13 @@ let get_ident_within_code ?no_dots llcs =
   let nograd_idents = Hashtbl.create (module String) in
   let grad_idents = Hashtbl.create (module String) in
   let visit tn =
-    let idents = if List.mem ~equal:String.equal tn.Tn.label "grad" then grad_idents else nograd_idents in
+    let idents =
+      if List.mem ~equal:String.equal tn.Tn.label "grad" then grad_idents else nograd_idents
+    in
     Option.iter (Tn.ident_label tn)
-      ~f:(Hashtbl.update idents ~f:(fun old -> Set.add (Option.value ~default:Utils.no_ints old) tn.id))
+      ~f:
+        (Hashtbl.update idents ~f:(fun old ->
+             Set.add (Option.value ~default:Utils.no_ints old) tn.id))
   in
   let rec loop (c : t) =
     match c with
@@ -781,7 +837,9 @@ let get_ident_within_code ?no_dots llcs =
   let repeating_nograd_idents =
     Hashtbl.filter nograd_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1)
   in
-  let repeating_grad_idents = Hashtbl.filter grad_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1) in
+  let repeating_grad_idents =
+    Hashtbl.filter grad_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1)
+  in
   Tn.styled_ident ~repeating_nograd_idents ~repeating_grad_idents ident_style
 
 let fprint_hum ?name ?static_indices () ppf llc =
@@ -801,8 +859,10 @@ let fprint_hum ?name ?static_indices () ppf llc =
     | Zero_out tn -> fprintf ppf "zero_out %a;" pp_ident tn
     | Set p ->
         p.debug <-
-          asprintf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.tn pp_indices p.idcs (pp_float p.tn.prec) p.llv;
-        fprintf ppf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.tn pp_indices p.idcs (pp_float p.tn.prec) p.llv
+          asprintf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.tn pp_indices p.idcs (pp_float p.tn.prec)
+            p.llv;
+        fprintf ppf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.tn pp_indices p.idcs (pp_float p.tn.prec)
+          p.llv
     | Comment message -> fprintf ppf "/* %s */" message
     | Staged_compilation _ -> fprintf ppf "STAGED_COMPILATION_CALLBACK()"
     | Set_local (id, llv) -> fprintf ppf "@[<2>%a :=@ %a;@]" pp_local id (pp_float id.tn.prec) llv
@@ -850,7 +910,8 @@ let%debug_sexp optimize_proc ~unoptim_ll_source ~ll_source ~(name : string)
 let loop_over_dims dims ~body =
   let rec for_loop rev_idcs : _ -> t = function
     | [] -> body @@ Array.of_list_rev rev_idcs
-    | d :: product when not @@ Indexing.iterated d -> for_loop (Indexing.Fixed_idx 0 :: rev_idcs) product
+    | d :: product when not @@ Indexing.iterated d ->
+        for_loop (Indexing.Fixed_idx 0 :: rev_idcs) product
     | d :: product ->
         let index = Indexing.get_symbol () in
         For_loop

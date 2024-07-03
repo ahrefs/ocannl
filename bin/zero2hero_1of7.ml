@@ -35,7 +35,10 @@ let _suspended () =
   let%op f5 = f 5 in
   let module Backend = (val Train.fresh_backend ()) in
   Train.every_non_literal_on_host f5;
-  Train.forward_and_forget (module Backend) Backend.(init @@ new_virtual_device @@ get_device ~ordinal:0) f5;
+  Train.forward_and_forget
+    (module Backend)
+    Backend.(init @@ new_virtual_device @@ get_device ~ordinal:0)
+    f5;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   Stdio.printf "\n%!"
@@ -167,15 +170,19 @@ let _suspended () =
       which are specified in the tensor in the brackets.|};
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   let%op learning_rate = 0.1 in
-  let routine = link routine.context @@ compile IDX.empty @@ Train.sgd_update ~learning_rate update in
+  let routine =
+    link routine.context @@ compile IDX.empty @@ Train.sgd_update ~learning_rate update
+  in
   (* learning_rate is virtual so this will not print anything. *)
-  Tensor.iter_embedded_arrays learning_rate ~f:(fun a -> ignore (from_host routine.context a : bool));
+  Tensor.iter_embedded_arrays learning_rate ~f:(fun a ->
+      ignore (from_host routine.context a : bool));
   Stdio.print_endline
     {|
       Due to how the gccjit backend works, since the parameters were constant in the grad_update
       computation, they did not exist on the device before. Now they do. This would not be needed
       on the cuda backend.|};
-  List.iter [ a.value; b.value; c.value; f.value ] ~f:(fun a -> assert (from_host routine.context a));
+  List.iter [ a.value; b.value; c.value; f.value ] ~f:(fun a ->
+      assert (from_host routine.context a));
   Train.run routine;
   Tensor.iter_embedded_arrays l ~f:(fun a -> ignore (to_host routine.context a : bool));
   await device;

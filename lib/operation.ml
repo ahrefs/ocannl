@@ -74,21 +74,22 @@ let pointmul ?(label = []) =
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 * v2 in
   mul Pointwise_bin ~op_asn ~label:("*." :: label)
 
-(* N1: AxB, N2 BxC, v: AxC, A: output of N1, B: input/output of N1/N2, C: input of N2. Although the matrix
-   algebra would require that we insert additional transposes in gradient multiplies: AxB = AxC * CxB = AxC *
-   (BxC)^T -> N1g += Ng * N2v^T, BxC = BxA * AxC = (AxB)^T * AxC -> N2g += N1v^T * Ng, in our setup there is
-   no transposing to do, since the projections produce correct indices for their corresponding matrices. *)
+(* N1: AxB, N2 BxC, v: AxC, A: output of N1, B: input/output of N1/N2, C: input of N2. Although the
+   matrix algebra would require that we insert additional transposes in gradient multiplies: AxB =
+   AxC * CxB = AxC * (BxC)^T -> N1g += Ng * N2v^T, BxC = BxA * AxC = (AxB)^T * AxC -> N2g += N1v^T *
+   Ng, in our setup there is no transposing to do, since the projections produce correct indices for
+   their corresponding matrices. *)
 
 let matmul ?(label = []) =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
   mul Compose ~op_asn ~label:("*" :: label)
 
-(** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of matrix
-    multiplication, inner and outer products, etc.
+(** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of
+    matrix multiplication, inner and outer products, etc.
 
-    Note that ["a,b->c"] from [numpy] is ["a;b=>c"] in OCANNL, since ["->"] is used to separate the input and
-    the output axes. *)
+    Note that ["a,b->c"] from [numpy] is ["a;b=>c"] in OCANNL, since ["->"] is used to separate the
+    input and the output axes. *)
 let einsum ?(label = []) spec =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
@@ -108,11 +109,11 @@ let outer_sum ?(label = []) spec =
   in
   Tensor.binop ~label:(";=>+" :: label) ~compose_op:(Einsum spec) ~op_asn ~grad_asn
 
-(** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract diagonals,
-    compute traces etc.
+(** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract
+    diagonals, compute traces etc.
 
-    Note that ["a->c"] from [numpy] is ["a=>c"] in OCANNL, since ["->"] is used to separate the input and the
-    output axes. *)
+    Note that ["a->c"] from [numpy] is ["a=>c"] in OCANNL, since ["->"] is used to separate the
+    input and the output axes. *)
 let einsum1 ?(label = []) spec =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~projections = v =:+ v1 in
@@ -173,7 +174,8 @@ let rec pointdiv ?(label : string list = []) ~grad_spec t1 t2 =
     end
   end in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 / v2 in
-  (* We cannot use g in a tensor expression since it's an array, so we keep it to the left (RHS1). *)
+  (* We cannot use g in a tensor expression since it's an array, so we keep it to the left
+     (RHS1). *)
   let%cd grad_asn ~v:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g / v2;
     g2 =+ g * (-1 *. t1 /. (t2 **. 2))
@@ -190,18 +192,21 @@ let range ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?axis_label upto =
   | None -> result ~output_dims:[ upto + 1 ] ()
   | Some l -> result ~output_axes:[ (l, upto + 1) ] ()
 
-let range_of_shape ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?batch_dims ?input_dims ?output_dims
-    ?batch_axes ?input_axes ?output_axes () =
+let range_of_shape ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?batch_dims ?input_dims
+    ?output_dims ?batch_axes ?input_axes ?output_axes () =
   let f (dims, axes) =
     Array.of_list @@ Option.value ~default:[] @@ Option.first_some dims
     @@ Option.map axes ~f:(List.map ~f:snd)
   in
   let dims =
-    Array.concat_map ~f [| (batch_dims, batch_axes); (output_dims, output_axes); (input_dims, input_axes) |]
+    Array.concat_map ~f
+      [| (batch_dims, batch_axes); (output_dims, output_axes); (input_dims, input_axes) |]
   in
   let batch_dims = Option.first_some batch_dims @@ Option.some_if (Option.is_none batch_axes) [] in
   let input_dims = Option.first_some input_dims @@ Option.some_if (Option.is_none input_axes) [] in
-  let output_dims = Option.first_some output_dims @@ Option.some_if (Option.is_none output_axes) [] in
+  let output_dims =
+    Option.first_some output_dims @@ Option.some_if (Option.is_none output_axes) []
+  in
   Tensor.term
     ~label:(("r" ^ Idx.dims_to_string dims) :: label)
     ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
@@ -226,13 +231,18 @@ let slice ?(label = []) ~grad_spec (batch_idx : Idx.static_symbol) t1 : Tensor.t
       }
   in
   let%cd grad_asn ~v:_ ~g ~t1 ~projections = g1 =+ g in
-  Tensor.unop ~label:("@|" :: label) ~transpose_op:(Batch_slice batch_idx) ~op_asn ~grad_asn ~grad_spec t1
+  Tensor.unop ~label:("@|" :: label) ~transpose_op:(Batch_slice batch_idx) ~op_asn ~grad_asn
+    ~grad_spec t1
 
 let embed_symbol ?(label = []) static_sym : Tensor.t =
   let module NTDSL = Initial_NTDSL in
   let op_asn ~v ~projections =
     Asgns.Fetch
-      { array = v; fetch_op = Embed_symbol static_sym; dims = lazy (Lazy.force projections).Idx.lhs_dims }
+      {
+        array = v;
+        fetch_op = Embed_symbol static_sym;
+        dims = lazy (Lazy.force projections).Idx.lhs_dims;
+      }
   in
   let grad_asn ~v:_ ~g:_ ~projections:_ = Asgns.Noop in
   Tensor.op ~label:("!@" :: label) ~op_asn ~grad_asn ~grad_spec:Prohibit_grad
@@ -273,11 +283,14 @@ module TDSL = struct
   let range_of_shape = range_of_shape ~grad_spec:If_needed
   let stop_gradient = stop_gradient
 
-  (** The input [i] dimensions default to empty. The batch dimensions will be inferred if omitted. [strict]
-      controls whether [Constant_fill] will try to fit the given values in the tensor and contribute to shape
-      inference. If it is not provided explicitly, it will be [true] if [b] is omitted, and [false] otherwise. *)
+  (** The input [i] dimensions default to empty. The batch dimensions will be inferred if omitted.
+      [strict] controls whether [Constant_fill] will try to fit the given values in the tensor and
+      contribute to shape inference. If it is not provided explicitly, it will be [true] if [b] is
+      omitted, and [false] otherwise. *)
   let init_const ~l ?strict ?b ?(i = []) ~o values =
-    let strict = match (strict, b) with Some s, _ -> s | None, Some _ -> false | None, None -> true in
+    let strict =
+      match (strict, b) with Some s, _ -> s | None, Some _ -> false | None, None -> true
+    in
     Tensor.term ~label:[ l ] ~grad_spec:Prohibit_grad ?batch_dims:b ~input_dims:i ~output_dims:o
       ~init_op:(Constant_fill { values; strict })
       ()

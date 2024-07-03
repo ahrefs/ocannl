@@ -14,7 +14,8 @@ type projections = Arrayjit.Indexing.projections
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-type diff = { grad : (Tn.t[@sexp.opaque]); zero_grads : Asgns.t; backprop : Asgns.t } [@@deriving sexp_of]
+type diff = { grad : (Tn.t[@sexp.opaque]); zero_grads : Asgns.t; backprop : Asgns.t }
+[@@deriving sexp_of]
 
 type t = {
   forward : Asgns.t;
@@ -39,7 +40,9 @@ let rec sexp_of_t t =
 
 and sexp_of_subtensor ch =
   Sexp.message "child"
-    [ (if ch.embedded then ("", sexp_of_t ch.subtensor) else ("ref-id", sexp_of_int ch.subtensor.id)) ]
+    [
+      (if ch.embedded then ("", sexp_of_t ch.subtensor) else ("ref-id", sexp_of_int ch.subtensor.id));
+    ]
 
 include Comparator.Make (struct
   type nonrec t = t
@@ -60,7 +63,9 @@ let session_state =
 let is_fwd_root t = Map.mem session_state.forward_roots t.id
 let remove_fwd_root t = session_state.forward_roots <- Map.remove session_state.forward_roots t.id
 let is_bprop_root t = Map.mem session_state.backprop_roots t.id
-let remove_bprop_root t = session_state.backprop_roots <- Map.remove session_state.backprop_roots t.id
+
+let remove_bprop_root t =
+  session_state.backprop_roots <- Map.remove session_state.backprop_roots t.id
 
 let with_unchanged_roots ~f =
   let fwd_roots = session_state.forward_roots in
@@ -93,12 +98,16 @@ let session_error_printer = function
 
 let () = Stdlib.Printexc.register_printer session_error_printer
 let lazy_to_dims shape = lazy (Shape.to_dims shape)
-let fetch_zeros array shape = Asgns.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
+
+let fetch_zeros array shape =
+  Asgns.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
+
 let default_init_op = Arrayjit.Ops.Constant_fill { values = [| 0.0 |]; strict = false }
 let max_sublabel_length = ref 25
 
-let raw_binop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t) ~(rhs1_is_grad : bool)
-    ~(rhs1_is_merge : bool) ~(t2 : t) ~rhs2_is_grad ~rhs2_is_merge ~logic : Asgns.t =
+let raw_binop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t)
+    ~(rhs1_is_grad : bool) ~(rhs1_is_merge : bool) ~(t2 : t) ~rhs2_is_grad ~rhs2_is_merge ~logic :
+    Asgns.t =
   let shape = t.shape in
   let shape_logic = Shape.Broadcast (logic, t1.shape, t2.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
@@ -111,8 +120,8 @@ let raw_binop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1
   let rhs2 = if rhs2_is_merge then Asgns.Merge_buffer rhs2 else Node rhs2 in
   Asgns.Accum_binop { initialize_neutral; accum; lhs; op; rhs1; rhs2; projections }
 
-let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t) ~(rhs_is_grad : bool)
-    ~(rhs_is_merge : bool) ~logic =
+let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t)
+    ~(rhs_is_grad : bool) ~(rhs_is_merge : bool) ~logic =
   let shape = t.shape in
   let shape_logic = Shape.Transpose (logic, t1.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
@@ -125,15 +134,16 @@ let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 
 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
-let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un)
-    ?(init_op = default_init_op) ~op_asn ~grad_asn ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t
-    =
+let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
+    ?(transpose_op = Shape.Pointwise_un) ?(init_op = default_init_op) ~op_asn ~grad_asn
+    ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t =
   let ordered_ts = List.dedup_and_sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
   let children =
     List.folding_map orig_ts
       ~init:(Set.empty (module Int))
       ~f:(fun used ti ->
-        (Set.add used ti.id, { subtensor = ti; embedded = is_fwd_root ti && not (Set.mem used ti.id) }))
+        ( Set.add used ti.id,
+          { subtensor = ti; embedded = is_fwd_root ti && not (Set.mem used ti.id) } ))
   in
   let id = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
@@ -162,7 +172,8 @@ let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin) ?(transpose_op
   List.iter ordered_ts ~f:(fun ti -> remove_fwd_root ti);
   if
     is_prohibit_grad grad_spec
-    || (Fn.non is_require_grad grad_spec && List.for_all orig_ts ~f:(fun ti -> Option.is_none ti.diff))
+    || Fn.non is_require_grad grad_spec
+       && List.for_all orig_ts ~f:(fun ti -> Option.is_none ti.diff)
   then (
     let tensor = { forward; diff = None; id; value = v; shape; children } in
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
@@ -181,14 +192,19 @@ let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin) ?(transpose_op
     let is_bck_root ti = Map.mem session_state.backprop_roots ti.id in
     let zero_grads =
       let zero_g = dcode ~f:(fun diff -> diff.zero_grads) in
-      let zeros = List.map ordered_ts ~f:(fun ti -> if is_bck_root ti then zero_g ti else Asgns.Noop) in
+      let zeros =
+        List.map ordered_ts ~f:(fun ti -> if is_bck_root ti then zero_g ti else Asgns.Noop)
+      in
       Asgns.sequential @@ zeros @ [ fetch_zeros g shape ]
     in
-    (* The code needs to be included in the reverse order to which it was computed! This guarantees that all
-       ancestors of a node are backpropagated before the node is backpropagated, even for non-tree DAGs. *)
+    (* The code needs to be included in the reverse order to which it was computed! This guarantees
+       that all ancestors of a node are backpropagated before the node is backpropagated, even for
+       non-tree DAGs. *)
     let backprop =
       let bprop = dcode ~f:(fun diff -> diff.backprop) in
-      let bcks = List.map ordered_ts ~f:(fun ti -> if is_bck_root ti then bprop ti else Asgns.Noop) in
+      let bcks =
+        List.map ordered_ts ~f:(fun ti -> if is_bck_root ti then bprop ti else Asgns.Noop)
+      in
       Asgns.sequential @@ (grad_asn ~v ~g ~projections :: List.rev bcks)
     in
     List.iter ordered_ts ~f:(fun ti ->
@@ -210,8 +226,8 @@ let unop ~label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
   let grad_asn ~v ~g ~projections = grad_asn ~v ~g ~t1 ~projections in
   op ~label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1 ]
 
-let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
-    ?init_op ?fetch_op () =
+let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
+    ?deduced ?init_op ?fetch_op () =
   let op_asn ~v ~projections =
     let open Asgns in
     let dims = lazy (Lazy.force projections).Idx.lhs_dims in
@@ -231,8 +247,8 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
         (match fetch_op with
         | Constant _ | Slice _ | Embed_symbol _ -> ()
         | Imported _ ->
-            (* Note: [Imported] can be used for merging across devices. But, some use cases of [Imported] will
-               require a hosted tensor node. *)
+            (* Note: [Imported] can be used for merging across devices. But, some use cases of
+               [Imported] will require a hosted tensor node. *)
             Tn.update_memory_mode v Materialized 22);
         Fetch { array = v; fetch_op; dims }
   in
@@ -257,8 +273,8 @@ let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
   Tn.update_memory_mode t.value Effectively_constant 24;
   t
 
-let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?output_dims ?batch_axes
-    ?input_axes ?output_axes ?(strict = true) values =
+let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?output_dims
+    ?batch_axes ?input_axes ?output_axes ?(strict = true) values =
   let to_dim_list dims axes =
     Option.value ~default:[] @@ Option.first_some dims @@ Option.map axes ~f:(List.map ~f:snd)
   in
@@ -271,19 +287,22 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
     let dims = Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list in
     let ndarr = Nd.create_array Arrayjit.Ops.double ~dims (Constant_fill { values; strict }) in
     let ( ! ) = List.length in
-    Nd.pp_array_inline ~num_batch_axes:!batch_ds ~num_output_axes:!output_ds ~num_input_axes:!input_ds
-      Stdlib.Format.str_formatter ndarr;
+    Nd.pp_array_inline ~num_batch_axes:!batch_ds ~num_output_axes:!output_ds
+      ~num_input_axes:!input_ds Stdlib.Format.str_formatter ndarr;
     Stdlib.Format.flush_str_formatter ()
   in
   let op_label =
     if String.contains op_label '\n' then
-      "c" ^ Idx.dims_to_string @@ Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list
+      "c" ^ Idx.dims_to_string
+      @@ Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list
     else op_label
   in
   let label = op_label :: label in
   let batch_dims = Option.first_some batch_dims @@ Option.some_if (Option.is_none batch_axes) [] in
   let input_dims = Option.first_some input_dims @@ Option.some_if (Option.is_none input_axes) [] in
-  let output_dims = Option.first_some output_dims @@ Option.some_if (Option.is_none output_axes) [] in
+  let output_dims =
+    Option.first_some output_dims @@ Option.some_if (Option.is_none output_axes) []
+  in
   let t =
     term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
       ~deduced:Not_constrained
@@ -293,21 +312,23 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
   Tn.update_memory_mode t.value Effectively_constant 24;
   t
 
-let param ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?(strict = false) ?values label =
+let param ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?(strict = false) ?values label
+    =
   let init_op =
     match values with
     | Some values -> Arrayjit.Ops.Constant_fill { values; strict }
     | None -> Standard_uniform
   in
   let t =
-    term ~label:[ label ] ~grad_spec:Require_grad ~batch_dims:[] ?input_dims ?output_dims ?input_axes
-      ?output_axes ?deduced ~init_op ()
+    term ~label:[ label ] ~grad_spec:Require_grad ~batch_dims:[] ?input_dims ?output_dims
+      ?input_axes ?output_axes ?deduced ~init_op ()
   in
   let v = t.value in
   (* It is convenient to use the param syntax for volatiles (mutable inputs). *)
   Tn.update_memory_mode v (Hosted Nonconstant) 24;
-  (* In principle, gradients can even be local, if a single jitted block does forward, backprop, and update
-     computations. Use-cases needing [Materialized] gradients need to request that before any jitting. *)
+  (* In principle, gradients can even be local, if a single jitted block does forward, backprop, and
+     update computations. Use-cases needing [Materialized] gradients need to request that before any
+     jitting. *)
   let g = (Option.value_exn ~here:[%here] t.diff).grad in
   Tn.update_memory_mode g Never_virtual 26;
   t
@@ -321,7 +342,8 @@ let consume_forward_code t =
   if not @@ is_fwd_root t then
     raise
     @@ Session_error
-         ( "Tensor.consume_forward_code: tensor is not a root for tnode: " ^ debug_name t ~label:t.value.label,
+         ( "Tensor.consume_forward_code: tensor is not a root for tnode: "
+           ^ debug_name t ~label:t.value.label,
            Some t );
   let unsafe_roots =
     Map.data session_state.forward_roots
@@ -368,13 +390,16 @@ found potentially unsafe roots: %{String.concat ~sep:", " @@ List.map ~f:debug_n
 
 let header t =
   let v_dims_s = Tn.dims_to_string t.value in
-  let g_dims_s = match t.diff with None -> "<no-grad>" | Some diff -> Tn.dims_to_string diff.grad in
+  let g_dims_s =
+    match t.diff with None -> "<no-grad>" | Some diff -> Tn.dims_to_string diff.grad
+  in
   let dims_s =
     if String.equal v_dims_s g_dims_s then "dims " ^ v_dims_s
     else "dims val " ^ v_dims_s ^ " grad " ^ g_dims_s
   in
   "#" ^ Int.to_string t.id ^ " " ^ Tn.label t.value ^ " " ^ dims_s ^ " ["
-  ^ String.concat ~sep:"," (List.map t.children ~f:(fun { subtensor = { id; _ }; _ } -> Int.to_string id))
+  ^ String.concat ~sep:","
+      (List.map t.children ~f:(fun { subtensor = { id; _ }; _ } -> Int.to_string id))
   ^ "]"
 (*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box v.label)*)
 
@@ -385,7 +410,8 @@ let lazy_optional_payload ~present ~missing v =
     | None -> `Vlist (false, [ `Text (missing ()); `Text "<void>" ])
   else `Vlist (false, [ `Text (missing ()); `Text "<not-in-yet> " ])
 
-type array_print_style = [ `Default | `Inline | `Label_layout of (string * int) list | `N5_layout of string ]
+type array_print_style =
+  [ `Default | `Inline | `Label_layout of (string * int) list | `N5_layout of string ]
 
 let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_value ~with_grad t =
   let rec to_dag { subtensor = t; embedded } : PrintBox_utils.dag =
@@ -396,7 +422,8 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_v
     let where_located a =
       match a.Tn.memory_mode with
       | None -> "<waiting>"
-      | Some (m, prov) -> [%string "<%{Sexp.to_string_hum @@ Tn.sexp_of_memory_mode m} %{prov#Int}>"]
+      | Some (m, prov) ->
+          [%string "<%{Sexp.to_string_hum @@ Tn.sexp_of_memory_mode m} %{prov#Int}>"]
     in
     let txt =
       if with_id then "#" ^ id ^ " " ^ Tn.label t.value (* ^ " DEBUG: " ^ where_located t.value *)
@@ -405,7 +432,8 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_v
     let grad_txt diff =
       let label = Tn.label diff.grad in
       let label =
-        if String.is_substring (String.lowercase label) ~substring:"grad" then label else label ^ " Gradient"
+        if String.is_substring (String.lowercase label) ~substring:"grad" then label
+        else label ^ " Gradient"
       in
       if with_id then
         "#" ^ Int.to_string diff.grad.id ^ " " ^ label (* ^ " DEBUG: " ^ where_located diff.grad *)
@@ -425,7 +453,8 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_v
         let node =
           lazy_optional_payload t.value.array
             ~present:(fun v_array ->
-              `Box (Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices v_array))
+              `Box
+                (Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices v_array))
             ~missing:(fun () -> txt ^ " " ^ where_located t.value)
         in
         `Subtree_with_ID (id, `Tree (add_shape [ node ], children))
@@ -443,15 +472,17 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_v
           let value =
             lazy_optional_payload t.value.array
               ~present:(fun v_array ->
-                `Box (Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices v_array))
+                `Box
+                  (Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices
+                     v_array))
               ~missing:(fun () -> txt ^ " " ^ where_located t.value)
           in
           let grad =
             lazy_optional_payload diff.grad.array
               ~present:(fun g_array ->
                 `Box
-                  (Nd.render_array ~brief:true ~prefix:(grad_txt diff) ?entries_per_axis ~labels ~indices
-                     g_array))
+                  (Nd.render_array ~brief:true ~prefix:(grad_txt diff) ?entries_per_axis ~labels
+                     ~indices g_array))
               ~missing:(fun () -> grad_txt diff ^ " " ^ where_located diff.grad)
           in
           `Vlist (false, [ value; grad ])
@@ -460,12 +491,13 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_v
   in
   to_dag { subtensor = t; embedded = true }
 
-let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_shape = false) ?(with_value = true)
-    ~with_grad ~depth t =
+let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_shape = false)
+    ?(with_value = true) ~with_grad ~depth t =
   to_dag ?single_node ?entries_per_axis ~with_id ~with_shape ~with_value ~with_grad t
   |> PrintBox_utils.reformat_dag depth
 
-let print ~with_grad ~with_code ?(force = false) ?(with_low_level = false) (style : array_print_style) t =
+let print ~with_grad ~with_code ?(force = false) ?(with_low_level = false)
+    (style : array_print_style) t =
   let sh = t.shape in
   let label = Tn.label t.value in
   let prefix =
@@ -475,7 +507,8 @@ let print ~with_grad ~with_code ?(force = false) ?(with_low_level = false) (styl
   in
   let grad_txt diff =
     let label = Tn.label diff.grad in
-    if String.is_substring (String.lowercase label) ~substring:"grad" then label else label ^ " Gradient"
+    if String.is_substring (String.lowercase label) ~substring:"grad" then label
+    else label ^ " Gradient"
   in
   let labels = Shape.to_labels t.shape in
   let indices =
@@ -494,7 +527,8 @@ let print ~with_grad ~with_code ?(force = false) ?(with_low_level = false) (styl
         in
         let inv_labels =
           match inv_labels with
-          | `Duplicate_key l -> raise @@ Session_error ("`Label_layout found a repeating label: " ^ l, Some t)
+          | `Duplicate_key l ->
+              raise @@ Session_error ("`Label_layout found a repeating label: " ^ l, Some t)
           | `Ok inv_labels -> inv_labels
         in
         let result = Array.create ~len:(Array.length labels) 0 in
@@ -519,8 +553,9 @@ let print ~with_grad ~with_code ?(force = false) ?(with_low_level = false) (styl
      match (style, t.value.array) with
      | `Inline, (lazy None) -> Stdlib.Format.printf "<virtual>@ "
      | `Inline, (lazy (Some arr)) ->
-         Nd.pp_array_inline (Stdlib.Format.get_std_formatter ()) ~num_batch_axes ~num_input_axes
-           ~num_output_axes ?axes_spec arr
+         Nd.pp_array_inline
+           (Stdlib.Format.get_std_formatter ())
+           ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec arr
      | _, (lazy None) -> Stdlib.Format.printf "<virtual>@ "
      | _, (lazy (Some arr)) ->
          Nd.pp_array (Stdlib.Format.get_std_formatter ()) ~prefix ~labels ~indices arr;
@@ -532,11 +567,13 @@ let print ~with_grad ~with_code ?(force = false) ?(with_low_level = false) (styl
         else
           match (style, diff.grad.array) with
           | `Inline, (lazy (Some arr)) ->
-              Nd.pp_array_inline (Stdlib.Format.get_std_formatter ()) ~num_batch_axes ~num_input_axes
-                ~num_output_axes ?axes_spec arr;
+              Nd.pp_array_inline
+                (Stdlib.Format.get_std_formatter ())
+                ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec arr;
               Stdlib.Format.print_newline ()
           | _, (lazy (Some arr)) ->
-              Nd.pp_array (Stdlib.Format.get_std_formatter ())
+              Nd.pp_array
+                (Stdlib.Format.get_std_formatter ())
                 ~prefix:(prefix ^ " " ^ grad_txt diff)
                 ~labels ~indices arr;
               Stdlib.Format.print_newline ()
@@ -544,7 +581,8 @@ let print ~with_grad ~with_code ?(force = false) ?(with_low_level = false) (styl
   if with_code then (
     (match t.forward with
     | Noop -> ()
-    | fwd_code -> Stdlib.Format.printf "@[<v 2>Current forward body:%a@]@," (Asgns.fprint_hum ()) fwd_code);
+    | fwd_code ->
+        Stdlib.Format.printf "@[<v 2>Current forward body:%a@]@," (Asgns.fprint_hum ()) fwd_code);
     match t.diff with
     | Some { backprop = Noop; _ } -> ()
     | Some { backprop = bwd_code; _ } ->
@@ -554,7 +592,8 @@ let print ~with_grad ~with_code ?(force = false) ?(with_low_level = false) (styl
     (match t.forward with
     | Noop -> ()
     | fwd_code ->
-        Stdlib.Format.printf "@[<v 2>Current forward low-level body:%a@]@," (Arrayjit.Low_level.fprint_hum ())
+        Stdlib.Format.printf "@[<v 2>Current forward low-level body:%a@]@,"
+          (Arrayjit.Low_level.fprint_hum ())
         @@ Asgns.to_low_level fwd_code);
     match t.diff with
     | Some { backprop = Noop; _ } -> ()
@@ -570,8 +609,8 @@ let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
       assert (id = root.id);
       print ~with_grad ~with_code style root)
 
-let print_tree ?entries_per_axis ?(with_backend_info = false) ?(with_id = true) ?(with_shape = false)
-    ?(with_value = true) ~with_grad ~depth t =
+let print_tree ?entries_per_axis ?(with_backend_info = false) ?(with_id = true)
+    ?(with_shape = false) ?(with_value = true) ~with_grad ~depth t =
   (* FIXME: print backend info *)
   ignore with_backend_info;
   PrintBox_text.output Stdio.stdout @@ PrintBox_utils.dag_to_box @@ PrintBox_utils.boxify depth
@@ -596,7 +635,8 @@ let grad_2d_points ?from_axis ~xdim ~ydim t =
   match t.diff with
   | None -> [||]
   | Some diff ->
-      Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_2d_points ?from_axis ~xdim ~ydim arr)
+      Option.value_map ~default:[||] ~f:(fun arr ->
+          Nd.retrieve_2d_points ?from_axis ~xdim ~ydim arr)
       @@ Lazy.force diff.grad.array
 
 let set_value t = Nd.set_from_float @@ Option.value_exn ~here:[%here] @@ Lazy.force t.value.array
@@ -618,4 +658,5 @@ let set_values t values =
     @@ Option.value_exn ~here:[%here]
     @@ Lazy.force t.value.array)
 
-let get_values t = Nd.(retrieve_flat_values @@ Option.value_exn ~here:[%here] @@ Lazy.force t.value.array)
+let get_values t =
+  Nd.(retrieve_flat_values @@ Option.value_exn ~here:[%here] @@ Lazy.force t.value.array)

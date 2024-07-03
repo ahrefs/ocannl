@@ -70,7 +70,9 @@ let%expect_test "Graph drawing recompile" =
   let ys =
     Array.map xs ~f:(fun v ->
         (* This is inefficient because it compiles the argument update inside the loop. *)
-        let assign_x = Backend.(link f_bprop.context @@ compile IDX.empty ~name:"assign_x" [%cd x =: !.v]) in
+        let assign_x =
+          Backend.(link f_bprop.context @@ compile IDX.empty ~name:"assign_x" [%cd x =: !.v])
+        in
         Train.sync_run (module Backend) assign_x x;
         Train.sync_run (module Backend) f_bprop f;
         Backend.await device;
@@ -232,8 +234,8 @@ let%expect_test "Simple gradients hosted" =
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in
-  (* We need to either call `grad_update` before introducing `learning_rate`, or disable the rootness
-     check. *)
+  (* We need to either call `grad_update` before introducing `learning_rate`, or disable the
+     rootness check. *)
   let grad = Train.grad_update l in
   let%op learning_rate = 0.1 in
   Train.every_non_literal_on_host l;
@@ -261,8 +263,8 @@ let%expect_test "Simple gradients hosted" =
      2.00e+0  │ -3.00e+0 │          │
     #76 grad_a│#78 grad_b│          │
      0.00e+0  │ 0.00e+0  │          │ |}];
-  (* Do not update the params: all values and gradients will be at initial points, which are specified in the
-     tensor in the brackets. *)
+  (* Do not update the params: all values and gradients will be at initial points, which are
+     specified in the tensor in the brackets. *)
   Train.sync_run backend grad_routine l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
@@ -283,8 +285,9 @@ let%expect_test "Simple gradients hosted" =
      2.00e+0  │ -3.00e+0 │          │
     #76 grad_a│#78 grad_b│          │
      6.00e+0  │ -4.00e+0 │          │ |}];
-  (* Now we update the params, but we are not doing the forward and backward passes: only params values will
-     change, compared to the above. The update is in the opposite direction of the gradient. *)
+  (* Now we update the params, but we are not doing the forward and backward passes: only params
+     values will change, compared to the above. The update is in the opposite direction of the
+     gradient. *)
   Train.sync_run backend sgd_routine l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
@@ -306,8 +309,8 @@ let%expect_test "Simple gradients hosted" =
     #76 grad_a│#78 grad_b│          │
      6.00e+0  │ -4.00e+0 │          │ |}];
 
-  (* Now the params will remain as above, but both param gradients and the values and gradients of other nodes
-     will change thanks to the forward and backward passes. *)
+  (* Now the params will remain as above, but both param gradients and the values and gradients of
+     other nodes will change thanks to the forward and backward passes. *)
   Train.sync_run backend grad_routine l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
@@ -338,10 +341,10 @@ let%expect_test "Simple gradients virtual" =
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in
-  (* We pretend this is for parallel updates, to force materializing gradients, because our SGD update is
-     compiled separately from our gradient update. Alternatively we could mark all
-     [Assignments.recurrent_nodes sgd] as materialized. Or, the best non-parallel option is to compile
-     grad_update and sgd_update together.*)
+  (* We pretend this is for parallel updates, to force materializing gradients, because our SGD
+     update is compiled separately from our gradient update. Alternatively we could mark all
+     [Assignments.recurrent_nodes sgd] as materialized. Or, the best non-parallel option is to
+     compile grad_update and sgd_update together.*)
   let grad = Train.grad_update ~setup_for_parallel:true l in
   let%op learning_rate = 0.1 in
   let sgd = Train.sgd_update ~learning_rate grad in
@@ -386,8 +389,8 @@ let%expect_test "Simple gradients virtual" =
      2.00e+0                  │ -3.00e+0                 │                          │
     #112 grad_a <On_device 33>│#114 grad_b <On_device 33>│                          │
     <void>                    │<void>                    │                          │ |}];
-  (* Do not update the params: all values and gradients will be at initial points, which are specified in the
-     tensor in the brackets. *)
+  (* Do not update the params: all values and gradients will be at initial points, which are
+     specified in the tensor in the brackets. *)
   Train.sync_run backend grad_routine l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
@@ -410,9 +413,9 @@ let%expect_test "Simple gradients virtual" =
     <void>                    │<void>                    │                          │ |}];
   (* Only now compile the SGD update. *)
   let sgd_routine = Backend.(link grad_routine.context @@ compile IDX.empty sgd) in
-  (* Now we update the params, but are not doing the forward and backward passes: only params values will
-     change, compared to the above. Since virtual tensors are computed by-need, they will always be recomputed
-     using the latest parameter state. *)
+  (* Now we update the params, but are not doing the forward and backward passes: only params values
+     will change, compared to the above. Since virtual tensors are computed by-need, they will
+     always be recomputed using the latest parameter state. *)
   Train.sync_run backend sgd_routine l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
@@ -433,8 +436,8 @@ let%expect_test "Simple gradients virtual" =
      1.40e+0                  │ -2.60e+0                 │                          │
     #112 grad_a <On_device 33>│#114 grad_b <On_device 33>│                          │
     <void>                    │<void>                    │                          │ |}];
-  (* Now the params will remain as above, but both param gradients and the values and gradients of other nodes
-     will change thanks to the forward and backward passes. *)
+  (* Now the params will remain as above, but both param gradients and the values and gradients of
+     other nodes will change thanks to the forward and backward passes. *)
   Train.sync_run backend grad_routine l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect

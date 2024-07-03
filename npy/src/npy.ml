@@ -32,7 +32,9 @@ let dtype ~packed_kind =
 
 let map_file file_descr ~pos kind layout shared shape =
   let is_scalar = Array.length shape = 0 in
-  let array = Unix.map_file file_descr ~pos kind layout shared (if is_scalar then [| 1 |] else shape) in
+  let array =
+    Unix.map_file file_descr ~pos kind layout shared (if is_scalar then [| 1 |] else shape)
+  in
   if is_scalar then Bigarray.reshape array [||] else array
 
 let fortran_order (type a) ~(layout : a Bigarray.layout) =
@@ -76,7 +78,8 @@ let with_file filename flags mask ~f =
 let write ?header_len bigarray filename =
   with_file filename [ O_CREAT; O_TRUNC; O_RDWR ] 0o640 ~f:(fun file_descr ->
       let full_header =
-        full_header () ?header_len ~layout:(Bigarray.Genarray.layout bigarray)
+        full_header () ?header_len
+          ~layout:(Bigarray.Genarray.layout bigarray)
           ~packed_kind:(P (Bigarray.Genarray.kind bigarray))
           ~dims:(Bigarray.Genarray.dims bigarray)
       in
@@ -85,7 +88,8 @@ let write ?header_len bigarray filename =
         raise Cannot_write;
       let file_array =
         map_file ~pos:(Int64.of_int full_header_len) file_descr (Bigarray.Genarray.kind bigarray)
-          (Bigarray.Genarray.layout bigarray) true (Bigarray.Genarray.dims bigarray)
+          (Bigarray.Genarray.layout bigarray)
+          true (Bigarray.Genarray.dims bigarray)
       in
       Bigarray.Genarray.blit bigarray file_array)
 
@@ -106,8 +110,9 @@ module Batch_writer = struct
     let file_array =
       map_file
         ~pos:(Int64.of_int t.bytes_written_so_far)
-        t.file_descr (Bigarray.Genarray.kind bigarray) (Bigarray.Genarray.layout bigarray) true
-        (Bigarray.Genarray.dims bigarray)
+        t.file_descr (Bigarray.Genarray.kind bigarray)
+        (Bigarray.Genarray.layout bigarray)
+        true (Bigarray.Genarray.dims bigarray)
     in
     Bigarray.Genarray.blit bigarray file_array;
     let size_in_bytes = Bigarray.Genarray.size_in_bytes bigarray in
@@ -125,7 +130,8 @@ module Batch_writer = struct
           | _ :: d, _ :: d' -> d <> d'
         in
         if incorrect_dimensions then
-          Printf.sprintf "Incorrect dimensions %s vs %s." (shape ~dims) (shape ~dims:dims') |> failwith;
+          Printf.sprintf "Incorrect dimensions %s vs %s." (shape ~dims) (shape ~dims:dims')
+          |> failwith;
         dims.(0) <- dims.(0) + dims'.(0)
 
   let create filename =
@@ -147,7 +153,8 @@ let really_read fd len =
   let buffer = Bytes.create len in
   let rec loop offset =
     let read = Unix.read fd buffer offset (len - offset) in
-    if read + offset < len then loop (read + offset) else if read = 0 then read_error "unexpected eof"
+    if read + offset < len then loop (read + offset)
+    else if read = 0 then read_error "unexpected eof"
   in
   loop 0;
   Bytes.to_string buffer
@@ -193,7 +200,8 @@ module Header = struct
       |> List.filter (fun s -> String.length s > 0)
       |> List.map (fun header_field ->
              match split header_field ~on:':' with
-             | [ name; value ] -> (trim name ~on:[ '\''; ' ' ], trim value ~on:[ '\''; ' '; '('; ')' ])
+             | [ name; value ] ->
+                 (trim name ~on:[ '\''; ' ' ], trim value ~on:[ '\''; ' '; '('; ')' ])
              | _ -> read_error "unable to parse field %s" header_field)
     in
     let find_field field =

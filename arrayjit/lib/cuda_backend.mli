@@ -9,10 +9,16 @@ val sexp_of_context : context -> Sexplib.Sexp.t
 val compile : ?name:string -> Indexing.unit_bindings -> Low_level.optimized -> code
 
 val compile_batch :
-  names:string option array -> Indexing.unit_bindings -> Low_level.optimized option array -> code_batch
+  names:string option array ->
+  Indexing.unit_bindings ->
+  Low_level.optimized option array ->
+  code_batch
 
 val link : context -> code -> context * Indexing.lowered_bindings * Tnode.task
-val link_batch : context -> code_batch -> context * Indexing.lowered_bindings * Tnode.task option array
+
+val link_batch :
+  context -> code_batch -> context * Indexing.lowered_bindings * Tnode.task option array
+
 val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
 
 val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> bool
@@ -35,8 +41,12 @@ type buffer_ptr [@@deriving sexp_of]
 val to_buffer :
   ?rt:(module Minidebug_runtime.Debug_runtime) -> Tnode.t -> dst:buffer_ptr -> src:context -> unit
 
-val host_to_buffer : ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> dst:buffer_ptr -> unit
-val buffer_to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> src:buffer_ptr -> unit
+val host_to_buffer :
+  ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> dst:buffer_ptr -> unit
+
+val buffer_to_host :
+  ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> src:buffer_ptr -> unit
+
 val get_buffer : Tnode.t -> context -> buffer_ptr option
 
 type physical_device

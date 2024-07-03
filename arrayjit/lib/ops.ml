@@ -94,7 +94,8 @@ let pack_prec (type ocaml elt_t) (prec : (ocaml, elt_t) precision) =
 type 'r map_prec = { f : 'ocaml 'elt_t. ('ocaml, 'elt_t) precision -> 'r }
 
 let map_prec ?default { f } = function
-  | Void_prec -> Option.value_or_thunk default ~default:(fun () -> invalid_arg "map_prec: Void_prec")
+  | Void_prec ->
+      Option.value_or_thunk default ~default:(fun () -> invalid_arg "map_prec: Void_prec")
   | Byte_prec Byte -> f Byte
   | Half_prec (Half | Single) -> f Half
   | Single_prec (Single | Half) -> f Single
@@ -111,22 +112,26 @@ let cuda_typ_of_prec = function
 
 (** {2 *** Operations ***} *)
 
-(** Initializes or resets a array by filling in the corresponding numbers, at the appropriate precision. *)
+(** Initializes or resets a array by filling in the corresponding numbers, at the appropriate
+    precision. *)
 type init_op =
   | Constant_fill of { values : float array; strict : bool }
-      (** Fills in the numbers where the rightmost axis is contiguous. If [strict=true], loops over the
-          provided values. *)
+      (** Fills in the numbers where the rightmost axis is contiguous. If [strict=true], loops over
+          the provided values. *)
   | Range_over_offsets
-      (** Fills in the offset number of each cell (i.e. how many cells away it is from the beginning). *)
+      (** Fills in the offset number of each cell (i.e. how many cells away it is from the
+          beginning). *)
   | Standard_uniform  (** Draws the values from U(0,1). *)
   | File_mapped of string * prec  (** Reads the data using [Unix.openfile] and [Unix.map_file]. *)
 [@@deriving equal, sexp]
 
-type binop = Add | Sub | Mul | Div | ToPowOf | Relu_gate | Arg2 | Arg1 [@@deriving sexp, compare, equal]
+type binop = Add | Sub | Mul | Div | ToPowOf | Relu_gate | Arg2 | Arg1
+[@@deriving sexp, compare, equal]
+
 type unop = Identity | Relu [@@deriving sexp, compare, equal]
 
-(** Either the left-neutral or right-neutral element of the operation. Unspecified if the operation does not
-    have a neutral element. *)
+(** Either the left-neutral or right-neutral element of the operation. Unspecified if the operation
+    does not have a neutral element. *)
 let neutral_elem = function
   | Add | Sub -> 0.
   | Mul | Div -> 1.
@@ -227,7 +232,7 @@ type global_identifier =
       dims : int array Lazy.t;
     }
   | Merge_buffer of { source_node_id : int }
-      (** Each device has at most one merge buffer, which is re-used, and re-allocated as needed, by merge
-          operations. The merge buffer is associated with the source node of the device's most recent
-          [device_to_device ~into_merge_buffer:true] operation. *)
+      (** Each device has at most one merge buffer, which is re-used, and re-allocated as needed, by
+          merge operations. The merge buffer is associated with the source node of the device's most
+          recent [device_to_device ~into_merge_buffer:true] operation. *)
 [@@deriving sexp_of, equal, compare]
