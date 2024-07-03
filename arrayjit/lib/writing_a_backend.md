@@ -191,7 +191,6 @@ type tn_info = {
   ptr : ...(* Some way to refer to the array from the compiled code. *);
   mem : mem_properties;
   dims : int array;
-  size_in_bytes : int;
   num_typ : ...;
       (** The type of the stored values:
           [short] or [half] (precision [Half]), [float] (precision [Single]), [double] (precision [Double]). *)

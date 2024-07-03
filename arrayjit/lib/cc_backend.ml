@@ -78,8 +78,6 @@ type tn_info = {
           - if [mem = Local_only], the address of the on-the-stack array. *)
   mem : mem_properties;
   dims : int array;
-  size_in_elems : int;
-  size_in_bytes : int;
   prec : Ops.prec;
   zero_initialized : bool;
 }
@@ -123,7 +121,7 @@ type ctx_nodes = Ctx_arrays of ctx_arrays ref | Param_ptrs of (string * param_so
    https://github.com/ahrefs/ocannl/blob/1eb5209772b759f00a0cb8a39e51c4ddae78aee6/lib/exec_as_OCaml.ml *)
 
 let pp_zero_out ppf node =
-  Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " node.ptr node.size_in_bytes
+  Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " node.ptr @@ Tn.size_in_bytes node.tn
 
 let get_c_ptr prec nd =
   let f arr = Ops.ptr_to_string (Ctypes.bigarray_start Ctypes_static.Genarray arr) prec in
@@ -179,9 +177,7 @@ let%debug_sexp prepare_node ~(traced_store : Low_level.traced_store) info ctx_no
         (* let tn = Low_level.get_node traced_store v in *)
         (* TODO: We will need tn to perform more refined optimizations. *)
         let dims = Lazy.force tn.dims in
-        let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
         let prec = tn.prec in
-        let size_in_bytes = size_in_elems * Ops.prec_in_bytes prec in
         let is_on_host = Tn.is_hosted_force tn 33 in
         let is_materialized = Tn.is_materialized_force tn 331 in
         let is_constant = Tn.is_hosted_force ~specifically:Constant tn 332 in
@@ -227,7 +223,7 @@ let%debug_sexp prepare_node ~(traced_store : Low_level.traced_store) info ctx_no
         if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
           tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
         let zero_initialized = (Hashtbl.find_exn traced_store tn).Low_level.zero_initialized in
-        { tn; ptr; mem; dims; size_in_bytes; size_in_elems; prec; zero_initialized })
+        { tn; ptr; mem; dims; prec; zero_initialized })
 
 let compile_main ~traced_store info ppf llc : unit =
   let open Stdlib.Format in
@@ -450,7 +446,7 @@ let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; 
       match node.mem with
       | Local_only ->
           fprintf ppf "%s %s[%d]%s;@ " (Ops.cuda_typ_of_prec node.prec) (info.get_ident tn)
-            node.size_in_elems
+            (Tn.num_elems tn)
             (if (Hashtbl.find_exn traced_store tn).zero_initialized then " = {0}" else "")
       | From_context when node.zero_initialized -> pp_zero_out ppf node
       | _ -> ());

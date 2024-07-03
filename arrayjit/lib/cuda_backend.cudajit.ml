@@ -20,8 +20,6 @@ type tn_info = {
   local : string option;  (** A local name, if any. *)
   mem : mem_properties;
   dims : int array;
-  size_in_bytes : int;
-  size_in_elems : int;
   num_typ : string;
       (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]),
           [double] (precision [Double]). *)

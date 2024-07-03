@@ -89,7 +89,6 @@ type tn_info = {
           - if [mem = Local_only], the address of the on-the-stack array. *)
   mem : mem_properties;
   dims : int array;
-  size_in_bytes : int;
   num_typ : (Gccjit.type_[@sexp.opaque]);
       (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]),
           [double] (precision [Double]). *)

@@ -424,11 +424,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         | Streaming -> fun _rt () -> dev.merge_buffer_ptr := Backend.get_buffer tn src.ctx
         | Copy ->
             fun rt () ->
-              let size_in_bytes =
-                Ndarray.size_in_bytes
-                @@ Option.value_exn ~here:[%here] ~message:(Tnode.get_debug_name tn)
-                @@ Lazy.force tn.array
-              in
+              let size_in_bytes = Tnode.size_in_bytes tn in
               let allocated_capacity =
                 Option.value ~default:0 @@ Option.map dev.allocated_buffer ~f:snd
               in

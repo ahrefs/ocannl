@@ -65,6 +65,12 @@ let name { id; _ } = "n" ^ Int.to_string id
 let label a = String.concat ~sep:"_" a.label
 let compare a1 a2 = compare_int a1.id a2.id
 
+let num_elems tn =
+  let dims = Lazy.force tn.dims in
+  if Array.is_empty dims then 0 else Array.reduce_exn dims ~f:( * )
+
+let size_in_bytes tn = num_elems tn * Ops.prec_in_bytes tn.prec
+
 let default_to_most_local tn provenance =
   match tn.memory_mode with
   | None | Some (Effectively_constant, _) -> tn.memory_mode <- Some (Virtual, provenance)
