@@ -333,7 +333,7 @@ let%track_sexp parallel_update (type context) (module Backend : Backend_type wit
              ~~("merging" updaten.loss);
              updaten.loss.value =+ updaten.loss.value.merge])
   in
-  (* FIXME: need to iterate over params in the outer loop. *)
+  (* Since each device has its own queue, we can iterate over devices in the outer loop. *)
   let merge_grads ~(from : int) ~(to_ : int) : unit =
     (* FIXME: do we need to sync already? *)
     Backend.(await @@ get_ctx_device ctxs.(from));

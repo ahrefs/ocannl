@@ -398,7 +398,9 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         | Copy ->
             fun rt () ->
               let size_in_bytes =
-                Ndarray.size_in_bytes @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
+                Ndarray.size_in_bytes
+                @@ Option.value_exn ~here:[%here] ~message:(Tnode.get_debug_name tn)
+                @@ Lazy.force tn.array
               in
               let allocated_capacity = Option.value ~default:0 @@ Option.map dev.allocated_buffer ~f:snd in
               if allocated_capacity < size_in_bytes then
