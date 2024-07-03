@@ -153,6 +153,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   type device_state = {
     mutable keep_spinning : bool;
+    mutable device_error : exn option;
     mutable host_pos : task_list;
     mutable dev_pos : task_list;
     mutable dev_previous_pos : task_list;
@@ -183,6 +184,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let expected_merge_nodes (codes : code_batch) = Backend.expected_merge_nodes codes
   let is_dev_queue_empty state = Utils.(is_empty @@ tl_exn state.dev_previous_pos)
   let is_idle device = is_dev_queue_empty device.state && device.state.dev_wait.is_waiting ()
+  let name = "multicore " ^ Backend.name
 
   let await device =
     assert (Domain.is_main_domain ());
@@ -195,11 +197,15 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     in
     while not (is_dev_queue_empty d) do
       ignore (device.host_wait_for_idle.await ~keep_waiting () : bool)
-    done
+    done;
+    Option.iter d.device_error ~f:(fun e ->
+        Exn.reraise e @@ name ^ " device " ^ Int.to_string device.ordinal)
 
   let%track_sexp schedule_task device task =
     assert (Domain.is_main_domain ());
     let d = device.state in
+    Option.iter d.device_error ~f:(fun e ->
+        Exn.reraise e @@ name ^ " device " ^ Int.to_string device.ordinal);
     if not d.keep_spinning then invalid_arg "Multicore_backend: device not available";
     d.host_pos <- Utils.insert ~next:task d.host_pos;
     ignore (d.dev_wait.release_if_waiting () : bool)
@@ -215,6 +221,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     let state =
       {
         keep_spinning = true;
+        device_error = None;
         host_pos = init_pos;
         dev_pos = Empty;
         dev_previous_pos = init_pos;
@@ -247,9 +254,12 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
               state.dev_pos <- tl
         done
       with e ->
+        state.device_error <- Some e;
         state.keep_spinning <- false;
         [%log "Device", (ordinal : int), "exception", Exn.to_string e];
         ignore (host_wait_for_idle.release_if_waiting () : bool);
+        (* TODO: we risk raising this error multiple times because await and schedule_task raise
+           device_error. But this is fine if we assume all exceptions are fatal. *)
         raise e
     in
     {
@@ -275,8 +285,6 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   [@@deriving sexp_of]
 
   type nonrec routine = context routine [@@deriving sexp_of]
-
-  let name = "multicore " ^ Backend.name
 
   let init device =
     {
