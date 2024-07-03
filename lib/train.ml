@@ -308,34 +308,41 @@ module Lazy = Utils.Lazy
     lost. Bindings without ranges remain at their initial values. *)
 let%track_sexp parallel_update (type context)
     (module Backend : Backend_type with type context = context)
-    ~(grad_updates : Backend.routine array) ~(sgd_update : Backend.routine) ~post_sync updaten :
-    unit -> unit =
+    ~(grad_updates : Backend.routine array) ~(sgd_update : Backend.routine) ~copy_to_merge
+    ~post_sync updaten : unit -> unit =
   assert (not @@ Array.is_empty grad_updates);
   let num_devices : int = Array.length grad_updates in
   let bindings : Idx.static_symbol list = List.map ~f:fst sgd_update.bindings in
-  let occupancies = Array.init num_devices ~f:(fun _ -> Array.create ~len:num_devices false) in
+  let occupancies_dst_src =
+    Array.init num_devices ~f:(fun _ -> Array.create ~len:num_devices false)
+  in
   (* to_, from positions correspond to the contexts (and devices) of grad_updates at the
      position. *)
-  let dry_merge ~from ~to_ = occupancies.(from).(to_) <- true in
+  let dry_merge ~from ~to_ = occupancies_dst_src.(to_).(from) <- true in
   let dry_sync devices_to_sync = Arrayjit.Utils.parallel_merge dry_merge devices_to_sync in
   round_robin_dry_run ~num_devices sgd_update.bindings ~dry_sync;
   [%debug_notrace
     assert (
       Array.for_all grad_updates ~f:(fun upd ->
           [%equal: Idx.static_symbol list] bindings @@ List.map ~f:fst upd.bindings))];
-  let all_params = Set.to_array updaten.params in
+  let all_params : Tensor.t array = Set.to_array updaten.params in
+  let _occupancies_debug : bool array array = occupancies_dst_src in
   let ctxs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.context)] in
-  let occupancy ~name:_ ~src_n = Array.exists ~f:Fn.id occupancies.(src_n) in
-  let grad_merges =
+  let occupancy_dst ~dst_n = Array.exists ~f:Fn.id occupancies_dst_src.(dst_n) in
+  let grad_merges : Asgns.t array =
     Array.map all_params ~f:(fun p ->
         [%cd
           ~~("merging gradient of" p);
           p.grad =+ p.grad.merge])
   in
-  let grad_merges_to =
-    Array.map ctxs ~f:(fun ctx ->
-        snd @@ Backend.link_batch ctx
-        @@ Backend.compile_batch ~shared:true ~occupancy Idx.Empty grad_merges)
+  let grad_merges_to : Backend.routine option array array =
+    (* For now, we need all params on all devices. *)
+    let occupancy ~name:_ ~src_n:_ = true in
+    Array.mapi ctxs ~f:(fun dst_n ctx ->
+        if occupancy_dst ~dst_n then
+          snd @@ Backend.link_batch ctx
+          @@ Backend.compile_batch ~shared:true ~occupancy Idx.Empty grad_merges
+        else [||])
   in
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
   let loss_merge =
@@ -346,20 +353,26 @@ let%track_sexp parallel_update (type context)
              ~~("merging" updaten.loss);
              updaten.loss.value =+ updaten.loss.value.merge])
   in
+  let into_merge_buffer =
+    if copy_to_merge then Arrayjit.Backend_types.Copy else Arrayjit.Backend_types.Streaming
+  in
   (* Since each device has its own queue, we can iterate over devices in the outer loop. *)
   let merge_grads ~(from : int) ~(to_ : int) : unit =
     (* FIXME: do we need to sync already? *)
     Backend.(await @@ get_ctx_device ctxs.(from));
     Array.iteri all_params ~f:(fun i p ->
-        let grad_merge = Option.value_exn ~here:[%here] grad_merges_to.(to_).(i) in
+        let grad_merge =
+          Option.value_exn ~here:[%here] ~message:(Tn.get_debug_name p.value)
+            grad_merges_to.(to_).(i)
+        in
         assert (
-          Backend.device_to_device (Option.value_exn ~here:[%here] p.diff).grad
-            ~into_merge_buffer:Copy ~dst:grad_merge.context ~src:ctxs.(from));
+          Backend.device_to_device (Option.value_exn ~here:[%here] p.diff).grad ~into_merge_buffer
+            ~dst:grad_merge.context ~src:ctxs.(from));
         (Tn.run debug_rt grad_merge.schedule : unit))
   in
   let merge_loss ~src =
     assert (
-      Backend.device_to_device updaten.loss.value ~into_merge_buffer:Copy ~dst:loss_merge.context
+      Backend.device_to_device updaten.loss.value ~into_merge_buffer ~dst:loss_merge.context
         ~src);
     Tn.run debug_rt loss_merge.schedule
   in
@@ -404,8 +417,8 @@ let get_all_suggested_devices (type device) ?max_num_devices
   |> Array.concat_map ~f:Fn.id
 
 let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init_lr ?lr_schedule
-    ?max_num_devices ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn ~weight_decay
-    ?per_batch_callback ?per_epoch_callback (backend : (module Backend_type)) () =
+    ?(copy_to_merge = false) ?max_num_devices ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn
+    ~weight_decay ?per_batch_callback ?per_epoch_callback (backend : (module Backend_type)) () =
   let module TDSL = Operation.TDSL in
   let module NTDSL = Operation.NTDSL in
   Rand.init seed;
@@ -449,7 +462,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   let update =
     parallel_update
       (module Backend)
-      ~grad_updates ~sgd_update update
+      ~grad_updates ~sgd_update update ~copy_to_merge
       ~post_sync:(fun ~num_synced_devices ->
         step_ref := !step_ref + num_synced_devices;
         assert (Backend.to_host sgd_update.context learning_rate.value);
