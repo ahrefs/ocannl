@@ -9,19 +9,20 @@ module Utils = Arrayjit.Utils
 module Rand = Arrayjit.Rand.Lib
 
 let experiment ~seed () =
-  Utils.settings.with_debug_level <- 2;
-  Utils.settings.output_debug_files_in_run_directory <- true;
-  Utils.settings.debug_log_from_routines <- true;
-  (* let hid_dim = 16 in *)
-  let hid_dim = 4 in
-  (* let batch_size = 120 in *)
+  (* Utils.settings.with_debug_level <- 1; *)
+  (* Utils.settings.with_debug_level <- 3; *)
+  (* Utils.settings.output_debug_files_in_run_directory <- true; *)
+  (* Utils.settings.debug_log_from_routines <- true; *)
+  let hid_dim = 16 in
+  (* let hid_dim = 4 in *)
+  let batch_size = 120 in
   (* let batch_size = 60 in *)
-  let batch_size = 20 in
+  (* let batch_size = 20 in *)
   let len = batch_size * 20 in
   let init_lr = 0.1 in
   (* let epochs = 10 in *)
-  (* let epochs = 20 in *)
-  let epochs = 1 in
+  let epochs = 20 in
+  (* let epochs = 1 in *)
   let noise () = Rand.float_range (-0.1) 0.1 in
   let moons_flat =
     Array.concat_map (Array.create ~len ())
@@ -118,9 +119,11 @@ let experiment ~seed () =
     plot ~size:(120, 30) ~x_label:"step" ~y_label:"learning rate"
       [ Line_plot { points = Array.of_list_rev learning_rates; pixel = "-" } ]
   in
-  PrintBox_text.output Stdio.stdout plot_lr
+  PrintBox_text.output Stdio.stdout plot_lr;
+  let module Backend = (val backend) in
+  Backend.unsafe_cleanup ~unsafe_shutdown:true ()
 
-let () = experiment ~seed:0 ()
+let () = experiment ~seed:1 ()
 
 let _suspended () =
   for seed = 0 to 19 do
