@@ -358,7 +358,7 @@ let%track_sexp parallel_update (type context)
   in
   (* Since each device has its own queue, we can iterate over devices in the outer loop. *)
   let merge_grads ~(from : int) ~(to_ : int) : unit =
-    (* FIXME: do we need to sync already? *)
+    (* Synchronize the source since we compute on the destionation. *)
     Backend.(await @@ get_ctx_device ctxs.(from));
     Array.iteri all_params ~f:(fun i p ->
         let grad_merge =
@@ -380,8 +380,9 @@ let%track_sexp parallel_update (type context)
   let needed_on_host = ref @@ Set.empty (module Tn) in
   let%track_sexp sync (devices_to_sync : int) : unit =
     Arrayjit.Utils.parallel_merge merge_grads devices_to_sync;
-    Tn.run debug_rt sgd_update.schedule;
     (* We need to wait, because copying happens on other devices. *)
+    Array.iteri ctxs ~f:(fun i src -> if i <> 0 then Backend.(await @@ get_ctx_device src));
+    Tn.run debug_rt sgd_update.schedule;
     Array.iteri ctxs ~f:(fun i src -> if i <> 0 then merge_loss ~src);
     Set.iter !needed_on_host ~f:(fun p -> assert (Backend.to_host sgd_update.context p));
     Backend.(await @@ get_ctx_device sgd_update.context);
