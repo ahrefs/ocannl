@@ -101,9 +101,8 @@ let get_device ~ordinal =
       result)
 
 let new_virtual_device physical =
-  (* FIXME: *)
   let subordinal = 0 in
-  let stream = Cudajit.no_stream in
+  let stream = Cudajit.stream_create () in
   { physical; stream; subordinal }
 
 let cuda_properties =
@@ -192,8 +191,7 @@ let%diagn_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option)
   match (Map.find ctx.all_arrays tn, Map.find ctx.global_arrays tn) with
   | Some { tn = { Tn.array = (lazy (Some hosted)); _ }; _ }, Some dst ->
       set_ctx ctx.ctx;
-      (* FIXME: asynchronous *)
-      let f src = Cudajit.memcpy_H_to_D ~dst ~src () in
+      let f src = Cudajit.memcpy_H_to_D_async ~dst ~src ctx.device.stream in
       Ndarray.map { f } hosted;
       (if Utils.settings.with_debug_level > 0 then
          let module Debug_runtime =
@@ -207,8 +205,7 @@ let%diagn_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (
   match (Map.find ctx.all_arrays tn, Map.find ctx.global_arrays tn) with
   | Some { tn = { Tn.array = (lazy (Some hosted)); _ }; _ }, Some src ->
       set_ctx ctx.ctx;
-      (* FIXME: asynchronous *)
-      let f dst = Cudajit.memcpy_D_to_H ~dst ~src () in
+      let f dst = Cudajit.memcpy_D_to_H_async ~dst ~src ctx.device.stream in
       Ndarray.map { f } hosted;
       if Utils.settings.with_debug_level > 0 then (
         let module Debug_runtime =
@@ -231,7 +228,8 @@ let%diagn_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) 
                 match into_merge_buffer with
                 | Backend_types.No ->
                     set_ctx dst.ctx;
-                    Cudajit.memcpy_D_to_D ~dst:d_arr ~src:s_arr ();
+                    Cudajit.memcpy_peer_async ~dst:d_arr ~dst_ctx:dst.ctx ~src:s_arr
+                      ~src_ctx:src.ctx dst.device.stream;
                     (if Utils.settings.with_debug_level > 0 then
                        let module Debug_runtime =
                          (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
@@ -737,7 +735,7 @@ let link old_context (code : code) =
     [%log "launching the kernel"];
     (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE
        4096; *)
-    Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 Cu.no_stream
+    Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.device.stream
     @@ log_arg @ idx_args @ args;
     [%log "kernel launched"];
     if Utils.settings.debug_log_from_routines then

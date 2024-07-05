@@ -17,7 +17,7 @@
 - Merge buffers representational abstraction (one per virtual device):
   - backends just need to support device-to-device transfers,
   - merging gets implemented in "user space".
-- TODO: CUDA streaming multiprocessor parallelism via streams <-> virtual devices.
+- CUDA streaming multiprocessor parallelism via streams <-> virtual devices.
 
 ### Changed
 
