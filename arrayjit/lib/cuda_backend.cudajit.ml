@@ -301,13 +301,10 @@ let%debug_sexp prepare_node traced_store info tn =
         (* let tn = Low_level.get_node traced_store v in *)
         (* TODO: We will need tn to perform more refined optimizations. *)
         let dims = Lazy.force tn.dims in
-        let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
-        let prec = tn.prec in
-        let size_in_bytes = size_in_elems * Ops.prec_in_bytes prec in
         let is_on_host = Tn.is_hosted_force tn 31 in
         let is_materialized = Tn.is_hosted_force tn 32 in
         assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
-        let num_typ = Ops.cuda_typ_of_prec prec in
+        let num_typ = Ops.cuda_typ_of_prec tn.prec in
         let mem = if not is_materialized then Local_only else Global in
         let global = if is_local_only mem then None else Some (Tn.name tn) in
         let local = Option.some_if (is_local_only mem) @@ Tn.name tn ^ "_local" in
@@ -320,7 +317,7 @@ let%debug_sexp prepare_node traced_store info tn =
               "mem",
               (backend_info : Sexp.t),
               "prec",
-              (prec : Ops.prec),
+              (tn.prec : Ops.prec),
               "on-host",
               (is_on_host : bool),
               "is-global",
@@ -328,7 +325,7 @@ let%debug_sexp prepare_node traced_store info tn =
         if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
           tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
         let zero_initialized = (Hashtbl.find_exn traced_store tn).Low_level.zero_initialized in
-        { tn; local; mem; dims; size_in_bytes; size_in_elems; num_typ; global; zero_initialized })
+        { tn; local; mem; dims; num_typ; global; zero_initialized })
 
 let compile_main traced_store info ppf llc : unit =
   let open Stdlib.Format in
@@ -584,11 +581,11 @@ let%track_sexp compile_proc ~name ~get_ident ppf idx_params
       match node.mem with
       | Local_only ->
           Option.iter node.local ~f:(fun t_name ->
-              fprintf ppf "%s %s[%d]%s;@," node.num_typ t_name node.size_in_elems
+              fprintf ppf "%s %s[%d]%s;@," node.num_typ t_name (Tn.num_elems tn)
                 (if (Hashtbl.find_exn traced_store tn).zero_initialized then " = {0}" else ""))
       | Global when node.zero_initialized ->
           Option.iter node.global ~f:(fun t_name ->
-              Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " t_name node.size_in_bytes)
+              Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " t_name (Tn.size_in_bytes tn))
       | _ -> ());
   fprintf ppf "/* Main logic. */@,";
   compile_main traced_store info ppf llc;
@@ -630,8 +627,8 @@ let alloc_buffer ?old_buffer ~size_in_bytes () =
   | Some (old_ptr, old_size) when size_in_bytes <= old_size -> old_ptr
   | Some (old_ptr, _old_size) ->
       Cudajit.mem_free old_ptr;
-      Cudajit.mem_alloc ~byte_size:size_in_bytes
-  | None -> Cudajit.mem_alloc ~byte_size:size_in_bytes
+      Cudajit.mem_alloc ~size_in_bytes
+  | None -> Cudajit.mem_alloc ~size_in_bytes
 
 let%diagn_sexp link_proc (old_context : context) ~name info ptx =
   let module Cu = Cudajit in
@@ -642,7 +639,7 @@ let%diagn_sexp link_proc (old_context : context) ~name info ptx =
         Option.value_map ~default:globals node.global ~f:(fun _name ->
             if Utils.settings.with_debug_level > 0 then [%log "mem_alloc", _name];
             set_ctx ctx;
-            let ptr () = Cu.mem_alloc ~byte_size:node.size_in_bytes in
+            let ptr () = Cu.mem_alloc ~size_in_bytes:(Tn.size_in_bytes node.tn) in
             Map.update globals key ~f:(fun old -> Option.value_or_thunk old ~default:ptr)))
   in
   let run_module = Cu.module_load_data_ex ptx [] in
@@ -736,7 +733,7 @@ let link old_context (code : code) =
         if Hash_set.mem code.info.used_tensors key then
           let node = Map.find_exn all_arrays key in
           if node.zero_initialized then
-            Cu.memset_d8 ptr Unsigned.UChar.zero ~length:node.size_in_bytes);
+            Cu.memset_d8 ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key));
     [%log "launching the kernel"];
     (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE
        4096; *)

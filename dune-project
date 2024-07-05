@@ -4,7 +4,7 @@
 
 (name ocannl)
 
-(version 0.3.3)
+(version 0.4.0)
 
 (generate_opam_files true)
 
@@ -67,7 +67,8 @@
   (ppx_minidebug
    (>= 1.5)))
  (depopts
-  cudajit
+  (cudajit
+   (>= 0.4.0))
   (gccjit
    (>= 0.3.2)))
  (tags
