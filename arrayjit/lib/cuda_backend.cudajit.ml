@@ -31,7 +31,6 @@ type physical_device = {
   dev : (Cudajit.device[@sexp.opaque]);
   ordinal : int;
   primary_context : (Cudajit.context[@sexp.opaque]);
-  mutable postprocess_queue : (context * (output:string list -> unit)) list;
 }
 [@@deriving sexp_of]
 
@@ -39,6 +38,7 @@ and device = {
   physical : physical_device;
   stream : (Cudajit.stream[@sexp.opaque]);
   subordinal : int;
+  mutable postprocess_queue : (context * (output:string list -> unit)) list;
 }
 
 and context = {
@@ -106,7 +106,7 @@ let new_virtual_device physical =
   (* Strange that we need ctx_set_current even with a single device! *)
   Cudajit.ctx_set_current physical.primary_context;
   let stream = Cudajit.stream_create () in
-  { physical; stream; subordinal }
+  { physical; stream; subordinal; postprocess_queue = [] }
 
 let cuda_properties =
   let cache =
@@ -161,12 +161,11 @@ let finalize ctx =
     let output = capture_stdout @@ fun () -> Option.iter ctx.run_module ~f:Cudajit.module_unload in
     Exn.protect
       ~f:(fun () ->
-        List.iter ctx.device.physical.postprocess_queue ~f:(fun (f_ctx, f) ->
+        List.iter ctx.device.postprocess_queue ~f:(fun (f_ctx, f) ->
             if phys_equal f_ctx ctx then f ~output))
       ~finally:(fun () ->
-        ctx.device.physical.postprocess_queue <-
-          List.filter ctx.device.physical.postprocess_queue ~f:(fun (f_ctx, _) ->
-              phys_equal f_ctx ctx));
+        ctx.device.postprocess_queue <-
+          List.filter ctx.device.postprocess_queue ~f:(fun (f_ctx, _) -> phys_equal f_ctx ctx));
     Map.iter ctx.global_arrays ~f:(fun ptr -> Cudajit.mem_free ptr))
 
 let unsafe_cleanup ?unsafe_shutdown:_ () =
@@ -179,15 +178,18 @@ let unsafe_cleanup ?unsafe_shutdown:_ () =
   Core.Weak.fill !devices 0 len None
 
 let await device =
-  (* FIXME: NOT IMPLEMENTED YET *)
-  let device = device.physical in
-  set_ctx device.primary_context;
-  let output = capture_stdout Cudajit.ctx_synchronize in
+  set_ctx device.physical.primary_context;
+  let output = capture_stdout (fun () -> Cudajit.stream_synchronize device.stream) in
   Exn.protect
-    ~f:(fun () -> List.iter device.postprocess_queue ~f:(fun (_, f) -> f ~output))
-    ~finally:(fun () -> device.postprocess_queue <- [])
+    ~f:(fun () ->
+      List.iter device.postprocess_queue ~f:(fun (f_ctx, f) ->
+          if phys_equal f_ctx.device device then f ~output))
+    ~finally:(fun () ->
+      device.postprocess_queue <-
+        List.filter device.postprocess_queue ~f:(fun (ctx, _) ->
+            not @@ phys_equal ctx.device device))
 
-let is_idle _device = failwith "NOT IMPLEMENTED YET"
+let is_idle device = Cudajit.stream_is_ready device.stream
 
 let%diagn_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context) tn
     =
@@ -748,8 +750,8 @@ let link old_context (code : code) =
           context.label;
           Utils.log_trace_tree _debug_runtime output]
       in
-      context.device.physical.postprocess_queue <-
-        (context, postprocess_logs) :: context.device.physical.postprocess_queue
+      context.device.postprocess_queue <-
+        (context, postprocess_logs) :: context.device.postprocess_queue
   in
   (context, idx_args, Tn.{ description = "launches " ^ code.name ^ " on " ^ context.label; work })
 
