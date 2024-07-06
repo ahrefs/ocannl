@@ -372,8 +372,7 @@ let%track_sexp parallel_update (type context)
   in
   let merge_loss ~src =
     assert (
-      Backend.device_to_device updaten.loss.value ~into_merge_buffer ~dst:loss_merge.context
-        ~src);
+      Backend.device_to_device updaten.loss.value ~into_merge_buffer ~dst:loss_merge.context ~src);
     Tn.run debug_rt loss_merge.schedule
   in
   (* FIXME: missing backcopy. *)

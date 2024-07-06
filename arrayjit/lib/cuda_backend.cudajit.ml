@@ -676,23 +676,6 @@ let%diagn_sexp cuda_to_ptx ~name cu_src =
     Stdio.Out_channel.close oc);
   ptx
 
-let%diagn_sexp link_proc (old_context : context) ~name info ptx =
-  let module Cu = Cudajit in
-  let ctx = old_context.ctx in
-  set_ctx ctx;
-  let global_arrays =
-    Hashtbl.fold ~init:old_context.global_arrays info.nodes ~f:(fun ~key ~data:node globals ->
-        Option.value_map ~default:globals node.global ~f:(fun _name ->
-            if Utils.settings.with_debug_level > 0 then [%log "mem_alloc", _name];
-            set_ctx ctx;
-            let ptr () = Cu.mem_alloc ~size_in_bytes:(Tn.size_in_bytes node.tn) in
-            Map.update globals key ~f:(fun old -> Option.value_or_thunk old ~default:ptr)))
-  in
-  let run_module = Cu.module_load_data_ex ptx [] in
-  let func = Cu.module_get_function run_module ~name in
-  [%log "compilation finished"];
-  (func, global_arrays, run_module)
-
 let compile ?name bindings ({ Low_level.llc; _ } as lowered) =
   let get_ident = Low_level.get_ident_within_code ~no_dots:true [| llc |] in
   let name : string =
@@ -734,27 +717,25 @@ let get_global_run_id =
     if !next_id < 0 then next_id := 0;
     !next_id
 
-let link old_context (code : code) =
-  let all_arrays = Map.of_alist_exn (module Tn) @@ Hashtbl.to_alist code.info.nodes in
-  let func, global_arrays, run_module = link_proc old_context ~name:code.name code.info code.ptx in
+let link_proc ~old_context ~name ~all_arrays ~global_arrays ~idx_args ~info run_module =
+  let module Cu = Cudajit in
+  let func = Cu.module_get_function run_module ~name in
   let context = { old_context with run_module = Some run_module; global_arrays; all_arrays } in
-  let idx_params = Indexing.bound_symbols code.bindings in
-  let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let%diagn_rt_sexp work () : unit =
     let log_id = get_global_run_id () in
     let log_id_prefix = Int.to_string log_id ^ ": " in
-    [%log_result "Launching", code.name, context.label, (log_id : int)];
+    [%log_result "Launching", name, context.label, (log_id : int)];
     let module Cu = Cudajit in
     let log_arg = if Utils.settings.debug_log_from_routines then [ Cu.Int log_id ] else [] in
     let merge_arg =
-      match (code.info.uses_merge_buffer, context.device.merge_buffer) with
+      match (info.uses_merge_buffer, context.device.merge_buffer) with
       | true, Some ptr -> [ Cu.Tensor ptr ]
       | false, _ -> []
       | true, None ->
           raise @@ Utils.User_error "Cuda_backend.link: copy into merge buffer before calling"
     in
     let idx_args =
-      List.map idx_args ~f:(fun ({ static_symbol; static_range }, i) ->
+      List.map idx_args ~f:(fun ({ Indexing.static_symbol; static_range }, i) ->
           if !i < 0 then
             raise
             @@ Utils.User_error
@@ -773,9 +754,9 @@ let link old_context (code : code) =
     let args =
       (* TODO: should we prohibit or warn about Local_only tensors that are in
          old_context.global_arrays? *)
-      let arrays = Hash_set.to_list code.info.used_tensors in
+      let arrays = Hash_set.to_list info.used_tensors in
       List.filter_map arrays ~f:(fun tn ->
-          let node = Hashtbl.find_exn code.info.nodes tn in
+          let node = Hashtbl.find_exn info.nodes tn in
           match (node.mem, node.global, Map.find global_arrays tn) with
           | Global, Some _, Some ptr -> Some (Cu.Tensor ptr)
           | _ -> None)
@@ -783,7 +764,7 @@ let link old_context (code : code) =
     [%log "zeroing-out global memory"];
     set_ctx context.ctx;
     Map.iteri global_arrays ~f:(fun ~key ~data:ptr ->
-        if Hash_set.mem code.info.used_tensors key then
+        if Hash_set.mem info.used_tensors key then
           let node = Map.find_exn all_arrays key in
           if node.zero_initialized then
             Cu.memset_d8 ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key));
@@ -803,13 +784,90 @@ let link old_context (code : code) =
       context.device.postprocess_queue <-
         (context, postprocess_logs) :: context.device.postprocess_queue
   in
-  (context, idx_args, Tn.{ description = "launches " ^ code.name ^ " on " ^ context.label; work })
+  (context, { Tn.description = "launches " ^ name ^ " on " ^ context.label; work })
 
-let link_batch old_context (code_batch : code_batch) =
+let%diagn_sexp link old_context (code : code) =
+  let all_arrays = Map.of_alist_exn (module Tn) @@ Hashtbl.to_alist code.info.nodes in
+  let module Cu = Cudajit in
+  let ctx = old_context.ctx in
+  set_ctx ctx;
+  let global_arrays =
+    Hashtbl.fold ~init:old_context.global_arrays code.info.nodes ~f:(fun ~key ~data:node globals ->
+        Option.value_map ~default:globals node.global ~f:(fun _name ->
+            if Utils.settings.with_debug_level > 0 then [%log "mem_alloc", _name];
+            set_ctx ctx;
+            let ptr () = Cu.mem_alloc ~size_in_bytes:(Tn.size_in_bytes node.tn) in
+            Map.update globals key ~f:(fun old -> Option.value_or_thunk old ~default:ptr)))
+  in
+  let run_module = Cu.module_load_data_ex code.ptx [] in
+  let idx_params = Indexing.bound_symbols code.bindings in
+  let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
+  let context, task =
+    link_proc ~old_context ~name:code.name ~all_arrays ~global_arrays ~idx_args ~info:code.info
+      run_module
+  in
+  (context, idx_args, task)
+
+let%track_sexp link_batch old_context (code_batch : code_batch) =
   let idx_params = Indexing.bound_symbols code_batch.bindings in
   let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
-  (* FIXME: NOT IMPLEMENTED YET *)
-  (old_context, idx_args, [||])
+  let module Cu = Cudajit in
+  let ctx = old_context.ctx in
+  set_ctx ctx;
+  let run_module = Cu.module_load_data_ex code_batch.ptx [] in
+  let (context, _global_arrays), procs =
+    Array.fold_mapi code_batch.infos ~init:(old_context, old_context.global_arrays)
+      ~f:(fun i (context, global_arrays) info ->
+        Option.value ~default:((context, global_arrays), None)
+        @@ Option.map2 info code_batch.names.(i) ~f:(fun info name ->
+               let all_arrays = Map.of_alist_exn (module Tn) @@ Hashtbl.to_alist info.nodes in
+               let global_arrays =
+                 Hashtbl.fold ~init:global_arrays info.nodes ~f:(fun ~key ~data:node globals ->
+                     Option.value_map ~default:globals node.global ~f:(fun _name ->
+                         if Utils.settings.with_debug_level > 0 then [%log "mem_alloc", _name];
+                         set_ctx ctx;
+                         let ptr () = Cu.mem_alloc ~size_in_bytes:(Tn.size_in_bytes node.tn) in
+                         Map.update globals key ~f:(fun old ->
+                             Option.value_or_thunk old ~default:ptr)))
+               in
+               let context, task =
+                 link_proc ~old_context:context ~name ~all_arrays ~global_arrays ~idx_args ~info
+                   run_module
+               in
+               ((context, global_arrays), Some task)))
+  in
+  (context, idx_args, procs)
+
+(** {[
+      let link_batch { ctx; device; expected_merge_node } (code_batch : code_batch) =
+        let ctx, routines =
+          Backend.link_batch ~merge_buffer:device.merge_buffer_ptr ctx code_batch
+        in
+        let merge_nodes = Backend.expected_merge_nodes code_batch in
+        ( { ctx; device; expected_merge_node },
+          Array.mapi routines ~f:(fun i ->
+              Option.map ~f:(fun task ->
+                  {
+                    task with
+                    context = { ctx = task.context; device; expected_merge_node = merge_nodes.(i) };
+                    schedule = make_work device task.schedule;
+                  })) )
+
+      let link_batch ~merge_buffer (old_context : context) (code_batch : code_batch) =
+        let _opt_ctx_arrays, procs =
+          match code_batch with
+          | Postponed { lowereds; bindings; names } ->
+              Backend.compile_batch ~names
+                ~opt_ctx_arrays:(Some (ctx_arrays old_context))
+                bindings lowereds
+          | Compiled procs -> procs
+        in
+        Array.fold_map procs ~init:old_context ~f:(fun context -> function
+          | Some proc ->
+              let context, bindings, schedule, name = link_compiled ~merge_buffer context proc in
+              (context, Some { context; schedule; bindings; name })
+          | None -> (context, None))
+    ]} *)
 
 let to_buffer ?rt:_ _tn ~dst:_ ~src:_ = failwith "CUDA low-level: NOT IMPLEMENTED YET"
 let host_to_buffer ?rt:_ _tn ~dst:_ = failwith "CUDA low-level: NOT IMPLEMENTED YET"
