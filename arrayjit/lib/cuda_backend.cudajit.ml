@@ -66,6 +66,7 @@ let alloc_buffer ?old_buffer ~size_in_bytes () =
   match old_buffer with
   | Some (old_ptr, old_size) when size_in_bytes <= old_size -> old_ptr
   | Some (old_ptr, _old_size) ->
+      (* FIXME: we need to set the context for this to work, but we don't know which one. *)
       Cudajit.mem_free old_ptr;
       Cudajit.mem_alloc ~size_in_bytes
   | None -> Cudajit.mem_alloc ~size_in_bytes
@@ -111,6 +112,10 @@ let is_initialized, initialize =
 let num_physical_devices = Cudajit.device_get_count
 let devices = ref @@ Core.Weak.create 0
 
+let set_ctx ctx =
+  let cur_ctx = Cudajit.ctx_get_current () in
+  if not @@ phys_equal ctx cur_ctx then Cudajit.ctx_set_current ctx
+
 let%track_sexp get_device ~(ordinal : int) : physical_device =
   if num_physical_devices () <= ordinal then
     invalid_arg [%string "Exec_as_cuda.get_device %{ordinal#Int}: not enough devices"];
@@ -122,6 +127,7 @@ let%track_sexp get_device ~(ordinal : int) : physical_device =
       let dev = Cudajit.device_get ~ordinal in
       let primary_context = Cudajit.device_primary_ctx_retain dev in
       let copy_merge_buffer_capacity = 8 in
+      set_ctx primary_context;
       let copy_merge_buffer = Cudajit.mem_alloc ~size_in_bytes:copy_merge_buffer_capacity in
       let result =
         { dev; ordinal; primary_context; copy_merge_buffer; copy_merge_buffer_capacity }
@@ -132,7 +138,7 @@ let%track_sexp get_device ~(ordinal : int) : physical_device =
 let new_virtual_device physical =
   let subordinal = 0 in
   (* Strange that we need ctx_set_current even with a single device! *)
-  Cudajit.ctx_set_current physical.primary_context;
+  set_ctx physical.primary_context;
   let stream = Cudajit.stream_create () in
   { physical; stream; subordinal; postprocess_queue = []; merge_buffer = None }
 
@@ -161,10 +167,6 @@ let to_subordinal { subordinal; _ } = subordinal
 
 let get_name device =
   Int.to_string (to_ordinal device.physical) ^ "_" ^ Int.to_string (to_subordinal device)
-
-let set_ctx ctx =
-  let cur_ctx = Cudajit.ctx_get_current () in
-  if not @@ phys_equal ctx cur_ctx then Cudajit.ctx_set_current ctx
 
 let capture_stdout arg =
   Stdlib.flush Stdlib.stdout;
