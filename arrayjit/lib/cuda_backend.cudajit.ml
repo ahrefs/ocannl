@@ -27,10 +27,17 @@ type tn_info = {
 }
 [@@deriving sexp_of]
 
+type buffer_ptr = Cudajit.deviceptr
+
+let sexp_of_buffer_ptr (Cudajit.Deviceptr ptr : buffer_ptr) =
+  Sexp.Atom (Unsigned.UInt64.to_hexstring ptr)
+
 type physical_device = {
   dev : (Cudajit.device[@sexp.opaque]);
   ordinal : int;
   primary_context : (Cudajit.context[@sexp.opaque]);
+  mutable copy_merge_buffer : buffer_ptr;
+  mutable copy_merge_buffer_capacity : int;
 }
 [@@deriving sexp_of]
 
@@ -39,6 +46,7 @@ and device = {
   stream : (Cudajit.stream[@sexp.opaque]);
   subordinal : int;
   mutable postprocess_queue : (context * (output:string list -> unit)) list;
+  mutable merge_buffer : buffer_ptr option;
 }
 
 and context = {
@@ -53,10 +61,26 @@ and context = {
 }
 [@@deriving sexp_of]
 
+(* It's not actually used, but it's required by the [Backend] interface. *)
+let alloc_buffer ?old_buffer ~size_in_bytes () =
+  match old_buffer with
+  | Some (old_ptr, old_size) when size_in_bytes <= old_size -> old_ptr
+  | Some (old_ptr, _old_size) ->
+      Cudajit.mem_free old_ptr;
+      Cudajit.mem_alloc ~size_in_bytes
+  | None -> Cudajit.mem_alloc ~size_in_bytes
+
+let opt_alloc_merge_buffer ~size_in_bytes phys_dev =
+  if phys_dev.copy_merge_buffer_capacity < size_in_bytes then (
+    Cudajit.mem_free phys_dev.copy_merge_buffer;
+    phys_dev.copy_merge_buffer <- Cudajit.mem_alloc ~size_in_bytes;
+    phys_dev.copy_merge_buffer_capacity <- size_in_bytes)
+
 type info_nodes = {
   nodes : tn_info Hashtbl.M(Tn).t;
   used_tensors : Hash_set.M(Tn).t;
   get_ident : Tn.t -> string;
+  uses_merge_buffer : bool;
 }
 [@@deriving sexp_of]
 
@@ -67,7 +91,7 @@ let global_config = ref Backend_types.For_parallel_copying
 
 let init device =
   {
-    label = "cuda " ^ get_name device;
+    label = "on dev " ^ get_name device;
     ctx = device.physical.primary_context;
     device;
     all_arrays = Map.empty (module Tn);
@@ -97,7 +121,11 @@ let%track_sexp get_device ~(ordinal : int) : physical_device =
   Option.value_or_thunk (Core.Weak.get !devices ordinal) ~default:(fun () ->
       let dev = Cudajit.device_get ~ordinal in
       let primary_context = Cudajit.device_primary_ctx_retain dev in
-      let result = { dev; ordinal; primary_context; postprocess_queue = [] } in
+      let copy_merge_buffer_capacity = 8 in
+      let copy_merge_buffer = Cudajit.mem_alloc ~size_in_bytes:copy_merge_buffer_capacity in
+      let result =
+        { dev; ordinal; primary_context; copy_merge_buffer; copy_merge_buffer_capacity }
+      in
       Core.Weak.set !devices ordinal (Some result);
       result)
 
@@ -106,7 +134,7 @@ let new_virtual_device physical =
   (* Strange that we need ctx_set_current even with a single device! *)
   Cudajit.ctx_set_current physical.primary_context;
   let stream = Cudajit.stream_create () in
-  { physical; stream; subordinal; postprocess_queue = [] }
+  { physical; stream; subordinal; postprocess_queue = []; merge_buffer = None }
 
 let cuda_properties =
   let cache =
@@ -224,32 +252,53 @@ let%diagn_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (
       true
   | _ -> false
 
-let%diagn_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn
+let%diagn_sexp rec device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn
     ~into_merge_buffer ~dst ~src =
+  let memcpy ~d_arr ~s_arr =
+    if phys_equal dst.device.physical src.device.physical then
+      Cudajit.memcpy_D_to_D_async ~dst:d_arr ~src:s_arr dst.device.stream
+    else
+      Cudajit.memcpy_peer_async ~dst:d_arr ~dst_ctx:dst.ctx ~src:s_arr ~src_ctx:src.ctx
+        dst.device.stream
+  in
   Option.value ~default:false
   @@ Option.map (Map.find src.global_arrays tn) ~f:(fun s_arr ->
-         Option.value ~default:false
-         @@ Option.map (Map.find dst.global_arrays tn) ~f:(fun d_arr ->
-                match into_merge_buffer with
-                | Backend_types.No ->
+         match into_merge_buffer with
+         | Backend_types.No ->
+             Option.value ~default:false
+             @@ Option.map (Map.find dst.global_arrays tn) ~f:(fun d_arr ->
                     set_ctx dst.ctx;
-                    Cudajit.memcpy_peer_async ~dst:d_arr ~dst_ctx:dst.ctx ~src:s_arr
-                      ~src_ctx:src.ctx dst.device.stream;
+                    memcpy ~d_arr ~s_arr;
                     (if Utils.settings.with_debug_level > 0 then
                        let module Debug_runtime =
                          (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
                        in
-                       [%log
-                         "copied",
-                           Tn.label tn,
-                           Tn.name tn,
-                           "using merge buffer",
-                           (into_merge_buffer : Backend_types.merge_buffer_use),
-                           "from device",
-                           get_ctx_device src |> get_name]);
-                    true (* FIXME: *)
-                | Streaming -> failwith "NOT IMPLEMENTED YET"
-                | Copy -> failwith "NOT IMPLEMENTED YET"))
+                       [%log "copied", Tn.label tn, Tn.name tn, "from", src.label]);
+                    true)
+         | Streaming ->
+             if phys_equal dst.device.physical src.device.physical then (
+               dst.device.merge_buffer <- Some s_arr;
+               (if Utils.settings.with_debug_level > 0 then
+                  let module Debug_runtime =
+                    (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
+                  in
+                  [%log "using merge buffer for", Tn.label tn, Tn.name tn, "from", src.label]);
+               true)
+             else
+               (* TODO: support proper streaming, but it might be difficult. *)
+               device_to_device ?rt tn ~into_merge_buffer:Copy ~dst ~src
+         | Copy ->
+             set_ctx dst.ctx;
+             let size_in_bytes = Tn.size_in_bytes tn in
+             opt_alloc_merge_buffer ~size_in_bytes dst.device.physical;
+             memcpy ~d_arr:dst.device.physical.copy_merge_buffer ~s_arr;
+             dst.device.merge_buffer <- Some dst.device.physical.copy_merge_buffer;
+             (if Utils.settings.with_debug_level > 0 then
+                let module Debug_runtime =
+                  (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
+                in
+                [%log "copied into merge buffer", Tn.label tn, Tn.name tn, "from", src.label]);
+             true)
 
 (* let pp_semi ppf () = Stdlib.Format.fprintf ppf ";@ " *)
 let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
@@ -549,7 +598,12 @@ let%track_sexp compile_proc ~name ~get_ident ppf idx_params
     Low_level.{ traced_store; llc; merge_node } =
   let open Stdlib.Format in
   let info =
-    { nodes = Hashtbl.create (module Tn); used_tensors = Hash_set.create (module Tn); get_ident }
+    {
+      nodes = Hashtbl.create (module Tn);
+      used_tensors = Hash_set.create (module Tn);
+      get_ident;
+      uses_merge_buffer = Option.is_some merge_node;
+    }
   in
   prepare_nodes traced_store info llc;
   let arrays = Hash_set.to_list info.used_tensors in
@@ -619,19 +673,6 @@ let%diagn_sexp cuda_to_ptx ~name cu_src =
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);
   ptx
-
-type buffer_ptr = Cudajit.deviceptr
-
-let sexp_of_buffer_ptr (Cudajit.Deviceptr ptr : buffer_ptr) =
-  Sexp.Atom (Unsigned.UInt64.to_hexstring ptr)
-
-let alloc_buffer ?old_buffer ~size_in_bytes () =
-  match old_buffer with
-  | Some (old_ptr, old_size) when size_in_bytes <= old_size -> old_ptr
-  | Some (old_ptr, _old_size) ->
-      Cudajit.mem_free old_ptr;
-      Cudajit.mem_alloc ~size_in_bytes
-  | None -> Cudajit.mem_alloc ~size_in_bytes
 
 let%diagn_sexp link_proc (old_context : context) ~name info ptx =
   let module Cu = Cudajit in
@@ -703,6 +744,13 @@ let link old_context (code : code) =
     [%log_result "Launching", code.name, context.label, (log_id : int)];
     let module Cu = Cudajit in
     let log_arg = if Utils.settings.debug_log_from_routines then [ Cu.Int log_id ] else [] in
+    let merge_arg =
+      match (code.info.uses_merge_buffer, context.device.merge_buffer) with
+      | true, Some ptr -> [ Cu.Tensor ptr ]
+      | false, _ -> []
+      | true, None ->
+          raise @@ Utils.User_error "Cuda_backend.link: copy into merge buffer before calling"
+    in
     let idx_args =
       List.map idx_args ~f:(fun ({ static_symbol; static_range }, i) ->
           if !i < 0 then
@@ -741,7 +789,7 @@ let link old_context (code : code) =
     (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE
        4096; *)
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.device.stream
-    @@ log_arg @ idx_args @ args;
+    @@ log_arg @ merge_arg @ idx_args @ args;
     [%log "kernel launched"];
     if Utils.settings.debug_log_from_routines then
       let postprocess_logs ~output =
