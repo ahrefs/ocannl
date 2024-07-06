@@ -8,7 +8,7 @@ module CDSL = Train.CDSL
 module Utils = Arrayjit.Utils
 module Rand = Arrayjit.Rand.Lib
 
-let experiment ~seed () =
+let experiment ~seed ~backend_name ~config () =
   (* Utils.settings.with_debug_level <- 1; *)
   (* Utils.settings.with_debug_level <- 3; *)
   (* Utils.settings.output_debug_files_in_run_directory <- true; *)
@@ -44,7 +44,7 @@ let experiment ~seed () =
      computation. *)
   let weight_decay = 0.0002 in
   (* So that we can inspect them. *)
-  let backend = Train.fresh_backend () in
+  let backend = Train.fresh_backend ~backend_name ~config () in
   let per_batch_callback ~at_batch ~at_step ~learning_rate ~batch_loss ~epoch_loss =
     if (at_batch + 1) % 20 = 0 then
       Stdio.printf "Batch=%d, step=%d, lr=%f, batch loss=%f, epoch loss=%f\n%!" at_batch at_step
@@ -123,10 +123,11 @@ let experiment ~seed () =
   let module Backend = (val backend) in
   Backend.unsafe_cleanup ~unsafe_shutdown:true ()
 
-let () = experiment ~seed:1 ()
+let _suspended () = experiment ~seed:1 ~backend_name:"cc" ~config:Physical_devices_only ()
+let () = experiment ~seed:1 ~backend_name:"cuda" ~config:Most_parallel_devices ()
 
 let _suspended () =
   for seed = 0 to 19 do
     Stdio.printf "\n*************** EXPERIMENT SEED %d ******************\n%!" seed;
-    experiment ~seed ()
+    experiment ~seed ~backend_name:"cc" ~config:Physical_devices_only ()
   done

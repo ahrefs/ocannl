@@ -77,16 +77,17 @@ let init device =
 
 let is_initialized, initialize =
   let initialized = ref false in
-  ( (fun () -> !initialized),
-    fun config ->
-      initialized := true;
-      global_config := config;
-      Cudajit.init () )
+  let%track_sexp init (config : Backend_types.config) : unit =
+    initialized := true;
+    global_config := config;
+    Cudajit.init ()
+  in
+  ((fun () -> !initialized), init)
 
 let num_physical_devices = Cudajit.device_get_count
 let devices = ref @@ Core.Weak.create 0
 
-let get_device ~ordinal =
+let%track_sexp get_device ~(ordinal : int) : physical_device =
   if num_physical_devices () <= ordinal then
     invalid_arg [%string "Exec_as_cuda.get_device %{ordinal#Int}: not enough devices"];
   if Core.Weak.length !devices <= ordinal then (
@@ -102,6 +103,8 @@ let get_device ~ordinal =
 
 let new_virtual_device physical =
   let subordinal = 0 in
+  (* Strange that we need ctx_set_current even with a single device! *)
+  Cudajit.ctx_set_current physical.primary_context;
   let stream = Cudajit.stream_create () in
   { physical; stream; subordinal }
 
@@ -239,7 +242,7 @@ let%diagn_sexp device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) 
                            Tn.label tn,
                            Tn.name tn,
                            "using merge buffer",
-                           (into_merge_buffer : bool),
+                           (into_merge_buffer : Backend_types.merge_buffer_use),
                            "from device",
                            get_ctx_device src |> get_name]);
                     true (* FIXME: *)
