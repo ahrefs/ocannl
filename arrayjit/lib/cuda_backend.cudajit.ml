@@ -362,7 +362,7 @@ let%debug_sexp prepare_node traced_store info tn =
         (* TODO: We will need tn to perform more refined optimizations. *)
         let dims = Lazy.force tn.dims in
         let is_on_host = Tn.is_hosted_force tn 31 in
-        let is_materialized = Tn.is_hosted_force tn 32 in
+        let is_materialized = Tn.is_materialized_force tn 32 in
         assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
         let num_typ = Ops.cuda_typ_of_prec tn.prec in
         let mem = if not is_materialized then Local_only else Global in
