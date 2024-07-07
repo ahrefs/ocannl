@@ -254,53 +254,59 @@ let%diagn_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (
       true
   | _ -> false
 
-let%diagn_sexp rec device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option) tn
-    ~into_merge_buffer ~dst ~src =
+let%diagn_sexp rec device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option)
+    (tn : Tn.t) ~into_merge_buffer ~(dst : context) ~(src : context) =
   let memcpy ~d_arr ~s_arr =
     if phys_equal dst.device.physical src.device.physical then
-      Cudajit.memcpy_D_to_D_async ~dst:d_arr ~src:s_arr dst.device.stream
-    else
-      Cudajit.memcpy_peer_async ~dst:d_arr ~dst_ctx:dst.ctx ~src:s_arr ~src_ctx:src.ctx
+      Cudajit.memcpy_D_to_D_async ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:d_arr ~src:s_arr
         dst.device.stream
+    else
+      Cudajit.memcpy_peer_async ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:d_arr ~dst_ctx:dst.ctx
+        ~src:s_arr ~src_ctx:src.ctx dst.device.stream
   in
-  Option.value ~default:false
-  @@ Option.map (Map.find src.global_arrays tn) ~f:(fun s_arr ->
-         match into_merge_buffer with
-         | Backend_types.No ->
-             Option.value ~default:false
-             @@ Option.map (Map.find dst.global_arrays tn) ~f:(fun d_arr ->
-                    set_ctx dst.ctx;
-                    memcpy ~d_arr ~s_arr;
-                    (if Utils.settings.with_debug_level > 0 then
-                       let module Debug_runtime =
-                         (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
-                       in
-                       [%log "copied", Tn.label tn, Tn.name tn, "from", src.label]);
-                    true)
-         | Streaming ->
-             if phys_equal dst.device.physical src.device.physical then (
-               dst.device.merge_buffer <- Some s_arr;
-               (if Utils.settings.with_debug_level > 0 then
-                  let module Debug_runtime =
-                    (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
-                  in
-                  [%log "using merge buffer for", Tn.label tn, Tn.name tn, "from", src.label]);
-               true)
-             else
-               (* TODO: support proper streaming, but it might be difficult. *)
-               device_to_device ?rt tn ~into_merge_buffer:Copy ~dst ~src
-         | Copy ->
-             set_ctx dst.ctx;
-             let size_in_bytes = Tn.size_in_bytes tn in
-             opt_alloc_merge_buffer ~size_in_bytes dst.device.physical;
-             memcpy ~d_arr:dst.device.physical.copy_merge_buffer ~s_arr;
-             dst.device.merge_buffer <- Some dst.device.physical.copy_merge_buffer;
-             (if Utils.settings.with_debug_level > 0 then
-                let module Debug_runtime =
-                  (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
-                in
-                [%log "copied into merge buffer", Tn.label tn, Tn.name tn, "from", src.label]);
-             true)
+  match Map.find src.global_arrays tn with
+  | None -> false
+  | Some s_arr -> (
+      match into_merge_buffer with
+      | Backend_types.No -> (
+          match Map.find dst.global_arrays tn with
+          | None -> false
+          | Some d_arr ->
+              set_ctx dst.ctx;
+              memcpy ~d_arr ~s_arr;
+              (if Utils.settings.with_debug_level > 0 then
+                 let module Debug_runtime =
+                   (val Option.value_or_thunk rt ~default:(fun () ->
+                            (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
+                 in
+                 [%log "copied", Tn.label tn, Tn.name tn, "from", src.label]);
+              true)
+      | Streaming ->
+          if phys_equal dst.device.physical src.device.physical then (
+            dst.device.merge_buffer <- Some s_arr;
+            (if Utils.settings.with_debug_level > 0 then
+               let module Debug_runtime =
+                 (val Option.value_or_thunk rt ~default:(fun () ->
+                          (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
+               in
+               [%log "using merge buffer for", Tn.label tn, Tn.name tn, "from", src.label]);
+            true)
+          else
+            (* TODO: support proper streaming, but it might be difficult. *)
+            device_to_device ?rt tn ~into_merge_buffer:Copy ~dst ~src
+      | Copy ->
+          set_ctx dst.ctx;
+          let size_in_bytes = Tn.size_in_bytes tn in
+          opt_alloc_merge_buffer ~size_in_bytes dst.device.physical;
+          memcpy ~d_arr:dst.device.physical.copy_merge_buffer ~s_arr;
+          dst.device.merge_buffer <- Some dst.device.physical.copy_merge_buffer;
+          (if Utils.settings.with_debug_level > 0 then
+             let module Debug_runtime =
+               (val Option.value_or_thunk rt ~default:(fun () ->
+                        (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
+             in
+             [%log "copied into merge buffer", Tn.label tn, Tn.name tn, "from", src.label]);
+          true)
 
 (* let pp_semi ppf () = Stdlib.Format.fprintf ppf ";@ " *)
 let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
