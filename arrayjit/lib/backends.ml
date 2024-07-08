@@ -1,5 +1,5 @@
 open Base
-open Backend_types
+open Backend_utils.Types
 module Debug_runtime = Utils.Debug_runtime
 
 [%%global_debug_log_level Nothing]

@@ -6,6 +6,7 @@ module Asgns = Arrayjit.Assignments
 module Idx = Arrayjit.Indexing
 module Utils = Arrayjit.Utils
 module Rand = Arrayjit.Rand.Lib
+module BT = Arrayjit.Backend_utils.Types
 
 module type Backend_type = Arrayjit.Backends.Backend
 
@@ -39,16 +40,15 @@ module IDX = struct
 end
 
 let debug_rt = (module Debug_runtime : Minidebug_runtime.Debug_runtime)
-let run jitted = Tn.run debug_rt jitted.Arrayjit.Backend_types.schedule
+let run jitted = Tn.run debug_rt jitted.BT.schedule
 
 (** Reinitializes a backend selected via a global [backend] flag. *)
-let fresh_backend ?backend_name ?(config = Arrayjit.Backend_types.Physical_devices_only) () =
+let fresh_backend ?backend_name ?(config = BT.Physical_devices_only) () =
   let module B = Arrayjit.Backends in
-  let module BT = Arrayjit.Backend_types in
   let backend =
     match
       Option.value_or_thunk backend_name ~default:(fun () ->
-          Arrayjit.Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+          Arrayjit.Utils.get_global_arg ~arg_name:"backend" ~default:"cuda")
       |> String.lowercase
     with
     | "cc" -> (module B.Cc_backend : B.Backend)
@@ -354,7 +354,7 @@ let%track_sexp parallel_update (type context)
              updaten.loss.value =+ updaten.loss.value.merge])
   in
   let into_merge_buffer =
-    if copy_to_merge then Arrayjit.Backend_types.Copy else Arrayjit.Backend_types.Streaming
+    if copy_to_merge then BT.Copy else BT.Streaming
   in
   (* Since each device has its own queue, we can iterate over devices in the outer loop. *)
   let merge_grads ~(from : int) ~(to_ : int) : unit =

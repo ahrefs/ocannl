@@ -1,15 +1,14 @@
-## [0.4.1] -- current
+## [0.4.1] -- next
 
 ### Added
 
 - TODO: API improvements for mixed precision computations.
-- TODO(#262): "term punning" for `%cd`.
 
 ### Fixed
 
 - TODO: Proper implementation of half precision. Requires OCaml 5.2.
 
-## [0.4.0] -- 2024-07-07
+## [0.4.0] -- 2024-07-??
 
 ### Added
 
@@ -18,6 +17,7 @@
   - backends just need to support device-to-device transfers,
   - merging gets implemented in "user space".
 - CUDA streaming multiprocessor parallelism via streams <-> virtual devices.
+- TODO(#262): "term punning" for `%cd`.
 
 ### Changed
 
@@ -31,6 +31,7 @@
   - split the `device` type into virtual `device` and `physical_device`,
   - removed the direct support for `merge`, instead relying on merge buffers.
 - Updated to cudajit 0.4.
+- TODO: a template for C-syntax backends, refactoring CC and CUDA backends.
 
 ## [0.3.3] -- 2024-04-24
 

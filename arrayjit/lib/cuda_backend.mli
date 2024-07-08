@@ -1,8 +1,9 @@
 type context [@@deriving sexp_of]
 type code [@@deriving sexp_of]
 type code_batch [@@deriving sexp_of]
+open Backend_utils.Types
 
-val initialize : Backend_types.config -> unit
+val initialize : config -> unit
 val is_initialized : unit -> bool
 val finalize : context -> unit
 val sexp_of_context : context -> Sexplib.Sexp.t
@@ -30,7 +31,7 @@ val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t
 val device_to_device :
   ?rt:(module Minidebug_runtime.Debug_runtime) ->
   Tnode.t ->
-  into_merge_buffer:Backend_types.merge_buffer_use ->
+  into_merge_buffer:merge_buffer_use ->
   dst:context ->
   src:context ->
   bool

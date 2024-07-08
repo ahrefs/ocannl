@@ -33,7 +33,7 @@
   tnode
   low_level
   assignments
-  backend_types
+  backend_utils
   Cc_backend
   gcc_backend
   cuda_backend

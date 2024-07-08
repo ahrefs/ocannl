@@ -2,6 +2,7 @@ open Base
 module Tn = Tnode
 module Lazy = Utils.Lazy
 module Debug_runtime = Utils.Debug_runtime
+open Backend_utils.Types
 
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
@@ -88,7 +89,7 @@ type info_nodes = {
 let get_name { physical = { ordinal; _ }; subordinal; _ } =
   Int.to_string ordinal ^ "_" ^ Int.to_string subordinal
 
-let global_config = ref Backend_types.For_parallel_copying
+let global_config = ref For_parallel_copying
 
 let init device =
   {
@@ -102,7 +103,7 @@ let init device =
 
 let is_initialized, initialize =
   let initialized = ref false in
-  let%track_sexp init (config : Backend_types.config) : unit =
+  let%track_sexp init (config : config) : unit =
     initialized := true;
     global_config := config;
     Cudajit.init ()
@@ -236,7 +237,8 @@ let%diagn_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option)
       true
   | _ -> false
 
-let%diagn_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context) tn =
+let%track_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context)
+    (tn : Tn.t) =
   match (Map.find ctx.all_arrays tn, Map.find ctx.global_arrays tn) with
   | Some { tn = { Tn.array = (lazy (Some hosted)); _ }; _ }, Some src ->
       set_ctx ctx.ctx;
@@ -244,7 +246,8 @@ let%diagn_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (
       Ndarray.map { f } hosted;
       if Utils.settings.with_debug_level > 0 then (
         let module Debug_runtime =
-          (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
+          (val Option.value_or_thunk rt ~default:(fun () ->
+                   (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
         in
         [%log "copied", Tn.label tn, Tn.name tn, "to host"];
         if Utils.settings.with_debug_level > 1 then
@@ -254,7 +257,7 @@ let%diagn_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (
       true
   | _ -> false
 
-let%diagn_sexp rec device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option)
+let%track_sexp rec device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option)
     (tn : Tn.t) ~into_merge_buffer ~(dst : context) ~(src : context) =
   let memcpy ~d_arr ~s_arr =
     if phys_equal dst.device.physical src.device.physical then
@@ -268,7 +271,7 @@ let%diagn_sexp rec device_to_device ?(rt : (module Minidebug_runtime.Debug_runti
   | None -> false
   | Some s_arr -> (
       match into_merge_buffer with
-      | Backend_types.No -> (
+      | No -> (
           match Map.find dst.global_arrays tn with
           | None -> false
           | Some d_arr ->
