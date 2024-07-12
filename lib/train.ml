@@ -48,7 +48,7 @@ let fresh_backend ?backend_name ?(config = BT.Physical_devices_only) () =
   let backend =
     match
       Option.value_or_thunk backend_name ~default:(fun () ->
-          Arrayjit.Utils.get_global_arg ~arg_name:"backend" ~default:"cuda")
+          Arrayjit.Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
       |> String.lowercase
     with
     | "cc" -> (module B.Cc_backend : B.Backend)
@@ -353,9 +353,7 @@ let%track_sexp parallel_update (type context)
              ~~("merging" updaten.loss);
              updaten.loss.value =+ updaten.loss.value.merge])
   in
-  let into_merge_buffer =
-    if copy_to_merge then BT.Copy else BT.Streaming
-  in
+  let into_merge_buffer = if copy_to_merge then BT.Copy else BT.Streaming in
   (* Since each device has its own queue, we can iterate over devices in the outer loop. *)
   let merge_grads ~(from : int) ~(to_ : int) : unit =
     (* Synchronize the source since we compute on the destionation. *)
@@ -490,13 +488,13 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     if disable_rootness_check then model_result.Tensor.forward
     else Tensor.consume_forward_code model_result
   in
-  set_on_host Volatile model_result.Tensor.value;
+  set_on_host Changed_on_devices model_result.Tensor.value;
   (* By using sgd_update.context here, maybe we don't need to copy the parameters back to the
      host. *)
   let routine =
     Backend.(
       link sgd_update.context @@ compile IDX.empty
-      @@ Block_comment (debug_name model_result, infer_fwd))
+      @@ Block_comment ("infer " ^ debug_name model_result, infer_fwd))
   in
   let infer_callback values =
     Tensor.set_values infer values;
