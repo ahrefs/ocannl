@@ -85,46 +85,6 @@ type procedure = {
 
 let expected_merge_node proc = proc.lowered.merge_node
 
-(* https://github.com/yallop/ocaml-ctypes/blob/master/src/ctypes-foreign/dl.mli
-   https://github.com/ahrefs/ocannl/blob/1eb5209772b759f00a0cb8a39e51c4ddae78aee6/lib/exec_as_OCaml.ml *)
-
-let is_builtin_op = function
-  | Ops.Add | Sub | Mul | Div -> true
-  | ToPowOf | Relu_gate | Arg2 | Arg1 -> false
-
-(* let pp_semi ppf () = Stdlib.Format.fprintf ppf ";@ " *)
-let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
-
-(* let pp_symbol ppf sym = Stdlib.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym *)
-let pp_index ppf sym = Stdlib.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym
-
-let pp_index_axis ppf = function
-  | Indexing.Iterator it -> pp_index ppf it
-  | Fixed_idx i -> Stdlib.Format.fprintf ppf "%d" i
-
-let pp_array_offset ppf (idcs, dims) =
-  let open Stdlib.Format in
-  assert (not @@ Array.is_empty idcs);
-  for _ = 0 to Array.length idcs - 3 do
-    fprintf ppf "@[<1>("
-  done;
-  for i = 0 to Array.length idcs - 1 do
-    let dim = dims.(i) in
-    if i = 0 then fprintf ppf "%a" pp_index_axis idcs.(i)
-    else if i = Array.length idcs - 1 then fprintf ppf " * %d + %a" dim pp_index_axis idcs.(i)
-    else fprintf ppf " * %d +@ %a@;<0 -1>)@]" dim pp_index_axis idcs.(i)
-  done
-
-let array_offset_to_string (idcs, dims) =
-  let b = Buffer.create 32 in
-  let ppf = Stdlib.Format.formatter_of_buffer b in
-  pp_array_offset ppf (idcs, dims);
-  Stdlib.Format.pp_print_flush ppf ();
-  Buffer.contents b
-
-(* let compute_array_offset ~idcs ~dims = Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim
-   -> idx + (offset * dim)) *)
-
 let is_in_context node =
   Tnode.default_to_most_local node.Low_level.tn 33;
   match node.tn.memory_mode with
