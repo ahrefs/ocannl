@@ -152,7 +152,7 @@ let%expect_test "Micrograd half-moons example" =
   let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   let%op mlp_result = mlp "point" in
-  Train.set_on_host Volatile mlp_result.value;
+  Train.set_on_host Changed_on_devices mlp_result.value;
   let result_routine =
     Backend.(
       link sgd_routine.context @@ compile IDX.empty

@@ -118,7 +118,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   let%op mlp_result = mlp "point" in
-  Train.set_on_host Volatile mlp_result.value;
+  Train.set_on_host Changed_on_devices mlp_result.value;
   (* By using jitted.context here, we don't need to copy the parameters back to the host. *)
   let result_routine =
     Backend.(
