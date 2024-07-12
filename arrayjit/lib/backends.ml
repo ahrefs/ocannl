@@ -49,7 +49,8 @@ module type No_device_backend = sig
   val link_batch :
     merge_buffer:buffer_ptr option ref -> context -> code_batch -> context * routine option array
   (** Returns the routines for the procedures included in the code batch. The returned context is
-      downstream of all the returned routines. *)
+      downstream of all the returned routines (in particular, the routines' contexts are not
+      independent). *)
 
   val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
   (** Cleans up all work on a backend. If [~unsafe_shutdown:true], releases resources, potentially

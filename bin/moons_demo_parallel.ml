@@ -123,8 +123,8 @@ let experiment ~seed ~backend_name ~config () =
   let module Backend = (val backend) in
   Backend.unsafe_cleanup ~unsafe_shutdown:true ()
 
-let _suspended () = experiment ~seed:1 ~backend_name:"cc" ~config:Physical_devices_only ()
-let () = experiment ~seed:1 ~backend_name:"cuda" ~config:Most_parallel_devices ()
+let () = experiment ~seed:1 ~backend_name:"cc" ~config:Physical_devices_only ()
+let _suspended () = experiment ~seed:1 ~backend_name:"cuda" ~config:Most_parallel_devices ()
 
 let _suspended () =
   for seed = 0 to 19 do

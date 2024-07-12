@@ -9,7 +9,7 @@ module Rand = Arrayjit.Rand.Lib
 module Debug_runtime = Utils.Debug_runtime
 
 let%diagn_sexp () =
-  let module Backend = (val Train.fresh_backend ~backend_name:"gccjit" ()) in
+  let module Backend = (val Train.fresh_backend ~backend_name:"cc" ()) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Utils.settings.output_debug_files_in_run_directory <- true;

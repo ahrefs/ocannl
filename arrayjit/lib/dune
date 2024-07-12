@@ -34,7 +34,7 @@
   low_level
   assignments
   backend_utils
-  Cc_backend
+  cc_backend
   gcc_backend
   cuda_backend
   backends)

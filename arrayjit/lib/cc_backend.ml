@@ -5,6 +5,8 @@ module Debug_runtime = Utils.Debug_runtime
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
+open Backend_utils.Types
+
 let name = "cc"
 
 let optimization_level () =
@@ -68,73 +70,27 @@ let init ~label =
   Core.Gc.Expert.add_finalizer_exn result finalize;
   result
 
-type tn_info = {
-  tn : Tn.t;  (** The original array. *)
-  mutable ptr : string;
-      (** Pointer to the first value of the associated array.
-          - if [mem = Constant_from_host], the pointer to the first element of the hosted [Ndarray],
-          - if [mem = From_context], either a pointer to [Ndarray] from [context.arrays] when
-            [~shared:false], or the function parameter when [~shared:true],
-          - if [mem = Local_only], the address of the on-the-stack array. *)
-  mem : mem_properties;
-  dims : int array;
-  prec : Ops.prec;
-  zero_initialized : bool;
-}
-[@@deriving sexp_of]
-
-type info_nodes = {
-  traced_store : (Low_level.traced_store[@sexp.opaque]);
-  nodes : (Tn.t, tn_info) Hashtbl.t;
-  used_tensors : Hash_set.M(Tn).t;
-  get_ident : Tn.t -> string;
-}
-[@@deriving sexp_of]
-
-type param_source =
-  | Log_file_name
-  | Merge_buffer
-  | Param_ptr of Tn.t
-  | Static_idx of Indexing.static_symbol
-[@@deriving sexp_of]
-
 (* open Ctypes *)
 (* open Foreign *)
 
 type procedure = {
-  info : info_nodes;
+  lowered : Low_level.optimized;
   bindings : Indexing.unit_bindings;
   name : string;
   result : (Dl.library[@sexp.opaque]);
   params : (string * param_source) list;
   opt_ctx_arrays : Ndarray.t Map.M(Tn).t option;
-  expected_merge_node : Tn.t option;
 }
 [@@deriving sexp_of]
 
-let expected_merge_node proc = proc.expected_merge_node
-
-type ctx_nodes = Ctx_arrays of ctx_arrays ref | Param_ptrs of (string * param_source) list ref
-[@@deriving sexp_of]
+let expected_merge_node proc = proc.lowered.merge_node
 
 (* https://github.com/yallop/ocaml-ctypes/blob/master/src/ctypes-foreign/dl.mli
    https://github.com/ahrefs/ocannl/blob/1eb5209772b759f00a0cb8a39e51c4ddae78aee6/lib/exec_as_OCaml.ml *)
 
-let pp_zero_out ppf node =
-  Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " node.ptr @@ Tn.size_in_bytes node.tn
-
-let get_c_ptr prec nd =
-  let f arr = Ops.ptr_to_string (Ctypes.bigarray_start Ctypes_static.Genarray arr) prec in
-  Ndarray.(map { f } nd)
-
 let is_builtin_op = function
   | Ops.Add | Sub | Mul | Div -> true
   | ToPowOf | Relu_gate | Arg2 | Arg1 -> false
-
-let node_debug_name node =
-  (* FIXME: node.ptr is not the mem address? *)
-  let memloc = if Utils.settings.debug_memory_locations then "@" ^ node.ptr else "" in
-  Tn.name node.tn ^ memloc
 
 (* let pp_semi ppf () = Stdlib.Format.fprintf ppf ";@ " *)
 let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
@@ -169,345 +125,47 @@ let array_offset_to_string (idcs, dims) =
 (* let compute_array_offset ~idcs ~dims = Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim
    -> idx + (offset * dim)) *)
 
-let%debug_sexp prepare_node ~(traced_store : Low_level.traced_store) info ctx_nodes tn =
-  Hash_set.add info.used_tensors tn;
-  Hashtbl.update info.nodes tn ~f:(function
-    | Some old -> old
-    | None ->
-        (* let tn = Low_level.get_node traced_store v in *)
-        (* TODO: We will need tn to perform more refined optimizations. *)
-        let dims = Lazy.force tn.dims in
-        let prec = tn.prec in
-        let is_on_host = Tn.is_hosted_force tn 33 in
-        let is_materialized = Tn.is_materialized_force tn 331 in
-        let is_constant = Tn.is_hosted_force ~specifically:Constant tn 332 in
-        assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
-        let traced = Low_level.(get_node traced_store tn) in
-        let mem =
-          if not is_materialized then Local_only
-          else if is_constant && traced.read_only then Constant_from_host
-          else From_context
-        in
-        let ident = info.get_ident tn in
-        let ptr =
-          match (mem, ctx_nodes) with
-          | From_context, Ctx_arrays ctx_arrays -> (
-              match Map.find !ctx_arrays tn with
-              | None ->
-                  let data =
-                    Ndarray.create_array tn.Tn.prec ~dims
-                    @@ Constant_fill { values = [| 0. |]; strict = false }
-                  in
-                  ctx_arrays := Map.add_exn !ctx_arrays ~key:tn ~data;
-                  get_c_ptr prec data
-              | Some data -> get_c_ptr prec data)
-          | From_context, Param_ptrs ptrs ->
-              ptrs := (name, Param_ptr tn) :: !ptrs;
-              ident
-          | Constant_from_host, _ ->
-              get_c_ptr prec @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
-          | Local_only, _ -> ident
-        in
-        let backend_info = sexp_of_mem_properties mem in
-        if Utils.settings.with_debug_level > 0 then
-          [%log
-            "creating",
-              (tn.id : int),
-              Tn.label tn,
-              "mem",
-              (backend_info : Sexp.t),
-              "prec",
-              (prec : Ops.prec),
-              "on-host",
-              (is_on_host : bool)];
-        if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
-          tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
-        let zero_initialized = (Hashtbl.find_exn traced_store tn).Low_level.zero_initialized in
-        { tn; ptr; mem; dims; prec; zero_initialized })
-
-let compile_main ~traced_store info ppf llc : unit =
-  let open Stdlib.Format in
-  let get_node = Hashtbl.find_exn info.nodes in
-  let visited = Hash_set.create (module Tn) in
-  let rec pp_ll ppf c : unit =
-    match c with
-    | Low_level.Noop -> ()
-    | Seq (c1, c2) ->
-        (* Note: no separator. Filter out some entries known to not generate code to avoid
-           whitespace. *)
-        fprintf ppf "@[<v 0>%a@]" (pp_print_list pp_ll)
-          (List.filter [ c1; c2 ] ~f:(function Noop -> false | _ -> true))
-    | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-        fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@;<1 -2>}@]@," pp_index i from_
-          pp_index i to_ pp_index i pp_ll body
-    | Zero_out tn ->
-        let node = Hashtbl.find_exn info.nodes tn in
-        let traced = Low_level.(get_node traced_store tn) in
-        if Hash_set.mem visited tn then pp_zero_out ppf node else assert traced.zero_initialized
-        (* The initialization will be emitted by get_array. *)
-    | Set { tn; idcs; llv; debug } ->
-        Hash_set.add visited tn;
-        let ident = info.get_ident tn in
-        let node = get_node tn in
-        let loop_f = pp_float tn.prec in
-        let loop_debug_f = debug_float tn.prec in
-        let num_closing_braces = pp_top_locals ppf llv in
-        let num_typ = Ops.cuda_typ_of_prec tn.prec in
-        if Utils.settings.debug_log_from_routines then (
-          fprintf ppf "@[<2>{@ @[<2>%s new_set_v =@ %a;@]@ " num_typ loop_f llv;
-          let v_code, v_idcs = loop_debug_f llv in
-          let pp_args =
-            pp_print_list @@ fun ppf -> function
-            | `Accessor idx ->
-                pp_comma ppf ();
-                pp_array_offset ppf idx
-            | `Value v ->
-                pp_comma ppf ();
-                pp_print_string ppf v
-          in
-          let offset = (idcs, node.dims) in
-          fprintf ppf {|@[<7>fprintf(log_file, @[<h>"# %s\n"@]);@]@ |}
-          @@ String.substr_replace_all debug ~pattern:"\n" ~with_:"$";
-          fprintf ppf
-            {|@[<7>fprintf(log_file,@ @[<h>"%s[%%u] = %%f = %s\n",@]@ %a,@ new_set_v%a);@]@ fflush(log_file);@ |}
-            ident v_code pp_array_offset offset pp_args v_idcs;
-          fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@;<1 -2>}@]@ " ident pp_array_offset
-            (idcs, node.dims))
-        else
-          (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
-          fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " ident pp_array_offset (idcs, node.dims) loop_f llv;
-        for _ = 1 to num_closing_braces do
-          fprintf ppf "@]@ }@,"
-        done
-    | Comment message ->
-        if Utils.settings.debug_log_from_routines then
-          fprintf ppf {|fprintf(log_file, @[<h>"COMMENT: %s\n"@]);@ |}
-            (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
-        else fprintf ppf "/* %s */@ " message
-    | Staged_compilation callback -> callback ()
-    | Set_local (Low_level.{ scope_id; tn = { prec; _ } }, value) ->
-        let num_closing_braces = pp_top_locals ppf value in
-        fprintf ppf "@[<2>v%d =@ %a;@]" scope_id (pp_float prec) value;
-        for _ = 1 to num_closing_braces do
-          fprintf ppf "@]@ }@,"
-        done
-  and pp_top_locals ppf (vcomp : Low_level.float_t) : int =
-    match vcomp with
-    | Local_scope { id = { scope_id = i; tn = { prec; _ } }; body; orig_indices = _ } ->
-        let num_typ = Ops.cuda_typ_of_prec prec in
-        (* Arrays are initialized to 0 by default. However, there is typically an explicit
-           initialization for virtual nodes. *)
-        fprintf ppf "@[<2>{@ %s v%d = 0;@ " num_typ i;
-        pp_ll ppf body;
-        pp_print_space ppf ();
-        1
-    | Get_local _ | Get_global _ | Get _ | Constant _ | Embed_index _ -> 0
-    | Binop (Arg1, v1, _v2) -> pp_top_locals ppf v1
-    | Binop (Arg2, _v1, v2) -> pp_top_locals ppf v2
-    | Binop (_, v1, v2) -> pp_top_locals ppf v1 + pp_top_locals ppf v2
-    | Unop (_, v) -> pp_top_locals ppf v
-  and pp_float prec ppf value =
-    let num_typ = Ops.cuda_typ_of_prec prec in
-    let loop = pp_float prec in
-    match value with
-    | Local_scope { id; _ } ->
-        (* Embedding of Local_scope is done by pp_top_locals. *)
-        loop ppf @@ Get_local id
-    | Get_local id ->
-        let get_typ = Ops.cuda_typ_of_prec id.tn.prec in
-        if not @@ String.equal num_typ get_typ then fprintf ppf "(%s)" num_typ;
-        fprintf ppf "v%d" id.scope_id
-    | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
-        let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
-        fprintf ppf "@[<2>((%s*)merge_buffer)[%a@;<0 -2>]@]" (Ops.cuda_typ_of_prec prec)
-          pp_array_offset
-          (idcs, Lazy.force tn.dims)
-    | Get_global _ -> failwith "Cc_backend: Get_global / FFI NOT IMPLEMENTED YET"
-    | Get (tn, idcs) ->
-        Hash_set.add visited tn;
-        let ident = info.get_ident tn in
-        let node = get_node tn in
-        fprintf ppf "@[<2>%s[%a@;<0 -2>]@]" ident pp_array_offset (idcs, node.dims)
-    | Constant c -> fprintf ppf "(%f)" c
-    | Embed_index idx ->
-        if not @@ List.exists ~f:(String.equal num_typ) [ "int"; "size_t" ] then
-          fprintf ppf "(%s)" num_typ;
-        pp_index_axis ppf idx
-    | Binop (Arg1, v1, _v2) -> loop ppf v1
-    | Binop (Arg2, _v1, v2) -> loop ppf v2
-    | Binop (op, v1, v2) ->
-        let prefix, infix, postfix = Ops.binop_C_syntax prec op in
-        fprintf ppf "@[<1>%s%a%s@ %a@]%s" prefix loop v1 infix loop v2 postfix
-    | Unop (Identity, v) -> loop ppf v
-    | Unop (Relu, v) ->
-        (* FIXME: don't recompute v *)
-        fprintf ppf "@[<1>(%a > 0.0 ?@ %a : 0.0@;<0 -1>)@]" loop v loop v
-  and debug_float prec (value : Low_level.float_t) : string * 'a list =
-    let num_typ = Ops.cuda_typ_of_prec prec in
-    let loop = debug_float prec in
-    match value with
-    | Local_scope { id; _ } ->
-        (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug
-           logs. *)
-        loop @@ Get_local id
-    | Get_local id ->
-        let get_typ = Ops.cuda_typ_of_prec id.tn.prec in
-        let v =
-          (if not @@ String.equal num_typ get_typ then "(" ^ num_typ ^ ")" else "")
-          ^ "v" ^ Int.to_string id.scope_id
-        in
-        (v ^ "{=%f}", [ `Value v ])
-    | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
-        let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
-        let node = get_node tn in
-        let v =
-          sprintf "@[<2>merge_buffer[%s@;<0 -2>]@]" (array_offset_to_string (idcs, node.dims))
-        in
-        ("merge_buffer[%u]{=%f}", [ `Accessor (idcs, node.dims); `Value v ])
-    | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
-    | Get (tn, idcs) ->
-        let ident = info.get_ident tn in
-        let node = get_node tn in
-        let v = sprintf "@[<2>%s[%s@;<0 -2>]@]" ident (array_offset_to_string (idcs, node.dims)) in
-        (ident ^ "[%u]{=%f}", [ `Accessor (idcs, node.dims); `Value v ])
-    | Constant c -> (Float.to_string c, [])
-    | Embed_index (Fixed_idx i) -> (Int.to_string i, [])
-    | Embed_index (Iterator s) -> (Indexing.symbol_ident s, [])
-    | Binop (Arg1, v1, _v2) -> loop v1
-    | Binop (Arg2, _v1, v2) -> loop v2
-    | Binop (op, v1, v2) ->
-        let prefix, infix, postfix = Ops.binop_C_syntax prec op in
-        let v1, idcs1 = loop v1 in
-        let v2, idcs2 = loop v2 in
-        (String.concat [ prefix; v1; infix; " "; v2; postfix ], idcs1 @ idcs2)
-    | Unop (Identity, v) -> loop v
-    | Unop (Relu, v) ->
-        let v, idcs = loop v in
-        (String.concat [ "("; v; " > 0.0 ? "; v; " : 0.0)" ], idcs @ idcs)
-  in
-  pp_ll ppf llc
-
-let%track_sexp compile_globals ~get_ident ppf infos =
-  let open Stdlib.Format in
-  fprintf ppf {|@[<v 0>#include <stdio.h>@,#include <stdlib.h>@,/* Global declarations. */@,|};
-  let infos = Array.filter_opt infos in
-  let used =
-    Array.map infos ~f:(fun i -> i.used_tensors)
-    |> Array.fold ~init:(Hash_set.create (module Tn)) ~f:Hash_set.union
-  in
-  let get_node tn = Array.find_map infos ~f:(fun info -> Hashtbl.find info.nodes tn) in
-  Hash_set.to_list used
-  |> List.iter ~f:(fun tn ->
-         let node = Option.value_exn ~here:[%here] @@ get_node tn in
-         match node.mem with
-         | Constant_from_host ->
-             let nd = Option.value_exn ~here:[%here] @@ Lazy.force tn.Tn.array in
-             fprintf ppf "#define %s (%s)@," (get_ident tn) @@ get_c_ptr tn.Tn.prec nd
-         | _ -> ());
-  fprintf ppf "@,@]"
-
-let%track_sexp compile_proc ~name info ppf idx_params Low_level.{ traced_store; llc; merge_node } =
-  let open Stdlib.Format in
-  let arrays = Hash_set.to_list info.used_tensors in
-  let params =
-    List.filter_map arrays ~f:(fun tn ->
-        let node = Hashtbl.find_exn info.nodes tn in
-        if Utils.settings.with_debug_level > 0 then
-          [%log "array-used:", (tn : Tn.t), Tn.label tn, (node.mem : mem_properties)];
-        match node.mem with
-        | Local_only -> None
-        | From_context ->
-            Some (Ops.cuda_typ_of_prec node.prec ^ " *" ^ info.get_ident tn, Param_ptr tn)
-        | Constant_from_host -> None)
-  in
-  let idx_params =
-    List.map idx_params ~f:(fun s ->
-        ("int " ^ Indexing.symbol_ident s.Indexing.static_symbol, Static_idx s))
-  in
-  let log_file =
-    if Utils.settings.debug_log_from_routines then [ ("const char* log_file_name", Log_file_name) ]
-    else []
-  in
-  let merge_param =
-    Option.(
-      to_list
-      @@ map merge_node ~f:(fun tn ->
-             ("const " ^ Ops.cuda_typ_of_prec tn.prec ^ " *merge_buffer", Merge_buffer)))
-  in
-  let params = log_file @ merge_param @ idx_params @ params in
-  fprintf ppf "@[<v 2>@[<hv 4>void %s(@,@[<hov 0>%a@]@;<0 -4>)@] {@ " name
-    (pp_print_list ~pp_sep:pp_comma pp_print_string)
-  @@ List.map ~f:fst params;
-  if Utils.settings.debug_log_from_routines then
-    fprintf ppf {|FILE* log_file = fopen(log_file_name, "w");@ |};
-  fprintf ppf "/* Local declarations and initialization. */@ ";
-  List.iter arrays ~f:(fun tn ->
-      let node = Hashtbl.find_exn info.nodes tn in
-      match node.mem with
-      | Local_only ->
-          fprintf ppf "%s %s[%d]%s;@ " (Ops.cuda_typ_of_prec node.prec) (info.get_ident tn)
-            (Tn.num_elems tn)
-            (if (Hashtbl.find_exn traced_store tn).zero_initialized then " = {0}" else "")
-      | From_context when node.zero_initialized -> pp_zero_out ppf node
-      | _ -> ());
-  fprintf ppf "@,/* Main logic. */@ ";
-  compile_main ~traced_store info ppf llc;
-  fprintf ppf "@;<0 -2>}@]@.";
-  params
-
-let prepare_nodes info ctx_nodes Low_level.{ traced_store; llc; merge_node = _ } =
-  let prepare_node = prepare_node ~traced_store info ctx_nodes in
-  let rec loop llc =
-    match llc with
-    | Low_level.Noop | Low_level.Comment _ | Low_level.Staged_compilation _ -> ()
-    | Low_level.Seq (c1, c2) ->
-        loop c1;
-        loop c2
-    | Low_level.For_loop { body; _ } -> loop body
-    | Low_level.Zero_out tn -> prepare_node tn
-    | Low_level.Set { tn; llv; _ } ->
-        prepare_node tn;
-        loop_float llv
-    | Low_level.Set_local (_, llv) -> loop_float llv
-  and loop_float llv =
-    match llv with
-    | Low_level.Local_scope { body; _ } -> loop body
-    | Low_level.Get_local _ | Low_level.Get_global (_, _) -> ()
-    | Low_level.Get (tn, _) -> prepare_node tn
-    | Low_level.Binop (_, v1, v2) ->
-        loop_float v1;
-        loop_float v2
-    | Low_level.Unop (_, v) -> loop_float v
-    | Low_level.Constant _ | Low_level.Embed_index _ -> ()
-  in
-  loop llc
+let is_in_context node =
+  Tnode.default_to_most_local node.Low_level.tn 33;
+  match node.tn.memory_mode with
+  | Some (Hosted (Constant | Volatile), _) -> false
+  | Some ((Virtual | Local), _) -> false
+  | _ -> true
 
 let header_sep =
   let open Re in
   compile (seq [ str " "; opt any; str "="; str " " ])
 
 let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optimized) =
-  let get_ident = Low_level.get_ident_within_code ~no_dots:true [| lowered.llc |] in
+  let opt_ctx_arrays =
+    Option.map opt_ctx_arrays ~f:(fun ctx_arrays ->
+        Hashtbl.fold lowered.traced_store ~init:ctx_arrays ~f:(fun ~key:tn ~data:_ ctx_arrays ->
+            match Map.find ctx_arrays tn with
+            | None ->
+                let data =
+                  Ndarray.create_array tn.Tn.prec ~dims:(Lazy.force tn.dims)
+                  @@ Constant_fill { values = [| 0. |]; strict = false }
+                in
+                Map.add_exn ctx_arrays ~key:tn ~data
+            | Some _ -> ctx_arrays))
+  in
+  let module Syntax = Backend_utils.C_syntax (struct
+    let for_lowereds = [| lowered |]
+
+    type nonrec ctx_array = ctx_array
+
+    let opt_ctx_arrays = opt_ctx_arrays
+    let hardcoded_context_ptr = Some Backend_utils.get_c_ptr
+    let is_in_context = is_in_context
+    let host_ptrs_for_readonly = true
+    let logs_to_stdout = false
+  end) in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
-  let info =
-    {
-      nodes = Hashtbl.create (module Tn);
-      used_tensors = Hash_set.create (module Tn);
-      get_ident;
-      traced_store = lowered.traced_store;
-    }
-  in
-  let ctx_nodes =
-    match opt_ctx_arrays with
-    | Some ctx_arrays -> Ctx_arrays (ref ctx_arrays)
-    | None -> Param_ptrs (ref [])
-  in
-  prepare_nodes info ctx_nodes lowered;
   let pp_file = Utils.pp_file ~base_name:name ~extension:".c" in
   let base_name = Filename_base.chop_extension pp_file.f_name in
-  compile_globals ~get_ident:info.get_ident pp_file.ppf [| Some info |];
-  let params = compile_proc ~name info pp_file.ppf idx_params lowered in
+  let is_global = Syntax.compile_globals pp_file.ppf in
+  let params = Syntax.compile_proc ~name pp_file.ppf idx_params ~is_global lowered in
   pp_file.finalize ();
   let log_fname = base_name ^ ".log" in
   let libname = base_name ^ ".so" in
@@ -522,53 +180,51 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
     ()
   done;
   let result = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW; RTLD_DEEPBIND ] in
-  let opt_ctx_arrays =
-    match ctx_nodes with Ctx_arrays ctx_arrays -> Some !ctx_arrays | _ -> None
-  in
-  { info; result; params; bindings; name; opt_ctx_arrays; expected_merge_node = lowered.merge_node }
+  { lowered; result; params; bindings; name; opt_ctx_arrays }
 
 let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings
     (lowereds : Low_level.optimized option array) =
-  let get_ident =
-    Low_level.get_ident_within_code ~no_dots:true
-    @@ Array.filter_map lowereds ~f:(Option.map ~f:(fun Low_level.{ llc; _ } -> llc))
+  let for_lowereds = Array.filter_map ~f:Fn.id lowereds in
+  let opt_ctx_arrays =
+    Option.map opt_ctx_arrays ~f:(fun ctx_arrays ->
+        Array.fold for_lowereds ~init:ctx_arrays ~f:(fun ctx_arrays lowered ->
+            Hashtbl.fold lowered.traced_store ~init:ctx_arrays ~f:(fun ~key:tn ~data:_ ctx_arrays ->
+                match Map.find ctx_arrays tn with
+                | None ->
+                    let data =
+                      Ndarray.create_array tn.Tn.prec ~dims:(Lazy.force tn.dims)
+                      @@ Constant_fill { values = [| 0. |]; strict = false }
+                    in
+                    Map.add_exn ctx_arrays ~key:tn ~data
+                | Some _ -> ctx_arrays)))
   in
+  let module Syntax = Backend_utils.C_syntax (struct
+    let for_lowereds = for_lowereds
+
+    type nonrec ctx_array = ctx_array
+
+    let opt_ctx_arrays = opt_ctx_arrays
+    let hardcoded_context_ptr = Some Backend_utils.get_c_ptr
+    let is_in_context = is_in_context
+    let host_ptrs_for_readonly = true
+    let logs_to_stdout = false
+  end) in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
-  let infos =
-    Array.map lowereds
-      ~f:
-        (Option.map ~f:(fun Low_level.{ traced_store; _ } ->
-             {
-               nodes = Hashtbl.create (module Tn);
-               used_tensors = Hash_set.create (module Tn);
-               get_ident;
-               traced_store;
-             }))
-  in
   let global_ctx_arrays =
     ref (match opt_ctx_arrays with Some ctx_arrays -> ctx_arrays | None -> Map.empty (module Tn))
   in
-  let ctx_nodes =
-    Array.map lowereds ~f:(fun _ ->
-        match opt_ctx_arrays with
-        | Some _ -> Ctx_arrays global_ctx_arrays
-        | None -> Param_ptrs (ref []))
-  in
-  Array.iteri ctx_nodes ~f:(fun i ctx_nodes ->
-      Option.iter infos.(i) ~f:(fun info ->
-          Option.iter lowereds.(i) ~f:(fun lowered -> prepare_nodes info ctx_nodes lowered)));
   let base_name =
     String.(
       strip ~drop:(equal_char '_')
       @@ common_prefix (Array.to_list @@ Array.concat_map ~f:Option.to_array names))
   in
   let pp_file = Utils.pp_file ~base_name ~extension:".c" in
-  compile_globals ~get_ident pp_file.ppf infos;
+  let is_global = Syntax.compile_globals pp_file.ppf in
   let params =
     Array.mapi lowereds ~f:(fun i lowered ->
-        Option.map2 names.(i) infos.(i) ~f:(fun name info ->
-            compile_proc ~name info pp_file.ppf idx_params @@ Option.value_exn ~here:[%here] lowered))
+        Option.map2 names.(i) lowered ~f:(fun name lowered ->
+            Syntax.compile_proc ~name pp_file.ppf idx_params ~is_global lowered))
   in
   pp_file.finalize ();
   let log_fname = pp_file.f_name ^ ".log" in
@@ -587,16 +243,14 @@ let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings
   let opt_ctx_arrays = Option.map opt_ctx_arrays ~f:(fun _ -> !global_ctx_arrays) in
   ( opt_ctx_arrays,
     Array.mapi params ~f:(fun i params ->
-        Option.map2 names.(i) infos.(i) ~f:(fun name info ->
+        Option.map2 names.(i) lowereds.(i) ~f:(fun name lowered ->
             {
-              info;
+              lowered;
               result;
               params = Option.value_exn ~here:[%here] params;
               bindings;
               name;
               opt_ctx_arrays;
-              expected_merge_node =
-                Option.(join @@ map lowereds.(i) ~f:(fun optim -> optim.Low_level.merge_node));
             })) )
 
 let%track_sexp link_compiled ~merge_buffer (old_context : context) (code : procedure) :

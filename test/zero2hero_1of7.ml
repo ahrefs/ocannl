@@ -26,19 +26,20 @@ let%expect_test "Graph drawing recompile" =
                                               #16 grad_+_f_nd <waiting>
                                               <not-in-yet>
                                        #13 - <Virtual 152>                                    │#2 5. <Virtual 40>
-                                       <not-in-yet>                                           │<not-in-yet>
+                                       <void>                                                 │<void>
                                        #14 grad_- <waiting>                                   │
                                        <not-in-yet>                                           │
               #11 *. <Virtual 152>            │             #4 *. <Virtual 152>               │
-              <not-in-yet>                    │             <not-in-yet>                      │
+              <void>                          │             <void>                            │
               #12 grad_*. <waiting>           │             #5 grad_*. <waiting>              │
               <not-in-yet>                    │             <not-in-yet>                      │
     #10 3. <Virtual 40>│#7 **. <Virtual 152>  │#3 4. <Virtual 40>│#0 x                        │
-    <not-in-yet>       │<not-in-yet>          │<not-in-yet>      │ 5.00e+0                    │
+    <void>             │<void>                │<void>            │ 5.00e+0                    │
                        │#8 grad_**. <waiting> │                  │#1 grad_x <Never_virtual 26>│
                        │<not-in-yet>          │                  │<not-in-yet>                │
                        │[0]│#6 2. <Virtual 40>│                  │                            │
-                       │   │<not-in-yet>      │                  │                            │ |}];
+                       │   │<void>            │                  │                            │
+    |}];
   let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.every_non_literal_on_host f;
   let f_upd = Train.grad_update f in
@@ -52,7 +53,7 @@ let%expect_test "Graph drawing recompile" =
                                              #33 grad_+_f
                                               1.00e+0
                                     #30 -                                      │#19 5. <Virtual 40>
-                                     5.50e+1                                   │<not-in-yet>
+                                     5.50e+1                                   │<void>
                                     #31 grad_-                                 │
                                      1.00e+0                                   │
                     #28 *.                      │         #21 *.               │
@@ -60,12 +61,12 @@ let%expect_test "Graph drawing recompile" =
                     #29 grad_*.                 │         #22 grad_*.          │
                      1.00e+0                    │          -1.00e+0            │
     #27 3. <Virtual 40>│      #24 **.           │#20 4. <Virtual 40>│#17 x     │
-    <not-in-yet>       │       2.50e+1          │<not-in-yet>       │ 5.00e+0  │
+    <void>             │       2.50e+1          │<void>             │ 5.00e+0  │
                        │      #25 grad_**.      │                   │#18 grad_x│
                        │       3.00e+0          │                   │ 2.60e+1  │
                        │[17]│#23 2. <Virtual 40>│                   │          │
-                       │    │<not-in-yet>       │                   │          │
-  |}];
+                       │    │<void>             │                   │          │
+    |}];
   let xs = Array.init 10 ~f:Float.(fun i -> of_int i - 5.) in
   let ys =
     Array.map xs ~f:(fun v ->
@@ -143,13 +144,14 @@ let%expect_test "Graph drawing fetch" =
                                                    #54 +_f
                                                     6.00e+1
                                          #53 -                                          │#46 5. <Virtual 40>
-                                          5.50e+1                                       │<not-in-yet>
+                                          5.50e+1                                       │<void>
                      #52 *.                     │               #48 *.                  │
                       7.50e+1                   │                2.00e+1                │
     #51 3. <Virtual 40>│       #50 **.          │#47 4. <Virtual 40>│#45 5. <Virtual 40>│
-    <not-in-yet>       │        2.50e+1         │<not-in-yet>       │<not-in-yet>       │
+    <void>             │        2.50e+1         │<void>             │<void>             │
                        │[45]│#49 2. <Virtual 40>│                   │                   │
-                       │    │<not-in-yet>       │                   │                   │ |}];
+                       │    │<void>             │                   │                   │
+    |}];
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   (* Yay, the whole shape gets inferred! *)
@@ -247,22 +249,23 @@ let%expect_test "Simple gradients hosted" =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                   #87 *._l
-                    0.00e+0
-                   #88 grad_*._l
-                    0.00e+0
-              #83 +_d               │#85 f
-               0.00e+0              │ -2.00e+0
-              #84 grad_+_d          │#86 grad_f
-               0.00e+0              │ 0.00e+0
-        #79 *._e         │#81 c     │
-         0.00e+0         │ 1.00e+1  │
-        #80 grad_*._e    │#82 grad_c│
-         0.00e+0         │ 0.00e+0  │
-    #75 a     │#77 b     │          │
-     2.00e+0  │ -3.00e+0 │          │
-    #76 grad_a│#78 grad_b│          │
-     0.00e+0  │ 0.00e+0  │          │ |}];
+                                                                    #87 *._l <(Hosted Changed_on_devices) 41>
+                                                                    <not-in-yet>
+                                                                    #88 grad_*._l <(Hosted Changed_on_devices) 41>
+                                                                    <not-in-yet>
+                                               #83 +_d <(Hosted Changed_on_devices) 41>                                                │#85 f <(Hosted Nonconstant) 24>
+                                               <not-in-yet>                                                                            │<not-in-yet>
+                                               #84 grad_+_d <(Hosted Changed_on_devices) 41>                                           │#86 grad_f <(Hosted Changed_on_devices) 41>
+                                               <not-in-yet>                                                                            │<not-in-yet>
+                        #79 *._e <(Hosted Changed_on_devices) 41>                          │#81 c <(Hosted Nonconstant) 24>            │
+                        <not-in-yet>                                                       │<not-in-yet>                               │
+                        #80 grad_*._e <(Hosted Changed_on_devices) 41>                     │#82 grad_c <(Hosted Changed_on_devices) 41>│
+                        <not-in-yet>                                                       │<not-in-yet>                               │
+    #75 a <(Hosted Nonconstant) 24>            │#77 b <(Hosted Nonconstant) 24>            │                                           │
+    <not-in-yet>                               │<not-in-yet>                               │                                           │
+    #76 grad_a <(Hosted Changed_on_devices) 41>│#78 grad_b <(Hosted Changed_on_devices) 41>│                                           │
+    <not-in-yet>                               │<not-in-yet>                               │                                           │
+    |}];
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
   Train.sync_run backend grad_routine l;
@@ -373,22 +376,23 @@ let%expect_test "Simple gradients virtual" =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                                            #123 *._l
-                                             0.00e+0
-                                            #124 grad_*._l <Virtual 40>
-                                            <not-in-yet>
-                               #119 +_d <Local 33>                                  │#121 f
-                               <void>                                               │ -2.00e+0
-                               #120 grad_+_d <Virtual 40>                           │#122 grad_f <On_device 33>
-                               <not-in-yet>                                         │<void>
-                 #115 *._e <Virtual 152>                 │#117 c                    │
-                 <not-in-yet>                            │ 1.00e+1                  │
-                 #116 grad_*._e <Virtual 40>             │#118 grad_c <On_device 33>│
-                 <not-in-yet>                            │<void>                    │
-    #111 a                    │#113 b                    │                          │
-     2.00e+0                  │ -3.00e+0                 │                          │
-    #112 grad_a <On_device 33>│#114 grad_b <On_device 33>│                          │
-    <void>                    │<void>                    │                          │ |}];
+                                                #123 *._l <(Hosted Changed_on_devices) 41>
+                                                <not-in-yet>
+                                                #124 grad_*._l <Virtual 40>
+                                                <not-in-yet>
+                                        #119 +_d <Local 33>                                           │#121 f <(Hosted Nonconstant) 24>
+                                        <not-in-yet>                                                  │<not-in-yet>
+                                        #120 grad_+_d <Virtual 40>                                    │#122 grad_f <On_device 33>
+                                        <not-in-yet>                                                  │<not-in-yet>
+                       #115 *._e <Virtual 152>                       │#117 c <(Hosted Nonconstant) 24>│
+                       <not-in-yet>                                  │<not-in-yet>                    │
+                       #116 grad_*._e <Virtual 40>                   │#118 grad_c <On_device 33>      │
+                       <not-in-yet>                                  │<not-in-yet>                    │
+    #111 a <(Hosted Nonconstant) 24>│#113 b <(Hosted Nonconstant) 24>│                                │
+    <not-in-yet>                    │<not-in-yet>                    │                                │
+    #112 grad_a <On_device 33>      │#114 grad_b <On_device 33>      │                                │
+    <not-in-yet>                    │<not-in-yet>                    │                                │
+    |}];
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
   Train.sync_run backend grad_routine l;
@@ -398,19 +402,20 @@ let%expect_test "Simple gradients virtual" =
                                             #123 *._l
                                              -8.00e+0
                                             #124 grad_*._l <Virtual 40>
-                                            <not-in-yet>
+                                            <void>
                                #119 +_d <Local 33>                                  │#121 f
                                <void>                                               │ -2.00e+0
                                #120 grad_+_d <Virtual 40>                           │#122 grad_f <On_device 33>
-                               <not-in-yet>                                         │<void>
+                               <void>                                               │<void>
                  #115 *._e <Virtual 152>                 │#117 c                    │
-                 <not-in-yet>                            │ 1.00e+1                  │
+                 <void>                                  │ 1.00e+1                  │
                  #116 grad_*._e <Virtual 40>             │#118 grad_c <On_device 33>│
-                 <not-in-yet>                            │<void>                    │
+                 <void>                                  │<void>                    │
     #111 a                    │#113 b                    │                          │
      2.00e+0                  │ -3.00e+0                 │                          │
     #112 grad_a <On_device 33>│#114 grad_b <On_device 33>│                          │
-    <void>                    │<void>                    │                          │ |}];
+    <void>                    │<void>                    │                          │
+    |}];
   (* Only now compile the SGD update. *)
   let sgd_routine = Backend.(link grad_routine.context @@ compile IDX.empty sgd) in
   (* Now we update the params, but are not doing the forward and backward passes: only params values
@@ -423,41 +428,43 @@ let%expect_test "Simple gradients virtual" =
                                             #123 *._l
                                              -8.00e+0
                                             #124 grad_*._l <Virtual 40>
-                                            <not-in-yet>
+                                            <void>
                                #119 +_d <Local 33>                                  │#121 f
                                <void>                                               │ -2.40e+0
                                #120 grad_+_d <Virtual 40>                           │#122 grad_f <On_device 33>
-                               <not-in-yet>                                         │<void>
+                               <void>                                               │<void>
                  #115 *._e <Virtual 152>                 │#117 c                    │
-                 <not-in-yet>                            │ 1.02e+1                  │
+                 <void>                                  │ 1.02e+1                  │
                  #116 grad_*._e <Virtual 40>             │#118 grad_c <On_device 33>│
-                 <not-in-yet>                            │<void>                    │
+                 <void>                                  │<void>                    │
     #111 a                    │#113 b                    │                          │
      1.40e+0                  │ -2.60e+0                 │                          │
     #112 grad_a <On_device 33>│#114 grad_b <On_device 33>│                          │
-    <void>                    │<void>                    │                          │ |}];
+    <void>                    │<void>                    │                          │
+    |}];
   (* Now the params will remain as above, but both param gradients and the values and gradients of
      other nodes will change thanks to the forward and backward passes. *)
   Train.sync_run backend grad_routine l;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                                              #123 *._l
-                                               -1.57e+1
-                                              #124 grad_*._l <Virtual 40>
-                                              <not-in-yet>
-                                 #119 +_d <Local 33>                                  │#121 f
-                                 <void>                                               │ -2.40e+0
-                                 #120 grad_+_d <Virtual 40>                           │#122 grad_f <On_device 33>
-                                 <not-in-yet>                                         │<void>
-                   #115 *._e <Virtual 152>                 │#117 c                    │
-                   <not-in-yet>                            │ 1.02e+1                  │
-                   #116 grad_*._e <Virtual 40>             │#118 grad_c <On_device 33>│
-                   <not-in-yet>                            │<void>                    │
-      #111 a                    │#113 b                    │                          │
-       1.40e+0                  │ -2.60e+0                 │                          │
-      #112 grad_a <On_device 33>│#114 grad_b <On_device 33>│                          │
-      <void>                    │<void>                    │                          │ |}]
+                                            #123 *._l
+                                             -1.57e+1
+                                            #124 grad_*._l <Virtual 40>
+                                            <void>
+                               #119 +_d <Local 33>                                  │#121 f
+                               <void>                                               │ -2.40e+0
+                               #120 grad_+_d <Virtual 40>                           │#122 grad_f <On_device 33>
+                               <void>                                               │<void>
+                 #115 *._e <Virtual 152>                 │#117 c                    │
+                 <void>                                  │ 1.02e+1                  │
+                 #116 grad_*._e <Virtual 40>             │#118 grad_c <On_device 33>│
+                 <void>                                  │<void>                    │
+    #111 a                    │#113 b                    │                          │
+     1.40e+0                  │ -2.60e+0                 │                          │
+    #112 grad_a <On_device 33>│#114 grad_b <On_device 33>│                          │
+    <void>                    │<void>                    │                          │
+    |}]
 
 let%expect_test "tanh plot" =
   (* TODO: NOT IMPLEMENTED *)
@@ -506,12 +513,13 @@ let%expect_test "2D neuron virtual" =
                          #166 +_v
                           7.00e-1
                          #167 grad_+_v <Virtual 40>
-                         <not-in-yet>
+                         <void>
               #164 * <Local 33>                  │#158 b
               <void>                             │ 6.70e+0
               #165 grad_* <Virtual 40>           │#159 grad_b <Local 33>
-              <not-in-yet>                       │<void>
+              <void>                             │<void>
     #160 w                │#162 x                │
      -3.00e+0  1.00e+0    │ 2.00e+0  0.00e+0     │
     #161 grad_w <Local 33>│#163 grad_x <Local 33>│
-    <void>                │<void>                │ |}]
+    <void>                │<void>                │
+    |}]

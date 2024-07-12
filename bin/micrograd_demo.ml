@@ -7,12 +7,13 @@ module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
 module Utils = Arrayjit.Utils
 module Rand = Arrayjit.Rand.Lib
+module Debug_runtime = Utils.Debug_runtime
 
 let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   Rand.init 0;
   Utils.settings.with_debug_level <- 1;
 
-  (* Utils.settings.output_debug_files_in_run_directory <- true; *)
+  Utils.settings.output_debug_files_in_run_directory <- true;
   (* Utils.settings.debug_log_from_routines <- true; *)
   let hid_dim = 16 in
   let len = 300 in
@@ -94,26 +95,28 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   let step_ref = IDX.find_exn routine.bindings step_n in
   let batch_ref = IDX.find_exn routine.bindings batch_n in
   step_ref := 0;
-  (* Tn.print_accessible_headers (); *)
-  for epoch = 0 to epochs - 1 do
-    for batch = 0 to n_batches - 1 do
-      batch_ref := batch;
-      Train.run routine;
-      assert (Backend.to_host routine.context learning_rate.value);
-      assert (Backend.to_host routine.context scalar_loss.value);
-      Backend.await device;
-      (* Stdio.printf "Data batch=%d, step=%d, lr=%f, batch loss=%f\n%!" !batch_ref !step_ref
-         learning_rate.@[0] scalar_loss.@[0]; *)
-      learning_rates := learning_rate.@[0] :: !learning_rates;
-      losses := scalar_loss.@[0] :: !losses;
-      epoch_loss := !epoch_loss +. scalar_loss.@[0];
-      log_losses := Float.log scalar_loss.@[0] :: !log_losses;
-      Int.incr step_ref
-    done;
-    if epoch % 1000 = 0 || epoch = epochs - 1 then
-      Stdio.printf "Epoch %d, lr=%f, epoch loss=%f\n%!" epoch learning_rate.@[0] !epoch_loss;
-    epoch_loss := 0.
-  done;
+  let%track_this_sexp _train_loop : unit =
+    (* Tn.print_accessible_headers (); *)
+    for epoch = 0 to epochs - 1 do
+      for batch = 0 to n_batches - 1 do
+        batch_ref := batch;
+        Train.run routine;
+        assert (Backend.to_host routine.context learning_rate.value);
+        assert (Backend.to_host routine.context scalar_loss.value);
+        Backend.await device;
+        (* Stdio.printf "Data batch=%d, step=%d, lr=%f, batch loss=%f\n%!" !batch_ref !step_ref
+           learning_rate.@[0] scalar_loss.@[0]; *)
+        learning_rates := learning_rate.@[0] :: !learning_rates;
+        losses := scalar_loss.@[0] :: !losses;
+        epoch_loss := !epoch_loss +. scalar_loss.@[0];
+        log_losses := Float.log scalar_loss.@[0] :: !log_losses;
+        Int.incr step_ref
+      done;
+      if epoch % 1000 = 0 || epoch = epochs - 1 then
+        Stdio.printf "Epoch %d, lr=%f, epoch loss=%f\n%!" epoch learning_rate.@[0] !epoch_loss;
+      epoch_loss := 0.
+    done
+  in
   let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
@@ -137,17 +140,19 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
     Backend.await device;
     Float.(mlp_result.@[0] >= 0.)
   in
-  let plot_moons =
-    let open PrintBox_utils in
-    plot ~size:(120, 40) ~x_label:"ixes" ~y_label:"ygreks"
-      [
-        Scatterplot { points = points1; pixel = "#" };
-        Scatterplot { points = points2; pixel = "%" };
-        Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
-      ]
+  let%track_this_sexp _plotting : unit =
+    let plot_moons =
+      let open PrintBox_utils in
+      plot ~size:(120, 40) ~x_label:"ixes" ~y_label:"ygreks"
+        [
+          Scatterplot { points = points1; pixel = "#" };
+          Scatterplot { points = points2; pixel = "%" };
+          Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
+        ]
+    in
+    Stdio.printf "Half-moons scatterplot and decision boundary:\n%!";
+    PrintBox_text.output Stdio.stdout plot_moons
   in
-  Stdio.printf "Half-moons scatterplot and decision boundary:\n%!";
-  PrintBox_text.output Stdio.stdout plot_moons;
   Stdio.printf "Loss:\n%!";
   let plot_loss =
     let open PrintBox_utils in

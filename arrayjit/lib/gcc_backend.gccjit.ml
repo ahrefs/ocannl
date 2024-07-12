@@ -5,6 +5,8 @@ module Debug_runtime = Utils.Debug_runtime
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
+open Backend_utils.Types
+
 let name = "gccjit"
 
 let optimization_level () =
@@ -106,13 +108,6 @@ type info_nodes = {
   get_ident : Tn.t -> string;
   merge_node : (Gccjit.rvalue[@sexp.opaque]) option;
 }
-[@@deriving sexp_of]
-
-type param_source =
-  | Log_file_name
-  | Merge_buffer
-  | Param_ptr of Tn.t
-  | Static_idx of Indexing.static_symbol
 [@@deriving sexp_of]
 
 type procedure = {

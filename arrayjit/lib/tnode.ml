@@ -79,6 +79,10 @@ let default_to_most_local tn provenance =
   | Some (Materialized, _) -> tn.memory_mode <- Some (On_device, provenance)
   | Some ((Virtual | Local | On_device | Hosted _), _) -> ()
 
+let is_virtual_force tn provenance =
+  default_to_most_local tn provenance;
+  match tn.memory_mode with Some (Virtual, _) -> true | _ -> false
+
 let is_hosted_force ?specifically tn provenance =
   default_to_most_local tn provenance;
   match (tn.memory_mode, specifically) with

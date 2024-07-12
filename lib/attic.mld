@@ -210,3 +210,49 @@ let indices_bio sh (type v) (arr : v array) =
   (batch, input, output)
 
 ]}
+
+C backend:
+{[
+
+let get_ptr ~(traced_store : Low_level.traced_store) ~ctx_nodes ~get_ident =
+  let cache = Hashtbl.create (module Tn) in
+  let mem = mem_properties traced_store in
+  fun tn ->
+    Hashtbl.find_or_add cache tn ~default:(fun () ->
+        let mem = mem tn in
+        let dims = Lazy.force tn.dims in
+        let prec = tn.prec in
+        let ident = get_ident tn in
+        match (mem, ctx_nodes) with
+        | From_context, Ctx_arrays ctx_arrays -> (
+            match Map.find !ctx_arrays tn with
+            | None ->
+                let data =
+                  Ndarray.create_array tn.Tn.prec ~dims
+                  @@ Constant_fill { values = [| 0. |]; strict = false }
+                in
+                ctx_arrays := Map.add_exn !ctx_arrays ~key:tn ~data;
+                get_c_ptr prec data
+            | Some data -> get_c_ptr prec data)
+        | From_context, Param_ptrs ptrs ->
+            ptrs := (name, Param_ptr tn) :: !ptrs;
+            ident
+        | Constant_from_host, _ ->
+            get_c_ptr prec @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
+        | Local_only, _ -> ident)
+
+
+let mem_properties (traced_store : Low_level.traced_store) =
+  let cache = Hashtbl.create (module Tn) in
+  fun tn ->
+    Hashtbl.find_or_add cache tn ~default:(fun () ->
+        let is_on_host = Tn.is_hosted_force tn 33 in
+        let is_materialized = Tn.is_materialized_force tn 331 in
+        let is_constant = Tn.is_hosted_force ~specifically:Constant tn 332 in
+        assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
+        let traced = Low_level.(get_node traced_store tn) in
+        if not is_materialized then Local_only
+        else if is_constant && traced.read_only then Constant_from_host
+        else From_context)
+
+]}
