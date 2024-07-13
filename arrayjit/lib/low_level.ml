@@ -73,9 +73,6 @@ let comment_to_name =
   let nonliteral = Str.regexp {|[^a-zA-Z0-9_]|} in
   Str.global_replace nonliteral "_"
 
-let extract_block_name llc =
-  match flat_lines llc with Comment s :: _ -> comment_to_name s | _ -> ""
-
 (** *** Optimization *** *)
 
 type virtualize_settings = {
