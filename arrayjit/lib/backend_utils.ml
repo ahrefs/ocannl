@@ -93,9 +93,9 @@ struct
     Array.iter B.for_lowereds ~f:(fun l ->
         Hashtbl.iter l.Low_level.traced_store ~f:(fun (node : Low_level.traced_array) ->
             if not @@ Hash_set.mem is_global node.tn then
-              let in_ctx: bool = B.is_in_context node in
+              let in_ctx : bool = B.is_in_context node in
               let ctx_ptr = B.hardcoded_context_ptr in
-              let mem: (Tn.memory_mode * int) option = node.tn.memory_mode in
+              let mem : (Tn.memory_mode * int) option = node.tn.memory_mode in
               match
                 (in_ctx, ctx_ptr, B.opt_ctx_arrays, B.host_ptrs_for_readonly, mem, node.read_only)
               with
@@ -118,6 +118,7 @@ struct
   let compile_main ~traced_store ppf llc : unit =
     let open Stdlib.Format in
     let visited = Hash_set.create (module Tn) in
+    let debug_printf = if B.logs_to_stdout then "printf(" else "fprintf(log_file, " in
     let rec pp_ll ppf c : unit =
       match c with
       | Low_level.Noop -> ()
@@ -154,11 +155,11 @@ struct
                   pp_print_string ppf v
             in
             let offset = (idcs, dims) in
-            fprintf ppf {|@[<7>fprintf(log_file, @[<h>"# %s\n"@]);@]@ |}
+            fprintf ppf {|@[<7>%s@[<h>"# %s\n"@]);@]@ |} debug_printf
             @@ String.substr_replace_all debug ~pattern:"\n" ~with_:"$";
             fprintf ppf
-              {|@[<7>fprintf(log_file,@ @[<h>"%s[%%u] = %%f = %s\n",@]@ %a,@ new_set_v%a);@]@ fflush(log_file);@ |}
-              ident v_code pp_array_offset offset pp_args v_idcs;
+              {|@[<7>%s@[<h>"%s[%%u] = %%f = %s\n",@]@ %a,@ new_set_v%a);@]@ fflush(log_file);@ |}
+              debug_printf ident v_code pp_array_offset offset pp_args v_idcs;
             fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@;<1 -2>}@]@ " ident pp_array_offset
               (idcs, dims))
           else
@@ -169,7 +170,7 @@ struct
           done
       | Comment message ->
           if Utils.settings.debug_log_from_routines then
-            fprintf ppf {|fprintf(log_file, @[<h>"COMMENT: %s\n"@]);@ |}
+            fprintf ppf {|%s@[<h>"COMMENT: %s\n"@]);@ |} debug_printf
               (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
           else fprintf ppf "/* %s */@ " message
       | Staged_compilation callback -> callback ()
