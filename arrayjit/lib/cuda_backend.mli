@@ -7,7 +7,7 @@ val initialize : config -> unit
 val is_initialized : unit -> bool
 val finalize : context -> unit
 val sexp_of_context : context -> Sexplib.Sexp.t
-val compile : ?name:string -> Indexing.unit_bindings -> Low_level.optimized -> code
+val compile : name:string -> Indexing.unit_bindings -> Low_level.optimized -> code
 
 val compile_batch :
   names:string option array ->

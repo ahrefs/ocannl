@@ -44,6 +44,8 @@ module C_syntax (B : sig
   val is_in_context : Low_level.traced_array -> bool
   val host_ptrs_for_readonly : bool
   val logs_to_stdout : bool
+  val main_kernel_prefix : string
+  val kernel_prep_line : string
 end) =
 struct
   open Types
@@ -118,7 +120,6 @@ struct
   let compile_main ~traced_store ppf llc : unit =
     let open Stdlib.Format in
     let visited = Hash_set.create (module Tn) in
-    let debug_printf = if B.logs_to_stdout then "printf(" else "fprintf(log_file, " in
     let rec pp_ll ppf c : unit =
       match c with
       | Low_level.Noop -> ()
@@ -155,11 +156,18 @@ struct
                   pp_print_string ppf v
             in
             let offset = (idcs, dims) in
-            fprintf ppf {|@[<7>%s@[<h>"# %s\n"@]);@]@ |} debug_printf
-            @@ String.substr_replace_all debug ~pattern:"\n" ~with_:"$";
-            fprintf ppf
-              {|@[<7>%s@[<h>"%s[%%u] = %%f = %s\n",@]@ %a,@ new_set_v%a);@]@ fflush(log_file);@ |}
-              debug_printf ident v_code pp_array_offset offset pp_args v_idcs;
+            if B.logs_to_stdout then (
+              fprintf ppf {|@[<7>printf(@[<h>"%%d: # %s\n", log_id@]);@]@ |}
+                (String.substr_replace_all debug ~pattern:"\n" ~with_:"$");
+              fprintf ppf
+                {|@[<7>printf(@[<h>"%%d: %s[%%u] = %%f = %s\n",@]@ log_id,@ %a,@ new_set_v%a);@]@ |}
+                ident v_code pp_array_offset offset pp_args v_idcs)
+            else (
+              fprintf ppf {|@[<7>fprintf(log_file,@ @[<h>"# %s\n"@]);@]@ |}
+                (String.substr_replace_all debug ~pattern:"\n" ~with_:"$");
+              fprintf ppf
+                {|@[<7>fprintf(log_file,@ @[<h>"%s[%%u] = %%f = %s\n",@]@ %a,@ new_set_v%a);@]@ fflush(log_file);@ |}
+                ident v_code pp_array_offset offset pp_args v_idcs);
             fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@;<1 -2>}@]@ " ident pp_array_offset
               (idcs, dims))
           else
@@ -170,8 +178,12 @@ struct
           done
       | Comment message ->
           if Utils.settings.debug_log_from_routines then
-            fprintf ppf {|%s@[<h>"COMMENT: %s\n"@]);@ |} debug_printf
-              (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
+            if B.logs_to_stdout then
+              fprintf ppf {|printf(@[<h>"%%d: COMMENT: %s\n",@] log_id);@ |}
+                (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
+            else
+              fprintf ppf {|fprintf(log_file,@ @[<h>"COMMENT: %s\n"@]);@ |}
+                (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
           else fprintf ppf "/* %s */@ " message
       | Staged_compilation callback -> callback ()
       | Set_local (Low_level.{ scope_id; tn = { prec; _ } }, value) ->
@@ -289,8 +301,10 @@ struct
           ("int " ^ Indexing.symbol_ident s.Indexing.static_symbol, Static_idx s))
     in
     let log_file =
-      if Utils.settings.debug_log_from_routines && not B.logs_to_stdout then
-        [ ("const char* log_file_name", Log_file_name) ]
+      if Utils.settings.debug_log_from_routines then
+        [
+          ((if B.logs_to_stdout then "int log_id" else "const char* log_file_name"), Log_file_name);
+        ]
       else []
     in
     let merge_param =
@@ -300,9 +314,13 @@ struct
                ("const " ^ Ops.cuda_typ_of_prec tn.prec ^ " *merge_buffer", Merge_buffer)))
     in
     let params = log_file @ merge_param @ idx_params @ params in
-    fprintf ppf "@[<v 2>@[<hv 4>void %s(@,@[<hov 0>%a@]@;<0 -4>)@] {@ " name
+    fprintf ppf "@[<v 2>@[<hv 4>%s%svoid %s(@,@[<hov 0>%a@]@;<0 -4>)@] {@ " B.main_kernel_prefix
+      (if String.is_empty B.main_kernel_prefix then "" else " ")
+      name
       (pp_print_list ~pp_sep:pp_comma pp_print_string)
     @@ List.map ~f:fst params;
+    if not (String.is_empty B.kernel_prep_line) then fprintf ppf "%s@ " B.kernel_prep_line;
+    (* FIXME: we should also close the file. *)
     if not (List.is_empty log_file) then
       fprintf ppf {|FILE* log_file = fopen(log_file_name, "w");@ |};
     fprintf ppf "/* Local declarations and initialization. */@ ";

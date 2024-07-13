@@ -7,27 +7,6 @@ open Backend_utils.Types
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-type mem_properties =
-  | Local_only
-      (** The array is only needed for a single computation and is allocated locally (or spilled). *)
-  | Global
-      (** Could not perform optimizations: the array is computed directly in the global memory. *)
-[@@deriving sexp, equal, compare, variants]
-
-type tn_info = {
-  tn : Tn.t;
-  global : string option;
-      (** A global device array, if any. This becomes [Cudajit.deviceptr] in a context. *)
-  local : string option;  (** A local name, if any. *)
-  mem : mem_properties;
-  dims : int array;
-  num_typ : string;
-      (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]),
-          [double] (precision [Double]). *)
-  zero_initialized : bool;
-}
-[@@deriving sexp_of]
-
 type buffer_ptr = Cudajit.deviceptr
 
 let sexp_of_buffer_ptr (Cudajit.Deviceptr ptr : buffer_ptr) =
@@ -56,7 +35,6 @@ and context = {
   device : device;
   run_module : (Cudajit.module_[@sexp.opaque]) option;
       (** Code jitted for this context, independent of the parent and child contexts. *)
-  all_arrays : tn_info Map.M(Tn).t;
   global_arrays : (Cudajit.deviceptr[@sexp.opaque]) Map.M(Tn).t;
       (** This map contains only the global arrays, where [all_arrays.(key).global] is [Some name]. *)
 }
@@ -78,14 +56,6 @@ let opt_alloc_merge_buffer ~size_in_bytes phys_dev =
     phys_dev.copy_merge_buffer <- Cudajit.mem_alloc ~size_in_bytes;
     phys_dev.copy_merge_buffer_capacity <- size_in_bytes)
 
-type info_nodes = {
-  nodes : tn_info Hashtbl.M(Tn).t;
-  used_tensors : Hash_set.M(Tn).t;
-  get_ident : Tn.t -> string;
-  uses_merge_buffer : bool;
-}
-[@@deriving sexp_of]
-
 let get_name { physical = { ordinal; _ }; subordinal; _ } =
   Int.to_string ordinal ^ "_" ^ Int.to_string subordinal
 
@@ -96,7 +66,6 @@ let init device =
     label = "on dev " ^ get_name device;
     ctx = device.physical.primary_context;
     device;
-    all_arrays = Map.empty (module Tn);
     global_arrays = Map.empty (module Tn);
     run_module = None;
   }
@@ -224,8 +193,8 @@ let is_idle device = Cudajit.stream_is_ready device.stream
 
 let%diagn_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context) tn
     =
-  match (Map.find ctx.all_arrays tn, Map.find ctx.global_arrays tn) with
-  | Some { tn = { Tn.array = (lazy (Some hosted)); _ }; _ }, Some dst ->
+  match (tn, Map.find ctx.global_arrays tn) with
+  | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
       set_ctx ctx.ctx;
       let f src = Cudajit.memcpy_H_to_D_async ~dst ~src ctx.device.stream in
       Ndarray.map { f } hosted;
@@ -239,8 +208,8 @@ let%diagn_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option)
 
 let%track_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context)
     (tn : Tn.t) =
-  match (Map.find ctx.all_arrays tn, Map.find ctx.global_arrays tn) with
-  | Some { tn = { Tn.array = (lazy (Some hosted)); _ }; _ }, Some src ->
+  match (tn, Map.find ctx.global_arrays tn) with
+  | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
       set_ctx ctx.ctx;
       let f dst = Cudajit.memcpy_D_to_H_async ~dst ~src ctx.device.stream in
       Ndarray.map { f } hosted;
@@ -311,354 +280,22 @@ let%track_sexp rec device_to_device ?(rt : (module Minidebug_runtime.Debug_runti
              [%log "copied into merge buffer", Tn.label tn, Tn.name tn, "from", src.label]);
           true)
 
-(* let pp_semi ppf () = Stdlib.Format.fprintf ppf ";@ " *)
-let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
-
-(* let pp_symbol ppf sym = Stdlib.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym *)
-let pp_index ppf sym = Stdlib.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym
-
-let pp_index_axis ppf = function
-  | Indexing.Iterator it -> pp_index ppf it
-  | Fixed_idx i -> Stdlib.Format.fprintf ppf "%d" i
-
-let pp_array_offset ppf (idcs, dims) =
-  let open Stdlib.Format in
-  assert (not @@ Array.is_empty idcs);
-  for _ = 0 to Array.length idcs - 3 do
-    fprintf ppf "@[<1>("
-  done;
-  for i = 0 to Array.length idcs - 1 do
-    let dim = dims.(i) in
-    if i = 0 then fprintf ppf "%a" pp_index_axis idcs.(i)
-    else if i = Array.length idcs - 1 then fprintf ppf " * %d +@ %a" dim pp_index_axis idcs.(i)
-    else fprintf ppf " * %d +@ %a@])" dim pp_index_axis idcs.(i)
-  done
-
-let array_offset_to_string (idcs, dims) =
-  let b = Buffer.create 32 in
-  let ppf = Stdlib.Format.formatter_of_buffer b in
-  pp_array_offset ppf (idcs, dims);
-  Stdlib.Format.pp_print_flush ppf ();
-  Buffer.contents b
-
-let get_run_ptr array =
-  match (array.global, array.local) with
-  | _, Some lv -> lv
-  | Some rv, _ -> rv
-  | None, None -> assert false
-
-let get_run_ptr_debug array =
-  match (array.global, array.local) with
-  | _, Some lv -> "local_" ^ lv
-  | Some rv, _ -> "global_" ^ rv
-  | None, None -> assert false
-
-(* let compute_array_offset ~idcs ~dims = Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim
-   -> idx + (offset * dim)) *)
-
-let%debug_sexp prepare_node traced_store info tn =
-  Hash_set.add info.used_tensors tn;
-  Hashtbl.update info.nodes tn ~f:(function
-    | Some old -> old
-    | None ->
-        (* let tn = Low_level.get_node traced_store v in *)
-        (* TODO: We will need tn to perform more refined optimizations. *)
-        let dims = Lazy.force tn.dims in
-        let is_on_host = Tn.is_hosted_force tn 31 in
-        let is_materialized = Tn.is_materialized_force tn 32 in
-        assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
-        let num_typ = Ops.cuda_typ_of_prec tn.prec in
-        let mem = if not is_materialized then Local_only else Global in
-        let global = if is_local_only mem then None else Some (Tn.name tn) in
-        let local = Option.some_if (is_local_only mem) @@ Tn.name tn ^ "_local" in
-        let backend_info = sexp_of_mem_properties mem in
-        if Utils.settings.with_debug_level > 0 then
-          [%log
-            "creating",
-              (tn.id : int),
-              Tn.label tn,
-              "mem",
-              (backend_info : Sexp.t),
-              "prec",
-              (tn.prec : Ops.prec),
-              "on-host",
-              (is_on_host : bool),
-              "is-global",
-              (Option.is_some global : bool)];
-        if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
-          tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
-        let zero_initialized = (Hashtbl.find_exn traced_store tn).Low_level.zero_initialized in
-        { tn; local; mem; dims; num_typ; global; zero_initialized })
-
-let compile_main traced_store info ppf llc : unit =
-  let open Stdlib.Format in
-  let get_node = Hashtbl.find_exn info.nodes in
-  let visited = Hash_set.create (module Tn) in
-  let rec pp_ll ppf c : unit =
-    match c with
-    | Low_level.Noop -> ()
-    | Seq (c1, c2) ->
-        (* Note: no separator. Filter out some entries known to not generate code to avoid
-           whitespace. *)
-        fprintf ppf "@[<v 0>%a@]" (pp_print_list pp_ll)
-          (List.filter [ c1; c2 ] ~f:(function
-            | Noop -> false
-            | Zero_out ptr -> not Low_level.(get_node traced_store ptr).zero_initialized
-            | _ -> true))
-    | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-        fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@]@ }@," pp_index i from_
-          pp_index i to_ pp_index i pp_ll body
-    | Zero_out tn ->
-        if Hash_set.mem visited tn then
-          pp_ll ppf
-          @@ Low_level.loop_over_dims (Lazy.force tn.dims) ~body:(fun idcs ->
-                 Set { tn; idcs; llv = Constant 0.0; debug = "zero_out" })
-        else
-          let traced = Low_level.(get_node traced_store tn) in
-          assert traced.zero_initialized (* The initialization will be emitted by prepare_node. *)
-    | Set { tn; idcs; llv; debug } ->
-        Hash_set.add visited tn;
-        let node = get_node tn in
-        let loop_f = pp_float ~num_typ:node.num_typ tn.prec in
-        let loop_debug_f = debug_float ~num_typ:node.num_typ tn.prec in
-        let num_closing_braces = pp_top_locals ppf llv in
-        let num_typ = Ops.cuda_typ_of_prec tn.prec in
-        if Utils.settings.debug_log_from_routines then (
-          fprintf ppf "@[<2>{@ @[<2>%s new_set_v =@ %a;@]@ " num_typ loop_f llv;
-          let v_code, v_idcs = loop_debug_f llv in
-          let pp_args =
-            pp_print_list @@ fun ppf -> function
-            | `Accessor idx ->
-                pp_comma ppf ();
-                pp_array_offset ppf idx
-            | `Value v ->
-                pp_comma ppf ();
-                pp_print_string ppf v
-          in
-          let run_ptr_debug = get_run_ptr_debug node in
-          let run_ptr = get_run_ptr node in
-          let offset = (idcs, node.dims) in
-          let debug_line =
-            "# " ^ String.substr_replace_all debug ~pattern:"\n" ~with_:"$" ^ "\\n"
-          in
-          fprintf ppf
-            "@ @[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(\"%%d: %s\", \
-             log_id);@ printf(@[<h>\"%%d: %s[%%u] = %%f = %s\\n\"@], log_id,@ %a,@ %s[%a]%a);@ @]}"
-            debug_line run_ptr_debug v_code pp_array_offset offset run_ptr pp_array_offset offset
-            pp_args v_idcs;
-          fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@ " (get_run_ptr node) pp_array_offset
-            (idcs, node.dims))
-        else
-          (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
-          fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " (get_run_ptr node) pp_array_offset
-            (idcs, node.dims) loop_f llv;
-        for _ = 1 to num_closing_braces do
-          fprintf ppf "@]@ }@,"
-        done
-    | Comment message ->
-        if Utils.settings.debug_log_from_routines then
-          fprintf ppf
-            "@[<2>if @[<2>(threadIdx.x == 0 && blockIdx.x == 0@]) {@ printf(@[<h>\"%%d: COMMENT: \
-             %s\\n\", log_id@]);@ @]}"
-            (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
-        else fprintf ppf "/* %s */@ " message
-    | Staged_compilation callback -> callback ()
-    | Set_local (Low_level.{ scope_id; tn = { prec; _ } }, value) ->
-        let num_typ = Ops.cuda_typ_of_prec prec in
-        let num_closing_braces = pp_top_locals ppf value in
-        fprintf ppf "@[<2>v%d =@ %a;@]" scope_id (pp_float ~num_typ prec) value;
-        for _ = 1 to num_closing_braces do
-          fprintf ppf "@]@ }@,"
-        done
-  and pp_top_locals ppf (vcomp : Low_level.float_t) : int =
-    match vcomp with
-    | Local_scope { id = { scope_id = i; tn = { prec; _ } }; body; orig_indices = _ } ->
-        let num_typ = Ops.cuda_typ_of_prec prec in
-        (* Arrays are initialized to 0 by default. However, there is typically an explicit
-           initialization for virtual nodes. *)
-        fprintf ppf "@[<2>{@ %s v%d = 0;@ " num_typ i;
-        pp_ll ppf body;
-        pp_print_space ppf ();
-        1
-    | Get_local _ | Get_global _ | Get _ | Constant _ | Embed_index _ -> 0
-    | Binop (Arg1, v1, _v2) -> pp_top_locals ppf v1
-    | Binop (Arg2, _v1, v2) -> pp_top_locals ppf v2
-    | Binop (_, v1, v2) -> pp_top_locals ppf v1 + pp_top_locals ppf v2
-    | Unop (_, v) -> pp_top_locals ppf v
-  and pp_float ~num_typ prec ppf value =
-    let loop = pp_float ~num_typ prec in
-    match value with
-    | Local_scope { id; _ } ->
-        (* Embedding of Local_scope is done by pp_top_locals. *)
-        loop ppf @@ Get_local id
-    | Get_local id ->
-        let get_typ = Ops.cuda_typ_of_prec id.tn.prec in
-        if not @@ String.equal num_typ get_typ then fprintf ppf "(%s)" num_typ;
-        fprintf ppf "v%d" id.scope_id
-    | Get_global (Merge_buffer { source_node_id }, Some idcs) ->
-        let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
-        fprintf ppf "@[<2>merge_buffer[%a@]]" pp_array_offset (idcs, Lazy.force tn.dims)
-    | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
-    | Get (tn, idcs) ->
-        Hash_set.add visited tn;
-        let node = get_node tn in
-        fprintf ppf "@[<2>%s[%a@]]" (get_run_ptr node) pp_array_offset (idcs, node.dims)
-    | Constant c -> fprintf ppf "(%f)" c
-    | Embed_index idx ->
-        if not @@ List.exists ~f:(String.equal num_typ) [ "int"; "size_t" ] then
-          fprintf ppf "(%s)" num_typ;
-        pp_index_axis ppf idx
-    | Binop (Arg1, v1, _v2) -> loop ppf v1
-    | Binop (Arg2, _v1, v2) -> loop ppf v2
-    | Binop (op, v1, v2) ->
-        let prefix, infix, postfix = Ops.binop_C_syntax prec op in
-        fprintf ppf "@[<1>%s%a%s@ %a@]%s" prefix loop v1 infix loop v2 postfix
-    | Unop (Identity, v) -> loop ppf v
-    | Unop (Relu, v) ->
-        (* FIXME: don't recompute v *)
-        fprintf ppf "@[<1>(%a > 0.0 ?@ %a : 0.0@])" loop v loop v
-  and debug_float ~num_typ prec (value : Low_level.float_t) : string * 'a list =
-    let loop = debug_float ~num_typ prec in
-    match value with
-    | Local_scope { id; _ } ->
-        (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug
-           logs. *)
-        loop @@ Get_local id
-    | Get_local id ->
-        let get_typ = Ops.cuda_typ_of_prec id.tn.prec in
-        let v =
-          (if not @@ String.equal num_typ get_typ then "(" ^ num_typ ^ ")" else "")
-          ^ "v" ^ Int.to_string id.scope_id
-        in
-        (v ^ "{=%f}", [ `Value v ])
-    | Get_global (Merge_buffer { source_node_id }, Some idcs) ->
-        let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
-        let v =
-          sprintf "@[<2>merge_buffer[%s@]]" (array_offset_to_string (idcs, Lazy.force tn.dims))
-        in
-        ( "merge " ^ Tn.get_debug_name tn ^ "[%u]{=%f}",
-          [ `Accessor (idcs, Lazy.force tn.dims); `Value v ] )
-    | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
-    | Get (tn, idcs) ->
-        let node = get_node tn in
-        let v =
-          sprintf "@[<2>%s[%s@]]" (get_run_ptr node) (array_offset_to_string (idcs, node.dims))
-        in
-        (get_run_ptr_debug node ^ "[%u]{=%f}", [ `Accessor (idcs, node.dims); `Value v ])
-    | Constant c -> (Float.to_string c, [])
-    | Embed_index (Fixed_idx i) -> (Int.to_string i, [])
-    | Embed_index (Iterator s) -> (Indexing.symbol_ident s, [])
-    | Binop (Arg1, v1, _v2) -> loop v1
-    | Binop (Arg2, _v1, v2) -> loop v2
-    | Binop (op, v1, v2) ->
-        let prefix, infix, postfix = Ops.binop_C_syntax prec op in
-        let v1, idcs1 = loop v1 in
-        let v2, idcs2 = loop v2 in
-        (String.concat [ prefix; v1; infix; " "; v2; postfix ], idcs1 @ idcs2)
-    | Unop (Identity, v) -> loop v
-    | Unop (Relu, v) ->
-        let v, idcs = loop v in
-        (String.concat [ "("; v; " > 0.0 ? "; v; " : 0.0)" ], idcs @ idcs)
-  in
-  pp_ll ppf llc
-
-let prepare_nodes traced_store info (llc : Low_level.t) =
-  let prepare_node = prepare_node traced_store info in
-  let rec loop llc =
-    match llc with
-    | Low_level.Noop | Low_level.Comment _ | Low_level.Staged_compilation _ -> ()
-    | Low_level.Seq (c1, c2) ->
-        loop c1;
-        loop c2
-    | Low_level.For_loop { body; _ } -> loop body
-    | Low_level.Zero_out tn -> prepare_node tn
-    | Low_level.Set { tn; llv; _ } ->
-        prepare_node tn;
-        loop_float llv
-    | Low_level.Set_local (_, llv) -> loop_float llv
-  and loop_float llv =
-    match llv with
-    | Low_level.Local_scope { body; _ } -> loop body
-    | Low_level.Get_local _ | Low_level.Get_global (_, _) -> ()
-    | Low_level.Get (tn, _) -> prepare_node tn
-    | Low_level.Binop (_, v1, v2) ->
-        loop_float v1;
-        loop_float v2
-    | Low_level.Unop (_, v) -> loop_float v
-    | Low_level.Constant _ | Low_level.Embed_index _ -> ()
-  in
-  loop llc
-
 type code = {
+  traced_store : Low_level.traced_store;
   ptx : (Cudajit.compile_to_ptx_result[@sexp.opaque]);
-  info : info_nodes;
+  params : (string * param_source) list;
   bindings : Indexing.unit_bindings;
   name : string;
 }
 [@@deriving sexp_of]
 
 type code_batch = {
+  traced_stores : Low_level.traced_store option array;
   ptx : (Cudajit.compile_to_ptx_result[@sexp.opaque]);
-  infos : info_nodes option array;
   bindings : Indexing.unit_bindings;
-  names : string option array;
+  params_and_names : ((string * param_source) list * string) option array;
 }
 [@@deriving sexp_of]
-
-let%track_sexp compile_proc ~name ~get_ident ppf idx_params
-    Low_level.{ traced_store; llc; merge_node } =
-  let open Stdlib.Format in
-  let info =
-    {
-      nodes = Hashtbl.create (module Tn);
-      used_tensors = Hash_set.create (module Tn);
-      get_ident;
-      uses_merge_buffer = Option.is_some merge_node;
-    }
-  in
-  prepare_nodes traced_store info llc;
-  let arrays = Hash_set.to_list info.used_tensors in
-  let params =
-    List.filter_map arrays ~f:(fun tn ->
-        let node = Hashtbl.find_exn info.nodes tn in
-        if Utils.settings.with_debug_level > 0 then
-          [%log "array-used:", (tn : Tn.t), Tn.label tn, (node.mem : mem_properties)];
-        match node.mem with
-        | Local_only -> None
-        | Global -> Option.map node.global ~f:(fun n -> node.num_typ ^ " *" ^ n))
-  in
-  let idx_params =
-    List.map idx_params ~f:(fun { Indexing.static_symbol; _ } ->
-        "int " ^ Indexing.symbol_ident static_symbol)
-  in
-  let merge_buffer_param =
-    Option.to_list merge_node
-    |> List.map ~f:(fun tn -> Ops.cuda_typ_of_prec tn.prec ^ " *merge_buffer")
-  in
-  let log_id = if Utils.settings.debug_log_from_routines then [ "int log_id" ] else [] in
-  fprintf ppf "extern \"C\" __global__ void %s(%a) {@," name
-    (pp_print_list ~pp_sep:pp_comma pp_print_string)
-  @@ log_id @ merge_buffer_param @ idx_params @ params;
-  fprintf ppf
-    "/* FIXME: single-threaded for now. */@,if (threadIdx.x != 0 || blockIdx.x != 0) { return; }@ ";
-  (* TODO: The following link seems to claim it's better to expand into loops.
-     https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
-  fprintf ppf "/* Thread-local declarations and initialization. */@,";
-  List.iter arrays ~f:(fun tn ->
-      let node = Hashtbl.find_exn info.nodes tn in
-      match node.mem with
-      | Local_only ->
-          Option.iter node.local ~f:(fun t_name ->
-              fprintf ppf "%s %s[%d]%s;@," node.num_typ t_name (Tn.num_elems tn)
-                (if (Hashtbl.find_exn traced_store tn).zero_initialized then " = {0}" else ""))
-      | Global when node.zero_initialized ->
-          Option.iter node.global ~f:(fun t_name ->
-              Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " t_name (Tn.size_in_bytes tn))
-      | _ -> ());
-  fprintf ppf "/* Main logic. */@,";
-  compile_main traced_store info ppf llc;
-  fprintf ppf "@,}@.";
-  info
 
 let%diagn_sexp cuda_to_ptx ~name cu_src =
   let f_name = name ^ "-cudajit-debug" in
@@ -685,31 +322,64 @@ let%diagn_sexp cuda_to_ptx ~name cu_src =
     Stdio.Out_channel.close oc);
   ptx
 
-let compile ?name bindings ({ Low_level.llc; _ } as lowered) =
-  let get_ident = Low_level.get_ident_within_code ~no_dots:true [| llc |] in
-  let name : string =
-    Option.value_or_thunk name ~default:(fun () -> Low_level.extract_block_name [ llc ])
-  in
+let is_in_context node =
+  Tnode.default_to_most_local node.Low_level.tn 33;
+  match node.tn.memory_mode with Some ((Virtual | Local), _) -> false | _ -> true
+
+let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
+  (* TODO: The following link seems to claim it's better to expand into loops than use memset.
+     https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
+  let module Syntax = Backend_utils.C_syntax (struct
+    let for_lowereds = [| lowered |]
+
+    type nonrec ctx_array = buffer_ptr
+
+    let opt_ctx_arrays = None
+    let hardcoded_context_ptr = None
+    let is_in_context = is_in_context
+    let host_ptrs_for_readonly = true
+    let logs_to_stdout = false
+    let main_kernel_prefix = "extern \"C\" __global__"
+
+    let kernel_prep_line =
+      "/* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"
+  end) in
   let idx_params = Indexing.bound_symbols bindings in
   let b = Buffer.create 4096 in
   let ppf = Stdlib.Format.formatter_of_buffer b in
   if Utils.settings.debug_log_from_routines then
     Stdlib.Format.fprintf ppf "@,__device__ int printf (const char * format, ... );@,";
-  let info = compile_proc ~name ~get_ident ppf idx_params lowered in
+  let is_global = Hash_set.create (module Tn) in
+  let params = Syntax.compile_proc ~name ~is_global ppf idx_params lowered in
   let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
-  { ptx; info; bindings; name }
+  { traced_store; ptx; params; bindings; name }
 
 let compile_batch ~names bindings lowereds =
-  let get_ident =
-    Low_level.get_ident_within_code ~no_dots:true
-    @@ Array.filter_map lowereds ~f:(Option.map ~f:(fun { Low_level.llc; _ } -> llc))
-  in
+  let for_lowereds = Array.filter_map ~f:Fn.id lowereds in
+  let module Syntax = Backend_utils.C_syntax (struct
+    let for_lowereds = for_lowereds
+
+    type nonrec ctx_array = buffer_ptr
+
+    let opt_ctx_arrays = None
+    let hardcoded_context_ptr = None
+    let is_in_context = is_in_context
+    let host_ptrs_for_readonly = true
+    let logs_to_stdout = false
+    let main_kernel_prefix = "extern \"C\" __global__"
+
+    let kernel_prep_line =
+      "/* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"
+  end) in
   let idx_params = Indexing.bound_symbols bindings in
   let b = Buffer.create 4096 in
   let ppf = Stdlib.Format.formatter_of_buffer b in
-  let infos =
+  let is_global = Hash_set.create (module Tn) in
+  let params_and_names =
     Array.map2_exn names lowereds
-      ~f:(Option.map2 ~f:(fun name lowered -> compile_proc ~name ~get_ident ppf idx_params lowered))
+      ~f:
+        (Option.map2 ~f:(fun name lowered ->
+             (Syntax.compile_proc ~name ~is_global ppf idx_params lowered, name)))
   in
   let name : string =
     String.(
@@ -717,7 +387,8 @@ let compile_batch ~names bindings lowereds =
       @@ common_prefix (Array.to_list names |> List.concat_map ~f:Option.to_list))
   in
   let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
-  { ptx; infos; bindings; names }
+  let traced_stores = Array.map lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store)) in
+  { traced_stores; ptx; params_and_names; bindings }
 
 let get_global_run_id =
   let next_id = ref 0 in
@@ -726,62 +397,53 @@ let get_global_run_id =
     if !next_id < 0 then next_id := 0;
     !next_id
 
-let link_proc ~old_context ~name ~all_arrays ~global_arrays ~idx_args ~info run_module =
+let link_proc ~old_context ~name ~params ~global_arrays lowered_bindings run_module =
   let module Cu = Cudajit in
   let func = Cu.module_get_function run_module ~name in
-  let context = { old_context with run_module = Some run_module; global_arrays; all_arrays } in
+  let context = { old_context with run_module = Some run_module; global_arrays } in
   let%diagn_rt_sexp work () : unit =
     let log_id = get_global_run_id () in
     let log_id_prefix = Int.to_string log_id ^ ": " in
     [%log_result "Launching", name, context.label, (log_id : int)];
     let module Cu = Cudajit in
-    let log_arg = if Utils.settings.debug_log_from_routines then [ Cu.Int log_id ] else [] in
-    let merge_arg =
-      match (info.uses_merge_buffer, context.device.merge_buffer) with
-      | true, Some ptr -> [ Cu.Tensor ptr ]
-      | false, _ -> []
-      | true, None ->
-          raise @@ Utils.User_error "Cuda_backend.link: copy into merge buffer before calling"
-    in
-    let idx_args =
-      List.map idx_args ~f:(fun ({ Indexing.static_symbol; static_range }, i) ->
-          if !i < 0 then
-            raise
-            @@ Utils.User_error
-                 [%string
-                   "Exec_as_cuda: static index %{Indexing.symbol_ident static_symbol} is negative: \
-                    %{!i#Int}"];
-          Option.iter static_range ~f:(fun upto ->
-              if !i >= upto then
-                raise
-                @@ Utils.User_error
-                     [%string
-                       "Exec_as_cuda: static index %{Indexing.symbol_ident static_symbol} is too \
-                        big: %{upto#Int}"]);
-          Cu.Int !i)
-    in
     let args =
-      (* TODO: should we prohibit or warn about Local_only tensors that are in
+      (* TODO: should we prohibit or warn about local-only tensors that are in
          old_context.global_arrays? *)
-      let arrays = Hash_set.to_list info.used_tensors in
-      List.filter_map arrays ~f:(fun tn ->
-          let node = Hashtbl.find_exn info.nodes tn in
-          match (node.mem, node.global, Map.find global_arrays tn) with
-          | Global, Some _, Some ptr -> Some (Cu.Tensor ptr)
-          | _ -> None)
+      List.map params ~f:(function
+        | _name, Param_ptr tn ->
+            let ptr = Option.value_exn ~here:[%here] @@ Map.find global_arrays tn in
+            Cu.Tensor ptr
+        | _name, Log_file_name -> Cu.Int log_id
+        | _name, Merge_buffer ->
+            let ptr = fst @@ Option.value_exn ~here:[%here] context.device.merge_buffer in
+            Cu.Tensor ptr
+        | _name, Static_idx s ->
+            let i = Indexing.find_exn lowered_bindings s in
+            if !i < 0 then
+              raise
+              @@ Utils.User_error
+                   [%string
+                     "cuda: static index %{Indexing.symbol_ident s.static_symbol} is negative: \
+                      %{!i#Int}"];
+            Option.iter s.static_range ~f:(fun upto ->
+                if !i >= upto then
+                  raise
+                  @@ Utils.User_error
+                       [%string
+                         "cuda: static index %{Indexing.symbol_ident s.static_symbol} is too big: \
+                          %{upto#Int}"]);
+            Cu.Int !i)
     in
-    [%log "zeroing-out global memory"];
+
     set_ctx context.ctx;
-    Map.iteri global_arrays ~f:(fun ~key ~data:ptr ->
-        if Hash_set.mem info.used_tensors key then
-          let node = Map.find_exn all_arrays key in
-          if node.zero_initialized then
-            Cu.memset_d8 ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key));
+    (* FIXME: this happens inside the kernel. *)
+    (* Map.iteri global_arrays ~f:(fun ~key ~data:ptr -> if key.Low_level.zero_initialized then
+       Cu.memset_d8_async ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key.Low_level.tn)); *)
     [%log "launching the kernel"];
     (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE
        4096; *)
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.device.stream
-    @@ log_arg @ merge_arg @ idx_args @ args;
+      args;
     [%log "kernel launched"];
     if Utils.settings.debug_log_from_routines then
       let postprocess_logs ~output =
@@ -796,56 +458,57 @@ let link_proc ~old_context ~name ~all_arrays ~global_arrays ~idx_args ~info run_
   (context, { Tn.description = "launches " ^ name ^ " on " ^ context.label; work })
 
 let%diagn_sexp link old_context (code : code) =
-  let all_arrays = Map.of_alist_exn (module Tn) @@ Hashtbl.to_alist code.info.nodes in
   let module Cu = Cudajit in
   let ctx = old_context.ctx in
   set_ctx ctx;
   let global_arrays =
-    Hashtbl.fold ~init:old_context.global_arrays code.info.nodes ~f:(fun ~key ~data:node globals ->
-        Option.value_map ~default:globals node.global ~f:(fun _name ->
-            if Utils.settings.with_debug_level > 0 then [%log "mem_alloc", _name];
-            set_ctx ctx;
-            let ptr () = Cu.mem_alloc ~size_in_bytes:(Tn.size_in_bytes node.tn) in
-            Map.update globals key ~f:(fun old -> Option.value_or_thunk old ~default:ptr)))
+    Hashtbl.fold ~init:old_context.global_arrays code.traced_store
+      ~f:(fun ~key ~data:node globals ->
+        if is_in_context node then (
+          if Utils.settings.with_debug_level > 0 then [%log "mem_alloc", Tn.get_debug_name node.tn];
+          set_ctx ctx;
+          let ptr () = Cu.mem_alloc ~size_in_bytes:(Tn.size_in_bytes node.tn) in
+          Map.update globals key ~f:(fun old -> Option.value_or_thunk old ~default:ptr))
+        else globals)
   in
   let run_module = Cu.module_load_data_ex code.ptx [] in
   let idx_params = Indexing.bound_symbols code.bindings in
-  let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
+  let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let context, task =
-    link_proc ~old_context ~name:code.name ~all_arrays ~global_arrays ~idx_args ~info:code.info
+    link_proc ~old_context ~name:code.name ~params:code.params ~global_arrays lowered_bindings
       run_module
   in
-  (context, idx_args, task)
+  (context, lowered_bindings, task)
 
 let%track_sexp link_batch old_context (code_batch : code_batch) =
   let idx_params = Indexing.bound_symbols code_batch.bindings in
-  let idx_args = List.map idx_params ~f:(fun s -> (s, ref 0)) in
+  let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let module Cu = Cudajit in
   let ctx = old_context.ctx in
   set_ctx ctx;
   let run_module = Cu.module_load_data_ex code_batch.ptx [] in
   let (context, _global_arrays), procs =
-    Array.fold_mapi code_batch.infos ~init:(old_context, old_context.global_arrays)
-      ~f:(fun i (context, global_arrays) info ->
+    Array.fold_mapi code_batch.params_and_names ~init:(old_context, old_context.global_arrays)
+      ~f:(fun i (context, global_arrays) pns ->
         Option.value ~default:((context, global_arrays), None)
-        @@ Option.map2 info code_batch.names.(i) ~f:(fun info name ->
-               let all_arrays = Map.of_alist_exn (module Tn) @@ Hashtbl.to_alist info.nodes in
+        @@ Option.map2 pns code_batch.traced_stores.(i) ~f:(fun (params, name) traced_store ->
                let global_arrays =
-                 Hashtbl.fold ~init:global_arrays info.nodes ~f:(fun ~key ~data:node globals ->
-                     Option.value_map ~default:globals node.global ~f:(fun _name ->
-                         if Utils.settings.with_debug_level > 0 then [%log "mem_alloc", _name];
-                         set_ctx ctx;
-                         let ptr () = Cu.mem_alloc ~size_in_bytes:(Tn.size_in_bytes node.tn) in
-                         Map.update globals key ~f:(fun old ->
-                             Option.value_or_thunk old ~default:ptr)))
+                 Hashtbl.fold ~init:global_arrays traced_store ~f:(fun ~key ~data:node globals ->
+                     if is_in_context node then (
+                       if Utils.settings.with_debug_level > 0 then
+                         [%log "mem_alloc", Tn.get_debug_name key];
+                       set_ctx ctx;
+                       let ptr () = Cu.mem_alloc ~size_in_bytes:(Tn.size_in_bytes node.tn) in
+                       Map.update globals key ~f:(fun old -> Option.value_or_thunk old ~default:ptr))
+                     else globals)
                in
                let context, task =
-                 link_proc ~old_context:context ~name ~all_arrays ~global_arrays ~idx_args ~info
+                 link_proc ~old_context:context ~name ~params ~global_arrays lowered_bindings
                    run_module
                in
                ((context, global_arrays), Some task)))
   in
-  (context, idx_args, procs)
+  (context, lowered_bindings, procs)
 
 (** {[
       let link_batch { ctx; device; expected_merge_node } (code_batch : code_batch) =
