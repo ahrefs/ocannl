@@ -43,11 +43,14 @@ module type No_device_backend = sig
       execution, but there can be backend-specific differences. Only array entries for which
       [occupancy] returns true are included. *)
 
-  val link : merge_buffer:buffer_ptr option ref -> context -> code -> routine
+  val link : merge_buffer:(buffer_ptr * Tnode.t) option ref -> context -> code -> routine
   (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
 
   val link_batch :
-    merge_buffer:buffer_ptr option ref -> context -> code_batch -> context * routine option array
+    merge_buffer:(buffer_ptr * Tnode.t) option ref ->
+    context ->
+    code_batch ->
+    context * routine option array
   (** Returns the routines for the procedures included in the code batch. The returned context is
       downstream of all the returned routines (in particular, the routines' contexts are not
       independent). *)
@@ -169,8 +172,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   type device = {
     state : device_state;
     host_wait_for_idle : (Utils.waiter[@sexp.opaque]);
-    merge_buffer_ptr : buffer_ptr option ref;
-    (* mutable *) merge_node : Tnode.t option;
+    merge_buffer : (buffer_ptr * Tnode.t) option ref;
     mutable allocated_buffer : (buffer_ptr * int) option;
     ordinal : int;
     domain : (unit Domain.t[@sexp.opaque]);
@@ -268,8 +270,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       host_wait_for_idle;
       ordinal;
       domain = Domain.spawn (worker debug_runtime);
-      merge_buffer_ptr = ref None;
-      merge_node = None;
+      merge_buffer = ref None;
       allocated_buffer = None;
     }
 
@@ -305,7 +306,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let compile_batch = Backend.compile_batch
 
   let link { ctx; device; expected_merge_node = _ } (code : code) =
-    let task = Backend.link ~merge_buffer:device.merge_buffer_ptr ctx code in
+    let task = Backend.link ~merge_buffer:device.merge_buffer ctx code in
     {
       task with
       context =
@@ -314,7 +315,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     }
 
   let link_batch { ctx; device; expected_merge_node } (code_batch : code_batch) =
-    let ctx, routines = Backend.link_batch ~merge_buffer:device.merge_buffer_ptr ctx code_batch in
+    let ctx, routines = Backend.link_batch ~merge_buffer:device.merge_buffer ctx code_batch in
     let merge_nodes = Backend.expected_merge_nodes code_batch in
     ( { ctx; device; expected_merge_node },
       Array.mapi routines ~f:(fun i ->
@@ -422,7 +423,10 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       let work =
         match into_merge_buffer with
         | No -> fun rt () -> Backend.to_buffer ~rt tn ~dst ~src:src.ctx
-        | Streaming -> fun _rt () -> dev.merge_buffer_ptr := Backend.get_buffer tn src.ctx
+        | Streaming ->
+            fun _rt () ->
+              dev.merge_buffer :=
+                Option.map ~f:(fun ptr -> (ptr, tn)) @@ Backend.get_buffer tn src.ctx
         | Copy ->
             fun rt () ->
               let size_in_bytes = Tnode.size_in_bytes tn in
@@ -434,10 +438,9 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                   Some
                     ( Backend.alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes (),
                       size_in_bytes );
-              dev.merge_buffer_ptr := Option.map ~f:fst dev.allocated_buffer;
-              Backend.to_buffer ~rt tn
-                ~dst:(Option.value_exn ~here:[%here] !(dev.merge_buffer_ptr))
-                ~src:src.ctx
+              let merge_ptr = fst @@ Option.value_exn dev.allocated_buffer in
+              dev.merge_buffer := Some (merge_ptr, tn);
+              Backend.to_buffer ~rt tn ~dst:merge_ptr ~src:src.ctx
       in
       schedule_task dev
         Tnode.
@@ -545,7 +548,7 @@ module type Simple_backend = sig
     ctx_arrays option * procedure option array
 
   val link_compiled :
-    merge_buffer:buffer_ptr option ref ->
+    merge_buffer:(buffer_ptr * Tnode.t) option ref ->
     context ->
     procedure ->
     context * Indexing.lowered_bindings * Tnode.task * string

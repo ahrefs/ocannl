@@ -252,7 +252,8 @@ let%track_sexp link_compiled ~merge_buffer (old_context : context) (code : proce
         | bs, Log_file_name :: ps ->
             Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Merge_buffer :: ps ->
-            Param_2f (Ndarray.get_voidptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
+            let get_ptr (buffer, _) = Ndarray.get_voidptr buffer in
+            Param_2f (get_ptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
         | bs, Param_ptr tn :: ps ->
             let nd = match Map.find arrays tn with Some nd -> nd | None -> assert false in
             (* let f ba = Ctypes.bigarray_start Ctypes_static.Genarray ba in let c_ptr =
@@ -268,6 +269,7 @@ let%track_sexp link_compiled ~merge_buffer (old_context : context) (code : proce
   in
   let%diagn_rt_sexp work () : unit =
     [%log_result name];
+    Backend_utils.check_merge_buffer ~merge_buffer ~code_node:code.lowered.merge_node;
     Indexing.apply run_variadic ();
     if Utils.settings.debug_log_from_routines then (
       Utils.log_trace_tree _debug_runtime (Stdio.In_channel.read_lines log_file_name);

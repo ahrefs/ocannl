@@ -47,7 +47,7 @@ and device = {
   stream : (Cudajit.stream[@sexp.opaque]);
   subordinal : int;
   mutable postprocess_queue : (context * (output:string list -> unit)) list;
-  mutable merge_buffer : buffer_ptr option;
+  mutable merge_buffer : (buffer_ptr * Tn.t) option;
 }
 
 and context = {
@@ -286,7 +286,7 @@ let%track_sexp rec device_to_device ?(rt : (module Minidebug_runtime.Debug_runti
               true)
       | Streaming ->
           if phys_equal dst.device.physical src.device.physical then (
-            dst.device.merge_buffer <- Some s_arr;
+            dst.device.merge_buffer <- Some (s_arr, tn);
             (if Utils.settings.with_debug_level > 0 then
                let module Debug_runtime =
                  (val Option.value_or_thunk rt ~default:(fun () ->
@@ -302,7 +302,7 @@ let%track_sexp rec device_to_device ?(rt : (module Minidebug_runtime.Debug_runti
           let size_in_bytes = Tn.size_in_bytes tn in
           opt_alloc_merge_buffer ~size_in_bytes dst.device.physical;
           memcpy ~d_arr:dst.device.physical.copy_merge_buffer ~s_arr;
-          dst.device.merge_buffer <- Some dst.device.physical.copy_merge_buffer;
+          dst.device.merge_buffer <- Some (dst.device.physical.copy_merge_buffer, tn);
           (if Utils.settings.with_debug_level > 0 then
              let module Debug_runtime =
                (val Option.value_or_thunk rt ~default:(fun () ->
