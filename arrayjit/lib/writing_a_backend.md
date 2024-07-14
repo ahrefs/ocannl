@@ -16,7 +16,7 @@
 
 ## Design around compiling and running code, backend interfaces
 
-Currently, OCANNL integrates new backends via code in [backends.ml](backends.ml). `Backends` introduces the context-specific `routine` type, and has a helper `lower_assignments` that wraps `Assignments.lower` and `Low_level.optimize_proc`. The interface to a `Backend` has `compile` functions, to allow some backends handle assignments directly, instead of using the optimized C-like representation `Low_level.t`.
+Currently, OCANNL integrates new backends via code in [Backends](backends.ml), so it's the "sink" of backend module dependencies; [Backend_utils](backend_utils.ml) is the "source". `Backend_utils.Types` introduces the context-specific `routine` type, for code executable on a backend. The interface `Backends.No_device_backend` has `compile` functions that take `Assignments.t` as input, to allow full flexibility in backend implementations. There is a helper `Backends.lower_assignments` that wraps `Assignments.lower` and `Low_level.optimize_proc`, since currently all backends use the optimized C-like representation `Low_level.t`. The user-facing interface `Backends.Backend` builds on top of `No_device_backend` providing multi-device functionality. The functor `Multicore_backend` converts a `No_device_backend` targetting the CPU into a `Backend` whose devices are parallel threads (and ultimately the CPU cores).
 
 ```ocaml
 type lowered_bindings = (static_symbol, int ref) List.Assoc.t  (* in indexing.ml *)
@@ -28,14 +28,14 @@ type 'context routine = {
   schedule : task;
   bindings : lowered_bindings;
   name : string;
-}
+}  (* in backend_utils.ml *)
 
 module type No_device_backend = sig
   type code
   type context
   type nonrec routine = context routine
   ...
-end
+end  (* in backends.ml *)
 ```
 
 Backends need to provide the `code` (for compilation result) and `context` types. `code` is some intermediate state between assignments and `context routine`. A backend may postpone doing anything specific until linking, e.g. `code = Low_level.optimized`, or linking may be a no-op, effectively `code = routine`, usually it will fall somewhere in between and depend on whether `~shared:true` is passed. For simple situations like CPU backends, `Backends` has a helper functor:
@@ -88,7 +88,7 @@ When devices natively implement a lightweight threads mechanism, as CUDA does vi
 
 Shared (relocatable) compilation, with `~shared:true`, improves compilation efficiency, because code can be compiled once for use on multiple devices (in multiple contexts). It also improves debugging convenience, by generating fewer debugging artifacts. A potential downside is slightly less efficient computations.
 
-Batched compilation has similar benefits, especially in producing fewer debugging artifacts. The compilation might also be slightly more efficient since the compiler needs to be invoked fewer times. While `~shared:true` compilation saves (more) total work by compiling _one routine for many devices_, batched compilation and linking saves a bit of work by compiling _many routines for one device_ at once.
+Batched compilation has similar benefits, especially in producing fewer debugging artifacts. The compilation might also be slightly more efficient since the compiler needs to be invoked fewer times. While `~shared:true` compiles _one routine for many devices_, batched compilation and linking process _many routines for one device_ at once.
 
 ## Tensor nodes, arrays, memory properties
 
@@ -123,7 +123,7 @@ type memory_mode =
 
  `Tnode.update_memory_mode` verifies consistency of the updates of these modes. Currently, these properties are only either set explicitly (directly or indirectly) by the user, or determined by the `Low_level` analysis and optimization process. Since backends can have full control of the optimizations, in the future determining the memory mode can also be backend-specific.
 
-Backends also have their specific memory classes for how arrays are stored. These are needed because, for example, `Hosted` does not precisely specify the places where the memory of an array is allocated, and a backend itself can have multiple ways of string an array on devices. And the distinction between `On_device` and `Hosted` may not be relevant for how arrays are manipulated on the backend (except for the behavior of `to_host`, `from_host`). Moreover, the memory classes used by a backend can evolve as the backend becomes more sophisticated. CPU backends use:
+Backends might have their specific classification of how arrays are stored. For example, `Hosted` does not precisely specify the places where the memory of an array is allocated, and a backend can have multiple ways of storing an array on devices. And the distinction between `On_device` and `Hosted` may not be relevant for how arrays are manipulated on the backend (except for the behavior of `to_host`, `from_host`). The GCCJIT backend expresses the memory classes explicitly:
 
 ```ocaml
 type mem_properties =
@@ -132,16 +132,37 @@ type mem_properties =
   | Constant_from_host  (** The array is read directly from the host. *)
 ```
 
-and our initial, naive CUDA backend uses:
+while the CC and CUDA backends do it implicitly via the input to the `Backend_utils.C_syntax` functor:
 
 ```ocaml
-type mem_properties =
-  | Local_only
-      (** The array is only needed for a single computation and is allocated locally (or spilled). *)
-  | Global  (** Could not perform optimizations: the array is computed directly in the global memory. *)
+module C_syntax (B : sig
+  val for_lowereds : Low_level.optimized array
+
+  type ctx_array
+
+  val opt_ctx_arrays : ctx_array Map.M(Tnode).t option
+  val hardcoded_context_ptr : (ctx_array -> string) option
+  val is_in_context : Low_level.traced_array -> bool
+  val host_ptrs_for_readonly : bool
+  val logs_to_stdout : bool
+  val main_kernel_prefix : string
+  val kernel_prep_line : string
+end) =
+struct
+  open Types
+
+  let get_ident =
+    Low_level.get_ident_within_code ~no_dots:true @@ Array.map B.for_lowereds ~f:(fun l -> l.llc)
+
+  type is_global = ...
+
+  let compile_globals ppf : is_global = ...
+
+  let compile_proc ~name ppf idx_params ~is_global Low_level.{ traced_store; llc; merge_node } = ...
+end
 ```
 
-Hopefully soon we will support arrays shared across a thread block, then the above will include `Shared`.
+The functor input signature will grow as the backends that use `C_syntax` evolve: when we cover more CUDA functionality and we introduce the METAL backend targetting Apple hardware. Correspondingly, tensor nodes will get categorized into more memory classes on the devices (at least implicitly).
 
 `Simple_backend` requires:
 
@@ -183,41 +204,11 @@ For a CUDA backend, the arrays might be tracked as:
 
 ## Typical details of a backend implementation
 
-A backend needs to maintain information about tensor nodes, in a datatype conventionally called `tn_info`, that might look like this:
+During the compilation process, the new context is not available, and even the old context cannot be available if the backend supports shared compilation. A backend may for simplicity not suport shared compilation, i.e. ignore `~shared:true` and postpone compilation to the linking phase. Currently, the CUDA backend does the opposite, it ignores `~shared:false` and always generates relocatable kernels. This does not require any extra compilation flag, because the kernels refer to context (i.e. global) arrays via parameters.
 
-```ocaml
-type tn_info = {
-  tn : Tn.t;  (** The original array. *)
-  ptr : ...(* Some way to refer to the array from the compiled code. *);
-  mem : mem_properties;
-  dims : int array;
-  num_typ : ...;
-      (** The type of the stored values:
-          [short] or [half] (precision [Half]), [float] (precision [Single]), [double] (precision [Double]). *)
-  zero_initialized : bool;
-  ...
-}
-```
+In the GCCJIT backend, we `prepare_nodes` upfront to not need to separately buffer initializations; and the GCCJIT backend needs to know the list of parameters of the compiled function before it starts the compilation. Needing to know the parameters forces this backend to use lazy initializers, since creating the local array pointers (on the function stack) requires knowing the function.
 
-These are sometimes just for convenience, as they can be easily recomputed, e.g. `num_typ` from `tn.prec`. `tn_info`s are used not just by setters and getters, but also when emitting code for various stages of procedure initialization: constants set outside of a function, function parameters, locals defined at the beginning of a function.
-
-`tn_info` values are typically called `node` for readability. The `tn_info`s are stored inside a compilation state datatype typically called `info_nodes`. During the compilation process, the new context is not available, and even the old context cannot be available if the backend supports shared compilation. A backend may for simplicity not suport shared compilation, i.e. ignore `~shared:true` and postpone compilation to the linking phase. Currently, the CUDA backend does the opposite, it ignores `~shared:false` and always generates relocatable kernels. This does not require any extra compilation flag, because the kernels refer to context (i.e. global) arrays via parameters. We face two cases:
-
-- Non-trivial `~shared:true`: `tn_info`s are by necessity generated from scratch. If this is the only mode the backend supports, they don't need to be stored.
-- Non-trivial `~shared:false`: `tn_info`s must be propagated via the context, because to benefit from not sharing, `tn_info` must include context-specific information (typically a memory pointer to the on-device array).
-
-We `prepare_nodes` upfront to not need to separately buffer initializations; and the `gccjit` backend needs to know the list of parameters of the compiled function before it starts the compilation. Needing to know the parameters forces the `gccjit` backend to use lazy initializers, since creating the local array pointers (on the function stack) requires knowing the function.
-
-`info_nodes` also contains a set `used_tensors`. These are precisely the (non-virtual) tensor nodes used in the optimized code that is compiled. That's a subset of `nodes`, which can contain nodes from the parent context corresponding to tensors only needed by parent or ancestor context's computations. And it's a subset of `traced_store`, which can contain inlined (i.e. virtual) tensor nodes. We also keep `get_ident`, which returns a human-readable identifier that's un-ambiguous in the context of the compiled code (shared within `compile_batch`). `info_nodes` is generated for each procedure (it's not shared within `compile_batch`) -- this enables more flexibility in assigning `mem_properties`.
-
-```ocaml
-type info_nodes = {
-  traced_store : Low_level.traced_store;
-  nodes : (Tn.t, tn_info) Hashtbl.t;
-  used_tensors : Hash_set.M(Tn).t;
-  get_ident : Tn.t -> string;
-}
-```
+We use keys of the `Low_level.traced_store` containers assuming that they are precisely the tensor nodes used in the compiled code -- and the `Virtual` nodes are the ones optimized-away. The context can contain nodes from the parent context corresponding to tensors only needed by parent or ancestor context's computations. The `get_ident` function (e.g. provided by `C_syntax`) returns a human-readable identifier that's un-ambiguous in the context of the compiled code (shared within `compile_batch`).
 
 Conventionally, the compilation implementation is split into three functions / layers:
 
@@ -229,13 +220,15 @@ Conventionally, the compilation implementation is split into three functions / l
     - Within `link` and `link_batch`, the `cuda` backend first calls `Cudajit.ctx_set_current` (if needed) and only then `Cudajit.module_load_data_ex`.
     - GPU-like backends necessitate distinguishing between `link` and `link_batch`, to prevent the same code from being loaded as multiple modules.
 
+The `C_syntax` functor returns the `compile_proc` function for use by `compile` and `compile_batch` of the backends.
+
 ### Conditionally emitting the tracing debugger code
 
-Backends should support logging some of the computations when `Utils.settings.debug_log_from_routines` is set. Obviously, setting this debug information only makes sense for tiny models / computations, otherwise the log files will explode. For GPU backends, cleanly logging from more than one thread per device would add too much complexity, so we restrict logging to `blockIdx = 0, threadIdx = 0`.
+Backends should support logging some of the computations when `Utils.settings.debug_log_from_routines` is set. Obviously, setting this debug information only makes sense for tiny models / computations, otherwise the log files will explode. For GPU backends, cleanly logging from more than one thread per device would add too much complexity, so we restrict logging to a single thread (`blockIdx = 0, threadIdx = 0`).
 
 We output a log line only for comments and array assignments (corresponding to non-virtual node computations), but we log the computed expression structure: the indices, array values, and inline computation values. For simplicity and conciseness, we don't log the structure of inlined computations. Comments determine the nesting of the `ppx_minidebug` entries: when lowering a `Block_comment`, `Assignments.to_low_level` outputs a `Comment "end"` at the end of a block. Comments are prefixed with `COMMENT:`. For assignments, we also log the debug information stored in the `Set` construct -- it's the computed expression translated into the `%cd` syntax. For processing, the debug information is prefixed by `#` and has endlines replaced by `$`. These structural prefixes / infixes are parsed out by `Utils.log_trace_tree`.
 
-Since the CUDA backend needs to capture the standard output, it additionally prefixes each log line with a kernel run ID. When postprocessing the logs, each run extracts its own log lines. Simultaneous logging from multiple CUDA devices should still be clean -- without interleaving lines -- because the driver is supposed to dump the logs to standard output at device synchronization points.
+Since the CUDA backend can only log to the standard output, it passes `let logs_to_stdout = true` to `C_syntax`. This uses `printf`, and prefixes each log line with a kernel run ID. When postprocessing the logs, each run extracts its own log lines. Simultaneous logging from multiple CUDA devices should still be clean -- without interleaving lines -- because the driver is supposed to dump the logs to standard output at device synchronization points.
 
 ## Synchronization and data transfers
 
@@ -247,55 +240,84 @@ Besides routines, calling `from_host`, `to_host`, `device_to_device` from a back
 
 ### Data transfers
 
-OCANNL supports asynchronous data transfers by embedding them in the scheduling mechanism.
+OCANNL supports asynchronous data transfers by embedding them in the scheduling mechanism. `No_device_backend` exposes the following low-level building blocks, which for CPU backends are synchronous and are used by `Multicore_backend` to provide the asynchronous operations.
 
 ```ocaml
 module type No_device_backend = sig
+  type buffer_ptr [@@deriving sexp_of]
   ...
-  val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
-  (** If the array is both hosted and in-context, schedules a copy from host to context, otherwise does
-      nothing. NOTE: when run for a device, it's the caller's responsibility to synchronize the device
-      before the host's data is overwritten. *)
+  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
+  ...
+  val to_buffer :
+    ?rt:(module Minidebug_runtime.Debug_runtime) -> Tnode.t -> dst:buffer_ptr -> src:context -> unit
 
-  val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> unit
-  (** If the array is both hosted and in-context, schedules a copy from context to host, otherwise does
-      nothing. NOTE: when run for a device, it's the caller's responsibility to synchronize the device
-      before the host's data is read. *)
+  val host_to_buffer :
+    ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> dst:buffer_ptr -> unit
+
+  val buffer_to_host :
+    ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> src:buffer_ptr -> unit
+
+  val get_buffer : Tnode.t -> context -> buffer_ptr option
+end
+module type Backend = sig
+  include No_device_backend
+  ...
+
+  val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> bool
+  (** If the array is both hosted and in-context, schedules a copy from host to context and returns
+      true, otherwise returns false. NOTE: when run for a device, it's the caller's responsibility
+      to synchronize the device before the host's data is overwritten. *)
+
+  val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> bool
+  (** If the array is both hosted and in-context, schedules a copy from context to host and returns
+      true, otherwise returns false. NOTE: when run for a device, it's the caller's responsibility
+      to synchronize the device before the host's data is read. *)
 
   val device_to_device :
     ?rt:(module Minidebug_runtime.Debug_runtime) ->
     Tnode.t ->
-    into_merge_buffer:bool ->
+    into_merge_buffer:merge_buffer_use ->
     dst:context ->
     src:context ->
-    unit
-  (** If the array is present in the [src] context, and in the [dst] context in case
-      [~into_merge_buffer:false], schedules a copy of the tensor node from the device of [src] to the device
-      of [dst]; otherwise, if [~into_merge_buffer:true], unsets the merge buffer source on [dst]. If
-      [~into_merge_buffer:false], copies into the given node on [dst]; if [~into_merge_buffer:true], sets on
-      [dst] the merge buffer source to the given node and handles the transfer using it. NOTE: when run for a
-      device, it's the caller's responsibility to synchronize the [src] device, if needed, {i before} calling
-      [device_to_device], and the [dst] device {i afterward}, according to {!physical_merge_buffers}, before
-      any computations on the [src] device overwrite the node. *)
+    bool
+  (** If the node is absent from the [src] context and either it is present in the [dst] context or
+      [~into_merge_buffer] is different from [No]: raises an error.
 
-  val physical_merge_buffers : bool
-  (** If [physical_merge_buffers = true], the [src] node data is not needed after the task scheduled by
-      [device_to_device] finishes. Otherwise, the [src] node data may be needed till after the tasks computing
-      with the merge buffer finish. *)
-  ...
+      If [~into_merge_buffer:No]: If the node is present in the [dst] context, schedules a copy of
+      the tensor node from the device of [src] to the device of [dst] and returns true, otherwise
+      returns false.
+
+      If [~into_merge_buffer] is different from [No]: schedules the following task and returns true.
+
+      The merge-buffer task sets on [dst] the merge buffer source to the given node. If
+      [~into_merge_buffer:Streaming], remembers the buffer pointer of the source node to use for
+      streaming, without blocking. If [~into_merge_buffer:Copy], copies from [src] to the merge
+      buffer of [dst]'s device.
+
+      If the [dst] context resulted from a compilation with [Streaming] or [Copy] specific merge
+      buffer code, the [device_to_device] call should fail immediately if there's a mismatch with
+      [~into_merge_buffer].
+
+      NOTE: it's the caller's responsibility to synchronize the [src] device, if needed, {i before}
+      calling [device_to_device], and if [~into_merge_buffer:Streaming], the [dst] device
+      {i afterward}, before any computations on the [src] device overwrite the node. *)
+
+   ...
 end
 ```
 
-OCANNL provides explicit _merge buffers_ for performing tensor node updates, where different versions of a tensor node from two devices feature in the same computation. The `%cd` syntax for using merge buffers is via applying `merge_buffer` pseudo-function. For example, the code for merging gradients might be: `[%cd p.grad =+ merge_buffer p.grad]`. There's at most one merge buffer per virtual device, and the memory is reused for merging different nodes. We keep track of the specific tensor node that occupies this buffer at scheduling time in the (virtual) device, and the expected tensor node via the context, so that mismatches are detected at scheduling time. The `device_to_device tn ~into_merge_buffer:true ~dst ~src` call requires that `tn` is the expected merge buffer node in the `dst` context; that is, it should be the context of the routine that does the merging. Currently, we only grow the merge buffer. Backends can (re)allocate the merge buffer at linking time, to avoid asynchronous allocation on the device.
+OCANNL provides explicit _merge buffers_ for performing tensor node updates, where different versions of a tensor node from two devices feature in the same computation. The `%cd` syntax for using merge buffers is via applying `.merge` pseudo-field. For example, the code for merging gradients might be: `[%cd p.grad =+ p.grad.merge]`. There's at most one merge buffer per virtual device, and the memory is reused for merging different nodes. We keep track of the specific tensor node that occupies this buffer in the (virtual) device, and the expected tensor node via the context, so that we can detect mismatches. For `Multicore_backend` (CPU backends) this happens at runtime, for CUDA at scheduling time. The `device_to_device tn ~into_merge_buffer:Copy ~dst ~src` call requires that `tn` is the expected merge buffer node in the `dst` context; that is, it should be the context of the routine that does the merging. Currently, we only grow the merge buffer (for `~into_merge_buffer:Copy`).
 
-The `Simple_backend` based generator for CPU-based backends uses the `merge_buffer_streaming` flag to decide whether to directly access another device's memory, or use physical arrays to back merge buffers. In the former case, it records the other device's array pointer in the merge buffer; in the latter, the buffer array (one per device) is resized (grown) if needed to fit a node's array. More generally, merge buffers can be _streaming_: `merge_buffer_streaming = true` when the source node should not be modified while it is accessed via the merge buffer; or `merge_buffer_streaming = false`, where before updating the node, the source device needs only wait for the `device_to_device` call to complete on the target device.
+The interface exposes two modes of utilizing merge buffers. The `Streaming` mode relies in some way on the array from the source context. Currently, this simply means using the source array (buffer) pointer, and the CUDA backend falls back to using `~into_merge_buffer:Copy` when the source and destination contexts live on different physical devices. The `Copy` mode uses physical arrays to back merge buffers. The merge buffer array (one per virtual device) is resized (grown) if needed to fit a node's array.
 
 ### Synchronization
 
-The `Utils` module provides a thread-safe `waiter` mechanism for suspending and resuming threads. Currently, `waiter`s only support sequential `await` events (as needed by the single-producer single-consumer queues). This can be easily generalized to allow concurrent `await` events. `await` could take an identifier of the waiting thread, and `release_if_waiting` could return an optional identifier of the thread that got resumed.
+For CPU backends, we currently implement our own scheduler. The `Utils` module provides a thread-safe `waiter` mechanism for suspending and resuming threads. Currently, `waiter`s only support sequential `await` events (as needed by the single-producer single-consumer queues). This can be easily generalized to allow concurrent `await` events. `await` could take an identifier of the waiting thread, and `release_if_waiting` could return an optional identifier of the thread that got resumed.
 
 The `Backends.Multicore_backend` functor implements scheduling with lock-free single-producer single-consumer queues. Thread safety is ensured, because each device:
 
 - uses two (thread-safe) `waiter`s, one for each of the communicating threads (host and device), so that `await` resp. `release_if_waiting` only happen from their respective threads,
 - uses two position pointers into the work queue, each thread (host resp. device) only modifies its position pointer,
 - each `await` is delineated (with an up to 5 second periodic check) to ensure that the host doesn't wait for an inactive device, and that waiting ends in a well-defined state: host's waiting to synchronize a device ends when the device started waiting; plus some defensive checks that should never be actually needed.
+
+For the CUDA backend, we rely on CUDA streams to handle scheduling and synchronization.

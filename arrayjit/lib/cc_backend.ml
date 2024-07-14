@@ -16,13 +16,6 @@ let compiler_command () = Utils.get_global_arg ~default:"cc" ~arg_name:"cc_backe
 
 (** Currently unused, backend behaves as if [config] is always [`Physical_devices_only]. *)
 
-type mem_properties =
-  | Local_only  (** The array is only needed for a local computation, is allocated on the stack. *)
-  | From_context
-      (** The array has a copy allocated per-cpu-device, may or may not exist on the host. *)
-  | Constant_from_host  (** The array is read directly from the host. *)
-[@@deriving sexp, equal, compare, variants]
-
 module Tn = Tnode
 
 type ctx_array = Ndarray.t [@@deriving sexp_of]
