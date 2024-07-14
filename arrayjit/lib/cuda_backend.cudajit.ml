@@ -338,7 +338,7 @@ let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
     let hardcoded_context_ptr = None
     let is_in_context = is_in_context
     let host_ptrs_for_readonly = true
-    let logs_to_stdout = false
+    let logs_to_stdout = true
     let main_kernel_prefix = "extern \"C\" __global__"
 
     let kernel_prep_line =
@@ -365,7 +365,7 @@ let compile_batch ~names bindings lowereds =
     let hardcoded_context_ptr = None
     let is_in_context = is_in_context
     let host_ptrs_for_readonly = true
-    let logs_to_stdout = false
+    let logs_to_stdout = true
     let main_kernel_prefix = "extern \"C\" __global__"
 
     let kernel_prep_line =

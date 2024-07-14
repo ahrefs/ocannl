@@ -166,8 +166,9 @@ struct
               fprintf ppf {|@[<7>fprintf(log_file,@ @[<h>"# %s\n"@]);@]@ |}
                 (String.substr_replace_all debug ~pattern:"\n" ~with_:"$");
               fprintf ppf
-                {|@[<7>fprintf(log_file,@ @[<h>"%s[%%u] = %%f = %s\n",@]@ %a,@ new_set_v%a);@]@ fflush(log_file);@ |}
+                {|@[<7>fprintf(log_file,@ @[<h>"%s[%%u] = %%f = %s\n",@]@ %a,@ new_set_v%a);@]@ |}
                 ident v_code pp_array_offset offset pp_args v_idcs);
+            if not B.logs_to_stdout then fprintf ppf "fflush(log_file);@ ";
             fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@;<1 -2>}@]@ " ident pp_array_offset
               (idcs, dims))
           else
@@ -321,7 +322,7 @@ struct
     @@ List.map ~f:fst params;
     if not (String.is_empty B.kernel_prep_line) then fprintf ppf "%s@ " B.kernel_prep_line;
     (* FIXME: we should also close the file. *)
-    if not (List.is_empty log_file) then
+    if (not (List.is_empty log_file)) && not B.logs_to_stdout then
       fprintf ppf {|FILE* log_file = fopen(log_file_name, "w");@ |};
     fprintf ppf "/* Local declarations and initialization. */@ ";
     Hashtbl.iteri traced_store ~f:(fun ~key:tn ~data:node ->
