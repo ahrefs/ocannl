@@ -25,7 +25,7 @@ and device = {
   physical : physical_device;
   stream : (Cudajit.stream[@sexp.opaque]);
   subordinal : int;
-  mutable postprocess_queue : (context * (output:string list -> unit)) list;
+  mutable postprocess_queue : ((context * (output:string list -> unit)) list[@sexp.opaque]);
   mutable merge_buffer : (buffer_ptr * Tn.t) option;
 }
 
