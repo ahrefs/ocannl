@@ -496,3 +496,49 @@ let pp_file ~base_name ~extension =
     Stdio.Out_channel.close oc
   in
   { f_name; ppf; finalize }
+
+let captured_log_prefix = ref "!@#"
+
+type captured_log_processor = { log_processor_prefix : string; process_logs : string list -> unit }
+
+let captured_log_processors : captured_log_processor list ref = ref []
+
+let add_log_processor ~prefix process_logs =
+  captured_log_processors :=
+    { log_processor_prefix = prefix; process_logs } :: !captured_log_processors
+
+let capture_stdout_logs ?(never_skip = false) arg =
+  if (not never_skip) && not settings.debug_log_from_routines then arg ()
+  else (
+    Stdlib.flush Stdlib.stdout;
+    let exitp, entrancep = Unix.pipe () and backup = Unix.dup Unix.stdout in
+    Unix.dup2 entrancep Unix.stdout;
+    Unix.set_nonblock entrancep;
+    (* TODO: process logs in a parallel thread. *)
+    let _ : unit =
+      try arg ()
+      with Sys_blocked_io ->
+        invalid_arg
+          "capture_stdout_logs: unfortunately, flushing stdout inside captured code is prohibited"
+    in
+    Stdlib.flush Stdlib.stdout;
+    Unix.close entrancep;
+    Unix.dup2 backup Unix.stdout;
+    let ls = ref [] and channel = Unix.in_channel_of_descr exitp in
+    let output =
+      try
+        while true do
+          let line = Stdlib.input_line channel in
+          match String.chop_prefix ~prefix:!captured_log_prefix line with
+          | None -> Stdlib.print_endline line
+          | Some logline -> ls := logline :: !ls
+        done;
+        []
+      with End_of_file -> List.rev !ls
+    in
+    Exn.protect
+      ~f:(fun () ->
+        List.iter !captured_log_processors ~f:(fun { log_processor_prefix; process_logs } ->
+            process_logs
+            @@ List.filter_map output ~f:(String.chop_prefix ~prefix:log_processor_prefix)))
+      ~finally:(fun () -> captured_log_processors := []))

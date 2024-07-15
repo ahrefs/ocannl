@@ -8,6 +8,7 @@
   - [Tensor nodes, arrays, memory properties](#tensor-nodes-arrays-memory-properties)
   - [Typical details of a backend implementation](#typical-details-of-a-backend-implementation)
     - [Conditionally emitting the tracing debugger code](#conditionally-emitting-the-tracing-debugger-code)
+      - [Tracing via stdout](#tracing-via-stdout)
   - [Synchronization and data transfers](#synchronization-and-data-transfers)
     - [Data transfers](#data-transfers)
     - [Synchronization](#synchronization)
@@ -228,7 +229,11 @@ Backends should support logging some of the computations when `Utils.settings.de
 
 We output a log line only for comments and array assignments (corresponding to non-virtual node computations), but we log the computed expression structure: the indices, array values, and inline computation values. For simplicity and conciseness, we don't log the structure of inlined computations. Comments determine the nesting of the `ppx_minidebug` entries: when lowering a `Block_comment`, `Assignments.to_low_level` outputs a `Comment "end"` at the end of a block. Comments are prefixed with `COMMENT:`. For assignments, we also log the debug information stored in the `Set` construct -- it's the computed expression translated into the `%cd` syntax. For processing, the debug information is prefixed by `#` and has endlines replaced by `$`. These structural prefixes / infixes are parsed out by `Utils.log_trace_tree`.
 
+#### Tracing via `stdout`
+
 Since the CUDA backend can only log to the standard output, it passes `let logs_to_stdout = true` to `C_syntax`. This uses `printf`, and prefixes each log line with a kernel run ID. When postprocessing the logs, each run extracts its own log lines. Simultaneous logging from multiple CUDA devices should still be clean -- without interleaving lines -- because the driver is supposed to dump the logs to standard output at device synchronization points.
+
+When using the default stream, CUDA would predictably write to the standard output at context synchronization only. Unfortunately, it does not appear to be the case with asynchronous streams. [Despite the assurance from the documentation, output happens in between CUDA calls...](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#formatted-output) To remedy this, we implement a `stdout` filtering scheme, where all output is captured, tracing lines extracted, and other output printed on the original `stdout`.
 
 ## Synchronization and data transfers
 

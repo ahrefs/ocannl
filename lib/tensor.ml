@@ -559,7 +559,7 @@ let print ~with_grad ~with_code ?(force = false) ?(with_low_level = false)
      | _, (lazy None) -> Stdlib.Format.printf "<virtual>@ "
      | _, (lazy (Some arr)) ->
          Nd.pp_array (Stdlib.Format.get_std_formatter ()) ~prefix ~labels ~indices arr;
-         Stdlib.Format.print_newline ());
+         Stdlib.Format.print_char '\n');
   if with_grad then
     Option.iter t.diff ~f:(fun diff ->
         if not (force || Lazy.is_val diff.grad.array) then
@@ -570,13 +570,13 @@ let print ~with_grad ~with_code ?(force = false) ?(with_low_level = false)
               Nd.pp_array_inline
                 (Stdlib.Format.get_std_formatter ())
                 ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec arr;
-              Stdlib.Format.print_newline ()
+              Stdlib.Format.print_char '\n'
           | _, (lazy (Some arr)) ->
               Nd.pp_array
                 (Stdlib.Format.get_std_formatter ())
                 ~prefix:(prefix ^ " " ^ grad_txt diff)
                 ~labels ~indices arr;
-              Stdlib.Format.print_newline ()
+              Stdlib.Format.print_char '\n'
           | _, (lazy None) -> Stdlib.Format.printf "%s <virtual>@ " (grad_txt diff));
   if with_code then (
     (match t.forward with
@@ -602,7 +602,7 @@ let print ~with_grad ~with_code ?(force = false) ?(with_low_level = false)
           (Arrayjit.Low_level.fprint_hum ())
         @@ Asgns.to_low_level bwd_code
     | None -> ());
-  Stdlib.Format.printf "\n%!"
+  Stdlib.Format.printf "\n"
 
 let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
   List.iter (Map.to_alist ~key_order:`Increasing session_state.forward_roots) ~f:(fun (id, root) ->

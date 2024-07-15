@@ -25,7 +25,6 @@ and device = {
   physical : physical_device;
   stream : (Cudajit.stream[@sexp.opaque]);
   subordinal : int;
-  mutable postprocess_queue : ((context * (output:string list -> unit)) list[@sexp.opaque]);
   mutable merge_buffer : (buffer_ptr * Tn.t) option;
 }
 
@@ -110,7 +109,7 @@ let new_virtual_device physical =
   (* Strange that we need ctx_set_current even with a single device! *)
   set_ctx physical.primary_context;
   let stream = Cudajit.stream_create () in
-  { physical; stream; subordinal; postprocess_queue = []; merge_buffer = None }
+  { physical; stream; subordinal; merge_buffer = None }
 
 let cuda_properties =
   let cache =
@@ -138,34 +137,11 @@ let to_subordinal { subordinal; _ } = subordinal
 let get_name device =
   Int.to_string (to_ordinal device.physical) ^ "_" ^ Int.to_string (to_subordinal device)
 
-let capture_stdout arg =
-  Stdlib.flush Stdlib.stdout;
-  let exitp, entrancep = Unix.pipe () and backup = Unix.dup Unix.stdout in
-  Unix.dup2 entrancep Unix.stdout;
-  let _ = arg () in
-  Stdlib.flush Stdlib.stdout;
-  Unix.close entrancep;
-  Unix.dup2 backup Unix.stdout;
-  let ls = ref [] and channel = Unix.in_channel_of_descr exitp in
-  try
-    while true do
-      let line = Stdlib.input_line channel in
-      ls := line :: !ls
-    done;
-    []
-  with _ -> List.rev !ls
-
 let finalize ctx =
-  if Option.is_some @@ Core.Weak.get !devices ctx.device.physical.ordinal then (
-    set_ctx ctx.device.physical.primary_context;
-    let output = capture_stdout @@ fun () -> Option.iter ctx.run_module ~f:Cudajit.module_unload in
-    Exn.protect
-      ~f:(fun () ->
-        List.iter ctx.device.postprocess_queue ~f:(fun (f_ctx, f) ->
-            if phys_equal f_ctx ctx then f ~output))
-      ~finally:(fun () ->
-        ctx.device.postprocess_queue <-
-          List.filter ctx.device.postprocess_queue ~f:(fun (f_ctx, _) -> phys_equal f_ctx ctx));
+  let phys_dev = ctx.device.physical in
+  if Option.is_some @@ Core.Weak.get !devices phys_dev.ordinal then (
+    set_ctx phys_dev.primary_context;
+    Option.iter ctx.run_module ~f:Cudajit.module_unload;
     Map.iter ctx.global_arrays ~f:(fun ptr -> Cudajit.mem_free ptr))
 
 let unsafe_cleanup ?unsafe_shutdown:_ () =
@@ -173,21 +149,16 @@ let unsafe_cleanup ?unsafe_shutdown:_ () =
   (* TODO: maybe better to do device_primary_ctx_reset if [unsafe_shutdown=false]. *)
   for i = 0 to len - 1 do
     Option.iter (Core.Weak.get !devices i) ~f:(fun device ->
+        Cudajit.ctx_set_current device.primary_context;
+        Cudajit.ctx_synchronize ();
         Cudajit.device_primary_ctx_release device.dev)
   done;
   Core.Weak.fill !devices 0 len None
 
-let await device =
-  set_ctx device.physical.primary_context;
-  let output = capture_stdout (fun () -> Cudajit.stream_synchronize device.stream) in
-  Exn.protect
-    ~f:(fun () ->
-      List.iter device.postprocess_queue ~f:(fun (f_ctx, f) ->
-          if phys_equal f_ctx.device device then f ~output))
-    ~finally:(fun () ->
-      device.postprocess_queue <-
-        List.filter device.postprocess_queue ~f:(fun (ctx, _) ->
-            not @@ phys_equal ctx.device device))
+let await device : unit =
+  let phys_dev = device.physical in
+  set_ctx phys_dev.primary_context;
+  Cudajit.stream_synchronize device.stream
 
 let is_idle device = Cudajit.stream_is_ready device.stream
 
@@ -434,26 +405,21 @@ let link_proc ~old_context ~name ~params ~global_arrays lowered_bindings run_mod
                           %{upto#Int}"]);
             Cu.Int !i)
     in
-
     set_ctx context.ctx;
     (* FIXME: this happens inside the kernel. *)
     (* Map.iteri global_arrays ~f:(fun ~key ~data:ptr -> if key.Low_level.zero_initialized then
        Cu.memset_d8_async ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key.Low_level.tn)); *)
     [%log "launching the kernel"];
+    (if Utils.settings.debug_log_from_routines then
+       Utils.add_log_processor ~prefix:log_id_prefix @@ fun output ->
+       [%log_entry
+         context.label;
+         Utils.log_trace_tree _debug_runtime output]);
     (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE
        4096; *)
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.device.stream
       args;
-    [%log "kernel launched"];
-    if Utils.settings.debug_log_from_routines then
-      let postprocess_logs ~output =
-        let output = List.filter_map output ~f:(String.chop_prefix ~prefix:log_id_prefix) in
-        [%log_entry
-          context.label;
-          Utils.log_trace_tree _debug_runtime output]
-      in
-      context.device.postprocess_queue <-
-        (context, postprocess_logs) :: context.device.postprocess_queue
+    [%log "kernel launched"]
   in
   (context, { Tn.description = "launches " ^ name ^ " on " ^ context.label; work })
 
@@ -509,37 +475,6 @@ let%track_sexp link_batch old_context (code_batch : code_batch) =
                ((context, global_arrays), Some task)))
   in
   (context, lowered_bindings, procs)
-
-(** {[
-      let link_batch { ctx; device; expected_merge_node } (code_batch : code_batch) =
-        let ctx, routines =
-          Backend.link_batch ~merge_buffer:device.merge_buffer_ptr ctx code_batch
-        in
-        let merge_nodes = Backend.expected_merge_nodes code_batch in
-        ( { ctx; device; expected_merge_node },
-          Array.mapi routines ~f:(fun i ->
-              Option.map ~f:(fun task ->
-                  {
-                    task with
-                    context = { ctx = task.context; device; expected_merge_node = merge_nodes.(i) };
-                    schedule = make_work device task.schedule;
-                  })) )
-
-      let link_batch ~merge_buffer (old_context : context) (code_batch : code_batch) =
-        let _opt_ctx_arrays, procs =
-          match code_batch with
-          | Postponed { lowereds; bindings; names } ->
-              Backend.compile_batch ~names
-                ~opt_ctx_arrays:(Some (ctx_arrays old_context))
-                bindings lowereds
-          | Compiled procs -> procs
-        in
-        Array.fold_map procs ~init:old_context ~f:(fun context -> function
-          | Some proc ->
-              let context, bindings, schedule, name = link_compiled ~merge_buffer context proc in
-              (context, Some { context; schedule; bindings; name })
-          | None -> (context, None))
-    ]} *)
 
 let to_buffer ?rt:_ _tn ~dst:_ ~src:_ = failwith "CUDA low-level: NOT IMPLEMENTED YET"
 let host_to_buffer ?rt:_ _tn ~dst:_ = failwith "CUDA low-level: NOT IMPLEMENTED YET"

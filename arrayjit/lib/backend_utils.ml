@@ -157,11 +157,12 @@ struct
             in
             let offset = (idcs, dims) in
             if B.logs_to_stdout then (
-              fprintf ppf {|@[<7>printf(@[<h>"%%d: # %s\n", log_id@]);@]@ |}
+              fprintf ppf {|@[<7>printf(@[<h>"%s%%d: # %s\n", log_id@]);@]@ |}
+                !Utils.captured_log_prefix
                 (String.substr_replace_all debug ~pattern:"\n" ~with_:"$");
               fprintf ppf
-                {|@[<7>printf(@[<h>"%%d: %s[%%u] = %%f = %s\n",@]@ log_id,@ %a,@ new_set_v%a);@]@ |}
-                ident v_code pp_array_offset offset pp_args v_idcs)
+                {|@[<7>printf(@[<h>"%s%%d: %s[%%u] = %%f = %s\n",@]@ log_id,@ %a,@ new_set_v%a);@]@ |}
+                !Utils.captured_log_prefix ident v_code pp_array_offset offset pp_args v_idcs)
             else (
               fprintf ppf {|@[<7>fprintf(log_file,@ @[<h>"# %s\n"@]);@]@ |}
                 (String.substr_replace_all debug ~pattern:"\n" ~with_:"$");
@@ -180,7 +181,8 @@ struct
       | Comment message ->
           if Utils.settings.debug_log_from_routines then
             if B.logs_to_stdout then
-              fprintf ppf {|printf(@[<h>"%%d: COMMENT: %s\n",@] log_id);@ |}
+              fprintf ppf {|printf(@[<h>"%s%%d: COMMENT: %s\n",@] log_id);@ |}
+                !Utils.captured_log_prefix
                 (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
             else
               fprintf ppf {|fprintf(log_file,@ @[<h>"COMMENT: %s\n"@]);@ |}
