@@ -327,8 +327,7 @@ let param ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?(strict = 
   (* It is convenient to use the param syntax for volatiles (mutable inputs). *)
   Tn.update_memory_mode v (Hosted Nonconstant) 24;
   (* In principle, gradients can even be local, if a single jitted block does forward, backprop, and
-     update computations. Use-cases needing [Materialized] gradients need to request that before any
-     jitting. *)
+     update computations. *)
   let g = (Option.value_exn ~here:[%here] t.diff).grad in
   Tn.update_memory_mode g Never_virtual 26;
   t

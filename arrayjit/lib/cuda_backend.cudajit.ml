@@ -423,21 +423,22 @@ let link_proc ~old_context ~name ~params ~global_arrays lowered_bindings run_mod
   in
   (context, { Tn.description = "launches " ^ name ^ " on " ^ context.label; work })
 
+let%diagn_sexp alloc_if_needed ctx ~key ~data:node globals =
+  if is_in_context node then (
+    if Utils.settings.with_debug_level > 0 then
+      [%log "mem_alloc", Tn.get_debug_name node.tn, (not @@ Map.mem globals key : bool)];
+    set_ctx ctx;
+    let ptr () = Cudajit.mem_alloc ~size_in_bytes:(Tn.size_in_bytes node.tn) in
+    Map.update globals key ~f:(fun old -> Option.value_or_thunk old ~default:ptr))
+  else globals
+
 let%diagn_sexp link old_context (code : code) =
-  let module Cu = Cudajit in
   let ctx = old_context.ctx in
   set_ctx ctx;
   let global_arrays =
-    Hashtbl.fold ~init:old_context.global_arrays code.traced_store
-      ~f:(fun ~key ~data:node globals ->
-        if is_in_context node then (
-          if Utils.settings.with_debug_level > 0 then [%log "mem_alloc", Tn.get_debug_name node.tn];
-          set_ctx ctx;
-          let ptr () = Cu.mem_alloc ~size_in_bytes:(Tn.size_in_bytes node.tn) in
-          Map.update globals key ~f:(fun old -> Option.value_or_thunk old ~default:ptr))
-        else globals)
+    Hashtbl.fold ~init:old_context.global_arrays code.traced_store ~f:(alloc_if_needed ctx)
   in
-  let run_module = Cu.module_load_data_ex code.ptx [] in
+  let run_module = Cudajit.module_load_data_ex code.ptx [] in
   let idx_params = Indexing.bound_symbols code.bindings in
   let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let context, task =
@@ -459,14 +460,7 @@ let%track_sexp link_batch old_context (code_batch : code_batch) =
         Option.value ~default:((context, global_arrays), None)
         @@ Option.map2 pns code_batch.traced_stores.(i) ~f:(fun (params, name) traced_store ->
                let global_arrays =
-                 Hashtbl.fold ~init:global_arrays traced_store ~f:(fun ~key ~data:node globals ->
-                     if is_in_context node then (
-                       if Utils.settings.with_debug_level > 0 then
-                         [%log "mem_alloc", Tn.get_debug_name key];
-                       set_ctx ctx;
-                       let ptr () = Cu.mem_alloc ~size_in_bytes:(Tn.size_in_bytes node.tn) in
-                       Map.update globals key ~f:(fun old -> Option.value_or_thunk old ~default:ptr))
-                     else globals)
+                 Hashtbl.fold ~init:global_arrays traced_store ~f:(alloc_if_needed ctx)
                in
                let context, task =
                  link_proc ~old_context:context ~name ~params ~global_arrays lowered_bindings

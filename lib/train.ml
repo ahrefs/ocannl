@@ -513,4 +513,5 @@ let%track_sexp forward_and_forget ?(disable_rootness_check = false) (type contex
     (module Backend : Backend_type with type context = context) ctx ?(bindings = IDX.empty) t =
   let routine = Backend.(link ctx @@ compile bindings @@ forward ~disable_rootness_check t) in
   if not disable_rootness_check then Tensor.remove_bprop_root t;
+  (* FIXME: to properly forget we need to free the incrementally-allocated memory! *)
   sync_run (module Backend) routine t
