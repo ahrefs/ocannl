@@ -44,12 +44,20 @@ and sexp_of_subtensor ch =
       (if ch.embedded then ("", sexp_of_t ch.subtensor) else ("ref-id", sexp_of_int ch.subtensor.id));
     ]
 
-include Comparator.Make (struct
+module Compare = struct
   type nonrec t = t
 
   let compare t1 t2 = Int.compare t1.id t2.id
   let sexp_of_t = sexp_of_t
-end)
+end
+
+module Self_comparator = Comparator.Make (Compare)
+include Self_comparator
+
+module Self = struct
+  include Compare
+  include Self_comparator
+end
 
 type session_state = {
   mutable next_id : int;
@@ -336,6 +344,25 @@ let rec iter_embedded_arrays ~f t =
   f t.value;
   Option.iter t.diff ~f:(fun diff -> f diff.grad);
   List.iter ~f:(fun ch -> if ch.embedded then iter_embedded_arrays ~f ch.subtensor) t.children
+
+let rec non_and_embedded_nodes t =
+  let non_embedded, embedded =
+    List.fold t.children
+      ~init:(Set.empty (module Self), Set.empty (module Self))
+      ~f:(fun (non_embedded, embedded) ch ->
+        if ch.embedded then (non_embedded, Set.add embedded ch.subtensor)
+        else (Set.add non_embedded ch.subtensor, embedded))
+  in
+  let open Arrayjit.Utils.Set_O in
+  let non_embedded, embedded =
+    List.fold t.children ~init:(non_embedded, embedded)
+      ~f:(fun ((non_embedded, embedded) as accu) ch ->
+        if ch.embedded then
+          let more_non, more = non_and_embedded_nodes ch.subtensor in
+          (non_embedded + more_non, embedded + more)
+        else accu)
+  in
+  (non_embedded - embedded, embedded)
 
 let consume_forward_code t =
   if not @@ is_fwd_root t then

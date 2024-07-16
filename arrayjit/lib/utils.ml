@@ -515,7 +515,7 @@ let capture_stdout_logs ?(never_skip = false) arg =
     Unix.dup2 entrancep Unix.stdout;
     Unix.set_nonblock entrancep;
     (* TODO: process logs in a parallel thread. *)
-    let _ : unit =
+    let result =
       try arg ()
       with Sys_blocked_io ->
         invalid_arg
@@ -541,4 +541,5 @@ let capture_stdout_logs ?(never_skip = false) arg =
         List.iter !captured_log_processors ~f:(fun { log_processor_prefix; process_logs } ->
             process_logs
             @@ List.filter_map output ~f:(String.chop_prefix ~prefix:log_processor_prefix)))
-      ~finally:(fun () -> captured_log_processors := []))
+      ~finally:(fun () -> captured_log_processors := []);
+    result)

@@ -52,12 +52,16 @@ let%expect_test "Half-moons data parallel" =
     Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" at_epoch at_step learning_rate
       epoch_loss
   in
+  let module Backend = (val backend) in
   let inputs, outputs, _model_result, infer_callback, batch_losses, epoch_losses, learning_rates =
     Train.example_train_loop ~seed ~batch_size ~max_num_devices:(batch_size / 2) ~init_lr
       ~data_len:len ~epochs ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn
-      ~weight_decay ~per_batch_callback ~per_epoch_callback backend ()
+      ~weight_decay ~per_batch_callback ~per_epoch_callback
+      (module Backend)
+      ()
   in
-  [%expect {|
+  [%expect
+    {|
     Batch=459, step=460, lr=0.187630, batch loss=0.302324, epoch loss=44.965767
     Batch=479, step=480, lr=0.187400, batch loss=0.242093, epoch loss=45.207860
     Epoch=0, step=480, lr=0.187400, epoch loss=45.207860
@@ -134,7 +138,8 @@ let%expect_test "Half-moons data parallel" =
   in
   Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n%!";
   PrintBox_text.output Stdio.stdout plot_moons;
-  [%expect {|
+  [%expect
+    {|
     Half-moons scatterplot and decision boundary:
      1.094e+0 │***************************************#********************************************************************************
               │***************************#*#*#########*###**######********************************************************************
@@ -215,7 +220,8 @@ let%expect_test "Half-moons data parallel" =
       [ Line_plot { points = Array.of_list_rev_map epoch_losses ~f:Float.log; pixel = "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_loss;
-  [%expect {|
+  [%expect
+    {|
     Batch Loss:
      2.165e+1│-
              │
@@ -360,7 +366,8 @@ let%expect_test "Half-moons data parallel" =
       [ Line_plot { points = Array.of_list_rev learning_rates; pixel = "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_lr;
-  [%expect {|
+  [%expect
+    {|
     Learning rate:
      1.874e-1│-
              │

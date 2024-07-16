@@ -43,17 +43,29 @@ module type No_device_backend = sig
       execution, but there can be backend-specific differences. Only array entries for which
       [occupancy] returns true are included. *)
 
-  val link : merge_buffer:(buffer_ptr * Tnode.t) option ref -> context -> code -> routine
-  (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
+  val link :
+    ?from_prior_context:Tnode.t list ->
+    merge_buffer:(buffer_ptr * Tnode.t) option ref ->
+    context ->
+    code ->
+    routine
+  (** Returns the routine for the code's procedure, in a new context derived from the given context.
+
+      The [from_prior_context] nodes must not be added to the resulting context -- if needed in
+      context, they must be part of the given context. *)
 
   val link_batch :
+    ?from_prior_context:Tnode.t list ->
     merge_buffer:(buffer_ptr * Tnode.t) option ref ->
     context ->
     code_batch ->
     context * routine option array
   (** Returns the routines for the procedures included in the code batch. The returned context is
       downstream of all the returned routines (in particular, the routines' contexts are not
-      independent). *)
+      independent).
+
+      The [from_prior_context] nodes must not be added to the resulting context -- if needed in
+      context, they must be part of the given context. *)
 
   val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
   (** Cleans up all work on a backend. If [~unsafe_shutdown:true], releases resources, potentially
@@ -74,10 +86,11 @@ end
 module type Backend = sig
   include No_device_backend
 
-  val link : context -> code -> routine
+  val link : ?from_prior_context:Tnode.t list -> context -> code -> routine
   (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
 
-  val link_batch : context -> code_batch -> context * routine option array
+  val link_batch :
+    ?from_prior_context:Tnode.t list -> context -> code_batch -> context * routine option array
   (** Returns the routines for the procedures included in the code batch. The returned context is
       downstream of all the returned routines. *)
 
@@ -305,8 +318,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let compile = Backend.compile
   let compile_batch = Backend.compile_batch
 
-  let link { ctx; device; expected_merge_node = _ } (code : code) =
-    let task = Backend.link ~merge_buffer:device.merge_buffer ctx code in
+  let link ?from_prior_context { ctx; device; expected_merge_node = _ } code =
+    let task = Backend.link ?from_prior_context ~merge_buffer:device.merge_buffer ctx code in
     {
       task with
       context =
@@ -314,8 +327,10 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       schedule = make_work device task.schedule;
     }
 
-  let link_batch { ctx; device; expected_merge_node } (code_batch : code_batch) =
-    let ctx, routines = Backend.link_batch ~merge_buffer:device.merge_buffer ctx code_batch in
+  let link_batch ?from_prior_context { ctx; device; expected_merge_node } code_batch =
+    let ctx, routines =
+      Backend.link_batch ?from_prior_context ~merge_buffer:device.merge_buffer ctx code_batch
+    in
     let merge_nodes = Backend.expected_merge_nodes code_batch in
     ( { ctx; device; expected_merge_node },
       Array.mapi routines ~f:(fun i ->
@@ -533,6 +548,12 @@ module type Simple_backend = sig
   val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
   val expected_merge_node : procedure -> Tnode.t option
 
+  val is_in_context : Low_level.traced_array -> bool
+  (** If true, the node is required to be in the contexts linked with code that uses it.
+
+      Should return false for nodes that are virtual, local, or which the backend prefers to access
+      directly from the host. *)
+
   val compile :
     name:string ->
     opt_ctx_arrays:ctx_arrays option ->
@@ -570,6 +591,15 @@ module type Simple_backend = sig
     ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> src:buffer_ptr -> unit
 end
 
+let verify_prior_context ~ctx_arrays ~is_in_context ~old_context ~from_prior_context traced_stores =
+  let olds = ctx_arrays old_context in
+  List.iter from_prior_context ~f:(fun tn ->
+      let node = Array.find_map traced_stores ~f:(fun store -> Hashtbl.find store tn) in
+      if
+        Option.value_map node ~default:false ~f:(fun node ->
+            is_in_context node && not (Map.mem olds tn))
+      then raise @@ Utils.User_error ("The linked context lacks node " ^ Tnode.get_debug_name tn))
+
 module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend = struct
   include Backend
 
@@ -579,7 +609,7 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
         bindings : Indexing.unit_bindings;
         name : string;
       }
-    | Compiled of Backend.procedure
+    | Compiled of Low_level.optimized * Backend.procedure
   [@@deriving sexp_of]
 
   type code_batch =
@@ -588,7 +618,8 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
         bindings : Indexing.unit_bindings;
         names : string option array;
       }
-    | Compiled of (ctx_arrays option * Backend.procedure option array)
+    | Compiled of
+        Low_level.optimized option array * (ctx_arrays option * Backend.procedure option array)
   [@@deriving sexp_of]
 
   let global_config = ref Physical_devices_only
@@ -601,26 +632,41 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
 
   let expected_merge_node : code -> _ = function
     | Postponed { lowered = Low_level.{ merge_node; _ }; _ } -> merge_node
-    | Compiled proc -> Backend.expected_merge_node proc
+    | Compiled (_, proc) -> Backend.expected_merge_node proc
 
   let expected_merge_nodes : code_batch -> _ = function
     | Postponed { lowereds; _ } ->
         Array.map lowereds ~f:(fun lowered ->
             Option.(join @@ map lowered ~f:(fun optim -> optim.merge_node)))
-    | Compiled (_, procs) ->
-        Array.map ~f:(fun proc -> Option.(join @@ map proc ~f:Backend.expected_merge_node)) procs
+    | Compiled (_, (_, procs)) ->
+        Array.map ~f:(function Some proc -> Backend.expected_merge_node proc | _ -> None) procs
+
+  let get_traced_store : code -> _ = function
+    | Postponed { lowered = Low_level.{ traced_store; _ }; _ }
+    | Compiled (Low_level.{ traced_store; _ }, _) ->
+        traced_store
+
+  let get_traced_stores : code_batch -> _ = function
+    | Postponed { lowereds; _ } ->
+        Array.filter_map lowereds ~f:(fun lowered ->
+            Option.map lowered ~f:(fun optim -> optim.traced_store))
+    | Compiled (lowereds, _) ->
+        Array.filter_map lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store))
 
   let compile ?(shared = false) ?name bindings asgns : code =
     let name, lowered = lower_assignments ?name bindings asgns in
-    if shared then Compiled (Backend.compile ~name ~opt_ctx_arrays:None bindings lowered)
+    if shared then Compiled (lowered, Backend.compile ~name ~opt_ctx_arrays:None bindings lowered)
     else Postponed { lowered; bindings; name }
 
   let compile_batch ?(shared = false) ?names ?occupancy bindings asgns_l : code_batch =
     let names, lowereds = lower_batch_assignments ?names ?occupancy bindings asgns_l in
-    if shared then Compiled (compile_batch ~names ~opt_ctx_arrays:None bindings lowereds)
+    if shared then Compiled (lowereds, compile_batch ~names ~opt_ctx_arrays:None bindings lowereds)
     else Postponed { lowereds; bindings; names }
 
-  let link ~merge_buffer (old_context : context) (code : code) =
+  let link ?(from_prior_context = []) ~merge_buffer (old_context : context) (code : code) =
+    Backend.(
+      verify_prior_context ~ctx_arrays ~is_in_context ~old_context ~from_prior_context
+        [| get_traced_store code |]);
     let context, bindings, schedule, name =
       match code with
       | Postponed { lowered; bindings; name } ->
@@ -628,18 +674,22 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
             Backend.compile ~name ~opt_ctx_arrays:(Some (ctx_arrays old_context)) bindings lowered
           in
           link_compiled ~merge_buffer old_context proc
-      | Compiled code -> link_compiled ~merge_buffer old_context code
+      | Compiled (_, code) -> link_compiled ~merge_buffer old_context code
     in
     { context; schedule; bindings; name }
 
-  let link_batch ~merge_buffer (old_context : context) (code_batch : code_batch) =
+  let link_batch ?(from_prior_context = []) ~merge_buffer (old_context : context)
+      (code_batch : code_batch) =
+    Backend.(
+      verify_prior_context ~ctx_arrays ~is_in_context ~old_context ~from_prior_context
+      @@ get_traced_stores code_batch);
     let _opt_ctx_arrays, procs =
       match code_batch with
       | Postponed { lowereds; bindings; names } ->
           Backend.compile_batch ~names
             ~opt_ctx_arrays:(Some (ctx_arrays old_context))
             bindings lowereds
-      | Compiled procs -> procs
+      | Compiled (_, procs) -> procs
     in
     Array.fold_map procs ~init:old_context ~f:(fun context -> function
       | Some proc ->
@@ -668,9 +718,18 @@ module Gccjit_backend = Multicore_backend (Gccjit_device)
 module Cuda_backend : Backend = struct
   include Cuda_backend
 
-  type nonrec code = { code : code; expected_merge_node : Tnode.t option } [@@deriving sexp_of]
+  type nonrec code = {
+    traced_store : Low_level.traced_store;
+    code : code;
+    expected_merge_node : Tnode.t option;
+  }
+  [@@deriving sexp_of]
 
-  type nonrec code_batch = { code_batch : code_batch; expected_merge_nodes : Tnode.t option array }
+  type nonrec code_batch = {
+    traced_stores : Low_level.traced_store array;
+    code_batch : code_batch;
+    expected_merge_nodes : Tnode.t option array;
+  }
   [@@deriving sexp_of]
 
   let expected_merge_node code = code.expected_merge_node
@@ -682,22 +741,32 @@ module Cuda_backend : Backend = struct
 
   let compile ?shared:_ ?name bindings asgns : code =
     let name, lowered = lower_assignments ?name bindings asgns in
-    { code = compile ~name bindings lowered; expected_merge_node = lowered.Low_level.merge_node }
+    {
+      traced_store = lowered.traced_store;
+      code = compile ~name bindings lowered;
+      expected_merge_node = lowered.Low_level.merge_node;
+    }
 
   let compile_batch ?shared:_ ?names ?occupancy bindings asgns_l =
     let names, lowereds = lower_batch_assignments ?names ?occupancy bindings asgns_l in
     {
+      traced_stores =
+        Array.filter_map lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store));
       code_batch = compile_batch ~names bindings lowereds;
       expected_merge_nodes =
         Array.map lowereds ~f:(fun lowered ->
             Option.(join @@ map lowered ~f:(fun optim -> optim.Low_level.merge_node)));
     }
 
-  let link context code =
+  let link ?(from_prior_context = []) context code =
+    verify_prior_context ~ctx_arrays ~is_in_context ~old_context:context.ctx ~from_prior_context
+      [| code.traced_store |];
     let ctx, bindings, schedule = link context.ctx code.code in
     { context = { ctx; expected_merge_node = code.expected_merge_node }; schedule; bindings; name }
 
-  let link_batch context code_batch =
+  let link_batch ?(from_prior_context = []) context code_batch =
+    verify_prior_context ~ctx_arrays ~is_in_context ~old_context:context.ctx ~from_prior_context
+      code_batch.traced_stores;
     let ctx, bindings, schedules = link_batch context.ctx code_batch.code_batch in
     ( { ctx; expected_merge_node = context.expected_merge_node },
       Array.mapi schedules ~f:(fun i ->

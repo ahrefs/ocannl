@@ -161,6 +161,7 @@ val param :
    [Require_grad]. *)
 
 val iter_embedded_arrays : f:(tn -> unit) -> t -> unit
+val non_and_embedded_nodes : t -> (t, comparator_witness) Set.t * (t, comparator_witness) Set.t
 
 val consume_forward_code : t -> asgns
 (** A forward root is a tensor that is not (currently) used to compute another tensor.

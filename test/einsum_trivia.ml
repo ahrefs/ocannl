@@ -559,9 +559,9 @@ let%expect_test "einsum matrix/inner+outer products" =
   let a = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] () in
   let%op a2 = a *+ "b|i->o; b|i->o => b|i->o" a in
-  Train.forward_and_forget backend ctx a2;
+  let ctx = Train.forward_and_ctx backend ctx a2 in
   let%op c = b *+ "b|h->o; b|i->h => b|i->o" a in
-  Train.forward_and_forget backend ctx c;
+  let ctx = Train.forward_and_ctx backend ctx c in
   let%op d = a *+ "a|i->h; b|h->o => ab|i->o" b in
   Train.forward_and_forget backend ctx d;
   let%op e = a *+ "b|i->h; b|h->o => i->o" b in
@@ -660,7 +660,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   Rand.init 0;
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|i->o => ...|o->i" in
-  Train.forward_and_forget backend ctx ho;
+  let ctx = Train.forward_and_ctx backend ctx ho in
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
@@ -710,7 +710,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] ()
   in
   let%op ho3 = hey2 ++ "...b|...i->...o => ...i|...o->...b" in
-  Train.forward_and_forget backend ctx ho3;
+  let ctx = Train.forward_and_ctx backend ctx ho3 in
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey2;
   [%expect
     {|
@@ -1156,7 +1156,7 @@ let%expect_test "einsum1 fixed dim axis" =
   Rand.init 0;
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|1->... => ...|..." in
-  Train.forward_and_forget backend ctx ho;
+  let ctx = Train.forward_and_ctx backend ctx ho in
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
@@ -1185,7 +1185,7 @@ let%expect_test "einsum1 fixed dim axis" =
     │└──────┴────────────────────────────────────┘│
     └─────────────────────────────────────────────┘ |}];
   let%op ho2 = hey ++ "...|...->... => ...|...->0" in
-  Train.forward_and_forget backend ctx ho2;
+  let ctx = Train.forward_and_ctx backend ctx ho2 in
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
@@ -1215,7 +1215,7 @@ let%expect_test "einsum1 fixed dim axis" =
     └────────────────────────────────────────────────────────────────┘ |}];
   let hey2 = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
   let%op ho3 = hey2 ++ "...|...->... => 0" in
-  Train.forward_and_forget backend ctx ho3;
+  let ctx = Train.forward_and_ctx backend ctx ho3 in
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hey2;
   [%expect
     {|

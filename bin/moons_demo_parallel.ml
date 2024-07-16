@@ -55,10 +55,13 @@ let experiment ~seed ~backend_name ~config () =
     Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" at_epoch at_step learning_rate
       epoch_loss
   in
+  let module Backend = (val backend) in
   let inputs, outputs, model_result, infer_callback, batch_losses, epoch_losses, learning_rates =
     Train.example_train_loop ~seed ~batch_size ~max_num_devices:(batch_size / 2) ~init_lr
       ~data_len:len ~epochs ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn
-      ~weight_decay ~per_batch_callback ~per_epoch_callback backend ()
+      ~weight_decay ~per_batch_callback ~per_epoch_callback
+      (module Backend)
+      ()
   in
   let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 inputs in
   let classes = Tensor.value_1d_points ~xdim:0 outputs in

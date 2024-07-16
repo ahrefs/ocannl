@@ -123,6 +123,13 @@ type procedure = {
 
 let expected_merge_node proc = proc.expected_merge_node
 
+let is_in_context node =
+  Tnode.default_to_most_local node.Low_level.tn 33;
+  match node.tn.memory_mode with
+  | Some (Hosted (Constant | Volatile), _) -> false
+  | Some ((Virtual | Local), _) -> false
+  | _ -> true
+
 type gccjit_param = Gccjit.param
 type gccjit_lvalue = Gccjit.lvalue
 type gccjit_rvalue = Gccjit.rvalue

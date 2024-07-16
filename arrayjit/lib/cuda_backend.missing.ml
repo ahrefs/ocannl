@@ -4,6 +4,7 @@ type buffer_ptr = Unimplemented_buffer_ptr [@@deriving sexp_of]
 type context = Unimplemented_ctx [@@deriving sexp_of]
 type code = Indexing.unit_bindings [@@deriving sexp_of]
 type code_batch = Indexing.unit_bindings array [@@deriving sexp_of]
+type ctx_array = Unimplemented_ctx_array [@@deriving sexp_of]
 
 let alloc_buffer ?old_buffer:_ ~size_in_bytes:_ () = Unimplemented_buffer_ptr
 let initialize (_config : Backend_types.config) = ()
@@ -13,6 +14,9 @@ let compile ?name:_ bindings _optimized = bindings
 
 let compile_batch ~names:_ (bindings : Indexing.unit_bindings) optimized : code_batch =
   Array.map optimized ~f:(fun _ -> bindings)
+
+let is_in_context _traced_array = false
+let ctx_arrays Unimplemented_ctx = Map.empty (module Tnode)
 
 let link (Unimplemented_ctx : context) (code : code) =
   let lowered_bindings = List.map ~f:(fun s -> (s, ref 0)) @@ Indexing.bound_symbols code in

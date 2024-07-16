@@ -12,6 +12,8 @@ type buffer_ptr = Cudajit.deviceptr
 let sexp_of_buffer_ptr (Cudajit.Deviceptr ptr : buffer_ptr) =
   Sexp.Atom (Unsigned.UInt64.to_hexstring ptr)
 
+type ctx_array = Cudajit.deviceptr
+
 type physical_device = {
   dev : (Cudajit.device[@sexp.opaque]);
   ordinal : int;
@@ -38,6 +40,8 @@ and context = {
       (** This map contains only the global arrays, where [all_arrays.(key).global] is [Some name]. *)
 }
 [@@deriving sexp_of]
+
+let ctx_arrays ctx = ctx.global_arrays
 
 (* It's not actually used, but it's required by the [Backend] interface. *)
 let alloc_buffer ?old_buffer ~size_in_bytes () =

@@ -21,7 +21,7 @@ let _suspended () =
   Tensor.print ~with_code:false ~with_grad:false `Default @@ c;
   Stdlib.Format.force_newline ()
 
-let () =
+let _suspended () =
   Utils.settings.with_debug_level <- 2;
   Utils.settings.output_debug_files_in_run_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
@@ -32,12 +32,39 @@ let () =
   Rand.init 0;
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "b|i->o => o|b->i" in
-  Utils.capture_stdout_logs (fun () -> Train.forward_and_forget backend ctx ho);
+  let ctx = Utils.capture_stdout_logs (fun () -> Train.forward_and_ctx backend ctx ho) in
   let hey2 =
     TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] ()
   in
   let%op ho2 = hey2 ++ "ab|cd->ef => cf|ae->db" in
   Utils.capture_stdout_logs @@ fun () ->
-  Train.forward_and_forget backend ctx ho2;
+    Train.forward_and_forget backend ctx ho2;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho2;
   Backend.unsafe_cleanup ()
+
+let () =
+  Utils.settings.with_debug_level <- 2;
+  Utils.settings.output_debug_files_in_run_directory <- true;
+  Utils.settings.debug_log_from_routines <- true;
+  let module Backend = (val Train.fresh_backend ()) in
+  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
+  let ctx = Backend.init device in
+  Rand.init 0;
+  let a = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
+  let b = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] () in
+  let%op a2 = a *+ "b|i->o; b|i->o => b|i->o" a in
+  Tensor.print ~force:false ~with_code:false ~with_grad:false `Default @@ a;
+  let ctx = Utils.capture_stdout_logs (fun () -> Train.forward_and_ctx backend ctx a2) in
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ a;
+  let%op c = b *+ "b|h->o; b|i->h => b|i->o" a in
+  Utils.capture_stdout_logs (fun () -> Train.forward_and_forget backend ctx c);
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ a;
+  (* let%op d = a *+ "a|i->h; b|h->o => ab|i->o" b in
+  Utils.capture_stdout_logs (fun () -> Train.forward_and_forget backend ctx d);
+  let%op e = a *+ "b|i->h; b|h->o => i->o" b in
+  Utils.capture_stdout_logs (fun () -> Train.forward_and_forget backend ctx e);
+  let%op f = a *+ "a|i->h; b|h->o => i->o" b in
+  Utils.capture_stdout_logs (fun () -> Train.forward_and_forget backend ctx f); *)
+  (* Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ a2; *)
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ c

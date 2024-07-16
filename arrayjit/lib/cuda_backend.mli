@@ -1,6 +1,10 @@
+open Base
+
 type context [@@deriving sexp_of]
 type code [@@deriving sexp_of]
 type code_batch [@@deriving sexp_of]
+type ctx_array
+
 open Backend_utils.Types
 
 val initialize : config -> unit
@@ -15,6 +19,8 @@ val compile_batch :
   Low_level.optimized option array ->
   code_batch
 
+val is_in_context : Low_level.traced_array -> bool
+val ctx_arrays : context -> ctx_array Map.M(Tnode).t
 val link : context -> code -> context * Indexing.lowered_bindings * Tnode.task
 
 val link_batch :

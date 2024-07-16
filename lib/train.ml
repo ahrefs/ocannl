@@ -274,6 +274,10 @@ let%debug_sexp all_device_to_host (type context)
   let f tn = ignore (Backend.to_host context tn : bool) in
   Tensor.iter_embedded_arrays ~f
 
+let needs_prior_context t =
+  Tensor.non_and_embedded_nodes t |> fst |> Set.to_list
+  |> List.concat_map ~f:(fun t -> t.value :: Option.(to_list @@ map t.diff ~f:(fun d -> d.grad)))
+
 (** Executes the jitted code and copies arrays embedded in the given tenosor from and to host,
     synchronizes before copying to host. If [looping] is provided, loops over bindings and executes
     the given function inside the loop after a run. All and only bindings with associated ranges are
@@ -347,7 +351,7 @@ let%track_sexp parallel_update (type context)
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
   let loss_merge =
     Backend.(
-      link sgd_update.context
+      link ~from_prior_context:(needs_prior_context updaten.loss) sgd_update.context
       @@ compile Idx.Empty
            [%cd
              ~~("merging" updaten.loss);
@@ -400,7 +404,7 @@ let%track_sexp parallel_update (type context)
 
 let debug_name t = Tn.(debug_name ~id:t.Tensor.value.id ~label:t.value.label)
 
-let get_all_suggested_devices (type device) ?max_num_devices
+let get_all_suggested_devices ?(max_num_devices : int option) (type device)
     (backend : (module Backend_type with type device = device)) : device array =
   let max_num_devices = Option.value max_num_devices ~default:Int.max_value_30_bits in
   let module Backend = (val backend : Backend_type with type device = device) in
@@ -416,13 +420,21 @@ let get_all_suggested_devices (type device) ?max_num_devices
 
 let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init_lr ?lr_schedule
     ?(copy_to_merge = false) ?max_num_devices ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn
-    ~weight_decay ?per_batch_callback ?per_epoch_callback (backend : (module Backend_type)) () =
+    ~weight_decay ?per_batch_callback ?per_epoch_callback (type context)
+    ?(prior_contexts : context array option)
+    (backend : (module Backend_type with type context = context)) () =
   let module TDSL = Operation.TDSL in
   let module NTDSL = Operation.NTDSL in
   Rand.init seed;
-  let module Backend = (val backend : Backend_type) in
-  let devices = get_all_suggested_devices ?max_num_devices (module Backend) in
-  let num_devices = Array.length devices in
+  let module Backend = (val backend : Backend_type with type context = context) in
+  let prior_contexts =
+    match prior_contexts with
+    | Some contexts -> contexts
+    | None ->
+        let devices = get_all_suggested_devices ?max_num_devices (module Backend) in
+        Array.map devices ~f:Backend.init
+  in
+  let num_devices = Array.length prior_contexts in
   let minibatch_size = batch_size / num_devices in
   let n_batches = data_len / minibatch_size in
   let inputs = inputs ~b:[ n_batches; minibatch_size ] in
@@ -447,9 +459,11 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   in
   set_hosted learning_rate.value;
   let sgd = sgd_update ~learning_rate ~weight_decay update in
-  let contexts = Array.map devices ~f:Backend.init in
   let grad_update = Backend.compile ~shared:true bindings update.fwd_bprop in
-  let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.link ctx grad_update) in
+  let from_prior_context = needs_prior_context update.loss in
+  let grad_updates =
+    Array.map prior_contexts ~f:(fun ctx -> Backend.link ~from_prior_context ctx grad_update)
+  in
   let sgd_update = Backend.(link grad_updates.(0).context @@ compile bindings sgd) in
   all_host_to_device (module Backend) sgd_update.context scalar_loss;
   all_host_to_device (module Backend) sgd_update.context learning_rate;
@@ -489,11 +503,11 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     else Tensor.consume_forward_code model_result
   in
   set_on_host Changed_on_devices model_result.Tensor.value;
-  (* By using sgd_update.context here, maybe we don't need to copy the parameters back to the
-     host. *)
+  (* By using sgd_update.context, maybe we don't need to copy the parameters back to the host. *)
   let routine =
     Backend.(
-      link sgd_update.context @@ compile IDX.empty
+      link ~from_prior_context:(needs_prior_context model_result) sgd_update.context
+      @@ compile IDX.empty
       @@ Block_comment ("infer " ^ debug_name model_result, infer_fwd))
   in
   let infer_callback values =
@@ -503,15 +517,23 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     assert (Backend.from_host routine.context infer.value);
     run routine;
     assert (Backend.to_host routine.context model_result.value);
-    Backend.await devices.(0);
+    Backend.(await @@ get_ctx_device prior_contexts.(0));
     Tensor.get_values model_result
   in
   (* Note: infer_callback is significantly less efficient than using the model via arrayjit. *)
   (inputs, outputs, model_result, infer_callback, !batch_losses, !epoch_losses, !learning_rates)
 
-let%track_sexp forward_and_forget ?(disable_rootness_check = false) (type context)
+let%track_sexp forward_and_ctx ?(disable_rootness_check = false) (type context)
     (module Backend : Backend_type with type context = context) ctx ?(bindings = IDX.empty) t =
-  let routine = Backend.(link ctx @@ compile bindings @@ forward ~disable_rootness_check t) in
+  let routine =
+    Backend.(
+      link ~from_prior_context:(needs_prior_context t) ctx
+      @@ compile bindings @@ forward ~disable_rootness_check t)
+  in
   if not disable_rootness_check then Tensor.remove_bprop_root t;
   (* FIXME: to properly forget we need to free the incrementally-allocated memory! *)
-  sync_run (module Backend) routine t
+  sync_run (module Backend) routine t;
+  routine.context
+
+let forward_and_forget ?disable_rootness_check backend ctx ?bindings t =
+  ignore @@ forward_and_ctx ?disable_rootness_check backend ctx ?bindings t
