@@ -372,10 +372,10 @@ let get_global_run_id =
     if !next_id < 0 then next_id := 0;
     !next_id
 
-let link_proc ~old_context ~name ~params ~global_arrays lowered_bindings run_module =
+let link_proc ~prior_context ~name ~params ~global_arrays lowered_bindings run_module =
   let module Cu = Cudajit in
   let func = Cu.module_get_function run_module ~name in
-  let context = { old_context with run_module = Some run_module; global_arrays } in
+  let context = { prior_context with run_module = Some run_module; global_arrays } in
   let%diagn_rt_sexp work () : unit =
     let log_id = get_global_run_id () in
     let log_id_prefix = Int.to_string log_id ^ ": " in
@@ -383,7 +383,7 @@ let link_proc ~old_context ~name ~params ~global_arrays lowered_bindings run_mod
     let module Cu = Cudajit in
     let args =
       (* TODO: should we prohibit or warn about local-only tensors that are in
-         old_context.global_arrays? *)
+         prior_context.global_arrays? *)
       List.map params ~f:(function
         | _name, Param_ptr tn ->
             let ptr = Option.value_exn ~here:[%here] @@ Map.find global_arrays tn in
@@ -436,30 +436,30 @@ let%diagn_sexp alloc_if_needed ctx ~key ~data:node globals =
     Map.update globals key ~f:(fun old -> Option.value_or_thunk old ~default:ptr))
   else globals
 
-let%diagn_sexp link old_context (code : code) =
-  let ctx = old_context.ctx in
+let%diagn_sexp link prior_context (code : code) =
+  let ctx = prior_context.ctx in
   set_ctx ctx;
   let global_arrays =
-    Hashtbl.fold ~init:old_context.global_arrays code.traced_store ~f:(alloc_if_needed ctx)
+    Hashtbl.fold ~init:prior_context.global_arrays code.traced_store ~f:(alloc_if_needed ctx)
   in
   let run_module = Cudajit.module_load_data_ex code.ptx [] in
   let idx_params = Indexing.bound_symbols code.bindings in
   let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let context, task =
-    link_proc ~old_context ~name:code.name ~params:code.params ~global_arrays lowered_bindings
+    link_proc ~prior_context ~name:code.name ~params:code.params ~global_arrays lowered_bindings
       run_module
   in
   (context, lowered_bindings, task)
 
-let%track_sexp link_batch old_context (code_batch : code_batch) =
+let%track_sexp link_batch prior_context (code_batch : code_batch) =
   let idx_params = Indexing.bound_symbols code_batch.bindings in
   let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let module Cu = Cudajit in
-  let ctx = old_context.ctx in
+  let ctx = prior_context.ctx in
   set_ctx ctx;
   let run_module = Cu.module_load_data_ex code_batch.ptx [] in
   let (context, _global_arrays), procs =
-    Array.fold_mapi code_batch.params_and_names ~init:(old_context, old_context.global_arrays)
+    Array.fold_mapi code_batch.params_and_names ~init:(prior_context, prior_context.global_arrays)
       ~f:(fun i (context, global_arrays) pns ->
         Option.value ~default:((context, global_arrays), None)
         @@ Option.map2 pns code_batch.traced_stores.(i) ~f:(fun (params, name) traced_store ->
@@ -467,7 +467,7 @@ let%track_sexp link_batch old_context (code_batch : code_batch) =
                  Hashtbl.fold ~init:global_arrays traced_store ~f:(alloc_if_needed ctx)
                in
                let context, task =
-                 link_proc ~old_context:context ~name ~params ~global_arrays lowered_bindings
+                 link_proc ~prior_context:context ~name ~params ~global_arrays lowered_bindings
                    run_module
                in
                ((context, global_arrays), Some task)))

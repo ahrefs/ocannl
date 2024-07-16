@@ -591,8 +591,8 @@ module type Simple_backend = sig
     ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> src:buffer_ptr -> unit
 end
 
-let verify_prior_context ~ctx_arrays ~is_in_context ~old_context ~from_prior_context traced_stores =
-  let olds = ctx_arrays old_context in
+let verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context traced_stores =
+  let olds = ctx_arrays prior_context in
   List.iter from_prior_context ~f:(fun tn ->
       let node = Array.find_map traced_stores ~f:(fun store -> Hashtbl.find store tn) in
       if
@@ -663,35 +663,35 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
     if shared then Compiled (lowereds, compile_batch ~names ~opt_ctx_arrays:None bindings lowereds)
     else Postponed { lowereds; bindings; names }
 
-  let link ?(from_prior_context = []) ~merge_buffer (old_context : context) (code : code) =
+  let link ?(from_prior_context = []) ~merge_buffer (prior_context : context) (code : code) =
     Backend.(
-      verify_prior_context ~ctx_arrays ~is_in_context ~old_context ~from_prior_context
+      verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
         [| get_traced_store code |]);
     let context, bindings, schedule, name =
       match code with
       | Postponed { lowered; bindings; name } ->
           let proc =
-            Backend.compile ~name ~opt_ctx_arrays:(Some (ctx_arrays old_context)) bindings lowered
+            Backend.compile ~name ~opt_ctx_arrays:(Some (ctx_arrays prior_context)) bindings lowered
           in
-          link_compiled ~merge_buffer old_context proc
-      | Compiled (_, code) -> link_compiled ~merge_buffer old_context code
+          link_compiled ~merge_buffer prior_context proc
+      | Compiled (_, code) -> link_compiled ~merge_buffer prior_context code
     in
     { context; schedule; bindings; name }
 
-  let link_batch ?(from_prior_context = []) ~merge_buffer (old_context : context)
+  let link_batch ?(from_prior_context = []) ~merge_buffer (prior_context : context)
       (code_batch : code_batch) =
     Backend.(
-      verify_prior_context ~ctx_arrays ~is_in_context ~old_context ~from_prior_context
+      verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
       @@ get_traced_stores code_batch);
     let _opt_ctx_arrays, procs =
       match code_batch with
       | Postponed { lowereds; bindings; names } ->
           Backend.compile_batch ~names
-            ~opt_ctx_arrays:(Some (ctx_arrays old_context))
+            ~opt_ctx_arrays:(Some (ctx_arrays prior_context))
             bindings lowereds
       | Compiled (_, procs) -> procs
     in
-    Array.fold_map procs ~init:old_context ~f:(fun context -> function
+    Array.fold_map procs ~init:prior_context ~f:(fun context -> function
       | Some proc ->
           let context, bindings, schedule, name = link_compiled ~merge_buffer context proc in
           (context, Some { context; schedule; bindings; name })
@@ -759,13 +759,13 @@ module Cuda_backend : Backend = struct
     }
 
   let link ?(from_prior_context = []) context code =
-    verify_prior_context ~ctx_arrays ~is_in_context ~old_context:context.ctx ~from_prior_context
+    verify_prior_context ~ctx_arrays ~is_in_context ~prior_context:context.ctx ~from_prior_context
       [| code.traced_store |];
     let ctx, bindings, schedule = link context.ctx code.code in
     { context = { ctx; expected_merge_node = code.expected_merge_node }; schedule; bindings; name }
 
   let link_batch ?(from_prior_context = []) context code_batch =
-    verify_prior_context ~ctx_arrays ~is_in_context ~old_context:context.ctx ~from_prior_context
+    verify_prior_context ~ctx_arrays ~is_in_context ~prior_context:context.ctx ~from_prior_context
       code_batch.traced_stores;
     let ctx, bindings, schedules = link_batch context.ctx code_batch.code_batch in
     ( { ctx; expected_merge_node = context.expected_merge_node },

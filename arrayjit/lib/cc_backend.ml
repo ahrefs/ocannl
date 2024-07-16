@@ -210,15 +210,15 @@ let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings
               opt_ctx_arrays;
             })) )
 
-let%track_sexp link_compiled ~merge_buffer (old_context : context) (code : procedure) :
+let%track_sexp link_compiled ~merge_buffer (prior_context : context) (code : procedure) :
     context * _ * _ * string =
-  let label : string = old_context.label in
+  let label : string = prior_context.label in
   let name : string = code.name in
   let arrays : Ndarray.t Base.Map.M(Tn).t =
     match code with
     | { opt_ctx_arrays = Some arrays; _ } -> arrays
     | { params; _ } ->
-        List.fold params ~init:old_context.arrays ~f:(fun ctx_arrays -> function
+        List.fold params ~init:prior_context.arrays ~f:(fun ctx_arrays -> function
           | _, Param_ptr tn ->
               let f = function
                 | Some arr -> arr
