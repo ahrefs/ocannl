@@ -11,9 +11,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   Rand.init 0;
-  Utils.settings.with_debug_level <- 1;
-
-  Utils.settings.output_debug_files_in_run_directory <- true;
+  Utils.enable_runtime_debug ();
   (* Utils.settings.debug_log_from_routines <- true; *)
   let hid_dim = 16 in
   let len = 300 in

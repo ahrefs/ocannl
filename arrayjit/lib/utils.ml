@@ -29,6 +29,10 @@ type settings = {
   mutable debug_log_from_routines : bool;
   mutable debug_memory_locations : bool;
   mutable output_debug_files_in_run_directory : bool;
+      (** Writes compilation related files in the run directory (additional files, or files that
+          would otherwise be in temp directory). When both
+          [output_debug_files_in_run_directory = true] and [with_debug_level > 1], compilation
+          should also preserve debug and line information for runtime debugging. *)
   mutable with_debug_level : int;
   mutable fixed_state_for_init : int option;
   mutable print_decimals_precision : int;
@@ -45,6 +49,13 @@ let settings =
     fixed_state_for_init = None;
     print_decimals_precision = 2;
   }
+
+let with_runtime_debug () =
+  settings.output_debug_files_in_run_directory && settings.with_debug_level > 1
+
+let enable_runtime_debug () =
+  settings.output_debug_files_in_run_directory <- true;
+  settings.with_debug_level <- max 2 settings.with_debug_level
 
 let accessed_global_args = Hash_set.create (module String)
 

@@ -14,6 +14,8 @@ let sexp_of_buffer_ptr (Cudajit.Deviceptr ptr : buffer_ptr) =
 
 type ctx_array = Cudajit.deviceptr
 
+let sexp_of_ctx_array = sexp_of_buffer_ptr
+
 type physical_device = {
   dev : (Cudajit.device[@sexp.opaque]);
   ordinal : int;
@@ -36,7 +38,7 @@ and context = {
   device : device;
   run_module : (Cudajit.module_[@sexp.opaque]) option;
       (** Code jitted for this context, independent of the parent and child contexts. *)
-  global_arrays : (Cudajit.deviceptr[@sexp.opaque]) Map.M(Tn).t;
+  global_arrays : ctx_array Map.M(Tn).t;
       (** This map contains only the global arrays, where [all_arrays.(key).global] is [Some name]. *)
 }
 [@@deriving sexp_of]
@@ -171,13 +173,13 @@ let%diagn_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option)
   match (tn, Map.find ctx.global_arrays tn) with
   | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
       set_ctx ctx.ctx;
-      let f src = Cudajit.memcpy_H_to_D_async ~dst ~src ctx.device.stream in
-      Ndarray.map { f } hosted;
       (if Utils.settings.with_debug_level > 0 then
          let module Debug_runtime =
            (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
          in
-         [%log "copied", Tn.label tn, Tn.name tn, "from host"]);
+         [%log "copying", Tn.label tn, Tn.name tn, "to", (dst : ctx_array), "from host"]);
+      let f src = Cudajit.memcpy_H_to_D_async ~dst ~src ctx.device.stream in
+      Ndarray.map { f } hosted;
       true
   | _ -> false
 
@@ -186,18 +188,14 @@ let%track_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (
   match (tn, Map.find ctx.global_arrays tn) with
   | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
       set_ctx ctx.ctx;
+      (if Utils.settings.with_debug_level > 0 then
+         let module Debug_runtime =
+           (val Option.value_or_thunk rt ~default:(fun () ->
+                    (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
+         in
+         [%log "copying", Tn.label tn, Tn.name tn, "at", (src : ctx_array), "to host"]);
       let f dst = Cudajit.memcpy_D_to_H_async ~dst ~src ctx.device.stream in
       Ndarray.map { f } hosted;
-      if Utils.settings.with_debug_level > 0 then (
-        let module Debug_runtime =
-          (val Option.value_or_thunk rt ~default:(fun () ->
-                   (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
-        in
-        [%log "copied", Tn.label tn, Tn.name tn, "to host"];
-        if Utils.settings.with_debug_level > 1 then
-          [%log_printbox
-            let indices = Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5) in
-            Ndarray.render_array ~indices hosted]);
       true
   | _ -> false
 
@@ -226,7 +224,16 @@ let%track_sexp rec device_to_device ?(rt : (module Minidebug_runtime.Debug_runti
                    (val Option.value_or_thunk rt ~default:(fun () ->
                             (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
                  in
-                 [%log "copied", Tn.label tn, Tn.name tn, "from", src.label]);
+                 [%log
+                   "copied",
+                     Tn.label tn,
+                     Tn.name tn,
+                     "from",
+                     src.label,
+                     "at",
+                     (s_arr : ctx_array),
+                     "to",
+                     (d_arr : ctx_array)]);
               true)
       | Streaming ->
           if phys_equal dst.device.physical src.device.physical then (
@@ -273,9 +280,9 @@ type code_batch = {
 [@@deriving sexp_of]
 
 let%diagn_sexp cuda_to_ptx ~name cu_src =
-  let f_name = name ^ "-cudajit-debug" in
+  let name_cu = name ^ ".cu" in
   if Utils.settings.output_debug_files_in_run_directory then (
-    let oc = Out_channel.open_text @@ f_name ^ ".cu" in
+    let oc = Out_channel.open_text name_cu in
     Stdio.Out_channel.output_string oc cu_src;
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);
@@ -284,14 +291,16 @@ let%diagn_sexp cuda_to_ptx ~name cu_src =
   let with_debug =
     Utils.settings.output_debug_files_in_run_directory || Utils.settings.with_debug_level > 0
   in
-  let ptx = Cu.compile_to_ptx ~cu_src ~name ~options:[ "--use_fast_math" ] ~with_debug in
+  let options =
+    "--use_fast_math" :: (if Utils.with_runtime_debug () then [ "--device-debug" ] else [])
+  in
+  let ptx = Cu.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug in
   if Utils.settings.output_debug_files_in_run_directory then (
-    let f_name = name ^ "-cudajit-debug" in
-    let oc = Out_channel.open_text @@ f_name ^ ".ptx" in
+    let oc = Out_channel.open_text @@ name ^ ".ptx" in
     Stdio.Out_channel.output_string oc @@ Cu.string_from_ptx ptx;
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc;
-    let oc = Out_channel.open_text @@ f_name ^ ".cu_log" in
+    let oc = Out_channel.open_text @@ name ^ ".cu_log" in
     Stdio.Out_channel.output_string oc @@ Option.value_exn ~here:[%here] ptx.log;
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);
@@ -436,13 +445,18 @@ let%diagn_sexp alloc_if_needed ctx ~key ~data:node globals =
     Map.update globals key ~f:(fun old -> Option.value_or_thunk old ~default:ptr))
   else globals
 
+let run_options () =
+  if Utils.with_runtime_debug () then
+    Cudajit.[ JIT_GENERATE_DEBUG_INFO true; JIT_GENERATE_LINE_INFO true ]
+  else []
+
 let%diagn_sexp link prior_context (code : code) =
   let ctx = prior_context.ctx in
   set_ctx ctx;
   let global_arrays =
     Hashtbl.fold ~init:prior_context.global_arrays code.traced_store ~f:(alloc_if_needed ctx)
   in
-  let run_module = Cudajit.module_load_data_ex code.ptx [] in
+  let run_module = Cudajit.module_load_data_ex code.ptx (run_options ()) in
   let idx_params = Indexing.bound_symbols code.bindings in
   let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let context, task =
@@ -457,7 +471,7 @@ let%track_sexp link_batch prior_context (code_batch : code_batch) =
   let module Cu = Cudajit in
   let ctx = prior_context.ctx in
   set_ctx ctx;
-  let run_module = Cu.module_load_data_ex code_batch.ptx [] in
+  let run_module = Cu.module_load_data_ex code_batch.ptx (run_options ()) in
   let (context, _global_arrays), procs =
     Array.fold_mapi code_batch.params_and_names ~init:(prior_context, prior_context.global_arrays)
       ~f:(fun i (context, global_arrays) pns ->
