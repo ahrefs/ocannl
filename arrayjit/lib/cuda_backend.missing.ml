@@ -7,7 +7,7 @@ type code_batch = Indexing.unit_bindings array [@@deriving sexp_of]
 type ctx_array = Unimplemented_ctx_array [@@deriving sexp_of]
 
 let alloc_buffer ?old_buffer:_ ~size_in_bytes:_ () = Unimplemented_buffer_ptr
-let initialize (_config : Backend_types.config) = ()
+let initialize (_config : Backend_utils.Types.config) = ()
 let is_initialized () = true
 let finalize _context = ()
 let compile ?name:_ bindings _optimized = bindings
