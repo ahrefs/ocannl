@@ -10,7 +10,7 @@ let alloc_buffer ?old_buffer:_ ~size_in_bytes:_ () = Unimplemented_buffer_ptr
 let initialize (_config : Backend_utils.Types.config) = ()
 let is_initialized () = true
 let finalize _context = ()
-let compile ?name:_ bindings _optimized = bindings
+let compile name:_ bindings _optimized = bindings
 
 let compile_batch ~names:_ (bindings : Indexing.unit_bindings) optimized : code_batch =
   Array.map optimized ~f:(fun _ -> bindings)
