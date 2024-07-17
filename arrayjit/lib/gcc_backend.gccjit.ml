@@ -12,10 +12,6 @@ let name = "gccjit"
 let optimization_level () =
   Int.of_string @@ Utils.get_global_arg ~default:"3" ~arg_name:"gccjit_backend_optimization_level"
 
-type config = [ `Physical_devices_only | `For_parallel_copying | `Most_parallel_devices ]
-[@@deriving equal, sexp, variants]
-(** Currently unused, backend behaves as if [config] is always [`Physical_devices_only]. *)
-
 type mem_properties =
   | Local_only  (** The array is only needed for a local computation, is allocated on the stack. *)
   | From_context
@@ -165,7 +161,11 @@ let zero_out ctx block node =
   let c_int = Type.get ctx Type.Int in
   Block.eval block
   @@ RValue.call ctx (Function.builtin ctx "memset")
-       [ Lazy.force node.ptr; RValue.zero ctx c_int; RValue.int ctx c_index node.size_in_bytes ]
+       [
+         Lazy.force node.ptr;
+         RValue.zero ctx c_int;
+         RValue.int ctx c_index @@ Tn.size_in_bytes node.tn;
+       ]
 
 let get_c_ptr ctx num_typ ba =
   Gccjit.(RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray ba)
@@ -179,7 +179,6 @@ let prepare_node ~debug_log_zero_out ~get_ident ctx nodes traced_store ctx_nodes
         let traced = Low_level.(get_node traced_store tn) in
         let dims = Lazy.force tn.dims in
         let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
-        let size_in_bytes = size_in_elems * Ops.prec_in_bytes tn.prec in
         let is_on_host = Tn.is_hosted_force tn 33 in
         let is_materialized = Tn.is_materialized_force tn 331 in
         let is_constant = Tn.is_hosted_force ~specifically:Constant tn 332 in
@@ -230,7 +229,7 @@ let prepare_node ~debug_log_zero_out ~get_ident ctx nodes traced_store ctx_nodes
               (* The array is the pointer but the address of the array is the same pointer. *)
               lazy (RValue.cast ctx (LValue.address @@ Option.value_exn ~here:[%here] !v) ptr_typ)
         in
-        let result = { tn; ptr; mem; dims; size_in_bytes; num_typ; prec; zero_initialized } in
+        let result = { tn; ptr; mem; dims; num_typ; prec; zero_initialized } in
         let backend_info = sexp_of_mem_properties mem in
         let initialize init_block _func =
           Block.comment init_block
@@ -329,8 +328,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
   let c_double = Type.get ctx Type.Double in
   let cast_bool num_typ v = RValue.cast ctx (RValue.cast ctx v c_int) num_typ in
   let to_d v = RValue.cast ctx v c_double in
-  (* Source of unique identifiers for local scope ids, which can be non-unique globally due to
-     inlining. *)
+  (* Unique identifiers for local scope ids, can be non-unique globally due to inlining. *)
   let uid = ref 0 in
   let get_uid () =
     let id =
@@ -376,8 +374,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
     let loop = debug_float ~env prec in
     match value with
     | Low_level.Local_scope { id; _ } ->
-        (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug
-           logs. *)
+        (* Not printing the inlined definition: (1) code complexity; (2) don't overload the logs. *)
         loop @@ Get_local id
     | Get_local id ->
         let lvalue = Map.find_exn !debug_locals id in
@@ -635,15 +632,15 @@ let%track_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
         (Param.create ctx c_index @@ Indexing.symbol_ident static_symbol, Static_idx s))
   in
   let merge_param =
-    Option.to_list
-    @@ Option.map merge_node ~f:(fun tn ->
-           let c_typ = gcc_typ_of_prec tn.prec in
-           let num_typ = Type.(get ctx c_typ) in
-           let ptr_typ = Type.pointer num_typ in
-           (Param.create ctx ptr_typ "merge_buffer", Merge_buffer))
+    Option.map merge_node ~f:(fun tn ->
+        let c_typ = gcc_typ_of_prec tn.prec in
+        let num_typ = Type.(get ctx c_typ) in
+        let ptr_typ = Type.pointer num_typ in
+        (Param.create ctx ptr_typ "merge_buffer", Merge_buffer))
   in
+  let merge_node = Option.map merge_param ~f:(fun (p, _) -> RValue.param p) in
   let params : (gccjit_param * param_source) list ref =
-    ref (Option.to_list log_file_name @ merge_param @ static_indices)
+    ref (Option.to_list log_file_name @ Option.to_list merge_param @ static_indices)
   in
   let ctx_nodes : ctx_nodes =
     match opt_ctx_arrays with
@@ -688,9 +685,8 @@ let%track_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
   (* Do initializations in the order they were scheduled. *)
   List.iter (List.rev !initializations) ~f:(fun init -> init init_block func);
   let main_block = Block.create ~name func in
-  (* let merge_node = Option.map merge_node ~f:(fun _tn -> Function.param) in *)
   let ctx_info : info_nodes =
-    { ctx; traced_store; init_block; func; nodes; get_ident; merge_node = None }
+    { ctx; traced_store; init_block; func; nodes; get_ident; merge_node }
   in
   let after_proc = compile_main ~name ~log_functions ~env ctx_info func main_block proc in
   (match log_functions with
@@ -843,7 +839,8 @@ let%track_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
             let c_ptr = Ndarray.get_voidptr nd in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
         | bs, Merge_buffer :: ps ->
-            Param_2f (Ndarray.get_voidptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
+            let get_ptr (buffer, _) = Ndarray.get_voidptr buffer in
+            Param_2f (get_ptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
       in
       (* Folding by [link] above reverses the input order. Important: [code.bindings] are traversed
          in the wrong order but that's OK because [link] only uses them to check the number of
@@ -852,6 +849,7 @@ let%track_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
   in
   let%diagn_rt_sexp work () : unit =
     [%log_result name];
+    Backend_utils.check_merge_buffer ~merge_buffer ~code_node:code.expected_merge_node;
     Indexing.apply run_variadic ();
     if Utils.settings.debug_log_from_routines then (
       Utils.log_trace_tree _debug_runtime (Stdio.In_channel.read_lines log_file_name);
