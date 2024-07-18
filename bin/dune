@@ -58,6 +58,14 @@
  (modes exe))
 
 (executable
+ (name moons_demo)
+ (modules moons_demo)
+ (libraries ocannl base stdio)
+ (preprocess
+  (pps ppx_jane ppx_ocannl ppx_minidebug))
+ (modes exe))
+
+(executable
  (name moons_demo_parallel)
  (modules moons_demo_parallel)
  (libraries ocannl base stdio)

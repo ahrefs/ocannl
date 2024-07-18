@@ -178,6 +178,8 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
 
 let () = experiment 4 ~no_batch_shape_inference:true ~use_builtin_weight_decay:true ()
 
+let () = experiment 4 ~no_batch_shape_inference:false ~use_builtin_weight_decay:false ()
+
 let _suspended () =
   for seed = 0 to 19 do
     Stdio.printf "\n*************** EXPERIMENT SEED %d ******************\n%!" seed;
