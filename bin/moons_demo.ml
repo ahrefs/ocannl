@@ -51,7 +51,7 @@ let demo () =
 
   let epoch_loss = ref 0. in
 
-  let module Backend = (val Train.fresh_backend ~backend_name:"cc" ()) in
+  let module Backend = (val Train.fresh_backend ()) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   let routine = Backend.(link ctx @@ compile bindings (Seq (update.fwd_bprop, sgd))) in
