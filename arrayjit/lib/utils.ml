@@ -63,8 +63,8 @@ let read_cmdline_or_env_var n =
   let with_debug = settings.with_debug_level > 0 && not (Hash_set.mem accessed_global_args n) in
   let env_variants = [ "ocannl_" ^ n; "ocannl-" ^ n ] in
   let env_variants = List.concat_map env_variants ~f:(fun n -> [ n; String.uppercase n ]) in
-  let cmd_variants = List.concat_map env_variants ~f:(fun n -> [ n; "-" ^ n; "--" ^ n ]) in
-  let cmd_variants = List.concat_map cmd_variants ~f:(fun n -> [ n; n ^ "_"; n ^ "-"; n ^ "=" ]) in
+  let cmd_variants = List.concat_map env_variants ~f:(fun n -> [ "-" ^ n; "--" ^ n; n ]) in
+  let cmd_variants = List.concat_map cmd_variants ~f:(fun n -> [ n ^ "_"; n ^ "-"; n ^ "="; n ]) in
   match
     Array.find_map (Core.Sys.get_argv ()) ~f:(fun arg ->
         List.find_map cmd_variants ~f:(fun prefix ->
