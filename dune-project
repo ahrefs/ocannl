@@ -43,9 +43,9 @@
 (package
  (name arrayjit)
  (synopsis
-  "An array language compiler with multiple backends (CPU, Cuda), staged compilation")
+  "An array language compiler with multiple backends (CPU, CUDA), staged compilation")
  (description
-  "The optimizing compiler sub-package of OCANNL. Use OCANNL instead to also get: nice syntax, shape inference, backpropagation, optimizers.")
+  "The optimizing compiler sub-package of OCANNL. Use neural_nets_lib instead to also get: nice syntax, shape inference, backpropagation, optimizers.")
  (depends
   (ocaml
    (>= 5.1.0))
@@ -79,7 +79,7 @@
  (synopsis
   "A from-scratch Deep Learning framework with an optimizing compiler, shape inference, concise syntax")
  (description
-  "OCaml Compiles Algorithms for Neural Networks Learning is a compiled Deep Learning framework that puts emphasis on low-level backends (like TinyGrad), shape inference, concise notation (ab)using PPX.")
+  "OCaml Compiles Algorithms for Neural Networks Learning is a compiled Deep Learning framework that puts emphasis on low-level backends (like tinygrad), shape inference, concise notation (ab)using PPX.")
  (depends
   (ocaml
    (>= 5.1.0))
@@ -98,7 +98,7 @@
   ppx_jane
   ppx_expect
   (ppx_minidebug
-   (>= 1.5))
+   (>= 1.5.1))
   (odoc :with-doc)
   (md2mld :with-doc))
  (tags

@@ -4,7 +4,7 @@ version: "0.4.0"
 synopsis:
   "A from-scratch Deep Learning framework with an optimizing compiler, shape inference, concise syntax"
 description:
-  "OCaml Compiles Algorithms for Neural Networks Learning is a compiled Deep Learning framework that puts emphasis on low-level backends (like TinyGrad), shape inference, concise notation (ab)using PPX."
+  "OCaml Compiles Algorithms for Neural Networks Learning is a compiled Deep Learning framework that puts emphasis on low-level backends (like tinygrad), shape inference, concise notation (ab)using PPX."
 maintainer: ["Lukasz Stafiniak"]
 authors: ["Lukasz Stafiniak"]
 license: "BSD-2-Clause"
@@ -27,7 +27,7 @@ depends: [
   "ppxlib"
   "ppx_jane"
   "ppx_expect"
-  "ppx_minidebug" {>= "1.5"}
+  "ppx_minidebug" {>= "1.5.1"}
   "odoc" {with-doc}
   "md2mld" {with-doc}
 ]
