@@ -65,7 +65,7 @@
   ppx_jane
   ppx_expect
   (ppx_minidebug
-   (>= 1.5)))
+   (>= 1.5.1)))
  (depopts
   (cudajit
    (>= 0.4.0))

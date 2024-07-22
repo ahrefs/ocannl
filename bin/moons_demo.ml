@@ -12,6 +12,7 @@ module Debug_runtime = Utils.Debug_runtime
 let demo () =
   Rand.init 0;
   Utils.enable_runtime_debug ();
+  Utils.settings.with_debug_level <- 3;
   (* Utils.settings.debug_log_from_routines <- true; *)
   let hid_dim = 16 in
   let len = 300 in
@@ -51,7 +52,7 @@ let demo () =
 
   let epoch_loss = ref 0. in
 
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Train.fresh_backend ~backend_name:"cuda" ()) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   let routine = Backend.(link ctx @@ compile bindings (Seq (update.fwd_bprop, sgd))) in

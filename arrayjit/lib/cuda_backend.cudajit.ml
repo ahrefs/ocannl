@@ -9,8 +9,7 @@ open Backend_utils.Types
 
 type buffer_ptr = Cudajit.deviceptr
 
-let sexp_of_buffer_ptr (Cudajit.Deviceptr ptr : buffer_ptr) =
-  Sexp.Atom (Unsigned.UInt64.to_hexstring ptr)
+let sexp_of_buffer_ptr ptr = Sexp.Atom (Cudajit.string_of_deviceptr ptr)
 
 type ctx_array = Cudajit.deviceptr
 
@@ -37,7 +36,8 @@ and context = {
   ctx : (Cudajit.context[@sexp.opaque]);
   device : device;
   run_module : (Cudajit.module_[@sexp.opaque]) option;
-      (** Code jitted for this context, independent of the parent and child contexts. *)
+      (** Code jitted for this context, typically independent of the parent and child contexts, but
+          shared by batch linked contexts. *)
   global_arrays : ctx_array Map.M(Tn).t;
       (** This map contains only the global arrays, where [all_arrays.(key).global] is [Some name]. *)
 }
@@ -114,7 +114,7 @@ let new_virtual_device physical =
   let subordinal = 0 in
   (* Strange that we need ctx_set_current even with a single device! *)
   set_ctx physical.primary_context;
-  let stream = Cudajit.stream_create () in
+  let stream = Cudajit.stream_create ~non_blocking:true () in
   { physical; stream; subordinal; merge_buffer = None }
 
 let cuda_properties =
@@ -143,15 +143,21 @@ let to_subordinal { subordinal; _ } = subordinal
 let get_name device =
   Int.to_string (to_ordinal device.physical) ^ "_" ^ Int.to_string (to_subordinal device)
 
+let await device : unit =
+  set_ctx device.physical.primary_context;
+  Cudajit.stream_synchronize device.stream
+
+let is_idle device = Cudajit.stream_is_ready device.stream
+
 let finalize ctx =
-  let phys_dev = ctx.device.physical in
-  if Option.is_some @@ Core.Weak.get !devices phys_dev.ordinal then (
-    set_ctx phys_dev.primary_context;
-    Option.iter ctx.run_module ~f:Cudajit.module_unload;
-    Map.iter ctx.global_arrays ~f:(fun ptr -> Cudajit.mem_free ptr))
+  (* await does this: set_ctx ctx.device.physical.primary_context; *)
+  await ctx.device;
+  Option.iter ctx.run_module ~f:Cudajit.module_unload;
+  Map.iter ctx.global_arrays ~f:(fun ptr -> Cudajit.mem_free ptr)
 
 let unsafe_cleanup ?unsafe_shutdown:_ () =
   let len = Core.Weak.length !devices in
+  (* FIXME: finalize still-living contexts first. *)
   (* TODO: maybe better to do device_primary_ctx_reset if [unsafe_shutdown=false]. *)
   for i = 0 to len - 1 do
     Option.iter (Core.Weak.get !devices i) ~f:(fun device ->
@@ -160,13 +166,6 @@ let unsafe_cleanup ?unsafe_shutdown:_ () =
         Cudajit.device_primary_ctx_release device.dev)
   done;
   Core.Weak.fill !devices 0 len None
-
-let await device : unit =
-  let phys_dev = device.physical in
-  set_ctx phys_dev.primary_context;
-  Cudajit.stream_synchronize device.stream
-
-let is_idle device = Cudajit.stream_is_ready device.stream
 
 let%diagn_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context) tn
     =
@@ -301,7 +300,7 @@ let%diagn_sexp cuda_to_ptx ~name cu_src =
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc;
     let oc = Out_channel.open_text @@ name ^ ".cu_log" in
-    Stdio.Out_channel.output_string oc @@ Option.value_exn ~here:[%here] ptx.log;
+    Stdio.Out_channel.output_string oc @@ Option.value_exn ~here:[%here] (Cu.compilation_log ptx);
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);
   ptx
@@ -381,16 +380,19 @@ let get_global_run_id =
     if !next_id < 0 then next_id := 0;
     !next_id
 
-let link_proc ~prior_context ~name ~params ~global_arrays lowered_bindings run_module =
+let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~global_arrays
+    lowered_bindings run_module =
   let module Cu = Cudajit in
   let func = Cu.module_get_function run_module ~name in
   let context = { prior_context with run_module = Some run_module; global_arrays } in
   let%diagn_rt_sexp work () : unit =
     let log_id = get_global_run_id () in
     let log_id_prefix = Int.to_string log_id ^ ": " in
-    [%log_result "Launching", name, context.label, (log_id : int)];
+    if Utils.settings.with_debug_level > 0 then
+      [%log_result
+        "Launching", name, context.label, (log_id : int), (params : (string * param_source) list)];
     let module Cu = Cudajit in
-    let args =
+    let args : Cu.kernel_param list =
       (* TODO: should we prohibit or warn about local-only tensors that are in
          prior_context.global_arrays? *)
       List.map params ~f:(function
@@ -446,8 +448,7 @@ let%diagn_sexp alloc_if_needed ctx ~key ~data:node globals =
   else globals
 
 let run_options () =
-  if Utils.with_runtime_debug () then
-    Cudajit.[ JIT_GENERATE_DEBUG_INFO true; JIT_GENERATE_LINE_INFO true ]
+  if Utils.with_runtime_debug () then Cudajit.[ GENERATE_DEBUG_INFO true; GENERATE_LINE_INFO true ]
   else []
 
 let%diagn_sexp link prior_context (code : code) =
