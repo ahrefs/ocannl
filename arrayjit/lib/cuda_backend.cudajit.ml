@@ -21,6 +21,7 @@ type physical_device = {
   primary_context : (Cudajit.context[@sexp.opaque]);
   mutable copy_merge_buffer : buffer_ptr;
   mutable copy_merge_buffer_capacity : int;
+  released : Utils.atomic_bool;
 }
 [@@deriving sexp_of]
 
@@ -35,11 +36,13 @@ and context = {
   label : string;
   ctx : (Cudajit.context[@sexp.opaque]);
   device : device;
+  parent : context option;
   run_module : (Cudajit.module_[@sexp.opaque]) option;
       (** Code jitted for this context, typically independent of the parent and child contexts, but
           shared by batch linked contexts. *)
   global_arrays : ctx_array Map.M(Tn).t;
       (** This map contains only the global arrays, where [all_arrays.(key).global] is [Some name]. *)
+  finalized : Utils.atomic_bool;
 }
 [@@deriving sexp_of]
 
@@ -55,8 +58,10 @@ let init device =
     label = "on dev " ^ get_name device;
     ctx = device.physical.primary_context;
     device;
+    parent = None;
     global_arrays = Map.empty (module Tn);
     run_module = None;
+    finalized = Atomic.make false;
   }
 
 let is_initialized, initialize =
@@ -108,7 +113,14 @@ let%track_sexp get_device ~(ordinal : int) : physical_device =
       set_ctx primary_context;
       let copy_merge_buffer = Cudajit.mem_alloc ~size_in_bytes:copy_merge_buffer_capacity in
       let result =
-        { dev; ordinal; primary_context; copy_merge_buffer; copy_merge_buffer_capacity }
+        {
+          dev;
+          ordinal;
+          primary_context;
+          copy_merge_buffer;
+          copy_merge_buffer_capacity;
+          released = Atomic.make false;
+        }
       in
       Core.Weak.set !devices ordinal (Some result);
       result)
@@ -153,20 +165,28 @@ let await device : unit =
 let is_idle device = Cudajit.stream_is_ready device.stream
 
 let finalize ctx =
-  (* await does this: set_ctx ctx.device.physical.primary_context; *)
-  await ctx.device;
-  Option.iter ctx.run_module ~f:Cudajit.module_unload;
-  Map.iter ctx.global_arrays ~f:(fun ptr -> Cudajit.mem_free ptr)
+  if
+    Atomic.compare_and_set ctx.finalized false true
+    && (not @@ Atomic.get ctx.device.physical.released)
+  then (
+    (* await does this: set_ctx ctx.device.physical.primary_context; *)
+    await ctx.device;
+    Option.iter ctx.run_module ~f:Cudajit.module_unload;
+    Map.iteri ctx.global_arrays ~f:(fun ~key ~data:ptr ->
+        if not @@ Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.global_arrays key) then
+          Cudajit.mem_free ptr);
+    Cudajit.stream_destroy ctx.device.stream)
 
 let unsafe_cleanup ?unsafe_shutdown:_ () =
   let len = Core.Weak.length !devices in
-  (* FIXME: finalize still-living contexts first. *)
-  (* TODO: maybe better to do device_primary_ctx_reset if [unsafe_shutdown=false]. *)
+  (* NOTE: releasing the context should free its resources, there's no need to finalize the
+     remaining contexts, and [finalize] will not do anything for a [released] physical device. *)
   for i = 0 to len - 1 do
     Option.iter (Core.Weak.get !devices i) ~f:(fun device ->
-        Cudajit.ctx_set_current device.primary_context;
-        Cudajit.ctx_synchronize ();
-        Cudajit.device_primary_ctx_release device.dev)
+        if Atomic.compare_and_set device.released false true then (
+          Cudajit.ctx_set_current device.primary_context;
+          Cudajit.ctx_synchronize ();
+          Cudajit.device_primary_ctx_release device.dev))
   done;
   Core.Weak.fill !devices 0 len None
 
@@ -387,7 +407,9 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~glo
     lowered_bindings run_module =
   let module Cu = Cudajit in
   let func = Cu.module_get_function run_module ~name in
-  let context = { prior_context with run_module = Some run_module; global_arrays } in
+  let context =
+    { prior_context with parent = Some prior_context; run_module = Some run_module; global_arrays }
+  in
   let%diagn_rt_sexp work () : unit =
     let log_id = get_global_run_id () in
     let log_id_prefix = Int.to_string log_id ^ ": " in
