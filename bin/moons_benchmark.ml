@@ -151,7 +151,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   in
   Stdio.printf "\n\n%!";
   let module Backend = (val backend) in
-  Backend.unsafe_cleanup ~unsafe_shutdown:true ();
+  Backend.unsafe_cleanup ();
   result
 
 let () =

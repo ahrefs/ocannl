@@ -143,8 +143,9 @@ let _suspended () =
     in
     PrintBox_text.output Stdio.stdout plot_box
   in
-  Backend.unsafe_cleanup ~unsafe_shutdown:true ();
-  Backend.unsafe_cleanup ~unsafe_shutdown:true ();
+  (* Test successive cleanups. *)
+  Backend.unsafe_cleanup ();
+  Backend.unsafe_cleanup ();
   ()
 
 let _suspended () =

@@ -70,7 +70,7 @@ let benchmark_overhead backend () =
   PrintBox_text.output Stdio.stdout plot_box;
   Stdio.print_endline "\n";
   let module Backend = (val backend) in
-  Backend.unsafe_cleanup ~unsafe_shutdown:true ();
+  Backend.unsafe_cleanup ();
   result
 
 let benchmarks =

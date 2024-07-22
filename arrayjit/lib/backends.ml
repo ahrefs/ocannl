@@ -13,8 +13,15 @@ module type No_device_backend = sig
   type nonrec routine = context routine [@@deriving sexp_of]
 
   val name : string
+
   val initialize : config -> unit
+  (** Initializes a backend before first use or (on some backends) after {!unsafe_cleanup}. Does
+      nothing if the backend is already initialized. *)
+
   val is_initialized : unit -> bool
+  (** Returns false if there was no previous {!initialize} call, or, on some backends, the most
+      recent call was followed by {!unsafe_cleanup}. If it returns false, one must call
+      {!initialize} before using the backend. *)
 
   val init : label:string -> context
   (** [label] is usually the backend name concatenated with the device number. *)
@@ -67,9 +74,10 @@ module type No_device_backend = sig
       The [from_prior_context] nodes must not be added to the resulting context -- if needed in
       context, they must be part of the given context. *)
 
-  val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
-  (** Cleans up all work on a backend. If [~unsafe_shutdown:true], releases resources, potentially
-      making the backend unusable. *)
+  val unsafe_cleanup : unit -> unit
+  (** Cleans up all work on a backend, releases resources. All previously retrieved values
+      (contexts, virtual and physical devices) become invalid. The backend needs to be initialized
+      again to be used again. *)
 
   val to_buffer :
     ?rt:(module Minidebug_runtime.Debug_runtime) -> Tnode.t -> dst:buffer_ptr -> src:context -> unit
@@ -476,26 +484,31 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let num_physical_devices () = Domain.recommended_domain_count () - 1
   let suggested_num_virtual_devices _device = 1
-  let devices = Array.init (num_physical_devices ()) ~f:(fun ordinal -> spinup_device ~ordinal)
+  let devices = Array.create ~len:(num_physical_devices ()) None
 
-  let%track_sexp unsafe_cleanup ?(unsafe_shutdown = false) () =
+  let%track_sexp unsafe_cleanup () =
     assert (Domain.is_main_domain ());
     let wait_for_finish device =
       await device;
       device.state.keep_spinning <- false;
       ignore (device.state.dev_wait.release_if_waiting () : bool)
     in
-    Array.iter devices ~f:wait_for_finish;
+    Array.iter devices ~f:(Option.iter ~f:wait_for_finish);
     let cleanup ordinal device =
       Domain.join device.domain;
       device.host_wait_for_idle.finalize ();
       device.state.dev_wait.finalize ();
-      if not unsafe_shutdown then devices.(ordinal) <- spinup_device ~ordinal
+      devices.(ordinal) <- None
     in
-    Array.iteri devices ~f:cleanup;
-    Backend.unsafe_cleanup ~unsafe_shutdown ()
+    Array.iteri devices ~f:(fun ordinal -> Option.iter ~f:(cleanup ordinal));
+    Backend.unsafe_cleanup ()
 
-  let get_device ~ordinal = devices.(ordinal)
+  let get_device ~ordinal =
+    Option.value_or_thunk devices.(ordinal) ~default:(fun () ->
+        let dev = spinup_device ~ordinal in
+        devices.(ordinal) <- Some dev;
+        dev)
+
   let new_virtual_device device = device
   let get_physical_device device = device
   let get_ctx_device { device; _ } = device
@@ -581,7 +594,7 @@ module type Simple_backend = sig
   val is_initialized : unit -> bool
   val init : label:string -> context
   val finalize : context -> unit
-  val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
+  val unsafe_cleanup : unit -> unit
 
   val to_buffer :
     ?rt:(module Minidebug_runtime.Debug_runtime) -> Tnode.t -> dst:buffer_ptr -> src:context -> unit
@@ -806,4 +819,5 @@ let reinitialize (module Backend : Backend) config =
   if not @@ Backend.is_initialized () then Backend.initialize config
   else (
     Core.Gc.full_major ();
-    Backend.unsafe_cleanup ())
+    Backend.unsafe_cleanup ();
+    Backend.initialize config)

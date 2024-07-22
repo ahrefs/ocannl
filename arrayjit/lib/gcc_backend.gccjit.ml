@@ -52,21 +52,19 @@ let to_buffer ?rt:_ tn ~dst ~src =
 let host_to_buffer ?rt:_ src ~dst = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 let buffer_to_host ?rt:_ dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 
-let unsafe_cleanup ?(unsafe_shutdown = false) () =
+let unsafe_cleanup () =
   let open Gccjit in
   Option.iter ~f:Context.release !root_ctx;
-  if unsafe_shutdown then root_ctx := None
-  else
+  root_ctx := None
+
+let is_initialized () = Option.is_some !root_ctx
+
+let initialize () =
+  if Option.is_none !root_ctx then (
+    let open Gccjit in
     let ctx = Context.create () in
     Context.set_option ctx Optimization_level (optimization_level ());
-    root_ctx := Some ctx
-
-let is_initialized, initialize =
-  let initialized = ref false in
-  ( (fun () -> !initialized),
-    fun () ->
-      initialized := true;
-      unsafe_cleanup () )
+    root_ctx := Some ctx)
 
 let finalize ctx =
   let open Gccjit in

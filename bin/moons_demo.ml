@@ -109,6 +109,6 @@ let demo () =
     Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n%!";
     PrintBox_text.output Stdio.stdout plot_moons
   in
-  Backend.unsafe_cleanup ~unsafe_shutdown:true ()
+  Backend.unsafe_cleanup ()
 
 let () = demo ()

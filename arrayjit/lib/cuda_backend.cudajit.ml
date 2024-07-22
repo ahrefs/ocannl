@@ -177,7 +177,7 @@ let init device =
   Stdlib.Gc.finalise finalize ctx;
   ctx
 
-let unsafe_cleanup ?unsafe_shutdown:_ () =
+let unsafe_cleanup () =
   let len = Core.Weak.length !devices in
   (* NOTE: releasing the context should free its resources, there's no need to finalize the
      remaining contexts, and [finalize] will not do anything for a [released] physical device. *)

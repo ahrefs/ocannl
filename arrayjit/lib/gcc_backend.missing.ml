@@ -13,8 +13,7 @@ let buffer_ptr ctx_array = ctx_array
 let expected_merge_node Unimplemented_proc =
   failwith "gcc backend missing: install the optional dependency gccjit"
 
-let is_in_context _node =
-  failwith "gcc backend missing: install the optional dependency gccjit"
+let is_in_context _node = failwith "gcc backend missing: install the optional dependency gccjit"
 
 let to_buffer ?rt:_ _tn ~dst:_ ~src:_ =
   failwith "gcc backend missing: install the optional dependency gccjit"
@@ -51,4 +50,4 @@ let initialize () = ()
 let is_initialized () = true
 let init ~label:_ = Unimplemented_ctx
 let finalize Unimplemented_ctx = ()
-let unsafe_cleanup ?unsafe_shutdown:_ () = ()
+let unsafe_cleanup () = ()

@@ -47,14 +47,11 @@ let to_buffer ?rt:_ tn ~dst ~src =
 
 let host_to_buffer ?rt:_ src ~dst = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 let buffer_to_host ?rt:_ dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
-let unsafe_cleanup ?(unsafe_shutdown = false) () = ignore unsafe_shutdown
+let unsafe_cleanup () = ()
 
 let is_initialized, initialize =
   let initialized = ref false in
-  ( (fun () -> !initialized),
-    fun () ->
-      initialized := true;
-      unsafe_cleanup () )
+  ((fun () -> !initialized), fun () -> initialized := true)
 
 let finalize _ctx = ()
 

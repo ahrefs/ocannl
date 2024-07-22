@@ -26,7 +26,7 @@ val link : context -> code -> context * Indexing.lowered_bindings * Tnode.task
 val link_batch :
   context -> code_batch -> context * Indexing.lowered_bindings * Tnode.task option array
 
-val unsafe_cleanup : ?unsafe_shutdown:bool -> unit -> unit
+val unsafe_cleanup : unit -> unit
 
 val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> bool
 (** If the array is both hosted and in-context, copies from host to context. *)
