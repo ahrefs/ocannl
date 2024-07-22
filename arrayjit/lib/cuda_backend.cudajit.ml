@@ -47,22 +47,7 @@ and context = {
 [@@deriving sexp_of]
 
 let ctx_arrays ctx = ctx.global_arrays
-
-let get_name { physical = { ordinal; _ }; subordinal; _ } =
-  Int.to_string ordinal ^ "_" ^ Int.to_string subordinal
-
 let global_config = ref For_parallel_copying
-
-let init device =
-  {
-    label = "on dev " ^ get_name device;
-    ctx = device.physical.primary_context;
-    device;
-    parent = None;
-    global_arrays = Map.empty (module Tn);
-    run_module = None;
-    finalized = Atomic.make false;
-  }
 
 let is_initialized, initialize =
   let initialized = ref false in
@@ -176,6 +161,21 @@ let finalize ctx =
         if not @@ Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.global_arrays key) then
           Cudajit.mem_free ptr);
     Cudajit.stream_destroy ctx.device.stream)
+
+let init device =
+  let ctx =
+    {
+      label = "on dev " ^ get_name device;
+      ctx = device.physical.primary_context;
+      device;
+      parent = None;
+      global_arrays = Map.empty (module Tn);
+      run_module = None;
+      finalized = Atomic.make false;
+    }
+  in
+  Stdlib.Gc.finalise finalize ctx;
+  ctx
 
 let unsafe_cleanup ?unsafe_shutdown:_ () =
   let len = Core.Weak.length !devices in
@@ -410,6 +410,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~glo
   let context =
     { prior_context with parent = Some prior_context; run_module = Some run_module; global_arrays }
   in
+  Stdlib.Gc.finalise finalize context;
   let%diagn_rt_sexp work () : unit =
     let log_id = get_global_run_id () in
     let log_id_prefix = Int.to_string log_id ^ ": " in

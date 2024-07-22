@@ -60,7 +60,7 @@ let finalize _ctx = ()
 
 let init ~label =
   let result = { label; arrays = Map.empty (module Tn) } in
-  Core.Gc.Expert.add_finalizer_exn result finalize;
+  Stdlib.Gc.finalise finalize result;
   result
 
 (* open Ctypes *)

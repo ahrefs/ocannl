@@ -74,7 +74,7 @@ let finalize ctx =
 
 let init ~label =
   let result = { label; result = None; arrays = Map.empty (module Tn) } in
-  Core.Gc.Expert.add_finalizer_exn result finalize;
+  Stdlib.Gc.finalise finalize result;
   result
 
 type tn_info = {

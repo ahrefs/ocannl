@@ -137,7 +137,6 @@ module type Backend = sig
   type device
 
   val init : device -> context
-  
   val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> device -> buffer_ptr
 
   val await : device -> unit
@@ -594,7 +593,8 @@ module type Simple_backend = sig
     ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> src:buffer_ptr -> unit
 end
 
-let verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context traced_stores =
+let verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context traced_stores
+    =
   let olds = ctx_arrays prior_context in
   List.iter from_prior_context ~f:(fun tn ->
       let node = Array.find_map traced_stores ~f:(fun store -> Hashtbl.find store tn) in
