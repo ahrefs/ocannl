@@ -59,7 +59,7 @@ val get_buffer : Tnode.t -> context -> buffer_ptr option
 type physical_device
 type device
 
-val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
+val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> device -> buffer_ptr
 val init : device -> context
 val await : device -> unit
 val is_idle : device -> bool

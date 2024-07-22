@@ -6,7 +6,6 @@ type code = Indexing.unit_bindings [@@deriving sexp_of]
 type code_batch = Indexing.unit_bindings array [@@deriving sexp_of]
 type ctx_array = Unimplemented_ctx_array [@@deriving sexp_of]
 
-let alloc_buffer ?old_buffer:_ ~size_in_bytes:_ () = Unimplemented_buffer_ptr
 let initialize (_config : Backend_utils.Types.config) = ()
 let is_initialized () = true
 let finalize _context = ()
@@ -47,6 +46,7 @@ type device = Unimplemented_dev [@@deriving sexp_of]
 type physical_device = Unimplemented_phys_dev [@@deriving sexp_of]
 
 let init Unimplemented_dev = Unimplemented_ctx
+let alloc_buffer ?old_buffer:_ ~size_in_bytes:_ Unimplemented_dev = Unimplemented_buffer_ptr
 let await _device = ()
 let is_idle _device = true
 let get_device ~ordinal:_ = failwith "CUDA missing: install cudajit"

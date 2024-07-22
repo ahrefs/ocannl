@@ -45,22 +45,6 @@ and context = {
 
 let ctx_arrays ctx = ctx.global_arrays
 
-(* It's not actually used, but it's required by the [Backend] interface. *)
-let alloc_buffer ?old_buffer ~size_in_bytes () =
-  match old_buffer with
-  | Some (old_ptr, old_size) when size_in_bytes <= old_size -> old_ptr
-  | Some (old_ptr, _old_size) ->
-      (* FIXME: we need to set the context for this to work, but we don't know which one. *)
-      Cudajit.mem_free old_ptr;
-      Cudajit.mem_alloc ~size_in_bytes
-  | None -> Cudajit.mem_alloc ~size_in_bytes
-
-let opt_alloc_merge_buffer ~size_in_bytes phys_dev =
-  if phys_dev.copy_merge_buffer_capacity < size_in_bytes then (
-    Cudajit.mem_free phys_dev.copy_merge_buffer;
-    phys_dev.copy_merge_buffer <- Cudajit.mem_alloc ~size_in_bytes;
-    phys_dev.copy_merge_buffer_capacity <- size_in_bytes)
-
 let get_name { physical = { ordinal; _ }; subordinal; _ } =
   Int.to_string ordinal ^ "_" ^ Int.to_string subordinal
 
@@ -90,6 +74,25 @@ let devices = ref @@ Core.Weak.create 0
 let set_ctx ctx =
   let cur_ctx = Cudajit.ctx_get_current () in
   if not @@ phys_equal ctx cur_ctx then Cudajit.ctx_set_current ctx
+
+(* It's not actually used, but it's required by the [Backend] interface. *)
+let alloc_buffer ?old_buffer ~size_in_bytes device =
+  match old_buffer with
+  | Some (old_ptr, old_size) when size_in_bytes <= old_size -> old_ptr
+  | Some (old_ptr, _old_size) ->
+      set_ctx device.physical.primary_context;
+      Cudajit.mem_free old_ptr;
+      Cudajit.mem_alloc ~size_in_bytes
+  | None ->
+      set_ctx device.physical.primary_context;
+      Cudajit.mem_alloc ~size_in_bytes
+
+let opt_alloc_merge_buffer ~size_in_bytes phys_dev =
+  if phys_dev.copy_merge_buffer_capacity < size_in_bytes then (
+    set_ctx phys_dev.primary_context;
+    Cudajit.mem_free phys_dev.copy_merge_buffer;
+    phys_dev.copy_merge_buffer <- Cudajit.mem_alloc ~size_in_bytes;
+    phys_dev.copy_merge_buffer_capacity <- size_in_bytes)
 
 let%track_sexp get_device ~(ordinal : int) : physical_device =
   if num_physical_devices () <= ordinal then

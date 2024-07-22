@@ -137,6 +137,8 @@ module type Backend = sig
   type device
 
   val init : device -> context
+  
+  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> device -> buffer_ptr
 
   val await : device -> unit
   (** Blocks till the device becomes idle, i.e. synchronizes the device. *)
@@ -180,8 +182,6 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   type buffer_ptr = Backend.buffer_ptr [@@deriving sexp_of]
 
-  let alloc_buffer = Backend.alloc_buffer
-
   type device = {
     state : device_state;
     host_wait_for_idle : (Utils.waiter[@sexp.opaque]);
@@ -191,6 +191,9 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     domain : (unit Domain.t[@sexp.opaque]);
   }
   [@@deriving sexp_of]
+
+  let alloc_buffer ?old_buffer ~size_in_bytes _device =
+    Backend.alloc_buffer ?old_buffer ~size_in_bytes ()
 
   type physical_device = device [@@deriving sexp_of]
   type code = Backend.code [@@deriving sexp_of]
