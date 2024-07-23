@@ -497,6 +497,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     if disable_rootness_check then model_result.Tensor.forward
     else Tensor.consume_forward_code model_result
   in
+  if not disable_rootness_check then Tensor.remove_bprop_root model_result;
   set_on_host Changed_on_devices model_result.Tensor.value;
   (* By using sgd_update.context, maybe we don't need to copy the parameters back to the host. *)
   let routine =
