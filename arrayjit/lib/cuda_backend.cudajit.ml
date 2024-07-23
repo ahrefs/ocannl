@@ -199,7 +199,7 @@ let%diagn_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option)
          let module Debug_runtime =
            (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
          in
-         [%log "copying", Tn.label tn, Tn.name tn, "to", (dst : ctx_array), "from host"]);
+         [%log "copying", Tn.debug_name tn, "to", (dst : ctx_array), "from host"]);
       let f src = Cudajit.memcpy_H_to_D_async ~dst ~src ctx.device.stream in
       Ndarray.map { f } hosted;
       true
@@ -215,7 +215,7 @@ let%track_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (
            (val Option.value_or_thunk rt ~default:(fun () ->
                     (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
          in
-         [%log "copying", Tn.label tn, Tn.name tn, "at", (src : ctx_array), "to host"]);
+         [%log "copying", Tn.debug_name tn, "at", (src : ctx_array), "to host"]);
       let f dst = Cudajit.memcpy_D_to_H_async ~dst ~src ctx.device.stream in
       Ndarray.map { f } hosted;
       true
@@ -248,8 +248,7 @@ let%track_sexp rec device_to_device ?(rt : (module Minidebug_runtime.Debug_runti
                  in
                  [%log
                    "copied",
-                     Tn.label tn,
-                     Tn.name tn,
+                     Tn.debug_name tn,
                      "from",
                      src.label,
                      "at",
@@ -265,7 +264,7 @@ let%track_sexp rec device_to_device ?(rt : (module Minidebug_runtime.Debug_runti
                  (val Option.value_or_thunk rt ~default:(fun () ->
                           (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
                in
-               [%log "using merge buffer for", Tn.label tn, Tn.name tn, "from", src.label]);
+               [%log "using merge buffer for", Tn.debug_name tn, "from", src.label]);
             true)
           else
             (* TODO: support proper streaming, but it might be difficult. *)
@@ -281,7 +280,7 @@ let%track_sexp rec device_to_device ?(rt : (module Minidebug_runtime.Debug_runti
                (val Option.value_or_thunk rt ~default:(fun () ->
                         (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
              in
-             [%log "copied into merge buffer", Tn.label tn, Tn.name tn, "from", src.label]);
+             [%log "copied into merge buffer", Tn.debug_name tn, "from", src.label]);
           true)
 
 type code = {
@@ -467,7 +466,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~glo
 let%diagn_sexp alloc_if_needed ctx ~key ~data:node globals =
   if is_in_context node then (
     if Utils.settings.with_debug_level > 0 then
-      [%log "mem_alloc", Tn.get_debug_name node.tn, (not @@ Map.mem globals key : bool)];
+      [%log "mem_alloc", Tn.debug_name node.tn, (not @@ Map.mem globals key : bool)];
     set_ctx ctx;
     let ptr () = Cudajit.mem_alloc ~size_in_bytes:(Tn.size_in_bytes node.tn) in
     Map.update globals key ~f:(fun old -> Option.value_or_thunk old ~default:ptr))

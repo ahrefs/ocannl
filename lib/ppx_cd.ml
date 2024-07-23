@@ -915,9 +915,9 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) :
         expr :: List.map ~f:snd exprs
         |> List.map ~f:(function
              | { pexp_desc = Pexp_constant (Pconst_string _); _ } as s -> s
-             | [%expr [%e? t].value] -> [%expr Arrayjit.Tnode.get_debug_name [%e t].value]
-             | [%expr [%e? t].grad] -> [%expr Arrayjit.Tnode.get_debug_name [%e t].value ^ ".grad"]
-             | t -> [%expr Arrayjit.Tnode.get_debug_name [%e t].value])
+             | [%expr [%e? t].value] -> [%expr Arrayjit.Tnode.debug_name [%e t].value]
+             | [%expr [%e? t].grad] -> [%expr Arrayjit.Tnode.debug_name [%e t].value ^ ".grad"]
+             | t -> [%expr Arrayjit.Tnode.debug_name [%e t].value])
       in
       let typ, slot, body = translate ?ident_label ~proj_in_scope expr2 in
       ( typ,

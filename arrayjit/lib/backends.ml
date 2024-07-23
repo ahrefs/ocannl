@@ -365,8 +365,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                    let module Debug_runtime = (val rt) in
                    [%diagn_sexp
                      [%log_entry
-                       "from_host " ^ Tnode.get_debug_name tn;
-                       [%log "copied", Tnode.label tn, Tnode.name tn, "from host"];
+                       "from_host " ^ Tnode.debug_name tn;
+                       [%log "copied", Tnode.debug_name tn, "from host"];
                        if Utils.settings.with_debug_level > 1 then
                          [%log_printbox
                            let indices =
@@ -378,7 +378,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                  Tnode.
                    {
                      description =
-                       "from_host " ^ Tnode.get_debug_name tn ^ " dst "
+                       "from_host " ^ Tnode.debug_name tn ^ " dst "
                        ^ Int.to_string context.device.ordinal;
                      work;
                    };
@@ -386,8 +386,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
            | (lazy None) ->
                [%diagn_sexp
                  [%log_entry
-                   "from_host empty " ^ Tnode.get_debug_name tn;
-                   [%log "nothing to copy", Tnode.label tn, Tnode.name tn, "from host"]]];
+                   "nothing to copy from host";
+                   [%log "for", Tnode.debug_name tn]]];
                false)
 
   let to_host ?rt (context : context) (tn : Tnode.t) =
@@ -404,8 +404,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                    let module Debug_runtime = (val rt) in
                    [%diagn_sexp
                      [%log_entry
-                       "to_host " ^ Tnode.get_debug_name tn;
-                       [%log "copied", Tnode.label tn, Tnode.name tn, "to host"];
+                       "to_host " ^ Tnode.debug_name tn;
+                       [%log "copied to host"];
                        if Utils.settings.with_debug_level > 1 then
                          [%log_printbox
                            let indices =
@@ -417,7 +417,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                  Tnode.
                    {
                      description =
-                       "from_host " ^ Tnode.get_debug_name tn ^ " dst "
+                       "from_host " ^ Tnode.debug_name tn ^ " dst "
                        ^ Int.to_string context.device.ordinal;
                      work;
                    };
@@ -425,8 +425,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
            | (lazy None) ->
                [%diagn_sexp
                  [%log_entry
-                   "to_host empty " ^ Tnode.get_debug_name tn;
-                   [%log "nothing to copy", Tnode.label tn, Tnode.name tn, "to host"]]];
+                   "nothing to copy to host";
+                   [%log "for", Tnode.debug_name tn]]];
                false)
 
   let device_to_device ?rt tn ~into_merge_buffer ~dst ~src =
@@ -442,8 +442,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       raise
       @@ Utils.User_error
            ("Multicore_backend.device_to_device: merge node mismatch, expected "
-           ^ Option.(value ~default:"none" @@ map ~f:Tnode.get_debug_name dst.expected_merge_node)
-           ^ ", actual " ^ Tnode.get_debug_name tn);
+           ^ Option.(value ~default:"none" @@ map ~f:Tnode.debug_name dst.expected_merge_node)
+           ^ ", actual " ^ Tnode.debug_name tn);
     let schedule dst =
       let work =
         match into_merge_buffer with
@@ -471,7 +471,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         Tnode.
           {
             description =
-              "device_to_device " ^ Tnode.get_debug_name tn ^ " dst " ^ Int.to_string dev.ordinal
+              "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ Int.to_string dev.ordinal
               ^ " src " ^ Int.to_string src.device.ordinal;
             work;
           }
@@ -614,7 +614,7 @@ let verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_c
       if
         Option.value_map node ~default:false ~f:(fun node ->
             is_in_context node && not (Map.mem olds tn))
-      then raise @@ Utils.User_error ("The linked context lacks node " ^ Tnode.get_debug_name tn))
+      then raise @@ Utils.User_error ("The linked context lacks node " ^ Tnode.debug_name tn))
 
 module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend = struct
   include Backend
@@ -810,8 +810,8 @@ module Cuda_backend : Backend = struct
       raise
       @@ Utils.User_error
            ("Multicore_backend.device_to_device: merge node mismatch, expected "
-           ^ Option.(value ~default:"none" @@ map ~f:Tnode.get_debug_name dst.expected_merge_node)
-           ^ ", actual " ^ Tnode.get_debug_name tn);
+           ^ Option.(value ~default:"none" @@ map ~f:Tnode.debug_name dst.expected_merge_node)
+           ^ ", actual " ^ Tnode.debug_name tn);
     device_to_device ?rt tn ~into_merge_buffer ~dst:dst.ctx ~src:src.ctx
 end
 

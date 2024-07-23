@@ -80,7 +80,7 @@ let save_params t =
     let v = p.Tensor.value in
     ( v,
       Option.value_or_thunk ~default:(fun () ->
-          invalid_arg @@ "Train.save_params: parameter is not named: " ^ Tn.name v ^ " "
+          invalid_arg @@ "Train.save_params: parameter is not named: " ^ Tn.debug_name v ^ " "
           ^ Tn.label v)
       @@ Tn.ident_label v )
   in
@@ -100,8 +100,7 @@ let restore_params t =
     let v = p.Tensor.value in
     ( v,
       Option.value_or_thunk ~default:(fun () ->
-          invalid_arg @@ "Train.restore_params: parameter is not named: " ^ Tn.name v ^ " "
-          ^ Tn.label v)
+          invalid_arg @@ "Train.restore_params: parameter is not named: " ^ Tn.debug_name v)
       @@ Tn.ident_label v )
   in
   let with_names = get_params t |> Set.elements |> List.map ~f:with_name in
@@ -363,8 +362,7 @@ let%track_sexp parallel_update (type context)
     Backend.(await @@ get_ctx_device ctxs.(from));
     Array.iteri all_params ~f:(fun i p ->
         let grad_merge =
-          Option.value_exn ~here:[%here] ~message:(Tn.get_debug_name p.value)
-            grad_merges_to.(to_).(i)
+          Option.value_exn ~here:[%here] ~message:(Tn.debug_name p.value) grad_merges_to.(to_).(i)
         in
         assert (
           Backend.device_to_device (Option.value_exn ~here:[%here] p.diff).grad ~into_merge_buffer
@@ -400,8 +398,6 @@ let%track_sexp parallel_update (type context)
     [%debug_notrace Array.map grad_updates ~f:(fun upd () -> Tn.run debug_rt upd.schedule)]
   in
   fun () -> round_robin fs lowered_bindings sgd_update.bindings ~sync
-
-let debug_name t = Tn.(debug_name ~id:t.Tensor.value.id ~label:t.value.label)
 
 let get_all_suggested_devices ?(max_num_devices : int option) (type device)
     (backend : (module Backend_type with type device = device)) : device array =
@@ -507,7 +503,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     Backend.(
       link ~from_prior_context:(needs_prior_context model_result) sgd_update.context
       @@ compile IDX.empty
-      @@ Block_comment ("infer " ^ debug_name model_result, infer_fwd))
+      @@ Block_comment ("infer " ^ Tn.debug_name model_result.value, infer_fwd))
   in
   let infer_callback values =
     Tensor.set_values infer values;

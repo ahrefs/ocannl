@@ -282,7 +282,10 @@ let get_ident_within_code ?no_dots c =
   let repeating_grad_idents =
     Hashtbl.filter grad_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1)
   in
-  Tn.styled_ident ~repeating_nograd_idents ~repeating_grad_idents ident_style
+  fun tn ->
+    let ident = Tn.styled_ident ~repeating_nograd_idents ~repeating_grad_idents ident_style tn in
+    Tn.update_code_name tn ident;
+    ident
 
 let fprint_hum ?name ?static_indices () ppf c =
   let ident = get_ident_within_code c in

@@ -93,15 +93,12 @@ let with_unchanged_roots ~f =
 let default_value_prec = ref Arrayjit.Ops.single
 let default_grad_prec = ref Arrayjit.Ops.single
 
-let debug_name ?label t =
-  let label = Option.value label ~default:t.value.label in
-  Tn.debug_name ~id:t.id ~label
-
 exception Session_error of string * t option [@@deriving sexp]
 
 let session_error_printer = function
   | Session_error (msg, None) -> Some msg
-  | Session_error (msg, Some m) -> Some [%string "For #%{m.id#Int} %{debug_name m}: %{msg}"]
+  | Session_error (msg, Some m) ->
+      Some [%string "For #%{m.id#Int} %{Tn.debug_name m.value}: %{msg}"]
   | _ -> None
 
 let () = Stdlib.Printexc.register_printer session_error_printer
@@ -155,7 +152,7 @@ let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
   in
   let id = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
-  let shape = make_shape ~debug_name:(Tn.debug_name ~id ~label) ~id in
+  let shape = make_shape ~debug_name:(Tn.get_debug_name ~id ~label ()) ~id in
   let prec =
     List.map orig_ts ~f:(fun ti -> ti.value.prec)
     |> List.reduce ~f:Arrayjit.Ops.promote_prec
@@ -364,12 +361,14 @@ let rec non_and_embedded_nodes t =
   in
   (non_embedded - embedded, embedded)
 
+let debug t = Tn.debug_name t.value
+let debug_grad t = Tn.debug_name (Option.value_exn t.diff).grad
+
 let consume_forward_code t =
   if not @@ is_fwd_root t then
     raise
     @@ Session_error
-         ( "Tensor.consume_forward_code: tensor is not a root for tnode: "
-           ^ debug_name t ~label:t.value.label,
+         ( "Tensor.consume_forward_code: tensor is not a root for tnode: " ^ Tn.debug_name t.value,
            Some t );
   let unsafe_roots =
     Map.data session_state.forward_roots
@@ -379,8 +378,8 @@ let consume_forward_code t =
     raise
     @@ Session_error
          ( [%string
-             {|Tensor.consume_forward_code for %{debug_name t ~label:t.value.label}:
-found potentially unsafe roots: %{String.concat ~sep:", " @@ List.map ~f:debug_name unsafe_roots}|}],
+             {|Tensor.consume_forward_code for %{debug t}:
+found potentially unsafe roots: %{String.concat ~sep:", " @@ List.map ~f:debug unsafe_roots}|}],
            Some t );
   remove_fwd_root t;
   t.forward
@@ -390,16 +389,13 @@ let consume_backprop_code t =
     Option.value_or_thunk t.diff ~default:(fun () ->
         raise
         @@ Session_error
-             ( "Tensor.consume_backprop_code: tensor is not differentiable for tnode: "
-               ^ debug_name t ~label:t.value.label,
+             ( "Tensor.consume_backprop_code: tensor is not differentiable for value: " ^ debug t,
                Some t ))
   in
   if not @@ is_bprop_root t then
     raise
     @@ Session_error
-         ( "Tensor.consume_backprop_code: tensor is not a root for tnode: "
-           ^ debug_name t ~label:diff.grad.label,
-           Some t );
+         ("Tensor.consume_backprop_code: tensor is not a root for tnode: " ^ debug_grad t, Some t);
   let unsafe_roots =
     Map.data session_state.backprop_roots
     |> List.filter ~f:(fun r -> not (List.is_empty r.children || r.id = t.id))
@@ -408,8 +404,8 @@ let consume_backprop_code t =
     raise
     @@ Session_error
          ( [%string
-             {|Tensor.consume_backprop_code for %{debug_name t ~label:diff.grad.label}:
-found potentially unsafe roots: %{String.concat ~sep:", " @@ List.map ~f:debug_name unsafe_roots}|}],
+             {|Tensor.consume_backprop_code for %{debug_grad t}:
+found potentially unsafe roots: %{String.concat ~sep:", " @@ List.map ~f:debug unsafe_roots}|}],
            Some t );
   remove_bprop_root t;
   (diff.zero_grads, diff.backprop)

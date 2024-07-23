@@ -58,11 +58,10 @@ type t = {
           alphanumeric, e.g. an identifier. *)
   mutable memory_mode : (memory_mode * int) option;
   mutable backend_info : Sexp.t;
+  mutable code_name : string option;
 }
 [@@deriving sexp_of]
 
-let name { id; _ } = "n" ^ Int.to_string id
-let label a = String.concat ~sep:"_" a.label
 let compare a1 a2 = compare_int a1.id a2.id
 
 let num_elems tn =
@@ -70,6 +69,35 @@ let num_elems tn =
   if Array.is_empty dims then 0 else Array.reduce_exn dims ~f:( * )
 
 let size_in_bytes tn = num_elems tn * Ops.prec_in_bytes tn.prec
+let id { id; _ } = "n" ^ Int.to_string id
+let label a = String.concat ~sep:"_" a.label
+let is_alphanum_ = String.for_all ~f:(fun c -> Char.equal c '_' || Char.is_alphanum c)
+
+let get_debug_name ?code_name ~id ~label () =
+  match code_name with
+  | Some code_name -> (
+      match String.chop_suffix code_name ~suffix:"_grad" with
+      | None -> code_name
+      | Some ident -> ident ^ ".grad")
+  | None -> (
+      let components = List.filter ~f:is_alphanum_ label in
+      let components, is_grad =
+        match List.rev components with
+        | "grad" :: components -> (List.rev components, true)
+        | _ -> (components, false)
+      in
+      let ident_label =
+        if List.is_empty components then None else Some (String.concat ~sep:"_" components)
+      in
+      let opt_grad = if is_grad then ".grad" else "" in
+      match ident_label with
+      | Some ident -> [%string "%{ident}%{opt_grad}"]
+      | None when is_grad -> [%string "n%{id - 1#Int}%{opt_grad}"]
+      | None -> "n" ^ Int.to_string id)
+
+let debug_name tn =
+  let id = tn.id and label = tn.label and code_name = tn.code_name in
+  get_debug_name ?code_name ~id ~label ()
 
 let default_to_most_local tn provenance =
   match tn.memory_mode with
@@ -133,8 +161,8 @@ let update_memory_mode tn mode provenance =
       raise
       @@ Utils.User_error
            [%string
-             "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} for %{name tn}: \
-              cannot be virtual"]
+             "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} for %{debug_name \
+              tn}: cannot be virtual"]
   | Some ((Virtual | Hosted Constant), _), Effectively_constant -> ()
   | Some ((Never_virtual | Materialized), _), Effectively_constant
   | Some (Effectively_constant, _), (Never_virtual | Materialized | Hosted Constant) ->
@@ -148,8 +176,8 @@ let update_memory_mode tn mode provenance =
       raise
       @@ Utils.User_error
            [%string
-             "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} for %{name tn} is \
-              already virtual"]
+             "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} for %{debug_name \
+              tn} is already virtual"]
   | Some (_, _), Never_virtual -> ()
   | Some (Device_only, _), (Local | On_device) -> tn.memory_mode <- Some (mode, provenance)
   | Some (Materialized, _), (On_device | Hosted _) -> tn.memory_mode <- Some (mode, provenance)
@@ -161,7 +189,7 @@ let update_memory_mode tn mode provenance =
       invalid_arg
         [%string
           "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} inconsistent for \
-           %{name tn}"]
+           %{debug_name tn}"]
 
 include Comparator.Make (struct
   type nonrec t = t
@@ -178,7 +206,7 @@ let hash_t = hash
 let get_exn a =
   match a.array with
   | (lazy (Some nd)) -> nd
-  | _ -> invalid_arg @@ "Tnode.get_exn: array " ^ name a ^ " is not hosted"
+  | _ -> invalid_arg @@ "Tnode.get_exn: array " ^ debug_name a ^ " is not hosted"
 
 let has a = match a.array with (lazy (Some _)) -> true | _ -> false
 
@@ -189,35 +217,14 @@ let dims_to_string ?(with_axis_numbers = false) arr =
   in
   Ops.prec_string arr.prec ^ " prec " ^ dims_s
 
-let is_alphanum_ = String.for_all ~f:(fun c -> Char.equal c '_' || Char.is_alphanum c)
-
 let ident_label tn =
   let components =
     List.filter tn.label ~f:(fun i -> is_alphanum_ i && not (String.equal i "grad"))
   in
   if List.is_empty components then None else Some (String.concat ~sep:"_" components)
 
-let debug_name ~id ~label =
-  let n = "n" ^ Int.to_string id in
-  let ident_label =
-    let components =
-      List.filter label ~f:(fun i -> is_alphanum_ i && not (String.equal i "grad"))
-    in
-    if List.is_empty components then None else Some (String.concat ~sep:"_" components)
-  in
-  let is_grad = List.mem ~equal:String.equal label "grad" in
-  let opt_grad = if is_grad then ".grad" else "" in
-  match ident_label with
-  | Some ident -> [%string "%{ident}%{opt_grad}"]
-  | None when is_grad -> [%string "n%{id - 1#Int}%{opt_grad}"]
-  | None -> n
-
-let get_debug_name tn =
-  let id = tn.id and label = tn.label in
-  debug_name ~id ~label
-
 let styled_ident ~repeating_nograd_idents ~repeating_grad_idents style arr =
-  let n = name arr in
+  let n = id arr in
   match style with
   | `Name_only -> n
   | `Name_and_label ->
@@ -241,6 +248,13 @@ let styled_ident ~repeating_nograd_idents ~repeating_grad_idents style arr =
       | None when is_grad -> [%string "n%{arr.id - 1#Int}%{opt_grad}"]
       | None -> n)
 
+let update_code_name tn ident =
+  match tn.code_name with
+  | None -> tn.code_name <- Some ident
+  | Some old_name ->
+      if String.length ident > String.length old_name || String.is_prefix ~prefix:(id tn) ident then
+        tn.code_name <- Some ident
+
 let get_style ?(arg_name = "ll_ident_style") ?(no_dots = false) () =
   match Utils.get_global_arg ~arg_name ~default:"heuristic" with
   | "heuristic" -> `Heuristic_ocannl (if no_dots then `Under_grad else `Dot_grad)
@@ -260,7 +274,7 @@ let header arr =
   let repeating_nograd_idents = Hashtbl.create ~size:1 (module String) in
   let repeating_grad_idents = Hashtbl.create ~size:1 (module String) in
   [%string
-    {|%{name arr} %{label arr} as %{
+    {|%{id arr} %{label arr} as %{
       styled_ident ~repeating_nograd_idents ~repeating_grad_idents (`Heuristic_ocannl `Dot_grad) arr
     }: %{dims_to_string arr}; mem in bytes: %{mem_size}|}]
 
@@ -278,7 +292,18 @@ let create prec ~id ~label ~dims init_op =
     lazy
       (if is_hosted_force tn 30 then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op)
        else None)
-  and tn = { array; prec; id; label; memory_mode = None; backend_info = Sexp.List []; dims } in
+  and tn =
+    {
+      array;
+      prec;
+      dims;
+      id;
+      label;
+      memory_mode = None;
+      backend_info = Sexp.List [];
+      code_name = None;
+    }
+  in
   Registry.add registry tn;
   tn
 
@@ -292,6 +317,7 @@ let find =
       label = [];
       memory_mode = None;
       backend_info = Sexp.List [];
+      code_name = None;
     }
   in
   fun ~id -> Registry.find_opt registry { mock with id }

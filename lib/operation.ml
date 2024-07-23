@@ -124,7 +124,7 @@ let relu ?(label = []) =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~projections = v =: ?/v1 ~projections in
   let%cd grad_asn ~v ~g ~t1 ~projections = g1 =+ v -?/ g in
-  Tensor.unop ~label:("r" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
+  Tensor.unop ~label:("?/" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
 module NDO_without_pow = struct
   let ( * ) = matmul ~grad_spec:Prohibit_grad
