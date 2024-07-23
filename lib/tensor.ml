@@ -78,17 +78,11 @@ let remove_bprop_root t =
 let with_unchanged_roots ~f =
   let fwd_roots = session_state.forward_roots in
   let bprop_roots = session_state.backprop_roots in
-  let restore () =
+  let finally () =
     session_state.forward_roots <- fwd_roots;
     session_state.backprop_roots <- bprop_roots
   in
-  try
-    let result = f () in
-    restore ();
-    result
-  with e ->
-    restore ();
-    raise e
+  Exn.protectx ~f ~finally ()
 
 let default_value_prec = ref Arrayjit.Ops.single
 let default_grad_prec = ref Arrayjit.Ops.single
