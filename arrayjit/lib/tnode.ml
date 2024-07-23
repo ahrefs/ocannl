@@ -252,8 +252,11 @@ let update_code_name tn ident =
   match tn.code_name with
   | None -> tn.code_name <- Some ident
   | Some old_name ->
-      if String.length ident > String.length old_name || String.is_prefix ~prefix:(id tn) ident then
-        tn.code_name <- Some ident
+      if
+        String.length ident > String.length old_name
+        && not (String.is_prefix ~prefix:(id tn) old_name)
+        || String.is_prefix ~prefix:(id tn) ident
+      then tn.code_name <- Some ident
 
 let get_style ?(arg_name = "ll_ident_style") ?(no_dots = false) () =
   match Utils.get_global_arg ~arg_name ~default:"heuristic" with
