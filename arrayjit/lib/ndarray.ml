@@ -365,6 +365,11 @@ let retrieve_flat_values arr =
 
 (** {2 *** Printing ***} *)
 
+let c_ptr_to_string nd =
+  let prec = get_prec nd in
+  let f arr = Ops.ptr_to_string (Ctypes.bigarray_start Ctypes_static.Genarray arr) prec in
+  map { f } nd
+
 (** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
     Outputs ["-"] for empty dimensions. *)
 let int_dims_to_string ?(with_axis_numbers = false) dims =

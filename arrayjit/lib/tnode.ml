@@ -271,7 +271,9 @@ let header arr =
     if Lazy.is_val arr.array then
       match arr.array with
       | (lazy None) -> "<not-hosted>"
-      | (lazy (Some nd)) -> Int.to_string_hum @@ Nd.size_in_bytes nd
+      | (lazy (Some nd)) ->
+          let size = Int.to_string_hum @@ Nd.size_in_bytes nd in
+          if Utils.settings.with_debug_level > 0 then size ^ " @ " ^ Nd.c_ptr_to_string nd else size
     else "<not-in-yet>"
   in
   let repeating_nograd_idents = Hashtbl.create ~size:1 (module String) in

@@ -14,8 +14,6 @@ let optimization_level () =
 
 let compiler_command () = Utils.get_global_arg ~default:"cc" ~arg_name:"cc_backend_compiler_command"
 
-(** Currently unused, backend behaves as if [config] is always [`Physical_devices_only]. *)
-
 module Tn = Tnode
 
 type ctx_array = Ndarray.t [@@deriving sexp_of]
@@ -47,7 +45,7 @@ let to_buffer ?rt:_ tn ~dst ~src =
 
 let host_to_buffer ?rt:_ src ~dst = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 let buffer_to_host ?rt:_ dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
-let unsafe_cleanup () = ()
+let unsafe_cleanup () = Stdlib.Gc.compact ()
 
 let is_initialized, initialize =
   let initialized = ref false in
@@ -105,7 +103,7 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
     type nonrec ctx_array = ctx_array
 
     let opt_ctx_arrays = opt_ctx_arrays
-    let hardcoded_context_ptr = Some Backend_utils.get_c_ptr
+    let hardcoded_context_ptr = Some Ndarray.c_ptr_to_string
     let is_in_context = is_in_context
     let host_ptrs_for_readonly = true
     let logs_to_stdout = false
@@ -156,7 +154,7 @@ let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings
     type nonrec ctx_array = ctx_array
 
     let opt_ctx_arrays = opt_ctx_arrays
-    let hardcoded_context_ptr = Some Backend_utils.get_c_ptr
+    let hardcoded_context_ptr = Some Ndarray.c_ptr_to_string
     let is_in_context = is_in_context
     let host_ptrs_for_readonly = true
     let logs_to_stdout = false

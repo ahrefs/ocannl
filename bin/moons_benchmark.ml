@@ -30,6 +30,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   CDSL.virtualize_settings.max_visits <- inlining_cutoff;
   Tensor.default_value_prec := value_prec;
   Tensor.default_grad_prec := grad_prec;
+  Utils.settings.with_debug_level <- 3;
   Utils.settings.output_debug_files_in_run_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   Rand.init (* seed *) 0;
@@ -38,8 +39,9 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   (* let hid_dim = 4 in *)
   let len = batch_size * 20 in
   (* let epochs = 100 in *)
-  (* let epochs = 10 in *)
-  let epochs = 5 in
+  (* let epochs = 20 in *)
+  (* let epochs = 5 in *)
+  let epochs = 1 in
   let init_lr = 0.1 in
   let noise () = Rand.float_range (-0.1) 0.1 in
   let moons_flat =
@@ -74,6 +76,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
       epoch_loss
   in
   let module Backend = (val backend) in
+  Backend.initialize Train.BT.Most_parallel_devices;
   let inputs, outputs, model_result, infer_callback, batch_losses, epoch_losses, learning_rates =
     Train.example_train_loop ~seed ~batch_size ~init_lr ~max_num_devices:num_devices ~data_len:len
       ~epochs ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn ~weight_decay
@@ -154,17 +157,28 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   Backend.unsafe_cleanup ();
   result
 
-let () =
+let _suspend () =
   ignore
   @@ classify_moons ~seed:0 ~on_device:true ~inlining_cutoff:3 ~num_devices:8 ~batch_size:16
        ~backend_name:"gccjit" ~value_prec:CDSL.single ~grad_prec:CDSL.double ()
 
-let benchmarks =
+let _cpu_benchmarks =
   List.concat_map [ 0; 1; 2; 3 ] ~f:(fun inlining_cutoff ->
       List.concat_map [ 1; 2; 5; 8; 10; 16 (* ; 20 *) ] ~f:(fun num_devices ->
           List.concat_map [ 120; 160 (* ; 320; 640; 1280 *) ] ~f:(fun batch_size ->
               List.concat_map [ 0; 1 (* ; 2; 3; 4 *) ] ~f:(fun seed ->
                   List.concat_map [ "gccjit" (* *; "cuda" *) ] ~f:(fun backend_name ->
+                      [
+                        classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_devices
+                          ~batch_size ~backend_name ~value_prec:CDSL.single ~grad_prec:CDSL.single;
+                      ])))))
+
+let cuda_benchmarks =
+  List.concat_map [ 0; (* 1; 2; *) 3 ] ~f:(fun inlining_cutoff ->
+      List.concat_map [1; 2; 5; 8; 10; 16; 20; 30 (* *; 32; 40; 64 *) ] ~f:(fun num_devices ->
+          List.concat_map [ 120; 160 (* ; 320; 640; 1280 *) ] ~f:(fun batch_size ->
+              List.concat_map [ 0; 1 (* ; 2; 3; 4 *) ] ~f:(fun seed ->
+                  List.concat_map [ (* "gccjit" ; *) "cc" (* ; "cuda" *) ] ~f:(fun backend_name ->
                       [
                         classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_devices
                           ~batch_size ~backend_name ~value_prec:CDSL.single ~grad_prec:CDSL.single;
@@ -186,7 +200,7 @@ let _suspended () =
    Stdio.stdout *)
 
 let benchmark () =
-  List.map benchmarks ~f:(fun bench -> bench ())
+  List.map cuda_benchmarks ~f:(fun bench -> bench ())
   |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
-let _suspended () = benchmark ()
+let () = benchmark ()

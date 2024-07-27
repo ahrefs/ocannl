@@ -29,11 +29,6 @@ end
 
 module Tn = Tnode
 
-let get_c_ptr nd =
-  let prec = Ndarray.get_prec nd in
-  let f arr = Ops.ptr_to_string (Ctypes.bigarray_start Ctypes_static.Genarray arr) prec in
-  Ndarray.(map { f } nd)
-
 module C_syntax (B : sig
   val for_lowereds : Low_level.optimized array
 
@@ -111,7 +106,7 @@ struct
               | false, _, _, true, Some (Hosted _, _), true ->
                   (* In-context nodes to read directly from host would be error prone. *)
                   let nd = Option.value_exn ~here:[%here] @@ Lazy.force node.tn.array in
-                  fprintf ppf "#define %s (%s)@," (get_ident node.tn) (get_c_ptr nd);
+                  fprintf ppf "#define %s (%s)@," (get_ident node.tn) (Ndarray.c_ptr_to_string nd);
                   Hash_set.add is_global node.tn
               | _ -> ()));
     fprintf ppf "@,@]";
@@ -326,6 +321,35 @@ struct
     (* FIXME: we should also close the file. *)
     if (not (List.is_empty log_file)) && not B.logs_to_stdout then
       fprintf ppf {|FILE* log_file = fopen(log_file_name, "w");@ |};
+    if Utils.settings.debug_log_from_routines && Utils.settings.with_debug_level > 1 then (
+      fprintf ppf "/* Debug initial parameter state. */@ ";
+      List.iter
+        ~f:(function
+          | p_name, Merge_buffer ->
+              if B.logs_to_stdout then
+                fprintf ppf {|@[<7>printf(@[<h>"%s%%d: %s = %%p\n",@] log_id, (void*)merge_buffer);@]@ |}
+                  !Utils.captured_log_prefix p_name
+              else
+                fprintf ppf {|@[<7>fprintf(log_file,@ @[<h>"%s = %%p\n",@] (void*)merge_buffer);@]@ |}
+                  p_name
+          | _, Log_file_name -> ()
+          | p_name, Param_ptr tn ->
+              if B.logs_to_stdout then
+                fprintf ppf {|@[<7>printf(@[<h>"%s%%d: %s = %%p\n",@] log_id, (void*)%s);@]@ |}
+                  !Utils.captured_log_prefix p_name
+                @@ get_ident tn
+              else
+                fprintf ppf {|@[<7>fprintf(log_file,@ @[<h>"%s = %%p\n",@] (void*)%s);@]@ |} p_name
+                @@ get_ident tn
+          | p_name, Static_idx s ->
+              if B.logs_to_stdout then
+                fprintf ppf {|@[<7>printf(@[<h>"%s%%d: %s = %%d\n",@] log_id, %s);@]@ |}
+                  !Utils.captured_log_prefix p_name
+                @@ Indexing.symbol_ident s.Indexing.static_symbol
+              else
+                fprintf ppf {|@[<7>fprintf(log_file,@ @[<h>"%s = %%d\n",@] %s);@]@ |} p_name
+                @@ Indexing.symbol_ident s.Indexing.static_symbol)
+        params);
     fprintf ppf "/* Local declarations and initialization. */@ ";
     Hashtbl.iteri traced_store ~f:(fun ~key:tn ~data:node ->
         if not (Tn.is_virtual_force tn 333 || B.is_in_context node || Hash_set.mem is_global tn)

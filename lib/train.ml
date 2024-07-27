@@ -483,6 +483,9 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
             f ~at_batch:!batch_ref ~at_step:!step_ref ~learning_rate:learning_rate.@[0] ~batch_loss
               ~epoch_loss:!epoch_loss))
   in
+  if Utils.settings.with_debug_level > 1 then (
+    Stdlib.Printf.printf "\nTraining...\n%!";
+    Tn.log_accessible_headers ());
   for epoch = 0 to epochs - 1 do
     epoch_loss := 0.;
     update ();
