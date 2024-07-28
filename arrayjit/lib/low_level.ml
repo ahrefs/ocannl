@@ -877,7 +877,7 @@ let fprint_hum ?name ?static_indices () ppf llc =
         fprintf ppf "%s[%a]" (Ops.ptr_to_string ptr prec) pp_indices idcs
     | Get_global (Ops.Merge_buffer { source_node_id }, None) ->
         let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
-        fprintf ppf "merge %a" pp_ident tn
+        fprintf ppf "%a.merge" pp_ident tn
     | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
         let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
         fprintf ppf "@[<2>%a[@,%a]@]" pp_ident tn pp_indices idcs

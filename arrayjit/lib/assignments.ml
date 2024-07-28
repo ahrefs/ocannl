@@ -288,7 +288,7 @@ let get_ident_within_code ?no_dots c =
 
 let fprint_hum ?name ?static_indices () ppf c =
   let ident = get_ident_within_code c in
-  let buffer_ident = function Node tn -> ident tn | Merge_buffer tn -> "merge " ^ ident tn in
+  let buffer_ident = function Node tn -> ident tn | Merge_buffer tn -> ident tn ^ ".merge" in
   let open Stdlib.Format in
   let out_fetch_op ppf (op : fetch_op) =
     match op with
@@ -296,7 +296,7 @@ let fprint_hum ?name ?static_indices () ppf c =
     | Imported (Ops.C_function c) -> fprintf ppf "%s()" c
     | Imported (Merge_buffer { source_node_id }) ->
         let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
-        fprintf ppf "merge %s" (ident tn)
+        fprintf ppf "%s.merge" (ident tn)
     | Imported (Ops.External_unsafe { ptr; prec; dims = _ }) ->
         fprintf ppf "%s" @@ Ops.ptr_to_string ptr prec
     | Slice { batch_idx; sliced } ->

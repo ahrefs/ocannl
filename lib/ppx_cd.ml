@@ -305,9 +305,6 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) :
             ~label:[%e opt_pat2string_list ~loc ident_label]
             ~axis_label:[%e axis]
             (Float.of_int [%e i])] )
-      (* | [%expr [%e? { pexp_desc = Pexp_ident { txt = Lident "merge_buffer"; _ }; _ }] [%e?
-         for_tn]] -> let typ1, slot1, e1 = translate ~proj_in_scope for_tn in ( typ1, slot1, [%expr
-         ] ) *)
   | { pexp_desc = Pexp_array _; _ }
   | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
       (Tensor, Undet, ndarray_op ~ident_label expr)

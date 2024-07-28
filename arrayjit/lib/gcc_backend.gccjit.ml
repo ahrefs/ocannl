@@ -393,7 +393,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         let ptr = Option.value_exn ~here:[%here] merge_node in
         let offset = jit_array_offset ctx ~idcs ~dims:(Lazy.force tn.dims) in
         let v = to_d @@ RValue.lvalue @@ LValue.access_array ptr offset in
-        ("merge " ^ get_ident tn ^ "[%d]{=%g}", [ offset; v ])
+        (get_ident tn ^ ".merge[%d]{=%g}", [ offset; v ])
     | Get_global (C_function _, Some _) ->
         failwith "gccjit_backend: FFI with parameters NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
