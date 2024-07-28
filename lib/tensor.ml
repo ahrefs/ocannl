@@ -447,10 +447,7 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_v
     in
     let grad_txt diff =
       let label = Tn.label diff.grad in
-      let label =
-        if String.is_substring (String.lowercase label) ~substring:"grad" then label
-        else label ^ " Gradient"
-      in
+      assert (String.is_prefix label ~prefix:"grad");
       if with_id then
         "#" ^ Int.to_string diff.grad.id ^ " " ^ label (* ^ " DEBUG: " ^ where_located diff.grad *)
       else label
@@ -523,8 +520,8 @@ let print ~with_grad ~with_code ?(force = false) ?(with_low_level = false)
   in
   let grad_txt diff =
     let label = Tn.label diff.grad in
-    if String.is_substring (String.lowercase label) ~substring:"grad" then label
-    else label ^ " Gradient"
+    assert (String.is_prefix label ~prefix:"grad");
+    label
   in
   let labels = Shape.to_labels t.shape in
   let indices =

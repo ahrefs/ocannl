@@ -253,10 +253,9 @@ let get_ident_within_code ?no_dots c =
   let nograd_idents = Hashtbl.create (module String) in
   let grad_idents = Hashtbl.create (module String) in
   let visit tn =
-    let idents =
-      if List.mem ~equal:String.equal tn.Tn.label "grad" then grad_idents else nograd_idents
-    in
-    Option.iter (Tn.ident_label tn)
+    let is_grad, ident = Tn.no_grad_ident_label tn in
+    let idents = if is_grad then grad_idents else nograd_idents in
+    Option.iter ident
       ~f:
         (Hashtbl.update idents ~f:(fun old ->
              Set.add (Option.value ~default:Utils.no_ints old) tn.id))

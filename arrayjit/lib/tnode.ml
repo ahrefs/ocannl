@@ -82,9 +82,7 @@ let get_debug_name ?code_name ~id ~label () =
   | None -> (
       let components = List.filter ~f:is_alphanum_ label in
       let components, is_grad =
-        match List.rev components with
-        | "grad" :: components -> (List.rev components, true)
-        | _ -> (components, false)
+        match components with "grad" :: components -> (components, true) | _ -> (components, false)
       in
       let ident_label =
         if List.is_empty components then None else Some (String.concat ~sep:"_" components)
@@ -217,11 +215,12 @@ let dims_to_string ?(with_axis_numbers = false) arr =
   in
   Ops.prec_string arr.prec ^ " prec " ^ dims_s
 
-let ident_label tn =
-  let components =
-    List.filter tn.label ~f:(fun i -> is_alphanum_ i && not (String.equal i "grad"))
-  in
-  if List.is_empty components then None else Some (String.concat ~sep:"_" components)
+let no_grad_ident_label tn =
+  match List.filter tn.label ~f:(fun i -> is_alphanum_ i) with
+  | [] -> (false, None)
+  | [ "grad" ] -> (true, None)
+  | "grad" :: components -> (true, Some (String.concat ~sep:"_" components))
+  | components -> (false, Some (String.concat ~sep:"_" components))
 
 let styled_ident ~repeating_nograd_idents ~repeating_grad_idents style arr =
   let n = id arr in
@@ -231,14 +230,14 @@ let styled_ident ~repeating_nograd_idents ~repeating_grad_idents style arr =
       let label = label arr in
       if String.is_empty label then n else [%string "%{n}_%{label}"]
   | `Heuristic_ocannl grad_sep -> (
-      let is_grad = List.mem ~equal:String.equal arr.label "grad" in
+      let is_grad, ident = no_grad_ident_label arr in
       let opt_grad =
         match (grad_sep, is_grad) with
         | `Dot_grad, true -> ".grad"
         | `Under_grad, true -> "_grad"
         | (`Dot_grad | `Under_grad), _ -> ""
       in
-      match ident_label arr with
+      match ident with
       | Some ident ->
           if Hashtbl.mem (if is_grad then repeating_grad_idents else repeating_nograd_idents) ident
           then
