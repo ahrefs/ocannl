@@ -812,7 +812,7 @@ let%track_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
           | _ -> ctx_arrays)
   in
   let context = { label; arrays; result = Some code.result } in
-  let log_file_name = [%string "debug-%{label}-%{code.name}.log"] in
+  let log_file_name = Utils.diagn_log_file [%string "debug-%{label}-%{code.name}.log"] in
   let run_variadic =
     [%log_level
       Nothing;

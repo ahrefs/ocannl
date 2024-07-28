@@ -164,6 +164,11 @@ let build_file fname =
   if not (Stdlib.Sys.file_exists build_files_dir) then Stdlib.Sys.mkdir build_files_dir 0o777;
   Filename_base.concat (Filename_base.concat "." build_files_dir) fname
 
+let diagn_log_file fname =
+  let log_files_dir = "log_files" in
+  if not (Stdlib.Sys.file_exists log_files_dir) then Stdlib.Sys.mkdir log_files_dir 0o777;
+  Filename_base.concat log_files_dir fname
+
 let get_debug name =
   let snapshot_every_sec = get_global_arg ~default:"" ~arg_name:"snapshot_every_sec" in
   let snapshot_every_sec =
@@ -219,7 +224,7 @@ let get_debug name =
   let verbose_entry_ids =
     Bool.of_string @@ get_global_arg ~default:"false" ~arg_name:"logs_verbose_entry_ids"
   in
-  let filename = if String.is_empty name then "debug" else "debug-" ^ name in
+  let filename = diagn_log_file @@ if String.is_empty name then "debug" else "debug-" ^ name in
   let log_level =
     match
       String.lowercase @@ String.strip
