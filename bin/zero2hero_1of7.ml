@@ -45,7 +45,7 @@ let _suspended () =
 
 let () =
   (* FIXME: why is this toplevel example broken and the next one working? *)
-  Utils.settings.output_debug_files_in_run_directory <- true;
+  Utils.settings.output_debug_files_in_build_directory <- true;
   Rand.init 0;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let size = 100 in
@@ -93,7 +93,7 @@ let () =
 
 let _suspended () =
   (* Utils.settings.with_debug_level <- 2; *)
-  Utils.settings.output_debug_files_in_run_directory <- true;
+  Utils.settings.output_debug_files_in_build_directory <- true;
   (* Utils.settings.debug_log_from_routines <- true; *)
   Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
@@ -151,7 +151,7 @@ let _suspended () =
 let _suspended () =
   Rand.init 0;
   Utils.settings.with_debug_level <- 2;
-  Utils.settings.output_debug_files_in_run_directory <- true;
+  Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in

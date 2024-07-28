@@ -12,7 +12,7 @@ let hello1 () =
   Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   Utils.settings.with_debug_level <- 2;
-  (* Utils.settings.output_debug_files_in_run_directory <- true; *)
+  (* Utils.settings.output_debug_files_in_build_directory <- true; *)
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   let open Operation.TDSL in
@@ -29,7 +29,7 @@ let hello2 () =
   Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
   Utils.settings.with_debug_level <- 2;
-  (* Utils.settings.output_debug_files_in_run_directory <- true; *)
+  (* Utils.settings.output_debug_files_in_build_directory <- true; *)
   (* Utils.settings.debug_log_from_routines <- true; *)
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
@@ -44,7 +44,7 @@ let hello2 () =
 let hello3 () =
   Rand.init 0;
   let module Backend = (val Train.fresh_backend ()) in
-  Utils.settings.output_debug_files_in_run_directory <- true;
+  Utils.settings.output_debug_files_in_build_directory <- true;
   (* Utils.settings.debug_log_from_routines <- true; *)
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
@@ -96,7 +96,7 @@ let hello4 () =
 
 let hello5 () =
   Utils.settings.with_debug_level <- 2;
-  Utils.settings.output_debug_files_in_run_directory <- true;
+  Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
@@ -111,7 +111,7 @@ let hello5 () =
 
 let hello6 () =
   Utils.settings.with_debug_level <- 2;
-  Utils.settings.output_debug_files_in_run_directory <- true;
+  Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in

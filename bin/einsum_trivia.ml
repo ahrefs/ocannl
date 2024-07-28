@@ -11,7 +11,7 @@ let _suspended () =
   let module Backend = (val Train.fresh_backend ()) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
-  Utils.settings.output_debug_files_in_run_directory <- true;
+  Utils.settings.output_debug_files_in_build_directory <- true;
   let a = TDSL.range_of_shape ~label:[ "a" ] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~label:[ "b" ] ~input_dims:[ 2; 3; 4 ] ~output_dims:[ 2 ] () in
   let%op c = a *+ "i->1; ij...->0 => ...->ji" b in
@@ -23,7 +23,7 @@ let _suspended () =
 
 let _suspended () =
   Utils.settings.with_debug_level <- 2;
-  Utils.settings.output_debug_files_in_run_directory <- true;
+  Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   let module Backend = (val Train.fresh_backend ~backend_name:"cuda" ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
@@ -44,7 +44,7 @@ let _suspended () =
 
 let () =
   Utils.settings.with_debug_level <- 2;
-  Utils.settings.output_debug_files_in_run_directory <- true;
+  Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   let module Backend = (val Train.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in

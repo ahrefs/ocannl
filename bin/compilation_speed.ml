@@ -12,7 +12,7 @@ let benchmark_overhead backend () =
   Arrayjit.Backends.reinitialize backend Physical_devices_only;
   let open (val backend : Arrayjit.Backends.Backend) in
   (* Utils.settings.with_debug <- true; *)
-  (* Utils.settings.output_debug_files_in_run_directory <- true; *)
+  (* Utils.settings.output_debug_files_in_build_directory <- true; *)
   (* Utils.settings.debug_log_from_routines <- true; *)
   CDSL.disable_all_debugs ();
   Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ name ^ " ******";

@@ -28,10 +28,10 @@ let mref_add_missing mref key ~f =
 type settings = {
   mutable debug_log_from_routines : bool;
   mutable debug_memory_locations : bool;
-  mutable output_debug_files_in_run_directory : bool;
-      (** Writes compilation related files in the run directory (additional files, or files that
-          would otherwise be in temp directory). When both
-          [output_debug_files_in_run_directory = true] and [with_debug_level > 1], compilation
+  mutable output_debug_files_in_build_directory : bool;
+      (** Writes compilation related files in the [build_files] subdirectory of the run directory
+          (additional files, or files that would otherwise be in temp directory). When both
+          [output_debug_files_in_build_directory = true] and [with_debug_level > 1], compilation
           should also preserve debug and line information for runtime debugging. *)
   mutable with_debug_level : int;
   mutable fixed_state_for_init : int option;
@@ -44,17 +44,17 @@ let settings =
   {
     debug_log_from_routines = false;
     debug_memory_locations = false;
-    output_debug_files_in_run_directory = false;
+    output_debug_files_in_build_directory = false;
     with_debug_level = 0;
     fixed_state_for_init = None;
     print_decimals_precision = 2;
   }
 
 let with_runtime_debug () =
-  settings.output_debug_files_in_run_directory && settings.with_debug_level > 1
+  settings.output_debug_files_in_build_directory && settings.with_debug_level > 1
 
 let enable_runtime_debug () =
-  settings.output_debug_files_in_run_directory <- true;
+  settings.output_debug_files_in_build_directory <- true;
   settings.with_debug_level <- max 2 settings.with_debug_level
 
 let accessed_global_args = Hash_set.create (module String)
@@ -150,14 +150,19 @@ let () =
     Bool.of_string @@ get_global_arg ~arg_name:"debug_log_from_routines" ~default:"false";
   settings.debug_memory_locations <-
     Bool.of_string @@ get_global_arg ~arg_name:"debug_memory_locations" ~default:"false";
-  settings.output_debug_files_in_run_directory <-
+  settings.output_debug_files_in_build_directory <-
     Bool.of_string
-    @@ get_global_arg ~arg_name:"output_debug_files_in_run_directory" ~default:"false";
+    @@ get_global_arg ~arg_name:"output_debug_files_in_build_directory" ~default:"false";
   settings.fixed_state_for_init <-
     (let seed = get_global_arg ~arg_name:"fixed_state_for_init" ~default:"" in
      if String.is_empty seed then None else Some (Int.of_string seed));
   settings.print_decimals_precision <-
     Int.of_string @@ get_global_arg ~arg_name:"print_decimals_precision" ~default:"2"
+
+let build_file fname =
+  let build_files_dir = "build_files" in
+  if not (Stdlib.Sys.file_exists build_files_dir) then Stdlib.Sys.mkdir build_files_dir 0o777;
+  Filename_base.concat (Filename_base.concat "." build_files_dir) fname
 
 let get_debug name =
   let snapshot_every_sec = get_global_arg ~default:"" ~arg_name:"snapshot_every_sec" in
@@ -369,8 +374,8 @@ type requirement =
 [@@deriving compare, sexp]
 
 let get_debug_formatter ~fname =
-  if settings.output_debug_files_in_run_directory then
-    let f = Stdio.Out_channel.create fname in
+  if settings.output_debug_files_in_build_directory then
+    let f = Stdio.Out_channel.create @@ build_file fname in
     let ppf = Stdlib.Format.formatter_of_out_channel f in
     Some ppf
   else None
@@ -438,8 +443,7 @@ type pp_file = { f_name : string; ppf : Stdlib.Format.formatter; finalize : unit
 let pp_file ~base_name ~extension =
   let column_width = 110 in
   let f_name =
-    if settings.output_debug_files_in_run_directory then
-      Filename_base.concat "./" base_name ^ extension
+    if settings.output_debug_files_in_build_directory then build_file @@ base_name ^ extension
     else Stdlib.Filename.temp_file (base_name ^ "_") extension
   in
   (* (try Stdlib.Sys.remove f_name with _ -> ()); *)

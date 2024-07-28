@@ -717,14 +717,14 @@ let compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optim
   if Option.is_none !root_ctx then initialize ();
   let ctx = Context.create_child @@ Option.value_exn ~here:[%here] !root_ctx in
   Context.set_option ctx Context.Optimization_level (optimization_level ());
-  (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
+  (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_build_directory then (
      Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx
      Context.Dump_everything true); *)
   let info, opt_ctx_arrays, params =
     compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident lowered
   in
-  (if Utils.settings.output_debug_files_in_run_directory then
-     let f_name = name ^ "-gccjit-debug.c" in
+  (if Utils.settings.output_debug_files_in_build_directory then
+     let f_name = Utils.build_file @@ name ^ "-gccjit-debug.c" in
      Context.dump_to_file ctx ~update_locs:true f_name);
   let result = Context.compile ctx in
   Context.release ctx;
@@ -748,7 +748,7 @@ let%track_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
   if Option.is_none !root_ctx then initialize ();
   let ctx = Context.create_child @@ Option.value_exn ~here:[%here] !root_ctx in
   Context.set_option ctx Context.Optimization_level (optimization_level ());
-  (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_run_directory then (
+  (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_build_directory then (
      Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx
      Context.Dump_everything true); *)
   let opt_ctx_arrays, funcs =
@@ -761,14 +761,14 @@ let%track_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
             (opt_ctx_arrays, Some (info, opt_ctx_arrays, params))
         | _ -> (opt_ctx_arrays, None))
   in
-  (if Utils.settings.output_debug_files_in_run_directory then
+  (if Utils.settings.output_debug_files_in_build_directory then
      let f_name =
        String.(
          strip ~drop:(equal_char '_')
          @@ common_prefix (Array.to_list @@ Array.concat_map ~f:Option.to_array names))
        ^ "-gccjit-debug.c"
      in
-     Context.dump_to_file ctx ~update_locs:true f_name);
+     Context.dump_to_file ctx ~update_locs:true @@ Utils.build_file f_name);
   let result = Context.compile ctx in
   Context.release ctx;
   ( opt_ctx_arrays,

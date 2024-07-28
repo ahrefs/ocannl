@@ -31,7 +31,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   Tensor.default_value_prec := value_prec;
   Tensor.default_grad_prec := grad_prec;
   Utils.settings.with_debug_level <- 3;
-  Utils.settings.output_debug_files_in_run_directory <- true;
+  Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   Rand.init (* seed *) 0;
   (* let hid_2_3 = 8 in let hid_4_5 = 4 in *)

@@ -302,26 +302,26 @@ type code_batch = {
 
 let%diagn_sexp cuda_to_ptx ~name cu_src =
   let name_cu = name ^ ".cu" in
-  if Utils.settings.output_debug_files_in_run_directory then (
-    let oc = Out_channel.open_text name_cu in
+  if Utils.settings.output_debug_files_in_build_directory then (
+    let oc = Out_channel.open_text @@ Utils.build_file name_cu in
     Stdio.Out_channel.output_string oc cu_src;
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);
   [%log "compiling to PTX"];
   let module Cu = Cudajit in
   let with_debug =
-    Utils.settings.output_debug_files_in_run_directory || Utils.settings.with_debug_level > 0
+    Utils.settings.output_debug_files_in_build_directory || Utils.settings.with_debug_level > 0
   in
   let options =
     "--use_fast_math" :: (if Utils.with_runtime_debug () then [ "--device-debug" ] else [])
   in
   let ptx = Cu.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug in
-  if Utils.settings.output_debug_files_in_run_directory then (
-    let oc = Out_channel.open_text @@ name ^ ".ptx" in
+  if Utils.settings.output_debug_files_in_build_directory then (
+    let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".ptx" in
     Stdio.Out_channel.output_string oc @@ Cu.string_from_ptx ptx;
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc;
-    let oc = Out_channel.open_text @@ name ^ ".cu_log" in
+    let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".cu_log" in
     Stdio.Out_channel.output_string oc @@ Option.value_exn ~here:[%here] (Cu.compilation_log ptx);
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);

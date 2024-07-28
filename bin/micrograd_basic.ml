@@ -12,7 +12,7 @@ let%diagn_sexp () =
   let module Backend = (val Train.fresh_backend ~backend_name:"cc" ()) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
-  Utils.settings.output_debug_files_in_run_directory <- true;
+  Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   Utils.settings.with_debug_level <- 2;
   Rand.init 0;
@@ -37,7 +37,7 @@ let%diagn_sexp _suspended () : unit =
   let module Backend = (val Train.fresh_backend ()) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
-  (* Utils.settings.output_debug_files_in_run_directory <- true; *)
+  (* Utils.settings.output_debug_files_in_build_directory <- true; *)
   Rand.init 0;
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = (a *. b) + (b **. 3) in
