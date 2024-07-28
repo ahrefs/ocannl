@@ -253,9 +253,9 @@ let%track_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
             let c_ptr = Ndarray.get_voidptr nd in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
       in
-      (* Folding by [link] above reverses the input order. Important: [code.bindings] are traversed
-         in the wrong order but that's OK because [link] only uses them to check the number of
-         indices. *)
+      (* Reverse the input order because [Indexing.apply] will reverse it again. Important:
+         [code.bindings] are traversed in the wrong order but that's OK because [link] only uses
+         them to check the number of indices. *)
       let params = List.rev_map code.params ~f:(fun (_, p) -> p) in
       link code.bindings params Ctypes.(void @-> returning void)]
   in

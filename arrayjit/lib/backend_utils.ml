@@ -287,6 +287,8 @@ struct
       Low_level.{ traced_store; llc; merge_node } =
     let open Stdlib.Format in
     let params : (string * param_source) list =
+      (* Preserve the order in the hashtable, so it's the same as e.g. in compile_globals. *)
+      List.rev @@
       Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:node params ->
           if Utils.settings.with_debug_level > 0 then
             [%log "array-used:", (tn : Tn.t), get_ident tn];

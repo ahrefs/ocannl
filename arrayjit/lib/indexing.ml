@@ -52,6 +52,8 @@ type ('r, 'idcs, 'p1, 'p2) variadic =
 type unit_bindings = (unit -> unit) bindings [@@deriving sexp_of]
 type lowered_bindings = (static_symbol, int ref) List.Assoc.t [@@deriving sexp_of]
 
+(** [apply run_variadic ()] applies the parameters in reverse order to how they appear in the
+    [run_variadic] list. *)
 let rec apply : 'r 'idcs 'p1 'p2. ('r, 'idcs, 'p1, 'p2) variadic -> 'r =
  fun (type r idcs p1 p2) (f : (r, idcs, p1, p2) variadic) ->
   match f with
