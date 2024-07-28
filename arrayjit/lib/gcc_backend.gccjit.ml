@@ -55,7 +55,8 @@ let buffer_to_host ?rt:_ dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 let unsafe_cleanup () =
   let open Gccjit in
   Option.iter ~f:Context.release !root_ctx;
-  root_ctx := None
+  root_ctx := None;
+  Stdlib.Gc.compact ()
 
 let is_initialized () = Option.is_some !root_ctx
 
@@ -710,7 +711,7 @@ let header_sep =
   let open Re in
   compile (seq [ str " "; opt any; str "="; str " " ])
 
-let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optimized) =
+let compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optimized) =
   let get_ident = Low_level.get_ident_within_code ~no_dots:true [| lowered.llc |] in
   let open Gccjit in
   if Option.is_none !root_ctx then initialize ();

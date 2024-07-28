@@ -319,7 +319,7 @@ let sorted_diff ~compare l1 l2 =
 (** [parallel_merge merge num_devices] progressively invokes the pairwise [merge] callback,
     converging on the 0th position, with [from] ranging from [1] to [num_devices - 1], and
     [to_ < from]. *)
-let%track_sexp parallel_merge merge (num_devices : int) =
+let parallel_merge merge (num_devices : int) =
   let rec loop (upper : int) : unit =
     let is_even = (upper + 1) % 2 = 0 in
     let lower = if is_even then 0 else 1 in
@@ -338,60 +338,6 @@ type atomic_bool = bool Atomic.t
 
 let sexp_of_atomic_bool flag = sexp_of_bool @@ Atomic.get flag
 let ( !@ ) = Atomic.get
-
-type waiter = {
-  await : keep_waiting:(unit -> bool) -> unit -> bool;
-      (** Returns [true] if the waiter was not already waiting (in another thread) and waiting was
-          needed ([keep_waiting] always returned true). *)
-  release_if_waiting : unit -> bool;
-      (** Returns [true] if the waiter both was waiting and was not already released. *)
-  is_waiting : unit -> bool;
-  finalize : unit -> unit;
-}
-(** Note: this waiter is meant for sequential waiting. *)
-
-let waiter ~name:_ () =
-  let is_open = Atomic.make true in
-  (* TODO: since OCaml 5.2, use [make_contended] for at least [is_released] and maybe
-     [is_waiting]. *)
-  let is_released = Atomic.make false in
-  let is_waiting = Atomic.make false in
-  let pipe_inp, pipe_out = Unix.pipe ~cloexec:true () in
-  let await ~keep_waiting =
-    let rec wait () =
-      if Atomic.compare_and_set is_released true false then (
-        let n = Unix.read pipe_inp (Bytes.create 1) 0 1 in
-        assert (n = 1);
-        true)
-      else if keep_waiting () then
-        let _, _, _ = Unix.select [ pipe_inp ] [] [] 5.0 in
-        wait ()
-      else false
-    in
-    fun () ->
-      if Atomic.compare_and_set is_waiting false true then (
-        let result = wait () in
-        assert (Atomic.compare_and_set is_waiting true false);
-        result)
-      else false
-  in
-  let release_if_waiting () =
-    let result =
-      if !@is_waiting && Atomic.compare_and_set is_released false true then (
-        let n = Unix.write pipe_out (Bytes.create 1) 0 1 in
-        assert (n = 1);
-        true)
-      else false
-    in
-    result
-  in
-  let finalize () =
-    if Atomic.compare_and_set is_open true false then (
-      Unix.close pipe_inp;
-      Unix.close pipe_out)
-  in
-  let is_waiting () = !@is_waiting in
-  { await; release_if_waiting; is_waiting; finalize }
 
 let sexp_append ~elem = function
   | Sexp.List l -> Sexp.List (elem :: l)
@@ -525,7 +471,7 @@ let capture_stdout_logs ?(never_skip = false) arg =
     let exitp, entrancep = Unix.pipe () and backup = Unix.dup Unix.stdout in
     Unix.dup2 entrancep Unix.stdout;
     Unix.set_nonblock entrancep;
-    (* TODO: process logs in a parallel thread. *)
+    (* FIXME: process logs in a parallel thread, and double check they are not getting cut off. *)
     let result =
       try arg ()
       with Sys_blocked_io ->
