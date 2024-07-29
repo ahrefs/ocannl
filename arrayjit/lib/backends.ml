@@ -177,19 +177,13 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   type task_list = Tnode.task Utils.mutable_list [@@deriving sexp_of]
 
-  module Mut = Stdlib.Mutex
-
   type device_state = {
     mutable keep_spinning : bool;
     mutable device_error : exn option;
     mutable host_pos : task_list;
     mutable dev_pos : task_list;
     mutable dev_previous_pos : task_list;
-    mut : (Mut.t[@sexp.opaque]);
-    host_wait_for_idle : (Condition.t[@sexp.opaque]);
-    dev_wait_for_work : (Condition.t[@sexp.opaque]);
-    mutable is_idle : bool;
-    mutable host_is_waiting : bool;  (** The host is waiting for this specific device. *)
+    dev_wait : (Utils.waiter[@sexp.opaque]);
   }
   [@@deriving sexp_of]
 
@@ -197,6 +191,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   type device = {
     state : device_state;
+    host_wait_for_idle : (Utils.waiter[@sexp.opaque]);
     merge_buffer : (buffer_ptr * Tnode.t) option ref;
     mutable allocated_buffer : (buffer_ptr * int) option;
     ordinal : int;
@@ -214,35 +209,23 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let expected_merge_node (code : code) = Backend.expected_merge_node code
   let expected_merge_nodes (codes : code_batch) = Backend.expected_merge_nodes codes
   let is_dev_queue_empty state = Utils.(is_empty @@ tl_exn state.dev_previous_pos)
-  let is_idle device = is_dev_queue_empty device.state && device.state.is_idle
+  let is_idle device = is_dev_queue_empty device.state && device.state.dev_wait.is_waiting ()
   let name = "multicore " ^ Backend.name
 
   let await device =
     assert (Domain.is_main_domain ());
     let d = device.state in
-    (* Stdlib.Printf.printf "DEBUG: await start is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-      d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
-    if (not d.is_idle) && d.keep_spinning then (
-      (* Stdlib.Printf.printf "DEBUG: await locking is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-        d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
-      Mut.lock d.mut;
-      (* Stdlib.Printf.printf "DEBUG: await locked is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-        d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
-      if (not d.is_idle) && d.keep_spinning then (
-        d.host_is_waiting <- true;
-        while (not d.is_idle) && d.keep_spinning do
-          (* Stdlib.Printf.printf "DEBUG: await waiting is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-            d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
-          Condition.wait d.host_wait_for_idle d.mut
-        done;
-        d.host_is_waiting <- false);
-      (* Stdlib.Printf.printf "DEBUG: await unlocking is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-        d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
-      Mut.unlock d.mut;
-      (* Stdlib.Printf.printf "DEBUG: await end is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-        d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
-      Option.iter d.device_error ~f:(fun e ->
-          Exn.reraise e @@ name ^ " device " ^ Int.to_string device.ordinal))
+    let keep_waiting () =
+      if d.keep_spinning && not (is_dev_queue_empty d) then (
+        ignore (d.dev_wait.release_if_waiting () : bool);
+        true)
+      else d.keep_spinning && not (d.dev_wait.is_waiting ())
+    in
+    while not (is_dev_queue_empty d) do
+      ignore (device.host_wait_for_idle.await ~keep_waiting () : bool)
+    done;
+    Option.iter d.device_error ~f:(fun e ->
+        Exn.reraise e @@ name ^ " device " ^ Int.to_string device.ordinal)
 
   let%track_sexp schedule_task device task =
     assert (Domain.is_main_domain ());
@@ -251,16 +234,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         Exn.reraise e @@ name ^ " device " ^ Int.to_string device.ordinal);
     if not d.keep_spinning then invalid_arg "Multicore_backend: device not available";
     d.host_pos <- Utils.insert ~next:task d.host_pos;
-    if d.is_idle then (
-      (* Stdlib.Printf.printf
-        "DEBUG: schedule task locking is_idle=%b host_is_waiting=%b is_empty=%b\n%!" d.is_idle
-        d.host_is_waiting (is_dev_queue_empty d); *)
-      Mut.lock d.mut;
-      (* Stdlib.Printf.printf
-        "DEBUG: schedule task broadcasting is_idle=%b host_is_waiting=%b is_empty=%b\n%!" d.is_idle
-        d.host_is_waiting (is_dev_queue_empty d); *)
-      Condition.broadcast d.dev_wait_for_work;
-      Mut.unlock d.mut)
+    ignore (d.dev_wait.release_if_waiting () : bool)
 
   let global_run_no = ref 0
 
@@ -277,13 +251,14 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         host_pos = init_pos;
         dev_pos = Empty;
         dev_previous_pos = init_pos;
-        mut = Mut.create ();
-        is_idle = false;
-        host_wait_for_idle = Condition.create ();
-        dev_wait_for_work = Condition.create ();
-        host_is_waiting = false;
+        dev_wait = Utils.waiter ~name:"dev" ();
       }
     in
+    let host_wait_for_idle = Utils.waiter ~name:"host" () in
+    let keep_waiting () =
+      state.keep_spinning && is_dev_queue_empty state && not (host_wait_for_idle.is_waiting ())
+    in
+    let wait_by_dev = state.dev_wait.await ~keep_waiting in
     let run_no = !global_run_no in
     let debug_runtime =
       Utils.get_debug ("dev-multicore-" ^ Int.to_string ordinal ^ "-run-" ^ Int.to_string run_no)
@@ -291,37 +266,12 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     let%diagn_rt_sexp worker (() : unit) : unit =
       try
         while state.keep_spinning do
-          (* Stdlib.Printf.printf
-            "DEBUG: worker loop start is_idle=%b host_is_waiting=%b is_empty=%b\n%!" state.is_idle
-            state.host_is_waiting (is_dev_queue_empty state); *)
           match state.dev_pos with
           | Empty ->
-              (* Stdlib.Printf.printf
-                "DEBUG: worker empty locking is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-                state.is_idle state.host_is_waiting (is_dev_queue_empty state); *)
-              Mut.lock state.mut;
-              (* Stdlib.Printf.printf
-                "DEBUG: worker empty locked is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-                state.is_idle state.host_is_waiting (is_dev_queue_empty state); *)
-              if is_dev_queue_empty state && state.keep_spinning then (
-                state.is_idle <- true;
-                while is_dev_queue_empty state && state.keep_spinning do
-                  (* Stdlib.Printf.printf
-                    "DEBUG: worker empty broadcasting is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-                    state.is_idle state.host_is_waiting (is_dev_queue_empty state); *)
-                  if state.host_is_waiting then Condition.broadcast state.host_wait_for_idle;
-                  (* Stdlib.Printf.printf
-                    "DEBUG: worker empty waiting is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-                    state.is_idle state.host_is_waiting (is_dev_queue_empty state); *)
-                  Condition.wait state.dev_wait_for_work state.mut
-                done;
-                state.is_idle <- false);
-              (* Stdlib.Printf.printf
-                "DEBUG: worker empty unlocking is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-                state.is_idle state.host_is_waiting (is_dev_queue_empty state); *)
-              Mut.unlock state.mut;
-              (* [%log "WORK WHILE LOOP: EMPTY AFTER WAIT -- dev pos:", (state.dev_pos :
-                 task_list)]; *)
+              let _host_released : bool = host_wait_for_idle.release_if_waiting () in
+              let _could_wait : bool = wait_by_dev () in
+              (* not _host_released && not _could_wait: we busy-loop until host processes its release. *)
+              (* [%log "WORK WHILE LOOP: EMPTY AFTER WAIT -- dev pos:", (state.dev_pos : task_list)]; *)
               state.dev_pos <- Utils.tl_exn state.dev_previous_pos
           | Cons { hd; tl } ->
               Tnode.run _debug_runtime hd;
@@ -333,12 +283,14 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         state.device_error <- Some e;
         state.keep_spinning <- false;
         [%log "Device", (ordinal : int), "exception", Exn.to_string e];
+        ignore (host_wait_for_idle.release_if_waiting () : bool);
         (* TODO: we risk raising this error multiple times because await and schedule_task raise
            device_error. But this is fine if we assume all exceptions are fatal. *)
         raise e
     in
     {
       state;
+      host_wait_for_idle;
       ordinal;
       domain = Domain.spawn (worker debug_runtime);
       merge_buffer = ref None;
@@ -539,11 +491,13 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     let wait_for_finish device =
       await device;
       device.state.keep_spinning <- false;
-      Condition.broadcast device.state.dev_wait_for_work
+      ignore (device.state.dev_wait.release_if_waiting () : bool)
     in
     Array.iter devices ~f:(Option.iter ~f:wait_for_finish);
     let cleanup ordinal device =
       Domain.join device.domain;
+      device.host_wait_for_idle.finalize ();
+      device.state.dev_wait.finalize ();
       devices.(ordinal) <- None
     in
     Array.iteri devices ~f:(fun ordinal -> Option.iter ~f:(cleanup ordinal));
