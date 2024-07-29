@@ -371,13 +371,13 @@ let c_ptr_to_string nd =
 let create_array ~debug:_debug prec ~dims init_op =
   let f prec = as_array prec @@ create_bigarray prec ~dims init_op in
   let result = Ops.map_prec { f } prec in
-  if Utils.settings.with_debug_level > 2 then
+  if Utils.settings.with_debug_level > 1 then
     [%debug_sexp
       [%log_entry
         "create_array";
         [%log _debug, c_ptr_to_string result]]];
   let%debug_sexp debug_finalizer _result = [%log "Deleting", _debug, c_ptr_to_string _result] in
-  if Utils.settings.with_debug_level > 2 then Stdlib.Gc.finalise debug_finalizer result;
+  if Utils.settings.with_debug_level > 1 then Stdlib.Gc.finalise debug_finalizer result;
   result
 
 let empty_array prec =
