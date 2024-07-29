@@ -288,13 +288,13 @@ struct
     let open Stdlib.Format in
     let params : (string * param_source) list =
       (* Preserve the order in the hashtable, so it's the same as e.g. in compile_globals. *)
-      List.rev @@
-      Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:node params ->
-          if Utils.settings.with_debug_level > 0 then
-            [%log "array-used:", (tn : Tn.t), get_ident tn];
-          if B.is_in_context node && not (Hash_set.mem is_global tn) then
-            (Ops.cuda_typ_of_prec tn.Tn.prec ^ " *" ^ get_ident tn, Param_ptr tn) :: params
-          else params)
+      List.rev
+      @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:node params ->
+             if Utils.settings.with_debug_level > 0 then
+               [%log "array-used:", (tn : Tn.t), get_ident tn];
+             if B.is_in_context node && not (Hash_set.mem is_global tn) then
+               (Ops.cuda_typ_of_prec tn.Tn.prec ^ " *" ^ get_ident tn, Param_ptr tn) :: params
+             else params)
     in
     let idx_params =
       List.map idx_params ~f:(fun s ->
@@ -314,6 +314,9 @@ struct
                ("const " ^ Ops.cuda_typ_of_prec tn.prec ^ " *merge_buffer", Merge_buffer)))
     in
     let params = log_file @ merge_param @ idx_params @ params in
+    let params =
+      List.sort params ~compare:(fun (p1_name, _) (p2_name, _) -> compare_string p1_name p2_name)
+    in
     fprintf ppf "@[<v 2>@[<hv 4>%s%svoid %s(@,@[<hov 0>%a@]@;<0 -4>)@] {@ " B.main_kernel_prefix
       (if String.is_empty B.main_kernel_prefix then "" else " ")
       name
@@ -329,11 +332,12 @@ struct
         ~f:(function
           | p_name, Merge_buffer ->
               if B.logs_to_stdout then
-                fprintf ppf {|@[<7>printf(@[<h>"%s%%d: %s = %%p\n",@] log_id, (void*)merge_buffer);@]@ |}
+                fprintf ppf
+                  {|@[<7>printf(@[<h>"%s%%d: %s = %%p\n",@] log_id, (void*)merge_buffer);@]@ |}
                   !Utils.captured_log_prefix p_name
               else
-                fprintf ppf {|@[<7>fprintf(log_file,@ @[<h>"%s = %%p\n",@] (void*)merge_buffer);@]@ |}
-                  p_name
+                fprintf ppf
+                  {|@[<7>fprintf(log_file,@ @[<h>"%s = %%p\n",@] (void*)merge_buffer);@]@ |} p_name
           | _, Log_file_name -> ()
           | p_name, Param_ptr tn ->
               if B.logs_to_stdout then

@@ -4,7 +4,7 @@ type buffer_ptr = Unimplemented_buffer_ptr [@@deriving sexp_of]
 type context = Unimplemented_ctx [@@deriving sexp_of]
 type code = Indexing.unit_bindings [@@deriving sexp_of]
 type code_batch = Indexing.unit_bindings array [@@deriving sexp_of]
-type ctx_array [@@deriving sexp_of]
+type ctx_array = | [@@deriving sexp_of]
 
 let initialize (_config : Backend_utils.Types.config) = ()
 let is_initialized () = true
