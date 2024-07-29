@@ -1,6 +1,11 @@
 open Base
 (** N-dimensional arrays: a precision-handling wrapper for [Bigarray.Genarray] and its utilities. *)
 
+module Debug_runtime = Utils.Debug_runtime
+
+[%%global_debug_log_level Nothing]
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+
 module A = Bigarray.Genarray
 
 (** {2 *** Handling of precisions ***} *)
@@ -144,13 +149,6 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
       in
       Unix.close fd;
       ba
-
-let create_array prec ~dims init_op =
-  let f prec = as_array prec @@ create_bigarray prec ~dims init_op in
-  Ops.map_prec { f } prec
-
-let empty_array prec =
-  create_array prec ~dims:[||] (Constant_fill { values = [| 0.0 |]; strict = false })
 
 (** {2 *** Accessing ***} *)
 
@@ -363,12 +361,29 @@ let retrieve_flat_values arr =
     iter 0;
     Array.of_list_rev !result
 
-(** {2 *** Printing ***} *)
+(** {2 *** Creating ***} *)
 
 let c_ptr_to_string nd =
   let prec = get_prec nd in
   let f arr = Ops.ptr_to_string (Ctypes.bigarray_start Ctypes_static.Genarray arr) prec in
   map { f } nd
+
+let create_array ~debug:_debug prec ~dims init_op =
+  let f prec = as_array prec @@ create_bigarray prec ~dims init_op in
+  let result = Ops.map_prec { f } prec in
+  if Utils.settings.with_debug_level > 2 then
+    [%debug_sexp
+      [%log_entry
+        "create_array";
+        [%log _debug, c_ptr_to_string result]]];
+  let%debug_sexp debug_finalizer _result = [%log "Deleting", _debug, c_ptr_to_string _result] in
+  if Utils.settings.with_debug_level > 2 then Stdlib.Gc.finalise debug_finalizer result;
+  result
+
+let empty_array prec =
+  create_array prec ~dims:[||] (Constant_fill { values = [| 0.0 |]; strict = false })
+
+(** {2 *** Printing ***} *)
 
 (** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
     Outputs ["-"] for empty dimensions. *)

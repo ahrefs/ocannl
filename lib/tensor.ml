@@ -284,7 +284,10 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
     Stdlib.Format.pp_set_geometry Stdlib.Format.str_formatter ~max_indent:!max_sublabel_length
       ~margin:(!max_sublabel_length * 2);
     let dims = Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list in
-    let ndarr = Nd.create_array Arrayjit.Ops.double ~dims (Constant_fill { values; strict }) in
+    let debug = "Temporary array for pretty-printing" in
+    let ndarr =
+      Nd.create_array ~debug Arrayjit.Ops.double ~dims (Constant_fill { values; strict })
+    in
     let ( ! ) = List.length in
     Nd.pp_array_inline ~num_batch_axes:!batch_ds ~num_output_axes:!output_ds
       ~num_input_axes:!input_ds Stdlib.Format.str_formatter ndarr;

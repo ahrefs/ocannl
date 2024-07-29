@@ -293,9 +293,11 @@ end)
 let registry = Registry.create 16
 
 let create prec ~id ~label ~dims init_op =
+  let debug = "Host array for " ^ get_debug_name ~id ~label () in
   let rec array =
     lazy
-      (if is_hosted_force tn 30 then Some (Nd.create_array prec ~dims:(Lazy.force dims) init_op)
+      (if is_hosted_force tn 30 then
+         Some (Nd.create_array ~debug prec ~dims:(Lazy.force dims) init_op)
        else None)
   and tn =
     {

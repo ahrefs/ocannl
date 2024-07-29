@@ -90,8 +90,9 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
         Hashtbl.fold lowered.traced_store ~init:ctx_arrays ~f:(fun ~key:tn ~data:_ ctx_arrays ->
             match Map.find ctx_arrays tn with
             | None ->
+                let debug = "CC compile-time ctx array for " ^ Tn.debug_name tn in
                 let data =
-                  Ndarray.create_array tn.Tn.prec ~dims:(Lazy.force tn.dims)
+                  Ndarray.create_array ~debug tn.Tn.prec ~dims:(Lazy.force tn.dims)
                   @@ Constant_fill { values = [| 0. |]; strict = false }
                 in
                 Map.add_exn ctx_arrays ~key:tn ~data
@@ -120,13 +121,14 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
   let log_fname = base_name ^ ".log" in
   let libname = base_name ^ ".so" in
   (try Stdlib.Sys.remove log_fname with _ -> ());
+  (try Stdlib.Sys.remove libname with _ -> ());
   let cmdline =
     Printf.sprintf "%s %s -O%d -o %s --shared >> %s 2>&1" (compiler_command ()) pp_file.f_name
       (optimization_level ()) libname log_fname
   in
   let _rc = Stdlib.Sys.command cmdline in
   (* FIXME: don't busy wait *)
-  while not @@ Stdlib.Sys.file_exists log_fname do
+  while not @@ (Stdlib.Sys.file_exists libname && Stdlib.Sys.file_exists log_fname) do
     ()
   done;
   let result = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW; RTLD_DEEPBIND ] in
@@ -141,8 +143,9 @@ let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings
             Hashtbl.fold lowered.traced_store ~init:ctx_arrays ~f:(fun ~key:tn ~data:_ ctx_arrays ->
                 match Map.find ctx_arrays tn with
                 | None ->
+                    let debug = "CC compile-time ctx array for " ^ Tn.debug_name tn in
                     let data =
-                      Ndarray.create_array tn.Tn.prec ~dims:(Lazy.force tn.dims)
+                      Ndarray.create_array ~debug tn.Tn.prec ~dims:(Lazy.force tn.dims)
                       @@ Constant_fill { values = [| 0. |]; strict = false }
                     in
                     Map.add_exn ctx_arrays ~key:tn ~data
@@ -218,7 +221,8 @@ let%track_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
               let f = function
                 | Some arr -> arr
                 | None ->
-                    Ndarray.create_array tn.Tn.prec ~dims:(Lazy.force tn.dims)
+                    let debug = "CC link-time ctx array for " ^ Tn.debug_name tn in
+                    Ndarray.create_array ~debug tn.Tn.prec ~dims:(Lazy.force tn.dims)
                     @@ Constant_fill { values = [| 0. |]; strict = false }
               in
               Map.update ctx_arrays tn ~f

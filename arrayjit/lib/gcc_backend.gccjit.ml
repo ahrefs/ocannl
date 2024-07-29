@@ -198,8 +198,9 @@ let prepare_node ~debug_log_zero_out ~get_ident ctx nodes traced_store ctx_nodes
           | From_context, Ctx_arrays ctx_arrays -> (
               match Map.find !ctx_arrays tn with
               | None ->
+                  let debug = "GCCJIT compile-time ctx array for " ^ Tn.debug_name tn in
                   let data =
-                    Ndarray.create_array tn.Tn.prec ~dims
+                    Ndarray.create_array ~debug tn.Tn.prec ~dims
                     @@ Constant_fill { values = [| 0. |]; strict = false }
                   in
                   ctx_arrays := Map.add_exn !ctx_arrays ~key:tn ~data;
@@ -805,7 +806,8 @@ let%track_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
               let f = function
                 | Some arr -> arr
                 | None ->
-                    Ndarray.create_array tn.Tn.prec ~dims:(Lazy.force tn.dims)
+                    let debug = "GCCJIT link-time ctx array for " ^ Tn.debug_name tn in
+                    Ndarray.create_array ~debug tn.Tn.prec ~dims:(Lazy.force tn.dims)
                     @@ Constant_fill { values = [| 0. |]; strict = false }
               in
               Map.update ctx_arrays tn ~f
