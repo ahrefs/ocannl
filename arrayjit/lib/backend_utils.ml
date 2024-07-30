@@ -128,8 +128,8 @@ struct
             from_ pp_index i to_ pp_index i pp_ll body
       | Zero_out tn ->
           let traced = Low_level.(get_node traced_store tn) in
+          (* The initialization will be emitted at the end of compile_proc. *)
           if Hash_set.mem visited tn then pp_zero_out ppf tn else assert traced.zero_initialized
-          (* The initialization will be emitted by get_array. *)
       | Set { tn; idcs; llv; debug } ->
           Hash_set.add visited tn;
           let ident = get_ident tn in
@@ -156,14 +156,15 @@ struct
                 !Utils.captured_log_prefix
                 (String.substr_replace_all debug ~pattern:"\n" ~with_:"$");
               fprintf ppf
-                {|@[<7>printf(@[<h>"%s%%d: %s[%%u] = %%f = %s\n",@]@ log_id,@ %a,@ new_set_v%a);@]@ |}
-                !Utils.captured_log_prefix ident v_code pp_array_offset offset pp_args v_idcs)
+                {|@[<7>printf(@[<h>"%s%%d: %s[%%u]{=%%f} = %%f = %s\n",@]@ log_id,@ %a,@ %s[%a],@ new_set_v%a);@]@ |}
+                !Utils.captured_log_prefix ident v_code pp_array_offset offset ident pp_array_offset
+                offset pp_args v_idcs)
             else (
               fprintf ppf {|@[<7>fprintf(log_file,@ @[<h>"# %s\n"@]);@]@ |}
                 (String.substr_replace_all debug ~pattern:"\n" ~with_:"$");
               fprintf ppf
-                {|@[<7>fprintf(log_file,@ @[<h>"%s[%%u] = %%f = %s\n",@]@ %a,@ new_set_v%a);@]@ |}
-                ident v_code pp_array_offset offset pp_args v_idcs);
+                {|@[<7>fprintf(log_file,@ @[<h>"%s[%%u]{=%%f} = %%f = %s\n",@]@ %a,@ %s[%a],@ new_set_v%a);@]@ |}
+                ident v_code pp_array_offset offset ident pp_array_offset offset pp_args v_idcs);
             if not B.logs_to_stdout then fprintf ppf "fflush(log_file);@ ";
             fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@;<1 -2>}@]@ " ident pp_array_offset
               (idcs, dims))
