@@ -128,6 +128,7 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
   in
   let _rc = Stdlib.Sys.command cmdline in
   (* FIXME: don't busy wait *)
+  (* FIXME: detect and propagate compile errors, log compile warnings *)
   while not @@ (Stdlib.Sys.file_exists libname && Stdlib.Sys.file_exists log_fname) do
     ()
   done;

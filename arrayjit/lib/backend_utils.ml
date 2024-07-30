@@ -86,7 +86,8 @@ struct
   let%track_sexp compile_globals ppf =
     let open Stdlib.Format in
     let is_global = Hash_set.create (module Tn) in
-    fprintf ppf {|@[<v 0>#include <stdio.h>@,#include <stdlib.h>@,/* Global declarations. */@,|};
+    fprintf ppf
+      {|@[<v 0>#include <stdio.h>@,#include <stdlib.h>@,#include <string.h>@,/* Global declarations. */@,|};
     Array.iter B.for_lowereds ~f:(fun l ->
         Hashtbl.iter l.Low_level.traced_store ~f:(fun (node : Low_level.traced_array) ->
             if not @@ Hash_set.mem is_global node.tn then
