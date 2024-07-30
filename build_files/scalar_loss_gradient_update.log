@@ -1,0 +1,12 @@
+./build_files/scalar_loss_gradient_update.c: In function ‘scalar_loss_gradient_update’:
+./build_files/scalar_loss_gradient_update.c:30:3: warning: implicit declaration of function ‘memset’ [-Wimplicit-function-declaration]
+   30 |   memset(w1_grad, 0, 128);
+      |   ^~~~~~
+./build_files/scalar_loss_gradient_update.c:3:1: note: include ‘<string.h>’ or provide a declaration of ‘memset’
+    2 | #include <stdlib.h>
+  +++ |+#include <string.h>
+    3 | /* Global declarations. */
+./build_files/scalar_loss_gradient_update.c:30:3: warning: incompatible implicit declaration of built-in function ‘memset’ [-Wbuiltin-declaration-mismatch]
+   30 |   memset(w1_grad, 0, 128);
+      |   ^~~~~~
+./build_files/scalar_loss_gradient_update.c:30:3: note: include ‘<string.h>’ or provide a declaration of ‘memset’

@@ -255,4 +255,40 @@ let mem_properties (traced_store : Low_level.traced_store) =
         else if is_constant && traced.read_only then Constant_from_host
         else From_context)
 
+
+  let run_variadic =
+    [%log_level
+      Nothing;
+      let rec link :
+            'a 'b 'idcs.
+            'idcs Indexing.bindings ->
+            (string * param_source) list ->
+            ('a -> 'b) Ctypes.fn ->
+            ('a -> 'b, 'idcs, 'p1, 'p2) Indexing.variadic =
+       fun (type a b idcs) (binds : idcs Indexing.bindings) params (cs : (a -> b) Ctypes.fn) ->
+        match (binds, params) with
+        | Empty, [] -> Indexing.Result (Foreign.foreign ~from:code.result name cs)
+        | Bind _, [] -> invalid_arg "Cc_backend.link: too few static index params"
+        | Bind (_, bs), (_p_name, Static_idx _) :: ps ->
+            Param_idx (ref 0, link bs ps Ctypes.(int @-> cs))
+        | Empty, (p_name, Static_idx _) :: _ ->
+            invalid_arg @@ "Cc_backend.link: too many static index params, found: " ^ p_name
+        | bs, (_p_name, Log_file_name) :: ps ->
+            Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
+        | bs, (_p_name, Merge_buffer) :: ps ->
+            let get_ptr (buffer, _) = Ndarray.get_voidptr buffer in
+            Param_2f (get_ptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
+        | bs, (_p_name, Param_ptr tn) :: ps ->
+            let nd = match Map.find arrays tn with Some nd -> nd | None -> assert false in
+            let c_ptr = Ndarray.get_voidptr nd in
+            (* Stdlib.Printf.printf "DEBUG: %s param for %s is %s\n%!" _p_name (Tn.debug_name tn)
+               (Ndarray.c_ptr_to_string nd); *)
+            Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
+      in
+      (* Reverse the input order because [Indexing.apply] will reverse it again. Important:
+         [code.bindings] are traversed in the wrong order but that's OK because [link] only uses
+         them to check the number of indices. *)
+      let params = List.rev code.params in
+      link code.bindings params Ctypes.(void @-> returning void)]
+  in
 ]}

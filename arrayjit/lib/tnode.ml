@@ -6,13 +6,14 @@ module Debug_runtime = Utils.Debug_runtime
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-type task = {
+type task = Task : {
+  context_lifetime : ('a[@sexp.opaque]);
   description : string;
   work : (module Minidebug_runtime.Debug_runtime) -> unit -> unit;
-}
+} -> task
 [@@deriving sexp_of]
 
-let run debug_runtime task =
+let run debug_runtime (Task task) =
   let module Debug_runtime = (val debug_runtime : Minidebug_runtime.Debug_runtime) in
   [%diagn_sexp
     [%log_entry

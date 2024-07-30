@@ -1,0 +1,12 @@
+
+infer_mlp ():
+  # "infer mlp";
+  n91 =:+ w1 * infer ~logic:"@";
+  n93 =: b1 + n91;
+  n95 =: ?/ n93;
+  n97 =:+ w2 * n95 ~logic:"@";
+  n99 =: b2 + n97;
+  n101 =: ?/ n99;
+  n103 =:+ w3 * n101 ~logic:"@";
+  mlp =: b3 + n103;
+  

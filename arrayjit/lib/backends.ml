@@ -221,26 +221,26 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     assert (Domain.is_main_domain ());
     let d = device.state in
     (* Stdlib.Printf.printf "DEBUG: await start is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-      d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
+       d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
     if (not d.is_idle) && d.keep_spinning then (
       (* Stdlib.Printf.printf "DEBUG: await locking is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-        d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
+         d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
       Mut.lock d.mut;
       (* Stdlib.Printf.printf "DEBUG: await locked is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-        d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
+         d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
       if (not d.is_idle) && d.keep_spinning then (
         d.host_is_waiting <- true;
         while (not d.is_idle) && d.keep_spinning do
-          (* Stdlib.Printf.printf "DEBUG: await waiting is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-            d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
+          (* Stdlib.Printf.printf "DEBUG: await waiting is_idle=%b host_is_waiting=%b
+             is_empty=%b\n%!" d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
           Condition.wait d.host_wait_for_idle d.mut
         done;
         d.host_is_waiting <- false);
       (* Stdlib.Printf.printf "DEBUG: await unlocking is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-        d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
+         d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
       Mut.unlock d.mut;
       (* Stdlib.Printf.printf "DEBUG: await end is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-        d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
+         d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
       Option.iter d.device_error ~f:(fun e ->
           Exn.reraise e @@ name ^ " device " ^ Int.to_string device.ordinal))
 
@@ -252,13 +252,11 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     if not d.keep_spinning then invalid_arg "Multicore_backend: device not available";
     d.host_pos <- Utils.insert ~next:task d.host_pos;
     if d.is_idle then (
-      (* Stdlib.Printf.printf
-        "DEBUG: schedule task locking is_idle=%b host_is_waiting=%b is_empty=%b\n%!" d.is_idle
-        d.host_is_waiting (is_dev_queue_empty d); *)
+      (* Stdlib.Printf.printf "DEBUG: schedule task locking is_idle=%b host_is_waiting=%b
+         is_empty=%b\n%!" d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
       Mut.lock d.mut;
-      (* Stdlib.Printf.printf
-        "DEBUG: schedule task broadcasting is_idle=%b host_is_waiting=%b is_empty=%b\n%!" d.is_idle
-        d.host_is_waiting (is_dev_queue_empty d); *)
+      (* Stdlib.Printf.printf "DEBUG: schedule task broadcasting is_idle=%b host_is_waiting=%b
+         is_empty=%b\n%!" d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
       Condition.broadcast d.dev_wait_for_work;
       Mut.unlock d.mut)
 
@@ -268,7 +266,16 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     Int.incr global_run_no;
     let init_pos =
       Utils.Cons
-        { hd = Tnode.{ description = "root of task queue"; work = (fun _rt () -> ()) }; tl = Empty }
+        {
+          hd =
+            Tnode.Task
+              {
+                context_lifetime = ();
+                description = "root of task queue";
+                work = (fun _rt () -> ());
+              };
+          tl = Empty;
+        }
     in
     let state =
       {
@@ -291,34 +298,30 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     let%diagn_rt_sexp worker (() : unit) : unit =
       try
         while state.keep_spinning do
-          (* Stdlib.Printf.printf
-            "DEBUG: worker loop start is_idle=%b host_is_waiting=%b is_empty=%b\n%!" state.is_idle
-            state.host_is_waiting (is_dev_queue_empty state); *)
+          (* Stdlib.Printf.printf "DEBUG: worker loop start is_idle=%b host_is_waiting=%b
+             is_empty=%b\n%!" state.is_idle state.host_is_waiting (is_dev_queue_empty state); *)
           match state.dev_pos with
           | Empty ->
-              (* Stdlib.Printf.printf
-                "DEBUG: worker empty locking is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-                state.is_idle state.host_is_waiting (is_dev_queue_empty state); *)
+              (* Stdlib.Printf.printf "DEBUG: worker empty locking is_idle=%b host_is_waiting=%b
+                 is_empty=%b\n%!" state.is_idle state.host_is_waiting (is_dev_queue_empty state); *)
               Mut.lock state.mut;
-              (* Stdlib.Printf.printf
-                "DEBUG: worker empty locked is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-                state.is_idle state.host_is_waiting (is_dev_queue_empty state); *)
+              (* Stdlib.Printf.printf "DEBUG: worker empty locked is_idle=%b host_is_waiting=%b
+                 is_empty=%b\n%!" state.is_idle state.host_is_waiting (is_dev_queue_empty state); *)
               if is_dev_queue_empty state && state.keep_spinning then (
                 state.is_idle <- true;
                 while is_dev_queue_empty state && state.keep_spinning do
-                  (* Stdlib.Printf.printf
-                    "DEBUG: worker empty broadcasting is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-                    state.is_idle state.host_is_waiting (is_dev_queue_empty state); *)
+                  (* Stdlib.Printf.printf "DEBUG: worker empty broadcasting is_idle=%b
+                     host_is_waiting=%b is_empty=%b\n%!" state.is_idle state.host_is_waiting
+                     (is_dev_queue_empty state); *)
                   if state.host_is_waiting then Condition.broadcast state.host_wait_for_idle;
-                  (* Stdlib.Printf.printf
-                    "DEBUG: worker empty waiting is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-                    state.is_idle state.host_is_waiting (is_dev_queue_empty state); *)
+                  (* Stdlib.Printf.printf "DEBUG: worker empty waiting is_idle=%b host_is_waiting=%b
+                     is_empty=%b\n%!" state.is_idle state.host_is_waiting (is_dev_queue_empty
+                     state); *)
                   Condition.wait state.dev_wait_for_work state.mut
                 done;
                 state.is_idle <- false);
-              (* Stdlib.Printf.printf
-                "DEBUG: worker empty unlocking is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
-                state.is_idle state.host_is_waiting (is_dev_queue_empty state); *)
+              (* Stdlib.Printf.printf "DEBUG: worker empty unlocking is_idle=%b host_is_waiting=%b
+                 is_empty=%b\n%!" state.is_idle state.host_is_waiting (is_dev_queue_empty state); *)
               Mut.unlock state.mut;
               (* [%log "WORK WHILE LOOP: EMPTY AFTER WAIT -- dev pos:", (state.dev_pos :
                  task_list)]; *)
@@ -345,12 +348,12 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       allocated_buffer = None;
     }
 
-  let%diagn_sexp make_work device task =
+  let%diagn_sexp make_work device (Tnode.Task { description; _ } as task) =
     let%diagn_rt_sexp work () = schedule_task device task in
-    Tnode.
+    Tnode.Task
       {
-        description =
-          "schedules {" ^ task.description ^ "} on device " ^ Int.to_string device.ordinal;
+        context_lifetime = task;
+        description = "schedules {" ^ description ^ "} on device " ^ Int.to_string device.ordinal;
         work;
       }
 
@@ -423,13 +426,14 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                            Ndarray.render_array ~indices h_arr]]]
                in
                schedule_task context.device
-                 Tnode.
-                   {
-                     description =
-                       "from_host " ^ Tnode.debug_name tn ^ " dst "
-                       ^ Int.to_string context.device.ordinal;
-                     work;
-                   };
+                 (Tnode.Task
+                    {
+                      context_lifetime = context;
+                      description =
+                        "from_host " ^ Tnode.debug_name tn ^ " dst "
+                        ^ Int.to_string context.device.ordinal;
+                      work;
+                    });
                true
            | (lazy None) ->
                [%diagn_sexp
@@ -462,13 +466,14 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                            Ndarray.render_array ~indices h_arr]]]
                in
                schedule_task context.device
-                 Tnode.
-                   {
-                     description =
-                       "from_host " ^ Tnode.debug_name tn ^ " dst "
-                       ^ Int.to_string context.device.ordinal;
-                     work;
-                   };
+                 (Tnode.Task
+                    {
+                      context_lifetime = context;
+                      description =
+                        "from_host " ^ Tnode.debug_name tn ^ " dst "
+                        ^ Int.to_string context.device.ordinal;
+                      work;
+                    });
                true
            | (lazy None) ->
                [%diagn_sexp
@@ -515,14 +520,11 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
               dev.merge_buffer := Some (merge_ptr, tn);
               Backend.to_buffer ~rt tn ~dst:merge_ptr ~src:src.ctx
       in
-      schedule_task dev
-        Tnode.
-          {
-            description =
-              "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ Int.to_string dev.ordinal
-              ^ " src " ^ Int.to_string src.device.ordinal;
-            work;
-          }
+      let description =
+        "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ Int.to_string dev.ordinal ^ " src "
+        ^ Int.to_string src.device.ordinal
+      in
+      schedule_task dev (Tnode.Task { context_lifetime = (src, dst); description; work })
     in
     match (Backend.get_buffer tn dst.ctx, Backend.get_buffer tn src.ctx) with
     | Some dst, Some _ ->

@@ -1,0 +1,5 @@
+
+merging_scalar_loss ():
+  # "merging scalar_loss";
+  scalar_loss =+ scalar_loss.merge;
+  

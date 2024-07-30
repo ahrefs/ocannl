@@ -461,7 +461,13 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~glo
       args;
     [%log "kernel launched"]
   in
-  (context, { Tn.description = "launches " ^ name ^ " on " ^ context.label; work })
+  ( context,
+    Tn.Task
+      {
+        context_lifetime = context;
+        description = "launches " ^ name ^ " on " ^ context.label;
+        work;
+      } )
 
 let%diagn_sexp alloc_if_needed ctx ~key ~data:node globals =
   if is_in_context node then (

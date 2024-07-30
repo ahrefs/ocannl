@@ -858,5 +858,10 @@ let%track_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
   in
   ( context,
     Indexing.lowered_bindings code.bindings run_variadic,
-    Tn.{ description = "executes " ^ code.name ^ " on " ^ context.label; work },
+    Tn.Task
+      {
+        context_lifetime = context;
+        description = "executes " ^ code.name ^ " on " ^ context.label;
+        work;
+      },
     name )
