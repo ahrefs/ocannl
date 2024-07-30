@@ -165,14 +165,14 @@ struct
                 !Utils.captured_log_prefix
                 (String.substr_replace_all debug ~pattern:"\n" ~with_:"$");
               fprintf ppf
-                {|@[<7>printf(@[<h>"%s%%d: %s[%%u]{=%%f} = %%f = %s\n",@]@ log_id,@ %a,@ %s[%a],@ new_set_v%a);@]@ |}
+                {|@[<7>printf(@[<h>"%s%%d: %s[%%u]{=%%g} = %%g = %s\n",@]@ log_id,@ %a,@ %s[%a],@ new_set_v%a);@]@ |}
                 !Utils.captured_log_prefix ident v_code pp_array_offset offset ident pp_array_offset
                 offset pp_args v_idcs)
             else (
               fprintf ppf {|@[<7>fprintf(log_file,@ @[<h>"# %s\n"@]);@]@ |}
                 (String.substr_replace_all debug ~pattern:"\n" ~with_:"$");
               fprintf ppf
-                {|@[<7>fprintf(log_file,@ @[<h>"%s[%%u]{=%%f} = %%f = %s\n",@]@ %a,@ %s[%a],@ new_set_v%a);@]@ |}
+                {|@[<7>fprintf(log_file,@ @[<h>"%s[%%u]{=%%g} = %%g = %s\n",@]@ %a,@ %s[%a],@ new_set_v%a);@]@ |}
                 ident v_code pp_array_offset offset ident pp_array_offset offset pp_args v_idcs);
             if not B.logs_to_stdout then fprintf ppf "fflush(log_file);@ ";
             fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@;<1 -2>}@]@ " ident pp_array_offset
