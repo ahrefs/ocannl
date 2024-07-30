@@ -38,6 +38,5 @@ ocannl_config
 ocannl_config-*
 
 # Debug output
-debug*.html
-debug*.log
-debug*.md
+log_files/
+build_files/
