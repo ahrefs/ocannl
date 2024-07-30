@@ -290,8 +290,15 @@ struct
       (* Preserve the order in the hashtable, so it's the same as e.g. in compile_globals. *)
       List.rev
       @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:node params ->
-             if Utils.settings.with_debug_level > 0 then
-               [%log "array-used:", (tn : Tn.t), get_ident tn];
+             (* A rough approximation to the type Gccjit_backend.mem_properties. *)
+             let backend_info =
+               Sexp.Atom
+                 (if B.is_in_context node then "From_context"
+                  else if Hash_set.mem is_global tn then "Constant_from_host"
+                  else "Local_only")
+             in
+             if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
+               tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
              if B.is_in_context node && not (Hash_set.mem is_global tn) then
                (Ops.cuda_typ_of_prec tn.Tn.prec ^ " *" ^ get_ident tn, Param_ptr tn) :: params
              else params)
