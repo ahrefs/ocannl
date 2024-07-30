@@ -53,6 +53,8 @@ let fresh_backend ?backend_name ?(config = BT.Physical_devices_only) () =
     with
     | "cc" -> (module B.Cc_backend : B.Backend)
     | "gccjit" -> (module B.Gccjit_backend : B.Backend)
+    | "sync_cc" -> (module B.Sync_cc_backend : B.Backend)
+    | "sync_gccjit" -> (module B.Sync_gccjit_backend : B.Backend)
     | "cuda" -> (module B.Cuda_backend : B.Backend)
     | backend -> invalid_arg [%string "Train.fresh_backend: unknown backend %{backend}"]
   in

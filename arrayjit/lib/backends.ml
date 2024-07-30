@@ -499,6 +499,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
            ^ ", actual " ^ Tnode.debug_name tn);
     let schedule dst =
       let work =
+        (* TODO: log the operation if [Utils.settings.with_log_level > 0]. *)
         match into_merge_buffer with
         | No -> fun rt () -> Backend.to_buffer ~rt tn ~dst ~src:src.ctx
         | Streaming ->
@@ -563,6 +564,198 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let get_name device = Int.to_string device.ordinal
   let to_ordinal { ordinal; _ } = ordinal
   let to_subordinal _ = 0
+  let to_buffer ?rt tn ~dst ~src = Backend.to_buffer ?rt tn ~dst ~src:src.ctx
+  let host_to_buffer = Backend.host_to_buffer
+  let buffer_to_host = Backend.buffer_to_host
+  let get_buffer tn context = Backend.get_buffer tn context.ctx
+end
+
+(** For debugging, allow [Sync_backend(...).suggested_num_virtual_devices] calls to return >1
+    numbers. *)
+let sync_suggested_num_virtual_devices = ref 1
+
+(** A minimalisitc wrapper creating backends where all calls run synchronously on the main thread.
+    There is only one physical device, but as always an arbitrary number of virtual devices. *)
+module Sync_backend (Backend : No_device_backend) (* : Backend *) = struct
+  type buffer_ptr = Backend.buffer_ptr [@@deriving sexp_of]
+
+  type device = {
+    subordinal : int;
+    merge_buffer : (buffer_ptr * Tnode.t) option ref;
+    mutable allocated_buffer : (buffer_ptr * int) option;
+  }
+  [@@deriving sexp_of]
+
+  let alloc_buffer ?old_buffer ~size_in_bytes _device =
+    Backend.alloc_buffer ?old_buffer ~size_in_bytes ()
+
+  type physical_device = CPU [@@deriving sexp_of]
+  type code = Backend.code [@@deriving sexp_of]
+  type code_batch = Backend.code_batch [@@deriving sexp_of]
+
+  let expected_merge_node (code : code) = Backend.expected_merge_node code
+  let expected_merge_nodes (codes : code_batch) = Backend.expected_merge_nodes codes
+  let is_idle _device = true
+  let name = "sync " ^ Backend.name
+  let await _device = ()
+  let global_run_no = ref 0
+
+  type context = { device : device; ctx : Backend.context; expected_merge_node : Tnode.t option }
+  [@@deriving sexp_of]
+
+  type nonrec routine = context routine [@@deriving sexp_of]
+
+  let init device = { device; ctx = Backend.init ~label:name; expected_merge_node = None }
+  let initialize = Backend.initialize
+  let is_initialized = Backend.is_initialized
+  let finalize { device = _; ctx; expected_merge_node = _ } = Backend.finalize ctx
+  let compile = Backend.compile
+  let compile_batch = Backend.compile_batch
+
+  let link ?from_prior_context { ctx; device; expected_merge_node = _ } code =
+    let task = Backend.link ?from_prior_context ~merge_buffer:device.merge_buffer ctx code in
+    {
+      task with
+      context =
+        { ctx = task.context; device; expected_merge_node = Backend.expected_merge_node code };
+    }
+
+  let link_batch ?from_prior_context { ctx; device; expected_merge_node } code_batch =
+    let ctx, routines =
+      Backend.link_batch ?from_prior_context ~merge_buffer:device.merge_buffer ctx code_batch
+    in
+    let merge_nodes = Backend.expected_merge_nodes code_batch in
+    ( { ctx; device; expected_merge_node },
+      Array.mapi routines ~f:(fun i ->
+          Option.map ~f:(fun task ->
+              {
+                task with
+                context = { ctx = task.context; device; expected_merge_node = merge_nodes.(i) };
+              })) )
+
+  let get_name device = Int.to_string device.subordinal
+
+  let from_host ?rt (context : context) (tn : Tnode.t) =
+    if Option.is_some rt then
+      raise
+      @@ Utils.User_error "Multicore_backend.from_host: backend cannot be nested in another runtime";
+    Option.value ~default:false
+    @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
+           match tn.Tnode.array with
+           | (lazy (Some h_arr)) ->
+               Backend.host_to_buffer ?rt h_arr ~dst:c_arr;
+               (if Utils.settings.with_debug_level > 0 then
+                  let module Debug_runtime = (val Option.value rt ~default:(module Debug_runtime))
+                  in
+                  [%diagn_sexp
+                    [%log_entry
+                      "from_host for " ^ Tnode.debug_name tn;
+                      [%log "copied", Tnode.debug_name tn, "from host to", get_name context.device];
+                      if Utils.settings.with_debug_level > 2 then
+                        [%log_printbox
+                          let indices =
+                            Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
+                          in
+                          Ndarray.render_array ~indices h_arr]]]);
+               true
+           | (lazy None) ->
+               [%diagn_sexp
+                 [%log_entry
+                   "nothing to copy from host for " ^ Tnode.debug_name tn;
+                   [%log "to", get_name context.device]]];
+               false)
+
+  let to_host ?rt (context : context) (tn : Tnode.t) =
+    if Option.is_some rt then
+      raise
+      @@ Utils.User_error "Multicore_backend.to_host: backend cannot be nested in another runtime";
+    Option.value ~default:false
+    @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
+           match tn.Tnode.array with
+           | (lazy (Some h_arr)) ->
+               Backend.buffer_to_host ?rt h_arr ~src:c_arr;
+               (if Utils.settings.with_debug_level > 0 then
+                  let module Debug_runtime = (val Option.value rt ~default:(module Debug_runtime))
+                  in
+                  [%diagn_sexp
+                    [%log_entry
+                      "to_host for " ^ Tnode.debug_name tn;
+                      [%log "copied to host from", get_name context.device];
+                      if Utils.settings.with_debug_level > 1 then
+                        [%log_printbox
+                          let indices =
+                            Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
+                          in
+                          Ndarray.render_array ~indices h_arr]]]);
+               true
+           | (lazy None) ->
+               [%diagn_sexp
+                 [%log_entry
+                   "nothing to copy to host for " ^ Tnode.debug_name tn;
+                   [%log "from", get_name context.device]]];
+               false)
+
+  let device_to_device ?rt tn ~into_merge_buffer ~dst ~src =
+    if Option.is_some rt then
+      raise
+      @@ Utils.User_error
+           "Multicore_backend.device_to_device: backend cannot be nested in another runtime";
+    let dev = dst.device in
+    if
+      (not (equal_merge_buffer_use into_merge_buffer No))
+      && not (Option.equal Tnode.equal (Some tn) dst.expected_merge_node)
+    then
+      raise
+      @@ Utils.User_error
+           ("Multicore_backend.device_to_device: merge node mismatch, expected "
+           ^ Option.(value ~default:"none" @@ map ~f:Tnode.debug_name dst.expected_merge_node)
+           ^ ", actual " ^ Tnode.debug_name tn);
+    (* TODO: log the operation if [Utils.settings.with_log_level > 0]. *)
+    match (Backend.get_buffer tn dst.ctx, Backend.get_buffer tn src.ctx) with
+    | None, _ | _, None -> false
+    | Some dst, Some _ ->
+        (match into_merge_buffer with
+        | No -> Backend.to_buffer ?rt tn ~dst ~src:src.ctx
+        | Streaming ->
+            dev.merge_buffer :=
+              Option.map ~f:(fun ptr -> (ptr, tn)) @@ Backend.get_buffer tn src.ctx
+        | Copy ->
+            let size_in_bytes = Tnode.size_in_bytes tn in
+            let allocated_capacity =
+              Option.value ~default:0 @@ Option.map dev.allocated_buffer ~f:snd
+            in
+            if allocated_capacity < size_in_bytes then
+              dev.allocated_buffer <-
+                Some
+                  ( Backend.alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes (),
+                    size_in_bytes );
+            let merge_ptr = fst @@ Option.value_exn dev.allocated_buffer in
+            dev.merge_buffer := Some (merge_ptr, tn);
+            Backend.to_buffer ?rt tn ~dst:merge_ptr ~src:src.ctx);
+        true
+
+  let num_physical_devices () = 1
+  let suggested_num_virtual_devices _device = !sync_suggested_num_virtual_devices
+  let next_virtual_device_id = ref 0
+
+  let unsafe_cleanup () =
+    next_virtual_device_id := 0;
+    Backend.unsafe_cleanup ()
+
+  let get_device ~ordinal =
+    if ordinal <> 0 then invalid_arg "Sync_backend backends only have physical device number 0";
+    CPU
+
+  let new_virtual_device CPU =
+    let result =
+      { subordinal = !next_virtual_device_id; merge_buffer = ref None; allocated_buffer = None }
+    in
+    result
+
+  let get_physical_device _device = CPU
+  let get_ctx_device { device; _ } = device
+  let to_ordinal _ = 0
+  let to_subordinal device = device.subordinal
   let to_buffer ?rt tn ~dst ~src = Backend.to_buffer ?rt tn ~dst ~src:src.ctx
   let host_to_buffer = Backend.host_to_buffer
   let buffer_to_host = Backend.buffer_to_host
@@ -773,11 +966,13 @@ module C_device : No_device_backend = Simple_no_device_backend ((
   Cc_backend : Simple_backend with type context = Cc_backend.context))
 
 module Cc_backend = Multicore_backend (C_device)
+module Sync_cc_backend = Sync_backend (C_device)
 
 module Gccjit_device : No_device_backend = Simple_no_device_backend ((
   Gcc_backend : Simple_backend with type context = Gcc_backend.context))
 
 module Gccjit_backend = Multicore_backend (Gccjit_device)
+module Sync_gccjit_backend = Sync_backend (Gccjit_device)
 
 module Cuda_backend : Backend = struct
   include Cuda_backend
