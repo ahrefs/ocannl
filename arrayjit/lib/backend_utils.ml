@@ -264,18 +264,18 @@ struct
             (if not @@ String.equal num_typ get_typ then "(" ^ num_typ ^ ")" else "")
             ^ "v" ^ Int.to_string id.scope_id
           in
-          (v ^ "{=%f}", [ `Value v ])
+          (v ^ "{=%g}", [ `Value v ])
       | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
           let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
           let dims = Lazy.force tn.dims in
           let v = sprintf "@[<2>merge_buffer[%s@;<0 -2>]@]" (array_offset_to_string (idcs, dims)) in
-          ("merge_buffer[%u]{=%f}", [ `Accessor (idcs, dims); `Value v ])
+          ("merge_buffer[%u]{=%g}", [ `Accessor (idcs, dims); `Value v ])
       | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
       | Get (tn, idcs) ->
           let dims = Lazy.force tn.dims in
           let ident = get_ident tn in
           let v = sprintf "@[<2>%s[%s@;<0 -2>]@]" ident (array_offset_to_string (idcs, dims)) in
-          (ident ^ "[%u]{=%f}", [ `Accessor (idcs, dims); `Value v ])
+          (ident ^ "[%u]{=%g}", [ `Accessor (idcs, dims); `Value v ])
       | Constant c -> (Float.to_string c, [])
       | Embed_index (Fixed_idx i) -> (Int.to_string i, [])
       | Embed_index (Iterator s) -> (Indexing.symbol_ident s, [])
