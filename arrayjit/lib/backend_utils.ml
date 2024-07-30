@@ -125,8 +125,16 @@ struct
           fprintf ppf "@[<v 0>%a@]" (pp_print_list pp_ll)
             (List.filter [ c1; c2 ] ~f:(function Noop -> false | _ -> true))
       | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-          fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ %a@;<1 -2>}@]@," pp_index i
-            from_ pp_index i to_ pp_index i pp_ll body
+          fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ " pp_index i from_ pp_index i
+            to_ pp_index i;
+          if Utils.settings.debug_log_from_routines then
+            if B.logs_to_stdout then
+              fprintf ppf {|printf(@[<h>"%s%%d: index %a = %%d\n",@] log_id, %a);@ |}
+                !Utils.captured_log_prefix pp_index i pp_index i
+            else
+              fprintf ppf {|fprintf(log_file,@ @[<h>"index %a = %%d\n",@] %a);@ |} pp_index i
+                pp_index i;
+          fprintf ppf "%a@;<1 -2>}@]@," pp_ll body
       | Zero_out tn ->
           let traced = Low_level.(get_node traced_store tn) in
           (* The initialization will be emitted at the end of compile_proc. *)
