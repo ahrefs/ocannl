@@ -161,12 +161,14 @@ let () =
 
 let build_file fname =
   let build_files_dir = "build_files" in
-  if not (Stdlib.Sys.file_exists build_files_dir) then Stdlib.Sys.mkdir build_files_dir 0o777;
-  Filename_base.concat (Filename_base.concat "." build_files_dir) fname
+  (try assert (Stdlib.Sys.is_directory build_files_dir)
+   with Stdlib.Sys_error _ -> Stdlib.Sys.mkdir build_files_dir 0o777);
+  Filename_base.concat build_files_dir fname
 
 let diagn_log_file fname =
   let log_files_dir = "log_files" in
-  if not (Stdlib.Sys.file_exists log_files_dir) then Stdlib.Sys.mkdir log_files_dir 0o777;
+  (try assert (Stdlib.Sys.is_directory log_files_dir)
+   with Stdlib.Sys_error _ -> Stdlib.Sys.mkdir log_files_dir 0o777);
   Filename_base.concat log_files_dir fname
 
 let get_debug name =
