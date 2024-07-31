@@ -6,11 +6,13 @@ module Debug_runtime = Utils.Debug_runtime
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-type task = Task : {
-  context_lifetime : ('a[@sexp.opaque]);
-  description : string;
-  work : (module Minidebug_runtime.Debug_runtime) -> unit -> unit;
-} -> task
+type task =
+  | Task : {
+      context_lifetime : ('a[@sexp.opaque]);
+      description : string;
+      work : (module Minidebug_runtime.Debug_runtime) -> unit -> unit;
+    }
+      -> task
 [@@deriving sexp_of]
 
 let run debug_runtime (Task task) =
@@ -97,6 +99,26 @@ let get_debug_name ?code_name ~id ~label () =
 let debug_name tn =
   let id = tn.id and label = tn.label and code_name = tn.code_name in
   get_debug_name ?code_name ~id ~label ()
+
+let log_debug_info ~from_log_level tn =
+  if Utils.settings.with_debug_level >= from_log_level then
+    [%debug_sexp
+      [%log_entry
+        debug_name tn;
+        [%log
+          "id:",
+            (tn.id : int),
+            "label:",
+            (tn.label : string list),
+            "mem:",
+            (tn.memory_mode : (memory_mode * int) option),
+            "backends:",
+            (tn.backend_info : Sexp.t)];
+        if Lazy.is_val tn.array then
+          match tn.array with
+          | (lazy None) -> [%log "<not-on-host>"]
+          | (lazy (Some nd)) -> Nd.log_debug_info ~from_log_level nd
+        else [%log "<not-in-yet>"]]]
 
 let default_to_most_local tn provenance =
   match tn.memory_mode with

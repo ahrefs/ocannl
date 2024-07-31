@@ -471,6 +471,8 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     Array.map prior_contexts ~f:(fun ctx -> Backend.link ~from_prior_context ctx grad_update)
   in
   let sgd_update = Backend.(link grad_updates.(0).context @@ compile bindings sgd) in
+  Tensor.log_debug_info ~from_log_level:2 inputs;
+  Tensor.log_debug_info ~from_log_level:2 outputs;
   all_host_to_device (module Backend) sgd_update.context scalar_loss;
   all_host_to_device (module Backend) sgd_update.context learning_rate;
   let open Operation.At in

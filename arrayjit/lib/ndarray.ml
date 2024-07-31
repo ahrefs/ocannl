@@ -12,6 +12,12 @@ module A = Bigarray.Genarray
 
 type ('ocaml, 'elt_t) bigarray = ('ocaml, 'elt_t, Bigarray.c_layout) A.t
 
+let big_ptr_to_string arr =
+  "@"
+  ^ Nativeint.Hex.to_string
+      (Ctypes.raw_address_of_ptr @@ Ctypes.to_voidp
+      @@ Ctypes.bigarray_start Ctypes_static.Genarray arr)
+
 let sexp_of_bigarray (arr : ('a, 'b) bigarray) =
   let dims = A.dims arr in
   Sexp.Atom ("bigarray_dims_" ^ String.concat_array ~sep:"x" (Array.map dims ~f:Int.to_string))
@@ -21,13 +27,10 @@ type half_nd = (float, Ops.float16_elt) bigarray
 type single_nd = (float, Ops.float32_elt) bigarray
 type double_nd = (float, Ops.float64_elt) bigarray
 
-let sexp_of_address_of arr =
-  Sexp.Atom ("@" ^ Nativeint.Hex.to_string @@ Ctypes_bigarray.unsafe_address arr)
-
-let sexp_of_byte_nd (arr : byte_nd) = sexp_of_address_of arr
-let sexp_of_half_nd (arr : half_nd) = sexp_of_address_of arr
-let sexp_of_single_nd (arr : single_nd) = sexp_of_address_of arr
-let sexp_of_double_nd (arr : double_nd) = sexp_of_address_of arr
+let sexp_of_byte_nd (arr : byte_nd) = Sexp.Atom (big_ptr_to_string arr)
+let sexp_of_half_nd (arr : half_nd) = Sexp.Atom (big_ptr_to_string arr)
+let sexp_of_single_nd (arr : single_nd) = Sexp.Atom (big_ptr_to_string arr)
+let sexp_of_double_nd (arr : double_nd) = Sexp.Atom (big_ptr_to_string arr)
 
 type t = Byte_nd of byte_nd | Half_nd of half_nd | Single_nd of single_nd | Double_nd of double_nd
 [@@deriving sexp_of]
@@ -183,13 +186,6 @@ let get_voidptr =
   in
   map { f }
 
-let get_as_float arr idx =
-  match arr with
-  | Byte_nd arr -> Float.of_int @@ Char.to_int @@ A.get arr idx
-  | Half_nd arr -> A.get arr idx
-  | Single_nd arr -> A.get arr idx
-  | Double_nd arr -> A.get arr idx
-
 let set_from_float arr idx v =
   match arr with
   | Byte_nd arr -> A.set arr idx @@ Char.of_int_exn @@ Int.of_float v
@@ -287,6 +283,13 @@ let size_in_bytes v =
   let f arr = if Array.is_empty @@ A.dims arr then 0 else A.size_in_bytes arr in
   map { f } v
 
+let get_as_float arr idx =
+  match arr with
+  | Byte_nd arr -> Float.of_int @@ Char.to_int @@ A.get arr idx
+  | Half_nd arr -> A.get arr idx
+  | Single_nd arr -> A.get arr idx
+  | Double_nd arr -> A.get arr idx
+
 let retrieve_2d_points ?from_axis ~xdim ~ydim arr =
   let dims = dims arr in
   if Array.is_empty dims then [||]
@@ -361,12 +364,12 @@ let retrieve_flat_values arr =
     iter 0;
     Array.of_list_rev !result
 
-(** {2 *** Creating ***} *)
-
 let c_ptr_to_string nd =
   let prec = get_prec nd in
   let f arr = Ops.ptr_to_string (Ctypes.bigarray_start Ctypes_static.Genarray arr) prec in
   map { f } nd
+
+(** {2 *** Creating ***} *)
 
 let create_array ~debug:_debug prec ~dims init_op =
   let f prec = as_array prec @@ create_bigarray prec ~dims init_op in
@@ -393,6 +396,26 @@ let int_dims_to_string ?(with_axis_numbers = false) dims =
     String.concat_array ~sep:" x "
     @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ Int.to_string s)
   else String.concat_array ~sep:"x" @@ Array.map dims ~f:Int.to_string
+
+(** Logs information about the array on the default ppx_minidebug runtime, if
+    [from_log_level > Utlis.settings.with_log_level]. *)
+let log_debug_info ~from_log_level _nd =
+  if Utils.settings.with_debug_level >= from_log_level then
+    [%debug_sexp
+      [%log_entry
+        "Ndarray " ^ Sexp.to_string_hum (sexp_of_t _nd);
+        [%log
+          "value-at-0:",
+            (get_as_float _nd (Array.map (dims _nd) ~f:(fun _ -> 0)) : float),
+            "has nan:",
+            (fold_as_float _nd ~init:false ~f:(fun has_nan _ v -> has_nan || Float.is_nan v) : bool),
+            "has +inf:",
+            (fold_as_float _nd ~init:false ~f:(fun has_inf _ v -> has_inf || Float.(v = infinity))
+              : bool),
+            "has -inf:",
+            (fold_as_float _nd ~init:false ~f:(fun has_neg_inf _ v ->
+                 has_neg_inf || Float.(v = neg_infinity))
+              : bool)]]]
 
 let concise_float ~prec v =
   Printf.sprintf "%.*e" prec v

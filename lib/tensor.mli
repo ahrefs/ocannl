@@ -179,6 +179,9 @@ val consume_backprop_code : t -> asgns * asgns
 val header : t -> string
 (** Converts ID, label and the dimensions of a node to a string. *)
 
+val log_debug_info : from_log_level:int -> t -> unit
+(** Logs debug information about the tensor on the default ppx_minidebug runtime. *)
+
 type array_print_style =
   [ `Default
     (** The inner rectangles comprise both an input and an output axis, if available. Similarly, the
