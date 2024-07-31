@@ -305,7 +305,7 @@ struct
                Sexp.Atom
                  (if B.is_in_context node then "From_context"
                   else if Hash_set.mem is_global tn then "Constant_from_host"
-                  else "Local_only")
+                  else if Tn.is_virtual_force tn 3331 then "Virtual" else "Local_only")
              in
              if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
                tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;

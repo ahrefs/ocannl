@@ -181,6 +181,7 @@ let prepare_node ~debug_log_zero_out ~get_ident ctx nodes traced_store ctx_nodes
         let is_on_host = Tn.is_hosted_force tn 33 in
         let is_materialized = Tn.is_materialized_force tn 331 in
         let is_constant = Tn.is_hosted_force ~specifically:Constant tn 332 in
+        assert (not @@ Tn.is_virtual_force tn 330);
         assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
         let prec = tn.prec in
         let zero_initialized = traced.zero_initialized in

@@ -87,15 +87,17 @@ let header_sep =
 let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optimized) =
   let opt_ctx_arrays =
     Option.map opt_ctx_arrays ~f:(fun ctx_arrays ->
-        Hashtbl.fold lowered.traced_store ~init:ctx_arrays ~f:(fun ~key:tn ~data:_ ctx_arrays ->
+        Hashtbl.fold lowered.traced_store ~init:ctx_arrays ~f:(fun ~key:tn ~data:node ctx_arrays ->
             match Map.find ctx_arrays tn with
             | None ->
-                let debug = "CC compile-time ctx array for " ^ Tn.debug_name tn in
-                let data =
-                  Ndarray.create_array ~debug tn.Tn.prec ~dims:(Lazy.force tn.dims)
-                  @@ Constant_fill { values = [| 0. |]; strict = false }
-                in
-                Map.add_exn ctx_arrays ~key:tn ~data
+                if is_in_context node then
+                  let debug = "CC compile-time ctx array for " ^ Tn.debug_name tn in
+                  let data =
+                    Ndarray.create_array ~debug tn.Tn.prec ~dims:(Lazy.force tn.dims)
+                    @@ Constant_fill { values = [| 0. |]; strict = false }
+                  in
+                  Map.add_exn ctx_arrays ~key:tn ~data
+                else ctx_arrays
             | Some _ -> ctx_arrays))
   in
   let module Syntax = Backend_utils.C_syntax (struct
@@ -141,15 +143,18 @@ let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings
   let opt_ctx_arrays =
     Option.map opt_ctx_arrays ~f:(fun ctx_arrays ->
         Array.fold for_lowereds ~init:ctx_arrays ~f:(fun ctx_arrays lowered ->
-            Hashtbl.fold lowered.traced_store ~init:ctx_arrays ~f:(fun ~key:tn ~data:_ ctx_arrays ->
+            Hashtbl.fold lowered.traced_store ~init:ctx_arrays
+              ~f:(fun ~key:tn ~data:node ctx_arrays ->
                 match Map.find ctx_arrays tn with
                 | None ->
-                    let debug = "CC compile-time ctx array for " ^ Tn.debug_name tn in
-                    let data =
-                      Ndarray.create_array ~debug tn.Tn.prec ~dims:(Lazy.force tn.dims)
-                      @@ Constant_fill { values = [| 0. |]; strict = false }
-                    in
-                    Map.add_exn ctx_arrays ~key:tn ~data
+                    if is_in_context node then
+                      let debug = "CC compile-time ctx array for " ^ Tn.debug_name tn in
+                      let data =
+                        Ndarray.create_array ~debug tn.Tn.prec ~dims:(Lazy.force tn.dims)
+                        @@ Constant_fill { values = [| 0. |]; strict = false }
+                      in
+                      Map.add_exn ctx_arrays ~key:tn ~data
+                    else ctx_arrays
                 | Some _ -> ctx_arrays)))
   in
   let module Syntax = Backend_utils.C_syntax (struct
