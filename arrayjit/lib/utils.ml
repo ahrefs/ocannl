@@ -511,3 +511,74 @@ let capture_stdout_logs ?(never_skip = false) arg =
             @@ List.filter_map output ~f:(String.chop_prefix ~prefix:log_processor_prefix)))
       ~finally:(fun () -> captured_log_processors := []);
     result)
+
+let ( !@ ) = Atomic.get
+
+type waiter = {
+  await : keep_waiting:(unit -> bool) -> unit -> bool;
+      (** Returns [true] if the waiter was not already waiting (in another thread) and waiting was
+          needed ([keep_waiting] always returned true). *)
+  release_if_waiting : unit -> bool;
+      (** Returns [true] if the waiter both was waiting and was not already released. *)
+  is_waiting : unit -> bool;
+  finalize : unit -> unit;
+}
+(** Note: this waiter is meant for sequential waiting. *)
+
+let waiter ~name () =
+  let is_open = Atomic.make true in
+  (* TODO: since OCaml 5.2, consider [make_contended]? *)
+  let is_released = Atomic.make false in
+  let is_waiting = Atomic.make false in
+  let pipe_inp, pipe_out =
+    try Unix.pipe ~cloexec:true () with e -> Exn.reraise e @@ "waiter " ^ name ^ ": Unix.pipe"
+  in
+  let await ~keep_waiting =
+    let rec wait () =
+      if Atomic.compare_and_set is_released true false then (
+        let n =
+          try Unix.read pipe_inp (Bytes.create 1) 0 1
+          with e -> Exn.reraise e @@ "waiter " ^ name ^ ": Unix.read"
+        in
+        assert (n = 1);
+        true)
+      else if keep_waiting () then
+        let _, _, _ =
+          try Unix.select [ pipe_inp ] [] [] 5.0
+          with e -> Exn.reraise e @@ "waiter " ^ name ^ ": Unix.select"
+        in
+        wait ()
+      else false
+    in
+    fun () ->
+      if not !@is_open then failwith @@ "await: waiter " ^ name ^ " already deleted";
+      if Atomic.compare_and_set is_waiting false true then (
+        let result = wait () in
+        assert (Atomic.compare_and_set is_waiting true false);
+        result)
+      else false
+  in
+  let release_if_waiting () =
+    if not !@is_open then failwith @@ "release_if_waiting: waiter " ^ name ^ " already deleted";
+    let result =
+      if !@is_waiting && Atomic.compare_and_set is_released false true then (
+        let n =
+          try Unix.write pipe_out (Bytes.create 1) 0 1
+          with e -> Exn.reraise e @@ "waiter " ^ name ^ ": Unix.write"
+        in
+        assert (n = 1);
+        true)
+      else false
+    in
+    result
+  in
+  let finalize () =
+    if Atomic.compare_and_set is_open true false then (
+      Atomic.set is_waiting false;
+      Unix.close pipe_inp;
+      Unix.close pipe_out)
+  in
+  let is_waiting () = !@is_waiting in
+  let result = { await; release_if_waiting; is_waiting; finalize } in
+  Stdlib.Gc.finalise (fun _ -> finalize ()) result;
+  result
