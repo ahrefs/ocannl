@@ -48,13 +48,15 @@ let fresh_backend ?backend_name ?(config = BT.Physical_devices_only) () =
   let backend =
     match
       Option.value_or_thunk backend_name ~default:(fun () ->
-          Arrayjit.Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+          Arrayjit.Utils.get_global_arg ~arg_name:"backend" ~default:"pipes_cc")
       |> String.lowercase
     with
     | "cc" -> (module B.Cc_backend : B.Backend)
     | "gccjit" -> (module B.Gccjit_backend : B.Backend)
     | "sync_cc" -> (module B.Sync_cc_backend : B.Backend)
     | "sync_gccjit" -> (module B.Sync_gccjit_backend : B.Backend)
+    | "pipes_cc" -> (module B.Pipes_cc_backend : B.Backend)
+    | "pipes_gccjit" -> (module B.Pipes_gccjit_backend : B.Backend)
     | "cuda" -> (module B.Cuda_backend : B.Backend)
     | backend -> invalid_arg [%string "Train.fresh_backend: unknown backend %{backend}"]
   in

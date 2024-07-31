@@ -168,7 +168,9 @@ let build_file fname =
 let diagn_log_file fname =
   let log_files_dir = "log_files" in
   (try assert (Stdlib.Sys.is_directory log_files_dir)
-   with Stdlib.Sys_error _ -> Stdlib.Sys.mkdir log_files_dir 0o777);
+   with Stdlib.Sys_error _ -> (
+     (* FIXME: is this called concurrently or what? *)
+     try Stdlib.Sys.mkdir log_files_dir 0o777 with Stdlib.Sys_error _ -> ()));
   Filename_base.concat log_files_dir fname
 
 let get_debug name =
@@ -511,8 +513,6 @@ let capture_stdout_logs ?(never_skip = false) arg =
             @@ List.filter_map output ~f:(String.chop_prefix ~prefix:log_processor_prefix)))
       ~finally:(fun () -> captured_log_processors := []);
     result)
-
-let ( !@ ) = Atomic.get
 
 type waiter = {
   await : keep_waiting:(unit -> bool) -> unit -> bool;

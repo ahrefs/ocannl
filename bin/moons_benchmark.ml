@@ -179,7 +179,7 @@ let cuda_benchmarks =
       List.concat_map [1; 2; 5; 8; 10; 16; 20; 30 (* *; 32; 40; 64 *) ] ~f:(fun num_devices ->
           List.concat_map [ 120; 160 (* ; 320; 640; 1280 *) ] ~f:(fun batch_size ->
               List.concat_map [ 0; 1 (* ; 2; 3; 4 *) ] ~f:(fun seed ->
-                  List.concat_map [(* "gccjit" ; *) "sync_gccjit" (* ; "cuda" *) ] ~f:(fun backend_name ->
+                  List.concat_map [(* "gccjit" ; *) "pipes_cc" (* ; "cuda" *) ] ~f:(fun backend_name ->
                       [
                         classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_devices
                           ~batch_size ~backend_name ~value_prec:CDSL.single ~grad_prec:CDSL.single;
