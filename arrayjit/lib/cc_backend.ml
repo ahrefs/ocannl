@@ -58,14 +58,13 @@ let init ~label =
   Stdlib.Gc.finalise finalize result;
   result
 
-(* open Ctypes *)
-(* open Foreign *)
+type library = { lib : (Dl.library[@sexp.opaque]); libname : string } [@@deriving sexp_of]
 
 type procedure = {
   lowered : Low_level.optimized;
   bindings : Indexing.unit_bindings;
   name : string;
-  result : (Dl.library[@sexp.opaque]);
+  result : library;
   params : (string * param_source) list;
   opt_ctx_arrays : Ndarray.t Map.M(Tn).t option;
 }
@@ -84,7 +83,37 @@ let header_sep =
   let open Re in
   compile (seq [ str " "; opt any; str "="; str " " ])
 
-let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optimized) =
+let get_global_run_id =
+  let next_id = ref 0 in
+  fun () ->
+    Int.incr next_id;
+    if !next_id < 0 then next_id := 0;
+    !next_id
+
+let c_compile_and_load ~f_name =
+  let base_name = Filename_base.chop_extension f_name in
+  (* There can be only one library with a given name, the object gets cached. Moreover, [Dl.dlclose]
+     is not required to unload the library, although ideally it should. *)
+  let run_id = Int.to_string @@ get_global_run_id () in
+  let log_fname = base_name ^ "_run_id_" ^ run_id ^ ".log" in
+  let libname = base_name ^ "_run_id_" ^ run_id ^ ".so" in
+  (try Stdlib.Sys.remove log_fname with _ -> ());
+  (try Stdlib.Sys.remove libname with _ -> ());
+  let cmdline =
+    Printf.sprintf "%s %s -O%d -o %s --shared >> %s 2>&1" (compiler_command ()) f_name
+      (optimization_level ()) libname log_fname
+  in
+  let _rc = Stdlib.Sys.command cmdline in
+  (* FIXME: don't busy wait *)
+  (* FIXME: detect and propagate compile errors, log compile warnings *)
+  while not @@ (Stdlib.Sys.file_exists libname && Stdlib.Sys.file_exists log_fname) do
+    ()
+  done;
+  let result = { lib = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW; RTLD_DEEPBIND ]; libname } in
+  Stdlib.Gc.finalise (fun lib -> Dl.dlclose ~handle:lib.lib) result;
+  result
+
+let%diagn_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optimized) =
   let opt_ctx_arrays =
     Option.map opt_ctx_arrays ~f:(fun ctx_arrays ->
         Hashtbl.fold lowered.traced_store ~init:ctx_arrays ~f:(fun ~key:tn ~data:node ctx_arrays ->
@@ -116,25 +145,10 @@ let%track_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
   let pp_file = Utils.pp_file ~base_name:name ~extension:".c" in
-  let base_name = Filename_base.chop_extension pp_file.f_name in
   let is_global = Syntax.compile_globals pp_file.ppf in
   let params = Syntax.compile_proc ~name pp_file.ppf idx_params ~is_global lowered in
   pp_file.finalize ();
-  let log_fname = base_name ^ ".log" in
-  let libname = base_name ^ ".so" in
-  (try Stdlib.Sys.remove log_fname with _ -> ());
-  (try Stdlib.Sys.remove libname with _ -> ());
-  let cmdline =
-    Printf.sprintf "%s %s -O%d -o %s --shared >> %s 2>&1" (compiler_command ()) pp_file.f_name
-      (optimization_level ()) libname log_fname
-  in
-  let _rc = Stdlib.Sys.command cmdline in
-  (* FIXME: don't busy wait *)
-  (* FIXME: detect and propagate compile errors, log compile warnings *)
-  while not @@ (Stdlib.Sys.file_exists libname && Stdlib.Sys.file_exists log_fname) do
-    ()
-  done;
-  let result = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW; RTLD_DEEPBIND ] in
+  let result = c_compile_and_load ~f_name:pp_file.f_name in
   { lowered; result; params; bindings; name; opt_ctx_arrays }
 
 let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings
@@ -188,18 +202,7 @@ let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings
             Syntax.compile_proc ~name pp_file.ppf idx_params ~is_global lowered))
   in
   pp_file.finalize ();
-  let log_fname = pp_file.f_name ^ ".log" in
-  let libname = pp_file.f_name ^ ".so" in
-  let cmdline =
-    Printf.sprintf "%s %s -O%d -o %s --shared >> %s 2>&1" (compiler_command ()) pp_file.f_name
-      (optimization_level ()) libname log_fname
-  in
-  let _rc = Stdlib.Sys.command cmdline in
-  (* FIXME: don't busy wait *)
-  while not @@ Stdlib.Sys.file_exists log_fname do
-    ()
-  done;
-  let result = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW; RTLD_DEEPBIND ] in
+  let result = c_compile_and_load ~f_name:pp_file.f_name in
   (* Note: for simplicity, we share ctx_arrays across all contexts. *)
   let opt_ctx_arrays = Option.map opt_ctx_arrays ~f:(fun _ -> !global_ctx_arrays) in
   ( opt_ctx_arrays,
@@ -247,7 +250,7 @@ let%track_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
             ('a -> 'b, 'idcs, 'p1, 'p2) Indexing.variadic =
        fun (type a b idcs) (binds : idcs Indexing.bindings) params (cs : (a -> b) Ctypes.fn) ->
         match (binds, params) with
-        | Empty, [] -> Indexing.Result (Foreign.foreign ~from:code.result name cs)
+        | Empty, [] -> Indexing.Result (Foreign.foreign ~from:code.result.lib name cs)
         | Bind _, [] -> invalid_arg "Cc_backend.link: too few static index params"
         | Bind (_, bs), Static_idx _ :: ps -> Param_idx (ref 0, link bs ps Ctypes.(int @-> cs))
         | Empty, Static_idx _ :: _ -> invalid_arg "Cc_backend.link: too many static index params"
@@ -281,7 +284,8 @@ let%track_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
     Indexing.lowered_bindings code.bindings run_variadic,
     Tn.Task
       {
-        context_lifetime = context;
+        (* In particular, keep code alive so it doesn't get unloaded. *)
+        context_lifetime = (context, code);
         description = "executes " ^ code.name ^ " on " ^ context.label;
         work;
       },
