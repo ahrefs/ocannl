@@ -83,7 +83,7 @@ struct
 
   (* let compute_array_offset ~idcs ~dims = Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim
      -> idx + (offset * dim)) *)
-  let%track_sexp compile_globals ppf =
+  let%diagn_sexp compile_globals ppf =
     let open Stdlib.Format in
     let is_global = Hash_set.create (module Tn) in
     fprintf ppf
@@ -293,7 +293,7 @@ struct
     in
     pp_ll ppf llc
 
-  let%track_sexp compile_proc ~name ppf idx_params ~is_global
+  let%diagn_sexp compile_proc ~name ppf idx_params ~is_global
       Low_level.{ traced_store; llc; merge_node } =
     let open Stdlib.Format in
     let params : (string * param_source) list =

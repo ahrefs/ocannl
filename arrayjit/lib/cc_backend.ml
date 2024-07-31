@@ -151,7 +151,7 @@ let%diagn_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
   let result = c_compile_and_load ~f_name:pp_file.f_name in
   { lowered; result; params; bindings; name; opt_ctx_arrays }
 
-let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings
+let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
     (lowereds : Low_level.optimized option array) =
   let for_lowereds = Array.filter_map ~f:Fn.id lowereds in
   let opt_ctx_arrays =
@@ -217,7 +217,7 @@ let%track_sexp compile_batch ~names ~opt_ctx_arrays bindings
               opt_ctx_arrays;
             })) )
 
-let%track_sexp link_compiled ~merge_buffer (prior_context : context) (code : procedure) :
+let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : procedure) :
     context * _ * _ * string =
   let label : string = prior_context.label in
   let name : string = code.name in

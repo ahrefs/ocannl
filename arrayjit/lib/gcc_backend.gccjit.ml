@@ -616,7 +616,7 @@ let prepare_nodes ctx ~log_functions ~get_ident nodes traced_store ctx_nodes ini
   in
   loop llc
 
-let%track_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
+let%diagn_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
     Low_level.{ traced_store; llc = proc; merge_node } =
   let open Gccjit in
   let c_index = Type.get ctx Type.Int in
@@ -740,7 +740,7 @@ let compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optim
     expected_merge_node = lowered.merge_node;
   }
 
-let%track_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bindings
+let%diagn_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bindings
     (lowereds : Low_level.optimized option array) =
   let get_ident =
     Low_level.get_ident_within_code ~no_dots:true
@@ -794,7 +794,7 @@ let alloc_buffer ?old_buffer ~size_in_bytes () =
   | Some (_old_ptr, _old_size) -> assert false
   | None -> assert false
 
-let%track_sexp link_compiled ~merge_buffer (prior_context : context) (code : procedure) :
+let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : procedure) :
     context * _ * _ * string =
   let label : string = prior_context.label in
   let name : string = code.name in
