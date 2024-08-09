@@ -4,6 +4,8 @@ module Lazy = Utils.Lazy
 module Debug_runtime = Utils.Debug_runtime
 open Backend_utils.Types
 
+let _get_local_debug_runtime = Utils._get_local_debug_runtime
+
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
@@ -410,7 +412,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~glo
     { prior_context with parent = Some prior_context; run_module = Some run_module; global_arrays }
   in
   Stdlib.Gc.finalise finalize context;
-  let%diagn_rt_sexp work () : unit =
+  let%diagn_l_sexp work () : unit =
     let log_id = get_global_run_id () in
     let log_id_prefix = Int.to_string log_id ^ ": " in
     if Utils.settings.with_debug_level > 0 then
@@ -454,7 +456,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~glo
        Utils.add_log_processor ~prefix:log_id_prefix @@ fun output ->
        [%log_entry
          context.label;
-         Utils.log_trace_tree _debug_runtime output]);
+         Utils.log_trace_tree (module Debug_runtime) output]);
     (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE
        4096; *)
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.device.stream

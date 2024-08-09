@@ -12,6 +12,8 @@ module type Backend_type = Arrayjit.Backends.Backend
 
 module Debug_runtime = Arrayjit.Utils.Debug_runtime
 
+let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
+
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
@@ -39,8 +41,7 @@ module IDX = struct
   let find_exn = Idx.find_exn
 end
 
-let debug_rt = (module Debug_runtime : Minidebug_runtime.Debug_runtime)
-let run jitted = Tn.run debug_rt jitted.BT.schedule
+let run jitted = Tn.run jitted.BT.schedule
 
 (** Reinitializes a backend selected via a global [backend] flag. *)
 let fresh_backend ?backend_name ?(config = BT.Physical_devices_only) () =
@@ -298,10 +299,10 @@ let%track_sexp sync_run ?looping (type context)
     (module Backend : Backend_type with type context = context) (routine : Backend.routine) t =
   all_host_to_device (module Backend) routine.context t;
   (match looping with
-  | None -> Tn.run debug_rt routine.schedule
+  | None -> Tn.run routine.schedule
   | Some then_ ->
       let f () =
-        Tn.run debug_rt routine.schedule;
+        Tn.run routine.schedule;
         then_ ()
       in
       sequential_loop ~f routine.bindings);
@@ -380,12 +381,12 @@ let%track_sexp parallel_update (type context)
         assert (
           Backend.device_to_device (Option.value_exn ~here:[%here] p.diff).grad ~into_merge_buffer
             ~dst:grad_merge.context ~src:ctxs.(from));
-        (Tn.run debug_rt grad_merge.schedule : unit))
+        (Tn.run grad_merge.schedule : unit))
   in
   let merge_loss ~src =
     assert (
       Backend.device_to_device updaten.loss.value ~into_merge_buffer ~dst:loss_merge.context ~src);
-    Tn.run debug_rt loss_merge.schedule
+    Tn.run loss_merge.schedule
   in
   (* FIXME: missing backcopy. *)
   let needed_on_host = ref @@ Set.empty (module Tn) in
@@ -393,7 +394,7 @@ let%track_sexp parallel_update (type context)
     Arrayjit.Utils.parallel_merge merge_grads devices_to_sync;
     (* We need to wait, because copying happens on other devices. *)
     Array.iteri ctxs ~f:(fun i src -> if i <> 0 then Backend.(await @@ get_ctx_device src));
-    Tn.run debug_rt sgd_update.schedule;
+    Tn.run sgd_update.schedule;
     Array.iteri ctxs ~f:(fun i src -> if i <> 0 then merge_loss ~src);
     Set.iter !needed_on_host ~f:(fun p -> assert (Backend.to_host sgd_update.context p));
     Backend.(await @@ get_ctx_device sgd_update.context);
@@ -407,9 +408,7 @@ let%track_sexp parallel_update (type context)
     post_sync ~num_synced_devices:devices_to_sync
   in
   let lowered_bindings = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.bindings)] in
-  let fs =
-    [%debug_notrace Array.map grad_updates ~f:(fun upd () -> Tn.run debug_rt upd.schedule)]
-  in
+  let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd () -> Tn.run upd.schedule)] in
   fun () -> round_robin fs lowered_bindings sgd_update.bindings ~sync
 
 let get_all_suggested_devices ?(max_num_devices : int option) (type device)

@@ -290,6 +290,12 @@ let get_debug name =
 
 module Debug_runtime = (val get_debug "")
 
+let _get_local_debug_runtime =
+  let open Stdlib.Domain in
+  let get_runtime () = get_debug @@ "Domain-" ^ Int.to_string (self () :> int) in
+  let debug_runtime_key = DLS.new_key get_runtime in
+  fun () -> DLS.get debug_runtime_key
+
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 

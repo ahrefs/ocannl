@@ -2,6 +2,8 @@ open Base
 module Lazy = Utils.Lazy
 module Debug_runtime = Utils.Debug_runtime
 
+let _get_local_debug_runtime = Utils._get_local_debug_runtime
+
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
@@ -849,12 +851,12 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
          indices. *)
       link code.bindings (List.rev code.params) Ctypes.(void @-> returning void)]
   in
-  let%diagn_rt_sexp work () : unit =
+  let%diagn_l_sexp work () : unit =
     [%log_result name];
     Backend_utils.check_merge_buffer ~merge_buffer ~code_node:code.expected_merge_node;
     Indexing.apply run_variadic ();
     if Utils.settings.debug_log_from_routines then (
-      Utils.log_trace_tree _debug_runtime (Stdio.In_channel.read_lines log_file_name);
+      Utils.log_trace_tree (module Debug_runtime) (Stdio.In_channel.read_lines log_file_name);
       Stdlib.Sys.remove log_file_name)
   in
   ( context,

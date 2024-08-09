@@ -11,6 +11,8 @@ type init_op = Arrayjit.Ops.init_op
 type fetch_op = Asgns.fetch_op
 type projections = Arrayjit.Indexing.projections
 
+let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
+
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
@@ -515,9 +517,9 @@ let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_shape =
 let log_debug_info ~from_log_level t =
   if Arrayjit.Utils.settings.with_debug_level >= from_log_level then
     [%debug_sexp
-      let log_child { subtensor; embedded } =
+      let log_child { subtensor; embedded = _embedded } =
         [%log_entry
-          (if embedded then "Embedded " else "Non-embedded ") ^ Tn.debug_name subtensor.value;
+          (if _embedded then "Embedded " else "Non-embedded ") ^ Tn.debug_name subtensor.value;
           Tn.log_debug_info ~from_log_level subtensor.value]
       in
       [%log_entry

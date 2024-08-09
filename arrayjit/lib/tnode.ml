@@ -3,6 +3,8 @@ module Lazy = Utils.Lazy
 module Nd = Ndarray
 module Debug_runtime = Utils.Debug_runtime
 
+let _get_local_debug_runtime = Utils._get_local_debug_runtime
+
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
@@ -10,17 +12,16 @@ type task =
   | Task : {
       context_lifetime : ('a[@sexp.opaque]);
       description : string;
-      work : (module Minidebug_runtime.Debug_runtime) -> unit -> unit;
+      work : unit -> unit;
     }
       -> task
 [@@deriving sexp_of]
 
-let run debug_runtime (Task task) =
-  let module Debug_runtime = (val debug_runtime : Minidebug_runtime.Debug_runtime) in
+let run (Task task) =
   [%diagn_sexp
     [%log_entry
       task.description;
-      task.work debug_runtime ()]]
+      task.work ()]]
 
 type memory_type =
   | Constant  (** The tensor node does not change after initialization. *)

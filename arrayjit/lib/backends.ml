@@ -2,6 +2,8 @@ open Base
 open Backend_utils.Types
 module Debug_runtime = Utils.Debug_runtime
 
+let _get_local_debug_runtime = Utils._get_local_debug_runtime
+
 [%%global_debug_log_level Nothing]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
@@ -186,8 +188,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     mutable dev_pos : task_list;
     mutable dev_previous_pos : task_list;
     mut : (Mut.t[@sexp.opaque]);
-    host_wait_for_idle : (Condition.t[@sexp.opaque]);
-    dev_wait_for_work : (Condition.t[@sexp.opaque]);
+    host_wait_for_idle : (Stdlib.Condition.t[@sexp.opaque]);
+    dev_wait_for_work : (Stdlib.Condition.t[@sexp.opaque]);
     mutable is_idle : bool;
     mutable host_is_waiting : bool;  (** The host is waiting for this specific device. *)
   }
@@ -233,7 +235,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         while (not d.is_idle) && d.keep_spinning do
           (* Stdlib.Printf.printf "DEBUG: await waiting is_idle=%b host_is_waiting=%b
              is_empty=%b\n%!" d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
-          Condition.wait d.host_wait_for_idle d.mut
+          Stdlib.Condition.wait d.host_wait_for_idle d.mut
         done;
         d.host_is_waiting <- false);
       (* Stdlib.Printf.printf "DEBUG: await unlocking is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
@@ -257,7 +259,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       Mut.lock d.mut;
       (* Stdlib.Printf.printf "DEBUG: schedule task broadcasting is_idle=%b host_is_waiting=%b
          is_empty=%b\n%!" d.is_idle d.host_is_waiting (is_dev_queue_empty d); *)
-      Condition.broadcast d.dev_wait_for_work;
+      Stdlib.Condition.broadcast d.dev_wait_for_work;
       Mut.unlock d.mut)
 
   let global_run_no = ref 0
@@ -269,11 +271,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         {
           hd =
             Tnode.Task
-              {
-                context_lifetime = ();
-                description = "root of task queue";
-                work = (fun _rt () -> ());
-              };
+              { context_lifetime = (); description = "root of task queue"; work = (fun () -> ()) };
           tl = Empty;
         }
     in
@@ -286,8 +284,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         dev_previous_pos = init_pos;
         mut = Mut.create ();
         is_idle = false;
-        host_wait_for_idle = Condition.create ();
-        dev_wait_for_work = Condition.create ();
+        host_wait_for_idle = Stdlib.Condition.create ();
+        dev_wait_for_work = Stdlib.Condition.create ();
         host_is_waiting = false;
       }
     in
@@ -313,11 +311,11 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                   (* Stdlib.Printf.printf "DEBUG: worker empty broadcasting is_idle=%b
                      host_is_waiting=%b is_empty=%b\n%!" state.is_idle state.host_is_waiting
                      (is_dev_queue_empty state); *)
-                  if state.host_is_waiting then Condition.broadcast state.host_wait_for_idle;
+                  if state.host_is_waiting then Stdlib.Condition.broadcast state.host_wait_for_idle;
                   (* Stdlib.Printf.printf "DEBUG: worker empty waiting is_idle=%b host_is_waiting=%b
                      is_empty=%b\n%!" state.is_idle state.host_is_waiting (is_dev_queue_empty
                      state); *)
-                  Condition.wait state.dev_wait_for_work state.mut
+                  Stdlib.Condition.wait state.dev_wait_for_work state.mut
                 done;
                 state.is_idle <- false);
               (* Stdlib.Printf.printf "DEBUG: worker empty unlocking is_idle=%b host_is_waiting=%b
@@ -327,7 +325,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                  task_list)]; *)
               state.dev_pos <- Utils.tl_exn state.dev_previous_pos
           | Cons { hd; tl } ->
-              Tnode.run _debug_runtime hd;
+              Tnode.run hd;
               (* [%log "WORK WHILE LOOP: AFTER WORK"]; *)
               state.dev_previous_pos <- state.dev_pos;
               state.dev_pos <- tl
@@ -349,7 +347,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     }
 
   let%diagn_sexp make_work device (Tnode.Task { description; _ } as task) =
-    let%diagn_rt_sexp work () = schedule_task device task in
+    let%diagn_l_sexp work () = schedule_task device task in
     Tnode.Task
       {
         context_lifetime = task;
@@ -410,10 +408,9 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
-               let work rt () =
-                 Backend.host_to_buffer ~rt h_arr ~dst:c_arr;
+               let%diagn_l_sexp work () =
+                 Backend.host_to_buffer h_arr ~dst:c_arr;
                  if Utils.settings.with_debug_level > 0 then
-                   let module Debug_runtime = (val rt) in
                    [%diagn_sexp
                      [%log_entry
                        "from_host " ^ Tnode.debug_name tn;
@@ -450,10 +447,9 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
-               let work rt () =
-                 Backend.buffer_to_host ~rt h_arr ~src:c_arr;
+               let%diagn_l_sexp work () =
+                 Backend.buffer_to_host h_arr ~src:c_arr;
                  if Utils.settings.with_debug_level > 0 then
-                   let module Debug_runtime = (val rt) in
                    [%diagn_sexp
                      [%log_entry
                        "to_host " ^ Tnode.debug_name tn;
@@ -501,13 +497,13 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       let work =
         (* TODO: log the operation if [Utils.settings.with_log_level > 0]. *)
         match into_merge_buffer with
-        | No -> fun rt () -> Backend.to_buffer ~rt tn ~dst ~src:src.ctx
+        | No -> fun () -> Backend.to_buffer tn ~dst ~src:src.ctx
         | Streaming ->
-            fun _rt () ->
+            fun () ->
               dev.merge_buffer :=
                 Option.map ~f:(fun ptr -> (ptr, tn)) @@ Backend.get_buffer tn src.ctx
         | Copy ->
-            fun rt () ->
+            fun () ->
               let size_in_bytes = Tnode.size_in_bytes tn in
               let allocated_capacity =
                 Option.value ~default:0 @@ Option.map dev.allocated_buffer ~f:snd
@@ -519,7 +515,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                       size_in_bytes );
               let merge_ptr = fst @@ Option.value_exn dev.allocated_buffer in
               dev.merge_buffer := Some (merge_ptr, tn);
-              Backend.to_buffer ~rt tn ~dst:merge_ptr ~src:src.ctx
+              Backend.to_buffer tn ~dst:merge_ptr ~src:src.ctx
       in
       let description =
         "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ Int.to_string dev.ordinal ^ " src "
@@ -542,7 +538,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     let wait_for_finish device =
       await device;
       device.state.keep_spinning <- false;
-      Condition.broadcast device.state.dev_wait_for_work
+      Stdlib.Condition.broadcast device.state.dev_wait_for_work
     in
     Array.iter devices ~f:(Option.iter ~f:wait_for_finish);
     let cleanup ordinal device =
@@ -643,11 +639,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
         {
           hd =
             Tnode.Task
-              {
-                context_lifetime = ();
-                description = "root of task queue";
-                work = (fun _rt () -> ());
-              };
+              { context_lifetime = (); description = "root of task queue"; work = (fun () -> ()) };
           tl = Empty;
         }
     in
@@ -681,7 +673,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
               (* [%log "WORK WHILE LOOP: EMPTY AFTER WAIT -- dev pos:", (state.dev_pos : task_list)]; *)
               state.dev_pos <- Utils.tl_exn state.dev_previous_pos
           | Cons { hd; tl } ->
-              Tnode.run _debug_runtime hd;
+              Tnode.run hd;
               (* [%log "WORK WHILE LOOP: AFTER WORK"]; *)
               state.dev_previous_pos <- state.dev_pos;
               state.dev_pos <- tl
@@ -705,7 +697,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
     }
 
   let%diagn_sexp make_work device (Tnode.Task { context_lifetime; description; _ } as task) =
-    let%diagn_rt_sexp work () = schedule_task device task in
+    let%diagn_l_sexp work () = schedule_task device task in
     Tnode.Task
       {
         context_lifetime;
@@ -766,10 +758,9 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
-               let work rt () =
-                 Backend.host_to_buffer ~rt h_arr ~dst:c_arr;
+               let%diagn_l_sexp work () =
+                 Backend.host_to_buffer h_arr ~dst:c_arr;
                  if Utils.settings.with_debug_level > 0 then
-                   let module Debug_runtime = (val rt) in
                    [%diagn_sexp
                      [%log_entry
                        "from_host " ^ Tnode.debug_name tn;
@@ -806,10 +797,9 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
-               let work rt () =
-                 Backend.buffer_to_host ~rt h_arr ~src:c_arr;
+               let%diagn_l_sexp work () =
+                 Backend.buffer_to_host h_arr ~src:c_arr;
                  if Utils.settings.with_debug_level > 0 then
-                   let module Debug_runtime = (val rt) in
                    [%diagn_sexp
                      [%log_entry
                        "to_host " ^ Tnode.debug_name tn;
@@ -856,13 +846,13 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
     let schedule dst_ptr =
       let work =
         match into_merge_buffer with
-        | No -> fun rt () -> Backend.to_buffer ~rt tn ~dst:dst_ptr ~src:src.ctx
+        | No -> fun () -> Backend.to_buffer tn ~dst:dst_ptr ~src:src.ctx
         | Streaming ->
-            fun _rt () ->
+            fun () ->
               dev.merge_buffer :=
                 Option.map ~f:(fun ptr -> (ptr, tn)) @@ Backend.get_buffer tn src.ctx
         | Copy ->
-            fun rt () ->
+            fun () ->
               let size_in_bytes = Tnode.size_in_bytes tn in
               let allocated_capacity =
                 Option.value ~default:0 @@ Option.map dev.allocated_buffer ~f:snd
@@ -874,7 +864,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
                       size_in_bytes );
               let merge_ptr = fst @@ Option.value_exn dev.allocated_buffer in
               dev.merge_buffer := Some (merge_ptr, tn);
-              Backend.to_buffer ~rt tn ~dst:merge_ptr ~src:src.ctx
+              Backend.to_buffer tn ~dst:merge_ptr ~src:src.ctx
       in
       schedule_task dev
         (Tnode.Task
