@@ -17,11 +17,10 @@ type task =
       -> task
 [@@deriving sexp_of]
 
-let run (Task task) =
-  [%diagn_sexp
-    [%log_entry
-      task.description;
-      task.work ()]]
+let%diagn_l_sexp run (Task task) =
+  [%log_entry
+    task.description;
+    task.work ()]
 
 type memory_type =
   | Constant  (** The tensor node does not change after initialization. *)
