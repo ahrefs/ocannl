@@ -290,7 +290,9 @@ let get_debug name =
 
 let _get_local_debug_runtime =
   let open Stdlib.Domain in
-  let get_runtime () = get_debug @@ "Domain-" ^ Int.to_string (self () :> int) in
+  let get_runtime () =
+    get_debug @@ if is_main_domain () then "" else "Domain-" ^ Int.to_string (self () :> int)
+  in
   let debug_runtime_key = DLS.new_key get_runtime in
   fun () -> DLS.get debug_runtime_key
 
