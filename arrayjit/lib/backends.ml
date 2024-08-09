@@ -289,11 +289,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         host_is_waiting = false;
       }
     in
-    let run_no = !global_run_no in
-    let debug_runtime =
-      Utils.get_debug ("dev-multicore-" ^ Int.to_string ordinal ^ "-run-" ^ Int.to_string run_no)
-    in
-    let%diagn_rt_sexp worker (() : unit) : unit =
+    let%diagn_l_sexp worker (() : unit) : unit =
       try
         while state.keep_spinning do
           (* Stdlib.Printf.printf "DEBUG: worker loop start is_idle=%b host_is_waiting=%b
@@ -341,7 +337,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     {
       state;
       ordinal;
-      domain = Domain.spawn (worker debug_runtime);
+      domain = Domain.spawn worker;
       merge_buffer = ref None;
       allocated_buffer = None;
     }
@@ -658,11 +654,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
       state.keep_spinning && is_dev_queue_empty state && not (host_wait_for_idle.is_waiting ())
     in
     let wait_by_dev = state.dev_wait.await ~keep_waiting in
-    let run_no = !global_run_no in
-    let debug_runtime =
-      Utils.get_debug ("dev-multicore-" ^ Int.to_string ordinal ^ "-run-" ^ Int.to_string run_no)
-    in
-    let%diagn_rt_sexp worker (() : unit) : unit =
+    let%diagn_l_sexp worker (() : unit) : unit =
       try
         while state.keep_spinning do
           match state.dev_pos with
@@ -691,7 +683,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
       state;
       host_wait_for_idle;
       ordinal;
-      domain = Domain.spawn (worker debug_runtime);
+      domain = Domain.spawn worker;
       merge_buffer = ref None;
       allocated_buffer = None;
     }
