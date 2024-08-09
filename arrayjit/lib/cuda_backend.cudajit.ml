@@ -456,7 +456,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~glo
        Utils.add_log_processor ~prefix:log_id_prefix @@ fun output ->
        [%log_entry
          context.label;
-         Utils.log_trace_tree (module Debug_runtime) output]);
+         Utils.log_trace_tree output]);
     (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE
        4096; *)
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.device.stream

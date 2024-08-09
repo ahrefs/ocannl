@@ -401,7 +401,7 @@ let header_sep =
   let open Re in
   compile (seq [ str " "; opt any; str "="; str " " ])
 
-let%diagn_rt_sexp log_trace_tree logs =
+let%diagn_l_sexp log_trace_tree logs =
   let rec loop = function
     | [] -> []
     | line :: more when String.is_empty line -> loop more
