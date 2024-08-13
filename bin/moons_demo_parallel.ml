@@ -13,16 +13,16 @@ let experiment ~seed ~backend_name ~config () =
   (* Utils.settings.with_debug_level <- 3; *)
   (* Utils.settings.output_debug_files_in_build_directory <- true; *)
   (* Utils.settings.debug_log_from_routines <- true; *)
-  let hid_dim = 16 in
-  (* let hid_dim = 4 in *)
-  let batch_size = 120 in
+  (* let hid_dim = 16 in *)
+  let hid_dim = 4 in
+  (* let batch_size = 120 in *)
   (* let batch_size = 60 in *)
-  (* let batch_size = 20 in *)
+  let batch_size = 20 in
   let len = batch_size * 20 in
   let init_lr = 0.1 in
   (* let epochs = 10 in *)
-  let epochs = 20 in
-  (* let epochs = 1 in *)
+  (* let epochs = 40 in *)
+  let epochs = 1 in
   let noise () = Rand.float_range (-0.1) 0.1 in
   let moons_flat =
     Array.concat_map (Array.create ~len ())
@@ -126,7 +126,7 @@ let experiment ~seed ~backend_name ~config () =
   let module Backend = (val backend) in
   Backend.unsafe_cleanup ()
 
-let () = experiment ~seed:1 ~backend_name:"gccjit" ~config:Physical_devices_only ()
+let () = experiment ~seed:1 ~backend_name:"pipes_cc" ~config:Physical_devices_only ()
 let _suspended () = experiment ~seed:1 ~backend_name:"cc" ~config:Physical_devices_only ()
 let _suspended () = experiment ~seed:1 ~backend_name:"cuda" ~config:Most_parallel_devices ()
 

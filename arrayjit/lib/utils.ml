@@ -284,9 +284,9 @@ let get_debug name =
          ~verbose_entry_ids ~global_prefix:name ~toc_flame_graph:true ~flame_graph_separation:50
          ~toc_entry ~for_append:false ~max_inline_sexp_length:120 ~hyperlink
          ~toc_specific_hyperlink:""
-         ~highlight_terms:Re.(alt [])
+         ~highlight_terms:Re.(alt [ str "wait"; str "release" ])
          ~exclude_on_path:Re.(str "env")
-         ~values_first_mode:true ~backend ~log_level ?snapshot_every_sec filename
+         ~values_first_mode:false ~backend ~log_level ?snapshot_every_sec filename
 
 let _get_local_debug_runtime =
   let open Stdlib.Domain in
@@ -542,7 +542,7 @@ let waiter ~name () =
     try Unix.pipe ~cloexec:true () with e -> Exn.reraise e @@ "waiter " ^ name ^ ": Unix.pipe"
   in
   let await ~keep_waiting =
-    let rec wait () =
+    let%track_this_l_sexp rec wait () : bool =
       if Atomic.compare_and_set is_released true false then (
         let n =
           try Unix.read pipe_inp (Bytes.create 1) 0 1
@@ -558,15 +558,17 @@ let waiter ~name () =
         wait ()
       else false
     in
-    fun () ->
+    let%track_this_l_sexp await () =
       if not !@is_open then failwith @@ "await: waiter " ^ name ^ " already deleted";
       if Atomic.compare_and_set is_waiting false true then (
         let result = wait () in
         assert (Atomic.compare_and_set is_waiting true false);
         result)
       else false
+    in
+    await
   in
-  let release_if_waiting () =
+  let%track_this_l_sexp release_if_waiting () : bool =
     if not !@is_open then failwith @@ "release_if_waiting: waiter " ^ name ^ " already deleted";
     let result =
       if !@is_waiting && Atomic.compare_and_set is_released false true then (
@@ -580,7 +582,7 @@ let waiter ~name () =
     in
     result
   in
-  let finalize () =
+  let%track_this_l_sexp finalize () =
     if Atomic.compare_and_set is_open true false then (
       Atomic.set is_waiting false;
       Unix.close pipe_inp;
