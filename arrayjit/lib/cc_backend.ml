@@ -274,7 +274,7 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
       let params = List.rev_map code.params ~f:(fun (_, p) -> p) in
       link code.bindings params Ctypes.(void @-> returning void)]
   in
-  let%diagn_l_sexp work () : unit =
+  let%diagn_this_l_sexp work () : unit =
     [%log_result name];
     Backend_utils.check_merge_buffer ~merge_buffer ~code_node:code.lowered.merge_node;
     Indexing.apply run_variadic ();

@@ -289,7 +289,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         host_is_waiting = false;
       }
     in
-    let%diagn_l_sexp worker (() : unit) : unit =
+    let%diagn_this_l_sexp worker (() : unit) : unit =
       try
         while state.keep_spinning do
           (* Stdlib.Printf.printf "DEBUG: worker loop start is_idle=%b host_is_waiting=%b
@@ -343,7 +343,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     }
 
   let%diagn_sexp make_work device (Tnode.Task { description; _ } as task) =
-    let%diagn_l_sexp work () = schedule_task device task in
+    let%diagn_this_l_sexp work () = schedule_task device task in
     Tnode.Task
       {
         context_lifetime = task;
@@ -404,7 +404,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
-               let%diagn_l_sexp work () =
+               let%diagn_this_l_sexp work () =
                  Backend.host_to_buffer h_arr ~dst:c_arr;
                  if Utils.settings.with_debug_level > 0 then
                    [%diagn_sexp
@@ -443,7 +443,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
-               let%diagn_l_sexp work () =
+               let%diagn_this_l_sexp work () =
                  Backend.buffer_to_host h_arr ~src:c_arr;
                  if Utils.settings.with_debug_level > 0 then
                    [%diagn_sexp
@@ -654,7 +654,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
       state.keep_spinning && is_dev_queue_empty state && not (host_wait_for_idle.is_waiting ())
     in
     let wait_by_dev = state.dev_wait.await ~keep_waiting in
-    let%diagn_l_sexp worker (() : unit) : unit =
+    let%diagn_this_l_sexp worker (() : unit) : unit =
       try
         while state.keep_spinning do
           match state.dev_pos with
@@ -689,7 +689,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
     }
 
   let%diagn_sexp make_work device (Tnode.Task { context_lifetime; description; _ } as task) =
-    let%diagn_l_sexp work () = schedule_task device task in
+    let%diagn_this_l_sexp work () = schedule_task device task in
     Tnode.Task
       {
         context_lifetime;
@@ -750,7 +750,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
-               let%diagn_l_sexp work () =
+               let%diagn_this_l_sexp work () =
                  Backend.host_to_buffer h_arr ~dst:c_arr;
                  if Utils.settings.with_debug_level > 0 then
                    [%diagn_sexp
@@ -789,7 +789,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
-               let%diagn_l_sexp work () =
+               let%diagn_this_l_sexp work () =
                  Backend.buffer_to_host h_arr ~src:c_arr;
                  if Utils.settings.with_debug_level > 0 then
                    [%diagn_sexp

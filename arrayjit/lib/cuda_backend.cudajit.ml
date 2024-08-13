@@ -412,7 +412,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~glo
     { prior_context with parent = Some prior_context; run_module = Some run_module; global_arrays }
   in
   Stdlib.Gc.finalise finalize context;
-  let%diagn_l_sexp work () : unit =
+  let%diagn_this_l_sexp work () : unit =
     let log_id = get_global_run_id () in
     let log_id_prefix = Int.to_string log_id ^ ": " in
     if Utils.settings.with_debug_level > 0 then
