@@ -22,7 +22,8 @@ Currently, OCANNL integrates new backends via code in [Backends](backends.ml), s
 ```ocaml
 type lowered_bindings = (static_symbol, int ref) List.Assoc.t  (* in indexing.ml *)
 
-type task = Work of ((module Debug_runtime) -> unit -> unit)  (* in tnode.ml *)
+type task =
+  | Task : { context_lifetime : 'a; description : string; work : unit -> unit; } -> task  (* in tnode.ml *)
 
 type 'context routine = {
   context : 'context;
@@ -253,14 +254,11 @@ module type No_device_backend = sig
   ...
   val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
   ...
-  val to_buffer :
-    ?rt:(module Minidebug_runtime.Debug_runtime) -> Tnode.t -> dst:buffer_ptr -> src:context -> unit
+  val to_buffer : Tnode.t -> dst:buffer_ptr -> src:context -> unit
 
-  val host_to_buffer :
-    ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> dst:buffer_ptr -> unit
+  val host_to_buffer : Ndarray.t -> dst:buffer_ptr -> unit
 
-  val buffer_to_host :
-    ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> src:buffer_ptr -> unit
+  val buffer_to_host : Ndarray.t -> src:buffer_ptr -> unit
 
   val get_buffer : Tnode.t -> context -> buffer_ptr option
 end
@@ -268,18 +266,17 @@ module type Backend = sig
   include No_device_backend
   ...
 
-  val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> bool
+  val from_host : context -> Tnode.t -> bool
   (** If the array is both hosted and in-context, schedules a copy from host to context and returns
       true, otherwise returns false. NOTE: when run for a device, it's the caller's responsibility
       to synchronize the device before the host's data is overwritten. *)
 
-  val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> bool
+  val to_host : context -> Tnode.t -> bool
   (** If the array is both hosted and in-context, schedules a copy from context to host and returns
       true, otherwise returns false. NOTE: when run for a device, it's the caller's responsibility
       to synchronize the device before the host's data is read. *)
 
   val device_to_device :
-    ?rt:(module Minidebug_runtime.Debug_runtime) ->
     Tnode.t ->
     into_merge_buffer:merge_buffer_use ->
     dst:context ->

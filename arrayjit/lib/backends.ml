@@ -81,15 +81,9 @@ module type No_device_backend = sig
       (contexts, virtual and physical devices) become invalid. The backend needs to be initialized
       again to be used again. *)
 
-  val to_buffer :
-    ?rt:(module Minidebug_runtime.Debug_runtime) -> Tnode.t -> dst:buffer_ptr -> src:context -> unit
-
-  val host_to_buffer :
-    ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> dst:buffer_ptr -> unit
-
-  val buffer_to_host :
-    ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> src:buffer_ptr -> unit
-
+  val to_buffer : Tnode.t -> dst:buffer_ptr -> src:context -> unit
+  val host_to_buffer : Ndarray.t -> dst:buffer_ptr -> unit
+  val buffer_to_host : Ndarray.t -> src:buffer_ptr -> unit
   val get_buffer : Tnode.t -> context -> buffer_ptr option
 end
 
@@ -104,23 +98,18 @@ module type Backend = sig
   (** Returns the routines for the procedures included in the code batch. The returned context is
       downstream of all the returned routines. *)
 
-  val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> bool
+  val from_host : context -> Tnode.t -> bool
   (** If the array is both hosted and in-context, schedules a copy from host to context and returns
       true, otherwise returns false. NOTE: when run for a device, it's the caller's responsibility
       to synchronize the device before the host's data is overwritten. *)
 
-  val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> bool
+  val to_host : context -> Tnode.t -> bool
   (** If the array is both hosted and in-context, schedules a copy from context to host and returns
       true, otherwise returns false. NOTE: when run for a device, it's the caller's responsibility
       to synchronize the device before the host's data is read. *)
 
   val device_to_device :
-    ?rt:(module Minidebug_runtime.Debug_runtime) ->
-    Tnode.t ->
-    into_merge_buffer:merge_buffer_use ->
-    dst:context ->
-    src:context ->
-    bool
+    Tnode.t -> into_merge_buffer:merge_buffer_use -> dst:context -> src:context -> bool
   (** If the node is absent from the [src] context and either it is present in the [dst] context or
       [~into_merge_buffer] is different from [No]: raises an error.
 
@@ -170,9 +159,6 @@ module type Backend = sig
   val to_subordinal : device -> int
   val get_name : device -> string
 end
-
-let forget_printbox (module Runtime : Minidebug_runtime.PrintBox_runtime) =
-  (module Runtime : Minidebug_runtime.Debug_runtime)
 
 module Multicore_backend (Backend : No_device_backend) : Backend = struct
   module Domain = Domain [@warning "-3"]
@@ -396,10 +382,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                 schedule = make_work device task.schedule;
               })) )
 
-  let from_host ?rt (context : context) (tn : Tnode.t) =
-    if Option.is_some rt then
-      raise
-      @@ Utils.User_error "Multicore_backend.from_host: backend cannot be nested in another runtime";
+  let from_host (context : context) (tn : Tnode.t) =
     Option.value ~default:false
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
@@ -435,10 +418,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                    [%log "for", Tnode.debug_name tn]]];
                false)
 
-  let to_host ?rt (context : context) (tn : Tnode.t) =
-    if Option.is_some rt then
-      raise
-      @@ Utils.User_error "Multicore_backend.to_host: backend cannot be nested in another runtime";
+  let to_host (context : context) (tn : Tnode.t) =
     Option.value ~default:false
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
@@ -474,11 +454,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                    [%log "for", Tnode.debug_name tn]]];
                false)
 
-  let device_to_device ?rt tn ~into_merge_buffer ~dst ~src =
-    if Option.is_some rt then
-      raise
-      @@ Utils.User_error
-           "Multicore_backend.device_to_device: backend cannot be nested in another runtime";
+  let device_to_device tn ~into_merge_buffer ~dst ~src =
     let dev = dst.device in
     if
       (not (equal_merge_buffer_use into_merge_buffer No))
@@ -556,7 +532,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let get_name device = Int.to_string device.ordinal
   let to_ordinal { ordinal; _ } = ordinal
   let to_subordinal _ = 0
-  let to_buffer ?rt tn ~dst ~src = Backend.to_buffer ?rt tn ~dst ~src:src.ctx
+  let to_buffer tn ~dst ~src = Backend.to_buffer tn ~dst ~src:src.ctx
   let host_to_buffer = Backend.host_to_buffer
   let buffer_to_host = Backend.buffer_to_host
   let get_buffer tn context = Backend.get_buffer tn context.ctx
@@ -742,10 +718,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
                 schedule = make_work device task.schedule;
               })) )
 
-  let from_host ?rt (context : context) (tn : Tnode.t) =
-    if Option.is_some rt then
-      raise
-      @@ Utils.User_error "Multicore_backend.from_host: backend cannot be nested in another runtime";
+  let from_host (context : context) (tn : Tnode.t) =
     Option.value ~default:false
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
@@ -753,16 +726,15 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
                let%diagn_this_l_sexp work () =
                  Backend.host_to_buffer h_arr ~dst:c_arr;
                  if Utils.settings.with_debug_level > 0 then
-                   [%diagn_sexp
-                     [%log_entry
-                       "from_host " ^ Tnode.debug_name tn;
-                       [%log "copied", Tnode.debug_name tn, "from host"];
-                       if Utils.settings.with_debug_level > 1 then
-                         [%log_printbox
-                           let indices =
-                             Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
-                           in
-                           Ndarray.render_array ~indices h_arr]]]
+                   [%log_entry
+                     "from_host " ^ Tnode.debug_name tn;
+                     [%log "copied", Tnode.debug_name tn, "from host"];
+                     if Utils.settings.with_debug_level > 1 then
+                       [%log_printbox
+                         let indices =
+                           Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
+                         in
+                         Ndarray.render_array ~indices h_arr]]
                in
                schedule_task context.device
                  (Tnode.Task
@@ -781,10 +753,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
                    [%log "for", Tnode.debug_name tn]]];
                false)
 
-  let to_host ?rt (context : context) (tn : Tnode.t) =
-    if Option.is_some rt then
-      raise
-      @@ Utils.User_error "Multicore_backend.to_host: backend cannot be nested in another runtime";
+  let to_host (context : context) (tn : Tnode.t) =
     Option.value ~default:false
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
@@ -792,16 +761,15 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
                let%diagn_this_l_sexp work () =
                  Backend.buffer_to_host h_arr ~src:c_arr;
                  if Utils.settings.with_debug_level > 0 then
-                   [%diagn_sexp
-                     [%log_entry
-                       "to_host " ^ Tnode.debug_name tn;
-                       [%log "copied to host"];
-                       if Utils.settings.with_debug_level > 1 then
-                         [%log_printbox
-                           let indices =
-                             Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
-                           in
-                           Ndarray.render_array ~indices h_arr]]]
+                   [%log_entry
+                     "to_host " ^ Tnode.debug_name tn;
+                     [%log "copied to host"];
+                     if Utils.settings.with_debug_level > 1 then
+                       [%log_printbox
+                         let indices =
+                           Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
+                         in
+                         Ndarray.render_array ~indices h_arr]]
                in
                schedule_task context.device
                  (Tnode.Task
@@ -820,11 +788,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
                    [%log "for", Tnode.debug_name tn]]];
                false)
 
-  let device_to_device ?rt tn ~into_merge_buffer ~dst ~src =
-    if Option.is_some rt then
-      raise
-      @@ Utils.User_error
-           "Multicore_backend.device_to_device: backend cannot be nested in another runtime";
+  let device_to_device tn ~into_merge_buffer ~dst ~src =
     let dev = dst.device in
     if
       (not (equal_merge_buffer_use into_merge_buffer No))
@@ -907,7 +871,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
   let get_name device = Int.to_string device.ordinal
   let to_ordinal { ordinal; _ } = ordinal
   let to_subordinal _ = 0
-  let to_buffer ?rt tn ~dst ~src = Backend.to_buffer ?rt tn ~dst ~src:src.ctx
+  let to_buffer tn ~dst ~src = Backend.to_buffer tn ~dst ~src:src.ctx
   let host_to_buffer = Backend.host_to_buffer
   let buffer_to_host = Backend.buffer_to_host
   let get_buffer tn context = Backend.get_buffer tn context.ctx
@@ -978,28 +942,23 @@ module Sync_backend (Backend : No_device_backend) (* : Backend *) = struct
 
   let get_name device = Int.to_string device.subordinal
 
-  let from_host ?rt (context : context) (tn : Tnode.t) =
-    if Option.is_some rt then
-      raise
-      @@ Utils.User_error "Multicore_backend.from_host: backend cannot be nested in another runtime";
+  let from_host (context : context) (tn : Tnode.t) =
     Option.value ~default:false
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
-               Backend.host_to_buffer ?rt h_arr ~dst:c_arr;
-               (if Utils.settings.with_debug_level > 0 then
-                  let module Debug_runtime = (val Option.value rt ~default:(module Debug_runtime))
-                  in
-                  [%diagn_sexp
-                    [%log_entry
-                      "from_host for " ^ Tnode.debug_name tn;
-                      [%log "copied", Tnode.debug_name tn, "from host to", get_name context.device];
-                      if Utils.settings.with_debug_level > 2 then
-                        [%log_printbox
-                          let indices =
-                            Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
-                          in
-                          Ndarray.render_array ~indices h_arr]]]);
+               Backend.host_to_buffer h_arr ~dst:c_arr;
+               if Utils.settings.with_debug_level > 0 then
+                 [%diagn_l_sexp
+                   [%log_entry
+                     "from_host for " ^ Tnode.debug_name tn;
+                     [%log "copied", Tnode.debug_name tn, "from host to", get_name context.device];
+                     if Utils.settings.with_debug_level > 2 then
+                       [%log_printbox
+                         let indices =
+                           Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
+                         in
+                         Ndarray.render_array ~indices h_arr]]];
                true
            | (lazy None) ->
                [%diagn_sexp
@@ -1008,28 +967,23 @@ module Sync_backend (Backend : No_device_backend) (* : Backend *) = struct
                    [%log "to", get_name context.device]]];
                false)
 
-  let to_host ?rt (context : context) (tn : Tnode.t) =
-    if Option.is_some rt then
-      raise
-      @@ Utils.User_error "Multicore_backend.to_host: backend cannot be nested in another runtime";
+  let to_host (context : context) (tn : Tnode.t) =
     Option.value ~default:false
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
-               Backend.buffer_to_host ?rt h_arr ~src:c_arr;
-               (if Utils.settings.with_debug_level > 0 then
-                  let module Debug_runtime = (val Option.value rt ~default:(module Debug_runtime))
-                  in
-                  [%diagn_sexp
-                    [%log_entry
-                      "to_host for " ^ Tnode.debug_name tn;
-                      [%log "copied to host from", get_name context.device];
-                      if Utils.settings.with_debug_level > 1 then
-                        [%log_printbox
-                          let indices =
-                            Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
-                          in
-                          Ndarray.render_array ~indices h_arr]]]);
+               Backend.buffer_to_host h_arr ~src:c_arr;
+               if Utils.settings.with_debug_level > 0 then
+                 [%diagn_l_sexp
+                   [%log_entry
+                     "to_host for " ^ Tnode.debug_name tn;
+                     [%log "copied to host from", get_name context.device];
+                     if Utils.settings.with_debug_level > 1 then
+                       [%log_printbox
+                         let indices =
+                           Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
+                         in
+                         Ndarray.render_array ~indices h_arr]]];
                true
            | (lazy None) ->
                [%diagn_sexp
@@ -1038,11 +992,7 @@ module Sync_backend (Backend : No_device_backend) (* : Backend *) = struct
                    [%log "from", get_name context.device]]];
                false)
 
-  let device_to_device ?rt tn ~into_merge_buffer ~dst ~src =
-    if Option.is_some rt then
-      raise
-      @@ Utils.User_error
-           "Multicore_backend.device_to_device: backend cannot be nested in another runtime";
+  let device_to_device tn ~into_merge_buffer ~dst ~src =
     let dev = dst.device in
     if
       (not (equal_merge_buffer_use into_merge_buffer No))
@@ -1058,7 +1008,7 @@ module Sync_backend (Backend : No_device_backend) (* : Backend *) = struct
     | None, _ | _, None -> false
     | Some dst, Some _ ->
         (match into_merge_buffer with
-        | No -> Backend.to_buffer ?rt tn ~dst ~src:src.ctx
+        | No -> Backend.to_buffer tn ~dst ~src:src.ctx
         | Streaming ->
             dev.merge_buffer :=
               Option.map ~f:(fun ptr -> (ptr, tn)) @@ Backend.get_buffer tn src.ctx
@@ -1074,7 +1024,7 @@ module Sync_backend (Backend : No_device_backend) (* : Backend *) = struct
                     size_in_bytes );
             let merge_ptr = fst @@ Option.value_exn dev.allocated_buffer in
             dev.merge_buffer := Some (merge_ptr, tn);
-            Backend.to_buffer ?rt tn ~dst:merge_ptr ~src:src.ctx);
+            Backend.to_buffer tn ~dst:merge_ptr ~src:src.ctx);
         true
 
   let num_physical_devices () = 1
@@ -1099,7 +1049,7 @@ module Sync_backend (Backend : No_device_backend) (* : Backend *) = struct
   let get_ctx_device { device; _ } = device
   let to_ordinal _ = 0
   let to_subordinal device = device.subordinal
-  let to_buffer ?rt tn ~dst ~src = Backend.to_buffer ?rt tn ~dst ~src:src.ctx
+  let to_buffer tn ~dst ~src = Backend.to_buffer tn ~dst ~src:src.ctx
   let host_to_buffer = Backend.host_to_buffer
   let buffer_to_host = Backend.buffer_to_host
   let get_buffer tn context = Backend.get_buffer tn context.ctx
@@ -1179,15 +1129,9 @@ module type Simple_backend = sig
   val init : label:string -> context
   val finalize : context -> unit
   val unsafe_cleanup : unit -> unit
-
-  val to_buffer :
-    ?rt:(module Minidebug_runtime.Debug_runtime) -> Tnode.t -> dst:buffer_ptr -> src:context -> unit
-
-  val host_to_buffer :
-    ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> dst:buffer_ptr -> unit
-
-  val buffer_to_host :
-    ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> src:buffer_ptr -> unit
+  val to_buffer : Tnode.t -> dst:buffer_ptr -> src:context -> unit
+  val host_to_buffer : Ndarray.t -> dst:buffer_ptr -> unit
+  val buffer_to_host : Ndarray.t -> src:buffer_ptr -> unit
 end
 
 let verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context traced_stores
@@ -1297,7 +1241,7 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
           (context, Some { context; schedule; bindings; name })
       | None -> (context, None))
 
-  let to_buffer ?rt tn ~dst ~src = Backend.to_buffer ?rt tn ~dst ~src
+  let to_buffer tn ~dst ~src = Backend.to_buffer tn ~dst ~src
   let host_to_buffer = Backend.host_to_buffer
   let buffer_to_host = Backend.buffer_to_host
 
@@ -1385,12 +1329,12 @@ module Cuda_backend : Backend = struct
   let init device = { ctx = init device; expected_merge_node = None }
   let get_ctx_device context = get_ctx_device context.ctx
   let finalize context = finalize context.ctx
-  let to_buffer ?rt tn ~dst ~src = to_buffer ?rt tn ~dst ~src:src.ctx
+  let to_buffer tn ~dst ~src = to_buffer tn ~dst ~src:src.ctx
   let get_buffer tn context = get_buffer tn context.ctx
-  let from_host ?rt context tn = from_host ?rt context.ctx tn
-  let to_host ?rt context tn = to_host ?rt context.ctx tn
+  let from_host context tn = from_host context.ctx tn
+  let to_host context tn = to_host context.ctx tn
 
-  let device_to_device ?rt tn ~into_merge_buffer ~dst ~src =
+  let device_to_device tn ~into_merge_buffer ~dst ~src =
     if
       (not (equal_merge_buffer_use into_merge_buffer No))
       && not (Option.equal Tnode.equal (Some tn) dst.expected_merge_node)
@@ -1400,7 +1344,7 @@ module Cuda_backend : Backend = struct
            ("Multicore_backend.device_to_device: merge node mismatch, expected "
            ^ Option.(value ~default:"none" @@ map ~f:Tnode.debug_name dst.expected_merge_node)
            ^ ", actual " ^ Tnode.debug_name tn);
-    device_to_device ?rt tn ~into_merge_buffer ~dst:dst.ctx ~src:src.ctx
+    device_to_device tn ~into_merge_buffer ~dst:dst.ctx ~src:src.ctx
 end
 
 let reinitialize (module Backend : Backend) config =

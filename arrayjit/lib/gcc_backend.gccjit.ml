@@ -47,12 +47,12 @@ type context = {
 
 let ctx_arrays context = context.arrays
 
-let to_buffer ?rt:_ tn ~dst ~src =
+let to_buffer tn ~dst ~src =
   let src = Map.find_exn src.arrays tn in
   Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 
-let host_to_buffer ?rt:_ src ~dst = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
-let buffer_to_host ?rt:_ dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
+let host_to_buffer src ~dst = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
+let buffer_to_host dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 
 let unsafe_cleanup () =
   let open Gccjit in

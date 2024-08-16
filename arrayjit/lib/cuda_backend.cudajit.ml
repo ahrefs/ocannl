@@ -192,39 +192,30 @@ let unsafe_cleanup () =
   done;
   Core.Weak.fill !devices 0 len None
 
-let%diagn_sexp from_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context) tn
-    =
+let%diagn_l_sexp from_host (ctx : context) tn =
   match (tn, Map.find ctx.global_arrays tn) with
   | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
       set_ctx ctx.ctx;
-      (if Utils.settings.with_debug_level > 0 then
-         let module Debug_runtime =
-           (val Option.value_or_thunk rt ~default:(fun () -> (module Debug_runtime)))
-         in
-         [%log "copying", Tn.debug_name tn, "to", (dst : ctx_array), "from host"]);
+      if Utils.settings.with_debug_level > 0 then
+        [%log "copying", Tn.debug_name tn, "to", (dst : ctx_array), "from host"];
       let f src = Cudajit.memcpy_H_to_D_async ~dst ~src ctx.device.stream in
       Ndarray.map { f } hosted;
       true
   | _ -> false
 
-let%track_sexp to_host ?(rt : (module Minidebug_runtime.Debug_runtime) option) (ctx : context)
-    (tn : Tn.t) =
+let%track_l_sexp to_host (ctx : context) (tn : Tn.t) =
   match (tn, Map.find ctx.global_arrays tn) with
   | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
       set_ctx ctx.ctx;
-      (if Utils.settings.with_debug_level > 0 then
-         let module Debug_runtime =
-           (val Option.value_or_thunk rt ~default:(fun () ->
-                    (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
-         in
-         [%log "copying", Tn.debug_name tn, "at", (src : ctx_array), "to host"]);
+      if Utils.settings.with_debug_level > 0 then
+        [%log "copying", Tn.debug_name tn, "at", (src : ctx_array), "to host"];
       let f dst = Cudajit.memcpy_D_to_H_async ~dst ~src ctx.device.stream in
       Ndarray.map { f } hosted;
       true
   | _ -> false
 
-let%track_sexp rec device_to_device ?(rt : (module Minidebug_runtime.Debug_runtime) option)
-    (tn : Tn.t) ~into_merge_buffer ~(dst : context) ~(src : context) =
+let%track_l_sexp rec device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : context)
+    ~(src : context) =
   let memcpy ~d_arr ~s_arr =
     if phys_equal dst.device.physical src.device.physical then
       Cudajit.memcpy_D_to_D_async ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:d_arr ~src:s_arr
@@ -243,46 +234,34 @@ let%track_sexp rec device_to_device ?(rt : (module Minidebug_runtime.Debug_runti
           | Some d_arr ->
               set_ctx dst.ctx;
               memcpy ~d_arr ~s_arr;
-              (if Utils.settings.with_debug_level > 0 then
-                 let module Debug_runtime =
-                   (val Option.value_or_thunk rt ~default:(fun () ->
-                            (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
-                 in
-                 [%log
-                   "copied",
-                     Tn.debug_name tn,
-                     "from",
-                     src.label,
-                     "at",
-                     (s_arr : ctx_array),
-                     "to",
-                     (d_arr : ctx_array)]);
+              if Utils.settings.with_debug_level > 0 then
+                [%log
+                  "copied",
+                    Tn.debug_name tn,
+                    "from",
+                    src.label,
+                    "at",
+                    (s_arr : ctx_array),
+                    "to",
+                    (d_arr : ctx_array)];
               true)
       | Streaming ->
           if phys_equal dst.device.physical src.device.physical then (
             dst.device.merge_buffer <- Some (s_arr, tn);
-            (if Utils.settings.with_debug_level > 0 then
-               let module Debug_runtime =
-                 (val Option.value_or_thunk rt ~default:(fun () ->
-                          (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
-               in
-               [%log "using merge buffer for", Tn.debug_name tn, "from", src.label]);
+            if Utils.settings.with_debug_level > 0 then
+              [%log "using merge buffer for", Tn.debug_name tn, "from", src.label];
             true)
           else
             (* TODO: support proper streaming, but it might be difficult. *)
-            device_to_device ?rt tn ~into_merge_buffer:Copy ~dst ~src
+            device_to_device tn ~into_merge_buffer:Copy ~dst ~src
       | Copy ->
           set_ctx dst.ctx;
           let size_in_bytes = Tn.size_in_bytes tn in
           opt_alloc_merge_buffer ~size_in_bytes dst.device.physical;
           memcpy ~d_arr:dst.device.physical.copy_merge_buffer ~s_arr;
           dst.device.merge_buffer <- Some (dst.device.physical.copy_merge_buffer, tn);
-          (if Utils.settings.with_debug_level > 0 then
-             let module Debug_runtime =
-               (val Option.value_or_thunk rt ~default:(fun () ->
-                        (module Debug_runtime : Minidebug_runtime.Debug_runtime)))
-             in
-             [%log "copied into merge buffer", Tn.debug_name tn, "from", src.label]);
+          if Utils.settings.with_debug_level > 0 then
+            [%log "copied into merge buffer", Tn.debug_name tn, "from", src.label];
           true)
 
 type code = {
@@ -522,7 +501,7 @@ let%track_sexp link_batch prior_context (code_batch : code_batch) =
   in
   (context, lowered_bindings, procs)
 
-let to_buffer ?rt:_ _tn ~dst:_ ~src:_ = failwith "CUDA low-level: NOT IMPLEMENTED YET"
-let host_to_buffer ?rt:_ _tn ~dst:_ = failwith "CUDA low-level: NOT IMPLEMENTED YET"
-let buffer_to_host ?rt:_ _tn ~src:_ = failwith "CUDA low-level: NOT IMPLEMENTED YET"
+let to_buffer _tn ~dst:_ ~src:_ = failwith "CUDA low-level: NOT IMPLEMENTED YET"
+let host_to_buffer _tn ~dst:_ = failwith "CUDA low-level: NOT IMPLEMENTED YET"
+let buffer_to_host _tn ~src:_ = failwith "CUDA low-level: NOT IMPLEMENTED YET"
 let get_buffer _tn _context = failwith "CUDA low-level: NOT IMPLEMENTED YET"

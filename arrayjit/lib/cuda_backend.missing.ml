@@ -19,9 +19,7 @@ let ctx_arrays Unimplemented_ctx = Map.empty (module Tnode)
 
 let link (Unimplemented_ctx : context) (code : code) =
   let lowered_bindings = List.map ~f:(fun s -> (s, ref 0)) @@ Indexing.bound_symbols code in
-  let task =
-    Tnode.{ description = "CUDA missing: install cudajit"; work = (fun _debug_runtime () -> ()) }
-  in
+  let task = Tnode.{ description = "CUDA missing: install cudajit"; work = (fun () -> ()) } in
   ((Unimplemented_ctx : context), lowered_bindings, task)
 
 let link_batch (Unimplemented_ctx : context) (code_batch : code_batch) =
@@ -31,16 +29,14 @@ let link_batch (Unimplemented_ctx : context) (code_batch : code_batch) =
   in
   let task =
     Array.map code_batch ~f:(fun _ ->
-        Some
-          Tnode.
-            { description = "CUDA missing: install cudajit"; work = (fun _debug_runtime () -> ()) })
+        Some Tnode.{ description = "CUDA missing: install cudajit"; work = (fun () -> ()) })
   in
   ((Unimplemented_ctx : context), lowered_bindings, task)
 
 let unsafe_cleanup () = ()
-let from_host ?rt:_ _context _tn = false
-let to_host ?rt:_ _context _tn = false
-let device_to_device ?rt:_ _tn ~into_merge_buffer:_ ~dst:_ ~src:_ = false
+let from_host _context _tn = false
+let to_host _context _tn = false
+let device_to_device _tn ~into_merge_buffer:_ ~dst:_ ~src:_ = false
 
 type device = Unimplemented_dev [@@deriving sexp_of]
 type physical_device = Unimplemented_phys_dev [@@deriving sexp_of]
@@ -58,7 +54,7 @@ let get_ctx_device Unimplemented_ctx = Unimplemented_dev
 let get_name Unimplemented_dev : string = failwith "CUDA missing: install cudajit"
 let to_ordinal _device = 0
 let to_subordinal _device = 0
-let to_buffer ?rt:_ _tn ~dst:_ ~src:_ = failwith "CUDA missing: install cudajit"
-let host_to_buffer ?rt:_ _tn ~dst:_ = failwith "CUDA missing: install cudajit"
-let buffer_to_host ?rt:_ _tn ~src:_ = failwith "CUDA missing: install cudajit"
+let to_buffer _tn ~dst:_ ~src:_ = failwith "CUDA missing: install cudajit"
+let host_to_buffer _tn ~dst:_ = failwith "CUDA missing: install cudajit"
+let buffer_to_host _tn ~src:_ = failwith "CUDA missing: install cudajit"
 let get_buffer _tn _context = failwith "CUDA missing: install cudajit"

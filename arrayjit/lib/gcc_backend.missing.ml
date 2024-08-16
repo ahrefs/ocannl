@@ -15,13 +15,13 @@ let expected_merge_node Unimplemented_proc =
 
 let is_in_context _node = failwith "gcc backend missing: install the optional dependency gccjit"
 
-let to_buffer ?rt:_ _tn ~dst:_ ~src:_ =
+let to_buffer _tn ~dst:_ ~src:_ =
   failwith "gcc backend missing: install the optional dependency gccjit"
 
-let host_to_buffer ?rt:_ _src ~dst:_ =
+let host_to_buffer _src ~dst:_ =
   failwith "gcc backend missing: install the optional dependency gccjit"
 
-let buffer_to_host ?rt:_ _dst ~src:_ =
+let buffer_to_host _dst ~src:_ =
   failwith "gcc backend missing: install the optional dependency gccjit"
 
 let alloc_buffer ?old_buffer:_ ~size_in_bytes:_ () =
@@ -35,13 +35,13 @@ let compile_batch ~names:_ ~opt_ctx_arrays:_ _bindings _codes =
 let link_compiled ~merge_buffer:_ Unimplemented_ctx Unimplemented_proc =
   failwith "gcc backend missing: install the optional dependency gccjit"
 
-let from_host ?rt:_ Unimplemented_ctx _tn =
+let from_host Unimplemented_ctx _tn =
   failwith "gcc backend missing: install the optional dependency gccjit"
 
-let to_host ?rt:_ Unimplemented_ctx _tn =
+let to_host Unimplemented_ctx _tn =
   failwith "gcc backend missing: install the optional dependency gccjit"
 
-let device_to_device ?rt:_ _tn ~into_merge_buffer:_ ~dst:_ ~src:_ =
+let device_to_device _tn ~into_merge_buffer:_ ~dst:_ ~src:_ =
   failwith "gcc backend missing: install the optional dependency gccjit"
 
 let physical_merge_buffers = false

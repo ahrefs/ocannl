@@ -28,32 +28,21 @@ val link_batch :
 
 val unsafe_cleanup : unit -> unit
 
-val from_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> bool
+val from_host : context -> Tnode.t -> bool
 (** If the array is both hosted and in-context, copies from host to context. *)
 
-val to_host : ?rt:(module Minidebug_runtime.Debug_runtime) -> context -> Tnode.t -> bool
+val to_host : context -> Tnode.t -> bool
 (** If the array is both hosted and in-context, copies from context to host. *)
 
 val device_to_device :
-  ?rt:(module Minidebug_runtime.Debug_runtime) ->
-  Tnode.t ->
-  into_merge_buffer:merge_buffer_use ->
-  dst:context ->
-  src:context ->
-  bool
+  Tnode.t -> into_merge_buffer:merge_buffer_use -> dst:context -> src:context -> bool
 (** If the array is in both contexts, copies from [dst] to [src]. *)
 
 type buffer_ptr [@@deriving sexp_of]
 
-val to_buffer :
-  ?rt:(module Minidebug_runtime.Debug_runtime) -> Tnode.t -> dst:buffer_ptr -> src:context -> unit
-
-val host_to_buffer :
-  ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> dst:buffer_ptr -> unit
-
-val buffer_to_host :
-  ?rt:(module Minidebug_runtime.Debug_runtime) -> Ndarray.t -> src:buffer_ptr -> unit
-
+val to_buffer : Tnode.t -> dst:buffer_ptr -> src:context -> unit
+val host_to_buffer : Ndarray.t -> dst:buffer_ptr -> unit
+val buffer_to_host : Ndarray.t -> src:buffer_ptr -> unit
 val get_buffer : Tnode.t -> context -> buffer_ptr option
 
 type physical_device
