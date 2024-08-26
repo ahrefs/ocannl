@@ -65,7 +65,7 @@
   ppx_jane
   ppx_expect
   (ppx_minidebug
-   (>= 1.5.1)))
+   (>= 2.0.0)))
  (depopts
   (cudajit
    (>= 0.4.0))
@@ -98,7 +98,7 @@
   ppx_jane
   ppx_expect
   (ppx_minidebug
-   (>= 1.5.1))
+   (>= 2.0.0))
   (odoc :with-doc)
   (md2mld :with-doc))
  (tags

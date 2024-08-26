@@ -93,7 +93,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   let step_ref = IDX.find_exn routine.bindings step_n in
   let batch_ref = IDX.find_exn routine.bindings batch_n in
   step_ref := 0;
-  let%track_this_sexp _train_loop : unit =
+  let%track_sexp _train_loop : unit =
     (* Tn.print_accessible_headers (); *)
     for epoch = 0 to epochs - 1 do
       for batch = 0 to n_batches - 1 do
@@ -138,7 +138,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
     Backend.await device;
     Float.(mlp_result.@[0] >= 0.)
   in
-  let%track_this_sexp _plotting : unit =
+  let%track_sexp _plotting : unit =
     let plot_moons =
       let open PrintBox_utils in
       plot ~size:(120, 40) ~x_label:"ixes" ~y_label:"ygreks"

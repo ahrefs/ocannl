@@ -5,7 +5,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 
-[%%global_debug_log_level Nothing]
+[%%global_debug_log_level 0]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 type task =
@@ -18,9 +18,8 @@ type task =
 [@@deriving sexp_of]
 
 let%diagn_l_sexp run (Task task) =
-  [%log_entry
-    task.description;
-    task.work ()]
+  [%log_result task.description];
+  task.work ()
 
 type memory_type =
   | Constant  (** The tensor node does not change after initialization. *)
@@ -101,24 +100,23 @@ let debug_name tn =
   get_debug_name ?code_name ~id ~label ()
 
 let log_debug_info ~from_log_level tn =
-  if Utils.settings.with_debug_level >= from_log_level then
-    [%debug_sexp
-      [%log_entry
-        debug_name tn;
-        [%log
-          "id:",
-            (tn.id : int),
-            "label:",
-            (tn.label : string list),
-            "mem:",
-            (tn.memory_mode : (memory_mode * int) option),
-            "backends:",
-            (tn.backend_info : Sexp.t)];
-        if Lazy.is_val tn.array then
-          match tn.array with
-          | (lazy None) -> [%log "<not-on-host>"]
-          | (lazy (Some nd)) -> Nd.log_debug_info ~from_log_level nd
-        else [%log "<not-in-yet>"]]]
+  [%debug_sexp
+    [%logN_block
+      from_log_level (debug_name tn);
+      [%log
+        "id:",
+          (tn.id : int),
+          "label:",
+          (tn.label : string list),
+          "mem:",
+          (tn.memory_mode : (memory_mode * int) option),
+          "backends:",
+          (tn.backend_info : Sexp.t)];
+      if Lazy.is_val tn.array then
+        match tn.array with
+        | (lazy None) -> [%log "<not-on-host>"]
+        | (lazy (Some nd)) -> Nd.log_debug_info ~from_log_level nd
+      else [%log "<not-in-yet>"]]]
 
 let default_to_most_local tn provenance =
   match tn.memory_mode with
@@ -295,7 +293,7 @@ let header tn =
       | (lazy None) -> "<not-hosted>"
       | (lazy (Some nd)) ->
           let size = Int.to_string_hum @@ Nd.size_in_bytes nd in
-          if Utils.settings.with_debug_level > 0 then size ^ " @ " ^ Nd.c_ptr_to_string nd else size
+          if Utils.settings.log_level > 0 then size ^ " @ " ^ Nd.c_ptr_to_string nd else size
     else "<not-in-yet>"
   in
   let repeating_nograd_idents = Hashtbl.create ~size:1 (module String) in

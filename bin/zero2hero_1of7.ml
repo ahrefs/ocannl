@@ -11,7 +11,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
 
-[%%global_debug_log_level Nothing]
+[%%global_debug_log_level 0]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 let _suspended () =
@@ -94,7 +94,7 @@ let () =
   Stdio.print_endline ""
 
 let _suspended () =
-  (* Utils.settings.with_debug_level <- 2; *)
+  (* Utils.settings.log_level <- 2; *)
   Utils.settings.output_debug_files_in_build_directory <- true;
   (* Utils.settings.debug_log_from_routines <- true; *)
   Rand.init 0;
@@ -152,7 +152,7 @@ let _suspended () =
 
 let _suspended () =
   Rand.init 0;
-  Utils.settings.with_debug_level <- 2;
+  Utils.settings.log_level <- 2;
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in

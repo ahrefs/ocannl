@@ -12,7 +12,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
 
-[%%global_debug_log_level Nothing]
+[%%global_debug_log_level 0]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~backend_name
@@ -32,7 +32,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   CDSL.virtualize_settings.max_visits <- inlining_cutoff;
   Tensor.default_value_prec := value_prec;
   Tensor.default_grad_prec := grad_prec;
-  Utils.settings.with_debug_level <- 3;
+  Utils.settings.log_level <- 3;
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   Rand.init (* seed *) 0;

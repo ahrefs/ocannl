@@ -22,7 +22,7 @@ let _suspended () =
   Stdlib.Format.force_newline ()
 
 let _suspended () =
-  Utils.settings.with_debug_level <- 2;
+  Utils.settings.log_level <- 2;
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   let module Backend = (val Train.fresh_backend ~backend_name:"cuda" ()) in
@@ -43,7 +43,7 @@ let _suspended () =
   Backend.unsafe_cleanup ()
 
 let () =
-  Utils.settings.with_debug_level <- 2;
+  Utils.settings.log_level <- 2;
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   let module Backend = (val Train.fresh_backend ()) in

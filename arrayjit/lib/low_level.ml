@@ -9,7 +9,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 
-[%%global_debug_log_level Nothing]
+[%%global_debug_log_level 0]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 module Scope_id = struct
@@ -324,11 +324,10 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
           Array.iter idcs ~f:(function
             | Iterator s as _idx when not (Set.mem static_indices s) ->
                 if not @@ Set.mem env_dom s then
-                  if Utils.settings.with_debug_level > 1 then
-                    [%log
-                      "INFO: Inlining candidate has an escaping variable",
-                        (_idx : Indexing.axis_index),
-                        (top_llc : t)];
+                  [%log2
+                    "INFO: Inlining candidate has an escaping variable",
+                      (_idx : Indexing.axis_index),
+                      (top_llc : t)];
                 raise @@ Non_virtual 7
             | _ -> ());
         loop_float ~env_dom llv
@@ -345,11 +344,10 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
           Array.iter idcs ~f:(function
             | Iterator s when not (Set.mem static_indices s) ->
                 if not @@ Set.mem env_dom s then (
-                  if Utils.settings.with_debug_level > 1 then
-                    [%log
-                      "Inlining candidate has an escaping variable",
-                        (s : Indexing.symbol),
-                        (top_llc : t)];
+                  [%log2
+                    "Inlining candidate has an escaping variable",
+                      (s : Indexing.symbol),
+                      (top_llc : t)];
                   raise @@ Non_virtual 9)
             | _ -> ())
     | Local_scope { body; _ } -> loop_proc ~env_dom body
@@ -358,8 +356,8 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
     | Embed_index (Fixed_idx _) -> ()
     | Embed_index (Iterator s) ->
         if not @@ Set.mem env_dom s then (
-          if Utils.settings.with_debug_level > 1 && not (Set.mem static_indices s) then
-            [%log
+          if not (Set.mem static_indices s) then
+            [%log2
               "Inlining candidate has an escaping variable", (s : Indexing.symbol), (top_llc : t)];
           raise @@ Non_virtual 10)
     | Binop (_, llv1, llv2) ->

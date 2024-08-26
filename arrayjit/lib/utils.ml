@@ -26,14 +26,14 @@ let mref_add_missing mref key ~f =
   if Map.mem !mref key then () else mref := Map.add_exn !mref ~key ~data:(f ())
 
 type settings = {
+  mutable log_level : int;
   mutable debug_log_from_routines : bool;
   mutable debug_memory_locations : bool;
   mutable output_debug_files_in_build_directory : bool;
       (** Writes compilation related files in the [build_files] subdirectory of the run directory
           (additional files, or files that would otherwise be in temp directory). When both
-          [output_debug_files_in_build_directory = true] and [with_debug_level > 1], compilation
-          should also preserve debug and line information for runtime debugging. *)
-  mutable with_debug_level : int;
+          [output_debug_files_in_build_directory = true] and [log_level > 1], compilation should
+          also preserve debug and line information for runtime debugging. *)
   mutable fixed_state_for_init : int option;
   mutable print_decimals_precision : int;
       (** When rendering arrays etc., outputs this many decimal digits. *)
@@ -42,25 +42,24 @@ type settings = {
 
 let settings =
   {
+    log_level = 0;
     debug_log_from_routines = false;
     debug_memory_locations = false;
     output_debug_files_in_build_directory = false;
-    with_debug_level = 0;
     fixed_state_for_init = None;
     print_decimals_precision = 2;
   }
 
-let with_runtime_debug () =
-  settings.output_debug_files_in_build_directory && settings.with_debug_level > 1
+let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1
 
 let enable_runtime_debug () =
   settings.output_debug_files_in_build_directory <- true;
-  settings.with_debug_level <- max 2 settings.with_debug_level
+  settings.log_level <- max 2 settings.log_level
 
 let accessed_global_args = Hash_set.create (module String)
 
 let read_cmdline_or_env_var n =
-  let with_debug = settings.with_debug_level > 0 && not (Hash_set.mem accessed_global_args n) in
+  let with_debug = settings.log_level > 0 && not (Hash_set.mem accessed_global_args n) in
   let env_variants = [ "ocannl_" ^ n; "ocannl-" ^ n ] in
   let env_variants = List.concat_map env_variants ~f:(fun n -> [ n; String.uppercase n ]) in
   let cmd_variants = List.concat_map env_variants ~f:(fun n -> [ "-" ^ n; "--" ^ n; n ]) in
@@ -127,7 +126,7 @@ let config_file_args =
 (** Retrieves [arg_name] argument from the command line or from an environment variable, returns
     [default] if none found. *)
 let get_global_arg ~default ~arg_name:n =
-  let with_debug = settings.with_debug_level > 0 && not (Hash_set.mem accessed_global_args n) in
+  let with_debug = settings.log_level > 0 && not (Hash_set.mem accessed_global_args n) in
   if with_debug then
     Stdio.printf "Retrieving commandline, environment, or config file variable ocannl_%s\n%!" n;
   let result =
@@ -144,8 +143,7 @@ let get_global_arg ~default ~arg_name:n =
   result
 
 let () =
-  settings.with_debug_level <-
-    Int.of_string @@ get_global_arg ~arg_name:"with_debug_level" ~default:"0";
+  settings.log_level <- Int.of_string @@ get_global_arg ~arg_name:"log_level" ~default:"0";
   settings.debug_log_from_routines <-
     Bool.of_string @@ get_global_arg ~arg_name:"debug_log_from_routines" ~default:"false";
   settings.debug_memory_locations <-
@@ -230,22 +228,10 @@ let get_debug name =
   in
   let filename = diagn_log_file @@ if String.is_empty name then "debug" else "debug-" ^ name in
   let log_level =
-    match
-      String.lowercase @@ String.strip
-      @@ get_global_arg ~default:"nonempty_entries" ~arg_name:"log_level"
-    with
-    | "nothing" -> Minidebug_runtime.Nothing
-    | "prefixed_error" -> Prefixed [| "ERROR" |]
-    | "prefixed_warn_error" -> Prefixed [| "WARN"; "ERROR" |]
-    | "prefixed_info_warn_error" -> Prefixed [| "INFO"; "WARN"; "ERROR" |]
-    | "explicit_logs" -> Prefixed [||]
-    | "nonempty_entries" -> Nonempty_entries
-    | "everything" -> Everything
-    | s ->
-        invalid_arg
-        @@ "ocannl_log_level setting should be one of: nothing, prefixed_error, \
-            prefixed_warn_error, prefixed_info_warn_error, explicit_logs, nonempty_entries, \
-            everything; found: " ^ s
+    let s = String.strip @@ get_global_arg ~default:"1" ~arg_name:"log_level" in
+    match Int.of_string_opt s with
+    | Some ll -> ll
+    | None -> invalid_arg @@ "ocannl_log_level setting should be an integer; found: " ^ s
   in
   let toc_entry_minimal_depth =
     let arg = get_global_arg ~default:"" ~arg_name:"toc_entry_minimal_depth" in
@@ -277,7 +263,7 @@ let get_debug name =
   in
   if flushing then
     Minidebug_runtime.debug_flushing ~filename ~time_tagged ~elapsed_times ~print_entry_ids
-      ~verbose_entry_ids ~global_prefix:name ~for_append:false (* ~log_level *) ()
+      ~verbose_entry_ids ~global_prefix:name ~for_append:false ~log_level ()
   else
     Minidebug_runtime.forget_printbox
     @@ Minidebug_runtime.debug_file ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
@@ -294,11 +280,14 @@ let _get_local_debug_runtime =
     get_debug @@ if is_main_domain () then "" else "Domain-" ^ Int.to_string (self () :> int)
   in
   let debug_runtime_key = DLS.new_key get_runtime in
-  fun () -> DLS.get debug_runtime_key
+  fun () ->
+    let module Debug_runtime = (val DLS.get debug_runtime_key) in
+    Debug_runtime.log_level := settings.log_level;
+    (module Debug_runtime : Minidebug_runtime.Debug_runtime)
 
 module Debug_runtime = (val _get_local_debug_runtime ())
 
-[%%global_debug_log_level Nothing]
+[%%global_debug_log_level 0]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 (* [%%global_debug_interrupts { max_nesting_depth = 100; max_num_children = 1000 }] *)
@@ -403,44 +392,46 @@ let header_sep =
   let open Re in
   compile (seq [ str " "; opt any; str "="; str " " ])
 
-let%diagn_l_sexp log_trace_tree logs =
-  let rec loop = function
-    | [] -> []
-    | line :: more when String.is_empty line -> loop more
-    | "COMMENT: end" :: more -> more
-    | comment :: more when String.is_prefix comment ~prefix:"COMMENT: " ->
-        let more =
-          [%log_entry
-            String.chop_prefix_exn ~prefix:"COMMENT: " comment;
-            loop more]
-        in
-        loop more
-    | source :: trace :: more when String.is_prefix source ~prefix:"# " ->
-        (let source =
-           String.concat ~sep:"\n" @@ String.split ~on:'$'
-           @@ String.chop_prefix_exn ~prefix:"# " source
-         in
-         match split_with_seps header_sep trace with
-         | [] | [ "" ] -> [%log source]
-         | header1 :: assign1 :: header2 :: body ->
-             let header = String.concat [ header1; assign1; header2 ] in
-             let body = String.concat body in
-             let _message = Sexp.(List [ Atom header; Atom source; Atom body ]) in
-             [%log (_message : Sexp.t)]
-         | _ -> [%log source, trace]);
-        loop more
-    | _line :: more ->
-        [%log _line];
-        loop more
-  in
-  let rec loop_logs logs =
-    let output = loop logs in
-    if not (List.is_empty output) then
-      [%log_entry
-        "TRAILING LOGS:";
-        loop_logs output]
-  in
-  loop_logs logs
+let%diagn_l_sexp log_trace_tree _logs =
+  [%log_block
+    "trace tree";
+    let rec loop = function
+      | [] -> []
+      | line :: more when String.is_empty line -> loop more
+      | "COMMENT: end" :: more -> more
+      | comment :: more when String.is_prefix comment ~prefix:"COMMENT: " ->
+          let more =
+            [%log_block
+              String.chop_prefix_exn ~prefix:"COMMENT: " comment;
+              loop more]
+          in
+          loop more
+      | source :: trace :: more when String.is_prefix source ~prefix:"# " ->
+          (let source =
+             String.concat ~sep:"\n" @@ String.split ~on:'$'
+             @@ String.chop_prefix_exn ~prefix:"# " source
+           in
+           match split_with_seps header_sep trace with
+           | [] | [ "" ] -> [%log source]
+           | header1 :: assign1 :: header2 :: body ->
+               let header = String.concat [ header1; assign1; header2 ] in
+               let body = String.concat body in
+               let _message = Sexp.(List [ Atom header; Atom source; Atom body ]) in
+               [%log (_message : Sexp.t)]
+           | _ -> [%log source, trace]);
+          loop more
+      | _line :: more ->
+          [%log _line];
+          loop more
+    in
+    let rec loop_logs logs =
+      let output = loop logs in
+      if not (List.is_empty output) then
+        [%log_block
+          "TRAILING LOGS:";
+          loop_logs output]
+    in
+    loop_logs _logs]
 
 type 'a mutable_list = Empty | Cons of { hd : 'a; mutable tl : 'a mutable_list }
 [@@deriving equal, sexp, variants]
@@ -542,7 +533,7 @@ let waiter ~name () =
     try Unix.pipe ~cloexec:true () with e -> Exn.reraise e @@ "waiter " ^ name ^ ": Unix.pipe"
   in
   let await ~keep_waiting =
-    let%track_this_l_sexp rec wait () : bool =
+    let%track_l_sexp rec wait () : bool =
       if Atomic.compare_and_set is_released true false then (
         let n =
           try Unix.read pipe_inp (Bytes.create 1) 0 1
@@ -558,7 +549,7 @@ let waiter ~name () =
         wait ()
       else false
     in
-    let%track_this_l_sexp await () =
+    let%track_l_sexp await () =
       if not !@is_open then failwith @@ "await: waiter " ^ name ^ " already deleted";
       if Atomic.compare_and_set is_waiting false true then (
         let result = wait () in
@@ -568,7 +559,7 @@ let waiter ~name () =
     in
     await
   in
-  let%track_this_l_sexp release_if_waiting () : bool =
+  let%track_l_sexp release_if_waiting () : bool =
     if not !@is_open then failwith @@ "release_if_waiting: waiter " ^ name ^ " already deleted";
     let result =
       if !@is_waiting && Atomic.compare_and_set is_released false true then (
@@ -582,7 +573,7 @@ let waiter ~name () =
     in
     result
   in
-  let%track_this_l_sexp finalize () =
+  let%track_l_sexp finalize () =
     if Atomic.compare_and_set is_open true false then (
       Atomic.set is_waiting false;
       Unix.close pipe_inp;

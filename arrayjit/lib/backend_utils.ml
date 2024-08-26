@@ -4,7 +4,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 
-[%%global_debug_log_level Nothing]
+[%%global_debug_log_level 0]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 module Types = struct
@@ -346,7 +346,7 @@ struct
     (* FIXME: we should also close the file. *)
     if (not (List.is_empty log_file)) && not B.logs_to_stdout then
       fprintf ppf {|FILE* log_file = fopen(log_file_name, "w");@ |};
-    if Utils.settings.debug_log_from_routines && Utils.settings.with_debug_level > 1 then (
+    if Utils.settings.debug_log_from_routines && Utils.settings.log_level > 1 then (
       fprintf ppf "/* Debug initial parameter state. */@ ";
       List.iter
         ~f:(function

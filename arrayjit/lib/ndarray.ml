@@ -5,7 +5,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 
-[%%global_debug_log_level Nothing]
+[%%global_debug_log_level 0]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 module A = Bigarray.Genarray
@@ -376,13 +376,12 @@ let c_ptr_to_string nd =
 let create_array ~debug:_debug prec ~dims init_op =
   let f prec = as_array prec @@ create_bigarray prec ~dims init_op in
   let result = Ops.map_prec { f } prec in
-  if Utils.settings.with_debug_level > 1 then
-    [%debug_sexp
-      [%log_entry
-        "create_array";
-        [%log _debug, c_ptr_to_string result]]];
+  [%debug2_sexp
+    [%log_block
+      "create_array";
+      [%log _debug, c_ptr_to_string result]]];
   let%debug_sexp debug_finalizer _result = [%log "Deleting", _debug, c_ptr_to_string _result] in
-  if Utils.settings.with_debug_level > 1 then Stdlib.Gc.finalise debug_finalizer result;
+  if Utils.settings.log_level > 1 then Stdlib.Gc.finalise debug_finalizer result;
   result
 
 let empty_array prec =
@@ -401,10 +400,11 @@ let int_dims_to_string ?(with_axis_numbers = false) dims =
 
 (** Logs information about the array on the default ppx_minidebug runtime, if
     [from_log_level > Utlis.settings.with_log_level]. *)
-let log_debug_info ~from_log_level _nd =
-  if Utils.settings.with_debug_level >= from_log_level then
-    [%debug_sexp
-      [%log_entry
+let log_debug_info ~from_log_level:_level _nd =
+  [%debug_sexp
+    [%at_log_level
+      _level;
+      [%log_block
         "Ndarray " ^ Sexp.to_string_hum (sexp_of_t _nd);
         [%log
           "value-at-0:",
@@ -417,7 +417,7 @@ let log_debug_info ~from_log_level _nd =
             "has -inf:",
             (fold_as_float _nd ~init:false ~f:(fun has_neg_inf _ v ->
                  has_neg_inf || Float.(v = neg_infinity))
-              : bool)]]]
+              : bool)]]]]
 
 let concise_float ~prec v =
   Printf.sprintf "%.*e" prec v

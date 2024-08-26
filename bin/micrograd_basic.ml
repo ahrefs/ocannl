@@ -14,7 +14,7 @@ let%diagn_sexp () =
   let ctx = Backend.init device in
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
-  Utils.settings.with_debug_level <- 2;
+  Utils.settings.log_level <- 2;
   Rand.init 0;
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = c + c + 1 in

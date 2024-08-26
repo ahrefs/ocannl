@@ -12,7 +12,7 @@ module Debug_runtime = Utils.Debug_runtime
 let demo () =
   Rand.init 0;
   Utils.enable_runtime_debug ();
-  Utils.settings.with_debug_level <- 3;
+  Utils.settings.log_level <- 3;
   (* Utils.settings.debug_log_from_routines <- true; *)
   let hid_dim = 16 in
   let len = 300 in
@@ -62,7 +62,7 @@ let demo () =
   let step_ref = IDX.find_exn routine.bindings step_n in
   let batch_ref = IDX.find_exn routine.bindings batch_n in
   step_ref := 0;
-  let%track_this_sexp _train_loop : unit =
+  let%track_sexp _train_loop : unit =
     for epoch = 0 to epochs - 1 do
       for batch = 0 to n_batches - 1 do
         batch_ref := batch;
@@ -96,7 +96,7 @@ let demo () =
     Float.(mlp_result.@[0] >= 0.)
   in
 
-  let%track_this_sexp _plotting : unit =
+  let%track_sexp _plotting : unit =
     let plot_moons =
       let open PrintBox_utils in
       plot ~size:(120, 40) ~x_label:"ixes" ~y_label:"ygreks"

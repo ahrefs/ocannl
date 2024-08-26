@@ -6,7 +6,7 @@ open Backend_utils.Types
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 
-[%%global_debug_log_level Nothing]
+[%%global_debug_log_level 0]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 type buffer_ptr = Cudajit.deviceptr
@@ -196,8 +196,7 @@ let%diagn_l_sexp from_host (ctx : context) tn =
   match (tn, Map.find ctx.global_arrays tn) with
   | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
       set_ctx ctx.ctx;
-      if Utils.settings.with_debug_level > 0 then
-        [%log "copying", Tn.debug_name tn, "to", (dst : ctx_array), "from host"];
+      [%log "copying", Tn.debug_name tn, "to", (dst : ctx_array), "from host"];
       let f src = Cudajit.memcpy_H_to_D_async ~dst ~src ctx.device.stream in
       Ndarray.map { f } hosted;
       true
@@ -207,8 +206,7 @@ let%track_l_sexp to_host (ctx : context) (tn : Tn.t) =
   match (tn, Map.find ctx.global_arrays tn) with
   | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
       set_ctx ctx.ctx;
-      if Utils.settings.with_debug_level > 0 then
-        [%log "copying", Tn.debug_name tn, "at", (src : ctx_array), "to host"];
+      [%log "copying", Tn.debug_name tn, "at", (src : ctx_array), "to host"];
       let f dst = Cudajit.memcpy_D_to_H_async ~dst ~src ctx.device.stream in
       Ndarray.map { f } hosted;
       true
@@ -234,22 +232,20 @@ let%track_l_sexp rec device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : con
           | Some d_arr ->
               set_ctx dst.ctx;
               memcpy ~d_arr ~s_arr;
-              if Utils.settings.with_debug_level > 0 then
-                [%log
-                  "copied",
-                    Tn.debug_name tn,
-                    "from",
-                    src.label,
-                    "at",
-                    (s_arr : ctx_array),
-                    "to",
-                    (d_arr : ctx_array)];
+              [%log
+                "copied",
+                  Tn.debug_name tn,
+                  "from",
+                  src.label,
+                  "at",
+                  (s_arr : ctx_array),
+                  "to",
+                  (d_arr : ctx_array)];
               true)
       | Streaming ->
           if phys_equal dst.device.physical src.device.physical then (
             dst.device.merge_buffer <- Some (s_arr, tn);
-            if Utils.settings.with_debug_level > 0 then
-              [%log "using merge buffer for", Tn.debug_name tn, "from", src.label];
+            [%log "using merge buffer for", Tn.debug_name tn, "from", src.label];
             true)
           else
             (* TODO: support proper streaming, but it might be difficult. *)
@@ -260,8 +256,7 @@ let%track_l_sexp rec device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : con
           opt_alloc_merge_buffer ~size_in_bytes dst.device.physical;
           memcpy ~d_arr:dst.device.physical.copy_merge_buffer ~s_arr;
           dst.device.merge_buffer <- Some (dst.device.physical.copy_merge_buffer, tn);
-          if Utils.settings.with_debug_level > 0 then
-            [%log "copied into merge buffer", Tn.debug_name tn, "from", src.label];
+          [%log "copied into merge buffer", Tn.debug_name tn, "from", src.label];
           true)
 
 type code = {
@@ -291,7 +286,7 @@ let%diagn_sexp cuda_to_ptx ~name cu_src =
   [%log "compiling to PTX"];
   let module Cu = Cudajit in
   let with_debug =
-    Utils.settings.output_debug_files_in_build_directory || Utils.settings.with_debug_level > 0
+    Utils.settings.output_debug_files_in_build_directory || Utils.settings.log_level > 0
   in
   let options =
     "--use_fast_math" :: (if Utils.with_runtime_debug () then [ "--device-debug" ] else [])
@@ -391,12 +386,11 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~glo
     { prior_context with parent = Some prior_context; run_module = Some run_module; global_arrays }
   in
   Stdlib.Gc.finalise finalize context;
-  let%diagn_this_l_sexp work () : unit =
+  let%diagn_l_sexp work () : unit =
     let log_id = get_global_run_id () in
     let log_id_prefix = Int.to_string log_id ^ ": " in
-    if Utils.settings.with_debug_level > 0 then
-      [%log_result
-        "Launching", name, context.label, (log_id : int), (params : (string * param_source) list)];
+    [%log_result
+      "Launching", name, context.label, (log_id : int), (params : (string * param_source) list)];
     let module Cu = Cudajit in
     let args : Cu.kernel_param list =
       (* TODO: should we prohibit or warn about local-only tensors that are in
@@ -432,10 +426,10 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~glo
        Cu.memset_d8_async ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key.Low_level.tn)); *)
     [%log "launching the kernel"];
     (if Utils.settings.debug_log_from_routines then
-       Utils.add_log_processor ~prefix:log_id_prefix @@ fun output ->
-       [%log_entry
+       Utils.add_log_processor ~prefix:log_id_prefix @@ fun _output ->
+       [%log_block
          context.label;
-         Utils.log_trace_tree output]);
+         Utils.log_trace_tree _output]);
     (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE
        4096; *)
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.device.stream
@@ -452,8 +446,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~glo
 
 let%diagn_sexp alloc_if_needed ctx ~key ~data:node globals =
   if is_in_context node then (
-    if Utils.settings.with_debug_level > 0 then
-      [%log "mem_alloc", Tn.debug_name node.tn, (not @@ Map.mem globals key : bool)];
+    [%log "mem_alloc", Tn.debug_name node.tn, (not @@ Map.mem globals key : bool)];
     set_ctx ctx;
     let ptr () = Cudajit.mem_alloc ~size_in_bytes:(Tn.size_in_bytes node.tn) in
     Map.update globals key ~f:(fun old -> Option.value_or_thunk old ~default:ptr))

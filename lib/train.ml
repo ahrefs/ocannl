@@ -14,7 +14,7 @@ module Debug_runtime = Arrayjit.Utils.Debug_runtime
 
 let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
 
-[%%global_debug_log_level Nothing]
+[%%global_debug_log_level 0]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 module CDSL = struct
@@ -23,14 +23,14 @@ module CDSL = struct
   let virtualize_settings = Arrayjit.Low_level.virtualize_settings
 
   let enable_all_debugs ?(debug_logs = false) ?(hosted_only = true) () =
-    Utils.settings.with_debug_level <- max 1 @@ Utils.settings.with_debug_level;
+    Utils.settings.log_level <- max 1 @@ Utils.settings.log_level;
     Utils.settings.output_debug_files_in_build_directory <- true;
     if hosted_only then virtualize_settings.enable_device_only <- false;
     if debug_logs then Utils.settings.debug_log_from_routines <- true
 
   let disable_all_debugs ?(restore_defaults = false) () =
     Utils.settings.debug_log_from_routines <- false;
-    Utils.settings.with_debug_level <- 0;
+    Utils.settings.log_level <- 0;
     Utils.settings.output_debug_files_in_build_directory <- false;
     if restore_defaults then virtualize_settings.enable_device_only <- true
 end
@@ -497,7 +497,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
             f ~at_batch:!batch_ref ~at_step:!step_ref ~learning_rate:learning_rate.@[0] ~batch_loss
               ~epoch_loss:!epoch_loss))
   in
-  if Utils.settings.with_debug_level > 1 then (
+  if Utils.settings.log_level > 1 then (
     Stdlib.Printf.printf "\nTraining...\n%!";
     Tn.log_accessible_headers ());
   for epoch = 0 to epochs - 1 do

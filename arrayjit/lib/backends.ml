@@ -4,7 +4,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 
-[%%global_debug_log_level Nothing]
+[%%global_debug_log_level 0]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 module type No_device_backend = sig
@@ -275,7 +275,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         host_is_waiting = false;
       }
     in
-    let%diagn_this_l_sexp worker (() : unit) : unit =
+    let%diagn_l_sexp worker (() : unit) : unit =
       try
         while state.keep_spinning do
           (* Stdlib.Printf.printf "DEBUG: worker loop start is_idle=%b host_is_waiting=%b
@@ -329,7 +329,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     }
 
   let%diagn_sexp make_work device (Tnode.Task { description; _ } as task) =
-    let%diagn_this_l_sexp work () = schedule_task device task in
+    let%diagn_l_sexp work () = schedule_task device task in
     Tnode.Task
       {
         context_lifetime = task;
@@ -387,19 +387,17 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
-               let%diagn_this_l_sexp work () =
+               let%diagn_l_sexp work () =
                  Backend.host_to_buffer h_arr ~dst:c_arr;
-                 if Utils.settings.with_debug_level > 0 then
-                   [%diagn_sexp
-                     [%log_entry
-                       "from_host " ^ Tnode.debug_name tn;
-                       [%log "copied", Tnode.debug_name tn, "from host"];
-                       if Utils.settings.with_debug_level > 1 then
-                         [%log_printbox
-                           let indices =
-                             Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
-                           in
-                           Ndarray.render_array ~indices h_arr]]]
+                 [%diagn_sexp
+                   [%log_block
+                     "from_host " ^ Tnode.debug_name tn;
+                     [%log "copied", Tnode.debug_name tn, "from host"];
+                     [%log2_printbox
+                       let indices =
+                         Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
+                       in
+                       Ndarray.render_array ~indices h_arr]]]
                in
                schedule_task context.device
                  (Tnode.Task
@@ -413,7 +411,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                true
            | (lazy None) ->
                [%diagn_sexp
-                 [%log_entry
+                 [%log_block
                    "nothing to copy from host";
                    [%log "for", Tnode.debug_name tn]]];
                false)
@@ -423,19 +421,17 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
-               let%diagn_this_l_sexp work () =
+               let%diagn_l_sexp work () =
                  Backend.buffer_to_host h_arr ~src:c_arr;
-                 if Utils.settings.with_debug_level > 0 then
-                   [%diagn_sexp
-                     [%log_entry
-                       "to_host " ^ Tnode.debug_name tn;
-                       [%log "copied to host"];
-                       if Utils.settings.with_debug_level > 1 then
-                         [%log_printbox
-                           let indices =
-                             Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
-                           in
-                           Ndarray.render_array ~indices h_arr]]]
+                 [%diagn_sexp
+                   [%log_block
+                     "to_host " ^ Tnode.debug_name tn;
+                     [%log "copied to host"];
+                     [%log2_printbox
+                       let indices =
+                         Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
+                       in
+                       Ndarray.render_array ~indices h_arr]]]
                in
                schedule_task context.device
                  (Tnode.Task
@@ -449,7 +445,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                true
            | (lazy None) ->
                [%diagn_sexp
-                 [%log_entry
+                 [%log_block
                    "nothing to copy to host";
                    [%log "for", Tnode.debug_name tn]]];
                false)
@@ -630,7 +626,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
       state.keep_spinning && is_dev_queue_empty state && not (host_wait_for_idle.is_waiting ())
     in
     let wait_by_dev = state.dev_wait.await ~keep_waiting in
-    let%diagn_this_l_sexp worker (() : unit) : unit =
+    let%diagn_l_sexp worker (() : unit) : unit =
       try
         while state.keep_spinning do
           match state.dev_pos with
@@ -665,7 +661,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
     }
 
   let%diagn_sexp make_work device (Tnode.Task { context_lifetime; description; _ } as task) =
-    let%diagn_this_l_sexp work () = schedule_task device task in
+    let%diagn_l_sexp work () = schedule_task device task in
     Tnode.Task
       {
         context_lifetime;
@@ -723,18 +719,16 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
-               let%diagn_this_l_sexp work () =
+               let%diagn_l_sexp work () =
                  Backend.host_to_buffer h_arr ~dst:c_arr;
-                 if Utils.settings.with_debug_level > 0 then
-                   [%log_entry
-                     "from_host " ^ Tnode.debug_name tn;
-                     [%log "copied", Tnode.debug_name tn, "from host"];
-                     if Utils.settings.with_debug_level > 1 then
-                       [%log_printbox
-                         let indices =
-                           Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
-                         in
-                         Ndarray.render_array ~indices h_arr]]
+                 [%log_block
+                   "from_host " ^ Tnode.debug_name tn;
+                   [%log "copied", Tnode.debug_name tn, "from host"];
+                   [%log2_printbox
+                     let indices =
+                       Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
+                     in
+                     Ndarray.render_array ~indices h_arr]]
                in
                schedule_task context.device
                  (Tnode.Task
@@ -748,7 +742,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
                true
            | (lazy None) ->
                [%diagn_sexp
-                 [%log_entry
+                 [%log_block
                    "nothing to copy from host";
                    [%log "for", Tnode.debug_name tn]]];
                false)
@@ -758,18 +752,16 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
-               let%diagn_this_l_sexp work () =
+               let%diagn_l_sexp work () =
                  Backend.buffer_to_host h_arr ~src:c_arr;
-                 if Utils.settings.with_debug_level > 0 then
-                   [%log_entry
-                     "to_host " ^ Tnode.debug_name tn;
-                     [%log "copied to host"];
-                     if Utils.settings.with_debug_level > 1 then
-                       [%log_printbox
-                         let indices =
-                           Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
-                         in
-                         Ndarray.render_array ~indices h_arr]]
+                 [%log_block
+                   "to_host " ^ Tnode.debug_name tn;
+                   [%log "copied to host"];
+                   [%log2_printbox
+                     let indices =
+                       Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
+                     in
+                     Ndarray.render_array ~indices h_arr]]
                in
                schedule_task context.device
                  (Tnode.Task
@@ -783,7 +775,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
                true
            | (lazy None) ->
                [%diagn_sexp
-                 [%log_entry
+                 [%log_block
                    "nothing to copy to host";
                    [%log "for", Tnode.debug_name tn]]];
                false)
@@ -948,21 +940,19 @@ module Sync_backend (Backend : No_device_backend) (* : Backend *) = struct
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
                Backend.host_to_buffer h_arr ~dst:c_arr;
-               if Utils.settings.with_debug_level > 0 then
-                 [%diagn_l_sexp
-                   [%log_entry
-                     "from_host for " ^ Tnode.debug_name tn;
-                     [%log "copied", Tnode.debug_name tn, "from host to", get_name context.device];
-                     if Utils.settings.with_debug_level > 2 then
-                       [%log_printbox
-                         let indices =
-                           Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
-                         in
-                         Ndarray.render_array ~indices h_arr]]];
+               [%diagn_l_sexp
+                 [%log_block
+                   "from_host for " ^ Tnode.debug_name tn;
+                   [%log "copied", Tnode.debug_name tn, "from host to", get_name context.device];
+                   [%log3_printbox
+                     let indices =
+                       Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
+                     in
+                     Ndarray.render_array ~indices h_arr]]];
                true
            | (lazy None) ->
                [%diagn_sexp
-                 [%log_entry
+                 [%log_block
                    "nothing to copy from host for " ^ Tnode.debug_name tn;
                    [%log "to", get_name context.device]]];
                false)
@@ -973,21 +963,19 @@ module Sync_backend (Backend : No_device_backend) (* : Backend *) = struct
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
                Backend.buffer_to_host h_arr ~src:c_arr;
-               if Utils.settings.with_debug_level > 0 then
-                 [%diagn_l_sexp
-                   [%log_entry
-                     "to_host for " ^ Tnode.debug_name tn;
-                     [%log "copied to host from", get_name context.device];
-                     if Utils.settings.with_debug_level > 1 then
-                       [%log_printbox
-                         let indices =
-                           Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
-                         in
-                         Ndarray.render_array ~indices h_arr]]];
+               [%diagn_l_sexp
+                 [%log_block
+                   "to_host for " ^ Tnode.debug_name tn;
+                   [%log "copied to host from", get_name context.device];
+                   [%log2_printbox
+                     let indices =
+                       Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
+                     in
+                     Ndarray.render_array ~indices h_arr]]];
                true
            | (lazy None) ->
                [%diagn_sexp
-                 [%log_entry
+                 [%log_block
                    "nothing to copy to host for " ^ Tnode.debug_name tn;
                    [%log "from", get_name context.device]]];
                false)

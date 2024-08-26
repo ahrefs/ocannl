@@ -13,7 +13,7 @@ type projections = Arrayjit.Indexing.projections
 
 let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
 
-[%%global_debug_log_level Nothing]
+[%%global_debug_log_level 0]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 type diff = { grad : (Tn.t[@sexp.opaque]); zero_grads : Asgns.t; backprop : Asgns.t }
@@ -515,21 +515,20 @@ let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_shape =
   |> PrintBox_utils.reformat_dag depth
 
 let log_debug_info ~from_log_level t =
-  if Arrayjit.Utils.settings.with_debug_level >= from_log_level then
-    [%debug_sexp
-      let log_child { subtensor; embedded = _embedded } =
-        [%log_entry
-          (if _embedded then "Embedded " else "Non-embedded ") ^ Tn.debug_name subtensor.value;
-          Tn.log_debug_info ~from_log_level subtensor.value]
-      in
-      [%log_entry
-        "Tensor " ^ Tn.dims_to_string t.value;
-        Tn.log_debug_info ~from_log_level t.value;
-        Option.iter t.diff ~f:(fun diff ->
-            [%log_entry
-              "Gradient";
-              Tn.log_debug_info ~from_log_level diff.grad]);
-        List.iter ~f:log_child t.children]]
+  let%diagn_sexp log_child { subtensor = _subtensor; embedded = _embedded } =
+    [%log_block
+      (if _embedded then "Embedded " else "Non-embedded ") ^ Tn.debug_name _subtensor.value;
+      Tn.log_debug_info ~from_log_level _subtensor.value]
+  in
+  [%debug_sexp
+    [%logN_block
+      from_log_level ("Tensor " ^ Tn.dims_to_string t.value);
+      Tn.log_debug_info ~from_log_level t.value;
+      Option.iter t.diff ~f:(fun diff ->
+          [%log_block
+            "Gradient";
+            Tn.log_debug_info ~from_log_level diff.grad]);
+      List.iter ~f:log_child t.children]]
 
 let print ~with_grad ~with_code ?(force = false) ?(with_low_level = false)
     (style : array_print_style) t =
