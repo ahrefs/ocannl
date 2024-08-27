@@ -44,8 +44,6 @@ and t =
   | Fetch of { array : Tn.t; fetch_op : fetch_op; dims : int array Lazy.t }
 [@@deriving sexp_of]
 
-let is_noop = function Noop -> true | _ -> false
-
 let get_name_exn asgns =
   let punct_or_sp = Str.regexp "[-@*/:.;, ]" in
   let punct_and_sp = Str.regexp {|[-@*/:.;,]\( |$\)|} in
@@ -249,6 +247,9 @@ let flatten c =
     | (Accum_binop _ | Accum_unop _ | Fetch _) as c -> [ c ]
   in
   loop c
+
+let is_noop c =
+  List.for_all ~f:(function Noop | Block_comment (_, Noop) -> true | _ -> false) @@ flatten c
 
 let get_ident_within_code ?no_dots c =
   let ident_style = Tn.get_style ~arg_name:"cd_ident_style" ?no_dots () in
