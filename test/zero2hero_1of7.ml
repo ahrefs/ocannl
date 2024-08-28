@@ -26,19 +26,19 @@ let%expect_test "Graph drawing recompile" =
                                               #16 grad_+_f_nd <waiting>
                                               <not-in-yet>
                                        #13 - <Virtual 152>                                    │#2 5. <Virtual 40>
-                                       <void>                                                 │<void>
+                                       <not-in-yet>                                           │<not-in-yet>
                                        #14 grad_- <waiting>                                   │
                                        <not-in-yet>                                           │
               #11 *. <Virtual 152>            │             #4 *. <Virtual 152>               │
-              <void>                          │             <void>                            │
+              <not-in-yet>                    │             <not-in-yet>                      │
               #12 grad_*. <waiting>           │             #5 grad_*. <waiting>              │
               <not-in-yet>                    │             <not-in-yet>                      │
     #10 3. <Virtual 40>│#7 **. <Virtual 152>  │#3 4. <Virtual 40>│#0 x                        │
-    <void>             │<void>                │<void>            │ 5.00e+0                    │
+    <not-in-yet>       │<not-in-yet>          │<not-in-yet>      │ 5.00e+0                    │
                        │#8 grad_**. <waiting> │                  │#1 grad_x <Never_virtual 26>│
                        │<not-in-yet>          │                  │<not-in-yet>                │
                        │[0]│#6 2. <Virtual 40>│                  │                            │
-                       │   │<void>            │                  │                            │
+                       │   │<not-in-yet>      │                  │                            │
     |}];
   let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.every_non_literal_on_host f;
@@ -53,7 +53,7 @@ let%expect_test "Graph drawing recompile" =
                                              #33 grad_+_f
                                               1.00e+0
                                     #30 -                                      │#19 5. <Virtual 40>
-                                     5.50e+1                                   │<void>
+                                     5.50e+1                                   │<not-in-yet>
                                     #31 grad_-                                 │
                                      1.00e+0                                   │
                     #28 *.                      │         #21 *.               │
@@ -61,11 +61,11 @@ let%expect_test "Graph drawing recompile" =
                     #29 grad_*.                 │         #22 grad_*.          │
                      1.00e+0                    │          -1.00e+0            │
     #27 3. <Virtual 40>│      #24 **.           │#20 4. <Virtual 40>│#17 x     │
-    <void>             │       2.50e+1          │<void>             │ 5.00e+0  │
+    <not-in-yet>       │       2.50e+1          │<not-in-yet>       │ 5.00e+0  │
                        │      #25 grad_**.      │                   │#18 grad_x│
                        │       3.00e+0          │                   │ 2.60e+1  │
                        │[17]│#23 2. <Virtual 40>│                   │          │
-                       │    │<void>             │                   │          │
+                       │    │<not-in-yet>       │                   │          │
     |}];
   let xs = Array.init 10 ~f:Float.(fun i -> of_int i - 5.) in
   let ys =
@@ -144,13 +144,13 @@ let%expect_test "Graph drawing fetch" =
                                                    #54 +_f
                                                     6.00e+1
                                          #53 -                                          │#46 5. <Virtual 40>
-                                          5.50e+1                                       │<void>
+                                          5.50e+1                                       │<not-in-yet>
                      #52 *.                     │               #48 *.                  │
                       7.50e+1                   │                2.00e+1                │
     #51 3. <Virtual 40>│       #50 **.          │#47 4. <Virtual 40>│#45 5. <Virtual 40>│
-    <void>             │        2.50e+1         │<void>             │<void>             │
+    <not-in-yet>       │        2.50e+1         │<not-in-yet>       │<not-in-yet>       │
                        │[45]│#49 2. <Virtual 40>│                   │                   │
-                       │    │<void>             │                   │                   │
+                       │    │<not-in-yet>       │                   │                   │
     |}];
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
@@ -402,15 +402,15 @@ let%expect_test "Simple gradients virtual" =
                                             #123 *._l
                                              -8.00e+0
                                             #124 grad_*._l <Virtual 40>
-                                            <void>
+                                            <not-in-yet>
                                #119 +_d <Local 33>                                  │#121 f
-                               <void>                                               │ -2.00e+0
+                               <not-in-yet>                                         │ -2.00e+0
                                #120 grad_+_d <Virtual 40>                           │#122 grad_f <On_device 33>
-                               <void>                                               │<void>
+                               <not-in-yet>                                         │<void>
                  #115 *._e <Virtual 152>                 │#117 c                    │
-                 <void>                                  │ 1.00e+1                  │
+                 <not-in-yet>                            │ 1.00e+1                  │
                  #116 grad_*._e <Virtual 40>             │#118 grad_c <On_device 33>│
-                 <void>                                  │<void>                    │
+                 <not-in-yet>                            │<void>                    │
     #111 a                    │#113 b                    │                          │
      2.00e+0                  │ -3.00e+0                 │                          │
     #112 grad_a <On_device 33>│#114 grad_b <On_device 33>│                          │
@@ -428,15 +428,15 @@ let%expect_test "Simple gradients virtual" =
                                             #123 *._l
                                              -8.00e+0
                                             #124 grad_*._l <Virtual 40>
-                                            <void>
+                                            <not-in-yet>
                                #119 +_d <Local 33>                                  │#121 f
-                               <void>                                               │ -2.40e+0
+                               <not-in-yet>                                         │ -2.40e+0
                                #120 grad_+_d <Virtual 40>                           │#122 grad_f <On_device 33>
-                               <void>                                               │<void>
+                               <not-in-yet>                                         │<void>
                  #115 *._e <Virtual 152>                 │#117 c                    │
-                 <void>                                  │ 1.02e+1                  │
+                 <not-in-yet>                            │ 1.02e+1                  │
                  #116 grad_*._e <Virtual 40>             │#118 grad_c <On_device 33>│
-                 <void>                                  │<void>                    │
+                 <not-in-yet>                            │<void>                    │
     #111 a                    │#113 b                    │                          │
      1.40e+0                  │ -2.60e+0                 │                          │
     #112 grad_a <On_device 33>│#114 grad_b <On_device 33>│                          │
@@ -451,15 +451,15 @@ let%expect_test "Simple gradients virtual" =
                                             #123 *._l
                                              -1.57e+1
                                             #124 grad_*._l <Virtual 40>
-                                            <void>
+                                            <not-in-yet>
                                #119 +_d <Local 33>                                  │#121 f
-                               <void>                                               │ -2.40e+0
+                               <not-in-yet>                                         │ -2.40e+0
                                #120 grad_+_d <Virtual 40>                           │#122 grad_f <On_device 33>
-                               <void>                                               │<void>
+                               <not-in-yet>                                         │<void>
                  #115 *._e <Virtual 152>                 │#117 c                    │
-                 <void>                                  │ 1.02e+1                  │
+                 <not-in-yet>                            │ 1.02e+1                  │
                  #116 grad_*._e <Virtual 40>             │#118 grad_c <On_device 33>│
-                 <void>                                  │<void>                    │
+                 <not-in-yet>                            │<void>                    │
     #111 a                    │#113 b                    │                          │
      1.40e+0                  │ -2.60e+0                 │                          │
     #112 grad_a <On_device 33>│#114 grad_b <On_device 33>│                          │
@@ -513,13 +513,13 @@ let%expect_test "2D neuron virtual" =
                          #166 +_v
                           7.00e-1
                          #167 grad_+_v <Virtual 40>
-                         <void>
+                         <not-in-yet>
               #164 * <Local 33>                  │#158 b
-              <void>                             │ 6.70e+0
+              <not-in-yet>                       │ 6.70e+0
               #165 grad_* <Virtual 40>           │#159 grad_b <Local 33>
-              <void>                             │<void>
+              <not-in-yet>                       │<not-in-yet>
     #160 w                │#162 x                │
      -3.00e+0  1.00e+0    │ 2.00e+0  0.00e+0     │
     #161 grad_w <Local 33>│#163 grad_x <Local 33>│
-    <void>                │<void>                │
+    <not-in-yet>          │<not-in-yet>          │
     |}]

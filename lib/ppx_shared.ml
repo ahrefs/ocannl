@@ -73,3 +73,45 @@ let let_opt ~loc vbs expr =
 
 let no_vbs = Map.empty (module String)
 let reduce_vbss = List.reduce_exn ~f:(Map.merge_skewed ~combine:(fun ~key:_ _v1 v2 -> v2))
+
+let expr_expander_with_punning translate ~loc ~path:_ payload =
+  match payload with
+  | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
+      (* We are at the %op annotation level: do not tranlsate the body. *)
+      let vbss, bindings =
+        List.unzip
+        @@ List.map bindings ~f:(fun vb ->
+               let vbs, v = translate ?ident_label:(Some vb.pvb_pat) vb.pvb_expr in
+               (vbs, { vb with pvb_expr = v }))
+      in
+      let expr = { payload with pexp_desc = Pexp_let (recflag, bindings, body) } in
+      let_opt ~loc (reduce_vbss vbss) expr
+  | expr ->
+      let vbs, expr = translate ?ident_label:None expr in
+      let_opt ~loc vbs expr
+
+let flatten_str ~loc ~path:_ items =
+  match items with
+  | [ x ] -> x
+  | _ ->
+      Ast_helper.Str.include_
+        { pincl_mod = Ast_helper.Mod.structure items; pincl_loc = loc; pincl_attributes = [] }
+
+let translate_str translate ({ pstr_desc; pstr_loc = loc; _ } as str) =
+  match pstr_desc with
+  | Pstr_eval (expr, attrs) ->
+      let vbs, expr = translate ?ident_label:None expr in
+      let expr = let_opt ~loc vbs expr in
+      { str with pstr_desc = Pstr_eval (expr, attrs) }
+  | Pstr_value (recf, bindings) ->
+      let f vb =
+        let loc = vb.pvb_loc in
+        let vbs, v = translate ?ident_label:(Some vb.pvb_pat) vb.pvb_expr in
+        let v = let_opt ~loc vbs v in
+        { vb with pvb_expr = v }
+      in
+      { str with pstr_desc = Pstr_value (recf, List.map bindings ~f) }
+  | _ -> str
+
+let str_expander_with_punning translate ~loc ~path (payload : structure_item list) =
+  flatten_str ~loc ~path @@ List.map payload ~f:(translate_str translate)

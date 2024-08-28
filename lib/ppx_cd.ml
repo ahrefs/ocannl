@@ -33,6 +33,7 @@ type expr_type =
   | Unknown
   | Merge_value of expression
   | Merge_grad of expression
+  | No_grad_tensor_intro of { name : string; name_expr : expression }
 
 let is_unknown = function Unknown -> true | _ -> false
 
@@ -119,29 +120,49 @@ let rec array_of_code c =
     | Seq (_, subexpr) | Block_comment (_, subexpr) -> [%e array_of_code [%expr subexpr]]
     | Noop -> Location.error_extensionf ~loc "ppx_ocannl %%cd: Noop code does not refer to any data"]
 
+type result = {
+  vbs : value_binding Map.M(String).t;
+  typ : expr_type;
+  slot : projections_slot;
+  expr : expression;
+}
+
 type binding_setup = { var : pattern; lazy_bind_to : expression; fwd_code_or_noop : expression }
 
+type array_setup = {
+  slot : projections_slot;
+  filler_typ : expr_type;
+  binding : binding_setup option;
+  array_opt : expression;
+  tensor : expression option;
+}
+
 let with_forward_args setups body =
+  let bindings_list = List.filter_map ~f:(fun setup -> setup.binding) setups in
   let loc = body.pexp_loc in
   let bindings =
-    List.map setups ~f:(fun { var; lazy_bind_to; _ } ->
+    List.map bindings_list ~f:(fun { var; lazy_bind_to; _ } ->
         Ast_helper.Vb.mk ~loc var [%expr Lazy.force [%e lazy_bind_to]])
   in
   let forward_args =
-    List.map setups ~f:(fun { fwd_code_or_noop; _ } -> fwd_code_or_noop)
+    List.map bindings_list ~f:(fun { fwd_code_or_noop; _ } -> fwd_code_or_noop)
     |> List.reduce ~f:(fun code fwd -> [%expr Arrayjit.Assignments.Seq ([%e code], [%e fwd])])
   in
-  ( Code,
-    Nonslot,
-    match forward_args with
-    | None -> body
-    | Some fwd ->
-        [%expr
-          (* FIXME: we do not want to force the computation unnecessarily, but we want the bindings? *)
-          (*if Arrayjit.Assignments.is_noop [%e body] then Arrayjit.Assignments.Noop else*)
-          [%e
-            Ast_helper.Exp.let_ ~loc Nonrecursive bindings
-              [%expr Arrayjit.Assignments.Seq ([%e fwd], [%e body])]]] )
+  {
+    vbs = no_vbs;
+    typ = Code;
+    slot = Nonslot;
+    expr =
+      (match forward_args with
+      | None -> body
+      | Some fwd ->
+          [%expr
+            (* FIXME: we do not want to force the computation unnecessarily, but we want the bindings? *)
+            (*if Arrayjit.Assignments.is_noop [%e body] then Arrayjit.Assignments.Noop else*)
+            [%e
+              Ast_helper.Exp.let_ ~loc Nonrecursive bindings
+                [%expr Arrayjit.Assignments.Seq ([%e fwd], [%e body])]]]);
+  }
 
 let project_p_slot debug loc slot =
   match slot with
@@ -173,15 +194,8 @@ let project_p_dims debug loc slot =
            "ppx_ocannl %%cd: insufficient slot filler information at %s %s" debug
            "(incorporate one of: v, v1, v2, g, g1, g2, lhs, rhs, rhs1, rhs2)"
 
-type array_setup = {
-  slot : projections_slot;
-  filler_typ : expr_type;
-  binding : binding_setup option;
-  array_opt : expression;
-  tensor : expression option;
-}
-
-let setup_array ~is_lhs filler_pat (filler_typ, slot, filler) =
+let setup_array ~is_lhs filler_pat { typ = filler_typ; slot; expr = filler; vbs } =
+  assert (Map.is_empty vbs);
   let loc = filler.pexp_loc in
   let opt_buffer tn =
     if is_lhs then [%expr Some [%e tn]] else [%expr Some (Arrayjit.Assignments.Node [%e tn])]
@@ -191,7 +205,7 @@ let setup_array ~is_lhs filler_pat (filler_typ, slot, filler) =
     else [%expr Option.map [%e opt_tn] ~f:(fun tn -> Arrayjit.Assignments.Node tn)]
   in
   match filler_typ with
-  | Tensor | Unknown ->
+  | Tensor | Unknown | No_grad_tensor_intro _ ->
       let t = pat2expr filler_pat in
       let fwd_code_or_noop =
         [%expr
@@ -268,147 +282,207 @@ let args_for ~loc = function
         [%expr false],
         [%expr false] )
 
-let rec translate ?ident_label ~proj_in_scope (expr : expression) :
-    expr_type * projections_slot * expression =
+let rec translate ?ident_label ~proj_in_scope (expr : expression) : result =
   let loc = expr.pexp_loc in
   match expr with
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
-      ( Tensor,
-        Undet,
-        [%expr NTDSL.number ~label:[%e opt_pat2string_list ~loc ident_label] [%e expr]] )
+      {
+        vbs = no_vbs;
+        typ = Tensor;
+        slot = Undet;
+        expr = [%expr NTDSL.number ~label:[%e opt_pat2string_list ~loc ident_label] [%e expr]];
+      }
   | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
-      ( Tensor,
-        Undet,
-        [%expr
-          NTDSL.number ~label:[%e opt_pat2string_list ~loc ident_label] (Float.of_int [%e expr])] )
+      {
+        vbs = no_vbs;
+        typ = Tensor;
+        slot = Undet;
+        expr =
+          [%expr
+            NTDSL.number ~label:[%e opt_pat2string_list ~loc ident_label] (Float.of_int [%e expr])];
+      }
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
         [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
       let axis =
         Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
       in
-      ( Tensor,
-        Undet,
-        [%expr
-          NTDSL.number ~label:[%e opt_pat2string_list ~loc ident_label] ~axis_label:[%e axis] [%e f]]
-      )
+      {
+        vbs = no_vbs;
+        typ = Tensor;
+        slot = Undet;
+        expr =
+          [%expr
+            NTDSL.number
+              ~label:[%e opt_pat2string_list ~loc ident_label]
+              ~axis_label:[%e axis] [%e f]];
+      }
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
         [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
       let axis =
         Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
       in
-      ( Tensor,
-        Undet,
-        [%expr
-          NTDSL.number
-            ~label:[%e opt_pat2string_list ~loc ident_label]
-            ~axis_label:[%e axis]
-            (Float.of_int [%e i])] )
+      {
+        vbs = no_vbs;
+        typ = Tensor;
+        slot = Undet;
+        expr =
+          [%expr
+            NTDSL.number
+              ~label:[%e opt_pat2string_list ~loc ident_label]
+              ~axis_label:[%e axis]
+              (Float.of_int [%e i])];
+      }
   | { pexp_desc = Pexp_array _; _ }
   | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
-      (Tensor, Undet, ndarray_op ~ident_label expr)
-  | { pexp_desc = Pexp_ident { txt = Lident ("v" | "lhs"); _ }; _ } -> (Array, LHS, expr)
-  | { pexp_desc = Pexp_ident { txt = Lident "g"; _ }; _ } -> (Array, LHS, expr)
-  | { pexp_desc = Pexp_ident { txt = Lident "rhs1"; _ }; _ } -> (Array, RHS1, expr)
-  | { pexp_desc = Pexp_ident { txt = Lident "t1"; _ }; _ } -> (Tensor, RHS1, expr)
-  | { pexp_desc = Pexp_ident { txt = Lident "v1"; _ }; _ } -> (Array, RHS1, [%expr t1.Tensor.value])
+      { vbs = no_vbs; typ = Tensor; slot = Undet; expr = ndarray_op ~ident_label expr }
+  | { pexp_desc = Pexp_ident { txt = Lident ("v" | "lhs"); _ }; _ } ->
+      { vbs = no_vbs; typ = Array; slot = LHS; expr }
+  | { pexp_desc = Pexp_ident { txt = Lident "g"; _ }; _ } ->
+      { vbs = no_vbs; typ = Array; slot = LHS; expr }
+  | { pexp_desc = Pexp_ident { txt = Lident "rhs1"; _ }; _ } ->
+      { vbs = no_vbs; typ = Array; slot = RHS1; expr }
+  | { pexp_desc = Pexp_ident { txt = Lident "t1"; _ }; _ } ->
+      { vbs = no_vbs; typ = Tensor; slot = RHS1; expr }
+  | { pexp_desc = Pexp_ident { txt = Lident "v1"; _ }; _ } ->
+      { vbs = no_vbs; typ = Array; slot = RHS1; expr = [%expr t1.Tensor.value] }
   | { pexp_desc = Pexp_ident { txt = Lident "g1"; _ }; _ } ->
-      ( Grad_of_tensor [%expr t1],
-        RHS1,
-        [%expr Option.map t1.Tensor.diff ~f:(fun d -> d.Tensor.grad)] )
-  | { pexp_desc = Pexp_ident { txt = Lident "rhs2"; _ }; _ } -> (Array, RHS2, expr)
-  | { pexp_desc = Pexp_ident { txt = Lident "t2"; _ }; _ } -> (Tensor, RHS2, expr)
-  | { pexp_desc = Pexp_ident { txt = Lident "v2"; _ }; _ } -> (Array, RHS2, [%expr t2.Tensor.value])
+      {
+        vbs = no_vbs;
+        typ = Grad_of_tensor [%expr t1];
+        slot = RHS1;
+        expr = [%expr Option.map t1.Tensor.diff ~f:(fun d -> d.Tensor.grad)];
+      }
+  | { pexp_desc = Pexp_ident { txt = Lident "rhs2"; _ }; _ } ->
+      { vbs = no_vbs; typ = Array; slot = RHS2; expr }
+  | { pexp_desc = Pexp_ident { txt = Lident "t2"; _ }; _ } ->
+      { vbs = no_vbs; typ = Tensor; slot = RHS2; expr }
+  | { pexp_desc = Pexp_ident { txt = Lident "v2"; _ }; _ } ->
+      { vbs = no_vbs; typ = Array; slot = RHS2; expr = [%expr t2.Tensor.value] }
   | { pexp_desc = Pexp_ident { txt = Lident "g2"; _ }; _ } ->
-      ( Grad_of_tensor [%expr t2],
-        RHS2,
-        [%expr Option.map t2.Tensor.diff ~f:(fun d -> d.Tensor.grad)] )
+      {
+        vbs = no_vbs;
+        typ = Grad_of_tensor [%expr t2];
+        slot = RHS2;
+        expr = [%expr Option.map t2.Tensor.diff ~f:(fun d -> d.Tensor.grad)];
+      }
   | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_operator op_ident ->
-      (Tensor, Undet, expr)
+      { vbs = no_vbs; typ = Tensor; slot = Undet; expr }
   | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
       (* FIXME: `**.` should take a tensor and require that it's a literal. *)
       (* We need to hardcode these two patterns to prevent the numbers from being converted to tensors. *)
-      let _typ1, slot1, e1 = translate ~proj_in_scope expr1 in
-      ( Tensor,
-        slot1,
-        [%expr
-          NTDSL.O.( **. )
-            ~label:[%e opt_pat2string_list ~loc ident_label]
-            [%e e1]
-            (Float.of_int [%e i])] )
+      let res1 = translate ~proj_in_scope expr1 in
+      {
+        res1 with
+        typ = Tensor;
+        expr =
+          [%expr
+            NTDSL.O.( **. )
+              ~label:[%e opt_pat2string_list ~loc ident_label]
+              [%e res1.expr]
+              (Float.of_int [%e i])];
+      }
   | [%expr [%e? expr1] **. [%e? expr2]] ->
-      let _typ1, slot1, e1 = translate ~proj_in_scope expr1 in
-      ( Tensor,
-        slot1,
-        [%expr NTDSL.O.( **. ) ~label:[%e opt_pat2string_list ~loc ident_label] [%e e1] [%e expr2]]
-      )
+      let res1 = translate ~proj_in_scope expr1 in
+      {
+        res1 with
+        typ = Tensor;
+        expr =
+          [%expr
+            NTDSL.O.( **. )
+              ~label:[%e opt_pat2string_list ~loc ident_label]
+              [%e res1.expr] [%e expr2]];
+      }
   | [%expr
       [%e? expr1]
       *+ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec] [%e? expr2]]
     when String.contains spec_str '>' ->
-      let _typ1, slot1, expr1 = translate ~proj_in_scope expr1 in
-      let _typ2, slot2, expr2 = translate ~proj_in_scope expr2 in
+      let res1 = translate ~proj_in_scope expr1 in
+      let res2 = translate ~proj_in_scope expr2 in
       let slot =
         Option.value ~default:Undet
-        @@ List.find ~f:(function Undet -> false | _ -> true) [ slot1; slot2 ]
+        @@ List.find ~f:(function Undet -> false | _ -> true) [ res1.slot; res2.slot ]
       in
-      ( Tensor,
-        slot,
-        [%expr
-          NTDSL.einsum
-            ~label:[%e opt_pat2string_list ~loc ident_label]
-            [%e spec] [%e expr1] [%e expr2]] )
+      {
+        vbs = reduce_vbss [ res1.vbs; res2.vbs ];
+        typ = Tensor;
+        slot;
+        expr =
+          [%expr
+            NTDSL.einsum
+              ~label:[%e opt_pat2string_list ~loc ident_label]
+              [%e spec] [%e res1.expr] [%e res2.expr]];
+      }
   | [%expr
       [%e? expr1] ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]]
     when String.contains spec_str '>' ->
-      let _typ1, slot1, expr1 = translate ~proj_in_scope expr1 in
-      ( Tensor,
-        slot1,
-        [%expr NTDSL.einsum1 ~label:[%e opt_pat2string_list ~loc ident_label] [%e spec] [%e expr1]]
-      )
+      let res1 = translate ~proj_in_scope expr1 in
+      {
+        res1 with
+        typ = Tensor;
+        expr =
+          [%expr
+            NTDSL.einsum1 ~label:[%e opt_pat2string_list ~loc ident_label] [%e spec] [%e res1.expr]];
+      }
   | [%expr [%e? expr1].grad] -> (
-      let typ1, slot1, expr1 = translate ?ident_label ~proj_in_scope expr1 in
-      match typ1 with
-      | Unknown | Tensor ->
-          ( Grad_of_tensor expr1,
-            slot1,
-            [%expr Option.map [%e expr1].Tensor.diff ~f:(fun d -> d.Tensor.grad)] )
+      let res1 = translate ?ident_label ~proj_in_scope expr1 in
+      match res1.typ with
+      | Unknown | Tensor | No_grad_tensor_intro _ ->
+          {
+            res1 with
+            typ = Grad_of_tensor expr1;
+            expr = [%expr Option.map [%e res1.expr].Tensor.diff ~f:(fun d -> d.Tensor.grad)];
+          }
       | Merge_value _ ->
-          ( Merge_grad expr1,
-            slot1,
-            Ast_builder.Default.pexp_extension ~loc
-            @@ Location.error_extensionf ~loc
-                 "ppx_ocannl %%cd: write .grad.merge instead of .merge.grad" )
+          {
+            res1 with
+            typ = Merge_grad expr1;
+            expr =
+              Ast_builder.Default.pexp_extension ~loc
+              @@ Location.error_extensionf ~loc
+                   "ppx_ocannl %%cd: write .grad.merge instead of .merge.grad";
+          }
       | Code | Array | Value_of_tensor _ | Grad_of_tensor _ | Merge_grad _ ->
-          ( Array,
-            slot1,
-            Ast_builder.Default.pexp_extension ~loc
-            @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: only tensors have a gradient" ))
+          {
+            res1 with
+            typ = Array;
+            expr =
+              Ast_builder.Default.pexp_extension ~loc
+              @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: only tensors have a gradient";
+          })
   | [%expr [%e? expr1].value] -> (
-      let ((typ1, slot1, expr1) as result) = translate ?ident_label ~proj_in_scope expr1 in
+      let res1 = translate ?ident_label ~proj_in_scope expr1 in
       (* TODO: maybe this is too permissive? E.g. [t1.grad.value] is accepted. *)
-      match typ1 with
-      | Unknown | Tensor -> (Value_of_tensor expr1, slot1, [%expr [%e expr1].Tensor.value])
-      | Code -> (Array, slot1, array_of_code expr1)
-      | Array | Value_of_tensor _ | Grad_of_tensor _ | Merge_value _ | Merge_grad _ -> result)
+      match res1.typ with
+      | Unknown | Tensor | No_grad_tensor_intro _ ->
+          { res1 with typ = Value_of_tensor res1.expr; expr = [%expr [%e res1.expr].Tensor.value] }
+      | Code -> { vbs = no_vbs; typ = Array; slot = res1.slot; expr = array_of_code res1.expr }
+      | Array | Value_of_tensor _ | Grad_of_tensor _ | Merge_value _ | Merge_grad _ -> res1)
   | [%expr [%e? expr1].merge] -> (
-      let typ1, slot1, expr1 = translate ?ident_label ~proj_in_scope expr1 in
-      match typ1 with
-      | Unknown | Tensor -> (Merge_value expr1, slot1, [%expr [%e expr1].Tensor.value])
-      | Value_of_tensor t -> (Merge_value t, slot1, [%expr [%e expr1].Tensor.value])
+      let res1 = translate ?ident_label ~proj_in_scope expr1 in
+      match res1.typ with
+      | Unknown | Tensor | No_grad_tensor_intro _ ->
+          { res1 with typ = Merge_value res1.expr; expr = [%expr [%e res1.expr].Tensor.value] }
+      | Value_of_tensor t ->
+          { res1 with typ = Merge_value t; expr = [%expr [%e res1.expr].Tensor.value] }
       | Array | Code ->
-          ( Array,
-            slot1,
-            Ast_builder.Default.pexp_extension ~loc
-            @@ Location.error_extensionf ~loc
-                 "ppx_ocannl %%cd: only tensor nodes (e.g. `.value` or `.grad`) can be merged" )
-      | Grad_of_tensor t -> (Merge_grad t, slot1, expr1)
+          {
+            res1 with
+            typ = Array;
+            expr =
+              Ast_builder.Default.pexp_extension ~loc
+              @@ Location.error_extensionf ~loc
+                   "ppx_ocannl %%cd: only tensor nodes (e.g. `.value` or `.grad`) can be merged";
+          }
+      | Grad_of_tensor t -> { res1 with vbs = no_vbs; typ = Merge_grad t }
       | Merge_value _ | Merge_grad _ ->
-          ( typ1,
-            slot1,
-            Ast_builder.Default.pexp_extension ~loc
-            @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: repeated .merge not allowed" ))
+          {
+            res1 with
+            expr =
+              Ast_builder.Default.pexp_extension ~loc
+              @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: repeated .merge not allowed";
+          })
   | [%expr
       [%e? accu_op] [%e? lhs] ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections]))]
     ->
@@ -443,10 +517,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) :
                      projections = [%e projections];
                    })]
       in
-      let setups =
-        List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r1; setup_r2 ]
-      in
-      with_forward_args setups body
+      with_forward_args [ setup_l; setup_r1; setup_r2 ] body
   | [%expr [%e? accu_op] [%e? lhs] (([%e? un_op] [%e? rhs]) ~projections:[%e? projections])]
   | [%expr [%e? accu_op] [%e? lhs] ([%e? un_op] ([%e? rhs] ~projections:[%e? projections]))] ->
       (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
@@ -478,8 +549,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) :
                      projections = [%e projections];
                    })]
       in
-      let setups = List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r ] in
-      with_forward_args setups body
+      with_forward_args [ setup_l; setup_r ] body
   | [%expr [%e? accu_op] [%e? lhs] ([%e? rhs] ~projections:[%e? projections])] ->
       let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l =
@@ -504,8 +574,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) :
                      projections = [%e projections];
                    })]
       in
-      let setups = List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r ] in
-      with_forward_args setups body
+      with_forward_args [ setup_l; setup_r ] body
   | [%expr
       [%e? accu_op]
         [%e? lhs]
@@ -543,10 +612,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) :
             ~rhs1_is_grad:[%e rhs1_is_grad] ~rhs1_is_merge:[%e rhs1_is_merge] ~t2:[%e t2_expr]
             ~rhs2_is_grad:[%e rhs2_is_grad] ~rhs2_is_merge:[%e rhs2_is_merge] ~logic:[%e logic]]
       in
-      let setups =
-        List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r1; setup_r2 ]
-      in
-      with_forward_args setups body
+      with_forward_args [ setup_l; setup_r1; setup_r2 ] body
   | [%expr
       [%e? accu_op]
         [%e? lhs]
@@ -584,8 +650,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) :
             ~t:[%e t_expr] ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e un_op] ~t1:[%e t1_expr]
             ~rhs_is_grad:[%e rhs_is_grad] ~rhs_is_merge:[%e rhs_is_merge] ~logic:[%e logic]]
       in
-      let setups = List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r ] in
-      with_forward_args setups body
+      with_forward_args [ setup_l; setup_r ] body
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; loc = accu_loc }; _ } as accu_op]
         [%e? lhs]
@@ -652,10 +717,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) :
                      projections = [%e projections];
                    })]
       in
-      let setups =
-        List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r1; setup_r2 ]
-      in
-      with_forward_args setups body
+      with_forward_args [ setup_l; setup_r1; setup_r2 ] body
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; loc = accu_loc }; _ } as accu_op]
         [%e? lhs]
@@ -714,8 +776,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) :
                      projections = [%e projections];
                    })]
       in
-      let setups = List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r1 ] in
-      with_forward_args setups body
+      with_forward_args [ setup_l; setup_r1 ] body
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; loc = op_loc }; _ } as accu_op]
         [%e? lhs]
@@ -769,8 +830,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) :
                      projections = [%e projections];
                    })]
       in
-      let setups = List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r1 ] in
-      with_forward_args setups body
+      with_forward_args [ setup_l; setup_r1 ] body
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
         [%e? lhs]
@@ -800,10 +860,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) :
             ~rhs1_is_grad:[%e rhs1_is_grad] ~rhs1_is_merge:[%e rhs1_is_merge] ~t2:[%e t2_expr]
             ~rhs2_is_grad:[%e rhs2_is_grad] ~rhs2_is_merge:[%e rhs2_is_merge] ~logic:[%e logic]]
       in
-      let setups =
-        List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r1; setup_r2 ]
-      in
-      with_forward_args setups body
+      with_forward_args [ setup_l; setup_r1; setup_r2 ] body
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
         [%e? lhs]
@@ -826,8 +883,7 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) :
             ~t:[%e t_expr] ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e un_op] ~t1:[%e t1_expr]
             ~rhs_is_grad:[%e rhs_is_grad] ~rhs_is_merge:[%e rhs_is_merge] ~logic:[%e logic]]
       in
-      let setups = List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r ] in
-      with_forward_args setups body
+      with_forward_args [ setup_l; setup_r ] body
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } as accu_op]
         [%e? lhs]
@@ -849,26 +905,35 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) :
             ~t:[%e t_expr] ~lhs_is_grad:[%e lhs_is_grad] ~op:Arrayjit.Ops.Identity ~t1:[%e t1_expr]
             ~rhs_is_grad:[%e rhs_is_grad] ~rhs_is_merge:[%e rhs_is_merge] ~logic:Shape.Pointwise_un]
       in
-      let setups = List.filter_map ~f:(fun setup -> setup.binding) [ setup_l; setup_r ] in
-      with_forward_args setups body
+      with_forward_args [ setup_l; setup_r ] body
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3]] ->
-      let typ1, slot1, expr1 = translate ?ident_label ~proj_in_scope expr1 in
-      let _typ2, slot2, expr2 = translate ~proj_in_scope expr2 in
-      let _typ3, slot3, expr3 = translate ~proj_in_scope expr3 in
+      let res1 = translate ?ident_label ~proj_in_scope expr1 in
+      let res2 = translate ~proj_in_scope expr2 in
+      let res3 = translate ~proj_in_scope expr3 in
       let slot =
         Option.value ~default:Undet
-        @@ List.find ~f:(function Undet -> false | _ -> true) [ slot1; slot2; slot3 ]
+        @@ List.find ~f:(function Undet -> false | _ -> true) [ res1.slot; res2.slot; res3.slot ]
       in
-      (typ1, slot, [%expr [%e expr1] [%e expr2] [%e expr3]])
+      {
+        vbs = reduce_vbss [ res1.vbs; res2.vbs; res3.vbs ];
+        typ = res1.typ;
+        slot;
+        expr = [%expr [%e res1.expr] [%e res2.expr] [%e res3.expr]];
+      }
   | [%expr [%e? expr1] [%e? expr2]] ->
-      let typ1, slot1, expr1 = translate ?ident_label ~proj_in_scope expr1 in
-      let _typ2, slot2, expr2 = translate ~proj_in_scope expr2 in
+      let res1 = translate ?ident_label ~proj_in_scope expr1 in
+      let res2 = translate ~proj_in_scope expr2 in
       let slot =
         Option.value ~default:Undet
-        @@ List.find ~f:(function Undet -> false | _ -> true) [ slot1; slot2 ]
+        @@ List.find ~f:(function Undet -> false | _ -> true) [ res1.slot; res2.slot ]
       in
-      (typ1, slot, [%expr [%e expr1] [%e expr2]])
-  | { pexp_desc = Pexp_fun ((arg_label : arg_label), arg, opt_val, body); _ } as expr ->
+      {
+        vbs = reduce_vbss [ res1.vbs; res2.vbs ];
+        typ = res1.typ;
+        slot;
+        expr = [%expr [%e res1.expr] [%e res2.expr]];
+      }
+  | { pexp_desc = Pexp_fun ((arg_label : arg_label), arg, opt_val, expr1); _ } as expr ->
       let proj_in_scope =
         proj_in_scope
         ||
@@ -876,35 +941,47 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) :
         | (Labelled s | Optional s) when String.equal s "projections" -> true
         | _ -> false
       in
-      let typ, slot, body = translate ?ident_label ~proj_in_scope body in
-      (typ, slot, { expr with pexp_desc = Pexp_fun (arg_label, arg, opt_val, body) })
+      let res1 = translate ?ident_label ~proj_in_scope expr1 in
+      { res1 with expr = { expr with pexp_desc = Pexp_fun (arg_label, arg, opt_val, res1.expr) } }
   | [%expr
       while [%e? _test_expr] do
         [%e? _body]
       done] ->
-      ( Code,
-        Nonslot,
-        Ast_builder.Default.pexp_extension ~loc
-        @@ Location.error_extensionf ~loc
-             "ppx_ocannl %%cd: while: low-level code embeddings not supported yet" )
+      {
+        vbs = no_vbs;
+        typ = Code;
+        slot = Nonslot;
+        expr =
+          Ast_builder.Default.pexp_extension ~loc
+          @@ Location.error_extensionf ~loc
+               "ppx_ocannl %%cd: while: low-level code embeddings not supported yet";
+      }
   | [%expr
       for [%p? _pat] = [%e? _init] to [%e? _final] do
         [%e? _body_expr]
       done] ->
-      ( Code,
-        Nonslot,
-        Ast_builder.Default.pexp_extension ~loc
-        @@ Location.error_extensionf ~loc
-             "ppx_ocannl %%cd: for-to: low-level code embeddings not supported yet" )
+      {
+        vbs = no_vbs;
+        typ = Code;
+        slot = Nonslot;
+        expr =
+          Ast_builder.Default.pexp_extension ~loc
+          @@ Location.error_extensionf ~loc
+               "ppx_ocannl %%cd: for-to: low-level code embeddings not supported yet";
+      }
   | [%expr
       for [%p? _pat] = [%e? _init] downto [%e? _final] do
         [%e? _body_expr]
       done] ->
-      ( Code,
-        Nonslot,
-        Ast_builder.Default.pexp_extension ~loc
-        @@ Location.error_extensionf ~loc
-             "ppx_ocannl %%cd: for-downto: low-level code embeddings not supported yet" )
+      {
+        vbs = no_vbs;
+        typ = Code;
+        slot = Nonslot;
+        expr =
+          Ast_builder.Default.pexp_extension ~loc
+          @@ Location.error_extensionf ~loc
+               "ppx_ocannl %%cd: for-downto: low-level code embeddings not supported yet";
+      }
   | [%expr
       ~~[%e? { pexp_desc = Pexp_apply (expr, exprs); pexp_loc; _ }];
       [%e? expr2]] ->
@@ -916,127 +993,110 @@ let rec translate ?ident_label ~proj_in_scope (expr : expression) :
              | [%expr [%e? t].grad] -> [%expr Arrayjit.Tnode.debug_name [%e t].value ^ ".grad"]
              | t -> [%expr Arrayjit.Tnode.debug_name [%e t].value])
       in
-      let typ, slot, body = translate ?ident_label ~proj_in_scope expr2 in
-      ( typ,
-        slot,
-        [%expr
-          Arrayjit.Assignments.Block_comment
-            ( String.concat_array ~sep:" " [%e Ast_helper.Exp.array ~loc:pexp_loc elements],
-              [%e body] )] )
+      let res2 = translate ?ident_label ~proj_in_scope expr2 in
+      {
+        res2 with
+        expr =
+          [%expr
+            Arrayjit.Assignments.Block_comment
+              ( String.concat_array ~sep:" " [%e Ast_helper.Exp.array ~loc:pexp_loc elements],
+                [%e res2.expr] )];
+      }
   | [%expr
       [%e? expr1];
       [%e? expr2]] ->
-      let _typ1, _slot1, expr1 = translate ~proj_in_scope expr1 in
-      let _typ2, _slot2, expr2 = translate ?ident_label ~proj_in_scope expr2 in
-      (Code, Nonslot, [%expr Arrayjit.Assignments.Seq ([%e expr1], [%e expr2])])
+      let res1 = translate ~proj_in_scope expr1 in
+      let res2 = translate ?ident_label ~proj_in_scope expr2 in
+      {
+        vbs = reduce_vbss [ res1.vbs; res2.vbs ];
+        typ = Code;
+        slot = Nonslot;
+        expr = [%expr Arrayjit.Assignments.Seq ([%e res1.expr], [%e res2.expr])];
+      }
   | [%expr if [%e? expr1] then [%e? expr2] else [%e? expr3]] ->
-      let typ2, slot2, expr2 = translate ?ident_label ~proj_in_scope expr2 in
-      let typ3, slot3, expr3 = translate ?ident_label ~proj_in_scope expr3 in
-      let typ = if is_unknown typ2 then typ3 else typ2 in
+      let res2 = translate ?ident_label ~proj_in_scope expr2 in
+      let res3 = translate ?ident_label ~proj_in_scope expr3 in
+      let typ = if is_unknown res2.typ then res3.typ else res2.typ in
       let slot =
         Option.value ~default:Undet
-        @@ List.find ~f:(function Undet -> false | _ -> true) [ slot2; slot3 ]
+        @@ List.find ~f:(function Undet -> false | _ -> true) [ res2.slot; res3.slot ]
       in
-      (typ, slot, [%expr if [%e expr1] then [%e expr2] else [%e expr3]])
+      {
+        vbs = reduce_vbss [ res2.vbs; res3.vbs ];
+        typ;
+        slot;
+        expr = [%expr if [%e expr1] then [%e res2.expr] else [%e res3.expr]];
+      }
   | [%expr if [%e? expr1] then [%e? expr2]] ->
-      let _typ2, _slot2, expr2 = translate ?ident_label ~proj_in_scope expr2 in
-      (Code, Nonslot, [%expr if [%e expr1] then [%e expr2] else Arrayjit.Assignments.Noop])
+      let res2 = translate ?ident_label ~proj_in_scope expr2 in
+      {
+        vbs = res2.vbs;
+        typ = Code;
+        slot = Nonslot;
+        expr = [%expr if [%e expr1] then [%e res2.expr] else Arrayjit.Assignments.Noop];
+      }
   | { pexp_desc = Pexp_match (expr1, cases); _ } ->
-      let typs, slots, cases =
-        List.unzip3
+      let fields, cases =
+        List.unzip
         @@ List.map cases ~f:(fun ({ pc_rhs; _ } as c) ->
-               let typ, slot, pc_rhs = translate ?ident_label ~proj_in_scope pc_rhs in
-               (typ, slot, { c with pc_rhs }))
+               let res = translate ?ident_label ~proj_in_scope pc_rhs in
+               ((res.vbs, res.typ, res.slot), { c with pc_rhs = res.expr }))
       in
+      let vbss, typs, slots = List.unzip3 fields in
       let typ = Option.value ~default:Unknown @@ List.find typs ~f:(Fn.non is_unknown) in
       let slot =
         Option.value ~default:Undet @@ List.find ~f:(function Undet -> false | _ -> true) slots
       in
-      (typ, slot, { expr with pexp_desc = Pexp_match (expr1, cases) })
+      {
+        vbs = reduce_vbss vbss;
+        typ;
+        slot;
+        expr = { expr with pexp_desc = Pexp_match (expr1, cases) };
+      }
   | { pexp_desc = Pexp_let (_recflag, _bindings, _body); _ } ->
       (* TODO(80): to properly support local bindings, we need to collect the type environment. *)
-      ( Unknown,
-        Undet,
-        Ast_builder.Default.pexp_extension ~loc
-        @@ Location.error_extensionf ~loc
-             "ppx_ocannl %%cd: let-in: local let-bindings not implemented yet" )
+      {
+        vbs = no_vbs;
+        typ = Unknown;
+        slot = Undet;
+        expr =
+          Ast_builder.Default.pexp_extension ~loc
+          @@ Location.error_extensionf ~loc
+               "ppx_ocannl %%cd: let-in: local let-bindings not implemented yet";
+      }
   (* let bindings = List.map bindings ~f:(fun binding -> {binding with pvb_expr=translate
      binding.pvb_expr}) in {expr with pexp_desc=Pexp_let (recflag, bindings, translate body)} *)
-  | { pexp_desc = Pexp_open (decl, body); _ } ->
-      let typ, slot, body = translate ?ident_label ~proj_in_scope body in
-      (typ, slot, { expr with pexp_desc = Pexp_open (decl, body) })
-  | { pexp_desc = Pexp_letmodule (name, module_expr, body); _ } ->
-      let typ, slot, body = translate ?ident_label ~proj_in_scope body in
-      (typ, slot, { expr with pexp_desc = Pexp_letmodule (name, module_expr, body) })
+  | { pexp_desc = Pexp_open (decl, expr1); _ } ->
+      let res1 = translate ?ident_label ~proj_in_scope expr1 in
+      { res1 with expr = { expr with pexp_desc = Pexp_open (decl, res1.expr) } }
+  | { pexp_desc = Pexp_letmodule (name, module_expr, expr1); _ } ->
+      let res1 = translate ?ident_label ~proj_in_scope expr1 in
+      { res1 with expr = { expr with pexp_desc = Pexp_letmodule (name, module_expr, res1.expr) } }
   | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_operator op_ident ->
-      (Unknown, Undet, [%expr [%e expr] ~label:[%e opt_pat2string_list ~loc ident_label]])
-  | _ -> (Unknown, Undet, expr)
-
-let translate ?ident_label (expr : expression) : expression =
-  let _, _, v = translate ?ident_label ~proj_in_scope:false expr in
-  match ident_label with
-  | Some [%pat? _] ->
-      let loc = v.pexp_loc in
-      [%expr Tensor.with_unchanged_roots ~f:(fun () -> [%e v])]
-  | _ -> v
-
-let expr_expander ~loc ~path:_ payload =
-  match payload with
-  | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
-      (* We are at the %cd annotation level: do not tranlsate the body. *)
-      let bindings =
-        List.map bindings ~f:(fun vb ->
-            let v = translate ~ident_label:vb.pvb_pat vb.pvb_expr in
-            {
-              vb with
-              pvb_expr =
-                [%expr
-                  let open! NTDSL.O in
-                  [%e v]];
-            })
-      in
-      { payload with pexp_desc = Pexp_let (recflag, bindings, body) }
-  | expr ->
-      let expr = translate expr in
-      [%expr
-        let open! NTDSL.O in
-        [%e expr]]
-
-let flatten_str ~loc ~path:_ items =
-  match items with
-  | [ x ] -> x
-  | _ ->
-      Ast_helper.Str.include_
-        { pincl_mod = Ast_helper.Mod.structure items; pincl_loc = loc; pincl_attributes = [] }
-
-let translate_str ({ pstr_desc; _ } as str) =
-  match pstr_desc with
-  | Pstr_eval (expr, attrs) ->
-      let expr = translate expr in
-      let loc = expr.pexp_loc in
       {
-        str with
-        pstr_desc =
-          Pstr_eval
-            ( [%expr
-                let open! NTDSL.O in
-                [%e expr]],
-              attrs );
+        vbs = no_vbs;
+        typ = Unknown;
+        slot = Undet;
+        expr = [%expr [%e expr] ~label:[%e opt_pat2string_list ~loc ident_label]];
       }
-  | Pstr_value (recf, bindings) ->
-      let f vb =
-        let loc = vb.pvb_loc in
-        let v = translate ~ident_label:vb.pvb_pat vb.pvb_expr in
-        {
-          vb with
-          pvb_expr =
-            [%expr
-              let open! NTDSL.O in
-              [%e v]];
-        }
-      in
-      { str with pstr_desc = Pstr_value (recf, List.map bindings ~f) }
-  | _ -> str
+  | _ ->
+     { vbs = no_vbs; typ = Unknown; slot = Undet; expr }
 
-let str_expander ~loc ~path (payload : structure_item list) =
-  flatten_str ~loc ~path @@ List.map payload ~f:translate_str
+let translate ?ident_label expr =
+  let res = translate ?ident_label ~proj_in_scope:false expr in
+  let expr = res.expr in
+  let loc = res.expr.pexp_loc in
+  ( res.vbs,
+    match ident_label with
+    | Some [%pat? _] ->
+        [%expr
+          Tensor.with_unchanged_roots ~f:(fun () ->
+              let open! NTDSL.O in
+              [%e expr])]
+    | _ ->
+        [%expr
+          let open! NTDSL.O in
+          [%e expr]] )
+
+let expr_expander ~loc ~path = expr_expander_with_punning translate ~loc ~path
+let str_expander ~loc ~path = str_expander_with_punning translate ~loc ~path

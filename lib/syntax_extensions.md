@@ -1,12 +1,16 @@
 # Syntax extensions `%cd` and `%op`
 
+## Notes true for bogth `%cd` and `%op`
+
+When an extension is over a wildcard (ignore result) binding: `let%cd _ = ...` and `let%op _ = ...`, the generated code is wrapped in `Tensor.with_unchanged_roots`, to prevent it from upsetting rootness checks. The use-case for writing `%op` and `%cd` notations with ignored result is to generate additional shape inference constraints.
+
 ## Syntax extension `%cd`, standing for "code", to express assignments: `Assignments.t`
 
 ### Implementation details
 
-The translate function returns a triple. The first component, `filler_typ`, is an `expr_type`. The second component, `slot`, is a `projection_slot` designator. The third component, `filler` is an expression. Its meaning depends on `filler_typ`: for `Code`, this is an `Assignments.t` expression. For `Unknown` and `Tensor`, this is a `Tensor.t` expression. For `Array` and `Merge_value`, this is a non-optional `Tnode.t` expression, and for `Grad_of_tensor` and `Merge_grad`, it's an optional `Tnode.t` expresssion.
+The translate function returns an record. The `expr` field (filler expression) meaning depends on `typ` (filler type): for `Code`, this is an `Assignments.t` expression. For `Unknown` and `Tensor`, this is a `Tensor.t` expression. For `Array` and `Merge_value`, this is a non-optional `Tnode.t` expression, and for `Grad_of_tensor` and `Merge_grad`, it's an optional `Tnode.t` expresssion.
 
-Next, `setup_array ~is_lhs:true` converts the filler into a `Tnode.t option` expression, and `setup_array ~is_lhs:false` converts the filler into an `Assignments.buffer option` expression according to `filler_typ`.
+Next, `setup_array ~is_lhs:true` converts the filler expression into a `Tnode.t option` expression, and `setup_array ~is_lhs:false` converts the filler into an `Assignments.buffer option` expression according to `filler_typ`.
 
 ```ocaml
 type expr_type =

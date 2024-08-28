@@ -238,60 +238,20 @@ let rec translate ?ident_label expr =
       (no_vbs, [%expr [%e expr] ~label:[%e opt_pat2string_list ~loc ident_label]])
   | expr -> (no_vbs, expr)
 
-let expr_expander ~loc ~path:_ payload =
-  match payload with
-  | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
-      (* We are at the %op annotation level: do not tranlsate the body. *)
-      let vbss, bindings =
-        List.unzip
-        @@ List.map bindings ~f:(fun vb ->
-               let vbs, v = translate ~ident_label:vb.pvb_pat vb.pvb_expr in
-               ( vbs,
-                 {
-                   vb with
-                   pvb_expr =
-                     [%expr
-                       let open! TDSL.O in
-                       [%e v]];
-                 } ))
-      in
-      let expr = { payload with pexp_desc = Pexp_let (recflag, bindings, body) } in
-      let_opt ~loc (reduce_vbss vbss) expr
-  | expr ->
-      let vbs, expr = translate expr in
-      let_opt ~loc vbs expr
-
-let flatten_str ~loc ~path:_ items =
-  match items with
-  | [ x ] -> x
-  | _ ->
-      Ast_helper.Str.include_
-        { pincl_mod = Ast_helper.Mod.structure items; pincl_loc = loc; pincl_attributes = [] }
-
-let translate_str ({ pstr_desc; pstr_loc = loc; _ } as str) =
-  match pstr_desc with
-  | Pstr_eval (expr, attrs) ->
-      let vbs, expr = translate expr in
-      let expr = let_opt ~loc vbs expr in
-      { str with pstr_desc = Pstr_eval (expr, attrs) }
-  | Pstr_value (recf, bindings) ->
-      let f vb =
-        let loc = vb.pvb_loc in
-        let ident_label = vb.pvb_pat in
-        let vbs, v = translate ~ident_label vb.pvb_expr in
-        let is_unused = match ident_label with [%pat? _] -> true | _ -> false in
-        let v = let_opt ~loc vbs v in
-        {
-          vb with
-          pvb_expr =
-            [%expr
+let translate ?ident_label expr =
+  let vbs, expr = translate ?ident_label expr in
+  let loc = expr.pexp_loc in
+  ( vbs,
+    match ident_label with
+    | Some [%pat? _] ->
+        [%expr
+          Tensor.with_unchanged_roots ~f:(fun () ->
               let open! TDSL.O in
-              [%e
-                if is_unused then [%expr Tensor.with_unchanged_roots ~f:(fun () -> [%e v])] else v]];
-        }
-      in
-      { str with pstr_desc = Pstr_value (recf, List.map bindings ~f) }
-  | _ -> str
+              [%e expr])]
+    | _ ->
+        [%expr
+          let open! TDSL.O in
+          [%e expr]] )
 
-let str_expander ~loc ~path (payload : structure_item list) =
-  flatten_str ~loc ~path @@ List.map payload ~f:translate_str
+let expr_expander ~loc ~path = expr_expander_with_punning translate ~loc ~path
+let str_expander ~loc ~path = str_expander_with_punning translate ~loc ~path
