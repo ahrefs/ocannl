@@ -30,6 +30,29 @@ let pat2string pat =
   in
   string_expr ~loc:pat.ppat_loc @@ loop pat
 
+let expr2string_or_empty expr =
+  let rec lident = function
+    | Lident s -> s
+    | Ldot (li, s) -> lident li ^ "." ^ s
+    | Lapply (_, i) -> lident i
+  in
+  let rec loop expr =
+    match expr.pexp_desc with
+    | Pexp_open (_, expr) | Pexp_lazy expr | Pexp_constraint (expr, _) -> loop expr
+    | Pexp_ident ident -> lident ident.txt
+    | Pexp_variant (s, _)
+    | Pexp_constant (Pconst_string (s, _, _))
+    | Pexp_constant (Pconst_integer (s, _))
+    | Pexp_constant (Pconst_float (s, _)) ->
+        s
+    | Pexp_constant (Pconst_char c) -> Char.to_string c
+    | Pexp_tuple exprs -> "(" ^ String.concat ~sep:", " (List.map ~f:loop exprs) ^ ")"
+    | Pexp_array exprs -> "[|" ^ String.concat ~sep:", " (List.map ~f:loop exprs) ^ "|]"
+    | Pexp_construct (c, _) -> lident c.txt
+    | _ -> ""
+  in
+  string_expr ~loc:expr.pexp_loc @@ loop expr
+
 let opt_pat2string ~loc = function
   | None -> [%expr None]
   | Some pat -> [%expr Some [%e pat2string pat]]
