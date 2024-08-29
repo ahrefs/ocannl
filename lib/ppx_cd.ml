@@ -112,28 +112,26 @@ let unary_op expr =
 
 let is_unary_op ident = List.mem [ "~="; "?/" ] ident ~equal:String.equal
 
-let rec array_of_code c =
-  let loc = c.pexp_loc in
-  [%expr
-    match [%e c] with
-    | Arrayjit.Assignments.Accum_binop { lhs; _ } | Accum_unop { lhs; _ } -> lhs
-    | Fetch { array; _ } -> array
-    | Seq (_, subexpr) | Block_comment (_, subexpr) -> [%e array_of_code [%expr subexpr]]
-    | Noop -> Location.error_extensionf ~loc "ppx_ocannl %%cd: Noop code does not refer to any data"]
-
 type result = {
   vbs : value_binding Map.M(String).t;
+      (** [vbs] are the bindings introduced by inline tensor declarations (aka. punning). These
+          bindings are discharged with the whole [%cd] extension scope in scope. *)
   typ : expr_type;
   slot : projections_slot;
   expr : expression;
+  array_opt_of_code : expression option;
+      (** [array_opt_of_code] keeps track of which tensor node to use when [typ] is [Code] but the
+          result is used in an array context. *)
 }
 
-type binding_setup = { var : pattern; lazy_bind_to : expression; fwd_code_or_noop : expression }
-
 type array_setup = {
+  vb : value_binding option;
+      (** This binding is only generated for a tensor expression that is not an identifier, since
+          recomputing the expression (when copied) would generate a fresh tensor. It is discharged
+          when an assignment is built. *)
   slot : projections_slot;
   filler_typ : expr_type;
-  binding : binding_setup option;
+  fwd_code_or_noop : expression option;
   array_opt : expression;
   tensor : expression option;
   pun_hint_tnode : (expression * bool) option;
@@ -153,14 +151,9 @@ let make_vb ~loc ~name ~name_expr ~hint_label =
 
 let assignment ~punned ~lhs ~rhses body =
   let setups = lhs :: rhses in
-  let bindings_list = List.filter_map ~f:(fun setup -> setup.binding) setups in
   let loc = body.pexp_loc in
-  let bindings =
-    List.map bindings_list ~f:(fun { var; lazy_bind_to; _ } ->
-        Ast_helper.Vb.mk ~loc var [%expr Lazy.force [%e lazy_bind_to]])
-  in
   let forward_args =
-    List.map bindings_list ~f:(fun { fwd_code_or_noop; _ } -> fwd_code_or_noop)
+    List.filter_map setups ~f:(fun { fwd_code_or_noop; _ } -> fwd_code_or_noop)
     |> List.reduce ~f:(fun code fwd -> [%expr Arrayjit.Assignments.Seq ([%e code], [%e fwd])])
   in
   let vbs, body =
@@ -185,21 +178,23 @@ let assignment ~punned ~lhs ~rhses body =
                 )))
     | _ -> (no_vbs, body)
   in
-  {
-    vbs;
-    typ = Code;
-    slot = Nonslot;
-    expr =
-      (match forward_args with
-      | None -> body
-      | Some fwd ->
-          [%expr
-            (* FIXME: we do not want to force the computation unnecessarily, but we want the bindings? *)
-            (*if Arrayjit.Assignments.is_noop [%e body] then Arrayjit.Assignments.Noop else*)
-            [%e
-              Ast_helper.Exp.let_ ~loc Nonrecursive bindings
-                [%expr Arrayjit.Assignments.Seq ([%e fwd], [%e body])]]]);
-  }
+  let body =
+    if Option.is_some lhs.vb then
+      Ast_builder.Default.pexp_extension ~loc
+      @@ Location.error_extensionf ~loc
+           "ppx_ocannl %%cd: the assigned-to position cannot be an expression building a new tensor"
+    else body
+  in
+  let tensor_vbs = List.filter_map rhses ~f:(fun rhs -> rhs.vb) in
+  let expr =
+    match forward_args with
+    | None -> body
+    | Some fwd -> [%expr Arrayjit.Assignments.Seq ([%e fwd], [%e body])]
+  in
+  let expr =
+    if List.is_empty tensor_vbs then expr else A.Exp.let_ ~loc Nonrecursive tensor_vbs expr
+  in
+  { vbs; typ = Code; slot = Nonslot; expr; array_opt_of_code = Some lhs.array_opt }
 
 let project_p_slot debug loc slot =
   match slot with
@@ -254,7 +249,7 @@ let guess_pun_hint ~punned filler_typ filler =
       match t with { pexp_desc = Pexp_ident _; _ } -> Some (hint, true) | _ -> Some (hint, false))
   | No_grad_tensor_intro { name; _ }, _ -> Hashtbl.find punned name
 
-let setup_array ~punned ~is_lhs filler_pat { typ = filler_typ; slot; expr = filler; vbs } =
+let setup_array ~punned ~is_lhs { typ = filler_typ; slot; expr = filler; vbs; array_opt_of_code } =
   assert (Map.is_empty vbs);
   let loc = filler.pexp_loc in
   let opt_buffer tn =
@@ -268,7 +263,8 @@ let setup_array ~punned ~is_lhs filler_pat { typ = filler_typ; slot; expr = fill
   match filler_typ with
   | No_grad_tensor_intro _ when not is_lhs ->
       {
-        binding = None;
+        vb = None;
+        fwd_code_or_noop = None;
         filler_typ;
         slot;
         array_opt =
@@ -278,69 +274,158 @@ let setup_array ~punned ~is_lhs filler_pat { typ = filler_typ; slot; expr = fill
         tensor = None;
         pun_hint_tnode = None;
       }
-  | Tensor | Unknown | No_grad_tensor_intro _ ->
-      let t = pat2expr filler_pat in
+  | (Tensor | Unknown) when match filler with { pexp_desc = Pexp_ident _; _ } -> true | _ -> false
+    ->
+      let t = filler in
       let fwd_code_or_noop =
-        [%expr
-          if Tensor.is_fwd_root [%e t] then (
-            Tensor.remove_fwd_root [%e t];
-            [%e t].Tensor.forward)
-          else Arrayjit.Assignments.Noop]
+        Some
+          [%expr
+            if Tensor.is_fwd_root [%e t] then (
+              Tensor.remove_fwd_root [%e t];
+              [%e t].Tensor.forward)
+            else Arrayjit.Assignments.Noop]
       in
       {
-        binding =
-          Some { var = filler_pat; lazy_bind_to = [%expr lazy [%e filler]]; fwd_code_or_noop };
+        vb = None;
+        fwd_code_or_noop;
         filler_typ;
         slot;
-        array_opt = opt_buffer [%expr [%e t].value];
+        array_opt = opt_buffer [%expr [%e t].Tensor.value];
         tensor = Some t;
         pun_hint_tnode;
       }
-  | Code ->
+  | Value_of_tensor ({ pexp_desc = Pexp_ident _; _ } as t) ->
+      let fwd_code_or_noop =
+        Some
+          [%expr
+            if Tensor.is_fwd_root [%e t] then (
+              Tensor.remove_fwd_root [%e t];
+              [%e t].Tensor.forward)
+            else Arrayjit.Assignments.Noop]
+      in
       {
-        binding =
-          Some
-            {
-              var = filler_pat;
-              lazy_bind_to = [%expr lazy [%e filler]];
-              fwd_code_or_noop = pat2expr filler_pat;
-            };
+        vb = None;
+        fwd_code_or_noop;
         filler_typ;
         slot;
-        array_opt = opt_buffer @@ array_of_code filler;
+        array_opt = opt_buffer [%expr [%e t].Tensor.value];
+        tensor = Some t;
+        pun_hint_tnode;
+      }
+  | Value_of_tensor t ->
+      {
+        vb = None;
+        fwd_code_or_noop = None;
+        filler_typ;
+        slot;
+        array_opt =
+          Ast_builder.Default.pexp_extension ~loc
+          @@ Location.error_extensionf ~loc
+               "ppx_ocannl %%cd: the <tensor>.value notation is only supported when <tensor> is an \
+                identifier";
+        tensor = Some t;
+        pun_hint_tnode;
+      }
+  | Tensor | Unknown ->
+      (* Need to bind the expression computing the tensor so we don't recompute it. *)
+      let v =
+        match slot with
+        | LHS -> [%pat? nondiff__lhs]
+        | RHS1 -> [%pat? nondiff__rhs1]
+        | RHS2 -> [%pat? nondiff__rhs2]
+        | Nonslot | Undet -> [%pat? nondiff__tensor]
+      in
+      let t = pat2expr v in
+      let vb = Some (A.Vb.mk ~loc v filler) in
+      let fwd_code_or_noop =
+        Some
+          [%expr
+            if Tensor.is_fwd_root [%e t] then (
+              Tensor.remove_fwd_root [%e t];
+              [%e t].Tensor.forward)
+            else Arrayjit.Assignments.Noop]
+      in
+      {
+        vb;
+        fwd_code_or_noop;
+        filler_typ;
+        slot;
+        array_opt = opt_buffer [%expr [%e t].Tensor.value];
+        tensor = Some t;
+        pun_hint_tnode;
+      }
+  | No_grad_tensor_intro _ ->
+      (* Inline tensors are guaranteed to be leaf tensors, so they don't have forward code. *)
+      {
+        vb = None;
+        fwd_code_or_noop = None;
+        filler_typ;
+        slot;
+        array_opt = opt_buffer [%expr [%e filler].Tensor.value];
+        tensor = Some filler;
+        pun_hint_tnode;
+      }
+  | Code when Option.is_none array_opt_of_code ->
+      {
+        vb = None;
+        fwd_code_or_noop = Some filler;
+        filler_typ;
+        slot;
+        array_opt =
+          Ast_builder.Default.pexp_extension ~loc
+          @@ Location.error_extensionf ~loc
+               "ppx_ocannl %%cd: could not determine a lead array of provided code";
+        tensor = None;
+        pun_hint_tnode = None;
+      }
+  | Code ->
+      {
+        vb = None;
+        fwd_code_or_noop = Some filler;
+        filler_typ;
+        slot;
+        array_opt = buffer (Option.value_exn array_opt_of_code);
         tensor = None;
         pun_hint_tnode = None;
       }
   | Array ->
       {
-        binding = None;
+        vb = None;
+        fwd_code_or_noop = None;
         filler_typ;
         slot;
         array_opt = opt_buffer filler;
         tensor = None;
         pun_hint_tnode;
       }
-  | Value_of_tensor t ->
+  | Grad_of_tensor ({ pexp_desc = Pexp_ident _; _ } as t) ->
       {
-        binding = None;
-        filler_typ;
-        slot;
-        array_opt = opt_buffer filler;
-        tensor = Some t;
-        pun_hint_tnode;
-      }
-  | Grad_of_tensor t ->
-      {
-        binding = None;
+        vb = None;
+        fwd_code_or_noop = None;
         filler_typ;
         slot;
         array_opt = buffer filler;
         tensor = Some t;
         pun_hint_tnode;
       }
+  | Grad_of_tensor t ->
+      {
+        vb = None;
+        fwd_code_or_noop = None;
+        filler_typ;
+        slot;
+        array_opt =
+          Ast_builder.Default.pexp_extension ~loc
+          @@ Location.error_extensionf ~loc
+               "ppx_ocannl %%cd: the <tensor>.grad notation is only supported when <tensor> is an \
+                identifier";
+        tensor = Some t;
+        pun_hint_tnode;
+      }
   | (Merge_value _ | Merge_grad _) when is_lhs ->
       {
-        binding = None;
+        vb = None;
+        fwd_code_or_noop = None;
         filler_typ;
         slot;
         array_opt =
@@ -351,7 +436,8 @@ let setup_array ~punned ~is_lhs filler_pat { typ = filler_typ; slot; expr = fill
       }
   | Merge_value t ->
       {
-        binding = None;
+        vb = None;
+        fwd_code_or_noop = None;
         filler_typ;
         slot;
         array_opt = [%expr Some (Merge_buffer [%e filler])];
@@ -360,7 +446,8 @@ let setup_array ~punned ~is_lhs filler_pat { typ = filler_typ; slot; expr = fill
       }
   | Merge_grad t ->
       {
-        binding = None;
+        vb = None;
+        fwd_code_or_noop = None;
         filler_typ;
         slot;
         array_opt =
@@ -386,19 +473,18 @@ let translate ?ident_label (expr : expression) : result =
   let punned = Hashtbl.create (module String) in
   let rec transl ?ident_label ~proj_in_scope (expr : expression) : result =
     let loc = expr.pexp_loc in
+    let default_result =
+      { vbs = no_vbs; typ = Tensor; slot = Undet; expr; array_opt_of_code = None }
+    in
     match expr with
     | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
         {
-          vbs = no_vbs;
-          typ = Tensor;
-          slot = Undet;
+          default_result with
           expr = [%expr NTDSL.number ~label:[%e opt_pat2string_list ~loc ident_label] [%e expr]];
         }
     | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
         {
-          vbs = no_vbs;
-          typ = Tensor;
-          slot = Undet;
+          default_result with
           expr =
             [%expr
               NTDSL.number ~label:[%e opt_pat2string_list ~loc ident_label] (Float.of_int [%e expr])];
@@ -410,9 +496,7 @@ let translate ?ident_label (expr : expression) : result =
           Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
         in
         {
-          vbs = no_vbs;
-          typ = Tensor;
-          slot = Undet;
+          default_result with
           expr =
             [%expr
               NTDSL.number
@@ -426,9 +510,7 @@ let translate ?ident_label (expr : expression) : result =
           Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
         in
         {
-          vbs = no_vbs;
-          typ = Tensor;
-          slot = Undet;
+          default_result with
           expr =
             [%expr
               NTDSL.number
@@ -438,46 +520,45 @@ let translate ?ident_label (expr : expression) : result =
         }
     | { pexp_desc = Pexp_constant (Pconst_string (name, str_loc, _)); _ } ->
         {
-          vbs = no_vbs;
+          default_result with
           typ = No_grad_tensor_intro { name; name_expr = expr };
-          slot = Undet;
           expr = A.Exp.ident ~loc:str_loc { txt = Lident name; loc = str_loc };
         }
     | { pexp_desc = Pexp_array _; _ }
     | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
-        { vbs = no_vbs; typ = Tensor; slot = Undet; expr = ndarray_op ~ident_label expr }
+        { default_result with expr = ndarray_op ~ident_label expr }
     | { pexp_desc = Pexp_ident { txt = Lident ("v" | "lhs"); _ }; _ } ->
-        { vbs = no_vbs; typ = Array; slot = LHS; expr }
+        { default_result with typ = Array; slot = LHS }
     | { pexp_desc = Pexp_ident { txt = Lident "g"; _ }; _ } ->
-        { vbs = no_vbs; typ = Array; slot = LHS; expr }
+        { default_result with typ = Array; slot = LHS }
     | { pexp_desc = Pexp_ident { txt = Lident "rhs1"; _ }; _ } ->
-        { vbs = no_vbs; typ = Array; slot = RHS1; expr }
+        { default_result with typ = Array; slot = RHS1 }
     | { pexp_desc = Pexp_ident { txt = Lident "t1"; _ }; _ } ->
-        { vbs = no_vbs; typ = Tensor; slot = RHS1; expr }
+        { default_result with slot = RHS1; expr }
     | { pexp_desc = Pexp_ident { txt = Lident "v1"; _ }; _ } ->
-        { vbs = no_vbs; typ = Array; slot = RHS1; expr = [%expr t1.Tensor.value] }
+        { default_result with typ = Array; slot = RHS1; expr = [%expr t1.Tensor.value] }
     | { pexp_desc = Pexp_ident { txt = Lident "g1"; _ }; _ } ->
         {
-          vbs = no_vbs;
+          default_result with
           typ = Grad_of_tensor [%expr t1];
           slot = RHS1;
           expr = [%expr Option.map t1.Tensor.diff ~f:(fun d -> d.Tensor.grad)];
         }
     | { pexp_desc = Pexp_ident { txt = Lident "rhs2"; _ }; _ } ->
-        { vbs = no_vbs; typ = Array; slot = RHS2; expr }
+        { default_result with typ = Array; slot = RHS2 }
     | { pexp_desc = Pexp_ident { txt = Lident "t2"; _ }; _ } ->
-        { vbs = no_vbs; typ = Tensor; slot = RHS2; expr }
+        { default_result with typ = Tensor; slot = RHS2 }
     | { pexp_desc = Pexp_ident { txt = Lident "v2"; _ }; _ } ->
-        { vbs = no_vbs; typ = Array; slot = RHS2; expr = [%expr t2.Tensor.value] }
+        { default_result with typ = Array; slot = RHS2; expr = [%expr t2.Tensor.value] }
     | { pexp_desc = Pexp_ident { txt = Lident "g2"; _ }; _ } ->
         {
-          vbs = no_vbs;
+          default_result with
           typ = Grad_of_tensor [%expr t2];
           slot = RHS2;
           expr = [%expr Option.map t2.Tensor.diff ~f:(fun d -> d.Tensor.grad)];
         }
     | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_operator op_ident ->
-        { vbs = no_vbs; typ = Tensor; slot = Undet; expr }
+        default_result
     | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
         (* FIXME: `**.` should take a tensor and require that it's a literal. *)
         (* We need to hardcode these two patterns to prevent the numbers from being converted to tensors. *)
@@ -523,6 +604,7 @@ let translate ?ident_label (expr : expression) : result =
               NTDSL.einsum
                 ~label:[%e opt_pat2string_list ~loc ident_label]
                 [%e spec] [%e res1.expr] [%e res2.expr]];
+          array_opt_of_code = None;
         }
     | [%expr
         [%e? expr1]
@@ -574,7 +656,18 @@ let translate ?ident_label (expr : expression) : result =
               typ = Value_of_tensor res1.expr;
               expr = [%expr [%e res1.expr].Tensor.value];
             }
-        | Code -> { vbs = no_vbs; typ = Array; slot = res1.slot; expr = array_of_code res1.expr }
+        | Code ->
+            {
+              vbs = no_vbs;
+              typ = Array;
+              slot = res1.slot;
+              expr =
+                Ast_builder.Default.pexp_extension ~loc
+                @@ Location.error_extensionf ~loc
+                     "ppx_ocannl %%cd: <code>.value notation not supported when <code> is not a \
+                      tensor";
+              array_opt_of_code = None;
+            }
         | Array | Value_of_tensor _ | Grad_of_tensor _ | Merge_value _ | Merge_grad _ -> res1)
     | [%expr [%e? expr1].merge] -> (
         let res1 = transl ?ident_label ~proj_in_scope expr1 in
@@ -606,18 +699,11 @@ let translate ?ident_label (expr : expression) : result =
           ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections]))] ->
         let initialize_neutral, accu_op = assignment_op accu_op in
         let setup_l =
-          setup_array ~punned ~is_lhs:true [%pat? nondiff___lhs]
-          @@ transl ?ident_label ~proj_in_scope:true lhs
+          setup_array ~punned ~is_lhs:true @@ transl ?ident_label ~proj_in_scope:true lhs
         in
         let _, bin_op = binary_op bin_op in
-        let setup_r1 =
-          setup_array ~punned ~is_lhs:false [%pat? nondiff___rhs1]
-          @@ transl ~proj_in_scope:true rhs1
-        in
-        let setup_r2 =
-          setup_array ~punned ~is_lhs:false [%pat? nondiff___rhs2]
-          @@ transl ~proj_in_scope:true rhs2
-        in
+        let setup_r1 = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope:true rhs1 in
+        let setup_r2 = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope:true rhs2 in
         let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
         (* TODO: might be better to treat missing [rhs1, rhs2] as zeros rather than eliding the
            code. *)
@@ -646,13 +732,10 @@ let translate ?ident_label (expr : expression) : result =
            as-should-be, but that's not consistent with omitting the projections arg (assuming it
            comes from the context). *)
         let setup_l =
-          setup_array ~punned ~is_lhs:true [%pat? nondiff___lhs]
-          @@ transl ?ident_label ~proj_in_scope:true lhs
+          setup_array ~punned ~is_lhs:true @@ transl ?ident_label ~proj_in_scope:true lhs
         in
         let _, un_op = unary_op un_op in
-        let setup_r =
-          setup_array ~punned ~is_lhs:false [%pat? nondiff___rhs] @@ transl ~proj_in_scope:true rhs
-        in
+        let setup_r = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope:true rhs in
         let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
         (* TODO: might be better to treat missing [rhs] as zeros rather than eliding the code. *)
         let body =
@@ -673,12 +756,9 @@ let translate ?ident_label (expr : expression) : result =
     | [%expr [%e? accu_op] [%e? lhs] ([%e? rhs] ~projections:[%e? projections])] ->
         let initialize_neutral, accu_op = assignment_op accu_op in
         let setup_l =
-          setup_array ~punned ~is_lhs:true [%pat? nondiff___lhs]
-          @@ transl ?ident_label ~proj_in_scope:true lhs
+          setup_array ~punned ~is_lhs:true @@ transl ?ident_label ~proj_in_scope:true lhs
         in
-        let setup_r =
-          setup_array ~punned ~is_lhs:false [%pat? nondiff___rhs] @@ transl ~proj_in_scope:true rhs
-        in
+        let setup_r = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope:true rhs in
         let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
         let body =
           [%expr
@@ -711,17 +791,10 @@ let translate ?ident_label (expr : expression) : result =
           else [%expr Shape.Einsum [%e logic]]
         in
         let initialize_neutral, accu_op = assignment_op accu_op in
-        let setup_l =
-          setup_array ~punned ~is_lhs:true [%pat? nondiff___lhs]
-          @@ transl ?ident_label ~proj_in_scope lhs
-        in
+        let setup_l = setup_array ~punned ~is_lhs:true @@ transl ?ident_label ~proj_in_scope lhs in
         let _, bin_op = binary_op bin_op in
-        let setup_r1 =
-          setup_array ~punned ~is_lhs:false [%pat? nondiff___rhs1] @@ transl ~proj_in_scope rhs1
-        in
-        let setup_r2 =
-          setup_array ~punned ~is_lhs:false [%pat? nondiff___rhs2] @@ transl ~proj_in_scope rhs2
-        in
+        let setup_r1 = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope rhs1 in
+        let setup_r2 = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope rhs2 in
         let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
         let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
         let t1_expr, rhs1_is_grad, rhs1_is_merge = args_for ~loc setup_r1 in
@@ -755,14 +828,9 @@ let translate ?ident_label (expr : expression) : result =
           else [%expr Shape.Permute [%e logic]]
         in
         let initialize_neutral, accu_op = assignment_op accu_op in
-        let setup_l =
-          setup_array ~punned ~is_lhs:true [%pat? nondiff___lhs]
-          @@ transl ?ident_label ~proj_in_scope lhs
-        in
+        let setup_l = setup_array ~punned ~is_lhs:true @@ transl ?ident_label ~proj_in_scope lhs in
         let _, un_op = unary_op un_op in
-        let setup_r =
-          setup_array ~punned ~is_lhs:false [%pat? nondiff___rhs] @@ transl ~proj_in_scope rhs
-        in
+        let setup_r = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope rhs in
         let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
         let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
         let t1_expr, rhs_is_grad, rhs_is_merge = args_for ~loc setup_r in
@@ -781,17 +849,10 @@ let translate ?ident_label (expr : expression) : result =
              [%e? rhs2])]
       when is_assignment accu_ident && is_binary_op binop_ident && proj_in_scope ->
         let initialize_neutral, accu_op = assignment_op accu_op in
-        let setup_l =
-          setup_array ~punned ~is_lhs:true [%pat? nondiff___lhs]
-          @@ transl ?ident_label ~proj_in_scope lhs
-        in
+        let setup_l = setup_array ~punned ~is_lhs:true @@ transl ?ident_label ~proj_in_scope lhs in
         let _, bin_op = binary_op bin_op in
-        let setup_r1 =
-          setup_array ~punned ~is_lhs:false [%pat? nondiff___rhs1] @@ transl ~proj_in_scope rhs1
-        in
-        let setup_r2 =
-          setup_array ~punned ~is_lhs:false [%pat? nondiff___rhs2] @@ transl ~proj_in_scope rhs2
-        in
+        let setup_r1 = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope rhs1 in
+        let setup_r2 = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope rhs2 in
         let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
         let projections =
           let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
@@ -848,14 +909,9 @@ let translate ?ident_label (expr : expression) : result =
              [%e? rhs])]
       when is_assignment accu_ident && is_unary_op unop_ident && proj_in_scope ->
         let initialize_neutral, accu_op = assignment_op accu_op in
-        let setup_l =
-          setup_array ~punned ~is_lhs:true [%pat? nondiff___lhs]
-          @@ transl ?ident_label ~proj_in_scope lhs
-        in
+        let setup_l = setup_array ~punned ~is_lhs:true @@ transl ?ident_label ~proj_in_scope lhs in
         let _, un_op = unary_op un_op in
-        let setup_r1 =
-          setup_array ~punned ~is_lhs:false [%pat? nondiff___rhs1] @@ transl ~proj_in_scope rhs
-        in
+        let setup_r1 = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope rhs in
         let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
         let projections =
           let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
@@ -907,13 +963,8 @@ let translate ?ident_label (expr : expression) : result =
           [%e? rhs]]
       when is_assignment op_ident && proj_in_scope ->
         let initialize_neutral, accu_op = assignment_op accu_op in
-        let setup_l =
-          setup_array ~punned ~is_lhs:true [%pat? nondiff___lhs]
-          @@ transl ?ident_label ~proj_in_scope lhs
-        in
-        let setup_r1 =
-          setup_array ~punned ~is_lhs:false [%pat? nondiff___rhs1] @@ transl ~proj_in_scope rhs
-        in
+        let setup_l = setup_array ~punned ~is_lhs:true @@ transl ?ident_label ~proj_in_scope lhs in
+        let setup_r1 = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope rhs in
         let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
         let projections =
           let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
@@ -964,17 +1015,10 @@ let translate ?ident_label (expr : expression) : result =
              [%e? rhs2])]
       when is_assignment accu_ident && is_binary_op binop_ident ->
         let initialize_neutral, accu_op = assignment_op accu_op in
-        let setup_l =
-          setup_array ~punned ~is_lhs:true [%pat? nondiff___lhs]
-          @@ transl ?ident_label ~proj_in_scope lhs
-        in
+        let setup_l = setup_array ~punned ~is_lhs:true @@ transl ?ident_label ~proj_in_scope lhs in
         let logic, bin_op = binary_op bin_op in
-        let setup_r1 =
-          setup_array ~punned ~is_lhs:false [%pat? nondiff___rhs1] @@ transl ~proj_in_scope rhs1
-        in
-        let setup_r2 =
-          setup_array ~punned ~is_lhs:false [%pat? nondiff___rhs2] @@ transl ~proj_in_scope rhs2
-        in
+        let setup_r1 = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope rhs1 in
+        let setup_r2 = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope rhs2 in
         let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
         let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
         let t1_expr, rhs1_is_grad, rhs1_is_merge = args_for ~loc setup_r1 in
@@ -993,14 +1037,9 @@ let translate ?ident_label (expr : expression) : result =
           ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ } as un_op] [%e? rhs])]
       when is_assignment accu_ident && is_unary_op unop_ident ->
         let initialize_neutral, accu_op = assignment_op accu_op in
-        let setup_l =
-          setup_array ~punned ~is_lhs:true [%pat? nondiff___lhs]
-          @@ transl ?ident_label ~proj_in_scope lhs
-        in
+        let setup_l = setup_array ~punned ~is_lhs:true @@ transl ?ident_label ~proj_in_scope lhs in
         let logic, un_op = unary_op un_op in
-        let setup_r =
-          setup_array ~punned ~is_lhs:false [%pat? nondiff___rhs] @@ transl ~proj_in_scope rhs
-        in
+        let setup_r = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope rhs in
         let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
         let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
         let t1_expr, rhs_is_grad, rhs_is_merge = args_for ~loc setup_r in
@@ -1017,13 +1056,8 @@ let translate ?ident_label (expr : expression) : result =
           [%e? rhs]]
       when is_assignment op_ident ->
         let initialize_neutral, accu_op = assignment_op accu_op in
-        let setup_l =
-          setup_array ~punned ~is_lhs:true [%pat? nondiff___lhs]
-          @@ transl ?ident_label ~proj_in_scope lhs
-        in
-        let setup_r =
-          setup_array ~punned ~is_lhs:false [%pat? nondiff___rhs] @@ transl ~proj_in_scope rhs
-        in
+        let setup_l = setup_array ~punned ~is_lhs:true @@ transl ?ident_label ~proj_in_scope lhs in
+        let setup_r = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope rhs in
         let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
         let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
         let t1_expr, rhs_is_grad, rhs_is_merge = args_for ~loc setup_r in
@@ -1050,6 +1084,7 @@ let translate ?ident_label (expr : expression) : result =
           typ = res1.typ;
           slot;
           expr = [%expr [%e res1.expr] [%e res2.expr] [%e res3.expr]];
+          array_opt_of_code = None;
         }
     | [%expr [%e? expr1] [%e? expr2]] ->
         let res1 = transl ?ident_label ~proj_in_scope expr1 in
@@ -1063,6 +1098,7 @@ let translate ?ident_label (expr : expression) : result =
           typ = res1.typ;
           slot;
           expr = [%expr [%e res1.expr] [%e res2.expr]];
+          array_opt_of_code = None;
         }
     | { pexp_desc = Pexp_fun ((arg_label : arg_label), arg, opt_val, expr1); _ } as expr ->
         let proj_in_scope =
@@ -1086,6 +1122,7 @@ let translate ?ident_label (expr : expression) : result =
             Ast_builder.Default.pexp_extension ~loc
             @@ Location.error_extensionf ~loc
                  "ppx_ocannl %%cd: while: low-level code embeddings not supported yet";
+          array_opt_of_code = None;
         }
     | [%expr
         for [%p? _pat] = [%e? _init] to [%e? _final] do
@@ -1099,6 +1136,7 @@ let translate ?ident_label (expr : expression) : result =
             Ast_builder.Default.pexp_extension ~loc
             @@ Location.error_extensionf ~loc
                  "ppx_ocannl %%cd: for-to: low-level code embeddings not supported yet";
+          array_opt_of_code = None;
         }
     | [%expr
         for [%p? _pat] = [%e? _init] downto [%e? _final] do
@@ -1112,6 +1150,7 @@ let translate ?ident_label (expr : expression) : result =
             Ast_builder.Default.pexp_extension ~loc
             @@ Location.error_extensionf ~loc
                  "ppx_ocannl %%cd: for-downto: low-level code embeddings not supported yet";
+          array_opt_of_code = None;
         }
     | [%expr
         ~~[%e? { pexp_desc = Pexp_apply (expr, exprs); pexp_loc; _ }];
@@ -1143,6 +1182,7 @@ let translate ?ident_label (expr : expression) : result =
           typ = Code;
           slot = Nonslot;
           expr = [%expr Arrayjit.Assignments.Seq ([%e res1.expr], [%e res2.expr])];
+          array_opt_of_code = res2.array_opt_of_code;
         }
     | [%expr if [%e? expr1] then [%e? expr2] else [%e? expr3]] ->
         let res2 = transl ?ident_label ~proj_in_scope expr2 in
@@ -1157,6 +1197,7 @@ let translate ?ident_label (expr : expression) : result =
           typ;
           slot;
           expr = [%expr if [%e expr1] then [%e res2.expr] else [%e res3.expr]];
+          array_opt_of_code = None;
         }
     | [%expr if [%e? expr1] then [%e? expr2]] ->
         let res2 = transl ?ident_label ~proj_in_scope expr2 in
@@ -1165,6 +1206,7 @@ let translate ?ident_label (expr : expression) : result =
           typ = Code;
           slot = Nonslot;
           expr = [%expr if [%e expr1] then [%e res2.expr] else Arrayjit.Assignments.Noop];
+          array_opt_of_code = res2.array_opt_of_code;
         }
     | { pexp_desc = Pexp_match (expr1, cases); _ } ->
         let fields, cases =
@@ -1183,13 +1225,13 @@ let translate ?ident_label (expr : expression) : result =
           typ;
           slot;
           expr = { expr with pexp_desc = Pexp_match (expr1, cases) };
+          array_opt_of_code = None;
         }
     | { pexp_desc = Pexp_let (_recflag, _bindings, _body); _ } ->
         (* TODO(80): to properly support local bindings, we need to collect the type environment. *)
         {
-          vbs = no_vbs;
+          default_result with
           typ = Unknown;
-          slot = Undet;
           expr =
             Ast_builder.Default.pexp_extension ~loc
             @@ Location.error_extensionf ~loc
@@ -1205,12 +1247,11 @@ let translate ?ident_label (expr : expression) : result =
         { res1 with expr = { expr with pexp_desc = Pexp_letmodule (name, module_expr, res1.expr) } }
     | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_operator op_ident ->
         {
-          vbs = no_vbs;
+          default_result with
           typ = Unknown;
-          slot = Undet;
           expr = [%expr [%e expr] ~label:[%e opt_pat2string_list ~loc ident_label]];
         }
-    | _ -> { vbs = no_vbs; typ = Unknown; slot = Undet; expr }
+    | _ -> { default_result with typ = Unknown }
   in
   transl ?ident_label ~proj_in_scope:false expr
 
