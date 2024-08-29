@@ -242,6 +242,13 @@ let guess_pun_hint ~punned filler_typ filler =
       Hashtbl.find punned name
   | (Tensor | Unknown), { pexp_desc = Pexp_ident _; _ } -> Some (hint, true)
   | (Tensor | Unknown), _ -> Some (hint, false)
+  | ( ( Value_of_tensor { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
+      | Grad_of_tensor { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
+      | Merge_value { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
+      | Merge_grad { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ } ),
+      _ )
+    when Hashtbl.mem punned name ->
+      Hashtbl.find punned name
   | (Value_of_tensor t | Grad_of_tensor t | Merge_value t | Merge_grad t), _ -> (
       let hint = [%expr [%e t].Tensor.value.Arrayjit.Tnode.label] in
       match t with { pexp_desc = Pexp_ident _; _ } -> Some (hint, true) | _ -> Some (hint, false))
