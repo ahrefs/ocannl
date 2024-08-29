@@ -226,17 +226,26 @@ let project_p_dims debug loc slot =
            "ppx_ocannl %%cd: insufficient slot filler information at %s %s" debug
            "(incorporate one of: v, v1, v2, g, g1, g2, lhs, rhs, rhs1, rhs2)"
 
-let guess_pun_hint ~punned filler_typ filler =
+let guess_pun_hint ~punned ~bad_pun_hints filler_typ filler =
   let loc = filler.pexp_loc in
   let hint = [%expr [%e filler].Arrayjit.Tnode.label] in
   match (filler_typ, filler) with
   | Code, _ -> None
+  | _, { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ } when Set.mem bad_pun_hints name ->
+      None
   | Array, _ -> Some (hint, false)
   | (Tensor | Unknown), { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
     when Hashtbl.mem punned name ->
       Hashtbl.find punned name
   | (Tensor | Unknown), { pexp_desc = Pexp_ident _; _ } -> Some (hint, true)
   | (Tensor | Unknown), _ -> Some (hint, false)
+  | ( ( Value_of_tensor { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
+      | Grad_of_tensor { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
+      | Merge_value { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
+      | Merge_grad { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ } ),
+      _ )
+    when Set.mem bad_pun_hints name ->
+      None
   | ( ( Value_of_tensor { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
       | Grad_of_tensor { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
       | Merge_value { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
@@ -249,7 +258,8 @@ let guess_pun_hint ~punned filler_typ filler =
       match t with { pexp_desc = Pexp_ident _; _ } -> Some (hint, true) | _ -> Some (hint, false))
   | No_grad_tensor_intro { name; _ }, _ -> Hashtbl.find punned name
 
-let setup_array ~punned ~is_lhs { typ = filler_typ; slot; expr = filler; vbs; array_opt_of_code } =
+let setup_array ~punned ~bad_pun_hints ~is_lhs
+    { typ = filler_typ; slot; expr = filler; vbs; array_opt_of_code } =
   assert (Map.is_empty vbs);
   let loc = filler.pexp_loc in
   let opt_buffer tn =
@@ -259,7 +269,7 @@ let setup_array ~punned ~is_lhs { typ = filler_typ; slot; expr = filler; vbs; ar
     if is_lhs then opt_tn
     else [%expr Option.map [%e opt_tn] ~f:(fun tn -> Arrayjit.Assignments.Node tn)]
   in
-  let pun_hint_tnode = guess_pun_hint ~punned filler_typ filler in
+  let pun_hint_tnode = guess_pun_hint ~punned ~bad_pun_hints filler_typ filler in
   let default_setup =
     {
       vb = None;
@@ -406,19 +416,25 @@ let args_for ~loc = function
 
 let translate ?ident_label (expr : expression) : result =
   let punned = Hashtbl.create (module String) in
-  let rec transl ?ident_label ~proj_in_scope (expr : expression) : result =
+  let rec transl ~bad_pun_hints ?ident_label ~proj_in_scope (expr : expression) : result =
     let loc = expr.pexp_loc in
     let default_result =
       { vbs = no_vbs; typ = Tensor; slot = Undet; expr; array_opt_of_code = None }
     in
+    let loop = transl ~bad_pun_hints in
     let process_assign_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ?projections ~proj_in_scope () =
       let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l =
-        setup_array ~punned ~is_lhs:true @@ transl ?ident_label ~proj_in_scope:true lhs
+        setup_array ~punned ~bad_pun_hints ~is_lhs:true
+        @@ loop ?ident_label ~proj_in_scope:true lhs
       in
       let _, bin_op = binary_op bin_op in
-      let setup_r1 = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope rhs1 in
-      let setup_r2 = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope rhs2 in
+      let setup_r1 =
+        setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs1
+      in
+      let setup_r2 =
+        setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2
+      in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let projections =
         match projections with
@@ -477,8 +493,10 @@ let translate ?ident_label (expr : expression) : result =
       (* FIXME: I think this ignores the slot information here! Just assuming [projections] is
          as-should-be, but that's not consistent with omitting the projections arg (assuming it
          comes from the context). *)
-      let setup_l = setup_array ~punned ~is_lhs:true @@ transl ?ident_label ~proj_in_scope lhs in
-      let setup_r = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope rhs in
+      let setup_l =
+        setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ?ident_label ~proj_in_scope lhs
+      in
+      let setup_r = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let projections =
         match projections with
@@ -530,9 +548,15 @@ let translate ?ident_label (expr : expression) : result =
     in
     let process_raw_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~logic =
       let initialize_neutral, accu_op = assignment_op accu_op in
-      let setup_l = setup_array ~punned ~is_lhs:true @@ transl ?ident_label ~proj_in_scope lhs in
-      let setup_r1 = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope rhs1 in
-      let setup_r2 = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope rhs2 in
+      let setup_l =
+        setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ?ident_label ~proj_in_scope lhs
+      in
+      let setup_r1 =
+        setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs1
+      in
+      let setup_r2 =
+        setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2
+      in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
       let t1_expr, rhs1_is_grad, rhs1_is_merge = args_for ~loc setup_r1 in
@@ -548,8 +572,10 @@ let translate ?ident_label (expr : expression) : result =
     in
     let process_raw_unop ~accu_op ~lhs ~un_op ~rhs ~logic =
       let initialize_neutral, accu_op = assignment_op accu_op in
-      let setup_l = setup_array ~punned ~is_lhs:true @@ transl ?ident_label ~proj_in_scope lhs in
-      let setup_r = setup_array ~punned ~is_lhs:false @@ transl ~proj_in_scope rhs in
+      let setup_l =
+        setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ?ident_label ~proj_in_scope lhs
+      in
+      let setup_r = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
       let t1_expr, rhs_is_grad, rhs_is_merge = args_for ~loc setup_r in
@@ -647,7 +673,7 @@ let translate ?ident_label (expr : expression) : result =
     | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
         (* FIXME: `**.` should take a tensor and require that it's a literal. *)
         (* We need to hardcode these two patterns to prevent the numbers from being converted to tensors. *)
-        let res1 = transl ~proj_in_scope expr1 in
+        let res1 = loop ~proj_in_scope expr1 in
         {
           res1 with
           typ = Tensor;
@@ -659,7 +685,7 @@ let translate ?ident_label (expr : expression) : result =
                 (Float.of_int [%e i])];
         }
     | [%expr [%e? expr1] **. [%e? expr2]] ->
-        let res1 = transl ~proj_in_scope expr1 in
+        let res1 = loop ~proj_in_scope expr1 in
         {
           res1 with
           typ = Tensor;
@@ -674,8 +700,8 @@ let translate ?ident_label (expr : expression) : result =
         *+ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]
              [%e? expr2]]
       when String.contains spec_str '>' ->
-        let res1 = transl ~proj_in_scope expr1 in
-        let res2 = transl ~proj_in_scope expr2 in
+        let res1 = loop ~proj_in_scope expr1 in
+        let res2 = loop ~proj_in_scope expr2 in
         let slot =
           Option.value ~default:Undet
           @@ List.find ~f:(function Undet -> false | _ -> true) [ res1.slot; res2.slot ]
@@ -695,7 +721,7 @@ let translate ?ident_label (expr : expression) : result =
         [%e? expr1]
         ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]]
       when String.contains spec_str '>' ->
-        let res1 = transl ~proj_in_scope expr1 in
+        let res1 = loop ~proj_in_scope expr1 in
         {
           res1 with
           typ = Tensor;
@@ -706,7 +732,7 @@ let translate ?ident_label (expr : expression) : result =
                 [%e spec] [%e res1.expr]];
         }
     | [%expr [%e? expr1].grad] -> (
-        let res1 = transl ?ident_label ~proj_in_scope expr1 in
+        let res1 = loop ?ident_label ~proj_in_scope expr1 in
         match res1.typ with
         | Unknown | Tensor | No_grad_tensor_intro _ ->
             {
@@ -732,7 +758,7 @@ let translate ?ident_label (expr : expression) : result =
                 @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: only tensors have a gradient";
             })
     | [%expr [%e? expr1].value] -> (
-        let res1 = transl ?ident_label ~proj_in_scope expr1 in
+        let res1 = loop ?ident_label ~proj_in_scope expr1 in
         (* TODO: maybe this is too permissive? E.g. [t1.grad.value] is accepted. *)
         match res1.typ with
         | Unknown | Tensor | No_grad_tensor_intro _ ->
@@ -754,7 +780,7 @@ let translate ?ident_label (expr : expression) : result =
             }
         | Array | Value_of_tensor _ | Grad_of_tensor _ | Merge_value _ | Merge_grad _ -> res1)
     | [%expr [%e? expr1].merge] -> (
-        let res1 = transl ?ident_label ~proj_in_scope expr1 in
+        let res1 = loop ?ident_label ~proj_in_scope expr1 in
         match res1.typ with
         | Unknown | Tensor | No_grad_tensor_intro _ ->
             { res1 with typ = Merge_value res1.expr; expr = [%expr [%e res1.expr].Tensor.value] }
@@ -875,9 +901,9 @@ let translate ?ident_label (expr : expression) : result =
         process_raw_unop ~accu_op ~lhs ~un_op:[%expr Arrayjit.Ops.Identity] ~rhs
           ~logic:[%expr Shape.Pointwise_un]
     | [%expr [%e? expr1] [%e? expr2] [%e? expr3]] ->
-        let res1 = transl ?ident_label ~proj_in_scope expr1 in
-        let res2 = transl ~proj_in_scope expr2 in
-        let res3 = transl ~proj_in_scope expr3 in
+        let res1 = loop ?ident_label ~proj_in_scope expr1 in
+        let res2 = loop ~proj_in_scope expr2 in
+        let res3 = loop ~proj_in_scope expr3 in
         let slot =
           Option.value ~default:Undet
           @@ List.find
@@ -892,8 +918,8 @@ let translate ?ident_label (expr : expression) : result =
           array_opt_of_code = None;
         }
     | [%expr [%e? expr1] [%e? expr2]] ->
-        let res1 = transl ?ident_label ~proj_in_scope expr1 in
-        let res2 = transl ~proj_in_scope expr2 in
+        let res1 = loop ?ident_label ~proj_in_scope expr1 in
+        let res2 = loop ~proj_in_scope expr2 in
         let slot =
           Option.value ~default:Undet
           @@ List.find ~f:(function Undet -> false | _ -> true) [ res1.slot; res2.slot ]
@@ -905,7 +931,7 @@ let translate ?ident_label (expr : expression) : result =
           expr = [%expr [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
-    | { pexp_desc = Pexp_fun ((arg_label : arg_label), arg, opt_val, expr1); _ } as expr ->
+    | { pexp_desc = Pexp_fun ((arg_label : arg_label), arg, pat, expr1); _ } as expr ->
         let proj_in_scope =
           proj_in_scope
           ||
@@ -913,8 +939,9 @@ let translate ?ident_label (expr : expression) : result =
           | (Labelled s | Optional s) when String.equal s "projections" -> true
           | _ -> false
         in
-        let res1 = transl ?ident_label ~proj_in_scope expr1 in
-        { res1 with expr = { expr with pexp_desc = Pexp_fun (arg_label, arg, opt_val, res1.expr) } }
+        let bad_pun_hints = Set.union bad_pun_hints @@ collect_pat_idents pat in
+        let res1 = transl ~bad_pun_hints ?ident_label ~proj_in_scope expr1 in
+        { res1 with expr = { expr with pexp_desc = Pexp_fun (arg_label, arg, pat, res1.expr) } }
     | [%expr
         while [%e? _test_expr] do
           [%e? _body]
@@ -965,7 +992,7 @@ let translate ?ident_label (expr : expression) : result =
                | [%expr [%e? t].grad] -> [%expr Arrayjit.Tnode.debug_name [%e t].value ^ ".grad"]
                | t -> [%expr Arrayjit.Tnode.debug_name [%e t].value])
         in
-        let res2 = transl ?ident_label ~proj_in_scope expr2 in
+        let res2 = loop ?ident_label ~proj_in_scope expr2 in
         {
           res2 with
           expr =
@@ -977,8 +1004,8 @@ let translate ?ident_label (expr : expression) : result =
     | [%expr
         [%e? expr1];
         [%e? expr2]] ->
-        let res1 = transl ~proj_in_scope expr1 in
-        let res2 = transl ?ident_label ~proj_in_scope expr2 in
+        let res1 = loop ~proj_in_scope expr1 in
+        let res2 = loop ?ident_label ~proj_in_scope expr2 in
         {
           vbs = reduce_vbss [ res1.vbs; res2.vbs ];
           typ = Code;
@@ -987,8 +1014,8 @@ let translate ?ident_label (expr : expression) : result =
           array_opt_of_code = res2.array_opt_of_code;
         }
     | [%expr if [%e? expr1] then [%e? expr2] else [%e? expr3]] ->
-        let res2 = transl ?ident_label ~proj_in_scope expr2 in
-        let res3 = transl ?ident_label ~proj_in_scope expr3 in
+        let res2 = loop ?ident_label ~proj_in_scope expr2 in
+        let res3 = loop ?ident_label ~proj_in_scope expr3 in
         let typ = if is_unknown res2.typ then res3.typ else res2.typ in
         let slot =
           Option.value ~default:Undet
@@ -1002,7 +1029,7 @@ let translate ?ident_label (expr : expression) : result =
           array_opt_of_code = None;
         }
     | [%expr if [%e? expr1] then [%e? expr2]] ->
-        let res2 = transl ?ident_label ~proj_in_scope expr2 in
+        let res2 = loop ?ident_label ~proj_in_scope expr2 in
         {
           vbs = res2.vbs;
           typ = Code;
@@ -1014,7 +1041,7 @@ let translate ?ident_label (expr : expression) : result =
         let fields, cases =
           List.unzip
           @@ List.map cases ~f:(fun ({ pc_rhs; _ } as c) ->
-                 let res = transl ?ident_label ~proj_in_scope pc_rhs in
+                 let res = loop ?ident_label ~proj_in_scope pc_rhs in
                  ((res.vbs, res.typ, res.slot), { c with pc_rhs = res.expr }))
         in
         let vbss, typs, slots = List.unzip3 fields in
@@ -1039,13 +1066,13 @@ let translate ?ident_label (expr : expression) : result =
             @@ Location.error_extensionf ~loc
                  "ppx_ocannl %%cd: let-in: local let-bindings not implemented yet";
         }
-    (* let bindings = List.map bindings ~f:(fun binding -> {binding with pvb_expr=transl
-       binding.pvb_expr}) in {expr with pexp_desc=Pexp_let (recflag, bindings, transl body)} *)
+    (* let bindings = List.map bindings ~f:(fun binding -> {binding with pvb_expr=loop
+       binding.pvb_expr}) in {expr with pexp_desc=Pexp_let (recflag, bindings, loop body)} *)
     | { pexp_desc = Pexp_open (decl, expr1); _ } ->
-        let res1 = transl ?ident_label ~proj_in_scope expr1 in
+        let res1 = loop ?ident_label ~proj_in_scope expr1 in
         { res1 with expr = { expr with pexp_desc = Pexp_open (decl, res1.expr) } }
     | { pexp_desc = Pexp_letmodule (name, module_expr, expr1); _ } ->
-        let res1 = transl ?ident_label ~proj_in_scope expr1 in
+        let res1 = loop ?ident_label ~proj_in_scope expr1 in
         { res1 with expr = { expr with pexp_desc = Pexp_letmodule (name, module_expr, res1.expr) } }
     | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_operator op_ident ->
         {
@@ -1055,7 +1082,7 @@ let translate ?ident_label (expr : expression) : result =
         }
     | _ -> { default_result with typ = Unknown }
   in
-  transl ?ident_label ~proj_in_scope:false expr
+  transl ?ident_label ~proj_in_scope:false ~bad_pun_hints:(Set.empty (module String)) expr
 
 let translate ?ident_label expr =
   let res = translate ?ident_label expr in

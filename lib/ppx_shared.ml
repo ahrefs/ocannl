@@ -30,6 +30,29 @@ let pat2string pat =
   in
   string_expr ~loc:pat.ppat_loc @@ loop pat
 
+let collect_pat_idents pat =
+  let one = Set.singleton (module String) in
+  let none = Set.empty (module String) in
+  let rec loop pat =
+    let all pats = Set.union_list (module String) @@ List.map ~f:loop pats in
+    match pat.ppat_desc with
+    | Ppat_open (_, pat) | Ppat_lazy pat | Ppat_constraint (pat, _) -> loop pat
+    | Ppat_alias (_, ident) -> one ident.txt
+    | Ppat_var ident -> one ident.txt
+    | Ppat_any -> none
+    | Ppat_variant (_, None) -> none
+    | Ppat_variant (_, Some pat) -> loop pat
+    | Ppat_constant _ -> none
+    | Ppat_tuple pats | Ppat_array pats -> all pats
+    | Ppat_construct (_, None) -> none
+    | Ppat_construct (_, Some (_, pat)) -> loop pat
+    | Ppat_interval (_, _) -> none
+    | Ppat_record (lpats, _) -> all @@ List.map ~f:snd lpats
+    | Ppat_or (p1, p2) -> all [ p1; p2 ]
+    | Ppat_type _ | Ppat_unpack _ | Ppat_exception _ | Ppat_extension _ -> none
+  in
+  loop pat
+
 let expr2string_or_empty expr =
   let rec lident = function
     | Lident s -> s
