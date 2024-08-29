@@ -149,18 +149,10 @@ let rec translate ?ident_label expr =
       let vbs1, e1 = translate ?ident_label expr1 in
       let vbs2, e2 = translate expr2 in
       (Map.merge_skewed vbs1 vbs2 ~combine:(fun ~key:_ _v1 v2 -> v2), [%expr [%e e1] [%e e2]])
-  | [%expr fun ~config [%p? pat1] [%p? pat2] -> [%e? body]] ->
-      (* TODO(#38): generalize config to any number of labeled arguments with any labels. *)
+  | [%expr fun ~config -> [%e? body]] ->
       let vbs, body = translate ?ident_label body in
       ( no_vbs,
-        [%expr fun ~config -> [%e let_opt ~loc vbs [%expr fun [%p pat1] [%p pat2] -> [%e body]]]] )
-  | [%expr fun ~config [%p? pat] -> [%e? body]] ->
-      (* TODO(#38): generalize config to any number of labeled arguments with any labels. *)
-      let vbs, body = translate ?ident_label body in
-      (no_vbs, [%expr fun ~config -> [%e let_opt ~loc vbs [%expr fun [%p pat] -> [%e body]]]])
-  | [%expr fun [%p? pat1] [%p? pat2] -> [%e? body]] ->
-      let vbs, body = translate ?ident_label body in
-      (vbs, [%expr fun [%p pat1] [%p pat2] -> [%e body]])
+        [%expr fun ~config -> [%e let_opt ~loc vbs body]] )
   | [%expr fun [%p? pat] -> [%e? body]] ->
       let vbs, body = translate ?ident_label body in
       (vbs, [%expr fun [%p pat] -> [%e body]])
