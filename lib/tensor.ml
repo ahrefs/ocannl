@@ -316,16 +316,16 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
   Tn.update_memory_mode t.value Effectively_constant 24;
   t
 
-let param ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?(strict = false) ?values label
-    =
+let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced
+    ?(strict = false) ?values label =
   let init_op =
     match values with
     | Some values -> Arrayjit.Ops.Constant_fill { values; strict }
     | None -> Standard_uniform
   in
   let t =
-    term ~label:[ label ] ~grad_spec:Require_grad ~batch_dims:[] ?input_dims ?output_dims
-      ?input_axes ?output_axes ?deduced ~init_op ()
+    term ~label:(label :: more_label) ~grad_spec:Require_grad ~batch_dims:[] ?input_dims
+      ?output_dims ?input_axes ?output_axes ?deduced ~init_op ()
   in
   let v = t.value in
   (* It is convenient to use the param syntax for volatiles (mutable inputs). *)

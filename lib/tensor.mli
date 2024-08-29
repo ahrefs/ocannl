@@ -148,6 +148,7 @@ val ndarray :
     over to populate the [value] node. *)
 
 val param :
+  ?more_label:string list ->
   ?input_dims:int list ->
   ?output_dims:int list ->
   ?input_axes:(string * int) list ->
@@ -158,7 +159,8 @@ val param :
   string ->
   t
 (* A tensor with no batch axes; input and output axes are by default inferred. [grad_spec] is set to
-   [Require_grad]. *)
+   [Require_grad]. The resulting tensor's label is the passed string, appended by [more_label] if
+   any. *)
 
 val iter_embedded_arrays : f:(tn -> unit) -> t -> unit
 val non_and_embedded_nodes : t -> (t, comparator_witness) Set.t * (t, comparator_witness) Set.t
