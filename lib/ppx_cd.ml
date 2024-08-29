@@ -141,7 +141,17 @@ type array_setup = {
           in its label. The bool denotes whether this is a preferred (high quality) guess. *)
 }
 
-let assignment ~punned:_ ~lhs ~rhses body =
+let make_vb ~loc ~name ~name_expr ~hint_label =
+  let pat = A.Pat.var ~loc { loc = name_expr.pexp_loc; txt = name } in
+  let v =
+    match hint_label with
+    | None -> [%expr NTDSL.term ~label:[ [%e name_expr] ] ()]
+    | Some hint_label -> [%expr NTDSL.term ~label:([%e name_expr] :: [%e hint_label]) ()]
+  in
+  let vb = A.Vb.mk ~loc pat v in
+  vb
+
+let assignment ~punned ~lhs ~rhses body =
   let setups = lhs :: rhses in
   let bindings_list = List.filter_map ~f:(fun setup -> setup.binding) setups in
   let loc = body.pexp_loc in
@@ -153,16 +163,27 @@ let assignment ~punned:_ ~lhs ~rhses body =
     List.map bindings_list ~f:(fun { fwd_code_or_noop; _ } -> fwd_code_or_noop)
     |> List.reduce ~f:(fun code fwd -> [%expr Arrayjit.Assignments.Seq ([%e code], [%e fwd])])
   in
-  let vbs =
+  let vbs, body =
     match lhs.filler_typ with
-    | No_grad_tensor_intro { name; name_expr } ->
+    | No_grad_tensor_intro { name; name_expr } -> (
         let good_hints, bad_hints =
           List.partition_tf ~f:snd @@ List.filter_map rhses ~f:(fun sup -> sup.pun_hint_tnode)
         in
-        (* FIXME: *)
-        ignore (name, name_expr, good_hints, bad_hints);
-        no_vbs
-    | _ -> no_vbs
+        let hint_data = Option.first_some (List.hd good_hints) (List.hd bad_hints) in
+        let hint_label = Option.map ~f:fst hint_data in
+        let vbs = Map.singleton (module String) name @@ make_vb ~loc ~name ~name_expr ~hint_label in
+        match hint_data with
+        | None -> (vbs, body)
+        | Some data -> (
+            match Hashtbl.add punned ~key:name ~data with
+            | `Ok -> (vbs, body)
+            | `Duplicate ->
+                ( no_vbs,
+                  Ast_builder.Default.pexp_extension ~loc
+                  @@ Location.error_extensionf ~loc
+                       "ppx_ocannl %%cd: duplicate inline declaration of no-gradient tensor %s" name
+                )))
+    | _ -> (no_vbs, body)
   in
   {
     vbs;
@@ -211,9 +232,20 @@ let project_p_dims debug loc slot =
            "(incorporate one of: v, v1, v2, g, g1, g2, lhs, rhs, rhs1, rhs2)"
 
 let guess_pun_hint ~punned filler_typ filler =
-  (* FIXME: *)
-  ignore (punned, filler_typ, filler);
-  None
+  let loc = filler.pexp_loc in
+  let hint = [%expr [%e filler].Arrayjit.Tnode.label] in
+  match (filler_typ, filler) with
+  | Code, _ -> None
+  | Array, _ -> Some (hint, false)
+  | (Tensor | Unknown), { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
+    when Hashtbl.mem punned name ->
+      Hashtbl.find punned name
+  | (Tensor | Unknown), { pexp_desc = Pexp_ident _; _ } -> Some (hint, true)
+  | (Tensor | Unknown), _ -> Some (hint, false)
+  | (Value_of_tensor t | Grad_of_tensor t | Merge_value t | Merge_grad t), _ -> (
+      let hint = [%expr [%e t].Tensor.value.Arrayjit.Tnode.label] in
+      match t with { pexp_desc = Pexp_ident _; _ } -> Some (hint, true) | _ -> Some (hint, false))
+  | No_grad_tensor_intro { name; _ }, _ -> Hashtbl.find punned name
 
 let setup_array ~punned ~is_lhs filler_pat { typ = filler_typ; slot; expr = filler; vbs } =
   assert (Map.is_empty vbs);

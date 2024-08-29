@@ -131,6 +131,7 @@ let set_hosted (a : Tn.t) =
   else Tn.update_memory_mode a (Hosted Changed_on_devices) 41
 
 let label_suffix label =
+  (* FIXME: this should be label prefix, as most valuable label components come first. *)
   Option.value ~default:"unknown"
   @@ List.find ~f:(String.for_all ~f:(fun c -> Char.is_alphanum c || equal_char '_' c))
   @@ List.rev label
@@ -189,13 +190,11 @@ let grad_update ?(disable_rootness_check = false) ?(setup_for_parallel = false) 
 (** See: https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py *)
 let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
   if not @@ is_param p then raise @@ Tensor.Session_error ("Train.sgd_one: not a parameter", Some p);
-  let sgd_delta = NTDSL.term ~label:("sgd_delta" :: p.value.label) () in
-  let sgd_momentum = NTDSL.term ~label:("sgd_momentum" :: p.value.label) () in
   [%cd
     ~~(p "param sgd step");
-    sgd_delta =: p.grad + (!.weight_decay *. p);
+    "sgd_delta" =: p.grad + (!.weight_decay *. p);
     if Float.(momentum > 0.0) then (
-      sgd_momentum =: (!.momentum *. sgd_momentum) + sgd_delta;
+      "sgd_momentum" =: (!.momentum *. sgd_momentum) + sgd_delta;
       if nesterov then sgd_delta =+ !.momentum *. sgd_momentum else sgd_delta =: sgd_momentum);
     p =- learning_rate *. sgd_delta]
 
