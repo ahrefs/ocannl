@@ -14,10 +14,11 @@
   - [Further features of the syntax extension %op](#features-of-syntax-op)
     - [Name from binding](#name-from-binding)
     - [Label from function argument](#label-from-function-argument)
+    - [Configuring inline declarations: inline output dimensions, initial values](#configuring-inline-declarations-inline-output-dimensions-initial-values)
     - [Lifting of the applications of ~config arguments: if it's an error, refactor your code](#lifting-of-the-applications-of-config-arguments-if-its-an-error-refactor-your-code)
   - [Implementation details](#implementation-details)
-    - [Syntax extension %cd](#implementation-extension-cd)
-    - [Syntax extension %op](#implementation-extension-op)
+    - [The hard-coded to-the-power-of operator](#the-hard-coded-to-the-power-of-operator)
+    - [Intricacies of the syntax extension %cd](#implementation-extension-cd)
 - In a nutshell
   - Syntax extension `%cd` stands for "code", to express assignments: `Assignments.t`.
   - Syntax extension `%op` stands for "operation", to express tensors: `Tensor.t`.
@@ -165,6 +166,17 @@ let%op mlp_layer ~config x = !/ ("w" * x + "b" config.hid_dim)
 
 ## Using OCANNL's generalized einsum notation
 
+As we mentioned above, in the `%cd` syntax you can set up an arbitrary assignment with projections derived from a generalized einsum specification, by passing the specification as a string with the `~logic` label. However, both the `%cd` and `%op` syntaxes support built-in operators that take an einsum specification: `*+` binding to `NTDSL.einsum` resp. `TDSL.einsum`, and `++` binding to `NTDSL.einsum1` resp. `TDSL.einsum1`. `*+` is a "ternary" operator, binary wrt. tensor arguments, and `++` is a binary operator, unary postfix wrt. tensor arguments. The einsum specification string should directly follow `*+` and `++`.
+
+Both `*+` and `++` use addition for the accumulation operation; `*+` uses multiplication. You can verify that looking at the `Operation.einsum` and `Operation.einsum1` definitions. You can find examples of `*+` and `++` behavior in the test suite [einsum_trivia.ml](test/einsum_trivia.ml). A frequent use-case for `++` is to sum out all axes of a tensor:
+
+```ocaml
+  let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
+  ...
+```
+
+where `(!..)` converts an integer into a constant tensor.
+
 ## Further features of the syntax extension `%cd` {#features-of-syntax-cd}
 
 ### Referencing arrays: tensor value, tensor gradient, merge buffer of a tensor node
@@ -181,6 +193,17 @@ For example, in a data-parallel computation, gradients of the same param `p` can
 
 ### Block comments
 
+The `%cd` syntax uses the prefix operator `(~~)` in a semicolon sequence to introduce block comments:
+
+```ocaml
+type Assignments.t =
+  ...
+  | Block_comment of string * t
+  ...
+```
+
+ Schematic example: `~~("space" "separated" "comment" "tensor p debug_name:" p); <scope of the comment>`. The content of the comment uses application syntax, must be composed of strings, `<tensor>`, `<tensor>.value` (equivalent to `<tensor>`), `<tensor>.grad` components, where `<tensor>` is any tensor expression or tensor identifier.
+
 ## Further features of the syntax extension `%op` {#features-of-syntax-op}
 
 ### Name from binding
@@ -192,6 +215,19 @@ When an extension point is applied to a let-binding, e.g. `let%op mlp_layer ~con
 The resulting (primary) tensor's label will also have incorporated the label of the input argument, if any. In our example, the resulting `mlp_layer` tensor will also include the label of the actually applied `x`.
 
 Note that we do not include `config.label`, even if `config` is available, because the actually applied input argument will typically have more specific information.
+
+### Configuring inline declarations: inline output dimensions, initial values
+
+In the `%op` syntax, when a tuple follows an inline declaration of a tensor (i.e. a string literal), the tuple is passed to specify the output axes in the tensor definition (via the `~output_dims` argument).
+
+When it is an integer, an identifier, or a record field dereference following an inline declaration, this expression specifies the single output axis in the tensor definition. You can see an example above in this document: `let%op mlp_layer ~config x = !/ ("w" * x + "b" config.hid_dim)`.
+
+If it is a list expression following an inline declaration, the expression is parsed as an [N-dimensional array constant](#numeric-and-n-dimensional-array-literals), and used to initialize the value tensor node of the defined tensor. A very simple example from [micrograd_demo: Micrograd README basic example](test/micrograd_demo.ml):
+
+```ocaml
+  let%op c = "a" [ -4 ] + "b" [ 2 ] in
+  ...
+```
 
 ### Lifting of the applications of `~config` arguments: if it's an error, refactor your code
 
@@ -253,23 +289,43 @@ Unfortunately, we need to be mindful to introduce params at the right times.
 
 ## Implementation details
 
-### Syntax extension `%cd` {#implementation-extension-cd}
+### The hard-coded to-the-power-of operator
 
-The translate function returns an record. The `expr` field (filler expression) meaning depends on `typ` (filler type): for `Code`, this is an `Assignments.t` expression. For `Unknown` and `Tensor`, this is a `Tensor.t` expression. For `Array` and `Merge_value`, this is a non-optional `Tnode.t` expression, and for `Grad_of_tensor` and `Merge_grad`, it's an optional `Tnode.t` expresssion.
-
-Next, `setup_array ~is_lhs:true` converts the filler expression into a `Tnode.t option` expression, and `setup_array ~is_lhs:false` converts the filler into an `Assignments.buffer option` expression according to `filler_typ`.
+OCANNL has a built-in numerical binary operation to-power-of: `Ops.ToPowOf`. As part of assignments, the corresponding operator is `**`. Here is the full definition of the to-power-of tensor operation from [Operation](lib/operation.ml):
 
 ```ocaml
-type expr_type =
-  | Code
-  | Array
-  | Grad_of_tensor of expression
-  | Tensor
-  | Unknown
-  | Merge_value
-  | Merge_grad of expression
+let rec pointpow ?(label : string list = []) ~grad_spec p t1 : Tensor.t =
+  let module NTDSL = struct
+    include Initial_NTDSL
 
-type projections_slot = LHS | RHS1 | RHS2 | Nonslot | Undet
+    module O = struct
+      include NDO_without_pow
+
+      let ( **. ) ?label base exp = pointpow ?label ~grad_spec:Tensor.Prohibit_grad exp base
+    end
+  end in
+  let p_t = NTDSL.number p in
+  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections in
+  let%cd grad_asn =
+    if Tensor.is_prohibit_grad grad_spec then fun ~v:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ -> Asgns.Noop
+    else if Float.equal p 2.0 then fun ~v:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ p_t *. t1 * g
+    else if Float.equal p 1.0 then fun ~v:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ g
+    else fun ~v:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ p_t *. (t1 **. (p -. 1.)) * g
+  in
+  Tensor.binop ~label:("**." :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn ~grad_spec t1 p_t
 ```
 
-### Syntax extension `%op` {#implementation-extension-op}
+On the `Tensor` level, this is implemented as a binary tensor operation, but it is exposed as a unary tensor operation! To avoid the complexities of propagating gradient into the exponent, `Operation.pointpow` is implemented as a function of only one tensor, the exponent is a number. We hard-code the pointwise-power-of operator `NTDSL.O.( **. )`, resp. `TDSL.O.( **. )`, in the `%cd` and `%op` syntaxes, to pass the numeric value to `pointpow` (the second argument of `**.`) without converting it to a tensor first.
+
+### Intricacies of the syntax extension `%cd` {#implementation-extension-cd}
+
+The syntax `%cd` translator needs to accomplish more than a context-free conversion of a concise notation to an `Assignments.t` data-type.
+
+- It needs to keep track if `~projections` is in scope, and it needs to collect the information about an assignment to properly transofm the projections from the scope into the projections valid for the particular assignment.
+- Whenever the parsed notation uses tensors whose value nodes have not been computed yet, the translator needs to include the "forward" code of the tensors among the generated assignments. Typically this is required for embedded tensor expressions, which create new tensors. The translator puts the forward code in sequence just prior to the assignment that made use of the created tensor. The translator includes the forward code of tensors that are "forward roots" at the time the assigments are constructed (using `Tensor.is_fwd_root`).
+- For inline declarations of tensors, the translator needs to pick the right other tensor, if any, to enrich the label information of the created tensor. Mechanisms:
+  - Prefer tensors from identifiers (or field dereferences), since labels of tensor expressions (creating new tensors) will typically be overly verbose.
+  - Filter out escaping variables (identifiers coming from nested function parameters).
+  - When one inline declaration uses another inline declaration on its right-hand-side, recall the other declaration's label-enriching-tensor and use it directly.
+- The argument slots in `Assignments.Accum_binop` and `Assignments.Accum_unop` can be either regular tensor nodes, or merge buffers of tensor nodes. The translator needs to determine that.
+- When a tensor expression is used to create a new tensor, the translator lifts the expression into a let-binding, to be able to refer to the (same) tensor more than once. The created tensor is referred to at least twice: at its use site, and to include its forward code among the assignments.
