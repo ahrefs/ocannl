@@ -108,7 +108,8 @@ let rec translate ~has_config ?ident_label expr =
       [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
         [%e?
           ( { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = dims_loc; _ }
-          | { pexp_desc = Pexp_ident _; pexp_loc = dims_loc; _ } ) as d]] ->
+          | { pexp_desc = Pexp_ident _; pexp_loc = dims_loc; _ }
+          | { pexp_desc = Pexp_field _; pexp_loc = dims_loc; _ } ) as d]] ->
       let pat, vb = make_vb_dims ~has_config ~loc ~str_loc ~ident ~dims:[ d ] ~dims_loc s in
       (Map.singleton (module String) ident vb, pat2expr pat)
   | [%expr
@@ -156,6 +157,9 @@ let rec translate ~has_config ?ident_label expr =
   | [%expr fun ~config -> [%e? body]] ->
       let vbs, body = translate ~has_config:true ?ident_label body in
       (no_vbs, [%expr fun ~config -> [%e let_opt ~loc vbs body]])
+  | [%expr fun ~(config : [%typ? config_ty]) -> [%e? body]] ->
+      let vbs, body = translate ~has_config:true ?ident_label body in
+      (no_vbs, [%expr fun ~(config : [%typ ty]) -> [%e let_opt ~loc vbs body]])
   | [%expr fun [%p? pat] -> [%e? body]] ->
       let vbs, body = loop ?ident_label body in
       (vbs, [%expr fun [%p pat] -> [%e body]])
