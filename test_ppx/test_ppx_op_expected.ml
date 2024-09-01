@@ -45,3 +45,48 @@ let z =
       ((( * ) ?label:None) (TDSL.number ?label:None ~axis_label:"q" 2.0) hey5)
       ((( * ) ?label:None) hey6 (TDSL.number ?label:None ~axis_label:"p" 1.0))
 let () = ignore (y0, y1, y2, a, b, y, z)
+type mlp_layer_config = {
+  label: string list ;
+  hid_dim: int }
+let mlp_layer =
+  let open! TDSL.O in
+    fun ~config ->
+      let b =
+        (TDSL.param ~more_label:(config.label)) ~output_dims:[config.hid_dim]
+          "b"
+      and w = (TDSL.param ~more_label:(config.label)) ?values:None "w" in
+      fun x ->
+        ((?/) ?label:(Some
+                        (["mlp_layer"] @
+                           (x.Tensor.value).Arrayjit.Tnode.label)))
+          (((+) ?label:None) ((( * ) ?label:None) w x) b)
+let _use_layer =
+  let config_block__0 = mlp_layer ~config:{ label = ["L2"]; hid_dim = 3 }
+  and config_block__1 = mlp_layer ~config:{ label = ["L"]; hid_dim = 3 } in
+  let open! TDSL.O in fun x -> config_block__1 (config_block__0 x)
+let _config_layer =
+  let open! TDSL.O in
+    fun ~config:_ ->
+      let config_block__0 = mlp_layer ~config:{ label = ["L"]; hid_dim = 3 } in
+      fun x -> config_block__0 x
+type tlp_config = {
+  label: string list ;
+  dim1: int ;
+  dim2: int ;
+  dim3: int }
+let _three_layer_perceptron =
+  let open! TDSL.O in
+    fun ~config:(config : tlp_config) ->
+      let config_block__0 =
+        mlp_layer
+          ~config:{ label = ("L1" :: (config.label)); hid_dim = (config.dim1)
+                  }
+      and config_block__1 =
+        mlp_layer
+          ~config:{ label = ("L2" :: (config.label)); hid_dim = (config.dim2)
+                  }
+      and config_block__2 =
+        mlp_layer
+          ~config:{ label = ("L3" :: (config.label)); hid_dim = (config.dim3)
+                  } in
+      fun x -> config_block__2 (config_block__1 (config_block__0 x))

@@ -10,3 +10,22 @@ let%op b = [| [ 7; 8 ]; [ 9; 10 ] |]
 let%op y = ("hey4" * 'q' 2.0) + 'p' 1.0
 let%op z = ('q' 2.0 * "hey5") + ("hey6" * 'p' 1.0)
 let () = ignore (y0, y1, y2, a, b, y, z)
+
+type mlp_layer_config = { label : string list; hid_dim : int }
+
+let%op mlp_layer ~config x = ?/(("w" * x) + "b" config.hid_dim)
+
+let%op _use_layer x =
+  mlp_layer ~config:{ label = [ "L" ]; hid_dim = 3 }
+    (mlp_layer ~config:{ label = [ "L2" ]; hid_dim = 3 } x)
+
+let%op _config_layer ~config:_ x = mlp_layer ~config:{ label = [ "L" ]; hid_dim = 3 } x
+
+type tlp_config = { label : string list; dim1 : int; dim2 : int; dim3 : int }
+
+let%op _three_layer_perceptron ~(config : tlp_config) x =
+  mlp_layer
+    ~config:{ label = "L3" :: config.label; hid_dim = config.dim3 }
+    (mlp_layer
+       ~config:{ label = "L2" :: config.label; hid_dim = config.dim2 }
+       (mlp_layer ~config:{ label = "L1" :: config.label; hid_dim = config.dim1 } x))

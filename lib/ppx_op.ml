@@ -58,9 +58,25 @@ let make_vb_nd ~has_config ~loc ~str_loc ?axis_labels ~ident ~init_nd string =
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
-let rec translate ~is_toplevel ~has_config ?label expr =
+let lift_config_vb ~loop ~num_configs ?label ~expr1 ~c_expr arg_exprs =
+  let vbs1, e1 = loop ?label expr1 in
+  let vbss, es = List.unzip @@ List.map arg_exprs ~f:loop in
+  let ident = "config_block__" ^ Int.to_string !num_configs in
+  Int.incr num_configs;
+  let loc = expr1.pexp_loc in
+  let pat = Ast_helper.Pat.var ~loc { loc = c_expr.pexp_loc; txt = ident } in
+  let v = [%expr [%e e1] ~config:[%e c_expr]] in
+  let vb = Ast_helper.Vb.mk ~loc pat v in
+  ( Map.add_exn ~key:ident ~data:vb @@ reduce_vbss (vbs1 :: vbss),
+    match es with
+    | [] -> [%expr [%e pat2expr pat]]
+    | [ e2 ] -> [%expr [%e pat2expr pat] [%e e2]]
+    | [ e2; e3 ] -> [%expr [%e pat2expr pat] [%e e2] [%e e3]]
+    | _ -> assert false )
+
+let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
   let loc = expr.pexp_loc in
-  let loop = translate ~is_toplevel:false ~has_config in
+  let loop = translate ~num_configs ~is_toplevel:false ~has_config in
   match expr with
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
       (no_vbs, [%expr TDSL.number ?label:[%e opt_expr ~loc label] [%e expr]])
@@ -130,6 +146,12 @@ let rec translate ~is_toplevel ~has_config ?label expr =
   | [%expr [%e? expr1] **. [%e? expr2]] ->
       let vbs, e1 = loop expr1 in
       (vbs, [%expr TDSL.O.( **. ) ?label:[%e opt_expr ~loc label] [%e e1] [%e expr2]])
+  | [%expr [%e? expr1] ~config:[%e? c_expr] [%e? expr2] [%e? expr3]] ->
+      lift_config_vb ~loop ~num_configs ?label ~expr1 ~c_expr [ expr2; expr3 ]
+  | [%expr [%e? expr1] ~config:[%e? c_expr] [%e? expr2]] ->
+      lift_config_vb ~loop ~num_configs ?label ~expr1 ~c_expr [ expr2 ]
+  | [%expr [%e? expr1] ~config:[%e? c_expr]] ->
+      lift_config_vb ~loop ~num_configs ?label ~expr1 ~c_expr []
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3]] ->
       let vbs1, e1 = loop ?label expr1 in
       let vbs2, e2 = loop expr2 in
@@ -138,13 +160,11 @@ let rec translate ~is_toplevel ~has_config ?label expr =
   | [%expr [%e? expr1] [%e? expr2]] ->
       let vbs1, e1 = loop ?label expr1 in
       let vbs2, e2 = loop expr2 in
-      (Map.merge_skewed vbs1 vbs2 ~combine:(fun ~key:_ _v1 v2 -> v2), [%expr [%e e1] [%e e2]])
-  | [%expr fun ~config -> [%e? body]] ->
-      let vbs, body = translate ~is_toplevel:true ~has_config:true ?label body in
-      (no_vbs, [%expr fun ~config -> [%e let_opt ~loc vbs body]])
-  | [%expr fun ~(config : [%typ? config_ty]) -> [%e? body]] ->
-      let vbs, body = translate ~is_toplevel:true ~has_config:true ?label body in
-      (no_vbs, [%expr fun ~(config : [%typ ty]) -> [%e let_opt ~loc vbs body]])
+      (reduce_vbss [ vbs1; vbs2 ], [%expr [%e e1] [%e e2]])
+  | { pexp_desc = Pexp_fun (Labelled "config", c_e, c_pat, body); _ } ->
+      let vbs, body = translate ~num_configs ~is_toplevel:true ~has_config:true ?label body in
+      let body = let_opt ~loc vbs body in
+      (no_vbs, {expr with pexp_desc = Pexp_fun (Labelled "config", c_e, c_pat, body)})
   | [%expr fun [%p? pat] -> [%e? body]] when is_toplevel ->
       let input_label =
         let loc = pat.ppat_loc in
@@ -240,7 +260,7 @@ let rec translate ~is_toplevel ~has_config ?label expr =
 
 let translate ?ident_label expr =
   let vbs, expr =
-    translate ~is_toplevel:true ~has_config:false
+    translate ~num_configs:(ref 0) ~is_toplevel:true ~has_config:false
       ~label:(opt_pat2string_list ~loc:expr.pexp_loc ident_label)
       expr
   in
