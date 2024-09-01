@@ -25,7 +25,7 @@
 
 ## Preliminaries
 
-OCANNL, and Arrayjit specifically, is built around a fixed number of numeric operations, declared in `arrayjit/ops.ml`. We assign operators to many of the operations, inventing new operators. For example, Rectified Linear Unit `Relu` operation, which computes `f(x) = max(0,x)`, gets the operator `!/`, and the ReLU-Gate `Relu_gate` operation, which computes `f(x,y) = if x > 0.0 then y else 0.0`, gets the operator `-?/`. These built-in numeric operations are used to construct assignments (`Assignments.t`). The syntax `%cd` is needed to build assignments concisely. On the other hand, while the syntax `%op` helps build tensors (`Tensor.t`), they can be expressed concisely in pure OCaml. Unlike for assignments, the building blocks for tensor expressions are easy to extend. The meaningful basic ones are provided in `lib/operation.ml`.
+OCANNL, and Arrayjit specifically, is built around a fixed number of numeric operations, declared in `arrayjit/ops.ml`. We assign operators to many of the operations, inventing new operators. For example, Rectified Linear Unit `Relu` operation, which computes `f(x) = max(0,x)`, gets the operator `?/`, and the ReLU-Gate `Relu_gate` operation, which computes `f(x,y) = if x > 0.0 then y else 0.0`, gets the operator `-?/`. These built-in numeric operations are used to construct assignments (`Assignments.t`). The syntax `%cd` is needed to build assignments concisely. On the other hand, while the syntax `%op` helps build tensors (`Tensor.t`), they can be expressed concisely in pure OCaml. Unlike for assignments, the building blocks for tensor expressions are easy to extend. The meaningful basic ones are provided in `lib/operation.ml`.
 
 In OCANNL, we call a tensor that is prohibited from propagating gradients, does not have a gradient node nor backprop code, a _non-differentiable tensor_. Accordingly we can call the "plain" tensors with a gradient node _differentiable tensors_. Expressions in the `%cd` syntax will sometimes build new non-differentiable tensors as components of assignments (they will never build new differentiable tensors). The syntax extensions make the following assumption:
 
@@ -44,7 +44,7 @@ The extension points open `NTDSL.O`, resp. `TDSL.O`, for the scope of the extens
   let hid_dim = 8 in
   let w = Tensor.param "w" in
   let b = Tensor.param ~output_dims:[ hid_dim ] "b" in
-  let layer x = TDSL.O.( !/(w * x + b) ) in
+  let layer x = TDSL.O.( ?/(w * x + b) ) in
   ...
 ```
 
@@ -54,7 +54,7 @@ Since `TDSL.O` is opened for the scope of an extension point `%op`:
   let hid_dim = 8 in
   let w = Tensor.param "w" in
   let b = Tensor.param ~output_dims:[ hid_dim ] "b" in
-  let%op layer x = !/(w * x + b) in
+  let%op layer x = ?/(w * x + b) in
   ...
 ```
 
@@ -62,7 +62,7 @@ Using [inline declarations](#inline-declarations), this becomes more concise:
 
 ```ocaml
   let hid_dim = 8 in
-  let%op mlp_layer x = !/("w" * x + "b" hid_dim) in
+  let%op mlp_layer x = ?/("w" * x + "b" hid_dim) in
   ...
 ```
 
@@ -163,7 +163,7 @@ For `%op`, the declaration is allowed anywhere. If there is a `~config` function
 ```ocaml
 type mlp_layer_config = { label : string list; hid_dim : int }
 
-let%op mlp_layer ~config x = !/ ("w" * x + "b" config.hid_dim)
+let%op mlp_layer ~config x = ?/ ("w" * x + "b" config.hid_dim)
 ```
 
 ## Using OCANNL's generalized einsum notation
@@ -210,7 +210,7 @@ type Assignments.t =
 
 ### Name from binding
 
-When an extension point is applied to a let-binding, e.g. `let%op mlp_layer ~config x = !/ ("w" * x + "b" config.hid_dim)`, it uses the name of the binding (`mlp_layer` in the example) for the label of the primary tensor created by the extension, if any. This is why the resulting layer tensor in the example has its label starting with `"mlp_layer"`. If the extension is over a semicolon-separated sequence of expressions, the primary tensor can only be in the last component of the sequence, other syntax constructs are handled analogously.
+When an extension point is applied to a let-binding, e.g. `let%op mlp_layer ~config x = ?/ ("w" * x + "b" config.hid_dim)`, it uses the name of the binding (`mlp_layer` in the example) for the label of the primary tensor created by the extension, if any. This is why the resulting layer tensor in the example has its label starting with `"mlp_layer"`. If the extension is over a semicolon-separated sequence of expressions, the primary tensor can only be in the last component of the sequence, other syntax constructs are handled analogously.
 
 ### Label from function argument
 
@@ -222,7 +222,7 @@ Note that we do not include `config.label`, even if `config` is available, becau
 
 In the `%op` syntax, when a tuple follows an inline declaration of a tensor (i.e. a string literal), the tuple is passed to specify the output axes in the tensor definition (via the `~output_dims` argument).
 
-When it is an integer, an identifier, or a record field dereference following an inline declaration, this expression specifies the single output axis in the tensor definition. You can see an example above in this document: `let%op mlp_layer ~config x = !/ ("w" * x + "b" config.hid_dim)`.
+When it is an integer, an identifier, or a record field dereference following an inline declaration, this expression specifies the single output axis in the tensor definition. You can see an example above in this document: `let%op mlp_layer ~config x = ?/ ("w" * x + "b" config.hid_dim)`.
 
 If it is a list expression following an inline declaration, the expression is parsed as an [N-dimensional array constant](#numeric-and-n-dimensional-array-literals), and used to initialize the value tensor node of the defined tensor. A very simple example from [micrograd_demo: Micrograd README basic example](test/micrograd_demo.ml):
 
@@ -233,7 +233,7 @@ If it is a list expression following an inline declaration, the expression is pa
 
 ### Lifting of the applications of `~config` arguments: if it's an error, refactor your code
 
-If you recall, inline declared param tensors get lifted out of functions except for the function `fun ~config ->`, where they get defined. Our example `let%op mlp_layer ~config x = !/ ("w" * x + "b" config.hid_dim)` translates as:
+If you recall, inline declared param tensors get lifted out of functions except for the function `fun ~config ->`, where they get defined. Our example `let%op mlp_layer ~config x = ?/ ("w" * x + "b" config.hid_dim)` translates as:
 
 ```ocaml
 let mlp_layer ~config =
