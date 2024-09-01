@@ -58,9 +58,9 @@ let make_vb_nd ~has_config ~loc ~str_loc ?axis_labels ~ident ~init_nd string =
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
-let rec translate ~has_config ?label expr =
+let rec translate ~is_toplevel ~has_config ?label expr =
   let loc = expr.pexp_loc in
-  let loop = translate ~has_config in
+  let loop = translate ~is_toplevel:false ~has_config in
   match expr with
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
       (no_vbs, [%expr TDSL.number ?label:[%e opt_expr ~loc label] [%e expr]])
@@ -140,11 +140,25 @@ let rec translate ~has_config ?label expr =
       let vbs2, e2 = loop expr2 in
       (Map.merge_skewed vbs1 vbs2 ~combine:(fun ~key:_ _v1 v2 -> v2), [%expr [%e e1] [%e e2]])
   | [%expr fun ~config -> [%e? body]] ->
-      let vbs, body = translate ~has_config:true ?label body in
+      let vbs, body = translate ~is_toplevel:true ~has_config:true ?label body in
       (no_vbs, [%expr fun ~config -> [%e let_opt ~loc vbs body]])
   | [%expr fun ~(config : [%typ? config_ty]) -> [%e? body]] ->
-      let vbs, body = translate ~has_config:true ?label body in
+      let vbs, body = translate ~is_toplevel:true ~has_config:true ?label body in
       (no_vbs, [%expr fun ~(config : [%typ ty]) -> [%e let_opt ~loc vbs body]])
+  | [%expr fun [%p? pat] -> [%e? body]] when is_toplevel ->
+      let input_label =
+        let loc = pat.ppat_loc in
+        [%expr [%e pat2expr pat].Tensor.value.Arrayjit.Tnode.label]
+      in
+      let label =
+        match label with
+        | None -> input_label
+        | Some label ->
+            let loc = pat.ppat_loc in
+            [%expr [%e label] @ [%e input_label]]
+      in
+      let vbs, body = loop ~label body in
+      (vbs, [%expr fun [%p pat] -> [%e body]])
   | [%expr fun [%p? pat] -> [%e? body]] ->
       let vbs, body = loop ?label body in
       (vbs, [%expr fun [%p pat] -> [%e body]])
@@ -226,7 +240,9 @@ let rec translate ~has_config ?label expr =
 
 let translate ?ident_label expr =
   let vbs, expr =
-    translate ~has_config:false ~label:(opt_pat2string_list ~loc:expr.pexp_loc ident_label) expr
+    translate ~is_toplevel:true ~has_config:false
+      ~label:(opt_pat2string_list ~loc:expr.pexp_loc ident_label)
+      expr
   in
   let loc = expr.pexp_loc in
   ( vbs,

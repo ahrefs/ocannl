@@ -11,13 +11,15 @@ let y1 =
   let hey2 = TDSL.param ?values:None "hey2" in
   let open! TDSL.O in
     fun x ->
-      ((+) ?label:(Some ["y1"]))
+      ((+) ?label:(Some (["y1"] @ (x.Tensor.value).Arrayjit.Tnode.label)))
         ((( * ) ?label:None) hey2 (TDSL.number (Float.of_int 2))) x
 let y2 =
   let hey3 = TDSL.param ?values:None "hey3" in
   let open! TDSL.O in
     fun x1 ->
-      fun x2 -> ((+) ?label:(Some ["y2"])) ((( *. ) ?label:None) x1 hey3) x2
+      fun x2 ->
+        ((+) ?label:(Some (["y2"] @ (x1.Tensor.value).Arrayjit.Tnode.label)))
+          ((( *. ) ?label:None) x1 hey3) x2
 let a =
   let open! TDSL.O in
     TDSL.ndarray ?label:(Some ["a"]) ~batch_dims:[] ~input_dims:[3]

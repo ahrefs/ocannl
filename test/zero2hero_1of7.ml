@@ -141,7 +141,7 @@ let%expect_test "Graph drawing fetch" =
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   [%expect
     {|
-                                                   #54 +_f
+                                                   #54 +_f_5.
                                                     6.00e+1
                                          #53 -                                          │#46 5. <Virtual 40>
                                           5.50e+1                                       │<not-in-yet>

@@ -358,4 +358,43 @@ let%expect_test "Micrograd half-moons example" =
      -2.000e-1│----
     ──────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
               │0.000e+0                                                                                                        3.990e+2
-              │                                                          step |}]
+              │                                                          step |}];
+  Tensor.print_tree ~with_grad:true ~depth:9 mlp_result;
+  [%expect {|
+                    #187 +_mlp_point
+                     -8.86e+0
+                    #188 grad_+_mlp_point <waiting>
+                    <not-in-yet>
+    [84]│                   #185 * <Local 33>
+        │                   <not-in-yet>
+        │                   #186 grad_* <waiting>
+        │                   <not-in-yet>
+        │[90]│                #183 ?/ <Virtual 15>
+        │    │                <not-in-yet>
+        │    │                #184 grad_?/ <waiting>
+        │    │                <not-in-yet>
+        │    │                #181 + <Virtual 15>
+        │    │                <not-in-yet>
+        │    │                #182 grad_+ <waiting>
+        │    │                <not-in-yet>
+        │    │[82]│              #179 * <Local 33>
+        │    │    │              <not-in-yet>
+        │    │    │              #180 grad_* <waiting>
+        │    │    │              <not-in-yet>
+        │    │    │[88]│           #177 ?/ <Local 33>
+        │    │    │    │           <not-in-yet>
+        │    │    │    │           #178 grad_?/ <waiting>
+        │    │    │    │           <not-in-yet>
+        │    │    │    │           #175 + <Virtual 15>
+        │    │    │    │           <not-in-yet>
+        │    │    │    │           #176 grad_+ <waiting>
+        │    │    │    │           <not-in-yet>
+        │    │    │    │[80]│         #173 * <Local 33>
+        │    │    │    │    │         <not-in-yet>
+        │    │    │    │    │         #174 grad_* <waiting>
+        │    │    │    │    │         <not-in-yet>
+        │    │    │    │    │[86]│#171 point
+        │    │    │    │    │    │ 2.09e+0  -5.88e-1
+        │    │    │    │    │    │#172 grad_point <Never_virtual 26>
+        │    │    │    │    │    │<not-in-yet>
+    |}]

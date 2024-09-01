@@ -66,6 +66,8 @@ Using [inline declarations](#inline-declarations), this becomes more concise:
   ...
 ```
 
+When there is a function directly under the `%op` extension point, like in the example above, or directly under a function taking a `~config` parameter, the function parameter must be a tensor. That's because `%op` uses this tensor's (value's) label to enrich the label of the resulting tensor.
+
 ## The syntax for `%cd` {#syntax-for-cd}
 
 The basic building blocks of the `%cd` syntax are individual assignments, separated by semicolons. The assignments, represented via `Assignments.Accum_binop` and `Assignments.Accum_unop`, are in full generality accumulating:
