@@ -4,7 +4,7 @@ open Ppx_arrayjit.Ppx_helper
 open Ppx_shared
 module A = Ppxlib_ast.Ast_helper
 
-let ndarray_op ~ident_label ?axis_labels ?label expr =
+let ndarray_op ?axis_labels ?label expr =
   let loc = expr.pexp_loc in
   let values, batch_dims, output_dims, input_dims = ndarray_constant expr in
   let edims dims = Ast_builder.Default.elist ~loc dims in
@@ -14,15 +14,10 @@ let ndarray_op ~ident_label ?axis_labels ?label expr =
     | Some axis_labels, None -> [%expr NTDSL.ndarray ~axis_labels:[%e axis_labels]]
     | None, Some label -> [%expr NTDSL.ndarray ~label:[%e label]]
     | Some axis_labels, Some label ->
-        [%expr
-          NTDSL.ndarray
-            ~label:[%e opt_pat2string_list ~loc ident_label]
-            ~axis_labels:[%e axis_labels] ~label:[%e label]]
+        [%expr NTDSL.ndarray ~axis_labels:[%e axis_labels] ~label:[%e label]]
   in
   [%expr
-    [%e op]
-      ~label:[%e opt_pat2string_list ~loc ident_label]
-      ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
+    [%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
       ~output_dims:[%e edims output_dims] [%e values]]
 
 type expr_type =
@@ -414,9 +409,9 @@ let args_for ~loc = function
         [%expr false],
         [%expr false] )
 
-let translate ?ident_label (expr : expression) : result =
+let translate (expr : expression) : result =
   let punned = Hashtbl.create (module String) in
-  let rec transl ~bad_pun_hints ?ident_label ~proj_in_scope (expr : expression) : result =
+  let rec transl ~bad_pun_hints ~proj_in_scope (expr : expression) : result =
     let loc = expr.pexp_loc in
     let default_result =
       { vbs = no_vbs; typ = Tensor; slot = Undet; expr; array_opt_of_code = None }
@@ -425,16 +420,11 @@ let translate ?ident_label (expr : expression) : result =
     let process_assign_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ?projections ~proj_in_scope () =
       let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l =
-        setup_array ~punned ~bad_pun_hints ~is_lhs:true
-        @@ loop ?ident_label ~proj_in_scope:true lhs
+        setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope:true lhs
       in
       let _, bin_op = binary_op bin_op in
-      let setup_r1 =
-        setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs1
-      in
-      let setup_r2 =
-        setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2
-      in
+      let setup_r1 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs1 in
+      let setup_r2 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2 in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let projections =
         match projections with
@@ -493,9 +483,7 @@ let translate ?ident_label (expr : expression) : result =
       (* FIXME: I think this ignores the slot information here! Just assuming [projections] is
          as-should-be, but that's not consistent with omitting the projections arg (assuming it
          comes from the context). *)
-      let setup_l =
-        setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ?ident_label ~proj_in_scope lhs
-      in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
       let setup_r = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let projections =
@@ -548,15 +536,9 @@ let translate ?ident_label (expr : expression) : result =
     in
     let process_raw_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~logic =
       let initialize_neutral, accu_op = assignment_op accu_op in
-      let setup_l =
-        setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ?ident_label ~proj_in_scope lhs
-      in
-      let setup_r1 =
-        setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs1
-      in
-      let setup_r2 =
-        setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2
-      in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
+      let setup_r1 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs1 in
+      let setup_r2 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2 in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
       let t1_expr, rhs1_is_grad, rhs1_is_merge = args_for ~loc setup_r1 in
@@ -572,9 +554,7 @@ let translate ?ident_label (expr : expression) : result =
     in
     let process_raw_unop ~accu_op ~lhs ~un_op ~rhs ~logic =
       let initialize_neutral, accu_op = assignment_op accu_op in
-      let setup_l =
-        setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ?ident_label ~proj_in_scope lhs
-      in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
       let setup_r = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
@@ -589,31 +569,16 @@ let translate ?ident_label (expr : expression) : result =
     in
     match expr with
     | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
-        {
-          default_result with
-          expr = [%expr NTDSL.number ~label:[%e opt_pat2string_list ~loc ident_label] [%e expr]];
-        }
+        { default_result with expr = [%expr NTDSL.number [%e expr]] }
     | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
-        {
-          default_result with
-          expr =
-            [%expr
-              NTDSL.number ~label:[%e opt_pat2string_list ~loc ident_label] (Float.of_int [%e expr])];
-        }
+        { default_result with expr = [%expr NTDSL.number (Float.of_int [%e expr])] }
     | [%expr
         [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
           [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
         let axis =
           Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
         in
-        {
-          default_result with
-          expr =
-            [%expr
-              NTDSL.number
-                ~label:[%e opt_pat2string_list ~loc ident_label]
-                ~axis_label:[%e axis] [%e f]];
-        }
+        { default_result with expr = [%expr NTDSL.number ~axis_label:[%e axis] [%e f]] }
     | [%expr
         [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
           [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
@@ -622,12 +587,7 @@ let translate ?ident_label (expr : expression) : result =
         in
         {
           default_result with
-          expr =
-            [%expr
-              NTDSL.number
-                ~label:[%e opt_pat2string_list ~loc ident_label]
-                ~axis_label:[%e axis]
-                (Float.of_int [%e i])];
+          expr = [%expr NTDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])];
         }
     | { pexp_desc = Pexp_constant (Pconst_string (name, str_loc, _)); _ } ->
         {
@@ -637,7 +597,7 @@ let translate ?ident_label (expr : expression) : result =
         }
     | { pexp_desc = Pexp_array _; _ }
     | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
-        { default_result with expr = ndarray_op ~ident_label expr }
+        { default_result with expr = ndarray_op expr }
     | { pexp_desc = Pexp_ident { txt = Lident ("v" | "lhs"); _ }; _ } ->
         { default_result with typ = Array; slot = LHS }
     | { pexp_desc = Pexp_ident { txt = Lident "g"; _ }; _ } ->
@@ -677,24 +637,11 @@ let translate ?ident_label (expr : expression) : result =
         {
           res1 with
           typ = Tensor;
-          expr =
-            [%expr
-              NTDSL.O.( **. )
-                ~label:[%e opt_pat2string_list ~loc ident_label]
-                [%e res1.expr]
-                (Float.of_int [%e i])];
+          expr = [%expr NTDSL.O.( **. ) [%e res1.expr] (Float.of_int [%e i])];
         }
     | [%expr [%e? expr1] **. [%e? expr2]] ->
         let res1 = loop ~proj_in_scope expr1 in
-        {
-          res1 with
-          typ = Tensor;
-          expr =
-            [%expr
-              NTDSL.O.( **. )
-                ~label:[%e opt_pat2string_list ~loc ident_label]
-                [%e res1.expr] [%e expr2]];
-        }
+        { res1 with typ = Tensor; expr = [%expr NTDSL.O.( **. ) [%e res1.expr] [%e expr2]] }
     | [%expr
         [%e? expr1]
         *+ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]
@@ -710,11 +657,7 @@ let translate ?ident_label (expr : expression) : result =
           vbs = reduce_vbss [ res1.vbs; res2.vbs ];
           typ = Tensor;
           slot;
-          expr =
-            [%expr
-              NTDSL.einsum
-                ~label:[%e opt_pat2string_list ~loc ident_label]
-                [%e spec] [%e res1.expr] [%e res2.expr]];
+          expr = [%expr NTDSL.einsum [%e spec] [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
     | [%expr
@@ -722,17 +665,9 @@ let translate ?ident_label (expr : expression) : result =
         ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]]
       when String.contains spec_str '>' ->
         let res1 = loop ~proj_in_scope expr1 in
-        {
-          res1 with
-          typ = Tensor;
-          expr =
-            [%expr
-              NTDSL.einsum1
-                ~label:[%e opt_pat2string_list ~loc ident_label]
-                [%e spec] [%e res1.expr]];
-        }
+        { res1 with typ = Tensor; expr = [%expr NTDSL.einsum1 [%e spec] [%e res1.expr]] }
     | [%expr [%e? expr1].grad] -> (
-        let res1 = loop ?ident_label ~proj_in_scope expr1 in
+        let res1 = loop ~proj_in_scope expr1 in
         match res1.typ with
         | Unknown | Tensor | No_grad_tensor_intro _ ->
             {
@@ -758,7 +693,7 @@ let translate ?ident_label (expr : expression) : result =
                 @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: only tensors have a gradient";
             })
     | [%expr [%e? expr1].value] -> (
-        let res1 = loop ?ident_label ~proj_in_scope expr1 in
+        let res1 = loop ~proj_in_scope expr1 in
         (* TODO: maybe this is too permissive? E.g. [t1.grad.value] is accepted. *)
         match res1.typ with
         | Unknown | Tensor | No_grad_tensor_intro _ ->
@@ -780,7 +715,7 @@ let translate ?ident_label (expr : expression) : result =
             }
         | Array | Value_of_tensor _ | Grad_of_tensor _ | Merge_value _ | Merge_grad _ -> res1)
     | [%expr [%e? expr1].merge] -> (
-        let res1 = loop ?ident_label ~proj_in_scope expr1 in
+        let res1 = loop ~proj_in_scope expr1 in
         match res1.typ with
         | Unknown | Tensor | No_grad_tensor_intro _ ->
             { res1 with typ = Merge_value res1.expr; expr = [%expr [%e res1.expr].Tensor.value] }
@@ -901,7 +836,7 @@ let translate ?ident_label (expr : expression) : result =
         process_raw_unop ~accu_op ~lhs ~un_op:[%expr Arrayjit.Ops.Identity] ~rhs
           ~logic:[%expr Shape.Pointwise_un]
     | [%expr [%e? expr1] [%e? expr2] [%e? expr3]] ->
-        let res1 = loop ?ident_label ~proj_in_scope expr1 in
+        let res1 = loop ~proj_in_scope expr1 in
         let res2 = loop ~proj_in_scope expr2 in
         let res3 = loop ~proj_in_scope expr3 in
         let slot =
@@ -918,7 +853,7 @@ let translate ?ident_label (expr : expression) : result =
           array_opt_of_code = None;
         }
     | [%expr [%e? expr1] [%e? expr2]] ->
-        let res1 = loop ?ident_label ~proj_in_scope expr1 in
+        let res1 = loop ~proj_in_scope expr1 in
         let res2 = loop ~proj_in_scope expr2 in
         let slot =
           Option.value ~default:Undet
@@ -940,7 +875,7 @@ let translate ?ident_label (expr : expression) : result =
           | _ -> false
         in
         let bad_pun_hints = Set.union bad_pun_hints @@ collect_pat_idents pat in
-        let res1 = transl ~bad_pun_hints ?ident_label ~proj_in_scope expr1 in
+        let res1 = transl ~bad_pun_hints ~proj_in_scope expr1 in
         { res1 with expr = { expr with pexp_desc = Pexp_fun (arg_label, arg, pat, res1.expr) } }
     | [%expr
         while [%e? _test_expr] do
@@ -992,7 +927,7 @@ let translate ?ident_label (expr : expression) : result =
                | [%expr [%e? t].grad] -> [%expr Arrayjit.Tnode.debug_name [%e t].value ^ ".grad"]
                | t -> [%expr Arrayjit.Tnode.debug_name [%e t].value])
         in
-        let res2 = loop ?ident_label ~proj_in_scope expr2 in
+        let res2 = loop ~proj_in_scope expr2 in
         {
           res2 with
           expr =
@@ -1005,7 +940,7 @@ let translate ?ident_label (expr : expression) : result =
         [%e? expr1];
         [%e? expr2]] ->
         let res1 = loop ~proj_in_scope expr1 in
-        let res2 = loop ?ident_label ~proj_in_scope expr2 in
+        let res2 = loop ~proj_in_scope expr2 in
         {
           vbs = reduce_vbss [ res1.vbs; res2.vbs ];
           typ = Code;
@@ -1014,8 +949,8 @@ let translate ?ident_label (expr : expression) : result =
           array_opt_of_code = res2.array_opt_of_code;
         }
     | [%expr if [%e? expr1] then [%e? expr2] else [%e? expr3]] ->
-        let res2 = loop ?ident_label ~proj_in_scope expr2 in
-        let res3 = loop ?ident_label ~proj_in_scope expr3 in
+        let res2 = loop ~proj_in_scope expr2 in
+        let res3 = loop ~proj_in_scope expr3 in
         let typ = if is_unknown res2.typ then res3.typ else res2.typ in
         let slot =
           Option.value ~default:Undet
@@ -1029,7 +964,7 @@ let translate ?ident_label (expr : expression) : result =
           array_opt_of_code = None;
         }
     | [%expr if [%e? expr1] then [%e? expr2]] ->
-        let res2 = loop ?ident_label ~proj_in_scope expr2 in
+        let res2 = loop ~proj_in_scope expr2 in
         {
           vbs = res2.vbs;
           typ = Code;
@@ -1041,7 +976,7 @@ let translate ?ident_label (expr : expression) : result =
         let fields, cases =
           List.unzip
           @@ List.map cases ~f:(fun ({ pc_rhs; _ } as c) ->
-                 let res = loop ?ident_label ~proj_in_scope pc_rhs in
+                 let res = loop ~proj_in_scope pc_rhs in
                  ((res.vbs, res.typ, res.slot), { c with pc_rhs = res.expr }))
         in
         let vbss, typs, slots = List.unzip3 fields in
@@ -1069,23 +1004,19 @@ let translate ?ident_label (expr : expression) : result =
     (* let bindings = List.map bindings ~f:(fun binding -> {binding with pvb_expr=loop
        binding.pvb_expr}) in {expr with pexp_desc=Pexp_let (recflag, bindings, loop body)} *)
     | { pexp_desc = Pexp_open (decl, expr1); _ } ->
-        let res1 = loop ?ident_label ~proj_in_scope expr1 in
+        let res1 = loop ~proj_in_scope expr1 in
         { res1 with expr = { expr with pexp_desc = Pexp_open (decl, res1.expr) } }
     | { pexp_desc = Pexp_letmodule (name, module_expr, expr1); _ } ->
-        let res1 = loop ?ident_label ~proj_in_scope expr1 in
+        let res1 = loop ~proj_in_scope expr1 in
         { res1 with expr = { expr with pexp_desc = Pexp_letmodule (name, module_expr, res1.expr) } }
     | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_operator op_ident ->
-        {
-          default_result with
-          typ = Unknown;
-          expr = [%expr [%e expr] ~label:[%e opt_pat2string_list ~loc ident_label]];
-        }
+        { default_result with typ = Unknown; expr = [%expr [%e expr]] }
     | _ -> { default_result with typ = Unknown }
   in
-  transl ?ident_label ~proj_in_scope:false ~bad_pun_hints:(Set.empty (module String)) expr
+  transl ~proj_in_scope:false ~bad_pun_hints:(Set.empty (module String)) expr
 
 let translate ?ident_label expr =
-  let res = translate ?ident_label expr in
+  let res = translate expr in
   let expr = res.expr in
   let loc = res.expr.pexp_loc in
   ( res.vbs,
