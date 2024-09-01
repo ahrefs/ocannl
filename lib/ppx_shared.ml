@@ -146,8 +146,7 @@ let flatten_str ~loc ~path:_ items =
 let translate_str translate ({ pstr_desc; pstr_loc = loc; _ } as str) =
   match pstr_desc with
   | Pstr_eval (expr, attrs) ->
-      let vbs, expr = translate ?ident_label:None expr in
-      let expr = let_opt ~loc vbs expr in
+      let expr = expr_expander_with_punning translate ~loc ~path:() expr in
       { str with pstr_desc = Pstr_eval (expr, attrs) }
   | Pstr_value (recf, bindings) ->
       let f vb =

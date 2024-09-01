@@ -360,7 +360,7 @@ let rec non_and_embedded_nodes t =
   in
   (non_embedded - embedded, embedded)
 
-let debug t = Tn.debug_name t.value
+let debug_name t = Tn.debug_name t.value
 let debug_grad t = Tn.debug_name (Option.value_exn t.diff).grad
 
 let consume_forward_code t =
@@ -377,8 +377,8 @@ let consume_forward_code t =
     raise
     @@ Session_error
          ( [%string
-             {|Tensor.consume_forward_code for %{debug t}:
-found potentially unsafe roots: %{String.concat ~sep:", " @@ List.map ~f:debug unsafe_roots}|}],
+             {|Tensor.consume_forward_code for %{debug_name t}:
+found potentially unsafe roots: %{String.concat ~sep:", " @@ List.map ~f:debug_name unsafe_roots}|}],
            Some t );
   remove_fwd_root t;
   t.forward
@@ -388,7 +388,8 @@ let consume_backprop_code t =
     Option.value_or_thunk t.diff ~default:(fun () ->
         raise
         @@ Session_error
-             ( "Tensor.consume_backprop_code: tensor is not differentiable for value: " ^ debug t,
+             ( "Tensor.consume_backprop_code: tensor is not differentiable for value: "
+               ^ debug_name t,
                Some t ))
   in
   if not @@ is_bprop_root t then
@@ -404,7 +405,7 @@ let consume_backprop_code t =
     @@ Session_error
          ( [%string
              {|Tensor.consume_backprop_code for %{debug_grad t}:
-found potentially unsafe roots: %{String.concat ~sep:", " @@ List.map ~f:debug unsafe_roots}|}],
+found potentially unsafe roots: %{String.concat ~sep:", " @@ List.map ~f:debug_name unsafe_roots}|}],
            Some t );
   remove_bprop_root t;
   (diff.zero_grads, diff.backprop)

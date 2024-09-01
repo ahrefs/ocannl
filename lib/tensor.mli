@@ -250,6 +250,8 @@ val print_tree :
   t ->
   unit
 
+val debug_name : t -> string
+
 (** {2 Accessors.} *)
 
 val value_1d_points : ?from_axis:int -> xdim:int -> t -> float array
