@@ -19,7 +19,14 @@ let ctx_arrays Unimplemented_ctx = Map.empty (module Tnode)
 
 let link (Unimplemented_ctx : context) (code : code) =
   let lowered_bindings = List.map ~f:(fun s -> (s, ref 0)) @@ Indexing.bound_symbols code in
-  let task = Tnode.{ description = "CUDA missing: install cudajit"; work = (fun () -> ()) } in
+  let task =
+    Tnode.Task
+      {
+        context_lifetime = ();
+        description = "CUDA missing: install cudajit";
+        work = (fun () -> ());
+      }
+  in
   ((Unimplemented_ctx : context), lowered_bindings, task)
 
 let link_batch (Unimplemented_ctx : context) (code_batch : code_batch) =
@@ -29,7 +36,13 @@ let link_batch (Unimplemented_ctx : context) (code_batch : code_batch) =
   in
   let task =
     Array.map code_batch ~f:(fun _ ->
-        Some Tnode.{ description = "CUDA missing: install cudajit"; work = (fun () -> ()) })
+        Some
+          (Tnode.Task
+             {
+               context_lifetime = ();
+               description = "CUDA missing: install cudajit";
+               work = (fun () -> ());
+             }))
   in
   ((Unimplemented_ctx : context), lowered_bindings, task)
 
