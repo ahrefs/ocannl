@@ -187,31 +187,37 @@ let plot_canvas ?canvas ?(size : (int * int) option) (specs : plot_spec list) :
 
 let concise_float = Arrayjit.Ndarray.concise_float
 
-let plot ?(prec = 3) ?canvas ?size ~x_label ~y_label specs =
+let plot ?(prec = 3) ?(no_axes = false) ?canvas ?size ?(x_label = "x") ?(y_label = "y") specs =
   let minx, miny, maxx, maxy, canvas = plot_canvas ?canvas ?size specs in
   let open PrintBox in
   let y_label_l = List.map ~f:String.of_char @@ String.to_list y_label in
-  grid_l
-    [
+  if no_axes then grid_text ~bars:false canvas
+  else
+    grid_l
       [
-        hlist ~bars:false
-          [
-            align ~h:`Left ~v:`Center @@ lines y_label_l;
-            vlist ~bars:false
-              [ line @@ concise_float ~prec maxy; align_bottom @@ line @@ concise_float ~prec miny ];
-          ];
-        grid_text ~bars:false canvas;
-      ];
-      [
-        empty;
-        vlist ~bars:false
-          [
-            hlist ~bars:false
-              [ line @@ concise_float ~prec minx; align_right @@ line @@ concise_float ~prec maxx ];
-            align ~h:`Center ~v:`Bottom @@ line x_label;
-          ];
-      ];
-    ]
+        [
+          hlist ~bars:false
+            [
+              align ~h:`Left ~v:`Center @@ lines y_label_l;
+              vlist ~bars:false
+                [
+                  line @@ concise_float ~prec maxy; align_bottom @@ line @@ concise_float ~prec miny;
+                ];
+            ];
+          grid_text ~bars:false canvas;
+        ];
+        [
+          empty;
+          vlist ~bars:false
+            [
+              hlist ~bars:false
+                [
+                  line @@ concise_float ~prec minx; align_right @@ line @@ concise_float ~prec maxx;
+                ];
+              align ~h:`Center ~v:`Bottom @@ line x_label;
+            ];
+        ];
+      ]
 
 type table_row_spec =
   | Benchmark of {
