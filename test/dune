@@ -3,7 +3,7 @@
  (package neural_nets_lib)
  (inline_tests
   (deps ocannl_config))
- (libraries base dynlink ocannl)
+ (libraries base dynlink patdiff.expect_test_patdiff ocannl)
  (modules
   einsum_trivia
   hello_world_op

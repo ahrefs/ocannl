@@ -107,6 +107,7 @@
   ppx_expect
   (ppx_minidebug
    (>= 2.0.0))
+   (patdiff :with-test)
   (odoc :with-doc)
   (md2mld :with-doc))
  (tags
