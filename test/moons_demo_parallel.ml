@@ -53,7 +53,8 @@ let%expect_test "Half-moons data parallel" =
       epoch_loss
   in
   let module Backend = (val backend) in
-  let inputs, outputs, _model_result, infer_callback, batch_losses, epoch_losses, learning_rates =
+  let inputs, outputs, _model_result, infer_callback, _batch_losses, _epoch_losses, _learning_rates
+      =
     Train.example_train_loop ~seed ~batch_size ~max_num_devices:(batch_size / 2) ~init_lr
       ~data_len:len ~epochs ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn
       ~weight_decay ~per_batch_callback ~per_epoch_callback
@@ -66,60 +67,36 @@ let%expect_test "Half-moons data parallel" =
   let callback (x, y) = Float.((infer_callback [| x; y |]).(0) >= 0.) in
   let plot_moons =
     let open PrintBox_utils in
-    plot ~size:(120, 40) ~x_label:"ixes" ~y_label:"ygreks"
+    plot ~no_axes:true ~size:(120, 40)
       [
         Scatterplot { points = points1; pixel = "#" };
         Scatterplot { points = points2; pixel = "%" };
         Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
       ]
   in
-  Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n%!";
+  Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n";
   PrintBox_text.output Stdio.stdout plot_moons;
-  Stdio.printf "\nBatch Loss:\n%!";
-  let plot_loss =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"batch loss"
-      [ Line_plot { points = Array.of_list_rev batch_losses; pixel = "-" } ]
-  in
-  PrintBox_text.output Stdio.stdout plot_loss;
-  Stdio.printf "\nEpoch Loss:\n%!";
-  let plot_loss =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"epoch loss"
-      [ Line_plot { points = Array.of_list_rev epoch_losses; pixel = "-" } ]
-  in
-  PrintBox_text.output Stdio.stdout plot_loss;
-  Stdio.printf "\nBatch Log-loss:\n%!";
-  let plot_loss =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"batch log loss"
-      [
-        Line_plot
-          {
-            points =
-              Array.of_list_rev_map batch_losses ~f:Float.(fun x -> max (log 0.00003) (log x));
-            pixel = "-";
-          };
-      ]
-  in
-  PrintBox_text.output Stdio.stdout plot_loss;
-  Stdio.printf "\nEpoch Log-loss:\n%!";
-  let plot_loss =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"epoch log loss"
-      [ Line_plot { points = Array.of_list_rev_map epoch_losses ~f:Float.log; pixel = "-" } ]
-  in
-  PrintBox_text.output Stdio.stdout plot_loss;
-  Stdio.printf "\nLearning rate:\n%!";
-  let plot_lr =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"learning rate"
-      [ Line_plot { points = Array.of_list_rev learning_rates; pixel = "-" } ]
-  in
-  PrintBox_text.output Stdio.stdout plot_lr;
-(* NOTE: as of OCANNL 0.4, moons_demo_parallel, while deterministic on a single machine, gives
-   slightly different results on machines with a different hardware, e.g. arm64, ppc. Here we list
-   the results from the various CI targets. The first result is the one typically observed, the
-   second comes from targets debian-arm64 and debian-s390x, the third one from debian-ppc. *)
+  (* NOTE: as of OCANNL 0.4, moons_demo_parallel, while deterministic on a single machine, gives
+     slightly different results on machines with a different hardware, e.g. arm64, ppc. Here we list
+     the results from the various CI targets. The first result is the one typically observed, the
+     second comes from targets debian-arm64 and debian-s390x, the third one from debian-ppc. *)
   let result = [%expect.output] in
-  Stdio.printf "\nR:%s\nEND\n%!" result
+  let typical_target =
+    {| |}
+  in
+  let arm64_and_s390x_target =
+    {| |}
+  in
+  let ppc64_target =
+    {| |}
+  in
+  let result_as_expected =
+    List.mem
+      [ typical_target; arm64_and_s390x_target; ppc64_target ]
+      result ~equal:String.equal
+  in
+  if result_as_expected then Stdio.print_string "moons_demo_parallel result is as expected"
+  else (
+    Stdio.print_endline "Unexpected result:";
+    Stdio.print_string result);
+  [%expect "moons_demo_parallel result is as expected"]
