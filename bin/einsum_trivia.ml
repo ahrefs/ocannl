@@ -38,7 +38,7 @@ let _suspended () =
   in
   let%op ho2 = hey2 ++ "ab|cd->ef => cf|ae->db" in
   Utils.capture_stdout_logs @@ fun () ->
-    Train.forward_and_forget backend ctx ho2;
+  Train.forward_and_forget backend ctx ho2;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho2;
   Backend.unsafe_cleanup ()
 
@@ -60,11 +60,10 @@ let () =
   let%op c = b *+ "b|h->o; b|i->h => b|i->o" a in
   Utils.capture_stdout_logs (fun () -> Train.forward_and_forget backend ctx c);
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ a;
-  (* let%op d = a *+ "a|i->h; b|h->o => ab|i->o" b in
-  Utils.capture_stdout_logs (fun () -> Train.forward_and_forget backend ctx d);
-  let%op e = a *+ "b|i->h; b|h->o => i->o" b in
-  Utils.capture_stdout_logs (fun () -> Train.forward_and_forget backend ctx e);
-  let%op f = a *+ "a|i->h; b|h->o => i->o" b in
-  Utils.capture_stdout_logs (fun () -> Train.forward_and_forget backend ctx f); *)
+  (* let%op d = a *+ "a|i->h; b|h->o => ab|i->o" b in Utils.capture_stdout_logs (fun () ->
+     Train.forward_and_forget backend ctx d); let%op e = a *+ "b|i->h; b|h->o => i->o" b in
+     Utils.capture_stdout_logs (fun () -> Train.forward_and_forget backend ctx e); let%op f = a *+
+     "a|i->h; b|h->o => i->o" b in Utils.capture_stdout_logs (fun () -> Train.forward_and_forget
+     backend ctx f); *)
   (* Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ a2; *)
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ c

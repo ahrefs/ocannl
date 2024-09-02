@@ -378,5 +378,4 @@ let%expect_test "Micrograd half-moons example" =
   ] ->
       subtensor
   | _ -> assert false);
-  [%expect
-    {| (mlp moons_input) name: mlp_moons_input |}]
+  [%expect {| (mlp moons_input) name: mlp_moons_input |}]

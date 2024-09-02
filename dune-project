@@ -56,6 +56,10 @@
    (>= 0.20))
   (ctypes-foreign
    (>= 0.20))
+  ; opam 2.2.0 has with-dev-setup. Is it supported, what's the syntax?
+  ; (ocamlformat
+  ;  (>= 0.26.2)
+  ;  :with-dev-setup)
   printbox
   printbox-text
   ocannl_npy
@@ -86,6 +90,10 @@
   dune
   base
   core
+  ; opam 2.2.0 has with-dev-setup. Is it supported, what's the syntax?
+  ; (ocamlformat
+  ;  (>= 0.26.2)
+  ;  :with-dev-setup)
   arrayjit
   printbox
   printbox-text

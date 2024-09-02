@@ -164,7 +164,7 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
   | { pexp_desc = Pexp_fun (Labelled "config", c_e, c_pat, body); _ } ->
       let vbs, body = translate ~num_configs ~is_toplevel:true ~has_config:true ?label body in
       let body = let_opt ~loc vbs body in
-      (no_vbs, {expr with pexp_desc = Pexp_fun (Labelled "config", c_e, c_pat, body)})
+      (no_vbs, { expr with pexp_desc = Pexp_fun (Labelled "config", c_e, c_pat, body) })
   | [%expr fun [%p? pat] -> [%e? body]] when is_toplevel ->
       let input_label =
         let loc = pat.ppat_loc in
