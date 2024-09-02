@@ -78,7 +78,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
 
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   let routine = Backend.(link ctx @@ compile bindings (Seq (update.fwd_bprop, sgd))) in
@@ -177,7 +177,6 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   Backend.unsafe_cleanup ()
 
 let () = experiment 4 ~no_batch_shape_inference:true ~use_builtin_weight_decay:true ()
-
 let () = experiment 4 ~no_batch_shape_inference:false ~use_builtin_weight_decay:false ()
 
 let _suspended () =

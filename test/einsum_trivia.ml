@@ -8,7 +8,7 @@ module NTDSL = Operation.NTDSL
 module Rand = Arrayjit.Rand.Lib
 
 let%expect_test "einsum1 permute axes" =
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
@@ -260,7 +260,7 @@ let%expect_test "einsum1 permute axes" =
       └────────────────────────────────────────────────────────────────────────────────────────────┘ |}]
 
 let%expect_test "einsum1 sum out axes" =
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
@@ -320,7 +320,7 @@ let%expect_test "einsum1 sum out axes" =
       └────────────────────────────────────────────────────────────────────────────────────┘ |}]
 
 let%expect_test "einsum outer product" =
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
@@ -551,7 +551,7 @@ let%expect_test "einsum outer product" =
     └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ |}]
 
 let%expect_test "einsum matrix/inner+outer products" =
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
@@ -653,7 +653,7 @@ let%expect_test "einsum matrix/inner+outer products" =
       └────────────────────────────────────┘ |}]
 
 let%expect_test "einsum1 broadcast or sum out prefix axes" =
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
@@ -1048,7 +1048,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     └─────────────────────────────────────────────┘ |}]
 
 let%expect_test "einsum broadcast or sum out prefix axes" =
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
@@ -1149,7 +1149,7 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
     └─────────────────────────────────────────────┘ |}]
 
 let%expect_test "einsum1 fixed dim axis" =
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
@@ -1259,7 +1259,7 @@ let%expect_test "einsum1 fixed dim axis" =
     └────────────────────────────────────┘ |}]
 
 let%expect_test "einsum with fixed dim axes" =
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
@@ -1311,7 +1311,7 @@ let%expect_test "einsum with fixed dim axes" =
     └─────────────────────────────────────────────┘ |}]
 
 let%expect_test "outer_sum simulating axis concatenation" =
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
@@ -1499,7 +1499,7 @@ let%expect_test "outer_sum simulating axis concatenation" =
       └────────────────────────────────────┘ |}]
 
 let%expect_test "einsum with a leftmost input axis preserved as output axis" =
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
@@ -1576,7 +1576,7 @@ let%expect_test "einsum with a leftmost input axis preserved as output axis" =
     └─────────────────────────────────────────────────────────────────┘ |}]
 
 let%expect_test "einsum permuting two leftmost input axes as output axes" =
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in

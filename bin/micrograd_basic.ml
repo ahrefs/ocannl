@@ -9,7 +9,7 @@ module Rand = Arrayjit.Rand.Lib
 module Debug_runtime = Utils.Debug_runtime
 
 let%diagn_sexp () =
-  let module Backend = (val Train.fresh_backend ~backend_name:"cc" ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name:"cc" ()) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Utils.settings.output_debug_files_in_build_directory <- true;
@@ -34,7 +34,7 @@ let%diagn_sexp () =
   Tensor.print ~with_code:false ~with_grad:true `Default @@ b
 
 let%diagn_sexp _suspended () : unit =
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   (* Utils.settings.output_debug_files_in_build_directory <- true; *)

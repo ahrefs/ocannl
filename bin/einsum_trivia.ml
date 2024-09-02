@@ -8,7 +8,7 @@ module Rand = Arrayjit.Rand.Lib
 
 let _suspended () =
   Rand.init 0;
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   Utils.settings.output_debug_files_in_build_directory <- true;
@@ -25,7 +25,7 @@ let _suspended () =
   Utils.settings.log_level <- 2;
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
-  let module Backend = (val Train.fresh_backend ~backend_name:"cuda" ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name:"cuda" ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
@@ -46,7 +46,7 @@ let () =
   Utils.settings.log_level <- 2;
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in

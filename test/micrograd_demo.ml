@@ -8,7 +8,7 @@ module Rand = Arrayjit.Rand.Lib
 
 let%expect_test "Micrograd README basic example" =
   Rand.init 0;
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
@@ -80,7 +80,7 @@ let%expect_test "Micrograd README basic example" =
 
 let%expect_test "Micrograd half-moons example" =
   Rand.init 5;
-  let module Backend = (val Train.fresh_backend ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in

@@ -52,7 +52,7 @@ let demo () =
 
   let epoch_loss = ref 0. in
 
-  let module Backend = (val Train.fresh_backend ~backend_name:"cuda" ()) in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name:"cuda" ()) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   let routine = Backend.(link ctx @@ compile bindings (Seq (update.fwd_bprop, sgd))) in

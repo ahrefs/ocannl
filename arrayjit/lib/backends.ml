@@ -1341,3 +1341,24 @@ let reinitialize (module Backend : Backend) config =
     Core.Gc.full_major ();
     Backend.unsafe_cleanup ();
     Backend.initialize config)
+
+
+(** Reinitializes a backend selected via a global [backend] flag. *)
+let fresh_backend ?backend_name ?(config = Physical_devices_only) () =
+  let backend =
+    match
+      Option.value_or_thunk backend_name ~default:(fun () ->
+          Utils.get_global_arg ~arg_name:"backend" ~default:"pipes_cc")
+      |> String.lowercase
+    with
+    | "cc" -> (module Cc_backend : Backend)
+    | "gccjit" -> (module Gccjit_backend : Backend)
+    | "sync_cc" -> (module Sync_cc_backend : Backend)
+    | "sync_gccjit" -> (module Sync_gccjit_backend : Backend)
+    | "pipes_cc" -> (module Pipes_cc_backend : Backend)
+    | "pipes_gccjit" -> (module Pipes_gccjit_backend : Backend)
+    | "cuda" -> (module Cuda_backend : Backend)
+    | backend -> invalid_arg [%string "Backends.fresh_backend: unknown backend %{backend}"]
+  in
+  reinitialize backend config;
+  backend
