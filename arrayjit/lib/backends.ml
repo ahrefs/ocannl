@@ -1342,7 +1342,6 @@ let reinitialize (module Backend : Backend) config =
     Backend.unsafe_cleanup ();
     Backend.initialize config)
 
-
 (** Reinitializes a backend selected via a global [backend] flag. *)
 let fresh_backend ?backend_name ?(config = Physical_devices_only) () =
   let backend =

@@ -103,6 +103,7 @@ let config_file_args =
       in
       Stdio.printf "\nWelcome to OCANNL! Reading configuration defaults from %s.\n%!" fname;
       config_lines
+      |> List.filter ~f:(Fn.non @@ String.is_prefix ~prefix:"~~")
       |> List.map ~f:(String.split ~on:'=')
       |> List.filter_map ~f:(function
            | [] -> None
