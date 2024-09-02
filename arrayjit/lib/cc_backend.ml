@@ -25,12 +25,15 @@ type context = { label : string; arrays : ctx_arrays } [@@deriving sexp_of]
 let ctx_arrays context = context.arrays
 
 type buffer_ptr = ctx_array [@@deriving sexp_of]
-(** Alternative approach: {[
-type buffer_ptr = unit Ctypes_static.ptr
 
-let sexp_of_buffer_ptr ptr = Sexp.Atom (Ops.ptr_to_string ptr Ops.Void_prec)
-let buffer_ptr ctx_array = Ndarray.get_voidptr ctx_array
-]} *)
+(** Alternative approach:
+
+    {[
+      type buffer_ptr = unit Ctypes_static.ptr
+
+      let sexp_of_buffer_ptr ptr = Sexp.Atom (Ops.ptr_to_string ptr Ops.Void_prec)
+      let buffer_ptr ctx_array = Ndarray.get_voidptr ctx_array
+    ]} *)
 
 let buffer_ptr ctx_array = ctx_array
 

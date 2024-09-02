@@ -29,12 +29,14 @@ type ctx_array = Ndarray.t [@@deriving sexp_of]
 type ctx_arrays = ctx_array Map.M(Tn).t [@@deriving sexp_of]
 
 type buffer_ptr = ctx_array [@@deriving sexp_of]
-(** Alternative approach: {[
-type buffer_ptr = unit Ctypes_static.ptr
+(** Alternative approach:
 
-let sexp_of_buffer_ptr ptr = Sexp.Atom (Ops.ptr_to_string ptr Ops.Void_prec)
-let buffer_ptr ctx_array = Ndarray.get_voidptr ctx_array
-]} *)
+    {[
+      type buffer_ptr = unit Ctypes_static.ptr
+
+      let sexp_of_buffer_ptr ptr = Sexp.Atom (Ops.ptr_to_string ptr Ops.Void_prec)
+      let buffer_ptr ctx_array = Ndarray.get_voidptr ctx_array
+    ]} *)
 
 let buffer_ptr ctx_array = ctx_array
 

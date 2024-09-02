@@ -27,7 +27,7 @@ module Random_for_tests = struct
   let int high = Int32.(to_int_trunc @@ (rand_int32 () % of_int_trunc high))
 end
 
-let random_config = Utils.get_global_arg ~arg_name:"randomness_lib" ~default:"for_tests"
+let random_config = Utils.get_global_arg ~arg_name:"randomness_lib" ~default:"stdlib"
 
 let random_lib =
   match random_config with
