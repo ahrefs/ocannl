@@ -1347,7 +1347,7 @@ let fresh_backend ?backend_name ?(config = Physical_devices_only) () =
   let backend =
     match
       Option.value_or_thunk backend_name ~default:(fun () ->
-          Utils.get_global_arg ~arg_name:"backend" ~default:"pipes_cc")
+          Utils.get_global_arg ~arg_name:"backend" ~default:"sync_cc")
       |> String.lowercase
     with
     | "cc" -> (module Cc_backend : Backend)
