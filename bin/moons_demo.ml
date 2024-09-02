@@ -12,7 +12,7 @@ module Debug_runtime = Utils.Debug_runtime
 let demo () =
   Rand.init 0;
   Utils.enable_runtime_debug ();
-  Utils.settings.log_level <- 3;
+  Utils.set_log_level 3;
   (* Utils.settings.debug_log_from_routines <- true; *)
   let hid_dim = 16 in
   let len = 300 in

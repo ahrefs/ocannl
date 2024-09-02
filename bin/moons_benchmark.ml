@@ -32,7 +32,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   CDSL.virtualize_settings.max_visits <- inlining_cutoff;
   Tensor.default_value_prec := value_prec;
   Tensor.default_grad_prec := grad_prec;
-  Utils.settings.log_level <- 3;
+  Utils.set_log_level 3;
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   Rand.init (* seed *) 0;

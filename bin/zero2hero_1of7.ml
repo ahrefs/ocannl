@@ -94,7 +94,7 @@ let () =
   Stdio.print_endline ""
 
 let _suspended () =
-  (* Utils.settings.log_level <- 2; *)
+  (* Utils.set_log_level 2; *)
   Utils.settings.output_debug_files_in_build_directory <- true;
   (* Utils.settings.debug_log_from_routines <- true; *)
   Rand.init 0;
@@ -152,7 +152,7 @@ let _suspended () =
 
 let _suspended () =
   Rand.init 0;
-  Utils.settings.log_level <- 2;
+  Utils.set_log_level 2;
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in

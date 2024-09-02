@@ -50,12 +50,6 @@ let settings =
     print_decimals_precision = 2;
   }
 
-let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1
-
-let enable_runtime_debug () =
-  settings.output_debug_files_in_build_directory <- true;
-  settings.log_level <- max 2 settings.log_level
-
 let accessed_global_args = Hash_set.create (module String)
 
 let read_cmdline_or_env_var n =
@@ -292,6 +286,16 @@ module Debug_runtime = (val _get_local_debug_runtime ())
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 (* [%%global_debug_interrupts { max_nesting_depth = 100; max_num_children = 1000 }] *)
+
+let set_log_level level =
+  settings.log_level <- level;
+  Debug_runtime.log_level := level
+
+let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1
+
+let enable_runtime_debug () =
+  settings.output_debug_files_in_build_directory <- true;
+  set_log_level @@ max 2 settings.log_level
 
 let rec union_find ~equal map ~key ~rank =
   match Map.find map key with
