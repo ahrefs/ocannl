@@ -137,7 +137,7 @@ let get_global_arg ~default ~arg_name:n =
   Hash_set.add accessed_global_args n;
   result
 
-let () =
+let restore_settings () =
   settings.log_level <- Int.of_string @@ get_global_arg ~arg_name:"log_level" ~default:"0";
   settings.debug_log_from_routines <-
     Bool.of_string @@ get_global_arg ~arg_name:"debug_log_from_routines" ~default:"false";
@@ -151,6 +151,8 @@ let () =
      if String.is_empty seed then None else Some (Int.of_string seed));
   settings.print_decimals_precision <-
     Int.of_string @@ get_global_arg ~arg_name:"print_decimals_precision" ~default:"2"
+
+let () = restore_settings ()
 
 let build_file fname =
   let build_files_dir = "build_files" in
