@@ -73,10 +73,12 @@
  (depopts
   (cudajit
    (>= 0.4.0))
-  (gccjit
-   (>= 0.3.2)))
+  ; FIXME(#269): for some reason, this depopt causes a MacOS installation to install conf-libgccjit.
+  ; (gccjit
+  ;  (>= 0.3.2))
+  )
  (tags
-  (deeplearning array jit gccjit CUDA)))
+  (deeplearning array jit CUDA)))
 
 (package
  (name neural_nets_lib)
@@ -107,7 +109,7 @@
   ppx_expect
   (ppx_minidebug
    (>= 2.0.0))
-   (patdiff :with-test)
+  (patdiff :with-test)
   (odoc :with-doc)
   (md2mld :with-doc))
  (tags

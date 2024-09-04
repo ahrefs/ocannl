@@ -8,7 +8,7 @@ description:
 maintainer: ["Lukasz Stafiniak"]
 authors: ["Lukasz Stafiniak"]
 license: "BSD-2-Clause"
-tags: ["deeplearning" "array" "jit" "gccjit" "CUDA"]
+tags: ["deeplearning" "array" "jit" "CUDA"]
 homepage: "https://github.com/lukstafi/ocannl"
 doc: "https://github.com/lukstafi/ocannl/blob/master/README.md"
 bug-reports: "https://github.com/lukstafi/ocannl/issues"
@@ -32,7 +32,6 @@ depends: [
 ]
 depopts: [
   "cudajit" {>= "0.4.0"}
-  "gccjit" {>= "0.3.2"}
 ]
 build: [
   ["dune" "subst"] {dev}
