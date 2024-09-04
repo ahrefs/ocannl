@@ -73,10 +73,8 @@
  (depopts
   (cudajit
    (>= 0.4.0))
-  ; FIXME(#269): for some reason, this depopt causes a MacOS installation to install conf-libgccjit.
-  ; (gccjit
-  ;  (>= 0.3.2))
-  )
+  (gccjit
+   (>= 0.3.2)))
  (tags
   (deeplearning array jit CUDA)))
 
