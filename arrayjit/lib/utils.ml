@@ -223,7 +223,13 @@ let get_debug name =
   let verbose_entry_ids =
     Bool.of_string @@ get_global_arg ~default:"false" ~arg_name:"logs_verbose_entry_ids"
   in
-  let filename = diagn_log_file @@ if String.is_empty name then "debug" else "debug-" ^ name in
+  let log_main_domain_to_stdout =
+    Bool.of_string @@ get_global_arg ~default:"false" ~arg_name:"log_main_domain_to_stdout"
+  in
+  let filename =
+    if log_main_domain_to_stdout && String.is_empty name then None
+    else Some (diagn_log_file @@ if String.is_empty name then "debug" else "debug-" ^ name)
+  in
   let log_level =
     let s = String.strip @@ get_global_arg ~default:"1" ~arg_name:"log_level" in
     match Int.of_string_opt s with
@@ -259,17 +265,26 @@ let get_debug name =
     Minidebug_runtime.And (toc_entry_minimal_depth @ toc_entry_minimal_size @ toc_entry_minimal_span)
   in
   if flushing then
-    Minidebug_runtime.debug_flushing ~filename ~time_tagged ~elapsed_times ~print_entry_ids
+    Minidebug_runtime.debug_flushing ?filename ~time_tagged ~elapsed_times ~print_entry_ids
       ~verbose_entry_ids ~global_prefix:name ~for_append:false ~log_level ()
   else
-    Minidebug_runtime.forget_printbox
-    @@ Minidebug_runtime.debug_file ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
-         ~verbose_entry_ids ~global_prefix:name ~toc_flame_graph:true ~flame_graph_separation:50
-         ~toc_entry ~for_append:false ~max_inline_sexp_length:120 ~hyperlink
-         ~toc_specific_hyperlink:""
-         ~highlight_terms:Re.(alt [ str "wait"; str "release" ])
-         ~exclude_on_path:Re.(str "env")
-         ~values_first_mode:false ~backend ~log_level ?snapshot_every_sec filename
+    match filename with
+    | None ->
+        Minidebug_runtime.forget_printbox
+        @@ Minidebug_runtime.debug ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
+             ~verbose_entry_ids ~global_prefix:name ~toc_entry ~toc_specific_hyperlink:""
+             ~highlight_terms:Re.(alt [ str "wait"; str "release" ])
+             ~exclude_on_path:Re.(str "env")
+             ~values_first_mode:false ~log_level ?snapshot_every_sec ()
+    | Some filename ->
+        Minidebug_runtime.forget_printbox
+        @@ Minidebug_runtime.debug_file ~time_tagged ~elapsed_times ~location_format
+             ~print_entry_ids ~verbose_entry_ids ~global_prefix:name ~toc_flame_graph:true
+             ~flame_graph_separation:50 ~toc_entry ~for_append:false ~max_inline_sexp_length:120
+             ~hyperlink ~toc_specific_hyperlink:""
+             ~highlight_terms:Re.(alt [ str "wait"; str "release" ])
+             ~exclude_on_path:Re.(str "env")
+             ~values_first_mode:false ~backend ~log_level ?snapshot_every_sec filename
 
 let _get_local_debug_runtime =
   let open Stdlib.Domain in

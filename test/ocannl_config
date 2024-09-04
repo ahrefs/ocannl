@@ -1,4 +1,5 @@
 randomness_lib=for_tests
+log_main_domain_to_stdout=true
 ~~ For version 0.4, the moons_demo_parallel test already works with the pipes_cc backend,
 ~~ but gives slightly different results on different machines.
 ~~ Once all scheduler issues are resolved, we should be using the cc backend.
