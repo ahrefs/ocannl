@@ -45,7 +45,7 @@ A possible route to learning OCANNL:
 1. Get some basic grasp of the aims and design of the project by reading or skimming files in [test/](test/) and [bin/](bin/).
 2. Read the syntax extensions documentation [lib/syntax_extensions.md](lib/syntax_extensions.md).
 3. Read the introductory part of the shape inference documentation [lib/shape_inference.md](lib/shape_inference.md).
-4. Improve your understanding by reading or skimming [lib/shape.mli](lib/shape.mli), [lib/tensor.mli](lib/tensor.mli), [lib/operation.ml](lib/operation.ml), [lib/train.ml](lib/train.ml), and [lib/nn_blocks.ml](lib/nn_blocks.ml).
+4. Improve your understanding by reading or skimming [lib/shape.mli](lib/shape.mli), [lib/tensor.mli](lib/tensor.mli), [lib/operation.ml](lib/operation.ml), [lib/train.ml](lib/train.ml), and (since 0.4.1) [lib/nn_blocks.ml](lib/nn_blocks.ml).
 5. Read [arrayjit/lib/writing_a_backend.md](arrayjit/lib/writing_a_backend.md).
 6. Read the implementation overview:
    1. Shape inference details [lib/shape_inference.md](lib/shape_inference.md).
@@ -58,6 +58,8 @@ This is very tentative.
 
 * 0.4.1
   * Half precision. Maybe improvements for mixed-precision computations.
+  * Resolve remaining issues with the new scheduler.
+  * Initial version of [lib/nn_blocks.ml](lib/nn_blocks.ml).
 * 0.5
   * More of primitive numeric operations.
   * Useful building blocks for models in [lib/nn_blocks.ml](lib/nn_blocks.ml).
@@ -69,6 +71,7 @@ This is very tentative.
 
 For more details, see [CHANGES](CHANGES.md).
 
+* **v0.4 merge buffers, C-syntax backend builder**: a significant refactoring of the API.
 * **v0.3 shape inference, jitted routines**: a major rewrite of the whole project.
   * **v0.3.3**: continuous integration and opam release.
   * **v0.3.2**: new shape inference feature: tracking leftmost axes -- complete inference for splicing, ellipsis-in-the-middle allowed in einsum notation.
