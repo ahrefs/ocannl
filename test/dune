@@ -1,3 +1,12 @@
+(test
+ (name moons_demo_parallel_run)
+ (package neural_nets_lib)
+ (modules moons_demo_parallel_run)
+ (deps ocannl_config)
+ (libraries ocannl)
+ (preprocess
+  (pps ppx_jane ppx_ocannl)))
+
 (library
  (name tutorials)
  (package neural_nets_lib)
