@@ -114,7 +114,8 @@ let c_compile_and_load ~f_name =
   while not @@ (Stdlib.Sys.file_exists libname && Stdlib.Sys.file_exists log_fname) do
     ()
   done;
-  let result = { lib = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW; RTLD_DEEPBIND ]; libname } in
+  (* Note: RTLD_DEEPBIND not available on MacOS. *)
+  let result = { lib = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW ]; libname } in
   Stdlib.Gc.finalise (fun lib -> Dl.dlclose ~handle:lib.lib) result;
   result
 
