@@ -143,23 +143,6 @@ let get_global_arg ~default ~arg_name:n =
   Hash_set.add accessed_global_args n;
   result
 
-let restore_settings () =
-  settings.log_level <- Int.of_string @@ get_global_arg ~arg_name:"log_level" ~default:"0";
-  settings.debug_log_from_routines <-
-    Bool.of_string @@ get_global_arg ~arg_name:"debug_log_from_routines" ~default:"false";
-  settings.debug_memory_locations <-
-    Bool.of_string @@ get_global_arg ~arg_name:"debug_memory_locations" ~default:"false";
-  settings.output_debug_files_in_build_directory <-
-    Bool.of_string
-    @@ get_global_arg ~arg_name:"output_debug_files_in_build_directory" ~default:"false";
-  settings.fixed_state_for_init <-
-    (let seed = get_global_arg ~arg_name:"fixed_state_for_init" ~default:"" in
-     if String.is_empty seed then None else Some (Int.of_string seed));
-  settings.print_decimals_precision <-
-    Int.of_string @@ get_global_arg ~arg_name:"print_decimals_precision" ~default:"2"
-
-let () = restore_settings ()
-
 let build_file fname =
   let build_files_dir = "build_files" in
   (try assert (Stdlib.Sys.is_directory build_files_dir)
@@ -310,10 +293,27 @@ module Debug_runtime = (val _get_local_debug_runtime ())
 
 (* [%%global_debug_interrupts { max_nesting_depth = 100; max_num_children = 1000 }] *)
 
-let set_log_level level =
+let%diagn_sexp set_log_level level =
   settings.log_level <- level;
-  Debug_runtime.log_level := level
+  Debug_runtime.log_level := level;
+  [%log "Set log_level to", (level : int)]
 
+let restore_settings () =
+  set_log_level (Int.of_string @@ get_global_arg ~arg_name:"log_level" ~default:"0");
+  settings.debug_log_from_routines <-
+    Bool.of_string @@ get_global_arg ~arg_name:"debug_log_from_routines" ~default:"false";
+  settings.debug_memory_locations <-
+    Bool.of_string @@ get_global_arg ~arg_name:"debug_memory_locations" ~default:"false";
+  settings.output_debug_files_in_build_directory <-
+    Bool.of_string
+    @@ get_global_arg ~arg_name:"output_debug_files_in_build_directory" ~default:"false";
+  settings.fixed_state_for_init <-
+    (let seed = get_global_arg ~arg_name:"fixed_state_for_init" ~default:"" in
+     if String.is_empty seed then None else Some (Int.of_string seed));
+  settings.print_decimals_precision <-
+    Int.of_string @@ get_global_arg ~arg_name:"print_decimals_precision" ~default:"2"
+
+let () = restore_settings ()
 let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1
 
 let enable_runtime_debug () =
