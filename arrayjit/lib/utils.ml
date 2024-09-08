@@ -264,7 +264,7 @@ let get_debug name =
              ~verbose_entry_ids ~global_prefix:name ~toc_entry ~toc_specific_hyperlink:""
              ~highlight_terms:Re.(alt [ str "wait"; str "release" ])
              ~exclude_on_path:Re.(str "env")
-             ~values_first_mode:false ~log_level ?snapshot_every_sec ()
+             ~log_level ?snapshot_every_sec ()
     | Some filename ->
         Minidebug_runtime.forget_printbox
         @@ Minidebug_runtime.debug_file ~time_tagged ~elapsed_times ~location_format
@@ -273,7 +273,7 @@ let get_debug name =
              ~hyperlink ~toc_specific_hyperlink:""
              ~highlight_terms:Re.(alt [ str "wait"; str "release" ])
              ~exclude_on_path:Re.(str "env")
-             ~values_first_mode:false ~backend ~log_level ?snapshot_every_sec filename
+             ~backend ~log_level ?snapshot_every_sec filename
 
 let _get_local_debug_runtime =
   let open Stdlib.Domain in

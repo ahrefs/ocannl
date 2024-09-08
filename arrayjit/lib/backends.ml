@@ -205,7 +205,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let is_idle device = is_dev_queue_empty device.state && device.state.is_idle
   let name = "multicore " ^ Backend.name
 
-  let await device =
+  let%track3_l_sexp await device =
     assert (Domain.is_main_domain ());
     let d = device.state in
     (* Stdlib.Printf.printf "DEBUG: await start is_idle=%b host_is_waiting=%b is_empty=%b\n%!"
@@ -234,6 +234,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let%track3_l_sexp schedule_task device task =
     assert (Domain.is_main_domain ());
+    [%log_result "schedule_task", Tnode.describe task, "device", (device.ordinal : int)];
     let d = device.state in
     Option.iter d.device_error ~f:(fun e ->
         Exn.reraise e @@ name ^ " device " ^ Int.to_string device.ordinal);
@@ -250,17 +251,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let global_run_no = ref 0
 
-  let spinup_device ~(ordinal : int) : device =
+  let%track3_l_sexp spinup_device ~(ordinal : int) : device =
     Int.incr global_run_no;
-    let init_pos =
-      Utils.Cons
-        {
-          hd =
-            Tnode.Task
-              { context_lifetime = (); description = "root of task queue"; work = (fun () -> ()) };
-          tl = Empty;
-        }
-    in
     let state =
       {
         keep_spinning = true;
@@ -315,7 +307,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       with e ->
         state.device_error <- Some e;
         state.keep_spinning <- false;
-        [%log "Device", (ordinal : int), "exception", Exn.to_string e];
+        [%log1 "Device", (ordinal : int), "exception", Exn.to_string e];
         (* TODO: we risk raising this error multiple times because await and schedule_task raise
            device_error. But this is fine if we assume all exceptions are fatal. *)
         raise e
@@ -328,8 +320,9 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       allocated_buffer = None;
     }
 
-  let%diagn_sexp make_work device (Tnode.Task { description; _ } as task) =
-    let%diagn_l_sexp work () = schedule_task device task in
+  let%track3_l_sexp make_work device (Tnode.Task { description; _ } as task) =
+    [%log_result "make_work", description, "device", (device.ordinal : int)];
+    let work () = schedule_task device task in
     Tnode.Task
       {
         context_lifetime = task;

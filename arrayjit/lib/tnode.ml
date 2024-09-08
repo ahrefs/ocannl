@@ -17,8 +17,10 @@ type task =
       -> task
 [@@deriving sexp_of]
 
+let describe (Task task) = task.description
+
 let%diagn_l_sexp run (Task task) =
-  [%log_result task.description];
+  [%log_result "run", task.description];
   task.work ()
 
 type memory_type =
