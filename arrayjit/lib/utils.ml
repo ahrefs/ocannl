@@ -423,7 +423,7 @@ let%diagn_l_sexp log_trace_tree _logs =
       | "COMMENT: end" :: more -> more
       | comment :: more when String.is_prefix comment ~prefix:"COMMENT: " ->
           let more =
-            [%log_block
+            [%log_entry
               String.chop_prefix_exn ~prefix:"COMMENT: " comment;
               loop more]
           in

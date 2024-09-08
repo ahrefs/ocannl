@@ -1,3 +1,9 @@
+## [0.4.1] -- current
+
+### Fixed
+
+- Critical bug: logging of computation traces was not properly converted to ppx_minidebug 2.0.
+
 ## [0.4.0] -- 2024-09-04
 
 ### Added
