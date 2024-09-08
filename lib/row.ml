@@ -6,7 +6,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
 
-[%%global_debug_log_level 0]
+[%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 module Dim_var = struct
@@ -256,7 +256,7 @@ let apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim) (constr
       (Dim_eq { d1 = dim; d2 = get_dim ~d () } :: extras, Unconstrained_dim)
   | _ -> (extras, constr)
 
-let%debug_sexp reduce_row_constraint (constr : row_constraint) ~(beg_dims : dim list)
+let reduce_row_constraint (constr : row_constraint) ~(beg_dims : dim list)
     ~(dims : dim list) : row_constraint =
   match constr with
   | Total_elems { nominator; divided_by } ->
@@ -280,7 +280,7 @@ let%debug_sexp reduce_row_constraint (constr : row_constraint) ~(beg_dims : dim 
   | Unconstrained -> Unconstrained
 
 (* Inverts what [reduce_row_constraint] would do. *)
-let%debug_sexp _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list)
+let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list)
     ~(dims : dim list) : row_constraint =
   match constr with
   | Total_elems { nominator; divided_by } ->

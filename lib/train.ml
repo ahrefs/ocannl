@@ -14,7 +14,7 @@ module Debug_runtime = Arrayjit.Utils.Debug_runtime
 
 let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
 
-[%%global_debug_log_level 0]
+[%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 module CDSL = struct
@@ -187,7 +187,7 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov l =
 
 (** All and only bindings with associated ranges are iterated, with the binding's initial value
     lost. Bindings without ranges remain at their initial values. *)
-let%track_sexp sequential_loop ~f lowered_bindings =
+let%track3_sexp sequential_loop ~f lowered_bindings =
   let rec loop = function
     | [] -> f ()
     | ({ Idx.static_range = None; static_symbol = _ }, _) :: more -> loop more
@@ -205,7 +205,7 @@ let%track_sexp sequential_loop ~f lowered_bindings =
     associated ranges are iterated, with the binding's initial value lost. Bindings without ranges
     remain at their initial values. [sync] is called after each round of calling all workers, and at
     the end if needed, with the number of workers called during the round. *)
-let%track_sexp round_robin fs parallel_jitbs jitbs ~sync : unit =
+let%track3_sexp round_robin fs parallel_jitbs jitbs ~sync : unit =
   let num_devices : int = Array.length fs in
   assert (Array.length parallel_jitbs = num_devices);
   let pos = ref 0 in
@@ -229,7 +229,7 @@ let%track_sexp round_robin fs parallel_jitbs jitbs ~sync : unit =
   loop jitbs;
   if !pos % num_devices <> 0 then sync (!pos % num_devices)
 
-let%track_sexp round_robin_dry_run ~num_devices jitbs ~dry_sync : unit =
+let%track3_sexp round_robin_dry_run ~num_devices jitbs ~dry_sync : unit =
   let pos = ref 0 in
   let rec loop = function
     | [] ->
@@ -254,12 +254,12 @@ let every_non_literal_on_host =
   Tensor.iter_embedded_arrays ~f:(fun a ->
       if Tn.mode_is_unspecified a && not (Tn.known_constant a) then set_hosted a)
 
-let%debug_sexp all_host_to_device (type context)
+let%debug2_sexp all_host_to_device (type context)
     (module Backend : Backend_type with type context = context) context =
   let f tn = ignore (Backend.from_host context tn : bool) in
   Tensor.iter_embedded_arrays ~f
 
-let%debug_sexp all_device_to_host (type context)
+let%debug2_sexp all_device_to_host (type context)
     (module Backend : Backend_type with type context = context) context =
   let f tn = ignore (Backend.to_host context tn : bool) in
   Tensor.iter_embedded_arrays ~f
@@ -273,7 +273,7 @@ let needs_prior_context t =
     the given function inside the loop after a run. All and only bindings with associated ranges are
     iterated, with the binding's initial value lost. Bindings without ranges remain at their initial
     values. *)
-let%track_sexp sync_run ?looping (type context)
+let%track3_sexp sync_run ?looping (type context)
     (module Backend : Backend_type with type context = context) (routine : Backend.routine) t =
   all_host_to_device (module Backend) routine.context t;
   (match looping with
@@ -300,7 +300,7 @@ module Lazy = Utils.Lazy
 
     All and only bindings with associated ranges are iterated, with the binding's initial value
     lost. Bindings without ranges remain at their initial values. *)
-let%track_sexp parallel_update (type context)
+let%track3_sexp parallel_update (type context)
     (module Backend : Backend_type with type context = context)
     ~(grad_updates : Backend.routine array) ~(sgd_update : Backend.routine) ~copy_to_merge
     ~post_sync updaten : unit -> unit =
@@ -368,7 +368,7 @@ let%track_sexp parallel_update (type context)
   in
   (* FIXME: missing backcopy. *)
   let needed_on_host = ref @@ Set.empty (module Tn) in
-  let%track_sexp sync (devices_to_sync : int) : unit =
+  let%track3_sexp sync (devices_to_sync : int) : unit =
     Arrayjit.Utils.parallel_merge merge_grads devices_to_sync;
     (* We need to wait, because copying happens on other devices. *)
     Array.iteri ctxs ~f:(fun i src -> if i <> 0 then Backend.(await @@ get_ctx_device src));
@@ -514,7 +514,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   (* Note: infer_callback is significantly less efficient than using the model via arrayjit. *)
   (inputs, outputs, model_result, infer_callback, !batch_losses, !epoch_losses, !learning_rates)
 
-let%track_sexp forward_and_ctx ?(disable_rootness_check = false) (type context)
+let%track3_sexp forward_and_ctx ?(disable_rootness_check = false) (type context)
     (module Backend : Backend_type with type context = context) ctx ?(bindings = IDX.empty) t =
   let routine =
     Backend.(

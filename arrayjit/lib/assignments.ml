@@ -7,7 +7,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 
-[%%global_debug_log_level 0]
+[%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 type buffer = Node of Tn.t | Merge_buffer of Tn.t [@@deriving sexp_of]
@@ -90,7 +90,7 @@ let recurrent_nodes asgns =
 
 let sequential l = Option.value ~default:Noop @@ List.reduce l ~f:(fun st sts -> Seq (st, sts))
 
-let%debug_sexp to_low_level code =
+let%diagn1_sexp to_low_level code =
   let open Indexing in
   let get buffer idcs =
     let tn = match buffer with Node tn -> tn | Merge_buffer tn -> tn in
@@ -347,7 +347,7 @@ let fprint_hum ?name ?static_indices () ppf c =
   loop c;
   fprintf ppf "@]"
 
-let%debug_sexp lower_proc ~unoptim_ll_source ~ll_source ~cd_source ~name static_indices (proc : t) :
+let lower_proc ~unoptim_ll_source ~ll_source ~cd_source ~name static_indices (proc : t) :
     Low_level.optimized =
   let llc = to_low_level proc in
   (* Generate the low-level code before outputting the assignments, to force projections. *)

@@ -53,7 +53,10 @@ let settings =
 let accessed_global_args = Hash_set.create (module String)
 
 let read_cmdline_or_env_var n =
-  let with_debug = settings.log_level > 0 && not (Hash_set.mem accessed_global_args n) in
+  let with_debug =
+    (settings.log_level > 0 || equal_string n "log_level")
+    && not (Hash_set.mem accessed_global_args n)
+  in
   let env_variants = [ "ocannl_" ^ n; "ocannl-" ^ n ] in
   let env_variants = List.concat_map env_variants ~f:(fun n -> [ n; String.uppercase n ]) in
   let cmd_variants = List.concat_map env_variants ~f:(fun n -> [ "-" ^ n; "--" ^ n; n ]) in
@@ -121,7 +124,10 @@ let config_file_args =
 (** Retrieves [arg_name] argument from the command line or from an environment variable, returns
     [default] if none found. *)
 let get_global_arg ~default ~arg_name:n =
-  let with_debug = settings.log_level > 0 && not (Hash_set.mem accessed_global_args n) in
+  let with_debug =
+    (settings.log_level > 0 || equal_string n "log_level")
+    && not (Hash_set.mem accessed_global_args n)
+  in
   if with_debug then
     Stdio.printf "Retrieving commandline, environment, or config file variable ocannl_%s\n%!" n;
   let result =
@@ -299,7 +305,7 @@ let _get_local_debug_runtime =
 
 module Debug_runtime = (val _get_local_debug_runtime ())
 
-[%%global_debug_log_level 0]
+[%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 (* [%%global_debug_interrupts { max_nesting_depth = 100; max_num_children = 1000 }] *)

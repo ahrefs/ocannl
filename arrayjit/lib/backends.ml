@@ -4,7 +4,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 
-[%%global_debug_log_level 0]
+[%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 module type No_device_backend = sig
@@ -232,7 +232,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       Option.iter d.device_error ~f:(fun e ->
           Exn.reraise e @@ name ^ " device " ^ Int.to_string device.ordinal))
 
-  let%track_sexp schedule_task device task =
+  let%track3_l_sexp schedule_task device task =
     assert (Domain.is_main_domain ());
     let d = device.state in
     Option.iter d.device_error ~f:(fun e ->
@@ -275,7 +275,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         host_is_waiting = false;
       }
     in
-    let%diagn_l_sexp worker (() : unit) : unit =
+    let%track3_l_sexp worker (() : unit) : unit =
       try
         while state.keep_spinning do
           (* Stdlib.Printf.printf "DEBUG: worker loop start is_idle=%b host_is_waiting=%b
@@ -501,7 +501,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let suggested_num_virtual_devices _device = 1
   let devices = Array.create ~len:(num_physical_devices ()) None
 
-  let%track_sexp unsafe_cleanup () =
+  let%track2_sexp unsafe_cleanup () =
     assert (Domain.is_main_domain ());
     let wait_for_finish device =
       await device;
@@ -589,7 +589,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
     Option.iter d.device_error ~f:(fun e ->
         Exn.reraise e @@ name ^ " device " ^ Int.to_string device.ordinal)
 
-  let%track_sexp schedule_task device task =
+  let%track2_sexp schedule_task device task =
     assert (Domain.is_main_domain ());
     let d = device.state in
     Option.iter d.device_error ~f:(fun e ->
@@ -834,7 +834,7 @@ module Pipes_multicore_backend (Backend : No_device_backend) : Backend = struct
   let suggested_num_virtual_devices _device = 1
   let devices = Array.create ~len:(num_physical_devices ()) None
 
-  let%track_sexp unsafe_cleanup () =
+  let%track2_sexp unsafe_cleanup () =
     assert (Domain.is_main_domain ());
     let wait_for_finish device =
       await device;
@@ -940,7 +940,7 @@ module Sync_backend (Backend : No_device_backend) (* : Backend *) = struct
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
                Backend.host_to_buffer h_arr ~dst:c_arr;
-               [%diagn_l_sexp
+               [%diagn2_l_sexp
                  [%log_block
                    "from_host for " ^ Tnode.debug_name tn;
                    [%log "copied", Tnode.debug_name tn, "from host to", get_name context.device];
@@ -951,7 +951,7 @@ module Sync_backend (Backend : No_device_backend) (* : Backend *) = struct
                      Ndarray.render_array ~indices h_arr]]];
                true
            | (lazy None) ->
-               [%diagn_sexp
+               [%diagn2_l_sexp
                  [%log_block
                    "nothing to copy from host for " ^ Tnode.debug_name tn;
                    [%log "to", get_name context.device]]];
@@ -963,11 +963,11 @@ module Sync_backend (Backend : No_device_backend) (* : Backend *) = struct
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
                Backend.buffer_to_host h_arr ~src:c_arr;
-               [%diagn_l_sexp
+               [%diagn2_l_sexp
                  [%log_block
                    "to_host for " ^ Tnode.debug_name tn;
                    [%log "copied to host from", get_name context.device];
-                   [%log2_printbox
+                   [%log3_printbox
                      let indices =
                        Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
                      in

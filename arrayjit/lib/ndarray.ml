@@ -5,7 +5,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 
-[%%global_debug_log_level 0]
+[%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 module A = Bigarray.Genarray
@@ -380,7 +380,7 @@ let create_array ~debug:_debug prec ~dims init_op =
     [%log_block
       "create_array";
       [%log _debug, c_ptr_to_string result]]];
-  let%debug_sexp debug_finalizer _result = [%log "Deleting", _debug, c_ptr_to_string _result] in
+  let%debug2_sexp debug_finalizer _result = [%log "Deleting", _debug, c_ptr_to_string _result] in
   if Utils.settings.log_level > 1 then Stdlib.Gc.finalise debug_finalizer result;
   result
 

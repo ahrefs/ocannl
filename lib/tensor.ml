@@ -13,7 +13,7 @@ type projections = Arrayjit.Indexing.projections
 
 let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
 
-[%%global_debug_log_level 0]
+[%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 type diff = { grad : (Tn.t[@sexp.opaque]); zero_grads : Asgns.t; backprop : Asgns.t }
@@ -517,11 +517,12 @@ let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_shape =
 
 let log_debug_info ~from_log_level t =
   let%diagn_sexp log_child { subtensor = _subtensor; embedded = _embedded } =
-    [%log_block
-      (if _embedded then "Embedded " else "Non-embedded ") ^ Tn.debug_name _subtensor.value;
+    [%logN_block
+      from_log_level
+        ((if _embedded then "Embedded " else "Non-embedded ") ^ Tn.debug_name _subtensor.value);
       Tn.log_debug_info ~from_log_level _subtensor.value]
   in
-  [%debug_sexp
+  [%diagn_sexp
     [%logN_block
       from_log_level ("Tensor " ^ Tn.dims_to_string t.value);
       Tn.log_debug_info ~from_log_level t.value;

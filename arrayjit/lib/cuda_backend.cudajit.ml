@@ -6,7 +6,7 @@ open Backend_utils.Types
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 
-[%%global_debug_log_level 0]
+[%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 type buffer_ptr = Cudajit.deviceptr
@@ -53,7 +53,7 @@ let global_config = ref For_parallel_copying
 
 let is_initialized, initialize =
   let initialized = ref false in
-  let%track_sexp init (config : config) : unit =
+  let init (config : config) : unit =
     initialized := true;
     global_config := config;
     Cudajit.init ()
@@ -86,7 +86,7 @@ let opt_alloc_merge_buffer ~size_in_bytes phys_dev =
     phys_dev.copy_merge_buffer <- Cudajit.mem_alloc ~size_in_bytes;
     phys_dev.copy_merge_buffer_capacity <- size_in_bytes)
 
-let%track_sexp get_device ~(ordinal : int) : physical_device =
+let get_device ~(ordinal : int) : physical_device =
   if num_physical_devices () <= ordinal then
     invalid_arg [%string "Exec_as_cuda.get_device %{ordinal#Int}: not enough devices"];
   if Core.Weak.length !devices <= ordinal then (
@@ -471,7 +471,7 @@ let%diagn_sexp link prior_context (code : code) =
   in
   (context, lowered_bindings, task)
 
-let%track_sexp link_batch prior_context (code_batch : code_batch) =
+let link_batch prior_context (code_batch : code_batch) =
   let idx_params = Indexing.bound_symbols code_batch.bindings in
   let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let module Cu = Cudajit in

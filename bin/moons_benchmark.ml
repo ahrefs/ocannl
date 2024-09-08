@@ -12,7 +12,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
 
-[%%global_debug_log_level 0]
+[%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~backend_name
@@ -32,7 +32,6 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   CDSL.virtualize_settings.max_visits <- inlining_cutoff;
   Tensor.default_value_prec := value_prec;
   Tensor.default_grad_prec := grad_prec;
-  Utils.set_log_level 3;
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   Rand.init (* seed *) 0;
@@ -181,7 +180,7 @@ let cuda_benchmarks =
       List.concat_map [ 1; 2; 5; 8; 10; 16; 20; 30 (* *; 32; 40; 64 *) ] ~f:(fun num_devices ->
           List.concat_map [ 120; 160 (* ; 320; 640; 1280 *) ] ~f:(fun batch_size ->
               List.concat_map [ 0; 1 (* ; 2; 3; 4 *) ] ~f:(fun seed ->
-                  List.concat_map [ (* "gccjit" ; *) "pipes_cc" (* ; "cuda" *) ]
+                  List.concat_map [ (* "gccjit" ; *) "cc" (* ; "cuda" *) ]
                     ~f:(fun backend_name ->
                       [
                         classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_devices

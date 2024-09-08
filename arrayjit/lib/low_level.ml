@@ -9,7 +9,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 
-[%%global_debug_log_level 0]
+[%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 module Scope_id = struct
@@ -743,7 +743,7 @@ type traced_store = (Tn.t, traced_array) Base.Hashtbl.t [@@deriving sexp_of]
 type optimized = { traced_store : traced_store; llc : t; merge_node : Tn.t option }
 [@@deriving sexp_of]
 
-let%debug_sexp optimize_proc static_indices llc =
+let%diagn2_sexp optimize_proc static_indices llc =
   let traced_store = Hashtbl.create (module Tnode) in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
   let reverse_node_map = Hashtbl.create (module Indexing.Symbol) in
@@ -897,7 +897,7 @@ let fprint_hum ?name ?static_indices () ppf llc =
   pp_ll ppf llc;
   fprintf ppf "@]"
 
-let%debug_sexp optimize_proc ~unoptim_ll_source ~ll_source ~(name : string)
+let%diagn2_sexp optimize_proc ~unoptim_ll_source ~ll_source ~(name : string)
     (static_indices : Indexing.static_symbol list) (llc : t) : optimized =
   Option.iter unoptim_ll_source ~f:(fun ppf ->
       Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ~name ~static_indices ()) llc);
