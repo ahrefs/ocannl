@@ -874,7 +874,7 @@ end
 let sync_suggested_num_virtual_devices = ref 1
 
 (** A minimalisitc wrapper creating backends where all calls run synchronously on the main thread.
-    There is only one physical device, but as always an arbitrary number of virtual devices. *)
+    There is only one physical device, but an arbitrary number of virtual devices. *)
 module Sync_backend (Backend : No_device_backend) (* : Backend *) = struct
   type buffer_ptr = Backend.buffer_ptr [@@deriving sexp_of]
 
@@ -1342,7 +1342,8 @@ let reinitialize (module Backend : Backend) config =
     Backend.unsafe_cleanup ();
     Backend.initialize config)
 
-(** Reinitializes a backend selected via a global [backend] flag. *)
+(** Reinitializes and returns a backend corresponding to [backend_name], or if omitted, selected via
+    the global [backend] setting. *)
 let fresh_backend ?backend_name ?(config = Physical_devices_only) () =
   let backend =
     match
