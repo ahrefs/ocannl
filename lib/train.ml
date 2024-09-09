@@ -421,12 +421,13 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   in
   let num_devices = Array.length prior_contexts in
   let minibatch_size = batch_size / num_devices in
-  let n_batches = data_len / minibatch_size in
-  let inputs = inputs ~b:[ n_batches; minibatch_size ] in
-  let outputs = outputs ~b:[ n_batches; minibatch_size ] in
-  let steps = epochs * n_batches in
+  let n_minibatches = data_len / minibatch_size in
+  let inputs = inputs ~b:[ n_minibatches; minibatch_size ] in
+  let outputs = outputs ~b:[ n_minibatches; minibatch_size ] in
+  (* This is the joint number of steps done by the round-robin scheduler across devices. *)
+  let steps = epochs * n_minibatches in
   Utils.settings.fixed_state_for_init <- Some seed;
-  let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
+  let batch_n, bindings = IDX.get_static_symbol ~static_range:n_minibatches IDX.empty in
   let step_n, bindings = IDX.get_static_symbol bindings in
   let%op input = inputs @| batch_n in
   let%op expectation = outputs @| batch_n in

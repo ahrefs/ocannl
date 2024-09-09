@@ -33,30 +33,32 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   Tensor.default_value_prec := value_prec;
   Tensor.default_grad_prec := grad_prec;
   Utils.settings.output_debug_files_in_build_directory <- true;
+  (* This will only log from routines if log-level is high enough. *)
   Utils.settings.debug_log_from_routines <- true;
   Rand.init (* seed *) 0;
   (* let hid_2_3 = 8 in let hid_4_5 = 4 in *)
   let hid_dim = 16 in
   (* let hid_dim = 4 in *)
-  let len = batch_size * 20 in
-  (* let epochs = 100 in *)
-  let epochs = 20 in
-  (* let epochs = 10 in *)
+  let data_len = 3 * 1024 in
+  let flat_len = data_len / 2 in
+  (* Note: [minibatch_size = batch_size / num_devices] is the actual per-device batch used. *)
+  (* let epochs = 20 in *)
+  let epochs = 10 in
   (* let epochs = 1 in *)
   let init_lr = 0.1 in
   let noise () = Rand.float_range (-0.1) 0.1 in
   let moons_flat =
-    Array.concat_map (Array.create ~len ())
+    Array.concat_map (Array.create ~len:flat_len ())
       ~f:
         Float.(
           fun () ->
-            let i = Rand.int len in
-            let v = of_int i * pi / of_int len in
+            let i = Rand.int flat_len in
+            let v = of_int i * pi / of_int flat_len in
             let c = cos v and s = sin v in
             [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
   in
   let moons_flat ~b = TDSL.init_const ~l:"moons_flat" ~b ~o:[ 2 ] moons_flat in
-  let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
+  let moons_classes = Array.init data_len ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let moons_classes ~b = TDSL.init_const ~l:"moons_classes" ~b ~o:[ 1 ] moons_classes in
 
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
@@ -80,7 +82,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   let module Backend = (val backend) in
   Backend.initialize Train.BT.Most_parallel_devices;
   let inputs, outputs, model_result, infer_callback, batch_losses, epoch_losses, learning_rates =
-    Train.example_train_loop ~seed ~batch_size ~init_lr ~max_num_devices:num_devices ~data_len:len
+    Train.example_train_loop ~seed ~batch_size ~init_lr ~max_num_devices:num_devices ~data_len
       ~epochs ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn ~weight_decay
       ~per_batch_callback ~per_epoch_callback
       (module Backend)
@@ -164,24 +166,12 @@ let _suspend () =
   @@ classify_moons ~seed:0 ~on_device:true ~inlining_cutoff:3 ~num_devices:8 ~batch_size:16
        ~backend_name:"gccjit" ~value_prec:CDSL.single ~grad_prec:CDSL.double ()
 
-let _cpu_benchmarks =
-  List.concat_map [ 0; 1; 2; 3 ] ~f:(fun inlining_cutoff ->
-      List.concat_map [ 1; 2; 5; 8; 10; 16 (* ; 20 *) ] ~f:(fun num_devices ->
-          List.concat_map [ 120; 160 (* ; 320; 640; 1280 *) ] ~f:(fun batch_size ->
-              List.concat_map [ 0; 1 (* ; 2; 3; 4 *) ] ~f:(fun seed ->
-                  List.concat_map [ "gccjit" (* *; "cuda" *) ] ~f:(fun backend_name ->
-                      [
-                        classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_devices
-                          ~batch_size ~backend_name ~value_prec:CDSL.single ~grad_prec:CDSL.single;
-                      ])))))
-
 let cuda_benchmarks =
-  List.concat_map [ 0; (* 1; 2; *) 3 ] ~f:(fun inlining_cutoff ->
-      List.concat_map [ 1; 2; 5; 8; 10 (* ; 16; 20; 30; 32; 40; 64 *) ] ~f:(fun num_devices ->
-          List.concat_map [ 120; 160 (* ; 320; 640; 1280 *) ] ~f:(fun batch_size ->
+  List.concat_map [ 0; 1; (* 2; *) 3 ] ~f:(fun inlining_cutoff ->
+      List.concat_map [ 1; 3; 6; 12 (* ; 16; 32; 64 *) ] ~f:(fun num_devices ->
+          List.concat_map [ 64; 128 (* ; 256 *) ] ~f:(fun batch_size ->
               List.concat_map [ 0; 1 (* ; 2; 3; 4 *) ] ~f:(fun seed ->
-                  List.concat_map [ (* "gccjit" ; *) "cc" (* ; "cuda" *) ]
-                    ~f:(fun backend_name ->
+                  List.concat_map [ (* "gccjit" ; *) "cc"; "cuda" ] ~f:(fun backend_name ->
                       [
                         classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_devices
                           ~batch_size ~backend_name ~value_prec:CDSL.single ~grad_prec:CDSL.single;
