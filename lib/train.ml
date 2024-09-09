@@ -508,7 +508,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     assert (Backend.from_host routine.context infer.value);
     run routine;
     assert (Backend.to_host routine.context model_result.value);
-    Backend.(await @@ get_ctx_device prior_contexts.(0));
+    Backend.(await @@ get_ctx_device routine.context);
     Tensor.get_values model_result
   in
   (* Note: infer_callback is significantly less efficient than using the model via arrayjit. *)

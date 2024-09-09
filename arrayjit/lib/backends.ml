@@ -180,7 +180,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     mut : (Mut.t[@sexp.opaque]);
     host_wait_for_idle : (Stdlib.Condition.t[@sexp.opaque]);
     dev_wait_for_work : (Stdlib.Condition.t[@sexp.opaque]);
-    mutable is_idle : bool;
+    mutable is_ready : bool;
     mutable host_is_waiting : bool;  (** The host is waiting for this specific device. *)
   }
   [@@deriving sexp_of]
@@ -206,17 +206,17 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   let expected_merge_node (code : code) = Backend.expected_merge_node code
   let expected_merge_nodes (codes : code_batch) = Backend.expected_merge_nodes codes
   let is_dev_queue_empty state = Queue.size state.queue = 0
-  let is_idle device = is_dev_queue_empty device.state && device.state.is_idle
+  let is_idle device = is_dev_queue_empty device.state && device.state.is_ready
   let name = "multicore " ^ Backend.name
 
   let%track3_l_sexp await device =
     assert (Domain.is_main_domain ());
     let d = device.state in
-    if (not d.is_idle) && d.keep_spinning then (
+    if (not @@ is_idle device) && d.keep_spinning then (
       Mut.lock d.mut;
-      if (not d.is_idle) && d.keep_spinning then (
+      if (not @@ is_idle device) && d.keep_spinning then (
         d.host_is_waiting <- true;
-        while (not d.is_idle) && d.keep_spinning do
+        while (not @@ is_idle device) && d.keep_spinning do
           Stdlib.Condition.wait d.host_wait_for_idle d.mut
         done;
         d.host_is_waiting <- false);
@@ -234,7 +234,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     if not @@ Queue.try_push d.queue task then (
       await device;
       Queue.push_exn d.queue task);
-    if d.is_idle then (
+    if d.is_ready then (
       Mut.lock d.mut;
       Stdlib.Condition.broadcast d.dev_wait_for_work;
       Mut.unlock d.mut)
@@ -249,25 +249,26 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         device_error = None;
         queue = Queue.create ~size_exponent:12;
         mut = Mut.create ();
-        is_idle = false;
+        is_ready = false;
         host_wait_for_idle = Stdlib.Condition.create ();
         dev_wait_for_work = Stdlib.Condition.create ();
         host_is_waiting = false;
       }
     in
     let%track3_l_sexp worker (() : unit) : unit =
+      assert (not @@ Domain.is_main_domain ());
       try
         while state.keep_spinning do
           match Queue.pop_opt state.queue with
           | None ->
               Mut.lock state.mut;
               if is_dev_queue_empty state && state.keep_spinning then (
-                state.is_idle <- true;
+                state.is_ready <- true;
                 while is_dev_queue_empty state && state.keep_spinning do
                   if state.host_is_waiting then Stdlib.Condition.broadcast state.host_wait_for_idle;
                   Stdlib.Condition.wait state.dev_wait_for_work state.mut
                 done;
-                state.is_idle <- false);
+                state.is_ready <- false);
               Mut.unlock state.mut
           | Some task -> Tnode.run task
         done
