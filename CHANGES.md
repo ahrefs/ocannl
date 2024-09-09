@@ -1,8 +1,17 @@
 ## [0.4.1] -- current
 
+### Changed
+
+- Removed the `pipes_cc, pipes_gccjit` backends (`Pipes_multicore_backend`) -- I had fixed `Pipes_multicore_backend` by using the `poll` library instead of `Unix.select`, but it turns out to be very very slow.
+
 ### Fixed
 
-- Critical bug: logging of computation traces was not properly converted to ppx_minidebug 2.0.
+- Log levels related de-confusion:
+  - Critical bug: logging of computation traces was not properly converted to ppx_minidebug 2.0.
+  - Properly restore `log_level` and inform about its setting.
+  - By default do not log from tests.
+  - `debug_log_from_routines` should only happen when `log_level > 1`.
+- Bugs in `Multicore_backend`: `await` was not checking queue emptiness, `worker`'s `Condition.broadcast` was non-atomically guarded (doesn't need to be), possible deadloop due to the lockfree queue -- now replaced with `saturn_lockfree`.
 
 ## [0.4.0] -- 2024-09-04
 

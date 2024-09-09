@@ -66,7 +66,6 @@
   stdio
   num
   saturn_lockfree
-  poll
   ppxlib
   ppx_jane
   ppx_expect
