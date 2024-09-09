@@ -49,7 +49,7 @@ let precision_to_bigarray_kind (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.pre
     (ocaml, elt_t) Bigarray.kind =
   match prec with
   | Byte -> Bigarray.Char
-  | Half -> Bigarray.Float32
+  | Half -> Bigarray.Float16
   | Single -> Bigarray.Float32
   | Double -> Bigarray.Float64
 
@@ -368,7 +368,12 @@ let retrieve_flat_values arr =
 
 let c_ptr_to_string nd =
   let prec = get_prec nd in
-  let f arr = Ops.ptr_to_string (Ctypes.bigarray_start Ctypes_static.Genarray arr) prec in
+  let f arr = Ops.c_ptr_to_string (Ctypes.bigarray_start Ctypes_static.Genarray arr) prec in
+  map { f } nd
+
+let ptr_to_string_hum nd =
+  let prec = get_prec nd in
+  let f arr = Ops.ptr_to_string_hum (Ctypes.bigarray_start Ctypes_static.Genarray arr) prec in
   map { f } nd
 
 (** {2 *** Creating ***} *)
@@ -379,8 +384,8 @@ let create_array ~debug:_debug prec ~dims init_op =
   [%debug2_sexp
     [%log_block
       "create_array";
-      [%log _debug, c_ptr_to_string result]]];
-  let%debug2_sexp debug_finalizer _result = [%log "Deleting", _debug, c_ptr_to_string _result] in
+      [%log _debug, ptr_to_string_hum result]]];
+  let%debug2_sexp debug_finalizer _result = [%log "Deleting", _debug, ptr_to_string_hum _result] in
   if Utils.settings.log_level > 1 then Stdlib.Gc.finalise debug_finalizer result;
   result
 

@@ -295,7 +295,7 @@ let header tn =
       | (lazy None) -> "<not-hosted>"
       | (lazy (Some nd)) ->
           let size = Int.to_string_hum @@ Nd.size_in_bytes nd in
-          if Utils.settings.log_level > 0 then size ^ " @ " ^ Nd.c_ptr_to_string nd else size
+          if Utils.settings.log_level > 0 then size ^ " @ " ^ Nd.ptr_to_string_hum nd else size
     else "<not-in-yet>"
   in
   let repeating_nograd_idents = Hashtbl.create ~size:1 (module String) in

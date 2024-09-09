@@ -301,7 +301,7 @@ let fprint_hum ?name ?static_indices () ppf c =
         let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
         fprintf ppf "%s.merge" (ident tn)
     | Imported (Ops.External_unsafe { ptr; prec; dims = _ }) ->
-        fprintf ppf "%s" @@ Ops.ptr_to_string ptr prec
+        fprintf ppf "%s" @@ Ops.ptr_to_string_hum ptr prec
     | Slice { batch_idx; sliced } ->
         fprintf ppf "%s @@| %s" (ident sliced) (Indexing.symbol_ident batch_idx.static_symbol)
     | Embed_symbol { static_symbol; static_range = _ } ->

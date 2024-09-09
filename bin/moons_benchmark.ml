@@ -172,10 +172,11 @@ let cuda_benchmarks =
           List.concat_map [ 64; 128 (* ; 256 *) ] ~f:(fun batch_size ->
               List.concat_map [ 0; 1 (* ; 2; 3; 4 *) ] ~f:(fun seed ->
                   List.concat_map [ (* "gccjit" ; *) "cc"; "cuda" ] ~f:(fun backend_name ->
-                      [
-                        classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_devices
-                          ~batch_size ~backend_name ~value_prec:CDSL.single ~grad_prec:CDSL.single;
-                      ])))))
+                      List.concat_map [ CDSL.single; CDSL.half ] ~f:(fun value_prec ->
+                          [
+                            classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_devices
+                              ~batch_size ~backend_name ~value_prec ~grad_prec:value_prec;
+                          ]))))))
 
 (* let time_of = function PrintBox_utils.Benchmark { time_in_sec; _ } -> time_in_sec let nth_best
    nth bench = let results = List.init 5 ~f:(fun seed -> bench ~seed ()) in let sorted = List.sort

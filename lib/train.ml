@@ -18,6 +18,7 @@ let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 module CDSL = struct
+  let half = Arrayjit.Ops.half
   let single = Arrayjit.Ops.single
   let double = Arrayjit.Ops.double
   let virtualize_settings = Arrayjit.Low_level.virtualize_settings

@@ -1,5 +1,10 @@
 ## [0.4.1] -- current
 
+### Added
+
+- The previously-mocked support for half precision.
+  - Currently broken because of missing Ctypes coverage.
+
 ### Changed
 
 - Removed the `pipes_cc, pipes_gccjit` backends (`Pipes_multicore_backend`) -- I had fixed `Pipes_multicore_backend` by using the `poll` library instead of `Unix.select`, but it turns out to be very very slow.

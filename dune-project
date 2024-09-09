@@ -35,7 +35,7 @@
   ; The real dependency is >= 4.06, but because of multi-package project
   ; need to keep it in sync with the other packages.
   (ocaml
-   (>= 5.1.0))
+   (>= 5.2.0))
   camlzip
   dune
   (conf-python-3 :with-test)))
@@ -48,14 +48,14 @@
   "The optimizing compiler sub-package of OCANNL. Use neural_nets_lib instead to also get: nice syntax, shape inference, backpropagation, optimizers.")
  (depends
   (ocaml
-   (>= 5.1.0))
+   (>= 5.2.0))
   dune
   base
   core
   (ctypes
-   (>= 0.20))
+   (>= 0.23))
   (ctypes-foreign
-   (>= 0.20))
+   (>= 0.23))
   ; opam 2.2.0 has with-dev-setup. Is it supported, what's the syntax?
   ; (ocamlformat
   ;  (>= 0.26.2)
@@ -87,7 +87,7 @@
   "OCaml Compiles Algorithms for Neural Networks Learning is a compiled Deep Learning framework that puts emphasis on low-level backends (like tinygrad), shape inference, concise notation (ab)using PPX.")
  (depends
   (ocaml
-   (>= 5.1.0))
+   (>= 5.2.0))
   dune
   base
   core

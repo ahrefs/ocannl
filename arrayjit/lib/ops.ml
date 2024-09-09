@@ -6,14 +6,9 @@ module Lazy = Utils.Lazy
 (** {2 *** Precision ***} *)
 
 type uint8_elt = Bigarray.int8_unsigned_elt
-
-(* FIXME: Upcoming in OCaml 5.2.0. See:
-   https://github.com/ocaml/ocaml/pull/10775/commits/ba6a2c378056c8669fb1bb99bf07b12d69bd4a12 *)
-type float16_elt = Bigarray.float32_elt
+type float16_elt = Bigarray.float16_elt
 type float32_elt = Bigarray.float32_elt
 type float64_elt = Bigarray.float64_elt
-
-let float16 : (float, float16_elt) Bigarray.kind = Bigarray.float32
 
 type ('ocaml, 'impl) precision =
   | Byte : (char, uint8_elt) precision
@@ -97,15 +92,28 @@ let map_prec ?default { f } = function
   | Void_prec ->
       Option.value_or_thunk default ~default:(fun () -> invalid_arg "map_prec: Void_prec")
   | Byte_prec Byte -> f Byte
-  | Half_prec (Half | Single) -> f Half
-  | Single_prec (Single | Half) -> f Single
+  | Half_prec Half -> f Half
+  | Single_prec Single -> f Single
   | Double_prec Double -> f Double
   | _ -> .
 
 let cuda_typ_of_prec = function
   | Byte_prec _ -> "unsigned char"
-  (* TODO: or should it be uint8, or uint8_t? *)
-  | Half_prec _ -> (* FIXME: *) "float"
+  | Half_prec _ -> "__half"
+  | Single_prec _ -> "float"
+  | Double_prec _ -> "double"
+  | Void_prec -> "void"
+
+let c_typ_of_prec = function
+  | Byte_prec _ -> "unsigned char"
+  | Half_prec _ -> "_Float16"
+  | Single_prec _ -> "float"
+  | Double_prec _ -> "double"
+  | Void_prec -> "void"
+
+let hum_typ_of_prec = function
+  | Byte_prec _ -> "byte"
+  | Half_prec _ -> "half"
   | Single_prec _ -> "float"
   | Double_prec _ -> "double"
   | Void_prec -> "void"
@@ -220,8 +228,16 @@ let sexp_of_voidptr p = Sexp.Atom Ctypes.(string_of (ptr void) p)
 let compare_voidptr = Ctypes.ptr_compare
 let equal_voidptr : voidptr -> voidptr -> bool = phys_equal
 
-let ptr_to_string (type elem) (ptr : elem Ctypes.ptr) prec =
+let cuda_ptr_to_string (type elem) (ptr : elem Ctypes.ptr) prec =
   "(" ^ cuda_typ_of_prec prec ^ "*)"
+  ^ Nativeint.Hex.to_string (Ctypes.raw_address_of_ptr @@ Ctypes.to_voidp ptr)
+
+let c_ptr_to_string (type elem) (ptr : elem Ctypes.ptr) prec =
+  "(" ^ c_typ_of_prec prec ^ "*)"
+  ^ Nativeint.Hex.to_string (Ctypes.raw_address_of_ptr @@ Ctypes.to_voidp ptr)
+
+let ptr_to_string_hum (type elem) (ptr : elem Ctypes.ptr) prec =
+  "(" ^ hum_typ_of_prec prec ^ "*)"
   ^ Nativeint.Hex.to_string (Ctypes.raw_address_of_ptr @@ Ctypes.to_voidp ptr)
 
 type global_identifier =

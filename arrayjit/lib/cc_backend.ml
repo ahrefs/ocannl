@@ -147,6 +147,7 @@ let%diagn_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
     let logs_to_stdout = false
     let main_kernel_prefix = ""
     let kernel_prep_line = ""
+    let extra_include_lines = []
   end) in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
@@ -189,6 +190,7 @@ let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
     let logs_to_stdout = false
     let main_kernel_prefix = ""
     let kernel_prep_line = ""
+    let extra_include_lines = []
   end) in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in

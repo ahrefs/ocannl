@@ -872,9 +872,9 @@ let fprint_hum ?name ?static_indices () ppf llc =
     | Get_global (Ops.C_function s, None) -> fprintf ppf "%s()" s
     | Get_global (Ops.C_function s, Some idcs) -> fprintf ppf "%s(%a)" s pp_indices idcs
     | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, None) ->
-        fprintf ppf "%s" @@ Ops.ptr_to_string ptr prec
+        fprintf ppf "%s" @@ Ops.ptr_to_string_hum ptr prec
     | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
-        fprintf ppf "%s[%a]" (Ops.ptr_to_string ptr prec) pp_indices idcs
+        fprintf ppf "%s[%a]" (Ops.ptr_to_string_hum ptr prec) pp_indices idcs
     | Get_global (Ops.Merge_buffer { source_node_id }, None) ->
         let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
         fprintf ppf "%a.merge" pp_ident tn

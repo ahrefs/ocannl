@@ -324,6 +324,8 @@ let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
 
     let kernel_prep_line =
       "/* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"
+
+    let extra_include_lines = [ "#include <cuda_fp16.h>" ]
   end) in
   let idx_params = Indexing.bound_symbols bindings in
   let b = Buffer.create 4096 in
@@ -351,6 +353,8 @@ let compile_batch ~names bindings lowereds =
 
     let kernel_prep_line =
       "/* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"
+
+    let extra_include_lines = [ "#include <cuda_fp16.h>" ]
   end) in
   let idx_params = Indexing.bound_symbols bindings in
   let b = Buffer.create 4096 in
@@ -430,8 +434,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~glo
        [%log_block
          context.label;
          Utils.log_trace_tree _output]);
-    (* if Utils.debug_log_from_routines () then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE
-       4096; *)
+    (* if Utils.debug_log_from_routines () then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.device.stream
       args;
     [%log "kernel launched"]
