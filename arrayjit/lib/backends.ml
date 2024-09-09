@@ -181,7 +181,6 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     host_wait_for_idle : (Stdlib.Condition.t[@sexp.opaque]);
     dev_wait_for_work : (Stdlib.Condition.t[@sexp.opaque]);
     mutable is_ready : bool;
-    mutable host_is_waiting : bool;  (** The host is waiting for this specific device. *)
   }
   [@@deriving sexp_of]
 
@@ -215,11 +214,9 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     if (not @@ is_idle device) && d.keep_spinning then (
       Mut.lock d.mut;
       if (not @@ is_idle device) && d.keep_spinning then (
-        d.host_is_waiting <- true;
         while (not @@ is_idle device) && d.keep_spinning do
           Stdlib.Condition.wait d.host_wait_for_idle d.mut
-        done;
-        d.host_is_waiting <- false);
+        done);
       Mut.unlock d.mut;
       Option.iter d.device_error ~f:(fun e ->
           Exn.reraise e @@ name ^ " device " ^ Int.to_string device.ordinal))
@@ -252,7 +249,6 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
         is_ready = false;
         host_wait_for_idle = Stdlib.Condition.create ();
         dev_wait_for_work = Stdlib.Condition.create ();
-        host_is_waiting = false;
       }
     in
     let%track3_l_sexp worker (() : unit) : unit =
@@ -265,7 +261,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
               if is_dev_queue_empty state && state.keep_spinning then (
                 state.is_ready <- true;
                 while is_dev_queue_empty state && state.keep_spinning do
-                  if state.host_is_waiting then Stdlib.Condition.broadcast state.host_wait_for_idle;
+                  Stdlib.Condition.broadcast state.host_wait_for_idle;
                   Stdlib.Condition.wait state.dev_wait_for_work state.mut
                 done;
                 state.is_ready <- false);
