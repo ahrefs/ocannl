@@ -114,7 +114,7 @@ struct
               | _ -> ()));
     fprintf ppf "@,@]";
     is_global
-
+    
   let compile_main ~traced_store ppf llc : unit =
     let open Stdlib.Format in
     let visited = Hash_set.create (module Tn) in
@@ -129,7 +129,7 @@ struct
       | For_loop { index = i; from_; to_; body; trace_it = _ } ->
           fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ " pp_index i from_ pp_index i
             to_ pp_index i;
-          if Utils.settings.debug_log_from_routines then
+          if Utils.debug_log_from_routines () then
             if B.logs_to_stdout then
               fprintf ppf {|printf(@[<h>"%s%%d: index %a = %%d\n",@] log_id, %a);@ |}
                 !Utils.captured_log_prefix pp_index i pp_index i
@@ -149,7 +149,7 @@ struct
           let loop_debug_f = debug_float tn.prec in
           let num_closing_braces = pp_top_locals ppf llv in
           let num_typ = Ops.cuda_typ_of_prec tn.prec in
-          if Utils.settings.debug_log_from_routines then (
+          if Utils.debug_log_from_routines () then (
             fprintf ppf "@[<2>{@ @[<2>%s new_set_v =@ %a;@]@ " num_typ loop_f llv;
             let v_code, v_idcs = loop_debug_f llv in
             let pp_args =
@@ -186,7 +186,7 @@ struct
             fprintf ppf "@]@ }@,"
           done
       | Comment message ->
-          if Utils.settings.debug_log_from_routines then
+          if Utils.debug_log_from_routines () then
             if B.logs_to_stdout then
               fprintf ppf {|printf(@[<h>"%s%%d: COMMENT: %s\n",@] log_id);@ |}
                 !Utils.captured_log_prefix
@@ -321,7 +321,7 @@ struct
           ("int " ^ Indexing.symbol_ident s.Indexing.static_symbol, Static_idx s))
     in
     let log_file =
-      if Utils.settings.debug_log_from_routines then
+      if Utils.debug_log_from_routines () then
         [
           ((if B.logs_to_stdout then "int log_id" else "const char* log_file_name"), Log_file_name);
         ]
@@ -346,7 +346,7 @@ struct
     (* FIXME: we should also close the file. *)
     if (not (List.is_empty log_file)) && not B.logs_to_stdout then
       fprintf ppf {|FILE* log_file = fopen(log_file_name, "w");@ |};
-    if Utils.settings.debug_log_from_routines && Utils.settings.log_level > 1 then (
+    if Utils.debug_log_from_routines () then (
       fprintf ppf "/* Debug initial parameter state. */@ ";
       List.iter
         ~f:(function

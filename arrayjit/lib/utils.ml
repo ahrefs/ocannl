@@ -28,6 +28,9 @@ let mref_add_missing mref key ~f =
 type settings = {
   mutable log_level : int;
   mutable debug_log_from_routines : bool;
+      (** If the [debug_log_from_routines] flag is true _and_ the flag [log_level > 1], backends
+          should generate code (e.g. fprintf statements) to log the execution, and arrange for the
+          logs to be emitted via ppx_minidebug. *)
   mutable debug_memory_locations : bool;
   mutable output_debug_files_in_build_directory : bool;
       (** Writes compilation related files in the [build_files] subdirectory of the run directory
@@ -315,6 +318,7 @@ let restore_settings () =
 
 let () = restore_settings ()
 let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1
+let debug_log_from_routines () = settings.debug_log_from_routines && settings.log_level > 1
 
 let enable_runtime_debug () =
   settings.output_debug_files_in_build_directory <- true;
@@ -505,7 +509,7 @@ let add_log_processor ~prefix process_logs =
     { log_processor_prefix = prefix; process_logs } :: !captured_log_processors
 
 let capture_stdout_logs ?(never_skip = false) arg =
-  if (not never_skip) && not settings.debug_log_from_routines then arg ()
+  if (not never_skip) && not (debug_log_from_routines ()) then arg ()
   else (
     Stdlib.flush Stdlib.stdout;
     let exitp, entrancep = Unix.pipe () and backup = Unix.dup Unix.stdout in

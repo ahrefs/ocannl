@@ -328,7 +328,7 @@ let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
   let idx_params = Indexing.bound_symbols bindings in
   let b = Buffer.create 4096 in
   let ppf = Stdlib.Format.formatter_of_buffer b in
-  if Utils.settings.debug_log_from_routines then
+  if Utils.debug_log_from_routines () then
     Stdlib.Format.fprintf ppf "@,__device__ int printf (const char * format, ... );@,";
   let is_global = Hash_set.create (module Tn) in
   let params = Syntax.compile_proc ~name ~is_global ppf idx_params lowered in
@@ -425,12 +425,12 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~glo
     (* Map.iteri global_arrays ~f:(fun ~key ~data:ptr -> if key.Low_level.zero_initialized then
        Cu.memset_d8_async ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key.Low_level.tn)); *)
     [%log "launching the kernel"];
-    (if Utils.settings.debug_log_from_routines then
+    (if Utils.debug_log_from_routines () then
        Utils.add_log_processor ~prefix:log_id_prefix @@ fun _output ->
        [%log_block
          context.label;
          Utils.log_trace_tree _output]);
-    (* if Utils.settings.debug_log_from_routines then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE
+    (* if Utils.debug_log_from_routines () then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE
        4096; *)
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.device.stream
       args;

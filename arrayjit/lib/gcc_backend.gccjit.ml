@@ -627,7 +627,7 @@ let%diagn_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
   let fkind = Function.Exported in
   let c_str = Type.(get ctx Const_char_ptr) in
   let log_file_name =
-    if Utils.settings.debug_log_from_routines then
+    if Utils.debug_log_from_routines () then
       Some (Param.create ctx c_str "log_file_name", Log_file_name)
     else None
   in
@@ -857,7 +857,7 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
     [%log_result name];
     Backend_utils.check_merge_buffer ~merge_buffer ~code_node:code.expected_merge_node;
     Indexing.apply run_variadic ();
-    if Utils.settings.debug_log_from_routines then (
+    if Utils.debug_log_from_routines () then (
       Utils.log_trace_tree (Stdio.In_channel.read_lines log_file_name);
       Stdlib.Sys.remove log_file_name)
   in
