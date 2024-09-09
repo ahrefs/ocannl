@@ -65,6 +65,7 @@
   ocannl_npy
   stdio
   num
+  saturn_lockfree
   ppxlib
   ppx_jane
   ppx_expect

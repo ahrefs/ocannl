@@ -166,13 +166,17 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   type task_list = Tnode.task Utils.mutable_list [@@deriving sexp_of]
 
   module Mut = Stdlib.Mutex
+  module Queue = Saturn_lockfree.Single_prod_single_cons_queue
+
+  type task_queue = Tnode.task Queue.t
+
+  let sexp_of_task_queue q =
+    Sexp.(List [ Atom "task_queue_of_size"; Atom (Int.to_string @@ Queue.size q) ])
 
   type device_state = {
     mutable keep_spinning : bool;
     mutable device_error : exn option;
-    mutable host_pos : task_list;
-    mutable dev_pos : task_list;
-    mutable dev_previous_pos : task_list;
+    queue : task_queue;
     mut : (Mut.t[@sexp.opaque]);
     host_wait_for_idle : (Stdlib.Condition.t[@sexp.opaque]);
     dev_wait_for_work : (Stdlib.Condition.t[@sexp.opaque]);
@@ -201,7 +205,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let expected_merge_node (code : code) = Backend.expected_merge_node code
   let expected_merge_nodes (codes : code_batch) = Backend.expected_merge_nodes codes
-  let is_dev_queue_empty state = Utils.(is_empty @@ tl_exn state.dev_previous_pos)
+  let is_dev_queue_empty state = Queue.size state.queue = 0
   let is_idle device = is_dev_queue_empty device.state && device.state.is_ready
   let name = "multicore " ^ Backend.name
 
@@ -227,7 +231,9 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     Option.iter d.device_error ~f:(fun e ->
         Exn.reraise e @@ name ^ " device " ^ Int.to_string device.ordinal);
     if not d.keep_spinning then invalid_arg "Multicore_backend: device not available";
-    d.host_pos <- Utils.insert ~next:task d.host_pos;
+    if not @@ Queue.try_push d.queue task then (
+      await device;
+      Queue.push_exn d.queue task);
     if d.is_ready then (
       Mut.lock d.mut;
       Stdlib.Condition.broadcast d.dev_wait_for_work;
@@ -237,22 +243,11 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let%track3_l_sexp spinup_device ~(ordinal : int) : device =
     Int.incr global_run_no;
-    let init_pos =
-      Utils.Cons
-        {
-          hd =
-            Tnode.Task
-              { context_lifetime = (); description = "root of task queue"; work = (fun () -> ()) };
-          tl = Empty;
-        }
-    in
     let state =
       {
         keep_spinning = true;
         device_error = None;
-        host_pos = init_pos;
-        dev_pos = Empty;
-        dev_previous_pos = init_pos;
+        queue = Queue.create ~size_exponent:12;
         mut = Mut.create ();
         is_ready = false;
         host_wait_for_idle = Stdlib.Condition.create ();
@@ -264,8 +259,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       assert (not @@ Domain.is_main_domain ());
       try
         while state.keep_spinning do
-          match state.dev_pos with
-          | Empty ->
+          match Queue.pop_opt state.queue with
+          | None ->
               Mut.lock state.mut;
               if is_dev_queue_empty state && state.keep_spinning then (
                 state.is_ready <- true;
@@ -274,12 +269,8 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
                   Stdlib.Condition.wait state.dev_wait_for_work state.mut
                 done;
                 state.is_ready <- false);
-              state.dev_pos <- Utils.tl_exn state.dev_previous_pos;
               Mut.unlock state.mut
-          | Cons { hd; tl } ->
-              Tnode.run hd;
-              state.dev_previous_pos <- state.dev_pos;
-              state.dev_pos <- tl
+          | Some task -> Tnode.run task
         done
       with e ->
         state.device_error <- Some e;
