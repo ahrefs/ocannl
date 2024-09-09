@@ -556,6 +556,18 @@ type waiter = {
 }
 (** Note: this waiter is meant for sequential waiting. *)
 
+let poll pipe_inp =
+  let poll = Poll.create () in
+  Poll.set poll pipe_inp Poll.Event.read;
+  let rec wait () =
+    Poll.clear poll;
+    match Poll.wait poll (Poll.Timeout.after 10_000_000L) with
+    | `Timeout -> ()
+    | `Ok -> ()
+    | exception Unix.Unix_error (Unix.EINTR, _, _) -> wait ()
+  in
+  wait
+
 let waiter ~name () =
   let is_open = Atomic.make true in
   (* TODO: since OCaml 5.2, consider [make_contended]? *)
@@ -564,6 +576,7 @@ let waiter ~name () =
   let pipe_inp, pipe_out =
     try Unix.pipe ~cloexec:true () with e -> Exn.reraise e @@ "waiter " ^ name ^ ": Unix.pipe"
   in
+  let poll = poll pipe_inp in
   let await ~keep_waiting =
     let%track_l_sexp rec wait () : bool =
       if Atomic.compare_and_set is_released true false then (
@@ -574,10 +587,7 @@ let waiter ~name () =
         assert (n = 1);
         true)
       else if keep_waiting () then
-        let _, _, _ =
-          try Unix.select [ pipe_inp ] [] [] 5.0
-          with e -> Exn.reraise e @@ "waiter " ^ name ^ ": Unix.select"
-        in
+        let () = try poll () with e -> Exn.reraise e @@ "waiter " ^ name ^ ": poll error" in
         wait ()
       else false
     in

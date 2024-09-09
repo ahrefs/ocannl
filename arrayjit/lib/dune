@@ -12,6 +12,7 @@
   ctypes
   ctypes.foreign
   saturn_lockfree
+  poll
   (select
    gcc_backend.ml
    from
