@@ -240,7 +240,7 @@ struct
           Hash_set.add visited tn;
           let ident = get_ident tn in
           fprintf ppf "@[<2>%s[%a@;<0 -2>]@]" ident pp_array_offset (idcs, Lazy.force tn.dims)
-      | Constant c -> fprintf ppf "(%f)" c
+      | Constant c -> fprintf ppf "(%.9g)" c
       | Embed_index idx ->
           if not @@ List.exists ~f:(String.equal num_typ) [ "int"; "size_t" ] then
             fprintf ppf "(%s)" num_typ;

@@ -882,7 +882,7 @@ let fprint_hum ?name ?static_indices () ppf llc =
         let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
         fprintf ppf "@[<2>%a.merge[@,%a]@]" pp_ident tn pp_indices idcs
     | Get (tn, idcs) -> fprintf ppf "@[<2>%a[@,%a]@]" pp_ident tn pp_indices idcs
-    | Constant c -> fprintf ppf "%f" c
+    | Constant c -> fprintf ppf "%.9g" c
     | Embed_index idx -> pp_index ppf idx
     | Binop (Arg1, v1, _v2) -> pp_float prec ppf v1
     | Binop (Arg2, _v1, v2) -> pp_float prec ppf v2
