@@ -213,10 +213,11 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
     let d = device.state in
     if (not @@ is_idle device) && d.keep_spinning then (
       Mut.lock d.mut;
-      if (not @@ is_idle device) && d.keep_spinning then (
-        while (not @@ is_idle device) && d.keep_spinning do
-          Stdlib.Condition.wait d.host_wait_for_idle d.mut
-        done);
+      while (not @@ is_idle device) && d.keep_spinning do
+        (* If the device "is ready", it needs to be woken up first to finish the work. *)
+        if d.is_ready then Stdlib.Condition.broadcast d.dev_wait_for_work;
+        Stdlib.Condition.wait d.host_wait_for_idle d.mut
+      done;
       Mut.unlock d.mut;
       Option.iter d.device_error ~f:(fun e ->
           Exn.reraise e @@ name ^ " device " ^ Int.to_string device.ordinal))
@@ -258,13 +259,12 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
           match Queue.pop_opt state.queue with
           | None ->
               Mut.lock state.mut;
-              if is_dev_queue_empty state && state.keep_spinning then (
-                state.is_ready <- true;
-                while is_dev_queue_empty state && state.keep_spinning do
-                  Stdlib.Condition.broadcast state.host_wait_for_idle;
-                  Stdlib.Condition.wait state.dev_wait_for_work state.mut
-                done;
-                state.is_ready <- false);
+              state.is_ready <- true;
+              Stdlib.Condition.broadcast state.host_wait_for_idle;
+              while is_dev_queue_empty state && state.keep_spinning do
+                Stdlib.Condition.wait state.dev_wait_for_work state.mut
+              done;
+              state.is_ready <- false;
               Mut.unlock state.mut
           | Some task -> Tnode.run task
         done
