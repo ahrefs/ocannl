@@ -3,7 +3,7 @@
 ### Added
 
 - The previously-mocked support for half precision.
-  - Currently broken because of missing Ctypes coverage.
+  - We work around the missing Ctypes coverage by not using `Ctypes.bigarray_start`.
 
 ### Changed
 

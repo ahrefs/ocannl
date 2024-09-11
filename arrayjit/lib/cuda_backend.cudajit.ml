@@ -307,26 +307,34 @@ let is_in_context node =
   Tnode.default_to_most_local node.Low_level.tn 33;
   match node.tn.memory_mode with Some ((Virtual | Local), _) -> false | _ -> true
 
+module C_syntax_config (Input : sig
+  val for_lowereds : Low_level.optimized array
+end) =
+struct
+  let for_lowereds = Input.for_lowereds
+
+  type nonrec ctx_array = buffer_ptr
+
+  let opt_ctx_arrays = None
+  let hardcoded_context_ptr = None
+  let is_in_context = is_in_context
+  let host_ptrs_for_readonly = true
+  let logs_to_stdout = true
+  let main_kernel_prefix = "extern \"C\" __global__"
+
+  let kernel_prep_line =
+    "/* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"
+
+  let extra_include_lines = [ "#include <cuda_fp16.h>" ]
+  let typ_of_prec = Ops.cuda_typ_of_prec
+end
+
 let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
   (* TODO: The following link seems to claim it's better to expand into loops than use memset.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
-  let module Syntax = Backend_utils.C_syntax (struct
+  let module Syntax = Backend_utils.C_syntax (C_syntax_config (struct
     let for_lowereds = [| lowered |]
-
-    type nonrec ctx_array = buffer_ptr
-
-    let opt_ctx_arrays = None
-    let hardcoded_context_ptr = None
-    let is_in_context = is_in_context
-    let host_ptrs_for_readonly = true
-    let logs_to_stdout = true
-    let main_kernel_prefix = "extern \"C\" __global__"
-
-    let kernel_prep_line =
-      "/* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"
-
-    let extra_include_lines = [ "#include <cuda_fp16.h>" ]
-  end) in
+  end)) in
   let idx_params = Indexing.bound_symbols bindings in
   let b = Buffer.create 4096 in
   let ppf = Stdlib.Format.formatter_of_buffer b in
@@ -339,23 +347,9 @@ let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
 
 let compile_batch ~names bindings lowereds =
   let for_lowereds = Array.filter_map ~f:Fn.id lowereds in
-  let module Syntax = Backend_utils.C_syntax (struct
+  let module Syntax = Backend_utils.C_syntax (C_syntax_config (struct
     let for_lowereds = for_lowereds
-
-    type nonrec ctx_array = buffer_ptr
-
-    let opt_ctx_arrays = None
-    let hardcoded_context_ptr = None
-    let is_in_context = is_in_context
-    let host_ptrs_for_readonly = true
-    let logs_to_stdout = true
-    let main_kernel_prefix = "extern \"C\" __global__"
-
-    let kernel_prep_line =
-      "/* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"
-
-    let extra_include_lines = [ "#include <cuda_fp16.h>" ]
-  end) in
+  end)) in
   let idx_params = Indexing.bound_symbols bindings in
   let b = Buffer.create 4096 in
   let ppf = Stdlib.Format.formatter_of_buffer b in

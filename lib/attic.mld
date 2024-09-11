@@ -276,11 +276,11 @@ let mem_properties (traced_store : Low_level.traced_store) =
         | bs, (_p_name, Log_file_name) :: ps ->
             Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, (_p_name, Merge_buffer) :: ps ->
-            let get_ptr (buffer, _) = Ndarray.get_voidptr buffer in
+            let get_ptr (buffer, _) = Ndarray.get_voidptr_not_managed buffer in
             Param_2f (get_ptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
         | bs, (_p_name, Param_ptr tn) :: ps ->
             let nd = match Map.find arrays tn with Some nd -> nd | None -> assert false in
-            let c_ptr = Ndarray.get_voidptr nd in
+            let c_ptr = Ndarray.get_voidptr_not_managed nd in
             (* Stdlib.Printf.printf "DEBUG: %s param for %s is %s\n%!" _p_name (Tn.debug_name tn)
                (Ndarray.c_ptr_to_string nd); *)
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))

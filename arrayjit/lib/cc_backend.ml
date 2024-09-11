@@ -26,15 +26,6 @@ let ctx_arrays context = context.arrays
 
 type buffer_ptr = ctx_array [@@deriving sexp_of]
 
-(** Alternative approach:
-
-    {[
-      type buffer_ptr = unit Ctypes_static.ptr
-
-      let sexp_of_buffer_ptr ptr = Sexp.Atom (Ops.ptr_to_string ptr Ops.Void_prec)
-      let buffer_ptr ctx_array = Ndarray.get_voidptr ctx_array
-    ]} *)
-
 let buffer_ptr ctx_array = ctx_array
 
 let alloc_buffer ?old_buffer ~size_in_bytes () =
@@ -112,17 +103,37 @@ let c_compile_and_load ~f_name =
   while rc = 0 && (not @@ (Stdlib.Sys.file_exists libname && Stdlib.Sys.file_exists log_fname)) do
     Unix.sleepf 0.001
   done;
-  (if rc <> 0 then
-     let errors =
-       "Cc_backend.c_compile_and_load: compilation failed with errors:\n"
-       ^ Stdio.In_channel.read_all log_fname
-     in
-     Stdio.prerr_endline errors;
-     invalid_arg errors);
+  if rc <> 0 then (
+    let errors =
+      "Cc_backend.c_compile_and_load: compilation failed with errors:\n"
+      ^ Stdio.In_channel.read_all log_fname
+    in
+    Stdio.prerr_endline errors;
+    invalid_arg errors);
   (* Note: RTLD_DEEPBIND not available on MacOS. *)
   let result = { lib = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW ]; libname } in
   Stdlib.Gc.finalise (fun lib -> Dl.dlclose ~handle:lib.lib) result;
   result
+
+module C_syntax_config (Input : sig
+  val for_lowereds : Low_level.optimized array
+  val opt_ctx_arrays : (Tn.t, buffer_ptr, Tn.comparator_witness) Base.Map.t option
+end) =
+struct
+  let for_lowereds = Input.for_lowereds
+
+  type nonrec ctx_array = ctx_array
+
+  let opt_ctx_arrays = Input.opt_ctx_arrays
+  let hardcoded_context_ptr = Some Ndarray.c_ptr_to_string
+  let is_in_context = is_in_context
+  let host_ptrs_for_readonly = true
+  let logs_to_stdout = false
+  let main_kernel_prefix = ""
+  let kernel_prep_line = ""
+  let extra_include_lines = []
+  let typ_of_prec = Ops.c_typ_of_prec
+end
 
 let%diagn_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optimized) =
   let opt_ctx_arrays =
@@ -140,20 +151,10 @@ let%diagn_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
                 else ctx_arrays
             | Some _ -> ctx_arrays))
   in
-  let module Syntax = Backend_utils.C_syntax (struct
+  let module Syntax = Backend_utils.C_syntax (C_syntax_config (struct
     let for_lowereds = [| lowered |]
-
-    type nonrec ctx_array = ctx_array
-
     let opt_ctx_arrays = opt_ctx_arrays
-    let hardcoded_context_ptr = Some Ndarray.c_ptr_to_string
-    let is_in_context = is_in_context
-    let host_ptrs_for_readonly = true
-    let logs_to_stdout = false
-    let main_kernel_prefix = ""
-    let kernel_prep_line = ""
-    let extra_include_lines = []
-  end) in
+  end)) in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
   let pp_file = Utils.pp_file ~base_name:name ~extension:".c" in
@@ -183,20 +184,10 @@ let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
                     else ctx_arrays
                 | Some _ -> ctx_arrays)))
   in
-  let module Syntax = Backend_utils.C_syntax (struct
+  let module Syntax = Backend_utils.C_syntax (C_syntax_config (struct
     let for_lowereds = for_lowereds
-
-    type nonrec ctx_array = ctx_array
-
     let opt_ctx_arrays = opt_ctx_arrays
-    let hardcoded_context_ptr = Some Ndarray.c_ptr_to_string
-    let is_in_context = is_in_context
-    let host_ptrs_for_readonly = true
-    let logs_to_stdout = false
-    let main_kernel_prefix = ""
-    let kernel_prep_line = ""
-    let extra_include_lines = []
-  end) in
+  end)) in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
   let global_ctx_arrays =
@@ -270,13 +261,11 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
         | bs, Log_file_name :: ps ->
             Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Merge_buffer :: ps ->
-            let get_ptr (buffer, _) = Ndarray.get_voidptr buffer in
+            let get_ptr (buffer, _) = Ndarray.get_voidptr_not_managed buffer in
             Param_2f (get_ptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
         | bs, Param_ptr tn :: ps ->
             let nd = match Map.find arrays tn with Some nd -> nd | None -> assert false in
-            (* let f ba = Ctypes.bigarray_start Ctypes_static.Genarray ba in let c_ptr =
-               Ndarray.(map { f } nd) in *)
-            let c_ptr = Ndarray.get_voidptr nd in
+            let c_ptr = Ndarray.get_voidptr_not_managed nd in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
       in
       (* Reverse the input order because [Indexing.apply] will reverse it again. Important:

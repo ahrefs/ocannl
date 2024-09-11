@@ -14,11 +14,10 @@ module A = Bigarray.Genarray
 
 type ('ocaml, 'elt_t) bigarray = ('ocaml, 'elt_t, Bigarray.c_layout) A.t
 
-let big_ptr_to_string arr =
-  "@"
-  ^ Nativeint.Hex.to_string
-      (Ctypes.raw_address_of_ptr @@ Ctypes.to_voidp
-      @@ Ctypes.bigarray_start Ctypes_static.Genarray arr)
+let bigarray_start_not_managed (arr : ('ocaml, 'elt_t) bigarray) =
+  Ctypes_bigarray.unsafe_address arr
+
+let big_ptr_to_string arr = "@" ^ Nativeint.Hex.to_string (bigarray_start_not_managed arr)
 
 let sexp_of_bigarray (arr : ('a, 'b) bigarray) =
   let dims = A.dims arr in
@@ -179,14 +178,15 @@ let map2 { f2 } x1 x2 =
 
 let dims = map { f = A.dims }
 
-let get_voidptr =
+let get_voidptr_not_managed nd : unit Ctypes.ptr =
   let f arr =
-    let open Ctypes in
-    coerce
-      (ptr @@ typ_of_bigarray_kind @@ Bigarray.Genarray.kind arr)
-      (ptr void) (bigarray_start genarray arr)
+    Ctypes_static.CPointer
+      (Ctypes_memory.make_unmanaged ~reftyp:Ctypes_static.void @@ bigarray_start_not_managed arr)
+    (* This doesn't work because Ctypes.bigarray_start doesn't support half precision: *)
+    (* let open Ctypes in coerce (ptr @@ typ_of_bigarray_kind @@ Bigarray.Genarray.kind arr) (ptr
+       void) (bigarray_start genarray arr) *)
   in
-  map { f }
+  map { f } nd
 
 let set_from_float arr idx v =
   match arr with
@@ -368,12 +368,12 @@ let retrieve_flat_values arr =
 
 let c_ptr_to_string nd =
   let prec = get_prec nd in
-  let f arr = Ops.c_ptr_to_string (Ctypes.bigarray_start Ctypes_static.Genarray arr) prec in
+  let f arr = Ops.c_rawptr_to_string (bigarray_start_not_managed arr) prec in
   map { f } nd
 
 let ptr_to_string_hum nd =
   let prec = get_prec nd in
-  let f arr = Ops.ptr_to_string_hum (Ctypes.bigarray_start Ctypes_static.Genarray arr) prec in
+  let f arr = Ops.rawptr_to_string_hum (bigarray_start_not_managed arr) prec in
   map { f } nd
 
 (** {2 *** Creating ***} *)

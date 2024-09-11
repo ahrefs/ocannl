@@ -44,6 +44,7 @@ module C_syntax (B : sig
   val main_kernel_prefix : string
   val kernel_prep_line : string
   val extra_include_lines : string list
+  val typ_of_prec : Ops.prec -> string
 end) =
 struct
   open Types
@@ -150,7 +151,7 @@ struct
           let loop_f = pp_float tn.prec in
           let loop_debug_f = debug_float tn.prec in
           let num_closing_braces = pp_top_locals ppf llv in
-          let num_typ = Ops.cuda_typ_of_prec tn.prec in
+          let num_typ = B.typ_of_prec tn.prec in
           if Utils.debug_log_from_routines () then (
             fprintf ppf "@[<2>{@ @[<2>%s new_set_v =@ %a;@]@ " num_typ loop_f llv;
             let v_code, v_idcs = loop_debug_f llv in
@@ -207,7 +208,7 @@ struct
     and pp_top_locals ppf (vcomp : Low_level.float_t) : int =
       match vcomp with
       | Local_scope { id = { scope_id = i; tn = { prec; _ } }; body; orig_indices = _ } ->
-          let num_typ = Ops.cuda_typ_of_prec prec in
+          let num_typ = B.typ_of_prec prec in
           (* Arrays are initialized to 0 by default. However, there is typically an explicit
              initialization for virtual nodes. *)
           fprintf ppf "@[<2>{@ %s v%d = 0;@ " num_typ i;
@@ -220,19 +221,19 @@ struct
       | Binop (_, v1, v2) -> pp_top_locals ppf v1 + pp_top_locals ppf v2
       | Unop (_, v) -> pp_top_locals ppf v
     and pp_float prec ppf value =
-      let num_typ = Ops.cuda_typ_of_prec prec in
+      let num_typ = B.typ_of_prec prec in
       let loop = pp_float prec in
       match value with
       | Local_scope { id; _ } ->
           (* Embedding of Local_scope is done by pp_top_locals. *)
           loop ppf @@ Get_local id
       | Get_local id ->
-          let get_typ = Ops.cuda_typ_of_prec id.tn.prec in
+          let get_typ = B.typ_of_prec id.tn.prec in
           if not @@ String.equal num_typ get_typ then fprintf ppf "(%s)" num_typ;
           fprintf ppf "v%d" id.scope_id
       | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
           let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
-          fprintf ppf "@[<2>((%s*)merge_buffer)[%a@;<0 -2>]@]" (Ops.cuda_typ_of_prec prec)
+          fprintf ppf "@[<2>((%s*)merge_buffer)[%a@;<0 -2>]@]" (B.typ_of_prec prec)
             pp_array_offset
             (idcs, Lazy.force tn.dims)
       | Get_global _ -> failwith "C_syntax: Get_global / FFI NOT IMPLEMENTED YET"
@@ -255,7 +256,7 @@ struct
           (* FIXME: don't recompute v *)
           fprintf ppf "@[<1>(%a > 0.0 ?@ %a : 0.0@;<0 -1>)@]" loop v loop v
     and debug_float prec (value : Low_level.float_t) : string * 'a list =
-      let num_typ = Ops.cuda_typ_of_prec prec in
+      let num_typ = B.typ_of_prec prec in
       let loop = debug_float prec in
       match value with
       | Local_scope { id; _ } ->
@@ -263,7 +264,7 @@ struct
              logs. *)
           loop @@ Get_local id
       | Get_local id ->
-          let get_typ = Ops.cuda_typ_of_prec id.tn.prec in
+          let get_typ = B.typ_of_prec id.tn.prec in
           let v =
             (if not @@ String.equal num_typ get_typ then "(" ^ num_typ ^ ")" else "")
             ^ "v" ^ Int.to_string id.scope_id
@@ -315,7 +316,7 @@ struct
              if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
                tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
              if B.is_in_context node && not (Hash_set.mem is_global tn) then
-               (Ops.cuda_typ_of_prec tn.Tn.prec ^ " *" ^ get_ident tn, Param_ptr tn) :: params
+               (B.typ_of_prec tn.Tn.prec ^ " *" ^ get_ident tn, Param_ptr tn) :: params
              else params)
     in
     let idx_params =
@@ -333,7 +334,7 @@ struct
       Option.(
         to_list
         @@ map merge_node ~f:(fun tn ->
-               ("const " ^ Ops.cuda_typ_of_prec tn.prec ^ " *merge_buffer", Merge_buffer)))
+               ("const " ^ B.typ_of_prec tn.prec ^ " *merge_buffer", Merge_buffer)))
     in
     let params = log_file @ merge_param @ idx_params @ params in
     let params =
@@ -382,7 +383,7 @@ struct
     Hashtbl.iteri traced_store ~f:(fun ~key:tn ~data:node ->
         if not (Tn.is_virtual_force tn 333 || B.is_in_context node || Hash_set.mem is_global tn)
         then
-          fprintf ppf "%s %s[%d]%s;@ " (Ops.cuda_typ_of_prec tn.prec) (get_ident tn)
+          fprintf ppf "%s %s[%d]%s;@ " (B.typ_of_prec tn.prec) (get_ident tn)
             (Tn.num_elems tn)
             (if node.zero_initialized then " = {0}" else "")
         else if (not (Tn.is_virtual_force tn 333)) && node.zero_initialized then pp_zero_out ppf tn);

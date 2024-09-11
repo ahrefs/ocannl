@@ -35,7 +35,7 @@ type buffer_ptr = ctx_array [@@deriving sexp_of]
       type buffer_ptr = unit Ctypes_static.ptr
 
       let sexp_of_buffer_ptr ptr = Sexp.Atom (Ops.ptr_to_string ptr Ops.Void_prec)
-      let buffer_ptr ctx_array = Ndarray.get_voidptr ctx_array
+      let buffer_ptr ctx_array = Ndarray.get_voidptr_not_managed ctx_array
     ]} *)
 
 let buffer_ptr ctx_array = ctx_array
@@ -171,6 +171,7 @@ let zero_out ctx block node =
        ]
 
 let get_c_ptr ctx num_typ ba =
+  (* FIXME(#284): half precision support breaks here. *)
   Gccjit.(RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray ba)
 
 let prepare_node ~debug_log_zero_out ~get_ident ctx nodes traced_store ctx_nodes initializations
@@ -840,12 +841,10 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
             Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Param_ptr tn :: ps ->
             let nd = match Map.find arrays tn with Some nd -> nd | None -> assert false in
-            (* let f ba = Ctypes.bigarray_start Ctypes_static.Genarray ba in let c_ptr =
-               Ndarray.(map { f } nd) in *)
-            let c_ptr = Ndarray.get_voidptr nd in
+            let c_ptr = Ndarray.get_voidptr_not_managed nd in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
         | bs, Merge_buffer :: ps ->
-            let get_ptr (buffer, _) = Ndarray.get_voidptr buffer in
+            let get_ptr (buffer, _) = Ndarray.get_voidptr_not_managed buffer in
             Param_2f (get_ptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
       in
       (* Folding by [link] above reverses the input order. Important: [code.bindings] are traversed
