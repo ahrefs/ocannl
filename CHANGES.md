@@ -17,6 +17,7 @@
   - By default do not log from tests.
   - `debug_log_from_routines` should only happen when `log_level > 1`.
 - Bugs in `Multicore_backend`: `await` was not checking queue emptiness, `worker`'s `Condition.broadcast` was non-atomically guarded (doesn't need to be), possible deadloop due to the lockfree queue -- now replaced with `saturn_lockfree`.
+- Reduced busy-waiting inside `c_compile_and_load`, propagating compilation errors now instead of infinite loop on error.
 
 ## [0.4.0] -- 2024-09-04
 

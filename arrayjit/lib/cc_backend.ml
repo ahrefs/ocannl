@@ -108,12 +108,17 @@ let c_compile_and_load ~f_name =
     Printf.sprintf "%s %s -O%d -o %s --shared >> %s 2>&1" (compiler_command ()) f_name
       (optimization_level ()) libname log_fname
   in
-  let _rc = Stdlib.Sys.command cmdline in
-  (* FIXME: don't busy wait *)
-  (* FIXME: detect and propagate compile errors, log compile warnings *)
-  while not @@ (Stdlib.Sys.file_exists libname && Stdlib.Sys.file_exists log_fname) do
-    ()
+  let rc = Stdlib.Sys.command cmdline in
+  while rc = 0 && (not @@ (Stdlib.Sys.file_exists libname && Stdlib.Sys.file_exists log_fname)) do
+    Unix.sleepf 0.001
   done;
+  (if rc <> 0 then
+     let errors =
+       "Cc_backend.c_compile_and_load: compilation failed with errors:\n"
+       ^ Stdio.In_channel.read_all log_fname
+     in
+     Stdio.prerr_endline errors;
+     invalid_arg errors);
   (* Note: RTLD_DEEPBIND not available on MacOS. *)
   let result = { lib = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW ]; libname } in
   Stdlib.Gc.finalise (fun lib -> Dl.dlclose ~handle:lib.lib) result;
