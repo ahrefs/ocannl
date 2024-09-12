@@ -736,7 +736,47 @@ let simplify_llc llc =
         let result = Unop (op, v) in
         if equal_float_t llv v then result else loop_float result
   in
-  loop_proc llc
+  let check_constant =
+    match Utils.settings.check_half_prec_constants_cutoff with
+    | None -> fun _prec _c -> ()
+    | Some cutoff -> (
+        fun tn c ->
+          match tn.Tn.prec with
+          | Ops.Half_prec _ ->
+              if Float.(abs c >= cutoff) then
+                raise
+                @@ Utils.User_error
+                     ("Constant " ^ Float.to_string c
+                    ^ " is too big for FP16 aka. half precision, risk of overflow; increase \
+                       precision of tensor node " ^ Tn.debug_name tn)
+          | _ -> ())
+  in
+  let rec check_proc llc =
+    let loop = check_proc in
+    match llc with
+    | Seq (c1, c2) ->
+        loop c1;
+        loop c2
+    | For_loop { body; _ } -> loop body
+    | Zero_out _ -> ()
+    | Set { tn; llv; _ } -> check_float tn llv
+    | Set_local (id, llv) -> check_float id.tn llv
+    | Noop | Comment _ | Staged_compilation _ -> ()
+  and check_float tn llv =
+    let loop = check_float tn in
+    match llv with
+    | Constant c -> check_constant tn c
+    | Local_scope { body; _ } -> check_proc body
+    | Binop (_, v1, v2) ->
+        loop v1;
+        loop v2
+    | Unop (_, v) -> loop v
+    | Embed_index (Indexing.Fixed_idx i) -> check_constant tn (Float.of_int i)
+    | Embed_index _ | Get_local _ | Get_global (_, _) | Get (_, _) -> ()
+  in
+  let result = loop_proc llc in
+  if Option.is_some Utils.settings.check_half_prec_constants_cutoff then check_proc result;
+  result
 
 type traced_store = (Tn.t, traced_array) Base.Hashtbl.t [@@deriving sexp_of]
 

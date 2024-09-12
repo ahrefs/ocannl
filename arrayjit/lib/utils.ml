@@ -40,6 +40,9 @@ type settings = {
   mutable fixed_state_for_init : int option;
   mutable print_decimals_precision : int;
       (** When rendering arrays etc., outputs this many decimal digits. *)
+  mutable check_half_prec_constants_cutoff : float option;
+      (** If given, generic code optimization should fail if a half precision FP16 constant exceeds
+          the cutoff. *)
 }
 [@@deriving sexp]
 
@@ -51,6 +54,7 @@ let settings =
     output_debug_files_in_build_directory = false;
     fixed_state_for_init = None;
     print_decimals_precision = 2;
+    check_half_prec_constants_cutoff = Some (2. **. 14.);
   }
 
 let accessed_global_args = Hash_set.create (module String)
@@ -314,7 +318,10 @@ let restore_settings () =
     (let seed = get_global_arg ~arg_name:"fixed_state_for_init" ~default:"" in
      if String.is_empty seed then None else Some (Int.of_string seed));
   settings.print_decimals_precision <-
-    Int.of_string @@ get_global_arg ~arg_name:"print_decimals_precision" ~default:"2"
+    Int.of_string @@ get_global_arg ~arg_name:"print_decimals_precision" ~default:"2";
+  settings.check_half_prec_constants_cutoff <-
+    Float.of_string_opt
+    @@ get_global_arg ~arg_name:"check_half_prec_constants_cutoff" ~default:"16384.0"
 
 let () = restore_settings ()
 let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1
