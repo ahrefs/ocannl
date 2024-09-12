@@ -32,7 +32,7 @@ depends: [
   "odoc" {with-doc}
 ]
 depopts: [
-  "cudajit" {>= "0.4.0"}
+  "cudajit" {>= "0.4.1"}
   "gccjit" {>= "0.3.2"}
 ]
 build: [

@@ -97,13 +97,6 @@ let map_prec ?default { f } = function
   | Double_prec Double -> f Double
   | _ -> .
 
-let cuda_typ_of_prec = function
-  | Byte_prec _ -> "unsigned char"
-  | Half_prec _ -> "__half"
-  | Single_prec _ -> "float"
-  | Double_prec _ -> "double"
-  | Void_prec -> "void"
-
 let c_typ_of_prec = function
   | Byte_prec _ -> "unsigned char"
   | Half_prec _ -> "_Float16"
@@ -164,24 +157,6 @@ let interpret_unop op v =
   let open Float in
   match op with Identity -> v | Relu when v >= 0. -> v | Relu -> 0.
 
-let binop_C_syntax prec v =
-  match (v, prec) with
-  | Arg1, _ -> invalid_arg "Ops.binop_C_syntax: Arg1 is not a C operator"
-  | Arg2, _ -> invalid_arg "Ops.binop_C_syntax: Arg2 is not a C operator"
-  | _, Void_prec -> invalid_arg "Ops.binop_C_syntax: Void precision"
-  | Add, _ -> ("(", " +", ")")
-  | Sub, _ -> ("(", " -", ")")
-  | Mul, _ -> ("(", " *", ")")
-  | Div, _ -> ("(", " /", ")")
-  | ToPowOf, Double_prec _ -> ("pow(", ",", ")")
-  | ToPowOf, Single_prec _ -> ("powf(", ",", ")")
-  | ToPowOf, Half_prec _ -> ("powf(", ",", ")")
-  | ToPowOf, Byte_prec _ ->
-      invalid_arg "Ops.binop_C_syntax: ToPowOf not supported for byte/integer precisions"
-  | Relu_gate, Byte_prec _ -> ("(", " > 0 ?", " : 0)")
-  | Relu_gate, _ -> ("(", " > 0.0 ?", " : 0.0)")
-(* "((int)(", "> 0.0) *", ")" *)
-
 let binop_cd_syntax = function
   | Arg1 -> "-@>"
   | Arg2 -> "-/>"
@@ -192,15 +167,22 @@ let binop_cd_syntax = function
   | ToPowOf -> "**"
   | Relu_gate -> "-?/"
 
-let assign_op_C_syntax = function
-  | Arg1 -> invalid_arg "Ops.assign_op_C_syntax: Arg1 is not a C assignment operator"
-  | Arg2 -> "="
-  | Add -> "+="
-  | Sub -> "-="
-  | Mul -> "*="
-  | Div -> "/="
-  | ToPowOf -> invalid_arg "Ops.assign_op_C_syntax: ToPowOf function is not a C assignment operator"
-  | Relu_gate -> invalid_arg "Ops.assign_op_C_syntax: Relu_gate is not a C assignment operator"
+let binop_c_syntax prec v =
+  match (v, prec) with
+  | Arg1, _ -> invalid_arg "Ops.binop_c_syntax: Arg1 is not an operator"
+  | Arg2, _ -> invalid_arg "Ops.binop_c_syntax: Arg2 is not an operator"
+  | _, Void_prec -> invalid_arg "Ops.binop_c_syntax: Void precision"
+  | Add, _ -> ("(", " +", ")")
+  | Sub, _ -> ("(", " -", ")")
+  | Mul, _ -> ("(", " *", ")")
+  | Div, _ -> ("(", " /", ")")
+  | ToPowOf, Double_prec _ -> ("pow(", ",", ")")
+  | ToPowOf, Single_prec _ -> ("powf(", ",", ")")
+  | ToPowOf, Half_prec _ -> ("powf(", ",", ")")
+  | ToPowOf, Byte_prec _ ->
+      invalid_arg "Ops.binop_c_syntax: ToPowOf not supported for byte/integer precisions"
+  | Relu_gate, Byte_prec _ -> ("(", " > 0 ?", " : 0)")
+  | Relu_gate, _ -> ("(", " > 0.0 ?", " : 0.0)")
 
 let assign_op_cd_syntax ~initialize_neutral = function
   | Arg1 -> invalid_arg "Ops.assign_op_cd_syntax: Arg1 is not a %cd assignment operator"
@@ -218,7 +200,34 @@ let assign_op_cd_syntax ~initialize_neutral = function
   | ToPowOf -> "=**"
   | Relu_gate -> "=?/"
 
+let assign_op_c_syntax = function
+  | Arg1 -> invalid_arg "Ops.assign_op_c_syntax: Arg1 is not a C assignment operator"
+  | Arg2 -> "="
+  | Add -> "+="
+  | Sub -> "-="
+  | Mul -> "*="
+  | Div -> "/="
+  | ToPowOf -> invalid_arg "Ops.assign_op_c_syntax: ToPowOf function is not a C assignment operator"
+  | Relu_gate -> invalid_arg "Ops.assign_op_c_syntax: Relu_gate is not a C assignment operator"
+
 let unop_cd_syntax = function Identity -> "~=" | Relu -> "?/"
+
+let unop_c_syntax prec v =
+  match (v, prec) with
+  | Identity, _ -> ("", "")
+  | Relu, Single_prec _ -> ("fmaxf(0.0, ", ")")
+  | Relu, Byte_prec _ -> ("fmax(0, ", ")")
+  | Relu, _ -> ("fmax(0.0, ", ")")
+
+let c_convert_precision ~from ~to_ =
+  match (from, to_) with
+  | Double_prec _, Double_prec _
+  | Single_prec _, Single_prec _
+  | Half_prec _, Half_prec _
+  | Byte_prec _, Byte_prec _
+  | Void_prec, Void_prec ->
+      ("(", ")")
+  | _ -> ("(" ^ c_typ_of_prec to_ ^ ")(", ")")
 
 (** {2 *** Global references ***} *)
 
@@ -228,17 +237,11 @@ let sexp_of_voidptr p = Sexp.Atom Ctypes.(string_of (ptr void) p)
 let compare_voidptr = Ctypes.ptr_compare
 let equal_voidptr : voidptr -> voidptr -> bool = phys_equal
 
-let cuda_rawptr_to_string (type elem) (ptr : nativeint) prec =
-  "(" ^ cuda_typ_of_prec prec ^ "*)" ^ Nativeint.Hex.to_string ptr
-
 let c_rawptr_to_string (type elem) (ptr : nativeint) prec =
   "(" ^ c_typ_of_prec prec ^ "*)" ^ Nativeint.Hex.to_string ptr
 
 let rawptr_to_string_hum (type elem) (ptr : nativeint) prec =
   "(" ^ hum_typ_of_prec prec ^ "*)" ^ Nativeint.Hex.to_string ptr
-
-let cuda_ptr_to_string (type elem) (ptr : elem Ctypes.ptr) prec =
-  cuda_rawptr_to_string (Ctypes.raw_address_of_ptr @@ Ctypes.to_voidp ptr) prec
 
 let c_ptr_to_string (type elem) (ptr : elem Ctypes.ptr) prec =
   c_rawptr_to_string (Ctypes.raw_address_of_ptr @@ Ctypes.to_voidp ptr) prec

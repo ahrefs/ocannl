@@ -318,15 +318,69 @@ struct
   let opt_ctx_arrays = None
   let hardcoded_context_ptr = None
   let is_in_context = is_in_context
-  let host_ptrs_for_readonly = true
+  let host_ptrs_for_readonly = false
+  (* GPUs cannot access host memory pointers directly. *)
+
   let logs_to_stdout = true
   let main_kernel_prefix = "extern \"C\" __global__"
 
   let kernel_prep_line =
     "/* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"
 
-  let extra_include_lines = [ "#include <cuda_fp16.h>" ]
-  let typ_of_prec = Ops.cuda_typ_of_prec
+  let include_lines = [ "#include <cuda_fp16.h>" ]
+
+  let typ_of_prec = function
+    | Ops.Byte_prec _ -> "unsigned char"
+    | Half_prec _ -> "__half"
+    | Single_prec _ -> "float"
+    | Double_prec _ -> "double"
+    | Void_prec -> "void"
+
+  let binop_syntax prec v =
+    match (v, prec) with
+    | Ops.Arg1, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg1 is not an operator"
+    | Arg2, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg2 is not an operator"
+    | _, Ops.Void_prec -> invalid_arg "Cuda_backend.binop_syntax: Void precision"
+    | Add, Half_prec _ -> ("__hadd(", ", ", ")")
+    | Sub, Half_prec _ -> ("__hsub(", ", ", ")")
+    | Mul, Half_prec _ -> ("__hmul(", ", ", ")")
+    | Div, Half_prec _ -> ("__hdiv(", ", ", ")")
+    | Add, _ -> ("(", " +", ")")
+    | Sub, _ -> ("(", " -", ")")
+    | Mul, _ -> ("(", " *", ")")
+    | Div, _ -> ("(", " /", ")")
+    | ToPowOf, Double_prec _ -> ("pow(", ",", ")")
+    | ToPowOf, Single_prec _ -> ("powf(", ",", ")")
+    | ToPowOf, Half_prec _ -> ("hexp2(hlog2(", "), ", ")")
+    | ToPowOf, Byte_prec _ ->
+        invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for byte/integer precisions"
+    | Relu_gate, Byte_prec _ -> ("(", " > 0 ?", " : 0)")
+    | Relu_gate, Half_prec _ ->
+        ( "(__hgt(",
+          ", __ushort_as_half((unsigned short)0x0000U)) ?",
+          " : __ushort_as_half((unsigned short)0x0000U))" )
+    | Relu_gate, _ -> ("(", " > 0.0 ?", " : 0.0)")
+
+  let unop_syntax prec v =
+    match (v, prec) with
+    | Ops.Identity, _ -> ("", "")
+    | Relu, Ops.Single_prec _ -> ("fmaxf(0.0, ", ")")
+    | Relu, Ops.Half_prec _ -> ("__hmax_nan(__ushort_as_half((unsigned short)0x0000U), ", ")")
+    | Relu, Ops.Byte_prec _ -> ("fmax(0, ", ")")
+    | Relu, _ -> ("fmax(0.0, ", ")")
+
+  let convert_precision ~from ~to_ =
+    match (from, to_) with
+    | Ops.Double_prec _, Ops.Double_prec _
+    | Single_prec _, Single_prec _
+    | Half_prec _, Half_prec _
+    | Byte_prec _, Byte_prec _
+    | Void_prec, Void_prec ->
+        ("(", ")")
+    | Double_prec _, Half_prec _ -> ("__double2half(", ")")
+    | Single_prec _, Half_prec _ -> ("__float2half(", ")")
+    | Byte_prec _, Half_prec _ -> ("__ushort2half_rn((unsigned short int)", ")")
+    | _ -> ("(" ^ typ_of_prec to_ ^ ")(", ")")
 end
 
 let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
@@ -340,7 +394,7 @@ let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
   let ppf = Stdlib.Format.formatter_of_buffer b in
   if Utils.debug_log_from_routines () then
     Stdlib.Format.fprintf ppf "@,__device__ int printf (const char * format, ... );@,";
-  let is_global = Hash_set.create (module Tn) in
+  let is_global = Syntax.compile_globals ppf in
   let params = Syntax.compile_proc ~name ~is_global ppf idx_params lowered in
   let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
   { traced_store; ptx; params; bindings; name }
@@ -353,7 +407,7 @@ let compile_batch ~names bindings lowereds =
   let idx_params = Indexing.bound_symbols bindings in
   let b = Buffer.create 4096 in
   let ppf = Stdlib.Format.formatter_of_buffer b in
-  let is_global = Hash_set.create (module Tn) in
+  let is_global = Syntax.compile_globals ppf in
   let params_and_names =
     Array.map2_exn names lowereds
       ~f:

@@ -416,7 +416,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
     | Binop (Arg1, v1, _v2) -> loop v1
     | Binop (Arg2, _v1, v2) -> loop v2
     | Binop (op, v1, v2) ->
-        let prefix, infix, postfix = Ops.binop_C_syntax prec op in
+        let prefix, infix, postfix = Ops.binop_c_syntax prec op in
         let v1, fillers1 = loop v1 in
         let v2, fillers2 = loop v2 in
         (String.concat [ prefix; v1; infix; " "; v2; postfix ], fillers1 @ fillers2)
@@ -437,7 +437,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         @@ lf
            :: RValue.string_literal ctx
                 [%string
-                  {|%{node_debug_name get_ident node}[%d]{=%g} %{Ops.assign_op_C_syntax accum_op} %g = %{v_format}
+                  {|%{node_debug_name get_ident node}[%d]{=%g} %{Ops.assign_op_c_syntax accum_op} %g = %{v_format}
 |}]
            :: (to_d @@ RValue.lvalue @@ LValue.access_array (Lazy.force node.ptr) offset)
            :: offset :: to_d value :: v_fillers;

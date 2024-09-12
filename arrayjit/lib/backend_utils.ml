@@ -43,8 +43,11 @@ module C_syntax (B : sig
   val logs_to_stdout : bool
   val main_kernel_prefix : string
   val kernel_prep_line : string
-  val extra_include_lines : string list
+  val include_lines : string list
   val typ_of_prec : Ops.prec -> string
+  val binop_syntax : Ops.prec -> Ops.binop -> string * string * string
+  val unop_syntax : Ops.prec -> Ops.unop -> string * string
+  val convert_precision : from:Ops.prec -> to_:Ops.prec -> string * string
 end) =
 struct
   open Types
@@ -90,9 +93,8 @@ struct
   let%diagn_sexp compile_globals ppf =
     let open Stdlib.Format in
     let is_global = Hash_set.create (module Tn) in
-    fprintf ppf
-      {|@[<v 0>#include <stdio.h>@,#include <stdlib.h>@,#include <string.h>%a@,/* Global declarations. */@,|}
-      (pp_print_list pp_print_string) B.extra_include_lines;
+    fprintf ppf {|@[<v 0>%a@,/* Global declarations. */@,|} (pp_print_list pp_print_string)
+      B.include_lines;
     Array.iter B.for_lowereds ~f:(fun l ->
         Hashtbl.iter l.Low_level.traced_store ~f:(fun (node : Low_level.traced_array) ->
             if not @@ Hash_set.mem is_global node.tn then
@@ -233,15 +235,17 @@ struct
           fprintf ppf "v%d" id.scope_id
       | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
           let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
-          fprintf ppf "@[<2>((%s*)merge_buffer)[%a@;<0 -2>]@]" (B.typ_of_prec prec)
-            pp_array_offset
+          fprintf ppf "@[<2>((%s*)merge_buffer)[%a@;<0 -2>]@]" (B.typ_of_prec prec) pp_array_offset
             (idcs, Lazy.force tn.dims)
       | Get_global _ -> failwith "C_syntax: Get_global / FFI NOT IMPLEMENTED YET"
       | Get (tn, idcs) ->
+          (* FIXME: implement type casts here and in other places to support mixed precision. *)
           Hash_set.add visited tn;
           let ident = get_ident tn in
           fprintf ppf "@[<2>%s[%a@;<0 -2>]@]" ident pp_array_offset (idcs, Lazy.force tn.dims)
-      | Constant c -> fprintf ppf "(%.16g)" c
+      | Constant c ->
+          let prefix, postfix = B.convert_precision ~from:Ops.double ~to_:prec in
+          fprintf ppf "%s%.16g%s" prefix c postfix
       | Embed_index idx ->
           if not @@ List.exists ~f:(String.equal num_typ) [ "int"; "size_t" ] then
             fprintf ppf "(%s)" num_typ;
@@ -249,12 +253,11 @@ struct
       | Binop (Arg1, v1, _v2) -> loop ppf v1
       | Binop (Arg2, _v1, v2) -> loop ppf v2
       | Binop (op, v1, v2) ->
-          let prefix, infix, postfix = Ops.binop_C_syntax prec op in
+          let prefix, infix, postfix = B.binop_syntax prec op in
           fprintf ppf "@[<1>%s%a%s@ %a@]%s" prefix loop v1 infix loop v2 postfix
-      | Unop (Identity, v) -> loop ppf v
-      | Unop (Relu, v) ->
-          (* FIXME: don't recompute v *)
-          fprintf ppf "@[<1>(%a > 0.0 ?@ %a : 0.0@;<0 -1>)@]" loop v loop v
+      | Unop (op, v) ->
+          let prefix, postfix = B.unop_syntax prec op in
+          fprintf ppf "@[<1>%s%a@]%s" prefix loop v postfix
     and debug_float prec (value : Low_level.float_t) : string * 'a list =
       let num_typ = B.typ_of_prec prec in
       let loop = debug_float prec in
@@ -281,20 +284,22 @@ struct
           let ident = get_ident tn in
           let v = sprintf "@[<2>%s[%s@;<0 -2>]@]" ident (array_offset_to_string (idcs, dims)) in
           (ident ^ "[%u]{=%g}", [ `Accessor (idcs, dims); `Value v ])
-      | Constant c -> (Float.to_string c, [])
+      | Constant c ->
+          let prefix, postfix = B.convert_precision ~from:Ops.double ~to_:prec in
+          (prefix ^ Float.to_string c ^ postfix, [])
       | Embed_index (Fixed_idx i) -> (Int.to_string i, [])
       | Embed_index (Iterator s) -> (Indexing.symbol_ident s, [])
       | Binop (Arg1, v1, _v2) -> loop v1
       | Binop (Arg2, _v1, v2) -> loop v2
       | Binop (op, v1, v2) ->
-          let prefix, infix, postfix = Ops.binop_C_syntax prec op in
+          let prefix, infix, postfix = B.binop_syntax prec op in
           let v1, idcs1 = loop v1 in
           let v2, idcs2 = loop v2 in
           (String.concat [ prefix; v1; infix; " "; v2; postfix ], idcs1 @ idcs2)
-      | Unop (Identity, v) -> loop v
-      | Unop (Relu, v) ->
+      | Unop (op, v) ->
+          let prefix, postfix = B.unop_syntax prec op in
           let v, idcs = loop v in
-          (String.concat [ "("; v; " > 0.0 ? "; v; " : 0.0)" ], idcs @ idcs)
+          (String.concat [ prefix; v; postfix ], idcs)
     in
     pp_ll ppf llc
 
@@ -383,8 +388,7 @@ struct
     Hashtbl.iteri traced_store ~f:(fun ~key:tn ~data:node ->
         if not (Tn.is_virtual_force tn 333 || B.is_in_context node || Hash_set.mem is_global tn)
         then
-          fprintf ppf "%s %s[%d]%s;@ " (B.typ_of_prec tn.prec) (get_ident tn)
-            (Tn.num_elems tn)
+          fprintf ppf "%s %s[%d]%s;@ " (B.typ_of_prec tn.prec) (get_ident tn) (Tn.num_elems tn)
             (if node.zero_initialized then " = {0}" else "")
         else if (not (Tn.is_virtual_force tn 333)) && node.zero_initialized then pp_zero_out ppf tn);
     fprintf ppf "@,/* Main logic. */@ ";
