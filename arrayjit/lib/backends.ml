@@ -150,7 +150,7 @@ module type Backend = sig
 
   val suggested_num_virtual_devices : physical_device -> int
   (** The optimal number of virtual devices for the given physical device to follow the
-      {!Backend_types.config} strategy passed to {!No_device_backend.initialize}. *)
+      {!Backend_utils.Types.config} strategy passed to {!No_device_backend.initialize}. *)
 
   val new_virtual_device : physical_device -> device
   val get_ctx_device : context -> device
