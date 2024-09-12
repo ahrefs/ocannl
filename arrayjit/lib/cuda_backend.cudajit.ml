@@ -162,7 +162,7 @@ let finalize ctx =
     Map.iteri ctx.global_arrays ~f:(fun ~key ~data:ptr ->
         if not @@ Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.global_arrays key) then
           Cudajit.mem_free ptr);
-    Cudajit.stream_destroy ctx.device.stream)
+    if Option.is_none ctx.parent then Cudajit.stream_destroy ctx.device.stream)
 
 let init device =
   let ctx =
