@@ -16,7 +16,7 @@
   arrayjit)
  (preprocess
   (pps ppx_jane ppx_ocannl ppx_minidebug))
- (modules PrintBox_utils row shape tensor operation train)
+ (modules PrintBox_utils row shape tensor operation train nn_blocks)
  (modes byte native)
  (c_library_flags -pthread))
 
