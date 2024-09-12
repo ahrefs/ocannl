@@ -188,7 +188,7 @@ let prepare_node ~debug_log_zero_out ~get_ident ctx nodes traced_store ctx_nodes
         let is_constant = Tn.is_hosted_force ~specifically:Constant tn 332 in
         assert (not @@ Tn.is_virtual_force tn 330);
         assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
-        let prec = tn.prec in
+        let prec = Lazy.force tn.prec in
         let zero_initialized = traced.zero_initialized in
         let c_typ = gcc_typ_of_prec prec in
         let num_typ = Type.(get ctx c_typ) in
@@ -206,7 +206,7 @@ let prepare_node ~debug_log_zero_out ~get_ident ctx nodes traced_store ctx_nodes
               | None ->
                   let debug = "GCCJIT compile-time ctx array for " ^ Tn.debug_name tn in
                   let data =
-                    Ndarray.create_array ~debug tn.Tn.prec ~dims
+                    Ndarray.create_array ~debug (Lazy.force tn.Tn.prec) ~dims
                     @@ Constant_fill { values = [| 0. |]; strict = false }
                   in
                   ctx_arrays := Map.add_exn !ctx_arrays ~key:tn ~data;
@@ -483,9 +483,10 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
           zero_out ctx !current_block node)
     | Set_local (id, llv) ->
         let lhs = Map.find_exn !locals id in
-        let local_typ = gcc_typ_of_prec id.tn.prec in
+        let local_prec = Lazy.force id.tn.prec in
+        let local_typ = gcc_typ_of_prec local_prec in
         let num_typ = Type.get ctx local_typ in
-        let value = loop_float ~name ~env ~num_typ id.tn.prec llv in
+        let value = loop_float ~name ~env ~num_typ local_prec llv in
         Block.assign !current_block lhs value
     | Comment c -> log_comment c
     | Staged_compilation exp -> exp ()
@@ -493,7 +494,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
     let loop = loop_float ~name ~env ~num_typ prec in
     match v_code with
     | Local_scope { id = { scope_id = i; tn = { prec; _ } } as id; body; orig_indices = _ } ->
-        let typ = Type.get ctx @@ prec_to_kind prec in
+        let typ = Type.get ctx @@ prec_to_kind @@ Lazy.force prec in
         (* Scope ids can be non-unique due to inlining. *)
         let v_name = Int.("v" ^ to_string i ^ "_" ^ get_uid ()) in
         let lvalue = Function.local func typ v_name in
@@ -509,9 +510,10 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
     | Get_local id ->
         let lvalue = Map.find_exn !locals id in
         let rvalue = RValue.lvalue lvalue in
-        let local_typ = gcc_typ_of_prec id.tn.prec in
+        let local_prec = Lazy.force id.tn.prec in
+        let local_typ = gcc_typ_of_prec local_prec in
         let num_typ = Type.get ctx local_typ in
-        if not @@ Ops.equal_prec prec id.tn.prec then RValue.cast ctx rvalue num_typ else rvalue
+        if not @@ Ops.equal_prec prec local_prec then RValue.cast ctx rvalue num_typ else rvalue
     | Get_global (C_function f_name, None) ->
         (* TODO: this is too limiting. *)
         let f = Function.builtin ctx f_name in
@@ -532,9 +534,10 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:(Lazy.force tn.dims) in
         let rvalue = RValue.lvalue @@ LValue.access_array ptr offset in
-        let local_typ = gcc_typ_of_prec tn.prec in
+        let local_prec = Lazy.force tn.prec in
+        let local_typ = gcc_typ_of_prec local_prec in
         let num_typ = Type.get ctx local_typ in
-        if not @@ Ops.equal_prec prec tn.prec then RValue.cast ctx rvalue num_typ else rvalue
+        if not @@ Ops.equal_prec prec local_prec then RValue.cast ctx rvalue num_typ else rvalue
     | Get_global (C_function _, Some _) ->
         failwith "gccjit_backend: FFI with parameters NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
@@ -543,9 +546,10 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:node.dims in
         let rvalue = RValue.lvalue @@ LValue.access_array (Lazy.force node.ptr) offset in
-        let local_typ = gcc_typ_of_prec tn.prec in
+        let local_prec = Lazy.force tn.prec in
+        let local_typ = gcc_typ_of_prec local_prec in
         let num_typ = Type.get ctx local_typ in
-        if not @@ Ops.equal_prec prec tn.prec then RValue.cast ctx rvalue num_typ else rvalue
+        if not @@ Ops.equal_prec prec local_prec then RValue.cast ctx rvalue num_typ else rvalue
     | Embed_index (Fixed_idx i) -> RValue.cast ctx (RValue.int ctx num_typ i) num_typ
     | Embed_index (Iterator s) -> (
         try RValue.cast ctx (Map.find_exn env s) num_typ
@@ -639,7 +643,7 @@ let%diagn_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
   in
   let merge_param =
     Option.map merge_node ~f:(fun tn ->
-        let c_typ = gcc_typ_of_prec tn.prec in
+        let c_typ = gcc_typ_of_prec @@ Lazy.force tn.prec in
         let num_typ = Type.(get ctx c_typ) in
         let ptr_typ = Type.pointer num_typ in
         (Param.create ctx ptr_typ "merge_buffer", Merge_buffer))
@@ -813,7 +817,7 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
                 | Some arr -> arr
                 | None ->
                     let debug = "GCCJIT link-time ctx array for " ^ Tn.debug_name tn in
-                    Ndarray.create_array ~debug tn.Tn.prec ~dims:(Lazy.force tn.dims)
+                    Ndarray.create_array ~debug (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims)
                     @@ Constant_fill { values = [| 0. |]; strict = false }
               in
               Map.update ctx_arrays tn ~f

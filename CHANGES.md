@@ -6,6 +6,7 @@
   - We work around the missing Ctypes coverage by not using `Ctypes.bigarray_start`.
   - We check FP16 constants for overflow.
   - We output half precision specific code from the CUDA backend.
+- Finally proper support for mixed precision! Lazy precision defaults and delayed precision setting via `Tnode.update_prec`.
 
 ### Changed
 

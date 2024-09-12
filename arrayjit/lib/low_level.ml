@@ -741,7 +741,7 @@ let simplify_llc llc =
     | None -> fun _prec _c -> ()
     | Some cutoff ->
         fun tn c ->
-          if Ops.is_fp16 tn.Tn.prec && Float.(abs c >= cutoff) then
+          if (Ops.is_fp16 @@ Lazy.force tn.Tn.prec) && Float.(abs c >= cutoff) then
             raise
             @@ Utils.User_error
                  ("Constant " ^ Float.to_string c
@@ -895,13 +895,16 @@ let fprint_hum ?name ?static_indices () ppf llc =
     | Zero_out tn -> fprintf ppf "zero_out %a;" pp_ident tn
     | Set p ->
         p.debug <-
-          asprintf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.tn pp_indices p.idcs (pp_float p.tn.prec)
+          asprintf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.tn pp_indices p.idcs
+            (pp_float @@ Lazy.force p.tn.prec)
             p.llv;
-        fprintf ppf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.tn pp_indices p.idcs (pp_float p.tn.prec)
+        fprintf ppf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.tn pp_indices p.idcs
+          (pp_float @@ Lazy.force p.tn.prec)
           p.llv
     | Comment message -> fprintf ppf "/* %s */" message
     | Staged_compilation _ -> fprintf ppf "STAGED_COMPILATION_CALLBACK()"
-    | Set_local (id, llv) -> fprintf ppf "@[<2>%a :=@ %a;@]" pp_local id (pp_float id.tn.prec) llv
+    | Set_local (id, llv) ->
+        fprintf ppf "@[<2>%a :=@ %a;@]" pp_local id (pp_float @@ Lazy.force id.tn.prec) llv
   and pp_float prec ppf value =
     match value with
     | Local_scope { id; body; _ } -> fprintf ppf "@[<2>%a {@ %a@]@ }@," pp_local id pp_ll body

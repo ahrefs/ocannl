@@ -151,10 +151,10 @@ struct
           Hash_set.add visited tn;
           let ident = get_ident tn in
           let dims = Lazy.force tn.dims in
-          let loop_f = pp_float tn.prec in
-          let loop_debug_f = debug_float tn.prec in
+          let loop_f = pp_float @@ Lazy.force tn.prec in
+          let loop_debug_f = debug_float @@ Lazy.force tn.prec in
           let num_closing_braces = pp_top_locals ppf llv in
-          let num_typ = B.typ_of_prec tn.prec in
+          let num_typ = B.typ_of_prec @@ Lazy.force tn.prec in
           if Utils.debug_log_from_routines () then (
             fprintf ppf "@[<2>{@ @[<2>%s new_set_v =@ %a;@]@ " num_typ loop_f llv;
             let v_code, v_idcs = loop_debug_f llv in
@@ -204,14 +204,14 @@ struct
       | Staged_compilation callback -> callback ()
       | Set_local (Low_level.{ scope_id; tn = { prec; _ } }, value) ->
           let num_closing_braces = pp_top_locals ppf value in
-          fprintf ppf "@[<2>v%d =@ %a;@]" scope_id (pp_float prec) value;
+          fprintf ppf "@[<2>v%d =@ %a;@]" scope_id (pp_float @@ Lazy.force prec) value;
           for _ = 1 to num_closing_braces do
             fprintf ppf "@]@ }@,"
           done
     and pp_top_locals ppf (vcomp : Low_level.float_t) : int =
       match vcomp with
       | Local_scope { id = { scope_id = i; tn = { prec; _ } }; body; orig_indices = _ } ->
-          let num_typ = B.typ_of_prec prec in
+          let num_typ = B.typ_of_prec @@ Lazy.force prec in
           (* Arrays are initialized to 0 by default. However, there is typically an explicit
              initialization for virtual nodes. *)
           fprintf ppf "@[<2>{@ %s v%d = 0;@ " num_typ i;
@@ -223,18 +223,18 @@ struct
       | Binop (Arg2, _v1, v2) -> pp_top_locals ppf v2
       | Binop (_, v1, v2) -> pp_top_locals ppf v1 + pp_top_locals ppf v2
       | Unop (_, v) -> pp_top_locals ppf v
-    and pp_float prec ppf value =
+    and pp_float (prec : Ops.prec) ppf value =
       let loop = pp_float prec in
       match value with
       | Local_scope { id; _ } ->
           (* Embedding of Local_scope is done by pp_top_locals. *)
           loop ppf @@ Get_local id
       | Get_local id ->
-          let prefix, postfix = B.convert_precision ~from:id.tn.prec ~to_:prec in
+          let prefix, postfix = B.convert_precision ~from:(Lazy.force id.tn.prec) ~to_:prec in
           fprintf ppf "%sv%d%s" prefix id.scope_id postfix
       | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
           let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
-          let prefix, postfix = B.convert_precision ~from:tn.prec ~to_:prec in
+          let prefix, postfix = B.convert_precision ~from:(Lazy.force tn.prec) ~to_:prec in
           fprintf ppf "@[<2>%smerge_buffer[%a@;<0 -2>]%s@]" prefix pp_array_offset
             (idcs, Lazy.force tn.dims)
             postfix
@@ -242,7 +242,7 @@ struct
       | Get (tn, idcs) ->
           Hash_set.add visited tn;
           let ident = get_ident tn in
-          let prefix, postfix = B.convert_precision ~from:tn.prec ~to_:prec in
+          let prefix, postfix = B.convert_precision ~from:(Lazy.force tn.prec) ~to_:prec in
           fprintf ppf "@[<2>%s%s[%a@;<0 -2>]%s@]" prefix ident pp_array_offset
             (idcs, Lazy.force tn.dims)
             postfix
@@ -264,7 +264,7 @@ struct
       | Unop (op, v) ->
           let prefix, postfix = B.unop_syntax prec op in
           fprintf ppf "@[<1>%s%a@]%s" prefix loop v postfix
-    and debug_float prec (value : Low_level.float_t) : string * 'a list =
+    and debug_float (prec : Ops.prec) (value : Low_level.float_t) : string * 'a list =
       let loop = debug_float prec in
       match value with
       | Local_scope { id; _ } ->
@@ -272,12 +272,12 @@ struct
              logs. *)
           loop @@ Get_local id
       | Get_local id ->
-          let prefix, postfix = B.convert_precision ~from:id.tn.prec ~to_:prec in
+          let prefix, postfix = B.convert_precision ~from:(Lazy.force id.tn.prec) ~to_:prec in
           let v = String.concat [ prefix; "v"; Int.to_string id.scope_id; postfix ] in
           (v ^ "{=%g}", [ `Value v ])
       | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
           let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
-          let prefix, postfix = B.convert_precision ~from:tn.prec ~to_:prec in
+          let prefix, postfix = B.convert_precision ~from:(Lazy.force tn.prec) ~to_:prec in
           let dims = Lazy.force tn.dims in
           let v =
             sprintf "@[<2>%smerge_buffer[%s@;<0 -2>]%s@]" prefix
@@ -290,7 +290,7 @@ struct
       | Get (tn, idcs) ->
           let dims = Lazy.force tn.dims in
           let ident = get_ident tn in
-          let prefix, postfix = B.convert_precision ~from:tn.prec ~to_:prec in
+          let prefix, postfix = B.convert_precision ~from:(Lazy.force tn.prec) ~to_:prec in
           let v =
             sprintf "@[<2>%s%s[%s@;<0 -2>]%s@]" prefix ident
               (array_offset_to_string (idcs, dims))
@@ -335,7 +335,7 @@ struct
              if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
                tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
              if B.is_in_context node && not (Hash_set.mem is_global tn) then
-               (B.typ_of_prec tn.Tn.prec ^ " *" ^ get_ident tn, Param_ptr tn) :: params
+               (B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn, Param_ptr tn) :: params
              else params)
     in
     let idx_params =
@@ -353,7 +353,7 @@ struct
       Option.(
         to_list
         @@ map merge_node ~f:(fun tn ->
-               ("const " ^ B.typ_of_prec tn.prec ^ " *merge_buffer", Merge_buffer)))
+               ("const " ^ B.typ_of_prec (Lazy.force tn.prec) ^ " *merge_buffer", Merge_buffer)))
     in
     let params = log_file @ merge_param @ idx_params @ params in
     let params =
@@ -402,7 +402,9 @@ struct
     Hashtbl.iteri traced_store ~f:(fun ~key:tn ~data:node ->
         if not (Tn.is_virtual_force tn 333 || B.is_in_context node || Hash_set.mem is_global tn)
         then
-          fprintf ppf "%s %s[%d]%s;@ " (B.typ_of_prec tn.prec) (get_ident tn) (Tn.num_elems tn)
+          fprintf ppf "%s %s[%d]%s;@ "
+            (B.typ_of_prec @@ Lazy.force tn.prec)
+            (get_ident tn) (Tn.num_elems tn)
             (if node.zero_initialized then " = {0}" else "")
         else if (not (Tn.is_virtual_force tn 333)) && node.zero_initialized then pp_zero_out ppf tn);
     fprintf ppf "@,/* Main logic. */@ ";

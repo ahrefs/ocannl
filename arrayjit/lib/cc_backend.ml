@@ -147,7 +147,7 @@ let%diagn_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
                 if is_in_context node then
                   let debug = "CC compile-time ctx array for " ^ Tn.debug_name tn in
                   let data =
-                    Ndarray.create_array ~debug tn.Tn.prec ~dims:(Lazy.force tn.dims)
+                    Ndarray.create_array ~debug (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims)
                     @@ Constant_fill { values = [| 0. |]; strict = false }
                   in
                   Map.add_exn ctx_arrays ~key:tn ~data
@@ -180,7 +180,8 @@ let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
                     if is_in_context node then
                       let debug = "CC compile-time ctx array for " ^ Tn.debug_name tn in
                       let data =
-                        Ndarray.create_array ~debug tn.Tn.prec ~dims:(Lazy.force tn.dims)
+                        Ndarray.create_array ~debug (Lazy.force tn.Tn.prec)
+                          ~dims:(Lazy.force tn.dims)
                         @@ Constant_fill { values = [| 0. |]; strict = false }
                       in
                       Map.add_exn ctx_arrays ~key:tn ~data
@@ -238,7 +239,7 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
                 | Some arr -> arr
                 | None ->
                     let debug = "CC link-time ctx array for " ^ Tn.debug_name tn in
-                    Ndarray.create_array ~debug tn.Tn.prec ~dims:(Lazy.force tn.dims)
+                    Ndarray.create_array ~debug (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims)
                     @@ Constant_fill { values = [| 0. |]; strict = false }
               in
               Map.update ctx_arrays tn ~f

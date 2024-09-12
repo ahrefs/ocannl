@@ -1,4 +1,5 @@
 open Base
+module Ops = Arrayjit.Ops
 module Tn = Arrayjit.Tnode
 module Nd = Arrayjit.Ndarray
 module NTDSL = Operation.NTDSL
@@ -444,6 +445,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     | None -> !.init_lr *. ((2 *. !..steps) - !@step_n) /. !..steps
     | Some schedule -> schedule ~batch_n ~step_n
   in
+  Tn.update_prec ~only_if:Ops.is_fp16 learning_rate.value Ops.single;
   set_hosted learning_rate.value;
   let sgd = sgd_update ~learning_rate ~weight_decay update in
   let grad_update = Backend.compile ~shared:true bindings update.fwd_bprop in

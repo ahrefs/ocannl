@@ -52,14 +52,21 @@ type memory_mode =
           visible to OCaml programs as an {!Ndarray} (the optional [array] of {!t}). *)
 [@@deriving sexp, compare, equal]
 
+type delayed_prec =
+  | Not_specified
+  | Default_spec of (Ops.prec Lazy.t[@sexp.opaque])
+  | Specified of Ops.prec
+[@@deriving sexp, equal]
+
 type t = {
   array : (Nd.t option Lazy.t[@sexp.opaque]);
-  prec : Ops.prec;
+  prec : (Ops.prec Lazy.t[@sexp.opaque]);
   dims : (int array Lazy.t[@sexp.opaque]);
   id : int;
   label : string list;
       (** Display information. It is better if the last element of the list is the most narrow or
           alphanumeric, e.g. an identifier. *)
+  mutable delayed_prec_unsafe : delayed_prec;
   mutable memory_mode : (memory_mode * int) option;
   mutable backend_info : Sexp.t;
   mutable code_name : string option;
@@ -72,7 +79,7 @@ let num_elems tn =
   let dims = Lazy.force tn.dims in
   if Array.is_empty dims then 0 else Array.reduce_exn dims ~f:( * )
 
-let size_in_bytes tn = num_elems tn * Ops.prec_in_bytes tn.prec
+let size_in_bytes tn = num_elems tn * Ops.prec_in_bytes (Lazy.force tn.prec)
 let id { id; _ } = "n" ^ Int.to_string id
 let label a = String.concat ~sep:"_" a.label
 let is_alphanum_ = String.for_all ~f:(fun c -> Char.equal c '_' || Char.is_alphanum c)
@@ -212,6 +219,52 @@ let update_memory_mode tn mode provenance =
           "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} inconsistent for \
            %{debug_name tn}"]
 
+let update_prec ?only_if tn prec =
+  let do_update =
+    match only_if with
+    | None -> false
+    | Some cond -> (
+        match tn.delayed_prec_unsafe with
+        | Specified old_prec -> cond old_prec
+        | Default_spec old_prec when Lazy.is_val old_prec -> cond @@ Lazy.force old_prec
+        | _ -> true)
+  in
+  if do_update then
+    if Lazy.is_val tn.prec then (
+      if not @@ Ops.equal_prec (Lazy.force tn.prec) prec then
+        raise
+        @@ Utils.User_error
+             (String.concat
+                [
+                  "Tnode.update_prec: setting precision ";
+                  Ops.prec_string prec;
+                  " for ";
+                  debug_name tn;
+                  " but the settled precision is ";
+                  Ops.prec_string (Lazy.force tn.prec);
+                ]))
+    else
+      match (tn.delayed_prec_unsafe, only_if) with
+      | Specified old_prec, _ when not @@ Ops.equal_prec old_prec prec ->
+          raise
+          @@ Utils.User_error
+               (String.concat
+                  [
+                    "Tnode.update_prec: setting precision ";
+                    Ops.prec_string prec;
+                    " for ";
+                    debug_name tn;
+                    ", but the precision is already set to ";
+                    Ops.prec_string (Lazy.force tn.prec);
+                  ])
+      | Default_spec old_prec, Some cond when not @@ Lazy.is_val old_prec ->
+          tn.delayed_prec_unsafe <-
+            Default_spec
+              (lazy
+                (let old = Lazy.force old_prec in
+                 if cond old then prec else old))
+      | _ -> tn.delayed_prec_unsafe <- Specified prec
+
 include Comparator.Make (struct
   type nonrec t = t
 
@@ -236,7 +289,7 @@ let dims_to_string ?(with_axis_numbers = false) arr =
     if Lazy.is_val arr.dims then Nd.int_dims_to_string ~with_axis_numbers @@ Lazy.force arr.dims
     else "<not-in-yet>"
   in
-  Ops.prec_string arr.prec ^ " prec " ^ dims_s
+  Ops.prec_string (Lazy.force arr.prec) ^ " prec " ^ dims_s
 
 let no_grad_ident_label tn =
   match List.filter tn.label ~f:(fun i -> is_alphanum_ i) with
@@ -315,16 +368,26 @@ end)
 
 let registry = Registry.create 16
 
-let create prec ~id ~label ~dims init_op =
+let create ?default_prec ~id ~label ~dims init_op =
   let debug = "Host array for " ^ get_debug_name ~id ~label () in
   let rec array =
     lazy
       (if is_hosted_force tn 30 then
-         Some (Nd.create_array ~debug prec ~dims:(Lazy.force dims) init_op)
+         Some (Nd.create_array ~debug (Lazy.force prec) ~dims:(Lazy.force dims) init_op)
        else None)
+  and prec =
+    lazy
+      (match tn.delayed_prec_unsafe with
+      | Specified prec | Default_spec (lazy prec) -> prec
+      | Not_specified ->
+          raise @@ Utils.User_error "Tnode.update_prec: precision is not specified yet")
   and tn =
+    let delayed_prec_unsafe =
+      match default_prec with None -> Not_specified | Some prec -> Default_spec prec
+    in
     {
       array;
+      delayed_prec_unsafe;
       prec;
       dims;
       id;
@@ -341,7 +404,8 @@ let find =
   let mock =
     {
       array = lazy None;
-      prec = Ops.single;
+      prec = lazy Ops.single;
+      delayed_prec_unsafe = Specified Ops.single;
       dims = lazy [||];
       id = -1;
       label = [];

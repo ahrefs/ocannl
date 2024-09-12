@@ -149,10 +149,12 @@ let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
   let id = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
   let shape = make_shape ~debug_name:(Tn.get_debug_name ~id ~label ()) ~id in
-  let prec =
-    List.map orig_ts ~f:(fun ti -> ti.value.prec)
-    |> List.reduce ~f:Arrayjit.Ops.promote_prec
-    |> Option.value ~default:!default_value_prec
+  let lazy_v_precs = List.map orig_ts ~f:(fun ti -> ti.value.prec) in
+  let default_prec =
+    lazy
+      (List.map lazy_v_precs ~f:Lazy.force
+      |> List.reduce ~f:Arrayjit.Ops.promote_prec
+      |> Option.value ~default:!default_value_prec)
   in
   let rec shape_logics = function
     | [] -> [ Shape.Terminal init_op ]
@@ -166,7 +168,7 @@ let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
   let dims = lazy_to_dims shape in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
   let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
-  let v = Tn.create prec ~id ~label ~dims init_op in
+  let v = Tn.create ~default_prec ~id ~label ~dims init_op in
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let fwds = List.map ordered_ts ~f:(fun ti -> if is_fwd_root ti then ti.forward else Asgns.Noop) in
   let forward = Asgns.sequential @@ fwds @ [ op_asn ~v ~projections ] in
@@ -180,15 +182,17 @@ let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     tensor)
   else
-    let g_prec =
+    let default_prec =
       let f ti = Option.map ti.diff ~f:(fun d -> d.grad.Tn.prec) in
-      Option.value ~default:!default_grad_prec
-      @@ List.reduce ~f:Arrayjit.Ops.promote_prec
-      @@ List.filter_map orig_ts ~f
+      let lazy_g_precs = List.filter_map orig_ts ~f in
+      lazy
+        (List.map lazy_g_precs ~f:Lazy.force
+        |> List.reduce ~f:Arrayjit.Ops.promote_prec
+        |> Option.value ~default:!default_grad_prec)
     in
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
-    let g = Tn.create g_prec ~id:grad_id ~label:("grad" :: label) ~dims default_init_op in
+    let g = Tn.create ~default_prec ~id:grad_id ~label:("grad" :: label) ~dims default_init_op in
     let dcode ti = Option.value_map ti.diff ~default:Asgns.Noop in
     let is_bck_root ti = Map.mem session_state.backprop_roots ti.id in
     let zero_grads =

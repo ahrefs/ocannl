@@ -40,8 +40,20 @@ val remove_fwd_root : t -> unit
 val is_bprop_root : t -> bool
 val remove_bprop_root : t -> unit
 val with_unchanged_roots : f:(unit -> 'a) -> 'a
+
 val default_value_prec : Arrayjit.Ops.prec ref
+(** The default precision for the value node of terminal (i.e. non-composite) tensors.
+
+    Note: the precision can be set arbitrarily via {!Arrayjit.Tnode.update_precision}. The default
+    precision for value nodes of composite tensors is the maximum of precisions of the value nodes
+    of sub-tensors. *)
+
 val default_grad_prec : Arrayjit.Ops.prec ref
+(** The default precision for the gradient node of terminal (i.e. non-composite) tensors.
+
+    Note: the precision can be set arbitrarily via {!Arrayjit.Tnode.update_precision}. The default
+    precision for gradient nodes of composite tensors is the maximum of precisions of the gradient
+    nodes of sub-tensors. *)
 
 exception Session_error of string * t option
 
