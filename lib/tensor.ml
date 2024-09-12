@@ -149,12 +149,13 @@ let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
   let id = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
   let shape = make_shape ~debug_name:(Tn.get_debug_name ~id ~label ()) ~id in
-  let lazy_v_precs = List.map orig_ts ~f:(fun ti -> ti.value.prec) in
   let default_prec =
+    let lazy_v_precs = List.map orig_ts ~f:(fun ti -> ti.value.prec) in
+    let default = !default_value_prec in
     lazy
       (List.map lazy_v_precs ~f:Lazy.force
       |> List.reduce ~f:Arrayjit.Ops.promote_prec
-      |> Option.value ~default:!default_value_prec)
+      |> Option.value ~default)
   in
   let rec shape_logics = function
     | [] -> [ Shape.Terminal init_op ]
@@ -185,10 +186,11 @@ let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
     let default_prec =
       let f ti = Option.map ti.diff ~f:(fun d -> d.grad.Tn.prec) in
       let lazy_g_precs = List.filter_map orig_ts ~f in
+      let default = !default_grad_prec in
       lazy
         (List.map lazy_g_precs ~f:Lazy.force
         |> List.reduce ~f:Arrayjit.Ops.promote_prec
-        |> Option.value ~default:!default_grad_prec)
+        |> Option.value ~default)
     in
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
