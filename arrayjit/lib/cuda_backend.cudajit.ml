@@ -376,7 +376,7 @@ struct
     | Half_prec _, Half_prec _
     | Byte_prec _, Byte_prec _
     | Void_prec, Void_prec ->
-        ("(", ")")
+        ("", "")
     | Double_prec _, Half_prec _ -> ("__double2half(", ")")
     | Single_prec _, Half_prec _ -> ("__float2half(", ")")
     | Byte_prec _, Half_prec _ -> ("__ushort2half_rn((unsigned short int)", ")")

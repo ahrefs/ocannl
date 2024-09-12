@@ -2,8 +2,10 @@
 
 ### Added
 
-- The previously-mocked support for half precision.
+- Implemented the previously-mocked support for half precision (FP16).
   - We work around the missing Ctypes coverage by not using `Ctypes.bigarray_start`.
+  - We check FP16 constants for overflow.
+  - We output half precision specific code from the CUDA backend.
 
 ### Changed
 
@@ -18,6 +20,8 @@
   - `debug_log_from_routines` should only happen when `log_level > 1`.
 - Bugs in `Multicore_backend`: `await` was not checking queue emptiness, `worker`'s `Condition.broadcast` was non-atomically guarded (doesn't need to be), possible deadloop due to the lockfree queue -- now replaced with `saturn_lockfree`.
 - Reduced busy-waiting inside `c_compile_and_load`, propagating compilation errors now instead of infinite loop on error.
+- Fixed loss of significant digits for small numbers when outputting files.
+- Added missing mixed-precision conversions in the `C_syntax` backend builder.
 
 ## [0.4.0] -- 2024-09-04
 

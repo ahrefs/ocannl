@@ -28,6 +28,7 @@ let byte = Byte_prec Byte
 let half = Half_prec Half
 let single = Single_prec Single
 let double = Double_prec Double
+let is_fp16 = function Half_prec _ -> true | _ -> false
 
 let sexp_of_prec = function
   | Void_prec -> Sexp.Atom "Void_prec"
@@ -226,7 +227,7 @@ let c_convert_precision ~from ~to_ =
   | Half_prec _, Half_prec _
   | Byte_prec _, Byte_prec _
   | Void_prec, Void_prec ->
-      ("(", ")")
+      ("", "")
   | _ -> ("(" ^ c_typ_of_prec to_ ^ ")(", ")")
 
 (** {2 *** Global references ***} *)

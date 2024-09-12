@@ -66,6 +66,7 @@ struct
 
   let pp_index_axis ppf = function
     | Indexing.Iterator it -> pp_index ppf it
+    | Fixed_idx i when i < 0 -> Stdlib.Format.fprintf ppf "(%d)" i
     | Fixed_idx i -> Stdlib.Format.fprintf ppf "%d" i
 
   let pp_array_offset ppf (idcs, dims) =
@@ -223,33 +224,38 @@ struct
       | Binop (_, v1, v2) -> pp_top_locals ppf v1 + pp_top_locals ppf v2
       | Unop (_, v) -> pp_top_locals ppf v
     and pp_float prec ppf value =
-      let num_typ = B.typ_of_prec prec in
       let loop = pp_float prec in
       match value with
       | Local_scope { id; _ } ->
           (* Embedding of Local_scope is done by pp_top_locals. *)
           loop ppf @@ Get_local id
       | Get_local id ->
-          let get_typ = B.typ_of_prec id.tn.prec in
-          if not @@ String.equal num_typ get_typ then fprintf ppf "(%s)" num_typ;
-          fprintf ppf "v%d" id.scope_id
+          let prefix, postfix = B.convert_precision ~from:id.tn.prec ~to_:prec in
+          fprintf ppf "%sv%d%s" prefix id.scope_id postfix
       | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
           let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
-          fprintf ppf "@[<2>((%s*)merge_buffer)[%a@;<0 -2>]@]" (B.typ_of_prec prec) pp_array_offset
+          let prefix, postfix = B.convert_precision ~from:tn.prec ~to_:prec in
+          fprintf ppf "@[<2>%smerge_buffer[%a@;<0 -2>]%s@]" prefix pp_array_offset
             (idcs, Lazy.force tn.dims)
+            postfix
       | Get_global _ -> failwith "C_syntax: Get_global / FFI NOT IMPLEMENTED YET"
       | Get (tn, idcs) ->
-          (* FIXME: implement type casts here and in other places to support mixed precision. *)
           Hash_set.add visited tn;
           let ident = get_ident tn in
-          fprintf ppf "@[<2>%s[%a@;<0 -2>]@]" ident pp_array_offset (idcs, Lazy.force tn.dims)
+          let prefix, postfix = B.convert_precision ~from:tn.prec ~to_:prec in
+          fprintf ppf "@[<2>%s%s[%a@;<0 -2>]%s@]" prefix ident pp_array_offset
+            (idcs, Lazy.force tn.dims)
+            postfix
       | Constant c ->
           let prefix, postfix = B.convert_precision ~from:Ops.double ~to_:prec in
+          let prefix, postfix =
+            if String.is_empty prefix && Float.(c < 0.0) then ("(", ")" ^ postfix)
+            else (prefix, postfix)
+          in
           fprintf ppf "%s%.16g%s" prefix c postfix
       | Embed_index idx ->
-          if not @@ List.exists ~f:(String.equal num_typ) [ "int"; "size_t" ] then
-            fprintf ppf "(%s)" num_typ;
-          pp_index_axis ppf idx
+          let prefix, postfix = B.convert_precision ~from:Ops.double ~to_:prec in
+          fprintf ppf "%s%a%s" prefix pp_index_axis idx postfix
       | Binop (Arg1, v1, _v2) -> loop ppf v1
       | Binop (Arg2, _v1, v2) -> loop ppf v2
       | Binop (op, v1, v2) ->
@@ -259,7 +265,6 @@ struct
           let prefix, postfix = B.unop_syntax prec op in
           fprintf ppf "@[<1>%s%a@]%s" prefix loop v postfix
     and debug_float prec (value : Low_level.float_t) : string * 'a list =
-      let num_typ = B.typ_of_prec prec in
       let loop = debug_float prec in
       match value with
       | Local_scope { id; _ } ->
@@ -267,23 +272,32 @@ struct
              logs. *)
           loop @@ Get_local id
       | Get_local id ->
-          let get_typ = B.typ_of_prec id.tn.prec in
-          let v =
-            (if not @@ String.equal num_typ get_typ then "(" ^ num_typ ^ ")" else "")
-            ^ "v" ^ Int.to_string id.scope_id
-          in
+          let prefix, postfix = B.convert_precision ~from:id.tn.prec ~to_:prec in
+          let v = String.concat [ prefix; "v"; Int.to_string id.scope_id; postfix ] in
           (v ^ "{=%g}", [ `Value v ])
       | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
           let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
+          let prefix, postfix = B.convert_precision ~from:tn.prec ~to_:prec in
           let dims = Lazy.force tn.dims in
-          let v = sprintf "@[<2>merge_buffer[%s@;<0 -2>]@]" (array_offset_to_string (idcs, dims)) in
-          ("merge_buffer[%u]{=%g}", [ `Accessor (idcs, dims); `Value v ])
+          let v =
+            sprintf "@[<2>%smerge_buffer[%s@;<0 -2>]%s@]" prefix
+              (array_offset_to_string (idcs, dims))
+              postfix
+          in
+          ( String.concat [ prefix; "merge_buffer[%u]"; postfix; "{=%g}" ],
+            [ `Accessor (idcs, dims); `Value v ] )
       | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
       | Get (tn, idcs) ->
           let dims = Lazy.force tn.dims in
           let ident = get_ident tn in
-          let v = sprintf "@[<2>%s[%s@;<0 -2>]@]" ident (array_offset_to_string (idcs, dims)) in
-          (ident ^ "[%u]{=%g}", [ `Accessor (idcs, dims); `Value v ])
+          let prefix, postfix = B.convert_precision ~from:tn.prec ~to_:prec in
+          let v =
+            sprintf "@[<2>%s%s[%s@;<0 -2>]%s@]" prefix ident
+              (array_offset_to_string (idcs, dims))
+              postfix
+          in
+          ( String.concat [ prefix; ident; "[%u]"; postfix; "{=%g}" ],
+            [ `Accessor (idcs, dims); `Value v ] )
       | Constant c ->
           let prefix, postfix = B.convert_precision ~from:Ops.double ~to_:prec in
           (prefix ^ Float.to_string c ^ postfix, [])
