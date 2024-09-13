@@ -63,6 +63,9 @@ let is_initialized, initialize =
 let num_physical_devices = Cudajit.device_get_count
 let devices = ref @@ Core.Weak.create 0
 
+(* Unlike [devices] above, [initialized_devices] never forgets its entries. *)
+let initialized_devices = Hash_set.create (module Int)
+
 let set_ctx ctx =
   let cur_ctx = Cudajit.ctx_get_current () in
   if not @@ phys_equal ctx cur_ctx then Cudajit.ctx_set_current ctx
@@ -98,6 +101,9 @@ let get_device ~(ordinal : int) : physical_device =
       let primary_context = Cudajit.device_primary_ctx_retain dev in
       let copy_merge_buffer_capacity = 8 in
       set_ctx primary_context;
+      if Utils.debug_log_from_routines () && not (Hash_set.mem initialized_devices ordinal) then
+        Option.iter Utils.settings.cuda_printf_fifo_size ~f:Cudajit.(ctx_set_limit PRINTF_FIFO_SIZE);
+      Hash_set.add initialized_devices ordinal;
       let copy_merge_buffer = Cudajit.mem_alloc ~size_in_bytes:copy_merge_buffer_capacity in
       let result =
         {
@@ -147,7 +153,8 @@ let get_name device =
 
 let await device : unit =
   set_ctx device.physical.primary_context;
-  Cudajit.stream_synchronize device.stream
+  Cudajit.stream_synchronize device.stream;
+  Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ())
 
 let is_idle device = Cudajit.stream_is_ready device.stream
 
@@ -188,6 +195,7 @@ let unsafe_cleanup () =
         if Atomic.compare_and_set device.released false true then (
           Cudajit.ctx_set_current device.primary_context;
           Cudajit.ctx_synchronize ();
+          Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ());
           Cudajit.device_primary_ctx_release device.dev))
   done;
   Core.Weak.fill !devices 0 len None
@@ -477,12 +485,13 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~glo
     (* Map.iteri global_arrays ~f:(fun ~key ~data:ptr -> if key.Low_level.zero_initialized then
        Cu.memset_d8_async ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key.Low_level.tn)); *)
     [%log "launching the kernel"];
+    (* TODO: This doesn't help. *)
+    (* Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ()); *)
     (if Utils.debug_log_from_routines () then
        Utils.add_log_processor ~prefix:log_id_prefix @@ fun _output ->
        [%log_block
          context.label;
          Utils.log_trace_tree _output]);
-    (* if Utils.debug_log_from_routines () then Cu.ctx_set_limit CU_LIMIT_PRINTF_FIFO_SIZE 4096; *)
     Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.device.stream
       args;
     [%log "kernel launched"]

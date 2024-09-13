@@ -52,6 +52,12 @@ A possible route to learning OCANNL:
    2. Backend-independent optimizations [arrayjit/lib/lowering_and_inlining.md](arrayjit/lib/lowering_and_inlining.md) -- _lowering_ means translating (compiling) from the high-level representation (as assignments) to the low-level representation.
    3. More documentation to come.
 
+### Using the tracing debugger with CUDA computations
+
+To use debugging as provided by configuring `Utils.settings.debug_log_from_routines <- true` with the `cuda` backend, you need to wrap the code scheduling tasks and synchronizing `cuda` devices with `Utils.capture_stdout_logs`. The reason is that CUDA kernels are allowed to use `printf`, but not `fprintf` -- the driver dumps the printing buffer of a device to `stdout` at certain times (e.g. when synchronizing the device). For an example, see the implementation of `Train.example_train_loop`. Specifically, it wraps two sections: the call to `Train.parallel_update`, and the body of the returned `infer_callback`.
+
+IMPORTANT: due to potential bugs, debug logging from CUDA in complex settings currently only works as intended for _very_ small computation sizes.
+
 ## Upcoming milestones
 
 This is very tentative.

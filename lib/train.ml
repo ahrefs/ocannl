@@ -484,7 +484,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     Tn.log_accessible_headers ());
   for epoch = 0 to epochs - 1 do
     epoch_loss := 0.;
-    update ();
+    Utils.capture_stdout_logs update;
     learning_rates := learning_rate.@[0] :: !learning_rates;
     epoch_losses := !epoch_loss :: !epoch_losses;
     Option.iter per_epoch_callback ~f:(fun f ->
@@ -509,6 +509,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     Tensor.set_values infer values;
     (* For the gccjit backend, infer is only on host, not on device. For cuda, this will be
        needed. *)
+    Utils.capture_stdout_logs @@ fun () ->
     assert (Backend.from_host routine.context infer.value);
     run routine;
     assert (Backend.to_host routine.context model_result.value);

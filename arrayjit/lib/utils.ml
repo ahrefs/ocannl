@@ -43,6 +43,10 @@ type settings = {
   mutable check_half_prec_constants_cutoff : float option;
       (** If given, generic code optimization should fail if a half precision FP16 constant exceeds
           the cutoff. *)
+  mutable cuda_printf_fifo_size : int option;
+      (** If not [None], the setting will be used for the size of the CUDA devices buffer for
+          storing logs, see [debug_log_from_routines] above. If [None], the default buffer size on
+          the devices is not altered. *)
 }
 [@@deriving sexp]
 
@@ -55,6 +59,7 @@ let settings =
     fixed_state_for_init = None;
     print_decimals_precision = 2;
     check_half_prec_constants_cutoff = Some (2. **. 14.);
+    cuda_printf_fifo_size = None;
   }
 
 let accessed_global_args = Hash_set.create (module String)
@@ -321,7 +326,9 @@ let restore_settings () =
     Int.of_string @@ get_global_arg ~arg_name:"print_decimals_precision" ~default:"2";
   settings.check_half_prec_constants_cutoff <-
     Float.of_string_opt
-    @@ get_global_arg ~arg_name:"check_half_prec_constants_cutoff" ~default:"16384.0"
+    @@ get_global_arg ~arg_name:"check_half_prec_constants_cutoff" ~default:"16384.0";
+  settings.cuda_printf_fifo_size <-
+    Int.of_string_opt @@ get_global_arg ~arg_name:"cuda_printf_fifo_size" ~default:""
 
 let () = restore_settings ()
 let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1
@@ -507,6 +514,10 @@ let pp_file ~base_name ~extension =
 
 let captured_log_prefix = ref "!@#"
 
+(** To avoid the complication of a concurrent thread, we expose a callback for collaborative log
+    processing. *)
+let advance_captured_logs = ref None
+
 type captured_log_processor = { log_processor_prefix : string; process_logs : string list -> unit }
 
 let captured_log_processors : captured_log_processor list ref = ref []
@@ -515,39 +526,69 @@ let add_log_processor ~prefix process_logs =
   captured_log_processors :=
     { log_processor_prefix = prefix; process_logs } :: !captured_log_processors
 
+external input_scan_line : Stdlib.in_channel -> int = "caml_ml_input_scan_line"
+
+let input_line chan =
+  let n = input_scan_line chan in
+  if n = 0 then raise End_of_file;
+  let line = Stdlib.really_input_string chan (abs n) in
+  ( n > 0,
+    String.chop_suffix_if_exists ~suffix:"\n" @@ String.chop_suffix_if_exists line ~suffix:"\r\n" )
+
 let capture_stdout_logs ?(never_skip = false) arg =
   if (not never_skip) && not (debug_log_from_routines ()) then arg ()
   else (
     Stdlib.flush Stdlib.stdout;
-    let exitp, entrancep = Unix.pipe () and backup = Unix.dup Unix.stdout in
-    Unix.dup2 entrancep Unix.stdout;
-    Unix.set_nonblock entrancep;
-    (* FIXME: process logs in a parallel thread, and double check they are not getting cut off. *)
+    let ls = ref [] in
+    let lastl = ref "" in
+    let backup = ref (Unix.dup Unix.stdout) in
+    let exit_entrance = ref (Unix.pipe ()) in
+    let pre_advance () =
+      Unix.dup2 (snd !exit_entrance) Unix.stdout;
+      Unix.set_nonblock (snd !exit_entrance)
+    in
+    let advance is_last () =
+      Stdlib.flush Stdlib.stdout;
+      Unix.close (snd !exit_entrance);
+      Unix.dup2 !backup Unix.stdout;
+      let channel = Unix.in_channel_of_descr (fst !exit_entrance) in
+      (try
+         while true do
+           let is_endlined, line = input_line channel in
+           let line = !lastl ^ line in
+           if is_endlined then (
+             (match String.chop_prefix ~prefix:!captured_log_prefix line with
+             | None -> Stdlib.print_endline line
+             (* ls := line :: !ls *)
+             | Some logline -> ls := logline :: !ls);
+             lastl := "")
+           else lastl := line
+         done
+       with End_of_file -> ());
+      if not is_last then (
+        backup := Unix.dup Unix.stdout;
+        exit_entrance := Unix.pipe ();
+        pre_advance ())
+    in
+    advance_captured_logs := Some (advance false);
+    pre_advance ();
     let result =
       try arg ()
       with Sys_blocked_io ->
+        advance_captured_logs := None;
         invalid_arg
           "capture_stdout_logs: unfortunately, flushing stdout inside captured code is prohibited"
     in
-    Stdlib.flush Stdlib.stdout;
-    Unix.close entrancep;
-    Unix.dup2 backup Unix.stdout;
-    let ls = ref [] and channel = Unix.in_channel_of_descr exitp in
-    let output =
-      try
-        while true do
-          let line = Stdlib.input_line channel in
-          match String.chop_prefix ~prefix:!captured_log_prefix line with
-          | None -> Stdlib.print_endline line
-          | Some logline -> ls := logline :: !ls
-        done;
-        []
-      with End_of_file -> List.rev !ls
-    in
+    advance true ();
+    let output = List.rev !ls in
     Exn.protect
       ~f:(fun () ->
-        List.iter !captured_log_processors ~f:(fun { log_processor_prefix; process_logs } ->
+        (* Preserve the order in which kernels were launched. *)
+        List.iter (List.rev !captured_log_processors)
+          ~f:(fun { log_processor_prefix; process_logs } ->
             process_logs
             @@ List.filter_map output ~f:(String.chop_prefix ~prefix:log_processor_prefix)))
-      ~finally:(fun () -> captured_log_processors := []);
+      ~finally:(fun () ->
+        advance_captured_logs := None;
+        captured_log_processors := []);
     result)

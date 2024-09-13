@@ -24,6 +24,7 @@
 - Reduced busy-waiting inside `c_compile_and_load`, propagating compilation errors now instead of infinite loop on error.
 - Fixed loss of significant digits for small numbers when outputting files.
 - Added missing mixed-precision conversions in the `C_syntax` backend builder.
+- Restored the functionality of debug logging from the cuda backend.
 
 ## [0.4.0] -- 2024-09-04
 
