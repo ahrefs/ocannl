@@ -23,6 +23,7 @@ type physical_device = {
   primary_context : (Cudajit.context[@sexp.opaque]);
   mutable copy_merge_buffer : buffer_ptr;
   mutable copy_merge_buffer_capacity : int;
+  mutable latest_subordinal : int;
   released : Utils.atomic_bool;
 }
 [@@deriving sexp_of]
@@ -109,6 +110,7 @@ let get_device ~(ordinal : int) : physical_device =
         {
           dev;
           ordinal;
+          latest_subordinal = 0;
           primary_context;
           copy_merge_buffer;
           copy_merge_buffer_capacity;
@@ -119,7 +121,8 @@ let get_device ~(ordinal : int) : physical_device =
       result)
 
 let new_virtual_device physical =
-  let subordinal = 0 in
+  let subordinal = physical.latest_subordinal in
+  physical.latest_subordinal <- physical.latest_subordinal + 1;
   (* Strange that we need ctx_set_current even with a single device! *)
   set_ctx physical.primary_context;
   let stream = Cudajit.stream_create ~non_blocking:true () in
