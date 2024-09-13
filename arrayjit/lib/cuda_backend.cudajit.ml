@@ -1,3 +1,22 @@
+(** In the current design of the CUDA backend, unlike in the CPU backends, context arrays for
+    incomparable contexts do not need be disjoint, as long as they share a physical device. If a
+    tensor node is read-only for all contexts, its array will be shared even by incomparable
+    contexts. The particular design is as follows, within a single physical device:
+    - If a tensor node is read-only for a context, and not otherwise recorded, it is stored as a
+      cross-device sharing candidate.
+    - If a cross-device sharing candidate is read-only for another context, whose parent does not
+      have the corresponding array (i.e. it is a different virtual device), it is recorded as
+      cross-device shared, and the same array is reused.
+    - If a tensor node is writable by a context, and it is not cross-device shared, it is marked as
+      non-cross-device, the array is removed from cross-device sharing candidates if present. If it
+      is cross-device shared, it is recorded as owned by the corresponding virtual device. It is an
+      error if the node was already owned by a different device.
+
+    If a tensor node is cross-device shared, within-physical-device copying is a NOOP as source and
+    destination pointers are in that case identical.
+
+    FIXME(#286): this should be controllable via {!Tnode.memory_mode}. *)
+
 open Base
 module Tn = Tnode
 module Lazy = Utils.Lazy
@@ -25,6 +44,15 @@ type physical_device = {
   mutable copy_merge_buffer_capacity : int;
   mutable latest_subordinal : int;
   released : Utils.atomic_bool;
+  cross_device_candidates : ctx_array Hashtbl.M(Tn).t;
+      (** Freshly created arrays that might be shared across virtual devices. The map can both grow
+          and shrink. See the explanation on top of this file. *)
+  cross_device_shared : Hash_set.M(Tn).t;
+      (** Tensor nodes known to be cross-device shared. This set can only grow. *)
+  non_cross_device : Hash_set.M(Tn).t;
+      (** Tensor nodes known to not be cross-device shared. This set can only grow. *)
+  owner_device_subordinal : int Hashtbl.M(Tn).t;
+      (** The virtual devices owning the given nodes. This map can only grow. *)
 }
 [@@deriving sexp_of]
 
@@ -38,18 +66,20 @@ and device = {
 and context = {
   label : string;
   ctx : (Cudajit.context[@sexp.opaque]);
+      (** Currently, this is always the same as [device.physical.primary_context]. *)
   device : device;
   parent : context option;
   run_module : (Cudajit.module_[@sexp.opaque]) option;
       (** Code jitted for this context, typically independent of the parent and child contexts, but
           shared by batch linked contexts. *)
-  global_arrays : ctx_array Map.M(Tn).t;
-      (** This map contains only the global arrays, where [all_arrays.(key).global] is [Some name]. *)
+  ctx_arrays : ctx_array Map.M(Tn).t;
+      (** This map contains arrays used in this context or an ancestor context (they might be unique
+          but might also be cross-device shared. *)
   finalized : Utils.atomic_bool;
 }
 [@@deriving sexp_of]
 
-let ctx_arrays ctx = ctx.global_arrays
+let ctx_arrays ctx = ctx.ctx_arrays
 let global_config = ref For_parallel_copying
 
 let is_initialized, initialize =
@@ -115,6 +145,10 @@ let get_device ~(ordinal : int) : physical_device =
           copy_merge_buffer;
           copy_merge_buffer_capacity;
           released = Atomic.make false;
+          cross_device_candidates = Hashtbl.create (module Tn);
+          cross_device_shared = Hash_set.create (module Tn);
+          non_cross_device = Hash_set.create (module Tn);
+          owner_device_subordinal = Hashtbl.create (module Tn);
         }
       in
       Core.Weak.set !devices ordinal (Some result);
@@ -169,9 +203,11 @@ let finalize ctx =
     (* await does this: set_ctx ctx.device.physical.primary_context; *)
     await ctx.device;
     Option.iter ctx.run_module ~f:Cudajit.module_unload;
-    Map.iteri ctx.global_arrays ~f:(fun ~key ~data:ptr ->
-        if not @@ Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.global_arrays key) then
-          Cudajit.mem_free ptr);
+    Map.iteri ctx.ctx_arrays ~f:(fun ~key ~data:ptr ->
+        if
+          (not (Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_arrays key)))
+          && not (Hashtbl.mem ctx.device.physical.cross_device_candidates key)
+        then Cudajit.mem_free ptr);
     if Option.is_none ctx.parent then Cudajit.stream_destroy ctx.device.stream)
 
 let init device =
@@ -181,7 +217,7 @@ let init device =
       ctx = device.physical.primary_context;
       device;
       parent = None;
-      global_arrays = Map.empty (module Tn);
+      ctx_arrays = Map.empty (module Tn);
       run_module = None;
       finalized = Atomic.make false;
     }
@@ -199,12 +235,13 @@ let unsafe_cleanup () =
           Cudajit.ctx_set_current device.primary_context;
           Cudajit.ctx_synchronize ();
           Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ());
+          Hashtbl.iter device.cross_device_candidates ~f:Cudajit.mem_free;
           Cudajit.device_primary_ctx_release device.dev))
   done;
   Core.Weak.fill !devices 0 len None
 
 let%diagn_l_sexp from_host (ctx : context) tn =
-  match (tn, Map.find ctx.global_arrays tn) with
+  match (tn, Map.find ctx.ctx_arrays tn) with
   | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
       set_ctx ctx.ctx;
       [%log "copying", Tn.debug_name tn, "to", (dst : ctx_array), "from host"];
@@ -214,7 +251,7 @@ let%diagn_l_sexp from_host (ctx : context) tn =
   | _ -> false
 
 let%track_l_sexp to_host (ctx : context) (tn : Tn.t) =
-  match (tn, Map.find ctx.global_arrays tn) with
+  match (tn, Map.find ctx.ctx_arrays tn) with
   | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
       set_ctx ctx.ctx;
       [%log "copying", Tn.debug_name tn, "at", (src : ctx_array), "to host"];
@@ -225,50 +262,57 @@ let%track_l_sexp to_host (ctx : context) (tn : Tn.t) =
 
 let%track_l_sexp rec device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : context)
     ~(src : context) =
+  let same_physical = phys_equal dst.device.physical src.device.physical in
   let memcpy ~d_arr ~s_arr =
-    if phys_equal dst.device.physical src.device.physical then
+    if same_physical then
       Cudajit.memcpy_D_to_D_async ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:d_arr ~src:s_arr
         dst.device.stream
     else
       Cudajit.memcpy_peer_async ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:d_arr ~dst_ctx:dst.ctx
         ~src:s_arr ~src_ctx:src.ctx dst.device.stream
   in
-  match Map.find src.global_arrays tn with
-  | None -> false
-  | Some s_arr -> (
-      match into_merge_buffer with
-      | No -> (
-          match Map.find dst.global_arrays tn with
-          | None -> false
-          | Some d_arr ->
-              set_ctx dst.ctx;
-              memcpy ~d_arr ~s_arr;
-              [%log
-                "copied",
-                  Tn.debug_name tn,
-                  "from",
-                  src.label,
-                  "at",
-                  (s_arr : ctx_array),
-                  "to",
-                  (d_arr : ctx_array)];
+  if
+    same_physical
+    && (src.device.subordinal = dst.device.subordinal
+       || Hash_set.mem dst.device.physical.cross_device_shared tn)
+  then false
+  else
+    match Map.find src.ctx_arrays tn with
+    | None -> false
+    | Some s_arr -> (
+        match into_merge_buffer with
+        | No -> (
+            match Map.find dst.ctx_arrays tn with
+            | None -> false
+            | Some d_arr ->
+                set_ctx dst.ctx;
+                memcpy ~d_arr ~s_arr;
+                [%log
+                  "copied",
+                    Tn.debug_name tn,
+                    "from",
+                    src.label,
+                    "at",
+                    (s_arr : ctx_array),
+                    "to",
+                    (d_arr : ctx_array)];
+                true)
+        | Streaming ->
+            if phys_equal dst.device.physical src.device.physical then (
+              dst.device.merge_buffer <- Some (s_arr, tn);
+              [%log "using merge buffer for", Tn.debug_name tn, "from", src.label];
               true)
-      | Streaming ->
-          if phys_equal dst.device.physical src.device.physical then (
-            dst.device.merge_buffer <- Some (s_arr, tn);
-            [%log "using merge buffer for", Tn.debug_name tn, "from", src.label];
+            else
+              (* TODO: support proper streaming, but it might be difficult. *)
+              device_to_device tn ~into_merge_buffer:Copy ~dst ~src
+        | Copy ->
+            set_ctx dst.ctx;
+            let size_in_bytes = Tn.size_in_bytes tn in
+            opt_alloc_merge_buffer ~size_in_bytes dst.device.physical;
+            memcpy ~d_arr:dst.device.physical.copy_merge_buffer ~s_arr;
+            dst.device.merge_buffer <- Some (dst.device.physical.copy_merge_buffer, tn);
+            [%log "copied into merge buffer", Tn.debug_name tn, "from", src.label];
             true)
-          else
-            (* TODO: support proper streaming, but it might be difficult. *)
-            device_to_device tn ~into_merge_buffer:Copy ~dst ~src
-      | Copy ->
-          set_ctx dst.ctx;
-          let size_in_bytes = Tn.size_in_bytes tn in
-          opt_alloc_merge_buffer ~size_in_bytes dst.device.physical;
-          memcpy ~d_arr:dst.device.physical.copy_merge_buffer ~s_arr;
-          dst.device.merge_buffer <- Some (dst.device.physical.copy_merge_buffer, tn);
-          [%log "copied into merge buffer", Tn.debug_name tn, "from", src.label];
-          true)
 
 type code = {
   traced_store : Low_level.traced_store;
@@ -441,12 +485,12 @@ let get_global_run_id =
     if !next_id < 0 then next_id := 0;
     !next_id
 
-let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~global_arrays
+let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx_arrays
     lowered_bindings run_module =
   let module Cu = Cudajit in
   let func = Cu.module_get_function run_module ~name in
   let context =
-    { prior_context with parent = Some prior_context; run_module = Some run_module; global_arrays }
+    { prior_context with parent = Some prior_context; run_module = Some run_module; ctx_arrays }
   in
   Stdlib.Gc.finalise finalize context;
   let%diagn_l_sexp work () : unit =
@@ -457,10 +501,10 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~glo
     let module Cu = Cudajit in
     let args : Cu.kernel_param list =
       (* TODO: should we prohibit or warn about local-only tensors that are in
-         prior_context.global_arrays? *)
+         prior_context.ctx_arrays? *)
       List.map params ~f:(function
         | _name, Param_ptr tn ->
-            let ptr = Option.value_exn ~here:[%here] @@ Map.find global_arrays tn in
+            let ptr = Option.value_exn ~here:[%here] @@ Map.find ctx_arrays tn in
             Cu.Tensor ptr
         | _name, Log_file_name -> Cu.Int log_id
         | _name, Merge_buffer ->
@@ -485,7 +529,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~glo
     in
     set_ctx context.ctx;
     (* FIXME: this happens inside the kernel. *)
-    (* Map.iteri global_arrays ~f:(fun ~key ~data:ptr -> if key.Low_level.zero_initialized then
+    (* Map.iteri ctx_arrays ~f:(fun ~key ~data:ptr -> if key.Low_level.zero_initialized then
        Cu.memset_d8_async ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key.Low_level.tn)); *)
     [%log "launching the kernel"];
     (* TODO: This doesn't help. *)
@@ -507,53 +551,79 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~glo
         work;
       } )
 
-let%diagn_sexp alloc_if_needed ctx ~key ~data:node globals =
-  if is_in_context node then (
-    [%log "mem_alloc", Tn.debug_name node.tn, (not @@ Map.mem globals key : bool)];
-    set_ctx ctx;
-    let ptr () = Cudajit.mem_alloc ~size_in_bytes:(Tn.size_in_bytes node.tn) in
-    Map.update globals key ~f:(fun old -> Option.value_or_thunk old ~default:ptr))
-  else globals
+let%diagn_sexp alloc_if_needed ctx device ~key ~data:node ctx_arrays =
+  if is_in_context node && not (Map.mem ctx_arrays key) then (
+    [%log Tn.debug_name key, "read_only", (node.read_only : bool)];
+    let default () =
+      set_ctx ctx;
+      Cudajit.mem_alloc ~size_in_bytes:(Tn.size_in_bytes key)
+    in
+    let add_new () = Map.add_exn ctx_arrays ~key ~data:(default ()) in
+    let physical = device.physical in
+    if node.read_only then
+      if Hash_set.mem physical.non_cross_device key then add_new ()
+      else (
+        if Hashtbl.mem physical.cross_device_candidates key then
+          Hash_set.add physical.cross_device_shared key;
+        let data = Hashtbl.find_or_add physical.cross_device_candidates key ~default in
+        Map.add_exn ctx_arrays ~key ~data)
+    else if Hash_set.mem physical.cross_device_shared key then (
+      if Hashtbl.mem physical.owner_device_subordinal key then
+        if Hashtbl.find_exn physical.owner_device_subordinal key <> device.subordinal then
+          raise
+          @@ Utils.User_error
+               ("Cuda_backend.alloc_if_needed: node " ^ Tn.debug_name key
+              ^ " assumed to be cross-device-shared but then written to on multiple devices")
+        else Hashtbl.add_exn physical.owner_device_subordinal ~key ~data:device.subordinal;
+      let data = Hashtbl.find_exn physical.cross_device_candidates key in
+      Map.add_exn ctx_arrays ~key ~data)
+    else (
+      Hash_set.add physical.non_cross_device key;
+      Hashtbl.remove physical.cross_device_candidates key;
+      add_new ()))
+  else ctx_arrays
 
 let run_options () =
   if Utils.with_runtime_debug () then Cudajit.[ GENERATE_DEBUG_INFO true; GENERATE_LINE_INFO true ]
   else []
 
-let%diagn_sexp link prior_context (code : code) =
+let%track3_sexp link prior_context (code : code) : context * _ * _ =
   let ctx = prior_context.ctx in
   set_ctx ctx;
-  let global_arrays =
-    Hashtbl.fold ~init:prior_context.global_arrays code.traced_store ~f:(alloc_if_needed ctx)
+  let ctx_arrays =
+    Hashtbl.fold ~init:prior_context.ctx_arrays code.traced_store
+      ~f:(alloc_if_needed ctx prior_context.device)
   in
   let run_module = Cudajit.module_load_data_ex code.ptx (run_options ()) in
   let idx_params = Indexing.bound_symbols code.bindings in
   let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let context, task =
-    link_proc ~prior_context ~name:code.name ~params:code.params ~global_arrays lowered_bindings
+    link_proc ~prior_context ~name:code.name ~params:code.params ~ctx_arrays lowered_bindings
       run_module
   in
   (context, lowered_bindings, task)
 
-let link_batch prior_context (code_batch : code_batch) =
+let%track3_sexp link_batch prior_context (code_batch : code_batch) : context * _ * _ =
   let idx_params = Indexing.bound_symbols code_batch.bindings in
   let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let module Cu = Cudajit in
   let ctx = prior_context.ctx in
   set_ctx ctx;
   let run_module = Cu.module_load_data_ex code_batch.ptx (run_options ()) in
-  let (context, _global_arrays), procs =
-    Array.fold_mapi code_batch.params_and_names ~init:(prior_context, prior_context.global_arrays)
-      ~f:(fun i (context, global_arrays) pns ->
-        Option.value ~default:((context, global_arrays), None)
+  let (context, _ctx_arrays), procs =
+    Array.fold_mapi code_batch.params_and_names ~init:(prior_context, prior_context.ctx_arrays)
+      ~f:(fun i (context, ctx_arrays) pns ->
+        Option.value ~default:((context, ctx_arrays), None)
         @@ Option.map2 pns code_batch.traced_stores.(i) ~f:(fun (params, name) traced_store ->
-               let global_arrays =
-                 Hashtbl.fold ~init:global_arrays traced_store ~f:(alloc_if_needed ctx)
+               let ctx_arrays =
+                 Hashtbl.fold ~init:ctx_arrays traced_store
+                   ~f:(alloc_if_needed ctx prior_context.device)
                in
                let context, task =
-                 link_proc ~prior_context:context ~name ~params ~global_arrays lowered_bindings
+                 link_proc ~prior_context:context ~name ~params ~ctx_arrays lowered_bindings
                    run_module
                in
-               ((context, global_arrays), Some task)))
+               ((context, ctx_arrays), Some task)))
   in
   (context, lowered_bindings, procs)
 

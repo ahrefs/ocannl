@@ -36,17 +36,20 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   (* This will only log from routines if log-level is high enough. *)
   Utils.settings.debug_log_from_routines <- true;
   Rand.init (* seed *) 0;
-  (* let hid_2_3 = 8 in let hid_4_5 = 4 in *)
-  (* let hid_dim = 16 in *)
   let hid_dim_1 = 16 in
   let hid_dim_2 = 8 in
   let hid_dim_3 = 4 in
-  let data_len = 3 * 4096 in
+  (* TINY for debugging: *)
+  (* let hid_dim = 2 in *)
+  let data_len = 3 * 5 * 1024 in
+  (* TINY for debugging: *)
+  (* let data_len = 3 * 4 in *)
   let flat_len = data_len / 2 in
   (* Note: [minibatch_size = batch_size / num_devices] is the actual per-device batch used. *)
   let epochs = 200 in
-  (* let epochs = 20 in *)
-  (* let epochs = 10 in *)
+  (* let epochs = 50 in *)
+  (* TINY for debugging: *)
+  (* let epochs = 2 in *)
   (* let epochs = 1 in *)
   (* let init_lr = 0.1 in *)
   let init_lr = 0.01 in
@@ -66,15 +69,12 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   let moons_classes ~b = TDSL.init_const ~l:"moons_classes" ~b ~o:[ 1 ] moons_classes in
 
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
-  (* let%op mlp x = "b6" 1 + "w6" * ?/("b4" hid_4_5 + "w4" * ?/("b2" hid_2_3 + ("w2" * ?/("b1" 16 +
-     ("w1" * x))) + "b3" hid_2_3 + ("w3" * ?/(b2 + (w2 * ?/(b1 + (w1 * x)))))) + ("b5" hid_4_5 +
-     ("w5" * ?/(b4 + (w4 * ?/(b3 + (w3 * ?/(b2 + (w2 * ?/(b1 + (w1 * x))))))))))) in *)
-  (* let%op mlp x = "b3" 1 + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x)))))
-     in *)
   let%op mlp x =
     "w4"
     * ?/("b3" hid_dim_3 + ("w3" * ?/("b2" hid_dim_2 + ("w2" * ?/("b1" hid_dim_1 + ("w1" * x))))))
   in
+  (* TINY for debugging: *)
+  (* let%op mlp x = "w2" * ?/("b1" hid_dim + ("w1" * x)) in *)
   let%op loss_fn ~output ~expectation = ?/(!..1 - (expectation *. output)) in
   let start_time = ref None in
   let weight_decay = 0.0002 in
@@ -106,7 +106,11 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   let callback (x, y) = Float.((infer_callback [| x; y |]).(0) >= 0.) in
   let plot_moons =
     let open PrintBox_utils in
-    plot ~size:(120, 40) ~x_label:"ixes" ~y_label:"ygreks"
+    plot
+      ~size:(120, 40)
+        (* TINY for debugging: *)
+        (* ~size:(20, 10) *)
+      ~x_label:"ixes" ~y_label:"ygreks"
       [
         Scatterplot { points = points1; pixel = "#" };
         Scatterplot { points = points2; pixel = "%" };
@@ -176,14 +180,18 @@ let _suspend () =
        ~backend_name:"gccjit" ~value_prec:CDSL.single ~grad_prec:CDSL.double ()
 
 let cuda_benchmarks =
-  List.concat_map [ (* 1; *) 3 (* ; 6; 12; 16; 32; 64 *) ] ~f:(fun num_devices ->
+  List.concat_map [ 1; 3; 6; 12; 16; 20 (* 32; 64 *) ] ~f:(fun num_devices ->
       List.concat_map
-        [ 3 * 32(* ; 3 * 64; 3 * 128 *)]
+        [
+          (* TINY for debugging: *)
+          (* 3 * 2 *)
+          3 * 5 * 16 (* ; 3 * 5 * 32; 3 * 5 * 64 *);
+        ]
         ~f:(fun batch_size ->
-          List.concat_map [  (* 0; 1; 2; *) 3 ] ~f:(fun inlining_cutoff ->
-              List.concat_map [ 1 (* ; 3 ; 7 *) ] ~f:(fun seed ->
-                  List.concat_map [ (* "gccjit" ;   *) "cc";(* "cuda" *) ] ~f:(fun backend_name ->
-                      List.concat_map [ (* CDSL.double;  CDSL.single; *) CDSL.half ]
+          List.concat_map [ 0; (* 1; 2; *) 3 ] ~f:(fun inlining_cutoff ->
+              List.concat_map [ (* 1; 3; *) 7 (* *) ] ~f:(fun seed ->
+                  List.concat_map [ (* "gccjit" ; "cc"; *) "cuda" ] ~f:(fun backend_name ->
+                      List.concat_map [ (* CDSL.double; *) CDSL.single (* ; CDSL.half *) ]
                         ~f:(fun value_prec ->
                           [
                             classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_devices

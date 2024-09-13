@@ -381,9 +381,10 @@ let%track3_sexp parallel_update (type context)
     (* We will need to update params on all devices! Not only the ones that computed gradients. *)
     for to_ = 1 to num_devices - 1 do
       Array.iter all_params ~f:(fun p ->
-          assert (
-            Backend.device_to_device p.value ~into_merge_buffer:No ~dst:ctxs.(to_)
-              ~src:sgd_update.context))
+          (* Allow the params to be shared across virtual devices. *)
+          ignore
+            (Backend.device_to_device p.value ~into_merge_buffer:No ~dst:ctxs.(to_)
+               ~src:sgd_update.context))
     done;
     post_sync ~num_synced_devices:devices_to_sync
   in
