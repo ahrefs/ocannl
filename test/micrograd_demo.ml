@@ -304,8 +304,8 @@ let%expect_test "Micrograd half-moons example" =
               │                        -                     -             -       -                     -          -
               │             -                                                               -
               │                                                                              -
-              │                                       -                                  -  -                       -
-              │
+              │                                       -                                  -  -
+              │                                                                                                     -
               │                                                                                 -
               │
               │
@@ -326,7 +326,7 @@ let%expect_test "Micrograd half-moons example" =
   [%expect
     {|
     Learning rate:
-     -1.002e-1│                                                                                                                       -
+     -1.003e-1│                                                                                                                       -
               │                                                                                                                   -----
               │                                                                                                               -----
               │                                                                                                           -----
@@ -358,7 +358,8 @@ let%expect_test "Micrograd half-moons example" =
      -2.000e-1│----
     ──────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
               │0.000e+0                                                                                                        3.990e+2
-              │                                                          step |}];
+              │                                                          step
+    |}];
 
   (* Testing how the syntax extension %op creates labels for the resulting tensors: *)
   Stdio.printf "mlp_result's name: %s\n%!" @@ Tensor.debug_name mlp_result;

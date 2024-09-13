@@ -46,8 +46,8 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   (* let data_len = 3 * 4 in *)
   let flat_len = data_len / 2 in
   (* Note: [minibatch_size = batch_size / num_devices] is the actual per-device batch used. *)
-  let epochs = 200 in
-  (* let epochs = 50 in *)
+  (* let epochs = 200 in *)
+  let epochs = 100 in
   (* TINY for debugging: *)
   (* let epochs = 2 in *)
   (* let epochs = 1 in *)
