@@ -355,42 +355,43 @@ let%expect_test "Simple gradients virtual" =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                                                #123 *._l <(Hosted Changed_on_devices) 41>
+                                                #119 *._l <(Hosted Changed_on_devices) 41>
                                                 <not-in-yet>
-                                                #124 grad_*._l <waiting>
+                                                #120 grad_*._l <waiting>
                                                 <not-in-yet>
-                                         #119 +_d <waiting>                                           │#121 f <(Hosted Nonconstant) 24>
+                                         #115 +_d <waiting>                                           │#117 f <(Hosted Nonconstant) 24>
                                          <not-in-yet>                                                 │<not-in-yet>
-                                         #120 grad_+_d <waiting>                                      │#122 grad_f <Materialized 28>
+                                         #116 grad_+_d <waiting>                                      │#118 grad_f <Materialized 28>
                                          <not-in-yet>                                                 │<not-in-yet>
-                        #115 *._e <waiting>                          │#117 c <(Hosted Nonconstant) 24>│
+                        #111 *._e <waiting>                          │#113 c <(Hosted Nonconstant) 24>│
                         <not-in-yet>                                 │<not-in-yet>                    │
-                        #116 grad_*._e <waiting>                     │#118 grad_c <Materialized 28>   │
+                        #112 grad_*._e <waiting>                     │#114 grad_c <Materialized 28>   │
                         <not-in-yet>                                 │<not-in-yet>                    │
-    #111 a <(Hosted Nonconstant) 24>│#113 b <(Hosted Nonconstant) 24>│                                │
+    #107 a <(Hosted Nonconstant) 24>│#109 b <(Hosted Nonconstant) 24>│                                │
     <not-in-yet>                    │<not-in-yet>                    │                                │
-    #112 grad_a <Materialized 28>   │#114 grad_b <Materialized 28>   │                                │
-    <not-in-yet>                    │<not-in-yet>                    │                                │ |}];
+    #108 grad_a <Materialized 28>   │#110 grad_b <Materialized 28>   │                                │
+    <not-in-yet>                    │<not-in-yet>                    │                                │
+    |}];
   let grad_routine = Backend.(link ctx @@ compile IDX.empty grad.fwd_bprop) in
   (* Check out the state without running a forward pass or compiling the SGD update. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                                                #123 *._l <(Hosted Changed_on_devices) 41>
+                                                #119 *._l <(Hosted Changed_on_devices) 41>
                                                 <not-in-yet>
-                                                #124 grad_*._l <Virtual 40>
+                                                #120 grad_*._l <Virtual 40>
                                                 <not-in-yet>
-                                        #119 +_d <Local 33>                                           │#121 f <(Hosted Nonconstant) 24>
+                                        #115 +_d <Local 33>                                           │#117 f <(Hosted Nonconstant) 24>
                                         <not-in-yet>                                                  │<not-in-yet>
-                                        #120 grad_+_d <Virtual 40>                                    │#122 grad_f <On_device 33>
+                                        #116 grad_+_d <Virtual 40>                                    │#118 grad_f <On_device 33>
                                         <not-in-yet>                                                  │<not-in-yet>
-                       #115 *._e <Virtual 152>                       │#117 c <(Hosted Nonconstant) 24>│
+                       #111 *._e <Virtual 152>                       │#113 c <(Hosted Nonconstant) 24>│
                        <not-in-yet>                                  │<not-in-yet>                    │
-                       #116 grad_*._e <Virtual 40>                   │#118 grad_c <On_device 33>      │
+                       #112 grad_*._e <Virtual 40>                   │#114 grad_c <On_device 33>      │
                        <not-in-yet>                                  │<not-in-yet>                    │
-    #111 a <(Hosted Nonconstant) 24>│#113 b <(Hosted Nonconstant) 24>│                                │
+    #107 a <(Hosted Nonconstant) 24>│#109 b <(Hosted Nonconstant) 24>│                                │
     <not-in-yet>                    │<not-in-yet>                    │                                │
-    #112 grad_a <On_device 33>      │#114 grad_b <On_device 33>      │                                │
+    #108 grad_a <On_device 33>      │#110 grad_b <On_device 33>      │                                │
     <not-in-yet>                    │<not-in-yet>                    │                                │
     |}];
   (* Do not update the params: all values and gradients will be at initial points, which are
@@ -399,21 +400,21 @@ let%expect_test "Simple gradients virtual" =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                                            #123 *._l
+                                            #119 *._l
                                              -8.00e+0
-                                            #124 grad_*._l <Virtual 40>
+                                            #120 grad_*._l <Virtual 40>
                                             <not-in-yet>
-                               #119 +_d <Local 33>                                  │#121 f
+                               #115 +_d <Local 33>                                  │#117 f
                                <not-in-yet>                                         │ -2.00e+0
-                               #120 grad_+_d <Virtual 40>                           │#122 grad_f <On_device 33>
+                               #116 grad_+_d <Virtual 40>                           │#118 grad_f <On_device 33>
                                <not-in-yet>                                         │<void>
-                 #115 *._e <Virtual 152>                 │#117 c                    │
+                 #111 *._e <Virtual 152>                 │#113 c                    │
                  <not-in-yet>                            │ 1.00e+1                  │
-                 #116 grad_*._e <Virtual 40>             │#118 grad_c <On_device 33>│
+                 #112 grad_*._e <Virtual 40>             │#114 grad_c <On_device 33>│
                  <not-in-yet>                            │<void>                    │
-    #111 a                    │#113 b                    │                          │
+    #107 a                    │#109 b                    │                          │
      2.00e+0                  │ -3.00e+0                 │                          │
-    #112 grad_a <On_device 33>│#114 grad_b <On_device 33>│                          │
+    #108 grad_a <On_device 33>│#110 grad_b <On_device 33>│                          │
     <void>                    │<void>                    │                          │
     |}];
   (* Only now compile the SGD update. *)
@@ -425,21 +426,21 @@ let%expect_test "Simple gradients virtual" =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                                            #123 *._l
+                                            #119 *._l
                                              -8.00e+0
-                                            #124 grad_*._l <Virtual 40>
+                                            #120 grad_*._l <Virtual 40>
                                             <not-in-yet>
-                               #119 +_d <Local 33>                                  │#121 f
+                               #115 +_d <Local 33>                                  │#117 f
                                <not-in-yet>                                         │ -2.40e+0
-                               #120 grad_+_d <Virtual 40>                           │#122 grad_f <On_device 33>
+                               #116 grad_+_d <Virtual 40>                           │#118 grad_f <On_device 33>
                                <not-in-yet>                                         │<void>
-                 #115 *._e <Virtual 152>                 │#117 c                    │
+                 #111 *._e <Virtual 152>                 │#113 c                    │
                  <not-in-yet>                            │ 1.02e+1                  │
-                 #116 grad_*._e <Virtual 40>             │#118 grad_c <On_device 33>│
+                 #112 grad_*._e <Virtual 40>             │#114 grad_c <On_device 33>│
                  <not-in-yet>                            │<void>                    │
-    #111 a                    │#113 b                    │                          │
+    #107 a                    │#109 b                    │                          │
      1.40e+0                  │ -2.60e+0                 │                          │
-    #112 grad_a <On_device 33>│#114 grad_b <On_device 33>│                          │
+    #108 grad_a <On_device 33>│#110 grad_b <On_device 33>│                          │
     <void>                    │<void>                    │                          │
     |}];
   (* Now the params will remain as above, but both param gradients and the values and gradients of
@@ -448,21 +449,21 @@ let%expect_test "Simple gradients virtual" =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                                            #123 *._l
+                                            #119 *._l
                                              -1.57e+1
-                                            #124 grad_*._l <Virtual 40>
+                                            #120 grad_*._l <Virtual 40>
                                             <not-in-yet>
-                               #119 +_d <Local 33>                                  │#121 f
+                               #115 +_d <Local 33>                                  │#117 f
                                <not-in-yet>                                         │ -2.40e+0
-                               #120 grad_+_d <Virtual 40>                           │#122 grad_f <On_device 33>
+                               #116 grad_+_d <Virtual 40>                           │#118 grad_f <On_device 33>
                                <not-in-yet>                                         │<void>
-                 #115 *._e <Virtual 152>                 │#117 c                    │
+                 #111 *._e <Virtual 152>                 │#113 c                    │
                  <not-in-yet>                            │ 1.02e+1                  │
-                 #116 grad_*._e <Virtual 40>             │#118 grad_c <On_device 33>│
+                 #112 grad_*._e <Virtual 40>             │#114 grad_c <On_device 33>│
                  <not-in-yet>                            │<void>                    │
-    #111 a                    │#113 b                    │                          │
+    #107 a                    │#109 b                    │                          │
      1.40e+0                  │ -2.60e+0                 │                          │
-    #112 grad_a <On_device 33>│#114 grad_b <On_device 33>│                          │
+    #108 grad_a <On_device 33>│#110 grad_b <On_device 33>│                          │
     <void>                    │<void>                    │                          │
     |}]
 
@@ -484,18 +485,19 @@ let%expect_test "2D neuron hosted" =
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect
     {|
-                       #155 +_v
+                       #147 +_v
                         7.00e-1
-                       #156 grad_+_v
+                       #148 grad_+_v
                         1.00e+0
-                  #153 *                   │#147 b
+                  #145 *                   │#139 b
                    -6.00e+0                │ 6.70e+0
-                  #154 grad_*              │#148 grad_b
+                  #146 grad_*              │#140 grad_b
                    1.00e+0                 │ 1.00e+0
-    #149 w             │#151 x             │
+    #141 w             │#143 x             │
      -3.00e+0  1.00e+0 │ 2.00e+0  0.00e+0  │
-    #150 grad_w        │#152 grad_x        │
-     2.00e+0  0.00e+0  │ -3.00e+0  1.00e+0 │ |}]
+    #142 grad_w        │#144 grad_x        │
+     2.00e+0  0.00e+0  │ -3.00e+0  1.00e+0 │
+    |}]
 
 let%expect_test "2D neuron virtual" =
   Rand.init 0;
@@ -510,16 +512,16 @@ let%expect_test "2D neuron virtual" =
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect
     {|
-                         #166 +_v
+                         #158 +_v
                           7.00e-1
-                         #167 grad_+_v <Virtual 40>
+                         #159 grad_+_v <Virtual 40>
                          <not-in-yet>
-              #164 * <Local 33>                  │#158 b
+              #156 * <Local 33>                  │#150 b
               <not-in-yet>                       │ 6.70e+0
-              #165 grad_* <Virtual 40>           │#159 grad_b <Local 33>
+              #157 grad_* <Virtual 40>           │#151 grad_b <Local 33>
               <not-in-yet>                       │<not-in-yet>
-    #160 w                │#162 x                │
+    #152 w                │#154 x                │
      -3.00e+0  1.00e+0    │ 2.00e+0  0.00e+0     │
-    #161 grad_w <Local 33>│#163 grad_x <Local 33>│
+    #153 grad_w <Local 33>│#155 grad_x <Local 33>│
     <not-in-yet>          │<not-in-yet>          │
     |}]

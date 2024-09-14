@@ -184,7 +184,7 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
        if Float.(momentum > 0.0) then (
          "sgd_momentum" =: (!.momentum *. sgd_momentum) + sgd_delta;
          if nesterov then sgd_delta =+ !.momentum *. sgd_momentum else sgd_delta =: sgd_momentum);
-       p =- learning_rate *. sgd_delta)]
+       p =- learning_rate * sgd_delta ~logic:".")]
 
 let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov l =
   let code =
