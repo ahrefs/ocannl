@@ -204,7 +204,7 @@ type Assignments.t =
   ...
 ```
 
- Schematic example: `~~("space" "separated" "comment" "tensor p debug_name:" p); <scope of the comment>`. The content of the comment uses application syntax, must be composed of strings, `<tensor>`, `<tensor>.value` (equivalent to `<tensor>`), `<tensor>.grad` components, where `<tensor>` is any tensor expression or tensor identifier.
+ Schematic example: `~~("space" "separated" "comment" "tensor p debug_name:" p; <scope of the comment>)`. The content of the comment uses application syntax, must be composed of strings, `<tensor>`, `<tensor>.value` (equivalent to `<tensor>`), `<tensor>.grad` components, where `<tensor>` is any tensor expression or tensor identifier.
 
 ## Further features of the syntax extension `%op` {#features-of-syntax-op}
 

@@ -111,26 +111,40 @@ let set_hosted (a : Tn.t) =
   if Tn.known_constant a then Tn.update_memory_mode a (Hosted Constant) 41
   else Tn.update_memory_mode a (Hosted Changed_on_devices) 41
 
-let label_suffix label =
-  (* FIXME: this should be label prefix, as most valuable label components come first. *)
-  Option.value ~default:"unknown"
-  @@ List.find ~f:(String.for_all ~f:(fun c -> Char.is_alphanum c || equal_char '_' c))
-  @@ List.rev label
-
 (** Sets the tensor's value as "fully on host", returns the tensor's forward code with a
     label-derived comment. *)
 let forward ?(disable_rootness_check = false) t =
   let fwd = if disable_rootness_check then t.Tensor.forward else Tensor.consume_forward_code t in
   set_hosted t.Tensor.value;
-  let label = label_suffix t.Tensor.value.label in
+  let label = Tn.debug_name t.value in
   Asgns.Block_comment (label ^ " fwd", fwd)
 
 type updaten = {
   loss : Tensor.t;
-  label : string;
   params : (Tensor.t, Tensor.comparator_witness) Base.Set.t;
   fwd_bprop : Asgns.t;
 }
+
+let diff_or_error t provenance =
+  Option.value_or_thunk t.Tensor.diff ~default:(fun () ->
+      raise @@ Tensor.Session_error (provenance ^ ": tensor is not differentiable", Some t))
+
+let grad_update_nochecks loss =
+  let params = get_params loss in
+  let diff = diff_or_error loss "Train.grad_update_nochecks" in
+  let fwd_bprop =
+    let%cd init_grad = loss.grad =: 1 in
+    [%cd
+      ~~(loss "gradient update";
+         ~~(loss "fwd";
+            loss.forward);
+         ~~(loss "zero grads";
+            diff.zero_grads);
+         init_grad;
+         ~~(loss "bprop";
+            diff.backprop))]
+  in
+  { loss; params; fwd_bprop }
 
 (** Returns the tensor's forward, zeroing gradients, and backprop code wrapped with label-derived
     comments. Sets the tensor's value as "fully on host". If [setup_for_parallel] is true (false by
@@ -140,44 +154,39 @@ let grad_update ?(disable_rootness_check = false) ?(setup_for_parallel = false) 
   let params = get_params loss in
   if setup_for_parallel then
     Set.iter params ~f:(fun p -> set_materialized (Option.value_exn ~here:[%here] p.diff).grad);
-  let label = label_suffix loss.value.label in
   let fwd =
     if disable_rootness_check then loss.Tensor.forward else Tensor.consume_forward_code loss
   in
+  let diff = diff_or_error loss "Train.grad_update" in
   let fwd_bprop =
-    match loss.Tensor.diff with
-    | Some diff ->
-        let zero_grads, bprop =
-          if disable_rootness_check then (diff.zero_grads, diff.backprop)
-          else Tensor.consume_backprop_code loss
-        in
-        (* Note: the %cd syntax for [loss.grad] does not modify roots. *)
-        let%cd init_grad = loss.grad =: 1 in
-        Asgns.(
-          Block_comment
-            ( label ^ " gradient update",
-              sequential
-                [
-                  Block_comment (label ^ " fwd", fwd);
-                  Block_comment (label ^ " zero grads", zero_grads);
-                  init_grad;
-                  Block_comment (label ^ " bprop", bprop);
-                ] ))
-    | None ->
-        raise @@ Tensor.Session_error ("Train.grad_update: tensor is not differentiable", Some loss)
+    let zero_grads, bprop =
+      if disable_rootness_check then (diff.zero_grads, diff.backprop)
+      else Tensor.consume_backprop_code loss
+    in
+    (* Note: the %cd syntax for [loss.grad] does not modify roots. *)
+    let%cd init_grad = loss.grad =: 1 in
+    [%cd
+      ~~(loss "gradient update";
+         ~~(loss "fwd";
+            fwd);
+         ~~(loss "zero grads";
+            zero_grads);
+         init_grad;
+         ~~(loss "bprop";
+            bprop))]
   in
-  { loss; label; params; fwd_bprop }
+  { loss; params; fwd_bprop }
 
 (** See: https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py *)
 let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
   if not @@ is_param p then raise @@ Tensor.Session_error ("Train.sgd_one: not a parameter", Some p);
   [%cd
-    ~~(p "param sgd step");
-    "sgd_delta" =: p.grad + (!.weight_decay *. p);
-    if Float.(momentum > 0.0) then (
-      "sgd_momentum" =: (!.momentum *. sgd_momentum) + sgd_delta;
-      if nesterov then sgd_delta =+ !.momentum *. sgd_momentum else sgd_delta =: sgd_momentum);
-    p =- learning_rate *. sgd_delta]
+    ~~(p "param sgd step";
+       "sgd_delta" =: p.grad + (!.weight_decay *. p);
+       if Float.(momentum > 0.0) then (
+         "sgd_momentum" =: (!.momentum *. sgd_momentum) + sgd_delta;
+         if nesterov then sgd_delta =+ !.momentum *. sgd_momentum else sgd_delta =: sgd_momentum);
+       p =- learning_rate *. sgd_delta)]
 
 let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov l =
   let code =
@@ -185,7 +194,9 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov l =
     |> List.map ~f:(sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov)
     |> Asgns.sequential
   in
-  Asgns.Block_comment (l.label ^ " sgd update", code)
+  [%cd
+    ~~(l.loss "sgd update";
+       code)]
 
 (** All and only bindings with associated ranges are iterated, with the binding's initial value
     lost. Bindings without ranges remain at their initial values. *)
@@ -328,8 +339,8 @@ let%track3_sexp parallel_update (type context)
   let grad_merges : Asgns.t array =
     Array.map all_params ~f:(fun p ->
         [%cd
-          ~~("merging gradient of" p);
-          p.grad =+ p.grad.merge])
+          ~~("merging gradient of" p;
+             p.grad =+ p.grad.merge)])
   in
   let grad_merges_to : Backend.routine option array array =
     (* For now, we need all params on all devices. *)
@@ -346,8 +357,8 @@ let%track3_sexp parallel_update (type context)
       link ~from_prior_context:(needs_prior_context updaten.loss) sgd_update.context
       @@ compile Idx.Empty
            [%cd
-             ~~("merging" updaten.loss);
-             updaten.loss.value =+ updaten.loss.value.merge])
+             ~~("merging" updaten.loss;
+                updaten.loss.value =+ updaten.loss.value.merge)])
   in
   let into_merge_buffer = if copy_to_merge then BT.Copy else BT.Streaming in
   (* Since each device has its own queue, we can iterate over devices in the outer loop. *)

@@ -739,6 +739,26 @@ let translate (expr : expression) : result =
                 @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: repeated .merge not allowed";
             })
     | [%expr
+        ~~([%e? { pexp_desc = Pexp_apply (expr, exprs); pexp_loc; _ }];
+           [%e? expr2])] ->
+        let elements =
+          expr :: List.map ~f:snd exprs
+          |> List.map ~f:(function
+               | { pexp_desc = Pexp_constant (Pconst_string _); _ } as s -> s
+               | [%expr [%e? t].value] -> [%expr Arrayjit.Tnode.debug_name [%e t].value]
+               | [%expr [%e? t].grad] -> [%expr Arrayjit.Tnode.debug_name [%e t].value ^ ".grad"]
+               | t -> [%expr Arrayjit.Tnode.debug_name [%e t].value])
+        in
+        let res2 = loop ~proj_in_scope expr2 in
+        {
+          res2 with
+          expr =
+            [%expr
+              Arrayjit.Assignments.Block_comment
+                ( String.concat_array ~sep:" " [%e Ast_helper.Exp.array ~loc:pexp_loc elements],
+                  [%e res2.expr] )];
+        }
+    | [%expr
         [%e? accu_op]
           [%e? lhs]
           ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections]))] ->
@@ -915,26 +935,6 @@ let translate (expr : expression) : result =
             Ast_builder.Default.pexp_extension ~loc
             @@ Location.error_extensionf ~loc
                  "ppx_ocannl %%cd: for-downto: low-level code embeddings not supported yet";
-        }
-    | [%expr
-        ~~[%e? { pexp_desc = Pexp_apply (expr, exprs); pexp_loc; _ }];
-        [%e? expr2]] ->
-        let elements =
-          expr :: List.map ~f:snd exprs
-          |> List.map ~f:(function
-               | { pexp_desc = Pexp_constant (Pconst_string _); _ } as s -> s
-               | [%expr [%e? t].value] -> [%expr Arrayjit.Tnode.debug_name [%e t].value]
-               | [%expr [%e? t].grad] -> [%expr Arrayjit.Tnode.debug_name [%e t].value ^ ".grad"]
-               | t -> [%expr Arrayjit.Tnode.debug_name [%e t].value])
-        in
-        let res2 = loop ~proj_in_scope expr2 in
-        {
-          res2 with
-          expr =
-            [%expr
-              Arrayjit.Assignments.Block_comment
-                ( String.concat_array ~sep:" " [%e Ast_helper.Exp.array ~loc:pexp_loc elements],
-                  [%e res2.expr] )];
         }
     | [%expr
         [%e? expr1];
