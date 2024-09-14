@@ -133,14 +133,13 @@ let grad_update_nochecks loss =
   let params = get_params loss in
   let diff = diff_or_error loss "Train.grad_update_nochecks" in
   let fwd_bprop =
-    let%cd init_grad = loss.grad =: 1 in
     [%cd
       ~~(loss "gradient update";
          ~~(loss "fwd";
             loss.forward);
          ~~(loss "zero grads";
             diff.zero_grads);
-         init_grad;
+         loss.grad =: 1;
          ~~(loss "bprop";
             diff.backprop))]
   in
@@ -164,14 +163,13 @@ let grad_update ?(disable_rootness_check = false) ?(setup_for_parallel = false) 
       else Tensor.consume_backprop_code loss
     in
     (* Note: the %cd syntax for [loss.grad] does not modify roots. *)
-    let%cd init_grad = loss.grad =: 1 in
     [%cd
       ~~(loss "gradient update";
          ~~(loss "fwd";
             fwd);
          ~~(loss "zero grads";
             zero_grads);
-         init_grad;
+         loss.grad =: 1;
          ~~(loss "bprop";
             bprop))]
   in
