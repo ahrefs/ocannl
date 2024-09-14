@@ -10,22 +10,25 @@ module Rand = Arrayjit.Rand.Lib
 module Debug_runtime = Utils.Debug_runtime
 
 let demo () =
-  Rand.init 0;
+  let seed = 3 in
+  Rand.init seed;
+  Utils.settings.fixed_state_for_init <- Some seed;
   Utils.enable_runtime_debug ();
-  Utils.set_log_level 3;
+  Utils.set_log_level 0;
   (* Utils.settings.debug_log_from_routines <- true; *)
   let hid_dim = 16 in
-  let len = 300 in
-  let batch_size = 20 in
+  let len = 512 in
+  let batch_size = 32 in
   let n_batches = 2 * len / batch_size in
   let epochs = 75 in
   let steps = epochs * n_batches in
   let weight_decay = 0.0002 in
   Utils.settings.fixed_state_for_init <- Some 4;
+
+  let%op mlp x =
+    "b3" + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
+
   let noise () = Rand.float_range (-0.1) 0.1 in
-
-  let%op mlp x = "b3" + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
-
   let moons_flat =
     Array.concat_map (Array.create ~len ())
       ~f:
@@ -39,28 +42,45 @@ let demo () =
   let moons_flat = TDSL.init_const ~l:"moons_flat" ~o:[ 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let moons_classes = TDSL.init_const ~l:"moons_classes" ~o:[ 1 ] moons_classes in
+
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_n, bindings = IDX.get_static_symbol bindings in
   let%op moons_input = moons_flat @| batch_n in
   let%op moons_class = moons_classes @| batch_n in
+  
   let%op margin_loss = ?/(1 - (moons_class *. mlp moons_input)) in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
+
   let update = Train.grad_update scalar_loss in
   let%op learning_rate = 0.1 *. (!..steps - !@step_n) /. !..steps in
   Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
 
-  let epoch_loss = ref 0. in
-
   let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name:"cuda" ()) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   let routine = Backend.(link ctx @@ compile bindings (Seq (update.fwd_bprop, sgd))) in
+
+  let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
+  let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
+  let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
+  let plot_moons =
+    let open PrintBox_utils in
+    plot ~size:(120, 40) ~x_label:"ixes" ~y_label:"ygreks"
+      [
+        Scatterplot { points = points1; pixel = "#" }; Scatterplot { points = points2; pixel = "+" };
+      ]
+  in
+  Stdio.printf "\nHalf-moons scatterplot:\n%!";
+  PrintBox_text.output Stdio.stdout plot_moons;
+  Stdio.print_endline "\n";
+
   Train.all_host_to_device (module Backend) routine.context scalar_loss;
   Train.all_host_to_device (module Backend) routine.context learning_rate;
   let open Operation.At in
   let step_ref = IDX.find_exn routine.bindings step_n in
   let batch_ref = IDX.find_exn routine.bindings batch_n in
+  let epoch_loss = ref 0. in
   step_ref := 0;
   let%track_sexp _train_loop : unit =
     for epoch = 0 to epochs - 1 do
@@ -78,9 +98,6 @@ let demo () =
     done
   in
 
-  let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
-  let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
-  let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   let%op mlp_result = mlp "point" in
   Train.set_on_host Changed_on_devices mlp_result.value;
   let result_routine =
@@ -102,12 +119,13 @@ let demo () =
       plot ~size:(120, 40) ~x_label:"ixes" ~y_label:"ygreks"
         [
           Scatterplot { points = points1; pixel = "#" };
-          Scatterplot { points = points2; pixel = "%" };
+          Scatterplot { points = points2; pixel = "+" };
           Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
         ]
     in
     Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n%!";
-    PrintBox_text.output Stdio.stdout plot_moons
+    PrintBox_text.output Stdio.stdout plot_moons;
+    Stdio.print_endline "\n"
   in
   Backend.unsafe_cleanup ()
 
