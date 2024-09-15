@@ -13,20 +13,20 @@ let demo () =
   let seed = 3 in
   Rand.init seed;
   Utils.settings.fixed_state_for_init <- Some seed;
-  Utils.enable_runtime_debug ();
-  Utils.set_log_level 0;
-  (* Utils.settings.debug_log_from_routines <- true; *)
+  Utils.settings.output_debug_files_in_build_directory <- true;
+  (* Utils.enable_runtime_debug (); *)
   let hid_dim = 16 in
   let len = 512 in
   let batch_size = 32 in
-  let n_batches = 2 * len / batch_size in
   let epochs = 75 in
+  (* Utils.settings.debug_log_from_routines <- true; *)
+  (* TINY for debugging: *)
+  (* let hid_dim = 2 in let len = 16 in let batch_size = 2 in let epochs = 2 in *)
+  let n_batches = 2 * len / batch_size in
   let steps = epochs * n_batches in
   let weight_decay = 0.0002 in
-  Utils.settings.fixed_state_for_init <- Some 4;
 
-  let%op mlp x =
-    "b3" + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
+  let%op mlp x = "b3" + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
 
   let noise () = Rand.float_range (-0.1) 0.1 in
   let moons_flat =
@@ -47,7 +47,7 @@ let demo () =
   let step_n, bindings = IDX.get_static_symbol bindings in
   let%op moons_input = moons_flat @| batch_n in
   let%op moons_class = moons_classes @| batch_n in
-  
+
   let%op margin_loss = ?/(1 - (moons_class *. mlp moons_input)) in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
 
@@ -86,6 +86,7 @@ let demo () =
     for epoch = 0 to epochs - 1 do
       for batch = 0 to n_batches - 1 do
         batch_ref := batch;
+        Utils.capture_stdout_logs @@ fun () ->
         Train.run routine;
         assert (Backend.to_host routine.context learning_rate.value);
         assert (Backend.to_host routine.context scalar_loss.value);
@@ -106,6 +107,7 @@ let demo () =
   in
   let callback (x, y) =
     Tensor.set_values point [| x; y |];
+    Utils.capture_stdout_logs @@ fun () ->
     assert (Backend.from_host result_routine.context point.value);
     Train.run result_routine;
     assert (Backend.to_host result_routine.context mlp_result.value);
