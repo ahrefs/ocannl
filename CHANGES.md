@@ -9,6 +9,7 @@
 - Finally proper support for mixed precision! Lazy precision defaults and delayed precision setting via `Tnode.update_prec`.
 - A placeholder `nn_blocks.ml` hinting at an intended design pattern for model components.
 - A memory model for the multiple virtual devices per physical device setup, implemented in the CUDA backend. It fixes the CUDA backend behavior in the data parallelism benchmark.
+- Slides for the Fun OCaml meetup: [docs/Fun OCaml](docs/OCANNL-slides-basics_backprop_training_loop_codegen.pdf).
 
 ### Changed
 
