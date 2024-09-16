@@ -131,7 +131,10 @@ struct
   let logs_to_stdout = false
   let main_kernel_prefix = ""
   let kernel_prep_line = ""
-  let include_lines = [ "#include <stdio.h>"; "#include <stdlib.h>"; "#include <string.h>" ]
+
+  let include_lines =
+    [ "#include <stdio.h>"; "#include <stdlib.h>"; "#include <string.h>"; "#include <math.h>" ]
+
   let typ_of_prec = Ops.c_typ_of_prec
   let binop_syntax = Ops.binop_c_syntax
   let unop_syntax = Ops.unop_c_syntax
