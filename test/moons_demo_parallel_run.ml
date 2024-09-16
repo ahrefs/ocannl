@@ -77,7 +77,6 @@ let main () =
   Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n";
   PrintBox_text.output Stdio.stdout plot_moons
 
-
 let () =
   (* Get some insights. *)
   Utils.set_log_level 1;

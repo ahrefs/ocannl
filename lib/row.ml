@@ -256,8 +256,8 @@ let apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim) (constr
       (Dim_eq { d1 = dim; d2 = get_dim ~d () } :: extras, Unconstrained_dim)
   | _ -> (extras, constr)
 
-let reduce_row_constraint (constr : row_constraint) ~(beg_dims : dim list)
-    ~(dims : dim list) : row_constraint =
+let reduce_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims : dim list) :
+    row_constraint =
   match constr with
   | Total_elems { nominator; divided_by } ->
       let ds, (vars : dim_var list) =
@@ -280,8 +280,8 @@ let reduce_row_constraint (constr : row_constraint) ~(beg_dims : dim list)
   | Unconstrained -> Unconstrained
 
 (* Inverts what [reduce_row_constraint] would do. *)
-let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list)
-    ~(dims : dim list) : row_constraint =
+let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims : dim list) :
+    row_constraint =
   match constr with
   | Total_elems { nominator; divided_by } ->
       let ds, vars =

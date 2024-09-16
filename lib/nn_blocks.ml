@@ -1,5 +1,5 @@
-(** Prior to OCANNL 0.5, this module is just a placeholder hinting at an intended design pattern
-    for model components. *)
+(** Prior to OCANNL 0.5, this module is just a placeholder hinting at an intended design pattern for
+    model components. *)
 
 open! Base
 module TDSL = Operation.TDSL
