@@ -65,7 +65,7 @@
   ocannl_npy
   stdio
   num
-  saturn_lockfree
+  (saturn_lockfree (>= 0.5.0))
   ppxlib
   ppx_jane
   ppx_expect
