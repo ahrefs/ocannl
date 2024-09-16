@@ -17,8 +17,7 @@ jobs:
           # Either the waiting queue for FreeBSD is very long, or it is not available.
           # - freebsd-latest
         ocaml-compiler:
-          - 5.1.x
-          # - 5.2.x
+          - 5.2.x
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v2
