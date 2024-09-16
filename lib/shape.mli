@@ -101,6 +101,9 @@ val to_string_hum :
   t ->
   string
 
+val unsafe_reinitialize : unit -> unit
+(** Bring global state to its initialization values. This invalidates any unfinished inference. *)
+
 (** {2 Internal-ish API.} *)
 
 (** How to propagate shape updates and do the last update of [Tensor.t.shape] when finalizing the

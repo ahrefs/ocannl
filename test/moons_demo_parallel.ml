@@ -78,6 +78,7 @@ let main () =
   PrintBox_text.output Stdio.stdout plot_moons
 
 let%expect_test "Half-moons data parallel" =
+  Tensor.unsafe_reinitialize ();
   main ();
   (* NOTE: as of OCANNL 0.4, moons_demo_parallel, while deterministic on a single machine, gives
      slightly different results on machines with a different hardware, e.g. arm64, ppc. Here we list

@@ -238,11 +238,11 @@ end
 
 type update_id = Update_id.t [@@deriving equal, compare, hash, sexp]
 
-let get_update_id =
-  let uid = ref 0 in
-  fun () ->
-    Int.incr uid;
-    Update_id.Update_id !uid
+let update_uid = ref 0
+
+let get_update_id () =
+  Int.incr update_uid;
+  Update_id.Update_id !update_uid
 
 type update_step = { shape : t; logic : logic; id : update_id } [@@deriving sexp]
 (** Data required for a shape inference update step. Ideally, an update should be performed at least
@@ -537,6 +537,12 @@ let get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : update_step) :
 let state = ref Row.empty_env
 let active_update_steps = ref []
 let active_constraints = ref []
+
+let unsafe_reinitialize () =
+  update_uid := 0;
+  state := Row.empty_env;
+  active_update_steps := [];
+  active_constraints := []
 
 let iter_shapes update_step ~f =
   f update_step.shape;

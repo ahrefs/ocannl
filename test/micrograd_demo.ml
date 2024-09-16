@@ -7,6 +7,7 @@ module CDSL = Train.CDSL
 module Rand = Arrayjit.Rand.Lib
 
 let%expect_test "Micrograd README basic example" =
+  Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
@@ -79,6 +80,7 @@ let%expect_test "Micrograd README basic example" =
     |}]
 
 let%expect_test "Micrograd half-moons example" =
+  Tensor.unsafe_reinitialize ();
   Rand.init 5;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in

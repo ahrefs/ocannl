@@ -9,6 +9,7 @@ module Utils = Arrayjit.Utils
 module Rand = Arrayjit.Rand.Lib
 
 let%expect_test "Graph drawing recompile" =
+  Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
@@ -127,6 +128,7 @@ let%expect_test "Graph drawing recompile" =
              │                                     x |}]
 
 let%expect_test "Graph drawing fetch" =
+  Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
@@ -141,16 +143,16 @@ let%expect_test "Graph drawing fetch" =
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   [%expect
     {|
-                                                   #54 +_f_5.
-                                                    6.00e+1
-                                         #53 -                                          │#46 5. <Virtual 40>
-                                          5.50e+1                                       │<not-in-yet>
-                     #52 *.                     │               #48 *.                  │
-                      7.50e+1                   │                2.00e+1                │
-    #51 3. <Virtual 40>│       #50 **.          │#47 4. <Virtual 40>│#45 5. <Virtual 40>│
-    <not-in-yet>       │        2.50e+1         │<not-in-yet>       │<not-in-yet>       │
-                       │[45]│#49 2. <Virtual 40>│                   │                   │
-                       │    │<not-in-yet>       │                   │                   │
+                                                #9 +_f_5.
+                                                 6.00e+1
+                                       #8 -                                        │#1 5. <Virtual 40>
+                                        5.50e+1                                    │<not-in-yet>
+                    #7 *.                    │              #3 *.                  │
+                     7.50e+1                 │               2.00e+1               │
+    #6 3. <Virtual 40>│      #5 **.          │#2 4. <Virtual 40>│#0 5. <Virtual 40>│
+    <not-in-yet>      │       2.50e+1        │<not-in-yet>      │<not-in-yet>      │
+                      │[0]│#4 2. <Virtual 40>│                  │                  │
+                      │   │<not-in-yet>      │                  │                  │
     |}];
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
@@ -228,6 +230,7 @@ let%expect_test "Graph drawing fetch" =
               │                                     x |}]
 
 let%expect_test "Simple gradients hosted" =
+  Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
@@ -249,22 +252,22 @@ let%expect_test "Simple gradients hosted" =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                                                                    #87 *._l <(Hosted Changed_on_devices) 41>
-                                                                    <not-in-yet>
-                                                                    #88 grad_*._l <(Hosted Changed_on_devices) 41>
-                                                                    <not-in-yet>
-                                               #83 +_d <(Hosted Changed_on_devices) 41>                                                │#85 f <(Hosted Nonconstant) 24>
-                                               <not-in-yet>                                                                            │<not-in-yet>
-                                               #84 grad_+_d <(Hosted Changed_on_devices) 41>                                           │#86 grad_f <(Hosted Changed_on_devices) 41>
-                                               <not-in-yet>                                                                            │<not-in-yet>
-                        #79 *._e <(Hosted Changed_on_devices) 41>                          │#81 c <(Hosted Nonconstant) 24>            │
-                        <not-in-yet>                                                       │<not-in-yet>                               │
-                        #80 grad_*._e <(Hosted Changed_on_devices) 41>                     │#82 grad_c <(Hosted Changed_on_devices) 41>│
-                        <not-in-yet>                                                       │<not-in-yet>                               │
-    #75 a <(Hosted Nonconstant) 24>            │#77 b <(Hosted Nonconstant) 24>            │                                           │
-    <not-in-yet>                               │<not-in-yet>                               │                                           │
-    #76 grad_a <(Hosted Changed_on_devices) 41>│#78 grad_b <(Hosted Changed_on_devices) 41>│                                           │
-    <not-in-yet>                               │<not-in-yet>                               │                                           │
+                                                                   #12 *._l <(Hosted Changed_on_devices) 41>
+                                                                   <not-in-yet>
+                                                                   #13 grad_*._l <(Hosted Changed_on_devices) 41>
+                                                                   <not-in-yet>
+                                              #8 +_d <(Hosted Changed_on_devices) 41>                                               │#10 f <(Hosted Nonconstant) 24>
+                                              <not-in-yet>                                                                          │<not-in-yet>
+                                              #9 grad_+_d <(Hosted Changed_on_devices) 41>                                          │#11 grad_f <(Hosted Changed_on_devices) 41>
+                                              <not-in-yet>                                                                          │<not-in-yet>
+                        #4 *._e <(Hosted Changed_on_devices) 41>                         │#6 c <(Hosted Nonconstant) 24>            │
+                        <not-in-yet>                                                     │<not-in-yet>                              │
+                        #5 grad_*._e <(Hosted Changed_on_devices) 41>                    │#7 grad_c <(Hosted Changed_on_devices) 41>│
+                        <not-in-yet>                                                     │<not-in-yet>                              │
+    #0 a <(Hosted Nonconstant) 24>            │#2 b <(Hosted Nonconstant) 24>            │                                          │
+    <not-in-yet>                              │<not-in-yet>                              │                                          │
+    #1 grad_a <(Hosted Changed_on_devices) 41>│#3 grad_b <(Hosted Changed_on_devices) 41>│                                          │
+    <not-in-yet>                              │<not-in-yet>                              │                                          │
     |}];
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
@@ -272,22 +275,23 @@ let%expect_test "Simple gradients hosted" =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                   #87 *._l
-                    -8.00e+0
-                   #88 grad_*._l
-                    1.00e+0
-              #83 +_d               │#85 f
-               4.00e+0              │ -2.00e+0
-              #84 grad_+_d          │#86 grad_f
-               -2.00e+0             │ 4.00e+0
-        #79 *._e         │#81 c     │
-         -6.00e+0        │ 1.00e+1  │
-        #80 grad_*._e    │#82 grad_c│
-         -2.00e+0        │ -2.00e+0 │
-    #75 a     │#77 b     │          │
-     2.00e+0  │ -3.00e+0 │          │
-    #76 grad_a│#78 grad_b│          │
-     6.00e+0  │ -4.00e+0 │          │ |}];
+                  #12 *._l
+                   -8.00e+0
+                  #13 grad_*._l
+                   1.00e+0
+              #8 +_d               │#10 f
+               4.00e+0             │ -2.00e+0
+              #9 grad_+_d          │#11 grad_f
+               -2.00e+0            │ 4.00e+0
+        #4 *._e         │#6 c      │
+         -6.00e+0       │ 1.00e+1  │
+        #5 grad_*._e    │#7 grad_c │
+         -2.00e+0       │ -2.00e+0 │
+    #0 a     │#2 b      │          │
+     2.00e+0 │ -3.00e+0 │          │
+    #1 grad_a│#3 grad_b │          │
+     6.00e+0 │ -4.00e+0 │          │
+    |}];
   (* Now we update the params, but we are not doing the forward and backward passes: only params
      values will change, compared to the above. The update is in the opposite direction of the
      gradient. *)
@@ -295,22 +299,23 @@ let%expect_test "Simple gradients hosted" =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                   #87 *._l
-                    -8.00e+0
-                   #88 grad_*._l
-                    1.00e+0
-              #83 +_d               │#85 f
-               4.00e+0              │ -2.40e+0
-              #84 grad_+_d          │#86 grad_f
-               -2.00e+0             │ 4.00e+0
-        #79 *._e         │#81 c     │
-         -6.00e+0        │ 1.02e+1  │
-        #80 grad_*._e    │#82 grad_c│
-         -2.00e+0        │ -2.00e+0 │
-    #75 a     │#77 b     │          │
-     1.40e+0  │ -2.60e+0 │          │
-    #76 grad_a│#78 grad_b│          │
-     6.00e+0  │ -4.00e+0 │          │ |}];
+                  #12 *._l
+                   -8.00e+0
+                  #13 grad_*._l
+                   1.00e+0
+              #8 +_d               │#10 f
+               4.00e+0             │ -2.40e+0
+              #9 grad_+_d          │#11 grad_f
+               -2.00e+0            │ 4.00e+0
+        #4 *._e         │#6 c      │
+         -6.00e+0       │ 1.02e+1  │
+        #5 grad_*._e    │#7 grad_c │
+         -2.00e+0       │ -2.00e+0 │
+    #0 a     │#2 b      │          │
+     1.40e+0 │ -2.60e+0 │          │
+    #1 grad_a│#3 grad_b │          │
+     6.00e+0 │ -4.00e+0 │          │
+    |}];
 
   (* Now the params will remain as above, but both param gradients and the values and gradients of
      other nodes will change thanks to the forward and backward passes. *)
@@ -318,24 +323,26 @@ let%expect_test "Simple gradients hosted" =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                     #87 *._l
-                      -1.57e+1
-                     #88 grad_*._l
-                      1.00e+0
-                #83 +_d               │#85 f
-                 6.56e+0              │ -2.40e+0
-                #84 grad_+_d          │#86 grad_f
-                 -2.40e+0             │ 6.56e+0
-          #79 *._e         │#81 c     │
-           -3.64e+0        │ 1.02e+1  │
-          #80 grad_*._e    │#82 grad_c│
-           -2.40e+0        │ -2.40e+0 │
-      #75 a     │#77 b     │          │
-       1.40e+0  │ -2.60e+0 │          │
-      #76 grad_a│#78 grad_b│          │
-       6.24e+0  │ -3.36e+0 │          │ |}]
+                  #12 *._l
+                   -1.57e+1
+                  #13 grad_*._l
+                   1.00e+0
+              #8 +_d               │#10 f
+               6.56e+0             │ -2.40e+0
+              #9 grad_+_d          │#11 grad_f
+               -2.40e+0            │ 6.56e+0
+        #4 *._e         │#6 c      │
+         -3.64e+0       │ 1.02e+1  │
+        #5 grad_*._e    │#7 grad_c │
+         -2.40e+0       │ -2.40e+0 │
+    #0 a     │#2 b      │          │
+     1.40e+0 │ -2.60e+0 │          │
+    #1 grad_a│#3 grad_b │          │
+     6.24e+0 │ -3.36e+0 │          │
+    |}]
 
 let%expect_test "Simple gradients virtual" =
+  Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
@@ -355,44 +362,44 @@ let%expect_test "Simple gradients virtual" =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                                                #119 *._l <(Hosted Changed_on_devices) 41>
-                                                <not-in-yet>
-                                                #120 grad_*._l <waiting>
-                                                <not-in-yet>
-                                         #115 +_d <waiting>                                           │#117 f <(Hosted Nonconstant) 24>
-                                         <not-in-yet>                                                 │<not-in-yet>
-                                         #116 grad_+_d <waiting>                                      │#118 grad_f <Materialized 28>
-                                         <not-in-yet>                                                 │<not-in-yet>
-                        #111 *._e <waiting>                          │#113 c <(Hosted Nonconstant) 24>│
-                        <not-in-yet>                                 │<not-in-yet>                    │
-                        #112 grad_*._e <waiting>                     │#114 grad_c <Materialized 28>   │
-                        <not-in-yet>                                 │<not-in-yet>                    │
-    #107 a <(Hosted Nonconstant) 24>│#109 b <(Hosted Nonconstant) 24>│                                │
-    <not-in-yet>                    │<not-in-yet>                    │                                │
-    #108 grad_a <Materialized 28>   │#110 grad_b <Materialized 28>   │                                │
-    <not-in-yet>                    │<not-in-yet>                    │                                │
+                                             #12 *._l <(Hosted Changed_on_devices) 41>
+                                             <not-in-yet>
+                                             #13 grad_*._l <waiting>
+                                             <not-in-yet>
+                                       #8 +_d <waiting>                                         │#10 f <(Hosted Nonconstant) 24>
+                                       <not-in-yet>                                             │<not-in-yet>
+                                       #9 grad_+_d <waiting>                                    │#11 grad_f <Materialized 28>
+                                       <not-in-yet>                                             │<not-in-yet>
+                       #4 *._e <waiting>                         │#6 c <(Hosted Nonconstant) 24>│
+                       <not-in-yet>                              │<not-in-yet>                  │
+                       #5 grad_*._e <waiting>                    │#7 grad_c <Materialized 28>   │
+                       <not-in-yet>                              │<not-in-yet>                  │
+    #0 a <(Hosted Nonconstant) 24>│#2 b <(Hosted Nonconstant) 24>│                              │
+    <not-in-yet>                  │<not-in-yet>                  │                              │
+    #1 grad_a <Materialized 28>   │#3 grad_b <Materialized 28>   │                              │
+    <not-in-yet>                  │<not-in-yet>                  │                              │
     |}];
   let grad_routine = Backend.(link ctx @@ compile IDX.empty grad.fwd_bprop) in
   (* Check out the state without running a forward pass or compiling the SGD update. *)
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                                                #119 *._l <(Hosted Changed_on_devices) 41>
-                                                <not-in-yet>
-                                                #120 grad_*._l <Virtual 40>
-                                                <not-in-yet>
-                                        #115 +_d <Local 33>                                           │#117 f <(Hosted Nonconstant) 24>
-                                        <not-in-yet>                                                  │<not-in-yet>
-                                        #116 grad_+_d <Virtual 40>                                    │#118 grad_f <On_device 33>
-                                        <not-in-yet>                                                  │<not-in-yet>
-                       #111 *._e <Virtual 152>                       │#113 c <(Hosted Nonconstant) 24>│
-                       <not-in-yet>                                  │<not-in-yet>                    │
-                       #112 grad_*._e <Virtual 40>                   │#114 grad_c <On_device 33>      │
-                       <not-in-yet>                                  │<not-in-yet>                    │
-    #107 a <(Hosted Nonconstant) 24>│#109 b <(Hosted Nonconstant) 24>│                                │
-    <not-in-yet>                    │<not-in-yet>                    │                                │
-    #108 grad_a <On_device 33>      │#110 grad_b <On_device 33>      │                                │
-    <not-in-yet>                    │<not-in-yet>                    │                                │
+                                             #12 *._l <(Hosted Changed_on_devices) 41>
+                                             <not-in-yet>
+                                             #13 grad_*._l <Virtual 40>
+                                             <not-in-yet>
+                                      #8 +_d <Local 33>                                         │#10 f <(Hosted Nonconstant) 24>
+                                      <not-in-yet>                                              │<not-in-yet>
+                                      #9 grad_+_d <Virtual 40>                                  │#11 grad_f <On_device 33>
+                                      <not-in-yet>                                              │<not-in-yet>
+                      #4 *._e <Virtual 152>                      │#6 c <(Hosted Nonconstant) 24>│
+                      <not-in-yet>                               │<not-in-yet>                  │
+                      #5 grad_*._e <Virtual 40>                  │#7 grad_c <On_device 33>      │
+                      <not-in-yet>                               │<not-in-yet>                  │
+    #0 a <(Hosted Nonconstant) 24>│#2 b <(Hosted Nonconstant) 24>│                              │
+    <not-in-yet>                  │<not-in-yet>                  │                              │
+    #1 grad_a <On_device 33>      │#3 grad_b <On_device 33>      │                              │
+    <not-in-yet>                  │<not-in-yet>                  │                              │
     |}];
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
@@ -400,22 +407,22 @@ let%expect_test "Simple gradients virtual" =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                                            #119 *._l
-                                             -8.00e+0
-                                            #120 grad_*._l <Virtual 40>
-                                            <not-in-yet>
-                               #115 +_d <Local 33>                                  │#117 f
-                               <not-in-yet>                                         │ -2.00e+0
-                               #116 grad_+_d <Virtual 40>                           │#118 grad_f <On_device 33>
-                               <not-in-yet>                                         │<void>
-                 #111 *._e <Virtual 152>                 │#113 c                    │
-                 <not-in-yet>                            │ 1.00e+1                  │
-                 #112 grad_*._e <Virtual 40>             │#114 grad_c <On_device 33>│
-                 <not-in-yet>                            │<void>                    │
-    #107 a                    │#109 b                    │                          │
-     2.00e+0                  │ -3.00e+0                 │                          │
-    #108 grad_a <On_device 33>│#110 grad_b <On_device 33>│                          │
-    <void>                    │<void>                    │                          │
+                                         #12 *._l
+                                          -8.00e+0
+                                         #13 grad_*._l <Virtual 40>
+                                         <not-in-yet>
+                             #8 +_d <Local 33>                                │#10 f
+                             <not-in-yet>                                     │ -2.00e+0
+                             #9 grad_+_d <Virtual 40>                         │#11 grad_f <On_device 33>
+                             <not-in-yet>                                     │<void>
+                #4 *._e <Virtual 152>                │#6 c                    │
+                <not-in-yet>                         │ 1.00e+1                │
+                #5 grad_*._e <Virtual 40>            │#7 grad_c <On_device 33>│
+                <not-in-yet>                         │<void>                  │
+    #0 a                    │#2 b                    │                        │
+     2.00e+0                │ -3.00e+0               │                        │
+    #1 grad_a <On_device 33>│#3 grad_b <On_device 33>│                        │
+    <void>                  │<void>                  │                        │
     |}];
   (* Only now compile the SGD update. *)
   let sgd_routine = Backend.(link grad_routine.context @@ compile IDX.empty sgd) in
@@ -426,22 +433,22 @@ let%expect_test "Simple gradients virtual" =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                                            #119 *._l
-                                             -8.00e+0
-                                            #120 grad_*._l <Virtual 40>
-                                            <not-in-yet>
-                               #115 +_d <Local 33>                                  │#117 f
-                               <not-in-yet>                                         │ -2.40e+0
-                               #116 grad_+_d <Virtual 40>                           │#118 grad_f <On_device 33>
-                               <not-in-yet>                                         │<void>
-                 #111 *._e <Virtual 152>                 │#113 c                    │
-                 <not-in-yet>                            │ 1.02e+1                  │
-                 #112 grad_*._e <Virtual 40>             │#114 grad_c <On_device 33>│
-                 <not-in-yet>                            │<void>                    │
-    #107 a                    │#109 b                    │                          │
-     1.40e+0                  │ -2.60e+0                 │                          │
-    #108 grad_a <On_device 33>│#110 grad_b <On_device 33>│                          │
-    <void>                    │<void>                    │                          │
+                                         #12 *._l
+                                          -8.00e+0
+                                         #13 grad_*._l <Virtual 40>
+                                         <not-in-yet>
+                             #8 +_d <Local 33>                                │#10 f
+                             <not-in-yet>                                     │ -2.40e+0
+                             #9 grad_+_d <Virtual 40>                         │#11 grad_f <On_device 33>
+                             <not-in-yet>                                     │<void>
+                #4 *._e <Virtual 152>                │#6 c                    │
+                <not-in-yet>                         │ 1.02e+1                │
+                #5 grad_*._e <Virtual 40>            │#7 grad_c <On_device 33>│
+                <not-in-yet>                         │<void>                  │
+    #0 a                    │#2 b                    │                        │
+     1.40e+0                │ -2.60e+0               │                        │
+    #1 grad_a <On_device 33>│#3 grad_b <On_device 33>│                        │
+    <void>                  │<void>                  │                        │
     |}];
   (* Now the params will remain as above, but both param gradients and the values and gradients of
      other nodes will change thanks to the forward and backward passes. *)
@@ -449,29 +456,31 @@ let%expect_test "Simple gradients virtual" =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                                            #119 *._l
-                                             -1.57e+1
-                                            #120 grad_*._l <Virtual 40>
-                                            <not-in-yet>
-                               #115 +_d <Local 33>                                  │#117 f
-                               <not-in-yet>                                         │ -2.40e+0
-                               #116 grad_+_d <Virtual 40>                           │#118 grad_f <On_device 33>
-                               <not-in-yet>                                         │<void>
-                 #111 *._e <Virtual 152>                 │#113 c                    │
-                 <not-in-yet>                            │ 1.02e+1                  │
-                 #112 grad_*._e <Virtual 40>             │#114 grad_c <On_device 33>│
-                 <not-in-yet>                            │<void>                    │
-    #107 a                    │#109 b                    │                          │
-     1.40e+0                  │ -2.60e+0                 │                          │
-    #108 grad_a <On_device 33>│#110 grad_b <On_device 33>│                          │
-    <void>                    │<void>                    │                          │
+                                         #12 *._l
+                                          -1.57e+1
+                                         #13 grad_*._l <Virtual 40>
+                                         <not-in-yet>
+                             #8 +_d <Local 33>                                │#10 f
+                             <not-in-yet>                                     │ -2.40e+0
+                             #9 grad_+_d <Virtual 40>                         │#11 grad_f <On_device 33>
+                             <not-in-yet>                                     │<void>
+                #4 *._e <Virtual 152>                │#6 c                    │
+                <not-in-yet>                         │ 1.02e+1                │
+                #5 grad_*._e <Virtual 40>            │#7 grad_c <On_device 33>│
+                <not-in-yet>                         │<void>                  │
+    #0 a                    │#2 b                    │                        │
+     1.40e+0                │ -2.60e+0               │                        │
+    #1 grad_a <On_device 33>│#3 grad_b <On_device 33>│                        │
+    <void>                  │<void>                  │                        │
     |}]
 
 let%expect_test "tanh plot" =
+  Tensor.unsafe_reinitialize ();
   (* TODO: NOT IMPLEMENTED *)
   ()
 
 let%expect_test "2D neuron hosted" =
+  Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
@@ -485,21 +494,22 @@ let%expect_test "2D neuron hosted" =
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect
     {|
-                       #147 +_v
+                       #8 +_v
                         7.00e-1
-                       #148 grad_+_v
+                       #9 grad_+_v
                         1.00e+0
-                  #145 *                   │#139 b
+                  #6 *                     │#0 b
                    -6.00e+0                │ 6.70e+0
-                  #146 grad_*              │#140 grad_b
+                  #7 grad_*                │#1 grad_b
                    1.00e+0                 │ 1.00e+0
-    #141 w             │#143 x             │
+    #2 w               │#4 x               │
      -3.00e+0  1.00e+0 │ 2.00e+0  0.00e+0  │
-    #142 grad_w        │#144 grad_x        │
+    #3 grad_w          │#5 grad_x          │
      2.00e+0  0.00e+0  │ -3.00e+0  1.00e+0 │
     |}]
 
 let%expect_test "2D neuron virtual" =
+  Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
@@ -512,16 +522,16 @@ let%expect_test "2D neuron virtual" =
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect
     {|
-                         #158 +_v
-                          7.00e-1
-                         #159 grad_+_v <Virtual 40>
-                         <not-in-yet>
-              #156 * <Local 33>                  │#150 b
-              <not-in-yet>                       │ 6.70e+0
-              #157 grad_* <Virtual 40>           │#151 grad_b <Local 33>
-              <not-in-yet>                       │<not-in-yet>
-    #152 w                │#154 x                │
-     -3.00e+0  1.00e+0    │ 2.00e+0  0.00e+0     │
-    #153 grad_w <Local 33>│#155 grad_x <Local 33>│
-    <not-in-yet>          │<not-in-yet>          │
+                       #8 +_v
+                        7.00e-1
+                       #9 grad_+_v <Virtual 40>
+                       <not-in-yet>
+             #6 * <Local 33>                 │#0 b
+             <not-in-yet>                    │ 6.70e+0
+             #7 grad_* <Virtual 40>          │#1 grad_b <Local 33>
+             <not-in-yet>                    │<not-in-yet>
+    #2 w                │#4 x                │
+     -3.00e+0  1.00e+0  │ 2.00e+0  0.00e+0   │
+    #3 grad_w <Local 33>│#5 grad_x <Local 33>│
+    <not-in-yet>        │<not-in-yet>        │
     |}]

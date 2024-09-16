@@ -70,6 +70,13 @@ type session_state = {
 let session_state =
   { next_id = 0; forward_roots = Map.empty (module Int); backprop_roots = Map.empty (module Int) }
 
+let unsafe_reinitialize () =
+  session_state.next_id <- 0;
+  session_state.forward_roots <- Map.empty (module Int);
+  session_state.backprop_roots <- Map.empty (module Int);
+  Tn.Registry.clear Tn.registry;
+  Shape.unsafe_reinitialize ()
+
 let is_fwd_root t = Map.mem session_state.forward_roots t.id
 let remove_fwd_root t = session_state.forward_roots <- Map.remove session_state.forward_roots t.id
 let is_bprop_root t = Map.mem session_state.backprop_roots t.id

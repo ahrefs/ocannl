@@ -29,6 +29,7 @@
 - Fixed loss of significant digits for small numbers when outputting files.
 - Added missing mixed-precision conversions in the `C_syntax` backend builder.
 - Restored the functionality of debug logging from the cuda backend.
+- Always reinitialize global state at the beginning of `let%expect_test`, to make them more deterministic.
 
 ## [0.4.0] -- 2024-09-04
 

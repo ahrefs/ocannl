@@ -188,6 +188,10 @@ val consume_backprop_code : t -> asgns * asgns
     [consume_backprop_code t] ensures [t] is a backprop root, removes it from backprop roots, and
     checks that there are no other backprop roots for tensors with children. *)
 
+val unsafe_reinitialize : unit -> unit
+(** Bring global state to its initialization values. This invalidates any previously defined tensors
+    and tensor nodes. Also invokes {!Shape.unsafe_reinitialize}. *)
+
 (** {2 Printing.} *)
 
 val header : t -> string
