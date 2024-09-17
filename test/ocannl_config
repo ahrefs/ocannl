@@ -1,5 +1,4 @@
 randomness_lib=for_tests
 log_main_domain_to_stdout=true
-~~ Once all scheduler issues are resolved, we should be using the cc backend.
-backend=sync_cc
+backend=cc
 log_level=0
