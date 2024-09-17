@@ -13,7 +13,7 @@
 
 (authors "Lukasz Stafiniak")
 
-(maintainers "Lukasz Stafiniak")
+(maintainers "Lukasz Stafiniak <lukstafi@gmail.com>")
 
 (license "BSD-2-Clause")
 
