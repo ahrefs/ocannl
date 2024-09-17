@@ -100,7 +100,9 @@
   ; (ocamlformat
   ;  (>= 0.26.2)
   ;  :with-dev-setup)
-  (arrayjit (= 0.4.1))
+  ; Here we mean (arrayjit (= 0.4.1)), but we must be compatible with arrayjit.dev during installation.
+  (arrayjit
+   (>= 0.4.1))
   printbox
   printbox-text
   ocannl_npy
