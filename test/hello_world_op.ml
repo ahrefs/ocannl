@@ -19,7 +19,7 @@ let%expect_test "Pointwise multiplication dims 1" =
   let ctx = Backend.init device in
   Rand.init 0;
   (* "Hey" is inferred to be a scalar. *)
-  let%op y = 2 *. "hey" in
+  let%op y = 2 *. "hey" 7.0 in
   Train.forward_and_forget backend ctx y;
 
   Tensor.print ~with_code:false ~with_grad:false `Default @@ y;
@@ -30,9 +30,10 @@ let%expect_test "Pointwise multiplication dims 1" =
     │┌┬─────────┐        │
     │││axis 0   │        │
     │├┼─────────┼─────── │
-    │││ 7.38e-2 │        │
+    │││ 1.40e+1 │        │
     │└┴─────────┘        │
-    └────────────────────┘ |}]
+    └────────────────────┘
+    |}]
 
 let%expect_test "Matrix multiplication dims 1x1" =
   Tensor.unsafe_reinitialize ();
@@ -379,7 +380,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
   let ctx = Backend.init device in
   Rand.init 0;
   (* Hey is inferred to be a matrix. *)
-  let%op y = ("hey" * [ 2; 3 ]) + [ 4; 5; 6 ] in
+  let%op y = ("hey" 7.0 * [ 2; 3 ]) + [ 4; 5; 6 ] in
   Train.forward_and_forget backend ctx y;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
