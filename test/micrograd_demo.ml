@@ -82,7 +82,9 @@ let%expect_test "Micrograd README basic example" =
 let%expect_test "Micrograd half-moons example" =
   Tensor.unsafe_reinitialize ();
   Rand.init 5;
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  (* We could use the cc backend! But for unknown reason, it leads to different resuls on a
+     lower_bounds CI target than on other CI targets. *)
+  let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name:"sync_cc" ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
