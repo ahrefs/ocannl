@@ -50,8 +50,10 @@
   (ocaml
    (>= 5.2.0))
   dune
-  base
-  core
+  (base
+   (>= v0.17.0))
+  (core
+   (>= v0.17.0))
   (ctypes
    (>= 0.23))
   (ctypes-foreign
@@ -65,7 +67,8 @@
   ocannl_npy
   stdio
   num
-  (saturn_lockfree (>= 0.5.0))
+  (saturn_lockfree
+   (>= 0.5.0))
   ppxlib
   ppx_jane
   ppx_expect
@@ -89,8 +92,10 @@
   (ocaml
    (>= 5.2.0))
   dune
-  base
-  core
+  (base
+   (>= v0.17.0))
+  (core
+   (>= v0.17.0))
   ; opam 2.2.0 has with-dev-setup. Is it supported, what's the syntax?
   ; (ocamlformat
   ;  (>= 0.26.2)
