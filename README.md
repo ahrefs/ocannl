@@ -42,12 +42,13 @@ OCANNL is sponsored by [Ahrefs](https://ocaml.org/success-stories/peta-byte-scal
 
 A possible route to learning OCANNL:
 
-1. Get some basic grasp of the aims and design of the project by reading or skimming files in [test/](test/) and [bin/](bin/).
-2. Read the syntax extensions documentation [lib/syntax_extensions.md](lib/syntax_extensions.md).
-3. Read the introductory part of the shape inference documentation [lib/shape_inference.md](lib/shape_inference.md).
-4. Improve your understanding by reading or skimming [lib/shape.mli](lib/shape.mli), [lib/tensor.mli](lib/tensor.mli), [lib/operation.ml](lib/operation.ml), [lib/train.ml](lib/train.ml), and (since 0.4.1) [lib/nn_blocks.ml](lib/nn_blocks.ml).
-5. Read [arrayjit/lib/writing_a_backend.md](arrayjit/lib/writing_a_backend.md).
-6. Read the implementation overview:
+1. Read [the introductory slides](docs/OCANNL-slides-basics_backprop_training_loop_codegen.pdf).
+2. Get some basic grasp of the aims and design of the project by reading or skimming files in [test/](test/) and [bin/](bin/).
+3. Read the syntax extensions documentation [lib/syntax_extensions.md](lib/syntax_extensions.md).
+4. Read the introductory part of the shape inference documentation [lib/shape_inference.md](lib/shape_inference.md).
+5. Improve your understanding by reading or skimming [lib/shape.mli](lib/shape.mli), [lib/tensor.mli](lib/tensor.mli), [lib/operation.ml](lib/operation.ml), [lib/train.ml](lib/train.ml), and (since 0.4.1) [lib/nn_blocks.ml](lib/nn_blocks.ml).
+6. Read [arrayjit/lib/writing_a_backend.md](arrayjit/lib/writing_a_backend.md).
+7. Read the implementation overview:
    1. Shape inference details [lib/shape_inference.md](lib/shape_inference.md).
    2. Backend-independent optimizations [arrayjit/lib/lowering_and_inlining.md](arrayjit/lib/lowering_and_inlining.md) -- _lowering_ means translating (compiling) from the high-level representation (as assignments) to the low-level representation.
    3. More documentation to come.
