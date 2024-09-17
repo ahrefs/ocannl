@@ -4,7 +4,7 @@
 
 (name ocannl)
 
-(version 0.4.1~beta2)
+(version 0.4.1)
 
 (generate_opam_files true)
 
