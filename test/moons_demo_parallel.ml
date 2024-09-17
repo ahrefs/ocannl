@@ -86,8 +86,8 @@ let%expect_test "Half-moons data parallel" =
      the results from the various CI targets. The first result is the one typically observed, the
      second comes from targets debian-arm64 and debian-s390x, the third one from debian-ppc. *)
   let result = [%expect.output] in
-  (* TODO: this approach is bordering on ridiculous, might be worth figuring out why computations
-     don't reproduce across machines. *)
+  (* TODO: this approach is bordering on, no, it got ridiculous, would be worth figuring out why
+     computations don't reproduce across machines. *)
   let typical_target_sync_cc =
     {|
 Batch=19, step=20, lr=0.195250, batch loss=0.263769, epoch loss=45.768608
@@ -2009,7 +2009,7 @@ Half-moons scatterplot and decision boundary:
 *************...................................................%%%%%%.%%%%%%%%%%%%%%%%%%%%%%%..........................
 ************.......................................................%....%%%%%.%%..%%%%...%..............................|}
   in
-  let yet_another_unknown_target_cc =
+  let yet_another_mac_target_cc =
     {|
 Batch=59, step=60, lr=0.195250, batch loss=0.749789, epoch loss=43.171278
 Epoch=0, step=60, lr=0.195250, epoch loss=43.171278
@@ -2094,6 +2094,61 @@ Half-moons scatterplot and decision boundary:
 ***********.....................................................%%%%%%.%%%%%%%%%%%%%%%%%%%%%%%..........................
 ***********........................................................%....%%%%%.%%..%%%%...%..............................|}
   in
+  let yet_yet_another_mac_target_cc =
+    {|
+Batch=19, step=20, lr=0.197750, batch loss=1.051057, epoch loss=39.077064
+Batch=39, step=40, lr=0.195250, batch loss=0.261981, epoch loss=42.821264
+Epoch=0, step=40, lr=0.195250, epoch loss=42.821264
+Batch=19, step=60, lr=0.192750, batch loss=0.275695, epoch loss=2.712253
+Batch=39, step=80, lr=0.190250, batch loss=0.221868, epoch loss=6.029776
+Epoch=1, step=80, lr=0.190250, epoch loss=6.029776
+Batch=19, step=100, lr=0.187750, batch loss=0.267967, epoch loss=2.653320
+Batch=39, step=120, lr=0.185250, batch loss=0.210309, epoch loss=5.889293
+Epoch=2, step=120, lr=0.185250, epoch loss=5.889293
+Batch=19, step=140, lr=0.182750, batch loss=0.245252, epoch loss=2.545632
+Batch=39, step=160, lr=0.180250, batch loss=0.198367, epoch loss=5.657765
+Epoch=3, step=160, lr=0.180250, epoch loss=5.657765
+Batch=19, step=180, lr=0.177750, batch loss=0.239847, epoch loss=2.446360
+Batch=39, step=200, lr=0.175250, batch loss=0.187839, epoch loss=5.435921
+Epoch=4, step=200, lr=0.175250, epoch loss=5.435921
+Batch=19, step=220, lr=0.172750, batch loss=0.229536, epoch loss=2.327686
+Batch=39, step=240, lr=0.170250, batch loss=0.179610, epoch loss=5.215845
+Epoch=5, step=240, lr=0.170250, epoch loss=5.215845
+Batch=19, step=260, lr=0.167750, batch loss=0.212184, epoch loss=2.234217
+Batch=39, step=280, lr=0.165250, batch loss=0.167163, epoch loss=5.010860
+Epoch=6, step=280, lr=0.165250, epoch loss=5.010860
+Batch=19, step=300, lr=0.162750, batch loss=0.192092, epoch loss=2.103425
+Batch=39, step=320, lr=0.160250, batch loss=0.144819, epoch loss=4.661177
+Epoch=7, step=320, lr=0.160250, epoch loss=4.661177
+Batch=19, step=340, lr=0.157750, batch loss=0.160005, epoch loss=1.805758
+Batch=39, step=360, lr=0.155250, batch loss=0.126462, epoch loss=4.176613
+Epoch=8, step=360, lr=0.155250, epoch loss=4.176613
+Batch=19, step=380, lr=0.152750, batch loss=0.148654, epoch loss=1.628916
+Batch=39, step=400, lr=0.150250, batch loss=0.096444, epoch loss=3.600679
+Epoch=9, step=400, lr=0.150250, epoch loss=3.600679
+Batch=19, step=420, lr=0.147750, batch loss=0.094088, epoch loss=1.298251
+Batch=39, step=440, lr=0.145250, batch loss=0.072883, epoch loss=3.125359
+Epoch=10, step=440, lr=0.145250, epoch loss=3.125359
+Batch=19, step=460, lr=0.142750, batch loss=0.059548, epoch loss=0.939508
+Batch=39, step=480, lr=0.140250, batch loss=0.045322, epoch loss=2.154090
+Epoch=11, step=480, lr=0.140250, epoch loss=2.154090
+Batch=19, step=500, lr=0.137750, batch loss=0.042893, epoch loss=0.582177
+Batch=39, step=520, lr=0.135250, batch loss=0.034900, epoch loss=1.544519
+Epoch=12, step=520, lr=0.135250, epoch loss=1.544519
+##****##*********.........................%%.%%%%%%%%...................****###*##**....................%%%%%%%%%%......
+****************..........................%%.%%%%%%%......................********......................%..%%.%%%.......
+****************............................%...%%%%%.%%....................*****..................%.%%%%%%%%%%.........
+***************...............................%.%%%%%.%%%%...................**....................%%%%%%%%.%.%%........
+**************..................................%..%%%%%...%......................................%%%%%%%%%%............
+*************.....................................%%%.%%%%%%%%..............................%%..%%%%.%%%%%.%............
+*************....................................%%%.%%%%%%.%%...%.........................%.%%%%%%%.%%%.%..............
+************.........................................%.%%%.%%%%%%%%%...................%.%%%%%%%%%%%%%.%.%..............
+***********...........................................%.%%%%.%%%%%%%%%.%%%%%%%%%.%.%%%%%%%%%%%%%%%%%%%.%................
+***********.............................................%%%%%%%%%%%%%%%%%%%%%.%%%%%%%.%%%.%%%%%%%%%%....................
+**********..................................................%%%%%%%%%%%%%%%%%.%%%%%%%%%%%%%%%%%%%.......................
+*********.......................................................%%%%%%.%%%%%%%%%%%%%%%%%%%%%%%..........................
+********...........................................................%....%%%%%.%%..%%%%...%..............................|}
+  in
   let result_deltas =
     List.map
       [
@@ -2109,7 +2164,8 @@ Half-moons scatterplot and decision boundary:
         ("another_unknown_target_cc", another_unknown_target_cc);
         ("another_mac_arm64_target_cc", another_mac_arm64_target_cc);
         ("another_mac_target_cc", another_mac_target_cc);
-        ("yet_another_unknown_target_cc", yet_another_unknown_target_cc);
+        ("yet_another_mac_target_cc", yet_another_mac_target_cc);
+        ("yet_yet_another_mac_target_cc", yet_yet_another_mac_target_cc);
       ]
       ~f:(fun (name, target) -> (name, Expect_test_patdiff.patdiff target result))
   in
