@@ -21,7 +21,7 @@ let make_p ~has_config ~loc =
 
 let make_vb ?value ~has_config ~loc ~str_loc ~ident string =
   let pat = Ast_helper.Pat.var ~loc { loc = str_loc; txt = ident } in
-  let value = match value with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
+  let value = match value with Some c -> [%expr Some [| [%e c] |]] | None -> [%expr None] in
   let v = [%expr [%e make_p ~has_config ~loc] ?values:[%e value] [%e string]] in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
@@ -119,6 +119,12 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
           | { pexp_desc = Pexp_ident _; pexp_loc = dims_loc; _ }
           | { pexp_desc = Pexp_field _; pexp_loc = dims_loc; _ } ) as d]] ->
       let pat, vb = make_vb_dims ~has_config ~loc ~str_loc ~ident ~dims:[ d ] ~dims_loc s in
+      (Map.singleton (module String) ident vb, pat2expr pat)
+  | [%expr
+      [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
+        [%e?
+          ( { pexp_desc = Pexp_constant (Pconst_float _); pexp_loc = _; _ } ) as value]] ->
+      let pat, vb = make_vb ~value ~has_config ~loc ~str_loc ~ident s in
       (Map.singleton (module String) ident vb, pat2expr pat)
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]

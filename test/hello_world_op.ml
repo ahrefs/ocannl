@@ -42,7 +42,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
   let ctx = Backend.init device in
   Rand.init 0;
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
-  let%op y = ("hey" * 'q' 2.0) + 'p' 1.0 in
+  let%op y = ("hey" 7.0 * 'q' 2.0) + 'p' 1.0 in
   Train.forward_and_forget backend ctx y;
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
@@ -53,7 +53,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
     │┌──────┬─────────┐      │
     ││      │axis 1   │      │
     │├──────┼─────────┼───── │
-    ││axis 0│ 3.69e-2 │      │
+    ││axis 0│ 7.00e+0 │      │
     │└──────┴─────────┘      │
     └────────────────────────┘
     |}];
@@ -65,7 +65,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
     │┌┬─────────┐       │
     │││axis 0   │       │
     │├┼─────────┼────── │
-    │││ 1.07e+0 │       │
+    │││ 1.50e+1 │       │
     │└┴─────────┘       │
     └───────────────────┘
     |}]

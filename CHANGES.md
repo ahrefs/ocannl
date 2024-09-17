@@ -1,4 +1,4 @@
-## [0.4.1] -- 2024-09-14
+## [0.4.1] -- 2024-09-17
 
 ### Added
 
@@ -10,6 +10,7 @@
 - A placeholder `nn_blocks.ml` hinting at an intended design pattern for model components.
 - A memory model for the multiple virtual devices per physical device setup, implemented in the CUDA backend. It fixes the CUDA backend behavior in the data parallelism benchmark.
 - Slides for the Fun OCaml meetup: [docs/Fun OCaml](docs/OCANNL-slides-basics_backprop_training_loop_codegen.pdf).
+- New syntax: inline tensor declarations with a literal float as initial value.
 
 ### Changed
 
