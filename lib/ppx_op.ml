@@ -122,8 +122,7 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
       (Map.singleton (module String) ident vb, pat2expr pat)
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
-        [%e?
-          ( { pexp_desc = Pexp_constant (Pconst_float _); pexp_loc = _; _ } ) as value]] ->
+        [%e? { pexp_desc = Pexp_constant (Pconst_float _); pexp_loc = _; _ } as value]] ->
       let pat, vb = make_vb ~value ~has_config ~loc ~str_loc ~ident s in
       (Map.singleton (module String) ident vb, pat2expr pat)
   | [%expr
