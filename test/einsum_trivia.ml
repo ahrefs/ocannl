@@ -8,8 +8,7 @@ module NTDSL = Operation.NTDSL
 module Rand = Arrayjit.Rand.Lib
 
 let%expect_test "einsum1 permute axes" =
-Tensor.unsafe_reinitialize ();
-Tensor.unsafe_reinitialize ();
+  Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
