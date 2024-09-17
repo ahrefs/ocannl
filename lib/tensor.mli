@@ -190,7 +190,8 @@ val consume_backprop_code : t -> asgns * asgns
 
 val unsafe_reinitialize : unit -> unit
 (** Bring global state to its initialization values. This invalidates any previously defined tensors
-    and tensor nodes. Also invokes {!Shape.unsafe_reinitialize}. *)
+    and tensor nodes. Also reinitializes the modules: {!Shape}, {!Arrayjit.Tnode},
+    {!Arrayjit.Rand.Random_for_tests}. *)
 
 (** {2 Printing.} *)
 

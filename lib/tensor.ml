@@ -75,6 +75,7 @@ let unsafe_reinitialize () =
   session_state.forward_roots <- Map.empty (module Int);
   session_state.backprop_roots <- Map.empty (module Int);
   Tn.Registry.clear Tn.registry;
+  Arrayjit.Rand.Random_for_tests.rand := (1l : Int32.t);
   Shape.unsafe_reinitialize ()
 
 let is_fwd_root t = Map.mem session_state.forward_roots t.id
