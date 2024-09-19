@@ -66,6 +66,7 @@ This is very tentative.
 * 0.4.2: device-to-device synchronization.
   * Need to add support for CUDA events to cudajit.
   * This is backend-specific so affects the abstract backend API.
+* 0.4.3: Apple Metal backend.
 * 0.5: Replicate the scaffolding from [llm.c](https://github.com/karpathy/llm.c) for training GPT-2.
   * More of primitive numeric operations.
   * Useful building blocks for models in [lib/nn_blocks.ml](lib/nn_blocks.ml).
