@@ -63,21 +63,37 @@ IMPORTANT: due to potential bugs, debug logging from CUDA in complex settings cu
 
 This is very tentative.
 
-* 0.4.1
-  * Half precision. Maybe improvements for mixed-precision computations.
-  * Resolve remaining issues with the new scheduler.
-  * Initial version of [lib/nn_blocks.ml](lib/nn_blocks.ml).
-* 0.5
+* 0.4.2: device-to-device synchronization.
+  * Need to add support for CUDA events to cudajit.
+  * This is backend-specific so affects the abstract backend API.
+* 0.5: Replicate the scaffolding from [llm.c](https://github.com/karpathy/llm.c) for training GPT-2.
   * More of primitive numeric operations.
   * Useful building blocks for models in [lib/nn_blocks.ml](lib/nn_blocks.ml).
   * A language model example.
-* 0.6
-  * Getting more out of GPUs: better CUDA generation.
+  * Port (translate or bind) the Python files from [llm.c](https://github.com/karpathy/llm.c) to implement tokenization, data loading and saving etc.
+  * At the end of 0.5.x, we should have an apples-to-apples benchmark comparing OCANNL to [llm.c](https://github.com/karpathy/llm.c) for both CPU and GPU.
+* 0.6: Optimize performance -- low hanging fruit.
+  * First harvested from [Fast Multidimensional Matrix Multiplication on CPU from Scratch](https://siboehm.com/articles/22/Fast-MMM-on-CPU).
+  * Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
+  * Finally from [llm.c](https://github.com/karpathy/llm.c).
+  * These will require splitting a routine into multiple CUDA kernels.
+* 0.7: A new abstraction layer automating compilation/linking, execution, and some data transfers.
+  * E.g. host-device transfers: copy from host if host update is later than the previous device update.
+  * Concise syntax for transfers into the merge buffer since we know which tensor node is transferred and where to.
+  * At the end of 0.7.x, OCANNL has a REPL.
+* 0.8: Optimize performance: program search.
+  * Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
+  * We should also reproduce the search that tinygrad is doing.
+  * Check which optimizations are missing against the implementation of [llm.c](https://github.com/karpathy/llm.c).
 
 ### Releases
 
 For more details, see [CHANGES](CHANGES.md).
 
+* **0.4.1 Half precision, mixed precision, CUDA virtual devices**
+  * Half precision. Maybe improvements for mixed-precision computations.
+  * Resolve remaining issues with the new scheduler.
+  * Initial version of [lib/nn_blocks.ml](lib/nn_blocks.ml).
 * **v0.4 merge buffers, C-syntax backend builder**: a significant refactoring of the API.
 * **v0.3 shape inference, jitted routines**: a major rewrite of the whole project.
   * **v0.3.3**: continuous integration and opam release.
