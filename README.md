@@ -82,10 +82,15 @@ This is very tentative.
   * E.g. host-device transfers: copy from host if host update is later than the previous device update.
   * Concise syntax for transfers into the merge buffer since we know which tensor node is transferred and where to.
   * At the end of 0.7.x, OCANNL has a REPL.
-* 0.8: Optimize performance: program search.
+* 0.8: Hopefully-efficient expressivity: block tensors, convolution.
+  * Requires extending expressivity of projections and the generalized einsum notation.
+  * Then, we can add convnet building blocks and corresponding examples starting with MNIST.
+* 0.9: Optimize performance: program search.
   * Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
   * We should also reproduce the search that tinygrad is doing.
   * Check which optimizations are missing against the implementation of [llm.c](https://github.com/karpathy/llm.c).
+* 1.0: Few documentation gaps, some degree of feature completeness.
+  * Feature completeness demonstrated by resolving / implementing a few of the $\color{green}{\text{explore}}$ issues.
 
 ### Releases
 
