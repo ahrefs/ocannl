@@ -85,6 +85,7 @@ This is very tentative.
 * 0.8: Hopefully-efficient expressivity: block tensors, convolution.
   * Requires extending expressivity of projections and the generalized einsum notation.
   * Then, we can add convnet building blocks and corresponding examples starting with MNIST.
+  * Verify or rethink usefulness of dimension labels, and whether to introduce axis labels.
 * 0.9: Optimize performance: program search.
   * Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
   * We should also reproduce the search that tinygrad is doing.
