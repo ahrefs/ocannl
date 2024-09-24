@@ -20,6 +20,7 @@
 open Base
 module Tn = Tnode
 module Lazy = Utils.Lazy
+module Cu = Cudajit
 module Debug_runtime = Utils.Debug_runtime
 open Backend_utils.Types
 
@@ -28,18 +29,18 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-type buffer_ptr = Cudajit.deviceptr
+type buffer_ptr = Cu.Deviceptr.t
 
-let sexp_of_buffer_ptr ptr = Sexp.Atom (Cudajit.string_of_deviceptr ptr)
+let sexp_of_buffer_ptr ptr = Sexp.Atom (Cu.Deviceptr.string_of ptr)
 
-type ctx_array = Cudajit.deviceptr
+type ctx_array = Cu.Deviceptr.t
 
 let sexp_of_ctx_array = sexp_of_buffer_ptr
 
 type physical_device = {
-  dev : (Cudajit.device[@sexp.opaque]);
+  dev : (Cu.Device.t[@sexp.opaque]);
   ordinal : int;
-  primary_context : (Cudajit.context[@sexp.opaque]);
+  primary_context : (Cu.Context.t[@sexp.opaque]);
   mutable copy_merge_buffer : buffer_ptr;
   mutable copy_merge_buffer_capacity : int;
   mutable latest_subordinal : int;
@@ -58,18 +59,18 @@ type physical_device = {
 
 and device = {
   physical : physical_device;
-  stream : (Cudajit.stream[@sexp.opaque]);
+  stream : (Cu.Stream.t[@sexp.opaque]);
   subordinal : int;
   mutable merge_buffer : (buffer_ptr * Tn.t) option;
 }
 
 and context = {
   label : string;
-  ctx : (Cudajit.context[@sexp.opaque]);
+  ctx : (Cu.Context.t[@sexp.opaque]);
       (** Currently, this is always the same as [device.physical.primary_context]. *)
   device : device;
   parent : context option;
-  run_module : (Cudajit.module_[@sexp.opaque]) option;
+  run_module : (Cu.Module.t[@sexp.opaque]) option;
       (** Code jitted for this context, typically independent of the parent and child contexts, but
           shared by batch linked contexts. *)
   ctx_arrays : ctx_array Map.M(Tn).t;
@@ -87,19 +88,19 @@ let is_initialized, initialize =
   let init (config : config) : unit =
     initialized := true;
     global_config := config;
-    Cudajit.init ()
+    Cu.init ()
   in
   ((fun () -> !initialized), init)
 
-let num_physical_devices = Cudajit.device_get_count
+let num_physical_devices = Cu.Device.get_count
 let devices = ref @@ Core.Weak.create 0
 
 (* Unlike [devices] above, [initialized_devices] never forgets its entries. *)
 let initialized_devices = Hash_set.create (module Int)
 
 let set_ctx ctx =
-  let cur_ctx = Cudajit.ctx_get_current () in
-  if not @@ phys_equal ctx cur_ctx then Cudajit.ctx_set_current ctx
+  let cur_ctx = Cu.Context.get_current () in
+  if not @@ phys_equal ctx cur_ctx then Cu.Context.set_current ctx
 
 (* It's not actually used, but it's required by the [Backend] interface. *)
 let alloc_buffer ?old_buffer ~size_in_bytes device =
@@ -107,17 +108,17 @@ let alloc_buffer ?old_buffer ~size_in_bytes device =
   | Some (old_ptr, old_size) when size_in_bytes <= old_size -> old_ptr
   | Some (old_ptr, _old_size) ->
       set_ctx device.physical.primary_context;
-      Cudajit.mem_free old_ptr;
-      Cudajit.mem_alloc ~size_in_bytes
+      Cu.Deviceptr.mem_free old_ptr;
+      Cu.Deviceptr.mem_alloc ~size_in_bytes
   | None ->
       set_ctx device.physical.primary_context;
-      Cudajit.mem_alloc ~size_in_bytes
+      Cu.Deviceptr.mem_alloc ~size_in_bytes
 
 let opt_alloc_merge_buffer ~size_in_bytes phys_dev =
   if phys_dev.copy_merge_buffer_capacity < size_in_bytes then (
     set_ctx phys_dev.primary_context;
-    Cudajit.mem_free phys_dev.copy_merge_buffer;
-    phys_dev.copy_merge_buffer <- Cudajit.mem_alloc ~size_in_bytes;
+    Cu.Deviceptr.mem_free phys_dev.copy_merge_buffer;
+    phys_dev.copy_merge_buffer <- Cu.Deviceptr.mem_alloc ~size_in_bytes;
     phys_dev.copy_merge_buffer_capacity <- size_in_bytes)
 
 let get_device ~(ordinal : int) : physical_device =
@@ -128,14 +129,14 @@ let get_device ~(ordinal : int) : physical_device =
     devices := Core.Weak.create (ordinal + 1);
     Core.Weak.blit old 0 !devices 0 (Core.Weak.length old));
   Option.value_or_thunk (Core.Weak.get !devices ordinal) ~default:(fun () ->
-      let dev = Cudajit.device_get ~ordinal in
-      let primary_context = Cudajit.device_primary_ctx_retain dev in
+      let dev = Cu.Device.get ~ordinal in
+      let primary_context = Cu.Context.get_primary dev in
       let copy_merge_buffer_capacity = 8 in
       set_ctx primary_context;
       if Utils.debug_log_from_routines () && not (Hash_set.mem initialized_devices ordinal) then
-        Option.iter Utils.settings.cuda_printf_fifo_size ~f:Cudajit.(ctx_set_limit PRINTF_FIFO_SIZE);
+        Option.iter Utils.settings.cuda_printf_fifo_size ~f:Cu.Context.(set_limit PRINTF_FIFO_SIZE);
       Hash_set.add initialized_devices ordinal;
-      let copy_merge_buffer = Cudajit.mem_alloc ~size_in_bytes:copy_merge_buffer_capacity in
+      let copy_merge_buffer = Cu.Deviceptr.mem_alloc ~size_in_bytes:copy_merge_buffer_capacity in
       let result =
         {
           dev;
@@ -159,7 +160,7 @@ let new_virtual_device physical =
   physical.latest_subordinal <- physical.latest_subordinal + 1;
   (* Strange that we need ctx_set_current even with a single device! *)
   set_ctx physical.primary_context;
-  let stream = Cudajit.stream_create ~non_blocking:true () in
+  let stream = Cu.Stream.create ~non_blocking:true () in
   { physical; stream; subordinal; merge_buffer = None }
 
 let cuda_properties =
@@ -167,7 +168,7 @@ let cuda_properties =
     lazy
       (Array.init (num_physical_devices ()) ~f:(fun ordinal ->
            let dev = get_device ~ordinal in
-           lazy (Cudajit.device_get_attributes dev.dev)))
+           lazy (Cu.Device.get_attributes dev.dev)))
   in
   fun physical ->
     if not @@ is_initialized () then invalid_arg "cuda_properties: CUDA not initialized";
@@ -190,10 +191,10 @@ let get_name device =
 
 let await device : unit =
   set_ctx device.physical.primary_context;
-  Cudajit.stream_synchronize device.stream;
+  Cu.Stream.synchronize device.stream;
   Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ())
 
-let is_idle device = Cudajit.stream_is_ready device.stream
+let is_idle device = Cu.Stream.is_ready device.stream
 
 let finalize ctx =
   if
@@ -202,13 +203,13 @@ let finalize ctx =
   then (
     (* await does this: set_ctx ctx.device.physical.primary_context; *)
     await ctx.device;
-    Option.iter ctx.run_module ~f:Cudajit.module_unload;
+    Option.iter ctx.run_module ~f:Cu.Module.unload;
     Map.iteri ctx.ctx_arrays ~f:(fun ~key ~data:ptr ->
         if
           (not (Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_arrays key)))
           && not (Hashtbl.mem ctx.device.physical.cross_device_candidates key)
-        then Cudajit.mem_free ptr);
-    if Option.is_none ctx.parent then Cudajit.stream_destroy ctx.device.stream)
+        then Cu.Deviceptr.mem_free ptr);
+    if Option.is_none ctx.parent then Cu.Stream.destroy ctx.device.stream)
 
 let init device =
   let ctx =
@@ -232,11 +233,11 @@ let unsafe_cleanup () =
   for i = 0 to len - 1 do
     Option.iter (Core.Weak.get !devices i) ~f:(fun device ->
         if Atomic.compare_and_set device.released false true then (
-          Cudajit.ctx_set_current device.primary_context;
-          Cudajit.ctx_synchronize ();
+          Cu.Context.set_current device.primary_context;
+          Cu.Context.synchronize ();
           Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ());
-          Hashtbl.iter device.cross_device_candidates ~f:Cudajit.mem_free;
-          Cudajit.device_primary_ctx_release device.dev))
+          Hashtbl.iter device.cross_device_candidates ~f:Cu.Deviceptr.mem_free;
+          Cu.Device.primary_ctx_release device.dev))
   done;
   Core.Weak.fill !devices 0 len None
 
@@ -245,7 +246,7 @@ let%diagn_l_sexp from_host (ctx : context) tn =
   | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
       set_ctx ctx.ctx;
       [%log "copying", Tn.debug_name tn, "to", (dst : ctx_array), "from host"];
-      let f src = Cudajit.memcpy_H_to_D_async ~dst ~src ctx.device.stream in
+      let f src = Cu.Stream.memcpy_H_to_D ~dst ~src ctx.device.stream in
       Ndarray.map { f } hosted;
       true
   | _ -> false
@@ -255,7 +256,7 @@ let%track_l_sexp to_host (ctx : context) (tn : Tn.t) =
   | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
       set_ctx ctx.ctx;
       [%log "copying", Tn.debug_name tn, "at", (src : ctx_array), "to host"];
-      let f dst = Cudajit.memcpy_D_to_H_async ~dst ~src ctx.device.stream in
+      let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src ctx.device.stream in
       Ndarray.map { f } hosted;
       true
   | _ -> false
@@ -265,10 +266,10 @@ let%track_l_sexp rec device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : con
   let same_physical = phys_equal dst.device.physical src.device.physical in
   let memcpy ~d_arr ~s_arr =
     if same_physical then
-      Cudajit.memcpy_D_to_D_async ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:d_arr ~src:s_arr
+      Cu.Stream.memcpy_D_to_D ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:d_arr ~src:s_arr
         dst.device.stream
     else
-      Cudajit.memcpy_peer_async ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:d_arr ~dst_ctx:dst.ctx
+      Cu.Stream.memcpy_peer ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:d_arr ~dst_ctx:dst.ctx
         ~src:s_arr ~src_ctx:src.ctx dst.device.stream
   in
   if
@@ -316,7 +317,7 @@ let%track_l_sexp rec device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : con
 
 type code = {
   traced_store : Low_level.traced_store;
-  ptx : (Cudajit.compile_to_ptx_result[@sexp.opaque]);
+  ptx : (Cu.Nvrtc.compile_to_ptx_result[@sexp.opaque]);
   params : (string * param_source) list;
   bindings : Indexing.unit_bindings;
   name : string;
@@ -325,7 +326,7 @@ type code = {
 
 type code_batch = {
   traced_stores : Low_level.traced_store option array;
-  ptx : (Cudajit.compile_to_ptx_result[@sexp.opaque]);
+  ptx : (Cu.Nvrtc.compile_to_ptx_result[@sexp.opaque]);
   bindings : Indexing.unit_bindings;
   params_and_names : ((string * param_source) list * string) option array;
 }
@@ -346,14 +347,14 @@ let%diagn_sexp cuda_to_ptx ~name cu_src =
   let options =
     "--use_fast_math" :: (if Utils.with_runtime_debug () then [ "--device-debug" ] else [])
   in
-  let ptx = Cu.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug in
+  let ptx = Cu.Nvrtc.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug in
   if Utils.settings.output_debug_files_in_build_directory then (
     let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".ptx" in
-    Stdio.Out_channel.output_string oc @@ Cu.string_from_ptx ptx;
+    Stdio.Out_channel.output_string oc @@ Cu.Nvrtc.string_from_ptx ptx;
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc;
     let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".cu_log" in
-    Stdio.Out_channel.output_string oc @@ Option.value_exn ~here:[%here] (Cu.compilation_log ptx);
+    Stdio.Out_channel.output_string oc @@ Option.value_exn ~here:[%here] (Cu.Nvrtc.compilation_log ptx);
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);
   ptx
@@ -488,7 +489,7 @@ let get_global_run_id =
 let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx_arrays
     lowered_bindings run_module =
   let module Cu = Cudajit in
-  let func = Cu.module_get_function run_module ~name in
+  let func = Cu.Module.get_function run_module ~name in
   let context =
     { prior_context with parent = Some prior_context; run_module = Some run_module; ctx_arrays }
   in
@@ -498,18 +499,18 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
     let log_id_prefix = Int.to_string log_id ^ ": " in
     [%log_result
       "Launching", name, context.label, (log_id : int), (params : (string * param_source) list)];
-    let module Cu = Cudajit in
-    let args : Cu.kernel_param list =
+    let module S = Cu.Stream in
+    let args : S.kernel_param list =
       (* TODO: should we prohibit or warn about local-only tensors that are in
          prior_context.ctx_arrays? *)
       List.map params ~f:(function
         | _name, Param_ptr tn ->
             let ptr = Option.value_exn ~here:[%here] @@ Map.find ctx_arrays tn in
-            Cu.Tensor ptr
-        | _name, Log_file_name -> Cu.Int log_id
+            S.Tensor ptr
+        | _name, Log_file_name -> S.Int log_id
         | _name, Merge_buffer ->
             let ptr = fst @@ Option.value_exn ~here:[%here] context.device.merge_buffer in
-            Cu.Tensor ptr
+            S.Tensor ptr
         | _name, Static_idx s ->
             let i = Indexing.find_exn lowered_bindings s in
             if !i < 0 then
@@ -525,12 +526,12 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
                        [%string
                          "cuda: static index %{Indexing.symbol_ident s.static_symbol} is too big: \
                           %{upto#Int}"]);
-            Cu.Int !i)
+            S.Int !i)
     in
     set_ctx context.ctx;
     (* FIXME: this happens inside the kernel. *)
     (* Map.iteri ctx_arrays ~f:(fun ~key ~data:ptr -> if key.Low_level.zero_initialized then
-       Cu.memset_d8_async ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key.Low_level.tn)); *)
+       Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key.Low_level.tn)); *)
     [%log "launching the kernel"];
     (* TODO: This doesn't help. *)
     (* Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ()); *)
@@ -539,7 +540,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
        [%log_block
          context.label;
          Utils.log_trace_tree _output]);
-    Cu.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.device.stream
+    S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.device.stream
       args;
     [%log "kernel launched"]
   in
@@ -556,7 +557,7 @@ let%diagn_sexp alloc_if_needed ctx device ~key ~data:node ctx_arrays =
     [%log Tn.debug_name key, "read_only", (node.read_only : bool)];
     let default () =
       set_ctx ctx;
-      Cudajit.mem_alloc ~size_in_bytes:(Tn.size_in_bytes key)
+      Cu.Deviceptr.mem_alloc ~size_in_bytes:(Tn.size_in_bytes key)
     in
     let add_new () = Map.add_exn ctx_arrays ~key ~data:(default ()) in
     let physical = device.physical in
@@ -584,7 +585,8 @@ let%diagn_sexp alloc_if_needed ctx device ~key ~data:node ctx_arrays =
   else ctx_arrays
 
 let run_options () =
-  if Utils.with_runtime_debug () then Cudajit.[ GENERATE_DEBUG_INFO true; GENERATE_LINE_INFO true ]
+  if Utils.with_runtime_debug () then
+    Cu.Module.[ GENERATE_DEBUG_INFO true; GENERATE_LINE_INFO true ]
   else []
 
 let%track3_sexp link prior_context (code : code) : context * _ * _ =
@@ -594,7 +596,7 @@ let%track3_sexp link prior_context (code : code) : context * _ * _ =
     Hashtbl.fold ~init:prior_context.ctx_arrays code.traced_store
       ~f:(alloc_if_needed ctx prior_context.device)
   in
-  let run_module = Cudajit.module_load_data_ex code.ptx (run_options ()) in
+  let run_module = Cu.Module.load_data_ex code.ptx (run_options ()) in
   let idx_params = Indexing.bound_symbols code.bindings in
   let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let context, task =
@@ -609,7 +611,7 @@ let%track3_sexp link_batch prior_context (code_batch : code_batch) : context * _
   let module Cu = Cudajit in
   let ctx = prior_context.ctx in
   set_ctx ctx;
-  let run_module = Cu.module_load_data_ex code_batch.ptx (run_options ()) in
+  let run_module = Cu.Module.load_data_ex code_batch.ptx (run_options ()) in
   let (context, _ctx_arrays), procs =
     Array.fold_mapi code_batch.params_and_names ~init:(prior_context, prior_context.ctx_arrays)
       ~f:(fun i (context, ctx_arrays) pns ->
