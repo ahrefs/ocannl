@@ -98,39 +98,64 @@ module type Backend = sig
   (** Returns the routines for the procedures included in the code batch. The returned context is
       downstream of all the returned routines. *)
 
+  type event
+  (** An event tracks if a device finished computing past a particular point in its schedue. These
+      values are used internally for scheduling across devices of the backend, and can be used for
+      explicit scheduling. *)
+
+  val await_ev : event -> unit
+  (** Blocks till the event completes, if it's not done already. *)
+
+  val is_done : event -> bool
+  (** Whether the event completed. *)
+
+  val work_for : context -> Tnode.t -> event option
+  (** If the tensor node is in the context, returns the event indicating if currently running or
+      scheduled computations modifying that node on the context's device have completed.
+
+      NOTE: [work_for ctx tn], if work tracking was not registered for [tn], will register work
+      tracking for [tn] and return the event tracking all currently scheduled computations on
+      [ctx]'s device. *)
+
+  val will_wait_for : context -> event -> unit
+  (** Schedules waiting for the given event on the context's device.
+
+      NOTE: it should rarely be needed to call [will_wait_for] explicitly, because it is typically
+      called internally when necessary. But there is one exception, see {!device_to_device} when
+      [into_merge_buffer=Streaming]. *)
+
   val from_host : context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, schedules a copy from host to context and returns
-      true, otherwise returns false. NOTE: when run for a device, it's the caller's responsibility
-      to synchronize the device before the host's data is overwritten. *)
+  (** If the tensor node is both hosted and in-context, schedules a copy from host to context and
+      returns true, otherwise returns false. NOTE: it's the caller's responsibility to synchronize
+      the device (via [await ctx.device] or [await_ev (work_for ctx tn)]) before the host's data is
+      overwritten. *)
 
   val to_host : context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, schedules a copy from context to host and returns
-      true, otherwise returns false. NOTE: when run for a device, it's the caller's responsibility
-      to synchronize the device before the host's data is read. *)
+  (** If the tensor node is both hosted and in-context, schedules a copy from context to host and
+      returns true, otherwise returns false. NOTE: it's the caller's responsibility to synchronize
+      the device (via [await ctx.device] or [await_ev (work_for ctx tn)]) before the host's data is
+      read. *)
 
   val device_to_device :
     Tnode.t -> into_merge_buffer:merge_buffer_use -> dst:context -> src:context -> bool
-  (** If the node is absent from the [src] context and either it is present in the [dst] context or
-      [~into_merge_buffer] is different from [No]: raises an error.
+  (** [device_to_device tn ~into_merge_buffer ~dst ~src] proceeds as follows:
+      - If the node is absent from the [src] context and either it is present in the [dst] context
+        or [into_merge_buffer] is different from [No]: raises an error.
+      - If the node is absent from [dst] and [into_merge_buffer=No]: returns false.
+      - Executes [will_wait_for dst (work_for src tn)].
+      - If [into_merge_buffer=No]: schedules a copy of the tensor node from the device of [src] to
+        the device of [dst].
+      - If [into_merge_buffer] is different from [No]: sets on [dst] the merge buffer source to the
+        given node. If [into_merge_buffer=Streaming], remembers the buffer pointer of the source
+        node to use for streaming, without blocking. If [into_merge_buffer=Copy], schedules copying
+        from [src] to the merge buffer of [dst]'s device.
+      - If the [dst] context resulted from a compilation with [Streaming] or [Copy] specific merge
+        buffer code, the [device_to_device] call should fail immediately if there's a mismatch with
+        [into_merge_buffer].
 
-      If [~into_merge_buffer:No]: If the node is present in the [dst] context, schedules a copy of
-      the tensor node from the device of [src] to the device of [dst] and returns true, otherwise
-      returns false.
-
-      If [~into_merge_buffer] is different from [No]: schedules the following task and returns true.
-
-      The merge-buffer task sets on [dst] the merge buffer source to the given node. If
-      [~into_merge_buffer:Streaming], remembers the buffer pointer of the source node to use for
-      streaming, without blocking. If [~into_merge_buffer:Copy], copies from [src] to the merge
-      buffer of [dst]'s device.
-
-      If the [dst] context resulted from a compilation with [Streaming] or [Copy] specific merge
-      buffer code, the [device_to_device] call should fail immediately if there's a mismatch with
-      [~into_merge_buffer].
-
-      NOTE: it's the caller's responsibility to synchronize the [src] device, if needed, {i before}
-      calling [device_to_device], and if [~into_merge_buffer:Streaming], the [dst] device
-      {i afterward}, before any computations on the [src] device overwrite the node. *)
+      NOTE: If [into_merge_buffer:Streaming], after scheduling the work on [dst] using the merge
+      buffer but before scheduling work on [src] that modifies [tn], execute
+      [will_wait_for src (all_work (get_ctx_device dst))]. *)
 
   type physical_device
   type device
@@ -140,6 +165,10 @@ module type Backend = sig
 
   val await : device -> unit
   (** Blocks till the device becomes idle, i.e. synchronizes the device. *)
+
+  val all_work : device -> event
+  (** Returns the event indicating if any currently running or scheduled computations on the device
+      have completed. *)
 
   val is_idle : device -> bool
   (** Whether the device is currently waiting for work. *)
@@ -172,6 +201,25 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let sexp_of_task_queue q =
     Sexp.(List [ Atom "task_queue_of_size"; Atom (Int.to_string @@ Queue.size q) ])
+
+  type event = Not_implemented_yet  (** TODO: NOT IMPLEMENTED YET *)
+
+  (** TODO: Blocks till the event completes, if it's not done already. *)
+  let await_ev Not_implemented_yet = ()
+
+  (** TODO: Whether the event completed. *)
+  let is_done Not_implemented_yet = true
+
+  (** TODO: If the tensor node is in the context, returns the event indicating if currently running
+      or scheduled computations modifying that node on the context's device have completed.
+
+      NOTE: [work_for ctx tn], if work tracking was not registered for [tn], will register work
+      tracking for [tn] and return the event tracking all currently scheduled computations on
+      [ctx]'s device. *)
+  let work_for _ctx _tn = Some Not_implemented_yet
+
+  (** TODO: Schedules waiting for the given event on the context's device. *)
+  let will_wait_for _ctx Not_implemented_yet = ()
 
   type device_state = {
     mutable keep_spinning : bool;
@@ -221,6 +269,10 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
       Mut.unlock d.mut;
       Option.iter d.device_error ~f:(fun e ->
           Exn.reraise e @@ name ^ " device " ^ Int.to_string device.ordinal))
+
+  (** TODO: Returns the event indicating if any currently running or scheduled computations on the
+      device have completed. *)
+  let all_work _device = Not_implemented_yet
 
   let%track3_l_sexp schedule_task device task =
     assert (Domain.is_main_domain ());
@@ -456,7 +508,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
 
   let num_physical_devices () = Domain.recommended_domain_count () - 1
   let suggested_num_virtual_devices _device = 1
-  let devices = Array.create ~len:(num_physical_devices ()) None
+  let devices : physical_device option array = Array.create ~len:(num_physical_devices ()) None
 
   let%track2_sexp unsafe_cleanup () =
     assert (Domain.is_main_domain ());
@@ -497,8 +549,14 @@ let sync_suggested_num_virtual_devices = ref 1
 
 (** A minimalisitc wrapper creating backends where all calls run synchronously on the main thread.
     There is only one physical device, but an arbitrary number of virtual devices. *)
-module Sync_backend (Backend : No_device_backend) (* : Backend *) = struct
+module Sync_backend (Backend : No_device_backend) : Backend = struct
   type buffer_ptr = Backend.buffer_ptr [@@deriving sexp_of]
+  type event = unit
+
+  let await_ev () = ()
+  let is_done () = true
+  let work_for _context _tn = Some ()
+  let will_wait_for _context () = ()
 
   type device = {
     subordinal : int;
@@ -516,10 +574,11 @@ module Sync_backend (Backend : No_device_backend) (* : Backend *) = struct
 
   let expected_merge_node (code : code) = Backend.expected_merge_node code
   let expected_merge_nodes (codes : code_batch) = Backend.expected_merge_nodes codes
+  let all_work _device = ()
   let is_idle _device = true
   let name = "sync " ^ Backend.name
   let await _device = ()
-  let global_run_no = ref 0
+  (* let global_run_no = ref 0 *)
 
   type context = { device : device; ctx : Backend.context; expected_merge_node : Tnode.t option }
   [@@deriving sexp_of]
@@ -933,6 +992,20 @@ module Cuda_backend : Backend = struct
                 bindings;
                 name;
               })) )
+
+  type event = Cudajit.Event.t
+
+  let work_for _ctx _tn = Some (Cudajit.Event.create ())
+  (* TODO: NOT IMPLEMENTED YET *)
+
+  let is_done event = Cudajit.Event.query event
+  let will_wait_for _context _event = ()
+  (* Cudajit.Event.wait (get_ctx_device context.ctx).Cuda_backend.stream event *)
+  (* TODO: NOT IMPLEMENTED YET *)
+
+  let await_ev event = Cudajit.Event.synchronize event
+  let all_work _device = Cudajit.Event.create ()
+  (* TODO: NOT IMPLEMENTED YET *)
 
   let init device = { ctx = init device; expected_merge_node = None }
   let get_ctx_device context = get_ctx_device context.ctx

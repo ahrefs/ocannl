@@ -2,8 +2,7 @@
 
 ### Added
 
-- TODO: (Virtual) device-to-device synchronization functionality.
-- TODO: lazy per-tensor-node synchronization functionality.
+- TODO: (Virtual) device-to-device synchronization functionality, with lazy per-tensor-node synchronization.
 
 ### Changed
 

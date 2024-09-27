@@ -15,6 +15,9 @@
 
 <!-- /TOC -->
 
+NOTE: these are outdated.
+TODO: update regarding events and device-to-device synchronization.
+
 ## Design around compiling and running code, backend interfaces
 
 Currently, OCANNL integrates new backends via code in [Backends](backends.ml), so it's the "sink" of backend module dependencies; [Backend_utils](backend_utils.ml) is the "source". `Backend_utils.Types` introduces the context-specific `routine` type, for code executable on a backend. The interface `Backends.No_device_backend` has `compile` functions that take `Assignments.t` as input, to allow full flexibility in backend implementations. There is a helper `Backends.lower_assignments` that wraps `Assignments.lower` and `Low_level.optimize_proc`, since currently all backends use the optimized C-like representation `Low_level.t`. The user-facing interface `Backends.Backend` builds on top of `No_device_backend` providing multi-device functionality. The functor `Multicore_backend` converts a `No_device_backend` targetting the CPU into a `Backend` whose devices are parallel threads (and ultimately the CPU cores).
