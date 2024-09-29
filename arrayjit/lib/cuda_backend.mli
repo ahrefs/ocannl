@@ -3,7 +3,13 @@ open Base
 type context [@@deriving sexp_of]
 type code [@@deriving sexp_of]
 type code_batch [@@deriving sexp_of]
-type ctx_array
+type ctx_array [@@deriving sexp_of]
+type event
+
+val sync : event -> unit
+val is_done : event -> bool
+val work_for : context -> Tnode.t -> event option
+val will_wait_for : context -> event -> unit
 
 open Backend_utils.Types
 
@@ -52,6 +58,7 @@ val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> device -
 val init : device -> context
 val await : device -> unit
 val is_idle : device -> bool
+val all_work : device -> event
 val sexp_of_device : device -> Sexplib.Sexp.t
 val num_physical_devices : unit -> int
 val suggested_num_virtual_devices : physical_device -> int

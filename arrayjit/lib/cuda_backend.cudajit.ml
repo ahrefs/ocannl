@@ -33,9 +33,10 @@ type buffer_ptr = Cu.Deviceptr.t
 
 let sexp_of_buffer_ptr ptr = Sexp.Atom (Cu.Deviceptr.string_of ptr)
 
-type ctx_array = Cu.Deviceptr.t
+type event = Cu.Delimited_event.t
 
-let sexp_of_ctx_array = sexp_of_buffer_ptr
+type ctx_array = { ptr : buffer_ptr; mutable tracking : (event[@sexp.opaque]) option }
+[@@deriving sexp_of]
 
 type physical_device = {
   dev : (Cu.Device.t[@sexp.opaque]);
@@ -82,6 +83,19 @@ and context = {
 
 let ctx_arrays ctx = ctx.ctx_arrays
 let global_config = ref For_parallel_copying
+
+let work_for ctx tn =
+  match Map.find ctx.ctx_arrays tn with
+  | None -> None
+  | Some { tracking = Some event; _ } -> Some event
+  | Some ctx_array ->
+      ctx_array.tracking <- Some (Cu.Delimited_event.record ctx.device.stream);
+      ctx_array.tracking
+
+let is_done event = Cu.Delimited_event.query event
+let will_wait_for context event = Cu.Delimited_event.wait context.device.stream event
+let sync event = Cu.Delimited_event.synchronize event
+let all_work device = Cu.Delimited_event.record device.stream
 
 let is_initialized, initialize =
   let initialized = ref false in
@@ -146,7 +160,7 @@ let get_device ~(ordinal : int) : physical_device =
           copy_merge_buffer;
           copy_merge_buffer_capacity;
           released = Atomic.make false;
-          cross_device_candidates = Hashtbl.create (module Tn);
+          cross_device_candidates = (Hashtbl.create (module Tn) : ctx_array Hashtbl.M(Tn).t);
           cross_device_shared = Hash_set.create (module Tn);
           non_cross_device = Hash_set.create (module Tn);
           owner_device_subordinal = Hashtbl.create (module Tn);
@@ -203,13 +217,13 @@ let finalize ctx =
   then (
     (* await does this: set_ctx ctx.device.physical.primary_context; *)
     await ctx.device;
+    (* Cudajit's contexts, streams and events are destroyed by their respective finalizers. *)
     Option.iter ctx.run_module ~f:Cu.Module.unload;
-    Map.iteri ctx.ctx_arrays ~f:(fun ~key ~data:ptr ->
+    Map.iteri ctx.ctx_arrays ~f:(fun ~key ~data ->
         if
           (not (Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_arrays key)))
           && not (Hashtbl.mem ctx.device.physical.cross_device_candidates key)
-        then Cu.Deviceptr.mem_free ptr);
-    if Option.is_none ctx.parent then Cu.Stream.destroy ctx.device.stream)
+        then Cu.Deviceptr.mem_free data.ptr))
 
 let init device =
   let ctx =
@@ -236,7 +250,8 @@ let unsafe_cleanup () =
           Cu.Context.set_current device.primary_context;
           Cu.Context.synchronize ();
           Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ());
-          Hashtbl.iter device.cross_device_candidates ~f:Cu.Deviceptr.mem_free;
+          Hashtbl.iter device.cross_device_candidates ~f:(fun ctx_array ->
+              Cu.Deviceptr.mem_free ctx_array.ptr);
           Cu.Device.primary_ctx_release device.dev))
   done;
   Core.Weak.fill !devices 0 len None
@@ -246,7 +261,7 @@ let%diagn_l_sexp from_host (ctx : context) tn =
   | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
       set_ctx ctx.ctx;
       [%log "copying", Tn.debug_name tn, "to", (dst : ctx_array), "from host"];
-      let f src = Cu.Stream.memcpy_H_to_D ~dst ~src ctx.device.stream in
+      let f src = Cu.Stream.memcpy_H_to_D ~dst:dst.ptr ~src ctx.device.stream in
       Ndarray.map { f } hosted;
       true
   | _ -> false
@@ -256,7 +271,7 @@ let%track_l_sexp to_host (ctx : context) (tn : Tn.t) =
   | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
       set_ctx ctx.ctx;
       [%log "copying", Tn.debug_name tn, "at", (src : ctx_array), "to host"];
-      let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src ctx.device.stream in
+      let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src:src.ptr ctx.device.stream in
       Ndarray.map { f } hosted;
       true
   | _ -> false
@@ -266,11 +281,11 @@ let%track_l_sexp rec device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : con
   let same_physical = phys_equal dst.device.physical src.device.physical in
   let memcpy ~d_arr ~s_arr =
     if same_physical then
-      Cu.Stream.memcpy_D_to_D ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:d_arr ~src:s_arr
+      Cu.Stream.memcpy_D_to_D ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:d_arr.ptr ~src:s_arr.ptr
         dst.device.stream
     else
-      Cu.Stream.memcpy_peer ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:d_arr ~dst_ctx:dst.ctx
-        ~src:s_arr ~src_ctx:src.ctx dst.device.stream
+      Cu.Stream.memcpy_peer ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:d_arr.ptr ~dst_ctx:dst.ctx
+        ~src:s_arr.ptr ~src_ctx:src.ctx dst.device.stream
   in
   if
     same_physical
@@ -300,7 +315,7 @@ let%track_l_sexp rec device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : con
                 true)
         | Streaming ->
             if phys_equal dst.device.physical src.device.physical then (
-              dst.device.merge_buffer <- Some (s_arr, tn);
+              dst.device.merge_buffer <- Some (s_arr.ptr, tn);
               [%log "using merge buffer for", Tn.debug_name tn, "from", src.label];
               true)
             else
@@ -310,7 +325,7 @@ let%track_l_sexp rec device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : con
             set_ctx dst.ctx;
             let size_in_bytes = Tn.size_in_bytes tn in
             opt_alloc_merge_buffer ~size_in_bytes dst.device.physical;
-            memcpy ~d_arr:dst.device.physical.copy_merge_buffer ~s_arr;
+            memcpy ~d_arr:{ ptr = dst.device.physical.copy_merge_buffer; tracking = None } ~s_arr;
             dst.device.merge_buffer <- Some (dst.device.physical.copy_merge_buffer, tn);
             [%log "copied into merge buffer", Tn.debug_name tn, "from", src.label];
             true)
@@ -354,7 +369,8 @@ let%diagn_sexp cuda_to_ptx ~name cu_src =
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc;
     let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".cu_log" in
-    Stdio.Out_channel.output_string oc @@ Option.value_exn ~here:[%here] (Cu.Nvrtc.compilation_log ptx);
+    Stdio.Out_channel.output_string oc
+    @@ Option.value_exn ~here:[%here] (Cu.Nvrtc.compilation_log ptx);
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc);
   ptx
@@ -486,7 +502,7 @@ let get_global_run_id =
     if !next_id < 0 then next_id := 0;
     !next_id
 
-let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx_arrays
+let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx_arrays traced_store
     lowered_bindings run_module =
   let module Cu = Cudajit in
   let func = Cu.Module.get_function run_module ~name in
@@ -505,8 +521,8 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
          prior_context.ctx_arrays? *)
       List.map params ~f:(function
         | _name, Param_ptr tn ->
-            let ptr = Option.value_exn ~here:[%here] @@ Map.find ctx_arrays tn in
-            S.Tensor ptr
+            let arr = Option.value_exn ~here:[%here] @@ Map.find ctx_arrays tn in
+            S.Tensor arr.ptr
         | _name, Log_file_name -> S.Int log_id
         | _name, Merge_buffer ->
             let ptr = fst @@ Option.value_exn ~here:[%here] context.device.merge_buffer in
@@ -533,15 +549,18 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
     (* Map.iteri ctx_arrays ~f:(fun ~key ~data:ptr -> if key.Low_level.zero_initialized then
        Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key.Low_level.tn)); *)
     [%log "launching the kernel"];
-    (* TODO: This doesn't help. *)
-    (* Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ()); *)
     (if Utils.debug_log_from_routines () then
        Utils.add_log_processor ~prefix:log_id_prefix @@ fun _output ->
        [%log_block
          context.label;
          Utils.log_trace_tree _output]);
-    S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.device.stream
-      args;
+    S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.device.stream args;
+    Map.iteri ctx_arrays ~f:(fun ~key ~data ->
+        (* Note: a tensor node can only be a context array if it is materialized. *)
+        if Option.is_some data.tracking then
+          let traced = Low_level.get_node traced_store key in
+          if not traced.read_only then
+            data.tracking <- Some (Cu.Delimited_event.record context.device.stream));
     [%log "kernel launched"]
   in
   ( context,
@@ -557,7 +576,8 @@ let%diagn_sexp alloc_if_needed ctx device ~key ~data:node ctx_arrays =
     [%log Tn.debug_name key, "read_only", (node.read_only : bool)];
     let default () =
       set_ctx ctx;
-      Cu.Deviceptr.mem_alloc ~size_in_bytes:(Tn.size_in_bytes key)
+      let ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes:(Tn.size_in_bytes key) in
+      { ptr; tracking = None }
     in
     let add_new () = Map.add_exn ctx_arrays ~key ~data:(default ()) in
     let physical = device.physical in
@@ -600,8 +620,8 @@ let%track3_sexp link prior_context (code : code) : context * _ * _ =
   let idx_params = Indexing.bound_symbols code.bindings in
   let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let context, task =
-    link_proc ~prior_context ~name:code.name ~params:code.params ~ctx_arrays lowered_bindings
-      run_module
+    link_proc ~prior_context ~name:code.name ~params:code.params ~ctx_arrays code.traced_store
+      lowered_bindings run_module
   in
   (context, lowered_bindings, task)
 
@@ -622,8 +642,8 @@ let%track3_sexp link_batch prior_context (code_batch : code_batch) : context * _
                    ~f:(alloc_if_needed ctx prior_context.device)
                in
                let context, task =
-                 link_proc ~prior_context:context ~name ~params ~ctx_arrays lowered_bindings
-                   run_module
+                 link_proc ~prior_context:context ~name ~params ~ctx_arrays traced_store
+                   lowered_bindings run_module
                in
                ((context, ctx_arrays), Some task)))
   in

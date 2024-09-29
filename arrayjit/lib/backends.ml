@@ -103,7 +103,7 @@ module type Backend = sig
       values are used internally for scheduling across devices of the backend, and can be used for
       explicit scheduling. *)
 
-  val await_ev : event -> unit
+  val sync : event -> unit
   (** Blocks till the event completes, if it's not done already. *)
 
   val is_done : event -> bool
@@ -113,9 +113,8 @@ module type Backend = sig
   (** If the tensor node is in the context, returns the event indicating if currently running or
       scheduled computations modifying that node on the context's device have completed.
 
-      NOTE: [work_for ctx tn], if work tracking was not registered for [tn], will register work
-      tracking for [tn] and return the event tracking all currently scheduled computations on
-      [ctx]'s device. *)
+      NOTE: [work_for ctx tn], if work tracking was not yet registered for [tn], will register work
+      tracking for [tn] and return the [all_work] event for [ctx]'s device. *)
 
   val will_wait_for : context -> event -> unit
   (** Schedules waiting for the given event on the context's device.
@@ -127,13 +126,13 @@ module type Backend = sig
   val from_host : context -> Tnode.t -> bool
   (** If the tensor node is both hosted and in-context, schedules a copy from host to context and
       returns true, otherwise returns false. NOTE: it's the caller's responsibility to synchronize
-      the device (via [await ctx.device] or [await_ev (work_for ctx tn)]) before the host's data is
+      the device (via [await ctx.device] or [sync (work_for ctx tn)]) before the host's data is
       overwritten. *)
 
   val to_host : context -> Tnode.t -> bool
   (** If the tensor node is both hosted and in-context, schedules a copy from context to host and
       returns true, otherwise returns false. NOTE: it's the caller's responsibility to synchronize
-      the device (via [await ctx.device] or [await_ev (work_for ctx tn)]) before the host's data is
+      the device (via [await ctx.device] or [sync (work_for ctx tn)]) before the host's data is
       read. *)
 
   val device_to_device :
@@ -205,7 +204,7 @@ module Multicore_backend (Backend : No_device_backend) : Backend = struct
   type event = Not_implemented_yet  (** TODO: NOT IMPLEMENTED YET *)
 
   (** TODO: Blocks till the event completes, if it's not done already. *)
-  let await_ev Not_implemented_yet = ()
+  let sync Not_implemented_yet = ()
 
   (** TODO: Whether the event completed. *)
   let is_done Not_implemented_yet = true
@@ -553,7 +552,7 @@ module Sync_backend (Backend : No_device_backend) : Backend = struct
   type buffer_ptr = Backend.buffer_ptr [@@deriving sexp_of]
   type event = unit
 
-  let await_ev () = ()
+  let sync () = ()
   let is_done () = true
   let work_for _context _tn = Some ()
   let will_wait_for _context () = ()
@@ -954,6 +953,9 @@ module Cuda_backend : Backend = struct
   type nonrec context = { ctx : context; expected_merge_node : Tnode.t option } [@@deriving sexp_of]
   type nonrec routine = context routine [@@deriving sexp_of]
 
+  let work_for context = work_for context.ctx
+  let will_wait_for context = will_wait_for context.ctx
+
   let compile ?shared:_ ?name bindings asgns : code =
     let name, lowered = lower_assignments ?name bindings asgns in
     {
@@ -992,20 +994,6 @@ module Cuda_backend : Backend = struct
                 bindings;
                 name;
               })) )
-
-  type event = Cudajit.Event.t
-
-  let work_for _ctx _tn = Some (Cudajit.Event.create ())
-  (* TODO: NOT IMPLEMENTED YET *)
-
-  let is_done event = Cudajit.Event.query event
-  let will_wait_for _context _event = ()
-  (* Cudajit.Event.wait (get_ctx_device context.ctx).Cuda_backend.stream event *)
-  (* TODO: NOT IMPLEMENTED YET *)
-
-  let await_ev event = Cudajit.Event.synchronize event
-  let all_work _device = Cudajit.Event.create ()
-  (* TODO: NOT IMPLEMENTED YET *)
 
   let init device = { ctx = init device; expected_merge_node = None }
   let get_ctx_device context = get_ctx_device context.ctx
