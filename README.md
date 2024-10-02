@@ -66,8 +66,7 @@ This is very tentative.
 * 0.4.2: device-to-device synchronization.
   * Need to add support for CUDA events to cudajit.
   * This is backend-specific so affects the abstract backend API.
-* 0.4.3: Apple Metal backend.
-* 0.5: Replicate the scaffolding from [llm.c](https://github.com/karpathy/llm.c) for training GPT-2.
+* 0.5.x: Replicate the scaffolding from [llm.c](https://github.com/karpathy/llm.c) for training GPT-2.
   * More of primitive numeric operations.
   * Useful building blocks for models in [lib/nn_blocks.ml](lib/nn_blocks.ml).
   * A language model example.
@@ -78,6 +77,7 @@ This is very tentative.
   * Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
   * Finally from [llm.c](https://github.com/karpathy/llm.c).
   * These will require splitting a routine into multiple CUDA kernels.
+  * Apple Metal backend in 0.6.1.
 * 0.7: A new abstraction layer automating compilation/linking, execution, and some data transfers.
   * E.g. host-device transfers: copy from host if host update is later than the previous device update.
   * Concise syntax for transfers into the merge buffer since we know which tensor node is transferred and where to.
