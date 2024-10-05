@@ -385,7 +385,7 @@ let rec inputs_and_outputs t =
   in
   (non_embedded - embedded, embedded)
 
-let iter_outputs ~f t = Set.iter ~f @@ snd @@ inputs_and_outputs t
+let iter_embedded ~f t = Set.iter ~f @@ snd @@ inputs_and_outputs t
 let input_nodes t = fst @@ inputs_and_outputs t
 let debug_name t = Tn.debug_name t.value
 let debug_grad t = Tn.debug_name (Option.value_exn t.diff).grad

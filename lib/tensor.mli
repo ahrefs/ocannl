@@ -28,8 +28,8 @@ type t = {
           shape inference. *)
   children : subtensor list;
   non_embedded : tn_set;
-      (** These tensor nodes ([value], resp. [grad] of {!diff}) of the children which are not
-          computed by [forward], resp. [backprop] of {!diff}. *)
+      (** These tensor nodes ([value], resp. {!grad} of {!field-diff}) of the children which are not
+          computed by [forward], resp. {!backprop} of {!field-diff}. *)
 }
 [@@deriving sexp_of]
 (** Information needed for compositional code generation. *)
@@ -196,11 +196,11 @@ val consume_backprop_code : t -> asgns * asgns
 
 val input_nodes : t -> tn_set
 (** The nodes of descendant tensors whose computation is not embedded by the given tensor. They are
-    "inputs" coming from other computations. *)
+    "inputs" coming from other computations. NOTE: this a specific, narrow meaning of "inputs". *)
 
-val iter_outputs : f:(tn -> unit) -> t -> unit
-(** [iter_outputs t] iterates over all descendant nodes that are embedded, i.e. are not members
-    of [input_nodes t]. *)
+val iter_embedded : f:(tn -> unit) -> t -> unit
+(** [iter_embedded t] iterates over all descendant nodes that are embedded, i.e. are not members of
+    [input_nodes t] -- see {!input_nodes}. *)
 
 val unsafe_reinitialize : unit -> unit
 (** Bring global state to its initialization values. This invalidates any previously defined tensors

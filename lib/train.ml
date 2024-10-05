@@ -262,18 +262,18 @@ let%track3_sexp round_robin_dry_run ~num_devices jitbs ~dry_sync : unit =
 let set_virtual (a : Tn.t) = Tn.update_memory_mode a Virtual 29
 
 let every_non_literal_on_host =
-  Tensor.iter_outputs ~f:(fun a ->
+  Tensor.iter_embedded ~f:(fun a ->
       if Tn.mode_is_unspecified a && not (Tn.known_constant a) then set_hosted a)
 
 let%debug2_sexp all_host_to_device (type context)
     (module Backend : Backend_type with type context = context) context =
   let f tn = ignore (Backend.from_host context tn : bool) in
-  Tensor.iter_outputs ~f
+  Tensor.iter_embedded ~f
 
 let%debug2_sexp all_device_to_host (type context)
     (module Backend : Backend_type with type context = context) context =
   let f tn = ignore (Backend.to_host context tn : bool) in
-  Tensor.iter_outputs ~f
+  Tensor.iter_embedded ~f
 
 (** Executes the jitted code and copies arrays embedded in the given tenosor from and to host,
     synchronizes before copying to host. If [looping] is provided, loops over bindings and executes
