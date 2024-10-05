@@ -262,22 +262,18 @@ let%track3_sexp round_robin_dry_run ~num_devices jitbs ~dry_sync : unit =
 let set_virtual (a : Tn.t) = Tn.update_memory_mode a Virtual 29
 
 let every_non_literal_on_host =
-  Tensor.iter_embedded_arrays ~f:(fun a ->
+  Tensor.iter_outputs ~f:(fun a ->
       if Tn.mode_is_unspecified a && not (Tn.known_constant a) then set_hosted a)
 
 let%debug2_sexp all_host_to_device (type context)
     (module Backend : Backend_type with type context = context) context =
   let f tn = ignore (Backend.from_host context tn : bool) in
-  Tensor.iter_embedded_arrays ~f
+  Tensor.iter_outputs ~f
 
 let%debug2_sexp all_device_to_host (type context)
     (module Backend : Backend_type with type context = context) context =
   let f tn = ignore (Backend.to_host context tn : bool) in
-  Tensor.iter_embedded_arrays ~f
-
-let needs_prior_context t =
-  Tensor.non_and_embedded_nodes t |> fst |> Set.to_list
-  |> List.concat_map ~f:(fun t -> t.value :: Option.(to_list @@ map t.diff ~f:(fun d -> d.grad)))
+  Tensor.iter_outputs ~f
 
 (** Executes the jitted code and copies arrays embedded in the given tenosor from and to host,
     synchronizes before copying to host. If [looping] is provided, loops over bindings and executes
@@ -352,7 +348,7 @@ let%track3_sexp parallel_update (type context)
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
   let loss_merge =
     Backend.(
-      link ~from_prior_context:(needs_prior_context updaten.loss) sgd_update.context
+      link ~from_prior_context:(Tensor.input_nodes updaten.loss) sgd_update.context
       @@ compile Idx.Empty
            [%cd
              ~~("merging" updaten.loss;
@@ -459,7 +455,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   set_hosted learning_rate.value;
   let sgd = sgd_update ~learning_rate ~weight_decay update in
   let grad_update = Backend.compile ~shared:true bindings update.fwd_bprop in
-  let from_prior_context = needs_prior_context update.loss in
+  let from_prior_context = Tensor.input_nodes update.loss in
   let grad_updates =
     Array.map prior_contexts ~f:(fun ctx -> Backend.link ~from_prior_context ctx grad_update)
   in
@@ -511,7 +507,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   (* By using sgd_update.context, maybe we don't need to copy the parameters back to the host. *)
   let routine =
     Backend.(
-      link ~from_prior_context:(needs_prior_context model_result) sgd_update.context
+      link ~from_prior_context:(Tensor.input_nodes model_result) sgd_update.context
       @@ compile IDX.empty
       @@ Block_comment ("infer " ^ Tn.debug_name model_result.value, infer_fwd))
   in
@@ -533,7 +529,7 @@ let%track3_sexp forward_and_ctx ?(disable_rootness_check = false) (type context)
     (module Backend : Backend_type with type context = context) ctx ?(bindings = IDX.empty) t =
   let routine =
     Backend.(
-      link ~from_prior_context:(needs_prior_context t) ctx
+      link ~from_prior_context:(Tensor.input_nodes t) ctx
       @@ compile bindings @@ forward ~disable_rootness_check t)
   in
   if not disable_rootness_check then Tensor.remove_bprop_root t;

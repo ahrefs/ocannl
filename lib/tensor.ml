@@ -6,6 +6,7 @@ module Idx = Arrayjit.Indexing
 module Debug_runtime = Arrayjit.Utils.Debug_runtime
 
 type tn = Tn.t
+type tn_set = Set.M(Arrayjit.Tnode).t
 type asgns = Asgns.t
 type init_op = Arrayjit.Ops.init_op
 type fetch_op = Asgns.fetch_op
@@ -23,9 +24,10 @@ type t = {
   forward : Asgns.t;
   diff : diff option;
   id : int;
-  value : Tn.t;
+  value : tn;
   shape : Shape.t;
   children : subtensor list;
+  non_embedded : tn_set;
 }
 
 and subtensor = { subtensor : t; embedded : bool }
@@ -147,12 +149,14 @@ let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
     ?(transpose_op = Shape.Pointwise_un) ?(init_op = default_init_op) ~op_asn ~grad_asn
     ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t =
   let ordered_ts = List.dedup_and_sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
+  let non_embedded = ref @@ Set.empty (module Tn) in
   let children =
     List.folding_map orig_ts
       ~init:(Set.empty (module Int))
       ~f:(fun used ti ->
-        ( Set.add used ti.id,
-          { subtensor = ti; embedded = is_fwd_root ti && not (Set.mem used ti.id) } ))
+        let root = is_fwd_root ti in
+        if not root then non_embedded := Set.add !non_embedded ti.value;
+        (Set.add used ti.id, { subtensor = ti; embedded = root && not (Set.mem used ti.id) }))
   in
   let id = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
@@ -187,7 +191,9 @@ let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
     || Fn.non is_require_grad grad_spec
        && List.for_all orig_ts ~f:(fun ti -> Option.is_none ti.diff)
   then (
-    let tensor = { forward; diff = None; id; value = v; shape; children } in
+    let tensor =
+      { forward; diff = None; id; value = v; shape; children; non_embedded = !non_embedded }
+    in
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     tensor)
   else
@@ -216,7 +222,11 @@ let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
        non-tree DAGs. *)
     let backprop =
-      let bprop = dcode ~f:(fun diff -> diff.backprop) in
+      let bprop =
+        dcode ~f:(fun diff ->
+            non_embedded := Set.add !non_embedded diff.grad;
+            diff.backprop)
+      in
       let bcks =
         List.map ordered_ts ~f:(fun ti -> if is_bck_root ti then bprop ti else Asgns.Noop)
       in
@@ -226,7 +236,7 @@ let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
         session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.id);
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop } in
-    let tensor = { forward; diff; id; value = v; shape; children } in
+    let tensor = { forward; diff; id; value = v; shape; children; non_embedded = !non_embedded } in
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     session_state.backprop_roots <- Map.add_exn session_state.backprop_roots ~key:id ~data:tensor;
     tensor
@@ -350,30 +360,33 @@ let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?
   Tn.update_memory_mode g Never_virtual 26;
   t
 
-let rec iter_embedded_arrays ~f t =
-  f t.value;
-  Option.iter t.diff ~f:(fun diff -> f diff.grad);
-  List.iter ~f:(fun ch -> if ch.embedded then iter_embedded_arrays ~f ch.subtensor) t.children
-
-let rec non_and_embedded_nodes t =
-  let non_embedded, embedded =
-    List.fold t.children
-      ~init:(Set.empty (module Self), Set.empty (module Self))
-      ~f:(fun (non_embedded, embedded) ch ->
-        if ch.embedded then (non_embedded, Set.add embedded ch.subtensor)
-        else (Set.add non_embedded ch.subtensor, embedded))
+let rec inputs_and_outputs t =
+  (* TODO: consider either caching here, or as a field of t. *)
+  let opt_grad t = Option.value_map ~default:[] ~f:(fun diff -> [ diff.grad ]) t.diff in
+  let dir_outputs t =
+    Set.of_list (module Tn)
+    @@ List.filter ~f:(fun tn -> not @@ Set.mem t.non_embedded tn)
+    @@ (t.value :: opt_grad t)
   in
   let open Arrayjit.Utils.Set_O in
+  let non_embedded, embedded =
+    List.fold t.children
+      ~init:(t.non_embedded, Set.of_list (module Tn) (t.value :: opt_grad t))
+      ~f:(fun (non_embedded, embedded) ch ->
+        (ch.subtensor.non_embedded + non_embedded, dir_outputs ch.subtensor + embedded))
+  in
   let non_embedded, embedded =
     List.fold t.children ~init:(non_embedded, embedded)
       ~f:(fun ((non_embedded, embedded) as accu) ch ->
         if ch.embedded then
-          let more_non, more = non_and_embedded_nodes ch.subtensor in
+          let more_non, more = inputs_and_outputs ch.subtensor in
           (non_embedded + more_non, embedded + more)
         else accu)
   in
   (non_embedded - embedded, embedded)
 
+let iter_outputs ~f t = Set.iter ~f @@ snd @@ inputs_and_outputs t
+let input_nodes t = fst @@ inputs_and_outputs t
 let debug_name t = Tn.debug_name t.value
 let debug_grad t = Tn.debug_name (Option.value_exn t.diff).grad
 

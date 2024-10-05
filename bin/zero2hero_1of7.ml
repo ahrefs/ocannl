@@ -163,9 +163,9 @@ let _suspended () =
   let device = new_virtual_device @@ get_device ~ordinal:0 in
   let update = Train.grad_update l in
   let routine = link (init device) @@ compile IDX.empty @@ update.fwd_bprop in
-  Tensor.iter_embedded_arrays l ~f:(fun a -> ignore (from_host routine.context a : bool));
+  Tensor.iter_outputs l ~f:(fun a -> ignore (from_host routine.context a : bool));
   Train.run routine;
-  Tensor.iter_embedded_arrays l ~f:(fun a -> ignore (to_host routine.context a : bool));
+  Tensor.iter_outputs l ~f:(fun a -> ignore (to_host routine.context a : bool));
   await device;
   Stdio.print_endline
     {|
@@ -177,7 +177,7 @@ let _suspended () =
     link routine.context @@ compile IDX.empty @@ Train.sgd_update ~learning_rate update
   in
   (* learning_rate is virtual so this will not print anything. *)
-  Tensor.iter_embedded_arrays learning_rate ~f:(fun a ->
+  Tensor.iter_outputs learning_rate ~f:(fun a ->
       ignore (from_host routine.context a : bool));
   Stdio.print_endline
     {|
@@ -187,7 +187,7 @@ let _suspended () =
   List.iter [ a.value; b.value; c.value; f.value ] ~f:(fun a ->
       assert (from_host routine.context a));
   Train.run routine;
-  Tensor.iter_embedded_arrays l ~f:(fun a -> ignore (to_host routine.context a : bool));
+  Tensor.iter_outputs l ~f:(fun a -> ignore (to_host routine.context a : bool));
   await device;
   Stdio.print_endline
     {|
@@ -198,7 +198,7 @@ let _suspended () =
   let update = Train.grad_update l in
   let routine = link routine.context @@ compile IDX.empty update.fwd_bprop in
   Train.run routine;
-  Tensor.iter_embedded_arrays l ~f:(fun a -> ignore (to_host routine.context a : bool));
+  Tensor.iter_outputs l ~f:(fun a -> ignore (to_host routine.context a : bool));
   await device;
   Stdio.print_endline
     {|

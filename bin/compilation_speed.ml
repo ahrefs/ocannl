@@ -31,7 +31,7 @@ let benchmark_overhead backend () =
   let init_assign_x = link ctx @@ compile ~name:"init_assign_x" IDX.empty mock_update_x in
   let f_routine = link init_assign_x.context @@ compile IDX.empty update_f.fwd_bprop in
   Tensor.print_tree ~with_grad:true ~with_backend_info:true ~depth:9 f;
-  Tensor.iter_embedded_arrays f ~f:(fun a -> ignore (from_host f_routine.context a : bool));
+  Tensor.iter_outputs f ~f:(fun a -> ignore (from_host f_routine.context a : bool));
 
   let xs = Array.init n_data ~f:Float.(fun i -> of_int i - (of_int n_data /. 2.)) in
   let open Operation.At in

@@ -3,6 +3,7 @@
 open Base
 
 type tn = Arrayjit.Tnode.t
+type tn_set = Set.M(Arrayjit.Tnode).t
 type asgns = Arrayjit.Assignments.t
 type init_op = Arrayjit.Ops.init_op
 type fetch_op = Arrayjit.Assignments.fetch_op
@@ -26,11 +27,19 @@ type t = {
       (** The eventual shape of [t.value] and [t.diff.grad], incorporating the current state of
           shape inference. *)
   children : subtensor list;
+  non_embedded : tn_set;
+      (** These tensor nodes ([value], resp. [grad] of {!diff}) of the children which are not
+          computed by [forward], resp. [backprop] of {!diff}. *)
 }
 [@@deriving sexp_of]
 (** Information needed for compositional code generation. *)
 
-and subtensor = { subtensor : t; embedded : bool }
+and subtensor = {
+  subtensor : t;
+  embedded : bool;
+      (** A tensor can be an [embedded] child at most once -- that's where its [forward] computation
+          ends up when used as part of a bigger computation. *)
+}
 
 type comparator_witness
 
@@ -174,9 +183,6 @@ val param :
    [Require_grad]. The resulting tensor's label is the passed string, appended by [more_label] if
    any. *)
 
-val iter_embedded_arrays : f:(tn -> unit) -> t -> unit
-val non_and_embedded_nodes : t -> (t, comparator_witness) Set.t * (t, comparator_witness) Set.t
-
 val consume_forward_code : t -> asgns
 (** A forward root is a tensor that is not (currently) used to compute another tensor.
     [consume_forward_code t] ensures [t] is a forward root, removes it from forward roots, and
@@ -187,6 +193,14 @@ val consume_backprop_code : t -> asgns * asgns
     another tensor. I.e. it is not currently used to compute a tensor with a gradient.
     [consume_backprop_code t] ensures [t] is a backprop root, removes it from backprop roots, and
     checks that there are no other backprop roots for tensors with children. *)
+
+val input_nodes : t -> tn_set
+(** The nodes of descendant tensors whose computation is not embedded by the given tensor. They are
+    "inputs" coming from other computations. *)
+
+val iter_outputs : f:(tn -> unit) -> t -> unit
+(** [iter_outputs t] iterates over all descendant nodes that are embedded, i.e. are not members
+    of [input_nodes t]. *)
 
 val unsafe_reinitialize : unit -> unit
 (** Bring global state to its initialization values. This invalidates any previously defined tensors
