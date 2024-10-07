@@ -164,6 +164,8 @@ let known_constant tn =
   | Some ((Effectively_constant | Hosted Constant), _) -> true
   | _ -> false
 
+let known_volatile tn = match tn.memory_mode with Some (Hosted Volatile, _) -> true | _ -> false
+
 let known_non_virtual tn =
   match tn.memory_mode with None | Some ((Virtual | Effectively_constant), _) -> false | _ -> true
 

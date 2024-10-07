@@ -44,6 +44,8 @@ and t =
   | Fetch of { array : Tn.t; fetch_op : fetch_op; dims : int array Lazy.t }
 [@@deriving sexp_of]
 
+type comp = {asgns: t; }
+
 let get_name_exn asgns =
   let punct_or_sp = Str.regexp "[-@*/:.;, ]" in
   let punct_and_sp = Str.regexp {|[-@*/:.;,]\( |$\)|} in
@@ -61,11 +63,16 @@ let get_name_exn asgns =
   let result = loop asgns in
   if String.is_empty result then invalid_arg "Assignments.get_name: no comments in code" else result
 
-let recurrent_nodes asgns =
+(** Returns nodes that are inputs to the computation in a narrow sense: nodes that were potentially
+    computed by assignments executed before. *)
+let input_or_recurrent_nodes asgns =
   let open Utils.Set_O in
   let empty = Set.empty (module Tn) in
   let single = function
-    | Node tn -> Set.singleton (module Tn) tn
+    | Node tn ->
+        if Tn.known_constant tn || Tn.known_volatile tn || Tn.known_not_materialized tn then
+          Set.empty (module Tn)
+        else Set.singleton (module Tn) tn
     | Merge_buffer _ -> Set.empty (module Tn)
   in
   let maybe have lhs = if have then Set.singleton (module Tn) lhs else empty in

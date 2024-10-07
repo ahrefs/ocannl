@@ -341,7 +341,14 @@ let%track3_sexp parallel_update (type context)
     let occupancy ~name:_ ~src_n:_ = true in
     Array.mapi ctxs ~f:(fun dst_n ctx ->
         if occupancy_dst ~dst_n then
-          snd @@ Backend.link_batch ctx
+          let from_prior_context =
+            Array.fold
+              ~init:(Set.empty (module Tn))
+              ~f:(fun acc tn -> Set.union acc @@ Asgns.input_or_recurrent_nodes tn)
+              grad_merges
+          in
+          snd
+          @@ Backend.link_batch ctx ~from_prior_context
           @@ Backend.compile_batch ~shared:true ~occupancy Idx.Empty grad_merges
         else [||])
   in
@@ -411,6 +418,11 @@ let get_all_suggested_devices ?(max_num_devices : int option) (type device)
         Array.init take_current ~f:(fun _subordinal -> Backend.new_virtual_device physical) ))
   |> Array.concat_map ~f:Fn.id
 
+let to_routine (type context) (module Backend : Backend_type with type context = context)
+    (context : context) ?shared ?name bindings asgns =
+  let code = Backend.compile ?shared ?name bindings asgns in
+  Backend.link ~from_prior_context:(Asgns.input_or_recurrent_nodes asgns) context code
+
 let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init_lr ?lr_schedule
     ?(copy_to_merge = false) ?max_num_devices ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn
     ~weight_decay ?per_batch_callback ?per_epoch_callback (type context)
@@ -459,7 +471,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   let grad_updates =
     Array.map prior_contexts ~f:(fun ctx -> Backend.link ~from_prior_context ctx grad_update)
   in
-  let sgd_update = Backend.(link grad_updates.(0).context @@ compile bindings sgd) in
+  let sgd_update = to_routine (module Backend) grad_updates.(0).context bindings sgd in
   Tensor.log_debug_info ~from_log_level:2 inputs;
   Tensor.log_debug_info ~from_log_level:2 outputs;
   all_host_to_device (module Backend) sgd_update.context scalar_loss;

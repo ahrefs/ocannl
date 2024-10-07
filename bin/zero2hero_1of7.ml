@@ -22,7 +22,7 @@ let _suspended () =
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
   let code = Train.grad_update v in
-  let routine = Backend.(link ctx @@ compile IDX.empty code.fwd_bprop) in
+  let routine = Train.to_routine (module Backend) ctx IDX.empty code.fwd_bprop in
   Train.sync_run (module Backend) routine v;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_id:true ~with_grad:true ~depth:9 v;
@@ -69,7 +69,7 @@ let () =
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
   let update = Train.grad_update fx in
-  let routine = Backend.(link ctx @@ compile bindings update.fwd_bprop) in
+  let routine = Train.to_routine (module Backend) ctx bindings update.fwd_bprop in
   let step_ref = IDX.find_exn routine.bindings step_sym in
   let ys = Array.create ~len:size 0. and dys = Array.create ~len:size 0. in
   let open Operation.At in
@@ -123,7 +123,7 @@ let _suspended () =
   Train.set_hosted x.value;
   Train.set_hosted (Option.value_exn ~here:[%here] x.diff).grad;
   let update = Train.grad_update fx in
-  let fx_routine = Backend.(link ctx @@ compile bindings update.fwd_bprop) in
+  let fx_routine = Train.to_routine (module Backend) ctx bindings update.fwd_bprop in
   let step_ref = IDX.find_exn fx_routine.bindings step_sym in
   let%track_sexp () =
     let ys, dys =
@@ -159,14 +159,16 @@ let _suspended () =
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in
   Train.every_non_literal_on_host l;
-  let open (val Arrayjit.Backends.fresh_backend ()) in
-  let device = new_virtual_device @@ get_device ~ordinal:0 in
+  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let update = Train.grad_update l in
-  let routine = link (init device) @@ compile IDX.empty @@ update.fwd_bprop in
-  Tensor.iter_embedded l ~f:(fun a -> ignore (from_host routine.context a : bool));
+  let routine =
+    Train.to_routine (module Backend) (Backend.init device) IDX.empty update.fwd_bprop
+  in
+  Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.from_host routine.context a : bool));
   Train.run routine;
-  Tensor.iter_embedded l ~f:(fun a -> ignore (to_host routine.context a : bool));
-  await device;
+  Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));
+  Backend.await device;
   Stdio.print_endline
     {|
       We did not update the params: all values and gradients will be at initial points,
@@ -174,21 +176,22 @@ let _suspended () =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   let%op learning_rate = 0.1 in
   let routine =
-    link routine.context @@ compile IDX.empty @@ Train.sgd_update ~learning_rate update
+    Train.to_routine (module Backend) routine.context IDX.empty
+    @@ Train.sgd_update ~learning_rate update
   in
   (* learning_rate is virtual so this will not print anything. *)
   Tensor.iter_embedded learning_rate ~f:(fun a ->
-      ignore (from_host routine.context a : bool));
+      ignore (Backend.from_host routine.context a : bool));
   Stdio.print_endline
     {|
       Due to how the gccjit backend works, since the parameters were constant in the grad_update
       computation, they did not exist on the device before. Now they do. This would not be needed
       on the cuda backend.|};
   List.iter [ a.value; b.value; c.value; f.value ] ~f:(fun a ->
-      assert (from_host routine.context a));
+      assert (Backend.from_host routine.context a));
   Train.run routine;
-  Tensor.iter_embedded l ~f:(fun a -> ignore (to_host routine.context a : bool));
-  await device;
+  Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));
+  Backend.await device;
   Stdio.print_endline
     {|
       Now we updated the params, but after the forward and backward passes:
@@ -196,10 +199,10 @@ let _suspended () =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   (* We could reuse the jitted code if we did not use `jit_and_run`. *)
   let update = Train.grad_update l in
-  let routine = link routine.context @@ compile IDX.empty update.fwd_bprop in
+  let routine = Train.to_routine (module Backend) routine.context IDX.empty update.fwd_bprop in
   Train.run routine;
-  Tensor.iter_embedded l ~f:(fun a -> ignore (to_host routine.context a : bool));
-  await device;
+  Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));
+  Backend.await device;
   Stdio.print_endline
     {|
       Now again we did not update the params, they will remain as above, but both param

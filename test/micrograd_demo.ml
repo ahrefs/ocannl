@@ -25,7 +25,7 @@ let%expect_test "Micrograd README basic example" =
   let%op g = g + (10. /. f) in
   List.iter ~f:(Option.iter ~f:(fun diff -> Train.set_hosted diff.Tensor.grad)) [ a.diff; b.diff ];
   let update = Train.grad_update g in
-  let step = Backend.(link ctx @@ compile IDX.empty update.fwd_bprop) in
+  let step = Train.to_routine (module Backend) ctx IDX.empty update.fwd_bprop in
   Train.sync_run backend step g;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ g;
   [%expect
@@ -135,7 +135,7 @@ let%expect_test "Micrograd half-moons example" =
   let%op learning_rate = 0.1 *. ((2 *. !..steps) - !@step_n) /. !..steps in
   Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
-  let sgd_routine = Backend.(link ctx @@ compile bindings (Seq (update.fwd_bprop, sgd))) in
+  let sgd_routine = Train.to_routine (module Backend) ctx bindings (Seq (update.fwd_bprop, sgd)) in
   Train.all_host_to_device backend sgd_routine.context scalar_loss;
   Train.all_host_to_device backend sgd_routine.context learning_rate;
   let step_ref = IDX.find_exn sgd_routine.bindings step_n in
@@ -160,9 +160,8 @@ let%expect_test "Micrograd half-moons example" =
   let%op mlp_result = mlp "point" in
   Train.set_on_host Changed_on_devices mlp_result.value;
   let result_routine =
-    Backend.(
-      link sgd_routine.context @@ compile IDX.empty
-      @@ Block_comment ("moons infer", mlp_result.forward))
+    Train.to_routine (module Backend) sgd_routine.context IDX.empty
+    @@ Block_comment ("moons infer", mlp_result.forward)
   in
   let callback (x, y) =
     Tensor.set_values point [| x; y |];

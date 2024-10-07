@@ -53,7 +53,7 @@ let hello3 () =
   let zero_to_twenty = TDSL.range 20 in
   let y = TDSL.O.(( + ) ~label:[ "y" ] (hey * zero_to_twenty) zero_to_twenty) in
   Train.set_hosted hey.value;
-  let routine = Backend.(link ctx @@ compile IDX.empty @@ Train.forward y) in
+  let routine = Train.to_routine (module Backend) ctx IDX.empty @@ Train.forward y in
   assert (Backend.from_host routine.context hey.value);
   assert (Backend.from_host routine.context zero_to_twenty.value);
   Tensor.print ~with_code:true ~with_grad:false `Inline zero_to_twenty;

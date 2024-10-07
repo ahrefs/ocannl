@@ -10,28 +10,32 @@ module Rand = Arrayjit.Rand.Lib
 let benchmark_overhead backend () =
   let n_data = 20 in
   Arrayjit.Backends.reinitialize backend Physical_devices_only;
-  let open (val backend : Arrayjit.Backends.Backend) in
+  let module Backend = (val backend : Arrayjit.Backends.Backend) in
   (* Utils.settings.with_debug <- true; *)
   (* Utils.settings.output_debug_files_in_build_directory <- true; *)
   (* Utils.settings.debug_log_from_routines <- true; *)
   CDSL.disable_all_debugs ();
-  Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ name ^ " ******";
+  Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ Backend.name ^ " ******";
   Rand.init 0;
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.set_hosted f.value;
 
   (* Train.every_non_literal_on_host f; *)
-  let device = new_virtual_device @@ get_device ~ordinal:0 in
-  let ctx = init device in
+  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
+  let ctx = Backend.init device in
   let update_f = Train.grad_update f in
   (* Initialize the context with a mock update of x to ensure that it is not optimized as a
      constant. *)
   let%cd mock_update_x = x =: 42 in
-  let init_assign_x = link ctx @@ compile ~name:"init_assign_x" IDX.empty mock_update_x in
-  let f_routine = link init_assign_x.context @@ compile IDX.empty update_f.fwd_bprop in
+  let init_assign_x =
+    Train.to_routine (module Backend) ctx ~name:"init_assign_x" IDX.empty mock_update_x
+  in
+  let f_routine =
+    Train.to_routine (module Backend) init_assign_x.context IDX.empty update_f.fwd_bprop
+  in
   Tensor.print_tree ~with_grad:true ~with_backend_info:true ~depth:9 f;
-  Tensor.iter_embedded f ~f:(fun a -> ignore (from_host f_routine.context a : bool));
+  Tensor.iter_embedded f ~f:(fun a -> ignore (Backend.from_host f_routine.context a : bool));
 
   let xs = Array.init n_data ~f:Float.(fun i -> of_int i - (of_int n_data /. 2.)) in
   let open Operation.At in
@@ -39,12 +43,14 @@ let benchmark_overhead backend () =
   let ys =
     Array.map xs ~f:(fun v ->
         let%cd update_x = x =: !.v in
-        let assign_x = link f_routine.context @@ compile ~name:"assign_x" IDX.empty update_x in
+        let assign_x =
+          Train.to_routine (module Backend) f_routine.context ~name:"assign_x" IDX.empty update_x
+        in
         Train.run assign_x;
         (* await device; *)
         Train.run f_routine;
-        assert (to_host f_routine.context f.value);
-        await device;
+        assert (Backend.to_host f_routine.context f.value);
+        Backend.await device;
         f.@[0])
   in
   let plot_box =
@@ -57,7 +63,7 @@ let benchmark_overhead backend () =
   let result =
     PrintBox_utils.Benchmark
       {
-        bench_title = name ^ " overhead";
+        bench_title = Backend.name ^ " overhead";
         time_in_sec;
         (* FIXME: global mem consumption *)
         mem_in_bytes = 0;

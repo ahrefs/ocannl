@@ -1,4 +1,4 @@
 randomness_lib=for_tests
 log_main_domain_to_stdout=true
-backend=cc
+backend=cuda
 log_level=0
