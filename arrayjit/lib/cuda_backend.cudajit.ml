@@ -261,7 +261,7 @@ let unsafe_cleanup () =
   Core.Weak.fill !devices 0 len None;
   Stdlib.Gc.compact ()
 
-let%diagn_l_sexp from_host (ctx : context) tn =
+let%diagn2_l_sexp from_host (ctx : context) tn =
   match (tn, Map.find ctx.ctx_arrays tn) with
   | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
       set_ctx ctx.ctx;
@@ -271,7 +271,7 @@ let%diagn_l_sexp from_host (ctx : context) tn =
       true
   | _ -> false
 
-let%track_l_sexp to_host (ctx : context) (tn : Tn.t) =
+let%diagn2_l_sexp to_host (ctx : context) (tn : Tn.t) =
   match (tn, Map.find ctx.ctx_arrays tn) with
   | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
       set_ctx ctx.ctx;
@@ -281,7 +281,7 @@ let%track_l_sexp to_host (ctx : context) (tn : Tn.t) =
       true
   | _ -> false
 
-let%track_l_sexp rec device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : context)
+let%diagn2_l_sexp rec device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : context)
     ~(src : context) =
   let same_physical = phys_equal dst.device.physical src.device.physical in
   let memcpy ~d_arr ~s_arr =
@@ -352,7 +352,7 @@ type code_batch = {
 }
 [@@deriving sexp_of]
 
-let%diagn_sexp cuda_to_ptx ~name cu_src =
+let%diagn2_sexp cuda_to_ptx ~name cu_src =
   let name_cu = name ^ ".cu" in
   if Utils.settings.output_debug_files_in_build_directory then (
     let oc = Out_channel.open_text @@ Utils.build_file name_cu in
@@ -515,7 +515,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
     { prior_context with parent = Some prior_context; run_module = Some run_module; ctx_arrays }
   in
   Stdlib.Gc.finalise finalize context;
-  let%diagn_l_sexp work () : unit =
+  let%diagn3_l_sexp work () : unit =
     let log_id = get_global_run_id () in
     let log_id_prefix = Int.to_string log_id ^ ": " in
     [%log_result
@@ -576,7 +576,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
         work;
       } )
 
-let%diagn_sexp alloc_if_needed ctx device ~key ~data:node ctx_arrays =
+let%diagn2_sexp alloc_if_needed ctx device ~key ~data:node ctx_arrays =
   if is_in_context node && not (Map.mem ctx_arrays key) then (
     [%log Tn.debug_name key, "read_only", (node.read_only : bool)];
     let default () =
