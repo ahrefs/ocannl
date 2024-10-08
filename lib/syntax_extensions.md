@@ -223,7 +223,7 @@ Examples:
 - `...|...->... ; ...|...->... => ...|...->...`: fully pointwise binary operation.
 - `...|...->... => ...->...` and `...->... => ...->...` are equivalent: reduce the batch axes into the result.
 - `2...|...->... => ...|...->...`: slice the tensor at dimension 2 of the leftmost batch axis. Note that the tensor operation `@|` implements slicing at the leftmost batch axis for arbitrary dimension.
-- `...|... => ...|...2`: expand the tensor by putting the argument at leftmost output dimension 2 of the result (and reduce input axes if any).
+- `...|... => ...|...2`: expand the tensor by putting the argument at leftmost output dimension 2 of the result (and reduce input axes if any). `rhs ++ "...|... => ...|...2"` will fill the other cells of the new tensor with zeroes; `[%cd lhs =:* rhs ~logic:"...|... => ...|...2"]` will fill the other cells of `lhs` with ones since it's the neutral element of the assignmet (reduction) operator.
 - `ijk => kji`: reverse the three rightmost output axes, reduce any other axes.
 - `ijk => ki`: as above but also reduce the second-leftmost output axis.
 - `..v..|ijk => ..v..kji`: reverse the three rightmost output axes, reduce any other output and input axes, pointwise for batch axes, pairing the batch axes with the leftmost output axes of the result.
