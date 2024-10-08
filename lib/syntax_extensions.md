@@ -20,12 +20,12 @@
     - [The hard-coded to-the-power-of operator](#the-hard-coded-to-the-power-of-operator)
     - [Intricacies of the syntax extension %cd](#implementation-extension-cd)
 - In a nutshell
-  - Syntax extension `%cd` stands for "code", to express assignments: `Assignments.t`.
+  - Syntax extension `%cd` stands for "code", to express assignments and computations: `Assignments.comp`.
   - Syntax extension `%op` stands for "operation", to express tensors: `Tensor.t`.
 
 ## Preliminaries
 
-OCANNL, and Arrayjit specifically, is built around a fixed number of numeric operations, declared in `arrayjit/ops.ml`. We assign operators to many of the operations, inventing new operators. For example, Rectified Linear Unit `Relu` operation, which computes `f(x) = max(0,x)`, gets the operator `?/`, and the ReLU-Gate `Relu_gate` operation, which computes `f(x,y) = if x > 0.0 then y else 0.0`, gets the operator `-?/`. These built-in numeric operations are used to construct assignments (`Assignments.t`). The syntax `%cd` is needed to build assignments concisely. On the other hand, while the syntax `%op` helps build tensors (`Tensor.t`), they can be expressed concisely in pure OCaml. Unlike for assignments, the building blocks for tensor expressions are easy to extend. The meaningful basic ones are provided in `lib/operation.ml`.
+OCANNL, and Arrayjit specifically, is built around a fixed number of numeric operations, declared in `arrayjit/ops.ml`. We assign lexical operators to many of the operations, inventing novel operators if needed. For example, Rectified Linear Unit `Relu` operation, which computes `f(x) = max(0,x)`, gets the operator `?/`, and the ReLU-Gate `Relu_gate` operation, which computes `f(x,y) = if x > 0.0 then y else 0.0`, gets the operator `-?/`. These built-in numeric operations are used to construct assignments (`Assignments.t`). The syntax `%cd` is needed to build assignments concisely. On the other hand, while the syntax `%op` helps build tensors (`Tensor.t`), they can be expressed concisely in pure OCaml. Unlike for assignments, the building blocks for tensor expressions are easy to extend. The meaningful basic ones are provided in `lib/operation.ml`.
 
 In OCANNL, we call a tensor that is prohibited from propagating gradients, does not have a gradient node nor backprop code, a _non-differentiable tensor_. Accordingly we can call the "plain" tensors with a gradient node _differentiable tensors_. Expressions in the `%cd` syntax will sometimes build new non-differentiable tensors as components of assignments (they will never build new differentiable tensors). The syntax extensions make the following assumption:
 
@@ -34,7 +34,7 @@ In OCANNL, we call a tensor that is prohibited from propagating gradients, does 
 
 Functions inside `Operation.NTDSL` use `~grad_spec:Prohibit_grad` when calling into `Tensor`, making the resulting tensors non-differentiable. Functions inside `Operation.TDSL` use `~grad_spec:If_needed`, which will make the tensors non-differentiable when the gradient is not needed -- except for `TDSL.param`, which internally sets `~grad_spec:Require_grad`.
 
-The extension points open `NTDSL.O`, resp. `TDSL.O`, for the scope of the extension point, to expose the corresponding iterators.
+The extension points open `NTDSL.O`, resp. `TDSL.O`, for the scope of the extension point, to expose the corresponding operators.
 
 ## The syntax for `%op` {#syntax-for-op}
 
@@ -180,6 +180,54 @@ Both `*+` and `++` use addition for the accumulation operation; `*+` uses multip
 ```
 
 where `(!..)` converts an integer into a constant tensor.
+
+### Syntax of the generalized einsum notation
+
+The specification syntax has two modes:
+
+- if there is a comma anywhere in a spec, it is the _multichar mode_: axis identifiers are comma-separated and can have multiple characters;
+- otherwise, it is the _single-char mode_: each alphanumeric character corresponds to an axis.
+
+The syntax of a generalized einsum spec has two variants:
+
+- unary: "\<rhs\> shape spec `=>` \<lhs\> shape spec", specifies a unary assignment `<lhs> <asgn-op> <rhs>` (see [syntax for `%cd`](#syntax-for-cd)),
+- binary: "\<rhs1\> shape spec `;` \<rhs2\> shape spec `=>` \<lhs\> shape spec", specifies a binary assignment `<lhs> <asgn-op> <rhs1> <op> <rhs2>` (see [syntax for `%cd`](#syntax-for-cd)).
+
+Recall that a tensor _shape_ is composed of three _rows_, i.e. sequences of axes: batch, input and output axes. Correspondingly, a shape spec in the notation can be:
+
+- the output row at the end of the spec, or just the output row,
+- the input row to the left of `->`, if given,
+- the batch row to the left of `|`, if given.
+
+The notation for a row is composed of sequences of row specs, and an optional _row variable_ spec. A row variable tracks broadcasting. The syntax of a row:
+
+- a sequence of axis specs: specifies the rightmost axes, with untracked broadcasting "to the left",
+- a row variable spec followed a sequence of axis specs for the rightmost axes,
+- leftmost axes specs, followed by a row variable, followed by rightmost axes specs.
+
+The syntax of a row variable:
+
+- `..`variable_id`..`: variable_id stands for the row variable identifier,
+- ellipsis `...` is context dependent: in the batch row it means `..batch..`, in the input row `..input..`, in the output row `..output..`.
+
+The syntax of an axis spec:
+
+- depending on the mode, either a alphabetic character or an alphanumeric identifier provides an axis variable,
+- the underscore `_` is a placeholder to align other axes, but does not specify anything for the given axis (it is not a variable),
+- a number specifies the particular dimension within the axis.
+
+Examples:
+
+- `...|...->... => 0`, `...|... => 0` and `... => 0` are equivalent: reduce all axes of the argument into a single number. Useful e.g. for reducing losses to a single number.
+- `...|...->... => ...|...->...`: fully pointwise unary operation.
+- `...|...->... ; ...|...->... => ...|...->...`: fully pointwise binary operation.
+- `...|...->... => ...->...` and `...->... => ...->...` are equivalent: reduce the batch axes into the result.
+- `2...|...->... => ...|...->...`: slice the tensor at dimension 2 of the leftmost batch axis. Note that the tensor operation `@|` implements slicing at the leftmost batch axis for arbitrary dimension.
+- `...|... => ...|...2`: expand the tensor by putting the argument at leftmost output dimension 2 of the result (and reduce input axes if any).
+- `ijk => kji`: reverse the three rightmost output axes, reduce any other axes.
+- `ijk => ki`: as above but also reduce the second-leftmost output axis.
+- `..v..|ijk => ..v..kji`: reverse the three rightmost output axes, reduce any other output and input axes, pointwise for batch axes, pairing the batch axes with the leftmost output axes of the result.
+- `2..v..|... => ..v..`: slice the tensor at dimension 2 of the leftmost batch axis, reduce all its input and output axes, preserve its other batch axes as output axes.
 
 ## Further features of the syntax extension `%cd` {#features-of-syntax-cd}
 

@@ -36,7 +36,12 @@
     operation.
 
     The label ["_"] is a place-holder: it is not output to the resulting map but aligns the axes of
-    other labels. *)
+    other labels.
+
+    Note: currently, OCANNL shapes always allow broadcasting. Row variables track the broadcasted
+    axes -- if there is no row variable, broadcasted axes are not tracked. In the notation case
+    `row_spec` = `axes_spec`, the axes are the rightmost axes (broadcasting to the left). In the
+    past, we supported preventing broadcasting, but removed that to reduce complexity. *)
 
 (** {2 User-ish API.} *)
 
