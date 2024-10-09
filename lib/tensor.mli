@@ -5,6 +5,7 @@ open Base
 type tn = Arrayjit.Tnode.t
 type tn_set = Set.M(Arrayjit.Tnode).t
 type asgns = Arrayjit.Assignments.t
+type comp = Arrayjit.Assignments.comp
 type init_op = Arrayjit.Ops.init_op
 type fetch_op = Arrayjit.Assignments.fetch_op
 type projections = Arrayjit.Indexing.projections
@@ -13,13 +14,13 @@ type diff = {
   grad : tn;
   zero_grads : asgns;
       (** Prepares for backpropagation. Always compile as: [Seq (zero_grads, backprop)]. *)
-  backprop : asgns;
+  backprop : comp;
       (** Backpropagates for the tensor and its descendants; which typically means adding partial
           gradients to the gradient tensor of the subtensors, then for sub-subtensors etc. *)
 }
 
 type t = {
-  forward : asgns;
+  forward : comp;
   diff : diff option;
   id : int;  (** Same as [value.id]. *)
   value : tn;
@@ -27,9 +28,6 @@ type t = {
       (** The eventual shape of [t.value] and [t.diff.grad], incorporating the current state of
           shape inference. *)
   children : subtensor list;
-  non_embedded : tn_set;
-      (** These tensor nodes ([value], resp. {!grad} of {!field-diff}) of the children which are not
-          computed by [forward], resp. {!backprop} of {!field-diff}. *)
 }
 [@@deriving sexp_of]
 (** Information needed for compositional code generation. *)
@@ -104,8 +102,8 @@ val op :
   ?compose_op:Shape.compose_type ->
   ?transpose_op:Shape.transpose_type ->
   ?init_op:init_op ->
-  op_asn:(v:tn -> projections:projections Lazy.t -> asgns) ->
-  grad_asn:(v:tn -> g:tn -> projections:projections Lazy.t -> asgns) ->
+  op_asn:(v:tn -> projections:projections Lazy.t -> comp) ->
+  grad_asn:(v:tn -> g:tn -> projections:projections Lazy.t -> comp) ->
   ?grad_spec:grad_spec ->
   (debug_name:string -> id:int -> Shape.t) ->
   t list ->
@@ -114,8 +112,8 @@ val op :
 val binop :
   label:string list ->
   ?compose_op:Shape.compose_type ->
-  op_asn:(v:tn -> t1:t -> t2:t -> projections:projections Lazy.t -> asgns) ->
-  grad_asn:(v:tn -> g:tn -> t1:t -> t2:t -> projections:projections Lazy.t -> asgns) ->
+  op_asn:(v:tn -> t1:t -> t2:t -> projections:projections Lazy.t -> comp) ->
+  grad_asn:(v:tn -> g:tn -> t1:t -> t2:t -> projections:projections Lazy.t -> comp) ->
   ?grad_spec:grad_spec ->
   t ->
   t ->
@@ -124,8 +122,8 @@ val binop :
 val unop :
   label:string list ->
   ?transpose_op:Shape.transpose_type ->
-  op_asn:(v:tn -> t1:t -> projections:projections Lazy.t -> asgns) ->
-  grad_asn:(v:tn -> g:tn -> t1:t -> projections:projections Lazy.t -> asgns) ->
+  op_asn:(v:tn -> t1:t -> projections:projections Lazy.t -> comp) ->
+  grad_asn:(v:tn -> g:tn -> t1:t -> projections:projections Lazy.t -> comp) ->
   ?grad_spec:grad_spec ->
   t ->
   t
@@ -183,24 +181,21 @@ val param :
    [Require_grad]. The resulting tensor's label is the passed string, appended by [more_label] if
    any. *)
 
-val consume_forward_code : t -> asgns
+val consume_forward_code : t -> comp
 (** A forward root is a tensor that is not (currently) used to compute another tensor.
     [consume_forward_code t] ensures [t] is a forward root, removes it from forward roots, and
     checks that there are no other forward roots for tensors with children. *)
 
-val consume_backprop_code : t -> asgns * asgns
+val consume_backprop_code : t -> asgns * comp
 (** A backprop root is a tensor with a gradient that is not (currently) receiving gradients from
     another tensor. I.e. it is not currently used to compute a tensor with a gradient.
     [consume_backprop_code t] ensures [t] is a backprop root, removes it from backprop roots, and
     checks that there are no other backprop roots for tensors with children. *)
 
-val input_nodes : t -> tn_set
-(** The nodes of descendant tensors whose computation is not embedded by the given tensor. They are
-    "inputs" coming from other computations. NOTE: this a specific, narrow meaning of "inputs". *)
-
 val iter_embedded : f:(tn -> unit) -> t -> unit
 (** [iter_embedded t] iterates over all descendant nodes that are embedded, i.e. are not members of
-    [input_nodes t] -- see {!input_nodes}. *)
+    [t.forward.embedded_nodes] or '[t.diff.backprop.embedded_nodes]' (if any). Note: [iter_embedded] should only be
+    called after shape inference finishes. *)
 
 val unsafe_reinitialize : unit -> unit
 (** Bring global state to its initialization values. This invalidates any previously defined tensors

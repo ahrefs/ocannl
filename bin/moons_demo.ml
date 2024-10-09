@@ -6,6 +6,7 @@ module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
 module Utils = Arrayjit.Utils
+module Asgns = Arrayjit.Assignments
 module Rand = Arrayjit.Rand.Lib
 module Debug_runtime = Utils.Debug_runtime
 
@@ -59,7 +60,9 @@ let demo () =
   let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name:"cuda" ()) in
   let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
   let ctx = Backend.init device in
-  let routine = Train.to_routine (module Backend) ctx bindings (Seq (update.fwd_bprop, sgd)) in
+  let routine =
+    Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update.fwd_bprop; sgd ])
+  in
 
   let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
   let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
@@ -102,8 +105,12 @@ let demo () =
   let%op mlp_result = mlp "point" in
   Train.set_on_host Changed_on_devices mlp_result.value;
   let result_routine =
-    Train.to_routine (module Backend) routine.context IDX.empty
-    @@ Block_comment ("moons infer", mlp_result.forward)
+    Train.to_routine
+      (module Backend)
+      routine.context IDX.empty
+      [%cd
+        ~~("moons" "infer";
+           mlp_result.forward)]
   in
   let callback (x, y) =
     Tensor.set_values point [| x; y |];

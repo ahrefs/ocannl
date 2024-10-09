@@ -4,6 +4,7 @@ module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
+module Asgns = Arrayjit.Assignments
 module Rand = Arrayjit.Rand.Lib
 
 let%expect_test "Micrograd README basic example" =
@@ -135,7 +136,9 @@ let%expect_test "Micrograd half-moons example" =
   let%op learning_rate = 0.1 *. ((2 *. !..steps) - !@step_n) /. !..steps in
   Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
-  let sgd_routine = Train.to_routine (module Backend) ctx bindings (Seq (update.fwd_bprop, sgd)) in
+  let sgd_routine =
+    Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update.fwd_bprop; sgd ])
+  in
   Train.all_host_to_device backend sgd_routine.context scalar_loss;
   Train.all_host_to_device backend sgd_routine.context learning_rate;
   let step_ref = IDX.find_exn sgd_routine.bindings step_n in
@@ -160,8 +163,12 @@ let%expect_test "Micrograd half-moons example" =
   let%op mlp_result = mlp "point" in
   Train.set_on_host Changed_on_devices mlp_result.value;
   let result_routine =
-    Train.to_routine (module Backend) sgd_routine.context IDX.empty
-    @@ Block_comment ("moons infer", mlp_result.forward)
+    Train.to_routine
+      (module Backend)
+      sgd_routine.context IDX.empty
+      [%cd
+        ~~("moons" "infer";
+           mlp_result.forward)]
   in
   let callback (x, y) =
     Tensor.set_values point [| x; y |];

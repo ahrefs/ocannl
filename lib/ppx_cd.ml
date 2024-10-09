@@ -114,9 +114,14 @@ type result = {
   typ : expr_type;
   slot : projections_slot;
   expr : expression;
+      (** Depending on {!field-typ}, of type:
+          - if [Code]: [Assignments.comp];
+          - if [Array | Merge_value | Value_of_tensor]: [Tnode.t];
+          - if [Merge_grad | Grad_of_tensor]: [Tnode.t option];
+          - if [Tensor | Unknown | No_grad_tensor_intro]: [Tensor.t]. *)
   array_opt_of_code : expression option;
-      (** [array_opt_of_code] keeps track of which tensor node to use when [typ] is [Code] but the
-          result is used in an array context. *)
+      (** Of type: [Tnode.t]. It keeps track of which tensor node to use when [typ] is [Code] but
+          the result is used in an array context. *)
 }
 
 type array_setup = {
@@ -126,12 +131,13 @@ type array_setup = {
           when an assignment is built. *)
   slot : projections_slot;
   filler_typ : expr_type;
-  fwd_code_or_noop : expression option;
-  array_opt : expression;
-  tensor : expression option;
+  fwd_code_or_noop : expression option;  (** Of type: [Assignments.comp]. *)
+  array_opt : expression;  (** Of type: if [slot = LHS] then [Tnode.t] else [Assignments.buffer]. *)
+  tensor : expression option;  (** Of type: [Tensor.t]. *)
   pun_hint_tnode : (expression * bool) option;
-      (** The tnode, if any, whose label the relevant punned no-gradient tensor should incorporate
-          in its label. The bool denotes whether this is a preferred (high quality) guess. *)
+      (** Of type: [string list]. The tnode, if any, whose label the relevant punned no-gradient
+          tensor should incorporate in its label. The bool denotes whether this is a preferred (high
+          quality) guess. *)
 }
 
 let make_vb ~loc ~name ~name_expr ~hint_label =
@@ -144,13 +150,15 @@ let make_vb ~loc ~name ~name_expr ~hint_label =
   let vb = A.Vb.mk ~loc pat v in
   vb
 
+let reduce_embs_arr ~loc (rs : array_setup list) =
+  List.filter_map rs ~f:(fun hs -> hs.fwd_code_or_noop)
+  |> List.reduce ~f:(fun embs comp -> [%expr Base.Set.union [%e embs] [%e comp].embedded_nodes])
+
+(** The expression argument is of type: [Assignments.t]. *)
 let assignment ~punned ~lhs ~rhses body =
   let setups = lhs :: rhses in
   let loc = body.pexp_loc in
-  let forward_args =
-    List.filter_map setups ~f:(fun { fwd_code_or_noop; _ } -> fwd_code_or_noop)
-    |> List.reduce ~f:(fun code fwd -> [%expr Arrayjit.Assignments.Seq ([%e code], [%e fwd])])
-  in
+  let forward_args = List.filter_map setups ~f:(fun { fwd_code_or_noop; _ } -> fwd_code_or_noop) in
   let vbs, body =
     match lhs.filler_typ with
     | No_grad_tensor_intro { name; name_expr } -> (
@@ -181,11 +189,14 @@ let assignment ~punned ~lhs ~rhses body =
     else body
   in
   let tensor_vbs = List.filter_map rhses ~f:(fun rhs -> rhs.vb) in
-  let expr =
-    match forward_args with
-    | None -> body
-    | Some fwd -> [%expr Arrayjit.Assignments.Seq ([%e fwd], [%e body])]
+  let body =
+    [%expr { asgns = [%e body]; embedded_nodes = Base.Set.empty (module Arrayjit.Tnode) }]
   in
+  let comps =
+    List.fold (body :: List.rev forward_args) ~init:[%expr []] ~f:(fun xs x ->
+        [%expr [%e x] :: [%e xs]])
+  in
+  let expr = [%expr Arrayjit.Assignments.sequence [%e comps]] in
   let expr =
     if List.is_empty tensor_vbs then expr else A.Exp.let_ ~loc Nonrecursive tensor_vbs expr
   in
@@ -253,6 +264,11 @@ let guess_pun_hint ~punned ~bad_pun_hints filler_typ filler =
       match t with { pexp_desc = Pexp_ident _; _ } -> Some (hint, true) | _ -> Some (hint, false))
   | No_grad_tensor_intro { name; _ }, _ -> Hashtbl.find punned name
 
+let empty_tns ~loc = [%expr Base.Set.empty (module Arrayjit.Tnode)]
+
+let empty_comp ~loc =
+  [%expr { asgns = Arrayjit.Assignments.Noop; embedded_nodes = [%e empty_tns ~loc] }]
+
 let setup_array ~punned ~bad_pun_hints ~is_lhs
     { typ = filler_typ; slot; expr = filler; vbs; array_opt_of_code } =
   assert (Map.is_empty vbs);
@@ -294,7 +310,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
             if Tensor.is_fwd_root [%e t] then (
               Tensor.remove_fwd_root [%e t];
               [%e t].Tensor.forward)
-            else Arrayjit.Assignments.Noop]
+            else [%e empty_comp ~loc]]
       in
       { default_setup with fwd_code_or_noop; tensor = Some t }
   | Value_of_tensor ({ pexp_desc = Pexp_ident _; _ } as t) ->
@@ -304,7 +320,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
             if Tensor.is_fwd_root [%e t] then (
               Tensor.remove_fwd_root [%e t];
               [%e t].Tensor.forward)
-            else Arrayjit.Assignments.Noop]
+            else [%e empty_comp ~loc]]
       in
       {
         default_setup with
@@ -339,7 +355,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
             if Tensor.is_fwd_root [%e t] then (
               Tensor.remove_fwd_root [%e t];
               [%e t].Tensor.forward)
-            else Arrayjit.Assignments.Noop]
+            else [%e empty_comp ~loc]]
       in
       {
         default_setup with
@@ -349,8 +365,18 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
         tensor = Some t;
       }
   | No_grad_tensor_intro _ ->
-      (* Inline tensors are guaranteed to be leaf tensors, so they don't have forward code. *)
-      { default_setup with tensor = Some filler }
+      (* Inline tensors are guaranteed to be leaf tensors, so they don't have forward code, but they
+         are embedded. *)
+      let fwd_code_or_noop =
+        Some
+          [%expr
+            Arrayjit.Assignments.
+              {
+                asgns = Noop;
+                embedded_nodes = Base.Set.singleton (module Arrayjit.Tnode) [%e filler].Tensor.value;
+              }]
+      in
+      { default_setup with fwd_code_or_noop; tensor = Some filler }
   | Code when Option.is_none array_opt_of_code ->
       {
         default_setup with
@@ -408,6 +434,8 @@ let args_for ~loc = function
               `.value` or `.grad` notation",
         [%expr false],
         [%expr false] )
+
+let reduce_res_vbs rs = reduce_vbss @@ List.map rs ~f:(fun r -> r.vbs)
 
 let translate (expr : expression) : result =
   let punned = Hashtbl.create (module String) in
@@ -674,6 +702,7 @@ let translate (expr : expression) : result =
               res1 with
               typ = Grad_of_tensor expr1;
               expr = [%expr Option.map [%e res1.expr].Tensor.diff ~f:(fun d -> d.Tensor.grad)];
+              (* It's never a good idea to embed backprop code outside of a proper backprop pass. *)
             }
         | Merge_value _ ->
             {
@@ -754,9 +783,14 @@ let translate (expr : expression) : result =
           res2 with
           expr =
             [%expr
-              Arrayjit.Assignments.Block_comment
-                ( String.concat_array ~sep:" " [%e Ast_helper.Exp.array ~loc:pexp_loc elements],
-                  [%e res2.expr] )];
+              let __comment_block = [%e res2.expr] in
+              {
+                Arrayjit.Assignments.asgns =
+                  Arrayjit.Assignments.Block_comment
+                    ( String.concat_array ~sep:" " [%e Ast_helper.Exp.array ~loc:pexp_loc elements],
+                      __comment_block.Arrayjit.Assignments.asgns );
+                embedded_nodes = __comment_block.Arrayjit.Assignments.embedded_nodes;
+              }];
         }
     | [%expr
         [%e? accu_op]
@@ -945,7 +979,7 @@ let translate (expr : expression) : result =
           vbs = reduce_vbss [ res1.vbs; res2.vbs ];
           typ = Code;
           slot = Nonslot;
-          expr = [%expr Arrayjit.Assignments.Seq ([%e res1.expr], [%e res2.expr])];
+          expr = [%expr Arrayjit.Assignments.sequence [ [%e res1.expr]; [%e res2.expr] ]];
           array_opt_of_code = res2.array_opt_of_code;
         }
     | [%expr if [%e? expr1] then [%e? expr2] else [%e? expr3]] ->
@@ -969,7 +1003,7 @@ let translate (expr : expression) : result =
           vbs = res2.vbs;
           typ = Code;
           slot = Nonslot;
-          expr = [%expr if [%e expr1] then [%e res2.expr] else Arrayjit.Assignments.Noop];
+          expr = [%expr if [%e expr1] then [%e res2.expr] else Arrayjit.Assignments.empty_comp];
           array_opt_of_code = res2.array_opt_of_code;
         }
     | { pexp_desc = Pexp_match (expr1, cases); _ } ->
@@ -1017,8 +1051,8 @@ let translate (expr : expression) : result =
 
 let translate ?ident_label expr =
   let res = translate expr in
-  let expr = res.expr in
   let loc = res.expr.pexp_loc in
+  let expr = res.expr in
   ( res.vbs,
     match ident_label with
     | Some [%pat? _] ->

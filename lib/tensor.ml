@@ -8,6 +8,7 @@ module Debug_runtime = Arrayjit.Utils.Debug_runtime
 type tn = Tn.t
 type tn_set = Set.M(Arrayjit.Tnode).t
 type asgns = Asgns.t
+type comp = Arrayjit.Assignments.comp
 type init_op = Arrayjit.Ops.init_op
 type fetch_op = Asgns.fetch_op
 type projections = Arrayjit.Indexing.projections
@@ -17,17 +18,16 @@ let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-type diff = { grad : (Tn.t[@sexp.opaque]); zero_grads : Asgns.t; backprop : Asgns.t }
+type diff = { grad : (Tn.t[@sexp.opaque]); zero_grads : Asgns.t; backprop : Asgns.comp }
 [@@deriving sexp_of]
 
 type t = {
-  forward : Asgns.t;
+  forward : comp;
   diff : diff option;
   id : int;
   value : tn;
   shape : Shape.t;
   children : subtensor list;
-  non_embedded : tn_set;
 }
 
 and subtensor = { subtensor : t; embedded : bool }
@@ -37,7 +37,7 @@ let rec sexp_of_t t =
     [
       ("id", sexp_of_int t.id);
       ("label", [%sexp_of: string list] t.value.label);
-      ("forward", [%sexp_of: Asgns.t] t.forward);
+      ("forward", [%sexp_of: Asgns.comp] t.forward);
       ("diff", [%sexp_of: diff option] t.diff);
       ("children", [%sexp_of: subtensor list] t.children);
     ]
@@ -96,6 +96,10 @@ let with_unchanged_roots ~f =
   in
   Exn.protectx ~f ~finally ()
 
+let iter_embedded ~f t =
+  Set.iter ~f t.forward.embedded_nodes;
+  Option.iter t.diff ~f:(fun diff -> Set.iter ~f diff.backprop.embedded_nodes)
+
 let default_value_prec = ref Arrayjit.Ops.single
 let default_grad_prec = ref Arrayjit.Ops.single
 
@@ -148,16 +152,8 @@ type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equa
 let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
     ?(transpose_op = Shape.Pointwise_un) ?(init_op = default_init_op) ~op_asn ~grad_asn
     ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t =
+  (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let ordered_ts = List.dedup_and_sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
-  let non_embedded = ref @@ Set.empty (module Tn) in
-  let children =
-    List.folding_map orig_ts
-      ~init:(Set.empty (module Int))
-      ~f:(fun used ti ->
-        let root = is_fwd_root ti in
-        if not root then non_embedded := Set.add !non_embedded ti.value;
-        (Set.add used ti.id, { subtensor = ti; embedded = root && not (Set.mem used ti.id) }))
-  in
   let id = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
   let shape = make_shape ~debug_name:(Tn.get_debug_name ~id ~label ()) ~id in
@@ -182,18 +178,31 @@ let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
   let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
   let v = Tn.create ~default_prec ~id ~label ~dims init_op in
-  (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
-  let fwds = List.map ordered_ts ~f:(fun ti -> if is_fwd_root ti then ti.forward else Asgns.Noop) in
-  let forward = Asgns.sequential @@ fwds @ [ op_asn ~v ~projections ] in
+  let embedded_nodes = ref @@ Set.singleton (module Tn) v in
+  let children =
+    List.folding_map orig_ts
+      ~init:(Set.empty (module Int))
+      ~f:(fun used ti ->
+        let embedded = is_fwd_root ti && not (Set.mem used ti.id) in
+        if embedded then
+          embedded_nodes := Set.add (Set.union !embedded_nodes ti.forward.embedded_nodes) ti.value;
+        (Set.add used ti.id, { subtensor = ti; embedded }))
+  in
+  let fwds =
+    List.filter_map ordered_ts ~f:(fun ti -> if is_fwd_root ti then Some ti.forward else None)
+  in
+  let forward = Asgns.sequence @@ fwds @ [ op_asn ~v ~projections ] in
+  let forward =
+    Asgns.
+      { asgns = forward.asgns; embedded_nodes = Set.union forward.embedded_nodes !embedded_nodes }
+  in
   List.iter ordered_ts ~f:(fun ti -> remove_fwd_root ti);
   if
     is_prohibit_grad grad_spec
     || Fn.non is_require_grad grad_spec
        && List.for_all orig_ts ~f:(fun ti -> Option.is_none ti.diff)
   then (
-    let tensor =
-      { forward; diff = None; id; value = v; shape; children; non_embedded = !non_embedded }
-    in
+    let tensor = { forward; diff = None; id; value = v; shape; children } in
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     tensor)
   else
@@ -209,34 +218,43 @@ let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
     let g = Tn.create ~default_prec ~id:grad_id ~label:("grad" :: label) ~dims default_init_op in
-    let dcode ti = Option.value_map ti.diff ~default:Asgns.Noop in
     let is_bck_root ti = Map.mem session_state.backprop_roots ti.id in
     let zero_grads =
-      let zero_g = dcode ~f:(fun diff -> diff.zero_grads) in
+      let zero_g ti =
+        Option.value_map ti.diff ~default:Asgns.Noop ~f:(fun diff -> diff.zero_grads)
+      in
       let zeros =
         List.map ordered_ts ~f:(fun ti -> if is_bck_root ti then zero_g ti else Asgns.Noop)
       in
       Asgns.sequential @@ zeros @ [ fetch_zeros g shape ]
     in
-    (* The code needs to be included in the reverse order to which it was computed! This guarantees
+    let embedded_nodes = ref @@ Set.singleton (module Tn) g in
+    (* The code needs to be included in the reverse order to which it was computed. This guarantees
        that all ancestors of a node are backpropagated before the node is backpropagated, even for
-       non-tree DAGs. *)
+       non-tree DAGs. For repeating subtensors, the first one to-be-included should actually be
+       included! That's why we reverse the order up-front prior to processing. *)
+    let ordered_ts = List.rev ordered_ts in
+    let bprop ti =
+      Option.map ti.diff ~f:(fun diff ->
+          embedded_nodes :=
+            Set.add (Set.union !embedded_nodes diff.backprop.embedded_nodes) diff.grad;
+          diff.backprop)
+    in
+    let bcks =
+      List.filter_map ordered_ts ~f:(fun ti -> if is_bck_root ti then bprop ti else None)
+    in
+    let backprop = Asgns.sequence @@ (grad_asn ~v ~g ~projections :: bcks) in
     let backprop =
-      let bprop =
-        dcode ~f:(fun diff ->
-            non_embedded := Set.add !non_embedded diff.grad;
-            diff.backprop)
-      in
-      let bcks =
-        List.map ordered_ts ~f:(fun ti -> if is_bck_root ti then bprop ti else Asgns.Noop)
-      in
-      Asgns.sequential @@ (grad_asn ~v ~g ~projections :: List.rev bcks)
+      {
+        Asgns.asgns = backprop.asgns;
+        embedded_nodes = Set.union backprop.embedded_nodes !embedded_nodes;
+      }
     in
     List.iter ordered_ts ~f:(fun ti ->
         session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.id);
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop } in
-    let tensor = { forward; diff; id; value = v; shape; children; non_embedded = !non_embedded } in
+    let tensor = { forward; diff; id; value = v; shape; children } in
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     session_state.backprop_roots <- Map.add_exn session_state.backprop_roots ~key:id ~data:tensor;
     tensor
@@ -265,8 +283,8 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
           | Some (Arrayjit.Ops.Constant_fill { values = [| c |]; _ }) -> Constant c
           | _ -> assert false
         in
-        Fetch { array = v; fetch_op; dims }
-    | None, _ -> Noop
+        Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
+    | None, _ -> Asgns.empty_comp
     | Some fetch_op, _ ->
         let fetch_op = fetch_op ~v in
         (match fetch_op with
@@ -275,9 +293,9 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
             (* Note: [Imported] can be used for merging across devices. But, some use cases of
                [Imported] will require a hosted tensor node. *)
             Tn.update_memory_mode v Materialized 22);
-        Fetch { array = v; fetch_op; dims }
+        Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
   in
-  let grad_asn ~v:_ ~g:_ ~projections:_ = Asgns.Noop in
+  let grad_asn ~v:_ ~g:_ ~projections:_ = Asgns.empty_comp in
   let make_shape =
     Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced ()
   in
@@ -352,7 +370,7 @@ let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?
       ?output_dims ?input_axes ?output_axes ?deduced ~init_op ()
   in
   let v = t.value in
-  (* It is convenient to use the param syntax for volatiles (mutable inputs). *)
+  (* It is convenient to use the param syntax for volatiles (mutable embedded_nodes). *)
   Tn.update_memory_mode v (Hosted Nonconstant) 24;
   (* In principle, gradients can even be local, if a single jitted block does forward, backprop, and
      update computations. *)
@@ -360,33 +378,6 @@ let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?
   Tn.update_memory_mode g Never_virtual 26;
   t
 
-let rec inputs_and_outputs t =
-  (* TODO: consider either caching here, or as a field of t. *)
-  let opt_grad t = Option.value_map ~default:[] ~f:(fun diff -> [ diff.grad ]) t.diff in
-  let dir_outputs t =
-    Set.of_list (module Tn)
-    @@ List.filter ~f:(fun tn -> not @@ Set.mem t.non_embedded tn)
-    @@ (t.value :: opt_grad t)
-  in
-  let open Arrayjit.Utils.Set_O in
-  let non_embedded, embedded =
-    List.fold t.children
-      ~init:(t.non_embedded, Set.of_list (module Tn) (t.value :: opt_grad t))
-      ~f:(fun (non_embedded, embedded) ch ->
-        (ch.subtensor.non_embedded + non_embedded, dir_outputs ch.subtensor + embedded))
-  in
-  let non_embedded, embedded =
-    List.fold t.children ~init:(non_embedded, embedded)
-      ~f:(fun ((non_embedded, embedded) as accu) ch ->
-        if ch.embedded then
-          let more_non, more = inputs_and_outputs ch.subtensor in
-          (non_embedded + more_non, embedded + more)
-        else accu)
-  in
-  (non_embedded - embedded, embedded)
-
-let iter_embedded ~f t = Set.iter ~f @@ snd @@ inputs_and_outputs t
-let input_nodes t = fst @@ inputs_and_outputs t
 let debug_name t = Tn.debug_name t.value
 let debug_grad t = Tn.debug_name (Option.value_exn t.diff).grad
 
@@ -642,28 +633,29 @@ let print ~with_grad ~with_code ?(force = false) ?(with_low_level = false)
               Stdlib.Format.print_char '\n'
           | _, (lazy None) -> Stdlib.Format.printf "%s <virtual>@ " (grad_txt diff));
   if with_code then (
-    (match t.forward with
+    (match t.forward.asgns with
     | Noop -> ()
     | fwd_code ->
         Stdlib.Format.printf "@[<v 2>Current forward body:%a@]@," (Asgns.fprint_hum ()) fwd_code);
     match t.diff with
-    | Some { backprop = Noop; _ } -> ()
+    | Some { backprop = { asgns = Noop; _ }; _ } -> ()
     | Some { backprop = bwd_code; _ } ->
-        Stdlib.Format.printf "@[<v 2>Current backprop body:%a@]@," (Asgns.fprint_hum ()) bwd_code
+        Stdlib.Format.printf "@[<v 2>Current backprop body:%a@]@," (Asgns.fprint_hum ())
+          bwd_code.asgns
     | None -> ());
   if with_low_level then (
-    (match t.forward with
+    (match t.forward.asgns with
     | Noop -> ()
     | fwd_code ->
         Stdlib.Format.printf "@[<v 2>Current forward low-level body:%a@]@,"
           (Arrayjit.Low_level.fprint_hum ())
         @@ Asgns.to_low_level fwd_code);
     match t.diff with
-    | Some { backprop = Noop; _ } -> ()
+    | Some { backprop = { asgns = Noop; _ }; _ } -> ()
     | Some { backprop = bwd_code; _ } ->
         Stdlib.Format.printf "@[<v 2>Current backprop low-level body:%a@]@,"
           (Arrayjit.Low_level.fprint_hum ())
-        @@ Asgns.to_low_level bwd_code
+        @@ Asgns.to_low_level bwd_code.asgns
     | None -> ());
   Stdlib.Format.printf "\n"
 

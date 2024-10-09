@@ -67,13 +67,7 @@ type procedure = {
 [@@deriving sexp_of]
 
 let expected_merge_node proc = proc.lowered.merge_node
-
-let is_in_context node =
-  Tnode.default_to_most_local node.Low_level.tn 33;
-  match node.tn.memory_mode with
-  | Some (Hosted (Constant | Volatile), _) -> false
-  | Some ((Virtual | Local), _) -> false
-  | _ -> true
+let is_in_context node = Tnode.is_in_context_force node.Low_level.tn 33
 
 let header_sep =
   let open Re in

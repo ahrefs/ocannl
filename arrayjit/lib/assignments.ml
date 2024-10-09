@@ -44,7 +44,18 @@ and t =
   | Fetch of { array : Tn.t; fetch_op : fetch_op; dims : int array Lazy.t }
 [@@deriving sexp_of]
 
-type comp = {asgns: t; }
+type comp = {
+  asgns : t;
+  embedded_nodes : Set.M(Tn).t;
+      (** The nodes in {!field-asgns} that are not in [embedded_nodes] need to already be in
+          contexts linked with the {!comp}. *)
+}
+[@@deriving sexp_of]
+(** Computations based on assignments. Note: the [arrayjit] library makes use of, but does not
+    produce nor verify the {!field-embedded_nodes} associated to some given {!field-asgns}. *)
+
+let to_comp asgns = { asgns; embedded_nodes = Set.empty (module Tnode) }
+let empty_comp = to_comp Noop
 
 let get_name_exn asgns =
   let punct_or_sp = Str.regexp "[-@*/:.;, ]" in
@@ -63,39 +74,54 @@ let get_name_exn asgns =
   let result = loop asgns in
   if String.is_empty result then invalid_arg "Assignments.get_name: no comments in code" else result
 
-(** Returns nodes that are inputs to the computation in a narrow sense: nodes that were potentially
-    computed by assignments executed before. *)
-let input_or_recurrent_nodes asgns =
+let is_total ~initialize_neutral ~projections =
+  initialize_neutral && Indexing.is_bijective projections
+
+(** Returns the left-hand-side nodes of total assignments. NOTE: [output_nodes] forces the
+    computation of the assignments' projections, so should only be called after shape inference. *)
+let output_nodes asgns =
   let open Utils.Set_O in
   let empty = Set.empty (module Tn) in
-  let single = function
-    | Node tn ->
-        if Tn.known_constant tn || Tn.known_volatile tn || Tn.known_not_materialized tn then
-          Set.empty (module Tn)
-        else Set.singleton (module Tn) tn
-    | Merge_buffer _ -> Set.empty (module Tn)
-  in
-  let maybe have lhs = if have then Set.singleton (module Tn) lhs else empty in
   let rec loop = function
     | Noop -> empty
-    | Seq (t1, t2) -> loop t1 + (loop t2 - assigned t1)
+    | Seq (t1, t2) -> loop t1 + loop t2
     | Block_comment (_, t) -> loop t
-    | Accum_binop { initialize_neutral; lhs; rhs1; rhs2; _ } ->
-        maybe (not initialize_neutral) lhs + single rhs1 + single rhs2
-    | Accum_unop { initialize_neutral; lhs; rhs; _ } ->
-        maybe (not initialize_neutral) lhs + single rhs
+    | Accum_unop { lhs; initialize_neutral; projections; _ }
+    | Accum_binop { lhs; initialize_neutral; projections; _ } ->
+        if is_total ~initialize_neutral ~projections:(Lazy.force projections) then
+          Set.singleton (module Tn) lhs
+        else empty
     | Fetch _ -> empty
-  and assigned = function
-    | Noop -> Set.empty (module Tn)
-    | Seq (t1, t2) -> assigned t1 + assigned t2
-    | Block_comment (_, t) -> assigned t
-    | Accum_binop { initialize_neutral; lhs; _ } -> maybe initialize_neutral lhs
-    | Accum_unop { initialize_neutral; lhs; _ } -> maybe initialize_neutral lhs
-    | Fetch { array; _ } -> Set.singleton (module Tn) array
   in
   loop asgns
 
-let sequential l = Option.value ~default:Noop @@ List.reduce l ~f:(fun st sts -> Seq (st, sts))
+(** Returns materialized nodes in the sense of {!Tnode.is_in_context_force}. NOTE: it ideally should
+    be called after compilation. *)
+let context_nodes asgns =
+  let open Utils.Set_O in
+  let empty = Set.empty (module Tn) in
+  let one tn = if Tnode.is_in_context_force tn 34 then Set.singleton (module Tn) tn else empty in
+  let of_node = function Node rhs -> one rhs | Merge_buffer _ -> empty in
+  let rec loop = function
+    | Noop -> empty
+    | Seq (t1, t2) -> loop t1 + loop t2
+    | Block_comment (_, t) -> loop t
+    | Accum_unop { lhs; rhs; _ } -> Set.union (one lhs) (of_node rhs)
+    | Accum_binop { lhs; rhs1; rhs2; _ } ->
+        Set.union_list (module Tn) [ one lhs; of_node rhs1; of_node rhs2 ]
+    | Fetch { array; _ } -> one array
+  in
+  loop asgns
+
+let sequential l =
+  Option.value ~default:Noop @@ List.reduce l ~f:(fun sts another_st -> Seq (sts, another_st))
+
+let sequence l =
+  Option.value ~default:{ asgns = Noop; embedded_nodes = Set.empty (module Tn) }
+  @@ List.reduce l
+       ~f:(fun
+           { asgns = sts; embedded_nodes = embs } { asgns = another_st; embedded_nodes = emb } ->
+         { asgns = Seq (sts, another_st); embedded_nodes = Set.union embs emb })
 
 let%diagn1_sexp to_low_level code =
   let open Indexing in
@@ -145,7 +171,6 @@ let%diagn1_sexp to_low_level code =
           derive_index ~product_syms:projections.product_iterators
             ~projection:projections.project_rhs.(1)
         in
-        let is_assignment = initialize_neutral && Indexing.is_bijective projections in
         let basecase rev_iters =
           let product = Array.of_list_rev_map rev_iters ~f:(fun s -> Indexing.Iterator s) in
           let rhs1_idcs = rhs1_idx ~product in
@@ -156,7 +181,7 @@ let%diagn1_sexp to_low_level code =
           let rhs1_ll = get rhs1 rhs1_idcs in
           let rhs2_ll = get rhs2 rhs2_idcs in
           let rhs2 = binop ~op ~rhs1:rhs1_ll ~rhs2:rhs2_ll in
-          if is_assignment then set lhs lhs_idcs rhs2
+          if is_total ~initialize_neutral ~projections then set lhs lhs_idcs rhs2
           else set lhs lhs_idcs @@ binop ~op:accum ~rhs1:lhs_ll ~rhs2
         in
         let rec for_loop rev_iters = function
@@ -178,7 +203,7 @@ let%diagn1_sexp to_low_level code =
             [%log "projections=", (projections : projections)];
             raise e
         in
-        if initialize_neutral && not is_assignment then
+        if initialize_neutral && not (is_total ~initialize_neutral ~projections) then
           let dims = lazy projections.lhs_dims in
           let fetch_op = Constant (Ops.neutral_elem accum) in
           Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops)
@@ -193,7 +218,6 @@ let%diagn1_sexp to_low_level code =
           derive_index ~product_syms:projections.product_iterators
             ~projection:projections.project_rhs.(0)
         in
-        let is_assignment = initialize_neutral && Indexing.is_bijective projections in
         let basecase rev_iters =
           let product = Array.of_list_rev_map rev_iters ~f:(fun s -> Indexing.Iterator s) in
           let lhs_idcs = lhs_idx ~product in
@@ -201,7 +225,7 @@ let%diagn1_sexp to_low_level code =
           let lhs_ll = get (Node lhs) lhs_idcs in
           let rhs_ll = get rhs @@ rhs_idx ~product in
           let rhs2 = unop ~op ~rhs:rhs_ll in
-          if is_assignment then set lhs lhs_idcs rhs2
+          if is_total ~initialize_neutral ~projections then set lhs lhs_idcs rhs2
           else set lhs lhs_idcs @@ binop ~op:accum ~rhs1:lhs_ll ~rhs2
         in
         let rec for_loop rev_iters = function
@@ -218,7 +242,7 @@ let%diagn1_sexp to_low_level code =
                 }
         in
         let for_loops = for_loop [] (Array.to_list projections.product_space) in
-        if initialize_neutral && not is_assignment then
+        if initialize_neutral && not (is_total ~initialize_neutral ~projections) then
           let dims = lazy projections.lhs_dims in
           let fetch_op = Constant (Ops.neutral_elem accum) in
           Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops)

@@ -26,7 +26,7 @@
 
 ## Preliminaries
 
-OCANNL, and Arrayjit specifically, is built around a fixed number of numeric operations, declared in `arrayjit/ops.ml`. We assign lexical operators to many of the operations, inventing novel operators if needed. For example, Rectified Linear Unit `Relu` operation, which computes `f(x) = max(0,x)`, gets the operator `?/`, and the ReLU-Gate `Relu_gate` operation, which computes `f(x,y) = if x > 0.0 then y else 0.0`, gets the operator `-?/`. These built-in numeric operations are used to construct assignments (`Assignments.t`). The syntax `%cd` is needed to build assignments concisely. On the other hand, while the syntax `%op` helps build tensors (`Tensor.t`), they can be expressed concisely in pure OCaml. Unlike for assignments, the building blocks for tensor expressions are easy to extend. The meaningful basic ones are provided in `lib/operation.ml`.
+OCANNL, and arrayjit specifically, is built around a fixed number of numeric operations, declared in `arrayjit/ops.ml`. We assign lexical operators to many of the operations, inventing novel operators if needed. For example, Rectified Linear Unit `Relu` operation, which computes `f(x) = max(0,x)`, gets the operator `?/`, and the ReLU-Gate `Relu_gate` operation, which computes `f(x,y) = if x > 0.0 then y else 0.0`, gets the operator `-?/`. These built-in numeric operations are used to construct assignments (`Assignments.t` packaged as `Assignments.comp`). The syntax `%cd` is needed to build assignments concisely. On the other hand, while the syntax `%op` helps build tensors (`Tensor.t`), they can be expressed concisely in pure OCaml. Unlike for assignments, the building blocks for tensor expressions are easy to extend. The meaningful basic ones are provided in `lib/operation.ml`.
 
 In OCANNL, we call a tensor that is prohibited from propagating gradients, does not have a gradient node nor backprop code, a _non-differentiable tensor_. Accordingly we can call the "plain" tensors with a gradient node _differentiable tensors_. Expressions in the `%cd` syntax will sometimes build new non-differentiable tensors as components of assignments (they will never build new differentiable tensors). The syntax extensions make the following assumption:
 
@@ -224,7 +224,7 @@ Examples:
 - `...|...->... ; ...|...->... => ...|...->...`: fully pointwise binary operation.
 - `...|...->... => ...->...` and `...->... => ...->...` are equivalent: reduce the batch axes into the result.
 - `2...|...->... => ...|...->...`: slice the tensor at dimension 2 of the leftmost batch axis. Note that the tensor operation `@|` implements slicing at the leftmost batch axis for arbitrary dimension.
-- `...|... => ...|...2`: expand the tensor by putting the argument at leftmost output dimension 2 of the result (and reduce input axes if any). `rhs ++ "...|... => ...|...2"` will fill the other cells of the new tensor with zeroes; `[%cd lhs =:* rhs ~logic:"...|... => ...|...2"]` will fill the other cells of `lhs` with ones since it's the neutral element of the assignmet (reduction) operator.
+- `...|... => ...|...2`: expand the tensor by putting the argument at leftmost output dimension 2 of the result (and reduce input axes if any). `rhs ++ "...|... => ...|...2"` will fill the other cells of the new tensor with zeroes; `[%cd lhs =:* rhs ~logic:"...|... => ...|...2"]` will fill the other cells of `lhs` with ones since it's the neutral element of the assignment (reduction) operator.
 - `ijk => kji`: reverse the three rightmost output axes, reduce any other axes.
 - `ijk => ki`: as above but also reduce the second-leftmost output axis.
 - `..v..|ijk => ..v..kji`: reverse the three rightmost output axes, reduce any other output and input axes, pointwise for batch axes, pairing the batch axes with the leftmost output axes of the result.
@@ -372,7 +372,7 @@ On the `Tensor` level, this is implemented as a binary tensor operation, but it 
 
 ### Intricacies of the syntax extension %cd
 
-The syntax `%cd` translator needs to accomplish more than a context-free conversion of a concise notation to an `Assignments.t` data-type.
+The syntax `%cd` translator needs to accomplish more than a context-free conversion of a concise notation to an `Assignments.comp` data-type. In particular:
 
 - It needs to keep track if `~projections` is in scope, and it needs to collect the information about an assignment to properly transofm the projections from the scope into the projections valid for the particular assignment.
 - Whenever the parsed notation uses tensors whose value nodes have not been computed yet, the translator needs to include the "forward" code of the tensors among the generated assignments. Typically this is required for embedded tensor expressions, which create new tensors. The translator puts the forward code in sequence just prior to the assignment that made use of the created tensor. The translator includes the forward code of tensors that are "forward roots" at the time the assigments are constructed (using `Tensor.is_fwd_root`).
@@ -382,3 +382,16 @@ The syntax `%cd` translator needs to accomplish more than a context-free convers
   - When one inline declaration uses another inline declaration on its right-hand-side, recall the other declaration's label-enriching-tensor and use it directly.
 - The argument slots in `Assignments.Accum_binop` and `Assignments.Accum_unop` can be either regular tensor nodes, or merge buffers of tensor nodes. The translator needs to determine that.
 - When a tensor expression is used to create a new tensor, the translator lifts the expression into a let-binding, to be able to refer to the (same) tensor more than once. The created tensor is referred to at least twice: at its use site, and to include its forward code among the assignments.
+
+### Embedded nodes
+
+In fact, the syntax `%cd` produces `Assignments.comp` values:
+
+```ocaml
+type comp = {
+  asgns : t;
+  embedded_nodes : Set.M(Tnode).t;
+}
+```
+
+The tensor nodes that are in `asgns` but not in `embedded_nodes`, and are on-device, must already be present in contexts with which the computation is linked. Such non-embedded nodes can be seen as inputs to the computation -- except that for `backprop` code of a tensor, they are actually the outputs! Embedded nodes are closely related to _rootness_ -- when a node has not been used in the code of another tensor, it is a root (a forward root for value nodes and a backprop root for grad nodes). `embedded_nodes` were roots the first time they were used in `asgns`.

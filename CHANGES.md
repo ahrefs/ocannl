@@ -7,6 +7,7 @@
 ### Changed
 
 - Migrated to cudajit 0.5.
+- Verifying that code is linked with the right contexts, by tracking `embedded_nodes` with assignments.
 - TODO: Built per-tensor-node device-to-device synchronization into device-to-device copying functions, removed obsolete blocking synchronizations.
 
 ## [0.4.1] -- 2024-09-17

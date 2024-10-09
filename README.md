@@ -24,7 +24,7 @@ OCANNL is sponsored by [Ahrefs](https://ocaml.org/success-stories/peta-byte-scal
   * Differentiable computations, centered around the [`%op`](lib/ppx_op.ml) syntax extension.
     * `%op` stands for "operation", it's meant to express tensors: `Tensor.t`, and tensor functions.
   * Plain computations, centered around the [`%cd`](lib/ppx_cd.ml) syntax extension. It integrates the `arrayjit` backend library with shape inference.
-    * `%cd` stands for "code", it's meant to express assignments: `Assignments.t`.
+    * `%cd` stands for "code", it's meant to express assignment computations: `Assignments.comp`.
 * The support for mixed-precision computations is upcoming.
   * E.g. higher-precision network components, or gradients at a higher precision than values.
   * Currently (v0.3), you can select the precision, and individual computation nodes track their precision, but mixing precisions might break things.

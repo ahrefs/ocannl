@@ -156,6 +156,13 @@ let is_materialized_force tn provenance =
   | Some ((On_device | Hosted _ | Materialized), _) -> true
   | Some ((Never_virtual | Device_only | Effectively_constant), _) -> assert false
 
+let is_in_context_force tn provenance =
+  default_to_most_local tn provenance;
+  match tn.memory_mode with
+  | Some (Hosted (Constant | Volatile), _) -> false
+  | Some ((Virtual | Local), _) -> false
+  | _ -> true
+
 let known_not_materialized tn =
   match tn.memory_mode with Some ((Virtual | Local), _) -> true | _ -> false
 

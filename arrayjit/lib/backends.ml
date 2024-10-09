@@ -35,7 +35,7 @@ module type No_device_backend = sig
   val expected_merge_node : code -> Tnode.t option
   val expected_merge_nodes : code_batch -> Tnode.t option array
 
-  val compile : ?shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.t -> code
+  val compile : ?shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.comp -> code
   (** If [~shared:true] (default [false]), the backend should prefer to do more compile work in a
       device-agnostic way. If [~shared:false], the backend can opt to postpone compiling altogether
       until [link] is called, to benefit from more optimizations. *)
@@ -45,7 +45,7 @@ module type No_device_backend = sig
     ?names:string array ->
     ?occupancy:(name:string -> src_n:int -> bool) ->
     Indexing.unit_bindings ->
-    Assignments.t array ->
+    Assignments.comp array ->
     code_batch
   (** Unlike the [~shared] parameter, [compile_batch] vs. [compile] is mostly about improving the
       compile time and debugging convenience by generating fewer files -- ideally does not affect
@@ -871,18 +871,20 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
     | Compiled (lowereds, _) ->
         Array.filter_map lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store))
 
-  let compile ?(shared = false) ?name bindings asgns : code =
-    let name, lowered = lower_assignments ?name bindings asgns in
+  let compile ?(shared = false) ?name bindings comp : code =
+    let name, lowered = lower_assignments ?name bindings comp.Assignments.asgns in
     if shared then Compiled (lowered, Backend.compile ~name ~opt_ctx_arrays:None bindings lowered)
     else Postponed { lowered; bindings; name }
 
-  let compile_batch ?(shared = false) ?names ?occupancy bindings asgns_l : code_batch =
-    let names, lowereds = lower_batch_assignments ?names ?occupancy bindings asgns_l in
+  let compile_batch ?(shared = false) ?names ?occupancy bindings comp_l : code_batch =
+    let names, lowereds =
+      lower_batch_assignments ?names ?occupancy bindings
+      @@ Array.map comp_l ~f:(fun c -> c.Assignments.asgns)
+    in
     if shared then Compiled (lowereds, compile_batch ~names ~opt_ctx_arrays:None bindings lowereds)
     else Postponed { lowereds; bindings; names }
 
-  let link ~from_prior_context ~merge_buffer (prior_context : context)
-      (code : code) =
+  let link ~from_prior_context ~merge_buffer (prior_context : context) (code : code) =
     Backend.(
       verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
         [| get_traced_store code |]);
@@ -897,8 +899,8 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
     in
     { context; schedule; bindings; name }
 
-  let link_batch ~from_prior_context ~merge_buffer
-      (prior_context : context) (code_batch : code_batch) =
+  let link_batch ~from_prior_context ~merge_buffer (prior_context : context)
+      (code_batch : code_batch) =
     Backend.(
       verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
       @@ get_traced_stores code_batch);
@@ -963,16 +965,19 @@ module Cuda_backend : Backend = struct
   let work_for context = work_for context.ctx
   let will_wait_for context = will_wait_for context.ctx
 
-  let compile ?shared:_ ?name bindings asgns : code =
-    let name, lowered = lower_assignments ?name bindings asgns in
+  let compile ?shared:_ ?name bindings comp : code =
+    let name, lowered = lower_assignments ?name bindings comp.Assignments.asgns in
     {
       traced_store = lowered.traced_store;
       code = compile ~name bindings lowered;
       expected_merge_node = lowered.Low_level.merge_node;
     }
 
-  let compile_batch ?shared:_ ?names ?occupancy bindings asgns_l =
-    let names, lowereds = lower_batch_assignments ?names ?occupancy bindings asgns_l in
+  let compile_batch ?shared:_ ?names ?occupancy bindings comp_l =
+    let names, lowereds =
+      lower_batch_assignments ?names ?occupancy bindings
+      @@ Array.map comp_l ~f:(fun c -> c.Assignments.asgns)
+    in
     {
       traced_stores =
         Array.filter_map lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store));

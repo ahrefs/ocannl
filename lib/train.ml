@@ -117,12 +117,12 @@ let forward ?(disable_rootness_check = false) t =
   let fwd = if disable_rootness_check then t.Tensor.forward else Tensor.consume_forward_code t in
   set_hosted t.Tensor.value;
   let label = Tn.debug_name t.value in
-  Asgns.Block_comment (label ^ " fwd", fwd)
+  { fwd with asgns = Asgns.Block_comment (label ^ " fwd", fwd.asgns) }
 
 type updaten = {
   loss : Tensor.t;
   params : (Tensor.t, Tensor.comparator_witness) Base.Set.t;
-  fwd_bprop : Asgns.t;
+  fwd_bprop : Asgns.comp;
 }
 
 let diff_or_error t provenance =
@@ -138,7 +138,7 @@ let grad_update_nochecks loss =
          ~~(loss "fwd";
             loss.forward);
          ~~(loss "zero grads";
-            diff.zero_grads);
+            Asgns.to_comp diff.zero_grads);
          loss.grad =: 1;
          ~~(loss "bprop";
             diff.backprop))]
@@ -168,7 +168,7 @@ let grad_update ?(disable_rootness_check = false) ?(setup_for_parallel = false) 
          ~~(loss "fwd";
             fwd);
          ~~(loss "zero grads";
-            zero_grads);
+            Asgns.to_comp zero_grads);
          loss.grad =: 1;
          ~~(loss "bprop";
             bprop))]
@@ -190,7 +190,7 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov l =
   let code =
     l.params |> Set.to_list
     |> List.map ~f:(sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov)
-    |> Asgns.sequential
+    |> Asgns.sequence
   in
   [%cd
     ~~(l.loss "sgd update";
@@ -330,7 +330,7 @@ let%track3_sexp parallel_update (type context)
   let _occupancies_debug : bool array array = occupancies_dst_src in
   let ctxs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.context)] in
   let occupancy_dst ~dst_n = Array.exists ~f:Fn.id occupancies_dst_src.(dst_n) in
-  let grad_merges : Asgns.t array =
+  let grad_merges =
     Array.map all_params ~f:(fun p ->
         [%cd
           ~~("merging gradient of" p;
@@ -341,25 +341,27 @@ let%track3_sexp parallel_update (type context)
     let occupancy ~name:_ ~src_n:_ = true in
     Array.mapi ctxs ~f:(fun dst_n ctx ->
         if occupancy_dst ~dst_n then
+          let compiled = Backend.compile_batch ~shared:true ~occupancy Idx.Empty grad_merges in
           let from_prior_context =
-            Array.fold
-              ~init:(Set.empty (module Tn))
-              ~f:(fun acc tn -> Set.union acc @@ Asgns.input_or_recurrent_nodes tn)
-              grad_merges
+            Set.union_list (module Tn)
+            @@ Array.to_list
+            @@ Array.map grad_merges ~f:(fun c ->
+                   Set.diff (Asgns.context_nodes c.asgns) c.embedded_nodes)
           in
-          snd
-          @@ Backend.link_batch ctx ~from_prior_context
-          @@ Backend.compile_batch ~shared:true ~occupancy Idx.Empty grad_merges
+          snd @@ Backend.link_batch ctx ~from_prior_context compiled
         else [||])
   in
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
   let loss_merge =
-    Backend.(
-      link ~from_prior_context:(Tensor.input_nodes updaten.loss) sgd_update.context
-      @@ compile Idx.Empty
-           [%cd
-             ~~("merging" updaten.loss;
-                updaten.loss.value =+ updaten.loss.value.merge)])
+    let compiled =
+      Backend.compile Idx.Empty
+        [%cd
+          ~~("merging" updaten.loss;
+             updaten.loss.value =+ updaten.loss.value.merge)]
+    in
+    let c = updaten.loss.forward in
+    let from_prior_context = Set.diff (Asgns.context_nodes c.asgns) c.embedded_nodes in
+    Backend.link ~from_prior_context sgd_update.context compiled
   in
   let into_merge_buffer = if copy_to_merge then BT.Copy else BT.Streaming in
   (* Since each device has its own queue, we can iterate over devices in the outer loop. *)
@@ -419,9 +421,10 @@ let get_all_suggested_devices ?(max_num_devices : int option) (type device)
   |> Array.concat_map ~f:Fn.id
 
 let to_routine (type context) (module Backend : Backend_type with type context = context)
-    (context : context) ?shared ?name bindings asgns =
-  let code = Backend.compile ?shared ?name bindings asgns in
-  Backend.link ~from_prior_context:(Asgns.input_or_recurrent_nodes asgns) context code
+    (context : context) ?shared ?name bindings comp =
+  let code = Backend.compile ?shared ?name bindings comp in
+  let from_prior_context = Set.diff (Asgns.context_nodes comp.asgns) comp.embedded_nodes in
+  Backend.link ~from_prior_context context code
 
 let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init_lr ?lr_schedule
     ?(copy_to_merge = false) ?max_num_devices ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn
@@ -467,7 +470,8 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   set_hosted learning_rate.value;
   let sgd = sgd_update ~learning_rate ~weight_decay update in
   let grad_update = Backend.compile ~shared:true bindings update.fwd_bprop in
-  let from_prior_context = Tensor.input_nodes update.loss in
+  let c = update.loss.forward in
+  let from_prior_context = Set.diff (Asgns.context_nodes c.asgns) c.embedded_nodes in
   let grad_updates =
     Array.map prior_contexts ~f:(fun ctx -> Backend.link ~from_prior_context ctx grad_update)
   in
@@ -518,10 +522,16 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   set_on_host Changed_on_devices model_result.Tensor.value;
   (* By using sgd_update.context, maybe we don't need to copy the parameters back to the host. *)
   let routine =
-    Backend.(
-      link ~from_prior_context:(Tensor.input_nodes model_result) sgd_update.context
-      @@ compile IDX.empty
-      @@ Block_comment ("infer " ^ Tn.debug_name model_result.value, infer_fwd))
+    let compiled =
+      Backend.compile IDX.empty
+        [%cd
+          ~~("infer " model_result;
+             infer_fwd)]
+    in
+    let from_prior_context =
+      Set.diff (Asgns.context_nodes infer_fwd.asgns) infer_fwd.embedded_nodes
+    in
+    Backend.link ~from_prior_context sgd_update.context compiled
   in
   let infer_callback values =
     Tensor.set_values infer values;
@@ -540,9 +550,10 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
 let%track3_sexp forward_and_ctx ?(disable_rootness_check = false) (type context)
     (module Backend : Backend_type with type context = context) ctx ?(bindings = IDX.empty) t =
   let routine =
-    Backend.(
-      link ~from_prior_context:(Tensor.input_nodes t) ctx
-      @@ compile bindings @@ forward ~disable_rootness_check t)
+    let c = forward ~disable_rootness_check t in
+    let compiled = Backend.compile bindings c in
+    let from_prior_context = Set.diff (Asgns.context_nodes c.asgns) c.embedded_nodes in
+    Backend.link ~from_prior_context ctx compiled
   in
   if not disable_rootness_check then Tensor.remove_bprop_root t;
   (* FIXME: to properly forget we need to free the incrementally-allocated memory! *)

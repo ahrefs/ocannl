@@ -292,3 +292,49 @@ let mem_properties (traced_store : Low_level.traced_store) =
       link code.bindings params Ctypes.(void @-> returning void)]
   in
 ]}
+
+syntax_extensions.md:
+{[
+Local input here has a narrow meaning: a local input is a non-merge tensor node that should be computed by (other) assignments executed before the constructed sequence of assignments. Local inputs are tricky because they only appear in the bigger picture: they exclude recurrent nodes, which are only computed by the associated assignments, and nodes that need be copied from host to devices before they are used. They are unrelated (orthogonal) to merge nodes (which are external inputs). For tensors, outside the purview of `%cd` but to give context:
+
+- The forward code has among its local inputs the child values nodes that were not forward roots at the time of tensor creation, and whose forward code was non-noop.
+- The backprop code, if non-noop, has among its local inputs the grad node of the tensor itself.
+]}
+
+assignments.ml:
+{[
+
+(** Computes an approximation to {!field-embedded_nodes} where the passed assignments serve as
+    {!field-asgns}. It is an over-approximation as it also includes recurrent nodes. It should
+    ideally be called after relevant compilations, when {!Tnode.memory_mode} is known for the nodes. *)
+let input_or_recurrent_nodes asgns =
+  let open Utils.Set_O in
+  let empty = Set.empty (module Tn) in
+  let single = function
+    | Node tn ->
+        if Tn.known_constant tn || Tn.known_volatile tn || Tn.known_not_materialized tn then
+          Set.empty (module Tn)
+        else Set.singleton (module Tn) tn
+    | Merge_buffer _ -> Set.empty (module Tn)
+  in
+  let maybe have lhs = if have then Set.singleton (module Tn) lhs else empty in
+  let rec loop = function
+    | Noop -> empty
+    | Seq (t1, t2) -> loop t1 + (loop t2 - assigned t1)
+    | Block_comment (_, t) -> loop t
+    | Accum_binop { initialize_neutral; lhs; rhs1; rhs2; _ } ->
+        maybe (not initialize_neutral) lhs + single rhs1 + single rhs2
+    | Accum_unop { initialize_neutral; lhs; rhs; _ } ->
+        maybe (not initialize_neutral) lhs + single rhs
+    | Fetch _ -> empty
+  and assigned = function
+    | Noop -> Set.empty (module Tn)
+    | Seq (t1, t2) -> assigned t1 + assigned t2
+    | Block_comment (_, t) -> assigned t
+    | Accum_binop { initialize_neutral; lhs; _ } -> maybe initialize_neutral lhs
+    | Accum_unop { initialize_neutral; lhs; _ } -> maybe initialize_neutral lhs
+    | Fetch { array; _ } -> Set.singleton (module Tn) array
+  in
+  loop asgns
+
+]}
