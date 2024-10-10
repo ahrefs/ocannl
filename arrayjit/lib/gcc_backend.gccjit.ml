@@ -7,7 +7,7 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-open Backend_utils.Types
+open Backend_types.Types
 
 let name = "gccjit"
 

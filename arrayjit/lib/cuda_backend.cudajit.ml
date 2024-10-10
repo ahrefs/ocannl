@@ -22,7 +22,7 @@ module Tn = Tnode
 module Lazy = Utils.Lazy
 module Cu = Cudajit
 module Debug_runtime = Utils.Debug_runtime
-open Backend_utils.Types
+open Backend_types.Types
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 

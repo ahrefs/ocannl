@@ -10,7 +10,7 @@ module Rand = Arrayjit.Rand.Lib
 let benchmark_overhead backend () =
   let n_data = 20 in
   Arrayjit.Backends.reinitialize backend Physical_devices_only;
-  let module Backend = (val backend : Arrayjit.Backends.Backend) in
+  let module Backend = (val backend : Arrayjit.Backend_types.Backend) in
   (* Utils.settings.with_debug <- true; *)
   (* Utils.settings.output_debug_files_in_build_directory <- true; *)
   (* Utils.settings.debug_log_from_routines <- true; *)

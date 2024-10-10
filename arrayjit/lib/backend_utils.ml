@@ -7,28 +7,6 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-module Types = struct
-  type 'context routine = {
-    context : 'context;
-    schedule : Tnode.task;
-    bindings : Indexing.lowered_bindings;
-    name : string;
-  }
-  [@@deriving sexp_of]
-
-  type config = Physical_devices_only | For_parallel_copying | Most_parallel_devices
-  [@@deriving equal, sexp, variants]
-
-  type merge_buffer_use = No | Streaming | Copy [@@deriving equal, sexp]
-
-  type param_source =
-    | Log_file_name
-    | Merge_buffer
-    | Param_ptr of Tnode.t
-    | Static_idx of Indexing.static_symbol
-  [@@deriving sexp_of]
-end
-
 module Tn = Tnode
 
 module C_syntax (B : sig
@@ -50,7 +28,7 @@ module C_syntax (B : sig
   val convert_precision : from:Ops.prec -> to_:Ops.prec -> string * string
 end) =
 struct
-  open Types
+  open Backend_types.Types
 
   let get_ident =
     Low_level.get_ident_within_code ~no_dots:true @@ Array.map B.for_lowereds ~f:(fun l -> l.llc)

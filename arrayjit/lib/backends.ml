@@ -1,5 +1,5 @@
 open Base
-open Backend_utils.Types
+open Backend_types.Types
 module Debug_runtime = Utils.Debug_runtime
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
@@ -7,175 +7,8 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-module type No_device_backend = sig
-  type code [@@deriving sexp_of]
-  type code_batch [@@deriving sexp_of]
-  type buffer_ptr [@@deriving sexp_of]
-  type context [@@deriving sexp_of]
-  type nonrec routine = context routine [@@deriving sexp_of]
-
-  val name : string
-
-  val initialize : config -> unit
-  (** Initializes a backend before first use or (on some backends) after {!unsafe_cleanup}. Does
-      nothing if the backend is already initialized. *)
-
-  val is_initialized : unit -> bool
-  (** Returns false if there was no previous {!initialize} call, or, on some backends, the most
-      recent call was followed by {!unsafe_cleanup}. If it returns false, one must call
-      {!initialize} before using the backend. *)
-
-  val init : label:string -> context
-  (** [label] is usually the backend name concatenated with the device number. *)
-
-  val finalize : context -> unit
-  (** Finalizes (just) the context. *)
-
-  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
-  val expected_merge_node : code -> Tnode.t option
-  val expected_merge_nodes : code_batch -> Tnode.t option array
-
-  val compile : ?shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.comp -> code
-  (** If [~shared:true] (default [false]), the backend should prefer to do more compile work in a
-      device-agnostic way. If [~shared:false], the backend can opt to postpone compiling altogether
-      until [link] is called, to benefit from more optimizations. *)
-
-  val compile_batch :
-    ?shared:bool ->
-    ?names:string array ->
-    ?occupancy:(name:string -> src_n:int -> bool) ->
-    Indexing.unit_bindings ->
-    Assignments.comp array ->
-    code_batch
-  (** Unlike the [~shared] parameter, [compile_batch] vs. [compile] is mostly about improving the
-      compile time and debugging convenience by generating fewer files -- ideally does not affect
-      execution, but there can be backend-specific differences. Only array entries for which
-      [occupancy] returns true are included. *)
-
-  val link : merge_buffer:(buffer_ptr * Tnode.t) option ref -> context -> code -> routine
-  (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
-
-  val link_batch :
-    merge_buffer:(buffer_ptr * Tnode.t) option ref ->
-    context ->
-    code_batch ->
-    context * routine option array
-  (** Returns the routines for the procedures included in the code batch. The returned context is
-      downstream of all the returned routines (in particular, the routines' contexts are not
-      independent). *)
-
-  val unsafe_cleanup : unit -> unit
-  (** Cleans up all work on a backend, releases resources. All previously retrieved values
-      (contexts, virtual and physical devices) become invalid. The backend needs to be initialized
-      again to be used again. *)
-
-  val to_buffer : Tnode.t -> dst:buffer_ptr -> src:context -> unit
-  val host_to_buffer : Ndarray.t -> dst:buffer_ptr -> unit
-  val buffer_to_host : Ndarray.t -> src:buffer_ptr -> unit
-  val get_buffer : Tnode.t -> context -> buffer_ptr option
-end
-
-module type Backend = sig
-  include No_device_backend
-
-  val link : context -> code -> routine
-  (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
-
-  val link_batch : context -> code_batch -> context * routine option array
-  (** Returns the routines for the procedures included in the code batch. The returned context is
-      downstream of all the returned routines. *)
-
-  type event
-  (** An event tracks if a device finished computing past a particular point in its schedue. These
-      values are used internally for scheduling across devices of the backend, and can be used for
-      explicit scheduling. *)
-
-  val sync : event -> unit
-  (** Blocks till the event completes, if it's not done already. *)
-
-  val is_done : event -> bool
-  (** Whether the event completed. *)
-
-  val work_for : context -> Tnode.t -> event option
-  (** If the tensor node is in the context, returns the event indicating if currently running or
-      scheduled computations modifying that node on the context's device have completed.
-
-      NOTE: [work_for ctx tn], if work tracking was not yet registered for [tn], will register work
-      tracking for [tn] and return the [all_work] event for [ctx]'s device. *)
-
-  val will_wait_for : context -> event -> unit
-  (** Schedules waiting for the given event on the context's device.
-
-      NOTE: it should rarely be needed to call [will_wait_for] explicitly, because it is typically
-      called internally when necessary. But there is one exception, see {!device_to_device} when
-      [into_merge_buffer=Streaming]. *)
-
-  val from_host : context -> Tnode.t -> bool
-  (** If the tensor node is both hosted and in-context, schedules a copy from host to context and
-      returns true, otherwise returns false. NOTE: it's the caller's responsibility to synchronize
-      the device (via [await ctx.device] or [sync (work_for ctx tn)]) before the host's data is
-      overwritten. *)
-
-  val to_host : context -> Tnode.t -> bool
-  (** If the tensor node is both hosted and in-context, schedules a copy from context to host and
-      returns true, otherwise returns false. NOTE: it's the caller's responsibility to synchronize
-      the device (via [await ctx.device] or [sync (work_for ctx tn)]) before the host's data is
-      read. *)
-
-  val device_to_device :
-    Tnode.t -> into_merge_buffer:merge_buffer_use -> dst:context -> src:context -> bool
-  (** [device_to_device tn ~into_merge_buffer ~dst ~src] proceeds as follows:
-      - If the node is absent from the [src] context and either it is present in the [dst] context
-        or [into_merge_buffer] is different from [No]: raises an error.
-      - If the node is absent from [dst] and [into_merge_buffer=No]: returns false.
-      - Executes [will_wait_for dst (work_for src tn)].
-      - If [into_merge_buffer=No]: schedules a copy of the tensor node from the device of [src] to
-        the device of [dst].
-      - If [into_merge_buffer] is different from [No]: sets on [dst] the merge buffer source to the
-        given node. If [into_merge_buffer=Streaming], remembers the buffer pointer of the source
-        node to use for streaming, without blocking. If [into_merge_buffer=Copy], schedules copying
-        from [src] to the merge buffer of [dst]'s device.
-      - If the [dst] context resulted from a compilation with [Streaming] or [Copy] specific merge
-        buffer code, the [device_to_device] call should fail immediately if there's a mismatch with
-        [into_merge_buffer].
-
-      NOTE: If [into_merge_buffer:Streaming], after scheduling the work on [dst] using the merge
-      buffer but before scheduling work on [src] that modifies [tn], execute
-      [will_wait_for src (all_work (get_ctx_device dst))]. *)
-
-  type physical_device
-  type device
-
-  val init : device -> context
-  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> device -> buffer_ptr
-
-  val await : device -> unit
-  (** Blocks till the device becomes idle, i.e. synchronizes the device. *)
-
-  val all_work : device -> event
-  (** Returns the event indicating if any currently running or scheduled computations on the device
-      have completed. *)
-
-  val is_idle : device -> bool
-  (** Whether the device is currently waiting for work. *)
-
-  val sexp_of_device : device -> Sexp.t
-  val get_device : ordinal:int -> physical_device
-  val num_physical_devices : unit -> int
-
-  val suggested_num_virtual_devices : physical_device -> int
-  (** The optimal number of virtual devices for the given physical device to follow the
-      {!Backend_utils.Types.config} strategy passed to {!No_device_backend.initialize}. *)
-
-  val new_virtual_device : physical_device -> device
-  val get_ctx_device : context -> device
-  val get_physical_device : device -> physical_device
-  val to_ordinal : physical_device -> int
-  val to_subordinal : device -> int
-  val get_name : device -> string
-end
-
-module Multicore_backend (Backend : No_device_backend) : Backend = struct
+module Multicore_backend (Backend : Backend_types.No_device_backend) : Backend_types.Backend =
+struct
   module Domain = Domain [@warning "-3"]
 
   type task_list = Tnode.task Utils.mutable_list [@@deriving sexp_of]
@@ -533,7 +366,7 @@ let sync_suggested_num_virtual_devices = ref 1
 
 (** A minimalisitc wrapper creating backends where all calls run synchronously on the main thread.
     There is only one physical device, but an arbitrary number of virtual devices. *)
-module Sync_backend (Backend : No_device_backend) : Backend = struct
+module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.Backend = struct
   type buffer_ptr = Backend.buffer_ptr [@@deriving sexp_of]
   type event = unit
 
@@ -736,55 +569,6 @@ let lower_batch_assignments ?names ?occupancy bindings asgns_l =
            )
          else (None, None))
 
-module type Simple_backend = sig
-  type context [@@deriving sexp_of]
-  type procedure [@@deriving sexp_of]
-  type ctx_array [@@deriving sexp_of]
-  type buffer_ptr [@@deriving sexp_of]
-  type ctx_arrays = ctx_array Map.M(Tnode).t [@@deriving sexp_of]
-
-  val buffer_ptr : ctx_array -> buffer_ptr
-  val ctx_arrays : context -> ctx_arrays
-  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
-  val expected_merge_node : procedure -> Tnode.t option
-
-  val is_in_context : Low_level.traced_array -> bool
-  (** If true, the node is required to be in the contexts linked with code that uses it.
-
-      Should return false for nodes that are virtual, local, or which the backend prefers to access
-      directly from the host. *)
-
-  val compile :
-    name:string ->
-    opt_ctx_arrays:ctx_arrays option ->
-    Indexing.unit_bindings ->
-    Low_level.optimized ->
-    procedure
-
-  val compile_batch :
-    names:string option array ->
-    opt_ctx_arrays:ctx_arrays option ->
-    Indexing.unit_bindings ->
-    Low_level.optimized option array ->
-    ctx_arrays option * procedure option array
-
-  val link_compiled :
-    merge_buffer:(buffer_ptr * Tnode.t) option ref ->
-    context ->
-    procedure ->
-    context * Indexing.lowered_bindings * Tnode.task * string
-
-  val name : string
-  val initialize : unit -> unit
-  val is_initialized : unit -> bool
-  val init : label:string -> context
-  val finalize : context -> unit
-  val unsafe_cleanup : unit -> unit
-  val to_buffer : Tnode.t -> dst:buffer_ptr -> src:context -> unit
-  val host_to_buffer : Ndarray.t -> dst:buffer_ptr -> unit
-  val buffer_to_host : Ndarray.t -> src:buffer_ptr -> unit
-end
-
 let verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context traced_stores
     =
   let olds = ctx_arrays prior_context in
@@ -801,7 +585,8 @@ let from_prior_context_batch comps =
           Set.diff (Assignments.context_nodes comp.Assignments.asgns) comp.embedded_nodes))
   |> Array.fold ~init:(Set.empty (module Tnode)) ~f:Set.union
 
-module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend = struct
+module Simple_no_device_backend (Backend : Backend_types.Simple_backend) :
+  Backend_types.No_device_backend = struct
   include Backend
 
   type code =
@@ -952,92 +737,19 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
     Map.find (Backend.ctx_arrays context) tn |> Option.map ~f:Backend.buffer_ptr
 end
 
-module C_device : No_device_backend = Simple_no_device_backend ((
-  Cc_backend : Simple_backend with type context = Cc_backend.context))
+module C_device : Backend_types.No_device_backend = Simple_no_device_backend ((
+  Cc_backend : Backend_types.Simple_backend with type context = Cc_backend.context))
 
 module Cc_backend = Multicore_backend (C_device)
 module Sync_cc_backend = Sync_backend (C_device)
 
-module Gccjit_device : No_device_backend = Simple_no_device_backend ((
-  Gcc_backend : Simple_backend with type context = Gcc_backend.context))
+module Gccjit_device : Backend_types.No_device_backend = Simple_no_device_backend ((
+  Gcc_backend : Backend_types.Simple_backend with type context = Gcc_backend.context))
 
 module Gccjit_backend = Multicore_backend (Gccjit_device)
 module Sync_gccjit_backend = Sync_backend (Gccjit_device)
 
-module type Device_backend = sig
-  type context [@@deriving sexp_of]
-  type code [@@deriving sexp_of]
-  type code_batch [@@deriving sexp_of]
-  type ctx_array [@@deriving sexp_of]
-  type event
-
-  val sync : event -> unit
-  val is_done : event -> bool
-  val work_for : context -> Tnode.t -> event option
-  val will_wait_for : context -> event -> unit
-
-  open Backend_utils.Types
-
-  val initialize : config -> unit
-  val is_initialized : unit -> bool
-  val finalize : context -> unit
-  val sexp_of_context : context -> Sexplib.Sexp.t
-  val compile : name:string -> Indexing.unit_bindings -> Low_level.optimized -> code
-
-  val compile_batch :
-    names:string option array ->
-    Indexing.unit_bindings ->
-    Low_level.optimized option array ->
-    code_batch
-
-  val is_in_context : Low_level.traced_array -> bool
-  val ctx_arrays : context -> ctx_array Map.M(Tnode).t
-  val link : context -> code -> context * Indexing.lowered_bindings * Tnode.task
-
-  val link_batch :
-    context -> code_batch -> context * Indexing.lowered_bindings * Tnode.task option array
-
-  val unsafe_cleanup : unit -> unit
-
-  val from_host : context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, copies from host to context. *)
-
-  val to_host : context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, copies from context to host. *)
-
-  val device_to_device :
-    Tnode.t -> into_merge_buffer:merge_buffer_use -> dst:context -> src:context -> bool
-  (** If the array is in both contexts, copies from [dst] to [src]. *)
-
-  type buffer_ptr [@@deriving sexp_of]
-
-  val to_buffer : Tnode.t -> dst:buffer_ptr -> src:context -> unit
-  val host_to_buffer : Ndarray.t -> dst:buffer_ptr -> unit
-  val buffer_to_host : Ndarray.t -> src:buffer_ptr -> unit
-  val get_buffer : Tnode.t -> context -> buffer_ptr option
-
-  type physical_device
-  type device
-
-  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> device -> buffer_ptr
-  val init : device -> context
-  val await : device -> unit
-  val is_idle : device -> bool
-  val all_work : device -> event
-  val sexp_of_device : device -> Sexplib.Sexp.t
-  val num_physical_devices : unit -> int
-  val suggested_num_virtual_devices : physical_device -> int
-  val get_device : ordinal:int -> physical_device
-  val get_physical_device : device -> physical_device
-  val new_virtual_device : physical_device -> device
-  val get_ctx_device : context -> device
-  val get_name : device -> string
-  val to_ordinal : physical_device -> int
-  val to_subordinal : device -> int
-  val name : string
-end
-
-module Device_backend (Device : Device_backend) : Backend = struct
+module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.Backend = struct
   include Device
 
   type nonrec code = {
@@ -1137,9 +849,10 @@ module Device_backend (Device : Device_backend) : Backend = struct
     device_to_device tn ~into_merge_buffer ~dst:dst.ctx ~src:src.ctx
 end
 
-module Cuda_backend : Backend = Device_backend ((Cuda_backend : Device_backend))
+module Cuda_backend : Backend_types.Backend = Lowered_backend ((
+  Cuda_backend : Backend_types.Lowered_backend))
 
-let reinitialize (module Backend : Backend) config =
+let reinitialize (module Backend : Backend_types.Backend) config =
   if not @@ Backend.is_initialized () then Backend.initialize config
   else (
     Core.Gc.full_major ();
@@ -1155,11 +868,11 @@ let fresh_backend ?backend_name ?(config = Physical_devices_only) () =
           Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
       |> String.lowercase
     with
-    | "cc" -> (module Cc_backend : Backend)
-    | "gccjit" -> (module Gccjit_backend : Backend)
-    | "sync_cc" -> (module Sync_cc_backend : Backend)
-    | "sync_gccjit" -> (module Sync_gccjit_backend : Backend)
-    | "cuda" -> (module Cuda_backend : Backend)
+    | "cc" -> (module Cc_backend : Backend_types.Backend)
+    | "gccjit" -> (module Gccjit_backend : Backend_types.Backend)
+    | "sync_cc" -> (module Sync_cc_backend : Backend_types.Backend)
+    | "sync_gccjit" -> (module Sync_gccjit_backend : Backend_types.Backend)
+    | "cuda" -> (module Cuda_backend : Backend_types.Backend)
     | backend -> invalid_arg [%string "Backends.fresh_backend: unknown backend %{backend}"]
   in
   reinitialize backend config;

@@ -7,9 +7,9 @@ module Asgns = Arrayjit.Assignments
 module Idx = Arrayjit.Indexing
 module Utils = Arrayjit.Utils
 module Rand = Arrayjit.Rand.Lib
-module BT = Arrayjit.Backend_utils.Types
+module BT = Arrayjit.Backend_types.Types
 
-module type Backend_type = Arrayjit.Backends.Backend
+module type Backend_type = Arrayjit.Backend_types.Backend
 
 module Debug_runtime = Arrayjit.Utils.Debug_runtime
 
